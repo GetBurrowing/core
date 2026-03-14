@@ -24,3 +24,6 @@ build/
 .DS_Store
 .vscode/
 .idea/
+
+# Reserved / intentionally unused until a real pattern emerges
+/workers/
