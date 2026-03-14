@@ -63,7 +63,7 @@ defmodule Platform.Repo.Migrations.CreateChatTables do
         null: false
       )
 
-      add(:parent_message_id, :bigint)
+      add(:parent_message_id, :binary_id)
       add(:title, :string)
       add(:metadata, :map, default: %{})
 
@@ -195,7 +195,7 @@ defmodule Platform.Repo.Migrations.CreateChatTables do
 
     # ── Deferred FK: chat_threads.parent_message_id -> chat_messages ──────────────
     alter table(:chat_threads) do
-      modify(:parent_message_id, references(:chat_messages, type: :bigint, on_delete: :nilify_all), from: :bigint)
+      modify(:parent_message_id, references(:chat_messages, type: :binary_id, on_delete: :nilify_all), from: :binary_id)
     end
   end
 end
