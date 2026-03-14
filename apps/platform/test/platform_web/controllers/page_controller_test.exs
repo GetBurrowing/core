@@ -29,6 +29,6 @@ defmodule PlatformWeb.PageControllerTest do
       |> render_submit()
 
     assert html =~ "hello"
-    assert html =~ "Message received locally"
+    assert html =~ "Agent online"
   end
 end
