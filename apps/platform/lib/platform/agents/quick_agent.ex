@@ -10,16 +10,17 @@ defmodule Platform.Agents.QuickAgent do
   require Logger
 
   @workspace_files ~w(SOUL.md IDENTITY.md USER.md AGENTS.md)
-  @default_model "claude-sonnet-4-6-20250514"
+  # OAuth tokens use short model IDs (no date suffix).
+  # API key tokens use versioned model IDs.
+  @oauth_model "claude-sonnet-4-6"
+  @api_key_model "claude-sonnet-4-5-20250929"
   @api_url "https://api.anthropic.com/v1/messages"
   @api_version "2023-06-01"
 
   # OAuth tokens (sk-ant-oat*) require specific beta headers.
-  # Without these, Anthropic rejects the token.
   @oauth_beta_headers [
     "oauth-2025-04-20",
-    "claude-code-20250219",
-    "interleaved-thinking-2025-05-14"
+    "claude-code-20250219"
   ]
 
   @doc """
@@ -69,7 +70,8 @@ defmodule Platform.Agents.QuickAgent do
   end
 
   defp call_anthropic(api_key, system_prompt, messages, opts) do
-    model = opts[:model] || @default_model
+    is_oauth = is_oauth_token?(api_key)
+    model = opts[:model] || if(is_oauth, do: @oauth_model, else: @api_key_model)
     max_tokens = opts[:max_tokens] || 2048
 
     body = %{
@@ -79,15 +81,23 @@ defmodule Platform.Agents.QuickAgent do
       "messages" => messages
     }
 
+    # OAuth tokens use Authorization: Bearer; API keys use x-api-key
+    auth_header =
+      if is_oauth do
+        {"Authorization", "Bearer #{api_key}"}
+      else
+        {"x-api-key", api_key}
+      end
+
     headers = [
-      {"x-api-key", api_key},
+      auth_header,
       {"anthropic-version", @api_version},
       {"content-type", "application/json"}
     ]
 
-    # OAuth tokens (sk-ant-oat*) require additional beta headers
+    # OAuth tokens require additional beta headers
     headers =
-      if is_oauth_token?(api_key) do
+      if is_oauth do
         beta_value = Enum.join(@oauth_beta_headers, ",")
         headers ++ [{"anthropic-beta", beta_value}]
       else
