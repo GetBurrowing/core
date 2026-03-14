@@ -96,8 +96,10 @@ defmodule Platform.Repo.Migrations.CreateChatTables do
       add(:inserted_at, :utc_datetime_usec, null: false, default: fragment("now()"))
     end
 
-    create(index(:chat_messages, [:space_id, :id], order: [id: :desc], name: :chat_messages_space_idx))
-    create(index(:chat_messages, [:thread_id, :id], order: [id: :desc]))
+    # Use raw SQL for DESC-ordered indexes — Ecto.Migration.Index does not support
+    # the `order:` option in ecto_sql 3.13.x (no :order field on the struct).
+    execute("CREATE INDEX chat_messages_space_idx ON chat_messages (space_id, id DESC)")
+    execute("CREATE INDEX chat_messages_thread_idx ON chat_messages (thread_id, id DESC)")
     create(index(:chat_messages, [:participant_id]))
 
     execute(
