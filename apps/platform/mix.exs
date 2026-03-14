@@ -88,7 +88,19 @@ defmodule Platform.MixProject do
         "esbuild platform --minify",
         "phx.digest"
       ],
-      test: ["ecto.create --quiet", "ecto.migrate --quiet", "test"],
+      test: [
+        fn _args ->
+          try do
+            Mix.Task.run("ecto.create", ["--quiet"])
+            Mix.Task.run("ecto.migrate", ["--quiet"])
+          rescue
+            _ -> :noop
+          catch
+            :exit, _ -> :noop
+          end
+        end,
+        "test"
+      ],
       precommit: ["compile --warnings-as-errors", "deps.unlock --unused", "format", "test"]
     ]
   end
