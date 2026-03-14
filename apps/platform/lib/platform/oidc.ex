@@ -4,8 +4,8 @@ defmodule Platform.OIDC do
   def authorize_url(state, nonce) do
     strategy().authorize_url(
       base_config()
-      |> Map.put(:state, state)
-      |> Map.put(:nonce, nonce)
+      |> Keyword.put(:state, state)
+      |> Keyword.put(:nonce, nonce)
     )
   end
 
@@ -28,10 +28,11 @@ defmodule Platform.OIDC do
     |> to_string()
   end
 
+  # Assent strategies require a Keyword list, not a Map.
   defp base_config do
     issuer = issuer()
 
-    %{
+    [
       client_id: config!(:client_id),
       client_secret: config!(:client_secret),
       issuer: issuer,
@@ -44,7 +45,7 @@ defmodule Platform.OIDC do
       token_url: issuer <> "/token",
       authorize_url: issuer <> "/authorize",
       http_adapter: config(:http_adapter)
-    }
+    ]
   end
 
   defp logout_query(nil), do: %{"post_logout_redirect_uri" => app_url()}

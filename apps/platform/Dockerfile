@@ -45,4 +45,4 @@ COPY --from=build --chown=app:app /app/_build/prod/rel/platform ./
 
 EXPOSE 4000
 
-CMD ["/app/bin/platform", "start"]
+CMD ["/bin/sh", "-c", "/app/bin/platform eval 'Platform.Release.migrate()' && /app/bin/platform start"]
