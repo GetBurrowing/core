@@ -1,18 +1,8 @@
 defmodule PlatformWeb.Router do
   use PlatformWeb, :router
 
-  @session_options [
-    store: :cookie,
-    key: "_platform_session",
-    signing_salt: "LVkhtRt/",
-    same_site: "Lax",
-    http_only: true,
-    secure: Application.compile_env(:platform, :env) == :prod
-  ]
-
   pipeline :browser do
     plug(:accepts, ["html"])
-    plug(Plug.Session, @session_options)
     plug(:fetch_session)
     plug(:fetch_live_flash)
     plug(:put_root_layout, html: {PlatformWeb.Layouts, :root})

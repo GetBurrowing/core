@@ -6,9 +6,10 @@ defmodule PlatformWeb.Endpoint do
   # Set :encryption_salt if you would also like to encrypt it.
   @session_options [
     store: :cookie,
-    key: "_platform_key",
-    signing_salt: "T2SQuymF",
-    same_site: "Lax"
+    key: "_platform_session",
+    signing_salt: "LVkhtRt/",
+    same_site: "Lax",
+    http_only: true
   ]
 
   socket "/live", Phoenix.LiveView.Socket,
