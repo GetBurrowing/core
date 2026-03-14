@@ -195,7 +195,7 @@ defmodule Platform.Repo.Migrations.CreateChatTables do
 
     # ── Deferred FK: chat_threads.parent_message_id -> chat_messages ──────────────
     alter table(:chat_threads) do
-      modify(:parent_message_id, references(:chat_messages, on_delete: :nilify_all))
+      modify(:parent_message_id, references(:chat_messages, type: :bigint, on_delete: :nilify_all), from: :bigint)
     end
   end
 end
