@@ -1,14 +1,21 @@
 defmodule Platform.TestOIDCStrategy do
   def authorize_url(config) do
+    state = :crypto.strong_rand_bytes(16) |> Base.url_encode64(padding: false)
+    nonce = :crypto.strong_rand_bytes(16) |> Base.url_encode64(padding: false)
+
     query =
       URI.encode_query(%{
         "client_id" => config[:client_id],
-        "nonce" => config[:nonce],
+        "nonce" => nonce,
         "redirect_uri" => config[:redirect_uri],
-        "state" => config[:state]
+        "state" => state
       })
 
-    {:ok, %{url: "https://issuer.example.com/authorize?" <> query}}
+    {:ok,
+     %{
+       url: "https://issuer.example.com/authorize?" <> query,
+       session_params: %{state: state, nonce: nonce}
+     }}
   end
 
   def callback(_config, params) do

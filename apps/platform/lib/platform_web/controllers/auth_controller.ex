@@ -5,26 +5,16 @@ defmodule PlatformWeb.AuthController do
   alias Platform.OIDC
 
   def login(conn, _params) do
-    state = random_token()
-    nonce = random_token()
-
     :telemetry.execute(
       [:platform, :auth, :login],
       %{system_time: System.system_time()},
       %{action: "redirect", ip_address: format_ip(conn.remote_ip)}
     )
 
-    case OIDC.authorize_url(state, nonce) do
-      {:ok, %{url: url}} ->
+    case OIDC.authorize_url() do
+      {:ok, %{url: url, session_params: session_params}} ->
         conn
-        |> put_session(:oidc_state, state)
-        |> put_session(:oidc_nonce, nonce)
-        |> redirect(external: url)
-
-      {:ok, url} when is_binary(url) ->
-        conn
-        |> put_session(:oidc_state, state)
-        |> put_session(:oidc_nonce, nonce)
+        |> put_session(:oidc_session_params, session_params)
         |> redirect(external: url)
 
       {:error, error} ->
@@ -35,12 +25,9 @@ defmodule PlatformWeb.AuthController do
   end
 
   def callback(conn, %{"state" => state, "code" => _code} = params) do
-    session_params = %{
-      state: get_session(conn, :oidc_state),
-      nonce: get_session(conn, :oidc_nonce)
-    }
+    session_params = get_session(conn, :oidc_session_params)
 
-    with ^state <- get_session(conn, :oidc_state),
+    with true <- is_map(session_params) and session_params[:state] == state,
          {:ok, auth} <- OIDC.callback(params, session_params),
          {:ok, oidc_user} <- extract_oidc_user(auth),
          {:ok, user} <- Accounts.find_or_create_from_oidc(oidc_user) do
@@ -59,18 +46,13 @@ defmodule PlatformWeb.AuthController do
       )
 
       conn
-      |> delete_session(:oidc_state)
-      |> delete_session(:oidc_nonce)
+      |> delete_session(:oidc_session_params)
       |> put_session(:current_user_id, user.id)
       |> maybe_put_id_token(auth)
       |> redirect(to: ~p"/")
     else
-      nil ->
+      false ->
         emit_callback_failure(conn, :invalid_state)
-        invalid_state(conn)
-
-      other_state when is_binary(other_state) ->
-        emit_callback_failure(conn, :state_mismatch)
         invalid_state(conn)
 
       {:error, reason} ->
@@ -170,10 +152,4 @@ defmodule PlatformWeb.AuthController do
   defp extract_id_token(%{id_token: id_token}) when is_binary(id_token), do: id_token
   defp extract_id_token(%{"id_token" => id_token}) when is_binary(id_token), do: id_token
   defp extract_id_token(_auth), do: nil
-
-  defp random_token do
-    32
-    |> :crypto.strong_rand_bytes()
-    |> Base.url_encode64(padding: false)
-  end
 end

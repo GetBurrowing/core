@@ -1,14 +1,13 @@
 defmodule Platform.OIDC do
   @default_scope "openid email profile"
 
-  def authorize_url(state, nonce) do
-    strategy().authorize_url(
-      base_config()
-      |> Keyword.put(:state, state)
-      |> Keyword.put(:nonce, nonce)
-    )
+  # Returns {:ok, %{url: url, session_params: %{state:, nonce:, code_verifier:, ...}}}
+  # Callers must store the full session_params and pass them back to callback/2.
+  def authorize_url do
+    strategy().authorize_url(base_config())
   end
 
+  # session_params must be the full map returned by authorize_url/0 (state, nonce, code_verifier).
   def callback(params, session_params) do
     config =
       base_config()

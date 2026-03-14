@@ -9,16 +9,17 @@ defmodule PlatformWeb.AuthControllerTest do
     :ok
   end
 
-  test "GET /auth/login redirects to the provider and stores state", %{conn: conn} do
+  test "GET /auth/login redirects to the provider and stores session params", %{conn: conn} do
     conn = get(conn, ~p"/auth/login")
 
     assert redirected_to(conn, 302) =~ "https://issuer.example.com/authorize?"
-    assert get_session(conn, :oidc_state)
-    assert get_session(conn, :oidc_nonce)
+    assert %{state: _, nonce: _} = get_session(conn, :oidc_session_params)
   end
 
   test "GET /auth/oidc/callback creates a user and signs them in", %{conn: conn} do
-    conn = init_test_session(conn, oidc_state: "expected-state")
+    conn =
+      init_test_session(conn, oidc_session_params: %{state: "expected-state", nonce: "n"})
+
     conn = get(conn, ~p"/auth/oidc/callback?code=test-code&state=expected-state")
 
     assert redirected_to(conn, 302) == ~p"/"
@@ -34,7 +35,9 @@ defmodule PlatformWeb.AuthControllerTest do
   end
 
   test "GET /auth/oidc/callback rejects an invalid state", %{conn: conn} do
-    conn = init_test_session(conn, oidc_state: "expected-state")
+    conn =
+      init_test_session(conn, oidc_session_params: %{state: "expected-state", nonce: "n"})
+
     conn = get(conn, ~p"/auth/oidc/callback?code=test-code&state=wrong-state")
 
     assert response(conn, 401) =~ "Invalid OIDC state"
