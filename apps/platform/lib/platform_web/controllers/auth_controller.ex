@@ -27,6 +27,14 @@ defmodule PlatformWeb.AuthController do
   def callback(conn, %{"state" => state, "code" => _code} = params) do
     session_params = get_session(conn, :oidc_session_params)
 
+    require Logger
+
+    Logger.debug(
+      "[auth_callback] session_params=#{inspect(session_params, limit: 5)} " <>
+        "params_state=#{String.slice(state, 0, 8)}... " <>
+        "session_state=#{inspect(session_params && String.slice(to_string(session_params[:state] || ""), 0, 8))}..."
+    )
+
     with true <- is_map(session_params) and session_params[:state] == state,
          {:ok, auth} <- OIDC.callback(params, session_params),
          {:ok, oidc_user} <- extract_oidc_user(auth),
@@ -49,6 +57,7 @@ defmodule PlatformWeb.AuthController do
       |> delete_session(:oidc_session_params)
       |> put_session(:current_user_id, user.id)
       |> maybe_put_id_token(auth)
+      |> maybe_put_end_session_endpoint(session_params)
       |> redirect(to: ~p"/")
     else
       false ->
@@ -71,6 +80,7 @@ defmodule PlatformWeb.AuthController do
 
   def logout(conn, _params) do
     id_token_hint = get_session(conn, :oidc_id_token)
+    end_session_endpoint = get_session(conn, :oidc_end_session_endpoint)
     user_id = get_session(conn, :current_user_id)
 
     :telemetry.execute(
@@ -86,7 +96,7 @@ defmodule PlatformWeb.AuthController do
 
     conn
     |> configure_session(drop: true)
-    |> redirect(external: OIDC.logout_url(id_token_hint))
+    |> redirect(external: OIDC.logout_url(id_token_hint, end_session_endpoint))
   end
 
   # -- Telemetry helpers --
@@ -122,6 +132,19 @@ defmodule PlatformWeb.AuthController do
     end
   end
 
+  # Store the provider's end_session_endpoint from the OIDC discovery doc so
+  # logout_url/2 doesn't need to guess the path (works for any OIDC provider).
+  defp maybe_put_end_session_endpoint(conn, session_params) do
+    endpoint =
+      get_in(session_params, [:openid_configuration, "end_session_endpoint"]) ||
+        get_in(session_params, ["openid_configuration", "end_session_endpoint"])
+
+    case endpoint do
+      nil -> conn
+      url -> put_session(conn, :oidc_end_session_endpoint, url)
+    end
+  end
+
   defp extract_oidc_user(%{user: user}), do: normalize_oidc_user(user)
   defp extract_oidc_user(%{"user" => user}), do: normalize_oidc_user(user)
 
@@ -138,9 +161,18 @@ defmodule PlatformWeb.AuthController do
   defp normalize_oidc_user(user) do
     user = for {key, value} <- user, into: %{}, do: {to_string(key), value}
 
-    case {user["sub"], user["email"], user["name"]} do
-      {sub, email, name} when is_binary(sub) and is_binary(email) and is_binary(name) ->
-        {:ok, %{sub: sub, email: email, name: name}}
+    name =
+      user["name"] ||
+        [user["given_name"], user["family_name"]]
+        |> Enum.filter(&is_binary/1)
+        |> Enum.join(" ")
+        |> then(fn s -> if s == "", do: nil, else: s end) ||
+        user["preferred_username"] ||
+        user["email"]
+
+    case {user["sub"], user["email"], name} do
+      {sub, email, n} when is_binary(sub) and is_binary(email) and is_binary(n) ->
+        {:ok, %{sub: sub, email: email, name: n}}
 
       _ ->
         {:error, :invalid_oidc_user}

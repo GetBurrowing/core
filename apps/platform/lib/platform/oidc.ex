@@ -3,6 +3,8 @@ defmodule Platform.OIDC do
 
   # Returns {:ok, %{url: url, session_params: %{state:, nonce:, code_verifier:, ...}}}
   # Callers must store the full session_params and pass them back to callback/2.
+  # The session_params do NOT include openid_configuration — it is fetched fresh
+  # in callback/2 when needed (avoiding oversized cookies).
   def authorize_url do
     strategy().authorize_url(base_config())
   end
@@ -16,10 +18,17 @@ defmodule Platform.OIDC do
     strategy().callback(config, params)
   end
 
-  def logout_url(id_token_hint) do
-    issuer = issuer()
+  # Builds a logout/end-session URL. Prefers the end_session_endpoint from the
+  # provider's discovery document (passed in as openid_configuration) so the
+  # module works with any compliant OIDC provider. Falls back to a heuristic
+  # path derived from the issuer URL when no config is available.
+  def logout_url(id_token_hint, openid_configuration \\ nil) do
+    endpoint =
+      get_in(openid_configuration, ["end_session_endpoint"]) ||
+        get_in(openid_configuration, [:end_session_endpoint]) ||
+        issuer() <> "/end-session"
 
-    URI.parse(issuer <> "/end-session")
+    URI.parse(endpoint)
     |> Map.put(:query, URI.encode_query(logout_query(id_token_hint)))
     |> URI.to_string()
   end
