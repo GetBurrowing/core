@@ -4,6 +4,26 @@ if System.get_env("PHX_SERVER") do
   config :platform, PlatformWeb.Endpoint, server: true
 end
 
+vault_key =
+  case {config_env(), System.get_env("VAULT_MASTER_KEY")} do
+    {:prod, nil} ->
+      raise "environment variable VAULT_MASTER_KEY is missing"
+
+    {_, nil} ->
+      Base.encode64(:crypto.strong_rand_bytes(32))
+
+    {_, key} ->
+      key
+  end
+
+config :platform, Platform.Vault.Encryption,
+  ciphers: [
+    default: {
+      Cloak.Ciphers.AES.GCM,
+      tag: "AES.GCM.V1", key: Base.decode64!(vault_key), iv_length: 12
+    }
+  ]
+
 if config_env() != :test do
   pool_size = String.to_integer(System.get_env("POOL_SIZE", "10"))
 

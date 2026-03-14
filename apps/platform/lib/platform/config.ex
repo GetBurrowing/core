@@ -14,6 +14,7 @@ defmodule Platform.Config do
     OIDC_CLIENT_ID
     OIDC_CLIENT_SECRET
     APP_URL
+    VAULT_MASTER_KEY
   )
 
   @doc """
