@@ -13,6 +13,8 @@ jobs:
   test:
     name: Test
     runs-on: ubuntu-latest
+    container:
+      image: elixir:1.19.5-otp-28-slim
     defaults:
       run:
         working-directory: apps/platform
@@ -20,10 +22,15 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - uses: erlef/setup-beam@v1.22.0
-        with:
-          elixir-version: "1.19.5"
-          otp-version: "28"
+      - name: Install system packages
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends build-essential git
+
+      - name: Install Hex and Rebar
+        run: |
+          mix local.hex --force
+          mix local.rebar --force
 
       - name: Cache deps
         uses: actions/cache@v5
