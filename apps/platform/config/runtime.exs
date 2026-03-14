@@ -30,6 +30,11 @@ if config_env() != :test do
 
   app_url = System.get_env("APP_URL") || "http://localhost:4000"
 
+  # Only enable when behind a trusted reverse proxy (Traefik, nginx, etc.).
+  # See PlatformWeb.Plugs.RewriteRemoteIp for security notes.
+  config :platform, :trust_proxy_headers,
+    System.get_env("TRUST_PROXY_HEADERS") in ["true", "1"]
+
   config :platform, :oidc,
     client_id: System.get_env("OIDC_CLIENT_ID"),
     client_secret: System.get_env("OIDC_CLIENT_SECRET"),

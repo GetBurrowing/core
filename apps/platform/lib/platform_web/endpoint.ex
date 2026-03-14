@@ -37,6 +37,7 @@ defmodule PlatformWeb.Endpoint do
   end
 
   plug Plug.RequestId
+  plug PlatformWeb.Plugs.RewriteRemoteIp
   plug Plug.Telemetry, event_prefix: [:phoenix, :endpoint]
 
   plug Plug.Parsers,
