@@ -52,6 +52,7 @@ defmodule Platform.MixProject do
       {:lazy_html, ">= 0.1.0", only: :test},
       {:ecto_sql, "~> 3.10"},
       {:cloak_ecto, "~> 1.3"},
+      {:req, "~> 0.5"},
       {:postgrex, ">= 0.0.0"},
       {:esbuild, "~> 0.10", runtime: Mix.env() == :dev},
       {:tailwind, "~> 0.3", runtime: Mix.env() == :dev},

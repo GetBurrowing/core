@@ -19,18 +19,55 @@ defmodule PlatformWeb.ChatLive do
     else
       timestamp = Calendar.strftime(DateTime.utc_now(), "%I:%M %p UTC")
 
+      # Add user message immediately
       messages =
         socket.assigns.messages ++
-          [
-            %{role: :user, body: message, at: timestamp},
-            %{role: :assistant, body: assistant_reply(message), at: timestamp}
-          ]
+          [%{role: :user, body: message, at: timestamp}]
+
+      # Build conversation history for the API (last 20 messages)
+      history =
+        messages
+        |> Enum.filter(&(&1.role in [:user, :assistant]))
+        |> Enum.take(-20)
+        |> Enum.map(fn msg ->
+          %{"role" => to_string(msg.role), "content" => msg.body}
+        end)
+
+      # Add thinking indicator
+      messages =
+        messages ++ [%{role: :assistant, body: "Thinking...", at: timestamp, thinking: true}]
+
+      # Fire async API call
+      lv = self()
+
+      Task.start(fn ->
+        case Platform.Agents.QuickAgent.chat(message, history: Enum.drop(history, -1)) do
+          {:ok, %{content: content}} ->
+            send(lv, {:agent_response, content})
+
+          {:error, reason} ->
+            send(lv, {:agent_response, "⚠️ Agent error: #{reason}"})
+        end
+      end)
 
       {:noreply,
        socket
        |> assign(:messages, messages)
        |> assign_form("")}
     end
+  end
+
+  @impl true
+  def handle_info({:agent_response, content}, socket) do
+    timestamp = Calendar.strftime(DateTime.utc_now(), "%I:%M %p UTC")
+
+    # Replace the "Thinking..." message with the real response
+    messages =
+      socket.assigns.messages
+      |> Enum.reject(&Map.get(&1, :thinking, false))
+      |> Kernel.++([%{role: :assistant, body: content, at: timestamp}])
+
+    {:noreply, assign(socket, :messages, messages)}
   end
 
   defp assign_form(socket, message) do
@@ -42,29 +79,10 @@ defmodule PlatformWeb.ChatLive do
       %{
         role: :assistant,
         body:
-          "Core is online. This is the first chat surface for the suite: plain, focused, and minimal.",
-        at: "Now"
-      },
-      %{
-        role: :assistant,
-        body:
-          "Tonight's goal is simple: get a working Elixir app running at suite.example.com before we widen the platform.",
+          "⚡ Agent online. Workspace loaded from .openclaw folder — personality, identity, and context active. Say something.",
         at: "Now"
       }
     ]
-  end
-
-  defp assistant_reply(message) do
-    cond do
-      String.contains?(String.downcase(message), "deploy") ->
-        "Deployment is being designed as pull-based operations from Hive through Core Ops, not push-from-GitHub automation."
-
-      String.contains?(String.downcase(message), "task") ->
-        "Tasks stays a sibling surface in the architecture, even though Chat is the first surface we are shipping."
-
-      true ->
-        "Message received locally. This chat surface is intentionally minimal while the platform and deployment path take shape."
-    end
   end
 
   @impl true
@@ -146,7 +164,7 @@ defmodule PlatformWeb.ChatLive do
     """
   end
 
-  defp role_label(:assistant), do: "Core"
+  defp role_label(:assistant), do: "⚡ Zip"
   defp role_label(:user), do: "You"
 
   defp message_row_class(:assistant), do: "flex justify-start"

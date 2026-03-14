@@ -67,6 +67,11 @@ if config_env() != :test do
     http: [port: String.to_integer(System.get_env("PORT", "4000"))]
 end
 
+# Agent workspace (sign-of-life — will be replaced by full agent runtime)
+config :platform,
+  agent_workspace_path: System.get_env("AGENT_WORKSPACE_PATH", "/data/agents/zip/workspace"),
+  anthropic_api_key: System.get_env("ANTHROPIC_API_KEY")
+
 if config_env() == :prod do
   secret_key_base =
     System.get_env("SECRET_KEY_BASE") ||
