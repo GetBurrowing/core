@@ -32,6 +32,7 @@ defmodule Platform.Chat do
   import Ecto.Query
 
   alias Platform.Chat.{Attachment, Canvas, Message, Participant, Pin, Reaction, Space, Thread}
+  alias Platform.Chat.PubSub, as: ChatPubSub
   alias Platform.Repo
 
   # ── Spaces ─────────────────────────────────────────────────────────────────
@@ -148,6 +149,8 @@ defmodule Platform.Chat do
           }
         )
 
+        ChatPubSub.broadcast(space_id, {:participant_joined, p})
+
       _ ->
         :ok
     end
@@ -220,6 +223,8 @@ defmodule Platform.Chat do
           %{space_id: p.space_id, participant_id: p.id}
         )
 
+        ChatPubSub.broadcast(p.space_id, {:participant_left, p})
+
       _ ->
         :ok
     end
@@ -253,6 +258,8 @@ defmodule Platform.Chat do
             participant_id: msg.participant_id
           }
         )
+
+        ChatPubSub.broadcast(msg.space_id, {:new_message, msg})
 
       _ ->
         :ok
@@ -330,6 +337,8 @@ defmodule Platform.Chat do
           %{message_id: msg.id, space_id: msg.space_id}
         )
 
+        ChatPubSub.broadcast(msg.space_id, {:message_updated, msg})
+
       _ ->
         :ok
     end
@@ -352,6 +361,8 @@ defmodule Platform.Chat do
           %{system_time: System.system_time()},
           %{message_id: msg.id, space_id: msg.space_id}
         )
+
+        ChatPubSub.broadcast(msg.space_id, {:message_deleted, msg})
 
       _ ->
         :ok
@@ -411,6 +422,11 @@ defmodule Platform.Chat do
           %{message_id: r.message_id, participant_id: r.participant_id, emoji: r.emoji}
         )
 
+        case Repo.get(Message, r.message_id) do
+          %Message{space_id: space_id} -> ChatPubSub.broadcast(space_id, {:reaction_added, r})
+          nil -> :ok
+        end
+
       _ ->
         :ok
     end
@@ -437,6 +453,18 @@ defmodule Platform.Chat do
             %{system_time: System.system_time()},
             %{message_id: message_id, participant_id: participant_id, emoji: emoji}
           )
+
+          case Repo.get(Message, message_id) do
+            %Message{space_id: space_id} ->
+              ChatPubSub.broadcast(
+                space_id,
+                {:reaction_removed,
+                 %{message_id: message_id, participant_id: participant_id, emoji: emoji}}
+              )
+
+            nil ->
+              :ok
+          end
 
           {:ok, deleted}
         end
@@ -475,6 +503,8 @@ defmodule Platform.Chat do
           %{space_id: pin.space_id, message_id: pin.message_id, pinned_by: pin.pinned_by}
         )
 
+        ChatPubSub.broadcast(pin.space_id, {:pin_added, pin})
+
       _ ->
         :ok
     end
@@ -496,6 +526,11 @@ defmodule Platform.Chat do
             [:platform, :chat, :pin_removed],
             %{system_time: System.system_time()},
             %{space_id: space_id, message_id: message_id}
+          )
+
+          ChatPubSub.broadcast(
+            space_id,
+            {:pin_removed, %{space_id: space_id, message_id: message_id}}
           )
 
           {:ok, deleted}

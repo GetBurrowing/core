@@ -18,6 +18,8 @@ defmodule Platform.Application do
       PlatformWeb.Telemetry,
       {DNSCluster, query: Application.get_env(:platform, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: Platform.PubSub},
+      # Chat presence — must start after PubSub
+      Platform.Chat.Presence,
       # Vault OAuth token refresh worker — must start after Repo and Vault.Encryption
       Platform.Vault.RefreshWorker,
       # Start to serve requests, typically the last entry
