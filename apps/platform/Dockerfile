@@ -25,11 +25,11 @@ RUN mix compile
 RUN mix release
 
 # ── Stage 2: Runtime ──────────────────────────────────────────
-FROM debian:bookworm-slim AS app
+FROM elixir:1.19.5-otp-28-slim AS app
 
 RUN apt-get update -y \
  && apt-get install -y --no-install-recommends \
-      libstdc++6 openssl libncurses5 locales ca-certificates wget \
+      libstdc++6 openssl libncurses6 locales ca-certificates wget \
  && rm -rf /var/lib/apt/lists/* \
  && sed -i '/en_US.UTF-8/s/^# //g' /etc/locale.gen \
  && locale-gen
@@ -45,4 +45,4 @@ COPY --from=build --chown=app:app /app/_build/prod/rel/platform ./
 
 EXPOSE 4000
 
-CMD ["/app/bin/server"]
+CMD ["/app/bin/platform", "start"]
