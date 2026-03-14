@@ -25,7 +25,8 @@ jobs:
       - name: Install system packages
         run: |
           apt-get update
-          apt-get install -y --no-install-recommends build-essential git
+          apt-get install -y --no-install-recommends build-essential ca-certificates git
+          update-ca-certificates
 
       - name: Install Hex and Rebar
         run: |
