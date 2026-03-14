@@ -1,10 +1,26 @@
-/_build
-/cover
-/deps
-/doc
-/.fetch
-erl_crash.dump
-*.ez
-*.beam
-/config/*.secret.exs
-.elixir_ls/
+# Elixir / Phoenix
+/_build/
+/deps/
+/.elixir_ls/
+/cover/
+**/_build/
+**/deps/
+**/.elixir_ls/
+**/cover/
+
+# Node
+node_modules/
+dist/
+build/
+.next/
+
+# Env and local overrides
+.env
+.env.*
+!.env.example
+*.local
+
+# OS / editors
+.DS_Store
+.vscode/
+.idea/
