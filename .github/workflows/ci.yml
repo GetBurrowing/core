@@ -50,6 +50,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Derive image tags
+        id: vars
+        run: echo "short_sha=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -67,3 +71,4 @@ jobs:
           tags: |
             ghcr.io/startup-suite/core:latest
             ghcr.io/startup-suite/core:${{ github.sha }}
+            ghcr.io/startup-suite/core:${{ steps.vars.outputs.short_sha }}
