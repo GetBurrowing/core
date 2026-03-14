@@ -25,8 +25,9 @@ defmodule PlatformWeb.ChatLiveTest do
     conn = authenticated_conn(conn)
     {:ok, _view, html} = live(conn, ~p"/chat")
 
-    assert html =~ "Core Chat"
-    assert html =~ "Agent online"
+    # Shell layout and channel sidebar should be present
+    assert html =~ "Channels"
+    assert html =~ "Startup Suite"
   end
 
   test "shell sidebar is rendered on /chat", %{conn: conn} do
@@ -41,11 +42,12 @@ defmodule PlatformWeb.ChatLiveTest do
 
   test "sending a message renders it in the chat", %{conn: conn} do
     conn = authenticated_conn(conn)
-    {:ok, view, _html} = live(conn, ~p"/chat")
+    # Navigate to a specific space (auto-created via bootstrap_space/1)
+    {:ok, view, _html} = live(conn, ~p"/chat/general")
 
     html =
       view
-      |> form("#chat-form", chat: %{message: "hello from test"})
+      |> form("#compose-form", compose: %{text: "hello from test"})
       |> render_submit()
 
     assert html =~ "hello from test"

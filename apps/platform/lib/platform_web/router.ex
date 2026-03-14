@@ -37,6 +37,7 @@ defmodule PlatformWeb.Router do
       on_mount: [PlatformWeb.ShellLive],
       layout: {PlatformWeb.Layouts, :shell} do
       live("/chat", ChatLive, :index)
+      live("/chat/:space_slug", ChatLive, :show)
       live("/control", ControlCenterLive, :index)
     end
   end

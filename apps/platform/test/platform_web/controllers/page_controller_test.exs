@@ -33,16 +33,10 @@ defmodule PlatformWeb.PageControllerTest do
 
     conn = init_test_session(conn, current_user_id: user.id)
 
-    {:ok, view, html} = live(conn, ~p"/chat")
+    {:ok, _view, html} = live(conn, ~p"/chat")
 
-    assert html =~ "Core Chat"
-
-    html =
-      view
-      |> form("#chat-form", chat: %{message: "hello"})
-      |> render_submit()
-
-    assert html =~ "hello"
-    assert html =~ "Agent online"
+    # Shell layout and channel sidebar should be present
+    assert html =~ "Startup Suite"
+    assert html =~ "Channels"
   end
 end

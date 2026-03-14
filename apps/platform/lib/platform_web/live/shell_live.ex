@@ -4,8 +4,21 @@ defmodule PlatformWeb.ShellLive do
   import Phoenix.Component
   import Phoenix.LiveView
 
+  alias Platform.Accounts
+
   def on_mount(:default, _params, session, socket) do
-    current_user = session["user_email"] || session["user_id"] || "user"
+    current_user =
+      case session["current_user_id"] do
+        user_id when is_binary(user_id) ->
+          case Accounts.get_user(user_id) do
+            %{name: name} when is_binary(name) and name != "" -> name
+            %{email: email} when is_binary(email) -> email
+            _ -> user_id
+          end
+
+        _ ->
+          session["user_email"] || session["user_id"] || "user"
+      end
 
     socket =
       socket
