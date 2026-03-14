@@ -46,6 +46,7 @@ defmodule Platform.MixProject do
       {:phoenix_live_view, "~> 1.1.0"},
       {:assent, "~> 0.2"},
       {:ssl_verify_fun, "~> 1.1"},
+      {:certifi, "~> 2.4"},
       {:mint, "~> 1.0"},
       {:castore, "~> 1.0"},
       {:lazy_html, ">= 0.1.0", only: :test},

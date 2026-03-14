@@ -31,6 +31,7 @@ defmodule PlatformWeb.Router do
   scope "/", PlatformWeb do
     pipe_through(:browser)
 
+    get("/health", HealthController, :index)
     get("/auth/login", AuthController, :login)
     get("/auth/oidc/callback", AuthController, :callback)
     get("/auth/logout", AuthController, :logout)
