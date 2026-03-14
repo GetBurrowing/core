@@ -9,6 +9,7 @@ defmodule Platform.Application do
   def start(_type, _args) do
     Platform.Config.validate!()
     Platform.Audit.TelemetryHandler.attach()
+    Platform.Vault.TelemetryHandler.attach()
 
     children = [
       Platform.Vault.Encryption,
