@@ -17,6 +17,9 @@ defmodule PlatformWeb.ConnCase do
 
   use ExUnit.CaseTemplate
 
+  alias Ecto.Adapters.SQL.Sandbox
+  alias Platform.Repo
+
   using do
     quote do
       # The default endpoint for testing
@@ -31,7 +34,13 @@ defmodule PlatformWeb.ConnCase do
     end
   end
 
-  setup _tags do
+  setup tags do
+    :ok = Sandbox.checkout(Repo)
+
+    unless tags[:async] do
+      Sandbox.mode(Repo, {:shared, self()})
+    end
+
     {:ok, conn: Phoenix.ConnTest.build_conn()}
   end
 end

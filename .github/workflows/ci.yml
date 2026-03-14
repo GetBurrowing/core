@@ -15,6 +15,23 @@ jobs:
     runs-on: ubuntu-latest
     container:
       image: elixir:1.19.5-otp-28-slim
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+    env:
+      PGHOST: postgres
+      PGUSER: postgres
+      PGPASSWORD: postgres
     defaults:
       run:
         working-directory: apps/platform

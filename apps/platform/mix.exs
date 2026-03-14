@@ -21,7 +21,7 @@ defmodule Platform.MixProject do
   def application do
     [
       mod: {Platform.Application, []},
-      extra_applications: [:logger, :runtime_tools]
+      extra_applications: [:logger, :runtime_tools, :ssl]
     ]
   end
 
@@ -44,7 +44,12 @@ defmodule Platform.MixProject do
       {:phoenix_html, "~> 4.1"},
       {:phoenix_live_reload, "~> 1.2", only: :dev},
       {:phoenix_live_view, "~> 1.1.0"},
+      {:assent, "~> 0.2"},
+      {:mint, "~> 1.0"},
+      {:castore, "~> 1.0"},
       {:lazy_html, ">= 0.1.0", only: :test},
+      {:ecto_sql, "~> 3.10"},
+      {:postgrex, ">= 0.0.0"},
       {:esbuild, "~> 0.10", runtime: Mix.env() == :dev},
       {:tailwind, "~> 0.3", runtime: Mix.env() == :dev},
       {:heroicons,
@@ -70,7 +75,9 @@ defmodule Platform.MixProject do
   # See the documentation for `Mix` for more info on aliases.
   defp aliases do
     [
-      setup: ["deps.get", "assets.setup", "assets.build"],
+      setup: ["deps.get", "ecto.setup", "assets.setup", "assets.build"],
+      "ecto.setup": ["ecto.create", "ecto.migrate"],
+      "ecto.reset": ["ecto.drop", "ecto.setup"],
       "assets.setup": ["tailwind.install --if-missing", "esbuild.install --if-missing"],
       "assets.build": ["compile", "tailwind platform", "esbuild platform"],
       "assets.deploy": [
@@ -78,6 +85,7 @@ defmodule Platform.MixProject do
         "esbuild platform --minify",
         "phx.digest"
       ],
+      test: ["ecto.create --quiet", "ecto.migrate --quiet", "test"],
       precommit: ["compile --warnings-as-errors", "deps.unlock --unused", "format", "test"]
     ]
   end

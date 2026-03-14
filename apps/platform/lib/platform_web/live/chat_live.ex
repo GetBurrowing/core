@@ -89,6 +89,9 @@ defmodule PlatformWeb.ChatLive do
               <span class="badge badge-outline">Chat first</span>
               <span class="badge badge-outline">Tasks later</span>
               <span class="badge badge-outline">Shell planned</span>
+              <.link href={~p"/auth/logout"} class="badge badge-neutral badge-outline">
+                Log out
+              </.link>
             </div>
           </div>
         </header>

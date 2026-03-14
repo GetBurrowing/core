@@ -7,6 +7,23 @@ config :platform, PlatformWeb.Endpoint,
   secret_key_base: "wDzkIE+XxH39V2UNNOc1XIoqNslG2NDHj2MH2kHjx1obx7fvxcWMq8nL+v7wp/fo",
   server: false
 
+config :platform, Platform.Repo,
+  username: System.get_env("PGUSER", "postgres"),
+  password: System.get_env("PGPASSWORD", "postgres"),
+  hostname: System.get_env("PGHOST", "localhost"),
+  port: String.to_integer(System.get_env("PGPORT", "5432")),
+  database: System.get_env("PLATFORM_TEST_DATABASE", "platform_test"),
+  pool: Ecto.Adapters.SQL.Sandbox,
+  pool_size: 10
+
+config :platform, :oidc,
+  client_id: "test-client-id",
+  client_secret: "test-client-secret",
+  issuer: "https://issuer.example.com",
+  app_url: "http://www.example.com",
+  strategy: Platform.TestOIDCStrategy,
+  http_adapter: {Assent.HTTPAdapter.Mint, []}
+
 # Print only warnings and errors during test
 config :logger, level: :warning
 
