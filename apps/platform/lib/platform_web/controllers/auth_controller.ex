@@ -35,8 +35,13 @@ defmodule PlatformWeb.AuthController do
   end
 
   def callback(conn, %{"state" => state, "code" => _code} = params) do
+    session_params = %{
+      state: get_session(conn, :oidc_state),
+      nonce: get_session(conn, :oidc_nonce)
+    }
+
     with ^state <- get_session(conn, :oidc_state),
-         {:ok, auth} <- OIDC.callback(params),
+         {:ok, auth} <- OIDC.callback(params, session_params),
          {:ok, oidc_user} <- extract_oidc_user(auth),
          {:ok, user} <- Accounts.find_or_create_from_oidc(oidc_user) do
       :telemetry.execute(
@@ -111,7 +116,7 @@ defmodule PlatformWeb.AuthController do
       %{
         action: "failure",
         ip_address: format_ip(conn.remote_ip),
-        reason: to_string(reason)
+        reason: inspect(reason)
       }
     )
   end

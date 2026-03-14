@@ -9,8 +9,12 @@ defmodule Platform.OIDC do
     )
   end
 
-  def callback(params) do
-    strategy().callback(base_config(), params)
+  def callback(params, session_params) do
+    config =
+      base_config()
+      |> Keyword.put(:session_params, session_params)
+
+    strategy().callback(config, params)
   end
 
   def logout_url(id_token_hint) do
