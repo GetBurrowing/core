@@ -4,7 +4,22 @@ if System.get_env("PHX_SERVER") do
   config :platform, PlatformWeb.Endpoint, server: true
 end
 
+# Use OTP 26+'s built-in public CA certificates for outbound HTTPS.
+# This covers the OIDC discovery and token endpoint calls made by Assent.
+# Eliminates the need for the certifi or ssl_verify_fun hex packages.
 if config_env() != :test do
+  config :platform, :oidc,
+    http_adapter:
+      {Assent.HTTPAdapter.Httpc,
+       ssl: [
+         verify: :verify_peer,
+         cacerts: :public_key.cacerts_get(),
+         depth: 3,
+         customize_hostname_check: [
+           match_fun: :public_key.pkix_verify_hostname_match_fun(:https)
+         ]
+       ]}
+
   pool_size = String.to_integer(System.get_env("POOL_SIZE", "10"))
 
   socket_options =
