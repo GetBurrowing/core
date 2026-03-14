@@ -42,11 +42,11 @@ Core owns:
 
 Core must not contain:
 
-- Hive-specific production values
+- host-specific production values
 - personal domains or private environment details
 - real deployment targets
 - target-specific promotion state
-- operator runbooks tied to Rowan's private infrastructure
+- operator runbooks tied to private infrastructure
 - secret material
 
 ### Private repo: Core Ops
@@ -163,7 +163,7 @@ core/
 ```text
 core-ops/
 ├─ targets/
-│  └─ hive-production/
+│  └─ <target-name>/
 │     ├─ compose/
 │     ├─ env/
 │     ├─ overrides/
@@ -196,7 +196,7 @@ core-ops/
 
 To preserve this decision:
 
-- do not add Hive-specific deploy values to the Core repo
+- do not add host-specific deploy values to the Core repo
 - do not use a generic catch-all top-level `workers/` directory until a real pattern emerges
 - do not collapse Tasks and Execution into one ambiguous concept
 - do not treat Chat as a permanent one-surface architecture
@@ -208,4 +208,4 @@ Near-term follow-up work should:
 1. define the public deployment contract in `deployment/schema/`
 2. describe platform domain boundaries under `docs/architecture/`
 3. scaffold the Phoenix app under `apps/platform/`
-4. keep the private Hive target model in `core-ops/targets/hive-production/`
+4. keep deployment target instances in the private Core Ops repo

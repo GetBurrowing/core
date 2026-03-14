@@ -10,7 +10,7 @@ ADR 0001 established that Core owns the reusable deployment model while Core Ops
 
 ADR 0002 established the platform/domain structure inside the Phoenix application.
 
-To perform the first real Hive deployment of the Phoenix scaffold, we need a clear deployment contract that answers:
+To perform the first real production deployment of the Phoenix scaffold, we need a clear deployment contract that answers:
 
 - what Core must publish
 - what Core Ops must provide
@@ -103,27 +103,13 @@ Core Ops should instantiate that contract under real targets:
 - `targets/<target>/compose/` — target-specific compose wiring
 - `targets/<target>/runbooks/` — target-specific operator procedures
 
-## Current first target
-
-The first concrete target is:
-
-- `hive-production`
-
-Its current contract instance is:
-
-- `targets/hive-production/env/platform.shared.env`
-- `targets/hive-production/overrides/suite.example.com.route.env`
-- `targets/hive-production/releases/platform.current.env`
-- `secrets/hive-production/platform.secrets.env`
-- `targets/hive-production/compose/platform.compose.yml`
-
 ## LiveView posture
 
 The platform should prefer **Phoenix LiveView wherever possible**.
 
 Implication for deployment:
 
-- the first deployment should optimize for a simple Phoenix release behind Traefik
+- the first deployment should optimize for a simple Phoenix release behind a reverse proxy
 - no separate SPA hosting layer is required for the first surface
 - server-rendered realtime behavior is the default posture unless a later surface has a clear reason to diverge
 
@@ -132,7 +118,7 @@ Implication for deployment:
 ### Positive
 
 - keeps the public/private boundary explicit during deployment work
-- makes Hive deployment a concrete instance of a reusable model
+- makes each deployment a concrete instance of a reusable model
 - reduces the chance of host-specific drift leaking into Core
 - gives future targets the same shape from the beginning
 - matches the LiveView-first deployment posture with a simple release model
@@ -148,7 +134,7 @@ Implication for deployment:
 To preserve this decision:
 
 - do not commit real secrets to Core
-- do not commit real Hive-specific values to Core
+- do not commit real host-specific values to Core
 - do not move promotion state into the public repo
 - do not let Core Ops become the home for reusable product deployment logic
 
@@ -159,4 +145,4 @@ Near-term follow-up work should:
 1. publish the current deployment contract in `deployment/schema/`
 2. add reusable runtime templates in `deployment/templates/`
 3. tighten the Core Ops target validator to include the full target shape
-4. attempt the first Hive deployment of the Phoenix scaffold using this contract
+4. attempt the first production deployment of the Phoenix scaffold using this contract
