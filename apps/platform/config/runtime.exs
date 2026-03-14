@@ -34,7 +34,10 @@ if config_env() != :test do
     client_id: System.get_env("OIDC_CLIENT_ID"),
     client_secret: System.get_env("OIDC_CLIENT_SECRET"),
     issuer: System.get_env("OIDC_ISSUER"),
-    app_url: app_url
+    app_url: app_url,
+    # PKCE (RFC 7636): set OIDC_PKCE_ENABLED=true when the provider enforces it.
+    # Defaults to false for compatibility with providers that don't support PKCE.
+    pkce_enabled: System.get_env("OIDC_PKCE_ENABLED") in ["true", "1"]
 
   config :platform, PlatformWeb.Endpoint,
     http: [port: String.to_integer(System.get_env("PORT", "4000"))]

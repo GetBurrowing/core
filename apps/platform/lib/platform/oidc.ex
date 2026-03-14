@@ -57,7 +57,16 @@ defmodule Platform.OIDC do
       token_url: issuer <> "/token",
       authorize_url: issuer <> "/authorize",
       http_adapter: config(:http_adapter)
-    ]
+    ] ++ pkce_config()
+  end
+
+  # PKCE (RFC 7636) is opt-in via OIDC_PKCE_ENABLED=true.
+  # Enable it when your OIDC provider enforces PKCE for the client (e.g. Pocket ID,
+  # Keycloak with "PKCE Required"). Leave it off for providers that don't support it.
+  # When enabled, Assent generates code_verifier/code_challenge and handles the
+  # full exchange automatically — no extra code needed in the controller.
+  defp pkce_config do
+    if config(:pkce_enabled), do: [code_verifier: true], else: []
   end
 
   defp logout_query(nil), do: %{"post_logout_redirect_uri" => app_url()}
