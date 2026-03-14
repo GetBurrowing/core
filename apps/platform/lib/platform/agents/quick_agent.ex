@@ -17,11 +17,10 @@ defmodule Platform.Agents.QuickAgent do
   @api_url "https://api.anthropic.com/v1/messages"
   @api_version "2023-06-01"
 
-  # OAuth tokens (sk-ant-oat*) require specific beta headers.
-  @oauth_beta_headers [
-    "oauth-2025-04-20",
-    "claude-code-20250219"
-  ]
+  # Exact OAuth header set from @mariozechner/pi-ai anthropic.js (OpenClaw's upstream)
+  # authToken (Bearer) + these headers is how OpenClaw authenticates OAuth tokens.
+  @oauth_beta "claude-code-20250219,oauth-2025-04-20,fine-grained-tool-streaming-2025-05-14"
+  @oauth_user_agent "claude-cli/2.1.62"
 
   @doc """
   Send a message to the agent and get a response.
@@ -81,27 +80,25 @@ defmodule Platform.Agents.QuickAgent do
       "messages" => messages
     }
 
-    # OAuth tokens use Authorization: Bearer; API keys use x-api-key
-    auth_header =
-      if is_oauth do
-        {"Authorization", "Bearer #{api_key}"}
-      else
-        {"x-api-key", api_key}
-      end
-
-    headers = [
-      auth_header,
-      {"anthropic-version", @api_version},
-      {"content-type", "application/json"}
-    ]
-
-    # OAuth tokens require additional beta headers
+    # Build headers exactly as OpenClaw's pi-ai anthropic.js does
     headers =
       if is_oauth do
-        beta_value = Enum.join(@oauth_beta_headers, ",")
-        headers ++ [{"anthropic-beta", beta_value}]
+        [
+          {"Authorization", "Bearer #{api_key}"},
+          {"anthropic-version", @api_version},
+          {"anthropic-beta", @oauth_beta},
+          {"user-agent", @oauth_user_agent},
+          {"x-app", "cli"},
+          {"anthropic-dangerous-direct-browser-access", "true"},
+          {"content-type", "application/json"}
+        ]
       else
-        headers
+        [
+          {"x-api-key", api_key},
+          {"anthropic-version", @api_version},
+          {"anthropic-beta", "fine-grained-tool-streaming-2025-05-14"},
+          {"content-type", "application/json"}
+        ]
       end
 
     case Req.post(@api_url, json: body, headers: headers, receive_timeout: 60_000) do
