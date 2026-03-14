@@ -1,5 +1,8 @@
 name: CI
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 on:
   push:
     branches: [main]
@@ -15,15 +18,15 @@ jobs:
         working-directory: apps/platform
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: erlef/setup-beam@v1
+      - uses: erlef/setup-beam@v1.22.0
         with:
           elixir-version: "1.19.5"
           otp-version: "28"
 
       - name: Cache deps
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: apps/platform/deps
           key: deps-${{ hashFiles('apps/platform/mix.lock') }}
@@ -48,7 +51,7 @@ jobs:
       packages: write
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Derive image tags
         id: vars
