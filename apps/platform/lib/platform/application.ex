@@ -11,6 +11,7 @@ defmodule Platform.Application do
     Platform.Audit.TelemetryHandler.attach()
 
     children = [
+      Platform.Vault.Encryption,
       Platform.Repo,
       PlatformWeb.Telemetry,
       {DNSCluster, query: Application.get_env(:platform, :dns_cluster_query) || :ignore},
