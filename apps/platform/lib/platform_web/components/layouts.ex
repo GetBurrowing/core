@@ -74,6 +74,25 @@ defmodule PlatformWeb.Layouts do
   end
 
   @doc """
+  Returns CSS classes for a sidebar navigation item.
+  Highlights the item when the current path starts with the given path.
+  """
+  def nav_item_class(current_path, path) do
+    base = "p-2 rounded-lg transition-colors hover:bg-base-300"
+
+    if String.starts_with?(current_path, path) do
+      base <> " bg-base-300 text-primary"
+    else
+      base <> " text-base-content/60"
+    end
+  end
+
+  @doc "Returns a Tailwind color class for the agent status indicator."
+  def agent_status_color(:online), do: "bg-success"
+  def agent_status_color(:error), do: "bg-error"
+  def agent_status_color(_), do: "bg-base-content/30"
+
+  @doc """
   Shows the flash group with standard titles and content.
 
   ## Examples

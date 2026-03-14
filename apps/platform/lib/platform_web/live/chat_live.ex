@@ -88,77 +88,51 @@ defmodule PlatformWeb.ChatLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <Layouts.flash_group flash={@flash} />
-    <div class="min-h-screen bg-base-100 text-base-content">
-      <div class="mx-auto flex min-h-screen max-w-5xl flex-col px-4 py-6 sm:px-6 lg:px-8">
-        <header class="mb-6 rounded-box border border-base-300 bg-base-200/60 p-5 shadow-sm">
-          <div class="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
-            <div>
-              <p class="text-sm font-medium uppercase tracking-[0.2em] text-base-content/60">
-                Startup Suite
-              </p>
-              <h1 class="mt-2 text-3xl font-semibold tracking-tight">Core Chat</h1>
-              <p class="mt-3 max-w-3xl text-sm leading-6 text-base-content/70">
-                The first surface for the suite. Elixir/Phoenix underneath, plain language up top,
-                and a deliberately restrained interface while the rest of the platform comes online.
-              </p>
-            </div>
-            <div class="flex flex-wrap gap-2 text-xs font-medium">
-              <span class="badge badge-outline">Chat first</span>
-              <span class="badge badge-outline">Tasks later</span>
-              <span class="badge badge-outline">Shell planned</span>
-              <.link href={~p"/auth/logout"} class="badge badge-neutral badge-outline">
-                Log out
-              </.link>
-            </div>
+    <div class="flex h-full flex-col">
+      <div class="border-b border-base-300 px-5 py-4">
+        <div class="flex items-center justify-between gap-3">
+          <div>
+            <p class="text-sm font-medium uppercase tracking-[0.2em] text-base-content/60">
+              Startup Suite
+            </p>
+            <h1 class="mt-1 text-xl font-semibold tracking-tight">Core Chat</h1>
+            <p class="mt-1 max-w-3xl text-sm leading-6 text-base-content/70">
+              The first surface for the suite. Elixir/Phoenix underneath, plain language up top,
+              and a deliberately restrained interface while the rest of the platform comes online.
+            </p>
           </div>
-        </header>
+          <div class="flex flex-wrap gap-2 text-xs font-medium">
+            <span class="badge badge-outline">Chat first</span>
+            <span class="badge badge-outline">Tasks later</span>
+            <span class="badge badge-outline">Shell planned</span>
+          </div>
+        </div>
+      </div>
 
-        <main class="flex flex-1 flex-col gap-4 rounded-box border border-base-300 bg-base-100 shadow-sm">
-          <div class="border-b border-base-300 px-5 py-4">
-            <div class="flex items-center justify-between gap-3">
-              <div>
-                <h2 class="text-sm font-semibold uppercase tracking-wide text-base-content/60">
-                  Conversation
-                </h2>
-                <p class="mt-1 text-sm text-base-content/70">
-                  Minimal local interaction for the first deployable build.
-                </p>
-              </div>
-              <div class="text-xs text-base-content/50">suite.example.com</div>
+      <div class="flex-1 space-y-4 overflow-y-auto px-5 py-5">
+        <div :for={message <- @messages} class={message_row_class(message.role)}>
+          <div class={message_bubble_class(message.role)}>
+            <div class="mb-2 flex items-center justify-between gap-4 text-xs uppercase tracking-wide text-base-content/50">
+              <span>{role_label(message.role)}</span>
+              <span>{message.at}</span>
             </div>
+            <p class="text-sm leading-6">{message.body}</p>
           </div>
+        </div>
+      </div>
 
-          <div class="flex-1 space-y-4 px-5 py-5">
-            <div :for={message <- @messages} class={message_row_class(message.role)}>
-              <div class={message_bubble_class(message.role)}>
-                <div class="mb-2 flex items-center justify-between gap-4 text-xs uppercase tracking-wide text-base-content/50">
-                  <span>{role_label(message.role)}</span>
-                  <span>{message.at}</span>
-                </div>
-                <p class="text-sm leading-6">{message.body}</p>
-              </div>
-            </div>
-          </div>
-
-          <div class="border-t border-base-300 px-5 py-4">
-            <.form
-              for={@form}
-              id="chat-form"
-              phx-submit="send"
-              class="flex flex-col gap-3 md:flex-row"
-            >
-              <.input
-                field={@form[:message]}
-                type="text"
-                placeholder="Type a message"
-                autocomplete="off"
-                class="w-full"
-              />
-              <button type="submit" class="btn btn-neutral md:self-end">Send</button>
-            </.form>
-          </div>
-        </main>
+      <div class="border-t border-base-300 px-5 py-4">
+        <div class="mb-2 text-xs text-base-content/50">suite.example.com</div>
+        <.form for={@form} id="chat-form" phx-submit="send" class="flex flex-col gap-3 md:flex-row">
+          <.input
+            field={@form[:message]}
+            type="text"
+            placeholder="Type a message"
+            autocomplete="off"
+            class="w-full"
+          />
+          <button type="submit" class="btn btn-neutral md:self-end">Send</button>
+        </.form>
       </div>
     </div>
     """

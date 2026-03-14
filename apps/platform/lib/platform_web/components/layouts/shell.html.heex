@@ -1,0 +1,44 @@
+<div class="flex h-screen overflow-hidden bg-base-100">
+  <%!-- Sidebar nav --%>
+  <nav class="flex w-14 flex-col items-center gap-2 border-r border-base-300 bg-base-200 py-4">
+    <div class="mb-4 text-lg font-bold">⚡</div>
+    <.link navigate="/chat" class={nav_item_class(@current_path, "/chat")} title="Chat">
+      <span class="hero-chat-bubble-left-right size-5"></span>
+    </.link>
+    <.link
+      navigate="/control"
+      class={nav_item_class(@current_path, "/control")}
+      title="Control Center"
+    >
+      <span class="hero-cog-6-tooth size-5"></span>
+    </.link>
+    <div class="flex-1"></div>
+    <.link href="/auth/logout" class="rounded-lg p-2 opacity-50 hover:opacity-100" title="Log out">
+      <span class="hero-arrow-right-on-rectangle size-5"></span>
+    </.link>
+  </nav>
+  <%!-- Main content --%>
+  <div class="flex flex-1 flex-col overflow-hidden">
+    <%!-- Top bar --%>
+    <header class="flex h-10 items-center justify-between border-b border-base-300 bg-base-200/60 px-4">
+      <span class="text-xs font-semibold uppercase tracking-widest text-base-content/50">
+        Startup Suite
+      </span>
+      <div class="flex items-center gap-2">
+        <span
+          :if={assigns[:agent_status]}
+          class={"inline-block size-2 rounded-full #{agent_status_color(@agent_status)}"}
+        >
+        </span>
+        <span :if={assigns[:agent_status]} class="text-xs text-base-content/50">Agent</span>
+        <span class="text-xs text-base-content/50">{@current_user}</span>
+      </div>
+    </header>
+    <%!-- Flash messages --%>
+    <.flash_group flash={@flash} />
+    <%!-- Surface --%>
+    <main class="flex-1 overflow-hidden">
+      {@inner_content}
+    </main>
+  </div>
+</div>

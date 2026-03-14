@@ -6,10 +6,24 @@ defmodule PlatformWeb.PageControllerTest do
   alias Platform.Repo
 
   test "GET / redirects unauthenticated users to login", %{conn: conn} do
-    assert {:error, {:redirect, %{to: "/auth/login"}}} = live(conn, ~p"/")
+    conn = get(conn, ~p"/")
+    assert redirected_to(conn) == "/auth/login"
   end
 
-  test "GET / renders the chat surface for authenticated users", %{conn: conn} do
+  test "GET / redirects authenticated users to /chat", %{conn: conn} do
+    user =
+      Repo.insert!(%User{
+        email: "user@example.com",
+        name: "Test User",
+        oidc_sub: "oidc-subject"
+      })
+
+    conn = init_test_session(conn, current_user_id: user.id)
+    conn = get(conn, ~p"/")
+    assert redirected_to(conn) == "/chat"
+  end
+
+  test "GET /chat renders the chat surface for authenticated users", %{conn: conn} do
     user =
       Repo.insert!(%User{
         email: "user@example.com",
@@ -19,7 +33,7 @@ defmodule PlatformWeb.PageControllerTest do
 
     conn = init_test_session(conn, current_user_id: user.id)
 
-    {:ok, view, html} = live(conn, ~p"/")
+    {:ok, view, html} = live(conn, ~p"/chat")
 
     assert html =~ "Core Chat"
 

@@ -30,7 +30,15 @@ defmodule PlatformWeb.Router do
   scope "/", PlatformWeb do
     pipe_through([:browser, :require_auth])
 
-    live("/", ChatLive, :index)
+    # Root redirects to /chat
+    get("/", PageController, :home)
+
+    live_session :authenticated,
+      on_mount: [PlatformWeb.ShellLive],
+      layout: {PlatformWeb.Layouts, :shell} do
+      live("/chat", ChatLive, :index)
+      live("/control", ControlCenterLive, :index)
+    end
   end
 
   # Other scopes may use custom stacks.
