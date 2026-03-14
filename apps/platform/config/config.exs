@@ -56,7 +56,7 @@ config :logger, :default_formatter,
 # Use Jason for JSON parsing in Phoenix
 config :phoenix, :json_library, Jason
 
-config :platform, :oidc, http_adapter: {Assent.HTTPAdapter.Mint, []}
+config :platform, :oidc, http_adapter: Assent.HTTPAdapter.Httpc
 
 # Import environment specific config. This must remain at the bottom
 # of this file so it overrides the configuration defined above.
