@@ -7,7 +7,7 @@ defmodule Platform.Chat.Thread do
 
   schema "chat_threads" do
     field(:space_id, :binary_id)
-    field(:parent_message_id, :integer)
+    field(:parent_message_id, :binary_id)
     field(:title, :string)
     field(:metadata, :map, default: %{})
 

@@ -2,8 +2,8 @@ defmodule Platform.Chat.Message do
   use Ecto.Schema
   import Ecto.Changeset
 
-  # Integer (bigserial) primary key — NOT binary_id.
-  @primary_key {:id, :id, autogenerate: true}
+  # UUID primary key — repo config sets migration_primary_key: [type: :binary_id].
+  @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
 
   @content_types ~w(text system agent_action canvas)

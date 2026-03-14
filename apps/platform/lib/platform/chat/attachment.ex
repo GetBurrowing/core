@@ -6,8 +6,7 @@ defmodule Platform.Chat.Attachment do
   @foreign_key_type :binary_id
 
   schema "chat_attachments" do
-    # message_id is an integer FK (chat_messages has bigserial PK).
-    field(:message_id, :id)
+    field(:message_id, :binary_id)
     field(:filename, :string)
     field(:content_type, :string)
     field(:byte_size, :integer)

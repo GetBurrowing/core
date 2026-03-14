@@ -7,8 +7,7 @@ defmodule Platform.Chat.Pin do
 
   schema "chat_pins" do
     field(:space_id, :binary_id)
-    # message_id is an integer FK (chat_messages has bigserial PK).
-    field(:message_id, :id)
+    field(:message_id, :binary_id)
     field(:pinned_by, :binary_id)
 
     field(:inserted_at, :utc_datetime_usec, autogenerate: {DateTime, :utc_now, []})

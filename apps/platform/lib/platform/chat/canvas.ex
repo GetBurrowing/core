@@ -9,8 +9,7 @@ defmodule Platform.Chat.Canvas do
 
   schema "chat_canvases" do
     field(:space_id, :binary_id)
-    # message_id is an integer FK (chat_messages has bigserial PK).
-    field(:message_id, :id)
+    field(:message_id, :binary_id)
     field(:created_by, :binary_id)
     field(:title, :string)
     field(:canvas_type, :string)

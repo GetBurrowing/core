@@ -71,7 +71,7 @@ defmodule Platform.Repo.Migrations.CreateChatTables do
     end
 
     # ── chat_messages ────────────────────────────────────────────────────────────
-    # Uses bigserial (integer) PK — NOT UUID.
+    # Uses binary_id (UUID) PK — inherited from repo's migration_primary_key config.
     create table(:chat_messages) do
       add(
         :space_id,
@@ -109,7 +109,6 @@ defmodule Platform.Repo.Migrations.CreateChatTables do
     execute("CREATE INDEX idx_chat_messages_search ON chat_messages USING gin(search_vector)")
 
     # ── chat_attachments ──────────────────────────────────────────────────────────
-    # message_id references the integer PK of chat_messages — type :id (bigint).
     create table(:chat_attachments, primary_key: false) do
       add(:id, :binary_id, primary_key: true)
       add(:message_id, references(:chat_messages, on_delete: :delete_all), null: false)
