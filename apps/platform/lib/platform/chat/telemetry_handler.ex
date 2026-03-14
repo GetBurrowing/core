@@ -8,18 +8,19 @@ defmodule Platform.Chat.TelemetryHandler do
 
   ## Handled events
 
-    | Telemetry event                          | Audit event type            |
-    |------------------------------------------|-----------------------------|
-    | `[:platform, :chat, :space_created]`     | `"chat.space.created"`      |
-    | `[:platform, :chat, :message_posted]`    | `"chat.message.posted"`     |
-    | `[:platform, :chat, :message_edited]`    | `"chat.message.edited"`     |
-    | `[:platform, :chat, :message_deleted]`   | `"chat.message.deleted"`    |
-    | `[:platform, :chat, :participant_added]` | `"chat.participant.added"`  |
-    | `[:platform, :chat, :participant_removed]`| `"chat.participant.removed"`|
-    | `[:platform, :chat, :reaction_added]`    | `"chat.reaction.added"`     |
-    | `[:platform, :chat, :reaction_removed]`  | `"chat.reaction.removed"`   |
-    | `[:platform, :chat, :pin_added]`         | `"chat.pin.added"`          |
-    | `[:platform, :chat, :pin_removed]`       | `"chat.pin.removed"`        |
+    | Telemetry event                           | Audit event type             |
+    |-------------------------------------------|------------------------------|
+    | `[:platform, :chat, :space_created]`      | `"chat.space.created"`       |
+    | `[:platform, :chat, :message_posted]`     | `"chat.message.posted"`      |
+    | `[:platform, :chat, :message_edited]`     | `"chat.message.edited"`      |
+    | `[:platform, :chat, :message_deleted]`    | `"chat.message.deleted"`     |
+    | `[:platform, :chat, :participant_added]`  | `"chat.participant.added"`   |
+    | `[:platform, :chat, :participant_removed]`| `"chat.participant.removed"` |
+    | `[:platform, :chat, :reaction_added]`     | `"chat.reaction.added"`      |
+    | `[:platform, :chat, :reaction_removed]`   | `"chat.reaction.removed"`    |
+    | `[:platform, :chat, :pin_added]`          | `"chat.pin.added"`           |
+    | `[:platform, :chat, :pin_removed]`        | `"chat.pin.removed"`         |
+    | `[:platform, :chat, :attention_routed]`   | `"chat.attention.routed"`    |
   """
 
   require Logger
@@ -36,7 +37,8 @@ defmodule Platform.Chat.TelemetryHandler do
     [:platform, :chat, :reaction_added],
     [:platform, :chat, :reaction_removed],
     [:platform, :chat, :pin_added],
-    [:platform, :chat, :pin_removed]
+    [:platform, :chat, :pin_removed],
+    [:platform, :chat, :attention_routed]
   ]
 
   @doc "Attach the handler to all registered chat telemetry events."

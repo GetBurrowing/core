@@ -20,6 +20,8 @@ defmodule Platform.Application do
       {Phoenix.PubSub, name: Platform.PubSub},
       # Chat presence — must start after PubSub
       Platform.Chat.Presence,
+      # AttentionRouter — must start after Repo and PubSub
+      Platform.Chat.AttentionRouter,
       # Vault OAuth token refresh worker — must start after Repo and Vault.Encryption
       Platform.Vault.RefreshWorker,
       # Start to serve requests, typically the last entry
