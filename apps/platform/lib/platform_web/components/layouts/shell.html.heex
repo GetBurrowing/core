@@ -1,29 +1,90 @@
 <div class="flex h-screen overflow-hidden bg-base-100">
-  <%!-- Sidebar nav --%>
-  <nav class="flex w-14 flex-col items-center gap-2 border-r border-base-300 bg-base-200 py-4">
-    <div class="mb-4 text-lg font-bold">⚡</div>
-    <.link navigate="/chat" class={nav_item_class(@current_path, "/chat")} title="Chat">
+  <%!-- Mobile backdrop overlay (only rendered when drawer is open) --%>
+  <%= if @drawer_open do %>
+    <div
+      class="fixed inset-0 z-40 bg-black/50 lg:hidden"
+      phx-click="close_drawer"
+      aria-hidden="true"
+    />
+  <% end %>
+
+  <%!-- Sidebar / mobile drawer nav --%>
+  <nav
+    id="shell-sidebar"
+    phx-hook="SwipeDrawer"
+    class={[
+      "flex w-56 flex-col gap-2 border-r border-base-300 bg-base-200 py-4 px-2 transition-transform duration-300 ease-in-out",
+      "fixed inset-y-0 left-0 z-50 lg:relative lg:translate-x-0",
+      if(@drawer_open, do: "translate-x-0", else: "-translate-x-full lg:translate-x-0")
+    ]}
+  >
+    <%!-- Drawer header --%>
+    <div class="mb-4 flex items-center justify-between px-2">
+      <span class="text-lg font-bold">⚡</span>
+      <%!-- Close button (mobile only) --%>
+      <button
+        class="rounded-lg p-1 text-base-content/60 hover:bg-base-300 hover:text-base-content lg:hidden"
+        phx-click="close_drawer"
+        aria-label="Close menu"
+      >
+        <span class="hero-x-mark size-5"></span>
+      </button>
+    </div>
+
+    <%!-- Module navigation links --%>
+    <.link
+      navigate="/chat"
+      class={nav_item_class(@current_path, "/chat")}
+      phx-click="close_drawer"
+      title="Chat"
+    >
       <span class="hero-chat-bubble-left-right size-5"></span>
+      <span class="text-sm font-medium">Chat</span>
     </.link>
     <.link
       navigate="/control"
       class={nav_item_class(@current_path, "/control")}
+      phx-click="close_drawer"
       title="Control Center"
     >
       <span class="hero-cog-6-tooth size-5"></span>
+      <span class="text-sm font-medium">Control Center</span>
     </.link>
+
     <div class="flex-1"></div>
-    <.link href="/auth/logout" class="rounded-lg p-2 opacity-50 hover:opacity-100" title="Log out">
+
+    <.link
+      href="/auth/logout"
+      class="flex items-center gap-2 rounded-lg p-2 opacity-50 hover:opacity-100"
+      title="Log out"
+    >
       <span class="hero-arrow-right-on-rectangle size-5"></span>
+      <span class="text-sm font-medium">Log out</span>
     </.link>
   </nav>
-  <%!-- Main content --%>
+
+  <%!-- Main content area --%>
   <div class="flex flex-1 flex-col overflow-hidden">
     <%!-- Top bar --%>
     <header class="flex h-10 items-center justify-between border-b border-base-300 bg-base-200/60 px-4">
-      <span class="text-xs font-semibold uppercase tracking-widest text-base-content/50">
-        Startup Suite
-      </span>
+      <div class="flex items-center gap-2">
+        <%!-- Hamburger button (mobile only) --%>
+        <button
+          class="rounded-lg p-1 text-base-content/60 hover:bg-base-300 hover:text-base-content lg:hidden"
+          phx-click="toggle_drawer"
+          aria-label="Open menu"
+        >
+          <span class="hero-bars-3 size-5"></span>
+        </button>
+        <%!-- Active module name (mobile only) --%>
+        <span class="text-sm font-semibold lg:hidden">
+          {@active_module}
+        </span>
+        <%!-- Suite name (desktop only) --%>
+        <span class="hidden text-xs font-semibold uppercase tracking-widest text-base-content/50 lg:inline">
+          Startup Suite
+        </span>
+      </div>
       <div class="flex items-center gap-2">
         <span
           :if={assigns[:agent_status]}

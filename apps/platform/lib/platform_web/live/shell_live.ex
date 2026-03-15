@@ -20,16 +20,48 @@ defmodule PlatformWeb.ShellLive do
           session["user_email"] || session["user_id"] || "user"
       end
 
+    active_module = derive_active_module(socket.view)
+
     socket =
       socket
       |> assign(:current_user, current_user)
       |> assign(:current_path, "/")
       |> assign(:agent_status, :unknown)
+      |> assign(:drawer_open, false)
+      |> assign(:active_module, active_module)
       |> attach_hook(:track_path, :handle_params, fn _params, url, socket ->
         uri = URI.parse(url)
         {:cont, assign(socket, :current_path, uri.path)}
       end)
+      |> attach_hook(:drawer_events, :handle_event, fn
+        "toggle_drawer", _params, socket ->
+          {:halt, assign(socket, :drawer_open, !socket.assigns.drawer_open)}
+
+        "close_drawer", _params, socket ->
+          {:halt, assign(socket, :drawer_open, false)}
+
+        _event, _params, socket ->
+          {:cont, socket}
+      end)
 
     {:cont, socket}
+  end
+
+  # Derive a human-readable module name from the LiveView module atom.
+  defp derive_active_module(view) do
+    case view do
+      PlatformWeb.ChatLive ->
+        "Chat"
+
+      PlatformWeb.ControlCenterLive ->
+        "Control Center"
+
+      _ ->
+        view
+        |> Module.split()
+        |> List.last()
+        |> String.replace("Live", "")
+        |> String.replace("_", " ")
+    end
   end
 end

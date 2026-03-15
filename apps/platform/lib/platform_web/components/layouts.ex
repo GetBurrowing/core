@@ -78,7 +78,7 @@ defmodule PlatformWeb.Layouts do
   Highlights the item when the current path starts with the given path.
   """
   def nav_item_class(current_path, path) do
-    base = "p-2 rounded-lg transition-colors hover:bg-base-300"
+    base = "flex items-center gap-3 px-3 py-2 rounded-lg transition-colors hover:bg-base-300"
 
     if String.starts_with?(current_path, path) do
       base <> " bg-base-300 text-primary"
