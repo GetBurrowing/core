@@ -112,7 +112,8 @@ defmodule Platform.Execution.LocalRunner do
   end
 
   defp resolve_command(%Run{} = run, opts) do
-    case Keyword.get(opts, :command) || Map.get(run.meta, :command) || Map.get(run.meta, "command") do
+    case Keyword.get(opts, :command) || Map.get(run.meta, :command) ||
+           Map.get(run.meta, "command") do
       nil ->
         {:error, :missing_command}
 

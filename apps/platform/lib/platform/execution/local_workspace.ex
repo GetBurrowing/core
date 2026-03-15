@@ -213,7 +213,12 @@ defmodule Platform.Execution.LocalWorkspace do
     helper_env =
       if token = Map.get(lease_env, "GITHUB_TOKEN") do
         helper_script = "!f() { echo \"password=#{token}\"; }; f"
-        [{"GIT_TERMINAL_PROMPT", "0"}, {"GIT_ASKPASS", "true"}, {"GIT_CREDENTIAL_HELPER", helper_script}]
+
+        [
+          {"GIT_TERMINAL_PROMPT", "0"},
+          {"GIT_ASKPASS", "true"},
+          {"GIT_CREDENTIAL_HELPER", helper_script}
+        ]
       else
         []
       end

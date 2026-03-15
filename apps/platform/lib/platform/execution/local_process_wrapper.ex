@@ -136,10 +136,14 @@ defmodule Platform.Execution.LocalProcessWrapper do
     # have a `runner_exited/2` callback depending on the current version;
     # we send an async message so the wrapper never blocks on notification.
     if is_pid(state.run_server) and Process.alive?(state.run_server) do
-      send(state.run_server, {:runner_exited, state.run_id, %{
-        exit_code: exit_status,
-        exit_state: classify_exit_state(state, exit_status)
-      }})
+      send(
+        state.run_server,
+        {:runner_exited, state.run_id,
+         %{
+           exit_code: exit_status,
+           exit_state: classify_exit_state(state, exit_status)
+         }}
+      )
     end
 
     {:stop, :normal, state}

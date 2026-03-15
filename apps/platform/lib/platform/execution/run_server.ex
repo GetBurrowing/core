@@ -302,8 +302,10 @@ defmodule Platform.Execution.RunServer do
   end
 
   # Runner process exited — update run state accordingly
-  def handle_info({:runner_exited, run_id, %{exit_code: code, exit_state: exit_state}},
-        %State{run: %Run{id: run_id} = run} = state) do
+  def handle_info(
+        {:runner_exited, run_id, %{exit_code: code, exit_state: exit_state}},
+        %State{run: %Run{id: run_id} = run} = state
+      ) do
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
     new_status =

@@ -147,13 +147,16 @@ defmodule Platform.Execution.LocalRunnerTest do
       assert :ok = LocalRunner.request_stop(run_with_ref, [])
 
       # Wrapper exits and we get a runner_exited message
-      assert_eventually(fn ->
-        receive do
-          {:runner_exited, ^run_id, %{exit_state: :cancelled}} -> true
-        after
-          10 -> false
-        end
-      end, 2_000)
+      assert_eventually(
+        fn ->
+          receive do
+            {:runner_exited, ^run_id, %{exit_state: :cancelled}} -> true
+          after
+            10 -> false
+          end
+        end,
+        2_000
+      )
 
       assert_file_eventually(state_file)
       assert File.read!(state_file) == "term\n"
@@ -181,13 +184,16 @@ defmodule Platform.Execution.LocalRunnerTest do
       assert :ok = LocalRunner.force_stop(run_with_ref, [])
 
       # Wrapper exits and we get a runner_exited message with :killed
-      assert_eventually(fn ->
-        receive do
-          {:runner_exited, ^run_id, %{exit_state: :killed}} -> true
-        after
-          10 -> false
-        end
-      end, 2_000)
+      assert_eventually(
+        fn ->
+          receive do
+            {:runner_exited, ^run_id, %{exit_state: :killed}} -> true
+          after
+            10 -> false
+          end
+        end,
+        2_000
+      )
 
       # State file should NOT be written (SIGKILL bypasses the trap)
       refute File.exists?(state_file)
@@ -209,9 +215,12 @@ defmodule Platform.Execution.LocalRunnerTest do
         )
 
       # Wait for the process to exit on its own
-      assert_eventually(fn ->
-        !Process.alive?(ref.wrapper_pid)
-      end, 2_000)
+      assert_eventually(
+        fn ->
+          !Process.alive?(ref.wrapper_pid)
+        end,
+        2_000
+      )
 
       run_with_ref = %Run{run | runner_ref: ref}
       assert :ok = LocalRunner.force_stop(run_with_ref, [])
@@ -479,9 +488,7 @@ defmodule Platform.Execution.LocalRunnerTest do
     clone = Path.join(root, "clone")
     branch = "run/#{run_id}"
 
-    System.cmd("git", ["init", "--bare", "--initial-branch=main", bare],
-      stderr_to_stdout: true
-    )
+    System.cmd("git", ["init", "--bare", "--initial-branch=main", bare], stderr_to_stdout: true)
 
     # Seed the bare repo so it has a HEAD ref
     seed = Path.join(root, "seed")
