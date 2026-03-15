@@ -5,7 +5,9 @@ defmodule Platform.Chat.PubSub do
   ## Topics
 
     * `"chat:space:{space_id}"` — per-space event stream (messages, reactions,
-      pins, participant changes).
+      pins, participant changes, canvas lifecycle events).
+    * `"chat:canvas:{canvas_id}"` — per-canvas event stream (state updates,
+      focused canvas subscribers).
 
   ## Usage in LiveView
 
@@ -46,6 +48,10 @@ defmodule Platform.Chat.PubSub do
   @spec space_topic(binary()) :: String.t()
   def space_topic(space_id), do: "chat:space:#{space_id}"
 
+  @doc "Returns the PubSub topic for a specific canvas."
+  @spec canvas_topic(binary()) :: String.t()
+  def canvas_topic(canvas_id), do: "chat:canvas:#{canvas_id}"
+
   # ── Subscribe ────────────────────────────────────────────────────────────────
 
   @doc """
@@ -62,6 +68,18 @@ defmodule Platform.Chat.PubSub do
   @spec unsubscribe(binary()) :: :ok
   def unsubscribe(space_id) do
     Phoenix.PubSub.unsubscribe(@pubsub, space_topic(space_id))
+  end
+
+  @doc "Subscribe the calling process to a specific canvas topic."
+  @spec subscribe_canvas(binary()) :: :ok | {:error, term()}
+  def subscribe_canvas(canvas_id) do
+    Phoenix.PubSub.subscribe(@pubsub, canvas_topic(canvas_id))
+  end
+
+  @doc "Unsubscribe the calling process from a canvas topic."
+  @spec unsubscribe_canvas(binary()) :: :ok
+  def unsubscribe_canvas(canvas_id) do
+    Phoenix.PubSub.unsubscribe(@pubsub, canvas_topic(canvas_id))
   end
 
   # ── Broadcast ────────────────────────────────────────────────────────────────
@@ -85,5 +103,11 @@ defmodule Platform.Chat.PubSub do
   @spec broadcast_from(binary(), pid(), term()) :: :ok
   def broadcast_from(space_id, from_pid, event) do
     Phoenix.PubSub.broadcast_from(@pubsub, from_pid, space_topic(space_id), event)
+  end
+
+  @doc "Broadcast a canvas-specific event to all subscribers of `canvas_id`."
+  @spec broadcast_canvas(binary(), term()) :: :ok
+  def broadcast_canvas(canvas_id, event) do
+    Phoenix.PubSub.broadcast(@pubsub, canvas_topic(canvas_id), event)
   end
 end

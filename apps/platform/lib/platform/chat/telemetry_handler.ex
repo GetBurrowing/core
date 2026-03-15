@@ -20,6 +20,8 @@ defmodule Platform.Chat.TelemetryHandler do
     | `[:platform, :chat, :reaction_removed]`   | `"chat.reaction.removed"`    |
     | `[:platform, :chat, :pin_added]`          | `"chat.pin.added"`           |
     | `[:platform, :chat, :pin_removed]`        | `"chat.pin.removed"`         |
+    | `[:platform, :chat, :canvas_created]`     | `"chat.canvas.created"`      |
+    | `[:platform, :chat, :canvas_updated]`     | `"chat.canvas.updated"`      |
     | `[:platform, :chat, :attention_routed]`   | `"chat.attention.routed"`    |
   """
 
@@ -38,6 +40,8 @@ defmodule Platform.Chat.TelemetryHandler do
     [:platform, :chat, :reaction_removed],
     [:platform, :chat, :pin_added],
     [:platform, :chat, :pin_removed],
+    [:platform, :chat, :canvas_created],
+    [:platform, :chat, :canvas_updated],
     [:platform, :chat, :attention_routed]
   ]
 
@@ -96,6 +100,7 @@ defmodule Platform.Chat.TelemetryHandler do
   end
 
   # Try to extract a meaningful resource_id from the metadata map.
+  defp resource_id_from(%{canvas_id: id}), do: to_string(id)
   defp resource_id_from(%{space_id: id}), do: to_string(id)
   defp resource_id_from(%{message_id: id}), do: to_string(id)
   defp resource_id_from(%{resource_id: id}), do: to_string(id)

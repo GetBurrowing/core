@@ -28,6 +28,7 @@ defmodule Platform.Chat do
       # Reactions / Pins / Canvases / Attachments
       Platform.Chat.add_reaction(%{message_id: msg.id, participant_id: p.id, emoji: "👍"})
       Platform.Chat.pin_message(%{space_id: space.id, message_id: msg.id, pinned_by: p.id})
+      Platform.Chat.create_canvas_with_message(space.id, p.id, %{canvas_type: "table"})
       Platform.Chat.list_reactions_for_messages([msg1.id, msg2.id])
   """
 
@@ -753,9 +754,77 @@ defmodule Platform.Chat do
   """
   @spec create_canvas(map()) :: {:ok, Canvas.t()} | {:error, Ecto.Changeset.t()}
   def create_canvas(attrs) do
-    %Canvas{}
-    |> Canvas.changeset(attrs)
-    |> Repo.insert()
+    attrs = stringify_canvas_payload(attrs)
+
+    result =
+      %Canvas{}
+      |> Canvas.changeset(attrs)
+      |> Repo.insert()
+
+    case result do
+      {:ok, canvas} ->
+        publish_canvas_created(canvas)
+
+      _ ->
+        :ok
+    end
+
+    result
+  end
+
+  @doc """
+  Create a canvas and its companion chat message in one transaction.
+
+  The resulting message uses `content_type: "canvas"` and stores a lightweight
+  pointer in `structured_content` so the LiveView can reopen the canvas later.
+  """
+  @spec create_canvas_with_message(binary(), binary(), map()) ::
+          {:ok, Canvas.t(), Message.t()} | {:error, term()}
+  def create_canvas_with_message(space_id, participant_id, attrs \\ %{}) do
+    attrs = stringify_canvas_payload(attrs)
+
+    message_attrs = %{
+      space_id: space_id,
+      participant_id: participant_id,
+      content_type: "canvas",
+      content: Map.get(attrs, "message_content") || default_canvas_message(attrs),
+      structured_content: %{
+        "canvas_type" => Map.get(attrs, "canvas_type", "custom"),
+        "title" => Map.get(attrs, "title")
+      }
+    }
+
+    multi =
+      Multi.new()
+      |> Multi.run(:canvas, fn repo, _changes ->
+        attrs
+        |> Map.put("space_id", space_id)
+        |> Map.put("created_by", participant_id)
+        |> then(&Canvas.changeset(%Canvas{}, &1))
+        |> repo.insert()
+      end)
+      |> Multi.run(:message, fn repo, %{canvas: canvas} ->
+        attrs = put_in(message_attrs, [:structured_content, "canvas_id"], canvas.id)
+
+        %Message{}
+        |> Message.changeset(attrs)
+        |> repo.insert()
+      end)
+      |> Multi.run(:canvas_link, fn repo, %{canvas: canvas, message: message} ->
+        canvas
+        |> Canvas.changeset(%{"message_id" => message.id})
+        |> repo.update()
+      end)
+
+    case Repo.transaction(multi) do
+      {:ok, %{canvas_link: canvas, message: message}} ->
+        publish_canvas_created(canvas)
+        publish_message_posted(message)
+        {:ok, canvas, message}
+
+      {:error, _operation, reason, _changes_so_far} ->
+        {:error, reason}
+    end
   end
 
   @doc "Fetch a canvas by primary key. Returns `nil` if not found."
@@ -766,9 +835,34 @@ defmodule Platform.Chat do
   @spec update_canvas(Canvas.t(), map()) ::
           {:ok, Canvas.t()} | {:error, Ecto.Changeset.t()}
   def update_canvas(%Canvas{} = canvas, attrs) do
-    canvas
-    |> Canvas.changeset(attrs)
-    |> Repo.update()
+    attrs = stringify_canvas_payload(attrs)
+
+    result =
+      canvas
+      |> Canvas.changeset(attrs)
+      |> Repo.update()
+
+    case result do
+      {:ok, updated} ->
+        publish_canvas_updated(updated)
+
+      _ ->
+        :ok
+    end
+
+    result
+  end
+
+  @doc "Merge new keys into a canvas's persisted state map."
+  @spec update_canvas_state(Canvas.t(), map()) ::
+          {:ok, Canvas.t()} | {:error, Ecto.Changeset.t()}
+  def update_canvas_state(%Canvas{} = canvas, state_updates) when is_map(state_updates) do
+    merged_state =
+      canvas.state
+      |> Kernel.||(%{})
+      |> Map.merge(stringify_canvas_payload(state_updates))
+
+    update_canvas(canvas, %{state: merged_state})
   end
 
   @doc "List canvases in a space, oldest first."
@@ -834,6 +928,56 @@ defmodule Platform.Chat do
     |> Repo.all()
     |> Enum.group_by(& &1.message_id)
   end
+
+  defp publish_canvas_created(canvas) do
+    :telemetry.execute(
+      [:platform, :chat, :canvas_created],
+      %{system_time: System.system_time()},
+      %{
+        canvas_id: canvas.id,
+        space_id: canvas.space_id,
+        message_id: canvas.message_id,
+        canvas_type: canvas.canvas_type
+      }
+    )
+
+    ChatPubSub.broadcast(canvas.space_id, {:canvas_created, canvas})
+    ChatPubSub.broadcast_canvas(canvas.id, {:canvas_updated, canvas})
+  end
+
+  defp publish_canvas_updated(canvas) do
+    :telemetry.execute(
+      [:platform, :chat, :canvas_updated],
+      %{system_time: System.system_time()},
+      %{
+        canvas_id: canvas.id,
+        space_id: canvas.space_id,
+        message_id: canvas.message_id,
+        canvas_type: canvas.canvas_type
+      }
+    )
+
+    ChatPubSub.broadcast(canvas.space_id, {:canvas_updated, canvas})
+    ChatPubSub.broadcast_canvas(canvas.id, {:canvas_updated, canvas})
+  end
+
+  defp default_canvas_message(attrs) do
+    title = Map.get(attrs, "title") || "Untitled Canvas"
+    "opened a live canvas: #{title}"
+  end
+
+  defp stringify_canvas_payload(value) when is_map(value) do
+    Map.new(value, fn
+      {key, nested} when is_atom(key) -> {Atom.to_string(key), stringify_canvas_payload(nested)}
+      {key, nested} -> {key, stringify_canvas_payload(nested)}
+    end)
+  end
+
+  defp stringify_canvas_payload(value) when is_list(value) do
+    Enum.map(value, &stringify_canvas_payload/1)
+  end
+
+  defp stringify_canvas_payload(value), do: value
 
   defp publish_message_posted(msg) do
     :telemetry.execute(
