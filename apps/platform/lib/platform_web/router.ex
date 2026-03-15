@@ -41,6 +41,7 @@ defmodule PlatformWeb.Router do
       live("/chat", ChatLive, :index)
       live("/chat/:space_slug", ChatLive, :show)
       live("/control", ControlCenterLive, :index)
+      live("/control/:agent_slug", ControlCenterLive, :show)
     end
   end
 
