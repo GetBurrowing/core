@@ -11,7 +11,7 @@ defmodule Platform.Execution.Run do
                                   ↓
                               context_stale  (ack SLA missed)
                                   ↓
-                              context_dead   (max staleness exceeded)
+                              context_dead   (runner presumed dead)
 
   ## Context versioning
 
@@ -20,8 +20,11 @@ defmodule Platform.Execution.Run do
     - `ctx_acked_version`     — the last version the runner confirmed
     - `ctx_status`            — `:current | :stale | :dead`
 
-  These fields are populated by `Platform.Execution.RunServer` and backed by
-  `Platform.Context.Cache`.
+  ## Provider ref
+
+  When a runner is attached via `Platform.Execution.RunServer.spawn_provider/3`,
+  the provider-specific handle is stored in `runner_ref`.  The shape is defined
+  by each provider; local runners store `wrapper_pid` and `os_pid` here.
   """
 
   @valid_statuses ~w(created starting running completed failed cancelled)a
@@ -37,6 +40,8 @@ defmodule Platform.Execution.Run do
             ctx_required_version: 0,
             ctx_acked_version: nil,
             ctx_status: :current,
+            runner_ref: %{},
+            exit_code: nil,
             started_at: nil,
             finished_at: nil,
             inserted_at: nil,
@@ -55,6 +60,8 @@ defmodule Platform.Execution.Run do
           ctx_required_version: non_neg_integer(),
           ctx_acked_version: non_neg_integer() | nil,
           ctx_status: ctx_status(),
+          runner_ref: map(),
+          exit_code: integer() | nil,
           started_at: DateTime.t() | nil,
           finished_at: DateTime.t() | nil,
           inserted_at: DateTime.t() | nil,
@@ -76,8 +83,10 @@ defmodule Platform.Execution.Run do
       ctx_required_version: 0,
       ctx_acked_version: nil,
       ctx_status: :current,
+      runner_ref: %{},
+      exit_code: nil,
       inserted_at: now,
-      meta: Keyword.get(opts, :meta, %{})
+      meta: normalize_map(Keyword.get(opts, :meta, %{}))
     }
   end
 
@@ -107,4 +116,7 @@ defmodule Platform.Execution.Run do
 
     Enum.join(parts, "/")
   end
+
+  defp normalize_map(value) when is_map(value), do: value
+  defp normalize_map(_), do: %{}
 end
