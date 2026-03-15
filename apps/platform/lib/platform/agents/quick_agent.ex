@@ -1,26 +1,18 @@
 defmodule Platform.Agents.QuickAgent do
   @moduledoc """
   Minimal agent proof-of-life. Reads .openclaw workspace files,
-  builds a system prompt, and calls the Anthropic API.
+  builds a system prompt, and calls Anthropic.
 
-  This is a temporary module — will be replaced by the full
-  Agent Runtime (ADR 0007) and Provider (ADR 0006) architecture.
+  This remains the lightweight chat surface entrypoint, but now routes through
+  the real Anthropic provider adapter so the Agent Runtime's provider logic is
+  the single source of truth for request formatting and OAuth headers.
   """
 
   require Logger
 
-  @workspace_files ~w(SOUL.md IDENTITY.md USER.md AGENTS.md)
-  # OAuth tokens use short model IDs (no date suffix).
-  # API key tokens use versioned model IDs.
-  @oauth_model "claude-sonnet-4-6"
-  @api_key_model "claude-sonnet-4-5-20250929"
-  @api_url "https://api.anthropic.com/v1/messages"
-  @api_version "2023-06-01"
+  alias Platform.Agents.Providers.Anthropic
 
-  # Exact OAuth header set from @mariozechner/pi-ai anthropic.js (OpenClaw's upstream)
-  # authToken (Bearer) + these headers is how OpenClaw authenticates OAuth tokens.
-  @oauth_beta "claude-code-20250219,oauth-2025-04-20,fine-grained-tool-streaming-2025-05-14"
-  @oauth_user_agent "claude-cli/2.1.62"
+  @workspace_files ~w(SOUL.md IDENTITY.md USER.md AGENTS.md)
 
   @doc """
   Send a message to the agent and get a response.
@@ -29,16 +21,17 @@ defmodule Platform.Agents.QuickAgent do
   """
   def chat(user_message, opts \\ []) do
     workspace_path = workspace_path()
-    api_key = api_key()
+    system_prompt = build_system_prompt(workspace_path)
+    messages = (opts[:history] || []) ++ [%{"role" => "user", "content" => user_message}]
 
-    if is_nil(api_key) do
-      {:error, "ANTHROPIC_API_KEY not configured"}
-    else
-      system_prompt = build_system_prompt(workspace_path)
-      messages = opts[:history] || []
-      messages = messages ++ [%{"role" => "user", "content" => user_message}]
+    case call_anthropic(system_prompt, messages, opts) do
+      {:ok, response} ->
+        Logger.info("Agent response: model=#{response.model} tokens=#{inspect(response.usage)}")
+        {:ok, response}
 
-      call_anthropic(api_key, system_prompt, messages, opts)
+      {:error, reason} ->
+        Logger.error("Anthropic request failed: #{inspect(reason)}")
+        {:error, format_error(reason)}
     end
   end
 
@@ -68,70 +61,50 @@ defmodule Platform.Agents.QuickAgent do
     """
   end
 
-  defp call_anthropic(api_key, system_prompt, messages, opts) do
-    is_oauth = is_oauth_token?(api_key)
-    model = opts[:model] || if(is_oauth, do: @oauth_model, else: @api_key_model)
-    max_tokens = opts[:max_tokens] || 2048
+  defp call_anthropic(system_prompt, messages, opts) do
+    provider_opts = [
+      system: system_prompt,
+      model: opts[:model],
+      max_tokens: opts[:max_tokens] || 2048
+    ]
 
-    body = %{
-      "model" => model,
-      "max_tokens" => max_tokens,
-      "system" => system_prompt,
-      "messages" => messages
-    }
+    case Anthropic.chat(
+           %{credential_slug: "anthropic-oauth", accessor: {:platform, nil}},
+           messages,
+           provider_opts
+         ) do
+      {:ok, response} ->
+        {:ok, response}
 
-    # Build headers exactly as OpenClaw's pi-ai anthropic.js does
-    headers =
-      if is_oauth do
-        [
-          {"Authorization", "Bearer #{api_key}"},
-          {"anthropic-version", @api_version},
-          {"anthropic-beta", @oauth_beta},
-          {"user-agent", @oauth_user_agent},
-          {"x-app", "cli"},
-          {"anthropic-dangerous-direct-browser-access", "true"},
-          {"content-type", "application/json"}
-        ]
-      else
-        [
-          {"x-api-key", api_key},
-          {"anthropic-version", @api_version},
-          {"anthropic-beta", "fine-grained-tool-streaming-2025-05-14"},
-          {"content-type", "application/json"}
-        ]
-      end
+      {:error, :not_found} ->
+        fallback_to_api_key(messages, provider_opts)
 
-    case Req.post(@api_url, json: body, headers: headers, receive_timeout: 60_000) do
-      {:ok, %{status: 200, body: resp_body}} ->
-        content =
-          resp_body
-          |> Map.get("content", [])
-          |> Enum.filter(&(&1["type"] == "text"))
-          |> Enum.map_join("", & &1["text"])
+      {:error, {:auth_error, _status, _body}} ->
+        fallback_to_api_key(messages, provider_opts)
 
-        usage = Map.get(resp_body, "usage", %{})
-        Logger.info("Agent response: model=#{model} tokens=#{inspect(usage)}")
-
-        {:ok,
-         %{
-           content: content,
-           model: resp_body["model"],
-           usage: usage,
-           stop_reason: resp_body["stop_reason"]
-         }}
-
-      {:ok, %{status: status, body: resp_body}} ->
-        Logger.error("Anthropic API error: status=#{status} body=#{inspect(resp_body)}")
-        {:error, "API error: #{status}"}
-
-      {:error, reason} ->
-        Logger.error("Anthropic request failed: #{inspect(reason)}")
-        {:error, "Request failed: #{inspect(reason)}"}
+      {:error, _reason} = error ->
+        case api_key() do
+          nil -> error
+          _ -> fallback_to_api_key(messages, provider_opts)
+        end
     end
   end
 
-  defp is_oauth_token?(key) when is_binary(key), do: String.contains?(key, "sk-ant-oat")
-  defp is_oauth_token?(_), do: false
+  defp fallback_to_api_key(messages, provider_opts) do
+    case api_key() do
+      nil -> {:error, :anthropic_credentials_not_configured}
+      key -> Anthropic.chat(key, messages, provider_opts)
+    end
+  end
+
+  defp format_error(:anthropic_credentials_not_configured),
+    do: "Anthropic credentials not configured"
+
+  defp format_error({:auth_error, status, _body}), do: "API error: #{status}"
+  defp format_error({:api_error, status, _body}), do: "API error: #{status}"
+  defp format_error({:rate_limited, _retry_after, _body}), do: "API error: 429"
+  defp format_error({:request_failed, reason}), do: "Request failed: #{inspect(reason)}"
+  defp format_error(other), do: "Request failed: #{inspect(other)}"
 
   defp workspace_path do
     Application.get_env(:platform, :agent_workspace_path, "/data/agents/zip/workspace")
