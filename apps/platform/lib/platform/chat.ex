@@ -33,6 +33,7 @@ defmodule Platform.Chat do
 
   import Ecto.Query
 
+  alias Ecto.Multi
   alias Platform.Chat.{Attachment, Canvas, Message, Participant, Pin, Reaction, Space, Thread}
   alias Platform.Chat.PubSub, as: ChatPubSub
   alias Platform.Repo
@@ -251,23 +252,56 @@ defmodule Platform.Chat do
 
     case result do
       {:ok, msg} ->
-        :telemetry.execute(
-          [:platform, :chat, :message_posted],
-          %{system_time: System.system_time()},
-          %{
-            space_id: msg.space_id,
-            message_id: msg.id,
-            participant_id: msg.participant_id
-          }
-        )
-
-        ChatPubSub.broadcast(msg.space_id, {:new_message, msg})
+        publish_message_posted(msg)
 
       _ ->
         :ok
     end
 
     result
+  end
+
+  @doc """
+  Post a new message and create any attachments in the same transaction.
+
+  `attachment_attrs_list` should contain maps with `:filename`, `:content_type`,
+  `:byte_size`, and `:storage_key`.
+  """
+  @spec post_message_with_attachments(map(), [map()]) ::
+          {:ok, Message.t(), [Attachment.t()]} | {:error, term()}
+  def post_message_with_attachments(attrs, attachment_attrs_list)
+      when is_list(attachment_attrs_list) do
+    multi =
+      Multi.new()
+      |> Multi.insert(:message, Message.changeset(%Message{}, attrs))
+
+    multi =
+      Enum.with_index(attachment_attrs_list)
+      |> Enum.reduce(multi, fn {attachment_attrs, index}, multi ->
+        Multi.run(multi, {:attachment, index}, fn repo, %{message: message} ->
+          attachment_attrs
+          |> Map.put(:message_id, message.id)
+          |> then(&Attachment.changeset(%Attachment{}, &1))
+          |> repo.insert()
+        end)
+      end)
+
+    case Repo.transaction(multi) do
+      {:ok, changes} ->
+        message = changes.message
+
+        attachments =
+          changes
+          |> Enum.filter(fn {key, _value} -> match?({:attachment, _}, key) end)
+          |> Enum.sort_by(fn {{:attachment, index}, _value} -> index end)
+          |> Enum.map(fn {_key, attachment} -> attachment end)
+
+        publish_message_posted(message)
+        {:ok, message, attachments}
+
+      {:error, _operation, reason, _changes_so_far} ->
+        {:error, reason}
+    end
   end
 
   @doc "Fetch a message by primary key (integer). Returns `nil` if not found."
@@ -754,13 +788,58 @@ defmodule Platform.Chat do
     |> Repo.insert()
   end
 
+  @doc "Fetch an attachment by primary key. Returns `nil` if not found."
+  @spec get_attachment(binary()) :: Attachment.t() | nil
+  def get_attachment(id), do: Repo.get(Attachment, id)
+
+  @doc """
+  Fetch an attachment only when its parent message still exists and is not soft-deleted.
+  """
+  @spec get_visible_attachment(binary()) :: Attachment.t() | nil
+  def get_visible_attachment(id) do
+    from(a in Attachment,
+      join: m in Message,
+      on: m.id == a.message_id,
+      where: a.id == ^id and is_nil(m.deleted_at),
+      select: a
+    )
+    |> Repo.one()
+  end
+
   @doc "List attachments for a message, oldest first."
-  @spec list_attachments(integer()) :: [Attachment.t()]
+  @spec list_attachments(binary()) :: [Attachment.t()]
   def list_attachments(message_id) do
     from(a in Attachment,
       where: a.message_id == ^message_id,
       order_by: [asc: a.inserted_at]
     )
     |> Repo.all()
+  end
+
+  @doc "Batch-load attachments for a list of message IDs in a single query."
+  @spec list_attachments_for_messages([binary()]) :: %{binary() => [Attachment.t()]}
+  def list_attachments_for_messages([]), do: %{}
+
+  def list_attachments_for_messages(message_ids) do
+    from(a in Attachment,
+      where: a.message_id in ^message_ids,
+      order_by: [asc: a.inserted_at]
+    )
+    |> Repo.all()
+    |> Enum.group_by(& &1.message_id)
+  end
+
+  defp publish_message_posted(msg) do
+    :telemetry.execute(
+      [:platform, :chat, :message_posted],
+      %{system_time: System.system_time()},
+      %{
+        space_id: msg.space_id,
+        message_id: msg.id,
+        participant_id: msg.participant_id
+      }
+    )
+
+    ChatPubSub.broadcast(msg.space_id, {:new_message, msg})
   end
 end

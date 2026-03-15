@@ -33,6 +33,8 @@ defmodule PlatformWeb.Router do
     # Root redirects to /chat
     get("/", PageController, :home)
 
+    get("/chat/attachments/:id", ChatAttachmentController, :show)
+
     live_session :authenticated,
       on_mount: [PlatformWeb.ShellLive],
       layout: {PlatformWeb.Layouts, :shell} do

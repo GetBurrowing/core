@@ -1,6 +1,6 @@
 defmodule PlatformWeb.ChatLive do
   @moduledoc """
-  LiveView for the Chat surface — with threads, reactions, and pins.
+  LiveView for the Chat surface — with threads, reactions, pins, and attachments.
 
   ## Layout
 
@@ -8,21 +8,8 @@ defmodule PlatformWeb.ChatLive do
 
       [Space sidebar | Message list | Thread panel]
 
-  Thread panel collapses when closed.  Pins panel slides in below the space
+  Thread panel collapses when closed. Pins panel slides in below the space
   header.
-
-  ## Assigns
-
-    * `:active_space`        — current `%Space{}` or `nil`
-    * `:spaces`              — sidebar list
-    * `:participants_map`    — `%{participant_id => display_name}`
-    * `:online_count`        — integer
-    * `:current_participant` — `%Participant{}` for the session user in this space
-    * `:reactions_map`       — `%{message_id => [%{emoji, count, reacted_by_me}]}`
-    * `:active_thread`       — `%Thread{}` or `nil`
-    * `:thread_messages`     — `[%Message{}]` for the active thread
-    * `:pins`                — `[%Pin{}]` for the active space
-    * `:pinned_message_ids`  — `MapSet.t(binary())` for O(1) lookup in template
 
   ## Routes
     GET /chat             → :index — redirects to first space (or empty state)
@@ -33,13 +20,14 @@ defmodule PlatformWeb.ChatLive do
 
   alias Platform.Accounts
   alias Platform.Chat
+  alias Platform.Chat.AttachmentStorage
   alias Platform.Chat.Presence, as: ChatPresence
   alias Platform.Chat.PubSub, as: ChatPubSub
 
   @message_limit 50
   @quick_emojis ["👍", "❤️", "😂", "🎉"]
-
-  # ── Mount ──────────────────────────────────────────────────────────────────
+  @max_upload_entries 5
+  @max_upload_size 15_000_000
 
   @impl true
   def mount(_params, session, socket) do
@@ -56,24 +44,35 @@ defmodule PlatformWeb.ChatLive do
       |> assign(:online_count, 0)
       |> assign(:current_participant, nil)
       |> assign(:reactions_map, %{})
+      |> assign(:attachments_map, %{})
       |> assign(:active_thread, nil)
       |> assign(:thread_messages, [])
+      |> assign(:thread_attachments_map, %{})
       |> assign(:pins, [])
       |> assign(:show_pins, false)
       |> assign(:pinned_message_ids, MapSet.new())
       |> assign(:quick_emojis, @quick_emojis)
       |> assign_compose("")
       |> assign_thread_compose("")
+      |> allow_upload(:attachments,
+        accept: :any,
+        auto_upload: true,
+        max_entries: @max_upload_entries,
+        max_file_size: @max_upload_size
+      )
+      |> allow_upload(:thread_attachments,
+        accept: :any,
+        auto_upload: true,
+        max_entries: @max_upload_entries,
+        max_file_size: @max_upload_size
+      )
       |> stream(:messages, [])
 
     {:ok, socket}
   end
 
-  # ── handle_params ──────────────────────────────────────────────────────────
-
   @impl true
   def handle_params(%{"space_slug" => slug}, _url, socket) do
-    # Unsubscribe from the previous space if navigating
     if prev = socket.assigns.active_space do
       ChatPubSub.unsubscribe(prev.id)
 
@@ -82,7 +81,6 @@ defmodule PlatformWeb.ChatLive do
       end
     end
 
-    # Find or bootstrap the space
     space = Chat.get_space_by_slug(slug) || bootstrap_space(slug)
 
     if is_nil(space) do
@@ -101,7 +99,6 @@ defmodule PlatformWeb.ChatLive do
         })
       end
 
-      # Load messages (newest-first → reverse for chronological display)
       messages =
         space.id
         |> Chat.list_messages(limit: @message_limit)
@@ -113,10 +110,8 @@ defmodule PlatformWeb.ChatLive do
       online_count =
         if connected?(socket), do: ChatPresence.online_count(space.id), else: 0
 
-      # Load reactions for all visible messages in one query
       reactions_map = build_reactions_map(messages, participant)
-
-      # Load pins for this space
+      attachments_map = build_attachments_map(messages)
       pins = Chat.list_pins(space.id)
       pinned_message_ids = MapSet.new(pins, & &1.message_id)
 
@@ -128,8 +123,10 @@ defmodule PlatformWeb.ChatLive do
        |> assign(:online_count, online_count)
        |> assign(:current_participant, participant)
        |> assign(:reactions_map, reactions_map)
+       |> assign(:attachments_map, attachments_map)
        |> assign(:active_thread, nil)
        |> assign(:thread_messages, [])
+       |> assign(:thread_attachments_map, %{})
        |> assign(:pins, pins)
        |> assign(:show_pins, false)
        |> assign(:pinned_message_ids, pinned_message_ids)
@@ -148,33 +145,35 @@ defmodule PlatformWeb.ChatLive do
     end
   end
 
-  # ── Events ─────────────────────────────────────────────────────────────────
-
   @impl true
   def handle_event("send_message", %{"compose" => %{"text" => content}}, socket) do
-    content = String.trim(content)
-
-    with false <- content == "",
-         space when not is_nil(space) <- socket.assigns.active_space,
+    with space when not is_nil(space) <- socket.assigns.active_space,
          participant when not is_nil(participant) <- socket.assigns.current_participant do
-      case Chat.post_message(%{
-             space_id: space.id,
-             participant_id: participant.id,
-             content_type: "text",
-             content: content
-           }) do
-        {:ok, msg} ->
-          {:noreply, socket |> stream_insert(:messages, msg) |> assign_compose("")}
+      attrs = %{
+        space_id: space.id,
+        participant_id: participant.id,
+        content_type: "text",
+        content: String.trim(content || "")
+      }
 
-        {:error, _changeset} ->
-          {:noreply, put_flash(socket, :error, "Failed to send message.")}
+      case post_message_from_upload(socket, :attachments, attrs) do
+        {:ok, socket, msg, attachments} ->
+          {:noreply,
+           socket
+           |> stream_insert(:messages, msg)
+           |> put_attachment_map_entry(msg.id, attachments)
+           |> assign_compose("")}
+
+        {:noop, socket} ->
+          {:noreply, socket}
+
+        {:error, socket, reason} ->
+          {:noreply, put_flash(socket, :error, reason)}
       end
     else
       _ -> {:noreply, socket}
     end
   end
-
-  # ── Reactions ──────────────────────────────────────────────────────────────
 
   def handle_event("react", %{"message_id" => msg_id, "emoji" => emoji}, socket) do
     with participant when not is_nil(participant) <- socket.assigns.current_participant do
@@ -192,11 +191,8 @@ defmodule PlatformWeb.ChatLive do
       end
     end
 
-    # State updates come via PubSub
     {:noreply, socket}
   end
-
-  # ── Threads ────────────────────────────────────────────────────────────────
 
   def handle_event("open_thread", %{"message_id" => message_id}, socket) do
     with space when not is_nil(space) <- socket.assigns.active_space do
@@ -213,11 +209,13 @@ defmodule PlatformWeb.ChatLive do
 
         thread ->
           thread_messages = load_thread_messages(space.id, thread.id)
+          thread_attachments_map = build_attachments_map(thread_messages)
 
           {:noreply,
            socket
            |> assign(:active_thread, thread)
            |> assign(:thread_messages, thread_messages)
+           |> assign(:thread_attachments_map, thread_attachments_map)
            |> assign_thread_compose("")}
       end
     else
@@ -229,40 +227,39 @@ defmodule PlatformWeb.ChatLive do
     {:noreply,
      socket
      |> assign(:active_thread, nil)
-     |> assign(:thread_messages, [])}
+     |> assign(:thread_messages, [])
+     |> assign(:thread_attachments_map, %{})}
   end
 
   def handle_event("send_thread_message", %{"thread_compose" => %{"text" => content}}, socket) do
-    content = String.trim(content)
-
-    with false <- content == "",
-         thread when not is_nil(thread) <- socket.assigns.active_thread,
-         space when not is_nil(space) <- socket.assigns.active_space,
+    with thread when not is_nil(thread) <- socket.assigns.active_thread,
          participant when not is_nil(participant) <- socket.assigns.current_participant do
-      case Chat.post_message(%{
-             space_id: space.id,
-             thread_id: thread.id,
-             participant_id: participant.id,
-             content_type: "text",
-             content: content
-           }) do
-        {:ok, msg} ->
-          thread_messages = socket.assigns.thread_messages ++ [msg]
+      attrs = %{
+        space_id: thread.space_id,
+        thread_id: thread.id,
+        participant_id: participant.id,
+        content_type: "text",
+        content: String.trim(content || "")
+      }
 
+      case post_message_from_upload(socket, :thread_attachments, attrs) do
+        {:ok, socket, msg, attachments} ->
           {:noreply,
            socket
-           |> assign(:thread_messages, thread_messages)
+           |> update(:thread_messages, &(&1 ++ [msg]))
+           |> put_thread_attachment_map_entry(msg.id, attachments)
            |> assign_thread_compose("")}
 
-        {:error, _changeset} ->
-          {:noreply, put_flash(socket, :error, "Failed to send reply.")}
+        {:noop, socket} ->
+          {:noreply, socket}
+
+        {:error, socket, reason} ->
+          {:noreply, put_flash(socket, :error, reason)}
       end
     else
       _ -> {:noreply, socket}
     end
   end
-
-  # ── Pins ───────────────────────────────────────────────────────────────────
 
   def handle_event("toggle_pin", %{"message_id" => msg_id, "space_id" => space_id}, socket) do
     with participant when not is_nil(participant) <- socket.assigns.current_participant do
@@ -277,7 +274,6 @@ defmodule PlatformWeb.ChatLive do
       end
     end
 
-    # State updates come via PubSub
     {:noreply, socket}
   end
 
@@ -285,18 +281,21 @@ defmodule PlatformWeb.ChatLive do
     {:noreply, assign(socket, :show_pins, !socket.assigns.show_pins)}
   end
 
-  # ── PubSub callbacks ────────────────────────────────────────────────────────
-
   @impl true
   def handle_info({:new_message, msg}, socket) do
-    # Only stream top-level (non-thread) messages into the main list.
-    # Thread messages are loaded separately.
+    attachments = Chat.list_attachments(msg.id)
+
     if is_nil(msg.thread_id) do
-      {:noreply, stream_insert(socket, :messages, msg)}
+      {:noreply,
+       socket
+       |> stream_insert(:messages, msg)
+       |> put_attachment_map_entry(msg.id, attachments)}
     else
-      # Append to thread panel if the active thread matches
       if socket.assigns.active_thread && socket.assigns.active_thread.id == msg.thread_id do
-        {:noreply, update(socket, :thread_messages, &(&1 ++ [msg]))}
+        {:noreply,
+         socket
+         |> update(:thread_messages, &(&1 ++ [msg]))
+         |> put_thread_attachment_map_entry(msg.id, attachments)}
       else
         {:noreply, socket}
       end
@@ -304,11 +303,20 @@ defmodule PlatformWeb.ChatLive do
   end
 
   def handle_info({:message_updated, msg}, socket) do
-    {:noreply, stream_insert(socket, :messages, msg)}
+    attachments = Chat.list_attachments(msg.id)
+
+    {:noreply,
+     socket
+     |> stream_insert(:messages, msg)
+     |> put_attachment_map_entry(msg.id, attachments)}
   end
 
   def handle_info({:message_deleted, msg}, socket) do
-    {:noreply, stream_delete(socket, :messages, msg)}
+    {:noreply,
+     socket
+     |> stream_delete(:messages, msg)
+     |> delete_attachment_map_entry(msg.id)
+     |> delete_thread_attachment_map_entry(msg.id)}
   end
 
   def handle_info({:reaction_added, reaction}, socket) do
@@ -375,16 +383,12 @@ defmodule PlatformWeb.ChatLive do
     {:noreply, assign(socket, :online_count, online_count)}
   end
 
-  # Catch-all to avoid crashing on unexpected messages
   def handle_info(_msg, socket), do: {:noreply, socket}
-
-  # ── Render ─────────────────────────────────────────────────────────────────
 
   @impl true
   def render(assigns) do
     ~H"""
     <div class="flex h-full overflow-hidden">
-      <%!-- ── Space sidebar ─────────────────────────────────────────── --%>
       <aside class="flex w-52 flex-shrink-0 flex-col border-r border-base-300 bg-base-200">
         <div class="border-b border-base-300 px-4 py-3">
           <p class="text-xs font-semibold uppercase tracking-widest text-base-content/50">
@@ -413,11 +417,8 @@ defmodule PlatformWeb.ChatLive do
         </nav>
       </aside>
 
-      <%!-- ── Main content (messages + thread panel) ─────────────────── --%>
       <div class="flex flex-1 overflow-hidden min-w-0">
-        <%!-- ── Messages column ───────────────────────────────────────── --%>
         <div class="flex flex-1 flex-col overflow-hidden min-w-0">
-          <%!-- Space header --%>
           <header
             :if={@active_space}
             class="flex h-12 flex-shrink-0 items-center justify-between border-b border-base-300 px-5"
@@ -434,7 +435,6 @@ defmodule PlatformWeb.ChatLive do
             </div>
 
             <div class="flex flex-shrink-0 items-center gap-3 text-xs text-base-content/50">
-              <%!-- Pins toggle button --%>
               <button
                 :if={@pins != []}
                 phx-click="toggle_pins_panel"
@@ -447,7 +447,6 @@ defmodule PlatformWeb.ChatLive do
                 <span>{length(@pins)} pinned</span>
               </button>
 
-              <%!-- Online count --%>
               <div class="flex items-center gap-1.5">
                 <span class="inline-block size-2 rounded-full bg-success"></span>
                 <span>{@online_count} online</span>
@@ -455,7 +454,6 @@ defmodule PlatformWeb.ChatLive do
             </div>
           </header>
 
-          <%!-- Pins panel (below header, above messages) --%>
           <div
             :if={@show_pins && @pins != []}
             class="border-b border-base-300 bg-base-200 px-5 py-2"
@@ -486,7 +484,6 @@ defmodule PlatformWeb.ChatLive do
             </div>
           </div>
 
-          <%!-- Message list --%>
           <div
             id="message-list"
             class="flex-1 overflow-y-auto px-5 py-4 space-y-3"
@@ -498,7 +495,6 @@ defmodule PlatformWeb.ChatLive do
               id={dom_id}
               class="group relative flex flex-col gap-0.5"
             >
-              <%!-- Row: sender + timestamp + action buttons --%>
               <div class="flex items-baseline gap-2">
                 <span class="text-xs font-semibold text-primary">
                   {sender_name(@participants_map, msg.participant_id)}
@@ -507,9 +503,7 @@ defmodule PlatformWeb.ChatLive do
                   {format_timestamp(msg.inserted_at)}
                 </span>
 
-                <%!-- Action bar (visible on hover) --%>
                 <div class="ml-auto hidden group-hover:flex items-center gap-1">
-                  <%!-- Quick emoji reactions --%>
                   <button
                     :for={emoji <- @quick_emojis}
                     phx-click="react"
@@ -521,7 +515,6 @@ defmodule PlatformWeb.ChatLive do
                     {emoji}
                   </button>
 
-                  <%!-- Reply in thread --%>
                   <button
                     phx-click="open_thread"
                     phx-value-message-id={msg.id}
@@ -531,7 +524,6 @@ defmodule PlatformWeb.ChatLive do
                     💬
                   </button>
 
-                  <%!-- Pin / Unpin --%>
                   <button
                     phx-click="toggle_pin"
                     phx-value-message-id={msg.id}
@@ -544,10 +536,29 @@ defmodule PlatformWeb.ChatLive do
                 </div>
               </div>
 
-              <%!-- Message content --%>
-              <p class="text-sm leading-6 text-base-content">{msg.content}</p>
+              <p :if={present?(msg.content)} class="text-sm leading-6 text-base-content">
+                {msg.content}
+              </p>
 
-              <%!-- Reactions row --%>
+              <div
+                :if={Map.get(@attachments_map, msg.id, []) != []}
+                class="mt-1 flex flex-col gap-1"
+              >
+                <a
+                  :for={attachment <- Map.get(@attachments_map, msg.id, [])}
+                  href={attachment_url(attachment)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="inline-flex w-fit items-center gap-2 rounded bg-base-200 px-2 py-1 text-sm text-primary hover:bg-base-300 hover:no-underline"
+                >
+                  <span>📎</span>
+                  <span>{attachment.filename}</span>
+                  <span class="text-xs text-base-content/40">
+                    ({format_bytes(attachment.byte_size)})
+                  </span>
+                </a>
+              </div>
+
               <div
                 :if={Map.get(@reactions_map, msg.id, []) != []}
                 class="flex flex-wrap gap-1 mt-0.5"
@@ -571,29 +582,61 @@ defmodule PlatformWeb.ChatLive do
             </div>
           </div>
 
-          <%!-- Compose bar --%>
           <div class="flex-shrink-0 border-t border-base-300 px-5 py-3">
             <.form
               :if={@active_space}
               for={@compose_form}
               id="compose-form"
               phx-submit="send_message"
-              class="flex gap-2"
+              class="flex flex-col gap-2"
             >
-              <.input
-                field={@compose_form[:text]}
-                type="text"
-                placeholder={"Message ##{(@active_space && @active_space.name) || ""}"}
-                autocomplete="off"
-                class="flex-1"
-              />
-              <button
-                type="submit"
-                class="btn btn-neutral"
-                disabled={is_nil(@current_participant)}
+              <div class="flex gap-2">
+                <.input
+                  field={@compose_form[:text]}
+                  type="text"
+                  placeholder={"Message ##{(@active_space && @active_space.name) || ""}"}
+                  autocomplete="off"
+                  class="flex-1"
+                />
+                <button
+                  type="submit"
+                  class="btn btn-neutral"
+                  disabled={is_nil(@current_participant)}
+                >
+                  Send
+                </button>
+              </div>
+
+              <div class="flex flex-wrap items-center gap-3 text-xs text-base-content/50">
+                <label class="inline-flex cursor-pointer items-center gap-2 rounded px-2 py-1 hover:bg-base-200">
+                  <span>📎</span>
+                  <span>Add files</span>
+                  <.live_file_input upload={@uploads.attachments} class="hidden" />
+                </label>
+
+                <span
+                  :for={entry <- @uploads.attachments.entries}
+                  class="rounded bg-base-200 px-2 py-1 text-base-content/70"
+                >
+                  {entry.client_name}
+                </span>
+              </div>
+
+              <p
+                :for={error <- upload_errors(@uploads.attachments)}
+                class="text-xs text-error"
               >
-                Send
-              </button>
+                {upload_error_to_string(error)}
+              </p>
+
+              <div :for={entry <- @uploads.attachments.entries}>
+                <p
+                  :for={error <- upload_errors(@uploads.attachments, entry)}
+                  class="text-xs text-error"
+                >
+                  {entry.client_name}: {upload_error_to_string(error)}
+                </p>
+              </div>
             </.form>
 
             <p :if={is_nil(@current_participant) && @active_space} class="mt-1 text-xs text-error">
@@ -602,12 +645,10 @@ defmodule PlatformWeb.ChatLive do
           </div>
         </div>
 
-        <%!-- ── Thread panel ──────────────────────────────────────────── --%>
         <div
           :if={@active_thread}
           class="flex w-80 flex-shrink-0 flex-col border-l border-base-300 bg-base-100"
         >
-          <%!-- Thread header --%>
           <div class="flex h-12 flex-shrink-0 items-center justify-between border-b border-base-300 px-4">
             <div class="flex items-center gap-2">
               <span class="text-sm font-semibold">Thread</span>
@@ -624,7 +665,6 @@ defmodule PlatformWeb.ChatLive do
             </button>
           </div>
 
-          <%!-- Thread messages --%>
           <div
             id="thread-messages"
             class="flex-1 overflow-y-auto px-4 py-3 space-y-3"
@@ -641,7 +681,29 @@ defmodule PlatformWeb.ChatLive do
                   {format_timestamp(msg.inserted_at)}
                 </span>
               </div>
-              <p class="text-sm leading-6 text-base-content">{msg.content}</p>
+
+              <p :if={present?(msg.content)} class="text-sm leading-6 text-base-content">
+                {msg.content}
+              </p>
+
+              <div
+                :if={Map.get(@thread_attachments_map, msg.id, []) != []}
+                class="mt-1 flex flex-col gap-1"
+              >
+                <a
+                  :for={attachment <- Map.get(@thread_attachments_map, msg.id, [])}
+                  href={attachment_url(attachment)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="inline-flex w-fit items-center gap-2 rounded bg-base-200 px-2 py-1 text-sm text-primary hover:bg-base-300 hover:no-underline"
+                >
+                  <span>📎</span>
+                  <span>{attachment.filename}</span>
+                  <span class="text-xs text-base-content/40">
+                    ({format_bytes(attachment.byte_size)})
+                  </span>
+                </a>
+              </div>
             </div>
 
             <div :if={@thread_messages == []} class="text-xs text-base-content/40">
@@ -649,28 +711,60 @@ defmodule PlatformWeb.ChatLive do
             </div>
           </div>
 
-          <%!-- Thread compose --%>
           <div class="flex-shrink-0 border-t border-base-300 px-4 py-3">
             <.form
               for={@thread_compose_form}
               id="thread-compose-form"
               phx-submit="send_thread_message"
-              class="flex gap-2"
+              class="flex flex-col gap-2"
             >
-              <.input
-                field={@thread_compose_form[:text]}
-                type="text"
-                placeholder="Reply in thread…"
-                autocomplete="off"
-                class="flex-1 text-sm"
-              />
-              <button
-                type="submit"
-                class="btn btn-neutral btn-sm"
-                disabled={is_nil(@current_participant)}
+              <div class="flex gap-2">
+                <.input
+                  field={@thread_compose_form[:text]}
+                  type="text"
+                  placeholder="Reply in thread…"
+                  autocomplete="off"
+                  class="flex-1 text-sm"
+                />
+                <button
+                  type="submit"
+                  class="btn btn-neutral btn-sm"
+                  disabled={is_nil(@current_participant)}
+                >
+                  Reply
+                </button>
+              </div>
+
+              <div class="flex flex-wrap items-center gap-3 text-xs text-base-content/50">
+                <label class="inline-flex cursor-pointer items-center gap-2 rounded px-2 py-1 hover:bg-base-200">
+                  <span>📎</span>
+                  <span>Add files</span>
+                  <.live_file_input upload={@uploads.thread_attachments} class="hidden" />
+                </label>
+
+                <span
+                  :for={entry <- @uploads.thread_attachments.entries}
+                  class="rounded bg-base-200 px-2 py-1 text-base-content/70"
+                >
+                  {entry.client_name}
+                </span>
+              </div>
+
+              <p
+                :for={error <- upload_errors(@uploads.thread_attachments)}
+                class="text-xs text-error"
               >
-                Reply
-              </button>
+                {upload_error_to_string(error)}
+              </p>
+
+              <div :for={entry <- @uploads.thread_attachments.entries}>
+                <p
+                  :for={error <- upload_errors(@uploads.thread_attachments, entry)}
+                  class="text-xs text-error"
+                >
+                  {entry.client_name}: {upload_error_to_string(error)}
+                </p>
+              </div>
             </.form>
           </div>
         </div>
@@ -678,8 +772,6 @@ defmodule PlatformWeb.ChatLive do
     </div>
     """
   end
-
-  # ── Private helpers ────────────────────────────────────────────────────────
 
   defp assign_compose(socket, text) do
     assign(socket, :compose_form, to_form(%{"text" => text}, as: :compose))
@@ -689,8 +781,6 @@ defmodule PlatformWeb.ChatLive do
     assign(socket, :thread_compose_form, to_form(%{"text" => text}, as: :thread_compose))
   end
 
-  # Build the reactions_map from a list of messages + current participant.
-  # Groups reactions by emoji with count + reacted_by_me flag.
   defp build_reactions_map(messages, current_participant) do
     message_ids = Enum.map(messages, & &1.id)
     my_participant_id = current_participant && current_participant.id
@@ -716,7 +806,12 @@ defmodule PlatformWeb.ChatLive do
     end)
   end
 
-  # Incrementally update reactions_map when a reaction is added via PubSub.
+  defp build_attachments_map(messages) do
+    messages
+    |> Enum.map(& &1.id)
+    |> Chat.list_attachments_for_messages()
+  end
+
   defp add_reaction_to_map(reactions_map, reaction, current_participant) do
     msg_id = reaction.message_id
     my_id = current_participant && current_participant.id
@@ -746,7 +841,6 @@ defmodule PlatformWeb.ChatLive do
     Map.put(reactions_map, msg_id, updated)
   end
 
-  # Incrementally update reactions_map when a reaction is removed via PubSub.
   defp remove_reaction_from_map(reactions_map, %{message_id: msg_id} = data, current_participant) do
     emoji = data[:emoji]
     removed_pid = data[:participant_id]
@@ -758,7 +852,6 @@ defmodule PlatformWeb.ChatLive do
       |> Enum.map(fn g ->
         if g.emoji == emoji do
           new_count = max(0, g.count - 1)
-          # If the removed reaction was mine, clear reacted_by_me
           new_reacted = g.reacted_by_me && removed_pid != my_id
           %{g | count: new_count, reacted_by_me: new_reacted}
         else
@@ -770,14 +863,106 @@ defmodule PlatformWeb.ChatLive do
     Map.put(reactions_map, msg_id, updated)
   end
 
-  # Load messages for an open thread (oldest-first for threaded display).
   defp load_thread_messages(space_id, thread_id) do
     space_id
     |> Chat.list_messages(thread_id: thread_id, limit: 100)
     |> Enum.reverse()
   end
 
-  # Find the space by slug; create it if this is the first visit.
+  defp post_message_from_upload(socket, upload_name, attrs) do
+    content = String.trim(Map.get(attrs, :content, "") || "")
+    attrs = Map.put(attrs, :content, content)
+
+    cond do
+      upload_in_progress?(socket, upload_name) ->
+        {:error, socket, "Please wait for uploads to finish."}
+
+      content == "" and not has_completed_uploads?(socket, upload_name) ->
+        {:noop, socket}
+
+      true ->
+        case persist_uploaded_attachments(socket, upload_name) do
+          {:ok, pending_attachments} ->
+            case Chat.post_message_with_attachments(attrs, pending_attachments) do
+              {:ok, msg, saved_attachments} ->
+                {:ok, socket, msg, saved_attachments}
+
+              {:error, _reason} ->
+                AttachmentStorage.delete_many(pending_attachments)
+                {:error, socket, "Failed to send message."}
+            end
+
+          {:error, :storage_failed} ->
+            {:error, socket, "Failed to store attachment."}
+        end
+    end
+  end
+
+  defp persist_uploaded_attachments(socket, upload_name) do
+    results =
+      consume_uploaded_entries(socket, upload_name, fn %{path: path}, entry ->
+        result =
+          case AttachmentStorage.persist_upload(path, entry.client_name, entry.client_type) do
+            {:ok, attrs} -> {:ok, attrs}
+            {:error, _reason} -> {:error, :storage_failed}
+          end
+
+        {:ok, result}
+      end)
+
+    {ok_results, error_results} = Enum.split_with(results, &match?({:ok, _}, &1))
+    attachments = Enum.map(ok_results, fn {:ok, attrs} -> attrs end)
+
+    if error_results == [] do
+      {:ok, attachments}
+    else
+      AttachmentStorage.delete_many(attachments)
+      {:error, :storage_failed}
+    end
+  end
+
+  defp has_completed_uploads?(socket, upload_name) do
+    case uploaded_entries(socket, upload_name) do
+      {[_ | _], _in_progress} -> true
+      _ -> false
+    end
+  end
+
+  defp upload_in_progress?(socket, upload_name) do
+    case uploaded_entries(socket, upload_name) do
+      {_completed, [_ | _]} -> true
+      _ -> false
+    end
+  end
+
+  defp put_attachment_map_entry(socket, message_id, attachments) do
+    assign(
+      socket,
+      :attachments_map,
+      Map.put(socket.assigns.attachments_map, message_id, attachments)
+    )
+  end
+
+  defp delete_attachment_map_entry(socket, message_id) do
+    assign(socket, :attachments_map, Map.delete(socket.assigns.attachments_map, message_id))
+  end
+
+  defp put_thread_attachment_map_entry(socket, message_id, attachments) do
+    assign(
+      socket,
+      :thread_attachments_map,
+      Map.put(socket.assigns.thread_attachments_map, message_id, attachments)
+    )
+  end
+
+  defp delete_thread_attachment_map_entry(socket, message_id) do
+    assign(
+      socket,
+      :thread_attachments_map,
+      Map.delete(socket.assigns.thread_attachments_map, message_id)
+    )
+  end
+
   defp bootstrap_space(slug) do
     name =
       slug
@@ -792,7 +977,6 @@ defmodule PlatformWeb.ChatLive do
     end
   end
 
-  # Ensure the user has an active participant record in this space.
   defp ensure_participant(space_id, user_id) do
     existing =
       space_id
@@ -817,7 +1001,6 @@ defmodule PlatformWeb.ChatLive do
         p
 
       p ->
-        # Participant left previously — rejoin
         case Chat.update_participant(p, %{left_at: nil, joined_at: DateTime.utc_now()}) do
           {:ok, rejoined} -> rejoined
           {:error, _} -> p
@@ -840,6 +1023,27 @@ defmodule PlatformWeb.ChatLive do
   defp sender_name(participants_map, participant_id) do
     Map.get(participants_map, participant_id, "User")
   end
+
+  defp attachment_url(attachment), do: ~p"/chat/attachments/#{attachment.id}"
+
+  defp present?(value) when is_binary(value), do: String.trim(value) != ""
+  defp present?(_value), do: false
+
+  defp format_bytes(size) when is_integer(size) and size < 1_024, do: "#{size} B"
+
+  defp format_bytes(size) when is_integer(size) and size < 1_048_576,
+    do: "#{Float.round(size / 1_024, 1)} KB"
+
+  defp format_bytes(size) when is_integer(size) and size < 1_073_741_824,
+    do: "#{Float.round(size / 1_048_576, 1)} MB"
+
+  defp format_bytes(size) when is_integer(size), do: "#{Float.round(size / 1_073_741_824, 1)} GB"
+  defp format_bytes(_size), do: "—"
+
+  defp upload_error_to_string(:too_large), do: "File is too large"
+  defp upload_error_to_string(:too_many_files), do: "Too many files selected"
+  defp upload_error_to_string(:not_accepted), do: "File type is not accepted"
+  defp upload_error_to_string(error), do: inspect(error)
 
   defp format_timestamp(nil), do: ""
 

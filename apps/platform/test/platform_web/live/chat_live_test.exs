@@ -6,6 +6,25 @@ defmodule PlatformWeb.ChatLiveTest do
   alias Platform.Chat
   alias Platform.Repo
 
+  setup do
+    previous_root = Application.get_env(:platform, :chat_attachments_root)
+
+    upload_root =
+      Path.join(
+        System.tmp_dir!(),
+        "platform_live_test_chat_uploads_#{System.unique_integer([:positive])}"
+      )
+
+    Application.put_env(:platform, :chat_attachments_root, upload_root)
+
+    on_exit(fn ->
+      File.rm_rf(upload_root)
+      Application.put_env(:platform, :chat_attachments_root, previous_root)
+    end)
+
+    :ok
+  end
+
   defp authenticated_conn(conn) do
     user =
       Repo.insert!(%User{
@@ -51,6 +70,39 @@ defmodule PlatformWeb.ChatLiveTest do
       |> render_submit()
 
     assert html =~ "hello from test"
+  end
+
+  describe "attachments" do
+    test "uploading a file shows it on the message after send", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/chat/general")
+
+      upload =
+        file_input(view, "#compose-form", :attachments, [
+          %{
+            name: "hello.txt",
+            content: "hello attachment",
+            type: "text/plain"
+          }
+        ])
+
+      assert render_upload(upload, "hello.txt") =~ "hello.txt"
+
+      html =
+        view
+        |> form("#compose-form", compose: %{text: "see file"})
+        |> render_submit()
+
+      assert html =~ "see file"
+      assert html =~ "hello.txt"
+
+      space = Chat.get_space_by_slug("general")
+      [message | _] = Chat.list_messages(space.id)
+      [attachment] = Chat.list_attachments(message.id)
+
+      assert attachment.filename == "hello.txt"
+      assert html =~ "/chat/attachments/#{attachment.id}"
+    end
   end
 
   # ── Reactions ────────────────────────────────────────────────────────────────

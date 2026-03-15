@@ -175,6 +175,79 @@ defmodule Platform.ChatTest do
     end
   end
 
+  # ── Attachments ───────────────────────────────────────────────────────────────
+
+  describe "post_message_with_attachments/2" do
+    test "creates the message and attachments in one transaction" do
+      space = create_space()
+      participant = create_participant(space.id)
+
+      {:ok, message, attachments} =
+        Chat.post_message_with_attachments(
+          %{
+            space_id: space.id,
+            participant_id: participant.id,
+            content_type: "text",
+            content: "see attached"
+          },
+          [
+            %{
+              filename: "notes.txt",
+              content_type: "text/plain",
+              byte_size: 12,
+              storage_key: "chat/test/notes.txt"
+            }
+          ]
+        )
+
+      assert message.content == "see attached"
+      assert length(attachments) == 1
+      assert hd(attachments).message_id == message.id
+      assert hd(attachments).filename == "notes.txt"
+    end
+  end
+
+  describe "list_attachments_for_messages/1" do
+    test "returns attachments grouped by message_id" do
+      space = create_space()
+      participant = create_participant(space.id)
+      message_one = create_message(space.id, participant.id)
+      message_two = create_message(space.id, participant.id)
+
+      {:ok, _} =
+        Chat.create_attachment(%{
+          message_id: message_one.id,
+          filename: "one.txt",
+          content_type: "text/plain",
+          byte_size: 3,
+          storage_key: "chat/test/one.txt"
+        })
+
+      {:ok, _} =
+        Chat.create_attachment(%{
+          message_id: message_one.id,
+          filename: "two.txt",
+          content_type: "text/plain",
+          byte_size: 3,
+          storage_key: "chat/test/two.txt"
+        })
+
+      {:ok, _} =
+        Chat.create_attachment(%{
+          message_id: message_two.id,
+          filename: "three.txt",
+          content_type: "text/plain",
+          byte_size: 5,
+          storage_key: "chat/test/three.txt"
+        })
+
+      result = Chat.list_attachments_for_messages([message_one.id, message_two.id])
+
+      assert Enum.map(result[message_one.id], & &1.filename) == ["one.txt", "two.txt"]
+      assert Enum.map(result[message_two.id], & &1.filename) == ["three.txt"]
+    end
+  end
+
   # ── Pins ──────────────────────────────────────────────────────────────────────
 
   describe "pin_message/1 and unpin_message/2" do

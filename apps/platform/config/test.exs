@@ -24,6 +24,9 @@ config :platform, :oidc,
   strategy: Platform.TestOIDCStrategy,
   http_adapter: {Assent.HTTPAdapter.Mint, []}
 
+config :platform,
+  chat_attachments_root: Path.join(System.tmp_dir!(), "platform_test_chat_uploads")
+
 # Print only warnings and errors during test
 config :logger, level: :warning
 
