@@ -548,7 +548,7 @@ defmodule Platform.Agents.AgentServer do
 
   defp fetch_agent(value) when is_binary(value) do
     cond do
-      match?({:ok, _}, Ecto.UUID.cast(value)) ->
+      uuid_string?(value) ->
         case Repo.get(Agent, value) do
           %Agent{} = agent -> {:ok, agent}
           nil -> {:error, :not_found}
@@ -568,7 +568,7 @@ defmodule Platform.Agents.AgentServer do
 
   defp resolve_slug(value) when is_binary(value) do
     cond do
-      match?({:ok, _}, Ecto.UUID.cast(value)) ->
+      uuid_string?(value) ->
         case Repo.get(Agent, value) do
           %Agent{slug: slug} -> {:ok, slug}
           nil -> {:error, :not_found}
@@ -580,6 +580,10 @@ defmodule Platform.Agents.AgentServer do
   end
 
   defp resolve_slug(_other), do: {:error, :not_found}
+
+  defp uuid_string?(value) when is_binary(value) do
+    String.length(value) == 36 and match?({:ok, _}, Ecto.UUID.cast(value))
+  end
 
   # -- Context / state helpers ------------------------------------------------
 
