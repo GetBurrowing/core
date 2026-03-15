@@ -173,16 +173,31 @@ handle_call({:transition, :completed | :failed | :cancelled})
 {:ok, _run} = Platform.Execution.transition(run.id, :completed)
 ```
 
-### Remote / Docker runners (future HTTP adapter)
+### Remote / Docker runners (`suite-runnerd` seam)
 
-The HTTP layer will expose thin wrappers:
+The Docker provider keeps `RunServer` as the control-plane source of truth and
+uses a thin companion client/service seam for the host-level container actions.
+The BEAM side owns run status, stale/dead classification, and context delivery;
+`suite-runnerd` only owns the container lifecycle mechanics.
+
+Planned control surface:
 
 ```
+POST /api/runs                → spawn container for run
+GET  /api/runs/:id            → describe provider/container state
+POST /api/runs/:id/stop       → graceful stop request
+POST /api/runs/:id/kill       → forced kill
+
 GET  /api/runs/:id/context           → snapshot
 POST /api/runs/:id/context/ack       → ack_context
 POST /api/runs/:id/context/push      → push_context
 POST /api/runs/:id/transition        → transition
 ```
+
+This split prevents a second orchestration plane: liveness, terminal
+transitions, and future Tasks/UI state continue to flow through
+`Platform.Execution`, while the service boundary is narrow enough to swap the
+transport later if needed.
 
 Authentication: existing Vault-backed token supply.
 
@@ -263,8 +278,126 @@ and transitions the run to `:completed`, `:cancelled`, or `:failed` deterministi
 
 ---
 
+## Docker Provider — Container Run Control and Fast Kill Semantics
+
+`Platform.Execution.DockerRunner` is the second first-party `Runner` implementation.
+It wraps `SuiteRunnerdClient` and keeps `RunServer` as the single control-plane
+source of truth.
+
+### Updated module map
+
+```
+apps/platform/lib/platform/
+└── execution/
+    ├── docker_runner.ex         # Docker-backed Runner behaviour impl
+    └── suite_runnerd_client.ex  # HTTP transport boundary for suite-runnerd
+```
+
+### Spawn flow
+
+```
+RunServer.spawn_provider(run_id, DockerRunner, command: ..., credential_lease: lease)
+  → DockerRunner.spawn_run/2
+      LocalWorkspace.ensure_workspace/2     # allocate per-run dir
+      resolve_command/2                     # command / args from opts or run.meta
+      build_spawn_payload/6                 # security + mount + env
+      SuiteRunnerdClient.spawn_run/3        # POST /api/runs
+  → {:ok, provider_ref}                     # stored on Run.runner_ref
+```
+
+### Two-phase stop/kill
+
+```
+DockerRunner.stop_with_escalation/2
+  → request_stop/2      # POST /api/runs/:id/stop (SIGTERM / docker stop)
+  → poll describe_run/2 every 500ms
+       ↳ if :exited/:killed/:stopped → :ok
+       ↳ if timeout (default 10s)   → force_stop/2  (POST /api/runs/:id/kill)
+       ↳ if describe error          → force_stop/2  (defensive)
+```
+
+### Security payload (hardening defaults)
+
+```
+security: %{
+  user: "runner",           # non-root UID 1000
+  no_new_privileges: true,  # blocks setuid escalation
+  capability_drop: ["ALL"], # all capabilities dropped
+  capability_add: [],       # opt-in via :capability_add
+  no_docker_socket: true    # Docker socket never mounted
+}
+```
+
+### Host worktree mount
+
+```
+mount: %{
+  type: "bind",
+  host_source: "<workspace_root>/<run_id>",
+  container_target: "/workspace",  # override: :container_workspace_path
+  workspace_root: "<root>",
+  read_only: false
+}
+```
+
+### suite-runnerd HTTP contract
+
+```
+POST /api/runs                  → spawn container; returns {container_id, status, image}
+GET  /api/runs/:id              → describe; returns {status, exit_code, health, ...}
+POST /api/runs/:id/stop         → graceful stop (SIGTERM / docker stop)
+POST /api/runs/:id/kill         → forced kill (SIGKILL / docker kill)
+```
+
+The `:id` segment is the container ID when available; falls back to the run ID
+so `suite-runnerd` can index either way.
+
+---
+
+## Follow-up Seams — Runner Image Posture and Proof-of-Life
+
+The following items are deferred pending a concrete `suite-runnerd` binary.
+
+### Runner image requirements
+
+| Requirement | Notes |
+|---|---|
+| Non-root user `runner` (UID 1000) | Must be created in the Dockerfile |
+| Read-only root filesystem | Only `/workspace` (bind) and `/tmp` (tmpfs) writable |
+| Seccomp profile | Curated alongside `no-new-privileges` |
+| Agent binaries | `git`, `gh`, Codex or Claude Code in `PATH` |
+| Image signing | Registry must enforce Cosign / Notation verification |
+
+### suite-runnerd binary (next task)
+
+- Scaffold as Go or Elixir release
+- Accepts POST `/api/runs` with the BEAM-generated payload
+- Calls `docker run` with the security and mount fields applied
+- Returns container ID and initial status
+- Handles SIGTERM → SIGKILL escalation on the Docker side
+
+### Proof-of-life integration test
+
+A sign-of-life end-to-end test should:
+
+1. Start a real Docker container with the runner image
+2. Mount a per-run worktree at `/workspace`
+3. Run `codex` or `claude --print` against a trivial prompt
+4. Assert the runner creates a commit and pushes a branch to GitHub
+
+The Tasks UI will surface the pushed branch SHA as an artifact in the task
+detail panel once this handoff path is wired through `EvictionPolicy` and
+the run context.
+
+---
+
 ## Future Work
 
+- **suite-runnerd binary:** implement the companion service that executes
+  `docker run` from the BEAM-generated spawn payload
+- **Runner image:** non-root base image with agent binaries, published to a
+  verified registry
+- **Proof-of-life integration test:** end-to-end Docker runner → GitHub branch push
 - **Vault credential leasing:** replace config-backed `CredentialLease` with
   short-lived GitHub App installation tokens from `Platform.Vault`
 - **GitHub push verification:** record the pushed branch HEAD SHA as an

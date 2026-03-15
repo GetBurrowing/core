@@ -223,6 +223,154 @@ to env vars and injected into the child process at spawn time.
 
 ---
 
+## Docker Provider — Container Run Control and Fast Kill Semantics (Stages 2–3)
+
+The Docker-backed provider established in Stage 1 is now fully functional.
+`Platform.Execution.DockerRunner` implements the `Runner` behaviour and delegates
+all container mechanics to the `suite-runnerd` companion service through
+`SuiteRunnerdClient`.
+
+### Spawn payload
+
+`spawn_run/2` builds a structured payload forwarded to `suite-runnerd`:
+
+| Field | Description |
+|-------|-------------|
+| `run_id` / `task_id` / `project_id` / `epic_id` | Run identity |
+| `workspace_root` / `workspace_path` | Per-run workspace paths |
+| `command` / `args` / `env` | Entrypoint and credential env vars |
+| `security` | Non-root user, no-new-privileges, capability drop, no Docker socket |
+| `mount` | Host-to-container bind mount for the per-run worktree |
+| `meta` | Arbitrary run metadata forwarded to the service |
+
+### Security posture (defaults)
+
+Every container is spawned with the following hardening applied by default:
+
+```elixir
+%{
+  user: "runner",           # non-root, UID 1000 in the image
+  no_new_privileges: true,  # blocks setuid/setgid escalation
+  capability_drop: ["ALL"], # drop all capabilities; add back only what's needed
+  capability_add: [],       # empty by default; opt-in per task
+  no_docker_socket: true    # socket never mounted into runner container
+}
+```
+
+The `:runner_user` and `:capability_add` opts allow per-spawn overrides.
+`suite-runnerd` is responsible for translating these into `docker run` flags.
+
+### Host-mounted worktree
+
+The per-run workspace path is bind-mounted into the container at `/workspace`:
+
+```elixir
+%{
+  type: "bind",
+  host_source: "<workspace_root>/<run_id>",
+  container_target: "/workspace",   # override via :container_workspace_path
+  workspace_root: "<root>",
+  read_only: false
+}
+```
+
+The container's working directory is `/workspace` by convention.  Runners
+write branches and artifacts here; the host sees the changes directly without
+needing a shared volume daemon.
+
+### Fast stop/kill escalation
+
+`DockerRunner.stop_with_escalation/2` provides two-phase termination:
+
+1. **Graceful stop** — calls `request_stop/2` (forwards to `POST /api/runs/:id/stop`)
+2. **Poll loop** — describes the run every 500 ms until it reports a terminal status
+   (`:exited`, `:dead`, `:stopped`, `:killed`) or the timeout elapses
+3. **Hard kill** — if still running after `escalation_timeout_ms` (default 10 s),
+   calls `force_stop/2` (forwards to `POST /api/runs/:id/kill`)
+
+Returns `:ok` once confirmed stopped or killed.  If the describe call fails the
+runner is assumed gone and `force_stop` is called defensively.
+
+### Describe metadata
+
+`describe_run/2` merges the stored provider ref with `suite-runnerd`'s response.
+The merged map exposes:
+
+| Key | Type | Notes |
+|-----|------|-------|
+| `:status` | atom | `:starting` \| `:running` \| `:exited` \| `:killed` \| `:stopped` |
+| `:exit_code` | integer \| nil | Process exit code |
+| `:container_id` | string | Docker short ID |
+| `:image` | string | Image reference |
+| `:stop_mode` | atom \| nil | `:graceful` \| `:kill` |
+| `:started_at` | string \| nil | ISO8601 |
+| `:finished_at` | string \| nil | ISO8601 |
+| `:exit_message` | string \| nil | Stderr tail from container |
+| `:health` | atom \| nil | `:healthy` \| `:degraded` \| `:unknown` |
+| `:workspace_path` | string | Run workspace path on host |
+| `:workspace_root` | string | Workspace root on host |
+
+---
+
+## Docker Provider — Follow-Up Notes (Stage 4)
+
+The following seams are intentionally deferred and documented here for
+subsequent tasks.
+
+### Runner image hardening
+
+The BEAM side sends a security payload but cannot enforce it — enforcement is
+the responsibility of `suite-runnerd`.  Outstanding items for the runner image:
+
+- **Non-root user creation**: the image must include `useradd -m -u 1000 runner`
+  (or equivalent) so the container starts as UID 1000.
+- **Seccomp profile**: apply a curated seccomp profile alongside `no-new-privileges`
+  to further reduce the syscall surface.
+- **Read-only root filesystem**: mount the container root as read-only; only
+  `/workspace` (bind mount) and `/tmp` (tmpfs) should be writable.
+- **Image signing**: runners should pull from a registry that enforces image
+  signature verification (Cosign / Notation).
+
+### Docker socket exclusion
+
+`no_docker_socket: true` is forwarded in the spawn payload but `suite-runnerd`
+must act on it.  The `docker run` command must **not** include
+`-v /var/run/docker.sock:/var/run/docker.sock`.  If a future task requires
+in-container Docker builds, the recommended path is:
+
+1. A rootless Docker-in-Docker (DinD) sidecar with an explicitly scoped socket
+2. A remote Buildkit daemon with a token-scoped connection
+
+### Proof-of-life handoff
+
+Sign-of-life for Docker runners means a runner container can:
+
+1. Accept an entrypoint (e.g. `codex` or `claude`) via the spawn command
+2. Clone or access the per-run worktree at `/workspace`
+3. Push a branch to GitHub using the injected `GITHUB_TOKEN`
+
+This requires:
+- A concrete `suite-runnerd` service (current task delivers the BEAM seam only)
+- A base runner image with `git`, `gh`, and the target agent binary installed
+- An integration test that spawns a real container and asserts the branch appears on GitHub
+
+The Tasks UI proof-of-life flow (run status → branch link in task detail) will
+build on top of this once the `suite-runnerd` binary exists.
+
+### suite-runnerd service
+
+`SuiteRunnerdClient` defines the HTTP contract but no server-side implementation
+exists yet.  The next task should:
+
+- Scaffold a `suite-runnerd` binary (Go or Elixir release) that handles
+  `POST /api/runs`, `GET /api/runs/:id`, `POST /api/runs/:id/stop|kill`
+- Translate the spawn payload into a `docker run` invocation using the
+  security and mount fields
+- Return the container ID and initial status in the spawn response
+- Handle the SIGTERM → SIGKILL escalation on the container side
+
+---
+
 ## Future Work
 
 - **Vault credential leasing:** replace config-backed `CredentialLease` with
@@ -236,6 +384,12 @@ to env vars and injected into the child process at spawn time.
 - **HTTP runner protocol:** thin adapter wrapping the Execution public API
 - **Context compaction:** summarise long item histories via an LLM pass before
   handing to runners
+- **suite-runnerd binary:** implement the companion service that translates the
+  BEAM spawn payload into concrete `docker run` invocations
+- **Runner image:** build and publish a base runner image with non-root posture,
+  git, gh CLI, and agent binaries (Codex / Claude Code)
+- **Proof-of-life integration test:** end-to-end test that spawns a real runner
+  container, runs a branch push, and verifies the result via GitHub API
 
 ---
 
@@ -244,6 +398,8 @@ to env vars and injected into the child process at spawn time.
 - ADR 0007: Agent Runtime Architecture
 - `Platform.Context.*` — context plane implementation
 - `Platform.Execution.*` — run control implementation
+- `Platform.Execution.DockerRunner` — Docker-backed runner provider
+- `Platform.Execution.SuiteRunnerdClient` — HTTP client for suite-runnerd
 - `Platform.Execution.CredentialLease` — per-run credential leasing
 - `Platform.Execution.LocalWorkspace` — workspace + git push path
 - `docs/architecture/06-execution-runners-adr-0011.md`
