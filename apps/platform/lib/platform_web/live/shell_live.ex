@@ -54,7 +54,7 @@ defmodule PlatformWeb.ShellLive do
         "Chat"
 
       PlatformWeb.ControlCenterLive ->
-        "Control Center"
+        "Agent Resources"
 
       _ ->
         view

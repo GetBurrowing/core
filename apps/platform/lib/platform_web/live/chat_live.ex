@@ -63,6 +63,7 @@ defmodule PlatformWeb.ChatLive do
       |> assign(:canvases_by_message_id, %{})
       |> assign(:active_canvas, nil)
       |> assign(:show_canvases, false)
+      |> assign(:mobile_browser_open, false)
       |> assign(:quick_emojis, @quick_emojis)
       |> assign(:canvas_types, @canvas_types)
       |> assign_compose("")
@@ -156,6 +157,7 @@ defmodule PlatformWeb.ChatLive do
        |> assign(:canvases_by_message_id, canvases_by_message_id)
        |> assign(:active_canvas, nil)
        |> assign(:show_canvases, false)
+       |> assign(:mobile_browser_open, false)
        |> assign(:spaces, Chat.list_spaces())
        |> assign_new_canvas_form()
        |> stream(:messages, messages, reset: true)}
@@ -173,6 +175,14 @@ defmodule PlatformWeb.ChatLive do
   end
 
   @impl true
+  def handle_event("toggle_mobile_browser", _params, socket) do
+    {:noreply, assign(socket, :mobile_browser_open, !socket.assigns.mobile_browser_open)}
+  end
+
+  def handle_event("close_mobile_browser", _params, socket) do
+    {:noreply, assign(socket, :mobile_browser_open, false)}
+  end
+
   def handle_event("search_messages", %{"search" => %{"query" => query}}, socket) do
     {:noreply, apply_search(socket, query)}
   end
@@ -597,7 +607,8 @@ defmodule PlatformWeb.ChatLive do
   def render(assigns) do
     ~H"""
     <div class="flex h-full overflow-hidden">
-      <aside class="flex w-52 flex-shrink-0 flex-col border-r border-base-300 bg-base-200">
+      <%!-- Desktop channel sidebar (hidden on mobile) --%>
+      <aside class="hidden lg:flex w-52 flex-shrink-0 flex-col border-r border-base-300 bg-base-200">
         <div class="border-b border-base-300 px-4 py-3">
           <p class="text-xs font-semibold uppercase tracking-widest text-base-content/50">
             Channels
@@ -625,6 +636,43 @@ defmodule PlatformWeb.ChatLive do
         </nav>
       </aside>
 
+      <%!-- Mobile channel browser overlay --%>
+      <%= if @mobile_browser_open do %>
+        <div class="fixed inset-0 z-40 flex flex-col bg-base-100 lg:hidden">
+          <header class="flex h-12 flex-shrink-0 items-center justify-between border-b border-base-300 px-4">
+            <p class="text-sm font-semibold">Channels</p>
+            <button
+              phx-click="close_mobile_browser"
+              class="rounded-lg p-1 text-base-content/60 hover:bg-base-300 hover:text-base-content"
+              aria-label="Close channels"
+            >
+              <span class="hero-x-mark size-5"></span>
+            </button>
+          </header>
+
+          <nav class="flex-1 overflow-y-auto py-2">
+            <.link
+              :for={space <- @spaces}
+              navigate={~p"/chat/#{space.slug}"}
+              phx-click="close_mobile_browser"
+              class={[
+                "flex items-center gap-3 px-4 py-3 text-sm transition-colors",
+                "hover:bg-base-200",
+                @active_space && @active_space.id == space.id &&
+                  "bg-base-200 text-primary font-semibold"
+              ]}
+            >
+              <span class="text-base-content/40 text-lg">#</span>
+              <span class="truncate">{space.name}</span>
+            </.link>
+
+            <div :if={@spaces == []} class="px-4 py-6 text-sm text-base-content/40 text-center">
+              No channels yet
+            </div>
+          </nav>
+        </div>
+      <% end %>
+
       <div class="flex flex-1 overflow-hidden min-w-0">
         <div class="flex flex-1 flex-col overflow-hidden min-w-0">
           <header
@@ -632,13 +680,26 @@ defmodule PlatformWeb.ChatLive do
             class="flex h-12 flex-shrink-0 items-center justify-between border-b border-base-300 px-5"
           >
             <div class="flex items-center gap-2 overflow-hidden">
-              <span class="text-base-content/50">#</span>
-              <span class="truncate font-semibold">{@active_space.name}</span>
-              <span
-                :if={@active_space.topic}
-                class="hidden truncate text-xs text-base-content/40 sm:block"
+              <%!-- Mobile: tappable channel title to open browser --%>
+              <button
+                phx-click="toggle_mobile_browser"
+                class="flex items-center gap-2 overflow-hidden lg:hidden"
+                aria-label="Browse channels"
               >
-                — {@active_space.topic}
+                <span class="text-base-content/50">#</span>
+                <span class="truncate font-semibold">{@active_space.name}</span>
+                <span class="hero-chevron-down size-4 text-base-content/40 flex-shrink-0"></span>
+              </button>
+              <%!-- Desktop: static channel title --%>
+              <span class="hidden lg:flex items-center gap-2 overflow-hidden">
+                <span class="text-base-content/50">#</span>
+                <span class="truncate font-semibold">{@active_space.name}</span>
+                <span
+                  :if={@active_space.topic}
+                  class="truncate text-xs text-base-content/40"
+                >
+                  — {@active_space.topic}
+                </span>
               </span>
             </div>
 
@@ -1085,7 +1146,7 @@ defmodule PlatformWeb.ChatLive do
 
         <div
           :if={@active_canvas}
-          class="flex w-96 flex-shrink-0 flex-col border-l border-base-300 bg-base-100"
+          class="hidden lg:flex w-96 flex-shrink-0 flex-col border-l border-base-300 bg-base-100"
         >
           <div class="flex h-12 flex-shrink-0 items-center justify-between border-b border-base-300 px-4">
             <div class="min-w-0">
@@ -1107,7 +1168,7 @@ defmodule PlatformWeb.ChatLive do
 
         <div
           :if={@active_thread}
-          class="flex w-80 flex-shrink-0 flex-col border-l border-base-300 bg-base-100"
+          class="hidden lg:flex w-80 flex-shrink-0 flex-col border-l border-base-300 bg-base-100"
         >
           <div class="flex h-12 flex-shrink-0 items-center justify-between border-b border-base-300 px-4">
             <div class="flex items-center gap-2">
