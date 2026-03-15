@@ -19,7 +19,9 @@ defmodule Platform.Application do
       {DNSCluster, query: Application.get_env(:platform, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: Platform.PubSub},
       {Registry, keys: :unique, name: Platform.Agents.Registry},
+      {Registry, keys: :unique, name: Platform.Execution.Registry},
       Platform.Agents.RuntimeSupervisor,
+      Platform.Execution.RuntimeSupervisor,
       # ContextBroker — must start after the agent registry/runtime tree
       Platform.Agents.ContextBroker,
       # Chat presence — must start after PubSub
