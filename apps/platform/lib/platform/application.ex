@@ -18,6 +18,8 @@ defmodule Platform.Application do
       PlatformWeb.Telemetry,
       {DNSCluster, query: Application.get_env(:platform, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: Platform.PubSub},
+      {Registry, keys: :unique, name: Platform.Agents.Registry},
+      Platform.Agents.RuntimeSupervisor,
       # Chat presence — must start after PubSub
       Platform.Chat.Presence,
       # AttentionRouter — must start after Repo and PubSub
