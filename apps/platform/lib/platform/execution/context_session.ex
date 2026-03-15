@@ -62,7 +62,8 @@ defmodule Platform.Execution.ContextSession do
 
   @doc "Return a new context session with an acknowledged version recorded."
   @spec acknowledge(t(), non_neg_integer(), DateTime.t()) :: t()
-  def acknowledge(%__MODULE__{} = session, version, at \\ DateTime.utc_now()) when is_integer(version) do
+  def acknowledge(%__MODULE__{} = session, version, at \\ DateTime.utc_now())
+      when is_integer(version) do
     %__MODULE__{
       session
       | version: max(session.version, version),
