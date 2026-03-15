@@ -1,192 +1,216 @@
-# Execution Runners, Context Plane, and Run Control — ADR 0011
+# Architecture: Execution Runners & Context Plane (ADR 0011)
 
-Tasks is the user-facing surface. Execution is the platform domain underneath it. The control plane stays in BEAM/Elixir; real work happens in isolated runners with live context access and deterministic stop/kill control.
+> For the decision record see
+> `docs/decisions/0011-execution-runners-context-plane-and-run-control.md`
 
-```mermaid
-graph TB
-  subgraph UI["User-Facing Surfaces"]
-    TasksUI["Tasks Surface<br/>run list · task detail · stop/kill controls"]
-    AgentResources["Agent Resources<br/>vault · agent config · runtime health"]
-    Chat["Chat / Canvas<br/>human-agent collaboration"]
-  end
+---
 
-  subgraph Phoenix["Platform Application (Elixir/Phoenix)"]
-    Router["Phoenix Router / LiveView"]
-    Execution["Platform.Execution"]
-    RunServer["RunServer<br/>one OTP process per run"]
-    ContextPlane["Context Plane<br/>reducers · scoped views · versioning"]
-    Artifacts["Artifacts / Destinations<br/>publish code, files, canvases"]
-    Vault["Vault<br/>leased run credentials"]
-    Audit["Audit Event Stream"]
-    PubSub["Phoenix PubSub"]
-    ETS["ETS Hot Context Cache"]
-  end
+## Overview
 
-  subgraph State["Durable State"]
-    Postgres[("Postgres<br/>runs · events · context records"])
-  end
+The context plane is a three-layer in-process substrate that gives AI runners
+a structured, versioned view of the task they are executing and a reliable
+handshake mechanism to confirm they have processed updates.
 
-  subgraph Providers["Execution Providers"]
-    LocalProvider["Local Runner Provider<br/>spawn OS process"]
-    DockerProvider["Docker Runner Provider"]
-    Runnerd["suite-runnerd<br/>companion control service"]
-  end
-
-  subgraph Workers["Execution Workers"]
-    LocalWrapper["Runner Wrapper<br/>local process"]
-    DockerWrapper["Runner Wrapper<br/>ephemeral container"]
-    CodingAgent["Codex / Claude Code / other tool"]
-  end
-
-  subgraph Outputs["Publication Targets"]
-    GitHub["GitHub<br/>branch / PR"]
-    Registry["Docker Registry"]
-    Drive["Google Drive"]
-    Preview["Ephemeral Preview Route<br/>(future experiments)"]
-  end
-
-  TasksUI --> Router
-  AgentResources --> Router
-  Chat --> Router
-
-  Router --> Execution
-  Execution --> RunServer
-  Execution --> ContextPlane
-  Execution --> Artifacts
-  Execution --> Vault
-  Execution --> Audit
-  ContextPlane --> ETS
-  ContextPlane --> Postgres
-  Artifacts --> Postgres
-  Audit --> Postgres
-  Audit --> PubSub
-  ContextPlane --> PubSub
-
-  RunServer --> LocalProvider
-  RunServer --> DockerProvider
-  DockerProvider --> Runnerd
-  LocalProvider --> LocalWrapper
-  Runnerd --> DockerWrapper
-  LocalWrapper --> CodingAgent
-  DockerWrapper --> CodingAgent
-
-  LocalWrapper --> ContextPlane
-  DockerWrapper --> ContextPlane
-  LocalWrapper --> Vault
-  DockerWrapper --> Vault
-  LocalWrapper --> Audit
-  DockerWrapper --> Audit
-
-  Artifacts --> GitHub
-  Artifacts --> Registry
-  Artifacts --> Drive
-  Artifacts --> Preview
+```
+┌────────────────────────────────────────────────────────┐
+│  Platform.Application                                   │
+│                                                         │
+│  ┌─────────────────┐   ┌─────────────────────────────┐ │
+│  │ Context.Supervisor│  │  Execution.RunSupervisor    │ │
+│  │  └ Cache (ETS)  │  │   └ RunServer (per run)      │ │
+│  └────────┬────────┘  └──────────┬──────────────────┘ │
+│           │PubSub                 │subscribes           │
+│           └───────────Platform.PubSub─────────────────┘ │
+└────────────────────────────────────────────────────────┘
 ```
 
-## Control Model
+---
 
-```mermaid
-graph LR
-  User["User"] -->|start / stop / kill| TasksUI
-  TasksUI --> RunServer
-  RunServer -->|heartbeat SLA| Liveness["Liveness timers"]
-  RunServer -->|checkpoint SLA| Progress["Progress timers"]
-  RunServer -->|required version ack| ContextAck["Context ack timers"]
+## Module Map
 
-  Liveness --> State["alive / stale / dead"]
-  Progress --> State
-  ContextAck --> State
+```
+apps/platform/lib/platform/
+├── context.ex                    # Public API (ensure_session, snapshot, put_item, ack, ...)
+└── context/
+    ├── session.ex                # %Session{} + %Scope{} value structs, scope_key/1
+    ├── item.ex                   # %Item{} value struct + Item.Kind (kinds + eviction_scope)
+    ├── delta.ex                  # %Delta{} versioned mutation descriptor
+    ├── cache.ex                  # GenServer owning ETS tables; all writes serialised here
+    ├── supervisor.ex             # one_for_one: [Cache]
+    └── eviction_policy.ex        # lifecycle hooks: run_terminated, task_closed, ...
 
-  RunServer -->|request_stop immediately| Wrapper["Runner Wrapper"]
-  RunServer -->|after short grace| ForceKill["force_stop"]
-  ForceKill --> Wrapper
-  Wrapper -->|exit confirmed| Final["cancelled / killed / failed / completed"]
+apps/platform/lib/platform/
+├── execution.ex                  # Public API (start_run, get_snapshot, push_context, ack_context, ...)
+└── execution/
+    ├── run.ex                    # %Run{} value struct (status + ctx tracking fields)
+    ├── run_server.ex             # per-run GenServer; SLA timers, transitions, PubSub relay
+    ├── run_supervisor.ex         # DynamicSupervisor for RunServer processes
+    └── context_session.ex        # bridge: Run ↔ Platform.Context (open, snapshot, push, ack, close)
 ```
 
-## Context Flow
+---
 
-```mermaid
-sequenceDiagram
-  participant H as Human / Chat
-  participant T as Tasks UI
-  participant C as Context Plane
-  participant R as RunServer
-  participant W as Runner Wrapper
-  participant A as Coding Agent
+## ETS Layout
 
-  T->>R: start run
-  R->>C: create scoped context session
-  C-->>W: snapshot(version N)
-  W-->>C: ack(version N)
-  W->>A: start coding tool
-  H->>C: new decision / chat update / clarification
-  C-->>W: delta(version N+1)
-  W-->>C: ack(version N+1)
-  W-->>C: observation(checkpoint, file changes, blockers)
-  C-->>T: updated task/run state
+```
+:ctx_sessions  — {scope_key} → %Session{}
+:ctx_items     — {scope_key, item_key} → %Item{}
+:ctx_deltas    — {scope_key, version} → %Delta{}
+:ctx_acks      — {scope_key, run_id} → acked_version (integer)
 ```
 
-## Fast Stop / Kill Sequence
+All tables are `:public` for O(1) reads without a GenServer hop.  Writes go
+through `Cache` to keep the monotonic version counter atomic.
 
-```mermaid
-sequenceDiagram
-  participant U as User
-  participant T as Tasks UI
-  participant R as RunServer
-  participant W as Runner Wrapper
-  participant P as Provider
+---
 
-  U->>T: Stop run now
-  T->>R: request_stop(run_id)
-  R->>R: state = stopping
-  R->>W: graceful stop immediately
-  W->>P: stop child process/container
+## Scope Key Convention
 
-  alt exits within grace window
-    W-->>R: exited(cancelled)
-    R-->>T: cancelled
-  else no exit before deadline
-    R->>R: state = kill_requested
-    R->>W: force_stop
-    W->>P: kill process/container
-    W-->>R: exited(killed)
-    R-->>T: killed
-  end
+```
+Scope              Cache key
+──────────────────────────────────
+project only       "proj-id"
+project + epic     "proj-id/epic-id"
+project + epic + task   "proj-id/epic-id/task-id"
+full run scope     "proj-id/epic-id/task-id/run-id"
+task only (no project/epic)  "task-id"
+task + run         "task-id/run-id"
 ```
 
-## UI Implications
+Nil segments are omitted.  The narrowest scope (run) inherits items from all
+ancestor scopes when `ContextSession.snapshot/1` is called.
 
-The Tasks surface needs a first-class operator UI, not just a kanban board.
+---
 
-Minimum UI responsibilities implied by ADR 0011:
+## Write Flow (put_item)
 
-- task detail with plan + current run state
-- live run timeline (phase, checkpoint, last heartbeat, last progress)
-- context summary and "what changed" view
-- explicit stop / kill controls
-- artifact list and publication status
-- runner profile visibility (`local` vs `docker`)
-- future experiment hooks (preview route, variant, TTL)
+```
+caller
+  │  Cache.put_item(scope_key, key, value, opts)
+  ▼
+Cache (GenServer)
+  1. :ets.lookup sessions — fail fast if session missing
+  2. Session.bump_version → new monotonic version
+  3. :ets.insert sessions (updated version)
+  4. Item.new(key, value, version, opts)
+  5. :ets.insert items
+  6. Build %Delta{puts: ...} stamped with version
+  7. :ets.insert deltas
+  8. Phoenix.PubSub.broadcast("ctx:<scope_key>", {:context_delta, delta})
+  → {:ok, new_version}
+```
 
-## Notes
+---
 
-- Runners are **context plane clients**, not trusted BEAM nodes
-- ETS is the hot cache, not the distributed contract
-- Docker installs use `suite-runnerd` as the companion service for spawning/killing containers
-- The same artifact/destination system should support task outputs and chat/canvas outputs
+## RunServer Lifecycle
 
-## Downstream Handoff
+```
+RunServer.init/1
+  ContextSession.open(run)          # ensure_session for project/epic/task/run
+  PubSub.subscribe("ctx:<key>")
 
-### Provider contract reminders
+handle_info({:context_delta, _})
+  ContextSession.require_current(run)   # bump required_version to current
+  cancel_stale_timer + start_stale_timer(stale_timeout_ms)
 
-- `spawn_run` should return a provider ref the control plane can persist and later hand back to provider adapters.
-- `request_stop` should be immediate and optimistic; the control plane starts the grace timer regardless of whether the provider reports success synchronously.
-- `force_stop` should be idempotent and should confirm exit explicitly whenever possible so `RunServer` can land on `killed` instead of timing out to `dead`.
-- Provider wrappers own emitting heartbeats, checkpoints, context acks, and exit notifications.
+handle_info(:stale_timeout)
+  run.ctx_status = :stale
+  broadcast(:run_ctx_status_changed, run_id, :stale)
+  start_dead_timer(dead_timeout_ms)
 
-### Tasks UI reminders
+handle_info(:dead_timeout)
+  run.ctx_status = :dead
+  broadcast(:run_ctx_status_changed, run_id, :dead)
 
-- Run detail should subscribe to the BEAM-owned run state, not derive health from raw logs.
-- Show `stale` and `dead` as distinct failure modes.
-- Make the quick stop action visible immediately, but preserve a separate hard-kill affordance for operators.
-- Future local/docker surfaces should reuse the same stop/kill timeline and run state labels.
+handle_call({:ack_context, version})
+  ContextSession.ack(run, version)
+  cancel_stale_timer
+  run.ctx_status = :current | :stale (recomputed)
+
+handle_call({:transition, :completed | :failed | :cancelled})
+  cancel timers
+  EvictionPolicy.run_terminated(%{...})   # promote artifacts + evict run session
+```
+
+---
+
+## Eviction Rules
+
+| Kind              | Eviction Scope | Promoted on run end? |
+|-------------------|----------------|----------------------|
+| `:generic`        | `:run`         | No                   |
+| `:env_var`        | `:run`         | No                   |
+| `:runner_hint`    | `:run`         | No                   |
+| `:system_event`   | `:run`         | No                   |
+| `:artifact_ref`   | `:run`         | **Yes → task scope** |
+| `:task_description` | `:task`      | N/A                  |
+| `:task_metadata`  | `:task`        | N/A                  |
+| `:epic_context`   | `:epic`        | N/A                  |
+| `:project_config` | `:project`     | N/A                  |
+
+---
+
+## Runner Contract (downstream handoff)
+
+### Local runners (same BEAM node)
+
+```elixir
+# 1. Platform starts run
+{:ok, run} = Platform.Execution.start_run(task_id, project_id: pid, epic_id: eid)
+
+# 2. Runner gets snapshot
+{:ok, %{items: items, version: v, required_version: req}} =
+  Platform.Execution.get_snapshot(run.id)
+
+# 3. Ack immediately after loading
+{:ok, _run} = Platform.Execution.ack_context(run.id, v)
+
+# 4. Push results
+{:ok, _v} = Platform.Execution.push_context(run.id,
+  %{"artifact:output" => "s3://..."}, kind: :artifact_ref)
+
+# 5. Complete
+{:ok, _run} = Platform.Execution.transition(run.id, :completed)
+```
+
+### Remote / Docker runners (future HTTP adapter)
+
+The HTTP layer will expose thin wrappers:
+
+```
+GET  /api/runs/:id/context           → snapshot
+POST /api/runs/:id/context/ack       → ack_context
+POST /api/runs/:id/context/push      → push_context
+POST /api/runs/:id/transition        → transition
+```
+
+Authentication: existing Vault-backed token supply.
+
+### Tasks UI (LiveView)
+
+Subscribe to:
+- `"ctx:<task_id>"` — for task-scoped context changes (item editor)
+- `"execution:runs:<task_id>"` — for run status + ctx_status transitions
+
+---
+
+## Delta Catch-up
+
+Runners that reconnect can catch up from a known version:
+
+```elixir
+{:ok, deltas} = Platform.Context.latest_delta(scope, last_known_version)
+```
+
+Deltas are kept up to 200 entries per scope.  Beyond that limit runners must
+request a full snapshot.
+
+---
+
+## Future Work
+
+- **Postgres persistence:** async write of items + deltas for audit/replay
+- **Distributed context:** pg_pubsub adapter for multi-node deployments  
+- **HTTP runner protocol:** thin adapter wrapping the Execution public API
+- **Context compaction:** summarise long item histories via an LLM pass before
+  handing to runners

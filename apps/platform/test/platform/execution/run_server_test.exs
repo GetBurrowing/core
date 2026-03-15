@@ -1,271 +1,217 @@
 defmodule Platform.Execution.RunServerTest do
-  use ExUnit.Case, async: true
+  @moduledoc """
+  Tests for Platform.Execution.RunServer:
+    - Context session open on start
+    - Status transitions
+    - Ack tracking
+    - Stale trigger on SLA miss
+    - Dead trigger after stale
+    - Context eviction on terminal state
+  """
+  use ExUnit.Case, async: false
 
-  alias Platform.Execution
-  alias Platform.Execution.{ContextSession, Run, RunServer}
+  alias Platform.Context
+  alias Platform.Execution.{ContextSession, Run, RunServer, RunSupervisor}
 
-  defmodule FakeRunner do
-    @behaviour Platform.Execution.Runner
+  # Start a run with very short SLA timers for stale tests
+  defp start_run(task_id, opts \\ []) do
+    run_id = "run-#{System.unique_integer([:positive, :monotonic])}"
+    run = Run.new(run_id, task_id, opts)
 
-    alias Platform.Execution.{ContextSession, Run}
+    {:ok, _pid} = RunSupervisor.start_run(run, opts)
+    run
+  end
 
-    @impl true
-    def spawn_run(%Run{} = run, opts) do
-      notify(run, {:spawn_run, run.id, opts})
-      {:ok, %{provider: :fake, run_id: run.id}}
+  defp unique_task, do: "task-#{System.unique_integer([:positive, :monotonic])}"
+
+  # ---------------------------------------------------------------------------
+  # Basic lifecycle
+  # ---------------------------------------------------------------------------
+
+  describe "start and context session" do
+    test "opens a context session when started" do
+      task_id = unique_task()
+      run = start_run(task_id)
+
+      # Session should exist in cache
+      scope_key = Run.context_scope_key(run)
+      assert {:ok, _session} = Context.get_session(%{task_id: task_id, run_id: run.id})
+
+      # Snapshot should work
+      assert {:ok, snapshot} = RunServer.get_snapshot(run.id)
+      assert snapshot.version == 0
+      assert snapshot.items == []
+
+      _ = scope_key
     end
 
-    @impl true
-    def request_stop(%Run{} = run, opts) do
-      notify(run, {:request_stop, run.id, opts})
-      :ok
-    end
-
-    @impl true
-    def force_stop(%Run{} = run, opts) do
-      notify(run, {:force_stop, run.id, opts})
-      :ok
-    end
-
-    @impl true
-    def describe_run(%Run{} = run, opts) do
-      notify(run, {:describe_run, run.id, opts})
-      {:ok, %{provider: :fake, run_id: run.id}}
-    end
-
-    @impl true
-    def push_context(%Run{} = run, %ContextSession{} = session, opts) do
-      notify(run, {:push_context, run.id, session.required_version, opts})
-      :ok
-    end
-
-    defp notify(%Run{} = run, message) do
-      if pid = run.metadata[:test_pid] do
-        send(pid, message)
-      end
-
-      :ok
+    test "get_run returns the run struct" do
+      run = start_run(unique_task())
+      assert {:ok, %Run{id: id}} = RunServer.get_run(run.id)
+      assert id == run.id
     end
   end
 
-  describe "public API" do
-    test "spawn_run/3 boots a provider-backed run server and describe_run/1 returns its state" do
-      run_id = unique_run_id()
+  # ---------------------------------------------------------------------------
+  # Status transitions
+  # ---------------------------------------------------------------------------
 
-      assert {:ok, pid} =
-               Execution.spawn_run(
-                 %{id: run_id, metadata: %{test_pid: self()}, kill_grace_ms: 25},
-                 FakeRunner
-               )
+  describe "transition/2" do
+    test "created -> starting -> running -> completed" do
+      run = start_run(unique_task())
 
-      on_exit(fn ->
-        if Process.alive?(pid) do
-          GenServer.stop(pid, :normal)
-        end
-      end)
+      assert {:ok, %Run{status: :starting}} = RunServer.transition(run.id, :starting)
+      assert {:ok, %Run{status: :running}} = RunServer.transition(run.id, :running)
+      assert {:ok, %Run{status: :completed}} = RunServer.transition(run.id, :completed)
+    end
 
-      assert_receive {:spawn_run, ^run_id, opts}
-      assert Keyword.get(opts, :spawn?) == true
-      assert Execution.get_run_server(run_id) == pid
-      assert {:ok, run} = Execution.describe_run(run_id)
-      assert run.id == run_id
-      assert run.state == :starting
-      assert run.runner_ref == %{provider: :fake, run_id: run_id}
+    test "created -> cancelled is valid" do
+      run = start_run(unique_task())
+      assert {:ok, %Run{status: :cancelled}} = RunServer.transition(run.id, :cancelled)
+    end
+
+    test "invalid transition returns error" do
+      run = start_run(unique_task())
+
+      assert {:error, {:invalid_transition, :created, :completed}} =
+               RunServer.transition(run.id, :completed)
+    end
+
+    test "context session evicted on terminal transition" do
+      run = start_run(unique_task())
+      RunServer.transition(run.id, :starting)
+      RunServer.transition(run.id, :running)
+      RunServer.transition(run.id, :completed)
+
+      # After eviction, the run-scoped session should be gone
+      # (wait a moment for the synchronous eviction)
+      assert {:error, :not_found} =
+               Context.get_session(%{task_id: run.task_id, run_id: run.id})
     end
   end
 
-  describe "Run.classify/2" do
-    test "classifies stale and dead runs deterministically" do
-      now = DateTime.utc_now()
+  # ---------------------------------------------------------------------------
+  # Push and snapshot
+  # ---------------------------------------------------------------------------
 
-      {:ok, stale_progress} =
-        Run.new(%{
-          id: unique_run_id(),
-          state: :running,
-          last_heartbeat_at: now,
-          last_progress_at: DateTime.add(now, -2, :second),
-          progress_timeout_ms: 500,
-          heartbeat_timeout_ms: 5_000,
-          context_ack_timeout_ms: 5_000
-        })
+  describe "push_context/3 and get_snapshot/1" do
+    test "pushed items appear in snapshot" do
+      run = start_run(unique_task())
 
-      {:ok, dead_heartbeat} =
-        Run.new(%{
-          id: unique_run_id(),
-          state: :running,
-          last_heartbeat_at: DateTime.add(now, -2, :second),
-          last_progress_at: now,
-          heartbeat_timeout_ms: 500,
-          progress_timeout_ms: 5_000,
-          context_ack_timeout_ms: 5_000
-        })
+      {:ok, version} = RunServer.push_context(run.id, %{"env" => "production", "model" => "gpt"})
 
-      {:ok, stale_context_ack} =
-        Run.new(%{
-          id: unique_run_id(),
-          state: :running,
-          last_heartbeat_at: now,
-          last_progress_at: now,
-          required_context_version: 2,
-          acknowledged_context_version: 1,
-          context_requested_at: DateTime.add(now, -2, :second),
-          heartbeat_timeout_ms: 5_000,
-          progress_timeout_ms: 5_000,
-          context_ack_timeout_ms: 500
-        })
+      assert version == 1
 
-      assert Run.classify(stale_progress, now) == :stale
-      assert Run.classify(dead_heartbeat, now) == :dead
-      assert Run.classify(stale_context_ack, now) == :stale
+      {:ok, snapshot} = RunServer.get_snapshot(run.id)
+      assert snapshot.version == 1
+      keys = Enum.map(snapshot.items, & &1.key)
+      assert "env" in keys
+      assert "model" in keys
+    end
+
+    test "successive pushes accumulate items" do
+      run = start_run(unique_task())
+
+      RunServer.push_context(run.id, %{"a" => 1})
+      RunServer.push_context(run.id, %{"b" => 2})
+
+      {:ok, snapshot} = RunServer.get_snapshot(run.id)
+      keys = Enum.map(snapshot.items, & &1.key)
+      assert "a" in keys
+      assert "b" in keys
     end
   end
 
-  describe "RunServer liveness transitions" do
-    test "marks a run stale on progress timeout and resumes it on checkpoint" do
-      now = DateTime.utc_now()
+  # ---------------------------------------------------------------------------
+  # Acknowledgement
+  # ---------------------------------------------------------------------------
 
-      pid =
-        start_run_server!(%{
-          state: :running,
-          last_heartbeat_at: now,
-          last_progress_at: DateTime.add(now, -1, :second),
-          heartbeat_timeout_ms: 1_000,
-          progress_timeout_ms: 50,
-          context_ack_timeout_ms: 1_000,
-          liveness_interval_ms: 10
-        })
+  describe "ack_context/2" do
+    test "recording ack updates run struct" do
+      run = start_run(unique_task())
+      RunServer.push_context(run.id, %{"x" => 1})
 
-      assert_eventually(fn -> RunServer.status(pid).state == :stale end)
-
-      assert {:ok, run} = RunServer.checkpoint(pid, "working")
-      assert run.state == :running
-      assert run.phase == "working"
+      {:ok, %Run{ctx_acked_version: acked}} = RunServer.ack_context(run.id, 1)
+      assert acked == 1
     end
 
-    test "marks a run stale when context ack is missing and clears it on ack" do
-      now = DateTime.utc_now()
+    test "ack with version >= required marks context current" do
+      run = start_run(unique_task())
+      RunServer.push_context(run.id, %{"k" => "v"})
 
-      pid =
-        start_run_server!(
-          last_heartbeat_at: now,
-          last_progress_at: now,
-          context_ack_timeout_ms: 50
-        )
-
-      run_id = RunServer.status(pid).id
-
-      assert {:ok, pushed_run} =
-               RunServer.push_context(pid, %{
-                 run_id: run_id,
-                 required_version: 1,
-                 issued_at: now,
-                 snapshot: %{instructions: ["ship it"]}
-               })
-
-      assert pushed_run.required_context_version == 1
-      assert pushed_run.context_requested_at
-      assert_receive {:push_context, ^run_id, 1, []}
-
-      assert_eventually(fn -> RunServer.status(pid).state == :stale end)
-
-      assert {:ok, run} = RunServer.ack_context_version(pid, 1)
-      assert run.state == :running
-      assert run.acknowledged_context_version == 1
-      assert run.context_requested_at == nil
-    end
-
-    test "marks a run dead when heartbeats stop arriving" do
-      now = DateTime.utc_now()
-
-      pid =
-        start_run_server!(%{
-          state: :running,
-          last_heartbeat_at: DateTime.add(now, -1, :second),
-          last_progress_at: now,
-          heartbeat_timeout_ms: 50,
-          progress_timeout_ms: 1_000,
-          context_ack_timeout_ms: 1_000,
-          liveness_interval_ms: 10
-        })
-
-      assert_eventually(fn -> RunServer.status(pid).state == :dead end)
+      {:ok, updated} = RunServer.ack_context(run.id, 1)
+      assert updated.ctx_status == :current
     end
   end
 
-  describe "RunServer stop escalation" do
-    test "requests a graceful stop, escalates to force stop, then marks the run dead if no exit arrives" do
-      now = DateTime.utc_now()
+  # ---------------------------------------------------------------------------
+  # Stale and dead transitions via SLA timers
+  # ---------------------------------------------------------------------------
 
-      pid =
-        start_run_server!(%{
-          state: :running,
-          last_heartbeat_at: now,
-          last_progress_at: now,
-          heartbeat_timeout_ms: 1_000,
-          progress_timeout_ms: 1_000,
-          context_ack_timeout_ms: 1_000,
-          kill_grace_ms: 20,
-          liveness_interval_ms: 10,
-          kill_confirm_timeout_ms: 20
-        })
+  describe "stale trigger" do
+    @tag :slow
+    test "marks run stale when ack SLA is missed" do
+      task_id = unique_task()
+      run = start_run(task_id, stale_timeout_ms: 50, dead_timeout_ms: 5_000)
 
-      run_id = RunServer.status(pid).id
+      # Push a delta (triggers required_version bump + stale timer)
+      RunServer.push_context(run.id, %{"trigger" => "stale"})
 
-      assert {:ok, run} = RunServer.request_stop(pid, :cancelled)
-      assert run.state == :stopping
-      assert run.stop_reason == "cancelled"
-      assert_receive {:request_stop, ^run_id, [reason: :cancelled]}
+      # Wait slightly longer than the stale timeout
+      Process.sleep(150)
 
-      assert_receive {:force_stop, ^run_id, [reason: "cancelled"]}, 200
-      assert_eventually(fn -> RunServer.status(pid).state == :kill_requested end)
-      assert_eventually(fn -> RunServer.status(pid).state == :dead end)
+      {:ok, current_run} = RunServer.get_run(run.id)
+      assert current_run.ctx_status == :stale
+    end
+
+    @tag :slow
+    test "ack before timeout keeps context current" do
+      task_id = unique_task()
+      run = start_run(task_id, stale_timeout_ms: 200, dead_timeout_ms: 5_000)
+
+      RunServer.push_context(run.id, %{"trigger" => "ack_test"})
+      # Ack immediately
+      RunServer.ack_context(run.id, 1)
+
+      # Wait longer than stale_timeout
+      Process.sleep(300)
+
+      {:ok, current_run} = RunServer.get_run(run.id)
+      assert current_run.ctx_status == :current
     end
   end
 
-  defp start_run_server!(attrs) do
-    run_id = unique_run_id()
+  describe "dead trigger" do
+    @tag :slow
+    test "marks run dead after stale + dead timeout" do
+      task_id = unique_task()
+      run = start_run(task_id, stale_timeout_ms: 30, dead_timeout_ms: 60)
 
-    run =
-      %{
-        id: run_id,
-        state: :running,
-        heartbeat_timeout_ms: 1_000,
-        progress_timeout_ms: 1_000,
-        context_ack_timeout_ms: 1_000,
-        kill_grace_ms: 25,
-        metadata: %{test_pid: self()}
-      }
-      |> Map.merge(Enum.into(attrs, %{}))
+      RunServer.push_context(run.id, %{"trigger" => "dead"})
 
-    opts = [
-      run: run,
-      runner: FakeRunner,
-      liveness_interval_ms: Map.get(run, :liveness_interval_ms, 10),
-      kill_confirm_timeout_ms: Map.get(run, :kill_confirm_timeout_ms, 25)
-    ]
+      # Wait for stale (30ms) + dead (60ms) + buffer
+      Process.sleep(200)
 
-    start_supervised!({RunServer, opts})
+      {:ok, current_run} = RunServer.get_run(run.id)
+      assert current_run.ctx_status == :dead
+    end
   end
 
-  defp unique_run_id do
-    "run-#{System.unique_integer([:positive, :monotonic])}"
-  end
+  # ---------------------------------------------------------------------------
+  # PubSub status events
+  # ---------------------------------------------------------------------------
 
-  defp assert_eventually(fun, timeout \\ 300) do
-    deadline = System.monotonic_time(:millisecond) + timeout
-    do_assert_eventually(fun, deadline)
-  end
+  describe "ctx status PubSub events" do
+    @tag :slow
+    test "broadcasts run_ctx_status_changed on stale" do
+      task_id = unique_task()
+      Phoenix.PubSub.subscribe(Platform.PubSub, "execution:runs:#{task_id}")
 
-  defp do_assert_eventually(fun, deadline) do
-    if fun.() do
-      assert true
-    else
-      if System.monotonic_time(:millisecond) < deadline do
-        Process.sleep(10)
-        do_assert_eventually(fun, deadline)
-      else
-        flunk("condition was not met before timeout")
-      end
+      run = start_run(task_id, stale_timeout_ms: 40, dead_timeout_ms: 5_000)
+      RunServer.push_context(run.id, %{"k" => "v"})
+
+      assert_receive {:run_ctx_status_changed, run_id, :stale}, 300
+      assert run_id == run.id
     end
   end
 end

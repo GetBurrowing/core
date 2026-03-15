@@ -1,509 +1,295 @@
 defmodule Platform.Execution.RunServer do
   @moduledoc """
-  OTP control process for a single execution run.
+  Supervised process managing a single execution run.
 
-  `RunServer` is the BEAM-owned source of truth for run liveness, progress,
-  context acknowledgement, and stop/kill escalation semantics defined in
-  ADR 0011.
+  `RunServer` is the primary OTP process that coordinates a run's full
+  lifecycle:
+
+    1. Ensures the context plane is open for the run's scope
+    2. Transitions the run through its status machine
+    3. Fans out context deltas and tracks runner acknowledgements
+    4. Triggers stale/dead transitions when the runner misses its SLA
+    5. Evicts the context session on terminal state
+
+  ## State machine
+
+      created → starting → running → {completed | failed | cancelled}
+                                   ↓ (SLA timer)
+                              context_stale (ack timeout)
+                                   ↓ (dead timer)
+                              context_dead  (runner presumed dead)
+
+  ## Context SLA
+
+  Two configurable timers drive stale detection:
+
+    - `stale_timeout_ms` (default 30_000) — ms after a required version is
+      issued before the run is marked `:stale`
+    - `dead_timeout_ms`  (default 120_000) — ms after entering stale before
+      the run is marked `:dead`
+
+  ## PubSub
+
+  RunServer subscribes to `"ctx:<scope_key>"` to receive `{:context_delta, _}`
+  notifications.  On each delta it bumps `required_version` and resets the
+  stale SLA timer.
   """
 
-  use GenServer
+  use GenServer, restart: :temporary
 
+  require Logger
+
+  alias Platform.Context
+  alias Platform.Context.EvictionPolicy
   alias Platform.Execution.{ContextSession, Run}
 
-  @type server :: GenServer.server()
+  @default_stale_timeout_ms 30_000
+  @default_dead_timeout_ms 120_000
 
-  @default_kill_confirm_timeout_ms 1_000
+  # ---------------------------------------------------------------------------
+  # State
+  # ---------------------------------------------------------------------------
 
-  defstruct run: nil,
-            runner: nil,
-            liveness_timer: nil,
-            force_stop_timer: nil,
-            liveness_interval_ms: 1_000,
-            kill_confirm_timeout_ms: @default_kill_confirm_timeout_ms,
-            context_session: nil
-
-  @type state :: %__MODULE__{
-          run: Run.t(),
-          runner: module(),
-          liveness_timer: reference() | nil,
-          force_stop_timer: reference() | nil,
-          liveness_interval_ms: pos_integer(),
-          kill_confirm_timeout_ms: pos_integer(),
-          context_session: ContextSession.t() | nil
-        }
-
-  @spec child_spec(keyword()) :: Supervisor.child_spec()
-  def child_spec(opts) do
-    run = Keyword.fetch!(opts, :run)
-    run_id = run_id!(run)
-
-    %{
-      id: {__MODULE__, run_id},
-      start: {__MODULE__, :start_link, [opts]},
-      restart: :temporary
-    }
+  defmodule State do
+    @moduledoc false
+    @enforce_keys [:run]
+    defstruct run: nil,
+              stale_timer: nil,
+              dead_timer: nil,
+              stale_timeout_ms: 30_000,
+              dead_timeout_ms: 120_000
   end
+
+  # ---------------------------------------------------------------------------
+  # Public API
+  # ---------------------------------------------------------------------------
 
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(opts) do
     run = Keyword.fetch!(opts, :run)
-    run_id = run_id!(run)
-
-    GenServer.start_link(__MODULE__, opts, name: via_tuple(run_id))
+    GenServer.start_link(__MODULE__, opts, name: via(run.id))
   end
 
-  @doc "Return the latest in-memory run snapshot."
-  @spec status(server()) :: Run.t()
-  def status(server), do: GenServer.call(server, :status)
-
-  @doc "Record a runner heartbeat."
-  @spec heartbeat(server(), non_neg_integer(), map()) :: {:ok, Run.t()}
-  def heartbeat(server, seq, metadata \\ %{}) do
-    GenServer.call(server, {:heartbeat, seq, metadata})
+  @doc "Returns a context snapshot for the run managed by this server."
+  @spec get_snapshot(String.t()) :: {:ok, map()} | {:error, term()}
+  def get_snapshot(run_id) do
+    GenServer.call(via(run_id), :get_snapshot)
   end
 
-  @doc "Record a deterministic run checkpoint."
-  @spec checkpoint(server(), String.t() | atom(), map()) :: {:ok, Run.t()}
-  def checkpoint(server, phase, metadata \\ %{}) do
-    GenServer.call(server, {:checkpoint, phase, metadata})
+  @doc "Pushes items into the run's context session."
+  @spec push_context(String.t(), map(), keyword()) ::
+          {:ok, non_neg_integer()} | {:error, term()}
+  def push_context(run_id, items, opts \\ []) do
+    GenServer.call(via(run_id), {:push_context, items, opts})
   end
 
-  @doc "Acknowledge the latest required context version."
-  @spec ack_context_version(server(), non_neg_integer()) :: {:ok, Run.t()}
-  def ack_context_version(server, version) do
-    GenServer.call(server, {:ack_context_version, version})
+  @doc "Records a runner acknowledgement of `version`."
+  @spec ack_context(String.t(), non_neg_integer()) :: {:ok, Run.t()} | {:error, term()}
+  def ack_context(run_id, version) do
+    GenServer.call(via(run_id), {:ack_context, version})
   end
 
-  @doc "Replace the active context session and push it to the runner provider."
-  @spec push_context(server(), ContextSession.t() | map() | keyword()) ::
-          {:ok, Run.t()} | {:error, term()}
-  def push_context(server, context_session) do
-    GenServer.call(server, {:push_context, context_session})
+  @doc "Transitions the run status."
+  @spec transition(String.t(), Run.status()) :: {:ok, Run.t()} | {:error, term()}
+  def transition(run_id, new_status) do
+    GenServer.call(via(run_id), {:transition, new_status})
   end
 
-  @doc "Request a fast graceful stop, with automatic escalation to force kill."
-  @spec request_stop(server(), String.t() | atom(), keyword()) ::
-          {:ok, Run.t()} | {:error, term()}
-  def request_stop(server, reason \\ :cancelled, opts \\ []) do
-    GenServer.call(server, {:request_stop, reason, opts})
+  @doc "Returns the current run struct."
+  @spec get_run(String.t()) :: {:ok, Run.t()} | {:error, term()}
+  def get_run(run_id) do
+    GenServer.call(via(run_id), :get_run)
   end
 
-  @doc "Escalate immediately to force stop/kill semantics."
-  @spec force_stop(server(), String.t() | atom(), keyword()) :: {:ok, Run.t()} | {:error, term()}
-  def force_stop(server, reason \\ :killed, opts \\ []) do
-    GenServer.call(server, {:force_stop, reason, opts})
-  end
-
-  @doc "Record runner exit."
-  @spec runner_exited(server(), map() | keyword()) :: {:ok, Run.t()}
-  def runner_exited(server, outcome \\ %{}) do
-    GenServer.call(server, {:runner_exited, outcome})
-  end
-
-  @doc "Registry lookup helper for run-id addressing."
-  @spec whereis(String.t()) :: pid() | nil
-  def whereis(run_id) when is_binary(run_id) do
-    case Registry.lookup(Platform.Execution.Registry, run_id) do
-      [{pid, _value}] -> pid
-      _ -> nil
-    end
-  end
+  # ---------------------------------------------------------------------------
+  # GenServer callbacks
+  # ---------------------------------------------------------------------------
 
   @impl true
   def init(opts) do
-    run =
-      opts
-      |> Keyword.fetch!(:run)
-      |> normalize_run!()
+    run = Keyword.fetch!(opts, :run)
+    stale_ms = Keyword.get(opts, :stale_timeout_ms, @default_stale_timeout_ms)
+    dead_ms = Keyword.get(opts, :dead_timeout_ms, @default_dead_timeout_ms)
 
-    runner = Keyword.fetch!(opts, :runner)
-
-    liveness_interval_ms =
-      opts
-      |> Keyword.get(:liveness_interval_ms, default_liveness_interval(run))
-      |> normalize_pos_integer(default_liveness_interval(run))
-
-    kill_confirm_timeout_ms =
-      opts
-      |> Keyword.get(:kill_confirm_timeout_ms, @default_kill_confirm_timeout_ms)
-      |> normalize_pos_integer(@default_kill_confirm_timeout_ms)
-
-    state = %__MODULE__{
+    state = %State{
       run: run,
-      runner: runner,
-      liveness_interval_ms: liveness_interval_ms,
-      kill_confirm_timeout_ms: kill_confirm_timeout_ms,
-      context_session: normalize_context_session(Keyword.get(opts, :context_session))
+      stale_timeout_ms: stale_ms,
+      dead_timeout_ms: dead_ms
     }
 
-    state = maybe_spawn_run(state, Keyword.get(opts, :spawn?, false), opts)
-    {:ok, schedule_liveness_timer(state)}
+    # Open context sessions (idempotent)
+    case ContextSession.open(run) do
+      {:ok, %{scope_key: scope_key}} ->
+        # Subscribe to context delta events for this scope
+        Phoenix.PubSub.subscribe(Platform.PubSub, "ctx:#{scope_key}")
+        Logger.debug("[RunServer] #{run.id} context session opened at scope #{scope_key}")
+        {:ok, state}
+
+      {:error, reason} ->
+        Logger.error("[RunServer] #{run.id} failed to open context session: #{inspect(reason)}")
+        {:stop, {:context_session_failed, reason}}
+    end
   end
 
   @impl true
-  def handle_call(:status, _from, state), do: {:reply, state.run, state}
-
-  def handle_call({:heartbeat, _seq, metadata}, _from, state) do
-    now = DateTime.utc_now()
-
-    run =
-      state.run
-      |> merge_metadata(metadata)
-      |> Map.put(:last_heartbeat_at, now)
-      |> mark_running()
-
-    {:reply, {:ok, run}, %{state | run: run}}
+  def handle_call(:get_snapshot, _from, %State{run: run} = state) do
+    {:reply, ContextSession.snapshot(run), state}
   end
 
-  def handle_call({:checkpoint, phase, metadata}, _from, state) do
-    now = DateTime.utc_now()
-
-    run =
-      state.run
-      |> Map.put(:phase, to_string(phase))
-      |> Map.put(:last_progress_at, now)
-      |> merge_metadata(metadata)
-      |> mark_running()
-
-    {:reply, {:ok, run}, %{state | run: run}}
+  def handle_call({:push_context, items, opts}, _from, %State{run: run} = state) do
+    result = ContextSession.push(run, items, opts)
+    {:reply, result, state}
   end
 
-  def handle_call({:ack_context_version, version}, _from, state) do
-    now = DateTime.utc_now()
-    acknowledged_version = max(state.run.acknowledged_context_version, version)
+  def handle_call({:ack_context, version}, _from, %State{run: run} = state) do
+    case ContextSession.ack(run, version) do
+      {:ok, %Run{} = updated_run} ->
+        new_state = cancel_stale_timer(%State{state | run: updated_run})
+        {:reply, {:ok, updated_run}, new_state}
 
-    run =
-      state.run
-      |> Map.put(:acknowledged_context_version, acknowledged_version)
-      |> Map.put(:last_context_ack_at, now)
-      |> maybe_clear_context_request(acknowledged_version)
-      |> mark_running()
-
-    context_session =
-      case state.context_session do
-        %ContextSession{} = session -> ContextSession.acknowledge(session, version, now)
-        nil -> nil
-      end
-
-    {:reply, {:ok, run}, %{state | run: run, context_session: context_session}}
+      error ->
+        {:reply, error, state}
+    end
   end
 
-  def handle_call({:push_context, context_input}, _from, state) do
-    with {:ok, context_session} <- normalize_context_session_result(context_input),
-         :ok <- push_context_to_runner(state.runner, state.run, context_session) do
-      run =
-        state.run
-        |> Map.put(
-          :required_context_version,
-          max(state.run.required_context_version, context_session.required_version)
-        )
-        |> Map.put(:context_requested_at, context_session.issued_at)
-        |> Map.put(:phase, state.run.phase || "context_sync")
+  def handle_call({:transition, new_status}, _from, %State{run: run} = state) do
+    if valid_transition?(run.status, new_status) do
+      now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
-      {:reply, {:ok, run}, %{state | run: run, context_session: context_session}}
+      updated_run =
+        case new_status do
+          :running ->
+            %Run{run | status: :running, started_at: run.started_at || now}
+
+          terminal when terminal in [:completed, :failed, :cancelled] ->
+            %Run{run | status: terminal, finished_at: now}
+
+          other ->
+            %Run{run | status: other}
+        end
+
+      new_state = %State{state | run: updated_run}
+      new_state = handle_terminal(updated_run, new_state)
+
+      {:reply, {:ok, updated_run}, new_state}
     else
-      {:error, reason} -> {:reply, {:error, reason}, state}
+      {:reply, {:error, {:invalid_transition, run.status, new_status}}, state}
     end
   end
 
-  def handle_call({:request_stop, reason, opts}, _from, state) do
-    cond do
-      Run.terminal?(state.run) or state.run.state in [:stopping, :kill_requested] ->
-        {:reply, {:ok, state.run}, state}
-
-      true ->
-        requested_run =
-          state.run
-          |> Map.put(:state, :stopping)
-          |> Map.put(:stop_reason, to_string(reason))
-          |> Map.put(:stop_requested_at, DateTime.utc_now())
-
-        run =
-          requested_run
-          |> maybe_merge_runner_result(
-            invoke_runner(state.runner, :request_stop, [
-              requested_run,
-              Keyword.put(opts, :reason, reason)
-            ])
-          )
-
-        state =
-          state
-          |> cancel_force_stop_timer()
-          |> Map.put(:run, run)
-          |> schedule_force_stop_timer()
-
-        {:reply, {:ok, run}, state}
-    end
-  end
-
-  def handle_call({:force_stop, reason, opts}, _from, state) do
-    if Run.terminal?(state.run) do
-      {:reply, {:ok, state.run}, state}
-    else
-      state = force_stop_now(state, reason, opts)
-      {:reply, {:ok, state.run}, state}
-    end
-  end
-
-  def handle_call({:runner_exited, outcome}, _from, state) do
-    run = finish_run(state.run, outcome)
-    state = state |> cancel_force_stop_timer() |> Map.put(:run, run)
+  def handle_call(:get_run, _from, %State{run: run} = state) do
     {:reply, {:ok, run}, state}
   end
 
   @impl true
-  def handle_info(:check_liveness, state) do
-    state =
-      state
-      |> maybe_transition_liveness()
-      |> schedule_liveness_timer()
+  def handle_info({:context_delta, _delta}, %State{run: run} = state) do
+    # A new delta was published — bump required version and reset stale timer
+    case ContextSession.require_current(run) do
+      {:ok, required_version, %Run{} = updated_run} ->
+        Logger.debug(
+          "[RunServer] #{run.id} required_version bumped to #{required_version} via delta"
+        )
 
-    {:noreply, state}
-  end
+        new_state =
+          state
+          |> cancel_stale_timer()
+          |> Map.put(:run, updated_run)
+          |> start_stale_timer()
 
-  def handle_info(:force_stop, state) do
-    if state.run.state == :stopping do
-      {:noreply, force_stop_now(state, state.run.stop_reason || :killed, [])}
-    else
-      {:noreply, %{state | force_stop_timer: nil}}
+        {:noreply, new_state}
+
+      {:error, reason} ->
+        Logger.warning("[RunServer] #{run.id} require_current failed: #{inspect(reason)}")
+        {:noreply, state}
     end
   end
 
-  defp maybe_spawn_run(state, false, _opts), do: state
+  def handle_info(:stale_timeout, %State{run: %Run{} = run} = state) do
+    Logger.warning("[RunServer] #{run.id} context stale — runner missed ack SLA")
 
-  defp maybe_spawn_run(%__MODULE__{run: %Run{} = run} = state, true, opts) do
-    case invoke_runner(state.runner, :spawn_run, [run, opts]) do
-      {:ok, provider_ref} ->
-        %{state | run: %Run{run | runner_ref: provider_ref, state: :starting}}
+    updated_run = %Run{run | ctx_status: :stale}
+    new_state = %State{state | run: updated_run, stale_timer: nil}
+    new_state = start_dead_timer(new_state)
 
-      _other ->
-        state
-    end
+    broadcast_ctx_status(updated_run)
+    {:noreply, new_state}
   end
 
-  defp maybe_transition_liveness(%__MODULE__{run: %Run{} = run} = state) do
-    now = DateTime.utc_now()
-    classification = Run.classify(run, now)
+  def handle_info(:dead_timeout, %State{run: %Run{} = run} = state) do
+    Logger.error("[RunServer] #{run.id} context dead — runner presumed dead")
 
-    run =
-      cond do
-        Run.terminal?(run) ->
-          run
+    updated_run = %Run{run | ctx_status: :dead}
+    new_state = %State{state | run: updated_run, dead_timer: nil}
 
-        run.state == :kill_requested and
-            kill_confirmation_expired?(run, state.kill_confirm_timeout_ms, now) ->
-          %Run{run | state: :dead}
-
-        run.state in [:stopping, :kill_requested] ->
-          run
-
-        classification == :dead ->
-          %Run{run | state: :dead}
-
-        classification == :stale ->
-          %Run{run | state: :stale}
-
-        run.state == :stale ->
-          %Run{run | state: :running}
-
-        true ->
-          run
-      end
-
-    %{state | run: run}
+    broadcast_ctx_status(updated_run)
+    {:noreply, new_state}
   end
 
-  defp mark_running(%Run{state: state} = run)
-       when state in [:queued, :starting, :booting, :stale],
-       do: %Run{run | state: :running}
+  # ---------------------------------------------------------------------------
+  # Private helpers
+  # ---------------------------------------------------------------------------
 
-  defp mark_running(run), do: run
-
-  defp maybe_clear_context_request(%Run{} = run, acknowledged_version)
-       when acknowledged_version >= run.required_context_version do
-    %Run{run | context_requested_at: nil}
+  defp via(run_id) do
+    {:via, Registry, {Platform.Execution.Registry, {:run_server, run_id}}}
   end
 
-  defp maybe_clear_context_request(run, _acknowledged_version), do: run
+  defp valid_transition?(from, to) do
+    valid_transitions = %{
+      created: [:starting, :cancelled],
+      starting: [:running, :failed, :cancelled],
+      running: [:completed, :failed, :cancelled]
+    }
 
-  defp finish_run(%Run{} = run, outcome) when is_list(outcome) do
-    outcome
-    |> Enum.into(%{})
-    |> then(&finish_run(run, &1))
+    to in Map.get(valid_transitions, from, [])
   end
 
-  defp finish_run(%Run{} = run, %{} = outcome) do
-    state =
-      outcome
-      |> Map.get(:state, Map.get(outcome, "state"))
-      |> normalize_terminal_state(run)
+  defp handle_terminal(%Run{status: status} = run, %State{} = state)
+       when status in [:completed, :failed, :cancelled] do
+    state = cancel_stale_timer(state)
+    state = cancel_dead_timer(state)
 
-    exit_code = Map.get(outcome, :exit_code, Map.get(outcome, "exit_code"))
-
-    %Run{run | state: state, exit_code: normalize_optional_integer(exit_code)}
-  end
-
-  defp normalize_terminal_state(nil, %Run{state: :kill_requested}), do: :killed
-  defp normalize_terminal_state(nil, %Run{state: :stopping}), do: :cancelled
-  defp normalize_terminal_state(nil, _run), do: :completed
-
-  defp normalize_terminal_state(state, _run)
-       when state in [:completed, :failed, :cancelled, :killed, :dead], do: state
-
-  defp normalize_terminal_state(state, _run) when is_binary(state) do
-    case String.downcase(String.trim(state)) do
-      "completed" -> :completed
-      "failed" -> :failed
-      "cancelled" -> :cancelled
-      "killed" -> :killed
-      "dead" -> :dead
-      _ -> :completed
-    end
-  end
-
-  defp normalize_terminal_state(_state, _run), do: :completed
-
-  defp force_stop_now(%__MODULE__{} = state, reason, opts) do
-    requested_run =
-      state.run
-      |> Map.put(:state, :kill_requested)
-      |> Map.put(:stop_reason, state.run.stop_reason || to_string(reason))
-      |> Map.put(:kill_requested_at, DateTime.utc_now())
-
-    run =
-      requested_run
-      |> maybe_merge_runner_result(
-        invoke_runner(state.runner, :force_stop, [
-          requested_run,
-          Keyword.put(opts, :reason, reason)
-        ])
-      )
+    # Promote artifacts to task session, then evict run-scoped session
+    EvictionPolicy.run_terminated(%{
+      project_id: run.project_id,
+      epic_id: run.epic_id,
+      task_id: run.task_id,
+      run_id: run.id
+    })
 
     state
-    |> cancel_force_stop_timer()
-    |> Map.put(:run, run)
   end
 
-  defp maybe_merge_runner_result(%Run{} = run, {:ok, metadata}) when is_map(metadata) do
-    merge_metadata(run, metadata)
+  defp handle_terminal(_run, state), do: state
+
+  defp start_stale_timer(%State{stale_timeout_ms: ms} = state) do
+    timer = Process.send_after(self(), :stale_timeout, ms)
+    %State{state | stale_timer: timer}
   end
 
-  defp maybe_merge_runner_result(%Run{} = run, _result), do: run
+  defp cancel_stale_timer(%State{stale_timer: nil} = state), do: state
 
-  defp merge_metadata(%Run{} = run, metadata) when is_map(metadata) and map_size(metadata) > 0 do
-    %Run{run | metadata: Map.merge(run.metadata, metadata)}
+  defp cancel_stale_timer(%State{stale_timer: timer} = state) do
+    Process.cancel_timer(timer)
+    %State{state | stale_timer: nil}
   end
 
-  defp merge_metadata(run, _metadata), do: run
-
-  defp schedule_liveness_timer(%__MODULE__{} = state) do
-    state = cancel_liveness_timer(state)
-    ref = Process.send_after(self(), :check_liveness, state.liveness_interval_ms)
-    %{state | liveness_timer: ref}
+  defp start_dead_timer(%State{dead_timeout_ms: ms} = state) do
+    timer = Process.send_after(self(), :dead_timeout, ms)
+    %State{state | dead_timer: timer}
   end
 
-  defp schedule_force_stop_timer(%__MODULE__{} = state) do
-    ref = Process.send_after(self(), :force_stop, state.run.kill_grace_ms)
-    %{state | force_stop_timer: ref}
+  defp cancel_dead_timer(%State{dead_timer: nil} = state), do: state
+
+  defp cancel_dead_timer(%State{dead_timer: timer} = state) do
+    Process.cancel_timer(timer)
+    %State{state | dead_timer: nil}
   end
 
-  defp cancel_liveness_timer(%__MODULE__{liveness_timer: nil} = state), do: state
-
-  defp cancel_liveness_timer(%__MODULE__{liveness_timer: ref} = state) do
-    Process.cancel_timer(ref)
-    %{state | liveness_timer: nil}
-  end
-
-  defp cancel_force_stop_timer(%__MODULE__{force_stop_timer: nil} = state), do: state
-
-  defp cancel_force_stop_timer(%__MODULE__{force_stop_timer: ref} = state) do
-    Process.cancel_timer(ref)
-    %{state | force_stop_timer: nil}
-  end
-
-  defp kill_confirmation_expired?(%Run{kill_requested_at: nil}, _timeout_ms, _now), do: false
-
-  defp kill_confirmation_expired?(%Run{kill_requested_at: %DateTime{} = at}, timeout_ms, now) do
-    DateTime.diff(now, at, :millisecond) > timeout_ms
-  end
-
-  defp push_context_to_runner(runner, run, %ContextSession{} = session) do
-    case invoke_runner(runner, :push_context, [run, session, []]) do
-      :ok -> :ok
-      {:ok, _metadata} -> :ok
-      {:error, reason} -> {:error, reason}
-    end
-  end
-
-  defp invoke_runner(runner, function_name, args) when is_atom(runner) do
-    apply(runner, function_name, args)
-  rescue
-    error -> {:error, error}
-  end
-
-  defp default_liveness_interval(%Run{} = run) do
-    run.heartbeat_timeout_ms
-    |> min(run.progress_timeout_ms)
-    |> min(run.context_ack_timeout_ms)
-    |> div(4)
-    |> max(250)
-  end
-
-  defp normalize_run!(%Run{} = run), do: run
-
-  defp normalize_run!(attrs) do
-    case Run.new(attrs) do
-      {:ok, run} -> run
-      {:error, reason} -> raise ArgumentError, "invalid run: #{inspect(reason)}"
-    end
-  end
-
-  defp normalize_context_session(nil), do: nil
-
-  defp normalize_context_session(%ContextSession{} = session), do: session
-
-  defp normalize_context_session(input) do
-    case ContextSession.new(input) do
-      {:ok, session} -> session
-      {:error, _reason} -> nil
-    end
-  end
-
-  defp normalize_context_session_result(%ContextSession{} = session), do: {:ok, session}
-  defp normalize_context_session_result(input), do: ContextSession.new(input)
-
-  defp normalize_pos_integer(value, _default) when is_integer(value) and value > 0, do: value
-
-  defp normalize_pos_integer(value, default) when is_binary(value) do
-    case Integer.parse(value) do
-      {parsed, ""} when parsed > 0 -> parsed
-      _ -> default
-    end
-  end
-
-  defp normalize_pos_integer(_value, default), do: default
-
-  defp normalize_optional_integer(nil), do: nil
-  defp normalize_optional_integer(value) when is_integer(value), do: value
-
-  defp normalize_optional_integer(value) when is_binary(value) do
-    case Integer.parse(value) do
-      {parsed, ""} -> parsed
-      _ -> nil
-    end
-  end
-
-  defp normalize_optional_integer(_value), do: nil
-
-  defp run_id!(%Run{id: id}) when is_binary(id), do: id
-
-  defp run_id!(attrs) when is_map(attrs) do
-    Map.get(attrs, :id) || Map.get(attrs, "id") || raise(ArgumentError, "run id required")
-  end
-
-  defp via_tuple(run_id) do
-    {:via, Registry, {Platform.Execution.Registry, run_id}}
+  defp broadcast_ctx_status(%Run{} = run) do
+    Phoenix.PubSub.broadcast(
+      Platform.PubSub,
+      "execution:runs:#{run.task_id}",
+      {:run_ctx_status_changed, run.id, run.ctx_status}
+    )
   end
 end

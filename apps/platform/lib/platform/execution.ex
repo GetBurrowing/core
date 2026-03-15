@@ -1,102 +1,139 @@
 defmodule Platform.Execution do
   @moduledoc """
-  Public entrypoint for the Execution domain.
+  Public API for the Execution domain.
 
-  The initial implementation focuses on the control plane introduced in
-  ADR 0011: per-run OTP supervision, runner abstraction, context sessions, and
-  deterministic stop/kill semantics.
+  Execution manages the lifecycle of agent runs: creating runs, tracking their
+  context plane, and driving state transitions.
+
+  ## Responsibilities
+
+    - Create and start `RunServer` processes for individual runs
+    - Expose high-level operations: start_run, stop_run, push_context, ack_context
+    - Route context operations through `Platform.Execution.ContextSession`
+    - Provide observability: get_run, get_snapshot, context status
+
+  ## Architecture
+
+  Each run is supervised by `Platform.Execution.RunSupervisor` (DynamicSupervisor).
+  Runs are registered in `Platform.Execution.Registry` for lookup.
+
+  Context operations are mediated by `Platform.Execution.ContextSession` which
+  bridges the run to `Platform.Context`.
+
+  ## Usage
+
+      # Start a new run
+      {:ok, run} = Platform.Execution.start_run("task-id", opts)
+
+      # Get the context snapshot
+      {:ok, snapshot} = Platform.Execution.get_snapshot(run.id)
+
+      # Push context items from a runner
+      {:ok, version} = Platform.Execution.push_context(run.id, %{"key" => "value"})
+
+      # Runner acknowledges context
+      {:ok, run} = Platform.Execution.ack_context(run.id, version)
+
+      # Transition to running
+      {:ok, run} = Platform.Execution.transition(run.id, :running)
+
+      # Finish
+      {:ok, run} = Platform.Execution.transition(run.id, :completed)
   """
 
-  alias Platform.Execution.{ContextSession, Run, RunServer}
+  alias Platform.Execution.{Run, RunServer, RunSupervisor}
 
-  @doc "Start a supervised run control process."
-  @spec start_run(Run.t() | map() | keyword(), module(), keyword()) ::
-          DynamicSupervisor.on_start_child()
-  def start_run(run_input, runner, opts \\ []) do
-    do_start_run(run_input, runner, opts)
-  end
+  # ---------------------------------------------------------------------------
+  # Run lifecycle
+  # ---------------------------------------------------------------------------
 
-  @doc "Spawn a supervised run control process and ask the provider to start the underlying run."
-  @spec spawn_run(Run.t() | map() | keyword(), module(), keyword()) ::
-          DynamicSupervisor.on_start_child()
-  def spawn_run(run_input, runner, opts \\ []) do
-    opts
-    |> Keyword.put_new(:spawn?, true)
-    |> then(&do_start_run(run_input, runner, &1))
-  end
+  @doc """
+  Creates and starts a new run for `task_id`.
 
-  @doc "Lookup a run server by run id."
-  @spec get_run_server(String.t()) :: pid() | nil
-  def get_run_server(run_id), do: RunServer.whereis(run_id)
+  Options:
+    - `:project_id`       — project scope for context inheritance
+    - `:epic_id`          — epic scope for context inheritance
+    - `:runner_type`      — atom identifying the runner (:local, :docker, etc.)
+    - `:stale_timeout_ms` — ms before run is considered stale (default 30s)
+    - `:dead_timeout_ms`  — ms after stale before run is considered dead (default 120s)
+    - `:meta`             — arbitrary metadata map
 
-  @doc "Return the latest in-memory run status."
-  @spec get_run_status(String.t() | pid()) :: Run.t() | nil
-  def get_run_status(run_id) when is_binary(run_id) do
-    case get_run_server(run_id) do
-      nil -> nil
-      pid -> RunServer.status(pid)
+  Returns `{:ok, run}` or `{:error, reason}`.
+  """
+  @spec start_run(String.t(), keyword()) :: {:ok, Run.t()} | {:error, term()}
+  def start_run(task_id, opts \\ []) do
+    run_id = Keyword.get(opts, :run_id) || generate_id()
+
+    run = Run.new(run_id, task_id, opts)
+
+    case RunSupervisor.start_run(run, opts) do
+      {:ok, _pid} -> {:ok, run}
+      {:error, {:already_started, _}} -> {:ok, run}
+      {:error, reason} -> {:error, reason}
     end
   end
 
-  def get_run_status(pid) when is_pid(pid), do: RunServer.status(pid)
-
-  @doc "Describe the latest control-plane view of a run."
-  @spec describe_run(String.t() | pid()) :: {:ok, Run.t()} | {:error, term()}
-  def describe_run(target) do
-    with {:ok, pid} <- resolve_server(target) do
-      {:ok, RunServer.status(pid)}
-    end
+  @doc """
+  Stops a run, transitioning it to `cancelled` and closing its context session.
+  """
+  @spec stop_run(String.t()) :: {:ok, Run.t()} | {:error, term()}
+  def stop_run(run_id) do
+    RunServer.transition(run_id, :cancelled)
   end
 
-  @doc "Push a fresh context snapshot/version to a run server."
-  @spec push_context(String.t() | pid(), ContextSession.t() | map() | keyword()) ::
-          {:ok, Run.t()} | {:error, term()}
-  def push_context(target, context_session) do
-    with {:ok, pid} <- resolve_server(target) do
-      RunServer.push_context(pid, context_session)
-    end
+  @doc "Returns the current run struct."
+  @spec get_run(String.t()) :: {:ok, Run.t()} | {:error, term()}
+  def get_run(run_id) do
+    RunServer.get_run(run_id)
   end
 
-  @doc "Request a fast graceful stop, with automatic escalation to force kill."
-  @spec stop_run(String.t() | pid(), String.t() | atom(), keyword()) ::
-          {:ok, Run.t()} | {:error, term()}
-  def stop_run(target, reason \\ :cancelled, opts \\ []), do: request_stop(target, reason, opts)
-
-  @doc "Request a fast graceful stop, with automatic escalation to force kill."
-  @spec request_stop(String.t() | pid(), String.t() | atom(), keyword()) ::
-          {:ok, Run.t()} | {:error, term()}
-  def request_stop(target, reason \\ :cancelled, opts \\ []) do
-    with {:ok, pid} <- resolve_server(target) do
-      RunServer.request_stop(pid, reason, opts)
-    end
+  @doc "Transitions a run to `new_status`."
+  @spec transition(String.t(), Run.status()) :: {:ok, Run.t()} | {:error, term()}
+  def transition(run_id, new_status) do
+    RunServer.transition(run_id, new_status)
   end
 
-  @doc "Escalate immediately to force-stop / kill semantics."
-  @spec force_stop(String.t() | pid(), String.t() | atom(), keyword()) ::
-          {:ok, Run.t()} | {:error, term()}
-  def force_stop(target, reason \\ :killed, opts \\ []) do
-    with {:ok, pid} <- resolve_server(target) do
-      RunServer.force_stop(pid, reason, opts)
-    end
+  # ---------------------------------------------------------------------------
+  # Context operations
+  # ---------------------------------------------------------------------------
+
+  @doc """
+  Returns the merged context snapshot for `run_id`.
+
+  Inherits from project → epic → task → run scopes.
+  Returns `{:ok, %{items: [...], version: n, required_version: n}}`.
+  """
+  @spec get_snapshot(String.t()) :: {:ok, map()} | {:error, term()}
+  def get_snapshot(run_id) do
+    RunServer.get_snapshot(run_id)
   end
 
-  defp do_start_run(run_input, runner, opts) do
-    with {:ok, run} <- Run.new(run_input) do
-      child_opts =
-        opts
-        |> Keyword.put(:run, run)
-        |> Keyword.put(:runner, runner)
+  @doc """
+  Pushes context items into the run's context session.
 
-      DynamicSupervisor.start_child(Platform.Execution.RuntimeSupervisor, {RunServer, child_opts})
-    end
+  Returns `{:ok, new_version}`.
+  """
+  @spec push_context(String.t(), map(), keyword()) ::
+          {:ok, non_neg_integer()} | {:error, term()}
+  def push_context(run_id, items, opts \\ []) do
+    RunServer.push_context(run_id, items, opts)
   end
 
-  defp resolve_server(pid) when is_pid(pid), do: {:ok, pid}
+  @doc """
+  Records that the runner has acknowledged context `version`.
 
-  defp resolve_server(run_id) when is_binary(run_id) do
-    case get_run_server(run_id) do
-      nil -> {:error, :not_found}
-      pid -> {:ok, pid}
-    end
+  Returns `{:ok, updated_run}`.
+  """
+  @spec ack_context(String.t(), non_neg_integer()) :: {:ok, Run.t()} | {:error, term()}
+  def ack_context(run_id, version) do
+    RunServer.ack_context(run_id, version)
+  end
+
+  # ---------------------------------------------------------------------------
+  # Private helpers
+  # ---------------------------------------------------------------------------
+
+  defp generate_id do
+    Base.encode16(:crypto.strong_rand_bytes(8), case: :lower)
   end
 end
