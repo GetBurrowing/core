@@ -31,7 +31,8 @@ defmodule Platform.DataCase do
     # share the test sandbox connection so telemetry-driven DB calls don't
     # raise DBConnection.OwnershipError.
     supervised_with_repo = [
-      Platform.Chat.AttentionRouter
+      Platform.Chat.AttentionRouter,
+      Platform.Agents.ContextBroker
     ]
 
     Enum.each(supervised_with_repo, fn name ->

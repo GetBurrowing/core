@@ -20,6 +20,8 @@ defmodule Platform.Application do
       {Phoenix.PubSub, name: Platform.PubSub},
       {Registry, keys: :unique, name: Platform.Agents.Registry},
       Platform.Agents.RuntimeSupervisor,
+      # ContextBroker — must start after the agent registry/runtime tree
+      Platform.Agents.ContextBroker,
       # Chat presence — must start after PubSub
       Platform.Chat.Presence,
       # AttentionRouter — must start after Repo and PubSub

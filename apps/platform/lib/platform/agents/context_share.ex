@@ -19,7 +19,7 @@ defmodule Platform.Agents.ContextShare do
     field(:scope, :string)
     field(:scope_filter, :map)
     field(:delta, :map)
-    field(:inserted_at, :utc_datetime_usec, autogenerate: {DateTime, :utc_now, [:usec]})
+    field(:inserted_at, :utc_datetime_usec)
   end
 
   def changeset(context_share, attrs) do

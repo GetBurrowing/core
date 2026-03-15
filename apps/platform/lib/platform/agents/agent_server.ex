@@ -18,7 +18,7 @@ defmodule Platform.Agents.AgentServer do
 
   import Ecto.Changeset, only: [put_change: 3]
 
-  alias Platform.Agents.{Agent, Context, Memory, MemoryContext, Session}
+  alias Platform.Agents.{Agent, Context, ContextDelta, Memory, MemoryContext, Session}
   alias Platform.Repo
 
   @valid_session_statuses ~w(completed failed cancelled)
@@ -191,6 +191,53 @@ defmodule Platform.Agents.AgentServer do
   end
 
   @doc """
+  Return the current runtime context for an active session.
+  """
+  @spec session_context(Agent.t() | Ecto.UUID.t() | String.t() | pid(), Ecto.UUID.t()) ::
+          {:ok, Context.t()} | {:error, term()}
+  def session_context(agent_or_ref, session_id) do
+    with {:ok, pid} <- locate_server(agent_or_ref) do
+      GenServer.call(pid, {:session_context, session_id})
+    end
+  end
+
+  @doc """
+  Merge an immutable inherited payload into an active session.
+
+  The payload is stored under `context.inherited[source_key]` so provenance is
+  preserved even when multiple parent sessions share context into the same child.
+  """
+  @spec merge_inherited_context(
+          Agent.t() | Ecto.UUID.t() | String.t() | pid(),
+          Ecto.UUID.t(),
+          term(),
+          map(),
+          keyword()
+        ) :: {:ok, Context.t()} | {:error, term()}
+  def merge_inherited_context(agent_or_ref, session_id, source_key, inherited_payload, opts \\ []) do
+    with {:ok, pid} <- locate_server(agent_or_ref) do
+      GenServer.call(
+        pid,
+        {:merge_inherited_context, session_id, source_key, inherited_payload, opts}
+      )
+    end
+  end
+
+  @doc """
+  Apply a promoted child delta to an active parent session.
+  """
+  @spec apply_delta(
+          Agent.t() | Ecto.UUID.t() | String.t() | pid(),
+          Ecto.UUID.t(),
+          ContextDelta.t() | map() | keyword()
+        ) :: {:ok, Context.t()} | {:error, term()}
+  def apply_delta(agent_or_ref, session_id, delta) do
+    with {:ok, pid} <- locate_server(agent_or_ref) do
+      GenServer.call(pid, {:apply_delta, session_id, delta})
+    end
+  end
+
+  @doc """
   Resolve a Vault credential on behalf of the agent.
 
   This is the runtime-side credential lookup later provider/router tasks will
@@ -242,6 +289,58 @@ defmodule Platform.Agents.AgentServer do
 
   def handle_call(:active_session_ids, _from, %State{} = state) do
     {:reply, Map.keys(state.active_sessions), state}
+  end
+
+  def handle_call({:session_context, session_id}, _from, %State{} = state) do
+    case Map.get(state.active_sessions, session_id) do
+      %{context: %Context{} = context} -> {:reply, {:ok, context}, state}
+      _ -> {:reply, {:error, :not_found}, state}
+    end
+  end
+
+  def handle_call(
+        {:merge_inherited_context, session_id, source_key, inherited_payload, opts},
+        _from,
+        %State{} = state
+      ) do
+    case update_session_runtime(state, session_id, fn context ->
+           key = normalize_inherited_key(source_key)
+           metadata = normalize_context_map(Keyword.get(opts, :metadata))
+
+           %{
+             context
+             | inherited: Map.put(context.inherited, key, json_safe(inherited_payload)),
+               metadata: deep_merge(context.metadata, metadata)
+           }
+         end) do
+      {:ok, context, new_state} -> {:reply, {:ok, context}, new_state}
+      {:error, reason} -> {:reply, {:error, reason}, state}
+    end
+  end
+
+  def handle_call({:apply_delta, session_id, delta_input}, _from, %State{} = state) do
+    with {:ok, delta} <- ContextDelta.new(delta_input),
+         {:ok, context, new_state} <-
+           update_session_runtime(state, session_id, fn %Context{} = context ->
+             updated_local =
+               context.local
+               |> deep_merge(delta.additions)
+               |> remove_context_paths(delta.removals)
+
+             %Context{
+               context
+               | local: updated_local,
+                 metadata:
+                   deep_merge(context.metadata, %{
+                     "last_promoted_from_agent" => delta.from_agent,
+                     "last_promoted_from_session" => delta.from_session
+                   })
+             }
+           end) do
+      {:reply, {:ok, context}, new_state}
+    else
+      {:error, reason} -> {:reply, {:error, reason}, state}
+    end
   end
 
   def handle_call(:refresh, _from, %State{} = state) do
@@ -560,6 +659,72 @@ defmodule Platform.Agents.AgentServer do
           deep_merge(context.metadata, normalize_context_map(Keyword.get(opts, :metadata)))
     }
   end
+
+  defp update_session_runtime(%State{} = state, session_id, updater)
+       when is_function(updater, 1) do
+    case Map.get(state.active_sessions, session_id) do
+      %{context: %Context{} = context} = runtime ->
+        updated_context = updater.(context)
+        updated_runtime = %{runtime | context: updated_context}
+
+        new_state = %State{
+          state
+          | active_sessions: Map.put(state.active_sessions, session_id, updated_runtime),
+            active_context:
+              maybe_replace_active_context(state.active_context, session_id, updated_context)
+        }
+
+        {:ok, updated_context, new_state}
+
+      _ ->
+        {:error, :not_found}
+    end
+  end
+
+  defp maybe_replace_active_context(
+         %Context{session_id: session_id},
+         session_id,
+         updated_context
+       ),
+       do: updated_context
+
+  defp maybe_replace_active_context(active_context, _session_id, _updated_context),
+    do: active_context
+
+  defp normalize_inherited_key(value) when is_binary(value), do: value
+  defp normalize_inherited_key(value) when is_atom(value), do: Atom.to_string(value)
+  defp normalize_inherited_key(value), do: inspect(value)
+
+  defp remove_context_paths(map, []), do: map
+
+  defp remove_context_paths(map, paths) when is_map(map) do
+    Enum.reduce(paths, map, &delete_context_path(&2, &1))
+  end
+
+  defp remove_context_paths(map, _paths), do: map
+
+  defp delete_context_path(map, path) when is_binary(path) do
+    keys =
+      path
+      |> String.split(".", trim: true)
+      |> Enum.reject(&(&1 == ""))
+
+    do_delete_context_path(map, keys)
+  end
+
+  defp delete_context_path(map, path), do: delete_context_path(map, to_string(path))
+
+  defp do_delete_context_path(map, []), do: map
+  defp do_delete_context_path(map, [key]) when is_map(map), do: Map.delete(map, key)
+
+  defp do_delete_context_path(map, [key | rest]) when is_map(map) do
+    case Map.get(map, key) do
+      nested when is_map(nested) -> Map.put(map, key, do_delete_context_path(nested, rest))
+      _ -> map
+    end
+  end
+
+  defp do_delete_context_path(map, _keys), do: map
 
   defp refresh_active_context(%Context{} = context, agent_id, workspace) do
     %Context{context | agent_id: agent_id, workspace: workspace}
