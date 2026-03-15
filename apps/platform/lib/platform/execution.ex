@@ -3,7 +3,8 @@ defmodule Platform.Execution do
   Public API for the Execution domain.
 
   Execution manages the lifecycle of agent runs: creating runs, tracking their
-  context plane, and driving state transitions.
+  context plane, and driving state transitions.  It also exposes the local
+  provider operations (spawn, stop, kill) introduced in ADR 0011 Stage 4.
 
   ## Responsibilities
 
@@ -11,6 +12,7 @@ defmodule Platform.Execution do
     - Expose high-level operations: start_run, stop_run, push_context, ack_context
     - Route context operations through `Platform.Execution.ContextSession`
     - Provide observability: get_run, get_snapshot, context status
+    - Delegate provider spawn/stop/kill to `Platform.Execution.Runner` impls
 
   ## Architecture
 
@@ -20,10 +22,17 @@ defmodule Platform.Execution do
   Context operations are mediated by `Platform.Execution.ContextSession` which
   bridges the run to `Platform.Context`.
 
+  Runner operations are delegated to provider modules that implement the
+  `Platform.Execution.Runner` behaviour.
+
   ## Usage
 
       # Start a new run
       {:ok, run} = Platform.Execution.start_run("task-id", opts)
+
+      # Attach a local runner and spawn the process
+      {:ok, run} = Platform.Execution.spawn_provider(run.id, Platform.Execution.LocalRunner,
+        command: "/bin/sh", args: ["-c", "echo hello"])
 
       # Get the context snapshot
       {:ok, snapshot} = Platform.Execution.get_snapshot(run.id)
@@ -34,7 +43,13 @@ defmodule Platform.Execution do
       # Runner acknowledges context
       {:ok, run} = Platform.Execution.ack_context(run.id, version)
 
-      # Transition to running
+      # Stop the runner gracefully
+      {:ok, run} = Platform.Execution.request_stop(run.id)
+
+      # Or force-kill immediately
+      {:ok, run} = Platform.Execution.force_stop(run.id)
+
+      # Transition to running manually (when not using a provider)
       {:ok, run} = Platform.Execution.transition(run.id, :running)
 
       # Finish
@@ -91,6 +106,47 @@ defmodule Platform.Execution do
   @spec transition(String.t(), Run.status()) :: {:ok, Run.t()} | {:error, term()}
   def transition(run_id, new_status) do
     RunServer.transition(run_id, new_status)
+  end
+
+  # ---------------------------------------------------------------------------
+  # Provider operations
+  # ---------------------------------------------------------------------------
+
+  @doc """
+  Attaches a runner provider module to the run and spawns the underlying process.
+
+  `runner` must implement `Platform.Execution.Runner`. Common opts:
+    - `:command`          — the executable to run
+    - `:args`             — list of args
+    - `:run_root`         — override workspace root directory
+    - `:credential_lease` — a `CredentialLease` to inject into the env
+
+  Returns `{:ok, run}` with `runner_ref` populated, or `{:error, reason}`.
+  """
+  @spec spawn_provider(String.t(), module(), keyword()) :: {:ok, Run.t()} | {:error, term()}
+  def spawn_provider(run_id, runner, opts \\ []) do
+    RunServer.spawn_provider(run_id, runner, opts)
+  end
+
+  @doc """
+  Requests a graceful stop of the underlying runner process.
+
+  Delegates to the attached runner provider's `request_stop/2`. The run
+  will transition to `:cancelled` when the process exits.
+  """
+  @spec request_stop(String.t()) :: {:ok, Run.t()} | {:error, term()}
+  def request_stop(run_id) do
+    RunServer.request_stop(run_id)
+  end
+
+  @doc """
+  Forces an immediate kill of the underlying runner process.
+
+  Delegates to the attached runner provider's `force_stop/2`.
+  """
+  @spec force_stop(String.t()) :: {:ok, Run.t()} | {:error, term()}
+  def force_stop(run_id) do
+    RunServer.force_stop(run_id)
   end
 
   # ---------------------------------------------------------------------------

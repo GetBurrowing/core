@@ -207,10 +207,70 @@ request a full snapshot.
 
 ---
 
+## Local Provider — Credential Leasing and Push Path
+
+The `Platform.Execution.LocalRunner` provider (Stage 1–3) has been extended
+with leased credentials and a GitHub proof-of-life push path (Stage 4).
+
+### Credential Leasing
+
+```elixir
+# Lease a GitHub credential for a run
+{:ok, lease} = Platform.Execution.CredentialLease.lease(:github,
+  run_id: run.id,
+  github_token: token,
+  author_name: "Suite Bot",
+  author_email: "bot@suite.local"
+)
+
+# Inject into a spawned process
+{:ok, run} = Platform.Execution.spawn_provider(run.id, LocalRunner,
+  command: "/bin/sh",
+  args: ["-c", "git push origin HEAD"],
+  credential_lease: lease
+)
+```
+
+Lease kinds: `:github`, `:model`, `:custom`.
+
+### GitHub Push Path
+
+```elixir
+# After spawn: set up a worktree and push
+{:ok, wt} = LocalWorkspace.setup_git_worktree(workspace, repo_path, branch: "run/abc123")
+
+# … make changes …
+
+:ok = LocalWorkspace.push_branch(wt, run.id,
+  message: "proof-of-life: run abc123",
+  lease: github_lease
+)
+```
+
+### RunServer Provider API
+
+```elixir
+# Attach a provider and spawn
+{:ok, run} = Platform.Execution.spawn_provider(run_id, LocalRunner, command: "/bin/sh", args: [...])
+
+# Stop / kill
+{:ok, _} = Platform.Execution.request_stop(run_id)
+{:ok, _} = Platform.Execution.force_stop(run_id)
+```
+
+Runner exit is reported via `{:runner_exited, run_id, %{exit_code, exit_state}}` messages
+and transitions the run to `:completed`, `:cancelled`, or `:failed` deterministically.
+
+---
+
 ## Future Work
 
+- **Vault credential leasing:** replace config-backed `CredentialLease` with
+  short-lived GitHub App installation tokens from `Platform.Vault`
+- **GitHub push verification:** record the pushed branch HEAD SHA as an
+  artifact ref in the run's context session
 - **Postgres persistence:** async write of items + deltas for audit/replay
-- **Distributed context:** pg_pubsub adapter for multi-node deployments  
+- **Distributed context:** pg_pubsub adapter for multi-node deployments
 - **HTTP runner protocol:** thin adapter wrapping the Execution public API
 - **Context compaction:** summarise long item histories via an LLM pass before
   handing to runners

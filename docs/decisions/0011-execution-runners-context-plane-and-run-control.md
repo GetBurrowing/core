@@ -172,9 +172,78 @@ HTTP/WS adapters will wrap this API for remote runners in a future task.
 
 ---
 
+## Local Provider — Credential Leasing and GitHub Push Path (Stage 4)
+
+The local provider seam introduced in Stage 1–3 has been extended with:
+
+### `Platform.Execution.CredentialLease`
+
+Short-lived, scoped credential tokens that the control plane issues per-run.
+Three lease kinds are supported:
+
+| Kind       | Env vars injected                                        |
+|------------|----------------------------------------------------------|
+| `:github`  | `GITHUB_TOKEN`, `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_*` |
+| `:model`   | `ANTHROPIC_API_KEY` / `OPENAI_API_KEY` (provider-specific) |
+| `:custom`  | Arbitrary key → value map converted to env vars         |
+
+MVP reads credentials from application config and process env; Vault-backed
+issuance is tracked as a follow-up (see § Future Work).
+
+Leases have a configurable TTL (default 2 hours), can be revoked explicitly,
+and expose `valid?/1` for runtime validity checks.  `to_env/1` converts a
+lease to an OS env-var map for injection into child processes.
+
+### `LocalWorkspace.setup_git_worktree/3`
+
+Sets up a durable git worktree under the per-run workspace path from a
+source repository. Used by the GitHub push path to keep run-specific branches
+isolated from the main workspace.
+
+### `LocalWorkspace.push_branch/3`
+
+Stages all changes, commits, and pushes the current branch to a remote. The
+optional `:lease` opt injects GitHub credentials via env. Designed for the
+proof-of-life GitHub push flow: the local runner can push a deterministic
+branch after each run without storing long-lived credentials.
+
+### `LocalRunner.spawn_run/2` — credential injection
+
+`spawn_run/2` now accepts `:credential_lease` in opts. The lease is converted
+to env vars and injected into the child process at spawn time.
+
+### RunServer provider extensions
+
+`RunServer` now supports:
+- `spawn_provider/3` — attach a `Runner` module and start the underlying process
+- `request_stop/1` and `force_stop/1` — delegate to the runner provider
+- `{:runner_exited, run_id, %{exit_code, exit_state}}` message handler —
+  receives exit notifications from `LocalProcessWrapper` and transitions the
+  run to `:completed`, `:cancelled`, or `:failed` deterministically.
+
+---
+
+## Future Work
+
+- **Vault credential leasing:** replace config-backed `CredentialLease` with
+  short-lived GitHub App installation tokens from `Platform.Vault`
+- **Model credential rotation:** lease provider API keys with per-run TTL so
+  compromised runs cannot use tokens indefinitely
+- **GitHub push verification:** after push, resolve the branch HEAD SHA and
+  record it in the run's context as an artifact ref for downstream consumers
+- **Postgres persistence:** async write of items + deltas for audit/replay
+- **Distributed context:** pg_pubsub adapter for multi-node deployments
+- **HTTP runner protocol:** thin adapter wrapping the Execution public API
+- **Context compaction:** summarise long item histories via an LLM pass before
+  handing to runners
+
+---
+
 ## References
 
 - ADR 0007: Agent Runtime Architecture
 - `Platform.Context.*` — context plane implementation
 - `Platform.Execution.*` — run control implementation
+- `Platform.Execution.CredentialLease` — per-run credential leasing
+- `Platform.Execution.LocalWorkspace` — workspace + git push path
 - `docs/architecture/06-execution-runners-adr-0011.md`

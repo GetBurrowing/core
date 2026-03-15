@@ -10,6 +10,7 @@ defmodule Platform.Execution.RunServer do
     3. Fans out context deltas and tracks runner acknowledgements
     4. Triggers stale/dead transitions when the runner misses its SLA
     5. Evicts the context session on terminal state
+    6. (Optional) Delegates process-level spawn/stop/kill to a `Runner` provider
 
   ## State machine
 
@@ -18,6 +19,13 @@ defmodule Platform.Execution.RunServer do
                               context_stale (ack timeout)
                                    ↓ (dead timer)
                               context_dead  (runner presumed dead)
+
+  ## Provider integration
+
+  When a `runner` module is set (via `spawn_provider/3` or the `:runner` start
+  option) `RunServer` delegates `spawn_run`, `request_stop`, `force_stop`, and
+  `describe_run` to that provider. Provider exit is reported back via
+  `{:runner_exited, run_id, %{exit_code: n, exit_state: atom}}` messages.
 
   ## Context SLA
 
@@ -39,7 +47,6 @@ defmodule Platform.Execution.RunServer do
 
   require Logger
 
-  alias Platform.Context
   alias Platform.Context.EvictionPolicy
   alias Platform.Execution.{ContextSession, Run}
 
@@ -54,6 +61,7 @@ defmodule Platform.Execution.RunServer do
     @moduledoc false
     @enforce_keys [:run]
     defstruct run: nil,
+              runner: nil,
               stale_timer: nil,
               dead_timer: nil,
               stale_timeout_ms: 30_000,
@@ -101,6 +109,42 @@ defmodule Platform.Execution.RunServer do
     GenServer.call(via(run_id), :get_run)
   end
 
+  @doc """
+  Attaches a `runner` provider module and spawns the underlying process.
+
+  The provider module must implement `Platform.Execution.Runner`. `opts` are
+  forwarded to `runner.spawn_run/2` and may include `:credential_lease`,
+  `:run_root`, `:command`, `:args`, etc.
+
+  Returns `{:ok, run}` with the updated runner_ref, or `{:error, reason}`.
+  """
+  @spec spawn_provider(String.t(), module(), keyword()) :: {:ok, Run.t()} | {:error, term()}
+  def spawn_provider(run_id, runner, opts \\ []) do
+    GenServer.call(via(run_id), {:spawn_provider, runner, opts})
+  end
+
+  @doc """
+  Requests a graceful stop of the underlying runner process.
+
+  If a runner provider is attached, delegates to `runner.request_stop/2`.
+  The run transitions to `:cancelled` when the process exits.
+  """
+  @spec request_stop(String.t()) :: {:ok, Run.t()} | {:error, term()}
+  def request_stop(run_id) do
+    GenServer.call(via(run_id), :request_stop)
+  end
+
+  @doc """
+  Forces an immediate kill of the underlying runner process.
+
+  If a runner provider is attached, delegates to `runner.force_stop/2`.
+  The run transitions to `:cancelled` (or `:failed` if non-zero exit).
+  """
+  @spec force_stop(String.t()) :: {:ok, Run.t()} | {:error, term()}
+  def force_stop(run_id) do
+    GenServer.call(via(run_id), :force_stop)
+  end
+
   # ---------------------------------------------------------------------------
   # GenServer callbacks
   # ---------------------------------------------------------------------------
@@ -110,9 +154,11 @@ defmodule Platform.Execution.RunServer do
     run = Keyword.fetch!(opts, :run)
     stale_ms = Keyword.get(opts, :stale_timeout_ms, @default_stale_timeout_ms)
     dead_ms = Keyword.get(opts, :dead_timeout_ms, @default_dead_timeout_ms)
+    runner = Keyword.get(opts, :runner)
 
     state = %State{
       run: run,
+      runner: runner,
       stale_timeout_ms: stale_ms,
       dead_timeout_ms: dead_ms
     }
@@ -181,6 +227,36 @@ defmodule Platform.Execution.RunServer do
     {:reply, {:ok, run}, state}
   end
 
+  def handle_call({:spawn_provider, runner, opts}, _from, %State{run: run} = state) do
+    spawn_opts = Keyword.put(opts, :run_server, self())
+
+    case runner.spawn_run(run, spawn_opts) do
+      {:ok, provider_ref} ->
+        updated_run = %Run{run | runner_ref: provider_ref, status: :starting}
+        new_state = %State{state | run: updated_run, runner: runner}
+        {:reply, {:ok, updated_run}, new_state}
+
+      {:error, _} = error ->
+        {:reply, error, state}
+    end
+  end
+
+  def handle_call(:request_stop, _from, %State{run: run, runner: runner} = state) do
+    if runner do
+      _ = runner.request_stop(run, [])
+    end
+
+    {:reply, {:ok, run}, state}
+  end
+
+  def handle_call(:force_stop, _from, %State{run: run, runner: runner} = state) do
+    if runner do
+      _ = runner.force_stop(run, [])
+    end
+
+    {:reply, {:ok, run}, state}
+  end
+
   @impl true
   def handle_info({:context_delta, _delta}, %State{run: run} = state) do
     # A new delta was published — bump required version and reset stale timer
@@ -224,6 +300,32 @@ defmodule Platform.Execution.RunServer do
     broadcast_ctx_status(updated_run)
     {:noreply, new_state}
   end
+
+  # Runner process exited — update run state accordingly
+  def handle_info({:runner_exited, run_id, %{exit_code: code, exit_state: exit_state}},
+        %State{run: %Run{id: run_id} = run} = state) do
+    now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+    new_status =
+      case exit_state do
+        :completed -> :completed
+        :cancelled -> :cancelled
+        :killed -> :cancelled
+        _ -> :failed
+      end
+
+    updated_run = %Run{run | status: new_status, exit_code: code, finished_at: now}
+    new_state = %State{state | run: updated_run}
+    new_state = handle_terminal(updated_run, new_state)
+
+    Logger.debug(
+      "[RunServer] #{run.id} runner exited with code=#{code}, state=#{exit_state} → #{new_status}"
+    )
+
+    {:noreply, new_state}
+  end
+
+  def handle_info({:runner_exited, _other_run_id, _}, state), do: {:noreply, state}
 
   # ---------------------------------------------------------------------------
   # Private helpers
