@@ -74,7 +74,13 @@ defmodule Platform.Chat do
 
   @doc "Fetch a space by slug. Returns `nil` if not found."
   @spec get_space_by_slug(String.t()) :: Space.t() | nil
-  def get_space_by_slug(slug), do: Repo.get_by(Space, slug: slug)
+  def get_space_by_slug(slug) do
+    Space
+    |> where([s], s.slug == ^slug)
+    |> order_by([s], asc: s.inserted_at)
+    |> limit(1)
+    |> Repo.one()
+  end
 
   @doc """
   List spaces with optional filters.
