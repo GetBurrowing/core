@@ -183,12 +183,24 @@ defmodule Platform.Execution.LocalProcessWrapper do
   defp maybe_signal(%__MODULE__{os_pid: nil}, _signal), do: :ok
 
   defp maybe_signal(%__MODULE__{os_pid: os_pid}, signal) do
-    case System.cmd("kill", [signal, Integer.to_string(os_pid)], stderr_to_stdout: true) do
-      {_output, 0} -> :ok
-      {output, code} -> {:error, {:kill_failed, code, String.trim(output)}}
+    case kill_executable() do
+      nil -> {:error, :kill_not_found}
+      kill -> run_kill(kill, signal, os_pid)
     end
   rescue
     error -> {:error, error}
+  end
+
+  defp run_kill(kill, signal, os_pid) do
+    case System.cmd(kill, [signal, Integer.to_string(os_pid)], stderr_to_stdout: true) do
+      {_output, 0} -> :ok
+      {output, code} -> {:error, {:kill_failed, code, String.trim(output)}}
+    end
+  end
+
+  defp kill_executable do
+    System.find_executable("kill") ||
+      Enum.find(["/bin/kill", "/usr/bin/kill"], &File.exists?/1)
   end
 
   defp classify_exit_state(%__MODULE__{stop_mode: :force}, _exit_status), do: :killed

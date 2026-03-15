@@ -198,7 +198,7 @@ defmodule Platform.Execution.RunServer do
     end
   end
 
-  def handle_call({:transition, new_status}, _from, %State{run: run} = state) do
+  def handle_call({:transition, new_status}, _from, %State{run: %Run{} = run} = state) do
     if valid_transition?(run.status, new_status) do
       now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
 
@@ -227,7 +227,7 @@ defmodule Platform.Execution.RunServer do
     {:reply, {:ok, run}, state}
   end
 
-  def handle_call({:spawn_provider, runner, opts}, _from, %State{run: run} = state) do
+  def handle_call({:spawn_provider, runner, opts}, _from, %State{run: %Run{} = run} = state) do
     spawn_opts = Keyword.put(opts, :run_server, self())
 
     case runner.spawn_run(run, spawn_opts) do
