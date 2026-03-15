@@ -344,23 +344,53 @@ defmodule Platform.Chat do
   end
 
   @doc """
-  Full-text search messages in a space using the generated `search_vector` column.
+  Full-text search messages in a space using PostgreSQL text search.
 
-  Returns up to `limit` results ordered by recency (newest first).
+  Returns up to `limit` results ordered by search rank (highest first) with a
+  lightweight highlighted excerpt in the virtual `search_headline` field.
+  Blank queries return an empty list.
   """
   @spec search_messages(binary(), String.t(), keyword()) :: [Message.t()]
-  def search_messages(space_id, query, opts \\ []) do
-    limit = Keyword.get(opts, :limit, 20)
+  def search_messages(space_id, query, opts \\ [])
+  def search_messages(_space_id, query, _opts) when not is_binary(query) or query == "", do: []
 
-    from(m in Message,
-      where:
-        m.space_id == ^space_id and
-          is_nil(m.deleted_at) and
-          fragment("search_vector @@ plainto_tsquery('english', ?)", ^query),
-      order_by: [desc: m.id],
-      limit: ^limit
-    )
-    |> Repo.all()
+  def search_messages(space_id, query, opts) do
+    limit = Keyword.get(opts, :limit, 20)
+    trimmed_query = String.trim(query)
+
+    if trimmed_query == "" do
+      []
+    else
+      from(m in Message,
+        where:
+          m.space_id == ^space_id and
+            is_nil(m.deleted_at) and
+            fragment("search_vector @@ websearch_to_tsquery('english', ?)", ^trimmed_query),
+        select_merge: %{
+          search_rank:
+            fragment(
+              "ts_rank_cd(search_vector, websearch_to_tsquery('english', ?))",
+              ^trimmed_query
+            ),
+          search_headline:
+            fragment(
+              "ts_headline('english', coalesce(?, ''), websearch_to_tsquery('english', ?), 'StartSel=<mark>, StopSel=</mark>, MaxWords=18, MinWords=5')",
+              m.content,
+              ^trimmed_query
+            )
+        },
+        order_by: [
+          desc:
+            fragment(
+              "ts_rank_cd(search_vector, websearch_to_tsquery('english', ?))",
+              ^trimmed_query
+            ),
+          desc: m.id
+        ],
+        limit: ^limit
+      )
+      |> Repo.all()
+    end
   end
 
   @doc "Edit a message's content. Sets `edited_at` to now."

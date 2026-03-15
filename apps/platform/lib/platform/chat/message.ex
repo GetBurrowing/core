@@ -18,6 +18,8 @@ defmodule Platform.Chat.Message do
     field(:metadata, :map, default: %{})
     field(:edited_at, :utc_datetime_usec)
     field(:deleted_at, :utc_datetime_usec)
+    field(:search_rank, :float, virtual: true)
+    field(:search_headline, :string, virtual: true)
 
     # Only inserted_at — no updated_at (no timestamps() macro).
     field(:inserted_at, :utc_datetime_usec, autogenerate: {DateTime, :utc_now, []})

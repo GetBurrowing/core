@@ -72,6 +72,68 @@ defmodule PlatformWeb.ChatLiveTest do
     assert html =~ "hello from test"
   end
 
+  describe "search" do
+    test "searching messages shows ranked results with highlighted matches", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/chat/general")
+
+      view
+      |> form("#compose-form", compose: %{text: "Phoenix search is live"})
+      |> render_submit()
+
+      view
+      |> form("#compose-form", compose: %{text: "Other chat note"})
+      |> render_submit()
+
+      html =
+        view
+        |> form("#chat-search-form", search: %{query: "phoenix"})
+        |> render_change()
+
+      assert html =~ "Search Results"
+      assert html =~ "<mark>Phoenix</mark>"
+      assert html =~ "match"
+    end
+
+    test "opening a threaded search result opens the thread panel", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/chat/general")
+
+      view
+      |> form("#compose-form", compose: %{text: "Thread root"})
+      |> render_submit()
+
+      space = Chat.get_space_by_slug("general")
+      [root_message | _] = Chat.list_messages(space.id)
+
+      render_click(view, "open_thread", %{"message_id" => root_message.id})
+
+      view
+      |> form("#thread-compose-form", thread_compose: %{text: "Phoenix lives in threads too"})
+      |> render_submit()
+
+      thread_message =
+        space.id
+        |> Chat.list_messages(
+          thread_id: Chat.get_thread_for_message(root_message.id).id,
+          limit: 10
+        )
+        |> List.first()
+
+      html =
+        view
+        |> form("#chat-search-form", search: %{query: "phoenix"})
+        |> render_change()
+
+      assert html =~ "Thread"
+
+      html = render_click(view, "open_search_result", %{"message_id" => thread_message.id})
+
+      assert html =~ "thread-compose-form"
+      assert html =~ "Phoenix lives in threads too"
+    end
+  end
+
   describe "attachments" do
     test "uploading a file shows it on the message after send", %{conn: conn} do
       conn = authenticated_conn(conn)

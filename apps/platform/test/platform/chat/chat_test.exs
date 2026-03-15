@@ -175,6 +175,45 @@ defmodule Platform.ChatTest do
     end
   end
 
+  # ── Search ────────────────────────────────────────────────────────────────────
+
+  describe "search_messages/3" do
+    test "returns ranked matches with highlighted excerpts" do
+      space = create_space()
+      other_space = create_space()
+      participant = create_participant(space.id)
+      other_participant = create_participant(other_space.id)
+
+      repeated =
+        create_message(space.id, participant.id, %{
+          content: "Phoenix search makes Phoenix chat search feel instant"
+        })
+
+      single =
+        create_message(space.id, participant.id, %{
+          content: "Phoenix presence keeps the room feeling live"
+        })
+
+      _non_match =
+        create_message(space.id, participant.id, %{content: "Completely unrelated note"})
+
+      _other_space_match =
+        create_message(other_space.id, other_participant.id, %{content: "Phoenix only elsewhere"})
+
+      results = Chat.search_messages(space.id, "phoenix", limit: 10)
+
+      assert Enum.map(results, & &1.id) == [repeated.id, single.id]
+      assert Enum.all?(results, &is_float(&1.search_rank))
+      assert Enum.all?(results, &(&1.search_rank > 0.0))
+      assert results |> hd() |> Map.fetch!(:search_headline) =~ "<mark>Phoenix</mark>"
+    end
+
+    test "returns an empty list for blank queries" do
+      space = create_space()
+      assert Chat.search_messages(space.id, "   ") == []
+    end
+  end
+
   # ── Attachments ───────────────────────────────────────────────────────────────
 
   describe "post_message_with_attachments/2" do

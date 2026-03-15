@@ -44,6 +44,10 @@ defmodule PlatformWeb.ChatLive do
       |> assign(:user_id, user_id)
       |> assign(:spaces, spaces)
       |> assign(:active_space, nil)
+      |> assign(:search_query, "")
+      |> assign(:search_results, [])
+      |> assign(:highlighted_message_id, nil)
+      |> assign(:highlighted_thread_message_id, nil)
       |> assign(:participants_map, %{})
       |> assign(:online_count, 0)
       |> assign(:current_participant, nil)
@@ -63,6 +67,7 @@ defmodule PlatformWeb.ChatLive do
       |> assign(:canvas_types, @canvas_types)
       |> assign_compose("")
       |> assign_thread_compose("")
+      |> assign_search_form("")
       |> assign_new_canvas_form()
       |> allow_upload(:attachments,
         accept: :any,
@@ -131,6 +136,11 @@ defmodule PlatformWeb.ChatLive do
        socket
        |> assign(:page_title, "# #{space.name}")
        |> assign(:active_space, space)
+       |> assign(:search_query, "")
+       |> assign(:search_results, [])
+       |> assign(:highlighted_message_id, nil)
+       |> assign(:highlighted_thread_message_id, nil)
+       |> assign_search_form("")
        |> assign(:participants_map, participants_map)
        |> assign(:online_count, online_count)
        |> assign(:current_participant, participant)
@@ -163,6 +173,44 @@ defmodule PlatformWeb.ChatLive do
   end
 
   @impl true
+  def handle_event("search_messages", %{"search" => %{"query" => query}}, socket) do
+    {:noreply, apply_search(socket, query)}
+  end
+
+  def handle_event("clear_search", _params, socket) do
+    {:noreply, clear_search(socket)}
+  end
+
+  def handle_event("open_search_result", %{"message_id" => message_id}, socket) do
+    case Chat.get_message(message_id) do
+      nil ->
+        {:noreply, put_flash(socket, :error, "Search result not found.")}
+
+      %{thread_id: thread_id} = message when is_binary(thread_id) ->
+        thread = Chat.get_thread(thread_id)
+        thread_messages = load_thread_messages(message.space_id, thread_id)
+        thread_attachments_map = build_attachments_map(thread_messages)
+
+        {:noreply,
+         socket
+         |> assign(:active_thread, thread)
+         |> assign(:active_canvas, nil)
+         |> assign(:thread_messages, thread_messages)
+         |> assign(:thread_attachments_map, thread_attachments_map)
+         |> assign(:highlighted_message_id, nil)
+         |> assign(:highlighted_thread_message_id, message.id)}
+
+      message ->
+        {:noreply,
+         socket
+         |> assign(:active_thread, nil)
+         |> assign(:thread_messages, [])
+         |> assign(:thread_attachments_map, %{})
+         |> assign(:highlighted_message_id, message.id)
+         |> assign(:highlighted_thread_message_id, nil)}
+    end
+  end
+
   def handle_event("send_message", %{"compose" => %{"text" => content}}, socket) do
     with space when not is_nil(space) <- socket.assigns.active_space,
          participant when not is_nil(participant) <- socket.assigns.current_participant do
@@ -234,6 +282,8 @@ defmodule PlatformWeb.ChatLive do
            |> assign(:active_canvas, nil)
            |> assign(:thread_messages, thread_messages)
            |> assign(:thread_attachments_map, thread_attachments_map)
+           |> assign(:highlighted_message_id, nil)
+           |> assign(:highlighted_thread_message_id, nil)
            |> assign_thread_compose("")}
       end
     else
@@ -246,7 +296,8 @@ defmodule PlatformWeb.ChatLive do
      socket
      |> assign(:active_thread, nil)
      |> assign(:thread_messages, [])
-     |> assign(:thread_attachments_map, %{})}
+     |> assign(:thread_attachments_map, %{})
+     |> assign(:highlighted_thread_message_id, nil)}
   end
 
   def handle_event("send_thread_message", %{"thread_compose" => %{"text" => content}}, socket) do
@@ -434,13 +485,15 @@ defmodule PlatformWeb.ChatLive do
       {:noreply,
        socket
        |> stream_insert(:messages, msg)
-       |> put_attachment_map_entry(msg.id, attachments)}
+       |> put_attachment_map_entry(msg.id, attachments)
+       |> maybe_refresh_search()}
     else
       if socket.assigns.active_thread && socket.assigns.active_thread.id == msg.thread_id do
         {:noreply,
          socket
          |> update(:thread_messages, &(&1 ++ [msg]))
-         |> put_thread_attachment_map_entry(msg.id, attachments)}
+         |> put_thread_attachment_map_entry(msg.id, attachments)
+         |> maybe_refresh_search()}
       else
         {:noreply, socket}
       end
@@ -453,7 +506,8 @@ defmodule PlatformWeb.ChatLive do
     {:noreply,
      socket
      |> stream_insert(:messages, msg)
-     |> put_attachment_map_entry(msg.id, attachments)}
+     |> put_attachment_map_entry(msg.id, attachments)
+     |> maybe_refresh_search()}
   end
 
   def handle_info({:message_deleted, msg}, socket) do
@@ -461,7 +515,8 @@ defmodule PlatformWeb.ChatLive do
      socket
      |> stream_delete(:messages, msg)
      |> delete_attachment_map_entry(msg.id)
-     |> delete_thread_attachment_map_entry(msg.id)}
+     |> delete_thread_attachment_map_entry(msg.id)
+     |> maybe_refresh_search()}
   end
 
   def handle_info({:reaction_added, reaction}, socket) do
@@ -588,6 +643,34 @@ defmodule PlatformWeb.ChatLive do
             </div>
 
             <div class="flex flex-shrink-0 items-center gap-3 text-xs text-base-content/50">
+              <.form
+                for={@search_form}
+                id="chat-search-form"
+                phx-change="search_messages"
+                phx-submit="search_messages"
+                class="hidden md:block"
+              >
+                <div class="flex items-center gap-2">
+                  <.input
+                    field={@search_form[:query]}
+                    type="text"
+                    placeholder="Search messages…"
+                    autocomplete="off"
+                    phx-debounce="250"
+                    class="input input-bordered input-sm w-64"
+                  />
+
+                  <button
+                    :if={present?(@search_query)}
+                    type="button"
+                    phx-click="clear_search"
+                    class="rounded px-2 py-1 text-xs hover:bg-base-300"
+                  >
+                    Clear
+                  </button>
+                </div>
+              </.form>
+
               <button
                 phx-click="toggle_canvases_panel"
                 class={[
@@ -617,6 +700,66 @@ defmodule PlatformWeb.ChatLive do
               </div>
             </div>
           </header>
+
+          <div
+            :if={present?(@search_query)}
+            class="border-b border-base-300 bg-base-200 px-5 py-3"
+          >
+            <div class="flex items-center justify-between gap-3">
+              <div>
+                <p class="text-xs font-semibold uppercase tracking-widest text-base-content/50">
+                  Search Results
+                </p>
+                <p class="text-sm text-base-content/70">
+                  “{@search_query}” · {length(@search_results)} match{if length(@search_results) == 1,
+                    do: "",
+                    else: "es"}
+                </p>
+              </div>
+
+              <button phx-click="clear_search" class="btn btn-ghost btn-xs">
+                Clear
+              </button>
+            </div>
+
+            <div class="mt-3 space-y-2">
+              <button
+                :for={result <- @search_results}
+                type="button"
+                phx-click="open_search_result"
+                phx-value-message-id={result.id}
+                class="block w-full rounded-xl border border-base-300 bg-base-100 px-3 py-2 text-left transition-colors hover:border-primary/40 hover:bg-base-100/80"
+              >
+                <div class="flex flex-wrap items-center gap-2 text-[11px] uppercase tracking-widest text-base-content/50">
+                  <span>{sender_name(@participants_map, result.participant_id)}</span>
+                  <span>{format_timestamp(result.inserted_at)}</span>
+                  <span
+                    :if={is_binary(result.thread_id)}
+                    class="rounded-full bg-base-300 px-2 py-0.5 normal-case tracking-normal text-[10px]"
+                  >
+                    Thread
+                  </span>
+                  <span
+                    :if={result.search_rank}
+                    class="font-mono normal-case tracking-normal text-[10px] text-base-content/40"
+                  >
+                    rank {Float.round(result.search_rank, 3)}
+                  </span>
+                </div>
+
+                <p class="mt-1 text-sm leading-6 text-base-content">
+                  {search_headline(result)}
+                </p>
+              </button>
+
+              <div
+                :if={@search_results == []}
+                class="rounded-xl border border-dashed border-base-300 bg-base-100 px-3 py-4 text-sm text-base-content/50"
+              >
+                No messages matched this search yet.
+              </div>
+            </div>
+          </div>
 
           <div
             :if={@show_pins && @pins != []}
@@ -752,7 +895,10 @@ defmodule PlatformWeb.ChatLive do
               :for={{dom_id, msg} <- @streams.messages}
               :if={is_nil(msg.deleted_at)}
               id={dom_id}
-              class="group relative flex flex-col gap-0.5"
+              class={[
+                "group relative flex flex-col gap-0.5 rounded-xl px-2 py-1 transition-colors",
+                @highlighted_message_id == msg.id && "bg-primary/5 ring-1 ring-primary/20"
+              ]}
             >
               <div class="flex items-baseline gap-2">
                 <span class="text-xs font-semibold text-primary">
@@ -985,7 +1131,10 @@ defmodule PlatformWeb.ChatLive do
           >
             <div
               :for={msg <- @thread_messages}
-              class="flex flex-col gap-0.5"
+              class={[
+                "flex flex-col gap-0.5 rounded-xl px-2 py-1 transition-colors",
+                @highlighted_thread_message_id == msg.id && "bg-primary/5 ring-1 ring-primary/20"
+              ]}
             >
               <div class="flex items-baseline gap-2">
                 <span class="text-xs font-semibold text-primary">
@@ -1093,6 +1242,47 @@ defmodule PlatformWeb.ChatLive do
 
   defp assign_thread_compose(socket, text) do
     assign(socket, :thread_compose_form, to_form(%{"text" => text}, as: :thread_compose))
+  end
+
+  defp assign_search_form(socket, query) do
+    assign(socket, :search_form, to_form(%{"query" => query}, as: :search))
+  end
+
+  defp apply_search(socket, query) do
+    trimmed_query = String.trim(query || "")
+
+    results =
+      case socket.assigns.active_space do
+        %{id: space_id} when trimmed_query != "" ->
+          Chat.search_messages(space_id, trimmed_query, limit: 12)
+
+        _ ->
+          []
+      end
+
+    socket
+    |> assign(:search_query, trimmed_query)
+    |> assign(:search_results, results)
+    |> assign(:highlighted_message_id, nil)
+    |> assign(:highlighted_thread_message_id, nil)
+    |> assign_search_form(trimmed_query)
+  end
+
+  defp clear_search(socket) do
+    socket
+    |> assign(:search_query, "")
+    |> assign(:search_results, [])
+    |> assign(:highlighted_message_id, nil)
+    |> assign(:highlighted_thread_message_id, nil)
+    |> assign_search_form("")
+  end
+
+  defp maybe_refresh_search(socket) do
+    if present?(socket.assigns.search_query) do
+      apply_search(socket, socket.assigns.search_query)
+    else
+      socket
+    end
   end
 
   defp assign_new_canvas_form(socket, attrs \\ %{}) do
@@ -1529,6 +1719,22 @@ defmodule PlatformWeb.ChatLive do
   end
 
   defp attachment_url(attachment), do: ~p"/chat/attachments/#{attachment.id}"
+
+  defp search_headline(message) do
+    headline =
+      cond do
+        present?(message.search_headline) -> message.search_headline
+        present?(message.content) -> message.content
+        true -> "No searchable text"
+      end
+
+    headline
+    |> Phoenix.HTML.html_escape()
+    |> Phoenix.HTML.safe_to_string()
+    |> String.replace("&lt;mark&gt;", "<mark>")
+    |> String.replace("&lt;/mark&gt;", "</mark>")
+    |> Phoenix.HTML.raw()
+  end
 
   defp present?(value) when is_binary(value), do: String.trim(value) != ""
   defp present?(_value), do: false
