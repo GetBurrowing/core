@@ -27,6 +27,33 @@ defmodule Platform.DataCase do
       Sandbox.mode(Repo, {:shared, self()})
     end
 
+    # Allow supervised GenServers that use Repo (e.g. AttentionRouter) to
+    # share the test sandbox connection so telemetry-driven DB calls don't
+    # raise DBConnection.OwnershipError.
+    supervised_with_repo = [
+      Platform.Chat.AttentionRouter
+    ]
+
+    Enum.each(supervised_with_repo, fn name ->
+      if pid = Process.whereis(name) do
+        Sandbox.allow(Repo, self(), pid)
+      end
+    end)
+
+    # Drain the AttentionRouter's message queue before the sandbox is released.
+    # A synchronous call guarantees any in-flight telemetry handle_info messages
+    # have been fully processed (and their Repo calls completed) before the
+    # sandbox owner exits and the connection is freed.
+    on_exit(fn ->
+      if pid = Process.whereis(Platform.Chat.AttentionRouter) do
+        try do
+          GenServer.call(pid, :__drain__, 2_000)
+        catch
+          :exit, _ -> :ok
+        end
+      end
+    end)
+
     :ok
   end
 end

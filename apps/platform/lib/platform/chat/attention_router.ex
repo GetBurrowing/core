@@ -129,11 +129,28 @@ defmodule Platform.Chat.AttentionRouter do
     {:reply, {:ok, items}, state}
   end
 
+  # Drain call used in tests to flush any pending telemetry handle_info messages
+  # before the Ecto sandbox is released. A synchronous call guarantees all prior
+  # async messages have been processed by the time we return.
+  @impl true
+  def handle_call(:__drain__, _from, state), do: {:reply, :ok, state}
+
   @impl true
   def handle_info({:telemetry_message_posted, %{message_id: message_id}}, state) do
-    case Repo.get(Message, message_id) do
-      %Message{} = msg -> do_route(msg)
-      nil -> Logger.warning("[AttentionRouter] message not found: #{message_id}")
+    try do
+      case Repo.get(Message, message_id) do
+        %Message{} = msg -> do_route(msg)
+        nil -> Logger.warning("[AttentionRouter] message not found: #{message_id}")
+      end
+    rescue
+      error ->
+        Logger.debug("[AttentionRouter] skipping telemetry route (#{Exception.message(error)})")
+    catch
+      # DBConnection calls exit/1 (not raise) when the sandbox owner exits.
+      # rescue does not catch EXIT signals, so we must handle :exit here to
+      # prevent the GenServer from crashing and triggering supervisor restarts.
+      :exit, reason ->
+        Logger.debug("[AttentionRouter] skipping telemetry route (exit: #{inspect(reason)})")
     end
 
     {:noreply, state}

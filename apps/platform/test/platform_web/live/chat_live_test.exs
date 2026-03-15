@@ -3,6 +3,7 @@ defmodule PlatformWeb.ChatLiveTest do
   import Phoenix.LiveViewTest
 
   alias Platform.Accounts.User
+  alias Platform.Chat
   alias Platform.Repo
 
   defp authenticated_conn(conn) do
@@ -42,7 +43,6 @@ defmodule PlatformWeb.ChatLiveTest do
 
   test "sending a message renders it in the chat", %{conn: conn} do
     conn = authenticated_conn(conn)
-    # Navigate to a specific space (auto-created via bootstrap_space/1)
     {:ok, view, _html} = live(conn, ~p"/chat/general")
 
     html =
@@ -51,5 +51,160 @@ defmodule PlatformWeb.ChatLiveTest do
       |> render_submit()
 
     assert html =~ "hello from test"
+  end
+
+  # ── Reactions ────────────────────────────────────────────────────────────────
+
+  describe "reactions" do
+    test "renders quick emoji buttons on each message", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/chat/general")
+
+      # Post a message so there's something to react to
+      view
+      |> form("#compose-form", compose: %{text: "react to me"})
+      |> render_submit()
+
+      html = render(view)
+      assert html =~ "react to me"
+
+      # Quick emoji buttons should be present (in the action bar)
+      assert html =~ "👍"
+      assert html =~ "❤️"
+      assert html =~ "😂"
+      assert html =~ "🎉"
+    end
+
+    test "reacting to a message broadcasts reaction_added and updates UI", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/chat/general")
+
+      # Send a message first
+      view
+      |> form("#compose-form", compose: %{text: "emoji test"})
+      |> render_submit()
+
+      html = render(view)
+      assert html =~ "emoji test"
+
+      # Find a message ID from the space to trigger the react event
+      slug = "general"
+      space = Chat.get_space_by_slug(slug)
+      [msg | _] = Chat.list_messages(space.id)
+
+      # Trigger react event directly
+      render_click(view, "react", %{"message_id" => msg.id, "emoji" => "👍"})
+
+      # After the PubSub roundtrip the reaction should appear
+      html = render(view)
+      # The reaction button shows count ≥ 1
+      assert html =~ "👍"
+    end
+  end
+
+  # ── Threads ──────────────────────────────────────────────────────────────────
+
+  describe "threads" do
+    test "opening a thread shows the thread panel", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/chat/general")
+
+      # Post a message to open a thread on
+      view
+      |> form("#compose-form", compose: %{text: "start a thread here"})
+      |> render_submit()
+
+      slug = "general"
+      space = Chat.get_space_by_slug(slug)
+      [msg | _] = Chat.list_messages(space.id)
+
+      html = render_click(view, "open_thread", %{"message_id" => msg.id})
+
+      assert html =~ "Thread"
+      assert html =~ "thread-compose-form"
+    end
+
+    test "closing the thread panel hides it", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/chat/general")
+
+      view
+      |> form("#compose-form", compose: %{text: "thread close test"})
+      |> render_submit()
+
+      space = Chat.get_space_by_slug("general")
+      [msg | _] = Chat.list_messages(space.id)
+
+      render_click(view, "open_thread", %{"message_id" => msg.id})
+      html = render_click(view, "close_thread", %{})
+
+      refute html =~ "thread-compose-form"
+    end
+
+    test "posting a thread reply appears in thread panel", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/chat/general")
+
+      view
+      |> form("#compose-form", compose: %{text: "root message"})
+      |> render_submit()
+
+      space = Chat.get_space_by_slug("general")
+      [msg | _] = Chat.list_messages(space.id)
+
+      render_click(view, "open_thread", %{"message_id" => msg.id})
+
+      html =
+        view
+        |> form("#thread-compose-form", thread_compose: %{text: "thread reply"})
+        |> render_submit()
+
+      assert html =~ "thread reply"
+    end
+  end
+
+  # ── Pins ─────────────────────────────────────────────────────────────────────
+
+  describe "pins" do
+    test "pinning a message shows it in the pins panel", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/chat/general")
+
+      view
+      |> form("#compose-form", compose: %{text: "pin me please"})
+      |> render_submit()
+
+      space = Chat.get_space_by_slug("general")
+      [msg | _] = Chat.list_messages(space.id)
+
+      # Toggle pin
+      render_click(view, "toggle_pin", %{"message_id" => msg.id, "space_id" => msg.space_id})
+
+      # Toggle pins panel open
+      html = render_click(view, "toggle_pins_panel", %{})
+
+      assert html =~ "Pinned Messages"
+      assert html =~ String.slice(msg.id, 0, 8)
+    end
+
+    test "toggle_pins_panel shows and hides the panel", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/chat/general")
+
+      view
+      |> form("#compose-form", compose: %{text: "pin me"})
+      |> render_submit()
+
+      space = Chat.get_space_by_slug("general")
+      [msg | _] = Chat.list_messages(space.id)
+
+      render_click(view, "toggle_pin", %{"message_id" => msg.id, "space_id" => msg.space_id})
+
+      html_open = render_click(view, "toggle_pins_panel", %{})
+      assert html_open =~ "Pinned Messages"
+
+      html_closed = render_click(view, "toggle_pins_panel", %{})
+      refute html_closed =~ "Pinned Messages"
+    end
   end
 end

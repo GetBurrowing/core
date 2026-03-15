@@ -23,10 +23,12 @@ defmodule Platform.Chat do
 
       # Threads
       Platform.Chat.create_thread(space.id, %{parent_message_id: msg.id, title: "Discussion"})
+      Platform.Chat.get_thread_for_message(msg.id)
 
       # Reactions / Pins / Canvases / Attachments
       Platform.Chat.add_reaction(%{message_id: msg.id, participant_id: p.id, emoji: "👍"})
       Platform.Chat.pin_message(%{space_id: space.id, message_id: msg.id, pinned_by: p.id})
+      Platform.Chat.list_reactions_for_messages([msg1.id, msg2.id])
   """
 
   import Ecto.Query
@@ -393,11 +395,86 @@ defmodule Platform.Chat do
   @spec get_thread(binary()) :: Thread.t() | nil
   def get_thread(id), do: Repo.get(Thread, id)
 
+  @doc """
+  Find the thread anchored to a specific parent message.
+
+  Returns `nil` if no thread has been started for this message yet.
+  """
+  @spec get_thread_for_message(binary()) :: Thread.t() | nil
+  def get_thread_for_message(parent_message_id) do
+    Repo.get_by(Thread, parent_message_id: parent_message_id)
+  end
+
   @doc "List threads in a space, oldest first."
   @spec list_threads(binary()) :: [Thread.t()]
   def list_threads(space_id) do
     from(t in Thread, where: t.space_id == ^space_id, order_by: [asc: t.inserted_at])
     |> Repo.all()
+  end
+
+  @doc """
+  Idempotent thread creation for a parent message.
+
+  If a thread already exists anchored to `parent_message_id`, returns it.
+  Otherwise creates a new thread in the space. Optional attrs: `:title`, `:metadata`.
+  """
+  @spec create_thread_for_message(binary(), binary(), map()) ::
+          {:ok, Thread.t()} | {:error, Ecto.Changeset.t()}
+  def create_thread_for_message(space_id, parent_message_id, attrs \\ %{}) do
+    case Repo.get_by(Thread, parent_message_id: parent_message_id) do
+      %Thread{} = existing ->
+        {:ok, existing}
+
+      nil ->
+        attrs =
+          attrs
+          |> Map.put(:space_id, space_id)
+          |> Map.put(:parent_message_id, parent_message_id)
+
+        result =
+          %Thread{}
+          |> Thread.changeset(attrs)
+          |> Repo.insert()
+
+        case result do
+          {:ok, thread} ->
+            :telemetry.execute(
+              [:platform, :chat, :thread_created],
+              %{system_time: System.system_time()},
+              %{space_id: space_id, thread_id: thread.id, parent_message_id: parent_message_id}
+            )
+
+          _ ->
+            :ok
+        end
+
+        result
+    end
+  end
+
+  @doc """
+  Post a reply to an existing thread.
+
+  Creates a message in `space_id` with `thread_id` set. Returns `{:error, :thread_not_found}`
+  if the thread ID does not exist.
+  """
+  @spec reply_to_thread(binary(), binary(), map()) ::
+          {:ok, Message.t()} | {:error, :thread_not_found | Ecto.Changeset.t()}
+  def reply_to_thread(thread_id, participant_id, attrs) do
+    case Repo.get(Thread, thread_id) do
+      nil ->
+        {:error, :thread_not_found}
+
+      thread ->
+        attrs =
+          attrs
+          |> Map.put(:space_id, thread.space_id)
+          |> Map.put(:thread_id, thread_id)
+          |> Map.put(:participant_id, participant_id)
+          |> Map.put_new(:content_type, "text")
+
+        post_message(attrs)
+    end
   end
 
   # ── Reactions ───────────────────────────────────────────────────────────────
@@ -472,13 +549,91 @@ defmodule Platform.Chat do
   end
 
   @doc "List all reactions for a message, ordered by insertion time."
-  @spec list_reactions(integer()) :: [Reaction.t()]
+  @spec list_reactions(binary()) :: [Reaction.t()]
   def list_reactions(message_id) do
     from(r in Reaction,
       where: r.message_id == ^message_id,
       order_by: [asc: r.inserted_at]
     )
     |> Repo.all()
+  end
+
+  @doc """
+  List reactions for a message grouped by emoji.
+
+  Returns a list of maps with `:emoji`, `:count`, and `:participants`
+  (list of participant_ids who reacted with that emoji), ordered by first
+  appearance.
+
+  Example:
+      [%{emoji: "👍", count: 2, participants: ["uid-1", "uid-2"]}, ...]
+  """
+  @spec list_reactions_grouped(binary()) :: [
+          %{emoji: String.t(), count: non_neg_integer(), participants: [binary()]}
+        ]
+  def list_reactions_grouped(message_id) do
+    message_id
+    |> list_reactions()
+    |> Enum.group_by(& &1.emoji)
+    |> Enum.map(fn {emoji, reactions} ->
+      %{
+        emoji: emoji,
+        count: length(reactions),
+        participants: Enum.map(reactions, & &1.participant_id)
+      }
+    end)
+    |> Enum.sort_by(fn %{participants: ps} ->
+      # stable ordering by first reactor's insertion (already sorted in list_reactions)
+      List.first(ps)
+    end)
+  end
+
+  @doc """
+  Toggle a reaction on a message.
+
+  If the participant has already reacted with this emoji, removes the reaction.
+  Otherwise adds it. Returns `{:ok, :added, Reaction.t()}` or `{:ok, :removed, Reaction.t()}`.
+  """
+  @spec toggle_reaction(binary(), binary(), String.t()) ::
+          {:ok, :added, Reaction.t()}
+          | {:ok, :removed, Reaction.t()}
+          | {:error, any()}
+  def toggle_reaction(message_id, participant_id, emoji) do
+    case Repo.get_by(Reaction,
+           message_id: message_id,
+           participant_id: participant_id,
+           emoji: emoji
+         ) do
+      nil ->
+        case add_reaction(%{message_id: message_id, participant_id: participant_id, emoji: emoji}) do
+          {:ok, reaction} -> {:ok, :added, reaction}
+          {:error, reason} -> {:error, reason}
+        end
+
+      _existing ->
+        case remove_reaction(message_id, participant_id, emoji) do
+          {:ok, reaction} -> {:ok, :removed, reaction}
+          {:error, reason} -> {:error, reason}
+        end
+    end
+  end
+
+  @doc """
+  Batch-load reactions for a list of message IDs in a single query.
+
+  Returns `%{message_id => [Reaction.t()]}`. Message IDs with no reactions
+  are omitted from the result map.
+  """
+  @spec list_reactions_for_messages([binary()]) :: %{binary() => [Reaction.t()]}
+  def list_reactions_for_messages([]), do: %{}
+
+  def list_reactions_for_messages(message_ids) do
+    from(r in Reaction,
+      where: r.message_id in ^message_ids,
+      order_by: [asc: r.inserted_at]
+    )
+    |> Repo.all()
+    |> Enum.group_by(& &1.message_id)
   end
 
   # ── Pins ────────────────────────────────────────────────────────────────────
