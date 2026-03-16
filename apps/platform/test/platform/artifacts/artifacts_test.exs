@@ -34,7 +34,8 @@ defmodule Platform.ArtifactsTest do
 
   describe "register_execution_artifact/2" do
     test "registers a run-scoped artifact and mirrors an artifact_ref into context" do
-      %{project_id: project_id, epic_id: epic_id, task_id: task_id, run_id: run_id} = ids = unique_ids()
+      %{project_id: project_id, epic_id: epic_id, task_id: task_id, run_id: run_id} =
+        ids = unique_ids()
 
       assert {:ok, _run} =
                Execution.start_run(task_id,
@@ -130,7 +131,9 @@ defmodule Platform.ArtifactsTest do
 
       artifact_item = Enum.find(snapshot.items, &(&1.key == "artifact:#{artifact.id}"))
       assert artifact_item.value["latest_publication"]["status"] == "published"
-      assert artifact_item.value["latest_publication"]["external_ref"] == "preview://artifact/#{artifact.id}"
+
+      assert artifact_item.value["latest_publication"]["external_ref"] ==
+               "preview://artifact/#{artifact.id}"
     end
 
     test "built-in destination ids resolve through the shared registry and record failure history" do
