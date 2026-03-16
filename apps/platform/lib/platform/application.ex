@@ -25,6 +25,8 @@ defmodule Platform.Application do
       Platform.Agents.ContextBroker,
       # Context plane supervisor — must start after PubSub
       Platform.Context.Supervisor,
+      # Artifact substrate — task/run artifact records + publication history
+      Platform.Artifacts.Store,
       # Execution plane — run supervisor (registry started above)
       Platform.Execution.RunSupervisor,
       # Chat presence — must start after PubSub

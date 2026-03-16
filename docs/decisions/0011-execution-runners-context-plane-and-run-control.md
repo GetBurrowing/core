@@ -371,6 +371,55 @@ exists yet.  The next task should:
 
 ---
 
+## Artifact + Destination Substrate — Consumer Handoff
+
+`Platform.Artifacts` is now the single shared domain for artifact lifecycle
+and publication. The following rules apply for all downstream consumers.
+
+### Registration
+
+| Caller | Entry point | Notes |
+|---|---|---|
+| Execution runners | `Platform.Execution.register_artifact/2` | Merges run scope automatically |
+| Chat / canvas | `Platform.Artifacts.register_artifact/1` | Pass `source: :chat` or `:canvas`; omit `run_id` |
+| Tests / scripts | `Platform.Artifacts.register_artifact/1` | Any attrs; `task_id` required |
+
+### Publication
+
+Call `Platform.Artifacts.publish_artifact/3`:
+
+```elixir
+{:ok, artifact, publication} =
+  Platform.Artifacts.publish_artifact(artifact_id, :github, external_ref: sha)
+
+{:error, reason, failed_publication} =
+  Platform.Artifacts.publish_artifact(artifact_id, :canvas)
+```
+
+Pass a module that implements `@behaviour Platform.Artifacts.Destination` for
+ad-hoc / test destinations. Pass a built-in atom (`:github`, `:docker_registry`,
+`:google_drive`, `:preview_route`, `:canvas`) for the shared destination registry.
+
+### Real-time updates
+
+Subscribe to `Platform.Artifacts.task_topic(task_id)` via Phoenix.PubSub.
+Events: `:artifact_registered`, `:artifact_published`, `:artifact_publication_failed`.
+Payload is a hydrated `%Platform.Artifacts.Artifact{}` with `latest_publication` set.
+
+### Lifecycle rule
+
+Execution and publication are **always separate steps**. Runners register
+artifacts; destinations publish them. No runner or provider module should
+contain destination-specific delivery logic.
+
+### Not yet implemented
+
+- Real delivery in `GitHub`, `DockerRegistry`, `GoogleDrive`, `PreviewRoute` adapters
+- Postgres persistence (currently ETS in-process)
+- Deck destination adapter
+
+---
+
 ## Future Work
 
 - **Vault credential leasing:** replace config-backed `CredentialLease` with
@@ -378,8 +427,9 @@ exists yet.  The next task should:
 - **Model credential rotation:** lease provider API keys with per-run TTL so
   compromised runs cannot use tokens indefinitely
 - **GitHub push verification:** after push, resolve the branch HEAD SHA and
-  record it in the run's context as an artifact ref for downstream consumers
-- **Postgres persistence:** async write of items + deltas for audit/replay
+  record it via `Platform.Execution.register_artifact/2` → `publish_artifact/3 :github`
+- **Postgres persistence:** async write of artifact + publication rows for
+  audit/replay; replace ETS store with Repo-backed write path
 - **Distributed context:** pg_pubsub adapter for multi-node deployments
 - **HTTP runner protocol:** thin adapter wrapping the Execution public API
 - **Context compaction:** summarise long item histories via an LLM pass before
@@ -398,6 +448,7 @@ exists yet.  The next task should:
 - ADR 0007: Agent Runtime Architecture
 - `Platform.Context.*` — context plane implementation
 - `Platform.Execution.*` — run control implementation
+- `Platform.Artifacts.*` — artifact + destination substrate
 - `Platform.Execution.DockerRunner` — Docker-backed runner provider
 - `Platform.Execution.SuiteRunnerdClient` — HTTP client for suite-runnerd
 - `Platform.Execution.CredentialLease` — per-run credential leasing

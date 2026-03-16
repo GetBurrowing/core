@@ -391,6 +391,86 @@ the run context.
 
 ---
 
+## Artifact + Destination Substrate — Handoff Notes
+
+### What was built
+
+`Platform.Artifacts` is a shared domain that decouples artifact _registration_
+from artifact _publication_. Both Tasks/Execution flows and chat/canvas surfaces
+write through the same contract.
+
+```
+apps/platform/lib/platform/
+├── artifacts.ex                      # Public API
+└── artifacts/
+    ├── artifact.ex                   # %Artifact{} value struct + validation
+    ├── destination.ex                # @behaviour for destination modules
+    ├── destinations.ex               # Built-in destination registry (github, docker_registry, …)
+    ├── publication.ex                # %Publication{} append-only attempt record
+    └── store.ex                      # ETS-backed GenServer; one write path, cheap reads
+```
+
+`Platform.Execution.register_artifact/2` is the execution-facing entry point.
+It merges run scope (project/epic/task/run ids) into the artifact attrs before
+delegating to `Platform.Artifacts`.
+
+### Consumer contracts
+
+#### Tasks UI
+
+Artifact refs are mirrored into the run's context session under the key
+`"artifact:#{artifact.id}"` with `kind: :artifact_ref`. A LiveView component
+can subscribe to `Platform.Artifacts.task_topic(task_id)` and render the
+`:artifact_registered`, `:artifact_published`, and `:artifact_publication_failed`
+events without polling.
+
+Each event payload is a hydrated `%Artifact{}` with `latest_publication` already
+populated. The UI does not need to re-fetch; just update local state on receipt.
+
+**Do not** read raw ETS tables from LiveView. Use `Platform.Artifacts.list_artifacts/1`
+and `Platform.Artifacts.list_publications/1` when building the initial page state.
+
+#### Chat / Canvas surfaces
+
+Register artifacts through `Platform.Artifacts.register_artifact/1` directly.
+Pass `source: :canvas` or `source: :chat` and omit `run_id` when there is no
+active execution run.
+
+Context mirroring (`sync_context_ref`) is skipped for non-run artifacts, so
+chat/canvas callers do not need a context session; PubSub broadcast still fires.
+
+#### Adding a new destination
+
+1. Add the id atom to `@valid_destinations` in `Platform.Artifacts.Publication`.
+2. Create `defmodule Platform.Artifacts.Destinations.MyTarget` implementing
+   `@behaviour Platform.Artifacts.Destination` (`id/0` and `publish/2`).
+3. Register the module in the `@builtin` map in `Platform.Artifacts.Destinations`.
+4. The publication attempt/result history is recorded automatically; the new
+   destination does not touch `Platform.Artifacts.Store` directly.
+
+#### Publication attempt history
+
+All publish attempts are stored in `@publication_table` (ETS) via
+`Store.begin_publication` / `Store.finish_publication`. The table is append-only
+by design: finished publications overwrite the same ETS key (same id), but
+`next_attempt_number` monotonically increments the `:attempt` field.
+
+`Platform.Artifacts.list_publications/1` returns attempts sorted by attempt
+number (ascending). UI surfaces that want to show "last known status" should
+use `artifact.latest_publication` from the hydrated struct.
+
+### What is NOT yet wired
+
+- Postgres persistence: the store is in-process ETS only. A follow-up task
+  should add `Platform.Repo` writes to `Artifacts.Store` callbacks.
+- Real destination adapters: `GitHub`, `DockerRegistry`, `GoogleDrive`, and
+  `PreviewRoute` all return `{:error, {:unconfigured_destination, id()}}` until
+  their concrete push logic is implemented.
+- Deck artifact kind: `:deck` is in `@valid_kinds` but no destination handles
+  deck-specific payloads yet.
+
+---
+
 ## Future Work
 
 - **suite-runnerd binary:** implement the companion service that executes
@@ -401,8 +481,9 @@ the run context.
 - **Vault credential leasing:** replace config-backed `CredentialLease` with
   short-lived GitHub App installation tokens from `Platform.Vault`
 - **GitHub push verification:** record the pushed branch HEAD SHA as an
-  artifact ref in the run's context session
-- **Postgres persistence:** async write of items + deltas for audit/replay
+  artifact ref in the run's context session via `Platform.Artifacts`
+- **Postgres persistence:** async write of artifact + publication rows for
+  audit/replay; replace ETS store with a Repo-backed write path
 - **Distributed context:** pg_pubsub adapter for multi-node deployments
 - **HTTP runner protocol:** thin adapter wrapping the Execution public API
 - **Context compaction:** summarise long item histories via an LLM pass before

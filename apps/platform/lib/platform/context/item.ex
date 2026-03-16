@@ -74,7 +74,7 @@ defmodule Platform.Context.Item.Kind do
     - `:epic_context`     — epic-level context; scoped to epic lifetime
     - `:project_config`   — project-level config; evicted on project close
     - `:env_var`          — environment variable for runners; run-scoped
-    - `:artifact_ref`     — reference to an artifact produced by a run
+    - `:artifact_ref`     — reference to an artifact produced by a run (mirrors the `Platform.Artifacts` record into context)
     - `:runner_hint`      — advisory hints pushed by runners; run-scoped
     - `:system_event`     — internal platform events; short-lived
 
