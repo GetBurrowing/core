@@ -56,6 +56,7 @@ defmodule Platform.Execution do
       {:ok, run} = Platform.Execution.transition(run.id, :completed)
   """
 
+  alias Platform.Artifacts
   alias Platform.Execution.{Run, RunServer, RunSupervisor}
 
   # ---------------------------------------------------------------------------
@@ -183,6 +184,18 @@ defmodule Platform.Execution do
   @spec ack_context(String.t(), non_neg_integer()) :: {:ok, Run.t()} | {:error, term()}
   def ack_context(run_id, version) do
     RunServer.ack_context(run_id, version)
+  end
+
+  @doc """
+  Registers an execution artifact for `run_id` using the shared artifact domain.
+
+  The execution domain supplies the run/task scope while publication remains
+  fully delegated to `Platform.Artifacts` destinations.
+  """
+  @spec register_artifact(String.t(), map() | keyword()) ::
+          {:ok, Platform.Artifacts.Artifact.t()} | {:error, term()}
+  def register_artifact(run_id, attrs) do
+    Artifacts.register_execution_artifact(run_id, attrs)
   end
 
   # ---------------------------------------------------------------------------
