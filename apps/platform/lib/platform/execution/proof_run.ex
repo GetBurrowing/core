@@ -77,6 +77,8 @@ defmodule Platform.Execution.ProofRun do
   """
   @spec run(String.t(), keyword()) :: {:ok, result()} | {:error, term()}
   def run(task_id, opts \\ []) when is_binary(task_id) do
+    opts = merge_config_defaults(opts)
+
     with {:ok, run} <- start_run(task_id, opts),
          {:ok, run} <- transition_to_running(run),
          {:ok, _version} <- push_initial_context(run, task_id, opts),
@@ -167,17 +169,19 @@ defmodule Platform.Execution.ProofRun do
   defp do_repo_work(run, repo_path, branch, opts) do
     run_root = Keyword.get(opts, :run_root)
     run_root_opts = if run_root, do: [run_root: run_root], else: []
-    lease = Keyword.get(opts, :credential_lease)
+    base_ref = Keyword.get(opts, :base_ref, "HEAD")
+    remote = Keyword.get(opts, :remote, "origin")
+    lease = resolve_credential_lease(run, opts)
 
     with {:ok, workspace} <- LocalWorkspace.ensure_workspace(run, run_root_opts),
          {:ok, wt_path} <-
            LocalWorkspace.setup_git_worktree(workspace, repo_path,
              branch: branch,
-             base_ref: "HEAD"
+             base_ref: base_ref
            ),
          :ok <- write_proof_change(wt_path, run),
          {:ok, verify_output} <- verify_change(wt_path),
-         push_result <- attempt_push(wt_path, run, branch, lease) do
+         push_result <- attempt_push(wt_path, run, branch, remote, lease) do
       {:ok,
        %{
          workspace: workspace,
@@ -253,12 +257,12 @@ defmodule Platform.Execution.ProofRun do
     end
   end
 
-  defp attempt_push(wt_path, run, branch, lease) do
+  defp attempt_push(wt_path, run, branch, remote, lease) do
     if is_struct(lease, CredentialLease) and CredentialLease.valid?(lease) do
       result =
         LocalWorkspace.push_branch(wt_path, run.id,
           message: "proof-of-life: run #{run.id} on task #{run.task_id}",
-          remote: "origin",
+          remote: remote,
           lease: lease
         )
 
@@ -274,6 +278,45 @@ defmodule Platform.Execution.ProofRun do
     else
       Logger.debug("[ProofRun] no valid credential lease — skipping push")
       :skipped
+    end
+  end
+
+  defp merge_config_defaults(opts) do
+    config = Application.get_env(:platform, :proof_of_life, [])
+
+    defaults =
+      []
+      |> put_default(:repo_path, Keyword.get(config, :repo_path))
+      |> put_default(:repo_slug, Keyword.get(config, :repo_slug))
+      |> put_default(:remote, Keyword.get(config, :remote))
+      |> put_default(:base_ref, Keyword.get(config, :base_ref))
+      |> put_default(:run_root, Keyword.get(config, :run_root))
+
+    Keyword.merge(defaults, opts)
+  end
+
+  defp put_default(opts, _key, nil), do: opts
+  defp put_default(opts, _key, ""), do: opts
+  defp put_default(opts, key, value), do: Keyword.put(opts, key, value)
+
+  defp resolve_credential_lease(run, opts) do
+    case Keyword.get(opts, :credential_lease) do
+      %CredentialLease{} = lease ->
+        lease
+
+      _ ->
+        case Keyword.get(opts, :repo_slug) do
+          nil -> nil
+          "" -> nil
+          repo_slug -> build_credential_lease(run, repo_slug)
+        end
+    end
+  end
+
+  defp build_credential_lease(run, repo_slug) do
+    case CredentialLease.lease(:github, run_id: run.id, repo: repo_slug) do
+      {:ok, lease} -> lease
+      {:error, _reason} -> nil
     end
   end
 

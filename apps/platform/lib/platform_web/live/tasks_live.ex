@@ -67,6 +67,20 @@ defmodule PlatformWeb.TasksLive do
     {:noreply, reload_selected_task(socket)}
   end
 
+  def handle_event("create_proof_task", _params, socket) do
+    case Tasks.bootstrap_proof_of_life_task() do
+      {:ok, task_id} ->
+        {:noreply,
+         socket
+         |> refresh_tasks()
+         |> put_flash(:info, "Created proof-of-life task #{task_id}.")
+         |> push_navigate(to: ~p"/tasks/#{task_id}")}
+
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, "Could not create proof task: #{inspect(reason)}")}
+    end
+  end
+
   def handle_event("launch_proof_run", %{"task_id" => task_id}, socket) do
     socket = assign(socket, :proof_run_loading, true)
 
@@ -74,14 +88,8 @@ defmodule PlatformWeb.TasksLive do
     parent = self()
 
     Task.start(fn ->
-      repo_path = Application.get_env(:platform, :execution, []) |> Keyword.get(:proof_repo_path)
       branch = "proof-of-life/#{task_id}"
-
-      opts =
-        [branch: branch]
-        |> then(fn o -> if repo_path, do: Keyword.put(o, :repo_path, repo_path), else: o end)
-
-      result = Tasks.launch_proof_run(task_id, opts)
+      result = Tasks.launch_proof_run(task_id, branch: branch)
       send(parent, {:proof_run_complete, task_id, result})
     end)
 

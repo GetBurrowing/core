@@ -10,8 +10,13 @@
       <span class="badge badge-ghost">{length(@tasks)}</span>
     </div>
 
-    <div class="px-4 py-3 text-xs text-base-content/60">
-      {@explanation}
+    <div class="space-y-3 px-4 py-3">
+      <p class="text-xs text-base-content/60">
+        {@explanation}
+      </p>
+      <button class="btn btn-sm btn-primary w-full" phx-click="create_proof_task">
+        Create proof-of-life task
+      </button>
     </div>
 
     <div :if={@tasks == []} class="px-4 pb-4 text-sm text-base-content/70">

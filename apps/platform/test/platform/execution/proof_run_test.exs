@@ -126,6 +126,18 @@ defmodule Platform.Execution.ProofRunTest do
   # ---------------------------------------------------------------------------
 
   describe "ProofRun.run/2 — repository mode" do
+    setup do
+      original_proof_config = Application.get_env(:platform, :proof_of_life, [])
+      original_execution_config = Application.get_env(:platform, :execution, [])
+
+      on_exit(fn ->
+        Application.put_env(:platform, :proof_of_life, original_proof_config)
+        Application.put_env(:platform, :execution, original_execution_config)
+      end)
+
+      :ok
+    end
+
     test "writes proof-of-life.md change and captures git status as verification artifact" do
       task_id = unique_task_id()
       root = temp_dir("proof-repo")
@@ -189,12 +201,66 @@ defmodule Platform.Execution.ProofRunTest do
       assert result1.branch != result2.branch
     end
 
+    test "uses configured repo_path defaults when repo_path opt is omitted" do
+      task_id = unique_task_id()
+      root = temp_dir("proof-config-repo")
+      {clone_path, _bare} = setup_temp_repo_with_remote(root)
+
+      Application.put_env(:platform, :proof_of_life,
+        repo_path: clone_path,
+        base_ref: "origin/main",
+        run_root: root
+      )
+
+      {:ok, result} = ProofRun.run(task_id)
+
+      assert result.run.status == :completed
+      wt_path = expected_worktree_path(result.run.id, root)
+      assert File.exists?(Path.join(wt_path, "docs/proof-of-life.md"))
+      assert result.branch == "proof-of-life/#{result.run.id}"
+    end
+
+    test "uses configured github credentials to push when no explicit lease is provided" do
+      task_id = unique_task_id()
+      root = temp_dir("proof-config-push")
+      {clone_path, bare_path} = setup_temp_repo_with_remote(root)
+
+      Application.put_env(:platform, :proof_of_life,
+        repo_path: clone_path,
+        repo_slug: "Startup-Suite/core",
+        remote: "origin",
+        base_ref: "origin/main",
+        run_root: root
+      )
+
+      Application.put_env(:platform, :execution,
+        github_credentials: [
+          token: "test-token",
+          author_name: "Suite Runner",
+          author_email: "runner@suite.local"
+        ]
+      )
+
+      {:ok, result} = ProofRun.run(task_id)
+
+      assert result.pushed == true
+
+      {branches, 0} =
+        System.cmd("git", ["for-each-ref", "--format=%(refname:short)", "refs/heads"],
+          cd: bare_path,
+          stderr_to_stdout: true
+        )
+
+      assert branches =~ result.branch
+      assert Enum.any?(result.artifacts, &(&1.name == "github branch ref"))
+    end
+
     test "push is skipped without a credential lease" do
       task_id = unique_task_id()
       root = temp_dir("proof-nolease")
       {clone_path, _bare} = setup_temp_repo_with_remote(root)
 
-      {:ok, result} = ProofRun.run(task_id, repo_path: clone_path, run_root: root)
+      {:ok, result} = ProofRun.run(task_id, repo_path: clone_path, run_root: root, repo_slug: nil)
 
       # No credential lease provided — push is explicitly skipped
       assert result.pushed == false

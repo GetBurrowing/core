@@ -67,4 +67,25 @@ defmodule PlatformWeb.TasksLiveTest do
     assert html =~ "/tasks"
     assert html =~ "Tasks"
   end
+
+  test "can bootstrap the proof-of-life task from the tasks UI", %{conn: conn} do
+    task_id = "task-#{System.unique_integer([:positive, :monotonic])}"
+    {:ok, _run} = Execution.start_run(task_id, project_id: "proj-1", epic_id: "epic-1")
+
+    conn = authenticated_conn(conn)
+    {:ok, view, html} = live(conn, ~p"/tasks/#{task_id}")
+
+    assert html =~ "Create proof-of-life task"
+
+    assert {:error, {:live_redirect, %{to: to}}} =
+             view
+             |> element("button[phx-click=\"create_proof_task\"]")
+             |> render_click()
+
+    assert to == "/tasks/suite-proof-of-life"
+
+    {:ok, _view, html} = live(conn, to)
+    assert html =~ "suite-proof-of-life"
+    assert html =~ "Launch proof run"
+  end
 end
