@@ -56,6 +56,9 @@ defmodule PlatformWeb.ShellLive do
       PlatformWeb.ControlCenterLive ->
         "Agent Resources"
 
+      PlatformWeb.TasksLive ->
+        "Tasks"
+
       _ ->
         view
         |> Module.split()

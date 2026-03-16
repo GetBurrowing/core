@@ -1,0 +1,211 @@
+<div class="grid h-full min-h-0 grid-cols-1 gap-0 lg:grid-cols-[20rem_minmax(0,1fr)]">
+  <aside class="border-b border-base-300 bg-base-200/50 lg:border-b-0 lg:border-r">
+    <div class="flex items-center justify-between border-b border-base-300 px-4 py-3">
+      <div>
+        <h1 class="text-sm font-semibold uppercase tracking-widest text-base-content/60">
+          Tasks
+        </h1>
+        <p class="mt-1 text-xs text-base-content/60">Execution/context/artifact-backed MVP</p>
+      </div>
+      <span class="badge badge-ghost">{length(@tasks)}</span>
+    </div>
+
+    <div class="px-4 py-3 text-xs text-base-content/60">
+      {@explanation}
+    </div>
+
+    <div :if={@tasks == []} class="px-4 pb-4 text-sm text-base-content/70">
+      No tasks are visible yet. This MVP discovers tasks from active runs, task-scoped context sessions, and registered artifacts.
+    </div>
+
+    <div class="flex max-h-[40vh] flex-col overflow-y-auto lg:max-h-none">
+      <.link
+        :for={task <- @tasks}
+        navigate={~p"/tasks/#{task.task_id}"}
+        class={[
+          "border-t border-base-300 px-4 py-3 text-left hover:bg-base-100",
+          @selected_task_id == task.task_id && "bg-base-100"
+        ]}
+      >
+        <div class="flex items-start justify-between gap-3">
+          <div class="min-w-0">
+            <p class="truncate font-mono text-xs text-primary">{task.task_id}</p>
+            <p class="mt-1 text-xs text-base-content/60">
+              {task.run_count} runs • {task.artifact_count} artifacts • ctx {task.context_version ||
+                0}
+            </p>
+          </div>
+          <span class={ctx_status_class(task.context_status)}>{task.context_status}</span>
+        </div>
+      </.link>
+    </div>
+  </aside>
+
+  <section class="min-h-0 overflow-y-auto">
+    <div
+      :if={is_nil(@task_detail)}
+      class="flex h-full items-center justify-center p-8 text-sm text-base-content/60"
+    >
+      Select a task to inspect its live execution/context/artifact state.
+    </div>
+
+    <div :if={@task_detail} class="space-y-6 p-4 md:p-6">
+      <div class="space-y-2">
+        <div class="flex flex-wrap items-center gap-2">
+          <h2 class="font-mono text-lg font-semibold">{@task_detail.summary.task_id}</h2>
+          <span class={ctx_status_class(@task_detail.summary.context_status)}>
+            ctx {@task_detail.summary.context_status}
+          </span>
+          <span class="badge badge-outline">{@task_detail.summary.run_count} runs</span>
+          <span class="badge badge-outline">{@task_detail.summary.artifact_count} artifacts</span>
+        </div>
+        <p class="text-sm text-base-content/60">
+          Last activity: {fmt_dt(@task_detail.summary.latest_activity_at)}
+        </p>
+      </div>
+
+      <div class="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_22rem]">
+        <div class="space-y-6">
+          <section class="rounded-box border border-base-300 bg-base-100 p-4">
+            <div class="mb-3 flex items-center justify-between gap-2">
+              <div>
+                <h3 class="font-semibold">Live runs</h3>
+                <p class="text-xs text-base-content/60">
+                  Current in-memory run state from the execution plane.
+                </p>
+              </div>
+            </div>
+
+            <div :if={@task_detail.runs == []} class="text-sm text-base-content/60">
+              No active runs recorded for this task.
+            </div>
+
+            <div
+              :for={run <- @task_detail.runs}
+              class="mb-3 rounded-box border border-base-300 bg-base-200/40 p-3 last:mb-0"
+            >
+              <div class="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <p class="font-mono text-xs text-primary">{run.id}</p>
+                  <p class="mt-1 text-xs text-base-content/60">
+                    runner {run.runner_type} • started {fmt_dt(run.started_at || run.inserted_at)}
+                  </p>
+                </div>
+                <div class="flex items-center gap-2">
+                  <span class={run_status_class(run.status)}>{run.status}</span>
+                  <span class={ctx_status_class(run.ctx_status)}>ctx {run.ctx_status}</span>
+                </div>
+              </div>
+
+              <div :if={active_run?(run)} class="mt-3 flex flex-wrap gap-2">
+                <button
+                  class="btn btn-xs btn-outline"
+                  phx-click="request_stop"
+                  phx-value-run_id={run.id}
+                >
+                  Stop
+                </button>
+                <button
+                  class="btn btn-xs btn-error btn-outline"
+                  phx-click="force_stop"
+                  phx-value-run_id={run.id}
+                >
+                  Force kill
+                </button>
+              </div>
+            </div>
+          </section>
+
+          <section class="rounded-box border border-base-300 bg-base-100 p-4">
+            <div class="mb-3">
+              <h3 class="font-semibold">Artifacts + publication</h3>
+              <p class="text-xs text-base-content/60">
+                Shared artifact substrate for task outputs, files, and publish history.
+              </p>
+            </div>
+
+            <div :if={@task_detail.artifacts == []} class="text-sm text-base-content/60">
+              No artifacts registered for this task yet.
+            </div>
+
+            <div
+              :for={artifact <- @task_detail.artifacts}
+              class="mb-3 rounded-box border border-base-300 bg-base-200/40 p-3 last:mb-0"
+            >
+              <div class="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <p class="font-medium">{artifact_name(artifact)}</p>
+                  <p class="mt-1 text-xs text-base-content/60">
+                    {artifact.kind} • {artifact.source} • run {artifact.run_id || "—"}
+                  </p>
+                </div>
+                <span class={publication_status_class(artifact.latest_publication)}>
+                  {publication_status_text(artifact.latest_publication)}
+                </span>
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <div class="space-y-6">
+          <section class="rounded-box border border-base-300 bg-base-100 p-4">
+            <div class="mb-3">
+              <h3 class="font-semibold">Context summary</h3>
+              <p class="text-xs text-base-content/60">
+                Task-scoped context items and the current required version.
+              </p>
+            </div>
+
+            <p class="text-xs text-base-content/60">
+              Version: {(@task_detail.context_session && @task_detail.context_session.version) ||
+                0} • Required: {(@task_detail.context_session &&
+                                   @task_detail.context_session.required_version) || 0}
+            </p>
+
+            <div :if={@task_detail.context_items == []} class="mt-3 text-sm text-base-content/60">
+              No task-scoped context items yet.
+            </div>
+
+            <div
+              :for={item <- @task_detail.context_items}
+              class="mt-3 rounded-box border border-base-300 bg-base-200/40 p-3"
+            >
+              <div class="flex items-center justify-between gap-2">
+                <p class="font-mono text-xs text-primary">{item.key}</p>
+                <span class="badge badge-ghost badge-sm">{item.kind}</span>
+              </div>
+              <pre class="mt-2 overflow-x-auto whitespace-pre-wrap text-xs text-base-content/80">{item_value_preview(item)}</pre>
+            </div>
+          </section>
+
+          <section class="rounded-box border border-base-300 bg-base-100 p-4">
+            <div class="mb-3">
+              <h3 class="font-semibold">What changed</h3>
+              <p class="text-xs text-base-content/60">Recent task-scoped context deltas.</p>
+            </div>
+
+            <div :if={@task_detail.recent_deltas == []} class="text-sm text-base-content/60">
+              No recent task-scoped deltas.
+            </div>
+
+            <div
+              :for={delta <- @task_detail.recent_deltas}
+              class="mb-3 rounded-box border border-base-300 bg-base-200/40 p-3 last:mb-0"
+            >
+              <div class="flex items-center justify-between gap-2">
+                <span class="badge badge-outline">v{delta.version}</span>
+                <span class="text-xs text-base-content/60">{delta_summary(delta)}</span>
+              </div>
+              <div class="mt-2 text-xs text-base-content/70">
+                puts: {Enum.join(Map.keys(delta.puts || %{}), ", ") |> blank_to_em_dash()}
+              </div>
+              <div class="mt-1 text-xs text-base-content/70">
+                deletes: {Enum.join(delta.deletes || [], ", ") |> blank_to_em_dash()}
+              </div>
+            </div>
+          </section>
+        </div>
+      </div>
+    </div>
+  </section>
+</div>
