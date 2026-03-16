@@ -40,6 +40,8 @@ defmodule PlatformWeb.Router do
       layout: {PlatformWeb.Layouts, :shell} do
       live("/chat", ChatLive, :index)
       live("/chat/:space_slug", ChatLive, :show)
+      live("/tasks", TasksLive, :index)
+      live("/tasks/:task_id", TasksLive, :show)
       live("/control", ControlCenterLive, :index)
       live("/control/:agent_slug", ControlCenterLive, :show)
     end
