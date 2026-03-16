@@ -471,13 +471,37 @@ use `artifact.latest_publication` from the hydrated struct.
 
 ---
 
+## Proof-of-Life Run (Milestone Landed)
+
+`Platform.Execution.ProofRun` closes the first end-to-end loop:
+
+1. `start_run/2` → `RunSupervisor` → `RunServer` (context plane opened)
+2. `transition` through `starting` → `running`
+3. `push_context` injects task metadata into the run scope
+4. `LocalWorkspace.ensure_workspace` allocates a per-run directory
+5. `LocalWorkspace.setup_git_worktree` creates a git worktree at `{workspace}/git`
+6. Writes a timestamped entry to `docs/proof-of-life.md`
+7. Runs `git status --short` as the verification command
+8. `register_artifact` (verification output, branch ref) → mirrors to context
+9. `LocalWorkspace.push_branch` pushes with an optional `CredentialLease`
+10. `transition(:completed)` closes the run cleanly
+
+All results surface automatically: artifact registration → PubSub broadcast →
+`TasksLive` reload. The Tasks UI now shows a **Launch proof run** button, branch
+ref, verification output, and push status without any additional wiring.
+
+`Platform.Tasks.launch_proof_run/2` exposes this path as a single public
+function, and `PlatformWeb.TasksLive` handles the `launch_proof_run` event,
+running the proof flow in a `Task` to keep the LiveView responsive.
+
+---
+
 ## Future Work
 
 - **suite-runnerd binary:** implement the companion service that executes
   `docker run` from the BEAM-generated spawn payload
 - **Runner image:** non-root base image with agent binaries, published to a
   verified registry
-- **Proof-of-life integration test:** end-to-end Docker runner → GitHub branch push
 - **Vault credential leasing:** replace config-backed `CredentialLease` with
   short-lived GitHub App installation tokens from `Platform.Vault`
 - **GitHub push verification:** record the pushed branch HEAD SHA as an

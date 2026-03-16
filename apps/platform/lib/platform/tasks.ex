@@ -12,11 +12,17 @@ defmodule Platform.Tasks do
     * task-scoped context summary and recent deltas
     * artifact + publication history
     * operator stop / kill actions routed through `Platform.Execution`
+
+  ## Proof-of-life run
+
+  `launch_proof_run/2` wires together the execution/context/artifact planes for
+  an end-to-end proof that the product plumbing works. See
+  `Platform.Execution.ProofRun` for the full orchestration details.
   """
 
   alias Platform.{Artifacts, Context, Execution}
   alias Platform.Context.Session
-  alias Platform.Execution.Run
+  alias Platform.Execution.{ProofRun, Run}
 
   defmodule Summary do
     @moduledoc false
@@ -27,7 +33,10 @@ defmodule Platform.Tasks do
               latest_run: nil,
               latest_activity_at: nil,
               context_version: nil,
-              context_status: :empty
+              context_status: :empty,
+              proof_branch: nil,
+              proof_verification: nil,
+              proof_pushed: false
   end
 
   defmodule Detail do
@@ -77,11 +86,37 @@ defmodule Platform.Tasks do
     end
   end
 
+  alias Platform.Tasks.ProofOfLife
+
+  @doc """
+  Launches a proof-of-life run for `task_id`.
+
+  Delegates to `Platform.Execution.ProofRun.run/2` which creates a run, makes
+  a deterministic repo change, runs verification, and registers artifacts. All
+  results surface back in the Tasks UI automatically through PubSub.
+
+  Options are forwarded to `ProofRun.run/2`; see that module for the full list.
+  """
+  @spec launch_proof_run(String.t(), keyword()) ::
+          {:ok, ProofRun.result()} | {:error, term()}
+  def launch_proof_run(task_id, opts \\ []) when is_binary(task_id) do
+    ProofRun.run(task_id, opts)
+  end
+
   @spec request_stop(String.t()) :: {:ok, Run.t()} | {:error, term()}
   def request_stop(run_id), do: Execution.request_stop(run_id)
 
   @spec force_stop(String.t()) :: {:ok, Run.t()} | {:error, term()}
   def force_stop(run_id), do: Execution.force_stop(run_id)
+
+  @spec bootstrap_proof_of_life_task(keyword()) :: {:ok, String.t()} | {:error, term()}
+  def bootstrap_proof_of_life_task(opts \\ []), do: ProofOfLife.bootstrap_task(opts)
+
+  @spec approve_proof_of_life_plan(String.t()) :: {:ok, non_neg_integer()} | {:error, term()}
+  def approve_proof_of_life_plan(task_id), do: ProofOfLife.approve_plan(task_id)
+
+  @spec launch_proof_of_life(String.t(), keyword()) :: {:ok, Run.t()} | {:error, term()}
+  def launch_proof_of_life(task_id, opts \\ []), do: ProofOfLife.launch(task_id, opts)
 
   @spec subscribe(String.t()) :: :ok
   def subscribe(task_id) do
@@ -102,7 +137,7 @@ defmodule Platform.Tasks do
   defp build_summary(task_id, active_runs, artifacts) do
     runs = runs_for_task(active_runs, task_id)
     task_artifacts = Enum.filter(artifacts, &(&1.task_id == task_id))
-    {context_session, _items, _deltas} = context_detail(task_id)
+    {context_session, items, _deltas} = context_detail(task_id)
 
     latest_run = List.first(Enum.sort_by(runs, &run_sort_key/1, :desc))
 
@@ -115,6 +150,9 @@ defmodule Platform.Tasks do
       |> Enum.reject(&is_nil/1)
       |> Enum.max(DateTime, fn -> nil end)
 
+    # Extract proof-of-life state from context items written by ProofRun
+    proof_state = extract_proof_state(items)
+
     %Summary{
       task_id: task_id,
       run_count: length(runs),
@@ -123,7 +161,21 @@ defmodule Platform.Tasks do
       latest_run: latest_run,
       latest_activity_at: latest_activity_at,
       context_version: context_session && context_session.version,
-      context_status: context_status(context_session)
+      context_status: context_status(context_session),
+      proof_branch: proof_state.branch,
+      proof_verification: proof_state.verification,
+      proof_pushed: proof_state.pushed
+    }
+  end
+
+  defp extract_proof_state(items) do
+    item_map =
+      Map.new(items, fn item -> {item.key, item.value} end)
+
+    %{
+      branch: Map.get(item_map, "proof_run.branch"),
+      verification: Map.get(item_map, "proof_run.verification_output"),
+      pushed: Map.get(item_map, "proof_run.pushed") == "true"
     }
   end
 

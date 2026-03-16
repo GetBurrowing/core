@@ -1,6 +1,8 @@
 defmodule PlatformWeb.TasksLive do
   use PlatformWeb, :live_view
 
+  require Logger
+
   alias Platform.Tasks
   alias Platform.Tasks.Detail
   alias Platform.Execution.Run
@@ -17,6 +19,7 @@ defmodule PlatformWeb.TasksLive do
      |> assign(:selected_task_id, nil)
      |> assign(:task_detail, nil)
      |> assign(:subscribed_task_id, nil)
+     |> assign(:proof_run_loading, false)
      |> assign(
        :explanation,
        "Tasks UI MVP is currently a read-side over execution/context/artifact state while the persistent Tasks domain is still being built."
@@ -64,7 +67,51 @@ defmodule PlatformWeb.TasksLive do
     {:noreply, reload_selected_task(socket)}
   end
 
+  def handle_event("launch_proof_run", %{"task_id" => task_id}, socket) do
+    socket = assign(socket, :proof_run_loading, true)
+
+    # Run in a Task so the LiveView stays responsive during execution
+    parent = self()
+
+    Task.start(fn ->
+      repo_path = Application.get_env(:platform, :execution, []) |> Keyword.get(:proof_repo_path)
+      branch = "proof-of-life/#{task_id}"
+
+      opts =
+        [branch: branch]
+        |> then(fn o -> if repo_path, do: Keyword.put(o, :repo_path, repo_path), else: o end)
+
+      result = Tasks.launch_proof_run(task_id, opts)
+      send(parent, {:proof_run_complete, task_id, result})
+    end)
+
+    {:noreply, socket}
+  end
+
   @impl true
+  def handle_info({:proof_run_complete, _task_id, {:ok, result}}, socket) do
+    branch = result.branch || "(no branch)"
+    pushed = if result.pushed, do: "pushed", else: "not pushed"
+
+    socket =
+      socket
+      |> assign(:proof_run_loading, false)
+      |> put_flash(:info, "Proof run complete — branch: #{branch} (#{pushed})")
+      |> reload_selected_task()
+
+    {:noreply, socket}
+  end
+
+  def handle_info({:proof_run_complete, _task_id, {:error, reason}}, socket) do
+    socket =
+      socket
+      |> assign(:proof_run_loading, false)
+      |> put_flash(:error, "Proof run failed: #{inspect(reason)}")
+      |> reload_selected_task()
+
+    {:noreply, socket}
+  end
+
   def handle_info({:artifact_registered, _artifact}, socket),
     do: {:noreply, reload_selected_task(socket)}
 
