@@ -37,6 +37,13 @@ defmodule PlatformWeb.ChatLiveTest do
     init_test_session(conn, current_user_id: user.id)
   end
 
+  defp count_occurrences(haystack, needle) do
+    haystack
+    |> String.split(needle)
+    |> length()
+    |> Kernel.-(1)
+  end
+
   test "GET /chat redirects unauthenticated users to login", %{conn: conn} do
     conn = get(conn, ~p"/chat")
     assert redirected_to(conn) == "/auth/login"
@@ -61,16 +68,18 @@ defmodule PlatformWeb.ChatLiveTest do
     assert html =~ "/control"
   end
 
-  test "sending a message renders it in the chat", %{conn: conn} do
+  test "sending a message renders it once in the chat", %{conn: conn} do
     conn = authenticated_conn(conn)
     {:ok, view, _html} = live(conn, ~p"/chat/general")
 
-    html =
-      view
-      |> form("#compose-form", compose: %{text: "hello from test"})
-      |> render_submit()
+    view
+    |> form("#compose-form", compose: %{text: "hello from test"})
+    |> render_submit()
+
+    html = render(view)
 
     assert html =~ "hello from test"
+    assert count_occurrences(html, "hello from test") == 1
   end
 
   test "shows the native agent as online only when the runtime is reachable", %{conn: conn} do
@@ -300,7 +309,7 @@ defmodule PlatformWeb.ChatLiveTest do
       refute html =~ "thread-compose-form"
     end
 
-    test "posting a thread reply appears in thread panel", %{conn: conn} do
+    test "posting a thread reply appears once in thread panel", %{conn: conn} do
       conn = authenticated_conn(conn)
       {:ok, view, _html} = live(conn, ~p"/chat/general")
 
@@ -313,12 +322,81 @@ defmodule PlatformWeb.ChatLiveTest do
 
       render_click(view, "open_thread", %{"message_id" => msg.id})
 
-      html =
-        view
-        |> form("#thread-compose-form", thread_compose: %{text: "thread reply"})
-        |> render_submit()
+      view
+      |> form("#thread-compose-form", thread_compose: %{text: "thread reply"})
+      |> render_submit()
+
+      html = render(view)
 
       assert html =~ "thread reply"
+      assert count_occurrences(html, "thread reply") == 1
+    end
+
+    test "channel feed excludes thread replies on reload", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/chat/general")
+
+      view
+      |> form("#compose-form", compose: %{text: "root for top-level feed"})
+      |> render_submit()
+
+      space = Chat.get_space_by_slug("general")
+      [msg | _] = Chat.list_messages(space.id)
+
+      render_click(view, "open_thread", %{"message_id" => msg.id})
+
+      view
+      |> form("#thread-compose-form",
+        thread_compose: %{text: "thread reply should stay in thread"}
+      )
+      |> render_submit()
+
+      {:ok, _reloaded, html} = live(conn, ~p"/chat/general")
+
+      assert html =~ "root for top-level feed"
+      refute html =~ "thread reply should stay in thread"
+    end
+  end
+
+  describe "timestamps" do
+    test "channel messages render LocalTime hook metadata", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/chat/general")
+
+      view
+      |> form("#compose-form", compose: %{text: "timestamp channel message"})
+      |> render_submit()
+
+      html = render(view)
+
+      assert html =~ "timestamp channel message"
+      assert html =~ "phx-hook=\"LocalTime\""
+      assert html =~ "data-local-time="
+      assert html =~ "datetime="
+    end
+
+    test "thread replies render LocalTime hook metadata", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/chat/general")
+
+      view
+      |> form("#compose-form", compose: %{text: "timestamp root"})
+      |> render_submit()
+
+      space = Chat.get_space_by_slug("general")
+      [msg | _] = Chat.list_messages(space.id)
+
+      render_click(view, "open_thread", %{"message_id" => msg.id})
+
+      view
+      |> form("#thread-compose-form", thread_compose: %{text: "timestamp thread reply"})
+      |> render_submit()
+
+      html = render(view)
+
+      assert html =~ "timestamp thread reply"
+      assert Regex.match?(~r/id="thread-messages"[\s\S]*phx-hook="LocalTime"/, html)
+      assert Regex.match?(~r/id="thread-messages"[\s\S]*data-local-time=/, html)
     end
   end
 

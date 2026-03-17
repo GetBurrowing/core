@@ -121,10 +121,7 @@ defmodule PlatformWeb.ChatLive do
         })
       end
 
-      messages =
-        space.id
-        |> Chat.list_messages(limit: @message_limit)
-        |> Enum.reverse()
+      messages = load_channel_messages(space.id)
 
       participants = Chat.list_participants(space.id)
       participants_map = Map.new(participants, fn p -> {p.id, p.display_name || "User"} end)
@@ -825,7 +822,10 @@ defmodule PlatformWeb.ChatLive do
               >
                 <div class="flex flex-wrap items-center gap-2 text-[11px] uppercase tracking-widest text-base-content/50">
                   <span>{sender_name(@participants_map, result.participant_id)}</span>
-                  <span>{format_timestamp(result.inserted_at)}</span>
+                  <.local_time
+                    id={"search-time-#{result.id}"}
+                    timestamp={result.inserted_at}
+                  />
                   <span
                     :if={is_binary(result.thread_id)}
                     class="rounded-full bg-base-300 px-2 py-0.5 normal-case tracking-normal text-[10px]"
@@ -997,9 +997,11 @@ defmodule PlatformWeb.ChatLive do
                 <span class="text-xs font-semibold text-primary">
                   {sender_name(@participants_map, msg.participant_id)}
                 </span>
-                <span class="text-[10px] text-base-content/40">
-                  {format_timestamp(msg.inserted_at)}
-                </span>
+                <.local_time
+                  id={"message-time-#{msg.id}"}
+                  timestamp={msg.inserted_at}
+                  class="text-[10px] text-base-content/40"
+                />
 
                 <div class="ml-auto hidden group-hover:flex items-center gap-1">
                   <button
@@ -1233,9 +1235,11 @@ defmodule PlatformWeb.ChatLive do
                 <span class="text-xs font-semibold text-primary">
                   {sender_name(@participants_map, msg.participant_id)}
                 </span>
-                <span class="text-[10px] text-base-content/40">
-                  {format_timestamp(msg.inserted_at)}
-                </span>
+                <.local_time
+                  id={"thread-message-time-#{msg.id}"}
+                  timestamp={msg.inserted_at}
+                  class="text-[10px] text-base-content/40"
+                />
               </div>
 
               <p :if={present?(msg.content)} class="text-sm leading-6 text-base-content">
@@ -1650,10 +1654,35 @@ defmodule PlatformWeb.ChatLive do
     Map.put(reactions_map, msg_id, updated)
   end
 
+  defp load_channel_messages(space_id) do
+    space_id
+    |> Chat.list_messages(limit: @message_limit, top_level_only: true)
+    |> Enum.reverse()
+  end
+
   defp load_thread_messages(space_id, thread_id) do
     space_id
     |> Chat.list_messages(thread_id: thread_id, limit: 100)
     |> Enum.reverse()
+  end
+
+  attr :id, :string, required: true
+  attr :timestamp, :any, default: nil
+  attr :class, :string, default: nil
+
+  defp local_time(assigns) do
+    ~H"""
+    <time
+      :if={match?(%DateTime{}, @timestamp)}
+      id={@id}
+      datetime={DateTime.to_iso8601(@timestamp)}
+      data-local-time={DateTime.to_iso8601(@timestamp)}
+      phx-hook="LocalTime"
+      class={@class}
+    >
+      {format_timestamp(@timestamp)}
+    </time>
+    """
   end
 
   defp post_message_from_upload(socket, upload_name, attrs) do
@@ -1670,7 +1699,7 @@ defmodule PlatformWeb.ChatLive do
       true ->
         case persist_uploaded_attachments(socket, upload_name) do
           {:ok, pending_attachments} ->
-            case Chat.post_message_with_attachments(attrs, pending_attachments) do
+            case Chat.post_message_with_attachments(attrs, pending_attachments, from_pid: self()) do
               {:ok, msg, saved_attachments} ->
                 {:ok, socket, msg, saved_attachments}
 

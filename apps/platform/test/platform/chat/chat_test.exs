@@ -97,6 +97,28 @@ defmodule Platform.ChatTest do
       assert length(thread_msgs) == 1
       assert hd(thread_msgs).id == reply.id
     end
+
+    test "list_messages/2 with top_level_only excludes thread replies" do
+      space = create_space()
+      participant = create_participant(space.id)
+      top_level = create_message(space.id, participant.id, %{content: "top-level"})
+
+      {:ok, thread} = Chat.create_thread(space.id, %{parent_message_id: top_level.id})
+
+      {:ok, _reply} =
+        Chat.post_message(%{
+          space_id: space.id,
+          thread_id: thread.id,
+          participant_id: participant.id,
+          content_type: "text",
+          content: "thread-only"
+        })
+
+      channel_messages = Chat.list_messages(space.id, top_level_only: true)
+
+      assert Enum.map(channel_messages, & &1.id) == [top_level.id]
+      assert Enum.all?(channel_messages, &is_nil(&1.thread_id))
+    end
   end
 
   # ── Reactions ─────────────────────────────────────────────────────────────────
