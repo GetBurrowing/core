@@ -4,14 +4,17 @@ defmodule PlatformWeb.ControlCenterLive do
   import Ecto.Query
 
   alias Ecto.Adapters.SQL.Sandbox
+  alias Ecto.Multi
 
   alias Platform.Agents.{
     Agent,
     AgentServer,
+    ContextShare,
     Memory,
     MemoryContext,
     Router,
     Session,
+    WorkspaceBootstrap,
     WorkspaceFile
   }
 
@@ -53,19 +56,26 @@ defmodule PlatformWeb.ControlCenterLive do
      |> assign(:agent_credentials, [])
      |> assign(:platform_credentials, [])
      |> assign(:config_form, to_form(%{}, as: :config))
+     |> assign(:create_agent_form, to_form(default_create_agent_params(), as: :create_agent))
      |> assign(:memory_form, to_form(default_memory_entry(), as: :memory_entry))
-     |> assign(:agent_status, :unknown)}
+     |> assign(:agent_status, :unknown)
+     |> assign(:selected_agent_directory_entry, nil)}
   end
 
   @impl true
   def handle_params(params, _url, socket) do
     agents = list_agents()
-    selected_agent = resolve_selected_agent(params["agent_slug"], agents)
+    selected_slug = resolve_selected_agent_slug(params["agent_slug"], agents)
+    selected_agent = selected_slug && ensure_selected_agent(selected_slug, agents)
+    agents = list_agents()
+    selected_agent = selected_agent && Repo.get(Agent, selected_agent.id)
+    selected_entry = selected_agent && find_agent_directory_entry(agents, selected_agent.slug)
 
     socket =
       socket
       |> assign(:agents, agents)
       |> assign(:selected_agent, selected_agent)
+      |> assign(:selected_agent_directory_entry, selected_entry)
 
     {:noreply,
      if selected_agent do
@@ -177,6 +187,75 @@ defmodule PlatformWeb.ControlCenterLive do
   end
 
   def handle_event("save_config", _params, socket), do: {:noreply, socket}
+
+  def handle_event("create_agent", %{"create_agent" => params}, socket) do
+    attrs = create_agent_attrs_from_params(params)
+
+    case %Agent{} |> Agent.changeset(attrs) |> Repo.insert() do
+      {:ok, agent} ->
+        {:noreply,
+         socket
+         |> put_flash(:info, "Created #{agent.name}.")
+         |> assign(:create_agent_form, to_form(default_create_agent_params(), as: :create_agent))
+         |> push_patch(to: ~p"/control/#{agent.slug}")}
+
+      {:error, %Ecto.Changeset{} = changeset} ->
+        {:noreply,
+         socket
+         |> assign(:create_agent_form, build_create_agent_form(params))
+         |> put_flash(:error, changeset_error_summary(changeset))}
+    end
+  end
+
+  def handle_event("create_agent", _params, socket), do: {:noreply, socket}
+
+  def handle_event(
+        "delete_agent",
+        _params,
+        %{assigns: %{selected_agent: %Agent{} = agent, selected_agent_directory_entry: entry}} =
+          socket
+      ) do
+    cond do
+      entry && entry.workspace_managed? ->
+        {:noreply,
+         put_flash(
+           socket,
+           :error,
+           "This agent is managed by the mounted workspace config. Remove it there to delete it permanently."
+         )}
+
+      true ->
+        case delete_agent(agent) do
+          :ok ->
+            next_slug =
+              list_agents()
+              |> Enum.reject(&(&1.slug == agent.slug))
+              |> List.first()
+              |> case do
+                nil -> nil
+                next -> next.slug
+              end
+
+            socket =
+              socket
+              |> put_flash(:info, "Deleted #{agent.name}.")
+              |> assign(:selected_agent, nil)
+              |> assign(:selected_agent_directory_entry, nil)
+
+            {:noreply,
+             if next_slug do
+               push_patch(socket, to: ~p"/control/#{next_slug}")
+             else
+               push_patch(socket, to: ~p"/control")
+             end}
+
+          {:error, reason} ->
+            {:noreply, put_flash(socket, :error, "Could not delete agent: #{inspect(reason)}")}
+        end
+    end
+  end
+
+  def handle_event("delete_agent", _params, socket), do: {:noreply, socket}
 
   def handle_event("select_workspace_file", %{"file_key" => file_key}, socket) do
     {:noreply,
@@ -332,9 +411,12 @@ defmodule PlatformWeb.ControlCenterLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <div class="flex h-full overflow-hidden bg-base-100">
-      <aside class="flex w-72 flex-shrink-0 flex-col border-r border-base-300 bg-base-200/60">
-        <div class="border-b border-base-300 px-4 py-4">
+    <div class="flex min-h-full flex-col bg-base-100 lg:h-full lg:flex-row lg:overflow-hidden">
+      <aside
+        id="agent-directory"
+        class="flex w-full flex-col border-b border-base-300 bg-base-200/60 lg:w-80 lg:flex-shrink-0 lg:border-b-0 lg:border-r"
+      >
+        <div class="border-b border-base-300 px-4 py-4 sm:px-5">
           <p class="text-xs font-semibold uppercase tracking-widest text-base-content/50">
             Agent Control Center
           </p>
@@ -343,15 +425,125 @@ defmodule PlatformWeb.ControlCenterLive do
           </p>
         </div>
 
-        <nav class="flex-1 overflow-y-auto px-2 py-3">
+        <div class="border-b border-base-300 px-4 py-4 sm:px-5">
+          <.form
+            for={@create_agent_form}
+            id="create-agent-form"
+            phx-submit="create_agent"
+            class="space-y-3"
+          >
+            <div class="flex items-center justify-between gap-3">
+              <div>
+                <p class="text-sm font-semibold text-base-content">Create agent</p>
+                <p class="text-xs text-base-content/55">
+                  Add a runtime-managed agent without leaving Control Center.
+                </p>
+              </div>
+            </div>
+
+            <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-1">
+              <label class="form-control">
+                <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
+                  Name
+                </span>
+                <input
+                  type="text"
+                  name="create_agent[name]"
+                  value={@create_agent_form[:name].value || ""}
+                  class="input input-bordered w-full"
+                  placeholder="Research Agent"
+                />
+              </label>
+
+              <label class="form-control">
+                <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
+                  Slug
+                </span>
+                <input
+                  type="text"
+                  name="create_agent[slug]"
+                  value={@create_agent_form[:slug].value || ""}
+                  class="input input-bordered w-full"
+                  placeholder="research-agent"
+                />
+              </label>
+
+              <label class="form-control sm:col-span-2 lg:col-span-1">
+                <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
+                  Primary model
+                </span>
+                <input
+                  type="text"
+                  name="create_agent[primary_model]"
+                  value={@create_agent_form[:primary_model].value || ""}
+                  class="input input-bordered w-full"
+                  placeholder="anthropic/claude-sonnet-4-6"
+                />
+              </label>
+            </div>
+
+            <div class="grid gap-3 sm:grid-cols-3 lg:grid-cols-1 xl:grid-cols-3">
+              <label class="form-control">
+                <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
+                  Status
+                </span>
+                <select name="create_agent[status]" class="select select-bordered w-full">
+                  <option
+                    :for={status <- ["active", "paused", "archived"]}
+                    selected={@create_agent_form[:status].value == status}
+                    value={status}
+                  >
+                    {humanize_value(status)}
+                  </option>
+                </select>
+              </label>
+
+              <label class="form-control">
+                <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
+                  Max
+                </span>
+                <input
+                  type="number"
+                  min="1"
+                  name="create_agent[max_concurrent]"
+                  value={@create_agent_form[:max_concurrent].value || 1}
+                  class="input input-bordered w-full"
+                />
+              </label>
+
+              <label class="form-control">
+                <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
+                  Sandbox
+                </span>
+                <select name="create_agent[sandbox_mode]" class="select select-bordered w-full">
+                  <option
+                    :for={mode <- ["off", "inherit", "require"]}
+                    selected={(@create_agent_form[:sandbox_mode].value || "off") == mode}
+                    value={mode}
+                  >
+                    {mode}
+                  </option>
+                </select>
+              </label>
+            </div>
+
+            <button type="submit" class="btn btn-neutral w-full">Create agent</button>
+          </.form>
+        </div>
+
+        <nav
+          id="agent-list"
+          class="flex-1 overflow-y-auto px-3 py-3 sm:px-4"
+          data-mobile-layout="stacked"
+        >
           <.link
             :for={agent <- @agents}
             patch={~p"/control/#{agent.slug}"}
             class={[
-              "mb-2 block rounded-2xl border px-3 py-3 text-left transition-colors",
-              @selected_agent && @selected_agent.id == agent.id &&
+              "mb-3 block rounded-2xl border px-3 py-3 text-left transition-colors",
+              @selected_agent && @selected_agent.slug == agent.slug &&
                 "border-primary bg-primary/5 shadow-sm",
-              (!@selected_agent || @selected_agent.id != agent.id) &&
+              (!@selected_agent || @selected_agent.slug != agent.slug) &&
                 "border-base-300 bg-base-100 hover:border-primary/30 hover:bg-base-100/80"
             ]}
           >
@@ -365,10 +557,13 @@ defmodule PlatformWeb.ControlCenterLive do
 
             <div class="mt-3 flex flex-wrap gap-2 text-[11px] text-base-content/55">
               <span class="rounded-full bg-base-200 px-2 py-0.5">
-                {primary_model_label(agent)}
+                {agent.primary_model}
               </span>
               <span class="rounded-full bg-base-200 px-2 py-0.5">
                 max {agent.max_concurrent || 1}
+              </span>
+              <span class={source_badge_class(agent.source)}>
+                {humanize_value(agent.source_label)}
               </span>
             </div>
           </.link>
@@ -383,7 +578,10 @@ defmodule PlatformWeb.ControlCenterLive do
       </aside>
 
       <main class="flex-1 overflow-y-auto">
-        <div :if={@selected_agent} class="mx-auto flex max-w-7xl flex-col gap-6 px-6 py-6">
+        <div
+          :if={@selected_agent}
+          class="mx-auto flex max-w-7xl flex-col gap-6 px-4 py-4 sm:px-6 sm:py-6"
+        >
           <section class="rounded-3xl border border-base-300 bg-base-100 p-5 shadow-sm">
             <div class="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
               <div class="min-w-0">
@@ -396,6 +594,12 @@ defmodule PlatformWeb.ControlCenterLive do
                   </span>
                   <span class={runtime_badge_class(@runtime.status)}>
                     Runtime {humanize_value(@runtime.status)}
+                  </span>
+                  <span
+                    :if={@selected_agent_directory_entry}
+                    class={source_badge_class(@selected_agent_directory_entry.source)}
+                  >
+                    {humanize_value(@selected_agent_directory_entry.source_label)}
                   </span>
                 </div>
                 <p class="mt-1 text-sm text-base-content/60">{@selected_agent.slug}</p>
@@ -412,12 +616,16 @@ defmodule PlatformWeb.ControlCenterLive do
                 </div>
               </div>
 
-              <div class="flex flex-wrap gap-2">
+              <div
+                id="agent-primary-actions"
+                class="grid w-full grid-cols-1 gap-2 sm:w-auto sm:grid-cols-2 xl:grid-cols-4"
+                data-mobile-actions="stacked"
+              >
                 <button
                   id="start-runtime"
                   type="button"
                   phx-click="start_runtime"
-                  class="btn btn-primary btn-sm"
+                  class="btn btn-primary btn-sm w-full"
                   disabled={@runtime.running?}
                 >
                   Start runtime
@@ -426,7 +634,7 @@ defmodule PlatformWeb.ControlCenterLive do
                   id="refresh-runtime"
                   type="button"
                   phx-click="refresh_runtime"
-                  class="btn btn-ghost btn-sm"
+                  class="btn btn-ghost btn-sm w-full"
                 >
                   Refresh runtime
                 </button>
@@ -434,10 +642,23 @@ defmodule PlatformWeb.ControlCenterLive do
                   id="stop-runtime"
                   type="button"
                   phx-click="stop_runtime"
-                  class="btn btn-ghost btn-sm text-error"
+                  class="btn btn-ghost btn-sm w-full text-error"
                   disabled={!@runtime.running?}
                 >
                   Stop runtime
+                </button>
+                <button
+                  id="delete-agent"
+                  type="button"
+                  phx-click="delete_agent"
+                  data-confirm="Delete this agent and its persisted state?"
+                  class="btn btn-ghost btn-sm w-full text-error"
+                  disabled={
+                    @selected_agent_directory_entry &&
+                      @selected_agent_directory_entry.workspace_managed?
+                  }
+                >
+                  Delete agent
                 </button>
               </div>
             </div>
@@ -588,6 +809,16 @@ defmodule PlatformWeb.ControlCenterLive do
                     </label>
                   </div>
 
+                  <p
+                    :if={
+                      @selected_agent_directory_entry &&
+                        @selected_agent_directory_entry.workspace_managed?
+                    }
+                    class="rounded-2xl border border-base-300 bg-base-200/50 px-3 py-2 text-sm text-base-content/65"
+                  >
+                    This agent is sourced from the mounted workspace config. Use the workspace to remove it permanently.
+                  </p>
+
                   <div class="rounded-2xl border border-base-300 bg-base-200/50 p-4">
                     <p class="text-xs font-semibold uppercase tracking-widest text-base-content/50">
                       Resolved model chain
@@ -608,8 +839,10 @@ defmodule PlatformWeb.ControlCenterLive do
                     </div>
                   </div>
 
-                  <div class="flex justify-end">
-                    <button type="submit" class="btn btn-neutral">Save config</button>
+                  <div class="flex justify-stretch sm:justify-end">
+                    <button type="submit" class="btn btn-neutral w-full sm:w-auto">
+                      Save config
+                    </button>
                   </div>
                 </.form>
               </section>
@@ -696,11 +929,13 @@ defmodule PlatformWeb.ControlCenterLive do
                       >{@workspace_form[:content].value || ""}</textarea>
                     </div>
 
-                    <div class="flex items-center justify-between gap-3">
+                    <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                       <p class="text-xs text-base-content/50">
                         {workspace_hint(@selected_workspace_file, @workspace_form[:file_key].value)}
                       </p>
-                      <button type="submit" class="btn btn-neutral">Save file</button>
+                      <button type="submit" class="btn btn-neutral w-full sm:w-auto">
+                        Save file
+                      </button>
                     </div>
                   </.form>
                 </div>
@@ -1034,8 +1269,10 @@ defmodule PlatformWeb.ControlCenterLive do
     |> assign(:agent_credentials, [])
     |> assign(:platform_credentials, [])
     |> assign(:config_form, to_form(%{}, as: :config))
+    |> assign(:create_agent_form, to_form(default_create_agent_params(), as: :create_agent))
     |> assign(:memory_form, to_form(default_memory_entry(), as: :memory_entry))
     |> assign(:agent_status, :unknown)
+    |> assign(:selected_agent_directory_entry, nil)
   end
 
   defp assign_agent_panel(socket, %Agent{} = agent, opts) do
@@ -1089,6 +1326,10 @@ defmodule PlatformWeb.ControlCenterLive do
     |> assign(:agent_credentials, agent_credentials)
     |> assign(:platform_credentials, platform_credentials)
     |> assign(:config_form, build_config_form(agent, Keyword.get(opts, :config_params, %{})))
+    |> assign(
+      :selected_agent_directory_entry,
+      find_agent_directory_entry(socket.assigns.agents, agent.slug)
+    )
     |> assign(:memory_form, build_memory_form(Keyword.get(opts, :memory_params)))
     |> assign(:agent_status, runtime.status)
   end
@@ -1097,26 +1338,89 @@ defmodule PlatformWeb.ControlCenterLive do
 
   defp reload_selected_agent(%{assigns: %{selected_agent: %Agent{} = agent}} = socket, opts) do
     refreshed_agent = Repo.get!(Agent, agent.id)
+    agents = list_agents()
 
     socket
-    |> assign(:agents, list_agents())
+    |> assign(:agents, agents)
     |> assign(:selected_agent, refreshed_agent)
+    |> assign(
+      :selected_agent_directory_entry,
+      find_agent_directory_entry(agents, refreshed_agent.slug)
+    )
     |> assign_agent_panel(refreshed_agent, opts)
   end
 
   defp reload_selected_agent(socket, _opts), do: socket
 
   defp list_agents do
+    persisted_agents = list_persisted_agents()
+    persisted_by_slug = Map.new(persisted_agents, &{&1.slug, &1})
+
+    configured_agents =
+      case WorkspaceBootstrap.list_configured_agents() do
+        {:ok, agents} -> agents
+        {:error, _reason} -> []
+      end
+
+    configured_items =
+      Enum.map(configured_agents, fn configured_agent ->
+        case Map.get(persisted_by_slug, configured_agent.id) do
+          %Agent{} = agent ->
+            build_agent_directory_entry(agent, :workspace)
+
+          nil ->
+            build_configured_agent_directory_entry(configured_agent)
+        end
+      end)
+
+    configured_slugs = MapSet.new(configured_items, & &1.slug)
+
+    persisted_items =
+      persisted_agents
+      |> Enum.reject(&MapSet.member?(configured_slugs, &1.slug))
+      |> Enum.map(&build_agent_directory_entry(&1, :database))
+
+    (configured_items ++ persisted_items)
+    |> Enum.sort_by(&{&1.name, &1.slug})
+  end
+
+  defp list_persisted_agents do
     from(a in Agent, order_by: [asc: a.slug])
     |> Repo.all()
   end
 
-  defp resolve_selected_agent(nil, [first | _]), do: first
-  defp resolve_selected_agent(nil, []), do: nil
+  defp resolve_selected_agent_slug(nil, [first | _]), do: first.slug
+  defp resolve_selected_agent_slug(nil, []), do: nil
 
-  defp resolve_selected_agent(slug, agents) do
-    Enum.find(agents, &(&1.slug == slug)) || List.first(agents)
+  defp resolve_selected_agent_slug(slug, agents) do
+    if Enum.any?(agents, &(&1.slug == slug)),
+      do: slug,
+      else: resolve_selected_agent_slug(nil, agents)
   end
+
+  defp ensure_selected_agent(slug, agents) when is_binary(slug) do
+    case find_agent_directory_entry(agents, slug) do
+      %{agent: %Agent{} = agent} ->
+        agent
+
+      %{workspace_managed?: true} ->
+        case WorkspaceBootstrap.ensure_agent(slug: slug) do
+          {:ok, agent} -> agent
+          {:error, _reason} -> Repo.get_by(Agent, slug: slug)
+        end
+
+      _ ->
+        Repo.get_by(Agent, slug: slug)
+    end
+  end
+
+  defp ensure_selected_agent(_slug, _agents), do: nil
+
+  defp find_agent_directory_entry(agents, slug) when is_binary(slug) do
+    Enum.find(agents, &(&1.slug == slug))
+  end
+
+  defp find_agent_directory_entry(_agents, _slug), do: nil
 
   defp runtime_snapshot(%Agent{} = agent) do
     pid = AgentServer.whereis(agent.id)
@@ -1221,6 +1525,10 @@ defmodule PlatformWeb.ControlCenterLive do
     to_form(Map.merge(base, normalize_map(overrides)), as: :config)
   end
 
+  defp build_create_agent_form(overrides) do
+    to_form(Map.merge(default_create_agent_params(), normalize_map(overrides)), as: :create_agent)
+  end
+
   defp build_workspace_form(
          _workspace_files,
          %WorkspaceFile{} = selected_workspace_file,
@@ -1249,6 +1557,17 @@ defmodule PlatformWeb.ControlCenterLive do
 
   defp default_memory_filters do
     %{"type" => "all", "query" => ""}
+  end
+
+  defp default_create_agent_params do
+    %{
+      "name" => "",
+      "slug" => "",
+      "primary_model" => "",
+      "status" => "active",
+      "max_concurrent" => 1,
+      "sandbox_mode" => "off"
+    }
   end
 
   defp default_memory_entry do
@@ -1300,6 +1619,23 @@ defmodule PlatformWeb.ControlCenterLive do
         parse_positive_integer(Map.get(params, "max_concurrent")) || agent.max_concurrent || 1,
       sandbox_mode: blank_fallback(Map.get(params, "sandbox_mode"), agent.sandbox_mode || "off"),
       model_config: updated_model_config
+    }
+  end
+
+  defp create_agent_attrs_from_params(params) do
+    params = normalize_map(params)
+    name = String.trim(Map.get(params, "name", ""))
+    slug = params |> Map.get("slug", "") |> to_string() |> slugify()
+    primary_model = String.trim(Map.get(params, "primary_model", ""))
+
+    %{
+      slug: slug,
+      name: name,
+      status: blank_fallback(Map.get(params, "status"), "active"),
+      max_concurrent: parse_positive_integer(Map.get(params, "max_concurrent")) || 1,
+      sandbox_mode: blank_fallback(Map.get(params, "sandbox_mode"), "off"),
+      model_config:
+        if(primary_model == "", do: %{}, else: %{"primary" => primary_model, "fallbacks" => []})
     }
   end
 
@@ -1382,6 +1718,69 @@ defmodule PlatformWeb.ControlCenterLive do
 
   defp agent_changed?(_socket, _selected_agent), do: true
 
+  defp delete_agent(%Agent{} = agent) do
+    :ok = AgentServer.stop_agent(agent)
+
+    session_ids_query =
+      from(s in Session,
+        where: s.agent_id == ^agent.id,
+        select: s.id
+      )
+
+    Multi.new()
+    |> Multi.delete_all(
+      :context_shares,
+      from(cs in ContextShare,
+        where:
+          cs.from_session_id in subquery(session_ids_query) or
+            cs.to_session_id in subquery(session_ids_query)
+      )
+    )
+    |> Multi.delete_all(:sessions, from(s in Session, where: s.agent_id == ^agent.id))
+    |> Multi.delete(:agent, agent)
+    |> Repo.transaction()
+    |> case do
+      {:ok, _changes} -> :ok
+      {:error, _step, reason, _changes} -> {:error, reason}
+    end
+  end
+
+  defp build_agent_directory_entry(%Agent{} = agent, source) do
+    %{
+      slug: agent.slug,
+      name: agent.name,
+      status: agent.status,
+      max_concurrent: agent.max_concurrent || 1,
+      primary_model: primary_model_label(agent),
+      source: source,
+      source_label: source_label(source),
+      workspace_managed?: source == :workspace,
+      persisted?: true,
+      agent: agent
+    }
+  end
+
+  defp build_configured_agent_directory_entry(configured_agent) do
+    attrs = normalize_map(configured_agent.attrs || %{})
+    model_config = normalize_map(Map.get(attrs, "model_config", %{}))
+
+    %{
+      slug: configured_agent.id,
+      name: configured_agent.name,
+      status: Map.get(attrs, "status", "active"),
+      max_concurrent: Map.get(attrs, "max_concurrent", 1),
+      primary_model: Map.get(model_config, "primary", "no primary model"),
+      source: :workspace,
+      source_label: source_label(:workspace),
+      workspace_managed?: true,
+      persisted?: false,
+      agent: nil
+    }
+  end
+
+  defp source_label(:workspace), do: "mounted workspace"
+  defp source_label(:database), do: "control center"
+
   defp primary_model_label(%Agent{} = agent) do
     case normalize_map(agent.model_config || %{}) do
       %{"primary" => value} when is_binary(value) and value != "" -> value
@@ -1438,6 +1837,15 @@ defmodule PlatformWeb.ControlCenterLive do
 
   defp runtime_badge_class(_status),
     do: "rounded-full bg-base-200 px-3 py-1 text-xs font-semibold text-base-content/65"
+
+  defp source_badge_class(:workspace),
+    do: "rounded-full bg-info/15 px-2 py-1 text-[11px] font-semibold text-info"
+
+  defp source_badge_class(:database),
+    do: "rounded-full bg-base-200 px-2 py-1 text-[11px] font-semibold text-base-content/60"
+
+  defp source_badge_class(_source),
+    do: "rounded-full bg-base-200 px-2 py-1 text-[11px] font-semibold text-base-content/60"
 
   defp agent_badge_class("active"),
     do: "rounded-full bg-success/15 px-2 py-1 text-[11px] font-semibold text-success"
@@ -1522,4 +1930,14 @@ defmodule PlatformWeb.ControlCenterLive do
       kept -> kept
     end
   end
+
+  defp slugify(value) when is_binary(value) do
+    value
+    |> String.downcase()
+    |> String.trim()
+    |> String.replace(~r/[^a-z0-9]+/u, "-")
+    |> String.trim("-")
+  end
+
+  defp slugify(value), do: value |> to_string() |> slugify()
 end

@@ -74,6 +74,18 @@ defmodule Platform.Agents.WorkspaceBootstrap do
   end
 
   @doc """
+  List configured agent entries from the mounted workspace without mutating the database.
+  """
+  @spec list_configured_agents(keyword()) :: {:ok, [Config.parsed_agent()]} | {:error, term()}
+  def list_configured_agents(opts \\ []) do
+    workspace_path = workspace_path(opts)
+
+    with {:ok, parsed} <- load_workspace_config(workspace_path) do
+      {:ok, parsed.agents}
+    end
+  end
+
+  @doc """
   Ensure the configured mounted agent exists in the database.
   """
   @spec ensure_agent(keyword()) :: {:ok, Agent.t()} | {:error, term()}
@@ -83,25 +95,7 @@ defmodule Platform.Agents.WorkspaceBootstrap do
     with {:ok, parsed} <- load_workspace_config(workspace_path),
          {:ok, parsed_agent} <- select_agent(parsed.agents, opts) do
       Repo.transaction(fn ->
-        attrs =
-          parsed_agent.attrs
-          |> Map.update(:metadata, source_metadata(workspace_path), fn metadata ->
-            Map.merge(metadata || %{}, source_metadata(workspace_path))
-          end)
-
-        agent =
-          case Repo.get_by(Agent, slug: parsed_agent.id) do
-            nil ->
-              %Agent{}
-              |> Agent.changeset(attrs)
-              |> Repo.insert!()
-
-            %Agent{} = agent ->
-              agent
-              |> Agent.changeset(attrs)
-              |> Repo.update!()
-          end
-
+        agent = upsert_agent!(parsed_agent, workspace_path)
         sync_workspace_files!(agent.id, workspace_path)
         agent
       end)
@@ -174,6 +168,26 @@ defmodule Platform.Agents.WorkspaceBootstrap do
         "path" => Path.expand(workspace_path)
       }
     }
+  end
+
+  defp upsert_agent!(parsed_agent, workspace_path) do
+    attrs =
+      parsed_agent.attrs
+      |> Map.update(:metadata, source_metadata(workspace_path), fn metadata ->
+        Map.merge(metadata || %{}, source_metadata(workspace_path))
+      end)
+
+    case Repo.get_by(Agent, slug: parsed_agent.id) do
+      nil ->
+        %Agent{}
+        |> Agent.changeset(attrs)
+        |> Repo.insert!()
+
+      %Agent{} = agent ->
+        agent
+        |> Agent.changeset(attrs)
+        |> Repo.update!()
+    end
   end
 
   defp sync_workspace_files!(agent_id, workspace_path) do

@@ -40,6 +40,42 @@ defmodule PlatformWeb.ControlCenterLiveTest do
     agent
   end
 
+  defp configure_workspace!(context, agents) do
+    workspace =
+      Path.join(
+        System.tmp_dir!(),
+        "control-center-workspace-#{System.unique_integer([:positive, :monotonic])}"
+      )
+
+    File.mkdir_p!(workspace)
+
+    openclaw = %{
+      "agents" => %{
+        "list" =>
+          Enum.map(agents, fn {slug, name} ->
+            %{
+              "id" => slug,
+              "name" => name,
+              "model" => %{"primary" => "anthropic/claude-sonnet-4-6"}
+            }
+          end)
+      }
+    }
+
+    File.write!(Path.join(workspace, "openclaw.json"), Jason.encode!(openclaw))
+    File.write!(Path.join(workspace, "SOUL.md"), "steady")
+
+    previous_workspace = Application.get_env(:platform, :agent_workspace_path)
+    Application.put_env(:platform, :agent_workspace_path, workspace)
+
+    on_exit(fn ->
+      Application.put_env(:platform, :agent_workspace_path, previous_workspace)
+      File.rm_rf(workspace)
+    end)
+
+    context
+  end
+
   test "GET /control redirects unauthenticated users to login", %{conn: conn} do
     conn = get(conn, ~p"/control")
     assert redirected_to(conn) == "/auth/login"
@@ -67,6 +103,22 @@ defmodule PlatformWeb.ControlCenterLiveTest do
     assert html =~ "Vault visibility"
     assert html =~ "calm systems win"
     assert html =~ "anthropic/claude-sonnet-4-6"
+  end
+
+  test "GET /control lists agents from the mounted workspace config alongside persisted rows", %{
+    conn: conn
+  } do
+    configure_workspace!(%{}, [{"zip", "Zip"}, {"rowan", "Rowan"}])
+    create_agent(%{slug: "repl-test-agent", name: "REPL Test Agent"})
+
+    conn = authenticated_conn(conn)
+    {:ok, _view, html} = live(conn, ~p"/control")
+
+    assert html =~ "Zip"
+    assert html =~ "Rowan"
+    assert html =~ "REPL Test Agent"
+    assert html =~ "Mounted Workspace"
+    assert html =~ "Control Center"
   end
 
   test "starting and stopping the runtime updates the dashboard", %{conn: conn} do
@@ -156,6 +208,59 @@ defmodule PlatformWeb.ControlCenterLiveTest do
     assert updated.sandbox_mode == "require"
     assert updated.model_config["primary"] == "openai/gpt-4.1"
     assert updated.model_config["fallbacks"] == ["anthropic/claude-sonnet-4-6"]
+  end
+
+  test "creating a new agent from the UI persists and selects it", %{conn: conn} do
+    conn = authenticated_conn(conn)
+    {:ok, view, _html} = live(conn, ~p"/control")
+
+    html =
+      view
+      |> form("#create-agent-form",
+        create_agent: %{
+          name: "Runtime Ops",
+          slug: "runtime-ops",
+          primary_model: "openai/gpt-4.1",
+          status: "active",
+          max_concurrent: 2,
+          sandbox_mode: "require"
+        }
+      )
+      |> render_submit()
+
+    created = Repo.get_by!(Agent, slug: "runtime-ops")
+
+    assert html =~ "Created Runtime Ops"
+    assert created.name == "Runtime Ops"
+    assert created.model_config["primary"] == "openai/gpt-4.1"
+    assert render(view) =~ "Runtime Ops"
+    assert render(view) =~ "runtime-ops"
+  end
+
+  test "deleting a database-managed agent removes it from the UI", %{conn: conn} do
+    agent = create_agent(%{slug: "stale-repl", name: "Stale REPL"})
+    conn = authenticated_conn(conn)
+    {:ok, view, _html} = live(conn, ~p"/control/#{agent.slug}")
+
+    html =
+      view
+      |> element("#delete-agent")
+      |> render_click()
+
+    refute Repo.get(Agent, agent.id)
+    assert html =~ "Deleted Stale REPL"
+    refute render(view) =~ ~s(href="/control/#{agent.slug}")
+  end
+
+  test "mobile-oriented layout hooks are rendered on /control", %{conn: conn} do
+    agent = create_agent()
+    conn = authenticated_conn(conn)
+    {:ok, _view, html} = live(conn, ~p"/control/#{agent.slug}")
+
+    assert html =~ "id=\"agent-directory\""
+    assert html =~ "data-mobile-layout=\"stacked\""
+    assert html =~ "data-mobile-actions=\"stacked\""
+    assert html =~ "create-agent-form"
   end
 
   test "shell sidebar is rendered on /control", %{conn: conn} do
