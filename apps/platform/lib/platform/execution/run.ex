@@ -18,7 +18,7 @@ defmodule Platform.Execution.Run do
   Each run tracks:
     - `ctx_required_version`  — the version the runner must acknowledge
     - `ctx_acked_version`     — the last version the runner confirmed
-    - `ctx_status`            — `:current | :stale | :dead`
+    - `ctx_status`            — `:current | :pending | :stale | :dead`
 
   ## Provider ref
 
@@ -28,7 +28,7 @@ defmodule Platform.Execution.Run do
   """
 
   @valid_statuses ~w(created starting running completed failed cancelled)a
-  @valid_ctx_statuses ~w(current stale dead)a
+  @valid_ctx_statuses ~w(current pending stale dead)a
 
   @enforce_keys [:id, :task_id]
   defstruct id: nil,
@@ -48,7 +48,7 @@ defmodule Platform.Execution.Run do
             meta: %{}
 
   @type status :: :created | :starting | :running | :completed | :failed | :cancelled
-  @type ctx_status :: :current | :stale | :dead
+  @type ctx_status :: :current | :pending | :stale | :dead
 
   @type t :: %__MODULE__{
           id: String.t(),

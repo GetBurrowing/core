@@ -22,7 +22,7 @@ defmodule Platform.Tasks do
 
   alias Platform.{Artifacts, Context, Execution}
   alias Platform.Context.Session
-  alias Platform.Execution.{ProofRun, Run}
+  alias Platform.Execution.Run
 
   defmodule Summary do
     @moduledoc false
@@ -89,18 +89,17 @@ defmodule Platform.Tasks do
   alias Platform.Tasks.ProofOfLife
 
   @doc """
-  Launches a proof-of-life run for `task_id`.
+  Legacy proof-run entrypoint.
 
-  Delegates to `Platform.Execution.ProofRun.run/2` which creates a run, makes
-  a deterministic repo change, runs verification, and registers artifacts. All
-  results surface back in the Tasks UI automatically through PubSub.
-
-  Options are forwarded to `ProofRun.run/2`; see that module for the full list.
+  This now delegates to the real docker/agent-backed proof-of-life launcher so
+  older callers do not silently take the old synchronous local-repo path.
   """
-  @spec launch_proof_run(String.t(), keyword()) ::
-          {:ok, ProofRun.result()} | {:error, term()}
+  @spec launch_proof_run(String.t(), keyword()) :: {:ok, Run.t()} | {:error, term()}
   def launch_proof_run(task_id, opts \\ []) when is_binary(task_id) do
-    ProofRun.run(task_id, opts)
+    with {:ok, _task_id} <- bootstrap_proof_of_life_task(task_id: task_id),
+         {:ok, _version} <- approve_proof_of_life_plan(task_id) do
+      launch_proof_of_life(task_id, opts)
+    end
   end
 
   @spec request_stop(String.t()) :: {:ok, Run.t()} | {:error, term()}
@@ -218,7 +217,7 @@ defmodule Platform.Tasks do
 
   defp context_status(nil), do: :empty
   defp context_status(%Session{required_version: version, version: version}), do: :current
-  defp context_status(_session), do: :stale
+  defp context_status(_session), do: :pending
 
   defp active_runs do
     Platform.Execution.RunSupervisor

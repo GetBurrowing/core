@@ -262,8 +262,8 @@ defmodule Platform.Execution.ContextSession do
     %Run{run | ctx_status: new_status}
   end
 
-  defp recompute_ctx_status(nil, required) when required > 0, do: :stale
+  defp recompute_ctx_status(nil, required) when required > 0, do: :pending
   defp recompute_ctx_status(nil, _), do: :current
   defp recompute_ctx_status(acked, required) when acked >= required, do: :current
-  defp recompute_ctx_status(_, _), do: :stale
+  defp recompute_ctx_status(_, _), do: :pending
 end

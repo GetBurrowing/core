@@ -190,7 +190,13 @@ defmodule Platform.Execution.RunServer do
   def handle_call({:ack_context, version}, _from, %State{run: run} = state) do
     case ContextSession.ack(run, version) do
       {:ok, %Run{} = updated_run} ->
-        new_state = cancel_stale_timer(%State{state | run: updated_run})
+        new_state =
+          state
+          |> Map.put(:run, updated_run)
+          |> cancel_stale_timer()
+          |> cancel_dead_timer()
+
+        maybe_broadcast_ctx_status(run, updated_run)
         {:reply, {:ok, updated_run}, new_state}
 
       error ->
@@ -269,9 +275,11 @@ defmodule Platform.Execution.RunServer do
         new_state =
           state
           |> cancel_stale_timer()
+          |> cancel_dead_timer()
           |> Map.put(:run, updated_run)
           |> start_stale_timer()
 
+        maybe_broadcast_ctx_status(run, updated_run)
         {:noreply, new_state}
 
       {:error, reason} ->
@@ -388,6 +396,16 @@ defmodule Platform.Execution.RunServer do
     Process.cancel_timer(timer)
     %State{state | dead_timer: nil}
   end
+
+  defp maybe_broadcast_ctx_status(
+         %Run{ctx_status: old_status},
+         %Run{ctx_status: new_status} = run
+       )
+       when old_status != new_status do
+    broadcast_ctx_status(run)
+  end
+
+  defp maybe_broadcast_ctx_status(_old_run, _new_run), do: :ok
 
   defp broadcast_ctx_status(%Run{} = run) do
     Phoenix.PubSub.broadcast(

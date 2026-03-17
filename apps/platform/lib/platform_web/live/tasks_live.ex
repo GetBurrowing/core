@@ -47,6 +47,21 @@ defmodule PlatformWeb.TasksLive do
   end
 
   @impl true
+  def handle_event("create_proof_task", _params, socket) do
+    socket =
+      case Tasks.bootstrap_proof_of_life_task() do
+        {:ok, task_id} ->
+          socket
+          |> put_flash(:info, "Created proof-of-life task #{task_id}.")
+          |> push_navigate(to: ~p"/tasks/#{task_id}")
+
+        {:error, reason} ->
+          put_flash(socket, :error, "Create proof task failed: #{inspect(reason)}")
+      end
+
+    {:noreply, socket}
+  end
+
   def handle_event("request_stop", %{"run_id" => run_id}, socket) do
     socket =
       case Tasks.request_stop(run_id) do
@@ -67,20 +82,6 @@ defmodule PlatformWeb.TasksLive do
     {:noreply, reload_selected_task(socket)}
   end
 
-  def handle_event("create_proof_task", _params, socket) do
-    case Tasks.bootstrap_proof_of_life_task() do
-      {:ok, task_id} ->
-        {:noreply,
-         socket
-         |> refresh_tasks()
-         |> put_flash(:info, "Created proof-of-life task #{task_id}.")
-         |> push_navigate(to: ~p"/tasks/#{task_id}")}
-
-      {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Could not create proof task: #{inspect(reason)}")}
-    end
-  end
-
   def handle_event("launch_proof_run", %{"task_id" => task_id}, socket) do
     socket = assign(socket, :proof_run_loading, true)
 
@@ -88,29 +89,31 @@ defmodule PlatformWeb.TasksLive do
     parent = self()
 
     Task.start(fn ->
-      branch = "proof-of-life/#{task_id}"
-      result = Tasks.launch_proof_run(task_id, branch: branch)
-      send(parent, {:proof_run_complete, task_id, result})
+      result =
+        with {:ok, _task_id} <- Tasks.bootstrap_proof_of_life_task(task_id: task_id),
+             {:ok, _version} <- Tasks.approve_proof_of_life_plan(task_id),
+             {:ok, run} <- Tasks.launch_proof_of_life(task_id) do
+          {:ok, run}
+        end
+
+      send(parent, {:proof_run_started, task_id, result})
     end)
 
     {:noreply, socket}
   end
 
   @impl true
-  def handle_info({:proof_run_complete, _task_id, {:ok, result}}, socket) do
-    branch = result.branch || "(no branch)"
-    pushed = if result.pushed, do: "pushed", else: "not pushed"
-
+  def handle_info({:proof_run_started, _task_id, {:ok, run}}, socket) do
     socket =
       socket
       |> assign(:proof_run_loading, false)
-      |> put_flash(:info, "Proof run complete — branch: #{branch} (#{pushed})")
+      |> put_flash(:info, "Proof run started — run: #{run.id}")
       |> reload_selected_task()
 
     {:noreply, socket}
   end
 
-  def handle_info({:proof_run_complete, _task_id, {:error, reason}}, socket) do
+  def handle_info({:proof_run_started, _task_id, {:error, reason}}, socket) do
     socket =
       socket
       |> assign(:proof_run_loading, false)
@@ -190,6 +193,7 @@ defmodule PlatformWeb.TasksLive do
   defp run_status_class(_), do: "badge badge-ghost"
 
   defp ctx_status_class(:current), do: "badge badge-success badge-outline"
+  defp ctx_status_class(:pending), do: "badge badge-info badge-outline"
   defp ctx_status_class(:stale), do: "badge badge-warning badge-outline"
   defp ctx_status_class(:dead), do: "badge badge-error badge-outline"
   defp ctx_status_class(:empty), do: "badge badge-ghost"

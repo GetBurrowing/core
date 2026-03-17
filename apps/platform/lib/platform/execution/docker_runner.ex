@@ -5,7 +5,7 @@ defmodule Platform.Execution.DockerRunner do
   @escalation_poll_ms 500
 
   # Default non-root user to run containers as
-  @default_runner_user "runner"
+  @default_runner_user "node"
 
   @moduledoc """
   Docker-backed `Platform.Execution.Runner` implementation.
@@ -69,11 +69,14 @@ defmodule Platform.Execution.DockerRunner do
          {:ok, command, args} <- resolve_command(run, opts),
          payload <- build_spawn_payload(run, workspace, command, args, lease, opts),
          {:ok, provider_ref} <- client.spawn_run(run, payload, client_opts) do
-      {:ok,
-       provider_ref
-       |> normalize_provider_ref(run, workspace)
-       |> Map.put(:command, command)
-       |> Map.put(:args, args)}
+      provider_ref =
+        provider_ref
+        |> normalize_provider_ref(run, workspace)
+        |> Map.put(:command, command)
+        |> Map.put(:args, args)
+
+      maybe_start_monitor(run, provider_ref, opts)
+      {:ok, provider_ref}
     end
   end
 
@@ -251,7 +254,7 @@ defmodule Platform.Execution.DockerRunner do
       workspace_path: workspace.path,
       command: command,
       args: args,
-      env: build_env(lease),
+      env: build_env(lease, opts),
       security: build_security_opts(opts),
       mount: build_mount_opts(workspace, opts),
       meta: Map.merge(run.meta, Enum.into(Keyword.get(opts, :meta_overrides, []), %{}))
@@ -272,12 +275,22 @@ defmodule Platform.Execution.DockerRunner do
   # Host-to-container bind mount for the per-run worktree
   defp build_mount_opts(%{root: root, path: path}, opts) do
     container_workspace = Keyword.get(opts, :container_workspace_path, "/workspace")
+    host_root = Keyword.get(opts, :host_workspace_root, root)
+
+    host_source =
+      Keyword.get_lazy(opts, :host_workspace_path, fn ->
+        if host_root != root and String.starts_with?(path, root) do
+          Path.join(host_root, Path.relative_to(path, root))
+        else
+          path
+        end
+      end)
 
     %{
       type: "bind",
-      host_source: path,
+      host_source: host_source,
       container_target: container_workspace,
-      workspace_root: root,
+      workspace_root: host_root,
       read_only: false
     }
   end
@@ -294,6 +307,9 @@ defmodule Platform.Execution.DockerRunner do
       "exit_message" => :exit_message,
       "health" => :health
     })
+    |> coerce_atom(:status)
+    |> coerce_atom(:stop_mode)
+    |> coerce_atom(:health)
   end
 
   defp resolve_command(%Run{} = run, opts) do
@@ -313,6 +329,73 @@ defmodule Platform.Execution.DockerRunner do
     end
   end
 
-  defp build_env(nil), do: %{}
-  defp build_env(%CredentialLease{} = lease), do: CredentialLease.to_env(lease)
+  defp build_env(nil, opts), do: normalize_extra_env(Keyword.get(opts, :extra_env, %{}))
+
+  defp build_env(%CredentialLease{} = lease, opts) do
+    lease
+    |> CredentialLease.to_env()
+    |> Map.merge(normalize_extra_env(Keyword.get(opts, :extra_env, %{})))
+  end
+
+  defp normalize_extra_env(env) when is_map(env), do: env
+
+  defp normalize_extra_env(env) when is_list(env) do
+    Enum.into(env, %{}, fn {k, v} -> {to_string(k), to_string(v)} end)
+  end
+
+  defp normalize_extra_env(_), do: %{}
+
+  defp maybe_start_monitor(%Run{} = run, provider_ref, opts) do
+    case Keyword.get(opts, :run_server) do
+      pid when is_pid(pid) ->
+        client = client_module(opts)
+        client_opts = Keyword.get(opts, :client_opts, [])
+
+        Task.start(fn ->
+          monitor_until_terminal(run, provider_ref, pid, client, client_opts)
+        end)
+
+        :ok
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp monitor_until_terminal(run, provider_ref, run_server, client, client_opts) do
+    case client.describe_run(run, provider_ref, client_opts) do
+      {:ok, description} ->
+        description = normalize_description(description)
+
+        case Map.get(description, :status) do
+          status when status in [:exited, :dead, :stopped, :killed] ->
+            send(run_server, {:runner_exited, run.id, terminal_payload(description)})
+
+          _ ->
+            Process.sleep(@escalation_poll_ms)
+            monitor_until_terminal(run, provider_ref, run_server, client, client_opts)
+        end
+
+      {:error, _reason} ->
+        Process.sleep(@escalation_poll_ms)
+        monitor_until_terminal(run, provider_ref, run_server, client, client_opts)
+    end
+  end
+
+  defp terminal_payload(description) do
+    %{
+      exit_code: Map.get(description, :exit_code) || 0,
+      exit_state: exit_state_from_description(description)
+    }
+  end
+
+  defp exit_state_from_description(%{status: :killed}), do: :killed
+  defp exit_state_from_description(%{status: :dead}), do: :killed
+
+  defp exit_state_from_description(%{status: status, exit_code: code})
+       when status in [:exited, :stopped] do
+    if code in [0, nil], do: :completed, else: :failed
+  end
+
+  defp exit_state_from_description(_), do: :failed
 end

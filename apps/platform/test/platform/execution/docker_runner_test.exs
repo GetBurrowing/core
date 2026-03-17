@@ -247,7 +247,7 @@ defmodule Platform.Execution.DockerRunnerTest do
       assert security.no_new_privileges == true
       assert security.capability_drop == ["ALL"]
       assert security.no_docker_socket == true
-      assert security.user == "runner"
+      assert security.user == "node"
       assert security.capability_add == []
     end
 

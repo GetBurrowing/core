@@ -156,7 +156,7 @@ defmodule Platform.Execution.ProofRun do
 
   defp execute_repo_work(run, opts) do
     repo_path = Keyword.get(opts, :repo_path)
-    branch = Keyword.get(opts, :branch, "proof-of-life/#{run.id}")
+    branch = normalize_branch(Keyword.get(opts, :branch), run)
 
     if is_binary(repo_path) and repo_path != "" do
       do_repo_work(run, repo_path, branch, opts)
@@ -279,6 +279,13 @@ defmodule Platform.Execution.ProofRun do
       Logger.debug("[ProofRun] no valid credential lease — skipping push")
       :skipped
     end
+  end
+
+  defp normalize_branch(nil, %Run{id: run_id}), do: "proof-of-life/#{run_id}"
+  defp normalize_branch("", %Run{id: run_id}), do: "proof-of-life/#{run_id}"
+
+  defp normalize_branch(branch, %Run{id: run_id}) when is_binary(branch) do
+    if String.contains?(branch, run_id), do: branch, else: "#{branch}-#{run_id}"
   end
 
   defp merge_config_defaults(opts) do

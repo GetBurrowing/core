@@ -45,6 +45,8 @@ defmodule Platform.Execution.LocalRunner do
              run_server: Keyword.get(opts, :run_server, self()),
              workspace_root: workspace.root,
              workspace_path: workspace.path,
+             ack_file_path: Path.join(workspace.path, ".context-ack-version"),
+             ack_version: Keyword.get(opts, :context_version),
              command: command,
              args: args,
              env: env_overrides

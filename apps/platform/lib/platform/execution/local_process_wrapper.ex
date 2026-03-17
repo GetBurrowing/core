@@ -3,6 +3,8 @@ defmodule Platform.Execution.LocalProcessWrapper do
 
   use GenServer
 
+  alias Platform.Execution.RunServer
+
   @type provider_ref :: %{
           provider: :local,
           run_id: String.t(),
@@ -16,6 +18,10 @@ defmodule Platform.Execution.LocalProcessWrapper do
             run_server: nil,
             workspace_root: nil,
             workspace_path: nil,
+            ack_file_path: nil,
+            ack_version: nil,
+            acked_context_version: nil,
+            ack_poll_timer: nil,
             port: nil,
             os_pid: nil,
             command: nil,
@@ -30,6 +36,10 @@ defmodule Platform.Execution.LocalProcessWrapper do
           run_server: pid(),
           workspace_root: String.t(),
           workspace_path: String.t(),
+          ack_file_path: String.t() | nil,
+          ack_version: non_neg_integer() | nil,
+          acked_context_version: non_neg_integer() | nil,
+          ack_poll_timer: reference() | nil,
           port: port() | nil,
           os_pid: pos_integer() | nil,
           command: String.t(),
@@ -66,6 +76,9 @@ defmodule Platform.Execution.LocalProcessWrapper do
     command = Keyword.fetch!(opts, :command)
     args = Enum.map(Keyword.get(opts, :args, []), &to_string/1)
     env = Keyword.get(opts, :env, [])
+    ack_file_path = Keyword.get(opts, :ack_file_path)
+    ack_version = Keyword.get(opts, :ack_version)
+    if is_binary(ack_file_path), do: File.rm(ack_file_path)
 
     port_opts = [
       :binary,
@@ -91,18 +104,23 @@ defmodule Platform.Execution.LocalProcessWrapper do
         _ -> nil
       end
 
-    {:ok,
-     %__MODULE__{
-       run_id: run_id,
-       run_server: run_server,
-       workspace_root: workspace_root,
-       workspace_path: workspace_path,
-       port: port,
-       os_pid: os_pid,
-       command: command,
-       args: args,
-       env: env
-     }}
+    state =
+      %__MODULE__{
+        run_id: run_id,
+        run_server: run_server,
+        workspace_root: workspace_root,
+        workspace_path: workspace_path,
+        ack_file_path: ack_file_path,
+        ack_version: ack_version,
+        port: port,
+        os_pid: os_pid,
+        command: command,
+        args: args,
+        env: env
+      }
+      |> schedule_ack_poll()
+
+    {:ok, state}
   end
 
   @impl true
@@ -127,6 +145,24 @@ defmodule Platform.Execution.LocalProcessWrapper do
   @impl true
   def handle_info({port, {:data, _output}}, %__MODULE__{port: port} = state) do
     {:noreply, state}
+  end
+
+  def handle_info(:check_context_ack, state) do
+    state = %{state | ack_poll_timer: nil}
+
+    cond do
+      state.status == :exited ->
+        {:noreply, state}
+
+      is_integer(state.acked_context_version) ->
+        {:noreply, state}
+
+      true ->
+        case maybe_ack_context(state) do
+          {:ok, new_state} -> {:noreply, new_state}
+          :noop -> {:noreply, schedule_ack_poll(state)}
+        end
+    end
   end
 
   def handle_info({port, {:exit_status, exit_status}}, %__MODULE__{port: port} = state) do
@@ -178,6 +214,36 @@ defmodule Platform.Execution.LocalProcessWrapper do
       exit_status: state.exit_status
     })
   end
+
+  defp schedule_ack_poll(%__MODULE__{ack_version: version} = state)
+       when is_integer(version) and version > 0 do
+    if state.ack_poll_timer do
+      state
+    else
+      %{state | ack_poll_timer: Process.send_after(self(), :check_context_ack, 100)}
+    end
+  end
+
+  defp schedule_ack_poll(state), do: state
+
+  defp maybe_ack_context(%__MODULE__{ack_file_path: path, ack_version: expected} = state)
+       when is_binary(path) and is_integer(expected) do
+    case File.read(path) do
+      {:ok, raw} ->
+        with {version, _rest} <- Integer.parse(String.trim(raw)),
+             true <- version >= expected,
+             {:ok, _run} <- RunServer.ack_context(state.run_id, version) do
+          {:ok, %{state | acked_context_version: version}}
+        else
+          _ -> :noop
+        end
+
+      _ ->
+        :noop
+    end
+  end
+
+  defp maybe_ack_context(_state), do: :noop
 
   defp maybe_signal(%__MODULE__{status: :exited}, _signal), do: :ok
   defp maybe_signal(%__MODULE__{os_pid: nil}, _signal), do: :ok

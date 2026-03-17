@@ -8,8 +8,8 @@ defmodule Platform.Execution.ProofRunTest do
   """
   use ExUnit.Case, async: false
 
-  alias Platform.Execution.{ProofRun, LocalWorkspace, Run}
-  alias Platform.{Context, Execution}
+  alias Platform.Execution.ProofRun
+  alias Platform.Execution
 
   # ---------------------------------------------------------------------------
   # Helpers
@@ -75,7 +75,7 @@ defmodule Platform.Execution.ProofRunTest do
       task_id = unique_task_id()
       root = temp_dir("proof-ws-only")
 
-      assert {:ok, result} = ProofRun.run(task_id, run_root: root)
+      assert {:ok, result} = ProofRun.run(task_id, run_root: root, repo_path: nil)
 
       # Run should be completed
       assert %{run: run, artifacts: artifacts, pushed: pushed} = result
@@ -103,7 +103,7 @@ defmodule Platform.Execution.ProofRunTest do
       task_id = unique_task_id()
       root = temp_dir("proof-inline")
 
-      {:ok, result} = ProofRun.run(task_id, run_root: root)
+      {:ok, result} = ProofRun.run(task_id, run_root: root, repo_path: nil)
 
       verify_art = Enum.find(result.artifacts, &(&1.name == "proof-of-life verification"))
       assert %{"type" => "inline", "content" => content} = verify_art.locator
@@ -114,7 +114,7 @@ defmodule Platform.Execution.ProofRunTest do
       task_id = unique_task_id()
       root = temp_dir("proof-meta")
 
-      {:ok, result} = ProofRun.run(task_id, run_root: root)
+      {:ok, result} = ProofRun.run(task_id, run_root: root, repo_path: nil)
 
       verify_art = Enum.find(result.artifacts, &(&1.name == "proof-of-life verification"))
       assert %{"step" => "git_status"} = verify_art.metadata
@@ -264,53 +264,6 @@ defmodule Platform.Execution.ProofRunTest do
 
       # No credential lease provided — push is explicitly skipped
       assert result.pushed == false
-    end
-  end
-
-  # ---------------------------------------------------------------------------
-  # Tasks module integration
-  # ---------------------------------------------------------------------------
-
-  describe "Platform.Tasks.launch_proof_run/2" do
-    test "delegates to ProofRun and returns result" do
-      task_id = unique_task_id()
-      root = temp_dir("tasks-launch")
-
-      assert {:ok, result} = Platform.Tasks.launch_proof_run(task_id, run_root: root)
-      assert result.run.task_id == task_id
-      assert result.run.status == :completed
-    end
-
-    test "resulting artifacts are scoped to the task" do
-      task_id = unique_task_id()
-      root = temp_dir("tasks-scope")
-
-      {:ok, result} = Platform.Tasks.launch_proof_run(task_id, run_root: root)
-
-      # All registered artifacts should be scoped to our task_id
-      assert Enum.all?(result.artifacts, &(&1.task_id == task_id))
-    end
-
-    test "task artifacts surface in Tasks.get_task/1" do
-      task_id = unique_task_id()
-      root = temp_dir("tasks-surface")
-
-      {:ok, _result} = Platform.Tasks.launch_proof_run(task_id, run_root: root)
-
-      # Artifacts are registered via Platform.Artifacts so they appear in
-      # Tasks.get_task via list_artifacts.
-      case Platform.Tasks.get_task(task_id) do
-        {:ok, detail} ->
-          assert detail.summary.task_id == task_id
-          assert detail.summary.artifact_count >= 1
-
-        {:error, :not_found} ->
-          # Acceptable if the run-level context session was already evicted by
-          # the time we query. The artifact was definitely created (we got
-          # {:ok, result} above). Check Artifacts directly.
-          artifacts = Platform.Artifacts.list_artifacts(task_id: task_id)
-          assert length(artifacts) >= 1
-      end
     end
   end
 end

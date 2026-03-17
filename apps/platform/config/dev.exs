@@ -1,5 +1,11 @@
 import Config
 
+bind_ip =
+  case System.get_env("PHX_BIND_IP", "127.0.0.1") do
+    "0.0.0.0" -> {0, 0, 0, 0}
+    _ -> {127, 0, 0, 1}
+  end
+
 # For development, we disable any cache and enable
 # debugging and code reloading.
 #
@@ -8,8 +14,8 @@ import Config
 # to bundle .js and .css sources.
 config :platform, PlatformWeb.Endpoint,
   # Binding to loopback ipv4 address prevents access from other machines.
-  # Change to `ip: {0, 0, 0, 0}` to allow access from other machines.
-  http: [ip: {127, 0, 0, 1}],
+  # Set PHX_BIND_IP=0.0.0.0 to allow access from other machines/containers.
+  http: [ip: bind_ip],
   check_origin: false,
   code_reloader: true,
   debug_errors: true,

@@ -150,12 +150,17 @@ defmodule Platform.Execution.RunServerTest do
 
   describe "stale trigger" do
     @tag :slow
-    test "marks run stale when ack SLA is missed" do
+    test "marks run pending before ack SLA and stale after it is missed" do
       task_id = unique_task()
       run = start_run(task_id, stale_timeout_ms: 50, dead_timeout_ms: 5_000)
 
       # Push a delta (triggers required_version bump + stale timer)
       RunServer.push_context(run.id, %{"trigger" => "stale"})
+
+      Process.sleep(10)
+
+      {:ok, pending_run} = RunServer.get_run(run.id)
+      assert pending_run.ctx_status == :pending
 
       # Wait slightly longer than the stale timeout
       Process.sleep(150)
@@ -203,15 +208,22 @@ defmodule Platform.Execution.RunServerTest do
 
   describe "ctx status PubSub events" do
     @tag :slow
-    test "broadcasts run_ctx_status_changed on stale" do
+    test "broadcasts ctx status changes for pending, current, and stale" do
       task_id = unique_task()
       Phoenix.PubSub.subscribe(Platform.PubSub, "execution:runs:#{task_id}")
 
       run = start_run(task_id, stale_timeout_ms: 40, dead_timeout_ms: 5_000)
       RunServer.push_context(run.id, %{"k" => "v"})
 
-      assert_receive {:run_ctx_status_changed, run_id, :stale}, 300
+      assert_receive {:run_ctx_status_changed, run_id, :pending}, 300
       assert run_id == run.id
+
+      RunServer.ack_context(run.id, 1)
+      assert_receive {:run_ctx_status_changed, ^run_id, :current}, 300
+
+      RunServer.push_context(run.id, %{"k2" => "v2"})
+      assert_receive {:run_ctx_status_changed, ^run_id, :pending}, 300
+      assert_receive {:run_ctx_status_changed, ^run_id, :stale}, 300
     end
   end
 end

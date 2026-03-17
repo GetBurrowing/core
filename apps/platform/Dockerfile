@@ -29,10 +29,11 @@ FROM elixir:1.19.5-otp-28-slim AS app
 
 RUN apt-get update -y \
  && apt-get install -y --no-install-recommends \
-      libstdc++6 openssl libncurses6 locales ca-certificates wget \
+      git libstdc++6 openssl libncurses6 locales ca-certificates wget \
  && rm -rf /var/lib/apt/lists/* \
  && sed -i '/en_US.UTF-8/s/^# //g' /etc/locale.gen \
- && locale-gen
+ && locale-gen \
+ && git config --system safe.directory '*'
 
 ENV LANG=en_US.UTF-8 LANGUAGE=en_US:en LC_ALL=en_US.UTF-8
 

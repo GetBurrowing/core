@@ -67,11 +67,73 @@ if config_env() != :test do
     http: [port: String.to_integer(System.get_env("PORT", "4000"))]
 end
 
+proof_repo_path = System.get_env("PROOF_OF_LIFE_REPO_PATH", "/repos/core")
+proof_run_root = System.get_env("PROOF_OF_LIFE_RUN_ROOT", "/data/platform/execution-runs")
+proof_author_name = System.get_env("GIT_AUTHOR_NAME", "Suite Runner")
+proof_author_email = System.get_env("GIT_AUTHOR_EMAIL", "runner@suite.local")
+proof_runner_image = System.get_env("PROOF_OF_LIFE_RUNNER_IMAGE", "suite-runner:dev")
+proof_host_run_root = System.get_env("PROOF_OF_LIFE_HOST_RUN_ROOT")
+proof_host_repo_git_path = System.get_env("PROOF_OF_LIFE_HOST_REPO_GIT_PATH")
+proof_host_codex_auth_path = System.get_env("PROOF_OF_LIFE_HOST_CODEX_AUTH_PATH")
+proof_runner_user = System.get_env("PROOF_OF_LIFE_RUNNER_USER")
+
+proof_mode =
+  case System.get_env("PROOF_OF_LIFE_MODE", "scripted") do
+    "claude_cli" -> :claude_cli
+    "claude-cli" -> :claude_cli
+    "codex_exec" -> :codex_exec
+    "codex-exec" -> :codex_exec
+    "docker_scripted" -> :docker_scripted
+    "docker-scripted" -> :docker_scripted
+    "docker_claude_cli" -> :docker_claude_cli
+    "docker-claude-cli" -> :docker_claude_cli
+    "docker_codex_exec" -> :docker_codex_exec
+    "docker-codex-exec" -> :docker_codex_exec
+    _ -> :scripted
+  end
+
 # Agent workspace (sign-of-life — will be replaced by full agent runtime)
 config :platform,
   agent_workspace_path: System.get_env("AGENT_WORKSPACE_PATH", "/data/agents/zip/workspace"),
   anthropic_api_key: System.get_env("ANTHROPIC_API_KEY"),
   chat_attachments_root: System.get_env("CHAT_ATTACHMENTS_ROOT", "/data/platform/chat_uploads")
+
+config :platform, :execution,
+  proof_repo_path: proof_repo_path,
+  local_run_root: proof_run_root,
+  github_credentials: [
+    token: System.get_env("GITHUB_TOKEN"),
+    author_name: proof_author_name,
+    author_email: proof_author_email
+  ],
+  suite_runnerd: [
+    base_url: System.get_env("SUITE_RUNNERD_BASE_URL", "http://127.0.0.1:4101"),
+    token: System.get_env("SUITE_RUNNERD_TOKEN")
+  ]
+
+config :platform, :proof_of_life,
+  repo_path: proof_repo_path,
+  repo_slug: System.get_env("PROOF_OF_LIFE_REPO_SLUG"),
+  remote: System.get_env("PROOF_OF_LIFE_REMOTE", "origin"),
+  base_ref: System.get_env("PROOF_OF_LIFE_BASE_REF", "origin/main"),
+  run_root: proof_run_root,
+  host_run_root: proof_host_run_root,
+  host_repo_git_path: proof_host_repo_git_path,
+  host_codex_auth_path: proof_host_codex_auth_path,
+  proof_file: System.get_env("PROOF_OF_LIFE_FILE", "docs/proof-of-life.md"),
+  mode: proof_mode,
+  claude_command: System.get_env("PROOF_OF_LIFE_CLAUDE_COMMAND", "claude"),
+  codex_command: System.get_env("PROOF_OF_LIFE_CODEX_COMMAND", "codex"),
+  runner_user: proof_runner_user,
+  runner_image: proof_runner_image,
+  ssh_auth_path: System.get_env("PROOF_OF_LIFE_SSH_AUTH_PATH"),
+  push_remote_url: System.get_env("PROOF_OF_LIFE_PUSH_REMOTE_URL"),
+  runner_auth_env: [
+    "ANTHROPIC_API_KEY",
+    "OPENAI_API_KEY"
+  ],
+  author_name: proof_author_name,
+  author_email: proof_author_email
 
 if config_env() == :prod do
   secret_key_base =

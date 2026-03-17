@@ -74,8 +74,9 @@ defmodule Platform.Execution.LocalWorkspace do
     git_file = Path.join(worktree_path, ".git")
 
     if File.exists?(git_file) do
-      # Worktree already set up — idempotent return
-      {:ok, worktree_path}
+      with :ok <- normalize_worktree_git_permissions(worktree_path, branch) do
+        {:ok, worktree_path}
+      end
     else
       with :ok <- File.mkdir_p(workspace_path) do
         case System.cmd(
@@ -85,26 +86,61 @@ defmodule Platform.Execution.LocalWorkspace do
                stderr_to_stdout: true
              ) do
           {_out, 0} ->
-            {:ok, worktree_path}
+            with :ok <- normalize_worktree_git_permissions(worktree_path, branch) do
+              {:ok, worktree_path}
+            end
 
-          {output, _code} when is_binary(output) ->
+          {output, code} when is_binary(output) ->
             trimmed = String.trim(output)
 
-            # If the branch already exists in the repo, try without -b to attach
-            # to the existing branch. This handles repeated calls where the
-            # worktree dir was removed but the branch persists.
-            if String.contains?(trimmed, "already exists") do
+            if String.contains?(trimmed, "already exists") or
+                 String.contains?(trimmed, "already used by worktree") do
+              if String.contains?(trimmed, "already used by worktree") do
+                _ =
+                  System.cmd("git", ["worktree", "prune"], cd: repo_path, stderr_to_stdout: true)
+              end
+
               case System.cmd(
                      "git",
                      ["worktree", "add", worktree_path, branch],
                      cd: repo_path,
                      stderr_to_stdout: true
                    ) do
-                {_out2, 0} -> {:ok, worktree_path}
-                {output2, code2} -> {:error, {:worktree_add_failed, code2, String.trim(output2)}}
+                {_out2, 0} ->
+                  with :ok <- normalize_worktree_git_permissions(worktree_path, branch) do
+                    {:ok, worktree_path}
+                  end
+
+                {output2, code2} when is_binary(output2) ->
+                  trimmed2 = String.trim(output2)
+
+                  if String.contains?(trimmed2, "already used by worktree") do
+                    _ =
+                      System.cmd("git", ["worktree", "prune"],
+                        cd: repo_path,
+                        stderr_to_stdout: true
+                      )
+
+                    case System.cmd(
+                           "git",
+                           ["worktree", "add", worktree_path, branch],
+                           cd: repo_path,
+                           stderr_to_stdout: true
+                         ) do
+                      {_out3, 0} ->
+                        with :ok <- normalize_worktree_git_permissions(worktree_path, branch) do
+                          {:ok, worktree_path}
+                        end
+
+                      {output3, code3} ->
+                        {:error, {:worktree_add_failed, code3, String.trim(output3)}}
+                    end
+                  else
+                    {:error, {:worktree_add_failed, code2, trimmed2}}
+                  end
               end
             else
-              {:error, {:worktree_add_failed, trimmed}}
+              {:error, {:worktree_add_failed, code, trimmed}}
             end
         end
       end
@@ -112,18 +148,87 @@ defmodule Platform.Execution.LocalWorkspace do
   end
 
   @doc """
+  Configures local git credential helper state for authenticated HTTPS push.
+
+  The helper reads `GITHUB_TOKEN` from the process environment at push time, so
+  the token never needs to be written into the repository config itself. If no
+  valid lease is available, this is a no-op.
+  """
+  @spec prepare_git_push_auth(String.t(), CredentialLease.t() | nil) :: :ok | {:error, term()}
+  def prepare_git_push_auth(_worktree_path, nil), do: :ok
+
+  def prepare_git_push_auth(worktree_path, %CredentialLease{} = lease) do
+    if CredentialLease.valid?(lease) do
+      helper =
+        "!f() { test -n \"$GITHUB_TOKEN\" || exit 1; echo username=x-access-token; echo password=$GITHUB_TOKEN; }; f"
+
+      with :ok <- git_config_local(worktree_path, "credential.helper", helper),
+           :ok <- git_config_local(worktree_path, "credential.useHttpPath", "true") do
+        :ok
+      end
+    else
+      :ok
+    end
+  end
+
+  @doc """
+  Returns `git status --short` output for the worktree.
+  """
+  @spec git_status(String.t()) :: {:ok, String.t()} | {:error, term()}
+  def git_status(worktree_path) do
+    case System.cmd("git", ["status", "--short"], cd: worktree_path, stderr_to_stdout: true) do
+      {output, 0} -> {:ok, String.trim(output)}
+      {output, code} -> {:error, {:git_status_failed, code, String.trim(output)}}
+    end
+  end
+
+  @doc """
+  Returns the current HEAD SHA for the worktree.
+  """
+  @spec current_head_sha(String.t()) :: {:ok, String.t()} | {:error, term()}
+  def current_head_sha(worktree_path) do
+    case System.cmd("git", ["rev-parse", "HEAD"], cd: worktree_path, stderr_to_stdout: true) do
+      {output, 0} -> {:ok, String.trim(output)}
+      {output, code} -> {:error, {:git_head_failed, code, String.trim(output)}}
+    end
+  end
+
+  @doc """
+  Returns the remote SHA for `branch`, or `nil` if the ref does not exist.
+  """
+  @spec remote_branch_sha(String.t(), String.t(), String.t(), CredentialLease.t() | nil) ::
+          {:ok, String.t() | nil} | {:error, term()}
+  def remote_branch_sha(worktree_path, remote, branch, lease \\ nil) do
+    env = build_git_env(lease)
+
+    case System.cmd(
+           "git",
+           ["ls-remote", remote, "refs/heads/#{branch}"],
+           cd: worktree_path,
+           env: env,
+           stderr_to_stdout: true
+         ) do
+      {"", 0} ->
+        {:ok, nil}
+
+      {output, 0} ->
+        sha =
+          output
+          |> String.trim()
+          |> String.split()
+          |> List.first()
+
+        {:ok, sha}
+
+      {output, code} ->
+        {:error, {:git_ls_remote_failed, code, String.trim(output)}}
+    end
+  end
+
+  @doc """
   Stages all changes, commits, and pushes the current branch to `origin`.
 
-  The caller must supply a valid `CredentialLease` so the push can
-  authenticate. The lease's `GITHUB_TOKEN` is injected into the git credential
-  helper for the duration of the push.
-
-  Options:
-    - `:message`  — commit message (default: `"Run <run_id> checkpoint"`)
-    - `:remote`   — remote name (default: `"origin"`)
-    - `:lease`    — a `CredentialLease.t()` (required for authenticated push)
-
-  Returns `:ok` on success or `{:error, reason}` on failure.
+  The caller may supply a valid `CredentialLease` so the push can authenticate.
   """
   @spec push_branch(String.t(), String.t(), keyword()) :: :ok | {:error, term()}
   def push_branch(worktree_path, run_id, opts \\ []) do
@@ -133,7 +238,8 @@ defmodule Platform.Execution.LocalWorkspace do
 
     env = build_git_env(lease)
 
-    with :ok <- git_add_all(worktree_path, env),
+    with :ok <- prepare_git_push_auth(worktree_path, lease),
+         :ok <- git_add_all(worktree_path, env),
          :ok <- git_commit(worktree_path, message, env),
          {:ok, branch} <- git_current_branch(worktree_path, env),
          :ok <- git_push(worktree_path, remote, branch, env) do
@@ -151,9 +257,66 @@ defmodule Platform.Execution.LocalWorkspace do
     |> Path.expand()
   end
 
-  # ---------------------------------------------------------------------------
-  # Private helpers
-  # ---------------------------------------------------------------------------
+  defp normalize_worktree_git_permissions(worktree_path, branch) do
+    git_pointer = Path.join(worktree_path, ".git")
+
+    with {:ok, pointer} <- File.read(git_pointer),
+         gitdir when is_binary(gitdir) <- parse_gitdir(pointer),
+         true <- gitdir != nil do
+      common_gitdir = common_gitdir(gitdir)
+
+      paths = [
+        gitdir,
+        Path.join([common_gitdir, "refs"]),
+        Path.dirname(Path.join([common_gitdir, "refs", "heads", branch])),
+        Path.join([common_gitdir, "refs", "heads", branch]),
+        Path.join([common_gitdir, "logs", "refs"]),
+        Path.dirname(Path.join([common_gitdir, "logs", "refs", "heads", branch])),
+        Path.join([common_gitdir, "logs", "refs", "heads", branch])
+      ]
+
+      Enum.each(paths, &relax_git_path/1)
+      :ok
+    else
+      nil -> :ok
+      {:error, :enoent} -> :ok
+      _ -> :ok
+    end
+  end
+
+  defp common_gitdir(gitdir) do
+    commondir_file = Path.join(gitdir, "commondir")
+
+    case File.read(commondir_file) do
+      {:ok, relative_path} -> Path.expand(String.trim(relative_path), gitdir)
+      _ -> Path.expand(Path.join(gitdir, "../.."))
+    end
+  end
+
+  defp relax_git_path(path) do
+    cond do
+      File.dir?(path) ->
+        _ = System.cmd("chmod", ["g+s", path], stderr_to_stdout: true)
+        _ = System.cmd("chmod", ["-R", "ug+rwX", path], stderr_to_stdout: true)
+        :ok
+
+      File.exists?(path) ->
+        _ = System.cmd("chmod", ["ug+rwX", path], stderr_to_stdout: true)
+        :ok
+
+      true ->
+        :ok
+    end
+  end
+
+  defp parse_gitdir(pointer) when is_binary(pointer) do
+    pointer
+    |> String.trim()
+    |> case do
+      <<"gitdir: ", path::binary>> -> String.trim(path)
+      _ -> nil
+    end
+  end
 
   defp git_add_all(worktree_path, env) do
     case System.cmd("git", ["add", "--all"], cd: worktree_path, env: env, stderr_to_stdout: true) do
@@ -163,8 +326,6 @@ defmodule Platform.Execution.LocalWorkspace do
   end
 
   defp git_commit(worktree_path, message, env) do
-    # --allow-empty lets us commit even if nothing was staged; useful for
-    # proof-of-life runs that only verify the push path, not code changes.
     case System.cmd(
            "git",
            ["commit", "--allow-empty", "-m", message],
@@ -203,29 +364,25 @@ defmodule Platform.Execution.LocalWorkspace do
     end
   end
 
+  defp git_config_local(worktree_path, key, value) do
+    case System.cmd(
+           "git",
+           ["config", "--local", key, value],
+           cd: worktree_path,
+           stderr_to_stdout: true
+         ) do
+      {_out, 0} -> :ok
+      {output, code} -> {:error, {:git_config_failed, key, code, String.trim(output)}}
+    end
+  end
+
   defp build_git_env(nil), do: []
 
   defp build_git_env(%CredentialLease{} = lease) do
-    lease_env = CredentialLease.to_env(lease)
-
-    # Inject a git credential helper that uses GITHUB_TOKEN when present,
-    # so `git push` authenticates without interactive prompts.
-    helper_env =
-      if token = Map.get(lease_env, "GITHUB_TOKEN") do
-        helper_script = "!f() { echo \"password=#{token}\"; }; f"
-
-        [
-          {"GIT_TERMINAL_PROMPT", "0"},
-          {"GIT_ASKPASS", "true"},
-          {"GIT_CREDENTIAL_HELPER", helper_script}
-        ]
-      else
-        []
-      end
-
-    lease_env
+    lease
+    |> CredentialLease.to_env()
     |> Enum.map(fn {k, v} -> {k, v} end)
-    |> Kernel.++(helper_env)
+    |> Kernel.++([{"GIT_TERMINAL_PROMPT", "0"}, {"GIT_ASKPASS", "true"}])
   end
 
   defp configured_run_root do
