@@ -2,6 +2,25 @@
 
 Core is the **public product repository** for Startup Suite.
 
+## Local git hooks
+
+This repo ships a versioned pre-commit hook that auto-runs `mix format` for staged
+Elixir/HEEx files under `apps/platform`.
+
+Enable it once per clone with:
+
+```bash
+./scripts/setup-git-hooks.sh
+```
+
+That configures:
+
+- `core.hooksPath=.githooks`
+- executable `.githooks/pre-commit`
+
+The hook formats only staged `apps/platform/**/*.ex`, `*.exs`, and `*.heex` files,
+then re-stages them before the commit continues.
+
 It holds the open-source application code, shared contracts, architecture decisions, and the reusable deployment model for the suite.
 
 It does **not** hold personal infrastructure details, Hive-specific production configuration, real deployment targets, or Rowan-specific operator workflows.

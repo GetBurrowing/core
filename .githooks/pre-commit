@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(git rev-parse --show-toplevel)"
+
+if ! command -v mix >/dev/null 2>&1; then
+  echo "[pre-commit] mix not found; skipping apps/platform auto-format." >&2
+  exit 0
+fi
+
+staged=()
+while IFS= read -r -d '' path; do
+  staged+=("$path")
+done < <(git -C "$repo_root" diff --cached --name-only --diff-filter=ACMR -z)
+
+repo_files=()
+app_files=()
+for path in "${staged[@]}"; do
+  case "$path" in
+    apps/platform/*.ex | apps/platform/*.exs | apps/platform/*.heex)
+      repo_files+=("$path")
+      app_files+=("${path#apps/platform/}")
+      ;;
+  esac
+done
+
+if [ ${#repo_files[@]} -eq 0 ]; then
+  exit 0
+fi
+
+echo "[pre-commit] mix format ${#repo_files[@]} staged file(s) in apps/platform"
+(
+  cd "$repo_root/apps/platform"
+  mix format "${app_files[@]}"
+)
+
+git -C "$repo_root" add -- "${repo_files[@]}"
