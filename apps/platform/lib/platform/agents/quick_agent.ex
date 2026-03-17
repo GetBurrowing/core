@@ -1,36 +1,36 @@
 defmodule Platform.Agents.QuickAgent do
   @moduledoc """
-  Minimal agent proof-of-life. Reads .openclaw workspace files,
-  builds a system prompt, and calls Anthropic.
+  Minimal native chat agent entrypoint.
 
-  This remains the lightweight chat surface entrypoint, but now routes through
-  the real Anthropic provider adapter so the Agent Runtime's provider logic is
-  the single source of truth for request formatting and OAuth headers.
+  Reads the configured workspace files to build a system prompt, then routes the
+  request through the app's provider adapter using Codex OAuth credentials from
+  the local `.codex/auth.json` state.
   """
 
   require Logger
 
-  alias Platform.Agents.{Providers.Anthropic, WorkspaceBootstrap}
+  alias Platform.Agents.{CodexAuth, Providers.OpenAI, WorkspaceBootstrap}
 
   @workspace_files ~w(SOUL.md IDENTITY.md USER.md AGENTS.md)
+  @default_model "gpt-5.4"
 
   @doc """
   Send a message to the agent and get a response.
   Reads workspace files from the configured path, builds context,
-  and calls Anthropic.
+  and calls the configured chat provider.
   """
   def chat(user_message, opts \\ []) do
     workspace_path = workspace_path()
     system_prompt = build_system_prompt(workspace_path)
     messages = (opts[:history] || []) ++ [%{"role" => "user", "content" => user_message}]
 
-    case call_anthropic(system_prompt, messages, opts) do
+    case call_provider(system_prompt, messages, opts) do
       {:ok, response} ->
         Logger.info("Agent response: model=#{response.model} tokens=#{inspect(response.usage)}")
         {:ok, response}
 
       {:error, reason} ->
-        Logger.error("Anthropic request failed: #{inspect(reason)}")
+        Logger.error("QuickAgent request failed: #{inspect(reason)}")
         {:error, format_error(reason)}
     end
   end
@@ -61,45 +61,42 @@ defmodule Platform.Agents.QuickAgent do
     """
   end
 
-  defp call_anthropic(system_prompt, messages, opts) do
-    provider_opts = [
+  defp call_provider(system_prompt, messages, opts) do
+    with {:ok, credentials} <- credentials(opts) do
+      provider_module().chat(credentials, messages, provider_opts(system_prompt, opts))
+    end
+  end
+
+  defp credentials(opts) do
+    auth_opts =
+      case Keyword.get(opts, :codex_auth_path) do
+        nil -> []
+        path -> [path: path]
+      end
+
+    CodexAuth.credentials(auth_opts)
+  end
+
+  defp provider_opts(system_prompt, opts) do
+    [
       system: system_prompt,
-      model: opts[:model],
+      model: model(opts),
       max_tokens: opts[:max_tokens] || 2048
     ]
-
-    case Anthropic.chat(
-           %{credential_slug: "anthropic-oauth", accessor: {:platform, nil}},
-           messages,
-           provider_opts
-         ) do
-      {:ok, response} ->
-        {:ok, response}
-
-      {:error, :not_found} ->
-        fallback_to_api_key(messages, provider_opts)
-
-      {:error, {:auth_error, _status, _body}} ->
-        fallback_to_api_key(messages, provider_opts)
-
-      {:error, _reason} = error ->
-        case api_key() do
-          nil -> error
-          _ -> fallback_to_api_key(messages, provider_opts)
-        end
-    end
   end
 
-  defp fallback_to_api_key(messages, provider_opts) do
-    case api_key() do
-      nil -> {:error, :anthropic_credentials_not_configured}
-      key -> Anthropic.chat(key, messages, provider_opts)
-    end
+  defp model(opts) do
+    Keyword.get(opts, :model) ||
+      Application.get_env(:platform, :chat_agent_model) ||
+      @default_model
   end
 
-  defp format_error(:anthropic_credentials_not_configured),
-    do: "Anthropic credentials not configured"
+  defp provider_module do
+    Application.get_env(:platform, :quick_agent_provider_module, OpenAI)
+  end
 
+  defp format_error({:codex_auth_missing, _path}), do: "Codex OAuth credentials not configured"
+  defp format_error(:missing_access_token), do: "Codex OAuth credentials not configured"
   defp format_error({:auth_error, status, _body}), do: "API error: #{status}"
   defp format_error({:api_error, status, _body}), do: "API error: #{status}"
   defp format_error({:rate_limited, _retry_after, _body}), do: "API error: 429"
@@ -113,10 +110,5 @@ defmodule Platform.Agents.QuickAgent do
       {:ok, layout} -> layout.workspace_path
       {:error, _reason} -> configured_path
     end
-  end
-
-  defp api_key do
-    System.get_env("ANTHROPIC_API_KEY") ||
-      Application.get_env(:platform, :anthropic_api_key)
   end
 end
