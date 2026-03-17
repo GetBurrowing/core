@@ -39,6 +39,26 @@ defmodule Platform.Agents.WorkspaceBootstrapTest do
     File.write!(Path.join(path, "SOUL.md"), soul)
   end
 
+  defp write_openclaw_agent_root!(path, slug, soul) do
+    openclaw = %{
+      "agents" => %{
+        "list" => [
+          %{
+            "id" => slug,
+            "name" => "Zip",
+            "model" => %{"primary" => "anthropic/claude-sonnet-4-6"},
+            "tools" => %{"profile" => "minimal"}
+          }
+        ]
+      }
+    }
+
+    workspace = Path.join(path, "workspace")
+    File.mkdir_p!(workspace)
+    File.write!(Path.join(path, "openclaw.json"), Jason.encode!(openclaw))
+    File.write!(Path.join(workspace, "SOUL.md"), soul)
+  end
+
   describe "boot/1" do
     test "upserts the mounted workspace agent and starts its runtime" do
       workspace = tmp_workspace!("boot")
@@ -63,6 +83,35 @@ defmodule Platform.Agents.WorkspaceBootstrapTest do
 
       Sandbox.allow(Repo, self(), refreshed.pid)
 
+      assert {:ok, refreshed_state} = AgentServer.state(refreshed.agent.id)
+      assert refreshed_state.workspace == %{"SOUL.md" => "updated"}
+
+      on_exit(fn ->
+        AgentServer.stop_agent(refreshed.pid)
+      end)
+    end
+
+    test "supports OpenClaw agent-root layout when pointed at the workspace subdirectory" do
+      root = tmp_workspace!("boot-agent-root")
+      workspace = Path.join(root, "workspace")
+      slug = "main"
+      write_openclaw_agent_root!(root, slug, "steady")
+
+      assert {:ok, status} = WorkspaceBootstrap.boot(workspace_path: workspace)
+      assert status.configured?
+      assert status.reachable?
+      assert status.agent.slug == slug
+      assert status.workspace_path == workspace
+
+      Sandbox.allow(Repo, self(), status.pid)
+
+      assert {:ok, state} = AgentServer.state(status.agent.id)
+      assert state.workspace == %{"SOUL.md" => "steady"}
+
+      File.write!(Path.join(workspace, "SOUL.md"), "updated")
+
+      assert {:ok, refreshed} = WorkspaceBootstrap.boot(workspace_path: workspace)
+      Sandbox.allow(Repo, self(), refreshed.pid)
       assert {:ok, refreshed_state} = AgentServer.state(refreshed.agent.id)
       assert refreshed_state.workspace == %{"SOUL.md" => "updated"}
 
@@ -122,6 +171,43 @@ defmodule Platform.Agents.WorkspaceBootstrapTest do
 
       assert %{configured?: true, reachable?: true, agent_slug: "main", agent_name: "Main"} =
                WorkspaceBootstrap.status(workspace_path: workspace)
+    end
+
+    test "falls back to the first configured agent when no explicit default exists" do
+      workspace = tmp_workspace!("status-first-configured")
+
+      File.write!(
+        Path.join(workspace, "openclaw.json"),
+        Jason.encode!(%{
+          "agents" => %{
+            "list" => [
+              %{
+                "id" => "zip",
+                "name" => "Zip",
+                "model" => %{"primary" => "anthropic/claude-sonnet-4-6"}
+              },
+              %{
+                "id" => "sidecar",
+                "name" => "Sidecar",
+                "model" => %{"primary" => "openai/gpt-4.1"}
+              }
+            ]
+          }
+        })
+      )
+
+      File.write!(Path.join(workspace, "SOUL.md"), "steady")
+
+      assert %{configured?: true, agent_slug: "zip", agent_name: "Zip"} =
+               WorkspaceBootstrap.status(workspace_path: workspace)
+
+      assert {:ok, status} = WorkspaceBootstrap.boot(workspace_path: workspace)
+      assert status.agent.slug == "zip"
+      assert status.reachable?
+
+      on_exit(fn ->
+        AgentServer.stop_agent(status.pid)
+      end)
     end
   end
 end

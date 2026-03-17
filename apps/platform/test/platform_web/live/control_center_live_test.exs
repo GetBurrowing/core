@@ -149,6 +149,45 @@ defmodule PlatformWeb.ControlCenterLiveTest do
     refute html =~ "Agent unknown"
   end
 
+  test "opening /control boots the first configured workspace agent when no main agent exists", %{
+    conn: conn
+  } do
+    configure_workspace!(%{}, [{"zip", "Zip"}, {"sidecar", "Sidecar"}])
+
+    on_exit(fn ->
+      AgentServer.stop_agent("zip")
+      AgentServer.stop_agent("sidecar")
+    end)
+
+    conn = authenticated_conn(conn)
+    {:ok, _view, html} = live(conn, ~p"/control")
+
+    assert html =~ "Agent online"
+    assert is_pid(AgentServer.whereis("zip"))
+    assert AgentServer.whereis("sidecar") == nil
+  end
+
+  test "opening /control falls back to persisted main agent when workspace bootstrap is unavailable",
+       %{
+         conn: conn
+       } do
+    previous_workspace = Application.get_env(:platform, :agent_workspace_path)
+    Application.put_env(:platform, :agent_workspace_path, "/tmp/does-not-exist/platform-agent")
+
+    main = create_agent(%{slug: "main", name: "Zip"})
+
+    on_exit(fn ->
+      AgentServer.stop_agent(main)
+      Application.put_env(:platform, :agent_workspace_path, previous_workspace)
+    end)
+
+    conn = authenticated_conn(conn)
+    {:ok, _view, html} = live(conn, ~p"/control")
+
+    assert html =~ "Agent online"
+    assert is_pid(AgentServer.whereis(main.id))
+  end
+
   test "saving a workspace file persists through MemoryContext", %{conn: conn} do
     agent = create_agent()
     {:ok, _} = MemoryContext.upsert_workspace_file(agent.id, "SOUL.md", "steady")

@@ -10,7 +10,7 @@ defmodule Platform.Agents.QuickAgent do
 
   require Logger
 
-  alias Platform.Agents.Providers.Anthropic
+  alias Platform.Agents.{Providers.Anthropic, WorkspaceBootstrap}
 
   @workspace_files ~w(SOUL.md IDENTITY.md USER.md AGENTS.md)
 
@@ -107,7 +107,12 @@ defmodule Platform.Agents.QuickAgent do
   defp format_error(other), do: "Request failed: #{inspect(other)}"
 
   defp workspace_path do
-    Application.get_env(:platform, :agent_workspace_path, "/data/agents/zip/workspace")
+    configured_path = Application.get_env(:platform, :agent_workspace_path, "/data/agents/zip")
+
+    case WorkspaceBootstrap.resolve_layout(configured_path) do
+      {:ok, layout} -> layout.workspace_path
+      {:error, _reason} -> configured_path
+    end
   end
 
   defp api_key do

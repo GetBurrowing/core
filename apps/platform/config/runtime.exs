@@ -94,7 +94,7 @@ proof_mode =
 
 # Agent workspace (sign-of-life — will be replaced by full agent runtime)
 config :platform,
-  agent_workspace_path: System.get_env("AGENT_WORKSPACE_PATH", "/data/agents/zip/workspace"),
+  agent_workspace_path: System.get_env("AGENT_WORKSPACE_PATH", "/data/agents/zip"),
   anthropic_api_key: System.get_env("ANTHROPIC_API_KEY"),
   chat_attachments_root: System.get_env("CHAT_ATTACHMENTS_ROOT", "/data/platform/chat_uploads")
 

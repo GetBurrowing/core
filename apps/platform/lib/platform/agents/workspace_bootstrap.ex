@@ -17,7 +17,7 @@ defmodule Platform.Agents.WorkspaceBootstrap do
 
   @workspace_files ~w(SOUL.md IDENTITY.md USER.md AGENTS.md MEMORY.md TOOLS.md HEARTBEAT.md)
   @source_key "workspace_source"
-  @default_workspace_path "/data/agents/zip/workspace"
+  @default_workspace_path "/data/agents/zip"
 
   @type status :: %{
           configured?: boolean(),
@@ -37,9 +37,10 @@ defmodule Platform.Agents.WorkspaceBootstrap do
   """
   @spec status(keyword()) :: status()
   def status(opts \\ []) do
-    workspace_path = workspace_path(opts)
+    requested_path = workspace_path(opts)
 
-    with {:ok, parsed} <- load_workspace_config(workspace_path),
+    with {:ok, layout} <- resolve_layout(requested_path),
+         {:ok, parsed} <- Config.parse_file(layout.config_path),
          {:ok, parsed_agent} <- select_agent(parsed.agents, opts) do
       agent = Repo.get_by(Agent, slug: parsed_agent.id)
       pid = agent && AgentServer.whereis(agent.id)
@@ -49,7 +50,7 @@ defmodule Platform.Agents.WorkspaceBootstrap do
         bootable?: true,
         reachable?: is_pid(pid) and Process.alive?(pid),
         running?: is_pid(pid),
-        workspace_path: workspace_path,
+        workspace_path: layout.workspace_path,
         agent_slug: parsed_agent.id,
         agent_name: parsed_agent.name,
         agent: agent,
@@ -63,7 +64,7 @@ defmodule Platform.Agents.WorkspaceBootstrap do
           bootable?: false,
           reachable?: false,
           running?: false,
-          workspace_path: workspace_path,
+          workspace_path: requested_path,
           agent_slug: nil,
           agent_name: nil,
           agent: nil,
@@ -78,9 +79,10 @@ defmodule Platform.Agents.WorkspaceBootstrap do
   """
   @spec list_configured_agents(keyword()) :: {:ok, [Config.parsed_agent()]} | {:error, term()}
   def list_configured_agents(opts \\ []) do
-    workspace_path = workspace_path(opts)
+    requested_path = workspace_path(opts)
 
-    with {:ok, parsed} <- load_workspace_config(workspace_path) do
+    with {:ok, layout} <- resolve_layout(requested_path),
+         {:ok, parsed} <- Config.parse_file(layout.config_path) do
       {:ok, parsed.agents}
     end
   end
@@ -90,13 +92,14 @@ defmodule Platform.Agents.WorkspaceBootstrap do
   """
   @spec ensure_agent(keyword()) :: {:ok, Agent.t()} | {:error, term()}
   def ensure_agent(opts \\ []) do
-    workspace_path = workspace_path(opts)
+    requested_path = workspace_path(opts)
 
-    with {:ok, parsed} <- load_workspace_config(workspace_path),
+    with {:ok, layout} <- resolve_layout(requested_path),
+         {:ok, parsed} <- Config.parse_file(layout.config_path),
          {:ok, parsed_agent} <- select_agent(parsed.agents, opts) do
       Repo.transaction(fn ->
-        agent = upsert_agent!(parsed_agent, workspace_path)
-        sync_workspace_files!(agent.id, workspace_path)
+        agent = upsert_agent!(parsed_agent, layout)
+        sync_workspace_files!(agent.id, layout.workspace_path)
         agent
       end)
       |> normalize_transaction_result()
@@ -108,7 +111,8 @@ defmodule Platform.Agents.WorkspaceBootstrap do
   """
   @spec boot(keyword()) :: {:ok, status()} | {:error, term()}
   def boot(opts \\ []) do
-    with {:ok, agent} <- ensure_agent(opts),
+    with {:ok, layout} <- resolve_layout(workspace_path(opts)),
+         {:ok, agent} <- ensure_agent(opts),
          existing_pid <- AgentServer.whereis(agent.id),
          {:ok, pid} <- AgentServer.start_agent(agent) do
       if is_pid(existing_pid) do
@@ -121,7 +125,7 @@ defmodule Platform.Agents.WorkspaceBootstrap do
          bootable?: true,
          reachable?: Process.alive?(pid),
          running?: true,
-         workspace_path: workspace_path(opts),
+         workspace_path: layout.workspace_path,
          agent_slug: agent.slug,
          agent_name: agent.name,
          agent: Repo.get!(Agent, agent.id),
@@ -139,10 +143,43 @@ defmodule Platform.Agents.WorkspaceBootstrap do
     )
   end
 
-  defp load_workspace_config(workspace_path) do
-    workspace_path
-    |> Path.join("openclaw.json")
-    |> Config.parse_file()
+  @doc false
+  def resolve_layout(path) when is_binary(path) do
+    expanded = Path.expand(path)
+    direct_config = Path.join(expanded, "openclaw.json")
+    parent = Path.dirname(expanded)
+    parent_config = Path.join(parent, "openclaw.json")
+
+    cond do
+      File.regular?(direct_config) ->
+        {:ok,
+         %{
+           root_path: expanded,
+           config_path: direct_config,
+           workspace_path: resolve_workspace_dir(expanded)
+         }}
+
+      File.regular?(parent_config) ->
+        {:ok,
+         %{
+           root_path: parent,
+           config_path: parent_config,
+           workspace_path: expanded
+         }}
+
+      true ->
+        {:error, :enoent}
+    end
+  end
+
+  defp resolve_workspace_dir(root_path) do
+    nested_workspace = Path.join(root_path, "workspace")
+
+    if File.dir?(nested_workspace) do
+      nested_workspace
+    else
+      root_path
+    end
   end
 
   defp select_agent([agent], _opts), do: {:ok, agent}
@@ -162,91 +199,42 @@ defmodule Platform.Agents.WorkspaceBootstrap do
     end
   end
 
+  defp select_default_agent([]), do: {:error, :no_agents}
+
   defp select_default_agent(agents) do
-    configured_ids = Enum.map(agents, & &1.id)
-
-    persisted_agents =
-      from(agent in Agent, where: agent.slug in ^configured_ids)
-      |> Repo.all()
-
-    persisted_by_slug = Map.new(persisted_agents, &{&1.slug, &1})
-
-    with {:ok, slug} <- select_running_agent_slug(persisted_agents),
-         %{} = agent <- Enum.find(agents, &(&1.id == slug)) do
-      {:ok, agent}
-    else
-      {:error, :no_running_agents} ->
-        select_main_or_single_persisted_agent(agents, persisted_by_slug)
-
-      {:error, {:multiple_running_agents, _running_slugs}} ->
-        select_main_or_single_persisted_agent(agents, persisted_by_slug)
-
-      _other ->
-        select_main_or_error(agents, configured_ids)
-    end
-  end
-
-  defp select_running_agent_slug(persisted_agents) do
-    persisted_agents
-    |> Enum.filter(&(is_pid(AgentServer.whereis(&1.id)) and &1.status != "archived"))
-    |> Enum.map(& &1.slug)
-    |> Enum.uniq()
-    |> case do
-      [slug] -> {:ok, slug}
-      [] -> {:error, :no_running_agents}
-      slugs -> {:error, {:multiple_running_agents, slugs}}
-    end
-  end
-
-  defp select_main_or_single_persisted_agent(agents, persisted_by_slug) do
-    persisted_agents =
-      Enum.filter(agents, fn agent ->
-        case Map.get(persisted_by_slug, agent.id) do
-          %Agent{status: "archived"} -> false
-          %Agent{} -> true
-          nil -> false
-        end
-      end)
-
-    case select_main_agent(persisted_agents) do
-      {:ok, agent} ->
+    cond do
+      agent = Enum.find(agents, &agent_marked_default?/1) ->
         {:ok, agent}
 
-      {:error, :no_main_agent} ->
-        case persisted_agents do
-          [agent] -> {:ok, agent}
-          _ -> {:error, {:multiple_agents, Enum.map(agents, & &1.id)}}
-        end
+      agent = Enum.find(agents, &(&1.id == "main")) ->
+        {:ok, agent}
+
+      true ->
+        {:ok, hd(agents)}
     end
   end
 
-  defp select_main_or_error(agents, configured_ids) do
-    case select_main_agent(agents) do
-      {:ok, agent} -> {:ok, agent}
-      {:error, :no_main_agent} -> {:error, {:multiple_agents, configured_ids}}
-    end
+  defp agent_marked_default?(%{raw: raw}) when is_map(raw) do
+    Map.get(raw, "default") == true
   end
 
-  defp select_main_agent(agents) do
-    case Enum.find(agents, &(&1.id == "main")) do
-      %{} = agent -> {:ok, agent}
-      nil -> {:error, :no_main_agent}
-    end
-  end
+  defp agent_marked_default?(_agent), do: false
 
-  defp source_metadata(workspace_path) do
+  defp source_metadata(layout) do
     %{
       @source_key => %{
-        "path" => Path.expand(workspace_path)
+        "path" => Path.expand(layout.root_path),
+        "config_path" => Path.expand(layout.config_path),
+        "workspace_path" => Path.expand(layout.workspace_path)
       }
     }
   end
 
-  defp upsert_agent!(parsed_agent, workspace_path) do
+  defp upsert_agent!(parsed_agent, layout) do
     attrs =
       parsed_agent.attrs
-      |> Map.update(:metadata, source_metadata(workspace_path), fn metadata ->
-        Map.merge(metadata || %{}, source_metadata(workspace_path))
+      |> Map.update(:metadata, source_metadata(layout), fn metadata ->
+        Map.merge(metadata || %{}, source_metadata(layout))
       end)
 
     case Repo.get_by(Agent, slug: parsed_agent.id) do

@@ -148,7 +148,7 @@ defmodule PlatformWeb.ChatLive do
        |> assign(:participants_map, participants_map)
        |> assign(:online_count, online_count)
        |> assign(:agent_presence, agent_presence)
-       |> assign(:agent_status, shell_agent_status(agent_presence))
+       |> assign(:agent_status, PlatformWeb.ShellLive.default_agent_status())
        |> assign(:current_participant, participant)
        |> assign(:reactions_map, reactions_map)
        |> assign(:attachments_map, attachments_map)
@@ -618,7 +618,7 @@ defmodule PlatformWeb.ChatLive do
 
           socket
           |> assign(:agent_presence, agent_presence)
-          |> assign(:agent_status, shell_agent_status(agent_presence))
+          |> assign(:agent_status, PlatformWeb.ShellLive.default_agent_status())
           |> schedule_agent_presence_refresh()
       end
 
@@ -1862,10 +1862,6 @@ defmodule PlatformWeb.ChatLive do
       indicator: :missing
     }
   end
-
-  defp shell_agent_status(%{indicator: :online}), do: :online
-  defp shell_agent_status(%{indicator: :offline}), do: :offline
-  defp shell_agent_status(_presence), do: :unknown
 
   defp allow_runtime_sandbox(pid) when is_pid(pid) do
     if sandbox_pool?() do

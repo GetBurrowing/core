@@ -1413,7 +1413,7 @@ defmodule PlatformWeb.ControlCenterLive do
     |> assign(:show_create_agent, socket.assigns[:show_create_agent] || false)
     |> assign(:pending_delete_slug, nil)
     |> assign(:memory_form, to_form(default_memory_entry(), as: :memory_entry))
-    |> assign(:agent_status, default_shell_agent_status())
+    |> assign(:agent_status, PlatformWeb.ShellLive.default_agent_status())
     |> assign(:selected_agent_directory_entry, nil)
   end
 
@@ -1474,7 +1474,7 @@ defmodule PlatformWeb.ControlCenterLive do
     )
     |> assign(:pending_delete_slug, pending_delete_slug(socket, agent.slug))
     |> assign(:memory_form, build_memory_form(Keyword.get(opts, :memory_params)))
-    |> assign(:agent_status, shell_agent_status(runtime))
+    |> assign(:agent_status, PlatformWeb.ShellLive.default_agent_status())
   end
 
   defp reload_selected_agent(socket, opts \\ [])
@@ -1980,28 +1980,6 @@ defmodule PlatformWeb.ControlCenterLive do
     case runtime_snapshot(agent) do
       %{status: status} -> status
       _ -> :unknown
-    end
-  end
-
-  defp shell_agent_status(%{running?: true, status: :paused}), do: :paused
-  defp shell_agent_status(%{running?: true}), do: :online
-  defp shell_agent_status(%{status: :paused}), do: :paused
-  defp shell_agent_status(%{status: _status}), do: :offline
-  defp shell_agent_status(_runtime), do: :unknown
-
-  defp default_shell_agent_status do
-    case WorkspaceBootstrap.status() do
-      %{agent: %Agent{} = agent} ->
-        shell_agent_status(runtime_snapshot(agent))
-
-      %{reachable?: true} ->
-        :online
-
-      %{configured?: true} ->
-        :offline
-
-      _ ->
-        :unknown
     end
   end
 

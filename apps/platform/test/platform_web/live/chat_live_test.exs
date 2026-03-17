@@ -3,7 +3,7 @@ defmodule PlatformWeb.ChatLiveTest do
   import Phoenix.LiveViewTest
 
   alias Platform.Accounts.User
-  alias Platform.Agents.AgentServer
+  alias Platform.Agents.{Agent, AgentServer}
   alias Platform.Chat
   alias Platform.Repo
 
@@ -128,6 +128,87 @@ defmodule PlatformWeb.ChatLiveTest do
     assert html =~ "Agent online"
     assert count_occurrences(html, "Agent online") == 1
     refute html =~ "Zip online"
+  end
+
+  test "chat boots the first configured workspace agent when no main agent exists", %{conn: conn} do
+    conn = authenticated_conn(conn)
+
+    workspace =
+      Path.join(
+        System.tmp_dir!(),
+        "platform-chat-live-default-agent-#{System.unique_integer([:positive, :monotonic])}"
+      )
+
+    File.mkdir_p!(workspace)
+
+    previous_workspace = Application.get_env(:platform, :agent_workspace_path)
+
+    on_exit(fn ->
+      AgentServer.stop_agent("zip")
+      AgentServer.stop_agent("sidecar")
+      File.rm_rf(workspace)
+      Application.put_env(:platform, :agent_workspace_path, previous_workspace)
+    end)
+
+    File.write!(
+      Path.join(workspace, "openclaw.json"),
+      Jason.encode!(%{
+        "agents" => %{
+          "list" => [
+            %{
+              "id" => "zip",
+              "name" => "Zip",
+              "model" => %{"primary" => "anthropic/claude-sonnet-4-6"}
+            },
+            %{
+              "id" => "sidecar",
+              "name" => "Sidecar",
+              "model" => %{"primary" => "openai/gpt-4.1"}
+            }
+          ]
+        }
+      })
+    )
+
+    File.write!(Path.join(workspace, "SOUL.md"), "steady")
+    Application.put_env(:platform, :agent_workspace_path, workspace)
+
+    {:ok, _view, html} = live(conn, ~p"/chat/general")
+
+    assert html =~ "Agent online"
+    assert is_pid(AgentServer.whereis("zip"))
+    assert AgentServer.whereis("sidecar") == nil
+  end
+
+  test "chat falls back to persisted main agent when workspace bootstrap is unavailable", %{
+    conn: conn
+  } do
+    conn = authenticated_conn(conn)
+
+    previous_workspace = Application.get_env(:platform, :agent_workspace_path)
+    Application.put_env(:platform, :agent_workspace_path, "/tmp/does-not-exist/platform-agent")
+
+    {:ok, agent} =
+      %Agent{}
+      |> Agent.changeset(%{
+        slug: "main",
+        name: "Zip",
+        status: "active",
+        max_concurrent: 1,
+        sandbox_mode: "off",
+        model_config: %{"primary" => "anthropic/claude-sonnet-4-6"}
+      })
+      |> Repo.insert()
+
+    on_exit(fn ->
+      AgentServer.stop_agent(agent)
+      Application.put_env(:platform, :agent_workspace_path, previous_workspace)
+    end)
+
+    {:ok, _view, html} = live(conn, ~p"/chat/general")
+
+    assert html =~ "Agent online"
+    assert is_pid(AgentServer.whereis(agent.id))
   end
 
   describe "search" do
