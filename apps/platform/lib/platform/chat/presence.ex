@@ -53,6 +53,8 @@ defmodule Platform.Chat.Presence do
     otp_app: :platform,
     pubsub_server: Platform.PubSub
 
+  alias Platform.Agents.WorkspaceBootstrap
+  alias Platform.Chat
   alias Platform.Chat.PubSub, as: ChatPubSub
 
   # ── Convenience helpers (space_id ─► topic) ──────────────────────────────────
@@ -102,4 +104,32 @@ defmodule Platform.Chat.Presence do
   def online_count(space_id) do
     space_id |> list_space() |> map_size()
   end
+
+  @doc """
+  Return runtime-backed presence for the configured native agent in a space.
+  """
+  @spec native_agent_presence(binary(), keyword()) :: map()
+  def native_agent_presence(space_id, opts \\ []) do
+    status = WorkspaceBootstrap.status(opts)
+
+    participant =
+      case status.agent do
+        nil ->
+          nil
+
+        agent ->
+          Chat.list_participants(space_id, participant_type: "agent")
+          |> Enum.find(&(&1.participant_id == agent.id))
+      end
+
+    Map.merge(status, %{
+      joined?: not is_nil(participant),
+      participant: participant,
+      indicator: native_agent_indicator(status)
+    })
+  end
+
+  defp native_agent_indicator(%{reachable?: true}), do: :online
+  defp native_agent_indicator(%{configured?: true}), do: :offline
+  defp native_agent_indicator(_status), do: :missing
 end

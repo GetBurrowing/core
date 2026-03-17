@@ -22,16 +22,20 @@ defmodule PlatformWeb.ChatLive do
   import PlatformWeb.Chat.CanvasComponents
 
   alias Platform.Accounts
+  alias Platform.Agents.WorkspaceBootstrap
+  alias Ecto.Adapters.SQL.Sandbox
   alias Platform.Chat
   alias Platform.Chat.AttachmentStorage
   alias Platform.Chat.Presence, as: ChatPresence
   alias Platform.Chat.PubSub, as: ChatPubSub
+  alias Platform.Repo
 
   @message_limit 50
   @quick_emojis ["👍", "❤️", "😂", "🎉"]
   @max_upload_entries 5
   @max_upload_size 15_000_000
   @canvas_types ~w(table form code diagram dashboard custom)
+  @agent_presence_refresh_ms 5_000
 
   @impl true
   def mount(_params, session, socket) do
@@ -50,6 +54,7 @@ defmodule PlatformWeb.ChatLive do
       |> assign(:highlighted_thread_message_id, nil)
       |> assign(:participants_map, %{})
       |> assign(:online_count, 0)
+      |> assign(:agent_presence, default_agent_presence())
       |> assign(:current_participant, nil)
       |> assign(:reactions_map, %{})
       |> assign(:attachments_map, %{})
@@ -105,6 +110,7 @@ defmodule PlatformWeb.ChatLive do
       if connected?(socket), do: ChatPubSub.subscribe(space.id)
 
       participant = ensure_participant(space.id, socket.assigns.user_id)
+      agent_presence = ensure_native_agent_presence(space.id)
 
       if connected?(socket) && participant do
         display_name = resolve_display_name(socket.assigns.user_id, participant)
@@ -144,6 +150,7 @@ defmodule PlatformWeb.ChatLive do
        |> assign_search_form("")
        |> assign(:participants_map, participants_map)
        |> assign(:online_count, online_count)
+       |> assign(:agent_presence, agent_presence)
        |> assign(:current_participant, participant)
        |> assign(:reactions_map, reactions_map)
        |> assign(:attachments_map, attachments_map)
@@ -160,7 +167,8 @@ defmodule PlatformWeb.ChatLive do
        |> assign(:mobile_browser_open, false)
        |> assign(:spaces, Chat.list_spaces())
        |> assign_new_canvas_form()
-       |> stream(:messages, messages, reset: true)}
+       |> stream(:messages, messages, reset: true)
+       |> schedule_agent_presence_refresh()}
     end
   end
 
@@ -601,6 +609,21 @@ defmodule PlatformWeb.ChatLive do
     {:noreply, assign(socket, :online_count, online_count)}
   end
 
+  def handle_info(:refresh_agent_presence, socket) do
+    socket =
+      case socket.assigns.active_space do
+        nil ->
+          socket
+
+        space ->
+          socket
+          |> assign(:agent_presence, ChatPresence.native_agent_presence(space.id))
+          |> schedule_agent_presence_refresh()
+      end
+
+    {:noreply, socket}
+  end
+
   def handle_info(_msg, socket), do: {:noreply, socket}
 
   @impl true
@@ -754,6 +777,15 @@ defmodule PlatformWeb.ChatLive do
                 <span>📌</span>
                 <span>{length(@pins)} pinned</span>
               </button>
+
+              <div class="flex items-center gap-1.5">
+                <span class={[
+                  "inline-block size-2 rounded-full",
+                  agent_presence_dot_class(@agent_presence)
+                ]}>
+                </span>
+                <span>{agent_presence_label(@agent_presence)}</span>
+              </div>
 
               <div class="flex items-center gap-1.5">
                 <span class="inline-block size-2 rounded-full bg-success"></span>
@@ -1773,6 +1805,81 @@ defmodule PlatformWeb.ChatLive do
 
   defp resolve_display_name(user_id, participant) do
     participant.display_name || name_for_user(user_id)
+  end
+
+  defp ensure_native_agent_presence(space_id) do
+    with {:ok, status} <- WorkspaceBootstrap.boot(),
+         %{} = agent <- status.agent do
+      allow_runtime_sandbox(status.pid)
+      _ = Chat.ensure_agent_participant(space_id, agent, display_name: agent.name)
+      ChatPresence.native_agent_presence(space_id)
+    else
+      _ -> ChatPresence.native_agent_presence(space_id)
+    end
+  end
+
+  defp schedule_agent_presence_refresh(socket) do
+    if connected?(socket) && socket.assigns.active_space do
+      Process.send_after(self(), :refresh_agent_presence, @agent_presence_refresh_ms)
+    end
+
+    socket
+  end
+
+  defp default_agent_presence do
+    %{
+      configured?: false,
+      bootable?: false,
+      reachable?: false,
+      running?: false,
+      workspace_path: nil,
+      agent_slug: nil,
+      agent_name: nil,
+      agent: nil,
+      pid: nil,
+      error: nil,
+      joined?: false,
+      participant: nil,
+      indicator: :missing
+    }
+  end
+
+  defp agent_presence_label(%{reachable?: true, agent_name: name}) when is_binary(name),
+    do: "#{name} online"
+
+  defp agent_presence_label(%{configured?: true, agent_name: name}) when is_binary(name),
+    do: "#{name} offline"
+
+  defp agent_presence_label(_presence), do: "No agent"
+
+  defp agent_presence_dot_class(%{indicator: :online}), do: "bg-success"
+  defp agent_presence_dot_class(%{indicator: :offline}), do: "bg-warning"
+  defp agent_presence_dot_class(_presence), do: "bg-base-content/20"
+
+  defp allow_runtime_sandbox(pid) when is_pid(pid) do
+    if sandbox_pool?() do
+      case Sandbox.allow(Repo, self(), pid) do
+        :ok -> :ok
+        {:already, :owner} -> :ok
+        {:already, :allowed} -> :ok
+        _other -> :ok
+      end
+    else
+      :ok
+    end
+  rescue
+    _ -> :ok
+  end
+
+  defp allow_runtime_sandbox(_pid), do: :ok
+
+  defp sandbox_pool? do
+    case Repo.config()[:pool] do
+      Sandbox -> true
+      _ -> false
+    end
+  rescue
+    _ -> false
   end
 
   defp sender_name(participants_map, participant_id) do

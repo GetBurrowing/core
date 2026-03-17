@@ -35,6 +35,7 @@ defmodule Platform.Chat do
   import Ecto.Query
 
   alias Ecto.Multi
+  alias Platform.Agents.Agent
   alias Platform.Chat.{Attachment, Canvas, Message, Participant, Pin, Reaction, Space, Thread}
   alias Platform.Chat.PubSub, as: ChatPubSub
   alias Platform.Repo
@@ -240,6 +241,52 @@ defmodule Platform.Chat do
     end
 
     result
+  end
+
+  @doc """
+  Ensure an agent is an active participant in the space.
+  """
+  @spec ensure_agent_participant(binary(), Agent.t() | binary(), keyword()) ::
+          {:ok, Participant.t()} | {:error, term()}
+  def ensure_agent_participant(space_id, agent_or_id, opts \\ [])
+
+  def ensure_agent_participant(space_id, %Agent{} = agent, opts) do
+    display_name = Keyword.get(opts, :display_name, agent.name)
+    attention_mode = Keyword.get(opts, :attention_mode, "mention")
+    joined_at = Keyword.get(opts, :joined_at, DateTime.utc_now())
+
+    case Repo.get_by(Participant,
+           space_id: space_id,
+           participant_type: "agent",
+           participant_id: agent.id
+         ) do
+      nil ->
+        add_participant(space_id, %{
+          participant_type: "agent",
+          participant_id: agent.id,
+          display_name: display_name,
+          attention_mode: attention_mode,
+          joined_at: joined_at
+        })
+
+      %Participant{left_at: nil} = participant ->
+        {:ok, participant}
+
+      %Participant{} = participant ->
+        update_participant(participant, %{
+          left_at: nil,
+          display_name: display_name,
+          attention_mode: attention_mode,
+          joined_at: joined_at
+        })
+    end
+  end
+
+  def ensure_agent_participant(space_id, agent_id, opts) when is_binary(agent_id) do
+    case Repo.get(Agent, agent_id) do
+      %Agent{} = agent -> ensure_agent_participant(space_id, agent, opts)
+      nil -> {:error, :not_found}
+    end
   end
 
   # ── Messages ────────────────────────────────────────────────────────────────

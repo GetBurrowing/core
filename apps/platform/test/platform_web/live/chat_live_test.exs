@@ -3,6 +3,7 @@ defmodule PlatformWeb.ChatLiveTest do
   import Phoenix.LiveViewTest
 
   alias Platform.Accounts.User
+  alias Platform.Agents.AgentServer
   alias Platform.Chat
   alias Platform.Repo
 
@@ -70,6 +71,50 @@ defmodule PlatformWeb.ChatLiveTest do
       |> render_submit()
 
     assert html =~ "hello from test"
+  end
+
+  test "shows the native agent as online only when the runtime is reachable", %{conn: conn} do
+    conn = authenticated_conn(conn)
+
+    workspace =
+      Path.join(
+        System.tmp_dir!(),
+        "platform-chat-live-agent-#{System.unique_integer([:positive, :monotonic])}"
+      )
+
+    File.mkdir_p!(workspace)
+
+    slug = "zip-#{System.unique_integer([:positive, :monotonic])}"
+    previous_workspace = Application.get_env(:platform, :agent_workspace_path)
+
+    on_exit(fn ->
+      AgentServer.stop_agent(slug)
+      File.rm_rf(workspace)
+      Application.put_env(:platform, :agent_workspace_path, previous_workspace)
+    end)
+
+    File.write!(
+      Path.join(workspace, "openclaw.json"),
+      Jason.encode!(%{
+        "agents" => %{
+          "list" => [
+            %{
+              "id" => slug,
+              "name" => "Zip",
+              "model" => %{"primary" => "anthropic/claude-sonnet-4-6"}
+            }
+          ]
+        }
+      })
+    )
+
+    File.write!(Path.join(workspace, "SOUL.md"), "steady")
+
+    Application.put_env(:platform, :agent_workspace_path, workspace)
+
+    {:ok, _view, html} = live(conn, ~p"/chat/general")
+
+    assert html =~ "Zip online"
   end
 
   describe "search" do
