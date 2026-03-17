@@ -47,7 +47,7 @@ defmodule Platform.Chat.AttentionRouter do
 
   require Logger
 
-  alias Platform.Chat.{Message, Participant}
+  alias Platform.Chat.{AgentResponder, Message, Participant}
   alias Platform.Chat.PubSub, as: ChatPubSub
   alias Platform.Repo
 
@@ -224,6 +224,7 @@ defmodule Platform.Chat.AttentionRouter do
 
         _ ->
           ChatPubSub.broadcast(space_id, {:attention_needed, signal})
+          AgentResponder.maybe_dispatch(signal)
       end
 
       emit_attention_telemetry(signal)
@@ -247,12 +248,22 @@ defmodule Platform.Chat.AttentionRouter do
   # ── Mention detection ────────────────────────────────────────────────────────
 
   defp mentioned?(%Participant{} = p, %Message{content: content}) when is_binary(content) do
-    name_match = not is_nil(p.display_name) and String.contains?(content, "@#{p.display_name}")
-    id_match = String.contains?(content, "@#{p.id}")
+    downcased = String.downcase(content)
+
+    name_match =
+      is_binary(p.display_name) and p.display_name != "" and
+        String.contains?(downcased, "@#{String.downcase(p.display_name)}")
+
+    id_match = String.contains?(downcased, "@#{String.downcase(p.id)}")
 
     # Support user-configured keywords in attention_config["keywords"]
     keywords = get_in(p.attention_config, ["keywords"]) || []
-    keyword_match = Enum.any?(keywords, &String.contains?(content, &1))
+
+    keyword_match =
+      Enum.any?(keywords, fn keyword ->
+        is_binary(keyword) and keyword != "" and
+          String.contains?(downcased, String.downcase(keyword))
+      end)
 
     name_match or id_match or keyword_match
   end

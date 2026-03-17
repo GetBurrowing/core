@@ -1,0 +1,168 @@
+defmodule Platform.Chat.AgentResponder do
+  @moduledoc """
+  Handles native agent replies triggered by chat attention signals.
+
+  Uses the existing attention routing layer as the trigger surface, then invokes
+  the configured chat agent module (QuickAgent by default) and persists the
+  reply back into chat as a normal agent-authored message.
+  """
+
+  require Logger
+
+  alias Platform.Agents.Agent
+  alias Platform.Chat
+  alias Platform.Chat.{Message, Participant}
+  alias Platform.Repo
+
+  @history_limit 12
+
+  @spec maybe_dispatch(map()) :: :ok
+  def maybe_dispatch(signal) when is_map(signal) do
+    case dispatch_mode() do
+      :sync ->
+        _ = respond(signal)
+        :ok
+
+      _ ->
+        Task.start(fn ->
+          _ = respond(signal)
+        end)
+
+        :ok
+    end
+  end
+
+  @spec respond(map()) :: :ok | {:error, term()}
+  def respond(%{reason: :mention} = signal) do
+    with {:ok, context} <- load_context(signal),
+         {:ok, response} <- chat_module().chat(context.user_message, history: context.history),
+         reply when is_binary(reply) <- Map.get(response, :content),
+         trimmed_reply when trimmed_reply != "" <- String.trim(reply),
+         {:ok, _message} <- persist_reply(context, trimmed_reply) do
+      :ok
+    else
+      {:error, :ignore} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("[AgentResponder] skipped reply: #{inspect(reason)}")
+        {:error, reason}
+
+      _ ->
+        :ok
+    end
+  rescue
+    error ->
+      Logger.error("[AgentResponder] failed: #{Exception.format(:error, error, __STACKTRACE__)}")
+      {:error, error}
+  end
+
+  def respond(_signal), do: :ok
+
+  defp load_context(%{participant_id: participant_id, message_id: message_id, space_id: space_id}) do
+    with %Participant{participant_type: "agent"} = participant <-
+           Chat.get_participant(participant_id),
+         %Message{} = message <- Chat.get_message(message_id),
+         %Participant{} = author <- Chat.get_participant(message.participant_id),
+         false <- author.participant_type == "agent",
+         %Agent{} = agent <- Repo.get(Agent, participant.participant_id),
+         {:ok, active_agent_participant} <-
+           Chat.ensure_agent_participant(space_id, agent, display_name: agent.name),
+         history <- build_history(space_id, message, active_agent_participant.id) do
+      {:ok,
+       %{
+         signal: %{participant_id: participant_id, message_id: message_id, space_id: space_id},
+         agent: agent,
+         agent_participant: active_agent_participant,
+         message: message,
+         user_message: String.trim(message.content || ""),
+         history: history
+       }}
+    else
+      nil -> {:error, :ignore}
+      true -> {:error, :ignore}
+      {:error, reason} -> {:error, reason}
+      _ -> {:error, :ignore}
+    end
+  end
+
+  defp persist_reply(context, reply) do
+    Chat.post_message(%{
+      space_id: context.message.space_id,
+      thread_id: context.message.thread_id,
+      participant_id: context.agent_participant.id,
+      content_type: "text",
+      content: String.trim(reply),
+      metadata: %{
+        "source" => "agent_responder",
+        "trigger" => "mention",
+        "reply_to_message_id" => context.message.id,
+        "agent_id" => context.agent.id
+      }
+    })
+  end
+
+  defp build_history(space_id, %Message{} = message, agent_participant_id) do
+    participants =
+      Chat.list_participants(space_id, include_left: true)
+      |> Map.new(fn participant -> {participant.id, participant} end)
+
+    opts =
+      if is_binary(message.thread_id) do
+        [thread_id: message.thread_id, limit: @history_limit]
+      else
+        [top_level_only: true, limit: @history_limit]
+      end
+
+    space_id
+    |> Chat.list_messages(opts)
+    |> Enum.reject(&(&1.id == message.id))
+    |> Enum.sort_by(& &1.inserted_at, fn left, right -> DateTime.compare(left, right) != :gt end)
+    |> Enum.flat_map(fn item ->
+      case history_message(item, participants, agent_participant_id) do
+        nil -> []
+        entry -> [entry]
+      end
+    end)
+  end
+
+  defp history_message(
+         %Message{content_type: "text", content: content} = message,
+         participants,
+         agent_id
+       )
+       when is_binary(content) do
+    trimmed = String.trim(content)
+
+    if trimmed == "" do
+      nil
+    else
+      participant = Map.get(participants, message.participant_id)
+
+      role =
+        if message.participant_id == agent_id, do: "assistant", else: history_role(participant)
+
+      %{role: role, content: history_content(trimmed, participant, role)}
+    end
+  end
+
+  defp history_message(_message, _participants, _agent_id), do: nil
+
+  defp history_role(%Participant{participant_type: "agent"}), do: "assistant"
+  defp history_role(_participant), do: "user"
+
+  defp history_content(content, %Participant{display_name: name}, "user")
+       when is_binary(name) and name != "" do
+    "#{name}: #{content}"
+  end
+
+  defp history_content(content, _participant, _role), do: content
+
+  defp chat_module do
+    Application.get_env(:platform, :chat_agent_module, Platform.Agents.QuickAgent)
+  end
+
+  defp dispatch_mode do
+    Application.get_env(:platform, :chat_agent_dispatch_mode, :async)
+  end
+end
