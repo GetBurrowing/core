@@ -152,13 +152,85 @@ defmodule Platform.Agents.WorkspaceBootstrap do
 
     case target do
       nil ->
-        {:error, {:multiple_agents, Enum.map(agents, & &1.id)}}
+        select_default_agent(agents)
 
       target ->
         case Enum.find(agents, &(&1.id == target)) do
           nil -> {:error, {:agent_not_found, target}}
           agent -> {:ok, agent}
         end
+    end
+  end
+
+  defp select_default_agent(agents) do
+    configured_ids = Enum.map(agents, & &1.id)
+
+    persisted_agents =
+      from(agent in Agent, where: agent.slug in ^configured_ids)
+      |> Repo.all()
+
+    persisted_by_slug = Map.new(persisted_agents, &{&1.slug, &1})
+
+    with {:ok, slug} <- select_running_agent_slug(persisted_agents),
+         %{} = agent <- Enum.find(agents, &(&1.id == slug)) do
+      {:ok, agent}
+    else
+      {:error, :no_running_agents} ->
+        select_main_or_single_persisted_agent(agents, persisted_by_slug)
+
+      {:error, {:multiple_running_agents, _running_slugs}} ->
+        select_main_or_single_persisted_agent(agents, persisted_by_slug)
+
+      _other ->
+        select_main_or_error(agents, configured_ids)
+    end
+  end
+
+  defp select_running_agent_slug(persisted_agents) do
+    persisted_agents
+    |> Enum.filter(&(is_pid(AgentServer.whereis(&1.id)) and &1.status != "archived"))
+    |> Enum.map(& &1.slug)
+    |> Enum.uniq()
+    |> case do
+      [slug] -> {:ok, slug}
+      [] -> {:error, :no_running_agents}
+      slugs -> {:error, {:multiple_running_agents, slugs}}
+    end
+  end
+
+  defp select_main_or_single_persisted_agent(agents, persisted_by_slug) do
+    persisted_agents =
+      Enum.filter(agents, fn agent ->
+        case Map.get(persisted_by_slug, agent.id) do
+          %Agent{status: "archived"} -> false
+          %Agent{} -> true
+          nil -> false
+        end
+      end)
+
+    case select_main_agent(persisted_agents) do
+      {:ok, agent} ->
+        {:ok, agent}
+
+      {:error, :no_main_agent} ->
+        case persisted_agents do
+          [agent] -> {:ok, agent}
+          _ -> {:error, {:multiple_agents, Enum.map(agents, & &1.id)}}
+        end
+    end
+  end
+
+  defp select_main_or_error(agents, configured_ids) do
+    case select_main_agent(agents) do
+      {:ok, agent} -> {:ok, agent}
+      {:error, :no_main_agent} -> {:error, {:multiple_agents, configured_ids}}
+    end
+  end
+
+  defp select_main_agent(agents) do
+    case Enum.find(agents, &(&1.id == "main")) do
+      %{} = agent -> {:ok, agent}
+      nil -> {:error, :no_main_agent}
     end
   end
 

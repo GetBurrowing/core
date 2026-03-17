@@ -148,6 +148,7 @@ defmodule PlatformWeb.ChatLive do
        |> assign(:participants_map, participants_map)
        |> assign(:online_count, online_count)
        |> assign(:agent_presence, agent_presence)
+       |> assign(:agent_status, shell_agent_status(agent_presence))
        |> assign(:current_participant, participant)
        |> assign(:reactions_map, reactions_map)
        |> assign(:attachments_map, attachments_map)
@@ -613,8 +614,11 @@ defmodule PlatformWeb.ChatLive do
           socket
 
         space ->
+          agent_presence = ChatPresence.native_agent_presence(space.id)
+
           socket
-          |> assign(:agent_presence, ChatPresence.native_agent_presence(space.id))
+          |> assign(:agent_presence, agent_presence)
+          |> assign(:agent_status, shell_agent_status(agent_presence))
           |> schedule_agent_presence_refresh()
       end
 
@@ -774,20 +778,6 @@ defmodule PlatformWeb.ChatLive do
                 <span>📌</span>
                 <span>{length(@pins)} pinned</span>
               </button>
-
-              <div class="flex items-center gap-1.5">
-                <span class={[
-                  "inline-block size-2 rounded-full",
-                  agent_presence_dot_class(@agent_presence)
-                ]}>
-                </span>
-                <span>{agent_presence_label(@agent_presence)}</span>
-              </div>
-
-              <div class="flex items-center gap-1.5">
-                <span class="inline-block size-2 rounded-full bg-success"></span>
-                <span>{@online_count} online</span>
-              </div>
             </div>
           </header>
 
@@ -1873,17 +1863,9 @@ defmodule PlatformWeb.ChatLive do
     }
   end
 
-  defp agent_presence_label(%{reachable?: true, agent_name: name}) when is_binary(name),
-    do: "#{name} online"
-
-  defp agent_presence_label(%{configured?: true, agent_name: name}) when is_binary(name),
-    do: "#{name} offline"
-
-  defp agent_presence_label(_presence), do: "No agent"
-
-  defp agent_presence_dot_class(%{indicator: :online}), do: "bg-success"
-  defp agent_presence_dot_class(%{indicator: :offline}), do: "bg-warning"
-  defp agent_presence_dot_class(_presence), do: "bg-base-content/20"
+  defp shell_agent_status(%{indicator: :online}), do: :online
+  defp shell_agent_status(%{indicator: :offline}), do: :offline
+  defp shell_agent_status(_presence), do: :unknown
 
   defp allow_runtime_sandbox(pid) when is_pid(pid) do
     if sandbox_pool?() do

@@ -80,5 +80,48 @@ defmodule Platform.Agents.WorkspaceBootstrapTest do
       refute status.reachable?
       assert status.error
     end
+
+    test "prefers the main agent when multiple configured runtimes are running" do
+      workspace = tmp_workspace!("status-main")
+
+      File.write!(
+        Path.join(workspace, "openclaw.json"),
+        Jason.encode!(%{
+          "agents" => %{
+            "list" => [
+              %{
+                "id" => "main",
+                "name" => "Main",
+                "model" => %{"primary" => "anthropic/claude-sonnet-4-6"}
+              },
+              %{
+                "id" => "sidecar",
+                "name" => "Sidecar",
+                "model" => %{"primary" => "openai/gpt-4.1"}
+              }
+            ]
+          }
+        })
+      )
+
+      File.write!(Path.join(workspace, "SOUL.md"), "steady")
+
+      {:ok, main_agent} =
+        WorkspaceBootstrap.ensure_agent(workspace_path: workspace, slug: "main")
+
+      {:ok, sidecar_agent} =
+        WorkspaceBootstrap.ensure_agent(workspace_path: workspace, slug: "sidecar")
+
+      {:ok, main_pid} = AgentServer.start_agent(main_agent)
+      {:ok, sidecar_pid} = AgentServer.start_agent(sidecar_agent)
+
+      on_exit(fn ->
+        AgentServer.stop_agent(main_pid)
+        AgentServer.stop_agent(sidecar_pid)
+      end)
+
+      assert %{configured?: true, reachable?: true, agent_slug: "main", agent_name: "Main"} =
+               WorkspaceBootstrap.status(workspace_path: workspace)
+    end
   end
 end

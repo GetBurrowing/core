@@ -57,6 +57,8 @@ defmodule PlatformWeb.ControlCenterLive do
      |> assign(:platform_credentials, [])
      |> assign(:config_form, to_form(%{}, as: :config))
      |> assign(:create_agent_form, to_form(default_create_agent_params(), as: :create_agent))
+     |> assign(:show_create_agent, false)
+     |> assign(:pending_delete_slug, nil)
      |> assign(:memory_form, to_form(default_memory_entry(), as: :memory_entry))
      |> assign(:agent_status, :unknown)
      |> assign(:selected_agent_directory_entry, nil)}
@@ -196,6 +198,7 @@ defmodule PlatformWeb.ControlCenterLive do
         {:noreply,
          socket
          |> put_flash(:info, "Created #{agent.name}.")
+         |> assign(:show_create_agent, false)
          |> assign(:create_agent_form, to_form(default_create_agent_params(), as: :create_agent))
          |> push_patch(to: ~p"/control/#{agent.slug}")}
 
@@ -209,6 +212,74 @@ defmodule PlatformWeb.ControlCenterLive do
 
   def handle_event("create_agent", _params, socket), do: {:noreply, socket}
 
+  def handle_event("toggle_create_agent", _params, socket) do
+    {:noreply, assign(socket, :show_create_agent, !socket.assigns.show_create_agent)}
+  end
+
+  def handle_event("request_delete_agent", %{"slug" => slug}, socket) when is_binary(slug) do
+    case find_agent_directory_entry(socket.assigns.agents, slug) do
+      %{agent: %Agent{}, workspace_managed?: false} ->
+        {:noreply, assign(socket, :pending_delete_slug, slug)}
+
+      %{workspace_managed?: true} ->
+        {:noreply,
+         put_flash(
+           socket,
+           :error,
+           "This agent is managed by the mounted workspace config. Remove it there to delete it permanently."
+         )}
+
+      _ ->
+        {:noreply, put_flash(socket, :error, "Agent not found.")}
+    end
+  end
+
+  def handle_event(
+        "request_delete_agent",
+        _params,
+        %{assigns: %{selected_agent: %Agent{} = agent, selected_agent_directory_entry: entry}} =
+          socket
+      ) do
+    if entry && entry.workspace_managed? do
+      {:noreply,
+       put_flash(
+         socket,
+         :error,
+         "This agent is managed by the mounted workspace config. Remove it there to delete it permanently."
+       )}
+    else
+      {:noreply, assign(socket, :pending_delete_slug, agent.slug)}
+    end
+  end
+
+  def handle_event("request_delete_agent", _params, socket), do: {:noreply, socket}
+
+  def handle_event("cancel_delete_agent", _params, socket) do
+    {:noreply, assign(socket, :pending_delete_slug, nil)}
+  end
+
+  def handle_event("delete_agent", %{"slug" => slug}, socket) when is_binary(slug) do
+    case {socket.assigns.pending_delete_slug,
+          find_agent_directory_entry(socket.assigns.agents, slug)} do
+      {pending_slug, _entry} when pending_slug != slug ->
+        {:noreply, put_flash(socket, :error, "Confirm the delete action first.")}
+
+      {_pending_slug, %{agent: %Agent{} = agent, workspace_managed?: false}} ->
+        handle_delete_agent(socket, agent)
+
+      {_pending_slug, %{workspace_managed?: true}} ->
+        {:noreply,
+         put_flash(
+           socket,
+           :error,
+           "This agent is managed by the mounted workspace config. Remove it there to delete it permanently."
+         )}
+
+      _ ->
+        {:noreply, put_flash(socket, :error, "Agent not found.")}
+    end
+  end
+
   def handle_event(
         "delete_agent",
         _params,
@@ -216,6 +287,9 @@ defmodule PlatformWeb.ControlCenterLive do
           socket
       ) do
     cond do
+      socket.assigns.pending_delete_slug != agent.slug ->
+        {:noreply, put_flash(socket, :error, "Confirm the delete action first.")}
+
       entry && entry.workspace_managed? ->
         {:noreply,
          put_flash(
@@ -225,33 +299,7 @@ defmodule PlatformWeb.ControlCenterLive do
          )}
 
       true ->
-        case delete_agent(agent) do
-          :ok ->
-            next_slug =
-              list_agents()
-              |> Enum.reject(&(&1.slug == agent.slug))
-              |> List.first()
-              |> case do
-                nil -> nil
-                next -> next.slug
-              end
-
-            socket =
-              socket
-              |> put_flash(:info, "Deleted #{agent.name}.")
-              |> assign(:selected_agent, nil)
-              |> assign(:selected_agent_directory_entry, nil)
-
-            {:noreply,
-             if next_slug do
-               push_patch(socket, to: ~p"/control/#{next_slug}")
-             else
-               push_patch(socket, to: ~p"/control")
-             end}
-
-          {:error, reason} ->
-            {:noreply, put_flash(socket, :error, "Could not delete agent: #{inspect(reason)}")}
-        end
+        handle_delete_agent(socket, agent)
     end
   end
 
@@ -411,21 +459,41 @@ defmodule PlatformWeb.ControlCenterLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <div class="flex min-h-full flex-col bg-base-100 lg:h-full lg:flex-row lg:overflow-hidden">
+    <div class="flex h-full min-h-full flex-col overflow-hidden bg-base-100 lg:flex-row">
       <aside
         id="agent-directory"
-        class="flex w-full flex-col border-b border-base-300 bg-base-200/60 lg:w-80 lg:flex-shrink-0 lg:border-b-0 lg:border-r"
+        class={[
+          "flex min-h-0 w-full flex-col overflow-hidden border-base-300 bg-base-200/60 lg:w-80 lg:flex-shrink-0 lg:border-r",
+          @selected_agent && "hidden border-b lg:flex",
+          is_nil(@selected_agent) && "border-b"
+        ]}
       >
         <div class="border-b border-base-300 px-4 py-4 sm:px-5">
-          <p class="text-xs font-semibold uppercase tracking-widest text-base-content/50">
-            Agent Control Center
-          </p>
-          <p class="mt-1 text-sm text-base-content/70">
-            Runtime, identity files, memory, sessions, and Vault visibility.
-          </p>
+          <div class="flex items-start justify-between gap-3">
+            <div>
+              <p class="text-xs font-semibold uppercase tracking-widest text-base-content/50">
+                Agent Control Center
+              </p>
+              <p class="mt-1 text-sm text-base-content/70">
+                Runtime, identity files, memory, sessions, and Vault visibility.
+              </p>
+            </div>
+
+            <button
+              id="toggle-create-agent"
+              type="button"
+              phx-click="toggle_create_agent"
+              class="btn btn-neutral btn-sm"
+            >
+              {if @show_create_agent, do: "Close", else: "Create"}
+            </button>
+          </div>
         </div>
 
-        <div class="border-b border-base-300 px-4 py-4 sm:px-5">
+        <div
+          :if={@show_create_agent}
+          class="border-b border-base-300 px-4 py-4 sm:px-5"
+        >
           <.form
             for={@create_agent_form}
             id="create-agent-form"
@@ -533,40 +601,83 @@ defmodule PlatformWeb.ControlCenterLive do
 
         <nav
           id="agent-list"
-          class="flex-1 overflow-y-auto px-3 py-3 sm:px-4"
-          data-mobile-layout="stacked"
+          class="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 py-3 sm:px-4"
+          data-mobile-layout="list-detail"
         >
-          <.link
+          <article
             :for={agent <- @agents}
-            patch={~p"/control/#{agent.slug}"}
             class={[
-              "mb-3 block rounded-2xl border px-3 py-3 text-left transition-colors",
+              "mb-3 rounded-2xl border px-3 py-3 transition-colors",
               @selected_agent && @selected_agent.slug == agent.slug &&
                 "border-primary bg-primary/5 shadow-sm",
               (!@selected_agent || @selected_agent.slug != agent.slug) &&
                 "border-base-300 bg-base-100 hover:border-primary/30 hover:bg-base-100/80"
             ]}
           >
-            <div class="flex items-start justify-between gap-3">
-              <div class="min-w-0">
-                <p class="truncate text-sm font-semibold text-base-content">{agent.name}</p>
-                <p class="truncate text-xs text-base-content/50">{agent.slug}</p>
+            <.link patch={~p"/control/#{agent.slug}"} class="block text-left">
+              <div class="flex items-start justify-between gap-3">
+                <div class="min-w-0">
+                  <p class="truncate text-sm font-semibold text-base-content">{agent.name}</p>
+                  <p class="truncate text-xs text-base-content/50">{agent.slug}</p>
+                </div>
+                <span class={agent_badge_class(agent.status)}>{humanize_value(agent.status)}</span>
               </div>
-              <span class={agent_badge_class(agent.status)}>{humanize_value(agent.status)}</span>
-            </div>
 
-            <div class="mt-3 flex flex-wrap gap-2 text-[11px] text-base-content/55">
-              <span class="rounded-full bg-base-200 px-2 py-0.5">
-                {agent.primary_model}
-              </span>
-              <span class="rounded-full bg-base-200 px-2 py-0.5">
-                max {agent.max_concurrent || 1}
-              </span>
-              <span class={source_badge_class(agent.source)}>
-                {humanize_value(agent.source_label)}
-              </span>
+              <div class="mt-3 flex flex-wrap gap-2 text-[11px] text-base-content/55">
+                <span class="rounded-full bg-base-200 px-2 py-0.5">
+                  {agent.primary_model}
+                </span>
+                <span class="rounded-full bg-base-200 px-2 py-0.5">
+                  max {agent.max_concurrent || 1}
+                </span>
+                <span class={source_badge_class(agent.source)}>
+                  {humanize_value(agent.source_label)}
+                </span>
+              </div>
+
+              <div class="mt-3 flex items-center gap-2">
+                <span class={runtime_badge_class(agent.runtime_status)}>
+                  {humanize_value(agent.runtime_status)}
+                </span>
+                <span class="text-[11px] text-base-content/45">
+                  {if agent.running?, do: "runtime reachable", else: "runtime stopped"}
+                </span>
+              </div>
+            </.link>
+
+            <div class="mt-3 flex flex-wrap items-center gap-2">
+              <.link patch={~p"/control/#{agent.slug}"} class="btn btn-ghost btn-xs">
+                Open
+              </.link>
+              <button
+                :if={agent.agent && !agent.workspace_managed? && @pending_delete_slug != agent.slug}
+                type="button"
+                phx-click="request_delete_agent"
+                phx-value-slug={agent.slug}
+                class="btn btn-ghost btn-xs text-error"
+              >
+                Delete
+              </button>
+              <button
+                :if={agent.agent && !agent.workspace_managed? && @pending_delete_slug == agent.slug}
+                id={"confirm-delete-agent-#{agent.slug}"}
+                type="button"
+                phx-click="delete_agent"
+                phx-value-slug={agent.slug}
+                class="btn btn-error btn-xs"
+              >
+                Confirm delete
+              </button>
+              <button
+                :if={agent.agent && !agent.workspace_managed? && @pending_delete_slug == agent.slug}
+                type="button"
+                phx-click="cancel_delete_agent"
+                class="btn btn-ghost btn-xs"
+              >
+                Cancel
+              </button>
             </div>
-          </.link>
+          </article>
 
           <div
             :if={@agents == []}
@@ -577,7 +688,10 @@ defmodule PlatformWeb.ControlCenterLive do
         </nav>
       </aside>
 
-      <main class="flex-1 overflow-y-auto">
+      <main class={[
+        "min-h-0 flex-1 overflow-y-auto",
+        is_nil(@selected_agent) && "hidden lg:block"
+      ]}>
         <div
           :if={@selected_agent}
           class="mx-auto flex max-w-7xl flex-col gap-6 px-4 py-4 sm:px-6 sm:py-6"
@@ -585,6 +699,9 @@ defmodule PlatformWeb.ControlCenterLive do
           <section class="rounded-3xl border border-base-300 bg-base-100 p-5 shadow-sm">
             <div class="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
               <div class="min-w-0">
+                <.link patch={~p"/control"} class="btn btn-ghost btn-sm mb-3 w-fit lg:hidden">
+                  Back to agents
+                </.link>
                 <div class="flex flex-wrap items-center gap-3">
                   <h1 class="truncate text-2xl font-semibold text-base-content">
                     {@selected_agent.name}
@@ -648,10 +765,10 @@ defmodule PlatformWeb.ControlCenterLive do
                   Stop runtime
                 </button>
                 <button
+                  :if={@pending_delete_slug != @selected_agent.slug}
                   id="delete-agent"
                   type="button"
-                  phx-click="delete_agent"
-                  data-confirm="Delete this agent and its persisted state?"
+                  phx-click="request_delete_agent"
                   class="btn btn-ghost btn-sm w-full text-error"
                   disabled={
                     @selected_agent_directory_entry &&
@@ -660,7 +777,30 @@ defmodule PlatformWeb.ControlCenterLive do
                 >
                   Delete agent
                 </button>
+                <button
+                  :if={@pending_delete_slug == @selected_agent.slug}
+                  id="delete-agent"
+                  type="button"
+                  phx-click="delete_agent"
+                  class="btn btn-error btn-sm w-full"
+                  disabled={
+                    @selected_agent_directory_entry &&
+                      @selected_agent_directory_entry.workspace_managed?
+                  }
+                >
+                  Confirm delete
+                </button>
               </div>
+            </div>
+
+            <div :if={@pending_delete_slug == @selected_agent.slug} class="mt-3">
+              <button
+                type="button"
+                phx-click="cancel_delete_agent"
+                class="btn btn-ghost btn-xs"
+              >
+                Cancel delete
+              </button>
             </div>
 
             <div class="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
@@ -1270,8 +1410,10 @@ defmodule PlatformWeb.ControlCenterLive do
     |> assign(:platform_credentials, [])
     |> assign(:config_form, to_form(%{}, as: :config))
     |> assign(:create_agent_form, to_form(default_create_agent_params(), as: :create_agent))
+    |> assign(:show_create_agent, socket.assigns[:show_create_agent] || false)
+    |> assign(:pending_delete_slug, nil)
     |> assign(:memory_form, to_form(default_memory_entry(), as: :memory_entry))
-    |> assign(:agent_status, :unknown)
+    |> assign(:agent_status, default_shell_agent_status())
     |> assign(:selected_agent_directory_entry, nil)
   end
 
@@ -1330,8 +1472,9 @@ defmodule PlatformWeb.ControlCenterLive do
       :selected_agent_directory_entry,
       find_agent_directory_entry(socket.assigns.agents, agent.slug)
     )
+    |> assign(:pending_delete_slug, pending_delete_slug(socket, agent.slug))
     |> assign(:memory_form, build_memory_form(Keyword.get(opts, :memory_params)))
-    |> assign(:agent_status, runtime.status)
+    |> assign(:agent_status, shell_agent_status(runtime))
   end
 
   defp reload_selected_agent(socket, opts \\ [])
@@ -1381,6 +1524,7 @@ defmodule PlatformWeb.ControlCenterLive do
       |> Enum.map(&build_agent_directory_entry(&1, :database))
 
     (configured_items ++ persisted_items)
+    |> Enum.map(&attach_runtime_status/1)
     |> Enum.sort_by(&{&1.name, &1.slug})
   end
 
@@ -1389,8 +1533,7 @@ defmodule PlatformWeb.ControlCenterLive do
     |> Repo.all()
   end
 
-  defp resolve_selected_agent_slug(nil, [first | _]), do: first.slug
-  defp resolve_selected_agent_slug(nil, []), do: nil
+  defp resolve_selected_agent_slug(nil, _agents), do: nil
 
   defp resolve_selected_agent_slug(slug, agents) do
     if Enum.any?(agents, &(&1.slug == slug)),
@@ -1416,11 +1559,36 @@ defmodule PlatformWeb.ControlCenterLive do
 
   defp ensure_selected_agent(_slug, _agents), do: nil
 
+  defp handle_delete_agent(socket, %Agent{} = agent) do
+    case delete_agent(agent) do
+      :ok ->
+        socket =
+          socket
+          |> put_flash(:info, "Deleted #{agent.name}.")
+          |> assign(:agents, list_agents())
+          |> assign(:pending_delete_slug, nil)
+          |> assign(:selected_agent, nil)
+          |> assign(:selected_agent_directory_entry, nil)
+
+        {:noreply, push_patch(socket, to: ~p"/control")}
+
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, "Could not delete agent: #{inspect(reason)}")}
+    end
+  end
+
   defp find_agent_directory_entry(agents, slug) when is_binary(slug) do
     Enum.find(agents, &(&1.slug == slug))
   end
 
   defp find_agent_directory_entry(_agents, _slug), do: nil
+
+  defp pending_delete_slug(socket, selected_slug) do
+    case socket.assigns[:pending_delete_slug] do
+      ^selected_slug -> selected_slug
+      _ -> nil
+    end
+  end
 
   defp runtime_snapshot(%Agent{} = agent) do
     pid = AgentServer.whereis(agent.id)
@@ -1756,7 +1924,9 @@ defmodule PlatformWeb.ControlCenterLive do
       source_label: source_label(source),
       workspace_managed?: source == :workspace,
       persisted?: true,
-      agent: agent
+      agent: agent,
+      runtime_status: runtime_status(agent),
+      running?: runtime_running?(agent)
     }
   end
 
@@ -1774,9 +1944,19 @@ defmodule PlatformWeb.ControlCenterLive do
       source_label: source_label(:workspace),
       workspace_managed?: true,
       persisted?: false,
-      agent: nil
+      agent: nil,
+      runtime_status: :unknown,
+      running?: false
     }
   end
+
+  defp attach_runtime_status(%{agent: %Agent{} = agent} = entry) do
+    entry
+    |> Map.put(:runtime_status, runtime_status(agent))
+    |> Map.put(:running?, runtime_running?(agent))
+  end
+
+  defp attach_runtime_status(entry), do: entry
 
   defp source_label(:workspace), do: "mounted workspace"
   defp source_label(:database), do: "control center"
@@ -1793,6 +1973,37 @@ defmodule PlatformWeb.ControlCenterLive do
 
   defp runtime_detail(%{running?: true, pid: pid}), do: runtime_pid_label(pid)
   defp runtime_detail(_runtime), do: "not started"
+
+  defp runtime_running?(%Agent{} = agent), do: is_pid(AgentServer.whereis(agent.id))
+
+  defp runtime_status(%Agent{} = agent) do
+    case runtime_snapshot(agent) do
+      %{status: status} -> status
+      _ -> :unknown
+    end
+  end
+
+  defp shell_agent_status(%{running?: true, status: :paused}), do: :paused
+  defp shell_agent_status(%{running?: true}), do: :online
+  defp shell_agent_status(%{status: :paused}), do: :paused
+  defp shell_agent_status(%{status: _status}), do: :offline
+  defp shell_agent_status(_runtime), do: :unknown
+
+  defp default_shell_agent_status do
+    case WorkspaceBootstrap.status() do
+      %{agent: %Agent{} = agent} ->
+        shell_agent_status(runtime_snapshot(agent))
+
+      %{reachable?: true} ->
+        :online
+
+      %{configured?: true} ->
+        :offline
+
+      _ ->
+        :unknown
+    end
+  end
 
   defp runtime_pid_label(pid) when is_pid(pid), do: inspect(pid)
   defp runtime_pid_label(_pid), do: "stopped"

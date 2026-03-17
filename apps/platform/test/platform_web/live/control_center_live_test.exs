@@ -93,7 +93,7 @@ defmodule PlatformWeb.ControlCenterLiveTest do
       )
 
     conn = authenticated_conn(conn)
-    {:ok, _view, html} = live(conn, ~p"/control")
+    {:ok, _view, html} = live(conn, ~p"/control/#{agent.slug}")
 
     assert html =~ "Agent Control Center"
     assert html =~ "Zip"
@@ -134,6 +134,19 @@ defmodule PlatformWeb.ControlCenterLiveTest do
     html = render_click(view, "stop_runtime", %{})
     assert AgentServer.whereis(agent.id) == nil
     assert html =~ "Stopped runtime"
+  end
+
+  test "shell indicator reflects the default workspace runtime on /control", %{conn: conn} do
+    configure_workspace!(%{}, [{"main", "Main"}])
+    main = create_agent(%{slug: "main", name: "Main"})
+    {:ok, _pid} = AgentServer.start_agent(main)
+    on_exit(fn -> AgentServer.stop_agent(main) end)
+
+    conn = authenticated_conn(conn)
+    {:ok, _view, html} = live(conn, ~p"/control")
+
+    assert html =~ "Agent online"
+    refute html =~ "Agent unknown"
   end
 
   test "saving a workspace file persists through MemoryContext", %{conn: conn} do
@@ -214,6 +227,10 @@ defmodule PlatformWeb.ControlCenterLiveTest do
     conn = authenticated_conn(conn)
     {:ok, view, _html} = live(conn, ~p"/control")
 
+    refute render(view) =~ "create-agent-form"
+
+    render_click(view, "toggle_create_agent", %{})
+
     html =
       view
       |> form("#create-agent-form",
@@ -240,11 +257,18 @@ defmodule PlatformWeb.ControlCenterLiveTest do
   test "deleting a database-managed agent removes it from the UI", %{conn: conn} do
     agent = create_agent(%{slug: "stale-repl", name: "Stale REPL"})
     conn = authenticated_conn(conn)
-    {:ok, view, _html} = live(conn, ~p"/control/#{agent.slug}")
+    {:ok, view, _html} = live(conn, ~p"/control")
 
     html =
       view
-      |> element("#delete-agent")
+      |> element("button[phx-value-slug=\"#{agent.slug}\"]")
+      |> render_click()
+
+    assert html =~ "Confirm delete"
+
+    html =
+      view
+      |> element("#confirm-delete-agent-#{agent.slug}")
       |> render_click()
 
     refute Repo.get(Agent, agent.id)
@@ -258,9 +282,10 @@ defmodule PlatformWeb.ControlCenterLiveTest do
     {:ok, _view, html} = live(conn, ~p"/control/#{agent.slug}")
 
     assert html =~ "id=\"agent-directory\""
-    assert html =~ "data-mobile-layout=\"stacked\""
+    assert html =~ "data-mobile-layout=\"list-detail\""
     assert html =~ "data-mobile-actions=\"stacked\""
-    assert html =~ "create-agent-form"
+    assert html =~ "overflow-y-auto"
+    refute html =~ "create-agent-form"
   end
 
   test "shell sidebar is rendered on /control", %{conn: conn} do

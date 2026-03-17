@@ -100,7 +100,9 @@
           class={"inline-block size-2 rounded-full #{agent_status_color(@agent_status)}"}
         >
         </span>
-        <span :if={assigns[:agent_status]} class="text-xs text-base-content/50">Agent</span>
+        <span :if={assigns[:agent_status]} class="text-xs text-base-content/50">
+          {agent_status_label(@agent_status)}
+        </span>
         <span class="text-xs text-base-content/50">{@current_user}</span>
       </div>
     </header>
