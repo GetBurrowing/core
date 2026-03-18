@@ -41,21 +41,26 @@ function buildSeparator(label) {
 
 const ScrollToBottom = {
   mounted() {
-    this.applyGrouping();
-    this.applyDateSeparators();
-    this.scrollToBottom();
     // MutationObserver fires when stream inserts new message rows
     this._observer = new MutationObserver(() => {
-      this.applyGrouping();
-      this.applyDateSeparators();
-      this.scrollToBottom();
+      this._safeUpdate();
     });
+    this._safeUpdate();
     this._observer.observe(this.el, { childList: true, subtree: false });
   },
-  updated() {
+  _safeUpdate() {
+    // Disconnect observer to prevent infinite loop from our own DOM changes
+    if (this._observer) this._observer.disconnect();
     this.applyGrouping();
     this.applyDateSeparators();
     this.scrollToBottom();
+    // Reconnect after our changes are done
+    if (this._observer) {
+      this._observer.observe(this.el, { childList: true, subtree: false });
+    }
+  },
+  updated() {
+    this._safeUpdate();
   },
   destroyed() {
     if (this._observer) this._observer.disconnect();

@@ -82,6 +82,7 @@ defmodule Platform.Agents.Providers.Codex do
            model: parsed.model || model,
            usage: parsed.usage || %{},
            finish_reason: parsed.finish_reason,
+           tool_calls: parsed.tool_calls || [],
            raw: parsed.events
          }}
 
@@ -135,7 +136,12 @@ defmodule Platform.Agents.Providers.Codex do
     |> maybe_put("prompt_cache_key", Keyword.get(opts, :session_id))
     |> Map.put("tool_choice", "auto")
     |> Map.put("parallel_tool_calls", true)
+    |> maybe_put_tools(Keyword.get(opts, :tools))
   end
+
+  defp maybe_put_tools(body, nil), do: body
+  defp maybe_put_tools(body, []), do: body
+  defp maybe_put_tools(body, tools) when is_list(tools), do: Map.put(body, "tools", tools)
 
   defp convert_messages(messages) do
     messages
@@ -285,6 +291,34 @@ defmodule Platform.Agents.Providers.Codex do
       end)
       |> Enum.join("")
 
+    # Extract function_call output items from the SSE stream.
+    # The Responses API emits output items with type "function_call".
+    tool_calls =
+      events
+      |> Enum.flat_map(fn
+        %{"type" => "response.output_item.done", "item" => %{"type" => "function_call"} = item} ->
+          [
+            %{
+              "name" => item["name"],
+              "call_id" => item["call_id"],
+              "arguments" => item["arguments"] || "{}"
+            }
+          ]
+
+        # Some Responses API shapes emit function_call directly as an event type
+        %{"type" => "function_call", "name" => name, "call_id" => call_id} = event ->
+          [
+            %{
+              "name" => name,
+              "call_id" => call_id,
+              "arguments" => event["arguments"] || "{}"
+            }
+          ]
+
+        _ ->
+          []
+      end)
+
     completed =
       Enum.find(events, fn
         %{"type" => type} when type in ["response.completed", "response.done"] -> true
@@ -298,6 +332,7 @@ defmodule Platform.Agents.Providers.Codex do
       model: response["model"],
       finish_reason: response["status"] || "completed",
       usage: Map.get(response, "usage", %{}),
+      tool_calls: tool_calls,
       events: events
     }
   end

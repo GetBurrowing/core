@@ -71,6 +71,8 @@ defmodule PlatformWeb.ChatLive do
       |> assign(:mobile_browser_open, false)
       |> assign(:quick_emojis, @quick_emojis)
       |> assign(:canvas_types, @canvas_types)
+      |> assign(:agent_typing, false)
+      |> assign(:mention_suggestions, [])
       |> assign_compose("")
       |> assign_thread_compose("")
       |> assign_search_form("")
@@ -149,6 +151,8 @@ defmodule PlatformWeb.ChatLive do
        |> assign(:online_count, online_count)
        |> assign(:agent_presence, agent_presence)
        |> assign(:agent_status, PlatformWeb.ShellLive.default_agent_status())
+       |> assign(:agent_typing, false)
+       |> assign(:mention_suggestions, [])
        |> assign(:current_participant, participant)
        |> assign(:reactions_map, reactions_map)
        |> assign(:attachments_map, attachments_map)
@@ -265,6 +269,41 @@ defmodule PlatformWeb.ChatLive do
     else
       _ -> {:noreply, socket}
     end
+  end
+
+  def handle_event("compose_changed", %{"compose" => %{"text" => text}}, socket) do
+    {:noreply, assign_compose(socket, text)}
+  end
+
+  def handle_event("compose_changed", _params, socket) do
+    {:noreply, socket}
+  end
+
+  def handle_event("mention_query", %{"query" => query}, socket) do
+    suggestions =
+      case socket.assigns.active_space do
+        nil ->
+          []
+
+        space ->
+          space.id
+          |> Chat.list_participants()
+          |> Enum.filter(fn p ->
+            name = (p.display_name || "") |> String.downcase()
+            String.starts_with?(name, String.downcase(query))
+          end)
+          |> Enum.take(8)
+      end
+
+    {:noreply, assign(socket, :mention_suggestions, suggestions)}
+  end
+
+  def handle_event("mention_query", _params, socket) do
+    {:noreply, assign(socket, :mention_suggestions, [])}
+  end
+
+  def handle_event("clear_mention_suggestions", _params, socket) do
+    {:noreply, assign(socket, :mention_suggestions, [])}
   end
 
   def handle_event("open_reaction_picker", _params, socket) do
@@ -638,6 +677,16 @@ defmodule PlatformWeb.ChatLive do
       end
 
     {:noreply, socket}
+  end
+
+  def handle_info({:agent_typing, %{typing: typing}}, socket) do
+    {:noreply,
+     socket
+     |> assign(:agent_typing, typing)
+     |> assign(
+       :agent_status,
+       if(typing, do: :thinking, else: PlatformWeb.ShellLive.default_agent_status())
+     )}
   end
 
   def handle_info(_msg, socket), do: {:noreply, socket}
@@ -1145,15 +1194,41 @@ defmodule PlatformWeb.ChatLive do
             </div>
           </div>
 
+          <%!-- Typing indicator --%>
+          <div
+            :if={@agent_typing}
+            class="flex-shrink-0 px-5 pb-1 flex items-center gap-2 text-xs text-base-content/50"
+          >
+            <span class="flex gap-0.5 items-center">
+              <span
+                class="inline-block size-1.5 rounded-full bg-base-content/40 animate-bounce"
+                style="animation-delay: 0ms"
+              >
+              </span>
+              <span
+                class="inline-block size-1.5 rounded-full bg-base-content/40 animate-bounce"
+                style="animation-delay: 150ms"
+              >
+              </span>
+              <span
+                class="inline-block size-1.5 rounded-full bg-base-content/40 animate-bounce"
+                style="animation-delay: 300ms"
+              >
+              </span>
+            </span>
+            <span>Zip is thinking…</span>
+          </div>
+
           <div class="flex-shrink-0 border-t border-base-300 px-5 py-3">
             <.form
               :if={@active_space}
               for={@compose_form}
               id="compose-form"
               phx-submit="send_message"
+              phx-change="compose_changed"
               class="flex flex-col gap-2"
             >
-              <%!-- File chips above the input --%>
+              <%!-- File chips above the input — only shown when files attached --%>
               <div
                 :if={@uploads.attachments.entries != []}
                 class="flex flex-wrap gap-1"
@@ -1162,40 +1237,77 @@ defmodule PlatformWeb.ChatLive do
                   :for={entry <- @uploads.attachments.entries}
                   class="inline-flex items-center gap-1 rounded-full bg-base-200 px-2 py-0.5 text-xs text-base-content/70"
                 >
-                  <span>📎</span>
+                  <span class="hero-paper-clip size-3"></span>
                   <span>{entry.client_name}</span>
                 </span>
               </div>
 
-              <%!-- Compose row: paperclip | textarea | send button --%>
-              <div class="flex items-end gap-2">
+              <%!-- @mention autocomplete dropdown --%>
+              <div
+                :if={@mention_suggestions != []}
+                class="relative"
+              >
+                <div class="absolute bottom-0 left-0 z-50 w-64 rounded-xl border border-base-300 bg-base-100 shadow-lg overflow-hidden">
+                  <div class="py-1">
+                    <button
+                      :for={{suggestion, idx} <- Enum.with_index(@mention_suggestions)}
+                      type="button"
+                      data-mention-suggestion={if idx == 0, do: "first"}
+                      phx-click={
+                        JS.dispatch("chat:insert-mention",
+                          to: "##{@compose_form[:text].id}",
+                          detail: %{name: suggestion.display_name || "User"}
+                        )
+                      }
+                      class="flex w-full items-center gap-2 px-3 py-2 text-sm hover:bg-base-200 text-left transition-colors"
+                    >
+                      <div class="w-6 h-6 rounded-full bg-primary text-primary-content flex items-center justify-center text-xs font-bold flex-shrink-0">
+                        {suggestion.display_name |> String.trim() |> String.first() |> String.upcase()}
+                      </div>
+                      <span class="flex-1 truncate font-medium">
+                        {suggestion.display_name || "User"}
+                      </span>
+                      <span class={[
+                        "rounded-full px-1.5 py-0.5 text-[10px] uppercase tracking-wider",
+                        suggestion.participant_type == "agent" && "bg-primary/10 text-primary",
+                        suggestion.participant_type != "agent" && "bg-base-300 text-base-content/50"
+                      ]}>
+                        {suggestion.participant_type}
+                      </span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <%!-- Compose row: [+] [input stretches] [send] --%>
+              <div class="flex items-center gap-2">
                 <label
                   class="flex-shrink-0 cursor-pointer rounded-full w-9 h-9 flex items-center justify-center text-base-content/50 hover:bg-base-300 transition-colors"
                   title="Attach files"
                 >
-                  <span class="text-lg">📎</span>
+                  <span class="hero-plus size-5"></span>
                   <.live_file_input upload={@uploads.attachments} class="hidden" />
                 </label>
 
-                <div class="flex-1 relative pb-10">
-                  <textarea
-                    name="compose[text]"
-                    id={@compose_form[:text].id}
-                    rows="2"
-                    placeholder={"Message ##{(@active_space && @active_space.name) || ""}"}
-                    autocomplete="off"
-                    class="textarea textarea-bordered w-full resize-none rounded-xl pr-12 text-sm leading-relaxed"
-                    phx-hook="ComposeInput"
-                  >{Phoenix.HTML.Form.normalize_value("textarea", @compose_form[:text].value)}</textarea>
-                  <button
-                    type="submit"
-                    class="absolute right-2 bottom-2 w-8 h-8 rounded-full btn btn-primary btn-sm flex items-center justify-center p-0"
-                    disabled={is_nil(@current_participant)}
-                    title="Send"
-                  >
-                    ✈️
-                  </button>
-                </div>
+                <input
+                  type="text"
+                  name="compose[text]"
+                  id={@compose_form[:text].id}
+                  value={Phoenix.HTML.Form.normalize_value("text", @compose_form[:text].value)}
+                  placeholder={"Message ##{(@active_space && @active_space.name) || ""}"}
+                  autocomplete="off"
+                  class="input input-bordered min-w-0 flex-1 rounded-xl text-sm"
+                  phx-hook="ComposeInput"
+                />
+
+                <button
+                  type="submit"
+                  class="flex-shrink-0 w-9 h-9 rounded-full btn btn-primary btn-sm flex items-center justify-center p-0"
+                  disabled={is_nil(@current_participant)}
+                  title="Send"
+                >
+                  <span class="hero-paper-airplane size-4 -rotate-45"></span>
+                </button>
               </div>
 
               <p
@@ -1890,14 +2002,26 @@ defmodule PlatformWeb.ChatLive do
   end
 
   defp ensure_native_agent_presence(space_id) do
-    with {:ok, status} <- WorkspaceBootstrap.boot(),
-         %{} = agent <- status.agent do
-      allow_runtime_sandbox(status.pid)
-      _ = Chat.ensure_agent_participant(space_id, agent, display_name: agent.name)
-      ChatPresence.native_agent_presence(space_id)
-    else
-      _ -> ChatPresence.native_agent_presence(space_id)
+    # Use non-blocking status() for initial render, then boot async
+    status = WorkspaceBootstrap.status()
+
+    case status do
+      %{configured?: true, agent: %{} = agent} ->
+        _ = Chat.ensure_agent_participant(space_id, agent, display_name: agent.name)
+
+        if status.pid, do: allow_runtime_sandbox(status.pid)
+
+        # Boot the runtime asynchronously if not already running
+        unless status.reachable? do
+          Task.start(fn -> WorkspaceBootstrap.boot() end)
+        end
+
+      _ ->
+        # Attempt async boot in background
+        Task.start(fn -> WorkspaceBootstrap.boot() end)
     end
+
+    ChatPresence.native_agent_presence(space_id)
   end
 
   defp schedule_agent_presence_refresh(socket) do

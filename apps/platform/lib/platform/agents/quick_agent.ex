@@ -9,7 +9,7 @@ defmodule Platform.Agents.QuickAgent do
 
   require Logger
 
-  alias Platform.Agents.{CodexAuth, Providers.Codex, WorkspaceBootstrap}
+  alias Platform.Agents.{CodexAuth, Providers.Codex, ToolRunner, WorkspaceBootstrap}
 
   @workspace_files ~w(SOUL.md IDENTITY.md USER.md AGENTS.md)
   @default_model "gpt-5.4"
@@ -24,7 +24,20 @@ defmodule Platform.Agents.QuickAgent do
     system_prompt = build_system_prompt(workspace_path)
     messages = (opts[:history] || []) ++ [%{"role" => "user", "content" => user_message}]
 
-    case call_provider(system_prompt, messages, opts) do
+    tools = Keyword.get(opts, :tools, ToolRunner.tool_definitions())
+
+    tool_context = %{
+      space_id: opts[:space_id],
+      participant_id: opts[:participant_id],
+      workspace_path: workspace_path
+    }
+
+    opts =
+      opts
+      |> Keyword.put(:tools, tools)
+      |> Keyword.put(:tool_context, tool_context)
+
+    case run_agent(system_prompt, messages, opts) do
       {:ok, response} ->
         Logger.info("Agent response: model=#{response.model} tokens=#{inspect(response.usage)}")
         {:ok, response}
@@ -58,7 +71,26 @@ defmodule Platform.Agents.QuickAgent do
     You are chatting with a user in the platform's Chat surface.
     Be yourself — follow SOUL.md and IDENTITY.md for your personality and voice.
     Keep responses concise and helpful.
+
+    You have access to tools that let you execute shell commands, read/write files,
+    fetch web pages, and create/update live canvases in the chat. Use them when
+    the user's request requires action beyond just conversation.
+
+    When creating canvases, use appropriate types: "table" for data grids, "code"
+    for code snippets, "diagram" for architecture diagrams, "dashboard" for metrics.
     """
+  end
+
+  # Run the agentic tool loop if tools are configured, otherwise fall back to
+  # a single-shot provider call (preserves backwards-compat when tools is nil/[]).
+  defp run_agent(system_prompt, messages, opts) do
+    tools = Keyword.get(opts, :tools)
+
+    if tools && tools != [] do
+      ToolRunner.run(system_prompt, messages, opts)
+    else
+      call_provider(system_prompt, messages, opts)
+    end
   end
 
   defp call_provider(system_prompt, messages, opts) do

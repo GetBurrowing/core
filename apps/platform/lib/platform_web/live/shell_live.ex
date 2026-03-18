@@ -51,16 +51,22 @@ defmodule PlatformWeb.ShellLive do
   end
 
   def default_agent_status do
-    case WorkspaceBootstrap.boot() do
-      {:ok, %{reachable?: true}} ->
-        :online
+    # Use non-blocking status() to avoid blocking mount
+    status = WorkspaceBootstrap.status()
 
-      {:ok, %{configured?: true}} ->
-        :offline
+    result =
+      case status do
+        %{reachable?: true} -> :online
+        %{configured?: true} -> :offline
+        _ -> fallback_default_agent_status()
+      end
 
-      {:error, _reason} ->
-        fallback_default_agent_status()
+    # Boot the runtime asynchronously if not already running
+    unless status.reachable? do
+      Task.start(fn -> WorkspaceBootstrap.boot() end)
     end
+
+    result
   end
 
   defp fallback_default_agent_status do

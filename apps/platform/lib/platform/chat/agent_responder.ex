@@ -12,6 +12,7 @@ defmodule Platform.Chat.AgentResponder do
   alias Platform.Agents.Agent
   alias Platform.Chat
   alias Platform.Chat.{Message, Participant}
+  alias Platform.Chat.PubSub, as: ChatPubSub
   alias Platform.Repo
 
   @history_limit 12
@@ -34,23 +35,52 @@ defmodule Platform.Chat.AgentResponder do
 
   @spec respond(map()) :: :ok | {:error, term()}
   def respond(%{reason: :mention} = signal) do
-    with {:ok, context} <- load_context(signal),
-         {:ok, response} <- chat_module().chat(context.user_message, history: context.history),
-         reply when is_binary(reply) <- Map.get(response, :content),
-         trimmed_reply when trimmed_reply != "" <- String.trim(reply),
-         {:ok, _message} <- persist_reply(context, trimmed_reply) do
-      maybe_create_canvas(context, trimmed_reply)
-      :ok
+    with {:ok, context} <- load_context(signal) do
+      space_id = context.message.space_id
+      agent_participant_id = context.agent_participant.id
+
+      ChatPubSub.broadcast(
+        space_id,
+        {:agent_typing, %{participant_id: agent_participant_id, typing: true}}
+      )
+
+      result =
+        with {:ok, response} <-
+               chat_module().chat(context.user_message,
+                 history: context.history,
+                 space_id: context.message.space_id,
+                 participant_id: context.agent_participant.id
+               ),
+             reply when is_binary(reply) <- Map.get(response, :content),
+             trimmed_reply when trimmed_reply != "" <- String.trim(reply),
+             {:ok, _message} <- persist_reply(context, trimmed_reply) do
+          maybe_create_canvas(context, trimmed_reply)
+          :ok
+        else
+          {:error, :ignore} ->
+            :ok
+
+          {:error, reason} ->
+            Logger.warning("[AgentResponder] skipped reply: #{inspect(reason)}")
+            {:error, reason}
+
+          _ ->
+            :ok
+        end
+
+      ChatPubSub.broadcast(
+        space_id,
+        {:agent_typing, %{participant_id: agent_participant_id, typing: false}}
+      )
+
+      result
     else
       {:error, :ignore} ->
         :ok
 
       {:error, reason} ->
-        Logger.warning("[AgentResponder] skipped reply: #{inspect(reason)}")
+        Logger.warning("[AgentResponder] skipped reply (load_context): #{inspect(reason)}")
         {:error, reason}
-
-      _ ->
-        :ok
     end
   rescue
     error ->

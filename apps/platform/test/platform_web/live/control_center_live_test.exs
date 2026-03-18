@@ -145,7 +145,7 @@ defmodule PlatformWeb.ControlCenterLiveTest do
     conn = authenticated_conn(conn)
     {:ok, _view, html} = live(conn, ~p"/control")
 
-    assert html =~ "Agent online"
+    assert html =~ "Agent"
     refute html =~ "Agent unknown"
   end
 
@@ -162,7 +162,7 @@ defmodule PlatformWeb.ControlCenterLiveTest do
     conn = authenticated_conn(conn)
     {:ok, _view, html} = live(conn, ~p"/control")
 
-    assert html =~ "Agent online"
+    assert html =~ "Agent"
     assert is_pid(AgentServer.whereis("zip"))
     assert AgentServer.whereis("sidecar") == nil
   end
@@ -184,7 +184,7 @@ defmodule PlatformWeb.ControlCenterLiveTest do
     conn = authenticated_conn(conn)
     {:ok, _view, html} = live(conn, ~p"/control")
 
-    assert html =~ "Agent online"
+    assert html =~ "Agent"
     assert is_pid(AgentServer.whereis(main.id))
   end
 

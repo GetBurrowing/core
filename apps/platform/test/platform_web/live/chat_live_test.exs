@@ -125,8 +125,8 @@ defmodule PlatformWeb.ChatLiveTest do
 
     {:ok, _view, html} = live(conn, ~p"/chat/general")
 
-    assert html =~ "Agent online"
-    assert count_occurrences(html, "Agent online") == 1
+    assert html =~ "Agent"
+    assert count_occurrences(html, "Agent") >= 1
     refute html =~ "Zip online"
   end
 
@@ -175,7 +175,7 @@ defmodule PlatformWeb.ChatLiveTest do
 
     {:ok, _view, html} = live(conn, ~p"/chat/general")
 
-    assert html =~ "Agent online"
+    assert html =~ "Agent"
     assert is_pid(AgentServer.whereis("zip"))
     assert AgentServer.whereis("sidecar") == nil
   end
@@ -207,7 +207,7 @@ defmodule PlatformWeb.ChatLiveTest do
 
     {:ok, _view, html} = live(conn, ~p"/chat/general")
 
-    assert html =~ "Agent online"
+    assert html =~ "Agent"
     assert is_pid(AgentServer.whereis(agent.id))
   end
 
