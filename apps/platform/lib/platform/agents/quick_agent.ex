@@ -9,7 +9,7 @@ defmodule Platform.Agents.QuickAgent do
 
   require Logger
 
-  alias Platform.Agents.{CodexAuth, Providers.OpenAI, WorkspaceBootstrap}
+  alias Platform.Agents.{CodexAuth, Providers.Codex, WorkspaceBootstrap}
 
   @workspace_files ~w(SOUL.md IDENTITY.md USER.md AGENTS.md)
   @default_model "gpt-5.4"
@@ -92,7 +92,7 @@ defmodule Platform.Agents.QuickAgent do
   end
 
   defp provider_module do
-    Application.get_env(:platform, :quick_agent_provider_module, OpenAI)
+    Application.get_env(:platform, :quick_agent_provider_module, Codex)
   end
 
   defp format_error({:codex_auth_missing, _path}), do: "Codex OAuth credentials not configured"
