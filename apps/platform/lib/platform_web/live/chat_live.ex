@@ -35,7 +35,7 @@ defmodule PlatformWeb.ChatLive do
   @max_upload_entries 5
   @max_upload_size 15_000_000
   @canvas_types ~w(table form code diagram dashboard custom)
-  @agent_presence_refresh_ms 5_000
+  @agent_presence_refresh_ms 30_000
 
   @impl true
   def mount(_params, session, socket) do
@@ -227,6 +227,17 @@ defmodule PlatformWeb.ChatLive do
     end
   end
 
+  def handle_event("push_subscribed", %{"endpoint" => endpoint, "keys" => keys}, socket) do
+    if participant = socket.assigns[:current_participant] do
+      Platform.Push.subscribe(participant.id, %{
+        endpoint: endpoint,
+        keys: %{p256dh: keys["p256dh"], auth: keys["auth"]}
+      })
+    end
+
+    {:noreply, socket}
+  end
+
   def handle_event("send_message", %{"compose" => %{"text" => content}}, socket) do
     with space when not is_nil(space) <- socket.assigns.active_space,
          participant when not is_nil(participant) <- socket.assigns.current_participant do
@@ -254,6 +265,10 @@ defmodule PlatformWeb.ChatLive do
     else
       _ -> {:noreply, socket}
     end
+  end
+
+  def handle_event("open_reaction_picker", _params, socket) do
+    {:noreply, socket}
   end
 
   def handle_event("react", %{"message_id" => msg_id, "emoji" => emoji}, socket) do
@@ -630,6 +645,7 @@ defmodule PlatformWeb.ChatLive do
   @impl true
   def render(assigns) do
     ~H"""
+    <div id="push-subscribe" phx-hook="PushSubscribe" class="hidden"></div>
     <div class="flex h-full overflow-hidden">
       <%!-- Desktop channel sidebar (hidden on mobile) --%>
       <aside class="hidden lg:flex w-52 flex-shrink-0 flex-col border-r border-base-300 bg-base-200">
@@ -647,7 +663,7 @@ defmodule PlatformWeb.ChatLive do
               "flex items-center gap-2 px-3 py-1.5 text-sm transition-colors",
               "hover:bg-base-300 rounded mx-1",
               @active_space && @active_space.id == space.id &&
-                "bg-base-300 text-primary font-semibold"
+                "bg-primary/10 text-primary font-semibold border-l-2 border-primary"
             ]}
           >
             <span class="text-base-content/40">#</span>
@@ -716,8 +732,8 @@ defmodule PlatformWeb.ChatLive do
               </button>
               <%!-- Desktop: static channel title --%>
               <span class="hidden lg:flex items-center gap-2 overflow-hidden">
-                <span class="text-base-content/50">#</span>
-                <span class="truncate font-semibold">{@active_space.name}</span>
+                <span class="text-base-content/50 text-lg font-bold">#</span>
+                <span class="truncate font-bold text-base">{@active_space.name}</span>
                 <span
                   :if={@active_space.topic}
                   class="truncate text-xs text-base-content/40"
@@ -757,6 +773,7 @@ defmodule PlatformWeb.ChatLive do
               </.form>
 
               <button
+                :if={@canvases != []}
                 phx-click="toggle_canvases_panel"
                 class={[
                   "flex items-center gap-1 rounded px-2 py-0.5 text-xs transition-colors hover:bg-base-300",
@@ -971,136 +988,159 @@ defmodule PlatformWeb.ChatLive do
 
           <div
             id="message-list"
-            class="flex-1 overflow-y-auto px-5 py-4 space-y-3"
+            class="flex-1 overflow-y-auto px-5 py-4 flex flex-col justify-end space-y-1"
             phx-update="stream"
+            phx-hook="ScrollToBottom"
           >
             <div
               :for={{dom_id, msg} <- @streams.messages}
               :if={is_nil(msg.deleted_at)}
               id={dom_id}
               class={[
-                "group relative flex flex-col gap-0.5 rounded-xl px-2 py-1 transition-colors",
-                @highlighted_message_id == msg.id && "bg-primary/5 ring-1 ring-primary/20"
+                "group relative flex gap-3 rounded-xl px-2 py-2 transition-colors",
+                @highlighted_message_id == msg.id && "bg-primary/5 ring-1 ring-primary/20",
+                @current_participant && msg.participant_id == @current_participant.id &&
+                  "bg-base-200/60"
               ]}
+              data-participant-id={msg.participant_id}
+              data-date={msg.inserted_at && DateTime.to_date(msg.inserted_at) |> Date.to_iso8601()}
             >
-              <div class="flex items-baseline gap-2">
-                <span class="text-xs font-semibold text-primary">
-                  {sender_name(@participants_map, msg.participant_id)}
-                </span>
-                <.local_time
-                  id={"message-time-#{msg.id}"}
-                  timestamp={msg.inserted_at}
-                  class="text-[10px] text-base-content/40"
-                />
-
-                <div class="ml-auto hidden group-hover:flex items-center gap-1">
-                  <button
-                    :for={emoji <- @quick_emojis}
-                    phx-click="react"
-                    phx-value-message-id={msg.id}
-                    phx-value-emoji={emoji}
-                    title={"React with #{emoji}"}
-                    class="rounded px-1.5 py-0.5 text-sm hover:bg-base-300 transition-colors"
-                  >
-                    {emoji}
-                  </button>
-
-                  <button
-                    phx-click="open_thread"
-                    phx-value-message-id={msg.id}
-                    title="Reply in thread"
-                    class="rounded px-1.5 py-0.5 text-xs text-base-content/50 hover:bg-base-300 transition-colors"
-                  >
-                    💬
-                  </button>
-
-                  <button
-                    phx-click="toggle_pin"
-                    phx-value-message-id={msg.id}
-                    phx-value-space-id={msg.space_id}
-                    title={if MapSet.member?(@pinned_message_ids, msg.id), do: "Unpin", else: "Pin"}
-                    class="rounded px-1.5 py-0.5 text-xs text-base-content/50 hover:bg-base-300 transition-colors"
-                  >
-                    {if MapSet.member?(@pinned_message_ids, msg.id), do: "📌", else: "📍"}
-                  </button>
+              <%!-- Avatar circle (hidden when grouped with previous message via JS) --%>
+              <div class="flex-shrink-0 mt-0.5 message-avatar">
+                <div class="w-8 h-8 rounded-full bg-primary text-primary-content flex items-center justify-center text-sm font-bold select-none">
+                  {avatar_initial(@participants_map, msg.participant_id)}
                 </div>
               </div>
 
-              <div
-                :if={msg.content_type == "canvas"}
-                class="mt-1 rounded-2xl border border-primary/20 bg-primary/5 p-3"
-              >
-                <div class="flex items-center justify-between gap-3">
-                  <div class="min-w-0">
-                    <p class="truncate text-sm font-semibold text-base-content">
-                      {message_canvas_title(msg, @canvases_by_message_id)}
-                    </p>
-                    <p class="text-[11px] uppercase tracking-widest text-base-content/50">
-                      {message_canvas_type(msg, @canvases_by_message_id)} live canvas
-                    </p>
+              <%!-- Message body --%>
+              <div class="flex-1 min-w-0">
+                <div class="flex items-baseline gap-2 message-header">
+                  <span class="text-sm font-bold text-base-content">
+                    {sender_name(@participants_map, msg.participant_id)}
+                  </span>
+                  <.local_time
+                    id={"message-time-#{msg.id}"}
+                    timestamp={msg.inserted_at}
+                    class="text-[10px] text-base-content/40"
+                  />
+
+                  <div class="ml-auto hidden group-hover:flex items-center gap-1">
+                    <button
+                      :for={emoji <- @quick_emojis}
+                      phx-click="react"
+                      phx-value-message-id={msg.id}
+                      phx-value-emoji={emoji}
+                      title={"React with #{emoji}"}
+                      class="rounded px-1.5 py-0.5 text-sm hover:bg-base-300 transition-colors"
+                    >
+                      {emoji}
+                    </button>
+
+                    <button
+                      phx-click="open_thread"
+                      phx-value-message-id={msg.id}
+                      title="Reply in thread"
+                      class="rounded px-1.5 py-0.5 text-xs text-base-content/50 hover:bg-base-300 transition-colors"
+                    >
+                      💬
+                    </button>
+
+                    <button
+                      phx-click="toggle_pin"
+                      phx-value-message-id={msg.id}
+                      phx-value-space-id={msg.space_id}
+                      title={if MapSet.member?(@pinned_message_ids, msg.id), do: "Unpin", else: "Pin"}
+                      class="rounded px-1.5 py-0.5 text-xs text-base-content/50 hover:bg-base-300 transition-colors"
+                    >
+                      {if MapSet.member?(@pinned_message_ids, msg.id), do: "📌", else: "📍"}
+                    </button>
+                  </div>
+                </div>
+
+                <div
+                  :if={msg.content_type == "canvas"}
+                  class="mt-1 rounded-2xl border border-primary/20 bg-primary/5 p-3"
+                >
+                  <div class="flex items-center justify-between gap-3">
+                    <div class="min-w-0">
+                      <p class="truncate text-sm font-semibold text-base-content">
+                        {message_canvas_title(msg, @canvases_by_message_id)}
+                      </p>
+                      <p class="text-[11px] uppercase tracking-widest text-base-content/50">
+                        {message_canvas_type(msg, @canvases_by_message_id)} live canvas
+                      </p>
+                    </div>
+
+                    <button
+                      type="button"
+                      phx-click="open_canvas"
+                      phx-value-canvas-id={message_canvas_id(msg, @canvases_by_message_id)}
+                      class="btn btn-ghost btn-sm"
+                      disabled={is_nil(message_canvas_id(msg, @canvases_by_message_id))}
+                    >
+                      Open
+                    </button>
                   </div>
 
-                  <button
-                    type="button"
-                    phx-click="open_canvas"
-                    phx-value-canvas-id={message_canvas_id(msg, @canvases_by_message_id)}
-                    class="btn btn-ghost btn-sm"
-                    disabled={is_nil(message_canvas_id(msg, @canvases_by_message_id))}
-                  >
-                    Open
-                  </button>
+                  <p :if={present?(msg.content)} class="mt-2 text-sm leading-6 text-base-content/70">
+                    {msg.content}
+                  </p>
                 </div>
 
-                <p :if={present?(msg.content)} class="mt-2 text-sm leading-6 text-base-content/70">
-                  {msg.content}
+                <p
+                  :if={msg.content_type != "canvas" and present?(msg.content)}
+                  class="text-sm leading-6 text-base-content"
+                >
+                  {format_message_content(msg.content)}
                 </p>
-              </div>
 
-              <p
-                :if={msg.content_type != "canvas" and present?(msg.content)}
-                class="text-sm leading-6 text-base-content"
-              >
-                {msg.content}
-              </p>
-
-              <div
-                :if={Map.get(@attachments_map, msg.id, []) != []}
-                class="mt-1 flex flex-col gap-1"
-              >
-                <a
-                  :for={attachment <- Map.get(@attachments_map, msg.id, [])}
-                  href={attachment_url(attachment)}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  class="inline-flex w-fit items-center gap-2 rounded bg-base-200 px-2 py-1 text-sm text-primary hover:bg-base-300 hover:no-underline"
+                <div
+                  :if={Map.get(@attachments_map, msg.id, []) != []}
+                  class="mt-1 flex flex-col gap-1"
                 >
-                  <span>📎</span>
-                  <span>{attachment.filename}</span>
-                  <span class="text-xs text-base-content/40">
-                    ({format_bytes(attachment.byte_size)})
-                  </span>
-                </a>
-              </div>
+                  <a
+                    :for={attachment <- Map.get(@attachments_map, msg.id, [])}
+                    href={attachment_url(attachment)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    class="inline-flex w-fit items-center gap-2 rounded bg-base-200 px-2 py-1 text-sm text-primary hover:bg-base-300 hover:no-underline"
+                  >
+                    <span>📎</span>
+                    <span>{attachment.filename}</span>
+                    <span class="text-xs text-base-content/40">
+                      ({format_bytes(attachment.byte_size)})
+                    </span>
+                  </a>
+                </div>
 
-              <div
-                :if={Map.get(@reactions_map, msg.id, []) != []}
-                class="flex flex-wrap gap-1 mt-0.5"
-              >
-                <button
-                  :for={r <- Map.get(@reactions_map, msg.id, [])}
-                  phx-click="react"
-                  phx-value-message-id={msg.id}
-                  phx-value-emoji={r.emoji}
-                  class={[
-                    "flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs transition-colors",
-                    "hover:bg-base-300",
-                    r.reacted_by_me && "border-primary bg-primary/10 text-primary",
-                    !r.reacted_by_me && "border-base-300 text-base-content/60"
-                  ]}
+                <div
+                  :if={Map.get(@reactions_map, msg.id, []) != []}
+                  class="flex flex-wrap gap-1 mt-0.5"
                 >
-                  <span>{r.emoji}</span>
-                  <span>{r.count}</span>
-                </button>
+                  <button
+                    :for={r <- Map.get(@reactions_map, msg.id, [])}
+                    phx-click="react"
+                    phx-value-message-id={msg.id}
+                    phx-value-emoji={r.emoji}
+                    class={[
+                      "flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs transition-colors",
+                      "hover:bg-base-300",
+                      r.reacted_by_me && "border-primary bg-primary/10 text-primary",
+                      !r.reacted_by_me && "border-base-300 text-base-content/60"
+                    ]}
+                  >
+                    <span>{r.emoji}</span>
+                    <span>{r.count}</span>
+                  </button>
+
+                  <button
+                    class="flex items-center gap-1 rounded-full border border-dashed border-base-300 px-2 py-0.5 text-xs text-base-content/40 hover:bg-base-300 hover:text-base-content transition-colors opacity-0 group-hover:opacity-100"
+                    phx-click="open_reaction_picker"
+                    phx-value-message-id={msg.id}
+                  >
+                    <span>+</span>
+                  </button>
+                </div>
               </div>
             </div>
           </div>
@@ -1113,36 +1153,49 @@ defmodule PlatformWeb.ChatLive do
               phx-submit="send_message"
               class="flex flex-col gap-2"
             >
-              <div class="flex gap-2">
-                <.input
-                  field={@compose_form[:text]}
-                  type="text"
-                  placeholder={"Message ##{(@active_space && @active_space.name) || ""}"}
-                  autocomplete="off"
-                  class="flex-1"
-                />
-                <button
-                  type="submit"
-                  class="btn btn-neutral"
-                  disabled={is_nil(@current_participant)}
+              <%!-- File chips above the input --%>
+              <div
+                :if={@uploads.attachments.entries != []}
+                class="flex flex-wrap gap-1"
+              >
+                <span
+                  :for={entry <- @uploads.attachments.entries}
+                  class="inline-flex items-center gap-1 rounded-full bg-base-200 px-2 py-0.5 text-xs text-base-content/70"
                 >
-                  Send
-                </button>
+                  <span>📎</span>
+                  <span>{entry.client_name}</span>
+                </span>
               </div>
 
-              <div class="flex flex-wrap items-center gap-3 text-xs text-base-content/50">
-                <label class="inline-flex cursor-pointer items-center gap-2 rounded px-2 py-1 hover:bg-base-200">
-                  <span>📎</span>
-                  <span>Add files</span>
+              <%!-- Compose row: paperclip | textarea | send button --%>
+              <div class="flex items-end gap-2">
+                <label
+                  class="flex-shrink-0 cursor-pointer rounded-full w-9 h-9 flex items-center justify-center text-base-content/50 hover:bg-base-300 transition-colors"
+                  title="Attach files"
+                >
+                  <span class="text-lg">📎</span>
                   <.live_file_input upload={@uploads.attachments} class="hidden" />
                 </label>
 
-                <span
-                  :for={entry <- @uploads.attachments.entries}
-                  class="rounded bg-base-200 px-2 py-1 text-base-content/70"
-                >
-                  {entry.client_name}
-                </span>
+                <div class="flex-1 relative pb-10">
+                  <textarea
+                    name="compose[text]"
+                    id={@compose_form[:text].id}
+                    rows="2"
+                    placeholder={"Message ##{(@active_space && @active_space.name) || ""}"}
+                    autocomplete="off"
+                    class="textarea textarea-bordered w-full resize-none rounded-xl pr-12 text-sm leading-relaxed"
+                    phx-hook="ComposeInput"
+                  >{Phoenix.HTML.Form.normalize_value("textarea", @compose_form[:text].value)}</textarea>
+                  <button
+                    type="submit"
+                    class="absolute right-2 bottom-2 w-8 h-8 rounded-full btn btn-primary btn-sm flex items-center justify-center p-0"
+                    disabled={is_nil(@current_participant)}
+                    title="Send"
+                  >
+                    ✈️
+                  </button>
+                </div>
               </div>
 
               <p
@@ -1268,36 +1321,46 @@ defmodule PlatformWeb.ChatLive do
               phx-submit="send_thread_message"
               class="flex flex-col gap-2"
             >
-              <div class="flex gap-2">
-                <.input
-                  field={@thread_compose_form[:text]}
-                  type="text"
-                  placeholder="Reply in thread…"
-                  autocomplete="off"
-                  class="flex-1 text-sm"
-                />
-                <button
-                  type="submit"
-                  class="btn btn-neutral btn-sm"
-                  disabled={is_nil(@current_participant)}
+              <div
+                :if={@uploads.thread_attachments.entries != []}
+                class="flex flex-wrap gap-1"
+              >
+                <span
+                  :for={entry <- @uploads.thread_attachments.entries}
+                  class="inline-flex items-center gap-1 rounded-full bg-base-200 px-2 py-0.5 text-xs text-base-content/70"
                 >
-                  Reply
-                </button>
+                  <span>📎</span>
+                  <span>{entry.client_name}</span>
+                </span>
               </div>
 
-              <div class="flex flex-wrap items-center gap-3 text-xs text-base-content/50">
-                <label class="inline-flex cursor-pointer items-center gap-2 rounded px-2 py-1 hover:bg-base-200">
-                  <span>📎</span>
-                  <span>Add files</span>
+              <div class="flex items-end gap-2">
+                <label
+                  class="flex-shrink-0 cursor-pointer rounded-full w-8 h-8 flex items-center justify-center text-base-content/50 hover:bg-base-300 transition-colors"
+                  title="Attach files"
+                >
+                  <span class="text-base">📎</span>
                   <.live_file_input upload={@uploads.thread_attachments} class="hidden" />
                 </label>
 
-                <span
-                  :for={entry <- @uploads.thread_attachments.entries}
-                  class="rounded bg-base-200 px-2 py-1 text-base-content/70"
-                >
-                  {entry.client_name}
-                </span>
+                <div class="flex-1 relative">
+                  <textarea
+                    name="thread_compose[text]"
+                    id={@thread_compose_form[:text].id}
+                    rows="2"
+                    placeholder="Reply in thread…"
+                    autocomplete="off"
+                    class="textarea textarea-bordered w-full resize-none rounded-xl pr-10 text-sm leading-relaxed"
+                  >{Phoenix.HTML.Form.normalize_value("textarea", @thread_compose_form[:text].value)}</textarea>
+                  <button
+                    type="submit"
+                    class="absolute right-2 bottom-2 w-7 h-7 rounded-full btn btn-primary btn-xs flex items-center justify-center p-0"
+                    disabled={is_nil(@current_participant)}
+                    title="Reply"
+                  >
+                    ✈️
+                  </button>
+                </div>
               </div>
 
               <p
@@ -1893,6 +1956,36 @@ defmodule PlatformWeb.ChatLive do
     Map.get(participants_map, participant_id, "User")
   end
 
+  defp avatar_initial(participants_map, participant_id) do
+    name = Map.get(participants_map, participant_id, "U")
+
+    name
+    |> String.trim()
+    |> String.first()
+    |> case do
+      nil -> "U"
+      ch -> String.upcase(ch)
+    end
+  end
+
+  defp format_message_content(content) when is_binary(content) do
+    import Phoenix.HTML, only: [raw: 1, html_escape: 1, safe_to_string: 1]
+
+    content
+    |> String.split(~r/(@\w+)/, include_captures: true)
+    |> Enum.map(fn part ->
+      if String.match?(part, ~r/^@\w+$/) do
+        ~s(<span class="rounded bg-primary/20 text-primary px-1 font-medium">#{safe_to_string(html_escape(part))}</span>)
+      else
+        safe_to_string(html_escape(part))
+      end
+    end)
+    |> Enum.join()
+    |> raw()
+  end
+
+  defp format_message_content(_content), do: ""
+
   defp attachment_url(attachment), do: ~p"/chat/attachments/#{attachment.id}"
 
   defp search_headline(message) do
@@ -1937,4 +2030,19 @@ defmodule PlatformWeb.ChatLive do
   end
 
   defp format_timestamp(_), do: ""
+
+  defp format_message_date(nil), do: ""
+
+  defp format_message_date(%DateTime{} = dt) do
+    today = Date.utc_today()
+    msg_date = DateTime.to_date(dt)
+
+    cond do
+      msg_date == today -> "Today"
+      msg_date == Date.add(today, -1) -> "Yesterday"
+      true -> Calendar.strftime(dt, "%a, %b %-d")
+    end
+  end
+
+  defp format_message_date(_), do: ""
 end

@@ -69,7 +69,8 @@ defmodule Platform.MixProject do
       {:dns_cluster, "~> 0.2.0"},
       {:bandit, "~> 1.5"},
       {:oauth2, "~> 2.1"},
-      {:mox, "~> 1.0", only: :test}
+      {:mox, "~> 1.0", only: :test},
+      {:web_push_encryption, "~> 0.3"}
     ]
   end
 

@@ -39,6 +39,7 @@ defmodule Platform.Chat.AgentResponder do
          reply when is_binary(reply) <- Map.get(response, :content),
          trimmed_reply when trimmed_reply != "" <- String.trim(reply),
          {:ok, _message} <- persist_reply(context, trimmed_reply) do
+      maybe_create_canvas(context, trimmed_reply)
       :ok
     else
       {:error, :ignore} ->
@@ -58,6 +59,42 @@ defmodule Platform.Chat.AgentResponder do
   end
 
   def respond(_signal), do: :ok
+
+  @canvas_tag_pattern ~r/\[canvas:([a-zA-Z0-9_-]+):([^\]]+)\]/
+
+  @doc """
+  Parses `[canvas:TYPE:TITLE]` tags in the agent reply and creates matching
+  canvases via `Platform.Chat.create_canvas_with_message/3`.
+
+  Returns `:ok` regardless of outcome so callers don't need to handle errors.
+  """
+  @spec maybe_create_canvas(map(), binary()) :: :ok
+  def maybe_create_canvas(context, reply) when is_binary(reply) do
+    @canvas_tag_pattern
+    |> Regex.scan(reply, capture: :all_but_first)
+    |> Enum.each(fn [canvas_type, title] ->
+      attrs = %{
+        "canvas_type" => String.downcase(canvas_type),
+        "title" => String.trim(title)
+      }
+
+      case Chat.create_canvas_with_message(
+             context.message.space_id,
+             context.agent_participant.id,
+             attrs
+           ) do
+        {:ok, canvas, _message} ->
+          Logger.info("[AgentResponder] created canvas #{canvas.id} (#{canvas_type}: #{title})")
+
+        {:error, reason} ->
+          Logger.warning("[AgentResponder] failed to create canvas: #{inspect(reason)}")
+      end
+    end)
+
+    :ok
+  end
+
+  def maybe_create_canvas(_context, _reply), do: :ok
 
   defp load_context(%{participant_id: participant_id, message_id: message_id, space_id: space_id}) do
     with %Participant{participant_type: "agent"} = participant <-

@@ -7,6 +7,13 @@
     <.live_title default="Platform" suffix=" · Phoenix Framework">
       {assigns[:page_title]}
     </.live_title>
+    <link rel="manifest" href="/manifest.json" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Suite" />
+    <link rel="apple-touch-icon" href="/images/icon-192.png" />
+    <meta name="theme-color" content="#000000" />
+    <meta name="vapid-public-key" content={Platform.Push.vapid_public_key()} />
     <link phx-track-static rel="stylesheet" href={~p"/assets/css/app.css"} />
     <script defer phx-track-static type="text/javascript" src={~p"/assets/js/app.js"}>
     </script>

@@ -78,6 +78,31 @@ defmodule PlatformWeb.AuthController do
     invalid_state(conn)
   end
 
+  def dev_login(conn, _params) do
+    {:ok, user} =
+      Accounts.find_or_create_from_oidc(%{
+        sub: "dev-local-user",
+        email: "dev@localhost",
+        name: "Dev User"
+      })
+
+    space = Platform.Chat.get_space_by_slug("general")
+
+    if space do
+      Platform.Chat.add_participant(space.id, %{
+        participant_type: "user",
+        participant_id: user.id,
+        display_name: user.name || "Dev User",
+        joined_at: DateTime.utc_now()
+      })
+    end
+
+    conn
+    |> put_session(:current_user_id, user.id)
+    |> put_session(:oidc_id_token, "dev-id-token")
+    |> redirect(to: ~p"/chat")
+  end
+
   def logout(conn, _params) do
     id_token_hint = get_session(conn, :oidc_id_token)
     end_session_endpoint = get_session(conn, :oidc_end_session_endpoint)

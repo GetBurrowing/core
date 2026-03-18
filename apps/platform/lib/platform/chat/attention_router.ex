@@ -47,7 +47,7 @@ defmodule Platform.Chat.AttentionRouter do
 
   require Logger
 
-  alias Platform.Chat.{AgentResponder, Message, Participant}
+  alias Platform.Chat.{AgentResponder, Message, Participant, Presence}
   alias Platform.Chat.PubSub, as: ChatPubSub
   alias Platform.Repo
 
@@ -202,6 +202,9 @@ defmodule Platform.Chat.AttentionRouter do
     # Exclude the message author — they don't need attention for their own post.
     recipients = Enum.reject(participants, &(&1.id == author_id))
 
+    # Determine which participants are currently online via presence.
+    online_ids = space_id |> Presence.list_space() |> Map.keys() |> MapSet.new()
+
     decisions =
       Enum.flat_map(recipients, fn participant ->
         case decide(participant, message) do
@@ -209,6 +212,10 @@ defmodule Platform.Chat.AttentionRouter do
           reason -> [%{participant_id: participant.id, reason: reason}]
         end
       end)
+
+    # Preload message author display name for notification body.
+    author = Enum.find(participants, &(&1.id == author_id))
+    sender_name = if author, do: author.display_name || "Someone", else: "Someone"
 
     Enum.each(decisions, fn %{participant_id: pid, reason: reason} ->
       signal = %{
@@ -225,12 +232,31 @@ defmodule Platform.Chat.AttentionRouter do
         _ ->
           ChatPubSub.broadcast(space_id, {:attention_needed, signal})
           AgentResponder.maybe_dispatch(signal)
+
+          # Send web push to offline participants
+          unless MapSet.member?(online_ids, pid) do
+            maybe_send_push(pid, sender_name, message)
+          end
       end
 
       emit_attention_telemetry(signal)
     end)
 
     decisions
+  end
+
+  defp maybe_send_push(participant_id, sender_name, %Message{content: content}) do
+    body = if is_binary(content), do: String.slice(content, 0, 200), else: ""
+
+    Task.start(fn ->
+      Platform.Push.send_notification(participant_id, %{
+        title: "#{sender_name} in Suite",
+        body: body,
+        url: "/chat"
+      })
+    end)
+  rescue
+    _ -> :ok
   end
 
   # ── Per-participant decision ─────────────────────────────────────────────────

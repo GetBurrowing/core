@@ -382,7 +382,7 @@ defmodule Platform.Chat do
     base =
       from(m in Message,
         where: m.space_id == ^space_id and is_nil(m.deleted_at),
-        order_by: [desc: m.id],
+        order_by: [desc: m.inserted_at],
         limit: ^limit
       )
 
@@ -440,7 +440,7 @@ defmodule Platform.Chat do
               "ts_rank_cd(search_vector, websearch_to_tsquery('english', ?))",
               ^trimmed_query
             ),
-          desc: m.id
+          desc: m.inserted_at
         ],
         limit: ^limit
       )

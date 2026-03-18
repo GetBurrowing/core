@@ -61,15 +61,6 @@
     </.link>
 
     <div class="flex-1"></div>
-
-    <.link
-      href="/auth/logout"
-      class="flex items-center gap-2 rounded-lg p-2 opacity-50 hover:opacity-100"
-      title="Log out"
-    >
-      <span class="hero-arrow-right-on-rectangle size-5"></span>
-      <span class="text-sm font-medium">Log out</span>
-    </.link>
   </nav>
 
   <%!-- Main content area --%>
@@ -104,6 +95,13 @@
           {agent_status_label(@agent_status)}
         </span>
         <span class="text-xs text-base-content/50">{@current_user}</span>
+        <.link
+          href="/auth/logout"
+          class="text-xs text-base-content/40 hover:text-base-content/70 transition-colors"
+          title="Log out"
+        >
+          <span class="hero-arrow-right-on-rectangle size-4"></span>
+        </.link>
       </div>
     </header>
     <%!-- Flash messages --%>

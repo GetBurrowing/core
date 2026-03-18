@@ -25,6 +25,10 @@ defmodule PlatformWeb.Router do
     get("/auth/login", AuthController, :login)
     get("/auth/oidc/callback", AuthController, :callback)
     get("/auth/logout", AuthController, :logout)
+
+    if Mix.env() == :dev do
+      get("/dev/login", AuthController, :dev_login)
+    end
   end
 
   scope "/", PlatformWeb do
