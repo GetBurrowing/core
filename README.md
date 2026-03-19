@@ -1,284 +1,252 @@
-# Core
+# Startup Suite Core
 
-Core is the **public product repository** for Startup Suite.
+An open-source, agent-native collaboration platform built with Elixir, Phoenix LiveView, and PostgreSQL.
 
-## Local git hooks
+Startup Suite is a modular business suite where AI agents are first-class participants — not bolted-on assistants. Agents join conversations, create live canvases, manage tasks, and respond to natural attention cues, all within a real-time collaborative environment.
 
-This repo ships a versioned pre-commit hook that auto-runs `mix format` for staged
-Elixir/HEEx files under `apps/platform`.
+[![CI](https://github.com/Startup-Suite/core/actions/workflows/ci.yml/badge.svg)](https://github.com/Startup-Suite/core/actions/workflows/ci.yml)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
-Enable it once per clone with:
+---
+
+## Features
+
+### Chat
+Real-time messaging with channels, direct messages, group conversations, threads, reactions, pins, search, and file attachments.
+
+### Live Canvases
+Collaborative canvases embedded directly in chat — tables, dashboards, code editors, and Mermaid diagrams. Agents can create and update canvases through tool calls during conversation.
+
+### Attention Routing
+Space-level attention policies that control how agents participate:
+- **Directed** — every message goes to the agent (default for DMs)
+- **On-mention** — agent responds only when @mentioned (default for channels)
+- **Collaborative** — agent observes and engages when it can add value (default for groups)
+- **Sticky engagement** — after being summoned, the agent stays in the conversation until dismissed or the topic drifts
+- **Natural language silencing** — say "quiet" or "that's all" to disengage the agent
+
+### Agent Runtime
+A built-in agent runtime with workspace bootstrapping, tool execution (shell, file I/O, web fetch, canvas operations), and configurable model backends. Agents are managed through an Agent Resources UI.
+
+### Authentication
+Pluggable OIDC authentication with a dev-mode bypass for local development.
+
+---
+
+## Tech Stack
+
+| Layer | Technology |
+|-------|-----------|
+| Language | Elixir 1.15+ / OTP 28 |
+| Web framework | Phoenix 1.8 / LiveView 1.1 |
+| Database | PostgreSQL 16 |
+| CSS | Tailwind CSS 4 / DaisyUI 5 |
+| JS bundler | esbuild |
+| HTTP server | Bandit |
+| CI | GitHub Actions |
+| Container | Docker (GHCR) |
+
+---
+
+## Getting Started
+
+### Prerequisites
+
+- **Elixir** ≥ 1.15 with OTP ≥ 26
+- **PostgreSQL** ≥ 14
+- **Node.js** ≥ 18 (for asset tooling)
+
+### Setup
+
+```bash
+# Clone the repository
+git clone https://github.com/Startup-Suite/core.git
+cd core/apps/platform
+
+# Install dependencies
+mix setup
+
+# Start the development server
+mix phx.server
+```
+
+The app will be available at [http://localhost:4000](http://localhost:4000).
+
+### Environment Variables
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `DATABASE_URL` | PostgreSQL connection string | `postgres://postgres:postgres@localhost/platform_dev` |
+| `SECRET_KEY_BASE` | Phoenix secret key (generate with `mix phx.gen.secret`) | Dev default provided |
+| `AGENT_WORKSPACE_PATH` | Path to the agent workspace directory | — |
+| `PHX_HOST` | Production hostname | `localhost` |
+| `PORT` | HTTP port | `4000` |
+
+### Dev Login
+
+In development, visit `/dev/login` to auto-create a dev user and bypass OIDC authentication.
+
+---
+
+## Project Structure
+
+```
+core/
+├── apps/
+│   └── platform/              # Phoenix application
+│       ├── lib/
+│       │   ├── platform/      # Backend contexts
+│       │   │   ├── accounts/  # Users and authentication
+│       │   │   ├── agents/    # Agent runtime and configuration
+│       │   │   ├── audit/     # Event audit log
+│       │   │   ├── chat/      # Spaces, messages, canvases, attention
+│       │   │   └── ...
+│       │   └── platform_web/  # LiveViews, controllers, components
+│       ├── priv/
+│       │   └── repo/migrations/
+│       └── test/
+│
+├── deployment/                # Deployment contracts and templates
+│   ├── schema/
+│   ├── templates/
+│   ├── examples/
+│   └── operators/
+│
+├── docs/
+│   ├── architecture/          # System design documents
+│   └── decisions/             # Architecture Decision Records
+│
+├── scripts/                   # Development utilities
+└── .github/workflows/         # CI configuration
+```
+
+---
+
+## Architecture
+
+The backend is a **modular Phoenix monolith** with strong internal domain boundaries and a shared real-time transport layer.
+
+### Domain Contexts
+
+| Context | Responsibility |
+|---------|---------------|
+| `Accounts` | Users, OIDC login, sessions |
+| `Chat` | Spaces, participants, messages, threads, reactions, pins, canvases, attention routing |
+| `Agents` | Agent configuration, workspace bootstrapping, model providers, tool execution |
+| `Audit` | Telemetry-driven event log |
+
+### Key Design Principles
+
+- **Deterministic automation for mechanical tasks** — routing, workflow transitions, validation gates, and tool invocation are system behavior, not LLM calls.
+- **LLMs where judgment is needed** — drafting, summarization, conversational assistance, and classification where brittle rules fail.
+- **Cost-conscious operation** — attention modes implicitly control spend; no user-facing budget knobs.
+- **Agents as participants, not plugins** — agents join spaces, have presence, follow attention policies, and can be silenced like any other participant.
+
+### Architecture Decision Records
+
+Design decisions are documented in [`docs/decisions/`](docs/decisions/):
+
+| ADR | Topic | Status |
+|-----|-------|--------|
+| [0001](docs/decisions/0001-repository-shape-and-boundary.md) | Repository shape and public/private boundary | Accepted |
+| [0002](docs/decisions/0002-platform-domain-boundaries.md) | Platform domain boundaries | Accepted |
+| [0003](docs/decisions/0003-deployment-contract-shape.md) | Deployment contract shape | Accepted |
+| [0004](docs/decisions/0004-authentication-strategy.md) | Authentication strategy | Accepted |
+| [0005](docs/decisions/0005-event-stream-architecture.md) | Event stream architecture | Accepted |
+| [0006](docs/decisions/0006-secure-credential-vault.md) | Secure credential vault | Accepted |
+| [0007](docs/decisions/0007-agent-runtime-architecture.md) | Agent runtime architecture | Accepted |
+| [0008](docs/decisions/0008-chat-backend-architecture.md) | Chat backend architecture | Accepted |
+| [0009](docs/decisions/0009-suite-shell-architecture.md) | Suite shell architecture | Accepted |
+| [0010](docs/decisions/0010-mobile-navigation-and-agent-resources.md) | Mobile navigation and agent resources | Accepted |
+| [0011](docs/decisions/0011-execution-runners-context-plane-and-run-control.md) | Execution runners and run control | Accepted |
+| [0012](docs/decisions/0012-agent-driven-live-canvas-architecture.md) | Live canvas architecture | Proposed |
+| [0013](docs/decisions/0013-attention-routing-and-channel-policy.md) | Attention routing and channel policy | Proposed |
+
+---
+
+## Testing
+
+```bash
+cd apps/platform
+
+# Run the full test suite
+mix test
+
+# Run a specific test file
+mix test test/platform/chat/conversation_test.exs
+
+# Run tests with coverage
+mix test --cover
+```
+
+CI runs on every push and pull request against `main`, using a containerized Elixir + PostgreSQL environment.
+
+---
+
+## Deployment
+
+Core publishes Docker images to GitHub Container Registry. The deployment model separates the public product (this repo) from operator-specific configuration:
+
+- **Core** defines deployment schemas, templates, contracts, and examples
+- **Core Ops** (private) owns real deployment targets, secrets, and production configuration
+
+See [`deployment/`](deployment/) for the reusable deployment contracts and examples.
+
+### Docker
+
+```bash
+# Build locally
+docker build -t startup-suite-core .
+
+# Or pull from GHCR (after CI publishes)
+docker pull ghcr.io/startup-suite/core:latest
+```
+
+---
+
+## Development
+
+### Git Hooks
+
+Enable the pre-commit hook (auto-formats staged Elixir files):
 
 ```bash
 ./scripts/setup-git-hooks.sh
 ```
 
-That configures:
+### Code Style
 
-- `core.hooksPath=.githooks`
-- executable `.githooks/pre-commit`
-
-The hook formats only staged `apps/platform/**/*.ex`, `*.exs`, and `*.heex` files,
-then re-stages them before the commit continues.
-
-It holds the open-source application code, shared contracts, architecture decisions, and the reusable deployment model for the suite.
-
-It does **not** hold personal infrastructure details, host-specific production configuration, real deployment targets, or operator-specific workflows.
-
-Those belong in the companion private repository: **Core Ops**.
+- Elixir formatting is enforced via `mix format` (pre-commit hook)
+- Follow Phoenix conventions for context boundaries
+- Keep LiveView render functions in the same module (no separate template files)
 
 ---
 
-## Product stance
+## Product Roadmap
 
-Core is being designed to feel like a professional business suite:
+Startup Suite is designed as multiple product surfaces over one shared platform:
 
-- clear names over cute names
-- explicit structure over magic
-- clean, restrained Elixir/Phoenix architecture
-- deterministic automation wherever possible
-- LLMs only where they add real value
-- cost-conscious operation as a first-class concern
+| Surface | Description | Status |
+|---------|-------------|--------|
+| **Chat** | Real-time messaging with agent participation | Active development |
+| **Tasks** | Execution-oriented task management | Planned |
+| **Shell** | Suite-level navigation container | Planned |
 
-The target feel is plain, disciplined, and unsurprising.
-
----
-
-## Product model
-
-Startup Suite is being designed as **multiple product surfaces over one shared platform**.
-
-### Product surfaces
-
-These are the user-facing parts of the suite:
-
-- **Chat** — the first surface to be built and shipped
-- **Tasks** — the execution-oriented sibling surface
-- **Shell** — the later suite-level container for navigation across surfaces
-
-### Platform domains
-
-These are the backend capabilities that power the surfaces:
-
-- Accounts
-- Workspaces
-- Chat
-- **Execution**
-- Experiments
-- Review
-- Artifacts
-- Automations
-- Integrations
-- Audit
-
-Important distinction:
-
-- **Tasks** is the product surface
-- **Execution** is the broader platform/domain capability underneath it
-
-That separation keeps the backend model honest: execution is larger than task lists, because it also covers experiments, variants, promotions, reversals, review, and controlled automation.
+The platform layer underneath supports: accounts, workspaces, chat, execution, experiments, review, artifacts, automations, integrations, and audit.
 
 ---
 
-## Sequencing
+## Contributing
 
-Current sequencing remains:
+Contributions are welcome. Please:
 
-1. build **Chat** first
-2. keep **Tasks** visible as a real sibling surface from the beginning
-3. add **Shell** later as the suite-level container
-
-This avoids designing Chat as a dead-end one-off while still keeping first delivery focused.
-
----
-
-## Backend architecture
-
-The backend should begin as a **modular Phoenix monolith**.
-
-That means:
-
-- one shared Elixir/Phoenix backend
-- strong internal domain boundaries
-- shared auth, realtime transport, audit, orchestration state, and policy
-- no premature split into services
-
-The goal is to preserve conceptual modularity without paying distributed-systems cost too early.
+1. Check existing [issues](https://github.com/Startup-Suite/core/issues) and [ADRs](docs/decisions/) before proposing large changes
+2. Open an issue to discuss significant design decisions before submitting a PR
+3. Ensure `mix test` passes and `mix format` has been applied
+4. Keep the public/private boundary intact — no host-specific configuration in this repo
 
 ---
 
-## Automation philosophy
+## License
 
-Core should prefer deterministic system behavior for mechanical work:
-
-- routing
-- workflow transitions
-- validation gates
-- promotion and reversal flows
-- tool invocation
-- policy and permission enforcement
-- deployment orchestration steps where the rules are known
-
-LLMs should be used where judgment or language generation is genuinely helpful:
-
-- drafting
-- summarization
-- extraction
-- planning support
-- conversational assistance
-- classification where brittle rules are a bad fit
-
-The system should not depend on LLMs as hidden glue for simple control flow.
-
----
-
-## Repository boundary
-
-This repository is intentionally scoped to the **public product** and the **reusable system model**.
-
-### This repo should contain
-
-- application code
-- frontend code
-- shared contracts and schemas
-- reusable deployment contracts
-- generic templates and examples
-- architecture and decision documents
-- CI for build, test, packaging, and artifact publication
-
-### This repo should not contain
-
-- host-specific production values
-- personal domains or private environment details
-- real deployment targets
-- production secret material
-- operator-specific workflows
-- private promotion state
-
-Those belong in **Core Ops**.
-
----
-
-## Relationship to Core Ops
-
-The boundary is simple:
-
-- **Core defines the deployment model**
-- **Core Ops owns deployment instances**
-
-In practice:
-
-- Core defines schemas, templates, contracts, and examples
-- Core Ops defines real targets such as `production`
-- Core may publish artifacts
-- Core Ops chooses, promotes, and deploys those artifacts
-
-This boundary is intentional and should remain permanent.
-
----
-
-## Target repository shape
-
-This is the intended target shape of the public repo:
-
-```text
-core/
-├─ apps/
-│  └─ platform/
-│     ├─ lib/
-│     │  ├─ core/
-│     │  │  ├─ accounts/
-│     │  │  ├─ workspaces/
-│     │  │  ├─ chat/
-│     │  │  ├─ execution/
-│     │  │  ├─ experiments/
-│     │  │  ├─ review/
-│     │  │  ├─ artifacts/
-│     │  │  ├─ automations/
-│     │  │  ├─ integrations/
-│     │  │  └─ audit/
-│     │  └─ core_web/
-│     ├─ priv/
-│     └─ test/
-│
-├─ frontends/
-│  ├─ chat/
-│  ├─ tasks/
-│  └─ shell/
-│
-├─ packages/
-│  ├─ ui/
-│  ├─ contracts/
-│  └─ deployment-contracts/
-│
-├─ deployment/
-│  ├─ schema/
-│  ├─ templates/
-│  └─ examples/
-│
-├─ docs/
-│  ├─ architecture/
-│  └─ decisions/
-│
-└─ .github/
-   └─ workflows/
-```
-
-### Notes on shape
-
-- `apps/platform/` is the shared Phoenix application
-- `frontends/` holds user-facing surfaces
-- `packages/` holds reusable cross-surface assets and contracts
-- `deployment/` stays generic and reusable
-- avoid a generic top-level `workers/` catch-all until a real pattern emerges
-
----
-
-## Current repository status
-
-Right now, this repository is still an **early design scaffold**.
-
-That means the repo should currently be treated as the source of truth for:
-
-- public architecture decisions
-- boundary definitions
-- platform shape
-- naming and modularity rules
-- deployment abstraction design
-
-It should **not** pretend implementation is further along than it is.
-
----
-
-## How to continue the design correctly
-
-If you are continuing the design:
-
-1. preserve the public/private boundary with Core Ops
-2. keep naming plain and explicit
-3. treat Chat as first delivery, not as the whole product
-4. keep Tasks visible as a sibling surface
-5. model **Execution** as the underlying platform domain
-6. keep experiments, variants, review, and reversals first-class
-7. keep deployment abstractions generic and reusable
-8. do not leak host-specific reality into this repo
-
----
-
-## Immediate next design moves
-
-Near-term work in this repo should focus on:
-
-- locking the domain and repository boundaries
-- defining the Phoenix app structure
-- documenting the public deployment contract
-- clarifying how Chat, Tasks, and Shell relate
-- describing how experiments and reversals fit the platform model
-
----
-
-## Status
-
-This repository is currently an initial public scaffold for Startup Suite Core.
-
-The primary job of the repo today is to make the architecture, boundaries, and future module structure explicit before implementation expands.
+Apache License 2.0 — see [LICENSE](LICENSE) for details.
