@@ -152,5 +152,10 @@ if config_env() == :prod do
     http: [
       ip: {0, 0, 0, 0, 0, 0, 0, 0}
     ],
+    check_origin: [
+      "https://#{host}",
+      "https://www.#{host}",
+      "//*.#{host}"
+    ],
     secret_key_base: secret_key_base
 end
