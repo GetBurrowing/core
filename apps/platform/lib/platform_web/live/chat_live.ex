@@ -20,6 +20,7 @@ defmodule PlatformWeb.ChatLive do
   use PlatformWeb, :live_view
 
   import PlatformWeb.Chat.CanvasComponents
+  import PlatformWeb.Chat.CanvasRenderer, only: [canvas_document: 1]
 
   alias Platform.Accounts
   alias Platform.Agents.WorkspaceBootstrap
@@ -1110,25 +1111,17 @@ defmodule PlatformWeb.ChatLive do
                   :if={msg.content_type == "canvas"}
                   class="mt-1 rounded-2xl border border-primary/20 bg-primary/5 p-3"
                 >
-                  <div class="flex items-center justify-between gap-3">
-                    <div class="min-w-0">
-                      <p class="truncate text-sm font-semibold text-base-content">
-                        {message_canvas_title(msg, @canvases_by_message_id)}
-                      </p>
-                      <p class="text-[11px] uppercase tracking-widest text-base-content/50">
-                        {message_canvas_type(msg, @canvases_by_message_id)} live canvas
-                      </p>
-                    </div>
+                  <div class="min-w-0 mb-2">
+                    <p class="truncate text-sm font-semibold text-base-content">
+                      {message_canvas_title(msg, @canvases_by_message_id)}
+                    </p>
+                    <p class="text-[11px] uppercase tracking-widest text-base-content/50">
+                      {message_canvas_type(msg, @canvases_by_message_id)} live canvas
+                    </p>
+                  </div>
 
-                    <button
-                      type="button"
-                      phx-click="open_canvas"
-                      phx-value-canvas-id={message_canvas_id(msg, @canvases_by_message_id)}
-                      class="btn btn-ghost btn-sm"
-                      disabled={is_nil(message_canvas_id(msg, @canvases_by_message_id))}
-                    >
-                      Open
-                    </button>
+                  <div :if={Map.get(@canvases_by_message_id, msg.id)} class="min-w-0 overflow-hidden">
+                    <.canvas_document canvas={Map.get(@canvases_by_message_id, msg.id)} />
                   </div>
 
                   <p :if={present?(msg.content)} class="mt-2 text-sm leading-6 text-base-content/70">
@@ -1831,9 +1824,9 @@ defmodule PlatformWeb.ChatLive do
     |> Enum.reverse()
   end
 
-  attr :id, :string, required: true
-  attr :timestamp, :any, default: nil
-  attr :class, :string, default: nil
+  attr(:id, :string, required: true)
+  attr(:timestamp, :any, default: nil)
+  attr(:class, :string, default: nil)
 
   defp local_time(assigns) do
     ~H"""

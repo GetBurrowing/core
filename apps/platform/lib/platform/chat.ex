@@ -957,6 +957,40 @@ defmodule Platform.Chat do
     |> Repo.all()
   end
 
+  @doc """
+  Apply one or more `CanvasPatch` operations to a canvas's canonical document.
+
+  Steps:
+  1. Load the current state as a `CanvasDocument`.
+  2. Apply the patch operations via `CanvasPatch.apply_many/2`.
+  3. Persist the resulting document via `update_canvas_state/2`.
+  4. Broadcast the update via PubSub.
+
+  Returns `{:ok, updated_canvas}` or `{:error, reason}`.
+  """
+  @spec patch_canvas(Canvas.t(), [Platform.Chat.CanvasPatch.operation()]) ::
+          {:ok, Canvas.t()} | {:error, term()}
+  def patch_canvas(%Canvas{} = canvas, operations) when is_list(operations) do
+    alias Platform.Chat.{CanvasDocument, CanvasPatch}
+
+    current_state = canvas.state || %{}
+
+    document =
+      if Map.get(current_state, "version") && Map.get(current_state, "root") do
+        current_state
+      else
+        CanvasDocument.new()
+      end
+
+    case CanvasPatch.apply_many(document, operations) do
+      {:ok, new_document} ->
+        update_canvas(canvas, %{"state" => new_document})
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
   # ── Attachments ──────────────────────────────────────────────────────────────
 
   @doc """

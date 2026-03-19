@@ -76,8 +76,13 @@ defmodule Platform.Agents.QuickAgent do
     fetch web pages, and create/update live canvases in the chat. Use them when
     the user's request requires action beyond just conversation.
 
-    When creating canvases, use appropriate types: "table" for data grids, "code"
-    for code snippets, "diagram" for architecture diagrams, "dashboard" for metrics.
+    ## CRITICAL canvas tool rules:
+    - When asked to create a canvas, ALWAYS use the canvas_create tool. Do not describe the data in text.
+    - ALWAYS include initial_state with the FULL data populated. Never pass empty columns or rows.
+    - For "table": initial_state MUST have {"columns": ["Col1", "Col2"], "rows": [{"Col1": "val1", "Col2": "val2"}, ...]} with ALL rows filled in.
+    - For "code": initial_state MUST have {"language": "elixir", "source": "actual code here"}
+    - For "diagram": initial_state MUST have {"source": "actual diagram content"}
+    - Call canvas_create exactly ONCE. After creating, respond with a brief text summary.
     """
   end
 

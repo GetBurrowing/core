@@ -12,8 +12,9 @@ defmodule Platform.Agents.ToolRunner do
   alias Platform.Agents.Providers.Codex
   alias Platform.Agents.CodexAuth
   alias Platform.Chat
+  alias Platform.Chat.CanvasDocument
 
-  @max_iterations 10
+  @max_iterations 5
   @shell_timeout_ms 30_000
   @file_read_max_bytes 50 * 1024
   @web_fetch_max_bytes 10 * 1024
@@ -213,7 +214,19 @@ defmodule Platform.Agents.ToolRunner do
 
           updated_messages = messages ++ tool_call_items ++ result_items
 
-          do_run(system_prompt, updated_messages, opts, credentials, iteration + 1)
+          # After a canvas_create call, remove tools from subsequent iterations
+          # to prevent duplicate canvas creation.
+          canvas_was_created =
+            Enum.any?(tool_calls, &(Map.get(&1, "name") == "canvas_create"))
+
+          next_opts =
+            if canvas_was_created do
+              Keyword.put(opts, :tools, [])
+            else
+              opts
+            end
+
+          do_run(system_prompt, updated_messages, next_opts, credentials, iteration + 1)
         end
 
       {:error, reason} ->
@@ -247,6 +260,8 @@ defmodule Platform.Agents.ToolRunner do
         {:ok, decoded} -> decoded
         {:error, _} -> %{}
       end
+
+    Logger.info("[ToolRunner] tool=#{name} args=#{inspect(args) |> String.slice(0, 500)}")
 
     output = run_tool(name, args, context)
 
@@ -350,16 +365,23 @@ defmodule Platform.Agents.ToolRunner do
 
   defp run_tool("canvas_create", args, %{space_id: space_id, participant_id: participant_id})
        when is_binary(space_id) and is_binary(participant_id) do
-    attrs =
-      %{
-        "title" => Map.get(args, "title"),
-        "canvas_type" => Map.get(args, "canvas_type", "custom")
-      }
-      |> maybe_put_initial_state(Map.get(args, "initial_state"))
+    canvas_type = Map.get(args, "canvas_type", "custom")
+    initial_state = Map.get(args, "initial_state") || %{}
+
+    # Seed a canonical document from the initial state so the renderer
+    # can immediately display real content inline.
+    seeded_document = CanvasDocument.seed(canvas_type, initial_state)
+
+    attrs = %{
+      "title" => Map.get(args, "title"),
+      "canvas_type" => canvas_type,
+      "state" => seeded_document
+    }
 
     case Chat.create_canvas_with_message(space_id, participant_id, attrs) do
       {:ok, canvas, _message} ->
-        "ok: created canvas id=#{canvas.id} title=#{canvas.title}"
+        "Canvas created (id=#{canvas.id}, title=#{canvas.title}). " <>
+          "Respond with a brief text message describing what you created."
 
       {:error, reason} ->
         "error: could not create canvas: #{inspect(reason)}"
@@ -392,13 +414,6 @@ defmodule Platform.Agents.ToolRunner do
     Logger.warning("[ToolRunner] unknown tool=#{name} args=#{inspect(args)}")
     "error: unknown tool '#{name}'"
   end
-
-  defp maybe_put_initial_state(attrs, nil), do: attrs
-
-  defp maybe_put_initial_state(attrs, state) when is_map(state),
-    do: Map.put(attrs, "initial_state", state)
-
-  defp maybe_put_initial_state(attrs, _), do: attrs
 
   defp provider_module do
     Application.get_env(:platform, :quick_agent_provider_module, Codex)
