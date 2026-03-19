@@ -41,14 +41,19 @@ defmodule PlatformWeb.ChatLive do
   @impl true
   def mount(_params, session, socket) do
     user_id = session["current_user_id"] || Ecto.UUID.generate()
-    spaces = Chat.list_spaces()
+    channels = Chat.list_spaces(kind: "channel")
+    conversations = if user_id, do: Chat.list_user_conversations(user_id), else: []
+    dm_conversations = Enum.filter(conversations, fn s -> s.kind in ["dm", "group"] end)
 
     socket =
       socket
       |> assign(:page_title, "Chat")
       |> assign(:user_id, user_id)
-      |> assign(:spaces, spaces)
+      |> assign(:spaces, channels ++ dm_conversations)
+      |> assign(:channels, channels)
+      |> assign(:dm_conversations, dm_conversations)
       |> assign(:active_space, nil)
+      |> assign(:space_participants, [])
       |> assign(:search_query, "")
       |> assign(:search_results, [])
       |> assign(:highlighted_message_id, nil)
@@ -69,7 +74,15 @@ defmodule PlatformWeb.ChatLive do
       |> assign(:canvases_by_message_id, %{})
       |> assign(:active_canvas, nil)
       |> assign(:show_canvases, false)
+      |> assign(:agent_silenced, false)
       |> assign(:mobile_browser_open, false)
+      |> assign(:show_new_channel_modal, false)
+      |> assign(:show_new_conversation_modal, false)
+      |> assign(:picker_users, [])
+      |> assign(:picker_agents, [])
+      |> assign(:picker_query, "")
+      |> assign(:picker_selected, [])
+      |> assign(:new_channel_form, to_form(%{"name" => "", "description" => ""}))
       |> assign(:quick_emojis, @quick_emojis)
       |> assign(:canvas_types, @canvas_types)
       |> assign(:agent_typing, false)
@@ -96,7 +109,7 @@ defmodule PlatformWeb.ChatLive do
   end
 
   @impl true
-  def handle_params(%{"space_slug" => slug}, _url, socket) do
+  def handle_params(%{"space_slug" => slug_or_id}, _url, socket) do
     if prev = socket.assigns.active_space do
       ChatPubSub.unsubscribe(prev.id)
 
@@ -105,7 +118,11 @@ defmodule PlatformWeb.ChatLive do
       end
     end
 
-    space = Chat.get_space_by_slug(slug) || bootstrap_space(slug)
+    # Try slug first, then ID fallback (for DM/group spaces without slugs)
+    space =
+      Chat.get_space_by_slug(slug_or_id) ||
+        (valid_uuid?(slug_or_id) && Chat.get_space(slug_or_id)) ||
+        bootstrap_space(slug_or_id)
 
     if is_nil(space) do
       {:noreply, push_navigate(socket, to: ~p"/chat")}
@@ -139,10 +156,18 @@ defmodule PlatformWeb.ChatLive do
       canvases = Chat.list_canvases(space.id)
       canvases_by_message_id = build_canvas_map(canvases)
 
+      page_title = space_page_title(space, participants, socket.assigns.user_id)
+
+      # Refresh sidebar lists
+      channels = Chat.list_spaces(kind: "channel")
+      user_convos = Chat.list_user_conversations(socket.assigns.user_id)
+      dm_convos = Enum.filter(user_convos, fn s -> s.kind in ["dm", "group"] end)
+
       {:noreply,
        socket
-       |> assign(:page_title, "# #{space.name}")
+       |> assign(:page_title, page_title)
        |> assign(:active_space, space)
+       |> assign(:space_participants, participants)
        |> assign(:search_query, "")
        |> assign(:search_results, [])
        |> assign(:highlighted_message_id, nil)
@@ -167,8 +192,11 @@ defmodule PlatformWeb.ChatLive do
        |> assign(:canvases_by_message_id, canvases_by_message_id)
        |> assign(:active_canvas, nil)
        |> assign(:show_canvases, false)
+       |> assign(:agent_silenced, agent_silenced?(space, participants))
        |> assign(:mobile_browser_open, false)
-       |> assign(:spaces, Chat.list_spaces())
+       |> assign(:channels, channels)
+       |> assign(:dm_conversations, dm_convos)
+       |> assign(:spaces, channels ++ dm_convos)
        |> assign_new_canvas_form()
        |> stream(:messages, messages, reset: true)
        |> schedule_agent_presence_refresh()}
@@ -176,7 +204,7 @@ defmodule PlatformWeb.ChatLive do
   end
 
   def handle_params(_params, _url, socket) do
-    case socket.assigns.spaces do
+    case socket.assigns.channels do
       [first | _] ->
         {:noreply, push_navigate(socket, to: ~p"/chat/#{first.slug}")}
 
@@ -425,6 +453,35 @@ defmodule PlatformWeb.ChatLive do
     {:noreply, assign(socket, :show_canvases, !socket.assigns.show_canvases)}
   end
 
+  def handle_event("toggle_agent_silence", _params, socket) do
+    space = socket.assigns.active_space
+    agent_presence = socket.assigns.agent_presence
+
+    case agent_presence do
+      %{agent: %{id: agent_id}} when not is_nil(agent_id) ->
+        participants = Chat.list_participants(space.id, participant_type: "agent")
+
+        agent_participant =
+          Enum.find(participants, fn p -> p.participant_id == agent_id end)
+
+        if agent_participant do
+          if socket.assigns.agent_silenced do
+            Chat.unsilence_agent(space.id, agent_participant.id)
+            {:noreply, assign(socket, :agent_silenced, false)}
+          else
+            until = DateTime.add(DateTime.utc_now(), 1800, :second)
+            Chat.silence_agent(space.id, agent_participant.id, until)
+            {:noreply, assign(socket, :agent_silenced, true)}
+          end
+        else
+          {:noreply, socket}
+        end
+
+      _ ->
+        {:noreply, socket}
+    end
+  end
+
   def handle_event("open_canvas", %{"canvas_id" => canvas_id}, socket) do
     case find_canvas(socket, canvas_id) do
       nil ->
@@ -546,6 +603,144 @@ defmodule PlatformWeb.ChatLive do
     end
 
     {:noreply, socket}
+  end
+
+  # ── Channel / Conversation creation events ─────────────────────────────────
+
+  def handle_event("open_new_channel_modal", _params, socket) do
+    {:noreply,
+     socket
+     |> assign(:show_new_channel_modal, true)
+     |> assign(:new_channel_form, to_form(%{"name" => "", "description" => ""}))}
+  end
+
+  def handle_event("close_new_channel_modal", _params, socket) do
+    {:noreply, assign(socket, :show_new_channel_modal, false)}
+  end
+
+  def handle_event("create_channel", %{"name" => name, "description" => desc}, socket) do
+    slug =
+      name
+      |> String.downcase()
+      |> String.replace(~r/[^a-z0-9\s-]/, "")
+      |> String.replace(~r/\s+/, "-")
+      |> String.trim("-")
+
+    case Chat.create_channel(%{name: name, slug: slug, description: desc}) do
+      {:ok, space} ->
+        {:noreply,
+         socket
+         |> assign(:show_new_channel_modal, false)
+         |> push_navigate(to: ~p"/chat/#{space.slug}")}
+
+      {:error, _changeset} ->
+        {:noreply, put_flash(socket, :error, "Could not create channel. Name may be taken.")}
+    end
+  end
+
+  def handle_event("open_new_conversation_modal", _params, socket) do
+    users = Platform.Accounts.list_users()
+    agents = Chat.list_agents_for_picker()
+
+    {:noreply,
+     socket
+     |> assign(:show_new_conversation_modal, true)
+     |> assign(:picker_users, users)
+     |> assign(:picker_agents, agents)
+     |> assign(:picker_query, "")
+     |> assign(:picker_selected, [])}
+  end
+
+  def handle_event("close_new_conversation_modal", _params, socket) do
+    {:noreply, assign(socket, :show_new_conversation_modal, false)}
+  end
+
+  def handle_event("picker_search", %{"query" => query}, socket) do
+    users = Platform.Accounts.list_users(query: query)
+    agents = Chat.list_agents_for_picker()
+
+    filtered_agents =
+      if query == "" do
+        agents
+      else
+        pattern = String.downcase(query)
+        Enum.filter(agents, fn a -> String.contains?(String.downcase(a.name || ""), pattern) end)
+      end
+
+    {:noreply,
+     socket
+     |> assign(:picker_query, query)
+     |> assign(:picker_users, users)
+     |> assign(:picker_agents, filtered_agents)}
+  end
+
+  def handle_event("picker_toggle", %{"type" => type, "id" => id}, socket) do
+    selected = socket.assigns.picker_selected
+    entry = %{type: type, id: id}
+
+    updated =
+      if Enum.any?(selected, fn s -> s.type == type and s.id == id end) do
+        Enum.reject(selected, fn s -> s.type == type and s.id == id end)
+      else
+        selected ++ [entry]
+      end
+
+    {:noreply, assign(socket, :picker_selected, updated)}
+  end
+
+  def handle_event("create_conversation", _params, socket) do
+    selected = socket.assigns.picker_selected
+    user_id = socket.assigns.user_id
+
+    if selected == [] do
+      {:noreply, put_flash(socket, :error, "Select at least one person or agent.")}
+    else
+      specs = Enum.map(selected, fn s -> %{type: s.type, id: s.id} end)
+
+      result =
+        if length(specs) == 1 do
+          [spec] = specs
+          Chat.find_or_create_dm(user_id, spec.type, spec.id)
+        else
+          Chat.create_group_conversation(user_id, specs)
+        end
+
+      case result do
+        {:ok, space} ->
+          nav_target = space.slug || space.id
+
+          {:noreply,
+           socket
+           |> assign(:show_new_conversation_modal, false)
+           |> push_navigate(to: ~p"/chat/#{nav_target}")}
+
+        {:error, _reason} ->
+          {:noreply, put_flash(socket, :error, "Could not create conversation.")}
+      end
+    end
+  end
+
+  def handle_event("promote_to_channel", %{"name" => name}, socket) do
+    space = socket.assigns.active_space
+
+    slug =
+      name
+      |> String.downcase()
+      |> String.replace(~r/[^a-z0-9\s-]/, "")
+      |> String.replace(~r/\s+/, "-")
+      |> String.trim("-")
+
+    case Chat.promote_to_channel(space, %{name: name, slug: slug}) do
+      {:ok, updated} ->
+        {:noreply, push_navigate(socket, to: ~p"/chat/#{updated.slug}")}
+
+      {:error, :not_promotable} ->
+        {:noreply,
+         put_flash(socket, :error, "This conversation cannot be promoted to a channel.")}
+
+      {:error, _changeset} ->
+        {:noreply, put_flash(socket, :error, "Could not promote to channel.")}
+    end
   end
 
   @impl true
@@ -690,6 +885,10 @@ defmodule PlatformWeb.ChatLive do
      )}
   end
 
+  def handle_info({:agent_silenced, _payload}, socket) do
+    {:noreply, assign(socket, :agent_silenced, true)}
+  end
+
   def handle_info(_msg, socket), do: {:noreply, socket}
 
   @impl true
@@ -697,17 +896,25 @@ defmodule PlatformWeb.ChatLive do
     ~H"""
     <div id="push-subscribe" phx-hook="PushSubscribe" class="hidden"></div>
     <div class="flex h-full overflow-hidden">
-      <%!-- Desktop channel sidebar (hidden on mobile) --%>
+      <%!-- Desktop sidebar --%>
       <aside class="hidden lg:flex w-52 flex-shrink-0 flex-col border-r border-base-300 bg-base-200">
-        <div class="border-b border-base-300 px-4 py-3">
+        <%!-- Channels section --%>
+        <div class="border-b border-base-300 px-4 py-3 flex items-center justify-between">
           <p class="text-xs font-semibold uppercase tracking-widest text-base-content/50">
             Channels
           </p>
+          <button
+            phx-click="open_new_channel_modal"
+            class="text-base-content/40 hover:text-primary text-sm"
+            title="New channel"
+          >
+            +
+          </button>
         </div>
 
-        <nav class="flex-1 overflow-y-auto py-2">
+        <nav class="overflow-y-auto py-2">
           <.link
-            :for={space <- @spaces}
+            :for={space <- @channels}
             navigate={~p"/chat/#{space.slug}"}
             class={[
               "flex items-center gap-2 px-3 py-1.5 text-sm transition-colors",
@@ -720,8 +927,41 @@ defmodule PlatformWeb.ChatLive do
             <span class="truncate">{space.name}</span>
           </.link>
 
-          <div :if={@spaces == []} class="px-4 py-2 text-xs text-base-content/40">
+          <div :if={@channels == []} class="px-4 py-2 text-xs text-base-content/40">
             No channels yet
+          </div>
+        </nav>
+
+        <%!-- Direct Messages section --%>
+        <div class="border-t border-b border-base-300 px-4 py-3 flex items-center justify-between">
+          <p class="text-xs font-semibold uppercase tracking-widest text-base-content/50">
+            Direct Messages
+          </p>
+          <button
+            phx-click="open_new_conversation_modal"
+            class="text-base-content/40 hover:text-primary text-sm"
+            title="New conversation"
+          >
+            +
+          </button>
+        </div>
+
+        <nav class="flex-1 overflow-y-auto py-2">
+          <.link
+            :for={space <- @dm_conversations}
+            navigate={~p"/chat/#{space.slug || space.id}"}
+            class={[
+              "flex items-center gap-2 px-3 py-1.5 text-sm transition-colors",
+              "hover:bg-base-300 rounded mx-1",
+              @active_space && @active_space.id == space.id &&
+                "bg-primary/10 text-primary font-semibold border-l-2 border-primary"
+            ]}
+          >
+            <span class="truncate">{sidebar_display_name(space, @user_id)}</span>
+          </.link>
+
+          <div :if={@dm_conversations == []} class="px-4 py-2 text-xs text-base-content/40">
+            No conversations yet
           </div>
         </nav>
       </aside>
@@ -730,19 +970,22 @@ defmodule PlatformWeb.ChatLive do
       <%= if @mobile_browser_open do %>
         <div class="fixed inset-0 z-40 flex flex-col bg-base-100 lg:hidden">
           <header class="flex h-12 flex-shrink-0 items-center justify-between border-b border-base-300 px-4">
-            <p class="text-sm font-semibold">Channels</p>
+            <p class="text-sm font-semibold">Conversations</p>
             <button
               phx-click="close_mobile_browser"
               class="rounded-lg p-1 text-base-content/60 hover:bg-base-300 hover:text-base-content"
-              aria-label="Close channels"
+              aria-label="Close"
             >
               <span class="hero-x-mark size-5"></span>
             </button>
           </header>
 
           <nav class="flex-1 overflow-y-auto py-2">
+            <p class="px-4 py-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
+              Channels
+            </p>
             <.link
-              :for={space <- @spaces}
+              :for={space <- @channels}
               navigate={~p"/chat/#{space.slug}"}
               phx-click="close_mobile_browser"
               class={[
@@ -756,8 +999,28 @@ defmodule PlatformWeb.ChatLive do
               <span class="truncate">{space.name}</span>
             </.link>
 
-            <div :if={@spaces == []} class="px-4 py-6 text-sm text-base-content/40 text-center">
-              No channels yet
+            <p class="px-4 py-1 mt-2 text-xs font-semibold uppercase tracking-widest text-base-content/50">
+              Direct Messages
+            </p>
+            <.link
+              :for={space <- @dm_conversations}
+              navigate={~p"/chat/#{space.slug || space.id}"}
+              phx-click="close_mobile_browser"
+              class={[
+                "flex items-center gap-3 px-4 py-3 text-sm transition-colors",
+                "hover:bg-base-200",
+                @active_space && @active_space.id == space.id &&
+                  "bg-base-200 text-primary font-semibold"
+              ]}
+            >
+              <span class="truncate">{sidebar_display_name(space, @user_id)}</span>
+            </.link>
+
+            <div
+              :if={@channels == [] and @dm_conversations == []}
+              class="px-4 py-6 text-sm text-base-content/40 text-center"
+            >
+              No conversations yet
             </div>
           </nav>
         </div>
@@ -770,27 +1033,60 @@ defmodule PlatformWeb.ChatLive do
             class="flex h-12 flex-shrink-0 items-center justify-between border-b border-base-300 px-5"
           >
             <div class="flex items-center gap-2 overflow-hidden">
-              <%!-- Mobile: tappable channel title to open browser --%>
+              <%!-- Mobile: tappable title to open browser --%>
               <button
                 phx-click="toggle_mobile_browser"
                 class="flex items-center gap-2 overflow-hidden lg:hidden"
                 aria-label="Browse channels"
               >
-                <span class="text-base-content/50">#</span>
-                <span class="truncate font-semibold">{@active_space.name}</span>
+                <span :if={@active_space.kind == "channel"} class="text-base-content/50">#</span>
+                <span class="truncate font-semibold">
+                  {space_header_name(@active_space, @space_participants, @user_id)}
+                </span>
                 <span class="hero-chevron-down size-4 text-base-content/40 flex-shrink-0"></span>
               </button>
-              <%!-- Desktop: static channel title --%>
+              <%!-- Desktop: static title --%>
               <span class="hidden lg:flex items-center gap-2 overflow-hidden">
-                <span class="text-base-content/50 text-lg font-bold">#</span>
-                <span class="truncate font-bold text-base">{@active_space.name}</span>
                 <span
-                  :if={@active_space.topic}
+                  :if={@active_space.kind == "channel"}
+                  class="text-base-content/50 text-lg font-bold"
+                >
+                  #
+                </span>
+                <span class="truncate font-bold text-base">
+                  {space_header_name(@active_space, @space_participants, @user_id)}
+                </span>
+                <span
+                  :if={@active_space.kind == "channel" && @active_space.topic}
                   class="truncate text-xs text-base-content/40"
                 >
                   — {@active_space.topic}
                 </span>
+                <span
+                  :if={@active_space.kind == "group"}
+                  class="text-xs text-base-content/40"
+                >
+                  — {length(Enum.filter(@space_participants, &is_nil(&1.left_at)))} members
+                </span>
               </span>
+
+              <%!-- Promote to channel button for groups --%>
+              <form
+                :if={@active_space.kind == "group" && !@active_space.is_direct}
+                phx-submit="promote_to_channel"
+                class="hidden lg:flex items-center gap-1 ml-2"
+              >
+                <input
+                  name="name"
+                  type="text"
+                  placeholder="Channel name…"
+                  class="input input-bordered input-xs w-32"
+                  required
+                />
+                <button type="submit" class="btn btn-xs btn-ghost">
+                  Convert to Channel
+                </button>
+              </form>
             </div>
 
             <div class="flex flex-shrink-0 items-center gap-3 text-xs text-base-content/50">
@@ -844,6 +1140,19 @@ defmodule PlatformWeb.ChatLive do
               >
                 <span>📌</span>
                 <span>{length(@pins)} pinned</span>
+              </button>
+
+              <button
+                :if={@agent_presence[:joined?]}
+                phx-click="toggle_agent_silence"
+                class={[
+                  "flex items-center gap-1 rounded px-2 py-0.5 text-xs transition-colors hover:bg-base-300",
+                  @agent_silenced && "bg-warning/20 text-warning"
+                ]}
+                title={if @agent_silenced, do: "Unsilence agent", else: "Silence agent for 30 min"}
+              >
+                <span>{if @agent_silenced, do: "🔇", else: "🔈"}</span>
+                <span>{if @agent_silenced, do: "silenced", else: "silence"}</span>
               </button>
             </div>
           </header>
@@ -1109,24 +1418,23 @@ defmodule PlatformWeb.ChatLive do
 
                 <div
                   :if={msg.content_type == "canvas"}
-                  class="mt-1 rounded-2xl border border-primary/20 bg-primary/5 p-3"
+                  class="mt-1"
                 >
-                  <div class="min-w-0 mb-2">
-                    <p class="truncate text-sm font-semibold text-base-content">
-                      {message_canvas_title(msg, @canvases_by_message_id)}
-                    </p>
-                    <p class="text-[11px] uppercase tracking-widest text-base-content/50">
-                      {message_canvas_type(msg, @canvases_by_message_id)} live canvas
-                    </p>
-                  </div>
-
                   <div :if={Map.get(@canvases_by_message_id, msg.id)} class="min-w-0 overflow-hidden">
                     <.canvas_document canvas={Map.get(@canvases_by_message_id, msg.id)} />
                   </div>
 
-                  <p :if={present?(msg.content)} class="mt-2 text-sm leading-6 text-base-content/70">
-                    {msg.content}
-                  </p>
+                  <div
+                    :if={is_nil(Map.get(@canvases_by_message_id, msg.id))}
+                    class="rounded-lg bg-base-200 px-3 py-2"
+                  >
+                    <p class="truncate text-sm font-semibold text-base-content">
+                      {message_canvas_title(msg, @canvases_by_message_id)}
+                    </p>
+                    <p class="text-[11px] uppercase tracking-widest text-base-content/50">
+                      {message_canvas_type(msg, @canvases_by_message_id)} canvas
+                    </p>
+                  </div>
                 </div>
 
                 <p
@@ -1488,6 +1796,160 @@ defmodule PlatformWeb.ChatLive do
         </div>
       </div>
     </div>
+
+    <%!-- New Channel Modal --%>
+    <%= if @show_new_channel_modal do %>
+      <div
+        class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+        phx-click="close_new_channel_modal"
+      >
+        <div
+          class="bg-base-100 rounded-xl shadow-xl w-full max-w-md p-6"
+          phx-click-away="close_new_channel_modal"
+        >
+          <h3 class="text-lg font-bold mb-4">Create Channel</h3>
+          <form phx-submit="create_channel">
+            <div class="form-control mb-3">
+              <label class="label"><span class="label-text">Name</span></label>
+              <input
+                name="name"
+                type="text"
+                class="input input-bordered w-full"
+                placeholder="e.g. engineering"
+                required
+              />
+            </div>
+            <div class="form-control mb-4">
+              <label class="label"><span class="label-text">Description (optional)</span></label>
+              <input
+                name="description"
+                type="text"
+                class="input input-bordered w-full"
+                placeholder="What's this channel about?"
+              />
+            </div>
+            <div class="flex justify-end gap-2">
+              <button type="button" phx-click="close_new_channel_modal" class="btn btn-ghost btn-sm">
+                Cancel
+              </button>
+              <button type="submit" class="btn btn-primary btn-sm">Create</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    <% end %>
+
+    <%!-- New Conversation Modal --%>
+    <%= if @show_new_conversation_modal do %>
+      <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+        <div
+          class="bg-base-100 rounded-xl shadow-xl w-full max-w-md p-6"
+          phx-click-away="close_new_conversation_modal"
+        >
+          <h3 class="text-lg font-bold mb-4">New Conversation</h3>
+
+          <div class="form-control mb-3">
+            <input
+              type="text"
+              class="input input-bordered w-full input-sm"
+              placeholder="Search users or agents…"
+              phx-keyup="picker_search"
+              phx-key=""
+              value={@picker_query}
+            />
+          </div>
+
+          <%!-- Selected --%>
+          <div :if={@picker_selected != []} class="flex flex-wrap gap-1 mb-3">
+            <span
+              :for={sel <- @picker_selected}
+              class="badge badge-primary badge-sm gap-1 cursor-pointer"
+              phx-click="picker_toggle"
+              phx-value-type={sel.type}
+              phx-value-id={sel.id}
+            >
+              {picker_selected_name(sel, @picker_users, @picker_agents)}
+              <span class="text-xs">x</span>
+            </span>
+          </div>
+
+          <%!-- Users --%>
+          <div class="max-h-48 overflow-y-auto space-y-1 mb-3">
+            <p class="text-xs font-semibold uppercase tracking-widest text-base-content/50 px-1">
+              Users
+            </p>
+            <%= for user <- @picker_users do %>
+              <% is_self = user.id == @user_id %>
+              <% is_selected =
+                Enum.any?(@picker_selected, fn s -> s.type == "user" and s.id == user.id end) %>
+              <button
+                :if={!is_self}
+                type="button"
+                phx-click="picker_toggle"
+                phx-value-type="user"
+                phx-value-id={user.id}
+                class={[
+                  "flex items-center gap-2 w-full px-2 py-1.5 rounded text-sm text-left transition-colors",
+                  if(is_selected, do: "bg-primary/10 text-primary", else: "hover:bg-base-200")
+                ]}
+              >
+                <span class="w-6 h-6 rounded-full bg-base-300 flex items-center justify-center text-xs font-bold">
+                  {String.first(user.name || "U") |> String.upcase()}
+                </span>
+                <span class="truncate">{user.name || user.email}</span>
+                <span :if={is_selected} class="ml-auto text-xs">selected</span>
+              </button>
+            <% end %>
+          </div>
+
+          <%!-- Agents --%>
+          <div :if={@picker_agents != []} class="max-h-32 overflow-y-auto space-y-1 mb-4">
+            <p class="text-xs font-semibold uppercase tracking-widest text-base-content/50 px-1">
+              Agents
+            </p>
+            <%= for agent <- @picker_agents do %>
+              <% is_selected =
+                Enum.any?(@picker_selected, fn s -> s.type == "agent" and s.id == agent.id end) %>
+              <button
+                type="button"
+                phx-click="picker_toggle"
+                phx-value-type="agent"
+                phx-value-id={agent.id}
+                class={[
+                  "flex items-center gap-2 w-full px-2 py-1.5 rounded text-sm text-left transition-colors",
+                  if(is_selected, do: "bg-primary/10 text-primary", else: "hover:bg-base-200")
+                ]}
+              >
+                <span class="w-6 h-6 rounded-full bg-accent/20 flex items-center justify-center text-xs font-bold text-accent">
+                  {String.first(agent.name || "A") |> String.upcase()}
+                </span>
+                <span class="truncate">{agent.name}</span>
+                <span class="badge badge-xs badge-accent ml-1">bot</span>
+                <span :if={is_selected} class="ml-auto text-xs">selected</span>
+              </button>
+            <% end %>
+          </div>
+
+          <div class="flex justify-end gap-2">
+            <button
+              type="button"
+              phx-click="close_new_conversation_modal"
+              class="btn btn-ghost btn-sm"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              phx-click="create_conversation"
+              class="btn btn-primary btn-sm"
+              disabled={@picker_selected == []}
+            >
+              {if length(@picker_selected) <= 1, do: "Start DM", else: "Create Group"}
+            </button>
+          </div>
+        </div>
+      </div>
+    <% end %>
     """
   end
 
@@ -1582,7 +2044,7 @@ defmodule PlatformWeb.ChatLive do
     %{
       "columns" => ["Task", "Owner", "Status"],
       "rows" => [
-        %{"Task" => "Plan", "Owner" => "Alice", "Status" => "Ready"},
+        %{"Task" => "Plan", "Owner" => "Rowan", "Status" => "Ready"},
         %{"Task" => "Build", "Owner" => "Zip", "Status" => "In Progress"},
         %{"Task" => "Ship", "Owner" => "Team", "Status" => "Queued"}
       ],
@@ -1937,17 +2399,67 @@ defmodule PlatformWeb.ChatLive do
     )
   end
 
-  defp bootstrap_space(slug) do
-    name =
-      slug
-      |> String.replace("-", " ")
-      |> String.split()
-      |> Enum.map(&String.capitalize/1)
-      |> Enum.join(" ")
+  defp bootstrap_space(slug) when is_binary(slug) do
+    # Only bootstrap for slug-like strings, not UUIDs
+    if valid_uuid?(slug) do
+      nil
+    else
+      name =
+        slug
+        |> String.replace("-", " ")
+        |> String.split()
+        |> Enum.map(&String.capitalize/1)
+        |> Enum.join(" ")
 
-    case Chat.create_space(%{name: name, slug: slug, kind: "channel"}) do
-      {:ok, space} -> space
-      {:error, _} -> Chat.get_space_by_slug(slug)
+      case Chat.create_space(%{name: name, slug: slug, kind: "channel"}) do
+        {:ok, space} -> space
+        {:error, _} -> Chat.get_space_by_slug(slug)
+      end
+    end
+  end
+
+  defp bootstrap_space(_), do: nil
+
+  defp valid_uuid?(string) when is_binary(string) do
+    case Ecto.UUID.cast(string) do
+      {:ok, _} -> true
+      :error -> false
+    end
+  end
+
+  defp valid_uuid?(_), do: false
+
+  defp space_page_title(%{kind: "channel", name: name}, _participants, _user_id) do
+    "# #{name}"
+  end
+
+  defp space_page_title(space, participants, user_id) do
+    Chat.display_name_for_space(space, participants, user_id)
+  end
+
+  defp space_header_name(%{kind: "channel", name: name}, _participants, _user_id), do: name
+
+  defp space_header_name(space, participants, user_id) do
+    Chat.display_name_for_space(space, participants, user_id)
+  end
+
+  defp sidebar_display_name(space, current_user_id) do
+    participants = Chat.list_participants(space.id)
+    Chat.display_name_for_space(space, participants, current_user_id)
+  end
+
+  defp picker_selected_name(%{type: "user", id: id}, users, _agents) do
+    case Enum.find(users, fn u -> u.id == id end) do
+      %{name: name} when is_binary(name) -> name
+      %{email: email} -> email
+      _ -> "User"
+    end
+  end
+
+  defp picker_selected_name(%{type: "agent", id: id}, _users, agents) do
+    case Enum.find(agents, fn a -> a.id == id end) do
+      %{name: name} -> name
+      _ -> "Agent"
     end
   end
 
@@ -2162,4 +2674,15 @@ defmodule PlatformWeb.ChatLive do
   end
 
   defp format_message_date(_), do: ""
+
+  defp agent_silenced?(space, participants) do
+    agent_participants = Enum.filter(participants, &(&1.participant_type == "agent"))
+
+    Enum.any?(agent_participants, fn p ->
+      case Chat.get_attention_state(space.id, p.id) do
+        %{state: "silenced"} -> true
+        _ -> false
+      end
+    end)
+  end
 end

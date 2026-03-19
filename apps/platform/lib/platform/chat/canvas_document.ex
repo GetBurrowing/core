@@ -37,7 +37,7 @@ defmodule Platform.Chat.CanvasDocument do
 
   @current_version 1
   @valid_kinds ~w(ui)
-  @valid_node_types ~w(stack row card text markdown table code badge heading)
+  @valid_node_types ~w(stack row card text markdown mermaid table code badge heading)
 
   @type document :: map()
   @type node_map :: map()
@@ -183,8 +183,8 @@ defmodule Platform.Chat.CanvasDocument do
 
     markdown_node = %{
       "id" => "diagram-source",
-      "type" => "markdown",
-      "props" => %{"content" => "```mermaid\n#{source}\n```"},
+      "type" => "mermaid",
+      "props" => %{"source" => source},
       "children" => []
     }
 

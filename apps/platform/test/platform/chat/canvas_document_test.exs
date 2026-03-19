@@ -205,8 +205,8 @@ defmodule Platform.Chat.CanvasDocumentTest do
       assert length(children) == 2
       heading = Enum.find(children, &(&1["type"] == "heading"))
       assert heading["props"]["value"] == "Flow"
-      md = Enum.find(children, &(&1["type"] == "markdown"))
-      assert md["props"]["content"] =~ "mermaid"
+      mermaid = Enum.find(children, &(&1["type"] == "mermaid"))
+      assert mermaid["props"]["source"] =~ "graph TD"
     end
 
     test "seeds a dashboard document" do

@@ -98,7 +98,7 @@ defmodule Platform.Agents.ToolRunner do
         "type" => "function",
         "name" => "canvas_create",
         "description" =>
-          "Create a live canvas in the current chat space. Use 'table' for data grids, 'code' for code snippets, 'diagram' for architecture diagrams, 'dashboard' for metrics, 'custom' for other types.",
+          "Create a live canvas in the current chat space. Always include initial_state with the full content to render. Use 'table' for data grids, 'code' for code snippets, 'diagram' for architecture diagrams, 'dashboard' for metrics, 'custom' for other types.",
         "parameters" => %{
           "type" => "object",
           "properties" => %{
@@ -113,10 +113,11 @@ defmodule Platform.Agents.ToolRunner do
             },
             "initial_state" => %{
               "type" => "object",
-              "description" => "Optional initial state for the canvas"
+              "description" =>
+                "Required initial state for the canvas. For dashboard include metrics; for table include columns and rows; for code include source; for diagram include source."
             }
           },
-          "required" => ["title", "canvas_type"]
+          "required" => ["title", "canvas_type", "initial_state"]
         }
       },
       %{
@@ -214,10 +215,14 @@ defmodule Platform.Agents.ToolRunner do
 
           updated_messages = messages ++ tool_call_items ++ result_items
 
-          # After a canvas_create call, remove tools from subsequent iterations
-          # to prevent duplicate canvas creation.
+          # After a successful canvas_create call, remove tools from subsequent
+          # iterations to prevent duplicate canvas creation. Failed validation
+          # errors should keep tools enabled so the model can retry with the
+          # required initial_state.
           canvas_was_created =
-            Enum.any?(tool_calls, &(Map.get(&1, "name") == "canvas_create"))
+            Enum.any?(tool_results, fn %{output: output} ->
+              is_binary(output) and String.starts_with?(output, "Canvas created")
+            end)
 
           next_opts =
             if canvas_was_created do
@@ -363,28 +368,38 @@ defmodule Platform.Agents.ToolRunner do
     error -> "error: #{Exception.message(error)}"
   end
 
-  defp run_tool("canvas_create", args, %{space_id: space_id, participant_id: participant_id})
+  defp run_tool(
+         "canvas_create",
+         args,
+         %{space_id: space_id, participant_id: participant_id} = context
+       )
        when is_binary(space_id) and is_binary(participant_id) do
     canvas_type = Map.get(args, "canvas_type", "custom")
     initial_state = Map.get(args, "initial_state") || %{}
 
-    # Seed a canonical document from the initial state so the renderer
-    # can immediately display real content inline.
-    seeded_document = CanvasDocument.seed(canvas_type, initial_state)
+    with {:ok, resolved_initial_state} <-
+           resolve_canvas_initial_state(canvas_type, initial_state, context) do
+      # Seed a canonical document from the initial state so the renderer
+      # can immediately display real content inline.
+      seeded_document = CanvasDocument.seed(canvas_type, resolved_initial_state)
 
-    attrs = %{
-      "title" => Map.get(args, "title"),
-      "canvas_type" => canvas_type,
-      "state" => seeded_document
-    }
+      attrs = %{
+        "title" => Map.get(args, "title"),
+        "canvas_type" => canvas_type,
+        "state" => seeded_document
+      }
 
-    case Chat.create_canvas_with_message(space_id, participant_id, attrs) do
-      {:ok, canvas, _message} ->
-        "Canvas created (id=#{canvas.id}, title=#{canvas.title}). " <>
-          "Respond with a brief text message describing what you created."
+      case Chat.create_canvas_with_message(space_id, participant_id, attrs) do
+        {:ok, canvas, _message} ->
+          "Canvas created (id=#{canvas.id}, title=#{canvas.title}). " <>
+            "Respond with a brief text message describing what you created."
 
+        {:error, reason} ->
+          "error: could not create canvas: #{inspect(reason)}"
+      end
+    else
       {:error, reason} ->
-        "error: could not create canvas: #{inspect(reason)}"
+        "error: #{reason}"
     end
   end
 
@@ -414,6 +429,152 @@ defmodule Platform.Agents.ToolRunner do
     Logger.warning("[ToolRunner] unknown tool=#{name} args=#{inspect(args)}")
     "error: unknown tool '#{name}'"
   end
+
+  defp resolve_canvas_initial_state(canvas_type, initial_state, context) do
+    case validate_canvas_initial_state(canvas_type, initial_state) do
+      :ok ->
+        {:ok, initial_state}
+
+      {:error, reason} ->
+        case infer_canvas_initial_state(canvas_type, context) do
+          {:ok, inferred_state} ->
+            Logger.info(
+              "[ToolRunner] inferred missing initial_state for canvas_type=#{canvas_type}"
+            )
+
+            {:ok, inferred_state}
+
+          :error ->
+            {:error, reason}
+        end
+    end
+  end
+
+  defp infer_canvas_initial_state("dashboard", %{user_message: user_message})
+       when is_binary(user_message) do
+    with {:error, :no_json_metrics} <- infer_dashboard_metrics_from_json(user_message),
+         {:error, :no_inline_metrics} <- infer_dashboard_metrics_from_inline_text(user_message) do
+      :error
+    else
+      {:ok, metrics} -> {:ok, %{"metrics" => metrics}}
+    end
+  end
+
+  defp infer_canvas_initial_state(_canvas_type, _context), do: :error
+
+  defp validate_canvas_initial_state("dashboard", %{"metrics" => metrics})
+       when is_list(metrics) do
+    if Enum.any?(metrics, &dashboard_metric?/1) do
+      :ok
+    else
+      {:error,
+       "canvas_create for dashboard requires initial_state.metrics with at least one metric map containing label and value. Retry canvas_create with full initial_state."}
+    end
+  end
+
+  defp validate_canvas_initial_state("dashboard", _state) do
+    {:error,
+     "canvas_create for dashboard requires initial_state.metrics with at least one metric map containing label and value. Retry canvas_create with full initial_state."}
+  end
+
+  defp validate_canvas_initial_state("table", %{"columns" => columns, "rows" => rows})
+       when is_list(columns) and is_list(rows) and columns != [] and rows != [] do
+    :ok
+  end
+
+  defp validate_canvas_initial_state("table", _state) do
+    {:error,
+     "canvas_create for table requires initial_state.columns and initial_state.rows with populated data. Retry canvas_create with full initial_state."}
+  end
+
+  defp validate_canvas_initial_state("code", state) when is_map(state) do
+    source = Map.get(state, "source") || Map.get(state, "content")
+
+    if is_binary(source) and String.trim(source) != "" do
+      :ok
+    else
+      {:error,
+       "canvas_create for code requires initial_state.source (or content) with the full code snippet. Retry canvas_create with full initial_state."}
+    end
+  end
+
+  defp validate_canvas_initial_state("diagram", %{"source" => source}) when is_binary(source) do
+    if String.trim(source) != "" do
+      :ok
+    else
+      {:error,
+       "canvas_create for diagram requires initial_state.source with the diagram definition. Retry canvas_create with full initial_state."}
+    end
+  end
+
+  defp validate_canvas_initial_state("diagram", _state) do
+    {:error,
+     "canvas_create for diagram requires initial_state.source with the diagram definition. Retry canvas_create with full initial_state."}
+  end
+
+  defp validate_canvas_initial_state(_canvas_type, state) when is_map(state), do: :ok
+
+  defp validate_canvas_initial_state(_canvas_type, _state),
+    do: {:error, "canvas_create requires initial_state to be an object."}
+
+  defp infer_dashboard_metrics_from_json(user_message) do
+    case Regex.run(~r/metrics\s*:?\s*(\[[\s\S]*?\])/u, user_message, capture: :all_but_first) do
+      [json] ->
+        with {:ok, metrics} <- Jason.decode(json),
+             true <- is_list(metrics),
+             filtered when filtered != [] <- Enum.filter(metrics, &dashboard_metric?/1) do
+          {:ok, filtered}
+        else
+          _ -> {:error, :no_json_metrics}
+        end
+
+      _ ->
+        {:error, :no_json_metrics}
+    end
+  end
+
+  defp infer_dashboard_metrics_from_inline_text(user_message) do
+    tail =
+      case Regex.run(~r/metrics\s+(.+)/ui, user_message, capture: :all_but_first) do
+        [rest] -> rest
+        _ -> user_message
+      end
+
+    metrics =
+      Regex.scan(
+        ~r/(?:^|,\s*)([A-Za-z][A-Za-z0-9 _-]*)\s*=\s*([^,]+(?:,\d{3})*(?:\.\d+)?%?|\$?\d[\d,]*(?:\.\d+)?[kKmMbB]?|[^,]+?)\s*([↑↓→])/u,
+        tail,
+        capture: :all_but_first
+      )
+      |> Enum.map(fn [label, value, trend] ->
+        %{
+          "label" => String.trim(label),
+          "value" => String.trim(value),
+          "trend" => String.trim(trend)
+        }
+      end)
+      |> Enum.filter(&dashboard_metric?/1)
+
+    if metrics == [] do
+      {:error, :no_inline_metrics}
+    else
+      {:ok, metrics}
+    end
+  end
+
+  defp dashboard_metric?(%{"label" => label, "value" => value}) do
+    present_string?(label) and present_value?(value)
+  end
+
+  defp dashboard_metric?(_metric), do: false
+
+  defp present_string?(value) when is_binary(value), do: String.trim(value) != ""
+  defp present_string?(_value), do: false
+
+  defp present_value?(value) when is_binary(value), do: String.trim(value) != ""
+  defp present_value?(value) when is_number(value), do: true
+  defp present_value?(value) when is_boolean(value), do: true
+  defp present_value?(_value), do: false
 
   defp provider_module do
     Application.get_env(:platform, :quick_agent_provider_module, Codex)

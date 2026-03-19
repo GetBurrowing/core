@@ -1,8 +1,30 @@
 defmodule Platform.Accounts do
+  import Ecto.Query
+
   alias Platform.Accounts.User
   alias Platform.Repo
 
   def get_user(id), do: Repo.get(User, id)
+
+  @doc """
+  List all users, optionally filtered by a search query (name or email).
+  """
+  @spec list_users(keyword()) :: [User.t()]
+  def list_users(opts \\ []) do
+    query = Keyword.get(opts, :query)
+
+    base = from(u in User, order_by: [asc: u.name])
+
+    base =
+      if query && String.trim(query) != "" do
+        pattern = "%#{String.trim(query)}%"
+        where(base, [u], ilike(u.name, ^pattern) or ilike(u.email, ^pattern))
+      else
+        base
+      end
+
+    Repo.all(base)
+  end
 
   def find_or_create_from_oidc(%{sub: sub, email: email, name: name})
       when is_binary(sub) and is_binary(email) and is_binary(name) do

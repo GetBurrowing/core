@@ -36,7 +36,19 @@ defmodule Platform.Chat do
 
   alias Ecto.Multi
   alias Platform.Agents.Agent
-  alias Platform.Chat.{Attachment, Canvas, Message, Participant, Pin, Reaction, Space, Thread}
+
+  alias Platform.Chat.{
+    Attachment,
+    AttentionState,
+    Canvas,
+    Message,
+    Participant,
+    Pin,
+    Reaction,
+    Space,
+    Thread
+  }
+
   alias Platform.Chat.PubSub, as: ChatPubSub
   alias Platform.Repo
 
@@ -127,6 +139,257 @@ defmodule Platform.Chat do
     space
     |> Space.changeset(%{archived_at: DateTime.utc_now()})
     |> Repo.update()
+  end
+
+  # ── Conversations (DM / Group / Channel creation) ─────────────────────────
+
+  @doc """
+  Find an existing DM between initiator and target, or create one.
+
+  `target_type` is "user" or "agent", `target_id` is the UUID.
+  Returns `{:ok, space}`.
+  """
+  @spec find_or_create_dm(binary(), String.t(), binary(), keyword()) ::
+          {:ok, Space.t()} | {:error, term()}
+  def find_or_create_dm(user_id, target_type, target_id, _opts \\ []) do
+    # Look for an existing DM space where both participants are active
+    existing =
+      from(s in Space,
+        join: p1 in Participant,
+        on: p1.space_id == s.id,
+        join: p2 in Participant,
+        on: p2.space_id == s.id,
+        where:
+          s.kind == "dm" and s.is_direct == true and is_nil(s.archived_at) and
+            p1.participant_type == "user" and p1.participant_id == ^user_id and
+            is_nil(p1.left_at) and
+            p2.participant_type == ^target_type and p2.participant_id == ^target_id and
+            is_nil(p2.left_at),
+        limit: 1,
+        select: s
+      )
+      |> Repo.one()
+
+    case existing do
+      %Space{} = space ->
+        {:ok, space}
+
+      nil ->
+        create_dm_space(user_id, target_type, target_id)
+    end
+  end
+
+  defp create_dm_space(user_id, target_type, target_id) do
+    Multi.new()
+    |> Multi.insert(
+      :space,
+      Space.changeset(%Space{}, %{
+        kind: "dm",
+        is_direct: true,
+        created_by: user_id
+      })
+    )
+    |> Multi.run(:initiator, fn _repo, %{space: space} ->
+      add_participant(space.id, %{
+        participant_type: "user",
+        participant_id: user_id,
+        display_name: user_display_name(user_id),
+        joined_at: DateTime.utc_now()
+      })
+    end)
+    |> Multi.run(:target, fn _repo, %{space: space} ->
+      if target_type == "agent" do
+        case Repo.get(Agent, target_id) do
+          %Agent{} = agent ->
+            ensure_agent_participant(space.id, agent)
+
+          nil ->
+            {:error, :agent_not_found}
+        end
+      else
+        add_participant(space.id, %{
+          participant_type: "user",
+          participant_id: target_id,
+          display_name: user_display_name(target_id),
+          joined_at: DateTime.utc_now()
+        })
+      end
+    end)
+    |> Repo.transaction()
+    |> case do
+      {:ok, %{space: space}} -> {:ok, space}
+      {:error, _step, reason, _} -> {:error, reason}
+    end
+  end
+
+  @doc """
+  Create a group conversation with multiple participants.
+
+  `participant_specs` is a list of `%{type: "user"|"agent", id: uuid}`.
+  If only 1 other participant, redirects to find_or_create_dm.
+  """
+  @spec create_group_conversation(binary(), [map()], keyword()) ::
+          {:ok, Space.t()} | {:error, term()}
+  def create_group_conversation(user_id, participant_specs, _opts \\ []) do
+    # If only one other participant, create a DM instead
+    if length(participant_specs) == 1 do
+      [spec] = participant_specs
+      type = Map.get(spec, :type) || Map.get(spec, "type")
+      id = Map.get(spec, :id) || Map.get(spec, "id")
+      find_or_create_dm(user_id, type, id)
+    else
+      multi =
+        Multi.new()
+        |> Multi.insert(
+          :space,
+          Space.changeset(%Space{}, %{
+            kind: "group",
+            is_direct: false,
+            created_by: user_id
+          })
+        )
+        |> Multi.run(:creator, fn _repo, %{space: space} ->
+          add_participant(space.id, %{
+            participant_type: "user",
+            participant_id: user_id,
+            display_name: user_display_name(user_id),
+            joined_at: DateTime.utc_now()
+          })
+        end)
+
+      multi =
+        participant_specs
+        |> Enum.with_index()
+        |> Enum.reduce(multi, fn {spec, idx}, multi ->
+          type = Map.get(spec, :type) || Map.get(spec, "type")
+          id = Map.get(spec, :id) || Map.get(spec, "id")
+
+          Multi.run(multi, {:participant, idx}, fn _repo, %{space: space} ->
+            if type == "agent" do
+              case Repo.get(Agent, id) do
+                %Agent{} = agent -> ensure_agent_participant(space.id, agent)
+                nil -> {:error, :agent_not_found}
+              end
+            else
+              add_participant(space.id, %{
+                participant_type: "user",
+                participant_id: id,
+                display_name: user_display_name(id),
+                joined_at: DateTime.utc_now()
+              })
+            end
+          end)
+        end)
+
+      case Repo.transaction(multi) do
+        {:ok, %{space: space}} -> {:ok, space}
+        {:error, _step, reason, _} -> {:error, reason}
+      end
+    end
+  end
+
+  @doc "Create a channel space. Requires name and slug."
+  @spec create_channel(map()) :: {:ok, Space.t()} | {:error, Ecto.Changeset.t()}
+  def create_channel(attrs) do
+    attrs = Map.put(attrs, :kind, "channel")
+    create_space(attrs)
+  end
+
+  @doc """
+  Promote a group conversation to a channel.
+
+  Only works on kind=group spaces. Sets name and slug from attrs.
+  """
+  @spec promote_to_channel(Space.t(), map()) ::
+          {:ok, Space.t()} | {:error, :not_promotable | Ecto.Changeset.t()}
+  def promote_to_channel(%Space{kind: "group", is_direct: false} = space, attrs) do
+    space
+    |> Space.changeset(Map.merge(attrs, %{kind: "channel"}))
+    |> Repo.update()
+  end
+
+  def promote_to_channel(%Space{kind: "dm"}, _attrs), do: {:error, :not_promotable}
+  def promote_to_channel(%Space{is_direct: true}, _attrs), do: {:error, :not_promotable}
+  def promote_to_channel(%Space{kind: "channel"}, _attrs), do: {:error, :not_promotable}
+  def promote_to_channel(_, _), do: {:error, :not_promotable}
+
+  @doc """
+  List all non-archived spaces where the user is an active participant,
+  ordered by most recent message (or inserted_at).
+  """
+  @spec list_user_conversations(binary()) :: [Space.t()]
+  def list_user_conversations(user_id) do
+    from(s in Space,
+      join: p in Participant,
+      on: p.space_id == s.id,
+      left_join: m in Message,
+      on: m.space_id == s.id and is_nil(m.deleted_at),
+      where:
+        p.participant_type == "user" and p.participant_id == ^user_id and
+          is_nil(p.left_at) and is_nil(s.archived_at),
+      group_by: s.id,
+      order_by: [desc: fragment("COALESCE(MAX(?), ?)", m.inserted_at, s.inserted_at)],
+      select: s
+    )
+    |> Repo.all()
+  end
+
+  @doc """
+  Compute a display name for a space relative to the current user.
+
+  - Channel: space.name
+  - DM: the other participant's display_name
+  - Group: comma-separated names (excluding current user), truncated
+  """
+  @spec display_name_for_space(Space.t(), [Participant.t()], binary()) :: String.t()
+  def display_name_for_space(%Space{kind: "channel"} = space, _participants, _current_user_id) do
+    space.name || "Unnamed Channel"
+  end
+
+  def display_name_for_space(%Space{kind: "dm"}, participants, current_user_id) do
+    other =
+      Enum.find(participants, fn p ->
+        p.participant_id != current_user_id and is_nil(p.left_at)
+      end)
+
+    case other do
+      %Participant{display_name: name} when is_binary(name) and name != "" -> name
+      _ -> "DM"
+    end
+  end
+
+  def display_name_for_space(%Space{kind: "group"}, participants, current_user_id) do
+    names =
+      participants
+      |> Enum.filter(fn p -> p.participant_id != current_user_id and is_nil(p.left_at) end)
+      |> Enum.map(fn p -> p.display_name || "User" end)
+
+    case names do
+      [] ->
+        "Group"
+
+      list ->
+        joined = Enum.join(list, ", ")
+        if String.length(joined) > 40, do: String.slice(joined, 0, 37) <> "...", else: joined
+    end
+  end
+
+  @doc "List active agents for the conversation picker."
+  @spec list_agents_for_picker() :: [Agent.t()]
+  def list_agents_for_picker do
+    from(a in Agent,
+      where: a.status == "active",
+      order_by: [asc: a.name]
+    )
+    |> Repo.all()
+  end
+
+  defp user_display_name(user_id) do
+    case Platform.Accounts.get_user(user_id) do
+      %{name: name} when is_binary(name) and name != "" -> name
+      %{email: email} when is_binary(email) -> email
+      _ -> "User"
+    end
   end
 
   # ── Participants ────────────────────────────────────────────────────────────
@@ -287,6 +550,84 @@ defmodule Platform.Chat do
       %Agent{} = agent -> ensure_agent_participant(space_id, agent, opts)
       nil -> {:error, :not_found}
     end
+  end
+
+  # ── Attention State ─────────────────────────────────────────────────────────
+
+  @doc "Fetch the current attention state for an agent in a space."
+  @spec get_attention_state(binary(), binary()) :: AttentionState.t() | nil
+  def get_attention_state(space_id, agent_participant_id) do
+    Repo.get_by(AttentionState,
+      space_id: space_id,
+      agent_participant_id: agent_participant_id
+    )
+  end
+
+  @doc "Upsert an attention state record for a space/agent pair."
+  @spec upsert_attention_state(binary(), map()) ::
+          {:ok, AttentionState.t()} | {:error, Ecto.Changeset.t()}
+  def upsert_attention_state(space_id, attrs) do
+    agent_participant_id =
+      Map.get(attrs, :agent_participant_id) || Map.get(attrs, "agent_participant_id")
+
+    case get_attention_state(space_id, agent_participant_id) do
+      nil ->
+        attrs = Map.merge(attrs, %{space_id: space_id, updated_at: DateTime.utc_now()})
+
+        %AttentionState{}
+        |> AttentionState.changeset(attrs)
+        |> Repo.insert()
+
+      existing ->
+        existing
+        |> AttentionState.changeset(Map.put(attrs, :updated_at, DateTime.utc_now()))
+        |> Repo.update()
+    end
+  end
+
+  @doc "Enter sticky engagement state for an agent in a space."
+  @spec engage_agent(binary(), binary(), String.t()) ::
+          {:ok, AttentionState.t()} | {:error, Ecto.Changeset.t()}
+  def engage_agent(space_id, agent_participant_id, context \\ "") do
+    upsert_attention_state(space_id, %{
+      agent_participant_id: agent_participant_id,
+      state: "engaged",
+      engaged_since: DateTime.utc_now(),
+      engaged_context: context,
+      silenced_until: nil
+    })
+  end
+
+  @doc "Clear engagement and return agent to idle state."
+  @spec disengage_agent(binary(), binary()) ::
+          {:ok, AttentionState.t()} | {:error, Ecto.Changeset.t()}
+  def disengage_agent(space_id, agent_participant_id) do
+    upsert_attention_state(space_id, %{
+      agent_participant_id: agent_participant_id,
+      state: "idle",
+      engaged_since: nil,
+      engaged_context: nil
+    })
+  end
+
+  @doc "Silence an agent in a space. If `until` is nil, silenced until re-mentioned."
+  @spec silence_agent(binary(), binary(), DateTime.t() | nil) ::
+          {:ok, AttentionState.t()} | {:error, Ecto.Changeset.t()}
+  def silence_agent(space_id, agent_participant_id, until \\ nil) do
+    upsert_attention_state(space_id, %{
+      agent_participant_id: agent_participant_id,
+      state: "silenced",
+      silenced_until: until,
+      engaged_since: nil,
+      engaged_context: nil
+    })
+  end
+
+  @doc "Unsilence an agent, returning to idle state."
+  @spec unsilence_agent(binary(), binary()) ::
+          {:ok, AttentionState.t()} | {:error, Ecto.Changeset.t()}
+  def unsilence_agent(space_id, agent_participant_id) do
+    disengage_agent(space_id, agent_participant_id)
   end
 
   # ── Messages ────────────────────────────────────────────────────────────────

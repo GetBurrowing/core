@@ -29,7 +29,8 @@ defmodule Platform.Agents.QuickAgent do
     tool_context = %{
       space_id: opts[:space_id],
       participant_id: opts[:participant_id],
-      workspace_path: workspace_path
+      workspace_path: workspace_path,
+      user_message: user_message
     }
 
     opts =

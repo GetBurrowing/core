@@ -1,13 +1,15 @@
+import ComposeInput from "./compose_input"
 import LocalTime from "./local_time"
-import SwipeDrawer from "./swipe_drawer"
+import MermaidDiagram from "./mermaid_diagram"
 import PushSubscribe from "./push_subscribe"
 import ScrollToBottom from "./scroll_to_bottom"
-import ComposeInput from "./compose_input"
+import SwipeDrawer from "./swipe_drawer"
 
 export default {
+  ComposeInput,
   LocalTime,
-  SwipeDrawer,
+  MermaidDiagram,
   PushSubscribe,
   ScrollToBottom,
-  ComposeInput,
+  SwipeDrawer,
 }

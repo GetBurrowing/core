@@ -33,8 +33,10 @@ defmodule Platform.Chat.AgentResponder do
     end
   end
 
+  @routable_reasons [:mention, :directed, :sticky]
+
   @spec respond(map()) :: :ok | {:error, term()}
-  def respond(%{reason: :mention} = signal) do
+  def respond(%{reason: reason} = signal) when reason in @routable_reasons do
     with {:ok, context} <- load_context(signal) do
       space_id = context.message.space_id
       agent_participant_id = context.agent_participant.id
@@ -55,6 +57,14 @@ defmodule Platform.Chat.AgentResponder do
              trimmed_reply when trimmed_reply != "" <- String.trim(reply),
              {:ok, _message} <- persist_reply(context, trimmed_reply) do
           maybe_create_canvas(context, trimmed_reply)
+
+          # Enter/extend sticky engagement after successful reply
+          Chat.engage_agent(
+            space_id,
+            agent_participant_id,
+            String.slice(context.user_message, 0, 200)
+          )
+
           :ok
         else
           {:error, :ignore} ->
@@ -126,7 +136,9 @@ defmodule Platform.Chat.AgentResponder do
 
   def maybe_create_canvas(_context, _reply), do: :ok
 
-  defp load_context(%{participant_id: participant_id, message_id: message_id, space_id: space_id}) do
+  defp load_context(
+         %{participant_id: participant_id, message_id: message_id, space_id: space_id} = signal
+       ) do
     with %Participant{participant_type: "agent"} = participant <-
            Chat.get_participant(participant_id),
          %Message{} = message <- Chat.get_message(message_id),
@@ -138,7 +150,7 @@ defmodule Platform.Chat.AgentResponder do
          history <- build_history(space_id, message, active_agent_participant.id) do
       {:ok,
        %{
-         signal: %{participant_id: participant_id, message_id: message_id, space_id: space_id},
+         signal: signal,
          agent: agent,
          agent_participant: active_agent_participant,
          message: message,
@@ -154,6 +166,8 @@ defmodule Platform.Chat.AgentResponder do
   end
 
   defp persist_reply(context, reply) do
+    trigger = Atom.to_string(context.signal.reason)
+
     Chat.post_message(%{
       space_id: context.message.space_id,
       thread_id: context.message.thread_id,
@@ -162,7 +176,7 @@ defmodule Platform.Chat.AgentResponder do
       content: String.trim(reply),
       metadata: %{
         "source" => "agent_responder",
-        "trigger" => "mention",
+        "trigger" => trigger,
         "reply_to_message_id" => context.message.id,
         "agent_id" => context.agent.id
       }

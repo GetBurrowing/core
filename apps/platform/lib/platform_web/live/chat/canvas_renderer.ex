@@ -14,7 +14,8 @@ defmodule PlatformWeb.Chat.CanvasRenderer do
   - `row`      — horizontal flex container with optional `gap` prop
   - `card`     — bordered card with optional `title` prop
   - `text`     — plain text with optional `size`/`weight` props
-  - `markdown` — renders `content` prop as pre-formatted text (Mermaid-safe)
+  - `markdown` — renders `content` prop as pre-formatted text
+  - `mermaid`  — renders `source` prop as an interactive Mermaid diagram via client-side JS
   - `table`    — renders `columns` + `rows` props as an HTML table
   - `code`     — renders `source` prop inside `<pre><code>`
   - `badge`    — small rounded label from `value` prop
@@ -42,28 +43,9 @@ defmodule PlatformWeb.Chat.CanvasRenderer do
 
     if canonical_document?(state) do
       ~H"""
-      <section
-        id={"canvas-doc-#{@canvas.id}"}
-        class="mt-2 overflow-hidden rounded-2xl border border-base-300 bg-base-100 shadow-sm"
-      >
-        <header class="flex items-center justify-between border-b border-base-300 bg-base-200 px-4 py-2">
-          <div>
-            <p class="text-sm font-semibold text-base-content">
-              {@canvas.title || canvas_kind_label(@canvas.canvas_type)}
-            </p>
-            <p class="text-[11px] uppercase tracking-widest text-base-content/50">
-              {@canvas.canvas_type} canvas · rev {@canvas.state["revision"] || 1}
-            </p>
-          </div>
-          <span class="rounded-full bg-primary/10 px-2 py-0.5 text-[11px] text-primary">
-            live
-          </span>
-        </header>
-
-        <div class="p-4">
-          <.render_node node={@canvas.state["root"]} />
-        </div>
-      </section>
+      <div id={"canvas-doc-#{@canvas.id}"} class="overflow-x-auto">
+        <.render_node node={@canvas.state["root"]} />
+      </div>
       """
     else
       ~H"""
@@ -140,6 +122,23 @@ defmodule PlatformWeb.Chat.CanvasRenderer do
     ~H"""
     <div class="rounded-xl border border-base-300 bg-base-200 p-3">
       <pre class="whitespace-pre-wrap text-xs leading-5 text-base-content/80 font-mono">{@node["props"]["content"] || ""}</pre>
+    </div>
+    """
+  end
+
+  def render_node(%{node: %{"type" => "mermaid"} = node} = assigns) do
+    assigns = assign(assigns, :node, node)
+
+    ~H"""
+    <div
+      id={"mermaid-#{@node["id"]}"}
+      phx-hook="MermaidDiagram"
+      data-source={@node["props"]["source"] || ""}
+      class="rounded-xl border border-base-300 bg-base-100 p-3 overflow-x-auto"
+    >
+      <div class="mermaid-container flex items-center justify-center min-h-[100px]">
+        <span class="loading loading-spinner loading-sm text-base-content/30"></span>
+      </div>
     </div>
     """
   end

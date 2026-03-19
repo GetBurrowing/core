@@ -1,14 +1,34 @@
 defmodule Platform.Chat.AttentionRouter do
   @moduledoc """
-  Routes attention signals to chat participants based on their configured mode.
+  Routes attention signals to chat participants based on space-level attention
+  policy and per-agent engagement state.
 
-  ## Attention modes
+  ## Space-level attention modes (resolved via `resolve_attention_mode/2`)
+
+    * `"on_mention"`    — agent responds only when @mentioned (default for channels)
+    * `"collaborative"` — like on_mention but with sticky engagement (default for groups)
+    * `"directed"`      — agent responds to ALL messages (default for DMs)
+
+  When `space.agent_attention` is `nil`, the mode falls back to a conversation-type
+  default: channels → on_mention, DMs → directed, groups → collaborative.
+
+  ## Per-participant modes (human participants)
 
     * `"active"`    — always notified when any message is posted in the space.
-    * `"mention"`   — notified only when `@display_name`, `@participant_id`, or a
-                      configured keyword appears in the message content.
-    * `"heartbeat"` — signals accumulate in memory; drain with `flush/1` on the
-                      participant's next heartbeat poll.
+    * `"mention"`   — notified only when @mentioned or keyword-matched.
+    * `"heartbeat"` — signals accumulate in memory; drain with `flush/1`.
+
+  ## Sticky engagement
+
+  After an @mention triggers an agent reply, the agent enters "engaged" state.
+  While engaged, subsequent messages are routed to the agent without requiring
+  @mention. Engagement expires after a configurable timeout (default 10 min).
+
+  ## Silencing
+
+  Natural language patterns (e.g. "quiet", "shut up", "that's all") cause the
+  agent to enter "silenced" state. The agent will not respond until re-mentioned
+  or the silence timeout expires.
 
   ## Integration
 
@@ -20,12 +40,12 @@ defmodule Platform.Chat.AttentionRouter do
 
   ## PubSub events
 
-  For `:active` and `:mention` decisions, broadcasts on the space topic
-  (`Platform.Chat.PubSub.space_topic/1`):
+  For `:active`, `:mention`, `:directed`, and `:sticky` decisions, broadcasts on
+  the space topic (`Platform.Chat.PubSub.space_topic/1`):
 
       {:attention_needed, %{
         participant_id: binary(),
-        reason: :active | :mention,
+        reason: :active | :mention | :directed | :sticky,
         message_id: binary(),
         space_id:   binary()
       }}
@@ -35,10 +55,7 @@ defmodule Platform.Chat.AttentionRouter do
   ## Heartbeat draining
 
       pending = Platform.Chat.AttentionRouter.pending(participant_id)
-      # => [%{space_id: …, message_id: …, reason: :heartbeat, participant_id: …}]
-
       {:ok, flushed} = Platform.Chat.AttentionRouter.flush(participant_id)
-      # => {:ok, [%{…}]}   — clears pending signals for the participant
   """
 
   use GenServer
@@ -47,12 +64,23 @@ defmodule Platform.Chat.AttentionRouter do
 
   require Logger
 
-  alias Platform.Chat.{AgentResponder, Message, Participant, Presence}
+  alias Platform.Chat
+  alias Platform.Chat.{AgentResponder, Message, Participant, Presence, Space}
   alias Platform.Chat.PubSub, as: ChatPubSub
   alias Platform.Repo
 
   @handler_id "platform-chat-attention-router"
   @table :chat_attention_heartbeat
+
+  # Sticky engagement timeout: 10 minutes
+  @engagement_timeout_seconds 600
+
+  @silence_patterns [
+    ~r/\b(quiet|shut up|back off|stop|enough|be quiet|silence|hush|shush|go away|leave)\b/i,
+    ~r/\b(only when i ask|only when mentioned|mentions only)\b/i,
+    ~r/\bthat'?s? (all|enough|it)\b/i,
+    ~r/\b(thanks?\s+(zip|that'?s?\s+all))\b/i
+  ]
 
   # ── Public API ──────────────────────────────────────────────────────────────
 
@@ -63,9 +91,9 @@ defmodule Platform.Chat.AttentionRouter do
   @doc """
   Synchronously route attention for `message`.
 
-  Looks up all active participants in the message's space, applies the per-mode
-  routing decision, broadcasts `:attention_needed` PubSub events for `:active`
-  and `:mention` recipients, and queues `:heartbeat` signals in ETS.
+  Loads the space to resolve the effective attention mode, checks for silencing
+  patterns, applies per-participant routing decisions, broadcasts PubSub events,
+  and queues heartbeat signals in ETS.
 
   Returns the list of routing decisions (one map per notified participant).
   """
@@ -84,12 +112,37 @@ defmodule Platform.Chat.AttentionRouter do
 
   @doc """
   Flush and clear all pending heartbeat signals for `participant_id`.
-
-  Returns `{:ok, signals}` where `signals` is the list that was pending.
   """
   @spec flush(binary()) :: {:ok, [map()]}
   def flush(participant_id) do
     GenServer.call(__MODULE__, {:flush, participant_id})
+  end
+
+  @doc """
+  Resolve the effective attention mode for an agent in a space.
+
+  If the space has an explicit `agent_attention` value, use it.
+  Otherwise fall back to the conversation-type default.
+  """
+  @spec resolve_attention_mode(Space.t(), Participant.t()) :: String.t()
+  def resolve_attention_mode(%Space{} = space, _participant) do
+    case space.agent_attention do
+      nil -> default_for_kind(space.kind)
+      mode -> mode
+    end
+  end
+
+  defp default_for_kind("channel"), do: "on_mention"
+  defp default_for_kind("dm"), do: "directed"
+  defp default_for_kind("group"), do: "collaborative"
+  defp default_for_kind(_), do: "on_mention"
+
+  @doc "Check if a message content matches any silence patterns."
+  @spec silence_detected?(String.t() | nil) :: boolean()
+  def silence_detected?(nil), do: false
+
+  def silence_detected?(content) when is_binary(content) do
+    Enum.any?(@silence_patterns, &Regex.match?(&1, content))
   end
 
   # ── GenServer callbacks ─────────────────────────────────────────────────────
@@ -130,8 +183,7 @@ defmodule Platform.Chat.AttentionRouter do
   end
 
   # Drain call used in tests to flush any pending telemetry handle_info messages
-  # before the Ecto sandbox is released. A synchronous call guarantees all prior
-  # async messages have been processed by the time we return.
+  # before the Ecto sandbox is released.
   @impl true
   def handle_call(:__drain__, _from, state), do: {:reply, :ok, state}
 
@@ -146,9 +198,6 @@ defmodule Platform.Chat.AttentionRouter do
       error ->
         Logger.debug("[AttentionRouter] skipping telemetry route (#{Exception.message(error)})")
     catch
-      # DBConnection calls exit/1 (not raise) when the sandbox owner exits.
-      # rescue does not catch EXIT signals, so we must handle :exit here to
-      # prevent the GenServer from crashing and triggering supervisor restarts.
       :exit, reason ->
         Logger.debug("[AttentionRouter] skipping telemetry route (exit: #{inspect(reason)})")
     end
@@ -183,8 +232,6 @@ defmodule Platform.Chat.AttentionRouter do
   end
 
   @doc false
-  # Called in the telemetry dispatcher process — must not raise.
-  # Forwards to the GenServer so routing runs with ETS write access.
   def handle_telemetry_event([:platform, :chat, :message_posted], _measurements, metadata, _cfg) do
     send(__MODULE__, {:telemetry_message_posted, metadata})
   rescue
@@ -197,21 +244,65 @@ defmodule Platform.Chat.AttentionRouter do
   # ── Core routing logic ──────────────────────────────────────────────────────
 
   defp do_route(%Message{space_id: space_id, id: message_id, participant_id: author_id} = message) do
+    space = Repo.get(Space, space_id)
+
+    unless space do
+      Logger.warning("[AttentionRouter] space not found: #{space_id}")
+      return_empty()
+    end
+
     participants = active_participants(space_id)
 
     # Exclude the message author — they don't need attention for their own post.
     recipients = Enum.reject(participants, &(&1.id == author_id))
 
+    # Check for silencing before routing to agents
+    agent_recipients = Enum.filter(recipients, &(&1.participant_type == "agent"))
+    human_recipients = Enum.reject(recipients, &(&1.participant_type == "agent"))
+
+    # If the message matches a silence pattern, silence all agents and skip routing
+    if silence_detected?(message.content) do
+      Enum.each(agent_recipients, fn agent_p ->
+        Chat.silence_agent(space_id, agent_p.id)
+
+        ChatPubSub.broadcast(
+          space_id,
+          {:agent_silenced,
+           %{
+             participant_id: agent_p.id,
+             space_id: space_id
+           }}
+        )
+      end)
+    end
+
     # Determine which participants are currently online via presence.
     online_ids = space_id |> Presence.list_space() |> Map.keys() |> MapSet.new()
 
-    decisions =
-      Enum.flat_map(recipients, fn participant ->
-        case decide(participant, message) do
+    # Route human participants using existing per-participant mode
+    human_decisions =
+      Enum.flat_map(human_recipients, fn participant ->
+        case decide_human(participant, message) do
           nil -> []
           reason -> [%{participant_id: participant.id, reason: reason}]
         end
       end)
+
+    # Route agent participants using space-level policy + engagement state
+    agent_decisions =
+      if silence_detected?(message.content) do
+        # Don't route to agents when silencing
+        []
+      else
+        Enum.flat_map(agent_recipients, fn participant ->
+          case decide_agent(space, participant, message) do
+            nil -> []
+            reason -> [%{participant_id: participant.id, reason: reason}]
+          end
+        end)
+      end
+
+    decisions = human_decisions ++ agent_decisions
 
     # Preload message author display name for notification body.
     author = Enum.find(participants, &(&1.id == author_id))
@@ -245,6 +336,8 @@ defmodule Platform.Chat.AttentionRouter do
     decisions
   end
 
+  defp return_empty, do: []
+
   defp maybe_send_push(participant_id, sender_name, %Message{content: content}) do
     body = if is_binary(content), do: String.slice(content, 0, 200), else: ""
 
@@ -259,17 +352,77 @@ defmodule Platform.Chat.AttentionRouter do
     _ -> :ok
   end
 
-  # ── Per-participant decision ─────────────────────────────────────────────────
+  # ── Human participant decision (unchanged from original) ───────────────────
 
-  defp decide(%Participant{attention_mode: "active"}, _message), do: :active
+  defp decide_human(%Participant{attention_mode: "active"}, _message), do: :active
 
-  defp decide(%Participant{attention_mode: "mention"} = participant, message) do
+  defp decide_human(%Participant{attention_mode: "mention"} = participant, message) do
     if mentioned?(participant, message), do: :mention, else: nil
   end
 
-  defp decide(%Participant{attention_mode: "heartbeat"}, _message), do: :heartbeat
+  defp decide_human(%Participant{attention_mode: "heartbeat"}, _message), do: :heartbeat
+  defp decide_human(_participant, _message), do: nil
 
-  defp decide(_participant, _message), do: nil
+  # ── Agent participant decision (space-level policy + engagement) ────────────
+
+  defp decide_agent(%Space{} = space, %Participant{} = participant, %Message{} = message) do
+    mode = resolve_attention_mode(space, participant)
+    attention_state = Chat.get_attention_state(space.id, participant.id)
+    is_mentioned = mentioned?(participant, message)
+
+    # Check if engaged and not expired
+    engaged? = engaged_and_active?(attention_state)
+
+    # Check if silenced
+    silenced? = silenced?(attention_state)
+
+    cond do
+      # If silenced: only respond to direct @mention (which also unsilences)
+      silenced? and is_mentioned ->
+        Chat.unsilence_agent(space.id, participant.id)
+        :mention
+
+      silenced? ->
+        nil
+
+      # Directed mode: always route (no @mention needed)
+      mode == "directed" ->
+        :directed
+
+      # Sticky engagement: treat as directed when engaged
+      engaged? ->
+        :sticky
+
+      # Mention detected: route with :mention reason
+      is_mentioned ->
+        :mention
+
+      # Default: no routing
+      true ->
+        nil
+    end
+  end
+
+  defp engaged_and_active?(nil), do: false
+
+  defp engaged_and_active?(%{state: "engaged", engaged_since: engaged_since})
+       when not is_nil(engaged_since) do
+    timeout = DateTime.add(engaged_since, @engagement_timeout_seconds, :second)
+    DateTime.compare(DateTime.utc_now(), timeout) == :lt
+  end
+
+  defp engaged_and_active?(%{state: "engaged"}), do: true
+  defp engaged_and_active?(_), do: false
+
+  defp silenced?(nil), do: false
+
+  defp silenced?(%{state: "silenced", silenced_until: nil}), do: true
+
+  defp silenced?(%{state: "silenced", silenced_until: until}) when not is_nil(until) do
+    DateTime.compare(DateTime.utc_now(), until) == :lt
+  end
+
+  defp silenced?(_), do: false
 
   # ── Mention detection ────────────────────────────────────────────────────────
 
