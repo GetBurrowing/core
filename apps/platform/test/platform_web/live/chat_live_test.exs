@@ -529,4 +529,99 @@ defmodule PlatformWeb.ChatLiveTest do
       refute html_closed =~ "Pinned Messages"
     end
   end
+
+  # ── Settings modal ──────────────────────────────────────────────────────────
+
+  describe "settings modal" do
+    test "opens settings modal for a channel with name/description/topic fields", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/chat/general")
+
+      html = render_click(view, "show_settings", %{})
+
+      assert html =~ "Channel Settings"
+      assert html =~ ~s(name="name")
+      assert html =~ ~s(name="description")
+      assert html =~ ~s(name="topic")
+      assert html =~ "Agent Attention Mode"
+      assert html =~ "Archive Channel"
+    end
+
+    test "settings modal for DMs shows only attention mode", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      user_id = get_session(conn, :current_user_id)
+
+      # Create a DM with another user
+      other =
+        Repo.insert!(%User{
+          email: "dm_settings_target@example.com",
+          name: "DM Target",
+          oidc_sub: "oidc-dm-settings-target"
+        })
+
+      {:ok, dm_space} = Chat.find_or_create_dm(user_id, "user", other.id)
+      nav_path = "/chat/#{dm_space.id}"
+
+      {:ok, view, _html} = live(conn, nav_path)
+
+      html = render_click(view, "show_settings", %{})
+
+      assert html =~ "Conversation Settings"
+      assert html =~ "Agent Attention Mode"
+      # DMs should NOT have name/description/topic fields
+      refute html =~ ~s(name="name")
+      refute html =~ ~s(name="description")
+      refute html =~ ~s(name="topic")
+    end
+
+    test "changing attention mode updates the space", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/chat/general")
+
+      # Open settings
+      render_click(view, "show_settings", %{})
+
+      # Save with collaborative mode
+      render_click(view, "save_settings", %{
+        "name" => "general",
+        "description" => "",
+        "topic" => "",
+        "agent_attention" => "collaborative"
+      })
+
+      space = Chat.get_space_by_slug("general")
+      assert space.agent_attention == "collaborative"
+
+      # Navigate back and set to default (nil)
+      {:ok, view, _html} = live(conn, ~p"/chat/general")
+      render_click(view, "show_settings", %{})
+
+      render_click(view, "save_settings", %{
+        "name" => "general",
+        "description" => "",
+        "topic" => "",
+        "agent_attention" => ""
+      })
+
+      space = Chat.get_space_by_slug("general")
+      assert is_nil(space.agent_attention)
+    end
+
+    test "archiving a channel redirects to /chat", %{conn: conn} do
+      conn = authenticated_conn(conn)
+
+      {:ok, _space} =
+        Chat.create_channel(%{name: "to-archive", slug: "to-archive", description: ""})
+
+      {:ok, view, _html} = live(conn, ~p"/chat/to-archive")
+
+      render_click(view, "show_settings", %{})
+      render_click(view, "archive_space", %{})
+
+      assert_redirect(view, "/chat")
+
+      archived = Chat.get_space_by_slug("to-archive")
+      assert archived.archived_at != nil
+    end
+  end
 end

@@ -78,6 +78,8 @@ defmodule PlatformWeb.ChatLive do
       |> assign(:mobile_browser_open, false)
       |> assign(:show_new_channel_modal, false)
       |> assign(:show_new_conversation_modal, false)
+      |> assign(:show_settings, false)
+      |> assign(:settings_form, to_form(%{}))
       |> assign(:picker_users, [])
       |> assign(:picker_agents, [])
       |> assign(:picker_query, "")
@@ -743,6 +745,118 @@ defmodule PlatformWeb.ChatLive do
     end
   end
 
+  # ── Settings modal events ──────────────────────────────────────────────────
+
+  def handle_event("show_settings", _params, socket) do
+    space = socket.assigns.active_space
+
+    form =
+      to_form(%{
+        "name" => space.name || "",
+        "description" => space.description || "",
+        "topic" => space.topic || "",
+        "agent_attention" => space.agent_attention || "",
+        "promote_name" => ""
+      })
+
+    {:noreply,
+     socket
+     |> assign(:show_settings, true)
+     |> assign(:settings_form, form)}
+  end
+
+  def handle_event("close_settings", _params, socket) do
+    {:noreply, assign(socket, :show_settings, false)}
+  end
+
+  def handle_event("save_settings", params, socket) do
+    space = socket.assigns.active_space
+
+    attention =
+      case params["agent_attention"] do
+        "" -> nil
+        val -> val
+      end
+
+    attrs =
+      case space.kind do
+        "channel" ->
+          slug =
+            (params["name"] || space.name)
+            |> String.downcase()
+            |> String.replace(~r/[^a-z0-9\s-]/, "")
+            |> String.replace(~r/\s+/, "-")
+            |> String.trim("-")
+
+          %{
+            name: params["name"],
+            slug: slug,
+            description: params["description"],
+            topic: params["topic"],
+            agent_attention: attention
+          }
+
+        "group" ->
+          %{
+            name: params["name"],
+            agent_attention: attention
+          }
+
+        "dm" ->
+          %{agent_attention: attention}
+      end
+
+    case Chat.update_space(space, attrs) do
+      {:ok, updated} ->
+        nav_target = updated.slug || updated.id
+
+        {:noreply,
+         socket
+         |> assign(:show_settings, false)
+         |> push_navigate(to: ~p"/chat/#{nav_target}")}
+
+      {:error, _changeset} ->
+        {:noreply, put_flash(socket, :error, "Could not save settings.")}
+    end
+  end
+
+  def handle_event("archive_space", _params, socket) do
+    space = socket.assigns.active_space
+
+    case Chat.archive_space(space) do
+      {:ok, _} ->
+        {:noreply, push_navigate(socket, to: ~p"/chat")}
+
+      {:error, _} ->
+        {:noreply, put_flash(socket, :error, "Could not archive space.")}
+    end
+  end
+
+  def handle_event("settings_promote_to_channel", %{"promote_name" => name}, socket) do
+    space = socket.assigns.active_space
+
+    slug =
+      name
+      |> String.downcase()
+      |> String.replace(~r/[^a-z0-9\s-]/, "")
+      |> String.replace(~r/\s+/, "-")
+      |> String.trim("-")
+
+    case Chat.promote_to_channel(space, %{name: name, slug: slug}) do
+      {:ok, updated} ->
+        {:noreply,
+         socket
+         |> assign(:show_settings, false)
+         |> push_navigate(to: ~p"/chat/#{updated.slug}")}
+
+      {:error, :not_promotable} ->
+        {:noreply, put_flash(socket, :error, "This conversation cannot be promoted.")}
+
+      {:error, _changeset} ->
+        {:noreply, put_flash(socket, :error, "Could not promote to channel.")}
+    end
+  end
+
   @impl true
   def handle_info({:new_message, msg}, socket) do
     attachments = Chat.list_attachments(msg.id)
@@ -1153,6 +1267,15 @@ defmodule PlatformWeb.ChatLive do
               >
                 <span>{if @agent_silenced, do: "🔇", else: "🔈"}</span>
                 <span>{if @agent_silenced, do: "silenced", else: "silence"}</span>
+              </button>
+
+              <button
+                phx-click="show_settings"
+                class="flex items-center gap-1 rounded px-2 py-0.5 text-xs transition-colors hover:bg-base-300"
+                title="Space settings"
+              >
+                <span>⚙️</span>
+                <span class="hidden md:inline">settings</span>
               </button>
             </div>
           </header>
@@ -1799,6 +1922,149 @@ defmodule PlatformWeb.ChatLive do
         </div>
       </div>
     </div>
+
+    <%!-- Space Settings Modal --%>
+    <%= if @show_settings && @active_space do %>
+      <div
+        class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+        phx-click="close_settings"
+      >
+        <div
+          class="bg-base-100 rounded-xl shadow-xl w-full max-w-md p-6 max-h-[80vh] overflow-y-auto"
+          phx-click-away="close_settings"
+        >
+          <h3 class="text-lg font-bold mb-4">
+            <%= case @active_space.kind do %>
+              <% "channel" -> %>
+                Channel Settings
+              <% "dm" -> %>
+                Conversation Settings
+              <% "group" -> %>
+                Group Settings
+              <% _ -> %>
+                Settings
+            <% end %>
+          </h3>
+
+          <form phx-submit="save_settings">
+            <%!-- Channel-specific fields --%>
+            <%= if @active_space.kind == "channel" do %>
+              <div class="form-control mb-3">
+                <label class="label"><span class="label-text">Name</span></label>
+                <input
+                  name="name"
+                  type="text"
+                  class="input input-bordered w-full"
+                  value={@active_space.name}
+                  required
+                />
+              </div>
+              <div class="form-control mb-3">
+                <label class="label"><span class="label-text">Description</span></label>
+                <textarea
+                  name="description"
+                  class="textarea textarea-bordered w-full"
+                  placeholder="What's this channel about?"
+                >{@active_space.description}</textarea>
+              </div>
+              <div class="form-control mb-3">
+                <label class="label"><span class="label-text">Topic</span></label>
+                <input
+                  name="topic"
+                  type="text"
+                  class="input input-bordered w-full"
+                  value={@active_space.topic}
+                  placeholder="Current topic of discussion"
+                />
+              </div>
+            <% end %>
+
+            <%!-- Group-specific fields --%>
+            <%= if @active_space.kind == "group" do %>
+              <div class="form-control mb-3">
+                <label class="label"><span class="label-text">Custom Name (optional)</span></label>
+                <input
+                  name="name"
+                  type="text"
+                  class="input input-bordered w-full"
+                  value={@active_space.name}
+                  placeholder="Override auto-generated name"
+                />
+              </div>
+            <% end %>
+
+            <%!-- Agent Attention Mode — shown for all space kinds --%>
+            <div class="form-control mb-4">
+              <label class="label"><span class="label-text">Agent Attention Mode</span></label>
+              <select name="agent_attention" class="select select-bordered w-full">
+                <option value="" selected={is_nil(@active_space.agent_attention)}>
+                  Default ({default_attention_label(@active_space.kind)})
+                </option>
+                <option value="on_mention" selected={@active_space.agent_attention == "on_mention"}>
+                  On Mention
+                </option>
+                <option
+                  value="collaborative"
+                  selected={@active_space.agent_attention == "collaborative"}
+                >
+                  Collaborative
+                </option>
+                <option value="directed" selected={@active_space.agent_attention == "directed"}>
+                  Directed
+                </option>
+              </select>
+              <p class="text-xs text-base-content/50 mt-1">
+                <%= case @active_space.agent_attention || default_attention_mode(@active_space.kind) do %>
+                  <% "on_mention" -> %>
+                    Agent responds only when @mentioned
+                  <% "collaborative" -> %>
+                    Agent observes and engages when it can add value
+                  <% "directed" -> %>
+                    Every message goes to the agent
+                  <% _ -> %>
+                <% end %>
+              </p>
+            </div>
+
+            <div class="flex justify-end gap-2">
+              <button type="button" phx-click="close_settings" class="btn btn-ghost btn-sm">
+                Cancel
+              </button>
+              <button type="submit" class="btn btn-primary btn-sm">Save</button>
+            </div>
+          </form>
+
+          <%!-- Danger Zone --%>
+          <div class="divider text-xs text-base-content/40 mt-6">Danger Zone</div>
+
+          <%= if @active_space.kind == "channel" do %>
+            <button
+              phx-click="archive_space"
+              class="btn btn-error btn-outline btn-sm w-full"
+              data-confirm="Are you sure you want to archive this channel? This cannot be undone."
+            >
+              Archive Channel
+            </button>
+          <% end %>
+
+          <%= if @active_space.kind == "group" && !@active_space.is_direct do %>
+            <form phx-submit="settings_promote_to_channel" class="mb-2">
+              <label class="label"><span class="label-text text-sm">Promote to Channel</span></label>
+              <div class="flex gap-2">
+                <input
+                  name="promote_name"
+                  type="text"
+                  class="input input-bordered input-sm flex-1"
+                  placeholder="Channel name"
+                  required
+                />
+                <button type="submit" class="btn btn-sm btn-outline">Promote</button>
+              </div>
+            </form>
+          <% end %>
+        </div>
+      </div>
+    <% end %>
 
     <%!-- New Channel Modal --%>
     <%= if @show_new_channel_modal do %>
@@ -2465,6 +2731,16 @@ defmodule PlatformWeb.ChatLive do
       _ -> "Agent"
     end
   end
+
+  defp default_attention_mode("channel"), do: "on_mention"
+  defp default_attention_mode("dm"), do: "directed"
+  defp default_attention_mode("group"), do: "collaborative"
+  defp default_attention_mode(_), do: "on_mention"
+
+  defp default_attention_label("channel"), do: "On Mention"
+  defp default_attention_label("dm"), do: "Directed"
+  defp default_attention_label("group"), do: "Collaborative"
+  defp default_attention_label(_), do: "On Mention"
 
   defp ensure_participant(space_id, user_id) do
     existing =
