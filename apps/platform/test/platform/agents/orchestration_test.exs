@@ -46,7 +46,7 @@ defmodule Platform.Agents.OrchestrationTest do
       _parent_pid = start_agent!(parent)
 
       {:ok, _} = MemoryContext.upsert_workspace_file(parent.id, "SOUL.md", "steady")
-      {:ok, _} = MemoryContext.upsert_workspace_file(parent.id, "USER.md", "Rowan")
+      {:ok, _} = MemoryContext.upsert_workspace_file(parent.id, "USER.md", "Operator")
       {:ok, _} = MemoryContext.append_memory(parent.id, :long_term, "calm systems win")
 
       {:ok, parent_session, _} =

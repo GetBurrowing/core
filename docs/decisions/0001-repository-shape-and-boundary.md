@@ -2,7 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-03-13
-- **Owners:** Rowan, Zip
+- **Owners:** Team
 
 ## Context
 

@@ -14,8 +14,8 @@ defmodule Platform.Tasks.ProofOfLife do
       test path fully hermetic.
     * `:claude_cli` — the runner launches the authenticated Claude CLI inside the
       prepared worktree and the agent itself performs the edit, commit, and push.
-      This is the Hive-oriented proof that a real agent subprocess can be
-      orchestrated end-to-end.
+      This is the end-to-end proof that a real agent subprocess can be
+      orchestrated by the platform.
   """
 
   alias Platform.{Context, Execution}
@@ -669,7 +669,7 @@ defmodule Platform.Tasks.ProofOfLife do
     mode_label = Atom.to_string(mode)
 
     """
-    You are running inside a git worktree prepared by Startup Suite on Hive.
+    You are running inside a git worktree prepared by Startup Suite.
 
     Goal: prove that the platform can orchestrate a real agent subprocess that edits a repository, commits the change, and pushes the branch to GitHub.
 
@@ -687,7 +687,7 @@ defmodule Platform.Tasks.ProofOfLife do
        - task_id: #{run.task_id}
        - branch: #{branch}
        - mode: #{mode_label}
-       - host: hive
+       - host: production
     3. Run git status --short.
     4. Commit the change with this exact message:
        #{commit_message(run.id)}

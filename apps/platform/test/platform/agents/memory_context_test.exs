@@ -78,10 +78,13 @@ defmodule Platform.Agents.MemoryContextTest do
       agent = create_agent()
 
       {:ok, _} =
-        MemoryContext.append_memory(agent.id, :long_term, "Rowan prefers calm systems")
+        MemoryContext.append_memory(agent.id, :long_term, "The team prefers calm systems")
 
       {:ok, daily_keep} =
-        MemoryContext.append_memory(agent.id, :daily, "Met Rowan to discuss calm platform rollout",
+        MemoryContext.append_memory(
+          agent.id,
+          :daily,
+          "Met with team to discuss calm platform rollout",
           date: ~D[2026-03-14]
         )
 
@@ -110,7 +113,7 @@ defmodule Platform.Agents.MemoryContextTest do
       session_id = Ecto.UUID.generate()
 
       {:ok, _} = MemoryContext.upsert_workspace_file(agent.id, "SOUL.md", "steady and sharp")
-      {:ok, _} = MemoryContext.upsert_workspace_file(agent.id, "USER.md", "Rowan likes calm")
+      {:ok, _} = MemoryContext.upsert_workspace_file(agent.id, "USER.md", "Operator prefers calm")
       {:ok, long_term} = MemoryContext.append_memory(agent.id, :long_term, "important preference")
 
       {:ok, daily} =
@@ -133,7 +136,7 @@ defmodule Platform.Agents.MemoryContextTest do
 
       assert context.workspace == %{
                "SOUL.md" => "steady and sharp",
-               "USER.md" => "Rowan likes calm"
+               "USER.md" => "Operator prefers calm"
              }
 
       assert Enum.map(context.memory.long_term, & &1.id) == [long_term.id]

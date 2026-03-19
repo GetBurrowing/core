@@ -51,7 +51,7 @@ defmodule Platform.Chat.AgentResponderTest do
     default = %{
       participant_type: "user",
       participant_id: Ecto.UUID.generate(),
-      display_name: "Rowan",
+      display_name: "Alice",
       joined_at: DateTime.utc_now()
     }
 
@@ -150,9 +150,9 @@ defmodule Platform.Chat.AgentResponderTest do
       assert_receive {:agent_chat_called, "@zip pick this up", opts}, 500
 
       assert opts[:history] == [
-               %{role: "user", content: "Rowan: Earlier context"},
+               %{role: "user", content: "Alice: Earlier context"},
                %{role: "assistant", content: "Previous reply"},
-               %{role: "user", content: "Rowan: No summon here"}
+               %{role: "user", content: "Alice: No summon here"}
              ]
 
       assert :ok = GenServer.call(AttentionRouter, :__drain__)

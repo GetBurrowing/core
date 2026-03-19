@@ -10,10 +10,10 @@ graph TB
     Control["Control Center<br/>(ControlCenterLive)"]
   end
 
-  subgraph Auth["Authentication Layer (Hive)"]
+  subgraph Auth["Authentication Layer"]
     Traefik["Traefik v3<br/>Reverse Proxy + TLS"]
     OAuthProxy["oauth2-proxy<br/>Header injection"]
-    PocketID["Pocket ID<br/>OIDC Provider"]
+    OIDCProvider["OIDC Provider"]
   end
 
   subgraph Platform["Platform Application (Elixir/Phoenix)"]
@@ -30,7 +30,7 @@ graph TB
     OpenAI["OpenAI API<br/>(API key via Vault)"]
   end
 
-  subgraph Hive["Hive — Docker Host (192.0.2.234)"]
+  subgraph Host["Production Host — Docker"]
     Postgres[("PostgreSQL<br/>core_platform DB")]
     Watchtower["Watchtower<br/>auto-deploy on :latest push"]
     GHCR["GHCR<br/>ghcr.io/startup-suite/core"]
@@ -42,7 +42,7 @@ graph TB
 
   Browser["Browser"] --> Traefik
   Traefik --> OAuthProxy
-  OAuthProxy <--> PocketID
+  OAuthProxy <--> OIDCProvider
   OAuthProxy --> Router
   Router --> Shell
   Shell --> Chat & Control

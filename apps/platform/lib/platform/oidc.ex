@@ -61,8 +61,8 @@ defmodule Platform.OIDC do
   end
 
   # PKCE (RFC 7636) is opt-in via OIDC_PKCE_ENABLED=true.
-  # Enable it when your OIDC provider enforces PKCE for the client (e.g. Pocket ID,
-  # Keycloak with "PKCE Required"). Leave it off for providers that don't support it.
+  # Enable it when your OIDC provider enforces PKCE for the client (e.g. Keycloak with
+  # "PKCE Required", or providers with strict PKCE enforcement). Leave it off for providers that don't support it.
   # When enabled, Assent generates code_verifier/code_challenge and handles the
   # full exchange automatically — no extra code needed in the controller.
   defp pkce_config do

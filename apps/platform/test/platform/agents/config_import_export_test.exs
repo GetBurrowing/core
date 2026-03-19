@@ -82,7 +82,7 @@ defmodule Platform.Agents.ConfigImportExportTest do
 
       File.write!(Path.join(dir, "openclaw.json"), Jason.encode!(openclaw))
       File.write!(Path.join(dir, "SOUL.md"), "calm and steady")
-      File.write!(Path.join(dir, "USER.md"), "Rowan")
+      File.write!(Path.join(dir, "USER.md"), "Operator")
       File.write!(Path.join(dir, "MEMORY.md"), "curated memory")
       File.write!(Path.join(memory_dir, "2026-03-14.md"), "daily memory")
       File.write!(Path.join(memory_dir, "not-a-date.md"), "ignored")
@@ -169,7 +169,7 @@ defmodule Platform.Agents.ConfigImportExportTest do
         })
 
       {:ok, _} = MemoryContext.upsert_workspace_file(agent.id, "SOUL.md", "steady")
-      {:ok, _} = MemoryContext.upsert_workspace_file(agent.id, "USER.md", "Rowan")
+      {:ok, _} = MemoryContext.upsert_workspace_file(agent.id, "USER.md", "Operator")
       {:ok, _} = MemoryContext.append_memory(agent.id, :long_term, "curated one")
       {:ok, _} = MemoryContext.append_memory(agent.id, :long_term, "curated two")
       {:ok, _} = MemoryContext.append_memory(agent.id, :daily, "day one", date: ~D[2026-03-14])
@@ -206,7 +206,7 @@ defmodule Platform.Agents.ConfigImportExportTest do
       refute Map.has_key?(entry, "workspace")
 
       assert File.read!(Path.join(dir, "SOUL.md")) == "steady"
-      assert File.read!(Path.join(dir, "USER.md")) == "Rowan"
+      assert File.read!(Path.join(dir, "USER.md")) == "Operator"
       assert File.read!(Path.join(dir, "MEMORY.md")) == "curated one\n\ncurated two"
       assert File.read!(Path.join(dir, "memory/2026-03-14.md")) == "day one\n\nday two"
       assert File.read!(Path.join(dir, "memory/2026-03-15.md")) == "day three"

@@ -1582,7 +1582,7 @@ defmodule PlatformWeb.ChatLive do
     %{
       "columns" => ["Task", "Owner", "Status"],
       "rows" => [
-        %{"Task" => "Plan", "Owner" => "Rowan", "Status" => "Ready"},
+        %{"Task" => "Plan", "Owner" => "Alice", "Status" => "Ready"},
         %{"Task" => "Build", "Owner" => "Zip", "Status" => "In Progress"},
         %{"Task" => "Ship", "Owner" => "Team", "Status" => "Queued"}
       ],

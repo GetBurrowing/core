@@ -2,7 +2,7 @@
 
 **Status:** Proposed  
 **Date:** 2026-03-17  
-**Deciders:** Rowan, Zip
+**Deciders:** Team
 
 ---
 
@@ -227,7 +227,7 @@ or
   "canvas_id" => "...",
   "node_id" => "customer_form",
   "event" => "submit",
-  "payload" => %{"name" => "Rowan"}
+  "payload" => %{"name" => "Alice"}
 }
 ```
 

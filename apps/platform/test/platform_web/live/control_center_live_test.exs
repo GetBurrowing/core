@@ -108,14 +108,14 @@ defmodule PlatformWeb.ControlCenterLiveTest do
   test "GET /control lists agents from the mounted workspace config alongside persisted rows", %{
     conn: conn
   } do
-    configure_workspace!(%{}, [{"zip", "Zip"}, {"rowan", "Rowan"}])
+    configure_workspace!(%{}, [{"zip", "Zip"}, {"alice", "Alice"}])
     create_agent(%{slug: "repl-test-agent", name: "REPL Test Agent"})
 
     conn = authenticated_conn(conn)
     {:ok, _view, html} = live(conn, ~p"/control")
 
     assert html =~ "Zip"
-    assert html =~ "Rowan"
+    assert html =~ "Alice"
     assert html =~ "REPL Test Agent"
     assert html =~ "Mounted Workspace"
     assert html =~ "Control Center"

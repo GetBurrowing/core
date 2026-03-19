@@ -47,7 +47,7 @@ defmodule Platform.Agents.ContextBrokerTest do
       child = create_agent(%{slug: "child-#{System.unique_integer([:positive, :monotonic])}"})
 
       {:ok, _} = MemoryContext.upsert_workspace_file(parent.id, "SOUL.md", "steady")
-      {:ok, _} = MemoryContext.upsert_workspace_file(parent.id, "USER.md", "Rowan")
+      {:ok, _} = MemoryContext.upsert_workspace_file(parent.id, "USER.md", "Operator")
       {:ok, _} = MemoryContext.append_memory(parent.id, :long_term, "calm systems win")
 
       _parent_pid = start_agent!(parent)

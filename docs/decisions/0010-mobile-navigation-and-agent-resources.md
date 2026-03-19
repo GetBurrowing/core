@@ -2,7 +2,7 @@
 
 **Status:** Accepted  
 **Date:** 2026-03-15  
-**Deciders:** Rowan, Zip
+**Deciders:** Team
 
 ---
 

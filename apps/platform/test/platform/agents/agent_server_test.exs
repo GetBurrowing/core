@@ -40,7 +40,8 @@ defmodule Platform.Agents.AgentServerTest do
       {:ok, _} =
         Platform.Agents.MemoryContext.upsert_workspace_file(agent.id, "SOUL.md", "steady")
 
-      {:ok, _} = Platform.Agents.MemoryContext.upsert_workspace_file(agent.id, "USER.md", "Rowan")
+      {:ok, _} =
+        Platform.Agents.MemoryContext.upsert_workspace_file(agent.id, "USER.md", "Operator")
 
       pid = start_agent!(agent)
 
@@ -52,8 +53,8 @@ defmodule Platform.Agents.AgentServerTest do
       assert state.agent_id == agent.id
       assert state.slug == agent.slug
       assert state.status == :idle
-      assert state.workspace == %{"SOUL.md" => "steady", "USER.md" => "Rowan"}
-      assert state.active_context.workspace == %{"SOUL.md" => "steady", "USER.md" => "Rowan"}
+      assert state.workspace == %{"SOUL.md" => "steady", "USER.md" => "Operator"}
+      assert state.active_context.workspace == %{"SOUL.md" => "steady", "USER.md" => "Operator"}
 
       assert {:ok, same_pid} = AgentServer.start_agent(agent.id)
       assert same_pid == pid

@@ -23,7 +23,7 @@ then re-stages them before the commit continues.
 
 It holds the open-source application code, shared contracts, architecture decisions, and the reusable deployment model for the suite.
 
-It does **not** hold personal infrastructure details, Hive-specific production configuration, real deployment targets, or Rowan-specific operator workflows.
+It does **not** hold personal infrastructure details, host-specific production configuration, real deployment targets, or operator-specific workflows.
 
 Those belong in the companion private repository: **Core Ops**.
 
@@ -148,11 +148,11 @@ This repository is intentionally scoped to the **public product** and the **reus
 
 ### This repo should not contain
 
-- Hive-specific production values
+- host-specific production values
 - personal domains or private environment details
 - real deployment targets
 - production secret material
-- Rowan-specific operator workflows
+- operator-specific workflows
 - private promotion state
 
 Those belong in **Core Ops**.
@@ -169,7 +169,7 @@ The boundary is simple:
 In practice:
 
 - Core defines schemas, templates, contracts, and examples
-- Core Ops defines real targets such as `hive-production`
+- Core Ops defines real targets such as `production`
 - Core may publish artifacts
 - Core Ops chooses, promotes, and deploys those artifacts
 
@@ -261,7 +261,7 @@ If you are continuing the design:
 5. model **Execution** as the underlying platform domain
 6. keep experiments, variants, review, and reversals first-class
 7. keep deployment abstractions generic and reusable
-8. do not leak Hive-specific reality into this repo
+8. do not leak host-specific reality into this repo
 
 ---
 

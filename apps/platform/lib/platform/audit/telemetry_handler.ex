@@ -15,7 +15,7 @@ defmodule Platform.Audit.TelemetryHandler do
           actor_id: user.id,
           actor_type: "user",
           action: "success",
-          ip_address: "192.168.1.1"
+          ip_address: "203.0.113.1"
         }
       )
 

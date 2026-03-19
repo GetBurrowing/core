@@ -7,7 +7,7 @@ graph TB
   subgraph External["External"]
     Browser["Browser"]
     OAuthProxy["oauth2-proxy<br/>Injects X-Auth-Request-Email<br/>X-Auth-Request-User headers"]
-    PocketID["Pocket ID OIDC<br/>id.example.com"]
+    OIDCProvider["OIDC Provider"]
   end
 
   subgraph Phoenix["Phoenix Router"]
@@ -32,7 +32,7 @@ graph TB
   end
 
   Browser --> OAuthProxy
-  OAuthProxy <--> PocketID
+  OAuthProxy <--> OIDCProvider
   OAuthProxy --> RequireAuth
   RequireAuth --> LiveSession
   LiveSession --> RootRoute & ChatRoute & ControlRoute
@@ -59,12 +59,12 @@ sequenceDiagram
   participant B as Browser
   participant T as Traefik
   participant O as oauth2-proxy
-  participant P as Pocket ID
+  participant P as OIDC Provider
   participant A as Phoenix App
 
   B->>T: GET /chat
   T->>O: forward (chain-oauth2)
-  O->>B: 302 → Pocket ID /authorize
+  O->>B: 302 → OIDC Provider /authorize
   B->>P: GET /authorize
   P->>B: login page
   B->>P: credentials
