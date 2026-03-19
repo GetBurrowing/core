@@ -1563,7 +1563,10 @@ defmodule PlatformWeb.ChatLive do
                       class="flex w-full items-center gap-2 px-3 py-2 text-sm hover:bg-base-200 text-left transition-colors"
                     >
                       <div class="w-6 h-6 rounded-full bg-primary text-primary-content flex items-center justify-center text-xs font-bold flex-shrink-0">
-                        {suggestion.display_name |> String.trim() |> String.first() |> String.upcase()}
+                        {(suggestion.display_name || "U")
+                        |> String.trim()
+                        |> String.first()
+                        |> String.upcase()}
                       </div>
                       <span class="flex-1 truncate font-medium">
                         {suggestion.display_name || "User"}
