@@ -31,6 +31,7 @@ defmodule PlatformWeb.ShellLive do
       |> assign(:current_path, "/")
       |> assign(:agent_status, default_agent_status())
       |> assign(:drawer_open, false)
+      |> assign(:sidebar_collapsed, false)
       |> assign(:active_module, active_module)
       |> attach_hook(:track_path, :handle_params, fn _params, url, socket ->
         uri = URI.parse(url)
@@ -42,6 +43,9 @@ defmodule PlatformWeb.ShellLive do
 
         "close_drawer", _params, socket ->
           {:halt, assign(socket, :drawer_open, false)}
+
+        "toggle_sidebar", _params, socket ->
+          {:halt, assign(socket, :sidebar_collapsed, !socket.assigns.sidebar_collapsed)}
 
         _event, _params, socket ->
           {:cont, socket}

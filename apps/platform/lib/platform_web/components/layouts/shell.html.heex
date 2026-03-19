@@ -13,14 +13,15 @@
     id="shell-sidebar"
     phx-hook="SwipeDrawer"
     class={[
-      "flex w-56 flex-col gap-2 border-r border-base-300 bg-base-200 py-4 px-2 transition-transform duration-300 ease-in-out",
+      "flex flex-col gap-2 border-r border-base-300 bg-base-200 py-4 px-2 transition-all duration-200 ease-in-out",
       "fixed inset-y-0 left-0 z-50 lg:relative lg:translate-x-0",
-      if(@drawer_open, do: "translate-x-0", else: "-translate-x-full lg:translate-x-0")
+      if(@drawer_open, do: "translate-x-0", else: "-translate-x-full lg:translate-x-0"),
+      if(@sidebar_collapsed, do: "lg:w-14", else: "w-56")
     ]}
   >
     <%!-- Drawer header --%>
     <div class="mb-4 flex items-center justify-between px-2">
-      <span class="text-lg font-bold">⚡</span>
+      <span :if={!@sidebar_collapsed} class="text-lg font-bold">⚡</span>
       <%!-- Close button (mobile only) --%>
       <button
         class="rounded-lg p-1 text-base-content/60 hover:bg-base-300 hover:text-base-content lg:hidden"
@@ -38,8 +39,8 @@
       phx-click="close_drawer"
       title="Chat"
     >
-      <span class="hero-chat-bubble-left-right size-5"></span>
-      <span class="text-sm font-medium">Chat</span>
+      <span class="hero-chat-bubble-left-right size-5 flex-shrink-0"></span>
+      <span :if={!@sidebar_collapsed} class="text-sm font-medium">Chat</span>
     </.link>
     <.link
       navigate="/tasks"
@@ -47,8 +48,8 @@
       phx-click="close_drawer"
       title="Tasks"
     >
-      <span class="hero-rectangle-stack size-5"></span>
-      <span class="text-sm font-medium">Tasks</span>
+      <span class="hero-rectangle-stack size-5 flex-shrink-0"></span>
+      <span :if={!@sidebar_collapsed} class="text-sm font-medium">Tasks</span>
     </.link>
     <.link
       navigate="/control"
@@ -56,11 +57,24 @@
       phx-click="close_drawer"
       title="Agent Resources"
     >
-      <span class="hero-cog-6-tooth size-5"></span>
-      <span class="text-sm font-medium">Agent Resources</span>
+      <span class="hero-cog-6-tooth size-5 flex-shrink-0"></span>
+      <span :if={!@sidebar_collapsed} class="text-sm font-medium">Agent Resources</span>
     </.link>
 
     <div class="flex-1"></div>
+
+    <%!-- Collapse toggle (desktop only) --%>
+    <button
+      class="hidden lg:flex items-center justify-center rounded-lg p-1 text-base-content/40 hover:bg-base-300 hover:text-base-content transition-colors"
+      phx-click="toggle_sidebar"
+      title={if @sidebar_collapsed, do: "Expand sidebar", else: "Collapse sidebar"}
+    >
+      <span class={[
+        "size-5",
+        if(@sidebar_collapsed, do: "hero-chevron-right", else: "hero-chevron-left")
+      ]}>
+      </span>
+    </button>
   </nav>
 
   <%!-- Main content area --%>

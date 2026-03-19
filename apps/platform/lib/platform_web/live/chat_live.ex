@@ -1019,10 +1019,10 @@ defmodule PlatformWeb.ChatLive do
           </p>
           <button
             phx-click="open_new_channel_modal"
-            class="text-base-content/40 hover:text-primary text-sm"
+            class="text-base-content/40 hover:text-primary"
             title="New channel"
           >
-            +
+            <span class="hero-plus size-4"></span>
           </button>
         </div>
 
@@ -1053,10 +1053,10 @@ defmodule PlatformWeb.ChatLive do
           </p>
           <button
             phx-click="open_new_conversation_modal"
-            class="text-base-content/40 hover:text-primary text-sm"
+            class="text-base-content/40 hover:text-primary"
             title="New conversation"
           >
-            +
+            <span class="hero-plus size-4"></span>
           </button>
         </div>
 
@@ -1236,11 +1236,11 @@ defmodule PlatformWeb.ChatLive do
                 :if={@canvases != []}
                 phx-click="toggle_canvases_panel"
                 class={[
-                  "flex items-center gap-1 rounded px-2 py-0.5 text-xs transition-colors hover:bg-base-300",
-                  @show_canvases && "bg-base-300 text-primary"
+                  "flex items-center gap-1 rounded px-2 py-0.5 text-xs text-base-content/50 hover:text-base-content transition-colors hover:bg-base-300",
+                  @show_canvases && "!bg-base-300 !text-primary"
                 ]}
               >
-                <span>🧩</span>
+                <span class="hero-puzzle-piece size-4"></span>
                 <span>{length(@canvases)} canvases</span>
               </button>
 
@@ -1248,11 +1248,11 @@ defmodule PlatformWeb.ChatLive do
                 :if={@pins != []}
                 phx-click="toggle_pins_panel"
                 class={[
-                  "flex items-center gap-1 rounded px-2 py-0.5 text-xs transition-colors hover:bg-base-300",
-                  @show_pins && "bg-base-300 text-primary"
+                  "flex items-center gap-1 rounded px-2 py-0.5 text-xs text-base-content/50 hover:text-base-content transition-colors hover:bg-base-300",
+                  @show_pins && "!bg-base-300 !text-primary"
                 ]}
               >
-                <span>📌</span>
+                <span class="hero-bookmark-solid size-4"></span>
                 <span>{length(@pins)} pinned</span>
               </button>
 
@@ -1260,21 +1260,25 @@ defmodule PlatformWeb.ChatLive do
                 :if={@agent_presence[:joined?]}
                 phx-click="toggle_agent_silence"
                 class={[
-                  "flex items-center gap-1 rounded px-2 py-0.5 text-xs transition-colors hover:bg-base-300",
-                  @agent_silenced && "bg-warning/20 text-warning"
+                  "flex items-center gap-1 rounded px-2 py-0.5 text-xs text-base-content/50 hover:text-base-content transition-colors hover:bg-base-300",
+                  @agent_silenced && "!bg-warning/20 !text-warning"
                 ]}
                 title={if @agent_silenced, do: "Unsilence agent", else: "Silence agent for 30 min"}
               >
-                <span>{if @agent_silenced, do: "🔇", else: "🔈"}</span>
+                <span class={[
+                  "size-4",
+                  if(@agent_silenced, do: "hero-speaker-x-mark", else: "hero-speaker-wave")
+                ]}>
+                </span>
                 <span>{if @agent_silenced, do: "silenced", else: "silence"}</span>
               </button>
 
               <button
                 phx-click="show_settings"
-                class="flex items-center gap-1 rounded px-2 py-0.5 text-xs transition-colors hover:bg-base-300"
+                class="flex items-center gap-1 rounded px-2 py-0.5 text-xs text-base-content/50 hover:text-base-content transition-colors hover:bg-base-300"
                 title="Space settings"
               >
-                <span>⚙️</span>
+                <span class="hero-cog-6-tooth size-4"></span>
                 <span class="hidden md:inline">settings</span>
               </button>
             </div>
@@ -1356,7 +1360,8 @@ defmodule PlatformWeb.ChatLive do
                 class="flex items-center justify-between rounded bg-base-100 px-3 py-1.5 text-sm"
               >
                 <span class="truncate text-base-content/70 text-xs">
-                  📌 pinned message
+                  <span class="hero-bookmark-solid size-3 inline-block align-text-bottom"></span>
+                  pinned message
                   <span class="font-mono text-base-content/40 text-[10px]">
                     {String.slice(pin.message_id, 0, 8)}…
                   </span>
@@ -1522,9 +1527,9 @@ defmodule PlatformWeb.ChatLive do
                       phx-click="open_thread"
                       phx-value-message-id={msg.id}
                       title="Reply in thread"
-                      class="rounded px-1.5 py-0.5 text-xs text-base-content/50 hover:bg-base-300 transition-colors"
+                      class="rounded px-1.5 py-0.5 text-xs text-base-content/50 hover:text-base-content hover:bg-base-300 transition-colors"
                     >
-                      💬
+                      <span class="hero-chat-bubble-left-right size-4"></span>
                     </button>
 
                     <button
@@ -1532,9 +1537,16 @@ defmodule PlatformWeb.ChatLive do
                       phx-value-message-id={msg.id}
                       phx-value-space-id={msg.space_id}
                       title={if MapSet.member?(@pinned_message_ids, msg.id), do: "Unpin", else: "Pin"}
-                      class="rounded px-1.5 py-0.5 text-xs text-base-content/50 hover:bg-base-300 transition-colors"
+                      class="rounded px-1.5 py-0.5 text-xs text-base-content/50 hover:text-base-content hover:bg-base-300 transition-colors"
                     >
-                      {if MapSet.member?(@pinned_message_ids, msg.id), do: "📌", else: "📍"}
+                      <span class={[
+                        "size-4",
+                        if(MapSet.member?(@pinned_message_ids, msg.id),
+                          do: "hero-bookmark-solid",
+                          else: "hero-bookmark"
+                        )
+                      ]}>
+                      </span>
                     </button>
                   </div>
                 </div>
@@ -1578,7 +1590,7 @@ defmodule PlatformWeb.ChatLive do
                     rel="noopener noreferrer"
                     class="inline-flex w-fit items-center gap-2 rounded bg-base-200 px-2 py-1 text-sm text-primary hover:bg-base-300 hover:no-underline"
                   >
-                    <span>📎</span>
+                    <span class="hero-paper-clip size-4"></span>
                     <span>{attachment.filename}</span>
                     <span class="text-xs text-base-content/40">
                       ({format_bytes(attachment.byte_size)})
@@ -1611,7 +1623,7 @@ defmodule PlatformWeb.ChatLive do
                     phx-click="open_reaction_picker"
                     phx-value-message-id={msg.id}
                   >
-                    <span>+</span>
+                    <span class="hero-plus size-4"></span>
                   </button>
                 </div>
               </div>
@@ -1773,7 +1785,7 @@ defmodule PlatformWeb.ChatLive do
             </div>
 
             <button phx-click="close_canvas" class="btn btn-ghost btn-xs" title="Close canvas">
-              ✕
+              <span class="hero-x-mark size-4"></span>
             </button>
           </div>
 
@@ -1798,7 +1810,7 @@ defmodule PlatformWeb.ChatLive do
               class="btn btn-ghost btn-xs"
               title="Close thread"
             >
-              ✕
+              <span class="hero-x-mark size-4"></span>
             </button>
           </div>
 
@@ -1839,7 +1851,7 @@ defmodule PlatformWeb.ChatLive do
                   rel="noopener noreferrer"
                   class="inline-flex w-fit items-center gap-2 rounded bg-base-200 px-2 py-1 text-sm text-primary hover:bg-base-300 hover:no-underline"
                 >
-                  <span>📎</span>
+                  <span class="hero-paper-clip size-4"></span>
                   <span>{attachment.filename}</span>
                   <span class="text-xs text-base-content/40">
                     ({format_bytes(attachment.byte_size)})
@@ -1868,7 +1880,7 @@ defmodule PlatformWeb.ChatLive do
                   :for={entry <- @uploads.thread_attachments.entries}
                   class="inline-flex items-center gap-1 rounded-full bg-base-200 px-2 py-0.5 text-xs text-base-content/70"
                 >
-                  <span>📎</span>
+                  <span class="hero-paper-clip size-3"></span>
                   <span>{entry.client_name}</span>
                 </span>
               </div>
@@ -1878,7 +1890,7 @@ defmodule PlatformWeb.ChatLive do
                   class="flex-shrink-0 cursor-pointer rounded-full w-8 h-8 flex items-center justify-center text-base-content/50 hover:bg-base-300 transition-colors"
                   title="Attach files"
                 >
-                  <span class="text-base">📎</span>
+                  <span class="hero-paper-clip size-5"></span>
                   <.live_file_input upload={@uploads.thread_attachments} class="hidden" />
                 </label>
 
@@ -1897,7 +1909,7 @@ defmodule PlatformWeb.ChatLive do
                     disabled={is_nil(@current_participant)}
                     title="Reply"
                   >
-                    ✈️
+                    <span class="hero-paper-airplane size-4 -rotate-45"></span>
                   </button>
                 </div>
               </div>
