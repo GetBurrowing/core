@@ -1,21 +1,13 @@
 defmodule PlatformWeb.ControlCenterLive do
   use PlatformWeb, :live_view
 
-  import Ecto.Query
-
   alias Ecto.Adapters.SQL.Sandbox
-  alias Ecto.Multi
 
   alias Platform.Agents.{
     Agent,
     AgentServer,
-    ContextShare,
-    Memory,
     MemoryContext,
-    Router,
-    Session,
-    WorkspaceBootstrap,
-    WorkspaceFile
+    Router
   }
 
   alias Platform.Federation
@@ -23,6 +15,7 @@ defmodule PlatformWeb.ControlCenterLive do
   alias Platform.Repo
 
   alias PlatformWeb.ControlCenter.AgentCard
+  alias PlatformWeb.ControlCenter.AgentData
   alias PlatformWeb.ControlCenter.AgentDetail
   alias PlatformWeb.ControlCenter.Onboarding
   alias PlatformWeb.ControlCenter.OnboardingEvents
@@ -30,18 +23,6 @@ defmodule PlatformWeb.ControlCenterLive do
   alias PlatformWeb.ControlCenter.RuntimePanel
 
   import PlatformWeb.ControlCenter.Helpers
-
-  @session_limit 8
-  @memory_limit 12
-  @workspace_defaults [
-    "SOUL.md",
-    "IDENTITY.md",
-    "USER.md",
-    "AGENTS.md",
-    "MEMORY.md",
-    "TOOLS.md",
-    "HEARTBEAT.md"
-  ]
 
   @impl true
   def mount(_params, session, socket) do
@@ -63,17 +44,23 @@ defmodule PlatformWeb.ControlCenterLive do
        :workspace_form,
        to_form(%{"file_key" => "", "content" => ""}, as: :workspace_file)
      )
-     |> assign(:memory_filters, default_memory_filters())
-     |> assign(:memory_filter_form, to_form(default_memory_filters(), as: :memory_filters))
+     |> assign(:memory_filters, AgentData.default_memory_filters())
+     |> assign(
+       :memory_filter_form,
+       to_form(AgentData.default_memory_filters(), as: :memory_filters)
+     )
      |> assign(:recent_memories, [])
      |> assign(:recent_sessions, [])
      |> assign(:agent_credentials, [])
      |> assign(:platform_credentials, [])
      |> assign(:config_form, to_form(%{}, as: :config))
-     |> assign(:create_agent_form, to_form(default_create_agent_params(), as: :create_agent))
+     |> assign(
+       :create_agent_form,
+       to_form(AgentData.default_create_agent_params(), as: :create_agent)
+     )
      |> assign(:show_create_agent, false)
      |> assign(:pending_delete_slug, nil)
-     |> assign(:memory_form, to_form(default_memory_entry(), as: :memory_entry))
+     |> assign(:memory_form, to_form(AgentData.default_memory_entry(), as: :memory_entry))
      |> assign(:agent_status, :unknown)
      |> assign(:selected_agent_directory_entry, nil)
      # Onboarding flow assigns
@@ -93,12 +80,14 @@ defmodule PlatformWeb.ControlCenterLive do
 
   @impl true
   def handle_params(params, _url, socket) do
-    agents = list_agents()
-    selected_slug = resolve_selected_agent_slug(params["agent_slug"], agents)
-    selected_agent = selected_slug && ensure_selected_agent(selected_slug, agents)
-    agents = list_agents()
+    agents = AgentData.list_agents()
+    selected_slug = AgentData.resolve_selected_agent_slug(params["agent_slug"], agents)
+    selected_agent = selected_slug && AgentData.ensure_selected_agent(selected_slug, agents)
+    agents = AgentData.list_agents()
     selected_agent = selected_agent && Repo.get(Agent, selected_agent.id)
-    selected_entry = selected_agent && find_agent_directory_entry(agents, selected_agent.slug)
+
+    selected_entry =
+      selected_agent && AgentData.find_agent_directory_entry(agents, selected_agent.slug)
 
     socket =
       socket
@@ -116,6 +105,8 @@ defmodule PlatformWeb.ControlCenterLive do
        assign_empty_panel(socket)
      end}
   end
+
+  # ── Runtime events (kept here — tightly coupled to socket) ────────
 
   @impl true
   def handle_event(
@@ -185,12 +176,14 @@ defmodule PlatformWeb.ControlCenterLive do
 
   def handle_event("refresh_runtime", _params, socket), do: {:noreply, socket}
 
+  # ── Config save ───────────────────────────────────────────────────
+
   def handle_event(
         "save_config",
         %{"config" => params},
         %{assigns: %{selected_agent: %Agent{} = agent}} = socket
       ) do
-    attrs = config_attrs_from_params(agent, params)
+    attrs = AgentData.config_attrs_from_params(agent, params)
 
     case agent |> Agent.changeset(attrs) |> Repo.update() do
       {:ok, updated_agent} ->
@@ -199,7 +192,7 @@ defmodule PlatformWeb.ControlCenterLive do
         {:noreply,
          socket
          |> put_flash(:info, "Updated #{updated_agent.name}.")
-         |> assign(:agents, list_agents())
+         |> assign(:agents, AgentData.list_agents())
          |> assign(:selected_agent, updated_agent)
          |> assign_agent_panel(updated_agent,
            selected_file_key: socket.assigns.selected_file_key,
@@ -210,15 +203,17 @@ defmodule PlatformWeb.ControlCenterLive do
       {:error, %Ecto.Changeset{} = changeset} ->
         {:noreply,
          socket
-         |> assign(:config_form, build_config_form(agent, params))
+         |> assign(:config_form, AgentData.build_config_form(agent, params))
          |> put_flash(:error, changeset_error_summary(changeset))}
     end
   end
 
   def handle_event("save_config", _params, socket), do: {:noreply, socket}
 
+  # ── Agent CRUD ────────────────────────────────────────────────────
+
   def handle_event("create_agent", %{"create_agent" => params}, socket) do
-    attrs = create_agent_attrs_from_params(params)
+    attrs = AgentData.create_agent_attrs_from_params(params)
 
     case %Agent{} |> Agent.changeset(attrs) |> Repo.insert() do
       {:ok, agent} ->
@@ -226,13 +221,16 @@ defmodule PlatformWeb.ControlCenterLive do
          socket
          |> put_flash(:info, "Created #{agent.name}.")
          |> assign(:show_create_agent, false)
-         |> assign(:create_agent_form, to_form(default_create_agent_params(), as: :create_agent))
+         |> assign(
+           :create_agent_form,
+           to_form(AgentData.default_create_agent_params(), as: :create_agent)
+         )
          |> push_patch(to: ~p"/control/#{agent.slug}")}
 
       {:error, %Ecto.Changeset{} = changeset} ->
         {:noreply,
          socket
-         |> assign(:create_agent_form, build_create_agent_form(params))
+         |> assign(:create_agent_form, AgentData.build_create_agent_form(params))
          |> put_flash(:error, changeset_error_summary(changeset))}
     end
   end
@@ -243,54 +241,8 @@ defmodule PlatformWeb.ControlCenterLive do
     {:noreply, assign(socket, :show_create_agent, !socket.assigns.show_create_agent)}
   end
 
-  # ── Onboarding flow events (delegated) ──────────────────────────────
-
-  def handle_event("open_onboarding_chooser", params, socket),
-    do: OnboardingEvents.handle("open_onboarding_chooser", params, socket)
-
-  def handle_event("close_onboarding", params, socket),
-    do: OnboardingEvents.handle("close_onboarding", params, socket)
-
-  def handle_event("choose_onboarding", params, socket),
-    do: OnboardingEvents.handle("choose_onboarding", params, socket)
-
-  def handle_event("select_template", params, socket),
-    do: OnboardingEvents.handle("select_template", params, socket)
-
-  def handle_event("back_to_templates", params, socket),
-    do: OnboardingEvents.handle("back_to_templates", params, socket)
-
-  def handle_event("create_from_template", params, socket),
-    do: OnboardingEvents.handle("create_from_template", params, socket)
-
-  def handle_event("submit_federate", params, socket),
-    do: OnboardingEvents.handle("submit_federate", params, socket)
-
-  def handle_event("federate_done", params, socket),
-    do: OnboardingEvents.handle("federate_done", params, socket)
-
-  def handle_event("toggle_import_agent", params, socket),
-    do: OnboardingEvents.handle("toggle_import_agent", params, socket)
-
-  def handle_event("submit_import", params, socket),
-    do: OnboardingEvents.handle("submit_import", params, socket)
-
-  # ── Runtime management events (delegated) ──────────────────────────
-
-  def handle_event("suspend_federated_runtime", params, socket),
-    do: RuntimeEvents.handle("suspend_federated_runtime", params, socket)
-
-  def handle_event("revoke_federated_runtime", params, socket),
-    do: RuntimeEvents.handle("revoke_federated_runtime", params, socket)
-
-  def handle_event("regenerate_federated_token", params, socket),
-    do: RuntimeEvents.handle("regenerate_federated_token", params, socket)
-
-  def handle_event("dismiss_regenerated_token", params, socket),
-    do: RuntimeEvents.handle("dismiss_regenerated_token", params, socket)
-
   def handle_event("request_delete_agent", %{"slug" => slug}, socket) when is_binary(slug) do
-    case find_agent_directory_entry(socket.assigns.agents, slug) do
+    case AgentData.find_agent_directory_entry(socket.assigns.agents, slug) do
       %{agent: %Agent{}, workspace_managed?: false} ->
         {:noreply, assign(socket, :pending_delete_slug, slug)}
 
@@ -333,7 +285,7 @@ defmodule PlatformWeb.ControlCenterLive do
 
   def handle_event("delete_agent", %{"slug" => slug}, socket) when is_binary(slug) do
     case {socket.assigns.pending_delete_slug,
-          find_agent_directory_entry(socket.assigns.agents, slug)} do
+          AgentData.find_agent_directory_entry(socket.assigns.agents, slug)} do
       {pending_slug, _entry} when pending_slug != slug ->
         {:noreply, put_flash(socket, :error, "Confirm the delete action first.")}
 
@@ -378,6 +330,8 @@ defmodule PlatformWeb.ControlCenterLive do
 
   def handle_event("delete_agent", _params, socket), do: {:noreply, socket}
 
+  # ── Workspace events ──────────────────────────────────────────────
+
   def handle_event("select_workspace_file", %{"file_key" => file_key}, socket) do
     {:noreply,
      reload_selected_agent(socket,
@@ -400,8 +354,8 @@ defmodule PlatformWeb.ControlCenterLive do
      |> assign(:workspace_files, workspace_files)
      |> assign(
        :workspace_form,
-       build_workspace_form(workspace_files, nil, %{
-         "file_key" => next_workspace_file_key(workspace_files)
+       AgentData.build_workspace_form(workspace_files, nil, %{
+         "file_key" => AgentData.next_workspace_file_key(workspace_files)
        })
      )}
   end
@@ -434,7 +388,11 @@ defmodule PlatformWeb.ControlCenterLive do
          socket
          |> assign(
            :workspace_form,
-           build_workspace_form(socket.assigns.workspace_files, selected_workspace_file, params)
+           AgentData.build_workspace_form(
+             socket.assigns.workspace_files,
+             selected_workspace_file,
+             params
+           )
          )
          |> put_flash(:error, "Choose a file key before saving.")}
 
@@ -465,7 +423,7 @@ defmodule PlatformWeb.ControlCenterLive do
              socket
              |> assign(
                :workspace_form,
-               build_workspace_form(
+               AgentData.build_workspace_form(
                  socket.assigns.workspace_files,
                  selected_workspace_file,
                  params
@@ -478,8 +436,10 @@ defmodule PlatformWeb.ControlCenterLive do
 
   def handle_event("save_workspace_file", _params, socket), do: {:noreply, socket}
 
+  # ── Memory events ─────────────────────────────────────────────────
+
   def handle_event("filter_memories", %{"memory_filters" => params}, socket) do
-    filters = normalize_memory_filters(params)
+    filters = AgentData.normalize_memory_filters(params)
 
     {:noreply,
      reload_selected_agent(socket,
@@ -493,26 +453,26 @@ defmodule PlatformWeb.ControlCenterLive do
         %{"memory_entry" => params},
         %{assigns: %{selected_agent: %Agent{} = agent}} = socket
       ) do
-    memory_type = normalize_memory_type(params["memory_type"])
+    memory_type = AgentData.normalize_memory_type(params["memory_type"])
     content = String.trim(params["content"] || "")
 
     cond do
       content == "" ->
         {:noreply,
          socket
-         |> assign(:memory_form, build_memory_form(params))
+         |> assign(:memory_form, AgentData.build_memory_form(params))
          |> put_flash(:error, "Memory content cannot be blank.")}
 
       true ->
         case MemoryContext.append_memory(agent.id, memory_type, content,
-               date: parse_memory_date(memory_type, params["date"]),
+               date: AgentData.parse_memory_date(memory_type, params["date"]),
                metadata: %{"source" => "control_center"}
              ) do
           {:ok, _memory} ->
             {:noreply,
              socket
              |> put_flash(:info, "Added #{humanize_memory_type(memory_type)} memory.")
-             |> assign(:memory_form, build_memory_form())
+             |> assign(:memory_form, AgentData.build_memory_form())
              |> reload_selected_agent(
                selected_file_key: socket.assigns.selected_file_key,
                memory_filters: socket.assigns.memory_filters
@@ -521,13 +481,61 @@ defmodule PlatformWeb.ControlCenterLive do
           {:error, %Ecto.Changeset{} = changeset} ->
             {:noreply,
              socket
-             |> assign(:memory_form, build_memory_form(params))
+             |> assign(:memory_form, AgentData.build_memory_form(params))
              |> put_flash(:error, changeset_error_summary(changeset))}
         end
     end
   end
 
   def handle_event("append_memory", _params, socket), do: {:noreply, socket}
+
+  # ── Onboarding flow events (delegated) ────────────────────────────
+
+  def handle_event("open_onboarding_chooser", params, socket),
+    do: OnboardingEvents.handle("open_onboarding_chooser", params, socket)
+
+  def handle_event("close_onboarding", params, socket),
+    do: OnboardingEvents.handle("close_onboarding", params, socket)
+
+  def handle_event("choose_onboarding", params, socket),
+    do: OnboardingEvents.handle("choose_onboarding", params, socket)
+
+  def handle_event("select_template", params, socket),
+    do: OnboardingEvents.handle("select_template", params, socket)
+
+  def handle_event("back_to_templates", params, socket),
+    do: OnboardingEvents.handle("back_to_templates", params, socket)
+
+  def handle_event("create_from_template", params, socket),
+    do: OnboardingEvents.handle("create_from_template", params, socket)
+
+  def handle_event("submit_federate", params, socket),
+    do: OnboardingEvents.handle("submit_federate", params, socket)
+
+  def handle_event("federate_done", params, socket),
+    do: OnboardingEvents.handle("federate_done", params, socket)
+
+  def handle_event("toggle_import_agent", params, socket),
+    do: OnboardingEvents.handle("toggle_import_agent", params, socket)
+
+  def handle_event("submit_import", params, socket),
+    do: OnboardingEvents.handle("submit_import", params, socket)
+
+  # ── Runtime management events (delegated) ─────────────────────────
+
+  def handle_event("suspend_federated_runtime", params, socket),
+    do: RuntimeEvents.handle("suspend_federated_runtime", params, socket)
+
+  def handle_event("revoke_federated_runtime", params, socket),
+    do: RuntimeEvents.handle("revoke_federated_runtime", params, socket)
+
+  def handle_event("regenerate_federated_token", params, socket),
+    do: RuntimeEvents.handle("regenerate_federated_token", params, socket)
+
+  def handle_event("dismiss_regenerated_token", params, socket),
+    do: RuntimeEvents.handle("dismiss_regenerated_token", params, socket)
+
+  # ── Render ────────────────────────────────────────────────────────
 
   @impl true
   def render(assigns) do
@@ -758,6 +766,8 @@ defmodule PlatformWeb.ControlCenterLive do
     """
   end
 
+  # ── Private: panel assignment ─────────────────────────────────────
+
   defp assign_empty_panel(socket) do
     socket
     |> assign(:page_title, "Agent Resources")
@@ -769,17 +779,23 @@ defmodule PlatformWeb.ControlCenterLive do
     |> assign(:selected_workspace_file, nil)
     |> assign(:selected_file_key, nil)
     |> assign(:workspace_form, to_form(%{"file_key" => "", "content" => ""}, as: :workspace_file))
-    |> assign(:memory_filters, default_memory_filters())
-    |> assign(:memory_filter_form, to_form(default_memory_filters(), as: :memory_filters))
+    |> assign(:memory_filters, AgentData.default_memory_filters())
+    |> assign(
+      :memory_filter_form,
+      to_form(AgentData.default_memory_filters(), as: :memory_filters)
+    )
     |> assign(:recent_memories, [])
     |> assign(:recent_sessions, [])
     |> assign(:agent_credentials, [])
     |> assign(:platform_credentials, [])
     |> assign(:config_form, to_form(%{}, as: :config))
-    |> assign(:create_agent_form, to_form(default_create_agent_params(), as: :create_agent))
+    |> assign(
+      :create_agent_form,
+      to_form(AgentData.default_create_agent_params(), as: :create_agent)
+    )
     |> assign(:show_create_agent, socket.assigns[:show_create_agent] || false)
     |> assign(:pending_delete_slug, nil)
-    |> assign(:memory_form, to_form(default_memory_entry(), as: :memory_entry))
+    |> assign(:memory_form, to_form(AgentData.default_memory_entry(), as: :memory_entry))
     |> assign(:agent_status, PlatformWeb.ShellLive.default_agent_status())
     |> assign(:selected_agent_directory_entry, nil)
     |> assign(:regenerated_token, nil)
@@ -790,25 +806,25 @@ defmodule PlatformWeb.ControlCenterLive do
 
   defp assign_agent_panel(socket, %Agent{} = agent, opts) do
     memory_filters =
-      normalize_memory_filters(
+      AgentData.normalize_memory_filters(
         Keyword.get(
           opts,
           :memory_filters,
-          socket.assigns[:memory_filters] || default_memory_filters()
+          socket.assigns[:memory_filters] || AgentData.default_memory_filters()
         )
       )
 
     workspace_files = MemoryContext.list_workspace_files(agent.id)
 
     selected_workspace_file =
-      select_workspace_file(
+      AgentData.select_workspace_file(
         workspace_files,
         Keyword.get(opts, :selected_file_key) || socket.assigns[:selected_file_key]
       )
 
     agent_credentials = Platform.Vault.list(scope: {:agent, agent.id})
-    platform_credentials = relevant_platform_credentials(agent)
-    runtime = runtime_snapshot(agent)
+    platform_credentials = AgentData.relevant_platform_credentials(agent)
+    runtime = AgentData.runtime_snapshot(agent)
 
     socket
     |> assign(:page_title, "Control Center · #{agent.name}")
@@ -816,8 +832,8 @@ defmodule PlatformWeb.ControlCenterLive do
     |> assign(:runtime, runtime)
     |> assign(:overview_counts, %{
       workspace_files: length(workspace_files),
-      memories: count_memories(agent.id),
-      sessions: count_sessions(agent.id),
+      memories: AgentData.count_memories(agent.id),
+      sessions: AgentData.count_sessions(agent.id),
       vault: length(agent_credentials) + length(platform_credentials)
     })
     |> assign(:model_chain_result, Router.model_chain(agent))
@@ -826,7 +842,7 @@ defmodule PlatformWeb.ControlCenterLive do
     |> assign(:selected_file_key, selected_workspace_file && selected_workspace_file.file_key)
     |> assign(
       :workspace_form,
-      build_workspace_form(
+      AgentData.build_workspace_form(
         workspace_files,
         selected_workspace_file,
         Keyword.get(opts, :workspace_params, %{})
@@ -834,17 +850,20 @@ defmodule PlatformWeb.ControlCenterLive do
     )
     |> assign(:memory_filters, memory_filters)
     |> assign(:memory_filter_form, to_form(memory_filters, as: :memory_filters))
-    |> assign(:recent_memories, list_filtered_memories(agent.id, memory_filters))
-    |> assign(:recent_sessions, list_recent_sessions(agent.id))
+    |> assign(:recent_memories, AgentData.list_filtered_memories(agent.id, memory_filters))
+    |> assign(:recent_sessions, AgentData.list_recent_sessions(agent.id))
     |> assign(:agent_credentials, agent_credentials)
     |> assign(:platform_credentials, platform_credentials)
-    |> assign(:config_form, build_config_form(agent, Keyword.get(opts, :config_params, %{})))
+    |> assign(
+      :config_form,
+      AgentData.build_config_form(agent, Keyword.get(opts, :config_params, %{}))
+    )
     |> assign(
       :selected_agent_directory_entry,
-      find_agent_directory_entry(socket.assigns.agents, agent.slug)
+      AgentData.find_agent_directory_entry(socket.assigns.agents, agent.slug)
     )
     |> assign(:pending_delete_slug, pending_delete_slug(socket, agent.slug))
-    |> assign(:memory_form, build_memory_form(Keyword.get(opts, :memory_params)))
+    |> assign(:memory_form, AgentData.build_memory_form(Keyword.get(opts, :memory_params)))
     |> assign(:agent_status, PlatformWeb.ShellLive.default_agent_status())
     |> assign_federation_data(agent)
   end
@@ -871,91 +890,29 @@ defmodule PlatformWeb.ControlCenterLive do
 
   def reload_selected_agent(%{assigns: %{selected_agent: %Agent{} = agent}} = socket, opts) do
     refreshed_agent = Repo.get!(Agent, agent.id)
-    agents = list_agents()
+    agents = AgentData.list_agents()
 
     socket
     |> assign(:agents, agents)
     |> assign(:selected_agent, refreshed_agent)
     |> assign(
       :selected_agent_directory_entry,
-      find_agent_directory_entry(agents, refreshed_agent.slug)
+      AgentData.find_agent_directory_entry(agents, refreshed_agent.slug)
     )
     |> assign_agent_panel(refreshed_agent, opts)
   end
 
   def reload_selected_agent(socket, _opts), do: socket
 
-  defp list_agents do
-    persisted_agents = list_persisted_agents()
-    persisted_by_slug = Map.new(persisted_agents, &{&1.slug, &1})
-
-    configured_agents =
-      case WorkspaceBootstrap.list_configured_agents() do
-        {:ok, agents} -> agents
-        {:error, _reason} -> []
-      end
-
-    configured_items =
-      Enum.map(configured_agents, fn configured_agent ->
-        case Map.get(persisted_by_slug, configured_agent.id) do
-          %Agent{} = agent ->
-            build_agent_directory_entry(agent, :workspace)
-
-          nil ->
-            build_configured_agent_directory_entry(configured_agent)
-        end
-      end)
-
-    configured_slugs = MapSet.new(configured_items, & &1.slug)
-
-    persisted_items =
-      persisted_agents
-      |> Enum.reject(&MapSet.member?(configured_slugs, &1.slug))
-      |> Enum.map(&build_agent_directory_entry(&1, :database))
-
-    (configured_items ++ persisted_items)
-    |> Enum.map(&attach_runtime_status/1)
-    |> Enum.sort_by(&{&1.name, &1.slug})
-  end
-
-  defp list_persisted_agents do
-    from(a in Agent, order_by: [asc: a.slug])
-    |> Repo.all()
-  end
-
-  defp resolve_selected_agent_slug(nil, _agents), do: nil
-
-  defp resolve_selected_agent_slug(slug, agents) do
-    if Enum.any?(agents, &(&1.slug == slug)),
-      do: slug,
-      else: resolve_selected_agent_slug(nil, agents)
-  end
-
-  defp ensure_selected_agent(slug, agents) when is_binary(slug) do
-    case find_agent_directory_entry(agents, slug) do
-      %{agent: %Agent{} = agent} ->
-        agent
-
-      %{workspace_managed?: true} ->
-        case WorkspaceBootstrap.ensure_agent(slug: slug) do
-          {:ok, agent} -> agent
-          {:error, _reason} -> Repo.get_by(Agent, slug: slug)
-        end
-
-      _ ->
-        Repo.get_by(Agent, slug: slug)
-    end
-  end
-
-  defp ensure_selected_agent(_slug, _agents), do: nil
+  # ── Private: small helpers ────────────────────────────────────────
 
   defp handle_delete_agent(socket, %Agent{} = agent) do
-    case delete_agent(agent) do
+    case AgentData.delete_agent(agent) do
       :ok ->
         socket =
           socket
           |> put_flash(:info, "Deleted #{agent.name}.")
-          |> assign(:agents, list_agents())
+          |> assign(:agents, AgentData.list_agents())
           |> assign(:pending_delete_slug, nil)
           |> assign(:selected_agent, nil)
           |> assign(:selected_agent_directory_entry, nil)
@@ -967,271 +924,12 @@ defmodule PlatformWeb.ControlCenterLive do
     end
   end
 
-  defp find_agent_directory_entry(agents, slug) when is_binary(slug) do
-    Enum.find(agents, &(&1.slug == slug))
-  end
-
-  defp find_agent_directory_entry(_agents, _slug), do: nil
-
   defp pending_delete_slug(socket, selected_slug) do
     case socket.assigns[:pending_delete_slug] do
       ^selected_slug -> selected_slug
       _ -> nil
     end
   end
-
-  defp runtime_snapshot(%Agent{} = agent) do
-    pid = AgentServer.whereis(agent.id)
-
-    case AgentServer.state(agent.id) do
-      {:ok, state} ->
-        %{
-          running?: is_pid(pid),
-          pid: pid,
-          status: state.status,
-          active_session_ids: Map.keys(state.active_sessions),
-          workspace_keys: Map.keys(state.workspace || %{})
-        }
-
-      {:error, _reason} ->
-        %{
-          running?: false,
-          pid: nil,
-          status: if(agent.status in ["paused", "archived"], do: :paused, else: :idle),
-          active_session_ids: [],
-          workspace_keys: []
-        }
-    end
-  end
-
-  defp count_memories(agent_id) do
-    from(m in Memory, where: m.agent_id == ^agent_id)
-    |> Repo.aggregate(:count, :id)
-  end
-
-  defp count_sessions(agent_id) do
-    from(s in Session, where: s.agent_id == ^agent_id)
-    |> Repo.aggregate(:count, :id)
-  end
-
-  defp list_recent_sessions(agent_id) do
-    from(s in Session,
-      where: s.agent_id == ^agent_id,
-      order_by: [desc: s.started_at, desc: s.id],
-      limit: ^@session_limit
-    )
-    |> Repo.all()
-  end
-
-  defp list_filtered_memories(agent_id, filters) do
-    opts = [limit: @memory_limit]
-
-    opts =
-      case filters["type"] do
-        "all" -> opts
-        type -> Keyword.put(opts, :memory_type, type)
-      end
-
-    opts =
-      case String.trim(filters["query"] || "") do
-        "" -> opts
-        query -> Keyword.put(opts, :query, query)
-      end
-
-    MemoryContext.list_memories(agent_id, opts)
-  end
-
-  defp relevant_platform_credentials(%Agent{} = agent) do
-    providers = providers_for_agent(agent)
-
-    Platform.Vault.list(scope: {:platform, nil})
-    |> Enum.filter(fn credential ->
-      providers == [] || is_nil(credential.provider) || credential.provider in providers
-    end)
-  end
-
-  defp providers_for_agent(%Agent{} = agent) do
-    case Router.model_chain(agent) do
-      {:ok, chain} -> chain
-      _ -> []
-    end
-    |> Enum.map(&provider_for_model/1)
-    |> Enum.reject(&is_nil/1)
-    |> Enum.uniq()
-  end
-
-  defp provider_for_model(model) when is_binary(model) do
-    case String.split(model, "/", parts: 2) do
-      ["openai-codex", _rest] -> "openai"
-      [provider, _rest] -> provider
-      _ -> nil
-    end
-  end
-
-  defp build_config_form(%Agent{} = agent, overrides) do
-    model_config = normalize_map(agent.model_config || %{})
-
-    base = %{
-      "name" => agent.name,
-      "status" => agent.status,
-      "primary_model" => Map.get(model_config, "primary", ""),
-      "fallback_models" => Enum.join(List.wrap(Map.get(model_config, "fallbacks", [])), ", "),
-      "thinking_default" => agent.thinking_default || "",
-      "max_concurrent" => agent.max_concurrent || 1,
-      "sandbox_mode" => agent.sandbox_mode || "off"
-    }
-
-    to_form(Map.merge(base, normalize_map(overrides)), as: :config)
-  end
-
-  defp build_create_agent_form(overrides) do
-    to_form(Map.merge(default_create_agent_params(), normalize_map(overrides)), as: :create_agent)
-  end
-
-  defp build_workspace_form(
-         _workspace_files,
-         %WorkspaceFile{} = selected_workspace_file,
-         overrides
-       ) do
-    base = %{
-      "file_key" => selected_workspace_file.file_key,
-      "content" => selected_workspace_file.content
-    }
-
-    to_form(Map.merge(base, normalize_map(overrides)), as: :workspace_file)
-  end
-
-  defp build_workspace_form(workspace_files, nil, overrides) do
-    base = %{
-      "file_key" => next_workspace_file_key(workspace_files),
-      "content" => ""
-    }
-
-    to_form(Map.merge(base, normalize_map(overrides)), as: :workspace_file)
-  end
-
-  defp build_memory_form(overrides \\ nil) do
-    to_form(Map.merge(default_memory_entry(), normalize_map(overrides || %{})), as: :memory_entry)
-  end
-
-  defp default_memory_filters do
-    %{"type" => "all", "query" => ""}
-  end
-
-  defp default_create_agent_params do
-    %{
-      "name" => "",
-      "slug" => "",
-      "primary_model" => "",
-      "status" => "active",
-      "max_concurrent" => 1,
-      "sandbox_mode" => "off"
-    }
-  end
-
-  defp default_memory_entry do
-    %{
-      "memory_type" => "long_term",
-      "date" => Date.utc_today() |> Date.to_iso8601(),
-      "content" => ""
-    }
-  end
-
-  defp normalize_memory_filters(params) do
-    params = normalize_map(params)
-
-    %{
-      "type" => Map.get(params, "type", "all"),
-      "query" => Map.get(params, "query", "")
-    }
-  end
-
-  defp select_workspace_file([], _selected_file_key), do: nil
-
-  defp select_workspace_file(workspace_files, selected_file_key)
-       when is_binary(selected_file_key) do
-    Enum.find(workspace_files, &(&1.file_key == selected_file_key)) || List.first(workspace_files)
-  end
-
-  defp select_workspace_file(workspace_files, _selected_file_key), do: List.first(workspace_files)
-
-  defp next_workspace_file_key(workspace_files) do
-    used = MapSet.new(workspace_files, & &1.file_key)
-
-    Enum.find(@workspace_defaults, &(not MapSet.member?(used, &1))) || "NOTES.md"
-  end
-
-  defp config_attrs_from_params(%Agent{} = agent, params) do
-    params = normalize_map(params)
-    model_config = normalize_map(agent.model_config || %{})
-
-    updated_model_config =
-      model_config
-      |> Map.put("primary", String.trim(Map.get(params, "primary_model", "")))
-      |> Map.put("fallbacks", parse_fallbacks(Map.get(params, "fallback_models", "")))
-
-    %{
-      name: String.trim(Map.get(params, "name", agent.name || "")),
-      status: Map.get(params, "status", agent.status),
-      thinking_default: blank_to_nil(Map.get(params, "thinking_default")),
-      max_concurrent:
-        parse_positive_integer(Map.get(params, "max_concurrent")) || agent.max_concurrent || 1,
-      sandbox_mode: blank_fallback(Map.get(params, "sandbox_mode"), agent.sandbox_mode || "off"),
-      model_config: updated_model_config
-    }
-  end
-
-  defp create_agent_attrs_from_params(params) do
-    params = normalize_map(params)
-    name = String.trim(Map.get(params, "name", ""))
-    slug = params |> Map.get("slug", "") |> to_string() |> slugify()
-    primary_model = String.trim(Map.get(params, "primary_model", ""))
-
-    %{
-      slug: slug,
-      name: name,
-      status: blank_fallback(Map.get(params, "status"), "active"),
-      max_concurrent: parse_positive_integer(Map.get(params, "max_concurrent")) || 1,
-      sandbox_mode: blank_fallback(Map.get(params, "sandbox_mode"), "off"),
-      model_config:
-        if(primary_model == "", do: %{}, else: %{"primary" => primary_model, "fallbacks" => []})
-    }
-  end
-
-  defp parse_fallbacks(raw) when is_binary(raw) do
-    raw
-    |> String.split([",", "\n"], trim: true)
-    |> Enum.map(&String.trim/1)
-    |> Enum.reject(&(&1 == ""))
-  end
-
-  defp parse_fallbacks(_raw), do: []
-
-  defp parse_positive_integer(value) when is_integer(value) and value > 0, do: value
-
-  defp parse_positive_integer(value) when is_binary(value) do
-    case Integer.parse(String.trim(value)) do
-      {parsed, ""} when parsed > 0 -> parsed
-      _ -> nil
-    end
-  end
-
-  defp parse_positive_integer(_value), do: nil
-
-  defp parse_memory_date("daily", value) when is_binary(value) do
-    case Date.from_iso8601(String.trim(value)) do
-      {:ok, date} -> date
-      _ -> Date.utc_today()
-    end
-  end
-
-  defp parse_memory_date("daily", _value), do: Date.utc_today()
-  defp parse_memory_date(_memory_type, _value), do: nil
-
-  defp normalize_memory_type(nil), do: "long_term"
-
-  defp normalize_memory_type(value),
-    do: value |> to_string() |> String.trim() |> blank_fallback("long_term")
 
   defp refresh_runtime_if_running(%Agent{} = agent) do
     case AgentServer.whereis(agent.id) do
@@ -1276,99 +974,4 @@ defmodule PlatformWeb.ControlCenterLive do
        do: current.id != selected_agent.id
 
   defp agent_changed?(_socket, _selected_agent), do: true
-
-  defp delete_agent(%Agent{} = agent) do
-    :ok = AgentServer.stop_agent(agent)
-
-    session_ids_query =
-      from(s in Session,
-        where: s.agent_id == ^agent.id,
-        select: s.id
-      )
-
-    Multi.new()
-    |> Multi.delete_all(
-      :context_shares,
-      from(cs in ContextShare,
-        where:
-          cs.from_session_id in subquery(session_ids_query) or
-            cs.to_session_id in subquery(session_ids_query)
-      )
-    )
-    |> Multi.delete_all(:sessions, from(s in Session, where: s.agent_id == ^agent.id))
-    |> Multi.delete(:agent, agent)
-    |> Repo.transaction()
-    |> case do
-      {:ok, _changes} -> :ok
-      {:error, _step, reason, _changes} -> {:error, reason}
-    end
-  end
-
-  defp build_agent_directory_entry(%Agent{} = agent, source) do
-    %{
-      slug: agent.slug,
-      name: agent.name,
-      status: agent.status,
-      max_concurrent: agent.max_concurrent || 1,
-      primary_model: primary_model_label(agent),
-      source: source,
-      source_label: source_label(source),
-      workspace_managed?: source == :workspace,
-      persisted?: true,
-      agent: agent,
-      runtime_type: agent.runtime_type || "built_in",
-      runtime_status: runtime_status(agent),
-      running?: runtime_running?(agent)
-    }
-  end
-
-  defp build_configured_agent_directory_entry(configured_agent) do
-    attrs = normalize_map(configured_agent.attrs || %{})
-    model_config = normalize_map(Map.get(attrs, "model_config", %{}))
-
-    %{
-      slug: configured_agent.id,
-      name: configured_agent.name,
-      status: Map.get(attrs, "status", "active"),
-      max_concurrent: Map.get(attrs, "max_concurrent", 1),
-      primary_model: Map.get(model_config, "primary", "no primary model"),
-      source: :workspace,
-      source_label: source_label(:workspace),
-      workspace_managed?: true,
-      persisted?: false,
-      agent: nil,
-      runtime_type: "built_in",
-      runtime_status: :unknown,
-      running?: false
-    }
-  end
-
-  defp attach_runtime_status(%{agent: %Agent{runtime_type: "external"} = agent} = entry) do
-    runtime = Federation.get_runtime_for_agent(agent)
-    online? = runtime != nil && RuntimePresence.online?(runtime.runtime_id)
-
-    entry
-    |> Map.put(:runtime_status, if(online?, do: :running, else: :idle))
-    |> Map.put(:running?, online?)
-  end
-
-  defp attach_runtime_status(%{agent: %Agent{} = agent} = entry) do
-    entry
-    |> Map.put(:runtime_status, runtime_status(agent))
-    |> Map.put(:running?, runtime_running?(agent))
-  end
-
-  defp attach_runtime_status(entry), do: entry
-
-  defp source_label(:workspace), do: "mounted workspace"
-  defp source_label(:database), do: "control center"
-
-  defp runtime_running?(%Agent{} = agent), do: is_pid(AgentServer.whereis(agent.id))
-
-  defp runtime_status(%Agent{} = agent) do
-    case runtime_snapshot(agent) do
-      %{status: status} -> status
-      _ -> :unknown
-    end
-  end
 end
