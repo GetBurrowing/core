@@ -98,7 +98,12 @@ defmodule PlatformWeb.RuntimeChannel do
   end
 
   @impl true
-  def handle_in("tool_call", %{"call_id" => call_id, "tool" => tool, "args" => args}, socket) do
+  def handle_in(
+        "tool_call",
+        %{"call_id" => call_id, "tool" => tool, "args" => args},
+        socket
+      )
+      when is_map(args) do
     space_id = Map.get(args, "space_id")
     agent_participant_id = get_agent_participant_id(socket, space_id)
 
@@ -116,6 +121,25 @@ defmodule PlatformWeb.RuntimeChannel do
       {:error, error} ->
         push(socket, "tool_result", %{call_id: call_id, status: "error", error: error})
     end
+
+    {:noreply, socket}
+  end
+
+  def handle_in("tool_call", %{"call_id" => call_id, "tool" => tool, "args" => args}, socket) do
+    require Logger
+
+    Logger.warning(
+      "[RuntimeChannel] tool_call #{tool} received non-map args (#{inspect(args)}), " <>
+        "expected a map with tool parameters"
+    )
+
+    push(socket, "tool_result", %{
+      call_id: call_id,
+      status: "error",
+      error: %{
+        error: "Invalid args: expected a map with tool parameters, got #{inspect(args)}"
+      }
+    })
 
     {:noreply, socket}
   end
