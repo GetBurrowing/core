@@ -42,6 +42,12 @@ defmodule PlatformWeb.RuntimeChannel do
         {:noreply, socket}
 
       participant_id ->
+        # Stop typing indicator when reply arrives
+        Platform.Chat.PubSub.broadcast(
+          space_id,
+          {:agent_typing, %{participant_id: participant_id, typing: false}}
+        )
+
         Chat.post_message(%{
           space_id: space_id,
           participant_id: participant_id,
