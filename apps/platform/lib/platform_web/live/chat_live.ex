@@ -460,30 +460,24 @@ defmodule PlatformWeb.ChatLive do
 
   def handle_event("toggle_agent_silence", _params, socket) do
     space = socket.assigns.active_space
-    agent_presence = socket.assigns.agent_presence
 
-    case agent_presence do
-      %{agent: %{id: agent_id}} when not is_nil(agent_id) ->
-        participants = Chat.list_participants(space.id, participant_type: "agent")
+    # Find any agent participant in this space — works for both built-in and federated agents
+    agent_participant =
+      space.id
+      |> Chat.list_participants(participant_type: "agent")
+      |> List.first()
 
-        agent_participant =
-          Enum.find(participants, fn p -> p.participant_id == agent_id end)
-
-        if agent_participant do
-          if socket.assigns.agent_silenced do
-            Chat.unsilence_agent(space.id, agent_participant.id)
-            {:noreply, assign(socket, :agent_silenced, false)}
-          else
-            until = DateTime.add(DateTime.utc_now(), 1800, :second)
-            Chat.silence_agent(space.id, agent_participant.id, until)
-            {:noreply, assign(socket, :agent_silenced, true)}
-          end
-        else
-          {:noreply, socket}
-        end
-
-      _ ->
-        {:noreply, socket}
+    if agent_participant do
+      if socket.assigns.agent_silenced do
+        Chat.unsilence_agent(space.id, agent_participant.id)
+        {:noreply, assign(socket, :agent_silenced, false)}
+      else
+        until = DateTime.add(DateTime.utc_now(), 1800, :second)
+        Chat.silence_agent(space.id, agent_participant.id, until)
+        {:noreply, assign(socket, :agent_silenced, true)}
+      end
+    else
+      {:noreply, socket}
     end
   end
 
@@ -1004,6 +998,10 @@ defmodule PlatformWeb.ChatLive do
 
   def handle_info({:agent_silenced, _payload}, socket) do
     {:noreply, assign(socket, :agent_silenced, true)}
+  end
+
+  def handle_info({:agent_unsilenced, _payload}, socket) do
+    {:noreply, assign(socket, :agent_silenced, false)}
   end
 
   def handle_info(_msg, socket), do: {:noreply, socket}

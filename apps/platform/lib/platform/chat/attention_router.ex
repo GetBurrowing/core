@@ -75,12 +75,19 @@ defmodule Platform.Chat.AttentionRouter do
   # Sticky engagement timeout: 10 minutes
   @engagement_timeout_seconds 600
 
+  # Silence timeout for NLP-triggered silences (30 minutes, same as UI button)
+  @nlp_silence_timeout_seconds 1800
+
+  # Silence patterns require clear dismissal intent — avoid common words like
+  # "stop", "leave", "enough" that appear in normal conversation and cause
+  # accidental silencing.
   @silence_patterns [
-    ~r/\b(quiet|shut up|back off|stop|enough|be quiet|silence|hush|shush|go away|leave)\b/i,
+    ~r/\b(shut up|back off|be quiet|hush|shush|go away)\b/i,
     ~r/\b(only when i ask|only when mentioned|mentions only)\b/i,
     ~r/\bthat'?s? (all|enough|it)\b/i,
     ~r/\b(thanks?\s+(zip|that'?s?\s+all))\b/i,
-    ~r/\byou'?re? dismissed\b/i
+    ~r/\byou'?re? dismissed\b/i,
+    ~r/\bquiet\s+(down|please|now)\b/i
   ]
 
   # ── Public API ──────────────────────────────────────────────────────────────
@@ -264,7 +271,8 @@ defmodule Platform.Chat.AttentionRouter do
     # If the message matches a silence pattern, silence all agents and skip routing
     if silence_detected?(message.content) do
       Enum.each(agent_recipients, fn agent_p ->
-        Chat.silence_agent(space_id, agent_p.id)
+        until = DateTime.add(DateTime.utc_now(), @nlp_silence_timeout_seconds, :second)
+        Chat.silence_agent(space_id, agent_p.id, until)
 
         ChatPubSub.broadcast(
           space_id,
@@ -381,6 +389,16 @@ defmodule Platform.Chat.AttentionRouter do
       # If silenced: only respond to direct @mention (which also unsilences)
       silenced? and is_mentioned ->
         Chat.unsilence_agent(space.id, participant.id)
+
+        ChatPubSub.broadcast(
+          space.id,
+          {:agent_unsilenced,
+           %{
+             participant_id: participant.id,
+             space_id: space.id
+           }}
+        )
+
         :mention
 
       silenced? ->
