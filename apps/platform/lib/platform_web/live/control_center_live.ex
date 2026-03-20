@@ -24,6 +24,8 @@ defmodule PlatformWeb.ControlCenterLive do
 
   alias PlatformWeb.ControlCenter.AgentCard
   alias PlatformWeb.ControlCenter.Onboarding
+  alias PlatformWeb.ControlCenter.OnboardingEvents
+  alias PlatformWeb.ControlCenter.RuntimeEvents
   alias PlatformWeb.ControlCenter.RuntimePanel
 
   import PlatformWeb.ControlCenter.Helpers
@@ -38,105 +40,6 @@ defmodule PlatformWeb.ControlCenterLive do
     "MEMORY.md",
     "TOOLS.md",
     "HEARTBEAT.md"
-  ]
-
-  @role_templates [
-    %{
-      id: "designer",
-      name: "Designer",
-      icon: "hero-paint-brush",
-      description: "Visual design, UI/UX, branding",
-      default_name: "Designer",
-      system_prompt: "You are a skilled visual designer...",
-      model_tier: "mid",
-      suggested_model: "anthropic/claude-sonnet-4-6",
-      tool_profile: "minimal",
-      tools_allow: ["canvas", "image", "web_search"]
-    },
-    %{
-      id: "researcher",
-      name: "Researcher",
-      icon: "hero-magnifying-glass",
-      description: "Deep research, analysis, synthesis",
-      default_name: "Researcher",
-      system_prompt: "You are a thorough researcher...",
-      model_tier: "high",
-      suggested_model: "anthropic/claude-opus-4-6",
-      tool_profile: "minimal",
-      tools_allow: ["web_search", "web_fetch", "pdf", "group:fs"]
-    },
-    %{
-      id: "architect",
-      name: "Architect",
-      icon: "hero-cube-transparent",
-      description: "System design, ADRs, code review",
-      default_name: "Architect",
-      system_prompt: "You are a senior software architect...",
-      model_tier: "high",
-      suggested_model: "anthropic/claude-opus-4-6",
-      tool_profile: "full",
-      tools_allow: ["group:fs", "exec", "web_search"]
-    },
-    %{
-      id: "writer",
-      name: "Writer",
-      icon: "hero-pencil-square",
-      description: "Content, docs, copywriting",
-      default_name: "Writer",
-      system_prompt: "You are a skilled writer...",
-      model_tier: "mid",
-      suggested_model: "anthropic/claude-sonnet-4-6",
-      tool_profile: "minimal",
-      tools_allow: ["group:fs", "web_search"]
-    },
-    %{
-      id: "analyst",
-      name: "Analyst",
-      icon: "hero-chart-bar",
-      description: "Data analysis, reporting, dashboards",
-      default_name: "Analyst",
-      system_prompt: "You are a data analyst...",
-      model_tier: "mid",
-      suggested_model: "anthropic/claude-sonnet-4-6",
-      tool_profile: "minimal",
-      tools_allow: ["canvas", "web_fetch", "exec"]
-    },
-    %{
-      id: "devops",
-      name: "DevOps",
-      icon: "hero-server-stack",
-      description: "Infrastructure, CI/CD, monitoring",
-      default_name: "DevOps",
-      system_prompt: "You are a DevOps engineer...",
-      model_tier: "mid",
-      suggested_model: "anthropic/claude-sonnet-4-6",
-      tool_profile: "full",
-      tools_allow: ["exec", "group:fs", "web_search"]
-    },
-    %{
-      id: "pm",
-      name: "Project Manager",
-      icon: "hero-clipboard-document-list",
-      description: "Planning, tracking, coordination",
-      default_name: "PM",
-      system_prompt: "You are a project manager...",
-      model_tier: "mid",
-      suggested_model: "anthropic/claude-sonnet-4-6",
-      tool_profile: "minimal",
-      tools_allow: ["canvas", "web_search"]
-    },
-    %{
-      id: "sales",
-      name: "Sales",
-      icon: "hero-currency-dollar",
-      description: "Outreach, proposals, CRM",
-      default_name: "Sales",
-      system_prompt: "You are a sales professional...",
-      model_tier: "mid",
-      suggested_model: "anthropic/claude-sonnet-4-6",
-      tool_profile: "minimal",
-      tools_allow: ["web_search", "web_fetch", "canvas"]
-    }
   ]
 
   @impl true
@@ -339,318 +242,51 @@ defmodule PlatformWeb.ControlCenterLive do
     {:noreply, assign(socket, :show_create_agent, !socket.assigns.show_create_agent)}
   end
 
-  # ── Onboarding flow events ──────────────────────────────────────────
+  # ── Onboarding flow events (delegated) ──────────────────────────────
 
-  def handle_event("open_onboarding_chooser", _params, socket) do
-    {:noreply,
-     socket
-     |> assign(:show_onboarding_chooser, true)
-     |> assign(:onboarding_flow, nil)
-     |> assign(:selected_template, nil)
-     |> assign(:federate_result, nil)}
-  end
+  def handle_event("open_onboarding_chooser", params, socket),
+    do: OnboardingEvents.handle("open_onboarding_chooser", params, socket)
 
-  def handle_event("close_onboarding", _params, socket) do
-    {:noreply,
-     socket
-     |> assign(:show_onboarding_chooser, false)
-     |> assign(:onboarding_flow, nil)
-     |> assign(:selected_template, nil)
-     |> assign(:federate_result, nil)}
-  end
+  def handle_event("close_onboarding", params, socket),
+    do: OnboardingEvents.handle("close_onboarding", params, socket)
 
-  def handle_event("choose_onboarding", %{"flow" => flow}, socket) do
-    socket =
-      socket
-      |> assign(:show_onboarding_chooser, true)
-      |> case do
-        socket ->
-          case flow do
-            "import" ->
-              agents =
-                case WorkspaceBootstrap.list_configured_agents() do
-                  {:ok, list} -> list
-                  {:error, _} -> []
-                end
+  def handle_event("choose_onboarding", params, socket),
+    do: OnboardingEvents.handle("choose_onboarding", params, socket)
 
-              socket
-              |> assign(:onboarding_flow, :import)
-              |> assign(:import_agents, agents)
-              |> assign(:import_selected, MapSet.new())
+  def handle_event("select_template", params, socket),
+    do: OnboardingEvents.handle("select_template", params, socket)
 
-            "create" ->
-              socket
-              |> assign(:onboarding_flow, :create)
-              |> assign(:show_create_agent, true)
+  def handle_event("back_to_templates", params, socket),
+    do: OnboardingEvents.handle("back_to_templates", params, socket)
 
-            _ ->
-              assign(socket, :onboarding_flow, String.to_existing_atom(flow))
-          end
-      end
+  def handle_event("create_from_template", params, socket),
+    do: OnboardingEvents.handle("create_from_template", params, socket)
 
-    {:noreply, socket}
-  end
+  def handle_event("submit_federate", params, socket),
+    do: OnboardingEvents.handle("submit_federate", params, socket)
 
-  def handle_event("select_template", %{"template_id" => template_id}, socket) do
-    template = Enum.find(@role_templates, &(&1.id == template_id))
+  def handle_event("federate_done", params, socket),
+    do: OnboardingEvents.handle("federate_done", params, socket)
 
-    {:noreply,
-     socket
-     |> assign(:selected_template, template)
-     |> assign(
-       :template_form,
-       to_form(%{"name" => (template && template.default_name) || ""}, as: :template)
-     )}
-  end
+  def handle_event("toggle_import_agent", params, socket),
+    do: OnboardingEvents.handle("toggle_import_agent", params, socket)
 
-  def handle_event("back_to_templates", _params, socket) do
-    {:noreply, assign(socket, :selected_template, nil)}
-  end
+  def handle_event("submit_import", params, socket),
+    do: OnboardingEvents.handle("submit_import", params, socket)
 
-  def handle_event("create_from_template", %{"template" => %{"name" => name}}, socket) do
-    template = socket.assigns.selected_template
+  # ── Runtime management events (delegated) ──────────────────────────
 
-    if is_nil(template) do
-      {:noreply, put_flash(socket, :error, "No template selected.")}
-    else
-      name = String.trim(name)
-      slug = slugify(name)
+  def handle_event("suspend_federated_runtime", params, socket),
+    do: RuntimeEvents.handle("suspend_federated_runtime", params, socket)
 
-      attrs = %{
-        slug: slug,
-        name: name,
-        status: "active",
-        model_config: %{
-          "primary" => template.suggested_model,
-          "fallbacks" => []
-        },
-        tools_config: %{
-          "profile" => template.tool_profile,
-          "allow" => template.tools_allow
-        },
-        metadata: %{
-          "template_id" => template.id,
-          "system_prompt" => template.system_prompt
-        }
-      }
+  def handle_event("revoke_federated_runtime", params, socket),
+    do: RuntimeEvents.handle("revoke_federated_runtime", params, socket)
 
-      case %Agent{} |> Agent.changeset(attrs) |> Repo.insert() do
-        {:ok, agent} ->
-          {:noreply,
-           socket
-           |> put_flash(:info, "Created #{agent.name} from #{template.name} template.")
-           |> assign(:show_onboarding_chooser, false)
-           |> assign(:onboarding_flow, nil)
-           |> assign(:selected_template, nil)
-           |> push_patch(to: ~p"/control/#{agent.slug}")}
+  def handle_event("regenerate_federated_token", params, socket),
+    do: RuntimeEvents.handle("regenerate_federated_token", params, socket)
 
-        {:error, %Ecto.Changeset{} = changeset} ->
-          {:noreply,
-           socket
-           |> assign(:template_form, to_form(%{"name" => name}, as: :template))
-           |> put_flash(:error, changeset_error_summary(changeset))}
-      end
-    end
-  end
-
-  def handle_event("create_from_template", _params, socket), do: {:noreply, socket}
-
-  def handle_event("submit_federate", %{"federate" => params}, socket) do
-    runtime_id = String.trim(params["runtime_id"] || "")
-    display_name = String.trim(params["display_name"] || "")
-    agent_name = String.trim(params["agent_name"] || "")
-    owner_id = socket.assigns.current_user_id
-
-    cond do
-      runtime_id == "" ->
-        {:noreply, put_flash(socket, :error, "Runtime ID is required.")}
-
-      agent_name == "" ->
-        {:noreply, put_flash(socket, :error, "Agent name is required.")}
-
-      is_nil(owner_id) ->
-        {:noreply, put_flash(socket, :error, "You must be logged in.")}
-
-      true ->
-        runtime_attrs = %{
-          runtime_id: runtime_id,
-          display_name: if(display_name == "", do: nil, else: display_name),
-          transport: "websocket",
-          status: "pending"
-        }
-
-        agent_attrs = %{
-          slug: slugify(agent_name),
-          name: agent_name,
-          status: "active",
-          runtime_type: "external"
-        }
-
-        with {:ok, runtime} <- Federation.register_runtime(owner_id, runtime_attrs),
-             {:ok, agent} <- Federation.link_agent(runtime, agent_attrs),
-             {:ok, _runtime, raw_token} <- Federation.activate_runtime(runtime) do
-          ws_url = "wss://#{PlatformWeb.Endpoint.host()}/runtime/ws"
-
-          {:noreply,
-           socket
-           |> assign(:federate_result, %{
-             runtime_id: runtime_id,
-             token: raw_token,
-             ws_url: ws_url,
-             agent: agent
-           })
-           |> put_flash(:info, "Federated agent #{agent.name} created.")}
-        else
-          {:error, %Ecto.Changeset{} = changeset} ->
-            {:noreply, put_flash(socket, :error, changeset_error_summary(changeset))}
-
-          {:error, reason} ->
-            {:noreply, put_flash(socket, :error, "Federation failed: #{inspect(reason)}")}
-        end
-    end
-  end
-
-  def handle_event("submit_federate", _params, socket), do: {:noreply, socket}
-
-  def handle_event("federate_done", _params, socket) do
-    agent = get_in(socket.assigns, [:federate_result, :agent])
-
-    socket =
-      socket
-      |> assign(:show_onboarding_chooser, false)
-      |> assign(:onboarding_flow, nil)
-      |> assign(:federate_result, nil)
-
-    if agent do
-      {:noreply, push_patch(socket, to: ~p"/control/#{agent.slug}")}
-    else
-      {:noreply, push_patch(socket, to: ~p"/control")}
-    end
-  end
-
-  def handle_event("toggle_import_agent", %{"agent_id" => agent_id}, socket) do
-    selected = socket.assigns.import_selected
-
-    selected =
-      if MapSet.member?(selected, agent_id),
-        do: MapSet.delete(selected, agent_id),
-        else: MapSet.put(selected, agent_id)
-
-    {:noreply, assign(socket, :import_selected, selected)}
-  end
-
-  def handle_event("submit_import", _params, socket) do
-    selected = socket.assigns.import_selected
-    agents = socket.assigns.import_agents
-
-    to_import = Enum.filter(agents, &MapSet.member?(selected, &1.id))
-
-    if to_import == [] do
-      {:noreply, put_flash(socket, :error, "Select at least one agent to import.")}
-    else
-      results =
-        Enum.map(to_import, fn configured_agent ->
-          case WorkspaceBootstrap.ensure_agent(slug: configured_agent.id) do
-            {:ok, agent} -> {:ok, agent}
-            {:error, reason} -> {:error, configured_agent.id, reason}
-          end
-        end)
-
-      imported = Enum.count(results, &match?({:ok, _}, &1))
-      last_agent = results |> Enum.filter(&match?({:ok, _}, &1)) |> List.last()
-
-      socket =
-        socket
-        |> put_flash(:info, "Imported #{imported} agent(s).")
-        |> assign(:show_onboarding_chooser, false)
-        |> assign(:onboarding_flow, nil)
-
-      case last_agent do
-        {:ok, agent} -> {:noreply, push_patch(socket, to: ~p"/control/#{agent.slug}")}
-        _ -> {:noreply, push_patch(socket, to: ~p"/control")}
-      end
-    end
-  end
-
-  # ── Runtime management events for federated agents ──────────────────
-
-  def handle_event(
-        "suspend_federated_runtime",
-        _params,
-        %{assigns: %{selected_agent: %Agent{runtime_id: rid}}} = socket
-      )
-      when is_binary(rid) do
-    case Federation.get_runtime(rid) do
-      %{} = runtime ->
-        case Federation.suspend_runtime(runtime) do
-          {:ok, _} ->
-            {:noreply,
-             socket |> put_flash(:info, "Runtime suspended.") |> reload_selected_agent()}
-
-          {:error, _} ->
-            {:noreply, put_flash(socket, :error, "Could not suspend runtime.")}
-        end
-
-      nil ->
-        {:noreply, put_flash(socket, :error, "Runtime not found.")}
-    end
-  end
-
-  def handle_event("suspend_federated_runtime", _params, socket), do: {:noreply, socket}
-
-  def handle_event(
-        "revoke_federated_runtime",
-        _params,
-        %{assigns: %{selected_agent: %Agent{runtime_id: rid}}} = socket
-      )
-      when is_binary(rid) do
-    case Federation.get_runtime(rid) do
-      %{} = runtime ->
-        case Federation.revoke_runtime(runtime) do
-          {:ok, _} ->
-            {:noreply, socket |> put_flash(:info, "Runtime revoked.") |> reload_selected_agent()}
-
-          {:error, _} ->
-            {:noreply, put_flash(socket, :error, "Could not revoke runtime.")}
-        end
-
-      nil ->
-        {:noreply, put_flash(socket, :error, "Runtime not found.")}
-    end
-  end
-
-  def handle_event("revoke_federated_runtime", _params, socket), do: {:noreply, socket}
-
-  def handle_event(
-        "regenerate_federated_token",
-        _params,
-        %{assigns: %{selected_agent: %Agent{runtime_id: rid}}} = socket
-      )
-      when is_binary(rid) do
-    case Federation.get_runtime(rid) do
-      %{} = runtime ->
-        case Federation.generate_runtime_token(runtime) do
-          {:ok, _runtime, raw_token} ->
-            {:noreply,
-             socket
-             |> assign(:regenerated_token, raw_token)
-             |> put_flash(:info, "New token generated. Save it now.")
-             |> reload_selected_agent()}
-
-          {:error, _} ->
-            {:noreply, put_flash(socket, :error, "Could not regenerate token.")}
-        end
-
-      nil ->
-        {:noreply, put_flash(socket, :error, "Runtime not found.")}
-    end
-  end
-
-  def handle_event("regenerate_federated_token", _params, socket), do: {:noreply, socket}
-
-  def handle_event("dismiss_regenerated_token", _params, socket) do
-    {:noreply, assign(socket, :regenerated_token, nil)}
-  end
+  def handle_event("dismiss_regenerated_token", params, socket),
+    do: RuntimeEvents.handle("dismiss_regenerated_token", params, socket)
 
   def handle_event("request_delete_agent", %{"slug" => slug}, socket) when is_binary(slug) do
     case find_agent_directory_entry(socket.assigns.agents, slug) do
@@ -894,7 +530,7 @@ defmodule PlatformWeb.ControlCenterLive do
 
   @impl true
   def render(assigns) do
-    assigns = assign(assigns, :role_templates, @role_templates)
+    assigns = assign(assigns, :role_templates, OnboardingEvents.role_templates())
 
     ~H"""
     <div class="flex h-full min-h-full flex-col overflow-hidden bg-base-100">
@@ -1949,9 +1585,9 @@ defmodule PlatformWeb.ControlCenterLive do
     |> assign(:federation_spaces, [])
   end
 
-  defp reload_selected_agent(socket, opts \\ [])
+  def reload_selected_agent(socket, opts \\ [])
 
-  defp reload_selected_agent(%{assigns: %{selected_agent: %Agent{} = agent}} = socket, opts) do
+  def reload_selected_agent(%{assigns: %{selected_agent: %Agent{} = agent}} = socket, opts) do
     refreshed_agent = Repo.get!(Agent, agent.id)
     agents = list_agents()
 
@@ -1965,7 +1601,7 @@ defmodule PlatformWeb.ControlCenterLive do
     |> assign_agent_panel(refreshed_agent, opts)
   end
 
-  defp reload_selected_agent(socket, _opts), do: socket
+  def reload_selected_agent(socket, _opts), do: socket
 
   defp list_agents do
     persisted_agents = list_persisted_agents()
