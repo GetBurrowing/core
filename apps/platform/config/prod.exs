@@ -13,7 +13,10 @@ config :platform, PlatformWeb.Endpoint, cache_static_manifest: "priv/static/cach
 config :platform, PlatformWeb.Endpoint,
   force_ssl: [
     rewrite_on: [:x_forwarded_proto],
-    exclude: ["/health", "/runtime/ws"]
+    exclude: [
+      paths: ["/health", "/runtime/ws/websocket"],
+      hosts: ["localhost", "127.0.0.1"]
+    ]
   ]
 
 # Do not print debug messages in production
