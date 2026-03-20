@@ -82,4 +82,75 @@ defmodule PlatformWeb.ControlCenter.Helpers do
 
   def short_id(id) when is_binary(id), do: String.slice(id, 0, 8)
   def short_id(_id), do: "—"
+
+  def normalize_map(%{} = map) do
+    Map.new(map, fn {key, value} -> {to_string(key), normalize_value(value)} end)
+  end
+
+  def normalize_map(_value), do: %{}
+
+  def normalize_value(%{} = map), do: normalize_map(map)
+  def normalize_value(list) when is_list(list), do: Enum.map(list, &normalize_value/1)
+  def normalize_value(value), do: value
+
+  def blank_to_nil(nil), do: nil
+
+  def blank_to_nil(value) when is_binary(value) do
+    case String.trim(value) do
+      "" -> nil
+      trimmed -> trimmed
+    end
+  end
+
+  def blank_to_nil(value), do: value
+
+  def blank_fallback(value, fallback) do
+    case blank_to_nil(value) do
+      nil -> fallback
+      kept -> kept
+    end
+  end
+
+  def primary_model_label(%{model_config: model_config}) do
+    case normalize_map(model_config || %{}) do
+      %{"primary" => value} when is_binary(value) and value != "" -> value
+      _ -> "no primary model"
+    end
+  end
+
+  def workspace_hint(%{version: version}, _file_key),
+    do: "Editing existing file · version #{version}"
+
+  def workspace_hint(nil, file_key) do
+    if is_binary(file_key) and String.trim(file_key) != "" do
+      "Creating a new workspace file"
+    else
+      "Choose a file key to create a new workspace file"
+    end
+  end
+
+  def slugify(value) when is_binary(value) do
+    value
+    |> String.downcase()
+    |> String.trim()
+    |> String.replace(~r/[^a-z0-9]+/u, "-")
+    |> String.trim("-")
+  end
+
+  def slugify(value), do: value |> to_string() |> slugify()
+
+  def changeset_error_summary(changeset) do
+    changeset
+    |> Ecto.Changeset.traverse_errors(fn {msg, opts} ->
+      replacements = Map.new(opts, fn {key, value} -> {to_string(key), value} end)
+
+      Regex.replace(~r/%{(\w+)}/, msg, fn _, key ->
+        replacements |> Map.get(key, key) |> to_string()
+      end)
+    end)
+    |> Enum.flat_map(fn {field, messages} -> Enum.map(messages, &"#{field} #{&1}") end)
+    |> Enum.join(", ")
+  rescue
+    _ -> "Please check the form and try again."
+  end
 end
