@@ -1364,7 +1364,10 @@ defmodule PlatformWeb.ControlCenterLive do
                 </div>
 
                 <div class="mt-2 flex flex-wrap gap-2 text-[11px] text-base-content/55">
-                  <span class="rounded-full bg-base-200 px-2 py-0.5">
+                  <span
+                    :if={agent.runtime_type != "external"}
+                    class="rounded-full bg-base-200 px-2 py-0.5"
+                  >
                     {agent.primary_model}
                   </span>
                   <span class={source_badge_class(agent.source)}>
