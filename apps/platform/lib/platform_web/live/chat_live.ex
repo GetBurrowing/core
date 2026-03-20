@@ -1218,7 +1218,7 @@ defmodule PlatformWeb.ChatLive do
                     placeholder="Search messages…"
                     autocomplete="off"
                     phx-debounce="250"
-                    class="input input-bordered input-sm w-64"
+                    class="input input-bordered input-sm w-64 text-base md:text-sm"
                   />
 
                   <button
@@ -1475,7 +1475,7 @@ defmodule PlatformWeb.ChatLive do
 
           <div
             id="message-list"
-            class="flex-1 overflow-y-auto px-5 py-4 flex flex-col justify-end space-y-1"
+            class="flex-1 overflow-y-auto overflow-x-hidden px-5 py-4 flex flex-col justify-end space-y-1"
             phx-update="stream"
             phx-hook="ScrollToBottom"
           >
@@ -1574,7 +1574,7 @@ defmodule PlatformWeb.ChatLive do
 
                 <p
                   :if={msg.content_type != "canvas" and present?(msg.content)}
-                  class="text-sm leading-6 text-base-content"
+                  class="text-sm leading-6 text-base-content break-words"
                 >
                   {format_message_content(msg.content)}
                 </p>
@@ -1655,7 +1655,7 @@ defmodule PlatformWeb.ChatLive do
             <span>Zip is thinking…</span>
           </div>
 
-          <div class="flex-shrink-0 border-t border-base-300 px-5 py-3">
+          <div class="flex-shrink-0 border-t border-base-300 px-5 py-3 safe-area-bottom">
             <.form
               :if={@active_space}
               for={@compose_form}
@@ -1735,7 +1735,7 @@ defmodule PlatformWeb.ChatLive do
                   value={Phoenix.HTML.Form.normalize_value("text", @compose_form[:text].value)}
                   placeholder={"Message ##{(@active_space && @active_space.name) || ""}"}
                   autocomplete="off"
-                  class="input input-bordered min-w-0 flex-1 rounded-xl text-sm"
+                  class="input input-bordered min-w-0 flex-1 rounded-xl text-base md:text-sm"
                   phx-hook="ComposeInput"
                 />
 
@@ -1836,7 +1836,7 @@ defmodule PlatformWeb.ChatLive do
                 />
               </div>
 
-              <p :if={present?(msg.content)} class="text-sm leading-6 text-base-content">
+              <p :if={present?(msg.content)} class="text-sm leading-6 text-base-content break-words">
                 {msg.content}
               </p>
 
@@ -1901,7 +1901,7 @@ defmodule PlatformWeb.ChatLive do
                     rows="2"
                     placeholder="Reply in thread…"
                     autocomplete="off"
-                    class="textarea textarea-bordered w-full resize-none rounded-xl pr-10 text-sm leading-relaxed"
+                    class="textarea textarea-bordered w-full resize-none rounded-xl pr-10 text-base md:text-sm leading-relaxed"
                   >{Phoenix.HTML.Form.normalize_value("textarea", @thread_compose_form[:text].value)}</textarea>
                   <button
                     type="submit"

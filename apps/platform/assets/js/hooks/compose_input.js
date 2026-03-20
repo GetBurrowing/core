@@ -3,6 +3,13 @@ const ComposeInput = {
   mounted() {
     this._lastMentionQuery = null;
 
+    // Reset viewport after iOS keyboard dismisses
+    this.el.addEventListener("blur", () => {
+      setTimeout(() => {
+        window.scrollTo({ top: 0, behavior: "instant" });
+      }, 100);
+    });
+
     this.el.addEventListener("keydown", (e) => {
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
