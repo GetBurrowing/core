@@ -15,12 +15,15 @@ defmodule PlatformWeb.ControlCenterLive do
   alias Platform.Repo
 
   alias PlatformWeb.ControlCenter.AgentCard
+  alias PlatformWeb.ControlCenter.AgentCrudEvents
   alias PlatformWeb.ControlCenter.AgentData
   alias PlatformWeb.ControlCenter.AgentDetail
+  alias PlatformWeb.ControlCenter.MemoryEvents
   alias PlatformWeb.ControlCenter.Onboarding
   alias PlatformWeb.ControlCenter.OnboardingEvents
   alias PlatformWeb.ControlCenter.RuntimeEvents
   alias PlatformWeb.ControlCenter.RuntimePanel
+  alias PlatformWeb.ControlCenter.WorkspaceEvents
 
   import PlatformWeb.ControlCenter.Helpers
 
@@ -210,284 +213,41 @@ defmodule PlatformWeb.ControlCenterLive do
 
   def handle_event("save_config", _params, socket), do: {:noreply, socket}
 
-  # ── Agent CRUD ────────────────────────────────────────────────────
+  # ── Agent CRUD events (delegated) ────────────────────────────────
 
-  def handle_event("create_agent", %{"create_agent" => params}, socket) do
-    attrs = AgentData.create_agent_attrs_from_params(params)
+  def handle_event("create_agent", params, socket),
+    do: AgentCrudEvents.handle("create_agent", params, socket)
 
-    case %Agent{} |> Agent.changeset(attrs) |> Repo.insert() do
-      {:ok, agent} ->
-        {:noreply,
-         socket
-         |> put_flash(:info, "Created #{agent.name}.")
-         |> assign(:show_create_agent, false)
-         |> assign(
-           :create_agent_form,
-           to_form(AgentData.default_create_agent_params(), as: :create_agent)
-         )
-         |> push_patch(to: ~p"/control/#{agent.slug}")}
+  def handle_event("toggle_create_agent", params, socket),
+    do: AgentCrudEvents.handle("toggle_create_agent", params, socket)
 
-      {:error, %Ecto.Changeset{} = changeset} ->
-        {:noreply,
-         socket
-         |> assign(:create_agent_form, AgentData.build_create_agent_form(params))
-         |> put_flash(:error, changeset_error_summary(changeset))}
-    end
-  end
+  def handle_event("request_delete_agent", params, socket),
+    do: AgentCrudEvents.handle("request_delete_agent", params, socket)
 
-  def handle_event("create_agent", _params, socket), do: {:noreply, socket}
+  def handle_event("cancel_delete_agent", params, socket),
+    do: AgentCrudEvents.handle("cancel_delete_agent", params, socket)
 
-  def handle_event("toggle_create_agent", _params, socket) do
-    {:noreply, assign(socket, :show_create_agent, !socket.assigns.show_create_agent)}
-  end
+  def handle_event("delete_agent", params, socket),
+    do: AgentCrudEvents.handle("delete_agent", params, socket)
 
-  def handle_event("request_delete_agent", %{"slug" => slug}, socket) when is_binary(slug) do
-    case AgentData.find_agent_directory_entry(socket.assigns.agents, slug) do
-      %{agent: %Agent{}, workspace_managed?: false} ->
-        {:noreply, assign(socket, :pending_delete_slug, slug)}
+  # ── Workspace events (delegated) ─────────────────────────────────
 
-      %{workspace_managed?: true} ->
-        {:noreply,
-         put_flash(
-           socket,
-           :error,
-           "This agent is managed by the mounted workspace config. Remove it there to delete it permanently."
-         )}
+  def handle_event("select_workspace_file", params, socket),
+    do: WorkspaceEvents.handle("select_workspace_file", params, socket)
 
-      _ ->
-        {:noreply, put_flash(socket, :error, "Agent not found.")}
-    end
-  end
+  def handle_event("new_workspace_file", params, socket),
+    do: WorkspaceEvents.handle("new_workspace_file", params, socket)
 
-  def handle_event(
-        "request_delete_agent",
-        _params,
-        %{assigns: %{selected_agent: %Agent{} = agent, selected_agent_directory_entry: entry}} =
-          socket
-      ) do
-    if entry && entry.workspace_managed? do
-      {:noreply,
-       put_flash(
-         socket,
-         :error,
-         "This agent is managed by the mounted workspace config. Remove it there to delete it permanently."
-       )}
-    else
-      {:noreply, assign(socket, :pending_delete_slug, agent.slug)}
-    end
-  end
+  def handle_event("save_workspace_file", params, socket),
+    do: WorkspaceEvents.handle("save_workspace_file", params, socket)
 
-  def handle_event("request_delete_agent", _params, socket), do: {:noreply, socket}
+  # ── Memory events (delegated) ────────────────────────────────────
 
-  def handle_event("cancel_delete_agent", _params, socket) do
-    {:noreply, assign(socket, :pending_delete_slug, nil)}
-  end
+  def handle_event("filter_memories", params, socket),
+    do: MemoryEvents.handle("filter_memories", params, socket)
 
-  def handle_event("delete_agent", %{"slug" => slug}, socket) when is_binary(slug) do
-    case {socket.assigns.pending_delete_slug,
-          AgentData.find_agent_directory_entry(socket.assigns.agents, slug)} do
-      {pending_slug, _entry} when pending_slug != slug ->
-        {:noreply, put_flash(socket, :error, "Confirm the delete action first.")}
-
-      {_pending_slug, %{agent: %Agent{} = agent, workspace_managed?: false}} ->
-        handle_delete_agent(socket, agent)
-
-      {_pending_slug, %{workspace_managed?: true}} ->
-        {:noreply,
-         put_flash(
-           socket,
-           :error,
-           "This agent is managed by the mounted workspace config. Remove it there to delete it permanently."
-         )}
-
-      _ ->
-        {:noreply, put_flash(socket, :error, "Agent not found.")}
-    end
-  end
-
-  def handle_event(
-        "delete_agent",
-        _params,
-        %{assigns: %{selected_agent: %Agent{} = agent, selected_agent_directory_entry: entry}} =
-          socket
-      ) do
-    cond do
-      socket.assigns.pending_delete_slug != agent.slug ->
-        {:noreply, put_flash(socket, :error, "Confirm the delete action first.")}
-
-      entry && entry.workspace_managed? ->
-        {:noreply,
-         put_flash(
-           socket,
-           :error,
-           "This agent is managed by the mounted workspace config. Remove it there to delete it permanently."
-         )}
-
-      true ->
-        handle_delete_agent(socket, agent)
-    end
-  end
-
-  def handle_event("delete_agent", _params, socket), do: {:noreply, socket}
-
-  # ── Workspace events ──────────────────────────────────────────────
-
-  def handle_event("select_workspace_file", %{"file_key" => file_key}, socket) do
-    {:noreply,
-     reload_selected_agent(socket,
-       selected_file_key: file_key,
-       memory_filters: socket.assigns.memory_filters
-     )}
-  end
-
-  def handle_event(
-        "new_workspace_file",
-        _params,
-        %{assigns: %{selected_agent: %Agent{} = agent}} = socket
-      ) do
-    workspace_files = MemoryContext.list_workspace_files(agent.id)
-
-    {:noreply,
-     socket
-     |> assign(:selected_workspace_file, nil)
-     |> assign(:selected_file_key, nil)
-     |> assign(:workspace_files, workspace_files)
-     |> assign(
-       :workspace_form,
-       AgentData.build_workspace_form(workspace_files, nil, %{
-         "file_key" => AgentData.next_workspace_file_key(workspace_files)
-       })
-     )}
-  end
-
-  def handle_event("new_workspace_file", _params, socket), do: {:noreply, socket}
-
-  def handle_event(
-        "save_workspace_file",
-        %{"workspace_file" => params},
-        %{assigns: %{selected_agent: %Agent{} = agent}} = socket
-      ) do
-    file_key =
-      params["file_key"] ||
-        (socket.assigns.selected_workspace_file && socket.assigns.selected_workspace_file.file_key) ||
-        ""
-
-    content = params["content"] || ""
-    selected_workspace_file = socket.assigns.selected_workspace_file
-
-    opts =
-      if selected_workspace_file && selected_workspace_file.file_key == file_key do
-        [expected_version: selected_workspace_file.version]
-      else
-        []
-      end
-
-    cond do
-      String.trim(file_key) == "" ->
-        {:noreply,
-         socket
-         |> assign(
-           :workspace_form,
-           AgentData.build_workspace_form(
-             socket.assigns.workspace_files,
-             selected_workspace_file,
-             params
-           )
-         )
-         |> put_flash(:error, "Choose a file key before saving.")}
-
-      true ->
-        case MemoryContext.upsert_workspace_file(agent.id, String.trim(file_key), content, opts) do
-          {:ok, workspace_file} ->
-            refresh_runtime_if_running(agent)
-
-            {:noreply,
-             socket
-             |> put_flash(:info, "Saved #{workspace_file.file_key}.")
-             |> reload_selected_agent(
-               selected_file_key: workspace_file.file_key,
-               memory_filters: socket.assigns.memory_filters
-             )}
-
-          {:error, :stale_workspace_file} ->
-            {:noreply,
-             socket
-             |> put_flash(:error, "That file changed underneath you. Refresh and try again.")
-             |> reload_selected_agent(
-               selected_file_key: socket.assigns.selected_file_key,
-               memory_filters: socket.assigns.memory_filters
-             )}
-
-          {:error, %Ecto.Changeset{} = changeset} ->
-            {:noreply,
-             socket
-             |> assign(
-               :workspace_form,
-               AgentData.build_workspace_form(
-                 socket.assigns.workspace_files,
-                 selected_workspace_file,
-                 params
-               )
-             )
-             |> put_flash(:error, changeset_error_summary(changeset))}
-        end
-    end
-  end
-
-  def handle_event("save_workspace_file", _params, socket), do: {:noreply, socket}
-
-  # ── Memory events ─────────────────────────────────────────────────
-
-  def handle_event("filter_memories", %{"memory_filters" => params}, socket) do
-    filters = AgentData.normalize_memory_filters(params)
-
-    {:noreply,
-     reload_selected_agent(socket,
-       selected_file_key: socket.assigns.selected_file_key,
-       memory_filters: filters
-     )}
-  end
-
-  def handle_event(
-        "append_memory",
-        %{"memory_entry" => params},
-        %{assigns: %{selected_agent: %Agent{} = agent}} = socket
-      ) do
-    memory_type = AgentData.normalize_memory_type(params["memory_type"])
-    content = String.trim(params["content"] || "")
-
-    cond do
-      content == "" ->
-        {:noreply,
-         socket
-         |> assign(:memory_form, AgentData.build_memory_form(params))
-         |> put_flash(:error, "Memory content cannot be blank.")}
-
-      true ->
-        case MemoryContext.append_memory(agent.id, memory_type, content,
-               date: AgentData.parse_memory_date(memory_type, params["date"]),
-               metadata: %{"source" => "control_center"}
-             ) do
-          {:ok, _memory} ->
-            {:noreply,
-             socket
-             |> put_flash(:info, "Added #{humanize_memory_type(memory_type)} memory.")
-             |> assign(:memory_form, AgentData.build_memory_form())
-             |> reload_selected_agent(
-               selected_file_key: socket.assigns.selected_file_key,
-               memory_filters: socket.assigns.memory_filters
-             )}
-
-          {:error, %Ecto.Changeset{} = changeset} ->
-            {:noreply,
-             socket
-             |> assign(:memory_form, AgentData.build_memory_form(params))
-             |> put_flash(:error, changeset_error_summary(changeset))}
-        end
-    end
-  end
-
-  def handle_event("append_memory", _params, socket), do: {:noreply, socket}
+  def handle_event("append_memory", params, socket),
+    do: MemoryEvents.handle("append_memory", params, socket)
 
   # ── Onboarding flow events (delegated) ────────────────────────────
 
@@ -905,24 +665,6 @@ defmodule PlatformWeb.ControlCenterLive do
   def reload_selected_agent(socket, _opts), do: socket
 
   # ── Private: small helpers ────────────────────────────────────────
-
-  defp handle_delete_agent(socket, %Agent{} = agent) do
-    case AgentData.delete_agent(agent) do
-      :ok ->
-        socket =
-          socket
-          |> put_flash(:info, "Deleted #{agent.name}.")
-          |> assign(:agents, AgentData.list_agents())
-          |> assign(:pending_delete_slug, nil)
-          |> assign(:selected_agent, nil)
-          |> assign(:selected_agent_directory_entry, nil)
-
-        {:noreply, push_patch(socket, to: ~p"/control")}
-
-      {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Could not delete agent: #{inspect(reason)}")}
-    end
-  end
 
   defp pending_delete_slug(socket, selected_slug) do
     case socket.assigns[:pending_delete_slug] do
