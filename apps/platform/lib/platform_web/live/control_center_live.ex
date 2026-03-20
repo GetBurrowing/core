@@ -22,6 +22,12 @@ defmodule PlatformWeb.ControlCenterLive do
   alias Platform.Federation.RuntimePresence
   alias Platform.Repo
 
+  alias PlatformWeb.ControlCenter.AgentCard
+  alias PlatformWeb.ControlCenter.Onboarding
+  alias PlatformWeb.ControlCenter.RuntimePanel
+
+  import PlatformWeb.ControlCenter.Helpers
+
   @session_limit 8
   @memory_limit 12
   @workspace_defaults [
@@ -892,413 +898,18 @@ defmodule PlatformWeb.ControlCenterLive do
 
     ~H"""
     <div class="flex h-full min-h-full flex-col overflow-hidden bg-base-100">
-      <%!-- ── Onboarding overlay ─────────────────────────────────────── --%>
-      <div
-        :if={@show_onboarding_chooser}
-        class="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-base-300/80 backdrop-blur-sm"
-      >
-        <div class="w-full max-w-2xl px-4 py-8 sm:py-16">
-          <div class="rounded-3xl border border-base-300 bg-base-100 p-6 shadow-xl sm:p-8">
-            <div class="flex items-center justify-between">
-              <h2 class="text-xl font-semibold text-base-content">
-                {cond do
-                  @federate_result -> "Connection Details"
-                  @selected_template -> @selected_template.name <> " Template"
-                  @onboarding_flow == :template -> "Choose a Template"
-                  @onboarding_flow == :federate -> "Federate an Agent"
-                  @onboarding_flow == :import -> "Import from Workspace"
-                  @onboarding_flow == :create -> "Create Custom Agent"
-                  true -> "Add Agent"
-                end}
-              </h2>
-              <button
-                type="button"
-                phx-click="close_onboarding"
-                class="btn btn-ghost btn-sm btn-circle"
-              >
-                <span class="hero-x-mark h-5 w-5" />
-              </button>
-            </div>
-
-            <%!-- ── Chooser cards ─────────────────────────────────── --%>
-            <div :if={is_nil(@onboarding_flow)} class="mt-6 grid gap-4 sm:grid-cols-2">
-              <button
-                type="button"
-                phx-click="choose_onboarding"
-                phx-value-flow="template"
-                class="group flex flex-col items-center gap-3 rounded-2xl border border-base-300 bg-base-100 px-4 py-6 text-center transition hover:border-primary/40 hover:bg-primary/5"
-              >
-                <span class="hero-briefcase h-8 w-8 text-primary" />
-                <span class="text-sm font-semibold text-base-content">From a Template</span>
-                <span class="text-xs text-base-content/55">
-                  Designer, Researcher, Architect, and more
-                </span>
-              </button>
-
-              <button
-                type="button"
-                phx-click="choose_onboarding"
-                phx-value-flow="federate"
-                class="group flex flex-col items-center gap-3 rounded-2xl border border-base-300 bg-base-100 px-4 py-6 text-center transition hover:border-primary/40 hover:bg-primary/5"
-              >
-                <span class="hero-globe-alt h-8 w-8 text-primary" />
-                <span class="text-sm font-semibold text-base-content">Federate</span>
-                <span class="text-xs text-base-content/55">Connect an agent from OpenClaw</span>
-              </button>
-
-              <button
-                type="button"
-                phx-click="choose_onboarding"
-                phx-value-flow="import"
-                class="group flex flex-col items-center gap-3 rounded-2xl border border-base-300 bg-base-100 px-4 py-6 text-center transition hover:border-primary/40 hover:bg-primary/5"
-              >
-                <span class="hero-arrow-down-tray h-8 w-8 text-primary" />
-                <span class="text-sm font-semibold text-base-content">Import</span>
-                <span class="text-xs text-base-content/55">From an OpenClaw workspace</span>
-              </button>
-
-              <button
-                type="button"
-                phx-click="choose_onboarding"
-                phx-value-flow="create"
-                class="group flex flex-col items-center gap-3 rounded-2xl border border-base-300 bg-base-100 px-4 py-6 text-center transition hover:border-primary/40 hover:bg-primary/5"
-              >
-                <span class="hero-wrench-screwdriver h-8 w-8 text-primary" />
-                <span class="text-sm font-semibold text-base-content">Create Custom</span>
-                <span class="text-xs text-base-content/55">Full manual setup</span>
-              </button>
-            </div>
-
-            <%!-- ── Template flow ─────────────────────────────────── --%>
-            <div :if={@onboarding_flow == :template && is_nil(@selected_template)} class="mt-6">
-              <div class="grid grid-cols-2 gap-3 sm:grid-cols-4">
-                <button
-                  :for={tmpl <- @role_templates}
-                  type="button"
-                  phx-click="select_template"
-                  phx-value-template_id={tmpl.id}
-                  class="flex flex-col items-center gap-2 rounded-2xl border border-base-300 bg-base-100 px-3 py-4 text-center transition hover:border-primary/40 hover:bg-primary/5"
-                >
-                  <span class={"#{tmpl.icon} h-6 w-6 text-primary"} />
-                  <span class="text-sm font-semibold text-base-content">{tmpl.name}</span>
-                  <span class="text-[11px] text-base-content/55">{tmpl.description}</span>
-                </button>
-              </div>
-            </div>
-
-            <div :if={@onboarding_flow == :template && @selected_template} class="mt-6">
-              <button type="button" phx-click="back_to_templates" class="btn btn-ghost btn-sm mb-4">
-                <span class="hero-arrow-left h-4 w-4" /> Back
-              </button>
-              <.form
-                for={@template_form}
-                id="template-create-form"
-                phx-submit="create_from_template"
-                class="space-y-4"
-              >
-                <div class="rounded-2xl border border-base-300 bg-base-200/40 px-4 py-3">
-                  <div class="flex items-center gap-3">
-                    <span class={"#{@selected_template.icon} h-6 w-6 text-primary"} />
-                    <div>
-                      <p class="text-sm font-semibold">{@selected_template.name}</p>
-                      <p class="text-xs text-base-content/55">{@selected_template.description}</p>
-                    </div>
-                  </div>
-                  <p class="mt-2 text-xs text-base-content/50">
-                    Model: {@selected_template.suggested_model} · Tools: {Enum.join(
-                      @selected_template.tools_allow,
-                      ", "
-                    )}
-                  </p>
-                </div>
-                <label class="form-control">
-                  <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
-                    Agent Name
-                  </span>
-                  <input
-                    type="text"
-                    name="template[name]"
-                    value={@template_form[:name].value || ""}
-                    class="input input-bordered w-full"
-                    placeholder="e.g. Designer"
-                    autofocus
-                  />
-                </label>
-                <button type="submit" class="btn btn-primary w-full">Create</button>
-              </.form>
-            </div>
-
-            <%!-- ── Federate flow ─────────────────────────────────── --%>
-            <div :if={@onboarding_flow == :federate && is_nil(@federate_result)} class="mt-6">
-              <.form
-                for={@federate_form}
-                id="federate-form"
-                phx-submit="submit_federate"
-                class="space-y-4"
-              >
-                <label class="form-control">
-                  <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
-                    Runtime ID
-                  </span>
-                  <input
-                    type="text"
-                    name="federate[runtime_id]"
-                    value={@federate_form[:runtime_id].value || ""}
-                    class="input input-bordered w-full"
-                    placeholder="e.g. rowan-home-openclaw"
-                    autofocus
-                  />
-                </label>
-                <label class="form-control">
-                  <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
-                    Display Name (optional)
-                  </span>
-                  <input
-                    type="text"
-                    name="federate[display_name]"
-                    value={@federate_form[:display_name].value || ""}
-                    class="input input-bordered w-full"
-                    placeholder="Rowan's OpenClaw"
-                  />
-                </label>
-                <label class="form-control">
-                  <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
-                    Agent Name
-                  </span>
-                  <input
-                    type="text"
-                    name="federate[agent_name]"
-                    value={@federate_form[:agent_name].value || ""}
-                    class="input input-bordered w-full"
-                    placeholder="Zip"
-                  />
-                </label>
-                <button type="submit" class="btn btn-primary w-full">Federate Agent</button>
-              </.form>
-            </div>
-
-            <%!-- ── Federate result (token display) ───────────────── --%>
-            <div :if={@federate_result} class="mt-6 space-y-4">
-              <div class="rounded-2xl border border-warning/40 bg-warning/10 p-4">
-                <p class="text-sm font-semibold text-warning-content">
-                  <span class="hero-exclamation-triangle mr-1 inline-block h-4 w-4 align-text-bottom" />
-                  Save this token now. It cannot be retrieved later.
-                </p>
-              </div>
-
-              <div class="space-y-3">
-                <div>
-                  <p class="text-xs font-semibold uppercase tracking-widest text-base-content/50">
-                    Runtime ID
-                  </p>
-                  <div class="mt-1 flex items-center gap-2">
-                    <code class="flex-1 rounded-lg bg-base-200 px-3 py-2 font-mono text-sm">
-                      {@federate_result.runtime_id}
-                    </code>
-                    <button
-                      type="button"
-                      id="copy-runtime-id"
-                      phx-hook="CopyToClipboard"
-                      data-clipboard-text={@federate_result.runtime_id}
-                      class="btn btn-ghost btn-sm"
-                    >
-                      Copy
-                    </button>
-                  </div>
-                </div>
-
-                <div>
-                  <p class="text-xs font-semibold uppercase tracking-widest text-base-content/50">
-                    Auth Token
-                  </p>
-                  <div class="mt-1 flex items-center gap-2">
-                    <code class="flex-1 break-all rounded-lg bg-warning/10 px-3 py-2 font-mono text-xs">
-                      {@federate_result.token}
-                    </code>
-                    <button
-                      type="button"
-                      id="copy-auth-token"
-                      phx-hook="CopyToClipboard"
-                      data-clipboard-text={@federate_result.token}
-                      class="btn btn-ghost btn-sm"
-                    >
-                      Copy
-                    </button>
-                  </div>
-                </div>
-
-                <div>
-                  <p class="text-xs font-semibold uppercase tracking-widest text-base-content/50">
-                    WebSocket URL
-                  </p>
-                  <div class="mt-1 flex items-center gap-2">
-                    <code class="flex-1 rounded-lg bg-base-200 px-3 py-2 font-mono text-sm">
-                      {@federate_result.ws_url}
-                    </code>
-                    <button
-                      type="button"
-                      id="copy-ws-url"
-                      phx-hook="CopyToClipboard"
-                      data-clipboard-text={@federate_result.ws_url}
-                      class="btn btn-ghost btn-sm"
-                    >
-                      Copy
-                    </button>
-                  </div>
-                </div>
-
-                <div>
-                  <p class="text-xs font-semibold uppercase tracking-widest text-base-content/50">
-                    openclaw.json snippet
-                  </p>
-                  <pre class="mt-1 overflow-x-auto rounded-lg bg-base-200 p-3 font-mono text-xs leading-5"><code>{federation_config_snippet(@federate_result.ws_url, @federate_result.runtime_id)}</code></pre>
-                </div>
-              </div>
-
-              <button type="button" phx-click="federate_done" class="btn btn-primary w-full">
-                Done
-              </button>
-            </div>
-
-            <%!-- ── Import flow ───────────────────────────────────── --%>
-            <div :if={@onboarding_flow == :import} class="mt-6">
-              <div
-                :if={@import_agents == []}
-                class="rounded-2xl border border-dashed border-base-300 px-4 py-6 text-center text-sm text-base-content/55"
-              >
-                No workspace agents found. Mount an OpenClaw workspace with an
-                <code>openclaw.json</code>
-                to import agents.
-              </div>
-              <div :if={@import_agents != []} class="space-y-4">
-                <div class="space-y-2">
-                  <label
-                    :for={agent <- @import_agents}
-                    class={[
-                      "flex cursor-pointer items-center gap-3 rounded-2xl border px-4 py-3 transition",
-                      MapSet.member?(@import_selected, agent.id) && "border-primary bg-primary/5",
-                      !MapSet.member?(@import_selected, agent.id) &&
-                        "border-base-300 hover:border-primary/30"
-                    ]}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={MapSet.member?(@import_selected, agent.id)}
-                      phx-click="toggle_import_agent"
-                      phx-value-agent_id={agent.id}
-                      class="checkbox checkbox-primary checkbox-sm"
-                    />
-                    <div>
-                      <p class="text-sm font-semibold text-base-content">{agent.name}</p>
-                      <p class="text-xs text-base-content/50">{agent.id}</p>
-                    </div>
-                  </label>
-                </div>
-                <button
-                  type="button"
-                  phx-click="submit_import"
-                  class="btn btn-primary w-full"
-                  disabled={MapSet.size(@import_selected) == 0}
-                >
-                  Import {MapSet.size(@import_selected)} agent(s)
-                </button>
-              </div>
-            </div>
-
-            <%!-- ── Create custom flow (inline existing form) ─────── --%>
-            <div :if={@onboarding_flow == :create} class="mt-6">
-              <.form
-                for={@create_agent_form}
-                id="create-agent-form"
-                phx-submit="create_agent"
-                class="space-y-3"
-              >
-                <div class="grid gap-3 sm:grid-cols-2">
-                  <label class="form-control">
-                    <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
-                      Name
-                    </span>
-                    <input
-                      type="text"
-                      name="create_agent[name]"
-                      value={@create_agent_form[:name].value || ""}
-                      class="input input-bordered w-full"
-                      placeholder="Research Agent"
-                    />
-                  </label>
-                  <label class="form-control">
-                    <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
-                      Slug
-                    </span>
-                    <input
-                      type="text"
-                      name="create_agent[slug]"
-                      value={@create_agent_form[:slug].value || ""}
-                      class="input input-bordered w-full"
-                      placeholder="research-agent"
-                    />
-                  </label>
-                  <label class="form-control sm:col-span-2">
-                    <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
-                      Primary model
-                    </span>
-                    <input
-                      type="text"
-                      name="create_agent[primary_model]"
-                      value={@create_agent_form[:primary_model].value || ""}
-                      class="input input-bordered w-full"
-                      placeholder="anthropic/claude-sonnet-4-6"
-                    />
-                  </label>
-                </div>
-                <div class="grid gap-3 sm:grid-cols-3">
-                  <label class="form-control">
-                    <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
-                      Status
-                    </span>
-                    <select name="create_agent[status]" class="select select-bordered w-full">
-                      <option
-                        :for={status <- ["active", "paused", "archived"]}
-                        selected={@create_agent_form[:status].value == status}
-                        value={status}
-                      >
-                        {humanize_value(status)}
-                      </option>
-                    </select>
-                  </label>
-                  <label class="form-control">
-                    <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
-                      Max
-                    </span>
-                    <input
-                      type="number"
-                      min="1"
-                      name="create_agent[max_concurrent]"
-                      value={@create_agent_form[:max_concurrent].value || 1}
-                      class="input input-bordered w-full"
-                    />
-                  </label>
-                  <label class="form-control">
-                    <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
-                      Sandbox
-                    </span>
-                    <select name="create_agent[sandbox_mode]" class="select select-bordered w-full">
-                      <option
-                        :for={mode <- ["off", "inherit", "require"]}
-                        selected={(@create_agent_form[:sandbox_mode].value || "off") == mode}
-                        value={mode}
-                      >
-                        {mode}
-                      </option>
-                    </select>
-                  </label>
-                </div>
-                <button type="submit" class="btn btn-primary w-full">Create agent</button>
-              </.form>
-            </div>
-          </div>
-        </div>
-      </div>
+      <Onboarding.overlay
+        show={@show_onboarding_chooser}
+        onboarding_flow={@onboarding_flow}
+        selected_template={@selected_template}
+        template_form={@template_form}
+        federate_form={@federate_form}
+        federate_result={@federate_result}
+        import_agents={@import_agents}
+        import_selected={@import_selected}
+        create_agent_form={@create_agent_form}
+        role_templates={@role_templates}
+      />
 
       <%!-- ── Main content ───────────────────────────────────────────── --%>
       <div class="flex min-h-0 flex-1 flex-col overflow-hidden lg:flex-row">
@@ -1335,53 +946,11 @@ defmodule PlatformWeb.ControlCenterLive do
             id="agent-list"
             class="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 py-3 sm:px-4"
           >
-            <article
+            <AgentCard.card
               :for={agent <- @agents}
-              class={[
-                "mb-3 rounded-2xl border px-3 py-3 transition-colors",
-                @selected_agent && @selected_agent.slug == agent.slug &&
-                  "border-primary bg-primary/5 shadow-sm",
-                (!@selected_agent || @selected_agent.slug != agent.slug) &&
-                  "border-base-300 bg-base-100 hover:border-primary/30 hover:bg-base-100/80"
-              ]}
-            >
-              <.link patch={~p"/control/#{agent.slug}"} class="block text-left">
-                <div class="flex items-start justify-between gap-3">
-                  <div class="min-w-0">
-                    <p class="truncate text-sm font-semibold text-base-content">{agent.name}</p>
-                    <p class="truncate text-xs text-base-content/50">{agent.slug}</p>
-                  </div>
-                  <div class="flex items-center gap-2">
-                    <span class={[
-                      "inline-block h-2 w-2 rounded-full",
-                      agent.running? && "bg-success",
-                      !agent.running? && "bg-base-content/25"
-                    ]} />
-                    <span class={agent_badge_class(agent.status)}>
-                      {humanize_value(agent.status)}
-                    </span>
-                  </div>
-                </div>
-
-                <div class="mt-2 flex flex-wrap gap-2 text-[11px] text-base-content/55">
-                  <span
-                    :if={agent.runtime_type != "external"}
-                    class="rounded-full bg-base-200 px-2 py-0.5"
-                  >
-                    {agent.primary_model}
-                  </span>
-                  <span class={source_badge_class(agent.source)}>
-                    {humanize_value(agent.source_label)}
-                  </span>
-                  <span
-                    :if={agent.runtime_type == "external"}
-                    class="inline-flex items-center gap-1 rounded-full bg-info/15 px-2 py-0.5 text-info"
-                  >
-                    <span class="hero-globe-alt h-3 w-3" /> Federated
-                  </span>
-                </div>
-              </.link>
-            </article>
+              agent={agent}
+              selected_slug={@selected_agent && @selected_agent.slug}
+            />
 
             <%!-- ── Empty state ─────────────────────────────────── --%>
             <div
@@ -1593,19 +1162,19 @@ defmodule PlatformWeb.ControlCenterLive do
                 :if={@selected_agent.runtime_type == "external"}
                 class="mt-5 grid gap-3 grid-cols-2 sm:grid-cols-3"
               >
-                <.stat_card
+                <RuntimePanel.stat_card
                   label="Connection"
                   value={if(@federation_online?, do: "Online", else: "Offline")}
                   detail={if(@federation_online?, do: "websocket active", else: "not connected")}
                 />
-                <.stat_card
+                <RuntimePanel.stat_card
                   label="Trust level"
                   value={
                     humanize_value((@federation_runtime && @federation_runtime.trust_level) || "—")
                   }
                   detail="permission scope"
                 />
-                <.stat_card
+                <RuntimePanel.stat_card
                   label="Spaces"
                   value={length(@federation_spaces)}
                   detail="active memberships"
@@ -1615,27 +1184,27 @@ defmodule PlatformWeb.ControlCenterLive do
                 :if={@selected_agent.runtime_type != "external"}
                 class="mt-5 grid gap-3 grid-cols-2 sm:grid-cols-3 xl:grid-cols-5"
               >
-                <.stat_card
+                <RuntimePanel.stat_card
                   label="Runtime"
                   value={humanize_value(@runtime.status)}
                   detail={runtime_detail(@runtime)}
                 />
-                <.stat_card
+                <RuntimePanel.stat_card
                   label="Active sessions"
                   value={length(@runtime.active_session_ids)}
                   detail="live in memory"
                 />
-                <.stat_card
+                <RuntimePanel.stat_card
                   label="Workspace files"
                   value={@overview_counts.workspace_files}
                   detail="identity + instructions"
                 />
-                <.stat_card
+                <RuntimePanel.stat_card
                   label="Memories"
                   value={@overview_counts.memories}
                   detail="daily, long-term, snapshot"
                 />
-                <.stat_card
+                <RuntimePanel.stat_card
                   label="Vault creds"
                   value={@overview_counts.vault}
                   detail="agent + platform"
@@ -1655,7 +1224,7 @@ defmodule PlatformWeb.ControlCenterLive do
               <p class="mt-1 text-sm text-base-content/60">
                 External runtime linked to this agent.
               </p>
-              <.federation_connection_panel
+              <RuntimePanel.federation_connection_panel
                 agent={@selected_agent}
                 regenerated_token={@regenerated_token}
                 federation_online?={@federation_online?}
@@ -2199,7 +1768,7 @@ defmodule PlatformWeb.ControlCenterLive do
                         Agent-scoped credentials
                       </p>
                       <div class="mt-2 space-y-2">
-                        <.credential_row
+                        <RuntimePanel.credential_row
                           :for={credential <- @agent_credentials}
                           credential={credential}
                         />
@@ -2217,7 +1786,7 @@ defmodule PlatformWeb.ControlCenterLive do
                         Relevant platform credentials
                       </p>
                       <div class="mt-2 space-y-2">
-                        <.credential_row
+                        <RuntimePanel.credential_row
                           :for={credential <- @platform_credentials}
                           credential={credential}
                         />
@@ -2267,165 +1836,6 @@ defmodule PlatformWeb.ControlCenterLive do
       >
         <span class="hero-plus h-6 w-6" />
       </button>
-    </div>
-    """
-  end
-
-  attr :label, :string, required: true
-  attr :value, :any, required: true
-  attr :detail, :string, default: nil
-
-  defp stat_card(assigns) do
-    ~H"""
-    <div class="rounded-2xl border border-base-300 bg-base-200/40 px-4 py-3">
-      <p class="text-xs font-semibold uppercase tracking-widest text-base-content/50">{@label}</p>
-      <p class="mt-2 text-2xl font-semibold text-base-content">{@value}</p>
-      <p :if={@detail} class="mt-1 text-xs text-base-content/55">{@detail}</p>
-    </div>
-    """
-  end
-
-  attr :credential, :map, required: true
-
-  defp credential_row(assigns) do
-    ~H"""
-    <div class="rounded-2xl border border-base-300 px-3 py-3 text-sm">
-      <div class="flex flex-wrap items-center justify-between gap-2">
-        <div class="min-w-0">
-          <p class="truncate font-semibold text-base-content">
-            {@credential.name || @credential.slug}
-          </p>
-          <p class="truncate font-mono text-[11px] text-base-content/45">{@credential.slug}</p>
-        </div>
-        <span class="rounded-full bg-base-200 px-2 py-1 text-[11px] uppercase tracking-widest text-base-content/55">
-          {@credential.credential_type}
-        </span>
-      </div>
-      <div class="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs text-base-content/55">
-        <span :if={@credential.provider}>provider {@credential.provider}</span>
-        <span>scope {@credential.scope_type}</span>
-        <span :if={@credential.expires_at}>expires {format_datetime(@credential.expires_at)}</span>
-        <span :if={@credential.last_used_at}>
-          last used {format_datetime(@credential.last_used_at)}
-        </span>
-      </div>
-    </div>
-    """
-  end
-
-  attr :agent, Agent, required: true
-  attr :regenerated_token, :string, default: nil
-  attr :federation_online?, :boolean, default: false
-
-  defp federation_connection_panel(assigns) do
-    runtime = Federation.get_runtime(assigns.agent.runtime_id)
-    assigns = assign(assigns, :fed_runtime, runtime)
-
-    ~H"""
-    <div :if={@fed_runtime} class="mt-4 space-y-3">
-      <div class="rounded-2xl border border-base-300 bg-base-200/40 p-4 text-sm">
-        <div class="flex items-center justify-between gap-3">
-          <span>Connection</span>
-          <span class={[
-            "inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-widest",
-            @federation_online? && "bg-success/15 text-success",
-            !@federation_online? && "bg-base-content/10 text-base-content/50"
-          ]}>
-            <span class={[
-              "inline-block h-2 w-2 rounded-full",
-              @federation_online? && "bg-success",
-              !@federation_online? && "bg-base-content/25"
-            ]} />
-            {if @federation_online?, do: "Connected", else: "Disconnected"}
-          </span>
-        </div>
-        <div class="mt-2 flex items-center justify-between gap-3">
-          <span>Runtime ID</span>
-          <code class="font-mono text-xs">{@fed_runtime.runtime_id}</code>
-        </div>
-        <div class="mt-2 flex items-center justify-between gap-3">
-          <span>Status</span>
-          <span class={runtime_badge_class(String.to_existing_atom(@fed_runtime.status))}>
-            {humanize_value(@fed_runtime.status)}
-          </span>
-        </div>
-        <div class="mt-2 flex items-center justify-between gap-3">
-          <span>Trust level</span>
-          <span class="rounded-full bg-base-200 px-2 py-0.5 text-xs">
-            {humanize_value(@fed_runtime.trust_level)}
-          </span>
-        </div>
-        <div class="mt-2 flex items-center justify-between gap-3">
-          <span>Transport</span>
-          <span class="text-xs">{@fed_runtime.transport}</span>
-        </div>
-        <div :if={@fed_runtime.last_connected_at} class="mt-2 flex items-center justify-between gap-3">
-          <span>Last connected</span>
-          <span class="text-xs">{format_datetime(@fed_runtime.last_connected_at)}</span>
-        </div>
-      </div>
-
-      <%!-- Regenerated token display --%>
-      <div
-        :if={@regenerated_token}
-        class="rounded-2xl border border-warning/40 bg-warning/10 p-4 space-y-2"
-      >
-        <p class="text-sm font-semibold text-warning-content">
-          <span class="hero-exclamation-triangle mr-1 inline-block h-4 w-4 align-text-bottom" />
-          New token generated. Save it now.
-        </p>
-        <div class="flex items-center gap-2">
-          <code class="flex-1 break-all rounded-lg bg-warning/10 px-3 py-2 font-mono text-xs">
-            {@regenerated_token}
-          </code>
-          <button
-            type="button"
-            id="copy-regen-token"
-            phx-hook="CopyToClipboard"
-            data-clipboard-text={@regenerated_token}
-            class="btn btn-ghost btn-sm"
-          >
-            Copy
-          </button>
-        </div>
-        <button type="button" phx-click="dismiss_regenerated_token" class="btn btn-ghost btn-xs">
-          Dismiss
-        </button>
-      </div>
-
-      <div class="flex flex-wrap gap-2">
-        <button
-          :if={@fed_runtime.status == "active"}
-          type="button"
-          phx-click="suspend_federated_runtime"
-          class="btn btn-ghost btn-sm"
-        >
-          Suspend
-        </button>
-        <button
-          :if={@fed_runtime.status != "revoked"}
-          type="button"
-          phx-click="revoke_federated_runtime"
-          class="btn btn-ghost btn-sm text-error"
-        >
-          Revoke
-        </button>
-        <button
-          :if={@fed_runtime.status != "revoked"}
-          type="button"
-          phx-click="regenerate_federated_token"
-          class="btn btn-ghost btn-sm"
-        >
-          Regenerate Token
-        </button>
-      </div>
-    </div>
-
-    <div
-      :if={is_nil(@fed_runtime)}
-      class="mt-4 rounded-2xl border border-dashed border-base-300 px-4 py-5 text-sm text-base-content/50"
-    >
-      Runtime record not found.
     </div>
     """
   end
@@ -3078,83 +2488,6 @@ defmodule PlatformWeb.ControlCenterLive do
     end
   end
 
-  defp session_badge_class("running"),
-    do: "rounded-full bg-info/15 px-2 py-1 text-[11px] font-semibold text-info"
-
-  defp session_badge_class("completed"),
-    do: "rounded-full bg-success/15 px-2 py-1 text-[11px] font-semibold text-success"
-
-  defp session_badge_class("failed"),
-    do: "rounded-full bg-error/15 px-2 py-1 text-[11px] font-semibold text-error"
-
-  defp session_badge_class("cancelled"),
-    do: "rounded-full bg-warning/15 px-2 py-1 text-[11px] font-semibold text-warning"
-
-  defp session_badge_class(_status),
-    do: "rounded-full bg-base-200 px-2 py-1 text-[11px] font-semibold text-base-content/60"
-
-  defp runtime_badge_class(:working),
-    do: "rounded-full bg-success/15 px-3 py-1 text-xs font-semibold text-success"
-
-  defp runtime_badge_class(:idle),
-    do: "rounded-full bg-base-200 px-3 py-1 text-xs font-semibold text-base-content/65"
-
-  defp runtime_badge_class(:paused),
-    do: "rounded-full bg-warning/15 px-3 py-1 text-xs font-semibold text-warning"
-
-  defp runtime_badge_class(_status),
-    do: "rounded-full bg-base-200 px-3 py-1 text-xs font-semibold text-base-content/65"
-
-  defp source_badge_class(:workspace),
-    do: "rounded-full bg-info/15 px-2 py-1 text-[11px] font-semibold text-info"
-
-  defp source_badge_class(:database),
-    do: "rounded-full bg-base-200 px-2 py-1 text-[11px] font-semibold text-base-content/60"
-
-  defp source_badge_class(_source),
-    do: "rounded-full bg-base-200 px-2 py-1 text-[11px] font-semibold text-base-content/60"
-
-  defp agent_badge_class("active"),
-    do: "rounded-full bg-success/15 px-2 py-1 text-[11px] font-semibold text-success"
-
-  defp agent_badge_class("paused"),
-    do: "rounded-full bg-warning/15 px-2 py-1 text-[11px] font-semibold text-warning"
-
-  defp agent_badge_class("archived"),
-    do: "rounded-full bg-base-200 px-2 py-1 text-[11px] font-semibold text-base-content/60"
-
-  defp agent_badge_class(_status),
-    do: "rounded-full bg-base-200 px-2 py-1 text-[11px] font-semibold text-base-content/60"
-
-  defp humanize_memory_type(type), do: humanize_value(type)
-
-  defp humanize_value(value) when is_atom(value),
-    do: value |> Atom.to_string() |> humanize_value()
-
-  defp humanize_value(value) when is_binary(value) do
-    value
-    |> String.replace(["_", "-"], " ")
-    |> String.split()
-    |> Enum.map_join(" ", &String.capitalize/1)
-  end
-
-  defp humanize_value(value), do: to_string(value)
-
-  defp short_id(id) when is_binary(id), do: String.slice(id, 0, 8)
-  defp short_id(_id), do: "—"
-
-  defp format_datetime(nil), do: "—"
-
-  defp format_datetime(%DateTime{} = datetime) do
-    Calendar.strftime(datetime, "%Y-%m-%d %I:%M %p")
-  end
-
-  defp format_datetime(%NaiveDateTime{} = datetime) do
-    Calendar.strftime(datetime, "%Y-%m-%d %I:%M %p")
-  end
-
-  defp format_datetime(_value), do: "—"
-
   defp changeset_error_summary(changeset) do
     changeset
     |> Ecto.Changeset.traverse_errors(fn {msg, opts} ->
@@ -3207,13 +2540,4 @@ defmodule PlatformWeb.ControlCenterLive do
   end
 
   defp slugify(value), do: value |> to_string() |> slugify()
-
-  defp federation_config_snippet(ws_url, runtime_id) do
-    Jason.encode!(
-      %{
-        "suite" => %{"url" => ws_url, "runtime_id" => runtime_id, "token" => "<paste-token-here>"}
-      },
-      pretty: true
-    )
-  end
 end
