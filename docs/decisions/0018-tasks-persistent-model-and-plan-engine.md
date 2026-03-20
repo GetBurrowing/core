@@ -239,7 +239,65 @@ At run time, the deploy target config is pushed into the project-scoped ETS sess
 
 Future deploy types: `:fly`, `:k8s`, `:static`, `:cloudflare_pages`. Each is a struct with typed fields — the deployer runner reads the type and dispatches accordingly.
 
-### 6. Task Status Transitions (Deterministic)
+### 6. Agent Execution Contract
+
+When a task is assigned to an agent — whether local (built-in) or federated (external runtime) — the agent is responsible for execution. The platform does not dictate *how* an agent executes, only the *reporting contract*.
+
+#### The contract
+
+An executing agent MUST:
+1. **Ack context snapshots** — call `ack_context(run_id, version)` within the stale SLA window (per ADR 0011)
+2. **Push progress** — push context items (`:stage_progress`, `:artifact_ref`, `:status_update`) as work proceeds
+3. **Report stage completion** — push validation evidence when a stage's work is done, so the deterministic plan engine can evaluate and progress
+
+An executing agent MAY:
+- Spawn subprocesses (Codex, Claude Code, custom tooling)
+- Use any model, tool, or execution strategy it chooses
+- Take as long as it needs (subject to stale/dead detection)
+
+The platform WILL:
+- Provide the full context snapshot at run start (project config, epic goals, task description, plan stages, deploy targets — the full hierarchy)
+- Push feedback deltas in real-time via PubSub (chat messages, human reviewer notes)
+- Evaluate validation criteria deterministically when the agent pushes evidence
+- Progress stages automatically when validations pass
+- Detect stale/dead agents and surface the state to the UI
+
+#### Local agents (built-in runtime)
+
+For built-in agents, the platform spawns execution directly. The proof-of-life path (ADR 0011) delegates to a local Codex subprocess via `LocalRunner`. The agent process:
+- Receives the context snapshot
+- Spawns Codex/Claude Code in a git worktree
+- Pushes artifacts (branch refs, file changes) back through the context bus
+- Reports stage completion
+
+#### Federated agents (external runtime)
+
+For federated agents, the platform dispatches an attention signal via the RuntimeChannel (ADR 0014). The external runtime is a black box — it can run whatever it wants. The only requirement is reporting back through the context bus:
+
+```elixir
+# Federated agent pushes progress via RuntimeChannel
+channel.push("context_push", %{
+  run_id: run_id,
+  items: [
+    %{kind: "stage_progress", data: %{stage_id: stage_id, percent: 75}},
+    %{kind: "artifact_ref", data: %{type: "branch", ref: "feat/my-feature"}}
+  ]
+})
+
+# Federated agent acks context
+channel.push("context_ack", %{run_id: run_id, version: snapshot_version})
+```
+
+RuntimeChannel translates these into `Platform.Execution` calls. The plan engine and validation registry work identically regardless of whether the agent is local or federated — they only see context items and validation evidence, not the agent's implementation.
+
+#### Why this matters
+
+This separation means:
+- The plan engine never needs to know what kind of agent is running
+- Adding a new agent type (remote HTTP runner, MCP agent, custom provider) requires zero changes to the plan engine, validation system, or task status transitions
+- Progress reporting is the universal interface — not agent implementation details
+
+### 7. Task Status Transitions (Deterministic)
 
 Task status transitions are driven by events, not LLM decisions:
 
