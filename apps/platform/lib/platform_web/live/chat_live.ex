@@ -61,6 +61,7 @@ defmodule PlatformWeb.ChatLive do
       |> assign(:participants_map, %{})
       |> assign(:online_count, 0)
       |> assign(:agent_presence, default_agent_presence())
+      |> assign(:has_agent_participant, false)
       |> assign(:current_participant, nil)
       |> assign(:reactions_map, %{})
       |> assign(:attachments_map, %{})
@@ -147,6 +148,7 @@ defmodule PlatformWeb.ChatLive do
 
       participants = Chat.list_participants(space.id)
       participants_map = Map.new(participants, fn p -> {p.id, p.display_name || "User"} end)
+      has_agent_participant = Enum.any?(participants, &(&1.participant_type == "agent"))
 
       online_count =
         if connected?(socket), do: ChatPresence.online_count(space.id), else: 0
@@ -178,6 +180,7 @@ defmodule PlatformWeb.ChatLive do
        |> assign(:participants_map, participants_map)
        |> assign(:online_count, online_count)
        |> assign(:agent_presence, agent_presence)
+       |> assign(:has_agent_participant, has_agent_participant)
        |> assign(:agent_status, PlatformWeb.ShellLive.default_agent_status())
        |> assign(:agent_typing, false)
        |> assign(:mention_suggestions, [])
@@ -1257,7 +1260,7 @@ defmodule PlatformWeb.ChatLive do
               </button>
 
               <button
-                :if={@agent_presence[:joined?]}
+                :if={@agent_presence[:joined?] || @has_agent_participant}
                 phx-click="toggle_agent_silence"
                 class={[
                   "flex items-center gap-1 rounded px-2 py-0.5 text-xs text-base-content/50 hover:text-base-content transition-colors hover:bg-base-300",
