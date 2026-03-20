@@ -30,6 +30,8 @@ defmodule Platform.Application do
         Platform.Artifacts.Store,
         # Execution plane — run supervisor (registry started above)
         Platform.Execution.RunSupervisor,
+        # Context plane — shared ETS context for federation (after Repo, before AttentionRouter)
+        Platform.Chat.ContextPlane,
         # Chat presence — must start after PubSub
         Platform.Chat.Presence,
         # Vault OAuth token refresh worker — must start after Repo and Vault.Encryption

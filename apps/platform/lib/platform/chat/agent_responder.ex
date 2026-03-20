@@ -5,14 +5,18 @@ defmodule Platform.Chat.AgentResponder do
   Uses the existing attention routing layer as the trigger surface, then invokes
   the configured chat agent module (QuickAgent by default) and persists the
   reply back into chat as a normal agent-authored message.
+
+  For external runtimes, dispatches attention signals via the RuntimeChannel
+  instead of calling QuickAgent directly.
   """
 
   require Logger
 
   alias Platform.Agents.Agent
   alias Platform.Chat
-  alias Platform.Chat.{Message, Participant}
+  alias Platform.Chat.{ContextPlane, Message, Participant}
   alias Platform.Chat.PubSub, as: ChatPubSub
+  alias Platform.Federation.ToolSurface
   alias Platform.Repo
 
   @history_limit 12
@@ -38,52 +42,11 @@ defmodule Platform.Chat.AgentResponder do
   @spec respond(map()) :: :ok | {:error, term()}
   def respond(%{reason: reason} = signal) when reason in @routable_reasons do
     with {:ok, context} <- load_context(signal) do
-      space_id = context.message.space_id
-      agent_participant_id = context.agent_participant.id
-
-      ChatPubSub.broadcast(
-        space_id,
-        {:agent_typing, %{participant_id: agent_participant_id, typing: true}}
-      )
-
-      result =
-        with {:ok, response} <-
-               chat_module().chat(context.user_message,
-                 history: context.history,
-                 space_id: context.message.space_id,
-                 participant_id: context.agent_participant.id
-               ),
-             reply when is_binary(reply) <- Map.get(response, :content),
-             trimmed_reply when trimmed_reply != "" <- String.trim(reply),
-             {:ok, _message} <- persist_reply(context, trimmed_reply) do
-          maybe_create_canvas(context, trimmed_reply)
-
-          # Enter/extend sticky engagement after successful reply
-          Chat.engage_agent(
-            space_id,
-            agent_participant_id,
-            String.slice(context.user_message, 0, 200)
-          )
-
-          :ok
-        else
-          {:error, :ignore} ->
-            :ok
-
-          {:error, reason} ->
-            Logger.warning("[AgentResponder] skipped reply: #{inspect(reason)}")
-            {:error, reason}
-
-          _ ->
-            :ok
-        end
-
-      ChatPubSub.broadcast(
-        space_id,
-        {:agent_typing, %{participant_id: agent_participant_id, typing: false}}
-      )
-
-      result
+      if context.agent.runtime_type == "external" do
+        dispatch_to_external(signal, context)
+      else
+        dispatch_to_built_in(signal, context)
+      end
     else
       {:error, :ignore} ->
         :ok
@@ -99,6 +62,98 @@ defmodule Platform.Chat.AgentResponder do
   end
 
   def respond(_signal), do: :ok
+
+  # ── Built-in agent dispatch (original behavior) ─────────────────────
+
+  defp dispatch_to_built_in(_signal, context) do
+    space_id = context.message.space_id
+    agent_participant_id = context.agent_participant.id
+
+    ChatPubSub.broadcast(
+      space_id,
+      {:agent_typing, %{participant_id: agent_participant_id, typing: true}}
+    )
+
+    result =
+      with {:ok, response} <-
+             chat_module().chat(context.user_message,
+               history: context.history,
+               space_id: context.message.space_id,
+               participant_id: context.agent_participant.id
+             ),
+           reply when is_binary(reply) <- Map.get(response, :content),
+           trimmed_reply when trimmed_reply != "" <- String.trim(reply),
+           {:ok, _message} <- persist_reply(context, trimmed_reply) do
+        maybe_create_canvas(context, trimmed_reply)
+
+        # Enter/extend sticky engagement after successful reply
+        Chat.engage_agent(
+          space_id,
+          agent_participant_id,
+          String.slice(context.user_message, 0, 200)
+        )
+
+        :ok
+      else
+        {:error, :ignore} ->
+          :ok
+
+        {:error, reason} ->
+          Logger.warning("[AgentResponder] skipped reply: #{inspect(reason)}")
+          {:error, reason}
+
+        _ ->
+          :ok
+      end
+
+    ChatPubSub.broadcast(
+      space_id,
+      {:agent_typing, %{participant_id: agent_participant_id, typing: false}}
+    )
+
+    result
+  end
+
+  # ── External runtime dispatch ───────────────────────────────────────
+
+  defp dispatch_to_external(signal, context) do
+    space_id = context.message.space_id
+    runtime_id = context.agent.runtime_id
+
+    if is_nil(runtime_id) do
+      Logger.warning("[AgentResponder] external agent #{context.agent.id} has no runtime_id")
+      {:error, :no_runtime}
+    else
+      runtime = Platform.Federation.get_runtime(runtime_id)
+
+      if runtime do
+        bundle = ContextPlane.build_context_bundle(space_id)
+        tools = ToolSurface.tool_definitions()
+
+        author_participant = Chat.get_participant(context.message.participant_id)
+        author_name = if author_participant, do: author_participant.display_name, else: "unknown"
+
+        payload = %{
+          signal: %{reason: signal.reason},
+          message: %{content: context.user_message, author: author_name},
+          history: context.history,
+          context: bundle,
+          tools: tools
+        }
+
+        PlatformWeb.Endpoint.broadcast(
+          "runtime:#{runtime.runtime_id}",
+          "attention",
+          payload
+        )
+
+        :ok
+      else
+        Logger.warning("[AgentResponder] runtime #{runtime_id} not found")
+        {:error, :runtime_not_found}
+      end
+    end
+  end
 
   @canvas_tag_pattern ~r/\[canvas:([a-zA-Z0-9_-]+):([^\]]+)\]/
 

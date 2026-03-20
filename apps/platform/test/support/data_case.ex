@@ -32,7 +32,8 @@ defmodule Platform.DataCase do
     # raise DBConnection.OwnershipError.
     supervised_with_repo = [
       Platform.Chat.AttentionRouter,
-      Platform.Agents.ContextBroker
+      Platform.Agents.ContextBroker,
+      Platform.Chat.ContextPlane
     ]
 
     Enum.each(supervised_with_repo, fn name ->
@@ -46,11 +47,13 @@ defmodule Platform.DataCase do
     # have been fully processed (and their Repo calls completed) before the
     # sandbox owner exits and the connection is freed.
     on_exit(fn ->
-      if pid = Process.whereis(Platform.Chat.AttentionRouter) do
-        try do
-          GenServer.call(pid, :__drain__, 2_000)
-        catch
-          :exit, _ -> :ok
+      for name <- [Platform.Chat.AttentionRouter, Platform.Chat.ContextPlane] do
+        if pid = Process.whereis(name) do
+          try do
+            GenServer.call(pid, :__drain__, 2_000)
+          catch
+            :exit, _ -> :ok
+          end
         end
       end
     end)

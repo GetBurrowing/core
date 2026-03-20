@@ -26,6 +26,8 @@ defmodule Platform.Agents.Agent do
     field(:sandbox_mode, :string, default: "off")
     field(:parent_agent_id, :binary_id)
     field(:metadata, :map, default: %{})
+    field(:runtime_type, :string, default: "built_in")
+    field(:runtime_id, :binary_id)
 
     timestamps(type: :utc_datetime_usec)
   end
@@ -44,7 +46,9 @@ defmodule Platform.Agents.Agent do
       :max_concurrent,
       :sandbox_mode,
       :parent_agent_id,
-      :metadata
+      :metadata,
+      :runtime_type,
+      :runtime_id
     ])
     |> validate_required([:slug, :name, :status])
     |> validate_inclusion(:status, @valid_statuses)

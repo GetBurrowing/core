@@ -12,6 +12,10 @@ defmodule PlatformWeb.Endpoint do
     http_only: true
   ]
 
+  socket "/runtime/ws", PlatformWeb.RuntimeSocket,
+    websocket: [timeout: 120_000],
+    longpoll: false
+
   socket("/live", Phoenix.LiveView.Socket,
     websocket: [connect_info: [session: @session_options]],
     longpoll: [connect_info: [session: @session_options]]
