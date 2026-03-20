@@ -154,7 +154,7 @@ defmodule Platform.Chat.AgentResponder do
         author_name = if author_participant, do: author_participant.display_name, else: "unknown"
 
         payload = %{
-          signal: %{reason: signal.reason},
+          signal: %{reason: signal.reason, space_id: space_id},
           message: %{content: context.user_message, author: author_name},
           history: context.history,
           context: bundle,
