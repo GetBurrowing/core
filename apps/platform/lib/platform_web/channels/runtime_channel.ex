@@ -62,6 +62,13 @@ defmodule PlatformWeb.RuntimeChannel do
           }
         })
 
+        # Enter/extend sticky engagement after successful reply
+        Chat.engage_agent(
+          space_id,
+          participant_id,
+          String.slice(content, 0, 200)
+        )
+
         {:noreply, socket}
     end
   end
