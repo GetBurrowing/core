@@ -103,7 +103,10 @@
 [data-phx-session], [data-phx-teleported-src] { display: contents }
 
 /* iOS PWA safe area support */
-@supports (padding-bottom: env(safe-area-inset-bottom)) {
+@supports (padding: env(safe-area-inset-top)) {
+  .safe-area-top {
+    padding-top: env(safe-area-inset-top);
+  }
   .safe-area-bottom {
     padding-bottom: env(safe-area-inset-bottom);
   }
