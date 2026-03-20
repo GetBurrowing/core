@@ -41,14 +41,27 @@ defmodule Platform.Chat.AgentResponder do
 
   @spec respond(map()) :: :ok | {:error, term()}
   def respond(%{reason: reason} = signal) when reason in @routable_reasons do
+    Logger.info(
+      "[AgentResponder] respond called with reason=#{reason} signal=#{inspect(Map.take(signal, [:participant_id, :message_id, :space_id]))}"
+    )
+
     with {:ok, context} <- load_context(signal) do
+      Logger.info(
+        "[AgentResponder] context loaded, agent=#{context.agent.slug} runtime_type=#{context.agent.runtime_type} runtime_id=#{inspect(context.agent.runtime_id)}"
+      )
+
       if context.agent.runtime_type == "external" do
+        Logger.info("[AgentResponder] dispatching to external runtime")
         dispatch_to_external(signal, context)
       else
         dispatch_to_built_in(signal, context)
       end
     else
       {:error, :ignore} ->
+        Logger.debug(
+          "[AgentResponder] load_context returned :ignore for signal=#{inspect(Map.take(signal, [:participant_id, :message_id, :space_id]))}"
+        )
+
         :ok
 
       {:error, reason} ->
@@ -141,13 +154,18 @@ defmodule Platform.Chat.AgentResponder do
           tools: tools
         }
 
-        PlatformWeb.Endpoint.broadcast(
-          "runtime:#{runtime.runtime_id}",
-          "attention",
-          payload
-        )
+        topic = "runtime:#{runtime.runtime_id}"
+        Logger.info("[AgentResponder] broadcasting attention to #{topic}")
 
-        :ok
+        case PlatformWeb.Endpoint.broadcast(topic, "attention", payload) do
+          :ok ->
+            Logger.info("[AgentResponder] broadcast sent successfully to #{topic}")
+            :ok
+
+          {:error, reason} ->
+            Logger.error("[AgentResponder] broadcast failed to #{topic}: #{inspect(reason)}")
+            {:error, :broadcast_failed}
+        end
       else
         Logger.warning("[AgentResponder] runtime #{runtime_id} not found")
         {:error, :runtime_not_found}
