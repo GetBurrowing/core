@@ -7,6 +7,7 @@ defmodule PlatformWeb.ControlCenter.OnboardingEvents do
 
   import Phoenix.Component, only: [assign: 3]
   import Phoenix.LiveView, only: [put_flash: 3, push_patch: 2]
+  import PlatformWeb.ControlCenter.Helpers, only: [slugify: 1, changeset_error_summary: 1]
 
   alias Platform.Agents.{Agent, WorkspaceBootstrap}
   alias Platform.Federation
@@ -343,32 +344,5 @@ defmodule PlatformWeb.ControlCenter.OnboardingEvents do
         _ -> {:noreply, push_patch(socket, to: ~p"/control")}
       end
     end
-  end
-
-  # ── Private helpers ──────────────────────────────────────────────────
-
-  defp slugify(value) when is_binary(value) do
-    value
-    |> String.downcase()
-    |> String.trim()
-    |> String.replace(~r/[^a-z0-9]+/u, "-")
-    |> String.trim("-")
-  end
-
-  defp slugify(value), do: value |> to_string() |> slugify()
-
-  defp changeset_error_summary(changeset) do
-    changeset
-    |> Ecto.Changeset.traverse_errors(fn {msg, opts} ->
-      replacements = Map.new(opts, fn {key, value} -> {to_string(key), value} end)
-
-      Regex.replace(~r/%{(\w+)}/, msg, fn _, key ->
-        replacements |> Map.get(key, key) |> to_string()
-      end)
-    end)
-    |> Enum.flat_map(fn {field, messages} -> Enum.map(messages, &"#{field} #{&1}") end)
-    |> Enum.join(", ")
-  rescue
-    _ -> "Please check the form and try again."
   end
 end
