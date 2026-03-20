@@ -4,7 +4,8 @@ defmodule PlatformWeb.ControlCenterLiveTest do
   import Phoenix.LiveViewTest
 
   alias Platform.Accounts.User
-  alias Platform.Agents.{Agent, AgentServer, MemoryContext}
+  alias Platform.Agents.{Agent, AgentRuntime, AgentServer, MemoryContext}
+  alias Platform.Federation
   alias Platform.Repo
 
   defp authenticated_conn(conn) do
@@ -326,5 +327,442 @@ defmodule PlatformWeb.ControlCenterLiveTest do
     assert html =~ "Startup Suite"
     assert html =~ "/chat"
     assert html =~ "/control"
+  end
+
+  # ── Onboarding flows ──────────────────────────────────────────────
+
+  test "opening the onboarding chooser shows 4 flow options", %{conn: conn} do
+    create_agent()
+    conn = authenticated_conn(conn)
+    {:ok, view, _html} = live(conn, ~p"/control")
+
+    html = render_click(view, "open_onboarding_chooser", %{})
+
+    assert html =~ "Add Agent"
+    assert html =~ "From a Template"
+    assert html =~ "Federate"
+    assert html =~ "Import"
+    assert html =~ "Create Custom"
+  end
+
+  test "selecting template flow shows 8 role template cards", %{conn: conn} do
+    conn = authenticated_conn(conn)
+    {:ok, view, _html} = live(conn, ~p"/control")
+
+    render_click(view, "open_onboarding_chooser", %{})
+    html = render_click(view, "choose_onboarding", %{"flow" => "template"})
+
+    assert html =~ "Choose a Template"
+    assert html =~ "Designer"
+    assert html =~ "Researcher"
+    assert html =~ "Architect"
+    assert html =~ "Writer"
+    assert html =~ "Analyst"
+    assert html =~ "DevOps"
+    assert html =~ "Project Manager"
+    assert html =~ "Sales"
+  end
+
+  test "selecting a template shows the confirm/name step", %{conn: conn} do
+    conn = authenticated_conn(conn)
+    {:ok, view, _html} = live(conn, ~p"/control")
+
+    render_click(view, "open_onboarding_chooser", %{})
+    render_click(view, "choose_onboarding", %{"flow" => "template"})
+    html = render_click(view, "select_template", %{"template_id" => "researcher"})
+
+    assert html =~ "Researcher Template"
+    assert html =~ "Deep research, analysis, synthesis"
+    assert html =~ "template-create-form"
+    assert html =~ "Agent Name"
+    assert html =~ "Back"
+  end
+
+  test "back button from template confirm returns to template grid", %{conn: conn} do
+    conn = authenticated_conn(conn)
+    {:ok, view, _html} = live(conn, ~p"/control")
+
+    render_click(view, "open_onboarding_chooser", %{})
+    render_click(view, "choose_onboarding", %{"flow" => "template"})
+    render_click(view, "select_template", %{"template_id" => "designer"})
+
+    html = render_click(view, "back_to_templates", %{})
+
+    assert html =~ "Choose a Template"
+    assert html =~ "Designer"
+    assert html =~ "Researcher"
+    refute html =~ "template-create-form"
+  end
+
+  test "federate flow shows connection form fields", %{conn: conn} do
+    conn = authenticated_conn(conn)
+    {:ok, view, _html} = live(conn, ~p"/control")
+
+    render_click(view, "open_onboarding_chooser", %{})
+    html = render_click(view, "choose_onboarding", %{"flow" => "federate"})
+
+    assert html =~ "Federate an Agent"
+    assert html =~ "Runtime ID"
+    assert html =~ "Display Name"
+    assert html =~ "Agent Name"
+    assert html =~ "federate-form"
+    assert html =~ "Federate Agent"
+  end
+
+  test "import flow with workspace configured shows agent checkboxes", %{conn: conn} do
+    configure_workspace!(%{}, [{"zip", "Zip"}, {"sidecar", "Sidecar"}])
+    conn = authenticated_conn(conn)
+    {:ok, view, _html} = live(conn, ~p"/control")
+
+    render_click(view, "open_onboarding_chooser", %{})
+    html = render_click(view, "choose_onboarding", %{"flow" => "import"})
+
+    assert html =~ "Import from Workspace"
+    assert html =~ "Zip"
+    assert html =~ "Sidecar"
+    assert html =~ "Import 0 agent(s)"
+  end
+
+  test "import flow without workspace shows empty message", %{conn: conn} do
+    previous_workspace = Application.get_env(:platform, :agent_workspace_path)
+    Application.put_env(:platform, :agent_workspace_path, "/tmp/does-not-exist/test-workspace")
+
+    on_exit(fn ->
+      Application.put_env(:platform, :agent_workspace_path, previous_workspace)
+    end)
+
+    conn = authenticated_conn(conn)
+    {:ok, view, _html} = live(conn, ~p"/control")
+
+    render_click(view, "open_onboarding_chooser", %{})
+    html = render_click(view, "choose_onboarding", %{"flow" => "import"})
+
+    assert html =~ "No workspace agents found"
+  end
+
+  test "closing onboarding overlay clears the state", %{conn: conn} do
+    conn = authenticated_conn(conn)
+    {:ok, view, _html} = live(conn, ~p"/control")
+
+    html = render_click(view, "open_onboarding_chooser", %{})
+    assert html =~ "From a Template"
+
+    html = render_click(view, "close_onboarding", %{})
+
+    refute html =~ "From a Template"
+    refute html =~ "Choose a Template"
+  end
+
+  # ── Federation / runtime management ────────────────────────────────
+
+  test "federated agent card shows Federated badge instead of model", %{conn: conn} do
+    user =
+      Repo.insert!(%User{
+        email: "fed_test_#{System.unique_integer([:positive])}@example.com",
+        name: "Fed Test User",
+        oidc_sub: "oidc-fed-test-#{System.unique_integer([:positive])}"
+      })
+
+    {:ok, runtime} =
+      Federation.register_runtime(user.id, %{
+        runtime_id: "test-runtime-#{System.unique_integer([:positive])}",
+        display_name: "Test OpenClaw"
+      })
+
+    _agent =
+      create_agent(%{
+        name: "Remote Agent",
+        runtime_type: "external",
+        runtime_id: runtime.id
+      })
+
+    conn = init_test_session(conn, current_user_id: user.id)
+    {:ok, _view, html} = live(conn, ~p"/control")
+
+    assert html =~ "Federated"
+    assert html =~ "Remote Agent"
+    # External agents should not show primary model badge in card
+    refute html =~ ~r/rounded-full bg-base-200.*anthropic\/claude-sonnet/
+  end
+
+  test "federated agent detail shows Federation Connection section", %{conn: conn} do
+    user =
+      Repo.insert!(%User{
+        email: "fed_detail_#{System.unique_integer([:positive])}@example.com",
+        name: "Fed Detail User",
+        oidc_sub: "oidc-fed-detail-#{System.unique_integer([:positive])}"
+      })
+
+    {:ok, runtime} =
+      Federation.register_runtime(user.id, %{
+        runtime_id: "detail-runtime-#{System.unique_integer([:positive])}",
+        display_name: "Detail OpenClaw"
+      })
+
+    {:ok, runtime, _token} = Federation.activate_runtime(runtime)
+
+    agent =
+      create_agent(%{
+        name: "Fed Detail Agent",
+        runtime_type: "external",
+        runtime_id: runtime.id
+      })
+
+    conn = init_test_session(conn, current_user_id: user.id)
+    {:ok, _view, html} = live(conn, ~p"/control/#{agent.slug}")
+
+    assert html =~ "Federation Connection"
+    assert html =~ "Identity"
+    assert html =~ "Spaces"
+    assert html =~ runtime.runtime_id
+    assert html =~ "Suspend"
+    assert html =~ "Revoke"
+    assert html =~ "Regenerate Token"
+  end
+
+  test "suspend federated runtime updates status", %{conn: conn} do
+    user =
+      Repo.insert!(%User{
+        email: "fed_suspend_#{System.unique_integer([:positive])}@example.com",
+        name: "Fed Suspend User",
+        oidc_sub: "oidc-fed-suspend-#{System.unique_integer([:positive])}"
+      })
+
+    {:ok, runtime} =
+      Federation.register_runtime(user.id, %{
+        runtime_id: "suspend-runtime-#{System.unique_integer([:positive])}",
+        display_name: "Suspend Test"
+      })
+
+    {:ok, runtime, _token} = Federation.activate_runtime(runtime)
+
+    agent =
+      create_agent(%{
+        name: "Suspend Agent",
+        runtime_type: "external",
+        runtime_id: runtime.id
+      })
+
+    conn = init_test_session(conn, current_user_id: user.id)
+    {:ok, view, _html} = live(conn, ~p"/control/#{agent.slug}")
+
+    html = render_click(view, "suspend_federated_runtime", %{})
+
+    assert html =~ "Runtime suspended"
+    updated_runtime = Repo.get!(AgentRuntime, runtime.id)
+    assert updated_runtime.status == "suspended"
+  end
+
+  test "revoke federated runtime updates status", %{conn: conn} do
+    user =
+      Repo.insert!(%User{
+        email: "fed_revoke_#{System.unique_integer([:positive])}@example.com",
+        name: "Fed Revoke User",
+        oidc_sub: "oidc-fed-revoke-#{System.unique_integer([:positive])}"
+      })
+
+    {:ok, runtime} =
+      Federation.register_runtime(user.id, %{
+        runtime_id: "revoke-runtime-#{System.unique_integer([:positive])}",
+        display_name: "Revoke Test"
+      })
+
+    {:ok, runtime, _token} = Federation.activate_runtime(runtime)
+
+    agent =
+      create_agent(%{
+        name: "Revoke Agent",
+        runtime_type: "external",
+        runtime_id: runtime.id
+      })
+
+    conn = init_test_session(conn, current_user_id: user.id)
+    {:ok, view, _html} = live(conn, ~p"/control/#{agent.slug}")
+
+    html = render_click(view, "revoke_federated_runtime", %{})
+
+    assert html =~ "Runtime revoked"
+    updated_runtime = Repo.get!(AgentRuntime, runtime.id)
+    assert updated_runtime.status == "revoked"
+  end
+
+  test "regenerate federated token shows new token and dismiss clears it", %{conn: conn} do
+    user =
+      Repo.insert!(%User{
+        email: "fed_regen_#{System.unique_integer([:positive])}@example.com",
+        name: "Fed Regen User",
+        oidc_sub: "oidc-fed-regen-#{System.unique_integer([:positive])}"
+      })
+
+    {:ok, runtime} =
+      Federation.register_runtime(user.id, %{
+        runtime_id: "regen-runtime-#{System.unique_integer([:positive])}",
+        display_name: "Regen Test"
+      })
+
+    {:ok, runtime, _token} = Federation.activate_runtime(runtime)
+
+    agent =
+      create_agent(%{
+        name: "Regen Agent",
+        runtime_type: "external",
+        runtime_id: runtime.id
+      })
+
+    conn = init_test_session(conn, current_user_id: user.id)
+    {:ok, view, _html} = live(conn, ~p"/control/#{agent.slug}")
+
+    html = render_click(view, "regenerate_federated_token", %{})
+
+    assert html =~ "New token generated"
+    assert html =~ "New token generated. Save it now."
+
+    html = render_click(view, "dismiss_regenerated_token", %{})
+
+    # The dismiss clears the regenerated_token display (not the flash)
+    refute html =~ "copy-regen-token"
+  end
+
+  # ── Agent deletion ─────────────────────────────────────────────────
+
+  test "request delete shows confirm dialog and cancel dismisses it", %{conn: conn} do
+    agent = create_agent(%{slug: "delete-test", name: "Delete Test"})
+    conn = authenticated_conn(conn)
+    {:ok, view, _html} = live(conn, ~p"/control/#{agent.slug}")
+
+    html = render_click(view, "request_delete_agent", %{})
+    assert html =~ "Confirm delete"
+    assert html =~ "Cancel delete"
+
+    html = render_click(view, "cancel_delete_agent", %{})
+    refute html =~ "Confirm delete"
+    refute html =~ "Cancel delete"
+    assert html =~ "Delete agent"
+  end
+
+  test "delete with slug param removes agent", %{conn: conn} do
+    agent = create_agent(%{slug: "slug-delete-test", name: "Slug Delete"})
+    conn = authenticated_conn(conn)
+    {:ok, view, _html} = live(conn, ~p"/control/#{agent.slug}")
+
+    render_click(view, "request_delete_agent", %{"slug" => agent.slug})
+    html = render_click(view, "delete_agent", %{"slug" => agent.slug})
+
+    refute Repo.get(Agent, agent.id)
+    assert html =~ "Deleted Slug Delete"
+  end
+
+  # ── Memory filtering ───────────────────────────────────────────────
+
+  test "filter memories by type narrows the list", %{conn: conn} do
+    agent = create_agent()
+    {:ok, _} = MemoryContext.append_memory(agent.id, :long_term, "long term note")
+    {:ok, _} = MemoryContext.append_memory(agent.id, :daily, "daily note", date: Date.utc_today())
+
+    conn = authenticated_conn(conn)
+    {:ok, view, html} = live(conn, ~p"/control/#{agent.slug}")
+
+    assert html =~ "long term note"
+    assert html =~ "daily note"
+
+    html =
+      view
+      |> form("#memory-filter-form", memory_filters: %{type: "long_term", query: ""})
+      |> render_submit()
+
+    assert html =~ "long term note"
+    refute html =~ "daily note"
+  end
+
+  test "filter memories by search query", %{conn: conn} do
+    agent = create_agent()
+    {:ok, _} = MemoryContext.append_memory(agent.id, :long_term, "alpha bravo")
+    {:ok, _} = MemoryContext.append_memory(agent.id, :long_term, "charlie delta")
+
+    conn = authenticated_conn(conn)
+    {:ok, view, _html} = live(conn, ~p"/control/#{agent.slug}")
+
+    html =
+      view
+      |> form("#memory-filter-form", memory_filters: %{type: "all", query: "alpha"})
+      |> render_submit()
+
+    assert html =~ "alpha bravo"
+    refute html =~ "charlie delta"
+  end
+
+  # ── Workspace file management ──────────────────────────────────────
+
+  test "select workspace file switches editor content", %{conn: conn} do
+    agent = create_agent()
+    {:ok, _} = MemoryContext.upsert_workspace_file(agent.id, "SOUL.md", "soul content")
+    {:ok, _} = MemoryContext.upsert_workspace_file(agent.id, "IDENTITY.md", "identity content")
+
+    conn = authenticated_conn(conn)
+    {:ok, view, html} = live(conn, ~p"/control/#{agent.slug}")
+
+    # First file should be selected by default
+    assert html =~ "soul content" or html =~ "identity content"
+
+    html = render_click(view, "select_workspace_file", %{"file_key" => "IDENTITY.md"})
+    assert html =~ "identity content"
+
+    html = render_click(view, "select_workspace_file", %{"file_key" => "SOUL.md"})
+    assert html =~ "soul content"
+  end
+
+  test "new workspace file flow shows empty editor", %{conn: conn} do
+    agent = create_agent()
+    {:ok, _} = MemoryContext.upsert_workspace_file(agent.id, "SOUL.md", "soul content")
+
+    conn = authenticated_conn(conn)
+    {:ok, view, _html} = live(conn, ~p"/control/#{agent.slug}")
+
+    html = render_click(view, "new_workspace_file", %{})
+
+    # Should show an editable file key input (not read-only)
+    assert html =~ "workspace-file-form"
+    assert html =~ "File key"
+  end
+
+  test "creating a new workspace file persists it", %{conn: conn} do
+    agent = create_agent()
+
+    conn = authenticated_conn(conn)
+    {:ok, view, _html} = live(conn, ~p"/control/#{agent.slug}")
+
+    render_click(view, "new_workspace_file", %{})
+
+    html =
+      view
+      |> form("#workspace-file-form",
+        workspace_file: %{file_key: "TOOLS.md", content: "tool definitions"}
+      )
+      |> render_submit()
+
+    assert html =~ "Saved TOOLS.md"
+    assert MemoryContext.get_workspace_file(agent.id, "TOOLS.md").content == "tool definitions"
+  end
+
+  # ── Creating agent from template ───────────────────────────────────
+
+  test "creating an agent from a template persists it with template config", %{conn: conn} do
+    conn = authenticated_conn(conn)
+    {:ok, view, _html} = live(conn, ~p"/control")
+
+    render_click(view, "open_onboarding_chooser", %{})
+    render_click(view, "choose_onboarding", %{"flow" => "template"})
+    render_click(view, "select_template", %{"template_id" => "architect"})
+
+    html =
+      view
+      |> form("#template-create-form", template: %{name: "My Architect"})
+      |> render_submit()
+
+    assert html =~ "Created My Architect"
+
+    created = Repo.get_by!(Agent, name: "My Architect")
+    assert created.model_config["primary"] == "anthropic/claude-opus-4-6"
+    assert created.status == "active"
   end
 end
