@@ -27,6 +27,10 @@ defmodule PlatformWeb.RuntimeChannel do
 
       RuntimePresence.track(runtime_id)
 
+      # Send available tools on join so the plugin knows what's registered
+      tools = ToolSurface.tool_definitions()
+      push(socket, "capabilities", %{tools: tools, tool_count: length(tools)})
+
       {:ok, socket}
     else
       {:error, %{reason: "unauthorized"}}
