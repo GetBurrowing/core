@@ -27,9 +27,8 @@ defmodule PlatformWeb.RuntimeChannel do
 
       RuntimePresence.track(runtime_id)
 
-      # Send available tools on join so the plugin knows what's registered
-      tools = ToolSurface.tool_definitions()
-      push(socket, "capabilities", %{tools: tools, tool_count: length(tools)})
+      # Push capabilities after join completes (push/3 not allowed during join/3)
+      send(self(), :send_capabilities)
 
       {:ok, socket}
     else
@@ -38,6 +37,13 @@ defmodule PlatformWeb.RuntimeChannel do
   end
 
   def join(_topic, _params, _socket), do: {:error, %{reason: "unauthorized"}}
+
+  @impl true
+  def handle_info(:send_capabilities, socket) do
+    tools = ToolSurface.tool_definitions()
+    push(socket, "capabilities", %{tools: tools, tool_count: length(tools)})
+    {:noreply, socket}
+  end
 
   @impl true
   def handle_in("reply", %{"space_id" => space_id, "content" => content}, socket) do

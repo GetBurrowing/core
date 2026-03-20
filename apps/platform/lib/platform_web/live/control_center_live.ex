@@ -22,7 +22,6 @@ defmodule PlatformWeb.ControlCenterLive do
   alias PlatformWeb.ControlCenter.Onboarding
   alias PlatformWeb.ControlCenter.OnboardingEvents
   alias PlatformWeb.ControlCenter.RuntimeEvents
-  alias PlatformWeb.ControlCenter.RuntimePanel
   alias PlatformWeb.ControlCenter.WorkspaceEvents
 
   import PlatformWeb.ControlCenter.Helpers
