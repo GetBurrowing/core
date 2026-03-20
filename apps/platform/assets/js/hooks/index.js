@@ -1,4 +1,5 @@
 import ComposeInput from "./compose_input"
+import CopyToClipboard from "./copy_to_clipboard"
 import LocalTime from "./local_time"
 import MermaidDiagram from "./mermaid_diagram"
 import PushSubscribe from "./push_subscribe"
@@ -7,6 +8,7 @@ import SwipeDrawer from "./swipe_drawer"
 
 export default {
   ComposeInput,
+  CopyToClipboard,
   LocalTime,
   MermaidDiagram,
   PushSubscribe,

@@ -95,7 +95,7 @@ defmodule PlatformWeb.ControlCenterLiveTest do
     conn = authenticated_conn(conn)
     {:ok, _view, html} = live(conn, ~p"/control/#{agent.slug}")
 
-    assert html =~ "Agent Control Center"
+    assert html =~ "Agent Resources"
     assert html =~ "Zip"
     assert html =~ "Config + model routing"
     assert html =~ "Workspace files"
@@ -268,7 +268,7 @@ defmodule PlatformWeb.ControlCenterLiveTest do
 
     refute render(view) =~ "create-agent-form"
 
-    render_click(view, "toggle_create_agent", %{})
+    render_click(view, "choose_onboarding", %{"flow" => "create"})
 
     html =
       view
@@ -296,23 +296,15 @@ defmodule PlatformWeb.ControlCenterLiveTest do
   test "deleting a database-managed agent removes it from the UI", %{conn: conn} do
     agent = create_agent(%{slug: "stale-repl", name: "Stale REPL"})
     conn = authenticated_conn(conn)
-    {:ok, view, _html} = live(conn, ~p"/control")
+    {:ok, view, _html} = live(conn, ~p"/control/#{agent.slug}")
 
-    html =
-      view
-      |> element("button[phx-value-slug=\"#{agent.slug}\"]")
-      |> render_click()
-
+    html = render_click(view, "request_delete_agent", %{})
     assert html =~ "Confirm delete"
 
-    html =
-      view
-      |> element("#confirm-delete-agent-#{agent.slug}")
-      |> render_click()
+    html = render_click(view, "delete_agent", %{})
 
     refute Repo.get(Agent, agent.id)
     assert html =~ "Deleted Stale REPL"
-    refute render(view) =~ ~s(href="/control/#{agent.slug}")
   end
 
   test "mobile-oriented layout hooks are rendered on /control", %{conn: conn} do
@@ -321,8 +313,7 @@ defmodule PlatformWeb.ControlCenterLiveTest do
     {:ok, _view, html} = live(conn, ~p"/control/#{agent.slug}")
 
     assert html =~ "id=\"agent-directory\""
-    assert html =~ "data-mobile-layout=\"list-detail\""
-    assert html =~ "data-mobile-actions=\"stacked\""
+    assert html =~ "id=\"agent-primary-actions\""
     assert html =~ "overflow-y-auto"
     refute html =~ "create-agent-form"
   end

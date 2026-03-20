@@ -18,6 +18,7 @@ defmodule PlatformWeb.ControlCenterLive do
     WorkspaceFile
   }
 
+  alias Platform.Federation
   alias Platform.Repo
 
   @session_limit 8
@@ -32,11 +33,113 @@ defmodule PlatformWeb.ControlCenterLive do
     "HEARTBEAT.md"
   ]
 
+  @role_templates [
+    %{
+      id: "designer",
+      name: "Designer",
+      icon: "hero-paint-brush",
+      description: "Visual design, UI/UX, branding",
+      default_name: "Designer",
+      system_prompt: "You are a skilled visual designer...",
+      model_tier: "mid",
+      suggested_model: "anthropic/claude-sonnet-4-6",
+      tool_profile: "minimal",
+      tools_allow: ["canvas", "image", "web_search"]
+    },
+    %{
+      id: "researcher",
+      name: "Researcher",
+      icon: "hero-magnifying-glass",
+      description: "Deep research, analysis, synthesis",
+      default_name: "Researcher",
+      system_prompt: "You are a thorough researcher...",
+      model_tier: "high",
+      suggested_model: "anthropic/claude-opus-4-6",
+      tool_profile: "minimal",
+      tools_allow: ["web_search", "web_fetch", "pdf", "group:fs"]
+    },
+    %{
+      id: "architect",
+      name: "Architect",
+      icon: "hero-cube-transparent",
+      description: "System design, ADRs, code review",
+      default_name: "Architect",
+      system_prompt: "You are a senior software architect...",
+      model_tier: "high",
+      suggested_model: "anthropic/claude-opus-4-6",
+      tool_profile: "full",
+      tools_allow: ["group:fs", "exec", "web_search"]
+    },
+    %{
+      id: "writer",
+      name: "Writer",
+      icon: "hero-pencil-square",
+      description: "Content, docs, copywriting",
+      default_name: "Writer",
+      system_prompt: "You are a skilled writer...",
+      model_tier: "mid",
+      suggested_model: "anthropic/claude-sonnet-4-6",
+      tool_profile: "minimal",
+      tools_allow: ["group:fs", "web_search"]
+    },
+    %{
+      id: "analyst",
+      name: "Analyst",
+      icon: "hero-chart-bar",
+      description: "Data analysis, reporting, dashboards",
+      default_name: "Analyst",
+      system_prompt: "You are a data analyst...",
+      model_tier: "mid",
+      suggested_model: "anthropic/claude-sonnet-4-6",
+      tool_profile: "minimal",
+      tools_allow: ["canvas", "web_fetch", "exec"]
+    },
+    %{
+      id: "devops",
+      name: "DevOps",
+      icon: "hero-server-stack",
+      description: "Infrastructure, CI/CD, monitoring",
+      default_name: "DevOps",
+      system_prompt: "You are a DevOps engineer...",
+      model_tier: "mid",
+      suggested_model: "anthropic/claude-sonnet-4-6",
+      tool_profile: "full",
+      tools_allow: ["exec", "group:fs", "web_search"]
+    },
+    %{
+      id: "pm",
+      name: "Project Manager",
+      icon: "hero-clipboard-document-list",
+      description: "Planning, tracking, coordination",
+      default_name: "PM",
+      system_prompt: "You are a project manager...",
+      model_tier: "mid",
+      suggested_model: "anthropic/claude-sonnet-4-6",
+      tool_profile: "minimal",
+      tools_allow: ["canvas", "web_search"]
+    },
+    %{
+      id: "sales",
+      name: "Sales",
+      icon: "hero-currency-dollar",
+      description: "Outreach, proposals, CRM",
+      default_name: "Sales",
+      system_prompt: "You are a sales professional...",
+      model_tier: "mid",
+      suggested_model: "anthropic/claude-sonnet-4-6",
+      tool_profile: "minimal",
+      tools_allow: ["web_search", "web_fetch", "canvas"]
+    }
+  ]
+
   @impl true
-  def mount(_params, _session, socket) do
+  def mount(_params, session, socket) do
+    current_user_id = session["current_user_id"]
+
     {:ok,
      socket
-     |> assign(:page_title, "Control Center")
+     |> assign(:page_title, "Agent Resources")
+     |> assign(:current_user_id, current_user_id)
      |> assign(:agents, [])
      |> assign(:selected_agent, nil)
      |> assign(:runtime, %{status: :unknown, running?: false, pid: nil, active_session_ids: []})
@@ -61,7 +164,20 @@ defmodule PlatformWeb.ControlCenterLive do
      |> assign(:pending_delete_slug, nil)
      |> assign(:memory_form, to_form(default_memory_entry(), as: :memory_entry))
      |> assign(:agent_status, :unknown)
-     |> assign(:selected_agent_directory_entry, nil)}
+     |> assign(:selected_agent_directory_entry, nil)
+     # Onboarding flow assigns
+     |> assign(:show_onboarding_chooser, false)
+     |> assign(:onboarding_flow, nil)
+     |> assign(:selected_template, nil)
+     |> assign(:template_form, to_form(%{"name" => ""}, as: :template))
+     |> assign(
+       :federate_form,
+       to_form(%{"runtime_id" => "", "display_name" => "", "agent_name" => ""}, as: :federate)
+     )
+     |> assign(:federate_result, nil)
+     |> assign(:import_agents, [])
+     |> assign(:import_selected, MapSet.new())
+     |> assign(:regenerated_token, nil)}
   end
 
   @impl true
@@ -214,6 +330,319 @@ defmodule PlatformWeb.ControlCenterLive do
 
   def handle_event("toggle_create_agent", _params, socket) do
     {:noreply, assign(socket, :show_create_agent, !socket.assigns.show_create_agent)}
+  end
+
+  # ── Onboarding flow events ──────────────────────────────────────────
+
+  def handle_event("open_onboarding_chooser", _params, socket) do
+    {:noreply,
+     socket
+     |> assign(:show_onboarding_chooser, true)
+     |> assign(:onboarding_flow, nil)
+     |> assign(:selected_template, nil)
+     |> assign(:federate_result, nil)}
+  end
+
+  def handle_event("close_onboarding", _params, socket) do
+    {:noreply,
+     socket
+     |> assign(:show_onboarding_chooser, false)
+     |> assign(:onboarding_flow, nil)
+     |> assign(:selected_template, nil)
+     |> assign(:federate_result, nil)}
+  end
+
+  def handle_event("choose_onboarding", %{"flow" => flow}, socket) do
+    socket =
+      socket
+      |> assign(:show_onboarding_chooser, true)
+      |> case do
+        socket ->
+          case flow do
+            "import" ->
+              agents =
+                case WorkspaceBootstrap.list_configured_agents() do
+                  {:ok, list} -> list
+                  {:error, _} -> []
+                end
+
+              socket
+              |> assign(:onboarding_flow, :import)
+              |> assign(:import_agents, agents)
+              |> assign(:import_selected, MapSet.new())
+
+            "create" ->
+              socket
+              |> assign(:onboarding_flow, :create)
+              |> assign(:show_create_agent, true)
+
+            _ ->
+              assign(socket, :onboarding_flow, String.to_existing_atom(flow))
+          end
+      end
+
+    {:noreply, socket}
+  end
+
+  def handle_event("select_template", %{"template_id" => template_id}, socket) do
+    template = Enum.find(@role_templates, &(&1.id == template_id))
+
+    {:noreply,
+     socket
+     |> assign(:selected_template, template)
+     |> assign(
+       :template_form,
+       to_form(%{"name" => (template && template.default_name) || ""}, as: :template)
+     )}
+  end
+
+  def handle_event("back_to_templates", _params, socket) do
+    {:noreply, assign(socket, :selected_template, nil)}
+  end
+
+  def handle_event("create_from_template", %{"template" => %{"name" => name}}, socket) do
+    template = socket.assigns.selected_template
+
+    if is_nil(template) do
+      {:noreply, put_flash(socket, :error, "No template selected.")}
+    else
+      name = String.trim(name)
+      slug = slugify(name)
+
+      attrs = %{
+        slug: slug,
+        name: name,
+        status: "active",
+        model_config: %{
+          "primary" => template.suggested_model,
+          "fallbacks" => []
+        },
+        tools_config: %{
+          "profile" => template.tool_profile,
+          "allow" => template.tools_allow
+        },
+        metadata: %{
+          "template_id" => template.id,
+          "system_prompt" => template.system_prompt
+        }
+      }
+
+      case %Agent{} |> Agent.changeset(attrs) |> Repo.insert() do
+        {:ok, agent} ->
+          {:noreply,
+           socket
+           |> put_flash(:info, "Created #{agent.name} from #{template.name} template.")
+           |> assign(:show_onboarding_chooser, false)
+           |> assign(:onboarding_flow, nil)
+           |> assign(:selected_template, nil)
+           |> push_patch(to: ~p"/control/#{agent.slug}")}
+
+        {:error, %Ecto.Changeset{} = changeset} ->
+          {:noreply,
+           socket
+           |> assign(:template_form, to_form(%{"name" => name}, as: :template))
+           |> put_flash(:error, changeset_error_summary(changeset))}
+      end
+    end
+  end
+
+  def handle_event("create_from_template", _params, socket), do: {:noreply, socket}
+
+  def handle_event("submit_federate", %{"federate" => params}, socket) do
+    runtime_id = String.trim(params["runtime_id"] || "")
+    display_name = String.trim(params["display_name"] || "")
+    agent_name = String.trim(params["agent_name"] || "")
+    owner_id = socket.assigns.current_user_id
+
+    cond do
+      runtime_id == "" ->
+        {:noreply, put_flash(socket, :error, "Runtime ID is required.")}
+
+      agent_name == "" ->
+        {:noreply, put_flash(socket, :error, "Agent name is required.")}
+
+      is_nil(owner_id) ->
+        {:noreply, put_flash(socket, :error, "You must be logged in.")}
+
+      true ->
+        runtime_attrs = %{
+          runtime_id: runtime_id,
+          display_name: if(display_name == "", do: nil, else: display_name),
+          transport: "websocket",
+          status: "pending"
+        }
+
+        agent_attrs = %{
+          slug: slugify(agent_name),
+          name: agent_name,
+          status: "active",
+          runtime_type: "external"
+        }
+
+        with {:ok, runtime} <- Federation.register_runtime(owner_id, runtime_attrs),
+             {:ok, agent} <- Federation.link_agent(runtime, agent_attrs),
+             {:ok, _runtime, raw_token} <- Federation.activate_runtime(runtime) do
+          ws_url = "wss://#{PlatformWeb.Endpoint.host()}/runtime/ws"
+
+          {:noreply,
+           socket
+           |> assign(:federate_result, %{
+             runtime_id: runtime_id,
+             token: raw_token,
+             ws_url: ws_url,
+             agent: agent
+           })
+           |> put_flash(:info, "Federated agent #{agent.name} created.")}
+        else
+          {:error, %Ecto.Changeset{} = changeset} ->
+            {:noreply, put_flash(socket, :error, changeset_error_summary(changeset))}
+
+          {:error, reason} ->
+            {:noreply, put_flash(socket, :error, "Federation failed: #{inspect(reason)}")}
+        end
+    end
+  end
+
+  def handle_event("submit_federate", _params, socket), do: {:noreply, socket}
+
+  def handle_event("federate_done", _params, socket) do
+    agent = get_in(socket.assigns, [:federate_result, :agent])
+
+    socket =
+      socket
+      |> assign(:show_onboarding_chooser, false)
+      |> assign(:onboarding_flow, nil)
+      |> assign(:federate_result, nil)
+
+    if agent do
+      {:noreply, push_patch(socket, to: ~p"/control/#{agent.slug}")}
+    else
+      {:noreply, push_patch(socket, to: ~p"/control")}
+    end
+  end
+
+  def handle_event("toggle_import_agent", %{"agent_id" => agent_id}, socket) do
+    selected = socket.assigns.import_selected
+
+    selected =
+      if MapSet.member?(selected, agent_id),
+        do: MapSet.delete(selected, agent_id),
+        else: MapSet.put(selected, agent_id)
+
+    {:noreply, assign(socket, :import_selected, selected)}
+  end
+
+  def handle_event("submit_import", _params, socket) do
+    selected = socket.assigns.import_selected
+    agents = socket.assigns.import_agents
+
+    to_import = Enum.filter(agents, &MapSet.member?(selected, &1.id))
+
+    if to_import == [] do
+      {:noreply, put_flash(socket, :error, "Select at least one agent to import.")}
+    else
+      results =
+        Enum.map(to_import, fn configured_agent ->
+          case WorkspaceBootstrap.ensure_agent(slug: configured_agent.id) do
+            {:ok, agent} -> {:ok, agent}
+            {:error, reason} -> {:error, configured_agent.id, reason}
+          end
+        end)
+
+      imported = Enum.count(results, &match?({:ok, _}, &1))
+      last_agent = results |> Enum.filter(&match?({:ok, _}, &1)) |> List.last()
+
+      socket =
+        socket
+        |> put_flash(:info, "Imported #{imported} agent(s).")
+        |> assign(:show_onboarding_chooser, false)
+        |> assign(:onboarding_flow, nil)
+
+      case last_agent do
+        {:ok, agent} -> {:noreply, push_patch(socket, to: ~p"/control/#{agent.slug}")}
+        _ -> {:noreply, push_patch(socket, to: ~p"/control")}
+      end
+    end
+  end
+
+  # ── Runtime management events for federated agents ──────────────────
+
+  def handle_event(
+        "suspend_federated_runtime",
+        _params,
+        %{assigns: %{selected_agent: %Agent{runtime_id: rid}}} = socket
+      )
+      when is_binary(rid) do
+    case Federation.get_runtime(rid) do
+      %{} = runtime ->
+        case Federation.suspend_runtime(runtime) do
+          {:ok, _} ->
+            {:noreply,
+             socket |> put_flash(:info, "Runtime suspended.") |> reload_selected_agent()}
+
+          {:error, _} ->
+            {:noreply, put_flash(socket, :error, "Could not suspend runtime.")}
+        end
+
+      nil ->
+        {:noreply, put_flash(socket, :error, "Runtime not found.")}
+    end
+  end
+
+  def handle_event("suspend_federated_runtime", _params, socket), do: {:noreply, socket}
+
+  def handle_event(
+        "revoke_federated_runtime",
+        _params,
+        %{assigns: %{selected_agent: %Agent{runtime_id: rid}}} = socket
+      )
+      when is_binary(rid) do
+    case Federation.get_runtime(rid) do
+      %{} = runtime ->
+        case Federation.revoke_runtime(runtime) do
+          {:ok, _} ->
+            {:noreply, socket |> put_flash(:info, "Runtime revoked.") |> reload_selected_agent()}
+
+          {:error, _} ->
+            {:noreply, put_flash(socket, :error, "Could not revoke runtime.")}
+        end
+
+      nil ->
+        {:noreply, put_flash(socket, :error, "Runtime not found.")}
+    end
+  end
+
+  def handle_event("revoke_federated_runtime", _params, socket), do: {:noreply, socket}
+
+  def handle_event(
+        "regenerate_federated_token",
+        _params,
+        %{assigns: %{selected_agent: %Agent{runtime_id: rid}}} = socket
+      )
+      when is_binary(rid) do
+    case Federation.get_runtime(rid) do
+      %{} = runtime ->
+        case Federation.generate_runtime_token(runtime) do
+          {:ok, _runtime, raw_token} ->
+            {:noreply,
+             socket
+             |> assign(:regenerated_token, raw_token)
+             |> put_flash(:info, "New token generated. Save it now.")
+             |> reload_selected_agent()}
+
+          {:error, _} ->
+            {:noreply, put_flash(socket, :error, "Could not regenerate token.")}
+        end
+
+      nil ->
+        {:noreply, put_flash(socket, :error, "Runtime not found.")}
+    end
+  end
+
+  def handle_event("regenerate_federated_token", _params, socket), do: {:noreply, socket}
+
+  def handle_event("dismiss_regenerated_token", _params, socket) do
+    {:noreply, assign(socket, :regenerated_token, nil)}
   end
 
   def handle_event("request_delete_agent", %{"slug" => slug}, socket) when is_binary(slug) do
@@ -458,664 +887,1069 @@ defmodule PlatformWeb.ControlCenterLive do
 
   @impl true
   def render(assigns) do
+    assigns = assign(assigns, :role_templates, @role_templates)
+
     ~H"""
-    <div class="flex h-full min-h-full flex-col overflow-hidden bg-base-100 lg:flex-row">
-      <aside
-        id="agent-directory"
-        class={[
-          "flex min-h-0 w-full flex-col overflow-hidden border-base-300 bg-base-200/60 lg:w-80 lg:flex-shrink-0 lg:border-r",
-          @selected_agent && "hidden border-b lg:flex",
-          is_nil(@selected_agent) && "border-b"
-        ]}
+    <div class="flex h-full min-h-full flex-col overflow-hidden bg-base-100">
+      <%!-- ── Onboarding overlay ─────────────────────────────────────── --%>
+      <div
+        :if={@show_onboarding_chooser}
+        class="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-base-300/80 backdrop-blur-sm"
       >
-        <div class="border-b border-base-300 px-4 py-4 sm:px-5">
-          <div class="flex items-start justify-between gap-3">
-            <div>
-              <p class="text-xs font-semibold uppercase tracking-widest text-base-content/50">
-                Agent Control Center
-              </p>
-              <p class="mt-1 text-sm text-base-content/70">
-                Runtime, identity files, memory, sessions, and Vault visibility.
-              </p>
+        <div class="w-full max-w-2xl px-4 py-8 sm:py-16">
+          <div class="rounded-3xl border border-base-300 bg-base-100 p-6 shadow-xl sm:p-8">
+            <div class="flex items-center justify-between">
+              <h2 class="text-xl font-semibold text-base-content">
+                {cond do
+                  @federate_result -> "Connection Details"
+                  @selected_template -> @selected_template.name <> " Template"
+                  @onboarding_flow == :template -> "Choose a Template"
+                  @onboarding_flow == :federate -> "Federate an Agent"
+                  @onboarding_flow == :import -> "Import from Workspace"
+                  @onboarding_flow == :create -> "Create Custom Agent"
+                  true -> "Add Agent"
+                end}
+              </h2>
+              <button
+                type="button"
+                phx-click="close_onboarding"
+                class="btn btn-ghost btn-sm btn-circle"
+              >
+                <span class="hero-x-mark h-5 w-5" />
+              </button>
             </div>
 
-            <button
-              id="toggle-create-agent"
-              type="button"
-              phx-click="toggle_create_agent"
-              class="btn btn-neutral btn-sm"
-            >
-              {if @show_create_agent, do: "Close", else: "Create"}
-            </button>
-          </div>
-        </div>
+            <%!-- ── Chooser cards ─────────────────────────────────── --%>
+            <div :if={is_nil(@onboarding_flow)} class="mt-6 grid gap-4 sm:grid-cols-2">
+              <button
+                type="button"
+                phx-click="choose_onboarding"
+                phx-value-flow="template"
+                class="group flex flex-col items-center gap-3 rounded-2xl border border-base-300 bg-base-100 px-4 py-6 text-center transition hover:border-primary/40 hover:bg-primary/5"
+              >
+                <span class="hero-briefcase h-8 w-8 text-primary" />
+                <span class="text-sm font-semibold text-base-content">From a Template</span>
+                <span class="text-xs text-base-content/55">
+                  Designer, Researcher, Architect, and more
+                </span>
+              </button>
 
-        <div
-          :if={@show_create_agent}
-          class="border-b border-base-300 px-4 py-4 sm:px-5"
-        >
-          <.form
-            for={@create_agent_form}
-            id="create-agent-form"
-            phx-submit="create_agent"
-            class="space-y-3"
-          >
-            <div class="flex items-center justify-between gap-3">
-              <div>
-                <p class="text-sm font-semibold text-base-content">Create agent</p>
-                <p class="text-xs text-base-content/55">
-                  Add a runtime-managed agent without leaving Control Center.
+              <button
+                type="button"
+                phx-click="choose_onboarding"
+                phx-value-flow="federate"
+                class="group flex flex-col items-center gap-3 rounded-2xl border border-base-300 bg-base-100 px-4 py-6 text-center transition hover:border-primary/40 hover:bg-primary/5"
+              >
+                <span class="hero-globe-alt h-8 w-8 text-primary" />
+                <span class="text-sm font-semibold text-base-content">Federate</span>
+                <span class="text-xs text-base-content/55">Connect an agent from OpenClaw</span>
+              </button>
+
+              <button
+                type="button"
+                phx-click="choose_onboarding"
+                phx-value-flow="import"
+                class="group flex flex-col items-center gap-3 rounded-2xl border border-base-300 bg-base-100 px-4 py-6 text-center transition hover:border-primary/40 hover:bg-primary/5"
+              >
+                <span class="hero-arrow-down-tray h-8 w-8 text-primary" />
+                <span class="text-sm font-semibold text-base-content">Import</span>
+                <span class="text-xs text-base-content/55">From an OpenClaw workspace</span>
+              </button>
+
+              <button
+                type="button"
+                phx-click="choose_onboarding"
+                phx-value-flow="create"
+                class="group flex flex-col items-center gap-3 rounded-2xl border border-base-300 bg-base-100 px-4 py-6 text-center transition hover:border-primary/40 hover:bg-primary/5"
+              >
+                <span class="hero-wrench-screwdriver h-8 w-8 text-primary" />
+                <span class="text-sm font-semibold text-base-content">Create Custom</span>
+                <span class="text-xs text-base-content/55">Full manual setup</span>
+              </button>
+            </div>
+
+            <%!-- ── Template flow ─────────────────────────────────── --%>
+            <div :if={@onboarding_flow == :template && is_nil(@selected_template)} class="mt-6">
+              <div class="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                <button
+                  :for={tmpl <- @role_templates}
+                  type="button"
+                  phx-click="select_template"
+                  phx-value-template_id={tmpl.id}
+                  class="flex flex-col items-center gap-2 rounded-2xl border border-base-300 bg-base-100 px-3 py-4 text-center transition hover:border-primary/40 hover:bg-primary/5"
+                >
+                  <span class={"#{tmpl.icon} h-6 w-6 text-primary"} />
+                  <span class="text-sm font-semibold text-base-content">{tmpl.name}</span>
+                  <span class="text-[11px] text-base-content/55">{tmpl.description}</span>
+                </button>
+              </div>
+            </div>
+
+            <div :if={@onboarding_flow == :template && @selected_template} class="mt-6">
+              <button type="button" phx-click="back_to_templates" class="btn btn-ghost btn-sm mb-4">
+                <span class="hero-arrow-left h-4 w-4" /> Back
+              </button>
+              <.form
+                for={@template_form}
+                id="template-create-form"
+                phx-submit="create_from_template"
+                class="space-y-4"
+              >
+                <div class="rounded-2xl border border-base-300 bg-base-200/40 px-4 py-3">
+                  <div class="flex items-center gap-3">
+                    <span class={"#{@selected_template.icon} h-6 w-6 text-primary"} />
+                    <div>
+                      <p class="text-sm font-semibold">{@selected_template.name}</p>
+                      <p class="text-xs text-base-content/55">{@selected_template.description}</p>
+                    </div>
+                  </div>
+                  <p class="mt-2 text-xs text-base-content/50">
+                    Model: {@selected_template.suggested_model} · Tools: {Enum.join(
+                      @selected_template.tools_allow,
+                      ", "
+                    )}
+                  </p>
+                </div>
+                <label class="form-control">
+                  <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
+                    Agent Name
+                  </span>
+                  <input
+                    type="text"
+                    name="template[name]"
+                    value={@template_form[:name].value || ""}
+                    class="input input-bordered w-full"
+                    placeholder="e.g. Designer"
+                    autofocus
+                  />
+                </label>
+                <button type="submit" class="btn btn-primary w-full">Create</button>
+              </.form>
+            </div>
+
+            <%!-- ── Federate flow ─────────────────────────────────── --%>
+            <div :if={@onboarding_flow == :federate && is_nil(@federate_result)} class="mt-6">
+              <.form
+                for={@federate_form}
+                id="federate-form"
+                phx-submit="submit_federate"
+                class="space-y-4"
+              >
+                <label class="form-control">
+                  <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
+                    Runtime ID
+                  </span>
+                  <input
+                    type="text"
+                    name="federate[runtime_id]"
+                    value={@federate_form[:runtime_id].value || ""}
+                    class="input input-bordered w-full"
+                    placeholder="e.g. rowan-home-openclaw"
+                    autofocus
+                  />
+                </label>
+                <label class="form-control">
+                  <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
+                    Display Name (optional)
+                  </span>
+                  <input
+                    type="text"
+                    name="federate[display_name]"
+                    value={@federate_form[:display_name].value || ""}
+                    class="input input-bordered w-full"
+                    placeholder="Rowan's OpenClaw"
+                  />
+                </label>
+                <label class="form-control">
+                  <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
+                    Agent Name
+                  </span>
+                  <input
+                    type="text"
+                    name="federate[agent_name]"
+                    value={@federate_form[:agent_name].value || ""}
+                    class="input input-bordered w-full"
+                    placeholder="Zip"
+                  />
+                </label>
+                <button type="submit" class="btn btn-primary w-full">Federate Agent</button>
+              </.form>
+            </div>
+
+            <%!-- ── Federate result (token display) ───────────────── --%>
+            <div :if={@federate_result} class="mt-6 space-y-4">
+              <div class="rounded-2xl border border-warning/40 bg-warning/10 p-4">
+                <p class="text-sm font-semibold text-warning-content">
+                  <span class="hero-exclamation-triangle mr-1 inline-block h-4 w-4 align-text-bottom" />
+                  Save this token now. It cannot be retrieved later.
                 </p>
               </div>
-            </div>
 
-            <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-1">
-              <label class="form-control">
-                <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
-                  Name
-                </span>
-                <input
-                  type="text"
-                  name="create_agent[name]"
-                  value={@create_agent_form[:name].value || ""}
-                  class="input input-bordered w-full"
-                  placeholder="Research Agent"
-                />
-              </label>
-
-              <label class="form-control">
-                <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
-                  Slug
-                </span>
-                <input
-                  type="text"
-                  name="create_agent[slug]"
-                  value={@create_agent_form[:slug].value || ""}
-                  class="input input-bordered w-full"
-                  placeholder="research-agent"
-                />
-              </label>
-
-              <label class="form-control sm:col-span-2 lg:col-span-1">
-                <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
-                  Primary model
-                </span>
-                <input
-                  type="text"
-                  name="create_agent[primary_model]"
-                  value={@create_agent_form[:primary_model].value || ""}
-                  class="input input-bordered w-full"
-                  placeholder="anthropic/claude-sonnet-4-6"
-                />
-              </label>
-            </div>
-
-            <div class="grid gap-3 sm:grid-cols-3 lg:grid-cols-1 xl:grid-cols-3">
-              <label class="form-control">
-                <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
-                  Status
-                </span>
-                <select name="create_agent[status]" class="select select-bordered w-full">
-                  <option
-                    :for={status <- ["active", "paused", "archived"]}
-                    selected={@create_agent_form[:status].value == status}
-                    value={status}
-                  >
-                    {humanize_value(status)}
-                  </option>
-                </select>
-              </label>
-
-              <label class="form-control">
-                <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
-                  Max
-                </span>
-                <input
-                  type="number"
-                  min="1"
-                  name="create_agent[max_concurrent]"
-                  value={@create_agent_form[:max_concurrent].value || 1}
-                  class="input input-bordered w-full"
-                />
-              </label>
-
-              <label class="form-control">
-                <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
-                  Sandbox
-                </span>
-                <select name="create_agent[sandbox_mode]" class="select select-bordered w-full">
-                  <option
-                    :for={mode <- ["off", "inherit", "require"]}
-                    selected={(@create_agent_form[:sandbox_mode].value || "off") == mode}
-                    value={mode}
-                  >
-                    {mode}
-                  </option>
-                </select>
-              </label>
-            </div>
-
-            <button type="submit" class="btn btn-neutral w-full">Create agent</button>
-          </.form>
-        </div>
-
-        <nav
-          id="agent-list"
-          class="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 py-3 sm:px-4"
-          data-mobile-layout="list-detail"
-        >
-          <article
-            :for={agent <- @agents}
-            class={[
-              "mb-3 rounded-2xl border px-3 py-3 transition-colors",
-              @selected_agent && @selected_agent.slug == agent.slug &&
-                "border-primary bg-primary/5 shadow-sm",
-              (!@selected_agent || @selected_agent.slug != agent.slug) &&
-                "border-base-300 bg-base-100 hover:border-primary/30 hover:bg-base-100/80"
-            ]}
-          >
-            <.link patch={~p"/control/#{agent.slug}"} class="block text-left">
-              <div class="flex items-start justify-between gap-3">
-                <div class="min-w-0">
-                  <p class="truncate text-sm font-semibold text-base-content">{agent.name}</p>
-                  <p class="truncate text-xs text-base-content/50">{agent.slug}</p>
+              <div class="space-y-3">
+                <div>
+                  <p class="text-xs font-semibold uppercase tracking-widest text-base-content/50">
+                    Runtime ID
+                  </p>
+                  <div class="mt-1 flex items-center gap-2">
+                    <code class="flex-1 rounded-lg bg-base-200 px-3 py-2 font-mono text-sm">
+                      {@federate_result.runtime_id}
+                    </code>
+                    <button
+                      type="button"
+                      id="copy-runtime-id"
+                      phx-hook="CopyToClipboard"
+                      data-clipboard-text={@federate_result.runtime_id}
+                      class="btn btn-ghost btn-sm"
+                    >
+                      Copy
+                    </button>
+                  </div>
                 </div>
-                <span class={agent_badge_class(agent.status)}>{humanize_value(agent.status)}</span>
-              </div>
 
-              <div class="mt-3 flex flex-wrap gap-2 text-[11px] text-base-content/55">
-                <span class="rounded-full bg-base-200 px-2 py-0.5">
-                  {agent.primary_model}
-                </span>
-                <span class="rounded-full bg-base-200 px-2 py-0.5">
-                  max {agent.max_concurrent || 1}
-                </span>
-                <span class={source_badge_class(agent.source)}>
-                  {humanize_value(agent.source_label)}
-                </span>
-              </div>
-
-              <div class="mt-3 flex items-center gap-2">
-                <span class={runtime_badge_class(agent.runtime_status)}>
-                  {humanize_value(agent.runtime_status)}
-                </span>
-                <span class="text-[11px] text-base-content/45">
-                  {if agent.running?, do: "runtime reachable", else: "runtime stopped"}
-                </span>
-              </div>
-            </.link>
-
-            <div class="mt-3 flex flex-wrap items-center gap-2">
-              <.link patch={~p"/control/#{agent.slug}"} class="btn btn-ghost btn-xs">
-                Open
-              </.link>
-              <button
-                :if={agent.agent && !agent.workspace_managed? && @pending_delete_slug != agent.slug}
-                type="button"
-                phx-click="request_delete_agent"
-                phx-value-slug={agent.slug}
-                class="btn btn-ghost btn-xs text-error"
-              >
-                Delete
-              </button>
-              <button
-                :if={agent.agent && !agent.workspace_managed? && @pending_delete_slug == agent.slug}
-                id={"confirm-delete-agent-#{agent.slug}"}
-                type="button"
-                phx-click="delete_agent"
-                phx-value-slug={agent.slug}
-                class="btn btn-error btn-xs"
-              >
-                Confirm delete
-              </button>
-              <button
-                :if={agent.agent && !agent.workspace_managed? && @pending_delete_slug == agent.slug}
-                type="button"
-                phx-click="cancel_delete_agent"
-                class="btn btn-ghost btn-xs"
-              >
-                Cancel
-              </button>
-            </div>
-          </article>
-
-          <div
-            :if={@agents == []}
-            class="rounded-2xl border border-dashed border-base-300 bg-base-100 px-4 py-5 text-sm text-base-content/55"
-          >
-            No agents yet. Import an OpenClaw workspace or create one through the runtime APIs first.
-          </div>
-        </nav>
-      </aside>
-
-      <main class={[
-        "min-h-0 flex-1 overflow-y-auto",
-        is_nil(@selected_agent) && "hidden lg:block"
-      ]}>
-        <div
-          :if={@selected_agent}
-          class="mx-auto flex max-w-7xl flex-col gap-6 px-4 py-4 sm:px-6 sm:py-6"
-        >
-          <section class="rounded-3xl border border-base-300 bg-base-100 p-5 shadow-sm">
-            <div class="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
-              <div class="min-w-0">
-                <.link patch={~p"/control"} class="btn btn-ghost btn-sm mb-3 w-fit lg:hidden">
-                  Back to agents
-                </.link>
-                <div class="flex flex-wrap items-center gap-3">
-                  <h1 class="truncate text-2xl font-semibold text-base-content">
-                    {@selected_agent.name}
-                  </h1>
-                  <span class={agent_badge_class(@selected_agent.status)}>
-                    {humanize_value(@selected_agent.status)}
-                  </span>
-                  <span class={runtime_badge_class(@runtime.status)}>
-                    Runtime {humanize_value(@runtime.status)}
-                  </span>
-                  <span
-                    :if={@selected_agent_directory_entry}
-                    class={source_badge_class(@selected_agent_directory_entry.source)}
-                  >
-                    {humanize_value(@selected_agent_directory_entry.source_label)}
-                  </span>
+                <div>
+                  <p class="text-xs font-semibold uppercase tracking-widest text-base-content/50">
+                    Auth Token
+                  </p>
+                  <div class="mt-1 flex items-center gap-2">
+                    <code class="flex-1 break-all rounded-lg bg-warning/10 px-3 py-2 font-mono text-xs">
+                      {@federate_result.token}
+                    </code>
+                    <button
+                      type="button"
+                      id="copy-auth-token"
+                      phx-hook="CopyToClipboard"
+                      data-clipboard-text={@federate_result.token}
+                      class="btn btn-ghost btn-sm"
+                    >
+                      Copy
+                    </button>
+                  </div>
                 </div>
-                <p class="mt-1 text-sm text-base-content/60">{@selected_agent.slug}</p>
-                <div class="mt-3 flex flex-wrap gap-2 text-xs text-base-content/55">
-                  <span class="rounded-full bg-base-200 px-2.5 py-1">
-                    {primary_model_label(@selected_agent)}
-                  </span>
-                  <span class="rounded-full bg-base-200 px-2.5 py-1">
-                    sandbox {@selected_agent.sandbox_mode || "off"}
-                  </span>
-                  <span class="rounded-full bg-base-200 px-2.5 py-1">
-                    thinking {blank_fallback(@selected_agent.thinking_default, "default")}
-                  </span>
+
+                <div>
+                  <p class="text-xs font-semibold uppercase tracking-widest text-base-content/50">
+                    WebSocket URL
+                  </p>
+                  <div class="mt-1 flex items-center gap-2">
+                    <code class="flex-1 rounded-lg bg-base-200 px-3 py-2 font-mono text-sm">
+                      {@federate_result.ws_url}
+                    </code>
+                    <button
+                      type="button"
+                      id="copy-ws-url"
+                      phx-hook="CopyToClipboard"
+                      data-clipboard-text={@federate_result.ws_url}
+                      class="btn btn-ghost btn-sm"
+                    >
+                      Copy
+                    </button>
+                  </div>
+                </div>
+
+                <div>
+                  <p class="text-xs font-semibold uppercase tracking-widest text-base-content/50">
+                    openclaw.json snippet
+                  </p>
+                  <pre class="mt-1 overflow-x-auto rounded-lg bg-base-200 p-3 font-mono text-xs leading-5"><code>{federation_config_snippet(@federate_result.ws_url, @federate_result.runtime_id)}</code></pre>
                 </div>
               </div>
 
+              <button type="button" phx-click="federate_done" class="btn btn-primary w-full">
+                Done
+              </button>
+            </div>
+
+            <%!-- ── Import flow ───────────────────────────────────── --%>
+            <div :if={@onboarding_flow == :import} class="mt-6">
               <div
-                id="agent-primary-actions"
-                class="grid w-full grid-cols-1 gap-2 sm:w-auto sm:grid-cols-2 xl:grid-cols-4"
-                data-mobile-actions="stacked"
+                :if={@import_agents == []}
+                class="rounded-2xl border border-dashed border-base-300 px-4 py-6 text-center text-sm text-base-content/55"
               >
+                No workspace agents found. Mount an OpenClaw workspace with an
+                <code>openclaw.json</code>
+                to import agents.
+              </div>
+              <div :if={@import_agents != []} class="space-y-4">
+                <div class="space-y-2">
+                  <label
+                    :for={agent <- @import_agents}
+                    class={[
+                      "flex cursor-pointer items-center gap-3 rounded-2xl border px-4 py-3 transition",
+                      MapSet.member?(@import_selected, agent.id) && "border-primary bg-primary/5",
+                      !MapSet.member?(@import_selected, agent.id) &&
+                        "border-base-300 hover:border-primary/30"
+                    ]}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={MapSet.member?(@import_selected, agent.id)}
+                      phx-click="toggle_import_agent"
+                      phx-value-agent_id={agent.id}
+                      class="checkbox checkbox-primary checkbox-sm"
+                    />
+                    <div>
+                      <p class="text-sm font-semibold text-base-content">{agent.name}</p>
+                      <p class="text-xs text-base-content/50">{agent.id}</p>
+                    </div>
+                  </label>
+                </div>
                 <button
-                  id="start-runtime"
                   type="button"
-                  phx-click="start_runtime"
-                  class="btn btn-primary btn-sm w-full"
-                  disabled={@runtime.running?}
+                  phx-click="submit_import"
+                  class="btn btn-primary w-full"
+                  disabled={MapSet.size(@import_selected) == 0}
                 >
-                  Start runtime
-                </button>
-                <button
-                  id="refresh-runtime"
-                  type="button"
-                  phx-click="refresh_runtime"
-                  class="btn btn-ghost btn-sm w-full"
-                >
-                  Refresh runtime
-                </button>
-                <button
-                  id="stop-runtime"
-                  type="button"
-                  phx-click="stop_runtime"
-                  class="btn btn-ghost btn-sm w-full text-error"
-                  disabled={!@runtime.running?}
-                >
-                  Stop runtime
-                </button>
-                <button
-                  :if={@pending_delete_slug != @selected_agent.slug}
-                  id="delete-agent"
-                  type="button"
-                  phx-click="request_delete_agent"
-                  class="btn btn-ghost btn-sm w-full text-error"
-                  disabled={
-                    @selected_agent_directory_entry &&
-                      @selected_agent_directory_entry.workspace_managed?
-                  }
-                >
-                  Delete agent
-                </button>
-                <button
-                  :if={@pending_delete_slug == @selected_agent.slug}
-                  id="delete-agent"
-                  type="button"
-                  phx-click="delete_agent"
-                  class="btn btn-error btn-sm w-full"
-                  disabled={
-                    @selected_agent_directory_entry &&
-                      @selected_agent_directory_entry.workspace_managed?
-                  }
-                >
-                  Confirm delete
+                  Import {MapSet.size(@import_selected)} agent(s)
                 </button>
               </div>
             </div>
 
-            <div :if={@pending_delete_slug == @selected_agent.slug} class="mt-3">
-              <button
-                type="button"
-                phx-click="cancel_delete_agent"
-                class="btn btn-ghost btn-xs"
+            <%!-- ── Create custom flow (inline existing form) ─────── --%>
+            <div :if={@onboarding_flow == :create} class="mt-6">
+              <.form
+                for={@create_agent_form}
+                id="create-agent-form"
+                phx-submit="create_agent"
+                class="space-y-3"
               >
-                Cancel delete
+                <div class="grid gap-3 sm:grid-cols-2">
+                  <label class="form-control">
+                    <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
+                      Name
+                    </span>
+                    <input
+                      type="text"
+                      name="create_agent[name]"
+                      value={@create_agent_form[:name].value || ""}
+                      class="input input-bordered w-full"
+                      placeholder="Research Agent"
+                    />
+                  </label>
+                  <label class="form-control">
+                    <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
+                      Slug
+                    </span>
+                    <input
+                      type="text"
+                      name="create_agent[slug]"
+                      value={@create_agent_form[:slug].value || ""}
+                      class="input input-bordered w-full"
+                      placeholder="research-agent"
+                    />
+                  </label>
+                  <label class="form-control sm:col-span-2">
+                    <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
+                      Primary model
+                    </span>
+                    <input
+                      type="text"
+                      name="create_agent[primary_model]"
+                      value={@create_agent_form[:primary_model].value || ""}
+                      class="input input-bordered w-full"
+                      placeholder="anthropic/claude-sonnet-4-6"
+                    />
+                  </label>
+                </div>
+                <div class="grid gap-3 sm:grid-cols-3">
+                  <label class="form-control">
+                    <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
+                      Status
+                    </span>
+                    <select name="create_agent[status]" class="select select-bordered w-full">
+                      <option
+                        :for={status <- ["active", "paused", "archived"]}
+                        selected={@create_agent_form[:status].value == status}
+                        value={status}
+                      >
+                        {humanize_value(status)}
+                      </option>
+                    </select>
+                  </label>
+                  <label class="form-control">
+                    <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
+                      Max
+                    </span>
+                    <input
+                      type="number"
+                      min="1"
+                      name="create_agent[max_concurrent]"
+                      value={@create_agent_form[:max_concurrent].value || 1}
+                      class="input input-bordered w-full"
+                    />
+                  </label>
+                  <label class="form-control">
+                    <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
+                      Sandbox
+                    </span>
+                    <select name="create_agent[sandbox_mode]" class="select select-bordered w-full">
+                      <option
+                        :for={mode <- ["off", "inherit", "require"]}
+                        selected={(@create_agent_form[:sandbox_mode].value || "off") == mode}
+                        value={mode}
+                      >
+                        {mode}
+                      </option>
+                    </select>
+                  </label>
+                </div>
+                <button type="submit" class="btn btn-primary w-full">Create agent</button>
+              </.form>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <%!-- ── Main content ───────────────────────────────────────────── --%>
+      <div class="flex min-h-0 flex-1 flex-col overflow-hidden lg:flex-row">
+        <%!-- ── Sidebar / agent list (hidden when agent selected on mobile) --%>
+        <aside
+          id="agent-directory"
+          class={[
+            "flex min-h-0 w-full flex-col overflow-hidden border-base-300 bg-base-200/60 lg:w-80 lg:flex-shrink-0 lg:border-r",
+            @selected_agent && "hidden lg:flex"
+          ]}
+        >
+          <div class="border-b border-base-300 px-4 py-4 sm:px-5">
+            <div class="flex items-start justify-between gap-3">
+              <div>
+                <p class="text-xs font-semibold uppercase tracking-widest text-base-content/50">
+                  Agent Resources
+                </p>
+                <p class="mt-1 text-sm text-base-content/70">
+                  Manage, federate, and monitor your agents.
+                </p>
+              </div>
+              <button
+                id="add-agent-btn-sidebar"
+                type="button"
+                phx-click="open_onboarding_chooser"
+                class="btn btn-primary btn-sm gap-1"
+              >
+                <span class="hero-plus h-4 w-4" /> Add
               </button>
             </div>
+          </div>
 
-            <div class="mt-5 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
-              <.stat_card
-                label="Runtime"
-                value={humanize_value(@runtime.status)}
-                detail={runtime_detail(@runtime)}
-              />
-              <.stat_card
-                label="Active sessions"
-                value={length(@runtime.active_session_ids)}
-                detail="live in memory"
-              />
-              <.stat_card
-                label="Workspace files"
-                value={@overview_counts.workspace_files}
-                detail="identity + instructions"
-              />
-              <.stat_card
-                label="Memories"
-                value={@overview_counts.memories}
-                detail="daily, long-term, snapshot"
-              />
-              <.stat_card
-                label="Vault creds"
-                value={@overview_counts.vault}
-                detail="agent + relevant platform scope"
-              />
-            </div>
-          </section>
-
-          <div class="grid gap-6 xl:grid-cols-[minmax(0,1.6fr)_minmax(320px,0.9fr)]">
-            <div class="flex min-w-0 flex-col gap-6">
-              <section class="rounded-3xl border border-base-300 bg-base-100 p-5 shadow-sm">
-                <div class="flex items-start justify-between gap-4">
-                  <div>
-                    <h2 class="text-lg font-semibold text-base-content">Config + model routing</h2>
-                    <p class="mt-1 text-sm text-base-content/60">
-                      Edit the persisted agent definition. Runtime refresh uses the real AgentServer.
-                    </p>
+          <nav
+            id="agent-list"
+            class="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 py-3 sm:px-4"
+          >
+            <article
+              :for={agent <- @agents}
+              class={[
+                "mb-3 rounded-2xl border px-3 py-3 transition-colors",
+                @selected_agent && @selected_agent.slug == agent.slug &&
+                  "border-primary bg-primary/5 shadow-sm",
+                (!@selected_agent || @selected_agent.slug != agent.slug) &&
+                  "border-base-300 bg-base-100 hover:border-primary/30 hover:bg-base-100/80"
+              ]}
+            >
+              <.link patch={~p"/control/#{agent.slug}"} class="block text-left">
+                <div class="flex items-start justify-between gap-3">
+                  <div class="min-w-0">
+                    <p class="truncate text-sm font-semibold text-base-content">{agent.name}</p>
+                    <p class="truncate text-xs text-base-content/50">{agent.slug}</p>
+                  </div>
+                  <div class="flex items-center gap-2">
+                    <span class={[
+                      "inline-block h-2 w-2 rounded-full",
+                      agent.running? && "bg-success",
+                      !agent.running? && "bg-base-content/25"
+                    ]} />
+                    <span class={agent_badge_class(agent.status)}>
+                      {humanize_value(agent.status)}
+                    </span>
                   </div>
                 </div>
 
-                <.form
-                  for={@config_form}
-                  id="agent-config-form"
-                  phx-submit="save_config"
-                  class="mt-4 space-y-4"
+                <div class="mt-2 flex flex-wrap gap-2 text-[11px] text-base-content/55">
+                  <span class="rounded-full bg-base-200 px-2 py-0.5">
+                    {agent.primary_model}
+                  </span>
+                  <span class={source_badge_class(agent.source)}>
+                    {humanize_value(agent.source_label)}
+                  </span>
+                </div>
+              </.link>
+            </article>
+
+            <%!-- ── Empty state ─────────────────────────────────── --%>
+            <div
+              :if={@agents == []}
+              class="flex flex-col items-center gap-6 px-4 py-10 text-center"
+            >
+              <div>
+                <span class="hero-rectangle-stack mx-auto h-12 w-12 text-base-content/25" />
+                <p class="mt-3 text-lg font-semibold text-base-content">Add your first agent</p>
+                <p class="mt-1 text-sm text-base-content/55">
+                  Choose a template, federate from OpenClaw, import from a workspace, or build from scratch.
+                </p>
+              </div>
+
+              <div class="grid w-full max-w-sm grid-cols-2 gap-3">
+                <button
+                  type="button"
+                  phx-click="choose_onboarding"
+                  phx-value-flow="template"
+                  class="flex flex-col items-center gap-2 rounded-2xl border border-base-300 bg-base-100 px-3 py-4 text-center transition hover:border-primary/40 hover:bg-primary/5"
                 >
-                  <div class="grid gap-4 md:grid-cols-2">
-                    <label class="form-control">
-                      <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
-                        Name
-                      </span>
-                      <input
-                        type="text"
-                        name="config[name]"
-                        value={@config_form[:name].value || ""}
-                        class="input input-bordered w-full"
-                      />
-                    </label>
+                  <span class="hero-briefcase h-6 w-6 text-primary" />
+                  <span class="text-xs font-semibold">Template</span>
+                </button>
+                <button
+                  type="button"
+                  phx-click="choose_onboarding"
+                  phx-value-flow="federate"
+                  class="flex flex-col items-center gap-2 rounded-2xl border border-base-300 bg-base-100 px-3 py-4 text-center transition hover:border-primary/40 hover:bg-primary/5"
+                >
+                  <span class="hero-globe-alt h-6 w-6 text-primary" />
+                  <span class="text-xs font-semibold">Federate</span>
+                </button>
+                <button
+                  type="button"
+                  phx-click="choose_onboarding"
+                  phx-value-flow="import"
+                  class="flex flex-col items-center gap-2 rounded-2xl border border-base-300 bg-base-100 px-3 py-4 text-center transition hover:border-primary/40 hover:bg-primary/5"
+                >
+                  <span class="hero-arrow-down-tray h-6 w-6 text-primary" />
+                  <span class="text-xs font-semibold">Import</span>
+                </button>
+                <button
+                  type="button"
+                  phx-click="choose_onboarding"
+                  phx-value-flow="create"
+                  class="flex flex-col items-center gap-2 rounded-2xl border border-base-300 bg-base-100 px-3 py-4 text-center transition hover:border-primary/40 hover:bg-primary/5"
+                >
+                  <span class="hero-wrench-screwdriver h-6 w-6 text-primary" />
+                  <span class="text-xs font-semibold">Custom</span>
+                </button>
+              </div>
+            </div>
+          </nav>
+        </aside>
 
-                    <label class="form-control">
-                      <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
-                        Status
-                      </span>
-                      <select name="config[status]" class="select select-bordered w-full">
-                        <option
-                          :for={status <- ["active", "paused", "archived"]}
-                          selected={@config_form[:status].value == status}
-                          value={status}
-                        >
-                          {humanize_value(status)}
-                        </option>
-                      </select>
-                    </label>
-
-                    <label class="form-control">
-                      <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
-                        Primary model
-                      </span>
-                      <input
-                        type="text"
-                        name="config[primary_model]"
-                        value={@config_form[:primary_model].value || ""}
-                        class="input input-bordered w-full"
-                        placeholder="anthropic/claude-sonnet-4-6"
-                      />
-                    </label>
-
-                    <label class="form-control">
-                      <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
-                        Fallbacks
-                      </span>
-                      <input
-                        type="text"
-                        name="config[fallback_models]"
-                        value={@config_form[:fallback_models].value || ""}
-                        class="input input-bordered w-full"
-                        placeholder="openai/gpt-4.1, openai/gpt-4o-mini"
-                      />
-                    </label>
-
-                    <label class="form-control">
-                      <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
-                        Thinking default
-                      </span>
-                      <input
-                        type="text"
-                        name="config[thinking_default]"
-                        value={@config_form[:thinking_default].value || ""}
-                        class="input input-bordered w-full"
-                        placeholder="medium"
-                      />
-                    </label>
-
-                    <label class="form-control">
-                      <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
-                        Max concurrent
-                      </span>
-                      <input
-                        type="number"
-                        min="1"
-                        name="config[max_concurrent]"
-                        value={@config_form[:max_concurrent].value || 1}
-                        class="input input-bordered w-full"
-                      />
-                    </label>
-
-                    <label class="form-control md:col-span-2">
-                      <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
-                        Sandbox mode
-                      </span>
-                      <select
-                        name="config[sandbox_mode]"
-                        class="select select-bordered w-full md:max-w-xs"
-                      >
-                        <option
-                          :for={mode <- ["off", "inherit", "require"]}
-                          selected={(@config_form[:sandbox_mode].value || "off") == mode}
-                          value={mode}
-                        >
-                          {mode}
-                        </option>
-                      </select>
-                    </label>
+        <%!-- ── Main panel ─────────────────────────────────────────── --%>
+        <main class={[
+          "min-h-0 flex-1 overflow-y-auto",
+          is_nil(@selected_agent) && "hidden lg:block"
+        ]}>
+          <%!-- Agent detail view --%>
+          <div
+            :if={@selected_agent}
+            class="mx-auto flex max-w-7xl flex-col gap-6 px-4 py-4 sm:px-6 sm:py-6"
+          >
+            <%!-- Header section --%>
+            <section class="rounded-3xl border border-base-300 bg-base-100 p-5 shadow-sm">
+              <div class="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+                <div class="min-w-0">
+                  <.link patch={~p"/control"} class="btn btn-ghost btn-sm mb-3 w-fit lg:hidden">
+                    <span class="hero-arrow-left h-4 w-4" /> Back to agents
+                  </.link>
+                  <div class="flex flex-wrap items-center gap-3">
+                    <h1 class="truncate text-2xl font-semibold text-base-content">
+                      {@selected_agent.name}
+                    </h1>
+                    <span class={[
+                      "inline-block h-2.5 w-2.5 rounded-full",
+                      @runtime.running? && "bg-success",
+                      !@runtime.running? && "bg-base-content/25"
+                    ]} />
+                    <span class={agent_badge_class(@selected_agent.status)}>
+                      {humanize_value(@selected_agent.status)}
+                    </span>
+                    <span class={runtime_badge_class(@runtime.status)}>
+                      Runtime {humanize_value(@runtime.status)}
+                    </span>
+                    <span
+                      :if={@selected_agent_directory_entry}
+                      class={source_badge_class(@selected_agent_directory_entry.source)}
+                    >
+                      {humanize_value(@selected_agent_directory_entry.source_label)}
+                    </span>
                   </div>
+                  <p class="mt-1 text-sm text-base-content/60">{@selected_agent.slug}</p>
+                  <div class="mt-3 flex flex-wrap gap-2 text-xs text-base-content/55">
+                    <span class="rounded-full bg-base-200 px-2.5 py-1">
+                      {primary_model_label(@selected_agent)}
+                    </span>
+                    <span class="rounded-full bg-base-200 px-2.5 py-1">
+                      sandbox {@selected_agent.sandbox_mode || "off"}
+                    </span>
+                    <span class="rounded-full bg-base-200 px-2.5 py-1">
+                      thinking {blank_fallback(@selected_agent.thinking_default, "default")}
+                    </span>
+                  </div>
+                </div>
 
-                  <p
-                    :if={
+                <div
+                  id="agent-primary-actions"
+                  class="grid w-full grid-cols-2 gap-2 sm:w-auto sm:grid-cols-2 xl:grid-cols-4"
+                >
+                  <button
+                    id="start-runtime"
+                    type="button"
+                    phx-click="start_runtime"
+                    class="btn btn-primary btn-sm w-full"
+                    disabled={@runtime.running?}
+                  >
+                    Start runtime
+                  </button>
+                  <button
+                    id="refresh-runtime"
+                    type="button"
+                    phx-click="refresh_runtime"
+                    class="btn btn-ghost btn-sm w-full"
+                  >
+                    Refresh runtime
+                  </button>
+                  <button
+                    id="stop-runtime"
+                    type="button"
+                    phx-click="stop_runtime"
+                    class="btn btn-ghost btn-sm w-full text-error"
+                    disabled={!@runtime.running?}
+                  >
+                    Stop runtime
+                  </button>
+                  <button
+                    :if={@pending_delete_slug != @selected_agent.slug}
+                    id="delete-agent"
+                    type="button"
+                    phx-click="request_delete_agent"
+                    class="btn btn-ghost btn-sm w-full text-error"
+                    disabled={
                       @selected_agent_directory_entry &&
                         @selected_agent_directory_entry.workspace_managed?
                     }
-                    class="rounded-2xl border border-base-300 bg-base-200/50 px-3 py-2 text-sm text-base-content/65"
                   >
-                    This agent is sourced from the mounted workspace config. Use the workspace to remove it permanently.
-                  </p>
-
-                  <div class="rounded-2xl border border-base-300 bg-base-200/50 p-4">
-                    <p class="text-xs font-semibold uppercase tracking-widest text-base-content/50">
-                      Resolved model chain
-                    </p>
-                    <div class="mt-3 flex flex-wrap gap-2">
-                      <span
-                        :for={model <- model_chain(@model_chain_result)}
-                        class="rounded-full bg-base-100 px-3 py-1 text-sm text-base-content/70 shadow-sm"
-                      >
-                        {model}
-                      </span>
-                      <span
-                        :if={model_chain(@model_chain_result) == []}
-                        class="text-sm text-base-content/50"
-                      >
-                        No models configured yet.
-                      </span>
-                    </div>
-                  </div>
-
-                  <div class="flex justify-stretch sm:justify-end">
-                    <button type="submit" class="btn btn-neutral w-full sm:w-auto">
-                      Save config
-                    </button>
-                  </div>
-                </.form>
-              </section>
-
-              <section class="rounded-3xl border border-base-300 bg-base-100 p-5 shadow-sm">
-                <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                  <div>
-                    <h2 class="text-lg font-semibold text-base-content">Workspace files</h2>
-                    <p class="mt-1 text-sm text-base-content/60">
-                      These are the portable identity files that make an OpenClaw agent feel like itself.
-                    </p>
-                  </div>
-                  <button type="button" phx-click="new_workspace_file" class="btn btn-ghost btn-sm">
-                    New file
+                    Delete agent
+                  </button>
+                  <button
+                    :if={@pending_delete_slug == @selected_agent.slug}
+                    id="delete-agent"
+                    type="button"
+                    phx-click="delete_agent"
+                    class="btn btn-error btn-sm w-full"
+                    disabled={
+                      @selected_agent_directory_entry &&
+                        @selected_agent_directory_entry.workspace_managed?
+                    }
+                  >
+                    Confirm delete
                   </button>
                 </div>
+              </div>
 
-                <div class="mt-4 grid gap-4 lg:grid-cols-[220px_minmax(0,1fr)]">
-                  <div class="flex flex-col gap-2">
-                    <button
-                      :for={workspace_file <- @workspace_files}
-                      type="button"
-                      phx-click="select_workspace_file"
-                      phx-value-file_key={workspace_file.file_key}
-                      class={[
-                        "rounded-2xl border px-3 py-2 text-left transition-colors",
-                        @selected_file_key == workspace_file.file_key &&
-                          "border-primary bg-primary/5 text-primary",
-                        @selected_file_key != workspace_file.file_key &&
-                          "border-base-300 bg-base-100 hover:border-primary/30"
-                      ]}
-                    >
-                      <p class="truncate text-sm font-semibold">{workspace_file.file_key}</p>
-                      <p class="text-xs text-base-content/50">v{workspace_file.version}</p>
-                    </button>
+              <div :if={@pending_delete_slug == @selected_agent.slug} class="mt-3">
+                <button type="button" phx-click="cancel_delete_agent" class="btn btn-ghost btn-xs">
+                  Cancel delete
+                </button>
+              </div>
 
-                    <div
-                      :if={@workspace_files == []}
-                      class="rounded-2xl border border-dashed border-base-300 px-3 py-4 text-sm text-base-content/50"
-                    >
-                      No files yet.
+              <div class="mt-5 grid gap-3 grid-cols-2 sm:grid-cols-3 xl:grid-cols-5">
+                <.stat_card
+                  label="Runtime"
+                  value={humanize_value(@runtime.status)}
+                  detail={runtime_detail(@runtime)}
+                />
+                <.stat_card
+                  label="Active sessions"
+                  value={length(@runtime.active_session_ids)}
+                  detail="live in memory"
+                />
+                <.stat_card
+                  label="Workspace files"
+                  value={@overview_counts.workspace_files}
+                  detail="identity + instructions"
+                />
+                <.stat_card
+                  label="Memories"
+                  value={@overview_counts.memories}
+                  detail="daily, long-term, snapshot"
+                />
+                <.stat_card
+                  label="Vault creds"
+                  value={@overview_counts.vault}
+                  detail="agent + platform"
+                />
+              </div>
+            </section>
+
+            <%!-- Federation connection section (for external runtime agents) --%>
+            <section
+              :if={@selected_agent.runtime_type == "external" && @selected_agent.runtime_id}
+              class="rounded-3xl border border-base-300 bg-base-100 p-5 shadow-sm"
+            >
+              <h2 class="text-lg font-semibold text-base-content">
+                <span class="hero-globe-alt mr-1 inline-block h-5 w-5 align-text-bottom" />
+                Federation Connection
+              </h2>
+              <p class="mt-1 text-sm text-base-content/60">
+                External runtime linked to this agent.
+              </p>
+              <.federation_connection_panel
+                agent={@selected_agent}
+                regenerated_token={@regenerated_token}
+              />
+            </section>
+
+            <%!-- Config + model routing --%>
+            <div class="grid gap-6 xl:grid-cols-[minmax(0,1.6fr)_minmax(320px,0.9fr)]">
+              <div class="flex min-w-0 flex-col gap-6">
+                <section class="rounded-3xl border border-base-300 bg-base-100 p-5 shadow-sm">
+                  <div class="flex items-start justify-between gap-4">
+                    <div>
+                      <h2 class="text-lg font-semibold text-base-content">Config + model routing</h2>
+                      <p class="mt-1 text-sm text-base-content/60">
+                        Edit the persisted agent definition. Runtime refresh uses the real AgentServer.
+                      </p>
                     </div>
                   </div>
 
                   <.form
-                    for={@workspace_form}
-                    id="workspace-file-form"
-                    phx-submit="save_workspace_file"
-                    class="space-y-3"
+                    for={@config_form}
+                    id="agent-config-form"
+                    phx-submit="save_config"
+                    class="mt-4 space-y-4"
                   >
-                    <div>
-                      <label class="mb-1 block text-xs font-semibold uppercase tracking-widest text-base-content/50">
-                        File key
-                      </label>
-                      <input
-                        :if={is_nil(@selected_workspace_file)}
-                        type="text"
-                        name="workspace_file[file_key]"
-                        value={@workspace_form[:file_key].value || ""}
-                        class="input input-bordered w-full md:max-w-sm"
-                        placeholder="SOUL.md"
-                      />
-                      <div
-                        :if={@selected_workspace_file}
-                        class="rounded-2xl border border-base-300 bg-base-200/50 px-3 py-2 text-sm text-base-content/70"
-                      >
-                        {@selected_workspace_file.file_key}
+                    <div class="grid gap-4 md:grid-cols-2">
+                      <label class="form-control">
+                        <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
+                          Name
+                        </span>
                         <input
-                          type="hidden"
-                          name="workspace_file[file_key]"
-                          value={@selected_workspace_file.file_key}
+                          type="text"
+                          name="config[name]"
+                          value={@config_form[:name].value || ""}
+                          class="input input-bordered w-full"
                         />
+                      </label>
+
+                      <label class="form-control">
+                        <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
+                          Status
+                        </span>
+                        <select name="config[status]" class="select select-bordered w-full">
+                          <option
+                            :for={status <- ["active", "paused", "archived"]}
+                            selected={@config_form[:status].value == status}
+                            value={status}
+                          >
+                            {humanize_value(status)}
+                          </option>
+                        </select>
+                      </label>
+
+                      <label class="form-control">
+                        <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
+                          Primary model
+                        </span>
+                        <input
+                          type="text"
+                          name="config[primary_model]"
+                          value={@config_form[:primary_model].value || ""}
+                          class="input input-bordered w-full"
+                          placeholder="anthropic/claude-sonnet-4-6"
+                        />
+                      </label>
+
+                      <label class="form-control">
+                        <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
+                          Fallbacks
+                        </span>
+                        <input
+                          type="text"
+                          name="config[fallback_models]"
+                          value={@config_form[:fallback_models].value || ""}
+                          class="input input-bordered w-full"
+                          placeholder="openai/gpt-4.1, openai/gpt-4o-mini"
+                        />
+                      </label>
+
+                      <label class="form-control">
+                        <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
+                          Thinking default
+                        </span>
+                        <input
+                          type="text"
+                          name="config[thinking_default]"
+                          value={@config_form[:thinking_default].value || ""}
+                          class="input input-bordered w-full"
+                          placeholder="medium"
+                        />
+                      </label>
+
+                      <label class="form-control">
+                        <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
+                          Max concurrent
+                        </span>
+                        <input
+                          type="number"
+                          min="1"
+                          name="config[max_concurrent]"
+                          value={@config_form[:max_concurrent].value || 1}
+                          class="input input-bordered w-full"
+                        />
+                      </label>
+
+                      <label class="form-control md:col-span-2">
+                        <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
+                          Sandbox mode
+                        </span>
+                        <select
+                          name="config[sandbox_mode]"
+                          class="select select-bordered w-full md:max-w-xs"
+                        >
+                          <option
+                            :for={mode <- ["off", "inherit", "require"]}
+                            selected={(@config_form[:sandbox_mode].value || "off") == mode}
+                            value={mode}
+                          >
+                            {mode}
+                          </option>
+                        </select>
+                      </label>
+                    </div>
+
+                    <p
+                      :if={
+                        @selected_agent_directory_entry &&
+                          @selected_agent_directory_entry.workspace_managed?
+                      }
+                      class="rounded-2xl border border-base-300 bg-base-200/50 px-3 py-2 text-sm text-base-content/65"
+                    >
+                      This agent is sourced from the mounted workspace config. Use the workspace to remove it permanently.
+                    </p>
+
+                    <div class="rounded-2xl border border-base-300 bg-base-200/50 p-4">
+                      <p class="text-xs font-semibold uppercase tracking-widest text-base-content/50">
+                        Resolved model chain
+                      </p>
+                      <div class="mt-3 flex flex-wrap gap-2">
+                        <span
+                          :for={model <- model_chain(@model_chain_result)}
+                          class="rounded-full bg-base-100 px-3 py-1 text-sm text-base-content/70 shadow-sm"
+                        >
+                          {model}
+                        </span>
+                        <span
+                          :if={model_chain(@model_chain_result) == []}
+                          class="text-sm text-base-content/50"
+                        >
+                          No models configured yet.
+                        </span>
                       </div>
                     </div>
 
-                    <div>
-                      <label class="mb-1 block text-xs font-semibold uppercase tracking-widest text-base-content/50">
-                        Content
-                      </label>
-                      <textarea
-                        name="workspace_file[content]"
-                        rows="18"
-                        class="textarea textarea-bordered h-80 w-full font-mono text-sm leading-6"
-                      >{@workspace_form[:content].value || ""}</textarea>
-                    </div>
-
-                    <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                      <p class="text-xs text-base-content/50">
-                        {workspace_hint(@selected_workspace_file, @workspace_form[:file_key].value)}
-                      </p>
+                    <div class="flex justify-stretch sm:justify-end">
                       <button type="submit" class="btn btn-neutral w-full sm:w-auto">
-                        Save file
+                        Save config
                       </button>
                     </div>
                   </.form>
-                </div>
-              </section>
+                </section>
 
-              <section class="rounded-3xl border border-base-300 bg-base-100 p-5 shadow-sm">
-                <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-                  <div>
-                    <h2 class="text-lg font-semibold text-base-content">Memory browser</h2>
-                    <p class="mt-1 text-sm text-base-content/60">
-                      Browse recent memories and append new long-term, daily, or snapshot entries.
-                    </p>
+                <section class="rounded-3xl border border-base-300 bg-base-100 p-5 shadow-sm">
+                  <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                    <div>
+                      <h2 class="text-lg font-semibold text-base-content">Workspace files</h2>
+                      <p class="mt-1 text-sm text-base-content/60">
+                        These are the portable identity files that make an OpenClaw agent feel like itself.
+                      </p>
+                    </div>
+                    <button type="button" phx-click="new_workspace_file" class="btn btn-ghost btn-sm">
+                      New file
+                    </button>
                   </div>
-                </div>
 
-                <div class="mt-4 grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
-                  <div class="space-y-4">
+                  <div class="mt-4 grid gap-4 lg:grid-cols-[220px_minmax(0,1fr)]">
+                    <div class="flex flex-col gap-2">
+                      <button
+                        :for={workspace_file <- @workspace_files}
+                        type="button"
+                        phx-click="select_workspace_file"
+                        phx-value-file_key={workspace_file.file_key}
+                        class={[
+                          "rounded-2xl border px-3 py-2 text-left transition-colors",
+                          @selected_file_key == workspace_file.file_key &&
+                            "border-primary bg-primary/5 text-primary",
+                          @selected_file_key != workspace_file.file_key &&
+                            "border-base-300 bg-base-100 hover:border-primary/30"
+                        ]}
+                      >
+                        <p class="truncate text-sm font-semibold">{workspace_file.file_key}</p>
+                        <p class="text-xs text-base-content/50">v{workspace_file.version}</p>
+                      </button>
+
+                      <div
+                        :if={@workspace_files == []}
+                        class="rounded-2xl border border-dashed border-base-300 px-3 py-4 text-sm text-base-content/50"
+                      >
+                        No files yet.
+                      </div>
+                    </div>
+
                     <.form
-                      for={@memory_filter_form}
-                      id="memory-filter-form"
-                      phx-change="filter_memories"
-                      phx-submit="filter_memories"
-                      class="grid gap-3 md:grid-cols-[180px_minmax(0,1fr)]"
+                      for={@workspace_form}
+                      id="workspace-file-form"
+                      phx-submit="save_workspace_file"
+                      class="space-y-3"
                     >
+                      <div>
+                        <label class="mb-1 block text-xs font-semibold uppercase tracking-widest text-base-content/50">
+                          File key
+                        </label>
+                        <input
+                          :if={is_nil(@selected_workspace_file)}
+                          type="text"
+                          name="workspace_file[file_key]"
+                          value={@workspace_form[:file_key].value || ""}
+                          class="input input-bordered w-full md:max-w-sm"
+                          placeholder="SOUL.md"
+                        />
+                        <div
+                          :if={@selected_workspace_file}
+                          class="rounded-2xl border border-base-300 bg-base-200/50 px-3 py-2 text-sm text-base-content/70"
+                        >
+                          {@selected_workspace_file.file_key}
+                          <input
+                            type="hidden"
+                            name="workspace_file[file_key]"
+                            value={@selected_workspace_file.file_key}
+                          />
+                        </div>
+                      </div>
+
+                      <div>
+                        <label class="mb-1 block text-xs font-semibold uppercase tracking-widest text-base-content/50">
+                          Content
+                        </label>
+                        <textarea
+                          name="workspace_file[content]"
+                          rows="18"
+                          class="textarea textarea-bordered h-80 w-full font-mono text-sm leading-6"
+                        >{@workspace_form[:content].value || ""}</textarea>
+                      </div>
+
+                      <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                        <p class="text-xs text-base-content/50">
+                          {workspace_hint(@selected_workspace_file, @workspace_form[:file_key].value)}
+                        </p>
+                        <button type="submit" class="btn btn-neutral w-full sm:w-auto">
+                          Save file
+                        </button>
+                      </div>
+                    </.form>
+                  </div>
+                </section>
+
+                <section class="rounded-3xl border border-base-300 bg-base-100 p-5 shadow-sm">
+                  <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                    <div>
+                      <h2 class="text-lg font-semibold text-base-content">Memory browser</h2>
+                      <p class="mt-1 text-sm text-base-content/60">
+                        Browse recent memories and append new long-term, daily, or snapshot entries.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div class="mt-4 grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
+                    <div class="space-y-4">
+                      <.form
+                        for={@memory_filter_form}
+                        id="memory-filter-form"
+                        phx-change="filter_memories"
+                        phx-submit="filter_memories"
+                        class="grid gap-3 md:grid-cols-[180px_minmax(0,1fr)]"
+                      >
+                        <label class="form-control">
+                          <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
+                            Type
+                          </span>
+                          <select name="memory_filters[type]" class="select select-bordered w-full">
+                            <option
+                              :for={
+                                {value, label} <- [
+                                  {"all", "All"},
+                                  {"long_term", "Long-term"},
+                                  {"daily", "Daily"},
+                                  {"snapshot", "Snapshot"}
+                                ]
+                              }
+                              value={value}
+                              selected={@memory_filter_form[:type].value == value}
+                            >
+                              {label}
+                            </option>
+                          </select>
+                        </label>
+
+                        <label class="form-control">
+                          <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
+                            Search
+                          </span>
+                          <input
+                            type="text"
+                            name="memory_filters[query]"
+                            value={@memory_filter_form[:query].value || ""}
+                            class="input input-bordered w-full"
+                            placeholder="keyword recall"
+                          />
+                        </label>
+                      </.form>
+
+                      <div class="space-y-3">
+                        <article
+                          :for={memory <- @recent_memories}
+                          class="rounded-2xl border border-base-300 bg-base-100 px-4 py-3"
+                        >
+                          <div class="flex flex-wrap items-center gap-2 text-[11px] uppercase tracking-widest text-base-content/50">
+                            <span>{humanize_memory_type(memory.memory_type)}</span>
+                            <span :if={memory.date}>{Date.to_iso8601(memory.date)}</span>
+                            <span>{format_datetime(memory.inserted_at)}</span>
+                          </div>
+                          <p class="mt-2 whitespace-pre-wrap text-sm leading-6 text-base-content/80">
+                            {memory.content}
+                          </p>
+                        </article>
+
+                        <div
+                          :if={@recent_memories == []}
+                          class="rounded-2xl border border-dashed border-base-300 px-4 py-5 text-sm text-base-content/50"
+                        >
+                          Nothing matched this memory filter.
+                        </div>
+                      </div>
+                    </div>
+
+                    <.form
+                      for={@memory_form}
+                      id="memory-entry-form"
+                      phx-submit="append_memory"
+                      class="space-y-3 rounded-2xl border border-base-300 bg-base-200/40 p-4"
+                    >
+                      <div>
+                        <p class="text-sm font-semibold text-base-content">Add memory</p>
+                        <p class="text-xs text-base-content/50">
+                          Writes through MemoryContext so later runtime modules see the real data.
+                        </p>
+                      </div>
+
                       <label class="form-control">
                         <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
-                          Type
+                          Memory type
                         </span>
-                        <select name="memory_filters[type]" class="select select-bordered w-full">
+                        <select name="memory_entry[memory_type]" class="select select-bordered w-full">
                           <option
                             :for={
                               {value, label} <- [
-                                {"all", "All"},
                                 {"long_term", "Long-term"},
                                 {"daily", "Daily"},
                                 {"snapshot", "Snapshot"}
                               ]
                             }
                             value={value}
-                            selected={@memory_filter_form[:type].value == value}
+                            selected={@memory_form[:memory_type].value == value}
                           >
                             {label}
                           </option>
@@ -1124,227 +1958,175 @@ defmodule PlatformWeb.ControlCenterLive do
 
                       <label class="form-control">
                         <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
-                          Search
+                          Date (for daily)
                         </span>
                         <input
-                          type="text"
-                          name="memory_filters[query]"
-                          value={@memory_filter_form[:query].value || ""}
+                          type="date"
+                          name="memory_entry[date]"
+                          value={@memory_form[:date].value || ""}
                           class="input input-bordered w-full"
-                          placeholder="keyword recall"
                         />
                       </label>
+
+                      <label class="form-control">
+                        <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
+                          Content
+                        </span>
+                        <textarea
+                          name="memory_entry[content]"
+                          rows="9"
+                          class="textarea textarea-bordered w-full leading-6"
+                        >{@memory_form[:content].value || ""}</textarea>
+                      </label>
+
+                      <button type="submit" class="btn btn-neutral w-full">Append memory</button>
                     </.form>
+                  </div>
+                </section>
+              </div>
 
-                    <div class="space-y-3">
-                      <article
-                        :for={memory <- @recent_memories}
-                        class="rounded-2xl border border-base-300 bg-base-100 px-4 py-3"
-                      >
-                        <div class="flex flex-wrap items-center gap-2 text-[11px] uppercase tracking-widest text-base-content/50">
-                          <span>{humanize_memory_type(memory.memory_type)}</span>
-                          <span :if={memory.date}>{Date.to_iso8601(memory.date)}</span>
-                          <span>{format_datetime(memory.inserted_at)}</span>
-                        </div>
-                        <p class="mt-2 whitespace-pre-wrap text-sm leading-6 text-base-content/80">
-                          {memory.content}
-                        </p>
-                      </article>
+              <div class="flex min-w-0 flex-col gap-6">
+                <section class="rounded-3xl border border-base-300 bg-base-100 p-5 shadow-sm">
+                  <h2 class="text-lg font-semibold text-base-content">Runtime + sessions</h2>
+                  <p class="mt-1 text-sm text-base-content/60">
+                    Monitoring reads the real AgentServer state plus persisted session history.
+                  </p>
 
-                      <div
-                        :if={@recent_memories == []}
-                        class="rounded-2xl border border-dashed border-base-300 px-4 py-5 text-sm text-base-content/50"
-                      >
-                        Nothing matched this memory filter.
-                      </div>
+                  <div class="mt-4 rounded-2xl border border-base-300 bg-base-200/40 p-4 text-sm text-base-content/75">
+                    <div class="flex items-center justify-between gap-3">
+                      <span>Status</span>
+                      <span class={runtime_badge_class(@runtime.status)}>
+                        {humanize_value(@runtime.status)}
+                      </span>
+                    </div>
+                    <div class="mt-2 flex items-center justify-between gap-3">
+                      <span>PID</span>
+                      <span class="font-mono text-xs text-base-content/55">
+                        {runtime_pid_label(@runtime.pid)}
+                      </span>
+                    </div>
+                    <div class="mt-2 flex items-center justify-between gap-3">
+                      <span>Active session IDs</span>
+                      <span class="text-right text-xs text-base-content/55">
+                        {runtime_sessions_label(@runtime.active_session_ids)}
+                      </span>
                     </div>
                   </div>
 
-                  <.form
-                    for={@memory_form}
-                    id="memory-entry-form"
-                    phx-submit="append_memory"
-                    class="space-y-3 rounded-2xl border border-base-300 bg-base-200/40 p-4"
-                  >
-                    <div>
-                      <p class="text-sm font-semibold text-base-content">Add memory</p>
-                      <p class="text-xs text-base-content/50">
-                        Writes through MemoryContext so later runtime modules see the real data.
+                  <div class="mt-4 space-y-3">
+                    <article
+                      :for={session <- @recent_sessions}
+                      class="rounded-2xl border border-base-300 px-4 py-3 text-sm"
+                    >
+                      <div class="flex flex-wrap items-center gap-2">
+                        <span class={session_badge_class(session.status)}>
+                          {humanize_value(session.status)}
+                        </span>
+                        <span class="font-mono text-[11px] text-base-content/45">
+                          {short_id(session.id)}
+                        </span>
+                      </div>
+                      <p class="mt-2 text-base-content/70">
+                        {blank_fallback(session.model_used, "model not recorded")}
                       </p>
-                    </div>
+                      <div class="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs text-base-content/50">
+                        <span>started {format_datetime(session.started_at)}</span>
+                        <span :if={session.ended_at}>ended {format_datetime(session.ended_at)}</span>
+                        <span :if={session.parent_session_id}>
+                          parent {short_id(session.parent_session_id)}
+                        </span>
+                      </div>
+                    </article>
 
-                    <label class="form-control">
-                      <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
-                        Memory type
-                      </span>
-                      <select name="memory_entry[memory_type]" class="select select-bordered w-full">
-                        <option
-                          :for={
-                            {value, label} <- [
-                              {"long_term", "Long-term"},
-                              {"daily", "Daily"},
-                              {"snapshot", "Snapshot"}
-                            ]
-                          }
-                          value={value}
-                          selected={@memory_form[:memory_type].value == value}
+                    <div
+                      :if={@recent_sessions == []}
+                      class="rounded-2xl border border-dashed border-base-300 px-4 py-5 text-sm text-base-content/50"
+                    >
+                      No sessions yet.
+                    </div>
+                  </div>
+                </section>
+
+                <section class="rounded-3xl border border-base-300 bg-base-100 p-5 shadow-sm">
+                  <h2 class="text-lg font-semibold text-base-content">Vault visibility</h2>
+                  <p class="mt-1 text-sm text-base-content/60">
+                    Metadata only — secrets stay encrypted. Agent runtime still resolves values through Platform.Vault.get/2.
+                  </p>
+
+                  <div class="mt-4 space-y-4">
+                    <div>
+                      <p class="text-xs font-semibold uppercase tracking-widest text-base-content/50">
+                        Agent-scoped credentials
+                      </p>
+                      <div class="mt-2 space-y-2">
+                        <.credential_row
+                          :for={credential <- @agent_credentials}
+                          credential={credential}
+                        />
+                        <div
+                          :if={@agent_credentials == []}
+                          class="rounded-2xl border border-dashed border-base-300 px-3 py-4 text-sm text-base-content/50"
                         >
-                          {label}
-                        </option>
-                      </select>
-                    </label>
-
-                    <label class="form-control">
-                      <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
-                        Date (for daily)
-                      </span>
-                      <input
-                        type="date"
-                        name="memory_entry[date]"
-                        value={@memory_form[:date].value || ""}
-                        class="input input-bordered w-full"
-                      />
-                    </label>
-
-                    <label class="form-control">
-                      <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
-                        Content
-                      </span>
-                      <textarea
-                        name="memory_entry[content]"
-                        rows="9"
-                        class="textarea textarea-bordered w-full leading-6"
-                      >{@memory_form[:content].value || ""}</textarea>
-                    </label>
-
-                    <button type="submit" class="btn btn-neutral w-full">Append memory</button>
-                  </.form>
-                </div>
-              </section>
-            </div>
-
-            <div class="flex min-w-0 flex-col gap-6">
-              <section class="rounded-3xl border border-base-300 bg-base-100 p-5 shadow-sm">
-                <h2 class="text-lg font-semibold text-base-content">Runtime + sessions</h2>
-                <p class="mt-1 text-sm text-base-content/60">
-                  Monitoring reads the real AgentServer state plus persisted session history.
-                </p>
-
-                <div class="mt-4 rounded-2xl border border-base-300 bg-base-200/40 p-4 text-sm text-base-content/75">
-                  <div class="flex items-center justify-between gap-3">
-                    <span>Status</span>
-                    <span class={runtime_badge_class(@runtime.status)}>
-                      {humanize_value(@runtime.status)}
-                    </span>
-                  </div>
-                  <div class="mt-2 flex items-center justify-between gap-3">
-                    <span>PID</span>
-                    <span class="font-mono text-xs text-base-content/55">
-                      {runtime_pid_label(@runtime.pid)}
-                    </span>
-                  </div>
-                  <div class="mt-2 flex items-center justify-between gap-3">
-                    <span>Active session IDs</span>
-                    <span class="text-right text-xs text-base-content/55">
-                      {runtime_sessions_label(@runtime.active_session_ids)}
-                    </span>
-                  </div>
-                </div>
-
-                <div class="mt-4 space-y-3">
-                  <article
-                    :for={session <- @recent_sessions}
-                    class="rounded-2xl border border-base-300 px-4 py-3 text-sm"
-                  >
-                    <div class="flex flex-wrap items-center gap-2">
-                      <span class={session_badge_class(session.status)}>
-                        {humanize_value(session.status)}
-                      </span>
-                      <span class="font-mono text-[11px] text-base-content/45">
-                        {short_id(session.id)}
-                      </span>
+                          No agent-scoped credentials.
+                        </div>
+                      </div>
                     </div>
-                    <p class="mt-2 text-base-content/70">
-                      {blank_fallback(session.model_used, "model not recorded")}
-                    </p>
-                    <div class="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs text-base-content/50">
-                      <span>started {format_datetime(session.started_at)}</span>
-                      <span :if={session.ended_at}>ended {format_datetime(session.ended_at)}</span>
-                      <span :if={session.parent_session_id}>
-                        parent {short_id(session.parent_session_id)}
-                      </span>
-                    </div>
-                  </article>
 
-                  <div
-                    :if={@recent_sessions == []}
-                    class="rounded-2xl border border-dashed border-base-300 px-4 py-5 text-sm text-base-content/50"
-                  >
-                    No sessions yet.
-                  </div>
-                </div>
-              </section>
-
-              <section class="rounded-3xl border border-base-300 bg-base-100 p-5 shadow-sm">
-                <h2 class="text-lg font-semibold text-base-content">Vault visibility</h2>
-                <p class="mt-1 text-sm text-base-content/60">
-                  Metadata only — secrets stay encrypted. Agent runtime still resolves values through Platform.Vault.get/2.
-                </p>
-
-                <div class="mt-4 space-y-4">
-                  <div>
-                    <p class="text-xs font-semibold uppercase tracking-widest text-base-content/50">
-                      Agent-scoped credentials
-                    </p>
-                    <div class="mt-2 space-y-2">
-                      <.credential_row
-                        :for={credential <- @agent_credentials}
-                        credential={credential}
-                      />
-                      <div
-                        :if={@agent_credentials == []}
-                        class="rounded-2xl border border-dashed border-base-300 px-3 py-4 text-sm text-base-content/50"
-                      >
-                        No agent-scoped credentials.
+                    <div>
+                      <p class="text-xs font-semibold uppercase tracking-widest text-base-content/50">
+                        Relevant platform credentials
+                      </p>
+                      <div class="mt-2 space-y-2">
+                        <.credential_row
+                          :for={credential <- @platform_credentials}
+                          credential={credential}
+                        />
+                        <div
+                          :if={@platform_credentials == []}
+                          class="rounded-2xl border border-dashed border-base-300 px-3 py-4 text-sm text-base-content/50"
+                        >
+                          No matching platform credentials for this model chain.
+                        </div>
                       </div>
                     </div>
                   </div>
-
-                  <div>
-                    <p class="text-xs font-semibold uppercase tracking-widest text-base-content/50">
-                      Relevant platform credentials
-                    </p>
-                    <div class="mt-2 space-y-2">
-                      <.credential_row
-                        :for={credential <- @platform_credentials}
-                        credential={credential}
-                      />
-                      <div
-                        :if={@platform_credentials == []}
-                        class="rounded-2xl border border-dashed border-base-300 px-3 py-4 text-sm text-base-content/50"
-                      >
-                        No matching platform credentials for this model chain.
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </section>
+                </section>
+              </div>
             </div>
           </div>
-        </div>
 
-        <div
-          :if={is_nil(@selected_agent)}
-          class="mx-auto flex h-full max-w-3xl items-center justify-center px-6 py-12"
-        >
-          <div class="rounded-3xl border border-dashed border-base-300 bg-base-100 px-8 py-10 text-center shadow-sm">
-            <p class="text-2xl font-semibold text-base-content">⚙️ Control Center</p>
-            <p class="mt-2 text-base text-base-content/60">
-              Pick an agent from the left to inspect runtime state, memory, files, and Vault metadata.
-            </p>
+          <%!-- No agent selected (desktop placeholder) --%>
+          <div
+            :if={is_nil(@selected_agent)}
+            class="mx-auto flex h-full max-w-3xl items-center justify-center px-6 py-12"
+          >
+            <div class="flex flex-col items-center gap-4 text-center">
+              <span class="hero-rectangle-stack h-12 w-12 text-base-content/20" />
+              <p class="text-xl font-semibold text-base-content">Agent Resources</p>
+              <p class="text-sm text-base-content/60">
+                Select an agent from the sidebar, or add a new one to get started.
+              </p>
+              <button
+                type="button"
+                phx-click="open_onboarding_chooser"
+                class="btn btn-primary btn-sm gap-1"
+              >
+                <span class="hero-plus h-4 w-4" /> Add Agent
+              </button>
+            </div>
           </div>
-        </div>
-      </main>
+        </main>
+      </div>
+
+      <%!-- Floating add button (mobile, when agents exist and no agent selected) --%>
+      <button
+        :if={@agents != [] && is_nil(@selected_agent) && !@show_onboarding_chooser}
+        type="button"
+        phx-click="open_onboarding_chooser"
+        class="fixed bottom-6 right-6 z-40 btn btn-primary btn-circle shadow-lg lg:hidden"
+      >
+        <span class="hero-plus h-6 w-6" />
+      </button>
     </div>
     """
   end
@@ -1391,9 +2173,104 @@ defmodule PlatformWeb.ControlCenterLive do
     """
   end
 
+  attr :agent, Agent, required: true
+  attr :regenerated_token, :string, default: nil
+
+  defp federation_connection_panel(assigns) do
+    runtime = Federation.get_runtime(assigns.agent.runtime_id)
+    assigns = assign(assigns, :fed_runtime, runtime)
+
+    ~H"""
+    <div :if={@fed_runtime} class="mt-4 space-y-3">
+      <div class="rounded-2xl border border-base-300 bg-base-200/40 p-4 text-sm">
+        <div class="flex items-center justify-between gap-3">
+          <span>Runtime ID</span>
+          <code class="font-mono text-xs">{@fed_runtime.runtime_id}</code>
+        </div>
+        <div class="mt-2 flex items-center justify-between gap-3">
+          <span>Status</span>
+          <span class={runtime_badge_class(String.to_existing_atom(@fed_runtime.status))}>
+            {humanize_value(@fed_runtime.status)}
+          </span>
+        </div>
+        <div class="mt-2 flex items-center justify-between gap-3">
+          <span>Transport</span>
+          <span class="text-xs">{@fed_runtime.transport}</span>
+        </div>
+        <div :if={@fed_runtime.last_connected_at} class="mt-2 flex items-center justify-between gap-3">
+          <span>Last connected</span>
+          <span class="text-xs">{format_datetime(@fed_runtime.last_connected_at)}</span>
+        </div>
+      </div>
+
+      <%!-- Regenerated token display --%>
+      <div
+        :if={@regenerated_token}
+        class="rounded-2xl border border-warning/40 bg-warning/10 p-4 space-y-2"
+      >
+        <p class="text-sm font-semibold text-warning-content">
+          <span class="hero-exclamation-triangle mr-1 inline-block h-4 w-4 align-text-bottom" />
+          New token generated. Save it now.
+        </p>
+        <div class="flex items-center gap-2">
+          <code class="flex-1 break-all rounded-lg bg-warning/10 px-3 py-2 font-mono text-xs">
+            {@regenerated_token}
+          </code>
+          <button
+            type="button"
+            id="copy-regen-token"
+            phx-hook="CopyToClipboard"
+            data-clipboard-text={@regenerated_token}
+            class="btn btn-ghost btn-sm"
+          >
+            Copy
+          </button>
+        </div>
+        <button type="button" phx-click="dismiss_regenerated_token" class="btn btn-ghost btn-xs">
+          Dismiss
+        </button>
+      </div>
+
+      <div class="flex flex-wrap gap-2">
+        <button
+          :if={@fed_runtime.status == "active"}
+          type="button"
+          phx-click="suspend_federated_runtime"
+          class="btn btn-ghost btn-sm"
+        >
+          Suspend
+        </button>
+        <button
+          :if={@fed_runtime.status != "revoked"}
+          type="button"
+          phx-click="revoke_federated_runtime"
+          class="btn btn-ghost btn-sm text-error"
+        >
+          Revoke
+        </button>
+        <button
+          :if={@fed_runtime.status != "revoked"}
+          type="button"
+          phx-click="regenerate_federated_token"
+          class="btn btn-ghost btn-sm"
+        >
+          Regenerate Token
+        </button>
+      </div>
+    </div>
+
+    <div
+      :if={is_nil(@fed_runtime)}
+      class="mt-4 rounded-2xl border border-dashed border-base-300 px-4 py-5 text-sm text-base-content/50"
+    >
+      Runtime record not found.
+    </div>
+    """
+  end
+
   defp assign_empty_panel(socket) do
     socket
-    |> assign(:page_title, "Control Center")
+    |> assign(:page_title, "Agent Resources")
     |> assign(:selected_agent, nil)
     |> assign(:runtime, %{status: :unknown, running?: false, pid: nil, active_session_ids: []})
     |> assign(:overview_counts, %{workspace_files: 0, memories: 0, sessions: 0, vault: 0})
@@ -1415,6 +2292,7 @@ defmodule PlatformWeb.ControlCenterLive do
     |> assign(:memory_form, to_form(default_memory_entry(), as: :memory_entry))
     |> assign(:agent_status, PlatformWeb.ShellLive.default_agent_status())
     |> assign(:selected_agent_directory_entry, nil)
+    |> assign(:regenerated_token, nil)
   end
 
   defp assign_agent_panel(socket, %Agent{} = agent, opts) do
@@ -2129,4 +3007,13 @@ defmodule PlatformWeb.ControlCenterLive do
   end
 
   defp slugify(value), do: value |> to_string() |> slugify()
+
+  defp federation_config_snippet(ws_url, runtime_id) do
+    Jason.encode!(
+      %{
+        "suite" => %{"url" => ws_url, "runtime_id" => runtime_id, "token" => "<paste-token-here>"}
+      },
+      pretty: true
+    )
+  end
 end
