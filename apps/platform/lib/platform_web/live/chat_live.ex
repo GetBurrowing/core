@@ -1943,7 +1943,7 @@ defmodule PlatformWeb.ChatLive do
       >
         <div
           class="bg-base-100 rounded-xl shadow-xl w-full max-w-md p-6 max-h-[80vh] overflow-y-auto"
-          phx-click-away="close_settings"
+          onclick="event.stopPropagation()"
         >
           <h3 class="text-lg font-bold mb-4">
             <%= case @active_space.kind do %>
