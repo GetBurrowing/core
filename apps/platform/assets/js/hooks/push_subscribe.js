@@ -9,6 +9,10 @@ function urlBase64ToUint8Array(base64String) {
   return outputArray;
 }
 
+function isIOSSafari() {
+  return /iPad|iPhone|iPod/.test(navigator.userAgent) && !window.MSStream;
+}
+
 const PushSubscribe = {
   mounted() {
     const vapidMeta = document.querySelector("meta[name='vapid-public-key']");
@@ -17,20 +21,62 @@ const PushSubscribe = {
     const vapidPublicKey = vapidMeta.getAttribute("content");
     if (!vapidPublicKey) return;
 
-    const hook = this;
+    this.vapidPublicKey = vapidPublicKey;
 
+    // Check current permission state
+    if (!("Notification" in window) || !("serviceWorker" in navigator)) {
+      this.pushEvent("push_unsupported", {});
+      return;
+    }
+
+    if (Notification.permission === "granted") {
+      // Already granted — subscribe silently
+      this.autoSubscribe();
+      this.pushEvent("push_permission_state", { state: "granted" });
+    } else if (Notification.permission === "denied") {
+      this.pushEvent("push_permission_state", { state: "denied" });
+    } else {
+      // Default state — need to ask
+      if (isIOSSafari()) {
+        // iOS requires user gesture — show the prompt button
+        this.pushEvent("push_permission_state", { state: "prompt" });
+      } else {
+        // Desktop browsers can auto-prompt
+        this.autoSubscribe();
+      }
+    }
+
+    // Listen for the user clicking the enable button
+    this.handleEvent("request_push_permission", () => {
+      this.requestPermission();
+    });
+  },
+
+  requestPermission() {
+    Notification.requestPermission().then(permission => {
+      if (permission === "granted") {
+        this.autoSubscribe();
+        this.pushEvent("push_permission_state", { state: "granted" });
+      } else {
+        this.pushEvent("push_permission_state", { state: permission });
+      }
+    });
+  },
+
+  autoSubscribe() {
+    const hook = this;
     navigator.serviceWorker?.ready.then(reg => {
       reg.pushManager.getSubscription().then(sub => {
         if (sub) {
-          hook.pushSubscription(sub);
+          hook.sendSubscription(sub);
           return;
         }
 
         reg.pushManager.subscribe({
           userVisibleOnly: true,
-          applicationServerKey: urlBase64ToUint8Array(vapidPublicKey)
+          applicationServerKey: urlBase64ToUint8Array(hook.vapidPublicKey)
         }).then(sub => {
-          hook.pushSubscription(sub);
+          hook.sendSubscription(sub);
         }).catch(err => {
           console.warn("Push subscription failed", err);
         });
@@ -38,7 +84,7 @@ const PushSubscribe = {
     });
   },
 
-  pushSubscription(sub) {
+  sendSubscription(sub) {
     const subJson = sub.toJSON();
     this.pushEvent("push_subscribed", {
       endpoint: subJson.endpoint,

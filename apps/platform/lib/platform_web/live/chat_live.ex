@@ -90,6 +90,7 @@ defmodule PlatformWeb.ChatLive do
       |> assign(:canvas_types, @canvas_types)
       |> assign(:agent_typing, false)
       |> assign(:mention_suggestions, [])
+      |> assign(:push_permission, "unknown")
       |> assign_compose("")
       |> assign_thread_compose("")
       |> assign_search_form("")
@@ -273,7 +274,19 @@ defmodule PlatformWeb.ChatLive do
       })
     end
 
-    {:noreply, socket}
+    {:noreply, assign(socket, :push_permission, "granted")}
+  end
+
+  def handle_event("push_permission_state", %{"state" => state}, socket) do
+    {:noreply, assign(socket, :push_permission, state)}
+  end
+
+  def handle_event("push_unsupported", _params, socket) do
+    {:noreply, assign(socket, :push_permission, "unsupported")}
+  end
+
+  def handle_event("enable_notifications", _params, socket) do
+    {:noreply, push_event(socket, "request_push_permission", %{})}
   end
 
   def handle_event("send_message", %{"compose" => %{"text" => content}}, socket) do
@@ -1010,6 +1023,25 @@ defmodule PlatformWeb.ChatLive do
   def render(assigns) do
     ~H"""
     <div id="push-subscribe" phx-hook="PushSubscribe" class="hidden"></div>
+
+    <%!-- Notification opt-in banner (shown when permission not yet granted) --%>
+    <div
+      :if={@push_permission == "prompt"}
+      class="flex items-center justify-between gap-3 border-b border-info/20 bg-info/10 px-4 py-2"
+    >
+      <p class="text-sm text-info">
+        <span class="hero-bell-alert mr-1 inline-block h-4 w-4 align-text-bottom" />
+        Enable notifications to get alerts when agents respond or you're mentioned.
+      </p>
+      <button
+        type="button"
+        phx-click="enable_notifications"
+        class="btn btn-info btn-sm flex-shrink-0"
+      >
+        Enable
+      </button>
+    </div>
+
     <div class="flex h-full overflow-hidden">
       <%!-- Desktop sidebar --%>
       <aside class="hidden lg:flex w-52 flex-shrink-0 flex-col border-r border-base-300 bg-base-200">
