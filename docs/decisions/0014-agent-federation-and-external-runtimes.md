@@ -4,6 +4,7 @@
 **Date:** 2026-03-19  
 **Deciders:** Rowan, Zip  
 **Related:** ADR 0008 (Chat Backend), ADR 0013 (Attention Routing), ADR 0007 (Agent Runtime)  
+**Research:** arXiv:2602.14878 (MCP Tool Description Quality), arXiv:2603.13417 (MCP Production Patterns)  
 
 ---
 
@@ -116,59 +117,223 @@ Runtimes authenticate via one of:
 The user who owns the runtime must authorize it first. A runtime cannot
 self-register without the owning user's approval.
 
-### 3. Transport: attention signals and responses
+### 3. Transport: NAT-safe outbound WebSocket
 
-Once registered, the runtime needs to receive attention signals (messages
-directed at its agent) and post responses back.
+Most OpenClaw instances run behind NAT on home networks, laptops, and
+phones. Suite cannot reach them with webhooks or inbound connections.
 
-#### Option A: WebSocket (recommended for real-time)
-
-```
-Suite ──ws──► Runtime
-
-Signal:   { "type": "attention", "signal": { "reason": "mention", ... }, "message": { ... }, "history": [...] }
-Typing:   Runtime → Suite: { "type": "typing", "participant_id": "...", "typing": true }
-Reply:    Runtime → Suite: { "type": "reply", "space_id": "...", "content": "...", "metadata": {...} }
-Canvas:   Runtime → Suite: { "type": "canvas_create", "space_id": "...", "attrs": {...} }
-```
-
-The WebSocket carries the same signals that the built-in AgentResponder
-currently receives — but over the network instead of in-process.
-
-#### Option B: Webhooks (simpler, higher latency)
+The connection must be **outbound from OpenClaw to Suite**. OpenClaw
+initiates a persistent WebSocket to Suite's public endpoint. Suite pushes
+events down the established connection. This is the same pattern used by
+every messaging channel plugin (Telegram, Discord) — the client reaches
+out, the server pushes events down.
 
 ```
-Suite → POST runtime_callback_url
-        { "signal": {...}, "message": {...}, "history": [...] }
-
-Runtime → POST suite_api/spaces/:id/messages
-          { "content": "...", "participant_id": "..." }
+OpenClaw (behind NAT) ──outbound WSS──► Suite (public)
+                                            │
+                     ◄── attention signals ──┘
+                     ──► replies ────────────►
+                     ◄── tool results ───────┘
+                     ──► tool calls ─────────►
+                     ◄── context updates ────┘
+                     ──► presence ───────────►
 ```
 
-Webhook transport adds latency but works through firewalls and doesn't
-require persistent connections. Suitable for runtimes that aren't always
-online.
+One persistent WebSocket, initiated by OpenClaw. Everything flows over it:
+messages, attention signals, tool calls and results, presence, typing
+indicators. No inbound connectivity required on the OpenClaw side.
 
-#### Option C: OpenClaw Channel Plugin (bridge pattern)
+Suite exposes a `/runtime/ws` endpoint. The OpenClaw channel plugin
+connects to it and maintains the connection with automatic reconnection.
 
-For OpenClaw-specific runtimes, Suite can be implemented as an **OpenClaw
-channel plugin** — the same way Telegram or Discord work. The plugin:
+#### Why not webhooks?
 
-1. Connects to Suite's WebSocket API as a registered runtime
-2. Maps Suite attention signals to OpenClaw's internal message routing
+Webhooks require the OpenClaw instance to have a publicly reachable URL.
+Most won't — home networks, corporate firewalls, mobile devices. Webhooks
+are not viable as the primary transport.
+
+#### Why not MCP as primary transport?
+
+MCP is fundamentally client→server (request-response). Suite needs to push
+unsolicited attention signals to the runtime. MCP doesn't do push. Using
+MCP would require MCP for tools + a separate WebSocket for chat events +
+something else for presence. Three protocols doing what one WebSocket
+handles.
+
+#### OpenClaw Channel Plugin (recommended integration)
+
+For OpenClaw runtimes, Suite is implemented as an **OpenClaw channel
+plugin** — the same way Telegram or Discord work. The plugin:
+
+1. Connects to Suite's `/runtime/ws` as a registered runtime
+2. Receives attention signals and maps them to OpenClaw's internal routing
 3. Posts OpenClaw responses back to Suite
+4. Translates Suite tool calls into the agent's tool execution loop
 
-This makes Suite look like "just another messaging surface" from OpenClaw's
-perspective, which is architecturally elegant — the agent doesn't need to
-know it's talking through Suite vs Telegram. The attention routing, context
-management, and tool execution all happen inside OpenClaw.
+From the agent's perspective, Suite looks like "just another messaging
+surface." The attention routing, context management, and model selection
+all happen inside OpenClaw. Zero changes to the agent itself.
 
 ```
-Suite ◄──ws──► OpenClaw Channel Plugin ──► OpenClaw Gateway ──► Agent
+OpenClaw (behind NAT)
+  └── suite-channel plugin ──outbound WSS──► Suite /runtime/ws
+         │
+         ├── Inbound: attention signals → OpenClaw message routing
+         ├── Outbound: agent replies → Suite message posting
+         └── Bidirectional: tool calls/results over same connection
 ```
 
-This is the recommended path for OpenClaw runtimes because it requires zero
-changes to the agent itself — it's purely a transport concern.
+### 4. Context injection (push, not pull)
+
+Agents do not reliably call context-fetching tools. Research and direct
+experience (GPT-5.4 ignoring required `initial_state` parameters across
+5 retry iterations) confirm that relying on the agent to proactively query
+context is a reliability hole.
+
+**Context is pushed into the attention signal, not fetched by the agent.**
+
+When Suite routes an attention signal to a runtime, it bundles the relevant
+context automatically:
+
+```json
+{
+  "type": "attention",
+  "signal": { "reason": "mention", "space_id": "..." },
+  "message": { "content": "@Zip review the dashboard", "author": "Rowan" },
+  "history": [ "...last 12 messages..." ],
+  "context": {
+    "space": {
+      "name": "Engineering",
+      "kind": "channel",
+      "topic": "Q2 planning",
+      "agent_attention": "on_mention",
+      "participant_count": 4
+    },
+    "active_canvases": [
+      { "id": "abc", "title": "SaaS Metrics", "type": "dashboard",
+        "summary": "4 metric cards: Revenue, Users, Churn, NPS" }
+    ],
+    "active_tasks": [
+      { "id": "def", "title": "Fix login bug", "status": "in_progress",
+        "assignee": "Nova" }
+    ],
+    "other_agents": [
+      { "name": "Nova", "state": "idle", "capabilities": ["chat", "tools"] }
+    ],
+    "recent_activity_summary": "Discussion about Q2 metrics. Nova created a review canvas 10 min ago."
+  },
+  "tools": [ "canvas_create", "canvas_update", "task_create" ]
+}
+```
+
+The agent **sees** the context without calling anything. Suite's attention
+router already has access to all this data (ETS context plane, database
+queries, participant state). Bundling it is mechanical work — the system
+should do it.
+
+This follows the core design principle: **deterministic system behavior
+for mechanical tasks, LLM reasoning only where judgment is needed.**
+Loading context is mechanical. Reasoning about it is where the agent adds
+value.
+
+### 5. Tool surface: write-only, compact, structured
+
+Tools exposed to federated agents are **write actions only**. Read context
+is injected (Section 4). This dramatically simplifies the tool surface and
+removes the most unreliable class of tool calls.
+
+#### MCP tool design principles
+
+Based on empirical research (arXiv:2602.14878, 856 tools across 103 MCP
+servers) and production experience:
+
+1. **Fewer tools, clear boundaries.** Expose actions, not CRUD. Not
+   `update_task(id, {any_fields})` but `complete_task(id)`,
+   `assign_task(id, participant_id)`, `add_task_note(id, content)`.
+
+2. **No optional parameter swamps.** If a parameter is optional, ask:
+   does the agent benefit from knowing it exists? If not, leave it out.
+   A second tool variant is better than an 8-parameter Swiss army knife.
+
+3. **Purpose + when-to-use in one sentence.** "Create a live canvas in
+   the current space. Use when the conversation calls for a shared visual
+   artifact like a table, diagram, or dashboard."
+
+4. **Parameter descriptions state format, not just type.** Not
+   `space_id: string` but `space_id: UUID of the space (from the
+   attention signal context)`.
+
+5. **Return values describe what matters.** Not `returns: object` but
+   `returns: {canvas_id, title} — use canvas_id for subsequent updates`.
+
+6. **No examples in the schema.** Research shows examples bloat context
+   without improving reliability (arXiv:2602.14878 RQ-3). If the agent
+   needs guidance, put it in the attention signal context.
+
+7. **Structured error responses.** Return
+   `{error: "space_not_found", recoverable: true, suggestion: "verify
+   space_id from the attention context"}` — not `500 Internal Server
+   Error`. Agents can self-correct on structured errors (SERF pattern
+   from arXiv:2603.13417).
+
+#### The 6-component rubric (arXiv:2602.14878)
+
+Every tool description should include these components in **compact**
+form (verbose descriptions regressed 16.67% of cases in research):
+
+| Component | Required | Notes |
+|-----------|----------|-------|
+| Purpose | Yes | One sentence: what it does |
+| Parameters | Yes | Each param: name, type, format, constraints |
+| Return value | Yes | What the tool gives back, what to use from it |
+| Limitations | Yes | What it can't do, edge cases |
+| Usage guidelines | Yes | When to use this vs. other tools |
+| Examples | No | Skip — inflates tokens without helping |
+
+#### Suite's tool surface
+
+```
+canvas_create
+  Purpose: Create a live collaborative canvas in a chat space.
+  Params:
+    space_id   — UUID of the space (from attention signal context)
+    canvas_type — table | dashboard | code | diagram | custom
+    title      — human-readable title (string)
+    initial_state — object with type-specific content to render
+  Returns: { canvas_id, title, canvas_type }
+  Limitation: One canvas per call. Canvas is posted as a chat message.
+  When: User requests a visual artifact, data display, or shared doc.
+
+canvas_update
+  Purpose: Update an existing canvas's content.
+  Params:
+    canvas_id — UUID (from attention context or prior canvas_create)
+    patches   — array of patch operations [{op, path, value}]
+  Returns: { canvas_id, updated_at }
+  Limitation: Canvas must exist. Use canvas_create first.
+  When: Modifying data in a canvas referenced in the conversation.
+
+task_create
+  Purpose: Create a tracked task visible in the space.
+  Params:
+    space_id    — UUID of the space
+    title       — short task title (string)
+    description — optional detail (string)
+  Returns: { task_id, title }
+  Limitation: Does not assign or schedule. Use assign_task separately.
+  When: An actionable item emerges that should be tracked.
+
+task_complete
+  Purpose: Mark an existing task as done.
+  Params:
+    task_id — UUID of the task
+  Returns: { task_id, status: "done" }
+  Limitation: Task must exist and not already be done.
+  When: Work on a task is confirmed finished.
+```
+
+Four tools. Clear boundaries. No parameter swamps. Context is pushed,
+tools are for writes only.
 
 ### 4. Agent identity and trust
 
@@ -234,7 +399,43 @@ Delegation happens through Suite's message system — Zip posts a message
 that @mentions Nova, which triggers Nova's attention signal. No special
 agent-to-agent API needed; it's just chat.
 
-### 6. Schema changes
+### 6. Shared context plane (ETS)
+
+Suite maintains a shared context plane backed by ETS, updated automatically
+via telemetry events (message_posted, canvas_created, task_updated, etc.).
+
+```elixir
+# ETS table owned by ContextPlane GenServer
+:ets.new(:suite_context_plane, [:named_table, :set, :protected])
+
+# Keyed by {scope, id, key}
+{:space, space_id, :recent_activity}     → [last N message summaries]
+{:space, space_id, :active_topics}       → ["PR review", "deploy plan"]
+{:space, space_id, :agent_states}        → %{"zip" => :engaged, "nova" => :idle}
+{:space, space_id, :canvas_summaries}    → [%{id, title, type, updated_at}]
+{:agent, agent_id, :working_memory}      → %{current_task: "...", notes: [...]}
+{:global, nil, :agent_capabilities}      → %{"zip" => [...], "nova" => [...]}
+```
+
+When the attention router prepares a signal for dispatch, it reads from
+this plane to build the context bundle. No LLM call needed — it's a
+deterministic ETS lookup.
+
+**What gets shared vs. private:**
+
+| Shared (Context Plane) | Private (per-runtime) |
+|---|---|
+| Space activity & topic summaries | Agent's internal reasoning |
+| Who's working on what | Agent's system prompt & personality |
+| Canvas state & recent changes | Conversation history with its owner |
+| Task status & assignments | Model selection & config |
+| Agent presence & capabilities | Tool execution internals |
+
+For real-time context push (not polling), Suite can send context-update
+events down the channel WebSocket unprompted. The channel plugin surfaces
+these as system events in the agent's session.
+
+### 7. Schema changes
 
 #### New table: `agent_runtimes`
 
@@ -369,21 +570,34 @@ translates the response back to Suite.
 
 ## Open Questions
 
-1. **Should external agents share memory/context?** Or is each agent's context
-   strictly private to its runtime? The current design says private, but there
-   may be use cases for shared context (e.g., a project knowledge base).
-
-2. **How does Suite handle conflicting agent responses?** If two agents both
+1. **How does Suite handle conflicting agent responses?** If two agents both
    respond to the same message (e.g., both are in collaborative mode), does
-   Suite deduplicate, sequence, or let both through?
+   Suite deduplicate, sequence, or let both through? Current leaning: let
+   both through — the principal agent pattern (ADR 0013) should prevent
+   this in most cases, and explicit @mentions are unambiguous.
 
-3. **Should the protocol be Suite-specific or generic?** A generic protocol
+2. **Should the protocol be Suite-specific or generic?** A generic protocol
    (like an "Agent Channel Protocol") could allow Suite to connect to runtimes
    beyond OpenClaw. But premature generalization risks over-engineering.
+   Current leaning: Suite-specific v1, extract a generic protocol if demand
+   emerges.
 
-4. **What happens to an agent's history when its runtime is revoked?** The
+3. **What happens to an agent's history when its runtime is revoked?** The
    messages and canvases persist (they're in Suite's DB), but should the
-   agent's participant record be anonymized or preserved?
+   agent's participant record be anonymized or preserved? Current leaning:
+   preserved — the work product belongs to the space, not the runtime.
+
+4. **How much context is too much in the attention signal?** Bundling space
+   state, canvas summaries, tasks, and activity into every signal could
+   bloat tokens. Suite should have a context budget (e.g., 4K tokens) and
+   prioritize by relevance. The attention router already knows the signal
+   reason — use it to select context.
+
+5. **Should the built-in agent use the same tool surface?** Currently
+   ToolRunner calls functions directly. Refactoring it to use the same
+   tool surface as federated agents (same descriptions, same schemas,
+   same error semantics) ensures parity. The built-in path is in-process;
+   the federated path is over WebSocket. Same interface, different transport.
 
 ---
 
