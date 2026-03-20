@@ -39,7 +39,7 @@ graph TB
         direction TB
         gw_a["Gateway"]
         agent_a["Agent: Zip"]
-        plugin_a["suite-channel<br>plugin"]
+        plugin_a["startup-suite-channel<br>plugin"]
         
         plugin_a --> gw_a
         gw_a --> agent_a
@@ -49,7 +49,7 @@ graph TB
         direction TB
         gw_b["Gateway"]
         agent_b["Agent: Nova"]
-        plugin_b["suite-channel<br>plugin"]
+        plugin_b["startup-suite-channel<br>plugin"]
         
         plugin_b --> gw_b
         gw_b --> agent_b
@@ -79,7 +79,7 @@ graph TB
 ```mermaid
 sequenceDiagram
     participant OC as OpenClaw<br>(behind NAT)
-    participant Plugin as suite-channel<br>plugin
+    participant Plugin as startup-suite-channel<br>plugin
     participant Suite as Suite<br>/runtime/ws
     participant AR as Attention<br>Router
     participant CP as Context<br>Plane (ETS)

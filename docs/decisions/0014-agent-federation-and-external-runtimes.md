@@ -176,7 +176,7 @@ all happen inside OpenClaw. Zero changes to the agent itself.
 
 ```
 OpenClaw (behind NAT)
-  └── suite-channel plugin ──outbound WSS──► Suite /runtime/ws
+  └── startup-suite-channel plugin ──outbound WSS──► Suite /runtime/ws
          │
          ├── Inbound: attention signals → OpenClaw message routing
          ├── Outbound: agent replies → Suite message posting
@@ -469,14 +469,14 @@ ALTER TABLE agents ADD COLUMN runtime_type VARCHAR DEFAULT 'built_in';
 ALTER TABLE agents ADD COLUMN runtime_id UUID REFERENCES agent_runtimes(id);
 ```
 
-### 7. OpenClaw Channel Plugin: `suite-channel`
+### 7. OpenClaw Channel Plugin: `startup-suite-channel`
 
 The recommended integration path for OpenClaw runtimes is a channel plugin
 that ships as an OpenClaw extension (similar to the `claude-runner` extension
 pattern):
 
 ```
-openclaw-suite-channel/
+openclaw-startup-suite-channel/
 ├── index.ts          # Plugin registration
 ├── src/
 │   ├── suite-client.ts    # WebSocket client to Suite API
@@ -521,7 +521,7 @@ translates the response back to Suite.
 
 ### Phase 2: OpenClaw channel plugin
 
-- Build `openclaw-suite-channel` extension
+- Build `openclaw-startup-suite-channel` extension
 - Handle bidirectional message translation
 - Sync attention state (engaged, silenced) between Suite and OpenClaw
 - Handle reconnection and signal replay
