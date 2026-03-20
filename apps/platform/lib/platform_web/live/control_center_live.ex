@@ -19,6 +19,7 @@ defmodule PlatformWeb.ControlCenterLive do
   }
 
   alias Platform.Federation
+  alias Platform.Federation.RuntimePresence
   alias Platform.Repo
 
   @session_limit 8
@@ -1369,6 +1370,12 @@ defmodule PlatformWeb.ControlCenterLive do
                   <span class={source_badge_class(agent.source)}>
                     {humanize_value(agent.source_label)}
                   </span>
+                  <span
+                    :if={agent.runtime_type == "external"}
+                    class="inline-flex items-center gap-1 rounded-full bg-info/15 px-2 py-0.5 text-info"
+                  >
+                    <span class="hero-globe-alt h-3 w-3" /> Federated
+                  </span>
                 </div>
               </.link>
             </article>
@@ -1451,14 +1458,28 @@ defmodule PlatformWeb.ControlCenterLive do
                     </h1>
                     <span class={[
                       "inline-block h-2.5 w-2.5 rounded-full",
-                      @runtime.running? && "bg-success",
-                      !@runtime.running? && "bg-base-content/25"
+                      agent_online?(@selected_agent, @runtime, @federation_online?) && "bg-success",
+                      !agent_online?(@selected_agent, @runtime, @federation_online?) &&
+                        "bg-base-content/25"
                     ]} />
                     <span class={agent_badge_class(@selected_agent.status)}>
                       {humanize_value(@selected_agent.status)}
                     </span>
-                    <span class={runtime_badge_class(@runtime.status)}>
+                    <span
+                      :if={@selected_agent.runtime_type != "external"}
+                      class={runtime_badge_class(@runtime.status)}
+                    >
                       Runtime {humanize_value(@runtime.status)}
+                    </span>
+                    <span
+                      :if={@selected_agent.runtime_type == "external"}
+                      class={[
+                        "rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-widest",
+                        @federation_online? && "bg-success/15 text-success",
+                        !@federation_online? && "bg-base-content/10 text-base-content/50"
+                      ]}
+                    >
+                      {if @federation_online?, do: "Connected", else: "Disconnected"}
                     </span>
                     <span
                       :if={@selected_agent_directory_entry}
@@ -1469,13 +1490,28 @@ defmodule PlatformWeb.ControlCenterLive do
                   </div>
                   <p class="mt-1 text-sm text-base-content/60">{@selected_agent.slug}</p>
                   <div class="mt-3 flex flex-wrap gap-2 text-xs text-base-content/55">
-                    <span class="rounded-full bg-base-200 px-2.5 py-1">
+                    <span
+                      :if={@selected_agent.runtime_type == "external"}
+                      class="inline-flex items-center gap-1 rounded-full bg-info/15 px-2.5 py-1 text-info"
+                    >
+                      <span class="hero-globe-alt h-3.5 w-3.5" /> Federated
+                    </span>
+                    <span
+                      :if={@selected_agent.runtime_type != "external"}
+                      class="rounded-full bg-base-200 px-2.5 py-1"
+                    >
                       {primary_model_label(@selected_agent)}
                     </span>
-                    <span class="rounded-full bg-base-200 px-2.5 py-1">
+                    <span
+                      :if={@selected_agent.runtime_type != "external"}
+                      class="rounded-full bg-base-200 px-2.5 py-1"
+                    >
                       sandbox {@selected_agent.sandbox_mode || "off"}
                     </span>
-                    <span class="rounded-full bg-base-200 px-2.5 py-1">
+                    <span
+                      :if={@selected_agent.runtime_type != "external"}
+                      class="rounded-full bg-base-200 px-2.5 py-1"
+                    >
                       thinking {blank_fallback(@selected_agent.thinking_default, "default")}
                     </span>
                   </div>
@@ -1486,6 +1522,7 @@ defmodule PlatformWeb.ControlCenterLive do
                   class="grid w-full grid-cols-2 gap-2 sm:w-auto sm:grid-cols-2 xl:grid-cols-4"
                 >
                   <button
+                    :if={@selected_agent.runtime_type != "external"}
                     id="start-runtime"
                     type="button"
                     phx-click="start_runtime"
@@ -1495,6 +1532,7 @@ defmodule PlatformWeb.ControlCenterLive do
                     Start runtime
                   </button>
                   <button
+                    :if={@selected_agent.runtime_type != "external"}
                     id="refresh-runtime"
                     type="button"
                     phx-click="refresh_runtime"
@@ -1503,6 +1541,7 @@ defmodule PlatformWeb.ControlCenterLive do
                     Refresh runtime
                   </button>
                   <button
+                    :if={@selected_agent.runtime_type != "external"}
                     id="stop-runtime"
                     type="button"
                     phx-click="stop_runtime"
@@ -1546,7 +1585,33 @@ defmodule PlatformWeb.ControlCenterLive do
                 </button>
               </div>
 
-              <div class="mt-5 grid gap-3 grid-cols-2 sm:grid-cols-3 xl:grid-cols-5">
+              <%!-- Stat cards: federated agents show connection-relevant stats --%>
+              <div
+                :if={@selected_agent.runtime_type == "external"}
+                class="mt-5 grid gap-3 grid-cols-2 sm:grid-cols-3"
+              >
+                <.stat_card
+                  label="Connection"
+                  value={if(@federation_online?, do: "Online", else: "Offline")}
+                  detail={if(@federation_online?, do: "websocket active", else: "not connected")}
+                />
+                <.stat_card
+                  label="Trust level"
+                  value={
+                    humanize_value((@federation_runtime && @federation_runtime.trust_level) || "—")
+                  }
+                  detail="permission scope"
+                />
+                <.stat_card
+                  label="Spaces"
+                  value={length(@federation_spaces)}
+                  detail="active memberships"
+                />
+              </div>
+              <div
+                :if={@selected_agent.runtime_type != "external"}
+                class="mt-5 grid gap-3 grid-cols-2 sm:grid-cols-3 xl:grid-cols-5"
+              >
                 <.stat_card
                   label="Runtime"
                   value={humanize_value(@runtime.status)}
@@ -1590,11 +1655,83 @@ defmodule PlatformWeb.ControlCenterLive do
               <.federation_connection_panel
                 agent={@selected_agent}
                 regenerated_token={@regenerated_token}
+                federation_online?={@federation_online?}
               />
             </section>
 
-            <%!-- Config + model routing --%>
-            <div class="grid gap-6 xl:grid-cols-[minmax(0,1.6fr)_minmax(320px,0.9fr)]">
+            <%!-- Federated agent detail panels --%>
+            <div :if={@selected_agent.runtime_type == "external"} class="flex flex-col gap-6">
+              <%!-- Identity section --%>
+              <section class="rounded-3xl border border-base-300 bg-base-100 p-5 shadow-sm">
+                <h2 class="text-lg font-semibold text-base-content">
+                  <span class="hero-identification mr-1 inline-block h-5 w-5 align-text-bottom" />
+                  Identity
+                </h2>
+                <p class="mt-1 text-sm text-base-content/60">
+                  How this agent appears in Suite chat. Config and model routing are managed by the remote OpenClaw instance.
+                </p>
+                <.form
+                  for={@config_form}
+                  id="federated-identity-form"
+                  phx-submit="save_config"
+                  class="mt-4 space-y-4"
+                >
+                  <label class="form-control max-w-md">
+                    <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
+                      Display name
+                    </span>
+                    <input
+                      type="text"
+                      name="config[name]"
+                      value={@config_form[:name].value || ""}
+                      class="input input-bordered w-full"
+                    />
+                  </label>
+                  <div class="flex justify-stretch sm:justify-end">
+                    <button type="submit" class="btn btn-neutral w-full sm:w-auto">
+                      Update name
+                    </button>
+                  </div>
+                </.form>
+              </section>
+
+              <%!-- Spaces section --%>
+              <section class="rounded-3xl border border-base-300 bg-base-100 p-5 shadow-sm">
+                <h2 class="text-lg font-semibold text-base-content">
+                  <span class="hero-chat-bubble-left-right mr-1 inline-block h-5 w-5 align-text-bottom" />
+                  Spaces
+                </h2>
+                <p class="mt-1 text-sm text-base-content/60">
+                  Spaces this agent participates in.
+                </p>
+                <div class="mt-4 space-y-2">
+                  <div
+                    :for={space <- @federation_spaces}
+                    class="flex items-center justify-between rounded-2xl border border-base-300 px-4 py-3 text-sm"
+                  >
+                    <div>
+                      <p class="font-semibold text-base-content">{space.space_name}</p>
+                      <p class="text-xs text-base-content/50">{space.space_slug}</p>
+                    </div>
+                    <span class="rounded-full bg-base-200 px-2.5 py-1 text-[11px] uppercase tracking-widest text-base-content/55">
+                      {space.attention_mode}
+                    </span>
+                  </div>
+                  <div
+                    :if={@federation_spaces == []}
+                    class="rounded-2xl border border-dashed border-base-300 px-4 py-5 text-sm text-base-content/50"
+                  >
+                    Not participating in any spaces yet.
+                  </div>
+                </div>
+              </section>
+            </div>
+
+            <%!-- Config + model routing (built-in agents only) --%>
+            <div
+              :if={@selected_agent.runtime_type != "external"}
+              class="grid gap-6 xl:grid-cols-[minmax(0,1.6fr)_minmax(320px,0.9fr)]"
+            >
               <div class="flex min-w-0 flex-col gap-6">
                 <section class="rounded-3xl border border-base-300 bg-base-100 p-5 shadow-sm">
                   <div class="flex items-start justify-between gap-4">
@@ -2175,6 +2312,7 @@ defmodule PlatformWeb.ControlCenterLive do
 
   attr :agent, Agent, required: true
   attr :regenerated_token, :string, default: nil
+  attr :federation_online?, :boolean, default: false
 
   defp federation_connection_panel(assigns) do
     runtime = Federation.get_runtime(assigns.agent.runtime_id)
@@ -2184,6 +2322,21 @@ defmodule PlatformWeb.ControlCenterLive do
     <div :if={@fed_runtime} class="mt-4 space-y-3">
       <div class="rounded-2xl border border-base-300 bg-base-200/40 p-4 text-sm">
         <div class="flex items-center justify-between gap-3">
+          <span>Connection</span>
+          <span class={[
+            "inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-widest",
+            @federation_online? && "bg-success/15 text-success",
+            !@federation_online? && "bg-base-content/10 text-base-content/50"
+          ]}>
+            <span class={[
+              "inline-block h-2 w-2 rounded-full",
+              @federation_online? && "bg-success",
+              !@federation_online? && "bg-base-content/25"
+            ]} />
+            {if @federation_online?, do: "Connected", else: "Disconnected"}
+          </span>
+        </div>
+        <div class="mt-2 flex items-center justify-between gap-3">
           <span>Runtime ID</span>
           <code class="font-mono text-xs">{@fed_runtime.runtime_id}</code>
         </div>
@@ -2191,6 +2344,12 @@ defmodule PlatformWeb.ControlCenterLive do
           <span>Status</span>
           <span class={runtime_badge_class(String.to_existing_atom(@fed_runtime.status))}>
             {humanize_value(@fed_runtime.status)}
+          </span>
+        </div>
+        <div class="mt-2 flex items-center justify-between gap-3">
+          <span>Trust level</span>
+          <span class="rounded-full bg-base-200 px-2 py-0.5 text-xs">
+            {humanize_value(@fed_runtime.trust_level)}
           </span>
         </div>
         <div class="mt-2 flex items-center justify-between gap-3">
@@ -2293,6 +2452,9 @@ defmodule PlatformWeb.ControlCenterLive do
     |> assign(:agent_status, PlatformWeb.ShellLive.default_agent_status())
     |> assign(:selected_agent_directory_entry, nil)
     |> assign(:regenerated_token, nil)
+    |> assign(:federation_runtime, nil)
+    |> assign(:federation_online?, false)
+    |> assign(:federation_spaces, [])
   end
 
   defp assign_agent_panel(socket, %Agent{} = agent, opts) do
@@ -2353,6 +2515,25 @@ defmodule PlatformWeb.ControlCenterLive do
     |> assign(:pending_delete_slug, pending_delete_slug(socket, agent.slug))
     |> assign(:memory_form, build_memory_form(Keyword.get(opts, :memory_params)))
     |> assign(:agent_status, PlatformWeb.ShellLive.default_agent_status())
+    |> assign_federation_data(agent)
+  end
+
+  defp assign_federation_data(socket, %Agent{runtime_type: "external"} = agent) do
+    runtime = Federation.get_runtime_for_agent(agent)
+    online? = runtime != nil && RuntimePresence.online?(runtime.runtime_id)
+    spaces = Federation.agent_spaces(agent)
+
+    socket
+    |> assign(:federation_runtime, runtime)
+    |> assign(:federation_online?, online?)
+    |> assign(:federation_spaces, spaces)
+  end
+
+  defp assign_federation_data(socket, _agent) do
+    socket
+    |> assign(:federation_runtime, nil)
+    |> assign(:federation_online?, false)
+    |> assign(:federation_spaces, [])
   end
 
   defp reload_selected_agent(socket, opts \\ [])
@@ -2803,6 +2984,7 @@ defmodule PlatformWeb.ControlCenterLive do
       workspace_managed?: source == :workspace,
       persisted?: true,
       agent: agent,
+      runtime_type: agent.runtime_type || "built_in",
       runtime_status: runtime_status(agent),
       running?: runtime_running?(agent)
     }
@@ -2823,9 +3005,19 @@ defmodule PlatformWeb.ControlCenterLive do
       workspace_managed?: true,
       persisted?: false,
       agent: nil,
+      runtime_type: "built_in",
       runtime_status: :unknown,
       running?: false
     }
+  end
+
+  defp attach_runtime_status(%{agent: %Agent{runtime_type: "external"} = agent} = entry) do
+    runtime = Federation.get_runtime_for_agent(agent)
+    online? = runtime != nil && RuntimePresence.online?(runtime.runtime_id)
+
+    entry
+    |> Map.put(:runtime_status, if(online?, do: :running, else: :idle))
+    |> Map.put(:running?, online?)
   end
 
   defp attach_runtime_status(%{agent: %Agent{} = agent} = entry) do
@@ -2853,6 +3045,11 @@ defmodule PlatformWeb.ControlCenterLive do
   defp runtime_detail(_runtime), do: "not started"
 
   defp runtime_running?(%Agent{} = agent), do: is_pid(AgentServer.whereis(agent.id))
+
+  defp agent_online?(%Agent{runtime_type: "external"}, _runtime, federation_online?),
+    do: federation_online?
+
+  defp agent_online?(_agent, runtime, _federation_online?), do: runtime.running?
 
   defp runtime_status(%Agent{} = agent) do
     case runtime_snapshot(agent) do

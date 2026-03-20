@@ -8,6 +8,7 @@ defmodule Platform.Federation do
 
   alias Platform.Agents.{Agent, AgentRuntime}
   alias Platform.Chat
+  alias Platform.Chat.{Participant, Space}
   alias Platform.Repo
 
   # ── Runtime registration ────────────────────────────────────────────
@@ -129,6 +130,30 @@ defmodule Platform.Federation do
 
   def ensure_runtime_agent_participant(_runtime, _space_id) do
     {:error, :no_linked_agent}
+  end
+
+  # ── Query helpers ───────────────────────────────────────────────────
+
+  @doc "Fetch the runtime linked to an agent (by the agent's runtime_id FK)."
+  def get_runtime_for_agent(%Agent{runtime_id: nil}), do: nil
+  def get_runtime_for_agent(%Agent{runtime_id: rid}), do: get_runtime(rid)
+
+  @doc "List spaces an agent participates in, with the participant's attention_mode."
+  def agent_spaces(%Agent{id: agent_id}) do
+    from(p in Participant,
+      join: s in Space,
+      on: s.id == p.space_id,
+      where:
+        p.participant_type == "agent" and p.participant_id == ^agent_id and is_nil(p.left_at),
+      select: %{
+        space_id: s.id,
+        space_name: s.name,
+        space_slug: s.slug,
+        attention_mode: p.attention_mode
+      },
+      order_by: [asc: s.name]
+    )
+    |> Repo.all()
   end
 
   # ── Helpers ─────────────────────────────────────────────────────────

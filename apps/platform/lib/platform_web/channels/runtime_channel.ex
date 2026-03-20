@@ -11,6 +11,7 @@ defmodule PlatformWeb.RuntimeChannel do
 
   alias Platform.Chat
   alias Platform.Federation
+  alias Platform.Federation.RuntimePresence
   alias Platform.Federation.ToolSurface
 
   @impl true
@@ -23,6 +24,8 @@ defmodule PlatformWeb.RuntimeChannel do
         })
         |> Platform.Repo.update()
       end
+
+      RuntimePresence.track(runtime_id)
 
       {:ok, socket}
     else
@@ -102,6 +105,12 @@ defmodule PlatformWeb.RuntimeChannel do
 
   def handle_in(_event, _payload, socket) do
     {:noreply, socket}
+  end
+
+  @impl true
+  def terminate(_reason, socket) do
+    RuntimePresence.untrack(socket.assigns.runtime_id)
+    :ok
   end
 
   # ── Helpers ─────────────────────────────────────────────────────────
