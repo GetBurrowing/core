@@ -86,7 +86,8 @@ defmodule PlatformWeb.ControlCenterLive do
     agents = AgentData.list_agents()
     selected_slug = AgentData.resolve_selected_agent_slug(params["agent_slug"], agents)
     selected_agent = selected_slug && AgentData.ensure_selected_agent(selected_slug, agents)
-    agents = AgentData.list_agents()
+    # Re-fetch after ensure_agent may have created/upserted the agent record
+    agents = if selected_agent, do: AgentData.list_agents(), else: agents
     selected_agent = selected_agent && Repo.get(Agent, selected_agent.id)
 
     selected_entry =
