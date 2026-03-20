@@ -79,7 +79,8 @@ defmodule Platform.Chat.AttentionRouter do
     ~r/\b(quiet|shut up|back off|stop|enough|be quiet|silence|hush|shush|go away|leave)\b/i,
     ~r/\b(only when i ask|only when mentioned|mentions only)\b/i,
     ~r/\bthat'?s? (all|enough|it)\b/i,
-    ~r/\b(thanks?\s+(zip|that'?s?\s+all))\b/i
+    ~r/\b(thanks?\s+(zip|that'?s?\s+all))\b/i,
+    ~r/\byou'?re? dismissed\b/i
   ]
 
   # ── Public API ──────────────────────────────────────────────────────────────
