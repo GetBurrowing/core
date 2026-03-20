@@ -1,17 +1,10 @@
 defmodule Platform.Tasks do
   @moduledoc """
-  Thin read-side for the Tasks UI MVP.
+  Persistent context for the Tasks domain.
 
-  The persistent Tasks domain is not implemented yet, so this module builds the
-  first shell surface from the execution, context, and artifact planes that
-  already exist. It discovers known task ids from active runs, task-scoped
-  context sessions, and registered artifacts, then assembles a task detail view
-  with:
-
-    * active/live run state
-    * task-scoped context summary and recent deltas
-    * artifact + publication history
-    * operator stop / kill actions routed through `Platform.Execution`
+  Manages the full hierarchy: Projects → Epics → Tasks → Plans → Stages →
+  Validations, backed by Postgres. Also preserves the original ETS-based
+  read-side for backward compatibility with the proof-of-life flow.
 
   ## Proof-of-life run
 
@@ -20,9 +13,16 @@ defmodule Platform.Tasks do
   `Platform.Execution.ProofRun` for the full orchestration details.
   """
 
+  import Ecto.Query
+
   alias Platform.{Artifacts, Context, Execution}
   alias Platform.Context.Session
   alias Platform.Execution.Run
+  alias Platform.Repo
+
+  alias Platform.Tasks.{Epic, Plan, Project, Stage, Task, Validation}
+
+  # ── Legacy summary/detail structs (backward compat) ──────────────────────
 
   defmodule Summary do
     @moduledoc false
@@ -51,6 +51,259 @@ defmodule Platform.Tasks do
 
   @type summary :: %Summary{}
   @type detail :: %Detail{}
+
+  # ── Valid status transitions (ADR 0018 §7) ───────────────────────────────
+
+  @valid_task_transitions %{
+    "backlog" => ~w(planning blocked),
+    "planning" => ~w(ready blocked backlog),
+    "ready" => ~w(in_progress blocked planning),
+    "in_progress" => ~w(in_review blocked done),
+    "in_review" => ~w(done in_progress blocked),
+    "blocked" => ~w(backlog planning ready in_progress),
+    "done" => []
+  }
+
+  # ── Projects ─────────────────────────────────────────────────────────────
+
+  def create_project(attrs) do
+    %Project{}
+    |> Project.changeset(attrs)
+    |> Repo.insert()
+  end
+
+  def update_project(%Project{} = project, attrs) do
+    project
+    |> Project.changeset(attrs)
+    |> Repo.update()
+  end
+
+  def get_project(id), do: Repo.get(Project, id)
+
+  def get_project_by_slug(slug) do
+    Repo.get_by(Project, slug: slug)
+  end
+
+  def list_projects do
+    Project
+    |> order_by([p], asc: p.name)
+    |> Repo.all()
+  end
+
+  # ── Epics ────────────────────────────────────────────────────────────────
+
+  def create_epic(attrs) do
+    %Epic{}
+    |> Epic.changeset(attrs)
+    |> Repo.insert()
+  end
+
+  def update_epic(%Epic{} = epic, attrs) do
+    epic
+    |> Epic.changeset(attrs)
+    |> Repo.update()
+  end
+
+  def get_epic(id), do: Repo.get(Epic, id)
+
+  def list_epics(project_id) do
+    Epic
+    |> where([e], e.project_id == ^project_id)
+    |> order_by([e], asc: e.inserted_at)
+    |> Repo.all()
+  end
+
+  # ── Tasks (persistent) ──────────────────────────────────────────────────
+
+  def create_task(attrs) do
+    %Task{}
+    |> Task.changeset(attrs)
+    |> Repo.insert()
+  end
+
+  def update_task(%Task{} = task, attrs) do
+    task
+    |> Task.changeset(attrs)
+    |> Repo.update()
+  end
+
+  @doc "Get a task record from Postgres (no ETS merge)."
+  def get_task_record(id), do: Repo.get(Task, id)
+
+  def list_tasks_by_project(project_id) do
+    Task
+    |> where([t], t.project_id == ^project_id)
+    |> order_by([t], desc: t.inserted_at)
+    |> Repo.all()
+  end
+
+  def list_tasks_by_epic(epic_id) do
+    Task
+    |> where([t], t.epic_id == ^epic_id)
+    |> order_by([t], desc: t.inserted_at)
+    |> Repo.all()
+  end
+
+  def list_tasks_by_status(status) do
+    Task
+    |> where([t], t.status == ^status)
+    |> order_by([t], desc: t.inserted_at)
+    |> Repo.all()
+  end
+
+  @doc """
+  Transition a task's status, enforcing valid transitions per ADR 0018 §7.
+  """
+  def transition_task_status(%Task{} = task, new_status) do
+    allowed = Map.get(@valid_task_transitions, task.status, [])
+
+    if new_status in allowed do
+      task
+      |> Task.changeset(%{status: new_status})
+      |> Repo.update()
+    else
+      {:error, :invalid_transition}
+    end
+  end
+
+  # ── Plans ────────────────────────────────────────────────────────────────
+
+  def create_plan(attrs) do
+    attrs = maybe_set_plan_version(attrs)
+
+    %Plan{}
+    |> Plan.changeset(attrs)
+    |> Repo.insert()
+  end
+
+  def get_plan(id) do
+    Plan
+    |> Repo.get(id)
+    |> Repo.preload(:stages)
+  end
+
+  @doc "Get the latest approved plan for a task."
+  def current_plan(task_id) do
+    Plan
+    |> where([p], p.task_id == ^task_id and p.status == "approved")
+    |> order_by([p], desc: p.version)
+    |> limit(1)
+    |> Repo.one()
+    |> case do
+      nil -> nil
+      plan -> Repo.preload(plan, :stages)
+    end
+  end
+
+  def list_plans(task_id) do
+    Plan
+    |> where([p], p.task_id == ^task_id)
+    |> order_by([p], asc: p.version)
+    |> Repo.all()
+  end
+
+  def submit_plan_for_review(%Plan{status: "draft"} = plan) do
+    plan
+    |> Plan.changeset(%{status: "pending_review"})
+    |> Repo.update()
+  end
+
+  def submit_plan_for_review(_plan), do: {:error, :invalid_transition}
+
+  def approve_plan(%Plan{status: "pending_review"} = plan, approved_by) do
+    now = DateTime.utc_now()
+
+    plan
+    |> Plan.changeset(%{status: "approved", approved_by: approved_by, approved_at: now})
+    |> Repo.update()
+  end
+
+  def approve_plan(_plan, _approved_by), do: {:error, :invalid_transition}
+
+  def reject_plan(%Plan{status: "pending_review"} = plan, _rejected_by) do
+    plan
+    |> Plan.changeset(%{status: "rejected"})
+    |> Repo.update()
+  end
+
+  def reject_plan(_plan, _rejected_by), do: {:error, :invalid_transition}
+
+  # ── Stages ───────────────────────────────────────────────────────────────
+
+  def create_stage(attrs) do
+    %Stage{}
+    |> Stage.changeset(attrs)
+    |> Repo.insert()
+  end
+
+  def list_stages(plan_id) do
+    Stage
+    |> where([s], s.plan_id == ^plan_id)
+    |> order_by([s], asc: s.position)
+    |> Repo.all()
+  end
+
+  @valid_stage_transitions %{
+    "pending" => ~w(running skipped),
+    "running" => ~w(passed failed),
+    "failed" => ~w(running skipped),
+    "passed" => [],
+    "skipped" => []
+  }
+
+  def transition_stage(%Stage{} = stage, new_status) do
+    allowed = Map.get(@valid_stage_transitions, stage.status, [])
+
+    if new_status in allowed do
+      now = DateTime.utc_now()
+
+      extra =
+        case new_status do
+          "running" -> %{started_at: now}
+          s when s in ~w(passed failed skipped) -> %{completed_at: now}
+          _ -> %{}
+        end
+
+      stage
+      |> Stage.changeset(Map.put(extra, :status, new_status))
+      |> Repo.update()
+    else
+      {:error, :invalid_transition}
+    end
+  end
+
+  # ── Validations ──────────────────────────────────────────────────────────
+
+  def create_validation(attrs) do
+    %Validation{}
+    |> Validation.changeset(attrs)
+    |> Repo.insert()
+  end
+
+  def list_validations(stage_id) do
+    Validation
+    |> where([v], v.stage_id == ^stage_id)
+    |> order_by([v], asc: v.inserted_at)
+    |> Repo.all()
+  end
+
+  def evaluate_validation(id, status, evidence) when status in ~w(passed failed) do
+    case Repo.get(Validation, id) do
+      nil ->
+        {:error, :not_found}
+
+      validation ->
+        validation
+        |> Validation.changeset(%{
+          status: status,
+          evidence: evidence,
+          evaluated_at: DateTime.utc_now()
+        })
+        |> Repo.update()
+    end
+  end
+
+  # ── Legacy ETS-based read-side (backward compat) ─────────────────────────
 
   @spec list_tasks() :: [summary()]
   def list_tasks do
@@ -86,6 +339,8 @@ defmodule Platform.Tasks do
     end
   end
 
+  # ── Proof-of-life delegates ──────────────────────────────────────────────
+
   alias Platform.Tasks.ProofOfLife
 
   @doc """
@@ -117,6 +372,8 @@ defmodule Platform.Tasks do
   @spec launch_proof_of_life(String.t(), keyword()) :: {:ok, Run.t()} | {:error, term()}
   def launch_proof_of_life(task_id, opts \\ []), do: ProofOfLife.launch(task_id, opts)
 
+  # ── PubSub ───────────────────────────────────────────────────────────────
+
   @spec subscribe(String.t()) :: :ok
   def subscribe(task_id) do
     _ = Phoenix.PubSub.subscribe(Platform.PubSub, "execution:runs:#{task_id}")
@@ -132,6 +389,8 @@ defmodule Platform.Tasks do
     _ = Phoenix.PubSub.unsubscribe(Platform.PubSub, "ctx:#{task_id}")
     :ok
   end
+
+  # ── Private helpers (legacy ETS read-side) ───────────────────────────────
 
   defp build_summary(task_id, active_runs, artifacts) do
     runs = runs_for_task(active_runs, task_id)
@@ -149,7 +408,6 @@ defmodule Platform.Tasks do
       |> Enum.reject(&is_nil/1)
       |> Enum.max(DateTime, fn -> nil end)
 
-    # Extract proof-of-life state from context items written by ProofRun
     proof_state = extract_proof_state(items)
 
     %Summary{
@@ -272,5 +530,33 @@ defmodule Platform.Tasks do
 
   defp sort_tuple(%Summary{} = summary) do
     {summary.latest_activity_at || DateTime.from_unix!(0), summary.task_id}
+  end
+
+  # ── Private helpers (plan version) ───────────────────────────────────────
+
+  defp maybe_set_plan_version(%{version: _} = attrs), do: attrs
+  defp maybe_set_plan_version(%{"version" => _} = attrs), do: attrs
+
+  defp maybe_set_plan_version(%{task_id: task_id} = attrs) do
+    Map.put(attrs, :version, next_plan_version(task_id))
+  end
+
+  defp maybe_set_plan_version(%{"task_id" => task_id} = attrs) do
+    Map.put(attrs, "version", next_plan_version(task_id))
+  end
+
+  defp maybe_set_plan_version(attrs), do: attrs
+
+  defp next_plan_version(task_id) do
+    query =
+      from(p in Plan,
+        where: p.task_id == ^task_id,
+        select: max(p.version)
+      )
+
+    case Repo.one(query) do
+      nil -> 1
+      max -> max + 1
+    end
   end
 end
