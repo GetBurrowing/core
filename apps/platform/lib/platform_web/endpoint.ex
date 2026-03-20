@@ -13,7 +13,7 @@ defmodule PlatformWeb.Endpoint do
   ]
 
   socket "/runtime/ws", PlatformWeb.RuntimeSocket,
-    websocket: [timeout: 120_000],
+    websocket: [timeout: 120_000, check_origin: false],
     longpoll: false
 
   socket("/live", Phoenix.LiveView.Socket,
