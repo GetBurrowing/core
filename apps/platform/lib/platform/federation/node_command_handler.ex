@@ -105,6 +105,10 @@ defmodule Platform.Federation.NodeCommandHandler do
     end
   end
 
+  # ── Gateway dot-notation aliases ─────────────────────────────────────
+  def handle("canvas.a2ui.pushJSONL", params, ctx), do: handle("canvas.a2ui_push", params, ctx)
+  def handle("canvas.a2ui.reset", params, ctx), do: handle("canvas.a2ui_reset", params, ctx)
+
   # ── canvas.eval (Phase 3 stub) ─────────────────────────────────────
 
   def handle("canvas.eval", _params, _ctx) do

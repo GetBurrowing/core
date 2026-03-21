@@ -212,7 +212,9 @@ defmodule Platform.Federation.NodeClient do
           "canvas.eval",
           "canvas.snapshot",
           "canvas.a2ui_push",
-          "canvas.a2ui_reset"
+          "canvas.a2ui_reset",
+          "canvas.a2ui.pushJSONL",
+          "canvas.a2ui.reset"
         ],
         commands: [
           "canvas.present",
@@ -220,7 +222,9 @@ defmodule Platform.Federation.NodeClient do
           "canvas.eval",
           "canvas.snapshot",
           "canvas.a2ui_push",
-          "canvas.a2ui_reset"
+          "canvas.a2ui_reset",
+          "canvas.a2ui.pushJSONL",
+          "canvas.a2ui.reset"
         ],
         permissions: %{},
         device: %{
