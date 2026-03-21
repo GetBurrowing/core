@@ -289,7 +289,9 @@ defmodule Platform.Chat.AttentionRouter do
     end
 
     # Determine which participants are currently online via presence.
-    online_ids = space_id |> Presence.list_space() |> Map.keys() |> MapSet.new()
+    # Presence tracks by user_id, so build a set of user_ids that are online,
+    # then we'll check participant.participant_id (which is the user_id for human participants).
+    online_user_ids = space_id |> Presence.list_space() |> Map.keys() |> MapSet.new()
 
     # Route human participants using existing per-participant mode
     human_decisions =
@@ -316,6 +318,9 @@ defmodule Platform.Chat.AttentionRouter do
     author = Enum.find(participants, &(&1.id == author_id))
     sender_name = if author, do: author.display_name || "Someone", else: "Someone"
 
+    # Build a lookup from participant record ID → participant for online checks
+    participant_by_id = Map.new(participants, fn p -> {p.id, p} end)
+
     Enum.each(decisions, fn %{participant_id: pid, reason: reason} ->
       signal = %{
         participant_id: pid,
@@ -332,8 +337,12 @@ defmodule Platform.Chat.AttentionRouter do
           ChatPubSub.broadcast(space_id, {:attention_needed, signal})
           AgentResponder.maybe_dispatch(signal)
 
-          # Send web push to offline participants
-          unless MapSet.member?(online_ids, pid) do
+          # Send web push to offline participants.
+          # Presence tracks by user_id (participant.participant_id), not participant record ID.
+          participant = Map.get(participant_by_id, pid)
+          user_id = if participant, do: participant.participant_id, else: pid
+
+          unless MapSet.member?(online_user_ids, user_id) do
             maybe_send_push(pid, sender_name, message)
           end
       end
@@ -428,6 +437,7 @@ defmodule Platform.Chat.AttentionRouter do
 
   # ── Human participant decision (unchanged from original) ───────────────────
 
+  defp decide_human(%Participant{attention_mode: "all"}, _message), do: :all
   defp decide_human(%Participant{attention_mode: "active"}, _message), do: :active
 
   defp decide_human(%Participant{attention_mode: "mention"} = participant, message) do
