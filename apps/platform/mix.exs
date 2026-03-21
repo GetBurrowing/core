@@ -74,7 +74,8 @@ defmodule Platform.MixProject do
       {:earmark, "~> 1.4"},
       {:makeup, "~> 1.2"},
       {:makeup_elixir, "~> 1.0"},
-      {:makeup_js, "~> 0.1"}
+      {:makeup_js, "~> 0.1"},
+      {:gun, "~> 2.1"}
     ]
   end
 

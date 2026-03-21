@@ -42,6 +42,7 @@ defmodule Platform.Application do
         PlatformWeb.Endpoint
       ]
       |> maybe_add_attention_router()
+      |> maybe_add_node_client()
 
     # See https://hexdocs.pm/elixir/Supervisor.html
     # for other strategies and supported options
@@ -54,6 +55,14 @@ defmodule Platform.Application do
   defp maybe_add_attention_router(children) do
     if Application.get_env(:platform, :start_attention_router, true) do
       children ++ [Platform.Chat.AttentionRouter]
+    else
+      children
+    end
+  end
+
+  defp maybe_add_node_client(children) do
+    if System.get_env("OPENCLAW_NODE_ENABLED") == "true" do
+      children ++ [Platform.Federation.NodeClient]
     else
       children
     end
