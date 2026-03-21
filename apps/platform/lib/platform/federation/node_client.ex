@@ -186,7 +186,7 @@ defmodule Platform.Federation.NodeClient do
         maxProtocol: 3,
         role: "node",
         client: %{
-          id: "suite-node",
+          id: "cli",
           version: "0.1.0",
           platform: "linux",
           mode: "node"
@@ -204,7 +204,6 @@ defmodule Platform.Federation.NodeClient do
         permissions: %{},
         device: %{
           id: device_id,
-          name: state.display_name,
           publicKey: Base.encode64(state.identity.public_key),
           signature: Base.encode64(signature),
           signedAt: System.system_time(:millisecond),
