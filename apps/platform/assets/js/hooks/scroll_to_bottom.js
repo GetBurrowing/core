@@ -66,7 +66,14 @@ const ScrollToBottom = {
     if (this._observer) this._observer.disconnect();
   },
   scrollToBottom() {
-    this.el.scrollTop = this.el.scrollHeight;
+    // Only auto-scroll if the user is near the bottom (within 150px).
+    // This prevents hijacking scroll when the user is reading history.
+    const threshold = 150;
+    const distanceFromBottom =
+      this.el.scrollHeight - this.el.scrollTop - this.el.clientHeight;
+    if (distanceFromBottom <= threshold) {
+      this.el.scrollTop = this.el.scrollHeight;
+    }
   },
   // Walk visible message rows; if the participant matches the previous row,
   // collapse the avatar + header for a compact grouped look.
