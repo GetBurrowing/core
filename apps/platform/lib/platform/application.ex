@@ -30,6 +30,8 @@ defmodule Platform.Application do
         Platform.Artifacts.Store,
         # Execution plane — run supervisor (registry started above)
         Platform.Execution.RunSupervisor,
+        # Node context — ETS-backed space tracking for node canvas commands
+        Platform.Federation.NodeContext,
         # Federation runtime presence tracker — before Endpoint so channels can use it
         Platform.Federation.RuntimePresence,
         # Context plane — shared ETS context for federation (after Repo, before AttentionRouter)

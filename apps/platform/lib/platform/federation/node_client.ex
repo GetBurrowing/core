@@ -47,7 +47,8 @@ defmodule Platform.Federation.NodeClient do
       msg_id: 0,
       gateway_url: gateway_url(),
       token: System.get_env("OPENCLAW_GATEWAY_TOKEN", ""),
-      display_name: System.get_env("OPENCLAW_NODE_DISPLAY_NAME", "Startup Suite")
+      display_name: System.get_env("OPENCLAW_NODE_DISPLAY_NAME", "Startup Suite"),
+      agent_id: resolve_agent_id()
     }
 
     send(self(), :connect)
@@ -221,8 +222,10 @@ defmodule Platform.Federation.NodeClient do
 
     {msg_id, state} = next_msg_id(state)
 
+    ctx = %{agent_id: state.agent_id}
+
     result_frame =
-      case NodeCommandHandler.handle(command, params) do
+      case NodeCommandHandler.handle(command, params, ctx) do
         {:ok, result} ->
           %{
             type: "req",
@@ -280,5 +283,15 @@ defmodule Platform.Federation.NodeClient do
 
   defp gateway_url do
     System.get_env("OPENCLAW_GATEWAY_URL", "ws://127.0.0.1:18789")
+  end
+
+  # Look up the agent whose runtime_id matches this node's configured agent,
+  # or fall back to the first active agent in the system.
+  defp resolve_agent_id do
+    case System.get_env("OPENCLAW_NODE_AGENT_ID") do
+      nil -> nil
+      "" -> nil
+      id -> id
+    end
   end
 end

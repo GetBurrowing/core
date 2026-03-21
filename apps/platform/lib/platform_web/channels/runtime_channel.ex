@@ -47,6 +47,11 @@ defmodule PlatformWeb.RuntimeChannel do
 
   @impl true
   def handle_in("reply", %{"space_id" => space_id, "content" => content}, socket) do
+    # Track which space this agent is actively replying in for NodeContext
+    if agent_id = socket.assigns[:agent_id] do
+      Platform.Federation.NodeContext.set_space(agent_id, space_id)
+    end
+
     agent_participant_id = get_agent_participant_id(socket, space_id)
 
     case agent_participant_id do
