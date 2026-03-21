@@ -241,7 +241,10 @@ defmodule Platform.Chat.AttentionRouter do
 
   @doc false
   def handle_telemetry_event([:platform, :chat, :message_posted], _measurements, metadata, _cfg) do
-    send(__MODULE__, {:telemetry_message_posted, metadata})
+    case Process.whereis(__MODULE__) do
+      nil -> :ok
+      pid -> send(pid, {:telemetry_message_posted, metadata})
+    end
   rescue
     error ->
       Logger.error(
