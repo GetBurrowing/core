@@ -1006,13 +1006,35 @@ defmodule PlatformWeb.ChatLive do
   end
 
   def handle_info({:agent_typing, %{typing: typing}}, socket) do
-    {:noreply,
-     socket
-     |> assign(:agent_typing, typing)
-     |> assign(
-       :agent_status,
-       if(typing, do: :thinking, else: PlatformWeb.ShellLive.default_agent_status())
-     )}
+    socket =
+      socket
+      |> assign(:agent_typing, typing)
+      |> assign(
+        :agent_status,
+        if(typing, do: :thinking, else: PlatformWeb.ShellLive.default_agent_status())
+      )
+
+    # Update composite status for the roster indicator (busy when typing)
+    socket =
+      if socket.assigns[:principal_name] do
+        if typing do
+          assign(socket, :composite_status, :busy)
+        else
+          # Recalculate from roster when typing stops
+          case socket.assigns[:active_space] do
+            %{id: space_id} ->
+              composite = Platform.Chat.SpaceAgentPresence.composite_status_for_space(space_id)
+              assign(socket, :composite_status, composite)
+
+            _ ->
+              socket
+          end
+        end
+      else
+        socket
+      end
+
+    {:noreply, socket}
   end
 
   def handle_info({:agent_silenced, _payload}, socket) do
