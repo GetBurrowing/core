@@ -60,7 +60,8 @@ defmodule Platform.Federation.NodeClient do
       gateway_url: gateway_url(),
       token: System.get_env("OPENCLAW_GATEWAY_TOKEN", ""),
       display_name: System.get_env("OPENCLAW_NODE_DISPLAY_NAME", "Startup Suite"),
-      agent_id: resolve_agent_id()
+      agent_id: resolve_agent_id(),
+      space_id: System.get_env("OPENCLAW_NODE_SPACE_ID")
     }
 
     send(self(), :connect)
@@ -238,6 +239,13 @@ defmodule Platform.Federation.NodeClient do
 
   defp handle_frame(%{"type" => "res", "ok" => true, "payload" => %{"type" => "hello-ok"}}, state) do
     Logger.info("[NodeClient] connected and authenticated as node")
+
+    # Register the engagement space so canvas commands can resolve it without explicit space_id
+    if state.agent_id && state.space_id do
+      Platform.Federation.NodeContext.set_space(state.agent_id, state.space_id)
+      Logger.info("[NodeClient] registered space #{state.space_id} for agent #{state.agent_id}")
+    end
+
     {:noreply, %{state | state: :connected, backoff: @base_backoff_ms}}
   end
 
