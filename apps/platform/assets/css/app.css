@@ -186,6 +186,7 @@
 
 .code-block-wrapper pre {
   background: oklch(20.15% 0.012 254.09);
+  color: #c9d1d9;
   border-radius: 0.5rem;
   padding: 0.75em 1em;
   overflow-x: auto;
