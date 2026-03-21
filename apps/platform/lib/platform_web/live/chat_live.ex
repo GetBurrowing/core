@@ -88,6 +88,7 @@ defmodule PlatformWeb.ChatLive do
       |> assign(:quick_emojis, @quick_emojis)
       |> assign(:canvas_types, @canvas_types)
       |> assign(:agent_typing, false)
+      |> assign(:agent_typing_participant_id, nil)
       |> assign(:streaming_replies, %{})
       |> assign(:mention_suggestions, [])
       |> assign(:push_permission, "unknown")
@@ -184,6 +185,7 @@ defmodule PlatformWeb.ChatLive do
        |> assign(:has_agent_participant, has_agent_participant)
        |> assign(:agent_status, PlatformWeb.ShellLive.default_agent_status())
        |> assign(:agent_typing, false)
+       |> assign(:agent_typing_participant_id, nil)
        |> assign(:streaming_replies, %{})
        |> assign(:mention_suggestions, [])
        |> assign(:current_participant, participant)
@@ -1015,10 +1017,11 @@ defmodule PlatformWeb.ChatLive do
     {:noreply, socket}
   end
 
-  def handle_info({:agent_typing, %{typing: typing}}, socket) do
+  def handle_info({:agent_typing, %{typing: typing, participant_id: participant_id}}, socket) do
     socket =
       socket
       |> assign(:agent_typing, typing)
+      |> assign(:agent_typing_participant_id, if(typing, do: participant_id, else: nil))
       |> assign(
         :agent_status,
         if(typing, do: :thinking, else: PlatformWeb.ShellLive.default_agent_status())
@@ -1784,7 +1787,7 @@ defmodule PlatformWeb.ChatLive do
               >
               </span>
             </span>
-            <span>Zip is thinking…</span>
+            <span>{sender_name(@participants_map, @agent_typing_participant_id)} is thinking…</span>
           </div>
 
           <div class="flex-shrink-0 border-t border-base-300 px-5 py-3 safe-area-bottom">
