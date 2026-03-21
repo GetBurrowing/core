@@ -1,5 +1,9 @@
 import Config
 
+# Ensure Erlang's :ssl uses CAStore for outbound HTTPS (web push, etc.)
+Application.ensure_all_started(:castore)
+:public_key.cacerts_load(CAStore.file_path())
+
 if System.get_env("PHX_SERVER") do
   config :platform, PlatformWeb.Endpoint, server: true
 end
