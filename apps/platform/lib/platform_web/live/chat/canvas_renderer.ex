@@ -37,20 +37,68 @@ defmodule PlatformWeb.Chat.CanvasRenderer do
   This is the single public entry point used by `ChatLive`.
   """
   attr(:canvas, Canvas, required: true)
+  attr(:inline, :boolean, default: false)
 
   def canvas_document(assigns) do
     state = assigns.canvas.state || %{}
 
-    if canonical_document?(state) do
-      ~H"""
-      <div id={"canvas-doc-#{@canvas.id}"} class="overflow-x-auto">
-        <.render_node node={@canvas.state["root"]} />
-      </div>
-      """
-    else
-      ~H"""
-      <PlatformWeb.Chat.CanvasComponents.canvas canvas={@canvas} />
-      """
+    cond do
+      url_canvas?(state) ->
+        ~H"""
+        <div
+          id={"canvas-url-#{@canvas.id}"}
+          class={[
+            "rounded-2xl border border-base-300 bg-base-100 shadow-sm overflow-hidden",
+            @inline && "cursor-pointer"
+          ]}
+          phx-click={@inline && "open_canvas"}
+          phx-value-canvas-id={@inline && @canvas.id}
+        >
+          <header class="flex items-center justify-between border-b border-base-300 bg-base-200 px-4 py-2">
+            <div class="min-w-0">
+              <p class="text-sm font-semibold text-base-content truncate">
+                {@canvas.title || "Web Canvas"}
+              </p>
+              <p class="text-[11px] uppercase tracking-widest text-base-content/50 truncate">
+                {URI.parse(@canvas.state["url"]).host || "canvas"}
+              </p>
+            </div>
+            <span class="hero-arrow-top-right-on-square size-4 text-base-content/40 flex-shrink-0"></span>
+          </header>
+          <div class={[
+            "w-full bg-white",
+            if(@inline, do: "h-48 sm:h-56", else: "h-[60vh] min-h-[300px]")
+          ]}>
+            <iframe
+              src={@canvas.state["url"]}
+              class="h-full w-full border-0"
+              sandbox="allow-scripts allow-same-origin allow-popups allow-forms"
+              loading="lazy"
+              title={@canvas.title || "Canvas"}
+            />
+          </div>
+        </div>
+        """
+
+      canonical_document?(state) ->
+        ~H"""
+        <div
+          id={"canvas-doc-#{@canvas.id}"}
+          class={[
+            "overflow-x-auto",
+            @inline && "cursor-pointer"
+          ]}
+          phx-click={@inline && "open_canvas"}
+          phx-value-canvas-id={@inline && @canvas.id}
+        >
+          <.render_node node={@canvas.state["root"]} />
+        </div>
+        """
+
+      true ->
+        ~H"""
+        <PlatformWeb.Chat.CanvasComponents.canvas canvas={@canvas} />
+        """
     end
   end
 
@@ -240,6 +288,13 @@ defmodule PlatformWeb.Chat.CanvasRenderer do
   # ---------------------------------------------------------------------------
 
   @doc """
+  Returns true if the canvas state map contains a URL for iframe rendering.
+  """
+  @spec url_canvas?(map()) :: boolean()
+  def url_canvas?(%{"url" => url}) when is_binary(url) and url != "", do: true
+  def url_canvas?(_), do: false
+
+  @doc """
   Returns true if the canvas state map contains a canonical document (v1).
   """
   @spec canonical_document?(map()) :: boolean()
@@ -282,13 +337,4 @@ defmodule PlatformWeb.Chat.CanvasRenderer do
   end
 
   defp cell_value(_row, _col), do: "—"
-
-  defp canvas_kind_label(type) when is_binary(type) do
-    type
-    |> String.replace(["_", "-"], " ")
-    |> String.split()
-    |> Enum.map_join(" ", &String.capitalize/1)
-  end
-
-  defp canvas_kind_label(_), do: "Canvas"
 end

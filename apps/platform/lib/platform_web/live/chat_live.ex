@@ -19,7 +19,6 @@ defmodule PlatformWeb.ChatLive do
 
   use PlatformWeb, :live_view
 
-  import PlatformWeb.Chat.CanvasComponents
   import PlatformWeb.Chat.CanvasRenderer, only: [canvas_document: 1]
 
   alias Platform.Accounts
@@ -511,6 +510,13 @@ defmodule PlatformWeb.ChatLive do
 
   def handle_event("close_canvas", _params, socket) do
     {:noreply, assign(socket, :active_canvas, nil)}
+  end
+
+  def handle_event("open_canvas_mobile", %{"message-id" => message_id}, socket) do
+    case Map.get(socket.assigns.canvases_by_message_id, message_id) do
+      nil -> {:noreply, socket}
+      canvas -> {:noreply, assign(socket, :active_canvas, canvas)}
+    end
   end
 
   def handle_event("create_canvas", %{"canvas" => canvas_params}, socket) do
@@ -1589,12 +1595,14 @@ defmodule PlatformWeb.ChatLive do
                   class="mt-1"
                 >
                   <div :if={Map.get(@canvases_by_message_id, msg.id)} class="min-w-0 overflow-hidden">
-                    <.canvas_document canvas={Map.get(@canvases_by_message_id, msg.id)} />
+                    <.canvas_document canvas={Map.get(@canvases_by_message_id, msg.id)} inline={true} />
                   </div>
 
                   <div
                     :if={is_nil(Map.get(@canvases_by_message_id, msg.id))}
-                    class="rounded-lg bg-base-200 px-3 py-2"
+                    phx-click="open_canvas_mobile"
+                    phx-value-message-id={msg.id}
+                    class="rounded-lg bg-base-200 px-3 py-2 cursor-pointer hover:bg-base-300 transition-colors"
                   >
                     <p class="truncate text-sm font-semibold text-base-content">
                       {message_canvas_title(msg, @canvases_by_message_id)}
@@ -1825,6 +1833,7 @@ defmodule PlatformWeb.ChatLive do
           </div>
         </div>
 
+        <%!-- Desktop: side panel --%>
         <div
           :if={@active_canvas}
           class="hidden lg:flex w-96 flex-shrink-0 flex-col border-l border-base-300 bg-base-100"
@@ -1843,9 +1852,31 @@ defmodule PlatformWeb.ChatLive do
           </div>
 
           <div class="flex-1 overflow-y-auto px-4 py-4">
-            <.canvas canvas={@active_canvas} />
+            <.canvas_document canvas={@active_canvas} />
           </div>
         </div>
+
+        <%!-- Mobile: full-screen canvas overlay --%>
+        <%= if @active_canvas do %>
+          <div class="fixed inset-0 z-50 flex flex-col bg-base-100 lg:hidden">
+            <header class="flex h-12 flex-shrink-0 items-center justify-between border-b border-base-300 px-4 safe-area-top">
+              <div class="min-w-0">
+                <p class="text-sm font-semibold">Live Canvas</p>
+                <p class="truncate text-xs text-base-content/50">
+                  {@active_canvas.title || humanize_canvas_type(@active_canvas.canvas_type)}
+                </p>
+              </div>
+
+              <button phx-click="close_canvas" class="btn btn-ghost btn-xs" title="Close canvas">
+                <span class="hero-x-mark size-4"></span>
+              </button>
+            </header>
+
+            <div class="flex-1 overflow-y-auto px-4 py-4">
+              <.canvas_document canvas={@active_canvas} />
+            </div>
+          </div>
+        <% end %>
 
         <div
           :if={@active_thread}
