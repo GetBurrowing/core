@@ -6,7 +6,7 @@ defmodule Platform.Federation.NodeIdentity do
   @identity_path Application.compile_env(
                    :platform,
                    :node_identity_path,
-                   "priv/node_identity.json"
+                   "/data/platform/node_identity.json"
                  )
 
   @doc """
