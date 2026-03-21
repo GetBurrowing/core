@@ -11,12 +11,15 @@ defmodule Platform.Federation.NodeCommandHandler do
   alias Platform.Chat
   alias Platform.Chat.PubSub
   alias Platform.Federation.NodeContext
+  alias Platform.Agents.Agent
+  import Ecto.Query, only: [from: 2]
 
   # ── canvas.present ──────────────────────────────────────────────────
 
   def handle("canvas.present", params, ctx) do
     with {:ok, space_id} <- resolve_space(params, ctx),
-         {:ok, participant} <- Chat.ensure_agent_participant(space_id, ctx.agent_id) do
+         {:ok, agent} <- resolve_agent(ctx.agent_id),
+         {:ok, participant} <- Chat.ensure_agent_participant(space_id, agent) do
       canvas_attrs = %{
         "title" => params["title"] || "Canvas",
         "canvas_type" => params["canvas_type"] || "custom",
@@ -167,7 +170,8 @@ defmodule Platform.Federation.NodeCommandHandler do
   defp get_or_create_canvas(nil, params, ctx) do
     # No canvas_id provided — create a new canvas in the current space
     with {:ok, space_id} <- resolve_space(params, ctx),
-         {:ok, participant} <- Chat.ensure_agent_participant(space_id, ctx.agent_id) do
+         {:ok, agent} <- resolve_agent(ctx.agent_id),
+         {:ok, participant} <- Chat.ensure_agent_participant(space_id, agent) do
       case Chat.create_canvas_with_message(space_id, participant.id, %{
              "title" => params["title"] || "A2UI Canvas",
              "canvas_type" => "custom",
@@ -183,8 +187,29 @@ defmodule Platform.Federation.NodeCommandHandler do
     end
   end
 
+  # Resolve agent_id string → {:ok, %Agent{}} or {:error, ...}
+  defp resolve_agent(nil), do: {:error, "NO_AGENT", "No agent_id in context"}
+
+  defp resolve_agent(agent_id) do
+    case find_agent(agent_id) do
+      nil -> {:error, "AGENT_NOT_FOUND", "Agent #{agent_id} not found"}
+      agent -> {:ok, agent}
+    end
+  end
+
+  # Look up agent by runtime_id (OpenClaw agent string, e.g. "main") or UUID primary key.
+  defp find_agent(agent_id) do
+    case Ecto.UUID.cast(agent_id) do
+      {:ok, _} ->
+        Platform.Repo.get(Agent, agent_id)
+
+      :error ->
+        Platform.Repo.one(from(a in Agent, where: a.runtime_id == ^agent_id, limit: 1))
+    end
+  end
+
   defp first_agent_space(agent_id) do
-    case Platform.Repo.get(Platform.Agents.Agent, agent_id) do
+    case find_agent(agent_id) do
       nil ->
         nil
 
