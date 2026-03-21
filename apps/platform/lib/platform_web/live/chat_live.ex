@@ -92,6 +92,7 @@ defmodule PlatformWeb.ChatLive do
       |> assign(:streaming_replies, %{})
       |> assign(:mention_suggestions, [])
       |> assign(:push_permission, "unknown")
+      |> assign(:dm_unread, %{})
       |> assign_compose("")
       |> assign_thread_compose("")
       |> assign_search_form("")
@@ -109,6 +110,14 @@ defmodule PlatformWeb.ChatLive do
         max_file_size: @max_upload_size
       )
       |> stream(:messages, [])
+
+    # Subscribe to all DM/group spaces so we can count unread messages
+    # in background conversations (active space subscription happens in handle_params)
+    if connected?(socket) do
+      Enum.each(dm_conversations, fn space ->
+        ChatPubSub.subscribe(space.id)
+      end)
+    end
 
     {:ok, socket}
   end
@@ -208,7 +217,8 @@ defmodule PlatformWeb.ChatLive do
        |> assign(:spaces, channels ++ dm_convos)
        |> assign_new_canvas_form()
        |> stream(:messages, messages, reset: true)
-       |> schedule_agent_presence_refresh()}
+       |> schedule_agent_presence_refresh()
+       |> clear_dm_unread(space.id)}
     end
   end
 
@@ -879,31 +889,59 @@ defmodule PlatformWeb.ChatLive do
 
   @impl true
   def handle_info({:new_message, msg}, socket) do
-    attachments = Chat.list_attachments(msg.id)
+    active_space = socket.assigns.active_space
+    current_participant = socket.assigns.current_participant
 
-    # Clear any streaming bubbles from this participant (final message replaces them)
-    streaming =
-      socket.assigns.streaming_replies
-      |> Enum.reject(fn {_k, v} -> v.participant_id == msg.participant_id end)
-      |> Map.new()
+    # If this message is from a background DM space (not the active one), count it as unread.
+    # Don't count messages sent by the current user.
+    is_background_dm =
+      is_nil(active_space) or msg.space_id != active_space.id
 
-    socket = assign(socket, :streaming_replies, streaming)
+    is_own_message =
+      current_participant && msg.participant_id == current_participant.id
 
-    if is_nil(msg.thread_id) do
-      {:noreply,
-       socket
-       |> stream_insert(:messages, msg)
-       |> put_attachment_map_entry(msg.id, attachments)
-       |> maybe_refresh_search()}
+    socket =
+      if is_background_dm and not is_own_message do
+        increment_dm_unread(socket, msg.space_id)
+      else
+        # Clear any streaming bubbles from this participant (final message replaces them)
+        streaming =
+          socket.assigns.streaming_replies
+          |> Enum.reject(fn {_k, v} -> v.participant_id == msg.participant_id end)
+          |> Map.new()
+
+        assign(socket, :streaming_replies, streaming)
+      end
+
+    if is_nil(active_space) or msg.space_id != active_space.id do
+      {:noreply, socket}
     else
-      if socket.assigns.active_thread && socket.assigns.active_thread.id == msg.thread_id do
+      # Clear streaming for this participant now
+      streaming =
+        socket.assigns.streaming_replies
+        |> Enum.reject(fn {_k, v} -> v.participant_id == msg.participant_id end)
+        |> Map.new()
+
+      socket = assign(socket, :streaming_replies, streaming)
+
+      attachments = Chat.list_attachments(msg.id)
+
+      if is_nil(msg.thread_id) do
         {:noreply,
          socket
-         |> update(:thread_messages, &(&1 ++ [msg]))
-         |> put_thread_attachment_map_entry(msg.id, attachments)
+         |> stream_insert(:messages, msg)
+         |> put_attachment_map_entry(msg.id, attachments)
          |> maybe_refresh_search()}
       else
-        {:noreply, socket}
+        if socket.assigns.active_thread && socket.assigns.active_thread.id == msg.thread_id do
+          {:noreply,
+           socket
+           |> update(:thread_messages, &(&1 ++ [msg]))
+           |> put_thread_attachment_map_entry(msg.id, attachments)
+           |> maybe_refresh_search()}
+        else
+          {:noreply, socket}
+        end
       end
     end
   end
@@ -1160,7 +1198,12 @@ defmodule PlatformWeb.ChatLive do
                 "bg-primary/10 text-primary font-semibold border-l-2 border-primary"
             ]}
           >
-            <span class="truncate">{sidebar_display_name(space, @user_id)}</span>
+            <span class="truncate flex-1">{sidebar_display_name(space, @user_id)}</span>
+            <%= if dm_unread_label(Map.get(@dm_unread, space.id, 0)) do %>
+              <span class="ml-1 flex-shrink-0 min-w-[1.125rem] h-[1.125rem] rounded-full bg-primary text-primary-content text-[0.6rem] font-bold flex items-center justify-center px-1 leading-none">
+                {dm_unread_label(Map.get(@dm_unread, space.id, 0))}
+              </span>
+            <% end %>
           </.link>
 
           <div :if={@dm_conversations == []} class="px-4 py-2 text-xs text-base-content/40">
@@ -1216,7 +1259,12 @@ defmodule PlatformWeb.ChatLive do
                   "bg-base-200 text-primary font-semibold"
               ]}
             >
-              <span class="truncate">{sidebar_display_name(space, @user_id)}</span>
+              <span class="truncate flex-1">{sidebar_display_name(space, @user_id)}</span>
+              <%= if dm_unread_label(Map.get(@dm_unread, space.id, 0)) do %>
+                <span class="ml-1 flex-shrink-0 min-w-[1.125rem] h-[1.125rem] rounded-full bg-primary text-primary-content text-[0.6rem] font-bold flex items-center justify-center px-1 leading-none">
+                  {dm_unread_label(Map.get(@dm_unread, space.id, 0))}
+                </span>
+              <% end %>
             </.link>
 
             <div
@@ -2886,6 +2934,19 @@ defmodule PlatformWeb.ChatLive do
     participants = Chat.list_participants(space.id)
     Chat.display_name_for_space(space, participants, current_user_id)
   end
+
+  defp increment_dm_unread(socket, space_id) do
+    current = Map.get(socket.assigns.dm_unread, space_id, 0)
+    update(socket, :dm_unread, &Map.put(&1, space_id, current + 1))
+  end
+
+  defp clear_dm_unread(socket, space_id) do
+    update(socket, :dm_unread, &Map.delete(&1, space_id))
+  end
+
+  defp dm_unread_label(count) when count >= 9, do: "9+"
+  defp dm_unread_label(count) when count > 0, do: Integer.to_string(count)
+  defp dm_unread_label(_), do: nil
 
   defp picker_selected_name(%{type: "user", id: id}, users, _agents) do
     case Enum.find(users, fn u -> u.id == id end) do
