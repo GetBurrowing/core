@@ -1327,7 +1327,7 @@ defmodule PlatformWeb.ChatLive do
                 ]}
               >
                 <span class="hero-puzzle-piece size-4"></span>
-                <span>{length(@canvases)} canvases</span>
+                <span class="hidden md:inline">{length(@canvases)}</span>
               </button>
 
               <button
@@ -1356,7 +1356,9 @@ defmodule PlatformWeb.ChatLive do
                   if(@agent_silenced, do: "hero-eye-slash", else: "hero-eye")
                 ]}>
                 </span>
-                <span>{if @agent_silenced, do: "paused", else: "watching"}</span>
+                <span class="hidden md:inline">
+                  {if @agent_silenced, do: "paused", else: "watching"}
+                </span>
               </button>
 
               <button

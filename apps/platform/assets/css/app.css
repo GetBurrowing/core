@@ -14,7 +14,14 @@
   .bg-green-500 { background-color: #22c55e; }
   .bg-green-400 { background-color: #4ade80; }
   .bg-zinc-500 { background-color: #71717a; }
+  .bg-zinc-400 { background-color: #a1a1aa; }
 }
+
+/*
+ * Force-include hero icon classes used in dynamic expressions (if/else)
+ * so Tailwind's scanner picks them up even when not statically present:
+ * hero-eye hero-eye-slash hero-user-group
+ */
 
 /* A Tailwind plugin that makes "hero-#{ICON}" classes available.
    The heroicons installation itself is managed by your mix.exs */
