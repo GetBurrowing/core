@@ -3,11 +3,7 @@ defmodule Platform.Federation.NodeIdentity do
   Manages Ed25519 device identity for the OpenClaw node connection.
   """
 
-  @identity_path Application.compile_env(
-                   :platform,
-                   :node_identity_path,
-                   "/data/platform/node_identity.json"
-                 )
+  @default_identity_path "/data/platform/execution-runs/node_identity.json"
 
   @doc """
   Loads an existing identity from disk or generates a new Ed25519 keypair.
@@ -68,6 +64,6 @@ defmodule Platform.Federation.NodeIdentity do
   end
 
   defp identity_path do
-    Application.get_env(:platform, :node_identity_path, @identity_path)
+    Application.get_env(:platform, :node_identity_path, @default_identity_path)
   end
 end

@@ -36,7 +36,19 @@ defmodule Platform.Federation.NodeClient do
 
   @impl true
   def init(_opts) do
-    identity = NodeIdentity.load_or_create()
+    identity =
+      try do
+        NodeIdentity.load_or_create()
+      rescue
+        e ->
+          Logger.error("[NodeClient] failed to load/create identity: #{Exception.message(e)}")
+
+          Logger.error(
+            "[NodeClient] identity path: #{inspect(Application.get_env(:platform, :node_identity_path, "/data/platform/node_identity.json"))}"
+          )
+
+          reraise e, __STACKTRACE__
+      end
 
     state = %{
       identity: identity,
