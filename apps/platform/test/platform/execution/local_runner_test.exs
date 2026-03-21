@@ -109,11 +109,18 @@ defmodule Platform.Execution.LocalRunnerTest do
                  run_root: root,
                  run_server: self(),
                  command: "/bin/sh",
-                 args: ["-c", "printenv GITHUB_TOKEN > #{output_file}"],
+                 args: ["-c", "printenv GITHUB_TOKEN > #{output_file} && sync"],
                  credential_lease: lease
                )
 
-      assert_file_eventually(output_file, 2_000)
+      # Wait for the process to finish writing (not just file existence)
+      assert_eventually(
+        fn ->
+          File.exists?(output_file) && String.trim(File.read!(output_file)) != ""
+        end,
+        5_000
+      )
+
       assert String.trim(File.read!(output_file)) == "test-token-#{run_id}"
 
       _ = ref
