@@ -1,8 +1,15 @@
 import Config
 
 # Ensure Erlang's :ssl uses CAStore for outbound HTTPS (web push, etc.)
+# hackney (used by WebPushEncryption/HTTPoison) needs cacertfile explicitly
 Application.ensure_all_started(:castore)
 :public_key.cacerts_load(CAStore.file_path())
+
+config :ssl, [
+  {:verify, :verify_peer},
+  {:cacertfile, CAStore.file_path() |> to_charlist()},
+  {:depth, 3}
+]
 
 if System.get_env("PHX_SERVER") do
   config :platform, PlatformWeb.Endpoint, server: true

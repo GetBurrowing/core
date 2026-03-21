@@ -104,16 +104,7 @@ defmodule Platform.Push do
         keys: %{p256dh: sub.p256dh, auth: sub.auth}
       }
 
-      # Pass explicit SSL options so hackney can verify Apple/Google push endpoints
-      hackney_opts = [
-        ssl_options: [
-          verify: :verify_peer,
-          cacerts: :public_key.cacerts_get(),
-          depth: 3
-        ]
-      ]
-
-      WebPushEncryption.send_web_push(json, subscription, hackney_opts)
+      WebPushEncryption.send_web_push(json, subscription)
     else
       Logger.warning("[Push] VAPID keys not configured, skipping push")
       {:error, :vapid_keys_missing}
