@@ -104,31 +104,28 @@ defmodule Platform.Push do
       Logger.warning("[Push] VAPID keys not configured, skipping push")
       {:error, :vapid_keys_missing}
     else
-      subscription = %{
-        endpoint: sub.endpoint,
-        keys: %{p256dh: sub.p256dh, auth: sub.auth}
-      }
+      try do
+        encrypted =
+          WebPushEncryption.Encrypt.encrypt(json, %{
+            keys: %{p256dh: sub.p256dh, auth: sub.auth}
+          })
 
-      # WebPushEncryption.send_web_push uses hackney which can't resolve
-      # CA certs in Docker releases. Use the encryption step only, then
-      # send via Req (Mint/Finch) which handles TLS properly.
-      with {:ok, {encrypted_payload, crypto_headers}} <-
-             encrypt_payload(json, subscription),
-           {:ok, vapid_headers} <- build_vapid_headers(sub.endpoint, vapid) do
-        # Merge Crypto-Key headers (encryption + VAPID both use this header)
-        merged_crypto_key =
-          [Map.get(crypto_headers, "Crypto-Key"), Map.get(vapid_headers, "Crypto-Key")]
-          |> Enum.reject(&is_nil/1)
-          |> Enum.join(";")
+        audience = URI.parse(sub.endpoint) |> then(&"#{&1.scheme}://#{&1.host}")
+        jwt = build_vapid_jwt(audience, vapid)
+        public_key_b64 = Keyword.get(vapid, :public_key)
 
-        headers =
-          crypto_headers
-          |> Map.merge(vapid_headers)
-          |> Map.put("Crypto-Key", merged_crypto_key)
-          |> Map.put("TTL", "0")
-          |> Enum.map(fn {k, v} -> {to_string(k), to_string(v)} end)
+        salt_b64 = Base.url_encode64(encrypted.salt, padding: false)
+        server_key_b64 = Base.url_encode64(encrypted.server_public_key, padding: false)
 
-        case Req.post(sub.endpoint, body: encrypted_payload, headers: headers) do
+        headers = [
+          {"Content-Encoding", "aesgcm"},
+          {"Encryption", "salt=#{salt_b64}"},
+          {"Crypto-Key", "dh=#{server_key_b64};p256ecdsa=#{public_key_b64}"},
+          {"Authorization", "vapid t=#{jwt}, k=#{public_key_b64}"},
+          {"TTL", "86400"}
+        ]
+
+        case Req.post(sub.endpoint, body: encrypted.ciphertext, headers: headers) do
           {:ok, %{status: status}} when status in [200, 201, 202] ->
             {:ok, %{status: status}}
 
@@ -145,46 +142,51 @@ defmodule Platform.Push do
             Logger.warning("[Push] request failed: #{inspect(reason)}")
             {:error, reason}
         end
-      else
-        error ->
-          Logger.warning("[Push] encryption/VAPID failed: #{inspect(error)}")
-          {:error, :encryption_failed}
+      rescue
+        e ->
+          Logger.warning("[Push] send failed: #{Exception.message(e)}")
+          {:error, :send_failed}
       end
     end
   end
 
-  defp encrypt_payload(json, subscription) do
-    case WebPushEncryption.Encrypt.encrypt(json, subscription.keys.p256dh, subscription.keys.auth) do
-      {:ok, {payload, key_header, salt_header}} ->
-        headers = %{
-          "Content-Encoding" => "aesgcm",
-          "Crypto-Key" => key_header,
-          "Encryption" => salt_header
-        }
+  defp build_vapid_jwt(audience, vapid) do
+    private_key_raw =
+      Base.url_decode64!(Keyword.get(vapid, :private_key), padding: false)
 
-        {:ok, {payload, headers}}
+    header =
+      Base.url_encode64(Jason.encode!(%{typ: "JWT", alg: "ES256"}), padding: false)
 
-      error ->
-        error
-    end
+    claims =
+      Base.url_encode64(
+        Jason.encode!(%{
+          aud: audience,
+          exp: System.system_time(:second) + 86_400,
+          sub: Keyword.get(vapid, :subject)
+        }),
+        padding: false
+      )
+
+    signing_input = "#{header}.#{claims}"
+
+    der_sig =
+      :crypto.sign(:ecdsa, :sha256, signing_input, [private_key_raw, :secp256r1])
+
+    raw_sig = der_to_raw_ecdsa(der_sig)
+    "#{signing_input}.#{Base.url_encode64(raw_sig, padding: false)}"
   end
 
-  defp build_vapid_headers(endpoint, vapid) do
-    audience = URI.parse(endpoint) |> then(&"#{&1.scheme}://#{&1.host}")
-
-    case WebPushEncryption.Vapid.get_vapid_headers(
-           audience,
-           Keyword.get(vapid, :subject),
-           Keyword.get(vapid, :public_key),
-           Keyword.get(vapid, :private_key)
-         ) do
-      {auth_header, crypto_key_header} ->
-        {:ok, %{"Authorization" => auth_header, "Crypto-Key" => crypto_key_header}}
-
-      error ->
-        {:error, error}
-    end
+  # Convert DER-encoded ECDSA signature to raw r||s (64 bytes)
+  defp der_to_raw_ecdsa(<<48, _, 2, r_len, rest::binary>>) do
+    <<r_bytes::binary-size(r_len), 2, s_len, s_bytes::binary-size(s_len), _::binary>> = rest
+    pad_to_32(r_bytes) <> pad_to_32(s_bytes)
   end
+
+  defp pad_to_32(bytes) when byte_size(bytes) >= 32,
+    do: binary_part(bytes, byte_size(bytes) - 32, 32)
+
+  defp pad_to_32(bytes),
+    do: :binary.copy(<<0>>, 32 - byte_size(bytes)) <> bytes
 
   defp vapid_configured? do
     case Application.get_env(:web_push_encryption, :vapid_details) do
