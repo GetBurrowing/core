@@ -493,7 +493,7 @@ defmodule PlatformWeb.ChatLive do
     end
   end
 
-  def handle_event("open_canvas", %{"canvas_id" => canvas_id}, socket) do
+  def handle_event("open_canvas", %{"canvas-id" => canvas_id}, socket) do
     case find_canvas(socket, canvas_id) do
       nil ->
         {:noreply, put_flash(socket, :error, "Canvas not found.")}

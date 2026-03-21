@@ -51,8 +51,8 @@ defmodule PlatformWeb.Chat.CanvasRenderer do
             "rounded-2xl border border-base-300 bg-base-100 shadow-sm overflow-hidden",
             @inline && "cursor-pointer"
           ]}
-          phx-click={@inline && "open_canvas"}
-          phx-value-canvas-id={@inline && @canvas.id}
+          phx-click={if(@inline, do: "open_canvas")}
+          phx-value-canvas-id={if(@inline, do: @canvas.id)}
         >
           <header class="flex items-center justify-between border-b border-base-300 bg-base-200 px-4 py-2">
             <div class="min-w-0">
@@ -88,8 +88,8 @@ defmodule PlatformWeb.Chat.CanvasRenderer do
             "overflow-x-auto",
             @inline && "cursor-pointer"
           ]}
-          phx-click={@inline && "open_canvas"}
-          phx-value-canvas-id={@inline && @canvas.id}
+          phx-click={if(@inline, do: "open_canvas")}
+          phx-value-canvas-id={if(@inline, do: @canvas.id)}
         >
           <.render_node node={@canvas.state["root"]} />
         </div>

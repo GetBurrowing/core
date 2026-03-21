@@ -1,5 +1,8 @@
 import Config
 
+# Federation: store node identity in a local dev-friendly path
+config :platform, :node_identity_path, "priv/dev/node_identity.json"
+
 bind_ip =
   case System.get_env("PHX_BIND_IP", "127.0.0.1") do
     "0.0.0.0" -> {0, 0, 0, 0}
