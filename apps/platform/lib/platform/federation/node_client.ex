@@ -171,10 +171,23 @@ defmodule Platform.Federation.NodeClient do
          },
          state
        ) do
-    # Gateway sends nonce as a plain string (UUID), not base64
-    signature = NodeIdentity.sign_challenge(nonce_b64, state.identity)
     device_id = NodeIdentity.device_id(state.identity)
+    signed_at = System.system_time(:millisecond)
 
+    # Build v3 auth payload and sign it
+    payload =
+      NodeIdentity.build_auth_payload(%{
+        device_id: device_id,
+        client_id: "cli",
+        client_mode: "node",
+        role: "node",
+        signed_at_ms: signed_at,
+        token: state.token,
+        nonce: nonce_b64,
+        platform: "linux"
+      })
+
+    signature = NodeIdentity.sign(payload, state.identity)
     {msg_id, state} = next_msg_id(state)
 
     connect_frame = %{
@@ -204,9 +217,9 @@ defmodule Platform.Federation.NodeClient do
         permissions: %{},
         device: %{
           id: device_id,
-          publicKey: Base.encode64(state.identity.public_key),
-          signature: Base.encode64(signature),
-          signedAt: System.system_time(:millisecond),
+          publicKey: NodeIdentity.base64url(state.identity.public_key),
+          signature: NodeIdentity.base64url(signature),
+          signedAt: signed_at,
           nonce: nonce_b64
         }
       }
