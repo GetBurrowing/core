@@ -65,7 +65,7 @@ defmodule Platform.Chat.AttentionRouter do
   require Logger
 
   alias Platform.Chat
-  alias Platform.Chat.{AgentResponder, Message, Participant, Presence, Space}
+  alias Platform.Chat.{AgentResponder, Message, Participant, Presence, Space, SpaceAgent}
   alias Platform.Chat.PubSub, as: ChatPubSub
   alias Platform.Repo
 
@@ -297,18 +297,14 @@ defmodule Platform.Chat.AttentionRouter do
         end
       end)
 
-    # Route agent participants using space-level policy + engagement state
+    # Route agent participants using roster (if available) or legacy participant routing
     agent_decisions =
       if silence_detected?(message.content) do
         # Don't route to agents when silencing
         []
       else
-        Enum.flat_map(agent_recipients, fn participant ->
-          case decide_agent(space, participant, message) do
-            nil -> []
-            reason -> [%{participant_id: participant.id, reason: reason}]
-          end
-        end)
+        roster = Chat.list_space_agents(space_id)
+        route_agents_with_roster(space, message, agent_recipients, roster)
       end
 
     decisions = human_decisions ++ agent_decisions
@@ -343,6 +339,72 @@ defmodule Platform.Chat.AttentionRouter do
     end)
 
     decisions
+  end
+
+  # ── Roster-aware agent routing ──────────────────────────────────────────────
+
+  # No roster entries — fall back to legacy participant-based routing
+  defp route_agents_with_roster(space, message, agent_recipients, []) do
+    Enum.flat_map(agent_recipients, fn participant ->
+      case decide_agent(space, participant, message) do
+        nil -> []
+        reason -> [%{participant_id: participant.id, reason: reason}]
+      end
+    end)
+  end
+
+  # Roster exists — use roster rules for routing
+  defp route_agents_with_roster(space, message, agent_recipients, roster) do
+    # Build lookup: agent_id -> SpaceAgent entry
+    roster_by_agent_id = Map.new(roster, fn sa -> {sa.agent_id, sa} end)
+
+    # Detect which rostered agents are @-mentioned
+    mentioned_agents =
+      Enum.filter(agent_recipients, fn participant ->
+        mentioned?(participant, message)
+      end)
+
+    cond do
+      # @-mentions present — route to mentioned agents that are in roster
+      mentioned_agents != [] ->
+        Enum.flat_map(mentioned_agents, fn participant ->
+          case Map.get(roster_by_agent_id, participant.participant_id) do
+            %SpaceAgent{role: "dismissed"} ->
+              # Re-invite dismissed agent on @-mention
+              Chat.reinvite_space_agent(space.id, participant.participant_id)
+              [%{participant_id: participant.id, reason: :mention}]
+
+            %SpaceAgent{role: role} when role in ["principal", "member"] ->
+              [%{participant_id: participant.id, reason: :mention}]
+
+            nil ->
+              # Agent not in roster — no delivery
+              []
+          end
+        end)
+
+      # No @-mentions — route to principal agent (if one exists and has a participant)
+      true ->
+        principal = Enum.find(roster, &(&1.role == "principal"))
+
+        if principal do
+          # Find the participant record for the principal agent
+          principal_participant =
+            Enum.find(agent_recipients, &(&1.participant_id == principal.agent_id))
+
+          if principal_participant do
+            case decide_agent(space, principal_participant, message) do
+              nil -> []
+              reason -> [%{participant_id: principal_participant.id, reason: reason}]
+            end
+          else
+            []
+          end
+        else
+          # No principal — no default routing
+          []
+        end
+    end
   end
 
   defp return_empty, do: []

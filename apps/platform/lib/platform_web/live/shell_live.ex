@@ -7,6 +7,7 @@ defmodule PlatformWeb.ShellLive do
 
   alias Platform.Accounts
   alias Platform.Agents.{Agent, AgentServer, WorkspaceBootstrap}
+  alias Platform.Chat.SpaceAgentPresence
   alias Platform.Repo
 
   def on_mount(:default, _params, session, socket) do
@@ -33,6 +34,10 @@ defmodule PlatformWeb.ShellLive do
       |> assign(:drawer_open, false)
       |> assign(:sidebar_collapsed, false)
       |> assign(:active_module, active_module)
+      |> assign(:roster_open, false)
+      |> assign(:roster_items, [])
+      |> assign(:composite_status, :none)
+      |> assign(:principal_name, nil)
       |> attach_hook(:track_path, :handle_params, fn _params, url, socket ->
         uri = URI.parse(url)
         {:cont, assign(socket, :current_path, uri.path)}
@@ -46,6 +51,21 @@ defmodule PlatformWeb.ShellLive do
 
         "toggle_sidebar", _params, socket ->
           {:halt, assign(socket, :sidebar_collapsed, !socket.assigns.sidebar_collapsed)}
+
+        "toggle_roster", _params, socket ->
+          {:halt, assign(socket, :roster_open, !socket.assigns.roster_open)}
+
+        "close_roster", _params, socket ->
+          {:halt, assign(socket, :roster_open, false)}
+
+        "dismiss_agent", %{"agent-id" => agent_id, "space-id" => space_id}, socket ->
+          user_id = session["current_user_id"]
+          Platform.Chat.dismiss_space_agent(space_id, agent_id, dismissed_by: user_id)
+          {:halt, refresh_roster(socket, space_id)}
+
+        "reinvite_agent", %{"agent-id" => agent_id, "space-id" => space_id}, socket ->
+          Platform.Chat.reinvite_space_agent(space_id, agent_id)
+          {:halt, refresh_roster(socket, space_id)}
 
         _event, _params, socket ->
           {:cont, socket}
@@ -98,6 +118,34 @@ defmodule PlatformWeb.ShellLive do
   rescue
     _ -> nil
   end
+
+  @doc false
+  def refresh_roster(socket, space_id) when is_binary(space_id) do
+    roster_items = SpaceAgentPresence.roster_with_status(space_id)
+
+    principal =
+      Enum.find(roster_items, fn {sa, _status} -> sa.role == "principal" end)
+
+    principal_name =
+      case principal do
+        {sa, _} -> sa.agent.name
+        nil -> nil
+      end
+
+    active_statuses =
+      roster_items
+      |> Enum.reject(fn {sa, _} -> sa.role == "dismissed" end)
+      |> Enum.map(fn {_sa, status} -> status end)
+
+    composite = SpaceAgentPresence.composite_status(active_statuses)
+
+    socket
+    |> assign(:roster_items, roster_items)
+    |> assign(:principal_name, principal_name)
+    |> assign(:composite_status, composite)
+  end
+
+  def refresh_roster(socket, _), do: socket
 
   # Derive a human-readable module name from the LiveView module atom.
   defp derive_active_module(view) do
