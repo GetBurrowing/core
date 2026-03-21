@@ -182,24 +182,34 @@ defmodule Platform.Federation.NodeClient do
       id: "msg-#{msg_id}",
       method: "connect",
       params: %{
+        minProtocol: 3,
+        maxProtocol: 3,
         role: "node",
-        token: state.token,
-        device: %{
-          id: device_id,
-          displayName: state.display_name,
-          platform: "suite",
-          publicKey: Base.encode64(state.identity.public_key),
-          signature: Base.encode64(signature),
-          nonce: nonce_b64
+        client: %{
+          id: "suite-node",
+          version: "0.1.0",
+          platform: "linux",
+          mode: "node"
         },
-        capabilities: [
+        auth: %{token: state.token},
+        caps: [
           "canvas.present",
           "canvas.navigate",
           "canvas.eval",
           "canvas.snapshot",
           "canvas.a2ui_push",
           "canvas.a2ui_reset"
-        ]
+        ],
+        commands: [],
+        permissions: %{},
+        device: %{
+          id: device_id,
+          name: state.display_name,
+          publicKey: Base.encode64(state.identity.public_key),
+          signature: Base.encode64(signature),
+          signedAt: System.system_time(:millisecond),
+          nonce: nonce_b64
+        }
       }
     }
 
