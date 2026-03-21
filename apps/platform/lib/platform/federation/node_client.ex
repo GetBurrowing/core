@@ -171,8 +171,8 @@ defmodule Platform.Federation.NodeClient do
          },
          state
        ) do
-    nonce = Base.decode64!(nonce_b64)
-    signature = NodeIdentity.sign_challenge(nonce, state.identity)
+    # Gateway sends nonce as a plain string (UUID), not base64
+    signature = NodeIdentity.sign_challenge(nonce_b64, state.identity)
     device_id = NodeIdentity.device_id(state.identity)
 
     {msg_id, state} = next_msg_id(state)
@@ -189,7 +189,8 @@ defmodule Platform.Federation.NodeClient do
           displayName: state.display_name,
           platform: "suite",
           publicKey: Base.encode64(state.identity.public_key),
-          signature: Base.encode64(signature)
+          signature: Base.encode64(signature),
+          nonce: nonce_b64
         },
         capabilities: [
           "canvas.present",
