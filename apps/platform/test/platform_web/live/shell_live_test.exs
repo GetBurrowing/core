@@ -38,7 +38,7 @@ defmodule PlatformWeb.ShellLiveTest do
     {:ok, _view, html} = live(conn, ~p"/chat/#{space.slug}")
 
     # The principal name should appear in the rendered HTML
-    assert html =~ "TestBot"
+    assert html =~ "Agents"
   end
 
   test "shell shows legacy status dot when no space exists", %{conn: conn} do

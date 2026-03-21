@@ -87,12 +87,11 @@ defmodule PlatformWeb.ChatLive do
       |> assign(:new_channel_form, to_form(%{"name" => "", "description" => ""}))
       |> assign(:quick_emojis, @quick_emojis)
       |> assign(:canvas_types, @canvas_types)
-      |> assign(:agent_typing, false)
-      |> assign(:agent_typing_participant_id, nil)
+      |> assign(:agent_typing_pids, MapSet.new())
       |> assign(:streaming_replies, %{})
       |> assign(:mention_suggestions, [])
       |> assign(:push_permission, "unknown")
-      |> assign(:dm_unread, %{})
+      |> assign(:unread_counts, %{})
       |> assign_compose("")
       |> assign_thread_compose("")
       |> assign_search_form("")
@@ -111,10 +110,10 @@ defmodule PlatformWeb.ChatLive do
       )
       |> stream(:messages, [])
 
-    # Subscribe to all DM/group spaces so we can count unread messages
+    # Subscribe to all spaces (channels + DMs) so we can count unread messages
     # in background conversations (active space subscription happens in handle_params)
     if connected?(socket) do
-      Enum.each(dm_conversations, fn space ->
+      Enum.each(channels ++ dm_conversations, fn space ->
         ChatPubSub.subscribe(space.id)
       end)
     end
@@ -193,8 +192,7 @@ defmodule PlatformWeb.ChatLive do
        |> assign(:agent_presence, agent_presence)
        |> assign(:has_agent_participant, has_agent_participant)
        |> assign(:agent_status, PlatformWeb.ShellLive.default_agent_status())
-       |> assign(:agent_typing, false)
-       |> assign(:agent_typing_participant_id, nil)
+       |> assign(:agent_typing_pids, MapSet.new())
        |> assign(:streaming_replies, %{})
        |> assign(:mention_suggestions, [])
        |> assign(:current_participant, participant)
@@ -218,7 +216,7 @@ defmodule PlatformWeb.ChatLive do
        |> assign_new_canvas_form()
        |> stream(:messages, messages, reset: true)
        |> schedule_agent_presence_refresh()
-       |> clear_dm_unread(space.id)}
+       |> clear_unread(space.id)}
     end
   end
 
@@ -902,7 +900,7 @@ defmodule PlatformWeb.ChatLive do
 
     socket =
       if is_background_dm and not is_own_message do
-        increment_dm_unread(socket, msg.space_id)
+        increment_unread(socket, msg.space_id)
       else
         # Clear any streaming bubbles from this participant (final message replaces them)
         streaming =
@@ -1058,17 +1056,20 @@ defmodule PlatformWeb.ChatLive do
   def handle_info({:agent_typing, %{typing: typing, participant_id: participant_id}}, socket) do
     socket =
       socket
-      |> assign(:agent_typing, typing)
-      |> assign(:agent_typing_participant_id, if(typing, do: participant_id, else: nil))
+      |> update(:agent_typing_pids, fn pids ->
+        if typing, do: MapSet.put(pids, participant_id), else: MapSet.delete(pids, participant_id)
+      end)
       |> assign(
         :agent_status,
         if(typing, do: :thinking, else: PlatformWeb.ShellLive.default_agent_status())
       )
 
-    # Update composite status for the roster indicator (busy when typing)
+    # Update composite status for the roster indicator (busy when any agent is typing)
+    any_typing = not MapSet.equal?(socket.assigns.agent_typing_pids, MapSet.new())
+
     socket =
       if socket.assigns[:principal_name] do
-        if typing do
+        if any_typing do
           assign(socket, :composite_status, :busy)
         else
           # Recalculate from roster when typing stops
@@ -1165,7 +1166,12 @@ defmodule PlatformWeb.ChatLive do
             ]}
           >
             <span class="text-base-content/40">#</span>
-            <span class="truncate">{space.name}</span>
+            <span class="truncate flex-1">{space.name}</span>
+            <%= if dm_unread_label(Map.get(@unread_counts, space.id, 0)) do %>
+              <span class="ml-1 flex-shrink-0 min-w-[1.125rem] h-[1.125rem] rounded-full bg-primary text-primary-content text-[0.6rem] font-bold flex items-center justify-center px-1 leading-none">
+                {dm_unread_label(Map.get(@unread_counts, space.id, 0))}
+              </span>
+            <% end %>
           </.link>
 
           <div :if={@channels == []} class="px-4 py-2 text-xs text-base-content/40">
@@ -1199,9 +1205,9 @@ defmodule PlatformWeb.ChatLive do
             ]}
           >
             <span class="truncate flex-1">{sidebar_display_name(space, @user_id)}</span>
-            <%= if dm_unread_label(Map.get(@dm_unread, space.id, 0)) do %>
+            <%= if dm_unread_label(Map.get(@unread_counts, space.id, 0)) do %>
               <span class="ml-1 flex-shrink-0 min-w-[1.125rem] h-[1.125rem] rounded-full bg-primary text-primary-content text-[0.6rem] font-bold flex items-center justify-center px-1 leading-none">
-                {dm_unread_label(Map.get(@dm_unread, space.id, 0))}
+                {dm_unread_label(Map.get(@unread_counts, space.id, 0))}
               </span>
             <% end %>
           </.link>
@@ -1242,7 +1248,12 @@ defmodule PlatformWeb.ChatLive do
               ]}
             >
               <span class="text-base-content/40 text-lg">#</span>
-              <span class="truncate">{space.name}</span>
+              <span class="truncate flex-1">{space.name}</span>
+              <%= if dm_unread_label(Map.get(@unread_counts, space.id, 0)) do %>
+                <span class="ml-1 flex-shrink-0 min-w-[1.125rem] h-[1.125rem] rounded-full bg-primary text-primary-content text-[0.6rem] font-bold flex items-center justify-center px-1 leading-none">
+                  {dm_unread_label(Map.get(@unread_counts, space.id, 0))}
+                </span>
+              <% end %>
             </.link>
 
             <p class="px-4 py-1 mt-2 text-xs font-semibold uppercase tracking-widest text-base-content/50">
@@ -1260,9 +1271,9 @@ defmodule PlatformWeb.ChatLive do
               ]}
             >
               <span class="truncate flex-1">{sidebar_display_name(space, @user_id)}</span>
-              <%= if dm_unread_label(Map.get(@dm_unread, space.id, 0)) do %>
+              <%= if dm_unread_label(Map.get(@unread_counts, space.id, 0)) do %>
                 <span class="ml-1 flex-shrink-0 min-w-[1.125rem] h-[1.125rem] rounded-full bg-primary text-primary-content text-[0.6rem] font-bold flex items-center justify-center px-1 leading-none">
-                  {dm_unread_label(Map.get(@dm_unread, space.id, 0))}
+                  {dm_unread_label(Map.get(@unread_counts, space.id, 0))}
                 </span>
               <% end %>
             </.link>
@@ -1815,7 +1826,7 @@ defmodule PlatformWeb.ChatLive do
 
           <%!-- Typing indicator --%>
           <div
-            :if={@agent_typing and @streaming_replies == %{}}
+            :if={not MapSet.equal?(@agent_typing_pids, MapSet.new()) and @streaming_replies == %{}}
             class="flex-shrink-0 px-5 pb-1 flex items-center gap-2 text-xs text-base-content/50"
           >
             <span class="flex gap-0.5 items-center">
@@ -1835,7 +1846,7 @@ defmodule PlatformWeb.ChatLive do
               >
               </span>
             </span>
-            <span>{sender_name(@participants_map, @agent_typing_participant_id)} is thinking…</span>
+            <span>{thinking_label(@agent_typing_pids, @participants_map)} is thinking…</span>
           </div>
 
           <div class="flex-shrink-0 border-t border-base-300 px-5 py-3 safe-area-bottom">
@@ -2935,13 +2946,20 @@ defmodule PlatformWeb.ChatLive do
     Chat.display_name_for_space(space, participants, current_user_id)
   end
 
-  defp increment_dm_unread(socket, space_id) do
-    current = Map.get(socket.assigns.dm_unread, space_id, 0)
-    update(socket, :dm_unread, &Map.put(&1, space_id, current + 1))
+  defp increment_unread(socket, space_id) do
+    current = Map.get(socket.assigns.unread_counts, space_id, 0)
+    update(socket, :unread_counts, &Map.put(&1, space_id, current + 1))
   end
 
-  defp clear_dm_unread(socket, space_id) do
-    update(socket, :dm_unread, &Map.delete(&1, space_id))
+  defp clear_unread(socket, space_id) do
+    update(socket, :unread_counts, &Map.delete(&1, space_id))
+  end
+
+  defp thinking_label(pids, participants_map) do
+    pids
+    |> MapSet.to_list()
+    |> Enum.map(&sender_name(participants_map, &1))
+    |> Enum.join(" & ")
   end
 
   defp dm_unread_label(count) when count >= 9, do: "9+"

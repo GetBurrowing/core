@@ -111,13 +111,13 @@
               "inline-block size-2 rounded-full",
               Platform.Chat.SpaceAgentPresence.dot_color(@composite_status)
             ]} />
-            <span>{@principal_name}</span>
+            <span>Agents</span>
           </button>
 
           <%!-- Roster dropdown panel --%>
           <div
             :if={assigns[:roster_open] && @roster_open}
-            class="absolute right-0 top-full mt-1 z-50 w-72 rounded-lg border border-base-300 bg-base-200 shadow-lg"
+            class="absolute right-0 top-full mt-1 z-50 w-64 max-w-[calc(100vw-1rem)] rounded-lg border border-base-300 bg-base-200 shadow-lg"
           >
             <div class="p-3 space-y-1">
               <%= for {sa, status} <- @roster_items, sa.role != "dismissed" do %>
@@ -205,7 +205,7 @@
 
           <div
             :if={assigns[:show_presence_panel] && @show_presence_panel}
-            class="absolute right-0 top-full mt-1 z-50 w-56 rounded-lg border border-base-300 bg-base-100 shadow-lg p-2"
+            class="absolute right-0 top-full mt-1 z-50 w-56 max-w-[calc(100vw-1rem)] rounded-lg border border-base-300 bg-base-100 shadow-lg p-2"
           >
             <div class="text-[10px] uppercase tracking-widest text-base-content/40 px-2 mb-1">
               Participants
