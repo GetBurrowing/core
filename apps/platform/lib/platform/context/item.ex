@@ -76,6 +76,7 @@ defmodule Platform.Context.Item.Kind do
     - `:env_var`          — environment variable for runners; run-scoped
     - `:artifact_ref`     — reference to an artifact produced by a run (mirrors the `Platform.Artifacts` record into context)
     - `:runner_hint`      — advisory hints pushed by runners; run-scoped
+    - `:feedback`         — feedback from chat/review/UI; run-scoped
     - `:system_event`     — internal platform events; short-lived
 
   Promotion rules:
@@ -86,7 +87,7 @@ defmodule Platform.Context.Item.Kind do
     - `:project_config` is project-scoped.
   """
 
-  @run_scoped [:env_var, :runner_hint, :artifact_ref, :system_event, :generic]
+  @run_scoped [:env_var, :runner_hint, :artifact_ref, :system_event, :feedback, :generic]
   @task_scoped [:task_description, :task_metadata]
   @epic_scoped [:epic_context]
   @project_scoped [:project_config]

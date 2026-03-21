@@ -303,6 +303,57 @@ defmodule Platform.Tasks do
     end
   end
 
+  # ── Kanban board queries ─────────────────────────────────────────────────
+
+  @board_topic "tasks:board"
+
+  @doc "List all tasks with preloaded project and epic, ordered by insertion."
+  def list_all_tasks(opts \\ []) do
+    project_id = Keyword.get(opts, :project_id)
+
+    Task
+    |> maybe_filter_project(project_id)
+    |> order_by([t], desc: t.inserted_at)
+    |> preload([:project, :epic, plans: :stages])
+    |> Repo.all()
+  end
+
+  defp maybe_filter_project(query, nil), do: query
+  defp maybe_filter_project(query, id), do: where(query, [t], t.project_id == ^id)
+
+  @doc "Get a task with full detail: project, epic, plans with stages and validations."
+  def get_task_detail(task_id) do
+    Task
+    |> where([t], t.id == ^task_id)
+    |> preload([:project, :epic, plans: [stages: :validations]])
+    |> Repo.one()
+  end
+
+  @doc """
+  Transition a task's status and broadcast the change to the board topic.
+  """
+  def transition_task(%Task{} = task, new_status) do
+    case transition_task_status(task, new_status) do
+      {:ok, updated} ->
+        updated = Repo.preload(updated, [:project, :epic, plans: :stages])
+        broadcast_board({:task_updated, updated})
+        {:ok, updated}
+
+      error ->
+        error
+    end
+  end
+
+  @doc "Subscribe to the kanban board topic for real-time updates."
+  def subscribe_board do
+    Phoenix.PubSub.subscribe(Platform.PubSub, @board_topic)
+  end
+
+  @doc "Broadcast a board event."
+  def broadcast_board(message) do
+    Phoenix.PubSub.broadcast(Platform.PubSub, @board_topic, message)
+  end
+
   # ── Legacy ETS-based read-side (backward compat) ─────────────────────────
 
   @spec list_tasks() :: [summary()]

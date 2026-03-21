@@ -5,13 +5,13 @@ defmodule Platform.Tasks.Plan do
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
 
-  @statuses ~w(draft pending_review approved rejected superseded)
+  @statuses ~w(draft pending_review approved rejected superseded executing completed)
 
   schema "plans" do
     belongs_to(:task, Platform.Tasks.Task)
     field(:status, :string, default: "draft")
     field(:version, :integer)
-    field(:approved_by, :binary_id)
+    field(:approved_by, :string)
     field(:approved_at, :utc_datetime_usec)
 
     has_many(:stages, Platform.Tasks.Stage)
