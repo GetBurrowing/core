@@ -98,16 +98,91 @@ defmodule Platform.Push do
   end
 
   defp do_send_push(sub, json) do
-    if vapid_configured?() do
+    vapid = Application.get_env(:web_push_encryption, :vapid_details)
+
+    unless vapid do
+      Logger.warning("[Push] VAPID keys not configured, skipping push")
+      {:error, :vapid_keys_missing}
+    else
       subscription = %{
         endpoint: sub.endpoint,
         keys: %{p256dh: sub.p256dh, auth: sub.auth}
       }
 
-      WebPushEncryption.send_web_push(json, subscription)
-    else
-      Logger.warning("[Push] VAPID keys not configured, skipping push")
-      {:error, :vapid_keys_missing}
+      # WebPushEncryption.send_web_push uses hackney which can't resolve
+      # CA certs in Docker releases. Use the encryption step only, then
+      # send via Req (Mint/Finch) which handles TLS properly.
+      with {:ok, {encrypted_payload, crypto_headers}} <-
+             encrypt_payload(json, subscription),
+           {:ok, vapid_headers} <- build_vapid_headers(sub.endpoint, vapid) do
+        # Merge Crypto-Key headers (encryption + VAPID both use this header)
+        merged_crypto_key =
+          [Map.get(crypto_headers, "Crypto-Key"), Map.get(vapid_headers, "Crypto-Key")]
+          |> Enum.reject(&is_nil/1)
+          |> Enum.join(";")
+
+        headers =
+          crypto_headers
+          |> Map.merge(vapid_headers)
+          |> Map.put("Crypto-Key", merged_crypto_key)
+          |> Map.put("TTL", "0")
+          |> Enum.map(fn {k, v} -> {to_string(k), to_string(v)} end)
+
+        case Req.post(sub.endpoint, body: encrypted_payload, headers: headers) do
+          {:ok, %{status: status}} when status in [200, 201, 202] ->
+            {:ok, %{status: status}}
+
+          {:ok, %{status: 410}} ->
+            Logger.info("[Push] subscription gone (410): #{sub.endpoint}")
+            unsubscribe(sub.participant_id, sub.endpoint)
+            {:error, :subscription_expired}
+
+          {:ok, %{status: status, body: body}} ->
+            Logger.warning("[Push] push returned #{status}: #{inspect(body)}")
+            {:error, {:http_error, status}}
+
+          {:error, reason} ->
+            Logger.warning("[Push] request failed: #{inspect(reason)}")
+            {:error, reason}
+        end
+      else
+        error ->
+          Logger.warning("[Push] encryption/VAPID failed: #{inspect(error)}")
+          {:error, :encryption_failed}
+      end
+    end
+  end
+
+  defp encrypt_payload(json, subscription) do
+    case WebPushEncryption.Encrypt.encrypt(json, subscription.keys.p256dh, subscription.keys.auth) do
+      {:ok, {payload, key_header, salt_header}} ->
+        headers = %{
+          "Content-Encoding" => "aesgcm",
+          "Crypto-Key" => key_header,
+          "Encryption" => salt_header
+        }
+
+        {:ok, {payload, headers}}
+
+      error ->
+        error
+    end
+  end
+
+  defp build_vapid_headers(endpoint, vapid) do
+    audience = URI.parse(endpoint) |> then(&"#{&1.scheme}://#{&1.host}")
+
+    case WebPushEncryption.Vapid.get_vapid_headers(
+           audience,
+           Keyword.get(vapid, :subject),
+           Keyword.get(vapid, :public_key),
+           Keyword.get(vapid, :private_key)
+         ) do
+      {auth_header, crypto_key_header} ->
+        {:ok, %{"Authorization" => auth_header, "Crypto-Key" => crypto_key_header}}
+
+      error ->
+        {:error, error}
     end
   end
 
