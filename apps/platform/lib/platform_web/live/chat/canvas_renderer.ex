@@ -66,7 +66,7 @@ defmodule PlatformWeb.Chat.CanvasRenderer do
             <span class="hero-arrow-top-right-on-square size-4 text-base-content/40 flex-shrink-0"></span>
           </header>
           <div class={[
-            "w-full bg-white",
+            "w-full bg-white relative",
             if(@inline, do: "h-48 sm:h-56", else: "h-[60vh] min-h-[300px]")
           ]}>
             <iframe
@@ -75,6 +75,11 @@ defmodule PlatformWeb.Chat.CanvasRenderer do
               sandbox="allow-scripts allow-same-origin allow-popups allow-forms"
               loading="lazy"
               title={@canvas.title || "Canvas"}
+            />
+            <div
+              :if={@inline}
+              class="absolute inset-0 cursor-pointer"
+              aria-hidden="true"
             />
           </div>
         </div>
