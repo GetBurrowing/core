@@ -88,6 +88,7 @@ defmodule PlatformWeb.ChatLive do
       |> assign(:quick_emojis, @quick_emojis)
       |> assign(:canvas_types, @canvas_types)
       |> assign(:agent_typing, false)
+      |> assign(:streaming_replies, %{})
       |> assign(:mention_suggestions, [])
       |> assign(:push_permission, "unknown")
       |> assign_compose("")
@@ -183,6 +184,7 @@ defmodule PlatformWeb.ChatLive do
        |> assign(:has_agent_participant, has_agent_participant)
        |> assign(:agent_status, PlatformWeb.ShellLive.default_agent_status())
        |> assign(:agent_typing, false)
+       |> assign(:streaming_replies, %{})
        |> assign(:mention_suggestions, [])
        |> assign(:current_participant, participant)
        |> assign(:reactions_map, reactions_map)
@@ -877,6 +879,14 @@ defmodule PlatformWeb.ChatLive do
   def handle_info({:new_message, msg}, socket) do
     attachments = Chat.list_attachments(msg.id)
 
+    # Clear any streaming bubbles from this participant (final message replaces them)
+    streaming =
+      socket.assigns.streaming_replies
+      |> Enum.reject(fn {_k, v} -> v.participant_id == msg.participant_id end)
+      |> Map.new()
+
+    socket = assign(socket, :streaming_replies, streaming)
+
     if is_nil(msg.thread_id) do
       {:noreply,
        socket
@@ -1035,6 +1045,21 @@ defmodule PlatformWeb.ChatLive do
       end
 
     {:noreply, socket}
+  end
+
+  def handle_info(
+        {:agent_reply_chunk,
+         %{chunk_id: chunk_id, text: text, done: done, participant_id: participant_id}},
+        socket
+      ) do
+    if done do
+      # Final chunk — clear the streaming entry; the real message arrives via :new_message
+      {:noreply, update(socket, :streaming_replies, &Map.delete(&1, chunk_id))}
+    else
+      # Accumulate streaming text
+      entry = %{text: text, participant_id: participant_id}
+      {:noreply, update(socket, :streaming_replies, &Map.put(&1, chunk_id, entry))}
+    end
   end
 
   def handle_info({:agent_silenced, _payload}, socket) do
@@ -1713,9 +1738,30 @@ defmodule PlatformWeb.ChatLive do
             </div>
           </div>
 
+          <%!-- Streaming reply bubbles --%>
+          <div
+            :for={{chunk_id, entry} <- @streaming_replies}
+            id={"streaming-#{chunk_id}"}
+            class="flex-shrink-0 px-5 pb-2"
+          >
+            <div class="flex items-start gap-2">
+              <div class="flex size-7 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-medium text-primary">
+                {avatar_initial(@participants_map, entry.participant_id)}
+              </div>
+              <div class="min-w-0 flex-1">
+                <div class="text-xs font-medium text-base-content/70 mb-0.5">
+                  {sender_name(@participants_map, entry.participant_id)}
+                </div>
+                <div class="prose prose-sm max-w-none text-base-content/80 border-l-2 border-primary/20 pl-3">
+                  {entry.text}<span class="inline-block w-1.5 h-4 bg-primary/50 animate-pulse ml-0.5 align-middle rounded-sm"></span>
+                </div>
+              </div>
+            </div>
+          </div>
+
           <%!-- Typing indicator --%>
           <div
-            :if={@agent_typing}
+            :if={@agent_typing and @streaming_replies == %{}}
             class="flex-shrink-0 px-5 pb-1 flex items-center gap-2 text-xs text-base-content/50"
           >
             <span class="flex gap-0.5 items-center">

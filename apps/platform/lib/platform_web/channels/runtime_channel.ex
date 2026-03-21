@@ -89,6 +89,31 @@ defmodule PlatformWeb.RuntimeChannel do
   end
 
   @impl true
+  def handle_in(
+        "reply_chunk",
+        %{"space_id" => space_id, "chunk_id" => chunk_id, "text" => text, "done" => done},
+        socket
+      ) do
+    agent_participant_id = get_agent_participant_id(socket, space_id)
+
+    if agent_participant_id do
+      Platform.Chat.PubSub.broadcast(
+        space_id,
+        {:agent_reply_chunk,
+         %{
+           space_id: space_id,
+           chunk_id: chunk_id,
+           text: text,
+           done: done,
+           participant_id: agent_participant_id
+         }}
+      )
+    end
+
+    {:noreply, socket}
+  end
+
+  @impl true
   def handle_in("typing", %{"space_id" => space_id, "typing" => typing}, socket) do
     agent_participant_id = get_agent_participant_id(socket, space_id)
 
