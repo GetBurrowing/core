@@ -41,6 +41,7 @@ function buildSeparator(label) {
 
 const ScrollToBottom = {
   mounted() {
+    this._initialScroll = true;
     // MutationObserver fires when stream inserts new message rows
     this._observer = new MutationObserver(() => {
       this._safeUpdate();
@@ -66,8 +67,14 @@ const ScrollToBottom = {
     if (this._observer) this._observer.disconnect();
   },
   scrollToBottom() {
-    // Only auto-scroll if the user is near the bottom (within 150px).
-    // This prevents hijacking scroll when the user is reading history.
+    // Always scroll to bottom on initial mount. After that, only auto-scroll
+    // if the user is near the bottom (within 150px) to avoid hijacking their
+    // scroll position when reading history.
+    if (this._initialScroll) {
+      this._initialScroll = false;
+      this.el.scrollTop = this.el.scrollHeight;
+      return;
+    }
     const threshold = 150;
     const distanceFromBottom =
       this.el.scrollHeight - this.el.scrollTop - this.el.clientHeight;
