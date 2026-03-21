@@ -188,23 +188,49 @@ defmodule Platform.Federation.NodeCommandHandler do
   end
 
   # Resolve agent_id string → {:ok, %Agent{}} or {:error, ...}
+  # Auto-creates a built_in agent record if the slug doesn't exist yet.
   defp resolve_agent(nil), do: {:error, "NO_AGENT", "No agent_id in context"}
 
   defp resolve_agent(agent_id) do
     case find_agent(agent_id) do
-      nil -> {:error, "AGENT_NOT_FOUND", "Agent #{agent_id} not found"}
+      nil -> upsert_openclaw_agent(agent_id)
       agent -> {:ok, agent}
     end
   end
 
-  # Look up agent by runtime_id (OpenClaw agent string, e.g. "main") or UUID primary key.
+  # Create a minimal agent record for an OpenClaw agent slug that hasn't been imported yet.
+  defp upsert_openclaw_agent(slug) do
+    attrs = %{
+      slug: slug,
+      name: slug,
+      status: "active",
+      runtime_type: "built_in"
+    }
+
+    case Platform.Repo.insert(Agent.changeset(%Agent{}, attrs)) do
+      {:ok, agent} ->
+        {:ok, agent}
+
+      {:error, %Ecto.Changeset{errors: [_ | _]}} ->
+        # Race: inserted concurrently — re-fetch
+        case find_agent(slug) do
+          nil -> {:error, "AGENT_CREATE_FAILED", "Agent #{slug} could not be created or found"}
+          agent -> {:ok, agent}
+        end
+
+      {:error, reason} ->
+        {:error, "AGENT_CREATE_FAILED", "Failed to create agent: #{inspect(reason)}"}
+    end
+  end
+
+  # Look up agent by UUID primary key or slug (e.g. "main").
   defp find_agent(agent_id) do
     case Ecto.UUID.cast(agent_id) do
       {:ok, _} ->
         Platform.Repo.get(Agent, agent_id)
 
       :error ->
-        Platform.Repo.one(from(a in Agent, where: a.runtime_id == ^agent_id, limit: 1))
+        Platform.Repo.one(from(a in Agent, where: a.slug == ^agent_id, limit: 1))
     end
   end
 
