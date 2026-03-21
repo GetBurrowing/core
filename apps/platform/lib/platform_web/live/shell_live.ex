@@ -26,8 +26,16 @@ defmodule PlatformWeb.ShellLive do
 
     active_module = derive_active_module(socket.view)
 
+    # Load the default space roster eagerly so the status dot renders on mount
+    {roster_space_id, roster_socket} = load_default_roster(socket)
+
+    # Subscribe to live roster updates when connected
+    if connected?(socket) && roster_space_id do
+      Phoenix.PubSub.subscribe(Platform.PubSub, "space_agents:#{roster_space_id}")
+    end
+
     socket =
-      socket
+      roster_socket
       |> assign(:current_user, current_user)
       |> assign(:current_path, "/")
       |> assign(:agent_status, default_agent_status())
@@ -35,12 +43,17 @@ defmodule PlatformWeb.ShellLive do
       |> assign(:sidebar_collapsed, false)
       |> assign(:active_module, active_module)
       |> assign(:roster_open, false)
-      |> assign(:roster_items, [])
-      |> assign(:composite_status, :none)
-      |> assign(:principal_name, nil)
+      |> assign(:roster_space_id, roster_space_id)
       |> attach_hook(:track_path, :handle_params, fn _params, url, socket ->
         uri = URI.parse(url)
         {:cont, assign(socket, :current_path, uri.path)}
+      end)
+      |> attach_hook(:roster_updates, :handle_info, fn
+        {:roster_changed, space_id}, socket ->
+          {:halt, refresh_roster(socket, space_id)}
+
+        _msg, socket ->
+          {:cont, socket}
       end)
       |> attach_hook(:drawer_events, :handle_event, fn
         "toggle_drawer", _params, socket ->
@@ -146,6 +159,40 @@ defmodule PlatformWeb.ShellLive do
   end
 
   def refresh_roster(socket, _), do: socket
+
+  defp load_default_roster(socket) do
+    case first_space() do
+      %{id: space_id} ->
+        socket =
+          socket
+          |> assign(:roster_items, [])
+          |> assign(:composite_status, :none)
+          |> assign(:principal_name, nil)
+          |> refresh_roster(space_id)
+
+        {space_id, socket}
+
+      nil ->
+        socket =
+          socket
+          |> assign(:roster_items, [])
+          |> assign(:composite_status, :none)
+          |> assign(:principal_name, nil)
+
+        {nil, socket}
+    end
+  end
+
+  defp first_space do
+    from(s in Platform.Chat.Space,
+      where: is_nil(s.archived_at),
+      order_by: [asc: s.inserted_at],
+      limit: 1
+    )
+    |> Repo.one()
+  rescue
+    _ -> nil
+  end
 
   # Derive a human-readable module name from the LiveView module atom.
   defp derive_active_module(view) do
