@@ -98,27 +98,25 @@ defmodule Platform.Push do
   end
 
   defp do_send_push(sub, json) do
-    public_key = vapid_public_key()
-    private_key = vapid_private_key()
-
-    if public_key && private_key do
+    if vapid_configured?() do
       subscription = %{
         endpoint: sub.endpoint,
         keys: %{p256dh: sub.p256dh, auth: sub.auth}
       }
 
-      WebPushEncryption.send_web_push(
-        json,
-        subscription,
-        %{
-          subject: "mailto:push@suite.app",
-          public_key: public_key,
-          private_key: private_key
-        }
-      )
+      # VAPID keys are read from application config by the library
+      # (configured in runtime.exs via :web_push_encryption, :vapid_details)
+      WebPushEncryption.send_web_push(json, subscription)
     else
       Logger.warning("[Push] VAPID keys not configured, skipping push")
       {:error, :vapid_keys_missing}
+    end
+  end
+
+  defp vapid_configured? do
+    case Application.get_env(:web_push_encryption, :vapid_details) do
+      nil -> false
+      details -> details[:public_key] != nil and details[:private_key] != nil
     end
   end
 end

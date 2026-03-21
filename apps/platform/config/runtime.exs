@@ -159,3 +159,16 @@ if config_env() == :prod do
     ],
     secret_key_base: secret_key_base
 end
+
+# ── Web Push (VAPID) ──────────────────────────────────────────────────────────
+# Configure the web_push_encryption library with VAPID keys at runtime.
+# Keys are read from env vars, falling back to Vault lookup in Platform.Push.
+vapid_public = System.get_env("VAPID_PUBLIC_KEY")
+vapid_private = System.get_env("VAPID_PRIVATE_KEY")
+
+if vapid_public && vapid_private do
+  config :web_push_encryption, :vapid_details,
+    subject: "mailto:push@#{System.get_env("PHX_HOST", "suite.app")}",
+    public_key: vapid_public,
+    private_key: vapid_private
+end
