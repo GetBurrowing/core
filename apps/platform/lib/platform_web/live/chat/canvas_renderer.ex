@@ -80,6 +80,25 @@ defmodule PlatformWeb.Chat.CanvasRenderer do
         </div>
         """
 
+      a2ui_canvas?(state) ->
+        assigns = assign(assigns, :a2ui_nodes, parse_a2ui(state["a2ui_content"]))
+
+        ~H"""
+        <div
+          id={"canvas-a2ui-#{@canvas.id}"}
+          class={[
+            "rounded-2xl border border-base-300 bg-base-100 shadow-sm overflow-hidden",
+            @inline && "cursor-pointer"
+          ]}
+          phx-click={if(@inline, do: "open_canvas")}
+          phx-value-canvas-id={if(@inline, do: @canvas.id)}
+        >
+          <div class="p-4 flex flex-col gap-3">
+            <.render_node :for={node <- @a2ui_nodes} node={node} />
+          </div>
+        </div>
+        """
+
       canonical_document?(state) ->
         ~H"""
         <div
@@ -293,6 +312,34 @@ defmodule PlatformWeb.Chat.CanvasRenderer do
   @spec url_canvas?(map()) :: boolean()
   def url_canvas?(%{"url" => url}) when is_binary(url) and url != "", do: true
   def url_canvas?(_), do: false
+
+  @doc """
+  Returns true if the canvas state map contains A2UI JSONL content.
+  """
+  @spec a2ui_canvas?(map()) :: boolean()
+  def a2ui_canvas?(%{"a2ui_content" => content}) when is_binary(content) and content != "",
+    do: true
+
+  def a2ui_canvas?(_), do: false
+
+  @doc """
+  Parses A2UI JSONL content into a list of node maps for rendering.
+  Each line is a JSON object representing a renderable node tree.
+  """
+  @spec parse_a2ui(String.t() | nil) :: [map()]
+  def parse_a2ui(nil), do: []
+  def parse_a2ui(""), do: []
+
+  def parse_a2ui(content) when is_binary(content) do
+    content
+    |> String.split("\n", trim: true)
+    |> Enum.flat_map(fn line ->
+      case Jason.decode(line) do
+        {:ok, node} when is_map(node) -> [node]
+        _ -> []
+      end
+    end)
+  end
 
   @doc """
   Returns true if the canvas state map contains a canonical document (v1).
