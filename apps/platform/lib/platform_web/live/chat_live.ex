@@ -1741,6 +1741,7 @@ defmodule PlatformWeb.ChatLive do
           <%!-- Streaming reply bubbles --%>
           <div
             :for={{chunk_id, entry} <- @streaming_replies}
+            :if={entry.text != nil and entry.text != ""}
             id={"streaming-#{chunk_id}"}
             class="flex-shrink-0 px-5 pb-2"
           >
