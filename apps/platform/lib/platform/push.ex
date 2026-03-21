@@ -104,9 +104,16 @@ defmodule Platform.Push do
         keys: %{p256dh: sub.p256dh, auth: sub.auth}
       }
 
-      # VAPID keys are read from application config by the library
-      # (configured in runtime.exs via :web_push_encryption, :vapid_details)
-      WebPushEncryption.send_web_push(json, subscription)
+      # Pass explicit SSL options so hackney can verify Apple/Google push endpoints
+      hackney_opts = [
+        ssl_options: [
+          verify: :verify_peer,
+          cacerts: :public_key.cacerts_get(),
+          depth: 3
+        ]
+      ]
+
+      WebPushEncryption.send_web_push(json, subscription, hackney_opts)
     else
       Logger.warning("[Push] VAPID keys not configured, skipping push")
       {:error, :vapid_keys_missing}
