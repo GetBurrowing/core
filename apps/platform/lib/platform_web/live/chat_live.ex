@@ -1605,19 +1605,39 @@ defmodule PlatformWeb.ChatLive do
                   </div>
                 </div>
 
-                <p
+                <div
                   :if={msg.content_type != "canvas" and present?(msg.content)}
-                  class="text-sm leading-6 text-base-content break-words"
+                  class="prose prose-sm max-w-none text-base-content break-words chat-markdown"
                 >
-                  {format_message_content(msg.content)}
-                </p>
+                  {Platform.Chat.ContentRenderer.render_message(msg.content)}
+                </div>
 
                 <div
                   :if={Map.get(@attachments_map, msg.id, []) != []}
-                  class="mt-1 flex flex-col gap-1"
+                  class="mt-1 flex flex-col gap-2"
                 >
                   <a
-                    :for={attachment <- Map.get(@attachments_map, msg.id, [])}
+                    :for={
+                      attachment <-
+                        Enum.filter(Map.get(@attachments_map, msg.id, []), &image_attachment?/1)
+                    }
+                    href={attachment_url(attachment)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    class="block max-w-sm"
+                  >
+                    <img
+                      src={attachment_url(attachment)}
+                      alt={attachment.filename}
+                      loading="lazy"
+                      class="rounded-lg max-h-64 object-contain bg-base-200"
+                    />
+                  </a>
+                  <a
+                    :for={
+                      attachment <-
+                        Enum.reject(Map.get(@attachments_map, msg.id, []), &image_attachment?/1)
+                    }
                     href={attachment_url(attachment)}
                     target="_blank"
                     rel="noopener noreferrer"
@@ -2921,23 +2941,9 @@ defmodule PlatformWeb.ChatLive do
     end
   end
 
-  defp format_message_content(content) when is_binary(content) do
-    import Phoenix.HTML, only: [raw: 1, html_escape: 1, safe_to_string: 1]
-
-    content
-    |> String.split(~r/(@\w+)/, include_captures: true)
-    |> Enum.map(fn part ->
-      if String.match?(part, ~r/^@\w+$/) do
-        ~s(<span class="rounded bg-primary/20 text-primary px-1 font-medium">#{safe_to_string(html_escape(part))}</span>)
-      else
-        safe_to_string(html_escape(part))
-      end
-    end)
-    |> Enum.join()
-    |> raw()
+  defp image_attachment?(attachment) do
+    String.starts_with?(attachment.content_type || "", "image/")
   end
-
-  defp format_message_content(_content), do: ""
 
   defp attachment_url(attachment), do: ~p"/chat/attachments/#{attachment.id}"
 

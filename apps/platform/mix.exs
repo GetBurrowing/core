@@ -70,7 +70,11 @@ defmodule Platform.MixProject do
       {:bandit, "~> 1.5"},
       {:oauth2, "~> 2.1"},
       {:mox, "~> 1.0", only: :test},
-      {:web_push_encryption, "~> 0.3"}
+      {:web_push_encryption, "~> 0.3"},
+      {:earmark, "~> 1.4"},
+      {:makeup, "~> 1.2"},
+      {:makeup_elixir, "~> 1.0"},
+      {:makeup_js, "~> 0.1"}
     ]
   end
 

@@ -113,3 +113,139 @@
 }
 
 /* This file is for your main application CSS */
+
+/* ── Chat Markdown Rendering ─────────────────────────────────────── */
+
+.chat-markdown h3 { font-size: 1.1em; font-weight: 700; margin: 0.5em 0 0.25em; }
+.chat-markdown h4 { font-size: 1.05em; font-weight: 600; margin: 0.4em 0 0.2em; }
+.chat-markdown h5,
+.chat-markdown h6 { font-size: 1em; font-weight: 600; margin: 0.3em 0 0.15em; }
+
+.chat-markdown p { margin: 0.25em 0; }
+.chat-markdown ul,
+.chat-markdown ol { margin: 0.25em 0; padding-left: 1.5em; }
+.chat-markdown li { margin: 0.1em 0; }
+
+.chat-markdown blockquote {
+  border-left: 3px solid oklch(58% 0.233 277.117);
+  padding-left: 0.75em;
+  margin: 0.5em 0;
+  opacity: 0.85;
+}
+
+.chat-markdown hr { margin: 0.5em 0; border-color: oklch(37% 0.044 257.287); }
+
+.chat-markdown code:not(pre code) {
+  background: oklch(25.26% 0.014 253.1 / 0.5);
+  padding: 0.15em 0.35em;
+  border-radius: 0.25rem;
+  font-size: 0.875em;
+}
+
+.chat-markdown table {
+  border-collapse: collapse;
+  margin: 0.5em 0;
+  font-size: 0.875em;
+}
+.chat-markdown th,
+.chat-markdown td {
+  border: 1px solid oklch(37% 0.044 257.287 / 0.3);
+  padding: 0.3em 0.6em;
+}
+.chat-markdown th { font-weight: 600; background: oklch(25.26% 0.014 253.1 / 0.3); }
+
+.chat-markdown img {
+  max-width: 100%;
+  border-radius: 0.5rem;
+  margin: 0.25em 0;
+}
+
+/* ── Code Block Wrapper (Phase 2 — CodeBlock hook) ───────────────── */
+
+.code-block-wrapper {
+  position: relative;
+  margin: 0.5em 0;
+}
+
+.code-block-wrapper pre {
+  background: oklch(20.15% 0.012 254.09);
+  border-radius: 0.5rem;
+  padding: 0.75em 1em;
+  overflow-x: auto;
+  font-size: 0.8125em;
+  line-height: 1.5;
+}
+
+.code-block-wrapper pre code {
+  background: none;
+  padding: 0;
+  border-radius: 0;
+}
+
+.code-block-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.25em 0.75em;
+  background: oklch(25.26% 0.014 253.1);
+  border-radius: 0.5rem 0.5rem 0 0;
+  font-size: 0.75em;
+  color: oklch(70% 0.02 252);
+}
+
+.code-block-header + pre {
+  border-radius: 0 0 0.5rem 0.5rem;
+}
+
+.code-block-header .copy-btn {
+  cursor: pointer;
+  padding: 0.15em 0.5em;
+  border-radius: 0.25rem;
+  background: transparent;
+  border: 1px solid oklch(37% 0.044 257.287);
+  color: inherit;
+  font-size: 1em;
+  transition: background 0.15s;
+}
+.code-block-header .copy-btn:hover {
+  background: oklch(37% 0.044 257.287 / 0.5);
+}
+
+.code-block-collapsed pre {
+  max-height: calc(20 * 1.5em + 1.5em);
+  overflow: hidden;
+}
+
+.code-block-expand {
+  display: block;
+  width: 100%;
+  padding: 0.3em;
+  background: oklch(22% 0.013 254);
+  border: none;
+  border-radius: 0 0 0.5rem 0.5rem;
+  color: oklch(70% 0.213 47.604);
+  font-size: 0.8em;
+  cursor: pointer;
+  text-align: center;
+}
+.code-block-expand:hover { background: oklch(25% 0.014 254); }
+
+/* ── Makeup Syntax Highlighting ──────────────────────────────────── */
+
+pre .makeup .n  { color: #c9d1d9; }        /* name */
+pre .makeup .s  { color: #a5d6ff; }        /* string */
+pre .makeup .k  { color: #ff7b72; }        /* keyword */
+pre .makeup .kd { color: #ff7b72; }        /* keyword declaration */
+pre .makeup .na { color: #d2a8ff; }        /* name attribute */
+pre .makeup .nf { color: #d2a8ff; }        /* name function */
+pre .makeup .nc { color: #ffa657; }        /* name class */
+pre .makeup .no { color: #79c0ff; }        /* name constant */
+pre .makeup .c  { color: #8b949e; font-style: italic; }  /* comment */
+pre .makeup .c1 { color: #8b949e; font-style: italic; }  /* comment single */
+pre .makeup .p  { color: #c9d1d9; }        /* punctuation */
+pre .makeup .o  { color: #ff7b72; }        /* operator */
+pre .makeup .m  { color: #79c0ff; }        /* number */
+pre .makeup .mi { color: #79c0ff; }        /* number integer */
+pre .makeup .mf { color: #79c0ff; }        /* number float */
+pre .makeup .ss { color: #a5d6ff; }        /* string symbol */
+pre .makeup .sa { color: #79c0ff; }        /* string affix */

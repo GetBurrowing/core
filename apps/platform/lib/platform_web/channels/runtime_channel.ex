@@ -144,6 +144,88 @@ defmodule PlatformWeb.RuntimeChannel do
     {:noreply, socket}
   end
 
+  @impl true
+  def handle_in(
+        "reply_with_media",
+        %{"space_id" => space_id, "content" => content, "attachments" => attachments},
+        socket
+      )
+      when is_list(attachments) do
+    alias Platform.Chat.AttachmentStorage
+
+    agent_participant_id = get_agent_participant_id(socket, space_id)
+
+    cond do
+      is_nil(agent_participant_id) ->
+        push(socket, "error", %{error: "Agent is not a participant in this space"})
+        {:noreply, socket}
+
+      not attachments_within_limits?(attachments) ->
+        push(socket, "error", %{
+          error: "Attachment size limits exceeded (10MB per file, 25MB total)"
+        })
+
+        {:noreply, socket}
+
+      true ->
+        # Stop typing indicator
+        Platform.Chat.PubSub.broadcast(
+          space_id,
+          {:agent_typing, %{participant_id: agent_participant_id, typing: false}}
+        )
+
+        # Decode and persist each attachment
+        attachment_results =
+          Enum.map(attachments, fn att ->
+            with {:ok, data} <- Base.decode64(att["data"] || ""),
+                 tmp_path = write_temp_file(data),
+                 {:ok, stored} <-
+                   AttachmentStorage.persist_upload(
+                     tmp_path,
+                     att["filename"],
+                     att["content_type"]
+                   ) do
+              File.rm(tmp_path)
+              {:ok, stored}
+            else
+              _error -> {:error, :attachment_failed}
+            end
+          end)
+
+        # Filter successful attachments
+        attachment_attrs =
+          attachment_results
+          |> Enum.filter(&match?({:ok, _}, &1))
+          |> Enum.map(fn {:ok, attrs} -> attrs end)
+
+        message_content = content || ""
+
+        Chat.post_message_with_attachments(
+          %{
+            space_id: space_id,
+            participant_id: agent_participant_id,
+            content_type: "text",
+            content: message_content,
+            metadata: %{
+              "source" => "external_runtime",
+              "runtime_id" => socket.assigns.runtime_id,
+              "has_media" => true
+            }
+          },
+          attachment_attrs
+        )
+
+        # Enter/extend sticky engagement after successful reply
+        Chat.engage_agent(
+          space_id,
+          agent_participant_id,
+          String.slice(message_content, 0, 200)
+        )
+
+        {:noreply, socket}
+    end
+  end
+
   def handle_in(_event, _payload, socket) do
     {:noreply, socket}
   end
@@ -155,6 +237,26 @@ defmodule PlatformWeb.RuntimeChannel do
   end
 
   # ── Helpers ─────────────────────────────────────────────────────────
+
+  @max_attachment_size 10 * 1024 * 1024
+  @max_total_size 25 * 1024 * 1024
+
+  defp attachments_within_limits?(attachments) do
+    sizes =
+      Enum.map(attachments, fn att ->
+        # Base64 data size ≈ 3/4 of encoded string length
+        byte_size(att["data"] || "")
+      end)
+
+    Enum.all?(sizes, &(&1 <= div(@max_attachment_size * 4, 3))) and
+      Enum.sum(sizes) <= div(@max_total_size * 4, 3)
+  end
+
+  defp write_temp_file(data) do
+    tmp_path = Path.join(System.tmp_dir!(), "runtime-upload-#{Ecto.UUID.generate()}")
+    File.write!(tmp_path, data)
+    tmp_path
+  end
 
   defp get_agent_participant_id(socket, space_id) do
     agent_id = socket.assigns[:agent_id]

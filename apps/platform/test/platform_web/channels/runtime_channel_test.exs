@@ -8,6 +8,23 @@ defmodule PlatformWeb.RuntimeChannelTest do
   alias Platform.Repo
 
   setup do
+    # Set up a writable uploads directory for attachment tests
+    previous_root = Application.get_env(:platform, :chat_attachments_root)
+
+    upload_root =
+      Path.join(
+        System.tmp_dir!(),
+        "runtime_channel_test_uploads_#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(upload_root)
+    Application.put_env(:platform, :chat_attachments_root, upload_root)
+
+    on_exit(fn ->
+      Application.put_env(:platform, :chat_attachments_root, previous_root)
+      File.rm_rf(upload_root)
+    end)
+
     user = create_user()
     agent = create_agent()
 
@@ -120,6 +137,143 @@ defmodule PlatformWeb.RuntimeChannelTest do
       # Verify message was posted
       messages = Chat.list_messages(ctx.space.id, limit: 10)
       assert Enum.any?(messages, fn m -> m.content == "Hello from external runtime!" end)
+    end
+  end
+
+  describe "reply_with_media" do
+    test "posts message with base64 attachments", ctx do
+      {:ok, socket} =
+        connect(PlatformWeb.RuntimeSocket, %{
+          "runtime_id" => ctx.runtime.runtime_id,
+          "token" => ctx.raw_token
+        })
+
+      {:ok, _reply, socket} =
+        subscribe_and_join(socket, "runtime:#{ctx.runtime.runtime_id}", %{})
+
+      # Create a small test PNG (1x1 pixel)
+      png_data = Base.encode64("fake-image-data-for-test")
+
+      push(socket, "reply_with_media", %{
+        "space_id" => ctx.space.id,
+        "content" => "Here is the diagram",
+        "attachments" => [
+          %{
+            "filename" => "diagram.png",
+            "content_type" => "image/png",
+            "data" => png_data
+          }
+        ]
+      })
+
+      Process.sleep(200)
+
+      messages = Chat.list_messages(ctx.space.id, limit: 10)
+      msg = Enum.find(messages, fn m -> m.content == "Here is the diagram" end)
+      assert msg
+      assert msg.metadata["has_media"] == true
+
+      attachments = Chat.list_attachments(msg.id)
+      assert length(attachments) == 1
+      assert hd(attachments).filename == "diagram.png"
+      assert hd(attachments).content_type == "image/png"
+    end
+
+    test "posts message with multiple attachments", ctx do
+      {:ok, socket} =
+        connect(PlatformWeb.RuntimeSocket, %{
+          "runtime_id" => ctx.runtime.runtime_id,
+          "token" => ctx.raw_token
+        })
+
+      {:ok, _reply, socket} =
+        subscribe_and_join(socket, "runtime:#{ctx.runtime.runtime_id}", %{})
+
+      push(socket, "reply_with_media", %{
+        "space_id" => ctx.space.id,
+        "content" => "Two files attached",
+        "attachments" => [
+          %{
+            "filename" => "file1.txt",
+            "content_type" => "text/plain",
+            "data" => Base.encode64("hello")
+          },
+          %{
+            "filename" => "file2.txt",
+            "content_type" => "text/plain",
+            "data" => Base.encode64("world")
+          }
+        ]
+      })
+
+      Process.sleep(200)
+
+      messages = Chat.list_messages(ctx.space.id, limit: 10)
+      msg = Enum.find(messages, fn m -> m.content == "Two files attached" end)
+      assert msg
+
+      attachments = Chat.list_attachments(msg.id)
+      assert length(attachments) == 2
+    end
+
+    test "rejects oversized attachments", ctx do
+      {:ok, socket} =
+        connect(PlatformWeb.RuntimeSocket, %{
+          "runtime_id" => ctx.runtime.runtime_id,
+          "token" => ctx.raw_token
+        })
+
+      {:ok, _reply, socket} =
+        subscribe_and_join(socket, "runtime:#{ctx.runtime.runtime_id}", %{})
+
+      # Create data that exceeds 10MB when decoded
+      # 10MB * 4/3 for base64 ≈ 13.3MB of base64 text
+      large_data = String.duplicate("A", 14_000_000)
+
+      push(socket, "reply_with_media", %{
+        "space_id" => ctx.space.id,
+        "content" => "Too big",
+        "attachments" => [
+          %{
+            "filename" => "huge.bin",
+            "content_type" => "application/octet-stream",
+            "data" => large_data
+          }
+        ]
+      })
+
+      assert_push "error", %{error: error}
+      assert error =~ "size limits exceeded"
+    end
+
+    test "rejects when agent not participant in space", ctx do
+      other_space =
+        create_space(%{name: "Other", slug: "other-#{System.unique_integer([:positive])}"})
+
+      {:ok, socket} =
+        connect(PlatformWeb.RuntimeSocket, %{
+          "runtime_id" => ctx.runtime.runtime_id,
+          "token" => ctx.raw_token
+        })
+
+      {:ok, _reply, socket} =
+        subscribe_and_join(socket, "runtime:#{ctx.runtime.runtime_id}", %{})
+
+      push(socket, "reply_with_media", %{
+        "space_id" => other_space.id,
+        "content" => "Unauthorized",
+        "attachments" => []
+      })
+
+      # The agent IS auto-joined via ensure_agent_participant, so let's
+      # test with a nil space_id instead
+      push(socket, "reply_with_media", %{
+        "space_id" => nil,
+        "content" => "No space",
+        "attachments" => []
+      })
+
+      assert_push "error", %{error: "Agent is not a participant in this space"}
     end
   end
 
