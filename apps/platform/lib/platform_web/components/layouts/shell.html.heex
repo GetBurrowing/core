@@ -192,6 +192,33 @@
         >
           {agent_status_label(@agent_status)}
         </span>
+        <%!-- Human presence indicator --%>
+        <div :if={assigns[:presence_list]} class="relative">
+          <button
+            phx-click="toggle_presence_panel"
+            class="flex items-center gap-1 text-xs text-base-content/50 hover:text-base-content transition-colors"
+            title="Online participants"
+          >
+            <span class="hero-user-group size-4"></span>
+            <span>{Enum.count(@presence_list, & &1.online)}</span>
+          </button>
+
+          <div
+            :if={assigns[:show_presence_panel] && @show_presence_panel}
+            class="absolute right-0 top-full mt-1 z-50 w-56 rounded-lg border border-base-300 bg-base-100 shadow-lg p-2"
+          >
+            <div class="text-[10px] uppercase tracking-widest text-base-content/40 px-2 mb-1">
+              Participants
+            </div>
+            <%= for user <- @presence_list do %>
+              <div class="flex items-center gap-2 py-1.5 px-2 rounded">
+                <span class={"inline-block size-2 rounded-full #{if user.online, do: "bg-green-500", else: "bg-zinc-400"}"} />
+                <span class="text-sm text-base-content/70">{user.name}</span>
+              </div>
+            <% end %>
+          </div>
+        </div>
+
         <span class="text-xs text-base-content/50">{@current_user}</span>
         <.link
           href="/auth/logout"

@@ -1353,10 +1353,10 @@ defmodule PlatformWeb.ChatLive do
               >
                 <span class={[
                   "size-4",
-                  if(@agent_silenced, do: "hero-speaker-x-mark", else: "hero-speaker-wave")
+                  if(@agent_silenced, do: "hero-eye-slash", else: "hero-eye")
                 ]}>
                 </span>
-                <span>{if @agent_silenced, do: "silenced", else: "silence"}</span>
+                <span>{if @agent_silenced, do: "paused", else: "watching"}</span>
               </button>
 
               <button

@@ -7,6 +7,9 @@ defmodule PlatformWeb.ShellLive do
 
   alias Platform.Accounts
   alias Platform.Agents.{Agent, AgentServer, WorkspaceBootstrap}
+  alias Platform.Chat
+  alias Platform.Chat.Presence, as: ChatPresence
+  alias Platform.Chat.PubSub, as: ChatPubSub
   alias Platform.Chat.SpaceAgentPresence
   alias Platform.Repo
 
@@ -32,7 +35,10 @@ defmodule PlatformWeb.ShellLive do
     # Subscribe to live roster updates when connected
     if connected?(socket) && roster_space_id do
       Phoenix.PubSub.subscribe(Platform.PubSub, "space_agents:#{roster_space_id}")
+      ChatPubSub.subscribe(roster_space_id)
     end
+
+    presence_list = if roster_space_id, do: build_presence_list(roster_space_id), else: []
 
     socket =
       roster_socket
@@ -44,6 +50,8 @@ defmodule PlatformWeb.ShellLive do
       |> assign(:active_module, active_module)
       |> assign(:roster_open, false)
       |> assign(:roster_space_id, roster_space_id)
+      |> assign(:show_presence_panel, false)
+      |> assign(:presence_list, presence_list)
       |> attach_hook(:track_path, :handle_params, fn _params, url, socket ->
         uri = URI.parse(url)
         {:cont, assign(socket, :current_path, uri.path)}
@@ -51,6 +59,16 @@ defmodule PlatformWeb.ShellLive do
       |> attach_hook(:roster_updates, :handle_info, fn
         {:roster_changed, space_id}, socket ->
           {:halt, refresh_roster(socket, space_id)}
+
+        %Phoenix.Socket.Broadcast{event: "presence_diff"}, socket ->
+          list =
+            if sid = socket.assigns[:roster_space_id] do
+              build_presence_list(sid)
+            else
+              []
+            end
+
+          {:halt, assign(socket, :presence_list, list)}
 
         _msg, socket ->
           {:cont, socket}
@@ -64,6 +82,9 @@ defmodule PlatformWeb.ShellLive do
 
         "toggle_sidebar", _params, socket ->
           {:halt, assign(socket, :sidebar_collapsed, !socket.assigns.sidebar_collapsed)}
+
+        "toggle_presence_panel", _params, socket ->
+          {:halt, assign(socket, :show_presence_panel, !socket.assigns.show_presence_panel)}
 
         "toggle_roster", _params, socket ->
           {:halt, assign(socket, :roster_open, !socket.assigns.roster_open)}
@@ -181,6 +202,24 @@ defmodule PlatformWeb.ShellLive do
 
         {nil, socket}
     end
+  end
+
+  defp build_presence_list(space_id) do
+    online_ids =
+      space_id
+      |> ChatPresence.list_space()
+      |> Map.keys()
+      |> MapSet.new()
+
+    space_id
+    |> Chat.list_participants()
+    |> Enum.filter(&(&1.participant_type == "user"))
+    |> Enum.map(fn p ->
+      %{name: p.display_name || "User", online: MapSet.member?(online_ids, p.participant_id)}
+    end)
+    |> Enum.sort_by(& &1.name)
+  rescue
+    _ -> []
   end
 
   defp first_space do
