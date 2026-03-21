@@ -1169,11 +1169,11 @@ defmodule PlatformWeb.ChatLive do
       <%!-- Mobile channel browser overlay --%>
       <%= if @mobile_browser_open do %>
         <div class="fixed inset-0 z-40 flex flex-col bg-base-100 lg:hidden">
-          <header class="flex h-12 flex-shrink-0 items-center justify-between border-b border-base-300 px-4">
+          <header class="flex h-12 flex-shrink-0 items-center justify-between border-b border-base-300 px-4 safe-area-top">
             <p class="text-sm font-semibold">Conversations</p>
             <button
               phx-click="close_mobile_browser"
-              class="rounded-lg p-1 text-base-content/60 hover:bg-base-300 hover:text-base-content"
+              class="flex items-center justify-center size-10 rounded-lg text-base-content/60 hover:bg-base-300 hover:text-base-content"
               aria-label="Close"
             >
               <span class="hero-x-mark size-5"></span>
