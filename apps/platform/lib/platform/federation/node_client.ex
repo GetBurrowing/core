@@ -213,7 +213,14 @@ defmodule Platform.Federation.NodeClient do
           "canvas.a2ui_push",
           "canvas.a2ui_reset"
         ],
-        commands: [],
+        commands: [
+          "canvas.present",
+          "canvas.navigate",
+          "canvas.eval",
+          "canvas.snapshot",
+          "canvas.a2ui_push",
+          "canvas.a2ui_reset"
+        ],
         permissions: %{},
         device: %{
           id: device_id,
