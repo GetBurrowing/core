@@ -60,6 +60,15 @@
       <span class="hero-cog-6-tooth size-5 flex-shrink-0"></span>
       <span :if={!@sidebar_collapsed} class="text-sm font-medium">Agent Resources</span>
     </.link>
+    <.link
+      navigate="/control/usage"
+      class={nav_item_class(@current_path, "/control/usage")}
+      phx-click="close_drawer"
+      title="Usage"
+    >
+      <span class="hero-chart-bar-square size-5 flex-shrink-0"></span>
+      <span :if={!@sidebar_collapsed} class="text-sm font-medium">Usage</span>
+    </.link>
 
     <div class="flex-1"></div>
 
