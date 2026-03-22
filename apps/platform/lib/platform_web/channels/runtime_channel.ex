@@ -256,6 +256,21 @@ defmodule PlatformWeb.RuntimeChannel do
     end
   end
 
+  @impl true
+  def handle_in("usage_event", params, socket) when is_map(params) do
+    # Enrich with agent_id from the socket if not provided
+    attrs =
+      params
+      |> Map.put_new("agent_id", socket.assigns[:agent_id])
+
+    case Platform.Analytics.record_usage_event(attrs) do
+      {:ok, _event} -> :ok
+      {:error, _changeset} -> :ok
+    end
+
+    {:noreply, socket}
+  end
+
   def handle_in(_event, _payload, socket) do
     {:noreply, socket}
   end
