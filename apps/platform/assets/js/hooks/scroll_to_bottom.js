@@ -67,14 +67,24 @@ const ScrollToBottom = {
     if (this._observer) this._observer.disconnect();
   },
   scrollToBottom() {
-    // Always scroll to bottom on initial mount. After that, only auto-scroll
-    // if the user is near the bottom (within 150px) to avoid hijacking their
-    // scroll position when reading history.
+    // During initial load, always scroll to bottom. We keep _initialScroll true
+    // until the user explicitly scrolls up, ensuring that late-arriving stream
+    // content (messages rendered after mount) still triggers a snap to bottom.
     if (this._initialScroll) {
-      this._initialScroll = false;
       this.el.scrollTop = this.el.scrollHeight;
+      // Start listening for user scroll after first meaningful content
+      if (this.el.scrollHeight > this.el.clientHeight && !this._scrollListenerAdded) {
+        this._scrollListenerAdded = true;
+        this.el.addEventListener("scroll", () => {
+          const distFromBottom = this.el.scrollHeight - this.el.scrollTop - this.el.clientHeight;
+          if (distFromBottom > 300) {
+            this._initialScroll = false;
+          }
+        }, { passive: true });
+      }
       return;
     }
+    // After initial load, only auto-scroll if user is near the bottom
     const threshold = 150;
     const distanceFromBottom =
       this.el.scrollHeight - this.el.scrollTop - this.el.clientHeight;
