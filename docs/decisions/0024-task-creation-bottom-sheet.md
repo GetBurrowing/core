@@ -107,6 +107,7 @@ Task includes an optional deploy target. UI provides a picker with these options
 |--------|-------------|-------------|
 | **Hive Production** | Docker compose on Hive via GHCR + Watchtower | Container running new image, health check passes |
 | **GitHub PR** | Deliverable is a merged PR | PR opened, CI green, merged to target branch |
+| **Google Drive** | Deliverable is a file/folder uploaded to Drive | File uploaded to specified folder, shareable link generated |
 | **None** | No deploy (docs, design, research, planning) | Task completed, no deploy step |
 
 Deploy targets are discovered from the ops directory (`core-ops/targets/`). GitHub PR
