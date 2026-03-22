@@ -151,9 +151,9 @@ defmodule Platform.Chat.SchemaTest do
       assert Message.changeset(%Message{}, message_attrs()).valid?
     end
 
-    test "uses binary_id (UUID) primary key" do
+    test "uses UUIDv7 primary key" do
       assert Message.__schema__(:primary_key) == [:id]
-      assert Message.__schema__(:type, :id) == :binary_id
+      assert Message.__schema__(:type, :id) == Platform.Types.UUIDv7
     end
 
     test "invalid content_type is rejected" do

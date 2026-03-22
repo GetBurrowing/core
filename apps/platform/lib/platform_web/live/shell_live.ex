@@ -62,10 +62,14 @@ defmodule PlatformWeb.ShellLive do
 
         %Phoenix.Socket.Broadcast{event: "presence_diff"}, socket ->
           list =
-            if sid = socket.assigns[:roster_space_id] do
-              build_presence_list(sid)
-            else
-              []
+            try do
+              if sid = socket.assigns[:roster_space_id] do
+                build_presence_list(sid)
+              else
+                []
+              end
+            rescue
+              _ -> socket.assigns[:presence_list] || []
             end
 
           {:halt, assign(socket, :presence_list, list)}
