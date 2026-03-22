@@ -159,6 +159,16 @@
         </button>
       </div>
 
+      <%!-- Deploy target --%>
+      <div :if={@selected_task.deploy_target} class="flex items-center gap-2">
+        <span class="text-xs font-semibold uppercase tracking-wider text-base-content/50">
+          Deploy
+        </span>
+        <span class="badge badge-outline badge-sm">
+          {deploy_target_label(@selected_task.deploy_target)}
+        </span>
+      </div>
+
       <%!-- Description --%>
       <div :if={@selected_task.description} class="space-y-1">
         <h3 class="text-xs font-semibold uppercase tracking-wider text-base-content/50">
@@ -216,6 +226,240 @@
         </h3>
         <pre class="rounded bg-base-200 p-2 text-xs overflow-x-auto">{inspect(@selected_task.metadata, pretty: true)}</pre>
       </div>
+    </div>
+  </div>
+
+  <%!-- FAB: Create Task --%>
+  <button
+    phx-click="toggle_task_sheet"
+    class="btn btn-primary btn-circle fixed bottom-6 right-6 z-30 shadow-lg"
+  >
+    <span class="hero-plus size-6"></span>
+  </button>
+
+  <%!-- Bottom sheet backdrop + panel --%>
+  <div
+    :if={@show_task_sheet}
+    class="fixed inset-0 z-40 flex items-end justify-center"
+  >
+    <%!-- Backdrop --%>
+    <div
+      class="absolute inset-0 bg-black/40"
+      phx-click="close_task_sheet"
+    />
+
+    <%!-- Sheet --%>
+    <div class="relative w-full max-w-lg rounded-t-2xl bg-base-100 shadow-2xl transition-transform duration-300 pb-[env(safe-area-inset-bottom)]">
+      <%!-- Header --%>
+      <div class="flex items-center justify-between border-b border-base-300 px-4 py-3">
+        <h2 class="text-sm font-semibold">New Task</h2>
+        <button class="btn btn-sm btn-ghost btn-square" phx-click="close_task_sheet">
+          <span class="hero-x-mark size-4"></span>
+        </button>
+      </div>
+
+      <%!-- Form --%>
+      <.form
+        for={@task_form}
+        phx-change="validate_task"
+        phx-submit="create_task"
+        class="max-h-[75vh] overflow-y-auto p-4 space-y-4"
+      >
+        <%!-- Title --%>
+        <div>
+          <label class="label label-text text-xs font-medium">Title *</label>
+          <input
+            type="text"
+            name="task[title]"
+            value={@task_form[:title].value}
+            required
+            placeholder="Add unread badges"
+            class="input input-bordered input-sm w-full"
+          />
+        </div>
+
+        <%!-- Project --%>
+        <div>
+          <label class="label label-text text-xs font-medium">Project *</label>
+          <select name="task[project_id]" class="select select-bordered select-sm w-full" required>
+            <option value="">Select project</option>
+            <option
+              :for={project <- @projects}
+              value={project.id}
+              selected={@task_form[:project_id].value == project.id}
+            >
+              {project.name}
+            </option>
+          </select>
+        </div>
+
+        <%!-- What --%>
+        <div>
+          <label class="label label-text text-xs font-medium">What *</label>
+          <textarea
+            name="task[what]"
+            required
+            placeholder="What is being changed or added?"
+            style="line-height:1.5;padding:6px 12px;min-height:33px;max-height:200px;overflow-y:auto;field-sizing:content"
+            class="textarea textarea-bordered w-full text-sm"
+          >{@sheet_what}</textarea>
+        </div>
+
+        <%!-- Why --%>
+        <div>
+          <label class="label label-text text-xs font-medium">Why *</label>
+          <textarea
+            name="task[why]"
+            required
+            placeholder="Why is this change needed?"
+            style="line-height:1.5;padding:6px 12px;min-height:33px;max-height:200px;overflow-y:auto;field-sizing:content"
+            class="textarea textarea-bordered w-full text-sm"
+          >{@sheet_why}</textarea>
+        </div>
+
+        <%!-- Epic --%>
+        <div>
+          <label class="label label-text text-xs font-medium">Epic</label>
+          <select name="task[epic_id]" class="select select-bordered select-sm w-full">
+            <option value="">None</option>
+            <option
+              :for={epic <- @epics}
+              value={epic.id}
+              selected={@task_form[:epic_id].value == epic.id}
+            >
+              {epic.name}
+            </option>
+          </select>
+        </div>
+
+        <%!-- Agent --%>
+        <div>
+          <label class="label label-text text-xs font-medium">Agent</label>
+          <select name="task[assignee_id]" class="select select-bordered select-sm w-full">
+            <option value="">None</option>
+            <option
+              :for={agent <- @agents}
+              value={agent.id}
+            >
+              {agent.name}
+            </option>
+          </select>
+          <input type="hidden" name="task[assignee_type]" value="agent" />
+        </div>
+
+        <%!-- Deploy Target --%>
+        <div>
+          <label class="label label-text text-xs font-medium">Deploy Target</label>
+          <select name="task[deploy_target]" class="select select-bordered select-sm w-full">
+            <option value="">None</option>
+            <option
+              value="hive_production"
+              selected={@task_form[:deploy_target].value == "hive_production"}
+            >
+              Hive Production
+            </option>
+            <option value="github_pr" selected={@task_form[:deploy_target].value == "github_pr"}>
+              GitHub PR
+            </option>
+            <option
+              value="google_drive"
+              selected={@task_form[:deploy_target].value == "google_drive"}
+            >
+              Google Drive
+            </option>
+          </select>
+        </div>
+
+        <%!-- Validation Mode --%>
+        <div>
+          <label class="label label-text text-xs font-medium">Validation</label>
+          <div class="flex flex-wrap gap-2">
+            <button
+              type="button"
+              phx-click="toggle_validation_mode"
+              phx-value-mode="show_me"
+              class={"btn btn-sm #{if MapSet.member?(@validation_modes, "show_me"), do: "btn-primary", else: "btn-outline"}"}
+            >
+              Show me
+            </button>
+            <button
+              type="button"
+              phx-click="toggle_validation_mode"
+              phx-value-mode="handle_it"
+              class={"btn btn-sm #{if MapSet.member?(@validation_modes, "handle_it"), do: "btn-primary", else: "btn-outline"}"}
+            >
+              Handle it
+            </button>
+            <button
+              type="button"
+              phx-click="toggle_validation_mode"
+              phx-value-mode="manual"
+              class={"btn btn-sm #{if MapSet.member?(@validation_modes, "manual"), do: "btn-primary", else: "btn-outline"}"}
+            >
+              Manual
+            </button>
+          </div>
+          <textarea
+            :if={MapSet.member?(@validation_modes, "manual")}
+            name="task[manual_validation_text]"
+            placeholder="Describe the validation criteria..."
+            style="line-height:1.5;padding:6px 12px;min-height:33px;max-height:200px;overflow-y:auto;field-sizing:content"
+            class="textarea textarea-bordered mt-2 w-full text-sm"
+          >{@manual_validation_text}</textarea>
+        </div>
+
+        <%!-- Attachments --%>
+        <div>
+          <label class="label label-text text-xs font-medium">Attachments</label>
+          <.live_file_input
+            upload={@uploads.task_attachments}
+            class="file-input file-input-bordered file-input-sm w-full"
+          />
+          <div
+            :for={entry <- @uploads.task_attachments.entries}
+            class="mt-2 flex items-center gap-2 text-xs"
+          >
+            <span class="flex-1 truncate">{entry.client_name}</span>
+            <span class="text-base-content/40">
+              {Float.round(entry.client_size / 1_000, 1)} KB
+            </span>
+            <button
+              type="button"
+              phx-click="cancel_task_upload"
+              phx-value-ref={entry.ref}
+              class="btn btn-ghost btn-xs btn-square"
+            >
+              <span class="hero-x-mark size-3"></span>
+            </button>
+          </div>
+          <div
+            :for={err <- upload_errors(@uploads.task_attachments)}
+            class="mt-1 text-xs text-error"
+          >
+            {err}
+          </div>
+        </div>
+
+        <%!-- Submit buttons --%>
+        <div class="flex gap-2 pt-2">
+          <button
+            type="submit"
+            name="task[action]"
+            value="create"
+            class="btn btn-primary btn-sm flex-1"
+          >
+            Create Task
+          </button>
+          <button
+            type="submit"
+            name="task[action]"
+            value="create_and_plan"
+            class="btn btn-secondary btn-sm flex-1"
+          >
+            Create & Request Plan
+          </button>
+        </div>
+      </.form>
     </div>
   </div>
 </div>

@@ -3,6 +3,8 @@ defmodule PlatformWeb.TasksLive do
 
   require Logger
 
+  alias Platform.Chat
+  alias Platform.Chat.AttachmentStorage
   alias Platform.Tasks
   alias Platform.Tasks.Task
 
@@ -21,12 +23,16 @@ defmodule PlatformWeb.TasksLive do
     "done" => ~w(done)
   }
 
+  @max_upload_entries 5
+  @max_upload_size 15_000_000
+
   @impl true
   def mount(_params, _session, socket) do
     if connected?(socket), do: Tasks.subscribe_board()
 
     projects = Tasks.list_projects()
     all_tasks = Tasks.list_all_tasks()
+    agents = Chat.list_agents_for_picker()
 
     {:ok,
      socket
@@ -37,7 +43,22 @@ defmodule PlatformWeb.TasksLive do
      |> assign(:columns, group_by_column(all_tasks))
      |> assign(:kanban_columns, @kanban_columns)
      |> assign(:selected_task, nil)
-     |> assign(:show_detail, false)}
+     |> assign(:show_detail, false)
+     # Bottom sheet state
+     |> assign(:show_task_sheet, false)
+     |> assign(:task_form, to_form(Task.changeset(%Task{}, %{}), as: "task"))
+     |> assign(:sheet_what, "")
+     |> assign(:sheet_why, "")
+     |> assign(:epics, Tasks.list_epics_for_project(nil))
+     |> assign(:agents, agents)
+     |> assign(:validation_modes, MapSet.new())
+     |> assign(:manual_validation_text, "")
+     |> allow_upload(:task_attachments,
+       accept: :any,
+       auto_upload: true,
+       max_entries: @max_upload_entries,
+       max_file_size: @max_upload_size
+     )}
   end
 
   @impl true
@@ -86,7 +107,8 @@ defmodule PlatformWeb.TasksLive do
      socket
      |> assign(:selected_project_id, nil)
      |> assign(:all_tasks, tasks)
-     |> assign(:columns, group_by_column(tasks))}
+     |> assign(:columns, group_by_column(tasks))
+     |> assign(:epics, Tasks.list_epics_for_project(nil))}
   end
 
   def handle_event("filter_project", %{"project_id" => project_id}, socket) do
@@ -96,7 +118,8 @@ defmodule PlatformWeb.TasksLive do
      socket
      |> assign(:selected_project_id, project_id)
      |> assign(:all_tasks, tasks)
-     |> assign(:columns, group_by_column(tasks))}
+     |> assign(:columns, group_by_column(tasks))
+     |> assign(:epics, Tasks.list_epics_for_project(project_id))}
   end
 
   def handle_event("select_task", %{"id" => task_id}, socket) do
@@ -136,6 +159,71 @@ defmodule PlatformWeb.TasksLive do
     {:noreply, socket}
   end
 
+  # ── Bottom sheet events ─────────────────────────────────────────────────
+
+  def handle_event("toggle_task_sheet", _params, socket) do
+    showing = !socket.assigns.show_task_sheet
+
+    socket =
+      if showing do
+        socket
+        |> assign(:show_task_sheet, true)
+        |> assign(:task_form, to_form(Task.changeset(%Task{}, %{}), as: "task"))
+        |> assign(:sheet_what, "")
+        |> assign(:sheet_why, "")
+        |> assign(:validation_modes, MapSet.new())
+        |> assign(:manual_validation_text, "")
+      else
+        assign(socket, :show_task_sheet, false)
+      end
+
+    {:noreply, socket}
+  end
+
+  def handle_event("close_task_sheet", _params, socket) do
+    {:noreply, assign(socket, :show_task_sheet, false)}
+  end
+
+  def handle_event("validate_task", %{"task" => params}, socket) do
+    changeset =
+      %Task{}
+      |> Task.changeset(params)
+      |> Map.put(:action, :validate)
+
+    {:noreply,
+     socket
+     |> assign(:task_form, to_form(changeset, as: "task"))
+     |> assign(:sheet_what, Map.get(params, "what", ""))
+     |> assign(:sheet_why, Map.get(params, "why", ""))
+     |> assign(:manual_validation_text, Map.get(params, "manual_validation_text", ""))}
+  end
+
+  def handle_event("toggle_validation_mode", %{"mode" => mode}, socket) do
+    modes = socket.assigns.validation_modes
+
+    updated =
+      if MapSet.member?(modes, mode),
+        do: MapSet.delete(modes, mode),
+        else: MapSet.put(modes, mode)
+
+    {:noreply, assign(socket, :validation_modes, updated)}
+  end
+
+  def handle_event("create_task", %{"task" => params}, socket) do
+    status =
+      case Map.get(params, "action") do
+        "create_and_plan" -> "planning"
+        _ -> "backlog"
+      end
+
+    do_create_task(params, socket, status)
+  end
+
+  # Upload cancel
+  def handle_event("cancel_task_upload", %{"ref" => ref}, socket) do
+    {:noreply, cancel_upload(socket, :task_attachments, ref)}
+  end
+
   # ── PubSub handlers ────────────────────────────────────────────────────
 
   @impl true
@@ -148,6 +236,84 @@ defmodule PlatformWeb.TasksLive do
   end
 
   def handle_info(_message, socket), do: {:noreply, socket}
+
+  # ── Private — Task creation ─────────────────────────────────────────────
+
+  defp do_create_task(params, socket, status) do
+    what = Map.get(params, "what", "")
+    why = Map.get(params, "why", "")
+
+    description =
+      case {String.trim(what), String.trim(why)} do
+        {"", ""} -> nil
+        {w, ""} -> "## What\n#{w}"
+        {"", w} -> "## Why\n#{w}"
+        {w, y} -> "## What\n#{w}\n\n## Why\n#{y}"
+      end
+
+    # Build validation metadata
+    modes = socket.assigns.validation_modes
+    manual_text = socket.assigns.manual_validation_text
+
+    validation_meta =
+      %{}
+      |> then(fn m ->
+        if MapSet.size(modes) > 0,
+          do: Map.put(m, "validation_modes", MapSet.to_list(modes)),
+          else: m
+      end)
+      |> then(fn m ->
+        if MapSet.member?(modes, "manual") && String.trim(manual_text) != "",
+          do: Map.put(m, "manual_validation", String.trim(manual_text)),
+          else: m
+      end)
+
+    existing_meta = Map.get(params, "metadata", %{})
+    metadata = Map.merge(existing_meta, validation_meta)
+
+    # Merge deploy_target — convert "" to nil
+    deploy_target =
+      case Map.get(params, "deploy_target", "") do
+        "" -> nil
+        v -> v
+      end
+
+    task_attrs =
+      params
+      |> Map.put("description", description)
+      |> Map.put("status", status)
+      |> Map.put("metadata", metadata)
+      |> Map.put("deploy_target", deploy_target)
+
+    case Tasks.create_task(task_attrs) do
+      {:ok, task} ->
+        # Persist attachments
+        persist_task_attachments(socket, task)
+
+        Tasks.broadcast_board({:task_created, task})
+
+        {:noreply,
+         socket
+         |> assign(:show_task_sheet, false)
+         |> put_flash(:info, "Task created.")
+         |> refresh_board()}
+
+      {:error, changeset} ->
+        {:noreply,
+         socket
+         |> assign(:task_form, to_form(changeset, as: "task"))
+         |> put_flash(:error, "Could not create task. Check the form for errors.")}
+    end
+  end
+
+  defp persist_task_attachments(socket, _task) do
+    consume_uploaded_entries(socket, :task_attachments, fn %{path: path}, entry ->
+      case AttachmentStorage.persist_upload(path, entry.client_name, entry.client_type) do
+        {:ok, _attrs} -> {:ok, :persisted}
+        {:error, _reason} -> {:ok, :failed}
+      end
+    end)
+  end
 
   # ── Private — Kanban helpers ───────────────────────────────────────────
 
@@ -174,6 +340,11 @@ defmodule PlatformWeb.TasksLive do
   end
 
   # ── View helpers ───────────────────────────────────────────────────────
+
+  defp deploy_target_label("hive_production"), do: "Hive Production"
+  defp deploy_target_label("github_pr"), do: "GitHub PR"
+  defp deploy_target_label("google_drive"), do: "Google Drive"
+  defp deploy_target_label(other), do: other
 
   defp priority_badge_class("critical"), do: "badge badge-error badge-sm"
   defp priority_badge_class("high"), do: "badge badge-error badge-outline badge-sm"

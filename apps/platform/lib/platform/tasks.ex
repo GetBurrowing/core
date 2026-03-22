@@ -113,6 +113,15 @@ defmodule Platform.Tasks do
     |> Repo.all()
   end
 
+  @doc "List epics for the dropdown — scoped to project if given, otherwise all."
+  def list_epics_for_project(nil) do
+    Epic
+    |> order_by([e], asc: e.inserted_at)
+    |> Repo.all()
+  end
+
+  def list_epics_for_project(project_id), do: list_epics(project_id)
+
   # ── Tasks (persistent) ──────────────────────────────────────────────────
 
   def create_task(attrs) do
