@@ -1,7 +1,14 @@
-// ComposeInput hook — Enter to send, Shift+Enter for newline, @mention autocomplete
+// ComposeInput hook — auto-expanding textarea, Enter for newline, @mention autocomplete
 const ComposeInput = {
   mounted() {
     this._lastMentionQuery = null;
+
+    // Auto-resize textarea as content grows
+    this._autoResize = () => {
+      this.el.style.height = "auto";
+      this.el.style.height = Math.min(this.el.scrollHeight, 200) + "px";
+    };
+    this._autoResize();
 
     // Reset viewport after iOS keyboard dismisses
     this.el.addEventListener("blur", () => {
@@ -11,14 +18,16 @@ const ComposeInput = {
     });
 
     this.el.addEventListener("keydown", (e) => {
-      if (e.key === "Enter" && !e.shiftKey) {
+      // Enter inserts newline (default textarea behavior) — no preventDefault.
+      // Shift+Enter or Cmd/Ctrl+Enter sends the message.
+      if (e.key === "Enter" && (e.shiftKey || e.metaKey || e.ctrlKey)) {
         e.preventDefault();
-        // Clear mention suggestions first
         this.pushEvent("clear_mention_suggestions", {});
         this._lastMentionQuery = null;
 
         const form = this.el.closest("form");
         if (form) form.requestSubmit();
+        return;
       }
 
       if (e.key === "Escape") {
@@ -27,7 +36,6 @@ const ComposeInput = {
       }
 
       if (e.key === "Tab" && this._lastMentionQuery !== null) {
-        // Tab-complete: select the first suggestion if available
         const dropdown = this.el.closest("form")?.querySelector("[data-mention-suggestion]");
         if (dropdown) {
           e.preventDefault();
@@ -37,7 +45,13 @@ const ComposeInput = {
     });
 
     this.el.addEventListener("input", () => {
+      this._autoResize();
       this._detectMention();
+    });
+
+    // Reset height after form submission (LiveView clears the value)
+    this.handleEvent && this.handleEvent("compose_reset", () => {
+      this.el.style.height = "auto";
     });
 
     // Handle insert-mention events dispatched by suggestion buttons
@@ -65,6 +79,11 @@ const ComposeInput = {
       this._lastMentionQuery = null;
       this.el.focus();
     });
+  },
+
+  updated() {
+    // Re-apply auto-resize when LiveView patches the textarea (e.g., after send clears it)
+    this._autoResize();
   },
 
   _detectMention() {

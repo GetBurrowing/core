@@ -1932,16 +1932,15 @@ defmodule PlatformWeb.ChatLive do
                   <.live_file_input upload={@uploads.attachments} class="hidden" />
                 </label>
 
-                <input
-                  type="text"
+                <textarea
                   name="compose[text]"
                   id={@compose_form[:text].id}
-                  value={Phoenix.HTML.Form.normalize_value("text", @compose_form[:text].value)}
                   placeholder={"Message ##{(@active_space && @active_space.name) || ""}"}
                   autocomplete="off"
-                  class="input input-bordered min-w-0 flex-1 rounded-xl text-base md:text-sm"
+                  rows="1"
+                  class="textarea textarea-bordered min-w-0 flex-1 rounded-xl text-base md:text-sm resize-none leading-6 py-2 overflow-hidden"
                   phx-hook="ComposeInput"
-                />
+                >{Phoenix.HTML.Form.normalize_value("text", @compose_form[:text].value)}</textarea>
 
                 <button
                   type="submit"
