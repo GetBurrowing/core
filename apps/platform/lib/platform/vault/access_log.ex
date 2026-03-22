@@ -10,7 +10,7 @@ defmodule Platform.Vault.AccessLog do
 
   use Ecto.Schema
 
-  @primary_key {:id, :binary_id, autogenerate: true}
+  @primary_key {:id, Platform.Types.UUIDv7, autogenerate: true}
   @foreign_key_type :binary_id
 
   schema "vault_access_log" do

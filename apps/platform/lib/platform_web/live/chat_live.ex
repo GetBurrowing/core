@@ -91,7 +91,7 @@ defmodule PlatformWeb.ChatLive do
       |> assign(:streaming_replies, %{})
       |> assign(:mention_suggestions, [])
       |> assign(:push_permission, "unknown")
-      |> assign(:unread_counts, %{})
+      |> assign(:unread_counts, if(user_id, do: Chat.unread_counts_for_user(user_id), else: %{}))
       |> assign_compose("")
       |> assign_thread_compose("")
       |> assign_search_form("")
@@ -155,6 +155,11 @@ defmodule PlatformWeb.ChatLive do
       end
 
       messages = load_channel_messages(space.id)
+      latest_message = List.last(messages)
+
+      if participant && latest_message do
+        Chat.mark_space_read(participant.id, latest_message.id)
+      end
 
       participants = Chat.list_participants(space.id)
       participants_map = Map.new(participants, fn p -> {p.id, p.display_name || "User"} end)
@@ -924,6 +929,11 @@ defmodule PlatformWeb.ChatLive do
 
       attachments = Chat.list_attachments(msg.id)
 
+      # Mark as read for active space top-level messages
+      if is_nil(msg.thread_id) && socket.assigns.current_participant do
+        Chat.mark_space_read(socket.assigns.current_participant.id, msg.id)
+      end
+
       if is_nil(msg.thread_id) do
         {:noreply,
          socket
@@ -1167,9 +1177,9 @@ defmodule PlatformWeb.ChatLive do
           >
             <span class="text-base-content/40">#</span>
             <span class="truncate flex-1">{space.name}</span>
-            <%= if dm_unread_label(Map.get(@unread_counts, space.id, 0)) do %>
+            <%= if unread_label(Map.get(@unread_counts, space.id, 0)) do %>
               <span class="ml-1 flex-shrink-0 min-w-[1.125rem] h-[1.125rem] rounded-full bg-primary text-primary-content text-[0.6rem] font-bold flex items-center justify-center px-1 leading-none">
-                {dm_unread_label(Map.get(@unread_counts, space.id, 0))}
+                {unread_label(Map.get(@unread_counts, space.id, 0))}
               </span>
             <% end %>
           </.link>
@@ -1205,9 +1215,9 @@ defmodule PlatformWeb.ChatLive do
             ]}
           >
             <span class="truncate flex-1">{sidebar_display_name(space, @user_id)}</span>
-            <%= if dm_unread_label(Map.get(@unread_counts, space.id, 0)) do %>
+            <%= if unread_label(Map.get(@unread_counts, space.id, 0)) do %>
               <span class="ml-1 flex-shrink-0 min-w-[1.125rem] h-[1.125rem] rounded-full bg-primary text-primary-content text-[0.6rem] font-bold flex items-center justify-center px-1 leading-none">
-                {dm_unread_label(Map.get(@unread_counts, space.id, 0))}
+                {unread_label(Map.get(@unread_counts, space.id, 0))}
               </span>
             <% end %>
           </.link>
@@ -1249,9 +1259,9 @@ defmodule PlatformWeb.ChatLive do
             >
               <span class="text-base-content/40 text-lg">#</span>
               <span class="truncate flex-1">{space.name}</span>
-              <%= if dm_unread_label(Map.get(@unread_counts, space.id, 0)) do %>
+              <%= if unread_label(Map.get(@unread_counts, space.id, 0)) do %>
                 <span class="ml-1 flex-shrink-0 min-w-[1.125rem] h-[1.125rem] rounded-full bg-primary text-primary-content text-[0.6rem] font-bold flex items-center justify-center px-1 leading-none">
-                  {dm_unread_label(Map.get(@unread_counts, space.id, 0))}
+                  {unread_label(Map.get(@unread_counts, space.id, 0))}
                 </span>
               <% end %>
             </.link>
@@ -1271,9 +1281,9 @@ defmodule PlatformWeb.ChatLive do
               ]}
             >
               <span class="truncate flex-1">{sidebar_display_name(space, @user_id)}</span>
-              <%= if dm_unread_label(Map.get(@unread_counts, space.id, 0)) do %>
+              <%= if unread_label(Map.get(@unread_counts, space.id, 0)) do %>
                 <span class="ml-1 flex-shrink-0 min-w-[1.125rem] h-[1.125rem] rounded-full bg-primary text-primary-content text-[0.6rem] font-bold flex items-center justify-center px-1 leading-none">
-                  {dm_unread_label(Map.get(@unread_counts, space.id, 0))}
+                  {unread_label(Map.get(@unread_counts, space.id, 0))}
                 </span>
               <% end %>
             </.link>
@@ -2962,9 +2972,9 @@ defmodule PlatformWeb.ChatLive do
     |> Enum.join(" & ")
   end
 
-  defp dm_unread_label(count) when count >= 9, do: "9+"
-  defp dm_unread_label(count) when count > 0, do: Integer.to_string(count)
-  defp dm_unread_label(_), do: nil
+  defp unread_label(count) when count >= 9, do: "9+"
+  defp unread_label(count) when count > 0, do: Integer.to_string(count)
+  defp unread_label(_), do: nil
 
   defp picker_selected_name(%{type: "user", id: id}, users, _agents) do
     case Enum.find(users, fn u -> u.id == id end) do

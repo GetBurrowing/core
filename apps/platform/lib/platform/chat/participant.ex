@@ -2,12 +2,12 @@ defmodule Platform.Chat.Participant do
   use Ecto.Schema
   import Ecto.Changeset
 
-  @primary_key {:id, :binary_id, autogenerate: true}
+  @primary_key {:id, Platform.Types.UUIDv7, autogenerate: true}
   @foreign_key_type :binary_id
 
   @participant_types ~w(user agent)
   @roles ~w(member admin observer)
-  @attention_modes ~w(mention heartbeat active)
+  @attention_modes ~w(mention heartbeat active all)
 
   schema "chat_participants" do
     field(:space_id, :binary_id)
@@ -16,7 +16,7 @@ defmodule Platform.Chat.Participant do
     field(:role, :string, default: "member")
     field(:display_name, :string)
     field(:avatar_url, :string)
-    field(:last_read_message_id, :integer)
+    field(:last_read_message_id, :binary_id)
     field(:attention_mode, :string, default: "mention")
     field(:attention_config, :map, default: %{})
     field(:joined_at, :utc_datetime_usec)

@@ -1712,6 +1712,57 @@ defmodule Platform.Chat do
     |> Repo.all()
   end
 
+  # ── Unread counts ──────────────────────────────────────────────────────────
+
+  @doc "Persist the last-read cursor for a participant."
+  @spec mark_space_read(binary(), binary()) :: :ok
+  def mark_space_read(participant_id, message_id) do
+    from(p in Participant, where: p.id == ^participant_id)
+    |> Repo.update_all(set: [last_read_message_id: message_id])
+
+    :ok
+  end
+
+  @doc """
+  Return `%{space_id => unread_count}` for every space the user participates in.
+
+  Uses UUIDv7 ordering (`id > last_read_message_id`) to count newer messages.
+  """
+  @spec unread_counts_for_user(binary()) :: %{binary() => non_neg_integer()}
+  def unread_counts_for_user(user_id) do
+    from(p in Participant,
+      where:
+        p.participant_id == ^user_id and is_nil(p.left_at) and
+          p.participant_type == "user",
+      select: {p.space_id, p.last_read_message_id}
+    )
+    |> Repo.all()
+    |> Enum.map(fn {space_id, last_read_id} ->
+      {space_id, count_unread(space_id, last_read_id)}
+    end)
+    |> Enum.filter(fn {_, count} -> count > 0 end)
+    |> Map.new()
+  end
+
+  defp count_unread(space_id, nil) do
+    from(m in Message,
+      where: m.space_id == ^space_id and is_nil(m.thread_id) and is_nil(m.deleted_at),
+      select: count(m.id)
+    )
+    |> Repo.one()
+    |> min(10)
+  end
+
+  defp count_unread(space_id, last_read_id) do
+    from(m in Message,
+      where:
+        m.space_id == ^space_id and m.id > ^last_read_id and is_nil(m.thread_id) and
+          is_nil(m.deleted_at),
+      select: count(m.id)
+    )
+    |> Repo.one()
+  end
+
   defp publish_message_posted(msg, opts \\ []) do
     :telemetry.execute(
       [:platform, :chat, :message_posted],

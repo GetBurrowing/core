@@ -2,7 +2,7 @@ defmodule Platform.Tasks.Epic do
   use Ecto.Schema
   import Ecto.Changeset
 
-  @primary_key {:id, :binary_id, autogenerate: true}
+  @primary_key {:id, Platform.Types.UUIDv7, autogenerate: true}
   @foreign_key_type :binary_id
 
   @statuses ~w(open in_progress closed)

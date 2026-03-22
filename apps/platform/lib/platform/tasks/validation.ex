@@ -2,7 +2,7 @@ defmodule Platform.Tasks.Validation do
   use Ecto.Schema
   import Ecto.Changeset
 
-  @primary_key {:id, :binary_id, autogenerate: true}
+  @primary_key {:id, Platform.Types.UUIDv7, autogenerate: true}
   @foreign_key_type :binary_id
 
   @kinds ~w(ci_check lint_pass type_check test_pass code_review manual_approval)
