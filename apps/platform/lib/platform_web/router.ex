@@ -47,12 +47,13 @@ defmodule PlatformWeb.Router do
       live("/tasks", TasksLive, :index)
       live("/tasks/:task_id", TasksLive, :show)
       live("/control", ControlCenterLive, :index)
+      live("/control/usage", UsageLive, :index)
       live("/control/:agent_slug", ControlCenterLive, :show)
     end
   end
 
-  # Other scopes may use custom stacks.
-  # scope "/api", PlatformWeb do
-  #   pipe_through :api
-  # end
+  scope "/api/internal", PlatformWeb do
+    pipe_through(:api)
+    post("/usage-events", UsageEventController, :create)
+  end
 end

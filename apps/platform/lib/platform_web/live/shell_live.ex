@@ -249,6 +249,9 @@ defmodule PlatformWeb.ShellLive do
       PlatformWeb.TasksLive ->
         "Tasks"
 
+      PlatformWeb.UsageLive ->
+        "Usage"
+
       _ ->
         view
         |> Module.split()
