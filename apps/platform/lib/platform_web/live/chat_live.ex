@@ -1949,7 +1949,8 @@ defmodule PlatformWeb.ChatLive do
                   placeholder={"Message ##{(@active_space && @active_space.name) || ""}"}
                   autocomplete="off"
                   rows="1"
-                  class="textarea textarea-bordered min-w-0 flex-1 rounded-xl text-base md:text-sm resize-none leading-6 py-2 overflow-hidden"
+                  class="min-w-0 flex-1 rounded-xl text-base md:text-sm resize-none bg-base-100 border border-base-300 focus:border-primary focus:outline-none transition-colors"
+                  style="line-height:1.5;padding:6px 12px;min-height:33px;max-height:200px;overflow-y:auto;field-sizing:content"
                   phx-hook="ComposeInput"
                 >{Phoenix.HTML.Form.normalize_value("text", @compose_form[:text].value)}</textarea>
 

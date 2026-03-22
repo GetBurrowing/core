@@ -3,12 +3,18 @@ const ComposeInput = {
   mounted() {
     this._lastMentionQuery = null;
 
-    // Auto-resize textarea as content grows
+    // Auto-resize: collapse to 0 then expand to exact content height (capped at 200px)
     this._autoResize = () => {
-      this.el.style.height = "auto";
-      this.el.style.height = Math.min(this.el.scrollHeight, 200) + "px";
+      this.el.style.height = "0";
+      const contentHeight = this.el.scrollHeight;
+      this.el.style.height = Math.min(contentHeight, 200) + "px";
+      // Toggle internal scroll when content exceeds max
+      this.el.style.overflowY = contentHeight > 200 ? "auto" : "hidden";
     };
-    this._autoResize();
+    // Only resize if field-sizing:content isn't supported
+    if (!CSS.supports("field-sizing", "content")) {
+      this._autoResize();
+    }
 
     // Reset viewport after iOS keyboard dismisses
     this.el.addEventListener("blur", () => {
@@ -45,13 +51,18 @@ const ComposeInput = {
     });
 
     this.el.addEventListener("input", () => {
-      this._autoResize();
+      if (!CSS.supports("field-sizing", "content")) {
+        this._autoResize();
+      }
       this._detectMention();
     });
 
     // Reset height after form submission (LiveView clears the value)
     this.handleEvent && this.handleEvent("compose_reset", () => {
-      this.el.style.height = "auto";
+      if (!CSS.supports("field-sizing", "content")) {
+        this.el.style.height = "33px";
+        this.el.style.overflowY = "hidden";
+      }
     });
 
     // Handle insert-mention events dispatched by suggestion buttons
@@ -83,7 +94,9 @@ const ComposeInput = {
 
   updated() {
     // Re-apply auto-resize when LiveView patches the textarea (e.g., after send clears it)
-    this._autoResize();
+    if (!CSS.supports("field-sizing", "content")) {
+      this._autoResize();
+    }
   },
 
   _detectMention() {
