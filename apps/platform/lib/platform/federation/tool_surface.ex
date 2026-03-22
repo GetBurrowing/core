@@ -276,7 +276,7 @@ defmodule Platform.Federation.ToolSurface do
     projects =
       Tasks.list_projects()
       |> Enum.map(fn p ->
-        %{id: p.id, name: p.name, description: p.description}
+        %{id: p.id, name: p.name, slug: p.slug, repo_url: p.repo_url}
       end)
 
     {:ok, projects}
