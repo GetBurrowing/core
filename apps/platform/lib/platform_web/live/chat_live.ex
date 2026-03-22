@@ -1684,6 +1684,17 @@ defmodule PlatformWeb.ChatLive do
                     </button>
 
                     <button
+                      :if={present?(msg.content)}
+                      phx-hook="CopyToClipboard"
+                      id={"copy-msg-#{msg.id}"}
+                      data-clipboard-text={msg.content}
+                      title="Copy message"
+                      class="rounded px-1.5 py-0.5 text-xs text-base-content/50 hover:text-base-content hover:bg-base-300 transition-colors"
+                    >
+                      <span class="hero-clipboard-document-list size-4"></span>
+                    </button>
+
+                    <button
                       phx-click="open_thread"
                       phx-value-message-id={msg.id}
                       title="Reply in thread"
