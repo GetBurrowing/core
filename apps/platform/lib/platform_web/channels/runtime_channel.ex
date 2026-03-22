@@ -258,14 +258,20 @@ defmodule PlatformWeb.RuntimeChannel do
 
   @impl true
   def handle_in("usage_event", params, socket) when is_map(params) do
+    require Logger
+    Logger.info("[RuntimeChannel] usage_event received: #{inspect(Map.keys(params))}")
+
     # Enrich with agent_id from the socket if not provided
     attrs =
       params
       |> Map.put_new("agent_id", socket.assigns[:agent_id])
 
     case Platform.Analytics.record_usage_event(attrs) do
-      {:ok, _event} -> :ok
-      {:error, _changeset} -> :ok
+      {:ok, event} ->
+        Logger.info("[RuntimeChannel] usage_event recorded: #{event.id}")
+
+      {:error, changeset} ->
+        Logger.warning("[RuntimeChannel] usage_event failed: #{inspect(changeset.errors)}")
     end
 
     {:noreply, socket}
