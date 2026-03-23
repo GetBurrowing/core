@@ -143,6 +143,7 @@ defmodule Platform.Chat.AttentionRouter do
   defp default_for_kind("channel"), do: "on_mention"
   defp default_for_kind("dm"), do: "directed"
   defp default_for_kind("group"), do: "collaborative"
+  defp default_for_kind("execution"), do: "directed"
   defp default_for_kind(_), do: "on_mention"
 
   @doc "Check if a message content matches any silence patterns."
@@ -259,6 +260,11 @@ defmodule Platform.Chat.AttentionRouter do
 
     unless space do
       Logger.warning("[AttentionRouter] space not found: #{space_id}")
+      return_empty()
+    end
+
+    # Execution spaces: log_only messages skip attention routing entirely
+    if space && space.kind == "execution" && message.log_only do
       return_empty()
     end
 

@@ -5,7 +5,7 @@ defmodule Platform.Chat.Space do
   @primary_key {:id, Platform.Types.UUIDv7, autogenerate: true}
   @foreign_key_type :binary_id
 
-  @kinds ~w(channel dm group)
+  @kinds ~w(channel dm group execution)
   @agent_attention_modes ~w(on_mention collaborative directed)
 
   schema "chat_spaces" do
@@ -50,13 +50,17 @@ defmodule Platform.Chat.Space do
   end
 
   defp validate_channel_fields(changeset) do
-    kind = get_field(changeset, :kind)
+    case get_field(changeset, :kind) do
+      "channel" ->
+        changeset
+        |> validate_required([:name, :slug])
 
-    if kind == "channel" do
-      changeset
-      |> validate_required([:name, :slug])
-    else
-      changeset
+      "execution" ->
+        # Execution spaces auto-generate name; no slug required
+        changeset
+
+      _ ->
+        changeset
     end
   end
 

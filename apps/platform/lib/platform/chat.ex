@@ -109,12 +109,21 @@ defmodule Platform.Chat do
   @spec list_spaces(keyword()) :: [Space.t()]
   def list_spaces(opts \\ []) do
     {archived, opts} = Keyword.pop(opts, :archived, false)
+    {include_execution, opts} = Keyword.pop(opts, :include_execution, false)
 
     base =
       if archived do
         from(s in Space, where: not is_nil(s.archived_at), order_by: [asc: s.inserted_at])
       else
         from(s in Space, where: is_nil(s.archived_at), order_by: [asc: s.inserted_at])
+      end
+
+    # Exclude execution spaces by default
+    base =
+      if include_execution do
+        base
+      else
+        where(base, [s], s.kind != "execution")
       end
 
     opts

@@ -21,6 +21,7 @@ defmodule Platform.Application do
         {Phoenix.PubSub, name: Platform.PubSub},
         {Registry, keys: :unique, name: Platform.Agents.Registry},
         {Registry, keys: :unique, name: Platform.Execution.Registry},
+        {Registry, keys: :unique, name: Platform.Orchestration.Registry},
         Platform.Agents.RuntimeSupervisor,
         # ContextBroker — must start after the agent registry/runtime tree
         Platform.Agents.ContextBroker,
@@ -30,6 +31,8 @@ defmodule Platform.Application do
         Platform.Artifacts.Store,
         # Execution plane — run supervisor (registry started above)
         Platform.Execution.RunSupervisor,
+        # Orchestration — task router supervisor (registry started above)
+        Platform.Orchestration.TaskRouterSupervisor,
         # Node context — ETS-backed space tracking for node canvas commands
         Platform.Federation.NodeContext,
         # Federation runtime presence tracker — before Endpoint so channels can use it

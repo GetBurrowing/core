@@ -18,6 +18,7 @@ defmodule Platform.Chat.Message do
     field(:metadata, :map, default: %{})
     field(:edited_at, :utc_datetime_usec)
     field(:deleted_at, :utc_datetime_usec)
+    field(:log_only, :boolean, default: false)
     field(:search_rank, :float, virtual: true)
     field(:search_headline, :string, virtual: true)
 
@@ -36,7 +37,8 @@ defmodule Platform.Chat.Message do
       :structured_content,
       :metadata,
       :edited_at,
-      :deleted_at
+      :deleted_at,
+      :log_only
     ])
     |> validate_required([:space_id, :participant_id, :content_type])
     |> validate_inclusion(:content_type, @content_types)
