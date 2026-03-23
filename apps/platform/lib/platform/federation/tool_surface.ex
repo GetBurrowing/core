@@ -6,7 +6,8 @@ defmodule Platform.Federation.ToolSurface do
 
   alias Platform.Chat
   alias Platform.Tasks
-  alias Platform.Tasks.{Task, Project, Epic}
+  alias Platform.Tasks.PlanEngine
+  alias Platform.Repo
 
   @doc """
   Returns the tool definitions for inclusion in attention signals.
@@ -15,7 +16,7 @@ defmodule Platform.Federation.ToolSurface do
   name, description, parameters, returns, limitations, when_to_use.
   """
   def tool_definitions do
-    canvas_tools() ++ task_tools()
+    canvas_tools() ++ task_tools() ++ plan_tools()
   end
 
   defp canvas_tools do
@@ -192,6 +193,109 @@ defmodule Platform.Federation.ToolSurface do
         returns: "The updated task object",
         limitations: "Status transitions are validated; not all transitions are allowed",
         when_to_use: "When you need to update a task's details or move it between columns"
+      }
+    ]
+  end
+
+  defp plan_tools do
+    [
+      %{
+        name: "plan_create",
+        description:
+          "Create a new execution plan for a task with stages and validations, all in a single transaction.",
+        parameters: %{
+          task_id: %{type: "string", required: true, description: "The task to create a plan for"},
+          stages: %{
+            type: "array",
+            required: true,
+            description:
+              "Array of stage objects: {name, description, position, validations: [{kind}]}. Valid validation kinds: ci_check, lint_pass, type_check, test_pass, code_review, manual_approval"
+          }
+        },
+        returns: "The created plan with stages and validations preloaded",
+        limitations: "Requires a valid task_id. Stages must have unique positions.",
+        when_to_use: "When you need to define a multi-stage execution plan for a task"
+      },
+      %{
+        name: "plan_get",
+        description: "Get the current approved plan for a task with full stage/validation tree.",
+        parameters: %{
+          task_id: %{type: "string", required: true, description: "The task ID"}
+        },
+        returns: "Plan object with stages and validations preloaded",
+        limitations: "Returns error if no approved plan exists for the task",
+        when_to_use: "When you need to check the current execution plan for a task"
+      },
+      %{
+        name: "plan_submit",
+        description: "Submit a draft plan for review (draft → pending_review).",
+        parameters: %{
+          plan_id: %{type: "string", required: true, description: "The plan ID to submit"}
+        },
+        returns: "The updated plan object",
+        limitations: "Plan must be in draft status",
+        when_to_use: "When a plan is ready to be reviewed and approved"
+      },
+      %{
+        name: "stage_start",
+        description: "Start a pending stage (pending → running).",
+        parameters: %{
+          stage_id: %{type: "string", required: true, description: "The stage ID to start"}
+        },
+        returns: "The updated stage object",
+        limitations: "Stage must be in pending status",
+        when_to_use: "When you are ready to begin executing a stage"
+      },
+      %{
+        name: "stage_list",
+        description:
+          "List all stages for a plan, ordered by position, with validations preloaded.",
+        parameters: %{
+          plan_id: %{type: "string", required: true, description: "The plan ID"}
+        },
+        returns: "Array of stage objects with validations",
+        limitations: "None",
+        when_to_use: "When you need to see all stages and their validation status for a plan"
+      },
+      %{
+        name: "validation_evaluate",
+        description:
+          "Record a validation result (passed/failed). Auto-advances the stage if all validations are resolved.",
+        parameters: %{
+          validation_id: %{
+            type: "string",
+            required: true,
+            description: "The validation ID to evaluate"
+          },
+          status: %{
+            type: "string",
+            required: true,
+            description: "Result: \"passed\" or \"failed\""
+          },
+          evidence: %{
+            type: "object",
+            required: false,
+            description: "Optional evidence map (e.g. CI output, test results)"
+          },
+          evaluated_by: %{
+            type: "string",
+            required: false,
+            description: "Who evaluated this (user ID or \"system\")"
+          }
+        },
+        returns: "The updated validation object",
+        limitations: "Status must be \"passed\" or \"failed\"",
+        when_to_use: "When a validation check has completed and you need to record the result"
+      },
+      %{
+        name: "validation_list",
+        description: "List all validations for a stage.",
+        parameters: %{
+          stage_id: %{type: "string", required: true, description: "The stage ID"}
+        },
+        returns: "Array of validation objects",
+        limitations: "None",
+        when_to_use: "When you need to see the validation status for a specific stage"
       }
     ]
   end
@@ -449,6 +553,205 @@ defmodule Platform.Federation.ToolSurface do
     end
   end
 
+  # ── Plan / Stage / Validation tools ──────────────────────────────────────
+
+  def execute("plan_create", args, _context) do
+    task_id = Map.get(args, "task_id")
+    stages_input = Map.get(args, "stages", [])
+
+    if is_nil(task_id) do
+      {:error,
+       %{
+         error: "task_id is required",
+         recoverable: true,
+         suggestion: "Provide a valid task_id"
+       }}
+    else
+      Repo.transaction(fn ->
+        case Tasks.create_plan(%{task_id: task_id}) do
+          {:ok, plan} ->
+            stages =
+              Enum.map(stages_input, fn stage_input ->
+                stage_attrs = %{
+                  plan_id: plan.id,
+                  name: Map.get(stage_input, "name"),
+                  description: Map.get(stage_input, "description"),
+                  position: Map.get(stage_input, "position"),
+                  expected_artifacts: Map.get(stage_input, "expected_artifacts", [])
+                }
+
+                case Tasks.create_stage(stage_attrs) do
+                  {:ok, stage} ->
+                    validations =
+                      stage_input
+                      |> Map.get("validations", [])
+                      |> Enum.map(fn v_input ->
+                        case Tasks.create_validation(%{
+                               stage_id: stage.id,
+                               kind: Map.get(v_input, "kind")
+                             }) do
+                          {:ok, validation} -> validation
+                          {:error, reason} -> Repo.rollback(reason)
+                        end
+                      end)
+
+                    Map.put(stage, :validations, validations)
+
+                  {:error, reason} ->
+                    Repo.rollback(reason)
+                end
+              end)
+
+            Map.put(plan, :stages, stages)
+
+          {:error, reason} ->
+            Repo.rollback(reason)
+        end
+      end)
+      |> case do
+        {:ok, plan} ->
+          {:ok, serialize_plan(plan)}
+
+        {:error, reason} ->
+          {:error,
+           %{
+             error: "Failed to create plan: #{inspect_errors_safe(reason)}",
+             recoverable: true,
+             suggestion: "Check that task_id is valid and stages have valid fields"
+           }}
+      end
+    end
+  end
+
+  def execute("plan_get", args, _context) do
+    task_id = Map.get(args, "task_id")
+
+    case Tasks.current_plan(task_id) do
+      nil ->
+        {:error,
+         %{
+           error: "No approved plan for task",
+           recoverable: false,
+           suggestion: "Create a plan with plan_create and approve it first"
+         }}
+
+      plan ->
+        plan = Repo.preload(plan, stages: :validations)
+        {:ok, serialize_plan(plan)}
+    end
+  end
+
+  def execute("plan_submit", args, _context) do
+    plan_id = Map.get(args, "plan_id")
+
+    case Tasks.get_plan(plan_id) do
+      nil ->
+        {:error,
+         %{
+           error: "Plan not found: #{plan_id}",
+           recoverable: false,
+           suggestion: "Use plan_create to create a plan first"
+         }}
+
+      plan ->
+        case Tasks.submit_plan_for_review(plan) do
+          {:ok, updated} ->
+            {:ok, serialize_plan(Repo.preload(updated, :stages))}
+
+          {:error, :invalid_transition} ->
+            {:error,
+             %{
+               error:
+                 "Plan must be in draft status to submit for review (current: #{plan.status})",
+               recoverable: false,
+               suggestion: "Only draft plans can be submitted for review"
+             }}
+
+          {:error, reason} ->
+            {:error,
+             %{
+               error: "Failed to submit plan: #{inspect(reason)}",
+               recoverable: true,
+               suggestion: "Check the plan status"
+             }}
+        end
+    end
+  end
+
+  def execute("stage_start", args, _context) do
+    stage_id = Map.get(args, "stage_id")
+
+    case PlanEngine.start_stage(stage_id) do
+      {:ok, stage} ->
+        {:ok, serialize_stage(stage)}
+
+      {:error, :invalid_transition} ->
+        {:error,
+         %{
+           error: "Stage must be in pending status to start",
+           recoverable: false,
+           suggestion: "Check the stage's current status with stage_list"
+         }}
+
+      {:error, reason} ->
+        {:error,
+         %{
+           error: "Failed to start stage: #{inspect(reason)}",
+           recoverable: true,
+           suggestion: "Verify the stage_id is valid"
+         }}
+    end
+  end
+
+  def execute("stage_list", args, _context) do
+    plan_id = Map.get(args, "plan_id")
+
+    stages =
+      Tasks.list_stages(plan_id)
+      |> Repo.preload(:validations)
+
+    {:ok, Enum.map(stages, &serialize_stage_with_validations/1)}
+  end
+
+  def execute("validation_evaluate", args, _context) do
+    validation_id = Map.get(args, "validation_id")
+    status = Map.get(args, "status")
+    evidence = Map.get(args, "evidence", %{})
+    evaluated_by = Map.get(args, "evaluated_by", "system")
+
+    unless status in ~w(passed failed) do
+      {:error,
+       %{
+         error: "Invalid status: #{inspect(status)}. Must be \"passed\" or \"failed\"",
+         recoverable: true,
+         suggestion: "Use status \"passed\" or \"failed\""
+       }}
+    else
+      case PlanEngine.evaluate_validation(validation_id, %{
+             status: status,
+             evidence: evidence,
+             evaluated_by: evaluated_by
+           }) do
+        {:ok, validation} ->
+          {:ok, serialize_validation(validation)}
+
+        {:error, reason} ->
+          {:error,
+           %{
+             error: "Failed to evaluate validation: #{inspect(reason)}",
+             recoverable: true,
+             suggestion: "Verify the validation_id is valid"
+           }}
+      end
+    end
+  end
+
+  def execute("validation_list", args, _context) do
+    stage_id = Map.get(args, "stage_id")
+    validations = Tasks.list_validations(stage_id)
+    {:ok, Enum.map(validations, &serialize_validation/1)}
+  end
+
   def execute(unknown_tool, _args, _context) do
     tool_names =
       tool_definitions()
@@ -480,6 +783,74 @@ defmodule Platform.Federation.ToolSurface do
       updated_at: task.updated_at
     }
   end
+
+  defp serialize_plan(plan) do
+    stages =
+      case plan.stages do
+        %Ecto.Association.NotLoaded{} -> []
+        stages -> Enum.map(stages, &serialize_stage_with_validations/1)
+      end
+
+    %{
+      id: plan.id,
+      task_id: plan.task_id,
+      status: plan.status,
+      version: plan.version,
+      approved_by: plan.approved_by,
+      approved_at: format_datetime(plan.approved_at),
+      stages: stages,
+      inserted_at: format_datetime(plan.inserted_at),
+      updated_at: format_datetime(plan.updated_at)
+    }
+  end
+
+  defp serialize_stage(stage) do
+    %{
+      id: stage.id,
+      plan_id: stage.plan_id,
+      name: stage.name,
+      description: stage.description,
+      position: stage.position,
+      status: stage.status,
+      expected_artifacts: stage.expected_artifacts,
+      started_at: format_datetime(stage.started_at),
+      completed_at: format_datetime(stage.completed_at),
+      inserted_at: format_datetime(stage.inserted_at),
+      updated_at: format_datetime(stage.updated_at)
+    }
+  end
+
+  defp serialize_stage_with_validations(stage) do
+    validations =
+      case stage.validations do
+        %Ecto.Association.NotLoaded{} -> []
+        validations -> Enum.map(validations, &serialize_validation/1)
+      end
+
+    stage
+    |> serialize_stage()
+    |> Map.put(:validations, validations)
+  end
+
+  defp serialize_validation(validation) do
+    %{
+      id: validation.id,
+      stage_id: validation.stage_id,
+      kind: validation.kind,
+      status: validation.status,
+      evidence: validation.evidence,
+      evaluated_by: validation.evaluated_by,
+      evaluated_at: format_datetime(validation.evaluated_at),
+      inserted_at: format_datetime(validation.inserted_at),
+      updated_at: format_datetime(validation.updated_at)
+    }
+  end
+
+  defp format_datetime(nil), do: nil
+  defp format_datetime(%DateTime{} = dt), do: DateTime.to_iso8601(dt)
+
+  defp inspect_errors_safe(%Ecto.Changeset{} = changeset), do: inspect_errors(changeset)
+  defp inspect_errors_safe(reason), do: inspect(reason)
 
   defp inspect_errors(changeset) do
     Ecto.Changeset.traverse_errors(changeset, fn {msg, opts} ->

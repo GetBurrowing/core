@@ -32,9 +32,9 @@ defmodule Platform.Federation.ToolSurfaceTest do
   defp unique_slug, do: "test-#{System.unique_integer([:positive])}"
 
   describe "tool_definitions/0" do
-    test "returns all 8 tools with required components" do
+    test "returns all 15 tools with required components" do
       tools = ToolSurface.tool_definitions()
-      assert length(tools) == 8
+      assert length(tools) == 15
 
       tool_names = Enum.map(tools, & &1.name)
       assert "canvas_create" in tool_names
@@ -45,6 +45,13 @@ defmodule Platform.Federation.ToolSurfaceTest do
       assert "task_get" in tool_names
       assert "task_list" in tool_names
       assert "task_update" in tool_names
+      assert "plan_create" in tool_names
+      assert "plan_get" in tool_names
+      assert "plan_submit" in tool_names
+      assert "stage_start" in tool_names
+      assert "stage_list" in tool_names
+      assert "validation_evaluate" in tool_names
+      assert "validation_list" in tool_names
 
       for tool <- tools do
         assert Map.has_key?(tool, :name)
@@ -164,6 +171,194 @@ defmodule Platform.Federation.ToolSurfaceTest do
       {:error, error} = ToolSurface.execute("nonexistent", %{}, %{})
       assert error.error =~ "Unknown tool"
       assert error.recoverable == false
+    end
+
+    # ── Plan tools ──────────────────────────────────────────────────────
+
+    test "plan_create creates a plan with stages and validations" do
+      project = create_project()
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Plan task"})
+
+      {:ok, result} =
+        ToolSurface.execute(
+          "plan_create",
+          %{
+            "task_id" => task.id,
+            "stages" => [
+              %{
+                "name" => "Build",
+                "description" => "Build the thing",
+                "position" => 1,
+                "validations" => [%{"kind" => "ci_check"}, %{"kind" => "test_pass"}]
+              },
+              %{
+                "name" => "Review",
+                "description" => "Review the thing",
+                "position" => 2,
+                "validations" => [%{"kind" => "code_review"}]
+              }
+            ]
+          },
+          %{}
+        )
+
+      assert result.task_id == task.id
+      assert result.status == "draft"
+      assert length(result.stages) == 2
+
+      build_stage = Enum.find(result.stages, &(&1.name == "Build"))
+      assert length(build_stage.validations) == 2
+      assert Enum.any?(build_stage.validations, &(&1.kind == "ci_check"))
+
+      review_stage = Enum.find(result.stages, &(&1.name == "Review"))
+      assert length(review_stage.validations) == 1
+    end
+
+    test "plan_create without task_id returns error" do
+      {:error, error} =
+        ToolSurface.execute("plan_create", %{"stages" => []}, %{})
+
+      assert error.recoverable == true
+    end
+
+    test "plan_get returns current approved plan" do
+      project = create_project()
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Plan task"})
+      {:ok, plan} = Tasks.create_plan(%{task_id: task.id})
+      {:ok, plan} = Tasks.submit_plan_for_review(plan)
+      {:ok, _plan} = Tasks.approve_plan(plan, "tester")
+
+      {:ok, result} =
+        ToolSurface.execute("plan_get", %{"task_id" => task.id}, %{})
+
+      assert result.task_id == task.id
+      assert result.status == "approved"
+    end
+
+    test "plan_get with no approved plan returns error" do
+      project = create_project()
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "No plan"})
+
+      {:error, error} =
+        ToolSurface.execute("plan_get", %{"task_id" => task.id}, %{})
+
+      assert error.error =~ "No approved plan"
+      assert error.recoverable == false
+    end
+
+    test "plan_submit transitions draft to pending_review" do
+      project = create_project()
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Submit task"})
+      {:ok, plan} = Tasks.create_plan(%{task_id: task.id})
+
+      {:ok, result} =
+        ToolSurface.execute("plan_submit", %{"plan_id" => plan.id}, %{})
+
+      assert result.status == "pending_review"
+    end
+
+    test "plan_submit on non-draft plan returns error" do
+      project = create_project()
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Submit task"})
+      {:ok, plan} = Tasks.create_plan(%{task_id: task.id})
+      {:ok, plan} = Tasks.submit_plan_for_review(plan)
+
+      {:error, error} =
+        ToolSurface.execute("plan_submit", %{"plan_id" => plan.id}, %{})
+
+      assert error.error =~ "draft"
+    end
+
+    test "plan_submit with unknown plan_id returns error" do
+      {:error, error} =
+        ToolSurface.execute("plan_submit", %{"plan_id" => Ecto.UUID.generate()}, %{})
+
+      assert error.error =~ "Plan not found"
+    end
+
+    # ── Stage tools ─────────────────────────────────────────────────────
+
+    test "stage_list returns stages with validations" do
+      project = create_project()
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Stage task"})
+      {:ok, plan} = Tasks.create_plan(%{task_id: task.id})
+      {:ok, stage} = Tasks.create_stage(%{plan_id: plan.id, name: "Build", position: 1})
+      {:ok, _val} = Tasks.create_validation(%{stage_id: stage.id, kind: "ci_check"})
+
+      {:ok, results} =
+        ToolSurface.execute("stage_list", %{"plan_id" => plan.id}, %{})
+
+      assert length(results) == 1
+      assert hd(results).name == "Build"
+      assert length(hd(results).validations) == 1
+    end
+
+    test "stage_start transitions pending to running" do
+      project = create_project()
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Start task"})
+      {:ok, plan} = Tasks.create_plan(%{task_id: task.id})
+      {:ok, stage} = Tasks.create_stage(%{plan_id: plan.id, name: "Build", position: 1})
+
+      {:ok, result} =
+        ToolSurface.execute("stage_start", %{"stage_id" => stage.id}, %{})
+
+      assert result.status == "running"
+      assert result.name == "Build"
+    end
+
+    # ── Validation tools ────────────────────────────────────────────────
+
+    test "validation_list returns validations for a stage" do
+      project = create_project()
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Val task"})
+      {:ok, plan} = Tasks.create_plan(%{task_id: task.id})
+      {:ok, stage} = Tasks.create_stage(%{plan_id: plan.id, name: "Build", position: 1})
+      {:ok, _} = Tasks.create_validation(%{stage_id: stage.id, kind: "ci_check"})
+      {:ok, _} = Tasks.create_validation(%{stage_id: stage.id, kind: "test_pass"})
+
+      {:ok, results} =
+        ToolSurface.execute("validation_list", %{"stage_id" => stage.id}, %{})
+
+      assert length(results) == 2
+    end
+
+    test "validation_evaluate records passed result" do
+      project = create_project()
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Eval task"})
+      {:ok, plan} = Tasks.create_plan(%{task_id: task.id})
+      {:ok, stage} = Tasks.create_stage(%{plan_id: plan.id, name: "Build", position: 1})
+      # Start the stage so validations can be evaluated
+      {:ok, _} = Platform.Tasks.PlanEngine.start_stage(stage.id)
+      {:ok, validation} = Tasks.create_validation(%{stage_id: stage.id, kind: "ci_check"})
+
+      {:ok, result} =
+        ToolSurface.execute(
+          "validation_evaluate",
+          %{
+            "validation_id" => validation.id,
+            "status" => "passed",
+            "evidence" => %{"ci_url" => "https://ci.example.com/123"},
+            "evaluated_by" => "ci_bot"
+          },
+          %{}
+        )
+
+      assert result.status == "passed"
+      assert result.kind == "ci_check"
+      assert result.evaluated_by == "ci_bot"
+      assert result.evidence["ci_url"] == "https://ci.example.com/123"
+    end
+
+    test "validation_evaluate with invalid status returns error" do
+      {:error, error} =
+        ToolSurface.execute(
+          "validation_evaluate",
+          %{"validation_id" => Ecto.UUID.generate(), "status" => "invalid"},
+          %{}
+        )
+
+      assert error.error =~ "Invalid status"
+      assert error.recoverable == true
     end
   end
 end
