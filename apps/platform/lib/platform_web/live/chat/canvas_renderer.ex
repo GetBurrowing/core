@@ -20,6 +20,7 @@ defmodule PlatformWeb.Chat.CanvasRenderer do
   - `code`     — renders `source` prop inside `<pre><code>`
   - `badge`    — small rounded label from `value` prop
   - `heading`  — h1–h4 heading from `value` + `level` props
+  - `image`    — renders `src` prop as an `<img>` tag with optional `alt`, `caption`, `border`, `rounded` props
   """
 
   use PlatformWeb, :html
@@ -259,6 +260,33 @@ defmodule PlatformWeb.Chat.CanvasRenderer do
         </span>
       </div>
       <pre class="p-3 text-xs leading-5 text-base-content overflow-x-auto"><code>{@node["props"]["source"] || ""}</code></pre>
+    </div>
+    """
+  end
+
+  def render_node(%{node: %{"type" => "image"} = node} = assigns) do
+    assigns = assign(assigns, :node, node)
+
+    ~H"""
+    <div class={[
+      "overflow-hidden",
+      @node["props"]["rounded"] != false && "rounded-xl"
+    ]}>
+      <img
+        src={@node["props"]["src"] || ""}
+        alt={@node["props"]["alt"] || ""}
+        class={[
+          "max-w-full h-auto block",
+          @node["props"]["border"] && "border border-base-300"
+        ]}
+        style={if caption = @node["props"]["caption"], do: "", else: ""}
+      />
+      <p
+        :if={@node["props"]["caption"]}
+        class="text-[11px] text-base-content/50 text-center mt-1"
+      >
+        {@node["props"]["caption"]}
+      </p>
     </div>
     """
   end
