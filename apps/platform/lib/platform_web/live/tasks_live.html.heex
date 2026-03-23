@@ -26,19 +26,6 @@
       >
         {project.name}
       </button>
-
-      <%!-- Epics nested under selected project --%>
-      <div :if={@selected_project_id && @epics != []} class="ml-3 border-l border-base-200 mt-1">
-        <button
-          :for={epic <- @epics}
-          phx-click="select_epic"
-          phx-value-id={epic.id}
-          class={"w-full text-left px-3 py-1.5 text-xs hover:bg-base-200 flex items-center gap-1 #{if @selected_epic_id == epic.id, do: "bg-base-200 font-medium"}"}
-        >
-          <span class="truncate">{epic.name}</span>
-          <span class="badge badge-xs badge-outline ml-auto shrink-0">{epic.status}</span>
-        </button>
-      </div>
     </div>
 
     <div class="border-t border-base-300 p-2">
@@ -84,6 +71,41 @@
         <button phx-click="clear_filters" class="btn btn-ghost btn-xs btn-square ml-1">
           <span class="hero-x-mark size-3"></span>
         </button>
+      </div>
+    </div>
+
+    <%!-- Epics above board --%>
+    <div :if={@selected_project_id && @epics != []} class="px-4 pt-3" id="epics-section">
+      <div class="flex items-center justify-between mb-2">
+        <span class="text-xs font-semibold uppercase tracking-widest text-base-content/50">
+          Epics
+        </span>
+        <button phx-click="toggle_epics_panel" class="btn btn-ghost btn-xs btn-square">
+          <span class={"size-4 transition-transform #{if @epics_collapsed, do: "hero-chevron-down", else: "hero-chevron-up"}"}>
+          </span>
+        </button>
+      </div>
+      <div :if={!@epics_collapsed} class="flex gap-3 overflow-x-auto pb-2">
+        <div
+          :for={epic <- @epics}
+          phx-click="select_epic"
+          phx-value-id={epic.id}
+          class={"card card-compact min-w-[180px] max-w-[220px] shrink-0 cursor-pointer border bg-base-100 shadow-sm transition-all hover:shadow-md #{if @selected_epic_id == epic.id, do: "border-primary ring-2 ring-primary", else: "border-base-300"}"}
+        >
+          <div class="card-body gap-1 p-3">
+            <div class="flex items-center justify-between gap-2">
+              <h3 class="text-sm font-bold truncate">{epic.name}</h3>
+              <span class={epic_status_badge_class(epic.status)}>{epic.status}</span>
+            </div>
+            <p :if={epic.description} class="text-xs text-base-content/60 line-clamp-2">
+              {epic.description}
+            </p>
+            <div class="flex items-center gap-2 mt-1 text-xs text-base-content/50">
+              <span>{epic.task_count} tasks</span>
+              <span class="text-success">{epic.done_count} done</span>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
 
@@ -315,30 +337,14 @@
       </div>
 
       <div class="flex-1 overflow-y-auto">
-        <div :for={project <- @projects}>
-          <button
-            phx-click="select_project_mobile"
-            phx-value-id={project.id}
-            class={"w-full text-left px-3 py-2 text-sm hover:bg-base-200 #{if @selected_project_id == project.id, do: "bg-base-200 font-medium"}"}
-          >
-            {project.name}
-          </button>
-
-          <div
-            :if={@selected_project_id == project.id && @epics != []}
-            class="ml-3 border-l border-base-200 mt-1"
-          >
-            <button
-              :for={epic <- @epics}
-              phx-click="select_epic"
-              phx-value-id={epic.id}
-              class={"w-full text-left px-3 py-1.5 text-xs hover:bg-base-200 flex items-center gap-1 #{if @selected_epic_id == epic.id, do: "bg-base-200 font-medium"}"}
-            >
-              <span class="truncate">{epic.name}</span>
-              <span class="badge badge-xs badge-outline ml-auto shrink-0">{epic.status}</span>
-            </button>
-          </div>
-        </div>
+        <button
+          :for={project <- @projects}
+          phx-click="select_project"
+          phx-value-id={project.id}
+          class={"w-full text-left px-3 py-2 text-sm hover:bg-base-200 #{if @selected_project_id == project.id, do: "bg-base-200 font-medium"}"}
+        >
+          {project.name}
+        </button>
       </div>
 
       <div class="border-t border-base-300 p-2">

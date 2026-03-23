@@ -184,15 +184,8 @@ defmodule PlatformWeb.TasksLiveTest do
     assert redirected_to(conn) == "/auth/login"
   end
 
-  test "mobile sheet shows epics after project selection and stays open", %{conn: conn} do
+  test "mobile project sheet closes on project selection", %{conn: conn} do
     project = create_project()
-
-    {:ok, _epic} =
-      Tasks.create_epic(%{
-        project_id: project.id,
-        name: "Mobile Epic",
-        status: "open"
-      })
 
     conn = authenticated_conn(conn)
     {:ok, view, _html} = live(conn, ~p"/tasks")
@@ -201,36 +194,94 @@ defmodule PlatformWeb.TasksLiveTest do
     html = render_click(view, "toggle_project_sheet")
     assert html =~ "Projects"
 
-    # Select project via mobile event — sheet should stay open
-    html = render_click(view, "select_project_mobile", %{"id" => project.id})
-    # Sheet is still visible (project name still rendered inside the sheet)
-    assert html =~ project.name
-    # Epic is shown nested under the project
-    assert html =~ "Mobile Epic"
-    assert html =~ "open"
+    # Select project — sheet should close (no backdrop)
+    html = render_click(view, "select_project", %{"id" => project.id})
+    refute html =~ "bg-black/40"
   end
 
-  test "selecting an epic from mobile sheet closes the sheet", %{conn: conn} do
+  test "epics section renders above board when project is selected", %{conn: conn} do
+    project = create_project()
+
+    {:ok, _epic} =
+      Tasks.create_epic(%{
+        project_id: project.id,
+        name: "Above Board Epic",
+        description: "Epic description here",
+        status: "in_progress"
+      })
+
+    _done_task = create_task(project, %{title: "Done Task", status: "done", epic_id: nil})
+
+    conn = authenticated_conn(conn)
+    {:ok, view, html} = live(conn, ~p"/tasks")
+
+    # Epics section not visible before project selection
+    refute html =~ "Above Board Epic"
+
+    # Select project — epics section appears
+    html = render_click(view, "select_project", %{"id" => project.id})
+    assert html =~ "Above Board Epic"
+    assert html =~ "in_progress"
+    assert html =~ "Epic description here"
+    assert html =~ "epics-section"
+  end
+
+  test "selecting an epic filters tasks on the board", %{conn: conn} do
     project = create_project()
 
     {:ok, epic} =
       Tasks.create_epic(%{
         project_id: project.id,
-        name: "Closeable Epic",
+        name: "Filter Epic",
+        status: "open"
+      })
+
+    _t1 = create_task(project, %{title: "Epic Task", status: "backlog", epic_id: epic.id})
+    _t2 = create_task(project, %{title: "No Epic Task", status: "backlog"})
+
+    conn = authenticated_conn(conn)
+    {:ok, view, _html} = live(conn, ~p"/tasks")
+
+    # Select project first
+    render_click(view, "select_project", %{"id" => project.id})
+
+    # Select epic — only epic tasks shown
+    html = render_click(view, "select_epic", %{"id" => epic.id})
+    assert html =~ "Epic Task"
+    refute html =~ "No Epic Task"
+
+    # Deselect epic — both tasks shown again
+    html = render_click(view, "select_epic", %{"id" => epic.id})
+    assert html =~ "Epic Task"
+    assert html =~ "No Epic Task"
+  end
+
+  test "toggle collapses the epics section", %{conn: conn} do
+    project = create_project()
+
+    {:ok, _epic} =
+      Tasks.create_epic(%{
+        project_id: project.id,
+        name: "Collapsible Epic",
         status: "open"
       })
 
     conn = authenticated_conn(conn)
     {:ok, view, _html} = live(conn, ~p"/tasks")
 
-    # Open sheet and select project
-    render_click(view, "toggle_project_sheet")
-    render_click(view, "select_project_mobile", %{"id" => project.id})
+    render_click(view, "select_project", %{"id" => project.id})
 
-    # Select epic — sheet should close
-    html = render_click(view, "select_epic", %{"id" => epic.id})
-    # The mobile sheet backdrop (bg-black/40) should no longer be present
-    refute html =~ "bg-black/40"
+    # Epic is visible initially
+    html = render(view)
+    assert html =~ "Collapsible Epic"
+
+    # Toggle collapse — epic card should no longer be visible
+    html = render_click(view, "toggle_epics_panel")
+    refute html =~ "Collapsible Epic"
+
+    # Toggle again — epic card reappears
+    html = render_click(view, "toggle_epics_panel")
+    assert html =~ "Collapsible Epic"
   end
 
   test "shell sidebar includes tasks navigation", %{conn: conn} do

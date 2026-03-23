@@ -52,7 +52,8 @@ defmodule PlatformWeb.TasksLive do
      |> assign(:task_form, to_form(Task.changeset(%Task{}, %{}), as: "task"))
      |> assign(:sheet_what, "")
      |> assign(:sheet_why, "")
-     |> assign(:epics, Tasks.list_epics_for_project(nil))
+     |> assign(:epics, enrich_epics(Tasks.list_epics_for_project(nil)))
+     |> assign(:epics_collapsed, false)
      |> assign(:agents, agents)
      |> assign(:validation_modes, MapSet.new())
      |> assign(:manual_validation_text, "")
@@ -116,7 +117,7 @@ defmodule PlatformWeb.TasksLive do
   end
 
   def handle_event("select_project", %{"id" => project_id}, socket) do
-    epics = Tasks.list_epics_for_project(project_id)
+    epics = enrich_epics(Tasks.list_epics_for_project(project_id))
 
     {:noreply,
      socket
@@ -124,26 +125,20 @@ defmodule PlatformWeb.TasksLive do
      |> assign(:selected_epic_id, nil)
      |> assign(:epics, epics)
      |> assign(:show_project_sheet, false)
-     |> refresh_board()}
-  end
-
-  def handle_event("select_project_mobile", %{"id" => project_id}, socket) do
-    epics = Tasks.list_epics_for_project(project_id)
-
-    {:noreply,
-     socket
-     |> assign(:selected_project_id, project_id)
-     |> assign(:selected_epic_id, nil)
-     |> assign(:epics, epics)
      |> refresh_board()}
   end
 
   def handle_event("select_epic", %{"id" => epic_id}, socket) do
+    new_id = if socket.assigns.selected_epic_id == epic_id, do: nil, else: epic_id
+
     {:noreply,
      socket
-     |> assign(:selected_epic_id, epic_id)
-     |> assign(:show_project_sheet, false)
+     |> assign(:selected_epic_id, new_id)
      |> refresh_board()}
+  end
+
+  def handle_event("toggle_epics_panel", _params, socket) do
+    {:noreply, assign(socket, :epics_collapsed, !socket.assigns.epics_collapsed)}
   end
 
   def handle_event("clear_filters", _params, socket) do
@@ -151,7 +146,7 @@ defmodule PlatformWeb.TasksLive do
      socket
      |> assign(:selected_project_id, nil)
      |> assign(:selected_epic_id, nil)
-     |> assign(:epics, Tasks.list_epics_for_project(nil))
+     |> assign(:epics, enrich_epics(Tasks.list_epics_for_project(nil)))
      |> assign(:show_project_sheet, false)
      |> refresh_board()}
   end
@@ -469,6 +464,28 @@ defmodule PlatformWeb.TasksLive do
       _ -> "btn btn-sm btn-ghost"
     end
   end
+
+  defp enrich_epics(epics) do
+    epic_ids = Enum.map(epics, & &1.id)
+    counts = Tasks.epic_task_counts(epic_ids)
+
+    Enum.map(epics, fn epic ->
+      c = Map.get(counts, epic.id, %{total: 0, done: 0})
+
+      %{
+        id: epic.id,
+        name: epic.name,
+        description: epic.description,
+        status: epic.status,
+        task_count: c.total,
+        done_count: c.done
+      }
+    end)
+  end
+
+  defp epic_status_badge_class("in_progress"), do: "badge badge-warning badge-xs"
+  defp epic_status_badge_class("closed"), do: "badge badge-success badge-xs"
+  defp epic_status_badge_class(_), do: "badge badge-ghost badge-xs"
 
   defp stage_status_icon("passed"), do: "hero-check-circle text-success"
   defp stage_status_icon("failed"), do: "hero-x-circle text-error"
