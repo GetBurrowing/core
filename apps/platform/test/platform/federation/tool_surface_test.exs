@@ -3,7 +3,7 @@ defmodule Platform.Federation.ToolSurfaceTest do
 
   alias Platform.Agents.Agent
   alias Platform.Chat
-  alias Platform.Chat.SpaceAgent
+
   alias Platform.Tasks
   alias Platform.Federation.ToolSurface
   alias Platform.Repo
@@ -406,10 +406,11 @@ defmodule Platform.Federation.ToolSurfaceTest do
       agent = create_agent()
       space = create_space(%{name: "Agent Space"})
 
-      {:ok, _sa} =
-        %SpaceAgent{}
-        |> SpaceAgent.changeset(%{space_id: space.id, agent_id: agent.id, role: "member"})
-        |> Repo.insert()
+      create_participant(space.id, %{
+        participant_type: "agent",
+        participant_id: agent.id,
+        display_name: agent.name
+      })
 
       {:ok, results} =
         ToolSurface.execute("space_list", %{}, %{agent_id: agent.id})
@@ -427,10 +428,11 @@ defmodule Platform.Federation.ToolSurfaceTest do
       dm = create_space(%{name: "DM", kind: "dm", slug: unique_slug()})
 
       for s <- [channel, dm] do
-        {:ok, _} =
-          %SpaceAgent{}
-          |> SpaceAgent.changeset(%{space_id: s.id, agent_id: agent.id, role: "member"})
-          |> Repo.insert()
+        create_participant(s.id, %{
+          participant_type: "agent",
+          participant_id: agent.id,
+          display_name: agent.name
+        })
       end
 
       {:ok, results} =
