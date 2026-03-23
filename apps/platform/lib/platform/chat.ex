@@ -126,6 +126,23 @@ defmodule Platform.Chat do
     |> Repo.all()
   end
 
+  @doc "List spaces an agent is a member of via the `chat_space_agents` roster."
+  @spec list_spaces_for_agent(binary(), keyword()) :: [Space.t()]
+  def list_spaces_for_agent(agent_id, opts \\ []) when is_binary(agent_id) do
+    kind = Keyword.get(opts, :kind)
+
+    base =
+      from(s in Space,
+        join: csa in SpaceAgent,
+        on: csa.space_id == s.id,
+        where: csa.agent_id == ^agent_id and csa.role != "dismissed" and is_nil(s.archived_at),
+        order_by: [asc: s.inserted_at]
+      )
+
+    base = if kind, do: where(base, [s], s.kind == ^kind), else: base
+    Repo.all(base)
+  end
+
   @doc "Update a space's attributes."
   @spec update_space(Space.t(), map()) :: {:ok, Space.t()} | {:error, Ecto.Changeset.t()}
   def update_space(%Space{} = space, attrs) do

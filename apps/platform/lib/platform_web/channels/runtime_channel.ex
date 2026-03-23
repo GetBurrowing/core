@@ -42,6 +42,24 @@ defmodule PlatformWeb.RuntimeChannel do
   def handle_info(:send_capabilities, socket) do
     tools = ToolSurface.tool_definitions()
     push(socket, "capabilities", %{tools: tools, tool_count: length(tools)})
+    send(self(), :send_spaces_manifest)
+    {:noreply, socket}
+  end
+
+  def handle_info(:send_spaces_manifest, socket) do
+    agent_id = socket.assigns[:agent_id]
+
+    if agent_id do
+      spaces = Chat.list_spaces_for_agent(agent_id)
+
+      payload =
+        Enum.map(spaces, fn s ->
+          %{id: s.id, name: s.name, kind: s.kind}
+        end)
+
+      push(socket, "spaces_manifest", %{spaces: payload})
+    end
+
     {:noreply, socket}
   end
 
@@ -139,6 +157,7 @@ defmodule PlatformWeb.RuntimeChannel do
 
     context = %{
       space_id: space_id,
+      agent_id: socket.assigns[:agent_id],
       agent_participant_id: agent_participant_id
     }
 

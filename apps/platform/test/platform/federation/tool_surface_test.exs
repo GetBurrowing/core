@@ -1,9 +1,12 @@
 defmodule Platform.Federation.ToolSurfaceTest do
   use Platform.DataCase, async: false
 
+  alias Platform.Agents.Agent
   alias Platform.Chat
+  alias Platform.Chat.SpaceAgent
   alias Platform.Tasks
   alias Platform.Federation.ToolSurface
+  alias Platform.Repo
 
   defp create_space(attrs \\ %{}) do
     default = %{name: "Test", slug: unique_slug(), kind: "channel"}
@@ -32,11 +35,13 @@ defmodule Platform.Federation.ToolSurfaceTest do
   defp unique_slug, do: "test-#{System.unique_integer([:positive])}"
 
   describe "tool_definitions/0" do
-    test "returns all 15 tools with required components" do
+    test "returns all 18 tools with required components" do
       tools = ToolSurface.tool_definitions()
-      assert length(tools) == 15
+      assert length(tools) == 18
 
       tool_names = Enum.map(tools, & &1.name)
+      assert "send_media" in tool_names
+      assert "space_list" in tool_names
       assert "canvas_create" in tool_names
       assert "canvas_update" in tool_names
       assert "project_list" in tool_names
@@ -45,6 +50,7 @@ defmodule Platform.Federation.ToolSurfaceTest do
       assert "task_get" in tool_names
       assert "task_list" in tool_names
       assert "task_update" in tool_names
+      assert "task_complete" in tool_names
       assert "plan_create" in tool_names
       assert "plan_get" in tool_names
       assert "plan_submit" in tool_names
@@ -360,5 +366,162 @@ defmodule Platform.Federation.ToolSurfaceTest do
       assert error.error =~ "Invalid status"
       assert error.recoverable == true
     end
+
+    # ── task_complete ────────────────────────────────────────────────────
+
+    test "task_complete marks a task as done" do
+      project = create_project()
+
+      {:ok, task} =
+        Tasks.create_task(%{project_id: project.id, title: "Finish me", status: "in_progress"})
+
+      {:ok, result} =
+        ToolSurface.execute("task_complete", %{"task_id" => task.id}, %{})
+
+      assert result.task_id == task.id
+      assert result.status == "done"
+    end
+
+    test "task_complete on non-existent task returns error" do
+      {:error, error} =
+        ToolSurface.execute("task_complete", %{"task_id" => Ecto.UUID.generate()}, %{})
+
+      assert error.error =~ "Task not found"
+      assert error.recoverable == false
+    end
+
+    test "task_complete on task that cannot transition to done returns error" do
+      project = create_project()
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Backlog task"})
+
+      {:error, error} =
+        ToolSurface.execute("task_complete", %{"task_id" => task.id}, %{})
+
+      assert error.error =~ "Cannot transition"
+    end
+
+    # ── space_list ───────────────────────────────────────────────────────
+
+    test "space_list returns spaces the agent is a member of" do
+      agent = create_agent()
+      space = create_space(%{name: "Agent Space"})
+
+      {:ok, _sa} =
+        %SpaceAgent{}
+        |> SpaceAgent.changeset(%{space_id: space.id, agent_id: agent.id, role: "member"})
+        |> Repo.insert()
+
+      {:ok, results} =
+        ToolSurface.execute("space_list", %{}, %{agent_id: agent.id})
+
+      assert is_list(results)
+      assert Enum.any?(results, fn s -> s.id == space.id end)
+      space_result = Enum.find(results, &(&1.id == space.id))
+      assert space_result.name == "Agent Space"
+      assert space_result.kind == "channel"
+    end
+
+    test "space_list filters by kind" do
+      agent = create_agent()
+      channel = create_space(%{name: "Channel", kind: "channel"})
+      dm = create_space(%{name: "DM", kind: "dm", slug: unique_slug()})
+
+      for s <- [channel, dm] do
+        {:ok, _} =
+          %SpaceAgent{}
+          |> SpaceAgent.changeset(%{space_id: s.id, agent_id: agent.id, role: "member"})
+          |> Repo.insert()
+      end
+
+      {:ok, results} =
+        ToolSurface.execute("space_list", %{"kind" => "dm"}, %{agent_id: agent.id})
+
+      assert length(results) == 1
+      assert hd(results).name == "DM"
+    end
+
+    # ── send_media ───────────────────────────────────────────────────────
+
+    test "send_media posts a message with file attachment" do
+      space = create_space()
+      participant = create_participant(space.id)
+
+      # Use a writable temp path for uploads in test
+      test_uploads = Path.join(System.tmp_dir!(), "platform_test_uploads_#{Ecto.UUID.generate()}")
+      prev = Application.get_env(:platform, :chat_attachments_root)
+      Application.put_env(:platform, :chat_attachments_root, test_uploads)
+
+      # Create a temp file for testing
+      tmp_path = Path.join(System.tmp_dir!(), "test-upload-#{Ecto.UUID.generate()}.txt")
+      File.write!(tmp_path, "hello world")
+
+      context = %{
+        space_id: space.id,
+        agent_participant_id: participant.id
+      }
+
+      try do
+        {:ok, result} =
+          ToolSurface.execute(
+            "send_media",
+            %{
+              "space_id" => space.id,
+              "file_path" => tmp_path,
+              "content" => "Here is the file",
+              "filename" => "test.txt"
+            },
+            context
+          )
+
+        assert is_binary(result.message_id)
+        assert result.space_id == space.id
+      after
+        Application.put_env(:platform, :chat_attachments_root, prev)
+        File.rm(tmp_path)
+        File.rm_rf(test_uploads)
+      end
+    end
+
+    test "send_media with non-existent file returns error" do
+      space = create_space()
+      participant = create_participant(space.id)
+
+      context = %{
+        space_id: space.id,
+        agent_participant_id: participant.id
+      }
+
+      {:error, error} =
+        ToolSurface.execute(
+          "send_media",
+          %{
+            "space_id" => space.id,
+            "file_path" => "/tmp/nonexistent-file-#{Ecto.UUID.generate()}.txt"
+          },
+          context
+        )
+
+      assert error.error =~ "Failed to send media"
+    end
+  end
+
+  # ── Helpers ──────────────────────────────────────────────────────────
+
+  defp create_agent(attrs \\ %{}) do
+    defaults = %{
+      slug: "agent-#{System.unique_integer([:positive])}",
+      name: "TestAgent",
+      status: "active",
+      max_concurrent: 1,
+      sandbox_mode: "off",
+      model_config: %{"primary" => "anthropic/claude-sonnet-4-6"}
+    }
+
+    {:ok, agent} =
+      %Agent{}
+      |> Agent.changeset(Map.merge(defaults, attrs))
+      |> Repo.insert()
+
+    agent
   end
 end

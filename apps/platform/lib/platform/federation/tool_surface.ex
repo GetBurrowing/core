@@ -16,7 +16,58 @@ defmodule Platform.Federation.ToolSurface do
   name, description, parameters, returns, limitations, when_to_use.
   """
   def tool_definitions do
-    canvas_tools() ++ task_tools() ++ plan_tools()
+    canvas_tools() ++ messaging_tools() ++ task_tools() ++ plan_tools() ++ space_tools()
+  end
+
+  defp messaging_tools do
+    [
+      %{
+        name: "send_media",
+        description: "Send a message with a file attachment to a Suite space.",
+        parameters: %{
+          space_id: %{type: "string", required: true, description: "UUID of the Suite space"},
+          file_path: %{
+            type: "string",
+            required: true,
+            description: "Absolute local path to the file"
+          },
+          content: %{
+            type: "string",
+            required: false,
+            description: "Optional message text"
+          },
+          filename: %{
+            type: "string",
+            required: false,
+            description: "Optional display filename"
+          }
+        },
+        returns: "The message ID and space ID",
+        limitations:
+          "File must exist on the local filesystem. Agent must be a participant in the space.",
+        when_to_use: "When you need to share a file (image, document, etc.) in a space"
+      }
+    ]
+  end
+
+  defp space_tools do
+    [
+      %{
+        name: "space_list",
+        description: "List Suite spaces the agent is a member of.",
+        parameters: %{
+          kind: %{
+            type: "string",
+            required: false,
+            description: "Filter by kind: channel, dm (optional)"
+          }
+        },
+        returns: "Array of space objects with id, name, kind, description",
+        limitations: "Only returns spaces the agent is a participant in",
+        when_to_use:
+          "When you need to discover available spaces or find a space ID for proactive messaging"
+      }
+    ]
   end
 
   defp canvas_tools do
@@ -173,6 +224,16 @@ defmodule Platform.Federation.ToolSurface do
           "When you need to see what tasks exist, check the backlog, or find tasks in a specific state"
       },
       %{
+        name: "task_complete",
+        description: "Mark a task as done.",
+        parameters: %{
+          task_id: %{type: "string", required: true, description: "The task ID to complete"}
+        },
+        returns: "The updated task object with id and status",
+        limitations: "Task must exist and allow transition to done status",
+        when_to_use: "When you need to mark a task as complete/done"
+      },
+      %{
         name: "task_update",
         description:
           "Update a task's fields (title, description, status, priority, assignee, etc.).",
@@ -308,6 +369,56 @@ defmodule Platform.Federation.ToolSurface do
   context must include :space_id and :agent_participant_id.
   Returns {:ok, result} | {:error, %{error: string, recoverable: boolean, suggestion: string}}
   """
+
+  # ── Messaging tools ──────────────────────────────────────────────────────
+
+  def execute("send_media", args, context) do
+    space_id = Map.get(args, "space_id")
+    file_path = Map.get(args, "file_path")
+    content = Map.get(args, "content", "")
+    filename = Map.get(args, "filename") || Path.basename(file_path)
+
+    participant_id =
+      Map.get(context, :agent_participant_id) ||
+        get_agent_participant_id_for_space(space_id, context)
+
+    with {:ok, file_meta} <-
+           Chat.AttachmentStorage.persist_upload(file_path, filename),
+         {:ok, message, _attachments} <-
+           Chat.post_message_with_attachments(
+             %{
+               space_id: space_id,
+               participant_id: participant_id,
+               content_type: "text",
+               content: content
+             },
+             [Map.put(file_meta, :message_id, nil)]
+           ) do
+      {:ok, %{message_id: message.id, space_id: space_id}}
+    else
+      {:error, reason} ->
+        {:error,
+         %{
+           error: "Failed to send media: #{inspect(reason)}",
+           recoverable: true,
+           suggestion: "Check that the file exists and the agent is a participant in the space"
+         }}
+    end
+  end
+
+  # ── Space tools ─────────────────────────────────────────────────────────
+
+  def execute("space_list", args, context) do
+    agent_id = Map.get(context, :agent_id)
+    kind = Map.get(args, "kind")
+
+    spaces = Chat.list_spaces_for_agent(agent_id, kind: kind)
+
+    {:ok,
+     Enum.map(spaces, fn s ->
+       %{id: s.id, name: s.name, kind: s.kind, description: s.description}
+     end)}
+  end
 
   # ── Canvas tools ─────────────────────────────────────────────────────────
 
@@ -454,6 +565,42 @@ defmodule Platform.Federation.ToolSurface do
 
       task ->
         {:ok, serialize_task(task)}
+    end
+  end
+
+  def execute("task_complete", %{"task_id" => task_id}, _context) do
+    case Tasks.get_task_record(task_id) do
+      nil ->
+        {:error,
+         %{
+           error: "Task not found: #{task_id}",
+           recoverable: false,
+           suggestion: "Use task_list to find available tasks"
+         }}
+
+      task ->
+        case Tasks.transition_task_status(task, "done") do
+          {:ok, updated} ->
+            Tasks.broadcast_board({:task_updated, updated})
+            {:ok, %{task_id: updated.id, status: updated.status}}
+
+          {:error, :invalid_transition} ->
+            {:error,
+             %{
+               error: "Cannot transition task from '#{task.status}' to 'done'",
+               recoverable: false,
+               suggestion:
+                 "Check the task's current status — only in_progress and in_review can move to done"
+             }}
+
+          {:error, changeset} ->
+            {:error,
+             %{
+               error: "Failed to complete task: #{inspect_errors(changeset)}",
+               recoverable: true,
+               suggestion: "Check that the task_id is valid"
+             }}
+        end
     end
   end
 
@@ -844,6 +991,17 @@ defmodule Platform.Federation.ToolSurface do
       inserted_at: format_datetime(validation.inserted_at),
       updated_at: format_datetime(validation.updated_at)
     }
+  end
+
+  defp get_agent_participant_id_for_space(space_id, context) do
+    agent_id = Map.get(context, :agent_id)
+
+    if agent_id && space_id do
+      case Chat.ensure_agent_participant(space_id, agent_id) do
+        {:ok, participant} -> participant.id
+        _ -> nil
+      end
+    end
   end
 
   defp format_datetime(nil), do: nil
