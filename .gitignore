@@ -27,3 +27,4 @@ build/
 
 # Reserved / intentionally unused until a real pattern emerges
 /workers/
+erl_crash.dump
