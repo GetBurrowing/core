@@ -126,16 +126,20 @@ defmodule Platform.Chat do
     |> Repo.all()
   end
 
-  @doc "List spaces an agent is a member of via the `chat_space_agents` roster."
+  @doc "List spaces an agent is a member of via the `chat_participants` roster."
   @spec list_spaces_for_agent(binary(), keyword()) :: [Space.t()]
   def list_spaces_for_agent(agent_id, opts \\ []) when is_binary(agent_id) do
     kind = Keyword.get(opts, :kind)
 
     base =
       from(s in Space,
-        join: csa in SpaceAgent,
-        on: csa.space_id == s.id,
-        where: csa.agent_id == ^agent_id and csa.role != "dismissed" and is_nil(s.archived_at),
+        join: p in Participant,
+        on: p.space_id == s.id,
+        where:
+          p.participant_type == "agent" and
+            p.participant_id == ^agent_id and
+            is_nil(p.left_at) and
+            is_nil(s.archived_at),
         order_by: [asc: s.inserted_at]
       )
 
