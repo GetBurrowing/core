@@ -41,6 +41,7 @@ defmodule PlatformWeb.TasksLive do
      |> assign(:selected_project_id, nil)
      |> assign(:selected_epic_id, nil)
      |> assign(:sidebar_open, true)
+     |> assign(:projects_collapsed, false)
      |> assign(:show_project_sheet, false)
      |> assign(:all_tasks, all_tasks)
      |> assign(:columns, group_by_column(all_tasks))
@@ -135,6 +136,10 @@ defmodule PlatformWeb.TasksLive do
      socket
      |> assign(:selected_epic_id, new_id)
      |> refresh_board()}
+  end
+
+  def handle_event("toggle_projects_section", _params, socket) do
+    {:noreply, assign(socket, :projects_collapsed, !socket.assigns.projects_collapsed)}
   end
 
   def handle_event("toggle_epics_panel", _params, socket) do

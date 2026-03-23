@@ -8,16 +8,26 @@
       <span class="text-xs font-semibold uppercase tracking-widest text-base-content/60">
         Projects
       </span>
-      <button
-        phx-click="toggle_sidebar"
-        class="btn btn-ghost btn-xs btn-square"
-        title="Collapse sidebar"
-      >
-        <span class="hero-chevron-left size-4"></span>
-      </button>
+      <div class="flex items-center gap-1">
+        <button
+          phx-click="toggle_projects_section"
+          class="btn btn-ghost btn-xs btn-square"
+          title={if @projects_collapsed, do: "Expand projects", else: "Collapse projects"}
+        >
+          <span class={"size-4 transition-transform #{if @projects_collapsed, do: "hero-chevron-down", else: "hero-chevron-up"}"}>
+          </span>
+        </button>
+        <button
+          phx-click="toggle_sidebar"
+          class="btn btn-ghost btn-xs btn-square"
+          title="Close sidebar"
+        >
+          <span class="hero-chevron-left size-4"></span>
+        </button>
+      </div>
     </div>
 
-    <div class="flex-1 overflow-y-auto">
+    <div :if={!@projects_collapsed} class="flex-1 overflow-y-auto">
       <button
         :for={project <- @projects}
         phx-click="select_project"
@@ -44,7 +54,7 @@
   </button>
 
   <%!-- Main content area --%>
-  <div class="flex min-h-0 flex-1 flex-col">
+  <div class="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
     <%!-- Board header --%>
     <div class="flex flex-wrap items-center justify-between gap-3 border-b border-base-300 px-4 py-3">
       <div class="flex items-center gap-3">
