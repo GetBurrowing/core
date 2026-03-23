@@ -68,14 +68,25 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
   @spec dispatch_prompt(map(), map() | nil, map() | nil) :: String.t()
   def dispatch_prompt(%{status: "planning"} = task, nil, nil) do
     """
-    You have been assigned a task that needs a plan.
+    You have been assigned a task that requires a plan before any implementation begins.
 
     Task: #{task.title}
     Description: #{task.description || "No description provided."}
     Priority: #{task.priority}
 
-    Create a plan using the plan_create tool, then submit it with plan_submit. \
-    Do not begin implementation until the plan is approved by a human reviewer.\
+    Create a plan using the plan_create tool. The plan will be reviewed by a human before work starts — make it specific enough that they can meaningfully approve or reject it.
+
+    A good plan stage must include:
+    - A clear name (not just a category label)
+    - A description that explains: what specifically will be changed, which files will be modified or created, what the implementation approach is, and why that approach was chosen
+    - Appropriate validations: test_pass and lint_pass for code changes, code_review for anything requiring human judgment, manual_approval for final sign-off
+
+    Aim for 3–7 stages. Each stage should represent a discrete, reviewable unit of work. "Client-side draft persistence" with no further detail is not acceptable — describe the actual change.
+
+    Example of a good stage description:
+    "Add a module-level drafts Map to ComposeInput JS hook (assets/js/hooks/compose_input.js). On every input event, store the current textarea value keyed by space_id (read from data-space-id attribute on the element). On mounted(), restore any saved draft and push it to the server via compose_changed event. On compose_reset, delete the draft for that space."
+
+    Submit the plan with plan_submit when complete. Do not begin implementation until the plan is approved.
     """
   end
 
