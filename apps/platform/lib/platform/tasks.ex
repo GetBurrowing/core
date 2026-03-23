@@ -122,6 +122,19 @@ defmodule Platform.Tasks do
 
   def list_epics_for_project(project_id), do: list_epics(project_id)
 
+  @doc "Return %{epic_id => %{total: n, done: n}} for a list of epic IDs in one query."
+  def epic_task_counts(epic_ids) when is_list(epic_ids) do
+    Task
+    |> where([t], t.epic_id in ^epic_ids)
+    |> group_by([t], t.epic_id)
+    |> select(
+      [t],
+      {t.epic_id, count(t.id), fragment("count(*) filter (where ? = 'done')", t.status)}
+    )
+    |> Repo.all()
+    |> Map.new(fn {epic_id, total, done} -> {epic_id, %{total: total, done: done}} end)
+  end
+
   # ── Tasks (persistent) ──────────────────────────────────────────────────
 
   def create_task(attrs) do
@@ -319,9 +332,11 @@ defmodule Platform.Tasks do
   @doc "List all tasks with preloaded project and epic, ordered by insertion."
   def list_all_tasks(opts \\ []) do
     project_id = Keyword.get(opts, :project_id)
+    epic_id = Keyword.get(opts, :epic_id)
 
     Task
     |> maybe_filter_project(project_id)
+    |> maybe_filter_epic(epic_id)
     |> order_by([t], desc: t.inserted_at)
     |> preload([:project, :epic, plans: :stages])
     |> Repo.all()
@@ -329,6 +344,9 @@ defmodule Platform.Tasks do
 
   defp maybe_filter_project(query, nil), do: query
   defp maybe_filter_project(query, id), do: where(query, [t], t.project_id == ^id)
+
+  defp maybe_filter_epic(query, nil), do: query
+  defp maybe_filter_epic(query, id), do: where(query, [t], t.epic_id == ^id)
 
   @doc "Get a task with full detail: project, epic, plans with stages and validations."
   def get_task_detail(task_id) do
