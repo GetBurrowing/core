@@ -124,11 +124,10 @@ defmodule PlatformWeb.TasksLiveTest do
     assert html =~ "Project One Task"
     assert html =~ "Project Two Task"
 
-    # Filter to p1
+    # Filter to p1 via sidebar
     html =
       view
-      |> element("form")
-      |> render_change(%{"project_id" => p1.id})
+      |> render_click("select_project", %{"id" => p1.id})
 
     assert html =~ "Project One Task"
     refute html =~ "Project Two Task"
@@ -183,6 +182,55 @@ defmodule PlatformWeb.TasksLiveTest do
   test "GET /tasks redirects unauthenticated users to login", %{conn: conn} do
     conn = get(conn, ~p"/tasks")
     assert redirected_to(conn) == "/auth/login"
+  end
+
+  test "mobile sheet shows epics after project selection and stays open", %{conn: conn} do
+    project = create_project()
+
+    {:ok, _epic} =
+      Tasks.create_epic(%{
+        project_id: project.id,
+        name: "Mobile Epic",
+        status: "open"
+      })
+
+    conn = authenticated_conn(conn)
+    {:ok, view, _html} = live(conn, ~p"/tasks")
+
+    # Open the mobile project sheet
+    html = render_click(view, "toggle_project_sheet")
+    assert html =~ "Projects"
+
+    # Select project via mobile event — sheet should stay open
+    html = render_click(view, "select_project_mobile", %{"id" => project.id})
+    # Sheet is still visible (project name still rendered inside the sheet)
+    assert html =~ project.name
+    # Epic is shown nested under the project
+    assert html =~ "Mobile Epic"
+    assert html =~ "open"
+  end
+
+  test "selecting an epic from mobile sheet closes the sheet", %{conn: conn} do
+    project = create_project()
+
+    {:ok, epic} =
+      Tasks.create_epic(%{
+        project_id: project.id,
+        name: "Closeable Epic",
+        status: "open"
+      })
+
+    conn = authenticated_conn(conn)
+    {:ok, view, _html} = live(conn, ~p"/tasks")
+
+    # Open sheet and select project
+    render_click(view, "toggle_project_sheet")
+    render_click(view, "select_project_mobile", %{"id" => project.id})
+
+    # Select epic — sheet should close
+    html = render_click(view, "select_epic", %{"id" => epic.id})
+    # The mobile sheet backdrop (bg-black/40) should no longer be present
+    refute html =~ "bg-black/40"
   end
 
   test "shell sidebar includes tasks navigation", %{conn: conn} do

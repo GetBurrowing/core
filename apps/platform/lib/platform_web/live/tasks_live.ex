@@ -39,6 +39,9 @@ defmodule PlatformWeb.TasksLive do
      |> assign(:page_title, "Tasks")
      |> assign(:projects, projects)
      |> assign(:selected_project_id, nil)
+     |> assign(:selected_epic_id, nil)
+     |> assign(:sidebar_open, true)
+     |> assign(:show_project_sheet, false)
      |> assign(:all_tasks, all_tasks)
      |> assign(:columns, group_by_column(all_tasks))
      |> assign(:kanban_columns, @kanban_columns)
@@ -100,26 +103,57 @@ defmodule PlatformWeb.TasksLive do
   # ── Events ──────────────────────────────────────────────────────────────
 
   @impl true
-  def handle_event("filter_project", %{"project_id" => ""}, socket) do
-    tasks = Tasks.list_all_tasks()
-
-    {:noreply,
-     socket
-     |> assign(:selected_project_id, nil)
-     |> assign(:all_tasks, tasks)
-     |> assign(:columns, group_by_column(tasks))
-     |> assign(:epics, Tasks.list_epics_for_project(nil))}
+  def handle_event("toggle_sidebar", _params, socket) do
+    {:noreply, assign(socket, :sidebar_open, !socket.assigns.sidebar_open)}
   end
 
-  def handle_event("filter_project", %{"project_id" => project_id}, socket) do
-    tasks = Tasks.list_all_tasks(project_id: project_id)
+  def handle_event("toggle_project_sheet", _params, socket) do
+    {:noreply, assign(socket, :show_project_sheet, !socket.assigns.show_project_sheet)}
+  end
+
+  def handle_event("close_project_sheet", _params, socket) do
+    {:noreply, assign(socket, :show_project_sheet, false)}
+  end
+
+  def handle_event("select_project", %{"id" => project_id}, socket) do
+    epics = Tasks.list_epics_for_project(project_id)
 
     {:noreply,
      socket
      |> assign(:selected_project_id, project_id)
-     |> assign(:all_tasks, tasks)
-     |> assign(:columns, group_by_column(tasks))
-     |> assign(:epics, Tasks.list_epics_for_project(project_id))}
+     |> assign(:selected_epic_id, nil)
+     |> assign(:epics, epics)
+     |> assign(:show_project_sheet, false)
+     |> refresh_board()}
+  end
+
+  def handle_event("select_project_mobile", %{"id" => project_id}, socket) do
+    epics = Tasks.list_epics_for_project(project_id)
+
+    {:noreply,
+     socket
+     |> assign(:selected_project_id, project_id)
+     |> assign(:selected_epic_id, nil)
+     |> assign(:epics, epics)
+     |> refresh_board()}
+  end
+
+  def handle_event("select_epic", %{"id" => epic_id}, socket) do
+    {:noreply,
+     socket
+     |> assign(:selected_epic_id, epic_id)
+     |> assign(:show_project_sheet, false)
+     |> refresh_board()}
+  end
+
+  def handle_event("clear_filters", _params, socket) do
+    {:noreply,
+     socket
+     |> assign(:selected_project_id, nil)
+     |> assign(:selected_epic_id, nil)
+     |> assign(:epics, Tasks.list_epics_for_project(nil))
+     |> assign(:show_project_sheet, false)
+     |> refresh_board()}
   end
 
   def handle_event("select_task", %{"id" => task_id}, socket) do
@@ -327,10 +361,19 @@ defmodule PlatformWeb.TasksLive do
 
   defp refresh_board(socket) do
     opts =
-      case socket.assigns.selected_project_id do
-        nil -> []
-        id -> [project_id: id]
-      end
+      []
+      |> then(fn o ->
+        case socket.assigns.selected_project_id do
+          nil -> o
+          id -> Keyword.put(o, :project_id, id)
+        end
+      end)
+      |> then(fn o ->
+        case socket.assigns.selected_epic_id do
+          nil -> o
+          id -> Keyword.put(o, :epic_id, id)
+        end
+      end)
 
     tasks = Tasks.list_all_tasks(opts)
 
