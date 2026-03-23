@@ -278,8 +278,10 @@ defmodule Platform.Orchestration.TaskRouter do
   # ── Dispatch helpers ───────────────────────────────────────────────────
 
   defp dispatch_attention(%{type: :federated, id: runtime_id}, task_id, reason, context, prompt) do
+    task_status = context[:task][:status] || context[:task]["status"]
+
     payload = %{
-      signal: %{reason: reason, task_id: task_id},
+      signal: %{reason: reason, task_id: task_id, task_status: task_status},
       context: context,
       message: %{content: prompt}
     }
