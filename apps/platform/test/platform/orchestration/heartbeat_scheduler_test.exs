@@ -58,11 +58,11 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
   end
 
   describe "dispatch_prompt/3" do
-    test "generates dispatch prompt with task info" do
+    test "planning without plan instructs agent to create a plan" do
       task = %{
         title: "Fix auth bug",
         description: "Auth is broken",
-        status: "in_progress",
+        status: "planning",
         priority: "high"
       }
 
@@ -70,7 +70,61 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
 
       assert prompt =~ "Fix auth bug"
       assert prompt =~ "Auth is broken"
-      assert prompt =~ "in_progress"
+      assert prompt =~ "plan_create"
+      assert prompt =~ "plan_submit"
+      assert prompt =~ "high"
+    end
+
+    test "in_progress generates execution prompt" do
+      task = %{
+        title: "Fix auth bug",
+        description: "Auth is broken",
+        status: "in_progress",
+        priority: "high"
+      }
+
+      plan = %{version: 1, stages: [%{}]}
+      stage = %{position: 1, name: "coding"}
+
+      prompt = HeartbeatScheduler.dispatch_prompt(task, plan, stage)
+
+      assert prompt =~ "Fix auth bug"
+      assert prompt =~ "Plan approved"
+      assert prompt =~ "validation_pass"
+      assert prompt =~ "report_blocker"
+    end
+
+    test "in_review generates review prompt" do
+      task = %{
+        title: "Review task",
+        description: "Check it",
+        status: "in_review",
+        priority: "medium"
+      }
+
+      plan = %{version: 1, stages: [%{}]}
+      stage = %{position: 1, name: "review"}
+
+      prompt = HeartbeatScheduler.dispatch_prompt(task, plan, stage)
+
+      assert prompt =~ "Review task"
+      assert prompt =~ "in review"
+      assert prompt =~ "Do not self-approve"
+    end
+
+    test "fallback generates generic assignment prompt" do
+      task = %{
+        title: "Fix auth bug",
+        description: "Auth is broken",
+        status: "ready",
+        priority: "high"
+      }
+
+      prompt = HeartbeatScheduler.dispatch_prompt(task, nil, nil)
+
+      assert prompt =~ "Fix auth bug"
+      assert prompt =~ "Auth is broken"
+      assert prompt =~ "ready"
       assert prompt =~ "high"
       assert prompt =~ "assigned"
     end

@@ -58,8 +58,54 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
 
   @doc """
   Generate the initial dispatch prompt sent when a task is first assigned.
+
+  Pattern-matched on task status and plan/stage presence:
+  - planning (no plan) — instruct agent to create and submit a plan
+  - in_progress — execute current stage with evidence
+  - in_review — run validations, do not self-approve gates
+  - fallback — generic assignment prompt
   """
   @spec dispatch_prompt(map(), map() | nil, map() | nil) :: String.t()
+  def dispatch_prompt(%{status: "planning"} = task, nil, nil) do
+    """
+    You have been assigned a task that needs a plan.
+
+    Task: #{task.title}
+    Description: #{task.description || "No description provided."}
+    Priority: #{task.priority}
+
+    Create a plan using the plan_create tool, then submit it with plan_submit. \
+    Do not begin implementation until the plan is approved by a human reviewer.\
+    """
+  end
+
+  def dispatch_prompt(%{status: "in_progress"} = task, plan, stage) do
+    stage_info = format_stage_info(plan, stage)
+
+    """
+    Plan approved — execute the current stage.
+
+    Task: #{task.title}
+    #{stage_info}\
+    Push evidence using validation_pass or stage_complete as you finish each step. \
+    Post commentary to the execution space so reviewers can follow along. \
+    Use report_blocker if you are stuck.\
+    """
+  end
+
+  def dispatch_prompt(%{status: "in_review"} = task, plan, stage) do
+    stage_info = format_stage_info(plan, stage)
+
+    """
+    Task is in review — run validations and push evidence.
+
+    Task: #{task.title}
+    #{stage_info}\
+    Run all applicable validations and push evidence. \
+    Do not self-approve code_review or manual_approval stages — a human must approve those.\
+    """
+  end
+
   def dispatch_prompt(task, plan, stage) do
     stage_info = format_stage_info(plan, stage)
 

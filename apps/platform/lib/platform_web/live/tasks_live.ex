@@ -175,6 +175,21 @@ defmodule PlatformWeb.TasksLive do
       if task do
         case Tasks.transition_task(task, new_status) do
           {:ok, updated} ->
+            if new_status == "planning" && updated.assignee_type == "agent" && updated.assignee_id do
+              Elixir.Task.start(fn ->
+                # assignee_id is the agent UUID — resolve to runtime_id for dispatch
+                agent = Platform.Repo.get(Platform.Agents.Agent, updated.assignee_id)
+                runtime = agent && Platform.Federation.get_runtime_for_agent(agent)
+
+                if runtime do
+                  Platform.Orchestration.assign_task(task_id, %{
+                    type: :federated,
+                    id: runtime.runtime_id
+                  })
+                end
+              end)
+            end
+
             socket
             |> put_flash(:info, "Task moved to #{new_status}.")
             |> refresh_board()
@@ -191,6 +206,32 @@ defmodule PlatformWeb.TasksLive do
       end
 
     {:noreply, socket}
+  end
+
+  def handle_event("assign_agent", %{"agent_id" => agent_id}, socket) do
+    task = socket.assigns.selected_task
+
+    if task do
+      attrs =
+        if agent_id == "" do
+          %{assignee_id: nil, assignee_type: nil}
+        else
+          %{assignee_id: agent_id, assignee_type: "agent"}
+        end
+
+      case Tasks.update_task(task, attrs) do
+        {:ok, updated} ->
+          {:noreply,
+           socket
+           |> refresh_board()
+           |> assign(:selected_task, Tasks.get_task_detail(updated.id))}
+
+        {:error, _} ->
+          {:noreply, put_flash(socket, :error, "Failed to assign agent.")}
+      end
+    else
+      {:noreply, socket}
+    end
   end
 
   # ── Bottom sheet events ─────────────────────────────────────────────────

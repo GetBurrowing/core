@@ -239,6 +239,27 @@
         </span>
       </div>
 
+      <%!-- Assign agent --%>
+      <div :if={@agents != []} class="flex items-center gap-2">
+        <span class="text-xs font-semibold uppercase tracking-wider text-base-content/50">
+          Agent
+        </span>
+        <select
+          class="select select-bordered select-xs flex-1"
+          phx-change="assign_agent"
+          name="agent_id"
+        >
+          <option value="">Unassigned</option>
+          <option
+            :for={agent <- @agents}
+            value={agent.id}
+            selected={@selected_task.assignee_id == agent.id}
+          >
+            {agent.name}
+          </option>
+        </select>
+      </div>
+
       <%!-- Transition buttons --%>
       <div :if={available_transitions(@selected_task.status) != []} class="flex flex-wrap gap-2">
         <button

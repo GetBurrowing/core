@@ -30,7 +30,7 @@ defmodule Platform.Orchestration.TaskRouter do
             last_evidence_at: DateTime.t() | nil,
             heartbeat_ref: reference() | nil,
             escalation_count: non_neg_integer(),
-            status: :dispatching | :running | :stalled | :complete | :escalated
+            status: :dispatching | :running | :stalled | :complete | :escalated | :waiting_human
           }
 
     defstruct [
@@ -160,6 +160,10 @@ defmodule Platform.Orchestration.TaskRouter do
     end
   end
 
+  def handle_info(:heartbeat, %State{status: :waiting_human} = state) do
+    {:noreply, state}
+  end
+
   def handle_info(:heartbeat, state) do
     state = %{state | heartbeat_ref: nil}
 
@@ -209,7 +213,13 @@ defmodule Platform.Orchestration.TaskRouter do
         |> Map.put(:stage_started_at, DateTime.utc_now())
         |> Map.put(:last_evidence_at, DateTime.utc_now())
         |> reset_escalation()
-        |> schedule_heartbeat()
+
+      state =
+        if HeartbeatScheduler.manual_approval?(stage.name) do
+          state |> cancel_heartbeat() |> Map.put(:status, :waiting_human)
+        else
+          schedule_heartbeat(state)
+        end
 
       {:noreply, state}
     else
@@ -217,7 +227,28 @@ defmodule Platform.Orchestration.TaskRouter do
     end
   end
 
+  # Board PubSub: plan updated for our task
+  def handle_info({:plan_updated, %{task_id: task_id} = plan}, %State{task_id: task_id} = state) do
+    state =
+      case plan.status do
+        "pending_review" ->
+          state |> cancel_heartbeat() |> Map.put(:status, :waiting_human)
+
+        "approved" ->
+          state |> Map.put(:status, :running) |> schedule_heartbeat()
+
+        "rejected" ->
+          state |> cancel_heartbeat() |> Map.put(:status, :waiting_human)
+
+        _other ->
+          state
+      end
+
+    {:noreply, state}
+  end
+
   # Ignore unrelated board events
+  def handle_info({:plan_updated, _plan}, state), do: {:noreply, state}
   def handle_info({:task_updated, _task}, state), do: {:noreply, state}
   def handle_info(_msg, state), do: {:noreply, state}
 
@@ -317,6 +348,8 @@ defmodule Platform.Orchestration.TaskRouter do
   end
 
   # ── Stall / escalation ────────────────────────────────────────────────
+
+  defp handle_possible_stall(%State{status: :waiting_human} = state, _task), do: state
 
   defp handle_possible_stall(state, task) do
     stage_type = current_stage_type(state)

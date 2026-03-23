@@ -225,9 +225,14 @@ defmodule Platform.Tasks do
   end
 
   def submit_plan_for_review(%Plan{status: "draft"} = plan) do
-    plan
-    |> Plan.changeset(%{status: "pending_review"})
-    |> Repo.update()
+    case plan |> Plan.changeset(%{status: "pending_review"}) |> Repo.update() do
+      {:ok, updated} ->
+        broadcast_board({:plan_updated, updated})
+        {:ok, updated}
+
+      error ->
+        error
+    end
   end
 
   def submit_plan_for_review(_plan), do: {:error, :invalid_transition}
@@ -235,17 +240,29 @@ defmodule Platform.Tasks do
   def approve_plan(%Plan{status: "pending_review"} = plan, approved_by) do
     now = DateTime.utc_now()
 
-    plan
-    |> Plan.changeset(%{status: "approved", approved_by: approved_by, approved_at: now})
-    |> Repo.update()
+    case plan
+         |> Plan.changeset(%{status: "approved", approved_by: approved_by, approved_at: now})
+         |> Repo.update() do
+      {:ok, updated} ->
+        broadcast_board({:plan_updated, updated})
+        {:ok, updated}
+
+      error ->
+        error
+    end
   end
 
   def approve_plan(_plan, _approved_by), do: {:error, :invalid_transition}
 
   def reject_plan(%Plan{status: "pending_review"} = plan, _rejected_by) do
-    plan
-    |> Plan.changeset(%{status: "rejected"})
-    |> Repo.update()
+    case plan |> Plan.changeset(%{status: "rejected"}) |> Repo.update() do
+      {:ok, updated} ->
+        broadcast_board({:plan_updated, updated})
+        {:ok, updated}
+
+      error ->
+        error
+    end
   end
 
   def reject_plan(_plan, _rejected_by), do: {:error, :invalid_transition}
