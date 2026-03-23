@@ -5,8 +5,9 @@ defmodule PlatformWeb.TasksLive do
 
   alias Platform.Chat
   alias Platform.Chat.AttachmentStorage
+  alias Platform.Repo
   alias Platform.Tasks
-  alias Platform.Tasks.Task
+  alias Platform.Tasks.{Plan, Task}
 
   @kanban_columns [
     {"backlog", "Backlog"},
@@ -27,7 +28,7 @@ defmodule PlatformWeb.TasksLive do
   @max_upload_size 15_000_000
 
   @impl true
-  def mount(_params, _session, socket) do
+  def mount(_params, session, socket) do
     if connected?(socket), do: Tasks.subscribe_board()
 
     projects = Tasks.list_projects()
@@ -37,6 +38,7 @@ defmodule PlatformWeb.TasksLive do
     {:ok,
      socket
      |> assign(:page_title, "Tasks")
+     |> assign(:current_user_id, session["current_user_id"])
      |> assign(:projects, projects)
      |> assign(:selected_project_id, nil)
      |> assign(:selected_epic_id, nil)
@@ -46,6 +48,7 @@ defmodule PlatformWeb.TasksLive do
      |> assign(:all_tasks, all_tasks)
      |> assign(:columns, group_by_column(all_tasks))
      |> assign(:kanban_columns, @kanban_columns)
+     |> assign(:pending_plan_count, count_pending_plans(all_tasks))
      |> assign(:selected_task, nil)
      |> assign(:show_detail, false)
      # Bottom sheet state
@@ -234,6 +237,52 @@ defmodule PlatformWeb.TasksLive do
     end
   end
 
+  # ── Plan review events ──────────────────────────────────────────────────
+
+  def handle_event("approve_plan", %{"plan-id" => plan_id}, socket) do
+    plan = Repo.get(Plan, plan_id)
+
+    if plan && plan.status == "pending_review" do
+      approved_by = socket.assigns[:current_user_id]
+
+      case Tasks.approve_plan(plan, approved_by) do
+        {:ok, _} ->
+          {:noreply,
+           socket
+           |> put_flash(:info, "Plan approved.")
+           |> refresh_board()
+           |> reload_selected_task()}
+
+        {:error, _} ->
+          {:noreply, put_flash(socket, :error, "Failed to approve plan.")}
+      end
+    else
+      {:noreply, put_flash(socket, :error, "Plan not found or not pending review.")}
+    end
+  end
+
+  def handle_event("reject_plan", %{"plan-id" => plan_id}, socket) do
+    plan = Repo.get(Plan, plan_id)
+
+    if plan && plan.status == "pending_review" do
+      rejected_by = socket.assigns[:current_user_id]
+
+      case Tasks.reject_plan(plan, rejected_by) do
+        {:ok, _} ->
+          {:noreply,
+           socket
+           |> put_flash(:info, "Plan rejected.")
+           |> refresh_board()
+           |> reload_selected_task()}
+
+        {:error, _} ->
+          {:noreply, put_flash(socket, :error, "Failed to reject plan.")}
+      end
+    else
+      {:noreply, put_flash(socket, :error, "Plan not found or not pending review.")}
+    end
+  end
+
   # ── Bottom sheet events ─────────────────────────────────────────────────
 
   def handle_event("toggle_task_sheet", _params, socket) do
@@ -303,11 +352,15 @@ defmodule PlatformWeb.TasksLive do
 
   @impl true
   def handle_info({:task_updated, _task}, socket) do
-    {:noreply, refresh_board(socket)}
+    {:noreply, socket |> refresh_board() |> reload_selected_task()}
   end
 
   def handle_info({:task_created, _task}, socket) do
     {:noreply, refresh_board(socket)}
+  end
+
+  def handle_info({:plan_updated, _plan}, socket) do
+    {:noreply, socket |> refresh_board() |> reload_selected_task()}
   end
 
   def handle_info(_message, socket), do: {:noreply, socket}
@@ -421,6 +474,21 @@ defmodule PlatformWeb.TasksLive do
     socket
     |> assign(:all_tasks, tasks)
     |> assign(:columns, group_by_column(tasks))
+    |> assign(:pending_plan_count, count_pending_plans(tasks))
+  end
+
+  defp reload_selected_task(socket) do
+    if task = socket.assigns[:selected_task] do
+      assign(socket, :selected_task, Tasks.get_task_detail(task.id))
+    else
+      socket
+    end
+  end
+
+  defp count_pending_plans(tasks) do
+    Enum.count(tasks, fn task ->
+      Enum.any?(task.plans || [], &(&1.status == "pending_review"))
+    end)
   end
 
   # ── View helpers ───────────────────────────────────────────────────────

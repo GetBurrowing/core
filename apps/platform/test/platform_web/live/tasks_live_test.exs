@@ -284,6 +284,79 @@ defmodule PlatformWeb.TasksLiveTest do
     assert html =~ "Collapsible Epic"
   end
 
+  # ── Plan review tests ─────────────────────────────────────────────────
+
+  test "approve_plan transitions plan to approved and refreshes detail", %{conn: conn} do
+    project = create_project()
+    task = create_task(project, %{title: "Plan Review Task", status: "planning"})
+
+    {:ok, plan} =
+      Tasks.create_plan(%{task_id: task.id, version: 1, status: "draft"})
+
+    {:ok, _s1} =
+      Tasks.create_stage(%{plan_id: plan.id, position: 1, name: "Stage 1", status: "pending"})
+
+    {:ok, plan} = Tasks.submit_plan_for_review(plan)
+
+    conn = authenticated_conn(conn)
+    {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
+
+    # Should see pending review indicator and approve button
+    html = render(view)
+    assert html =~ "pending review"
+    assert html =~ "Approve Plan"
+
+    # Click approve
+    html =
+      view
+      |> element("button[phx-click=\"approve_plan\"]")
+      |> render_click()
+
+    assert html =~ "Plan approved."
+
+    # Verify plan is now approved in DB
+    updated_plan = Tasks.get_plan(plan.id)
+    assert updated_plan.status == "approved"
+  end
+
+  test "reject_plan transitions plan to rejected", %{conn: conn} do
+    project = create_project()
+    task = create_task(project, %{title: "Rejectable Task", status: "planning"})
+
+    {:ok, plan} =
+      Tasks.create_plan(%{task_id: task.id, version: 1, status: "draft"})
+
+    {:ok, plan} = Tasks.submit_plan_for_review(plan)
+
+    conn = authenticated_conn(conn)
+    {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
+
+    html =
+      view
+      |> element("button[phx-click=\"reject_plan\"]")
+      |> render_click()
+
+    assert html =~ "Plan rejected."
+
+    updated_plan = Tasks.get_plan(plan.id)
+    assert updated_plan.status == "rejected"
+  end
+
+  test "pending plan count badge appears in board header", %{conn: conn} do
+    project = create_project()
+    task = create_task(project, %{title: "Badge Task", status: "planning"})
+
+    {:ok, plan} =
+      Tasks.create_plan(%{task_id: task.id, version: 1, status: "draft"})
+
+    {:ok, _plan} = Tasks.submit_plan_for_review(plan)
+
+    conn = authenticated_conn(conn)
+    {:ok, _view, html} = live(conn, ~p"/tasks")
+
+    assert html =~ "awaiting review"
+  end
+
   test "shell sidebar includes tasks navigation", %{conn: conn} do
     conn = authenticated_conn(conn)
     {:ok, _view, html} = live(conn, ~p"/tasks")

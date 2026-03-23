@@ -70,6 +70,9 @@
           Tasks
         </h1>
         <span class="badge badge-ghost badge-sm">{length(@all_tasks)}</span>
+        <span :if={@pending_plan_count > 0} class="badge badge-warning badge-sm gap-1">
+          {@pending_plan_count} awaiting review
+        </span>
       </div>
 
       <%!-- Active filter breadcrumb --%>
@@ -300,11 +303,33 @@
         </h3>
         <div
           :for={plan <- @selected_task.plans}
-          class="rounded-box border border-base-300 bg-base-200/30 p-3 space-y-2"
+          class={"rounded-box border p-3 space-y-2 #{if plan.status == "pending_review", do: "border-warning bg-warning/5", else: "border-base-300 bg-base-200/30"}"}
         >
           <div class="flex items-center justify-between">
             <span class="text-xs font-medium">v{plan.version}</span>
-            <span class="badge badge-outline badge-xs">{plan.status}</span>
+            <span :if={plan.status == "pending_review"} class="badge badge-warning badge-xs">
+              pending review
+            </span>
+            <span :if={plan.status != "pending_review"} class="badge badge-outline badge-xs">
+              {plan.status}
+            </span>
+          </div>
+          <%!-- Approve / Reject buttons — prominent, above stages --%>
+          <div :if={plan.status == "pending_review"} class="flex gap-2">
+            <button
+              class="btn btn-sm btn-success flex-1"
+              phx-click="approve_plan"
+              phx-value-plan-id={plan.id}
+            >
+              Approve Plan
+            </button>
+            <button
+              class="btn btn-sm btn-ghost btn-error"
+              phx-click="reject_plan"
+              phx-value-plan-id={plan.id}
+            >
+              Reject
+            </button>
           </div>
           <div
             :for={stage <- plan.stages || []}
