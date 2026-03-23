@@ -1784,28 +1784,13 @@ defmodule Platform.Chat do
   end
 
   defp count_unread(space_id, last_read_id) do
-    # Look up when the last-read message was posted, then count newer messages
-    # by inserted_at. This handles the v4→v7 UUID migration where old v4 UUIDs
-    # sort lexicographically higher than v7 UUIDs, causing phantom unreads.
-    case Repo.get(Message, last_read_id) do
-      %Message{inserted_at: last_read_at} ->
-        from(m in Message,
-          where:
-            m.space_id == ^space_id and m.inserted_at > ^last_read_at and
-              m.id != ^last_read_id and is_nil(m.thread_id) and is_nil(m.deleted_at),
-          select: count(m.id)
-        )
-        |> Repo.one()
-
-      nil ->
-        # Last-read message was deleted — count all messages
-        from(m in Message,
-          where: m.space_id == ^space_id and is_nil(m.thread_id) and is_nil(m.deleted_at),
-          select: count(m.id)
-        )
-        |> Repo.one()
-        |> min(10)
-    end
+    from(m in Message,
+      where:
+        m.space_id == ^space_id and m.id > ^last_read_id and is_nil(m.thread_id) and
+          is_nil(m.deleted_at),
+      select: count(m.id)
+    )
+    |> Repo.one()
   end
 
   defp publish_message_posted(msg, opts \\ []) do
