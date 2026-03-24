@@ -240,7 +240,11 @@ defmodule PlatformWeb.TasksLive do
   # ── Plan review events ──────────────────────────────────────────────────
 
   def handle_event("approve_plan", %{"plan-id" => plan_id}, socket) do
-    plan = Repo.get(Plan, plan_id)
+    plan =
+      case Ecto.UUID.cast(plan_id) do
+        {:ok, uuid} -> Repo.get(Plan, uuid)
+        :error -> nil
+      end
 
     if plan && plan.status == "pending_review" do
       approved_by = socket.assigns[:current_user_id]
@@ -262,7 +266,11 @@ defmodule PlatformWeb.TasksLive do
   end
 
   def handle_event("reject_plan", %{"plan-id" => plan_id}, socket) do
-    plan = Repo.get(Plan, plan_id)
+    plan =
+      case Ecto.UUID.cast(plan_id) do
+        {:ok, uuid} -> Repo.get(Plan, uuid)
+        :error -> nil
+      end
 
     if plan && plan.status == "pending_review" do
       rejected_by = socket.assigns[:current_user_id]
