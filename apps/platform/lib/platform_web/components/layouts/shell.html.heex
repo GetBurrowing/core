@@ -78,6 +78,15 @@
       <span class="hero-chart-bar-square size-5 flex-shrink-0"></span>
       <span :if={!@sidebar_collapsed} class="text-sm font-medium">Usage</span>
     </.link>
+    <.link
+      navigate="/admin/prompts"
+      class={nav_item_class(@current_path, "/admin/prompts")}
+      phx-click="close_drawer"
+      title="Admin"
+    >
+      <span class="hero-wrench-screwdriver size-5 flex-shrink-0"></span>
+      <span :if={!@sidebar_collapsed} class="text-sm font-medium">Admin</span>
+    </.link>
 
     <div class="flex-1"></div>
 

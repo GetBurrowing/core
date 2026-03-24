@@ -255,6 +255,9 @@ defmodule PlatformWeb.ShellLive do
       PlatformWeb.UsageLive ->
         "Usage"
 
+      PlatformWeb.AdminPromptsLive ->
+        "Admin"
+
       _ ->
         view
         |> Module.split()

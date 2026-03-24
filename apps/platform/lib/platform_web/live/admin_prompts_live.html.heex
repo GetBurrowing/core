@@ -1,0 +1,189 @@
+<div class="flex h-full min-h-0 flex-col">
+  <%!-- Header --%>
+  <div class="flex items-center justify-between border-b border-base-300 px-4 py-3">
+    <div class="flex items-center gap-3">
+      <%= if @selected_template do %>
+        <button
+          phx-click="back_to_index"
+          class="btn btn-ghost btn-xs btn-square"
+          title="Back to all prompts"
+        >
+          <span class="hero-arrow-left size-4"></span>
+        </button>
+        <h1 class="text-sm font-semibold uppercase tracking-widest text-base-content/60">
+          Admin · Prompts · {@selected_template.slug}
+        </h1>
+      <% else %>
+        <h1 class="text-sm font-semibold uppercase tracking-widest text-base-content/60">
+          Admin · Prompts
+        </h1>
+        <span class="badge badge-ghost badge-sm">{length(@templates)}</span>
+      <% end %>
+    </div>
+    <div class="flex items-center gap-2">
+      <span :if={@save_status == :saved} class="text-xs text-success">Saved ✓</span>
+    </div>
+  </div>
+
+  <%!-- INDEX VIEW --%>
+  <%= if is_nil(@selected_template) do %>
+    <div class="flex-1 overflow-y-auto p-4">
+      <div
+        :if={@templates == []}
+        class="flex items-center justify-center h-full text-base-content/30"
+      >
+        No prompt templates found. Run migrations to seed defaults.
+      </div>
+
+      <div :if={@templates != []} class="overflow-x-auto">
+        <table class="table table-sm w-full">
+          <thead>
+            <tr>
+              <th class="text-xs uppercase tracking-wider text-base-content/50">Slug</th>
+              <th class="text-xs uppercase tracking-wider text-base-content/50">Name</th>
+              <th class="text-xs uppercase tracking-wider text-base-content/50 hidden md:table-cell">
+                Description
+              </th>
+              <th class="text-xs uppercase tracking-wider text-base-content/50 hidden sm:table-cell">
+                Updated
+              </th>
+              <th class="text-xs uppercase tracking-wider text-base-content/50 hidden sm:table-cell">
+                By
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr
+              :for={template <- @templates}
+              phx-click="select_template"
+              phx-value-slug={template.slug}
+              class="cursor-pointer hover:bg-base-200 transition-colors"
+            >
+              <td class="font-mono text-xs text-primary">{template.slug}</td>
+              <td class="text-sm font-medium">{template.name}</td>
+              <td class="text-xs text-base-content/60 hidden md:table-cell max-w-xs">
+                <span class="line-clamp-1">{template.description || "—"}</span>
+              </td>
+              <td class="text-xs text-base-content/50 hidden sm:table-cell whitespace-nowrap">
+                {relative_time(template.updated_at)}
+              </td>
+              <td class="text-xs text-base-content/50 hidden sm:table-cell">
+                {template.updated_by || "—"}
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  <% end %>
+
+  <%!-- EDIT VIEW --%>
+  <%= if @selected_template && @edit_form do %>
+    <div class="flex flex-1 min-h-0 overflow-hidden">
+      <%!-- Editor area --%>
+      <div class="flex flex-1 min-w-0 flex-col overflow-y-auto p-4 gap-6">
+        <.form
+          for={@edit_form}
+          phx-change="validate_template"
+          phx-submit="save_template"
+          class="space-y-4"
+        >
+          <%!-- Name --%>
+          <div>
+            <label class="label label-text text-xs font-medium">Name</label>
+            <input
+              type="text"
+              name="template[name]"
+              value={@edit_form[:name].value}
+              class="input input-bordered input-sm w-full"
+              placeholder="Human-readable name"
+            />
+            <div :if={@edit_form[:name].errors != []} class="text-xs text-error mt-1">
+              {hd(@edit_form[:name].errors) |> elem(0)}
+            </div>
+          </div>
+
+          <%!-- Description --%>
+          <div>
+            <label class="label label-text text-xs font-medium">Description</label>
+            <textarea
+              name="template[description]"
+              rows="2"
+              class="textarea textarea-bordered textarea-sm w-full text-sm"
+              placeholder="What this template is used for…"
+            >{@edit_form[:description].value}</textarea>
+          </div>
+
+          <%!-- Content --%>
+          <div>
+            <label class="label label-text text-xs font-medium">
+              Content
+              <span class="text-base-content/40 font-normal ml-1">
+                — use {"{{variable}}"} for interpolation
+              </span>
+            </label>
+            <textarea
+              name="template[content]"
+              rows="20"
+              class="textarea textarea-bordered w-full font-mono text-xs leading-relaxed"
+              placeholder="Prompt content with {{variable}} placeholders…"
+              style="resize: vertical;"
+            >{@edit_form[:content].value}</textarea>
+            <div :if={@edit_form[:content].errors != []} class="text-xs text-error mt-1">
+              {hd(@edit_form[:content].errors) |> elem(0)}
+            </div>
+          </div>
+
+          <%!-- Actions --%>
+          <div class="flex items-center gap-3 pt-2">
+            <button type="submit" class="btn btn-primary btn-sm">
+              Save
+            </button>
+            <button
+              type="button"
+              phx-click="reset_template"
+              class="btn btn-ghost btn-sm"
+              data-confirm="Reset to hardcoded default? This will overwrite your changes."
+            >
+              Reset to Default
+            </button>
+          </div>
+        </.form>
+
+        <%!-- Preview section --%>
+        <div :if={@preview_content} class="space-y-2">
+          <div class="flex items-center gap-2">
+            <span class="text-xs font-semibold uppercase tracking-wider text-base-content/50">
+              Preview
+            </span>
+            <span class="text-[10px] text-base-content/30">(with sample data)</span>
+          </div>
+          <div class="rounded-lg border border-base-300 bg-base-200 p-4">
+            <pre class="whitespace-pre-wrap font-mono text-xs text-base-content/80 leading-relaxed">{@preview_content}</pre>
+          </div>
+        </div>
+      </div>
+
+      <%!-- Variables reference sidebar --%>
+      <aside class="hidden lg:flex w-64 shrink-0 flex-col border-l border-base-300 bg-base-100 overflow-y-auto p-4 gap-3">
+        <div class="text-xs font-semibold uppercase tracking-wider text-base-content/50">
+          Available Variables
+        </div>
+        <div class="space-y-2">
+          <div
+            :for={var <- @selected_template.variables}
+            class="rounded border border-base-300 bg-base-200 p-2"
+          >
+            <div class="font-mono text-xs text-primary">{"{{#{var}}}"}</div>
+            <div class="mt-0.5 text-[11px] text-base-content/50">
+              {Map.get(variable_descriptions(), var, "Variable")}
+            </div>
+          </div>
+        </div>
+        <div class="mt-2 text-[10px] text-base-content/30 leading-relaxed">
+          Use {"{{variable_name}}"} syntax in the content. Unknown variables are left as-is.
+        </div>
+      </aside>
+    </div>
+  <% end %>
+</div>

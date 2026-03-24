@@ -17,6 +17,8 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
   | manual_approval   | n/a                | n/a             | n/a (human gate)    |
   """
 
+  alias Platform.Orchestration.PromptTemplates
+
   @type stage_type :: String.t()
 
   # Cadence config: {interval_ms, stall_threshold_ms, max_escalations}
@@ -65,6 +67,9 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
   @doc """
   Generate the initial dispatch prompt sent when a task is first assigned.
 
+  Tries to load the prompt from the DB (via PromptTemplates), falls back to the
+  hardcoded prompt if the template is not found.
+
   Pattern-matched on task status and plan/stage presence:
   - planning (no plan) — instruct agent to create and submit a plan
   - in_progress — execute current stage with evidence
@@ -73,6 +78,132 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
   """
   @spec dispatch_prompt(map(), map() | nil, map() | nil) :: String.t()
   def dispatch_prompt(%{status: "planning"} = task, nil, nil) do
+    assigns = %{
+      task_title: task.title,
+      task_description: task.description || "No description provided.",
+      task_priority: task.priority,
+      skills_reference: @skills_reference
+    }
+
+    case PromptTemplates.render_template("dispatch.planning", assigns) do
+      {:ok, rendered} ->
+        rendered
+
+      {:error, :not_found} ->
+        hardcoded_dispatch_planning(task)
+    end
+  end
+
+  def dispatch_prompt(%{status: "in_progress"} = task, plan, stage) do
+    stage_info = format_stage_info(plan, stage)
+    repo_url = project_attr(task, :repo_url, "")
+    default_branch = project_attr(task, :default_branch, "main")
+    task_slug = short_task_id(task)
+
+    assigns = %{
+      task_title: task.title,
+      stage_info: stage_info,
+      repo_url: repo_url,
+      default_branch: default_branch,
+      task_slug: task_slug,
+      skills_reference: @skills_reference
+    }
+
+    case PromptTemplates.render_template("dispatch.in_progress", assigns) do
+      {:ok, rendered} ->
+        rendered
+
+      {:error, :not_found} ->
+        hardcoded_dispatch_in_progress(task, plan, stage)
+    end
+  end
+
+  def dispatch_prompt(%{status: "in_review"} = task, plan, stage) do
+    stage_info = format_stage_info(plan, stage)
+    repo_url = project_attr(task, :repo_url, "")
+    default_branch = project_attr(task, :default_branch, "main")
+    task_slug = short_task_id(task)
+
+    assigns = %{
+      task_title: task.title,
+      stage_info: stage_info,
+      repo_url: repo_url,
+      default_branch: default_branch,
+      task_slug: task_slug,
+      skills_reference: @skills_reference
+    }
+
+    case PromptTemplates.render_template("dispatch.in_review", assigns) do
+      {:ok, rendered} ->
+        rendered
+
+      {:error, :not_found} ->
+        hardcoded_dispatch_in_review(task, plan, stage)
+    end
+  end
+
+  def dispatch_prompt(task, plan, stage) do
+    stage_info = format_stage_info(plan, stage)
+
+    assigns = %{
+      task_title: task.title,
+      task_description: task.description || "No description provided.",
+      task_status: task.status,
+      task_priority: task.priority,
+      stage_info: stage_info,
+      skills_reference: @skills_reference
+    }
+
+    case PromptTemplates.render_template("dispatch.fallback", assigns) do
+      {:ok, rendered} ->
+        rendered
+
+      {:error, :not_found} ->
+        hardcoded_dispatch_fallback(task, plan, stage)
+    end
+  end
+
+  @doc """
+  Generate a stateful heartbeat interrogation prompt.
+
+  Tries to load the prompt from the DB (via PromptTemplates), falls back to the
+  hardcoded prompt if the template is not found.
+
+  This is not a keepalive — it carries elapsed time, stage position, and
+  pending validations to force the agent to account for itself.
+  """
+  @spec heartbeat_prompt(map(), map() | nil, non_neg_integer(), list()) :: String.t()
+  def heartbeat_prompt(task, stage, elapsed_seconds, pending_validations) do
+    elapsed_str = format_elapsed(elapsed_seconds)
+    stage_name = if stage, do: stage.name, else: "unknown"
+    stage_status = if stage, do: stage.status, else: "unknown"
+
+    pending_str =
+      case pending_validations do
+        [] -> "none"
+        validations -> Enum.map_join(validations, ", ", & &1.kind)
+      end
+
+    assigns = %{
+      task_title: task.title,
+      stage_name: stage_name,
+      stage_status: stage_status,
+      elapsed: elapsed_str,
+      pending_validations: pending_str
+    }
+
+    case PromptTemplates.render_template("heartbeat", assigns) do
+      {:ok, rendered} ->
+        rendered
+
+      {:error, :not_found} ->
+        hardcoded_heartbeat(task, stage_name, stage_status, elapsed_str, pending_str)
+    end
+  end
+
+  # ── Hardcoded fallback prompts ─────────────────────────────────────────
+
+  defp hardcoded_dispatch_planning(task) do
     """
     You have been assigned a task that requires a plan before any implementation begins.
 
@@ -100,7 +231,7 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
     """
   end
 
-  def dispatch_prompt(%{status: "in_progress"} = task, plan, stage) do
+  defp hardcoded_dispatch_in_progress(task, plan, stage) do
     stage_info = format_stage_info(plan, stage)
     repo_url = project_attr(task, :repo_url, "")
     default_branch = project_attr(task, :default_branch, "main")
@@ -143,7 +274,7 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
     """
   end
 
-  def dispatch_prompt(%{status: "in_review"} = task, plan, stage) do
+  defp hardcoded_dispatch_in_review(task, plan, stage) do
     stage_info = format_stage_info(plan, stage)
     repo_url = project_attr(task, :repo_url, "")
     default_branch = project_attr(task, :default_branch, "main")
@@ -176,7 +307,7 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
     """
   end
 
-  def dispatch_prompt(task, plan, stage) do
+  defp hardcoded_dispatch_fallback(task, plan, stage) do
     stage_info = format_stage_info(plan, stage)
 
     """
@@ -195,24 +326,7 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
     """
   end
 
-  @doc """
-  Generate a stateful heartbeat interrogation prompt.
-
-  This is not a keepalive — it carries elapsed time, stage position, and
-  pending validations to force the agent to account for itself.
-  """
-  @spec heartbeat_prompt(map(), map() | nil, non_neg_integer(), list()) :: String.t()
-  def heartbeat_prompt(task, stage, elapsed_seconds, pending_validations) do
-    elapsed_str = format_elapsed(elapsed_seconds)
-    stage_name = if stage, do: stage.name, else: "unknown"
-    stage_status = if stage, do: stage.status, else: "unknown"
-
-    pending_str =
-      case pending_validations do
-        [] -> "none"
-        validations -> Enum.map_join(validations, ", ", & &1.kind)
-      end
-
+  defp hardcoded_heartbeat(task, stage_name, stage_status, elapsed_str, pending_str) do
     """
     Task: #{task.title} [stage: #{stage_name} — #{stage_status}]
     Stage running for: #{elapsed_str}
@@ -223,6 +337,8 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
     The attention signal that delivered this message includes a `context` field with the full task hierarchy: project, epic, task metadata, approved plan with stages, and execution_space_id.\
     """
   end
+
+  # ── Private helpers ────────────────────────────────────────────────────
 
   defp format_stage_info(nil, _stage), do: ""
 

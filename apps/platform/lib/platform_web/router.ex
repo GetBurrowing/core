@@ -51,6 +51,8 @@ defmodule PlatformWeb.Router do
       live("/control", ControlCenterLive, :index)
       live("/control/usage", UsageLive, :index)
       live("/control/:agent_slug", ControlCenterLive, :show)
+      live("/admin/prompts", AdminPromptsLive, :index)
+      live("/admin/prompts/:slug", AdminPromptsLive, :edit)
     end
   end
 

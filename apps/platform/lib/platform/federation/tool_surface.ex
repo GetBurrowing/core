@@ -385,6 +385,40 @@ defmodule Platform.Federation.ToolSurface do
         returns: "Array of validation objects",
         limitations: "None",
         when_to_use: "When you need to see the validation status for a specific stage"
+      },
+      %{
+        name: "prompt_template_list",
+        description:
+          "List all prompt templates (dispatch and heartbeat prompts used by the orchestrator).",
+        parameters: %{},
+        returns: "Array of prompt template objects with slug, name, description, variables",
+        limitations: "None",
+        when_to_use:
+          "When you need to see or audit the current dispatch/heartbeat prompt templates"
+      },
+      %{
+        name: "prompt_template_update",
+        description:
+          "Update the content of a prompt template by slug. " <>
+            "Use {{variable_name}} placeholders for dynamic values. " <>
+            "Sets updated_by to \"agent\".",
+        parameters: %{
+          slug: %{
+            type: "string",
+            required: true,
+            description:
+              "Template slug (e.g. dispatch.planning, dispatch.in_progress, dispatch.in_review, dispatch.fallback, heartbeat)"
+          },
+          content: %{
+            type: "string",
+            required: true,
+            description:
+              "New template content with {{variable_name}} placeholders for interpolation"
+          }
+        },
+        returns: "The updated prompt template object",
+        limitations: "Template must exist. Use prompt_template_list to see available slugs.",
+        when_to_use: "When you need to improve or customize a dispatch or heartbeat prompt"
       }
     ]
   end
@@ -973,6 +1007,83 @@ defmodule Platform.Federation.ToolSurface do
     stage_id = Map.get(args, "stage_id")
     validations = Tasks.list_validations(stage_id)
     {:ok, Enum.map(validations, &serialize_validation/1)}
+  end
+
+  def execute("prompt_template_list", _args, _context) do
+    templates = Platform.Orchestration.PromptTemplates.list_templates()
+
+    result =
+      Enum.map(templates, fn t ->
+        %{
+          slug: t.slug,
+          name: t.name,
+          description: t.description,
+          variables: t.variables,
+          updated_by: t.updated_by,
+          updated_at: format_datetime(t.updated_at)
+        }
+      end)
+
+    {:ok, result}
+  end
+
+  def execute("prompt_template_update", args, _context) do
+    slug = Map.get(args, "slug")
+    content = Map.get(args, "content")
+
+    cond do
+      is_nil(slug) || slug == "" ->
+        {:error,
+         %{
+           error: "slug is required",
+           recoverable: true,
+           suggestion: "Provide a valid template slug (e.g. dispatch.planning, heartbeat)"
+         }}
+
+      is_nil(content) ->
+        {:error,
+         %{
+           error: "content is required",
+           recoverable: true,
+           suggestion: "Provide the new template content with {{variable_name}} placeholders"
+         }}
+
+      true ->
+        case Platform.Orchestration.PromptTemplates.get_template_by_slug(slug) do
+          nil ->
+            {:error,
+             %{
+               error: "Template not found: #{slug}",
+               recoverable: true,
+               suggestion: "Use prompt_template_list to see available slugs, or check spelling"
+             }}
+
+          template ->
+            case Platform.Orchestration.PromptTemplates.update_template(template, %{
+                   "content" => content,
+                   "updated_by" => "agent"
+                 }) do
+              {:ok, updated} ->
+                {:ok,
+                 %{
+                   slug: updated.slug,
+                   name: updated.name,
+                   description: updated.description,
+                   variables: updated.variables,
+                   updated_by: updated.updated_by,
+                   updated_at: format_datetime(updated.updated_at)
+                 }}
+
+              {:error, changeset} ->
+                {:error,
+                 %{
+                   error: "Failed to update template: #{inspect_errors_safe(changeset)}",
+                   recoverable: true,
+                   suggestion: "Check that content is not empty"
+                 }}
+            end
+        end
+    end
   end
 
   def execute(unknown_tool, _args, _context) do
