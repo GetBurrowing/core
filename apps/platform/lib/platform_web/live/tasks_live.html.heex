@@ -218,7 +218,7 @@
   <%!-- Task detail panel (slide-in from right) --%>
   <div
     :if={@show_detail && @selected_task}
-    class="fixed inset-y-0 right-0 z-30 flex w-full max-w-lg flex-col border-l border-base-300 bg-base-100 shadow-xl"
+    class="fixed inset-y-0 right-0 z-30 flex w-full max-w-lg flex-col border-l border-base-300 bg-base-100 shadow-xl safe-area-top"
   >
     <div class="flex items-center justify-between border-b border-base-300 px-4 py-3">
       <h2 class="text-sm font-semibold truncate">{@selected_task.title}</h2>
@@ -372,7 +372,7 @@
   <%!-- FAB: Create Task --%>
   <button
     phx-click="toggle_task_sheet"
-    class="btn btn-primary btn-circle fixed bottom-6 right-6 z-30 shadow-lg"
+    class="btn btn-primary btn-circle fixed bottom-[calc(env(safe-area-inset-bottom)+1.5rem)] right-6 z-30 shadow-lg"
   >
     <span class="hero-plus size-6"></span>
   </button>
@@ -383,7 +383,7 @@
     class="fixed inset-0 z-40 flex md:hidden"
   >
     <div class="absolute inset-0 bg-black/40" phx-click="close_project_sheet" />
-    <aside class="relative flex w-64 flex-col bg-base-100 shadow-xl">
+    <aside class="relative flex w-64 flex-col bg-base-100 shadow-xl safe-area-top">
       <div class="flex items-center justify-between border-b border-base-300 px-3 py-3">
         <span class="text-xs font-semibold uppercase tracking-widest text-base-content/60">
           Projects
