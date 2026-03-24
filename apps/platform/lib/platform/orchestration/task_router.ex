@@ -224,8 +224,12 @@ defmodule Platform.Orchestration.TaskRouter do
         |> Map.put(:last_evidence_at, DateTime.utc_now())
         |> reset_escalation()
 
+      # Re-evaluate stage type using state (which now has current_stage_id set)
+      # This correctly detects manual_approval gates via validation inspection
+      stage_type = current_stage_type(state)
+
       state =
-        if HeartbeatScheduler.manual_approval?(stage.name) do
+        if HeartbeatScheduler.manual_approval?(stage_type) do
           state |> cancel_heartbeat() |> Map.put(:status, :waiting_human)
         else
           schedule_heartbeat(state)
@@ -447,7 +451,37 @@ defmodule Platform.Orchestration.TaskRouter do
   defp current_stage_type(%State{task_id: task_id, current_stage_id: stage_id}) do
     plan = Tasks.current_plan(task_id)
     stage = find_stage(plan, stage_id)
-    if stage, do: stage.name, else: "coding"
+
+    if stage do
+      # Check if all remaining (pending) validations on this stage are manual_approval.
+      # If so, treat the stage as a human gate — no heartbeat should fire.
+      pending_validations =
+        (stage.validations || [])
+        |> Enum.filter(&(&1.status == "pending"))
+
+      if pending_validations != [] &&
+           Enum.all?(pending_validations, &(&1.kind == "manual_approval")) do
+        "manual_approval"
+      else
+        infer_stage_type(stage.name)
+      end
+    else
+      "coding"
+    end
+  end
+
+  # Map human-readable stage names to cadence keys.
+  # Falls back to "coding" for unrecognized names.
+  defp infer_stage_type(name) do
+    name_lower = String.downcase(name || "")
+
+    cond do
+      String.contains?(name_lower, "planning") -> "planning"
+      String.contains?(name_lower, "review") -> "review"
+      String.contains?(name_lower, "ci") -> "ci_check"
+      String.contains?(name_lower, "manual_approval") -> "manual_approval"
+      true -> "coding"
+    end
   end
 
   defp find_stage(nil, _stage_id), do: nil

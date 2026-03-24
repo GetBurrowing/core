@@ -213,7 +213,7 @@ defmodule Platform.Tasks do
     |> Repo.one()
     |> case do
       nil -> nil
-      plan -> Repo.preload(plan, :stages)
+      plan -> Repo.preload(plan, stages: :validations)
     end
   end
 
