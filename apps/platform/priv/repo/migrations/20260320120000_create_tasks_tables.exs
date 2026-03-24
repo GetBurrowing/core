@@ -77,7 +77,7 @@ defmodule Platform.Repo.Migrations.CreateTasksTables do
 
       add(:status, :string, null: false, default: "draft")
       add(:version, :integer, null: false)
-      add(:approved_by, :string)
+      add(:approved_by, :uuid)
       add(:approved_at, :utc_datetime_usec)
 
       timestamps(type: :utc_datetime_usec)
