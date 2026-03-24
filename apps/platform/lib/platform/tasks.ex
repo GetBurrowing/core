@@ -207,7 +207,7 @@ defmodule Platform.Tasks do
   @doc "Get the latest approved plan for a task."
   def current_plan(task_id) do
     Plan
-    |> where([p], p.task_id == ^task_id and p.status == "approved")
+    |> where([p], p.task_id == ^task_id and p.status in ["approved", "completed"])
     |> order_by([p], desc: p.version)
     |> limit(1)
     |> Repo.one()

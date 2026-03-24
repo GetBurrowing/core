@@ -56,7 +56,7 @@ defmodule Platform.Orchestration.ContextAssembler do
 
   defp find_current_plan(plans) do
     plans
-    |> Enum.filter(&(&1.status == "approved"))
+    |> Enum.filter(&(&1.status in ["approved", "completed"]))
     |> Enum.sort_by(& &1.version, :desc)
     |> List.first()
   end
