@@ -6,7 +6,7 @@ defmodule Platform.Federation.ToolSurface do
 
   alias Platform.Chat
   alias Platform.Tasks
-  alias Platform.Tasks.PlanEngine
+  alias Platform.Tasks.{Plan, PlanEngine, Stage, Validation}
   alias Platform.Repo
 
   @doc """
@@ -16,7 +16,8 @@ defmodule Platform.Federation.ToolSurface do
   name, description, parameters, returns, limitations, when_to_use.
   """
   def tool_definitions do
-    canvas_tools() ++ messaging_tools() ++ task_tools() ++ plan_tools() ++ space_tools()
+    canvas_tools() ++
+      messaging_tools() ++ task_tools() ++ plan_tools() ++ review_tools() ++ space_tools()
   end
 
   defp messaging_tools do
@@ -46,6 +47,33 @@ defmodule Platform.Federation.ToolSurface do
         limitations:
           "File must exist on the local filesystem. Agent must be a participant in the space.",
         when_to_use: "When you need to share a file (image, document, etc.) in a space"
+      }
+    ]
+  end
+
+  defp review_tools do
+    [
+      %{
+        name: "review_request_create",
+        description:
+          "Submit evidence for a manual_approval validation gate. Creates a review request with labelled items for human review. Each item is independently approvable. Use this instead of validation_evaluate for manual_approval validations.",
+        parameters: %{
+          validation_id: %{
+            type: "string",
+            required: true,
+            description: "The manual_approval validation ID to submit evidence for"
+          },
+          items: %{
+            type: "array",
+            required: true,
+            description:
+              "Array of review items: {label: string, canvas_id?: string, content?: string}. Each item is independently reviewed by a human."
+          }
+        },
+        returns: "The created review request object with id, status, and items list",
+        limitations: "Only for manual_approval validations. Items cannot be empty.",
+        when_to_use:
+          "When you reach a manual_approval validation gate and need to submit evidence (screenshots, canvases, text) for human review"
       }
     ]
   end
@@ -402,6 +430,54 @@ defmodule Platform.Federation.ToolSurface do
            error: "Failed to send media: #{inspect(reason)}",
            recoverable: true,
            suggestion: "Check that the file exists and the agent is a participant in the space"
+         }}
+    end
+  end
+
+  # ── Review tools ────────────────────────────────────────────────────────
+
+  def execute("review_request_create", args, context) do
+    validation_id = Map.get(args, "validation_id")
+    items = Map.get(args, "items", [])
+
+    with validation when not is_nil(validation) <- Repo.get(Validation, validation_id),
+         stage when not is_nil(stage) <- Repo.get(Stage, validation.stage_id),
+         plan when not is_nil(plan) <- Repo.get(Plan, stage.plan_id) do
+      # Find or create the execution space for the task
+      execution_space_id =
+        case Platform.Orchestration.ExecutionSpace.find_or_create(plan.task_id) do
+          {:ok, space} -> space.id
+          _ -> nil
+        end
+
+      attrs = %{
+        validation_id: validation_id,
+        task_id: plan.task_id,
+        execution_space_id: execution_space_id,
+        submitted_by: Map.get(context, :agent_id) || "agent",
+        items: items
+      }
+
+      case Platform.Tasks.ReviewRequests.create_review_request(attrs) do
+        {:ok, request} ->
+          {:ok, serialize_review_request(request)}
+
+        {:error, reason} ->
+          {:error,
+           %{
+             error: "Failed to create review request: #{inspect_errors_safe(reason)}",
+             recoverable: true,
+             suggestion: "Check that items have valid labels and validation_id is correct"
+           }}
+      end
+    else
+      nil ->
+        {:error,
+         %{
+           error: "Validation, stage, or plan not found for validation_id: #{validation_id}",
+           recoverable: false,
+           suggestion:
+             "Verify the validation_id belongs to an existing manual_approval validation"
          }}
     end
   end
@@ -990,6 +1066,38 @@ defmodule Platform.Federation.ToolSurface do
       evaluated_at: format_datetime(validation.evaluated_at),
       inserted_at: format_datetime(validation.inserted_at),
       updated_at: format_datetime(validation.updated_at)
+    }
+  end
+
+  defp serialize_review_request(request) do
+    items =
+      case request.items do
+        %Ecto.Association.NotLoaded{} -> []
+        items -> Enum.map(items, &serialize_review_item/1)
+      end
+
+    %{
+      id: request.id,
+      validation_id: request.validation_id,
+      task_id: request.task_id,
+      status: request.status,
+      submitted_by: request.submitted_by,
+      items: items,
+      inserted_at: format_datetime(request.inserted_at),
+      updated_at: format_datetime(request.updated_at)
+    }
+  end
+
+  defp serialize_review_item(item) do
+    %{
+      id: item.id,
+      label: item.label,
+      canvas_id: item.canvas_id,
+      content: item.content,
+      status: item.status,
+      feedback: item.feedback,
+      reviewed_by: item.reviewed_by,
+      reviewed_at: format_datetime(item.reviewed_at)
     }
   end
 

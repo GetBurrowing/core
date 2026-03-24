@@ -188,6 +188,15 @@
                   {status_label(task.status)}
                 </span>
 
+                <%!-- Review badge --%>
+                <span
+                  :if={Map.get(@review_counts, task.id, 0) > 0}
+                  class="badge badge-warning badge-xs gap-1"
+                >
+                  <span class="hero-eye size-3"></span>
+                  {Map.get(@review_counts, task.id)} review
+                </span>
+
                 <%!-- Plan stage progress --%>
                 <% progress = plan_progress(task) %>
                 <div :if={progress} class="flex flex-1 items-center gap-1">
@@ -400,6 +409,105 @@
                 {msg.sender_name}
               </span>
               <span class="flex-1 whitespace-pre-wrap break-words">{msg.content}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <%!-- Pending Review --%>
+      <div :if={@pending_reviews != []} class="space-y-2">
+        <div class="flex items-center gap-2">
+          <h3 class="text-xs font-semibold uppercase tracking-wider text-base-content/50">
+            Pending Review
+          </h3>
+          <span class="badge badge-warning badge-xs">{length(@pending_reviews)}</span>
+        </div>
+
+        <div
+          :for={review <- @pending_reviews}
+          class="rounded-box border border-warning bg-warning/5 p-3 space-y-3"
+        >
+          <div class="flex items-center justify-between text-xs text-base-content/50">
+            <span :if={review.submitted_by}>
+              Submitted by {review.submitted_by}
+            </span>
+            <span>{Calendar.strftime(review.inserted_at, "%b %d, %H:%M")}</span>
+          </div>
+
+          <div
+            :for={item <- review.items}
+            class="rounded-lg border border-base-300 bg-base-100 p-3 space-y-2"
+          >
+            <div class="flex items-center justify-between">
+              <span class="text-sm font-medium">{item.label}</span>
+              <%= cond do %>
+                <% item.status == "approved" -> %>
+                  <span class="badge badge-success badge-xs gap-1">
+                    <span class="hero-check-circle size-3"></span> Approved
+                  </span>
+                <% item.status == "needs_revision" -> %>
+                  <span class="badge badge-warning badge-xs">Needs revision</span>
+                <% true -> %>
+                  <span class="badge badge-ghost badge-xs">Pending</span>
+              <% end %>
+            </div>
+
+            <p :if={item.content} class="text-xs text-base-content/70 whitespace-pre-wrap">
+              {item.content}
+            </p>
+
+            <span
+              :if={item.canvas_id}
+              class="badge badge-outline badge-xs gap-1"
+            >
+              <span class="hero-squares-2x2 size-3"></span> Canvas: {item.canvas_id}
+            </span>
+
+            <%!-- Feedback display for rejected items --%>
+            <div
+              :if={item.status == "needs_revision" && item.feedback}
+              class="rounded bg-warning/10 p-2 text-xs text-warning-content"
+            >
+              <span class="font-medium">Feedback:</span> {item.feedback}
+            </div>
+
+            <%!-- Action buttons for pending items --%>
+            <div :if={item.status == "pending"} class="flex items-center gap-2">
+              <button
+                class="btn btn-success btn-xs"
+                phx-click="approve_review_item"
+                phx-value-item-id={item.id}
+              >
+                <span class="hero-check size-3"></span> Approve
+              </button>
+              <button
+                class="btn btn-ghost btn-xs"
+                phx-click="toggle_review_feedback"
+                phx-value-item-id={item.id}
+              >
+                <span class="hero-chat-bubble-left size-3"></span> Send feedback
+              </button>
+            </div>
+
+            <%!-- Feedback textarea (toggled) --%>
+            <div
+              :if={item.status == "pending" && MapSet.member?(@review_feedback_open, item.id)}
+              class="space-y-2"
+            >
+              <textarea
+                class="textarea textarea-bordered textarea-xs w-full"
+                placeholder="Describe what needs to change..."
+                phx-keyup="update_review_feedback_text"
+                phx-value-item-id={item.id}
+              >{Map.get(@review_items_feedback, item.id, "")}</textarea>
+              <button
+                class="btn btn-warning btn-xs"
+                phx-click="submit_review_feedback"
+                phx-value-item-id={item.id}
+                phx-value-feedback={Map.get(@review_items_feedback, item.id, "")}
+              >
+                Submit Feedback
+              </button>
             </div>
           </div>
         </div>

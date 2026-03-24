@@ -3,12 +3,14 @@ defmodule PlatformWeb.TasksLive do
 
   require Logger
 
+  import Ecto.Query
+
   alias Platform.Chat
   alias Platform.Chat.AttachmentStorage
   alias Platform.Orchestration.ExecutionSpace
   alias Platform.Repo
   alias Platform.Tasks
-  alias Platform.Tasks.{Plan, Task}
+  alias Platform.Tasks.{Plan, ReviewRequest, ReviewRequests, Task}
 
   @kanban_columns [
     {"backlog", "Backlog"},
@@ -50,6 +52,7 @@ defmodule PlatformWeb.TasksLive do
      |> assign(:columns, group_by_column(all_tasks))
      |> assign(:kanban_columns, @kanban_columns)
      |> assign(:pending_plan_count, count_pending_plans(all_tasks))
+     |> assign(:review_counts, pending_review_counts(all_tasks))
      |> assign(:selected_task, nil)
      |> assign(:show_detail, false)
      # Execution log state
@@ -66,6 +69,9 @@ defmodule PlatformWeb.TasksLive do
      |> assign(:agents, agents)
      |> assign(:validation_modes, MapSet.new())
      |> assign(:manual_validation_text, "")
+     |> assign(:pending_reviews, [])
+     |> assign(:review_feedback_open, MapSet.new())
+     |> assign(:review_items_feedback, %{})
      |> allow_upload(:task_attachments,
        accept: :any,
        auto_upload: true,
@@ -90,12 +96,15 @@ defmodule PlatformWeb.TasksLive do
           # Subscribe to real-time updates if space exists
           if space_id, do: Chat.PubSub.subscribe(space_id)
 
+          pending_reviews = ReviewRequests.list_pending_for_task(task.id)
+
           {:noreply,
            socket
            |> assign(:selected_task, task)
            |> assign(:show_detail, true)
            |> assign(:execution_space_id, space_id)
            |> assign(:execution_log, log)
+           |> assign(:pending_reviews, pending_reviews)
            |> assign(:page_title, "Tasks · #{task.title}")}
         else
           {:noreply,
@@ -313,6 +322,74 @@ defmodule PlatformWeb.TasksLive do
     else
       {:noreply, put_flash(socket, :error, "Plan not found or not pending review.")}
     end
+  end
+
+  # ── Review item events ──────────────────────────────────────────────────
+
+  def handle_event("approve_review_item", %{"item-id" => item_id}, socket) do
+    reviewed_by = socket.assigns[:current_user_id] || "unknown"
+
+    case ReviewRequests.approve_item(item_id, reviewed_by) do
+      {:ok, _} ->
+        {:noreply,
+         socket
+         |> refresh_board()
+         |> reload_selected_task()}
+
+      {:error, _} ->
+        {:noreply, put_flash(socket, :error, "Failed to approve review item.")}
+    end
+  end
+
+  def handle_event(
+        "submit_review_feedback",
+        %{"item-id" => item_id, "feedback" => feedback},
+        socket
+      ) do
+    reviewed_by = socket.assigns[:current_user_id] || "unknown"
+
+    case ReviewRequests.reject_item(item_id, reviewed_by, feedback) do
+      {:ok, _} ->
+        {:noreply,
+         socket
+         |> assign(
+           :review_items_feedback,
+           Map.delete(socket.assigns.review_items_feedback, item_id)
+         )
+         |> assign(
+           :review_feedback_open,
+           MapSet.delete(socket.assigns.review_feedback_open, item_id)
+         )
+         |> refresh_board()
+         |> reload_selected_task()}
+
+      {:error, _} ->
+        {:noreply, put_flash(socket, :error, "Failed to submit feedback.")}
+    end
+  end
+
+  def handle_event("toggle_review_feedback", %{"item-id" => item_id}, socket) do
+    open = socket.assigns.review_feedback_open
+
+    updated =
+      if MapSet.member?(open, item_id),
+        do: MapSet.delete(open, item_id),
+        else: MapSet.put(open, item_id)
+
+    {:noreply, assign(socket, :review_feedback_open, updated)}
+  end
+
+  def handle_event(
+        "update_review_feedback_text",
+        %{"item-id" => item_id, "value" => text},
+        socket
+      ) do
+    {:noreply,
+     assign(
+       socket,
+       :review_items_feedback,
+       Map.put(socket.assigns.review_items_feedback, item_id, text)
+     )}
   end
 
   # ── Bottom sheet events ─────────────────────────────────────────────────
@@ -551,15 +628,21 @@ defmodule PlatformWeb.TasksLive do
     |> assign(:all_tasks, tasks)
     |> assign(:columns, group_by_column(tasks))
     |> assign(:pending_plan_count, count_pending_plans(tasks))
+    |> assign(:review_counts, pending_review_counts(tasks))
   end
 
   defp reload_selected_task(socket) do
     if task = socket.assigns[:selected_task] do
+      updated = Tasks.get_task_detail(task.id)
+      pending_reviews = if updated, do: ReviewRequests.list_pending_for_task(updated.id), else: []
+
       socket
-      |> assign(:selected_task, Tasks.get_task_detail(task.id))
+      |> assign(:selected_task, updated)
+      |> assign(:pending_reviews, pending_reviews)
       |> refresh_execution_log()
     else
       socket
+      |> assign(:pending_reviews, [])
     end
   end
 
@@ -567,6 +650,21 @@ defmodule PlatformWeb.TasksLive do
     Enum.count(tasks, fn task ->
       Enum.any?(task.plans || [], &(&1.status == "pending_review"))
     end)
+  end
+
+  defp pending_review_counts(tasks) do
+    task_ids = Enum.map(tasks, & &1.id)
+
+    if task_ids == [] do
+      %{}
+    else
+      ReviewRequest
+      |> where([rr], rr.task_id in ^task_ids and rr.status == "pending")
+      |> group_by([rr], rr.task_id)
+      |> select([rr], {rr.task_id, count(rr.id)})
+      |> Repo.all()
+      |> Map.new()
+    end
   end
 
   # ── View helpers ───────────────────────────────────────────────────────
