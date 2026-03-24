@@ -43,6 +43,9 @@ defmodule PlatformWeb.RuntimeChannel do
         %{runtime_id: runtime_id}
       )
 
+      # Notify the task board so the watcher can re-dispatch to this runtime
+      Platform.Tasks.broadcast_board({:runtime_reconnected, runtime_id})
+
       # Push capabilities after join completes (push/3 not allowed during join/3)
       send(self(), :send_capabilities)
 

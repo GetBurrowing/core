@@ -75,6 +75,11 @@ defmodule Platform.Orchestration.TaskRouterWatcher do
     {:noreply, state}
   end
 
+  def handle_info({:runtime_reconnected, runtime_id}, state) do
+    redispatch_for_runtime(runtime_id)
+    {:noreply, state}
+  end
+
   def handle_info(:reconcile, state) do
     {started, stopped} = reconcile()
     Logger.info("[TaskRouterWatcher] reconcile: started #{started}, stopped #{stopped}")
@@ -82,7 +87,7 @@ defmodule Platform.Orchestration.TaskRouterWatcher do
     {:noreply, state}
   end
 
-  # Ignore other PubSub events
+  # Ignore other PubSub events (plan_updated, stage_transitioned, etc.)
   def handle_info(_msg, state), do: {:noreply, state}
 
   # ── Invariant evaluation ───────────────────────────────────────────────
@@ -139,6 +144,35 @@ defmodule Platform.Orchestration.TaskRouterWatcher do
   end
 
   # ── Private helpers ────────────────────────────────────────────────────
+
+  defp redispatch_for_runtime(runtime_id) do
+    # Find all running routers whose task is assigned to this runtime.
+    # Send :dispatch to each so the agent gets a fresh prompt now that it's reconnected.
+    tasks = list_should_run_tasks()
+
+    redispatched =
+      Enum.count(tasks, fn task ->
+        case resolve_runtime_for_task(task) do
+          {:ok, %{id: ^runtime_id}} ->
+            if router_running?(task.id) do
+              [{pid, _}] = Registry.lookup(Platform.Orchestration.Registry, task.id)
+              send(pid, :dispatch)
+              true
+            else
+              false
+            end
+
+          _ ->
+            false
+        end
+      end)
+
+    if redispatched > 0 do
+      Logger.info(
+        "[TaskRouterWatcher] runtime #{runtime_id} reconnected — re-dispatched #{redispatched} task(s)"
+      )
+    end
+  end
 
   defp evaluate_task(task) do
     cond do
