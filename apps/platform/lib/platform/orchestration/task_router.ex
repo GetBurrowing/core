@@ -13,7 +13,14 @@ defmodule Platform.Orchestration.TaskRouter do
 
   require Logger
 
-  alias Platform.Orchestration.{ContextAssembler, ExecutionSpace, HeartbeatScheduler}
+  alias Platform.Orchestration.{
+    ContextAssembler,
+    ExecutionSpace,
+    HeartbeatScheduler,
+    TaskRouterAssignment
+  }
+
+  alias Platform.Repo
   alias Platform.Tasks
 
   # ── State ──────────────────────────────────────────────────────────────
@@ -91,6 +98,9 @@ defmodule Platform.Orchestration.TaskRouter do
 
           nil
       end
+
+    # Persist assignment record (upsert — idempotent for rehydration)
+    persist_assignment(task_id, assignee, execution_space_id)
 
     state = %State{
       task_id: task_id,
@@ -458,6 +468,32 @@ defmodule Platform.Orchestration.TaskRouter do
     case HeartbeatScheduler.interval_ms(stage.name) do
       nil -> 0
       ms -> div(ms, 60_000)
+    end
+  end
+
+  # ── Assignment persistence ─────────────────────────────────────────────
+
+  defp persist_assignment(task_id, assignee, execution_space_id) do
+    attrs = %{
+      task_id: task_id,
+      assignee_type: to_string(assignee.type),
+      assignee_id: assignee.id,
+      execution_space_id: execution_space_id,
+      assigned_at: DateTime.utc_now(),
+      status: "active"
+    }
+
+    changeset = TaskRouterAssignment.create_changeset(attrs)
+
+    try do
+      Repo.insert(changeset,
+        on_conflict:
+          {:replace, [:assignee_id, :assignee_type, :execution_space_id, :assigned_at, :status]},
+        conflict_target: :task_id
+      )
+    rescue
+      e ->
+        Logger.warning("[TaskRouter] failed to persist assignment for #{task_id}: #{inspect(e)}")
     end
   end
 end

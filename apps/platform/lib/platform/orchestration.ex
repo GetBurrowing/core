@@ -16,7 +16,10 @@ defmodule Platform.Orchestration do
     - `task_status/1` — get current router status for a task
   """
 
-  alias Platform.Orchestration.{TaskRouter, TaskRouterSupervisor}
+  require Logger
+
+  alias Platform.Orchestration.{TaskRouter, TaskRouterAssignment, TaskRouterSupervisor}
+  alias Platform.Repo
 
   @doc """
   Start orchestrating a task for the given assignee.
@@ -31,7 +34,28 @@ defmodule Platform.Orchestration do
   @doc "Stop orchestration for a task."
   @spec unassign_task(String.t()) :: :ok | {:error, :not_found}
   def unassign_task(task_id) do
+    # Mark the persisted assignment as completed before stopping the router
+    mark_assignment_completed(task_id)
     TaskRouterSupervisor.stop_assignment(task_id)
+  end
+
+  defp mark_assignment_completed(task_id) do
+    case Repo.get(TaskRouterAssignment, task_id) do
+      %TaskRouterAssignment{} = assignment ->
+        assignment
+        |> TaskRouterAssignment.status_changeset(%{status: "completed"})
+        |> Repo.update()
+
+      nil ->
+        :ok
+    end
+  rescue
+    e ->
+      Logger.warning(
+        "[Orchestration] failed to mark assignment completed for #{task_id}: #{inspect(e)}"
+      )
+
+      :ok
   end
 
   @doc "Get current router status for a task."
