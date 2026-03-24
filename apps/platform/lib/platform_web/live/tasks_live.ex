@@ -9,6 +9,7 @@ defmodule PlatformWeb.TasksLive do
   alias Platform.Chat.AttachmentStorage
   alias Platform.Orchestration.ExecutionSpace
   alias Platform.Repo
+  alias Platform.Skills
   alias Platform.Tasks
   alias Platform.Tasks.{Plan, ReviewRequest, ReviewRequests, Task}
 
@@ -72,6 +73,8 @@ defmodule PlatformWeb.TasksLive do
      |> assign(:pending_reviews, [])
      |> assign(:review_feedback_open, MapSet.new())
      |> assign(:review_items_feedback, %{})
+     |> assign(:attached_skills, [])
+     |> assign(:available_skills, Skills.list_skills())
      |> allow_upload(:task_attachments,
        accept: :any,
        auto_upload: true,
@@ -97,6 +100,7 @@ defmodule PlatformWeb.TasksLive do
           if space_id, do: Chat.PubSub.subscribe(space_id)
 
           pending_reviews = ReviewRequests.list_pending_for_task(task.id)
+          attached_skills = Skills.resolve_skills(task.id)
 
           {:noreply,
            socket
@@ -105,6 +109,8 @@ defmodule PlatformWeb.TasksLive do
            |> assign(:execution_space_id, space_id)
            |> assign(:execution_log, log)
            |> assign(:pending_reviews, pending_reviews)
+           |> assign(:attached_skills, attached_skills)
+           |> assign(:available_skills, Skills.list_skills())
            |> assign(:page_title, "Tasks · #{task.title}")}
         else
           {:noreply,
@@ -265,6 +271,38 @@ defmodule PlatformWeb.TasksLive do
         {:error, _} ->
           {:noreply, put_flash(socket, :error, "Failed to assign agent.")}
       end
+    else
+      {:noreply, socket}
+    end
+  end
+
+  # ── Skill picker events ─────────────────────────────────────────────────
+
+  def handle_event("attach_skill", %{"skill_id" => skill_id}, socket) do
+    task = socket.assigns.selected_task
+
+    if task && skill_id != "" do
+      Skills.attach_skill(skill_id, "task", task.id)
+
+      {:noreply,
+       socket
+       |> assign(:attached_skills, Skills.resolve_skills(task.id))
+       |> assign(:available_skills, Skills.list_skills())}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_event("detach_skill", %{"skill_id" => skill_id}, socket) do
+    task = socket.assigns.selected_task
+
+    if task do
+      Skills.detach_skill(skill_id, "task", task.id)
+
+      {:noreply,
+       socket
+       |> assign(:attached_skills, Skills.resolve_skills(task.id))
+       |> assign(:available_skills, Skills.list_skills())}
     else
       {:noreply, socket}
     end
@@ -635,14 +673,17 @@ defmodule PlatformWeb.TasksLive do
     if task = socket.assigns[:selected_task] do
       updated = Tasks.get_task_detail(task.id)
       pending_reviews = if updated, do: ReviewRequests.list_pending_for_task(updated.id), else: []
+      attached_skills = if updated, do: Skills.resolve_skills(updated.id), else: []
 
       socket
       |> assign(:selected_task, updated)
       |> assign(:pending_reviews, pending_reviews)
+      |> assign(:attached_skills, attached_skills)
       |> refresh_execution_log()
     else
       socket
       |> assign(:pending_reviews, [])
+      |> assign(:attached_skills, [])
     end
   end
 

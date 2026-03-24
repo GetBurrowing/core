@@ -2,6 +2,7 @@ defmodule Platform.Orchestration.ContextAssemblerTest do
   use Platform.DataCase, async: false
 
   alias Platform.Orchestration.ContextAssembler
+  alias Platform.Skills
   alias Platform.Tasks
 
   setup do
@@ -118,6 +119,38 @@ defmodule Platform.Orchestration.ContextAssemblerTest do
 
       assert context.epic == nil
       assert context.task.title == "No Epic Task"
+    end
+
+    test "includes empty skills list when no skills attached", %{task: task} do
+      context = ContextAssembler.build(task.id)
+      assert context.skills == []
+    end
+
+    test "includes attached skills in context", %{task: task, project: project} do
+      {:ok, skill} =
+        Skills.create_skill(%{
+          name: "Coding Guide",
+          content: "# Coding Guide\nFollow conventions."
+        })
+
+      {:ok, _} = Skills.attach_skill(skill.id, "project", project.id)
+
+      context = ContextAssembler.build(task.id)
+      assert length(context.skills) == 1
+      assert hd(context.skills).name == "Coding Guide"
+      assert hd(context.skills).content == "# Coding Guide\nFollow conventions."
+    end
+
+    test "includes skills from multiple hierarchy levels", %{task: task, project: project} do
+      {:ok, s1} = Skills.create_skill(%{name: "Project Skill", content: "proj content"})
+      {:ok, s2} = Skills.create_skill(%{name: "Task Skill", content: "task content"})
+      {:ok, _} = Skills.attach_skill(s1.id, "project", project.id)
+      {:ok, _} = Skills.attach_skill(s2.id, "task", task.id)
+
+      context = ContextAssembler.build(task.id)
+      assert length(context.skills) == 2
+      names = Enum.map(context.skills, & &1.name) |> Enum.sort()
+      assert names == ["Project Skill", "Task Skill"]
     end
   end
 end

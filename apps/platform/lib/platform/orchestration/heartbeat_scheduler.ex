@@ -31,6 +31,12 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
   # Default for unknown stage types — treat like coding
   @default_cadence {10 * 60_000, 25 * 60_000, 2}
 
+  @skills_reference """
+  The dispatch context includes attached skills under the `skills` key. \
+  Read and follow any relevant skills — they describe conventions, repo layout, \
+  deploy targets, and how to delegate work.\
+  """
+
   @doc "Heartbeat interval in milliseconds for the given stage type."
   @spec interval_ms(stage_type()) :: non_neg_integer() | nil
   def interval_ms(stage_type) do
@@ -89,6 +95,8 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
     Submit the plan with plan_submit when complete. Do not begin implementation until the plan is approved.
 
     The attention signal that delivered this message includes a `context` field with the full task hierarchy: project (name, repo_url, tech_stack), epic (name, description, acceptance_criteria), task metadata, current plan with stages, and execution_space_id. Use it for full context when writing your plan.
+
+    #{@skills_reference}
     """
   end
 
@@ -105,6 +113,8 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
     Use report_blocker if you are stuck.
 
     The attention signal that delivered this message includes a `context` field with the full task hierarchy: project, epic, task metadata, approved plan with stages, and execution_space_id. Use it as your source of truth.
+
+    #{@skills_reference}
     """
   end
 
@@ -120,6 +130,8 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
     Do not self-approve code_review or manual_approval stages — a human must approve those.
 
     The attention signal that delivered this message includes a `context` field with the full task hierarchy: project, epic, task metadata, approved plan with stages, and execution_space_id. Use it as your source of truth.
+
+    #{@skills_reference}
     """
   end
 
@@ -137,6 +149,8 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
     Review the task context and begin working. Report progress by pushing validation evidence as you complete each stage.
 
     The attention signal that delivered this message includes a `context` field with the full task hierarchy: project, epic, task metadata, current plan with stages, and execution_space_id. Use it for full context.
+
+    #{@skills_reference}
     """
   end
 

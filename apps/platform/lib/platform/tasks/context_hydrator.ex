@@ -20,6 +20,7 @@ defmodule Platform.Tasks.ContextHydrator do
 
   alias Platform.Context
   alias Platform.Repo
+  alias Platform.Skills
   alias Platform.Tasks.{DeployResolver, Plan, Task}
 
   import Ecto.Query
@@ -74,6 +75,13 @@ defmodule Platform.Tasks.ContextHydrator do
           v
         else
           version
+        end
+
+      # 5. Hydrate attached skills into task session
+      version =
+        case push_skill_items(task_scope, task_id) do
+          {:ok, v} when v > 0 -> v
+          _ -> version
         end
 
       emit_telemetry(task_id, version)
@@ -164,6 +172,21 @@ defmodule Platform.Tasks.ContextHydrator do
       end)
 
     push_items(scope, items, kind: :task_metadata)
+  end
+
+  defp push_skill_items(scope, task_id) do
+    case Skills.resolve_skills(task_id) do
+      [] ->
+        {:ok, 0}
+
+      skills ->
+        items =
+          Enum.map(skills, fn {skill, _source} ->
+            {"skill.#{skill.name}", skill.content}
+          end)
+
+        push_items(scope, items, kind: :skill_context)
+    end
   end
 
   defp maybe_hydrate_deploy_target(_scope, _project, opts) when opts == [], do: :ok

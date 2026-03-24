@@ -8,6 +8,7 @@ defmodule Platform.Orchestration.ContextAssembler do
   """
 
   alias Platform.Orchestration.ExecutionSpace
+  alias Platform.Skills
   alias Platform.Tasks
 
   @doc """
@@ -33,12 +34,18 @@ defmodule Platform.Orchestration.ContextAssembler do
             _ -> nil
           end
 
+        skills =
+          task_id
+          |> Skills.resolve_skills()
+          |> Enum.map(fn {skill, _source} -> %{name: skill.name, content: skill.content} end)
+
         %{
           project: serialize_project(task.project),
           epic: serialize_epic(task.epic),
           task: serialize_task(task),
           plan: serialize_plan(plan),
-          execution_space_id: execution_space_id
+          execution_space_id: execution_space_id,
+          skills: skills
         }
     end
   end

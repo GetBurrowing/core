@@ -306,6 +306,61 @@
         </p>
       </div>
 
+      <%!-- Skills --%>
+      <div class="space-y-2">
+        <h3 class="text-xs font-semibold uppercase tracking-wider text-base-content/50 flex items-center gap-1">
+          <span class="hero-book-open size-3"></span> Skills
+        </h3>
+
+        <%!-- Attached skill chips --%>
+        <div :if={@attached_skills != []} class="flex flex-wrap gap-2">
+          <div
+            :for={{skill, source} <- @attached_skills}
+            class={
+              "flex items-center gap-1 rounded-full px-2 py-0.5 text-xs " <>
+                if source == "task",
+                  do: "bg-primary/10 text-primary border border-primary/20",
+                  else: "bg-base-200 text-base-content/60 border border-base-300"
+            }
+          >
+            <span class="font-medium">{skill.name}</span>
+            <span :if={source != "task"} class="text-[10px] opacity-70">
+              (from {String.capitalize(source)})
+            </span>
+            <button
+              :if={source == "task"}
+              phx-click="detach_skill"
+              phx-value-skill_id={skill.id}
+              class="ml-0.5 text-primary/60 hover:text-primary"
+              title="Remove skill"
+            >
+              <span class="hero-x-mark size-3"></span>
+            </button>
+          </div>
+        </div>
+
+        <%!-- Attach dropdown — only shows skills not already task-level attached --%>
+        <% task_skill_ids =
+          @attached_skills
+          |> Enum.filter(fn {_, src} -> src == "task" end)
+          |> Enum.map(fn {skill, _} -> skill.id end)
+          |> MapSet.new() %>
+
+        <% attachable =
+          Enum.reject(@available_skills, fn s -> MapSet.member?(task_skill_ids, s.id) end) %>
+
+        <div :if={attachable != []}>
+          <select
+            class="select select-bordered select-xs w-full max-w-xs"
+            phx-change="attach_skill"
+            name="skill_id"
+          >
+            <option value="">Attach a skill…</option>
+            <option :for={skill <- attachable} value={skill.id}>{skill.name}</option>
+          </select>
+        </div>
+      </div>
+
       <%!-- Plan stages --%>
       <div :if={@selected_task.plans != []} class="space-y-2">
         <h3 class="text-xs font-semibold uppercase tracking-wider text-base-content/50">
