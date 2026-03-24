@@ -87,6 +87,8 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
     "Add a module-level drafts Map to ComposeInput JS hook (assets/js/hooks/compose_input.js). On every input event, store the current textarea value keyed by space_id (read from data-space-id attribute on the element). On mounted(), restore any saved draft and push it to the server via compose_changed event. On compose_reset, delete the draft for that space."
 
     Submit the plan with plan_submit when complete. Do not begin implementation until the plan is approved.
+
+    The attention signal that delivered this message includes a `context` field with the full task hierarchy: project (name, repo_url, tech_stack), epic (name, description, acceptance_criteria), task metadata, current plan with stages, and execution_space_id. Use it for full context when writing your plan.
     """
   end
 
@@ -100,7 +102,9 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
     #{stage_info}\
     Push evidence using validation_pass or stage_complete as you finish each step. \
     Post commentary to the execution space so reviewers can follow along. \
-    Use report_blocker if you are stuck.\
+    Use report_blocker if you are stuck.
+
+    The attention signal that delivered this message includes a `context` field with the full task hierarchy: project, epic, task metadata, approved plan with stages, and execution_space_id. Use it as your source of truth.
     """
   end
 
@@ -113,7 +117,9 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
     Task: #{task.title}
     #{stage_info}\
     Run all applicable validations and push evidence. \
-    Do not self-approve code_review or manual_approval stages — a human must approve those.\
+    Do not self-approve code_review or manual_approval stages — a human must approve those.
+
+    The attention signal that delivered this message includes a `context` field with the full task hierarchy: project, epic, task metadata, approved plan with stages, and execution_space_id. Use it as your source of truth.
     """
   end
 
@@ -128,7 +134,9 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
     Status: #{task.status}
     Priority: #{task.priority}
     #{stage_info}\
-    Review the task context and begin working. Report progress by pushing validation evidence as you complete each stage.\
+    Review the task context and begin working. Report progress by pushing validation evidence as you complete each stage.
+
+    The attention signal that delivered this message includes a `context` field with the full task hierarchy: project, epic, task metadata, current plan with stages, and execution_space_id. Use it for full context.
     """
   end
 
@@ -155,7 +163,9 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
     Stage running for: #{elapsed_str}
     Pending validations: #{pending_str}
 
-    Either push validation evidence or report a blocker.\
+    Either push validation evidence or report a blocker.
+
+    The attention signal that delivered this message includes a `context` field with the full task hierarchy: project, epic, task metadata, approved plan with stages, and execution_space_id.\
     """
   end
 
