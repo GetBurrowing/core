@@ -195,36 +195,19 @@ defmodule Platform.Orchestration.TaskRouterTest do
     end
   end
 
-  describe "assignment persistence" do
-    alias Platform.Orchestration.TaskRouterAssignment
-
-    test "init upserts an active assignment record", %{task: task, assignee: assignee} do
-      {:ok, _pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
-      Process.sleep(100)
-
-      assignment = Platform.Repo.get(TaskRouterAssignment, task.id)
-      assert assignment != nil
-      assert assignment.status == "active"
-      assert assignment.assignee_type == to_string(assignee.type)
-      assert assignment.assignee_id == assignee.id
-      assert assignment.execution_space_id != nil
-    end
-
-    test "unassign_task marks assignment completed", %{task: task, assignee: assignee} do
-      {:ok, _pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
-      Process.sleep(100)
-
-      # Verify active
-      assignment = Platform.Repo.get(TaskRouterAssignment, task.id)
-      assert assignment.status == "active"
-
-      # Unassign
-      Platform.Orchestration.unassign_task(task.id)
+  describe "router lifecycle (no assignment persistence)" do
+    test "router starts and stops cleanly without persisting to DB", %{
+      task: task,
+      assignee: assignee
+    } do
+      {:ok, pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
       Process.sleep(50)
 
-      # Verify completed
-      updated = Platform.Repo.get(TaskRouterAssignment, task.id)
-      assert updated.status == "completed"
+      assert Process.alive?(pid)
+
+      # Stop via TaskRouter.stop/1
+      :ok = TaskRouter.stop(task.id)
+      refute Process.alive?(pid)
     end
   end
 end

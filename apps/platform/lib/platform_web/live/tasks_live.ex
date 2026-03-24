@@ -217,21 +217,6 @@ defmodule PlatformWeb.TasksLive do
       if task do
         case Tasks.transition_task(task, new_status) do
           {:ok, updated} ->
-            if new_status == "planning" && updated.assignee_type == "agent" && updated.assignee_id do
-              Elixir.Task.start(fn ->
-                # assignee_id is the agent UUID — resolve to runtime_id for dispatch
-                agent = Platform.Repo.get(Platform.Agents.Agent, updated.assignee_id)
-                runtime = agent && Platform.Federation.get_runtime_for_agent(agent)
-
-                if runtime do
-                  Platform.Orchestration.assign_task(task_id, %{
-                    type: :federated,
-                    id: runtime.runtime_id
-                  })
-                end
-              end)
-            end
-
             socket
             |> put_flash(:info, "Task moved to #{new_status}.")
             |> refresh_board()

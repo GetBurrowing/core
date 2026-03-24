@@ -33,8 +33,8 @@ defmodule Platform.Application do
         Platform.Execution.RunSupervisor,
         # Orchestration — task router supervisor (registry started above)
         Platform.Orchestration.TaskRouterSupervisor,
-        # Orchestration — rehydrate active routers from DB after restart
-        Platform.Orchestration.Rehydrator,
+        # Orchestration — declarative watcher: starts/stops routers based on task state
+        Platform.Orchestration.TaskRouterWatcher,
         # Node context — ETS-backed space tracking for node canvas commands
         Platform.Federation.NodeContext,
         # Federation runtime presence tracker — before Endpoint so channels can use it

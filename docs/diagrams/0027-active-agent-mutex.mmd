@@ -1,0 +1,47 @@
+---
+title: "ADR 0027: Active Agent Mutex — Message Routing"
+---
+flowchart TD
+    MSG["💬 New Message in Space"] --> CHK_EXEC{"Space kind?"}
+
+    CHK_EXEC -->|"execution"| TASK_ROUTER["TaskRouter\n(direct RuntimeChannel dispatch)"]
+    TASK_ROUTER --> AGENT_RUNTIME["Agent Runtime\n(WebSocket)"]
+
+    CHK_EXEC -->|"dm (agent)"| DM_DISPATCH["Always directed\n(Watch permanently ON)"]
+    DM_DISPATCH --> DISPATCH_ACTIVE
+
+    CHK_EXEC -->|"channel / group"| CHK_MENTION{"@mention\nin message?"}
+
+    CHK_MENTION -->|"Single @mention"| SET_ACTIVE["Set active_agent\nto mentioned agent"]
+    SET_ACTIVE --> DISPATCH_ACTIVE["Dispatch to\nactive agent"]
+    DISPATCH_ACTIVE --> RUNTIME_BROADCAST["Broadcast to\nruntime:{id}"]
+    RUNTIME_BROADCAST --> AGENT_RUNTIME
+
+    CHK_MENTION -->|"Multi @mention"| SNAPSHOT["Snapshot history\n(freeze context)"]
+    SNAPSHOT --> PARALLEL["Parallel dispatch\nto all mentioned agents"]
+    PARALLEL --> AGENT_A["Agent A\n(gets frozen history)"]
+    PARALLEL --> AGENT_B["Agent B\n(gets frozen history)"]
+    AGENT_A --> RESPONSES["Both responses\npost to space"]
+    AGENT_B --> RESPONSES
+    RESPONSES --> CLEAR_MUTEX["Clear active_agent\n(mutex released)"]
+
+    CHK_MENTION -->|"No @mention"| CHK_ACTIVE{"active_agent\nset?"}
+
+    CHK_ACTIVE -->|"Yes"| DISPATCH_ACTIVE
+    CHK_ACTIVE -->|"No"| CHK_WATCH{"Watch\nenabled?"}
+
+    CHK_WATCH -->|"ON"| SET_PRIMARY["Set active_agent\nto primary agent"]
+    SET_PRIMARY --> DISPATCH_ACTIVE
+    CHK_WATCH -->|"OFF"| SILENT["No agent responds"]
+
+    %% Timeout path
+    TIMEOUT["⏱️ 15min human\ninactivity"] -.->|"Timer fires"| CLEAR_TIMEOUT["Clear active_agent"]
+    CLEAR_TIMEOUT -.-> CHK_ACTIVE
+
+    style MSG fill:#4a9eff,color:#fff
+    style SILENT fill:#6b7280,color:#fff
+    style AGENT_RUNTIME fill:#10b981,color:#fff
+    style PARALLEL fill:#f59e0b,color:#fff
+    style CLEAR_MUTEX fill:#f59e0b,color:#fff
+    style TASK_ROUTER fill:#8b5cf6,color:#fff
+    style DM_DISPATCH fill:#10b981,color:#fff
