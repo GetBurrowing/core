@@ -137,6 +137,30 @@ defmodule Platform.Orchestration.TaskRouterTest do
       assert status.last_evidence_at != nil
     end
 
+    test "completed plan transitions in_progress task to in_review", %{
+      task: task,
+      assignee: assignee,
+      plan: plan
+    } do
+      {:ok, _pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
+      Process.sleep(50)
+
+      {:ok, task} = Tasks.transition_task(task, "planning")
+      {:ok, task} = Tasks.transition_task(task, "ready")
+      {:ok, task} = Tasks.transition_task(task, "in_progress")
+
+      completed_plan =
+        plan
+        |> Ecto.Changeset.change(%{status: "completed"})
+        |> Platform.Repo.update!()
+
+      Tasks.broadcast_board({:plan_updated, completed_plan})
+      Process.sleep(100)
+
+      updated_task = Tasks.get_task_detail(task.id)
+      assert updated_task.status == "in_review"
+    end
+
     test "ignores task_updated for other tasks", %{
       task: task,
       assignee: assignee,

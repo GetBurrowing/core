@@ -98,18 +98,19 @@ defmodule Platform.Tasks.PlanEngineTest do
   # ── advance/1 ─────────────────────────────────────────────────────────
 
   describe "advance/1" do
-    test "advances to next stage when current passes", %{plan: plan} do
+    test "advances to next stage when current passes (auto-starts next)", %{plan: plan} do
       {:ok, s1} = Tasks.create_stage(%{plan_id: plan.id, position: 1, name: "Build"})
       {:ok, _s2} = Tasks.create_stage(%{plan_id: plan.id, position: 2, name: "Test"})
 
       {:ok, _} = PlanEngine.start_stage(s1.id)
 
-      # No validations on s1 → all passed
+      # No validations on s1 → all passed → next stage auto-starts
       assert {:ok, updated_plan} = PlanEngine.advance(plan.id)
 
       stage_statuses = Enum.map(updated_plan.stages, & &1.status)
       assert List.first(stage_statuses) == "passed"
-      assert List.last(stage_statuses) == "pending"
+      # Next stage is auto-started to "running" (not left as "pending")
+      assert List.last(stage_statuses) == "running"
     end
 
     test "completes plan when last stage passes", %{plan: plan} do
@@ -145,14 +146,13 @@ defmodule Platform.Tasks.PlanEngineTest do
 
     test "all stages passed completes the plan", %{plan: plan} do
       {:ok, s1} = Tasks.create_stage(%{plan_id: plan.id, position: 1, name: "Build"})
-      {:ok, s2} = Tasks.create_stage(%{plan_id: plan.id, position: 2, name: "Deploy"})
+      {:ok, _s2} = Tasks.create_stage(%{plan_id: plan.id, position: 2, name: "Deploy"})
 
-      # Run and pass s1
+      # Run and pass s1 — s2 auto-starts
       {:ok, _} = PlanEngine.start_stage(s1.id)
       {:ok, _} = PlanEngine.advance(plan.id)
 
-      # Run and pass s2
-      {:ok, _} = PlanEngine.start_stage(s2.id)
+      # s2 is already running (auto-started), advance again to complete
       {:ok, updated_plan} = PlanEngine.advance(plan.id)
 
       assert updated_plan.status == "completed"
@@ -162,12 +162,11 @@ defmodule Platform.Tasks.PlanEngineTest do
       {:ok, s1} = Tasks.create_stage(%{plan_id: plan.id, position: 1, name: "Build"})
       {:ok, s2} = Tasks.create_stage(%{plan_id: plan.id, position: 2, name: "Deploy"})
 
-      # Pass s1
+      # Pass s1 — s2 auto-starts
       {:ok, _} = PlanEngine.start_stage(s1.id)
       {:ok, _} = PlanEngine.advance(plan.id)
 
-      # Fail s2
-      {:ok, _} = PlanEngine.start_stage(s2.id)
+      # s2 is already running (auto-started), add a failing validation
       {:ok, v1} = Tasks.create_validation(%{stage_id: s2.id, kind: "test_pass"})
       Tasks.evaluate_validation(v1.id, "failed", %{})
       {:ok, updated_plan} = PlanEngine.advance(plan.id)
@@ -183,26 +182,25 @@ defmodule Platform.Tasks.PlanEngineTest do
     test "build → test → deploy with validations", %{plan: plan} do
       {:ok, s1} = Tasks.create_stage(%{plan_id: plan.id, position: 1, name: "Build"})
       {:ok, s2} = Tasks.create_stage(%{plan_id: plan.id, position: 2, name: "Test"})
-      {:ok, s3} = Tasks.create_stage(%{plan_id: plan.id, position: 3, name: "Deploy"})
+      {:ok, _s3} = Tasks.create_stage(%{plan_id: plan.id, position: 3, name: "Deploy"})
 
       # Stage 1: Build — no validations, just start and advance
+      # s2 auto-starts after s1 passes
       {:ok, _} = PlanEngine.start_stage(s1.id)
       {:ok, _} = PlanEngine.advance(plan.id)
 
-      # Stage 2: Test — with validations
-      {:ok, _} = PlanEngine.start_stage(s2.id)
+      # Stage 2: Test — already running (auto-started), add validations
       {:ok, v1} = Tasks.create_validation(%{stage_id: s2.id, kind: "test_pass"})
       {:ok, v2} = Tasks.create_validation(%{stage_id: s2.id, kind: "lint_pass"})
 
-      # Pass both validations — auto-advances stage
+      # Pass both validations — auto-advances stage, s3 auto-starts
       PlanEngine.evaluate_validation(v1.id, %{status: "passed", evidence: %{"tests" => 42}})
       PlanEngine.evaluate_validation(v2.id, %{status: "passed"})
 
       s2_updated = Platform.Repo.get!(Platform.Tasks.Stage, s2.id)
       assert s2_updated.status == "passed"
 
-      # Stage 3: Deploy — no validations
-      {:ok, _} = PlanEngine.start_stage(s3.id)
+      # Stage 3: Deploy — already running (auto-started), no validations
       {:ok, final_plan} = PlanEngine.advance(plan.id)
 
       assert final_plan.status == "completed"

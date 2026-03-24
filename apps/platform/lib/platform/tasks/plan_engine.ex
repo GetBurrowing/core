@@ -22,6 +22,7 @@ defmodule Platform.Tasks.PlanEngine do
   import Ecto.Query
 
   alias Platform.Repo
+  alias Platform.Tasks
   alias Platform.Tasks.{Plan, Stage, Validation}
 
   @valid_stage_transitions %{
@@ -230,16 +231,24 @@ defmodule Platform.Tasks.PlanEngine do
           Repo.preload(Repo.get!(Plan, plan.id), stages_query())
         end
 
-      _next_stage ->
-        # Next stage exists but don't auto-start it — caller uses start_stage/1
+      next_stage ->
+        # Auto-start the next pending stage so the agent can proceed immediately
+        {:ok, _started} = transition_stage(next_stage, "running")
         Repo.preload(Repo.get!(Plan, plan.id), stages_query())
     end
   end
 
   defp complete_plan(%Plan{} = plan) do
-    plan
-    |> Plan.changeset(%{status: "completed"})
-    |> Repo.update()
+    case plan
+         |> Plan.changeset(%{status: "completed"})
+         |> Repo.update() do
+      {:ok, completed} ->
+        Tasks.broadcast_board({:plan_updated, completed})
+        {:ok, completed}
+
+      error ->
+        error
+    end
   end
 
   defp stages_query do
@@ -259,6 +268,9 @@ defmodule Platform.Tasks.PlanEngine do
         to: stage.status
       }
     )
+
+    # Broadcast to the board PubSub topic so TaskRouter can react
+    Tasks.broadcast_board({:stage_transitioned, stage})
   end
 
   defp emit_validation_telemetry(%Validation{} = validation) do

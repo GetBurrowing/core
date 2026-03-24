@@ -232,6 +232,12 @@ defmodule Platform.Orchestration.TaskRouter do
         if HeartbeatScheduler.manual_approval?(stage_type) do
           state |> cancel_heartbeat() |> Map.put(:status, :waiting_human)
         else
+          # When a new stage becomes running, re-dispatch so the agent gets
+          # an updated prompt that describes the current stage
+          if stage.status == "running" do
+            send(self(), :dispatch)
+          end
+
           schedule_heartbeat(state)
         end
 
@@ -239,6 +245,30 @@ defmodule Platform.Orchestration.TaskRouter do
     else
       {:noreply, state}
     end
+  end
+
+  # Board PubSub: plan completed for our task — auto-transition task to in_review
+  def handle_info(
+        {:plan_updated, %{task_id: task_id, status: "completed"} = _plan},
+        %State{task_id: task_id} = state
+      ) do
+    task = Tasks.get_task_detail(task_id)
+
+    if task && task.status == "in_progress" do
+      case Tasks.transition_task(task, "in_review") do
+        {:ok, _updated} ->
+          Logger.info("[TaskRouter] plan completed — transitioned task #{task_id} to in_review")
+
+        {:error, reason} ->
+          Logger.warning(
+            "[TaskRouter] failed to transition task #{task_id} to in_review: #{inspect(reason)}"
+          )
+      end
+    end
+
+    # Re-dispatch so the agent picks up the in_review prompt
+    send(self(), :dispatch)
+    {:noreply, state}
   end
 
   # Board PubSub: plan updated for our task

@@ -75,12 +75,14 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
       assert prompt =~ "high"
     end
 
-    test "in_progress generates execution prompt" do
+    test "in_progress generates execution prompt with git workflow" do
       task = %{
+        id: "task-1234abcd",
         title: "Fix auth bug",
         description: "Auth is broken",
         status: "in_progress",
-        priority: "high"
+        priority: "high",
+        project: %{repo_url: "https://github.com/test/router", default_branch: "main"}
       }
 
       plan = %{version: 1, stages: [%{}]}
@@ -92,14 +94,18 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
       assert prompt =~ "Plan approved"
       assert prompt =~ "validation_pass"
       assert prompt =~ "report_blocker"
+      assert prompt =~ "Git Workflow (CRITICAL)"
+      assert prompt =~ "git worktree add ../worktrees/task"
+      assert prompt =~ "https://github.com/test/router"
     end
 
-    test "in_review generates review prompt" do
+    test "in_review generates explicit validation prompt" do
       task = %{
         title: "Review task",
         description: "Check it",
         status: "in_review",
-        priority: "medium"
+        priority: "medium",
+        project: %{repo_url: "https://github.com/test/router", default_branch: "main"}
       }
 
       plan = %{version: 1, stages: [%{}]}
@@ -108,8 +114,12 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
       prompt = HeartbeatScheduler.dispatch_prompt(task, plan, stage)
 
       assert prompt =~ "Review task"
-      assert prompt =~ "in review"
-      assert prompt =~ "Do not self-approve"
+      assert prompt =~ "validate the implementation"
+      assert prompt =~ "git merge-base --is-ancestor origin/main HEAD"
+      assert prompt =~ "git merge --no-commit --no-ff origin/main"
+      assert prompt =~ "task_update"
+      assert prompt =~ "in_progress"
+      assert prompt =~ "done"
     end
 
     test "fallback generates generic assignment prompt" do

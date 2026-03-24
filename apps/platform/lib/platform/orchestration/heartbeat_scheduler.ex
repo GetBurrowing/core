@@ -102,6 +102,31 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
 
   def dispatch_prompt(%{status: "in_progress"} = task, plan, stage) do
     stage_info = format_stage_info(plan, stage)
+    repo_url = project_attr(task, :repo_url, "")
+    default_branch = project_attr(task, :default_branch, "main")
+    task_slug = short_task_id(task)
+
+    git_section =
+      """
+
+      ## Git Workflow (CRITICAL)
+      Repository: #{repo_url}
+      Base branch: #{default_branch}
+
+      1. Create a worktree from the latest #{default_branch} branch:
+         ```
+         git fetch origin
+         git worktree add ../worktrees/#{task_slug} -b task/#{task_slug} origin/#{default_branch}
+         cd ../worktrees/#{task_slug}
+         ```
+      2. Do ALL work in the worktree directory.
+      3. When implementation is complete:
+         - Run the full test suite and lint checks
+         - Commit all changes with a descriptive message referencing task #{short_task_id(task)}
+         - Push the branch: `git push -u origin task/#{task_slug}`
+         - Open a PR against #{default_branch}#{pr_repo_suffix(repo_url)}
+      4. NEVER work on an existing branch. ALWAYS branch from latest origin/#{default_branch}.
+      """
 
     """
     Plan approved — execute the current stage.
@@ -111,7 +136,7 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
     Push evidence using validation_pass or stage_complete as you finish each step. \
     Post commentary to the execution space so reviewers can follow along. \
     Use report_blocker if you are stuck.
-
+    #{git_section}
     The attention signal that delivered this message includes a `context` field with the full task hierarchy: project, epic, task metadata, approved plan with stages, and execution_space_id. Use it as your source of truth.
 
     #{@skills_reference}
@@ -120,13 +145,29 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
 
   def dispatch_prompt(%{status: "in_review"} = task, plan, stage) do
     stage_info = format_stage_info(plan, stage)
+    repo_url = project_attr(task, :repo_url, "")
+    default_branch = project_attr(task, :default_branch, "main")
 
     """
-    Task is in review — run validations and push evidence.
+    Task is in review — validate the implementation before marking it done.
 
     Task: #{task.title}
     #{stage_info}\
-    Run all applicable validations and push evidence. \
+    Run these checks exactly and push evidence for each result:
+    - Confirm the task branch is up to date with #{default_branch}: `git fetch origin && git merge-base --is-ancestor origin/#{default_branch} HEAD`
+    - Check CI / GitHub Actions status with `gh` CLI#{gh_repo_suffix(repo_url)}
+    - Check for merge conflicts: `git merge --no-commit --no-ff origin/#{default_branch}` and then immediately abort with `git merge --abort`
+    - Run the local test suite and any required lint checks
+
+    If ALL checks pass:
+    - call `task_update` to move the task to `done`
+    - include the validation evidence, CI status, and PR link in your update
+
+    If ANY check fails:
+    - provide specific feedback describing what failed and how to reproduce it
+    - call `task_update` to move the task back to `in_progress`
+    - do not mark the task done
+
     Do not self-approve code_review or manual_approval stages — a human must approve those.
 
     The attention signal that delivered this message includes a `context` field with the full task hierarchy: project, epic, task metadata, approved plan with stages, and execution_space_id. Use it as your source of truth.
@@ -196,6 +237,25 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
     position = stage.position || 0
     "Plan: v#{plan.version} (stage #{position}/#{stage_count} — #{stage.name})\n"
   end
+
+  defp project_attr(task, key, default) do
+    project = Map.get(task, :project) || Map.get(task, "project") || %{}
+    Map.get(project, key) || Map.get(project, Atom.to_string(key)) || default
+  end
+
+  defp short_task_id(task) do
+    task
+    |> Map.get(:id, Map.get(task, "id", "task"))
+    |> to_string()
+    |> String.split("-")
+    |> List.first()
+  end
+
+  defp pr_repo_suffix(""), do: ""
+  defp pr_repo_suffix(repo_url), do: " on #{repo_url}"
+
+  defp gh_repo_suffix(""), do: ""
+  defp gh_repo_suffix(repo_url), do: " for #{repo_url}"
 
   defp format_elapsed(seconds) when seconds < 60, do: "#{seconds} seconds"
 
