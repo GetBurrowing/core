@@ -1,6 +1,7 @@
 import CodeBlock from "./code_block"
 import ComposeInput from "./compose_input"
 import CopyToClipboard from "./copy_to_clipboard"
+import ExecutionLogScroll from "./execution_log_scroll"
 import LocalTime from "./local_time"
 import MermaidDiagram from "./mermaid_diagram"
 import PushSubscribe from "./push_subscribe"
@@ -11,6 +12,7 @@ export default {
   CodeBlock,
   ComposeInput,
   CopyToClipboard,
+  ExecutionLogScroll,
   LocalTime,
   MermaidDiagram,
   PushSubscribe,

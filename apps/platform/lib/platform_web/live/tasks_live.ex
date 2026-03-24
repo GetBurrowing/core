@@ -5,6 +5,7 @@ defmodule PlatformWeb.TasksLive do
 
   alias Platform.Chat
   alias Platform.Chat.AttachmentStorage
+  alias Platform.Orchestration.ExecutionSpace
   alias Platform.Repo
   alias Platform.Tasks
   alias Platform.Tasks.{Plan, Task}
@@ -51,6 +52,10 @@ defmodule PlatformWeb.TasksLive do
      |> assign(:pending_plan_count, count_pending_plans(all_tasks))
      |> assign(:selected_task, nil)
      |> assign(:show_detail, false)
+     # Execution log state
+     |> assign(:execution_space_id, nil)
+     |> assign(:execution_log, [])
+     |> assign(:execution_log_collapsed, false)
      # Bottom sheet state
      |> assign(:show_task_sheet, false)
      |> assign(:task_form, to_form(Task.changeset(%Task{}, %{}), as: "task"))
@@ -76,16 +81,29 @@ defmodule PlatformWeb.TasksLive do
         task = Tasks.get_task_detail(task_id)
 
         if task do
+          # Unsubscribe from previous execution space if any
+          unsubscribe_execution_space(socket)
+
+          # Load execution log for this task
+          {space_id, log} = load_execution_log(task_id)
+
+          # Subscribe to real-time updates if space exists
+          if space_id, do: Chat.PubSub.subscribe(space_id)
+
           {:noreply,
            socket
            |> assign(:selected_task, task)
            |> assign(:show_detail, true)
+           |> assign(:execution_space_id, space_id)
+           |> assign(:execution_log, log)
            |> assign(:page_title, "Tasks · #{task.title}")}
         else
           {:noreply,
            socket
            |> assign(:selected_task, nil)
            |> assign(:show_detail, false)
+           |> assign(:execution_space_id, nil)
+           |> assign(:execution_log, [])
            |> put_flash(:error, "Task not found.")}
         end
 
@@ -94,6 +112,8 @@ defmodule PlatformWeb.TasksLive do
          socket
          |> assign(:selected_task, nil)
          |> assign(:show_detail, false)
+         |> assign(:execution_space_id, nil)
+         |> assign(:execution_log, [])
          |> put_flash(:error, "Invalid task ID.")}
     end
   end
@@ -164,10 +184,14 @@ defmodule PlatformWeb.TasksLive do
   end
 
   def handle_event("close_detail", _params, socket) do
+    unsubscribe_execution_space(socket)
+
     {:noreply,
      socket
      |> assign(:selected_task, nil)
      |> assign(:show_detail, false)
+     |> assign(:execution_space_id, nil)
+     |> assign(:execution_log, [])
      |> push_patch(to: ~p"/tasks")}
   end
 
@@ -351,6 +375,10 @@ defmodule PlatformWeb.TasksLive do
     do_create_task(params, socket, status)
   end
 
+  def handle_event("toggle_execution_log", _params, socket) do
+    {:noreply, assign(socket, :execution_log_collapsed, !socket.assigns.execution_log_collapsed)}
+  end
+
   # Upload cancel
   def handle_event("cancel_task_upload", %{"ref" => ref}, socket) do
     {:noreply, cancel_upload(socket, :task_attachments, ref)}
@@ -369,6 +397,18 @@ defmodule PlatformWeb.TasksLive do
 
   def handle_info({:plan_updated, _plan}, socket) do
     {:noreply, socket |> refresh_board() |> reload_selected_task()}
+  end
+
+  # Execution space PubSub — re-fetch log on any new message
+  def handle_info({:new_message, _msg}, socket) do
+    case socket.assigns[:execution_space_id] do
+      nil ->
+        {:noreply, socket}
+
+      space_id ->
+        log = ExecutionSpace.list_messages_with_participants(space_id)
+        {:noreply, assign(socket, :execution_log, log)}
+    end
   end
 
   def handle_info(_message, socket), do: {:noreply, socket}
@@ -451,6 +491,34 @@ defmodule PlatformWeb.TasksLive do
     end)
   end
 
+  # ── Private — Execution log helpers ──────────────────────────────────────
+
+  defp load_execution_log(task_id) do
+    case ExecutionSpace.find_by_task_id(task_id) do
+      %{id: space_id} ->
+        {space_id, ExecutionSpace.list_messages_with_participants(space_id)}
+
+      nil ->
+        {nil, []}
+    end
+  end
+
+  defp refresh_execution_log(socket) do
+    case socket.assigns[:execution_space_id] do
+      nil ->
+        socket
+
+      space_id ->
+        assign(socket, :execution_log, ExecutionSpace.list_messages_with_participants(space_id))
+    end
+  end
+
+  defp unsubscribe_execution_space(socket) do
+    if space_id = socket.assigns[:execution_space_id] do
+      Chat.PubSub.unsubscribe(space_id)
+    end
+  end
+
   # ── Private — Kanban helpers ───────────────────────────────────────────
 
   defp group_by_column(tasks) do
@@ -487,7 +555,9 @@ defmodule PlatformWeb.TasksLive do
 
   defp reload_selected_task(socket) do
     if task = socket.assigns[:selected_task] do
-      assign(socket, :selected_task, Tasks.get_task_detail(task.id))
+      socket
+      |> assign(:selected_task, Tasks.get_task_detail(task.id))
+      |> refresh_execution_log()
     else
       socket
     end
@@ -608,6 +678,24 @@ defmodule PlatformWeb.TasksLive do
   defp epic_status_badge_class("in_progress"), do: "badge badge-warning badge-xs"
   defp epic_status_badge_class("closed"), do: "badge badge-success badge-xs"
   defp epic_status_badge_class(_), do: "badge badge-ghost badge-xs"
+
+  defp format_log_timestamp(nil), do: ""
+
+  defp format_log_timestamp(%DateTime{} = dt) do
+    now = DateTime.utc_now()
+
+    if Date.compare(DateTime.to_date(dt), DateTime.to_date(now)) == :eq do
+      # Today — just HH:MM
+      Calendar.strftime(dt, "%H:%M")
+    else
+      # Older — Mon DD HH:MM
+      Calendar.strftime(dt, "%b %d %H:%M")
+    end
+  end
+
+  defp log_sender_color("agent", "system"), do: "text-warning"
+  defp log_sender_color("agent", _content_type), do: "text-info"
+  defp log_sender_color(_sender_type, _content_type), do: "text-base-content/60"
 
   defp stage_status_icon("passed"), do: "hero-check-circle text-success"
   defp stage_status_icon("failed"), do: "hero-x-circle text-error"

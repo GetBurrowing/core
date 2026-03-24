@@ -359,6 +359,52 @@
         </div>
       </div>
 
+      <%!-- Execution Log --%>
+      <div :if={@execution_space_id} class="space-y-2">
+        <div class="flex items-center justify-between">
+          <h3 class="text-xs font-semibold uppercase tracking-wider text-base-content/50">
+            Execution Log
+          </h3>
+          <button
+            phx-click="toggle_execution_log"
+            class="btn btn-ghost btn-xs btn-square"
+            title={if @execution_log_collapsed, do: "Expand log", else: "Collapse log"}
+          >
+            <span class={"size-4 transition-transform #{if @execution_log_collapsed, do: "hero-chevron-down", else: "hero-chevron-up"}"}>
+            </span>
+          </button>
+        </div>
+
+        <div :if={!@execution_log_collapsed}>
+          <div
+            :if={@execution_log == []}
+            class="text-xs text-base-content/30 italic py-2"
+          >
+            No messages yet
+          </div>
+
+          <div
+            :if={@execution_log != []}
+            id="execution-log-scroll"
+            phx-hook="ExecutionLogScroll"
+            class="max-h-72 overflow-y-auto rounded-box border border-base-300 bg-base-200/30 p-2 space-y-1"
+          >
+            <div
+              :for={msg <- @execution_log}
+              class={"flex items-start gap-2 text-xs #{if msg.log_only, do: "opacity-50", else: ""} #{if msg.content_type == "system", do: "border-l-2 border-base-300 pl-2", else: ""}"}
+            >
+              <span class="text-base-content/40 whitespace-nowrap shrink-0">
+                {format_log_timestamp(msg.inserted_at)}
+              </span>
+              <span class={"font-medium shrink-0 #{log_sender_color(msg.sender_type, msg.content_type)}"}>
+                {msg.sender_name}
+              </span>
+              <span class="flex-1 whitespace-pre-wrap break-words">{msg.content}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <%!-- Metadata --%>
       <div :if={@selected_task.metadata != %{}} class="space-y-1">
         <h3 class="text-xs font-semibold uppercase tracking-wider text-base-content/50">

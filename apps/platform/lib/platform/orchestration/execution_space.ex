@@ -12,7 +12,7 @@ defmodule Platform.Orchestration.ExecutionSpace do
   require Logger
 
   alias Platform.Chat
-  alias Platform.Chat.{Participant, Space}
+  alias Platform.Chat.{Message, Participant, Space}
   alias Platform.Repo
 
   @system_display_name "TaskRouter"
@@ -138,15 +138,71 @@ defmodule Platform.Orchestration.ExecutionSpace do
     end
   end
 
-  # ── Helpers ──────────────────────────────────────────────────────────────
+  # ── Queries ──────────────────────────────────────────────────────────────
 
-  defp find_by_task_id(task_id) do
-    from(s in Space,
-      where: s.kind == "execution" and fragment("?->>'task_id' = ?", s.metadata, ^task_id),
-      where: is_nil(s.archived_at),
-      limit: 1
+  @doc """
+  Look up the execution space for a task by its `task_id`.
+
+  Returns the `Space` struct or `nil` if no execution space exists.
+  Checks active spaces first, then falls back to archived ones so that
+  completed tasks still show their execution log.
+  """
+  @spec find_by_task_id(String.t()) :: Space.t() | nil
+  def find_by_task_id(task_id) do
+    # Active space first
+    active =
+      from(s in Space,
+        where: s.kind == "execution" and fragment("?->>'task_id' = ?", s.metadata, ^task_id),
+        where: is_nil(s.archived_at),
+        limit: 1
+      )
+      |> Repo.one()
+
+    case active do
+      %Space{} = s ->
+        s
+
+      nil ->
+        # Fall back to archived space (task completed)
+        from(s in Space,
+          where: s.kind == "execution" and fragment("?->>'task_id' = ?", s.metadata, ^task_id),
+          where: not is_nil(s.archived_at),
+          order_by: [desc: s.archived_at],
+          limit: 1
+        )
+        |> Repo.one()
+    end
+  end
+
+  @doc """
+  List messages in an execution space with participant info joined.
+
+  Returns a list of maps ordered chronologically (oldest first) with keys:
+  `id`, `content`, `content_type`, `log_only`, `inserted_at`, `metadata`,
+  `sender_name`, and `sender_type`.
+  """
+  @spec list_messages_with_participants(binary(), keyword()) :: [map()]
+  def list_messages_with_participants(space_id, opts \\ []) do
+    limit = Keyword.get(opts, :limit, 200)
+
+    from(m in Message,
+      join: p in Participant,
+      on: p.id == m.participant_id,
+      where: m.space_id == ^space_id and is_nil(m.deleted_at),
+      order_by: [asc: m.inserted_at],
+      limit: ^limit,
+      select: %{
+        id: m.id,
+        content: m.content,
+        content_type: m.content_type,
+        log_only: m.log_only,
+        inserted_at: m.inserted_at,
+        metadata: m.metadata,
+        sender_name: coalesce(p.display_name, p.participant_type),
+        sender_type: p.participant_type
+      }
     )
-    |> Repo.one()
+    |> Repo.all()
   end
 
   defp system_participant_id(space_id) do

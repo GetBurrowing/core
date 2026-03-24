@@ -96,6 +96,71 @@ defmodule Platform.Orchestration.ExecutionSpaceTest do
     end
   end
 
+  describe "find_by_task_id/1" do
+    test "returns nil when no execution space exists" do
+      assert ExecutionSpace.find_by_task_id("nonexistent-id") == nil
+    end
+
+    test "returns the active execution space for a task" do
+      {:ok, space} = ExecutionSpace.find_or_create(@task_id)
+      assert found = ExecutionSpace.find_by_task_id(@task_id)
+      assert found.id == space.id
+    end
+
+    test "returns archived space when no active space exists" do
+      {:ok, _space} = ExecutionSpace.find_or_create(@task_id)
+      {:ok, archived} = ExecutionSpace.archive(@task_id)
+      assert found = ExecutionSpace.find_by_task_id(@task_id)
+      assert found.id == archived.id
+      assert found.archived_at != nil
+    end
+  end
+
+  describe "list_messages_with_participants/2" do
+    test "returns messages with participant info in chronological order" do
+      {:ok, space} = ExecutionSpace.find_or_create(@task_id)
+      {:ok, _log} = ExecutionSpace.post_log(space.id, "First log message")
+      {:ok, _eng} = ExecutionSpace.post_engagement(space.id, "Heartbeat prompt")
+      {:ok, _log2} = ExecutionSpace.post_log(space.id, "Second log message")
+
+      messages = ExecutionSpace.list_messages_with_participants(space.id)
+
+      assert length(messages) == 3
+
+      [first, second, third] = messages
+      assert first.content == "First log message"
+      assert first.log_only == true
+      assert first.sender_name == "TaskRouter"
+      assert first.sender_type == "agent"
+
+      assert second.content == "Heartbeat prompt"
+      assert second.log_only == false
+
+      assert third.content == "Second log message"
+
+      # Verify chronological order
+      assert DateTime.compare(first.inserted_at, second.inserted_at) in [:lt, :eq]
+      assert DateTime.compare(second.inserted_at, third.inserted_at) in [:lt, :eq]
+    end
+
+    test "returns empty list when no messages exist" do
+      {:ok, space} = ExecutionSpace.find_or_create(@task_id)
+      assert ExecutionSpace.list_messages_with_participants(space.id) == []
+    end
+
+    test "respects limit option" do
+      {:ok, space} = ExecutionSpace.find_or_create(@task_id)
+      {:ok, _} = ExecutionSpace.post_log(space.id, "msg 1")
+      {:ok, _} = ExecutionSpace.post_log(space.id, "msg 2")
+      {:ok, _} = ExecutionSpace.post_log(space.id, "msg 3")
+
+      messages = ExecutionSpace.list_messages_with_participants(space.id, limit: 2)
+      assert length(messages) == 2
+      # Should get the oldest 2 (ORDER BY ASC + LIMIT)
+      assert hd(messages).content == "msg 1"
+    end
+  end
+
   describe "add_participant/2" do
     test "adds an agent participant to the space" do
       {:ok, space} = ExecutionSpace.find_or_create(@task_id)
