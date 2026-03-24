@@ -247,20 +247,21 @@
         <span class="text-xs font-semibold uppercase tracking-wider text-base-content/50">
           Agent
         </span>
-        <select
-          class="select select-bordered select-xs flex-1"
-          phx-change="assign_agent"
-          name="agent_id"
-        >
-          <option value="">Unassigned</option>
-          <option
-            :for={agent <- @agents}
-            value={agent.id}
-            selected={@selected_task.assignee_id == agent.id}
+        <form phx-change="assign_agent" class="flex-1">
+          <select
+            class="select select-bordered select-xs w-full"
+            name="agent_id"
           >
-            {agent.name}
-          </option>
-        </select>
+            <option value="">Unassigned</option>
+            <option
+              :for={agent <- @agents}
+              value={agent.id}
+              selected={@selected_task.assignee_id == agent.id}
+            >
+              {agent.name}
+            </option>
+          </select>
+        </form>
       </div>
 
       <%!-- Transition buttons --%>
