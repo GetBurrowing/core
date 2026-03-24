@@ -279,9 +279,10 @@ defmodule Platform.Orchestration.TaskRouter do
 
   defp dispatch_attention(%{type: :federated, id: runtime_id}, task_id, reason, context, prompt) do
     task_status = context[:task][:status] || context[:task]["status"]
+    space_id = context[:execution_space_id]
 
     payload = %{
-      signal: %{reason: reason, task_id: task_id, task_status: task_status},
+      signal: %{reason: reason, task_id: task_id, task_status: task_status, space_id: space_id},
       context: context,
       message: %{content: prompt}
     }
