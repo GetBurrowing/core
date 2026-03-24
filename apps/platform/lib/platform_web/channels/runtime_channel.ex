@@ -23,9 +23,25 @@ defmodule PlatformWeb.RuntimeChannel do
           last_connected_at: DateTime.utc_now()
         })
         |> Platform.Repo.update()
+
+        agent_name =
+          case runtime.agent_id && Platform.Repo.get(Platform.Agents.Agent, runtime.agent_id) do
+            %{name: name} -> name
+            _ -> nil
+          end
+
+        Logger.info(
+          "[RuntimeChannel] runtime connected: runtime_id=#{runtime_id} agent=#{inspect(agent_name)}"
+        )
       end
 
       RuntimePresence.track(runtime_id)
+
+      :telemetry.execute(
+        [:platform, :federation, :runtime_connected],
+        %{system_time: System.system_time()},
+        %{runtime_id: runtime_id}
+      )
 
       # Push capabilities after join completes (push/3 not allowed during join/3)
       send(self(), :send_capabilities)
@@ -64,7 +80,15 @@ defmodule PlatformWeb.RuntimeChannel do
   end
 
   @impl true
+  def handle_in("pong", _payload, socket) do
+    RuntimePresence.touch(socket.assigns.runtime_id)
+    {:noreply, socket}
+  end
+
+  @impl true
   def handle_in("reply", %{"space_id" => space_id, "content" => content}, socket) do
+    RuntimePresence.touch(socket.assigns.runtime_id)
+
     # Track which space this agent is actively replying in for NodeContext
     if agent_id = socket.assigns[:agent_id] do
       Platform.Federation.NodeContext.set_space(agent_id, space_id)
@@ -112,6 +136,7 @@ defmodule PlatformWeb.RuntimeChannel do
         %{"space_id" => space_id, "chunk_id" => chunk_id, "text" => text, "done" => done},
         socket
       ) do
+    RuntimePresence.touch(socket.assigns.runtime_id)
     agent_participant_id = get_agent_participant_id(socket, space_id)
 
     if agent_participant_id do
@@ -133,6 +158,7 @@ defmodule PlatformWeb.RuntimeChannel do
 
   @impl true
   def handle_in("typing", %{"space_id" => space_id, "typing" => typing}, socket) do
+    RuntimePresence.touch(socket.assigns.runtime_id)
     agent_participant_id = get_agent_participant_id(socket, space_id)
 
     if agent_participant_id do
@@ -152,6 +178,7 @@ defmodule PlatformWeb.RuntimeChannel do
         socket
       )
       when is_map(args) do
+    RuntimePresence.touch(socket.assigns.runtime_id)
     space_id = Map.get(args, "space_id")
     agent_participant_id = get_agent_participant_id(socket, space_id)
 
@@ -302,7 +329,17 @@ defmodule PlatformWeb.RuntimeChannel do
 
   @impl true
   def terminate(_reason, socket) do
-    RuntimePresence.untrack(socket.assigns.runtime_id)
+    runtime_id = socket.assigns.runtime_id
+    RuntimePresence.untrack(runtime_id)
+
+    Logger.info("[RuntimeChannel] runtime disconnected: runtime_id=#{runtime_id}")
+
+    :telemetry.execute(
+      [:platform, :federation, :runtime_disconnected],
+      %{system_time: System.system_time()},
+      %{runtime_id: runtime_id}
+    )
+
     :ok
   end
 

@@ -16,7 +16,7 @@ defmodule Platform.Chat.AgentResponder do
   alias Platform.Chat
   alias Platform.Chat.{ContextPlane, Message, Participant}
   alias Platform.Chat.PubSub, as: ChatPubSub
-  alias Platform.Federation.ToolSurface
+  alias Platform.Federation.{DeadLetterBuffer, RuntimePresence, ToolSurface}
   alias Platform.Repo
 
   @history_limit 12
@@ -147,31 +147,70 @@ defmodule Platform.Chat.AgentResponder do
       runtime = Platform.Federation.get_runtime(runtime_id)
 
       if runtime do
-        bundle = ContextPlane.build_context_bundle(space_id)
-        tools = ToolSurface.tool_definitions()
-
-        author_participant = Chat.get_participant(context.message.participant_id)
-        author_name = if author_participant, do: author_participant.display_name, else: "unknown"
-
-        payload = %{
-          signal: %{reason: signal.reason, space_id: space_id},
-          message: %{content: context.user_message, author: author_name},
-          history: context.history,
-          context: bundle,
-          tools: tools
-        }
-
         topic = "runtime:#{runtime.runtime_id}"
-        Logger.info("[AgentResponder] broadcasting attention to #{topic}")
 
-        case PlatformWeb.Endpoint.broadcast(topic, "attention", payload) do
-          :ok ->
-            Logger.info("[AgentResponder] broadcast sent successfully to #{topic}")
-            :ok
+        # Pre-check: is the runtime actually connected?
+        unless RuntimePresence.online?(runtime.runtime_id) do
+          Logger.error(
+            "[AgentResponder] DEAD LETTER: runtime #{runtime.runtime_id} not in presence — agent #{context.agent.slug} unreachable (topic=#{topic})"
+          )
 
-          {:error, reason} ->
-            Logger.error("[AgentResponder] broadcast failed to #{topic}: #{inspect(reason)}")
-            {:error, :broadcast_failed}
+          DeadLetterBuffer.record(%{
+            runtime_id: runtime.runtime_id,
+            agent_id: context.agent.id,
+            agent_slug: context.agent.slug,
+            space_id: space_id,
+            reason: :runtime_offline,
+            timestamp: DateTime.utc_now()
+          })
+
+          :telemetry.execute(
+            [:platform, :federation, :delivery_failed],
+            %{system_time: System.system_time()},
+            %{
+              runtime_id: runtime.runtime_id,
+              agent_id: context.agent.id,
+              reason: :runtime_offline
+            }
+          )
+
+          {:error, :runtime_offline}
+        else
+          bundle = ContextPlane.build_context_bundle(space_id)
+          tools = ToolSurface.tool_definitions()
+
+          author_participant = Chat.get_participant(context.message.participant_id)
+
+          author_name =
+            if author_participant, do: author_participant.display_name, else: "unknown"
+
+          payload = %{
+            signal: %{reason: signal.reason, space_id: space_id},
+            message: %{content: context.user_message, author: author_name},
+            history: context.history,
+            context: bundle,
+            tools: tools
+          }
+
+          Logger.info("[AgentResponder] broadcasting attention to #{topic}")
+
+          case PlatformWeb.Endpoint.broadcast(topic, "attention", payload) do
+            :ok ->
+              Logger.info("[AgentResponder] broadcast sent successfully to #{topic}")
+
+              :telemetry.execute(
+                [:platform, :federation, :delivery_success],
+                %{system_time: System.system_time()},
+                %{runtime_id: runtime.runtime_id, agent_id: context.agent.id}
+              )
+
+              :ok
+
+            {:error, reason} ->
+              Logger.error("[AgentResponder] broadcast failed to #{topic}: #{inspect(reason)}")
+
+              {:error, :broadcast_failed}
+          end
         end
       else
         Logger.warning("[AgentResponder] runtime #{runtime_id} not found")

@@ -9,6 +9,7 @@ defmodule Platform.Federation do
   alias Platform.Agents.{Agent, AgentRuntime}
   alias Platform.Chat
   alias Platform.Chat.{Participant, Space}
+  alias Platform.Federation.RuntimePresence
   alias Platform.Repo
 
   # ── Runtime registration ────────────────────────────────────────────
@@ -154,6 +155,59 @@ defmodule Platform.Federation do
       order_by: [asc: s.name]
     )
     |> Repo.all()
+  end
+
+  # ── Observability ───────────────────────────────────────────────────
+
+  @doc """
+  Returns the federation health status for all active runtimes.
+
+  Combines DB records with live presence data to show connectivity,
+  connected_at, last_seen_at, and historical last_connected_at.
+  """
+  def federation_status do
+    runtimes = Repo.all(from(r in AgentRuntime, where: r.status == "active"))
+    presence = RuntimePresence.list_all()
+
+    # Build agent lookup — AgentRuntime has agent_id as a raw field, no association
+    agent_ids = runtimes |> Enum.map(& &1.agent_id) |> Enum.reject(&is_nil/1)
+
+    agents =
+      if agent_ids != [] do
+        from(a in Platform.Agents.Agent, where: a.id in ^agent_ids)
+        |> Repo.all()
+        |> Map.new(&{&1.id, &1})
+      else
+        %{}
+      end
+
+    Enum.map(runtimes, fn runtime ->
+      online_info = Map.get(presence, runtime.runtime_id)
+      agent = Map.get(agents, runtime.agent_id)
+
+      %{
+        runtime_id: runtime.runtime_id,
+        agent_name: agent && agent.name,
+        agent_slug: agent && agent.slug,
+        agent_id: runtime.agent_id,
+        status: runtime.status,
+        online: online_info != nil,
+        connected_at: online_info && online_info.connected_at,
+        last_seen_at: online_info && online_info.last_seen_at,
+        last_connected_at: runtime.last_connected_at
+      }
+    end)
+  end
+
+  @doc """
+  Broadcast a ping event to a runtime channel.
+
+  The runtime client is expected to respond with a "pong" event,
+  which will update the last_seen_at via RuntimePresence.touch/1.
+  """
+  def ping_runtime(runtime_id) do
+    topic = "runtime:#{runtime_id}"
+    PlatformWeb.Endpoint.broadcast(topic, "ping", %{timestamp: DateTime.utc_now()})
   end
 
   # ── Helpers ─────────────────────────────────────────────────────────

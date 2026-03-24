@@ -82,10 +82,19 @@
       navigate="/admin/prompts"
       class={nav_item_class(@current_path, "/admin/prompts")}
       phx-click="close_drawer"
-      title="Admin"
+      title="Admin · Prompts"
     >
       <span class="hero-wrench-screwdriver size-5 flex-shrink-0"></span>
-      <span :if={!@sidebar_collapsed} class="text-sm font-medium">Admin</span>
+      <span :if={!@sidebar_collapsed} class="text-sm font-medium">Admin · Prompts</span>
+    </.link>
+    <.link
+      navigate="/admin/federation"
+      class={nav_item_class(@current_path, "/admin/federation")}
+      phx-click="close_drawer"
+      title="Admin · Federation"
+    >
+      <span class="hero-signal size-5 flex-shrink-0"></span>
+      <span :if={!@sidebar_collapsed} class="text-sm font-medium">Admin · Federation</span>
     </.link>
 
     <div class="flex-1"></div>

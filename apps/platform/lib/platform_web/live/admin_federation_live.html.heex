@@ -1,0 +1,161 @@
+<div class="flex h-full min-h-0 flex-col">
+  <%!-- Header --%>
+  <div class="flex items-center justify-between border-b border-base-300 px-4 py-3">
+    <div class="flex items-center gap-3">
+      <h1 class="text-sm font-semibold uppercase tracking-widest text-base-content/60">
+        Admin · Federation Health
+      </h1>
+      <span class="badge badge-ghost badge-sm">{length(@runtimes)} runtimes</span>
+    </div>
+    <div class="flex items-center gap-2">
+      <span class="text-xs text-base-content/40">Auto-refreshes every 5s</span>
+      <button phx-click="refresh" class="btn btn-ghost btn-xs">
+        <span class="hero-arrow-path size-4"></span> Refresh
+      </button>
+    </div>
+  </div>
+
+  <%!-- Tabs: Federation / Dead Letters --%>
+  <div class="flex-1 min-h-0 overflow-y-auto p-4 space-y-6">
+    <%!-- Runtime status table --%>
+    <div>
+      <h2 class="text-xs font-semibold uppercase tracking-wider text-base-content/50 mb-3">
+        Runtime Connections
+      </h2>
+
+      <%= if Enum.empty?(@runtimes) do %>
+        <div class="rounded-lg border border-base-300 p-8 text-center text-base-content/40 text-sm">
+          No active runtimes registered.
+        </div>
+      <% else %>
+        <div class="rounded-lg border border-base-300 overflow-hidden">
+          <table class="w-full text-sm">
+            <thead class="bg-base-200 text-xs uppercase tracking-wider text-base-content/50">
+              <tr>
+                <th class="px-4 py-2 text-left">Agent</th>
+                <th class="px-4 py-2 text-left">Runtime ID</th>
+                <th class="px-4 py-2 text-left">Status</th>
+                <th class="px-4 py-2 text-left">Connected At</th>
+                <th class="px-4 py-2 text-left">Last Seen</th>
+                <th class="px-4 py-2 text-left">Last Connected (DB)</th>
+                <th class="px-4 py-2 text-left">Actions</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-base-200">
+              <%= for runtime <- @runtimes do %>
+                <tr class="hover:bg-base-100">
+                  <td class="px-4 py-3 font-medium">
+                    {runtime.agent_name || runtime.agent_slug || "(unlinked)"}
+                  </td>
+                  <td class="px-4 py-3 font-mono text-xs text-base-content/60">
+                    {runtime.runtime_id}
+                  </td>
+                  <td class="px-4 py-3">
+                    <%= if runtime.online do %>
+                      <span class="inline-flex items-center gap-1.5 text-success">
+                        <span class="size-2 rounded-full bg-success inline-block"></span> Online
+                      </span>
+                    <% else %>
+                      <span class="inline-flex items-center gap-1.5 text-error">
+                        <span class="size-2 rounded-full bg-error inline-block"></span> Offline
+                      </span>
+                    <% end %>
+                  </td>
+                  <td class="px-4 py-3 text-xs text-base-content/60">
+                    {format_dt(runtime.connected_at)}
+                  </td>
+                  <td class="px-4 py-3 text-xs text-base-content/60">
+                    {format_dt(runtime.last_seen_at)}
+                  </td>
+                  <td class="px-4 py-3 text-xs text-base-content/60">
+                    {format_dt(runtime.last_connected_at)}
+                  </td>
+                  <td class="px-4 py-3">
+                    <%= if runtime.online do %>
+                      <button
+                        phx-click="ping"
+                        phx-value-runtime-id={runtime.runtime_id}
+                        class="btn btn-xs btn-outline"
+                        title="Send ping to runtime"
+                      >
+                        Ping
+                      </button>
+                      <%= case Map.get(@ping_results, runtime.runtime_id) do %>
+                        <% :sent -> %>
+                          <span class="text-xs text-info ml-1">Sent ✓</span>
+                        <% {:error, _} -> %>
+                          <span class="text-xs text-error ml-1">Failed</span>
+                        <% _ -> %>
+                          <span></span>
+                      <% end %>
+                    <% else %>
+                      <span class="text-xs text-base-content/30">—</span>
+                    <% end %>
+                  </td>
+                </tr>
+              <% end %>
+            </tbody>
+          </table>
+        </div>
+      <% end %>
+    </div>
+
+    <%!-- Dead Letters --%>
+    <div>
+      <div class="flex items-center justify-between mb-3">
+        <h2 class="text-xs font-semibold uppercase tracking-wider text-base-content/50">
+          Dead Letters
+          <span class="badge badge-error badge-xs ml-1">{length(@dead_letters)}</span>
+        </h2>
+        <%= if not Enum.empty?(@dead_letters) do %>
+          <button phx-click="clear_dead_letters" class="btn btn-xs btn-ghost text-error">
+            Clear
+          </button>
+        <% end %>
+      </div>
+
+      <%= if Enum.empty?(@dead_letters) do %>
+        <div class="rounded-lg border border-base-300 p-6 text-center text-base-content/40 text-sm">
+          No delivery failures since last restart.
+        </div>
+      <% else %>
+        <div class="rounded-lg border border-base-300 overflow-hidden">
+          <table class="w-full text-sm">
+            <thead class="bg-base-200 text-xs uppercase tracking-wider text-base-content/50">
+              <tr>
+                <th class="px-4 py-2 text-left">Timestamp</th>
+                <th class="px-4 py-2 text-left">Agent</th>
+                <th class="px-4 py-2 text-left">Runtime ID</th>
+                <th class="px-4 py-2 text-left">Space ID</th>
+                <th class="px-4 py-2 text-left">Reason</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-base-200">
+              <%= for letter <- @dead_letters do %>
+                <tr class="hover:bg-base-100">
+                  <td class="px-4 py-2 text-xs text-base-content/60">
+                    {format_dt(letter.timestamp)}
+                  </td>
+                  <td class="px-4 py-2">
+                    {letter.agent_slug || letter.agent_id}
+                  </td>
+                  <td class="px-4 py-2 font-mono text-xs text-base-content/60">
+                    {letter.runtime_id}
+                  </td>
+                  <td class="px-4 py-2 font-mono text-xs text-base-content/60">
+                    {letter.space_id}
+                  </td>
+                  <td class="px-4 py-2">
+                    <span class="badge badge-error badge-sm">
+                      {letter.reason}
+                    </span>
+                  </td>
+                </tr>
+              <% end %>
+            </tbody>
+          </table>
+        </div>
+      <% end %>
+    </div>
+  </div>
+</div>

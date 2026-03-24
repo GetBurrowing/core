@@ -17,7 +17,25 @@ defmodule Platform.Federation.ToolSurface do
   """
   def tool_definitions do
     canvas_tools() ++
-      messaging_tools() ++ task_tools() ++ plan_tools() ++ review_tools() ++ space_tools()
+      messaging_tools() ++
+      task_tools() ++ plan_tools() ++ review_tools() ++ space_tools() ++ federation_tools()
+  end
+
+  defp federation_tools do
+    [
+      %{
+        name: "federation_status",
+        description:
+          "Check the connection status of all registered agent runtimes. Shows which runtimes are online, when they connected, and when they last sent a message.",
+        parameters: %{},
+        returns:
+          "Array of runtime status objects with runtime_id, agent_name, online, connected_at, last_seen_at, last_connected_at",
+        limitations:
+          "Only shows active runtimes. Presence data is in-memory and resets on restart.",
+        when_to_use:
+          "When you need to diagnose connectivity issues or verify which agent runtimes are currently reachable"
+      }
+    ]
   end
 
   defp messaging_tools do
@@ -1084,6 +1102,27 @@ defmodule Platform.Federation.ToolSurface do
             end
         end
     end
+  end
+
+  # ── Federation tools ─────────────────────────────────────────────────
+
+  def execute("federation_status", _args, _context) do
+    status = Platform.Federation.federation_status()
+
+    runtimes =
+      Enum.map(status, fn r ->
+        %{
+          runtime_id: r.runtime_id,
+          agent_name: r.agent_name,
+          agent_slug: r.agent_slug,
+          online: r.online,
+          connected_at: format_datetime(r.connected_at),
+          last_seen_at: format_datetime(r.last_seen_at),
+          last_connected_at: format_datetime(r.last_connected_at)
+        }
+      end)
+
+    {:ok, %{runtimes: runtimes}}
   end
 
   def execute(unknown_tool, _args, _context) do

@@ -39,6 +39,8 @@ defmodule Platform.Application do
         Platform.Federation.NodeContext,
         # Federation runtime presence tracker — before Endpoint so channels can use it
         Platform.Federation.RuntimePresence,
+        # Dead letter buffer — in-process ring buffer for delivery failures
+        Platform.Federation.DeadLetterBuffer,
         # Context plane — shared ETS context for federation (after Repo, before AttentionRouter)
         Platform.Chat.ContextPlane,
         # Chat presence — must start after PubSub
