@@ -2150,6 +2150,7 @@ defmodule PlatformWeb.ChatLive do
                     placeholder="Reply in thread…"
                     autocomplete="off"
                     class="textarea textarea-bordered w-full resize-none rounded-xl pr-10 text-base md:text-sm leading-relaxed"
+                    phx-hook="ComposeInput"
                   >{Phoenix.HTML.Form.normalize_value("textarea", @thread_compose_form[:text].value)}</textarea>
                   <button
                     type="submit"

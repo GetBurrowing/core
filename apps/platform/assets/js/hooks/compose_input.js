@@ -1,7 +1,12 @@
-// ComposeInput hook — auto-expanding textarea, Enter for newline, @mention autocomplete
+// ComposeInput hook — auto-expanding textarea, Enter to send (desktop),
+// Shift+Enter for newline, @mention autocomplete
 const ComposeInput = {
   mounted() {
     this._lastMentionQuery = null;
+
+    // Mobile detection: touch-primary devices keep Enter as newline,
+    // send button is the primary send method on mobile.
+    this._isMobile = window.matchMedia("(pointer: coarse)").matches;
 
     // Auto-resize: collapse to 0 then expand to exact content height (capped at 200px)
     this._autoResize = () => {
@@ -24,16 +29,25 @@ const ComposeInput = {
     });
 
     this.el.addEventListener("keydown", (e) => {
-      // Enter inserts newline (default textarea behavior) — no preventDefault.
-      // Shift+Enter or Cmd/Ctrl+Enter sends the message.
-      if (e.key === "Enter" && (e.shiftKey || e.metaKey || e.ctrlKey)) {
-        e.preventDefault();
-        this.pushEvent("clear_mention_suggestions", {});
-        this._lastMentionQuery = null;
+      if (e.key === "Enter") {
+        // Shift+Enter always inserts a newline (default textarea behavior)
+        if (e.shiftKey) return;
 
-        const form = this.el.closest("form");
-        if (form) form.requestSubmit();
-        return;
+        // On desktop: Enter (or Cmd/Ctrl+Enter) sends the message
+        // On mobile: Enter inserts a newline (send via button)
+        if (!this._isMobile || e.metaKey || e.ctrlKey) {
+          e.preventDefault();
+
+          // Don't send empty/whitespace-only messages
+          if (this.el.value.trim().length === 0) return;
+
+          this.pushEvent("clear_mention_suggestions", {});
+          this._lastMentionQuery = null;
+
+          const form = this.el.closest("form");
+          if (form) form.requestSubmit();
+          return;
+        }
       }
 
       if (e.key === "Escape") {
