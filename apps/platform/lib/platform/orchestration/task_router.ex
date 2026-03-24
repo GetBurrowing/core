@@ -323,7 +323,7 @@ defmodule Platform.Orchestration.TaskRouter do
     payload = %{
       signal: %{reason: reason, task_id: task_id, task_status: task_status, space_id: space_id},
       context: context,
-      message: %{content: prompt}
+      message: %{content: prompt, author: "TaskRouter"}
     }
 
     topic = "runtime:#{runtime_id}"
