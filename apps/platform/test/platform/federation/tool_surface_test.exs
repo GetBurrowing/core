@@ -232,7 +232,7 @@ defmodule Platform.Federation.ToolSurfaceTest do
       {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Plan task"})
       {:ok, plan} = Tasks.create_plan(%{task_id: task.id})
       {:ok, plan} = Tasks.submit_plan_for_review(plan)
-      {:ok, _plan} = Tasks.approve_plan(plan, "tester")
+      {:ok, _plan} = Tasks.approve_plan(plan, "00000000-0000-0000-0000-000000000001")
 
       {:ok, result} =
         ToolSurface.execute("plan_get", %{"task_id" => task.id}, %{})
