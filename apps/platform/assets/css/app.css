@@ -248,6 +248,13 @@
 }
 .code-block-expand:hover { background: oklch(25% 0.014 254); }
 
+/* ── Resizable Sidebar ──────────────────────────────────────────── */
+
+.sidebar-resizing {
+  user-select: none;
+  cursor: col-resize;
+}
+
 /* ── Makeup Syntax Highlighting ──────────────────────────────────── */
 
 pre .makeup .n  { color: #c9d1d9; }        /* name */

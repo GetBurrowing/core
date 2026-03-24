@@ -1149,7 +1149,11 @@ defmodule PlatformWeb.ChatLive do
 
     <div class="flex h-full overflow-hidden">
       <%!-- Desktop sidebar --%>
-      <aside class="hidden lg:flex w-52 flex-shrink-0 flex-col border-r border-base-300 bg-base-200">
+      <aside
+        id="chat-sidebar"
+        phx-hook="ResizableSidebar"
+        class="hidden lg:flex relative flex-shrink-0 flex-col border-r border-base-300 bg-base-200"
+      >
         <%!-- Channels section --%>
         <div class="border-b border-base-300 px-4 py-3 flex items-center justify-between">
           <p class="text-xs font-semibold uppercase tracking-widest text-base-content/50">
@@ -1226,6 +1230,12 @@ defmodule PlatformWeb.ChatLive do
             No conversations yet
           </div>
         </nav>
+
+        <%!-- Drag handle for sidebar resize --%>
+        <div
+          class="absolute right-0 inset-y-0 w-1 cursor-col-resize hover:bg-primary/40 active:bg-primary/60 transition-colors z-10"
+          aria-hidden="true"
+        />
       </aside>
 
       <%!-- Mobile channel browser overlay --%>
