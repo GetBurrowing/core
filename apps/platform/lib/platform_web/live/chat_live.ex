@@ -252,7 +252,7 @@ defmodule PlatformWeb.ChatLive do
     {:noreply, clear_search(socket)}
   end
 
-  def handle_event("open_search_result", %{"message_id" => message_id}, socket) do
+  def handle_event("open_search_result", %{"message-id" => message_id}, socket) do
     case Chat.get_message(message_id) do
       nil ->
         {:noreply, put_flash(socket, :error, "Search result not found.")}
@@ -390,9 +390,14 @@ defmodule PlatformWeb.ChatLive do
     end
 
     {:noreply, socket}
+  rescue
+    e ->
+      require Logger
+      Logger.error("Reaction handler crashed: #{Exception.message(e)}")
+      {:noreply, socket}
   end
 
-  def handle_event("open_thread", %{"message_id" => message_id}, socket) do
+  def handle_event("open_thread", %{"message-id" => message_id}, socket) do
     with space when not is_nil(space) <- socket.assigns.active_space do
       thread =
         Chat.get_thread_for_message(message_id) ||
@@ -463,7 +468,7 @@ defmodule PlatformWeb.ChatLive do
     end
   end
 
-  def handle_event("toggle_pin", %{"message_id" => msg_id, "space_id" => space_id}, socket) do
+  def handle_event("toggle_pin", %{"message-id" => msg_id, "space-id" => space_id}, socket) do
     with participant when not is_nil(participant) <- socket.assigns.current_participant do
       if MapSet.member?(socket.assigns.pinned_message_ids, msg_id) do
         Chat.unpin_message(space_id, msg_id)
@@ -982,6 +987,11 @@ defmodule PlatformWeb.ChatLive do
       )
 
     {:noreply, assign(socket, :reactions_map, reactions_map)}
+  rescue
+    e ->
+      require Logger
+      Logger.error("Reaction broadcast (added) crashed: #{Exception.message(e)}")
+      {:noreply, socket}
   end
 
   def handle_info({:reaction_removed, data}, socket) do
@@ -993,6 +1003,11 @@ defmodule PlatformWeb.ChatLive do
       )
 
     {:noreply, assign(socket, :reactions_map, reactions_map)}
+  rescue
+    e ->
+      require Logger
+      Logger.error("Reaction broadcast (removed) crashed: #{Exception.message(e)}")
+      {:noreply, socket}
   end
 
   def handle_info({:pin_added, pin}, socket) do
