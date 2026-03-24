@@ -159,16 +159,17 @@
           <% attachable_projects =
             Enum.reject(@all_projects, fn p -> MapSet.member?(attached_project_ids, p.id) end) %>
           <div :if={attachable_projects != []}>
-            <select
-              class="select select-bordered select-xs w-full max-w-xs"
-              phx-change="attach_skill_to_project"
-              name="project_id"
-            >
-              <option value="">Attach to project…</option>
-              <option :for={project <- attachable_projects} value={project.id}>
-                {project.name}
-              </option>
-            </select>
+            <form phx-change="attach_skill_to_project">
+              <select
+                class="select select-bordered select-xs w-full max-w-xs"
+                name="project_id"
+              >
+                <option value="">Attach to project…</option>
+                <option :for={project <- attachable_projects} value={project.id}>
+                  {project.name}
+                </option>
+              </select>
+            </form>
           </div>
         </div>
 
@@ -198,14 +199,15 @@
           <% attachable_epics =
             Enum.reject(@all_epics, fn e -> MapSet.member?(attached_epic_ids, e.id) end) %>
           <div :if={attachable_epics != []}>
-            <select
-              class="select select-bordered select-xs w-full max-w-xs"
-              phx-change="attach_skill_to_epic"
-              name="epic_id"
-            >
-              <option value="">Attach to epic…</option>
-              <option :for={epic <- attachable_epics} value={epic.id}>{epic.name}</option>
-            </select>
+            <form phx-change="attach_skill_to_epic">
+              <select
+                class="select select-bordered select-xs w-full max-w-xs"
+                name="epic_id"
+              >
+                <option value="">Attach to epic…</option>
+                <option :for={epic <- attachable_epics} value={epic.id}>{epic.name}</option>
+              </select>
+            </form>
           </div>
         </div>
 

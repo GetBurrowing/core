@@ -350,14 +350,15 @@
           Enum.reject(@available_skills, fn s -> MapSet.member?(task_skill_ids, s.id) end) %>
 
         <div :if={attachable != []}>
-          <select
-            class="select select-bordered select-xs w-full max-w-xs"
-            phx-change="attach_skill"
-            name="skill_id"
-          >
-            <option value="">Attach a skill…</option>
-            <option :for={skill <- attachable} value={skill.id}>{skill.name}</option>
-          </select>
+          <form phx-change="attach_skill">
+            <select
+              class="select select-bordered select-xs w-full max-w-xs"
+              name="skill_id"
+            >
+              <option value="">Attach a skill…</option>
+              <option :for={skill <- attachable} value={skill.id}>{skill.name}</option>
+            </select>
+          </form>
         </div>
       </div>
 
