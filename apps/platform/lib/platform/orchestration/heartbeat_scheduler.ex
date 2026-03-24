@@ -79,7 +79,7 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
     A good plan stage must include:
     - A clear name (not just a category label)
     - A description that explains: what specifically will be changed, which files will be modified or created, what the implementation approach is, and why that approach was chosen
-    - Appropriate validations: test_pass and lint_pass for code changes, code_review for anything requiring human judgment, manual_approval for final sign-off
+    - Appropriate validations: use test_pass and lint_pass for code changes. Use manual_approval for any stage that requires a human to visually verify a UI change — when you reach that stage, post a screenshot as a canvas into the execution space so the human can review it. Do NOT include code_review as a validation kind — it is not supported.
 
     Aim for 3–7 stages. Each stage should represent a discrete, reviewable unit of work. "Client-side draft persistence" with no further detail is not acceptable — describe the actual change.
 
