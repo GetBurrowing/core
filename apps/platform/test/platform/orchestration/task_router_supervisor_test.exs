@@ -45,13 +45,18 @@ defmodule Platform.Orchestration.TaskRouterSupervisorTest do
     test "starts a TaskRouter under the supervisor", %{task: task, assignee: assignee} do
       assert {:ok, pid} = TaskRouterSupervisor.start_assignment(task.id, assignee)
       assert Process.alive?(pid)
+      _ = :sys.get_state(pid)
+      TaskRouterSupervisor.stop_assignment(task.id)
     end
 
     test "returns error if already started", %{task: task, assignee: assignee} do
-      assert {:ok, _pid} = TaskRouterSupervisor.start_assignment(task.id, assignee)
+      assert {:ok, pid} = TaskRouterSupervisor.start_assignment(task.id, assignee)
+      _ = :sys.get_state(pid)
 
       assert {:error, {:already_started, _}} =
                TaskRouterSupervisor.start_assignment(task.id, assignee)
+
+      TaskRouterSupervisor.stop_assignment(task.id)
     end
   end
 
@@ -59,6 +64,7 @@ defmodule Platform.Orchestration.TaskRouterSupervisorTest do
     test "stops a running TaskRouter", %{task: task, assignee: assignee} do
       {:ok, pid} = TaskRouterSupervisor.start_assignment(task.id, assignee)
       assert Process.alive?(pid)
+      _ = :sys.get_state(pid)
 
       assert :ok = TaskRouterSupervisor.stop_assignment(task.id)
       refute Process.alive?(pid)
@@ -71,12 +77,18 @@ defmodule Platform.Orchestration.TaskRouterSupervisorTest do
 
   describe "list_active/0" do
     test "lists active assignments", %{task: task, assignee: assignee} do
-      {:ok, _pid} = TaskRouterSupervisor.start_assignment(task.id, assignee)
-      Process.sleep(50)
+      {:ok, pid} = TaskRouterSupervisor.start_assignment(task.id, assignee)
+      # :sys.get_state/1 is synchronous — blocks until the GenServer finishes
+      # processing its current message (the initial :dispatch). This prevents
+      # sandbox ownership races during teardown.
+      _ = :sys.get_state(pid)
 
       active = TaskRouterSupervisor.list_active()
       assert length(active) >= 1
       assert Enum.any?(active, &(&1.task_id == task.id))
+
+      # Stop explicitly before sandbox teardown
+      TaskRouterSupervisor.stop_assignment(task.id)
     end
 
     test "returns empty list when no assignments" do
