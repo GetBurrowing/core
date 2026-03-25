@@ -39,10 +39,35 @@ defmodule Platform.AnalyticsTest do
       assert event.inserted_at != nil
     end
 
-    test "allows explicit total_tokens" do
+    test "always recomputes total_tokens from components (ignores caller value)" do
       attrs = Map.put(@valid_attrs, :total_tokens, 42)
       assert {:ok, event} = Analytics.record_usage_event(attrs)
-      assert event.total_tokens == 42
+      # Should be recomputed, not the caller's 42
+      assert event.total_tokens == 1500 + 800 + 500 + 100
+    end
+
+    test "computes cost_usd server-side (ignores caller-provided cost)" do
+      # @valid_attrs has cost_usd: 999.99 — should be overridden
+      assert {:ok, event} = Analytics.record_usage_event(@valid_attrs)
+      assert event.cost_usd != 999.99
+      assert event.cost_usd > 0
+      # Verify it matches the pricing module calculation
+      expected =
+        Platform.Analytics.Pricing.calculate_cost(%{
+          model: "anthropic/claude-sonnet-4-6",
+          input_tokens: 1500,
+          output_tokens: 800,
+          cache_read_tokens: 500,
+          cache_write_tokens: 100
+        })
+
+      assert event.cost_usd == expected
+    end
+
+    test "returns 0.0 cost for unknown models" do
+      attrs = Map.merge(@valid_attrs, %{model: "unknown/model", provider: "unknown"})
+      assert {:ok, event} = Analytics.record_usage_event(attrs)
+      assert event.cost_usd == 0.0
     end
 
     test "returns error for missing required fields" do
@@ -64,12 +89,13 @@ defmodule Platform.AnalyticsTest do
     end
 
     test "aggregates across multiple events" do
-      create_event(%{cost_usd: 0.01, latency_ms: 1000, input_tokens: 100, output_tokens: 50})
-      create_event(%{cost_usd: 0.02, latency_ms: 2000, input_tokens: 200, output_tokens: 100})
+      create_event(%{latency_ms: 1000, input_tokens: 100, output_tokens: 50})
+      create_event(%{latency_ms: 2000, input_tokens: 200, output_tokens: 100})
 
       summary = Analytics.usage_summary()
       assert summary.total_requests == 2
-      assert summary.total_cost > 0.02
+      # Cost is now server-computed; both events use claude-sonnet-4-6 pricing
+      assert summary.total_cost > 0
     end
 
     test "filters by agent_id" do

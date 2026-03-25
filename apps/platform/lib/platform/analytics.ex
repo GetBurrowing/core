@@ -22,6 +22,10 @@ defmodule Platform.Analytics do
   @spec usage_summary(map()) :: %{
           total_requests: integer(),
           total_tokens: integer(),
+          total_input_tokens: integer(),
+          total_output_tokens: integer(),
+          total_cache_read_tokens: integer(),
+          total_cache_write_tokens: integer(),
           total_cost: float(),
           avg_latency_ms: float()
         }
@@ -31,6 +35,10 @@ defmodule Platform.Analytics do
         select: %{
           total_requests: count(e.id),
           total_tokens: coalesce(sum(e.total_tokens), 0),
+          total_input_tokens: coalesce(sum(e.input_tokens), 0),
+          total_output_tokens: coalesce(sum(e.output_tokens), 0),
+          total_cache_read_tokens: coalesce(sum(e.cache_read_tokens), 0),
+          total_cache_write_tokens: coalesce(sum(e.cache_write_tokens), 0),
           total_cost: coalesce(sum(e.cost_usd), 0.0),
           avg_latency_ms: coalesce(avg(e.latency_ms), 0.0)
         }
@@ -42,6 +50,10 @@ defmodule Platform.Analytics do
     %{
       total_requests: result.total_requests || 0,
       total_tokens: result.total_tokens || 0,
+      total_input_tokens: result.total_input_tokens || 0,
+      total_output_tokens: result.total_output_tokens || 0,
+      total_cache_read_tokens: result.total_cache_read_tokens || 0,
+      total_cache_write_tokens: result.total_cache_write_tokens || 0,
       total_cost: result.total_cost || 0.0,
       avg_latency_ms:
         if(is_number(result.avg_latency_ms),

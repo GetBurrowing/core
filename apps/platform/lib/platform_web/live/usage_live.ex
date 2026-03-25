@@ -189,9 +189,16 @@ defmodule PlatformWeb.UsageLive do
         <div class="bg-base-200 rounded-lg p-4">
           <div class="text-xs text-base-content/50 uppercase tracking-wider">Tokens</div>
           <div class="text-2xl font-bold mt-1">{format_tokens(@summary.total_tokens)}</div>
+          <div class="flex flex-wrap gap-x-3 mt-1 text-xs text-base-content/60">
+            <span title="Input tokens">⬆ {format_tokens(@summary.total_input_tokens)}</span>
+            <span title="Output tokens">⬇ {format_tokens(@summary.total_output_tokens)}</span>
+            <span :if={@summary.total_cache_read_tokens > 0} title="Cache read tokens">
+              ⚡ {format_tokens(@summary.total_cache_read_tokens)}
+            </span>
+          </div>
         </div>
         <div class="bg-base-200 rounded-lg p-4">
-          <div class="text-xs text-base-content/50 uppercase tracking-wider">Est. Spend</div>
+          <div class="text-xs text-base-content/50 uppercase tracking-wider">Cost</div>
           <div class="text-2xl font-bold mt-1">{format_cost(@summary.total_cost)}</div>
         </div>
         <div class="bg-base-200 rounded-lg p-4">
@@ -246,17 +253,18 @@ defmodule PlatformWeb.UsageLive do
               <th>Time</th>
               <th class="hidden md:table-cell">Agent</th>
               <th>Model</th>
-              <th>Tokens</th>
+              <th>Input</th>
+              <th class="hidden md:table-cell">Cached</th>
+              <th>Output</th>
               <th>Cost</th>
               <th class="hidden md:table-cell">Latency</th>
-              <th class="hidden lg:table-cell">Tools</th>
               <th class="hidden lg:table-cell">Task</th>
             </tr>
           </thead>
           <tbody>
             <%= if @events == [] do %>
               <tr>
-                <td colspan="8" class="text-center py-8 text-base-content/40">
+                <td colspan="9" class="text-center py-8 text-base-content/40">
                   No usage events recorded yet
                 </td>
               </tr>
@@ -266,16 +274,13 @@ defmodule PlatformWeb.UsageLive do
                 <td class="text-xs whitespace-nowrap">{format_time(event)}</td>
                 <td class="hidden md:table-cell text-xs">{agent_name(event.agent_id, @agents)}</td>
                 <td class="text-xs font-mono">{event.model}</td>
-                <td class="text-xs">
-                  <span title={"In: #{event.input_tokens} Out: #{event.output_tokens}"}>
-                    {format_tokens(event.total_tokens)}
-                  </span>
+                <td class="text-xs">{format_tokens(event.input_tokens)}</td>
+                <td class="hidden md:table-cell text-xs text-base-content/60">
+                  {format_tokens(event.cache_read_tokens)}
                 </td>
+                <td class="text-xs">{format_tokens(event.output_tokens)}</td>
                 <td class="text-xs">{format_cost(event.cost_usd)}</td>
                 <td class="hidden md:table-cell text-xs">{format_latency(event.latency_ms)}</td>
-                <td class="hidden lg:table-cell text-xs">
-                  {Enum.join(event.tool_calls || [], ", ")}
-                </td>
                 <td class="hidden lg:table-cell text-xs text-base-content/50">
                   {event.task_id || "-"}
                 </td>

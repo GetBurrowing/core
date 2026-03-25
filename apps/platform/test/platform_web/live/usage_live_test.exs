@@ -70,7 +70,7 @@ defmodule PlatformWeb.UsageLiveTest do
     assert html =~ "Usage Analytics"
     assert html =~ "Requests"
     assert html =~ "Tokens"
-    assert html =~ "Est. Spend"
+    assert html =~ "Cost"
     assert html =~ "Avg Latency"
   end
 
