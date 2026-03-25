@@ -8,6 +8,12 @@ defmodule Platform.Chat.AgentResponder do
 
   For external runtimes, dispatches attention signals via the RuntimeChannel
   instead of calling QuickAgent directly.
+
+  ## Parallel dispatch (ADR 0027)
+
+  When multiple agents are @-mentioned simultaneously, `dispatch_parallel/3`
+  sends each agent the same frozen history snapshot so they can't see each
+  other's responses. Uses `Task.Supervisor` for fault-isolated concurrency.
   """
 
   require Logger
@@ -37,7 +43,46 @@ defmodule Platform.Chat.AgentResponder do
     end
   end
 
-  @routable_reasons [:mention, :directed, :sticky]
+  @doc """
+  Dispatch the same message to multiple agents concurrently with a frozen
+  history snapshot. Each agent receives identical context so they cannot see
+  each other's responses.
+
+  `signals` is a list of attention signal maps (one per agent).
+  `space` is the `%Space{}` struct for the conversation.
+  `frozen_history` is a pre-built history list captured *before* dispatch.
+  """
+  @spec dispatch_parallel([map()], term(), list()) :: :ok
+  def dispatch_parallel(signals, _space, frozen_history) when is_list(signals) do
+    Task.Supervisor.async_stream_nolink(
+      Platform.TaskSupervisor,
+      signals,
+      fn signal ->
+        signal = Map.put(signal, :reason, :multi_mention)
+
+        signal =
+          Map.update(signal, :metadata, %{frozen_history: frozen_history}, fn meta ->
+            Map.put(meta || %{}, :frozen_history, frozen_history)
+          end)
+
+        respond(signal)
+      end,
+      max_concurrency: 5,
+      timeout: 60_000
+    )
+    |> Stream.each(fn
+      {:ok, result} ->
+        Logger.debug("[AgentResponder] parallel dispatch result: #{inspect(result)}")
+
+      {:exit, reason} ->
+        Logger.warning("[AgentResponder] parallel dispatch task exited: #{inspect(reason)}")
+    end)
+    |> Stream.run()
+
+    :ok
+  end
+
+  @routable_reasons [:mention, :directed, :sticky, :active_agent, :watch, :multi_mention]
 
   @spec respond(map()) :: :ok | {:error, term()}
   def respond(%{reason: reason} = signal) when reason in @routable_reasons do
@@ -98,14 +143,6 @@ defmodule Platform.Chat.AgentResponder do
            trimmed_reply when trimmed_reply != "" <- String.trim(reply),
            {:ok, _message} <- persist_reply(context, trimmed_reply) do
         maybe_create_canvas(context, trimmed_reply)
-
-        # Enter/extend sticky engagement after successful reply
-        Chat.engage_agent(
-          space_id,
-          agent_participant_id,
-          String.slice(context.user_message, 0, 200)
-        )
-
         :ok
       else
         {:error, :ignore} ->

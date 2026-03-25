@@ -4,7 +4,7 @@ defmodule Platform.Chat.AttentionRouterTest do
   alias Ecto.Adapters.SQL.Sandbox
   alias Platform.Agents.Agent
   alias Platform.Chat
-  alias Platform.Chat.{AttentionRouter, Message}
+  alias Platform.Chat.{ActiveAgentStore, AttentionRouter, Message}
   alias Platform.Repo
 
   defmodule StubAgentChat do
@@ -37,6 +37,13 @@ defmodule Platform.Chat.AttentionRouterTest do
         start_supervised!({AttentionRouter, []})
 
     Sandbox.allow(Repo, self(), router)
+
+    # Ensure ActiveAgentStore is running and sandbox-allowed
+    store =
+      Process.whereis(ActiveAgentStore) ||
+        start_supervised!({ActiveAgentStore, []})
+
+    Sandbox.allow(Repo, self(), store)
 
     :ok
   end
@@ -101,8 +108,8 @@ defmodule Platform.Chat.AttentionRouterTest do
     :ok = GenServer.call(AttentionRouter, :__drain__)
   end
 
-  describe "space-level attention mode defaults" do
-    test "DM space routes all messages to agent without @mention (directed mode)" do
+  describe "DM spaces" do
+    test "always routes to agent participant without mention" do
       space = create_space(%{kind: "dm"})
       user = create_participant(space.id)
       agent = create_agent()
@@ -119,270 +126,237 @@ defmodule Platform.Chat.AttentionRouterTest do
       assert_receive {:agent_chat_called, "hey, what's up?", _opts}, 500
       drain()
     end
+  end
 
-    test "channel space routes only @mentions (on_mention default)" do
-      space = create_space(%{kind: "channel"})
+  describe "execution spaces" do
+    test "log_only messages return empty" do
+      space = create_space(%{kind: "execution"})
       user = create_participant(space.id)
       agent = create_agent()
+      Chat.ensure_agent_participant(space.id, agent, display_name: "Zip")
+
+      message = create_message(space.id, user.id, %{content: "log entry", log_only: true})
+      assert {:ok, []} = AttentionRouter.route(message)
+      refute_receive {:agent_chat_called, _, _}, 100
+      drain()
+    end
+  end
+
+  describe "single @mention" do
+    test "sets active agent and routes to mentioned agent" do
+      space = create_space(%{kind: "channel"})
+      user = create_participant(space.id)
+      agent = create_agent(%{name: "Zip"})
 
       {:ok, agent_participant} =
         Chat.ensure_agent_participant(space.id, agent, display_name: "Zip")
 
-      # No mention — should not route to agent
-      message = create_message(space.id, user.id, %{content: "just chatting"})
-      assert {:ok, []} = AttentionRouter.route(message)
-      refute_receive {:agent_chat_called, _, _}, 200
+      # Add to roster as member
+      Chat.add_space_agent(space.id, agent.id, role: "member")
 
-      # With mention — should route
-      mention = create_message(space.id, user.id, %{content: "hey @zip help me"})
+      message = create_message(space.id, user.id, %{content: "hey @zip help me"})
       agent_participant_id = agent_participant.id
 
       assert {:ok, [%{participant_id: ^agent_participant_id, reason: :mention}]} =
-               AttentionRouter.route(mention)
+               AttentionRouter.route(message)
+
+      # Verify active agent was set
+      assert ActiveAgentStore.get_active(space.id) == agent_participant_id
 
       assert_receive {:agent_chat_called, "hey @zip help me", _opts}, 500
       drain()
     end
+  end
 
-    test "group space with explicit agent_attention='directed' routes all messages" do
-      space = create_space(%{kind: "group", agent_attention: "directed"})
+  describe "multi @mention" do
+    test "routes to all mentioned agents and clears active" do
+      space = create_space(%{kind: "group"})
       user = create_participant(space.id)
-      agent = create_agent()
+
+      agent1 = create_agent(%{name: "Zip"})
+      agent2 = create_agent(%{name: "Nova"})
+
+      {:ok, p1} = Chat.ensure_agent_participant(space.id, agent1, display_name: "Zip")
+      {:ok, p2} = Chat.ensure_agent_participant(space.id, agent2, display_name: "Nova")
+
+      Chat.add_space_agent(space.id, agent1.id, role: "principal")
+      Chat.add_space_agent(space.id, agent2.id, role: "member")
+
+      # Set one as active first to verify it gets cleared
+      ActiveAgentStore.set_active(space.id, p1.id)
+
+      message = create_message(space.id, user.id, %{content: "hey @zip and @nova help"})
+
+      {:ok, decisions} = AttentionRouter.route(message)
+
+      participant_ids = Enum.map(decisions, & &1.participant_id) |> Enum.sort()
+      expected_ids = Enum.sort([p1.id, p2.id])
+      assert participant_ids == expected_ids
+
+      assert Enum.all?(decisions, fn d -> d.reason == :multi_mention end)
+
+      # Active agent should be cleared
+      assert ActiveAgentStore.get_active(space.id) == nil
+
+      drain()
+    end
+  end
+
+  describe "no mention + active agent" do
+    test "routes to active agent and refreshes timeout" do
+      space = create_space(%{kind: "channel"})
+      user = create_participant(space.id)
+      agent = create_agent(%{name: "Zip"})
 
       {:ok, agent_participant} =
         Chat.ensure_agent_participant(space.id, agent, display_name: "Zip")
 
-      message = create_message(space.id, user.id, %{content: "no mention needed"})
+      Chat.add_space_agent(space.id, agent.id, role: "principal")
+
+      # Set as active agent (simulates prior @mention)
+      ActiveAgentStore.set_active(space.id, agent_participant.id)
+
+      message = create_message(space.id, user.id, %{content: "and also do this"})
       agent_participant_id = agent_participant.id
 
-      assert {:ok, [%{participant_id: ^agent_participant_id, reason: :directed}]} =
+      assert {:ok, [%{participant_id: ^agent_participant_id, reason: :active_agent}]} =
                AttentionRouter.route(message)
 
-      assert_receive {:agent_chat_called, "no mention needed", _opts}, 500
-      drain()
-    end
-
-    test "space with agent_attention=nil falls back to kind-based default" do
-      # Channel with nil agent_attention → on_mention
-      channel = create_space(%{kind: "channel", agent_attention: nil})
-      user = create_participant(channel.id)
-      agent = create_agent()
-
-      {:ok, agent_participant} =
-        Chat.ensure_agent_participant(channel.id, agent, display_name: "Zip")
-
-      message = create_message(channel.id, user.id, %{content: "no mention"})
-      assert {:ok, []} = AttentionRouter.route(message)
-
-      # DM with nil agent_attention → directed
-      dm = create_space(%{kind: "dm", agent_attention: nil})
-      user2 = create_participant(dm.id)
-
-      {:ok, dm_agent_participant} =
-        Chat.ensure_agent_participant(dm.id, agent, display_name: "Zip")
-
-      dm_message = create_message(dm.id, user2.id, %{content: "no mention"})
-      dm_agent_id = dm_agent_participant.id
-
-      assert {:ok, [%{participant_id: ^dm_agent_id, reason: :directed}]} =
-               AttentionRouter.route(dm_message)
-
-      drain()
-    end
-  end
-
-  describe "sticky engagement" do
-    test "after @mention → next message routes without mention → timeout expires → no longer routes" do
-      space = create_space(%{kind: "channel"})
-      user = create_participant(space.id)
-      agent = create_agent()
-
-      {:ok, agent_participant} =
-        Chat.ensure_agent_participant(space.id, agent, display_name: "Zip")
-
-      agent_participant_id = agent_participant.id
-
-      # Step 1: @mention triggers agent reply, which calls engage_agent
-      mention = create_message(space.id, user.id, %{content: "@zip help me"})
-
-      assert {:ok, [%{participant_id: ^agent_participant_id, reason: :mention}]} =
-               AttentionRouter.route(mention)
-
-      assert_receive {:agent_chat_called, "@zip help me", _opts}, 500
-
-      # Agent should now be engaged
-      state = Chat.get_attention_state(space.id, agent_participant.id)
-      assert state.state == "engaged"
-
-      # Step 2: Next message without mention should route via sticky engagement
-      followup = create_message(space.id, user.id, %{content: "and also do this"})
-
-      assert {:ok, [%{participant_id: ^agent_participant_id, reason: :sticky}]} =
-               AttentionRouter.route(followup)
+      # Active agent should still be set
+      assert ActiveAgentStore.get_active(space.id) == agent_participant_id
 
       assert_receive {:agent_chat_called, "and also do this", _opts}, 500
-
-      # Step 3: Simulate timeout by setting engaged_since to the past
-      Chat.upsert_attention_state(space.id, %{
-        agent_participant_id: agent_participant.id,
-        engaged_since: DateTime.add(DateTime.utc_now(), -700, :second)
-      })
-
-      # Now the engagement should have expired
-      expired_msg = create_message(space.id, user.id, %{content: "still there?"})
-      assert {:ok, []} = AttentionRouter.route(expired_msg)
-      refute_receive {:agent_chat_called, _, _}, 200
-
       drain()
     end
   end
 
-  describe "silencing" do
-    test "natural language 'quiet' silences agent → re-mention unsilences" do
-      space = create_space(%{kind: "channel"})
+  describe "no mention + no active + watch ON + primary agent" do
+    test "routes to primary agent and sets as active" do
+      agent = create_agent(%{name: "Zip"})
+
+      space =
+        create_space(%{
+          kind: "group",
+          watch_enabled: true,
+          primary_agent_id: agent.id
+        })
+
       user = create_participant(space.id)
-      agent = create_agent()
 
       {:ok, agent_participant} =
         Chat.ensure_agent_participant(space.id, agent, display_name: "Zip")
 
+      Chat.add_space_agent(space.id, agent.id, role: "principal")
+
+      message = create_message(space.id, user.id, %{content: "hello everyone"})
       agent_participant_id = agent_participant.id
 
-      # First, engage the agent so it's responding
-      Chat.engage_agent(space.id, agent_participant.id, "test")
+      assert {:ok, [%{participant_id: ^agent_participant_id, reason: :watch}]} =
+               AttentionRouter.route(message)
 
-      # Silence via natural language
-      silence_msg = create_message(space.id, user.id, %{content: "ok quiet now"})
-      assert {:ok, []} = AttentionRouter.route(silence_msg)
-      refute_receive {:agent_chat_called, _, _}, 200
+      # Agent should now be active
+      assert ActiveAgentStore.get_active(space.id) == agent_participant_id
 
-      # Confirm silenced state
-      state = Chat.get_attention_state(space.id, agent_participant.id)
-      assert state.state == "silenced"
-
-      # Regular message should not route
-      normal_msg = create_message(space.id, user.id, %{content: "hello?"})
-      assert {:ok, []} = AttentionRouter.route(normal_msg)
-      refute_receive {:agent_chat_called, _, _}, 200
-
-      # Re-mention should unsilence and route
-      remention = create_message(space.id, user.id, %{content: "@zip come back"})
-
-      assert {:ok, [%{participant_id: ^agent_participant_id, reason: :mention}]} =
-               AttentionRouter.route(remention)
-
-      assert_receive {:agent_chat_called, "@zip come back", _opts}, 500
-
-      # Agent should be unsilenced now
-      state = Chat.get_attention_state(space.id, agent_participant.id)
-      assert state.state != "silenced"
-
+      assert_receive {:agent_chat_called, "hello everyone", _opts}, 500
       drain()
     end
+  end
 
-    test "silence patterns are detected correctly" do
-      assert AttentionRouter.silence_detected?("ok shut up")
-      assert AttentionRouter.silence_detected?("that's all")
-      assert AttentionRouter.silence_detected?("be quiet please")
-      assert AttentionRouter.silence_detected?("only when mentioned")
-      assert AttentionRouter.silence_detected?("thanks that's all")
-      refute AttentionRouter.silence_detected?("help me with this")
-      refute AttentionRouter.silence_detected?("can you explain?")
-      refute AttentionRouter.silence_detected?(nil)
+  describe "no mention + no active + watch OFF" do
+    test "returns empty (silence)" do
+      space = create_space(%{kind: "channel", watch_enabled: false})
+      user = create_participant(space.id)
+      agent = create_agent(%{name: "Zip"})
+
+      Chat.ensure_agent_participant(space.id, agent, display_name: "Zip")
+      Chat.add_space_agent(space.id, agent.id, role: "principal")
+
+      message = create_message(space.id, user.id, %{content: "just chatting"})
+      assert {:ok, []} = AttentionRouter.route(message)
+      refute_receive {:agent_chat_called, _, _}, 200
+      drain()
     end
   end
 
   describe "agent self-message filtering" do
-    test "agent doesn't respond to its own messages in directed mode" do
+    test "agent doesn't respond to its own messages in DM" do
       space = create_space(%{kind: "dm"})
       agent = create_agent()
 
       {:ok, agent_participant} =
         Chat.ensure_agent_participant(space.id, agent, display_name: "Zip")
 
-      # Agent posting its own message should not trigger routing to itself
       agent_message =
         create_message(space.id, agent_participant.id, %{content: "I'm the agent speaking"})
 
       assert {:ok, []} = AttentionRouter.route(agent_message)
       refute_receive {:agent_chat_called, _, _}, 200
-
       drain()
     end
   end
 
   describe "resolve_attention_mode/2" do
-    test "returns space-level mode when set" do
-      space = %Platform.Chat.Space{kind: "channel", agent_attention: "directed"}
-      participant = %Platform.Chat.Participant{}
-
-      assert AttentionRouter.resolve_attention_mode(space, participant) == "directed"
-    end
-
-    test "falls back to kind-based default when agent_attention is nil" do
+    test "returns kind-based default for each space kind" do
       participant = %Platform.Chat.Participant{}
 
       assert AttentionRouter.resolve_attention_mode(
-               %Platform.Chat.Space{kind: "channel", agent_attention: nil},
+               %Platform.Chat.Space{kind: "channel"},
                participant
              ) == "on_mention"
 
       assert AttentionRouter.resolve_attention_mode(
-               %Platform.Chat.Space{kind: "dm", agent_attention: nil},
+               %Platform.Chat.Space{kind: "dm"},
                participant
              ) == "directed"
 
       assert AttentionRouter.resolve_attention_mode(
-               %Platform.Chat.Space{kind: "group", agent_attention: nil},
+               %Platform.Chat.Space{kind: "group"},
                participant
              ) == "collaborative"
     end
   end
 
-  describe "attention state context functions" do
-    test "engage_agent creates/updates attention state" do
-      space = create_space()
-      agent = create_agent()
+  describe "mention → active agent → no mention flow" do
+    test "mention sets active, followup routes via active_agent, watch routes primary" do
+      agent = create_agent(%{name: "Zip"})
+
+      space =
+        create_space(%{
+          kind: "channel",
+          watch_enabled: true,
+          primary_agent_id: agent.id
+        })
+
+      user = create_participant(space.id)
 
       {:ok, agent_participant} =
         Chat.ensure_agent_participant(space.id, agent, display_name: "Zip")
 
-      assert Chat.get_attention_state(space.id, agent_participant.id) == nil
+      Chat.add_space_agent(space.id, agent.id, role: "principal")
+      agent_participant_id = agent_participant.id
 
-      {:ok, state} = Chat.engage_agent(space.id, agent_participant.id, "test context")
-      assert state.state == "engaged"
-      assert state.engaged_context == "test context"
-      assert state.engaged_since != nil
-    end
+      # Step 1: @mention sets active agent
+      mention = create_message(space.id, user.id, %{content: "@zip help me"})
 
-    test "disengage_agent returns to idle" do
-      space = create_space()
-      agent = create_agent()
+      assert {:ok, [%{participant_id: ^agent_participant_id, reason: :mention}]} =
+               AttentionRouter.route(mention)
 
-      {:ok, agent_participant} =
-        Chat.ensure_agent_participant(space.id, agent, display_name: "Zip")
+      assert ActiveAgentStore.get_active(space.id) == agent_participant_id
 
-      Chat.engage_agent(space.id, agent_participant.id, "engaged")
-      {:ok, state} = Chat.disengage_agent(space.id, agent_participant.id)
+      # Step 2: followup without mention → routes via active_agent
+      followup = create_message(space.id, user.id, %{content: "and also this"})
 
-      assert state.state == "idle"
-      assert state.engaged_since == nil
-    end
+      assert {:ok, [%{participant_id: ^agent_participant_id, reason: :active_agent}]} =
+               AttentionRouter.route(followup)
 
-    test "silence_agent and unsilence_agent" do
-      space = create_space()
-      agent = create_agent()
+      # Step 3: clear active agent, next message should use watch
+      ActiveAgentStore.clear_active(space.id)
+      watch_msg = create_message(space.id, user.id, %{content: "new topic"})
 
-      {:ok, agent_participant} =
-        Chat.ensure_agent_participant(space.id, agent, display_name: "Zip")
+      assert {:ok, [%{participant_id: ^agent_participant_id, reason: :watch}]} =
+               AttentionRouter.route(watch_msg)
 
-      until = DateTime.add(DateTime.utc_now(), 1800, :second)
-      {:ok, state} = Chat.silence_agent(space.id, agent_participant.id, until)
-      assert state.state == "silenced"
-      assert state.silenced_until != nil
-
-      {:ok, state} = Chat.unsilence_agent(space.id, agent_participant.id)
-      assert state.state == "idle"
+      drain()
     end
   end
 end

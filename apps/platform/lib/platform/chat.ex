@@ -39,7 +39,6 @@ defmodule Platform.Chat do
 
   alias Platform.Chat.{
     Attachment,
-    AttentionState,
     Canvas,
     Message,
     Participant,
@@ -581,84 +580,6 @@ defmodule Platform.Chat do
       %Agent{} = agent -> ensure_agent_participant(space_id, agent, opts)
       nil -> {:error, :not_found}
     end
-  end
-
-  # ── Attention State ─────────────────────────────────────────────────────────
-
-  @doc "Fetch the current attention state for an agent in a space."
-  @spec get_attention_state(binary(), binary()) :: AttentionState.t() | nil
-  def get_attention_state(space_id, agent_participant_id) do
-    Repo.get_by(AttentionState,
-      space_id: space_id,
-      agent_participant_id: agent_participant_id
-    )
-  end
-
-  @doc "Upsert an attention state record for a space/agent pair."
-  @spec upsert_attention_state(binary(), map()) ::
-          {:ok, AttentionState.t()} | {:error, Ecto.Changeset.t()}
-  def upsert_attention_state(space_id, attrs) do
-    agent_participant_id =
-      Map.get(attrs, :agent_participant_id) || Map.get(attrs, "agent_participant_id")
-
-    case get_attention_state(space_id, agent_participant_id) do
-      nil ->
-        attrs = Map.merge(attrs, %{space_id: space_id, updated_at: DateTime.utc_now()})
-
-        %AttentionState{}
-        |> AttentionState.changeset(attrs)
-        |> Repo.insert()
-
-      existing ->
-        existing
-        |> AttentionState.changeset(Map.put(attrs, :updated_at, DateTime.utc_now()))
-        |> Repo.update()
-    end
-  end
-
-  @doc "Enter sticky engagement state for an agent in a space."
-  @spec engage_agent(binary(), binary(), String.t()) ::
-          {:ok, AttentionState.t()} | {:error, Ecto.Changeset.t()}
-  def engage_agent(space_id, agent_participant_id, context \\ "") do
-    upsert_attention_state(space_id, %{
-      agent_participant_id: agent_participant_id,
-      state: "engaged",
-      engaged_since: DateTime.utc_now(),
-      engaged_context: context,
-      silenced_until: nil
-    })
-  end
-
-  @doc "Clear engagement and return agent to idle state."
-  @spec disengage_agent(binary(), binary()) ::
-          {:ok, AttentionState.t()} | {:error, Ecto.Changeset.t()}
-  def disengage_agent(space_id, agent_participant_id) do
-    upsert_attention_state(space_id, %{
-      agent_participant_id: agent_participant_id,
-      state: "idle",
-      engaged_since: nil,
-      engaged_context: nil
-    })
-  end
-
-  @doc "Silence an agent in a space. If `until` is nil, silenced until re-mentioned."
-  @spec silence_agent(binary(), binary(), DateTime.t() | nil) ::
-          {:ok, AttentionState.t()} | {:error, Ecto.Changeset.t()}
-  def silence_agent(space_id, agent_participant_id, until \\ nil) do
-    upsert_attention_state(space_id, %{
-      agent_participant_id: agent_participant_id,
-      state: "silenced",
-      silenced_until: until,
-      engaged_since: nil,
-      engaged_context: nil
-    })
-  end
-
-  @doc "Unsilence an agent, returning to idle state."
-  @spec unsilence_agent(binary(), binary()) ::
-          {:ok, AttentionState.t()} | {:error, Ecto.Changeset.t()}
-  def unsilence_agent(space_id, agent_participant_id) do
-    disengage_agent(space_id, agent_participant_id)
   end
 
   # ── Messages ────────────────────────────────────────────────────────────────
@@ -1510,19 +1431,13 @@ defmodule Platform.Chat do
               |> SpaceAgent.changeset(%{
                 space_id: space_id,
                 agent_id: agent_id,
-                role: "principal",
-                dismissed_by: nil,
-                dismissed_at: nil
+                role: "principal"
               })
               |> repo.insert()
 
             %SpaceAgent{} = existing ->
               existing
-              |> SpaceAgent.changeset(%{
-                role: "principal",
-                dismissed_by: nil,
-                dismissed_at: nil
-              })
+              |> SpaceAgent.changeset(%{role: "principal"})
               |> repo.update()
           end
       end
@@ -1613,95 +1528,8 @@ defmodule Platform.Chat do
     end
   end
 
-  @doc """
-  Dismiss an agent from a space (soft — sets role to `"dismissed"`).
-
-  The agent stops receiving attention signals but the roster entry is preserved
-  for re-invite.
-  """
-  @spec dismiss_space_agent(binary(), binary(), keyword()) ::
-          {:ok, SpaceAgent.t()} | {:error, term()}
-  def dismiss_space_agent(space_id, agent_id, opts \\ []) do
-    dismissed_by = Keyword.get(opts, :dismissed_by)
-
-    case Repo.get_by(SpaceAgent, space_id: space_id, agent_id: agent_id) do
-      nil ->
-        {:error, :not_found}
-
-      %SpaceAgent{role: "dismissed"} = sa ->
-        {:ok, sa}
-
-      %SpaceAgent{} = sa ->
-        result =
-          sa
-          |> SpaceAgent.changeset(%{
-            role: "dismissed",
-            dismissed_by: dismissed_by,
-            dismissed_at: DateTime.utc_now()
-          })
-          |> Repo.update()
-
-        case result do
-          {:ok, updated} ->
-            :telemetry.execute(
-              [:platform, :chat, :agent_dismissed],
-              %{system_time: System.system_time()},
-              %{space_id: space_id, agent_id: agent_id, dismissed_by: dismissed_by}
-            )
-
-            Phoenix.PubSub.broadcast(
-              Platform.PubSub,
-              "space_agents:#{space_id}",
-              {:roster_changed, space_id}
-            )
-
-            {:ok, updated}
-
-          error ->
-            error
-        end
-    end
-  end
-
-  @doc "Re-invite a dismissed agent, restoring role to `\"member\"`."
-  @spec reinvite_space_agent(binary(), binary()) ::
-          {:ok, SpaceAgent.t()} | {:error, term()}
-  def reinvite_space_agent(space_id, agent_id) do
-    case Repo.get_by(SpaceAgent, space_id: space_id, agent_id: agent_id) do
-      nil ->
-        {:error, :not_found}
-
-      %SpaceAgent{role: "dismissed"} = sa ->
-        result =
-          sa
-          |> SpaceAgent.changeset(%{role: "member", dismissed_by: nil, dismissed_at: nil})
-          |> Repo.update()
-
-        case result do
-          {:ok, updated} ->
-            :telemetry.execute(
-              [:platform, :chat, :agent_reinvited],
-              %{system_time: System.system_time()},
-              %{space_id: space_id, agent_id: agent_id}
-            )
-
-            Phoenix.PubSub.broadcast(
-              Platform.PubSub,
-              "space_agents:#{space_id}",
-              {:roster_changed, space_id}
-            )
-
-            {:ok, updated}
-
-          error ->
-            error
-        end
-
-      %SpaceAgent{} = sa ->
-        # Already active — no-op
-        {:ok, sa}
-    end
-  end
+  # ADR 0027: dismiss_space_agent/3 and reinvite_space_agent/2 removed.
+  # The 'dismissed' role no longer exists — use remove_space_agent/2 instead.
 
   @doc "List all agents in a space's roster, with preloaded agent data."
   @spec list_space_agents(binary()) :: [SpaceAgent.t()]
@@ -1731,11 +1559,11 @@ defmodule Platform.Chat do
     Repo.get_by(SpaceAgent, space_id: space_id, agent_id: agent_id)
   end
 
-  @doc "List active (non-dismissed) agents in a space's roster."
+  @doc "List all agents in a space's roster (all roles are active now — ADR 0027)."
   @spec list_active_space_agents(binary()) :: [SpaceAgent.t()]
   def list_active_space_agents(space_id) do
     from(sa in SpaceAgent,
-      where: sa.space_id == ^space_id and sa.role != "dismissed",
+      where: sa.space_id == ^space_id,
       preload: [:agent],
       order_by: [asc: sa.inserted_at]
     )

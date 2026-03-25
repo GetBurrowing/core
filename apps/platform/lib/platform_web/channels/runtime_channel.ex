@@ -122,12 +122,8 @@ defmodule PlatformWeb.RuntimeChannel do
           }
         })
 
-        # Enter/extend sticky engagement after successful reply
-        Chat.engage_agent(
-          space_id,
-          participant_id,
-          String.slice(content, 0, 200)
-        )
+        # Refresh active agent mutex timeout on successful reply
+        Platform.Chat.ActiveAgentStore.set_active(space_id, participant_id)
 
         {:noreply, socket}
     end
@@ -294,12 +290,8 @@ defmodule PlatformWeb.RuntimeChannel do
           attachment_attrs
         )
 
-        # Enter/extend sticky engagement after successful reply
-        Chat.engage_agent(
-          space_id,
-          agent_participant_id,
-          String.slice(message_content, 0, 200)
-        )
+        # Refresh active agent mutex timeout on successful reply
+        Platform.Chat.ActiveAgentStore.set_active(space_id, agent_participant_id)
 
         {:noreply, socket}
     end

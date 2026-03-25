@@ -2,7 +2,6 @@ defmodule Platform.Chat.SpaceAgentTest do
   use Platform.DataCase, async: false
 
   alias Ecto.Adapters.SQL.Sandbox
-  alias Platform.Accounts.User
   alias Platform.Agents.Agent
   alias Platform.Chat
   alias Platform.Chat.{AttentionRouter, Message, SpaceAgent, SpaceAgentPresence}
@@ -92,14 +91,6 @@ defmodule Platform.Chat.SpaceAgentTest do
       |> Repo.insert()
 
     message
-  end
-
-  defp create_user do
-    Repo.insert!(%User{
-      email: "test_#{System.unique_integer([:positive])}@example.com",
-      name: "Test User",
-      oidc_sub: "oidc-test-#{System.unique_integer([:positive])}"
-    })
   end
 
   defp unique_slug, do: "test-#{System.unique_integer([:positive])}"
@@ -246,67 +237,8 @@ defmodule Platform.Chat.SpaceAgentTest do
     end
   end
 
-  # ── dismiss / reinvite ─────────────────────────────────────────────────────
-
-  describe "dismiss_space_agent/3" do
-    test "sets role to dismissed with metadata" do
-      space = create_space()
-      agent = create_agent()
-      user = create_user()
-
-      {:ok, _} = Chat.add_space_agent(space.id, agent.id)
-      {:ok, sa} = Chat.dismiss_space_agent(space.id, agent.id, dismissed_by: user.id)
-
-      assert sa.role == "dismissed"
-      assert sa.dismissed_by == user.id
-      assert sa.dismissed_at != nil
-    end
-
-    test "dismissing already dismissed agent is a no-op" do
-      space = create_space()
-      agent = create_agent()
-
-      {:ok, _} = Chat.add_space_agent(space.id, agent.id)
-      {:ok, _} = Chat.dismiss_space_agent(space.id, agent.id)
-      {:ok, sa} = Chat.dismiss_space_agent(space.id, agent.id)
-      assert sa.role == "dismissed"
-    end
-
-    test "returns error for unknown agent" do
-      space = create_space()
-      assert {:error, :not_found} = Chat.dismiss_space_agent(space.id, Ecto.UUID.generate())
-    end
-  end
-
-  describe "reinvite_space_agent/2" do
-    test "restores dismissed agent to member" do
-      space = create_space()
-      agent = create_agent()
-      user = create_user()
-
-      {:ok, _} = Chat.add_space_agent(space.id, agent.id)
-      {:ok, _} = Chat.dismiss_space_agent(space.id, agent.id, dismissed_by: user.id)
-      {:ok, sa} = Chat.reinvite_space_agent(space.id, agent.id)
-
-      assert sa.role == "member"
-      assert sa.dismissed_by == nil
-      assert sa.dismissed_at == nil
-    end
-
-    test "reinviting active agent is a no-op" do
-      space = create_space()
-      agent = create_agent()
-
-      {:ok, _} = Chat.add_space_agent(space.id, agent.id)
-      {:ok, sa} = Chat.reinvite_space_agent(space.id, agent.id)
-      assert sa.role == "member"
-    end
-
-    test "returns error for unknown agent" do
-      space = create_space()
-      assert {:error, :not_found} = Chat.reinvite_space_agent(space.id, Ecto.UUID.generate())
-    end
-  end
+  # ADR 0027: dismiss_space_agent/3 and reinvite_space_agent/2 tests removed.
+  # The dismissed role no longer exists.
 
   # ── list / get functions ───────────────────────────────────────────────────
 
@@ -344,18 +276,16 @@ defmodule Platform.Chat.SpaceAgentTest do
   end
 
   describe "list_active_space_agents/1" do
-    test "excludes dismissed agents" do
+    test "returns all agents in roster" do
       space = create_space()
       agent_a = create_agent(%{name: "Alpha"})
       agent_b = create_agent(%{name: "Beta"})
 
       {:ok, _} = Chat.add_space_agent(space.id, agent_a.id)
       {:ok, _} = Chat.add_space_agent(space.id, agent_b.id)
-      {:ok, _} = Chat.dismiss_space_agent(space.id, agent_b.id)
 
       active = Chat.list_active_space_agents(space.id)
-      assert length(active) == 1
-      assert hd(active).agent_id == agent_a.id
+      assert length(active) == 2
     end
   end
 
@@ -464,34 +394,8 @@ defmodule Platform.Chat.SpaceAgentTest do
       drain()
     end
 
-    test "dismissed agent @-mention triggers reinvite" do
-      space = create_space(%{kind: "channel"})
-      user = create_participant(space.id)
-      agent = create_agent(%{name: "Linter"})
-
-      {:ok, agent_participant} =
-        Chat.ensure_agent_participant(space.id, agent, display_name: "Linter")
-
-      {:ok, _} = Chat.add_space_agent(space.id, agent.id)
-      {:ok, _} = Chat.dismiss_space_agent(space.id, agent.id)
-
-      # Verify dismissed
-      sa = Chat.get_space_agent(space.id, agent.id)
-      assert sa.role == "dismissed"
-
-      message = create_message(space.id, user.id, %{content: "@Linter check this"})
-      agent_participant_id = agent_participant.id
-
-      assert {:ok, [%{participant_id: ^agent_participant_id, reason: :mention}]} =
-               AttentionRouter.route(message)
-
-      # Verify reinvited
-      sa = Chat.get_space_agent(space.id, agent.id)
-      assert sa.role == "member"
-
-      assert_receive {:agent_chat_called, "@Linter check this", _opts}, 500
-      drain()
-    end
+    # ADR 0027: "dismissed agent @-mention triggers reinvite" test removed.
+    # The dismissed role no longer exists.
 
     test "agent not in roster does not receive messages" do
       space = create_space(%{kind: "channel"})

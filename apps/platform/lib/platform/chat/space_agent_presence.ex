@@ -15,7 +15,7 @@ defmodule Platform.Chat.SpaceAgentPresence do
 
   ## Composite status (worst wins)
 
-  Folds over all non-dismissed roster entries:
+  Folds over all roster entries:
 
     * `:error`  — any agent is in error state
     * `:busy`   — no errors, any agent is busy
@@ -55,7 +55,7 @@ defmodule Platform.Chat.SpaceAgentPresence do
   def agent_status(_), do: :offline
 
   @doc """
-  Compute the composite status for all non-dismissed agents in a space.
+  Compute the composite status for all agents in a space.
 
   Pure function — folds over a list of individual statuses.
   """
@@ -93,7 +93,7 @@ defmodule Platform.Chat.SpaceAgentPresence do
     space_id
     |> Chat.list_space_agents()
     |> Enum.map(fn sa ->
-      status = if sa.role == "dismissed", do: :dismissed, else: agent_status(sa.agent)
+      status = agent_status(sa.agent)
       {sa, status}
     end)
   end

@@ -97,12 +97,8 @@ defmodule PlatformWeb.ShellLive do
           {:halt, assign(socket, :roster_open, false)}
 
         "dismiss_agent", %{"agent-id" => agent_id, "space-id" => space_id}, socket ->
-          user_id = session["current_user_id"]
-          Platform.Chat.dismiss_space_agent(space_id, agent_id, dismissed_by: user_id)
-          {:halt, refresh_roster(socket, space_id)}
-
-        "reinvite_agent", %{"agent-id" => agent_id, "space-id" => space_id}, socket ->
-          Platform.Chat.reinvite_space_agent(space_id, agent_id)
+          # ADR 0027: dismissed role removed — just remove the agent from roster
+          Platform.Chat.remove_space_agent(space_id, agent_id)
           {:halt, refresh_roster(socket, space_id)}
 
         _event, _params, socket ->

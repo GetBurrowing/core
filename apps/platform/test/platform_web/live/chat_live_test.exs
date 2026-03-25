@@ -590,11 +590,12 @@ defmodule PlatformWeb.ChatLiveTest do
       assert html =~ ~s(name="name")
       assert html =~ ~s(name="description")
       assert html =~ ~s(name="topic")
-      assert html =~ "Agent Attention Mode"
+      # ADR 0027: Agent Attention Mode removed
+      refute html =~ "Agent Attention Mode"
       assert html =~ "Archive Channel"
     end
 
-    test "settings modal for DMs shows only attention mode", %{conn: conn} do
+    test "settings modal for DMs shows minimal fields", %{conn: conn} do
       conn = authenticated_conn(conn)
       user_id = get_session(conn, :current_user_id)
 
@@ -614,45 +615,16 @@ defmodule PlatformWeb.ChatLiveTest do
       html = render_click(view, "show_settings", %{})
 
       assert html =~ "Conversation Settings"
-      assert html =~ "Agent Attention Mode"
+      # ADR 0027: Agent Attention Mode removed
+      refute html =~ "Agent Attention Mode"
       # DMs should NOT have name/description/topic fields
       refute html =~ ~s(name="name")
       refute html =~ ~s(name="description")
       refute html =~ ~s(name="topic")
     end
 
-    test "changing attention mode updates the space", %{conn: conn} do
-      conn = authenticated_conn(conn)
-      {:ok, view, _html} = live(conn, ~p"/chat/general")
-
-      # Open settings
-      render_click(view, "show_settings", %{})
-
-      # Save with collaborative mode
-      render_click(view, "save_settings", %{
-        "name" => "general",
-        "description" => "",
-        "topic" => "",
-        "agent_attention" => "collaborative"
-      })
-
-      space = Chat.get_space_by_slug("general")
-      assert space.agent_attention == "collaborative"
-
-      # Navigate back and set to default (nil)
-      {:ok, view, _html} = live(conn, ~p"/chat/general")
-      render_click(view, "show_settings", %{})
-
-      render_click(view, "save_settings", %{
-        "name" => "general",
-        "description" => "",
-        "topic" => "",
-        "agent_attention" => ""
-      })
-
-      space = Chat.get_space_by_slug("general")
-      assert is_nil(space.agent_attention)
-    end
+    # ADR 0027: "changing attention mode updates the space" test removed.
+    # agent_attention field no longer exists on Space.
 
     test "archiving a channel redirects to /chat", %{conn: conn} do
       conn = authenticated_conn(conn)

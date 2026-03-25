@@ -156,7 +156,7 @@
             class="absolute right-0 top-full mt-1 z-50 w-64 max-w-[calc(100vw-1rem)] rounded-lg border border-base-300 bg-base-200 shadow-lg"
           >
             <div class="p-3 space-y-1">
-              <%= for {sa, status} <- @roster_items, sa.role != "dismissed" do %>
+              <%= for {sa, status} <- @roster_items do %>
                 <div class="flex items-center justify-between py-1.5 px-2 rounded hover:bg-base-300 group">
                   <div class="flex items-center gap-2">
                     <span class={[
@@ -181,35 +181,11 @@
                       phx-value-agent-id={sa.agent_id}
                       phx-value-space-id={sa.space_id}
                       class="hidden group-hover:inline text-xs text-base-content/40 hover:text-error transition-colors"
-                      title="Dismiss agent"
+                      title="Remove agent"
                     >
-                      Dismiss
+                      Remove
                     </button>
                   </div>
-                </div>
-              <% end %>
-
-              <%!-- Dismissed section --%>
-              <% dismissed = Enum.filter(@roster_items, fn {sa, _} -> sa.role == "dismissed" end) %>
-              <%= if dismissed != [] do %>
-                <div class="border-t border-base-300 mt-2 pt-2">
-                  <span class="text-[10px] text-base-content/40 uppercase px-2">Dismissed</span>
-                  <%= for {sa, _status} <- dismissed do %>
-                    <div class="flex items-center justify-between py-1.5 px-2 rounded hover:bg-base-300">
-                      <div class="flex items-center gap-2">
-                        <span class="inline-block size-2 rounded-full bg-zinc-500" />
-                        <span class="text-sm text-base-content/50">@{sa.agent.name}</span>
-                      </div>
-                      <button
-                        phx-click="reinvite_agent"
-                        phx-value-agent-id={sa.agent_id}
-                        phx-value-space-id={sa.space_id}
-                        class="text-xs text-primary hover:text-primary/80 transition-colors"
-                      >
-                        Re-invite
-                      </button>
-                    </div>
-                  <% end %>
                 </div>
               <% end %>
             </div>

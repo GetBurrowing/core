@@ -25,6 +25,7 @@ defmodule PlatformWeb.ChatLive do
   alias Platform.Agents.WorkspaceBootstrap
   alias Ecto.Adapters.SQL.Sandbox
   alias Platform.Chat
+  alias Platform.Chat.ActiveAgentStore
   alias Platform.Chat.AttachmentStorage
   alias Platform.Chat.Presence, as: ChatPresence
   alias Platform.Chat.PubSub, as: ChatPubSub
@@ -74,7 +75,8 @@ defmodule PlatformWeb.ChatLive do
       |> assign(:canvases_by_message_id, %{})
       |> assign(:active_canvas, nil)
       |> assign(:show_canvases, false)
-      |> assign(:agent_silenced, false)
+      |> assign(:active_agent_participant_id, nil)
+      |> assign(:active_agent_name, nil)
       |> assign(:mobile_browser_open, false)
       |> assign(:show_new_channel_modal, false)
       |> assign(:show_new_conversation_modal, false)
@@ -125,6 +127,7 @@ defmodule PlatformWeb.ChatLive do
   def handle_params(%{"space_slug" => slug_or_id}, _url, socket) do
     if prev = socket.assigns.active_space do
       ChatPubSub.unsubscribe(prev.id)
+      Phoenix.PubSub.unsubscribe(Platform.PubSub, "active_agent:#{prev.id}")
 
       if connected?(socket) do
         ChatPresence.untrack_in_space(self(), prev.id, socket.assigns.user_id)
@@ -140,7 +143,10 @@ defmodule PlatformWeb.ChatLive do
     if is_nil(space) do
       {:noreply, push_navigate(socket, to: ~p"/chat")}
     else
-      if connected?(socket), do: ChatPubSub.subscribe(space.id)
+      if connected?(socket) do
+        ChatPubSub.subscribe(space.id)
+        Phoenix.PubSub.subscribe(Platform.PubSub, "active_agent:#{space.id}")
+      end
 
       participant = ensure_participant(space.id, socket.assigns.user_id)
       agent_presence = ensure_native_agent_presence(space.id)
@@ -176,6 +182,10 @@ defmodule PlatformWeb.ChatLive do
       canvases_by_message_id = build_canvas_map(canvases)
 
       page_title = space_page_title(space, participants, socket.assigns.user_id)
+
+      # Resolve active agent indicator
+      {active_agent_participant_id, active_agent_name} =
+        resolve_active_agent(space.id, participants)
 
       # Refresh sidebar lists
       channels = Chat.list_spaces(kind: "channel")
@@ -213,7 +223,8 @@ defmodule PlatformWeb.ChatLive do
        |> assign(:canvases_by_message_id, canvases_by_message_id)
        |> assign(:active_canvas, nil)
        |> assign(:show_canvases, false)
-       |> assign(:agent_silenced, agent_silenced?(space, participants))
+       |> assign(:active_agent_participant_id, active_agent_participant_id)
+       |> assign(:active_agent_name, active_agent_name)
        |> assign(:mobile_browser_open, false)
        |> assign(:channels, channels)
        |> assign(:dm_conversations, dm_convos)
@@ -492,27 +503,49 @@ defmodule PlatformWeb.ChatLive do
     {:noreply, assign(socket, :show_canvases, !socket.assigns.show_canvases)}
   end
 
-  def handle_event("toggle_agent_silence", _params, socket) do
+  def handle_event("toggle_watch", _params, socket) do
     space = socket.assigns.active_space
+    new_watch = !space.watch_enabled
 
-    # Find any agent participant in this space — works for both built-in and federated agents
-    agent_participant =
-      space.id
-      |> Chat.list_participants(participant_type: "agent")
-      |> List.first()
+    case Chat.update_space(space, %{watch_enabled: new_watch}) do
+      {:ok, updated_space} ->
+        socket = assign(socket, :active_space, updated_space)
 
-    if agent_participant do
-      if socket.assigns.agent_silenced do
-        Chat.unsilence_agent(space.id, agent_participant.id)
-        {:noreply, assign(socket, :agent_silenced, false)}
-      else
-        until = DateTime.add(DateTime.utc_now(), 1800, :second)
-        Chat.silence_agent(space.id, agent_participant.id, until)
-        {:noreply, assign(socket, :agent_silenced, true)}
-      end
-    else
-      {:noreply, socket}
+        socket =
+          if new_watch do
+            # Watch turned ON — if no active agent and there's a primary agent, activate it
+            if is_nil(ActiveAgentStore.get_active(space.id)) &&
+                 is_binary(space.primary_agent_id) do
+              primary_participant =
+                space.id
+                |> Chat.list_participants(participant_type: "agent")
+                |> Enum.find(fn p -> p.participant_id == space.primary_agent_id end)
+
+              if primary_participant do
+                ActiveAgentStore.set_active(space.id, primary_participant.id)
+              end
+
+              socket
+            else
+              socket
+            end
+          else
+            # Watch turned OFF — clear active agent immediately
+            ActiveAgentStore.clear_active(space.id)
+            socket
+          end
+
+        {:noreply, socket}
+
+      {:error, _changeset} ->
+        {:noreply, put_flash(socket, :error, "Could not update watch setting.")}
     end
+  end
+
+  def handle_event("clear_active_agent", _params, socket) do
+    space = socket.assigns.active_space
+    ActiveAgentStore.clear_active(space.id)
+    {:noreply, socket}
   end
 
   def handle_event("open_canvas", %{"canvas-id" => canvas_id}, socket) do
@@ -793,7 +826,6 @@ defmodule PlatformWeb.ChatLive do
         "name" => space.name || "",
         "description" => space.description || "",
         "topic" => space.topic || "",
-        "agent_attention" => space.agent_attention || "",
         "promote_name" => ""
       })
 
@@ -810,12 +842,6 @@ defmodule PlatformWeb.ChatLive do
   def handle_event("save_settings", params, socket) do
     space = socket.assigns.active_space
 
-    attention =
-      case params["agent_attention"] do
-        "" -> nil
-        val -> val
-      end
-
     attrs =
       case space.kind do
         "channel" ->
@@ -830,18 +856,14 @@ defmodule PlatformWeb.ChatLive do
             name: params["name"],
             slug: slug,
             description: params["description"],
-            topic: params["topic"],
-            agent_attention: attention
+            topic: params["topic"]
           }
 
         "group" ->
-          %{
-            name: params["name"],
-            agent_attention: attention
-          }
+          %{name: params["name"]}
 
         "dm" ->
-          %{agent_attention: attention}
+          %{}
       end
 
     case Chat.update_space(space, attrs) do
@@ -1129,12 +1151,14 @@ defmodule PlatformWeb.ChatLive do
     end
   end
 
-  def handle_info({:agent_silenced, _payload}, socket) do
-    {:noreply, assign(socket, :agent_silenced, true)}
-  end
+  def handle_info({:active_agent_changed, _space_id, agent_participant_id}, socket) do
+    participants = socket.assigns.space_participants
+    name = resolve_agent_name(agent_participant_id, participants)
 
-  def handle_info({:agent_unsilenced, _payload}, socket) do
-    {:noreply, assign(socket, :agent_silenced, false)}
+    {:noreply,
+     socket
+     |> assign(:active_agent_participant_id, agent_participant_id)
+     |> assign(:active_agent_name, name)}
   end
 
   def handle_info(_msg, socket), do: {:noreply, socket}
@@ -1439,22 +1463,57 @@ defmodule PlatformWeb.ChatLive do
                 <span>{length(@pins)} pinned</span>
               </button>
 
+              <%!-- Active agent indicator --%>
+              <span
+                :if={@active_agent_participant_id != nil}
+                class="flex items-center gap-1 rounded px-2 py-0.5 text-xs text-success"
+              >
+                <span>🟢</span>
+                <span class="hidden md:inline">Talking to {@active_agent_name || "Agent"}</span>
+                <button
+                  phx-click="clear_active_agent"
+                  class="ml-1 text-base-content/40 hover:text-error transition-colors"
+                  title="Clear active agent"
+                >
+                  <span class="hero-x-mark size-3"></span>
+                </button>
+              </span>
+              <span
+                :if={
+                  @active_agent_participant_id == nil && @active_space.watch_enabled &&
+                    (@agent_presence[:joined?] || @has_agent_participant)
+                }
+                class="flex items-center gap-1 rounded px-2 py-0.5 text-xs text-success/60"
+              >
+                <span>🟢</span>
+                <span class="hidden md:inline">
+                  {primary_agent_label(@active_space, @space_participants)} listening
+                </span>
+              </span>
+
+              <%!-- Watch toggle (hidden for DM spaces — always ON) --%>
               <button
-                :if={@agent_presence[:joined?] || @has_agent_participant}
-                phx-click="toggle_agent_silence"
+                :if={
+                  (@agent_presence[:joined?] || @has_agent_participant) && @active_space.kind != "dm"
+                }
+                phx-click="toggle_watch"
                 class={[
                   "flex items-center gap-1 rounded px-2 py-0.5 text-xs text-base-content/50 hover:text-base-content transition-colors hover:bg-base-300",
-                  @agent_silenced && "!bg-warning/20 !text-warning"
+                  !@active_space.watch_enabled && "!bg-warning/20 !text-warning"
                 ]}
-                title={if @agent_silenced, do: "Unsilence agent", else: "Silence agent for 30 min"}
+                title={
+                  if @active_space.watch_enabled,
+                    do: "Disable watch — agent won't auto-respond",
+                    else: "Enable watch — agent will auto-respond"
+                }
               >
                 <span class={[
                   "size-4",
-                  if(@agent_silenced, do: "hero-eye-slash", else: "hero-eye")
+                  if(@active_space.watch_enabled, do: "hero-eye", else: "hero-eye-slash")
                 ]}>
                 </span>
                 <span class="hidden md:inline">
-                  {if @agent_silenced, do: "paused", else: "watching"}
+                  {if @active_space.watch_enabled, do: "watching", else: "paused"}
                 </span>
               </button>
 
@@ -2269,38 +2328,7 @@ defmodule PlatformWeb.ChatLive do
               </div>
             <% end %>
 
-            <%!-- Agent Attention Mode — shown for all space kinds --%>
-            <div class="form-control mb-4">
-              <label class="label"><span class="label-text">Agent Attention Mode</span></label>
-              <select name="agent_attention" class="select select-bordered w-full">
-                <option value="" selected={is_nil(@active_space.agent_attention)}>
-                  Default ({default_attention_label(@active_space.kind)})
-                </option>
-                <option value="on_mention" selected={@active_space.agent_attention == "on_mention"}>
-                  On Mention
-                </option>
-                <option
-                  value="collaborative"
-                  selected={@active_space.agent_attention == "collaborative"}
-                >
-                  Collaborative
-                </option>
-                <option value="directed" selected={@active_space.agent_attention == "directed"}>
-                  Directed
-                </option>
-              </select>
-              <p class="text-xs text-base-content/50 mt-1">
-                <%= case @active_space.agent_attention || default_attention_mode(@active_space.kind) do %>
-                  <% "on_mention" -> %>
-                    Agent responds only when @mentioned
-                  <% "collaborative" -> %>
-                    Agent observes and engages when it can add value
-                  <% "directed" -> %>
-                    Every message goes to the agent
-                  <% _ -> %>
-                <% end %>
-              </p>
-            </div>
+            <%!-- ADR 0027: Agent attention mode removed; replaced by active agent mutex (Stage 3) --%>
 
             <div class="flex justify-end gap-2">
               <button type="button" phx-click="close_settings" class="btn btn-ghost btn-sm">
@@ -3028,15 +3056,8 @@ defmodule PlatformWeb.ChatLive do
     end
   end
 
-  defp default_attention_mode("channel"), do: "on_mention"
-  defp default_attention_mode("dm"), do: "directed"
-  defp default_attention_mode("group"), do: "collaborative"
-  defp default_attention_mode(_), do: "on_mention"
-
-  defp default_attention_label("channel"), do: "On Mention"
-  defp default_attention_label("dm"), do: "Directed"
-  defp default_attention_label("group"), do: "Collaborative"
-  defp default_attention_label(_), do: "On Mention"
+  # ADR 0027: default_attention_mode/1 and default_attention_label/1 removed
+  # (agent_attention field no longer exists on Space)
 
   defp ensure_participant(space_id, user_id) do
     existing =
@@ -3236,14 +3257,53 @@ defmodule PlatformWeb.ChatLive do
 
   defp format_message_date(_), do: ""
 
-  defp agent_silenced?(space, participants) do
-    agent_participants = Enum.filter(participants, &(&1.participant_type == "agent"))
+  # Resolve the currently active agent's participant ID and display name
+  defp resolve_active_agent(space_id, participants) do
+    case ActiveAgentStore.get_active(space_id) do
+      nil ->
+        {nil, nil}
 
-    Enum.any?(agent_participants, fn p ->
-      case Chat.get_attention_state(space.id, p.id) do
-        %{state: "silenced"} -> true
-        _ -> false
-      end
-    end)
+      participant_id ->
+        name = resolve_agent_name(participant_id, participants)
+        {participant_id, name}
+    end
+  end
+
+  # Resolve an agent's display name from their participant ID
+  defp resolve_agent_name(nil, _participants), do: nil
+
+  defp resolve_agent_name(participant_id, participants) do
+    case Enum.find(participants, &(&1.id == participant_id)) do
+      %{display_name: name} when is_binary(name) and name != "" -> name
+      %{participant_id: agent_id} -> resolve_agent_name_by_id(agent_id)
+      nil -> resolve_agent_name_by_lookup(participant_id)
+    end
+  end
+
+  defp resolve_agent_name_by_id(agent_id) do
+    case Repo.get(Platform.Agents.Agent, agent_id) do
+      %{name: name} when is_binary(name) -> name
+      _ -> "Agent"
+    end
+  end
+
+  defp resolve_agent_name_by_lookup(participant_id) do
+    case Chat.get_participant(participant_id) do
+      %{display_name: name} when is_binary(name) and name != "" -> name
+      %{participant_id: agent_id} -> resolve_agent_name_by_id(agent_id)
+      _ -> "Agent"
+    end
+  end
+
+  # Build label for the primary agent when in listening mode
+  defp primary_agent_label(%{primary_agent_id: nil}, _participants), do: "Agent"
+
+  defp primary_agent_label(%{primary_agent_id: primary_agent_id}, participants) do
+    case Enum.find(participants, fn p ->
+           p.participant_type == "agent" && p.participant_id == primary_agent_id
+         end) do
+      %{display_name: name} when is_binary(name) and name != "" -> name
+      _ -> resolve_agent_name_by_id(primary_agent_id)
+    end
   end
 end
