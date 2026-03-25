@@ -177,7 +177,16 @@ defmodule PlatformWeb.RuntimeChannel do
         socket
       )
       when is_map(args) do
-    RuntimePresence.touch(socket.assigns.runtime_id)
+    require Logger
+    runtime_id = socket.assigns.runtime_id
+
+    Logger.info(
+      "[RuntimeChannel] tool_call received: tool=#{tool} call_id=#{call_id} runtime=#{runtime_id}"
+    )
+
+    start_time = System.monotonic_time(:millisecond)
+
+    RuntimePresence.touch(runtime_id)
     space_id = Map.get(args, "space_id")
     agent_participant_id = get_agent_participant_id(socket, space_id)
 
@@ -188,12 +197,21 @@ defmodule PlatformWeb.RuntimeChannel do
     }
 
     result = ToolSurface.execute(tool, args, context)
+    elapsed = System.monotonic_time(:millisecond) - start_time
 
     case result do
       {:ok, data} ->
+        Logger.info(
+          "[RuntimeChannel] tool_result ok: tool=#{tool} call_id=#{call_id} runtime=#{runtime_id} elapsed=#{elapsed}ms"
+        )
+
         push(socket, "tool_result", %{call_id: call_id, status: "ok", result: data})
 
       {:error, error} ->
+        Logger.warning(
+          "[RuntimeChannel] tool_result error: tool=#{tool} call_id=#{call_id} runtime=#{runtime_id} elapsed=#{elapsed}ms error=#{inspect(error)}"
+        )
+
         push(socket, "tool_result", %{call_id: call_id, status: "error", error: error})
     end
 
