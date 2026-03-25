@@ -44,10 +44,16 @@ defmodule Platform.Repo.Migrations.BackfillUsageEventCosts do
         end)
 
       Enum.each(updates, fn {id, cost, total} ->
+        # id is raw binary UUID — must be formatted as hex string for SQL
+        id_hex = Base.encode16(id, case: :lower)
+
+        formatted_id =
+          "#{String.slice(id_hex, 0, 8)}-#{String.slice(id_hex, 8, 4)}-#{String.slice(id_hex, 12, 4)}-#{String.slice(id_hex, 16, 4)}-#{String.slice(id_hex, 20, 12)}"
+
         execute("""
         UPDATE agent_usage_events
         SET cost_usd = #{cost}, total_tokens = #{total}
-        WHERE id = '#{id}'
+        WHERE id = '#{formatted_id}'
         """)
       end)
     end)
