@@ -1700,7 +1700,7 @@ defmodule PlatformWeb.ChatLive do
                     <button
                       :for={emoji <- @quick_emojis}
                       phx-click="react"
-                      phx-value-message-id={msg.id}
+                      phx-value-message_id={msg.id}
                       phx-value-emoji={emoji}
                       title={"React with #{emoji}"}
                       class="rounded px-1.5 py-0.5 text-sm hover:bg-base-300 transition-colors"
@@ -1823,7 +1823,7 @@ defmodule PlatformWeb.ChatLive do
                   <button
                     :for={r <- Map.get(@reactions_map, msg.id, [])}
                     phx-click="react"
-                    phx-value-message-id={msg.id}
+                    phx-value-message_id={msg.id}
                     phx-value-emoji={r.emoji}
                     class={[
                       "flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs transition-colors",
