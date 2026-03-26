@@ -30,7 +30,7 @@ defmodule Platform.Orchestration.TaskRouterWatcher do
 
   import Ecto.Query
 
-  alias Platform.Orchestration.TaskRouterSupervisor
+  alias Platform.Orchestration.{RuntimeSupervision, TaskRouterSupervisor}
   alias Platform.Repo
   alias Platform.Tasks
   alias Platform.Tasks.Task
@@ -70,7 +70,7 @@ defmodule Platform.Orchestration.TaskRouterWatcher do
   end
 
   @impl true
-  def handle_info({:task_updated, task}, state) do
+  def handle_info({event, task}, state) when event in [:task_created, :task_updated] do
     evaluate_task(task)
     {:noreply, state}
   end
@@ -91,6 +91,37 @@ defmodule Platform.Orchestration.TaskRouterWatcher do
   def handle_info(_msg, state), do: {:noreply, state}
 
   # ── Invariant evaluation ───────────────────────────────────────────────
+
+  @doc """
+  Force a router dispatch for the given task if a router is running. If not,
+  re-evaluate the task so an eligible router is started first.
+  """
+  @spec force_dispatch(String.t()) :: :ok | :noop | {:error, :task_not_found}
+  def force_dispatch(task_id) do
+    case Registry.lookup(Platform.Orchestration.Registry, task_id) do
+      [{pid, _}] ->
+        send(pid, :dispatch)
+        :ok
+
+      [] ->
+        case Tasks.get_task_detail(task_id) do
+          nil ->
+            {:error, :task_not_found}
+
+          task ->
+            evaluate_task(task)
+
+            case Registry.lookup(Platform.Orchestration.Registry, task_id) do
+              [{pid, _}] ->
+                send(pid, :dispatch)
+                :ok
+
+              [] ->
+                :noop
+            end
+        end
+    end
+  end
 
   @doc """
   Returns true if the given task should have a router running.
@@ -147,19 +178,24 @@ defmodule Platform.Orchestration.TaskRouterWatcher do
 
   defp redispatch_for_runtime(runtime_id) do
     # Find all running routers whose task is assigned to this runtime.
-    # Send :dispatch to each so the agent gets a fresh prompt now that it's reconnected.
+    # Only redispatch tasks that do not already have an active lease for this runtime.
     tasks = list_should_run_tasks()
 
     redispatched =
       Enum.count(tasks, fn task ->
         case resolve_runtime_for_task(task) do
           {:ok, %{id: ^runtime_id}} ->
-            if router_running?(task.id) do
-              [{pid, _}] = Registry.lookup(Platform.Orchestration.Registry, task.id)
-              send(pid, :dispatch)
-              true
-            else
-              false
+            cond do
+              !router_running?(task.id) ->
+                false
+
+              active_lease_present?(task.id, runtime_id) ->
+                false
+
+              true ->
+                [{pid, _}] = Registry.lookup(Platform.Orchestration.Registry, task.id)
+                send(pid, :dispatch)
+                true
             end
 
           _ ->
@@ -171,6 +207,19 @@ defmodule Platform.Orchestration.TaskRouterWatcher do
       Logger.info(
         "[TaskRouterWatcher] runtime #{runtime_id} reconnected — re-dispatched #{redispatched} task(s)"
       )
+    end
+  end
+
+  defp active_lease_present?(task_id, runtime_id) do
+    case RuntimeSupervision.current_lease_for_task_runtime(task_id, runtime_id) do
+      %{expires_at: %DateTime{} = expires_at} ->
+        DateTime.compare(expires_at, DateTime.utc_now()) == :gt
+
+      %{status: status} when status in ["active", "blocked"] ->
+        true
+
+      _ ->
+        false
     end
   end
 

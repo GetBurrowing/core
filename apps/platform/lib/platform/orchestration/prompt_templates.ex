@@ -132,8 +132,9 @@ defmodule Platform.Orchestration.PromptTemplates do
   defp default_templates do
     skills_reference =
       "The dispatch context includes attached skills under the `skills` key. " <>
-        "Read and follow any relevant skills — they describe conventions, repo layout, " <>
-        "deploy targets, and how to delegate work."
+        "Treat bundled skill content in that payload as authoritative for this task before trying to rediscover skills from disk. " <>
+        "Read and follow any relevant bundled skills — they describe conventions, repo layout, deploy targets, and how to delegate work. " <>
+        "Only fall back to filesystem skill lookup if the payload clearly references a path without including the needed content."
 
     [
       %{
@@ -208,6 +209,8 @@ defmodule Platform.Orchestration.PromptTemplates do
         4. NEVER work on an existing branch. ALWAYS branch from latest origin/{{default_branch}}.
 
         The attention signal that delivered this message includes a `context` field with the full task hierarchy: project, epic, task metadata, approved plan with stages, and execution_space_id. Use it as your source of truth.
+        Start from the concrete stage contract and any attached/bundled skill content in that payload before re-fetching broad task/project context.
+        Avoid redundant task/plan lookup churn on the first turn unless an identifier is genuinely missing or the stage contract is ambiguous.
 
         {{skills_reference}}
         """
@@ -227,25 +230,30 @@ defmodule Platform.Orchestration.PromptTemplates do
           "skills_reference"
         ],
         content: """
-        Task is in review — validate the implementation before marking it done.
+        Task is in review — validate the implementation by exercising it in the local/dev environment.
 
         Task: {{task_title}}
-        {{stage_info}}Run these checks exactly and push evidence for each result:
-        - Confirm the task branch is up to date with {{default_branch}}: `git fetch origin && git merge-base --is-ancestor origin/{{default_branch}} HEAD`
-        - Check CI / GitHub Actions status with `gh` CLI for {{repo_url}}
-        - Check for merge conflicts: `git merge --no-commit --no-ff origin/{{default_branch}}` and then immediately abort with `git merge --abort`
-        - Run the local test suite and any required lint checks
+        {{stage_info}}Your job is to validate the current review stage and push evidence for each validation.
 
-        If ALL checks pass:
-        - call `task_update` to move the task to `done`
-        - include the validation evidence, CI status, and PR link in your update
+        First-turn rule (CRITICAL):
+        - Do NOT spend your first substantive turn re-discovering broad task/plan state if the dispatch already gives you `Current task_id`, `Current stage_id`, `validation_id`, and `execution_space_id` in the attention context.
+        - For a `manual_approval` review stage, your first substantive turn should normally do the real review work and then create the human gate:
+          1. exercise the implementation in the local/dev environment,
+          2. publish concrete evidence into the execution space,
+          3. call `suite_review_request_create` for the provided `validation_id` with labelled checklist items and links to that evidence.
+        - Only call `suite_task_get`, `suite_plan_get`, or `suite_validation_list` if an identifier is actually missing, the dispatch context is contradicted by direct evidence, or you need a specific field that is not already present.
+        - Do NOT stop after status-check churn. Reach the evidence + review-request step in the same attempt unless a real blocker prevents it.
+        - Do NOT spend this review attempt inspecting unrelated repository history or workspace state first (for example `git status`, `git log`, broad `git diff`, or listing the whole workspace) unless a specific blocker explicitly requires it. Those checks are lower priority than producing review evidence.
+        - Prefer direct review actions over repo archaeology: use the local app, execution-space artifacts, screenshots, and Suite review tools before exploring source diffs.
 
-        If ANY check fails:
-        - provide specific feedback describing what failed and how to reproduce it
-        - call `task_update` to move the task back to `in_progress`
-        - do not mark the task done
-
-        Do not self-approve code_review or manual_approval stages — a human must approve those.
+        Review rules:
+        - Use `suite_validation_evaluate` for deterministic review validations (`passed` / `failed`).
+        - Use `suite_review_request_create` for `manual_approval` validations and include labelled checklist items plus screenshots/canvas/evidence links.
+        - Do NOT call `stage_complete` before the required manual-review request and evidence have been created.
+        - Do NOT self-approve `manual_approval` validations.
+        - Do NOT call `task_update` for lifecycle status changes — review outcomes flow through validations and review requests.
+        - If review fails, record the failure on the relevant validation with concrete reproduction details so the task can return to `in_progress`.
+        - If review passes, let the plan engine advance the task; do not force status changes manually.
 
         The attention signal that delivered this message includes a `context` field with the full task hierarchy: project, epic, task metadata, approved plan with stages, and execution_space_id. Use it as your source of truth.
 

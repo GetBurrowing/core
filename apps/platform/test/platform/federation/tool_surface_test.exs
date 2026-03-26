@@ -35,9 +35,9 @@ defmodule Platform.Federation.ToolSurfaceTest do
   defp unique_slug, do: "test-#{System.unique_integer([:positive])}"
 
   describe "tool_definitions/0" do
-    test "returns all 22 tools with required components" do
+    test "returns all 25 tools with required components" do
       tools = ToolSurface.tool_definitions()
-      assert length(tools) == 22
+      assert length(tools) == 25
 
       tool_names = Enum.map(tools, & &1.name)
       assert "send_media" in tool_names
@@ -57,9 +57,14 @@ defmodule Platform.Federation.ToolSurfaceTest do
       assert "stage_start" in tool_names
       assert "stage_list" in tool_names
       assert "validation_evaluate" in tool_names
+      assert "validation_pass" in tool_names
+      assert "stage_complete" in tool_names
+      assert "report_blocker" in tool_names
       assert "validation_list" in tool_names
+      assert "review_request_create" in tool_names
       assert "prompt_template_list" in tool_names
       assert "prompt_template_update" in tool_names
+      assert "federation_status" in tool_names
 
       for tool <- tools do
         assert Map.has_key?(tool, :name)
@@ -369,6 +374,62 @@ defmodule Platform.Federation.ToolSurfaceTest do
       assert error.recoverable == true
     end
 
+    test "validation_pass is an alias for passing a validation" do
+      project = create_project()
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Alias task"})
+      {:ok, plan} = Tasks.create_plan(%{task_id: task.id})
+      {:ok, stage} = Tasks.create_stage(%{plan_id: plan.id, name: "Build", position: 1})
+      {:ok, _} = Platform.Tasks.PlanEngine.start_stage(stage.id)
+      {:ok, validation} = Tasks.create_validation(%{stage_id: stage.id, kind: "test_pass"})
+
+      {:ok, result} =
+        ToolSurface.execute(
+          "validation_pass",
+          %{"validation_id" => validation.id, "evidence" => %{"tests" => "green"}},
+          %{}
+        )
+
+      assert result.status == "passed"
+      assert result.evidence["tests"] == "green"
+    end
+
+    test "stage_complete advances a validation-free running stage" do
+      project = create_project()
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Complete task"})
+      {:ok, plan} = Tasks.create_plan(%{task_id: task.id})
+      {:ok, stage} = Tasks.create_stage(%{plan_id: plan.id, name: "Build", position: 1})
+      {:ok, _} = Platform.Tasks.PlanEngine.start_stage(stage.id)
+
+      {:ok, result} = ToolSurface.execute("stage_complete", %{"stage_id" => stage.id}, %{})
+
+      assert result.stage_id == stage.id
+      assert result.plan_id == plan.id
+      assert result.plan_status in ["completed", "draft"]
+    end
+
+    test "report_blocker records a structured runtime blocker" do
+      project = create_project()
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Blocked task"})
+      {:ok, plan} = Tasks.create_plan(%{task_id: task.id})
+      {:ok, stage} = Tasks.create_stage(%{plan_id: plan.id, name: "Build", position: 1})
+
+      {:ok, result} =
+        ToolSurface.execute(
+          "report_blocker",
+          %{
+            "task_id" => task.id,
+            "stage_id" => stage.id,
+            "description" => "Missing deploy credentials",
+            "needs_human" => true
+          },
+          %{runtime_id: "runtime:test", agent_id: "agent:test"}
+        )
+
+      assert result.blocked == true
+      assert result.task_id == task.id
+      assert is_binary(result.event_id)
+    end
+
     # ── task_complete ────────────────────────────────────────────────────
 
     test "task_complete marks a task as done" do
@@ -446,7 +507,7 @@ defmodule Platform.Federation.ToolSurfaceTest do
 
     # ── send_media ───────────────────────────────────────────────────────
 
-    test "send_media posts a message with file attachment" do
+    test "send_media posts a message with single file attachment" do
       space = create_space()
       participant = create_participant(space.id)
 
@@ -479,9 +540,51 @@ defmodule Platform.Federation.ToolSurfaceTest do
 
         assert is_binary(result.message_id)
         assert result.space_id == space.id
+        assert result.attachment_count == 1
       after
         Application.put_env(:platform, :chat_attachments_root, prev)
         File.rm(tmp_path)
+        File.rm_rf(test_uploads)
+      end
+    end
+
+    test "send_media posts a message with file_paths attachments" do
+      space = create_space()
+      participant = create_participant(space.id)
+
+      test_uploads = Path.join(System.tmp_dir!(), "platform_test_uploads_#{Ecto.UUID.generate()}")
+      prev = Application.get_env(:platform, :chat_attachments_root)
+      Application.put_env(:platform, :chat_attachments_root, test_uploads)
+
+      tmp_path_1 = Path.join(System.tmp_dir!(), "test-upload-#{Ecto.UUID.generate()}.txt")
+      tmp_path_2 = Path.join(System.tmp_dir!(), "test-upload-#{Ecto.UUID.generate()}.md")
+      File.write!(tmp_path_1, "hello world")
+      File.write!(tmp_path_2, "# hello")
+
+      context = %{
+        space_id: space.id,
+        agent_participant_id: participant.id
+      }
+
+      try do
+        {:ok, result} =
+          ToolSurface.execute(
+            "send_media",
+            %{
+              "space_id" => space.id,
+              "file_paths" => [tmp_path_1, tmp_path_2],
+              "content" => "Here are the files"
+            },
+            context
+          )
+
+        assert is_binary(result.message_id)
+        assert result.space_id == space.id
+        assert result.attachment_count == 2
+      after
+        Application.put_env(:platform, :chat_attachments_root, prev)
+        File.rm(tmp_path_1)
+        File.rm(tmp_path_2)
         File.rm_rf(test_uploads)
       end
     end

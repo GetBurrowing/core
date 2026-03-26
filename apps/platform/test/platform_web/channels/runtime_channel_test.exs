@@ -5,7 +5,9 @@ defmodule PlatformWeb.RuntimeChannelTest do
   alias Platform.Agents.Agent
   alias Platform.Chat
   alias Platform.Federation
+  alias Platform.Orchestration.ExecutionSpace
   alias Platform.Repo
+  alias Platform.Tasks
 
   setup do
     # Set up a writable uploads directory for attachment tests
@@ -137,6 +139,43 @@ defmodule PlatformWeb.RuntimeChannelTest do
       # Verify message was posted
       messages = Chat.list_messages(ctx.space.id, limit: 10)
       assert Enum.any?(messages, fn m -> m.content == "Hello from external runtime!" end)
+    end
+  end
+
+  describe "execution_event" do
+    test "records runtime execution events and acknowledges them", ctx do
+      {:ok, socket} =
+        connect(PlatformWeb.RuntimeSocket, %{
+          "runtime_id" => ctx.runtime.runtime_id,
+          "token" => ctx.raw_token
+        })
+
+      {:ok, _reply, socket} =
+        subscribe_and_join(socket, "runtime:#{ctx.runtime.runtime_id}", %{})
+
+      {:ok, project} = Tasks.create_project(%{name: "Runtime channel project"})
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Runtime channel task"})
+      {:ok, space} = ExecutionSpace.find_or_create(task.id)
+
+      push(socket, "execution_event", %{
+        "task_id" => task.id,
+        "phase" => "execution",
+        "event_type" => "execution.started",
+        "execution_space_id" => space.id,
+        "idempotency_key" => "runtime-channel-started-#{task.id}"
+      })
+
+      assert_receive %Phoenix.Socket.Message{
+        event: "execution_event_ack",
+        payload: %{idempotency_key: _, status: "ok"}
+      }
+
+      lease = Platform.Orchestration.current_lease_for_task(task.id)
+      assert lease.runtime_id == ctx.runtime.runtime_id
+      assert lease.status == "active"
+
+      messages = ExecutionSpace.list_messages_with_participants(space.id)
+      assert Enum.any?(messages, &String.contains?(&1.content, "started execution"))
     end
   end
 

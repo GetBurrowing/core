@@ -56,6 +56,7 @@ defmodule Platform.Application do
       ]
       |> maybe_add_attention_router()
       |> maybe_add_node_client()
+      |> ensure_task_router_watcher_after_endpoint()
 
     # See https://hexdocs.pm/elixir/Supervisor.html
     # for other strategies and supported options
@@ -67,7 +68,13 @@ defmodule Platform.Application do
   # whenever the application is updated.
   defp maybe_add_attention_router(children) do
     if Application.get_env(:platform, :start_attention_router, true) do
-      children ++ [Platform.Chat.AttentionRouter]
+      insert_at =
+        Enum.find_index(children, fn child ->
+          child == Platform.Orchestration.TaskRouterWatcher
+        end) ||
+          -1
+
+      List.insert_at(children, insert_at, Platform.Chat.AttentionRouter)
     else
       children
     end
@@ -78,6 +85,22 @@ defmodule Platform.Application do
       children ++ [Platform.Federation.NodeClient]
     else
       children
+    end
+  end
+
+  defp ensure_task_router_watcher_after_endpoint(children) do
+    {watchers, others} =
+      Enum.split_with(children, &(&1 == Platform.Orchestration.TaskRouterWatcher))
+
+    case watchers do
+      [] ->
+        children
+
+      [watcher] ->
+        insert_at =
+          (Enum.find_index(others, &(&1 == PlatformWeb.Endpoint)) || length(others) - 1) + 1
+
+        List.insert_at(others, insert_at, watcher)
     end
   end
 

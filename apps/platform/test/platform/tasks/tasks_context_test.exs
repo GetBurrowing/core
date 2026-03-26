@@ -79,9 +79,11 @@ defmodule Platform.Tasks.TasksContextTest do
   end
 
   describe "plan approval flow end-to-end" do
-    test "create → submit → approve, then current_plan returns it" do
+    test "create → submit → approve moves task directly to in_progress" do
       {:ok, project} = Tasks.create_project(%{name: "Approve Project"})
-      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Approvable"})
+
+      {:ok, task} =
+        Tasks.create_task(%{project_id: project.id, title: "Approvable", status: "planning"})
 
       {:ok, plan} = Tasks.create_plan(%{task_id: task.id})
       {:ok, plan} = Tasks.submit_plan_for_review(plan)
@@ -91,6 +93,9 @@ defmodule Platform.Tasks.TasksContextTest do
       assert current != nil
       assert current.status == "approved"
       assert current.version == 1
+
+      updated_task = Tasks.get_task_record(task.id)
+      assert updated_task.status == "in_progress"
     end
   end
 

@@ -193,7 +193,8 @@ defmodule PlatformWeb.RuntimeChannel do
     context = %{
       space_id: space_id,
       agent_id: socket.assigns[:agent_id],
-      agent_participant_id: agent_participant_id
+      agent_participant_id: agent_participant_id,
+      runtime_id: socket.assigns.runtime_id
     }
 
     result = ToolSurface.execute(tool, args, context)
@@ -313,6 +314,33 @@ defmodule PlatformWeb.RuntimeChannel do
 
         {:noreply, socket}
     end
+  end
+
+  @impl true
+  def handle_in("execution_event", params, socket) when is_map(params) do
+    RuntimePresence.touch(socket.assigns.runtime_id)
+
+    attrs =
+      params
+      |> Map.put("runtime_id", socket.assigns.runtime_id)
+      |> Map.put_new("occurred_at", DateTime.utc_now() |> DateTime.to_iso8601())
+
+    case Platform.Orchestration.record_runtime_event(attrs) do
+      {:ok, event} ->
+        push(socket, "execution_event_ack", %{
+          idempotency_key: event.idempotency_key,
+          status: "ok"
+        })
+
+      {:error, reason} ->
+        push(socket, "execution_event_ack", %{
+          idempotency_key: Map.get(attrs, "idempotency_key"),
+          status: "error",
+          error: inspect(reason)
+        })
+    end
+
+    {:noreply, socket}
   end
 
   @impl true

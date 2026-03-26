@@ -42,13 +42,18 @@ defmodule Platform.Federation.ToolSurface do
     [
       %{
         name: "send_media",
-        description: "Send a message with a file attachment to a Suite space.",
+        description: "Send a message with one or more file attachments to a Suite space.",
         parameters: %{
           space_id: %{type: "string", required: true, description: "UUID of the Suite space"},
+          file_paths: %{
+            type: "array",
+            required: false,
+            description: "Absolute local file paths to attach"
+          },
           file_path: %{
             type: "string",
-            required: true,
-            description: "Absolute local path to the file"
+            required: false,
+            description: "Back-compat single absolute local path to the file"
           },
           content: %{
             type: "string",
@@ -58,13 +63,13 @@ defmodule Platform.Federation.ToolSurface do
           filename: %{
             type: "string",
             required: false,
-            description: "Optional display filename"
+            description: "Optional display filename for single-file uploads"
           }
         },
-        returns: "The message ID and space ID",
+        returns: "The message ID, space ID, and attachment count",
         limitations:
-          "File must exist on the local filesystem. Agent must be a participant in the space.",
-        when_to_use: "When you need to share a file (image, document, etc.) in a space"
+          "Files must exist on the local filesystem. Agent must be a participant in the space.",
+        when_to_use: "When you need to share files (images, documents, etc.) in a space"
       }
     ]
   end
@@ -395,6 +400,66 @@ defmodule Platform.Federation.ToolSurface do
         when_to_use: "When a validation check has completed and you need to record the result"
       },
       %{
+        name: "validation_pass",
+        description:
+          "Convenience alias for marking a validation as passed. Mirrors validation_evaluate with status=passed.",
+        parameters: %{
+          validation_id: %{
+            type: "string",
+            required: true,
+            description: "The validation ID to mark passed"
+          },
+          evidence: %{
+            type: "object",
+            required: false,
+            description: "Optional evidence payload"
+          },
+          evaluated_by: %{
+            type: "string",
+            required: false,
+            description: "Who evaluated this (user ID or \"system\")"
+          }
+        },
+        returns: "The updated validation object",
+        limitations: "Equivalent to validation_evaluate with status=passed",
+        when_to_use:
+          "When prompt contracts refer to validation_pass and you need to mark a validation successful"
+      },
+      %{
+        name: "stage_complete",
+        description:
+          "Attempt to advance a running stage once its validations are satisfied. Useful for stages with no validations or for prompt contracts that refer to stage_complete.",
+        parameters: %{
+          stage_id: %{type: "string", required: true, description: "The running stage ID"}
+        },
+        returns: "Structured result describing the completed stage and updated plan state",
+        limitations: "Fails if the stage is not running or still has pending/failed validations.",
+        when_to_use: "When you have completed a running stage and need the plan engine to advance"
+      },
+      %{
+        name: "report_blocker",
+        description:
+          "Report a blocker for the current task stage. Records a structured execution.blocked event so the router can stop treating silence as liveness.",
+        parameters: %{
+          task_id: %{type: "string", required: true, description: "The task ID"},
+          stage_id: %{type: "string", required: true, description: "The current stage ID"},
+          description: %{
+            type: "string",
+            required: true,
+            description: "What is blocked and why"
+          },
+          needs_human: %{
+            type: "boolean",
+            required: false,
+            description: "Whether the blocker requires human intervention"
+          }
+        },
+        returns: "Structured blocker acknowledgement with event ID and escalation hint",
+        limitations: "Requires task_id and stage_id from the current execution context.",
+        when_to_use:
+          "When you cannot proceed and need the orchestrator to pause silence-based escalation"
+      },
+      %{
         name: "validation_list",
         description: "List all validations for a stage.",
         parameters: %{
@@ -454,35 +519,93 @@ defmodule Platform.Federation.ToolSurface do
 
   def execute("send_media", args, context) do
     space_id = Map.get(args, "space_id")
-    file_path = Map.get(args, "file_path")
     content = Map.get(args, "content", "")
-    filename = Map.get(args, "filename") || Path.basename(file_path)
 
     participant_id =
       Map.get(context, :agent_participant_id) ||
         get_agent_participant_id_for_space(space_id, context)
 
-    with {:ok, file_meta} <-
-           Chat.AttachmentStorage.persist_upload(file_path, filename),
-         {:ok, message, _attachments} <-
-           Chat.post_message_with_attachments(
+    case normalize_send_media_attachments(args) do
+      {:ok, attachment_specs} ->
+        with {:ok, attachment_attrs} <- persist_send_media_attachments(attachment_specs),
+             {:ok, message, attachments} <-
+               Chat.post_message_with_attachments(
+                 %{
+                   space_id: space_id,
+                   participant_id: participant_id,
+                   content_type: "text",
+                   content: content
+                 },
+                 attachment_attrs
+               ) do
+          {:ok,
+           %{
+             message_id: message.id,
+             space_id: space_id,
+             attachment_count: length(attachments)
+           }}
+        else
+          {:error, reason} ->
+            {:error,
              %{
-               space_id: space_id,
-               participant_id: participant_id,
-               content_type: "text",
-               content: content
-             },
-             [Map.put(file_meta, :message_id, nil)]
-           ) do
-      {:ok, %{message_id: message.id, space_id: space_id}}
-    else
-      {:error, reason} ->
+               error: "Failed to send media: #{inspect(reason)}",
+               recoverable: true,
+               suggestion:
+                 "Check that the files exist and the agent is a participant in the space"
+             }}
+        end
+
+      {:error, message} ->
         {:error,
          %{
-           error: "Failed to send media: #{inspect(reason)}",
+           error: message,
            recoverable: true,
-           suggestion: "Check that the file exists and the agent is a participant in the space"
+           suggestion:
+             "Pass file_paths as a non-empty array, or file_path for a single attachment"
          }}
+    end
+  end
+
+  defp normalize_send_media_attachments(args) do
+    file_paths =
+      case Map.get(args, "file_paths") do
+        paths when is_list(paths) -> Enum.filter(paths, &is_binary/1)
+        _ -> []
+      end
+
+    attachment_specs =
+      cond do
+        file_paths != [] ->
+          Enum.map(file_paths, fn path ->
+            %{path: path, filename: Path.basename(path)}
+          end)
+
+        is_binary(Map.get(args, "file_path")) and Map.get(args, "file_path") != "" ->
+          file_path = Map.get(args, "file_path")
+          filename = Map.get(args, "filename") || Path.basename(file_path)
+          [%{path: file_path, filename: filename}]
+
+        true ->
+          []
+      end
+
+    case attachment_specs do
+      [] -> {:error, "Failed to send media: no file path provided"}
+      specs -> {:ok, specs}
+    end
+  end
+
+  defp persist_send_media_attachments(attachment_specs) do
+    attachment_specs
+    |> Enum.reduce_while({:ok, []}, fn %{path: path, filename: filename}, {:ok, acc} ->
+      case Chat.AttachmentStorage.persist_upload(path, filename) do
+        {:ok, file_meta} -> {:cont, {:ok, [Map.put(file_meta, :message_id, nil) | acc]}}
+        {:error, reason} -> {:halt, {:error, reason}}
+      end
+    end)
+    |> case do
+      {:ok, attachment_attrs} -> {:ok, Enum.reverse(attachment_attrs)}
+      {:error, reason} -> {:error, reason}
     end
   end
 
@@ -1021,6 +1144,144 @@ defmodule Platform.Federation.ToolSurface do
     end
   end
 
+  def execute("validation_pass", args, context) do
+    execute(
+      "validation_evaluate",
+      %{
+        "validation_id" => Map.get(args, "validation_id"),
+        "status" => "passed",
+        "evidence" => Map.get(args, "evidence", %{}),
+        "evaluated_by" => Map.get(args, "evaluated_by", "system")
+      },
+      context
+    )
+  end
+
+  def execute("stage_complete", args, _context) do
+    stage_id = Map.get(args, "stage_id")
+
+    with %Stage{} = stage <- Repo.get(Stage, stage_id),
+         true <- stage.status == "running" || {:error, :not_running},
+         validations <- Tasks.list_validations(stage.id),
+         true <-
+           Enum.all?(validations, &(&1.status == "passed")) || validations == [] ||
+             {:error, :pending_validations},
+         {:ok, plan} <- PlanEngine.advance(stage.plan_id) do
+      fresh_stage = Enum.find(plan.stages || [], &(&1.id == stage.id))
+
+      {:ok,
+       %{
+         stage_id: stage.id,
+         stage_status: fresh_stage && fresh_stage.status,
+         plan_id: plan.id,
+         plan_status: plan.status
+       }}
+    else
+      nil ->
+        {:error,
+         %{
+           error: "Stage not found: #{inspect(stage_id)}",
+           recoverable: true,
+           suggestion: "Verify the stage_id is valid"
+         }}
+
+      {:error, :not_running} ->
+        {:error,
+         %{
+           error: "Stage must be running before it can be completed",
+           recoverable: false,
+           suggestion: "Use stage_list to inspect the current stage status"
+         }}
+
+      {:error, :pending_validations} ->
+        {:error,
+         %{
+           error: "Stage still has pending or failed validations",
+           recoverable: true,
+           suggestion: "Use validation_pass or validation_evaluate before stage_complete"
+         }}
+
+      {:error, reason} ->
+        {:error,
+         %{
+           error: "Failed to complete stage: #{inspect(reason)}",
+           recoverable: true,
+           suggestion: "Verify the stage state and validations"
+         }}
+    end
+  end
+
+  def execute("report_blocker", args, context) do
+    task_id = Map.get(args, "task_id")
+    stage_id = Map.get(args, "stage_id")
+    description = Map.get(args, "description")
+    needs_human = Map.get(args, "needs_human", false)
+
+    cond do
+      is_nil(task_id) or task_id == "" ->
+        {:error,
+         %{
+           error: "task_id is required",
+           recoverable: true,
+           suggestion: "Provide the current task_id from the execution context"
+         }}
+
+      is_nil(stage_id) or stage_id == "" ->
+        {:error,
+         %{
+           error: "stage_id is required",
+           recoverable: true,
+           suggestion: "Provide the current stage_id from the execution context"
+         }}
+
+      is_nil(description) or String.trim(description) == "" ->
+        {:error,
+         %{
+           error: "description is required",
+           recoverable: true,
+           suggestion: "Describe what is blocked and what is needed to continue"
+         }}
+
+      true ->
+        attrs = %{
+          "task_id" => task_id,
+          "phase" => current_phase_for_blocker(task_id),
+          "runtime_id" => Map.get(context, :runtime_id) || "tool-surface",
+          "event_type" => "execution.blocked",
+          "execution_space_id" => execution_space_id_for_task(task_id),
+          "payload" => %{
+            "stage_id" => stage_id,
+            "description" => description,
+            "needs_human" => needs_human,
+            "reported_by" => Map.get(context, :agent_id) || "agent"
+          }
+        }
+
+        case Platform.Orchestration.record_runtime_event(attrs) do
+          {:ok, event} ->
+            if needs_human do
+              if space_id = execution_space_id_for_task(task_id) do
+                Platform.Orchestration.ExecutionSpace.post_engagement(
+                  space_id,
+                  "Blocker reported: #{description}",
+                  metadata: %{"reason" => "runtime_blocker", "stage_id" => stage_id}
+                )
+              end
+            end
+
+            {:ok, %{event_id: event.id, task_id: task_id, stage_id: stage_id, blocked: true}}
+
+          {:error, reason} ->
+            {:error,
+             %{
+               error: "Failed to record blocker: #{inspect(reason)}",
+               recoverable: true,
+               suggestion: "Retry the blocker report or post the blocker in the execution space"
+             }}
+        end
+    end
+  end
+
   def execute("validation_list", args, _context) do
     stage_id = Map.get(args, "stage_id")
     validations = Tasks.list_validations(stage_id)
@@ -1249,6 +1510,39 @@ defmodule Platform.Federation.ToolSurface do
       reviewed_by: item.reviewed_by,
       reviewed_at: format_datetime(item.reviewed_at)
     }
+  end
+
+  defp current_phase_for_blocker(task_id) do
+    case Platform.Tasks.current_plan(task_id) do
+      %{stages: stages} ->
+        cond do
+          Enum.any?(
+            stages || [],
+            &(&1.status == "running" and
+                  String.contains?(String.downcase(&1.name || ""), "review"))
+          ) ->
+            "review"
+
+          Enum.any?(
+            stages || [],
+            &(&1.status == "running" and String.contains?(String.downcase(&1.name || ""), "plan"))
+          ) ->
+            "planning"
+
+          true ->
+            "execution"
+        end
+
+      _ ->
+        "execution"
+    end
+  end
+
+  defp execution_space_id_for_task(task_id) do
+    case Platform.Orchestration.ExecutionSpace.find_by_task_id(task_id) do
+      %{id: id} -> id
+      _ -> nil
+    end
   end
 
   defp get_agent_participant_id_for_space(space_id, context) do

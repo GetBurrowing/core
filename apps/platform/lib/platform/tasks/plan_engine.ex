@@ -48,6 +48,55 @@ defmodule Platform.Tasks.PlanEngine do
   end
 
   @doc """
+  Reopen a failed manual-approval validation so review can be attempted again.
+
+  If the owning stage is failed, it is moved back to `running` and the failed
+  validation is reset to `pending` with cleared evaluation metadata.
+  """
+  @spec reopen_manual_approval(Ecto.UUID.t()) :: {:ok, Validation.t()} | {:error, term()}
+  def reopen_manual_approval(validation_id) do
+    Repo.transaction(fn ->
+      validation = Repo.get!(Validation, validation_id)
+
+      if validation.kind != "manual_approval" do
+        Repo.rollback(:not_manual_approval)
+      end
+
+      stage = Repo.get!(Stage, validation.stage_id)
+
+      cond do
+        validation.status == "passed" ->
+          Repo.rollback(:already_passed)
+
+        stage.status == "failed" ->
+          {:ok, _stage} = transition_stage(stage, "running")
+
+        stage.status in ["running", "pending"] ->
+          :ok
+
+        true ->
+          Repo.rollback(:invalid_stage_state)
+      end
+
+      {:ok, updated} =
+        validation
+        |> Validation.changeset(%{
+          status: "pending",
+          evidence: %{},
+          evaluated_by: nil,
+          evaluated_at: nil
+        })
+        |> Repo.update()
+
+      updated
+    end)
+    |> case do
+      {:ok, validation} -> {:ok, validation}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @doc """
   Record a validation result and auto-advance if this was the last pending
   validation for its stage.
 
@@ -147,7 +196,7 @@ defmodule Platform.Tasks.PlanEngine do
 
       extra =
         case new_status do
-          "running" -> %{started_at: now}
+          "running" -> %{started_at: now, completed_at: nil}
           s when s in ~w(passed failed skipped) -> %{completed_at: now}
           _ -> %{}
         end

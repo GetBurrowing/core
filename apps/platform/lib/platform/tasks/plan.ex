@@ -11,7 +11,8 @@ defmodule Platform.Tasks.Plan do
     belongs_to(:task, Platform.Tasks.Task)
     field(:status, :string, default: "draft")
     field(:version, :integer)
-    field(:approved_by, :binary_id)
+    # Generic actor identifier: may be a user UUID or a system/runtime label.
+    field(:approved_by, :string)
     field(:approved_at, :utc_datetime_usec)
 
     has_many(:stages, Platform.Tasks.Stage)

@@ -38,6 +38,7 @@ defmodule PlatformWeb.Router do
     get("/", PageController, :home)
 
     get("/chat/attachments/:id", ChatAttachmentController, :show)
+    get("/artifacts/preview", ArtifactPreviewController, :show)
 
     live_session :authenticated,
       on_mount: [PlatformWeb.ShellLive],

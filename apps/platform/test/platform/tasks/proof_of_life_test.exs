@@ -60,9 +60,10 @@ defmodule Platform.Tasks.ProofOfLifeTest do
   end
 
   defp temp_dir(prefix) do
-    path =
-      Path.join(System.tmp_dir!(), "#{prefix}-#{System.unique_integer([:positive, :monotonic])}")
+    suffix = Base.encode16(:crypto.strong_rand_bytes(6), case: :lower)
+    path = Path.join(System.tmp_dir!(), "#{prefix}-#{System.system_time(:nanosecond)}-#{suffix}")
 
+    File.rm_rf!(path)
     File.mkdir_p!(path)
     path
   end
@@ -89,23 +90,29 @@ defmodule Platform.Tasks.ProofOfLifeTest do
     bare = Path.join(root, "bare.git")
     clone = Path.join(root, "clone")
 
-    System.cmd("git", ["init", "--bare", "--initial-branch=main", bare], stderr_to_stdout: true)
+    assert_cmd!("git", ["init", "--bare", "--initial-branch=main", bare])
 
     seed = Path.join(root, "seed")
     File.mkdir_p!(seed)
-    System.cmd("git", ["init", "--initial-branch=main"], cd: seed, stderr_to_stdout: true)
-    System.cmd("git", ["config", "user.email", "test@suite.local"], cd: seed)
-    System.cmd("git", ["config", "user.name", "Test"], cd: seed)
+    assert_cmd!("git", ["init", "--initial-branch=main"], cd: seed)
+    assert_cmd!("git", ["config", "user.email", "test@suite.local"], cd: seed)
+    assert_cmd!("git", ["config", "user.name", "Test"], cd: seed)
     File.write!(Path.join(seed, "README.md"), "# proof flow\n")
-    System.cmd("git", ["add", "."], cd: seed)
-    System.cmd("git", ["commit", "-m", "init"], cd: seed, stderr_to_stdout: true)
-    System.cmd("git", ["remote", "add", "origin", bare], cd: seed)
-    System.cmd("git", ["push", "origin", "main"], cd: seed, stderr_to_stdout: true)
+    assert_cmd!("git", ["add", "."], cd: seed)
+    assert_cmd!("git", ["commit", "-m", "init"], cd: seed)
+    assert_cmd!("git", ["remote", "add", "origin", bare], cd: seed)
+    assert_cmd!("git", ["push", "origin", "main"], cd: seed)
 
-    System.cmd("git", ["clone", bare, clone], stderr_to_stdout: true)
-    System.cmd("git", ["config", "user.email", "test@suite.local"], cd: clone)
-    System.cmd("git", ["config", "user.name", "Suite Bot"], cd: clone)
+    assert_cmd!("git", ["clone", bare, clone])
+    assert_cmd!("git", ["config", "user.email", "test@suite.local"], cd: clone)
+    assert_cmd!("git", ["config", "user.name", "Suite Bot"], cd: clone)
 
     {clone, bare}
+  end
+
+  defp assert_cmd!(command, args, opts \\ []) do
+    {output, code} = System.cmd(command, args, Keyword.put_new(opts, :stderr_to_stdout, true))
+    assert code == 0, "command failed: #{command} #{Enum.join(args, " ")}\n#{output}"
+    output
   end
 end

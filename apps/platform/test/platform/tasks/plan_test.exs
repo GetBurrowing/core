@@ -41,6 +41,19 @@ defmodule Platform.Tasks.PlanTest do
       assert plan.approved_at != nil
     end
 
+    test "approval stores string actor id and moves planning task to in_progress", %{task: task} do
+      {:ok, task} = Tasks.update_task(task, %{status: "planning"})
+      {:ok, plan} = Tasks.create_plan(%{task_id: task.id})
+      {:ok, plan} = Tasks.submit_plan_for_review(plan)
+
+      assert {:ok, plan} = Tasks.approve_plan(plan, "system")
+      assert plan.status == "approved"
+      assert plan.approved_by == "system"
+
+      updated_task = Tasks.get_task_record(task.id)
+      assert updated_task.status == "in_progress"
+    end
+
     test "draft → pending_review → rejected", %{task: task} do
       {:ok, plan} = Tasks.create_plan(%{task_id: task.id})
       {:ok, plan} = Tasks.submit_plan_for_review(plan)

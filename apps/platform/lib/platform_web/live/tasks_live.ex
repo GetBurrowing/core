@@ -6,6 +6,7 @@ defmodule PlatformWeb.TasksLive do
   import Ecto.Query
 
   alias Platform.Chat
+  alias Platform.Chat.Canvas
   alias Platform.Chat.AttachmentStorage
   alias Platform.Orchestration.ExecutionSpace
   alias Platform.Repo
@@ -38,6 +39,7 @@ defmodule PlatformWeb.TasksLive do
     projects = Tasks.list_projects()
     all_tasks = Tasks.list_all_tasks()
     agents = Chat.list_agents_for_picker()
+    default_task_agent_id = default_task_agent_id(agents)
 
     {:ok,
      socket
@@ -62,7 +64,13 @@ defmodule PlatformWeb.TasksLive do
      |> assign(:execution_log_collapsed, false)
      # Bottom sheet state
      |> assign(:show_task_sheet, false)
-     |> assign(:task_form, to_form(Task.changeset(%Task{}, %{}), as: "task"))
+     |> assign(:default_task_agent_id, default_task_agent_id)
+     |> assign(
+       :task_form,
+       to_form(Task.changeset(%Task{}, default_task_form_attrs(default_task_agent_id)),
+         as: "task"
+       )
+     )
      |> assign(:sheet_what, "")
      |> assign(:sheet_why, "")
      |> assign(:epics, enrich_epics(Tasks.list_epics_for_project(nil)))
@@ -71,6 +79,10 @@ defmodule PlatformWeb.TasksLive do
      |> assign(:validation_modes, MapSet.new())
      |> assign(:manual_validation_text, "")
      |> assign(:pending_reviews, [])
+     |> assign(:review_canvases, %{})
+     |> assign(:review_output_ids, MapSet.new())
+     |> assign(:output_canvases, [])
+     |> assign(:active_review_canvas, nil)
      |> assign(:review_feedback_open, MapSet.new())
      |> assign(:review_items_feedback, %{})
      |> assign(:attached_skills, [])
@@ -100,6 +112,9 @@ defmodule PlatformWeb.TasksLive do
           if space_id, do: Chat.PubSub.subscribe(space_id)
 
           pending_reviews = ReviewRequests.list_pending_for_task(task.id)
+          review_canvases = load_review_canvases(pending_reviews)
+          review_output_ids = review_canvas_ids(pending_reviews)
+          output_canvases = load_output_canvases(space_id)
           attached_skills = Skills.resolve_skills(task.id)
 
           {:noreply,
@@ -109,6 +124,10 @@ defmodule PlatformWeb.TasksLive do
            |> assign(:execution_space_id, space_id)
            |> assign(:execution_log, log)
            |> assign(:pending_reviews, pending_reviews)
+           |> assign(:review_canvases, review_canvases)
+           |> assign(:review_output_ids, review_output_ids)
+           |> assign(:output_canvases, output_canvases)
+           |> assign(:active_review_canvas, nil)
            |> assign(:attached_skills, attached_skills)
            |> assign(:available_skills, Skills.list_skills())
            |> assign(:page_title, "Tasks · #{task.title}")}
@@ -119,6 +138,11 @@ defmodule PlatformWeb.TasksLive do
            |> assign(:show_detail, false)
            |> assign(:execution_space_id, nil)
            |> assign(:execution_log, [])
+           |> assign(:pending_reviews, [])
+           |> assign(:review_canvases, %{})
+           |> assign(:review_output_ids, MapSet.new())
+           |> assign(:output_canvases, [])
+           |> assign(:active_review_canvas, nil)
            |> put_flash(:error, "Task not found.")}
         end
 
@@ -129,6 +153,11 @@ defmodule PlatformWeb.TasksLive do
          |> assign(:show_detail, false)
          |> assign(:execution_space_id, nil)
          |> assign(:execution_log, [])
+         |> assign(:pending_reviews, [])
+         |> assign(:review_canvases, %{})
+         |> assign(:review_output_ids, MapSet.new())
+         |> assign(:output_canvases, [])
+         |> assign(:active_review_canvas, nil)
          |> put_flash(:error, "Invalid task ID.")}
     end
   end
@@ -207,6 +236,11 @@ defmodule PlatformWeb.TasksLive do
      |> assign(:show_detail, false)
      |> assign(:execution_space_id, nil)
      |> assign(:execution_log, [])
+     |> assign(:pending_reviews, [])
+     |> assign(:review_canvases, %{})
+     |> assign(:review_output_ids, MapSet.new())
+     |> assign(:output_canvases, [])
+     |> assign(:active_review_canvas, nil)
      |> push_patch(to: ~p"/tasks")}
   end
 
@@ -402,6 +436,20 @@ defmodule PlatformWeb.TasksLive do
     {:noreply, assign(socket, :review_feedback_open, updated)}
   end
 
+  def handle_event("open_review_canvas", %{"canvas-id" => canvas_id}, socket) do
+    canvas = find_canvas_for_display(socket, canvas_id)
+    {:noreply, assign(socket, :active_review_canvas, canvas)}
+  end
+
+  def handle_event("open_canvas", %{"canvas-id" => canvas_id}, socket) do
+    canvas = find_canvas_for_display(socket, canvas_id)
+    {:noreply, assign(socket, :active_review_canvas, canvas)}
+  end
+
+  def handle_event("close_review_canvas", _params, socket) do
+    {:noreply, assign(socket, :active_review_canvas, nil)}
+  end
+
   def handle_event(
         "update_review_feedback_text",
         %{"item-id" => item_id, "value" => text},
@@ -424,7 +472,16 @@ defmodule PlatformWeb.TasksLive do
       if showing do
         socket
         |> assign(:show_task_sheet, true)
-        |> assign(:task_form, to_form(Task.changeset(%Task{}, %{}), as: "task"))
+        |> assign(
+          :task_form,
+          to_form(
+            Task.changeset(
+              %Task{},
+              default_task_form_attrs(socket.assigns.default_task_agent_id)
+            ),
+            as: "task"
+          )
+        )
         |> assign(:sheet_what, "")
         |> assign(:sheet_why, "")
         |> assign(:validation_modes, MapSet.new())
@@ -507,7 +564,11 @@ defmodule PlatformWeb.TasksLive do
 
       space_id ->
         log = ExecutionSpace.list_messages_with_participants(space_id)
-        {:noreply, assign(socket, :execution_log, log)}
+
+        {:noreply,
+         socket
+         |> assign(:execution_log, log)
+         |> assign(:output_canvases, load_output_canvases(space_id))}
     end
   end
 
@@ -516,6 +577,20 @@ defmodule PlatformWeb.TasksLive do
   # ── Private — Task creation ─────────────────────────────────────────────
 
   defp do_create_task(params, socket, status) do
+    requested_plan? = status == "planning"
+
+    case normalize_task_assignee(params, socket.assigns.default_task_agent_id, requested_plan?) do
+      {:error, :no_agent_available} ->
+        {:noreply,
+         socket
+         |> put_flash(:error, "Select an agent before requesting a plan.")}
+
+      normalized_assignee ->
+        do_create_task_with_assignee(params, socket, status, normalized_assignee)
+    end
+  end
+
+  defp do_create_task_with_assignee(params, socket, status, {assignee_id, assignee_type}) do
     what = Map.get(params, "what", "")
     why = Map.get(params, "why", "")
 
@@ -560,6 +635,8 @@ defmodule PlatformWeb.TasksLive do
       |> Map.put("status", status)
       |> Map.put("metadata", metadata)
       |> Map.put("deploy_target", deploy_target)
+      |> Map.put("assignee_id", assignee_id)
+      |> Map.put("assignee_type", assignee_type)
 
     case Tasks.create_task(task_attrs) do
       {:ok, task} ->
@@ -568,10 +645,15 @@ defmodule PlatformWeb.TasksLive do
 
         Tasks.broadcast_board({:task_created, task})
 
+        flash_message =
+          if status == "planning",
+            do: "Task created and planning requested.",
+            else: "Task created."
+
         {:noreply,
          socket
          |> assign(:show_task_sheet, false)
-         |> put_flash(:info, "Task created.")
+         |> put_flash(:info, flash_message)
          |> refresh_board()}
 
       {:error, changeset} ->
@@ -658,18 +740,68 @@ defmodule PlatformWeb.TasksLive do
     if task = socket.assigns[:selected_task] do
       updated = Tasks.get_task_detail(task.id)
       pending_reviews = if updated, do: ReviewRequests.list_pending_for_task(updated.id), else: []
+      review_canvases = load_review_canvases(pending_reviews)
+      review_output_ids = review_canvas_ids(pending_reviews)
+      output_canvases = load_output_canvases(socket.assigns[:execution_space_id])
       attached_skills = if updated, do: Skills.resolve_skills(updated.id), else: []
+
+      active_review_canvas =
+        case socket.assigns[:active_review_canvas] do
+          %Canvas{id: id} ->
+            Enum.find(output_canvases, &(&1.id == id)) || Map.get(review_canvases, id)
+
+          _ ->
+            nil
+        end
 
       socket
       |> assign(:selected_task, updated)
       |> assign(:pending_reviews, pending_reviews)
+      |> assign(:review_canvases, review_canvases)
+      |> assign(:review_output_ids, review_output_ids)
+      |> assign(:output_canvases, output_canvases)
+      |> assign(:active_review_canvas, active_review_canvas)
       |> assign(:attached_skills, attached_skills)
       |> refresh_execution_log()
     else
       socket
       |> assign(:pending_reviews, [])
+      |> assign(:review_canvases, %{})
+      |> assign(:review_output_ids, MapSet.new())
+      |> assign(:output_canvases, [])
+      |> assign(:active_review_canvas, nil)
       |> assign(:attached_skills, [])
     end
+  end
+
+  defp load_review_canvases(pending_reviews) do
+    pending_reviews
+    |> Enum.flat_map(&(&1.items || []))
+    |> Enum.map(& &1.canvas_id)
+    |> Enum.filter(&is_binary/1)
+    |> Enum.uniq()
+    |> Enum.reduce(%{}, fn canvas_id, acc ->
+      case Chat.get_canvas(canvas_id) do
+        %Canvas{} = canvas -> Map.put(acc, canvas_id, canvas)
+        _ -> acc
+      end
+    end)
+  end
+
+  defp review_canvas_ids(pending_reviews) do
+    pending_reviews
+    |> Enum.flat_map(&(&1.items || []))
+    |> Enum.map(& &1.canvas_id)
+    |> Enum.filter(&is_binary/1)
+    |> MapSet.new()
+  end
+
+  defp load_output_canvases(nil), do: []
+  defp load_output_canvases(space_id), do: Chat.list_canvases(space_id)
+
+  defp find_canvas_for_display(socket, canvas_id) do
+    Enum.find(socket.assigns[:output_canvases] || [], &(&1.id == canvas_id)) ||
+      Map.get(socket.assigns[:review_canvases] || %{}, canvas_id)
   end
 
   defp count_pending_plans(tasks) do
@@ -756,6 +888,38 @@ defmodule PlatformWeb.TasksLive do
 
   defp assignee_initials(_), do: nil
 
+  defp default_task_agent_id([agent | _]), do: agent.id
+  defp default_task_agent_id([]), do: nil
+
+  defp default_task_form_attrs(nil), do: %{}
+
+  defp default_task_form_attrs(agent_id) do
+    %{"assignee_id" => agent_id, "assignee_type" => "agent"}
+  end
+
+  defp normalize_task_assignee(params, default_agent_id, requested_plan?) do
+    selected_assignee_id =
+      case Map.get(params, "assignee_id", "") do
+        "" -> nil
+        nil -> nil
+        id -> id
+      end
+
+    cond do
+      is_binary(selected_assignee_id) ->
+        {selected_assignee_id, "agent"}
+
+      requested_plan? && is_binary(default_agent_id) ->
+        {default_agent_id, "agent"}
+
+      requested_plan? ->
+        {:error, :no_agent_available}
+
+      true ->
+        {nil, nil}
+    end
+  end
+
   defp available_transitions("backlog"), do: [{"planning", "Start Planning"}]
   defp available_transitions("planning"), do: [{"ready", "Mark Ready"}, {"backlog", "Back"}]
   defp available_transitions("ready"), do: [{"in_progress", "Start"}, {"planning", "Back"}]
@@ -763,8 +927,8 @@ defmodule PlatformWeb.TasksLive do
   defp available_transitions("in_progress"),
     do: [{"in_review", "Submit for Review"}, {"done", "Mark Done"}]
 
-  defp available_transitions("in_review"),
-    do: [{"done", "Approve"}, {"in_progress", "Return"}]
+  # Review outcomes flow through validations / review requests, not blunt status buttons.
+  defp available_transitions("in_review"), do: []
 
   defp available_transitions("blocked"),
     do: [{"backlog", "To Backlog"}, {"in_progress", "Resume"}]

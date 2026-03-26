@@ -1,7 +1,11 @@
 defmodule Platform.Orchestration.TaskRouterWatcherTest do
   use Platform.DataCase, async: false
 
+  alias Platform.Accounts.User
+  alias Platform.Agents.Agent
+  alias Platform.Federation
   alias Platform.Orchestration.{TaskRouterSupervisor, TaskRouterWatcher}
+  alias Platform.Repo
   alias Platform.Tasks
 
   # Allow dynamically spawned TaskRouter GenServers to share the test sandbox.
@@ -112,7 +116,39 @@ defmodule Platform.Orchestration.TaskRouterWatcherTest do
 
   # ── PubSub-driven start/stop ───────────────────────────────────────────
 
-  describe "task_updated event handling" do
+  describe "task lifecycle event handling" do
+    test "watcher starts router when an active agent-assigned task is created", %{task: task} do
+      user = create_user()
+      agent = create_agent()
+
+      {:ok, runtime} =
+        Federation.register_runtime(user.id, %{
+          runtime_id: "watcher-created-#{System.unique_integer([:positive])}"
+        })
+
+      {:ok, activated, _raw_token} = Federation.activate_runtime(runtime)
+      {:ok, _linked_agent} = Federation.link_agent(activated, agent)
+
+      {:ok, created_task} =
+        Tasks.update_task(task, %{
+          status: "planning",
+          assignee_type: "agent",
+          assignee_id: agent.id
+        })
+
+      assert TaskRouterWatcher.router_running?(task.id) == false
+
+      watcher_pid = Process.whereis(TaskRouterWatcher)
+      assert watcher_pid != nil, "TaskRouterWatcher should be running"
+
+      send(watcher_pid, {:task_created, created_task})
+      Process.sleep(100)
+
+      assert TaskRouterWatcher.router_running?(task.id) == true
+
+      TaskRouterSupervisor.stop_assignment(task.id)
+    end
+
     test "watcher starts router when task transitions to active status with agent assignee",
          %{task: task} do
       # Ensure no router running
@@ -228,6 +264,29 @@ defmodule Platform.Orchestration.TaskRouterWatcherTest do
   end
 
   # ── Private helpers ────────────────────────────────────────────────────
+
+  defp create_user do
+    Repo.insert!(%User{
+      email: "watcher_test_#{System.unique_integer([:positive])}@example.com",
+      name: "Watcher Test User",
+      oidc_sub: "oidc-watcher-test-#{System.unique_integer([:positive])}"
+    })
+  end
+
+  defp create_agent(attrs \\ %{}) do
+    defaults = %{
+      slug: "watcher-agent-#{System.unique_integer([:positive])}",
+      name: "Watcher Test Agent",
+      status: "active"
+    }
+
+    {:ok, agent} =
+      %Agent{}
+      |> Agent.changeset(Map.merge(defaults, attrs))
+      |> Repo.insert()
+
+    agent
+  end
 
   defp stop_router_if_running(task_id) do
     case Registry.lookup(Platform.Orchestration.Registry, task_id) do

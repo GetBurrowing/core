@@ -72,10 +72,26 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
       assert prompt =~ "Auth is broken"
       assert prompt =~ "plan_create"
       assert prompt =~ "plan_submit"
+      assert prompt =~ "Implementation stages"
+      assert prompt =~ "test_pass"
+      assert prompt =~ "lint_pass"
+      assert prompt =~ "Push branch when implementation stages are complete"
+      assert prompt =~ "do NOT open a PR yet"
+      assert prompt =~ "Final review stage"
+      assert prompt =~ "take a screenshot or canvas snapshot as evidence"
+      assert prompt =~ "manual_approval"
+      assert prompt =~ "suite_review_request_create"
+
+      assert prompt =~
+               "screenshot into the execution space so the human can review before approving"
+
+      assert prompt =~ "open the PR and include the PR link as evidence on the final validation"
+      assert prompt =~ "Do NOT include `code_review` as a validation kind"
+      assert prompt =~ "Do not begin implementation until approved"
       assert prompt =~ "high"
     end
 
-    test "in_progress generates execution prompt with git workflow" do
+    test "in_progress generates execution prompt with git workflow and completion contract" do
       task = %{
         id: "task-1234abcd",
         title: "Fix auth bug",
@@ -86,7 +102,13 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
       }
 
       plan = %{version: 1, stages: [%{}]}
-      stage = %{position: 1, name: "coding"}
+
+      stage = %{
+        id: "stage-123",
+        position: 1,
+        name: "coding",
+        validations: [%{id: "val-123", kind: "test_pass"}]
+      }
 
       prompt = HeartbeatScheduler.dispatch_prompt(task, plan, stage)
 
@@ -97,10 +119,42 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
       assert prompt =~ "Git Workflow (CRITICAL)"
       assert prompt =~ "git worktree add ../worktrees/task"
       assert prompt =~ "https://github.com/test/router"
+      assert prompt =~ "Do NOT open a PR yet"
+      assert prompt =~ "PR opening happens after successful review in `in_review`"
+      assert prompt =~ "Current stage_id: `stage-123`"
+      assert prompt =~ "validation_id=`val-123`"
+      assert prompt =~ "task_id=task-1234abcd"
+    end
+
+    test "in_progress omits git workflow for placeholder repos and still includes completion contract" do
+      task = %{
+        id: "task-local-proof",
+        title: "Proof task",
+        description: "Use the local proof stack",
+        status: "in_progress",
+        priority: "medium",
+        project: %{
+          repo_url: "https://example.invalid/local-task-lifecycle-proof",
+          default_branch: "main"
+        }
+      }
+
+      plan = %{version: 1, stages: [%{}]}
+      stage = %{id: "stage-local", position: 1, name: "proof", validations: []}
+
+      prompt = HeartbeatScheduler.dispatch_prompt(task, plan, stage)
+
+      refute prompt =~ "Git Workflow (CRITICAL)"
+      refute prompt =~ "example.invalid"
+      assert prompt =~ "Current stage_id: `stage-local`"
+      assert prompt =~ "This stage has no validations"
+      assert prompt =~ "stage_complete"
+      assert prompt =~ "report_blocker"
     end
 
     test "in_review generates explicit validation prompt" do
       task = %{
+        id: "task-review-1",
         title: "Review task",
         description: "Check it",
         status: "in_review",
@@ -109,17 +163,70 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
       }
 
       plan = %{version: 1, stages: [%{}]}
-      stage = %{position: 1, name: "review"}
+
+      stage = %{
+        id: "stage-review-1",
+        position: 1,
+        name: "review",
+        validations: [
+          %{id: "val-pass-1", kind: "test_pass"},
+          %{id: "val-manual-1", kind: "manual_approval"}
+        ]
+      }
 
       prompt = HeartbeatScheduler.dispatch_prompt(task, plan, stage)
 
       assert prompt =~ "Review task"
       assert prompt =~ "validate the implementation"
-      assert prompt =~ "git merge-base --is-ancestor origin/main HEAD"
-      assert prompt =~ "git merge --no-commit --no-ff origin/main"
-      assert prompt =~ "task_update"
+      assert prompt =~ "suite_validation_evaluate"
+      assert prompt =~ "suite_review_request_create"
+      assert prompt =~ "manual_approval"
+      assert prompt =~ "Do NOT self-approve `manual_approval` validations"
+      assert prompt =~ "Current task_id: `task-review-1`"
+      assert prompt =~ "Current stage_id: `stage-review-1`"
+      assert prompt =~ "validation_id=`val-pass-1`"
+      assert prompt =~ "validation_id=`val-manual-1`"
+      assert prompt =~ "Do NOT call `task_update` for lifecycle status changes"
+      assert prompt =~ "Review outcomes flow through validations and review requests"
+      assert prompt =~ "If review evidence shows the feature is not good enough"
+      assert prompt =~ "fail the relevant validation so the task can return to `in_progress`"
       assert prompt =~ "in_progress"
-      assert prompt =~ "done"
+      refute prompt =~ "call `task_update` to move the task to `done`"
+      refute prompt =~ "call `task_update` to move the task back to `in_progress`"
+    end
+
+    test "in_review strips placeholder repo git instructions from stale template" do
+      task = %{
+        id: "task-review-local",
+        title: "Proof review task",
+        description: "Check the local proof",
+        status: "in_review",
+        priority: "medium",
+        project: %{
+          repo_url: "https://example.invalid/local-task-lifecycle-proof",
+          default_branch: "main"
+        }
+      }
+
+      plan = %{version: 1, stages: [%{}]}
+
+      stage = %{
+        id: "stage-review-local",
+        position: 1,
+        name: "review",
+        validations: [%{id: "val-manual-local", kind: "manual_approval"}]
+      }
+
+      prompt = HeartbeatScheduler.dispatch_prompt(task, plan, stage)
+
+      refute prompt =~ "example.invalid"
+      refute prompt =~ "git merge-base"
+      refute prompt =~ "gh` CLI"
+      refute prompt =~ "call `task_update` to move the task to `done`"
+      refute prompt =~ "call `task_update` to move the task back to `in_progress`"
+      assert prompt =~ "suite_review_request_create"
+      assert prompt =~ "validation_id=`val-manual-local`"
+      assert prompt =~ "Current stage_id: `stage-review-local`"
     end
 
     test "fallback generates generic assignment prompt" do
@@ -168,12 +275,14 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
     end
 
     test "handles zero pending validations" do
-      task = %{title: "Task"}
-      stage = %{name: "review", status: "running"}
+      task = %{id: "task-1", title: "Task"}
+      stage = %{id: "stage-1", name: "review", status: "running"}
 
       prompt = HeartbeatScheduler.heartbeat_prompt(task, stage, 60, [])
 
       assert prompt =~ "none"
+      assert prompt =~ "Current stage_id: `stage-1`"
+      assert prompt =~ "stage_complete"
     end
 
     test "formats hours correctly" do

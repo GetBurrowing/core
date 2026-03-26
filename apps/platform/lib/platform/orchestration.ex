@@ -19,14 +19,22 @@ defmodule Platform.Orchestration do
     - `resolve_runtime_for_task/1` — resolve agent runtime for a task
   """
 
-  alias Platform.Orchestration.TaskRouterWatcher
-  alias Platform.Orchestration.TaskRouter
+  alias Platform.Orchestration.{RuntimeSupervision, TaskRouter, TaskRouterWatcher}
 
   @doc "Get current router status for a task."
   @spec task_status(String.t()) :: map()
   def task_status(task_id) do
     TaskRouter.current_status(task_id)
   end
+
+  @doc "Persist a normalized runtime execution event and update lease state."
+  defdelegate record_runtime_event(attrs), to: RuntimeSupervision, as: :record_event
+
+  @doc "Fetch the current active execution lease for a task, if any."
+  defdelegate current_lease_for_task(task_id), to: RuntimeSupervision
+
+  @doc "Fetch the current active execution lease for a specific task/runtime pair, if any."
+  defdelegate current_lease_for_task_runtime(task_id, runtime_id), to: RuntimeSupervision
 
   @doc """
   Resolve the agent runtime for a task with an agent assignee.

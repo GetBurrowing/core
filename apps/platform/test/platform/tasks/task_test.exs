@@ -1,8 +1,10 @@
 defmodule Platform.Tasks.TaskTest do
   use Platform.DataCase, async: true
 
+  alias Platform.Orchestration.RuntimeSupervision
+  alias Platform.Repo
   alias Platform.Tasks
-  alias Platform.Tasks.Task
+  alias Platform.Tasks.{PlanEngine, Stage, Task, Validation}
 
   setup do
     {:ok, project} = Tasks.create_project(%{name: "Test Project"})
@@ -72,6 +74,69 @@ defmodule Platform.Tasks.TaskTest do
     test "blocked can go to multiple states", %{project: project} do
       {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "T", status: "blocked"})
       assert {:ok, _} = Tasks.transition_task_status(task, "backlog")
+    end
+  end
+
+  describe "transition_task/2" do
+    test "reopens a failed manual approval gate and abandons stale execution lease before moving back to in_review",
+         %{project: project} do
+      {:ok, task} =
+        Tasks.create_task(%{project_id: project.id, title: "Retry review", status: "in_progress"})
+
+      {:ok, plan} = Tasks.create_plan(%{task_id: task.id, status: "approved"})
+
+      {:ok, stage} =
+        Tasks.create_stage(%{
+          plan_id: plan.id,
+          position: 1,
+          name: "Manual review",
+          status: "running"
+        })
+
+      {:ok, validation} =
+        Tasks.create_validation(%{stage_id: stage.id, kind: "manual_approval", status: "pending"})
+
+      {:ok, started_event} =
+        RuntimeSupervision.record_event(%{
+          "task_id" => task.id,
+          "phase" => "execution",
+          "runtime_id" => "runtime:test",
+          "event_type" => "execution.started"
+        })
+
+      {:ok, _blocked_event} =
+        RuntimeSupervision.record_event(%{
+          "task_id" => task.id,
+          "phase" => "execution",
+          "runtime_id" => "runtime:test",
+          "event_type" => "execution.blocked",
+          "payload" => %{"description" => "waiting on review retry"}
+        })
+
+      {:ok, _} =
+        PlanEngine.evaluate_validation(validation.id, %{status: "failed", evaluated_by: "test"})
+
+      assert Repo.get!(Stage, stage.id).status == "failed"
+      assert Repo.get!(Validation, validation.id).status == "failed"
+      assert RuntimeSupervision.current_lease_for_task(task.id).status == "blocked"
+
+      assert {:ok, updated_task} = Tasks.transition_task(task, "in_review")
+      assert updated_task.status == "in_review"
+
+      retried_stage = Repo.get!(Stage, stage.id)
+      assert retried_stage.status == "running"
+      assert retried_stage.completed_at == nil
+
+      retried_validation = Repo.get!(Validation, validation.id)
+      assert retried_validation.status == "pending"
+      assert retried_validation.evidence == %{}
+      assert retried_validation.evaluated_by == nil
+      assert retried_validation.evaluated_at == nil
+
+      assert RuntimeSupervision.current_lease_for_task(task.id) == nil
+
+      assert Repo.get!(Platform.Orchestration.ExecutionLease, started_event.lease_id).status ==
+               "abandoned"
     end
   end
 

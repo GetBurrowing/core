@@ -39,6 +39,7 @@ defmodule PlatformWeb.Chat.CanvasRenderer do
   """
   attr(:canvas, Canvas, required: true)
   attr(:inline, :boolean, default: false)
+  attr(:show_header, :boolean, default: true)
 
   def canvas_document(assigns) do
     state = assigns.canvas.state || %{}
@@ -101,6 +102,86 @@ defmodule PlatformWeb.Chat.CanvasRenderer do
         >
           <div class="p-4 flex flex-col gap-3">
             <.render_node :for={node <- @a2ui_nodes} node={node} />
+          </div>
+        </div>
+        """
+
+      review_evidence_manifest?(state) ->
+        artifacts = review_artifacts(state)
+
+        assigns =
+          assigns
+          |> assign(:summary, review_summary(state))
+          |> assign(:checks, review_checks(state))
+          |> assign(:image_artifacts, Enum.filter(artifacts, &image_artifact?/1))
+          |> assign(:supporting_artifacts, Enum.reject(artifacts, &image_artifact?/1))
+
+        ~H"""
+        <div id={"canvas-review-evidence-#{@canvas.id}"} class="space-y-4 p-4">
+          <div :if={@summary} class="rounded-xl border border-base-300 bg-base-100 p-4">
+            <p class="text-xs font-semibold uppercase tracking-widest text-base-content/50">
+              Summary
+            </p>
+            <p class="mt-2 text-sm leading-6 text-base-content/80">{@summary}</p>
+          </div>
+
+          <div :if={@checks != []} class="rounded-xl border border-base-300 bg-base-100 p-4">
+            <p class="text-xs font-semibold uppercase tracking-widest text-base-content/50">
+              Checks
+            </p>
+            <ul class="mt-2 space-y-2">
+              <li :for={check <- @checks} class="flex items-start gap-2 text-sm text-base-content/80">
+                <span class="hero-check-circle size-4 shrink-0 text-success mt-0.5"></span>
+                <span>{check}</span>
+              </li>
+            </ul>
+          </div>
+
+          <div :if={@image_artifacts != []} class="space-y-2">
+            <p class="text-xs font-semibold uppercase tracking-widest text-base-content/50">
+              Preview
+            </p>
+            <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+              <a
+                :for={artifact <- @image_artifacts}
+                href={artifact_preview_url(artifact["path"])}
+                target="_blank"
+                rel="noreferrer"
+                class="overflow-hidden rounded-xl border border-base-300 bg-base-100 transition hover:border-primary/40 hover:shadow-sm"
+              >
+                <img
+                  src={artifact_preview_url(artifact["path"])}
+                  alt={artifact_label(artifact)}
+                  class="block h-48 w-full object-cover bg-base-200"
+                  loading="lazy"
+                />
+                <div class="space-y-1 p-3">
+                  <div class="text-sm font-medium text-base-content">{artifact_label(artifact)}</div>
+                  <div class="text-xs text-base-content/50">{Path.basename(artifact["path"] || "")}</div>
+                </div>
+              </a>
+            </div>
+          </div>
+
+          <div :if={@supporting_artifacts != []} class="rounded-xl border border-base-300 bg-base-100 p-4">
+            <p class="text-xs font-semibold uppercase tracking-widest text-base-content/50">
+              Supporting files
+            </p>
+            <div class="mt-2 space-y-2">
+              <a
+                :for={artifact <- @supporting_artifacts}
+                href={artifact_preview_url(artifact["path"])}
+                target="_blank"
+                rel="noreferrer"
+                class="flex items-center justify-between gap-3 rounded-lg border border-base-300 bg-base-200/40 px-3 py-2 text-sm hover:border-primary/40 hover:bg-base-200"
+              >
+                <div class="min-w-0">
+                  <div class="truncate font-medium text-base-content">{artifact_label(artifact)}</div>
+                  <div class="truncate text-xs text-base-content/50">{artifact["path"]}</div>
+                </div>
+                <span class="hero-arrow-top-right-on-square size-4 shrink-0 text-base-content/40"></span>
+              </a>
+            </div>
           </div>
         </div>
         """
@@ -383,6 +464,57 @@ defmodule PlatformWeb.Chat.CanvasRenderer do
       do: true
 
   def canonical_document?(_), do: false
+
+  defp review_evidence_manifest?(%{"summary" => summary, "artifacts" => artifacts})
+       when is_binary(summary) and is_list(artifacts),
+       do: true
+
+  defp review_evidence_manifest?(%{"checks" => checks, "artifacts" => artifacts})
+       when is_list(checks) and is_list(artifacts),
+       do: true
+
+  defp review_evidence_manifest?(_), do: false
+
+  defp review_summary(%{"summary" => summary}) when is_binary(summary) and summary != "",
+    do: summary
+
+  defp review_summary(_), do: nil
+
+  defp review_checks(%{"checks" => checks}) when is_list(checks) do
+    checks
+    |> Enum.map(&to_string/1)
+    |> Enum.reject(&(&1 == ""))
+  end
+
+  defp review_checks(_), do: []
+
+  defp review_artifacts(%{"artifacts" => artifacts}) when is_list(artifacts) do
+    Enum.filter(artifacts, fn
+      %{"path" => path} when is_binary(path) and path != "" -> true
+      _ -> false
+    end)
+  end
+
+  defp review_artifacts(_), do: []
+
+  defp artifact_label(%{"label" => label}) when is_binary(label) and label != "", do: label
+  defp artifact_label(%{"path" => path}) when is_binary(path), do: Path.basename(path)
+  defp artifact_label(_), do: "Artifact"
+
+  defp image_artifact?(%{"path" => path}) when is_binary(path) do
+    path
+    |> Path.extname()
+    |> String.downcase()
+    |> then(&(&1 in [".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"]))
+  end
+
+  defp image_artifact?(_), do: false
+
+  defp artifact_preview_url(path) when is_binary(path) and path != "" do
+    "/artifacts/preview?path=" <> URI.encode_www_form(path)
+  end
+
+  defp artifact_preview_url(_), do: "#"
 
   defp text_size_class(%{"props" => props}) when is_map(props) do
     size = Map.get(props, "size", "sm")

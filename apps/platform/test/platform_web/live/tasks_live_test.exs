@@ -4,8 +4,12 @@ defmodule PlatformWeb.TasksLiveTest do
   import Phoenix.LiveViewTest
 
   alias Platform.Accounts.User
+  alias Platform.Agents.Agent
+  alias Platform.Chat
+  alias Platform.Chat.Canvas
+  alias Platform.Orchestration.ExecutionSpace
   alias Platform.{Repo, Tasks}
-  alias Platform.Tasks.{Epic, Plan}
+  alias Platform.Tasks.{Epic, Plan, ReviewRequests}
 
   defp authenticated_conn(conn) do
     user =
@@ -43,6 +47,14 @@ defmodule PlatformWeb.TasksLiveTest do
       )
 
     task
+  end
+
+  defp create_agent(name \\ nil) do
+    Repo.insert!(%Agent{
+      slug: "agent-#{System.unique_integer([:positive])}",
+      name: name || "Agent #{System.unique_integer([:positive])}",
+      status: "active"
+    })
   end
 
   # ── Kanban board tests ─────────────────────────────────────────────────
@@ -284,6 +296,71 @@ defmodule PlatformWeb.TasksLiveTest do
     assert html =~ "Collapsible Epic"
   end
 
+  test "create_and_plan defaults to the first active agent and creates a planning task", %{
+    conn: conn
+  } do
+    project = create_project()
+    agent = create_agent("Alpha Planner")
+
+    conn = authenticated_conn(conn)
+    {:ok, view, _html} = live(conn, ~p"/tasks")
+
+    html =
+      render_submit(view, "create_task", %{
+        "task" => %{
+          "title" => "Request a plan",
+          "project_id" => project.id,
+          "what" => "Build the task lifecycle end to end",
+          "why" => "So the planning flow starts from the board",
+          "action" => "create_and_plan",
+          "assignee_id" => "",
+          "assignee_type" => "agent",
+          "deploy_target" => "",
+          "epic_id" => ""
+        }
+      })
+
+    assert html =~ "Task created and planning requested."
+
+    created =
+      Tasks.list_tasks_by_project(project.id)
+      |> Enum.find(&(&1.title == "Request a plan"))
+
+    assert created
+    assert created.status == "planning"
+    assert created.assignee_id == agent.id
+    assert created.assignee_type == "agent"
+  end
+
+  test "create_and_plan requires an available agent", %{conn: conn} do
+    project = create_project()
+
+    conn = authenticated_conn(conn)
+    {:ok, view, _html} = live(conn, ~p"/tasks")
+
+    html =
+      render_submit(view, "create_task", %{
+        "task" => %{
+          "title" => "Unassigned plan request",
+          "project_id" => project.id,
+          "what" => "Need a plan",
+          "why" => "But nobody is available to make one",
+          "action" => "create_and_plan",
+          "assignee_id" => "",
+          "assignee_type" => "agent",
+          "deploy_target" => "",
+          "epic_id" => ""
+        }
+      })
+
+    assert html =~ "Select an agent before requesting a plan."
+
+    refute Enum.any?(
+             Tasks.list_tasks_by_project(project.id),
+             &(&1.title == "Unassigned plan request")
+           )
+  end
+
   # ── Plan review tests ─────────────────────────────────────────────────
 
   test "approve_plan transitions plan to approved and refreshes detail", %{conn: conn} do
@@ -340,6 +417,84 @@ defmodule PlatformWeb.TasksLiveTest do
 
     updated_plan = Tasks.get_plan(plan.id)
     assert updated_plan.status == "rejected"
+  end
+
+  test "in_review task detail does not show direct approve/return status buttons", %{conn: conn} do
+    project = create_project()
+    task = create_task(project, %{title: "Review Flow Task", status: "in_review"})
+
+    conn = authenticated_conn(conn)
+    {:ok, _view, html} = live(conn, ~p"/tasks/#{task.id}")
+
+    refute html =~ "phx-value-status=\"done\""
+    refute html =~ "phx-value-status=\"in_progress\""
+    refute html =~ ">Approve<"
+    refute html =~ ">Return<"
+  end
+
+  test "task detail renders review canvas evidence", %{conn: conn} do
+    project = create_project()
+    task = create_task(project, %{title: "Canvas Review Task", status: "in_review"})
+
+    {:ok, space} = ExecutionSpace.find_or_create(task.id)
+
+    {:ok, author} =
+      Chat.add_participant(space.id, %{
+        participant_type: "user",
+        participant_id: Ecto.UUID.generate(),
+        display_name: "Reviewer",
+        joined_at: DateTime.utc_now()
+      })
+
+    canvas =
+      Repo.insert!(%Canvas{
+        space_id: space.id,
+        created_by: author.id,
+        title: "Manual review screenshot",
+        canvas_type: "code",
+        state: %{"language" => "markdown", "content" => "# Screenshot review\nLooks good"}
+      })
+
+    {:ok, plan} = Tasks.create_plan(%{task_id: task.id, version: 1, status: "approved"})
+
+    {:ok, stage} =
+      Tasks.create_stage(%{
+        plan_id: plan.id,
+        name: "Manual review",
+        position: 1,
+        status: "running"
+      })
+
+    {:ok, validation} =
+      Tasks.create_validation(%{
+        stage_id: stage.id,
+        kind: "manual_approval",
+        status: "pending"
+      })
+
+    {:ok, _request} =
+      ReviewRequests.create_review_request(%{
+        validation_id: validation.id,
+        task_id: task.id,
+        status: "pending",
+        items: [
+          %{
+            kind: "artifact",
+            label: "Review screenshot",
+            status: "pending",
+            content: "Please verify the submitted screenshot.",
+            canvas_id: canvas.id
+          }
+        ]
+      })
+
+    conn = authenticated_conn(conn)
+    {:ok, _view, html} = live(conn, ~p"/tasks/#{task.id}")
+
+    assert html =~ "Outputs"
+    assert html =~ "Manual review screenshot"
+    assert html =~ "View output"
+    assert html =~ "Please verify the submitted screenshot."
   end
 
   test "pending plan count badge appears in board header", %{conn: conn} do
