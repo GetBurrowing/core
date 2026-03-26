@@ -45,8 +45,10 @@ defmodule PlatformWeb.UsageLiveTest do
           model: "anthropic/claude-sonnet-4-6",
           provider: "anthropic",
           session_key: "sess-#{System.unique_integer([:positive])}",
-          input_tokens: 1500,
+          input_tokens: 10,
           output_tokens: 800,
+          cache_read_tokens: 50_000,
+          cache_write_tokens: 200,
           cost_usd: 0.023,
           latency_ms: 3200,
           tool_calls: ["read", "exec"]
@@ -82,6 +84,83 @@ defmodule PlatformWeb.UsageLiveTest do
 
     # Should show at least 1 request
     assert html =~ "1"
+    # Should show "input" label in the breakdown
+    assert html =~ "input"
+    # Should show "output" label in the breakdown
+    assert html =~ "output"
+  end
+
+  test "summary card shows total input tokens including cache", %{conn: conn} do
+    # input=10, cache_read=50000, cache_write=200 → total prompt = 50210 → "50.2K"
+    create_usage_event(%{
+      input_tokens: 10,
+      cache_read_tokens: 50_000,
+      cache_write_tokens: 200,
+      output_tokens: 500
+    })
+
+    conn = authenticated_conn(conn)
+    {:ok, _view, html} = live(conn, ~p"/control/usage")
+
+    # Total prompt tokens should be 50210 → displayed as "50.2K"
+    assert html =~ "50.2K"
+    # Should NOT display just "10" as the input (the old uncached-only value)
+    # The "10" token count should appear only in the "fresh" breakdown, not as a standalone input number
+    assert html =~ "fresh"
+  end
+
+  test "event log shows total input per row", %{conn: conn} do
+    # Total input per row: 10 + 50000 + 200 = 50210
+    create_usage_event(%{
+      input_tokens: 10,
+      cache_read_tokens: 50_000,
+      cache_write_tokens: 200,
+      output_tokens: 500
+    })
+
+    conn = authenticated_conn(conn)
+    {:ok, _view, html} = live(conn, ~p"/control/usage")
+
+    # The table should show "Total In" header
+    assert html =~ "Total In"
+    # The row should contain the total input value (50210 → "50.2K")
+    assert html =~ "50.2K"
+    # Should also show "Total" column
+    assert html =~ ">Total<"
+  end
+
+  test "cache efficiency stats shown when cache data exists", %{conn: conn} do
+    create_usage_event(%{
+      input_tokens: 10,
+      cache_read_tokens: 50_000,
+      cache_write_tokens: 200,
+      output_tokens: 500
+    })
+
+    conn = authenticated_conn(conn)
+    {:ok, _view, html} = live(conn, ~p"/control/usage")
+
+    # Should show cache hit rate and "cached" text
+    assert html =~ "cached"
+    assert html =~ "%"
+    # Cache R/W column in the event table
+    assert html =~ "Cache R/W"
+  end
+
+  test "cache stats hidden when no cache data", %{conn: conn} do
+    create_usage_event(%{
+      input_tokens: 1500,
+      cache_read_tokens: 0,
+      cache_write_tokens: 0,
+      output_tokens: 800
+    })
+
+    conn = authenticated_conn(conn)
+    {:ok, _view, html} = live(conn, ~p"/control/usage")
+
+    # Should NOT show the cache efficiency line when no cache data
+    refute html =~ "cached ("
+    refute html =~ "% cached"
   end
 
   test "renders event log table with events", %{conn: conn} do

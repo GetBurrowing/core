@@ -95,6 +95,10 @@ defmodule Platform.Analytics do
         period: fragment("date_trunc('day', ?)", e.inserted_at),
         requests: count(e.id),
         tokens: coalesce(sum(e.total_tokens), 0),
+        input_tokens: coalesce(sum(e.input_tokens), 0),
+        output_tokens: coalesce(sum(e.output_tokens), 0),
+        cache_read_tokens: coalesce(sum(e.cache_read_tokens), 0),
+        cache_write_tokens: coalesce(sum(e.cache_write_tokens), 0),
         cost: coalesce(sum(e.cost_usd), 0.0)
       }
     )
@@ -108,6 +112,10 @@ defmodule Platform.Analytics do
         period: fragment("date_trunc('hour', ?)", e.inserted_at),
         requests: count(e.id),
         tokens: coalesce(sum(e.total_tokens), 0),
+        input_tokens: coalesce(sum(e.input_tokens), 0),
+        output_tokens: coalesce(sum(e.output_tokens), 0),
+        cache_read_tokens: coalesce(sum(e.cache_read_tokens), 0),
+        cache_write_tokens: coalesce(sum(e.cache_write_tokens), 0),
         cost: coalesce(sum(e.cost_usd), 0.0)
       }
     )

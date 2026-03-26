@@ -59,8 +59,20 @@ defmodule PlatformWeb.UsageLive do
     # Pad time series to cover full range
     padded_series = pad_time_series(time_series, days)
 
+    # Compute derived cache metrics
+    total_prompt =
+      summary.total_input_tokens + summary.total_cache_read_tokens +
+        summary.total_cache_write_tokens
+
+    cache_hit_rate =
+      if total_prompt > 0,
+        do: Float.round(summary.total_cache_read_tokens / total_prompt * 100, 1),
+        else: 0.0
+
     socket
     |> assign(:summary, summary)
+    |> assign(:total_prompt_tokens, total_prompt)
+    |> assign(:cache_hit_rate, cache_hit_rate)
     |> assign(:time_series, padded_series)
     |> assign(:events, events)
   end
@@ -104,8 +116,20 @@ defmodule PlatformWeb.UsageLive do
       date = Date.add(start_date, offset)
 
       case Map.get(existing, date) do
-        nil -> %{period: date, requests: 0, tokens: 0, cost: 0.0}
-        row -> %{row | period: date}
+        nil ->
+          %{
+            period: date,
+            requests: 0,
+            tokens: 0,
+            input_tokens: 0,
+            output_tokens: 0,
+            cache_read_tokens: 0,
+            cache_write_tokens: 0,
+            cost: 0.0
+          }
+
+        row ->
+          %{row | period: date}
       end
     end)
   end
@@ -118,6 +142,9 @@ defmodule PlatformWeb.UsageLive do
 
   defp format_cost(c) when is_float(c), do: "$#{:erlang.float_to_binary(c, decimals: 4)}"
   defp format_cost(_), do: "$0.00"
+
+  defp format_percent(n) when is_float(n), do: "#{:erlang.float_to_binary(n, decimals: 1)}%"
+  defp format_percent(_), do: "0.0%"
 
   defp format_latency(nil), do: "-"
   defp format_latency(ms) when ms >= 1000, do: "#{Float.round(ms / 1000, 1)}s"
@@ -190,10 +217,21 @@ defmodule PlatformWeb.UsageLive do
           <div class="text-xs text-base-content/50 uppercase tracking-wider">Tokens</div>
           <div class="text-2xl font-bold mt-1">{format_tokens(@summary.total_tokens)}</div>
           <div class="flex flex-wrap gap-x-3 mt-1 text-xs text-base-content/60">
-            <span title="Input tokens">⬆ {format_tokens(@summary.total_input_tokens)}</span>
-            <span title="Output tokens">⬇ {format_tokens(@summary.total_output_tokens)}</span>
-            <span :if={@summary.total_cache_read_tokens > 0} title="Cache read tokens">
-              ⚡ {format_tokens(@summary.total_cache_read_tokens)}
+            <span title="Total input (fresh + cached)">
+              ⬆ {format_tokens(@total_prompt_tokens)} input
+            </span>
+            <span title="Output tokens">⬇ {format_tokens(@summary.total_output_tokens)} output</span>
+          </div>
+          <div
+            :if={@summary.total_cache_read_tokens > 0}
+            class="mt-1 text-xs text-base-content/60"
+          >
+            <span title="Cache efficiency breakdown">
+              ⚡ {format_percent(@cache_hit_rate)} cached ({format_tokens(
+                @summary.total_cache_read_tokens
+              )} read, {format_tokens(@summary.total_cache_write_tokens)} write, {format_tokens(
+                @summary.total_input_tokens
+              )} fresh)
             </span>
           </div>
         </div>
@@ -227,7 +265,11 @@ defmodule PlatformWeb.UsageLive do
               rx="2"
             >
               <title>
-                {Calendar.strftime(day.period, "%b %d")}: {format_tokens(day.tokens)} tokens, {day.requests} requests, {format_cost(
+                {Calendar.strftime(day.period, "%b %d")}: {format_tokens(day.tokens)} tokens ({format_tokens(
+                  Map.get(day, :input_tokens, 0)
+                )} fresh + {format_tokens(Map.get(day, :cache_read_tokens, 0))} cached read + {format_tokens(
+                  Map.get(day, :cache_write_tokens, 0)
+                )} cached write → {format_tokens(Map.get(day, :output_tokens, 0))} output), {day.requests} requests, {format_cost(
                   day.cost
                 )}
               </title>
@@ -253,9 +295,10 @@ defmodule PlatformWeb.UsageLive do
               <th>Time</th>
               <th class="hidden md:table-cell">Agent</th>
               <th>Model</th>
-              <th>Input</th>
-              <th class="hidden md:table-cell">Cached</th>
+              <th title="Total input: fresh + cached read + cached write">Total In</th>
+              <th class="hidden md:table-cell">Cache R/W</th>
               <th>Output</th>
+              <th>Total</th>
               <th>Cost</th>
               <th class="hidden md:table-cell">Latency</th>
               <th class="hidden lg:table-cell">Task</th>
@@ -264,7 +307,7 @@ defmodule PlatformWeb.UsageLive do
           <tbody>
             <%= if @events == [] do %>
               <tr>
-                <td colspan="9" class="text-center py-8 text-base-content/40">
+                <td colspan="10" class="text-center py-8 text-base-content/40">
                   No usage events recorded yet
                 </td>
               </tr>
@@ -274,11 +317,19 @@ defmodule PlatformWeb.UsageLive do
                 <td class="text-xs whitespace-nowrap">{format_time(event)}</td>
                 <td class="hidden md:table-cell text-xs">{agent_name(event.agent_id, @agents)}</td>
                 <td class="text-xs font-mono">{event.model}</td>
-                <td class="text-xs">{format_tokens(event.input_tokens)}</td>
+                <td
+                  class="text-xs"
+                  title={"Fresh: #{format_tokens(event.input_tokens)}, Cached read: #{format_tokens(event.cache_read_tokens)}, Cached write: #{format_tokens(event.cache_write_tokens)}"}
+                >
+                  {format_tokens(
+                    event.input_tokens + event.cache_read_tokens + event.cache_write_tokens
+                  )}
+                </td>
                 <td class="hidden md:table-cell text-xs text-base-content/60">
-                  {format_tokens(event.cache_read_tokens)}
+                  {format_tokens(event.cache_read_tokens)} / {format_tokens(event.cache_write_tokens)}
                 </td>
                 <td class="text-xs">{format_tokens(event.output_tokens)}</td>
+                <td class="text-xs">{format_tokens(event.total_tokens)}</td>
                 <td class="text-xs">{format_cost(event.cost_usd)}</td>
                 <td class="hidden md:table-cell text-xs">{format_latency(event.latency_ms)}</td>
                 <td class="hidden lg:table-cell text-xs text-base-content/50">
