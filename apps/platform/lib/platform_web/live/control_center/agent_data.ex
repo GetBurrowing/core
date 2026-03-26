@@ -25,8 +25,10 @@ defmodule PlatformWeb.ControlCenter.AgentData do
     WorkspaceFile
   }
 
+  alias Platform.Agents.AgentRuntime
+  alias Platform.Chat.{ActiveAgentStore, Participant, Space, SpaceAgent}
   alias Platform.Federation
-  alias Platform.Federation.RuntimePresence
+  alias Platform.Federation.{NodeContext, RuntimePresence}
   alias Platform.Repo
 
   @session_limit 8
@@ -449,27 +451,115 @@ defmodule PlatformWeb.ControlCenter.AgentData do
   def delete_agent(%Agent{} = agent) do
     :ok = AgentServer.stop_agent(agent)
 
+    now = DateTime.utc_now()
+
+    # Collect runtime_ids and participant space_ids before the transaction
+    # (needed for in-memory cleanup after commit)
+    runtime_ids =
+      Repo.all(
+        from(r in AgentRuntime,
+          where: r.agent_id == ^agent.id,
+          select: r.runtime_id
+        )
+      )
+
+    participant_space_ids =
+      Repo.all(
+        from(p in Participant,
+          where:
+            p.participant_type == "agent" and
+              p.participant_id == ^agent.id and
+              is_nil(p.left_at),
+          select: p.space_id
+        )
+      )
+
+    # Pre-compute DM space IDs before the transaction — the subquery approach
+    # won't work because step 1 sets left_at on participants before step 3 runs.
+    dm_space_ids =
+      Repo.all(
+        from(p in Participant,
+          join: s in Space,
+          on: s.id == p.space_id,
+          where:
+            p.participant_type == "agent" and
+              p.participant_id == ^agent.id and
+              is_nil(p.left_at) and
+              s.kind == "dm" and
+              is_nil(s.archived_at),
+          select: s.id
+        )
+      )
+
     session_ids_query =
       from(s in Session,
         where: s.agent_id == ^agent.id,
         select: s.id
       )
 
-    Multi.new()
-    |> Multi.delete_all(
-      :context_shares,
-      from(cs in ContextShare,
-        where:
-          cs.from_session_id in subquery(session_ids_query) or
-            cs.to_session_id in subquery(session_ids_query)
+    result =
+      Multi.new()
+      # 1. Soft-remove all chat_participants for this agent (set left_at)
+      |> Multi.update_all(
+        :soft_remove_participants,
+        from(p in Participant,
+          where:
+            p.participant_type == "agent" and
+              p.participant_id == ^agent.id and
+              is_nil(p.left_at)
+        ),
+        set: [left_at: now]
       )
-    )
-    |> Multi.delete_all(:sessions, from(s in Session, where: s.agent_id == ^agent.id))
-    |> Multi.delete(:agent, agent)
-    |> Repo.transaction()
-    |> case do
-      {:ok, _changes} -> :ok
-      {:error, _step, reason, _changes} -> {:error, reason}
+      # 2. Remove all chat_space_agents roster entries
+      |> Multi.delete_all(
+        :remove_roster_entries,
+        from(sa in SpaceAgent, where: sa.agent_id == ^agent.id)
+      )
+      # 3. Archive DM spaces where this agent was an active participant
+      |> Multi.update_all(
+        :archive_dm_spaces,
+        from(s in Space, where: s.id in ^dm_space_ids),
+        set: [archived_at: now]
+      )
+      # 4. Clean up context shares (existing)
+      |> Multi.delete_all(
+        :context_shares,
+        from(cs in ContextShare,
+          where:
+            cs.from_session_id in subquery(session_ids_query) or
+              cs.to_session_id in subquery(session_ids_query)
+        )
+      )
+      # 5. Clean up sessions (existing)
+      |> Multi.delete_all(:sessions, from(s in Session, where: s.agent_id == ^agent.id))
+      # 6. Delete the agent record
+      |> Multi.delete(:agent, agent)
+      |> Repo.transaction()
+
+    case result do
+      {:ok, _changes} ->
+        # Post-commit: clean up in-memory runtime/presence state (best-effort)
+        cleanup_in_memory_state(agent.id, runtime_ids, participant_space_ids)
+        :ok
+
+      {:error, _step, reason, _changes} ->
+        {:error, reason}
     end
+  end
+
+  # Clean up ETS/Agent-backed in-memory state after successful deletion.
+  # All operations are idempotent — safe even if the process has already
+  # cleaned itself up or the entry doesn't exist.
+  defp cleanup_in_memory_state(agent_id, runtime_ids, participant_space_ids) do
+    # 1. Clear NodeContext ETS entry for this agent
+    NodeContext.clear_space(agent_id)
+
+    # 2. Untrack all associated runtimes from RuntimePresence
+    Enum.each(runtime_ids, &RuntimePresence.untrack/1)
+
+    # 3. Clear ActiveAgentStore entries where this agent holds the mutex
+    Enum.each(participant_space_ids, fn space_id ->
+      ActiveAgentStore.clear_if_match(space_id, agent_id)
+    end)
   end
 end
