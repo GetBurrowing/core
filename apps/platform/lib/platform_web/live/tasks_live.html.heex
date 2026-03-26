@@ -305,9 +305,12 @@
         <h3 class="text-xs font-semibold uppercase tracking-wider text-base-content/50">
           Description
         </h3>
-        <p class="text-sm text-base-content/80 whitespace-pre-wrap">
-          {@selected_task.description}
-        </p>
+        <div
+          id={"task-desc-#{@selected_task.id}"}
+          class="prose prose-sm max-w-none text-sm text-base-content/80 chat-markdown task-markdown"
+        >
+          {Platform.Chat.ContentRenderer.render_message(@selected_task.description)}
+        </div>
       </div>
 
       <%!-- Skills --%>
@@ -401,13 +404,18 @@
               Reject
             </button>
           </div>
-          <div
-            :for={stage <- plan.stages || []}
-            class="flex items-center gap-2 text-sm"
-          >
-            <span class={"size-4 #{stage_status_icon(stage.status)}"}></span>
-            <span class="flex-1">{stage.name}</span>
-            <span class="text-xs text-base-content/40">{stage.status}</span>
+          <div :for={stage <- plan.stages || []}>
+            <div class="flex items-center gap-2 text-sm">
+              <span class={"size-4 #{stage_status_icon(stage.status)}"}></span>
+              <span class="flex-1">{stage.name}</span>
+              <span class="text-xs text-base-content/40">{stage.status}</span>
+            </div>
+            <div
+              :if={stage.description}
+              class="prose prose-sm max-w-none text-xs text-base-content/60 chat-markdown task-markdown mt-1 ml-6"
+            >
+              {Platform.Chat.ContentRenderer.render_message(stage.description)}
+            </div>
           </div>
           <%!-- Validations per stage --%>
           <div
