@@ -248,6 +248,9 @@ defmodule PlatformWeb.ShellLive do
       PlatformWeb.SkillsLive ->
         "Skills"
 
+      PlatformWeb.ChangelogLive ->
+        "Changelog"
+
       PlatformWeb.UsageLive ->
         "Usage"
 

@@ -61,6 +61,15 @@
       <span :if={!@sidebar_collapsed} class="text-sm font-medium">Skills</span>
     </.link>
     <.link
+      navigate="/changelog"
+      class={nav_item_class(@current_path, "/changelog")}
+      phx-click="close_drawer"
+      title="Changelog"
+    >
+      <span class="hero-newspaper size-5 flex-shrink-0"></span>
+      <span :if={!@sidebar_collapsed} class="text-sm font-medium">Changelog</span>
+    </.link>
+    <.link
       navigate="/control"
       class={nav_item_class(@current_path, "/control")}
       phx-click="close_drawer"
