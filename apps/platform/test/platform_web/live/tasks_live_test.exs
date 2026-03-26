@@ -67,6 +67,7 @@ defmodule PlatformWeb.TasksLiveTest do
     assert html =~ "Backlog"
     assert html =~ "In Progress"
     assert html =~ "In Review"
+    assert html =~ "Deploying"
     assert html =~ "Done"
     assert html =~ "All Projects"
   end

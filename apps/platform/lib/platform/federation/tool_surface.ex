@@ -217,7 +217,7 @@ defmodule Platform.Federation.ToolSurface do
             type: "string",
             required: false,
             description:
-              "Initial status: backlog (default), planning, ready, in_progress, in_review, done, blocked"
+              "Initial status: backlog (default), planning, ready, in_progress, in_review, deploying, done, blocked"
           },
           priority: %{
             type: "string",

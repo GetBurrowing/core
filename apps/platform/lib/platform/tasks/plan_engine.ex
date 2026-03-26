@@ -22,8 +22,10 @@ defmodule Platform.Tasks.PlanEngine do
   import Ecto.Query
 
   alias Platform.Repo
+  require Logger
+
   alias Platform.Tasks
-  alias Platform.Tasks.{Plan, Stage, Validation}
+  alias Platform.Tasks.{DeployStageBuilder, Plan, Stage, Task, Validation}
 
   @valid_stage_transitions %{
     "pending" => ~w(running skipped),
@@ -273,8 +275,7 @@ defmodule Platform.Tasks.PlanEngine do
         all_terminal? = Enum.all?(fresh_stages, &(&1.status in ~w(passed skipped)))
 
         if all_terminal? do
-          {:ok, completed} = complete_plan(plan)
-          Repo.preload(completed, stages_query())
+          maybe_inject_deploy_or_complete(plan, fresh_stages)
         else
           # Some stages failed; reload plan
           Repo.preload(Repo.get!(Plan, plan.id), stages_query())
@@ -285,6 +286,100 @@ defmodule Platform.Tasks.PlanEngine do
         {:ok, _started} = transition_stage(next_stage, "running")
         Repo.preload(Repo.get!(Plan, plan.id), stages_query())
     end
+  end
+
+  # Statuses from which a task can transition to "deploying"
+  @deployable_statuses ~w(in_progress in_review)
+
+  # Check if a deploy stage needs to be injected before completing the plan.
+  # If a deploy stage already exists (was previously injected), complete normally.
+  # If no deploy stage exists and the strategy isn't "none", inject one.
+  # Only injects when the task is in a status that can transition to deploying.
+  defp maybe_inject_deploy_or_complete(plan, stages) do
+    has_deploy_stage? = Enum.any?(stages, &String.starts_with?(&1.name, "Deploy: "))
+
+    if has_deploy_stage? do
+      # Deploy stage already ran and passed — complete the plan
+      {:ok, completed} = complete_plan(plan)
+      Repo.preload(completed, stages_query())
+    else
+      # No deploy stage yet — check strategy and maybe inject one
+      task =
+        Task
+        |> Repo.get!(plan.task_id)
+        |> Repo.preload(:project)
+
+      strategy = Tasks.resolve_deploy_strategy(task)
+
+      case DeployStageBuilder.build_stage(strategy, max_position(stages) + 1) do
+        :skip ->
+          # Strategy is "none" — complete normally
+          {:ok, completed} = complete_plan(plan)
+          Repo.preload(completed, stages_query())
+
+        stage_def ->
+          if task.status in @deployable_statuses do
+            inject_deploy_stage(plan, task, stage_def, strategy)
+          else
+            # Task can't transition to deploying (e.g. backlog, planning) — complete normally
+            Logger.info(
+              "[PlanEngine] skipping deploy injection for task #{task.id} " <>
+                "(status: #{task.status}, not deployable)"
+            )
+
+            {:ok, completed} = complete_plan(plan)
+            Repo.preload(completed, stages_query())
+          end
+      end
+    end
+  end
+
+  defp inject_deploy_stage(plan, task, stage_def, strategy) do
+    # Create the deploy stage record
+    {:ok, deploy_stage} =
+      Tasks.create_stage(%{
+        plan_id: plan.id,
+        position: stage_def.position,
+        name: stage_def.name,
+        description: stage_def.description
+      })
+
+    # Create validation records for the deploy stage
+    for validation_def <- stage_def.validations do
+      {:ok, _} =
+        Tasks.create_validation(%{
+          stage_id: deploy_stage.id,
+          kind: validation_def.kind
+        })
+    end
+
+    # Start the deploy stage immediately
+    {:ok, _started} = transition_stage(deploy_stage, "running")
+
+    # Transition the task to "deploying"
+    case Tasks.transition_task(task, "deploying") do
+      {:ok, _updated_task} ->
+        Logger.info(
+          "[PlanEngine] injected deploy stage (#{stage_def.name}) for task #{task.id}, " <>
+            "strategy: #{strategy["type"]}"
+        )
+
+      {:error, reason} ->
+        Logger.warning(
+          "[PlanEngine] failed to transition task #{task.id} to deploying: #{inspect(reason)}"
+        )
+    end
+
+    # Broadcast plan update so the board refreshes
+    Tasks.broadcast_board({:plan_updated, Repo.get!(Plan, plan.id)})
+
+    Repo.preload(Repo.get!(Plan, plan.id), stages_query())
+  end
+
+  defp max_position(stages) do
+    stages
+    |> Enum.map(& &1.position)
+    |> Enum.max(fn -> 0 end)
   end
 
   defp complete_plan(%Plan{} = plan) do

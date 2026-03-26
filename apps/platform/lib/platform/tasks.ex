@@ -59,9 +59,10 @@ defmodule Platform.Tasks do
     "backlog" => ~w(planning blocked in_progress),
     "planning" => ~w(in_progress ready blocked backlog),
     "ready" => ~w(in_progress blocked planning),
-    "in_progress" => ~w(in_review blocked done),
-    "in_review" => ~w(done in_progress blocked),
-    "blocked" => ~w(backlog planning ready in_progress in_review),
+    "in_progress" => ~w(in_review deploying blocked done),
+    "in_review" => ~w(deploying in_progress blocked),
+    "deploying" => ~w(done in_progress blocked),
+    "blocked" => ~w(backlog planning ready in_progress in_review deploying),
     "done" => []
   }
 
@@ -188,6 +189,27 @@ defmodule Platform.Tasks do
       {:error, :invalid_transition}
     end
   end
+
+  @doc """
+  Resolve the effective deploy strategy for a task.
+
+  Resolution order:
+  1. `task.deploy_strategy` (task-level override)
+  2. `project.deploy_config["default_strategy"]` (project default)
+  3. `%{"type" => "manual"}` (system fallback)
+
+  The task must have `:project` preloaded, or be loaded with project.
+  """
+  def resolve_deploy_strategy(%Task{} = task) do
+    task = ensure_project_loaded(task)
+
+    task.deploy_strategy ||
+      get_in(task.project && task.project.deploy_config, ["default_strategy"]) ||
+      %{"type" => "manual"}
+  end
+
+  defp ensure_project_loaded(%Task{project: %Project{}} = task), do: task
+  defp ensure_project_loaded(%Task{} = task), do: Repo.preload(task, :project)
 
   # ── Plans ────────────────────────────────────────────────────────────────
 

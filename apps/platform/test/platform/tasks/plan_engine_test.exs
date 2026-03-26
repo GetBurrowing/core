@@ -176,6 +176,175 @@ defmodule Platform.Tasks.PlanEngineTest do
     end
   end
 
+  # ── Deploy stage injection ─────────────────────────────────────────────
+
+  describe "deploy stage injection" do
+    test "injects deploy stage when strategy is not none", %{project: project} do
+      strategy = %{"type" => "pr_merge", "config" => %{"require_ci_pass" => true}}
+
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Deployable task",
+          status: "in_progress",
+          deploy_strategy: strategy
+        })
+
+      {:ok, plan} = Tasks.create_plan(%{task_id: task.id, status: "approved"})
+      {:ok, s1} = Tasks.create_stage(%{plan_id: plan.id, position: 1, name: "Build"})
+      {:ok, _} = PlanEngine.start_stage(s1.id)
+
+      # Advance — s1 has no validations, passes immediately
+      {:ok, updated_plan} = PlanEngine.advance(plan.id)
+
+      # Plan should NOT be completed yet
+      refute updated_plan.status == "completed"
+
+      # Deploy stage should be injected and running
+      stages = updated_plan.stages
+      assert length(stages) == 2
+
+      deploy_stage = Enum.find(stages, &(&1.name == "Deploy: PR merge"))
+      assert deploy_stage != nil
+      assert deploy_stage.position == 2
+      assert deploy_stage.status == "running"
+
+      # Deploy stage should have validations
+      validations = Tasks.list_validations(deploy_stage.id)
+      assert length(validations) == 2
+      kinds = Enum.map(validations, & &1.kind) |> Enum.sort()
+      assert kinds == ["manual_approval", "test_pass"]
+
+      # Task should be in deploying status
+      updated_task = Tasks.get_task_record(task.id)
+      assert updated_task.status == "deploying"
+    end
+
+    test "completes plan normally when strategy is none", %{project: project} do
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "No-deploy task",
+          status: "in_progress",
+          deploy_strategy: %{"type" => "none"}
+        })
+
+      {:ok, plan} = Tasks.create_plan(%{task_id: task.id, status: "approved"})
+      {:ok, s1} = Tasks.create_stage(%{plan_id: plan.id, position: 1, name: "Build"})
+      {:ok, _} = PlanEngine.start_stage(s1.id)
+
+      {:ok, updated_plan} = PlanEngine.advance(plan.id)
+
+      assert updated_plan.status == "completed"
+      assert length(updated_plan.stages) == 1
+    end
+
+    test "completes plan when deploy stage passes", %{project: project} do
+      strategy = %{"type" => "manual"}
+
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Deploy then done",
+          status: "in_progress",
+          deploy_strategy: strategy
+        })
+
+      {:ok, plan} = Tasks.create_plan(%{task_id: task.id, status: "approved"})
+      {:ok, s1} = Tasks.create_stage(%{plan_id: plan.id, position: 1, name: "Build"})
+      {:ok, _} = PlanEngine.start_stage(s1.id)
+
+      # Advance — injects deploy stage
+      {:ok, plan_after_inject} = PlanEngine.advance(plan.id)
+      refute plan_after_inject.status == "completed"
+
+      deploy_stage = Enum.find(plan_after_inject.stages, &(&1.name == "Deploy: Manual"))
+      assert deploy_stage.status == "running"
+
+      # Pass the deploy stage's manual_approval validation
+      [validation] = Tasks.list_validations(deploy_stage.id)
+      assert validation.kind == "manual_approval"
+
+      PlanEngine.evaluate_validation(validation.id, %{
+        status: "passed",
+        evaluated_by: "test"
+      })
+
+      # Now the plan should be completed
+      final_plan = Tasks.get_plan(plan.id)
+      assert final_plan.status == "completed"
+    end
+
+    test "uses project default strategy when task has no override", %{project: project} do
+      {:ok, project} =
+        Tasks.update_project(project, %{
+          deploy_config: %{
+            "default_strategy" => %{"type" => "docker_deploy", "config" => %{}}
+          }
+        })
+
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Inherit strategy",
+          status: "in_progress"
+        })
+
+      {:ok, plan} = Tasks.create_plan(%{task_id: task.id, status: "approved"})
+      {:ok, s1} = Tasks.create_stage(%{plan_id: plan.id, position: 1, name: "Build"})
+      {:ok, _} = PlanEngine.start_stage(s1.id)
+
+      {:ok, updated_plan} = PlanEngine.advance(plan.id)
+
+      deploy_stage = Enum.find(updated_plan.stages, &(&1.name == "Deploy: Docker deploy"))
+      assert deploy_stage != nil
+      assert deploy_stage.status == "running"
+    end
+
+    test "falls back to manual strategy when no strategy set anywhere", %{project: project} do
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Fallback manual",
+          status: "in_progress"
+        })
+
+      {:ok, plan} = Tasks.create_plan(%{task_id: task.id, status: "approved"})
+      {:ok, s1} = Tasks.create_stage(%{plan_id: plan.id, position: 1, name: "Build"})
+      {:ok, _} = PlanEngine.start_stage(s1.id)
+
+      {:ok, updated_plan} = PlanEngine.advance(plan.id)
+
+      deploy_stage = Enum.find(updated_plan.stages, &(&1.name == "Deploy: Manual"))
+      assert deploy_stage != nil
+    end
+
+    test "does not double-inject deploy stage on second advance", %{project: project} do
+      strategy = %{"type" => "manual"}
+
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "No double inject",
+          status: "in_progress",
+          deploy_strategy: strategy
+        })
+
+      {:ok, plan} = Tasks.create_plan(%{task_id: task.id, status: "approved"})
+      {:ok, s1} = Tasks.create_stage(%{plan_id: plan.id, position: 1, name: "Build"})
+      {:ok, _} = PlanEngine.start_stage(s1.id)
+
+      # First advance — injects deploy stage
+      {:ok, plan_v1} = PlanEngine.advance(plan.id)
+      assert length(plan_v1.stages) == 2
+
+      # Second advance — deploy stage is running, has pending validation
+      # Should NOT inject another deploy stage
+      {:ok, plan_v2} = PlanEngine.advance(plan.id)
+      assert length(plan_v2.stages) == 2
+    end
+  end
+
   # ── Full lifecycle ────────────────────────────────────────────────────
 
   describe "full plan lifecycle" do

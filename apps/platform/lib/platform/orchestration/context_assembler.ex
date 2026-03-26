@@ -39,13 +39,16 @@ defmodule Platform.Orchestration.ContextAssembler do
           |> Skills.resolve_skills()
           |> Enum.map(fn {skill, _source} -> %{name: skill.name, content: skill.content} end)
 
+        resolved_deploy_strategy = Tasks.resolve_deploy_strategy(task)
+
         %{
           project: serialize_project(task.project),
           epic: serialize_epic(task.epic),
           task: serialize_task(task),
           plan: serialize_plan(plan),
           execution_space_id: execution_space_id,
-          skills: skills
+          skills: skills,
+          resolved_deploy_strategy: resolved_deploy_strategy
         }
     end
   end

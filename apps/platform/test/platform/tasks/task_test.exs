@@ -57,8 +57,26 @@ defmodule Platform.Tasks.TaskTest do
       assert {:ok, task} = Tasks.transition_task_status(task, "in_review")
       assert task.status == "in_review"
 
+      assert {:ok, task} = Tasks.transition_task_status(task, "deploying")
+      assert task.status == "deploying"
+
       assert {:ok, task} = Tasks.transition_task_status(task, "done")
       assert task.status == "done"
+    end
+
+    test "in_review cannot go directly to done", %{project: project} do
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "T", status: "in_review"})
+      assert {:error, :invalid_transition} = Tasks.transition_task_status(task, "done")
+    end
+
+    test "deploying can go to in_progress or blocked", %{project: project} do
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "T", status: "deploying"})
+      assert {:ok, _} = Tasks.transition_task_status(task, "in_progress")
+
+      {:ok, task2} =
+        Tasks.create_task(%{project_id: project.id, title: "T2", status: "deploying"})
+
+      assert {:ok, _} = Tasks.transition_task_status(task2, "blocked")
     end
 
     test "rejects invalid transitions", %{project: project} do
@@ -137,6 +155,87 @@ defmodule Platform.Tasks.TaskTest do
 
       assert Repo.get!(Platform.Orchestration.ExecutionLease, started_event.lease_id).status ==
                "abandoned"
+    end
+  end
+
+  describe "deploy_strategy" do
+    test "creates a task with deploy_strategy", %{project: project} do
+      strategy = %{"type" => "pr_merge", "config" => %{"require_ci_pass" => true}}
+
+      assert {:ok, task} =
+               Tasks.create_task(%{
+                 project_id: project.id,
+                 title: "With strategy",
+                 deploy_strategy: strategy
+               })
+
+      assert task.deploy_strategy == strategy
+    end
+
+    test "deploy_strategy defaults to nil", %{project: project} do
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "No strategy"})
+      assert task.deploy_strategy == nil
+    end
+  end
+
+  describe "resolve_deploy_strategy/1" do
+    test "returns task-level strategy when set", %{project: project} do
+      strategy = %{"type" => "docker_deploy", "config" => %{}}
+
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Task override",
+          deploy_strategy: strategy
+        })
+
+      task = Platform.Repo.preload(task, :project)
+      assert Tasks.resolve_deploy_strategy(task) == strategy
+    end
+
+    test "falls back to project default_strategy", %{project: project} do
+      project_strategy = %{"type" => "pr_merge", "config" => %{"auto_merge" => false}}
+
+      {:ok, project} =
+        Tasks.update_project(project, %{
+          deploy_config: %{"default_strategy" => project_strategy}
+        })
+
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Inherit"})
+      task = Platform.Repo.preload(task, :project)
+      assert Tasks.resolve_deploy_strategy(task) == project_strategy
+    end
+
+    test "falls back to manual when no strategy anywhere", %{project: project} do
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Fallback"})
+      task = Platform.Repo.preload(task, :project)
+      assert Tasks.resolve_deploy_strategy(task) == %{"type" => "manual"}
+    end
+
+    test "task strategy takes precedence over project default", %{project: project} do
+      project_strategy = %{"type" => "pr_merge", "config" => %{}}
+      task_strategy = %{"type" => "none"}
+
+      {:ok, project} =
+        Tasks.update_project(project, %{
+          deploy_config: %{"default_strategy" => project_strategy}
+        })
+
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Override",
+          deploy_strategy: task_strategy
+        })
+
+      task = Platform.Repo.preload(task, :project)
+      assert Tasks.resolve_deploy_strategy(task) == task_strategy
+    end
+
+    test "auto-preloads project when not preloaded", %{project: project} do
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Auto preload"})
+      # Don't preload project — resolve_deploy_strategy should handle it
+      assert Tasks.resolve_deploy_strategy(task) == %{"type" => "manual"}
     end
   end
 

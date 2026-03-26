@@ -9,6 +9,7 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
       assert HeartbeatScheduler.interval_ms("coding") == 10 * 60_000
       assert HeartbeatScheduler.interval_ms("ci_check") == 5 * 60_000
       assert HeartbeatScheduler.interval_ms("review") == 20 * 60_000
+      assert HeartbeatScheduler.interval_ms("deploying") == 5 * 60_000
     end
 
     test "returns nil for manual_approval" do
@@ -26,6 +27,7 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
       assert HeartbeatScheduler.stall_threshold_ms("coding") == 25 * 60_000
       assert HeartbeatScheduler.stall_threshold_ms("ci_check") == 15 * 60_000
       assert HeartbeatScheduler.stall_threshold_ms("review") == 60 * 60_000
+      assert HeartbeatScheduler.stall_threshold_ms("deploying") == 15 * 60_000
     end
 
     test "returns nil for manual_approval" do
@@ -39,6 +41,7 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
       assert HeartbeatScheduler.max_escalations("coding") == 2
       assert HeartbeatScheduler.max_escalations("ci_check") == 3
       assert HeartbeatScheduler.max_escalations("review") == 1
+      assert HeartbeatScheduler.max_escalations("deploying") == 3
     end
 
     test "returns nil for manual_approval" do
@@ -227,6 +230,67 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
       assert prompt =~ "suite_review_request_create"
       assert prompt =~ "validation_id=`val-manual-local`"
       assert prompt =~ "Current stage_id: `stage-review-local`"
+    end
+
+    test "deploying generates deploy prompt with strategy instructions" do
+      task = %{
+        id: "task-deploy-1",
+        title: "Deploy feature",
+        description: "Ship the feature",
+        status: "deploying",
+        priority: "high",
+        deploy_strategy: %{"type" => "pr_merge", "config" => %{"require_ci_pass" => true}},
+        project: %{repo_url: "https://github.com/test/app", default_branch: "main"}
+      }
+
+      plan = %{version: 1, stages: [%{}, %{}]}
+
+      stage = %{
+        id: "stage-deploy-1",
+        position: 2,
+        name: "Deploy: PR merge",
+        validations: [
+          %{id: "val-test-1", kind: "test_pass"},
+          %{id: "val-manual-1", kind: "manual_approval"}
+        ]
+      }
+
+      prompt = HeartbeatScheduler.dispatch_prompt(task, plan, stage)
+
+      assert prompt =~ "Deploy feature"
+      assert prompt =~ "deploying"
+      assert prompt =~ "pr_merge"
+      assert prompt =~ "validation_pass"
+      assert prompt =~ "report_blocker"
+      assert prompt =~ "Current stage_id: `stage-deploy-1`"
+      assert prompt =~ "validation_id=`val-test-1`"
+      assert prompt =~ "validation_id=`val-manual-1`"
+    end
+
+    test "deploying uses manual fallback when no strategy set" do
+      task = %{
+        id: "task-deploy-2",
+        title: "Deploy task",
+        description: "Ship it",
+        status: "deploying",
+        priority: "medium",
+        deploy_strategy: nil,
+        project: %{repo_url: "", default_branch: "main", deploy_config: %{}}
+      }
+
+      plan = %{version: 1, stages: [%{}]}
+
+      stage = %{
+        id: "stage-deploy-2",
+        position: 1,
+        name: "Deploy: Manual",
+        validations: [%{id: "val-manual-2", kind: "manual_approval"}]
+      }
+
+      prompt = HeartbeatScheduler.dispatch_prompt(task, plan, stage)
+
+      assert prompt =~ "manual"
+      assert prompt =~ "Deploy task"
     end
 
     test "fallback generates generic assignment prompt" do

@@ -61,11 +61,11 @@ defmodule Platform.Tasks.TasksContextTest do
   end
 
   describe "task status transition chain" do
-    test "backlog → planning → ready → in_progress → in_review → done" do
+    test "backlog → planning → ready → in_progress → in_review → deploying → done" do
       {:ok, project} = Tasks.create_project(%{name: "Status Project"})
       {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Full chain"})
 
-      transitions = ~w(planning ready in_progress in_review done)
+      transitions = ~w(planning ready in_progress in_review deploying done)
 
       final_task =
         Enum.reduce(transitions, task, fn status, t ->

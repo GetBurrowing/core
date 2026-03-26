@@ -261,10 +261,50 @@ defmodule Platform.Orchestration.PromptTemplates do
         """
       },
       %{
+        slug: "dispatch.deploying",
+        name: "Deploying Dispatch Prompt",
+        description:
+          "Sent when a task is in deploying status with a running deploy stage. " <>
+            "Instructs the agent to execute the deploy based on the resolved strategy.",
+        variables: [
+          "task_title",
+          "stage_info",
+          "repo_url",
+          "default_branch",
+          "task_slug",
+          "deploy_strategy_type",
+          "deploy_strategy_config",
+          "skills_reference"
+        ],
+        content: """
+        Task is deploying — execute the deploy stage based on the resolved strategy.
+
+        Task: {{task_title}}
+        {{stage_info}}Deploy strategy: **{{deploy_strategy_type}}**
+        Strategy config: {{deploy_strategy_config}}
+
+        ### Strategy-specific instructions
+
+        **pr_merge**: Push branch, open PR against {{default_branch}}, wait for CI, then request human merge approval.
+        **docker_deploy**: SSH to target, pull image, compose up, health check, push evidence.
+        **skill_driven**: Execute the attached skill's deploy procedure, confirm via manual approval.
+        **manual**: Create a review request describing what needs to be deployed; wait for human confirmation.
+
+        Follow the instructions for **{{deploy_strategy_type}}** above.
+
+        Push evidence using validation_pass as you complete each deploy step.
+        Use report_blocker if you are stuck or the deploy fails.
+
+        The attention signal that delivered this message includes a `context` field with the full task hierarchy: project, epic, task metadata, approved plan with stages, and execution_space_id. Use it as your source of truth.
+
+        {{skills_reference}}
+        """
+      },
+      %{
         slug: "dispatch.fallback",
         name: "Fallback Dispatch Prompt",
         description:
-          "Sent when a task is assigned but doesn't match planning/in_progress/in_review. " <>
+          "Sent when a task is assigned but doesn't match planning/in_progress/in_review/deploying. " <>
             "Generic assignment prompt.",
         variables: [
           "task_title",

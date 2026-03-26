@@ -27,6 +27,7 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
     "coding" => {10 * 60_000, 25 * 60_000, 2},
     "ci_check" => {5 * 60_000, 15 * 60_000, 3},
     "review" => {20 * 60_000, 60 * 60_000, 1},
+    "deploying" => {5 * 60_000, 15 * 60_000, 3},
     "manual_approval" => {nil, nil, nil}
   }
 
@@ -147,6 +148,40 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
       end
 
     enrich_in_review_prompt(prompt, task, stage)
+  end
+
+  def dispatch_prompt(%{status: "deploying"} = task, plan, stage) do
+    stage_info = format_stage_info(plan, stage)
+    repo_url = project_attr(task, :repo_url, "")
+    default_branch = project_attr(task, :default_branch, "main")
+    task_slug = short_task_id(task)
+
+    # Extract strategy from the task context (preloaded by TaskRouter)
+    resolved_strategy = resolve_task_deploy_strategy(task)
+    strategy_type = Map.get(resolved_strategy, "type", "manual")
+    strategy_config = Map.get(resolved_strategy, "config", %{}) |> inspect()
+
+    assigns = %{
+      task_title: task.title,
+      stage_info: stage_info,
+      repo_url: repo_url,
+      default_branch: default_branch,
+      task_slug: task_slug,
+      deploy_strategy_type: strategy_type,
+      deploy_strategy_config: strategy_config,
+      skills_reference: @skills_reference
+    }
+
+    prompt =
+      case PromptTemplates.render_template("dispatch.deploying", assigns) do
+        {:ok, rendered} ->
+          rendered
+
+        {:error, :not_found} ->
+          hardcoded_dispatch_deploying(task, plan, stage, resolved_strategy)
+      end
+
+    enrich_deploying_prompt(prompt, task, stage)
   end
 
   def dispatch_prompt(task, plan, stage) do
@@ -346,6 +381,119 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
     """
   end
 
+  defp hardcoded_dispatch_deploying(task, plan, stage, resolved_strategy) do
+    stage_info = format_stage_info(plan, stage)
+    strategy_type = Map.get(resolved_strategy, "type", "manual")
+    strategy_config = Map.get(resolved_strategy, "config", %{})
+    repo_url = project_attr(task, :repo_url, "")
+    default_branch = project_attr(task, :default_branch, "main")
+    task_slug = short_task_id(task)
+
+    strategy_instructions =
+      deploy_strategy_instructions(
+        strategy_type,
+        strategy_config,
+        repo_url,
+        default_branch,
+        task_slug
+      )
+
+    """
+    Task is deploying — execute the deploy stage based on the resolved strategy.
+
+    Task: #{task.title}
+    #{stage_info}\
+    Deploy strategy: **#{strategy_type}**
+    Strategy config: #{inspect(strategy_config)}
+
+    #{strategy_instructions}
+
+    Push evidence using validation_pass as you complete each deploy step.
+    Use report_blocker if you are stuck or the deploy fails.
+
+    The attention signal that delivered this message includes a `context` field with the full task hierarchy: project, epic, task metadata, approved plan with stages, and execution_space_id. Use it as your source of truth.
+
+    #{@skills_reference}
+    """
+  end
+
+  defp deploy_strategy_instructions("pr_merge", config, repo_url, default_branch, task_slug) do
+    require_ci = Map.get(config, "require_ci_pass", true)
+    auto_merge = Map.get(config, "auto_merge", false)
+
+    ci_instruction =
+      if require_ci,
+        do:
+          "3. Wait for CI to pass. Check with `gh run list --branch task/#{task_slug}` and push `test_pass` evidence when green.",
+        else: ""
+
+    merge_instruction =
+      if auto_merge,
+        do: "4. PR will auto-merge when checks pass.",
+        else:
+          "4. A human must merge the PR. Create a review request via `suite_review_request_create` for the `manual_approval` validation."
+
+    """
+    ## PR Merge Deploy Flow
+    1. Ensure all changes are committed and pushed to `task/#{task_slug}`.
+    2. Open a PR against `#{default_branch}` on #{repo_url} if not already open.
+    #{ci_instruction}
+    #{merge_instruction}
+    """
+  end
+
+  defp deploy_strategy_instructions(
+         "docker_deploy",
+         config,
+         _repo_url,
+         _default_branch,
+         _task_slug
+       ) do
+    host = Map.get(config, "host", "the target host")
+    image = Map.get(config, "image", "the configured image")
+
+    """
+    ## Docker Deploy Flow
+    1. SSH to #{host} and pull the latest image (#{image}).
+    2. Run `docker compose up -d` (or equivalent) to deploy.
+    3. Run health checks to verify the service is up and healthy.
+    4. Push `test_pass` evidence with deploy output and health check results.
+    5. Create a review request via `suite_review_request_create` for the `manual_approval` validation confirming the deploy is healthy.
+    """
+  end
+
+  defp deploy_strategy_instructions(
+         "skill_driven",
+         _config,
+         _repo_url,
+         _default_branch,
+         _task_slug
+       ) do
+    """
+    ## Skill-Driven Deploy
+    1. Execute the attached skill's deploy procedure.
+    2. Follow the skill's instructions for deployment steps and verification.
+    3. Create a review request via `suite_review_request_create` for the `manual_approval` validation with evidence of successful execution.
+    """
+  end
+
+  defp deploy_strategy_instructions("manual", _config, _repo_url, _default_branch, _task_slug) do
+    """
+    ## Manual Deploy
+    1. The deploy must be performed manually (by a human or following manual steps).
+    2. Create a review request via `suite_review_request_create` for the `manual_approval` validation describing what needs to be deployed and how.
+    3. Wait for human confirmation.
+    """
+  end
+
+  defp deploy_strategy_instructions(_type, _config, _repo_url, _default_branch, _task_slug) do
+    """
+    ## Deploy
+    Execute the deployment according to the project's deploy configuration.
+    Push validation evidence as you complete each step.
+    """
+  end
+
   defp hardcoded_heartbeat(task, stage_name, stage_status, elapsed_str, pending_str) do
     """
     Task: #{task.title} [stage: #{stage_name} — #{stage_status}]
@@ -372,6 +520,40 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
     |> maybe_strip_review_git_checks(task)
     |> maybe_strip_task_update_status_instructions()
     |> insert_before_context(review_contract(task, stage))
+  end
+
+  defp enrich_deploying_prompt(prompt, task, stage) do
+    prompt
+    |> maybe_strip_git_workflow(task)
+    |> insert_before_context(execution_contract(task, stage))
+    |> maybe_insert_git_workflow(task)
+  end
+
+  defp resolve_task_deploy_strategy(task) do
+    # The task should be preloaded with project by TaskRouter/ContextAssembler.
+    # If it has the deploy_strategy field, use it; otherwise fall back through
+    # the Tasks module which handles preloading (for real %Task{} structs).
+    strategy = Map.get(task, :deploy_strategy) || Map.get(task, "deploy_strategy")
+
+    cond do
+      is_map(strategy) and map_size(strategy) > 0 ->
+        strategy
+
+      match?(%Platform.Tasks.Task{}, task) ->
+        Platform.Tasks.resolve_deploy_strategy(task)
+
+      true ->
+        # Plain map (e.g. in tests) — check project default or fall back to manual
+        project = Map.get(task, :project) || Map.get(task, "project") || %{}
+
+        deploy_config =
+          Map.get(project, :deploy_config) || Map.get(project, "deploy_config") || %{}
+
+        case Map.get(deploy_config, "default_strategy") do
+          %{} = s when map_size(s) > 0 -> s
+          _ -> %{"type" => "manual"}
+        end
+    end
   end
 
   defp enrich_heartbeat_prompt(prompt, task, stage, pending_validations) do

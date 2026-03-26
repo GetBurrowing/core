@@ -18,6 +18,7 @@ defmodule PlatformWeb.TasksLive do
     {"backlog", "Backlog"},
     {"in_progress", "In Progress"},
     {"in_review", "In Review"},
+    {"deploying", "Deploying"},
     {"done", "Done"}
   ]
 
@@ -26,6 +27,7 @@ defmodule PlatformWeb.TasksLive do
     "backlog" => ~w(backlog planning ready blocked),
     "in_progress" => ~w(in_progress),
     "in_review" => ~w(in_review),
+    "deploying" => ~w(deploying),
     "done" => ~w(done)
   }
 
@@ -622,12 +624,15 @@ defmodule PlatformWeb.TasksLive do
     existing_meta = Map.get(params, "metadata", %{})
     metadata = Map.merge(existing_meta, validation_meta)
 
-    # Merge deploy_target — convert "" to nil
+    # Merge deploy_target — convert "" to nil (kept for backward compat)
     deploy_target =
       case Map.get(params, "deploy_target", "") do
         "" -> nil
         v -> v
       end
+
+    # Parse deploy_strategy from form
+    deploy_strategy = parse_deploy_strategy(params)
 
     task_attrs =
       params
@@ -635,6 +640,7 @@ defmodule PlatformWeb.TasksLive do
       |> Map.put("status", status)
       |> Map.put("metadata", metadata)
       |> Map.put("deploy_target", deploy_target)
+      |> Map.put("deploy_strategy", deploy_strategy)
       |> Map.put("assignee_id", assignee_id)
       |> Map.put("assignee_type", assignee_type)
 
@@ -832,6 +838,35 @@ defmodule PlatformWeb.TasksLive do
   defp deploy_target_label("google_drive"), do: "Google Drive"
   defp deploy_target_label(other), do: other
 
+  defp deploy_strategy_label(nil), do: "Inherit from project"
+  defp deploy_strategy_label(%{"type" => "pr_merge"}), do: "PR Merge"
+  defp deploy_strategy_label(%{"type" => "docker_deploy"}), do: "Docker Deploy"
+  defp deploy_strategy_label(%{"type" => "skill_driven"}), do: "Skill Driven"
+  defp deploy_strategy_label(%{"type" => "manual"}), do: "Manual"
+  defp deploy_strategy_label(%{"type" => "none"}), do: "None (skip deploy)"
+  defp deploy_strategy_label(_), do: "Unknown"
+
+  defp parse_deploy_strategy(params) do
+    case Map.get(params, "deploy_strategy_type", "") do
+      "" -> nil
+      "inherit" -> nil
+      "pr_merge" -> %{"type" => "pr_merge", "config" => parse_pr_merge_config(params)}
+      "docker_deploy" -> %{"type" => "docker_deploy", "config" => %{}}
+      "skill_driven" -> %{"type" => "skill_driven", "config" => %{}}
+      "manual" -> %{"type" => "manual"}
+      "none" -> %{"type" => "none"}
+      _ -> nil
+    end
+  end
+
+  defp parse_pr_merge_config(params) do
+    %{
+      "require_ci_pass" => Map.get(params, "require_ci_pass") == "true",
+      "auto_merge" => Map.get(params, "auto_merge") == "true",
+      "require_review_approval" => Map.get(params, "require_review_approval") == "true"
+    }
+  end
+
   defp priority_badge_class("critical"), do: "badge badge-error badge-sm"
   defp priority_badge_class("high"), do: "badge badge-error badge-outline badge-sm"
   defp priority_badge_class("medium"), do: "badge badge-warning badge-outline badge-sm"
@@ -843,6 +878,7 @@ defmodule PlatformWeb.TasksLive do
   defp status_label("ready"), do: "Ready"
   defp status_label("in_progress"), do: "In Progress"
   defp status_label("in_review"), do: "In Review"
+  defp status_label("deploying"), do: "Deploying"
   defp status_label("done"), do: "Done"
   defp status_label("blocked"), do: "Blocked"
   defp status_label(other), do: other
@@ -850,6 +886,7 @@ defmodule PlatformWeb.TasksLive do
   defp column_header_class("backlog"), do: "text-base-content/60"
   defp column_header_class("in_progress"), do: "text-info"
   defp column_header_class("in_review"), do: "text-warning"
+  defp column_header_class("deploying"), do: "text-secondary"
   defp column_header_class("done"), do: "text-success"
   defp column_header_class(_), do: "text-base-content/60"
 
@@ -929,6 +966,9 @@ defmodule PlatformWeb.TasksLive do
 
   # Review outcomes flow through validations / review requests, not blunt status buttons.
   defp available_transitions("in_review"), do: []
+
+  # Deploying outcomes flow through deploy stage validations, not manual transitions.
+  defp available_transitions("deploying"), do: []
 
   defp available_transitions("blocked"),
     do: [{"backlog", "To Backlog"}, {"in_progress", "Resume"}]

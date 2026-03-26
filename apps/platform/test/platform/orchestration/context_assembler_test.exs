@@ -86,6 +86,13 @@ defmodule Platform.Orchestration.ContextAssemblerTest do
       assert context.task.priority == "high"
     end
 
+    test "includes resolved_deploy_strategy in context", %{task: task} do
+      context = ContextAssembler.build(task.id)
+
+      # Task and project have no strategy set, so should fall back to manual
+      assert context.resolved_deploy_strategy == %{"type" => "manual"}
+    end
+
     test "includes plan with stages and validations", %{task: task} do
       context = ContextAssembler.build(task.id)
 

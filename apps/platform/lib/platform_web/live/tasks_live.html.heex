@@ -286,13 +286,17 @@
         </button>
       </div>
 
-      <%!-- Deploy target --%>
-      <div :if={@selected_task.deploy_target} class="flex items-center gap-2">
+      <%!-- Deploy strategy --%>
+      <div class="flex items-center gap-2">
         <span class="text-xs font-semibold uppercase tracking-wider text-base-content/50">
           Deploy
         </span>
         <span class="badge badge-outline badge-sm">
-          {deploy_target_label(@selected_task.deploy_target)}
+          <%= if @selected_task.deploy_strategy do %>
+            {deploy_strategy_label(@selected_task.deploy_strategy)}
+          <% else %>
+            <span class="text-base-content/40">Inherited from project</span>
+          <% end %>
         </span>
       </div>
 
@@ -824,26 +828,19 @@
           <input type="hidden" name="task[assignee_type]" value="agent" />
         </div>
 
-        <%!-- Deploy Target --%>
+        <%!-- Deploy Strategy --%>
         <div>
-          <label class="label label-text text-xs font-medium">Deploy Target</label>
-          <select name="task[deploy_target]" class="select select-bordered select-sm w-full">
-            <option value="">None</option>
-            <option
-              value="hive_production"
-              selected={@task_form[:deploy_target].value == "hive_production"}
-            >
-              Hive Production
-            </option>
-            <option value="github_pr" selected={@task_form[:deploy_target].value == "github_pr"}>
-              GitHub PR
-            </option>
-            <option
-              value="google_drive"
-              selected={@task_form[:deploy_target].value == "google_drive"}
-            >
-              Google Drive
-            </option>
+          <label class="label label-text text-xs font-medium">Deploy Strategy</label>
+          <select
+            name="task[deploy_strategy_type]"
+            class="select select-bordered select-sm w-full"
+          >
+            <option value="inherit">Inherit from project</option>
+            <option value="pr_merge">PR Merge</option>
+            <option value="docker_deploy">Docker Deploy</option>
+            <option value="skill_driven">Skill Driven</option>
+            <option value="manual">Manual</option>
+            <option value="none">None (skip deploy)</option>
           </select>
         </div>
 

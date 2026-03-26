@@ -285,7 +285,7 @@ defmodule Platform.Orchestration.TaskRouterTest do
       assert updated_task.status == "in_review"
     end
 
-    test "completed plan transitions in_review task to done", %{
+    test "completed plan transitions in_review task to deploying", %{
       task: task,
       assignee: assignee,
       plan: plan
@@ -307,7 +307,7 @@ defmodule Platform.Orchestration.TaskRouterTest do
       Process.sleep(100)
 
       updated_task = Tasks.get_task_detail(task.id)
-      assert updated_task.status == "done"
+      assert updated_task.status == "deploying"
     end
 
     test "running manual approval stage without a pending review request stays actively routed",
