@@ -457,6 +457,7 @@ defmodule Platform.Orchestration.TaskRouterTest do
         %{
           state
           | last_runtime_event_at: stale_at,
+            last_dispatch_at: stale_at,
             current_stage_id: state.current_stage_id,
             escalation_count: 1,
             lease_status: "active",
@@ -493,6 +494,205 @@ defmodule Platform.Orchestration.TaskRouterTest do
       status = TaskRouter.current_status(task.id)
       assert status.status in [:dispatching, :running]
       assert status.escalation_count == 0
+    end
+  end
+
+  describe "heartbeat suppression" do
+    test "heartbeat is suppressed when dispatch was sent within the heartbeat interval", %{
+      task: task,
+      assignee: assignee
+    } do
+      Phoenix.PubSub.subscribe(Platform.PubSub, "runtime:#{assignee.id}")
+
+      {:ok, pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
+
+      # Consume the initial dispatch attention
+      assert_receive %Phoenix.Socket.Broadcast{
+                       event: "attention",
+                       payload: %{signal: %{reason: "task_assigned"}}
+                     },
+                     1_000
+
+      # Immediately trigger heartbeat — dispatch was just sent, so it should be suppressed
+      send(pid, :heartbeat)
+
+      # Should NOT receive a heartbeat attention (dispatch cooldown)
+      refute_receive %Phoenix.Socket.Broadcast{
+                       event: "attention",
+                       payload: %{signal: %{reason: "task_heartbeat"}}
+                     },
+                     500
+
+      status = TaskRouter.current_status(task.id)
+      assert status.status == :running
+      assert status.last_dispatch_at != nil
+    end
+
+    test "heartbeat is suppressed when last_runtime_event_at is within cooldown", %{
+      task: task,
+      assignee: assignee
+    } do
+      Phoenix.PubSub.subscribe(Platform.PubSub, "runtime:#{assignee.id}")
+
+      {:ok, pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
+
+      # Consume the initial dispatch attention
+      assert_receive %Phoenix.Socket.Broadcast{event: "attention"}, 1_000
+
+      # Record a runtime event (marks last_runtime_event_at as now)
+      {:ok, _event} =
+        Platform.Orchestration.record_runtime_event(%{
+          "task_id" => task.id,
+          "phase" => "execution",
+          "runtime_id" => assignee.id,
+          "event_type" => "execution.progress",
+          "payload" => %{"summary" => "actively streaming"}
+        })
+
+      Process.sleep(50)
+
+      # Set last_dispatch_at far in the past so dispatch cooldown doesn't interfere
+      stale_dispatch = DateTime.add(DateTime.utc_now(), -20 * 60, :second)
+
+      :sys.replace_state(pid, fn state ->
+        %{state | last_dispatch_at: stale_dispatch}
+      end)
+
+      # Trigger heartbeat — runtime activity is fresh, should be suppressed
+      send(pid, :heartbeat)
+
+      refute_receive %Phoenix.Socket.Broadcast{
+                       event: "attention",
+                       payload: %{signal: %{reason: "task_heartbeat"}}
+                     },
+                     500
+
+      status = TaskRouter.current_status(task.id)
+      assert status.last_runtime_event_at != nil
+    end
+
+    test "heartbeat fires normally after cooldown period", %{
+      task: task,
+      assignee: assignee
+    } do
+      Phoenix.PubSub.subscribe(Platform.PubSub, "runtime:#{assignee.id}")
+
+      {:ok, pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
+
+      # Consume the initial dispatch attention
+      assert_receive %Phoenix.Socket.Broadcast{event: "attention"}, 1_000
+
+      # Set both timestamps far in the past (beyond all cooldowns)
+      stale_at = DateTime.add(DateTime.utc_now(), -20 * 60, :second)
+
+      :sys.replace_state(pid, fn state ->
+        %{
+          state
+          | last_dispatch_at: stale_at,
+            last_runtime_event_at: stale_at,
+            stage_started_at: stale_at
+        }
+      end)
+
+      # Trigger heartbeat — all cooldowns expired, should fire
+      send(pid, :heartbeat)
+
+      assert_receive %Phoenix.Socket.Broadcast{
+                       event: "attention",
+                       payload: %{signal: %{reason: "task_heartbeat"}}
+                     },
+                     1_000
+    end
+
+    test "heartbeat is suppressed when plan is in pending_review during planning", %{
+      task: task,
+      assignee: assignee
+    } do
+      # Transition task to planning
+      {:ok, task} = Tasks.transition_task(task, "planning")
+
+      Phoenix.PubSub.subscribe(Platform.PubSub, "runtime:#{assignee.id}")
+
+      {:ok, pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
+
+      # Consume the initial dispatch attention
+      assert_receive %Phoenix.Socket.Broadcast{event: "attention"}, 1_000
+
+      # Create a plan in pending_review
+      {:ok, _plan} =
+        Tasks.create_plan(%{task_id: task.id, status: "pending_review", version: 2})
+
+      # Set timestamps far in the past so other cooldowns don't interfere
+      stale_at = DateTime.add(DateTime.utc_now(), -20 * 60, :second)
+
+      :sys.replace_state(pid, fn state ->
+        %{
+          state
+          | last_dispatch_at: stale_at,
+            last_runtime_event_at: stale_at,
+            task_status: "planning"
+        }
+      end)
+
+      # Trigger heartbeat
+      send(pid, :heartbeat)
+
+      # Should NOT receive a heartbeat (plan is pending_review)
+      refute_receive %Phoenix.Socket.Broadcast{
+                       event: "attention",
+                       payload: %{signal: %{reason: "task_heartbeat"}}
+                     },
+                     500
+
+      Process.sleep(50)
+      status = TaskRouter.current_status(task.id)
+      assert status.status == :waiting_human
+    end
+
+    test "heartbeat is suppressed when plan is in draft during planning", %{
+      task: task,
+      assignee: assignee
+    } do
+      # Transition task to planning
+      {:ok, task} = Tasks.transition_task(task, "planning")
+
+      Phoenix.PubSub.subscribe(Platform.PubSub, "runtime:#{assignee.id}")
+
+      {:ok, pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
+
+      # Consume the initial dispatch attention
+      assert_receive %Phoenix.Socket.Broadcast{event: "attention"}, 1_000
+
+      # Create a plan in draft status
+      {:ok, _plan} =
+        Tasks.create_plan(%{task_id: task.id, status: "draft", version: 2})
+
+      # Set timestamps far in the past so other cooldowns don't interfere
+      stale_at = DateTime.add(DateTime.utc_now(), -20 * 60, :second)
+
+      :sys.replace_state(pid, fn state ->
+        %{
+          state
+          | last_dispatch_at: stale_at,
+            last_runtime_event_at: stale_at,
+            task_status: "planning"
+        }
+      end)
+
+      # Trigger heartbeat
+      send(pid, :heartbeat)
+
+      # Should NOT receive a heartbeat (plan is in draft — agent is actively working)
+      refute_receive %Phoenix.Socket.Broadcast{
+                       event: "attention",
+                       payload: %{signal: %{reason: "task_heartbeat"}}
+                     },
+                     500
+
+      Process.sleep(50)
+      status = TaskRouter.current_status(task.id)
+      # Should still be running (not waiting_human — draft is agent work, not human gate)
+      assert status.status == :running
     end
   end
 

@@ -240,6 +240,19 @@ defmodule Platform.Tasks do
     end
   end
 
+  @doc "Returns the latest plan for a task regardless of status (draft, pending_review, etc.)."
+  def latest_plan(task_id) do
+    Plan
+    |> where([p], p.task_id == ^task_id)
+    |> order_by([p], desc: p.version)
+    |> limit(1)
+    |> Repo.one()
+    |> case do
+      nil -> nil
+      plan -> Repo.preload(plan, stages: :validations)
+    end
+  end
+
   def list_plans(task_id) do
     Plan
     |> where([p], p.task_id == ^task_id)

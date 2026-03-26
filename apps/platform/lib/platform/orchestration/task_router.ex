@@ -23,6 +23,11 @@ defmodule Platform.Orchestration.TaskRouter do
   alias Platform.Tasks
   alias Platform.Tasks.ReviewRequests
 
+  # Cooldown window for runtime activity: if the runtime sent a progress/heartbeat
+  # event within this window, suppress the next heartbeat to avoid interrupting
+  # an actively-streaming agent. Half the shortest non-planning interval (coding: 10 min).
+  @runtime_activity_cooldown_ms 2 * 60_000
+
   # ── State ──────────────────────────────────────────────────────────────
 
   defmodule State do
@@ -36,6 +41,8 @@ defmodule Platform.Orchestration.TaskRouter do
             stage_started_at: DateTime.t() | nil,
             last_evidence_at: DateTime.t() | nil,
             last_runtime_event_at: DateTime.t() | nil,
+            last_dispatch_at: DateTime.t() | nil,
+            task_status: String.t() | nil,
             lease_status: String.t() | nil,
             heartbeat_ref: reference() | nil,
             escalation_count: non_neg_integer(),
@@ -50,6 +57,8 @@ defmodule Platform.Orchestration.TaskRouter do
       :stage_started_at,
       :last_evidence_at,
       :last_runtime_event_at,
+      :last_dispatch_at,
+      :task_status,
       :lease_status,
       :heartbeat_ref,
       escalation_count: 0,
@@ -103,11 +112,20 @@ defmodule Platform.Orchestration.TaskRouter do
           nil
       end
 
+    # Hydrate task_status from DB so heartbeat guards can check the phase
+    # without a DB query on every heartbeat tick.
+    initial_task_status =
+      case Tasks.get_task_detail(task_id) do
+        %{status: s} -> s
+        _ -> nil
+      end
+
     state =
       %State{
         task_id: task_id,
         assignee: assignee,
-        execution_space_id: execution_space_id
+        execution_space_id: execution_space_id,
+        task_status: initial_task_status
       }
       |> maybe_hydrate_from_lease()
       |> maybe_hydrate_current_stage()
@@ -145,6 +163,8 @@ defmodule Platform.Orchestration.TaskRouter do
       stage_started_at: state.stage_started_at,
       last_evidence_at: state.last_evidence_at,
       last_runtime_event_at: state.last_runtime_event_at,
+      last_dispatch_at: state.last_dispatch_at,
+      task_status: state.task_status,
       lease_status: state.lease_status
     }
 
@@ -182,6 +202,8 @@ defmodule Platform.Orchestration.TaskRouter do
           state =
             state
             |> Map.put(:status, :running)
+            |> Map.put(:last_dispatch_at, DateTime.utc_now())
+            |> Map.put(:task_status, task.status)
             |> maybe_set_stage(stage)
             |> maybe_mark_review_task_in_review()
 
@@ -206,6 +228,8 @@ defmodule Platform.Orchestration.TaskRouter do
           state =
             state
             |> Map.put(:status, :running)
+            |> Map.put(:last_dispatch_at, DateTime.utc_now())
+            |> Map.put(:task_status, task.status)
             |> maybe_set_stage(stage)
             |> maybe_mark_review_task_in_review()
 
@@ -236,29 +260,60 @@ defmodule Platform.Orchestration.TaskRouter do
     if HeartbeatScheduler.manual_approval?(stage_type) do
       {:noreply, schedule_heartbeat(state)}
     else
-      task = Tasks.get_task_detail(state.task_id)
+      interval_ms = HeartbeatScheduler.interval_ms(stage_type) || 0
 
-      if task do
-        idle_ms = latest_activity_age_ms(state)
-        stall_threshold = HeartbeatScheduler.stall_threshold_ms(stage_type)
+      cond do
+        # Guard 1: Suppress heartbeat if we dispatched within the current heartbeat interval.
+        # The agent hasn't had a full interval to respond yet — don't interrupt.
+        dispatch_within_interval?(state, interval_ms) ->
+          Logger.debug(
+            "[TaskRouter] heartbeat suppressed for task #{state.task_id}: dispatch too recent"
+          )
 
-        if stall_threshold && idle_ms >= stall_threshold do
-          {:noreply, handle_possible_stall(state, task)}
-        else
-          send_heartbeat(state, task)
           {:noreply, schedule_heartbeat(state)}
-        end
-      else
-        {:noreply, schedule_heartbeat(state)}
+
+        # Guard 2: Suppress heartbeat if the runtime sent a progress/heartbeat event recently.
+        # The agent is actively streaming — don't interrupt with a nudge.
+        runtime_activity_within_cooldown?(state) ->
+          Logger.debug(
+            "[TaskRouter] heartbeat suppressed for task #{state.task_id}: runtime activity within cooldown"
+          )
+
+          {:noreply, schedule_heartbeat(state)}
+
+        # Guard 3: Plan-aware gating for the planning phase.
+        # Defensive catch for missed PubSub events — check plan status directly.
+        state.task_status == "planning" ->
+          {:noreply, handle_planning_heartbeat(state)}
+
+        true ->
+          task = Tasks.get_task_detail(state.task_id)
+
+          if task do
+            idle_ms = latest_activity_age_ms(state)
+            stall_threshold = HeartbeatScheduler.stall_threshold_ms(stage_type)
+
+            if stall_threshold && idle_ms >= stall_threshold do
+              {:noreply, handle_possible_stall(state, task)}
+            else
+              send_heartbeat(state, task)
+              {:noreply, schedule_heartbeat(state)}
+            end
+          else
+            {:noreply, schedule_heartbeat(state)}
+          end
       end
     end
   end
 
   # Board PubSub: task updated for our task
-  def handle_info({:task_updated, %{id: task_id} = _task}, %State{task_id: task_id} = state) do
+  def handle_info({:task_updated, %{id: task_id} = task}, %State{task_id: task_id} = state) do
+    task_status = Map.get(task, :status) || Map.get(task, "status")
+
     state =
       state
       |> Map.put(:last_evidence_at, DateTime.utc_now())
+      |> then(fn s -> if task_status, do: Map.put(s, :task_status, task_status), else: s end)
       |> reset_escalation()
 
     state =
@@ -459,8 +514,67 @@ defmodule Platform.Orchestration.TaskRouter do
       {:error, :endpoint_not_ready}
   end
 
+  # Defensive plan-aware heartbeat gating for the planning phase.
+  # Uses latest_plan (any status) instead of current_plan (approved/completed only)
+  # because during planning the plan may be in draft or pending_review.
+  defp handle_planning_heartbeat(state) do
+    plan = Tasks.latest_plan(state.task_id)
+
+    cond do
+      # Plan submitted and awaiting human review — suppress heartbeat entirely
+      # and move to waiting_human state (defensive catch for missed PubSub).
+      plan && plan.status == "pending_review" ->
+        Logger.info(
+          "[TaskRouter] heartbeat suppressed for task #{state.task_id}: plan is pending_review (defensive catch)"
+        )
+
+        state |> cancel_heartbeat() |> Map.put(:status, :waiting_human)
+
+      # Plan is still being drafted — agent is actively working on it.
+      # Skip this heartbeat but reschedule (don't interrupt the drafting process).
+      plan && plan.status == "draft" ->
+        Logger.debug(
+          "[TaskRouter] heartbeat suppressed for task #{state.task_id}: plan is in draft"
+        )
+
+        schedule_heartbeat(state)
+
+      # Plan was rejected — agent needs a nudge to revise.
+      # Fall through to normal heartbeat behavior.
+      plan && plan.status == "rejected" ->
+        task = Tasks.get_task_detail(state.task_id)
+
+        if task do
+          send_heartbeat(state, task)
+          schedule_heartbeat(state)
+        else
+          schedule_heartbeat(state)
+        end
+
+      # No plan exists yet — send heartbeat normally so agent creates one,
+      # but only if the dispatch cooldown has passed (handled by guard 1 above).
+      true ->
+        task = Tasks.get_task_detail(state.task_id)
+
+        if task do
+          send_heartbeat(state, task)
+          schedule_heartbeat(state)
+        else
+          schedule_heartbeat(state)
+        end
+    end
+  end
+
   defp send_heartbeat(state, task) do
-    plan = Tasks.current_plan(state.task_id)
+    # During planning, use latest_plan to include draft/pending_review plans
+    # that current_plan (approved/completed only) would miss.
+    plan =
+      if state.task_status == "planning" do
+        Tasks.latest_plan(state.task_id)
+      else
+        Tasks.current_plan(state.task_id)
+      end
+
     stage = find_stage(plan, state.current_stage_id)
     elapsed = elapsed_seconds(state.stage_started_at)
 
@@ -473,7 +587,7 @@ defmodule Platform.Orchestration.TaskRouter do
       end
 
     context = ContextAssembler.build(state.task_id)
-    prompt = HeartbeatScheduler.heartbeat_prompt(task, stage, elapsed, pending_validations)
+    prompt = HeartbeatScheduler.heartbeat_prompt(task, stage, elapsed, pending_validations, plan)
 
     # Post heartbeat as engagement message (triggers attention routing)
     if state.execution_space_id do
@@ -681,6 +795,22 @@ defmodule Platform.Orchestration.TaskRouter do
       _ ->
         base_state
     end
+  end
+
+  # Returns true if `last_dispatch_at` is within the given interval, meaning the
+  # agent hasn't had a full heartbeat cycle to respond to the dispatch yet.
+  defp dispatch_within_interval?(%State{last_dispatch_at: nil}, _interval_ms), do: false
+
+  defp dispatch_within_interval?(%State{last_dispatch_at: dispatch_at}, interval_ms) do
+    DateTime.diff(DateTime.utc_now(), dispatch_at, :millisecond) < interval_ms
+  end
+
+  # Returns true if the runtime sent a progress/heartbeat event within the
+  # cooldown window, indicating the agent is actively streaming.
+  defp runtime_activity_within_cooldown?(%State{last_runtime_event_at: nil}), do: false
+
+  defp runtime_activity_within_cooldown?(%State{last_runtime_event_at: event_at}) do
+    DateTime.diff(DateTime.utc_now(), event_at, :millisecond) < @runtime_activity_cooldown_ms
   end
 
   defp latest_activity_at(state) do

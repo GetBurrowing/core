@@ -339,12 +339,22 @@ defmodule Platform.Orchestration.PromptTemplates do
         name: "Heartbeat Prompt",
         description:
           "Periodic heartbeat sent to the agent to force it to account for itself. " <>
-            "Carries elapsed time, stage position, and pending validations.",
-        variables: ["task_title", "stage_name", "stage_status", "elapsed", "pending_validations"],
+            "Carries elapsed time, stage position, pending validations, and plan status. " <>
+            "During the planning phase, plan-aware prompts override this template.",
+        variables: [
+          "task_title",
+          "stage_name",
+          "stage_status",
+          "elapsed",
+          "pending_validations",
+          "plan_status",
+          "plan_exists"
+        ],
         content: """
         Task: {{task_title}} [stage: {{stage_name}} — {{stage_status}}]
         Stage running for: {{elapsed}}
         Pending validations: {{pending_validations}}
+        Plan status: {{plan_status}}
 
         Either push validation evidence or report a blocker.
 

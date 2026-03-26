@@ -389,4 +389,68 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
       assert prompt =~ "1h 1m"
     end
   end
+
+  describe "heartbeat_prompt/5 plan-aware behavior" do
+    test "returns plan-aware prompt when task is in planning with pending_review plan" do
+      task = %{title: "Plan Task", status: "planning"}
+      plan = %{status: "pending_review", version: 1}
+
+      prompt = HeartbeatScheduler.heartbeat_prompt(task, nil, 60, [], plan)
+
+      assert prompt =~ "submitted"
+      assert prompt =~ "awaiting human review"
+      assert prompt =~ "do not create another plan"
+      refute prompt =~ "validation evidence"
+    end
+
+    test "returns plan-aware prompt when task is in planning with draft plan" do
+      task = %{title: "Draft Task", status: "planning"}
+      plan = %{status: "draft", version: 1}
+
+      prompt = HeartbeatScheduler.heartbeat_prompt(task, nil, 60, [], plan)
+
+      assert prompt =~ "draft"
+      assert prompt =~ "Continue working"
+      assert prompt =~ "plan_submit"
+      refute prompt =~ "do not create another plan"
+    end
+
+    test "returns plan-aware prompt when task is in planning with rejected plan" do
+      task = %{title: "Rejected Task", status: "planning"}
+      plan = %{status: "rejected", version: 1}
+
+      prompt = HeartbeatScheduler.heartbeat_prompt(task, nil, 60, [], plan)
+
+      assert prompt =~ "rejected"
+      assert prompt =~ "revised plan"
+      assert prompt =~ "plan_create"
+    end
+
+    test "returns standard heartbeat prompt when plan is nil" do
+      task = %{title: "Standard Task"}
+      stage = %{name: "coding", status: "running"}
+
+      prompt = HeartbeatScheduler.heartbeat_prompt(task, stage, 120, [], nil)
+
+      assert prompt =~ "Standard Task"
+      assert prompt =~ "coding"
+      assert prompt =~ "2 minutes"
+      assert prompt =~ "validation evidence"
+    end
+
+    test "returns standard heartbeat prompt when task is not in planning even with plan" do
+      task = %{title: "In Progress Task", status: "in_progress"}
+      stage = %{name: "coding", status: "running"}
+      plan = %{status: "approved", version: 1}
+
+      prompt = HeartbeatScheduler.heartbeat_prompt(task, stage, 300, [], plan)
+
+      assert prompt =~ "In Progress Task"
+      assert prompt =~ "coding"
+      assert prompt =~ "5 minutes"
+      # Should be the standard prompt, not plan-aware
+      assert prompt =~ "validation evidence"
+      refute prompt =~ "do not create another plan"
+    end
+  end
 end

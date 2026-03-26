@@ -208,36 +208,85 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
   This is not a keepalive — it carries elapsed time, stage position, and
   pending validations to force the agent to account for itself.
   """
-  @spec heartbeat_prompt(map(), map() | nil, non_neg_integer(), list()) :: String.t()
-  def heartbeat_prompt(task, stage, elapsed_seconds, pending_validations) do
-    elapsed_str = format_elapsed(elapsed_seconds)
-    stage_name = if stage, do: stage.name, else: "unknown"
-    stage_status = if stage, do: stage.status, else: "unknown"
+  @spec heartbeat_prompt(map(), map() | nil, non_neg_integer(), list(), map() | nil) :: String.t()
+  def heartbeat_prompt(task, stage, elapsed_seconds, pending_validations, plan \\ nil) do
+    # Plan-aware prompt override for planning phase
+    task_status = Map.get(task, :status) || Map.get(task, "status")
 
-    pending_str =
-      case pending_validations do
-        [] -> "none"
-        validations -> Enum.map_join(validations, ", ", & &1.kind)
-      end
+    if task_status == "planning" && plan do
+      planning_heartbeat_prompt(task, plan)
+    else
+      elapsed_str = format_elapsed(elapsed_seconds)
+      stage_name = if stage, do: stage.name, else: "unknown"
+      stage_status = if stage, do: stage.status, else: "unknown"
 
-    assigns = %{
-      task_title: task.title,
-      stage_name: stage_name,
-      stage_status: stage_status,
-      elapsed: elapsed_str,
-      pending_validations: pending_str
-    }
+      pending_str =
+        case pending_validations do
+          [] -> "none"
+          validations -> Enum.map_join(validations, ", ", & &1.kind)
+        end
 
-    prompt =
-      case PromptTemplates.render_template("heartbeat", assigns) do
-        {:ok, rendered} ->
-          rendered
+      plan_status = if plan, do: plan.status, else: "none"
+      plan_exists = if plan, do: "true", else: "false"
 
-        {:error, :not_found} ->
-          hardcoded_heartbeat(task, stage_name, stage_status, elapsed_str, pending_str)
-      end
+      assigns = %{
+        task_title: task.title,
+        stage_name: stage_name,
+        stage_status: stage_status,
+        elapsed: elapsed_str,
+        pending_validations: pending_str,
+        plan_status: plan_status,
+        plan_exists: plan_exists
+      }
 
-    enrich_heartbeat_prompt(prompt, task, stage, pending_validations)
+      prompt =
+        case PromptTemplates.render_template("heartbeat", assigns) do
+          {:ok, rendered} ->
+            rendered
+
+          {:error, :not_found} ->
+            hardcoded_heartbeat(task, stage_name, stage_status, elapsed_str, pending_str)
+        end
+
+      enrich_heartbeat_prompt(prompt, task, stage, pending_validations)
+    end
+  end
+
+  # ── Plan-aware heartbeat prompts ─────────────────────────────────────────
+
+  defp planning_heartbeat_prompt(task, plan) do
+    case plan.status do
+      "pending_review" ->
+        """
+        Your plan for "#{task.title}" has been submitted and is awaiting human review.
+
+        No action needed — do not create another plan. The current plan (v#{plan.version}) is in pending_review status. Wait for the human reviewer to approve or reject it.
+
+        If you have other context to share about the plan, post it to the execution space as commentary.
+        """
+
+      "draft" ->
+        """
+        A plan draft for "#{task.title}" is in progress (v#{plan.version}, status: draft).
+
+        Continue working on the plan or submit it when ready using plan_submit. Do not create a new plan — finish and submit the existing draft.
+        """
+
+      "rejected" ->
+        """
+        Your plan for "#{task.title}" was rejected (v#{plan.version}).
+
+        Review any feedback in the execution space, then create a revised plan using plan_create. Address the reviewer's concerns in the new version.
+        """
+
+      _other ->
+        """
+        Task: #{task.title} [planning phase]
+        Plan status: #{plan.status} (v#{plan.version})
+
+        Review the plan status and take appropriate action. If the plan needs work, continue with it. If it's ready, submit it for review.
+        """
+    end
   end
 
   # ── Hardcoded fallback prompts ─────────────────────────────────────────
