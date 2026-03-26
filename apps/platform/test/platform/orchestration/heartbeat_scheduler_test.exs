@@ -123,7 +123,7 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
       assert prompt =~ "git worktree add ../worktrees/task"
       assert prompt =~ "https://github.com/test/router"
       assert prompt =~ "Do NOT open a PR yet"
-      assert prompt =~ "PR opening happens after successful review in `in_review`"
+      assert prompt =~ "PR opening happens in the deploy phase"
       assert prompt =~ "Current stage_id: `stage-123`"
       assert prompt =~ "validation_id=`val-123`"
       assert prompt =~ "task_id=task-1234abcd"
@@ -155,7 +155,7 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
       assert prompt =~ "report_blocker"
     end
 
-    test "in_review generates explicit validation prompt" do
+    test "in_review generates experiential review prompt" do
       task = %{
         id: "task-review-1",
         title: "Review task",
@@ -179,26 +179,43 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
 
       prompt = HeartbeatScheduler.dispatch_prompt(task, plan, stage)
 
+      # Experiential review focus
       assert prompt =~ "Review task"
-      assert prompt =~ "validate the implementation"
+      assert prompt =~ "exercise and validate the implementation"
+      assert prompt =~ "experiential review"
+      assert prompt =~ "screenshots"
+      assert prompt =~ "local dev server"
+
+      # Review tools
       assert prompt =~ "suite_validation_evaluate"
       assert prompt =~ "suite_review_request_create"
       assert prompt =~ "manual_approval"
       assert prompt =~ "Do NOT self-approve `manual_approval` validations"
+
+      # Validation contract
       assert prompt =~ "Current task_id: `task-review-1`"
       assert prompt =~ "Current stage_id: `stage-review-1`"
       assert prompt =~ "validation_id=`val-pass-1`"
       assert prompt =~ "validation_id=`val-manual-1`"
+
+      # Lifecycle rules
       assert prompt =~ "Do NOT call `task_update` for lifecycle status changes"
-      assert prompt =~ "Review outcomes flow through validations and review requests"
-      assert prompt =~ "If review evidence shows the feature is not good enough"
-      assert prompt =~ "fail the relevant validation so the task can return to `in_progress`"
+      assert prompt =~ "fail the relevant validation"
       assert prompt =~ "in_progress"
-      refute prompt =~ "call `task_update` to move the task to `done`"
-      refute prompt =~ "call `task_update` to move the task back to `in_progress`"
+
+      # No deploy concerns
+      refute prompt =~ "Open a PR"
+      refute prompt =~ "open a PR"
+      refute prompt =~ "CI status"
+      refute prompt =~ "branch freshness"
+      refute prompt =~ "merge conflict"
+
+      # No mechanical re-checks
+      refute prompt =~ "tests passed"
+      refute prompt =~ "lint clean"
     end
 
-    test "in_review strips placeholder repo git instructions from stale template" do
+    test "in_review does not include repo-specific git checks" do
       task = %{
         id: "task-review-local",
         title: "Proof review task",
@@ -222,11 +239,12 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
 
       prompt = HeartbeatScheduler.dispatch_prompt(task, plan, stage)
 
+      # No repo references — review is experiential, not git-based
       refute prompt =~ "example.invalid"
       refute prompt =~ "git merge-base"
       refute prompt =~ "gh` CLI"
-      refute prompt =~ "call `task_update` to move the task to `done`"
-      refute prompt =~ "call `task_update` to move the task back to `in_progress`"
+
+      # Still has review tools and contract
       assert prompt =~ "suite_review_request_create"
       assert prompt =~ "validation_id=`val-manual-local`"
       assert prompt =~ "Current stage_id: `stage-review-local`"
@@ -262,9 +280,22 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
       assert prompt =~ "pr_merge"
       assert prompt =~ "validation_pass"
       assert prompt =~ "report_blocker"
+
+      # Deploy contract with phase-appropriate validation instructions
+      assert prompt =~ "Deploy Stage Contract"
       assert prompt =~ "Current stage_id: `stage-deploy-1`"
       assert prompt =~ "validation_id=`val-test-1`"
       assert prompt =~ "validation_id=`val-manual-1`"
+      # manual_approval gets review_request instruction, not validation_pass
+      assert prompt =~ "suite_review_request_create"
+      assert prompt =~ "human must merge"
+      # blocker instruction specific to deploy
+      assert prompt =~ "do NOT attempt code fixes"
+
+      # Deploy boundaries — no code modification, no local test re-runs
+      assert prompt =~ "Do NOT modify code"
+      assert prompt =~ "Do NOT re-run tests or lint locally"
+      assert prompt =~ "branch is already pushed from execution"
     end
 
     test "deploying uses manual fallback when no strategy set" do
