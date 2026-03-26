@@ -94,6 +94,8 @@ defmodule PlatformWeb.ChatLive do
       |> assign(:mention_suggestions, [])
       |> assign(:push_permission, "unknown")
       |> assign(:unread_counts, if(user_id, do: Chat.unread_counts_for_user(user_id), else: %{}))
+      |> assign(:upload_dialog_open, false)
+      |> assign(:upload_caption, "")
       |> assign_compose("")
       |> assign_thread_compose("")
       |> assign_search_form("")
@@ -344,6 +346,64 @@ defmodule PlatformWeb.ChatLive do
       _ -> {:noreply, socket}
     end
   end
+
+  # ── Upload staging dialog events ──────────────────────────────────────
+
+  def handle_event("show_upload_dialog", _params, socket) do
+    {:noreply, assign(socket, :upload_dialog_open, true)}
+  end
+
+  def handle_event("hide_upload_dialog", _params, socket) do
+    socket =
+      Enum.reduce(socket.assigns.uploads.attachments.entries, socket, fn entry, acc ->
+        cancel_upload(acc, :attachments, entry.ref)
+      end)
+
+    {:noreply,
+     socket
+     |> assign(:upload_dialog_open, false)
+     |> assign(:upload_caption, "")}
+  end
+
+  def handle_event("upload_caption_changed", %{"caption" => text}, socket) do
+    {:noreply, assign(socket, :upload_caption, text)}
+  end
+
+  def handle_event("send_upload", _params, socket) do
+    with space when not is_nil(space) <- socket.assigns.active_space,
+         participant when not is_nil(participant) <- socket.assigns.current_participant do
+      attrs = %{
+        space_id: space.id,
+        participant_id: participant.id,
+        content_type: "text",
+        content: String.trim(socket.assigns.upload_caption || "")
+      }
+
+      case post_message_from_upload(socket, :attachments, attrs) do
+        {:ok, socket, msg, attachments} ->
+          {:noreply,
+           socket
+           |> stream_insert(:messages, msg)
+           |> put_attachment_map_entry(msg.id, attachments)
+           |> assign(:upload_dialog_open, false)
+           |> assign(:upload_caption, "")}
+
+        {:noop, _socket} ->
+          {:noreply, put_flash(socket, :info, "No files selected")}
+
+        {:error, socket, reason} ->
+          {:noreply, put_flash(socket, :error, reason)}
+      end
+    else
+      _ -> {:noreply, socket}
+    end
+  end
+
+  def handle_event("cancel_upload", %{"ref" => ref}, socket) do
+    {:noreply, cancel_upload(socket, :attachments, ref)}
+  end
+
+  # ── End upload staging dialog events ──────────────────────────────────
 
   def handle_event("compose_changed", %{"compose" => %{"text" => text}}, socket) do
     {:noreply, assign_compose(socket, text)}
@@ -1348,7 +1408,11 @@ defmodule PlatformWeb.ChatLive do
       <% end %>
 
       <div class="flex flex-1 overflow-hidden min-w-0">
-        <div class="flex flex-1 flex-col overflow-hidden min-w-0">
+        <div
+          id="chat-drop-zone"
+          phx-hook="DragDropUpload"
+          class="flex flex-1 flex-col overflow-hidden min-w-0"
+        >
           <header
             :if={@active_space}
             class="flex h-12 flex-shrink-0 items-center justify-between border-b border-base-300 px-5"
@@ -1963,20 +2027,6 @@ defmodule PlatformWeb.ChatLive do
               phx-change="compose_changed"
               class="flex flex-col gap-2"
             >
-              <%!-- File chips above the input — only shown when files attached --%>
-              <div
-                :if={@uploads.attachments.entries != []}
-                class="flex flex-wrap gap-1"
-              >
-                <span
-                  :for={entry <- @uploads.attachments.entries}
-                  class="inline-flex items-center gap-1 rounded-full bg-base-200 px-2 py-0.5 text-xs text-base-content/70"
-                >
-                  <span class="hero-paper-clip size-3"></span>
-                  <span>{entry.client_name}</span>
-                </span>
-              </div>
-
               <%!-- @mention autocomplete dropdown --%>
               <div
                 :if={@mention_suggestions != []}
@@ -2019,13 +2069,16 @@ defmodule PlatformWeb.ChatLive do
 
               <%!-- Compose row: [+] [input stretches] [send] --%>
               <div class="flex items-center gap-2">
-                <label
+                <button
+                  type="button"
+                  phx-click="show_upload_dialog"
                   class="flex-shrink-0 cursor-pointer rounded-full w-9 h-9 flex items-center justify-center text-base-content/50 hover:bg-base-300 transition-colors"
                   title="Attach files"
                 >
                   <span class="hero-plus size-5"></span>
-                  <.live_file_input upload={@uploads.attachments} class="hidden" />
-                </label>
+                </button>
+                <%!-- Hidden file input keeps LiveView upload channel active for drag-drop --%>
+                <.live_file_input upload={@uploads.attachments} class="hidden" />
 
                 <textarea
                   name="compose[text]"
@@ -2069,6 +2122,152 @@ defmodule PlatformWeb.ChatLive do
               Unable to join space — messages are read-only.
             </p>
           </div>
+
+          <%!-- Upload staging dialog --%>
+          <%= if @upload_dialog_open do %>
+            <div
+              class="absolute inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm"
+              phx-click="hide_upload_dialog"
+            >
+              <div
+                class="mx-4 w-full max-w-lg rounded-2xl bg-base-100 shadow-2xl border border-base-300"
+                phx-click-away="hide_upload_dialog"
+                onclick="event.stopPropagation()"
+              >
+                <%!-- Header --%>
+                <div class="flex items-center justify-between border-b border-base-300 px-5 py-3">
+                  <h3 class="text-base font-semibold">Upload files</h3>
+                  <button
+                    type="button"
+                    phx-click="hide_upload_dialog"
+                    class="btn btn-ghost btn-xs btn-circle"
+                    title="Close"
+                  >
+                    <span class="hero-x-mark size-4"></span>
+                  </button>
+                </div>
+
+                <%!-- File previews --%>
+                <div class="px-5 py-4">
+                  <div
+                    :if={@uploads.attachments.entries != []}
+                    class="grid grid-cols-3 gap-3 mb-4"
+                  >
+                    <div
+                      :for={entry <- @uploads.attachments.entries}
+                      class="relative group"
+                    >
+                      <%= if String.starts_with?(entry.client_type, "image/") do %>
+                        <.live_img_preview
+                          entry={entry}
+                          class="w-full h-24 object-cover rounded-lg border border-base-300"
+                        />
+                      <% else %>
+                        <div class="w-full h-24 rounded-lg border border-base-300 bg-base-200 flex flex-col items-center justify-center gap-1 px-2">
+                          <span class="hero-document size-8 text-base-content/40"></span>
+                          <span class="text-[10px] text-base-content/60 truncate w-full text-center">
+                            {entry.client_name}
+                          </span>
+                        </div>
+                      <% end %>
+
+                      <%!-- Remove button --%>
+                      <button
+                        type="button"
+                        phx-click="cancel_upload"
+                        phx-value-ref={entry.ref}
+                        class="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-error text-error-content flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity shadow-sm"
+                        title="Remove"
+                      >
+                        <span class="hero-x-mark size-3"></span>
+                      </button>
+
+                      <%!-- Progress bar --%>
+                      <div
+                        :if={entry.progress > 0 and entry.progress < 100}
+                        class="absolute bottom-1 left-1 right-1"
+                      >
+                        <div class="h-1 rounded-full bg-base-300 overflow-hidden">
+                          <div
+                            class="h-full bg-primary transition-all duration-300"
+                            style={"width: #{entry.progress}%"}
+                          >
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div
+                    :if={@uploads.attachments.entries == []}
+                    class="text-center py-8 text-base-content/40"
+                  >
+                    <span class="hero-cloud-arrow-up size-12 mx-auto mb-2"></span>
+                    <p class="text-sm">No files selected yet</p>
+                  </div>
+
+                  <%!-- Upload errors --%>
+                  <p
+                    :for={error <- upload_errors(@uploads.attachments)}
+                    class="text-xs text-error mb-2"
+                  >
+                    {upload_error_to_string(error)}
+                  </p>
+
+                  <div :for={entry <- @uploads.attachments.entries}>
+                    <p
+                      :for={error <- upload_errors(@uploads.attachments, entry)}
+                      class="text-xs text-error mb-1"
+                    >
+                      {entry.client_name}: {upload_error_to_string(error)}
+                    </p>
+                  </div>
+
+                  <%!-- Add more files — triggers the hidden live_file_input in compose area --%>
+                  <button
+                    type="button"
+                    onclick="document.getElementById('chat-drop-zone').querySelector('input[type=file]').click()"
+                    class="flex items-center gap-2 text-sm text-primary cursor-pointer hover:underline mt-2"
+                  >
+                    <span class="hero-plus size-4"></span>
+                    <span>Add more files</span>
+                  </button>
+                </div>
+
+                <%!-- Caption --%>
+                <div class="px-5 pb-4">
+                  <form phx-change="upload_caption_changed" phx-submit="send_upload">
+                    <textarea
+                      name="caption"
+                      placeholder="Add a caption (optional)..."
+                      rows="2"
+                      phx-debounce="200"
+                      class="w-full rounded-xl text-sm resize-none bg-base-100 border border-base-300 focus:border-primary focus:outline-none transition-colors px-3 py-2"
+                    >{@upload_caption}</textarea>
+                  </form>
+                </div>
+
+                <%!-- Footer --%>
+                <div class="flex items-center justify-end gap-2 border-t border-base-300 px-5 py-3">
+                  <button
+                    type="button"
+                    phx-click="hide_upload_dialog"
+                    class="btn btn-ghost btn-sm"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    phx-click="send_upload"
+                    class="btn btn-primary btn-sm"
+                    disabled={@uploads.attachments.entries == []}
+                  >
+                    Send
+                  </button>
+                </div>
+              </div>
+            </div>
+          <% end %>
         </div>
 
         <%!-- Desktop: side panel --%>
