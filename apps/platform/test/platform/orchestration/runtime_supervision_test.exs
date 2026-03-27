@@ -78,6 +78,82 @@ defmodule Platform.Orchestration.RuntimeSupervisionTest do
     assert first.id == second.id
   end
 
+  test "execution.progress truncates long summaries to 300 characters" do
+    task = create_task!()
+    {:ok, space} = ExecutionSpace.find_or_create(task.id)
+
+    # Start execution first to create a lease
+    assert {:ok, _started} =
+             RuntimeSupervision.record_event(%{
+               "task_id" => task.id,
+               "phase" => "execution",
+               "runtime_id" => "runtime:test",
+               "event_type" => "execution.started",
+               "execution_space_id" => space.id,
+               "payload" => %{}
+             })
+
+    long_summary = String.duplicate("a", 500)
+
+    assert {:ok, _progress} =
+             RuntimeSupervision.record_event(%{
+               "task_id" => task.id,
+               "phase" => "execution",
+               "runtime_id" => "runtime:test",
+               "event_type" => "execution.progress",
+               "execution_space_id" => space.id,
+               "payload" => %{"summary" => long_summary}
+             })
+
+    messages = ExecutionSpace.list_messages_with_participants(space.id)
+
+    progress_msg =
+      Enum.find(messages, fn m ->
+        String.contains?(m.content, "Runtime progress from runtime:test:")
+      end)
+
+    assert progress_msg != nil
+    # 300 chars of 'a' + ellipsis, should NOT contain the full 500-char string
+    refute String.contains?(progress_msg.content, long_summary)
+    assert String.contains?(progress_msg.content, String.duplicate("a", 300) <> "…")
+  end
+
+  test "execution.progress passes short summaries through unchanged" do
+    task = create_task!()
+    {:ok, space} = ExecutionSpace.find_or_create(task.id)
+
+    assert {:ok, _started} =
+             RuntimeSupervision.record_event(%{
+               "task_id" => task.id,
+               "phase" => "execution",
+               "runtime_id" => "runtime:test",
+               "event_type" => "execution.started",
+               "execution_space_id" => space.id,
+               "payload" => %{}
+             })
+
+    short_summary = "agent replied: hello world"
+
+    assert {:ok, _progress} =
+             RuntimeSupervision.record_event(%{
+               "task_id" => task.id,
+               "phase" => "execution",
+               "runtime_id" => "runtime:test",
+               "event_type" => "execution.progress",
+               "execution_space_id" => space.id,
+               "payload" => %{"summary" => short_summary}
+             })
+
+    messages = ExecutionSpace.list_messages_with_participants(space.id)
+
+    progress_msg =
+      Enum.find(messages, fn m ->
+        String.contains?(m.content, short_summary)
+      end)
+
+    assert progress_msg != nil
+  end
+
   test "current_lease_for_task_runtime/2 expires stale leases on lookup" do
     task = create_task!()
 

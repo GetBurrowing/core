@@ -328,6 +328,11 @@ defmodule Platform.Orchestration.RuntimeSupervision do
       "execution.progress" ->
         details = event.payload["summary"] || event.payload[:summary]
 
+        details =
+          if is_binary(details) and byte_size(details) > 300,
+            do: String.slice(details, 0, 300) <> "…",
+            else: details
+
         if details,
           do: "Runtime progress from #{runtime}: #{details}",
           else: "Runtime progress received from #{runtime}"
