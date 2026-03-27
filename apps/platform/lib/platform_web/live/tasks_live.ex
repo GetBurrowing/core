@@ -699,6 +699,16 @@ defmodule PlatformWeb.TasksLive do
   end
 
   # Upload cancel
+  # ── Mention suggestion no-ops (ComposeInput hook fires these; TasksLive has no mention UI) ──
+
+  def handle_event("clear_mention_suggestions", _params, socket) do
+    {:noreply, socket}
+  end
+
+  def handle_event("mention_query", _params, socket) do
+    {:noreply, socket}
+  end
+
   def handle_event("cancel_task_upload", %{"ref" => ref}, socket) do
     {:noreply, cancel_upload(socket, :task_attachments, ref)}
   end
