@@ -88,7 +88,9 @@ defmodule Platform.Orchestration.ContextAssembler do
     %{
       name: epic.name,
       description: epic.description,
-      acceptance_criteria: epic.acceptance_criteria
+      acceptance_criteria: epic.acceptance_criteria,
+      target_branch: epic.target_branch,
+      deploy_target: epic.deploy_target
     }
   end
 

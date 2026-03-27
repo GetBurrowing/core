@@ -13,6 +13,8 @@ defmodule Platform.Tasks.Epic do
     field(:description, :string)
     field(:acceptance_criteria, :string)
     field(:status, :string, default: "open")
+    field(:target_branch, :string)
+    field(:deploy_target, :string)
 
     has_many(:tasks, Platform.Tasks.Task)
 
@@ -21,7 +23,15 @@ defmodule Platform.Tasks.Epic do
 
   def changeset(epic, attrs) do
     epic
-    |> cast(attrs, [:project_id, :name, :description, :acceptance_criteria, :status])
+    |> cast(attrs, [
+      :project_id,
+      :name,
+      :description,
+      :acceptance_criteria,
+      :status,
+      :target_branch,
+      :deploy_target
+    ])
     |> validate_required([:project_id, :name])
     |> validate_inclusion(:status, @statuses)
     |> foreign_key_constraint(:project_id)

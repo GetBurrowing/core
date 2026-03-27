@@ -100,7 +100,7 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
   def dispatch_prompt(%{status: "in_progress"} = task, plan, stage) do
     stage_info = format_stage_info(plan, stage)
     repo_url = project_attr(task, :repo_url, "")
-    default_branch = project_attr(task, :default_branch, "main")
+    default_branch = resolve_branch(task)
     task_slug = short_task_id(task)
 
     assigns = %{
@@ -148,7 +148,7 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
   def dispatch_prompt(%{status: "deploying"} = task, plan, stage) do
     stage_info = format_stage_info(plan, stage)
     repo_url = project_attr(task, :repo_url, "")
-    default_branch = project_attr(task, :default_branch, "main")
+    default_branch = resolve_branch(task)
     task_slug = short_task_id(task)
 
     # Extract strategy from the task context (preloaded by TaskRouter)
@@ -438,7 +438,7 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
     strategy_type = Map.get(resolved_strategy, "type", "manual")
     strategy_config = Map.get(resolved_strategy, "config", %{})
     repo_url = project_attr(task, :repo_url, "")
-    default_branch = project_attr(task, :default_branch, "main")
+    default_branch = resolve_branch(task)
     task_slug = short_task_id(task)
 
     strategy_instructions =
@@ -783,7 +783,7 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
 
   defp git_workflow_section(task) do
     repo_url = project_attr(task, :repo_url, "")
-    default_branch = project_attr(task, :default_branch, "main")
+    default_branch = resolve_branch(task)
     task_slug = short_task_id(task)
 
     """
@@ -853,6 +853,22 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
   defp project_attr(task, key, default) do
     project = Map.get(task, :project) || Map.get(task, "project") || %{}
     Map.get(project, key) || Map.get(project, Atom.to_string(key)) || default
+  end
+
+  @doc """
+  Resolve the effective branch for a task by walking epic → project.
+
+  Returns `epic.target_branch || project.default_branch || "main"`.
+  """
+  def resolve_branch(task) do
+    epic = Map.get(task, :epic) || Map.get(task, "epic")
+    epic_branch = epic && (Map.get(epic, :target_branch) || Map.get(epic, "target_branch"))
+
+    if epic_branch && epic_branch != "" do
+      epic_branch
+    else
+      project_attr(task, :default_branch, "main")
+    end
   end
 
   defp short_task_id(task) do

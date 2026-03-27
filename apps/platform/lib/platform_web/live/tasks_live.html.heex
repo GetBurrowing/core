@@ -117,6 +117,10 @@
               <span>{epic.task_count} tasks</span>
               <span class="text-success">{epic.done_count} done</span>
             </div>
+            <div :if={epic.target_branch} class="flex items-center gap-1 mt-1 text-xs text-info">
+              <span class="hero-code-bracket size-3"></span>
+              <span class="truncate">{epic.target_branch}</span>
+            </div>
           </div>
         </div>
       </div>
