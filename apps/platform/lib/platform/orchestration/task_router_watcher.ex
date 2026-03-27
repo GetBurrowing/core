@@ -37,7 +37,7 @@ defmodule Platform.Orchestration.TaskRouterWatcher do
 
   @reconcile_interval_ms 5 * 60 * 1_000
 
-  @active_statuses ~w(planning in_progress in_review)
+  @active_statuses ~w(planning in_progress in_review deploying)
 
   # ── Public API ─────────────────────────────────────────────────────────
 
