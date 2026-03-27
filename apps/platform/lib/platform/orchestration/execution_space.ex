@@ -12,7 +12,7 @@ defmodule Platform.Orchestration.ExecutionSpace do
   require Logger
 
   alias Platform.Chat
-  alias Platform.Chat.{Message, Participant, Space}
+  alias Platform.Chat.{Attachment, Message, Participant, Space}
   alias Platform.Repo
 
   @system_display_name "TaskRouter"
@@ -179,30 +179,57 @@ defmodule Platform.Orchestration.ExecutionSpace do
 
   Returns a list of maps ordered chronologically (oldest first) with keys:
   `id`, `content`, `content_type`, `log_only`, `inserted_at`, `metadata`,
-  `sender_name`, and `sender_type`.
+  `sender_name`, `sender_type`, and `attachments` (list of attachment maps).
   """
   @spec list_messages_with_participants(binary(), keyword()) :: [map()]
   def list_messages_with_participants(space_id, opts \\ []) do
     limit = Keyword.get(opts, :limit, 200)
 
-    from(m in Message,
-      join: p in Participant,
-      on: p.id == m.participant_id,
-      where: m.space_id == ^space_id and is_nil(m.deleted_at),
-      order_by: [asc: m.inserted_at],
-      limit: ^limit,
-      select: %{
-        id: m.id,
-        content: m.content,
-        content_type: m.content_type,
-        log_only: m.log_only,
-        inserted_at: m.inserted_at,
-        metadata: m.metadata,
-        sender_name: coalesce(p.display_name, p.participant_type),
-        sender_type: p.participant_type
-      }
-    )
-    |> Repo.all()
+    messages =
+      from(m in Message,
+        join: p in Participant,
+        on: p.id == m.participant_id,
+        where: m.space_id == ^space_id and is_nil(m.deleted_at),
+        order_by: [asc: m.inserted_at],
+        limit: ^limit,
+        select: %{
+          id: m.id,
+          content: m.content,
+          content_type: m.content_type,
+          log_only: m.log_only,
+          inserted_at: m.inserted_at,
+          metadata: m.metadata,
+          sender_name: coalesce(p.display_name, p.participant_type),
+          sender_type: p.participant_type
+        }
+      )
+      |> Repo.all()
+
+    # Batch-load attachments for all messages
+    message_ids = Enum.map(messages, & &1.id)
+
+    attachments_by_message =
+      if message_ids == [] do
+        %{}
+      else
+        from(a in Attachment,
+          where: a.message_id in ^message_ids,
+          select: %{
+            message_id: a.message_id,
+            id: a.id,
+            filename: a.filename,
+            content_type: a.content_type,
+            byte_size: a.byte_size,
+            storage_key: a.storage_key
+          }
+        )
+        |> Repo.all()
+        |> Enum.group_by(& &1.message_id)
+      end
+
+    Enum.map(messages, fn msg ->
+      Map.put(msg, :attachments, Map.get(attachments_by_message, msg.id, []))
+    end)
   end
 
   defp system_participant_id(space_id) do

@@ -148,6 +148,17 @@ defmodule Platform.Orchestration.ExecutionSpaceTest do
       assert ExecutionSpace.list_messages_with_participants(space.id) == []
     end
 
+    test "includes attachments field for messages" do
+      {:ok, space} = ExecutionSpace.find_or_create(@task_id)
+      {:ok, _msg} = ExecutionSpace.post_log(space.id, "Message with attachments field")
+
+      messages = ExecutionSpace.list_messages_with_participants(space.id)
+      assert length(messages) == 1
+      [msg] = messages
+      assert Map.has_key?(msg, :attachments)
+      assert msg.attachments == []
+    end
+
     test "respects limit option" do
       {:ok, space} = ExecutionSpace.find_or_create(@task_id)
       {:ok, _} = ExecutionSpace.post_log(space.id, "msg 1")

@@ -5,6 +5,7 @@ defmodule PlatformWeb.TasksLive do
 
   import Ecto.Query
 
+  alias Platform.Accounts
   alias Platform.Chat
   alias Platform.Chat.Canvas
   alias Platform.Chat.AttachmentStorage
@@ -64,6 +65,9 @@ defmodule PlatformWeb.TasksLive do
      |> assign(:execution_space_id, nil)
      |> assign(:execution_log, [])
      |> assign(:execution_log_collapsed, false)
+     # Steering input state
+     |> assign(:steering_compose_form, to_form(%{"text" => ""}, as: :steering))
+     |> assign(:execution_participant, nil)
      # Bottom sheet state
      |> assign(:show_task_sheet, false)
      |> assign(:default_task_agent_id, default_task_agent_id)
@@ -97,6 +101,12 @@ defmodule PlatformWeb.TasksLive do
        auto_upload: true,
        max_entries: @max_upload_entries,
        max_file_size: @max_upload_size
+     )
+     |> allow_upload(:steering_attachments,
+       accept: :any,
+       auto_upload: true,
+       max_entries: @max_upload_entries,
+       max_file_size: @max_upload_size
      )}
   end
 
@@ -122,12 +132,22 @@ defmodule PlatformWeb.TasksLive do
           output_canvases = load_output_canvases(space_id)
           attached_skills = Skills.resolve_skills(task.id)
 
+          # Lazily resolve participant for the execution space
+          execution_participant =
+            if space_id do
+              resolve_execution_participant(space_id, socket.assigns.current_user_id)
+            else
+              nil
+            end
+
           {:noreply,
            socket
            |> assign(:selected_task, task)
            |> assign(:show_detail, true)
            |> assign(:execution_space_id, space_id)
            |> assign(:execution_log, log)
+           |> assign(:execution_participant, execution_participant)
+           |> assign(:steering_compose_form, to_form(%{"text" => ""}, as: :steering))
            |> assign(:pending_reviews, pending_reviews)
            |> assign(:review_canvases, review_canvases)
            |> assign(:review_output_ids, review_output_ids)
@@ -143,6 +163,8 @@ defmodule PlatformWeb.TasksLive do
            |> assign(:show_detail, false)
            |> assign(:execution_space_id, nil)
            |> assign(:execution_log, [])
+           |> assign(:execution_participant, nil)
+           |> assign(:steering_compose_form, to_form(%{"text" => ""}, as: :steering))
            |> assign(:pending_reviews, [])
            |> assign(:review_canvases, %{})
            |> assign(:review_output_ids, MapSet.new())
@@ -158,6 +180,8 @@ defmodule PlatformWeb.TasksLive do
          |> assign(:show_detail, false)
          |> assign(:execution_space_id, nil)
          |> assign(:execution_log, [])
+         |> assign(:execution_participant, nil)
+         |> assign(:steering_compose_form, to_form(%{"text" => ""}, as: :steering))
          |> assign(:pending_reviews, [])
          |> assign(:review_canvases, %{})
          |> assign(:review_output_ids, MapSet.new())
@@ -241,6 +265,8 @@ defmodule PlatformWeb.TasksLive do
      |> assign(:show_detail, false)
      |> assign(:execution_space_id, nil)
      |> assign(:execution_log, [])
+     |> assign(:execution_participant, nil)
+     |> assign(:steering_compose_form, to_form(%{"text" => ""}, as: :steering))
      |> assign(:pending_reviews, [])
      |> assign(:review_canvases, %{})
      |> assign(:review_output_ids, MapSet.new())
@@ -599,6 +625,79 @@ defmodule PlatformWeb.TasksLive do
   defp column_to_status("done"), do: "done"
   defp column_to_status(_), do: "unknown"
 
+  # ── Steering input events ──────────────────────────────────────────────
+
+  def handle_event("send_steering_message", %{"steering" => %{"text" => content}}, socket) do
+    content = String.trim(content || "")
+    has_uploads = has_completed_steering_uploads?(socket)
+
+    with true <- content != "" or has_uploads,
+         space_id when not is_nil(space_id) <- socket.assigns.execution_space_id do
+      # Ensure we have a participant (lazy resolve on first send)
+      participant =
+        socket.assigns.execution_participant ||
+          resolve_execution_participant(space_id, socket.assigns.current_user_id)
+
+      if participant do
+        attrs = %{
+          space_id: space_id,
+          participant_id: participant.id,
+          content_type: "text",
+          content: content,
+          log_only: false
+        }
+
+        result =
+          if has_uploads do
+            case persist_steering_attachments(socket) do
+              {:ok, pending_attachments} ->
+                Chat.post_message_with_attachments(attrs, pending_attachments)
+
+              {:error, :storage_failed} ->
+                {:error, :storage_failed}
+            end
+          else
+            case Chat.post_message(attrs) do
+              {:ok, msg} -> {:ok, msg, []}
+              error -> error
+            end
+          end
+
+        case result do
+          {:ok, _msg, _attachments} ->
+            {:noreply,
+             socket
+             |> assign(:execution_participant, participant)
+             |> assign(:steering_compose_form, to_form(%{"text" => ""}, as: :steering))}
+
+          {:ok, _msg} ->
+            {:noreply,
+             socket
+             |> assign(:execution_participant, participant)
+             |> assign(:steering_compose_form, to_form(%{"text" => ""}, as: :steering))}
+
+          {:error, :storage_failed} ->
+            {:noreply, put_flash(socket, :error, "Failed to store attachment.")}
+
+          {:error, _reason} ->
+            {:noreply, put_flash(socket, :error, "Failed to send steering message.")}
+        end
+      else
+        {:noreply, put_flash(socket, :error, "Could not join execution space.")}
+      end
+    else
+      _ -> {:noreply, socket}
+    end
+  end
+
+  def handle_event("steering_changed", %{"steering" => params}, socket) do
+    {:noreply, assign(socket, :steering_compose_form, to_form(params, as: :steering))}
+  end
+
+  def handle_event("cancel_steering_upload", %{"ref" => ref}, socket) do
+    {:noreply, cancel_upload(socket, :steering_attachments, ref)}
+  end
+
   # Upload cancel
   def handle_event("cancel_task_upload", %{"ref" => ref}, socket) do
     {:noreply, cancel_upload(socket, :task_attachments, ref)}
@@ -738,6 +837,79 @@ defmodule PlatformWeb.TasksLive do
         {:error, _reason} -> {:ok, :failed}
       end
     end)
+  end
+
+  # ── Private — Steering participant helper ──────────────────────────────────
+
+  defp resolve_execution_participant(space_id, user_id)
+       when is_binary(space_id) and is_binary(user_id) do
+    existing =
+      space_id
+      |> Chat.list_participants(include_left: true)
+      |> Enum.find(fn p -> p.participant_id == user_id end)
+
+    case existing do
+      nil ->
+        display_name =
+          case Accounts.get_user(user_id) do
+            %{name: name} when is_binary(name) and name != "" -> name
+            %{email: email} when is_binary(email) -> email
+            _ -> "User"
+          end
+
+        case Chat.add_participant(space_id, %{
+               participant_type: "user",
+               participant_id: user_id,
+               display_name: display_name,
+               joined_at: DateTime.utc_now()
+             }) do
+          {:ok, p} -> p
+          {:error, _} -> nil
+        end
+
+      %{left_at: nil} = p ->
+        p
+
+      p ->
+        case Chat.update_participant(p, %{left_at: nil, joined_at: DateTime.utc_now()}) do
+          {:ok, rejoined} -> rejoined
+          {:error, _} -> p
+        end
+    end
+  end
+
+  defp resolve_execution_participant(_space_id, _user_id), do: nil
+
+  # ── Private — Steering upload helpers ────────────────────────────────────
+
+  defp has_completed_steering_uploads?(socket) do
+    case uploaded_entries(socket, :steering_attachments) do
+      {[_ | _], _in_progress} -> true
+      _ -> false
+    end
+  end
+
+  defp persist_steering_attachments(socket) do
+    results =
+      consume_uploaded_entries(socket, :steering_attachments, fn %{path: path}, entry ->
+        result =
+          case AttachmentStorage.persist_upload(path, entry.client_name, entry.client_type) do
+            {:ok, attrs} -> {:ok, attrs}
+            {:error, _reason} -> {:error, :storage_failed}
+          end
+
+        {:ok, result}
+      end)
+
+    {ok_results, error_results} = Enum.split_with(results, &match?({:ok, _}, &1))
+    attachments = Enum.map(ok_results, fn {:ok, attrs} -> attrs end)
+
+    if error_results == [] do
+      {:ok, attachments}
+    else
+      AttachmentStorage.delete_many(attachments)
+      {:error, :storage_failed}
+    end
   end
 
   # ── Private — Execution log helpers ──────────────────────────────────────
@@ -1095,6 +1267,7 @@ defmodule PlatformWeb.TasksLive do
 
   defp log_sender_color("agent", "system"), do: "text-warning"
   defp log_sender_color("agent", _content_type), do: "text-info"
+  defp log_sender_color("user", _content_type), do: "text-primary"
   defp log_sender_color(_sender_type, _content_type), do: "text-base-content/60"
 
   defp stage_status_icon("passed"), do: "hero-check-circle text-success"
@@ -1102,4 +1275,9 @@ defmodule PlatformWeb.TasksLive do
   defp stage_status_icon("running"), do: "hero-arrow-path text-info animate-spin"
   defp stage_status_icon("skipped"), do: "hero-minus-circle text-base-content/40"
   defp stage_status_icon(_), do: "hero-clock text-base-content/40"
+
+  defp upload_error_to_string(:too_large), do: "File is too large"
+  defp upload_error_to_string(:too_many_files), do: "Too many files selected"
+  defp upload_error_to_string(:not_accepted), do: "File type is not accepted"
+  defp upload_error_to_string(error), do: inspect(error)
 end
