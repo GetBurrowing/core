@@ -287,3 +287,30 @@ pre .makeup .mi { color: #79c0ff; }        /* number integer */
 pre .makeup .mf { color: #79c0ff; }        /* number float */
 pre .makeup .ss { color: #a5d6ff; }        /* string symbol */
 pre .makeup .sa { color: #79c0ff; }        /* string affix */
+
+/* ── Kanban drag-and-drop feedback ─────────────────────────────────── */
+
+/* Card being dragged */
+.kanban-dragging {
+  opacity: 0.4;
+  transform: rotate(2deg) scale(0.95);
+  box-shadow: none;
+  transition: opacity 150ms ease, transform 150ms ease;
+}
+
+/* Column highlighted as valid drop target */
+.kanban-drag-over {
+  background-color: oklch(var(--color-primary) / 0.08);
+  border: 2px dashed oklch(var(--color-primary) / 0.4);
+  border-radius: var(--radius-box, 1rem);
+  transition: background-color 150ms ease, border-color 150ms ease;
+}
+
+/* Draggable task cards — cursor styling */
+.card[draggable="true"] {
+  cursor: grab;
+}
+
+.card[draggable="true"]:active {
+  cursor: grabbing;
+}

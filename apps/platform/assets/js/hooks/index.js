@@ -3,6 +3,7 @@ import ComposeInput from "./compose_input"
 import CopyToClipboard from "./copy_to_clipboard"
 import DragDropUpload from "./drag_drop_upload"
 import ExecutionLogScroll from "./execution_log_scroll"
+import KanbanDragDrop from "./kanban_drag_drop"
 import LocalTime from "./local_time"
 import MermaidDiagram from "./mermaid_diagram"
 import PushSubscribe from "./push_subscribe"
@@ -16,6 +17,7 @@ export default {
   CopyToClipboard,
   DragDropUpload,
   ExecutionLogScroll,
+  KanbanDragDrop,
   LocalTime,
   MermaidDiagram,
   PushSubscribe,

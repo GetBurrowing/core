@@ -442,6 +442,67 @@ defmodule Platform.Tasks do
     end
   end
 
+  # ── Manual drag-and-drop transitions (permissive) ─────────────────────
+
+  # Permissive transitions for manual drag-and-drop on the kanban board.
+  # Unlike @valid_task_transitions (used by the automated pipeline), this
+  # allows humans to override status from the UI — e.g. reopening a done
+  # task, skipping straight to in_progress, etc.
+  @valid_drop_transitions %{
+    "backlog" => ~w(in_progress in_review deploying done),
+    "planning" => ~w(backlog in_progress in_review deploying done),
+    "ready" => ~w(backlog in_progress in_review deploying done),
+    "blocked" => ~w(backlog in_progress in_review deploying done),
+    "in_progress" => ~w(backlog in_review deploying done),
+    "in_review" => ~w(backlog in_progress deploying done),
+    "deploying" => ~w(backlog in_progress in_review done),
+    "done" => ~w(backlog in_progress)
+  }
+
+  @drop_target_status %{
+    "backlog" => "backlog",
+    "in_progress" => "in_progress",
+    "in_review" => "in_review",
+    "deploying" => "deploying",
+    "done" => "done"
+  }
+
+  @doc """
+  Move a task to a kanban column via manual drag-and-drop.
+
+  Uses permissive transition rules (broader than the automated pipeline)
+  since this represents an intentional human override from the board UI.
+
+  Returns `{:ok, task}` or `{:error, :invalid_drop | :unknown_column | changeset}`.
+  """
+  def drop_task_to_column(%Task{} = task, column) do
+    case Map.get(@drop_target_status, column) do
+      nil ->
+        {:error, :unknown_column}
+
+      target_status when target_status == task.status ->
+        # Same column — no-op, return task as-is
+        {:ok, task}
+
+      target_status ->
+        allowed = Map.get(@valid_drop_transitions, task.status, [])
+
+        if target_status in allowed do
+          case task |> Task.changeset(%{status: target_status}) |> Repo.update() do
+            {:ok, updated} ->
+              updated = Repo.preload(updated, [:project, :epic, plans: :stages])
+              broadcast_board({:task_updated, updated})
+              {:ok, updated}
+
+            {:error, changeset} ->
+              {:error, changeset}
+          end
+        else
+          {:error, :invalid_drop}
+        end
+    end
+  end
+
   defp maybe_prepare_transition(%Task{status: "in_progress"} = task, "in_review") do
     case failed_manual_approval_validation(task.id) do
       nil ->
