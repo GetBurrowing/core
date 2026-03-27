@@ -22,6 +22,58 @@ defmodule PlatformWeb.GithubWebhookControllerTest do
     task
   end
 
+  defp create_task_with_ci_validation! do
+    {:ok, project} =
+      Tasks.create_project(%{
+        name: "CI Test #{System.unique_integer([:positive])}",
+        repo_url: "https://github.com/test/ci-repo"
+      })
+
+    {:ok, task} =
+      Tasks.create_task(%{
+        project_id: project.id,
+        title: "Task with CI"
+      })
+
+    {:ok, plan} =
+      Tasks.create_plan(%{
+        task_id: task.id,
+        status: "approved"
+      })
+
+    {:ok, stage} =
+      Tasks.create_stage(%{
+        plan_id: plan.id,
+        position: 1,
+        name: "Deploy: PR merge",
+        description: "Deploy via PR merge"
+      })
+
+    {:ok, _} = Tasks.transition_stage(stage, "running")
+    stage = Platform.Repo.get!(Platform.Tasks.Stage, stage.id)
+
+    {:ok, ci_validation} =
+      Tasks.create_validation(%{
+        stage_id: stage.id,
+        kind: "ci_passed"
+      })
+
+    {:ok, pr_validation} =
+      Tasks.create_validation(%{
+        stage_id: stage.id,
+        kind: "pr_merged"
+      })
+
+    %{
+      project: project,
+      task: task,
+      plan: plan,
+      stage: stage,
+      ci_validation: ci_validation,
+      pr_validation: pr_validation
+    }
+  end
+
   defp merged_pr_payload(overrides \\ %{}) do
     Map.merge(
       %{
@@ -42,7 +94,39 @@ defmodule PlatformWeb.GithubWebhookControllerTest do
     )
   end
 
-  describe "POST #{@github_webhook_path}" do
+  defp check_suite_payload(branch, conclusion) do
+    %{
+      "action" => "completed",
+      "check_suite" => %{
+        "head_branch" => branch,
+        "conclusion" => conclusion,
+        "head_sha" => "abc123",
+        "url" => "https://api.github.com/repos/test/ci-repo/check-suites/12345"
+      },
+      "repository" => %{
+        "html_url" => "https://github.com/test/ci-repo"
+      }
+    }
+  end
+
+  defp workflow_run_payload(branch, conclusion) do
+    %{
+      "action" => "completed",
+      "workflow_run" => %{
+        "head_branch" => branch,
+        "conclusion" => conclusion,
+        "head_sha" => "def456",
+        "html_url" => "https://github.com/test/ci-repo/actions/runs/67890"
+      },
+      "repository" => %{
+        "html_url" => "https://github.com/test/ci-repo"
+      }
+    }
+  end
+
+  # ── Merged PR tests (existing functionality) ────────────────────────────
+
+  describe "POST #{@github_webhook_path} — merged PRs" do
     test "creates a changelog entry for a merged PR", %{conn: conn} do
       payload = merged_pr_payload()
 
@@ -125,6 +209,197 @@ defmodule PlatformWeb.GithubWebhookControllerTest do
 
       conn2 = post(conn, @github_webhook_path, payload)
       assert %{"status" => "error"} = json_response(conn2, 422)
+    end
+  end
+
+  # ── CI webhook tests ────────────────────────────────────────────────────
+
+  describe "POST #{@github_webhook_path} — check_suite.completed" do
+    test "evaluates ci_passed validation as passed on success", %{conn: conn} do
+      %{task: task, ci_validation: ci_validation} = create_task_with_ci_validation!()
+
+      branch = "task/#{task.id}"
+      payload = check_suite_payload(branch, "success")
+
+      conn = post(conn, @github_webhook_path, payload)
+
+      assert %{
+               "status" => "evaluated",
+               "validation_id" => _id,
+               "result" => "passed"
+             } = json_response(conn, 201)
+
+      # Verify the validation was actually updated
+      updated = Platform.Repo.get!(Platform.Tasks.Validation, ci_validation.id)
+      assert updated.status == "passed"
+      assert updated.evaluated_by == "github_webhook"
+      assert updated.evidence["event_type"] == "check_suite"
+      assert updated.evidence["conclusion"] == "success"
+      assert updated.evidence["sha"] == "abc123"
+    end
+
+    test "evaluates ci_passed validation as failed on failure", %{conn: conn} do
+      %{task: task, ci_validation: ci_validation} = create_task_with_ci_validation!()
+
+      branch = "task/#{task.id}"
+      payload = check_suite_payload(branch, "failure")
+
+      conn = post(conn, @github_webhook_path, payload)
+
+      assert %{
+               "status" => "evaluated",
+               "result" => "failed"
+             } = json_response(conn, 201)
+
+      updated = Platform.Repo.get!(Platform.Tasks.Validation, ci_validation.id)
+      assert updated.status == "failed"
+      assert updated.evidence["conclusion"] == "failure"
+    end
+
+    test "ignores branches that don't match task pattern", %{conn: conn} do
+      payload = check_suite_payload("main", "success")
+
+      conn = post(conn, @github_webhook_path, payload)
+
+      assert %{"status" => "ignored", "reason" => "branch does not match task pattern"} =
+               json_response(conn, 200)
+    end
+
+    test "ignores when no pending ci_passed validation exists", %{conn: conn} do
+      task = create_task!()
+      branch = "task/#{task.id}"
+      payload = check_suite_payload(branch, "success")
+
+      conn = post(conn, @github_webhook_path, payload)
+
+      assert %{"status" => "ignored", "reason" => "no pending ci_passed validation"} =
+               json_response(conn, 200)
+    end
+  end
+
+  describe "POST #{@github_webhook_path} — workflow_run.completed" do
+    test "evaluates ci_passed validation as passed on success", %{conn: conn} do
+      %{task: task, ci_validation: ci_validation} = create_task_with_ci_validation!()
+
+      branch = "task/#{task.id}"
+      payload = workflow_run_payload(branch, "success")
+
+      conn = post(conn, @github_webhook_path, payload)
+
+      assert %{
+               "status" => "evaluated",
+               "validation_id" => _id,
+               "result" => "passed"
+             } = json_response(conn, 201)
+
+      updated = Platform.Repo.get!(Platform.Tasks.Validation, ci_validation.id)
+      assert updated.status == "passed"
+      assert updated.evaluated_by == "github_webhook"
+      assert updated.evidence["event_type"] == "workflow_run"
+      assert updated.evidence["sha"] == "def456"
+    end
+
+    test "evaluates ci_passed validation as failed on failure", %{conn: conn} do
+      %{task: task, ci_validation: ci_validation} = create_task_with_ci_validation!()
+
+      branch = "task/#{task.id}"
+      payload = workflow_run_payload(branch, "failure")
+
+      conn = post(conn, @github_webhook_path, payload)
+
+      assert %{
+               "status" => "evaluated",
+               "result" => "failed"
+             } = json_response(conn, 201)
+
+      updated = Platform.Repo.get!(Platform.Tasks.Validation, ci_validation.id)
+      assert updated.status == "failed"
+    end
+  end
+
+  # ── HMAC signature verification tests ───────────────────────────────────
+
+  describe "HMAC signature verification" do
+    test "verify_hmac/3 returns true for valid signature" do
+      body = ~s({"action": "completed"})
+      secret = "test-secret-key"
+
+      hex_digest =
+        :crypto.mac(:hmac, :sha256, secret, body)
+        |> Base.encode16(case: :lower)
+
+      signature = "sha256=#{hex_digest}"
+
+      assert PlatformWeb.GithubWebhookController.verify_hmac(body, signature, secret)
+    end
+
+    test "verify_hmac/3 returns false for invalid signature" do
+      body = ~s({"action": "completed"})
+      secret = "test-secret-key"
+      signature = "sha256=0000000000000000000000000000000000000000000000000000000000000000"
+
+      refute PlatformWeb.GithubWebhookController.verify_hmac(body, signature, secret)
+    end
+
+    test "verify_hmac/3 returns false for malformed signature" do
+      refute PlatformWeb.GithubWebhookController.verify_hmac("body", "not-sha256", "secret")
+    end
+
+    test "requests without signature header are allowed through (backward compat)", %{conn: conn} do
+      # No x-hub-signature-256 header — should be allowed
+      conn = post(conn, @github_webhook_path, %{"action" => "opened", "issue" => %{}})
+      assert %{"status" => "ignored"} = json_response(conn, 200)
+    end
+  end
+
+  # ── Auto-merge query tests ─────────────────────────────────────────────
+
+  describe "find_pending_pr_merged_validation/1" do
+    test "finds pending pr_merged validation on running deploy stage" do
+      %{task: task, pr_validation: pr_validation} = create_task_with_ci_validation!()
+
+      found =
+        PlatformWeb.GithubWebhookController.find_pending_pr_merged_validation(task.id)
+
+      assert found != nil
+      assert found.id == pr_validation.id
+    end
+
+    test "returns nil when no pending pr_merged validation exists" do
+      task = create_task!()
+      assert PlatformWeb.GithubWebhookController.find_pending_pr_merged_validation(task.id) == nil
+    end
+
+    test "finds ci_check kind validation (used when auto_merge is true)" do
+      {:ok, project} =
+        Tasks.create_project(%{
+          name: "Auto Merge Query #{System.unique_integer([:positive])}",
+          repo_url: "https://github.com/test/auto-merge-query"
+        })
+
+      {:ok, task} =
+        Tasks.create_task(%{project_id: project.id, title: "Auto merge query"})
+
+      {:ok, plan} =
+        Tasks.create_plan(%{task_id: task.id, status: "approved"})
+
+      {:ok, stage} =
+        Tasks.create_stage(%{
+          plan_id: plan.id,
+          position: 1,
+          name: "Deploy: PR merge"
+        })
+
+      {:ok, _} = Tasks.transition_stage(stage, "running")
+
+      {:ok, ci_check_val} =
+        Tasks.create_validation(%{stage_id: stage.id, kind: "ci_check"})
+
+      found =
+        PlatformWeb.GithubWebhookController.find_pending_pr_merged_validation(task.id)
+
+      assert found != nil
+      assert found.id == ci_check_val.id
     end
   end
 end

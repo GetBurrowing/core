@@ -7,6 +7,7 @@ defmodule Platform.Orchestration.ContextAssembler do
   pure Repo queries via `Platform.Tasks`.
   """
 
+  alias Platform.Execution.CredentialLease
   alias Platform.Orchestration.ExecutionSpace
   alias Platform.Skills
   alias Platform.Tasks
@@ -14,11 +15,15 @@ defmodule Platform.Orchestration.ContextAssembler do
   @doc """
   Build a full context snapshot for the given task.
 
-  Returns a map with `:project`, `:epic`, `:task`, `:plan`, and
-  `:execution_space_id` keys.
+  Returns a map with `:project`, `:epic`, `:task`, `:plan`,
+  `:execution_space_id`, and optionally `:deploy_credentials` keys.
+
+  The optional `deploy_lease` argument, when provided, causes the lease's
+  env vars to be included under `:deploy_credentials` so the executing agent
+  has SSH keys, API tokens, etc. available in its dispatch context.
   """
-  @spec build(String.t()) :: map() | nil
-  def build(task_id) do
+  @spec build(String.t(), CredentialLease.t() | nil) :: map() | nil
+  def build(task_id, deploy_lease \\ nil) do
     case Tasks.get_task_detail(task_id) do
       nil ->
         nil
@@ -41,7 +46,7 @@ defmodule Platform.Orchestration.ContextAssembler do
 
         resolved_deploy_strategy = Tasks.resolve_deploy_strategy(task)
 
-        %{
+        base = %{
           project: serialize_project(task.project),
           epic: serialize_epic(task.epic),
           task: serialize_task(task),
@@ -50,6 +55,8 @@ defmodule Platform.Orchestration.ContextAssembler do
           skills: skills,
           resolved_deploy_strategy: resolved_deploy_strategy
         }
+
+        maybe_add_deploy_credentials(base, deploy_lease)
     end
   end
 
@@ -132,5 +139,15 @@ defmodule Platform.Orchestration.ContextAssembler do
       kind: validation.kind,
       status: validation.status
     }
+  end
+
+  defp maybe_add_deploy_credentials(context, nil), do: context
+
+  defp maybe_add_deploy_credentials(context, %CredentialLease{} = lease) do
+    if CredentialLease.valid?(lease) do
+      Map.put(context, :deploy_credentials, CredentialLease.to_env(lease))
+    else
+      context
+    end
   end
 end

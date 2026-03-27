@@ -208,8 +208,9 @@ defmodule Platform.Tasks do
       %{"type" => "manual"}
   end
 
-  defp ensure_project_loaded(%Task{project: %Project{}} = task), do: task
-  defp ensure_project_loaded(%Task{} = task), do: Repo.preload(task, :project)
+  @doc "Ensures the task has its project association loaded."
+  def ensure_project_loaded(%Task{project: %Project{}} = task), do: task
+  def ensure_project_loaded(%Task{} = task), do: Repo.preload(task, :project)
 
   # ── Plans ────────────────────────────────────────────────────────────────
 

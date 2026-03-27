@@ -846,7 +846,9 @@
           <label class="label label-text text-xs font-medium">Deploy Strategy</label>
           <select
             name="task[deploy_strategy_type]"
+            id="deploy-strategy-type"
             class="select select-bordered select-sm w-full"
+            phx-change="validate_task"
           >
             <option value="inherit">Inherit from project</option>
             <option value="pr_merge">PR Merge</option>
@@ -855,6 +857,53 @@
             <option value="manual">Manual</option>
             <option value="none">None (skip deploy)</option>
           </select>
+        </div>
+        <%!-- Auto-merge config — visible only when PR Merge is selected --%>
+        <div
+          :if={@deploy_strategy_type == "pr_merge"}
+          class="space-y-2 pl-2 border-l-2 border-base-300"
+        >
+          <label class="label cursor-pointer justify-start gap-2">
+            <input
+              type="checkbox"
+              name="task[auto_merge]"
+              value="true"
+              checked={@auto_merge_enabled}
+              class="toggle toggle-sm toggle-primary"
+              phx-click="toggle_auto_merge"
+            />
+            <span class="label-text text-xs">
+              Auto-merge after CI passes
+            </span>
+            <div
+              class="tooltip tooltip-right"
+              data-tip="When enabled, PRs are automatically merged after CI passes. When disabled, a human must click merge."
+            >
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                class="h-3.5 w-3.5 opacity-50"
+                viewBox="0 0 20 20"
+                fill="currentColor"
+              >
+                <path
+                  fill-rule="evenodd"
+                  d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z"
+                  clip-rule="evenodd"
+                />
+              </svg>
+            </div>
+          </label>
+          <div :if={@auto_merge_enabled}>
+            <label class="label label-text text-xs font-medium">Merge Method</label>
+            <select
+              name="task[merge_method]"
+              class="select select-bordered select-xs w-full"
+            >
+              <option value="squash" selected={@merge_method == "squash"}>Squash</option>
+              <option value="merge" selected={@merge_method == "merge"}>Merge commit</option>
+              <option value="rebase" selected={@merge_method == "rebase"}>Rebase</option>
+            </select>
+          </div>
         </div>
 
         <%!-- Validation Mode --%>

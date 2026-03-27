@@ -5,7 +5,7 @@ defmodule Platform.Tasks.Validation do
   @primary_key {:id, Platform.Types.UUIDv7, autogenerate: true}
   @foreign_key_type :binary_id
 
-  @kinds ~w(ci_check lint_pass type_check test_pass code_review manual_approval)
+  @kinds ~w(ci_check ci_passed pr_merged lint_pass type_check test_pass code_review manual_approval)
   @statuses ~w(pending running passed failed)
 
   schema "validations" do

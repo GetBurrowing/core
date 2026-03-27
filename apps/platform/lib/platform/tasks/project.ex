@@ -30,6 +30,32 @@ defmodule Platform.Tasks.Project do
     |> maybe_generate_slug()
     |> validate_required([:slug])
     |> unique_constraint(:slug)
+    |> validate_deploy_strategy()
+  end
+
+  defp validate_deploy_strategy(changeset) do
+    case get_change(changeset, :deploy_config) do
+      nil ->
+        changeset
+
+      deploy_config when is_map(deploy_config) ->
+        case Map.get(deploy_config, "default_strategy") do
+          nil ->
+            changeset
+
+          strategy when is_map(strategy) ->
+            case Platform.Tasks.DeployStageBuilder.validate_strategy(strategy) do
+              :ok -> changeset
+              {:error, reason} -> add_error(changeset, :deploy_config, reason)
+            end
+
+          _ ->
+            add_error(changeset, :deploy_config, "default_strategy must be a map")
+        end
+
+      _ ->
+        changeset
+    end
   end
 
   defp maybe_generate_slug(changeset) do

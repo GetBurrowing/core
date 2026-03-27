@@ -10,7 +10,7 @@ defmodule Platform.Tasks.DeployStageBuilderTest do
   end
 
   describe "build_stage/2 — pr_merge" do
-    test "returns stage with test_pass and manual_approval validations" do
+    test "auto_merge false: uses ci_passed + manual_approval for pr_merged" do
       strategy = %{
         "type" => "pr_merge",
         "config" => %{
@@ -24,20 +24,34 @@ defmodule Platform.Tasks.DeployStageBuilderTest do
 
       assert result.name == "Deploy: PR merge"
       assert result.position == 4
-      assert result.validations == [%{kind: "test_pass"}, %{kind: "manual_approval"}]
+      assert result.validations == [%{kind: "ci_passed"}, %{kind: "manual_approval"}]
       assert result.description =~ "PR merge flow"
       assert result.description =~ "CI must pass"
       assert result.description =~ "Auto-merge is disabled"
+      assert result.description =~ "manual_approval"
     end
 
-    test "description reflects auto_merge enabled" do
+    test "auto_merge true: uses ci_passed + ci_check for pr_merged" do
+      strategy = %{
+        "type" => "pr_merge",
+        "config" => %{"auto_merge" => true, "merge_method" => "squash"}
+      }
+
+      result = DeployStageBuilder.build_stage(strategy, 1)
+
+      assert result.validations == [%{kind: "ci_passed"}, %{kind: "ci_check"}]
+      assert result.description =~ "Auto-merge is enabled"
+      assert result.description =~ "merge method: squash"
+    end
+
+    test "auto_merge true defaults merge_method to squash" do
       strategy = %{
         "type" => "pr_merge",
         "config" => %{"auto_merge" => true}
       }
 
       result = DeployStageBuilder.build_stage(strategy, 1)
-      assert result.description =~ "Auto-merge is enabled"
+      assert result.description =~ "merge method: squash"
     end
 
     test "description reflects require_review_approval" do
@@ -50,18 +64,19 @@ defmodule Platform.Tasks.DeployStageBuilderTest do
       assert result.description =~ "PR review approval is required"
     end
 
-    test "works with empty config" do
+    test "works with empty config (defaults)" do
       strategy = %{"type" => "pr_merge"}
       result = DeployStageBuilder.build_stage(strategy, 2)
 
       assert result.name == "Deploy: PR merge"
       assert result.position == 2
-      assert length(result.validations) == 2
+      # Default: auto_merge false → manual_approval
+      assert result.validations == [%{kind: "ci_passed"}, %{kind: "manual_approval"}]
     end
   end
 
   describe "build_stage/2 — docker_deploy" do
-    test "returns stage with test_pass and manual_approval validations" do
+    test "returns stage with ci_passed and test_pass validations" do
       strategy = %{
         "type" => "docker_deploy",
         "config" => %{
@@ -74,7 +89,7 @@ defmodule Platform.Tasks.DeployStageBuilderTest do
 
       assert result.name == "Deploy: Docker deploy"
       assert result.position == 5
-      assert result.validations == [%{kind: "test_pass"}, %{kind: "manual_approval"}]
+      assert result.validations == [%{kind: "ci_passed"}, %{kind: "test_pass"}]
       assert result.description =~ "Docker"
       assert result.description =~ "dev@192.0.2.234"
       assert result.description =~ "ghcr.io/org/app:latest"
@@ -85,8 +100,34 @@ defmodule Platform.Tasks.DeployStageBuilderTest do
       result = DeployStageBuilder.build_stage(strategy, 1)
 
       assert result.name == "Deploy: Docker deploy"
+      assert result.validations == [%{kind: "ci_passed"}, %{kind: "test_pass"}]
       refute result.description =~ "Target host:"
       refute result.description =~ "Image:"
+    end
+  end
+
+  describe "build_stage/2 — fly" do
+    test "returns stage with ci_passed and test_pass validations" do
+      strategy = %{
+        "type" => "fly",
+        "config" => %{"app" => "my-fly-app"}
+      }
+
+      result = DeployStageBuilder.build_stage(strategy, 3)
+
+      assert result.name == "Deploy: Fly deploy"
+      assert result.position == 3
+      assert result.validations == [%{kind: "ci_passed"}, %{kind: "test_pass"}]
+      assert result.description =~ "Fly.io"
+      assert result.description =~ "my-fly-app"
+    end
+
+    test "works without app in config" do
+      strategy = %{"type" => "fly", "config" => %{}}
+      result = DeployStageBuilder.build_stage(strategy, 1)
+
+      assert result.name == "Deploy: Fly deploy"
+      refute result.description =~ "Fly app:"
     end
   end
 
@@ -138,10 +179,46 @@ defmodule Platform.Tasks.DeployStageBuilderTest do
 
   describe "build_stage/2 — position" do
     test "uses the provided position for all strategy types" do
-      for {type, pos} <- [{"pr_merge", 1}, {"docker_deploy", 7}, {"manual", 42}] do
+      for {type, pos} <- [{"pr_merge", 1}, {"docker_deploy", 7}, {"fly", 10}, {"manual", 42}] do
         result = DeployStageBuilder.build_stage(%{"type" => type}, pos)
         assert result.position == pos, "Expected position #{pos} for type #{type}"
       end
+    end
+  end
+
+  describe "validate_strategy/1" do
+    test "returns :ok for all valid strategy types" do
+      for type <- DeployStageBuilder.valid_strategy_types() do
+        assert :ok == DeployStageBuilder.validate_strategy(%{"type" => type}),
+               "Expected :ok for type #{type}"
+      end
+    end
+
+    test "returns error for unknown type" do
+      assert {:error, msg} = DeployStageBuilder.validate_strategy(%{"type" => "bogus"})
+      assert msg =~ "unknown strategy type"
+      assert msg =~ "bogus"
+    end
+
+    test "returns error when type key is missing" do
+      assert {:error, _} = DeployStageBuilder.validate_strategy(%{})
+    end
+
+    test "returns error for non-map input" do
+      assert {:error, _} = DeployStageBuilder.validate_strategy("not a map")
+    end
+  end
+
+  describe "valid_merge_method?/1" do
+    test "returns true for squash, merge, rebase" do
+      assert DeployStageBuilder.valid_merge_method?("squash")
+      assert DeployStageBuilder.valid_merge_method?("merge")
+      assert DeployStageBuilder.valid_merge_method?("rebase")
+    end
+
+    test "returns false for unknown method" do
+      refute DeployStageBuilder.valid_merge_method?("fast-forward")
+      refute DeployStageBuilder.valid_merge_method?("")
     end
   end
 end

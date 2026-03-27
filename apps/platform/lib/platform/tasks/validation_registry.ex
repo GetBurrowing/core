@@ -25,6 +25,18 @@ defmodule Platform.Tasks.ValidationRegistry do
       description: "Poll CI status via GitHub API"
     },
     %{
+      kind: "ci_passed",
+      label: "CI Passed",
+      deterministic: true,
+      description: "Auto-evaluated by GitHub CI webhook on check_suite/workflow_run completion"
+    },
+    %{
+      kind: "pr_merged",
+      label: "PR Merged",
+      deterministic: false,
+      description: "PR merge gate — manual or auto-merge depending on project config"
+    },
+    %{
       kind: "lint_pass",
       label: "Lint Pass",
       deterministic: true,

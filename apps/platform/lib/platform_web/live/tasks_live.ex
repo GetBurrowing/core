@@ -80,6 +80,9 @@ defmodule PlatformWeb.TasksLive do
      |> assign(:agents, agents)
      |> assign(:validation_modes, MapSet.new())
      |> assign(:manual_validation_text, "")
+     |> assign(:deploy_strategy_type, "inherit")
+     |> assign(:auto_merge_enabled, false)
+     |> assign(:merge_method, "squash")
      |> assign(:pending_reviews, [])
      |> assign(:review_canvases, %{})
      |> assign(:review_output_ids, MapSet.new())
@@ -488,6 +491,9 @@ defmodule PlatformWeb.TasksLive do
         |> assign(:sheet_why, "")
         |> assign(:validation_modes, MapSet.new())
         |> assign(:manual_validation_text, "")
+        |> assign(:deploy_strategy_type, "inherit")
+        |> assign(:auto_merge_enabled, false)
+        |> assign(:merge_method, "squash")
       else
         assign(socket, :show_task_sheet, false)
       end
@@ -500,17 +506,28 @@ defmodule PlatformWeb.TasksLive do
   end
 
   def handle_event("validate_task", %{"task" => params}, socket) do
+    Logger.debug(
+      "[TasksLive] validate_task: deploy_strategy_type=#{inspect(Map.get(params, "deploy_strategy_type"))}"
+    )
+
     changeset =
       %Task{}
       |> Task.changeset(params)
       |> Map.put(:action, :validate)
+
+    strategy_type = Map.get(params, "deploy_strategy_type", socket.assigns.deploy_strategy_type)
+    auto_merge = Map.get(params, "auto_merge") == "true"
+    merge_method = Map.get(params, "merge_method", socket.assigns.merge_method)
 
     {:noreply,
      socket
      |> assign(:task_form, to_form(changeset, as: "task"))
      |> assign(:sheet_what, Map.get(params, "what", ""))
      |> assign(:sheet_why, Map.get(params, "why", ""))
-     |> assign(:manual_validation_text, Map.get(params, "manual_validation_text", ""))}
+     |> assign(:manual_validation_text, Map.get(params, "manual_validation_text", ""))
+     |> assign(:deploy_strategy_type, strategy_type)
+     |> assign(:auto_merge_enabled, auto_merge)
+     |> assign(:merge_method, merge_method)}
   end
 
   def handle_event("toggle_validation_mode", %{"mode" => mode}, socket) do
@@ -522,6 +539,10 @@ defmodule PlatformWeb.TasksLive do
         else: MapSet.put(modes, mode)
 
     {:noreply, assign(socket, :validation_modes, updated)}
+  end
+
+  def handle_event("toggle_auto_merge", _params, socket) do
+    {:noreply, assign(socket, :auto_merge_enabled, !socket.assigns.auto_merge_enabled)}
   end
 
   def handle_event("create_task", %{"task" => params}, socket) do
@@ -900,11 +921,22 @@ defmodule PlatformWeb.TasksLive do
   end
 
   defp parse_pr_merge_config(params) do
-    %{
+    base = %{
       "require_ci_pass" => Map.get(params, "require_ci_pass") == "true",
       "auto_merge" => Map.get(params, "auto_merge") == "true",
       "require_review_approval" => Map.get(params, "require_review_approval") == "true"
     }
+
+    # Only include merge_method when auto_merge is enabled
+    if base["auto_merge"] do
+      method = Map.get(params, "merge_method", "squash")
+
+      if method in ~w(squash merge rebase),
+        do: Map.put(base, "merge_method", method),
+        else: Map.put(base, "merge_method", "squash")
+    else
+      base
+    end
   end
 
   defp priority_badge_class("critical"), do: "badge badge-error badge-sm"

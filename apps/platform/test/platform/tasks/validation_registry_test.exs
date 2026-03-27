@@ -8,12 +8,14 @@ defmodule Platform.Tasks.ValidationRegistryTest do
       kinds = ValidationRegistry.kinds()
 
       assert "ci_check" in kinds
+      assert "ci_passed" in kinds
+      assert "pr_merged" in kinds
       assert "lint_pass" in kinds
       assert "type_check" in kinds
       assert "test_pass" in kinds
       assert "code_review" in kinds
       assert "manual_approval" in kinds
-      assert length(kinds) == 6
+      assert length(kinds) == 8
     end
   end
 
@@ -52,6 +54,7 @@ defmodule Platform.Tasks.ValidationRegistryTest do
   describe "deterministic?/1" do
     test "returns true for deterministic kinds" do
       assert ValidationRegistry.deterministic?("ci_check")
+      assert ValidationRegistry.deterministic?("ci_passed")
       assert ValidationRegistry.deterministic?("lint_pass")
       assert ValidationRegistry.deterministic?("type_check")
       assert ValidationRegistry.deterministic?("test_pass")
@@ -60,6 +63,7 @@ defmodule Platform.Tasks.ValidationRegistryTest do
     test "returns false for non-deterministic kinds" do
       refute ValidationRegistry.deterministic?("code_review")
       refute ValidationRegistry.deterministic?("manual_approval")
+      refute ValidationRegistry.deterministic?("pr_merged")
     end
 
     test "returns false for unknown kinds" do
@@ -70,7 +74,7 @@ defmodule Platform.Tasks.ValidationRegistryTest do
   describe "all/0" do
     test "returns all definitions" do
       definitions = ValidationRegistry.all()
-      assert length(definitions) == 6
+      assert length(definitions) == 8
 
       for def <- definitions do
         assert is_binary(def.kind)

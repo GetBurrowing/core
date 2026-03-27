@@ -28,6 +28,7 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
     "ci_check" => {5 * 60_000, 15 * 60_000, 3},
     "review" => {20 * 60_000, 60 * 60_000, 1},
     "deploying" => {5 * 60_000, 15 * 60_000, 3},
+    "deploy_failure" => {5 * 60_000, 10 * 60_000, 3},
     "manual_approval" => {nil, nil, nil}
   }
 

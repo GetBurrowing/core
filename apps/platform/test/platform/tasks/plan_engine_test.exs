@@ -213,7 +213,7 @@ defmodule Platform.Tasks.PlanEngineTest do
       validations = Tasks.list_validations(deploy_stage.id)
       assert length(validations) == 2
       kinds = Enum.map(validations, & &1.kind) |> Enum.sort()
-      assert kinds == ["manual_approval", "test_pass"]
+      assert kinds == ["ci_passed", "manual_approval"]
 
       # Task should be in deploying status
       updated_task = Tasks.get_task_record(task.id)
@@ -389,6 +389,115 @@ defmodule Platform.Tasks.PlanEngineTest do
       # Retry: transition failed → running
       {:ok, s1_retried} = PlanEngine.start_stage(s1.id)
       assert s1_retried.status == "running"
+    end
+  end
+
+  describe "build_deploy_plan/1" do
+    test "returns stage definitions for pr_merge strategy" do
+      {:ok, project} =
+        Tasks.create_project(%{
+          name: "Deploy Plan Test #{System.unique_integer([:positive])}",
+          repo_url: "https://github.com/test/deploy-plan",
+          deploy_config: %{
+            "default_strategy" => %{
+              "type" => "pr_merge",
+              "config" => %{"auto_merge" => false}
+            }
+          }
+        })
+
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Deploy plan test task"
+        })
+
+      assert {:ok, [stage_def]} = PlanEngine.build_deploy_plan(task.id)
+      assert stage_def.name == "Deploy: PR merge"
+      assert stage_def.position == 1
+      assert %{kind: "ci_passed"} in stage_def.validations
+      assert %{kind: "manual_approval"} in stage_def.validations
+    end
+
+    test "positions deploy stage after existing plan stages" do
+      {:ok, project} =
+        Tasks.create_project(%{
+          name: "Deploy Pos Test #{System.unique_integer([:positive])}",
+          repo_url: "https://github.com/test/deploy-pos",
+          deploy_config: %{
+            "default_strategy" => %{
+              "type" => "docker_deploy",
+              "config" => %{}
+            }
+          }
+        })
+
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Deploy position test"
+        })
+
+      {:ok, plan} =
+        Tasks.create_plan(%{
+          task_id: task.id,
+          status: "approved"
+        })
+
+      {:ok, _s1} = Tasks.create_stage(%{plan_id: plan.id, position: 1, name: "Build"})
+      {:ok, _s2} = Tasks.create_stage(%{plan_id: plan.id, position: 2, name: "Test"})
+
+      assert {:ok, [stage_def]} = PlanEngine.build_deploy_plan(task.id)
+      assert stage_def.position == 3
+      assert stage_def.name == "Deploy: Docker deploy"
+      assert %{kind: "ci_passed"} in stage_def.validations
+      assert %{kind: "test_pass"} in stage_def.validations
+    end
+
+    test "returns :skip for strategy type none" do
+      {:ok, project} =
+        Tasks.create_project(%{
+          name: "Deploy Skip Test #{System.unique_integer([:positive])}",
+          deploy_config: %{
+            "default_strategy" => %{"type" => "none"}
+          }
+        })
+
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "No deploy test"
+        })
+
+      assert {:ok, :skip} = PlanEngine.build_deploy_plan(task.id)
+    end
+
+    test "returns error for nonexistent task" do
+      assert {:error, :task_not_found} =
+               PlanEngine.build_deploy_plan("00000000-0000-0000-0000-000000000000")
+    end
+
+    test "auto_merge true uses ci_check for pr_merged" do
+      {:ok, project} =
+        Tasks.create_project(%{
+          name: "Auto Merge Test #{System.unique_integer([:positive])}",
+          deploy_config: %{
+            "default_strategy" => %{
+              "type" => "pr_merge",
+              "config" => %{"auto_merge" => true, "merge_method" => "rebase"}
+            }
+          }
+        })
+
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Auto merge test"
+        })
+
+      assert {:ok, [stage_def]} = PlanEngine.build_deploy_plan(task.id)
+      assert %{kind: "ci_passed"} in stage_def.validations
+      assert %{kind: "ci_check"} in stage_def.validations
     end
   end
 end
