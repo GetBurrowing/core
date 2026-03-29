@@ -59,6 +59,7 @@ defmodule PlatformWeb.ChatLive do
       |> assign(:highlighted_message_id, nil)
       |> assign(:highlighted_thread_message_id, nil)
       |> assign(:participants_map, %{})
+      |> assign(:agent_participant_ids, MapSet.new())
       |> assign(:online_count, 0)
       |> assign(:agent_presence, default_agent_presence())
       |> assign(:has_agent_participant, false)
@@ -171,6 +172,10 @@ defmodule PlatformWeb.ChatLive do
 
       participants = Chat.list_participants(space.id)
       participants_map = Map.new(participants, fn p -> {p.id, p.display_name || "User"} end)
+
+      agent_participant_ids =
+        participants |> Enum.filter(&(&1.participant_type == "agent")) |> MapSet.new(& &1.id)
+
       has_agent_participant = Enum.any?(participants, &(&1.participant_type == "agent"))
 
       online_count =
@@ -205,6 +210,7 @@ defmodule PlatformWeb.ChatLive do
        |> assign(:highlighted_thread_message_id, nil)
        |> assign_search_form("")
        |> assign(:participants_map, participants_map)
+       |> assign(:agent_participant_ids, agent_participant_ids)
        |> assign(:online_count, online_count)
        |> assign(:agent_presence, agent_presence)
        |> assign(:has_agent_participant, has_agent_participant)
@@ -1793,16 +1799,23 @@ defmodule PlatformWeb.ChatLive do
               id={dom_id}
               class={[
                 "group relative flex gap-3 rounded-xl px-2 py-2 transition-colors",
+                MapSet.member?(@agent_participant_ids, msg.participant_id) && "msg-agent",
                 @highlighted_message_id == msg.id && "bg-primary/5 ring-1 ring-primary/20",
                 @current_participant && msg.participant_id == @current_participant.id &&
-                  "bg-base-200/60"
+                  !MapSet.member?(@agent_participant_ids, msg.participant_id) && "bg-base-200/60"
               ]}
               data-participant-id={msg.participant_id}
               data-date={msg.inserted_at && DateTime.to_date(msg.inserted_at) |> Date.to_iso8601()}
             >
               <%!-- Avatar circle (hidden when grouped with previous message via JS) --%>
               <div class="flex-shrink-0 mt-0.5 message-avatar">
-                <div class="w-8 h-8 rounded-full bg-primary text-primary-content flex items-center justify-center text-sm font-bold select-none">
+                <div class={[
+                  "w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold select-none",
+                  if(MapSet.member?(@agent_participant_ids, msg.participant_id),
+                    do: "bg-base-300 text-primary msg-agent-avatar",
+                    else: "bg-primary text-primary-content"
+                  )
+                ]}>
                   {avatar_initial(@participants_map, msg.participant_id)}
                 </div>
               </div>
@@ -1810,8 +1823,20 @@ defmodule PlatformWeb.ChatLive do
               <%!-- Message body --%>
               <div class="flex-1 min-w-0">
                 <div class="flex items-baseline gap-2 message-header">
-                  <span class="text-sm font-bold text-base-content">
+                  <span class={[
+                    "text-sm font-bold",
+                    if(MapSet.member?(@agent_participant_ids, msg.participant_id),
+                      do: "msg-agent-name",
+                      else: "text-base-content"
+                    )
+                  ]}>
                     {sender_name(@participants_map, msg.participant_id)}
+                    <span
+                      :if={MapSet.member?(@agent_participant_ids, msg.participant_id)}
+                      class="msg-agent-badge"
+                    >
+                      AI
+                    </span>
                   </span>
                   <.local_time
                     id={"message-time-#{msg.id}"}

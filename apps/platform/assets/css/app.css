@@ -84,10 +84,10 @@
   default: false;
   prefersdark: true;
   color-scheme: "dark";
-  /* Fabrikam dark surfaces */
-  --color-base-100: oklch(8% 0 0);            /* #121212 */
-  --color-base-200: oklch(12% 0 0);           /* #1E1E1E */
-  --color-base-300: oklch(17% 0 0);           /* #2A2A2A */
+  /* Fabrikam dark surfaces — layered navy, not flat black */
+  --color-base-100: oklch(12% 0.018 240);     /* #161b26 — chat canvas */
+  --color-base-200: oklch(15% 0.022 240);     /* #1e2333 — cards, topbar */
+  --color-base-300: oklch(19% 0.028 240);     /* #252c3d — raised, input bar */
   --color-base-content: oklch(90% 0 0);       /* #E5E5E5 */
   /* Fabrikam cyan */
   --color-primary: oklch(82% 0.12 207);      /* #06D5ED */
@@ -338,15 +338,27 @@ body, .font-fabrikam, * {
 /* ── Agent message differentiation ──────────────────────────────── */
 /* Applied to messages from AI agents in chat */
 .msg-agent {
-  border-left: 2px solid oklch(74% 0.177 207 / 0.7); /* cyan */
-  background: oklch(74% 0.177 207 / 0.03);
+  border-left: 3px solid oklch(82% 0.12 207); /* cyan — full opacity */
+  background: oklch(74% 0.177 207 / 0.06);    /* lifted from 0.03 → 0.06 */
   border-radius: 0 0.5rem 0.5rem 0;
-  margin-left: -2px;
-  padding-left: calc(0.75rem + 2px);
+  box-shadow: inset 0 0 0 1px oklch(74% 0.177 207 / 0.08);
+  margin: 2px 0;
+  padding-left: calc(0.75rem + 3px);
+}
+
+.msg-agent:hover {
+  background: oklch(74% 0.177 207 / 0.10);
 }
 
 .msg-agent-avatar {
-  box-shadow: 0 0 0 2px oklch(82% 0.12 207); /* cyan ring */
+  /* Cyan ring + subtle glow — stands out from human avatars */
+  box-shadow: 0 0 0 2px oklch(82% 0.12 207), 0 0 10px oklch(82% 0.12 207 / 0.2);
+}
+
+.msg-agent-name {
+  color: oklch(82% 0.12 207);
+  font-weight: 700;
+  letter-spacing: 0.03em;
 }
 
 .msg-agent-badge {
