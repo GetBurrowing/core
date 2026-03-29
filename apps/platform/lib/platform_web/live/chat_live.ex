@@ -788,7 +788,7 @@ defmodule PlatformWeb.ChatLive do
     {:noreply, assign(socket, :show_new_conversation_modal, false)}
   end
 
-  def handle_event("picker_search", %{"query" => query}, socket) do
+  def handle_event("picker_search", %{"value" => query}, socket) do
     users = Platform.Accounts.list_users(query: query)
     agents = Chat.list_agents_for_picker()
 
