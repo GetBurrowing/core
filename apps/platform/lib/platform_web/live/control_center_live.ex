@@ -317,7 +317,9 @@ defmodule PlatformWeb.ControlCenterLive do
         %{"space_id" => space_id, "role" => role},
         %{assigns: %{selected_agent: %Agent{} = agent}} = socket
       ) do
-    case Platform.Chat.add_space_agent(space_id, agent.id, role: role) do
+    attention_mode = if role == "principal", do: "all", else: "mention"
+
+    case Platform.Chat.ensure_agent_participant(space_id, agent, attention_mode: attention_mode) do
       {:ok, _} ->
         spaces = Federation.agent_spaces(agent)
 
@@ -327,18 +329,8 @@ defmodule PlatformWeb.ControlCenterLive do
          |> assign(:show_add_space_modal, false)
          |> put_flash(:info, "Agent added to space.")}
 
-      {:error, changeset} ->
-        reason =
-          changeset.errors
-          |> Enum.map(fn {field, {msg, _}} -> "#{field}: #{msg}" end)
-          |> Enum.join(", ")
-
-        msg =
-          if reason != "",
-            do: "Could not add agent to space: #{reason}",
-            else: "Could not add agent to space."
-
-        {:noreply, put_flash(socket, :error, msg)}
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, "Could not add agent to space: \#{inspect(reason)}")}
     end
   end
 
