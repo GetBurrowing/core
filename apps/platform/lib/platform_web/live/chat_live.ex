@@ -1895,7 +1895,7 @@ defmodule PlatformWeb.ChatLive do
 
                 <div
                   :if={msg.content_type != "canvas" and present?(msg.content)}
-                  class="prose prose-sm max-w-none text-base-content break-words chat-markdown"
+                  class="prose prose-sm max-w-none text-sm text-base-content break-words chat-markdown"
                 >
                   {Platform.Chat.ContentRenderer.render_message(msg.content)}
                 </div>
@@ -1986,7 +1986,7 @@ defmodule PlatformWeb.ChatLive do
                 <div class="text-xs font-medium text-base-content/70 mb-0.5">
                   {sender_name(@participants_map, entry.participant_id)}
                 </div>
-                <div class="prose prose-sm max-w-none text-base-content/80 border-l-2 border-primary/20 pl-3">
+                <div class="prose prose-sm max-w-none text-sm text-base-content/80 border-l-2 border-primary/20 pl-3">
                   {entry.text}<span class="inline-block w-1.5 h-4 bg-primary/50 animate-pulse ml-0.5 align-middle rounded-sm"></span>
                 </div>
               </div>
