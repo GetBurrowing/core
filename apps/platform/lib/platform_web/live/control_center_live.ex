@@ -327,12 +327,31 @@ defmodule PlatformWeb.ControlCenterLive do
          |> assign(:show_add_space_modal, false)
          |> put_flash(:info, "Agent added to space.")}
 
-      {:error, _} ->
-        {:noreply, put_flash(socket, :error, "Could not add agent to space.")}
+      {:error, changeset} ->
+        reason =
+          changeset.errors
+          |> Enum.map(fn {field, {msg, _}} -> "#{field}: #{msg}" end)
+          |> Enum.join(", ")
+
+        msg =
+          if reason != "",
+            do: "Could not add agent to space: #{reason}",
+            else: "Could not add agent to space."
+
+        {:noreply, put_flash(socket, :error, msg)}
     end
   end
 
-  def handle_event("add_agent_to_space", _params, socket), do: {:noreply, socket}
+  def handle_event("add_agent_to_space", params, socket) do
+    require Logger
+
+    Logger.warning(
+      "add_agent_to_space: unmatched — params=#{inspect(params)}, selected_agent=#{inspect(socket.assigns[:selected_agent])}"
+    )
+
+    {:noreply,
+     put_flash(socket, :error, "Could not add agent to space: agent not selected or invalid.")}
+  end
 
   # ── Render ────────────────────────────────────────────────────────
 
