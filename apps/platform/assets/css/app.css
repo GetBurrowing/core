@@ -76,6 +76,7 @@
   --border: 1px;
   --depth: 0;
   --noise: 0;
+  --font-sans: "Public Sans", system-ui, sans-serif;
 }
 
 @plugin "../vendor/daisyui-theme" {
@@ -113,6 +114,7 @@
   --border: 1px;
   --depth: 0;
   --noise: 0;
+  --font-sans: "Public Sans", system-ui, sans-serif;
 }
 
 /* Add variants based on LiveView classes */
@@ -329,8 +331,8 @@ pre .makeup .sa { color: #79c0ff; }        /* string affix */
 /* ── Fabrikam Design System — Custom utilities ──────────────────────── */
 
 /* Typography */
-body, .font-fabrikam {
-  font-family: "Public Sans", system-ui, sans-serif;
+body, .font-fabrikam, * {
+  font-family: "Public Sans", system-ui, sans-serif !important;
 }
 
 /* ── Agent message differentiation ──────────────────────────────── */
