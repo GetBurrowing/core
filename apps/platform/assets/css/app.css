@@ -52,15 +52,15 @@
   --color-base-300: oklch(88% 0 0);           /* #E0E0E0 */
   --color-base-content: oklch(0% 0 0);        /* #000000 */
   /* Fabrikam cyan primary */
-  --color-primary: oklch(74% 0.177 207);      /* #00BFFF */
+  --color-primary: oklch(82% 0.12 207);      /* #06D5ED */
   --color-primary-content: oklch(0% 0 0);     /* black text on cyan */
   --color-secondary: oklch(30% 0.01 0);       /* #4A4A4A */
   --color-secondary-content: oklch(100% 0 0);
-  --color-accent: oklch(74% 0.177 207);       /* cyan */
+  --color-accent: oklch(82% 0.12 207);       /* cyan */
   --color-accent-content: oklch(0% 0 0);
   --color-neutral: oklch(55% 0.01 0);         /* #888888 */
   --color-neutral-content: oklch(100% 0 0);
-  --color-info: oklch(74% 0.177 207);         /* cyan */
+  --color-info: oklch(82% 0.12 207);         /* cyan */
   --color-info-content: oklch(0% 0 0);
   --color-success: oklch(70% 0.15 162);       /* #10B981 */
   --color-success-content: oklch(100% 0 0);
@@ -90,15 +90,15 @@
   --color-base-300: oklch(17% 0 0);           /* #2A2A2A */
   --color-base-content: oklch(90% 0 0);       /* #E5E5E5 */
   /* Fabrikam cyan */
-  --color-primary: oklch(74% 0.177 207);      /* #00BFFF */
+  --color-primary: oklch(82% 0.12 207);      /* #06D5ED */
   --color-primary-content: oklch(0% 0 0);     /* black text on cyan */
   --color-secondary: oklch(70% 0.01 0);       /* #B0B0B0 */
   --color-secondary-content: oklch(0% 0 0);
-  --color-accent: oklch(74% 0.177 207);
+  --color-accent: oklch(82% 0.12 207);
   --color-accent-content: oklch(0% 0 0);
   --color-neutral: oklch(40% 0.01 0);         /* #6A6A6A */
   --color-neutral-content: oklch(90% 0 0);
-  --color-info: oklch(74% 0.177 207);
+  --color-info: oklch(82% 0.12 207);
   --color-info-content: oklch(0% 0 0);
   --color-success: oklch(70% 0.15 162);
   --color-success-content: oklch(100% 0 0);
@@ -346,7 +346,7 @@ body, .font-fabrikam, * {
 }
 
 .msg-agent-avatar {
-  box-shadow: 0 0 0 2px oklch(74% 0.177 207); /* cyan ring */
+  box-shadow: 0 0 0 2px oklch(82% 0.12 207); /* cyan ring */
 }
 
 .msg-agent-badge {
@@ -355,15 +355,15 @@ body, .font-fabrikam, * {
   letter-spacing: 0.06em;
   padding: 1px 5px;
   border-radius: 9999px;
-  border: 1px solid oklch(74% 0.177 207);
-  color: oklch(74% 0.177 207);
+  border: 1px solid oklch(82% 0.12 207);
+  color: oklch(82% 0.12 207);
   vertical-align: middle;
   margin-left: 4px;
 }
 
 /* ── Decision / question cards ───────────────────────────────────── */
 .decision-card {
-  border: 1px solid oklch(74% 0.177 207);
+  border: 1px solid oklch(82% 0.12 207);
   background: oklch(74% 0.177 207 / 0.05);
   border-radius: 0.75rem;
   padding: 1rem;
@@ -380,10 +380,10 @@ body, .font-fabrikam, * {
 
 /* ── Sidebar nav active state ────────────────────────────────────── */
 .nav-item-active {
-  border-left: 3px solid oklch(74% 0.177 207);
+  border-left: 3px solid oklch(82% 0.12 207);
   background: oklch(74% 0.177 207 / 0.08);
 }
 
 /* ── Fabrikam progress bar ───────────────────────────────────────────── */
-.progress-fabrikam::-webkit-progress-value { background: oklch(74% 0.177 207); }
-.progress-fabrikam::-moz-progress-bar { background: oklch(74% 0.177 207); }
+.progress-fabrikam::-webkit-progress-value { background: oklch(82% 0.12 207); }
+.progress-fabrikam::-moz-progress-bar { background: oklch(82% 0.12 207); }
