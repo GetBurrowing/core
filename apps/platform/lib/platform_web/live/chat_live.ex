@@ -1489,7 +1489,7 @@ defmodule PlatformWeb.ChatLive do
                     placeholder="Search messages…"
                     autocomplete="off"
                     phx-debounce="250"
-                    class="input input-bordered input-sm w-64 text-base md:text-sm"
+                    class="input input-bordered input-sm w-64 text-sm"
                   />
 
                   <button
@@ -2086,7 +2086,7 @@ defmodule PlatformWeb.ChatLive do
                   placeholder={"Message ##{(@active_space && @active_space.name) || ""}"}
                   autocomplete="off"
                   rows="1"
-                  class="min-w-0 flex-1 rounded-xl text-base md:text-sm resize-none bg-base-100 border border-base-300 focus:border-primary focus:outline-none transition-colors"
+                  class="min-w-0 flex-1 rounded-xl text-sm resize-none bg-base-100 border border-base-300 focus:border-primary focus:outline-none transition-colors"
                   style="line-height:1.5;padding:6px 12px;min-height:33px;max-height:200px;overflow-y:auto;field-sizing:content"
                   phx-hook="ComposeInput"
                 >{Phoenix.HTML.Form.normalize_value("text", @compose_form[:text].value)}</textarea>
@@ -2422,7 +2422,7 @@ defmodule PlatformWeb.ChatLive do
                     rows="2"
                     placeholder="Reply in thread…"
                     autocomplete="off"
-                    class="textarea textarea-bordered w-full resize-none rounded-xl pr-10 text-base md:text-sm leading-relaxed"
+                    class="textarea textarea-bordered w-full resize-none rounded-xl pr-10 text-sm leading-relaxed"
                     phx-hook="ComposeInput"
                   >{Phoenix.HTML.Form.normalize_value("textarea", @thread_compose_form[:text].value)}</textarea>
                   <button
