@@ -237,6 +237,8 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
   attr :regenerated_token, :string, default: nil
   attr :federation_online?, :boolean, required: true
   attr :federation_spaces, :list, default: []
+  attr :show_add_space_modal, :boolean, default: false
+  attr :available_spaces, :list, default: []
 
   def federation_panels(assigns) do
     ~H"""
@@ -321,7 +323,48 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
           Not participating in any spaces yet.
         </div>
       </div>
+
+      <button
+        type="button"
+        phx-click="show_add_space_modal"
+        class="btn btn-sm btn-outline mt-3 w-full"
+      >
+        <span class="hero-plus size-4" /> Add to Space
+      </button>
     </section>
+
+    <div
+      :if={@show_add_space_modal}
+      class="fixed inset-0 z-50 flex items-center justify-center bg-base-300/60"
+    >
+      <div class="w-full max-w-md rounded-2xl border border-base-300 bg-base-100 p-6 shadow-xl">
+        <h3 class="mb-4 text-base font-semibold">Add Agent to Space</h3>
+        <form phx-submit="add_agent_to_space">
+          <div class="form-control mb-4">
+            <label class="label"><span class="label-text">Space</span></label>
+            <select name="space_id" class="select select-bordered w-full" required>
+              <option value="">Select a space...</option>
+              <%= for space <- @available_spaces do %>
+                <option value={space.id}>{space.name}</option>
+              <% end %>
+            </select>
+          </div>
+          <div class="form-control mb-6">
+            <label class="label"><span class="label-text">Role</span></label>
+            <select name="role" class="select select-bordered w-full">
+              <option value="member" selected>Member</option>
+              <option value="principal">Principal (default responder)</option>
+            </select>
+          </div>
+          <div class="flex justify-end gap-2">
+            <button type="button" phx-click="hide_add_space_modal" class="btn btn-ghost btn-sm">
+              Cancel
+            </button>
+            <button type="submit" class="btn btn-primary btn-sm">Add to Space</button>
+          </div>
+        </form>
+      </div>
+    </div>
     """
   end
 

@@ -77,7 +77,9 @@ defmodule PlatformWeb.ControlCenterLive do
      |> assign(:federate_result, nil)
      |> assign(:import_agents, [])
      |> assign(:import_selected, MapSet.new())
-     |> assign(:regenerated_token, nil)}
+     |> assign(:regenerated_token, nil)
+     |> assign(:show_add_space_modal, false)
+     |> assign(:available_spaces, [])}
   end
 
   @impl true
@@ -295,6 +297,43 @@ defmodule PlatformWeb.ControlCenterLive do
   def handle_event("dismiss_regenerated_token", params, socket),
     do: RuntimeEvents.handle("dismiss_regenerated_token", params, socket)
 
+  # ── Add agent to space ─────────────────────────────────────────────
+
+  def handle_event("show_add_space_modal", _params, socket) do
+    spaces = Platform.Chat.list_spaces() |> Enum.filter(&(&1.kind != "dm"))
+
+    {:noreply,
+     socket
+     |> assign(:show_add_space_modal, true)
+     |> assign(:available_spaces, spaces)}
+  end
+
+  def handle_event("hide_add_space_modal", _params, socket) do
+    {:noreply, assign(socket, :show_add_space_modal, false)}
+  end
+
+  def handle_event(
+        "add_agent_to_space",
+        %{"space_id" => space_id, "role" => role},
+        %{assigns: %{selected_agent: %Agent{} = agent}} = socket
+      ) do
+    case Platform.Chat.add_space_agent(space_id, agent.id, role: role) do
+      {:ok, _} ->
+        spaces = Federation.agent_spaces(agent)
+
+        {:noreply,
+         socket
+         |> assign(:federation_spaces, spaces)
+         |> assign(:show_add_space_modal, false)
+         |> put_flash(:info, "Agent added to space.")}
+
+      {:error, _} ->
+        {:noreply, put_flash(socket, :error, "Could not add agent to space.")}
+    end
+  end
+
+  def handle_event("add_agent_to_space", _params, socket), do: {:noreply, socket}
+
   # ── Render ────────────────────────────────────────────────────────
 
   @impl true
@@ -446,6 +485,8 @@ defmodule PlatformWeb.ControlCenterLive do
                 regenerated_token={@regenerated_token}
                 federation_online?={@federation_online?}
                 federation_spaces={@federation_spaces}
+                show_add_space_modal={@show_add_space_modal}
+                available_spaces={@available_spaces}
               />
             </div>
 
@@ -562,6 +603,8 @@ defmodule PlatformWeb.ControlCenterLive do
     |> assign(:federation_runtime, nil)
     |> assign(:federation_online?, false)
     |> assign(:federation_spaces, [])
+    |> assign(:show_add_space_modal, false)
+    |> assign(:available_spaces, [])
   end
 
   defp assign_agent_panel(socket, %Agent{} = agent, opts) do
