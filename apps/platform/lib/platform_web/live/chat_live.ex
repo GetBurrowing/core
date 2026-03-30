@@ -1789,7 +1789,7 @@ defmodule PlatformWeb.ChatLive do
 
           <div
             id="message-list"
-            class="flex-1 overflow-y-auto overflow-x-hidden px-5 py-4 flex flex-col space-y-1"
+            class="flex-1 overflow-y-auto overflow-x-hidden bg-base-100 px-5 py-4 flex flex-col space-y-1"
             phx-update="stream"
             phx-hook="ScrollToBottom"
           >
