@@ -370,6 +370,23 @@ defmodule Platform.Federation.ToolSurface do
         when_to_use: "When a plan is ready to be reviewed and approved"
       },
       %{
+        name: "plan_approve",
+        description:
+          "Approve a plan that is in pending_review status. Transitions the plan to approved and auto-advances the task to in_progress if it was in planning/ready/backlog.",
+        parameters: %{
+          plan_id: %{type: "string", required: true, description: "The plan ID to approve"},
+          approved_by: %{
+            type: "string",
+            required: false,
+            description: "Who is approving (agent slug or user ID). Defaults to system."
+          }
+        },
+        returns: "The approved plan object",
+        limitations: "Plan must be in pending_review status",
+        when_to_use:
+          "After plan_submit, when you want to approve a plan and kick off task execution without waiting for human review"
+      },
+      %{
         name: "stage_start",
         description: "Start a pending stage (pending → running).",
         parameters: %{
@@ -1149,6 +1166,44 @@ defmodule Platform.Federation.ToolSurface do
                recoverable: true,
                suggestion: "Check the plan status"
              }}
+        end
+    end
+  end
+
+  def execute("plan_approve", args, _context) do
+    plan_id = Map.get(args, "plan_id")
+    approved_by = Map.get(args, "approved_by", "system")
+
+    case Repo.get(Plan, plan_id) do
+      nil ->
+        {:error,
+         %{
+           error: "Plan not found: #{plan_id}",
+           recoverable: false,
+           suggestion: "Use plan_get to find the plan ID for a task"
+         }}
+
+      plan ->
+        case Tasks.approve_plan(plan, approved_by) do
+          {:ok, approved} ->
+            {:ok,
+             %{
+               id: approved.id,
+               task_id: approved.task_id,
+               status: approved.status,
+               approved_by: approved.approved_by
+             }}
+
+          {:error, :invalid_transition} ->
+            {:error,
+             %{
+               error: "Cannot approve plan with status #{plan.status}. Must be pending_review.",
+               recoverable: true,
+               suggestion: "Use plan_submit first to move the plan to pending_review"
+             }}
+
+          {:error, reason} ->
+            {:error, %{error: "Failed to approve plan: #{inspect(reason)}", recoverable: true}}
         end
     end
   end
