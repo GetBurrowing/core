@@ -34,7 +34,7 @@
    curl -sLO https://github.com/saadeghi/daisyui/releases/latest/download/daisyui.js
    Make sure to look at the daisyUI changelog: https://daisyui.com/docs/changelog/ */
 @plugin "../vendor/daisyui" {
-  themes: false;
+  themes: ["light", "dark"];
 }
 
 /* daisyUI theme plugin. You can update this file by fetching the latest version with:
@@ -84,13 +84,13 @@
   default: false;
   prefersdark: true;
   color-scheme: "dark";
-  /* Fabrikam dark surfaces — layered navy, clearly not black */
-  --color-base-100: oklch(18% 0.025 240);     /* ~#161b26 — chat canvas, dark navy */
-  --color-base-200: oklch(22% 0.030 240);     /* ~#1e2540 — cards, topbar */
-  --color-base-300: oklch(27% 0.035 240);     /* ~#252c3d — raised, input bar */
-  --color-base-content: oklch(90% 0 0);       /* #E5E5E5 */
-  /* Fabrikam cyan */
-  --color-primary: oklch(82% 0.12 207);      /* #06D5ED */
+  /* Fabrikam dark surfaces — deep navy matching comp */
+  --color-base-100: oklch(12% 0.020 240);     /* ~#0f1419 — chat canvas */
+  --color-base-200: oklch(9% 0.018 240);      /* ~#0a0f14 — sidebar */
+  --color-base-300: oklch(20% 0.028 240);     /* ~#1a2332 — raised, input bar */
+  --color-base-content: oklch(95% 0 0);       /* near-white text */
+  /* Fabrikam cyan — matching comp #00bcd4 */
+  --color-primary: oklch(78% 0.14 200);      /* ~#00bcd4 bright cyan */
   --color-primary-content: oklch(0% 0 0);     /* black text on cyan */
   --color-secondary: oklch(70% 0.01 0);       /* #B0B0B0 */
   --color-secondary-content: oklch(0% 0 0);

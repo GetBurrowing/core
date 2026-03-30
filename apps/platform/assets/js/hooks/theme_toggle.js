@@ -51,12 +51,9 @@ const ThemeToggle = {
 
   toggle() {
     const next = this.currentTheme() === "dark" ? "light" : "dark";
-    // Set data-phx-theme on this element so the existing phx:set-theme listener
-    // in root.html.heex can read it via e.target.dataset.phxTheme.
-    this.el.dataset.phxTheme = next;
-    // dispatchEvent is synchronous — all listeners (including root.html.heex's
-    // setTheme) finish before this line returns, so updateIcon sees the new value.
-    this.el.dispatchEvent(new CustomEvent("phx:set-theme", { bubbles: true }));
+    // Directly set theme — bypass event dispatch which can fail across shadow DOM boundaries
+    localStorage.setItem("phx:theme", next);
+    document.documentElement.setAttribute("data-theme", next);
     this.updateIcon();
   },
 };
