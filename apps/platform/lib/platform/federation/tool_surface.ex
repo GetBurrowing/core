@@ -197,6 +197,29 @@ defmodule Platform.Federation.ToolSurface do
         when_to_use: "When you need to find an epic to assign a task to"
       },
       %{
+        name: "epic_update",
+        description: "Update an epic's fields including target_branch and deploy_target.",
+        parameters: %{
+          epic_id: %{type: "string", required: true, description: "The epic to update"},
+          name: %{type: "string", required: false, description: "New epic name"},
+          description: %{type: "string", required: false, description: "New description"},
+          status: %{type: "string", required: false, description: "New status"},
+          target_branch: %{
+            type: "string",
+            required: false,
+            description: "Git branch for task worktrees in this epic (e.g. feat/reskin)"
+          },
+          deploy_target: %{
+            type: "string",
+            required: false,
+            description: "Deploy target for tasks in this epic (e.g. exp, prod)"
+          }
+        },
+        returns: "The updated epic object",
+        limitations: "Epic must exist",
+        when_to_use: "When you need to configure an epic's target branch or deploy target"
+      },
+      %{
         name: "task_create",
         description:
           "Create a new task in a project. Tasks track work items on the kanban board.",
@@ -802,6 +825,48 @@ defmodule Platform.Federation.ToolSurface do
       end)
 
     {:ok, epics}
+  end
+
+  def execute("epic_update", args, _context) do
+    epic_id = Map.get(args, "epic_id")
+
+    case Tasks.get_epic(epic_id) do
+      nil ->
+        {:error,
+         %{
+           error: "Epic not found: #{epic_id}",
+           recoverable: false,
+           suggestion: "Use epic_list to find available epics"
+         }}
+
+      epic ->
+        attrs =
+          args
+          |> Map.take(["name", "description", "status", "target_branch", "deploy_target"])
+          |> Map.reject(fn {_k, v} -> is_nil(v) end)
+          |> Enum.into(%{}, fn {k, v} -> {String.to_existing_atom(k), v} end)
+
+        case Tasks.update_epic(epic, attrs) do
+          {:ok, updated} ->
+            Tasks.broadcast_board({:epic_updated, updated})
+
+            {:ok,
+             %{
+               id: updated.id,
+               name: updated.name,
+               status: updated.status,
+               target_branch: updated.target_branch,
+               deploy_target: updated.deploy_target
+             }}
+
+          {:error, changeset} ->
+            {:error,
+             %{
+               error: "Failed to update epic: #{inspect_errors(changeset)}",
+               recoverable: true
+             }}
+        end
+    end
   end
 
   def execute("task_create", args, _context) do
