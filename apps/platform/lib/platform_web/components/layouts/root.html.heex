@@ -33,11 +33,30 @@
             localStorage.setItem("phx:theme", theme);
             document.documentElement.setAttribute("data-theme", theme);
           }
+
+          window.dispatchEvent(
+            new CustomEvent("app:theme-changed", {
+              detail: {theme: theme === "system" ? null : theme}
+            })
+          );
         };
+
+        const getTheme = () =>
+          document.documentElement.getAttribute("data-theme") ||
+          localStorage.getItem("phx:theme") ||
+          "dark";
+
+        window.setAppTheme = setTheme;
+        window.getAppTheme = getTheme;
+
         if (!document.documentElement.hasAttribute("data-theme")) {
           setTheme(localStorage.getItem("phx:theme") || "dark");
         }
-        window.addEventListener("storage", (e) => e.key === "phx:theme" && setTheme(e.newValue || "system"));
+
+        window.addEventListener(
+          "storage",
+          (e) => e.key === "phx:theme" && setTheme(e.newValue || "system")
+        );
         
         window.addEventListener("phx:set-theme", (e) => setTheme(e.target.dataset.phxTheme));
       })();

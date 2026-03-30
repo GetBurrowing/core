@@ -15,23 +15,27 @@ const ThemeToggle = {
   mounted() {
     this.updateIcon();
 
-    // Sync icon when another tab changes the theme
+    // Sync icon when the theme changes anywhere (this tab, another tab, or a
+    // server-dispatched phx:set-theme event)
     this.handleStorage = () => this.updateIcon();
+    this.handleThemeChanged = () => this.updateIcon();
     window.addEventListener("storage", this.handleStorage);
+    window.addEventListener("app:theme-changed", this.handleThemeChanged);
 
     this.el.addEventListener("click", () => this.toggle());
   },
 
   destroyed() {
     window.removeEventListener("storage", this.handleStorage);
+    window.removeEventListener("app:theme-changed", this.handleThemeChanged);
   },
 
   currentTheme() {
-    return (
-      document.documentElement.getAttribute("data-theme") ||
-      localStorage.getItem("phx:theme") ||
-      "light"
-    );
+    return typeof window.getAppTheme === "function"
+      ? window.getAppTheme()
+      : (document.documentElement.getAttribute("data-theme") ||
+          localStorage.getItem("phx:theme") ||
+          "dark");
   },
 
   updateIcon() {
@@ -51,9 +55,14 @@ const ThemeToggle = {
 
   toggle() {
     const next = this.currentTheme() === "dark" ? "light" : "dark";
-    // Directly set theme — bypass event dispatch which can fail across shadow DOM boundaries
-    localStorage.setItem("phx:theme", next);
-    document.documentElement.setAttribute("data-theme", next);
+
+    if (typeof window.setAppTheme === "function") {
+      window.setAppTheme(next);
+    } else {
+      localStorage.setItem("phx:theme", next);
+      document.documentElement.setAttribute("data-theme", next);
+    }
+
     this.updateIcon();
   },
 };
