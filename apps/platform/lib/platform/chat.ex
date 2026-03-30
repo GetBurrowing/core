@@ -1528,6 +1528,31 @@ defmodule Platform.Chat do
     end
   end
 
+  @doc """
+  Ensure an agent exists in a space's roster.
+
+  This is idempotent:
+  - `role: "principal"` promotes the agent to principal via `set_principal_agent/2`
+  - `role: "member"` inserts a member row if missing, otherwise returns the
+    existing roster entry without demoting a principal
+  """
+  @spec ensure_space_agent(binary(), binary(), keyword()) ::
+          {:ok, SpaceAgent.t()} | {:error, term()}
+  def ensure_space_agent(space_id, agent_id, opts \\ []) do
+    role = Keyword.get(opts, :role, "member")
+
+    case role do
+      "principal" ->
+        set_principal_agent(space_id, agent_id)
+
+      _ ->
+        case Repo.get_by(SpaceAgent, space_id: space_id, agent_id: agent_id) do
+          %SpaceAgent{} = existing -> {:ok, existing}
+          nil -> add_space_agent(space_id, agent_id, role: "member")
+        end
+    end
+  end
+
   # ADR 0027: dismiss_space_agent/3 and reinvite_space_agent/2 removed.
   # The 'dismissed' role no longer exists — use remove_space_agent/2 instead.
 

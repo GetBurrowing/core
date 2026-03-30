@@ -5,6 +5,7 @@ defmodule PlatformWeb.ControlCenterLiveTest do
 
   alias Platform.Accounts.User
   alias Platform.Agents.{Agent, AgentRuntime, AgentServer, MemoryContext}
+  alias Platform.Chat
   alias Platform.Federation
   alias Platform.Repo
 
@@ -518,6 +519,34 @@ defmodule PlatformWeb.ControlCenterLiveTest do
     assert html =~ "Suspend"
     assert html =~ "Revoke"
     assert html =~ "Regenerate Token"
+  end
+
+  test "adding agent to space via control center creates both participant and roster entries", %{
+    conn: conn
+  } do
+    agent = create_agent(%{name: "Roster Agent"})
+    {:ok, space} = Chat.create_space(%{name: "General", slug: "general-test", kind: "channel"})
+
+    conn = authenticated_conn(conn)
+    {:ok, view, _html} = live(conn, ~p"/control/#{agent.slug}")
+
+    html =
+      render_submit(view, "add_agent_to_space", %{"space_id" => space.id, "role" => "principal"})
+
+    assert html =~ "Agent added to space."
+
+    participant =
+      Repo.get_by!(Platform.Chat.Participant,
+        space_id: space.id,
+        participant_type: "agent",
+        participant_id: agent.id
+      )
+
+    assert participant.attention_mode == "all"
+    assert is_nil(participant.left_at)
+
+    roster = Repo.get_by!(Platform.Chat.SpaceAgent, space_id: space.id, agent_id: agent.id)
+    assert roster.role == "principal"
   end
 
   test "suspend federated runtime updates status", %{conn: conn} do

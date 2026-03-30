@@ -320,17 +320,24 @@ defmodule PlatformWeb.ControlCenterLive do
     attention_mode = if role == "principal", do: "all", else: "mention"
 
     case Platform.Chat.ensure_agent_participant(space_id, agent, attention_mode: attention_mode) do
-      {:ok, _} ->
-        spaces = Federation.agent_spaces(agent)
+      {:ok, _participant} ->
+        case Platform.Chat.ensure_space_agent(space_id, agent.id, role: role) do
+          {:ok, _space_agent} ->
+            spaces = Federation.agent_spaces(agent)
 
-        {:noreply,
-         socket
-         |> assign(:federation_spaces, spaces)
-         |> assign(:show_add_space_modal, false)
-         |> put_flash(:info, "Agent added to space.")}
+            {:noreply,
+             socket
+             |> assign(:federation_spaces, spaces)
+             |> assign(:show_add_space_modal, false)
+             |> put_flash(:info, "Agent added to space.")}
+
+          {:error, reason} ->
+            {:noreply,
+             put_flash(socket, :error, "Could not add agent to space roster: #{inspect(reason)}")}
+        end
 
       {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Could not add agent to space: \#{inspect(reason)}")}
+        {:noreply, put_flash(socket, :error, "Could not add agent to space: #{inspect(reason)}")}
     end
   end
 
