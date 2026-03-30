@@ -84,10 +84,10 @@
   default: false;
   prefersdark: true;
   color-scheme: "dark";
-  /* Fabrikam dark surfaces — layered navy, not flat black */
-  --color-base-100: oklch(12% 0.018 240);     /* #161b26 — chat canvas */
-  --color-base-200: oklch(15% 0.022 240);     /* #1e2333 — cards, topbar */
-  --color-base-300: oklch(19% 0.028 240);     /* #252c3d — raised, input bar */
+  /* Fabrikam dark surfaces — layered navy, clearly not black */
+  --color-base-100: oklch(18% 0.025 240);     /* ~#161b26 — chat canvas, dark navy */
+  --color-base-200: oklch(22% 0.030 240);     /* ~#1e2540 — cards, topbar */
+  --color-base-300: oklch(27% 0.035 240);     /* ~#252c3d — raised, input bar */
   --color-base-content: oklch(90% 0 0);       /* #E5E5E5 */
   /* Fabrikam cyan */
   --color-primary: oklch(82% 0.12 207);      /* #06D5ED */
