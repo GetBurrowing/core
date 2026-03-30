@@ -285,6 +285,18 @@
         </form>
       </div>
 
+      <%!-- Start button --%>
+      <div :if={@selected_task.status in ["backlog", "planning", "ready"]} class="flex">
+        <button
+          class="btn btn-primary btn-sm gap-1"
+          phx-click="transition_task"
+          phx-value-id={@selected_task.id}
+          phx-value-status="in_progress"
+        >
+          <span class="hero-play-solid size-4"></span> Start Task
+        </button>
+      </div>
+
       <%!-- Transition buttons --%>
       <div :if={available_transitions(@selected_task.status) != []} class="flex flex-wrap gap-2">
         <button

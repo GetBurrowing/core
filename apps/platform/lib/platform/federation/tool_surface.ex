@@ -305,6 +305,27 @@ defmodule Platform.Federation.ToolSurface do
         returns: "The updated task object",
         limitations: "Status transitions are validated; not all transitions are allowed",
         when_to_use: "When you need to update a task's details or move it between columns"
+      },
+      %{
+        name: "task_start",
+        description:
+          "Start a task — sets assignee (optional), transitions to in_progress, kicks off TaskRouter. Use instead of task_update when ready to begin work.",
+        parameters: %{
+          task_id: %{type: "string", required: true, description: "The task to start"},
+          assignee_id: %{
+            type: "string",
+            required: false,
+            description: "Agent ID to assign. Defaults to current assignee."
+          },
+          assignee_type: %{
+            type: "string",
+            required: false,
+            description: "Assignee type: agent or user. Defaults to agent."
+          }
+        },
+        returns: "Updated task object with status in_progress",
+        limitations: "Task must be in backlog, planning, or ready status",
+        when_to_use: "When task is fully specced and ready to begin"
       }
     ]
   end
@@ -947,6 +968,62 @@ defmodule Platform.Federation.ToolSurface do
                recoverable: true,
                suggestion: "Check that the provided values are valid"
              }}
+        end
+    end
+  end
+
+  def execute("task_start", args, _context) do
+    task_id = Map.get(args, "task_id")
+
+    case Tasks.get_task_record(task_id) do
+      nil ->
+        {:error,
+         %{
+           error: "Task not found: #{task_id}",
+           recoverable: false,
+           suggestion: "Use task_list to find available tasks"
+         }}
+
+      task ->
+        task =
+          case {Map.get(args, "assignee_id"), Map.get(args, "assignee_type", "agent")} do
+            {nil, _} ->
+              task
+
+            {assignee_id, assignee_type} ->
+              case Tasks.update_task(task, %{
+                     assignee_id: assignee_id,
+                     assignee_type: assignee_type
+                   }) do
+                {:ok, updated} -> updated
+                _ -> task
+              end
+          end
+
+        case Tasks.transition_task(task, "in_progress") do
+          {:ok, updated} ->
+            Tasks.broadcast_board({:task_updated, updated})
+
+            {:ok,
+             %{
+               id: updated.id,
+               title: updated.title,
+               status: updated.status,
+               assignee_id: updated.assignee_id,
+               assignee_type: updated.assignee_type
+             }}
+
+          {:error, :invalid_transition} ->
+            {:error,
+             %{
+               error:
+                 "Cannot start task from status #{task.status}. Must be backlog, planning, or ready.",
+               recoverable: true,
+               suggestion: "Check task status with task_get first"
+             }}
+
+          {:error, reason} ->
+            {:error, %{error: "Failed to start task: #{inspect(reason)}", recoverable: true}}
         end
     end
   end
