@@ -1,58 +1,45 @@
-/**
- * ResizableSidebar — LiveView hook for drag-resizable chat sidebar.
- *
- * Attach to the <aside> element with phx-hook="ResizableSidebar".
- * Expects a child div.cursor-col-resize as the drag handle.
- *
- * Width persists in localStorage under "suite:sidebar_width".
- * Clamp range: 160px–480px. Default: 208px (≈ w-52).
- */
-
-const STORAGE_KEY = "suite:sidebar_width"
-const MIN_WIDTH = 160
-const MAX_WIDTH = 480
-const DEFAULT_WIDTH = 208
-
 const ResizableSidebar = {
   mounted() {
-    const saved = parseInt(localStorage.getItem(STORAGE_KEY), 10)
-    this.el.style.width = `${saved >= MIN_WIDTH && saved <= MAX_WIDTH ? saved : DEFAULT_WIDTH}px`
+    const saved = localStorage.getItem("suite:sidebar_width");
+    const initialWidth = saved ? parseInt(saved, 10) : 208;
+    this.el.style.width = initialWidth + "px";
 
-    this._handle = this.el.querySelector(".cursor-col-resize")
-    if (!this._handle) return
+    this._handle = this.el.querySelector("[data-drag-handle]");
+    if (!this._handle) return;
 
     this._onMouseDown = (e) => {
-      e.preventDefault()
-      const startX = e.clientX
-      const startWidth = this.el.getBoundingClientRect().width
+      e.preventDefault();
+      this._startX = e.clientX;
+      this._startWidth = this.el.offsetWidth;
+      document.body.classList.add("sidebar-resizing");
+      document.addEventListener("mousemove", this._onMouseMove);
+      document.addEventListener("mouseup", this._onMouseUp);
+    };
 
-      document.body.classList.add("sidebar-resizing")
+    this._onMouseMove = (e) => {
+      const delta = e.clientX - this._startX;
+      const newWidth = Math.min(480, Math.max(160, this._startWidth + delta));
+      this.el.style.width = newWidth + "px";
+    };
 
-      const onMouseMove = (e) => {
-        const newWidth = Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, startWidth + (e.clientX - startX)))
-        this.el.style.width = `${newWidth}px`
-      }
+    this._onMouseUp = () => {
+      document.body.classList.remove("sidebar-resizing");
+      document.removeEventListener("mousemove", this._onMouseMove);
+      document.removeEventListener("mouseup", this._onMouseUp);
+      localStorage.setItem("suite:sidebar_width", parseInt(this.el.style.width, 10));
+    };
 
-      const onMouseUp = () => {
-        document.removeEventListener("mousemove", onMouseMove)
-        document.removeEventListener("mouseup", onMouseUp)
-        document.body.classList.remove("sidebar-resizing")
-        const finalWidth = Math.round(this.el.getBoundingClientRect().width)
-        localStorage.setItem(STORAGE_KEY, String(finalWidth))
-      }
-
-      document.addEventListener("mousemove", onMouseMove)
-      document.addEventListener("mouseup", onMouseUp)
-    }
-
-    this._handle.addEventListener("mousedown", this._onMouseDown)
+    this._handle.addEventListener("mousedown", this._onMouseDown);
   },
 
   destroyed() {
-    if (this._handle && this._onMouseDown) {
-      this._handle.removeEventListener("mousedown", this._onMouseDown)
+    if (this._handle) {
+      this._handle.removeEventListener("mousedown", this._onMouseDown);
     }
+    document.removeEventListener("mousemove", this._onMouseMove);
+    document.removeEventListener("mouseup", this._onMouseUp);
+    document.body.classList.remove("sidebar-resizing");
   },
-}
+};
 
-export default ResizableSidebar
+export default ResizableSidebar;

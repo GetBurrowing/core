@@ -222,6 +222,24 @@
                   </span>
                 </div>
               </div>
+
+              <%!-- Start button — only for startable tasks --%>
+              <div
+                :if={task.status in ~w(backlog planning ready)}
+                class="mt-2 flex justify-end"
+                phx-click="transition_task"
+                phx-value-id={task.id}
+                phx-value-status="in_progress"
+              >
+                <button
+                  class="btn btn-success btn-xs gap-1"
+                  phx-click="transition_task"
+                  phx-value-id={task.id}
+                  phx-value-status="in_progress"
+                >
+                  <span class="hero-play size-3"></span> Start
+                </button>
+              </div>
             </div>
           </div>
 
@@ -283,6 +301,18 @@
             </option>
           </select>
         </form>
+      </div>
+
+      <%!-- Start button --%>
+      <div :if={@selected_task.status in ["backlog", "planning", "ready"]} class="flex">
+        <button
+          class="btn btn-success btn-sm gap-1"
+          phx-click="transition_task"
+          phx-value-id={@selected_task.id}
+          phx-value-status="in_progress"
+        >
+          <span class="hero-play-solid size-4"></span> Start Task
+        </button>
       </div>
 
       <%!-- Transition buttons --%>

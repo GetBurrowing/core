@@ -197,6 +197,29 @@ defmodule Platform.Federation.ToolSurface do
         when_to_use: "When you need to find an epic to assign a task to"
       },
       %{
+        name: "epic_update",
+        description: "Update an epic's fields including target_branch and deploy_target.",
+        parameters: %{
+          epic_id: %{type: "string", required: true, description: "The epic to update"},
+          name: %{type: "string", required: false, description: "New epic name"},
+          description: %{type: "string", required: false, description: "New description"},
+          status: %{type: "string", required: false, description: "New status"},
+          target_branch: %{
+            type: "string",
+            required: false,
+            description: "Git branch for task worktrees in this epic (e.g. feat/reskin)"
+          },
+          deploy_target: %{
+            type: "string",
+            required: false,
+            description: "Deploy target for tasks in this epic (e.g. exp, prod)"
+          }
+        },
+        returns: "The updated epic object",
+        limitations: "Epic must exist",
+        when_to_use: "When you need to configure an epic's target branch or deploy target"
+      },
+      %{
         name: "task_create",
         description:
           "Create a new task in a project. Tasks track work items on the kanban board.",
@@ -305,6 +328,27 @@ defmodule Platform.Federation.ToolSurface do
         returns: "The updated task object",
         limitations: "Status transitions are validated; not all transitions are allowed",
         when_to_use: "When you need to update a task's details or move it between columns"
+      },
+      %{
+        name: "task_start",
+        description:
+          "Start a task — sets assignee (optional), transitions to in_progress, kicks off TaskRouter. Use instead of task_update when ready to begin work.",
+        parameters: %{
+          task_id: %{type: "string", required: true, description: "The task to start"},
+          assignee_id: %{
+            type: "string",
+            required: false,
+            description: "Agent ID to assign. Defaults to current assignee."
+          },
+          assignee_type: %{
+            type: "string",
+            required: false,
+            description: "Assignee type: agent or user. Defaults to agent."
+          }
+        },
+        returns: "Updated task object with status in_progress",
+        limitations: "Task must be in backlog, planning, or ready status",
+        when_to_use: "When task is fully specced and ready to begin"
       }
     ]
   end
@@ -347,6 +391,23 @@ defmodule Platform.Federation.ToolSurface do
         returns: "The updated plan object",
         limitations: "Plan must be in draft status",
         when_to_use: "When a plan is ready to be reviewed and approved"
+      },
+      %{
+        name: "plan_approve",
+        description:
+          "Approve a plan that is in pending_review status. Transitions the plan to approved and auto-advances the task to in_progress if it was in planning/ready/backlog.",
+        parameters: %{
+          plan_id: %{type: "string", required: true, description: "The plan ID to approve"},
+          approved_by: %{
+            type: "string",
+            required: false,
+            description: "Who is approving (agent slug or user ID). Defaults to system."
+          }
+        },
+        returns: "The approved plan object",
+        limitations: "Plan must be in pending_review status",
+        when_to_use:
+          "After plan_submit, when you want to approve a plan and kick off task execution without waiting for human review"
       },
       %{
         name: "stage_start",
@@ -766,6 +827,48 @@ defmodule Platform.Federation.ToolSurface do
     {:ok, epics}
   end
 
+  def execute("epic_update", args, _context) do
+    epic_id = Map.get(args, "epic_id")
+
+    case Tasks.get_epic(epic_id) do
+      nil ->
+        {:error,
+         %{
+           error: "Epic not found: #{epic_id}",
+           recoverable: false,
+           suggestion: "Use epic_list to find available epics"
+         }}
+
+      epic ->
+        attrs =
+          args
+          |> Map.take(["name", "description", "status", "target_branch", "deploy_target"])
+          |> Map.reject(fn {_k, v} -> is_nil(v) end)
+          |> Enum.into(%{}, fn {k, v} -> {String.to_existing_atom(k), v} end)
+
+        case Tasks.update_epic(epic, attrs) do
+          {:ok, updated} ->
+            Tasks.broadcast_board({:epic_updated, updated})
+
+            {:ok,
+             %{
+               id: updated.id,
+               name: updated.name,
+               status: updated.status,
+               target_branch: updated.target_branch,
+               deploy_target: updated.deploy_target
+             }}
+
+          {:error, changeset} ->
+            {:error,
+             %{
+               error: "Failed to update epic: #{inspect_errors(changeset)}",
+               recoverable: true
+             }}
+        end
+    end
+  end
+
   def execute("task_create", args, _context) do
     attrs = %{
       project_id: Map.get(args, "project_id"),
@@ -951,6 +1054,62 @@ defmodule Platform.Federation.ToolSurface do
     end
   end
 
+  def execute("task_start", args, _context) do
+    task_id = Map.get(args, "task_id")
+
+    case Tasks.get_task_record(task_id) do
+      nil ->
+        {:error,
+         %{
+           error: "Task not found: #{task_id}",
+           recoverable: false,
+           suggestion: "Use task_list to find available tasks"
+         }}
+
+      task ->
+        task =
+          case {Map.get(args, "assignee_id"), Map.get(args, "assignee_type", "agent")} do
+            {nil, _} ->
+              task
+
+            {assignee_id, assignee_type} ->
+              case Tasks.update_task(task, %{
+                     assignee_id: assignee_id,
+                     assignee_type: assignee_type
+                   }) do
+                {:ok, updated} -> updated
+                _ -> task
+              end
+          end
+
+        case Tasks.transition_task(task, "in_progress") do
+          {:ok, updated} ->
+            Tasks.broadcast_board({:task_updated, updated})
+
+            {:ok,
+             %{
+               id: updated.id,
+               title: updated.title,
+               status: updated.status,
+               assignee_id: updated.assignee_id,
+               assignee_type: updated.assignee_type
+             }}
+
+          {:error, :invalid_transition} ->
+            {:error,
+             %{
+               error:
+                 "Cannot start task from status #{task.status}. Must be backlog, planning, or ready.",
+               recoverable: true,
+               suggestion: "Check task status with task_get first"
+             }}
+
+          {:error, reason} ->
+            {:error, %{error: "Failed to start task: #{inspect(reason)}", recoverable: true}}
+        end
+    end
+  end
+
   # ── Plan / Stage / Validation tools ──────────────────────────────────────
 
   def execute("plan_create", args, _context) do
@@ -1072,6 +1231,44 @@ defmodule Platform.Federation.ToolSurface do
                recoverable: true,
                suggestion: "Check the plan status"
              }}
+        end
+    end
+  end
+
+  def execute("plan_approve", args, _context) do
+    plan_id = Map.get(args, "plan_id")
+    approved_by = Map.get(args, "approved_by", "system")
+
+    case Repo.get(Plan, plan_id) do
+      nil ->
+        {:error,
+         %{
+           error: "Plan not found: #{plan_id}",
+           recoverable: false,
+           suggestion: "Use plan_get to find the plan ID for a task"
+         }}
+
+      plan ->
+        case Tasks.approve_plan(plan, approved_by) do
+          {:ok, approved} ->
+            {:ok,
+             %{
+               id: approved.id,
+               task_id: approved.task_id,
+               status: approved.status,
+               approved_by: approved.approved_by
+             }}
+
+          {:error, :invalid_transition} ->
+            {:error,
+             %{
+               error: "Cannot approve plan with status #{plan.status}. Must be pending_review.",
+               recoverable: true,
+               suggestion: "Use plan_submit first to move the plan to pending_review"
+             }}
+
+          {:error, reason} ->
+            {:error, %{error: "Failed to approve plan: #{inspect(reason)}", recoverable: true}}
         end
     end
   end

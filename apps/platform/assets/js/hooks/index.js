@@ -10,6 +10,7 @@ import PushSubscribe from "./push_subscribe"
 import ResizableSidebar from "./resizable_sidebar"
 import ScrollToBottom from "./scroll_to_bottom"
 import SwipeDrawer from "./swipe_drawer"
+import ThemeToggle from "./theme_toggle"
 
 export default {
   CodeBlock,
@@ -24,4 +25,5 @@ export default {
   ResizableSidebar,
   ScrollToBottom,
   SwipeDrawer,
+  ThemeToggle,
 }

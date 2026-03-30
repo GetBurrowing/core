@@ -59,6 +59,7 @@ defmodule PlatformWeb.ChatLive do
       |> assign(:highlighted_message_id, nil)
       |> assign(:highlighted_thread_message_id, nil)
       |> assign(:participants_map, %{})
+      |> assign(:agent_participant_ids, MapSet.new())
       |> assign(:online_count, 0)
       |> assign(:agent_presence, default_agent_presence())
       |> assign(:has_agent_participant, false)
@@ -171,6 +172,10 @@ defmodule PlatformWeb.ChatLive do
 
       participants = Chat.list_participants(space.id)
       participants_map = Map.new(participants, fn p -> {p.id, p.display_name || "User"} end)
+
+      agent_participant_ids =
+        participants |> Enum.filter(&(&1.participant_type == "agent")) |> MapSet.new(& &1.id)
+
       has_agent_participant = Enum.any?(participants, &(&1.participant_type == "agent"))
 
       online_count =
@@ -205,6 +210,7 @@ defmodule PlatformWeb.ChatLive do
        |> assign(:highlighted_thread_message_id, nil)
        |> assign_search_form("")
        |> assign(:participants_map, participants_map)
+       |> assign(:agent_participant_ids, agent_participant_ids)
        |> assign(:online_count, online_count)
        |> assign(:agent_presence, agent_presence)
        |> assign(:has_agent_participant, has_agent_participant)
@@ -788,7 +794,7 @@ defmodule PlatformWeb.ChatLive do
     {:noreply, assign(socket, :show_new_conversation_modal, false)}
   end
 
-  def handle_event("picker_search", %{"query" => query}, socket) do
+  def handle_event("picker_search", %{"value" => query}, socket) do
     users = Platform.Accounts.list_users(query: query)
     agents = Chat.list_agents_for_picker()
 
@@ -1489,7 +1495,7 @@ defmodule PlatformWeb.ChatLive do
                     placeholder="Search messages…"
                     autocomplete="off"
                     phx-debounce="250"
-                    class="input input-bordered input-sm w-64 text-base md:text-sm"
+                    class="input input-bordered input-sm w-64 text-sm"
                   />
 
                   <button
@@ -1793,16 +1799,23 @@ defmodule PlatformWeb.ChatLive do
               id={dom_id}
               class={[
                 "group relative flex gap-3 rounded-xl px-2 py-2 transition-colors",
+                MapSet.member?(@agent_participant_ids, msg.participant_id) && "msg-agent",
                 @highlighted_message_id == msg.id && "bg-primary/5 ring-1 ring-primary/20",
                 @current_participant && msg.participant_id == @current_participant.id &&
-                  "bg-base-200/60"
+                  !MapSet.member?(@agent_participant_ids, msg.participant_id) && "bg-base-200/60"
               ]}
               data-participant-id={msg.participant_id}
               data-date={msg.inserted_at && DateTime.to_date(msg.inserted_at) |> Date.to_iso8601()}
             >
               <%!-- Avatar circle (hidden when grouped with previous message via JS) --%>
               <div class="flex-shrink-0 mt-0.5 message-avatar">
-                <div class="w-8 h-8 rounded-full bg-primary text-primary-content flex items-center justify-center text-sm font-bold select-none">
+                <div class={[
+                  "w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold select-none",
+                  if(MapSet.member?(@agent_participant_ids, msg.participant_id),
+                    do: "bg-base-300 text-primary msg-agent-avatar",
+                    else: "bg-primary text-primary-content"
+                  )
+                ]}>
                   {avatar_initial(@participants_map, msg.participant_id)}
                 </div>
               </div>
@@ -1810,8 +1823,20 @@ defmodule PlatformWeb.ChatLive do
               <%!-- Message body --%>
               <div class="flex-1 min-w-0">
                 <div class="flex items-baseline gap-2 message-header">
-                  <span class="text-sm font-bold text-base-content">
+                  <span class={[
+                    "text-sm font-bold",
+                    if(MapSet.member?(@agent_participant_ids, msg.participant_id),
+                      do: "msg-agent-name",
+                      else: "text-base-content"
+                    )
+                  ]}>
                     {sender_name(@participants_map, msg.participant_id)}
+                    <span
+                      :if={MapSet.member?(@agent_participant_ids, msg.participant_id)}
+                      class="msg-agent-badge"
+                    >
+                      AI
+                    </span>
                   </span>
                   <.local_time
                     id={"message-time-#{msg.id}"}
@@ -1895,7 +1920,7 @@ defmodule PlatformWeb.ChatLive do
 
                 <div
                   :if={msg.content_type != "canvas" and present?(msg.content)}
-                  class="prose prose-sm max-w-none text-base-content break-words chat-markdown"
+                  class="prose prose-sm max-w-none text-sm text-base-content break-words chat-markdown"
                 >
                   {Platform.Chat.ContentRenderer.render_message(msg.content)}
                 </div>
@@ -1986,7 +2011,7 @@ defmodule PlatformWeb.ChatLive do
                 <div class="text-xs font-medium text-base-content/70 mb-0.5">
                   {sender_name(@participants_map, entry.participant_id)}
                 </div>
-                <div class="prose prose-sm max-w-none text-base-content/80 border-l-2 border-primary/20 pl-3">
+                <div class="prose prose-sm max-w-none text-sm text-base-content/80 border-l-2 border-primary/20 pl-3">
                   {entry.text}<span class="inline-block w-1.5 h-4 bg-primary/50 animate-pulse ml-0.5 align-middle rounded-sm"></span>
                 </div>
               </div>
@@ -2086,7 +2111,7 @@ defmodule PlatformWeb.ChatLive do
                   placeholder={"Message ##{(@active_space && @active_space.name) || ""}"}
                   autocomplete="off"
                   rows="1"
-                  class="min-w-0 flex-1 rounded-xl text-base md:text-sm resize-none bg-base-100 border border-base-300 focus:border-primary focus:outline-none transition-colors"
+                  class="min-w-0 flex-1 rounded-xl text-sm resize-none bg-base-100 border border-base-300 focus:border-primary focus:outline-none transition-colors"
                   style="line-height:1.5;padding:6px 12px;min-height:33px;max-height:200px;overflow-y:auto;field-sizing:content"
                   phx-hook="ComposeInput"
                 >{Phoenix.HTML.Form.normalize_value("text", @compose_form[:text].value)}</textarea>
@@ -2422,7 +2447,7 @@ defmodule PlatformWeb.ChatLive do
                     rows="2"
                     placeholder="Reply in thread…"
                     autocomplete="off"
-                    class="textarea textarea-bordered w-full resize-none rounded-xl pr-10 text-base md:text-sm leading-relaxed"
+                    class="textarea textarea-bordered w-full resize-none rounded-xl pr-10 text-sm leading-relaxed"
                     phx-hook="ComposeInput"
                   >{Phoenix.HTML.Form.normalize_value("textarea", @thread_compose_form[:text].value)}</textarea>
                   <button

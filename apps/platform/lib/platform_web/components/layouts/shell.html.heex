@@ -240,6 +240,18 @@
           </div>
         </div>
 
+        <%!-- Dark/light mode toggle --%>
+        <button
+          id="theme-toggle"
+          phx-hook="ThemeToggle"
+          class="rounded-lg p-1 text-base-content/60 hover:bg-base-300 hover:text-base-content transition-colors"
+          aria-label="Toggle dark/light mode"
+          title="Toggle dark/light mode"
+        >
+          <span data-icon="sun" class="hero-sun size-4 hidden"></span>
+          <span data-icon="moon" class="hero-moon size-4"></span>
+        </button>
+
         <span class="text-xs text-base-content/50">{@current_user}</span>
         <.link
           href="/auth/logout"
