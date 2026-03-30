@@ -23,7 +23,7 @@
 /*
  * Force-include hero icon classes used in dynamic expressions (if/else)
  * so Tailwind's scanner picks them up even when not statically present:
- * hero-eye hero-eye-slash hero-user-group
+ * hero-eye hero-eye-slash hero-user-group hero-sun hero-moon
  */
 
 /* A Tailwind plugin that makes "hero-#{ICON}" classes available.
