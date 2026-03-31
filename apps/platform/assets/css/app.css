@@ -434,3 +434,25 @@ body, .font-fabrikam, * {
 /* ── Fabrikam progress bar ───────────────────────────────────────────── */
 .progress-fabrikam::-webkit-progress-value { background: oklch(82% 0.12 207); }
 .progress-fabrikam::-moz-progress-bar { background: oklch(82% 0.12 207); }
+
+/* ── Checklist inline card ───────────────────────────────────────── */
+
+/* Structural overrides not covered by Tailwind utilities applied
+   directly in canvas_renderer.ex (card-checklist class). These
+   supplement the border/padding/gap set there. */
+.card-checklist {
+  gap: 0.25rem;
+}
+
+/* Active glow: pulsing cyan box-shadow matching the --cyan-glow design token.
+   rgba(6, 213, 237, 0.15) ≈ oklch(82% 0.12 207 / 0.15) — the primary cyan. */
+@keyframes checklist-glow {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(6, 213, 237, 0.15); }
+  50%       { box-shadow: 0 0 0 6px rgba(6, 213, 237, 0); }
+}
+
+.card-checklist [data-state="active"] {
+  animation: checklist-glow 2s ease-in-out infinite;
+  border-radius: 0.375rem;
+  background: rgba(6, 213, 237, 0.05);
+}

@@ -746,6 +746,24 @@ defmodule PlatformWeb.ChatLive do
     end
   end
 
+  def handle_event("canvas_action", %{"value" => value, "canvas-id" => canvas_id}, socket) do
+    require Logger
+
+    case find_canvas(socket, canvas_id) do
+      nil ->
+        Logger.warning("canvas_action: canvas not found (canvas_id=#{inspect(canvas_id)})")
+        {:noreply, socket}
+
+      canvas ->
+        Logger.info(
+          "canvas_action: canvas=#{canvas.id} value=#{inspect(value)} space=#{canvas.space_id}"
+        )
+
+        ChatPubSub.broadcast(canvas.space_id, {:canvas_action, canvas, value})
+        {:noreply, socket}
+    end
+  end
+
   def handle_event("close_canvas", _params, socket) do
     {:noreply, assign(socket, :active_canvas, nil)}
   end
