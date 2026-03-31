@@ -60,6 +60,7 @@ defmodule PlatformWeb.ChatLive do
       |> assign(:highlighted_thread_message_id, nil)
       |> assign(:participants_map, %{})
       |> assign(:agent_participant_ids, MapSet.new())
+      |> assign(:agent_colors_map, %{})
       |> assign(:online_count, 0)
       |> assign(:agent_presence, default_agent_presence())
       |> assign(:has_agent_participant, false)
@@ -187,6 +188,8 @@ defmodule PlatformWeb.ChatLive do
       agent_participant_ids =
         participants |> Enum.filter(&(&1.participant_type == "agent")) |> MapSet.new(& &1.id)
 
+      agent_colors_map = Chat.agent_color_map_for_participants(participants)
+
       has_agent_participant = Enum.any?(participants, &(&1.participant_type == "agent"))
 
       online_count =
@@ -223,6 +226,7 @@ defmodule PlatformWeb.ChatLive do
        |> assign_search_form("")
        |> assign(:participants_map, participants_map)
        |> assign(:agent_participant_ids, agent_participant_ids)
+       |> assign(:agent_colors_map, agent_colors_map)
        |> assign(:online_count, online_count)
        |> assign(:agent_presence, agent_presence)
        |> assign(:has_agent_participant, has_agent_participant)
@@ -1922,6 +1926,18 @@ defmodule PlatformWeb.ChatLive do
                 @current_participant && msg.participant_id == @current_participant.id &&
                   !MapSet.member?(@agent_participant_ids, msg.participant_id) && "bg-base-200/60"
               ]}
+              style={
+                if MapSet.member?(@agent_participant_ids, msg.participant_id) do
+                  accent =
+                    Map.get(
+                      @agent_colors_map,
+                      msg.participant_id,
+                      Platform.Agents.ColorPalette.default_accent()
+                    )
+
+                  "--agent-accent: #{accent};"
+                end
+              }
               data-participant-id={msg.participant_id}
               data-date={msg.inserted_at && DateTime.to_date(msg.inserted_at) |> Date.to_iso8601()}
             >
@@ -2119,18 +2135,27 @@ defmodule PlatformWeb.ChatLive do
             :for={{chunk_id, entry} <- @streaming_replies}
             :if={entry.text != nil and entry.text != ""}
             id={"streaming-#{chunk_id}"}
-            class="flex-shrink-0 px-5 pb-2"
+            class="flex-shrink-0 px-5 pb-2 msg-agent"
+            style={
+              "--agent-accent: #{Map.get(@agent_colors_map, entry.participant_id, Platform.Agents.ColorPalette.default_accent())};"
+            }
           >
             <div class="flex items-start gap-2">
-              <div class="flex size-7 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-medium text-primary">
+              <div class="flex size-7 shrink-0 items-center justify-center rounded-full bg-base-300 text-xs font-medium msg-agent-avatar">
                 {avatar_initial(@participants_map, entry.participant_id)}
               </div>
               <div class="min-w-0 flex-1">
-                <div class="text-xs font-medium text-base-content/70 mb-0.5">
+                <div class="text-xs font-medium mb-0.5 msg-agent-name">
                   {sender_name(@participants_map, entry.participant_id)}
                 </div>
-                <div class="prose prose-sm max-w-none text-sm text-base-content/80 border-l-2 border-primary/20 pl-3">
-                  {entry.text}<span class="inline-block w-1.5 h-4 bg-primary/50 animate-pulse ml-0.5 align-middle rounded-sm"></span>
+                <div
+                  class="prose prose-sm max-w-none text-sm text-base-content/80 border-l-2 pl-3"
+                  style="border-color: color-mix(in oklch, var(--agent-accent, oklch(82% 0.12 207)) 30%, transparent);"
+                >
+                  {entry.text}<span
+                    class="inline-block w-1.5 h-4 animate-pulse ml-0.5 align-middle rounded-sm"
+                    style="background: color-mix(in oklch, var(--agent-accent, oklch(82% 0.12 207)) 50%, transparent);"
+                  ></span>
                 </div>
               </div>
             </div>

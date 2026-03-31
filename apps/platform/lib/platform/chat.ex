@@ -510,6 +510,40 @@ defmodule Platform.Chat do
     |> Repo.update()
   end
 
+  @doc """
+  Build a map of `participant.id → accent_color_string` for agent participants in a space.
+
+  Used to supply per-agent color identity to chat rendering. Agents without a color
+  fall back to the default blue accent via `ColorPalette.accent_for/1`.
+  """
+  @spec agent_color_map_for_participants([Participant.t()]) :: %{binary() => binary()}
+  def agent_color_map_for_participants(participants) do
+    alias Platform.Agents.ColorPalette
+
+    # Build map: agent_id → participant.id (for agent participants only)
+    agent_participant_ids =
+      participants
+      |> Enum.filter(&(&1.participant_type == "agent"))
+      |> Map.new(fn p -> {p.participant_id, p.id} end)
+
+    if map_size(agent_participant_ids) == 0 do
+      %{}
+    else
+      agent_ids = Map.keys(agent_participant_ids)
+
+      # Fetch color for each agent
+      colors =
+        from(a in Agent, where: a.id in ^agent_ids, select: {a.id, a.color})
+        |> Repo.all()
+
+      # Map participant.id → accent string
+      Map.new(colors, fn {agent_id, color} ->
+        participant_id = Map.fetch!(agent_participant_ids, agent_id)
+        {participant_id, ColorPalette.accent_for(color)}
+      end)
+    end
+  end
+
   @doc "Soft-remove a participant by setting `left_at` to now."
   @spec remove_participant(Participant.t()) ::
           {:ok, Participant.t()} | {:error, Ecto.Changeset.t()}

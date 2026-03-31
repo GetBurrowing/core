@@ -28,6 +28,7 @@ defmodule Platform.Agents.Agent do
     field(:metadata, :map, default: %{})
     field(:runtime_type, :string, default: "built_in")
     field(:runtime_id, :binary_id)
+    field(:color, :string)
 
     timestamps(type: :utc_datetime_usec)
   end
@@ -48,7 +49,8 @@ defmodule Platform.Agents.Agent do
       :parent_agent_id,
       :metadata,
       :runtime_type,
-      :runtime_id
+      :runtime_id,
+      :color
     ])
     |> validate_required([:slug, :name, :status])
     |> validate_inclusion(:status, @valid_statuses)

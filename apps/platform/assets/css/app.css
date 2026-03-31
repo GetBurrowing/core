@@ -337,26 +337,31 @@ body, .font-fabrikam, * {
 }
 
 /* ── Agent message differentiation ──────────────────────────────── */
-/* Applied to messages from AI agents in chat */
+/* Applied to messages from AI agents in chat.
+   --agent-accent is set per-message via inline style from the agent's stored color.
+   Falls back to the original blue when not set. */
 .msg-agent {
-  border-left: 3px solid oklch(82% 0.12 207); /* cyan — full opacity */
-  background: oklch(74% 0.177 207 / 0.06);    /* lifted from 0.03 → 0.06 */
+  --agent-accent-fallback: oklch(82% 0.12 207); /* blue default */
+  border-left: 3px solid var(--agent-accent, var(--agent-accent-fallback));
+  background: color-mix(in oklch, var(--agent-accent, var(--agent-accent-fallback)) 6%, transparent);
   border-radius: 0 0.5rem 0.5rem 0;
-  box-shadow: inset 0 0 0 1px oklch(74% 0.177 207 / 0.08);
+  box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--agent-accent, var(--agent-accent-fallback)) 8%, transparent);
   margin: 2px 0;
   padding-left: calc(0.75rem + 3px);
 }
 
 .msg-agent:hover {
-  background: oklch(74% 0.177 207 / 0.10);
+  background: color-mix(in oklch, var(--agent-accent, var(--agent-accent-fallback)) 10%, transparent);
 }
 
 /* In dark mode, use neutral stepped surfaces for agent messages to match the
-   comp rather than the older cyan-tinted wash. Keep the cyan border as the
+   comp rather than the older cyan-tinted wash. Keep the accent border as the
    identity cue, but make the bubble itself part of the surface system. */
 [data-theme="dark"] .msg-agent {
+  --agent-accent-fallback: oklch(82% 0.12 207);
   background: #1c2531;
   box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.04);
+  border-left-color: var(--agent-accent, var(--agent-accent-fallback));
 }
 
 [data-theme="dark"] .msg-agent:hover {
@@ -365,8 +370,10 @@ body, .font-fabrikam, * {
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) .msg-agent {
+    --agent-accent-fallback: oklch(82% 0.12 207);
     background: #1c2531;
     box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.04);
+    border-left-color: var(--agent-accent, var(--agent-accent-fallback));
   }
 
   :root:not([data-theme="light"]) .msg-agent:hover {
@@ -375,24 +382,28 @@ body, .font-fabrikam, * {
 }
 
 .msg-agent-avatar {
-  /* Cyan ring + subtle glow — stands out from human avatars */
-  box-shadow: 0 0 0 2px oklch(82% 0.12 207), 0 0 10px oklch(82% 0.12 207 / 0.2);
+  /* Uses --agent-accent from closest ancestor with the property set */
+  --agent-accent-fallback: oklch(82% 0.12 207);
+  box-shadow: 0 0 0 2px var(--agent-accent, var(--agent-accent-fallback)),
+              0 0 10px color-mix(in oklch, var(--agent-accent, var(--agent-accent-fallback)) 20%, transparent);
 }
 
 .msg-agent-name {
-  color: oklch(82% 0.12 207);
+  --agent-accent-fallback: oklch(82% 0.12 207);
+  color: var(--agent-accent, var(--agent-accent-fallback));
   font-weight: 700;
   letter-spacing: 0.03em;
 }
 
 .msg-agent-badge {
+  --agent-accent-fallback: oklch(82% 0.12 207);
   font-size: 0.625rem;
   font-weight: 700;
   letter-spacing: 0.06em;
   padding: 1px 5px;
   border-radius: 9999px;
-  border: 1px solid oklch(82% 0.12 207);
-  color: oklch(82% 0.12 207);
+  border: 1px solid var(--agent-accent, var(--agent-accent-fallback));
+  color: var(--agent-accent, var(--agent-accent-fallback));
   vertical-align: middle;
   margin-left: 4px;
 }

@@ -287,7 +287,8 @@ defmodule PlatformWeb.ControlCenter.AgentData do
       "fallback_models" => Enum.join(List.wrap(Map.get(model_config, "fallbacks", [])), ", "),
       "thinking_default" => agent.thinking_default || "",
       "max_concurrent" => agent.max_concurrent || 1,
-      "sandbox_mode" => agent.sandbox_mode || "off"
+      "sandbox_mode" => agent.sandbox_mode || "off",
+      "color" => agent.color || ""
     }
 
     to_form(Map.merge(base, normalize_map(overrides)), as: :config)
@@ -336,7 +337,8 @@ defmodule PlatformWeb.ControlCenter.AgentData do
       "primary_model" => "",
       "status" => "active",
       "max_concurrent" => 1,
-      "sandbox_mode" => "off"
+      "sandbox_mode" => "off",
+      "color" => ""
     }
   end
 
@@ -390,6 +392,7 @@ defmodule PlatformWeb.ControlCenter.AgentData do
       max_concurrent:
         parse_positive_integer(Map.get(params, "max_concurrent")) || agent.max_concurrent || 1,
       sandbox_mode: blank_fallback(Map.get(params, "sandbox_mode"), agent.sandbox_mode || "off"),
+      color: blank_to_nil(Map.get(params, "color")),
       model_config: updated_model_config
     }
   end
@@ -406,6 +409,7 @@ defmodule PlatformWeb.ControlCenter.AgentData do
       status: blank_fallback(Map.get(params, "status"), "active"),
       max_concurrent: parse_positive_integer(Map.get(params, "max_concurrent")) || 1,
       sandbox_mode: blank_fallback(Map.get(params, "sandbox_mode"), "off"),
+      color: blank_to_nil(Map.get(params, "color")),
       model_config:
         if(primary_model == "", do: %{}, else: %{"primary" => primary_model, "fallbacks" => []})
     }

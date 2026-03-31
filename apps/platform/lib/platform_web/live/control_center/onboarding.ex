@@ -474,6 +474,38 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
             </select>
           </label>
         </div>
+        <%!-- Color family picker --%>
+        <div class="form-control">
+          <span class="mb-2 text-xs font-semibold uppercase tracking-widest text-base-content/50">
+            Color family
+          </span>
+          <div class="flex flex-wrap gap-2">
+            <label
+              :for={color <- Platform.Agents.ColorPalette.all()}
+              class="cursor-pointer"
+              title={color.label}
+            >
+              <input
+                type="radio"
+                name="create_agent[color]"
+                value={color.id}
+                class="sr-only peer"
+                checked={(@create_agent_form[:color].value || "") == color.id}
+              />
+              <span
+                class={[
+                  "flex flex-col items-center gap-1 px-2 py-1.5 rounded-lg border-2 transition-all",
+                  "peer-checked:border-current border-transparent hover:border-base-300"
+                ]}
+                style={"color: #{color.accent};"}
+              >
+                <span class="w-5 h-5 rounded-full" style={"background: #{color.accent};"}></span>
+                <span class="text-[9px] text-base-content/60 font-medium">{color.label}</span>
+              </span>
+            </label>
+          </div>
+        </div>
+
         <button type="submit" class="btn btn-primary w-full">Create agent</button>
       </.form>
     </div>
