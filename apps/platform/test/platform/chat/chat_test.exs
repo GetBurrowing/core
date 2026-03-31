@@ -311,6 +311,58 @@ defmodule Platform.ChatTest do
 
   # ── Pins ──────────────────────────────────────────────────────────────────────
 
+  describe "unread_counts_for_user/1" do
+    test "counts messages from other participants after last_read" do
+      space = create_space()
+      user = create_participant(space.id)
+      other = create_participant(space.id)
+
+      # Post a message from the other user, then mark it as read
+      msg1 = create_message(space.id, other.id)
+      Chat.mark_space_read(user.id, msg1.id)
+
+      # Post another message from the other user (unread)
+      _msg2 = create_message(space.id, other.id)
+
+      counts = Chat.unread_counts_for_user(user.participant_id)
+      assert Map.get(counts, space.id, 0) == 1
+    end
+
+    test "does not count own messages as unread" do
+      space = create_space()
+      user = create_participant(space.id)
+      other = create_participant(space.id)
+
+      # Post a message from the other user, mark as read
+      msg1 = create_message(space.id, other.id)
+      Chat.mark_space_read(user.id, msg1.id)
+
+      # Now user posts their own message — should NOT be counted as unread
+      _own_msg = create_message(space.id, user.id)
+
+      counts = Chat.unread_counts_for_user(user.participant_id)
+      assert Map.get(counts, space.id, 0) == 0
+    end
+
+    test "counts only non-own messages when mixed" do
+      space = create_space()
+      user = create_participant(space.id)
+      other = create_participant(space.id)
+
+      # Mark a starting point
+      seed = create_message(space.id, other.id)
+      Chat.mark_space_read(user.id, seed.id)
+
+      # User sends 2 own messages, other user sends 1
+      _own1 = create_message(space.id, user.id)
+      _own2 = create_message(space.id, user.id)
+      _theirs = create_message(space.id, other.id)
+
+      counts = Chat.unread_counts_for_user(user.participant_id)
+      assert Map.get(counts, space.id, 0) == 1
+    end
+  end
+
   describe "pin_message/1 and unpin_message/2" do
     test "pins a message in a space" do
       space = create_space()

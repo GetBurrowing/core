@@ -1617,30 +1617,34 @@ defmodule Platform.Chat do
       where:
         p.participant_id == ^user_id and is_nil(p.left_at) and
           p.participant_type == "user",
-      select: {p.space_id, p.last_read_message_id}
+      select: {p.space_id, p.last_read_message_id, p.id}
     )
     |> Repo.all()
-    |> Enum.map(fn {space_id, last_read_id} ->
-      {space_id, count_unread(space_id, last_read_id)}
+    |> Enum.map(fn {space_id, last_read_id, participant_pk} ->
+      {space_id, count_unread(space_id, last_read_id, participant_pk)}
     end)
     |> Enum.filter(fn {_, count} -> count > 0 end)
     |> Map.new()
   end
 
-  defp count_unread(space_id, nil) do
+  # participant_pk is the internal chat_participants.id (PK), which is what
+  # chat_messages.participant_id references via foreign key.
+  defp count_unread(space_id, nil, participant_pk) do
     from(m in Message,
-      where: m.space_id == ^space_id and is_nil(m.thread_id) and is_nil(m.deleted_at),
+      where:
+        m.space_id == ^space_id and is_nil(m.thread_id) and is_nil(m.deleted_at) and
+          m.participant_id != ^participant_pk,
       select: count(m.id)
     )
     |> Repo.one()
     |> min(10)
   end
 
-  defp count_unread(space_id, last_read_id) do
+  defp count_unread(space_id, last_read_id, participant_pk) do
     from(m in Message,
       where:
         m.space_id == ^space_id and m.id > ^last_read_id and is_nil(m.thread_id) and
-          is_nil(m.deleted_at),
+          is_nil(m.deleted_at) and m.participant_id != ^participant_pk,
       select: count(m.id)
     )
     |> Repo.one()
