@@ -1,10 +1,12 @@
 defmodule Platform.Federation.ToolSurface do
   @moduledoc """
-  Write-only tool surface for federated agents.
+  Tool surface for federated agents.
   Same tools available to built-in and external runtimes.
+  Includes both write tools and bounded read tools for space context.
   """
 
   alias Platform.Chat
+  alias Platform.Chat.ContextPlane
   alias Platform.Tasks
   alias Platform.Tasks.{Plan, PlanEngine, Stage, Validation}
   alias Platform.Repo
@@ -18,7 +20,10 @@ defmodule Platform.Federation.ToolSurface do
   def tool_definitions do
     canvas_tools() ++
       messaging_tools() ++
-      task_tools() ++ plan_tools() ++ review_tools() ++ space_tools() ++ federation_tools()
+      task_tools() ++
+      plan_tools() ++
+      review_tools() ++
+      space_tools() ++ context_read_tools() ++ federation_tools()
   end
 
   defp federation_tools do
@@ -117,6 +122,103 @@ defmodule Platform.Federation.ToolSurface do
         limitations: "Only returns spaces the agent is a participant in",
         when_to_use:
           "When you need to discover available spaces or find a space ID for proactive messaging"
+      }
+    ]
+  end
+
+  defp context_read_tools do
+    [
+      %{
+        name: "space_get_context",
+        description:
+          "Get the current context bundle for a space: recent activity summary, active canvases, other agents, and space metadata. Useful for orienting yourself in a space before acting.",
+        parameters: %{
+          space_id: %{type: "string", required: true, description: "UUID of the Suite space"}
+        },
+        returns:
+          "Context bundle with space metadata, active_canvases, other_agents, and recent_activity_summary",
+        limitations:
+          "Only works for spaces the agent is an active participant in. Activity data is in-memory and may be incomplete after restarts.",
+        when_to_use:
+          "When you join a space or need to understand what has been happening before you act"
+      },
+      %{
+        name: "space_search_messages",
+        description:
+          "Full-text search messages in a space. Returns up to 10 results ranked by relevance with highlighted excerpts.",
+        parameters: %{
+          space_id: %{type: "string", required: true, description: "UUID of the Suite space"},
+          query: %{
+            type: "string",
+            required: true,
+            description: "Search query (supports natural language)"
+          },
+          limit: %{
+            type: "integer",
+            required: false,
+            description: "Max results to return (default 10, max 10)"
+          }
+        },
+        returns:
+          "Array of message objects with id, participant_id, content, search_headline, inserted_at",
+        limitations:
+          "Only searches spaces the agent is a participant in. Max 10 results. Uses PostgreSQL full-text search.",
+        when_to_use: "When you need to find specific messages or topics discussed in a space"
+      },
+      %{
+        name: "space_get_messages",
+        description:
+          "Get recent messages from a space, newest first. Supports cursor-based pagination.",
+        parameters: %{
+          space_id: %{type: "string", required: true, description: "UUID of the Suite space"},
+          limit: %{
+            type: "integer",
+            required: false,
+            description: "Number of messages to return (default 20, max 20)"
+          },
+          before_id: %{
+            type: "string",
+            required: false,
+            description: "Cursor: only return messages older than this message ID"
+          }
+        },
+        returns:
+          "Array of message objects with id, participant_id, content_type, content, inserted_at",
+        limitations:
+          "Only works for spaces the agent is a participant in. Max 20 messages per call.",
+        when_to_use: "When you need to read the recent conversation history in a space"
+      },
+      %{
+        name: "canvas_list",
+        description:
+          "List all canvases in a space with summary information (id, title, type, timestamps).",
+        parameters: %{
+          space_id: %{type: "string", required: true, description: "UUID of the Suite space"}
+        },
+        returns: "Array of canvas summary objects with id, title, type, inserted_at, updated_at",
+        limitations: "Only works for spaces the agent is a participant in.",
+        when_to_use:
+          "When you need to discover what canvases exist in a space before reading or updating one"
+      },
+      %{
+        name: "canvas_get",
+        description:
+          "Get a canvas by ID. Returns summary by default, or full document state with mode=full.",
+        parameters: %{
+          canvas_id: %{type: "string", required: true, description: "UUID of the canvas"},
+          mode: %{
+            type: "string",
+            required: false,
+            description:
+              "\"summary\" (default) or \"full\" — full includes the complete state map"
+          }
+        },
+        returns:
+          "Canvas object with id, title, type, space_id, and optionally the full state document",
+        limitations:
+          "Only works for canvases in spaces the agent is a participant in. Full mode may return large payloads for complex canvases.",
+        when_to_use:
+          "When you need to inspect a canvas's content before updating it, or to present canvas data to a user"
       }
     ]
   end
@@ -793,6 +895,126 @@ defmodule Platform.Federation.ToolSurface do
                recoverable: true,
                suggestion: "Check that the patches are valid JSON-compatible maps"
              }}
+        end
+    end
+  end
+
+  # ── Context read tools ──────────────────────────────────────────────────
+
+  def execute("space_get_context", args, context) do
+    space_id = Map.get(args, "space_id")
+
+    with :ok <- assert_agent_in_space(space_id, context) do
+      bundle = ContextPlane.build_context_bundle(space_id)
+
+      # Enrich with space metadata from DB
+      space_meta =
+        case Chat.get_space(space_id) do
+          nil -> %{}
+          s -> %{id: s.id, name: s.name, kind: s.kind, description: s.description}
+        end
+
+      {:ok, Map.put(bundle, :space, space_meta)}
+    end
+  end
+
+  def execute("space_search_messages", args, context) do
+    space_id = Map.get(args, "space_id")
+    query = Map.get(args, "query", "")
+    limit = args |> Map.get("limit", 10) |> min(10)
+
+    with :ok <- assert_agent_in_space(space_id, context) do
+      messages = Chat.search_messages(space_id, query, limit: limit)
+
+      {:ok,
+       Enum.map(messages, fn m ->
+         %{
+           id: m.id,
+           participant_id: m.participant_id,
+           content: String.slice(m.content || "", 0, 500),
+           search_headline: m.search_headline,
+           inserted_at: format_datetime(m.inserted_at)
+         }
+       end)}
+    end
+  end
+
+  def execute("space_get_messages", args, context) do
+    space_id = Map.get(args, "space_id")
+    limit = args |> Map.get("limit", 20) |> min(20)
+    before_id = Map.get(args, "before_id")
+
+    with :ok <- assert_agent_in_space(space_id, context) do
+      opts = [limit: limit, top_level_only: true]
+      opts = if before_id, do: Keyword.put(opts, :before_id, before_id), else: opts
+
+      messages = Chat.list_messages(space_id, opts)
+
+      {:ok,
+       Enum.map(messages, fn m ->
+         %{
+           id: m.id,
+           participant_id: m.participant_id,
+           content_type: m.content_type,
+           content: String.slice(m.content || "", 0, 500),
+           thread_id: m.thread_id,
+           inserted_at: format_datetime(m.inserted_at)
+         }
+       end)}
+    end
+  end
+
+  def execute("canvas_list", args, context) do
+    space_id = Map.get(args, "space_id")
+
+    with :ok <- assert_agent_in_space(space_id, context) do
+      canvases = Chat.list_canvases(space_id)
+
+      {:ok,
+       Enum.map(canvases, fn c ->
+         %{
+           id: c.id,
+           title: c.title,
+           type: c.canvas_type,
+           inserted_at: format_datetime(c.inserted_at),
+           updated_at: format_datetime(c.updated_at)
+         }
+       end)}
+    end
+  end
+
+  def execute("canvas_get", args, context) do
+    canvas_id = Map.get(args, "canvas_id")
+    mode = Map.get(args, "mode", "summary")
+
+    case Chat.get_canvas(canvas_id) do
+      nil ->
+        {:error,
+         %{
+           error: "Canvas not found: #{canvas_id}",
+           recoverable: false,
+           suggestion: "Use canvas_list to find available canvases in the space"
+         }}
+
+      canvas ->
+        with :ok <- assert_agent_in_space(canvas.space_id, context) do
+          result = %{
+            id: canvas.id,
+            title: canvas.title,
+            type: canvas.canvas_type,
+            space_id: canvas.space_id,
+            inserted_at: format_datetime(canvas.inserted_at),
+            updated_at: format_datetime(canvas.updated_at)
+          }
+
+          result =
+            if mode == "full" do
+              Map.put(result, :state, canvas.state)
+            else
+              result
+            end
+
+          {:ok, result}
         end
     end
   end
@@ -1739,6 +1961,49 @@ defmodule Platform.Federation.ToolSurface do
     case Platform.Orchestration.ExecutionSpace.find_by_task_id(task_id) do
       %{id: id} -> id
       _ -> nil
+    end
+  end
+
+  defp assert_agent_in_space(space_id, context) do
+    agent_id = Map.get(context, :agent_id)
+
+    cond do
+      is_nil(space_id) ->
+        {:error,
+         %{
+           error: "space_id is required",
+           recoverable: true,
+           suggestion: "Provide a valid space_id"
+         }}
+
+      is_nil(agent_id) ->
+        {:error,
+         %{
+           error: "Agent identity required for read operations",
+           recoverable: false,
+           suggestion: "Ensure the agent context includes agent_id"
+         }}
+
+      true ->
+        participant =
+          Repo.get_by(Chat.Participant,
+            space_id: space_id,
+            participant_type: "agent",
+            participant_id: agent_id
+          )
+
+        case participant do
+          %{left_at: nil} ->
+            :ok
+
+          _ ->
+            {:error,
+             %{
+               error: "Access denied: agent is not an active participant in space #{space_id}",
+               recoverable: false,
+               suggestion: "Use space_list to find spaces the agent has access to"
+             }}
+        end
     end
   end
 

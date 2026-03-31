@@ -35,9 +35,9 @@ defmodule Platform.Federation.ToolSurfaceTest do
   defp unique_slug, do: "test-#{System.unique_integer([:positive])}"
 
   describe "tool_definitions/0" do
-    test "returns all 28 tools with required components" do
+    test "returns all 33 tools with required components" do
       tools = ToolSurface.tool_definitions()
-      assert length(tools) == 28
+      assert length(tools) == 33
 
       tool_names = Enum.map(tools, & &1.name)
       assert "send_media" in tool_names
@@ -66,6 +66,12 @@ defmodule Platform.Federation.ToolSurfaceTest do
       assert "prompt_template_list" in tool_names
       assert "prompt_template_update" in tool_names
       assert "federation_status" in tool_names
+      # Context read tools
+      assert "space_get_context" in tool_names
+      assert "space_search_messages" in tool_names
+      assert "space_get_messages" in tool_names
+      assert "canvas_list" in tool_names
+      assert "canvas_get" in tool_names
 
       for tool <- tools do
         assert Map.has_key?(tool, :name)
@@ -610,6 +616,345 @@ defmodule Platform.Federation.ToolSurfaceTest do
         )
 
       assert error.error =~ "Failed to send media"
+    end
+  end
+
+  # ── Context read tools ────────────────────────────────────────────
+
+  describe "context read tools" do
+    setup do
+      agent = create_agent()
+      space = create_space(%{name: "Read Space", description: "A test space"})
+
+      participant =
+        create_participant(space.id, %{
+          participant_type: "agent",
+          participant_id: agent.id,
+          display_name: agent.name
+        })
+
+      context = %{agent_id: agent.id, agent_participant_id: participant.id}
+      %{agent: agent, space: space, participant: participant, context: context}
+    end
+
+    # ── space_get_context ──────────────────────────────────────────
+
+    test "space_get_context returns context bundle for a member space", ctx do
+      {:ok, result} =
+        ToolSurface.execute(
+          "space_get_context",
+          %{"space_id" => ctx.space.id},
+          ctx.context
+        )
+
+      assert result.space.id == ctx.space.id
+      assert result.space.name == "Read Space"
+      assert is_list(result.active_canvases)
+      assert is_binary(result.recent_activity_summary) or result.recent_activity_summary == ""
+    end
+
+    test "space_get_context denied for non-member agent", ctx do
+      other_space = create_space(%{name: "Other"})
+
+      {:error, error} =
+        ToolSurface.execute(
+          "space_get_context",
+          %{"space_id" => other_space.id},
+          ctx.context
+        )
+
+      assert error.error =~ "Access denied"
+      assert error.recoverable == false
+    end
+
+    test "space_get_context with nil space_id returns error", ctx do
+      {:error, error} =
+        ToolSurface.execute("space_get_context", %{}, ctx.context)
+
+      assert error.error =~ "space_id is required"
+    end
+
+    # ── space_get_messages ─────────────────────────────────────────
+
+    test "space_get_messages returns recent messages", ctx do
+      # Post some messages
+      for i <- 1..3 do
+        Chat.post_message(%{
+          space_id: ctx.space.id,
+          participant_id: ctx.participant.id,
+          content_type: "text",
+          content: "Message #{i}"
+        })
+      end
+
+      {:ok, results} =
+        ToolSurface.execute(
+          "space_get_messages",
+          %{"space_id" => ctx.space.id},
+          ctx.context
+        )
+
+      assert length(results) == 3
+      # Newest first
+      assert hd(results).content == "Message 3"
+      assert is_binary(hd(results).id)
+      assert is_binary(hd(results).inserted_at)
+    end
+
+    test "space_get_messages caps at 20", ctx do
+      for i <- 1..25 do
+        Chat.post_message(%{
+          space_id: ctx.space.id,
+          participant_id: ctx.participant.id,
+          content_type: "text",
+          content: "Msg #{i}"
+        })
+      end
+
+      {:ok, results} =
+        ToolSurface.execute(
+          "space_get_messages",
+          %{"space_id" => ctx.space.id, "limit" => 50},
+          ctx.context
+        )
+
+      assert length(results) == 20
+    end
+
+    test "space_get_messages denied for non-member", ctx do
+      other_space = create_space(%{name: "Locked"})
+
+      {:error, error} =
+        ToolSurface.execute(
+          "space_get_messages",
+          %{"space_id" => other_space.id},
+          ctx.context
+        )
+
+      assert error.error =~ "Access denied"
+    end
+
+    test "space_get_messages supports before_id cursor", ctx do
+      {:ok, msg1} =
+        Chat.post_message(%{
+          space_id: ctx.space.id,
+          participant_id: ctx.participant.id,
+          content_type: "text",
+          content: "First"
+        })
+
+      {:ok, _msg2} =
+        Chat.post_message(%{
+          space_id: ctx.space.id,
+          participant_id: ctx.participant.id,
+          content_type: "text",
+          content: "Second"
+        })
+
+      {:ok, msg3} =
+        Chat.post_message(%{
+          space_id: ctx.space.id,
+          participant_id: ctx.participant.id,
+          content_type: "text",
+          content: "Third"
+        })
+
+      {:ok, results} =
+        ToolSurface.execute(
+          "space_get_messages",
+          %{"space_id" => ctx.space.id, "before_id" => msg3.id},
+          ctx.context
+        )
+
+      ids = Enum.map(results, & &1.id)
+      refute msg3.id in ids
+      assert msg1.id in ids
+    end
+
+    # ── space_search_messages ──────────────────────────────────────
+
+    test "space_search_messages returns matching messages", ctx do
+      Chat.post_message(%{
+        space_id: ctx.space.id,
+        participant_id: ctx.participant.id,
+        content_type: "text",
+        content: "The deployment pipeline is working great"
+      })
+
+      Chat.post_message(%{
+        space_id: ctx.space.id,
+        participant_id: ctx.participant.id,
+        content_type: "text",
+        content: "Unrelated conversation about lunch"
+      })
+
+      {:ok, results} =
+        ToolSurface.execute(
+          "space_search_messages",
+          %{"space_id" => ctx.space.id, "query" => "deployment pipeline"},
+          ctx.context
+        )
+
+      assert length(results) >= 1
+      assert Enum.any?(results, fn r -> r.content =~ "deployment" end)
+    end
+
+    test "space_search_messages caps at 10", ctx do
+      for i <- 1..15 do
+        Chat.post_message(%{
+          space_id: ctx.space.id,
+          participant_id: ctx.participant.id,
+          content_type: "text",
+          content: "Search target keyword banana #{i}"
+        })
+      end
+
+      {:ok, results} =
+        ToolSurface.execute(
+          "space_search_messages",
+          %{"space_id" => ctx.space.id, "query" => "banana", "limit" => 50},
+          ctx.context
+        )
+
+      assert length(results) <= 10
+    end
+
+    test "space_search_messages denied for non-member", ctx do
+      other_space = create_space(%{name: "Private"})
+
+      {:error, error} =
+        ToolSurface.execute(
+          "space_search_messages",
+          %{"space_id" => other_space.id, "query" => "test"},
+          ctx.context
+        )
+
+      assert error.error =~ "Access denied"
+    end
+
+    # ── canvas_list ────────────────────────────────────────────────
+
+    test "canvas_list returns canvases in a space", ctx do
+      {:ok, canvas, _msg} =
+        Chat.create_canvas_with_message(ctx.space.id, ctx.participant.id, %{
+          "canvas_type" => "table",
+          "title" => "Test Canvas"
+        })
+
+      {:ok, results} =
+        ToolSurface.execute(
+          "canvas_list",
+          %{"space_id" => ctx.space.id},
+          ctx.context
+        )
+
+      assert length(results) >= 1
+      entry = Enum.find(results, &(&1.id == canvas.id))
+      assert entry.title == "Test Canvas"
+      assert entry.type == "table"
+      assert is_binary(entry.inserted_at)
+    end
+
+    test "canvas_list denied for non-member", ctx do
+      other_space = create_space(%{name: "No Access"})
+
+      {:error, error} =
+        ToolSurface.execute(
+          "canvas_list",
+          %{"space_id" => other_space.id},
+          ctx.context
+        )
+
+      assert error.error =~ "Access denied"
+    end
+
+    # ── canvas_get ─────────────────────────────────────────────────
+
+    test "canvas_get returns summary by default", ctx do
+      {:ok, canvas, _msg} =
+        Chat.create_canvas_with_message(ctx.space.id, ctx.participant.id, %{
+          "canvas_type" => "code",
+          "title" => "My Code",
+          "state" => %{"language" => "elixir", "code" => "IO.puts(:hello)"}
+        })
+
+      {:ok, result} =
+        ToolSurface.execute(
+          "canvas_get",
+          %{"canvas_id" => canvas.id},
+          ctx.context
+        )
+
+      assert result.id == canvas.id
+      assert result.title == "My Code"
+      assert result.type == "code"
+      assert result.space_id == ctx.space.id
+      refute Map.has_key?(result, :state)
+    end
+
+    test "canvas_get with mode=full includes state", ctx do
+      {:ok, canvas, _msg} =
+        Chat.create_canvas_with_message(ctx.space.id, ctx.participant.id, %{
+          "canvas_type" => "table",
+          "title" => "Data Table",
+          "state" => %{"rows" => [%{"a" => 1}]}
+        })
+
+      {:ok, result} =
+        ToolSurface.execute(
+          "canvas_get",
+          %{"canvas_id" => canvas.id, "mode" => "full"},
+          ctx.context
+        )
+
+      assert result.id == canvas.id
+      assert is_map(result.state)
+    end
+
+    test "canvas_get with non-existent canvas returns error", ctx do
+      {:error, error} =
+        ToolSurface.execute(
+          "canvas_get",
+          %{"canvas_id" => Ecto.UUID.generate()},
+          ctx.context
+        )
+
+      assert error.error =~ "Canvas not found"
+    end
+
+    test "canvas_get denied for canvas in non-member space", ctx do
+      other_space = create_space(%{name: "Locked Space"})
+      other_participant = create_participant(other_space.id)
+
+      {:ok, canvas, _msg} =
+        Chat.create_canvas_with_message(other_space.id, other_participant.id, %{
+          "canvas_type" => "table",
+          "title" => "Secret Canvas"
+        })
+
+      {:error, error} =
+        ToolSurface.execute(
+          "canvas_get",
+          %{"canvas_id" => canvas.id},
+          ctx.context
+        )
+
+      assert error.error =~ "Access denied"
+    end
+
+    # ── auth: missing agent_id ─────────────────────────────────────
+
+    test "read tools fail without agent_id in context", ctx do
+      no_agent_ctx = %{}
+
+      {:error, error} =
+        ToolSurface.execute(
+          "space_get_messages",
+          %{"space_id" => ctx.space.id},
+          no_agent_ctx
+        )
+
+      assert error.error =~ "Agent identity required"
     end
   end
 
