@@ -328,9 +328,27 @@ defmodule Platform.Chat.AttentionRouter do
           ActiveAgentStore.set_active(space.id, active_participant_id)
           [%{participant_id: active_participant_id, reason: :active_agent}]
         else
-          # Active agent not in recipients (e.g. they authored this message).
-          # Don't clear the mutex — just skip agent routing for this message.
-          []
+          # Active agent not in recipients — check whether they're still an
+          # active (non-left) participant in the space.  If they are, they are
+          # simply the message author and we skip routing for this message.
+          # If they're NOT an active participant any more (left_at is set or
+          # record deleted), the mutex is stale — clear it and fall through to
+          # watch-mode so the feedback still reaches an agent.
+          still_active =
+            Repo.exists?(
+              from(p in Participant,
+                where: p.id == ^active_participant_id and is_nil(p.left_at)
+              )
+            )
+
+          if still_active do
+            # Author is still present — skip routing for this message.
+            []
+          else
+            # Stale mutex — clear and fall through to watch routing.
+            ActiveAgentStore.clear_active(space.id)
+            route_watch(space, agent_recipients)
+          end
         end
     end
   end

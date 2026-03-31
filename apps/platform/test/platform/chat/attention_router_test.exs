@@ -359,4 +359,79 @@ defmodule Platform.Chat.AttentionRouterTest do
       drain()
     end
   end
+
+  describe "stale active agent cleanup" do
+    test "clears mutex and falls through to watch when active agent has left" do
+      agent = create_agent(%{name: "Zip"})
+      agent2 = create_agent(%{name: "Zip2"})
+
+      # Set agent2 as primary so watch mode picks it up after stale mutex clears
+      space =
+        create_space(%{
+          kind: "group",
+          watch_enabled: true,
+          primary_agent_id: agent2.id
+        })
+
+      user = create_participant(space.id)
+
+      {:ok, agent_participant} =
+        Chat.ensure_agent_participant(space.id, agent, display_name: "Zip")
+
+      Chat.add_space_agent(space.id, agent.id, role: "principal")
+
+      {:ok, agent2_participant} =
+        Chat.ensure_agent_participant(space.id, agent2, display_name: "Zip2")
+
+      Chat.add_space_agent(space.id, agent2.id, role: "member")
+
+      # Set the first agent as active
+      ActiveAgentStore.set_active(space.id, agent_participant.id)
+
+      # Mark the first agent participant as having left the space
+      agent_participant
+      |> Ecto.Changeset.change(%{left_at: DateTime.utc_now()})
+      |> Repo.update!()
+
+      # Send a message — should NOT silently drop; should clear stale mutex
+      # and fall through to watch routing (which picks up agent2)
+      message = create_message(space.id, user.id, %{content: "feedback for agent"})
+      {:ok, decisions} = AttentionRouter.route(message)
+
+      # The stale active agent mutex should have been cleared
+      assert ActiveAgentStore.get_active(space.id) != agent_participant.id
+
+      # Should have routed to agent2 via watch, not returned empty
+      assert length(decisions) > 0
+
+      drain()
+    end
+
+    test "keeps mutex when active agent is still present but authored the message" do
+      space = create_space(%{kind: "channel"})
+      agent = create_agent(%{name: "Zip"})
+
+      {:ok, agent_participant} =
+        Chat.ensure_agent_participant(space.id, agent, display_name: "Zip")
+
+      Chat.add_space_agent(space.id, agent.id, role: "principal")
+
+      # Set agent as active
+      ActiveAgentStore.set_active(space.id, agent_participant.id)
+
+      # Agent sends its own message — should NOT clear the mutex
+      message =
+        create_message(space.id, agent_participant.id, %{content: "I'm responding"})
+
+      {:ok, decisions} = AttentionRouter.route(message)
+
+      # No routing needed for self-message
+      assert decisions == []
+
+      # Mutex should still be set (agent is still an active participant)
+      assert ActiveAgentStore.get_active(space.id) == agent_participant.id
+
+      drain()
+    end
+  end
 end

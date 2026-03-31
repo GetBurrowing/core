@@ -711,4 +711,48 @@ defmodule Platform.Orchestration.TaskRouterTest do
       refute Process.alive?(pid)
     end
   end
+
+  describe "deploy stage failure recovery" do
+    test "handle_deploy_stage_failure returns state and router stays alive", %{
+      task: task,
+      assignee: assignee,
+      plan: plan,
+      stage: stage
+    } do
+      {:ok, pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
+      Process.sleep(50)
+
+      # Transition task through to deploying
+      {:ok, task} = Tasks.transition_task(task, "planning")
+      {:ok, task} = Tasks.transition_task(task, "ready")
+      {:ok, task} = Tasks.transition_task(task, "in_progress")
+      {:ok, _task} = Tasks.transition_task(task, "deploying")
+
+      # Create a deploy stage and mark it as failed
+      {:ok, deploy_stage} =
+        Tasks.create_stage(%{
+          plan_id: plan.id,
+          position: 2,
+          name: "Deploy: PR merge",
+          description: "Deploy via PR"
+        })
+
+      failed_deploy =
+        deploy_stage
+        |> Ecto.Changeset.change(%{status: "failed", completed_at: DateTime.utc_now()})
+        |> Platform.Repo.update!()
+        |> Platform.Repo.preload(:validations)
+
+      # Broadcast the failed stage transition
+      Tasks.broadcast_board({:stage_transitioned, failed_deploy})
+      Process.sleep(150)
+
+      # Router must still be alive — before this fix it crashed on nil state
+      assert Process.alive?(pid)
+
+      # Task should have bounced back to in_progress
+      updated_task = Tasks.get_task_detail(task.id)
+      assert updated_task.status == "in_progress"
+    end
+  end
 end

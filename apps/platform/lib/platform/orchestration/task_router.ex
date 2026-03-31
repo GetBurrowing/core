@@ -1165,6 +1165,8 @@ defmodule Platform.Orchestration.TaskRouter do
       log_content = log_parts |> Enum.reject(&is_nil/1) |> Enum.join(" ")
       ExecutionSpace.post_log(state.execution_space_id, log_content)
     end
+
+    state
   end
 
   defp extract_failed_validations(stage) do

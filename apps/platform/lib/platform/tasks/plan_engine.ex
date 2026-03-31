@@ -478,16 +478,25 @@ defmodule Platform.Tasks.PlanEngine do
             "strategy: #{strategy["type"]}"
         )
 
+        # Broadcast plan update so the board refreshes
+        Tasks.broadcast_board({:plan_updated, Repo.get!(Plan, plan.id)})
+
+        Repo.preload(Repo.get!(Plan, plan.id), stages_query())
+
       {:error, reason} ->
         Logger.warning(
           "[PlanEngine] failed to transition task #{task.id} to deploying: #{inspect(reason)}"
         )
+
+        # Roll back the deploy stage so we don't leave an orphaned running
+        # stage when the task couldn't actually enter the deploying status.
+        transition_stage(deploy_stage, "failed")
+
+        # Still broadcast so the board shows the current state
+        Tasks.broadcast_board({:plan_updated, Repo.get!(Plan, plan.id)})
+
+        Repo.preload(Repo.get!(Plan, plan.id), stages_query())
     end
-
-    # Broadcast plan update so the board refreshes
-    Tasks.broadcast_board({:plan_updated, Repo.get!(Plan, plan.id)})
-
-    Repo.preload(Repo.get!(Plan, plan.id), stages_query())
   end
 
   defp max_position(stages) do
