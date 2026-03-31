@@ -69,6 +69,9 @@ defmodule PlatformWeb.ChatLive do
       |> assign(:active_thread, nil)
       |> assign(:thread_messages, [])
       |> assign(:thread_attachments_map, %{})
+      |> assign(:thread_previews, %{})
+      |> assign(:expanded_threads, MapSet.new())
+      |> assign(:inline_thread_messages, %{})
       |> assign(:pins, [])
       |> assign(:show_pins, false)
       |> assign(:pinned_message_ids, MapSet.new())
@@ -97,6 +100,7 @@ defmodule PlatformWeb.ChatLive do
       |> assign(:unread_counts, if(user_id, do: Chat.unread_counts_for_user(user_id), else: %{}))
       |> assign(:upload_dialog_open, false)
       |> assign(:upload_caption, "")
+      |> assign(:drafts, %{})
       |> assign_compose("")
       |> assign_thread_compose("")
       |> assign_search_form("")
@@ -128,14 +132,21 @@ defmodule PlatformWeb.ChatLive do
 
   @impl true
   def handle_params(%{"space_slug" => slug_or_id}, _url, socket) do
-    if prev = socket.assigns.active_space do
-      ChatPubSub.unsubscribe(prev.id)
-      Phoenix.PubSub.unsubscribe(Platform.PubSub, "active_agent:#{prev.id}")
+    # Save the outgoing channel's draft before switching
+    socket =
+      if prev = socket.assigns.active_space do
+        ChatPubSub.unsubscribe(prev.id)
+        Phoenix.PubSub.unsubscribe(Platform.PubSub, "active_agent:#{prev.id}")
 
-      if connected?(socket) do
-        ChatPresence.untrack_in_space(self(), prev.id, socket.assigns.user_id)
+        if connected?(socket) do
+          ChatPresence.untrack_in_space(self(), prev.id, socket.assigns.user_id)
+        end
+
+        outgoing_draft = socket.assigns.compose_form[:text].value || ""
+        update(socket, :drafts, &Map.put(&1, prev.id, outgoing_draft))
+      else
+        socket
       end
-    end
 
     # Try slug first, then ID fallback (for DM/group spaces without slugs)
     space =
@@ -183,6 +194,7 @@ defmodule PlatformWeb.ChatLive do
 
       reactions_map = build_reactions_map(messages, participant)
       attachments_map = build_attachments_map(messages)
+      thread_previews = Chat.thread_previews_for_messages(Enum.map(messages, & &1.id))
       pins = Chat.list_pins(space.id)
       pinned_message_ids = MapSet.new(pins, & &1.message_id)
       canvases = Chat.list_canvases(space.id)
@@ -224,6 +236,9 @@ defmodule PlatformWeb.ChatLive do
        |> assign(:active_thread, nil)
        |> assign(:thread_messages, [])
        |> assign(:thread_attachments_map, %{})
+       |> assign(:thread_previews, thread_previews)
+       |> assign(:expanded_threads, MapSet.new())
+       |> assign(:inline_thread_messages, %{})
        |> assign(:pins, pins)
        |> assign(:show_pins, false)
        |> assign(:pinned_message_ids, pinned_message_ids)
@@ -240,7 +255,8 @@ defmodule PlatformWeb.ChatLive do
        |> assign_new_canvas_form()
        |> stream(:messages, messages, reset: true)
        |> schedule_agent_presence_refresh()
-       |> clear_unread(space.id)}
+       |> clear_unread(space.id)
+       |> restore_draft(space.id)}
     end
   end
 
@@ -340,7 +356,8 @@ defmodule PlatformWeb.ChatLive do
            socket
            |> stream_insert(:messages, msg)
            |> put_attachment_map_entry(msg.id, attachments)
-           |> assign_compose("")}
+           |> assign_compose("")
+           |> update(:drafts, &Map.delete(&1, space.id))}
 
         {:noop, socket} ->
           {:noreply, socket}
@@ -412,7 +429,18 @@ defmodule PlatformWeb.ChatLive do
   # ── End upload staging dialog events ──────────────────────────────────
 
   def handle_event("compose_changed", %{"compose" => %{"text" => text}}, socket) do
-    {:noreply, assign_compose(socket, text)}
+    socket = assign_compose(socket, text)
+
+    socket =
+      case socket.assigns.active_space do
+        %{id: space_id} ->
+          update(socket, :drafts, &Map.put(&1, space_id, text))
+
+        _ ->
+          socket
+      end
+
+    {:noreply, socket}
   end
 
   def handle_event("compose_changed", _params, socket) do
@@ -539,6 +567,91 @@ defmodule PlatformWeb.ChatLive do
 
         {:error, socket, reason} ->
           {:noreply, put_flash(socket, :error, reason)}
+      end
+    else
+      _ -> {:noreply, socket}
+    end
+  end
+
+  def handle_event("toggle_inline_thread", %{"message-id" => msg_id}, socket) do
+    if MapSet.member?(socket.assigns.expanded_threads, msg_id) do
+      {:noreply,
+       socket
+       |> update(:expanded_threads, &MapSet.delete(&1, msg_id))
+       |> update(:inline_thread_messages, &Map.delete(&1, msg_id))}
+    else
+      space = socket.assigns.active_space
+
+      thread =
+        Chat.get_thread_for_message(msg_id) ||
+          case Chat.create_thread(space.id, %{parent_message_id: msg_id}) do
+            {:ok, t} -> t
+            {:error, _} -> nil
+          end
+
+      case thread do
+        nil ->
+          {:noreply, put_flash(socket, :error, "Could not open thread.")}
+
+        thread ->
+          thread_msgs = load_thread_messages(space.id, thread.id)
+
+          {:noreply,
+           socket
+           |> update(:expanded_threads, &MapSet.put(&1, msg_id))
+           |> update(:inline_thread_messages, &Map.put(&1, msg_id, thread_msgs))
+           |> update(
+             :thread_previews,
+             &Map.put(&1, msg_id, %{
+               thread_id: thread.id,
+               reply_count: length(thread_msgs),
+               last_reply_at: List.last(thread_msgs) && List.last(thread_msgs).inserted_at
+             })
+           )}
+      end
+    end
+  end
+
+  def handle_event(
+        "send_inline_thread_message",
+        %{"inline_thread_compose" => %{"text" => content, "message_id" => msg_id}},
+        socket
+      ) do
+    content = String.trim(content || "")
+
+    with true <- content != "",
+         space when not is_nil(space) <- socket.assigns.active_space,
+         participant when not is_nil(participant) <- socket.assigns.current_participant do
+      {:ok, thread} = Chat.create_thread_for_message(space.id, msg_id)
+
+      attrs = %{
+        space_id: space.id,
+        thread_id: thread.id,
+        participant_id: participant.id,
+        content_type: "text",
+        content: content
+      }
+
+      case Chat.post_message(attrs, from_pid: self()) do
+        {:ok, msg} ->
+          {:noreply,
+           socket
+           |> update(:inline_thread_messages, fn itm ->
+             Map.update(itm, msg_id, [msg], &(&1 ++ [msg]))
+           end)
+           |> update(:thread_previews, fn tp ->
+             preview =
+               Map.get(tp, msg_id, %{thread_id: thread.id, reply_count: 0, last_reply_at: nil})
+
+             Map.put(tp, msg_id, %{
+               preview
+               | reply_count: preview.reply_count + 1,
+                 last_reply_at: msg.inserted_at
+             })
+           end)}
+
+        {:error, _reason} ->
+          {:noreply, put_flash(socket, :error, "Failed to send reply.")}
       end
     else
       _ -> {:noreply, socket}
@@ -1034,15 +1147,20 @@ defmodule PlatformWeb.ChatLive do
          |> put_attachment_map_entry(msg.id, attachments)
          |> maybe_refresh_search()}
       else
-        if socket.assigns.active_thread && socket.assigns.active_thread.id == msg.thread_id do
-          {:noreply,
-           socket
-           |> update(:thread_messages, &(&1 ++ [msg]))
-           |> put_thread_attachment_map_entry(msg.id, attachments)
-           |> maybe_refresh_search()}
-        else
-          {:noreply, socket}
-        end
+        # Update side-panel thread if open
+        socket =
+          if socket.assigns.active_thread && socket.assigns.active_thread.id == msg.thread_id do
+            socket
+            |> update(:thread_messages, &(&1 ++ [msg]))
+            |> put_thread_attachment_map_entry(msg.id, attachments)
+          else
+            socket
+          end
+
+        # Update inline thread if expanded
+        socket = maybe_update_inline_thread(socket, msg)
+
+        {:noreply, maybe_refresh_search(socket)}
       end
     end
   end
@@ -2754,6 +2872,11 @@ defmodule PlatformWeb.ChatLive do
     assign(socket, :compose_form, to_form(%{"text" => text}, as: :compose))
   end
 
+  defp restore_draft(socket, space_id) do
+    draft = Map.get(socket.assigns.drafts, space_id, "")
+    assign_compose(socket, draft)
+  end
+
   defp assign_thread_compose(socket, text) do
     assign(socket, :thread_compose_form, to_form(%{"text" => text}, as: :thread_compose))
   end
@@ -3082,6 +3205,36 @@ defmodule PlatformWeb.ChatLive do
     |> Chat.list_messages(thread_id: thread_id, limit: 100)
     |> Enum.reverse()
   end
+
+  # Updates the inline thread view and preview counts when a new thread reply arrives via PubSub.
+  defp maybe_update_inline_thread(socket, %{thread_id: thread_id} = msg)
+       when is_binary(thread_id) do
+    # Find the parent message ID mapped to this thread
+    msg_id =
+      Enum.find_value(socket.assigns.thread_previews, fn {pmid, %{thread_id: tid}} ->
+        if tid == thread_id, do: pmid
+      end)
+
+    if is_nil(msg_id) do
+      socket
+    else
+      socket
+      |> update(:inline_thread_messages, fn itm ->
+        if MapSet.member?(socket.assigns.expanded_threads, msg_id) do
+          Map.update(itm, msg_id, [msg], &(&1 ++ [msg]))
+        else
+          itm
+        end
+      end)
+      |> update(:thread_previews, fn tp ->
+        Map.update(tp, msg_id, nil, fn preview ->
+          %{preview | reply_count: preview.reply_count + 1, last_reply_at: msg.inserted_at}
+        end)
+      end)
+    end
+  end
+
+  defp maybe_update_inline_thread(socket, _msg), do: socket
 
   attr(:id, :string, required: true)
   attr(:timestamp, :any, default: nil)

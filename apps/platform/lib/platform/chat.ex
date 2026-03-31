@@ -896,6 +896,50 @@ defmodule Platform.Chat do
     end
   end
 
+  @doc "Returns the number of replies in a thread."
+  @spec count_thread_replies(binary()) :: non_neg_integer()
+  def count_thread_replies(thread_id) do
+    from(m in Message, where: m.thread_id == ^thread_id and is_nil(m.deleted_at), select: count())
+    |> Repo.one()
+  end
+
+  @doc "Batch version: returns `%{thread_id => reply_count}` for the given thread IDs."
+  @spec list_thread_reply_counts([binary()]) :: %{binary() => non_neg_integer()}
+  def list_thread_reply_counts([]), do: %{}
+
+  def list_thread_reply_counts(thread_ids) do
+    from(m in Message,
+      where: m.thread_id in ^thread_ids and is_nil(m.deleted_at),
+      group_by: m.thread_id,
+      select: {m.thread_id, count()}
+    )
+    |> Repo.all()
+    |> Map.new()
+  end
+
+  @doc """
+  For a list of message IDs, returns thread preview data for any that have threads with replies.
+
+  Returns `%{message_id => %{thread_id: id, reply_count: count, last_reply_at: datetime}}`.
+  """
+  @spec thread_previews_for_messages([binary()]) :: map()
+  def thread_previews_for_messages([]), do: %{}
+
+  def thread_previews_for_messages(message_ids) do
+    from(t in Thread,
+      where: t.parent_message_id in ^message_ids,
+      left_join: m in Message,
+      on: m.thread_id == t.id and is_nil(m.deleted_at),
+      group_by: [t.id, t.parent_message_id],
+      having: count(m.id) > 0,
+      select:
+        {t.parent_message_id,
+         %{thread_id: t.id, reply_count: count(m.id), last_reply_at: max(m.inserted_at)}}
+    )
+    |> Repo.all()
+    |> Map.new()
+  end
+
   # ── Reactions ───────────────────────────────────────────────────────────────
 
   @doc """
