@@ -24,6 +24,7 @@ defmodule Platform.Chat.AgentResponder do
   alias Platform.Chat.PubSub, as: ChatPubSub
   alias Platform.Federation.{DeadLetterBuffer, RuntimePresence, ToolSurface}
   alias Platform.Repo
+  alias Platform.Tasks.Task, as: TaskRecord
 
   @history_limit 12
 
@@ -222,7 +223,7 @@ defmodule Platform.Chat.AgentResponder do
             if author_participant, do: author_participant.display_name, else: "unknown"
 
           payload = %{
-            signal: %{reason: signal.reason, space_id: space_id},
+            signal: build_external_signal(signal, space_id),
             message: %{content: context.user_message, author: author_name},
             history: context.history,
             context: bundle,
@@ -394,6 +395,32 @@ defmodule Platform.Chat.AgentResponder do
   end
 
   defp history_content(content, _participant, _role), do: content
+
+  defp build_external_signal(signal, space_id) do
+    {task_id, task_status} = execution_task_context(space_id)
+
+    %{}
+    |> Map.put(:reason, signal.reason)
+    |> Map.put(:space_id, space_id)
+    |> maybe_put(:task_id, task_id)
+    |> maybe_put(:task_status, task_status)
+  end
+
+  defp execution_task_context(space_id) do
+    with %Platform.Chat.Space{kind: "execution", metadata: metadata} <- Chat.get_space(space_id),
+         task_id when is_binary(task_id) <-
+           Map.get(metadata || %{}, "task_id") || Map.get(metadata || %{}, :task_id) do
+      case Repo.get(TaskRecord, task_id) do
+        %TaskRecord{status: status} -> {task_id, status}
+        _ -> {task_id, nil}
+      end
+    else
+      _ -> {nil, nil}
+    end
+  end
+
+  defp maybe_put(map, _key, nil), do: map
+  defp maybe_put(map, key, value), do: Map.put(map, key, value)
 
   defp chat_module do
     Application.get_env(:platform, :chat_agent_module, Platform.Agents.QuickAgent)

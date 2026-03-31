@@ -5,7 +5,9 @@ defmodule Platform.Chat.AttentionRouterTest do
   alias Platform.Agents.Agent
   alias Platform.Chat
   alias Platform.Chat.{ActiveAgentStore, AttentionRouter, Message}
+  alias Platform.Orchestration.ExecutionSpace
   alias Platform.Repo
+  alias Platform.Tasks
 
   defmodule StubAgentChat do
     def chat(message, opts) do
@@ -138,6 +140,34 @@ defmodule Platform.Chat.AttentionRouterTest do
       message = create_message(space.id, user.id, %{content: "log entry", log_only: true})
       assert {:ok, []} = AttentionRouter.route(message)
       refute_receive {:agent_chat_called, _, _}, 100
+      drain()
+    end
+
+    test "non-log steering routes to the assigned task agent even without an active mutex" do
+      agent = create_agent(%{name: "Beacon"})
+      {:ok, project} = Tasks.create_project(%{name: "Execution routing project"})
+
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Execution routing task",
+          status: "in_progress",
+          assignee_id: agent.id,
+          assignee_type: "agent"
+        })
+
+      {:ok, space} = ExecutionSpace.find_or_create(task.id)
+      user = create_participant(space.id)
+
+      message = create_message(space.id, user.id, %{content: "are you still working?"})
+
+      assert {:ok, [%{participant_id: agent_participant_id, reason: :watch}]} =
+               AttentionRouter.route(message)
+
+      assert is_binary(agent_participant_id)
+      assert ActiveAgentStore.get_active(space.id) == agent_participant_id
+
+      assert_receive {:agent_chat_called, "are you still working?", _opts}, 500
       drain()
     end
   end
