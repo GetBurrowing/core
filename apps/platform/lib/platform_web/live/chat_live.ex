@@ -1374,6 +1374,8 @@ defmodule PlatformWeb.ChatLive do
     ~H"""
     <div id="push-subscribe" phx-hook="PushSubscribe" class="hidden"></div>
 
+    <div id="chat-state" phx-hook="ChatState" class="hidden"></div>
+
     <%!-- Notification opt-in banner (shown when permission not yet granted) --%>
     <div
       :if={@push_permission == "prompt"}
@@ -2269,6 +2271,7 @@ defmodule PlatformWeb.ChatLive do
                 <textarea
                   name="compose[text]"
                   id={@compose_form[:text].id}
+                  data-draft-key={if @active_space, do: "chat-draft:" <> @active_space.id, else: nil}
                   placeholder={"Message ##{(@active_space && @active_space.name) || ""}"}
                   autocomplete="off"
                   rows="1"

@@ -34,7 +34,10 @@
 
     <%!-- Module navigation links --%>
     <.link
+      id="shell-chat-link"
       navigate="/chat"
+      phx-hook="LastChatLink"
+      data-default-chat-path="/chat"
       class={nav_item_class(@current_path, "/chat")}
       phx-click="close_drawer"
       title="Chat"

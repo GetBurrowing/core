@@ -1,8 +1,9 @@
 // ComposeInput hook — auto-expanding textarea, Enter to send (desktop),
-// Shift+Enter for newline, @mention autocomplete
+// Shift+Enter for newline, @mention autocomplete, and per-space draft persistence
 const ComposeInput = {
   mounted() {
     this._lastMentionQuery = null;
+    this._draftKey = null;
 
     // Mobile detection: touch-primary devices keep Enter as newline,
     // send button is the primary send method on mobile.
@@ -16,10 +17,43 @@ const ComposeInput = {
       // Toggle internal scroll when content exceeds max
       this.el.style.overflowY = contentHeight > 200 ? "auto" : "hidden";
     };
+
+    this._syncDraftState = () => {
+      const nextDraftKey = this.el.dataset.draftKey || null;
+      const keyChanged = nextDraftKey !== this._draftKey;
+      this._draftKey = nextDraftKey;
+
+      if (!this._draftKey) return;
+
+      const currentValue = this.el.value || "";
+      const storedValue = localStorage.getItem(this._draftKey) || "";
+
+      if (keyChanged) {
+        if (currentValue !== "") {
+          if (currentValue !== storedValue) {
+            localStorage.setItem(this._draftKey, currentValue);
+          }
+        } else if (storedValue !== "") {
+          this.el.value = storedValue;
+          this.el.dispatchEvent(new Event("input", { bubbles: true }));
+        }
+
+        return;
+      }
+
+      if (currentValue === "") {
+        localStorage.removeItem(this._draftKey);
+      } else if (currentValue !== storedValue) {
+        localStorage.setItem(this._draftKey, currentValue);
+      }
+    };
+
     // Only resize if field-sizing:content isn't supported
     if (!CSS.supports("field-sizing", "content")) {
       this._autoResize();
     }
+
+    this._syncDraftState();
 
     // Reset viewport after iOS keyboard dismisses
     this.el.addEventListener("blur", () => {
@@ -68,6 +102,15 @@ const ComposeInput = {
       if (!CSS.supports("field-sizing", "content")) {
         this._autoResize();
       }
+
+      if (this._draftKey) {
+        if (this.el.value === "") {
+          localStorage.removeItem(this._draftKey);
+        } else {
+          localStorage.setItem(this._draftKey, this.el.value);
+        }
+      }
+
       this._detectMention();
     });
 
@@ -100,6 +143,10 @@ const ComposeInput = {
         this.el.setSelectionRange(newPos, newPos);
       }
 
+      if (this._draftKey) {
+        localStorage.setItem(this._draftKey, this.el.value);
+      }
+
       this.pushEvent("clear_mention_suggestions", {});
       this._lastMentionQuery = null;
       this.el.focus();
@@ -111,6 +158,8 @@ const ComposeInput = {
     if (!CSS.supports("field-sizing", "content")) {
       this._autoResize();
     }
+
+    this._syncDraftState();
   },
 
   _detectMention() {

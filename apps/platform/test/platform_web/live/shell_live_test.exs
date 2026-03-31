@@ -49,4 +49,13 @@ defmodule PlatformWeb.ShellLiveTest do
     # Should render without crashing; legacy status dot is present
     assert html =~ "Startup Suite"
   end
+
+  test "shell chat nav link is prepared to restore the last selected chat space", %{conn: conn} do
+    conn = authenticated_conn(conn)
+    {:ok, _view, html} = live(conn, ~p"/tasks")
+
+    assert html =~ ~s(id="shell-chat-link")
+    assert html =~ ~s(phx-hook="LastChatLink")
+    assert html =~ ~s(data-default-chat-path="/chat")
+  end
 end

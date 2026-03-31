@@ -68,6 +68,16 @@ defmodule PlatformWeb.ChatLiveTest do
     assert html =~ "/control"
   end
 
+  test "chat page renders client hooks for last-space and per-space draft persistence", %{
+    conn: conn
+  } do
+    conn = authenticated_conn(conn)
+    {:ok, _view, html} = live(conn, ~p"/chat/general")
+
+    assert html =~ "phx-hook=\"ChatState\""
+    assert html =~ "data-draft-key=\"chat-draft:"
+  end
+
   test "sending a message renders it once in the chat", %{conn: conn} do
     conn = authenticated_conn(conn)
     {:ok, view, _html} = live(conn, ~p"/chat/general")
