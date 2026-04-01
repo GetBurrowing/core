@@ -188,6 +188,20 @@
                 </div>
               </div>
 
+              <%!-- Assignee name + date --%>
+              <div
+                :if={assignee_name(task, @agent_names) || task.inserted_at}
+                class="mt-1 flex items-center gap-1.5 text-[10px] text-base-content/40"
+              >
+                <span :if={assignee_name(task, @agent_names)} class="truncate max-w-[120px]">
+                  {assignee_name(task, @agent_names)}
+                </span>
+                <span :if={assignee_name(task, @agent_names) && task.inserted_at}>·</span>
+                <span :if={task.inserted_at} class="whitespace-nowrap">
+                  {relative_time(task.inserted_at)}
+                </span>
+              </div>
+
               <%!-- Bottom row: priority + progress --%>
               <div class="mt-1 flex items-center gap-2">
                 <span :if={task.priority} class={priority_badge_class(task.priority)}>
@@ -278,6 +292,27 @@
         </span>
         <span :if={@selected_task.epic} class="text-xs text-base-content/50">
           / {(@selected_task.epic && @selected_task.epic.name) || "—"}
+        </span>
+      </div>
+
+      <%!-- Dates + Assignee name --%>
+      <div class="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-base-content/50">
+        <span :if={assignee_name(@selected_task, @agent_names)}>
+          <span class="text-base-content/40">Assigned:</span> {assignee_name(
+            @selected_task,
+            @agent_names
+          )}
+        </span>
+        <span :if={@selected_task.inserted_at}>
+          <span class="text-base-content/40">Created:</span> {Calendar.strftime(
+            @selected_task.inserted_at,
+            "%b %d, %Y"
+          )}
+        </span>
+        <span :if={@selected_task.updated_at}>
+          <span class="text-base-content/40">Updated:</span> {relative_time(
+            @selected_task.updated_at
+          )}
         </span>
       </div>
 

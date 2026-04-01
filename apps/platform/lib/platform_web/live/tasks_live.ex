@@ -82,6 +82,7 @@ defmodule PlatformWeb.TasksLive do
      |> assign(:epics, enrich_epics(Tasks.list_epics_for_project(nil)))
      |> assign(:epics_collapsed, false)
      |> assign(:agents, agents)
+     |> assign(:agent_names, Map.new(agents, fn a -> {a.id, a.name} end))
      |> assign(:validation_modes, MapSet.new())
      |> assign(:manual_validation_text, "")
      |> assign(:deploy_strategy_type, "inherit")
@@ -1178,6 +1179,33 @@ defmodule PlatformWeb.TasksLive do
     do: "U"
 
   defp assignee_initials(_), do: nil
+
+  defp assignee_name(%Task{assignee_type: "agent", assignee_id: id}, agent_names)
+       when is_binary(id) do
+    Map.get(agent_names, id, "Agent")
+  end
+
+  defp assignee_name(%Task{assignee_type: "user"}, _agent_names), do: "User"
+
+  defp assignee_name(_, _), do: nil
+
+  defp relative_time(nil), do: ""
+
+  defp relative_time(%DateTime{} = dt) do
+    diff = DateTime.diff(DateTime.utc_now(), dt, :second)
+
+    cond do
+      diff < 60 -> "just now"
+      diff < 3600 -> "#{div(diff, 60)}m ago"
+      diff < 86400 -> "#{div(diff, 3600)}h ago"
+      diff < 604_800 -> "#{div(diff, 86400)}d ago"
+      true -> Calendar.strftime(dt, "%b %d")
+    end
+  end
+
+  defp relative_time(%NaiveDateTime{} = ndt) do
+    ndt |> DateTime.from_naive!("Etc/UTC") |> relative_time()
+  end
 
   defp default_task_agent_id([agent | _]), do: agent.id
   defp default_task_agent_id([]), do: nil
