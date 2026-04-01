@@ -579,10 +579,14 @@ defmodule PlatformWeb.ChatLive do
 
   def handle_event("toggle_inline_thread", %{"message-id" => msg_id}, socket) do
     if MapSet.member?(socket.assigns.expanded_threads, msg_id) do
-      {:noreply,
-       socket
-       |> update(:expanded_threads, &MapSet.delete(&1, msg_id))
-       |> update(:inline_thread_messages, &Map.delete(&1, msg_id))}
+      # Collapse: remove from expanded set and re-insert message to force re-render
+      socket =
+        socket
+        |> update(:expanded_threads, &MapSet.delete(&1, msg_id))
+        |> update(:inline_thread_messages, &Map.delete(&1, msg_id))
+
+      socket = reinsert_stream_message(socket, msg_id)
+      {:noreply, socket}
     else
       space = socket.assigns.active_space
 
@@ -600,18 +604,22 @@ defmodule PlatformWeb.ChatLive do
         thread ->
           thread_msgs = load_thread_messages(space.id, thread.id)
 
-          {:noreply,
-           socket
-           |> update(:expanded_threads, &MapSet.put(&1, msg_id))
-           |> update(:inline_thread_messages, &Map.put(&1, msg_id, thread_msgs))
-           |> update(
-             :thread_previews,
-             &Map.put(&1, msg_id, %{
-               thread_id: thread.id,
-               reply_count: length(thread_msgs),
-               last_reply_at: List.last(thread_msgs) && List.last(thread_msgs).inserted_at
-             })
-           )}
+          socket =
+            socket
+            |> update(:expanded_threads, &MapSet.put(&1, msg_id))
+            |> update(:inline_thread_messages, &Map.put(&1, msg_id, thread_msgs))
+            |> update(
+              :thread_previews,
+              &Map.put(&1, msg_id, %{
+                thread_id: thread.id,
+                reply_count: length(thread_msgs),
+                last_reply_at: List.last(thread_msgs) && List.last(thread_msgs).inserted_at
+              })
+            )
+            |> push_event("focus_inline_thread_compose", %{message_id: msg_id})
+
+          socket = reinsert_stream_message(socket, msg_id)
+          {:noreply, socket}
       end
     end
   end
@@ -1939,6 +1947,7 @@ defmodule PlatformWeb.ChatLive do
             </div>
           </div>
 
+          <div id="inline-focus-listener" phx-hook="InlineFocus" class="hidden"></div>
           <div
             id="message-list"
             class="flex-1 overflow-y-auto overflow-x-hidden bg-base-100 px-5 py-4 flex flex-col space-y-1"
@@ -2032,12 +2041,21 @@ defmodule PlatformWeb.ChatLive do
                     </button>
 
                     <button
-                      phx-click="open_thread"
+                      phx-click="toggle_inline_thread"
                       phx-value-message-id={msg.id}
-                      title="Reply in thread"
+                      title="Reply"
                       class="rounded px-1.5 py-0.5 text-xs text-base-content/50 hover:text-base-content hover:bg-base-300 transition-colors"
                     >
                       <span class="hero-chat-bubble-left-right size-4"></span>
+                    </button>
+
+                    <button
+                      phx-click="open_thread"
+                      phx-value-message-id={msg.id}
+                      title="View thread detail"
+                      class="rounded px-1.5 py-0.5 text-xs text-base-content/40 hover:text-base-content/60 hover:bg-base-300 transition-colors"
+                    >
+                      <span class="hero-arrow-top-right-on-square size-4"></span>
                     </button>
 
                     <button
@@ -2155,6 +2173,102 @@ defmodule PlatformWeb.ChatLive do
                   >
                     <span class="hero-plus size-4"></span>
                   </button>
+                </div>
+              </div>
+
+              <%!-- Inline thread: preview bar + expanded thread --%>
+              <div
+                :if={
+                  Map.has_key?(@thread_previews, msg.id) or MapSet.member?(@expanded_threads, msg.id)
+                }
+                class="ml-9 mt-1"
+              >
+                <%!-- Thread preview / collapse bar --%>
+                <button
+                  phx-click="toggle_inline_thread"
+                  phx-value-message-id={msg.id}
+                  class="flex items-center gap-1.5 text-xs text-primary hover:text-primary/70 transition-colors"
+                >
+                  <span class="hero-chat-bubble-left size-3.5"></span>
+                  <span>
+                    {Map.get(@thread_previews, msg.id, %{}) |> Map.get(:reply_count, 0)}
+                    {if Map.get(@thread_previews, msg.id, %{}) |> Map.get(:reply_count, 0) == 1,
+                      do: "reply",
+                      else: "replies"}
+                  </span>
+                  <span
+                    class="hero-chevron-down size-3 transition-transform"
+                    style={
+                      if MapSet.member?(@expanded_threads, msg.id), do: "transform: rotate(180deg)"
+                    }
+                  >
+                  </span>
+                </button>
+
+                <%!-- Expanded inline thread messages --%>
+                <div
+                  :if={MapSet.member?(@expanded_threads, msg.id)}
+                  class="mt-2 space-y-2 border-l-2 border-base-300 pl-3"
+                  id={"inline-thread-#{msg.id}"}
+                >
+                  <div
+                    :for={tmsg <- Map.get(@inline_thread_messages, msg.id, [])}
+                    class="flex items-start gap-2"
+                  >
+                    <div class={[
+                      "flex size-6 shrink-0 items-center justify-center rounded-full text-xs font-medium",
+                      if(MapSet.member?(@agent_participant_ids, tmsg.participant_id),
+                        do: "bg-primary/10 text-primary",
+                        else: "bg-base-200 text-base-content/60"
+                      )
+                    ]}>
+                      {avatar_initial(@participants_map, tmsg.participant_id)}
+                    </div>
+                    <div class="min-w-0 flex-1">
+                      <div class="flex items-baseline gap-2">
+                        <span class="text-xs font-medium text-base-content/70">
+                          {sender_name(@participants_map, tmsg.participant_id)}
+                        </span>
+                        <.local_time
+                          id={"inline-thread-ts-#{tmsg.id}"}
+                          timestamp={tmsg.inserted_at}
+                          class="text-[10px] text-base-content/40"
+                        />
+                      </div>
+                      <div class="prose prose-sm max-w-none text-sm text-base-content break-words">
+                        {Platform.Chat.ContentRenderer.render_message(tmsg.content)}
+                      </div>
+                    </div>
+                  </div>
+
+                  <%!-- Inline thread composer --%>
+                  <.form
+                    for={%{}}
+                    id={"inline-thread-compose-form-#{msg.id}"}
+                    phx-submit="send_inline_thread_message"
+                    class="flex items-end gap-2 pt-1"
+                  >
+                    <input type="hidden" name="inline_thread_compose[message_id]" value={msg.id} />
+                    <div class="flex-1 relative">
+                      <textarea
+                        name="inline_thread_compose[text]"
+                        id={"inline-thread-compose-#{msg.id}"}
+                        rows="1"
+                        placeholder="Reply…"
+                        autocomplete="off"
+                        class="textarea textarea-bordered w-full resize-none rounded-xl pr-10 text-sm leading-relaxed"
+                        phx-hook="ComposeInput"
+                      ></textarea>
+                      <button
+                        type="submit"
+                        class="absolute right-2 bottom-2 w-7 h-7 rounded-full btn btn-primary btn-xs flex items-center justify-center p-0"
+                        disabled={is_nil(@current_participant)}
+                        title="Reply"
+                      >
+                        <span class="hero-paper-airplane size-4 -rotate-45"></span>
+                      </button>
+                    </div>
+                  </.form>
                 </div>
               </div>
             </div>
@@ -3298,6 +3412,16 @@ defmodule PlatformWeb.ChatLive do
     space_id
     |> Chat.list_messages(limit: @message_limit, top_level_only: true)
     |> Enum.reverse()
+  end
+
+  # Re-insert a message into the stream to force LiveView to re-render the
+  # stream item after assign changes (e.g. expanded_threads, thread_previews).
+  # Stream items only re-render on explicit stream_insert, not on assign changes.
+  defp reinsert_stream_message(socket, msg_id) do
+    case Chat.get_message(msg_id) do
+      nil -> socket
+      msg -> stream_insert(socket, :messages, msg)
+    end
   end
 
   defp load_thread_messages(space_id, thread_id) do
