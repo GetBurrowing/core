@@ -505,3 +505,51 @@ body, .font-fabrikam, * {
   border-radius: 0.375rem;
   background: rgba(6, 213, 237, 0.05);
 }
+
+/* ── Needs-attention pulse ───────────────────────────────────────── */
+/* Applied to messages or threads requiring human action.
+   Classes are defined here; activation is data-driven (future). */
+
+@keyframes attention-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 oklch(82% 0.12 207 / 0.3); }
+  50% { box-shadow: 0 0 0 8px oklch(82% 0.12 207 / 0); }
+}
+
+@keyframes attention-bounce {
+  0%, 100% { transform: translateY(0); }
+  20% { transform: translateY(-3px); }
+  40% { transform: translateY(0); }
+  60% { transform: translateY(-2px); }
+  80% { transform: translateY(0); }
+}
+
+@keyframes attention-avatar-glow {
+  0%, 100% {
+    box-shadow: 0 0 0 2px var(--agent-accent, oklch(82% 0.12 207)),
+                0 0 8px color-mix(in oklch, var(--agent-accent, oklch(82% 0.12 207)) 30%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 0 3px var(--agent-accent, oklch(82% 0.12 207)),
+                0 0 16px color-mix(in oklch, var(--agent-accent, oklch(82% 0.12 207)) 50%, transparent);
+  }
+}
+
+.needs-attention {
+  animation: attention-pulse 2.5s ease-in-out infinite;
+  border-radius: 0.5rem;
+}
+
+.needs-attention-bounce {
+  animation: attention-bounce 2s ease-in-out infinite;
+}
+
+.needs-attention-avatar {
+  animation: attention-avatar-glow 2s ease-in-out infinite;
+  border-radius: 9999px;
+}
+
+.needs-attention-thread {
+  animation: attention-pulse 2.5s ease-in-out infinite;
+  border-radius: 0.375rem;
+  padding: 2px 4px;
+}

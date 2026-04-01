@@ -441,7 +441,7 @@ defmodule PlatformWeb.ChatLiveTest do
       assert html =~ "match"
     end
 
-    test "opening a threaded search result opens the thread panel", %{conn: conn} do
+    test "opening a threaded search result expands the inline thread", %{conn: conn} do
       conn = authenticated_conn(conn)
       {:ok, view, _html} = live(conn, ~p"/chat/general")
 
@@ -454,9 +454,12 @@ defmodule PlatformWeb.ChatLiveTest do
 
       render_click(view, "open_thread", %{"message-id" => root_message.id})
 
-      view
-      |> form("#thread-compose-form", thread_compose: %{text: "Phoenix lives in threads too"})
-      |> render_submit()
+      render_submit(view, "send_inline_thread_message", %{
+        "inline_thread_compose" => %{
+          "text" => "Phoenix lives in threads too",
+          "message_id" => root_message.id
+        }
+      })
 
       thread_message =
         space.id
@@ -475,7 +478,7 @@ defmodule PlatformWeb.ChatLiveTest do
 
       html = render_click(view, "open_search_result", %{"message-id" => thread_message.id})
 
-      assert html =~ "thread-compose-form"
+      assert html =~ "inline-thread-compose-form-#{root_message.id}"
       assert html =~ "Phoenix lives in threads too"
     end
   end
@@ -554,8 +557,7 @@ defmodule PlatformWeb.ChatLiveTest do
       # Before reacting — no reaction row for this message in the DB
       assert Chat.list_reactions(msg.id) == []
 
-      # Trigger the react event (key is "message-id", hyphenated, as Phoenix serializes phx-value-*)
-      render_click(view, "react", %{"message-id" => msg.id, "emoji" => "👍"})
+      render_click(view, "react", %{"message_id" => msg.id, "emoji" => "👍"})
 
       # The reaction is persisted in the DB
       assert [%{emoji: "👍"}] = Chat.list_reactions(msg.id)
@@ -579,11 +581,11 @@ defmodule PlatformWeb.ChatLiveTest do
       [msg | _] = Chat.list_messages(space.id)
 
       # React once — reaction is added
-      render_click(view, "react", %{"message-id" => msg.id, "emoji" => "👍"})
+      render_click(view, "react", %{"message_id" => msg.id, "emoji" => "👍"})
       assert [_] = Chat.list_reactions(msg.id)
 
       # React again (same user, same emoji) — reaction is removed
-      render_click(view, "react", %{"message-id" => msg.id, "emoji" => "👍"})
+      render_click(view, "react", %{"message_id" => msg.id, "emoji" => "👍"})
       assert Chat.list_reactions(msg.id) == []
     end
 
@@ -613,11 +615,10 @@ defmodule PlatformWeb.ChatLiveTest do
   # ── Threads ──────────────────────────────────────────────────────────────────
 
   describe "threads" do
-    test "opening a thread shows the thread panel", %{conn: conn} do
+    test "opening a thread expands the inline thread composer", %{conn: conn} do
       conn = authenticated_conn(conn)
       {:ok, view, _html} = live(conn, ~p"/chat/general")
 
-      # Post a message to open a thread on
       view
       |> form("#compose-form", compose: %{text: "start a thread here"})
       |> render_submit()
@@ -628,11 +629,11 @@ defmodule PlatformWeb.ChatLiveTest do
 
       html = render_click(view, "open_thread", %{"message-id" => msg.id})
 
-      assert html =~ "Thread"
-      assert html =~ "thread-compose-form"
+      assert html =~ "inline-thread-compose-form-#{msg.id}"
+      assert html =~ "Reply…"
     end
 
-    test "closing the thread panel hides it", %{conn: conn} do
+    test "toggling the inline thread closed hides its composer", %{conn: conn} do
       conn = authenticated_conn(conn)
       {:ok, view, _html} = live(conn, ~p"/chat/general")
 
@@ -644,12 +645,12 @@ defmodule PlatformWeb.ChatLiveTest do
       [msg | _] = Chat.list_messages(space.id)
 
       render_click(view, "open_thread", %{"message-id" => msg.id})
-      html = render_click(view, "close_thread", %{})
+      html = render_click(view, "toggle_inline_thread", %{"message-id" => msg.id})
 
-      refute html =~ "thread-compose-form"
+      refute html =~ "inline-thread-compose-form-#{msg.id}"
     end
 
-    test "posting a thread reply appears once in thread panel", %{conn: conn} do
+    test "posting a thread reply appears once inline", %{conn: conn} do
       conn = authenticated_conn(conn)
       {:ok, view, _html} = live(conn, ~p"/chat/general")
 
@@ -662,9 +663,9 @@ defmodule PlatformWeb.ChatLiveTest do
 
       render_click(view, "open_thread", %{"message-id" => msg.id})
 
-      view
-      |> form("#thread-compose-form", thread_compose: %{text: "thread reply"})
-      |> render_submit()
+      render_submit(view, "send_inline_thread_message", %{
+        "inline_thread_compose" => %{"text" => "thread reply", "message_id" => msg.id}
+      })
 
       html = render(view)
 
@@ -685,11 +686,12 @@ defmodule PlatformWeb.ChatLiveTest do
 
       render_click(view, "open_thread", %{"message-id" => msg.id})
 
-      view
-      |> form("#thread-compose-form",
-        thread_compose: %{text: "thread reply should stay in thread"}
-      )
-      |> render_submit()
+      render_submit(view, "send_inline_thread_message", %{
+        "inline_thread_compose" => %{
+          "text" => "thread reply should stay in thread",
+          "message_id" => msg.id
+        }
+      })
 
       {:ok, _reloaded, html} = live(conn, ~p"/chat/general")
 
@@ -728,15 +730,15 @@ defmodule PlatformWeb.ChatLiveTest do
 
       render_click(view, "open_thread", %{"message-id" => msg.id})
 
-      view
-      |> form("#thread-compose-form", thread_compose: %{text: "timestamp thread reply"})
-      |> render_submit()
+      render_submit(view, "send_inline_thread_message", %{
+        "inline_thread_compose" => %{"text" => "timestamp thread reply", "message_id" => msg.id}
+      })
 
       html = render(view)
 
       assert html =~ "timestamp thread reply"
-      assert Regex.match?(~r/id="thread-messages"[\s\S]*phx-hook="LocalTime"/, html)
-      assert Regex.match?(~r/id="thread-messages"[\s\S]*data-local-time=/, html)
+      assert Regex.match?(~r/id="inline-thread-ts-[^"]+"[\s\S]*phx-hook="LocalTime"/, html)
+      assert Regex.match?(~r/id="inline-thread-ts-[^"]+"[\s\S]*data-local-time=/, html)
     end
   end
 

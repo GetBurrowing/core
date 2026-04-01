@@ -304,18 +304,27 @@ defmodule PlatformWeb.ChatLive do
         {:noreply, put_flash(socket, :error, "Search result not found.")}
 
       %{thread_id: thread_id} = message when is_binary(thread_id) ->
-        thread = Chat.get_thread(thread_id)
-        thread_messages = load_thread_messages(message.space_id, thread_id)
-        thread_attachments_map = build_attachments_map(thread_messages)
+        # Find the parent message for this thread and expand inline
+        parent_msg_id =
+          Enum.find_value(socket.assigns.thread_previews, fn {pmid, %{thread_id: tid}} ->
+            if tid == thread_id, do: pmid
+          end)
 
-        {:noreply,
-         socket
-         |> assign(:active_thread, thread)
-         |> assign(:active_canvas, nil)
-         |> assign(:thread_messages, thread_messages)
-         |> assign(:thread_attachments_map, thread_attachments_map)
-         |> assign(:highlighted_message_id, nil)
-         |> assign(:highlighted_thread_message_id, message.id)}
+        thread_msgs = load_thread_messages(message.space_id, thread_id)
+
+        socket =
+          if parent_msg_id do
+            socket
+            |> update(:expanded_threads, &MapSet.put(&1, parent_msg_id))
+            |> update(:inline_thread_messages, &Map.put(&1, parent_msg_id, thread_msgs))
+            |> assign(:highlighted_message_id, parent_msg_id)
+            |> reinsert_stream_message(parent_msg_id)
+          else
+            socket
+            |> assign(:highlighted_message_id, message.id)
+          end
+
+        {:noreply, socket}
 
       message ->
         {:noreply,
@@ -497,7 +506,33 @@ defmodule PlatformWeb.ChatLive do
     {:noreply, socket}
   end
 
+  def handle_event("react", %{"message_id" => msg_id, "emoji" => emoji}, socket) do
+    react_to_message(socket, msg_id, emoji)
+  end
+
   def handle_event("react", %{"message-id" => msg_id, "emoji" => emoji}, socket) do
+    react_to_message(socket, msg_id, emoji)
+  end
+
+  # Redirect open_thread to inline expansion (side panel removed)
+  def handle_event("open_thread", %{"message-id" => message_id}, socket) do
+    handle_event("toggle_inline_thread", %{"message-id" => message_id}, socket)
+  end
+
+  def handle_event("open_thread", %{"message_id" => message_id}, socket) do
+    handle_event("toggle_inline_thread", %{"message-id" => message_id}, socket)
+  end
+
+  def handle_event("close_thread", _params, socket) do
+    {:noreply,
+     socket
+     |> assign(:active_thread, nil)
+     |> assign(:thread_messages, [])
+     |> assign(:thread_attachments_map, %{})
+     |> assign(:highlighted_thread_message_id, nil)}
+  end
+
+  defp react_to_message(socket, msg_id, emoji) do
     with participant when not is_nil(participant) <- socket.assigns.current_participant do
       groups = Map.get(socket.assigns.reactions_map, msg_id, [])
       already_reacted = Enum.any?(groups, &(&1.emoji == emoji && &1.reacted_by_me))
@@ -519,47 +554,6 @@ defmodule PlatformWeb.ChatLive do
       require Logger
       Logger.error("Reaction handler crashed: #{Exception.message(e)}")
       {:noreply, socket}
-  end
-
-  def handle_event("open_thread", %{"message-id" => message_id}, socket) do
-    with space when not is_nil(space) <- socket.assigns.active_space do
-      thread =
-        Chat.get_thread_for_message(message_id) ||
-          case Chat.create_thread(space.id, %{parent_message_id: message_id}) do
-            {:ok, t} -> t
-            {:error, _} -> nil
-          end
-
-      case thread do
-        nil ->
-          {:noreply, put_flash(socket, :error, "Could not open thread.")}
-
-        thread ->
-          thread_messages = load_thread_messages(space.id, thread.id)
-          thread_attachments_map = build_attachments_map(thread_messages)
-
-          {:noreply,
-           socket
-           |> assign(:active_thread, thread)
-           |> assign(:active_canvas, nil)
-           |> assign(:thread_messages, thread_messages)
-           |> assign(:thread_attachments_map, thread_attachments_map)
-           |> assign(:highlighted_message_id, nil)
-           |> assign(:highlighted_thread_message_id, nil)
-           |> assign_thread_compose("")}
-      end
-    else
-      _ -> {:noreply, socket}
-    end
-  end
-
-  def handle_event("close_thread", _params, socket) do
-    {:noreply,
-     socket
-     |> assign(:active_thread, nil)
-     |> assign(:thread_messages, [])
-     |> assign(:thread_attachments_map, %{})
-     |> assign(:highlighted_thread_message_id, nil)}
   end
 
   def handle_event("send_thread_message", %{"thread_compose" => %{"text" => content}}, socket) do
@@ -590,6 +584,10 @@ defmodule PlatformWeb.ChatLive do
     else
       _ -> {:noreply, socket}
     end
+  end
+
+  def handle_event("toggle_inline_thread", %{"message_id" => msg_id}, socket) do
+    handle_event("toggle_inline_thread", %{"message-id" => msg_id}, socket)
   end
 
   def handle_event("toggle_inline_thread", %{"message-id" => msg_id}, socket) do
@@ -675,7 +673,8 @@ defmodule PlatformWeb.ChatLive do
                | reply_count: preview.reply_count + 1,
                  last_reply_at: msg.inserted_at
              })
-           end)}
+           end)
+           |> reinsert_stream_message(msg_id)}
 
         {:error, _reason} ->
           {:noreply, put_flash(socket, :error, "Failed to send reply.")}
@@ -683,6 +682,10 @@ defmodule PlatformWeb.ChatLive do
     else
       _ -> {:noreply, socket}
     end
+  end
+
+  def handle_event("toggle_pin", %{"message_id" => msg_id, "space_id" => space_id}, socket) do
+    handle_event("toggle_pin", %{"message-id" => msg_id, "space-id" => space_id}, socket)
   end
 
   def handle_event("toggle_pin", %{"message-id" => msg_id, "space-id" => space_id}, socket) do
@@ -2075,9 +2078,9 @@ defmodule PlatformWeb.ChatLive do
                     </button>
 
                     <button
-                      phx-click="open_thread"
+                      phx-click="toggle_inline_thread"
                       phx-value-message-id={msg.id}
-                      title="View thread detail"
+                      title="Open thread"
                       class="rounded px-1.5 py-0.5 text-xs text-base-content/40 hover:text-base-content/60 hover:bg-base-300 transition-colors"
                     >
                       <span class="hero-arrow-top-right-on-square size-4"></span>
@@ -2205,6 +2208,16 @@ defmodule PlatformWeb.ChatLive do
                 </div>
               </div>
 
+              <%!-- Floating reply button (appears on hover) --%>
+              <button
+                phx-click="toggle_inline_thread"
+                phx-value-message-id={msg.id}
+                class="absolute -bottom-2 right-3 z-10 flex items-center gap-1 rounded-full bg-base-200 border border-base-300 shadow-sm px-2 py-0.5 text-xs text-base-content/60 hover:text-primary hover:border-primary/40 opacity-0 group-hover:opacity-100 transition-all"
+              >
+                <span class="hero-chat-bubble-left size-3"></span>
+                <span>Reply</span>
+              </button>
+
               <%!-- Inline thread: preview bar + expanded thread --%>
               <div
                 :if={
@@ -2239,6 +2252,7 @@ defmodule PlatformWeb.ChatLive do
                   :if={MapSet.member?(@expanded_threads, msg.id)}
                   class="mt-2 space-y-2 border-l-2 border-base-300 pl-3"
                   id={"inline-thread-#{msg.id}"}
+                  phx-hook="InlineThread"
                 >
                   <div
                     :for={tmsg <- Map.get(@inline_thread_messages, msg.id, [])}
@@ -2668,145 +2682,7 @@ defmodule PlatformWeb.ChatLive do
           </div>
         <% end %>
 
-        <div
-          :if={@active_thread}
-          class="hidden lg:flex w-80 flex-shrink-0 flex-col border-l border-base-300 bg-base-100"
-        >
-          <div class="flex h-12 flex-shrink-0 items-center justify-between border-b border-base-300 px-4">
-            <div class="flex items-center gap-2">
-              <span class="text-sm font-semibold">Thread</span>
-              <span :if={@active_thread.title} class="text-xs text-base-content/50 truncate">
-                {@active_thread.title}
-              </span>
-            </div>
-            <button
-              phx-click="close_thread"
-              class="btn btn-ghost btn-xs"
-              title="Close thread"
-            >
-              <span class="hero-x-mark size-4"></span>
-            </button>
-          </div>
-
-          <div
-            id="thread-messages"
-            class="flex-1 overflow-y-auto px-4 py-3 space-y-3"
-          >
-            <div
-              :for={msg <- @thread_messages}
-              class={[
-                "flex flex-col gap-0.5 rounded-xl px-2 py-1 transition-colors",
-                @highlighted_thread_message_id == msg.id && "bg-primary/5 ring-1 ring-primary/20"
-              ]}
-            >
-              <div class="flex items-baseline gap-2">
-                <span class="text-xs font-semibold text-primary">
-                  {sender_name(@participants_map, msg.participant_id)}
-                </span>
-                <.local_time
-                  id={"thread-message-time-#{msg.id}"}
-                  timestamp={msg.inserted_at}
-                  class="text-[10px] text-base-content/40"
-                />
-              </div>
-
-              <p :if={present?(msg.content)} class="text-sm leading-6 text-base-content break-words">
-                {msg.content}
-              </p>
-
-              <div
-                :if={Map.get(@thread_attachments_map, msg.id, []) != []}
-                class="mt-1 flex flex-col gap-1"
-              >
-                <a
-                  :for={attachment <- Map.get(@thread_attachments_map, msg.id, [])}
-                  href={attachment_url(attachment)}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  class="inline-flex w-fit items-center gap-2 rounded bg-base-200 px-2 py-1 text-sm text-primary hover:bg-base-300 hover:no-underline"
-                >
-                  <span class="hero-paper-clip size-4"></span>
-                  <span>{attachment.filename}</span>
-                  <span class="text-xs text-base-content/40">
-                    ({format_bytes(attachment.byte_size)})
-                  </span>
-                </a>
-              </div>
-            </div>
-
-            <div :if={@thread_messages == []} class="text-xs text-base-content/40">
-              No replies yet — be the first!
-            </div>
-          </div>
-
-          <div class="flex-shrink-0 border-t border-base-300 px-4 py-3">
-            <.form
-              for={@thread_compose_form}
-              id="thread-compose-form"
-              phx-submit="send_thread_message"
-              class="flex flex-col gap-2"
-            >
-              <div
-                :if={@uploads.thread_attachments.entries != []}
-                class="flex flex-wrap gap-1"
-              >
-                <span
-                  :for={entry <- @uploads.thread_attachments.entries}
-                  class="inline-flex items-center gap-1 rounded-full bg-base-200 px-2 py-0.5 text-xs text-base-content/70"
-                >
-                  <span class="hero-paper-clip size-3"></span>
-                  <span>{entry.client_name}</span>
-                </span>
-              </div>
-
-              <div class="flex items-end gap-2">
-                <label
-                  class="flex-shrink-0 cursor-pointer rounded-full w-8 h-8 flex items-center justify-center text-base-content/50 hover:bg-base-300 transition-colors"
-                  title="Attach files"
-                >
-                  <span class="hero-paper-clip size-5"></span>
-                  <.live_file_input upload={@uploads.thread_attachments} class="hidden" />
-                </label>
-
-                <div class="flex-1 relative">
-                  <textarea
-                    name="thread_compose[text]"
-                    id={@thread_compose_form[:text].id}
-                    rows="2"
-                    placeholder="Reply in thread…"
-                    autocomplete="off"
-                    class="textarea textarea-bordered w-full resize-none rounded-xl pr-10 text-sm leading-relaxed"
-                    phx-hook="ComposeInput"
-                  >{Phoenix.HTML.Form.normalize_value("textarea", @thread_compose_form[:text].value)}</textarea>
-                  <button
-                    type="submit"
-                    class="absolute right-2 bottom-2 w-7 h-7 rounded-full btn btn-primary btn-xs flex items-center justify-center p-0"
-                    disabled={is_nil(@current_participant)}
-                    title="Reply"
-                  >
-                    <span class="hero-paper-airplane size-4 -rotate-45"></span>
-                  </button>
-                </div>
-              </div>
-
-              <p
-                :for={error <- upload_errors(@uploads.thread_attachments)}
-                class="text-xs text-error"
-              >
-                {upload_error_to_string(error)}
-              </p>
-
-              <div :for={entry <- @uploads.thread_attachments.entries}>
-                <p
-                  :for={error <- upload_errors(@uploads.thread_attachments, entry)}
-                  class="text-xs text-error"
-                >
-                  {entry.client_name}: {upload_error_to_string(error)}
-                </p>
-              </div>
-            </.form>
-          </div>
-        </div>
+        <%!-- Side thread panel removed — all thread interaction is inline --%>
       </div>
     </div>
 
