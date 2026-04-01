@@ -453,4 +453,94 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
       refute prompt =~ "do not create another plan"
     end
   end
+
+  describe "heartbeat_prompt/5 nil-stage handling" do
+    test "directs agent to start first pending stage when no stage is running" do
+      task = %{title: "My Task", status: "in_progress"}
+
+      plan = %{
+        status: "approved",
+        version: 1,
+        stages: [
+          %{id: "stage-pending-1", name: "Implement Feature", status: "pending"},
+          %{id: "stage-pending-2", name: "Run Tests", status: "pending"}
+        ]
+      }
+
+      prompt = HeartbeatScheduler.heartbeat_prompt(task, nil, 0, [], plan)
+
+      assert prompt =~ "suite_stage_start"
+      assert prompt =~ "stage-pending-1"
+      assert prompt =~ "Implement Feature"
+      assert prompt =~ "stage-pending-2"
+      refute prompt =~ "unknown"
+    end
+
+    test "tells agent all stages complete when every stage is done" do
+      task = %{title: "Done Task", status: "in_progress"}
+
+      plan = %{
+        status: "approved",
+        version: 1,
+        stages: [
+          %{id: "s1", name: "Stage A", status: "passed"},
+          %{id: "s2", name: "Stage B", status: "passed"}
+        ]
+      }
+
+      prompt = HeartbeatScheduler.heartbeat_prompt(task, nil, 0, [], plan)
+
+      assert prompt =~ "all plan stages are complete"
+      assert prompt =~ "Done Task"
+      refute prompt =~ "unknown"
+    end
+
+    test "tells agent to create a plan when plan is nil and task is not in planning" do
+      task = %{title: "No Plan Task", status: "in_progress"}
+
+      prompt = HeartbeatScheduler.heartbeat_prompt(task, nil, 0, [], nil)
+
+      assert prompt =~ "plan_create"
+      refute prompt =~ "unknown"
+    end
+
+    test "handles mixed stage statuses — only counts truly pending stages" do
+      task = %{title: "Mixed Task", status: "in_progress"}
+
+      plan = %{
+        status: "approved",
+        version: 1,
+        stages: [
+          %{id: "s1", name: "Done Stage", status: "passed"},
+          %{id: "s2", name: "Next Stage", status: "pending"}
+        ]
+      }
+
+      prompt = HeartbeatScheduler.heartbeat_prompt(task, nil, 0, [], plan)
+
+      assert prompt =~ "s2"
+      assert prompt =~ "Next Stage"
+      assert prompt =~ "suite_stage_start"
+    end
+
+    test "running stage found by task_router still produces normal heartbeat" do
+      task = %{title: "Running Task", status: "in_progress"}
+      # When task_router falls back via current_running_stage, it passes the stage in.
+      # Heartbeat scheduler should emit the normal prompt — not the nil-stage one.
+      stage = %{id: "s1", name: "Implement Fix", status: "running"}
+
+      plan = %{
+        status: "approved",
+        version: 1,
+        stages: [%{id: "s1", name: "Implement Fix", status: "running"}]
+      }
+
+      prompt = HeartbeatScheduler.heartbeat_prompt(task, stage, 120, [], plan)
+
+      assert prompt =~ "Implement Fix"
+      assert prompt =~ "2 minutes"
+      refute prompt =~ "suite_stage_start"
+      refute prompt =~ "unknown"
+    end
+  end
 end

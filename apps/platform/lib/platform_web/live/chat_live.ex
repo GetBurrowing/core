@@ -2107,7 +2107,11 @@ defmodule PlatformWeb.ChatLive do
                   class="mt-1"
                 >
                   <div :if={Map.get(@canvases_by_message_id, msg.id)} class="min-w-0 overflow-hidden">
-                    <.canvas_document canvas={Map.get(@canvases_by_message_id, msg.id)} inline={true} />
+                    <.canvas_document
+                      canvas={Map.get(@canvases_by_message_id, msg.id)}
+                      inline={true}
+                      dom_id_base="chat-message-inline"
+                    />
                   </div>
 
                   <div
@@ -2637,7 +2641,7 @@ defmodule PlatformWeb.ChatLive do
           </div>
 
           <div class="flex-1 overflow-y-auto px-4 py-4">
-            <.canvas_document canvas={@active_canvas} />
+            <.canvas_document canvas={@active_canvas} dom_id_base="chat-live-canvas-panel" />
           </div>
         </div>
 
@@ -2658,7 +2662,7 @@ defmodule PlatformWeb.ChatLive do
             </header>
 
             <div class="flex-1 overflow-y-auto px-4 py-4">
-              <.canvas_document canvas={@active_canvas} />
+              <.canvas_document canvas={@active_canvas} dom_id_base="chat-live-canvas-overlay" />
             </div>
           </div>
         <% end %>

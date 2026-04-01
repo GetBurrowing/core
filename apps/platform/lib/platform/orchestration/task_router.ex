@@ -601,7 +601,14 @@ defmodule Platform.Orchestration.TaskRouter do
         Tasks.current_plan(state.task_id)
       end
 
-    stage = find_stage(plan, state.current_stage_id)
+    # When current_stage_id is nil (e.g. task was dispatched before a stage
+    # transition wrote the id back), fall back to the live running stage from
+    # the plan so the heartbeat prompt shows the real stage name/status
+    # instead of "stage: unknown — unknown".
+    stage =
+      find_stage(plan, state.current_stage_id) ||
+        current_running_stage(plan)
+
     elapsed = elapsed_seconds(state.stage_started_at)
 
     pending_validations =

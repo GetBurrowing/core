@@ -43,6 +43,7 @@ defmodule PlatformWeb.Chat.CanvasRenderer do
   attr(:canvas, Canvas, required: true)
   attr(:inline, :boolean, default: false)
   attr(:show_header, :boolean, default: true)
+  attr(:dom_id_base, :string, default: nil)
 
   def canvas_document(assigns) do
     state = assigns.canvas.state || %{}
@@ -51,7 +52,7 @@ defmodule PlatformWeb.Chat.CanvasRenderer do
       url_canvas?(state) ->
         ~H"""
         <div
-          id={"canvas-url-#{@canvas.id}"}
+          id={canvas_root_id(assigns, "url")}
           class={[
             "rounded-2xl border border-base-300 bg-base-100 shadow-sm overflow-hidden",
             @inline && "cursor-pointer"
@@ -95,7 +96,7 @@ defmodule PlatformWeb.Chat.CanvasRenderer do
 
         ~H"""
         <div
-          id={"canvas-a2ui-#{@canvas.id}"}
+          id={canvas_root_id(assigns, "a2ui")}
           class={[
             "rounded-2xl border border-base-300 bg-base-100 shadow-sm overflow-hidden",
             @inline && "cursor-pointer"
@@ -120,7 +121,7 @@ defmodule PlatformWeb.Chat.CanvasRenderer do
           |> assign(:supporting_artifacts, Enum.reject(artifacts, &image_artifact?/1))
 
         ~H"""
-        <div id={"canvas-review-evidence-#{@canvas.id}"} class="space-y-4 p-4">
+        <div id={canvas_root_id(assigns, "review-evidence")} class="space-y-4 p-4">
           <div :if={@summary} class="rounded-xl border border-base-300 bg-base-100 p-4">
             <p class="text-xs font-semibold uppercase tracking-widest text-base-content/50">
               Summary
@@ -192,7 +193,7 @@ defmodule PlatformWeb.Chat.CanvasRenderer do
       canonical_document?(state) ->
         ~H"""
         <div
-          id={"canvas-doc-#{@canvas.id}"}
+          id={canvas_root_id(assigns, "doc")}
           class={[
             "overflow-x-auto",
             @inline && "cursor-pointer"
@@ -209,7 +210,7 @@ defmodule PlatformWeb.Chat.CanvasRenderer do
 
         ~H"""
         <div
-          id={"canvas-flat-#{@canvas.id}"}
+          id={canvas_root_id(assigns, "flat")}
           class={[
             "overflow-x-auto",
             @inline && "cursor-pointer"
@@ -224,7 +225,7 @@ defmodule PlatformWeb.Chat.CanvasRenderer do
       bare_node?(state) ->
         ~H"""
         <div
-          id={"canvas-bare-#{@canvas.id}"}
+          id={canvas_root_id(assigns, "bare")}
           class={[
             "overflow-x-auto",
             @inline && "cursor-pointer"
@@ -240,6 +241,13 @@ defmodule PlatformWeb.Chat.CanvasRenderer do
         ~H"""
         <PlatformWeb.Chat.CanvasComponents.canvas canvas={@canvas} />
         """
+    end
+  end
+
+  defp canvas_root_id(assigns, kind) do
+    case assigns[:dom_id_base] do
+      base when is_binary(base) and base != "" -> "#{base}-#{kind}-#{assigns.canvas.id}"
+      _ -> "canvas-#{kind}-#{assigns.canvas.id}"
     end
   end
 
