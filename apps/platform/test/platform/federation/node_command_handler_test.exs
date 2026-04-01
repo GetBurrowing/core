@@ -82,6 +82,19 @@ defmodule Platform.Federation.NodeCommandHandlerTest do
       assert {:ok, result} = NodeCommandHandler.handle("canvas.present", params, ctx_for(agent))
       assert result.space_id == space.id
     end
+
+    test "rejects invalid sentinel canvas URLs" do
+      %{agent: agent, space: space} = setup_agent_in_space()
+
+      params = %{
+        "space_id" => space.id,
+        "title" => "Bad Canvas",
+        "url" => "__FROM_FILE__"
+      }
+
+      assert {:error, "INVALID_CANVAS_URL", _} =
+               NodeCommandHandler.handle("canvas.present", params, ctx_for(agent))
+    end
   end
 
   # ── canvas.navigate ─────────────────────────────────────────────────────────
@@ -115,8 +128,26 @@ defmodule Platform.Federation.NodeCommandHandlerTest do
       assert {:error, "CANVAS_NOT_FOUND", _} =
                NodeCommandHandler.handle(
                  "canvas.navigate",
-                 %{"canvas_id" => Ecto.UUID.generate()},
+                 %{"canvas_id" => Ecto.UUID.generate(), "url" => "https://new.com"},
                  %{agent_id: nil}
+               )
+    end
+
+    test "rejects invalid sentinel navigation URLs" do
+      %{agent: agent, space: space} = setup_agent_in_space()
+
+      {:ok, create_result} =
+        NodeCommandHandler.handle(
+          "canvas.present",
+          %{"space_id" => space.id, "url" => "https://old.com"},
+          ctx_for(agent)
+        )
+
+      assert {:error, "INVALID_CANVAS_URL", _} =
+               NodeCommandHandler.handle(
+                 "canvas.navigate",
+                 %{"canvas_id" => create_result.canvas_id, "url" => "__FROM_FILE__"},
+                 ctx_for(agent)
                )
     end
   end

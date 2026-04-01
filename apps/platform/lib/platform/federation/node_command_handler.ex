@@ -17,13 +17,14 @@ defmodule Platform.Federation.NodeCommandHandler do
   # ── canvas.present ──────────────────────────────────────────────────
 
   def handle("canvas.present", params, ctx) do
-    with {:ok, space_id} <- resolve_space(params, ctx),
+    with {:ok, url} <- validate_canvas_url(params["url"]),
+         {:ok, space_id} <- resolve_space(params, ctx),
          {:ok, agent} <- resolve_agent(ctx.agent_id),
          {:ok, participant} <- Chat.ensure_agent_participant(space_id, agent) do
       canvas_attrs = %{
         "title" => params["title"] || "Canvas",
         "canvas_type" => params["canvas_type"] || "custom",
-        "state" => %{"url" => params["url"]}
+        "state" => %{"url" => url}
       }
 
       case Chat.create_canvas_with_message(space_id, participant.id, canvas_attrs) do
@@ -40,8 +41,9 @@ defmodule Platform.Federation.NodeCommandHandler do
   # ── canvas.navigate ─────────────────────────────────────────────────
 
   def handle("canvas.navigate", params, _ctx) do
-    with {:ok, canvas} <- fetch_canvas(params["canvas_id"]) do
-      case Chat.update_canvas_state(canvas, %{"url" => params["url"]}) do
+    with {:ok, url} <- validate_canvas_url(params["url"]),
+         {:ok, canvas} <- fetch_canvas(params["canvas_id"]) do
+      case Chat.update_canvas_state(canvas, %{"url" => url}) do
         {:ok, updated} ->
           PubSub.broadcast(canvas.space_id, {:canvas_updated, updated})
           PubSub.broadcast_canvas(canvas.id, {:canvas_updated, updated})
@@ -161,6 +163,23 @@ defmodule Platform.Federation.NodeCommandHandler do
     case Chat.get_canvas(canvas_id) do
       nil -> {:error, "CANVAS_NOT_FOUND", "Canvas #{canvas_id} not found"}
       canvas -> {:ok, canvas}
+    end
+  end
+
+  defp validate_canvas_url(url) when not is_binary(url) do
+    {:error, "INVALID_CANVAS_URL", "Canvas URL must be an http(s) URL"}
+  end
+
+  defp validate_canvas_url(url) do
+    trimmed = String.trim(url)
+
+    case URI.parse(trimmed) do
+      %URI{scheme: scheme, host: host}
+      when scheme in ["http", "https"] and is_binary(host) and host != "" ->
+        {:ok, trimmed}
+
+      _ ->
+        {:error, "INVALID_CANVAS_URL", "Canvas URL must be an http(s) URL"}
     end
   end
 
