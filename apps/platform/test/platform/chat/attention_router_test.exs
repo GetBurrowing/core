@@ -170,6 +170,82 @@ defmodule Platform.Chat.AttentionRouterTest do
       assert_receive {:agent_chat_called, "are you still working?", _opts}, 500
       drain()
     end
+
+    test "execution steering follows the current assignee when the mutex is stale after reassignment" do
+      agent_one = create_agent(%{name: "Beacon"})
+      agent_two = create_agent(%{name: "Nova"})
+      {:ok, project} = Tasks.create_project(%{name: "Execution reassignment project"})
+
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Execution reassignment task",
+          status: "in_progress",
+          assignee_id: agent_one.id,
+          assignee_type: "agent"
+        })
+
+      {:ok, space} = ExecutionSpace.find_or_create(task.id)
+      user = create_participant(space.id)
+
+      {:ok, participant_one} =
+        Chat.ensure_agent_participant(space.id, agent_one, display_name: "Beacon")
+
+      {:ok, participant_two} =
+        Chat.ensure_agent_participant(space.id, agent_two, display_name: "Nova")
+
+      participant_two_id = participant_two.id
+      ActiveAgentStore.set_active(space.id, participant_one.id)
+
+      {:ok, _task} =
+        Tasks.update_task(task, %{assignee_id: agent_two.id, assignee_type: "agent"})
+
+      message = create_message(space.id, user.id, %{content: "please pick up the new direction"})
+
+      assert {:ok, [%{participant_id: ^participant_two_id, reason: :watch}]} =
+               AttentionRouter.route(message)
+
+      assert ActiveAgentStore.get_active(space.id) == participant_two_id
+
+      assert_receive {:agent_chat_called, "please pick up the new direction", _opts}, 500
+      drain()
+    end
+
+    test "execution steering rejoins a departed assignee participant instead of dropping feedback" do
+      agent = create_agent(%{name: "Beacon"})
+      {:ok, project} = Tasks.create_project(%{name: "Execution departed participant project"})
+
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Execution departed participant task",
+          status: "in_progress",
+          assignee_id: agent.id,
+          assignee_type: "agent"
+        })
+
+      {:ok, space} = ExecutionSpace.find_or_create(task.id)
+      user = create_participant(space.id)
+      {:ok, participant} = Chat.ensure_agent_participant(space.id, agent, display_name: "Beacon")
+
+      participant_id = participant.id
+      ActiveAgentStore.set_active(space.id, participant_id)
+
+      participant
+      |> Ecto.Changeset.change(%{left_at: DateTime.utc_now()})
+      |> Repo.update!()
+
+      message = create_message(space.id, user.id, %{content: "are you still on this?"})
+
+      assert {:ok, [%{participant_id: ^participant_id, reason: :watch}]} =
+               AttentionRouter.route(message)
+
+      assert Chat.get_participant(participant_id).left_at == nil
+      assert ActiveAgentStore.get_active(space.id) == participant_id
+
+      assert_receive {:agent_chat_called, "are you still on this?", _opts}, 500
+      drain()
+    end
   end
 
   describe "single @mention" do

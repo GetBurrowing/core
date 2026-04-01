@@ -11,6 +11,26 @@ defmodule PlatformWeb.TasksLiveTest do
   alias Platform.{Repo, Tasks}
   alias Platform.Tasks.{Epic, Plan, ReviewRequests}
 
+  setup do
+    previous_root = Application.get_env(:platform, :chat_attachments_root)
+
+    upload_root =
+      Path.join(
+        System.tmp_dir!(),
+        "platform_tasks_live_test_uploads_#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(upload_root)
+    Application.put_env(:platform, :chat_attachments_root, upload_root)
+
+    on_exit(fn ->
+      Application.put_env(:platform, :chat_attachments_root, previous_root)
+      File.rm_rf(upload_root)
+    end)
+
+    :ok
+  end
+
   defp authenticated_conn(conn) do
     {conn, _user} = authenticated_conn_with_user(conn)
     conn
@@ -606,31 +626,35 @@ defmodule PlatformWeb.TasksLiveTest do
 
   # ── Steering input tests ──────────────────────────────────────────────
 
-  test "send_steering_message posts to execution space and clears form", %{conn: conn} do
+  test "send_steering_message posts engagement metadata and shows success feedback", %{conn: conn} do
     project = create_project()
     task = create_task(project, %{title: "Steerable Task", status: "in_progress"})
 
-    # Create an execution space for this task
     {:ok, space} = ExecutionSpace.find_or_create(task.id)
 
     {conn, _user} = authenticated_conn_with_user(conn)
     {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
 
-    # Send a steering message
-    render_submit(view, "send_steering_message", %{
-      "steering" => %{"text" => "Focus on the error handling first"}
-    })
+    html =
+      render_submit(view, "send_steering_message", %{
+        "steering" => %{"text" => "Focus on the error handling first"}
+      })
 
-    # Verify message was posted to the execution space
     messages = ExecutionSpace.list_messages_with_participants(space.id)
     steering_msg = Enum.find(messages, &(&1.content == "Focus on the error handling first"))
     assert steering_msg
     assert steering_msg.sender_type == "user"
     assert steering_msg.content_type == "text"
     assert steering_msg.log_only == false
+    assert steering_msg.metadata["kind"] == "steering"
+    assert steering_msg.metadata["source"] == "tasks_live"
+    assert steering_msg.metadata["delivery"] == "engagement"
+
+    assert html =~ "steering-feedback"
+    assert html =~ "Steering sent to the execution log."
   end
 
-  test "send_steering_message is a no-op when content is empty", %{conn: conn} do
+  test "send_steering_message reports actionable error when content is empty", %{conn: conn} do
     project = create_project()
     task = create_task(project, %{title: "Empty Steering Task", status: "in_progress"})
 
@@ -639,28 +663,29 @@ defmodule PlatformWeb.TasksLiveTest do
     {conn, _user} = authenticated_conn_with_user(conn)
     {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
 
-    # Send empty message
-    render_submit(view, "send_steering_message", %{
-      "steering" => %{"text" => "   "}
-    })
+    html =
+      render_submit(view, "send_steering_message", %{
+        "steering" => %{"text" => "   "}
+      })
 
-    # No messages should have been created
     messages = ExecutionSpace.list_messages_with_participants(space.id)
     assert Enum.empty?(messages)
+    assert html =~ "Enter a message or attach a file before sending."
   end
 
-  test "send_steering_message is a no-op without an execution space", %{conn: conn} do
+  test "send_steering_message reports actionable error without an execution space", %{conn: conn} do
     project = create_project()
     task = create_task(project, %{title: "No Space Task", status: "backlog"})
 
-    # No execution space created — steering should be a no-op
     {conn, _user} = authenticated_conn_with_user(conn)
     {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
 
-    # Should not crash
-    render_submit(view, "send_steering_message", %{
-      "steering" => %{"text" => "This should do nothing"}
-    })
+    html =
+      render_submit(view, "send_steering_message", %{
+        "steering" => %{"text" => "This should do nothing"}
+      })
+
+    assert html =~ "This task does not have an execution log yet"
   end
 
   test "steering_changed tracks form input", %{conn: conn} do
@@ -762,16 +787,85 @@ defmodule PlatformWeb.TasksLiveTest do
     {conn, user} = authenticated_conn_with_user(conn)
     {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
 
-    # Send a message to trigger participant creation
     render_submit(view, "send_steering_message", %{
       "steering" => %{"text" => "Hello agent"}
     })
 
-    # Verify user participant was created in the execution space
     participants = Chat.list_participants(space.id)
     user_participant = Enum.find(participants, &(&1.participant_id == user.id))
     assert user_participant
     assert user_participant.participant_type == "user"
     assert user_participant.display_name == "Tasks Test User"
+  end
+
+  test "left execution participant is rejoined when the task detail opens", %{conn: conn} do
+    project = create_project()
+    task = create_task(project, %{title: "Rejoin Task", status: "in_progress"})
+    {:ok, space} = ExecutionSpace.find_or_create(task.id)
+
+    {conn, user} = authenticated_conn_with_user(conn)
+
+    {:ok, participant} =
+      Chat.add_participant(space.id, %{
+        participant_type: "user",
+        participant_id: user.id,
+        display_name: "Tasks Test User",
+        joined_at: DateTime.utc_now(),
+        left_at: DateTime.utc_now()
+      })
+
+    {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
+
+    refreshed = Chat.get_participant(participant.id)
+    assert refreshed.left_at == nil
+
+    html =
+      render_submit(view, "send_steering_message", %{
+        "steering" => %{"text" => "Back in the loop"}
+      })
+
+    assert html =~ "Steering sent to the execution log."
+  end
+
+  test "send_steering_message surfaces attachment storage failures", %{conn: conn} do
+    project = create_project()
+    task = create_task(project, %{title: "Attachment Steering Task", status: "in_progress"})
+    {:ok, space} = ExecutionSpace.find_or_create(task.id)
+
+    broken_root =
+      Path.join(
+        System.tmp_dir!(),
+        "platform_tasks_live_test_broken_root_#{System.unique_integer([:positive])}"
+      )
+
+    File.write!(broken_root, "not a directory")
+    Application.put_env(:platform, :chat_attachments_root, broken_root)
+
+    on_exit(fn -> File.rm_rf(broken_root) end)
+
+    {conn, _user} = authenticated_conn_with_user(conn)
+    {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
+
+    upload =
+      file_input(view, "#steering-compose-form", :steering_attachments, [
+        %{
+          name: "notes.txt",
+          content: "steering attachment",
+          type: "text/plain"
+        }
+      ])
+
+    assert render_upload(upload, "notes.txt") =~ "notes.txt"
+
+    html =
+      view
+      |> form("#steering-compose-form", steering: %{text: "See attached"})
+      |> render_submit()
+
+    assert Chat.list_messages(space.id) == []
+    assert html =~ "notes.txt"
+
+    assert html =~
+             "The attachment upload could not be stored in the execution log. Please try again."
   end
 end

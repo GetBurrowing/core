@@ -296,7 +296,7 @@ defmodule Platform.Chat.AttentionRouter do
 
     case length(mentioned_agents) do
       0 ->
-        route_no_mention(space, agent_recipients)
+        route_no_mention(space, message, agent_recipients)
 
       1 ->
         # Single @mention → set as active agent (mutex)
@@ -315,34 +315,35 @@ defmodule Platform.Chat.AttentionRouter do
   end
 
   # No @mention — check mutex, then execution fallback/watch, then silence
-  defp route_no_mention(%Space{kind: "execution"} = space, agent_recipients) do
-    case ActiveAgentStore.get_active(space.id) do
-      nil ->
-        route_execution_assignee(space, agent_recipients)
+  defp route_no_mention(
+         %Space{kind: "execution"} = space,
+         %Message{participant_id: author_id},
+         agent_recipients
+       ) do
+    case execution_assignee_participant(space) do
+      {:ok, %Participant{id: assignee_participant_id}}
+      when assignee_participant_id == author_id ->
+        ActiveAgentStore.set_active(space.id, assignee_participant_id)
+        []
 
-      active_participant_id ->
-        if Enum.any?(agent_recipients, &(&1.id == active_participant_id)) do
-          ActiveAgentStore.set_active(space.id, active_participant_id)
-          [%{participant_id: active_participant_id, reason: :active_agent}]
-        else
-          still_active =
-            Repo.exists?(
-              from(p in Participant,
-                where: p.id == ^active_participant_id and is_nil(p.left_at)
-              )
-            )
-
-          if still_active do
-            []
+      {:ok, %Participant{id: assignee_participant_id}} ->
+        reason =
+          if ActiveAgentStore.get_active(space.id) == assignee_participant_id and
+               Enum.any?(agent_recipients, &(&1.id == assignee_participant_id)) do
+            :active_agent
           else
-            ActiveAgentStore.clear_active(space.id)
-            route_execution_assignee(space, agent_recipients)
+            :watch
           end
-        end
+
+        ActiveAgentStore.set_active(space.id, assignee_participant_id)
+        [%{participant_id: assignee_participant_id, reason: reason}]
+
+      _ ->
+        route_execution_active_or_watch(space, agent_recipients)
     end
   end
 
-  defp route_no_mention(%Space{} = space, agent_recipients) do
+  defp route_no_mention(%Space{} = space, _message, agent_recipients) do
     case ActiveAgentStore.get_active(space.id) do
       nil ->
         # No active agent — check watch mode
@@ -382,28 +383,38 @@ defmodule Platform.Chat.AttentionRouter do
     end
   end
 
-  defp route_execution_assignee(%Space{} = space, agent_recipients) do
-    case execution_assignee_participant(space, agent_recipients) do
-      {:ok, participant} ->
-        ActiveAgentStore.set_active(space.id, participant.id)
-        [%{participant_id: participant.id, reason: :watch}]
-
-      _ ->
+  defp route_execution_active_or_watch(%Space{} = space, agent_recipients) do
+    case ActiveAgentStore.get_active(space.id) do
+      nil ->
         route_watch(space, agent_recipients)
+
+      active_participant_id ->
+        if Enum.any?(agent_recipients, &(&1.id == active_participant_id)) do
+          ActiveAgentStore.set_active(space.id, active_participant_id)
+          [%{participant_id: active_participant_id, reason: :active_agent}]
+        else
+          still_active =
+            Repo.exists?(
+              from(p in Participant,
+                where: p.id == ^active_participant_id and is_nil(p.left_at)
+              )
+            )
+
+          if still_active do
+            []
+          else
+            ActiveAgentStore.clear_active(space.id)
+            route_watch(space, agent_recipients)
+          end
+        end
     end
   end
 
-  defp execution_assignee_participant(%Space{} = space, agent_recipients) do
+  defp execution_assignee_participant(%Space{} = space) do
     with task_id when is_binary(task_id) <- execution_space_task_id(space),
          %TaskRecord{assignee_type: "agent", assignee_id: agent_id} when is_binary(agent_id) <-
            Repo.get(TaskRecord, task_id) do
-      case Enum.find(agent_recipients, &(&1.participant_id == agent_id)) do
-        %Participant{} = participant ->
-          {:ok, participant}
-
-        nil ->
-          Chat.ensure_agent_participant(space.id, agent_id, attention_mode: "all")
-      end
+      Chat.ensure_agent_participant(space.id, agent_id, attention_mode: "all")
     else
       _ -> {:error, :no_execution_assignee}
     end

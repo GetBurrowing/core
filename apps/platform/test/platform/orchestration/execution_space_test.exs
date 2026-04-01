@@ -54,6 +54,9 @@ defmodule Platform.Orchestration.ExecutionSpaceTest do
       assert message.log_only == true
       assert message.content_type == "system"
       assert message.space_id == space.id
+      assert message.metadata["source"] == "task_router"
+      assert message.metadata["kind"] == "log"
+      assert message.metadata["log_only"] == true
     end
   end
 
@@ -65,6 +68,9 @@ defmodule Platform.Orchestration.ExecutionSpaceTest do
       assert message.log_only == false
       assert message.content_type == "text"
       assert message.space_id == space.id
+      assert message.metadata["source"] == "task_router"
+      assert message.metadata["kind"] == "engagement"
+      assert message.metadata["log_only"] == false
     end
 
     test "accepts metadata option" do
@@ -77,6 +83,8 @@ defmodule Platform.Orchestration.ExecutionSpaceTest do
 
       assert message.metadata["reason"] == "task_heartbeat"
       assert message.metadata["source"] == "task_router"
+      assert message.metadata["kind"] == "engagement"
+      assert message.metadata["log_only"] == false
     end
   end
 
@@ -157,6 +165,56 @@ defmodule Platform.Orchestration.ExecutionSpaceTest do
       [msg] = messages
       assert Map.has_key?(msg, :attachments)
       assert msg.attachments == []
+    end
+
+    test "returns engagement-class steering messages with metadata and attachments" do
+      {:ok, space} = ExecutionSpace.find_or_create(@task_id)
+
+      {:ok, user} =
+        Chat.add_participant(space.id, %{
+          participant_type: "user",
+          participant_id: Ecto.UUID.generate(),
+          display_name: "Rowan",
+          joined_at: DateTime.utc_now()
+        })
+
+      {:ok, message, [_attachment]} =
+        Chat.post_message_with_attachments(
+          %{
+            space_id: space.id,
+            participant_id: user.id,
+            content_type: "text",
+            content: "Please focus on the failing execution route",
+            log_only: false,
+            metadata: %{
+              "kind" => "steering",
+              "source" => "tasks_live",
+              "delivery" => "engagement"
+            }
+          },
+          [
+            %{
+              filename: "steering.txt",
+              content_type: "text/plain",
+              byte_size: 24,
+              storage_key: "tests/execution-space/steering.txt"
+            }
+          ]
+        )
+
+      [msg] = ExecutionSpace.list_messages_with_participants(space.id)
+
+      assert msg.id == message.id
+      assert msg.sender_name == "Rowan"
+      assert msg.sender_type == "user"
+      assert msg.content_type == "text"
+      assert msg.log_only == false
+      assert msg.metadata["kind"] == "steering"
+      assert msg.metadata["source"] == "tasks_live"
+      assert msg.metadata["delivery"] == "engagement"
+      assert length(msg.attachments) == 1
+      assert hd(msg.attachments).filename == "steering.txt"
+      assert hd(msg.attachments).content_type == "text/plain"
     end
 
     test "respects limit option" do

@@ -109,7 +109,7 @@ defmodule Platform.Orchestration.ExecutionSpace do
         content_type: "system",
         content: content,
         log_only: true,
-        metadata: %{"source" => "task_router", "log_only" => true}
+        metadata: %{"source" => "task_router", "kind" => "log", "log_only" => true}
       })
     end
   end
@@ -124,7 +124,7 @@ defmodule Platform.Orchestration.ExecutionSpace do
   def post_engagement(space_id, content, opts \\ []) do
     with {:ok, participant} <- ensure_system_participant(space_id) do
       metadata =
-        %{"source" => "task_router"}
+        %{"source" => "task_router", "kind" => "engagement", "log_only" => false}
         |> Map.merge(Keyword.get(opts, :metadata, %{}))
 
       Chat.post_message(%{

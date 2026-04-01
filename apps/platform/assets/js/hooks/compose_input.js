@@ -114,8 +114,14 @@ const ComposeInput = {
       this._detectMention();
     });
 
-    // Reset height after form submission (LiveView clears the value)
+    // Reset height and clear persisted draft after a successful submission
     this.handleEvent && this.handleEvent("compose_reset", () => {
+      this.el.value = "";
+
+      if (this._draftKey) {
+        localStorage.removeItem(this._draftKey);
+      }
+
       if (!CSS.supports("field-sizing", "content")) {
         this.el.style.height = "33px";
         this.el.style.overflowY = "hidden";
