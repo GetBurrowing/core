@@ -204,6 +204,23 @@ defmodule PlatformWeb.Chat.CanvasRenderer do
         </div>
         """
 
+      flat_nodes_array?(state) ->
+        assigns = assign(assigns, :synthetic_root, normalize_flat_nodes(state))
+
+        ~H"""
+        <div
+          id={"canvas-flat-#{@canvas.id}"}
+          class={[
+            "overflow-x-auto",
+            @inline && "cursor-pointer"
+          ]}
+          phx-click={if(@inline, do: "open_canvas")}
+          phx-value-canvas-id={if(@inline, do: @canvas.id)}
+        >
+          <.render_node node={@synthetic_root} />
+        </div>
+        """
+
       true ->
         ~H"""
         <PlatformWeb.Chat.CanvasComponents.canvas canvas={@canvas} />
@@ -566,6 +583,49 @@ defmodule PlatformWeb.Chat.CanvasRenderer do
       do: true
 
   def canonical_document?(_), do: false
+
+  @doc """
+  Returns true if the canvas state contains a flat `nodes` array without canonical
+  document wrapping. This is a backward-compatible fallback for agents that emit
+  the simpler `%{"nodes" => [...]}` format instead of `%{"version" => 1, "root" => ...}`.
+  """
+  @spec flat_nodes_array?(map()) :: boolean()
+  def flat_nodes_array?(%{"nodes" => nodes}) when is_list(nodes) and nodes != [], do: true
+  def flat_nodes_array?(_), do: false
+
+  @doc """
+  Converts a flat `%{"nodes" => [...]}` state into a canonical document root node.
+  Each node in the array is normalized: if props are inlined at the top level
+  (e.g. `%{"type" => "text", "value" => "hi"}`), they are moved under a `"props"` key.
+  The result is a `stack` node wrapping all normalized children.
+  """
+  @spec normalize_flat_nodes(map()) :: map()
+  def normalize_flat_nodes(%{"nodes" => nodes}) when is_list(nodes) do
+    children = Enum.map(nodes, &normalize_flat_node/1)
+    %{"type" => "stack", "props" => %{"gap" => 8}, "children" => children}
+  end
+
+  def normalize_flat_nodes(_), do: %{"type" => "stack", "children" => []}
+
+  defp normalize_flat_node(%{"type" => type, "props" => props} = node) when is_map(props) do
+    children = normalize_flat_children(node)
+    %{"type" => type, "props" => props, "children" => children}
+  end
+
+  defp normalize_flat_node(%{"type" => type} = node) do
+    reserved = ~w(type children)
+    props = Map.drop(node, reserved)
+    children = normalize_flat_children(node)
+    %{"type" => type, "props" => props, "children" => children}
+  end
+
+  defp normalize_flat_node(node), do: node
+
+  defp normalize_flat_children(%{"children" => children}) when is_list(children) do
+    Enum.map(children, &normalize_flat_node/1)
+  end
+
+  defp normalize_flat_children(_), do: []
 
   defp review_evidence_manifest?(%{"summary" => summary, "artifacts" => artifacts})
        when is_binary(summary) and is_list(artifacts),

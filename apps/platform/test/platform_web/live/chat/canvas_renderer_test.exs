@@ -506,4 +506,99 @@ defmodule PlatformWeb.Chat.CanvasRendererTest do
       assert html =~ "Action"
     end
   end
+
+  # ---------------------------------------------------------------------------
+  # flat_nodes_array? / normalize_flat_nodes
+  # ---------------------------------------------------------------------------
+
+  describe "flat_nodes_array?/1" do
+    test "returns true for non-empty nodes array" do
+      assert CanvasRenderer.flat_nodes_array?(%{"nodes" => [%{"type" => "text"}]})
+    end
+
+    test "returns false for empty nodes array" do
+      refute CanvasRenderer.flat_nodes_array?(%{"nodes" => []})
+    end
+
+    test "returns false when nodes key is absent" do
+      refute CanvasRenderer.flat_nodes_array?(%{})
+    end
+
+    test "returns false for canonical document" do
+      refute CanvasRenderer.flat_nodes_array?(%{"version" => 1, "root" => %{"type" => "stack"}})
+    end
+  end
+
+  describe "normalize_flat_nodes/1" do
+    test "wraps flat nodes into a stack root" do
+      state = %{
+        "nodes" => [
+          %{"type" => "text", "value" => "hello"},
+          %{"type" => "badge", "value" => "tag"}
+        ]
+      }
+
+      root = CanvasRenderer.normalize_flat_nodes(state)
+
+      assert root["type"] == "stack"
+      assert length(root["children"]) == 2
+    end
+
+    test "moves inlined props under props key" do
+      state = %{
+        "nodes" => [
+          %{"type" => "text", "value" => "hello", "size" => "lg"}
+        ]
+      }
+
+      root = CanvasRenderer.normalize_flat_nodes(state)
+      [child] = root["children"]
+
+      assert child["type"] == "text"
+      assert child["props"]["value"] == "hello"
+      assert child["props"]["size"] == "lg"
+      refute Map.has_key?(child, "value")
+    end
+
+    test "preserves already-nested props" do
+      state = %{
+        "nodes" => [
+          %{"type" => "text", "props" => %{"value" => "hello"}}
+        ]
+      }
+
+      root = CanvasRenderer.normalize_flat_nodes(state)
+      [child] = root["children"]
+
+      assert child["props"]["value"] == "hello"
+    end
+
+    test "normalizes nested children recursively" do
+      state = %{
+        "nodes" => [
+          %{
+            "type" => "checklist",
+            "title" => "Tasks",
+            "children" => [
+              %{"type" => "checklist_item", "label" => "Do thing", "state" => "complete"}
+            ]
+          }
+        ]
+      }
+
+      root = CanvasRenderer.normalize_flat_nodes(state)
+      [checklist] = root["children"]
+
+      assert checklist["props"]["title"] == "Tasks"
+      [item] = checklist["children"]
+      assert item["props"]["label"] == "Do thing"
+      assert item["props"]["state"] == "complete"
+    end
+
+    test "returns empty stack for non-nodes state" do
+      root = CanvasRenderer.normalize_flat_nodes(%{"foo" => "bar"})
+      assert root["type"] == "stack"
+      assert root["children"] == []
+    end
+  end
 end
