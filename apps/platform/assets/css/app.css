@@ -159,16 +159,16 @@
 .chat-markdown li { margin: 0.1em 0; }
 
 .chat-markdown blockquote {
-  border-left: 3px solid oklch(58% 0.233 277.117);
+  border-left: 3px solid color-mix(in oklch, var(--color-primary) 60%, var(--color-base-content));
   padding-left: 0.75em;
   margin: 0.5em 0;
   opacity: 0.85;
 }
 
-.chat-markdown hr { margin: 0.5em 0; border-color: oklch(37% 0.044 257.287); }
+.chat-markdown hr { margin: 0.5em 0; border-color: var(--color-base-300); }
 
 .chat-markdown code:not(pre code) {
-  background: oklch(25.26% 0.014 253.1 / 0.5);
+  background: color-mix(in oklch, var(--color-base-300) 50%, transparent);
   padding: 0.15em 0.35em;
   border-radius: 0.25rem;
   font-size: 0.875em;
@@ -181,10 +181,10 @@
 }
 .chat-markdown th,
 .chat-markdown td {
-  border: 1px solid oklch(37% 0.044 257.287 / 0.3);
+  border: 1px solid color-mix(in oklch, var(--color-base-300) 50%, transparent);
   padding: 0.3em 0.6em;
 }
-.chat-markdown th { font-weight: 600; background: oklch(25.26% 0.014 253.1 / 0.3); }
+.chat-markdown th { font-weight: 600; background: color-mix(in oklch, var(--color-base-300) 30%, transparent); }
 
 .chat-markdown img {
   max-width: 100%;
@@ -213,8 +213,8 @@
 }
 
 .code-block-wrapper pre {
-  background: oklch(20.15% 0.012 254.09);
-  color: #c9d1d9;
+  background: var(--color-base-200);
+  color: var(--color-base-content);
   border-radius: 0.5rem;
   padding: 0.75em 1em;
   overflow-x: auto;
@@ -233,10 +233,10 @@
   justify-content: space-between;
   align-items: center;
   padding: 0.25em 0.75em;
-  background: oklch(25.26% 0.014 253.1);
+  background: var(--color-base-300);
   border-radius: 0.5rem 0.5rem 0 0;
   font-size: 0.75em;
-  color: oklch(70% 0.02 252);
+  color: color-mix(in oklch, var(--color-base-content) 70%, transparent);
 }
 
 .code-block-header + pre {
@@ -248,13 +248,13 @@
   padding: 0.15em 0.5em;
   border-radius: 0.25rem;
   background: transparent;
-  border: 1px solid oklch(37% 0.044 257.287);
+  border: 1px solid var(--color-base-300);
   color: inherit;
   font-size: 1em;
   transition: background 0.15s;
 }
 .code-block-header .copy-btn:hover {
-  background: oklch(37% 0.044 257.287 / 0.5);
+  background: color-mix(in oklch, var(--color-base-300) 50%, transparent);
 }
 
 .code-block-collapsed pre {
@@ -266,15 +266,15 @@
   display: block;
   width: 100%;
   padding: 0.3em;
-  background: oklch(22% 0.013 254);
+  background: var(--color-base-200);
   border: none;
   border-radius: 0 0 0.5rem 0.5rem;
-  color: oklch(70% 0.213 47.604);
+  color: var(--color-primary);
   font-size: 0.8em;
   cursor: pointer;
   text-align: center;
 }
-.code-block-expand:hover { background: oklch(25% 0.014 254); }
+.code-block-expand:hover { background: var(--color-base-300); }
 
 /* ── Resizable Sidebar ──────────────────────────────────────────── */
 
