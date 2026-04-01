@@ -770,8 +770,11 @@ defmodule PlatformWeb.ChatLive do
 
   def handle_event("open_canvas_mobile", %{"message-id" => message_id}, socket) do
     case Map.get(socket.assigns.canvases_by_message_id, message_id) do
-      nil -> {:noreply, socket}
-      canvas -> {:noreply, assign(socket, :active_canvas, canvas)}
+      nil ->
+        {:noreply, socket}
+
+      canvas ->
+        {:noreply, assign(socket, :active_canvas, find_canvas(socket, canvas.id) || canvas)}
     end
   end
 
@@ -3003,7 +3006,7 @@ defmodule PlatformWeb.ChatLive do
   end
 
   defp find_canvas(socket, canvas_id) do
-    Enum.find(socket.assigns.canvases, &(&1.id == canvas_id))
+    Chat.get_canvas(canvas_id) || Enum.find(socket.assigns.canvases, &(&1.id == canvas_id))
   end
 
   defp default_canvas_state("table") do

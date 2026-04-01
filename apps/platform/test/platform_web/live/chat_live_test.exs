@@ -5,6 +5,7 @@ defmodule PlatformWeb.ChatLiveTest do
   alias Platform.Accounts.User
   alias Platform.Agents.{Agent, AgentServer}
   alias Platform.Chat
+  alias Platform.Chat.Canvas
   alias Platform.Repo
 
   setup do
@@ -93,6 +94,62 @@ defmodule PlatformWeb.ChatLiveTest do
     # Text may appear once in the message stream and once in the textarea
     # (LiveView textarea content patching quirk). At most 2 occurrences.
     assert count_occurrences(html, "hello from test") in [1, 2]
+  end
+
+  test "opening a canvas refetches latest state from the database", %{conn: conn} do
+    conn = authenticated_conn(conn)
+
+    {:ok, view, _html} = live(conn, ~p"/chat/general", on_error: :warn)
+
+    user = Repo.get_by!(User, email: "chat_test@example.com")
+    space = Repo.get_by!(Chat.Space, slug: "general")
+
+    participant =
+      Repo.get_by(Chat.Participant,
+        space_id: space.id,
+        participant_type: "user",
+        participant_id: user.id
+      ) ||
+        elem(
+          Chat.add_participant(space.id, %{participant_type: "user", participant_id: user.id}),
+          1
+        )
+
+    {:ok, canvas, _message} =
+      Chat.create_canvas_with_message(space.id, participant.id, %{
+        canvas_type: "custom",
+        title: "Out-of-band canvas",
+        state: %{}
+      })
+
+    updated_state = %{
+      "version" => 1,
+      "root" => %{
+        "type" => "stack",
+        "props" => %{"gap" => 8},
+        "children" => [
+          %{
+            "type" => "heading",
+            "props" => %{"level" => 3, "value" => "Out-of-band render test"}
+          },
+          %{
+            "type" => "markdown",
+            "props" => %{"content" => "Canvas should render the latest stored state."}
+          }
+        ]
+      }
+    }
+
+    canvas
+    |> Canvas.changeset(%{"state" => updated_state})
+    |> Repo.update!()
+
+    render_click(view, "open_canvas", %{"canvas-id" => canvas.id})
+
+    html = render(view)
+
+    assert html =~ "Out-of-band render test"
+    assert html =~ "Canvas should render the latest stored state."
   end
 
   test "shows the shell agent indicator without a duplicate chat header presence badge", %{
