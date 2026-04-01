@@ -104,7 +104,7 @@ defmodule PlatformWeb.Chat.CanvasRenderer do
           phx-value-canvas-id={if(@inline, do: @canvas.id)}
         >
           <div class="p-4 flex flex-col gap-3">
-            <.render_node :for={node <- @a2ui_nodes} node={node} />
+            <.render_node :for={node <- @a2ui_nodes} node={node} canvas_id={@canvas.id} />
           </div>
         </div>
         """
@@ -200,7 +200,7 @@ defmodule PlatformWeb.Chat.CanvasRenderer do
           phx-click={if(@inline, do: "open_canvas")}
           phx-value-canvas-id={if(@inline, do: @canvas.id)}
         >
-          <.render_node node={@canvas.state["root"]} />
+          <.render_node node={@canvas.state["root"]} canvas_id={@canvas.id} />
         </div>
         """
 
@@ -217,7 +217,7 @@ defmodule PlatformWeb.Chat.CanvasRenderer do
           phx-click={if(@inline, do: "open_canvas")}
           phx-value-canvas-id={if(@inline, do: @canvas.id)}
         >
-          <.render_node node={@synthetic_root} />
+          <.render_node node={@synthetic_root} canvas_id={@canvas.id} />
         </div>
         """
 
@@ -232,7 +232,7 @@ defmodule PlatformWeb.Chat.CanvasRenderer do
           phx-click={if(@inline, do: "open_canvas")}
           phx-value-canvas-id={if(@inline, do: @canvas.id)}
         >
-          <.render_node node={@canvas.state} />
+          <.render_node node={@canvas.state} canvas_id={@canvas.id} />
         </div>
         """
 
@@ -249,6 +249,7 @@ defmodule PlatformWeb.Chat.CanvasRenderer do
 
   @doc false
   attr(:node, :map, required: true)
+  attr(:canvas_id, :string, default: nil)
 
   def render_node(%{node: %{"type" => "stack"} = node} = assigns) do
     assigns = assign(assigns, :node, node)
@@ -258,7 +259,7 @@ defmodule PlatformWeb.Chat.CanvasRenderer do
       class="flex flex-col"
       style={"gap: #{@node["props"]["gap"] || 8}px"}
     >
-      <.render_node :for={child <- @node["children"] || []} node={child} />
+      <.render_node :for={child <- @node["children"] || []} node={child} canvas_id={@canvas_id} />
     </div>
     """
   end
@@ -271,7 +272,7 @@ defmodule PlatformWeb.Chat.CanvasRenderer do
       class="flex flex-row flex-wrap"
       style={"gap: #{@node["props"]["gap"] || 8}px"}
     >
-      <.render_node :for={child <- @node["children"] || []} node={child} />
+      <.render_node :for={child <- @node["children"] || []} node={child} canvas_id={@canvas_id} />
     </div>
     """
   end
@@ -287,7 +288,7 @@ defmodule PlatformWeb.Chat.CanvasRenderer do
       >
         {@node["props"]["title"]}
       </p>
-      <.render_node :for={child <- @node["children"] || []} node={child} />
+      <.render_node :for={child <- @node["children"] || []} node={child} canvas_id={@canvas_id} />
     </div>
     """
   end
@@ -459,7 +460,7 @@ defmodule PlatformWeb.Chat.CanvasRenderer do
           {@complete} / {@total} tasks
         </span>
       </div>
-      <.render_node :for={child <- @node["children"] || []} node={child} />
+      <.render_node :for={child <- @node["children"] || []} node={child} canvas_id={@canvas_id} />
     </div>
     """
   end
@@ -511,7 +512,7 @@ defmodule PlatformWeb.Chat.CanvasRenderer do
       >
         {@node["props"]["label"]}
       </p>
-      <.render_node :for={child <- @node["children"] || []} node={child} />
+      <.render_node :for={child <- @node["children"] || []} node={child} canvas_id={@canvas_id} />
     </div>
     """
   end
@@ -527,7 +528,7 @@ defmodule PlatformWeb.Chat.CanvasRenderer do
       ]}
       phx-click="canvas_action"
       phx-value-value={@node["props"]["value"] || ""}
-      phx-value-canvas-id={@node["props"]["canvas_id"] || ""}
+      phx-value-canvas-id={@node["props"]["canvas_id"] || @canvas_id || ""}
     >
       {@node["props"]["label"] || "Action"}
     </button>
