@@ -25,7 +25,7 @@ defmodule Platform.TestOIDCStrategy do
          user: %{
            "sub" => params["sub"] || "test-subject",
            "email" => params["email"] || "user@example.com",
-           "name" => params["name"] || "Test User"
+            "name" => params["name"] || "Test User"
          },
          userinfo: %{
            "sub" => params["sub"] || "test-subject",
