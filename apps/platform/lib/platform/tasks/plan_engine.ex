@@ -132,16 +132,20 @@ defmodule Platform.Tasks.PlanEngine do
       emit_validation_telemetry(updated)
 
       # Auto-advance: if no more pending/running validations on this stage, advance.
-      # For any stage, a single validation failure is enough to fail the stage
-      # immediately — no point waiting for remaining validations.
+      # A newly failed validation should fail a running stage immediately, while
+      # a later failed->passed flip must be able to reopen and re-advance a stage
+      # that had already entered failed.
       stage = Repo.get!(Stage, updated.stage_id)
 
-      should_advance =
-        stage.status == "running" and
-          (all_validations_resolved?(stage.id) or status == "failed")
+      cond do
+        stage.status == "running" and status == "failed" ->
+          advance_stage(stage)
 
-      if should_advance do
-        advance_stage(stage)
+        all_validations_resolved?(stage.id) ->
+          maybe_advance_resolved_stage(stage)
+
+        true ->
+          :ok
       end
 
       updated
@@ -301,6 +305,29 @@ defmodule Platform.Tasks.PlanEngine do
       |> Repo.aggregate(:count)
 
     pending_count == 0
+  end
+
+  defp maybe_advance_resolved_stage(%Stage{} = stage) do
+    case stage.status do
+      "running" ->
+        advance_stage(stage)
+
+      "failed" ->
+        case stage_verdict(stage) do
+          :all_passed ->
+            {:ok, reopened_stage} = transition_stage(stage, "running")
+            advance_stage(reopened_stage)
+
+          :has_failures ->
+            :ok
+
+          :pending ->
+            :ok
+        end
+
+      _other ->
+        :ok
+    end
   end
 
   defp advance_stage(stage) do

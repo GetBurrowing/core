@@ -3,7 +3,7 @@ defmodule Platform.Orchestration.TaskRouterTest do
 
   import Ecto.Query
 
-  alias Platform.Orchestration.{ExecutionLease, TaskRouter}
+  alias Platform.Orchestration.{ExecutionLease, ExecutionSpace, TaskRouter}
   alias Platform.Tasks
 
   setup do
@@ -230,6 +230,16 @@ defmodule Platform.Orchestration.TaskRouterTest do
 
       updated_task = Tasks.get_task_detail(task.id)
       assert updated_task.status == "in_review"
+
+      messages =
+        execution_space.id
+        |> ExecutionSpace.list_messages_with_participants()
+        |> Enum.map(& &1.content)
+
+      assert Enum.any?(
+               messages,
+               &String.contains?(&1, "Heartbeat suppressed: waiting for manual approval")
+             )
     end
 
     test "approved plan starts the first pending execution stage", %{
@@ -376,6 +386,14 @@ defmodule Platform.Orchestration.TaskRouterTest do
 
       updated_task = Tasks.get_task_detail(task.id)
       assert updated_task.status == "in_progress"
+
+      space = ExecutionSpace.find_by_task_id(task.id)
+      messages = ExecutionSpace.list_messages_with_participants(space.id)
+
+      assert Enum.any?(
+               messages,
+               &String.contains?(&1.content, "Stage failure bounced task back to in_progress")
+             )
     end
 
     test "ignores task_updated for other tasks", %{
@@ -494,6 +512,18 @@ defmodule Platform.Orchestration.TaskRouterTest do
       status = TaskRouter.current_status(task.id)
       assert status.status in [:dispatching, :running]
       assert status.escalation_count == 0
+
+      space = ExecutionSpace.find_by_task_id(task.id)
+      messages = ExecutionSpace.list_messages_with_participants(space.id)
+
+      assert Enum.any?(messages, &String.contains?(&1.content, "Watchdog: runtime went silent"))
+
+      assert Enum.any?(
+               messages,
+               &String.contains?(&1.content, "pending_validations=test_pass:pending")
+             )
+
+      assert Enum.any?(messages, &String.contains?(&1.content, "lease=active"))
     end
   end
 

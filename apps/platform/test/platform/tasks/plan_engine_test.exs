@@ -80,6 +80,26 @@ defmodule Platform.Tasks.PlanEngineTest do
       assert updated_stage.status == "failed"
     end
 
+    test "reopens a failed stage when its last failed validation later passes", %{
+      stage: stage,
+      v1: v1,
+      v2: v2
+    } do
+      PlanEngine.evaluate_validation(v1.id, %{status: "passed"})
+      PlanEngine.evaluate_validation(v2.id, %{status: "failed"})
+
+      failed_stage = Platform.Repo.get!(Platform.Tasks.Stage, stage.id)
+      assert failed_stage.status == "failed"
+      assert failed_stage.completed_at != nil
+
+      PlanEngine.evaluate_validation(v2.id, %{status: "passed"})
+
+      recovered_stage = Platform.Repo.get!(Platform.Tasks.Stage, stage.id)
+      assert recovered_stage.status == "passed"
+      assert recovered_stage.started_at != nil
+      assert recovered_stage.completed_at != nil
+    end
+
     test "does not advance when validations are still pending", %{stage: stage, v1: v1} do
       PlanEngine.evaluate_validation(v1.id, %{status: "passed"})
 
@@ -132,6 +152,26 @@ defmodule Platform.Tasks.PlanEngineTest do
       assert {:ok, updated_plan} = PlanEngine.advance(plan.id)
       stage = Enum.find(updated_plan.stages, &(&1.position == 1))
       assert stage.status == "failed"
+    end
+
+    test "completes the plan when a previously failed final-stage validation later passes", %{
+      plan: plan
+    } do
+      {:ok, s1} = Tasks.create_stage(%{plan_id: plan.id, position: 1, name: "Deploy"})
+      {:ok, _} = PlanEngine.start_stage(s1.id)
+      {:ok, v1} = Tasks.create_validation(%{stage_id: s1.id, kind: "ci_check"})
+
+      PlanEngine.evaluate_validation(v1.id, %{status: "failed"})
+      failed_plan = Platform.Repo.get!(Platform.Tasks.Plan, plan.id)
+      refute failed_plan.status == "completed"
+
+      PlanEngine.evaluate_validation(v1.id, %{status: "passed"})
+
+      completed_plan = Platform.Repo.get!(Platform.Tasks.Plan, plan.id)
+      assert completed_plan.status == "completed"
+
+      recovered_stage = Platform.Repo.get!(Platform.Tasks.Stage, s1.id)
+      assert recovered_stage.status == "passed"
     end
 
     test "no-op when validations are still pending", %{plan: plan} do

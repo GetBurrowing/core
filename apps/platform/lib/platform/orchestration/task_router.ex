@@ -139,6 +139,11 @@ defmodule Platform.Orchestration.TaskRouter do
         state = maybe_mark_review_task_in_review(state)
 
         if waiting_for_human_review?(state) do
+          maybe_log_heartbeat_suppressed(
+            state,
+            find_stage(Tasks.current_plan(task_id), state.current_stage_id)
+          )
+
           send(self(), :dispatch)
           {:ok, %{state | status: :waiting_human}}
         else
@@ -389,6 +394,14 @@ defmodule Platform.Orchestration.TaskRouter do
           end
 
           # Re-dispatch so the agent picks up the in_progress prompt
+          if state.execution_space_id do
+            ExecutionSpace.post_log(
+              state.execution_space_id,
+              "Stage failure bounced task back to in_progress | " <>
+                diagnostic_snapshot(state, task, stage_override: stage)
+            )
+          end
+
           send(self(), :dispatch)
           state |> Map.put(:status, :running) |> schedule_heartbeat()
         else
@@ -399,6 +412,7 @@ defmodule Platform.Orchestration.TaskRouter do
               send(self(), :dispatch)
             end
 
+            maybe_log_heartbeat_suppressed(state, stage)
             state |> cancel_heartbeat() |> Map.put(:status, :waiting_human)
           else
             # When a new stage becomes running, re-dispatch so the agent gets
@@ -671,7 +685,8 @@ defmodule Platform.Orchestration.TaskRouter do
     if state.execution_space_id do
       ExecutionSpace.post_log(
         state.execution_space_id,
-        "Stall detected: no runtime activity for #{idle_seconds}s on stage #{state.current_stage_id || "unknown"} | Escalation #{new_count}/#{max_esc}"
+        "Stall detected: no runtime activity for #{idle_seconds}s | Escalation #{new_count}/#{max_esc} | " <>
+          diagnostic_snapshot(state, task)
       )
     end
 
@@ -704,7 +719,8 @@ defmodule Platform.Orchestration.TaskRouter do
     if state.execution_space_id do
       ExecutionSpace.post_log(
         state.execution_space_id,
-        "Watchdog: runtime went silent for #{idle_seconds}s during #{phase}; abandoning the current attempt and launching a fresh retry"
+        "Watchdog: runtime went silent for #{idle_seconds}s during #{phase}; abandoning the current attempt and launching a fresh retry | " <>
+          diagnostic_snapshot(state, task)
       )
     end
 
@@ -727,7 +743,7 @@ defmodule Platform.Orchestration.TaskRouter do
   defp runtime_phase_for_task(%{status: "deploying"}), do: "deploying"
   defp runtime_phase_for_task(_task), do: "execution"
 
-  defp escalate(state, _task) do
+  defp escalate(state, task) do
     Logger.warning(
       "[TaskRouter] task #{state.task_id} stalled after #{state.escalation_count + 1} escalations"
     )
@@ -738,7 +754,8 @@ defmodule Platform.Orchestration.TaskRouter do
     if state.execution_space_id do
       ExecutionSpace.post_log(
         state.execution_space_id,
-        "Escalation: task stalled after #{state.escalation_count} missed heartbeats | Assignee: #{state.assignee.id}"
+        "Escalation: task stalled after #{state.escalation_count} missed heartbeats | Assignee: #{state.assignee.id} | " <>
+          diagnostic_snapshot(state, task)
       )
     end
 
@@ -811,6 +828,16 @@ defmodule Platform.Orchestration.TaskRouter do
         |> schedule_heartbeat()
 
       "execution.blocked" ->
+        task = Tasks.get_task_detail(state.task_id)
+
+        if base_state.execution_space_id && task do
+          ExecutionSpace.post_log(
+            base_state.execution_space_id,
+            "Heartbeat suppressed: runtime reported blocker | " <>
+              runtime_event_summary(event) <> " | " <> diagnostic_snapshot(base_state, task)
+          )
+        end
+
         base_state
         |> cancel_heartbeat()
         |> Map.put(:status, :waiting_human)
@@ -821,6 +848,16 @@ defmodule Platform.Orchestration.TaskRouter do
         |> Map.put(:status, :running)
 
       type when type in ["execution.failed", "execution.abandoned", "assignment.rejected"] ->
+        task = Tasks.get_task_detail(state.task_id)
+
+        if base_state.execution_space_id && task do
+          ExecutionSpace.post_log(
+            base_state.execution_space_id,
+            "Runtime failure detected | event=#{type} | " <>
+              runtime_event_summary(event) <> " | " <> diagnostic_snapshot(base_state, task)
+          )
+        end
+
         base_state
         |> cancel_heartbeat()
         |> Map.put(:status, :stalled)
@@ -858,6 +895,187 @@ defmodule Platform.Orchestration.TaskRouter do
   defp latest_activity_age_ms(state) do
     DateTime.diff(DateTime.utc_now(), latest_activity_at(state), :millisecond)
     |> max(0)
+  end
+
+  defp maybe_log_heartbeat_suppressed(%State{execution_space_id: nil}, _stage), do: :ok
+
+  defp maybe_log_heartbeat_suppressed(%State{} = state, stage) do
+    task = Tasks.get_task_detail(state.task_id)
+
+    if task do
+      ExecutionSpace.post_log(
+        state.execution_space_id,
+        "Heartbeat suppressed: waiting for manual approval before more agent work | " <>
+          diagnostic_snapshot(state, task, stage_override: stage)
+      )
+    end
+  end
+
+  defp diagnostic_snapshot(%State{} = state, task, opts \\ []) do
+    plan = Tasks.current_plan(state.task_id)
+
+    stage =
+      Keyword.get(opts, :stage_override) ||
+        find_stage(plan, state.current_stage_id) || current_running_stage(plan) ||
+        first_pending_stage(plan)
+
+    phase = runtime_phase_for_task(task)
+    lease = RuntimeSupervision.latest_lease_for_task(state.task_id, phase)
+
+    [
+      "task_status=#{task.status}",
+      stage_diagnostic(stage),
+      deploy_diagnostic(task, stage),
+      validation_diagnostic(stage),
+      lease_diagnostic(lease),
+      heartbeat_diagnostic(state, stage)
+    ]
+    |> Enum.reject(&(&1 in [nil, ""]))
+    |> Enum.join(" | ")
+  end
+
+  defp runtime_event_summary(event) do
+    payload = event.payload || %{}
+
+    [
+      payload["description"] || payload[:description],
+      payload["error"] || payload[:error],
+      payload["summary"] || payload[:summary],
+      payload["block_reason"] || payload[:block_reason]
+    ]
+    |> Enum.reject(&is_nil/1)
+    |> Enum.join(" | ")
+    |> case do
+      "" -> "no extra runtime details"
+      details -> details
+    end
+  end
+
+  defp stage_diagnostic(nil), do: "stage=unknown"
+
+  defp stage_diagnostic(stage) do
+    "stage=#{stage.name || "unknown"}(#{stage.id}) status=#{stage.status}"
+  end
+
+  defp validation_diagnostic(nil), do: "validations=unknown"
+
+  defp validation_diagnostic(stage) do
+    validations = stage_validations(stage)
+
+    cond do
+      validations == [] ->
+        "validations=none"
+
+      true ->
+        pending =
+          validations
+          |> Enum.filter(&(&1.status in ["pending", "running", "failed"]))
+          |> Enum.map_join(", ", fn validation ->
+            "#{validation.kind}:#{validation.status}"
+          end)
+
+        if pending == "", do: "pending_validations=none", else: "pending_validations=#{pending}"
+    end
+  end
+
+  defp deploy_diagnostic(task, stage) do
+    name = String.downcase((stage && stage.name) || task.title || "")
+    requested = task.deploy_target
+    targets = available_deploy_targets(task)
+
+    cond do
+      not String.contains?(name, "deploy") and is_nil(requested) and targets == [] ->
+        nil
+
+      is_nil(requested) and targets == [] ->
+        "deploy_target=missing(task.deploy_target unset; project has no deploy_targets)"
+
+      is_nil(requested) ->
+        "deploy_target=unresolved(task.deploy_target unset; available=#{Enum.join(targets, ",")})"
+
+      match?(%{project: %{}}, task) ->
+        case DeployResolver.resolve(task.project, requested) do
+          {:ok, _target} ->
+            "deploy_target=#{requested}"
+
+          {:error, reason} ->
+            "deploy_target=unresolved(requested=#{requested}; error=#{inspect(reason)}; available=#{Enum.join(targets, ",")})"
+        end
+
+      true ->
+        "deploy_target=#{requested}"
+    end
+  end
+
+  defp available_deploy_targets(task) do
+    deploy_config =
+      case task.project do
+        %{deploy_config: config} when is_map(config) -> config
+        _ -> %{}
+      end
+
+    case Map.get(deploy_config, "deploy_targets") || Map.get(deploy_config, :deploy_targets) do
+      targets when is_list(targets) ->
+        Enum.map(targets, fn target -> target["name"] || inspect(target) end)
+
+      _ ->
+        []
+    end
+  end
+
+  defp lease_diagnostic(nil), do: "lease=none"
+
+  defp lease_diagnostic(lease) do
+    worker = if lease.runtime_worker_ref, do: " worker=#{lease.runtime_worker_ref}", else: ""
+
+    reason =
+      if lease.block_reason do
+        " reason=#{lease.block_reason}"
+      else
+        ""
+      end
+
+    expires =
+      case lease.expires_at do
+        %DateTime{} = expires_at -> " expires_at=#{DateTime.to_iso8601(expires_at)}"
+        _ -> ""
+      end
+
+    "lease=#{lease.status}#{worker}#{reason}#{expires}"
+  end
+
+  defp heartbeat_diagnostic(%State{} = state, stage) do
+    cond do
+      manual_approval_stage?(stage) and pending_review_request?(state.task_id) ->
+        "heartbeat=suppressed_waiting_human"
+
+      state.status == :waiting_human ->
+        "heartbeat=waiting_human"
+
+      true ->
+        "heartbeat=#{state.status}:escalations=#{state.escalation_count}"
+    end
+  end
+
+  defp manual_approval_stage?(nil), do: false
+
+  defp manual_approval_stage?(stage) do
+    pending_validations =
+      stage_validations(stage)
+      |> Enum.filter(&(&1.status == "pending"))
+
+    pending_validations != [] &&
+      Enum.all?(pending_validations, &(&1.kind == "manual_approval"))
+  end
+
+  defp stage_validations(nil), do: []
+
+  defp stage_validations(stage) do
+    case Map.get(stage, :validations) do
+      validations when is_list(validations) -> validations
+      %Ecto.Association.NotLoaded{} -> Tasks.list_validations(stage.id)
+      _ -> []
+    end
   end
 
   # ── Stage helpers ──────────────────────────────────────────────────────

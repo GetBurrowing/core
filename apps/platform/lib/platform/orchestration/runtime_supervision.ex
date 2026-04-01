@@ -84,6 +84,18 @@ defmodule Platform.Orchestration.RuntimeSupervision do
     |> Repo.one()
   end
 
+  @doc "Return the most recent lease for a task, including failed/expired ones."
+  def latest_lease_for_task(task_id, phase \\ nil) do
+    expire_stale_leases(Repo, task_id: task_id, phase: phase)
+
+    ExecutionLease
+    |> where([l], l.task_id == ^task_id)
+    |> maybe_filter(:phase, phase)
+    |> order_by([l], desc: l.updated_at, desc: l.inserted_at)
+    |> limit(1)
+    |> Repo.one()
+  end
+
   def current_lease_for_task_runtime(task_id, runtime_id) do
     expire_stale_leases(Repo, task_id: task_id, runtime_id: runtime_id)
 
