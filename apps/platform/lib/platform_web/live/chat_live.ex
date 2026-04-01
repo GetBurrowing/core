@@ -760,6 +760,7 @@ defmodule PlatformWeb.ChatLive do
         )
 
         ChatPubSub.broadcast(canvas.space_id, {:canvas_action, canvas, value})
+        dispatch_canvas_action_to_agent(canvas, value)
         {:noreply, socket}
     end
   end
@@ -1259,6 +1260,12 @@ defmodule PlatformWeb.ChatLive do
      socket
      |> assign(:pins, pins)
      |> assign(:pinned_message_ids, pinned_message_ids)}
+  end
+
+  def handle_info({:canvas_action, _canvas, _value}, socket) do
+    # Canvas action events are handled at the source (handle_event);
+    # other LiveView clients just ignore the PubSub broadcast.
+    {:noreply, socket}
   end
 
   def handle_info({:canvas_created, canvas}, socket) do
@@ -3007,6 +3014,50 @@ defmodule PlatformWeb.ChatLive do
 
   defp find_canvas(socket, canvas_id) do
     Chat.get_canvas(canvas_id) || Enum.find(socket.assigns.canvases, &(&1.id == canvas_id))
+  end
+
+  defp dispatch_canvas_action_to_agent(canvas, value) do
+    require Logger
+
+    with %{participant_type: "agent", participant_id: agent_id} <-
+           Chat.get_participant(canvas.created_by),
+         %Platform.Agents.Agent{} = agent <- Platform.Agents.get_agent(agent_id),
+         runtime_id when is_binary(runtime_id) <- agent.runtime_id,
+         topic = "runtime:#{runtime_id}",
+         bundle = Platform.Chat.ContextPlane.build_context_bundle(canvas.space_id),
+         tools = PlatformWeb.Channels.ToolSurface.tool_definitions() do
+      payload = %{
+        signal: %{
+          reason: :canvas_action,
+          space_id: canvas.space_id,
+          canvas_id: canvas.id,
+          canvas_title: canvas.title,
+          action_value: value
+        },
+        message: %{
+          content: "Action button pressed on canvas \"#{canvas.title || canvas.id}\": #{value}",
+          author: "system"
+        },
+        history: [],
+        context: bundle,
+        tools: tools
+      }
+
+      case PlatformWeb.Endpoint.broadcast(topic, "attention", payload) do
+        :ok ->
+          Logger.info(
+            "canvas_action dispatched to agent #{agent_id} (runtime: #{runtime_id}) value=#{value}"
+          )
+
+        {:error, reason} ->
+          Logger.warning("canvas_action dispatch failed: #{inspect(reason)}")
+      end
+    else
+      _ ->
+        Logger.debug(
+          "canvas_action: creator is not an agent or runtime not found, skipping dispatch"
+        )
+    end
   end
 
   defp default_canvas_state("table") do
