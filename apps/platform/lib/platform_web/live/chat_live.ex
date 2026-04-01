@@ -2382,14 +2382,15 @@ defmodule PlatformWeb.ChatLive do
                       phx-click={
                         JS.dispatch("chat:insert-mention",
                           to: "##{@compose_form[:text].id}",
-                          detail: %{name: suggestion.display_name || "User"}
+                          detail: %{name: participant_name(suggestion)}
                         )
                       }
                       class="flex w-full items-center gap-2 px-3 py-2 text-sm hover:bg-base-200 text-left transition-colors"
                     >
                       <%= if suggestion.participant_type == "agent" do %>
                         <div class="w-6 h-6 rounded-full bg-primary text-primary-content flex items-center justify-center text-xs font-bold flex-shrink-0">
-                          {(suggestion.display_name || "U")
+                          {suggestion
+                          |> participant_name()
                           |> String.trim()
                           |> String.first()
                           |> String.upcase()}
@@ -3831,18 +3832,24 @@ defmodule PlatformWeb.ChatLive do
   defp participant_identity(participant, user \\ nil)
 
   defp participant_identity(%{participant_type: "agent"} = participant, _user) do
+    name = participant.display_name || "Agent"
+
     %{
       participant_type: "agent",
-      name: participant.display_name || "Agent",
+      name: name,
+      display_name: name,
       avatar_url: participant.avatar_url,
       avatar_seed: participant.participant_id || participant.id
     }
   end
 
   defp participant_identity(participant, user) do
+    name = participant_name(participant, user)
+
     %{
       participant_type: "user",
-      name: participant_name(participant, user),
+      name: name,
+      display_name: name,
       avatar_url: participant.avatar_url || (user && user.avatar_url),
       avatar_seed: participant_avatar_seed(participant, user)
     }
