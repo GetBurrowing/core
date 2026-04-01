@@ -170,21 +170,31 @@ defmodule PlatformWeb.AuthController do
     end
   end
 
-  defp extract_oidc_user(%{user: user}), do: normalize_oidc_user(user)
-  defp extract_oidc_user(%{"user" => user}), do: normalize_oidc_user(user)
+  defp extract_oidc_user(auth) when is_map(auth) do
+    user_claims = oidc_claims(auth, :user)
+    userinfo_claims = oidc_claims(auth, :userinfo)
+    id_token_claims = oidc_claims(auth, :id_token)
 
-  defp extract_oidc_user(%{userinfo: user}), do: normalize_oidc_user(user)
-  defp extract_oidc_user(%{"userinfo" => user}), do: normalize_oidc_user(user)
+    if Enum.all?([user_claims, userinfo_claims, id_token_claims], &(map_size(&1) == 0)) do
+      {:error, :missing_oidc_user}
+    else
+      claims =
+        id_token_claims
+        |> Map.merge(user_claims)
+        |> Map.merge(userinfo_claims)
+        |> Map.put(
+          "picture",
+          id_token_claims["picture"] || userinfo_claims["picture"] || user_claims["picture"]
+        )
 
-  defp extract_oidc_user(%{id_token: claims}) when is_map(claims), do: normalize_oidc_user(claims)
-
-  defp extract_oidc_user(%{"id_token" => claims}) when is_map(claims),
-    do: normalize_oidc_user(claims)
+      normalize_oidc_user(claims)
+    end
+  end
 
   defp extract_oidc_user(_auth), do: {:error, :missing_oidc_user}
 
   defp normalize_oidc_user(user) do
-    user = for {key, value} <- user, into: %{}, do: {to_string(key), value}
+    user = oidc_claims(user)
 
     name =
       user["name"] ||
@@ -195,14 +205,36 @@ defmodule PlatformWeb.AuthController do
         user["preferred_username"] ||
         user["email"]
 
+    picture = normalize_optional_string(user["picture"])
+
     case {user["sub"], user["email"], name} do
       {sub, email, n} when is_binary(sub) and is_binary(email) and is_binary(n) ->
-        {:ok, %{sub: sub, email: email, name: n}}
+        {:ok, %{sub: sub, email: email, name: n, avatar_url: picture}}
 
       _ ->
         {:error, :invalid_oidc_user}
     end
   end
+
+  defp oidc_claims(claims) when is_map(claims) do
+    for {key, value} <- claims, into: %{}, do: {to_string(key), value}
+  end
+
+  defp oidc_claims(_claims), do: %{}
+
+  defp oidc_claims(auth, key) when is_map(auth),
+    do: oidc_claims(Map.get(auth, key) || Map.get(auth, Atom.to_string(key)))
+
+  defp normalize_optional_string(value) when is_binary(value) do
+    value
+    |> String.trim()
+    |> case do
+      "" -> nil
+      trimmed -> trimmed
+    end
+  end
+
+  defp normalize_optional_string(_value), do: nil
 
   defp extract_id_token(%{token: token}), do: extract_id_token(token)
   defp extract_id_token(%{"token" => token}), do: extract_id_token(token)

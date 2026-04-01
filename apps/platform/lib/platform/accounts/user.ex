@@ -9,13 +9,15 @@ defmodule Platform.Accounts.User do
     field(:email, :string)
     field(:name, :string)
     field(:oidc_sub, :string)
+    field(:avatar_url, :string)
+    field(:avatar_source, Ecto.Enum, values: [:oidc, :local, :generated])
 
     timestamps()
   end
 
   def changeset(user, attrs) do
     user
-    |> cast(attrs, [:email, :name, :oidc_sub])
+    |> cast(attrs, [:email, :name, :oidc_sub, :avatar_url, :avatar_source])
     |> validate_required([:email, :name, :oidc_sub])
     |> validate_format(:email, ~r/^[^\s]+@[^\s]+$/)
     |> unique_constraint(:email)

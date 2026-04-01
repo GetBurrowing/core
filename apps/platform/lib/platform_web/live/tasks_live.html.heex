@@ -178,13 +178,27 @@
                     title="Active run"
                   />
                   <%!-- Assignee --%>
-                  <span
-                    :if={assignee_initials(task)}
-                    class="flex size-5 items-center justify-center rounded-full bg-base-300 text-[10px] font-bold text-base-content/60"
-                    title={"#{task.assignee_type}: #{task.assignee_id}"}
-                  >
-                    {assignee_initials(task)}
-                  </span>
+                  <% assignee = assignee_identity(task, @users_by_id, @agents_by_id) %>
+                  <%= if assignee do %>
+                    <%= if assignee.type == :user do %>
+                      <.human_avatar
+                        name={assignee.name}
+                        avatar_url={assignee.avatar_url}
+                        seed={assignee.seed}
+                        size="xs"
+                        class="shrink-0"
+                        title={assignee.name}
+                      />
+                    <% else %>
+                      <span
+                        class="flex size-5 items-center justify-center rounded-full bg-accent/15 text-[10px] font-bold text-accent ring-1 ring-accent/20"
+                        title={assignee.name}
+                        data-avatar-kind="agent"
+                      >
+                        {agent_initials(assignee.name)}
+                      </span>
+                    <% end %>
+                  <% end %>
                 </div>
               </div>
 

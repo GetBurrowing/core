@@ -183,7 +183,14 @@ defmodule PlatformWeb.ChatLive do
       end
 
       participants = Chat.list_participants(space.id)
-      participants_map = Map.new(participants, fn p -> {p.id, p.display_name || "User"} end)
+
+      users_by_id =
+        participants
+        |> Enum.filter(&(&1.participant_type == "user"))
+        |> Enum.map(& &1.participant_id)
+        |> Accounts.get_users_map()
+
+      participants_map = build_participant_identity_map(participants, users_by_id)
 
       agent_participant_ids =
         participants |> Enum.filter(&(&1.participant_type == "agent")) |> MapSet.new(& &1.id)
@@ -458,13 +465,21 @@ defmodule PlatformWeb.ChatLive do
           []
 
         space ->
-          space.id
-          |> Chat.list_participants()
+          participants = Chat.list_participants(space.id)
+
+          users_by_id =
+            participants
+            |> Enum.filter(&(&1.participant_type == "user"))
+            |> Enum.map(& &1.participant_id)
+            |> Accounts.get_users_map()
+
+          participants
           |> Enum.filter(fn p ->
             name = (p.display_name || "") |> String.downcase()
             String.starts_with?(name, String.downcase(query))
           end)
           |> Enum.take(8)
+          |> Enum.map(&participant_identity(&1, Map.get(users_by_id, &1.participant_id)))
       end
 
     {:noreply, assign(socket, :mention_suggestions, suggestions)}
@@ -1285,9 +1300,16 @@ defmodule PlatformWeb.ChatLive do
   end
 
   def handle_info({:participant_joined, participant}, socket) do
+    user =
+      if participant.participant_type == "user" do
+        Accounts.get_user(participant.participant_id)
+      else
+        nil
+      end
+
     {:noreply,
      update(socket, :participants_map, fn map ->
-       Map.put(map, participant.id, participant.display_name || "User")
+       Map.put(map, participant.id, participant_identity(participant, user))
      end)}
   end
 
@@ -1982,15 +2004,18 @@ defmodule PlatformWeb.ChatLive do
             >
               <%!-- Avatar circle (hidden when grouped with previous message via JS) --%>
               <div class="flex-shrink-0 mt-0.5 message-avatar">
-                <div class={[
-                  "w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold select-none",
-                  if(MapSet.member?(@agent_participant_ids, msg.participant_id),
-                    do: "bg-base-300 text-primary msg-agent-avatar",
-                    else: "bg-primary text-primary-content"
-                  )
-                ]}>
-                  {avatar_initial(@participants_map, msg.participant_id)}
-                </div>
+                <%= if MapSet.member?(@agent_participant_ids, msg.participant_id) do %>
+                  <div class="w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold select-none bg-base-300 text-primary msg-agent-avatar">
+                    {avatar_initial(@participants_map, msg.participant_id)}
+                  </div>
+                <% else %>
+                  <.human_avatar
+                    name={sender_name(@participants_map, msg.participant_id)}
+                    avatar_url={sender_avatar_url(@participants_map, msg.participant_id)}
+                    seed={sender_avatar_seed(@participants_map, msg.participant_id)}
+                    size="md"
+                  />
+                <% end %>
               </div>
 
               <%!-- Message body --%>
@@ -2358,14 +2383,24 @@ defmodule PlatformWeb.ChatLive do
                       }
                       class="flex w-full items-center gap-2 px-3 py-2 text-sm hover:bg-base-200 text-left transition-colors"
                     >
-                      <div class="w-6 h-6 rounded-full bg-primary text-primary-content flex items-center justify-center text-xs font-bold flex-shrink-0">
-                        {(suggestion.display_name || "U")
-                        |> String.trim()
-                        |> String.first()
-                        |> String.upcase()}
-                      </div>
+                      <%= if suggestion.participant_type == "agent" do %>
+                        <div class="w-6 h-6 rounded-full bg-primary text-primary-content flex items-center justify-center text-xs font-bold flex-shrink-0">
+                          {(suggestion.display_name || "U")
+                          |> String.trim()
+                          |> String.first()
+                          |> String.upcase()}
+                        </div>
+                      <% else %>
+                        <.human_avatar
+                          name={participant_name(suggestion)}
+                          avatar_url={participant_avatar_url(suggestion)}
+                          seed={participant_avatar_seed(suggestion)}
+                          size="sm"
+                          class="flex-shrink-0"
+                        />
+                      <% end %>
                       <span class="flex-1 truncate font-medium">
-                        {suggestion.display_name || "User"}
+                        {participant_name(suggestion)}
                       </span>
                       <span class={[
                         "rounded-full px-1.5 py-0.5 text-[10px] uppercase tracking-wider",
@@ -2978,9 +3013,13 @@ defmodule PlatformWeb.ChatLive do
                   if(is_selected, do: "bg-primary/10 text-primary", else: "hover:bg-base-200")
                 ]}
               >
-                <span class="w-6 h-6 rounded-full bg-base-300 flex items-center justify-center text-xs font-bold">
-                  {String.first(user.name || "U") |> String.upcase()}
-                </span>
+                <.human_avatar
+                  name={user.name || user.email || "User"}
+                  avatar_url={user.avatar_url}
+                  seed={user.oidc_sub || user.email || user.id}
+                  size="sm"
+                  class="flex-shrink-0"
+                />
                 <span class="truncate">{user.name || user.email}</span>
                 <span :if={is_selected} class="ml-auto text-xs">selected</span>
               </button>
@@ -3778,14 +3817,102 @@ defmodule PlatformWeb.ChatLive do
     _ -> false
   end
 
+  defp build_participant_identity_map(participants, users_by_id) do
+    Map.new(participants, fn participant ->
+      {participant.id,
+       participant_identity(participant, Map.get(users_by_id, participant.participant_id))}
+    end)
+  end
+
+  defp participant_identity(participant, user \\ nil)
+
+  defp participant_identity(%{participant_type: "agent"} = participant, _user) do
+    %{
+      participant_type: "agent",
+      name: participant.display_name || "Agent",
+      avatar_url: participant.avatar_url,
+      avatar_seed: participant.participant_id || participant.id
+    }
+  end
+
+  defp participant_identity(participant, user) do
+    %{
+      participant_type: "user",
+      name: participant_name(participant, user),
+      avatar_url: participant.avatar_url || (user && user.avatar_url),
+      avatar_seed: participant_avatar_seed(participant, user)
+    }
+  end
+
+  defp participant_name(participant), do: participant_name(participant, nil)
+
+  defp participant_name(%{name: name}, _user) when is_binary(name) and name != "", do: name
+
+  defp participant_name(%{resolved_name: name}, _user) when is_binary(name) and name != "",
+    do: name
+
+  defp participant_name(%{display_name: name}, _user) when is_binary(name) and name != "",
+    do: name
+
+  defp participant_name(_participant, %{name: name}) when is_binary(name) and name != "", do: name
+
+  defp participant_name(_participant, %{email: email}) when is_binary(email) and email != "",
+    do: email
+
+  defp participant_name(_participant, _user), do: "User"
+
+  defp participant_avatar_url(%{avatar_url: avatar_url}) when is_binary(avatar_url),
+    do: avatar_url
+
+  defp participant_avatar_url(_participant), do: nil
+
+  defp participant_avatar_seed(%{avatar_seed: seed}) when not is_nil(seed), do: seed
+
+  defp participant_avatar_seed(participant, user \\ nil) do
+    cond do
+      user && is_binary(user.oidc_sub) && user.oidc_sub != "" ->
+        user.oidc_sub
+
+      user && is_binary(user.email) && user.email != "" ->
+        user.email
+
+      is_binary(participant.participant_id) && participant.participant_id != "" ->
+        participant.participant_id
+
+      is_binary(participant.id) && participant.id != "" ->
+        participant.id
+
+      true ->
+        "user"
+    end
+  end
+
   defp sender_name(participants_map, participant_id) do
-    Map.get(participants_map, participant_id, "User")
+    case Map.get(participants_map, participant_id) do
+      %{name: name} when is_binary(name) and name != "" -> name
+      name when is_binary(name) and name != "" -> name
+      _ -> "User"
+    end
+  end
+
+  defp sender_avatar_url(participants_map, participant_id) do
+    case Map.get(participants_map, participant_id) do
+      %{avatar_url: avatar_url} when is_binary(avatar_url) -> avatar_url
+      _ -> nil
+    end
+  end
+
+  defp sender_avatar_seed(participants_map, participant_id) do
+    case Map.get(participants_map, participant_id) do
+      %{avatar_seed: avatar_seed} when not is_nil(avatar_seed) -> avatar_seed
+      %{name: name} when is_binary(name) and name != "" -> name
+      name when is_binary(name) and name != "" -> name
+      _ -> participant_id || "user"
+    end
   end
 
   defp avatar_initial(participants_map, participant_id) do
-    name = Map.get(participants_map, participant_id, "U")
-
-    name
+    sender_name(participants_map, participant_id)
     |> String.trim()
     |> String.first()
     |> case do

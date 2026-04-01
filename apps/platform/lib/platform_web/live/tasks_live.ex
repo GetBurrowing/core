@@ -41,7 +41,10 @@ defmodule PlatformWeb.TasksLive do
 
     projects = Tasks.list_projects()
     all_tasks = Tasks.list_all_tasks()
+    users = Accounts.list_users()
+    users_by_id = Map.new(users, &{&1.id, &1})
     agents = Chat.list_agents_for_picker()
+    agents_by_id = Map.new(agents, &{&1.id, &1})
     default_task_agent_id = default_task_agent_id(agents)
 
     {:ok,
@@ -83,6 +86,11 @@ defmodule PlatformWeb.TasksLive do
      |> assign(:epics_collapsed, false)
      |> assign(:agents, agents)
      |> assign(:agent_names, Map.new(agents, fn a -> {a.id, a.name} end))
+     |> assign(:users_by_id, users_by_id)
+     |> assign(:agents_by_id, agents_by_id)
+     |> assign(:agent_names, Map.new(agents, fn a -> {a.id, a.name} end))
+     |> assign(:users_by_id, users_by_id)
+     |> assign(:agents_by_id, agents_by_id)
      |> assign(:validation_modes, MapSet.new())
      |> assign(:manual_validation_text, "")
      |> assign(:deploy_strategy_type, "inherit")
@@ -1171,15 +1179,65 @@ defmodule PlatformWeb.TasksLive do
 
   defp plan_progress(_), do: nil
 
-  defp assignee_initials(%Task{assignee_type: nil}), do: nil
+  defp assignee_identity(%Task{assignee_type: nil}, _users_by_id, _agents_by_id), do: nil
 
-  defp assignee_initials(%Task{assignee_type: "agent", assignee_id: id}) when is_binary(id),
-    do: "A"
+  defp assignee_identity(
+         %Task{assignee_type: "agent", assignee_id: id},
+         _users_by_id,
+         agents_by_id
+       )
+       when is_binary(id) do
+    agent = Map.get(agents_by_id, id)
 
-  defp assignee_initials(%Task{assignee_type: "user", assignee_id: id}) when is_binary(id),
-    do: "U"
+    %{
+      type: :agent,
+      name: agent_name(agent),
+      seed: id
+    }
+  end
 
-  defp assignee_initials(_), do: nil
+  defp assignee_identity(
+         %Task{assignee_type: "user", assignee_id: id},
+         users_by_id,
+         _agents_by_id
+       )
+       when is_binary(id) do
+    user = Map.get(users_by_id, id)
+
+    %{
+      type: :user,
+      name: user_name(user),
+      avatar_url: user && user.avatar_url,
+      seed: user_seed(user, id)
+    }
+  end
+
+  defp assignee_identity(_task, _users_by_id, _agents_by_id), do: nil
+
+  defp agent_name(%{name: name}) when is_binary(name) and name != "", do: name
+  defp agent_name(_agent), do: "Agent"
+
+  defp user_name(%{name: name}) when is_binary(name) and name != "", do: name
+  defp user_name(%{email: email}) when is_binary(email) and email != "", do: email
+  defp user_name(_user), do: "User"
+
+  defp user_seed(%{oidc_sub: oidc_sub}, _fallback) when is_binary(oidc_sub) and oidc_sub != "",
+    do: oidc_sub
+
+  defp user_seed(%{email: email}, _fallback) when is_binary(email) and email != "", do: email
+  defp user_seed(_user, fallback), do: fallback
+
+  defp agent_initials(name) when is_binary(name) do
+    name
+    |> String.trim()
+    |> String.first()
+    |> case do
+      nil -> "A"
+      ch -> String.upcase(ch)
+    end
+  end
+
+  defp agent_initials(_name), do: "A"
 
   defp assignee_name(%Task{assignee_type: "agent", assignee_id: id}, agent_names)
        when is_binary(id) do

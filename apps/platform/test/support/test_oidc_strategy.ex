@@ -27,6 +27,17 @@ defmodule Platform.TestOIDCStrategy do
            "email" => params["email"] || "user@example.com",
            "name" => params["name"] || "Test User"
          },
+         userinfo: %{
+           "sub" => params["sub"] || "test-subject",
+           "email" => params["email"] || "user@example.com",
+           "name" => params["name"] || "Test User"
+         },
+         id_token: %{
+           "sub" => params["sub"] || "test-subject",
+           "email" => params["email"] || "user@example.com",
+           "name" => params["name"] || "Test User",
+           "picture" => params["picture"] || "https://issuer.example.com/avatars/test-user.png"
+         },
          token: %{"id_token" => "test-id-token"}
        }}
   end

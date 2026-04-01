@@ -62,6 +62,25 @@ defmodule PlatformWeb.TasksLiveTest do
     })
   end
 
+  defp create_user(attrs \\ %{}) do
+    Repo.insert!(%User{
+      email:
+        Map.get(
+          attrs,
+          :email,
+          "tasks-user-#{System.unique_integer([:positive, :monotonic])}@example.com"
+        ),
+      name: Map.get(attrs, :name, "Tasks User"),
+      oidc_sub:
+        Map.get(
+          attrs,
+          :oidc_sub,
+          "oidc-tasks-user-#{System.unique_integer([:positive, :monotonic])}"
+        ),
+      avatar_url: Map.get(attrs, :avatar_url)
+    })
+  end
+
   # ── Kanban board tests ─────────────────────────────────────────────────
 
   test "GET /tasks renders the kanban board", %{conn: conn} do
@@ -195,6 +214,65 @@ defmodule PlatformWeb.TasksLiveTest do
 
     # Should show progress 1/2
     assert html =~ "1/2"
+  end
+
+  test "task cards render image avatars, varied human fallback palettes, and distinct agent chips",
+       %{
+         conn: conn
+       } do
+    project = create_project()
+
+    user_with_avatar =
+      create_user(%{
+        name: "Avatar Owner",
+        avatar_url: "https://issuer.example.com/tasks-user.png"
+      })
+
+    fallback_user_one = create_user(%{name: "Amber Atlas", oidc_sub: "seed-a"})
+    fallback_user_two = create_user(%{name: "Basil Brook", oidc_sub: "seed-b"})
+    agent = create_agent("Task Bot")
+
+    _avatar_task =
+      create_task(project, %{
+        title: "Avatar Task",
+        assignee_type: "user",
+        assignee_id: user_with_avatar.id
+      })
+
+    _fallback_task_one =
+      create_task(project, %{
+        title: "Fallback Task One",
+        assignee_type: "user",
+        assignee_id: fallback_user_one.id
+      })
+
+    _fallback_task_two =
+      create_task(project, %{
+        title: "Fallback Task Two",
+        assignee_type: "user",
+        assignee_id: fallback_user_two.id
+      })
+
+    _agent_task =
+      create_task(project, %{
+        title: "Agent Task",
+        assignee_type: "agent",
+        assignee_id: agent.id
+      })
+
+    conn = authenticated_conn(conn)
+    {:ok, _view, html} = live(conn, ~p"/tasks")
+
+    palette_classes =
+      Regex.scan(~r/avatar-fallback-\d+/, html)
+      |> List.flatten()
+      |> Enum.uniq()
+
+    assert html =~ "https://issuer.example.com/tasks-user.png"
+    assert html =~ "data-avatar-kind=\"human\""
+    assert "avatar-fallback-5" in palette_classes
+    assert "avatar-fallback-4" in palette_classes
+    assert html =~ "data-avatar-kind=\"agent\""
   end
 
   test "GET /tasks redirects unauthenticated users to login", %{conn: conn} do

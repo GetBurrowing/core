@@ -526,21 +526,22 @@ defmodule Platform.Chat do
       |> Enum.filter(&(&1.participant_type == "agent"))
       |> Map.new(fn p -> {p.participant_id, p.id} end)
 
-    if map_size(agent_participant_ids) == 0 do
-      %{}
-    else
-      agent_ids = Map.keys(agent_participant_ids)
+    cond do
+      map_size(agent_participant_ids) == 0 ->
+        %{}
 
-      # Fetch color for each agent
-      colors =
+      :color not in Agent.__schema__(:fields) ->
+        %{}
+
+      true ->
+        agent_ids = Map.keys(agent_participant_ids)
+
         from(a in Agent, where: a.id in ^agent_ids, select: {a.id, a.color})
         |> Repo.all()
-
-      # Map participant.id → accent string
-      Map.new(colors, fn {agent_id, color} ->
-        participant_id = Map.fetch!(agent_participant_ids, agent_id)
-        {participant_id, ColorPalette.accent_for(color)}
-      end)
+        |> Map.new(fn {agent_id, color} ->
+          participant_id = Map.fetch!(agent_participant_ids, agent_id)
+          {participant_id, ColorPalette.accent_for(color)}
+        end)
     end
   end
 
@@ -723,6 +724,29 @@ defmodule Platform.Chat do
     base = if before_id, do: where(base, [m], m.id < ^before_id), else: base
 
     Repo.all(base)
+  end
+
+  @doc """
+  For a list of message IDs, returns thread preview data for any that have threads with replies.
+
+  Returns `%{message_id => %{thread_id: id, reply_count: count, last_reply_at: datetime}}`.
+  """
+  @spec thread_previews_for_messages([binary()]) :: map()
+  def thread_previews_for_messages([]), do: %{}
+
+  def thread_previews_for_messages(message_ids) do
+    from(t in Thread,
+      where: t.parent_message_id in ^message_ids,
+      left_join: m in Message,
+      on: m.thread_id == t.id and is_nil(m.deleted_at),
+      group_by: [t.id, t.parent_message_id],
+      having: count(m.id) > 0,
+      select:
+        {t.parent_message_id,
+         %{thread_id: t.id, reply_count: count(m.id), last_reply_at: max(m.inserted_at)}}
+    )
+    |> Repo.all()
+    |> Map.new()
   end
 
   @doc """
