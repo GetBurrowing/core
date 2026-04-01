@@ -102,6 +102,31 @@ defmodule PlatformWeb.ChatLiveTest do
     assert redirected_to(conn) == "/auth/login"
   end
 
+  test "navigating to a garbage slug does not create an accidental channel", %{conn: conn} do
+    conn = authenticated_conn(conn)
+    # Tool-artifact strings like __from_file__ should never bootstrap real spaces.
+    # The route should redirect back to /chat instead of creating a new space.
+    space_count_before = Platform.Repo.aggregate(Platform.Chat.Space, :count)
+
+    {:error, {:live_redirect, %{to: "/chat"}}} = live(conn, "/chat/__from_file__")
+
+    space_count_after = Platform.Repo.aggregate(Platform.Chat.Space, :count)
+
+    assert space_count_after == space_count_before,
+           "bootstrap_space should not create a space for invalid slugs"
+  end
+
+  test "navigating to a valid unknown slug creates a channel via bootstrap", %{conn: conn} do
+    conn = authenticated_conn(conn)
+    slug = "test-bootstrap-channel-#{System.unique_integer([:positive])}"
+    space_count_before = Platform.Repo.aggregate(Platform.Chat.Space, :count)
+    {:ok, _view, _html} = live(conn, "/chat/#{slug}")
+    space_count_after = Platform.Repo.aggregate(Platform.Chat.Space, :count)
+
+    assert space_count_after == space_count_before + 1,
+           "valid slug should bootstrap a new channel"
+  end
+
   test "GET /chat renders chat surface for authenticated users", %{conn: conn} do
     conn = authenticated_conn(conn)
     {:ok, _view, html} = live(conn, ~p"/chat")

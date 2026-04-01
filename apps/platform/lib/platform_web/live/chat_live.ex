@@ -3617,22 +3617,33 @@ defmodule PlatformWeb.ChatLive do
     )
   end
 
-  defp bootstrap_space(slug) when is_binary(slug) do
-    # Only bootstrap for slug-like strings, not UUIDs
-    if valid_uuid?(slug) do
-      nil
-    else
-      name =
-        slug
-        |> String.replace("-", " ")
-        |> String.split()
-        |> Enum.map(&String.capitalize/1)
-        |> Enum.join(" ")
+  # Valid slug pattern: lowercase alphanumerics separated by hyphens (1–64 chars).
+  # This intentionally excludes anything with underscores, uppercase, special chars,
+  # or tool-artifact strings like "__from_file__" that should never create real spaces.
+  @slug_pattern ~r/^[a-z0-9][a-z0-9\-]{0,62}[a-z0-9]$/
 
-      case Chat.create_space(%{name: name, slug: slug, kind: "channel"}) do
-        {:ok, space} -> space
-        {:error, _} -> Chat.get_space_by_slug(slug)
-      end
+  defp bootstrap_space(slug) when is_binary(slug) do
+    cond do
+      # Never bootstrap for UUIDs — those are fetched directly
+      valid_uuid?(slug) ->
+        nil
+
+      # Only bootstrap slugs that look like real channel slugs
+      not String.match?(slug, @slug_pattern) ->
+        nil
+
+      true ->
+        name =
+          slug
+          |> String.replace("-", " ")
+          |> String.split()
+          |> Enum.map(&String.capitalize/1)
+          |> Enum.join(" ")
+
+        case Chat.create_space(%{name: name, slug: slug, kind: "channel"}) do
+          {:ok, space} -> space
+          {:error, _} -> Chat.get_space_by_slug(slug)
+        end
     end
   end
 
