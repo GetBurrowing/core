@@ -814,6 +814,7 @@ defmodule PlatformWeb.TasksLive do
       |> Map.put("deploy_strategy", deploy_strategy)
       |> Map.put("assignee_id", assignee_id)
       |> Map.put("assignee_type", assignee_type)
+      |> Map.put("reported_by", socket.assigns.current_user)
 
     case Tasks.create_task(task_attrs) do
       {:ok, task} ->

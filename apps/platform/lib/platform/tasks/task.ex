@@ -21,6 +21,7 @@ defmodule Platform.Tasks.Task do
     field(:deploy_strategy, :map)
     field(:dependencies, {:array, :map}, default: [])
     field(:metadata, :map, default: %{})
+    field(:reported_by, :string)
 
     has_many(:plans, Platform.Tasks.Plan)
 
@@ -43,7 +44,8 @@ defmodule Platform.Tasks.Task do
       :deploy_target,
       :deploy_strategy,
       :dependencies,
-      :metadata
+      :metadata,
+      :reported_by
     ])
     |> validate_required([:project_id, :title])
     |> validate_inclusion(:status, @statuses)

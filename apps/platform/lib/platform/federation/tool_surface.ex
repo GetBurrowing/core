@@ -1100,7 +1100,8 @@ defmodule Platform.Federation.ToolSurface do
       status: Map.get(args, "status", "backlog"),
       priority: Map.get(args, "priority", "medium"),
       assignee_type: Map.get(args, "assignee_type"),
-      assignee_id: Map.get(args, "assignee_id")
+      assignee_id: Map.get(args, "assignee_id"),
+      reported_by: Map.get(args, "reported_by")
     }
 
     case Tasks.create_task(attrs) do

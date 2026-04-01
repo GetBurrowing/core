@@ -188,13 +188,25 @@
                 </div>
               </div>
 
-              <%!-- Assignee name + date --%>
+              <%!-- Author + assignee + date --%>
               <div
-                :if={assignee_name(task, @agent_names) || task.inserted_at}
+                :if={task.reported_by || assignee_name(task, @agent_names) || task.inserted_at}
                 class="mt-1 flex items-center gap-1.5 text-[10px] text-base-content/40"
               >
-                <span :if={assignee_name(task, @agent_names)} class="truncate max-w-[120px]">
-                  {assignee_name(task, @agent_names)}
+                <span
+                  :if={task.reported_by}
+                  class="truncate max-w-[100px]"
+                  title={"Reported by " <> (task.reported_by || "")}
+                >
+                  {task.reported_by}
+                </span>
+                <span :if={
+                  task.reported_by && (assignee_name(task, @agent_names) || task.inserted_at)
+                }>
+                  ·
+                </span>
+                <span :if={assignee_name(task, @agent_names)} class="truncate max-w-[100px]">
+                  → {assignee_name(task, @agent_names)}
                 </span>
                 <span :if={assignee_name(task, @agent_names) && task.inserted_at}>·</span>
                 <span :if={task.inserted_at} class="whitespace-nowrap">
@@ -295,8 +307,11 @@
         </span>
       </div>
 
-      <%!-- Dates + Assignee name --%>
+      <%!-- Reporter + Dates + Assignee name --%>
       <div class="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-base-content/50">
+        <span :if={@selected_task.reported_by}>
+          <span class="text-base-content/40">Reporter:</span> {@selected_task.reported_by}
+        </span>
         <span :if={assignee_name(@selected_task, @agent_names)}>
           <span class="text-base-content/40">Assigned:</span> {assignee_name(
             @selected_task,
