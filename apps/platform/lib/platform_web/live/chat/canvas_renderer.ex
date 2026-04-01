@@ -221,6 +221,21 @@ defmodule PlatformWeb.Chat.CanvasRenderer do
         </div>
         """
 
+      bare_node?(state) ->
+        ~H"""
+        <div
+          id={"canvas-bare-#{@canvas.id}"}
+          class={[
+            "overflow-x-auto",
+            @inline && "cursor-pointer"
+          ]}
+          phx-click={if(@inline, do: "open_canvas")}
+          phx-value-canvas-id={if(@inline, do: @canvas.id)}
+        >
+          <.render_node node={@canvas.state} />
+        </div>
+        """
+
       true ->
         ~H"""
         <PlatformWeb.Chat.CanvasComponents.canvas canvas={@canvas} />
@@ -592,6 +607,15 @@ defmodule PlatformWeb.Chat.CanvasRenderer do
   @spec flat_nodes_array?(map()) :: boolean()
   def flat_nodes_array?(%{"nodes" => nodes}) when is_list(nodes) and nodes != [], do: true
   def flat_nodes_array?(_), do: false
+
+  @doc """
+  Returns true if the canvas state is itself a bare renderable node — a map with
+  a `"type"` key. This catches agent-emitted canvases where the node tree was set
+  directly as the state without a canonical or flat-nodes wrapper.
+  """
+  @spec bare_node?(map()) :: boolean()
+  def bare_node?(%{"type" => type}) when is_binary(type), do: true
+  def bare_node?(_), do: false
 
   @doc """
   Converts a flat `%{"nodes" => [...]}` state into a canonical document root node.
