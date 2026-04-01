@@ -601,6 +601,135 @@ defmodule PlatformWeb.TasksLiveTest do
     assert html =~ "Please verify the submitted screenshot."
   end
 
+  # ── Soft delete tests ─────────────────────────────────────────────────
+
+  test "delete button appears in detail panel for deletable task", %{conn: conn} do
+    project = create_project()
+    task = create_task(project, %{title: "Deletable Task", status: "backlog"})
+
+    conn = authenticated_conn(conn)
+    {:ok, _view, html} = live(conn, ~p"/tasks/#{task.id}")
+
+    assert html =~ "hero-trash"
+    assert html =~ "Delete task"
+  end
+
+  test "delete button does not appear for in_progress task", %{conn: conn} do
+    project = create_project()
+    task = create_task(project, %{title: "Active Task", status: "in_progress"})
+
+    conn = authenticated_conn(conn)
+    {:ok, _view, html} = live(conn, ~p"/tasks/#{task.id}")
+
+    refute html =~ "Delete task"
+  end
+
+  test "delete button does not appear for in_review task", %{conn: conn} do
+    project = create_project()
+    task = create_task(project, %{title: "Review Task", status: "in_review"})
+
+    conn = authenticated_conn(conn)
+    {:ok, _view, html} = live(conn, ~p"/tasks/#{task.id}")
+
+    refute html =~ "Delete task"
+  end
+
+  test "delete button does not appear for deploying task", %{conn: conn} do
+    project = create_project()
+    task = create_task(project, %{title: "Deploy Task", status: "deploying"})
+
+    conn = authenticated_conn(conn)
+    {:ok, _view, html} = live(conn, ~p"/tasks/#{task.id}")
+
+    refute html =~ "Delete task"
+  end
+
+  test "request_delete_task shows confirmation dialog", %{conn: conn} do
+    project = create_project()
+    task = create_task(project, %{title: "Confirm Delete Task", status: "backlog"})
+
+    conn = authenticated_conn(conn)
+    {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
+
+    html = render_click(view, "request_delete_task")
+
+    assert html =~ "Are you sure you want to delete this task?"
+    assert html =~ "Yes, Delete"
+    assert html =~ "Cancel"
+  end
+
+  test "cancel_delete_task hides confirmation dialog", %{conn: conn} do
+    project = create_project()
+    task = create_task(project, %{title: "Cancel Delete Task", status: "backlog"})
+
+    conn = authenticated_conn(conn)
+    {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
+
+    render_click(view, "request_delete_task")
+    html = render_click(view, "cancel_delete_task")
+
+    refute html =~ "Are you sure you want to delete this task?"
+  end
+
+  test "confirm_delete_task soft-deletes the task and removes it from the board", %{conn: conn} do
+    project = create_project()
+    task = create_task(project, %{title: "Doomed Task", status: "backlog"})
+
+    conn = authenticated_conn(conn)
+    {:ok, view, html} = live(conn, ~p"/tasks/#{task.id}")
+
+    # Task is visible
+    assert html =~ "Doomed Task"
+
+    # Request then confirm delete
+    render_click(view, "request_delete_task")
+    render_click(view, "confirm_delete_task")
+
+    # Task should be gone from the board
+    html = render(view)
+    refute html =~ "Doomed Task"
+
+    # Task still exists in DB but has deleted_at set
+    deleted = Platform.Repo.get(Platform.Tasks.Task, task.id)
+    assert deleted.deleted_at != nil
+  end
+
+  test "deleted task no longer appears on kanban board", %{conn: conn} do
+    project = create_project()
+    task = create_task(project, %{title: "Ghost Task", status: "backlog"})
+
+    # Soft-delete via context
+    {:ok, _} = Tasks.soft_delete_task(task)
+
+    conn = authenticated_conn(conn)
+    {:ok, _view, html} = live(conn, ~p"/tasks")
+
+    refute html =~ "Ghost Task"
+  end
+
+  test "three-dot menu appears on deletable task cards", %{conn: conn} do
+    project = create_project()
+    _task = create_task(project, %{title: "Menu Task", status: "backlog"})
+
+    conn = authenticated_conn(conn)
+    {:ok, _view, html} = live(conn, ~p"/tasks")
+
+    assert html =~ "hero-ellipsis-vertical"
+    assert html =~ "Task actions"
+  end
+
+  test "three-dot menu does not appear on in_progress task cards", %{conn: conn} do
+    project = create_project()
+    _task = create_task(project, %{title: "No Menu Task", status: "in_progress"})
+
+    conn = authenticated_conn(conn)
+    {:ok, _view, html} = live(conn, ~p"/tasks")
+
+    # The in_progress task card should not have the three-dot menu
+    # (only deletable tasks get it)
+    refute html =~ "select_task_and_delete"
+  end
+
   test "pending plan count badge appears in board header", %{conn: conn} do
     project = create_project()
     task = create_task(project, %{title: "Badge Task", status: "planning"})

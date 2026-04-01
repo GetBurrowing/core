@@ -22,6 +22,7 @@ defmodule Platform.Tasks.Task do
     field(:dependencies, {:array, :map}, default: [])
     field(:metadata, :map, default: %{})
     field(:reported_by, :string)
+    field(:deleted_at, :utc_datetime_usec)
 
     has_many(:plans, Platform.Tasks.Plan)
 
@@ -29,6 +30,11 @@ defmodule Platform.Tasks.Task do
   end
 
   def statuses, do: @statuses
+
+  @deletable_statuses ~w(backlog planning ready blocked done)
+  def deletable_statuses, do: @deletable_statuses
+
+  def deletable?(%__MODULE__{status: status}), do: status in @deletable_statuses
 
   def changeset(task, attrs) do
     task
@@ -45,7 +51,8 @@ defmodule Platform.Tasks.Task do
       :deploy_strategy,
       :dependencies,
       :metadata,
-      :reported_by
+      :reported_by,
+      :deleted_at
     ])
     |> validate_required([:project_id, :title])
     |> validate_inclusion(:status, @statuses)

@@ -108,6 +108,7 @@ defmodule PlatformWeb.TasksLive do
      |> assign(:review_items_feedback, %{})
      |> assign(:attached_skills, [])
      |> assign(:available_skills, Skills.list_skills())
+     |> assign(:confirm_delete, false)
      |> allow_upload(:task_attachments,
        accept: :any,
        auto_upload: true,
@@ -296,7 +297,62 @@ defmodule PlatformWeb.TasksLive do
      |> assign(:review_output_ids, MapSet.new())
      |> assign(:output_canvases, [])
      |> assign(:active_review_canvas, nil)
+     |> assign(:confirm_delete, false)
      |> push_patch(to: ~p"/tasks")}
+  end
+
+  # ── Task deletion events ────────────────────────────────────────────────
+
+  def handle_event("request_delete_task", _params, socket) do
+    {:noreply, assign(socket, :confirm_delete, true)}
+  end
+
+  def handle_event("select_task_and_delete", %{"id" => task_id}, socket) do
+    {:noreply,
+     socket
+     |> assign(:confirm_delete, true)
+     |> push_patch(to: ~p"/tasks/#{task_id}")}
+  end
+
+  def handle_event("cancel_delete_task", _params, socket) do
+    {:noreply, assign(socket, :confirm_delete, false)}
+  end
+
+  def handle_event("confirm_delete_task", _params, socket) do
+    task = socket.assigns.selected_task
+
+    socket =
+      if task do
+        case Tasks.soft_delete_task(task) do
+          {:ok, _deleted} ->
+            unsubscribe_execution_space(socket)
+
+            socket
+            |> assign(:selected_task, nil)
+            |> assign(:show_detail, false)
+            |> assign(:confirm_delete, false)
+            |> assign(:execution_space_id, nil)
+            |> assign(:execution_log, [])
+            |> assign(:execution_participant, nil)
+            |> put_flash(:info, "Task deleted.")
+            |> refresh_board()
+            |> push_patch(to: ~p"/tasks")
+
+          {:error, :restricted_status} ->
+            socket
+            |> assign(:confirm_delete, false)
+            |> put_flash(:error, "Cannot delete a task that is #{status_label(task.status)}.")
+
+          {:error, _reason} ->
+            socket
+            |> assign(:confirm_delete, false)
+            |> put_flash(:error, "Failed to delete task.")
+        end
+      else
+        assign(socket, :confirm_delete, false)
+      end
+
+    {:noreply, socket}
   end
 
   def handle_event("transition_task", %{"id" => task_id, "status" => new_status}, socket) do
@@ -773,6 +829,10 @@ defmodule PlatformWeb.TasksLive do
   # Upload cancel
   # ── Mention suggestion no-ops (ComposeInput hook fires these; TasksLive has no mention UI) ──
 
+  def handle_event("noop", _params, socket) do
+    {:noreply, socket}
+  end
+
   def handle_event("clear_mention_suggestions", _params, socket) do
     {:noreply, socket}
   end
@@ -800,6 +860,10 @@ defmodule PlatformWeb.TasksLive do
   end
 
   def handle_info({:task_created, _task}, socket) do
+    {:noreply, refresh_board(socket)}
+  end
+
+  def handle_info({:task_deleted, _task}, socket) do
     {:noreply, refresh_board(socket)}
   end
 
@@ -1428,6 +1492,9 @@ defmodule PlatformWeb.TasksLive do
         {nil, nil}
     end
   end
+
+  defp deletable_task?(%Task{} = task), do: Task.deletable?(task)
+  defp deletable_task?(_), do: false
 
   defp available_transitions("backlog"), do: [{"planning", "Start Planning"}]
   defp available_transitions("planning"), do: [{"ready", "Mark Ready"}, {"backlog", "Back"}]

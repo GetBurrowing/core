@@ -128,6 +128,7 @@ defmodule Platform.Tasks do
   def epic_task_counts(epic_ids) when is_list(epic_ids) do
     Task
     |> where([t], t.epic_id in ^epic_ids)
+    |> where([t], is_nil(t.deleted_at))
     |> group_by([t], t.epic_id)
     |> select(
       [t],
@@ -151,12 +152,41 @@ defmodule Platform.Tasks do
     |> Repo.update()
   end
 
+  # ── Soft delete ─────────────────────────────────────────────────────────
+
+  @restricted_delete_statuses ~w(in_progress in_review deploying)
+
+  @doc """
+  Soft-delete a task by setting `deleted_at`.
+
+  Refuses to delete tasks whose status is in_progress, in_review, or deploying.
+  Returns `{:ok, task}` or `{:error, :restricted_status}`.
+  """
+  def soft_delete_task(%Task{} = task) do
+    if task.status in @restricted_delete_statuses do
+      {:error, :restricted_status}
+    else
+      task
+      |> Task.changeset(%{deleted_at: DateTime.utc_now()})
+      |> Repo.update()
+      |> case do
+        {:ok, deleted} ->
+          broadcast_board({:task_deleted, deleted})
+          {:ok, deleted}
+
+        error ->
+          error
+      end
+    end
+  end
+
   @doc "Get a task record from Postgres (no ETS merge)."
   def get_task_record(id), do: Repo.get(Task, id)
 
   def list_tasks_by_project(project_id) do
     Task
     |> where([t], t.project_id == ^project_id)
+    |> where([t], is_nil(t.deleted_at))
     |> order_by([t], desc: t.inserted_at)
     |> Repo.all()
   end
@@ -164,6 +194,7 @@ defmodule Platform.Tasks do
   def list_tasks_by_epic(epic_id) do
     Task
     |> where([t], t.epic_id == ^epic_id)
+    |> where([t], is_nil(t.deleted_at))
     |> order_by([t], desc: t.inserted_at)
     |> Repo.all()
   end
@@ -171,6 +202,7 @@ defmodule Platform.Tasks do
   def list_tasks_by_status(status) do
     Task
     |> where([t], t.status == ^status)
+    |> where([t], is_nil(t.deleted_at))
     |> order_by([t], desc: t.inserted_at)
     |> Repo.all()
   end
@@ -406,6 +438,7 @@ defmodule Platform.Tasks do
     epic_id = Keyword.get(opts, :epic_id)
 
     Task
+    |> where([t], is_nil(t.deleted_at))
     |> maybe_filter_project(project_id)
     |> maybe_filter_epic(epic_id)
     |> order_by([t], desc: t.inserted_at)
@@ -423,6 +456,7 @@ defmodule Platform.Tasks do
   def get_task_detail(task_id) do
     Task
     |> where([t], t.id == ^task_id)
+    |> where([t], is_nil(t.deleted_at))
     |> preload([:project, :epic, plans: [stages: :validations]])
     |> Repo.one()
   end

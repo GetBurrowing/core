@@ -154,7 +154,7 @@
             id={"task-card-#{task.id}"}
             data-task-id={task.id}
             draggable="true"
-            class="card card-compact cursor-grab border border-base-300 bg-base-100 shadow-sm transition-all hover:shadow-md active:cursor-grabbing"
+            class="group card card-compact cursor-grab border border-base-300 bg-base-100 shadow-sm transition-all hover:shadow-md active:cursor-grabbing"
             phx-click="select_task"
             phx-value-id={task.id}
           >
@@ -199,6 +199,31 @@
                       </span>
                     <% end %>
                   <% end %>
+                  <%!-- Three-dot menu --%>
+                  <div :if={deletable_task?(task)} class="dropdown dropdown-end" phx-click="noop">
+                    <div
+                      tabindex="0"
+                      role="button"
+                      class="btn btn-ghost btn-xs btn-square opacity-0 group-hover:opacity-100 transition-opacity"
+                      title="Task actions"
+                    >
+                      <span class="hero-ellipsis-vertical size-4"></span>
+                    </div>
+                    <ul
+                      tabindex="0"
+                      class="dropdown-content z-50 menu menu-sm p-1 shadow-lg bg-base-100 rounded-box w-36 border border-base-300"
+                    >
+                      <li>
+                        <button
+                          phx-click="select_task_and_delete"
+                          phx-value-id={task.id}
+                          class="text-error"
+                        >
+                          <span class="hero-trash size-4"></span> Delete
+                        </button>
+                      </li>
+                    </ul>
+                  </div>
                 </div>
               </div>
 
@@ -301,12 +326,40 @@
   >
     <div class="flex items-center justify-between border-b border-base-300 px-4 py-3">
       <h2 class="text-sm font-semibold truncate">{@selected_task.title}</h2>
-      <button class="btn btn-sm btn-ghost btn-square" phx-click="close_detail">
-        <span class="hero-x-mark size-4"></span>
-      </button>
+      <div class="flex items-center gap-1">
+        <button
+          :if={deletable_task?(@selected_task)}
+          class="btn btn-sm btn-ghost btn-square text-error"
+          phx-click="request_delete_task"
+          title="Delete task"
+        >
+          <span class="hero-trash size-4"></span>
+        </button>
+        <button class="btn btn-sm btn-ghost btn-square" phx-click="close_detail">
+          <span class="hero-x-mark size-4"></span>
+        </button>
+      </div>
     </div>
 
     <div class="flex-1 overflow-y-auto p-4 space-y-5">
+      <%!-- Delete confirmation --%>
+      <div
+        :if={@confirm_delete}
+        class="rounded-box border border-error bg-error/10 p-4 space-y-3"
+      >
+        <p class="text-sm font-medium text-error">
+          Are you sure you want to delete this task?
+        </p>
+        <div class="flex gap-2">
+          <button phx-click="confirm_delete_task" class="btn btn-error btn-sm">
+            Yes, Delete
+          </button>
+          <button phx-click="cancel_delete_task" class="btn btn-ghost btn-sm">
+            Cancel
+          </button>
+        </div>
+      </div>
+
       <%!-- Status + Priority --%>
       <div class="flex flex-wrap items-center gap-2">
         <span class="badge badge-outline">{status_label(@selected_task.status)}</span>

@@ -269,6 +269,92 @@ defmodule Platform.Tasks.TaskTest do
     end
   end
 
+  describe "soft_delete_task/1" do
+    test "soft-deletes a backlog task", %{project: project} do
+      {:ok, task} =
+        Tasks.create_task(%{project_id: project.id, title: "Deletable", status: "backlog"})
+
+      assert {:ok, deleted} = Tasks.soft_delete_task(task)
+      assert deleted.deleted_at != nil
+    end
+
+    test "soft-deletes a done task", %{project: project} do
+      {:ok, task} =
+        Tasks.create_task(%{project_id: project.id, title: "Done Task", status: "done"})
+
+      assert {:ok, deleted} = Tasks.soft_delete_task(task)
+      assert deleted.deleted_at != nil
+    end
+
+    test "soft-deletes a planning task", %{project: project} do
+      {:ok, task} =
+        Tasks.create_task(%{project_id: project.id, title: "Planning", status: "planning"})
+
+      assert {:ok, _} = Tasks.soft_delete_task(task)
+    end
+
+    test "soft-deletes a ready task", %{project: project} do
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Ready", status: "ready"})
+      assert {:ok, _} = Tasks.soft_delete_task(task)
+    end
+
+    test "soft-deletes a blocked task", %{project: project} do
+      {:ok, task} =
+        Tasks.create_task(%{project_id: project.id, title: "Blocked", status: "blocked"})
+
+      assert {:ok, _} = Tasks.soft_delete_task(task)
+    end
+
+    test "refuses to delete an in_progress task", %{project: project} do
+      {:ok, task} =
+        Tasks.create_task(%{project_id: project.id, title: "Active", status: "in_progress"})
+
+      assert {:error, :restricted_status} = Tasks.soft_delete_task(task)
+    end
+
+    test "refuses to delete an in_review task", %{project: project} do
+      {:ok, task} =
+        Tasks.create_task(%{project_id: project.id, title: "Reviewing", status: "in_review"})
+
+      assert {:error, :restricted_status} = Tasks.soft_delete_task(task)
+    end
+
+    test "refuses to delete a deploying task", %{project: project} do
+      {:ok, task} =
+        Tasks.create_task(%{project_id: project.id, title: "Deploying", status: "deploying"})
+
+      assert {:error, :restricted_status} = Tasks.soft_delete_task(task)
+    end
+
+    test "deleted tasks are excluded from list_all_tasks", %{project: project} do
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Soon Gone"})
+      assert Enum.any?(Tasks.list_all_tasks(), &(&1.id == task.id))
+
+      {:ok, _} = Tasks.soft_delete_task(task)
+      refute Enum.any?(Tasks.list_all_tasks(), &(&1.id == task.id))
+    end
+
+    test "deleted tasks are excluded from get_task_detail", %{project: project} do
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Invisible"})
+      assert Tasks.get_task_detail(task.id) != nil
+
+      {:ok, _} = Tasks.soft_delete_task(task)
+      assert Tasks.get_task_detail(task.id) == nil
+    end
+
+    test "deleted tasks are excluded from list_tasks_by_project", %{project: project} do
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Filter Me"})
+      {:ok, _} = Tasks.soft_delete_task(task)
+      refute Enum.any?(Tasks.list_tasks_by_project(project.id), &(&1.id == task.id))
+    end
+
+    test "deleted tasks are excluded from list_tasks_by_status", %{project: project} do
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Filter Status"})
+      {:ok, _} = Tasks.soft_delete_task(task)
+      refute Enum.any?(Tasks.list_tasks_by_status("backlog"), &(&1.id == task.id))
+    end
+  end
+
   defp errors_on(changeset) do
     Ecto.Changeset.traverse_errors(changeset, fn {message, opts} ->
       Regex.replace(~r"%{(\w+)}", message, fn _, key ->
