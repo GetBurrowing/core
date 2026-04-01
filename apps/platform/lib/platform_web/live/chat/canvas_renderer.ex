@@ -535,6 +535,46 @@ defmodule PlatformWeb.Chat.CanvasRenderer do
     """
   end
 
+  def render_node(%{node: %{"type" => "key_value"} = node} = assigns) do
+    rows = node["props"]["rows"] || node["children"] || []
+    assigns = assign(assigns, :node, node) |> assign(:rows, rows)
+
+    ~H"""
+    <div class="rounded-lg border border-base-300 overflow-hidden text-sm">
+      <div
+        :for={row <- @rows}
+        class="flex border-b border-base-300 last:border-b-0"
+      >
+        <div class="w-2/5 px-3 py-1.5 bg-base-200 font-medium text-base-content/70 shrink-0">
+          {row_key(row)}
+        </div>
+        <div class="flex-1 px-3 py-1.5 text-base-content">
+          {row_value(row)}
+        </div>
+      </div>
+    </div>
+    """
+  end
+
+  def render_node(%{node: %{"type" => "status"} = node} = assigns) do
+    assigns = assign(assigns, :node, node)
+
+    ~H"""
+    <div class="flex items-center gap-2">
+      <span
+        :if={@node["props"]["label"]}
+        class={[
+          "inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold",
+          status_color(@node["props"]["color"] || @node["props"]["variant"])
+        ]}
+      >
+        <span :if={@node["props"]["icon"]} class="size-3">{@node["props"]["icon"]}</span>
+        {@node["props"]["label"]}
+      </span>
+    </div>
+    """
+  end
+
   # Fallback for unknown / nil node types
   def render_node(%{node: node} = assigns) when is_map(node) do
     assigns = assign(assigns, :node, node)
@@ -742,4 +782,30 @@ defmodule PlatformWeb.Chat.CanvasRenderer do
   defp action_button_class("ghost"), do: "btn-ghost"
   defp action_button_class("outline"), do: "btn-outline"
   defp action_button_class(_), do: "btn-outline"
+
+  # key_value row helpers — supports both list-of-pairs and map-children formats
+  defp row_key([k, _v]), do: k
+  defp row_key(%{"key" => k}), do: k
+  defp row_key(%{"label" => l}), do: l
+  defp row_key(%{"props" => %{"key" => k}}), do: k
+  defp row_key(%{"props" => %{"label" => l}}), do: l
+  defp row_key(_), do: ""
+
+  defp row_value([_k, v]), do: v
+  defp row_value(%{"value" => v}), do: v
+  defp row_value(%{"props" => %{"value" => v}}), do: v
+  defp row_value(_), do: ""
+
+  # status node color helpers
+  defp status_color("success"), do: "bg-success/20 text-success"
+  defp status_color("green"), do: "bg-success/20 text-success"
+  defp status_color("warning"), do: "bg-warning/20 text-warning"
+  defp status_color("yellow"), do: "bg-warning/20 text-warning"
+  defp status_color("amber"), do: "bg-warning/20 text-warning"
+  defp status_color("error"), do: "bg-error/20 text-error"
+  defp status_color("red"), do: "bg-error/20 text-error"
+  defp status_color("info"), do: "bg-info/20 text-info"
+  defp status_color("blue"), do: "bg-info/20 text-info"
+  defp status_color("cyan"), do: "bg-info/20 text-info"
+  defp status_color(_), do: "bg-base-300 text-base-content/70"
 end
