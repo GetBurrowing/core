@@ -25,7 +25,110 @@
     </script>
     <script>
       (() => {
+        let themeDebugHideTimer = null;
+
+        const SURFACE_SELECTORS = {
+          moduleRail: "#shell-sidebar",
+          spaceSidebar: "#chat-sidebar",
+          chatPane: "#message-list, #messages-container",
+          utilityBar: "#utility-bar",
+          messageComposer: "#compose-form textarea"
+        };
+
+        const getSurfaceSnapshot = () => {
+          const snapshot = {};
+
+          Object.entries(SURFACE_SELECTORS).forEach(([key, selector]) => {
+            const el = document.querySelector(selector);
+
+            if (!el) {
+              snapshot[key] = "(missing)";
+              return;
+            }
+
+            const styles = window.getComputedStyle(el);
+            snapshot[key] = styles.backgroundColor || "(transparent)";
+          });
+
+          return snapshot;
+        };
+
+        const ensureThemeDebugPanel = () => {
+          if (!document.body) return null;
+
+          let panel = document.getElementById("theme-debug-panel");
+          if (panel) return panel;
+
+          panel = document.createElement("div");
+          panel.id = "theme-debug-panel";
+          panel.setAttribute(
+            "style",
+            [
+              "position:fixed",
+              "right:12px",
+              "bottom:12px",
+              "z-index:9999",
+              "max-width:min(360px,calc(100vw - 24px))",
+              "padding:10px 12px",
+              "border-radius:12px",
+              "border:1px solid rgba(255,255,255,.12)",
+              "background:rgba(11,13,18,.94)",
+              "color:#e5e7eb",
+              "box-shadow:0 10px 30px rgba(0,0,0,.35)",
+              "font:12px/1.45 ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,monospace",
+              "white-space:pre-wrap",
+              "display:none",
+              "pointer-events:none"
+            ].join(";")
+          );
+
+          document.body.appendChild(panel);
+          return panel;
+        };
+
+        const renderThemeDebugPanel = (reason = "theme-change") => {
+          const panel = ensureThemeDebugPanel();
+          if (!panel) return;
+
+          const currentTheme = document.documentElement.getAttribute("data-theme") || "(unset)";
+          const storedTheme = localStorage.getItem("phx:theme") || "(none)";
+          const surfaces = getSurfaceSnapshot();
+
+          panel.textContent = [
+            `Theme Debug · ${reason}`,
+            `html[data-theme]: ${currentTheme}`,
+            `localStorage[phx:theme]: ${storedTheme}`,
+            `Module Rail: ${surfaces.moduleRail}`,
+            `Space Sidebar: ${surfaces.spaceSidebar}`,
+            `Chat Pane: ${surfaces.chatPane}`,
+            `Utility Bar: ${surfaces.utilityBar}`,
+            `Message Composer: ${surfaces.messageComposer}`
+          ].join("\n");
+        };
+
+        const showThemeDebugPanel = (reason = "theme-change") => {
+          const panel = ensureThemeDebugPanel();
+          if (!panel) return;
+
+          renderThemeDebugPanel(reason);
+          panel.style.display = "block";
+
+          if (themeDebugHideTimer) {
+            clearTimeout(themeDebugHideTimer);
+          }
+
+          themeDebugHideTimer = setTimeout(() => {
+            panel.style.display = "none";
+          }, 12000);
+        };
+
         const setTheme = (theme) => {
+          const before = {
+            htmlTheme: document.documentElement.getAttribute("data-theme") || null,
+            storedTheme: localStorage.getItem("phx:theme") || null,
+            surfaces: getSurfaceSnapshot()
+          };
+
           if (theme === "system") {
             localStorage.removeItem("phx:theme");
             document.documentElement.removeAttribute("data-theme");
@@ -34,11 +137,24 @@
             document.documentElement.setAttribute("data-theme", theme);
           }
 
+          const after = {
+            htmlTheme: document.documentElement.getAttribute("data-theme") || null,
+            storedTheme: localStorage.getItem("phx:theme") || null,
+            surfaces: getSurfaceSnapshot()
+          };
+
+          console.groupCollapsed(`[theme] setTheme(${theme})`);
+          console.log("before", before);
+          console.log("after", after);
+          console.groupEnd();
+
           window.dispatchEvent(
             new CustomEvent("app:theme-changed", {
               detail: {theme: theme === "system" ? null : theme}
             })
           );
+
+          showThemeDebugPanel(`setTheme(${theme})`);
         };
 
         const getTheme = () =>
@@ -48,10 +164,17 @@
 
         window.setAppTheme = setTheme;
         window.getAppTheme = getTheme;
+        window.showThemeDebugPanel = showThemeDebugPanel;
+        window.renderThemeDebugPanel = renderThemeDebugPanel;
 
         if (!document.documentElement.hasAttribute("data-theme")) {
           setTheme(localStorage.getItem("phx:theme") || "dark");
         }
+
+        window.addEventListener("DOMContentLoaded", () => {
+          ensureThemeDebugPanel();
+          renderThemeDebugPanel("initial-load");
+        });
 
         window.addEventListener(
           "storage",

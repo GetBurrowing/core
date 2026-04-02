@@ -54,13 +54,24 @@ const ThemeToggle = {
   },
 
   toggle() {
+    const current = this.currentTheme();
     const next = this.currentTheme() === "dark" ? "light" : "dark";
+
+    console.debug("[ThemeToggle] toggle requested", {
+      current,
+      next,
+      htmlTheme: document.documentElement.getAttribute("data-theme"),
+      storedTheme: localStorage.getItem("phx:theme"),
+    });
 
     if (typeof window.setAppTheme === "function") {
       window.setAppTheme(next);
     } else {
       localStorage.setItem("phx:theme", next);
       document.documentElement.setAttribute("data-theme", next);
+      if (typeof window.showThemeDebugPanel === "function") {
+        window.showThemeDebugPanel(`fallback-toggle(${next})`);
+      }
     }
 
     this.updateIcon();
