@@ -555,221 +555,151 @@ body, .font-fabrikam, * {
 }
 
 
-/* ── Inline Thread UI (reference comp exact-match) ───────────────── */
+/* ═══ THREAD & REPLY SYSTEM — exact-match to thread-reply-prototype.html ═══ */
 
-/* Pattern 1: Simple thread indicator (≤5 replies, collapsed) */
+/* ── Left-gutter reply button (desktop) ── */
+.msg-reply-gutter {
+  position: absolute; left: -6px; top: 50%; transform: translateY(-50%);
+  width: 28px; height: 28px; border-radius: 50%; border: none;
+  background: #252c3d; color: #06d5ed; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  opacity: 0; transition: all 0.15s ease; z-index: 10;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.3), 0 0 0 1px rgba(255,255,255,0.08);
+  font-size: 14px;
+}
+.message:hover .msg-reply-gutter,
+[class*="msg-"]:hover > .msg-reply-gutter { opacity: 1; left: -14px; }
+.msg-reply-gutter:hover { background: #06d5ed; color: #000; transform: translateY(-50%) scale(1.1); }
+[data-theme="light"] .msg-reply-gutter { box-shadow: 0 2px 8px rgba(0,0,0,0.1), 0 0 0 1px #E0E0E0; background: #F5F5F5; }
+
+/* Thread indicator (collapsed state) */
 .thread-indicator {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  margin-top: 8px;
+  gap: 8px;
+  margin-top: 6px;
+  padding: 6px 12px;
+  border-radius: 6px;
+  cursor: pointer;
   font-size: 12px;
   color: #06d5ed;
-  cursor: pointer;
-  user-select: none;
-  padding: 4px 8px;
-  border-radius: 6px;
   transition: background 150ms ease;
+  opacity: 0.85;
 }
 .thread-indicator:hover {
   background: rgba(6,213,237,0.08);
   opacity: 1;
 }
+.thread-indicator .ti-count { font-weight: 600; }
+.thread-indicator .ti-time { color: #666; }
 
-/* Pattern 2: Thread summary card (>5 replies, collapsed) */
-.thread-summary {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-top: 4px;
-  padding: 6px 10px;
-  background: #1e2333;
-  border: 1px solid rgba(255,255,255,0.08);
-  border-radius: 8px;
-  font-size: 12px;
-  color: var(--color-secondary);
-  cursor: pointer;
-  transition: background 0.15s ease, border-color 0.15s ease;
-  max-width: 480px;
-}
-.thread-summary:hover {
-  background: #252c3d;
-  border-color: rgba(6,213,237,0.25);
-}
-.thread-summary .ts-count {
-  color: #06d5ed;
-  font-weight: 600;
-}
-.thread-summary .ts-preview {
-  flex: 1;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  color: #666;
-}
-.thread-summary .ts-time {
-  color: #666;
-  font-size: 11px;
-  white-space: nowrap;
-}
-
-/* Avatar stack inside thread summary */
+/* Thread avatar stack */
 .thread-avatars {
   display: flex;
-  margin-right: 2px;
+  margin-right: 4px;
 }
 .thread-avatars .t-av {
-  width: 18px;
-  height: 18px;
+  width: 20px;
+  height: 20px;
   border-radius: 50%;
+  font-size: 8px;
+  font-weight: 700;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 8px;
-  font-weight: 700;
-  border: 1.5px solid var(--color-base-100);
-  margin-right: -5px;
+  border: 2px solid #161b26;
+  margin-left: -6px;
 }
-.thread-avatars .t-av.ai {
-  background: #091214;
-  color: #06d5ed;
-  border-color: var(--color-base-100, #161b26);
-  outline: 1px solid rgba(6,213,237,0.4);
-}
-.thread-avatars .t-av.human {
-  background: rgba(255,255,255,0.12);
-  color: #B0B0B0;
-}
+.thread-avatars .t-av:first-child { margin-left: 0; }
+.thread-avatars .t-av.ai { background: #06d5ed; color: #000; }
+.thread-avatars .t-av.human { background: rgba(255,255,255,0.12); color: #B0B0B0; }
+[data-theme="light"] .thread-avatars .t-av { border-color: #FFFFFF; }
+[data-theme="light"] .thread-avatars .t-av.human { background: #D0D0D0; color: #4A4A4A; }
 
-/* Expanded thread container */
+/* Thread replies container */
 .thread-replies {
-  margin-top: 6px;
-  margin-left: 0;
-  padding-left: 20px;
+  margin-top: 8px;
+  padding: 8px 0 8px 16px;
   border-left: 2px solid rgba(255,255,255,0.07);
-  overflow: hidden;
-  transition: max-height 0.4s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.3s ease;
+  margin-left: 6px;
 }
-.thread-replies.collapsed {
-  max-height: 0 !important;
-  opacity: 0;
-}
+.thread-replies.collapsed { display: none; }
+[data-theme="light"] .thread-replies { border-left-color: #E0E0E0; }
 
 /* Individual thread reply */
 .thread-reply {
   display: flex;
   gap: 10px;
-  padding: 6px 8px;
-  border-radius: 8px;
+  padding: 6px 10px;
+  border-radius: 6px;
   transition: background 150ms ease;
+  margin-bottom: 2px;
 }
-.thread-reply:hover {
-  background: rgba(255,255,255,0.04);
-}
+.thread-reply:hover { background: rgba(255,255,255,0.02); }
+[data-theme="light"] .thread-reply:hover { background: rgba(0,0,0,0.02); }
 
-/* Agent replies get special treatment */
+/* Agent replies */
 .thread-reply.agent-reply {
-  background: rgba(6,213,237,0.04);
-  border-left: 2px solid rgba(6,213,237,0.3);
-  border-radius: 0 8px 8px 0;
-  padding-left: 10px;
-  margin: 2px 0;
+  background: rgba(6,213,237,0.03);
+  box-shadow: inset 2px 0 0 0 rgba(6,213,237,0.15);
+  border-radius: 0 6px 6px 0;
 }
-.thread-reply.agent-reply:hover {
-  background: rgba(6,213,237,0.07);
-}
+.thread-reply.agent-reply:hover { background: rgba(6,213,237,0.07); }
 
-/* Thread reply sizing */
-.thread-reply .msg-avatar {
-  width: 26px;
-  height: 26px;
-  font-size: 10px;
-  flex-shrink: 0;
-  margin-top: 1px;
-}
-.thread-reply .msg-username {
-  font-size: 12.5px;
-}
-.thread-reply .msg-time {
-  font-size: 10px;
-}
-.thread-reply .msg-text {
-  font-size: 13px;
-  line-height: 1.55;
-}
+/* Thread reply sizing overrides */
+.thread-reply .msg-avatar { width: 28px; height: 28px; font-size: 10px; }
+.thread-reply .msg-username,
+.thread-reply .msg-name { font-size: 12.5px; }
+.thread-reply .msg-time { font-size: 10px; }
+.thread-reply .msg-text { font-size: 13px; line-height: 1.55; }
 
-/* Thread reply avatar styles */
-.thread-reply .tr-avatar {
-  width: 28px;
-  height: 28px;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 10px;
-  font-weight: 600;
-  flex-shrink: 0;
-  margin-top: 1px;
-}
-.thread-reply .tr-avatar.ai {
-  background: #091214;
-  color: #06d5ed;
-  border: 1.5px solid rgba(6,213,237,0.4);
-  box-shadow: 0 0 0 2px #06d5ed;
-}
-.thread-reply .tr-avatar.human {
-  background: rgba(255,255,255,0.10);
-  color: #B0B0B0;
-}
-
-/* AI badge pill */
+/* AI badge (used in threads and parent messages) */
+.ai-badge,
 .ai-badge-pill {
-  display: inline-flex;
-  align-items: center;
   font-size: 9px;
   font-weight: 700;
-  letter-spacing: 0.04em;
-  padding: 0px 4px;
-  border-radius: 8px;
-  border: 1px solid rgba(0,191,255,0.5);
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: rgba(6,213,237,0.08);
   color: #06d5ed;
-  line-height: 15px;
-  vertical-align: middle;
-  margin-left: 2px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
 
-/* Thread composer */
+/* Thread inline composer */
 .thread-composer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   margin-top: 8px;
-  padding-top: 8px;
-  border-top: 1px solid rgba(255,255,255,0.07);
+  padding: 4px 0 0 10px;
 }
 .thread-composer-form {
   display: flex;
   align-items: center;
   gap: 8px;
+  width: 100%;
 }
 .thread-input {
   flex: 1;
-  background: var(--color-base-200, #1E1E1E);
-  border: 1px solid rgba(255,255,255,0.08);
-  border-radius: 28px;
   padding: 8px 14px;
-  color: var(--color-base-content, #E5E5E5);
+  background: #252c3d;
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 20px;
+  color: #E5E5E5;
   font-size: 13px;
   font-family: inherit;
   outline: none;
-  transition: border-color 150ms ease;
+  transition: border-color 150ms ease, box-shadow 150ms ease;
 }
 .thread-input:focus {
   border-color: rgba(6,213,237,0.55);
+  box-shadow: 0 0 0 3px rgba(6,213,237,0.08);
 }
-.thread-input::placeholder {
-  color: rgba(255,255,255,0.3);
-}
+.thread-input::placeholder { color: #666; }
 .thread-send {
-  width: 32px;
-  height: 32px;
+  width: 30px;
+  height: 30px;
   border-radius: 50%;
   border: none;
   background: #06d5ed;
@@ -781,72 +711,33 @@ body, .font-fabrikam, * {
   flex-shrink: 0;
   transition: filter 150ms ease;
 }
-.thread-send:hover {
-  filter: brightness(1.1);
-}
-.thread-send:disabled {
-  opacity: 0.4;
-  cursor: not-allowed;
-}
-
-/* Light mode thread composer */
-[data-theme="light"] .thread-composer {
-  border-top-color: #E0E0E0;
-}
+.thread-send:hover { filter: brightness(1.1); }
+.thread-send:disabled { opacity: 0.4; cursor: not-allowed; }
 [data-theme="light"] .thread-input {
   background: #FFFFFF;
   border-color: #E0E0E0;
   color: #000;
 }
-[data-theme="light"] .thread-input::placeholder {
-  color: #888;
-}
+[data-theme="light"] .thread-input::placeholder { color: #888; }
 
-/* Collapse thread button */
+/* Thread collapse button */
 .thread-collapse {
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: 5px;
-  font-size: 12px;
-  color: #06d5ed;
+  gap: 4px;
+  margin-top: 6px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 11px;
+  color: #666;
   cursor: pointer;
-  padding: 6px 4px 4px;
-  user-select: none;
-  margin-top: 2px;
+  transition: color 150ms ease, background 150ms ease;
+  background: none;
+  border: none;
+  font-family: inherit;
 }
-.thread-collapse:hover {
-  opacity: 0.8;
-}
-
-/* Light mode overrides */
-[data-theme="light"] .thread-replies {
-  border-left-color: #E0E0E0;
-}
-[data-theme="light"] .thread-summary {
-  background: #F5F5F5;
-  border-color: rgba(0,0,0,0.08);
-}
-[data-theme="light"] .thread-summary:hover {
-  background: #E8E8E8;
-  border-color: rgba(6,213,237,0.35);
-}
-[data-theme="light"] .thread-reply:hover {
-  background: rgba(0,0,0,0.04);
-}
-[data-theme="light"] .thread-reply.agent-reply {
-  background: rgba(6,213,237,0.06);
-}
-[data-theme="light"] .thread-reply.agent-reply:hover {
-  background: rgba(6,213,237,0.10);
-}
-[data-theme="light"] .thread-reply .tr-avatar.human {
-  background: rgba(0,0,0,0.08);
-  color: #000;
-}
-[data-theme="light"] .thread-avatars .t-av.human {
-  background: rgba(0,0,0,0.08);
-  color: #000;
-}
+.thread-collapse:hover { color: #B0B0B0; background: rgba(255,255,255,0.02); }
+[data-theme="light"] .thread-collapse:hover { background: rgba(0,0,0,0.02); }
 
 /* ══════════════════════════════════════════════════════════════════════
    IMAGE UPLOAD PANEL & GALLERY — matches reference-image-upload.html

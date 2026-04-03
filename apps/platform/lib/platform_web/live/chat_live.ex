@@ -2266,70 +2266,52 @@ defmodule PlatformWeb.ChatLive do
                 </div>
               </div>
 
-              <%!-- Floating reply button (appears on hover) --%>
+              <%!-- Left-gutter reply button (desktop, appears on hover) --%>
               <button
                 phx-click="toggle_inline_thread"
                 phx-value-message-id={msg.id}
-                class="absolute -bottom-2 right-3 z-10 flex items-center gap-1 rounded-full bg-base-200 border border-base-300 shadow-sm px-2 py-0.5 text-xs text-base-content/60 hover:text-primary hover:border-primary/40 opacity-0 group-hover:opacity-100 transition-all"
+                class="msg-reply-gutter hidden lg:flex"
+                title="Reply"
               >
-                <span class="hero-chat-bubble-left size-3"></span>
-                <span>Reply</span>
+                ↩
               </button>
 
-              <%!-- Inline thread: preview bar + expanded thread --%>
+              <%!-- Inline thread: indicator + expanded thread --%>
               <div
                 :if={
-                  Map.has_key?(@thread_previews, msg.id) or MapSet.member?(@expanded_threads, msg.id)
+                  Map.has_key?(@thread_previews, msg.id) or
+                    MapSet.member?(@expanded_threads, msg.id)
                 }
-                class="ml-9 mt-1"
+                class="ml-12 mt-1"
               >
-                <%!-- Thread indicator / summary (collapsed state) --%>
-                <div :if={not MapSet.member?(@expanded_threads, msg.id)}>
-                  <%= if (Map.get(@thread_previews, msg.id, %{}) |> Map.get(:reply_count, 0)) > 5 do %>
-                    <%!-- Pattern 2: Thread summary card (>5 replies) --%>
-                    <div
-                      phx-click="toggle_inline_thread"
-                      phx-value-message-id={msg.id}
-                      class="thread-summary"
-                    >
-                      <div class="thread-avatars">
-                        <div class="t-av ai">↳</div>
-                      </div>
-                      <span class="ts-count">
-                        {Map.get(@thread_previews, msg.id, %{}) |> Map.get(:reply_count, 0)} replies
-                      </span>
-                      <span class="ts-time">
-                        {relative_time(
-                          Map.get(@thread_previews, msg.id, %{})
-                          |> Map.get(:last_reply_at)
-                        )}
-                      </span>
-                    </div>
-                  <% else %>
-                    <%!-- Pattern 1: Simple thread indicator (≤5 replies) --%>
-                    <div
-                      phx-click="toggle_inline_thread"
-                      phx-value-message-id={msg.id}
-                      class="thread-indicator"
-                    >
-                      <span>↳</span>
-                      <span>
-                        {Map.get(@thread_previews, msg.id, %{}) |> Map.get(:reply_count, 0)}
-                        {if Map.get(@thread_previews, msg.id, %{}) |> Map.get(:reply_count, 0) == 1,
-                          do: "reply",
-                          else: "replies"}
-                      </span>
-                      <span :if={Map.get(@thread_previews, msg.id, %{}) |> Map.get(:last_reply_at)}>
-                        · Last reply {relative_time(
-                          Map.get(@thread_previews, msg.id, %{})
-                          |> Map.get(:last_reply_at)
-                        )}
-                      </span>
-                    </div>
-                  <% end %>
+                <%!-- Thread indicator (collapsed state) --%>
+                <div
+                  :if={not MapSet.member?(@expanded_threads, msg.id)}
+                  phx-click="toggle_inline_thread"
+                  phx-value-message-id={msg.id}
+                  class="thread-indicator"
+                >
+                  <div class="thread-avatars">
+                    <div class="t-av ai">↩</div>
+                  </div>
+                  <span class="ti-count">
+                    {Map.get(@thread_previews, msg.id, %{}) |> Map.get(:reply_count, 0)}
+                    {if Map.get(@thread_previews, msg.id, %{}) |> Map.get(:reply_count, 0) == 1,
+                      do: "reply",
+                      else: "replies"}
+                  </span>
+                  <span
+                    :if={Map.get(@thread_previews, msg.id, %{}) |> Map.get(:last_reply_at)}
+                    class="ti-time"
+                  >
+                    · {relative_time(
+                      Map.get(@thread_previews, msg.id, %{})
+                      |> Map.get(:last_reply_at)
+                    )}
+                  </span>
                 </div>
 
-                <%!-- Expanded inline thread messages --%>
+                <%!-- Expanded thread --%>
                 <div
                   :if={MapSet.member?(@expanded_threads, msg.id)}
                   class="thread-replies"
@@ -2341,8 +2323,7 @@ defmodule PlatformWeb.ChatLive do
                     class={[
                       "thread-reply",
                       if(MapSet.member?(@agent_participant_ids, tmsg.participant_id),
-                        do: "agent-reply",
-                        else: ""
+                        do: "agent-reply"
                       )
                     ]}
                   >
@@ -2354,32 +2335,23 @@ defmodule PlatformWeb.ChatLive do
                           else: "human"
                         )
                       ]}
-                      style={
-                        if(MapSet.member?(@agent_participant_ids, tmsg.participant_id),
-                          do: "width:28px;height:28px;font-size:10px;box-shadow:0 0 0 2px #06d5ed;",
-                          else: "width:28px;height:28px;font-size:10px;"
-                        )
-                      }
+                      style="width:28px;height:28px;font-size:10px"
                     >
                       {avatar_initial(@participants_map, tmsg.participant_id)}
                     </div>
                     <div class="msg-body">
                       <div class="msg-header">
-                        <span
-                          class={[
-                            "msg-username",
-                            if(MapSet.member?(@agent_participant_ids, tmsg.participant_id),
-                              do: "ai-name",
-                              else: ""
-                            )
-                          ]}
-                          style="font-size:13px;"
-                        >
+                        <span class={[
+                          "msg-username",
+                          if(MapSet.member?(@agent_participant_ids, tmsg.participant_id),
+                            do: "ai-name"
+                          )
+                        ]}>
                           {sender_name(@participants_map, tmsg.participant_id)}
                         </span>
                         <span
                           :if={MapSet.member?(@agent_participant_ids, tmsg.participant_id)}
-                          class="ai-badge-pill"
+                          class="ai-badge"
                         >
                           AI
                         </span>
@@ -2387,16 +2359,15 @@ defmodule PlatformWeb.ChatLive do
                           id={"inline-thread-ts-#{tmsg.id}"}
                           timestamp={tmsg.inserted_at}
                           class="msg-time"
-                          style="font-size:10px;"
                         />
                       </div>
-                      <div class="msg-text" style="font-size:13px;">
+                      <div class="msg-text">
                         {Platform.Chat.ContentRenderer.render_message(tmsg.content)}
                       </div>
                     </div>
                   </div>
 
-                  <%!-- Inline thread composer --%>
+                  <%!-- Thread composer --%>
                   <div class="thread-composer">
                     <.form
                       for={%{}}
@@ -2429,14 +2400,14 @@ defmodule PlatformWeb.ChatLive do
                     </.form>
                   </div>
 
-                  <%!-- Collapse thread button --%>
-                  <div
+                  <%!-- Collapse thread --%>
+                  <button
                     phx-click="toggle_inline_thread"
                     phx-value-message-id={msg.id}
                     class="thread-collapse"
                   >
                     ▲ Collapse thread
-                  </div>
+                  </button>
                 </div>
               </div>
             </div>
