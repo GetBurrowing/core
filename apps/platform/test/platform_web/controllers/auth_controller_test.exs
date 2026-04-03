@@ -16,11 +16,15 @@ defmodule PlatformWeb.AuthControllerTest do
     assert %{state: _, nonce: _} = get_session(conn, :oidc_session_params)
   end
 
-  test "GET /auth/oidc/callback creates a user, stores avatar metadata, and signs them in", %{conn: conn} do
+  test "GET /auth/oidc/callback creates a user, stores avatar metadata, and signs them in", %{
+    conn: conn
+  } do
     mock_oidc_response(%{
       user: base_claims(),
-      userinfo: Map.put(base_claims(), "picture", "https://issuer.example.com/userinfo-avatar.png"),
-      id_token: Map.put(base_claims(), "picture", "https://issuer.example.com/id-token-avatar.png")
+      userinfo:
+        Map.put(base_claims(), "picture", "https://issuer.example.com/userinfo-avatar.png"),
+      id_token:
+        Map.put(base_claims(), "picture", "https://issuer.example.com/id-token-avatar.png")
     })
 
     conn =
@@ -75,7 +79,9 @@ defmodule PlatformWeb.AuthControllerTest do
     assert user.avatar_source == :oidc
   end
 
-  test "GET /auth/oidc/callback keeps the stored avatar when the provider omits picture", %{conn: conn} do
+  test "GET /auth/oidc/callback keeps the stored avatar when the provider omits picture", %{
+    conn: conn
+  } do
     existing_user =
       insert_user(%{
         avatar_url: "https://issuer.example.com/stable-avatar.png",

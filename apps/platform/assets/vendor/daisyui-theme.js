@@ -88,7 +88,7 @@ var theme_default = plugin.withOptions((options = {}) => {
     if (prefersdark) {
       addBase({
         "@media (prefers-color-scheme: dark)": {
-          [root]: baseStyles[selector]
+          [`${root}:not([data-theme="light"])`]: baseStyles[selector]
         }
       });
     }
