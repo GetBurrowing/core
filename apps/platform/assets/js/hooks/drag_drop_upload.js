@@ -75,8 +75,15 @@ const DragDropUpload = {
       const imageFiles = [];
       for (let i = 0; i < items.length; i++) {
         if (items[i].type.startsWith("image/")) {
-          const file = items[i].getAsFile();
-          if (file) imageFiles.push(file);
+          const blob = items[i].getAsFile();
+          if (blob) {
+            // Mobile browsers often return blobs without a name — LiveView
+            // upload requires a name property. Wrap in a new File if needed.
+            const ext = blob.type.split("/")[1] || "png";
+            const name = blob.name && blob.name !== "" ? blob.name : `pasted-image-${Date.now()}.${ext}`;
+            const file = new File([blob], name, { type: blob.type, lastModified: blob.lastModified });
+            imageFiles.push(file);
+          }
         }
       }
 

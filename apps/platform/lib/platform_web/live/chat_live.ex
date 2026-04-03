@@ -111,13 +111,15 @@ defmodule PlatformWeb.ChatLive do
         accept: :any,
         auto_upload: true,
         max_entries: @max_upload_entries,
-        max_file_size: @max_upload_size
+        max_file_size: @max_upload_size,
+        progress: &handle_upload_progress/3
       )
       |> allow_upload(:thread_attachments,
         accept: :any,
         auto_upload: true,
         max_entries: @max_upload_entries,
-        max_file_size: @max_upload_size
+        max_file_size: @max_upload_size,
+        progress: &handle_upload_progress/3
       )
       |> stream(:messages, [])
 
@@ -392,6 +394,10 @@ defmodule PlatformWeb.ChatLive do
   end
 
   # ── Upload staging dialog events ──────────────────────────────────────
+
+  defp handle_upload_progress(_upload_name, _entry, socket) do
+    {:noreply, socket}
+  end
 
   def handle_event("show_upload_dialog", _params, socket) do
     {:noreply, assign(socket, :upload_dialog_open, true)}
