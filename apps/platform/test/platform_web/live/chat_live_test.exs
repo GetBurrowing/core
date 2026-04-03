@@ -630,7 +630,7 @@ defmodule PlatformWeb.ChatLiveTest do
       html = render_click(view, "open_thread", %{"message-id" => msg.id})
 
       assert html =~ "inline-thread-compose-form-#{msg.id}"
-      assert html =~ "Reply…"
+      assert html =~ "Reply in thread..."
     end
 
     test "toggling the inline thread closed hides its composer", %{conn: conn} do

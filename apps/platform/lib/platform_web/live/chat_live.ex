@@ -2332,20 +2332,34 @@ defmodule PlatformWeb.ChatLive do
                       )
                     ]}
                   >
-                    <div class={[
-                      "tr-avatar",
-                      if(MapSet.member?(@agent_participant_ids, tmsg.participant_id),
-                        do: "ai",
-                        else: "human"
-                      )
-                    ]}>
+                    <div
+                      class={[
+                        "msg-avatar",
+                        if(MapSet.member?(@agent_participant_ids, tmsg.participant_id),
+                          do: "ai",
+                          else: "human"
+                        )
+                      ]}
+                      style={
+                        if(MapSet.member?(@agent_participant_ids, tmsg.participant_id),
+                          do: "width:28px;height:28px;font-size:10px;box-shadow:0 0 0 2px #06d5ed;",
+                          else: "width:28px;height:28px;font-size:10px;"
+                        )
+                      }
+                    >
                       {avatar_initial(@participants_map, tmsg.participant_id)}
                     </div>
-                    <div class="min-w-0 flex-1">
-                      <div class="flex items-baseline gap-2">
+                    <div class="msg-body">
+                      <div class="msg-header">
                         <span
-                          class="msg-username"
-                          style="color: inherit; opacity: 0.85; font-weight: 600;"
+                          class={[
+                            "msg-username",
+                            if(MapSet.member?(@agent_participant_ids, tmsg.participant_id),
+                              do: "ai-name",
+                              else: ""
+                            )
+                          ]}
+                          style="font-size:13px;"
                         >
                           {sender_name(@participants_map, tmsg.participant_id)}
                         </span>
@@ -2359,43 +2373,47 @@ defmodule PlatformWeb.ChatLive do
                           id={"inline-thread-ts-#{tmsg.id}"}
                           timestamp={tmsg.inserted_at}
                           class="msg-time"
-                          style="opacity: 0.4;"
+                          style="font-size:10px;"
                         />
                       </div>
-                      <div class="msg-text" style="color: inherit; opacity: 0.9;">
+                      <div class="msg-text" style="font-size:13px;">
                         {Platform.Chat.ContentRenderer.render_message(tmsg.content)}
                       </div>
                     </div>
                   </div>
 
                   <%!-- Inline thread composer --%>
-                  <.form
-                    for={%{}}
-                    id={"inline-thread-compose-form-#{msg.id}"}
-                    phx-submit="send_inline_thread_message"
-                    class="flex items-center gap-2 mt-1"
-                  >
-                    <input type="hidden" name="inline_thread_compose[message_id]" value={msg.id} />
-                    <div class="flex-1 relative">
-                      <textarea
+                  <div class="thread-composer">
+                    <.form
+                      for={%{}}
+                      id={"inline-thread-compose-form-#{msg.id}"}
+                      phx-submit="send_inline_thread_message"
+                      class="thread-composer-form"
+                    >
+                      <input
+                        type="hidden"
+                        name="inline_thread_compose[message_id]"
+                        value={msg.id}
+                      />
+                      <input
+                        type="text"
                         name="inline_thread_compose[text]"
                         id={"inline-thread-compose-#{msg.id}"}
-                        rows="1"
-                        placeholder="Reply…"
+                        placeholder="Reply in thread..."
                         autocomplete="off"
-                        class="textarea w-full resize-none rounded-lg border-base-300/50 pr-10 text-[13px] leading-relaxed py-1 px-2.5"
+                        class="thread-input"
                         phx-hook="ComposeInput"
-                      ></textarea>
+                      />
                       <button
                         type="submit"
-                        class="absolute right-2 bottom-1 btn btn-ghost btn-xs flex items-center justify-center p-0"
+                        class="thread-send"
                         disabled={is_nil(@current_participant)}
                         title="Reply"
                       >
                         <span class="hero-paper-airplane size-3.5 -rotate-45"></span>
                       </button>
-                    </div>
-                  </.form>
+                    </.form>
+                  </div>
 
                   <%!-- Collapse thread button --%>
                   <div

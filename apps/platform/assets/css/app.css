@@ -564,15 +564,15 @@ body, .font-fabrikam, * {
   gap: 6px;
   margin-top: 8px;
   font-size: 12px;
-  color: var(--color-primary);
+  color: #06d5ed;
   cursor: pointer;
   user-select: none;
   padding: 4px 8px;
   border-radius: 6px;
-  transition: background 0.15s ease;
+  transition: background 150ms ease;
 }
 .thread-indicator:hover {
-  background: color-mix(in oklch, var(--color-primary) 8%, transparent);
+  background: rgba(6,213,237,0.08);
   opacity: 1;
 }
 
@@ -597,7 +597,7 @@ body, .font-fabrikam, * {
   border-color: rgba(6,213,237,0.25);
 }
 .thread-summary .ts-count {
-  color: var(--color-primary);
+  color: #06d5ed;
   font-weight: 600;
 }
 .thread-summary .ts-preview {
@@ -605,13 +605,12 @@ body, .font-fabrikam, * {
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
-  color: var(--color-neutral);
+  color: #666;
 }
 .thread-summary .ts-time {
-  color: var(--color-neutral);
+  color: #666;
   font-size: 11px;
   white-space: nowrap;
-  opacity: 0.6;
 }
 
 /* Avatar stack inside thread summary */
@@ -633,13 +632,13 @@ body, .font-fabrikam, * {
 }
 .thread-avatars .t-av.ai {
   background: #091214;
-  color: var(--color-primary);
-  border-color: var(--color-base-100);
+  color: #06d5ed;
+  border-color: var(--color-base-100, #161b26);
   outline: 1px solid rgba(6,213,237,0.4);
 }
 .thread-avatars .t-av.human {
   background: rgba(255,255,255,0.12);
-  color: var(--color-secondary);
+  color: #B0B0B0;
 }
 
 /* Expanded thread container */
@@ -714,13 +713,13 @@ body, .font-fabrikam, * {
 }
 .thread-reply .tr-avatar.ai {
   background: #091214;
-  color: var(--color-primary);
+  color: #06d5ed;
   border: 1.5px solid rgba(6,213,237,0.4);
   box-shadow: 0 0 0 2px #06d5ed;
 }
 .thread-reply .tr-avatar.human {
   background: rgba(255,255,255,0.10);
-  color: var(--color-secondary);
+  color: #B0B0B0;
 }
 
 /* AI badge pill */
@@ -733,10 +732,74 @@ body, .font-fabrikam, * {
   padding: 0px 4px;
   border-radius: 8px;
   border: 1px solid rgba(0,191,255,0.5);
-  color: var(--color-primary);
+  color: #06d5ed;
   line-height: 15px;
   vertical-align: middle;
   margin-left: 2px;
+}
+
+/* Thread composer */
+.thread-composer {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255,255,255,0.07);
+}
+.thread-composer-form {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.thread-input {
+  flex: 1;
+  background: var(--color-base-200, #1E1E1E);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 28px;
+  padding: 8px 14px;
+  color: var(--color-base-content, #E5E5E5);
+  font-size: 13px;
+  font-family: inherit;
+  outline: none;
+  transition: border-color 150ms ease;
+}
+.thread-input:focus {
+  border-color: rgba(6,213,237,0.55);
+}
+.thread-input::placeholder {
+  color: rgba(255,255,255,0.3);
+}
+.thread-send {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  border: none;
+  background: #06d5ed;
+  color: #000;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: filter 150ms ease;
+}
+.thread-send:hover {
+  filter: brightness(1.1);
+}
+.thread-send:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* Light mode thread composer */
+[data-theme="light"] .thread-composer {
+  border-top-color: #E0E0E0;
+}
+[data-theme="light"] .thread-input {
+  background: #FFFFFF;
+  border-color: #E0E0E0;
+  color: #000;
+}
+[data-theme="light"] .thread-input::placeholder {
+  color: #888;
 }
 
 /* Collapse thread button */
@@ -745,7 +808,7 @@ body, .font-fabrikam, * {
   align-items: center;
   gap: 5px;
   font-size: 12px;
-  color: var(--color-primary);
+  color: #06d5ed;
   cursor: pointer;
   padding: 6px 4px 4px;
   user-select: none;
@@ -778,12 +841,12 @@ body, .font-fabrikam, * {
 }
 [data-theme="light"] .thread-reply .tr-avatar.human {
   background: rgba(0,0,0,0.08);
-  color: var(--color-base-content);
+  color: #000;
 }
 [data-theme="light"] .thread-avatars .t-av.human {
   background: rgba(0,0,0,0.08);
-  color: var(--color-base-content);
-
+  color: #000;
+}
 
 /* ══════════════════════════════════════════════════════════════════════
    IMAGE UPLOAD PANEL & GALLERY — matches reference-image-upload.html
