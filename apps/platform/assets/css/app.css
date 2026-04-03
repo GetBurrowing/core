@@ -568,7 +568,7 @@ body, .font-fabrikam, * {
   font-size: 14px;
 }
 .message:hover .msg-reply-gutter,
-[class*="msg-"]:hover > .msg-reply-gutter { opacity: 1; left: -14px; }
+.group:hover > .msg-reply-gutter { opacity: 1; left: -14px; }
 .msg-reply-gutter:hover { background: #06d5ed; color: #000; transform: translateY(-50%) scale(1.1); }
 [data-theme="light"] .msg-reply-gutter { box-shadow: 0 2px 8px rgba(0,0,0,0.1), 0 0 0 1px #E0E0E0; background: #F5F5F5; }
 

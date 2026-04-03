@@ -2264,152 +2264,150 @@ defmodule PlatformWeb.ChatLive do
                     <span class="hero-plus size-4"></span>
                   </button>
                 </div>
-              </div>
 
-              <%!-- Left-gutter reply button (desktop, appears on hover) --%>
+                <%!-- Inline thread: indicator + expanded thread --%>
+                <div :if={
+                  Map.has_key?(@thread_previews, msg.id) or
+                    MapSet.member?(@expanded_threads, msg.id)
+                }>
+                  <%!-- Thread indicator (collapsed state) --%>
+                  <div
+                    :if={not MapSet.member?(@expanded_threads, msg.id)}
+                    phx-click="toggle_inline_thread"
+                    phx-value-message-id={msg.id}
+                    class="thread-indicator"
+                  >
+                    <div class="thread-avatars">
+                      <div class="t-av ai">↩</div>
+                    </div>
+                    <span class="ti-count">
+                      {Map.get(@thread_previews, msg.id, %{}) |> Map.get(:reply_count, 0)}
+                      {if Map.get(@thread_previews, msg.id, %{}) |> Map.get(:reply_count, 0) == 1,
+                        do: "reply",
+                        else: "replies"}
+                    </span>
+                    <span
+                      :if={Map.get(@thread_previews, msg.id, %{}) |> Map.get(:last_reply_at)}
+                      class="ti-time"
+                    >
+                      · {relative_time(
+                        Map.get(@thread_previews, msg.id, %{})
+                        |> Map.get(:last_reply_at)
+                      )}
+                    </span>
+                  </div>
+
+                  <%!-- Expanded thread --%>
+                  <div
+                    :if={MapSet.member?(@expanded_threads, msg.id)}
+                    class="thread-replies"
+                    id={"inline-thread-#{msg.id}"}
+                    phx-hook="InlineThread"
+                  >
+                    <div
+                      :for={tmsg <- Map.get(@inline_thread_messages, msg.id, [])}
+                      class={[
+                        "thread-reply",
+                        if(MapSet.member?(@agent_participant_ids, tmsg.participant_id),
+                          do: "agent-reply"
+                        )
+                      ]}
+                    >
+                      <div
+                        class={[
+                          "msg-avatar",
+                          if(MapSet.member?(@agent_participant_ids, tmsg.participant_id),
+                            do: "ai",
+                            else: "human"
+                          )
+                        ]}
+                        style="width:28px;height:28px;font-size:10px"
+                      >
+                        {avatar_initial(@participants_map, tmsg.participant_id)}
+                      </div>
+                      <div class="msg-body">
+                        <div class="msg-header">
+                          <span class={[
+                            "msg-username",
+                            if(MapSet.member?(@agent_participant_ids, tmsg.participant_id),
+                              do: "ai-name"
+                            )
+                          ]}>
+                            {sender_name(@participants_map, tmsg.participant_id)}
+                          </span>
+                          <span
+                            :if={MapSet.member?(@agent_participant_ids, tmsg.participant_id)}
+                            class="ai-badge"
+                          >
+                            AI
+                          </span>
+                          <.local_time
+                            id={"inline-thread-ts-#{tmsg.id}"}
+                            timestamp={tmsg.inserted_at}
+                            class="msg-time"
+                          />
+                        </div>
+                        <div class="msg-text">
+                          {Platform.Chat.ContentRenderer.render_message(tmsg.content)}
+                        </div>
+                      </div>
+                    </div>
+
+                    <%!-- Thread composer --%>
+                    <div class="thread-composer">
+                      <.form
+                        for={%{}}
+                        id={"inline-thread-compose-form-#{msg.id}"}
+                        phx-submit="send_inline_thread_message"
+                        class="thread-composer-form"
+                      >
+                        <input
+                          type="hidden"
+                          name="inline_thread_compose[message_id]"
+                          value={msg.id}
+                        />
+                        <input
+                          type="text"
+                          name="inline_thread_compose[text]"
+                          id={"inline-thread-compose-#{msg.id}"}
+                          placeholder="Reply in thread..."
+                          autocomplete="off"
+                          class="thread-input"
+                          phx-hook="ComposeInput"
+                        />
+                        <button
+                          type="submit"
+                          class="thread-send"
+                          disabled={is_nil(@current_participant)}
+                          title="Reply"
+                        >
+                          <span class="hero-paper-airplane size-3.5 -rotate-45"></span>
+                        </button>
+                      </.form>
+                    </div>
+
+                    <%!-- Collapse thread --%>
+                    <button
+                      phx-click="toggle_inline_thread"
+                      phx-value-message-id={msg.id}
+                      class="thread-collapse"
+                    >
+                      ▲ Collapse thread
+                    </button>
+                  </div>
+                </div>
+              </div>
+              <%!-- end message body --%>
+
+              <%!-- Left-gutter reply button (desktop, hidden until hover via CSS) --%>
               <button
                 phx-click="toggle_inline_thread"
                 phx-value-message-id={msg.id}
-                class="msg-reply-gutter hidden lg:flex"
+                class="msg-reply-gutter"
                 title="Reply"
               >
                 ↩
               </button>
-
-              <%!-- Inline thread: indicator + expanded thread --%>
-              <div
-                :if={
-                  Map.has_key?(@thread_previews, msg.id) or
-                    MapSet.member?(@expanded_threads, msg.id)
-                }
-                class="ml-12 mt-1"
-              >
-                <%!-- Thread indicator (collapsed state) --%>
-                <div
-                  :if={not MapSet.member?(@expanded_threads, msg.id)}
-                  phx-click="toggle_inline_thread"
-                  phx-value-message-id={msg.id}
-                  class="thread-indicator"
-                >
-                  <div class="thread-avatars">
-                    <div class="t-av ai">↩</div>
-                  </div>
-                  <span class="ti-count">
-                    {Map.get(@thread_previews, msg.id, %{}) |> Map.get(:reply_count, 0)}
-                    {if Map.get(@thread_previews, msg.id, %{}) |> Map.get(:reply_count, 0) == 1,
-                      do: "reply",
-                      else: "replies"}
-                  </span>
-                  <span
-                    :if={Map.get(@thread_previews, msg.id, %{}) |> Map.get(:last_reply_at)}
-                    class="ti-time"
-                  >
-                    · {relative_time(
-                      Map.get(@thread_previews, msg.id, %{})
-                      |> Map.get(:last_reply_at)
-                    )}
-                  </span>
-                </div>
-
-                <%!-- Expanded thread --%>
-                <div
-                  :if={MapSet.member?(@expanded_threads, msg.id)}
-                  class="thread-replies"
-                  id={"inline-thread-#{msg.id}"}
-                  phx-hook="InlineThread"
-                >
-                  <div
-                    :for={tmsg <- Map.get(@inline_thread_messages, msg.id, [])}
-                    class={[
-                      "thread-reply",
-                      if(MapSet.member?(@agent_participant_ids, tmsg.participant_id),
-                        do: "agent-reply"
-                      )
-                    ]}
-                  >
-                    <div
-                      class={[
-                        "msg-avatar",
-                        if(MapSet.member?(@agent_participant_ids, tmsg.participant_id),
-                          do: "ai",
-                          else: "human"
-                        )
-                      ]}
-                      style="width:28px;height:28px;font-size:10px"
-                    >
-                      {avatar_initial(@participants_map, tmsg.participant_id)}
-                    </div>
-                    <div class="msg-body">
-                      <div class="msg-header">
-                        <span class={[
-                          "msg-username",
-                          if(MapSet.member?(@agent_participant_ids, tmsg.participant_id),
-                            do: "ai-name"
-                          )
-                        ]}>
-                          {sender_name(@participants_map, tmsg.participant_id)}
-                        </span>
-                        <span
-                          :if={MapSet.member?(@agent_participant_ids, tmsg.participant_id)}
-                          class="ai-badge"
-                        >
-                          AI
-                        </span>
-                        <.local_time
-                          id={"inline-thread-ts-#{tmsg.id}"}
-                          timestamp={tmsg.inserted_at}
-                          class="msg-time"
-                        />
-                      </div>
-                      <div class="msg-text">
-                        {Platform.Chat.ContentRenderer.render_message(tmsg.content)}
-                      </div>
-                    </div>
-                  </div>
-
-                  <%!-- Thread composer --%>
-                  <div class="thread-composer">
-                    <.form
-                      for={%{}}
-                      id={"inline-thread-compose-form-#{msg.id}"}
-                      phx-submit="send_inline_thread_message"
-                      class="thread-composer-form"
-                    >
-                      <input
-                        type="hidden"
-                        name="inline_thread_compose[message_id]"
-                        value={msg.id}
-                      />
-                      <input
-                        type="text"
-                        name="inline_thread_compose[text]"
-                        id={"inline-thread-compose-#{msg.id}"}
-                        placeholder="Reply in thread..."
-                        autocomplete="off"
-                        class="thread-input"
-                        phx-hook="ComposeInput"
-                      />
-                      <button
-                        type="submit"
-                        class="thread-send"
-                        disabled={is_nil(@current_participant)}
-                        title="Reply"
-                      >
-                        <span class="hero-paper-airplane size-3.5 -rotate-45"></span>
-                      </button>
-                    </.form>
-                  </div>
-
-                  <%!-- Collapse thread --%>
-                  <button
-                    phx-click="toggle_inline_thread"
-                    phx-value-message-id={msg.id}
-                    class="thread-collapse"
-                  >
-                    ▲ Collapse thread
-                  </button>
-                </div>
-              </div>
             </div>
           </div>
 
