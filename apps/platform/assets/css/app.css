@@ -553,3 +553,233 @@ body, .font-fabrikam, * {
   border-radius: 0.375rem;
   padding: 2px 4px;
 }
+
+/* ── Inline Thread UI (reference comp exact-match) ───────────────── */
+
+/* Pattern 1: Simple thread indicator (≤5 replies, collapsed) */
+.thread-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--color-primary);
+  cursor: pointer;
+  user-select: none;
+  padding: 4px 8px;
+  border-radius: 6px;
+  transition: background 0.15s ease;
+}
+.thread-indicator:hover {
+  background: color-mix(in oklch, var(--color-primary) 8%, transparent);
+  opacity: 1;
+}
+
+/* Pattern 2: Thread summary card (>5 replies, collapsed) */
+.thread-summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 4px;
+  padding: 6px 10px;
+  background: #1e2333;
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 8px;
+  font-size: 12px;
+  color: var(--color-secondary);
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+  max-width: 480px;
+}
+.thread-summary:hover {
+  background: #252c3d;
+  border-color: rgba(6,213,237,0.25);
+}
+.thread-summary .ts-count {
+  color: var(--color-primary);
+  font-weight: 600;
+}
+.thread-summary .ts-preview {
+  flex: 1;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--color-neutral);
+}
+.thread-summary .ts-time {
+  color: var(--color-neutral);
+  font-size: 11px;
+  white-space: nowrap;
+  opacity: 0.6;
+}
+
+/* Avatar stack inside thread summary */
+.thread-avatars {
+  display: flex;
+  margin-right: 2px;
+}
+.thread-avatars .t-av {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 8px;
+  font-weight: 700;
+  border: 1.5px solid var(--color-base-100);
+  margin-right: -5px;
+}
+.thread-avatars .t-av.ai {
+  background: #091214;
+  color: var(--color-primary);
+  border-color: var(--color-base-100);
+  outline: 1px solid rgba(6,213,237,0.4);
+}
+.thread-avatars .t-av.human {
+  background: rgba(255,255,255,0.12);
+  color: var(--color-secondary);
+}
+
+/* Expanded thread container */
+.thread-replies {
+  margin-top: 6px;
+  margin-left: 0;
+  padding-left: 20px;
+  border-left: 2px solid rgba(255,255,255,0.07);
+  overflow: hidden;
+  transition: max-height 0.4s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.3s ease;
+}
+.thread-replies.collapsed {
+  max-height: 0 !important;
+  opacity: 0;
+}
+
+/* Individual thread reply */
+.thread-reply {
+  display: flex;
+  gap: 10px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  transition: background 150ms ease;
+}
+.thread-reply:hover {
+  background: rgba(255,255,255,0.04);
+}
+
+/* Agent replies get special treatment */
+.thread-reply.agent-reply {
+  background: rgba(6,213,237,0.04);
+  border-left: 2px solid rgba(6,213,237,0.3);
+  border-radius: 0 8px 8px 0;
+  padding-left: 10px;
+  margin: 2px 0;
+}
+.thread-reply.agent-reply:hover {
+  background: rgba(6,213,237,0.07);
+}
+
+/* Thread reply sizing */
+.thread-reply .msg-avatar {
+  width: 26px;
+  height: 26px;
+  font-size: 10px;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+.thread-reply .msg-username {
+  font-size: 12.5px;
+}
+.thread-reply .msg-time {
+  font-size: 10px;
+}
+.thread-reply .msg-text {
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+/* Thread reply avatar styles */
+.thread-reply .tr-avatar {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 600;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+.thread-reply .tr-avatar.ai {
+  background: #091214;
+  color: var(--color-primary);
+  border: 1.5px solid rgba(6,213,237,0.4);
+  box-shadow: 0 0 0 2px #06d5ed;
+}
+.thread-reply .tr-avatar.human {
+  background: rgba(255,255,255,0.10);
+  color: var(--color-secondary);
+}
+
+/* AI badge pill */
+.ai-badge-pill {
+  display: inline-flex;
+  align-items: center;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  padding: 0px 4px;
+  border-radius: 8px;
+  border: 1px solid rgba(0,191,255,0.5);
+  color: var(--color-primary);
+  line-height: 15px;
+  vertical-align: middle;
+  margin-left: 2px;
+}
+
+/* Collapse thread button */
+.thread-collapse {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  color: var(--color-primary);
+  cursor: pointer;
+  padding: 6px 4px 4px;
+  user-select: none;
+  margin-top: 2px;
+}
+.thread-collapse:hover {
+  opacity: 0.8;
+}
+
+/* Light mode overrides */
+[data-theme="light"] .thread-replies {
+  border-left-color: #E0E0E0;
+}
+[data-theme="light"] .thread-summary {
+  background: #F5F5F5;
+  border-color: rgba(0,0,0,0.08);
+}
+[data-theme="light"] .thread-summary:hover {
+  background: #E8E8E8;
+  border-color: rgba(6,213,237,0.35);
+}
+[data-theme="light"] .thread-reply:hover {
+  background: rgba(0,0,0,0.04);
+}
+[data-theme="light"] .thread-reply.agent-reply {
+  background: rgba(6,213,237,0.06);
+}
+[data-theme="light"] .thread-reply.agent-reply:hover {
+  background: rgba(6,213,237,0.10);
+}
+[data-theme="light"] .thread-reply .tr-avatar.human {
+  background: rgba(0,0,0,0.08);
+  color: var(--color-base-content);
+}
+[data-theme="light"] .thread-avatars .t-av.human {
+  background: rgba(0,0,0,0.08);
+  color: var(--color-base-content);
+}

@@ -2,8 +2,9 @@ const InlineThread = {
   mounted() {
     this.el.style.overflow = "hidden";
     this.el.style.maxHeight = "0px";
-    this.el.style.transition = "max-height 0.3s ease-out, opacity 0.3s ease-out";
     this.el.style.opacity = "0";
+    this.el.style.transition =
+      "max-height 0.4s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.3s ease";
 
     // Expand on next frame
     requestAnimationFrame(() => {
