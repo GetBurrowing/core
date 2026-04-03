@@ -101,6 +101,7 @@ defmodule PlatformWeb.ChatLive do
       |> assign(:unread_counts, if(user_id, do: Chat.unread_counts_for_user(user_id), else: %{}))
       |> assign(:upload_dialog_open, false)
       |> assign(:upload_caption, "")
+      |> assign(:upload_tagged_agents, MapSet.new())
       |> assign(:drafts, %{})
       |> assign_compose("")
       |> assign_thread_compose("")
@@ -405,7 +406,8 @@ defmodule PlatformWeb.ChatLive do
     {:noreply,
      socket
      |> assign(:upload_dialog_open, false)
-     |> assign(:upload_caption, "")}
+     |> assign(:upload_caption, "")
+     |> assign(:upload_tagged_agents, MapSet.new())}
   end
 
   def handle_event("upload_caption_changed", %{"caption" => text}, socket) do
@@ -415,11 +417,29 @@ defmodule PlatformWeb.ChatLive do
   def handle_event("send_upload", _params, socket) do
     with space when not is_nil(space) <- socket.assigns.active_space,
          participant when not is_nil(participant) <- socket.assigns.current_participant do
+      caption = String.trim(socket.assigns.upload_caption || "")
+      tagged = socket.assigns.upload_tagged_agents
+
+      # Append @mentions for tagged agents not already in caption
+      mentions =
+        tagged
+        |> MapSet.to_list()
+        |> Enum.reject(fn slug -> String.contains?(caption, "@#{String.capitalize(slug)}") end)
+        |> Enum.map(fn slug -> "@#{String.capitalize(slug)}" end)
+
+      content =
+        case {caption, mentions} do
+          {"", []} -> ""
+          {"", _} -> Enum.join(mentions, " ")
+          {c, []} -> c
+          {c, _} -> c <> " " <> Enum.join(mentions, " ")
+        end
+
       attrs = %{
         space_id: space.id,
         participant_id: participant.id,
         content_type: "text",
-        content: String.trim(socket.assigns.upload_caption || "")
+        content: content
       }
 
       case post_message_from_upload(socket, :attachments, attrs) do
@@ -429,7 +449,8 @@ defmodule PlatformWeb.ChatLive do
            |> stream_insert(:messages, msg)
            |> put_attachment_map_entry(msg.id, attachments)
            |> assign(:upload_dialog_open, false)
-           |> assign(:upload_caption, "")}
+           |> assign(:upload_caption, "")
+           |> assign(:upload_tagged_agents, MapSet.new())}
 
         {:noop, _socket} ->
           {:noreply, put_flash(socket, :info, "No files selected")}
@@ -445,6 +466,19 @@ defmodule PlatformWeb.ChatLive do
   def handle_event("cancel_upload", %{"ref" => ref}, socket) do
     {:noreply, cancel_upload(socket, :attachments, ref)}
   end
+
+  def handle_event("toggle_upload_agent_tag", %{"agent" => slug}, socket) do
+    tagged = socket.assigns.upload_tagged_agents
+
+    tagged =
+      if MapSet.member?(tagged, slug),
+        do: MapSet.delete(tagged, slug),
+        else: MapSet.put(tagged, slug)
+
+    {:noreply, assign(socket, :upload_tagged_agents, tagged)}
+  end
+
+  def handle_event("noop", _params, socket), do: {:noreply, socket}
 
   # ── End upload staging dialog events ──────────────────────────────────
 
@@ -2139,32 +2173,42 @@ defmodule PlatformWeb.ChatLive do
                   {Platform.Chat.ContentRenderer.render_message(msg.content)}
                 </div>
 
+                <%!-- Image gallery --%>
+                <% images = Enum.filter(Map.get(@attachments_map, msg.id, []), &image_attachment?/1) %>
+                <% non_images =
+                  Enum.reject(Map.get(@attachments_map, msg.id, []), &image_attachment?/1) %>
                 <div
-                  :if={Map.get(@attachments_map, msg.id, []) != []}
-                  class="mt-1 flex flex-col gap-2"
+                  :if={images != []}
+                  class={"image-gallery count-#{min(length(images), 5)}"}
                 >
                   <a
-                    :for={
-                      attachment <-
-                        Enum.filter(Map.get(@attachments_map, msg.id, []), &image_attachment?/1)
-                    }
+                    :for={{attachment, idx} <- Enum.with_index(images)}
                     href={attachment_url(attachment)}
                     target="_blank"
                     rel="noopener noreferrer"
-                    class="block max-w-sm"
+                    class={"gallery-item#{if length(images) == 3 and idx == 0, do: " span-2", else: ""}"}
                   >
                     <img
                       src={attachment_url(attachment)}
                       alt={attachment.filename}
                       loading="lazy"
-                      class="rounded-lg max-h-64 object-contain bg-base-200"
                     />
+                    <span class="gallery-filename">{attachment.filename}</span>
+                    <div class="gallery-overlay">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" /><line
+                          x1="11"
+                          y1="8"
+                          x2="11"
+                          y2="14"
+                        /><line x1="8" y1="11" x2="14" y2="11" />
+                      </svg>
+                    </div>
                   </a>
+                </div>
+                <div :if={non_images != []} class="mt-1 flex flex-col gap-2">
                   <a
-                    :for={
-                      attachment <-
-                        Enum.reject(Map.get(@attachments_map, msg.id, []), &image_attachment?/1)
-                    }
+                    :for={attachment <- non_images}
                     href={attachment_url(attachment)}
                     target="_blank"
                     rel="noopener noreferrer"
@@ -2492,8 +2536,12 @@ defmodule PlatformWeb.ChatLive do
                 >
                   <span class="hero-plus size-5"></span>
                 </button>
-                <%!-- Hidden file input keeps LiveView upload channel active for drag-drop --%>
-                <.live_file_input upload={@uploads.attachments} class="hidden" />
+                <%!-- Hidden file input — single instance, used by both compose attach button and upload panel --%>
+                <.live_file_input
+                  upload={@uploads.attachments}
+                  class="hidden"
+                  id="upload-file-trigger"
+                />
 
                 <textarea
                   name="compose[text]"
@@ -2541,148 +2589,201 @@ defmodule PlatformWeb.ChatLive do
 
           <%!-- Upload staging dialog --%>
           <%= if @upload_dialog_open do %>
-            <div
-              class="absolute inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm"
-              phx-click="hide_upload_dialog"
-            >
-              <div
-                class="mx-4 w-full max-w-lg rounded-2xl bg-base-100 shadow-2xl border border-base-300"
-                phx-click-away="hide_upload_dialog"
-                onclick="event.stopPropagation()"
-              >
+            <div class="upload-backdrop" phx-click="hide_upload_dialog">
+              <div class="upload-panel" phx-click="noop">
                 <%!-- Header --%>
-                <div class="flex items-center justify-between border-b border-base-300 px-5 py-3">
-                  <h3 class="text-base font-semibold">Upload files</h3>
-                  <button
-                    type="button"
-                    phx-click="hide_upload_dialog"
-                    class="btn btn-ghost btn-xs btn-circle"
-                    title="Close"
-                  >
-                    <span class="hero-x-mark size-4"></span>
+                <div class="upload-header">
+                  <div class="upload-header-icon">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <rect x="3" y="3" width="18" height="18" rx="2" /><circle
+                        cx="8.5"
+                        cy="8.5"
+                        r="1.5"
+                      /><path d="M21 15l-5-5L5 21" />
+                    </svg>
+                  </div>
+                  <div class="upload-header-text">
+                    <div class="upload-title">Share Images</div>
+                    <div class="upload-subtitle">
+                      Upload images to
+                      <strong>{"##{(@active_space && @active_space.name) || ""}"}</strong>
+                    </div>
+                  </div>
+                  <button type="button" class="upload-close" phx-click="hide_upload_dialog">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+                    </svg>
                   </button>
                 </div>
 
-                <%!-- File previews --%>
-                <div class="px-5 py-4">
-                  <div
-                    :if={@uploads.attachments.entries != []}
-                    class="grid grid-cols-3 gap-3 mb-4"
+                <%!-- Empty: Drop Zone --%>
+                <div
+                  :if={@uploads.attachments.entries == []}
+                  class="upload-dropzone"
+                  phx-click={JS.dispatch("click", to: "#upload-file-trigger")}
+                >
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                    <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" /><polyline points="17 8 12 3 7 8" /><line
+                      x1="12"
+                      y1="3"
+                      x2="12"
+                      y2="15"
+                    />
+                  </svg>
+                  <div class="upload-dropzone-title">Drag & drop images here</div>
+                  <div class="upload-dropzone-or">or</div>
+                  <button
+                    type="button"
+                    class="upload-browse-btn"
+                    phx-click={JS.dispatch("click", to: "#upload-file-trigger")}
                   >
-                    <div
-                      :for={entry <- @uploads.attachments.entries}
-                      class="relative group"
-                    >
+                    Browse files
+                  </button>
+                  <div class="upload-dropzone-sub">You can also paste images with ⌘V</div>
+                  <div class="upload-dropzone-formats">
+                    PNG · JPG · GIF · WebP · SVG — max 15 MB each
+                  </div>
+                </div>
+
+                <%!-- Populated: Image Grid --%>
+                <div :if={@uploads.attachments.entries != []} class="upload-grid-area">
+                  <div class="upload-grid">
+                    <div :for={entry <- @uploads.attachments.entries} class="upload-thumb">
                       <%= if String.starts_with?(entry.client_type, "image/") do %>
                         <.live_img_preview
                           entry={entry}
-                          class="w-full h-24 object-cover rounded-lg border border-base-300"
+                          class="upload-thumb-inner"
+                          style="width:100%;height:100%;object-fit:cover"
                         />
                       <% else %>
-                        <div class="w-full h-24 rounded-lg border border-base-300 bg-base-200 flex flex-col items-center justify-center gap-1 px-2">
-                          <span class="hero-document size-8 text-base-content/40"></span>
-                          <span class="text-[10px] text-base-content/60 truncate w-full text-center">
-                            {entry.client_name}
-                          </span>
+                        <div class="upload-thumb-inner">
+                          <svg
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="1.5"
+                          >
+                            <rect x="3" y="3" width="18" height="18" rx="2" /><circle
+                              cx="8.5"
+                              cy="8.5"
+                              r="1.5"
+                            /><path d="M21 15l-5-5L5 21" />
+                          </svg>
                         </div>
                       <% end %>
-
-                      <%!-- Remove button --%>
+                      <span class="upload-thumb-name">{entry.client_name}</span>
                       <button
                         type="button"
+                        class="upload-thumb-remove"
                         phx-click="cancel_upload"
                         phx-value-ref={entry.ref}
-                        class="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-error text-error-content flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity shadow-sm"
-                        title="Remove"
                       >
-                        <span class="hero-x-mark size-3"></span>
+                        ×
                       </button>
-
                       <%!-- Progress bar --%>
                       <div
                         :if={entry.progress > 0 and entry.progress < 100}
-                        class="absolute bottom-1 left-1 right-1"
+                        style="position:absolute;bottom:0;left:0;right:0;height:3px;background:rgba(0,0,0,0.3)"
                       >
-                        <div class="h-1 rounded-full bg-base-300 overflow-hidden">
-                          <div
-                            class="h-full bg-primary transition-all duration-300"
-                            style={"width: #{entry.progress}%"}
-                          >
-                          </div>
+                        <div style={"height:100%;background:var(--cyan);width:#{entry.progress}%;transition:width 300ms ease"}>
                         </div>
                       </div>
                     </div>
+                    <%!-- Add more tile --%>
+                    <button
+                      type="button"
+                      class="upload-add-tile"
+                      phx-click={JS.dispatch("click", to: "#upload-file-trigger")}
+                    >
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" />
+                      </svg>
+                      Add more
+                    </button>
                   </div>
+                </div>
 
-                  <div
-                    :if={@uploads.attachments.entries == []}
-                    class="text-center py-8 text-base-content/40"
-                  >
-                    <span class="hero-cloud-arrow-up size-12 mx-auto mb-2"></span>
-                    <p class="text-sm">No files selected yet</p>
-                  </div>
-
-                  <%!-- Upload errors --%>
+                <%!-- Upload errors --%>
+                <div :if={upload_errors(@uploads.attachments) != []} style="padding:0 20px">
                   <p
                     :for={error <- upload_errors(@uploads.attachments)}
-                    class="text-xs text-error mb-2"
+                    class="text-xs"
+                    style="color:var(--danger);margin-bottom:4px"
                   >
                     {upload_error_to_string(error)}
                   </p>
-
-                  <div :for={entry <- @uploads.attachments.entries}>
-                    <p
-                      :for={error <- upload_errors(@uploads.attachments, entry)}
-                      class="text-xs text-error mb-1"
-                    >
-                      {entry.client_name}: {upload_error_to_string(error)}
-                    </p>
-                  </div>
-
-                  <%!-- Add more files — triggers the hidden live_file_input in compose area --%>
-                  <button
-                    type="button"
-                    onclick="document.getElementById('chat-drop-zone').querySelector('input[type=file]').click()"
-                    class="flex items-center gap-2 text-sm text-primary cursor-pointer hover:underline mt-2"
+                </div>
+                <div :for={entry <- @uploads.attachments.entries} style="padding:0 20px">
+                  <p
+                    :for={error <- upload_errors(@uploads.attachments, entry)}
+                    class="text-xs"
+                    style="color:var(--danger);margin-bottom:4px"
                   >
-                    <span class="hero-plus size-4"></span>
-                    <span>Add more files</span>
-                  </button>
+                    {entry.client_name}: {upload_error_to_string(error)}
+                  </p>
                 </div>
 
-                <%!-- Caption --%>
-                <div class="px-5 pb-4">
+                <%!-- Agent Tag Section --%>
+                <div :if={@uploads.attachments.entries != []} class="upload-agent-section">
+                  <div class="upload-agent-label">Tag an agent</div>
+                  <div class="upload-agent-chips">
+                    <button
+                      :for={
+                        {slug, label} <- [
+                          {"beacon", "Beacon"},
+                          {"pixel", "Pixel"},
+                          {"builder", "Builder"},
+                          {"higgins", "Higgins"}
+                        ]
+                      }
+                      type="button"
+                      class={"agent-chip #{slug}#{if MapSet.member?(@upload_tagged_agents, slug), do: " selected", else: ""}"}
+                      phx-click="toggle_upload_agent_tag"
+                      phx-value-agent={slug}
+                    >
+                      <span class="chip-dot"></span> {label}
+                    </button>
+                  </div>
+                </div>
+
+                <%!-- Comment --%>
+                <div :if={@uploads.attachments.entries != []} class="upload-comment">
                   <form phx-change="upload_caption_changed" phx-submit="send_upload">
                     <textarea
                       name="caption"
-                      placeholder="Add a caption (optional)..."
-                      rows="2"
+                      class="upload-comment-input"
+                      placeholder="Add a comment about these images..."
                       phx-debounce="200"
-                      class="w-full rounded-xl text-sm resize-none bg-base-100 border border-base-300 focus:border-primary focus:outline-none transition-colors px-3 py-2"
                     >{@upload_caption}</textarea>
                   </form>
                 </div>
 
                 <%!-- Footer --%>
-                <div class="flex items-center justify-end gap-2 border-t border-base-300 px-5 py-3">
-                  <button
-                    type="button"
-                    phx-click="hide_upload_dialog"
-                    class="btn btn-ghost btn-sm"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="button"
-                    phx-click="send_upload"
-                    class="btn btn-primary btn-sm"
-                    disabled={@uploads.attachments.entries == []}
-                  >
-                    Send
-                  </button>
+                <div :if={@uploads.attachments.entries != []} class="upload-footer">
+                  <div class="upload-count">
+                    <strong>{length(@uploads.attachments.entries)}</strong>
+                    {if length(@uploads.attachments.entries) == 1, do: "image", else: "images"} selected
+                  </div>
+                  <div class="upload-footer-actions">
+                    <button type="button" class="upload-btn-cancel" phx-click="hide_upload_dialog">
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      class="upload-btn-send"
+                      phx-click="send_upload"
+                      disabled={@uploads.attachments.entries == []}
+                    >
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                        <line x1="22" y1="2" x2="11" y2="13" /><polygon points="22 2 15 22 11 13 2 9 22 2" />
+                      </svg>
+                      Send to {"##{(@active_space && @active_space.name) || ""}"}
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>
+            <%!-- Upload file input is in the compose area above (single instance to avoid duplicate IDs) --%>
           <% end %>
         </div>
 
