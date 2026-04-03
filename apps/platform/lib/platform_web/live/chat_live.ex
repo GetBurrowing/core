@@ -101,6 +101,7 @@ defmodule PlatformWeb.ChatLive do
       |> assign(:unread_counts, if(user_id, do: Chat.unread_counts_for_user(user_id), else: %{}))
       |> assign(:upload_dialog_open, false)
       |> assign(:upload_caption, "")
+      |> assign(:lightbox_url, nil)
       |> assign(:upload_tagged_agents, MapSet.new())
       |> assign(:drafts, %{})
       |> assign_compose("")
@@ -397,6 +398,14 @@ defmodule PlatformWeb.ChatLive do
 
   defp handle_upload_progress(_upload_name, _entry, socket) do
     {:noreply, socket}
+  end
+
+  def handle_event("open_lightbox", %{"url" => url}, socket) do
+    {:noreply, assign(socket, :lightbox_url, url)}
+  end
+
+  def handle_event("close_lightbox", _params, socket) do
+    {:noreply, assign(socket, :lightbox_url, nil)}
   end
 
   def handle_event("show_upload_dialog", _params, socket) do
@@ -2187,12 +2196,11 @@ defmodule PlatformWeb.ChatLive do
                   :if={images != []}
                   class={"image-gallery count-#{min(length(images), 5)}"}
                 >
-                  <a
+                  <div
                     :for={{attachment, idx} <- Enum.with_index(images)}
-                    href={attachment_url(attachment)}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    class={"gallery-item#{if length(images) == 3 and idx == 0, do: " span-2", else: ""}"}
+                    phx-click="open_lightbox"
+                    phx-value-url={attachment_url(attachment)}
+                    class={"gallery-item cursor-pointer#{if length(images) == 3 and idx == 0, do: " span-2", else: ""}"}
                   >
                     <img
                       src={attachment_url(attachment)}
@@ -2210,7 +2218,7 @@ defmodule PlatformWeb.ChatLive do
                         /><line x1="8" y1="11" x2="14" y2="11" />
                       </svg>
                     </div>
-                  </a>
+                  </div>
                 </div>
                 <div :if={non_images != []} class="mt-1 flex flex-col gap-2">
                   <a
@@ -3129,6 +3137,26 @@ defmodule PlatformWeb.ChatLive do
         </div>
       </div>
     <% end %>
+
+    <%!-- Image lightbox modal --%>
+    <div
+      :if={@lightbox_url}
+      class="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm"
+      phx-click="close_lightbox"
+    >
+      <button
+        class="absolute top-4 right-4 z-10 rounded-full bg-black/50 p-2 text-white hover:bg-black/70 transition-colors safe-area-top"
+        phx-click="close_lightbox"
+        aria-label="Close"
+      >
+        <span class="hero-x-mark size-6"></span>
+      </button>
+      <img
+        src={@lightbox_url}
+        class="max-h-[90vh] max-w-[95vw] rounded-lg object-contain shadow-2xl"
+        phx-click="close_lightbox"
+      />
+    </div>
     """
   end
 
