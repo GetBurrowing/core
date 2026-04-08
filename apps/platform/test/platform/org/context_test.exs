@@ -142,7 +142,8 @@ defmodule Platform.Org.ContextTest do
 
     test "records updated_by on upsert" do
       agent_id = Ecto.UUID.generate()
-      assert {:ok, file} = Context.upsert_context_file("ORG_MEMORY.md", "content", updated_by: agent_id)
+      assert {:ok, file} =
+               Context.upsert_context_file("ORG_MEMORY.md", "content", updated_by: agent_id)
       assert file.updated_by == agent_id
     end
 
@@ -150,9 +151,7 @@ defmodule Platform.Org.ContextTest do
       ws = Ecto.UUID.generate()
 
       assert {:ok, file} =
-               Context.upsert_context_file("ORG_IDENTITY.md", "ws content",
-                 workspace_id: ws
-               )
+               Context.upsert_context_file("ORG_IDENTITY.md", "ws content", workspace_id: ws)
 
       assert file.workspace_id == ws
 
@@ -227,8 +226,7 @@ defmodule Platform.Org.ContextTest do
 
       Context.append_memory("Memory for telemetry test")
 
-      assert_receive {[:platform, :org_context, :memory_appended], ^ref, _measurements,
-                      metadata}
+      assert_receive {[:platform, :org_context, :memory_appended], ^ref, _measurements, metadata}
 
       assert metadata.memory_type == "daily"
 
