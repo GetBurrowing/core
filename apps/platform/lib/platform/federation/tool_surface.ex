@@ -99,7 +99,8 @@ defmodule Platform.Federation.ToolSurface do
               "Expected current version for optimistic locking. Write fails if the file has been modified since this version."
           }
         },
-        returns: "The updated file object with file_key, content, version, updated_by, and timestamps",
+        returns:
+          "The updated file object with file_key, content, version, updated_by, and timestamps",
         limitations:
           "If expected_version is supplied and doesn't match, returns a version conflict error.",
         when_to_use:
@@ -198,7 +199,8 @@ defmodule Platform.Federation.ToolSurface do
             description: "Maximum number of results to return (default: 50)"
           }
         },
-        returns: "Array of memory entry objects with id, content, memory_type, date, and timestamps",
+        returns:
+          "Array of memory entry objects with id, content, memory_type, date, and timestamps",
         limitations:
           "Uses case-insensitive substring matching, not full-text search. Default limit is 50.",
         when_to_use:
