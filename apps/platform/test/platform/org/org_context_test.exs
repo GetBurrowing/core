@@ -7,7 +7,6 @@ defmodule Platform.Org.ContextTest do
   alias Platform.Org.Seeds
   alias Platform.Repo
 
-
   defp errors_on(changeset) do
     Ecto.Changeset.traverse_errors(changeset, fn {msg, opts} ->
       Enum.reduce(opts, msg, fn {key, value}, acc ->
