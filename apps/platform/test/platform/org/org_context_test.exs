@@ -234,7 +234,7 @@ defmodule Platform.Org.ContextTest do
       :ok = Seeds.seed_defaults()
 
       files = Repo.all(ContextFile)
-      assert length(files) == 4
+      assert length(files) == 3
     end
 
     test "does not overwrite existing content" do
