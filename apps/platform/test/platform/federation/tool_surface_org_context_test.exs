@@ -50,6 +50,7 @@ defmodule Platform.Federation.ToolSurfaceOrgContextTest do
   describe "org_context_read" do
     test "returns file content when file exists" do
       clear_seeded_data()
+
       {:ok, _file} =
         OrgContext.upsert_context_file("ORG_IDENTITY.md", %{content: "We are Acme Corp"})
 
@@ -82,6 +83,7 @@ defmodule Platform.Federation.ToolSurfaceOrgContextTest do
   describe "org_context_write" do
     test "creates a new context file" do
       clear_seeded_data()
+
       {:ok, result} =
         ToolSurface.execute(
           "org_context_write",
@@ -178,6 +180,7 @@ defmodule Platform.Federation.ToolSurfaceOrgContextTest do
   describe "org_memory_append" do
     test "creates a daily memory entry" do
       clear_seeded_data()
+
       {:ok, result} =
         ToolSurface.execute(
           "org_memory_append",
@@ -193,6 +196,7 @@ defmodule Platform.Federation.ToolSurfaceOrgContextTest do
 
     test "creates a long_term memory entry with specific date" do
       clear_seeded_data()
+
       {:ok, result} =
         ToolSurface.execute(
           "org_memory_append",
@@ -230,6 +234,7 @@ defmodule Platform.Federation.ToolSurfaceOrgContextTest do
   describe "org_memory_search" do
     test "returns all entries when no filters" do
       clear_seeded_data()
+
       {:ok, _} =
         OrgContext.append_memory_entry(%{
           content: "Entry one",
