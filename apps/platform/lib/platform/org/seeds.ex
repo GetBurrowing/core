@@ -2,8 +2,8 @@ defmodule Platform.Org.Seeds do
   @moduledoc """
   Seeds default org context files on first boot.
 
-  Inserts the four default org context files (ORG_IDENTITY.md, ORG_MEMORY.md,
-  ORG_AGENTS.md, ORG_DIRECTORY.md) if they don't already exist.
+  Inserts the default org context files (ORG_IDENTITY.md, ORG_MEMORY.md,
+  ORG_AGENTS.md) if they don't already exist.
   Idempotent — safe to call multiple times.
   """
 
@@ -34,13 +34,6 @@ defmodule Platform.Org.Seeds do
     Document workflows, coding standards, review processes, deployment procedures,
     and any other conventions agents should follow.
     """,
-    "ORG_DIRECTORY.md" => """
-    # Org Directory
-
-    _Auto-generated directory of users and agents. Do not edit manually._
-
-    This file is regenerated automatically when users or agents are added or removed.
-    """
   }
 
   @doc """

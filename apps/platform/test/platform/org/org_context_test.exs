@@ -214,7 +214,7 @@ defmodule Platform.Org.ContextTest do
   # ── Seeds ──────────────────────────────────────────────────────────────
 
   describe "Seeds.seed_defaults/1" do
-    test "creates all four default org context files" do
+    test "creates all default org context files" do
       clear_seeded_files()
       :ok = Seeds.seed_defaults()
 
@@ -223,7 +223,6 @@ defmodule Platform.Org.ContextTest do
 
       assert file_keys == [
                "ORG_AGENTS.md",
-               "ORG_DIRECTORY.md",
                "ORG_IDENTITY.md",
                "ORG_MEMORY.md"
              ]

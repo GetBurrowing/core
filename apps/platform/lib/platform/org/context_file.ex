@@ -49,6 +49,6 @@ defmodule Platform.Org.ContextFile do
 
   @doc "List of allowed file keys for org context files."
   def allowed_file_keys do
-    ~w(ORG_IDENTITY.md ORG_MEMORY.md ORG_AGENTS.md ORG_DIRECTORY.md)
+    ~w(ORG_IDENTITY.md ORG_MEMORY.md ORG_AGENTS.md)
   end
 end

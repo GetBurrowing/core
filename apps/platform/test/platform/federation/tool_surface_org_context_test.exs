@@ -115,17 +115,17 @@ defmodule Platform.Federation.ToolSurfaceOrgContextTest do
       clear_seeded_data()
 
       {:ok, _} =
-        OrgContext.upsert_context_file("ORG_DIRECTORY.md", %{content: "V1"})
+        OrgContext.upsert_context_file("ORG_AGENTS.md", %{content: "V1"})
 
       # Update to v2
       {:ok, _} =
-        OrgContext.upsert_context_file("ORG_DIRECTORY.md", %{content: "V2"})
+        OrgContext.upsert_context_file("ORG_AGENTS.md", %{content: "V2"})
 
       {:error, error} =
         ToolSurface.execute(
           "org_context_write",
           %{
-            "file_key" => "ORG_DIRECTORY.md",
+            "file_key" => "ORG_AGENTS.md",
             "content" => "V3",
             "expected_version" => 1
           },
