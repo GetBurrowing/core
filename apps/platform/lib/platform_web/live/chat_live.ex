@@ -97,6 +97,7 @@ defmodule PlatformWeb.ChatLive do
       |> assign(:agent_typing_pids, MapSet.new())
       |> assign(:streaming_replies, %{})
       |> assign(:mention_suggestions, [])
+      |> assign(:mention_source, "compose-form")
       |> assign(:push_permission, "unknown")
       |> assign(:unread_counts, if(user_id, do: Chat.unread_counts_for_user(user_id), else: %{}))
       |> assign(:upload_dialog_open, false)
@@ -245,6 +246,7 @@ defmodule PlatformWeb.ChatLive do
        |> assign(:agent_typing_pids, MapSet.new())
        |> assign(:streaming_replies, %{})
        |> assign(:mention_suggestions, [])
+       |> assign(:mention_source, "compose-form")
        |> assign(:current_participant, participant)
        |> assign(:reactions_map, reactions_map)
        |> assign(:attachments_map, attachments_map)
@@ -516,7 +518,9 @@ defmodule PlatformWeb.ChatLive do
     {:noreply, socket}
   end
 
-  def handle_event("mention_query", %{"query" => query}, socket) do
+  def handle_event("mention_query", %{"query" => query} = params, socket) do
+    source = Map.get(params, "source", "compose-form")
+
     suggestions =
       case socket.assigns.active_space do
         nil ->
@@ -540,7 +544,10 @@ defmodule PlatformWeb.ChatLive do
           |> Enum.map(&participant_identity(&1, Map.get(users_by_id, &1.participant_id)))
       end
 
-    {:noreply, assign(socket, :mention_suggestions, suggestions)}
+    {:noreply,
+     socket
+     |> assign(:mention_suggestions, suggestions)
+     |> assign(:mention_source, source)}
   end
 
   def handle_event("mention_query", _params, socket) do
@@ -548,7 +555,10 @@ defmodule PlatformWeb.ChatLive do
   end
 
   def handle_event("clear_mention_suggestions", _params, socket) do
-    {:noreply, assign(socket, :mention_suggestions, [])}
+    {:noreply,
+     socket
+     |> assign(:mention_suggestions, [])
+     |> assign(:mention_source, "compose-form")}
   end
 
   def handle_event("open_reaction_picker", _params, socket) do
@@ -2355,6 +2365,49 @@ defmodule PlatformWeb.ChatLive do
 
                     <%!-- Thread composer --%>
                     <div class="thread-composer">
+                      <%!-- @mention autocomplete dropdown (inline thread) --%>
+                      <div
+                        :if={
+                          @mention_suggestions != [] &&
+                            @mention_source == "inline-thread-compose-form-#{msg.id}"
+                        }
+                        class="relative mb-1"
+                      >
+                        <div class="absolute bottom-full left-0 z-50 w-64 rounded-xl border border-base-300 bg-base-100 shadow-lg overflow-hidden mb-1">
+                          <div class="py-1">
+                            <button
+                              :for={{suggestion, idx} <- Enum.with_index(@mention_suggestions)}
+                              type="button"
+                              data-mention-suggestion={if idx == 0, do: "first"}
+                              phx-click={
+                                JS.dispatch("chat:insert-mention",
+                                  to: "#inline-thread-compose-#{msg.id}",
+                                  detail: %{name: suggestion.display_name || "User"}
+                                )
+                              }
+                              class="flex w-full items-center gap-2 px-3 py-2 text-sm hover:bg-base-200 text-left transition-colors"
+                            >
+                              <div class="w-6 h-6 rounded-full bg-primary text-primary-content flex items-center justify-center text-xs font-bold flex-shrink-0">
+                                {(suggestion.display_name || "U")
+                                |> String.trim()
+                                |> String.first()
+                                |> String.upcase()}
+                              </div>
+                              <span class="flex-1 truncate font-medium">
+                                {suggestion.display_name || "User"}
+                              </span>
+                              <span class={[
+                                "rounded-full px-1.5 py-0.5 text-[10px] uppercase tracking-wider",
+                                suggestion.participant_type == "agent" && "bg-primary/10 text-primary",
+                                suggestion.participant_type != "agent" &&
+                                  "bg-base-300 text-base-content/50"
+                              ]}>
+                                {suggestion.participant_type}
+                              </span>
+                            </button>
+                          </div>
+                        </div>
+                      </div>
                       <.form
                         for={%{}}
                         id={"inline-thread-compose-form-#{msg.id}"}
@@ -2478,7 +2531,7 @@ defmodule PlatformWeb.ChatLive do
             >
               <%!-- @mention autocomplete dropdown --%>
               <div
-                :if={@mention_suggestions != []}
+                :if={@mention_suggestions != [] && @mention_source == "compose-form"}
                 class="relative"
               >
                 <div class="absolute bottom-0 left-0 z-50 w-64 rounded-xl border border-base-300 bg-base-100 shadow-lg overflow-hidden">

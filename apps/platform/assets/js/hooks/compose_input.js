@@ -176,11 +176,15 @@ const ComposeInput = {
     // Look for @ followed by word chars (no spaces) since last whitespace
     const match = before.match(/@(\w*)$/);
 
+    // Identify which compose area triggered the mention by form ID
+    const form = this.el.closest("form");
+    const source = form ? form.id : "compose-form";
+
     if (match) {
       const query = match[1];
       if (query !== this._lastMentionQuery) {
         this._lastMentionQuery = query;
-        this.pushEvent("mention_query", { query });
+        this.pushEvent("mention_query", { query, source });
       }
     } else {
       if (this._lastMentionQuery !== null) {
