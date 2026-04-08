@@ -142,8 +142,10 @@ defmodule Platform.Org.ContextTest do
 
     test "records updated_by on upsert" do
       agent_id = Ecto.UUID.generate()
+
       assert {:ok, file} =
                Context.upsert_context_file("ORG_MEMORY.md", "content", updated_by: agent_id)
+
       assert file.updated_by == agent_id
     end
 
