@@ -1,177 +1,129 @@
 defmodule Platform.Org.Context do
   @moduledoc """
-  Context module for org-level shared context management.
+  Business logic for org-level context files and memory entries.
 
-  Provides CRUD for org context files (ORG_IDENTITY.md, ORG_MEMORY.md,
-  ORG_AGENTS.md, ORG_DIRECTORY.md) and append + search for org memory
-  entries (daily notes and long-term memories).
-
-  The `build_context/1` function assembles the full org context bundle
-  for injection into agent sessions — workspace files plus recent daily
-  notes, mirroring OpenClaw's MEMORY.md + memory/YYYY-MM-DD.md pattern.
-
-  ## Telemetry
-
-  Emits telemetry events on write operations:
-    - `[:platform, :org_context, :file_updated]` — when a context file is upserted
-    - `[:platform, :org_context, :memory_appended]` — when a memory entry is appended
+  Provides CRUD for versioned context files (ORG_IDENTITY.md, etc.),
+  append-only memory entries (daily, long_term), and a `build_context/1`
+  function that assembles workspace files and recent daily entries into a
+  map suitable for injection into agent sessions.
   """
 
   import Ecto.Query
 
-  alias Platform.Org.{ContextFile, MemoryEntry}
+  alias Platform.Org.ContextFile
+  alias Platform.Org.MemoryEntry
   alias Platform.Repo
 
-  # ── Context Files ─────────────────────────────────────────────────────────
+  # ── Context files ────────────────────────────────────────────────────
 
-  @doc """
-  Get a single org context file by file_key, optionally scoped to a workspace.
-
-  Returns `{:ok, file}` if found, `{:error, :not_found}` otherwise.
-  """
+  @doc "Fetch a single context file by file_key, optionally scoped to a workspace."
+  @spec get_context_file(String.t(), binary() | nil) :: ContextFile.t() | nil
   def get_context_file(file_key, workspace_id \\ nil) do
-    query =
-      if workspace_id do
-        from(f in ContextFile,
-          where: f.workspace_id == ^workspace_id and f.file_key == ^file_key
-        )
-      else
-        from(f in ContextFile,
-          where: is_nil(f.workspace_id) and f.file_key == ^file_key
-        )
-      end
-
-    case Repo.one(query) do
-      nil -> {:error, :not_found}
-      file -> {:ok, file}
-    end
+    ContextFile
+    |> where([f], f.file_key == ^file_key)
+    |> filter_workspace(workspace_id)
+    |> Repo.one()
   end
 
   @doc """
-  List all org context files, optionally scoped to a workspace.
-
-  Returns files ordered by file_key for stable output.
-  """
-  def list_context_files(workspace_id \\ nil) do
-    query =
-      if workspace_id do
-        from(f in ContextFile,
-          where: f.workspace_id == ^workspace_id,
-          order_by: f.file_key
-        )
-      else
-        from(f in ContextFile,
-          where: is_nil(f.workspace_id),
-          order_by: f.file_key
-        )
-      end
-
-    Repo.all(query)
-  end
-
-  @doc """
-  Upsert an org context file with optimistic locking.
-
-  On insert: creates the file with version 1.
-  On update: applies `update_changeset/2` which uses `optimistic_lock/1` to
-  detect concurrent modification. Increments version on each successful update.
-
-  Emits `[:platform, :org_context, :file_updated]` telemetry on success.
-
-  Returns `{:ok, file}` or `{:error, changeset}`.
+  List all context files for a workspace.
 
   ## Options
-    - `:updated_by` — UUID of the agent or user performing the update
+
+    * `:workspace_id` - scope to a specific workspace (default: nil)
   """
-  def upsert_context_file(file_key, content, opts \\ []) do
+  @spec list_context_files(keyword()) :: [ContextFile.t()]
+  def list_context_files(opts \\ []) do
     workspace_id = Keyword.get(opts, :workspace_id)
-    updated_by = Keyword.get(opts, :updated_by)
 
-    result =
-      case get_context_file(file_key, workspace_id) do
-        {:ok, existing} ->
-          existing
-          |> ContextFile.update_changeset(%{content: content, updated_by: updated_by})
-          |> Repo.update()
+    ContextFile
+    |> filter_workspace(workspace_id)
+    |> order_by([f], asc: f.file_key)
+    |> Repo.all()
+  end
 
-        {:error, :not_found} ->
+  @doc """
+  Create or update a context file with optimistic locking.
+
+  New files start at version 1. Existing files increment their version on
+  each successful write. When `:expected_version` is supplied, a mismatch
+  returns `{:error, :stale}`.
+  """
+  @spec upsert_context_file(String.t(), map(), keyword()) ::
+          {:ok, ContextFile.t()} | {:error, Ecto.Changeset.t() | :stale}
+  def upsert_context_file(file_key, attrs, opts \\ []) do
+    workspace_id = Keyword.get(opts, :workspace_id)
+    expected_version = Keyword.get(opts, :expected_version)
+
+    Repo.transaction(fn ->
+      existing =
+        ContextFile
+        |> where([f], f.file_key == ^file_key)
+        |> filter_workspace(workspace_id)
+        |> Repo.one()
+
+      case existing do
+        nil ->
           %ContextFile{}
-          |> ContextFile.changeset(%{
-            file_key: file_key,
-            content: content,
-            workspace_id: workspace_id,
-            updated_by: updated_by
-          })
+          |> ContextFile.changeset(
+            Map.merge(attrs, %{file_key: file_key, workspace_id: workspace_id})
+          )
           |> Repo.insert()
+          |> unwrap_or_rollback()
+
+        %ContextFile{} = file ->
+          if not is_nil(expected_version) and file.version != expected_version do
+            Repo.rollback(:stale)
+          else
+            file
+            |> ContextFile.changeset(%{
+              content: Map.get(attrs, :content, Map.get(attrs, "content")),
+              updated_by: Map.get(attrs, :updated_by, Map.get(attrs, "updated_by")),
+              version: file.version + 1
+            })
+            |> Repo.update()
+            |> unwrap_or_rollback()
+          end
       end
-
-    case result do
-      {:ok, file} ->
-        :telemetry.execute(
-          [:platform, :org_context, :file_updated],
-          %{system_time: System.system_time()},
-          %{
-            file_key: file_key,
-            workspace_id: workspace_id,
-            version: file.version,
-            updated_by: updated_by
-          }
-        )
-
-        {:ok, file}
-
-      error ->
-        error
-    end
+    end)
+    |> tap_ok(fn file ->
+      :telemetry.execute(
+        [:platform, :org, :context_file_written],
+        %{system_time: System.system_time()},
+        %{file_key: file.file_key, version: file.version, workspace_id: file.workspace_id}
+      )
+    end)
+    |> normalize_transaction_result()
   end
 
-  # ── Memory Entries ────────────────────────────────────────────────────────
+  # ── Memory entries ───────────────────────────────────────────────────
 
   @doc """
-  Append a new org memory entry.
+  Append a memory entry.
 
-  Memory entries are append-only — they represent a log of decisions,
-  milestones, and notable events at the org level.
-
-  Emits `[:platform, :org_context, :memory_appended]` telemetry on success.
-
-  ## Options
-    - `:workspace_id` — scope to a specific workspace (nil = default)
-    - `:authored_by` — UUID of the agent or user authoring the entry
-    - `:memory_type` — "daily" (default) or "long_term"
-    - `:date` — entry date (defaults to today UTC)
-    - `:metadata` — map of additional metadata (tags, source, etc.)
+  Attrs should include `:content`, `:date`, and optionally `:memory_type`,
+  `:workspace_id`, `:authored_by`, `:metadata`.
   """
-  def append_memory(content, opts \\ []) do
-    workspace_id = Keyword.get(opts, :workspace_id)
-    authored_by = Keyword.get(opts, :authored_by)
-    memory_type = Keyword.get(opts, :memory_type, "daily")
-    date = Keyword.get(opts, :date, Date.utc_today())
-    metadata = Keyword.get(opts, :metadata, %{})
+  @spec append_memory_entry(map(), keyword()) ::
+          {:ok, MemoryEntry.t()} | {:error, Ecto.Changeset.t()}
+  def append_memory_entry(attrs, opts \\ []) do
+    attrs = maybe_put_workspace(attrs, Keyword.get(opts, :workspace_id))
 
     result =
       %MemoryEntry{}
-      |> MemoryEntry.changeset(%{
-        workspace_id: workspace_id,
-        content: content,
-        authored_by: authored_by,
-        memory_type: memory_type,
-        date: date,
-        metadata: metadata
-      })
+      |> MemoryEntry.changeset(attrs)
       |> Repo.insert()
 
     case result do
       {:ok, entry} ->
         :telemetry.execute(
-          [:platform, :org_context, :memory_appended],
+          [:platform, :org, :memory_entry_written],
           %{system_time: System.system_time()},
           %{
-            entry_id: entry.id,
-            workspace_id: workspace_id,
-            memory_type: memory_type,
-            date: date,
-            authored_by: authored_by
+            memory_entry_id: entry.id,
+            memory_type: entry.memory_type,
+            date: entry.date,
+            workspace_id: entry.workspace_id
           }
         )
 
@@ -183,142 +135,132 @@ defmodule Platform.Org.Context do
   end
 
   @doc """
-  Search org memory entries by content (case-insensitive substring match).
+  Search memory entries with optional filters.
 
   ## Options
-    - `:workspace_id` — scope to a specific workspace (nil = default/global)
-    - `:memory_type` — filter to "daily" or "long_term" (nil = both)
-    - `:date_from` — filter entries on or after this date
-    - `:date_to` — filter entries on or before this date
-    - `:limit` — max entries to return (default 50)
-  """
-  def search_memory(query_string, opts \\ []) do
-    workspace_id = Keyword.get(opts, :workspace_id)
-    memory_type = Keyword.get(opts, :memory_type)
-    date_from = Keyword.get(opts, :date_from)
-    date_to = Keyword.get(opts, :date_to)
-    limit = Keyword.get(opts, :limit, 50)
 
-    pattern = "%#{String.replace(query_string, "%", "\\%")}%"
+    * `:query` - case-insensitive substring match on content
+    * `:memory_type` - filter by memory type
+    * `:date_from` - include entries on/after this date
+    * `:date_to` - include entries on/before this date
+    * `:workspace_id` - scope to a workspace
+    * `:limit` - max results (default: 50)
+  """
+  @spec search_memory_entries(keyword()) :: [MemoryEntry.t()]
+  def search_memory_entries(opts \\ []) do
+    limit = Keyword.get(opts, :limit, 50)
+    workspace_id = Keyword.get(opts, :workspace_id)
 
     MemoryEntry
-    |> where([e], ilike(e.content, ^pattern))
-    |> maybe_filter_workspace(workspace_id)
-    |> maybe_filter_memory_type(memory_type)
-    |> maybe_filter_date_from(date_from)
-    |> maybe_filter_date_to(date_to)
-    |> order_by([e], desc: e.date, desc: e.inserted_at)
+    |> filter_workspace(workspace_id)
+    |> maybe_filter_memory_type(Keyword.get(opts, :memory_type))
+    |> maybe_filter_date_from(Keyword.get(opts, :date_from))
+    |> maybe_filter_date_to(Keyword.get(opts, :date_to))
+    |> maybe_filter_query(Keyword.get(opts, :query))
+    |> order_by([m], desc: m.inserted_at, desc: m.id)
     |> limit(^limit)
     |> Repo.all()
   end
 
-  @doc """
-  List org memory entries with optional filters.
-
-  ## Options
-    - `:workspace_id` — scope to a specific workspace (nil = default/global)
-    - `:memory_type` — filter to "daily" or "long_term" (nil = both)
-    - `:date_from` — filter entries on or after this date
-    - `:date_to` — filter entries on or before this date
-    - `:limit` — max entries to return (default 50)
-  """
-  def list_memory_entries(opts \\ []) do
-    workspace_id = Keyword.get(opts, :workspace_id)
-    memory_type = Keyword.get(opts, :memory_type)
-    date_from = Keyword.get(opts, :date_from)
-    date_to = Keyword.get(opts, :date_to)
-    limit = Keyword.get(opts, :limit, 50)
-
-    MemoryEntry
-    |> maybe_filter_workspace(workspace_id)
-    |> maybe_filter_memory_type(memory_type)
-    |> maybe_filter_date_from(date_from)
-    |> maybe_filter_date_to(date_to)
-    |> order_by([e], desc: e.date, desc: e.inserted_at)
-    |> limit(^limit)
-    |> Repo.all()
-  end
-
-  # ── Context Bundle Assembly ───────────────────────────────────────────────
+  # ── Build context ────────────────────────────────────────────────────
 
   @doc """
-  Assemble the full org context bundle for injection into agent sessions.
+  Assemble org context for injection into an agent session.
 
-  Returns a map with:
-    - `"ORG_IDENTITY.md"` — the org identity file content
-    - `"ORG_MEMORY.md"` — the long-term org memory file content
-    - `"ORG_AGENTS.md"` — agent conventions and guidelines
-    - `"ORG_DIRECTORY.md"` — auto-generated org directory
-    - `"ORG_NOTES-YYYY-MM-DD"` — last 2 days of daily memory entries,
-      formatted as date-keyed markdown notes (mirrors OpenClaw's daily
-      memory/YYYY-MM-DD.md pattern)
+  Returns a map of filename => content, including workspace context files
+  and the last 2 days of daily memory entries as `ORG_NOTES-YYYY-MM-DD`.
 
   ## Options
-    - `:workspace_id` — scope to a specific workspace (nil = default)
-    - `:days_back` — how many days of daily notes to include (default 2)
+
+    * `:workspace_id` - scope to a workspace (default: nil)
   """
+  @spec build_context(keyword()) :: %{String.t() => String.t()}
   def build_context(opts \\ []) do
     workspace_id = Keyword.get(opts, :workspace_id)
-    days_back = Keyword.get(opts, :days_back, 2)
 
-    # Fetch all context files
-    files = list_context_files(workspace_id)
-    file_map = Map.new(files, &{&1.file_key, &1.content})
+    files =
+      list_context_files(workspace_id: workspace_id)
+      |> Map.new(fn f -> {f.file_key, f.content} end)
 
-    # Fill in defaults for missing files
-    workspace_files = %{
-      "ORG_IDENTITY.md" => Map.get(file_map, "ORG_IDENTITY.md", ""),
-      "ORG_MEMORY.md" => Map.get(file_map, "ORG_MEMORY.md", ""),
-      "ORG_AGENTS.md" => Map.get(file_map, "ORG_AGENTS.md", ""),
-      "ORG_DIRECTORY.md" => Map.get(file_map, "ORG_DIRECTORY.md", "")
-    }
-
-    # Fetch last N days of daily memory entries
     today = Date.utc_today()
-    cutoff = Date.add(today, -days_back + 1)
+    yesterday = Date.add(today, -1)
 
     daily_entries =
-      list_memory_entries(
+      search_memory_entries(
         workspace_id: workspace_id,
         memory_type: "daily",
-        date_from: cutoff
+        date_from: yesterday,
+        date_to: today,
+        limit: 1000
       )
 
-    # Group entries by date and format as ORG_NOTES-YYYY-MM-DD keys
-    daily_notes =
+    notes =
       daily_entries
       |> Enum.group_by(& &1.date)
-      |> Enum.map(fn {date, entries} ->
-        date_str = Calendar.strftime(date, "%Y-%m-%d")
-        key = "ORG_NOTES-#{date_str}"
-
+      |> Enum.into(%{}, fn {date, entries} ->
         content =
           entries
-          |> Enum.sort_by(& &1.inserted_at)
-          |> Enum.map_join("\n\n---\n\n", & &1.content)
+          |> Enum.sort_by(& &1.inserted_at, DateTime)
+          |> Enum.map_join("\n", & &1.content)
 
-        {key, content}
+        {"ORG_NOTES-#{Date.to_iso8601(date)}", content}
       end)
-      |> Map.new()
 
-    Map.merge(workspace_files, daily_notes)
+    Map.merge(files, notes)
   end
 
-  # ── Private helpers ───────────────────────────────────────────────────────
+  # ── Private helpers ──────────────────────────────────────────────────
 
-  defp maybe_filter_workspace(query, nil), do: where(query, [e], is_nil(e.workspace_id))
+  defp filter_workspace(queryable, nil) do
+    where(queryable, [r], is_nil(r.workspace_id))
+  end
 
-  defp maybe_filter_workspace(query, workspace_id),
-    do: where(query, [e], e.workspace_id == ^workspace_id)
+  defp filter_workspace(queryable, workspace_id) do
+    where(queryable, [r], r.workspace_id == ^workspace_id)
+  end
 
   defp maybe_filter_memory_type(query, nil), do: query
 
-  defp maybe_filter_memory_type(query, memory_type),
-    do: where(query, [e], e.memory_type == ^memory_type)
+  defp maybe_filter_memory_type(query, type) do
+    where(query, [m], m.memory_type == ^to_string(type))
+  end
 
   defp maybe_filter_date_from(query, nil), do: query
-  defp maybe_filter_date_from(query, date), do: where(query, [e], e.date >= ^date)
+  defp maybe_filter_date_from(query, %Date{} = d), do: where(query, [m], m.date >= ^d)
 
   defp maybe_filter_date_to(query, nil), do: query
-  defp maybe_filter_date_to(query, date), do: where(query, [e], e.date <= ^date)
+  defp maybe_filter_date_to(query, %Date{} = d), do: where(query, [m], m.date <= ^d)
+
+  defp maybe_filter_query(queryable, nil), do: queryable
+  defp maybe_filter_query(queryable, ""), do: queryable
+
+  defp maybe_filter_query(queryable, query) do
+    trimmed = String.trim(query)
+
+    if trimmed == "" do
+      queryable
+    else
+      pattern = "%#{trimmed}%"
+      where(queryable, [m], ilike(m.content, ^pattern))
+    end
+  end
+
+  defp maybe_put_workspace(attrs, nil), do: attrs
+
+  defp maybe_put_workspace(attrs, workspace_id) when is_map(attrs) do
+    Map.put(attrs, :workspace_id, workspace_id)
+  end
+
+  defp unwrap_or_rollback({:ok, value}), do: value
+  defp unwrap_or_rollback({:error, reason}), do: Repo.rollback(reason)
+
+  defp tap_ok({:ok, value}, fun) do
+    fun.(value)
+    {:ok, value}
+  end
+
+  defp tap_ok(error, _fun), do: error
+
+  defp normalize_transaction_result({:ok, value}), do: {:ok, value}
+  defp normalize_transaction_result({:error, reason}), do: {:error, reason}
 end
