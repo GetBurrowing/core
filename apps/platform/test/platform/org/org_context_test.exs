@@ -7,12 +7,19 @@ defmodule Platform.Org.ContextTest do
   alias Platform.Org.Seeds
   alias Platform.Repo
 
+
   defp errors_on(changeset) do
     Ecto.Changeset.traverse_errors(changeset, fn {msg, opts} ->
       Enum.reduce(opts, msg, fn {key, value}, acc ->
         String.replace(acc, "%{#{key}}", to_string(value))
       end)
     end)
+  end
+
+  # Delete seeded context files to start each test with a clean slate.
+  # The seed migration inserts defaults that would conflict with test inserts.
+  defp clear_seeded_files do
+    Repo.delete_all(ContextFile)
   end
 
   # ── ContextFile schema ──────────────────────────────────────────────────
@@ -58,6 +65,8 @@ defmodule Platform.Org.ContextTest do
     end
 
     test "defaults version to 1" do
+      clear_seeded_files()
+
       {:ok, file} =
         %ContextFile{}
         |> ContextFile.changeset(%{file_key: "ORG_IDENTITY.md", content: "test"})
@@ -71,6 +80,8 @@ defmodule Platform.Org.ContextTest do
 
   describe "ContextFile update_changeset" do
     test "updates content and increments version" do
+      clear_seeded_files()
+
       {:ok, file} =
         %ContextFile{}
         |> ContextFile.changeset(%{file_key: "ORG_MEMORY.md", content: "v1"})
@@ -85,6 +96,8 @@ defmodule Platform.Org.ContextTest do
     end
 
     test "requires content on update" do
+      clear_seeded_files()
+
       {:ok, file} =
         %ContextFile{}
         |> ContextFile.changeset(%{file_key: "ORG_AGENTS.md", content: "v1"})
@@ -99,6 +112,8 @@ defmodule Platform.Org.ContextTest do
 
   describe "ContextFile uniqueness" do
     test "prevents duplicate file_key for same workspace_id" do
+      clear_seeded_files()
+
       {:ok, _} =
         %ContextFile{}
         |> ContextFile.changeset(%{file_key: "ORG_IDENTITY.md", content: "first"})
@@ -113,6 +128,7 @@ defmodule Platform.Org.ContextTest do
     end
 
     test "allows same file_key with different workspace_ids" do
+      clear_seeded_files()
       ws1 = Ecto.UUID.generate()
       ws2 = Ecto.UUID.generate()
 
@@ -200,6 +216,7 @@ defmodule Platform.Org.ContextTest do
 
   describe "Seeds.seed_defaults/1" do
     test "creates all four default org context files" do
+      clear_seeded_files()
       :ok = Seeds.seed_defaults()
 
       files = Repo.all(ContextFile)
@@ -214,6 +231,7 @@ defmodule Platform.Org.ContextTest do
     end
 
     test "is idempotent — calling twice does not create duplicates" do
+      clear_seeded_files()
       :ok = Seeds.seed_defaults()
       :ok = Seeds.seed_defaults()
 
@@ -222,6 +240,7 @@ defmodule Platform.Org.ContextTest do
     end
 
     test "does not overwrite existing content" do
+      clear_seeded_files()
       :ok = Seeds.seed_defaults()
 
       file = Repo.get_by!(ContextFile, file_key: "ORG_IDENTITY.md")
@@ -237,6 +256,7 @@ defmodule Platform.Org.ContextTest do
     end
 
     test "default files have non-empty content" do
+      clear_seeded_files()
       :ok = Seeds.seed_defaults()
 
       files = Repo.all(ContextFile)

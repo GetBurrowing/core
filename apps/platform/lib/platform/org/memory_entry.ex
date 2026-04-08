@@ -10,8 +10,6 @@ defmodule Platform.Org.MemoryEntry do
   use Ecto.Schema
   import Ecto.Changeset
 
-  @primary_key {:id, :id, autogenerate: true}
-
   @memory_types ~w(daily long_term)
 
   schema "org_memory_entries" do
@@ -22,7 +20,7 @@ defmodule Platform.Org.MemoryEntry do
     field(:authored_by, :binary_id)
     field(:metadata, :map, default: %{})
 
-    field(:inserted_at, :utc_datetime_usec)
+    field(:inserted_at, :utc_datetime_usec, read_after_writes: true)
   end
 
   @required ~w(content date)a
