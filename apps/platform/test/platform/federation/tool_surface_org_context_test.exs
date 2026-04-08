@@ -3,6 +3,15 @@ defmodule Platform.Federation.ToolSurfaceOrgContextTest do
 
   alias Platform.Federation.ToolSurface
   alias Platform.Org.Context, as: OrgContext
+  alias Platform.Org.ContextFile
+  alias Platform.Org.MemoryEntry
+  alias Platform.Repo
+
+  # Clear seeded context files and memory entries so tests start clean.
+  defp clear_seeded_data do
+    Repo.delete_all(ContextFile)
+    Repo.delete_all(MemoryEntry)
+  end
 
   describe "tool_definitions/0 includes org context tools" do
     test "includes all 5 org context tools" do
@@ -40,6 +49,7 @@ defmodule Platform.Federation.ToolSurfaceOrgContextTest do
 
   describe "org_context_read" do
     test "returns file content when file exists" do
+      clear_seeded_data()
       {:ok, _file} =
         OrgContext.upsert_context_file("ORG_IDENTITY.md", %{content: "We are Acme Corp"})
 
@@ -52,8 +62,10 @@ defmodule Platform.Federation.ToolSurfaceOrgContextTest do
     end
 
     test "returns error when file not found" do
+      clear_seeded_data()
+
       {:error, error} =
-        ToolSurface.execute("org_context_read", %{"file_key" => "ORG_MEMORY.md"}, %{})
+        ToolSurface.execute("org_context_read", %{"file_key" => "NONEXISTENT_FILE.md"}, %{})
 
       assert error.error =~ "Context file not found"
       assert error.recoverable == true
@@ -69,6 +81,7 @@ defmodule Platform.Federation.ToolSurfaceOrgContextTest do
 
   describe "org_context_write" do
     test "creates a new context file" do
+      clear_seeded_data()
       {:ok, result} =
         ToolSurface.execute(
           "org_context_write",
@@ -82,6 +95,8 @@ defmodule Platform.Federation.ToolSurfaceOrgContextTest do
     end
 
     test "updates an existing context file" do
+      clear_seeded_data()
+
       {:ok, _} =
         OrgContext.upsert_context_file("ORG_AGENTS.md", %{content: "Version 1"})
 
@@ -97,6 +112,8 @@ defmodule Platform.Federation.ToolSurfaceOrgContextTest do
     end
 
     test "returns version conflict error with stale expected_version" do
+      clear_seeded_data()
+
       {:ok, _} =
         OrgContext.upsert_context_file("ORG_DIRECTORY.md", %{content: "V1"})
 
@@ -138,11 +155,15 @@ defmodule Platform.Federation.ToolSurfaceOrgContextTest do
 
   describe "org_context_list" do
     test "returns empty list when no files exist" do
+      clear_seeded_data()
+
       {:ok, result} = ToolSurface.execute("org_context_list", %{}, %{})
       assert result == []
     end
 
     test "returns all context files" do
+      clear_seeded_data()
+
       {:ok, _} = OrgContext.upsert_context_file("ORG_IDENTITY.md", %{content: "A"})
       {:ok, _} = OrgContext.upsert_context_file("ORG_MEMORY.md", %{content: "B"})
 
@@ -156,6 +177,7 @@ defmodule Platform.Federation.ToolSurfaceOrgContextTest do
 
   describe "org_memory_append" do
     test "creates a daily memory entry" do
+      clear_seeded_data()
       {:ok, result} =
         ToolSurface.execute(
           "org_memory_append",
@@ -170,6 +192,7 @@ defmodule Platform.Federation.ToolSurfaceOrgContextTest do
     end
 
     test "creates a long_term memory entry with specific date" do
+      clear_seeded_data()
       {:ok, result} =
         ToolSurface.execute(
           "org_memory_append",
@@ -206,6 +229,7 @@ defmodule Platform.Federation.ToolSurfaceOrgContextTest do
 
   describe "org_memory_search" do
     test "returns all entries when no filters" do
+      clear_seeded_data()
       {:ok, _} =
         OrgContext.append_memory_entry(%{
           content: "Entry one",
@@ -226,6 +250,8 @@ defmodule Platform.Federation.ToolSurfaceOrgContextTest do
     end
 
     test "filters by query" do
+      clear_seeded_data()
+
       {:ok, _} =
         OrgContext.append_memory_entry(%{
           content: "Deployed v2.1",
@@ -247,6 +273,8 @@ defmodule Platform.Federation.ToolSurfaceOrgContextTest do
     end
 
     test "filters by memory_type" do
+      clear_seeded_data()
+
       {:ok, _} =
         OrgContext.append_memory_entry(%{
           content: "Daily note",
@@ -268,6 +296,8 @@ defmodule Platform.Federation.ToolSurfaceOrgContextTest do
     end
 
     test "filters by date range" do
+      clear_seeded_data()
+
       {:ok, _} =
         OrgContext.append_memory_entry(%{
           content: "Old entry",
@@ -309,6 +339,8 @@ defmodule Platform.Federation.ToolSurfaceOrgContextTest do
     end
 
     test "respects limit parameter" do
+      clear_seeded_data()
+
       for i <- 1..5 do
         {:ok, _} =
           OrgContext.append_memory_entry(%{
