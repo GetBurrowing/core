@@ -20,7 +20,8 @@ defmodule Platform.Repo.Migrations.CreateOrgContextTables do
       "DROP INDEX org_context_files_workspace_id_file_key_index"
     )
 
-    create table(:org_memory_entries) do
+    create table(:org_memory_entries, primary_key: false) do
+      add(:id, :uuid, primary_key: true)
       add(:workspace_id, :uuid)
       add(:memory_type, :string, null: false, default: "daily")
       add(:date, :date, null: false)

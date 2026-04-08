@@ -10,6 +10,9 @@ defmodule Platform.Org.MemoryEntry do
   use Ecto.Schema
   import Ecto.Changeset
 
+  @primary_key {:id, Platform.Types.UUIDv7, autogenerate: true}
+  @foreign_key_type :binary_id
+
   @memory_types ~w(daily long_term)
 
   schema "org_memory_entries" do
