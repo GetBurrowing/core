@@ -33,7 +33,7 @@ defmodule Platform.Org.Seeds do
 
     Document workflows, coding standards, review processes, deployment procedures,
     and any other conventions agents should follow.
-    """,
+    """
   }
 
   @doc """
