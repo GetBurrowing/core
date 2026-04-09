@@ -2364,56 +2364,58 @@ defmodule PlatformWeb.ChatLive do
                     </div>
 
                     <%!-- Thread composer --%>
-                    <div class="thread-composer">
-                      <%!-- @mention autocomplete dropdown (inline thread) --%>
-                      <div
-                        :if={
-                          @mention_suggestions != [] &&
-                            @mention_source == "inline-thread-compose-form-#{msg.id}"
-                        }
-                        class="relative mb-1"
-                      >
-                        <div class="absolute bottom-full left-0 z-50 w-64 rounded-xl border border-base-300 bg-base-100 shadow-lg overflow-hidden mb-1">
-                          <div class="py-1">
-                            <button
-                              :for={{suggestion, idx} <- Enum.with_index(@mention_suggestions)}
-                              type="button"
-                              data-mention-suggestion={if idx == 0, do: "first"}
-                              phx-click={
-                                JS.dispatch("chat:insert-mention",
-                                  to: "#inline-thread-compose-#{msg.id}",
-                                  detail: %{name: suggestion.display_name || "User"}
-                                )
-                              }
-                              class="flex w-full items-center gap-2 px-3 py-2 text-sm hover:bg-base-200 text-left transition-colors"
-                            >
-                              <div class="w-6 h-6 rounded-full bg-primary text-primary-content flex items-center justify-center text-xs font-bold flex-shrink-0">
-                                {(suggestion.display_name || "U")
-                                |> String.trim()
-                                |> String.first()
-                                |> String.upcase()}
-                              </div>
-                              <span class="flex-1 truncate font-medium">
-                                {suggestion.display_name || "User"}
-                              </span>
-                              <span class={[
-                                "rounded-full px-1.5 py-0.5 text-[10px] uppercase tracking-wider",
-                                suggestion.participant_type == "agent" && "bg-primary/10 text-primary",
-                                suggestion.participant_type != "agent" &&
-                                  "bg-base-300 text-base-content/50"
-                              ]}>
-                                {suggestion.participant_type}
-                              </span>
-                            </button>
-                          </div>
-                        </div>
-                      </div>
+                    <div class="thread-composer" style="flex-direction: column; align-items: stretch;">
                       <.form
                         for={%{}}
                         id={"inline-thread-compose-form-#{msg.id}"}
                         phx-submit="send_inline_thread_message"
                         class="thread-composer-form"
+                        style="position: relative;"
                       >
+                        <%!-- @mention autocomplete dropdown (inline thread) --%>
+                        <div
+                          :if={
+                            @mention_suggestions != [] &&
+                              @mention_source == "inline-thread-compose-form-#{msg.id}"
+                          }
+                          style="position: absolute; bottom: 100%; left: 0; z-index: 50; width: 16rem; margin-bottom: 4px;"
+                        >
+                          <div class="rounded-xl border border-base-300 bg-base-100 shadow-lg overflow-hidden">
+                            <div class="py-1">
+                              <button
+                                :for={{suggestion, idx} <- Enum.with_index(@mention_suggestions)}
+                                type="button"
+                                data-mention-suggestion={if idx == 0, do: "first"}
+                                phx-click={
+                                  JS.dispatch("chat:insert-mention",
+                                    to: "#inline-thread-compose-#{msg.id}",
+                                    detail: %{name: suggestion.display_name || "User"}
+                                  )
+                                }
+                                class="flex w-full items-center gap-2 px-3 py-2 text-sm hover:bg-base-200 text-left transition-colors"
+                              >
+                                <div class="w-6 h-6 rounded-full bg-primary text-primary-content flex items-center justify-center text-xs font-bold flex-shrink-0">
+                                  {(suggestion.display_name || "U")
+                                  |> String.trim()
+                                  |> String.first()
+                                  |> String.upcase()}
+                                </div>
+                                <span class="flex-1 truncate font-medium">
+                                  {suggestion.display_name || "User"}
+                                </span>
+                                <span class={[
+                                  "rounded-full px-1.5 py-0.5 text-[10px] uppercase tracking-wider",
+                                  suggestion.participant_type == "agent" &&
+                                    "bg-primary/10 text-primary",
+                                  suggestion.participant_type != "agent" &&
+                                    "bg-base-300 text-base-content/50"
+                                ]}>
+                                  {suggestion.participant_type}
+                                </span>
+                              </button>
+                            </div>
+                          </div>
+                        </div>
                         <input
                           type="hidden"
                           name="inline_thread_compose[message_id]"
