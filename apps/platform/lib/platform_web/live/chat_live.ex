@@ -3601,6 +3601,7 @@ defmodule PlatformWeb.ChatLive do
           %{preview | reply_count: preview.reply_count + 1, last_reply_at: msg.inserted_at}
         end)
       end)
+      |> reinsert_stream_message(msg_id)
     end
   end
 
