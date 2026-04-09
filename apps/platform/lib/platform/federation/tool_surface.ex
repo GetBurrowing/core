@@ -7,6 +7,7 @@ defmodule Platform.Federation.ToolSurface do
 
   alias Platform.Chat
   alias Platform.Chat.ContextPlane
+  alias Platform.Org.Context, as: OrgContext
   alias Platform.Tasks
   alias Platform.Tasks.{Plan, PlanEngine, Stage, Validation}
   alias Platform.Repo
@@ -23,7 +24,7 @@ defmodule Platform.Federation.ToolSurface do
       task_tools() ++
       plan_tools() ++
       review_tools() ++
-      space_tools() ++ context_read_tools() ++ federation_tools()
+      space_tools() ++ context_read_tools() ++ federation_tools() ++ org_context_tools()
   end
 
   defp federation_tools do
@@ -39,6 +40,171 @@ defmodule Platform.Federation.ToolSurface do
           "Only shows active runtimes. Presence data is in-memory and resets on restart.",
         when_to_use:
           "When you need to diagnose connectivity issues or verify which agent runtimes are currently reachable"
+      }
+    ]
+  end
+
+  defp org_context_tools do
+    [
+      %{
+        name: "org_context_read",
+        description:
+          "Read an org context file by key. Returns the file content, current version, and metadata.",
+        parameters: %{
+          file_key: %{
+            type: "string",
+            required: true,
+            description: "The key identifying the context file (e.g. 'ORG_IDENTITY.md')"
+          },
+          workspace_id: %{
+            type: "string",
+            required: false,
+            description: "UUID of the workspace to scope to (default: org-level)"
+          }
+        },
+        returns: "The file object with file_key, content, version, updated_by, and timestamps",
+        limitations: "Returns nil if the file does not exist for the given key and workspace.",
+        when_to_use:
+          "When you need to read org-level context like identity, preferences, or guidelines"
+      },
+      %{
+        name: "org_context_write",
+        description:
+          "Write or update an org context file. Creates the file if it doesn't exist, or increments the version on update. Supports optimistic locking via expected_version.",
+        parameters: %{
+          file_key: %{
+            type: "string",
+            required: true,
+            description: "The key identifying the context file (e.g. 'ORG_IDENTITY.md')"
+          },
+          content: %{
+            type: "string",
+            required: true,
+            description: "The full content to write to the file"
+          },
+          updated_by: %{
+            type: "string",
+            required: false,
+            description: "UUID of the agent or user performing the update"
+          },
+          workspace_id: %{
+            type: "string",
+            required: false,
+            description: "UUID of the workspace to scope to (default: org-level)"
+          },
+          expected_version: %{
+            type: "integer",
+            required: false,
+            description:
+              "Expected current version for optimistic locking. Write fails if the file has been modified since this version."
+          }
+        },
+        returns:
+          "The updated file object with file_key, content, version, updated_by, and timestamps",
+        limitations:
+          "If expected_version is supplied and doesn't match, returns a version conflict error.",
+        when_to_use:
+          "When you need to create or update org-level context files like identity, preferences, or guidelines"
+      },
+      %{
+        name: "org_context_list",
+        description: "List all available org context files with summary information.",
+        parameters: %{
+          workspace_id: %{
+            type: "string",
+            required: false,
+            description: "UUID of the workspace to scope to (default: org-level)"
+          }
+        },
+        returns:
+          "Array of file objects with file_key, content, version, updated_by, and timestamps",
+        limitations: "Returns an empty list if no context files exist.",
+        when_to_use:
+          "When you need to discover what org context files are available before reading or writing"
+      },
+      %{
+        name: "org_memory_append",
+        description:
+          "Append a daily or long-term memory entry. Memory entries are append-only and timestamped.",
+        parameters: %{
+          content: %{
+            type: "string",
+            required: true,
+            description: "The content of the memory entry"
+          },
+          memory_type: %{
+            type: "string",
+            required: false,
+            description: "Type of memory: 'daily' or 'long_term' (default: 'daily')"
+          },
+          date: %{
+            type: "string",
+            required: false,
+            description: "ISO 8601 date (YYYY-MM-DD) for the entry (default: today)"
+          },
+          authored_by: %{
+            type: "string",
+            required: false,
+            description: "UUID of the agent or user authoring the entry"
+          },
+          workspace_id: %{
+            type: "string",
+            required: false,
+            description: "UUID of the workspace to scope to (default: org-level)"
+          },
+          metadata: %{
+            type: "object",
+            required: false,
+            description: "Optional metadata map to attach to the entry"
+          }
+        },
+        returns: "The created memory entry with id, content, memory_type, date, and timestamps",
+        limitations: "Memory entries are append-only and cannot be edited or deleted.",
+        when_to_use:
+          "When you need to record observations, decisions, or notes for future reference"
+      },
+      %{
+        name: "org_memory_search",
+        description:
+          "Search org memory entries with optional filters for query, type, and date range.",
+        parameters: %{
+          query: %{
+            type: "string",
+            required: false,
+            description: "Case-insensitive substring search on content"
+          },
+          memory_type: %{
+            type: "string",
+            required: false,
+            description: "Filter by memory type: 'daily' or 'long_term'"
+          },
+          date_from: %{
+            type: "string",
+            required: false,
+            description: "ISO 8601 date (YYYY-MM-DD) — include entries on or after this date"
+          },
+          date_to: %{
+            type: "string",
+            required: false,
+            description: "ISO 8601 date (YYYY-MM-DD) — include entries on or before this date"
+          },
+          workspace_id: %{
+            type: "string",
+            required: false,
+            description: "UUID of the workspace to scope to (default: org-level)"
+          },
+          limit: %{
+            type: "integer",
+            required: false,
+            description: "Maximum number of results to return (default: 50)"
+          }
+        },
+        returns:
+          "Array of memory entry objects with id, content, memory_type, date, and timestamps",
+        limitations:
+          "Uses case-insensitive substring matching, not full-text search. Default limit is 50.",
+        when_to_use:
+          "When you need to recall past observations, decisions, or notes from org memory"
       }
     ]
   end
@@ -1806,6 +1972,204 @@ defmodule Platform.Federation.ToolSurface do
     {:ok, %{runtimes: runtimes}}
   end
 
+  # ── Org Context tools ────────────────────────────────────────────────
+
+  def execute("org_context_read", args, _context) do
+    file_key = Map.get(args, "file_key")
+
+    if is_nil(file_key) or file_key == "" do
+      {:error,
+       %{
+         error: "file_key is required",
+         recoverable: true,
+         suggestion: "Provide a file_key such as 'ORG_IDENTITY.md'"
+       }}
+    else
+      workspace_id = Map.get(args, "workspace_id")
+
+      case OrgContext.get_context_file(file_key, workspace_id) do
+        nil ->
+          {:error,
+           %{
+             error: "Context file not found: #{file_key}",
+             recoverable: true,
+             suggestion: "Use org_context_list to see available files"
+           }}
+
+        file ->
+          {:ok, serialize_context_file(file)}
+      end
+    end
+  end
+
+  def execute("org_context_write", args, _context) do
+    file_key = Map.get(args, "file_key")
+    content = Map.get(args, "content")
+
+    cond do
+      is_nil(file_key) or file_key == "" ->
+        {:error,
+         %{
+           error: "file_key is required",
+           recoverable: true,
+           suggestion: "Provide a file_key such as 'ORG_IDENTITY.md'"
+         }}
+
+      is_nil(content) ->
+        {:error,
+         %{
+           error: "content is required",
+           recoverable: true,
+           suggestion: "Provide content for the context file"
+         }}
+
+      true ->
+        workspace_id = Map.get(args, "workspace_id")
+        updated_by = Map.get(args, "updated_by")
+        expected_version = Map.get(args, "expected_version")
+
+        attrs = %{content: content, updated_by: updated_by}
+
+        opts =
+          [workspace_id: workspace_id]
+          |> maybe_put_opt(:expected_version, expected_version)
+
+        case OrgContext.upsert_context_file(file_key, attrs, opts) do
+          {:ok, file} ->
+            {:ok, serialize_context_file(file)}
+
+          {:error, :stale} ->
+            {:error,
+             %{
+               error: "Version conflict: the file was modified since you last read it",
+               recoverable: true,
+               suggestion:
+                 "Re-read the file with org_context_read to get the latest version, then retry"
+             }}
+
+          {:error, changeset} ->
+            {:error,
+             %{
+               error: "Failed to write context file: #{inspect_errors_safe(changeset)}",
+               recoverable: false,
+               suggestion: "Check the provided attributes and try again"
+             }}
+        end
+    end
+  end
+
+  def execute("org_context_list", args, _context) do
+    workspace_id = Map.get(args, "workspace_id")
+
+    files =
+      OrgContext.list_context_files(workspace_id: workspace_id)
+      |> Enum.map(&serialize_context_file/1)
+
+    {:ok, files}
+  end
+
+  def execute("org_memory_append", args, _context) do
+    content = Map.get(args, "content")
+
+    if is_nil(content) or content == "" do
+      {:error,
+       %{
+         error: "content is required",
+         recoverable: true,
+         suggestion: "Provide content for the memory entry"
+       }}
+    else
+      memory_type = Map.get(args, "memory_type", "daily")
+      authored_by = Map.get(args, "authored_by")
+      workspace_id = Map.get(args, "workspace_id")
+      metadata = Map.get(args, "metadata", %{})
+
+      date =
+        case Map.get(args, "date") do
+          nil -> Date.utc_today()
+          date_str -> parse_date(date_str)
+        end
+
+      case date do
+        {:error, reason} ->
+          {:error,
+           %{
+             error: "Invalid date format: #{reason}",
+             recoverable: true,
+             suggestion: "Use ISO 8601 date format: YYYY-MM-DD"
+           }}
+
+        date ->
+          attrs = %{
+            content: content,
+            memory_type: memory_type,
+            date: date,
+            authored_by: authored_by,
+            metadata: metadata
+          }
+
+          case OrgContext.append_memory_entry(attrs, workspace_id: workspace_id) do
+            {:ok, entry} ->
+              {:ok, serialize_memory_entry(entry)}
+
+            {:error, changeset} ->
+              {:error,
+               %{
+                 error: "Failed to append memory entry: #{inspect_errors_safe(changeset)}",
+                 recoverable: false,
+                 suggestion: "Check the provided attributes and try again"
+               }}
+          end
+      end
+    end
+  end
+
+  def execute("org_memory_search", args, _context) do
+    workspace_id = Map.get(args, "workspace_id")
+    query = Map.get(args, "query")
+    memory_type = Map.get(args, "memory_type")
+    limit = Map.get(args, "limit", 50)
+
+    date_from = parse_optional_date(Map.get(args, "date_from"))
+    date_to = parse_optional_date(Map.get(args, "date_to"))
+
+    case {date_from, date_to} do
+      {{:error, reason}, _} ->
+        {:error,
+         %{
+           error: "Invalid date_from format: #{reason}",
+           recoverable: true,
+           suggestion: "Use ISO 8601 date format: YYYY-MM-DD"
+         }}
+
+      {_, {:error, reason}} ->
+        {:error,
+         %{
+           error: "Invalid date_to format: #{reason}",
+           recoverable: true,
+           suggestion: "Use ISO 8601 date format: YYYY-MM-DD"
+         }}
+
+      {date_from, date_to} ->
+        opts =
+          [
+            workspace_id: workspace_id,
+            query: query,
+            memory_type: memory_type,
+            date_from: date_from,
+            date_to: date_to,
+            limit: limit
+          ]
+          |> Enum.reject(fn {_k, v} -> is_nil(v) end)
+
+        entries =
+          OrgContext.search_memory_entries(opts)
+          |> Enum.map(&serialize_memory_entry/1)
+
+        {:ok, entries}
+    end
+  end
+
   def execute(unknown_tool, _args, _context) do
     tool_names =
       tool_definitions()
@@ -2033,4 +2397,52 @@ defmodule Platform.Federation.ToolSurface do
     end)
     |> inspect()
   end
+
+  # ── Org Context helpers ─────────────────────────────────────────────────
+
+  defp serialize_context_file(file) do
+    %{
+      file_key: file.file_key,
+      content: file.content,
+      version: file.version,
+      updated_by: file.updated_by,
+      workspace_id: file.workspace_id,
+      inserted_at: format_datetime(file.inserted_at),
+      updated_at: format_datetime(file.updated_at)
+    }
+  end
+
+  defp serialize_memory_entry(entry) do
+    %{
+      id: entry.id,
+      content: entry.content,
+      memory_type: entry.memory_type,
+      date: Date.to_iso8601(entry.date),
+      authored_by: entry.authored_by,
+      workspace_id: entry.workspace_id,
+      metadata: entry.metadata,
+      inserted_at: format_datetime(entry.inserted_at)
+    }
+  end
+
+  defp parse_date(date_str) when is_binary(date_str) do
+    case Date.from_iso8601(date_str) do
+      {:ok, date} -> date
+      {:error, _} -> {:error, date_str}
+    end
+  end
+
+  defp parse_date(%Date{} = date), do: date
+
+  defp parse_optional_date(nil), do: nil
+
+  defp parse_optional_date(date_str) do
+    case parse_date(date_str) do
+      {:error, _} = err -> err
+      date -> date
+    end
+  end
+
+  defp maybe_put_opt(opts, _key, nil), do: opts
+  defp maybe_put_opt(opts, key, value), do: Keyword.put(opts, key, value)
 end
