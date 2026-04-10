@@ -1060,3 +1060,93 @@ body, .font-fabrikam, * {
   0%, 100% { border-color: var(--cyan); }
   50% { border-color: var(--cyan-muted); }
 }
+
+/* ── Fabrikam Design System — Pill-shaped Chat Input Bar ─────────────── */
+.compose-input-area {
+  padding: 12px 20px 16px;
+}
+
+.compose-pill-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: oklch(0.21 0 0);
+  border: 1.5px solid oklch(0.35 0 0);
+  border-radius: 26px;
+  padding: 8px 8px 8px 18px;
+  transition: border-color 150ms ease, box-shadow 150ms ease;
+}
+
+.compose-pill-bar:focus-within {
+  border-color: oklch(0.75 0.15 207);
+  box-shadow: 0 0 0 3px rgba(0, 191, 255, 0.1);
+}
+
+/* Theme-aware pill bar backgrounds */
+[data-theme="dark"] .compose-pill-bar,
+:root:not([data-theme="light"]) .compose-pill-bar {
+  background: oklch(0.21 0 0);
+  border-color: oklch(0.35 0 0);
+}
+
+[data-theme="light"] .compose-pill-bar {
+  background: oklch(1 0 0);
+  border-color: oklch(0.88 0 0);
+}
+
+[data-theme="light"] .compose-pill-bar:focus-within {
+  border-color: oklch(0.75 0.15 207);
+  box-shadow: 0 0 0 3px rgba(0, 191, 255, 0.1);
+}
+
+/* Textarea inside pill — strip all chrome */
+.compose-pill-bar textarea {
+  flex: 1;
+  background: none !important;
+  border: none !important;
+  outline: none !important;
+  box-shadow: none !important;
+  border-radius: 0 !important;
+  padding: 4px 0 !important;
+  min-width: 0;
+}
+
+/* Attach button inside pill */
+.compose-pill-attach {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+/* Send button pill style */
+.compose-pill-send {
+  width: 36px !important;
+  height: 36px !important;
+  min-height: 36px !important;
+  border-radius: 50% !important;
+  background: oklch(0.75 0.15 207) !important;
+  color: oklch(0.15 0 0) !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  flex-shrink: 0;
+  padding: 0 !important;
+  border: none !important;
+  transition: transform 150ms ease, box-shadow 150ms ease;
+}
+
+.compose-pill-send:hover {
+  transform: scale(1.05);
+  box-shadow: 0 0 12px rgba(0, 191, 255, 0.4);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .compose-pill-bar {
+    background: oklch(0.21 0 0);
+    border-color: oklch(0.35 0 0);
+  }
+}

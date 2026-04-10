@@ -2522,7 +2522,7 @@ defmodule PlatformWeb.ChatLive do
             <span>{thinking_label(@agent_typing_pids, @participants_map)} is thinking…</span>
           </div>
 
-          <div class="flex-shrink-0 border-t border-base-300 px-5 py-3 safe-area-bottom">
+          <div class="flex-shrink-0 compose-input-area safe-area-bottom">
             <.form
               :if={@active_space}
               for={@compose_form}
@@ -2582,12 +2582,12 @@ defmodule PlatformWeb.ChatLive do
                 </div>
               </div>
 
-              <%!-- Compose row: [+] [input stretches] [send] --%>
-              <div class="flex items-center gap-2">
+              <%!-- Pill-shaped compose bar --%>
+              <div class="compose-pill-bar">
                 <button
                   type="button"
                   phx-click="show_upload_dialog"
-                  class="flex-shrink-0 cursor-pointer rounded-full w-9 h-9 flex items-center justify-center text-base-content/50 hover:bg-base-300 transition-colors"
+                  class="compose-pill-attach cursor-pointer text-base-content/50 hover:bg-base-300/50 transition-colors"
                   title="Attach files"
                 >
                   <span class="hero-plus size-5"></span>
@@ -2606,14 +2606,14 @@ defmodule PlatformWeb.ChatLive do
                   placeholder={"Message ##{(@active_space && @active_space.name) || ""}"}
                   autocomplete="off"
                   rows="1"
-                  class="min-w-0 flex-1 rounded-xl text-sm resize-none bg-base-100 border border-base-300 focus:border-primary focus:outline-none transition-colors"
-                  style="line-height:1.5;padding:6px 12px;min-height:33px;max-height:200px;overflow-y:auto;field-sizing:content"
+                  class="min-w-0 flex-1 text-sm resize-none"
+                  style="line-height:1.5;padding:4px 0;min-height:28px;max-height:200px;overflow-y:auto;field-sizing:content"
                   phx-hook="ComposeInput"
                 >{Phoenix.HTML.Form.normalize_value("text", @compose_form[:text].value)}</textarea>
 
                 <button
                   type="submit"
-                  class="flex-shrink-0 w-9 h-9 rounded-full btn btn-primary btn-sm flex items-center justify-center p-0"
+                  class="compose-pill-send"
                   disabled={is_nil(@current_participant)}
                   title="Send"
                 >
