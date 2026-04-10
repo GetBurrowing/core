@@ -2582,6 +2582,13 @@ defmodule PlatformWeb.ChatLive do
                 </div>
               </div>
 
+              <%!-- Hidden file input — outside pill bar to avoid flex layout interference --%>
+              <.live_file_input
+                upload={@uploads.attachments}
+                class="hidden"
+                id="upload-file-trigger"
+              />
+
               <%!-- Pill-shaped compose bar --%>
               <div class="compose-pill-bar">
                 <button
@@ -2592,12 +2599,6 @@ defmodule PlatformWeb.ChatLive do
                 >
                   <span class="hero-plus size-5"></span>
                 </button>
-                <%!-- Hidden file input — single instance, used by both compose attach button and upload panel --%>
-                <.live_file_input
-                  upload={@uploads.attachments}
-                  class="hidden"
-                  id="upload-file-trigger"
-                />
 
                 <textarea
                   name="compose[text]"

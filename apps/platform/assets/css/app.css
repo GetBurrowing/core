@@ -1068,13 +1068,23 @@ body, .font-fabrikam, * {
 
 .compose-pill-bar {
   display: flex;
-  align-items: center;
+  align-items: flex-end;
   gap: 10px;
   background: oklch(0.21 0 0);
   border: 1.5px solid oklch(0.35 0 0);
   border-radius: 26px;
   padding: 8px 8px 8px 18px;
   transition: border-color 150ms ease, box-shadow 150ms ease;
+}
+
+/* Hide file input from flex layout */
+.compose-pill-bar .hidden,
+.compose-pill-bar [type="file"] {
+  display: none !important;
+  position: absolute !important;
+  width: 0 !important;
+  height: 0 !important;
+  overflow: hidden !important;
 }
 
 .compose-pill-bar:focus-within {
@@ -1109,6 +1119,9 @@ body, .font-fabrikam, * {
   border-radius: 0 !important;
   padding: 4px 0 !important;
   min-width: 0;
+  color: inherit;
+  font-size: 14px;
+  line-height: 1.5;
 }
 
 /* Attach button inside pill */
@@ -1120,6 +1133,8 @@ body, .font-fabrikam, * {
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
+  align-self: center;
+  margin-bottom: 2px;
 }
 
 /* Send button pill style */
