@@ -9,6 +9,8 @@ import InlineThread from "./inline_thread"
 import KanbanDragDrop from "./kanban_drag_drop"
 import LastChatLink from "./last_chat_link"
 import LocalTime from "./local_time"
+import MeetingCaptions from "./meeting_captions"
+import MeetingRoom from "./meeting_room"
 import MermaidDiagram from "./mermaid_diagram"
 import PushSubscribe from "./push_subscribe"
 import ResizableSidebar from "./resizable_sidebar"
@@ -28,6 +30,8 @@ export default {
   KanbanDragDrop,
   LastChatLink,
   LocalTime,
+  MeetingCaptions,
+  MeetingRoom,
   MermaidDiagram,
   PushSubscribe,
   ResizableSidebar,

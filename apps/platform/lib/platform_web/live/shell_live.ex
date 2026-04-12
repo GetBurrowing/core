@@ -52,6 +52,7 @@ defmodule PlatformWeb.ShellLive do
       |> assign(:roster_space_id, roster_space_id)
       |> assign(:show_presence_panel, false)
       |> assign(:presence_list, presence_list)
+      |> assign(:captions_enabled, false)
       |> attach_hook(:track_path, :handle_params, fn _params, url, socket ->
         uri = URI.parse(url)
         {:cont, assign(socket, :current_path, uri.path)}
@@ -95,6 +96,9 @@ defmodule PlatformWeb.ShellLive do
 
         "close_roster", _params, socket ->
           {:halt, assign(socket, :roster_open, false)}
+
+        "toggle_captions", _params, socket ->
+          {:halt, assign(socket, :captions_enabled, !socket.assigns.captions_enabled)}
 
         "dismiss_agent", %{"agent-id" => agent_id, "space-id" => space_id}, socket ->
           # ADR 0027: dismissed role removed — just remove the agent from roster

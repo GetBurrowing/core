@@ -246,6 +246,30 @@
           </div>
         </div>
 
+        <%!-- Caption toggle (visible when in a meeting) --%>
+        <button
+          :if={@captions_enabled != nil}
+          phx-click="toggle_captions"
+          class={[
+            "rounded-lg p-1 transition-colors",
+            if(@captions_enabled,
+              do: "text-primary hover:bg-base-300",
+              else: "text-base-content/60 hover:bg-base-300 hover:text-base-content"
+            )
+          ]}
+          aria-label={if @captions_enabled, do: "Hide captions", else: "Show captions"}
+          title={if @captions_enabled, do: "Hide captions", else: "Show captions"}
+        >
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            viewBox="0 0 24 24"
+            fill="currentColor"
+            class="size-4"
+          >
+            <path d="M2 5a2 2 0 012-2h16a2 2 0 012 2v10a2 2 0 01-2 2H6l-4 4V5zm5 3a1 1 0 00-1 1v1a1 1 0 001 1h2a1 1 0 001-1V9a1 1 0 00-1-1H7zm7 0a1 1 0 00-1 1v1a1 1 0 001 1h2a1 1 0 001-1V9a1 1 0 00-1-1h-2z" />
+          </svg>
+        </button>
+
         <%!-- Dark/light mode toggle --%>
         <button
           id="theme-toggle"
@@ -270,6 +294,16 @@
     </header>
     <%!-- Flash messages --%>
     <.flash_group flash={@flash} />
+    <%!-- Meeting captions overlay --%>
+    <div
+      :if={@captions_enabled}
+      id="meeting-captions"
+      phx-hook="MeetingCaptions"
+      class="fixed bottom-4 left-1/2 -translate-x-1/2 z-30 w-full max-w-2xl px-4 py-3 rounded-xl bg-black/75 backdrop-blur-sm text-sm text-white shadow-lg transition-opacity duration-300"
+      aria-live="polite"
+      aria-label="Meeting captions"
+    >
+    </div>
     <%!-- Surface --%>
     <main class="flex-1 overflow-hidden">
       {@inner_content}

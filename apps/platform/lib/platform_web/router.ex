@@ -39,6 +39,7 @@ defmodule PlatformWeb.Router do
 
     get("/chat/attachments/:id", ChatAttachmentController, :show)
     get("/artifacts/preview", ArtifactPreviewController, :show)
+    get("/api/transcripts/:id/download", TranscriptController, :show)
 
     live_session :authenticated,
       on_mount: [PlatformWeb.ShellLive],
@@ -67,5 +68,6 @@ defmodule PlatformWeb.Router do
   scope "/api/webhooks", PlatformWeb do
     pipe_through(:api)
     post("/github", GithubWebhookController, :handle)
+    post("/livekit", LivekitWebhookController, :handle)
   end
 end
