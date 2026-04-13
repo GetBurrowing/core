@@ -147,6 +147,58 @@ defmodule PlatformWeb.Chat.CanvasRendererTest do
       html = render_node(node)
       assert html =~ "font-bold"
     end
+
+    test "coerces list-of-content-blocks value into text without crashing" do
+      node = %{
+        "type" => "text",
+        "props" => %{
+          "value" => [%{"type" => "text", "text" => "Block one"}, %{"text" => "Block two"}]
+        },
+        "children" => []
+      }
+
+      html = render_node(node)
+      assert html =~ "Block one"
+      assert html =~ "Block two"
+    end
+  end
+
+  describe "render_node/1 — markdown" do
+    test "renders string content" do
+      node = %{
+        "type" => "markdown",
+        "props" => %{"content" => "hello world"},
+        "children" => []
+      }
+
+      html = render_node(node)
+      assert html =~ "hello world"
+    end
+
+    test "coerces list-of-content-blocks content into text without crashing" do
+      # Regression: agents occasionally write Anthropic-style content blocks
+      # into `content`; phoenix_html refuses to render a list containing a map.
+      node = %{
+        "type" => "markdown",
+        "props" => %{
+          "content" => [
+            %{"type" => "text", "text" => "line 1"},
+            %{"type" => "text", "text" => "line 2"}
+          ]
+        },
+        "children" => []
+      }
+
+      html = render_node(node)
+      assert html =~ "line 1"
+      assert html =~ "line 2"
+    end
+
+    test "renders nil content as empty string" do
+      node = %{"type" => "markdown", "props" => %{}, "children" => []}
+      html = render_node(node)
+      assert html =~ "<pre"
+    end
   end
 
   describe "render_node/1 — badge" do

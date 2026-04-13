@@ -287,20 +287,24 @@ defmodule PlatformWeb.Chat.CanvasRenderer do
       assigns
       |> assign(:node, node)
       |> assign(:text_class, text_size_class(node))
+      |> assign(:value, stringify_content(get_in(node, ["props", "value"])))
 
     ~H"""
     <p class={@text_class}>
-      {@node["props"]["value"] || ""}
+      {@value}
     </p>
     """
   end
 
   def render_node(%{node: %{"type" => "markdown"} = node} = assigns) do
-    assigns = assign(assigns, :node, node)
+    assigns =
+      assigns
+      |> assign(:node, node)
+      |> assign(:content, stringify_content(get_in(node, ["props", "content"])))
 
     ~H"""
     <div class="rounded-xl border border-base-300 bg-base-200 p-3">
-      <pre class="whitespace-pre-wrap text-xs leading-5 text-base-content/80 font-mono">{@node["props"]["content"] || ""}</pre>
+      <pre class="whitespace-pre-wrap text-xs leading-5 text-base-content/80 font-mono">{@content}</pre>
     </div>
     """
   end
@@ -710,6 +714,22 @@ defmodule PlatformWeb.Chat.CanvasRenderer do
   end
 
   defp text_size_class(_), do: "text-sm text-base-content leading-6"
+
+  # Coerce canvas text-ish props into a string. Agents sometimes write
+  # Anthropic-style content blocks (a list of %{"type" => "text", "text" => "..."})
+  # into string props; rendering a list containing a map crashes Phoenix.HTML.
+  defp stringify_content(nil), do: ""
+  defp stringify_content(s) when is_binary(s), do: s
+  defp stringify_content(n) when is_number(n) or is_boolean(n) or is_atom(n), do: to_string(n)
+
+  defp stringify_content(list) when is_list(list) do
+    list |> Enum.map(&stringify_content/1) |> Enum.join("\n")
+  end
+
+  defp stringify_content(%{"type" => "text", "text" => t}) when is_binary(t), do: t
+  defp stringify_content(%{"text" => t}) when is_binary(t), do: t
+  defp stringify_content(%{"content" => c}), do: stringify_content(c)
+  defp stringify_content(other), do: inspect(other)
 
   defp cell_value(row, col) when is_map(row) do
     Map.get(row, col, Map.get(row, to_string(col), "—"))
