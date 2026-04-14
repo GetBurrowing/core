@@ -1165,3 +1165,22 @@ body, .font-fabrikam, * {
     border-color: oklch(0.35 0 0);
   }
 }
+
+/* ── Meeting Panel ──────────────────────────────────────────────────────────── */
+
+.meeting-tile {
+  min-height: 80px;
+  transition: box-shadow 0.2s ease;
+}
+
+.meeting-tile.ring-2 {
+  box-shadow: 0 0 0 2px oklch(var(--p));
+}
+
+.meeting-control-active {
+  color: oklch(var(--p));
+}
+
+.meeting-control-muted {
+  opacity: 0.5;
+}

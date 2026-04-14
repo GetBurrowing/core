@@ -105,6 +105,9 @@ defmodule PlatformWeb.ChatLive do
       |> assign(:lightbox_url, nil)
       |> assign(:upload_tagged_agents, MapSet.new())
       |> assign(:drafts, %{})
+      |> assign(:meeting_active, false)
+      |> assign(:meeting_room_name, nil)
+      |> assign(:meetings_enabled, Platform.Meetings.enabled?())
       |> assign_compose("")
       |> assign_thread_compose("")
       |> assign_search_form("")
@@ -270,6 +273,8 @@ defmodule PlatformWeb.ChatLive do
        |> assign(:dm_conversations, dm_convos)
        |> assign(:spaces, channels ++ dm_convos)
        |> assign_new_canvas_form()
+       |> assign(:meeting_active, false)
+       |> assign(:meeting_room_name, nil)
        |> stream(:messages, messages, reset: true)
        |> schedule_agent_presence_refresh()
        |> clear_unread(space.id)
@@ -769,6 +774,72 @@ defmodule PlatformWeb.ChatLive do
 
   def handle_event("toggle_canvases_panel", _params, socket) do
     {:noreply, assign(socket, :show_canvases, !socket.assigns.show_canvases)}
+  end
+
+  # ── Meeting Events ─────────────────────────────────────────────────────────
+
+  def handle_event("join_meeting", _params, socket) do
+    space = socket.assigns.active_space
+    user_id = socket.assigns.user_id
+    participant = socket.assigns.current_participant
+
+    if is_nil(space) or !Platform.Meetings.enabled?() do
+      {:noreply, socket}
+    else
+      case Platform.Meetings.ensure_room(space.id) do
+        {:ok, room_name} ->
+          display_name =
+            if participant,
+              do: participant.display_name || participant.participant_id,
+              else: user_id
+
+          token =
+            Platform.Meetings.generate_token(room_name, user_id, name: display_name)
+
+          livekit_url = Platform.Meetings.livekit_url()
+
+          {:noreply,
+           socket
+           |> assign(:meeting_active, true)
+           |> assign(:meeting_room_name, room_name)
+           |> push_event("join-meeting", %{token: token, url: livekit_url})}
+
+        {:error, reason} ->
+          require Logger
+          Logger.warning("[ChatLive] Failed to ensure meeting room: #{inspect(reason)}")
+          {:noreply, put_flash(socket, :error, "Could not start meeting. Please try again.")}
+      end
+    end
+  end
+
+  def handle_event("leave_meeting", _params, socket) do
+    {:noreply,
+     socket
+     |> assign(:meeting_active, false)
+     |> assign(:meeting_room_name, nil)
+     |> push_event("leave-meeting", %{})}
+  end
+
+  def handle_event("meeting-connected", _params, socket) do
+    {:noreply, socket}
+  end
+
+  def handle_event("meeting-disconnected", _params, socket) do
+    {:noreply,
+     socket
+     |> assign(:meeting_active, false)
+     |> assign(:meeting_room_name, nil)}
+  end
+
+  def handle_event("meeting-error", %{"reason" => reason}, socket) do
+    require Logger
+    Logger.warning("[ChatLive] Meeting error: #{reason}")
+
+    {:noreply,
+     socket
+     |> assign(:meeting_active, false)
+     |> assign(:meeting_room_name, nil)
+     |> put_flash(:error, "Meeting connection failed: #{reason}")}
   end
 
   def handle_event("toggle_watch", _params, socket) do
@@ -1753,6 +1824,52 @@ defmodule PlatformWeb.ChatLive do
                 </div>
               </.form>
 
+              <%!-- Join Meeting button (gated by meetings_enabled) --%>
+              <button
+                :if={@meetings_enabled && !@meeting_active}
+                phx-click="join_meeting"
+                class="flex items-center gap-1 rounded px-2 py-0.5 text-xs text-base-content/50 hover:text-base-content transition-colors hover:bg-base-300"
+                title="Join meeting"
+              >
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  class="size-4"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <polygon points="23 7 16 12 23 17 23 7" />
+                  <rect x="1" y="5" width="15" height="14" rx="2" ry="2" />
+                </svg>
+                <span class="hidden md:inline">Meet</span>
+              </button>
+
+              <button
+                :if={@meetings_enabled && @meeting_active}
+                phx-click="leave_meeting"
+                class="flex items-center gap-1 rounded px-2 py-0.5 text-xs text-error hover:text-error/80 transition-colors hover:bg-error/10"
+                title="Leave meeting"
+              >
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  class="size-4"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <polygon points="23 7 16 12 23 17 23 7" />
+                  <rect x="1" y="5" width="15" height="14" rx="2" ry="2" />
+                  <line x1="1" y1="1" x2="23" y2="23" />
+                </svg>
+                <span class="hidden md:inline">Leave</span>
+              </button>
+
               <button
                 :if={@canvases != []}
                 phx-click="toggle_canvases_panel"
@@ -2028,6 +2145,116 @@ defmodule PlatformWeb.ChatLive do
                   Create canvas
                 </button>
               </.form>
+            </div>
+          </div>
+
+          <%!-- Meeting Panel --%>
+          <div
+            :if={@meeting_active}
+            id="meeting-panel"
+            phx-hook="MeetingRoom"
+            class="bg-base-200 border-b border-base-300"
+          >
+            <div class="px-4 py-3">
+              <div class="flex items-center justify-between mb-3">
+                <div class="flex items-center gap-2">
+                  <span class="inline-block w-2 h-2 rounded-full bg-success animate-pulse"></span>
+                  <span class="text-sm font-medium text-base-content">Meeting in progress</span>
+                  <span data-connection-state class="text-xs text-base-content/50"></span>
+                </div>
+                <button
+                  data-meeting-action="leave"
+                  class="btn btn-error btn-xs gap-1"
+                >
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    class="size-3"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <path d="M10.68 13.31a16 16 0 0 0 3.41 2.6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7 2 2 0 0 1 1.72 2v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91" />
+                    <line x1="23" y1="1" x2="1" y2="23" />
+                  </svg>
+                  Leave
+                </button>
+              </div>
+
+              <%!-- Participant grid --%>
+              <div
+                data-meeting-grid
+                class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2 min-h-[120px] max-h-[300px] overflow-y-auto"
+              >
+              </div>
+
+              <%!-- Controls bar --%>
+              <div class="flex items-center justify-center gap-3 mt-3 pt-3 border-t border-base-300">
+                <button
+                  data-meeting-action="toggle-mic"
+                  class="meeting-control-active btn btn-circle btn-sm btn-ghost"
+                  title="Toggle microphone"
+                >
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    class="size-4"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
+                    <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
+                    <line x1="12" y1="19" x2="12" y2="23" />
+                    <line x1="8" y1="23" x2="16" y2="23" />
+                  </svg>
+                </button>
+
+                <button
+                  data-meeting-action="toggle-camera"
+                  class="meeting-control-muted btn btn-circle btn-sm btn-ghost"
+                  title="Toggle camera"
+                >
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    class="size-4"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <polygon points="23 7 16 12 23 17 23 7" />
+                    <rect x="1" y="5" width="15" height="14" rx="2" ry="2" />
+                  </svg>
+                </button>
+
+                <button
+                  data-meeting-action="toggle-screenshare"
+                  class="meeting-control-muted btn btn-circle btn-sm btn-ghost"
+                  title="Share screen"
+                >
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    class="size-4"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
+                    <line x1="8" y1="21" x2="16" y2="21" />
+                    <line x1="12" y1="17" x2="12" y2="21" />
+                  </svg>
+                </button>
+              </div>
             </div>
           </div>
 

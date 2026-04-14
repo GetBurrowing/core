@@ -17,6 +17,8 @@ defmodule Platform.Meetings do
   alias Platform.Meetings.{Participant, Recording, Room, Transcript}
   alias Platform.Repo
 
+  require Logger
+
   # ── Feature gate ─────────────────────────────────────────────────────────
 
   @doc """
@@ -24,13 +26,11 @@ defmodule Platform.Meetings do
   """
   @spec enabled?() :: boolean()
   def enabled? do
-    url = System.get_env("LIVEKIT_URL")
-    key = System.get_env("LIVEKIT_API_KEY")
-    secret = System.get_env("LIVEKIT_API_SECRET")
+    config = livekit_config()
 
-    is_binary(url) and url != "" and
-      is_binary(key) and key != "" and
-      is_binary(secret) and secret != ""
+    is_binary(config[:url]) and config[:url] != "" and
+      is_binary(config[:api_key]) and config[:api_key] != "" and
+      is_binary(config[:api_secret]) and config[:api_secret] != ""
   end
 
   @doc """
@@ -39,12 +39,21 @@ defmodule Platform.Meetings do
   @spec config() :: map() | nil
   def config do
     if enabled?() do
+      config = livekit_config()
+
       %{
-        url: System.get_env("LIVEKIT_URL"),
-        api_key: System.get_env("LIVEKIT_API_KEY"),
-        api_secret: System.get_env("LIVEKIT_API_SECRET")
+        url: config[:url],
+        api_key: config[:api_key],
+        api_secret: config[:api_secret]
       }
     end
+  end
+
+  @doc """
+  Returns the LiveKit WebSocket URL for client connections.
+  """
+  def livekit_url do
+    livekit_config()[:url]
   end
 
   # ── Rooms ────────────────────────────────────────────────────────────────
@@ -59,7 +68,18 @@ defmodule Platform.Meetings do
     with :ok <- guard_enabled() do
       case get_room(space_id) do
         nil ->
-          room_name = "suite-#{space_id}"
+          room_name = room_name_for_space(space_id)
+
+          # Create room in LiveKit via Twirp API
+          case ensure_livekit_room(room_name) do
+            :ok ->
+              :ok
+
+            {:error, reason} ->
+              Logger.warning(
+                "[Meetings] LiveKit CreateRoom failed: #{inspect(reason)}, proceeding with DB only"
+              )
+          end
 
           %Room{}
           |> Room.changeset(%{space_id: space_id, livekit_room_name: room_name})
@@ -166,6 +186,49 @@ defmodule Platform.Meetings do
 
       {:ok, build_jwt(identity, name, grants)}
     end
+  end
+
+  @doc """
+  Generate a LiveKit access token from a room name string.
+
+  Simpler API for cases where you have the room name directly
+  (e.g. from `ensure_room/1` or `room_name_for_space/1`).
+
+  Options:
+    - `:name` — display name (defaults to identity)
+    - `:ttl` — token TTL in seconds (default: 6 hours)
+
+  Returns the signed JWT string.
+  """
+  def generate_token(room_name, identity, opts)
+      when is_binary(room_name) and is_binary(identity) do
+    config = livekit_config()
+    name = Keyword.get(opts, :name, identity)
+    ttl = Keyword.get(opts, :ttl, 21_600)
+
+    now = System.system_time(:second)
+
+    claims = %{
+      "iss" => config[:api_key],
+      "sub" => identity,
+      "nbf" => now,
+      "exp" => now + ttl,
+      "jti" => :crypto.strong_rand_bytes(12) |> Base.url_encode64(padding: false),
+      "name" => name,
+      "video" => %{
+        "room" => room_name,
+        "roomJoin" => true,
+        "canPublish" => true,
+        "canSubscribe" => true,
+        "canPublishData" => true
+      }
+    }
+
+    sign_jwt(claims, config[:api_secret])
+  end
+
+  def generate_token(room_name, identity) when is_binary(room_name) and is_binary(identity) do
+    generate_token(room_name, identity, [])
   end
 
   # ── Participants ─────────────────────────────────────────────────────────
@@ -509,6 +572,80 @@ defmodule Platform.Meetings do
 
   defp guard_enabled do
     if enabled?(), do: :ok, else: {:error, :meetings_disabled}
+  end
+
+  @doc false
+  def room_name_for_space(space_id) do
+    "space-#{space_id}"
+  end
+
+  defp livekit_config do
+    app_config = Application.get_env(:platform, :livekit)
+
+    if is_list(app_config) and app_config != [] do
+      app_config
+    else
+      # Fall back to System env vars for backward compatibility
+      url = System.get_env("LIVEKIT_URL")
+      key = System.get_env("LIVEKIT_API_KEY")
+      secret = System.get_env("LIVEKIT_API_SECRET")
+
+      if url || key || secret do
+        [url: url, api_key: key, api_secret: secret]
+      else
+        []
+      end
+    end
+  end
+
+  defp ensure_livekit_room(room_name) do
+    config = livekit_config()
+    url = "#{config[:url]}/twirp/livekit.RoomService/CreateRoom"
+    body = Jason.encode!(%{name: room_name, empty_timeout: 300, max_participants: 50})
+    token = service_token(config, %{roomCreate: true})
+
+    headers = [
+      {"content-type", "application/json"},
+      {"authorization", "Bearer #{token}"}
+    ]
+
+    case Req.post(url, body: body, headers: headers, receive_timeout: 10_000) do
+      {:ok, %Req.Response{status: 200}} ->
+        :ok
+
+      {:ok, %Req.Response{status: status, body: resp_body}} ->
+        {:error, {:livekit_error, status, resp_body}}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  rescue
+    e -> {:error, {:http_error, Exception.message(e)}}
+  end
+
+  defp service_token(config, grants) do
+    now = System.system_time(:second)
+
+    claims = %{
+      "iss" => config[:api_key],
+      "nbf" => now,
+      "exp" => now + 60,
+      "video" => grants
+    }
+
+    sign_jwt(claims, config[:api_secret])
+  end
+
+  defp sign_jwt(claims, secret) do
+    header = Base.url_encode64(Jason.encode!(%{"alg" => "HS256", "typ" => "JWT"}), padding: false)
+    payload = Base.url_encode64(Jason.encode!(claims), padding: false)
+    signing_input = "#{header}.#{payload}"
+
+    signature =
+      :crypto.mac(:hmac, :sha256, secret, signing_input)
+      |> Base.url_encode64(padding: false)
+
+    "#{signing_input}.#{signature}"
   end
 
   defp build_jwt(identity, name, grants) do

@@ -77,6 +77,101 @@ defmodule Platform.MeetingsTest do
     end
   end
 
+  describe "room_name_for_space/1" do
+    test "prefixes space_id with 'space-'" do
+      assert Meetings.room_name_for_space("abc-123") == "space-abc-123"
+    end
+  end
+
+  describe "generate_token/3" do
+    setup do
+      Application.put_env(:platform, :livekit,
+        url: "wss://lk.example.com",
+        api_key: "APItest123",
+        api_secret: "supersecretkey"
+      )
+
+      on_exit(fn -> Application.delete_env(:platform, :livekit) end)
+    end
+
+    test "returns a valid JWT string with three dot-separated parts" do
+      token = Meetings.generate_token("test-room", "user-1")
+      parts = String.split(token, ".")
+      assert length(parts) == 3
+    end
+
+    test "JWT header specifies HS256" do
+      token = Meetings.generate_token("test-room", "user-1")
+      [header_b64 | _] = String.split(token, ".")
+      header = header_b64 |> Base.url_decode64!(padding: false) |> Jason.decode!()
+      assert header["alg"] == "HS256"
+      assert header["typ"] == "JWT"
+    end
+
+    test "JWT claims contain correct issuer, subject, and video grants" do
+      token = Meetings.generate_token("test-room", "user-42", name: "Alice")
+      [_, payload_b64 | _] = String.split(token, ".")
+      claims = payload_b64 |> Base.url_decode64!(padding: false) |> Jason.decode!()
+
+      assert claims["iss"] == "APItest123"
+      assert claims["sub"] == "user-42"
+      assert claims["name"] == "Alice"
+      assert is_integer(claims["exp"])
+      assert is_integer(claims["nbf"])
+      assert claims["exp"] > claims["nbf"]
+
+      video = claims["video"]
+      assert video["room"] == "test-room"
+      assert video["roomJoin"] == true
+      assert video["canPublish"] == true
+      assert video["canSubscribe"] == true
+      assert video["canPublishData"] == true
+    end
+
+    test "default TTL is 6 hours" do
+      token = Meetings.generate_token("room", "user")
+      [_, payload_b64 | _] = String.split(token, ".")
+      claims = payload_b64 |> Base.url_decode64!(padding: false) |> Jason.decode!()
+
+      # 6 hours = 21600 seconds, allow 2s tolerance for test execution
+      assert_in_delta claims["exp"] - claims["nbf"], 21_600, 2
+    end
+
+    test "custom TTL is respected" do
+      token = Meetings.generate_token("room", "user", ttl: 3600)
+      [_, payload_b64 | _] = String.split(token, ".")
+      claims = payload_b64 |> Base.url_decode64!(padding: false) |> Jason.decode!()
+
+      assert_in_delta claims["exp"] - claims["nbf"], 3600, 2
+    end
+
+    test "signature is valid HMAC-SHA256" do
+      secret = "supersecretkey"
+      token = Meetings.generate_token("room", "user")
+      [header_b64, payload_b64, sig_b64] = String.split(token, ".")
+
+      signing_input = "#{header_b64}.#{payload_b64}"
+
+      expected_sig =
+        :crypto.mac(:hmac, :sha256, secret, signing_input) |> Base.url_encode64(padding: false)
+
+      assert sig_b64 == expected_sig
+    end
+
+    test "each token has a unique jti" do
+      t1 = Meetings.generate_token("room", "user")
+      t2 = Meetings.generate_token("room", "user")
+
+      [_, p1 | _] = String.split(t1, ".")
+      [_, p2 | _] = String.split(t2, ".")
+
+      c1 = p1 |> Base.url_decode64!(padding: false) |> Jason.decode!()
+      c2 = p2 |> Base.url_decode64!(padding: false) |> Jason.decode!()
+
+      assert c1["jti"] != c2["jti"]
+    end
+  end
+
   # ── Rooms ────────────────────────────────────────────────────────────────
 
   describe "ensure_room/1" do
@@ -91,7 +186,7 @@ defmodule Platform.MeetingsTest do
       assert {:ok, %Room{} = room} = Meetings.ensure_room(space.id)
       assert room.space_id == space.id
       assert room.status == "idle"
-      assert room.livekit_room_name == "suite-#{space.id}"
+      assert room.livekit_room_name == "space-#{space.id}"
     end
 
     test "returns existing room on second call" do
