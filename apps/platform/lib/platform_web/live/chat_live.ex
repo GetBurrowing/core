@@ -675,6 +675,24 @@ defmodule PlatformWeb.ChatLive do
     {:noreply, socket}
   end
 
+  def handle_event("toggle_camera", _params, socket) do
+    socket =
+      socket
+      |> assign(:camera_enabled, !socket.assigns.camera_enabled)
+      |> push_event("toggle-camera", %{})
+
+    {:noreply, socket}
+  end
+
+  def handle_event("toggle_screen_share", _params, socket) do
+    socket =
+      socket
+      |> assign(:screen_share_enabled, !socket.assigns.screen_share_enabled)
+      |> push_event("toggle-screen-share", %{})
+
+    {:noreply, socket}
+  end
+
   def handle_event("noop", _params, socket), do: {:noreply, socket}
 
   # ── End upload staging dialog events ──────────────────────────────────
