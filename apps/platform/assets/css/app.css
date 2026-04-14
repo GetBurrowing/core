@@ -1184,3 +1184,13 @@ body, .font-fabrikam, * {
 .meeting-control-muted {
   opacity: 0.5;
 }
+
+/* Meeting speaking indicator */
+@keyframes meeting-speak-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 var(--speak-color, oklch(82% 0.12 207 / 0.5)); }
+  50% { box-shadow: 0 0 0 3px var(--speak-color, oklch(82% 0.12 207 / 0)); }
+}
+
+.meeting-avatar-speaking {
+  animation: meeting-speak-pulse 1.5s ease-in-out infinite;
+}

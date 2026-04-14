@@ -828,6 +828,42 @@ defmodule Platform.Meetings do
     end
   end
 
+  # ── Agent Meeting Participation ──────────────────────────────────
+
+  @doc """
+  Invite an agent to join a meeting room.
+
+  Generates a token, records the agent as a participant, and dispatches
+  a `meeting_join` signal to the agent's runtime.
+  """
+  @spec invite_agent(Room.t(), Agent.t(), any()) ::
+          {:ok, Participant.t()} | {:error, term()}
+  def invite_agent(%Room{} = room, %Agent{} = agent, _inviting_user) do
+    with {:ok, _token} <-
+           generate_agent_token(agent, room.livekit_room_name),
+         {:ok, participant} <-
+           participant_joined(room, %{
+             display_name: agent.name,
+             agent_id: agent.id
+           }) do
+      # Dispatch to agent runtime
+      dispatch_meeting_join(agent, room.livekit_room_name, %{space_id: room.space_id})
+      {:ok, participant}
+    end
+  end
+
+  @doc """
+  Dismiss an agent from a meeting room.
+
+  Records the agent's participant as having left.
+  """
+  @spec dismiss_agent(Room.t(), binary()) :: {:ok, Participant.t()} | {:error, :not_found}
+  def dismiss_agent(%Room{} = room, agent_id) do
+    agent = Repo.get(Agent, agent_id)
+    name = if agent, do: agent.name, else: "Agent"
+    participant_left(room, name)
+  end
+
   # ── Presence Broadcasting (private) ──────────────────────────────────────
 
   @doc """

@@ -86,6 +86,10 @@ defmodule PlatformWeb.ChatLive do
       |> assign(:meeting_participants, [])
       |> assign(:meeting_participant_count, 0)
       |> assign(:meeting_counts, %{})
+      |> assign(:meeting_room, nil)
+      |> assign(:active_speakers, MapSet.new())
+      |> assign(:show_agent_picker, false)
+      |> assign(:available_agents, [])
       |> assign(:active_agent_participant_id, nil)
       |> assign(:active_agent_name, nil)
       |> assign(:mobile_browser_open, false)
@@ -200,19 +204,19 @@ defmodule PlatformWeb.ChatLive do
       agent_presence = ensure_native_agent_presence(space.id)
 
       # Subscribe to meeting room presence for this space and load participants
-      {meeting_participants, meeting_active, meeting_participant_count} =
+      {meeting_room, meeting_participants, meeting_active, meeting_participant_count} =
         if connected?(socket) do
           case Meetings.get_active_room(space.id) do
             nil ->
-              {[], false, 0}
+              {nil, [], false, 0}
 
             room ->
               MeetingsPubSub.subscribe_room(room.id)
               participants = Meetings.active_participants(room.id)
-              {participants, participants != [], length(participants)}
+              {room, participants, participants != [], length(participants)}
           end
         else
-          {[], false, 0}
+          {nil, [], false, 0}
         end
 
       if connected?(socket) && participant do
@@ -316,6 +320,12 @@ defmodule PlatformWeb.ChatLive do
        |> assign(:meeting_active, meeting_active)
        |> assign(:meeting_participants, meeting_participants)
        |> assign(:meeting_participant_count, meeting_participant_count)
+       |> assign(:meeting_room, meeting_room)
+       |> assign(:show_agent_picker, false)
+       |> assign(
+         :available_agents,
+         if(meeting_active, do: load_available_agents(space.id, meeting_participants), else: [])
+       )
        |> assign_new_canvas_form()
        |> assign(:meeting_active, false)
        |> assign(:meeting_room_name, nil)
@@ -547,6 +557,47 @@ defmodule PlatformWeb.ChatLive do
   def handle_event("join-meeting-click", _params, socket) do
     # Placeholder — full join flow handled by the Join Meeting UI task
     {:noreply, socket}
+  end
+
+  def handle_event("toggle_agent_picker", _params, socket) do
+    {:noreply, assign(socket, :show_agent_picker, !socket.assigns.show_agent_picker)}
+  end
+
+  def handle_event("invite_agent", %{"agent-id" => agent_id}, socket) do
+    space = socket.assigns.active_space
+    agent = Platform.Repo.get(Platform.Agents.Agent, agent_id)
+
+    with %Platform.Agents.Agent{} <- agent,
+         {:ok, room} <- Platform.Meetings.ensure_room(space.id),
+         {:ok, _participant} <-
+           Platform.Meetings.invite_agent(room, agent, %{user_id: socket.assigns.user_id}) do
+      {:noreply,
+       socket
+       |> assign(:show_agent_picker, false)
+       |> assign(
+         :available_agents,
+         load_available_agents(space.id, socket.assigns.meeting_participants)
+       )}
+    else
+      _ ->
+        {:noreply, put_flash(socket, :error, "Failed to invite agent")}
+    end
+  end
+
+  def handle_event("meeting_active_speaker", %{"identities" => identities}, socket) do
+    {:noreply, assign(socket, :active_speakers, MapSet.new(identities))}
+  end
+
+  def handle_event("dismiss_meeting_agent", %{"agent-id" => agent_id}, socket) do
+    space = socket.assigns.active_space
+
+    with {:ok, room} <- Platform.Meetings.ensure_room(space.id),
+         {:ok, _participant} <- Platform.Meetings.dismiss_agent(room, agent_id) do
+      {:noreply, socket}
+    else
+      _ ->
+        {:noreply, put_flash(socket, :error, "Failed to dismiss agent")}
+    end
   end
 
   def handle_event("noop", _params, socket), do: {:noreply, socket}
@@ -1608,13 +1659,25 @@ defmodule PlatformWeb.ChatLive do
     # If this is the active space, also update the header presence
     socket =
       if socket.assigns.active_space && socket.assigns.active_space.id == space_id do
-        meeting_participants =
-          if active, do: Meetings.active_participants_for_space(space_id), else: []
+        if active do
+          room = Meetings.get_active_room(space_id)
+          meeting_participants = Meetings.active_participants_for_space(space_id)
 
-        socket
-        |> assign(:meeting_active, active)
-        |> assign(:meeting_participants, meeting_participants)
-        |> assign(:meeting_participant_count, count)
+          socket
+          |> assign(:meeting_active, true)
+          |> assign(:meeting_participants, meeting_participants)
+          |> assign(:meeting_participant_count, count)
+          |> assign(:meeting_room, room)
+          |> assign(:available_agents, load_available_agents(space_id, meeting_participants))
+        else
+          socket
+          |> assign(:meeting_active, false)
+          |> assign(:meeting_participants, [])
+          |> assign(:meeting_participant_count, 0)
+          |> assign(:meeting_room, nil)
+          |> assign(:show_agent_picker, false)
+          |> assign(:available_agents, [])
+        end
       else
         socket
       end
@@ -1888,6 +1951,8 @@ defmodule PlatformWeb.ChatLive do
             <%!-- Meeting presence indicator --%>
             <button
               :if={@meeting_active}
+              id="meeting-presence"
+              phx-hook="MeetingRoom"
               phx-click="join-meeting-click"
               class="flex items-center gap-2 px-2 py-1 rounded-lg hover:bg-base-200 transition-colors group"
               title={"#{@meeting_participant_count} in meeting — click to join"}
@@ -1898,9 +1963,69 @@ defmodule PlatformWeb.ChatLive do
               <span class="hidden lg:flex items-center -space-x-2">
                 <span
                   :for={p <- Enum.take(@meeting_participants, 3)}
-                  class="ring-2 ring-base-100 rounded-full"
+                  class={[
+                    "ring-2 rounded-full",
+                    cond do
+                      MapSet.member?(@active_speakers, p.identity) && p.agent_id ->
+                        "ring-primary meeting-avatar-speaking"
+
+                      MapSet.member?(@active_speakers, p.identity) ->
+                        "ring-success meeting-avatar-speaking"
+
+                      p.agent_id ->
+                        "ring-primary"
+
+                      true ->
+                        "ring-base-100"
+                    end
+                  ]}
+                  style={
+                    if MapSet.member?(@active_speakers, p.identity) && p.agent_id,
+                      do:
+                        "--speak-color: #{Platform.Agents.ColorPalette.accent_for(p.agent && p.agent.color)}80",
+                      else: ""
+                  }
                 >
+                  <%!-- Agent participant --%>
+                  <span
+                    :if={p.agent_id}
+                    class="relative flex items-center justify-center size-5 rounded-full text-white cursor-pointer group/agent"
+                    style={"background-color: #{Platform.Agents.ColorPalette.accent_for(p.agent && p.agent.color)}"}
+                    phx-click="dismiss_meeting_agent"
+                    phx-value-agent-id={p.agent_id}
+                    title={"Dismiss #{meeting_participant_name(p)}"}
+                  >
+                    <svg
+                      xmlns="http://www.w3.org/2000/svg"
+                      class="size-3 group-hover/agent:hidden"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2.5"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                    >
+                      <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
+                    </svg>
+                    <svg
+                      xmlns="http://www.w3.org/2000/svg"
+                      class="size-3 hidden group-hover/agent:block"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2.5"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                    >
+                      <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+                    </svg>
+                    <span class="absolute -bottom-0.5 -right-0.5 flex items-center justify-center size-2.5 rounded-full bg-primary text-[5px] font-bold text-primary-content ring-1 ring-base-100">
+                      AI
+                    </span>
+                  </span>
+                  <%!-- Human participant --%>
                   <.human_avatar
+                    :if={!p.agent_id}
                     name={meeting_participant_name(p)}
                     avatar_url={meeting_participant_avatar(p)}
                     seed={p.id}
@@ -1923,6 +2048,108 @@ defmodule PlatformWeb.ChatLive do
                 {@meeting_participant_count}
               </span>
             </button>
+
+            <%!-- Invite Agent button --%>
+            <div :if={@meeting_active} class="relative">
+              <button
+                phx-click="toggle_agent_picker"
+                class={[
+                  "flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium transition-colors",
+                  (@show_agent_picker && "bg-primary/10 text-primary") ||
+                    "text-base-content/50 hover:bg-base-200"
+                ]}
+                title="Invite agent to meeting"
+              >
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  class="size-4"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                >
+                  <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
+                </svg>
+                <span class="hidden lg:inline">Invite Agent</span>
+              </button>
+
+              <%!-- Agent picker popover --%>
+              <div
+                :if={@show_agent_picker}
+                phx-click-away="toggle_agent_picker"
+                class="absolute top-full right-0 mt-1 w-72 bg-base-100 border border-base-300 rounded-xl shadow-xl z-50"
+              >
+                <div class="px-3 py-2 border-b border-base-300">
+                  <div class="flex items-center gap-2 text-sm font-semibold">
+                    <svg
+                      xmlns="http://www.w3.org/2000/svg"
+                      class="size-4 text-primary"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                    >
+                      <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
+                    </svg>
+                    Invite Agent
+                  </div>
+                  <div class="text-xs text-base-content/50 mt-0.5">Available in this space</div>
+                </div>
+                <ul :if={@available_agents != []} class="py-1">
+                  <li
+                    :for={sa <- @available_agents}
+                    phx-click="invite_agent"
+                    phx-value-agent-id={sa.agent.id}
+                    class="flex items-center gap-3 px-3 py-2 cursor-pointer hover:bg-base-200 transition-colors"
+                  >
+                    <span
+                      class="flex items-center justify-center size-8 rounded-full text-white text-xs font-bold"
+                      style={"background-color: #{Platform.Agents.ColorPalette.accent_for(sa.agent.color)}"}
+                    >
+                      <svg
+                        xmlns="http://www.w3.org/2000/svg"
+                        class="size-4"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="2"
+                        stroke-linecap="round"
+                        stroke-linejoin="round"
+                      >
+                        <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
+                      </svg>
+                    </span>
+                    <div class="flex-1 min-w-0">
+                      <div class="flex items-center gap-1.5">
+                        <span class="text-sm font-medium truncate">{sa.agent.name}</span>
+                        <span class="inline-flex items-center px-1 py-0.5 text-[9px] font-bold uppercase tracking-wider rounded bg-primary/10 text-primary">
+                          AI
+                        </span>
+                      </div>
+                      <div :if={sa.agent.slug} class="text-xs text-base-content/50 truncate">
+                        {sa.agent.slug}
+                      </div>
+                    </div>
+                    <span class="flex items-center gap-1 text-xs text-success">
+                      <span class="bg-success rounded-full w-1.5 h-1.5"></span> Online
+                    </span>
+                  </li>
+                </ul>
+                <div
+                  :if={@available_agents == []}
+                  class="px-3 py-4 text-center text-xs text-base-content/50"
+                >
+                  No agents available
+                </div>
+                <div class="px-3 py-1.5 border-t border-base-300 text-[10px] text-base-content/40">
+                  v1 supports one agent at a time
+                </div>
+              </div>
+            </div>
 
             <div class="flex flex-shrink-0 items-center gap-3 text-xs text-base-content/50">
               <.form
@@ -4148,6 +4375,17 @@ defmodule PlatformWeb.ChatLive do
     do: url
 
   defp meeting_participant_avatar(_), do: nil
+
+  defp load_available_agents(space_id, meeting_participants) do
+    agent_ids_in_meeting =
+      meeting_participants
+      |> Enum.filter(& &1.agent_id)
+      |> Enum.map(& &1.agent_id)
+      |> MapSet.new()
+
+    Platform.Chat.list_space_agents(space_id)
+    |> Enum.reject(fn sa -> MapSet.member?(agent_ids_in_meeting, sa.agent.id) end)
+  end
 
   defp sidebar_display_name(space, current_user_id) do
     participants = Chat.list_participants(space.id)
