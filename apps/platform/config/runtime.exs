@@ -183,3 +183,17 @@ if vapid_public && vapid_private do
     public_key: vapid_public,
     private_key: vapid_private
 end
+
+# ── LiveKit (Meetings) ────────────────────────────────────────────────────────
+# Feature-gated: meetings are inert unless LIVEKIT_API_KEY + LIVEKIT_API_SECRET
+# are set. See ADR 0030.
+livekit_api_key = System.get_env("LIVEKIT_API_KEY")
+livekit_api_secret = System.get_env("LIVEKIT_API_SECRET")
+livekit_url = System.get_env("LIVEKIT_URL")
+
+if livekit_api_key && livekit_api_secret do
+  config :platform, :livekit,
+    api_key: livekit_api_key,
+    api_secret: livekit_api_secret,
+    url: livekit_url || "wss://localhost:7880"
+end

@@ -16,6 +16,7 @@ defmodule Platform.Meetings do
 
   import Ecto.Query
 
+  alias Platform.Agents.Agent
   alias Platform.Meetings.{Participant, Recording, Room, Transcript}
   alias Platform.Meetings.PubSub, as: MeetingsPubSub
   alias Platform.Repo
@@ -713,6 +714,117 @@ defmodule Platform.Meetings do
         {:ok, _message} -> :ok
         {:error, reason} -> {:error, {:post_failed, reason}}
       end
+    end
+  end
+
+  # ── Agent Token Generation ────────────────────────────────────────
+
+  @doc """
+  Generate a LiveKit access token for an agent to join a room.
+
+  Accepts either an `%Agent{}` struct or an agent ID string.
+  Uses the agent's slug as identity and name for the token.
+
+  ## Options
+
+    * `:ttl` — Token TTL in seconds (default: 3600)
+    * `:can_publish` — Whether the agent can publish (default: true)
+    * `:can_subscribe` — Whether the agent can subscribe (default: true)
+    * `:can_publish_data` — Whether the agent can publish data (default: true)
+  """
+  @spec generate_agent_token(Agent.t() | binary(), String.t(), keyword()) ::
+          {:ok, String.t()} | {:error, atom()}
+  def generate_agent_token(agent_or_id, room_name, opts \\ [])
+
+  def generate_agent_token(%Agent{} = agent, room_name, opts) do
+    identity = "agent:#{agent.slug}"
+    name = agent.name || agent.slug
+    config = livekit_config()
+    api_key = config[:api_key]
+    api_secret = config[:api_secret]
+
+    if is_nil(api_key) or api_key == "" or is_nil(api_secret) or api_secret == "" do
+      {:error, :livekit_not_configured}
+    else
+      ttl = Keyword.get(opts, :ttl, 3600)
+      now = System.system_time(:second)
+
+      claims = %{
+        "iss" => api_key,
+        "sub" => identity,
+        "name" => name,
+        "nbf" => now,
+        "exp" => now + ttl,
+        "jti" => Ecto.UUID.generate(),
+        "video" => %{
+          "room" => room_name,
+          "roomJoin" => true,
+          "canPublish" => Keyword.get(opts, :can_publish, true),
+          "canSubscribe" => Keyword.get(opts, :can_subscribe, true),
+          "canPublishData" => Keyword.get(opts, :can_publish_data, true)
+        }
+      }
+
+      {:ok, encode_jwt(claims, api_secret)}
+    end
+  end
+
+  def generate_agent_token(agent_id, room_name, opts) when is_binary(agent_id) do
+    case Repo.get(Agent, agent_id) do
+      %Agent{} = agent -> generate_agent_token(agent, room_name, opts)
+      nil -> {:error, :agent_not_found}
+    end
+  end
+
+  # ── Meeting Join Dispatch ─────────────────────────────────────────
+
+  @doc """
+  Dispatch a `meeting_join` signal to an agent's runtime, instructing it
+  to connect to a LiveKit room.
+
+  Generates a LiveKit token for the agent, then broadcasts the signal
+  via PubSub. The runtime is expected to use the token to connect
+  its voice worker to the room.
+  """
+  @spec dispatch_meeting_join(Agent.t() | binary(), String.t(), map()) ::
+          :ok | {:error, term()}
+  def dispatch_meeting_join(agent_or_id, room_name, context \\ %{})
+
+  def dispatch_meeting_join(%Agent{} = agent, room_name, context) do
+    with {:ok, token} <- generate_agent_token(agent, room_name) do
+      payload = %{
+        room_name: room_name,
+        token: token,
+        agent_identity: "agent:#{agent.slug}",
+        agent_name: agent.name || agent.slug,
+        space_id: Map.get(context, :space_id),
+        meeting_id: Map.get(context, :meeting_id),
+        persona: Map.get(context, :persona),
+        livekit_url: livekit_url()
+      }
+
+      topic = "runtime:agent:#{agent.id}"
+
+      case PlatformWeb.Endpoint.broadcast(topic, "meeting_join", payload) do
+        :ok ->
+          Logger.info(
+            "[Meetings] dispatched meeting_join to agent=#{agent.slug} room=#{room_name}"
+          )
+
+          :ok
+
+        {:error, reason} ->
+          Logger.error("[Meetings] broadcast meeting_join failed to #{topic}: #{inspect(reason)}")
+
+          {:error, :broadcast_failed}
+      end
+    end
+  end
+
+  def dispatch_meeting_join(agent_id, room_name, context) when is_binary(agent_id) do
+    case Repo.get(Agent, agent_id) do
+      %Agent{} = agent -> dispatch_meeting_join(agent, room_name, context)
+      nil -> {:error, :agent_not_found}
     end
   end
 

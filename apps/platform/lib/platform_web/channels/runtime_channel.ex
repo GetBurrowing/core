@@ -89,6 +89,25 @@ defmodule PlatformWeb.RuntimeChannel do
   end
 
   @impl true
+  def handle_in("meeting_join_ack", %{"room_name" => room_name} = payload, socket) do
+    RuntimePresence.touch(socket.assigns.runtime_id)
+    agent_id = socket.assigns[:agent_id]
+    status = Map.get(payload, "status", "joined")
+
+    Logger.info(
+      "[RuntimeChannel] meeting_join_ack: agent=#{inspect(agent_id)} room=#{room_name} status=#{status}"
+    )
+
+    :telemetry.execute(
+      [:platform, :meetings, :agent_join_ack],
+      %{system_time: System.system_time()},
+      %{agent_id: agent_id, room_name: room_name, status: status}
+    )
+
+    {:noreply, socket}
+  end
+
+  @impl true
   def handle_in("reply", %{"space_id" => space_id, "content" => content}, socket) do
     RuntimePresence.touch(socket.assigns.runtime_id)
 
@@ -339,6 +358,22 @@ defmodule PlatformWeb.RuntimeChannel do
           error: inspect(reason)
         })
     end
+
+    {:noreply, socket}
+  end
+
+  @impl true
+  def handle_in("meeting_leave", %{"room_name" => room_name}, socket) do
+    RuntimePresence.touch(socket.assigns.runtime_id)
+    agent_id = socket.assigns[:agent_id]
+
+    Logger.info("[RuntimeChannel] meeting_leave: agent=#{inspect(agent_id)} room=#{room_name}")
+
+    :telemetry.execute(
+      [:platform, :meetings, :agent_leave],
+      %{system_time: System.system_time()},
+      %{agent_id: agent_id, room_name: room_name}
+    )
 
     {:noreply, socket}
   end
