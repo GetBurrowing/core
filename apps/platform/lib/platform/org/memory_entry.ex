@@ -23,7 +23,7 @@ defmodule Platform.Org.MemoryEntry do
     field(:authored_by, :binary_id)
     field(:metadata, :map, default: %{})
 
-    field(:inserted_at, :utc_datetime_usec, read_after_writes: true)
+    timestamps(type: :utc_datetime_usec, updated_at: false)
   end
 
   @required ~w(content date)a

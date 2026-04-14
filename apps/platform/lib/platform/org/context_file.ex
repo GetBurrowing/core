@@ -13,6 +13,12 @@ defmodule Platform.Org.ContextFile do
   @primary_key {:id, Platform.Types.UUIDv7, autogenerate: true}
   @foreign_key_type :binary_id
 
+  @valid_file_keys ~w(
+    ORG_IDENTITY.md
+    ORG_MEMORY.md
+    ORG_AGENTS.md
+  )
+
   schema "org_context_files" do
     field(:workspace_id, :binary_id)
     field(:file_key, :string)
@@ -30,7 +36,7 @@ defmodule Platform.Org.ContextFile do
     context_file
     |> cast(attrs, @required ++ @optional)
     |> validate_required(@required)
-    |> validate_inclusion(:file_key, allowed_file_keys())
+    |> validate_inclusion(:file_key, @valid_file_keys)
     |> unique_constraint([:workspace_id, :file_key],
       name: :org_context_files_workspace_id_file_key_index
     )
@@ -48,7 +54,8 @@ defmodule Platform.Org.ContextFile do
   end
 
   @doc "List of allowed file keys for org context files."
-  def allowed_file_keys do
-    ~w(ORG_IDENTITY.md ORG_MEMORY.md ORG_AGENTS.md)
-  end
+  def allowed_file_keys, do: @valid_file_keys
+
+  @doc "Returns the list of valid file keys."
+  def valid_file_keys, do: @valid_file_keys
 end

@@ -6,6 +6,13 @@ defmodule Platform.Org.Context do
   append-only memory entries (daily, long_term), and a `build_context/1`
   function that assembles workspace files and recent daily entries into a
   map suitable for injection into agent sessions.
+
+  ## Quick reference
+
+      Platform.Org.Context.list_files()
+      Platform.Org.Context.get_file("ORG_IDENTITY.md")
+      Platform.Org.Context.upsert_file(%{file_key: "ORG_IDENTITY.md", content: "# Our Org", updated_by: user_id})
+      Platform.Org.Context.delete_file("CUSTOM_FILE.md")
   """
 
   import Ecto.Query
@@ -13,6 +20,61 @@ defmodule Platform.Org.Context do
   alias Platform.Org.ContextFile
   alias Platform.Org.MemoryEntry
   alias Platform.Repo
+
+  # ── Default templates ─────────────────────────────────────────────────
+
+  @default_templates %{
+    "ORG_IDENTITY.md" => """
+    # Organization Identity
+
+    ## Mission
+    _What is your organization's mission?_
+
+    ## Values
+    _What principles guide your team?_
+
+    ## Product Summary
+    _Brief description of what you're building._
+
+    ## Team
+    _Who are the key people and what are their roles?_
+    """,
+    "ORG_MEMORY.md" => """
+    # Organization Memory
+
+    Long-term curated knowledge for the organization. Agents reference this
+    for persistent context about decisions, patterns, and institutional knowledge.
+
+    ## Key Decisions
+    _Record important decisions and their rationale here._
+
+    ## Patterns & Conventions
+    _Document recurring patterns, naming conventions, and standards._
+
+    ## Lessons Learned
+    _Capture insights from past experiences._
+    """,
+    "ORG_AGENTS.md" => """
+    # Organization Agents
+
+    Registry of agents and their roles within the organization.
+
+    ## Active Agents
+
+    | Agent | Role | Capabilities |
+    |-------|------|-------------|
+    | _agent-name_ | _role_ | _what it does_ |
+
+    ## Agent Guidelines
+    _Shared guidelines for how agents should behave._
+    """
+  }
+
+  @doc "Returns the default template content for a given file key, or nil."
+  def default_template(file_key), do: Map.get(@default_templates, file_key)
+
+  @doc "Returns the map of all default templates."
+  def default_templates, do: @default_templates
 
   # ── Context files ────────────────────────────────────────────────────
 
@@ -25,8 +87,19 @@ defmodule Platform.Org.Context do
     |> Repo.one()
   end
 
+  @doc "Gets a single org context file by file_key. Alias for `get_context_file/2`."
+  def get_file(file_key, opts \\ []) do
+    workspace_id = Keyword.get(opts, :workspace_id)
+    get_context_file(file_key, workspace_id)
+  end
+
+  @doc "Gets a single org context file by ID."
+  def get_file_by_id(id) do
+    Repo.get(ContextFile, id)
+  end
+
   @doc """
-  List all context files for a workspace.
+  List all context files, optionally scoped to a workspace.
 
   ## Options
 
@@ -41,6 +114,9 @@ defmodule Platform.Org.Context do
     |> order_by([f], asc: f.file_key)
     |> Repo.all()
   end
+
+  @doc "Lists all org context files, ordered by file_key. Alias for `list_context_files/1`."
+  def list_files(opts \\ []), do: list_context_files(opts)
 
   @doc """
   Create or update a context file with optimistic locking.
@@ -96,6 +172,50 @@ defmodule Platform.Org.Context do
     |> normalize_transaction_result()
   end
 
+  @doc """
+  Creates or updates an org context file (simple interface).
+  On update, the version is incremented.
+  """
+  def upsert_file(attrs) do
+    file_key = Map.get(attrs, :file_key) || Map.get(attrs, "file_key")
+    content = Map.get(attrs, :content) || Map.get(attrs, "content")
+    updated_by = Map.get(attrs, :updated_by) || Map.get(attrs, "updated_by")
+
+    upsert_context_file(file_key, %{content: content, updated_by: updated_by})
+  end
+
+  @doc "Deletes a context file. Returns {:ok, file} or {:error, :not_found}."
+  def delete_file(file_key) do
+    case get_file(file_key) do
+      nil -> {:error, :not_found}
+      file -> Repo.delete(file)
+    end
+  end
+
+  @doc """
+  Seeds default org context files if they don't already exist.
+  Typically called during application startup or from a migration seed.
+  """
+  def seed_defaults(opts \\ []) do
+    updated_by = Keyword.get(opts, :updated_by)
+
+    Enum.each(@default_templates, fn {file_key, template} ->
+      case get_file(file_key) do
+        nil ->
+          %ContextFile{}
+          |> ContextFile.changeset(%{
+            file_key: file_key,
+            content: template,
+            updated_by: updated_by
+          })
+          |> Repo.insert!()
+
+        _exists ->
+          :ok
+      end
+    end)
+  end
+
   # ── Memory entries ───────────────────────────────────────────────────
 
   @doc """
@@ -134,6 +254,9 @@ defmodule Platform.Org.Context do
     end
   end
 
+  @doc "Appends a new memory entry. Alias for `append_memory_entry/2`."
+  def append_memory(attrs), do: append_memory_entry(attrs)
+
   @doc """
   Search memory entries with optional filters.
 
@@ -160,6 +283,18 @@ defmodule Platform.Org.Context do
     |> order_by([m], desc: m.inserted_at, desc: m.id)
     |> limit(^limit)
     |> Repo.all()
+  end
+
+  @doc "Searches org memory entries. Alias for `search_memory_entries/1`."
+  def search_memory(opts \\ []), do: search_memory_entries(opts)
+
+  @doc "Returns recent memory entries grouped by date (last N days)."
+  def recent_memory(days \\ 7, opts \\ []) do
+    date_from = Date.add(Date.utc_today(), -days)
+
+    search_memory_entries(Keyword.merge(opts, date_from: date_from))
+    |> Enum.group_by(& &1.date)
+    |> Enum.sort_by(fn {date, _} -> date end, {:desc, Date})
   end
 
   # ── Build context ────────────────────────────────────────────────────
@@ -228,8 +363,22 @@ defmodule Platform.Org.Context do
   defp maybe_filter_date_from(query, nil), do: query
   defp maybe_filter_date_from(query, %Date{} = d), do: where(query, [m], m.date >= ^d)
 
+  defp maybe_filter_date_from(query, date_string) when is_binary(date_string) do
+    case Date.from_iso8601(date_string) do
+      {:ok, date} -> maybe_filter_date_from(query, date)
+      _ -> query
+    end
+  end
+
   defp maybe_filter_date_to(query, nil), do: query
   defp maybe_filter_date_to(query, %Date{} = d), do: where(query, [m], m.date <= ^d)
+
+  defp maybe_filter_date_to(query, date_string) when is_binary(date_string) do
+    case Date.from_iso8601(date_string) do
+      {:ok, date} -> maybe_filter_date_to(query, date)
+      _ -> query
+    end
+  end
 
   defp maybe_filter_query(queryable, nil), do: queryable
   defp maybe_filter_query(queryable, ""), do: queryable

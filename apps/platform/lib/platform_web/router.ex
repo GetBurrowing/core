@@ -56,6 +56,8 @@ defmodule PlatformWeb.Router do
       live("/control/:agent_slug", ControlCenterLive, :show)
       live("/admin/prompts", AdminPromptsLive, :index)
       live("/admin/prompts/:slug", AdminPromptsLive, :edit)
+      live("/org-context", OrgContextLive, :index)
+      live("/org-context/:file_key", OrgContextLive, :show)
       live("/admin/federation", AdminFederationLive, :index)
     end
   end

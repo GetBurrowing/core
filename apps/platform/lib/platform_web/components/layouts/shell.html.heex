@@ -82,6 +82,15 @@
       <span :if={!@sidebar_collapsed} class="text-sm font-medium">Agent Resources</span>
     </.link>
     <.link
+      navigate="/org-context"
+      class={nav_item_class(@current_path, "/org-context")}
+      phx-click="close_drawer"
+      title="Org Context"
+    >
+      <span class="hero-building-library size-5 flex-shrink-0"></span>
+      <span :if={!@sidebar_collapsed} class="text-sm font-medium">Org Context</span>
+    </.link>
+    <.link
       navigate="/control/usage"
       class={nav_item_class(@current_path, "/control/usage")}
       phx-click="close_drawer"
