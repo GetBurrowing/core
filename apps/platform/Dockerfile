@@ -2,7 +2,9 @@
 FROM elixir:1.19.5-otp-28-slim AS build
 
 RUN apt-get update -y \
- && apt-get install -y build-essential git \
+ && apt-get install -y build-essential git curl ca-certificates \
+ && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
+ && apt-get install -y nodejs \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -20,6 +22,7 @@ COPY assets assets
 COPY priv priv
 COPY lib lib
 
+RUN cd assets && npm ci
 RUN mix assets.deploy
 RUN mix compile
 RUN mix release
