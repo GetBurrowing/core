@@ -12,6 +12,7 @@ import MarkdownEditor from "./markdown_editor"
 import LocalTime from "./local_time"
 import MeetingBar from "./meeting_bar"
 import MeetingCaptions from "./meeting_captions"
+import MeetingClient from "./meeting_client"
 import MeetingRoom from "./meeting_room"
 import MeetingTimer from "./meeting_timer"
 import MermaidDiagram from "./mermaid_diagram"
@@ -36,6 +37,7 @@ export default {
   MarkdownEditor,
   MeetingBar,
   MeetingCaptions,
+  MeetingClient,
   MeetingRoom,
   MeetingTimer,
   MermaidDiagram,

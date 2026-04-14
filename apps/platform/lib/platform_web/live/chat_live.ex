@@ -1795,6 +1795,8 @@ defmodule PlatformWeb.ChatLive do
 
     <div id="chat-state" phx-hook="ChatState" class="hidden"></div>
 
+    <div id="meeting-client" phx-hook="MeetingClient" class="hidden"></div>
+
     <%!-- Notification opt-in banner (shown when permission not yet granted) --%>
     <div
       :if={@push_permission == "prompt"}
