@@ -29,6 +29,8 @@ defmodule PlatformWeb.ChatLive do
   alias Platform.Chat.AttachmentStorage
   alias Platform.Chat.Presence, as: ChatPresence
   alias Platform.Chat.PubSub, as: ChatPubSub
+  alias Platform.Meetings
+  alias Platform.Meetings.PubSub, as: MeetingsPubSub
   alias Platform.Repo
 
   @message_limit 50
@@ -80,6 +82,10 @@ defmodule PlatformWeb.ChatLive do
       |> assign(:canvases_by_message_id, %{})
       |> assign(:active_canvas, nil)
       |> assign(:show_canvases, false)
+      |> assign(:meeting_active, false)
+      |> assign(:meeting_participants, [])
+      |> assign(:meeting_participant_count, 0)
+      |> assign(:meeting_counts, %{})
       |> assign(:active_agent_participant_id, nil)
       |> assign(:active_agent_name, nil)
       |> assign(:mobile_browser_open, false)
@@ -130,11 +136,25 @@ defmodule PlatformWeb.ChatLive do
 
     # Subscribe to all spaces (channels + DMs) so we can count unread messages
     # in background conversations (active space subscription happens in handle_params)
-    if connected?(socket) do
-      Enum.each(channels ++ dm_conversations, fn space ->
-        ChatPubSub.subscribe(space.id)
-      end)
-    end
+    socket =
+      if connected?(socket) do
+        all_spaces = channels ++ dm_conversations
+
+        Enum.each(all_spaces, fn space ->
+          ChatPubSub.subscribe(space.id)
+          MeetingsPubSub.subscribe_presence(space.id)
+        end)
+
+        # Subscribe to global meeting presence summary for sidebar indicators
+        MeetingsPubSub.subscribe_presence_summary()
+
+        # Load initial meeting counts for sidebar indicators
+        space_ids = Enum.map(all_spaces, & &1.id)
+        meeting_counts = Meetings.active_meeting_counts(space_ids)
+        assign(socket, :meeting_counts, meeting_counts)
+      else
+        socket
+      end
 
     {:ok, socket}
   end
@@ -146,6 +166,11 @@ defmodule PlatformWeb.ChatLive do
       if prev = socket.assigns.active_space do
         ChatPubSub.unsubscribe(prev.id)
         Phoenix.PubSub.unsubscribe(Platform.PubSub, "active_agent:#{prev.id}")
+
+        # Unsubscribe from previous space's meeting room presence
+        if prev_room = Meetings.get_active_room(prev.id) do
+          MeetingsPubSub.unsubscribe_room(prev_room.id)
+        end
 
         if connected?(socket) do
           ChatPresence.untrack_in_space(self(), prev.id, socket.assigns.user_id)
@@ -173,6 +198,22 @@ defmodule PlatformWeb.ChatLive do
 
       participant = ensure_participant(space.id, socket.assigns.user_id)
       agent_presence = ensure_native_agent_presence(space.id)
+
+      # Subscribe to meeting room presence for this space and load participants
+      {meeting_participants, meeting_active, meeting_participant_count} =
+        if connected?(socket) do
+          case Meetings.get_active_room(space.id) do
+            nil ->
+              {[], false, 0}
+
+            room ->
+              MeetingsPubSub.subscribe_room(room.id)
+              participants = Meetings.active_participants(room.id)
+              {participants, participants != [], length(participants)}
+          end
+        else
+          {[], false, 0}
+        end
 
       if connected?(socket) && participant do
         display_name = resolve_display_name(socket.assigns.user_id, participant)
@@ -272,6 +313,9 @@ defmodule PlatformWeb.ChatLive do
        |> assign(:channels, channels)
        |> assign(:dm_conversations, dm_convos)
        |> assign(:spaces, channels ++ dm_convos)
+       |> assign(:meeting_active, meeting_active)
+       |> assign(:meeting_participants, meeting_participants)
+       |> assign(:meeting_participant_count, meeting_participant_count)
        |> assign_new_canvas_form()
        |> assign(:meeting_active, false)
        |> assign(:meeting_room_name, nil)
@@ -498,6 +542,11 @@ defmodule PlatformWeb.ChatLive do
         else: MapSet.put(tagged, slug)
 
     {:noreply, assign(socket, :upload_tagged_agents, tagged)}
+  end
+
+  def handle_event("join-meeting-click", _params, socket) do
+    # Placeholder — full join flow handled by the Join Meeting UI task
+    {:noreply, socket}
   end
 
   def handle_event("noop", _params, socket), do: {:noreply, socket}
@@ -1540,6 +1589,47 @@ defmodule PlatformWeb.ChatLive do
      |> assign(:active_agent_name, name)}
   end
 
+  # ── Meeting presence updates ──────────────────────────────────────────────
+
+  def handle_info(
+        {:meeting_presence_update, %{space_id: space_id, active: active, count: count}},
+        socket
+      ) do
+    # Update sidebar meeting counts
+    meeting_counts =
+      if active do
+        Map.put(socket.assigns.meeting_counts, space_id, count)
+      else
+        Map.delete(socket.assigns.meeting_counts, space_id)
+      end
+
+    socket = assign(socket, :meeting_counts, meeting_counts)
+
+    # If this is the active space, also update the header presence
+    socket =
+      if socket.assigns.active_space && socket.assigns.active_space.id == space_id do
+        meeting_participants =
+          if active, do: Meetings.active_participants_for_space(space_id), else: []
+
+        socket
+        |> assign(:meeting_active, active)
+        |> assign(:meeting_participants, meeting_participants)
+        |> assign(:meeting_participant_count, count)
+      else
+        socket
+      end
+
+    {:noreply, socket}
+  end
+
+  def handle_info({:meeting_presence_summary, %{space_id: _space_id}}, socket) do
+    # Re-fetch all meeting counts for sidebar
+    all_spaces = socket.assigns.channels ++ socket.assigns.dm_conversations
+    space_ids = Enum.map(all_spaces, & &1.id)
+    meeting_counts = Meetings.active_meeting_counts(space_ids)
+    {:noreply, assign(socket, :meeting_counts, meeting_counts)}
+  end
+
   def handle_info(_msg, socket), do: {:noreply, socket}
 
   @impl true
@@ -1794,6 +1884,45 @@ defmodule PlatformWeb.ChatLive do
                 </button>
               </form>
             </div>
+
+            <%!-- Meeting presence indicator --%>
+            <button
+              :if={@meeting_active}
+              phx-click="join-meeting-click"
+              class="flex items-center gap-2 px-2 py-1 rounded-lg hover:bg-base-200 transition-colors group"
+              title={"#{@meeting_participant_count} in meeting — click to join"}
+            >
+              <%!-- Green pulsing dot --%>
+              <span class="bg-success rounded-full w-2 h-2 animate-pulse flex-shrink-0"></span>
+              <%!-- Participant avatars (desktop only, max 3 + overflow) --%>
+              <span class="hidden lg:flex items-center -space-x-2">
+                <span
+                  :for={p <- Enum.take(@meeting_participants, 3)}
+                  class="ring-2 ring-base-100 rounded-full"
+                >
+                  <.human_avatar
+                    name={meeting_participant_name(p)}
+                    avatar_url={meeting_participant_avatar(p)}
+                    seed={p.id}
+                    size="xs"
+                  />
+                </span>
+                <span
+                  :if={@meeting_participant_count > 3}
+                  class="flex items-center justify-center size-5 rounded-full bg-base-300 text-[10px] font-semibold ring-2 ring-base-100"
+                >
+                  +{@meeting_participant_count - 3}
+                </span>
+              </span>
+              <%!-- "In call" label (desktop) --%>
+              <span class="hidden lg:inline text-xs text-success font-medium group-hover:text-success/80">
+                In call
+              </span>
+              <%!-- Compact count (mobile) --%>
+              <span class="lg:hidden text-xs text-success font-medium">
+                {@meeting_participant_count}
+              </span>
+            </button>
 
             <div class="flex flex-shrink-0 items-center gap-3 text-xs text-base-content/50">
               <.form
@@ -4002,6 +4131,23 @@ defmodule PlatformWeb.ChatLive do
   defp space_header_name(space, participants, user_id) do
     Chat.display_name_for_space(space, participants, user_id)
   end
+
+  defp meeting_participant_name(%{display_name: name}) when is_binary(name) and name != "",
+    do: name
+
+  defp meeting_participant_name(%{user: %{display_name: name}})
+       when is_binary(name) and name != "", do: name
+
+  defp meeting_participant_name(%{agent: %{name: name}}) when is_binary(name) and name != "",
+    do: name
+
+  defp meeting_participant_name(%{identity: identity}) when is_binary(identity), do: identity
+  defp meeting_participant_name(_), do: "User"
+
+  defp meeting_participant_avatar(%{user: %{avatar_url: url}}) when is_binary(url) and url != "",
+    do: url
+
+  defp meeting_participant_avatar(_), do: nil
 
   defp sidebar_display_name(space, current_user_id) do
     participants = Chat.list_participants(space.id)
