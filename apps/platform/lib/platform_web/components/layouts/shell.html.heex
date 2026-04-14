@@ -322,13 +322,13 @@
     <.live_component
       module={PlatformWeb.MeetingBarLive}
       id="meeting-bar"
-      user_id={assigns[:user_id]}
-      current_path={@current_path}
-      active_meeting={assigns[:active_meeting]}
-      mic_enabled={assigns[:mic_enabled] || true}
-      camera_enabled={assigns[:camera_enabled] || false}
-      participant_count={assigns[:participant_count] || 0}
-      meeting_started_at={assigns[:meeting_started_at]}
+      meeting_active={@meeting_active}
+      meeting_space_id={@meeting_space_id}
+      meeting_space_name={@meeting_space_name}
+      meeting_space_slug={@meeting_space_slug}
+      meeting_started_at={@meeting_started_at}
+      on_meeting_page={@on_meeting_page}
+      sidebar_collapsed={@sidebar_collapsed}
     />
   </div>
 </div>
