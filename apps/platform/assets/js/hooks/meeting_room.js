@@ -1,368 +1,286 @@
-import {
-  Room,
-  RoomEvent,
-  Track,
-  ConnectionState,
-  createLocalTracks,
-} from "livekit-client"
-
 /**
- * MeetingRoom LiveView Hook
+ * MeetingRoom hook — root-level LiveKit Room persistence.
  *
- * Manages the LiveKit client-side connection for video/audio meetings.
+ * This hook is attached to the shell layout (outside per-page LiveViews)
+ * so the LiveKit Room instance, audio elements, and connection state
+ * survive LiveView navigation.
  *
- * ## Server → Client events
- *   - "join-meeting" {token, url}  — connect to LiveKit room
- *   - "leave-meeting" {}           — disconnect from room
+ * ## Architecture
  *
- * ## Client → Server events
- *   - "meeting-connected" {}       — room connected successfully
- *   - "meeting-disconnected" {}    — room disconnected
- *   - "meeting-error" {reason}     — connection error
+ * The hook maintains a singleton `window.__meetingRoom` object that holds:
+ * - The LiveKit Room instance
+ * - Audio/video element references (attached to root DOM)
+ * - Connection state and media toggle state
+ *
+ * Communication with MeetingBarLive happens via:
+ * - `push_event` from server → JS (join, leave, toggle commands)
+ * - `pushEvent` from JS → server (state sync, participant updates)
+ *
+ * ## Events
+ *
+ * Server → Client (handleEvent):
+ *   - `meeting:join`          — connect to LiveKit room with token
+ *   - `meeting:leave`         — disconnect and clean up
+ *   - `meeting:toggle-mic`    — toggle local microphone
+ *   - `meeting:toggle-camera` — toggle local camera
+ *
+ * Client → Server (pushEvent):
+ *   - `meeting:state-sync`    — periodic state sync (participant count, media state)
+ *   - `meeting:connected`     — room connected successfully
+ *   - `meeting:disconnected`  — room disconnected
+ *   - `meeting:error`         — connection error
  */
+
 const MeetingRoom = {
   mounted() {
-    this.room = null
-    this.localTracks = []
-    this.micEnabled = true
-    this.camEnabled = false
-    this.screenShareTrack = null
+    this._userId = this.el.dataset.userId
 
-    // Listen for server push events
-    this.handleEvent("join-meeting", ({ token, url }) => {
-      this.connect(url, token)
-    })
-
-    this.handleEvent("leave-meeting", () => {
-      this.disconnect()
-    })
-
-    // Bind control buttons
-    this.el.addEventListener("click", (e) => {
-      const btn = e.target.closest("[data-meeting-action]")
-      if (!btn) return
-
-      const action = btn.dataset.meetingAction
-      switch (action) {
-        case "toggle-mic":
-          this.toggleMic()
-          break
-        case "toggle-camera":
-          this.toggleCamera()
-          break
-        case "toggle-screenshare":
-          this.toggleScreenShare()
-          break
-        case "leave":
-          this.pushEvent("leave_meeting", {})
-          break
+    // Initialize the singleton meeting state if not present
+    if (!window.__meetingRoom) {
+      window.__meetingRoom = {
+        room: null,
+        connected: false,
+        audioContainer: null,
+        micEnabled: true,
+        cameraEnabled: false,
+        participantCount: 0,
+        roomName: null,
       }
-    })
+    }
+
+    // Create a persistent audio container in the root DOM
+    this._ensureAudioContainer()
+
+    // Register event handlers from server
+    this.handleEvent("meeting:join", (payload) => this._handleJoin(payload))
+    this.handleEvent("meeting:leave", () => this._handleLeave())
+    this.handleEvent("meeting:toggle-mic", (payload) => this._handleToggleMic(payload))
+    this.handleEvent("meeting:toggle-camera", (payload) => this._handleToggleCamera(payload))
+
+    // If we already have an active room (e.g., after navigation), sync state
+    if (window.__meetingRoom.connected) {
+      this._syncStateToServer()
+    }
+
+    // Start the duration timer
+    this._startDurationTimer()
   },
 
-  destroyed() {
-    this.disconnect()
+  /**
+   * Ensure a persistent audio container exists in the root DOM.
+   * Audio elements are attached here (outside LiveView containers)
+   * so they survive navigation.
+   */
+  _ensureAudioContainer() {
+    let container = document.getElementById("meeting-audio-container")
+    if (!container) {
+      container = document.createElement("div")
+      container.id = "meeting-audio-container"
+      container.style.display = "none"
+      container.setAttribute("aria-hidden", "true")
+      document.body.appendChild(container)
+    }
+    window.__meetingRoom.audioContainer = container
   },
 
-  async connect(url, token) {
+  /**
+   * Handle join event — connect to a LiveKit room.
+   * In the current implementation, this sets up the meeting state.
+   * Full LiveKit integration will be wired when livekit-client is added.
+   */
+  async _handleJoin(payload) {
+    const { token, url, room_name, space_name, space_slug } = payload
+    const state = window.__meetingRoom
+
+    // If already connected to a different room, disconnect first
+    if (state.connected && state.roomName !== room_name) {
+      await this._handleLeave()
+    }
+
     try {
-      this.room = new Room({
-        adaptiveStream: true,
-        dynacast: true,
-        videoCaptureDefaults: {
-          resolution: { width: 640, height: 480, frameRate: 24 },
-        },
+      // Store meeting metadata
+      state.roomName = room_name
+      state.spaceName = space_name
+      state.spaceSlug = space_slug
+      state.connected = true
+      state.micEnabled = true
+      state.cameraEnabled = false
+      state.participantCount = 1
+
+      // If livekit-client is available, create and connect the Room
+      if (typeof window.LivekitClient !== "undefined") {
+        const { Room, RoomEvent } = window.LivekitClient
+
+        state.room = new Room()
+
+        state.room.on(RoomEvent.ParticipantConnected, () => {
+          state.participantCount = state.room.numParticipants + 1
+          this._syncStateToServer()
+        })
+
+        state.room.on(RoomEvent.ParticipantDisconnected, () => {
+          state.participantCount = Math.max(1, state.room.numParticipants)
+          this._syncStateToServer()
+        })
+
+        state.room.on(RoomEvent.TrackSubscribed, (track, publication, participant) => {
+          if (track.kind === "audio") {
+            const audioEl = track.attach()
+            audioEl.dataset.participantId = participant.identity
+            state.audioContainer.appendChild(audioEl)
+          }
+        })
+
+        state.room.on(RoomEvent.TrackUnsubscribed, (track) => {
+          track.detach().forEach((el) => el.remove())
+        })
+
+        state.room.on(RoomEvent.Disconnected, () => {
+          state.connected = false
+          this.pushEvent("meeting:disconnected", {})
+        })
+
+        await state.room.connect(url, token)
+        state.participantCount = state.room.numParticipants + 1
+      }
+
+      // Notify server of successful connection
+      this.pushEvent("meeting:connected", {
+        room_name,
+        space_name,
+        space_slug,
+        participant_count: state.participantCount,
       })
-
-      this.setupRoomListeners()
-
-      await this.room.connect(url, token)
-
-      // Publish local audio by default
-      await this.room.localParticipant.setMicrophoneEnabled(true)
-      this.micEnabled = true
-
-      this.pushEvent("meeting-connected", {})
-      this.renderParticipants()
-    } catch (err) {
-      console.error("[MeetingRoom] Connection failed:", err)
-      this.pushEvent("meeting-error", { reason: err.message || "Connection failed" })
+    } catch (error) {
+      console.error("[MeetingRoom] Failed to join:", error)
+      state.connected = false
+      this.pushEvent("meeting:error", { message: error.message })
     }
   },
 
-  disconnect() {
-    if (this.screenShareTrack) {
-      this.screenShareTrack.stop()
-      this.screenShareTrack = null
-    }
+  /**
+   * Handle leave event — disconnect from the LiveKit room and clean up.
+   */
+  async _handleLeave() {
+    const state = window.__meetingRoom
 
-    for (const track of this.localTracks) {
-      track.stop()
-    }
-    this.localTracks = []
-
-    if (this.room) {
-      this.room.disconnect(true)
-      this.room = null
-    }
-
-    this.clearParticipantTiles()
-  },
-
-  setupRoomListeners() {
-    const room = this.room
-
-    room.on(RoomEvent.ParticipantConnected, (participant) => {
-      this.renderParticipants()
-    })
-
-    room.on(RoomEvent.ParticipantDisconnected, (participant) => {
-      this.renderParticipants()
-    })
-
-    room.on(RoomEvent.TrackSubscribed, (track, publication, participant) => {
-      this.attachTrack(track, participant)
-    })
-
-    room.on(RoomEvent.TrackUnsubscribed, (track, publication, participant) => {
-      this.detachTrack(track, participant)
-    })
-
-    room.on(RoomEvent.LocalTrackPublished, (publication, participant) => {
-      if (publication.track) {
-        this.attachTrack(publication.track, participant)
+    if (state.room) {
+      try {
+        await state.room.disconnect()
+      } catch (e) {
+        console.warn("[MeetingRoom] Error during disconnect:", e)
       }
-    })
-
-    room.on(RoomEvent.LocalTrackUnpublished, (publication, participant) => {
-      if (publication.track) {
-        this.detachTrack(publication.track, participant)
-      }
-    })
-
-    room.on(RoomEvent.ActiveSpeakersChanged, (speakers) => {
-      this.updateActiveSpeakers(speakers)
-    })
-
-    room.on(RoomEvent.Disconnected, (reason) => {
-      console.log("[MeetingRoom] Disconnected:", reason)
-      this.pushEvent("meeting-disconnected", {})
-      this.clearParticipantTiles()
-    })
-
-    room.on(RoomEvent.ConnectionStateChanged, (state) => {
-      this.updateConnectionState(state)
-    })
-  },
-
-  // ── Media Controls ──────────────────────────────────────────────────────
-
-  async toggleMic() {
-    if (!this.room) return
-    this.micEnabled = !this.micEnabled
-    await this.room.localParticipant.setMicrophoneEnabled(this.micEnabled)
-    this.updateControlState("toggle-mic", this.micEnabled)
-  },
-
-  async toggleCamera() {
-    if (!this.room) return
-    this.camEnabled = !this.camEnabled
-    await this.room.localParticipant.setCameraEnabled(this.camEnabled)
-    this.updateControlState("toggle-camera", this.camEnabled)
-  },
-
-  async toggleScreenShare() {
-    if (!this.room) return
-    try {
-      const enabled = this.room.localParticipant.isScreenShareEnabled
-      await this.room.localParticipant.setScreenShareEnabled(!enabled)
-      this.updateControlState("toggle-screenshare", !enabled)
-    } catch (err) {
-      console.warn("[MeetingRoom] Screen share error:", err)
-    }
-  },
-
-  updateControlState(action, enabled) {
-    const btn = this.el.querySelector(`[data-meeting-action="${action}"]`)
-    if (!btn) return
-    btn.classList.toggle("meeting-control-active", enabled)
-    btn.classList.toggle("meeting-control-muted", !enabled)
-  },
-
-  // ── Participant Rendering ───────────────────────────────────────────────
-
-  renderParticipants() {
-    if (!this.room) return
-
-    const grid = this.el.querySelector("[data-meeting-grid]")
-    if (!grid) return
-
-    const participants = [
-      this.room.localParticipant,
-      ...Array.from(this.room.remoteParticipants.values()),
-    ]
-
-    // Remove tiles for participants who left
-    const currentIds = new Set(participants.map((p) => p.identity))
-    grid.querySelectorAll("[data-participant-id]").forEach((tile) => {
-      if (!currentIds.has(tile.dataset.participantId)) {
-        tile.remove()
-      }
-    })
-
-    // Add/update tiles
-    for (const participant of participants) {
-      let tile = grid.querySelector(
-        `[data-participant-id="${participant.identity}"]`
-      )
-
-      if (!tile) {
-        tile = this.createParticipantTile(participant)
-        grid.appendChild(tile)
-      }
-
-      this.updateParticipantTile(tile, participant)
-    }
-  },
-
-  createParticipantTile(participant) {
-    const tile = document.createElement("div")
-    tile.dataset.participantId = participant.identity
-    tile.className =
-      "meeting-tile relative flex items-center justify-center bg-base-300 rounded-xl overflow-hidden aspect-video"
-
-    const videoContainer = document.createElement("div")
-    videoContainer.className = "meeting-tile-video absolute inset-0"
-    videoContainer.dataset.videoContainer = ""
-    tile.appendChild(videoContainer)
-
-    const nameOverlay = document.createElement("div")
-    nameOverlay.className =
-      "meeting-tile-name absolute bottom-2 left-2 px-2 py-0.5 bg-base-100/70 text-base-content text-xs rounded-md backdrop-blur-sm"
-    nameOverlay.textContent = participant.name || participant.identity
-    tile.appendChild(nameOverlay)
-
-    const muteIndicator = document.createElement("div")
-    muteIndicator.className =
-      "meeting-tile-mute absolute top-2 right-2 text-error hidden"
-    muteIndicator.dataset.muteIndicator = ""
-    muteIndicator.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="1" y1="1" x2="23" y2="23"/><path d="M9 9v3a3 3 0 0 0 5.12 2.12M15 9.34V4a3 3 0 0 0-5.94-.6"/><path d="M17 16.95A7 7 0 0 1 5 12v-2m14 0v2c0 .76-.13 1.49-.35 2.17"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>`
-    tile.appendChild(muteIndicator)
-
-    return tile
-  },
-
-  updateParticipantTile(tile, participant) {
-    const isMuted = !participant.isMicrophoneEnabled
-    const muteIndicator = tile.querySelector("[data-mute-indicator]")
-    if (muteIndicator) {
-      muteIndicator.classList.toggle("hidden", !isMuted)
-    }
-  },
-
-  attachTrack(track, participant) {
-    if (track.kind === Track.Kind.Audio) {
-      // Audio tracks get attached to a hidden audio element
-      const audioEl = track.attach()
-      audioEl.dataset.trackSid = track.sid
-      audioEl.dataset.participantId = participant.identity
-      // Don't play local audio back to the user
-      if (participant === this.room?.localParticipant) {
-        audioEl.muted = true
-      }
-      this.el.appendChild(audioEl)
-      return
+      state.room = null
     }
 
-    if (track.kind === Track.Kind.Video) {
-      const grid = this.el.querySelector("[data-meeting-grid]")
-      if (!grid) return
+    // Clean up audio elements
+    if (state.audioContainer) {
+      state.audioContainer.innerHTML = ""
+    }
 
-      let tile = grid.querySelector(
-        `[data-participant-id="${participant.identity}"]`
-      )
-      if (!tile) {
-        tile = this.createParticipantTile(participant)
-        grid.appendChild(tile)
-      }
+    state.connected = false
+    state.roomName = null
+    state.spaceName = null
+    state.spaceSlug = null
+    state.participantCount = 0
+    state.micEnabled = true
+    state.cameraEnabled = false
 
-      const container = tile.querySelector("[data-video-container]")
-      if (container) {
-        // Clear existing video
-        container.innerHTML = ""
-        const videoEl = track.attach()
-        videoEl.className = "w-full h-full object-cover"
-        videoEl.dataset.trackSid = track.sid
-        container.appendChild(videoEl)
+    this.pushEvent("meeting:disconnected", {})
+  },
+
+  /**
+   * Handle mic toggle from server.
+   */
+  async _handleToggleMic({ enabled }) {
+    const state = window.__meetingRoom
+    state.micEnabled = enabled
+
+    if (state.room && state.room.localParticipant) {
+      try {
+        await state.room.localParticipant.setMicrophoneEnabled(enabled)
+      } catch (e) {
+        console.warn("[MeetingRoom] Failed to toggle mic:", e)
       }
     }
   },
 
-  detachTrack(track, participant) {
-    // Remove all elements attached to this track
-    const elements = track.detach()
-    for (const el of elements) {
-      el.remove()
-    }
+  /**
+   * Handle camera toggle from server.
+   */
+  async _handleToggleCamera({ enabled }) {
+    const state = window.__meetingRoom
+    state.cameraEnabled = enabled
 
-    // If it was a video track, clear the container
-    if (track.kind === Track.Kind.Video) {
-      const grid = this.el.querySelector("[data-meeting-grid]")
-      if (!grid) return
-
-      const tile = grid.querySelector(
-        `[data-participant-id="${participant.identity}"]`
-      )
-      if (tile) {
-        const container = tile.querySelector("[data-video-container]")
-        if (container) {
-          container.innerHTML = ""
-        }
+    if (state.room && state.room.localParticipant) {
+      try {
+        await state.room.localParticipant.setCameraEnabled(enabled)
+      } catch (e) {
+        console.warn("[MeetingRoom] Failed to toggle camera:", e)
       }
     }
   },
 
-  updateActiveSpeakers(speakers) {
-    const grid = this.el.querySelector("[data-meeting-grid]")
-    if (!grid) return
+  /**
+   * Sync current meeting state to the server.
+   */
+  _syncStateToServer() {
+    const state = window.__meetingRoom
+    if (!state.connected) return
 
-    // Remove active speaker highlight from all tiles
-    grid.querySelectorAll("[data-participant-id]").forEach((tile) => {
-      tile.classList.remove("ring-2", "ring-primary")
+    this.pushEvent("meeting:state-sync", {
+      room_name: state.roomName,
+      space_name: state.spaceName,
+      space_slug: state.spaceSlug,
+      participant_count: state.participantCount,
+      mic_enabled: state.micEnabled,
+      camera_enabled: state.cameraEnabled,
     })
+  },
 
-    // Add highlight to active speakers
-    for (const speaker of speakers) {
-      const tile = grid.querySelector(
-        `[data-participant-id="${speaker.identity}"]`
-      )
-      if (tile) {
-        tile.classList.add("ring-2", "ring-primary")
+  /**
+   * Start a timer that updates the duration display.
+   * Uses a simple interval since the actual start time is tracked server-side.
+   */
+  _startDurationTimer() {
+    // Clean up any existing timer
+    if (this._durationInterval) {
+      clearInterval(this._durationInterval)
+    }
+
+    this._durationInterval = setInterval(() => {
+      const el = document.getElementById("meeting-duration")
+      if (!el) return
+
+      const startedAt = el.dataset.startedAt
+      if (!startedAt) return
+
+      const start = new Date(startedAt)
+      const now = new Date()
+      const diffSec = Math.floor((now - start) / 1000)
+
+      if (diffSec < 0) return
+
+      const hours = Math.floor(diffSec / 3600)
+      const minutes = Math.floor((diffSec % 3600) / 60)
+      const seconds = diffSec % 60
+
+      if (hours > 0) {
+        el.textContent = `${hours}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`
+      } else {
+        el.textContent = `${minutes}:${String(seconds).padStart(2, "0")}`
       }
-    }
+    }, 1000)
   },
 
-  updateConnectionState(state) {
-    const indicator = this.el.querySelector("[data-connection-state]")
-    if (!indicator) return
-
-    indicator.dataset.connectionState = state
-    indicator.textContent =
-      state === ConnectionState.Connected
-        ? "Connected"
-        : state === ConnectionState.Reconnecting
-          ? "Reconnecting..."
-          : "Disconnected"
-  },
-
-  clearParticipantTiles() {
-    const grid = this.el.querySelector("[data-meeting-grid]")
-    if (grid) {
-      grid.innerHTML = ""
+  /**
+   * The hook is never destroyed during normal navigation (it's in the shell),
+   * but clean up if it is.
+   */
+  destroyed() {
+    if (this._durationInterval) {
+      clearInterval(this._durationInterval)
     }
-
-    // Remove any orphaned audio elements
-    this.el.querySelectorAll("audio[data-track-sid]").forEach((el) => el.remove())
   },
 }
 

@@ -317,5 +317,18 @@
     <main class="flex-1 overflow-hidden">
       {@inner_content}
     </main>
+
+    <%!-- Persistent meeting bar (survives navigation) --%>
+    <.live_component
+      module={PlatformWeb.MeetingBarLive}
+      id="meeting-bar"
+      user_id={assigns[:user_id]}
+      current_path={@current_path}
+      active_meeting={assigns[:active_meeting]}
+      mic_enabled={assigns[:mic_enabled] || true}
+      camera_enabled={assigns[:camera_enabled] || false}
+      participant_count={assigns[:participant_count] || 0}
+      meeting_started_at={assigns[:meeting_started_at]}
+    />
   </div>
 </div>

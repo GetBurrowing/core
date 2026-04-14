@@ -11,6 +11,7 @@ defmodule PlatformWeb.ShellLive do
   alias Platform.Chat.Presence, as: ChatPresence
   alias Platform.Chat.PubSub, as: ChatPubSub
   alias Platform.Chat.SpaceAgentPresence
+  alias Platform.Meetings.PubSub, as: MeetingsPubSub
   alias Platform.Repo
 
   def on_mount(:default, _params, session, socket) do
@@ -33,9 +34,16 @@ defmodule PlatformWeb.ShellLive do
     {roster_space_id, roster_socket} = load_default_roster(socket)
 
     # Subscribe to live roster updates when connected
+    user_id = session["current_user_id"]
+
     if connected?(socket) && roster_space_id do
       Phoenix.PubSub.subscribe(Platform.PubSub, "space_agents:#{roster_space_id}")
       ChatPubSub.subscribe(roster_space_id)
+    end
+
+    # Subscribe to meeting events for this user
+    if connected?(socket) && user_id do
+      MeetingsPubSub.subscribe_user(user_id)
     end
 
     presence_list = if roster_space_id, do: build_presence_list(roster_space_id), else: []
@@ -43,6 +51,7 @@ defmodule PlatformWeb.ShellLive do
     socket =
       roster_socket
       |> assign(:current_user, current_user)
+      |> assign(:user_id, user_id)
       |> assign(:current_path, "/")
       |> assign(:agent_status, default_agent_status())
       |> assign(:drawer_open, false)
@@ -53,6 +62,12 @@ defmodule PlatformWeb.ShellLive do
       |> assign(:show_presence_panel, false)
       |> assign(:presence_list, presence_list)
       |> assign(:captions_enabled, false)
+      # Meeting state (managed at shell level, passed to MeetingBarLive)
+      |> assign(:active_meeting, nil)
+      |> assign(:mic_enabled, true)
+      |> assign(:camera_enabled, false)
+      |> assign(:participant_count, 0)
+      |> assign(:meeting_started_at, nil)
       |> attach_hook(:track_path, :handle_params, fn _params, url, socket ->
         uri = URI.parse(url)
         {:cont, assign(socket, :current_path, uri.path)}
@@ -74,6 +89,41 @@ defmodule PlatformWeb.ShellLive do
             end
 
           {:halt, assign(socket, :presence_list, list)}
+
+        {:meeting_joined, info}, socket ->
+          {:halt,
+           socket
+           |> assign(:active_meeting, info)
+           |> assign(:meeting_started_at, info[:started_at] || DateTime.utc_now())
+           |> assign(:participant_count, info[:participant_count] || 1)
+           |> assign(:mic_enabled, true)
+           |> assign(:camera_enabled, false)}
+
+        {:meeting_left, _info}, socket ->
+          {:halt,
+           socket
+           |> assign(:active_meeting, nil)
+           |> assign(:meeting_started_at, nil)
+           |> assign(:participant_count, 0)
+           |> assign(:mic_enabled, true)
+           |> assign(:camera_enabled, false)}
+
+        {:meeting_participant_update, info}, socket ->
+          {:halt,
+           assign(
+             socket,
+             :participant_count,
+             info[:participant_count] || socket.assigns.participant_count
+           )}
+
+        {:meeting_media_state, info}, socket ->
+          {:halt,
+           socket
+           |> assign(:mic_enabled, Map.get(info, :mic_enabled, socket.assigns.mic_enabled))
+           |> assign(
+             :camera_enabled,
+             Map.get(info, :camera_enabled, socket.assigns.camera_enabled)
+           )}
 
         _msg, socket ->
           {:cont, socket}
@@ -104,6 +154,64 @@ defmodule PlatformWeb.ShellLive do
           # ADR 0027: dismissed role removed — just remove the agent from roster
           Platform.Chat.remove_space_agent(space_id, agent_id)
           {:halt, refresh_roster(socket, space_id)}
+
+        # Meeting JS hook events (pushed from MeetingRoom hook)
+        "meeting:connected", params, socket ->
+          meeting_info = %{
+            room_name: params["room_name"],
+            space_name: params["space_name"],
+            space_slug: params["space_slug"],
+            participant_count: params["participant_count"] || 1,
+            started_at: DateTime.utc_now()
+          }
+
+          {:halt,
+           socket
+           |> assign(:active_meeting, meeting_info)
+           |> assign(:meeting_started_at, meeting_info.started_at)
+           |> assign(:participant_count, meeting_info.participant_count)
+           |> assign(:mic_enabled, true)
+           |> assign(:camera_enabled, false)}
+
+        "meeting:disconnected", _params, socket ->
+          {:halt,
+           socket
+           |> assign(:active_meeting, nil)
+           |> assign(:meeting_started_at, nil)
+           |> assign(:participant_count, 0)
+           |> assign(:mic_enabled, true)
+           |> assign(:camera_enabled, false)}
+
+        "meeting:state-sync", params, socket ->
+          {:halt,
+           socket
+           |> assign(
+             :participant_count,
+             params["participant_count"] || socket.assigns.participant_count
+           )
+           |> assign(:mic_enabled, params["mic_enabled"])
+           |> assign(:camera_enabled, params["camera_enabled"])}
+
+        "meeting:error", _params, socket ->
+          {:halt, socket}
+
+        # Meeting bar button events
+        "toggle_meeting_mic", _params, socket ->
+          new_state = !socket.assigns.mic_enabled
+          {:halt, assign(socket, :mic_enabled, new_state)}
+
+        "toggle_meeting_camera", _params, socket ->
+          new_state = !socket.assigns.camera_enabled
+          {:halt, assign(socket, :camera_enabled, new_state)}
+
+        "leave_meeting", _params, socket ->
+          {:halt,
+           socket
+           |> assign(:active_meeting, nil)
+           |> assign(:meeting_started_at, nil)
+           |> assign(:participant_count, 0)
+           |> assign(:mic_enabled, true)
+           |> assign(:camera_enabled, false)}
 
         _event, _params, socket ->
           {:cont, socket}
