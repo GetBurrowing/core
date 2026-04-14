@@ -8,6 +8,8 @@ defmodule Platform.Meetings.PresenceTest do
 
   alias Platform.Meetings
   alias Platform.Meetings.PubSub, as: MeetingsPubSub
+  alias Platform.Meetings.{Recording, Room}
+  alias Platform.Chat
 
   # ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -194,6 +196,27 @@ defmodule Platform.Meetings.PresenceTest do
       assert is_nil(participant.user) or is_struct(participant.user)
       assert is_nil(participant.agent) or is_struct(participant.agent)
     end
+  end
+
+  # ── Helpers (shared) ─────────────────────────────────────────────────────
+
+  defp create_space(attrs \\ %{}) do
+    default = %{
+      name: "Test Space",
+      slug: "test-space-#{System.unique_integer([:positive])}",
+      kind: "channel"
+    }
+
+    {:ok, space} = Chat.create_space(Map.merge(default, attrs))
+    space
+  end
+
+  defp errors_on(changeset) do
+    Ecto.Changeset.traverse_errors(changeset, fn {message, opts} ->
+      Regex.replace(~r"%{(\w+)}", message, fn _, key ->
+        opts |> Keyword.get(String.to_existing_atom(key), key) |> to_string()
+      end)
+    end)
   end
 
   # ── Space-level Queries ─────────────────────────────────────────────────────
