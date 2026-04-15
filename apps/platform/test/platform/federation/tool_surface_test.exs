@@ -80,7 +80,50 @@ defmodule Platform.Federation.ToolSurfaceTest do
         assert Map.has_key?(tool, :returns)
         assert Map.has_key?(tool, :limitations)
         assert Map.has_key?(tool, :when_to_use)
+        assert Map.has_key?(tool, :bundle)
+        assert tool.bundle in ToolSurface.all_bundles()
       end
+    end
+  end
+
+  describe "list_tools/1" do
+    test "scopes the surface to the requested bundles" do
+      tools = ToolSurface.list_tools(["task"])
+      names = Enum.map(tools, & &1.name)
+
+      assert "task_create" in names
+      assert "task_list" in names
+      refute "canvas_create" in names
+      refute "plan_create" in names
+      assert Enum.all?(tools, &(&1.bundle == "task"))
+    end
+
+    test "returns the union when multiple bundles are requested" do
+      tools = ToolSurface.list_tools(["federation", "messaging"])
+      bundles = tools |> Enum.map(& &1.bundle) |> Enum.uniq() |> Enum.sort()
+
+      assert bundles == ["federation", "messaging"]
+      assert "federation_status" in Enum.map(tools, & &1.name)
+      assert "send_media" in Enum.map(tools, & &1.name)
+    end
+
+    test "silently skips unknown bundle names" do
+      known = ToolSurface.list_tools(["task"])
+      mixed = ToolSurface.list_tools(["task", "does_not_exist"])
+
+      assert known == mixed
+    end
+
+    test "returns an empty list for no bundles" do
+      assert ToolSurface.list_tools([]) == []
+    end
+
+    test "matches tool_definitions/0 when all bundles are requested" do
+      scoped = ToolSurface.list_tools(ToolSurface.all_bundles())
+      full = ToolSurface.tool_definitions()
+
+      assert Enum.map(scoped, & &1.name) |> Enum.sort() ==
+               Enum.map(full, & &1.name) |> Enum.sort()
     end
   end
 

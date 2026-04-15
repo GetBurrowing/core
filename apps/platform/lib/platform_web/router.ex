@@ -14,6 +14,11 @@ defmodule PlatformWeb.Router do
     plug(:accepts, ["json"])
   end
 
+  pipeline :mcp do
+    plug(:accepts, ["json"])
+    plug(PlatformWeb.Plugs.RuntimeBearerAuth)
+  end
+
   pipeline :require_auth do
     plug(PlatformWeb.Plugs.RequireAuth)
   end
@@ -71,5 +76,11 @@ defmodule PlatformWeb.Router do
     pipe_through(:api)
     post("/github", GithubWebhookController, :handle)
     post("/livekit", LivekitWebhookController, :handle)
+  end
+
+  scope "/mcp", PlatformWeb do
+    pipe_through(:mcp)
+    post("/", MCPController, :handle)
+    get("/", MCPController, :stream)
   end
 end

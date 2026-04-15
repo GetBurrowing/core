@@ -12,20 +12,43 @@ defmodule Platform.Federation.ToolSurface do
   alias Platform.Tasks.{Plan, PlanEngine, Stage, Validation}
   alias Platform.Repo
 
+  @bundles ~w(canvas messaging task plan review space context_read federation org_context)
+
+  @doc "Known capability bundle names."
+  def all_bundles, do: @bundles
+
   @doc """
-  Returns the tool definitions for inclusion in attention signals.
+  Returns the full tool surface.
 
   Each tool follows the 6-component rubric:
-  name, description, parameters, returns, limitations, when_to_use.
+  name, description, parameters, returns, limitations, when_to_use, plus a
+  `:bundle` key identifying which capability bundle owns the tool.
   """
-  def tool_definitions do
-    canvas_tools() ++
-      messaging_tools() ++
-      task_tools() ++
-      plan_tools() ++
-      review_tools() ++
-      space_tools() ++ context_read_tools() ++ federation_tools() ++ org_context_tools()
+  def tool_definitions, do: list_tools(@bundles)
+
+  @doc """
+  Returns tools scoped to the given capability bundles.
+
+  Unknown bundle names are skipped silently. Duplicate names are deduped.
+  """
+  def list_tools(bundles) when is_list(bundles) do
+    bundles
+    |> Enum.uniq()
+    |> Enum.flat_map(&tools_for_bundle/1)
   end
+
+  defp tools_for_bundle("canvas"), do: tag(canvas_tools(), "canvas")
+  defp tools_for_bundle("messaging"), do: tag(messaging_tools(), "messaging")
+  defp tools_for_bundle("task"), do: tag(task_tools(), "task")
+  defp tools_for_bundle("plan"), do: tag(plan_tools(), "plan")
+  defp tools_for_bundle("review"), do: tag(review_tools(), "review")
+  defp tools_for_bundle("space"), do: tag(space_tools(), "space")
+  defp tools_for_bundle("context_read"), do: tag(context_read_tools(), "context_read")
+  defp tools_for_bundle("federation"), do: tag(federation_tools(), "federation")
+  defp tools_for_bundle("org_context"), do: tag(org_context_tools(), "org_context")
+  defp tools_for_bundle(_), do: []
+
+  defp tag(tools, bundle), do: Enum.map(tools, &Map.put(&1, :bundle, bundle))
 
   defp federation_tools do
     [

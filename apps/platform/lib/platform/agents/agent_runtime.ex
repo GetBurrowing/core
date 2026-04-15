@@ -14,6 +14,9 @@ defmodule Platform.Agents.AgentRuntime do
   @valid_statuses ~w(pending active suspended revoked)
   @valid_trust_levels ~w(viewer participant collaborator admin)
   @valid_transports ~w(websocket)
+  @valid_bundles ~w(federation space context_read messaging review canvas task plan org_context)
+
+  @default_allowed_bundles ~w(federation space context_read messaging)
 
   schema "agent_runtimes" do
     field(:runtime_id, :string)
@@ -23,13 +26,16 @@ defmodule Platform.Agents.AgentRuntime do
     field(:transport, :string, default: "websocket")
     field(:status, :string, default: "pending")
     field(:trust_level, :string, default: "participant")
-    field(:capabilities, {:array, :string}, default: [])
+    field(:allowed_bundles, {:array, :string}, default: @default_allowed_bundles)
     field(:auth_token_hash, :string)
     field(:last_connected_at, :utc_datetime_usec)
     field(:metadata, :map, default: %{})
 
     timestamps(type: :utc_datetime_usec)
   end
+
+  def valid_bundles, do: @valid_bundles
+  def default_allowed_bundles, do: @default_allowed_bundles
 
   def changeset(runtime, attrs) do
     runtime
@@ -41,7 +47,7 @@ defmodule Platform.Agents.AgentRuntime do
       :transport,
       :status,
       :trust_level,
-      :capabilities,
+      :allowed_bundles,
       :auth_token_hash,
       :last_connected_at,
       :metadata
@@ -50,6 +56,7 @@ defmodule Platform.Agents.AgentRuntime do
     |> validate_inclusion(:status, @valid_statuses)
     |> validate_inclusion(:trust_level, @valid_trust_levels)
     |> validate_inclusion(:transport, @valid_transports)
+    |> validate_subset(:allowed_bundles, @valid_bundles)
     |> unique_constraint(:runtime_id)
   end
 
