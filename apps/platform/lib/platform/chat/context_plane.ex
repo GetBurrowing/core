@@ -83,7 +83,8 @@ defmodule Platform.Chat.ContextPlane do
         Enum.map(agents, fn {_id, agent} ->
           %{name: agent[:name], state: agent[:state], capabilities: agent[:capabilities] || []}
         end),
-      recent_activity_summary: summary
+      recent_activity_summary: summary,
+      org: Platform.Org.Context.build_context()
     }
   end
 

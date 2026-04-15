@@ -8,6 +8,7 @@ defmodule Platform.Orchestration.ContextAssembler do
   """
 
   alias Platform.Execution.CredentialLease
+  alias Platform.Org
   alias Platform.Orchestration.ExecutionSpace
   alias Platform.Skills
   alias Platform.Tasks
@@ -53,7 +54,8 @@ defmodule Platform.Orchestration.ContextAssembler do
           plan: serialize_plan(plan),
           execution_space_id: execution_space_id,
           skills: skills,
-          resolved_deploy_strategy: resolved_deploy_strategy
+          resolved_deploy_strategy: resolved_deploy_strategy,
+          org: Org.Context.build_context()
         }
 
         maybe_add_deploy_credentials(base, deploy_lease)
