@@ -40,6 +40,19 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      - name: Check for duplicate migration timestamps
+        working-directory: ${{ github.workspace }}
+        run: |
+          dupes=$(ls apps/platform/priv/repo/migrations/ | awk -F_ '{print $1}' | sort | uniq -d)
+          if [ -n "$dupes" ]; then
+            echo "::error::Duplicate migration timestamp(s) detected:"
+            for ts in $dupes; do
+              echo "  $ts:"
+              ls apps/platform/priv/repo/migrations/ | grep "^${ts}_" | sed 's/^/    /'
+            done
+            exit 1
+          fi
+
       - name: Install system packages
         run: |
           apt-get update
