@@ -39,10 +39,12 @@ defmodule Platform.Agents.SystemEventScheduler do
 
   @instruction_templates %{
     "daily_summary" => """
-    You are performing your daily summary. Review today's activity across all \
-    spaces you participate in. Write a concise summary of what happened today, \
-    including key decisions, progress, blockers, and open questions. Use the \
-    org_memory_append tool to record this summary as a daily memory entry \
+    You are performing your daily summary for {date}. \
+    Start by calling `space_list` to see all spaces you participate in. \
+    Then call `space_get_messages` on each active space to review today's \
+    activity. Write a concise summary of what happened today, including key \
+    decisions, progress, blockers, and open questions. Use the \
+    `org_memory_append` tool to record this summary as a daily memory entry \
     dated {date}.
     """,
     "dreaming" => """

@@ -5,6 +5,8 @@ defmodule Platform.Federation.ToolSurface do
   Includes both write tools and bounded read tools for space context.
   """
 
+  require Logger
+
   alias Platform.Chat
   alias Platform.Chat.ContextPlane
   alias Platform.Org.Context, as: OrgContext
@@ -189,12 +191,13 @@ defmodule Platform.Federation.ToolSurface do
       %{
         name: "org_memory_search",
         description:
-          "Search org memory entries with optional filters for query, type, and date range.",
+          "Search org memory entries. Uses semantic search when an external memory service is configured, otherwise falls back to case-insensitive substring matching.",
         parameters: %{
           query: %{
             type: "string",
             required: false,
-            description: "Case-insensitive substring search on content"
+            description:
+              "Search query — used for semantic similarity when the memory service is configured, or case-insensitive substring match as fallback"
           },
           memory_type: %{
             type: "string",
@@ -223,9 +226,9 @@ defmodule Platform.Federation.ToolSurface do
           }
         },
         returns:
-          "Array of memory entry objects with id, content, memory_type, date, and timestamps",
+          "Array of memory entry objects with id, content, memory_type, date, timestamps, and score (when semantic search is active)",
         limitations:
-          "Uses case-insensitive substring matching, not full-text search. Default limit is 50.",
+          "Falls back to substring matching when no external memory service is configured. Default limit is 50.",
         when_to_use:
           "When you need to recall past observations, decisions, or notes from org memory"
       }
@@ -2185,11 +2188,8 @@ defmodule Platform.Federation.ToolSurface do
           ]
           |> Enum.reject(fn {_k, v} -> is_nil(v) end)
 
-        entries =
-          OrgContext.search_memory_entries(opts)
-          |> Enum.map(&serialize_memory_entry/1)
-
-        {:ok, entries}
+        provider = Platform.Memory.Provider.configured()
+        {:ok, search_with_provider(provider, query, opts)}
     end
   end
 
@@ -2205,6 +2205,49 @@ defmodule Platform.Federation.ToolSurface do
        recoverable: false,
        suggestion: "Available tools: #{tool_names}"
      }}
+  end
+
+  # ── Memory search helpers ────────────────────────────────────────────────
+
+  defp search_with_provider(Platform.Memory.Providers.Null, _query, opts) do
+    OrgContext.search_memory_entries(opts)
+    |> Enum.map(&serialize_memory_entry/1)
+  end
+
+  defp search_with_provider(provider, query, opts) do
+    case provider.search(query || "", opts) do
+      {:ok, [_ | _] = scored_results} ->
+        hydrate_scored_results(scored_results)
+
+      {:ok, []} ->
+        # Empty results from provider — fall back to DB search
+        search_with_provider(Platform.Memory.Providers.Null, query, opts)
+
+      {:error, reason} ->
+        Logger.warning(
+          "Memory provider search failed, falling back to DB: #{inspect(reason)}"
+        )
+
+        search_with_provider(Platform.Memory.Providers.Null, query, opts)
+    end
+  end
+
+  defp hydrate_scored_results(scored_results) do
+    entry_ids = Enum.map(scored_results, & &1.entry_id)
+    score_map = Map.new(scored_results, &{&1.entry_id, &1.score})
+
+    entries_by_id =
+      OrgContext.get_memory_entries_by_ids(entry_ids)
+      |> Map.new(&{&1.id, &1})
+
+    # Preserve provider ranking order, skip entries not found in DB
+    scored_results
+    |> Enum.flat_map(fn %{entry_id: id} ->
+      case Map.get(entries_by_id, id) do
+        nil -> []
+        entry -> [Map.put(serialize_memory_entry(entry), :score, score_map[id])]
+      end
+    end)
   end
 
   # ── Helpers ──────────────────────────────────────────────────────────────

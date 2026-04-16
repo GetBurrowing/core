@@ -11,6 +11,7 @@ defmodule Platform.Application do
     Platform.Audit.TelemetryHandler.attach()
     Platform.Vault.TelemetryHandler.attach()
     Platform.Chat.TelemetryHandler.attach()
+    Platform.Memory.TelemetryHandler.attach()
 
     children =
       [

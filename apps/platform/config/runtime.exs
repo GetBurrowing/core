@@ -197,3 +197,14 @@ if livekit_api_key && livekit_api_secret do
     api_secret: livekit_api_secret,
     url: livekit_url || "wss://localhost:7880"
 end
+
+# ── Memory Service (ADR 0033) ────────────────────────────────────────────────
+# Feature-gated: external memory indexing is inert unless MEMORY_SERVICE_URL
+# is set. The Null provider is used by default (no-op).
+memory_service_url = System.get_env("MEMORY_SERVICE_URL")
+
+if memory_service_url do
+  config :platform,
+    memory_provider: Platform.Memory.Providers.StartupSuite,
+    memory_service_url: memory_service_url
+end
