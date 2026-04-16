@@ -1172,6 +1172,8 @@ body, .font-fabrikam, * {
 .meeting-participant-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  grid-auto-rows: min-content;
+  align-content: start;
   gap: 0.5rem;
 }
 
@@ -1186,7 +1188,7 @@ body, .font-fabrikam, * {
   position: relative;
   border-radius: 0.75rem;
   overflow: hidden;
-  background: oklch(from var(--b2) l c h);
+  background: var(--color-base-200);
   aspect-ratio: 4 / 3;
   display: flex;
   align-items: center;
@@ -1195,13 +1197,13 @@ body, .font-fabrikam, * {
 }
 
 .meeting-tile.meeting-tile-speaking {
-  box-shadow: 0 0 0 2px oklch(from var(--p) l c h);
+  box-shadow: 0 0 0 2px var(--color-primary);
   animation: meeting-speaker-pulse 1.5s ease-in-out infinite;
 }
 
 @keyframes meeting-speaker-pulse {
-  0%, 100% { box-shadow: 0 0 0 2px oklch(from var(--p) l c h / 0.6); }
-  50%      { box-shadow: 0 0 0 3px oklch(from var(--p) l c h / 1); }
+  0%, 100% { box-shadow: 0 0 0 2px color-mix(in oklch, var(--color-primary) 60%, transparent); }
+  50%      { box-shadow: 0 0 0 3px var(--color-primary); }
 }
 
 .meeting-tile-video {
@@ -1233,8 +1235,8 @@ body, .font-fabrikam, * {
   width: 3.5rem;
   height: 3.5rem;
   border-radius: 9999px;
-  background: oklch(from var(--p) l c h / 0.15);
-  color: oklch(from var(--p) l c h);
+  background: color-mix(in oklch, var(--color-primary) 20%, transparent);
+  color: var(--color-primary);
   display: flex;
   align-items: center;
   justify-content: center;
