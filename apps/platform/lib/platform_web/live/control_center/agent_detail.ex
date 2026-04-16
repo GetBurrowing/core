@@ -521,6 +521,31 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
               </option>
             </select>
           </label>
+
+          <div class="form-control md:col-span-2">
+            <span class="mb-2 block text-xs font-semibold uppercase tracking-widest text-base-content/50">
+              System events
+            </span>
+            <input type="hidden" name="config[system_events][]" value="" />
+            <div class="flex flex-wrap gap-4">
+              <label
+                :for={event <- ["daily_summary", "dreaming"]}
+                class="label cursor-pointer gap-2"
+              >
+                <input
+                  type="checkbox"
+                  name="config[system_events][]"
+                  value={event}
+                  checked={event in (@config_form[:system_events].value || [])}
+                  class="checkbox checkbox-sm"
+                />
+                <span class="label-text">{humanize_value(event)}</span>
+              </label>
+            </div>
+            <p class="mt-1 text-xs text-base-content/50">
+              Scheduled tasks this agent will perform automatically. Each event can only be assigned to one agent.
+            </p>
+          </div>
         </div>
 
         <%!-- Color family picker --%>

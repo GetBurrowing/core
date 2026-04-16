@@ -56,6 +56,7 @@ defmodule Platform.Application do
       ]
       |> maybe_add_attention_router()
       |> maybe_add_node_client()
+      |> maybe_add_system_event_scheduler()
       |> ensure_task_router_watcher_after_endpoint()
 
     # See https://hexdocs.pm/elixir/Supervisor.html
@@ -83,6 +84,15 @@ defmodule Platform.Application do
   defp maybe_add_node_client(children) do
     if System.get_env("OPENCLAW_NODE_ENABLED") == "true" do
       children ++ [Platform.Federation.NodeClient]
+    else
+      children
+    end
+  end
+
+  defp maybe_add_system_event_scheduler(children) do
+    if Application.get_env(:platform, :start_system_event_scheduler, true) do
+      idx = Enum.find_index(children, &(&1 == PlatformWeb.Endpoint)) || length(children)
+      List.insert_at(children, idx, Platform.Agents.SystemEventScheduler)
     else
       children
     end
