@@ -37,6 +37,8 @@ defmodule PlatformWeb.ChatLive do
   alias PlatformWeb.ChatLive.ActiveAgentHooks
   alias PlatformWeb.ChatLive.CanvasHooks
   alias PlatformWeb.ChatLive.MentionsHooks
+  alias PlatformWeb.ChatLive.NewChannelComponent
+  alias PlatformWeb.ChatLive.NewConversationComponent
   alias PlatformWeb.ChatLive.PinHooks
   alias PlatformWeb.ChatLive.SearchHooks
   alias PlatformWeb.ChatLive.SettingsComponent
@@ -92,11 +94,6 @@ defmodule PlatformWeb.ChatLive do
       |> assign(:show_new_channel_modal, false)
       |> assign(:show_new_conversation_modal, false)
       |> assign(:show_settings, false)
-      |> assign(:picker_users, [])
-      |> assign(:picker_agents, [])
-      |> assign(:picker_query, "")
-      |> assign(:picker_selected, [])
-      |> assign(:new_channel_form, to_form(%{"name" => "", "description" => ""}))
       |> assign(:quick_emojis, @quick_emojis)
       |> assign(:agent_typing_pids, MapSet.new())
       |> assign(:streaming_replies, %{})
@@ -990,117 +987,12 @@ defmodule PlatformWeb.ChatLive do
 
   # ── Channel / Conversation creation events ─────────────────────────────────
 
-  def handle_event("open_new_channel_modal", _params, socket) do
-    {:noreply,
-     socket
-     |> assign(:show_new_channel_modal, true)
-     |> assign(:new_channel_form, to_form(%{"name" => "", "description" => ""}))}
+  def handle_event("new_channel_open", _params, socket) do
+    {:noreply, assign(socket, :show_new_channel_modal, true)}
   end
 
-  def handle_event("close_new_channel_modal", _params, socket) do
-    {:noreply, assign(socket, :show_new_channel_modal, false)}
-  end
-
-  def handle_event("create_channel", %{"name" => name, "description" => desc}, socket) do
-    slug =
-      name
-      |> String.downcase()
-      |> String.replace(~r/[^a-z0-9\s-]/, "")
-      |> String.replace(~r/\s+/, "-")
-      |> String.trim("-")
-
-    case Chat.create_channel(%{name: name, slug: slug, description: desc}) do
-      {:ok, space} ->
-        {:noreply,
-         socket
-         |> assign(:show_new_channel_modal, false)
-         |> push_navigate(to: ~p"/chat/#{space.slug}")}
-
-      {:error, _changeset} ->
-        {:noreply, put_flash(socket, :error, "Could not create channel. Name may be taken.")}
-    end
-  end
-
-  def handle_event("open_new_conversation_modal", _params, socket) do
-    users = Platform.Accounts.list_users()
-    agents = Chat.list_agents_for_picker()
-
-    {:noreply,
-     socket
-     |> assign(:show_new_conversation_modal, true)
-     |> assign(:picker_users, users)
-     |> assign(:picker_agents, agents)
-     |> assign(:picker_query, "")
-     |> assign(:picker_selected, [])}
-  end
-
-  def handle_event("close_new_conversation_modal", _params, socket) do
-    {:noreply, assign(socket, :show_new_conversation_modal, false)}
-  end
-
-  def handle_event("picker_search", %{"value" => query}, socket) do
-    users = Platform.Accounts.list_users(query: query)
-    agents = Chat.list_agents_for_picker()
-
-    filtered_agents =
-      if query == "" do
-        agents
-      else
-        pattern = String.downcase(query)
-        Enum.filter(agents, fn a -> String.contains?(String.downcase(a.name || ""), pattern) end)
-      end
-
-    {:noreply,
-     socket
-     |> assign(:picker_query, query)
-     |> assign(:picker_users, users)
-     |> assign(:picker_agents, filtered_agents)}
-  end
-
-  def handle_event("picker_toggle", %{"type" => type, "id" => id}, socket) do
-    selected = socket.assigns.picker_selected
-    entry = %{type: type, id: id}
-
-    updated =
-      if Enum.any?(selected, fn s -> s.type == type and s.id == id end) do
-        Enum.reject(selected, fn s -> s.type == type and s.id == id end)
-      else
-        selected ++ [entry]
-      end
-
-    {:noreply, assign(socket, :picker_selected, updated)}
-  end
-
-  def handle_event("create_conversation", _params, socket) do
-    selected = socket.assigns.picker_selected
-    user_id = socket.assigns.user_id
-
-    if selected == [] do
-      {:noreply, put_flash(socket, :error, "Select at least one person or agent.")}
-    else
-      specs = Enum.map(selected, fn s -> %{type: s.type, id: s.id} end)
-
-      result =
-        if length(specs) == 1 do
-          [spec] = specs
-          Chat.find_or_create_dm(user_id, spec.type, spec.id)
-        else
-          Chat.create_group_conversation(user_id, specs)
-        end
-
-      case result do
-        {:ok, space} ->
-          nav_target = space.slug || space.id
-
-          {:noreply,
-           socket
-           |> assign(:show_new_conversation_modal, false)
-           |> push_navigate(to: ~p"/chat/#{nav_target}")}
-
-        {:error, _reason} ->
-          {:noreply, put_flash(socket, :error, "Could not create conversation.")}
-      end
-    end
+  def handle_event("new_conversation_open", _params, socket) do
+    {:noreply, assign(socket, :show_new_conversation_modal, true)}
   end
 
   def handle_event("promote_to_channel", %{"name" => name}, socket) do
@@ -1145,6 +1037,36 @@ defmodule PlatformWeb.ChatLive do
   end
 
   def handle_info({:settings_flash, kind, msg}, socket) do
+    {:noreply, put_flash(socket, kind, msg)}
+  end
+
+  def handle_info({:new_channel_closed}, socket) do
+    {:noreply, assign(socket, :show_new_channel_modal, false)}
+  end
+
+  def handle_info({:new_channel_navigate, path}, socket) do
+    {:noreply,
+     socket
+     |> assign(:show_new_channel_modal, false)
+     |> push_navigate(to: path)}
+  end
+
+  def handle_info({:new_channel_flash, kind, msg}, socket) do
+    {:noreply, put_flash(socket, kind, msg)}
+  end
+
+  def handle_info({:new_conversation_closed}, socket) do
+    {:noreply, assign(socket, :show_new_conversation_modal, false)}
+  end
+
+  def handle_info({:new_conversation_navigate, path}, socket) do
+    {:noreply,
+     socket
+     |> assign(:show_new_conversation_modal, false)
+     |> push_navigate(to: path)}
+  end
+
+  def handle_info({:new_conversation_flash, kind, msg}, socket) do
     {:noreply, put_flash(socket, kind, msg)}
   end
 
@@ -1460,7 +1382,7 @@ defmodule PlatformWeb.ChatLive do
             Channels
           </p>
           <button
-            phx-click="open_new_channel_modal"
+            phx-click="new_channel_open"
             class="text-base-content/40 hover:text-primary"
             title="New channel"
           >
@@ -1499,7 +1421,7 @@ defmodule PlatformWeb.ChatLive do
             Direct Messages
           </p>
           <button
-            phx-click="open_new_conversation_modal"
+            phx-click="new_conversation_open"
             class="text-base-content/40 hover:text-primary"
             title="New conversation"
           >
@@ -3408,163 +3330,18 @@ defmodule PlatformWeb.ChatLive do
       space={@active_space}
     />
 
-    <%!-- New Channel Modal --%>
-    <%= if @show_new_channel_modal do %>
-      <div
-        class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
-        phx-click="close_new_channel_modal"
-      >
-        <div
-          class="bg-base-100 rounded-xl shadow-xl w-full max-w-md p-6"
-          phx-click-away="close_new_channel_modal"
-        >
-          <h3 class="text-lg font-bold mb-4">Create Channel</h3>
-          <form phx-submit="create_channel">
-            <div class="form-control mb-3">
-              <label class="label"><span class="label-text">Name</span></label>
-              <input
-                name="name"
-                type="text"
-                class="input input-bordered w-full"
-                placeholder="e.g. engineering"
-                required
-              />
-            </div>
-            <div class="form-control mb-4">
-              <label class="label"><span class="label-text">Description (optional)</span></label>
-              <input
-                name="description"
-                type="text"
-                class="input input-bordered w-full"
-                placeholder="What's this channel about?"
-              />
-            </div>
-            <div class="flex justify-end gap-2">
-              <button type="button" phx-click="close_new_channel_modal" class="btn btn-ghost btn-sm">
-                Cancel
-              </button>
-              <button type="submit" class="btn btn-primary btn-sm">Create</button>
-            </div>
-          </form>
-        </div>
-      </div>
-    <% end %>
+    <.live_component
+      module={NewChannelComponent}
+      id="chat-new-channel"
+      open={@show_new_channel_modal}
+    />
 
-    <%!-- New Conversation Modal --%>
-    <%= if @show_new_conversation_modal do %>
-      <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-        <div
-          class="bg-base-100 rounded-xl shadow-xl w-full max-w-md p-6"
-          phx-click-away="close_new_conversation_modal"
-        >
-          <h3 class="text-lg font-bold mb-4">New Conversation</h3>
-
-          <div class="form-control mb-3">
-            <input
-              type="text"
-              class="input input-bordered w-full input-sm"
-              placeholder="Search users or agents…"
-              phx-keyup="picker_search"
-              phx-key=""
-              value={@picker_query}
-            />
-          </div>
-
-          <%!-- Selected --%>
-          <div :if={@picker_selected != []} class="flex flex-wrap gap-1 mb-3">
-            <span
-              :for={sel <- @picker_selected}
-              class="badge badge-primary badge-sm gap-1 cursor-pointer"
-              phx-click="picker_toggle"
-              phx-value-type={sel.type}
-              phx-value-id={sel.id}
-            >
-              {picker_selected_name(sel, @picker_users, @picker_agents)}
-              <span class="text-xs">x</span>
-            </span>
-          </div>
-
-          <%!-- Users --%>
-          <div class="max-h-48 overflow-y-auto space-y-1 mb-3">
-            <p class="text-xs font-semibold uppercase tracking-widest text-base-content/50 px-1">
-              Users
-            </p>
-            <%= for user <- @picker_users do %>
-              <% is_self = user.id == @user_id %>
-              <% is_selected =
-                Enum.any?(@picker_selected, fn s -> s.type == "user" and s.id == user.id end) %>
-              <button
-                :if={!is_self}
-                type="button"
-                phx-click="picker_toggle"
-                phx-value-type="user"
-                phx-value-id={user.id}
-                class={[
-                  "flex items-center gap-2 w-full px-2 py-1.5 rounded text-sm text-left transition-colors",
-                  if(is_selected, do: "bg-primary/10 text-primary", else: "hover:bg-base-200")
-                ]}
-              >
-                <.human_avatar
-                  name={user.name || user.email || "User"}
-                  avatar_url={user.avatar_url}
-                  seed={user.oidc_sub || user.email || user.id}
-                  size="sm"
-                  class="flex-shrink-0"
-                />
-                <span class="truncate">{user.name || user.email}</span>
-                <span :if={is_selected} class="ml-auto text-xs">selected</span>
-              </button>
-            <% end %>
-          </div>
-
-          <%!-- Agents --%>
-          <div :if={@picker_agents != []} class="max-h-32 overflow-y-auto space-y-1 mb-4">
-            <p class="text-xs font-semibold uppercase tracking-widest text-base-content/50 px-1">
-              Agents
-            </p>
-            <%= for agent <- @picker_agents do %>
-              <% is_selected =
-                Enum.any?(@picker_selected, fn s -> s.type == "agent" and s.id == agent.id end) %>
-              <button
-                type="button"
-                phx-click="picker_toggle"
-                phx-value-type="agent"
-                phx-value-id={agent.id}
-                class={[
-                  "flex items-center gap-2 w-full px-2 py-1.5 rounded text-sm text-left transition-colors",
-                  if(is_selected, do: "bg-primary/10 text-primary", else: "hover:bg-base-200")
-                ]}
-              >
-                <span class="w-6 h-6 rounded-full bg-accent/20 flex items-center justify-center text-xs font-bold text-accent">
-                  {String.first(agent.name || "A") |> String.upcase()}
-                </span>
-                <span class="truncate">{agent.name}</span>
-                <span class="badge badge-xs badge-accent ml-1">bot</span>
-                <span :if={is_selected} class="ml-auto text-xs">selected</span>
-              </button>
-            <% end %>
-          </div>
-
-          <div class="flex justify-end gap-2">
-            <button
-              type="button"
-              phx-click="close_new_conversation_modal"
-              class="btn btn-ghost btn-sm"
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              phx-click="create_conversation"
-              class="btn btn-primary btn-sm"
-              disabled={@picker_selected == []}
-            >
-              {if length(@picker_selected) <= 1, do: "Start DM", else: "Create Group"}
-            </button>
-          </div>
-        </div>
-      </div>
-    <% end %>
+    <.live_component
+      module={NewConversationComponent}
+      id="chat-new-conversation"
+      open={@show_new_conversation_modal}
+      user_id={@user_id}
+    />
 
     <%!-- Image lightbox modal --%>
     <div
@@ -3956,21 +3733,6 @@ defmodule PlatformWeb.ChatLive do
   defp unread_label(count) when count >= 9, do: "9+"
   defp unread_label(count) when count > 0, do: Integer.to_string(count)
   defp unread_label(_), do: nil
-
-  defp picker_selected_name(%{type: "user", id: id}, users, _agents) do
-    case Enum.find(users, fn u -> u.id == id end) do
-      %{name: name} when is_binary(name) -> name
-      %{email: email} -> email
-      _ -> "User"
-    end
-  end
-
-  defp picker_selected_name(%{type: "agent", id: id}, _users, agents) do
-    case Enum.find(agents, fn a -> a.id == id end) do
-      %{name: name} -> name
-      _ -> "Agent"
-    end
-  end
 
   # ADR 0027: default_attention_mode/1 and default_attention_label/1 removed
   # (agent_attention field no longer exists on Space)
