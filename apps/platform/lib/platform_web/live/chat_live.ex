@@ -34,6 +34,7 @@ defmodule PlatformWeb.ChatLive do
   alias Platform.Meetings.State, as: MeetingState
   alias Platform.Repo
 
+  alias PlatformWeb.ChatLive.ActiveAgentHooks
   alias PlatformWeb.ChatLive.CanvasHooks
   alias PlatformWeb.ChatLive.MentionsHooks
   alias PlatformWeb.ChatLive.PinHooks
@@ -87,8 +88,6 @@ defmodule PlatformWeb.ChatLive do
       |> assign(:active_speakers, MapSet.new())
       |> assign(:show_agent_picker, false)
       |> assign(:available_agents, [])
-      |> assign(:active_agent_participant_id, nil)
-      |> assign(:active_agent_name, nil)
       |> assign(:mobile_browser_open, false)
       |> assign(:show_new_channel_modal, false)
       |> assign(:show_new_conversation_modal, false)
@@ -159,6 +158,7 @@ defmodule PlatformWeb.ChatLive do
       |> MentionsHooks.attach()
       |> UploadHooks.attach()
       |> CanvasHooks.attach()
+      |> ActiveAgentHooks.attach()
 
     {:ok, socket}
   end
@@ -261,10 +261,6 @@ defmodule PlatformWeb.ChatLive do
 
       page_title = space_page_title(space, participants, socket.assigns.user_id)
 
-      # Resolve active agent indicator
-      {active_agent_participant_id, active_agent_name} =
-        resolve_active_agent(space.id, participants)
-
       # Refresh sidebar lists
       channels = Chat.list_spaces(kind: "channel")
       user_convos = Chat.list_user_conversations(socket.assigns.user_id)
@@ -297,8 +293,7 @@ defmodule PlatformWeb.ChatLive do
        |> assign(:inline_thread_messages, %{})
        |> PinHooks.load_for_space(space.id)
        |> CanvasHooks.load_for_space(space.id)
-       |> assign(:active_agent_participant_id, active_agent_participant_id)
-       |> assign(:active_agent_name, active_agent_name)
+       |> ActiveAgentHooks.resolve_for_space(space.id, participants)
        |> assign(:mobile_browser_open, false)
        |> assign(:channels, channels)
        |> assign(:dm_conversations, dm_convos)
@@ -938,12 +933,6 @@ defmodule PlatformWeb.ChatLive do
     end
   end
 
-  def handle_event("clear_active_agent", _params, socket) do
-    space = socket.assigns.active_space
-    ActiveAgentStore.clear_active(space.id)
-    {:noreply, socket}
-  end
-
   # Cross-feature: canvas_open writes Thread assigns (active_thread, …).
   # Stays on parent until Threads extracts.
   def handle_event("canvas_open", %{"canvas-id" => canvas_id}, socket) do
@@ -1374,16 +1363,6 @@ defmodule PlatformWeb.ChatLive do
       entry = %{text: text, participant_id: participant_id}
       {:noreply, update(socket, :streaming_replies, &Map.put(&1, chunk_id, entry))}
     end
-  end
-
-  def handle_info({:active_agent_changed, _space_id, agent_participant_id}, socket) do
-    participants = socket.assigns.space_participants
-    name = resolve_agent_name(agent_participant_id, participants)
-
-    {:noreply,
-     socket
-     |> assign(:active_agent_participant_id, agent_participant_id)
-     |> assign(:active_agent_name, name)}
   end
 
   # ── Meeting presence updates ──────────────────────────────────────────────
@@ -2016,7 +1995,7 @@ defmodule PlatformWeb.ChatLive do
                 <span>🟢</span>
                 <span class="hidden md:inline">Talking to {@active_agent_name || "Agent"}</span>
                 <button
-                  phx-click="clear_active_agent"
+                  phx-click="active_agent_clear"
                   class="ml-1 text-base-content/40 hover:text-error transition-colors"
                   title="Clear active agent"
                 >
@@ -4301,40 +4280,9 @@ defmodule PlatformWeb.ChatLive do
 
   defp format_message_date(_), do: ""
 
-  # Resolve the currently active agent's participant ID and display name
-  defp resolve_active_agent(space_id, participants) do
-    case ActiveAgentStore.get_active(space_id) do
-      nil ->
-        {nil, nil}
-
-      participant_id ->
-        name = resolve_agent_name(participant_id, participants)
-        {participant_id, name}
-    end
-  end
-
-  # Resolve an agent's display name from their participant ID
-  defp resolve_agent_name(nil, _participants), do: nil
-
-  defp resolve_agent_name(participant_id, participants) do
-    case Enum.find(participants, &(&1.id == participant_id)) do
-      %{display_name: name} when is_binary(name) and name != "" -> name
-      %{participant_id: agent_id} -> resolve_agent_name_by_id(agent_id)
-      nil -> resolve_agent_name_by_lookup(participant_id)
-    end
-  end
-
   defp resolve_agent_name_by_id(agent_id) do
     case Repo.get(Platform.Agents.Agent, agent_id) do
       %{name: name} when is_binary(name) -> name
-      _ -> "Agent"
-    end
-  end
-
-  defp resolve_agent_name_by_lookup(participant_id) do
-    case Chat.get_participant(participant_id) do
-      %{display_name: name} when is_binary(name) and name != "" -> name
-      %{participant_id: agent_id} -> resolve_agent_name_by_id(agent_id)
       _ -> "Agent"
     end
   end
