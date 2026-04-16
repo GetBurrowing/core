@@ -97,8 +97,8 @@ const MeetingCaptions = {
         const opacity = line.final ? "opacity-100" : "opacity-70"
         const italic = line.final ? "" : "italic"
         return `<div class="caption-line ${opacity} ${italic} py-0.5 transition-opacity duration-200">
-          <span class="font-semibold text-primary-content">${this._escapeHtml(line.speaker)}</span>
-          <span class="text-primary-content/90">${this._escapeHtml(line.text)}</span>
+          <span class="font-semibold text-base-content">${this._escapeHtml(line.speaker)}</span>
+          <span class="text-base-content/90">${this._escapeHtml(line.text)}</span>
         </div>`
       })
       .join("")

@@ -307,7 +307,13 @@ defmodule PlatformWeb.ChatLive.Partials do
       </div>
 
       <div class="flex-1 overflow-y-auto p-3">
-        <div id="meeting-participants" class="meeting-participant-grid gap-2"></div>
+        <%!-- JS owns the children (meeting_client.js injects tiles); ignore on re-render --%>
+        <div
+          id="meeting-participants"
+          phx-update="ignore"
+          class="meeting-participant-grid gap-2"
+        >
+        </div>
         <div
           id="meeting-captions"
           phx-hook="MeetingCaptions"
@@ -397,7 +403,13 @@ defmodule PlatformWeb.ChatLive.Partials do
       </header>
 
       <div class="flex-1 overflow-y-auto p-4">
-        <div class="meeting-participant-grid gap-2"></div>
+        <%!-- JS owns the children (meeting_client.js injects tiles); ignore on re-render --%>
+        <div
+          id="meeting-participants-mobile"
+          phx-update="ignore"
+          class="meeting-participant-grid gap-2"
+        >
+        </div>
       </div>
 
       <div class="flex items-center justify-center gap-3 border-t border-base-300 px-4 py-4 safe-area-bottom">

@@ -1175,8 +1175,11 @@ body, .font-fabrikam, * {
   gap: 0.5rem;
 }
 
+/* A single tile is framed by the column track rather than by its contents,
+   otherwise a placeholder-only tile collapses to the width of the username. */
 .meeting-participant-grid:has(.meeting-tile:only-child) {
-  justify-items: center;
+  grid-template-columns: minmax(0, 480px);
+  justify-content: center;
 }
 
 .meeting-tile {
