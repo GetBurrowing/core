@@ -833,7 +833,7 @@ defmodule PlatformWeb.TasksLive do
     {:noreply, socket}
   end
 
-  def handle_event("clear_mention_suggestions", _params, socket) do
+  def handle_event("mention_clear", _params, socket) do
     {:noreply, socket}
   end
 

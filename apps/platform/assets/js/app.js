@@ -120,7 +120,7 @@ if (typeof navigator.modelContext !== "undefined") {
       nativeSet.call(input, query);
       input.dispatchEvent(new Event("input", { bubbles: true }));
       await new Promise(r => setTimeout(r, 500));
-      const results = document.querySelectorAll("[phx-click='open_search_result']").length;
+      const results = document.querySelectorAll("[phx-click='search_open_result']").length;
       return { content: [{ type: "text", text: JSON.stringify({ query, resultCount: results }) }] };
     }
   });

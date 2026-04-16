@@ -34,6 +34,11 @@ defmodule PlatformWeb.ChatLive do
   alias Platform.Meetings.State, as: MeetingState
   alias Platform.Repo
 
+  alias PlatformWeb.ChatLive.MentionsHooks
+  alias PlatformWeb.ChatLive.PinHooks
+  alias PlatformWeb.ChatLive.SearchHooks
+  alias PlatformWeb.ChatLive.SettingsComponent
+
   @message_limit 50
   @quick_emojis ["👍", "❤️", "😂", "🎉"]
   @max_upload_entries 5
@@ -57,9 +62,6 @@ defmodule PlatformWeb.ChatLive do
       |> assign(:dm_conversations, dm_conversations)
       |> assign(:active_space, nil)
       |> assign(:space_participants, [])
-      |> assign(:search_query, "")
-      |> assign(:search_results, [])
-      |> assign(:highlighted_message_id, nil)
       |> assign(:highlighted_thread_message_id, nil)
       |> assign(:participants_map, %{})
       |> assign(:agent_participant_ids, MapSet.new())
@@ -76,9 +78,6 @@ defmodule PlatformWeb.ChatLive do
       |> assign(:thread_previews, %{})
       |> assign(:expanded_threads, MapSet.new())
       |> assign(:inline_thread_messages, %{})
-      |> assign(:pins, [])
-      |> assign(:show_pins, false)
-      |> assign(:pinned_message_ids, MapSet.new())
       |> assign(:canvases, [])
       |> assign(:canvases_by_message_id, %{})
       |> assign(:active_canvas, nil)
@@ -97,7 +96,6 @@ defmodule PlatformWeb.ChatLive do
       |> assign(:show_new_channel_modal, false)
       |> assign(:show_new_conversation_modal, false)
       |> assign(:show_settings, false)
-      |> assign(:settings_form, to_form(%{}))
       |> assign(:picker_users, [])
       |> assign(:picker_agents, [])
       |> assign(:picker_query, "")
@@ -107,8 +105,6 @@ defmodule PlatformWeb.ChatLive do
       |> assign(:canvas_types, @canvas_types)
       |> assign(:agent_typing_pids, MapSet.new())
       |> assign(:streaming_replies, %{})
-      |> assign(:mention_suggestions, [])
-      |> assign(:mention_source, "compose-form")
       |> assign(:push_permission, "unknown")
       |> assign(:unread_counts, if(user_id, do: Chat.unread_counts_for_user(user_id), else: %{}))
       |> assign(:upload_dialog_open, false)
@@ -125,7 +121,6 @@ defmodule PlatformWeb.ChatLive do
       |> assign(:screen_share_enabled, false)
       |> assign_compose("")
       |> assign_thread_compose("")
-      |> assign_search_form("")
       |> assign_new_canvas_form()
       |> allow_upload(:attachments,
         accept: :any,
@@ -164,6 +159,12 @@ defmodule PlatformWeb.ChatLive do
       else
         socket
       end
+
+    socket =
+      socket
+      |> PinHooks.attach()
+      |> SearchHooks.attach()
+      |> MentionsHooks.attach()
 
     {:ok, socket}
   end
@@ -263,8 +264,6 @@ defmodule PlatformWeb.ChatLive do
       reactions_map = build_reactions_map(messages, participant)
       attachments_map = build_attachments_map(messages)
       thread_previews = Chat.thread_previews_for_messages(Enum.map(messages, & &1.id))
-      pins = Chat.list_pins(space.id)
-      pinned_message_ids = MapSet.new(pins, & &1.message_id)
       canvases = Chat.list_canvases(space.id)
       canvases_by_message_id = build_canvas_map(canvases)
 
@@ -284,11 +283,7 @@ defmodule PlatformWeb.ChatLive do
        |> assign(:page_title, page_title)
        |> assign(:active_space, space)
        |> assign(:space_participants, participants)
-       |> assign(:search_query, "")
-       |> assign(:search_results, [])
-       |> assign(:highlighted_message_id, nil)
-       |> assign(:highlighted_thread_message_id, nil)
-       |> assign_search_form("")
+       |> SearchHooks.reset_for_space()
        |> assign(:participants_map, participants_map)
        |> assign(:agent_participant_ids, agent_participant_ids)
        |> assign(:agent_colors_map, agent_colors_map)
@@ -298,8 +293,7 @@ defmodule PlatformWeb.ChatLive do
        |> assign(:agent_status, PlatformWeb.ShellLive.default_agent_status())
        |> assign(:agent_typing_pids, MapSet.new())
        |> assign(:streaming_replies, %{})
-       |> assign(:mention_suggestions, [])
-       |> assign(:mention_source, "compose-form")
+       |> MentionsHooks.reset_for_space()
        |> assign(:current_participant, participant)
        |> assign(:reactions_map, reactions_map)
        |> assign(:attachments_map, attachments_map)
@@ -309,9 +303,7 @@ defmodule PlatformWeb.ChatLive do
        |> assign(:thread_previews, thread_previews)
        |> assign(:expanded_threads, MapSet.new())
        |> assign(:inline_thread_messages, %{})
-       |> assign(:pins, pins)
-       |> assign(:show_pins, false)
-       |> assign(:pinned_message_ids, pinned_message_ids)
+       |> PinHooks.load_for_space(space.id)
        |> assign(:canvases, canvases)
        |> assign(:canvases_by_message_id, canvases_by_message_id)
        |> assign(:active_canvas, nil)
@@ -360,21 +352,14 @@ defmodule PlatformWeb.ChatLive do
     {:noreply, assign(socket, :mobile_browser_open, false)}
   end
 
-  def handle_event("search_messages", %{"search" => %{"query" => query}}, socket) do
-    {:noreply, apply_search(socket, query)}
-  end
-
-  def handle_event("clear_search", _params, socket) do
-    {:noreply, clear_search(socket)}
-  end
-
-  def handle_event("open_search_result", %{"message-id" => message_id}, socket) do
+  # Cross-feature: Search event that also touches Threads + MessageList.
+  # Stays here (coordinator) until Threads extracts; then becomes PubSub.
+  def handle_event("search_open_result", %{"message-id" => message_id}, socket) do
     case Chat.get_message(message_id) do
       nil ->
         {:noreply, put_flash(socket, :error, "Search result not found.")}
 
       %{thread_id: thread_id} = message when is_binary(thread_id) ->
-        # Find the parent message for this thread and expand inline
         parent_msg_id =
           Enum.find_value(socket.assigns.thread_previews, fn {pmid, %{thread_id: tid}} ->
             if tid == thread_id, do: pmid
@@ -387,11 +372,10 @@ defmodule PlatformWeb.ChatLive do
             socket
             |> update(:expanded_threads, &MapSet.put(&1, parent_msg_id))
             |> update(:inline_thread_messages, &Map.put(&1, parent_msg_id, thread_msgs))
-            |> assign(:highlighted_message_id, parent_msg_id)
+            |> SearchHooks.set_highlights(parent_msg_id, nil)
             |> reinsert_stream_message(parent_msg_id)
           else
-            socket
-            |> assign(:highlighted_message_id, message.id)
+            SearchHooks.set_highlights(socket, message.id, nil)
           end
 
         {:noreply, socket}
@@ -402,8 +386,7 @@ defmodule PlatformWeb.ChatLive do
          |> assign(:active_thread, nil)
          |> assign(:thread_messages, [])
          |> assign(:thread_attachments_map, %{})
-         |> assign(:highlighted_message_id, message.id)
-         |> assign(:highlighted_thread_message_id, nil)}
+         |> SearchHooks.set_highlights(message.id, nil)}
     end
   end
 
@@ -716,49 +699,6 @@ defmodule PlatformWeb.ChatLive do
     {:noreply, socket}
   end
 
-  def handle_event("mention_query", %{"query" => query} = params, socket) do
-    source = Map.get(params, "source", "compose-form")
-
-    suggestions =
-      case socket.assigns.active_space do
-        nil ->
-          []
-
-        space ->
-          participants = Chat.list_participants(space.id)
-
-          users_by_id =
-            participants
-            |> Enum.filter(&(&1.participant_type == "user"))
-            |> Enum.map(& &1.participant_id)
-            |> Accounts.get_users_map()
-
-          participants
-          |> Enum.filter(fn p ->
-            name = (p.display_name || "") |> String.downcase()
-            String.starts_with?(name, String.downcase(query))
-          end)
-          |> Enum.take(8)
-          |> Enum.map(&participant_identity(&1, Map.get(users_by_id, &1.participant_id)))
-      end
-
-    {:noreply,
-     socket
-     |> assign(:mention_suggestions, suggestions)
-     |> assign(:mention_source, source)}
-  end
-
-  def handle_event("mention_query", _params, socket) do
-    {:noreply, assign(socket, :mention_suggestions, [])}
-  end
-
-  def handle_event("clear_mention_suggestions", _params, socket) do
-    {:noreply,
-     socket
-     |> assign(:mention_suggestions, [])
-     |> assign(:mention_source, "compose-form")}
-  end
-
   def handle_event("open_reaction_picker", _params, socket) do
     {:noreply, socket}
   end
@@ -939,30 +879,6 @@ defmodule PlatformWeb.ChatLive do
     else
       _ -> {:noreply, socket}
     end
-  end
-
-  def handle_event("toggle_pin", %{"message_id" => msg_id, "space_id" => space_id}, socket) do
-    handle_event("toggle_pin", %{"message-id" => msg_id, "space-id" => space_id}, socket)
-  end
-
-  def handle_event("toggle_pin", %{"message-id" => msg_id, "space-id" => space_id}, socket) do
-    with participant when not is_nil(participant) <- socket.assigns.current_participant do
-      if MapSet.member?(socket.assigns.pinned_message_ids, msg_id) do
-        Chat.unpin_message(space_id, msg_id)
-      else
-        Chat.pin_message(%{
-          space_id: space_id,
-          message_id: msg_id,
-          pinned_by: participant.id
-        })
-      end
-    end
-
-    {:noreply, socket}
-  end
-
-  def handle_event("toggle_pins_panel", _params, socket) do
-    {:noreply, assign(socket, :show_pins, !socket.assigns.show_pins)}
   end
 
   def handle_event("toggle_canvases_panel", _params, socket) do
@@ -1370,108 +1286,28 @@ defmodule PlatformWeb.ChatLive do
     end
   end
 
-  # ── Settings modal events ──────────────────────────────────────────────────
+  # ── Settings modal (see SettingsComponent) ────────────────────────────────
 
-  def handle_event("show_settings", _params, socket) do
-    space = socket.assigns.active_space
-
-    form =
-      to_form(%{
-        "name" => space.name || "",
-        "description" => space.description || "",
-        "topic" => space.topic || "",
-        "promote_name" => ""
-      })
-
-    {:noreply,
-     socket
-     |> assign(:show_settings, true)
-     |> assign(:settings_form, form)}
-  end
-
-  def handle_event("close_settings", _params, socket) do
-    {:noreply, assign(socket, :show_settings, false)}
-  end
-
-  def handle_event("save_settings", params, socket) do
-    space = socket.assigns.active_space
-
-    attrs =
-      case space.kind do
-        "channel" ->
-          slug =
-            (params["name"] || space.name)
-            |> String.downcase()
-            |> String.replace(~r/[^a-z0-9\s-]/, "")
-            |> String.replace(~r/\s+/, "-")
-            |> String.trim("-")
-
-          %{
-            name: params["name"],
-            slug: slug,
-            description: params["description"],
-            topic: params["topic"]
-          }
-
-        "group" ->
-          %{name: params["name"]}
-
-        "dm" ->
-          %{}
-      end
-
-    case Chat.update_space(space, attrs) do
-      {:ok, updated} ->
-        nav_target = updated.slug || updated.id
-
-        {:noreply,
-         socket
-         |> assign(:show_settings, false)
-         |> push_navigate(to: ~p"/chat/#{nav_target}")}
-
-      {:error, _changeset} ->
-        {:noreply, put_flash(socket, :error, "Could not save settings.")}
-    end
-  end
-
-  def handle_event("archive_space", _params, socket) do
-    space = socket.assigns.active_space
-
-    case Chat.archive_space(space) do
-      {:ok, _} ->
-        {:noreply, push_navigate(socket, to: ~p"/chat")}
-
-      {:error, _} ->
-        {:noreply, put_flash(socket, :error, "Could not archive space.")}
-    end
-  end
-
-  def handle_event("settings_promote_to_channel", %{"promote_name" => name}, socket) do
-    space = socket.assigns.active_space
-
-    slug =
-      name
-      |> String.downcase()
-      |> String.replace(~r/[^a-z0-9\s-]/, "")
-      |> String.replace(~r/\s+/, "-")
-      |> String.trim("-")
-
-    case Chat.promote_to_channel(space, %{name: name, slug: slug}) do
-      {:ok, updated} ->
-        {:noreply,
-         socket
-         |> assign(:show_settings, false)
-         |> push_navigate(to: ~p"/chat/#{updated.slug}")}
-
-      {:error, :not_promotable} ->
-        {:noreply, put_flash(socket, :error, "This conversation cannot be promoted.")}
-
-      {:error, _changeset} ->
-        {:noreply, put_flash(socket, :error, "Could not promote to channel.")}
-    end
+  def handle_event("settings_open", _params, socket) do
+    {:noreply, assign(socket, :show_settings, true)}
   end
 
   @impl true
+  def handle_info({:settings_closed}, socket) do
+    {:noreply, assign(socket, :show_settings, false)}
+  end
+
+  def handle_info({:settings_navigate, path}, socket) do
+    {:noreply,
+     socket
+     |> assign(:show_settings, false)
+     |> push_navigate(to: path)}
+  end
+
+  def handle_info({:settings_flash, kind, msg}, socket) do
+    {:noreply, put_flash(socket, kind, msg)}
+  end
+
   def handle_info({:new_message, msg}, socket) do
     active_space = socket.assigns.active_space
     current_participant = socket.assigns.current_participant
@@ -1520,7 +1356,7 @@ defmodule PlatformWeb.ChatLive do
          socket
          |> stream_insert(:messages, msg)
          |> put_attachment_map_entry(msg.id, attachments)
-         |> maybe_refresh_search()}
+         |> SearchHooks.maybe_refresh()}
       else
         # Update side-panel thread if open
         socket =
@@ -1535,7 +1371,7 @@ defmodule PlatformWeb.ChatLive do
         # Update inline thread if expanded
         socket = maybe_update_inline_thread(socket, msg)
 
-        {:noreply, maybe_refresh_search(socket)}
+        {:noreply, SearchHooks.maybe_refresh(socket)}
       end
     end
   end
@@ -1547,7 +1383,7 @@ defmodule PlatformWeb.ChatLive do
      socket
      |> stream_insert(:messages, msg)
      |> put_attachment_map_entry(msg.id, attachments)
-     |> maybe_refresh_search()}
+     |> SearchHooks.maybe_refresh()}
   end
 
   def handle_info({:message_deleted, msg}, socket) do
@@ -1556,7 +1392,7 @@ defmodule PlatformWeb.ChatLive do
      |> stream_delete(:messages, msg)
      |> delete_attachment_map_entry(msg.id)
      |> delete_thread_attachment_map_entry(msg.id)
-     |> maybe_refresh_search()}
+     |> SearchHooks.maybe_refresh()}
   end
 
   def handle_info({:reaction_added, reaction}, socket) do
@@ -1589,26 +1425,6 @@ defmodule PlatformWeb.ChatLive do
       require Logger
       Logger.error("Reaction broadcast (removed) crashed: #{Exception.message(e)}")
       {:noreply, socket}
-  end
-
-  def handle_info({:pin_added, pin}, socket) do
-    pins = socket.assigns.pins ++ [pin]
-    pinned_message_ids = MapSet.put(socket.assigns.pinned_message_ids, pin.message_id)
-
-    {:noreply,
-     socket
-     |> assign(:pins, pins)
-     |> assign(:pinned_message_ids, pinned_message_ids)}
-  end
-
-  def handle_info({:pin_removed, %{message_id: msg_id}}, socket) do
-    pins = Enum.reject(socket.assigns.pins, &(&1.message_id == msg_id))
-    pinned_message_ids = MapSet.delete(socket.assigns.pinned_message_ids, msg_id)
-
-    {:noreply,
-     socket
-     |> assign(:pins, pins)
-     |> assign(:pinned_message_ids, pinned_message_ids)}
   end
 
   def handle_info({:canvas_action, _canvas, _value}, socket) do
@@ -2260,8 +2076,8 @@ defmodule PlatformWeb.ChatLive do
               <.form
                 for={@search_form}
                 id="chat-search-form"
-                phx-change="search_messages"
-                phx-submit="search_messages"
+                phx-change="search_submit"
+                phx-submit="search_submit"
                 class="hidden md:block"
               >
                 <div class="flex items-center gap-2">
@@ -2277,7 +2093,7 @@ defmodule PlatformWeb.ChatLive do
                   <button
                     :if={present?(@search_query)}
                     type="button"
-                    phx-click="clear_search"
+                    phx-click="search_clear"
                     class="rounded px-2 py-1 text-xs hover:bg-base-300"
                   >
                     Clear
@@ -2345,7 +2161,7 @@ defmodule PlatformWeb.ChatLive do
 
               <button
                 :if={@pins != []}
-                phx-click="toggle_pins_panel"
+                phx-click="pin_panel_toggle"
                 class={[
                   "flex items-center gap-1 rounded px-2 py-0.5 text-xs text-base-content/50 hover:text-base-content transition-colors hover:bg-base-300",
                   @show_pins && "!bg-base-300 !text-primary"
@@ -2410,7 +2226,7 @@ defmodule PlatformWeb.ChatLive do
               </button>
 
               <button
-                phx-click="show_settings"
+                phx-click="settings_open"
                 class="flex items-center gap-1 rounded px-2 py-0.5 text-xs text-base-content/50 hover:text-base-content transition-colors hover:bg-base-300"
                 title="Space settings"
               >
@@ -2436,7 +2252,7 @@ defmodule PlatformWeb.ChatLive do
                 </p>
               </div>
 
-              <button phx-click="clear_search" class="btn btn-ghost btn-xs">
+              <button phx-click="search_clear" class="btn btn-ghost btn-xs">
                 Clear
               </button>
             </div>
@@ -2445,7 +2261,7 @@ defmodule PlatformWeb.ChatLive do
               <button
                 :for={result <- @search_results}
                 type="button"
-                phx-click="open_search_result"
+                phx-click="search_open_result"
                 phx-value-message-id={result.id}
                 class="block w-full rounded-xl border border-base-300 bg-base-100 px-3 py-2 text-left transition-colors hover:border-primary/40 hover:bg-base-100/80"
               >
@@ -2503,7 +2319,7 @@ defmodule PlatformWeb.ChatLive do
                   </span>
                 </span>
                 <button
-                  phx-click="toggle_pin"
+                  phx-click="pin_toggle"
                   phx-value-message-id={pin.message_id}
                   phx-value-space-id={pin.space_id}
                   class="ml-2 text-xs text-base-content/40 hover:text-error"
@@ -2834,7 +2650,7 @@ defmodule PlatformWeb.ChatLive do
                     </button>
 
                     <button
-                      phx-click="toggle_pin"
+                      phx-click="pin_toggle"
                       phx-value-message-id={msg.id}
                       phx-value-space-id={msg.space_id}
                       title={if MapSet.member?(@pinned_message_ids, msg.id), do: "Unpin", else: "Pin"}
@@ -3769,117 +3585,12 @@ defmodule PlatformWeb.ChatLive do
       </div>
     </div>
 
-    <%!-- Space Settings Modal --%>
-    <%= if @show_settings && @active_space do %>
-      <div
-        class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
-        phx-click="close_settings"
-      >
-        <div
-          class="bg-base-100 rounded-xl shadow-xl w-full max-w-md p-6 max-h-[80vh] overflow-y-auto"
-          onclick="event.stopPropagation()"
-        >
-          <h3 class="text-lg font-bold mb-4">
-            <%= case @active_space.kind do %>
-              <% "channel" -> %>
-                Channel Settings
-              <% "dm" -> %>
-                Conversation Settings
-              <% "group" -> %>
-                Group Settings
-              <% _ -> %>
-                Settings
-            <% end %>
-          </h3>
-
-          <form phx-submit="save_settings">
-            <%!-- Channel-specific fields --%>
-            <%= if @active_space.kind == "channel" do %>
-              <div class="form-control mb-3">
-                <label class="label"><span class="label-text">Name</span></label>
-                <input
-                  name="name"
-                  type="text"
-                  class="input input-bordered w-full"
-                  value={@active_space.name}
-                  required
-                />
-              </div>
-              <div class="form-control mb-3">
-                <label class="label"><span class="label-text">Description</span></label>
-                <textarea
-                  name="description"
-                  class="textarea textarea-bordered w-full"
-                  placeholder="What's this channel about?"
-                >{@active_space.description}</textarea>
-              </div>
-              <div class="form-control mb-3">
-                <label class="label"><span class="label-text">Topic</span></label>
-                <input
-                  name="topic"
-                  type="text"
-                  class="input input-bordered w-full"
-                  value={@active_space.topic}
-                  placeholder="Current topic of discussion"
-                />
-              </div>
-            <% end %>
-
-            <%!-- Group-specific fields --%>
-            <%= if @active_space.kind == "group" do %>
-              <div class="form-control mb-3">
-                <label class="label"><span class="label-text">Custom Name (optional)</span></label>
-                <input
-                  name="name"
-                  type="text"
-                  class="input input-bordered w-full"
-                  value={@active_space.name}
-                  placeholder="Override auto-generated name"
-                />
-              </div>
-            <% end %>
-
-            <%!-- ADR 0027: Agent attention mode removed; replaced by active agent mutex (Stage 3) --%>
-
-            <div class="flex justify-end gap-2">
-              <button type="button" phx-click="close_settings" class="btn btn-ghost btn-sm">
-                Cancel
-              </button>
-              <button type="submit" class="btn btn-primary btn-sm">Save</button>
-            </div>
-          </form>
-
-          <%!-- Danger Zone --%>
-          <div class="divider text-xs text-base-content/40 mt-6">Danger Zone</div>
-
-          <%= if @active_space.kind == "channel" do %>
-            <button
-              phx-click="archive_space"
-              class="btn btn-error btn-outline btn-sm w-full"
-              data-confirm="Are you sure you want to archive this channel? This cannot be undone."
-            >
-              Archive Channel
-            </button>
-          <% end %>
-
-          <%= if @active_space.kind == "group" && !@active_space.is_direct do %>
-            <form phx-submit="settings_promote_to_channel" class="mb-2">
-              <label class="label"><span class="label-text text-sm">Promote to Channel</span></label>
-              <div class="flex gap-2">
-                <input
-                  name="promote_name"
-                  type="text"
-                  class="input input-bordered input-sm flex-1"
-                  placeholder="Channel name"
-                  required
-                />
-                <button type="submit" class="btn btn-sm btn-outline">Promote</button>
-              </div>
-            </form>
-          <% end %>
-        </div>
-      </div>
-    <% end %>
+    <.live_component
+      module={SettingsComponent}
+      id="chat-settings"
+      open={@show_settings}
+      space={@active_space}
+    />
 
     <%!-- New Channel Modal --%>
     <%= if @show_new_channel_modal do %>
@@ -4072,47 +3783,6 @@ defmodule PlatformWeb.ChatLive do
 
   defp assign_thread_compose(socket, text) do
     assign(socket, :thread_compose_form, to_form(%{"text" => text}, as: :thread_compose))
-  end
-
-  defp assign_search_form(socket, query) do
-    assign(socket, :search_form, to_form(%{"query" => query}, as: :search))
-  end
-
-  defp apply_search(socket, query) do
-    trimmed_query = String.trim(query || "")
-
-    results =
-      case socket.assigns.active_space do
-        %{id: space_id} when trimmed_query != "" ->
-          Chat.search_messages(space_id, trimmed_query, limit: 12)
-
-        _ ->
-          []
-      end
-
-    socket
-    |> assign(:search_query, trimmed_query)
-    |> assign(:search_results, results)
-    |> assign(:highlighted_message_id, nil)
-    |> assign(:highlighted_thread_message_id, nil)
-    |> assign_search_form(trimmed_query)
-  end
-
-  defp clear_search(socket) do
-    socket
-    |> assign(:search_query, "")
-    |> assign(:search_results, [])
-    |> assign(:highlighted_message_id, nil)
-    |> assign(:highlighted_thread_message_id, nil)
-    |> assign_search_form("")
-  end
-
-  defp maybe_refresh_search(socket) do
-    if present?(socket.assigns.search_query) do
-      apply_search(socket, socket.assigns.search_query)
-    else
-      socket
-    end
   end
 
   defp assign_new_canvas_form(socket, attrs \\ %{}) do

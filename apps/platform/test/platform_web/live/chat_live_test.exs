@@ -476,7 +476,7 @@ defmodule PlatformWeb.ChatLiveTest do
 
       assert html =~ "Thread"
 
-      html = render_click(view, "open_search_result", %{"message-id" => thread_message.id})
+      html = render_click(view, "search_open_result", %{"message-id" => thread_message.id})
 
       assert html =~ "inline-thread-compose-form-#{root_message.id}"
       assert html =~ "Phoenix lives in threads too"
@@ -757,16 +757,16 @@ defmodule PlatformWeb.ChatLiveTest do
       [msg | _] = Chat.list_messages(space.id)
 
       # Toggle pin
-      render_click(view, "toggle_pin", %{"message-id" => msg.id, "space-id" => msg.space_id})
+      render_click(view, "pin_toggle", %{"message-id" => msg.id, "space-id" => msg.space_id})
 
       # Toggle pins panel open
-      html = render_click(view, "toggle_pins_panel", %{})
+      html = render_click(view, "pin_panel_toggle", %{})
 
       assert html =~ "Pinned Messages"
       assert html =~ String.slice(msg.id, 0, 8)
     end
 
-    test "toggle_pins_panel shows and hides the panel", %{conn: conn} do
+    test "pin_panel_toggle shows and hides the panel", %{conn: conn} do
       conn = authenticated_conn(conn)
       {:ok, view, _html} = live(conn, ~p"/chat/general")
 
@@ -777,12 +777,12 @@ defmodule PlatformWeb.ChatLiveTest do
       space = Chat.get_space_by_slug("general")
       [msg | _] = Chat.list_messages(space.id)
 
-      render_click(view, "toggle_pin", %{"message-id" => msg.id, "space-id" => msg.space_id})
+      render_click(view, "pin_toggle", %{"message-id" => msg.id, "space-id" => msg.space_id})
 
-      html_open = render_click(view, "toggle_pins_panel", %{})
+      html_open = render_click(view, "pin_panel_toggle", %{})
       assert html_open =~ "Pinned Messages"
 
-      html_closed = render_click(view, "toggle_pins_panel", %{})
+      html_closed = render_click(view, "pin_panel_toggle", %{})
       refute html_closed =~ "Pinned Messages"
     end
   end
@@ -794,7 +794,7 @@ defmodule PlatformWeb.ChatLiveTest do
       conn = authenticated_conn(conn)
       {:ok, view, _html} = live(conn, ~p"/chat/general")
 
-      html = render_click(view, "show_settings", %{})
+      html = render_click(view, "settings_open", %{})
 
       assert html =~ "Channel Settings"
       assert html =~ ~s(name="name")
@@ -822,7 +822,7 @@ defmodule PlatformWeb.ChatLiveTest do
 
       {:ok, view, _html} = live(conn, nav_path)
 
-      html = render_click(view, "show_settings", %{})
+      html = render_click(view, "settings_open", %{})
 
       assert html =~ "Conversation Settings"
       # ADR 0027: Agent Attention Mode removed
@@ -844,8 +844,11 @@ defmodule PlatformWeb.ChatLiveTest do
 
       {:ok, view, _html} = live(conn, ~p"/chat/to-archive")
 
-      render_click(view, "show_settings", %{})
-      render_click(view, "archive_space", %{})
+      render_click(view, "settings_open", %{})
+
+      view
+      |> element("button[phx-click=settings_archive]")
+      |> render_click()
 
       assert_redirect(view, "/chat")
 
