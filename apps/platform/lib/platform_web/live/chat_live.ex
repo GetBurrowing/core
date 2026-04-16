@@ -22,20 +22,14 @@ defmodule PlatformWeb.ChatLive do
   import PlatformWeb.Chat.CanvasRenderer, only: [canvas_document: 1]
 
   alias Platform.Accounts
-  alias Platform.Agents.WorkspaceBootstrap
-  alias Ecto.Adapters.SQL.Sandbox
   alias Platform.Chat
   alias Platform.Chat.ActiveAgentStore
   alias Platform.Chat.AttachmentStorage
-  alias Platform.Chat.Presence, as: ChatPresence
   alias Platform.Chat.PubSub, as: ChatPubSub
-  alias Platform.Meetings
-  alias Platform.Meetings.PubSub, as: MeetingsPubSub
-  alias Platform.Meetings.State, as: MeetingState
-  alias Platform.Repo
 
   alias PlatformWeb.ChatLive.ActiveAgentHooks
   alias PlatformWeb.ChatLive.CanvasHooks
+  alias PlatformWeb.ChatLive.MeetingHooks
   alias PlatformWeb.ChatLive.MentionsHooks
   alias PlatformWeb.ChatLive.NewChannelComponent
   alias PlatformWeb.ChatLive.NewConversationComponent
@@ -74,14 +68,6 @@ defmodule PlatformWeb.ChatLive do
       |> assign(:thread_previews, %{})
       |> assign(:expanded_threads, MapSet.new())
       |> assign(:inline_thread_messages, %{})
-      |> assign(:meeting_active, false)
-      |> assign(:meeting_participants, [])
-      |> assign(:meeting_participant_count, 0)
-      |> assign(:meeting_counts, %{})
-      |> assign(:meeting_room, nil)
-      |> assign(:active_speakers, MapSet.new())
-      |> assign(:show_agent_picker, false)
-      |> assign(:available_agents, [])
       |> assign(:mobile_browser_open, false)
       |> assign(:show_new_channel_modal, false)
       |> assign(:show_new_conversation_modal, false)
@@ -92,13 +78,6 @@ defmodule PlatformWeb.ChatLive do
       |> assign(:unread_counts, if(user_id, do: Chat.unread_counts_for_user(user_id), else: %{}))
       |> assign(:lightbox_url, nil)
       |> assign(:drafts, %{})
-      |> assign(:meeting_active, false)
-      |> assign(:meeting_room_name, nil)
-      |> assign(:meetings_enabled, Platform.Meetings.enabled?())
-      |> assign(:in_meeting, false)
-      |> assign(:mic_enabled, true)
-      |> assign(:camera_enabled, false)
-      |> assign(:screen_share_enabled, false)
       |> assign_compose("")
       |> assign_thread_compose("")
       |> allow_upload(:attachments,
@@ -117,27 +96,15 @@ defmodule PlatformWeb.ChatLive do
       )
       |> stream(:messages, [])
 
-    # Subscribe to all spaces (channels + DMs) so we can count unread messages
-    # in background conversations (active space subscription happens in handle_params)
-    socket =
-      if connected?(socket) do
-        all_spaces = channels ++ dm_conversations
+    all_spaces = channels ++ dm_conversations
 
-        Enum.each(all_spaces, fn space ->
-          ChatPubSub.subscribe(space.id)
-          MeetingsPubSub.subscribe_presence(space.id)
-        end)
+    # Subscribe to chat pubsub for unread counts in background conversations
+    # (active space subscription happens in handle_params).
+    if connected?(socket) do
+      Enum.each(all_spaces, &ChatPubSub.subscribe(&1.id))
+    end
 
-        # Subscribe to global meeting presence summary for sidebar indicators
-        MeetingsPubSub.subscribe_presence_summary()
-
-        # Load initial meeting counts for sidebar indicators
-        space_ids = Enum.map(all_spaces, & &1.id)
-        meeting_counts = Meetings.active_meeting_counts(space_ids)
-        assign(socket, :meeting_counts, meeting_counts)
-      else
-        socket
-      end
+    space_ids = Enum.map(all_spaces, & &1.id)
 
     socket =
       socket
@@ -148,6 +115,7 @@ defmodule PlatformWeb.ChatLive do
       |> UploadHooks.attach()
       |> CanvasHooks.attach()
       |> ActiveAgentHooks.attach()
+      |> MeetingHooks.attach(space_ids)
 
     {:ok, socket}
   end
@@ -159,11 +127,6 @@ defmodule PlatformWeb.ChatLive do
       if prev = socket.assigns.active_space do
         ChatPubSub.unsubscribe(prev.id)
         Phoenix.PubSub.unsubscribe(Platform.PubSub, "active_agent:#{prev.id}")
-
-        # Unsubscribe from previous space's meeting room presence
-        if prev_room = Meetings.get_active_room(prev.id) do
-          MeetingsPubSub.unsubscribe_room(prev_room.id)
-        end
 
         socket = PresenceHooks.leave_space(socket, prev.id)
 
@@ -188,22 +151,6 @@ defmodule PlatformWeb.ChatLive do
       end
 
       participant = ensure_participant(space.id, socket.assigns.user_id)
-
-      # Subscribe to meeting room presence for this space and load participants
-      {meeting_room, meeting_participants, meeting_active, meeting_participant_count} =
-        if connected?(socket) do
-          case Meetings.get_active_room(space.id) do
-            nil ->
-              {nil, [], false, 0}
-
-            room ->
-              MeetingsPubSub.subscribe_room(room.id)
-              participants = Meetings.active_participants(room.id)
-              {room, participants, participants != [], length(participants)}
-          end
-        else
-          {nil, [], false, 0}
-        end
 
       messages = load_channel_messages(space.id)
       latest_message = List.last(messages)
@@ -249,17 +196,6 @@ defmodule PlatformWeb.ChatLive do
        |> assign(:channels, channels)
        |> assign(:dm_conversations, dm_convos)
        |> assign(:spaces, channels ++ dm_convos)
-       |> assign(:meeting_active, meeting_active)
-       |> assign(:meeting_participants, meeting_participants)
-       |> assign(:meeting_participant_count, meeting_participant_count)
-       |> assign(:meeting_room, meeting_room)
-       |> assign(:show_agent_picker, false)
-       |> assign(
-         :available_agents,
-         if(meeting_active, do: load_available_agents(space.id, meeting_participants), else: [])
-       )
-       |> assign(:meeting_active, false)
-       |> assign(:meeting_room_name, nil)
        |> stream(:messages, messages, reset: true)
        |> clear_unread(space.id)
        |> restore_draft(space.id)}
@@ -437,140 +373,6 @@ defmodule PlatformWeb.ChatLive do
     else
       _ -> {:noreply, socket}
     end
-  end
-
-  def handle_event("join-meeting-click", _params, socket) do
-    # Placeholder — full join flow handled by the Join Meeting UI task
-    {:noreply, socket}
-  end
-
-  def handle_event("toggle_agent_picker", _params, socket) do
-    {:noreply, assign(socket, :show_agent_picker, !socket.assigns.show_agent_picker)}
-  end
-
-  def handle_event("invite_agent", %{"agent-id" => agent_id}, socket) do
-    space = socket.assigns.active_space
-    agent = Platform.Repo.get(Platform.Agents.Agent, agent_id)
-
-    with %Platform.Agents.Agent{} <- agent,
-         {:ok, room} <- Platform.Meetings.ensure_room(space.id),
-         {:ok, _participant} <-
-           Platform.Meetings.invite_agent(room, agent, %{user_id: socket.assigns.user_id}) do
-      {:noreply,
-       socket
-       |> assign(:show_agent_picker, false)
-       |> assign(
-         :available_agents,
-         load_available_agents(space.id, socket.assigns.meeting_participants)
-       )}
-    else
-      _ ->
-        {:noreply, put_flash(socket, :error, "Failed to invite agent")}
-    end
-  end
-
-  def handle_event("meeting_active_speaker", %{"identities" => identities}, socket) do
-    {:noreply, assign(socket, :active_speakers, MapSet.new(identities))}
-  end
-
-  def handle_event("dismiss_meeting_agent", %{"agent-id" => agent_id}, socket) do
-    space = socket.assigns.active_space
-
-    with {:ok, room} <- Platform.Meetings.ensure_room(space.id),
-         {:ok, _participant} <- Platform.Meetings.dismiss_agent(room, agent_id) do
-      {:noreply, socket}
-    else
-      _ ->
-        {:noreply, put_flash(socket, :error, "Failed to dismiss agent")}
-    end
-  end
-
-  def handle_event("join_meeting", _params, socket) do
-    space = socket.assigns.active_space
-    participant = socket.assigns.current_participant
-
-    with {:ok, room} <- Meetings.ensure_room(space.id),
-         identity = "user:#{socket.assigns.user_id}",
-         name = participant.display_name || "User",
-         {:ok, token} <- Meetings.generate_token(room, %{identity: identity, name: name}) do
-      socket =
-        socket
-        |> assign(:in_meeting, true)
-        |> push_event("join-meeting", %{
-          token: token,
-          url: Meetings.livekit_url(),
-          room_name: room.livekit_room_name,
-          space_slug: space.slug
-        })
-
-      # Broadcast to ShellLive so the mini-bar appears
-      MeetingState.broadcast_joined(socket.assigns.user_id, space.id, space.name)
-
-      {:noreply, socket}
-    else
-      {:error, reason} ->
-        require Logger
-        Logger.warning("[ChatLive] Failed to join meeting: #{inspect(reason)}")
-        {:noreply, socket}
-    end
-  end
-
-  def handle_event("leave_meeting", _params, socket) do
-    # Broadcast to ShellLive so the mini-bar disappears
-    MeetingState.broadcast_left(socket.assigns.user_id)
-
-    socket =
-      socket
-      |> assign(:in_meeting, false)
-      |> assign(:active_speakers, [])
-      |> assign(:mic_enabled, true)
-      |> assign(:camera_enabled, false)
-      |> assign(:screen_share_enabled, false)
-      |> push_event("leave-meeting", %{})
-
-    {:noreply, socket}
-  end
-
-  # Handle meeting_left event from JS MeetingBar hook (via livekit:room-disconnected)
-  def handle_event("meeting_left", _params, socket) do
-    MeetingState.broadcast_left(socket.assigns.user_id)
-
-    socket =
-      socket
-      |> assign(:in_meeting, false)
-      |> assign(:active_speakers, [])
-      |> assign(:mic_enabled, true)
-      |> assign(:camera_enabled, false)
-      |> assign(:screen_share_enabled, false)
-
-    {:noreply, socket}
-  end
-
-  def handle_event("toggle_mic", _params, socket) do
-    socket =
-      socket
-      |> assign(:mic_enabled, !socket.assigns.mic_enabled)
-      |> push_event("toggle-mic", %{})
-
-    {:noreply, socket}
-  end
-
-  def handle_event("toggle_camera", _params, socket) do
-    socket =
-      socket
-      |> assign(:camera_enabled, !socket.assigns.camera_enabled)
-      |> push_event("toggle-camera", %{})
-
-    {:noreply, socket}
-  end
-
-  def handle_event("toggle_screen_share", _params, socket) do
-    socket =
-      socket
-      |> assign(:screen_share_enabled, !socket.assigns.screen_share_enabled)
-      |> push_event("toggle-screen-share", %{})
-
-    {:noreply, socket}
   end
 
   def handle_event("noop", _params, socket), do: {:noreply, socket}
@@ -776,72 +578,6 @@ defmodule PlatformWeb.ChatLive do
     else
       _ -> {:noreply, socket}
     end
-  end
-
-  # ── Meeting Events ─────────────────────────────────────────────────────────
-
-  def handle_event("join_meeting", _params, socket) do
-    space = socket.assigns.active_space
-    user_id = socket.assigns.user_id
-    participant = socket.assigns.current_participant
-
-    if is_nil(space) or !Platform.Meetings.enabled?() do
-      {:noreply, socket}
-    else
-      case Platform.Meetings.ensure_room(space.id) do
-        {:ok, room_name} ->
-          display_name =
-            if participant,
-              do: participant.display_name || participant.participant_id,
-              else: user_id
-
-          token =
-            Platform.Meetings.generate_token(room_name, user_id, name: display_name)
-
-          livekit_url = Platform.Meetings.livekit_url()
-
-          {:noreply,
-           socket
-           |> assign(:meeting_active, true)
-           |> assign(:meeting_room_name, room_name)
-           |> push_event("join-meeting", %{token: token, url: livekit_url})}
-
-        {:error, reason} ->
-          require Logger
-          Logger.warning("[ChatLive] Failed to ensure meeting room: #{inspect(reason)}")
-          {:noreply, put_flash(socket, :error, "Could not start meeting. Please try again.")}
-      end
-    end
-  end
-
-  def handle_event("leave_meeting", _params, socket) do
-    {:noreply,
-     socket
-     |> assign(:meeting_active, false)
-     |> assign(:meeting_room_name, nil)
-     |> push_event("leave-meeting", %{})}
-  end
-
-  def handle_event("meeting-connected", _params, socket) do
-    {:noreply, socket}
-  end
-
-  def handle_event("meeting-disconnected", _params, socket) do
-    {:noreply,
-     socket
-     |> assign(:meeting_active, false)
-     |> assign(:meeting_room_name, nil)}
-  end
-
-  def handle_event("meeting-error", %{"reason" => reason}, socket) do
-    require Logger
-    Logger.warning("[ChatLive] Meeting error: #{reason}")
-
-    {:noreply,
-     socket
-     |> assign(:meeting_active, false)
-     |> assign(:meeting_room_name, nil)
-     |> put_flash(:error, "Meeting connection failed: #{reason}")}
   end
 
   def handle_event("toggle_watch", _params, socket) do
@@ -1157,59 +893,6 @@ defmodule PlatformWeb.ChatLive do
     end
   end
 
-  # ── Meeting presence updates ──────────────────────────────────────────────
-
-  def handle_info(
-        {:meeting_presence_update, %{space_id: space_id, active: active, count: count}},
-        socket
-      ) do
-    # Update sidebar meeting counts
-    meeting_counts =
-      if active do
-        Map.put(socket.assigns.meeting_counts, space_id, count)
-      else
-        Map.delete(socket.assigns.meeting_counts, space_id)
-      end
-
-    socket = assign(socket, :meeting_counts, meeting_counts)
-
-    # If this is the active space, also update the header presence
-    socket =
-      if socket.assigns.active_space && socket.assigns.active_space.id == space_id do
-        if active do
-          room = Meetings.get_active_room(space_id)
-          meeting_participants = Meetings.active_participants_for_space(space_id)
-
-          socket
-          |> assign(:meeting_active, true)
-          |> assign(:meeting_participants, meeting_participants)
-          |> assign(:meeting_participant_count, count)
-          |> assign(:meeting_room, room)
-          |> assign(:available_agents, load_available_agents(space_id, meeting_participants))
-        else
-          socket
-          |> assign(:meeting_active, false)
-          |> assign(:meeting_participants, [])
-          |> assign(:meeting_participant_count, 0)
-          |> assign(:meeting_room, nil)
-          |> assign(:show_agent_picker, false)
-          |> assign(:available_agents, [])
-        end
-      else
-        socket
-      end
-
-    {:noreply, socket}
-  end
-
-  def handle_info({:meeting_presence_summary, %{space_id: _space_id}}, socket) do
-    # Re-fetch all meeting counts for sidebar
-    all_spaces = socket.assigns.channels ++ socket.assigns.dm_conversations
-    space_ids = Enum.map(all_spaces, & &1.id)
-    meeting_counts = Meetings.active_meeting_counts(space_ids)
-    {:noreply, assign(socket, :meeting_counts, meeting_counts)}
-  end
-
   def handle_info(_msg, socket), do: {:noreply, socket}
 
   @impl true
@@ -1220,6 +903,7 @@ defmodule PlatformWeb.ChatLive do
     <div id="chat-state" phx-hook="ChatState" class="hidden"></div>
 
     <div id="meeting-client" phx-hook="MeetingClient" class="hidden"></div>
+    <div id="meeting-room" phx-hook="MeetingRoom" class="hidden"></div>
 
     <%!-- Notification opt-in banner (shown when permission not yet granted) --%>
     <div
@@ -1467,212 +1151,10 @@ defmodule PlatformWeb.ChatLive do
               </form>
             </div>
 
-            <%!-- Meeting presence indicator --%>
+            <%!-- Join Meeting button --%>
             <button
-              :if={@meeting_active}
-              id="meeting-presence"
-              phx-hook="MeetingRoom"
-              phx-click="join-meeting-click"
-              class="flex items-center gap-2 px-2 py-1 rounded-lg hover:bg-base-200 transition-colors group"
-              title={"#{@meeting_participant_count} in meeting — click to join"}
-            >
-              <%!-- Green pulsing dot --%>
-              <span class="bg-success rounded-full w-2 h-2 animate-pulse flex-shrink-0"></span>
-              <%!-- Participant avatars (desktop only, max 3 + overflow) --%>
-              <span class="hidden lg:flex items-center -space-x-2">
-                <span
-                  :for={p <- Enum.take(@meeting_participants, 3)}
-                  class={[
-                    "ring-2 rounded-full",
-                    cond do
-                      MapSet.member?(@active_speakers, p.identity) && p.agent_id ->
-                        "ring-primary meeting-avatar-speaking"
-
-                      MapSet.member?(@active_speakers, p.identity) ->
-                        "ring-success meeting-avatar-speaking"
-
-                      p.agent_id ->
-                        "ring-primary"
-
-                      true ->
-                        "ring-base-100"
-                    end
-                  ]}
-                  style={
-                    if MapSet.member?(@active_speakers, p.identity) && p.agent_id,
-                      do:
-                        "--speak-color: #{Platform.Agents.ColorPalette.accent_for(p.agent && p.agent.color)}80",
-                      else: ""
-                  }
-                >
-                  <%!-- Agent participant --%>
-                  <span
-                    :if={p.agent_id}
-                    class="relative flex items-center justify-center size-5 rounded-full text-white cursor-pointer group/agent"
-                    style={"background-color: #{Platform.Agents.ColorPalette.accent_for(p.agent && p.agent.color)}"}
-                    phx-click="dismiss_meeting_agent"
-                    phx-value-agent-id={p.agent_id}
-                    title={"Dismiss #{meeting_participant_name(p)}"}
-                  >
-                    <svg
-                      xmlns="http://www.w3.org/2000/svg"
-                      class="size-3 group-hover/agent:hidden"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      stroke-width="2.5"
-                      stroke-linecap="round"
-                      stroke-linejoin="round"
-                    >
-                      <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
-                    </svg>
-                    <svg
-                      xmlns="http://www.w3.org/2000/svg"
-                      class="size-3 hidden group-hover/agent:block"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      stroke-width="2.5"
-                      stroke-linecap="round"
-                      stroke-linejoin="round"
-                    >
-                      <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
-                    </svg>
-                    <span class="absolute -bottom-0.5 -right-0.5 flex items-center justify-center size-2.5 rounded-full bg-primary text-[5px] font-bold text-primary-content ring-1 ring-base-100">
-                      AI
-                    </span>
-                  </span>
-                  <%!-- Human participant --%>
-                  <.human_avatar
-                    :if={!p.agent_id}
-                    name={meeting_participant_name(p)}
-                    avatar_url={meeting_participant_avatar(p)}
-                    seed={p.id}
-                    size="xs"
-                  />
-                </span>
-                <span
-                  :if={@meeting_participant_count > 3}
-                  class="flex items-center justify-center size-5 rounded-full bg-base-300 text-[10px] font-semibold ring-2 ring-base-100"
-                >
-                  +{@meeting_participant_count - 3}
-                </span>
-              </span>
-              <%!-- "In call" label (desktop) --%>
-              <span class="hidden lg:inline text-xs text-success font-medium group-hover:text-success/80">
-                In call
-              </span>
-              <%!-- Compact count (mobile) --%>
-              <span class="lg:hidden text-xs text-success font-medium">
-                {@meeting_participant_count}
-              </span>
-            </button>
-
-            <%!-- Invite Agent button --%>
-            <div :if={@meeting_active} class="relative">
-              <button
-                phx-click="toggle_agent_picker"
-                class={[
-                  "flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-medium transition-colors",
-                  (@show_agent_picker && "bg-primary/10 text-primary") ||
-                    "text-base-content/50 hover:bg-base-200"
-                ]}
-                title="Invite agent to meeting"
-              >
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  class="size-4"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="2"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                >
-                  <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
-                </svg>
-                <span class="hidden lg:inline">Invite Agent</span>
-              </button>
-
-              <%!-- Agent picker popover --%>
-              <div
-                :if={@show_agent_picker}
-                phx-click-away="toggle_agent_picker"
-                class="absolute top-full right-0 mt-1 w-72 bg-base-100 border border-base-300 rounded-xl shadow-xl z-50"
-              >
-                <div class="px-3 py-2 border-b border-base-300">
-                  <div class="flex items-center gap-2 text-sm font-semibold">
-                    <svg
-                      xmlns="http://www.w3.org/2000/svg"
-                      class="size-4 text-primary"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      stroke-width="2"
-                      stroke-linecap="round"
-                      stroke-linejoin="round"
-                    >
-                      <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
-                    </svg>
-                    Invite Agent
-                  </div>
-                  <div class="text-xs text-base-content/50 mt-0.5">Available in this space</div>
-                </div>
-                <ul :if={@available_agents != []} class="py-1">
-                  <li
-                    :for={sa <- @available_agents}
-                    phx-click="invite_agent"
-                    phx-value-agent-id={sa.agent.id}
-                    class="flex items-center gap-3 px-3 py-2 cursor-pointer hover:bg-base-200 transition-colors"
-                  >
-                    <span
-                      class="flex items-center justify-center size-8 rounded-full text-white text-xs font-bold"
-                      style={"background-color: #{Platform.Agents.ColorPalette.accent_for(sa.agent.color)}"}
-                    >
-                      <svg
-                        xmlns="http://www.w3.org/2000/svg"
-                        class="size-4"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        stroke-width="2"
-                        stroke-linecap="round"
-                        stroke-linejoin="round"
-                      >
-                        <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
-                      </svg>
-                    </span>
-                    <div class="flex-1 min-w-0">
-                      <div class="flex items-center gap-1.5">
-                        <span class="text-sm font-medium truncate">{sa.agent.name}</span>
-                        <span class="inline-flex items-center px-1 py-0.5 text-[9px] font-bold uppercase tracking-wider rounded bg-primary/10 text-primary">
-                          AI
-                        </span>
-                      </div>
-                      <div :if={sa.agent.slug} class="text-xs text-base-content/50 truncate">
-                        {sa.agent.slug}
-                      </div>
-                    </div>
-                    <span class="flex items-center gap-1 text-xs text-success">
-                      <span class="bg-success rounded-full w-1.5 h-1.5"></span> Online
-                    </span>
-                  </li>
-                </ul>
-                <div
-                  :if={@available_agents == []}
-                  class="px-3 py-4 text-center text-xs text-base-content/50"
-                >
-                  No agents available
-                </div>
-                <div class="px-3 py-1.5 border-t border-base-300 text-[10px] text-base-content/40">
-                  v1 supports one agent at a time
-                </div>
-              </div>
-            </div>
-            <%!-- Join Meeting button (meetings enabled, not in meeting, no active indicator) --%>
-            <button
-              :if={@meetings_enabled && !@in_meeting && !@meeting_active}
-              phx-click="join_meeting"
+              :if={@meetings_enabled && !@in_meeting}
+              phx-click="meeting_join"
               class="flex items-center gap-1.5 px-2 py-1 rounded-lg text-xs font-medium text-base-content/60 hover:text-primary hover:bg-primary/10 transition-colors"
               title="Start or join a meeting in this space"
             >
@@ -1708,52 +1190,6 @@ defmodule PlatformWeb.ChatLive do
                   </button>
                 </div>
               </.form>
-
-              <%!-- Join Meeting button (gated by meetings_enabled) --%>
-              <button
-                :if={@meetings_enabled && !@meeting_active}
-                phx-click="join_meeting"
-                class="flex items-center gap-1 rounded px-2 py-0.5 text-xs text-base-content/50 hover:text-base-content transition-colors hover:bg-base-300"
-                title="Join meeting"
-              >
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  class="size-4"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="2"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                >
-                  <polygon points="23 7 16 12 23 17 23 7" />
-                  <rect x="1" y="5" width="15" height="14" rx="2" ry="2" />
-                </svg>
-                <span class="hidden md:inline">Meet</span>
-              </button>
-
-              <button
-                :if={@meetings_enabled && @meeting_active}
-                phx-click="leave_meeting"
-                class="flex items-center gap-1 rounded px-2 py-0.5 text-xs text-error hover:text-error/80 transition-colors hover:bg-error/10"
-                title="Leave meeting"
-              >
-                <svg
-                  xmlns="http://www.w3.org/2000/svg"
-                  class="size-4"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="2"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                >
-                  <polygon points="23 7 16 12 23 17 23 7" />
-                  <rect x="1" y="5" width="15" height="14" rx="2" ry="2" />
-                  <line x1="1" y1="1" x2="23" y2="23" />
-                </svg>
-                <span class="hidden md:inline">Leave</span>
-              </button>
 
               <button
                 :if={@canvases != []}
@@ -2030,116 +1466,6 @@ defmodule PlatformWeb.ChatLive do
                   Create canvas
                 </button>
               </.form>
-            </div>
-          </div>
-
-          <%!-- Meeting Panel --%>
-          <div
-            :if={@meeting_active}
-            id="meeting-panel"
-            phx-hook="MeetingRoom"
-            class="bg-base-200 border-b border-base-300"
-          >
-            <div class="px-4 py-3">
-              <div class="flex items-center justify-between mb-3">
-                <div class="flex items-center gap-2">
-                  <span class="inline-block w-2 h-2 rounded-full bg-success animate-pulse"></span>
-                  <span class="text-sm font-medium text-base-content">Meeting in progress</span>
-                  <span data-connection-state class="text-xs text-base-content/50"></span>
-                </div>
-                <button
-                  data-meeting-action="leave"
-                  class="btn btn-error btn-xs gap-1"
-                >
-                  <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    class="size-3"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="2"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                  >
-                    <path d="M10.68 13.31a16 16 0 0 0 3.41 2.6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7 2 2 0 0 1 1.72 2v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91" />
-                    <line x1="23" y1="1" x2="1" y2="23" />
-                  </svg>
-                  Leave
-                </button>
-              </div>
-
-              <%!-- Participant grid --%>
-              <div
-                data-meeting-grid
-                class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2 min-h-[120px] max-h-[300px] overflow-y-auto"
-              >
-              </div>
-
-              <%!-- Controls bar --%>
-              <div class="flex items-center justify-center gap-3 mt-3 pt-3 border-t border-base-300">
-                <button
-                  data-meeting-action="toggle-mic"
-                  class="meeting-control-active btn btn-circle btn-sm btn-ghost"
-                  title="Toggle microphone"
-                >
-                  <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    class="size-4"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="2"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                  >
-                    <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z" />
-                    <path d="M19 10v2a7 7 0 0 1-14 0v-2" />
-                    <line x1="12" y1="19" x2="12" y2="23" />
-                    <line x1="8" y1="23" x2="16" y2="23" />
-                  </svg>
-                </button>
-
-                <button
-                  data-meeting-action="toggle-camera"
-                  class="meeting-control-muted btn btn-circle btn-sm btn-ghost"
-                  title="Toggle camera"
-                >
-                  <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    class="size-4"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="2"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                  >
-                    <polygon points="23 7 16 12 23 17 23 7" />
-                    <rect x="1" y="5" width="15" height="14" rx="2" ry="2" />
-                  </svg>
-                </button>
-
-                <button
-                  data-meeting-action="toggle-screenshare"
-                  class="meeting-control-muted btn btn-circle btn-sm btn-ghost"
-                  title="Share screen"
-                >
-                  <svg
-                    xmlns="http://www.w3.org/2000/svg"
-                    class="size-4"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="2"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                  >
-                    <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
-                    <line x1="8" y1="21" x2="16" y2="21" />
-                    <line x1="12" y1="17" x2="12" y2="21" />
-                  </svg>
-                </button>
-              </div>
             </div>
           </div>
 
@@ -3024,7 +2350,7 @@ defmodule PlatformWeb.ChatLive do
               </span>
             </div>
             <button
-              phx-click="leave_meeting"
+              phx-click="meeting_leave"
               class="btn btn-ghost btn-xs text-error"
               title="Leave meeting"
             >
@@ -3050,7 +2376,7 @@ defmodule PlatformWeb.ChatLive do
           <%!-- Controls bar --%>
           <div class="flex items-center justify-center gap-2 border-t border-base-300 px-4 py-3">
             <button
-              phx-click="toggle_mic"
+              phx-click="meeting_toggle_mic"
               class={[
                 "meeting-control-btn rounded-full p-2.5 transition-colors",
                 if(@mic_enabled,
@@ -3068,7 +2394,7 @@ defmodule PlatformWeb.ChatLive do
             </button>
 
             <button
-              phx-click="toggle_camera"
+              phx-click="meeting_toggle_camera"
               class={[
                 "meeting-control-btn rounded-full p-2.5 transition-colors",
                 if(@camera_enabled,
@@ -3086,7 +2412,7 @@ defmodule PlatformWeb.ChatLive do
             </button>
 
             <button
-              phx-click="toggle_screen_share"
+              phx-click="meeting_toggle_screen_share"
               class={[
                 "meeting-control-btn rounded-full p-2.5 transition-colors",
                 if(@screen_share_enabled,
@@ -3100,7 +2426,7 @@ defmodule PlatformWeb.ChatLive do
             </button>
 
             <button
-              phx-click="leave_meeting"
+              phx-click="meeting_leave"
               class="meeting-control-btn rounded-full p-2.5 bg-error text-error-content hover:bg-error/80 transition-colors"
               title="Leave meeting"
             >
@@ -3125,7 +2451,7 @@ defmodule PlatformWeb.ChatLive do
                   0:00
                 </span>
               </div>
-              <button phx-click="leave_meeting" class="btn btn-ghost btn-xs" title="Back to chat">
+              <button phx-click="meeting_leave" class="btn btn-ghost btn-xs" title="Back to chat">
                 <span class="hero-arrow-left size-4"></span>
                 <span class="text-xs">Chat</span>
               </button>
@@ -3137,7 +2463,7 @@ defmodule PlatformWeb.ChatLive do
 
             <div class="flex items-center justify-center gap-3 border-t border-base-300 px-4 py-4 safe-area-bottom">
               <button
-                phx-click="toggle_mic"
+                phx-click="meeting_toggle_mic"
                 class={[
                   "meeting-control-btn rounded-full p-3 transition-colors",
                   if(@mic_enabled,
@@ -3154,7 +2480,7 @@ defmodule PlatformWeb.ChatLive do
               </button>
 
               <button
-                phx-click="toggle_camera"
+                phx-click="meeting_toggle_camera"
                 class={[
                   "meeting-control-btn rounded-full p-3 transition-colors",
                   if(@camera_enabled,
@@ -3171,7 +2497,7 @@ defmodule PlatformWeb.ChatLive do
               </button>
 
               <button
-                phx-click="toggle_screen_share"
+                phx-click="meeting_toggle_screen_share"
                 class={[
                   "meeting-control-btn rounded-full p-3 transition-colors",
                   if(@screen_share_enabled,
@@ -3184,7 +2510,7 @@ defmodule PlatformWeb.ChatLive do
               </button>
 
               <button
-                phx-click="leave_meeting"
+                phx-click="meeting_leave"
                 class="meeting-control-btn rounded-full p-3 bg-error text-error-content hover:bg-error/80 transition-colors"
               >
                 <span class="hero-phone-x-mark size-6"></span>
@@ -3555,34 +2881,6 @@ defmodule PlatformWeb.ChatLive do
     Chat.display_name_for_space(space, participants, user_id)
   end
 
-  defp meeting_participant_name(%{display_name: name}) when is_binary(name) and name != "",
-    do: name
-
-  defp meeting_participant_name(%{user: %{display_name: name}})
-       when is_binary(name) and name != "", do: name
-
-  defp meeting_participant_name(%{agent: %{name: name}}) when is_binary(name) and name != "",
-    do: name
-
-  defp meeting_participant_name(%{identity: identity}) when is_binary(identity), do: identity
-  defp meeting_participant_name(_), do: "User"
-
-  defp meeting_participant_avatar(%{user: %{avatar_url: url}}) when is_binary(url) and url != "",
-    do: url
-
-  defp meeting_participant_avatar(_), do: nil
-
-  defp load_available_agents(space_id, meeting_participants) do
-    agent_ids_in_meeting =
-      meeting_participants
-      |> Enum.filter(& &1.agent_id)
-      |> Enum.map(& &1.agent_id)
-      |> MapSet.new()
-
-    Platform.Chat.list_space_agents(space_id)
-    |> Enum.reject(fn sa -> MapSet.member?(agent_ids_in_meeting, sa.agent.id) end)
-  end
-
   defp sidebar_display_name(space, current_user_id) do
     participants = Chat.list_participants(space.id)
     Chat.display_name_for_space(space, participants, current_user_id)
@@ -3722,11 +3020,7 @@ defmodule PlatformWeb.ChatLive do
 
   @impl true
   def terminate(_reason, socket) do
-    # Prevent ghost mini-bars when tab is closed during active meeting
-    if socket.assigns[:in_meeting] do
-      MeetingState.broadcast_left(socket.assigns.user_id)
-    end
-
+    MeetingHooks.on_terminate(socket)
     :ok
   end
 end
