@@ -54,7 +54,6 @@ const MeetingClient = {
     room.on(RoomEvent.ActiveSpeakersChanged, (speakers) => {
       const identities = speakers.map((p) => p.identity)
       this._markSpeakers(identities)
-      this.pushEvent("meeting_active_speaker", { identities })
     })
     room.on(RoomEvent.Disconnected, () => {
       this._cleanupRoom()

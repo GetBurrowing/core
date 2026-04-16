@@ -95,12 +95,11 @@ const MeetingRoom = {
   },
 
   /**
-   * Handle activeSpeakersChanged — push the list of speaking identities
-   * to the LiveView for rendering speaking indicators.
+   * Handle activeSpeakersChanged — no-op for now; tile highlighting is
+   * done client-side by MeetingClient._markSpeakers.
    */
-  _onActiveSpeaker(speakers) {
-    const identities = speakers.map(p => p.identity)
-    this.pushEvent("meeting_active_speaker", { identities })
+  _onActiveSpeaker(_speakers) {
+    // no-op
   },
 }
 
