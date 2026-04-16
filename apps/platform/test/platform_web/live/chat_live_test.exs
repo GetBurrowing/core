@@ -498,13 +498,13 @@ defmodule PlatformWeb.ChatLiveTest do
         ])
 
       # Open the upload staging dialog so file previews are visible
-      view |> element("button[phx-click=show_upload_dialog]") |> render_click()
+      view |> element("button[phx-click=upload_dialog_open]") |> render_click()
 
       assert render_upload(upload, "hello.txt") =~ "hello.txt"
 
       # Set the caption via the change event, then send via the dialog button
-      render_change(view, "upload_caption_changed", %{"caption" => "see file"})
-      render_click(view, "send_upload")
+      render_change(view, "upload_caption_change", %{"caption" => "see file"})
+      render_click(view, "upload_send")
 
       html = render(view)
 

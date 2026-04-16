@@ -65,7 +65,7 @@ const DragDropUpload = {
       this.uploadTo(this.el, "attachments", files);
 
       // Tell the server to open the staging dialog
-      this.pushEvent("show_upload_dialog", {});
+      this.pushEvent("upload_dialog_open", {});
     };
 
     this._onPaste = (e) => {
@@ -98,7 +98,7 @@ const DragDropUpload = {
 
       // Queue pasted images and open dialog
       this.uploadTo(this.el, "attachments", imageFiles);
-      this.pushEvent("show_upload_dialog", {});
+      this.pushEvent("upload_dialog_open", {});
     };
 
     this.el.addEventListener("dragenter", this._onDragEnter);

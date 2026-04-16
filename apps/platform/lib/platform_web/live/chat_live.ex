@@ -38,6 +38,7 @@ defmodule PlatformWeb.ChatLive do
   alias PlatformWeb.ChatLive.PinHooks
   alias PlatformWeb.ChatLive.SearchHooks
   alias PlatformWeb.ChatLive.SettingsComponent
+  alias PlatformWeb.ChatLive.UploadHooks
 
   @message_limit 50
   @quick_emojis ["👍", "❤️", "😂", "🎉"]
@@ -107,10 +108,7 @@ defmodule PlatformWeb.ChatLive do
       |> assign(:streaming_replies, %{})
       |> assign(:push_permission, "unknown")
       |> assign(:unread_counts, if(user_id, do: Chat.unread_counts_for_user(user_id), else: %{}))
-      |> assign(:upload_dialog_open, false)
-      |> assign(:upload_caption, "")
       |> assign(:lightbox_url, nil)
-      |> assign(:upload_tagged_agents, MapSet.new())
       |> assign(:drafts, %{})
       |> assign(:meeting_active, false)
       |> assign(:meeting_room_name, nil)
@@ -165,6 +163,7 @@ defmodule PlatformWeb.ChatLive do
       |> PinHooks.attach()
       |> SearchHooks.attach()
       |> MentionsHooks.attach()
+      |> UploadHooks.attach()
 
     {:ok, socket}
   end
@@ -457,28 +456,9 @@ defmodule PlatformWeb.ChatLive do
     {:noreply, assign(socket, :lightbox_url, nil)}
   end
 
-  def handle_event("show_upload_dialog", _params, socket) do
-    {:noreply, assign(socket, :upload_dialog_open, true)}
-  end
-
-  def handle_event("hide_upload_dialog", _params, socket) do
-    socket =
-      Enum.reduce(socket.assigns.uploads.attachments.entries, socket, fn entry, acc ->
-        cancel_upload(acc, :attachments, entry.ref)
-      end)
-
-    {:noreply,
-     socket
-     |> assign(:upload_dialog_open, false)
-     |> assign(:upload_caption, "")
-     |> assign(:upload_tagged_agents, MapSet.new())}
-  end
-
-  def handle_event("upload_caption_changed", %{"caption" => text}, socket) do
-    {:noreply, assign(socket, :upload_caption, text)}
-  end
-
-  def handle_event("send_upload", _params, socket) do
+  # Cross-feature: upload_send creates a message with attachments
+  # (MessageList concern). Stays on parent until MessageList extracts.
+  def handle_event("upload_send", _params, socket) do
     with space when not is_nil(space) <- socket.assigns.active_space,
          participant when not is_nil(participant) <- socket.assigns.current_participant do
       caption = String.trim(socket.assigns.upload_caption || "")
@@ -512,9 +492,7 @@ defmodule PlatformWeb.ChatLive do
            socket
            |> stream_insert(:messages, msg)
            |> put_attachment_map_entry(msg.id, attachments)
-           |> assign(:upload_dialog_open, false)
-           |> assign(:upload_caption, "")
-           |> assign(:upload_tagged_agents, MapSet.new())}
+           |> UploadHooks.reset()}
 
         {:noop, _socket} ->
           {:noreply, put_flash(socket, :info, "No files selected")}
@@ -525,21 +503,6 @@ defmodule PlatformWeb.ChatLive do
     else
       _ -> {:noreply, socket}
     end
-  end
-
-  def handle_event("cancel_upload", %{"ref" => ref}, socket) do
-    {:noreply, cancel_upload(socket, :attachments, ref)}
-  end
-
-  def handle_event("toggle_upload_agent_tag", %{"agent" => slug}, socket) do
-    tagged = socket.assigns.upload_tagged_agents
-
-    tagged =
-      if MapSet.member?(tagged, slug),
-        do: MapSet.delete(tagged, slug),
-        else: MapSet.put(tagged, slug)
-
-    {:noreply, assign(socket, :upload_tagged_agents, tagged)}
   end
 
   def handle_event("join-meeting-click", _params, socket) do
@@ -3097,7 +3060,7 @@ defmodule PlatformWeb.ChatLive do
               <div class="compose-pill-bar">
                 <button
                   type="button"
-                  phx-click="show_upload_dialog"
+                  phx-click="upload_dialog_open"
                   class="compose-pill-attach cursor-pointer text-base-content/50 hover:bg-base-300/50 transition-colors"
                   title="Attach files"
                 >
@@ -3150,7 +3113,7 @@ defmodule PlatformWeb.ChatLive do
 
           <%!-- Upload staging dialog --%>
           <%= if @upload_dialog_open do %>
-            <div class="upload-backdrop" phx-click="hide_upload_dialog">
+            <div class="upload-backdrop" phx-click="upload_dialog_close">
               <div class="upload-panel" phx-click="noop">
                 <%!-- Header --%>
                 <div class="upload-header">
@@ -3170,7 +3133,7 @@ defmodule PlatformWeb.ChatLive do
                       <strong>{"##{(@active_space && @active_space.name) || ""}"}</strong>
                     </div>
                   </div>
-                  <button type="button" class="upload-close" phx-click="hide_upload_dialog">
+                  <button type="button" class="upload-close" phx-click="upload_dialog_close">
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                       <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
                     </svg>
@@ -3236,7 +3199,7 @@ defmodule PlatformWeb.ChatLive do
                       <button
                         type="button"
                         class="upload-thumb-remove"
-                        phx-click="cancel_upload"
+                        phx-click="upload_entry_cancel"
                         phx-value-ref={entry.ref}
                       >
                         ×
@@ -3299,7 +3262,7 @@ defmodule PlatformWeb.ChatLive do
                       }
                       type="button"
                       class={"agent-chip #{slug}#{if MapSet.member?(@upload_tagged_agents, slug), do: " selected", else: ""}"}
-                      phx-click="toggle_upload_agent_tag"
+                      phx-click="upload_toggle_agent"
                       phx-value-agent={slug}
                     >
                       <span class="chip-dot"></span> {label}
@@ -3309,7 +3272,7 @@ defmodule PlatformWeb.ChatLive do
 
                 <%!-- Comment --%>
                 <div :if={@uploads.attachments.entries != []} class="upload-comment">
-                  <form phx-change="upload_caption_changed" phx-submit="send_upload">
+                  <form phx-change="upload_caption_change" phx-submit="upload_send">
                     <textarea
                       name="caption"
                       class="upload-comment-input"
@@ -3326,13 +3289,13 @@ defmodule PlatformWeb.ChatLive do
                     {if length(@uploads.attachments.entries) == 1, do: "image", else: "images"} selected
                   </div>
                   <div class="upload-footer-actions">
-                    <button type="button" class="upload-btn-cancel" phx-click="hide_upload_dialog">
+                    <button type="button" class="upload-btn-cancel" phx-click="upload_dialog_close">
                       Cancel
                     </button>
                     <button
                       type="button"
                       class="upload-btn-send"
-                      phx-click="send_upload"
+                      phx-click="upload_send"
                       disabled={@uploads.attachments.entries == []}
                     >
                       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
