@@ -40,6 +40,7 @@ defmodule PlatformWeb.ChatLive do
   alias PlatformWeb.ChatLive.NewChannelComponent
   alias PlatformWeb.ChatLive.NewConversationComponent
   alias PlatformWeb.ChatLive.PinHooks
+  alias PlatformWeb.ChatLive.PresenceHooks
   alias PlatformWeb.ChatLive.SearchHooks
   alias PlatformWeb.ChatLive.SettingsComponent
   alias PlatformWeb.ChatLive.UploadHooks
@@ -48,8 +49,6 @@ defmodule PlatformWeb.ChatLive do
   @quick_emojis ["👍", "❤️", "😂", "🎉"]
   @max_upload_entries 5
   @max_upload_size 15_000_000
-  @agent_presence_refresh_ms 30_000
-
   @impl true
   def mount(_params, session, socket) do
     user_id = session["current_user_id"] || Ecto.UUID.generate()
@@ -65,14 +64,7 @@ defmodule PlatformWeb.ChatLive do
       |> assign(:channels, channels)
       |> assign(:dm_conversations, dm_conversations)
       |> assign(:active_space, nil)
-      |> assign(:space_participants, [])
       |> assign(:highlighted_thread_message_id, nil)
-      |> assign(:participants_map, %{})
-      |> assign(:agent_participant_ids, MapSet.new())
-      |> assign(:agent_colors_map, %{})
-      |> assign(:online_count, 0)
-      |> assign(:agent_presence, default_agent_presence())
-      |> assign(:has_agent_participant, false)
       |> assign(:current_participant, nil)
       |> assign(:reactions_map, %{})
       |> assign(:attachments_map, %{})
@@ -95,7 +87,6 @@ defmodule PlatformWeb.ChatLive do
       |> assign(:show_new_conversation_modal, false)
       |> assign(:show_settings, false)
       |> assign(:quick_emojis, @quick_emojis)
-      |> assign(:agent_typing_pids, MapSet.new())
       |> assign(:streaming_replies, %{})
       |> assign(:push_permission, "unknown")
       |> assign(:unread_counts, if(user_id, do: Chat.unread_counts_for_user(user_id), else: %{}))
@@ -150,6 +141,7 @@ defmodule PlatformWeb.ChatLive do
 
     socket =
       socket
+      |> PresenceHooks.attach()
       |> PinHooks.attach()
       |> SearchHooks.attach()
       |> MentionsHooks.attach()
@@ -173,9 +165,7 @@ defmodule PlatformWeb.ChatLive do
           MeetingsPubSub.unsubscribe_room(prev_room.id)
         end
 
-        if connected?(socket) do
-          ChatPresence.untrack_in_space(self(), prev.id, socket.assigns.user_id)
-        end
+        socket = PresenceHooks.leave_space(socket, prev.id)
 
         outgoing_draft = socket.assigns.compose_form[:text].value || ""
         update(socket, :drafts, &Map.put(&1, prev.id, outgoing_draft))
@@ -198,7 +188,6 @@ defmodule PlatformWeb.ChatLive do
       end
 
       participant = ensure_participant(space.id, socket.assigns.user_id)
-      agent_presence = ensure_native_agent_presence(space.id)
 
       # Subscribe to meeting room presence for this space and load participants
       {meeting_room, meeting_participants, meeting_active, meeting_participant_count} =
@@ -216,15 +205,6 @@ defmodule PlatformWeb.ChatLive do
           {nil, [], false, 0}
         end
 
-      if connected?(socket) && participant do
-        display_name = resolve_display_name(socket.assigns.user_id, participant)
-
-        ChatPresence.track_in_space(self(), space.id, socket.assigns.user_id, %{
-          display_name: display_name,
-          participant_type: "user"
-        })
-      end
-
       messages = load_channel_messages(space.id)
       latest_message = List.last(messages)
 
@@ -233,24 +213,6 @@ defmodule PlatformWeb.ChatLive do
       end
 
       participants = Chat.list_participants(space.id)
-
-      users_by_id =
-        participants
-        |> Enum.filter(&(&1.participant_type == "user"))
-        |> Enum.map(& &1.participant_id)
-        |> Accounts.get_users_map()
-
-      participants_map = build_participant_identity_map(participants, users_by_id)
-
-      agent_participant_ids =
-        participants |> Enum.filter(&(&1.participant_type == "agent")) |> MapSet.new(& &1.id)
-
-      agent_colors_map = Chat.agent_color_map_for_participants(participants)
-
-      has_agent_participant = Enum.any?(participants, &(&1.participant_type == "agent"))
-
-      online_count =
-        if connected?(socket), do: ChatPresence.online_count(space.id), else: 0
 
       reactions_map = build_reactions_map(messages, participant)
       attachments_map = build_attachments_map(messages)
@@ -267,16 +229,8 @@ defmodule PlatformWeb.ChatLive do
        socket
        |> assign(:page_title, page_title)
        |> assign(:active_space, space)
-       |> assign(:space_participants, participants)
+       |> PresenceHooks.enter_space(space, participant, participants)
        |> SearchHooks.reset_for_space()
-       |> assign(:participants_map, participants_map)
-       |> assign(:agent_participant_ids, agent_participant_ids)
-       |> assign(:agent_colors_map, agent_colors_map)
-       |> assign(:online_count, online_count)
-       |> assign(:agent_presence, agent_presence)
-       |> assign(:has_agent_participant, has_agent_participant)
-       |> assign(:agent_status, PlatformWeb.ShellLive.default_agent_status())
-       |> assign(:agent_typing_pids, MapSet.new())
        |> assign(:streaming_replies, %{})
        |> MentionsHooks.reset_for_space()
        |> assign(:current_participant, participant)
@@ -307,7 +261,6 @@ defmodule PlatformWeb.ChatLive do
        |> assign(:meeting_active, false)
        |> assign(:meeting_room_name, nil)
        |> stream(:messages, messages, reset: true)
-       |> schedule_agent_presence_refresh()
        |> clear_unread(space.id)
        |> restore_draft(space.id)}
     end
@@ -1189,89 +1142,6 @@ defmodule PlatformWeb.ChatLive do
       {:noreply, socket}
   end
 
-  def handle_info({:participant_joined, participant}, socket) do
-    user =
-      if participant.participant_type == "user" do
-        Accounts.get_user(participant.participant_id)
-      else
-        nil
-      end
-
-    {:noreply,
-     update(socket, :participants_map, fn map ->
-       Map.put(map, participant.id, participant_identity(participant, user))
-     end)}
-  end
-
-  def handle_info({:participant_left, _participant}, socket) do
-    {:noreply, socket}
-  end
-
-  def handle_info(%Phoenix.Socket.Broadcast{event: "presence_diff"}, socket) do
-    online_count =
-      if space = socket.assigns.active_space do
-        ChatPresence.online_count(space.id)
-      else
-        0
-      end
-
-    {:noreply, assign(socket, :online_count, online_count)}
-  end
-
-  def handle_info(:refresh_agent_presence, socket) do
-    socket =
-      case socket.assigns.active_space do
-        nil ->
-          socket
-
-        space ->
-          agent_presence = ChatPresence.native_agent_presence(space.id)
-
-          socket
-          |> assign(:agent_presence, agent_presence)
-          |> assign(:agent_status, PlatformWeb.ShellLive.default_agent_status())
-          |> schedule_agent_presence_refresh()
-      end
-
-    {:noreply, socket}
-  end
-
-  def handle_info({:agent_typing, %{typing: typing, participant_id: participant_id}}, socket) do
-    socket =
-      socket
-      |> update(:agent_typing_pids, fn pids ->
-        if typing, do: MapSet.put(pids, participant_id), else: MapSet.delete(pids, participant_id)
-      end)
-      |> assign(
-        :agent_status,
-        if(typing, do: :thinking, else: PlatformWeb.ShellLive.default_agent_status())
-      )
-
-    # Update composite status for the roster indicator (busy when any agent is typing)
-    any_typing = not MapSet.equal?(socket.assigns.agent_typing_pids, MapSet.new())
-
-    socket =
-      if socket.assigns[:principal_name] do
-        if any_typing do
-          assign(socket, :composite_status, :busy)
-        else
-          # Recalculate from roster when typing stops
-          case socket.assigns[:active_space] do
-            %{id: space_id} ->
-              composite = Platform.Chat.SpaceAgentPresence.composite_status_for_space(space_id)
-              assign(socket, :composite_status, composite)
-
-            _ ->
-              socket
-          end
-        end
-      else
-        socket
-      end
-
-    {:noreply, socket}
-  end
-
   def handle_info(
         {:agent_reply_chunk,
          %{chunk_id: chunk_id, text: text, done: done, participant_id: participant_id}},
@@ -1933,7 +1803,7 @@ defmodule PlatformWeb.ChatLive do
               >
                 <span>🟢</span>
                 <span class="hidden md:inline">
-                  {primary_agent_label(@active_space, @space_participants)} listening
+                  {PresenceHooks.primary_agent_label(@active_space, @space_participants)} listening
                 </span>
               </span>
 
@@ -2004,7 +1874,7 @@ defmodule PlatformWeb.ChatLive do
                 class="block w-full rounded-xl border border-base-300 bg-base-100 px-3 py-2 text-left transition-colors hover:border-primary/40 hover:bg-base-100/80"
               >
                 <div class="flex flex-wrap items-center gap-2 text-[11px] uppercase tracking-widest text-base-content/50">
-                  <span>{sender_name(@participants_map, result.participant_id)}</span>
+                  <span>{PresenceHooks.sender_name(@participants_map, result.participant_id)}</span>
                   <.local_time
                     id={"search-time-#{result.id}"}
                     timestamp={result.inserted_at}
@@ -2310,13 +2180,15 @@ defmodule PlatformWeb.ChatLive do
               <div class="flex-shrink-0 mt-0.5 message-avatar">
                 <%= if MapSet.member?(@agent_participant_ids, msg.participant_id) do %>
                   <div class="w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold select-none bg-base-300 text-primary msg-agent-avatar">
-                    {avatar_initial(@participants_map, msg.participant_id)}
+                    {PresenceHooks.avatar_initial(@participants_map, msg.participant_id)}
                   </div>
                 <% else %>
                   <.human_avatar
-                    name={sender_name(@participants_map, msg.participant_id)}
-                    avatar_url={sender_avatar_url(@participants_map, msg.participant_id)}
-                    seed={sender_avatar_seed(@participants_map, msg.participant_id)}
+                    name={PresenceHooks.sender_name(@participants_map, msg.participant_id)}
+                    avatar_url={
+                      PresenceHooks.sender_avatar_url(@participants_map, msg.participant_id)
+                    }
+                    seed={PresenceHooks.sender_avatar_seed(@participants_map, msg.participant_id)}
                     size="md"
                   />
                 <% end %>
@@ -2332,7 +2204,7 @@ defmodule PlatformWeb.ChatLive do
                       else: "text-base-content"
                     )
                   ]}>
-                    {sender_name(@participants_map, msg.participant_id)}
+                    {PresenceHooks.sender_name(@participants_map, msg.participant_id)}
                     <span
                       :if={MapSet.member?(@agent_participant_ids, msg.participant_id)}
                       class="msg-agent-badge"
@@ -2575,7 +2447,7 @@ defmodule PlatformWeb.ChatLive do
                         ]}
                         style="width:28px;height:28px;font-size:10px"
                       >
-                        {avatar_initial(@participants_map, tmsg.participant_id)}
+                        {PresenceHooks.avatar_initial(@participants_map, tmsg.participant_id)}
                       </div>
                       <div class="msg-body">
                         <div class="msg-header">
@@ -2585,7 +2457,7 @@ defmodule PlatformWeb.ChatLive do
                               do: "ai-name"
                             )
                           ]}>
-                            {sender_name(@participants_map, tmsg.participant_id)}
+                            {PresenceHooks.sender_name(@participants_map, tmsg.participant_id)}
                           </span>
                           <span
                             :if={MapSet.member?(@agent_participant_ids, tmsg.participant_id)}
@@ -2720,11 +2592,11 @@ defmodule PlatformWeb.ChatLive do
           >
             <div class="flex items-start gap-2">
               <div class="flex size-7 shrink-0 items-center justify-center rounded-full bg-base-300 text-xs font-medium msg-agent-avatar">
-                {avatar_initial(@participants_map, entry.participant_id)}
+                {PresenceHooks.avatar_initial(@participants_map, entry.participant_id)}
               </div>
               <div class="min-w-0 flex-1">
                 <div class="text-xs font-medium mb-0.5 msg-agent-name">
-                  {sender_name(@participants_map, entry.participant_id)}
+                  {PresenceHooks.sender_name(@participants_map, entry.participant_id)}
                 </div>
                 <div
                   class="prose prose-sm max-w-none text-sm text-base-content/80 border-l-2 pl-3"
@@ -2761,7 +2633,9 @@ defmodule PlatformWeb.ChatLive do
               >
               </span>
             </span>
-            <span>{thinking_label(@agent_typing_pids, @participants_map)} is thinking…</span>
+            <span>
+              {PresenceHooks.thinking_label(@agent_typing_pids, @participants_map)} is thinking…
+            </span>
           </div>
 
           <div class="flex-shrink-0 compose-input-area safe-area-bottom">
@@ -2787,7 +2661,7 @@ defmodule PlatformWeb.ChatLive do
                       phx-click={
                         JS.dispatch("chat:insert-mention",
                           to: "##{@compose_form[:text].id}",
-                          detail: %{name: participant_name(suggestion)}
+                          detail: %{name: suggestion.name}
                         )
                       }
                       class="flex w-full items-center gap-2 px-3 py-2 text-sm hover:bg-base-200 text-left transition-colors"
@@ -2795,22 +2669,22 @@ defmodule PlatformWeb.ChatLive do
                       <%= if suggestion.participant_type == "agent" do %>
                         <div class="w-6 h-6 rounded-full bg-primary text-primary-content flex items-center justify-center text-xs font-bold flex-shrink-0">
                           {suggestion
-                          |> participant_name()
+                          |> Map.get(:name)
                           |> String.trim()
                           |> String.first()
                           |> String.upcase()}
                         </div>
                       <% else %>
                         <.human_avatar
-                          name={participant_name(suggestion)}
-                          avatar_url={participant_avatar_url(suggestion)}
-                          seed={participant_avatar_seed(suggestion)}
+                          name={suggestion.name}
+                          avatar_url={suggestion.avatar_url}
+                          seed={suggestion.avatar_seed}
                           size="sm"
                           class="flex-shrink-0"
                         />
                       <% end %>
                       <span class="flex-1 truncate font-medium">
-                        {participant_name(suggestion)}
+                        {suggestion.name}
                       </span>
                       <span class={[
                         "rounded-full px-1.5 py-0.5 text-[10px] uppercase tracking-wider",
@@ -3723,13 +3597,6 @@ defmodule PlatformWeb.ChatLive do
     update(socket, :unread_counts, &Map.delete(&1, space_id))
   end
 
-  defp thinking_label(pids, participants_map) do
-    pids
-    |> MapSet.to_list()
-    |> Enum.map(&sender_name(participants_map, &1))
-    |> Enum.join(" & ")
-  end
-
   defp unread_label(count) when count >= 9, do: "9+"
   defp unread_label(count) when count > 0, do: Integer.to_string(count)
   defp unread_label(_), do: nil
@@ -3776,185 +3643,6 @@ defmodule PlatformWeb.ChatLive do
     end
   end
 
-  defp resolve_display_name(user_id, participant) do
-    participant.display_name || name_for_user(user_id)
-  end
-
-  defp ensure_native_agent_presence(space_id) do
-    # Use non-blocking status() for initial render, then boot async
-    status = WorkspaceBootstrap.status()
-
-    case status do
-      %{configured?: true, agent: %{} = agent} ->
-        _ = Chat.ensure_agent_participant(space_id, agent, display_name: agent.name)
-
-        if status.pid, do: allow_runtime_sandbox(status.pid)
-
-        # Boot the runtime asynchronously if not already running
-        unless status.reachable? do
-          Task.start(fn -> WorkspaceBootstrap.boot() end)
-        end
-
-      _ ->
-        # Attempt async boot in background
-        Task.start(fn -> WorkspaceBootstrap.boot() end)
-    end
-
-    ChatPresence.native_agent_presence(space_id)
-  end
-
-  defp schedule_agent_presence_refresh(socket) do
-    if connected?(socket) && socket.assigns.active_space do
-      Process.send_after(self(), :refresh_agent_presence, @agent_presence_refresh_ms)
-    end
-
-    socket
-  end
-
-  defp default_agent_presence do
-    %{
-      configured?: false,
-      bootable?: false,
-      reachable?: false,
-      running?: false,
-      workspace_path: nil,
-      agent_slug: nil,
-      agent_name: nil,
-      agent: nil,
-      pid: nil,
-      error: nil,
-      joined?: false,
-      participant: nil,
-      indicator: :missing
-    }
-  end
-
-  defp allow_runtime_sandbox(pid) when is_pid(pid) do
-    if sandbox_pool?() do
-      case Sandbox.allow(Repo, self(), pid) do
-        :ok -> :ok
-        {:already, :owner} -> :ok
-        {:already, :allowed} -> :ok
-        _other -> :ok
-      end
-    else
-      :ok
-    end
-  rescue
-    _ -> :ok
-  end
-
-  defp allow_runtime_sandbox(_pid), do: :ok
-
-  defp sandbox_pool? do
-    case Repo.config()[:pool] do
-      Sandbox -> true
-      _ -> false
-    end
-  rescue
-    _ -> false
-  end
-
-  defp build_participant_identity_map(participants, users_by_id) do
-    Map.new(participants, fn participant ->
-      {participant.id,
-       participant_identity(participant, Map.get(users_by_id, participant.participant_id))}
-    end)
-  end
-
-  defp participant_identity(participant, user \\ nil)
-
-  defp participant_identity(%{participant_type: "agent"} = participant, _user) do
-    name = participant.display_name || "Agent"
-
-    %{
-      participant_type: "agent",
-      name: name,
-      display_name: name,
-      avatar_url: participant.avatar_url,
-      avatar_seed: participant.participant_id || participant.id
-    }
-  end
-
-  defp participant_identity(participant, user) do
-    name = participant_name(participant, user)
-
-    %{
-      participant_type: "user",
-      name: name,
-      display_name: name,
-      avatar_url: participant.avatar_url || (user && user.avatar_url),
-      avatar_seed: participant_avatar_seed(participant, user)
-    }
-  end
-
-  defp participant_name(participant), do: participant_name(participant, nil)
-
-  defp participant_name(%{name: name}, _user) when is_binary(name) and name != "", do: name
-
-  defp participant_name(%{resolved_name: name}, _user) when is_binary(name) and name != "",
-    do: name
-
-  defp participant_name(%{display_name: name}, _user) when is_binary(name) and name != "",
-    do: name
-
-  defp participant_name(_participant, %{name: name}) when is_binary(name) and name != "", do: name
-
-  defp participant_name(_participant, %{email: email}) when is_binary(email) and email != "",
-    do: email
-
-  defp participant_name(_participant, _user), do: "User"
-
-  defp participant_avatar_url(%{avatar_url: avatar_url}) when is_binary(avatar_url),
-    do: avatar_url
-
-  defp participant_avatar_url(_participant), do: nil
-
-  defp participant_avatar_seed(%{avatar_seed: seed}) when not is_nil(seed), do: seed
-
-  defp participant_avatar_seed(participant, user \\ nil) do
-    cond do
-      user && is_binary(user.oidc_sub) && user.oidc_sub != "" ->
-        user.oidc_sub
-
-      user && is_binary(user.email) && user.email != "" ->
-        user.email
-
-      is_binary(participant.participant_id) && participant.participant_id != "" ->
-        participant.participant_id
-
-      is_binary(participant.id) && participant.id != "" ->
-        participant.id
-
-      true ->
-        "user"
-    end
-  end
-
-  defp sender_name(participants_map, participant_id) do
-    case Map.get(participants_map, participant_id) do
-      %{name: name} when is_binary(name) and name != "" -> name
-      name when is_binary(name) and name != "" -> name
-      _ -> "User"
-    end
-  end
-
-  defp sender_avatar_url(participants_map, participant_id) do
-    case Map.get(participants_map, participant_id) do
-      %{avatar_url: avatar_url} when is_binary(avatar_url) -> avatar_url
-      _ -> nil
-    end
-  end
-
-  defp sender_avatar_seed(participants_map, participant_id) do
-    case Map.get(participants_map, participant_id) do
-      %{avatar_seed: avatar_seed} when not is_nil(avatar_seed) -> avatar_seed
-      %{name: name} when is_binary(name) and name != "" -> name
-      name when is_binary(name) and name != "" -> name
-      _ -> participant_id || "user"
-    end
-  end
-
   defp relative_time(nil), do: ""
 
   defp relative_time(datetime) do
@@ -3965,16 +3653,6 @@ defmodule PlatformWeb.ChatLive do
       diff < 3600 -> "#{div(diff, 60)}m ago"
       diff < 86400 -> "#{div(diff, 3600)}h ago"
       true -> "#{div(diff, 86400)}d ago"
-    end
-  end
-
-  defp avatar_initial(participants_map, participant_id) do
-    sender_name(participants_map, participant_id)
-    |> String.trim()
-    |> String.first()
-    |> case do
-      nil -> "U"
-      ch -> String.upcase(ch)
     end
   end
 
@@ -4041,25 +3719,6 @@ defmodule PlatformWeb.ChatLive do
   end
 
   defp format_message_date(_), do: ""
-
-  defp resolve_agent_name_by_id(agent_id) do
-    case Repo.get(Platform.Agents.Agent, agent_id) do
-      %{name: name} when is_binary(name) -> name
-      _ -> "Agent"
-    end
-  end
-
-  # Build label for the primary agent when in listening mode
-  defp primary_agent_label(%{primary_agent_id: nil}, _participants), do: "Agent"
-
-  defp primary_agent_label(%{primary_agent_id: primary_agent_id}, participants) do
-    case Enum.find(participants, fn p ->
-           p.participant_type == "agent" && p.participant_id == primary_agent_id
-         end) do
-      %{display_name: name} when is_binary(name) and name != "" -> name
-      _ -> resolve_agent_name_by_id(primary_agent_id)
-    end
-  end
 
   @impl true
   def terminate(_reason, socket) do
