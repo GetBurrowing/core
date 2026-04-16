@@ -61,7 +61,7 @@ defmodule PlatformWeb.Chat.CanvasRenderer do
             "rounded-2xl border border-base-300 bg-base-100 shadow-sm overflow-hidden",
             @inline && "cursor-pointer"
           ]}
-          phx-click={if(@inline, do: "open_canvas")}
+          phx-click={if(@inline, do: "canvas_open")}
           phx-value-canvas-id={if(@inline, do: @canvas.id)}
         >
           <header class="flex items-center justify-between border-b border-base-300 bg-base-200 px-4 py-2">
@@ -105,7 +105,7 @@ defmodule PlatformWeb.Chat.CanvasRenderer do
             "rounded-2xl border border-base-300 bg-base-100 shadow-sm overflow-hidden",
             @inline && "cursor-pointer"
           ]}
-          phx-click={if(@inline, do: "open_canvas")}
+          phx-click={if(@inline, do: "canvas_open")}
           phx-value-canvas-id={if(@inline, do: @canvas.id)}
         >
           <div class="p-4 flex flex-col gap-3">
@@ -202,7 +202,7 @@ defmodule PlatformWeb.Chat.CanvasRenderer do
             "overflow-x-auto",
             @inline && "cursor-pointer"
           ]}
-          phx-click={if(@inline, do: "open_canvas")}
+          phx-click={if(@inline, do: "canvas_open")}
           phx-value-canvas-id={if(@inline, do: @canvas.id)}
         >
           <.render_node node={@canvas.state["root"]} />
@@ -219,7 +219,7 @@ defmodule PlatformWeb.Chat.CanvasRenderer do
             "overflow-x-auto",
             @inline && "cursor-pointer"
           ]}
-          phx-click={if(@inline, do: "open_canvas")}
+          phx-click={if(@inline, do: "canvas_open")}
           phx-value-canvas-id={if(@inline, do: @canvas.id)}
         >
           <.render_node node={@synthetic_root} />

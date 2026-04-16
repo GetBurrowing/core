@@ -281,7 +281,7 @@ defmodule PlatformWeb.ChatLiveTest do
     |> Canvas.changeset(%{"state" => updated_state})
     |> Repo.update!()
 
-    render_click(view, "open_canvas", %{"canvas-id" => canvas.id})
+    render_click(view, "canvas_open", %{"canvas-id" => canvas.id})
 
     html = render(view)
 
