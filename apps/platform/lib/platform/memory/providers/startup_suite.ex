@@ -82,15 +82,17 @@ defmodule Platform.Memory.Providers.StartupSuite do
   # ── Private ──────────────────────────────────────────────────────────
 
   defp req_client do
-    Application.get_env(
-      :platform,
-      :memory_service_req_client,
-      Req.new(
-        base_url: memory_service_url(),
-        headers: [{"accept", "application/json"}],
-        receive_timeout: @receive_timeout
-      )
-    )
+    case Application.get_env(:platform, :memory_service_req_client) do
+      nil ->
+        Req.new(
+          base_url: memory_service_url(),
+          headers: [{"accept", "application/json"}],
+          receive_timeout: @receive_timeout
+        )
+
+      client ->
+        client
+    end
   end
 
   defp memory_service_url do
