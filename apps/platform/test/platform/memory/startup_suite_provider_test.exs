@@ -76,7 +76,7 @@ defmodule Platform.Memory.Providers.StartupSuiteTest do
 
       Application.put_env(:platform, :memory_service_req_client, req_client)
 
-      entry = %{id: "id", content: "c", memory_type: "daily", date: ~D[2026-04-15]}
+      entry = %{id: "id", content: "c", memory_type: "daily", date: ~D[2026-04-15], workspace_id: nil, metadata: %{}}
       assert {:error, {:unexpected_status, 500}} = StartupSuite.ingest(entry)
     end
   end
