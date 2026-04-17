@@ -84,6 +84,7 @@ defmodule Platform.Memory.Providers.StartupSuiteTest do
         workspace_id: nil,
         metadata: %{}
       }
+
       assert {:error, {:unexpected_status, 500}} = StartupSuite.ingest(entry)
     end
   end
