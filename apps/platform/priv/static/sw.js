@@ -19,8 +19,14 @@ self.addEventListener("activate", event => {
 
 self.addEventListener("fetch", event => {
   if (event.request.method !== "GET") return;
+  // Skip cross-origin requests — intercepting e.g. livekit.example.com
+  // breaks the LiveKit SDK's /rtc/v1/validate reconnect path.
+  const url = new URL(event.request.url);
+  if (url.origin !== self.location.origin) return;
   event.respondWith(
-    fetch(event.request).catch(() => caches.match(event.request))
+    fetch(event.request).catch(() =>
+      caches.match(event.request).then(r => r || Response.error())
+    )
   );
 });
 

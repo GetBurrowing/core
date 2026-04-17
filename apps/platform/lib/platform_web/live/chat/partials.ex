@@ -379,7 +379,9 @@ defmodule PlatformWeb.ChatLive.Partials do
         </button>
       </div>
 
-      <div id="meeting-media" class="hidden"></div>
+      <%!-- JS owns the children (track.attach outputs); ignore on re-render
+           so toggling mic/camera doesn't wipe the <audio> elements. --%>
+      <div id="meeting-media" class="hidden" phx-update="ignore"></div>
     </div>
 
     <div
