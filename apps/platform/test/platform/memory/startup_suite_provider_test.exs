@@ -1,5 +1,5 @@
 defmodule Platform.Memory.Providers.StartupSuiteTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias Platform.Memory.Providers.StartupSuite
 
