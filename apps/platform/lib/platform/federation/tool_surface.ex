@@ -2224,9 +2224,7 @@ defmodule Platform.Federation.ToolSurface do
         search_with_provider(Platform.Memory.Providers.Null, query, opts)
 
       {:error, reason} ->
-        Logger.warning(
-          "Memory provider search failed, falling back to DB: #{inspect(reason)}"
-        )
+        Logger.warning("Memory provider search failed, falling back to DB: #{inspect(reason)}")
 
         search_with_provider(Platform.Memory.Providers.Null, query, opts)
     end

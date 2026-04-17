@@ -95,14 +95,20 @@ defmodule Platform.Agents.SystemEventSchedulerTest do
     describe "system_events field" do
       test "agent changeset accepts valid system events" do
         changeset =
-          Agent.changeset(%Agent{}, Map.put(@valid_agent_attrs, :system_events, ["daily_summary"]))
+          Agent.changeset(
+            %Agent{},
+            Map.put(@valid_agent_attrs, :system_events, ["daily_summary"])
+          )
 
         assert changeset.valid?
       end
 
       test "agent changeset rejects invalid system events" do
         changeset =
-          Agent.changeset(%Agent{}, Map.put(@valid_agent_attrs, :system_events, ["invalid_event"]))
+          Agent.changeset(
+            %Agent{},
+            Map.put(@valid_agent_attrs, :system_events, ["invalid_event"])
+          )
 
         refute changeset.valid?
       end
