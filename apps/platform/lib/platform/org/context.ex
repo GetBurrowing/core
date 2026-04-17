@@ -376,6 +376,16 @@ defmodule Platform.Org.Context do
     |> Enum.sort_by(fn {date, _} -> date end, {:desc, Date})
   end
 
+  @doc "Fetches memory entries by a list of IDs."
+  @spec get_memory_entries_by_ids([binary()]) :: [MemoryEntry.t()]
+  def get_memory_entries_by_ids([]), do: []
+
+  def get_memory_entries_by_ids(ids) do
+    MemoryEntry
+    |> where([m], m.id in ^ids)
+    |> Repo.all()
+  end
+
   # ── Build context ────────────────────────────────────────────────────
 
   @doc """

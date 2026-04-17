@@ -1,6 +1,6 @@
 # ADR 0033 — Org-Level Context Management
 
-**Status:** Accepted  
+**Status:** Accepted (Phase 3 revised 2026-04-16)  
 **Date:** 2026-04-08  
 **Author:** Sloane Scott / Hal
 
@@ -8,7 +8,7 @@
 
 ## Context
 
-Individual agents have persistent personal knowledge via SOUL.md, MEMORY.md, AGENTS.md, and similar workspace files. There is no equivalent shared organizational layer — agents cannot access org-wide knowledge, discover other agents/users, or search past conversations across spaces. This ADR covers two major components: (1) Org Context Files for shared persistent knowledge, and (2) Conversation Retrieval via hybrid vector+keyword search.
+Individual agents have persistent personal knowledge via SOUL.md, MEMORY.md, AGENTS.md, and similar workspace files. There is no equivalent shared organizational layer — agents cannot access org-wide knowledge or recall past organizational decisions and events. This ADR covers three components: (1) Org Context Files for shared persistent knowledge, (2) Org Memory Search via an external memory service, and (3) Agent-driven memory lifecycle (daily summaries + dreaming).
 
 ---
 
@@ -77,7 +77,6 @@ A tiered model controls when and how org context reaches agents:
 ### On Demand (tools)
 - `org_context_read`, `org_context_write`, `org_context_list`
 - `org_memory_append`, `org_memory_search`
-- `org_directory_search`
 
 ### Injection Location
 
@@ -89,43 +88,75 @@ Agent prompt templates (`dispatch.in_progress`, `dispatch.planning`) will be upd
 
 ---
 
-## Conversation Retrieval
+## Org Memory Search
 
-### Embedding Infrastructure
+### Architecture
 
-- **pgvector** added to the existing Postgres instance — no new infrastructure
-- HNSW index on the embedding column for approximate nearest neighbor performance
+Org memory search runs on an **external memory service** deployed on dedicated hardware (separate repo). The main application communicates with it via a pluggable `MemoryProvider` behaviour, allowing third parties to implement alternative backends (Qdrant, Pinecone, etc.).
 
-**`message_embeddings`** — separate table (keeps `chat_messages` hot table clean, allows reindexing and model swaps independently):
+The search corpus is **`org_memory_entries` only** — daily summaries and long-term memory entries. `ORG_MEMORY.md` is not searched; it is injected into agent session context at start (see Context Injection Strategy above).
 
-| Column      | Type                          | Notes                                 |
-|-------------|-------------------------------|---------------------------------------|
-| id          | uuid v7                       | PK                                    |
-| message_id  | uuid (unique FK → chat_messages) | One embedding per message          |
-| space_id    | uuid                          | Denormalized for efficient filtering  |
-| embedding   | vector(dim TBD)               | Dimension depends on Gemma model      |
-| model       | text                          | Embedding model identifier            |
-| inserted_at | utc_datetime_usec             |                                       |
+### Memory Provider Behaviour
 
-### Embedding Generation
+```elixir
+defmodule Platform.Memory.Provider do
+  @callback ingest(entry :: map()) :: :ok | {:error, term()}
+  @callback search(query :: String.t(), opts :: keyword()) :: {:ok, [%{entry_id: binary(), score: float()}]} | {:error, term()}
+  @callback delete(entry_id :: binary()) :: :ok | {:error, term()}
+end
+```
 
-- **Model:** Gemma via local Ollama endpoint — no API cost
-- **Worker:** `Platform.Workers.MessageEmbeddingWorker` (Oban job)
-- **Schedule:** Every 30 minutes, batches of 100 messages per run
-- **Discovery:** LEFT JOIN on `chat_messages` to find unembedded messages
+- **`ingest/1`** — receives a single entry map `%{id, content, memory_type, date, workspace_id, metadata}`. The provider wraps it in a list for the service's batch API (`POST /ingest` accepts `{entries: [...]}`).
+- **`search/2`** — opts include `:workspace_id`, `:memory_type`, `:date_from`, `:date_to`, `:limit`. Returns `[%{entry_id, score}]`. Main app hydrates full entries locally.
+- **`delete/1`** — removes a single entry from the index by ID.
 
-### Hybrid Search
+Configuration: `config :platform, memory_provider: Platform.Memory.Providers.StartupSuite` (or `Platform.Memory.Providers.Null` for no-op default). Feature-gated via `MEMORY_SERVICE_URL` env var in `runtime.exs`; when unset the Null provider is used.
 
-`Platform.Chat.ConversationSearch` module combines two retrieval legs:
+A `Platform.Memory.Provider.configured/0` helper resolves the active provider at runtime via `Application.get_env/3`.
 
-1. **Vector leg** — pgvector cosine similarity on `message_embeddings`
-2. **Keyword leg** — existing `websearch_to_tsquery` on `chat_messages.search_vector`
+### Ingest Pipeline
 
-Results are merged via **Reciprocal Rank Fusion (RRF)**.
+When an `org_memory_entry` is written, the existing telemetry event (`[:platform, :org, :memory_entry_written]`) fires `Platform.Memory.TelemetryHandler`, which loads the full entry from the database (telemetry metadata only carries the entry ID, not content), converts it to a plain map, and calls `Provider.ingest/1` on the configured provider. The handler is attached in `Application.start/2` alongside the Audit, Vault, and Chat telemetry handlers. Volume is low (~5–50 writes/day), so a synchronous HTTP call is appropriate.
 
-### Access Control
+The handler wraps execution in a rescue to prevent telemetry from detaching it on crash, and logs warnings on provider errors without raising.
 
-Agents can only search spaces they are active participants in, enforced at query level via JOIN on `chat_participants`.
+For resilience, the memory service exposes a `GET /sync?since=<timestamp>` catchup endpoint so it can backfill missed entries on restart.
+
+### Search Tool
+
+A single `org_memory_search` tool in `federation/tool_surface.ex` routes queries through the configured `MemoryProvider`. The tool accepts `query` (optional), `memory_type`, `date_from`, `date_to`, and `limit`.
+
+**Search flow:**
+- **Null provider** (default): bypasses the provider entirely and falls back to the existing `OrgContext.search_memory_entries/1` ILIKE substring search against the database.
+- **Real provider** (e.g. StartupSuite): calls `Provider.search/2` to get scored entry IDs, then hydrates full entries from `org_memory_entries` in the main DB. Results include a `score` field and are ordered by provider ranking. If the provider returns empty results or errors, the tool gracefully degrades to the DB fallback.
+
+The `query` parameter is optional to support both semantic search (when a provider is active) and browsing/filtering by date and type (DB fallback).
+
+---
+
+## Agent System Events
+
+### Concept
+
+Agents can be flagged for **system-triggered events** — scheduled tasks that fire automatically rather than via user attention. Two system events are defined in v1:
+
+- **`daily_summary`** — generate a daily org memory entry summarizing the day's activity
+- **`dreaming`** — consolidate accumulated daily memories into `ORG_MEMORY.md`
+
+### Agent Flagging
+
+A new `system_events` field (list of strings) on the `agents` table stores which system events an agent is opted into. Managed via the agent config UI. Example: `["daily_summary", "dreaming"]`.
+
+### Scheduling
+
+A `Platform.Agents.SystemEventScheduler` GenServer starts in the supervision tree and uses `:timer.send_interval/2` to fire on schedule:
+
+- **Daily summary:** once per day (e.g. 23:00 UTC). The scheduler queries for agents with `"daily_summary"` in `system_events`, picks the designated agent, and sends it an attention event with instructions to summarize the day's activity across spaces it participates in. The agent writes the result via `org_memory_append`.
+- **Dreaming:** once per day (e.g. 03:00 UTC). The scheduler sends the designated `"dreaming"` agent an attention event to read recent daily entries, synthesize patterns, and update `ORG_MEMORY.md` via `org_context_write`.
+
+### Why Not Oban
+
+At two jobs per day, Oban's persistence, uniqueness, and retry infrastructure is not justified as a new dependency. A GenServer + timer is sufficient. If scheduling needs grow, Oban can be introduced later without architectural changes.
 
 ---
 
@@ -140,16 +171,13 @@ Agents can only search spaces they are active participants in, enforced at query
 
 Registered via the channel plugin WebSocket interface:
 
-| Tool                        | Purpose                                      |
-|-----------------------------|----------------------------------------------|
-| `org_context_read`          | Read an org context file by key              |
-| `org_context_write`         | Write/update an org context file             |
-| `org_context_list`          | List available org context files             |
-| `org_memory_append`         | Append a daily or long-term memory entry     |
-| `org_memory_search`         | Search org memory entries                    |
-| `org_directory_search`      | Search the org directory for users/agents    |
-| `conversation_search`       | Cross-space conversation search (hybrid)     |
-| `conversation_search_space` | Single-space conversation search (hybrid)    |
+| Tool                        | Purpose                                      | Phase |
+|-----------------------------|----------------------------------------------|-------|
+| `org_context_read`          | Read an org context file by key              | 1 ✅  |
+| `org_context_write`         | Write/update an org context file             | 1 ✅  |
+| `org_context_list`          | List available org context files             | 1 ✅  |
+| `org_memory_append`         | Append a daily or long-term memory entry     | 1 ✅  |
+| `org_memory_search`         | Semantic search over org memory entries (with DB fallback) | 3 ✅  |
 
 ---
 
@@ -157,8 +185,11 @@ Registered via the channel plugin WebSocket interface:
 
 | Alternative                              | Reason for Rejection                                                                 |
 |------------------------------------------|--------------------------------------------------------------------------------------|
-| Separate vector DB (Pinecone, Weaviate)  | Unnecessary infrastructure at current scale; pgvector keeps everything in Postgres    |
-| Full roster injection per message        | Too much token overhead; use `org_directory_search` tool on demand instead            |
+| pgvector in main Postgres                | Moved embedding + vector search to dedicated external service (`memory-service`) for hardware isolation and pluggability. External service uses pgvector in its own Postgres. |
+| Bumblebee (in-monolith embeddings)       | Embedding workload moved to dedicated Python service using SentenceTransformers + CUDA; keeps BEAM lean |
+| Chat message search (hybrid vector+keyword) | Descoped — search over org memory entries is sufficient for v1; conversation search can be revisited later |
+| Oban for scheduling                      | Two cron jobs/day doesn't justify the dependency; GenServer + timer is sufficient     |
+| Full roster injection per message        | Too much token overhead; roster is injected at session start only                    |
 | Per-message full org context injection   | Wasteful; tiered model with session-start injection is more efficient                 |
 | ACLs on org context writes in v1         | Deferred — any agent/user can write; revisit when abuse or access-control needs arise |
 
@@ -166,25 +197,46 @@ Registered via the channel plugin WebSocket interface:
 
 ## Implementation Phases
 
-### Phase 1 — Org Context Core
+### Phase 1 — Org Context Core ✅
 - `org_context_files` + `org_memory_entries` tables and migrations
 - `Platform.Org.Context` module (CRUD + version bumping)
 - WebSocket tool registration
 - Channel plugin tool handlers (`org_context_read/write/list`, `org_memory_append/search`)
 - Basic UI for viewing/editing org context files
 
-### Phase 2 — Context Injection Optimization
-- Session-aware context injection (stop injecting full context every message)
-- Org context delivery on session start via system prompt
-- Prompt template updates for `dispatch.in_progress` and `dispatch.planning`
+### Phase 2 — Context Injection Optimization ✅
+- Org context delivery on attention via `ContextPlane.build_context_bundle/1` and `ContextAssembler.build/2`
+- Prompt template updates for `dispatch.in_progress` and `dispatch.planning` with "Writing to Org Memory" guidance
 
-### Phase 3 — Conversation Search
-- pgvector extension + `message_embeddings` table and HNSW index
-- `Platform.Workers.MessageEmbeddingWorker` Oban job
-- `Platform.Chat.ConversationSearch` hybrid search module
-- `conversation_search` and `conversation_search_space` tools
+### Phase 3 — Org Memory Search & Agent System Events
 
-### Phase 4 — Directory & Linking
-- `org_directory_search` tool
+**Branch:** `feat/org-context-phase-3` (core repo) + `memory-service` repo
+
+#### 3.1 — Agent system events infrastructure ✅
+- `system_events` field on `agents` table (list of strings, migration `20260416020000`)
+- `Platform.Agents.SystemEventScheduler` GenServer with `:timer` for daily summary (23:00 UTC) + dreaming (03:00 UTC)
+- Agent config UI: toggle system event flags per agent
+
+#### 3.2 — Memory Provider plugin interface ✅
+- `Platform.Memory.Provider` behaviour (`ingest/1`, `search/2`, `delete/1`) + `configured/0` helper
+- `Platform.Memory.Providers.Null` no-op default
+- `Platform.Memory.Providers.StartupSuite` HTTP client (Req) to external memory service
+- `Platform.Memory.TelemetryHandler` on `[:platform, :org, :memory_entry_written]` → loads full entry from DB → `Provider.ingest/1`
+- Config gated on `MEMORY_SERVICE_URL` env var in `runtime.exs`
+
+#### 3.3 — `org_memory_search` tool upgrade ✅
+- `org_memory_search` in `federation/tool_surface.ex` routes through configured provider
+- Provider returns scored entry IDs → hydrated from `org_memory_entries` via `OrgContext.get_memory_entries_by_ids/1`
+- Graceful degradation: Null provider or provider error falls back to DB ILIKE search
+
+#### 3.4 — External memory service (separate repo: `memory-service`)
+- FastAPI (Python) microservice with Pydantic request/response schemas
+- Embedding model: `BAAI/bge-large-en-v1.5` (1024-dim) via SentenceTransformers, with BGE query prefix for asymmetric retrieval
+- Vector storage: pgvector in dedicated Postgres (`embeddings` table with `vector(1024)` column, cosine distance)
+- REST API: `POST /ingest`, `POST /search`, `DELETE /entries`, `GET /sync?since=<timestamp>`, `GET /health`
+- Idempotent upsert on ingest (`INSERT ON CONFLICT DO UPDATE`)
+- Deployed on dedicated hardware (GPU-capable for embedding)
+
+### Phase 4 — Project Linking & Polish
 - `project_id` FK on `chat_spaces` + project context in agent preamble
-- UI polish
+- UI polish for org memory feed and search

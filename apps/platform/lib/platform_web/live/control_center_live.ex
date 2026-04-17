@@ -1,6 +1,8 @@
 defmodule PlatformWeb.ControlCenterLive do
   use PlatformWeb, :live_view
 
+  import Ecto.Query
+
   alias Ecto.Adapters.SQL.Sandbox
 
   alias Platform.Agents.{
@@ -189,6 +191,21 @@ defmodule PlatformWeb.ControlCenterLive do
         %{assigns: %{selected_agent: %Agent{} = agent}} = socket
       ) do
     attrs = AgentData.config_attrs_from_params(agent, params)
+
+    # Enforce one-agent-per-event: unflag other agents for newly claimed events
+    newly_claimed = Map.get(attrs, :system_events, []) -- (agent.system_events || [])
+
+    for event <- newly_claimed do
+      from(a in Agent,
+        where: a.id != ^agent.id,
+        where: fragment("? @> ?", a.system_events, ^[event])
+      )
+      |> Repo.all()
+      |> Enum.each(fn other ->
+        cleaned = Enum.reject(other.system_events || [], &(&1 == event))
+        other |> Agent.changeset(%{system_events: cleaned}) |> Repo.update()
+      end)
+    end
 
     case agent |> Agent.changeset(attrs) |> Repo.update() do
       {:ok, updated_agent} ->

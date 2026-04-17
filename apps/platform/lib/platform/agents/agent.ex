@@ -12,6 +12,7 @@ defmodule Platform.Agents.Agent do
   @foreign_key_type :binary_id
 
   @valid_statuses ~w(active paused archived)
+  @valid_system_events ~w(daily_summary dreaming)
 
   schema "agents" do
     field(:workspace_id, :binary_id)
@@ -29,6 +30,7 @@ defmodule Platform.Agents.Agent do
     field(:runtime_type, :string, default: "built_in")
     field(:runtime_id, :binary_id)
     field(:color, :string)
+    field(:system_events, {:array, :string}, default: [])
 
     timestamps(type: :utc_datetime_usec)
   end
@@ -50,10 +52,12 @@ defmodule Platform.Agents.Agent do
       :metadata,
       :runtime_type,
       :runtime_id,
-      :color
+      :color,
+      :system_events
     ])
     |> validate_required([:slug, :name, :status])
     |> validate_inclusion(:status, @valid_statuses)
+    |> validate_subset(:system_events, @valid_system_events)
     |> unique_constraint(:slug,
       name: :agents_unique_slug,
       message: "slug already taken in this workspace"

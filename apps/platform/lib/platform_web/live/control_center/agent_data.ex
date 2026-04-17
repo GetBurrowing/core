@@ -288,7 +288,8 @@ defmodule PlatformWeb.ControlCenter.AgentData do
       "thinking_default" => agent.thinking_default || "",
       "max_concurrent" => agent.max_concurrent || 1,
       "sandbox_mode" => agent.sandbox_mode || "off",
-      "color" => agent.color || ""
+      "color" => agent.color || "",
+      "system_events" => agent.system_events || []
     }
 
     to_form(Map.merge(base, normalize_map(overrides)), as: :config)
@@ -393,7 +394,12 @@ defmodule PlatformWeb.ControlCenter.AgentData do
         parse_positive_integer(Map.get(params, "max_concurrent")) || agent.max_concurrent || 1,
       sandbox_mode: blank_fallback(Map.get(params, "sandbox_mode"), agent.sandbox_mode || "off"),
       color: blank_to_nil(Map.get(params, "color")),
-      model_config: updated_model_config
+      model_config: updated_model_config,
+      system_events:
+        params
+        |> Map.get("system_events", [])
+        |> List.wrap()
+        |> Enum.reject(&(&1 == ""))
     }
   end
 

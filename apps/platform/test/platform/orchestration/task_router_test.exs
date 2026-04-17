@@ -747,7 +747,7 @@ defmodule Platform.Orchestration.TaskRouterTest do
       task: task,
       assignee: assignee,
       plan: plan,
-      stage: stage
+      stage: _stage
     } do
       {:ok, pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
       Process.sleep(50)
