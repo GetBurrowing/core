@@ -143,9 +143,7 @@ defmodule Platform.Agents.SystemEventSchedulerTest do
 
         # Start scheduler in test to use fire_now
         {:ok, _pid} =
-          start_supervised(
-            {SystemEventScheduler, check_interval_ms: :timer.hours(24)}
-          )
+          start_supervised({SystemEventScheduler, check_interval_ms: :timer.hours(24)})
 
         # fire_now should not crash and should dispatch to the agent
         result = SystemEventScheduler.fire_now("daily_summary")
@@ -160,9 +158,7 @@ defmodule Platform.Agents.SystemEventSchedulerTest do
         _agent = create_agent(%{system_events: []})
 
         {:ok, _pid} =
-          start_supervised(
-            {SystemEventScheduler, check_interval_ms: :timer.hours(24)}
-          )
+          start_supervised({SystemEventScheduler, check_interval_ms: :timer.hours(24)})
 
         assert :ok = SystemEventScheduler.fire_now("daily_summary")
       end
@@ -171,9 +167,7 @@ defmodule Platform.Agents.SystemEventSchedulerTest do
         _agent = create_agent(%{system_events: ["daily_summary"], status: "paused"})
 
         {:ok, _pid} =
-          start_supervised(
-            {SystemEventScheduler, check_interval_ms: :timer.hours(24)}
-          )
+          start_supervised({SystemEventScheduler, check_interval_ms: :timer.hours(24)})
 
         assert :ok = SystemEventScheduler.fire_now("daily_summary")
       end

@@ -193,7 +193,7 @@ defmodule PlatformWeb.ControlCenterLive do
     attrs = AgentData.config_attrs_from_params(agent, params)
 
     # Enforce one-agent-per-event: unflag other agents for newly claimed events
-    newly_claimed = (Map.get(attrs, :system_events, []) -- (agent.system_events || []))
+    newly_claimed = Map.get(attrs, :system_events, []) -- (agent.system_events || [])
 
     for event <- newly_claimed do
       from(a in Agent,

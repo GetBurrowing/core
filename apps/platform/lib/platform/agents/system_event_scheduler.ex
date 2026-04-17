@@ -78,7 +78,11 @@ defmodule Platform.Agents.SystemEventScheduler do
 
     state = %{
       check_interval_ms:
-        Keyword.get(opts, :check_interval_ms, Keyword.get(config, :check_interval_ms, @default_check_interval_ms)),
+        Keyword.get(
+          opts,
+          :check_interval_ms,
+          Keyword.get(config, :check_interval_ms, @default_check_interval_ms)
+        ),
       events: Keyword.get(opts, :events, Keyword.get(config, :events, @default_events)),
       next_fires: %{},
       last_fired: %{}

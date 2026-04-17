@@ -83,7 +83,15 @@ defmodule Platform.Chat.AgentResponder do
     :ok
   end
 
-  @routable_reasons [:mention, :directed, :sticky, :active_agent, :watch, :multi_mention, :system_event]
+  @routable_reasons [
+    :mention,
+    :directed,
+    :sticky,
+    :active_agent,
+    :watch,
+    :multi_mention,
+    :system_event
+  ]
 
   @spec respond(map()) :: :ok | {:error, term()}
   def respond(%{reason: reason} = signal) when reason in @routable_reasons do
