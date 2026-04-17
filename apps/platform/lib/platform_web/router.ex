@@ -72,6 +72,11 @@ defmodule PlatformWeb.Router do
     post("/usage-events", UsageEventController, :create)
   end
 
+  scope "/api/meetings", PlatformWeb do
+    pipe_through(:api)
+    post("/segments", MeetingAgentController, :segments)
+  end
+
   scope "/api/webhooks", PlatformWeb do
     pipe_through(:api)
     post("/github", GithubWebhookController, :handle)

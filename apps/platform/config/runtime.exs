@@ -198,13 +198,23 @@ if livekit_api_key && livekit_api_secret do
     url: livekit_url || "wss://localhost:7880"
 end
 
-# ── Memory Service (ADR 0033) ────────────────────────────────────────────────
-# Feature-gated: external memory indexing is inert unless MEMORY_SERVICE_URL
-# is set. The Null provider is used by default (no-op).
+# ── Memory service ────────────────────────────────────────────────────────────
+# Wires Platform.Memory to an external vector-search service (the Startup Suite
+# memory-service by default). When MEMORY_SERVICE_URL is not set, the Noop
+# provider is used — append_memory_entry still writes to Postgres and
+# search_memory_entries falls back to substring match. See ADR 0033.
 memory_service_url = System.get_env("MEMORY_SERVICE_URL")
 
+memory_service_timeout =
+  case System.get_env("MEMORY_SERVICE_TIMEOUT_MS") do
+    nil -> 5_000
+    value -> String.to_integer(value)
+  end
+
 if memory_service_url do
-  config :platform,
-    memory_provider: Platform.Memory.Providers.StartupSuite,
-    memory_service_url: memory_service_url
+  config :platform, :memory_service,
+    provider: Platform.Memory.Providers.StartupSuite,
+    base_url: memory_service_url,
+    api_key: System.get_env("MEMORY_SERVICE_API_KEY"),
+    timeout: memory_service_timeout
 end

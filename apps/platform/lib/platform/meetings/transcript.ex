@@ -18,7 +18,7 @@ defmodule Platform.Meetings.Transcript do
   @statuses ~w(recording processing complete failed)
 
   schema "meeting_transcripts" do
-    field(:room_id, :binary_id)
+    field(:room_id, :string)
     field(:space_id, :binary_id)
     field(:segments, {:array, :map}, default: [])
     field(:summary, :string)

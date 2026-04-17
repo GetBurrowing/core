@@ -16,7 +16,9 @@ defmodule Platform.Org.Context do
   """
 
   import Ecto.Query
+  require Logger
 
+  alias Platform.Memory
   alias Platform.Org.ContextFile
   alias Platform.Org.MemoryEntry
   alias Platform.Repo
@@ -247,6 +249,11 @@ defmodule Platform.Org.Context do
           }
         )
 
+        # Fire-and-forget: embed + index via memory-service if configured.
+        # Entry is already durably in Postgres; failures are logged and can
+        # be backfilled later via the /sync endpoint.
+        Memory.ingest_async([entry])
+
         {:ok, entry}
 
       error ->
@@ -260,9 +267,15 @@ defmodule Platform.Org.Context do
   @doc """
   Search memory entries with optional filters.
 
+  When `:query` is provided and a memory-service provider is configured
+  (see `Platform.Memory`), results are ranked by semantic similarity via
+  vector search. Without `:query` — or when memory-service is unreachable
+  — this falls back to plain SQL filters ordered by `inserted_at desc`.
+
   ## Options
 
-    * `:query` - case-insensitive substring match on content
+    * `:query` - natural-language query for semantic retrieval (falls back
+      to case-insensitive substring match if memory-service is unavailable)
     * `:memory_type` - filter by memory type
     * `:date_from` - include entries on/after this date
     * `:date_to` - include entries on/before this date
@@ -271,6 +284,57 @@ defmodule Platform.Org.Context do
   """
   @spec search_memory_entries(keyword()) :: [MemoryEntry.t()]
   def search_memory_entries(opts \\ []) do
+    query = Keyword.get(opts, :query)
+
+    if is_binary(query) and query != "" and Memory.enabled?() do
+      vector_search_memory_entries(query, opts) || sql_search_memory_entries(opts)
+    else
+      sql_search_memory_entries(opts)
+    end
+  end
+
+  @doc """
+  Vector-search variant that returns `[{entry, score}]` for callers that
+  need the similarity score alongside the entry (e.g. the `org_memory_search`
+  tool). Returns `nil` when memory-service is unavailable so callers can
+  decide whether to fall back.
+  """
+  @spec search_memory_with_scores(String.t(), keyword()) ::
+          [{MemoryEntry.t(), float()}] | nil
+  def search_memory_with_scores(query, opts \\ []) when is_binary(query) do
+    with true <- Memory.enabled?(),
+         {:ok, hits} <- Memory.search(query, memory_search_opts(opts)) do
+      entries_by_id =
+        hits
+        |> Enum.map(& &1.entry_id)
+        |> fetch_entries_by_ids(Keyword.get(opts, :workspace_id))
+        |> Map.new(fn entry -> {entry.id, entry} end)
+
+      hits
+      |> Enum.flat_map(fn %{entry_id: id, score: score} ->
+        case Map.get(entries_by_id, id) do
+          nil -> []
+          entry -> [{entry, score}]
+        end
+      end)
+    else
+      false ->
+        nil
+
+      {:error, reason} ->
+        Logger.warning("Platform.Memory.search failed: #{inspect(reason)}")
+        nil
+    end
+  end
+
+  defp vector_search_memory_entries(query, opts) do
+    case search_memory_with_scores(query, opts) do
+      nil -> nil
+      results -> Enum.map(results, fn {entry, _score} -> entry end)
+    end
+  end
+
+  defp sql_search_memory_entries(opts) do
     limit = Keyword.get(opts, :limit, 50)
     workspace_id = Keyword.get(opts, :workspace_id)
 
@@ -283,6 +347,21 @@ defmodule Platform.Org.Context do
     |> order_by([m], desc: m.inserted_at, desc: m.id)
     |> limit(^limit)
     |> Repo.all()
+  end
+
+  defp fetch_entries_by_ids([], _workspace_id), do: []
+
+  defp fetch_entries_by_ids(ids, workspace_id) do
+    MemoryEntry
+    |> where([m], m.id in ^ids)
+    |> filter_workspace(workspace_id)
+    |> Repo.all()
+  end
+
+  defp memory_search_opts(opts) do
+    opts
+    |> Keyword.take([:workspace_id, :memory_type, :date_from, :date_to, :limit])
+    |> Enum.reject(fn {_k, v} -> is_nil(v) end)
   end
 
   @doc "Searches org memory entries. Alias for `search_memory_entries/1`."

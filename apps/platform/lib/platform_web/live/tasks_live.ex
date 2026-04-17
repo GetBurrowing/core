@@ -552,7 +552,7 @@ defmodule PlatformWeb.TasksLive do
     {:noreply, assign(socket, :active_review_canvas, canvas)}
   end
 
-  def handle_event("open_canvas", %{"canvas-id" => canvas_id}, socket) do
+  def handle_event("canvas_open", %{"canvas-id" => canvas_id}, socket) do
     canvas = find_canvas_for_display(socket, canvas_id)
     {:noreply, assign(socket, :active_review_canvas, canvas)}
   end
@@ -833,7 +833,7 @@ defmodule PlatformWeb.TasksLive do
     {:noreply, socket}
   end
 
-  def handle_event("clear_mention_suggestions", _params, socket) do
+  def handle_event("mention_clear", _params, socket) do
     {:noreply, socket}
   end
 

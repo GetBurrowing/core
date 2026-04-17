@@ -25,9 +25,10 @@ defmodule PlatformWeb.LivekitWebhookController do
   """
   def handle(conn, %{"event" => "room_started", "room" => room} = _params) do
     room_id = room["sid"] || room["name"]
+    space_id = space_id_from_room_name(room["name"])
 
     if room_id do
-      case Meetings.ensure_transcript(%{room_id: room_id}) do
+      case Meetings.ensure_transcript(%{room_id: room_id, space_id: space_id}) do
         {:ok, transcript} ->
           Logger.info("[LiveKit] Created transcript #{transcript.id} for room #{room_id}")
 
@@ -104,13 +105,14 @@ defmodule PlatformWeb.LivekitWebhookController do
   """
   def handle(conn, %{"event" => "transcription", "room" => room} = params) do
     room_id = room["sid"] || room["name"]
+    space_id = space_id_from_room_name(room["name"])
     raw_segments = params["segments"] || []
 
     if room_id && raw_segments != [] do
       case Meetings.get_transcript_for_room(room_id) do
         nil ->
           # Auto-create transcript if one doesn't exist yet (race condition safety)
-          case Meetings.ensure_transcript(%{room_id: room_id}) do
+          case Meetings.ensure_transcript(%{room_id: room_id, space_id: space_id}) do
             {:ok, transcript} ->
               append_segments(conn, transcript.id, raw_segments, room_id)
 
@@ -200,4 +202,12 @@ defmodule PlatformWeb.LivekitWebhookController do
   defp maybe_trigger_summary(transcript) do
     Platform.Meetings.Summarizer.summarize_async(transcript)
   end
+
+  # LiveKit room names in Suite follow `space-<uuid>` — recover the space
+  # UUID from the name so transcripts can be linked back to their space.
+  defp space_id_from_room_name("space-" <> uuid) do
+    if String.length(uuid) == 36, do: uuid, else: nil
+  end
+
+  defp space_id_from_room_name(_), do: nil
 end

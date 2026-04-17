@@ -10,10 +10,25 @@ const MeetingClient = {
     this.handleEvent("toggle-mic", () => this._toggleMic())
     this.handleEvent("toggle-camera", () => this._toggleCamera())
     this.handleEvent("toggle-screen-share", () => this._toggleScreenShare())
+
+    // Migrate tiles between desktop/mobile grids when the viewport crosses
+    // the lg breakpoint (rotation, window resize, dev tools toggle).
+    this._viewportQuery = window.matchMedia("(min-width: 1024px)")
+    this._onViewportChange = () => this._rehomeTiles()
+    this._viewportQuery.addEventListener("change", this._onViewportChange)
   },
 
   destroyed() {
     this._leave()
+    this._viewportQuery?.removeEventListener("change", this._onViewportChange)
+  },
+
+  _rehomeTiles() {
+    const grid = this._grid()
+    if (!grid) return
+    for (const tile of this._tiles.values()) {
+      if (tile.parentElement !== grid) grid.appendChild(tile)
+    }
   },
 
   async _join({ token, url }) {
@@ -54,7 +69,6 @@ const MeetingClient = {
     room.on(RoomEvent.ActiveSpeakersChanged, (speakers) => {
       const identities = speakers.map((p) => p.identity)
       this._markSpeakers(identities)
-      this.pushEvent("meeting_active_speaker", { identities })
     })
     room.on(RoomEvent.Disconnected, () => {
       this._cleanupRoom()
@@ -112,7 +126,7 @@ const MeetingClient = {
     const enabled = room.localParticipant.isMicrophoneEnabled
     try {
       await room.localParticipant.setMicrophoneEnabled(!enabled)
-      this.pushEvent("mic_toggled", { enabled: !enabled })
+      // Server already flipped :mic_enabled optimistically via meeting_toggle_mic.
     } catch (err) {
       console.warn("[MeetingClient] mic toggle failed:", err)
     }
@@ -124,7 +138,7 @@ const MeetingClient = {
     const enabled = room.localParticipant.isCameraEnabled
     try {
       await room.localParticipant.setCameraEnabled(!enabled)
-      this.pushEvent("camera_toggled", { enabled: !enabled })
+      // Server already flipped :camera_enabled optimistically via meeting_toggle_camera.
     } catch (err) {
       console.warn("[MeetingClient] camera toggle failed:", err)
     }
@@ -144,7 +158,15 @@ const MeetingClient = {
   // ── Tile rendering ─────────────────────────────────────────────────────
 
   _grid() {
-    return document.getElementById("meeting-participants")
+    // Two panels render simultaneously — desktop side pane (lg:flex,
+    // hidden below lg) and mobile full-screen overlay (lg:hidden).
+    // `matchMedia` is deterministic where `offsetParent` isn't: the mobile
+    // overlay uses position:fixed, which makes visibility probing brittle
+    // and historically left tiles appended to the hidden desktop grid.
+    const isDesktop = window.matchMedia("(min-width: 1024px)").matches
+    return document.getElementById(
+      isDesktop ? "meeting-participants" : "meeting-participants-mobile"
+    )
   },
 
   _mediaContainer() {
@@ -157,22 +179,33 @@ const MeetingClient = {
     const { identity } = participant
     if (this._tiles.has(identity)) return
 
+    const displayName = participant.name || identity
+    const initial = (displayName.trim()[0] || "?").toUpperCase()
+
     const tile = document.createElement("div")
     tile.dataset.participant = identity
-    tile.className =
-      "meeting-tile relative aspect-video overflow-hidden rounded-lg bg-base-300 flex items-center justify-center"
+    if (participant.isLocal) tile.dataset.local = "true"
+    tile.className = "meeting-tile"
 
-    const label = document.createElement("span")
-    label.className =
-      "absolute bottom-1 left-1 rounded bg-base-100/80 px-1.5 py-0.5 text-xs font-medium"
-    label.textContent = participant.name || identity
-    tile.appendChild(label)
+    const avatar = document.createElement("div")
+    avatar.className = "meeting-tile-avatar"
+    avatar.dataset.placeholder = ""
+    const circle = document.createElement("div")
+    circle.className = "meeting-tile-avatar-circle"
+    circle.textContent = initial
+    avatar.appendChild(circle)
+    tile.appendChild(avatar)
 
-    const placeholder = document.createElement("span")
-    placeholder.dataset.placeholder = ""
-    placeholder.className = "text-base-content/50 text-sm"
-    placeholder.textContent = (participant.name || identity).slice(0, 16)
-    tile.appendChild(placeholder)
+    const name = document.createElement("div")
+    name.className = "meeting-tile-name"
+    name.textContent = displayName
+    if (participant.isLocal) {
+      const you = document.createElement("span")
+      you.className = "meeting-tile-you"
+      you.textContent = "(you)"
+      name.appendChild(you)
+    }
+    tile.appendChild(name)
 
     grid.appendChild(tile)
     this._tiles.set(identity, tile)
@@ -195,14 +228,23 @@ const MeetingClient = {
       this._ensureTile(participant)
       const tile = this._tiles.get(participant.identity)
       if (!tile) return
+
+      let wrapper = tile.querySelector(".meeting-tile-video")
+      if (!wrapper) {
+        wrapper = document.createElement("div")
+        wrapper.className = "meeting-tile-video"
+        tile.insertBefore(wrapper, tile.firstChild)
+      }
+      wrapper.style.display = "block"
+
       const placeholder = tile.querySelector("[data-placeholder]")
-      if (placeholder) placeholder.remove()
+      if (placeholder) placeholder.style.display = "none"
+
       const el = track.attach()
-      el.className = "h-full w-full object-cover"
       el.autoplay = true
       el.playsInline = true
       el.muted = participant.isLocal === true
-      tile.insertBefore(el, tile.firstChild)
+      wrapper.appendChild(el)
     } else if (track.kind === Track.Kind.Audio) {
       if (participant.isLocal) return
       const el = track.attach()
@@ -211,16 +253,26 @@ const MeetingClient = {
     }
   },
 
-  _detachTrack(track, _participant) {
+  _detachTrack(track, participant) {
     const elements = track.detach()
     elements.forEach((el) => el.remove())
+
+    if (track.kind === Track.Kind.Video) {
+      const tile = this._tiles.get(participant?.identity)
+      if (!tile) return
+      const wrapper = tile.querySelector(".meeting-tile-video")
+      if (wrapper && !wrapper.querySelector("video")) {
+        wrapper.style.display = "none"
+      }
+      const placeholder = tile.querySelector("[data-placeholder]")
+      if (placeholder) placeholder.style.display = ""
+    }
   },
 
   _markSpeakers(identities) {
     const speaking = new Set(identities)
     for (const [identity, tile] of this._tiles) {
-      tile.classList.toggle("ring-2", speaking.has(identity))
-      tile.classList.toggle("ring-primary", speaking.has(identity))
+      tile.classList.toggle("meeting-tile-speaking", speaking.has(identity))
     }
   },
 }

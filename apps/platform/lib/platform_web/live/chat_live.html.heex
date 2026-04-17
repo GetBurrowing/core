@@ -1,0 +1,1214 @@
+<div id="push-subscribe" phx-hook="PushSubscribe" class="hidden"></div>
+
+<div id="chat-state" phx-hook="ChatState" class="hidden"></div>
+
+<div id="meeting-client" phx-hook="MeetingClient" class="hidden"></div>
+<div id="meeting-room" phx-hook="MeetingRoom" class="hidden"></div>
+
+<.notification_banner push_permission={@push_permission} />
+
+<div class="flex h-full overflow-hidden">
+  <%!-- Desktop sidebar --%>
+  <aside
+    id="chat-sidebar"
+    phx-hook="ResizableSidebar"
+    class="hidden lg:flex relative flex-shrink-0 flex-col border-r border-base-300 bg-base-200"
+  >
+    <%!-- Channels section --%>
+    <div class="border-b border-base-300 px-4 py-3 flex items-center justify-between">
+      <p class="text-xs font-semibold uppercase tracking-widest text-base-content/50">
+        Channels
+      </p>
+      <button
+        phx-click="new_channel_open"
+        class="text-base-content/40 hover:text-primary"
+        title="New channel"
+      >
+        <span class="hero-plus size-4"></span>
+      </button>
+    </div>
+
+    <nav class="overflow-y-auto py-2">
+      <.link
+        :for={space <- @channels}
+        navigate={~p"/chat/#{space.slug}"}
+        class={[
+          "flex items-center gap-2 px-3 py-1.5 text-sm transition-colors",
+          "hover:bg-base-300 rounded mx-1",
+          @active_space && @active_space.id == space.id &&
+            "bg-primary/10 text-primary font-semibold border-l-2 border-primary"
+        ]}
+      >
+        <span class="text-base-content/40">#</span>
+        <span class="truncate flex-1">{space.name}</span>
+        <%= if unread_label(Map.get(@unread_counts, space.id, 0)) do %>
+          <span class="ml-1 flex-shrink-0 min-w-[1.125rem] h-[1.125rem] rounded-full bg-primary text-primary-content text-[0.6rem] font-bold flex items-center justify-center px-1 leading-none">
+            {unread_label(Map.get(@unread_counts, space.id, 0))}
+          </span>
+        <% end %>
+      </.link>
+
+      <div :if={@channels == []} class="px-4 py-2 text-xs text-base-content/40">
+        No channels yet
+      </div>
+    </nav>
+
+    <%!-- Direct Messages section --%>
+    <div class="border-t border-b border-base-300 px-4 py-3 flex items-center justify-between">
+      <p class="text-xs font-semibold uppercase tracking-widest text-base-content/50">
+        Direct Messages
+      </p>
+      <button
+        phx-click="new_conversation_open"
+        class="text-base-content/40 hover:text-primary"
+        title="New conversation"
+      >
+        <span class="hero-plus size-4"></span>
+      </button>
+    </div>
+
+    <nav class="flex-1 overflow-y-auto py-2">
+      <.link
+        :for={space <- @dm_conversations}
+        navigate={~p"/chat/#{space.slug || space.id}"}
+        class={[
+          "flex items-center gap-2 px-3 py-1.5 text-sm transition-colors",
+          "hover:bg-base-300 rounded mx-1",
+          @active_space && @active_space.id == space.id &&
+            "bg-primary/10 text-primary font-semibold border-l-2 border-primary"
+        ]}
+      >
+        <span class="truncate flex-1">{sidebar_display_name(space, @user_id)}</span>
+        <%= if unread_label(Map.get(@unread_counts, space.id, 0)) do %>
+          <span class="ml-1 flex-shrink-0 min-w-[1.125rem] h-[1.125rem] rounded-full bg-primary text-primary-content text-[0.6rem] font-bold flex items-center justify-center px-1 leading-none">
+            {unread_label(Map.get(@unread_counts, space.id, 0))}
+          </span>
+        <% end %>
+      </.link>
+
+      <div :if={@dm_conversations == []} class="px-4 py-2 text-xs text-base-content/40">
+        No conversations yet
+      </div>
+    </nav>
+
+    <%!-- Drag handle for sidebar resize --%>
+    <div
+      class="absolute right-0 inset-y-0 w-1 cursor-col-resize hover:bg-primary/40 active:bg-primary/60 transition-colors z-10"
+      aria-hidden="true"
+    />
+  </aside>
+
+  <%!-- Mobile channel browser overlay --%>
+  <%= if @mobile_browser_open do %>
+    <div class="fixed inset-0 z-40 flex flex-col bg-base-100 lg:hidden">
+      <header class="flex h-12 flex-shrink-0 items-center justify-between border-b border-base-300 px-4 safe-area-top">
+        <p class="text-sm font-semibold">Conversations</p>
+        <button
+          phx-click="close_mobile_browser"
+          class="flex items-center justify-center size-10 rounded-lg text-base-content/60 hover:bg-base-300 hover:text-base-content"
+          aria-label="Close"
+        >
+          <span class="hero-x-mark size-5"></span>
+        </button>
+      </header>
+
+      <nav class="flex-1 overflow-y-auto py-2">
+        <p class="px-4 py-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
+          Channels
+        </p>
+        <.link
+          :for={space <- @channels}
+          navigate={~p"/chat/#{space.slug}"}
+          phx-click="close_mobile_browser"
+          class={[
+            "flex items-center gap-3 px-4 py-3 text-sm transition-colors",
+            "hover:bg-base-200",
+            @active_space && @active_space.id == space.id &&
+              "bg-base-200 text-primary font-semibold"
+          ]}
+        >
+          <span class="text-base-content/40 text-lg">#</span>
+          <span class="truncate flex-1">{space.name}</span>
+          <%= if unread_label(Map.get(@unread_counts, space.id, 0)) do %>
+            <span class="ml-1 flex-shrink-0 min-w-[1.125rem] h-[1.125rem] rounded-full bg-primary text-primary-content text-[0.6rem] font-bold flex items-center justify-center px-1 leading-none">
+              {unread_label(Map.get(@unread_counts, space.id, 0))}
+            </span>
+          <% end %>
+        </.link>
+
+        <p class="px-4 py-1 mt-2 text-xs font-semibold uppercase tracking-widest text-base-content/50">
+          Direct Messages
+        </p>
+        <.link
+          :for={space <- @dm_conversations}
+          navigate={~p"/chat/#{space.slug || space.id}"}
+          phx-click="close_mobile_browser"
+          class={[
+            "flex items-center gap-3 px-4 py-3 text-sm transition-colors",
+            "hover:bg-base-200",
+            @active_space && @active_space.id == space.id &&
+              "bg-base-200 text-primary font-semibold"
+          ]}
+        >
+          <span class="truncate flex-1">{sidebar_display_name(space, @user_id)}</span>
+          <%= if unread_label(Map.get(@unread_counts, space.id, 0)) do %>
+            <span class="ml-1 flex-shrink-0 min-w-[1.125rem] h-[1.125rem] rounded-full bg-primary text-primary-content text-[0.6rem] font-bold flex items-center justify-center px-1 leading-none">
+              {unread_label(Map.get(@unread_counts, space.id, 0))}
+            </span>
+          <% end %>
+        </.link>
+
+        <div
+          :if={@channels == [] and @dm_conversations == []}
+          class="px-4 py-6 text-sm text-base-content/40 text-center"
+        >
+          No conversations yet
+        </div>
+      </nav>
+    </div>
+  <% end %>
+
+  <div class="flex flex-1 overflow-hidden min-w-0">
+    <div
+      id="chat-drop-zone"
+      phx-hook="DragDropUpload"
+      class="flex flex-1 flex-col overflow-hidden min-w-0"
+    >
+      <header
+        :if={@active_space}
+        class="flex h-12 flex-shrink-0 items-center justify-between border-b border-base-300 px-5"
+      >
+        <div class="flex items-center gap-2 overflow-hidden">
+          <%!-- Mobile: tappable title to open browser --%>
+          <button
+            phx-click="toggle_mobile_browser"
+            class="flex items-center gap-2 overflow-hidden lg:hidden"
+            aria-label="Browse channels"
+          >
+            <span :if={@active_space.kind == "channel"} class="text-base-content/50">#</span>
+            <span class="truncate font-semibold">
+              {space_header_name(@active_space, @space_participants, @user_id)}
+            </span>
+            <span class="hero-chevron-down size-4 text-base-content/40 flex-shrink-0"></span>
+          </button>
+          <%!-- Desktop: static title --%>
+          <span class="hidden lg:flex items-center gap-2 overflow-hidden">
+            <span
+              :if={@active_space.kind == "channel"}
+              class="text-base-content/50 text-lg font-bold"
+            >
+              #
+            </span>
+            <span class="truncate font-bold text-base">
+              {space_header_name(@active_space, @space_participants, @user_id)}
+            </span>
+            <span
+              :if={@active_space.kind == "channel" && @active_space.topic}
+              class="truncate text-xs text-base-content/40"
+            >
+              — {@active_space.topic}
+            </span>
+            <span
+              :if={@active_space.kind == "group"}
+              class="text-xs text-base-content/40"
+            >
+              — {length(Enum.filter(@space_participants, &is_nil(&1.left_at)))} members
+            </span>
+          </span>
+
+          <%!-- Promote to channel button for groups --%>
+          <form
+            :if={@active_space.kind == "group" && !@active_space.is_direct}
+            phx-submit="promote_to_channel"
+            class="hidden lg:flex items-center gap-1 ml-2"
+          >
+            <input
+              name="name"
+              type="text"
+              placeholder="Channel name…"
+              class="input input-bordered input-xs w-32"
+              required
+            />
+            <button type="submit" class="btn btn-xs btn-ghost">
+              Convert to Channel
+            </button>
+          </form>
+        </div>
+
+        <%!-- Join Meeting button --%>
+        <button
+          :if={@meetings_enabled && !@in_meeting}
+          phx-click="meeting_join"
+          class="flex items-center gap-1.5 px-2 py-1 rounded-lg text-xs font-medium text-base-content/60 hover:text-primary hover:bg-primary/10 transition-colors"
+          title="Start or join a meeting in this space"
+        >
+          <span class="hero-video-camera size-4"></span>
+          <span class="hidden md:inline">Meet</span>
+        </button>
+
+        <div class="flex flex-shrink-0 items-center gap-3 text-xs text-base-content/50">
+          <.form
+            for={@search_form}
+            id="chat-search-form"
+            phx-change="search_submit"
+            phx-submit="search_submit"
+            class="hidden md:block"
+          >
+            <div class="flex items-center gap-2">
+              <.input
+                field={@search_form[:query]}
+                type="text"
+                placeholder="Search messages…"
+                autocomplete="off"
+                phx-debounce="250"
+                class="input input-bordered input-sm w-64 text-sm"
+              />
+
+              <button
+                :if={present?(@search_query)}
+                type="button"
+                phx-click="search_clear"
+                class="rounded px-2 py-1 text-xs hover:bg-base-300"
+              >
+                Clear
+              </button>
+            </div>
+          </.form>
+
+          <button
+            :if={@canvases != []}
+            phx-click="canvas_panel_toggle"
+            class={[
+              "flex items-center gap-1 rounded px-2 py-0.5 text-xs text-base-content/50 hover:text-base-content transition-colors hover:bg-base-300",
+              @show_canvases && "!bg-base-300 !text-primary"
+            ]}
+          >
+            <span class="hero-puzzle-piece size-4"></span>
+            <span class="hidden md:inline">{length(@canvases)}</span>
+          </button>
+
+          <button
+            :if={@pins != []}
+            phx-click="pin_panel_toggle"
+            class={[
+              "flex items-center gap-1 rounded px-2 py-0.5 text-xs text-base-content/50 hover:text-base-content transition-colors hover:bg-base-300",
+              @show_pins && "!bg-base-300 !text-primary"
+            ]}
+          >
+            <span class="hero-bookmark-solid size-4"></span>
+            <span>{length(@pins)} pinned</span>
+          </button>
+
+          <%!-- Active agent indicator --%>
+          <span
+            :if={@active_agent_participant_id != nil}
+            class="flex items-center gap-1 rounded px-2 py-0.5 text-xs text-success"
+          >
+            <span>🟢</span>
+            <span class="hidden md:inline">Talking to {@active_agent_name || "Agent"}</span>
+            <button
+              phx-click="active_agent_clear"
+              class="ml-1 text-base-content/40 hover:text-error transition-colors"
+              title="Clear active agent"
+            >
+              <span class="hero-x-mark size-3"></span>
+            </button>
+          </span>
+          <span
+            :if={
+              @active_agent_participant_id == nil && @active_space.watch_enabled &&
+                (@agent_presence[:joined?] || @has_agent_participant)
+            }
+            class="flex items-center gap-1 rounded px-2 py-0.5 text-xs text-success/60"
+          >
+            <span>🟢</span>
+            <span class="hidden md:inline">
+              {PresenceHooks.primary_agent_label(@active_space, @space_participants)} listening
+            </span>
+          </span>
+
+          <%!-- Watch toggle (hidden for DM spaces — always ON) --%>
+          <button
+            :if={
+              (@agent_presence[:joined?] || @has_agent_participant) && @active_space.kind != "dm"
+            }
+            phx-click="toggle_watch"
+            class={[
+              "flex items-center gap-1 rounded px-2 py-0.5 text-xs text-base-content/50 hover:text-base-content transition-colors hover:bg-base-300",
+              !@active_space.watch_enabled && "!bg-warning/20 !text-warning"
+            ]}
+            title={
+              if @active_space.watch_enabled,
+                do: "Disable watch — agent won't auto-respond",
+                else: "Enable watch — agent will auto-respond"
+            }
+          >
+            <span class={[
+              "size-4",
+              if(@active_space.watch_enabled, do: "hero-eye", else: "hero-eye-slash")
+            ]}>
+            </span>
+            <span class="hidden md:inline">
+              {if @active_space.watch_enabled, do: "watching", else: "paused"}
+            </span>
+          </button>
+
+          <button
+            phx-click="settings_open"
+            class="flex items-center gap-1 rounded px-2 py-0.5 text-xs text-base-content/50 hover:text-base-content transition-colors hover:bg-base-300"
+            title="Space settings"
+          >
+            <span class="hero-cog-6-tooth size-4"></span>
+            <span class="hidden md:inline">settings</span>
+          </button>
+        </div>
+      </header>
+
+      <div
+        :if={present?(@search_query)}
+        class="border-b border-base-300 bg-base-200 px-5 py-3"
+      >
+        <div class="flex items-center justify-between gap-3">
+          <div>
+            <p class="text-xs font-semibold uppercase tracking-widest text-base-content/50">
+              Search Results
+            </p>
+            <p class="text-sm text-base-content/70">
+              “{@search_query}” · {length(@search_results)} match{if length(@search_results) == 1,
+                do: "",
+                else: "es"}
+            </p>
+          </div>
+
+          <button phx-click="search_clear" class="btn btn-ghost btn-xs">
+            Clear
+          </button>
+        </div>
+
+        <div class="mt-3 space-y-2">
+          <button
+            :for={result <- @search_results}
+            type="button"
+            phx-click="search_open_result"
+            phx-value-message-id={result.id}
+            class="block w-full rounded-xl border border-base-300 bg-base-100 px-3 py-2 text-left transition-colors hover:border-primary/40 hover:bg-base-100/80"
+          >
+            <div class="flex flex-wrap items-center gap-2 text-[11px] uppercase tracking-widest text-base-content/50">
+              <span>{PresenceHooks.sender_name(@participants_map, result.participant_id)}</span>
+              <.local_time
+                id={"search-time-#{result.id}"}
+                timestamp={result.inserted_at}
+              />
+              <span
+                :if={is_binary(result.thread_id)}
+                class="rounded-full bg-base-300 px-2 py-0.5 normal-case tracking-normal text-[10px]"
+              >
+                Thread
+              </span>
+              <span
+                :if={result.search_rank}
+                class="font-mono normal-case tracking-normal text-[10px] text-base-content/40"
+              >
+                rank {Float.round(result.search_rank, 3)}
+              </span>
+            </div>
+
+            <p class="mt-1 text-sm leading-6 text-base-content">
+              {search_headline(result)}
+            </p>
+          </button>
+
+          <div
+            :if={@search_results == []}
+            class="rounded-xl border border-dashed border-base-300 bg-base-100 px-3 py-4 text-sm text-base-content/50"
+          >
+            No messages matched this search yet.
+          </div>
+        </div>
+      </div>
+
+      <div
+        :if={@show_pins && @pins != []}
+        class="border-b border-base-300 bg-base-200 px-5 py-2"
+      >
+        <p class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
+          Pinned Messages
+        </p>
+        <div class="flex flex-col gap-1 max-h-40 overflow-y-auto">
+          <div
+            :for={pin <- @pins}
+            class="flex items-center justify-between rounded bg-base-100 px-3 py-1.5 text-sm"
+          >
+            <span class="truncate text-base-content/70 text-xs">
+              <span class="hero-bookmark-solid size-3 inline-block align-text-bottom"></span>
+              pinned message
+              <span class="font-mono text-base-content/40 text-[10px]">
+                {String.slice(pin.message_id, 0, 8)}…
+              </span>
+            </span>
+            <button
+              phx-click="pin_toggle"
+              phx-value-message-id={pin.message_id}
+              phx-value-space-id={pin.space_id}
+              class="ml-2 text-xs text-base-content/40 hover:text-error"
+            >
+              Unpin
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div
+        :if={@show_canvases}
+        class="border-b border-base-300 bg-base-200 px-5 py-3"
+      >
+        <div class="grid gap-3 xl:grid-cols-[minmax(0,1fr)_320px]">
+          <div class="space-y-2">
+            <p class="text-xs font-semibold uppercase tracking-widest text-base-content/50">
+              Live Canvases
+            </p>
+
+            <button
+              :for={canvas <- @canvases}
+              type="button"
+              phx-click="canvas_open"
+              phx-value-canvas-id={canvas.id}
+              class={[
+                "flex w-full items-center justify-between rounded-xl border px-3 py-2 text-left transition-colors",
+                "border-base-300 bg-base-100 hover:border-primary/40 hover:bg-base-100/80",
+                @active_canvas && @active_canvas.id == canvas.id && "border-primary bg-primary/5"
+              ]}
+            >
+              <div class="min-w-0">
+                <p class="truncate text-sm font-semibold text-base-content">
+                  {canvas.title || CanvasHooks.humanize_type(canvas.canvas_type)}
+                </p>
+                <p class="text-[11px] uppercase tracking-widest text-base-content/50">
+                  {CanvasHooks.humanize_type(canvas.canvas_type)}
+                </p>
+              </div>
+
+              <span class="ml-3 rounded-full bg-base-300 px-2 py-0.5 text-[11px] text-base-content/60">
+                Open
+              </span>
+            </button>
+
+            <div
+              :if={@canvases == []}
+              class="rounded-xl border border-dashed border-base-300 bg-base-100 px-3 py-4 text-sm text-base-content/50"
+            >
+              No canvases yet. Create one to collaborate live in this channel.
+            </div>
+          </div>
+
+          <.form
+            for={@new_canvas_form}
+            id="new-canvas-form"
+            phx-submit="canvas_create"
+            class="space-y-3 rounded-2xl border border-base-300 bg-base-100 p-4"
+          >
+            <div>
+              <p class="text-sm font-semibold text-base-content">New canvas</p>
+              <p class="text-xs text-base-content/50">
+                Creates a canvas and posts a linked canvas message.
+              </p>
+            </div>
+
+            <div class="space-y-1.5">
+              <label class="text-xs font-semibold uppercase tracking-widest text-base-content/50">
+                Title
+              </label>
+              <input
+                type="text"
+                name="canvas[title]"
+                value={@new_canvas_form[:title].value || ""}
+                placeholder="Sprint planning board"
+                class="input input-bordered w-full"
+              />
+            </div>
+
+            <div class="space-y-1.5">
+              <label class="text-xs font-semibold uppercase tracking-widest text-base-content/50">
+                Canvas type
+              </label>
+              <select name="canvas[canvas_type]" class="select select-bordered w-full">
+                <option
+                  :for={type <- @canvas_types}
+                  value={type}
+                  selected={@new_canvas_form[:canvas_type].value == type}
+                >
+                  {CanvasHooks.humanize_type(type)}
+                </option>
+              </select>
+            </div>
+
+            <button
+              type="submit"
+              class="btn btn-neutral w-full"
+              disabled={is_nil(@current_participant)}
+            >
+              Create canvas
+            </button>
+          </.form>
+        </div>
+      </div>
+
+      <div id="inline-focus-listener" phx-hook="InlineFocus" class="hidden"></div>
+      <div
+        id="message-list"
+        class="flex-1 overflow-y-auto overflow-x-hidden bg-base-100 px-5 py-4 flex flex-col space-y-1"
+        phx-update="stream"
+        phx-hook="ScrollToBottom"
+      >
+        <div
+          :for={{dom_id, msg} <- @streams.messages}
+          :if={is_nil(msg.deleted_at)}
+          id={dom_id}
+          class={[
+            "group relative flex gap-3 rounded-xl px-2 py-2 transition-colors",
+            MapSet.member?(@agent_participant_ids, msg.participant_id) && "msg-agent",
+            @highlighted_message_id == msg.id && "bg-primary/5 ring-1 ring-primary/20",
+            @current_participant && msg.participant_id == @current_participant.id &&
+              !MapSet.member?(@agent_participant_ids, msg.participant_id) && "bg-base-200/60"
+          ]}
+          style={
+            if MapSet.member?(@agent_participant_ids, msg.participant_id) do
+              accent =
+                Map.get(
+                  @agent_colors_map,
+                  msg.participant_id,
+                  Platform.Agents.ColorPalette.default_accent()
+                )
+
+              "--agent-accent: #{accent};"
+            end
+          }
+          data-participant-id={msg.participant_id}
+          data-date={msg.inserted_at && DateTime.to_date(msg.inserted_at) |> Date.to_iso8601()}
+        >
+          <%!-- Avatar circle (hidden when grouped with previous message via JS) --%>
+          <div class="flex-shrink-0 mt-0.5 message-avatar">
+            <%= if MapSet.member?(@agent_participant_ids, msg.participant_id) do %>
+              <div class="w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold select-none bg-base-300 text-primary msg-agent-avatar">
+                {PresenceHooks.avatar_initial(@participants_map, msg.participant_id)}
+              </div>
+            <% else %>
+              <.human_avatar
+                name={PresenceHooks.sender_name(@participants_map, msg.participant_id)}
+                avatar_url={
+                  PresenceHooks.sender_avatar_url(@participants_map, msg.participant_id)
+                }
+                seed={PresenceHooks.sender_avatar_seed(@participants_map, msg.participant_id)}
+                size="md"
+              />
+            <% end %>
+          </div>
+
+          <%!-- Message body --%>
+          <div class="flex-1 min-w-0">
+            <div class="flex items-baseline gap-2 message-header">
+              <span class={[
+                "text-sm font-bold",
+                if(MapSet.member?(@agent_participant_ids, msg.participant_id),
+                  do: "msg-agent-name",
+                  else: "text-base-content"
+                )
+              ]}>
+                {PresenceHooks.sender_name(@participants_map, msg.participant_id)}
+                <span
+                  :if={MapSet.member?(@agent_participant_ids, msg.participant_id)}
+                  class="msg-agent-badge"
+                >
+                  AI
+                </span>
+              </span>
+              <.local_time
+                id={"message-time-#{msg.id}"}
+                timestamp={msg.inserted_at}
+                class="text-[10px] text-base-content/40"
+              />
+
+              <div class="ml-auto hidden group-hover:flex items-center gap-1">
+                <button
+                  :for={emoji <- @quick_emojis}
+                  phx-click="react"
+                  phx-value-message_id={msg.id}
+                  phx-value-emoji={emoji}
+                  title={"React with #{emoji}"}
+                  class="rounded px-1.5 py-0.5 text-sm hover:bg-base-300 transition-colors"
+                >
+                  {emoji}
+                </button>
+
+                <button
+                  :if={present?(msg.content)}
+                  phx-hook="CopyToClipboard"
+                  id={"copy-msg-#{msg.id}"}
+                  data-clipboard-text={msg.content}
+                  title="Copy message"
+                  class="rounded px-1.5 py-0.5 text-xs text-base-content/50 hover:text-base-content hover:bg-base-300 transition-colors"
+                >
+                  <span class="hero-clipboard-document-list size-4"></span>
+                </button>
+
+                <button
+                  phx-click="toggle_inline_thread"
+                  phx-value-message-id={msg.id}
+                  title="Reply"
+                  class="rounded px-1.5 py-0.5 text-xs text-base-content/50 hover:text-base-content hover:bg-base-300 transition-colors"
+                >
+                  <span class="hero-chat-bubble-left-right size-4"></span>
+                </button>
+
+                <button
+                  phx-click="toggle_inline_thread"
+                  phx-value-message-id={msg.id}
+                  title="Open thread"
+                  class="rounded px-1.5 py-0.5 text-xs text-base-content/40 hover:text-base-content/60 hover:bg-base-300 transition-colors"
+                >
+                  <span class="hero-arrow-top-right-on-square size-4"></span>
+                </button>
+
+                <button
+                  phx-click="pin_toggle"
+                  phx-value-message-id={msg.id}
+                  phx-value-space-id={msg.space_id}
+                  title={if MapSet.member?(@pinned_message_ids, msg.id), do: "Unpin", else: "Pin"}
+                  class="rounded px-1.5 py-0.5 text-xs text-base-content/50 hover:text-base-content hover:bg-base-300 transition-colors"
+                >
+                  <span class={[
+                    "size-4",
+                    if(MapSet.member?(@pinned_message_ids, msg.id),
+                      do: "hero-bookmark-solid",
+                      else: "hero-bookmark"
+                    )
+                  ]}>
+                  </span>
+                </button>
+              </div>
+            </div>
+
+            <div
+              :if={msg.content_type == "canvas"}
+              class="mt-1"
+            >
+              <div :if={Map.get(@canvases_by_message_id, msg.id)} class="min-w-0 overflow-hidden">
+                <.canvas_document
+                  canvas={Map.get(@canvases_by_message_id, msg.id)}
+                  inline={true}
+                  dom_id_base="chat-message-inline"
+                />
+              </div>
+
+              <div
+                :if={is_nil(Map.get(@canvases_by_message_id, msg.id))}
+                phx-click="canvas_open_mobile"
+                phx-value-message-id={msg.id}
+                class="rounded-lg bg-base-200 px-3 py-2 cursor-pointer hover:bg-base-300 transition-colors"
+              >
+                <p class="truncate text-sm font-semibold text-base-content">
+                  {CanvasHooks.message_canvas_title(msg, @canvases_by_message_id)}
+                </p>
+                <p class="text-[11px] uppercase tracking-widest text-base-content/50">
+                  {CanvasHooks.message_canvas_type(msg, @canvases_by_message_id)} canvas
+                </p>
+              </div>
+            </div>
+
+            <div
+              :if={msg.content_type != "canvas" and present?(msg.content)}
+              class="prose prose-sm max-w-none text-sm text-base-content break-words chat-markdown"
+            >
+              {Platform.Chat.ContentRenderer.render_message(msg.content)}
+            </div>
+
+            <%!-- Image gallery --%>
+            <% images = Enum.filter(Map.get(@attachments_map, msg.id, []), &image_attachment?/1) %>
+            <% non_images =
+              Enum.reject(Map.get(@attachments_map, msg.id, []), &image_attachment?/1) %>
+            <div
+              :if={images != []}
+              class={"image-gallery count-#{min(length(images), 5)}"}
+            >
+              <div
+                :for={{attachment, idx} <- Enum.with_index(images)}
+                phx-click="open_lightbox"
+                phx-value-url={attachment_url(attachment)}
+                class={"gallery-item cursor-pointer#{if length(images) == 3 and idx == 0, do: " span-2", else: ""}"}
+              >
+                <img
+                  src={attachment_url(attachment)}
+                  alt={attachment.filename}
+                  loading="lazy"
+                />
+                <span class="gallery-filename">{attachment.filename}</span>
+                <div class="gallery-overlay">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" /><line
+                      x1="11"
+                      y1="8"
+                      x2="11"
+                      y2="14"
+                    /><line x1="8" y1="11" x2="14" y2="11" />
+                  </svg>
+                </div>
+              </div>
+            </div>
+            <div :if={non_images != []} class="mt-1 flex flex-col gap-2">
+              <a
+                :for={attachment <- non_images}
+                href={attachment_url(attachment)}
+                target="_blank"
+                rel="noopener noreferrer"
+                class="inline-flex w-fit items-center gap-2 rounded bg-base-200 px-2 py-1 text-sm text-primary hover:bg-base-300 hover:no-underline"
+              >
+                <span class="hero-paper-clip size-4"></span>
+                <span>{attachment.filename}</span>
+                <span class="text-xs text-base-content/40">
+                  ({format_bytes(attachment.byte_size)})
+                </span>
+              </a>
+            </div>
+
+            <div
+              :if={Map.get(@reactions_map, msg.id, []) != []}
+              class="flex flex-wrap gap-1 mt-0.5"
+            >
+              <button
+                :for={r <- Map.get(@reactions_map, msg.id, [])}
+                phx-click="react"
+                phx-value-message_id={msg.id}
+                phx-value-emoji={r.emoji}
+                class={[
+                  "flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs transition-colors",
+                  "hover:bg-base-300",
+                  r.reacted_by_me && "border-primary bg-primary/10 text-primary",
+                  !r.reacted_by_me && "border-base-300 text-base-content/60"
+                ]}
+              >
+                <span>{r.emoji}</span>
+                <span>{r.count}</span>
+              </button>
+
+              <button
+                class="flex items-center gap-1 rounded-full border border-dashed border-base-300 px-2 py-0.5 text-xs text-base-content/40 hover:bg-base-300 hover:text-base-content transition-colors opacity-0 group-hover:opacity-100"
+                phx-click="open_reaction_picker"
+                phx-value-message-id={msg.id}
+              >
+                <span class="hero-plus size-4"></span>
+              </button>
+            </div>
+
+            <%!-- Inline thread: indicator + expanded thread --%>
+            <div :if={
+              Map.has_key?(@thread_previews, msg.id) or
+                MapSet.member?(@expanded_threads, msg.id)
+            }>
+              <%!-- Thread indicator (collapsed state) --%>
+              <div
+                :if={not MapSet.member?(@expanded_threads, msg.id)}
+                phx-click="toggle_inline_thread"
+                phx-value-message-id={msg.id}
+                class="thread-indicator"
+              >
+                <div class="thread-avatars">
+                  <div class="t-av ai">↩</div>
+                </div>
+                <span class="ti-count">
+                  {Map.get(@thread_previews, msg.id, %{}) |> Map.get(:reply_count, 0)}
+                  {if Map.get(@thread_previews, msg.id, %{}) |> Map.get(:reply_count, 0) == 1,
+                    do: "reply",
+                    else: "replies"}
+                </span>
+                <span
+                  :if={Map.get(@thread_previews, msg.id, %{}) |> Map.get(:last_reply_at)}
+                  class="ti-time"
+                >
+                  · {relative_time(
+                    Map.get(@thread_previews, msg.id, %{})
+                    |> Map.get(:last_reply_at)
+                  )}
+                </span>
+              </div>
+
+              <%!-- Expanded thread --%>
+              <div
+                :if={MapSet.member?(@expanded_threads, msg.id)}
+                class="thread-replies"
+                id={"inline-thread-#{msg.id}"}
+                phx-hook="InlineThread"
+              >
+                <div
+                  :for={tmsg <- Map.get(@inline_thread_messages, msg.id, [])}
+                  class={[
+                    "thread-reply",
+                    if(MapSet.member?(@agent_participant_ids, tmsg.participant_id),
+                      do: "agent-reply"
+                    )
+                  ]}
+                >
+                  <div
+                    class={[
+                      "msg-avatar",
+                      if(MapSet.member?(@agent_participant_ids, tmsg.participant_id),
+                        do: "ai",
+                        else: "human"
+                      )
+                    ]}
+                    style="width:28px;height:28px;font-size:10px"
+                  >
+                    {PresenceHooks.avatar_initial(@participants_map, tmsg.participant_id)}
+                  </div>
+                  <div class="msg-body">
+                    <div class="msg-header">
+                      <span class={[
+                        "msg-username",
+                        if(MapSet.member?(@agent_participant_ids, tmsg.participant_id),
+                          do: "ai-name"
+                        )
+                      ]}>
+                        {PresenceHooks.sender_name(@participants_map, tmsg.participant_id)}
+                      </span>
+                      <span
+                        :if={MapSet.member?(@agent_participant_ids, tmsg.participant_id)}
+                        class="ai-badge"
+                      >
+                        AI
+                      </span>
+                      <.local_time
+                        id={"inline-thread-ts-#{tmsg.id}"}
+                        timestamp={tmsg.inserted_at}
+                        class="msg-time"
+                      />
+                    </div>
+                    <div class="msg-text">
+                      {Platform.Chat.ContentRenderer.render_message(tmsg.content)}
+                    </div>
+                  </div>
+                </div>
+
+                <%!-- Thread composer --%>
+                <div class="thread-composer" style="flex-direction: column; align-items: stretch;">
+                  <.form
+                    for={%{}}
+                    id={"inline-thread-compose-form-#{msg.id}"}
+                    phx-submit="send_inline_thread_message"
+                    class="thread-composer-form"
+                    style="position: relative;"
+                  >
+                    <%!-- @mention autocomplete dropdown (inline thread) --%>
+                    <div
+                      :if={
+                        @mention_suggestions != [] &&
+                          @mention_source == "inline-thread-compose-form-#{msg.id}"
+                      }
+                      style="position: absolute; bottom: 100%; left: 0; z-index: 50; width: 16rem; margin-bottom: 4px;"
+                    >
+                      <div class="rounded-xl border border-base-300 bg-base-100 shadow-lg overflow-hidden">
+                        <div class="py-1">
+                          <button
+                            :for={{suggestion, idx} <- Enum.with_index(@mention_suggestions)}
+                            type="button"
+                            data-mention-suggestion={if idx == 0, do: "first"}
+                            phx-click={
+                              JS.dispatch("chat:insert-mention",
+                                to: "#inline-thread-compose-#{msg.id}",
+                                detail: %{name: suggestion.display_name || "User"}
+                              )
+                            }
+                            class="flex w-full items-center gap-2 px-3 py-2 text-sm hover:bg-base-200 text-left transition-colors"
+                          >
+                            <div class="w-6 h-6 rounded-full bg-primary text-primary-content flex items-center justify-center text-xs font-bold flex-shrink-0">
+                              {(suggestion.display_name || "U")
+                              |> String.trim()
+                              |> String.first()
+                              |> String.upcase()}
+                            </div>
+                            <span class="flex-1 truncate font-medium">
+                              {suggestion.display_name || "User"}
+                            </span>
+                            <span class={[
+                              "rounded-full px-1.5 py-0.5 text-[10px] uppercase tracking-wider",
+                              suggestion.participant_type == "agent" &&
+                                "bg-primary/10 text-primary",
+                              suggestion.participant_type != "agent" &&
+                                "bg-base-300 text-base-content/50"
+                            ]}>
+                              {suggestion.participant_type}
+                            </span>
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                    <input
+                      type="hidden"
+                      name="inline_thread_compose[message_id]"
+                      value={msg.id}
+                    />
+                    <input
+                      type="text"
+                      name="inline_thread_compose[text]"
+                      id={"inline-thread-compose-#{msg.id}"}
+                      placeholder="Reply in thread..."
+                      autocomplete="off"
+                      class="thread-input"
+                      phx-hook="ComposeInput"
+                    />
+                    <button
+                      type="submit"
+                      class="thread-send"
+                      disabled={is_nil(@current_participant)}
+                      title="Reply"
+                    >
+                      <span class="hero-paper-airplane size-3.5 -rotate-45"></span>
+                    </button>
+                  </.form>
+                </div>
+
+                <%!-- Collapse thread --%>
+                <button
+                  phx-click="toggle_inline_thread"
+                  phx-value-message-id={msg.id}
+                  class="thread-collapse"
+                >
+                  ▲ Collapse thread
+                </button>
+              </div>
+            </div>
+          </div>
+          <%!-- end message body --%>
+
+          <%!-- Left-gutter reply button (desktop, hidden until hover via CSS) --%>
+          <button
+            phx-click="toggle_inline_thread"
+            phx-value-message-id={msg.id}
+            class="msg-reply-gutter"
+            title="Reply"
+          >
+            ↩
+          </button>
+        </div>
+      </div>
+
+      <%!-- Streaming reply bubbles --%>
+      <div
+        :for={{chunk_id, entry} <- @streaming_replies}
+        :if={entry.text != nil and entry.text != ""}
+        id={"streaming-#{chunk_id}"}
+        class="flex-shrink-0 px-5 pb-2 msg-agent"
+        style={
+          "--agent-accent: #{Map.get(@agent_colors_map, entry.participant_id, Platform.Agents.ColorPalette.default_accent())};"
+        }
+      >
+        <div class="flex items-start gap-2">
+          <div class="flex size-7 shrink-0 items-center justify-center rounded-full bg-base-300 text-xs font-medium msg-agent-avatar">
+            {PresenceHooks.avatar_initial(@participants_map, entry.participant_id)}
+          </div>
+          <div class="min-w-0 flex-1">
+            <div class="text-xs font-medium mb-0.5 msg-agent-name">
+              {PresenceHooks.sender_name(@participants_map, entry.participant_id)}
+            </div>
+            <div
+              class="prose prose-sm max-w-none text-sm text-base-content/80 border-l-2 pl-3"
+              style="border-color: color-mix(in oklch, var(--agent-accent, oklch(82% 0.12 207)) 30%, transparent);"
+            >
+              {entry.text}<span
+                class="inline-block w-1.5 h-4 animate-pulse ml-0.5 align-middle rounded-sm"
+                style="background: color-mix(in oklch, var(--agent-accent, oklch(82% 0.12 207)) 50%, transparent);"
+              ></span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <%!-- Typing indicator --%>
+      <div
+        :if={not MapSet.equal?(@agent_typing_pids, MapSet.new()) and @streaming_replies == %{}}
+        class="flex-shrink-0 px-5 pb-1 flex items-center gap-2 text-xs text-base-content/50"
+      >
+        <span class="flex gap-0.5 items-center">
+          <span
+            class="inline-block size-1.5 rounded-full bg-base-content/40 animate-bounce"
+            style="animation-delay: 0ms"
+          >
+          </span>
+          <span
+            class="inline-block size-1.5 rounded-full bg-base-content/40 animate-bounce"
+            style="animation-delay: 150ms"
+          >
+          </span>
+          <span
+            class="inline-block size-1.5 rounded-full bg-base-content/40 animate-bounce"
+            style="animation-delay: 300ms"
+          >
+          </span>
+        </span>
+        <span>
+          {PresenceHooks.thinking_label(@agent_typing_pids, @participants_map)} is thinking…
+        </span>
+      </div>
+
+      <div class="flex-shrink-0 compose-input-area safe-area-bottom">
+        <.form
+          :if={@active_space}
+          for={@compose_form}
+          id="compose-form"
+          phx-submit="send_message"
+          phx-change="compose_changed"
+          class="flex flex-col gap-2"
+        >
+          <%!-- @mention autocomplete dropdown --%>
+          <div
+            :if={@mention_suggestions != [] && @mention_source == "compose-form"}
+            class="relative"
+          >
+            <div class="absolute bottom-0 left-0 z-50 w-64 rounded-xl border border-base-300 bg-base-100 shadow-lg overflow-hidden">
+              <div class="py-1">
+                <button
+                  :for={{suggestion, idx} <- Enum.with_index(@mention_suggestions)}
+                  type="button"
+                  data-mention-suggestion={if idx == 0, do: "first"}
+                  phx-click={
+                    JS.dispatch("chat:insert-mention",
+                      to: "##{@compose_form[:text].id}",
+                      detail: %{name: suggestion.name}
+                    )
+                  }
+                  class="flex w-full items-center gap-2 px-3 py-2 text-sm hover:bg-base-200 text-left transition-colors"
+                >
+                  <%= if suggestion.participant_type == "agent" do %>
+                    <div class="w-6 h-6 rounded-full bg-primary text-primary-content flex items-center justify-center text-xs font-bold flex-shrink-0">
+                      {suggestion
+                      |> Map.get(:name)
+                      |> String.trim()
+                      |> String.first()
+                      |> String.upcase()}
+                    </div>
+                  <% else %>
+                    <.human_avatar
+                      name={suggestion.name}
+                      avatar_url={suggestion.avatar_url}
+                      seed={suggestion.avatar_seed}
+                      size="sm"
+                      class="flex-shrink-0"
+                    />
+                  <% end %>
+                  <span class="flex-1 truncate font-medium">
+                    {suggestion.name}
+                  </span>
+                  <span class={[
+                    "rounded-full px-1.5 py-0.5 text-[10px] uppercase tracking-wider",
+                    suggestion.participant_type == "agent" && "bg-primary/10 text-primary",
+                    suggestion.participant_type != "agent" && "bg-base-300 text-base-content/50"
+                  ]}>
+                    {suggestion.participant_type}
+                  </span>
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <%!-- Hidden file input — outside pill bar to avoid flex layout interference --%>
+          <.live_file_input
+            upload={@uploads.attachments}
+            class="hidden"
+            id="upload-file-trigger"
+          />
+
+          <%!-- Pill-shaped compose bar --%>
+          <div class="compose-pill-bar">
+            <button
+              type="button"
+              phx-click="upload_dialog_open"
+              class="compose-pill-attach cursor-pointer text-base-content/50 hover:bg-base-300/50 transition-colors"
+              title="Attach files"
+            >
+              <span class="hero-plus size-5"></span>
+            </button>
+
+            <textarea
+              name="compose[text]"
+              id={@compose_form[:text].id}
+              data-draft-key={if @active_space, do: "chat-draft:" <> @active_space.id, else: nil}
+              placeholder={"Message ##{(@active_space && @active_space.name) || ""}"}
+              autocomplete="off"
+              rows="1"
+              class="min-w-0 flex-1 text-sm resize-none"
+              style="line-height:1.5;padding:4px 0;min-height:28px;max-height:200px;overflow-y:auto;field-sizing:content"
+              phx-hook="ComposeInput"
+            >{Phoenix.HTML.Form.normalize_value("text", @compose_form[:text].value)}</textarea>
+
+            <button
+              type="submit"
+              class="compose-pill-send"
+              disabled={is_nil(@current_participant)}
+              title="Send"
+            >
+              <span class="hero-paper-airplane size-4 -rotate-45"></span>
+            </button>
+          </div>
+
+          <p
+            :for={error <- upload_errors(@uploads.attachments)}
+            class="text-xs text-error"
+          >
+            {upload_error_to_string(error)}
+          </p>
+
+          <div :for={entry <- @uploads.attachments.entries}>
+            <p
+              :for={error <- upload_errors(@uploads.attachments, entry)}
+              class="text-xs text-error"
+            >
+              {entry.client_name}: {upload_error_to_string(error)}
+            </p>
+          </div>
+        </.form>
+
+        <p :if={is_nil(@current_participant) && @active_space} class="mt-1 text-xs text-error">
+          Unable to join space — messages are read-only.
+        </p>
+      </div>
+
+      <.upload_dialog
+        open={@upload_dialog_open}
+        active_space={@active_space}
+        uploads={@uploads}
+        caption={@upload_caption}
+        tagged_agents={@upload_tagged_agents}
+      />
+    </div>
+
+    <.canvas_overlay canvas={@active_canvas} />
+
+    <.meeting_panel
+      in_meeting={@in_meeting}
+      active_space={@active_space}
+      mic_enabled={@mic_enabled}
+      camera_enabled={@camera_enabled}
+      screen_share_enabled={@screen_share_enabled}
+    />
+  </div>
+</div>
+
+<.live_component
+  module={SettingsComponent}
+  id="chat-settings"
+  open={@show_settings}
+  space={@active_space}
+/>
+
+<.live_component
+  module={NewChannelComponent}
+  id="chat-new-channel"
+  open={@show_new_channel_modal}
+/>
+
+<.live_component
+  module={NewConversationComponent}
+  id="chat-new-conversation"
+  open={@show_new_conversation_modal}
+  user_id={@user_id}
+/>
+
+<.image_lightbox url={@lightbox_url} />

@@ -116,7 +116,7 @@ defmodule PlatformWeb.Chat.CanvasComponents do
 
     ~H"""
     <div class="space-y-4">
-      <.form for={to_form(@values, as: :values)} phx-submit="save_canvas_form" class="space-y-3">
+      <.form for={to_form(@values, as: :values)} phx-submit="canvas_save_form" class="space-y-3">
         <input type="hidden" name="canvas_id" value={@canvas.id} />
 
         <div :for={field <- @fields} class="space-y-1.5">
@@ -172,7 +172,7 @@ defmodule PlatformWeb.Chat.CanvasComponents do
     <div class="space-y-3">
       <.form
         for={to_form(%{"language" => @language, "content" => @content}, as: :code_canvas)}
-        phx-submit="save_canvas_code"
+        phx-submit="canvas_save_code"
         class="space-y-3"
       >
         <input type="hidden" name="canvas_id" value={@canvas.id} />
@@ -218,7 +218,7 @@ defmodule PlatformWeb.Chat.CanvasComponents do
     <div class="space-y-3">
       <.form
         for={to_form(%{"diagram_title" => @diagram_title, "source" => @source}, as: :diagram_canvas)}
-        phx-submit="save_canvas_diagram"
+        phx-submit="canvas_save_diagram"
         class="space-y-3"
       >
         <input type="hidden" name="canvas_id" value={@canvas.id} />
@@ -290,7 +290,7 @@ defmodule PlatformWeb.Chat.CanvasComponents do
         </span>
         <button
           type="button"
-          phx-click="refresh_canvas_dashboard"
+          phx-click="canvas_refresh_dashboard"
           phx-value-id={@canvas.id}
           class="btn btn-neutral btn-sm"
         >

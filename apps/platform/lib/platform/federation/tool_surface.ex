@@ -2188,8 +2188,7 @@ defmodule Platform.Federation.ToolSurface do
           ]
           |> Enum.reject(fn {_k, v} -> is_nil(v) end)
 
-        provider = Platform.Memory.Provider.configured()
-        {:ok, search_with_provider(provider, query, opts)}
+        {:ok, search_with_memory_service(query, opts)}
     end
   end
 
@@ -2209,25 +2208,27 @@ defmodule Platform.Federation.ToolSurface do
 
   # ── Memory search helpers ────────────────────────────────────────────────
 
-  defp search_with_provider(Platform.Memory.Providers.Null, _query, opts) do
-    OrgContext.search_memory_entries(opts)
-    |> Enum.map(&serialize_memory_entry/1)
+  defp search_with_memory_service(query, opts) do
+    if Platform.Memory.enabled?() and is_binary(query) and query != "" do
+      case Platform.Memory.search(query, opts) do
+        {:ok, [_ | _] = scored_results} ->
+          hydrate_scored_results(scored_results)
+
+        {:ok, []} ->
+          db_fallback_search(opts)
+
+        {:error, reason} ->
+          Logger.warning("Memory provider search failed, falling back to DB: #{inspect(reason)}")
+          db_fallback_search(opts)
+      end
+    else
+      db_fallback_search(opts)
+    end
   end
 
-  defp search_with_provider(provider, query, opts) do
-    case provider.search(query || "", opts) do
-      {:ok, [_ | _] = scored_results} ->
-        hydrate_scored_results(scored_results)
-
-      {:ok, []} ->
-        # Empty results from provider — fall back to DB search
-        search_with_provider(Platform.Memory.Providers.Null, query, opts)
-
-      {:error, reason} ->
-        Logger.warning("Memory provider search failed, falling back to DB: #{inspect(reason)}")
-
-        search_with_provider(Platform.Memory.Providers.Null, query, opts)
-    end
+  defp db_fallback_search(opts) do
+    OrgContext.search_memory_entries(opts)
+    |> Enum.map(&serialize_memory_entry/1)
   end
 
   defp hydrate_scored_results(scored_results) do

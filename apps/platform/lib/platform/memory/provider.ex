@@ -1,32 +1,36 @@
 defmodule Platform.Memory.Provider do
   @moduledoc """
-  Behaviour for external memory service providers.
+  Behaviour for memory-service provider adapters.
 
-  Providers handle indexing and semantic search over org memory entries.
-  The main application stores entries in Postgres; providers maintain an
-  external index (e.g. vector embeddings) for richer search capabilities.
-
-  See ADR 0033 for architecture details.
+  A provider handles vector-based ingestion, search, and deletion of org
+  memory entries against an external embedding/retrieval service. The
+  default implementation (`Platform.Memory.Providers.StartupSuite`) targets
+  the Startup Suite [memory-service](https://github.com/Startup-Suite/memory-service);
+  a `Noop` provider is used when no service is configured so the app still
+  starts and `append_memory_entry` + keyword search keep working.
   """
 
   @type entry :: %{
-          id: binary(),
-          content: String.t(),
-          memory_type: String.t(),
-          date: Date.t(),
-          workspace_id: binary() | nil,
-          metadata: map() | nil
+          required(:id) => String.t(),
+          required(:content) => String.t(),
+          required(:date) => String.t() | Date.t(),
+          optional(:memory_type) => String.t(),
+          optional(:workspace_id) => String.t() | nil,
+          optional(:metadata) => map()
         }
 
-  @type search_result :: %{entry_id: binary(), score: float()}
+  @type search_result :: %{entry_id: String.t(), score: float()}
+  @type search_opts :: [
+          workspace_id: String.t() | nil,
+          memory_type: String.t() | nil,
+          date_from: String.t() | nil,
+          date_to: String.t() | nil,
+          limit: pos_integer()
+        ]
 
-  @callback ingest(entry()) :: :ok | {:error, term()}
-  @callback search(query :: String.t(), opts :: keyword()) ::
+  @callback ingest([entry()], keyword()) :: {:ok, non_neg_integer()} | {:error, term()}
+  @callback search(String.t(), search_opts(), keyword()) ::
               {:ok, [search_result()]} | {:error, term()}
-  @callback delete(entry_id :: binary()) :: :ok | {:error, term()}
-
-  @doc "Returns the currently configured memory provider module."
-  def configured do
-    Application.get_env(:platform, :memory_provider, Platform.Memory.Providers.Null)
-  end
+  @callback delete([String.t()], keyword()) :: {:ok, non_neg_integer()} | {:error, term()}
+  @callback health(keyword()) :: :ok | {:error, term()}
 end

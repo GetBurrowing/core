@@ -231,7 +231,7 @@ defmodule Platform.Chat.AgentResponder do
             if author_participant, do: author_participant.display_name, else: "unknown"
 
           payload = %{
-            signal: build_external_signal(signal, space_id),
+            signal: build_external_signal(signal, space_id, context.agent),
             message: %{content: context.user_message, author: author_name},
             history: context.history,
             context: bundle,
@@ -404,7 +404,9 @@ defmodule Platform.Chat.AgentResponder do
 
   defp history_content(content, _participant, _role), do: content
 
-  defp build_external_signal(signal, space_id) do
+  defp build_external_signal(signal, space_id), do: build_external_signal(signal, space_id, nil)
+
+  defp build_external_signal(signal, space_id, agent) do
     {task_id, task_status} = execution_task_context(space_id)
 
     %{}
@@ -412,6 +414,8 @@ defmodule Platform.Chat.AgentResponder do
     |> Map.put(:space_id, space_id)
     |> maybe_put(:task_id, task_id)
     |> maybe_put(:task_status, task_status)
+    |> maybe_put(:agent_id, Map.get(agent || %{}, :id))
+    |> maybe_put(:agent_slug, Map.get(agent || %{}, :slug))
   end
 
   defp execution_task_context(space_id) do

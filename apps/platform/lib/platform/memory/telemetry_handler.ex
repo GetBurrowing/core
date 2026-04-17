@@ -27,33 +27,24 @@ defmodule Platform.Memory.TelemetryHandler do
 
   @doc false
   def handle_event([:platform, :org, :memory_entry_written], _measurements, metadata, _config) do
-    entry = Platform.Repo.get(Platform.Org.MemoryEntry, metadata.memory_entry_id)
+    if Platform.Memory.enabled?() do
+      entry = Platform.Repo.get(Platform.Org.MemoryEntry, metadata.memory_entry_id)
 
-    if entry do
-      provider = Platform.Memory.Provider.configured()
+      if entry do
+        case Platform.Memory.ingest([entry]) do
+          {:ok, _count} ->
+            :ok
 
-      entry_map = %{
-        id: entry.id,
-        content: entry.content,
-        memory_type: entry.memory_type,
-        date: entry.date,
-        workspace_id: entry.workspace_id,
-        metadata: entry.metadata
-      }
-
-      case provider.ingest(entry_map) do
-        :ok ->
-          :ok
-
-        {:error, reason} ->
-          Logger.warning(
-            "Memory provider ingest failed for entry #{entry.id}: #{inspect(reason)}"
-          )
+          {:error, reason} ->
+            Logger.warning(
+              "Memory provider ingest failed for entry #{entry.id}: #{inspect(reason)}"
+            )
+        end
+      else
+        Logger.warning(
+          "Memory telemetry handler: entry #{metadata.memory_entry_id} not found in database"
+        )
       end
-    else
-      Logger.warning(
-        "Memory telemetry handler: entry #{metadata.memory_entry_id} not found in database"
-      )
     end
   rescue
     error ->

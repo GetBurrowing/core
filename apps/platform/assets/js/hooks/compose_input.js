@@ -75,7 +75,7 @@ const ComposeInput = {
           // Don't send empty/whitespace-only messages
           if (this.el.value.trim().length === 0) return;
 
-          this.pushEvent("clear_mention_suggestions", {});
+          this.pushEvent("mention_clear", {});
           this._lastMentionQuery = null;
 
           const form = this.el.closest("form");
@@ -85,7 +85,7 @@ const ComposeInput = {
       }
 
       if (e.key === "Escape") {
-        this.pushEvent("clear_mention_suggestions", {});
+        this.pushEvent("mention_clear", {});
         this._lastMentionQuery = null;
       }
 
@@ -153,7 +153,7 @@ const ComposeInput = {
         localStorage.setItem(this._draftKey, this.el.value);
       }
 
-      this.pushEvent("clear_mention_suggestions", {});
+      this.pushEvent("mention_clear", {});
       this._lastMentionQuery = null;
       this.el.focus();
     });
@@ -189,7 +189,7 @@ const ComposeInput = {
     } else {
       if (this._lastMentionQuery !== null) {
         this._lastMentionQuery = null;
-        this.pushEvent("clear_mention_suggestions", {});
+        this.pushEvent("mention_clear", {});
       }
     }
   },

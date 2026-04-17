@@ -12,7 +12,9 @@ const MeetingBar = {
     this._bindControls()
 
     this._onDisconnected = () => {
-      this.pushEvent("meeting_bar_state", { mic: false, camera: false, connected: false })
+      // Route to the MeetingBarLive LiveComponent (this.el lives inside it),
+      // not the parent ChatLive which doesn't care about mini-bar state.
+      this.pushEventTo(this.el, "meeting_bar_state", { mic: false, camera: false, connected: false })
     }
     window.addEventListener("livekit:room-disconnected", this._onDisconnected)
 
@@ -40,7 +42,7 @@ const MeetingBar = {
     if (!room || !room.localParticipant) return
     const mic = room.localParticipant.isMicrophoneEnabled ?? true
     const camera = room.localParticipant.isCameraEnabled ?? false
-    this.pushEvent("meeting_bar_state", { mic, camera, connected: true })
+    this.pushEventTo(this.el, "meeting_bar_state", { mic, camera, connected: true })
   },
 
   _bindControls() {
@@ -51,7 +53,7 @@ const MeetingBar = {
       if (!room || !room.localParticipant) return
       const current = room.localParticipant.isMicrophoneEnabled
       room.localParticipant.setMicrophoneEnabled(!current).then(() => {
-        this.pushEvent("mic_toggled", { enabled: !current })
+        this.pushEventTo(this.el, "mic_toggled", { enabled: !current })
       }).catch((err) => console.warn("[MeetingBar] mic toggle failed:", err))
     }
 
@@ -60,7 +62,7 @@ const MeetingBar = {
       if (!room || !room.localParticipant) return
       const current = room.localParticipant.isCameraEnabled
       room.localParticipant.setCameraEnabled(!current).then(() => {
-        this.pushEvent("camera_toggled", { enabled: !current })
+        this.pushEventTo(this.el, "camera_toggled", { enabled: !current })
       }).catch((err) => console.warn("[MeetingBar] camera toggle failed:", err))
     }
 
