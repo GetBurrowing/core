@@ -152,7 +152,7 @@ defmodule Platform.Agents.SystemEventSchedulerTest do
           start_supervised({SystemEventScheduler, check_interval_ms: :timer.hours(24)})
 
         # fire_now should not crash and should dispatch to the agent
-        result = SystemEventScheduler.fire_now("daily_summary")
+        _result = SystemEventScheduler.fire_now("daily_summary")
 
         # Verify a system space was created for this agent
         space = Chat.get_space_by_slug("system-#{agent.slug}")
