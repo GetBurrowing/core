@@ -410,6 +410,12 @@ defmodule PlatformWeb.ChatLive.Partials do
           class="meeting-participant-grid gap-2"
         >
         </div>
+        <div
+          id="meeting-captions-mobile"
+          phx-hook="MeetingCaptions"
+          class="mt-2 rounded-lg bg-base-300/80 px-3 py-2 text-sm opacity-0 pointer-events-none transition-opacity duration-300"
+        >
+        </div>
       </div>
 
       <div class="flex items-center justify-center gap-3 border-t border-base-300 px-4 py-4 safe-area-bottom">

@@ -1,0 +1,19 @@
+summary:
+  provider: anthropic
+  model: claude-sonnet-4-5-20250929
+  max_tokens: 2048
+  temperature: 0.3
+
+  api_key_env: ANTHROPIC_API_KEY
+
+  # --- Examples for other providers --------------------------------------
+  #
+  # Ollama (self-hosted, OpenAI-compatible endpoint):
+  # provider: ollama
+  # base_url: http://localhost:11434/v1
+  # model: gemma3:e4b
+  #
+  # OpenAI:
+  # provider: openai
+  # model: gpt-4o-mini
+  # api_key_env: OPENAI_API_KEY

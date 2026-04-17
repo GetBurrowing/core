@@ -4,10 +4,10 @@ defmodule Platform.Repo.Migrations.AgentRuntimeAllowedBundles do
   @all_bundles ~w(federation space context_read messaging review canvas task plan org_context)
 
   def up do
-    alter table(:agent_runtimes) do
-      remove(:capabilities)
+    execute("ALTER TABLE agent_runtimes DROP COLUMN IF EXISTS capabilities")
 
-      add(:allowed_bundles, {:array, :string},
+    alter table(:agent_runtimes) do
+      add_if_not_exists(:allowed_bundles, {:array, :string},
         null: false,
         default: ["federation", "space", "context_read", "messaging"]
       )

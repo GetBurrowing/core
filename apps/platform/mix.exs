@@ -77,7 +77,8 @@ defmodule Platform.MixProject do
       {:makeup_elixir, "~> 1.0"},
       {:makeup_js, "~> 0.1"},
       {:gun, "~> 2.1"},
-      {:jose, "~> 1.11"}
+      {:jose, "~> 1.11"},
+      {:yaml_elixir, "~> 2.9"}
     ]
   end
 

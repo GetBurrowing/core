@@ -17,8 +17,11 @@ defmodule Platform.Meetings.Summarizer do
   require Logger
 
   alias Platform.Meetings
+  alias Platform.Meetings.Config
   alias Platform.Meetings.SummaryPrompt
   alias Platform.Agents.Providers.Anthropic
+  alias Platform.Agents.Providers.Ollama
+  alias Platform.Agents.Providers.OpenAI
 
   @doc """
   Spawns an async task to summarize the given transcript.
@@ -78,14 +81,18 @@ defmodule Platform.Meetings.Summarizer do
       }
     ]
 
-    opts = [
-      system: SummaryPrompt.system_prompt(),
-      model: summary_model(),
-      max_tokens: 2048,
-      temperature: 0.3
-    ]
+    cfg = Config.summary()
 
-    case call_llm(messages, opts) do
+    opts =
+      [
+        system: SummaryPrompt.system_prompt(),
+        model: cfg.model,
+        max_tokens: cfg.max_tokens,
+        temperature: cfg.temperature
+      ]
+      |> maybe_put(:base_url, cfg.base_url)
+
+    case call_llm(cfg, messages, opts) do
       {:ok, summary_text} ->
         Logger.info(
           "[Summarizer] Summary generated for transcript #{id} (#{String.length(summary_text)} chars)"
@@ -136,10 +143,15 @@ defmodule Platform.Meetings.Summarizer do
     end
   end
 
-  defp call_llm(messages, opts) do
-    credentials = llm_credentials()
+  defp call_llm(%{provider: :none}, _messages, _opts) do
+    {:error, :no_summary_provider_configured}
+  end
 
-    case Anthropic.chat(credentials, messages, opts) do
+  defp call_llm(%{provider: provider} = cfg, messages, opts) do
+    credentials = llm_credentials(cfg)
+    adapter = provider_adapter(provider)
+
+    case adapter.chat(credentials, messages, opts) do
       {:ok, %{content: content}} when is_binary(content) ->
         {:ok, content}
 
@@ -158,6 +170,13 @@ defmodule Platform.Meetings.Summarizer do
     end
   end
 
+  defp provider_adapter(:anthropic), do: Anthropic
+  defp provider_adapter(:openai), do: OpenAI
+  defp provider_adapter(:ollama), do: Ollama
+
+  defp provider_adapter(other),
+    do: raise(ArgumentError, "Unknown summary provider: #{inspect(other)}")
+
   defp extract_text_from_response(%{content: content}) when is_list(content) do
     text =
       content
@@ -170,15 +189,32 @@ defmodule Platform.Meetings.Summarizer do
 
   defp extract_text_from_response(_), do: {:error, :unrecognized_response}
 
-  defp llm_credentials do
-    # Prefer API key from environment, fall back to vault credential
-    case System.get_env("ANTHROPIC_API_KEY") do
+  defp llm_credentials(%{provider: :anthropic, api_key_env: env}) do
+    case api_key_from_env(env) do
       nil -> %{credential_slug: "anthropic"}
       key -> %{api_key: key}
     end
   end
 
-  defp summary_model do
-    System.get_env("MEETING_SUMMARY_MODEL") || "claude-sonnet-4-5-20250929"
+  defp llm_credentials(%{provider: :openai, api_key_env: env}) do
+    case api_key_from_env(env) do
+      nil -> %{credential_slug: "openai"}
+      key -> %{api_key: key}
+    end
   end
+
+  defp llm_credentials(%{provider: :ollama, api_key_env: env}) do
+    case api_key_from_env(env) do
+      nil -> %{}
+      key -> %{api_key: key}
+    end
+  end
+
+  defp llm_credentials(_), do: %{}
+
+  defp api_key_from_env(nil), do: nil
+  defp api_key_from_env(name) when is_binary(name), do: System.get_env(name)
+
+  defp maybe_put(opts, _key, nil), do: opts
+  defp maybe_put(opts, key, value), do: Keyword.put(opts, key, value)
 end

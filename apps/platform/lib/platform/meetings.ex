@@ -343,25 +343,38 @@ defmodule Platform.Meetings do
       now = System.system_time(:second)
       ttl = 6 * 60 * 60
 
-      claims = %{
-        "iss" => api_key,
-        "sub" => identity,
-        "nbf" => now,
-        "exp" => now + ttl,
-        "jti" => Ecto.UUID.generate(),
-        "name" => name,
-        "video" => %{
-          "room" => room.livekit_room_name,
-          "roomJoin" => true,
-          "canPublish" => true,
-          "canSubscribe" => true,
-          "canPublishData" => true
+      claims =
+        %{
+          "iss" => api_key,
+          "sub" => identity,
+          "nbf" => now,
+          "exp" => now + ttl,
+          "jti" => Ecto.UUID.generate(),
+          "name" => name,
+          "video" => %{
+            "room" => room.livekit_room_name,
+            "roomJoin" => true,
+            "canPublish" => true,
+            "canSubscribe" => true,
+            "canPublishData" => true
+          }
         }
-      }
+        |> maybe_put_room_config(room.livekit_room_name)
 
       {:ok, encode_jwt(claims, api_secret)}
     end
   end
+
+  # When the room is a meeting space (space-<uuid>), explicitly dispatch the
+  # meeting-transcriber agent. This keeps the voice-assistant agent (which
+  # handles phone-call rooms) out of meetings — LiveKit routes by agentName.
+  defp maybe_put_room_config(claims, "space-" <> _) do
+    Map.put(claims, "roomConfig", %{
+      "agents" => [%{"agentName" => "meeting-transcriber"}]
+    })
+  end
+
+  defp maybe_put_room_config(claims, _room_name), do: claims
 
   @doc """
   Generate a LiveKit access token from a room name string.
@@ -383,21 +396,23 @@ defmodule Platform.Meetings do
 
     now = System.system_time(:second)
 
-    claims = %{
-      "iss" => config[:api_key],
-      "sub" => identity,
-      "nbf" => now,
-      "exp" => now + ttl,
-      "jti" => :crypto.strong_rand_bytes(12) |> Base.url_encode64(padding: false),
-      "name" => name,
-      "video" => %{
-        "room" => room_name,
-        "roomJoin" => true,
-        "canPublish" => true,
-        "canSubscribe" => true,
-        "canPublishData" => true
+    claims =
+      %{
+        "iss" => config[:api_key],
+        "sub" => identity,
+        "nbf" => now,
+        "exp" => now + ttl,
+        "jti" => :crypto.strong_rand_bytes(12) |> Base.url_encode64(padding: false),
+        "name" => name,
+        "video" => %{
+          "room" => room_name,
+          "roomJoin" => true,
+          "canPublish" => true,
+          "canSubscribe" => true,
+          "canPublishData" => true
+        }
       }
-    }
+      |> maybe_put_room_config(room_name)
 
     sign_jwt(claims, config[:api_secret])
   end
