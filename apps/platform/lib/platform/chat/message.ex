@@ -22,6 +22,11 @@ defmodule Platform.Chat.Message do
     field(:search_rank, :float, virtual: true)
     field(:search_headline, :string, virtual: true)
 
+    # Reactions are grouped per message and attached as a virtual field at
+    # render time so LiveView streams can carry them as part of the item.
+    # Shape: [%{emoji: "👍", count: 2, reacted_by_me: true}, ...].
+    field(:reactions, {:array, :map}, virtual: true, default: [])
+
     # Only inserted_at — no updated_at (no timestamps() macro).
     field(:inserted_at, :utc_datetime_usec, autogenerate: {DateTime, :utc_now, []})
   end

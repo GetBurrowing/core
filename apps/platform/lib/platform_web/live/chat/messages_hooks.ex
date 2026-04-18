@@ -3,28 +3,26 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
   Lifecycle hook for MessageList + Threads + Reactions + Attachments +
   Drafts in `PlatformWeb.ChatLive`.
 
-  See ADR 0035. These concerns share `:messages` stream, `:reactions_map`,
-  `:attachments_map`, `:thread_previews`, and `:inline_thread_messages`.
-  Splitting them across separate hooks would require fan-out coordination
-  for every PubSub event, so they live in one module together — honestly
-  representing the domain as "chat messages, some with thread children."
+  See ADR 0035. These concerns share `:messages` stream, `:attachments_map`,
+  `:thread_previews`, and `:inline_thread_messages`. Splitting them across
+  separate hooks would require fan-out coordination for every PubSub event,
+  so they live in one module together — honestly representing the domain as
+  "chat messages, some with thread children."
 
-  ## Known debt (see project memory: Suite chat state debt)
+  ## State shape
 
-  Today we keep parallel stores: the `:messages` stream carries message
-  structs, while `:reactions_map` / `:attachments_map` carry per-message
-  derived data keyed by id. A reaction change requires updating the map
-  AND re-emitting the message into the stream so the DOM re-renders.
-  Rowan flagged that reactions currently don't live-update — a likely
-  symptom of that fan-out. A future pass should normalize:
-  put reactions/attachments onto the stream item itself, delete the
-  parallel maps, let `stream_insert` drive rendering. Centralizing state
-  here is the prerequisite for that refactor.
+  Reactions live **on the stream item itself** via the `:reactions` virtual
+  field on `Platform.Chat.Message`. Every `stream_insert` re-renders the
+  item against a fresh, DB-derived reaction list — so reaction broadcasts
+  are idempotent (duplicate delivery doesn't double-count), in-order (the
+  DB is source of truth), and don't require parallel-map bookkeeping.
+
+  Attachments still live in the parallel `:attachments_map` assign; the
+  same refactor applies to them and is a follow-up.
 
   ## Assigns owned
 
-    * `:messages` (stream)
-    * `:reactions_map` — msg_id → [%{emoji, count, reacted_by_me}]
+    * `:messages` (stream — items are `%Message{}` enriched with `:reactions`)
     * `:attachments_map` — msg_id → [attachments]
     * `:reaction_picker_for` — msg_id | nil — when set, the picker popover is open for that message
     * `:reaction_picker_emojis` — curated emoji list shown in the picker
@@ -105,7 +103,6 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
   @spec attach(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
   def attach(socket) do
     socket
-    |> assign(:reactions_map, %{})
     |> assign(:attachments_map, %{})
     |> assign(:reaction_picker_for, nil)
     |> assign(:reaction_picker_emojis, @reaction_picker_emojis)
@@ -139,12 +136,11 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
       Chat.mark_space_read(participant.id, latest_message.id)
     end
 
-    reactions_map = build_reactions_map(messages, participant)
+    enriched = enrich_messages_with_reactions(messages, participant)
     attachments_map = build_attachments_map(messages)
     thread_previews = Chat.thread_previews_for_messages(Enum.map(messages, & &1.id))
 
     socket
-    |> assign(:reactions_map, reactions_map)
     |> assign(:attachments_map, attachments_map)
     |> assign(:reaction_picker_for, nil)
     |> assign(:thread_previews, thread_previews)
@@ -154,19 +150,24 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
     |> assign(:expanded_threads, MapSet.new())
     |> assign(:inline_thread_messages, %{})
     |> assign(:streaming_replies, %{})
-    |> stream(:messages, messages, reset: true)
+    |> stream(:messages, enriched, reset: true)
     |> restore_draft(space.id)
   end
 
   @doc """
   Insert a message into the stream and populate its attachments map
   entry. Used by `canvas_create` and `upload_send` coordinators.
+
+  Enriches the message with its current reaction groups so the stream
+  item carries everything the template needs — no :reactions_map lookup.
   """
   @spec stream_insert_message(Phoenix.LiveView.Socket.t(), map(), [map()]) ::
           Phoenix.LiveView.Socket.t()
   def stream_insert_message(socket, message, attachments \\ []) do
+    enriched = enrich_with_reactions(message, socket.assigns.current_participant)
+
     socket
-    |> stream_insert(:messages, message)
+    |> stream_insert(:messages, enriched)
     |> put_attachment_map_entry(message.id, attachments)
   end
 
@@ -222,9 +223,11 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
 
       case post_message_with_upload(socket, :attachments, attrs) do
         {:ok, socket, msg, attachments} ->
+          enriched = enrich_with_reactions(msg, socket.assigns.current_participant)
+
           {:halt,
            socket
-           |> stream_insert(:messages, msg)
+           |> stream_insert(:messages, enriched)
            |> put_attachment_map_entry(msg.id, attachments)
            |> assign_compose("")
            |> update(:drafts, &Map.delete(&1, space.id))}
@@ -463,9 +466,11 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
       end
 
       if is_nil(msg.thread_id) do
+        enriched = enrich_with_reactions(msg, current_participant)
+
         {:halt,
          socket
-         |> stream_insert(:messages, msg)
+         |> stream_insert(:messages, enriched)
          |> put_attachment_map_entry(msg.id, attachments)
          |> SearchHooks.maybe_refresh()}
       else
@@ -487,10 +492,11 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
 
   defp handle_info({:message_updated, msg}, socket) do
     attachments = Chat.list_attachments(msg.id)
+    enriched = enrich_with_reactions(msg, socket.assigns.current_participant)
 
     {:halt,
      socket
-     |> stream_insert(:messages, msg)
+     |> stream_insert(:messages, enriched)
      |> put_attachment_map_entry(msg.id, attachments)
      |> SearchHooks.maybe_refresh()}
   end
@@ -504,32 +510,12 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
      |> SearchHooks.maybe_refresh()}
   end
 
+  # Reaction broadcasts just re-insert the affected message — `reinsert_stream_message/2`
+  # fetches fresh from the DB and enriches with the current reaction groups, so the
+  # stream item carries everything the template reads. Idempotent under duplicate
+  # delivery (DB is truth), immune to out-of-order events.
   defp handle_info({:reaction_added, reaction}, socket) do
-    # Rebuild from DB truth rather than incrementing a local map. Incremental
-    # counting double-counts under duplicate PubSub delivery (which is
-    # possible because Phoenix.PubSub subscriptions are NOT deduped per pid —
-    # if the LV accidentally subscribes to the space topic twice, one
-    # broadcast fires handle_info twice and `count: g.count + 1` produces
-    # count 2 for a single click). The DB row is the source of truth; one
-    # SELECT per broadcast per connected LV is cheap and immune to
-    # duplicate delivery, out-of-order events, and stale state.
-    reactions_map =
-      rebuild_reactions_entry(
-        socket.assigns.reactions_map,
-        reaction.message_id,
-        socket.assigns.current_participant
-      )
-
-    # Reaction pills render inside the `:messages` stream iteration. Phoenix
-    # streams freeze item markup at stream_insert time, so updating
-    # :reactions_map alone doesn't re-render the pill block — re-insert the
-    # message so it renders against the fresh reactions_map.
-    socket =
-      socket
-      |> assign(:reactions_map, reactions_map)
-      |> reinsert_stream_message(reaction.message_id)
-
-    {:halt, socket}
+    {:halt, reinsert_stream_message(socket, reaction.message_id)}
   rescue
     e ->
       Logger.error("Reaction broadcast (added) crashed: #{Exception.message(e)}")
@@ -537,19 +523,7 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
   end
 
   defp handle_info({:reaction_removed, data}, socket) do
-    reactions_map =
-      rebuild_reactions_entry(
-        socket.assigns.reactions_map,
-        data.message_id,
-        socket.assigns.current_participant
-      )
-
-    socket =
-      socket
-      |> assign(:reactions_map, reactions_map)
-      |> reinsert_stream_message(data.message_id)
-
-    {:halt, socket}
+    {:halt, reinsert_stream_message(socket, data.message_id)}
   rescue
     e ->
       Logger.error("Reaction broadcast (removed) crashed: #{Exception.message(e)}")
@@ -575,18 +549,10 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
 
   defp react_to_message(socket, msg_id, emoji) do
     with participant when not is_nil(participant) <- socket.assigns.current_participant do
-      groups = Map.get(socket.assigns.reactions_map, msg_id, [])
-      already_reacted = Enum.any?(groups, &(&1.emoji == emoji && &1.reacted_by_me))
-
-      if already_reacted do
-        Chat.remove_reaction(msg_id, participant.id, emoji)
-      else
-        Chat.add_reaction(%{
-          message_id: msg_id,
-          participant_id: participant.id,
-          emoji: emoji
-        })
-      end
+      # DB is truth for "did this participant already react with this emoji".
+      # Previously this read from :reactions_map — kept in sync locally but
+      # vulnerable to stale state under duplicate delivery.
+      Chat.toggle_reaction(msg_id, participant.id, emoji)
     end
 
     socket
@@ -619,8 +585,12 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
 
   defp reinsert_stream_message(socket, msg_id) do
     case Chat.get_message(msg_id) do
-      nil -> socket
-      msg -> stream_insert(socket, :messages, msg)
+      nil ->
+        socket
+
+      msg ->
+        enriched = enrich_with_reactions(msg, socket.assigns.current_participant)
+        stream_insert(socket, :messages, enriched)
     end
   end
 
@@ -653,14 +623,14 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
 
   defp maybe_update_inline_thread(socket, _msg), do: socket
 
-  defp build_reactions_map(messages, current_participant) do
-    message_ids = Enum.map(messages, & &1.id)
-    my_participant_id = current_participant && current_participant.id
+  # Bulk-enrich a list of messages with their current reaction groups.
+  # Used when loading a space: one batched query, then group per message.
+  defp enrich_messages_with_reactions(messages, current_participant) do
+    my_id = current_participant && current_participant.id
+    raw = Chat.list_reactions_for_messages(Enum.map(messages, & &1.id))
 
-    raw = Chat.list_reactions_for_messages(message_ids)
-
-    Map.new(message_ids, fn msg_id ->
-      reactions = Map.get(raw, msg_id, [])
+    Enum.map(messages, fn msg ->
+      reactions = Map.get(raw, msg.id, [])
 
       groups =
         reactions
@@ -669,26 +639,23 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
           %{
             emoji: emoji,
             count: length(rs),
-            reacted_by_me: Enum.any?(rs, &(&1.participant_id == my_participant_id))
+            reacted_by_me: Enum.any?(rs, &(&1.participant_id == my_id))
           }
         end)
         |> Enum.sort_by(& &1.emoji)
 
-      {msg_id, groups}
+      %{msg | reactions: groups}
     end)
   end
 
-  defp build_attachments_map(messages) do
-    messages
-    |> Enum.map(& &1.id)
-    |> Chat.list_attachments_for_messages()
-  end
-
-  defp rebuild_reactions_entry(reactions_map, msg_id, current_participant) do
+  # Single-message enrichment. Used on every stream_insert (new message,
+  # message updated, reaction added/removed) so the stream item always
+  # carries the current reaction groups.
+  defp enrich_with_reactions(msg, current_participant) do
     my_id = current_participant && current_participant.id
 
     groups =
-      msg_id
+      msg.id
       |> Chat.list_reactions_grouped()
       |> Enum.map(fn g ->
         %{
@@ -698,11 +665,13 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
         }
       end)
 
-    if groups == [] do
-      Map.delete(reactions_map, msg_id)
-    else
-      Map.put(reactions_map, msg_id, groups)
-    end
+    %{msg | reactions: groups}
+  end
+
+  defp build_attachments_map(messages) do
+    messages
+    |> Enum.map(& &1.id)
+    |> Chat.list_attachments_for_messages()
   end
 
   defp put_attachment_map_entry(socket, message_id, attachments) do

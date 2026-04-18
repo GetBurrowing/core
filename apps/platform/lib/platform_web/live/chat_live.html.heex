@@ -780,11 +780,11 @@
             </div>
 
             <div
-              :if={Map.get(@reactions_map, msg.id, []) != []}
+              :if={msg.reactions != []}
               class="flex flex-wrap gap-1 mt-0.5"
             >
               <button
-                :for={r <- Map.get(@reactions_map, msg.id, [])}
+                :for={r <- msg.reactions}
                 phx-click="react"
                 phx-value-message_id={msg.id}
                 phx-value-emoji={r.emoji}

@@ -591,11 +591,10 @@ defmodule PlatformWeb.ChatLiveTest do
 
     test "a reaction from another participant updates the DOM without remount",
          %{conn: conn} do
-      # Regression for Rowan's flag: reactions arriving via PubSub must update
-      # the rendered pill/count for already-visible messages. Because pills
-      # render inside the :messages stream iteration, the reaction handle_info
-      # must re-insert the message so the stream re-renders the item against
-      # the fresh :reactions_map.
+      # Reactions arriving via PubSub must update the rendered pill/count for
+      # already-visible messages. Pills render inside the :messages stream
+      # iteration and ride on the stream item itself (Message.reactions virtual
+      # field) — every stream_insert re-renders the item with fresh groups.
       conn = authenticated_conn(conn)
       {:ok, view, _html} = live(conn, ~p"/chat/general")
 
@@ -623,13 +622,13 @@ defmodule PlatformWeb.ChatLiveTest do
           emoji: "🎉"
         })
 
-      # Assert exactly one pill with count=1 — not a loose "1 appears somewhere
-      # after 🎉" regex, which false-positives on reply counts / unread badges.
+      # Assert exactly one pill with count=1 — the exact pill markup, not a
+      # loose regex that would false-positive on other <span>1</span> on the
+      # page (reply counts, unread badges).
       html = render(view)
       assert count_occurrences(html, "<span>🎉</span><span>1</span>") == 1
 
-      # Removal live-updates the DOM: the pill disappears, count=0 entries are
-      # pruned from :reactions_map.
+      # Removal live-updates the DOM: pill disappears, groups are pruned.
       {:ok, _} = Chat.remove_reaction(msg.id, other_participant.id, "🎉")
       html = render(view)
       assert count_occurrences(html, "<span>🎉</span>") == 0
@@ -637,13 +636,12 @@ defmodule PlatformWeb.ChatLiveTest do
 
     test "duplicate reaction_added delivery does not double-count",
          %{conn: conn} do
-      # Regression for the triple-count bug: Phoenix.PubSub subscriptions are
-      # not deduplicated per pid, so if the LV subscribes to the space topic
-      # twice (the mount loop + handle_params double-subscribe that existed
-      # in chat_live.ex), one broadcast delivers twice and the incremental
-      # `add_reaction_to_map` produced count=2 for a single click. The fix
-      # rebuilds the reactions entry from DB truth on every handle_info,
-      # making the handler idempotent under duplicate delivery.
+      # Stream-shape refactor guarantee: reactions ride on the stream item,
+      # rebuilt from DB truth on every stream_insert. Duplicate delivery of
+      # the same {:reaction_added, _} message (possible if the LV accidentally
+      # subscribes twice, which is exactly what used to happen — see the
+      # hotfix PR #199) must NOT double-count. Before the refactor, the
+      # incremental `add_reaction_to_map` would have produced count=3 here.
       conn = authenticated_conn(conn)
       {:ok, view, _html} = live(conn, ~p"/chat/general")
 
@@ -672,9 +670,8 @@ defmodule PlatformWeb.ChatLiveTest do
           emoji: "🎉"
         })
 
-      # Simulate a duplicate delivery of the SAME {:reaction_added, _} event
-      # (what the double-subscribe would produce in production). The handler
-      # must be idempotent: count stays at 1, not 2.
+      # Simulate duplicate delivery by hand — send the same broadcast payload
+      # to the LV pid twice after the real one.
       send(view.pid, {:reaction_added, reaction})
       send(view.pid, {:reaction_added, reaction})
 
@@ -682,6 +679,39 @@ defmodule PlatformWeb.ChatLiveTest do
       assert count_occurrences(html, "<span>🎉</span><span>1</span>") == 1
       refute html =~ "<span>🎉</span><span>2</span>"
       refute html =~ "<span>🎉</span><span>3</span>"
+    end
+
+    test "entering a space pre-populates reactions on stream items",
+         %{conn: conn} do
+      # Bulk path: enter_space calls enrich_messages_with_reactions which
+      # batch-loads all reactions in one query, then attaches to each message
+      # as the `:reactions` virtual field. The rendered page on first mount
+      # must show pre-existing reactions without any post-mount broadcast.
+      conn = authenticated_conn(conn)
+
+      # Seed: create a message and a reaction on it BEFORE anyone mounts the
+      # LV, so it only appears via the bulk enrichment path.
+      space =
+        Chat.get_space_by_slug("general") ||
+          elem(Chat.create_space(%{name: "General", slug: "general", kind: "channel"}), 1)
+
+      user = insert_chat_user(%{email: "pre@example.com", oidc_sub: "pre-sub"})
+      # add_user_message both adds the participant and posts the message —
+      # capture the participant so we don't double-add (unique constraint).
+      participant = add_user_message(space, user, "pre-reacted message")
+      [msg | _] = Chat.list_messages(space.id)
+
+      {:ok, _} =
+        Chat.add_reaction(%{
+          message_id: msg.id,
+          participant_id: participant.id,
+          emoji: "👍"
+        })
+
+      # Now mount the LV — the initial render must include the 👍 pill with
+      # count=1, populated by the bulk enrichment in enter_space.
+      {:ok, _view, html} = live(conn, ~p"/chat/general")
+      assert count_occurrences(html, "<span>👍</span><span>1</span>") == 1
     end
 
     test "reacting with a nil/missing participant does not crash the LiveView", %{conn: conn} do
