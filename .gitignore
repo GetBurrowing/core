@@ -31,3 +31,15 @@ erl_crash.dump
 
 # Local runtime configs (see *.example templates)
 apps/platform/priv/meetings.yml
+
+# Claude Code per-machine settings (project-shared settings.json may be committed)
+.claude/settings.local.json
+
+# GitButler-installed hooks (local machine artifacts from `but setup`).
+# The canonical pre-commit (mix format) is tracked; GitButler shelves it as
+# pre-commit-user while its shim occupies pre-commit. Run
+#   git update-index --skip-worktree .githooks/pre-commit
+# once per clone so the shim overlay doesn't show as a modification.
+.githooks/pre-commit-user
+.githooks/post-checkout
+.githooks/post-checkout-user
