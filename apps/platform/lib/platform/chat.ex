@@ -127,6 +127,10 @@ defmodule Platform.Chat do
 
     opts
     |> Enum.reduce(base, fn
+      # `workspace_id: nil` means "match spaces with NULL workspace_id" (the
+      # single-tenant / default-org case), not "skip the filter". Ecto refuses
+      # to compare against nil so we must branch to `is_nil/1`.
+      {:workspace_id, nil}, q -> where(q, [s], is_nil(s.workspace_id))
       {:workspace_id, wid}, q -> where(q, [s], s.workspace_id == ^wid)
       {:kind, kind}, q -> where(q, [s], s.kind == ^kind)
       _other, q -> q

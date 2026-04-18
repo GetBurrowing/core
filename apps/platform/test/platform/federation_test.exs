@@ -135,7 +135,21 @@ defmodule Platform.FederationTest do
       refute Repo.get_by(SpaceAgent, space_id: archived.id, agent_id: agent.id)
     end
 
-    test "auto-roster is a no-op for agents without a workspace" do
+    test "auto-roster adds nil-workspace agents to nil-workspace channel spaces (single-tenant)" do
+      alias Platform.Chat.{Space, SpaceAgent}
+
+      # Single-tenant / default-org setup: both agents and spaces have
+      # workspace_id: nil. Auto-roster must still match them together.
+      {:ok, general} =
+        %Space{}
+        |> Space.changeset(%{
+          workspace_id: nil,
+          name: "General",
+          slug: "general-#{System.unique_integer([:positive])}",
+          kind: "channel"
+        })
+        |> Repo.insert()
+
       agent = create_agent()
       user = create_user()
 
@@ -144,8 +158,52 @@ defmodule Platform.FederationTest do
           runtime_id: "test-runtime-#{System.unique_integer([:positive])}"
         })
 
-      assert {:ok, linked} = Federation.link_agent(runtime, agent)
+      {:ok, linked} = Federation.link_agent(runtime, agent)
       assert is_nil(linked.workspace_id)
+
+      assert %SpaceAgent{role: "member"} =
+               Repo.get_by(SpaceAgent, space_id: general.id, agent_id: agent.id)
+    end
+
+    test "auto-roster does NOT leak across workspaces" do
+      alias Platform.Chat.{Space, SpaceAgent}
+
+      # Agent in workspace A should NOT be rostered into workspace B's spaces.
+      workspace_a = Ecto.UUID.generate()
+      workspace_b = Ecto.UUID.generate()
+
+      {:ok, space_a} =
+        %Space{}
+        |> Space.changeset(%{
+          workspace_id: workspace_a,
+          name: "A",
+          slug: "a-#{System.unique_integer([:positive])}",
+          kind: "channel"
+        })
+        |> Repo.insert()
+
+      {:ok, space_b} =
+        %Space{}
+        |> Space.changeset(%{
+          workspace_id: workspace_b,
+          name: "B",
+          slug: "b-#{System.unique_integer([:positive])}",
+          kind: "channel"
+        })
+        |> Repo.insert()
+
+      agent_a = create_agent(%{workspace_id: workspace_a})
+      user = create_user()
+
+      {:ok, runtime} =
+        Federation.register_runtime(user.id, %{
+          runtime_id: "test-runtime-#{System.unique_integer([:positive])}"
+        })
+
+      {:ok, _} = Federation.link_agent(runtime, agent_a)
+
+      assert Repo.get_by(SpaceAgent, space_id: space_a.id, agent_id: agent_a.id)
+      refute Repo.get_by(SpaceAgent, space_id: space_b.id, agent_id: agent_a.id)
     end
 
     test "auto-roster is idempotent when called again on an already-rostered agent" do

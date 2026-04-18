@@ -38,18 +38,22 @@ defmodule Mix.Tasks.Platform.BackfillAgentRoster do
 
   @impl Mix.Task
   def run(args) do
+    # NOTE: OptionParser normalizes `--dry-run` → `:dry_run` (hyphens map to
+    # underscores) by default. The strict spec MUST use underscore atoms or
+    # the flags are silently dropped, causing an unexpected *write-mode* run
+    # when the operator typed `--dry-run`. Keep the atoms underscored here.
     {opts, _, _} =
       OptionParser.parse(args,
         strict: [
-          "dry-run": :boolean,
-          "workspace-id": :string
+          dry_run: :boolean,
+          workspace_id: :string
         ]
       )
 
     Mix.Task.run("app.start")
 
-    dry_run? = Keyword.get(opts, :"dry-run", false)
-    workspace_id = Keyword.get(opts, :"workspace-id")
+    dry_run? = Keyword.get(opts, :dry_run, false)
+    workspace_id = Keyword.get(opts, :workspace_id)
 
     agents = list_federated_agents(workspace_id)
 
@@ -113,29 +117,33 @@ defmodule Mix.Tasks.Platform.BackfillAgentRoster do
   end
 
   defp ensure_or_preview(agent, space, false) do
-    case Chat.ensure_space_agent(space.id, agent.id, role: "member") do
-      {:ok, sa} ->
-        # ensure_space_agent returns the existing row when no insert happened.
-        # Distinguish by comparing inserted_at to updated_at or by peeking.
-        if recent?(sa) do
+    # Explicit pre-check then insert: `Chat.ensure_space_agent/3` is
+    # idempotent but collapses the "found existing" and "just inserted"
+    # branches into the same `{:ok, _}` shape, which makes it impossible
+    # for the caller to tell them apart without heuristics (we tried a
+    # `recent?/1` inserted_at hack and it mis-counted rapid re-runs).
+    # The split here gives accurate `added` vs `already-present` stats.
+    import Ecto.Query
+
+    already_present? =
+      Repo.exists?(
+        from(sa in Platform.Chat.SpaceAgent,
+          where: sa.space_id == ^space.id and sa.agent_id == ^agent.id
+        )
+      )
+
+    if already_present? do
+      :exists
+    else
+      case Chat.add_space_agent(space.id, agent.id, role: "member") do
+        {:ok, _sa} ->
           IO.puts("  added: agent=#{agent.slug} space=#{space.name}")
           :added
-        else
-          :exists
-        end
 
-      {:error, reason} ->
-        IO.puts("  ERROR: agent=#{agent.slug} space=#{space.name} reason=#{inspect(reason)}")
-        :error
+        {:error, reason} ->
+          IO.puts("  ERROR: agent=#{agent.slug} space=#{space.name} reason=#{inspect(reason)}")
+          :error
+      end
     end
   end
-
-  # Treat a row whose inserted_at is within the last 5 seconds as "just added".
-  # ensure_space_agent returns {:ok, existing} for pre-existing rows, which we
-  # want to count as `:exists` not `:added`.
-  defp recent?(%{inserted_at: inserted_at}) when not is_nil(inserted_at) do
-    DateTime.diff(DateTime.utc_now(), inserted_at, :second) < 5
-  end
-
-  defp recent?(_), do: false
 end

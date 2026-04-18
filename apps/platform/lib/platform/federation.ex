@@ -151,9 +151,11 @@ defmodule Platform.Federation do
   model.)
   """
   @spec auto_roster_federated_agent(Agent.t()) :: :ok
-  def auto_roster_federated_agent(%Agent{workspace_id: nil}), do: :ok
-
   def auto_roster_federated_agent(%Agent{id: agent_id, workspace_id: workspace_id} = agent) do
+    # `workspace_id` may be nil in single-tenant / default-org setups; in that
+    # case we roster against the channel spaces that also have a nil
+    # workspace_id. `Chat.list_spaces/1` handles the nil semantics with
+    # `is_nil/1` internally.
     spaces = Chat.list_spaces(workspace_id: workspace_id, kind: "channel")
 
     Enum.each(spaces, fn %Space{id: space_id} ->
