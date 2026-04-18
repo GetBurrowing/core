@@ -263,17 +263,11 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
   defp handle_event("close_lightbox", _params, socket),
     do: {:halt, assign(socket, :lightbox_url, nil)}
 
-  defp handle_event("open_reaction_picker", %{"message_id" => msg_id}, socket),
-    do: {:halt, assign(socket, :reaction_picker_for, msg_id)}
-
   defp handle_event("open_reaction_picker", %{"message-id" => msg_id}, socket),
     do: {:halt, assign(socket, :reaction_picker_for, msg_id)}
 
   defp handle_event("close_reaction_picker", _params, socket),
     do: {:halt, assign(socket, :reaction_picker_for, nil)}
-
-  defp handle_event("react", %{"message_id" => msg_id, "emoji" => emoji}, socket),
-    do: {:halt, socket |> react_to_message(msg_id, emoji) |> close_picker()}
 
   defp handle_event("react", %{"message-id" => msg_id, "emoji" => emoji}, socket),
     do: {:halt, socket |> react_to_message(msg_id, emoji) |> close_picker()}

@@ -632,7 +632,7 @@
                 <button
                   :for={emoji <- @quick_emojis}
                   phx-click="react"
-                  phx-value-message_id={msg.id}
+                  phx-value-message-id={msg.id}
                   phx-value-emoji={emoji}
                   title={"React with #{emoji}"}
                   class="rounded px-1.5 py-0.5 text-sm hover:bg-base-300 transition-colors"
@@ -642,7 +642,7 @@
 
                 <button
                   phx-click="open_reaction_picker"
-                  phx-value-message_id={msg.id}
+                  phx-value-message-id={msg.id}
                   title="More reactions"
                   class="rounded px-1.5 py-0.5 text-xs text-base-content/50 hover:text-base-content hover:bg-base-300 transition-colors"
                 >
@@ -786,7 +786,7 @@
               <button
                 :for={r <- msg.reactions}
                 phx-click="react"
-                phx-value-message_id={msg.id}
+                phx-value-message-id={msg.id}
                 phx-value-emoji={r.emoji}
                 class={[
                   "flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs transition-colors",
@@ -1255,7 +1255,7 @@
         :for={emoji <- @reaction_picker_emojis}
         type="button"
         phx-click="react"
-        phx-value-message_id={@reaction_picker_for}
+        phx-value-message-id={@reaction_picker_for}
         phx-value-emoji={emoji}
         title={"React with #{emoji}"}
         class="rounded px-1.5 py-1 text-lg hover:bg-base-200 transition-colors"

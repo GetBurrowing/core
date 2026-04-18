@@ -557,7 +557,7 @@ defmodule PlatformWeb.ChatLiveTest do
       # Before reacting — no reaction row for this message in the DB
       assert Chat.list_reactions(msg.id) == []
 
-      render_click(view, "react", %{"message_id" => msg.id, "emoji" => "👍"})
+      render_click(view, "react", %{"message-id" => msg.id, "emoji" => "👍"})
 
       # The reaction is persisted in the DB
       assert [%{emoji: "👍"}] = Chat.list_reactions(msg.id)
@@ -581,11 +581,11 @@ defmodule PlatformWeb.ChatLiveTest do
       [msg | _] = Chat.list_messages(space.id)
 
       # React once — reaction is added
-      render_click(view, "react", %{"message_id" => msg.id, "emoji" => "👍"})
+      render_click(view, "react", %{"message-id" => msg.id, "emoji" => "👍"})
       assert [_] = Chat.list_reactions(msg.id)
 
       # React again (same user, same emoji) — reaction is removed
-      render_click(view, "react", %{"message_id" => msg.id, "emoji" => "👍"})
+      render_click(view, "react", %{"message-id" => msg.id, "emoji" => "👍"})
       assert Chat.list_reactions(msg.id) == []
     end
 
@@ -751,13 +751,13 @@ defmodule PlatformWeb.ChatLiveTest do
       space = Chat.get_space_by_slug("general")
       [msg | _] = Chat.list_messages(space.id)
 
-      html = render_click(view, "open_reaction_picker", %{"message_id" => msg.id})
+      html = render_click(view, "open_reaction_picker", %{"message-id" => msg.id})
 
       # Popover is now in the DOM, anchored to this message via the emoji buttons.
       assert html =~ ~s(id="reaction-picker")
       assert html =~ ~s(aria-label="Add reaction")
-      # Every picker emoji button carries the target message_id.
-      assert html =~ ~s(phx-value-message_id="#{msg.id}")
+      # Every picker emoji button carries the target message-id.
+      assert html =~ ~s(phx-value-message-id="#{msg.id}")
     end
 
     test "closing the reaction picker removes the popover", %{conn: conn} do
@@ -771,7 +771,7 @@ defmodule PlatformWeb.ChatLiveTest do
       space = Chat.get_space_by_slug("general")
       [msg | _] = Chat.list_messages(space.id)
 
-      html = render_click(view, "open_reaction_picker", %{"message_id" => msg.id})
+      html = render_click(view, "open_reaction_picker", %{"message-id" => msg.id})
       assert html =~ ~s(id="reaction-picker")
 
       html = render_click(view, "close_reaction_picker", %{})
@@ -791,11 +791,11 @@ defmodule PlatformWeb.ChatLiveTest do
       [msg | _] = Chat.list_messages(space.id)
 
       # Open the picker.
-      render_click(view, "open_reaction_picker", %{"message_id" => msg.id})
+      render_click(view, "open_reaction_picker", %{"message-id" => msg.id})
 
       # Pick an emoji that is NOT in @quick_emojis, to prove the picker is the
       # path under test (not the hover quick-react buttons).
-      html = render_click(view, "react", %{"message_id" => msg.id, "emoji" => "🚀"})
+      html = render_click(view, "react", %{"message-id" => msg.id, "emoji" => "🚀"})
 
       # Reaction is persisted.
       assert [%{emoji: "🚀"}] = Chat.list_reactions(msg.id)
