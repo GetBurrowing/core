@@ -133,6 +133,13 @@ defmodule PlatformWeb.ChatLive do
       {:noreply, push_navigate(socket, to: ~p"/chat")}
     else
       if connected?(socket) do
+        # Mount's subscribe loop (see `mount/3`) already subscribed this LV
+        # to every space in the user's channel + DM list — which includes
+        # whichever one is about to become active. Phoenix.PubSub does NOT
+        # dedupe subscriptions per pid: a second subscribe adds a second
+        # registry entry and a single broadcast fires handle_info twice.
+        # Unsubscribe first to guarantee a single active subscription here.
+        ChatPubSub.unsubscribe(space.id)
         ChatPubSub.subscribe(space.id)
         Phoenix.PubSub.subscribe(Platform.PubSub, "active_agent:#{space.id}")
       end

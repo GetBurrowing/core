@@ -606,9 +606,6 @@ defmodule PlatformWeb.ChatLiveTest do
       space = Chat.get_space_by_slug("general")
       [msg | _] = Chat.list_messages(space.id)
 
-      # Another participant (simulating a second connected user/agent) reacts.
-      # This goes through Chat.add_reaction → PubSub broadcast only — no local
-      # render_click to mask a stream-insertion miss.
       other_user = insert_chat_user(%{email: "other@example.com", oidc_sub: "other-sub"})
 
       {:ok, other_participant} =
@@ -626,28 +623,65 @@ defmodule PlatformWeb.ChatLiveTest do
           emoji: "🎉"
         })
 
-      # The LV should receive the PubSub event and re-render the message in
-      # place with the new pill + count — no navigation, no remount.
+      # Assert exactly one pill with count=1 — not a loose "1 appears somewhere
+      # after 🎉" regex, which false-positives on reply counts / unread badges.
       html = render(view)
-      assert html =~ "🎉"
-      assert Regex.match?(~r/🎉[\s\S]*?<span>1<\/span>|<span>1<\/span>[\s\S]*?🎉/, html)
+      assert count_occurrences(html, "<span>🎉</span><span>1</span>") == 1
 
-      # A second reaction (different emoji) arrives — pill list grows live.
-      {:ok, _reaction2} =
+      # Removal live-updates the DOM: the pill disappears, count=0 entries are
+      # pruned from :reactions_map.
+      {:ok, _} = Chat.remove_reaction(msg.id, other_participant.id, "🎉")
+      html = render(view)
+      assert count_occurrences(html, "<span>🎉</span>") == 0
+    end
+
+    test "duplicate reaction_added delivery does not double-count",
+         %{conn: conn} do
+      # Regression for the triple-count bug: Phoenix.PubSub subscriptions are
+      # not deduplicated per pid, so if the LV subscribes to the space topic
+      # twice (the mount loop + handle_params double-subscribe that existed
+      # in chat_live.ex), one broadcast delivers twice and the incremental
+      # `add_reaction_to_map` produced count=2 for a single click. The fix
+      # rebuilds the reactions entry from DB truth on every handle_info,
+      # making the handler idempotent under duplicate delivery.
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/chat/general")
+
+      view
+      |> form("#compose-form", compose: %{text: "idempotency target"})
+      |> render_submit()
+
+      space = Chat.get_space_by_slug("general")
+      [msg | _] = Chat.list_messages(space.id)
+
+      other_user =
+        insert_chat_user(%{email: "dup@example.com", oidc_sub: "dup-sub"})
+
+      {:ok, other_participant} =
+        Chat.add_participant(space.id, %{
+          participant_type: "user",
+          participant_id: other_user.id,
+          display_name: other_user.name,
+          joined_at: DateTime.utc_now()
+        })
+
+      {:ok, reaction} =
         Chat.add_reaction(%{
           message_id: msg.id,
           participant_id: other_participant.id,
-          emoji: "👍"
+          emoji: "🎉"
         })
 
-      html = render(view)
-      assert html =~ "🎉"
-      assert html =~ "👍"
+      # Simulate a duplicate delivery of the SAME {:reaction_added, _} event
+      # (what the double-subscribe would produce in production). The handler
+      # must be idempotent: count stays at 1, not 2.
+      send(view.pid, {:reaction_added, reaction})
+      send(view.pid, {:reaction_added, reaction})
 
-      # Removal also live-updates the DOM.
-      {:ok, _} = Chat.remove_reaction(msg.id, other_participant.id, "🎉")
       html = render(view)
-      refute Regex.match?(~r/🎉[\s\S]*?<span>1<\/span>/, html)
+      assert count_occurrences(html, "<span>🎉</span><span>1</span>") == 1
+      refute html =~ "<span>🎉</span><span>2</span>"
+      refute html =~ "<span>🎉</span><span>3</span>"
     end
 
     test "reacting with a nil/missing participant does not crash the LiveView", %{conn: conn} do

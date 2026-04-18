@@ -505,17 +505,25 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
   end
 
   defp handle_info({:reaction_added, reaction}, socket) do
+    # Rebuild from DB truth rather than incrementing a local map. Incremental
+    # counting double-counts under duplicate PubSub delivery (which is
+    # possible because Phoenix.PubSub subscriptions are NOT deduped per pid —
+    # if the LV accidentally subscribes to the space topic twice, one
+    # broadcast fires handle_info twice and `count: g.count + 1` produces
+    # count 2 for a single click). The DB row is the source of truth; one
+    # SELECT per broadcast per connected LV is cheap and immune to
+    # duplicate delivery, out-of-order events, and stale state.
     reactions_map =
-      add_reaction_to_map(
+      rebuild_reactions_entry(
         socket.assigns.reactions_map,
-        reaction,
+        reaction.message_id,
         socket.assigns.current_participant
       )
 
-    # Reaction pills are rendered inside the `:messages` stream iteration.
-    # Phoenix streams freeze item markup at stream_insert time, so updating
-    # :reactions_map alone does not re-render the pill block. Re-insert the
-    # message so it's re-rendered against the fresh reactions_map.
+    # Reaction pills render inside the `:messages` stream iteration. Phoenix
+    # streams freeze item markup at stream_insert time, so updating
+    # :reactions_map alone doesn't re-render the pill block — re-insert the
+    # message so it renders against the fresh reactions_map.
     socket =
       socket
       |> assign(:reactions_map, reactions_map)
@@ -530,9 +538,9 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
 
   defp handle_info({:reaction_removed, data}, socket) do
     reactions_map =
-      remove_reaction_from_map(
+      rebuild_reactions_entry(
         socket.assigns.reactions_map,
-        data,
+        data.message_id,
         socket.assigns.current_participant
       )
 
@@ -676,55 +684,25 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
     |> Chat.list_attachments_for_messages()
   end
 
-  defp add_reaction_to_map(reactions_map, reaction, current_participant) do
-    msg_id = reaction.message_id
+  defp rebuild_reactions_entry(reactions_map, msg_id, current_participant) do
     my_id = current_participant && current_participant.id
-    groups = Map.get(reactions_map, msg_id, [])
 
-    updated =
-      case Enum.find_index(groups, &(&1.emoji == reaction.emoji)) do
-        nil ->
-          new_group = %{
-            emoji: reaction.emoji,
-            count: 1,
-            reacted_by_me: reaction.participant_id == my_id
-          }
-
-          Enum.sort_by([new_group | groups], & &1.emoji)
-
-        idx ->
-          List.update_at(groups, idx, fn g ->
-            %{
-              g
-              | count: g.count + 1,
-                reacted_by_me: g.reacted_by_me || reaction.participant_id == my_id
-            }
-          end)
-      end
-
-    Map.put(reactions_map, msg_id, updated)
-  end
-
-  defp remove_reaction_from_map(reactions_map, %{message_id: msg_id} = data, current_participant) do
-    emoji = data[:emoji]
-    removed_pid = data[:participant_id]
-    my_id = current_participant && current_participant.id
-    groups = Map.get(reactions_map, msg_id, [])
-
-    updated =
-      groups
+    groups =
+      msg_id
+      |> Chat.list_reactions_grouped()
       |> Enum.map(fn g ->
-        if g.emoji == emoji do
-          new_count = max(0, g.count - 1)
-          new_reacted = g.reacted_by_me && removed_pid != my_id
-          %{g | count: new_count, reacted_by_me: new_reacted}
-        else
-          g
-        end
+        %{
+          emoji: g.emoji,
+          count: g.count,
+          reacted_by_me: my_id in g.participants
+        }
       end)
-      |> Enum.reject(&(&1.count == 0))
 
-    Map.put(reactions_map, msg_id, updated)
+    if groups == [] do
+      Map.delete(reactions_map, msg_id)
+    else
+      Map.put(reactions_map, msg_id, groups)
+    end
   end
 
   defp put_attachment_map_entry(socket, message_id, attachments) do
