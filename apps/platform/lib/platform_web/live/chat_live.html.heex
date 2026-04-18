@@ -641,6 +641,15 @@
                 </button>
 
                 <button
+                  phx-click="open_reaction_picker"
+                  phx-value-message_id={msg.id}
+                  title="More reactions"
+                  class="rounded px-1.5 py-0.5 text-xs text-base-content/50 hover:text-base-content hover:bg-base-300 transition-colors"
+                >
+                  <span class="hero-face-smile size-4"></span>
+                </button>
+
+                <button
                   :if={present?(msg.content)}
                   phx-hook="CopyToClipboard"
                   id={"copy-msg-#{msg.id}"}
@@ -1210,5 +1219,51 @@
   open={@show_new_conversation_modal}
   user_id={@user_id}
 />
+
+<%!-- Reaction picker popover --%>
+<div
+  :if={@reaction_picker_for}
+  id="reaction-picker"
+  class="fixed inset-0 z-50 flex items-center justify-center"
+>
+  <div
+    class="absolute inset-0 bg-base-content/20"
+    phx-click="close_reaction_picker"
+    aria-hidden="true"
+  >
+  </div>
+  <div
+    class="relative z-10 w-80 rounded-lg border border-base-300 bg-base-100 p-3 shadow-xl"
+    role="dialog"
+    aria-label="Add reaction"
+  >
+    <div class="mb-2 flex items-center justify-between">
+      <span class="text-xs font-semibold uppercase tracking-widest text-base-content/60">
+        Add reaction
+      </span>
+      <button
+        type="button"
+        phx-click="close_reaction_picker"
+        title="Close"
+        class="rounded p-1 text-base-content/50 hover:bg-base-200 hover:text-base-content"
+      >
+        <span class="hero-x-mark size-4"></span>
+      </button>
+    </div>
+    <div class="grid grid-cols-8 gap-1">
+      <button
+        :for={emoji <- @reaction_picker_emojis}
+        type="button"
+        phx-click="react"
+        phx-value-message_id={@reaction_picker_for}
+        phx-value-emoji={emoji}
+        title={"React with #{emoji}"}
+        class="rounded px-1.5 py-1 text-lg hover:bg-base-200 transition-colors"
+      >
+        {emoji}
+      </button>
+    </div>
+  </div>
+</div>
 
 <.image_lightbox url={@lightbox_url} />

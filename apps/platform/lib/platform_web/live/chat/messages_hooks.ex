@@ -26,6 +26,8 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
     * `:messages` (stream)
     * `:reactions_map` — msg_id → [%{emoji, count, reacted_by_me}]
     * `:attachments_map` — msg_id → [attachments]
+    * `:reaction_picker_for` — msg_id | nil — when set, the picker popover is open for that message
+    * `:reaction_picker_emojis` — curated emoji list shown in the picker
     * `:compose_form`
     * `:thread_compose_form`
     * `:active_thread`
@@ -42,7 +44,7 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
 
     * Compose: `"send_message"`, `"compose_changed"` (+ draft save),
       `"open_lightbox"`, `"close_lightbox"`
-    * Reactions: `"react"`, `"open_reaction_picker"`
+    * Reactions: `"react"`, `"open_reaction_picker"`, `"close_reaction_picker"`
     * Threads: `"open_thread"`, `"close_thread"`, `"send_thread_message"`,
       `"toggle_inline_thread"`, `"send_inline_thread_message"`
 
@@ -90,12 +92,23 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
 
   @message_limit 50
 
+  # Expanded emoji list offered in the "+" picker popover. Keep curated —
+  # full emoji-picker-element with search/skin tones is tracked for V2.
+  @reaction_picker_emojis ~w(
+    👍 👎 ❤️ 🔥 🎉 🚀 ✅ ❌
+    😀 😂 😅 😊 😍 🤔 😮 😢
+    🙏 👏 🙌 💪 👀 💡 ⭐ ✨
+    🥳 🤯 💯 🫶 🤝 ☕ 🍕 🐛
+  )
+
   @doc "Attach message/thread/reactions handlers. Call from `ChatLive.mount/3`."
   @spec attach(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
   def attach(socket) do
     socket
     |> assign(:reactions_map, %{})
     |> assign(:attachments_map, %{})
+    |> assign(:reaction_picker_for, nil)
+    |> assign(:reaction_picker_emojis, @reaction_picker_emojis)
     |> assign(:active_thread, nil)
     |> assign(:thread_messages, [])
     |> assign(:thread_attachments_map, %{})
@@ -133,6 +146,7 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
     socket
     |> assign(:reactions_map, reactions_map)
     |> assign(:attachments_map, attachments_map)
+    |> assign(:reaction_picker_for, nil)
     |> assign(:thread_previews, thread_previews)
     |> assign(:active_thread, nil)
     |> assign(:thread_messages, [])
@@ -246,13 +260,20 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
   defp handle_event("close_lightbox", _params, socket),
     do: {:halt, assign(socket, :lightbox_url, nil)}
 
-  defp handle_event("open_reaction_picker", _params, socket), do: {:halt, socket}
+  defp handle_event("open_reaction_picker", %{"message_id" => msg_id}, socket),
+    do: {:halt, assign(socket, :reaction_picker_for, msg_id)}
+
+  defp handle_event("open_reaction_picker", %{"message-id" => msg_id}, socket),
+    do: {:halt, assign(socket, :reaction_picker_for, msg_id)}
+
+  defp handle_event("close_reaction_picker", _params, socket),
+    do: {:halt, assign(socket, :reaction_picker_for, nil)}
 
   defp handle_event("react", %{"message_id" => msg_id, "emoji" => emoji}, socket),
-    do: {:halt, react_to_message(socket, msg_id, emoji)}
+    do: {:halt, socket |> react_to_message(msg_id, emoji) |> close_picker()}
 
   defp handle_event("react", %{"message-id" => msg_id, "emoji" => emoji}, socket),
-    do: {:halt, react_to_message(socket, msg_id, emoji)}
+    do: {:halt, socket |> react_to_message(msg_id, emoji) |> close_picker()}
 
   defp handle_event("open_thread", %{"message-id" => message_id}, socket),
     do: handle_event("toggle_inline_thread", %{"message-id" => message_id}, socket)
@@ -566,6 +587,8 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
       Logger.error("Reaction handler crashed: #{Exception.message(e)}")
       socket
   end
+
+  defp close_picker(socket), do: assign(socket, :reaction_picker_for, nil)
 
   defp assign_compose(socket, text) do
     assign(socket, :compose_form, to_form(%{"text" => text}, as: :compose))
