@@ -25,7 +25,8 @@ config :platform, :oidc,
   http_adapter: {Assent.HTTPAdapter.Mint, []}
 
 config :platform,
-  chat_attachments_root: Path.join(System.tmp_dir!(), "platform_test_chat_uploads")
+  chat_attachments_root: Path.join(System.tmp_dir!(), "platform_test_chat_uploads"),
+  skip_attachment_storage_check: true
 
 # Print only warnings and errors during test
 config :logger, level: :warning

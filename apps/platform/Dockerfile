@@ -43,6 +43,14 @@ ENV LANG=en_US.UTF-8 LANGUAGE=en_US:en LC_ALL=en_US.UTF-8
 WORKDIR /app
 
 RUN useradd -m -u 1000 app
+
+# Chat attachment storage root. Operators must mount a persistent volume at
+# /data/platform/chat_uploads in their deployment manifest — otherwise
+# attachments are written to the container's ephemeral layer and vanish on
+# every restart/redeploy. See Platform.Chat.AttachmentStorage.
+RUN mkdir -p /data/platform/chat_uploads && chown -R app:app /data/platform
+VOLUME ["/data/platform/chat_uploads"]
+
 USER app
 
 COPY --from=build --chown=app:app /app/_build/prod/rel/platform ./

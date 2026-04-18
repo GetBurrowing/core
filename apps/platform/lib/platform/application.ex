@@ -8,53 +8,55 @@ defmodule Platform.Application do
   @impl true
   def start(_type, _args) do
     Platform.Config.validate!()
+
     Platform.Audit.TelemetryHandler.attach()
     Platform.Vault.TelemetryHandler.attach()
     Platform.Chat.TelemetryHandler.attach()
     Platform.Memory.TelemetryHandler.attach()
 
     children =
-      [
-        Platform.Vault.Encryption,
-        Platform.Repo,
-        PlatformWeb.Telemetry,
-        {DNSCluster, query: Application.get_env(:platform, :dns_cluster_query) || :ignore},
-        {Phoenix.PubSub, name: Platform.PubSub},
-        {Registry, keys: :unique, name: Platform.Agents.Registry},
-        {Registry, keys: :unique, name: Platform.Execution.Registry},
-        {Registry, keys: :unique, name: Platform.Orchestration.Registry},
-        Platform.Agents.RuntimeSupervisor,
-        # ContextBroker — must start after the agent registry/runtime tree
-        Platform.Agents.ContextBroker,
-        # Context plane supervisor — must start after PubSub
-        Platform.Context.Supervisor,
-        # Artifact substrate — task/run artifact records + publication history
-        Platform.Artifacts.Store,
-        # Execution plane — run supervisor (registry started above)
-        Platform.Execution.RunSupervisor,
-        # Orchestration — task router supervisor (registry started above)
-        Platform.Orchestration.TaskRouterSupervisor,
-        # Orchestration — declarative watcher: starts/stops routers based on task state
-        Platform.Orchestration.TaskRouterWatcher,
-        # Node context — ETS-backed space tracking for node canvas commands
-        Platform.Federation.NodeContext,
-        # Federation runtime presence tracker — before Endpoint so channels can use it
-        Platform.Federation.RuntimePresence,
-        # Dead letter buffer — in-process ring buffer for delivery failures
-        Platform.Federation.DeadLetterBuffer,
-        # Task supervisor for parallel agent dispatch (ADR 0027)
-        {Task.Supervisor, name: Platform.TaskSupervisor},
-        # Context plane — shared ETS context for federation (after Repo, before AttentionRouter)
-        Platform.Chat.ContextPlane,
-        # Active agent mutex — ETS-backed per-space agent tracking (ADR 0027)
-        Platform.Chat.ActiveAgentStore,
-        # Chat presence — must start after PubSub
-        Platform.Chat.Presence,
-        # Vault OAuth token refresh worker — must start after Repo and Vault.Encryption
-        Platform.Vault.RefreshWorker,
-        # Start to serve requests, typically the last entry
-        PlatformWeb.Endpoint
-      ]
+      (maybe_chat_storage_boot_check() ++
+         [
+           Platform.Vault.Encryption,
+           Platform.Repo,
+           PlatformWeb.Telemetry,
+           {DNSCluster, query: Application.get_env(:platform, :dns_cluster_query) || :ignore},
+           {Phoenix.PubSub, name: Platform.PubSub},
+           {Registry, keys: :unique, name: Platform.Agents.Registry},
+           {Registry, keys: :unique, name: Platform.Execution.Registry},
+           {Registry, keys: :unique, name: Platform.Orchestration.Registry},
+           Platform.Agents.RuntimeSupervisor,
+           # ContextBroker — must start after the agent registry/runtime tree
+           Platform.Agents.ContextBroker,
+           # Context plane supervisor — must start after PubSub
+           Platform.Context.Supervisor,
+           # Artifact substrate — task/run artifact records + publication history
+           Platform.Artifacts.Store,
+           # Execution plane — run supervisor (registry started above)
+           Platform.Execution.RunSupervisor,
+           # Orchestration — task router supervisor (registry started above)
+           Platform.Orchestration.TaskRouterSupervisor,
+           # Orchestration — declarative watcher: starts/stops routers based on task state
+           Platform.Orchestration.TaskRouterWatcher,
+           # Node context — ETS-backed space tracking for node canvas commands
+           Platform.Federation.NodeContext,
+           # Federation runtime presence tracker — before Endpoint so channels can use it
+           Platform.Federation.RuntimePresence,
+           # Dead letter buffer — in-process ring buffer for delivery failures
+           Platform.Federation.DeadLetterBuffer,
+           # Task supervisor for parallel agent dispatch (ADR 0027)
+           {Task.Supervisor, name: Platform.TaskSupervisor},
+           # Context plane — shared ETS context for federation (after Repo, before AttentionRouter)
+           Platform.Chat.ContextPlane,
+           # Active agent mutex — ETS-backed per-space agent tracking (ADR 0027)
+           Platform.Chat.ActiveAgentStore,
+           # Chat presence — must start after PubSub
+           Platform.Chat.Presence,
+           # Vault OAuth token refresh worker — must start after Repo and Vault.Encryption
+           Platform.Vault.RefreshWorker,
+           # Start to serve requests, typically the last entry
+           PlatformWeb.Endpoint
+         ])
       |> maybe_add_attention_router()
       |> maybe_add_node_client()
       |> maybe_add_system_event_scheduler()
@@ -64,6 +66,17 @@ defmodule Platform.Application do
     # for other strategies and supported options
     opts = [strategy: :one_for_one, name: Platform.Supervisor]
     Supervisor.start_link(children, opts)
+  end
+
+  # Fail-closed: run unless explicitly skipped (dev/test). Prevents the
+  # durability check from being silently bypassed in staging or any other
+  # non-:prod-but-still-real environment.
+  defp maybe_chat_storage_boot_check do
+    if Application.get_env(:platform, :skip_attachment_storage_check, false) do
+      []
+    else
+      [Platform.Chat.AttachmentStorage.BootCheck]
+    end
   end
 
   # Tell Phoenix to update the endpoint configuration
