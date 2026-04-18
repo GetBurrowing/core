@@ -476,14 +476,24 @@ defmodule Platform.Chat.AttentionRouter do
 
   # ── Mention detection ────────────────────────────────────────────────────────
 
+  # ADR 0037: messages may contain `@[Display Name]` (bracketed, exact) and/or
+  # legacy `@name` (substring). We scan both:
+  #   1. Extract bracketed tokens — matched exactly, no prefix ambiguity.
+  #   2. Strip bracketed tokens from the content; the remainder is the "legacy
+  #      zone" where `@name` substring matching applies (covers pre-backfill
+  #      messages and LLM-emitted mentions that skip brackets).
+  # A single message may mix both forms (e.g. autocompleted `@[Rowan]` plus a
+  # manually-typed `@alice`) — both route correctly, and `@Rowan` substring
+  # inside `@[Rowan]` does not leak into the legacy check.
   defp mentioned?(%Participant{} = p, %Message{content: content}) when is_binary(content) do
     downcased = String.downcase(content)
+    {bracketed_tokens, legacy_zone} = extract_bracketed_tokens(downcased)
 
     name_match =
       is_binary(p.display_name) and p.display_name != "" and
-        String.contains?(downcased, "@#{String.downcase(p.display_name)}")
+        name_mention?(String.downcase(p.display_name), bracketed_tokens, legacy_zone)
 
-    id_match = String.contains?(downcased, "@#{String.downcase(p.id)}")
+    id_match = id_mention?(String.downcase(p.id), bracketed_tokens, legacy_zone)
 
     # Support user-configured keywords in attention_config["keywords"]
     keywords = get_in(p.attention_config, ["keywords"]) || []
@@ -498,6 +508,24 @@ defmodule Platform.Chat.AttentionRouter do
   end
 
   defp mentioned?(_participant, _message), do: false
+
+  defp extract_bracketed_tokens(content) do
+    tokens =
+      ~r/@\[([^\[\]]+)\]/
+      |> Regex.scan(content, capture: :all_but_first)
+      |> List.flatten()
+
+    legacy_zone = Regex.replace(~r/@\[([^\[\]]+)\]/, content, "")
+    {tokens, legacy_zone}
+  end
+
+  defp name_mention?(name, bracketed_tokens, legacy_zone) do
+    name in bracketed_tokens or String.contains?(legacy_zone, "@#{name}")
+  end
+
+  defp id_mention?(id, bracketed_tokens, legacy_zone) do
+    id in bracketed_tokens or String.contains?(legacy_zone, "@#{id}")
+  end
 
   # ── Query helpers ───────────────────────────────────────────────────────────
 

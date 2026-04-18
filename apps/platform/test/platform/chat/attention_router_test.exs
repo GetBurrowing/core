@@ -540,4 +540,127 @@ defmodule Platform.Chat.AttentionRouterTest do
       drain()
     end
   end
+
+  describe "bracketed @[Name] mentions (ADR 0037)" do
+    test "routes on exact bracketed match with multi-word display name" do
+      space = create_space(%{kind: "channel"})
+      user = create_participant(space.id)
+      agent = create_agent(%{name: "Rowan Ellis"})
+
+      {:ok, agent_participant} =
+        Chat.ensure_agent_participant(space.id, agent, display_name: "Rowan Ellis")
+
+      Chat.add_space_agent(space.id, agent.id, role: "member")
+
+      message =
+        create_message(space.id, user.id, %{content: "hey @[Rowan Ellis] can you look"})
+
+      agent_participant_id = agent_participant.id
+
+      assert {:ok, [%{participant_id: ^agent_participant_id, reason: :mention}]} =
+               AttentionRouter.route(message)
+
+      drain()
+    end
+
+    test "bracketed @[Rowan] does not leak to @[Rowan Ellis] (no prefix ambiguity)" do
+      space = create_space(%{kind: "channel"})
+      user = create_participant(space.id)
+
+      rowan_agent = create_agent(%{name: "Rowan"})
+      rowan_m_agent = create_agent(%{name: "Rowan Ellis"})
+
+      {:ok, rowan_participant} =
+        Chat.ensure_agent_participant(space.id, rowan_agent, display_name: "Rowan")
+
+      {:ok, _rowan_m_participant} =
+        Chat.ensure_agent_participant(space.id, rowan_m_agent, display_name: "Rowan Ellis")
+
+      Chat.add_space_agent(space.id, rowan_agent.id, role: "member")
+      Chat.add_space_agent(space.id, rowan_m_agent.id, role: "member")
+
+      message = create_message(space.id, user.id, %{content: "hey @[Rowan] look here"})
+
+      rowan_participant_id = rowan_participant.id
+
+      # Only Rowan is routed — Rowan Ellis's participant must not appear.
+      assert {:ok, [%{participant_id: ^rowan_participant_id, reason: :mention}]} =
+               AttentionRouter.route(message)
+
+      drain()
+    end
+
+    test "legacy @name still routes in a pre-migration message" do
+      space = create_space(%{kind: "channel"})
+      user = create_participant(space.id)
+      agent = create_agent(%{name: "Zip"})
+
+      {:ok, agent_participant} =
+        Chat.ensure_agent_participant(space.id, agent, display_name: "Zip")
+
+      Chat.add_space_agent(space.id, agent.id, role: "member")
+
+      message = create_message(space.id, user.id, %{content: "hey @zip help me"})
+      agent_participant_id = agent_participant.id
+
+      assert {:ok, [%{participant_id: ^agent_participant_id, reason: :mention}]} =
+               AttentionRouter.route(message)
+
+      drain()
+    end
+
+    test "hybrid message: bracketed + legacy both route" do
+      space = create_space(%{kind: "group"})
+      user = create_participant(space.id)
+
+      zip = create_agent(%{name: "Zip"})
+      nova = create_agent(%{name: "Nova"})
+
+      {:ok, zip_p} = Chat.ensure_agent_participant(space.id, zip, display_name: "Zip")
+      {:ok, nova_p} = Chat.ensure_agent_participant(space.id, nova, display_name: "Nova")
+
+      Chat.add_space_agent(space.id, zip.id, role: "member")
+      Chat.add_space_agent(space.id, nova.id, role: "member")
+
+      # User autocompletes Zip → bracketed; types @nova manually → legacy.
+      message =
+        create_message(space.id, user.id, %{content: "ping @[Zip] and also @nova please"})
+
+      {:ok, decisions} = AttentionRouter.route(message)
+
+      participant_ids = decisions |> Enum.map(& &1.participant_id) |> Enum.sort()
+      assert participant_ids == Enum.sort([zip_p.id, nova_p.id])
+      assert Enum.all?(decisions, fn d -> d.reason == :multi_mention end)
+
+      drain()
+    end
+
+    test "@[Rowan Ellis] does not route to a legacy Rowan substring-match" do
+      # Regression guard: ensure `@Rowan` substring inside `@[Rowan Ellis]`
+      # does not leak into the legacy zone. Without stripping brackets first,
+      # a plain-Rowan participant would be falsely routed.
+      space = create_space(%{kind: "channel"})
+      user = create_participant(space.id)
+
+      rowan_agent = create_agent(%{name: "Rowan"})
+      rowan_m_agent = create_agent(%{name: "Rowan Ellis"})
+
+      {:ok, _rowan_p} = Chat.ensure_agent_participant(space.id, rowan_agent, display_name: "Rowan")
+
+      {:ok, rowan_m_p} =
+        Chat.ensure_agent_participant(space.id, rowan_m_agent, display_name: "Rowan Ellis")
+
+      Chat.add_space_agent(space.id, rowan_agent.id, role: "member")
+      Chat.add_space_agent(space.id, rowan_m_agent.id, role: "member")
+
+      message = create_message(space.id, user.id, %{content: "hello @[Rowan Ellis]"})
+
+      rowan_m_p_id = rowan_m_p.id
+
+      assert {:ok, [%{participant_id: ^rowan_m_p_id, reason: :mention}]} =
+               AttentionRouter.route(message)
+
+      drain()
+    end
+  end
 end

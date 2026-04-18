@@ -142,10 +142,10 @@ const ComposeInput = {
 
       if (atIndex !== -1) {
         const after = value.slice(cursor);
-        this.el.value = before.slice(0, atIndex) + "@" + name + " " + after;
+        this.el.value = before.slice(0, atIndex) + "@[" + name + "] " + after;
 
-        // Move cursor after the inserted mention
-        const newPos = atIndex + name.length + 2;
+        // Cursor lands after "@[" + name + "] " (4 extra chars)
+        const newPos = atIndex + name.length + 4;
         this.el.setSelectionRange(newPos, newPos);
       }
 
@@ -173,8 +173,12 @@ const ComposeInput = {
     const cursor = this.el.selectionStart;
     const before = value.slice(0, cursor);
 
-    // Look for @ followed by word chars (no spaces) since last whitespace
-    const match = before.match(/@(\w*)$/);
+    // Match `@` that starts a mention-in-progress:
+    //   - preceded by start-of-line or whitespace (so `foo@bar.com` doesn't trigger)
+    //   - followed by query chars: anything except brackets, another @, or newline
+    //   - `[` in exclusion class means a committed `@[Name]` stops matching once
+    //     the user types past the closing `]`
+    const match = before.match(/(?:^|\s)@([^\[\]@\n]*)$/);
 
     // Identify which compose area triggered the mention by form ID
     const form = this.el.closest("form");

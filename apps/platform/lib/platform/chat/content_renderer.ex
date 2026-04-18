@@ -99,6 +99,14 @@ defmodule Platform.Chat.ContentRenderer do
   end
 
   # ── @-mention decoration ───────────────────────────────────────────
+  #
+  # Primary format (ADR 0037): `@[Display Name]` — bracketed, multi-word safe.
+  # Legacy format: `@word` — still highlighted so pre-migration messages render
+  # the same. Run in that order so a bracketed mention inside a line isn't
+  # double-wrapped by the legacy pass.
+
+  @mention_span ~s(<span class="rounded bg-primary/20 text-primary px-1 font-medium">)
+  @mention_span_close "</span>"
 
   defp decorate_mentions(html) do
     # Split on HTML tags to avoid decorating mentions inside tag attributes
@@ -108,12 +116,32 @@ defmodule Platform.Chat.ContentRenderer do
       if String.starts_with?(part, "<") do
         part
       else
-        String.replace(part, ~r/@(\w+)/, fn mention ->
-          ~s(<span class="rounded bg-primary/20 text-primary px-1 font-medium">#{Phoenix.HTML.html_escape(mention) |> Phoenix.HTML.safe_to_string()}</span>)
-        end)
+        # Order matters: legacy first (its `\w+` won't match `@[`, so it
+        # leaves bracketed mentions alone). Bracketed second — the legacy
+        # pass has already wrapped any bare `@word`, so the bracketed
+        # regex only sees un-wrapped `@[...]` tokens.
+        part
+        |> decorate_legacy_mentions()
+        |> decorate_bracketed_mentions()
       end
     end)
     |> Enum.join()
+  end
+
+  # `text` arrives post-Earmark, which has already HTML-escaped content and
+  # (together with `sanitize_html/1`) stripped anything dangerous — so the
+  # captured name/word is already safe to inline. Re-escaping double-encodes
+  # entities (e.g. `&lt;` → `&amp;lt;`).
+  defp decorate_bracketed_mentions(text) do
+    Regex.replace(~r/@\[([^\[\]]+)\]/, text, fn _full, name ->
+      @mention_span <> "@" <> name <> @mention_span_close
+    end)
+  end
+
+  defp decorate_legacy_mentions(text) do
+    String.replace(text, ~r/@(\w+)/, fn mention ->
+      @mention_span <> mention <> @mention_span_close
+    end)
   end
 
   # ── Code Block Post-Processing ─────────────────────────────────────
