@@ -37,12 +37,13 @@ defmodule Platform.Federation.ToolSurfaceTest do
   describe "tool_definitions/0" do
     test "returns all 41 tools with required components" do
       tools = ToolSurface.tool_definitions()
-      assert length(tools) == 41
+      assert length(tools) == 42
 
       tool_names = Enum.map(tools, & &1.name)
       assert "send_media" in tool_names
       assert "react" in tool_names
       assert "space_list" in tool_names
+      assert "space_list_agents" in tool_names
       assert "space_leave" in tool_names
       assert "canvas.create" in tool_names
       assert "canvas.patch" in tool_names
@@ -580,6 +581,63 @@ defmodule Platform.Federation.ToolSurfaceTest do
 
       assert length(results) == 1
       assert hd(results).name == "DM"
+    end
+
+    # ── space_list_agents ────────────────────────────────────────────────
+
+    test "space_list_agents returns active agent participants enriched with slug + name" do
+      higgins = create_agent(%{name: "Higgins"})
+      geordi = create_agent(%{name: "Geordi"})
+      space = create_space(%{name: "Engineering"})
+
+      {:ok, higgins_p} =
+        Chat.ensure_agent_participant(space.id, higgins, display_name: "Higgins")
+
+      {:ok, _geordi_p} =
+        Chat.ensure_agent_participant(space.id, geordi, display_name: "Geordi")
+
+      {:ok, rows} = ToolSurface.execute("space_list_agents", %{"space_id" => space.id}, %{})
+
+      assert length(rows) == 2
+      higgins_row = Enum.find(rows, &(&1.agent_id == higgins.id))
+      assert higgins_row.slug == higgins.slug
+      assert higgins_row.name == "Higgins"
+      assert higgins_row.display_name == "Higgins"
+      assert higgins_row.participant_id == higgins_p.id
+      assert %DateTime{} = higgins_row.joined_at
+    end
+
+    test "space_list_agents excludes human participants and left agents" do
+      higgins = create_agent(%{name: "Higgins"})
+      geordi = create_agent(%{name: "Geordi"})
+      space = create_space(%{name: "Mixed"})
+
+      {:ok, _} = Chat.ensure_agent_participant(space.id, higgins, display_name: "Higgins")
+      {:ok, geordi_p} = Chat.ensure_agent_participant(space.id, geordi, display_name: "Geordi")
+
+      # Human participant — uses a raw UUID, no corresponding agent row.
+      human_user_id = Ecto.UUID.generate()
+
+      create_participant(space.id, %{
+        participant_type: "user",
+        participant_id: human_user_id,
+        display_name: "Human"
+      })
+
+      # Geordi leaves.
+      {:ok, _} = Chat.remove_participant(geordi_p)
+
+      {:ok, rows} = ToolSurface.execute("space_list_agents", %{"space_id" => space.id}, %{})
+
+      agent_ids = Enum.map(rows, & &1.agent_id)
+      assert higgins.id in agent_ids
+      refute geordi.id in agent_ids
+      refute human_user_id in agent_ids
+    end
+
+    test "space_list_agents returns an error when space_id is missing" do
+      assert {:error, err} = ToolSurface.execute("space_list_agents", %{}, %{})
+      assert err.error =~ "space_id is required"
     end
 
     # ── space_leave ──────────────────────────────────────────────────────

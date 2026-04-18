@@ -7,6 +7,7 @@ defmodule Platform.Federation.ToolSurface do
 
   require Logger
 
+  alias Platform.Agents.Agent
   alias Platform.Chat
   alias Platform.Chat.{ActiveAgentStore, ContextPlane, Participant}
   alias Platform.Org.Context, as: OrgContext
@@ -340,6 +341,20 @@ defmodule Platform.Federation.ToolSurface do
         limitations: "Only returns spaces the agent is a participant in",
         when_to_use:
           "When you need to discover available spaces or find a space ID for proactive messaging"
+      },
+      %{
+        name: "space_list_agents",
+        description:
+          "List the agent participants in a space with their IDs, slugs, and display names. Use this to resolve an agent by name before calling tools that require an `agent_id` (e.g. `space_leave`).",
+        parameters: %{
+          space_id: %{type: "string", required: true, description: "UUID of the Suite space"}
+        },
+        returns:
+          "Array of `{agent_id, slug, name, display_name, participant_id, joined_at}`. Only active agent participants are returned (humans excluded, left agents excluded).",
+        limitations:
+          "Only agent participants currently in the space. Name matching is case-sensitive — compare against `slug` for stable lookups or `name` for the human-readable label.",
+        when_to_use:
+          "Before calling `space_leave` on another agent, or whenever you need to map a human-readable agent name to its UUID."
       },
       %{
         name: "space_leave",
@@ -1190,6 +1205,52 @@ defmodule Platform.Federation.ToolSurface do
      Enum.map(spaces, fn s ->
        %{id: s.id, name: s.name, kind: s.kind, description: s.description}
      end)}
+  end
+
+  def execute("space_list_agents", args, _context) do
+    space_id = Map.get(args, "space_id")
+
+    if not is_binary(space_id) or space_id == "" do
+      {:error,
+       %{
+         error: "space_id is required",
+         recoverable: false,
+         suggestion: "Provide a valid Suite space UUID"
+       }}
+    else
+      participants = Chat.list_participants(space_id, participant_type: "agent")
+      agent_ids = Enum.map(participants, & &1.participant_id) |> Enum.uniq()
+
+      agents_by_id =
+        if agent_ids == [] do
+          %{}
+        else
+          Repo.all(from(a in Agent, where: a.id in ^agent_ids))
+          |> Map.new(&{&1.id, &1})
+        end
+
+      rows =
+        Enum.flat_map(participants, fn p ->
+          case Map.get(agents_by_id, p.participant_id) do
+            nil ->
+              []
+
+            %Agent{} = agent ->
+              [
+                %{
+                  agent_id: agent.id,
+                  slug: agent.slug,
+                  name: agent.name,
+                  display_name: p.display_name || agent.name,
+                  participant_id: p.id,
+                  joined_at: p.joined_at
+                }
+              ]
+          end
+        end)
+
+      {:ok, rows}
+    end
   end
 
   def execute("space_leave", args, context) do
