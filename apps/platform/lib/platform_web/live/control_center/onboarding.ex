@@ -102,7 +102,9 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
       >
         <span class="hero-globe-alt h-8 w-8 text-primary" />
         <span class="text-sm font-semibold text-base-content">Federate</span>
-        <span class="text-xs text-base-content/55">Connect an agent from OpenClaw</span>
+        <span class="text-xs text-base-content/55">
+          Connect an agent from OpenClaw or Claude Code
+        </span>
       </button>
 
       <button
@@ -113,7 +115,7 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
       >
         <span class="hero-arrow-down-tray h-8 w-8 text-primary" />
         <span class="text-sm font-semibold text-base-content">Import</span>
-        <span class="text-xs text-base-content/55">From an OpenClaw workspace</span>
+        <span class="text-xs text-base-content/55">From an OpenClaw or Claude Code workspace</span>
       </button>
 
       <button

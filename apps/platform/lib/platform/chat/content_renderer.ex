@@ -119,20 +119,24 @@ defmodule Platform.Chat.ContentRenderer do
   # ── Code Block Post-Processing ─────────────────────────────────────
 
   defp wrap_code_blocks(html) do
-    # Wrap pre>code blocks with a phx-hook div for the CodeBlock JS hook
-    # Earmark uses class="elixir language-elixir" or class="language-elixir"
+    # Wrap pre>code blocks with a phx-hook div for the CodeBlock JS hook.
+    # Earmark uses class="elixir language-elixir" or class="language-elixir".
+    # Each wrapper MUST carry a unique DOM id — Phoenix LiveView hooks log
+    # "no DOM ID for hook" otherwise. A process-unique integer suffix is
+    # stable within a single render and avoids the hook-attach warning.
     Regex.replace(~r/<pre><code(\s+class="([^"]*)")?>/, html, fn _full, class_attr, classes ->
       lang = extract_language(classes)
+      id = "code-block-#{System.unique_integer([:positive])}"
 
       cond do
         lang != nil ->
-          ~s(<div phx-hook="CodeBlock" data-language="#{lang}" class="code-block-wrapper"><pre><code#{class_attr}>)
+          ~s(<div id="#{id}" phx-hook="CodeBlock" data-language="#{lang}" class="code-block-wrapper"><pre><code#{class_attr}>)
 
         class_attr != "" ->
-          ~s(<div phx-hook="CodeBlock" class="code-block-wrapper"><pre><code#{class_attr}>)
+          ~s(<div id="#{id}" phx-hook="CodeBlock" class="code-block-wrapper"><pre><code#{class_attr}>)
 
         true ->
-          ~s(<div phx-hook="CodeBlock" class="code-block-wrapper"><pre><code>)
+          ~s(<div id="#{id}" phx-hook="CodeBlock" class="code-block-wrapper"><pre><code>)
       end
     end)
     |> close_code_block_wrappers()

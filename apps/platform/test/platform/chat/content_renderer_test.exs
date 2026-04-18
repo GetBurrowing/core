@@ -68,6 +68,8 @@ defmodule Platform.Chat.ContentRendererTest do
       assert result =~ "CodeBlock"
       assert result =~ ~s[data-language="elixir"]
       assert result =~ "defmodule Foo"
+      # Phoenix hooks require a DOM id on each element.
+      assert result =~ ~r/<div id="code-block-\d+" phx-hook="CodeBlock"/
     end
 
     test "renders code blocks without language" do
@@ -80,6 +82,28 @@ defmodule Platform.Chat.ContentRendererTest do
       result = render(md)
       assert result =~ "code-block-wrapper"
       assert result =~ "some code"
+      assert result =~ ~r/<div id="code-block-\d+" phx-hook="CodeBlock"/
+    end
+
+    test "multiple code blocks get unique ids" do
+      md = """
+      ```elixir
+      one
+      ```
+
+      ```elixir
+      two
+      ```
+      """
+
+      result = render(md)
+
+      ids =
+        Regex.scan(~r/<div id="(code-block-\d+)" phx-hook="CodeBlock"/, result)
+        |> Enum.map(&Enum.at(&1, 1))
+
+      assert length(ids) == 2
+      assert Enum.uniq(ids) == ids
     end
 
     test "renders links with target=_blank" do
