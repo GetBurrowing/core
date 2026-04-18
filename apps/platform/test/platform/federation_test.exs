@@ -78,6 +78,106 @@ defmodule Platform.FederationTest do
       assert linked_agent.runtime_type == "external"
       assert linked_agent.runtime_id == runtime.id
     end
+
+    test "auto-adds the federated agent to every non-archived channel space in its workspace" do
+      alias Platform.Chat.{Space, SpaceAgent}
+
+      workspace_id = Ecto.UUID.generate()
+
+      {:ok, general} =
+        %Space{}
+        |> Space.changeset(%{
+          workspace_id: workspace_id,
+          name: "General",
+          slug: "general-#{System.unique_integer([:positive])}",
+          kind: "channel"
+        })
+        |> Repo.insert()
+
+      {:ok, random} =
+        %Space{}
+        |> Space.changeset(%{
+          workspace_id: workspace_id,
+          name: "Random",
+          slug: "random-#{System.unique_integer([:positive])}",
+          kind: "channel"
+        })
+        |> Repo.insert()
+
+      # Archived space should NOT get the agent rostered.
+      {:ok, archived} =
+        %Space{}
+        |> Space.changeset(%{
+          workspace_id: workspace_id,
+          name: "Archived",
+          slug: "archived-#{System.unique_integer([:positive])}",
+          kind: "channel",
+          archived_at: DateTime.utc_now()
+        })
+        |> Repo.insert()
+
+      agent = create_agent(%{workspace_id: workspace_id})
+      user = create_user()
+
+      {:ok, runtime} =
+        Federation.register_runtime(user.id, %{
+          runtime_id: "test-runtime-#{System.unique_integer([:positive])}"
+        })
+
+      {:ok, _} = Federation.link_agent(runtime, agent)
+
+      assert %SpaceAgent{role: "member"} =
+               Repo.get_by(SpaceAgent, space_id: general.id, agent_id: agent.id)
+
+      assert %SpaceAgent{role: "member"} =
+               Repo.get_by(SpaceAgent, space_id: random.id, agent_id: agent.id)
+
+      refute Repo.get_by(SpaceAgent, space_id: archived.id, agent_id: agent.id)
+    end
+
+    test "auto-roster is a no-op for agents without a workspace" do
+      agent = create_agent()
+      user = create_user()
+
+      {:ok, runtime} =
+        Federation.register_runtime(user.id, %{
+          runtime_id: "test-runtime-#{System.unique_integer([:positive])}"
+        })
+
+      assert {:ok, linked} = Federation.link_agent(runtime, agent)
+      assert is_nil(linked.workspace_id)
+    end
+
+    test "auto-roster is idempotent when called again on an already-rostered agent" do
+      alias Platform.Chat.{Space, SpaceAgent}
+
+      workspace_id = Ecto.UUID.generate()
+
+      {:ok, general} =
+        %Space{}
+        |> Space.changeset(%{
+          workspace_id: workspace_id,
+          name: "General",
+          slug: "general-#{System.unique_integer([:positive])}",
+          kind: "channel"
+        })
+        |> Repo.insert()
+
+      agent = create_agent(%{workspace_id: workspace_id})
+
+      :ok = Federation.auto_roster_federated_agent(agent)
+      :ok = Federation.auto_roster_federated_agent(agent)
+
+      count =
+        Repo.aggregate(
+          Ecto.Query.from(sa in SpaceAgent,
+            where: sa.space_id == ^general.id and sa.agent_id == ^agent.id
+          ),
+          :count
+        )
+
+      assert count == 1
+    end
   end
 
   describe "generate_runtime_token/1" do

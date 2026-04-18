@@ -4,6 +4,7 @@ defmodule Platform.Federation do
   token management, and runtime ↔ agent linking.
   """
 
+  require Logger
   import Ecto.Query
 
   alias Platform.Agents.{Agent, AgentRuntime}
@@ -98,8 +99,12 @@ defmodule Platform.Federation do
     )
     |> Repo.transaction()
     |> case do
-      {:ok, %{agent: agent}} -> {:ok, agent}
-      {:error, _step, changeset, _} -> {:error, changeset}
+      {:ok, %{agent: agent}} ->
+        auto_roster_federated_agent(agent)
+        {:ok, agent}
+
+      {:error, _step, changeset, _} ->
+        {:error, changeset}
     end
   end
 
@@ -118,9 +123,52 @@ defmodule Platform.Federation do
     end)
     |> Repo.transaction()
     |> case do
-      {:ok, %{agent: agent}} -> {:ok, agent}
-      {:error, _step, changeset, _} -> {:error, changeset}
+      {:ok, %{agent: agent}} ->
+        auto_roster_federated_agent(agent)
+        {:ok, agent}
+
+      {:error, _step, changeset, _} ->
+        {:error, changeset}
     end
+  end
+
+  @doc """
+  Add a federated agent to the roster of every non-archived channel space
+  in its workspace.
+
+  Runs best-effort: idempotent via `Chat.ensure_space_agent/3` (no-op when
+  the agent is already on a space's roster), logs-but-ignores per-space
+  errors so a single misbehaving space never blocks agent creation. The
+  roster add emits `{:roster_changed, space_id}` pubsub so any open shell
+  LiveView refreshes automatically.
+
+  Rationale: until a federated agent is in a space's roster, it is not
+  @-mentionable from that space, which makes newly-provisioned agents
+  effectively invisible until an operator manually adds them. Auto-adding
+  to every channel in the workspace mirrors the UX of a human user being
+  added to an org — they can see every room by default; operators remove
+  from specific spaces later if needed. (See ADR 0019 for the roster
+  model.)
+  """
+  @spec auto_roster_federated_agent(Agent.t()) :: :ok
+  def auto_roster_federated_agent(%Agent{workspace_id: nil}), do: :ok
+
+  def auto_roster_federated_agent(%Agent{id: agent_id, workspace_id: workspace_id} = agent) do
+    spaces = Chat.list_spaces(workspace_id: workspace_id, kind: "channel")
+
+    Enum.each(spaces, fn %Space{id: space_id} ->
+      case Chat.ensure_space_agent(space_id, agent_id, role: "member") do
+        {:ok, _space_agent} ->
+          :ok
+
+        {:error, reason} ->
+          Logger.warning(
+            "[Federation] auto-roster failed for agent=#{agent.slug} space=#{space_id} reason=#{inspect(reason)}"
+          )
+      end
+    end)
+
+    :ok
   end
 
   @doc "Ensure the runtime's linked agent has a participant in the given space."
