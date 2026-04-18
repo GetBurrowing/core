@@ -267,6 +267,30 @@ defmodule Platform.Federation.ToolSurface do
         limitations:
           "Files must exist on the local filesystem. Agent must be a participant in the space.",
         when_to_use: "When you need to share files (images, documents, etc.) in a space"
+      },
+      %{
+        name: "react",
+        description:
+          "React to a specific message in a Suite space with an emoji. Prefer this over a text reply for quick acknowledgements (👍 got it, ✅ done, 🎉 shipped). Idempotent — re-reacting with the same emoji returns success without duplicating.",
+        parameters: %{
+          space_id: %{type: "string", required: true, description: "UUID of the Suite space"},
+          message_id: %{
+            type: "string",
+            required: true,
+            description: "UUID of the message to react to. Must belong to space_id."
+          },
+          emoji: %{
+            type: "string",
+            required: true,
+            description: "Single emoji grapheme, e.g. 👍, 🎉, ✅"
+          }
+        },
+        returns:
+          "A map with message_id, emoji, space_id, and status: 'added' for a new reaction or 'already_reacted' if the agent had already reacted with that emoji.",
+        limitations:
+          "Agent must be a participant in the space. message_id must belong to the provided space_id.",
+        when_to_use:
+          "When a short emoji ack is more appropriate than a text reply, especially for mobile readers"
       }
     ]
   end
@@ -961,6 +985,119 @@ defmodule Platform.Federation.ToolSurface do
     |> case do
       {:ok, attachment_attrs} -> {:ok, Enum.reverse(attachment_attrs)}
       {:error, reason} -> {:error, reason}
+    end
+  end
+
+  def execute("react", args, context) do
+    space_id = Map.get(args, "space_id")
+    message_id = Map.get(args, "message_id")
+    emoji = Map.get(args, "emoji")
+
+    cond do
+      not is_binary(space_id) or space_id == "" ->
+        {:error,
+         %{
+           error: "space_id is required",
+           recoverable: false,
+           suggestion: "Pass the UUID of the Suite space as space_id"
+         }}
+
+      not is_binary(message_id) or message_id == "" ->
+        {:error,
+         %{
+           error: "message_id is required",
+           recoverable: false,
+           suggestion: "Pass the UUID of the message to react to as message_id"
+         }}
+
+      not is_binary(emoji) or emoji == "" ->
+        {:error,
+         %{
+           error: "emoji is required",
+           recoverable: false,
+           suggestion: "Pass a single emoji grapheme as emoji (e.g. \"👍\")"
+         }}
+
+      true ->
+        react_after_validation(space_id, message_id, emoji, context)
+    end
+  end
+
+  defp react_after_validation(space_id, message_id, emoji, context) do
+    case Chat.get_message(message_id) do
+      nil ->
+        {:error,
+         %{
+           error: "Message #{message_id} not found",
+           recoverable: false,
+           suggestion: "Verify the message_id exists and is accessible to the agent"
+         }}
+
+      %{space_id: msg_space_id} when msg_space_id != space_id ->
+        {:error,
+         %{
+           error: "Message does not belong to space #{space_id}",
+           recoverable: false,
+           suggestion: "Pass the space_id that owns the target message"
+         }}
+
+      _message ->
+        participant_id =
+          Map.get(context, :agent_participant_id) ||
+            get_agent_participant_id_for_space(space_id, context)
+
+        if is_nil(participant_id) do
+          {:error,
+           %{
+             error: "Access denied: agent is not a participant in space #{space_id}",
+             recoverable: false,
+             suggestion: "Use space_list to find spaces the agent has access to"
+           }}
+        else
+          persist_reaction(space_id, message_id, participant_id, emoji)
+        end
+    end
+  end
+
+  defp persist_reaction(space_id, message_id, participant_id, emoji) do
+    case Chat.add_reaction(%{
+           message_id: message_id,
+           participant_id: participant_id,
+           emoji: emoji
+         }) do
+      {:ok, _reaction} ->
+        {:ok,
+         %{
+           message_id: message_id,
+           space_id: space_id,
+           emoji: emoji,
+           status: "added"
+         }}
+
+      {:error, %Ecto.Changeset{} = changeset} ->
+        if already_reacted?(changeset) do
+          {:ok,
+           %{
+             message_id: message_id,
+             space_id: space_id,
+             emoji: emoji,
+             status: "already_reacted"
+           }}
+        else
+          {:error,
+           %{
+             error: "Failed to add reaction: #{inspect_errors_safe(changeset)}",
+             recoverable: true,
+             suggestion: "Verify message_id, participant_id, and emoji are valid"
+           }}
+        end
+    end
+  end
+
+  defp already_reacted?(%Ecto.Changeset{errors: errors}) do
+    case Keyword.get(errors, :emoji) do
+      {_msg, opts} -> Keyword.get(opts, :constraint) == :unique
+      _ -> false
     end
   end
 

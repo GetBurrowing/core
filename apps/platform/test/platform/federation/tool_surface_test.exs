@@ -35,12 +35,13 @@ defmodule Platform.Federation.ToolSurfaceTest do
   defp unique_slug, do: "test-#{System.unique_integer([:positive])}"
 
   describe "tool_definitions/0" do
-    test "returns all 38 tools with required components" do
+    test "returns all 39 tools with required components" do
       tools = ToolSurface.tool_definitions()
-      assert length(tools) == 38
+      assert length(tools) == 39
 
       tool_names = Enum.map(tools, & &1.name)
       assert "send_media" in tool_names
+      assert "react" in tool_names
       assert "space_list" in tool_names
       assert "canvas_create" in tool_names
       assert "canvas_update" in tool_names
@@ -659,6 +660,125 @@ defmodule Platform.Federation.ToolSurfaceTest do
         )
 
       assert error.error =~ "Failed to send media"
+    end
+
+    # ── react ───────────────────────────────────────────────────────────
+
+    test "react adds an emoji reaction to a message" do
+      space = create_space()
+      author = create_participant(space.id)
+      agent_participant = create_participant(space.id, %{display_name: "Agent"})
+
+      {:ok, message} =
+        Chat.post_message(%{
+          space_id: space.id,
+          participant_id: author.id,
+          content_type: "text",
+          content: "hello"
+        })
+
+      {:ok, result} =
+        ToolSurface.execute(
+          "react",
+          %{
+            "space_id" => space.id,
+            "message_id" => message.id,
+            "emoji" => "👍"
+          },
+          %{space_id: space.id, agent_participant_id: agent_participant.id}
+        )
+
+      assert result.message_id == message.id
+      assert result.space_id == space.id
+      assert result.emoji == "👍"
+      assert result.status == "added"
+
+      assert [%{emoji: "👍"}] = Chat.list_reactions(message.id)
+    end
+
+    test "react is idempotent — second call returns already_reacted" do
+      space = create_space()
+      author = create_participant(space.id)
+      agent_participant = create_participant(space.id, %{display_name: "Agent"})
+
+      {:ok, message} =
+        Chat.post_message(%{
+          space_id: space.id,
+          participant_id: author.id,
+          content_type: "text",
+          content: "hello"
+        })
+
+      context = %{space_id: space.id, agent_participant_id: agent_participant.id}
+      args = %{"space_id" => space.id, "message_id" => message.id, "emoji" => "🎉"}
+
+      {:ok, first} = ToolSurface.execute("react", args, context)
+      {:ok, second} = ToolSurface.execute("react", args, context)
+
+      assert first.status == "added"
+      assert second.status == "already_reacted"
+      assert length(Chat.list_reactions(message.id)) == 1
+    end
+
+    test "react rejects a message from a different space" do
+      space_a = create_space()
+      space_b = create_space()
+      author = create_participant(space_a.id)
+      agent_participant = create_participant(space_b.id, %{display_name: "Agent"})
+
+      {:ok, message} =
+        Chat.post_message(%{
+          space_id: space_a.id,
+          participant_id: author.id,
+          content_type: "text",
+          content: "hello"
+        })
+
+      {:error, error} =
+        ToolSurface.execute(
+          "react",
+          %{
+            "space_id" => space_b.id,
+            "message_id" => message.id,
+            "emoji" => "👍"
+          },
+          %{space_id: space_b.id, agent_participant_id: agent_participant.id}
+        )
+
+      assert error.error =~ "does not belong to space"
+      assert Chat.list_reactions(message.id) == []
+    end
+
+    test "react returns error for non-existent message" do
+      space = create_space()
+      participant = create_participant(space.id, %{display_name: "Agent"})
+
+      {:error, error} =
+        ToolSurface.execute(
+          "react",
+          %{
+            "space_id" => space.id,
+            "message_id" => Ecto.UUID.generate(),
+            "emoji" => "👍"
+          },
+          %{space_id: space.id, agent_participant_id: participant.id}
+        )
+
+      assert error.error =~ "not found"
+    end
+
+    test "react rejects missing emoji" do
+      space = create_space()
+      participant = create_participant(space.id, %{display_name: "Agent"})
+
+      {:error, error} =
+        ToolSurface.execute(
+          "react",
+          %{"space_id" => space.id, "message_id" => Ecto.UUID.generate(), "emoji" => ""},
+          %{space_id: space.id, agent_participant_id: participant.id}
+        )
+
+      assert error.error =~ "emoji is required"
     end
   end
 
