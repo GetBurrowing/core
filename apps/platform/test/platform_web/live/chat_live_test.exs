@@ -589,6 +589,67 @@ defmodule PlatformWeb.ChatLiveTest do
       assert Chat.list_reactions(msg.id) == []
     end
 
+    test "a reaction from another participant updates the DOM without remount",
+         %{conn: conn} do
+      # Regression for Rowan's flag: reactions arriving via PubSub must update
+      # the rendered pill/count for already-visible messages. Because pills
+      # render inside the :messages stream iteration, the reaction handle_info
+      # must re-insert the message so the stream re-renders the item against
+      # the fresh :reactions_map.
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/chat/general")
+
+      view
+      |> form("#compose-form", compose: %{text: "remote-reaction target"})
+      |> render_submit()
+
+      space = Chat.get_space_by_slug("general")
+      [msg | _] = Chat.list_messages(space.id)
+
+      # Another participant (simulating a second connected user/agent) reacts.
+      # This goes through Chat.add_reaction → PubSub broadcast only — no local
+      # render_click to mask a stream-insertion miss.
+      other_user = insert_chat_user(%{email: "other@example.com", oidc_sub: "other-sub"})
+
+      {:ok, other_participant} =
+        Chat.add_participant(space.id, %{
+          participant_type: "user",
+          participant_id: other_user.id,
+          display_name: other_user.name,
+          joined_at: DateTime.utc_now()
+        })
+
+      {:ok, _reaction} =
+        Chat.add_reaction(%{
+          message_id: msg.id,
+          participant_id: other_participant.id,
+          emoji: "🎉"
+        })
+
+      # The LV should receive the PubSub event and re-render the message in
+      # place with the new pill + count — no navigation, no remount.
+      html = render(view)
+      assert html =~ "🎉"
+      assert Regex.match?(~r/🎉[\s\S]*?<span>1<\/span>|<span>1<\/span>[\s\S]*?🎉/, html)
+
+      # A second reaction (different emoji) arrives — pill list grows live.
+      {:ok, _reaction2} =
+        Chat.add_reaction(%{
+          message_id: msg.id,
+          participant_id: other_participant.id,
+          emoji: "👍"
+        })
+
+      html = render(view)
+      assert html =~ "🎉"
+      assert html =~ "👍"
+
+      # Removal also live-updates the DOM.
+      {:ok, _} = Chat.remove_reaction(msg.id, other_participant.id, "🎉")
+      html = render(view)
+      refute Regex.match?(~r/🎉[\s\S]*?<span>1<\/span>/, html)
+    end
+
     test "reacting with a nil/missing participant does not crash the LiveView", %{conn: conn} do
       conn = authenticated_conn(conn)
       {:ok, view, _html} = live(conn, ~p"/chat/general")

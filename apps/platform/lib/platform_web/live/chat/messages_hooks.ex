@@ -491,7 +491,16 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
         socket.assigns.current_participant
       )
 
-    {:halt, assign(socket, :reactions_map, reactions_map)}
+    # Reaction pills are rendered inside the `:messages` stream iteration.
+    # Phoenix streams freeze item markup at stream_insert time, so updating
+    # :reactions_map alone does not re-render the pill block. Re-insert the
+    # message so it's re-rendered against the fresh reactions_map.
+    socket =
+      socket
+      |> assign(:reactions_map, reactions_map)
+      |> reinsert_stream_message(reaction.message_id)
+
+    {:halt, socket}
   rescue
     e ->
       Logger.error("Reaction broadcast (added) crashed: #{Exception.message(e)}")
@@ -506,7 +515,12 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
         socket.assigns.current_participant
       )
 
-    {:halt, assign(socket, :reactions_map, reactions_map)}
+    socket =
+      socket
+      |> assign(:reactions_map, reactions_map)
+      |> reinsert_stream_message(data.message_id)
+
+    {:halt, socket}
   rescue
     e ->
       Logger.error("Reaction broadcast (removed) crashed: #{Exception.message(e)}")
