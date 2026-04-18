@@ -204,15 +204,13 @@ defmodule Platform.Chat.ContextPlane do
     end
   end
 
-  defp update_canvas_summary(
-         %{canvas_id: canvas_id, space_id: space_id, canvas_type: canvas_type} = meta
-       ) do
+  defp update_canvas_summary(%{canvas_id: canvas_id, space_id: space_id} = meta) do
     current = get_canvas_summaries(space_id)
 
     entry = %{
       id: canvas_id,
       title: Map.get(meta, :title),
-      type: canvas_type
+      kind: Map.get(meta, :document_kind)
     }
 
     updated =
@@ -222,6 +220,8 @@ defmodule Platform.Chat.ContextPlane do
 
     :ets.insert(@table, {{:canvases, space_id}, updated})
   end
+
+  defp update_canvas_summary(_meta), do: :ok
 
   defp fetch_message_preview(message_id) do
     case Platform.Chat.get_message(message_id) do

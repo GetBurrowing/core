@@ -876,7 +876,7 @@
               <div class="min-w-0">
                 <div class="truncate text-sm font-medium">{canvas.title || "Output"}</div>
                 <div class="text-xs text-base-content/50">
-                  {canvas.canvas_type} • {Calendar.strftime(
+                  {Platform.Chat.CanvasDocument.root_kind(canvas.document) || "canvas"} • {Calendar.strftime(
                     canvas.inserted_at,
                     "%b %-d, %-I:%M %p"
                   )}
@@ -1038,7 +1038,9 @@
           <div class="truncate text-sm font-semibold">
             {@active_review_canvas.title || "Review canvas"}
           </div>
-          <div class="text-xs text-base-content/60">{@active_review_canvas.canvas_type}</div>
+          <div class="text-xs text-base-content/60">
+            {Platform.Chat.CanvasDocument.root_kind(@active_review_canvas.document) || "canvas"}
+          </div>
         </div>
         <button class="btn btn-ghost btn-sm btn-square" phx-click="close_review_canvas">
           <span class="hero-x-mark size-4"></span>

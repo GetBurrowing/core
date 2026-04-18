@@ -265,40 +265,16 @@ defmodule Platform.Chat.AgentResponder do
     end
   end
 
-  @canvas_tag_pattern ~r/\[canvas:([a-zA-Z0-9_-]+):([^\]]+)\]/
-
   @doc """
-  Parses `[canvas:TYPE:TITLE]` tags in the agent reply and creates matching
-  canvases via `Platform.Chat.create_canvas_with_message/3`.
+  Placeholder for the legacy `[canvas:TYPE:TITLE]` regex tag path.
 
-  Returns `:ok` regardless of outcome so callers don't need to handle errors.
+  Per ADR 0036 the `canvas.create` / `canvas.patch` / `canvas.describe` tools
+  are the only sanctioned surface for agent-produced canvases. The regex tag
+  path is disabled; agents that still emit tagged markers will have those
+  tokens rendered literally in their reply. Remove the emission in agent
+  prompts rather than reintroducing the tag parser.
   """
-  @spec maybe_create_canvas(map(), binary()) :: :ok
-  def maybe_create_canvas(context, reply) when is_binary(reply) do
-    @canvas_tag_pattern
-    |> Regex.scan(reply, capture: :all_but_first)
-    |> Enum.each(fn [canvas_type, title] ->
-      attrs = %{
-        "canvas_type" => String.downcase(canvas_type),
-        "title" => String.trim(title)
-      }
-
-      case Chat.create_canvas_with_message(
-             context.message.space_id,
-             context.agent_participant.id,
-             attrs
-           ) do
-        {:ok, canvas, _message} ->
-          Logger.info("[AgentResponder] created canvas #{canvas.id} (#{canvas_type}: #{title})")
-
-        {:error, reason} ->
-          Logger.warning("[AgentResponder] failed to create canvas: #{inspect(reason)}")
-      end
-    end)
-
-    :ok
-  end
-
+  @spec maybe_create_canvas(map(), binary() | any()) :: :ok
   def maybe_create_canvas(_context, _reply), do: :ok
 
   defp load_context(

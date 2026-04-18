@@ -555,8 +555,29 @@ defmodule PlatformWeb.TasksLiveTest do
         space_id: space.id,
         created_by: author.id,
         title: "Manual review screenshot",
-        canvas_type: "code",
-        state: %{"language" => "markdown", "content" => "# Screenshot review\nLooks good"}
+        document: %{
+          "version" => 1,
+          "revision" => 1,
+          "root" => %{
+            "id" => "root",
+            "type" => "stack",
+            "props" => %{},
+            "children" => [
+              %{
+                "id" => "code-main",
+                "type" => "code",
+                "props" => %{
+                  "language" => "markdown",
+                  "source" => "# Screenshot review\nLooks good"
+                },
+                "children" => []
+              }
+            ]
+          },
+          "theme" => %{},
+          "bindings" => %{},
+          "meta" => %{}
+        }
       })
 
     {:ok, plan} = Tasks.create_plan(%{task_id: task.id, version: 1, status: "approved"})

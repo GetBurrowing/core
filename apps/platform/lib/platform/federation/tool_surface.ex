@@ -464,50 +464,57 @@ defmodule Platform.Federation.ToolSurface do
   defp canvas_tools do
     [
       %{
-        name: "canvas_create",
+        name: "canvas.create",
         description:
-          "Create a new live canvas in a space. Canvases are collaborative visual artifacts (tables, forms, code blocks, diagrams, dashboards).",
+          "Create a live canvas with a canonical document (ADR 0036). The document is a node tree whose root type is one of the registered kinds.",
         parameters: %{
-          space_id: %{
-            type: "string",
-            required: true,
-            description: "The space to create the canvas in"
-          },
-          canvas_type: %{
-            type: "string",
-            required: true,
-            description: "One of: table, form, code, diagram, dashboard, custom"
-          },
-          title: %{
-            type: "string",
-            required: false,
-            description: "Human-readable title for the canvas"
-          },
-          initial_state: %{
+          space_id: %{type: "string", required: true, description: "Target space UUID"},
+          title: %{type: "string", required: false, description: "Human-readable title"},
+          document: %{
             type: "object",
-            required: false,
-            description: "Initial state map for the canvas"
+            required: true,
+            description:
+              "Canonical document. See canvas.describe on an existing canvas for a valid shape."
           }
         },
-        returns: "The created canvas object with id, title, type",
-        limitations: "Cannot create canvases in spaces the agent is not a participant of",
+        returns: "%{canvas_id, title, kind, revision}",
+        limitations: "Canvas kinds are defined in the kind registry.",
         when_to_use: "When you need to present structured, interactive, or visual data to users"
       },
       %{
-        name: "canvas_update",
-        description: "Update an existing canvas by merging new keys into its state.",
+        name: "canvas.patch",
+        description:
+          "Apply patch operations with rebase-or-reject concurrency (ADR 0036). Requires the current base_revision — the server compares it to the live revision and either applies, rebases, or rejects with a structured reason.",
         parameters: %{
-          canvas_id: %{type: "string", required: true, description: "The canvas to update"},
-          patches: %{
-            type: "object",
+          canvas_id: %{type: "string", required: true},
+          base_revision: %{
+            type: "integer",
             required: true,
-            description: "Map of keys to merge into canvas state"
+            description: "Revision the caller last observed (from canvas.describe)"
+          },
+          operations: %{
+            type: "array",
+            required: true,
+            description:
+              "Each op is [\"set_props\", id, props] | [\"replace_children\", id, children] | [\"append_child\", parent_id, child] | [\"delete_node\", id] | [\"replace_document\", doc]."
           }
         },
-        returns: "The updated canvas object",
+        returns: "%{canvas_id, revision} on success, structured conflict on rejection",
         limitations:
-          "Cannot update canvases in spaces the agent is not a participant of. Patches are merged, not replaced.",
+          "Rejection reasons: target_deleted, schema_violation, illegal_child, too_stale. Refresh with canvas.describe and retry.",
         when_to_use: "When you need to modify the content or state of an existing canvas"
+      },
+      %{
+        name: "canvas.describe",
+        description:
+          "Read the current document, revision, presence, and recent events for a canvas. Cheap, idempotent — call before patching so base_revision is fresh.",
+        parameters: %{
+          canvas_id: %{type: "string", required: true}
+        },
+        returns:
+          "%{canvas_id, title, space_id, kind, revision, document, presence, recent_events}",
+        limitations: "Only works for canvases in spaces the agent is a participant in.",
+        when_to_use: "Before emitting canvas.patch, or to present canvas state to a user"
       }
     ]
   end
@@ -1261,68 +1268,62 @@ defmodule Platform.Federation.ToolSurface do
     |> Repo.one()
   end
 
-  # ── Canvas tools ─────────────────────────────────────────────────────────
+  # ── Canvas tools (ADR 0036) ─────────────────────────────────────────────
 
+  def execute("canvas.create", args, context),
+    do: Platform.Chat.Canvas.ToolHandlers.create(args, context)
+
+  def execute("canvas.patch", args, context),
+    do: Platform.Chat.Canvas.ToolHandlers.patch(args, context)
+
+  def execute("canvas.describe", args, context),
+    do: Platform.Chat.Canvas.ToolHandlers.describe(args, context)
+
+  # Legacy underscore-names kept for one release — delegate to the new handlers.
   def execute("canvas_create", args, context) do
-    space_id = Map.get(args, "space_id") || Map.get(context, :space_id)
-    participant_id = Map.get(context, :agent_participant_id)
+    case Platform.Chat.Canvas.ToolHandlers.create(args, context) do
+      {:ok, payload} ->
+        {:ok, %{id: payload.canvas_id, title: payload.title, kind: payload.kind}}
 
-    canvas_attrs = %{
-      "canvas_type" => Map.get(args, "canvas_type", "custom"),
-      "title" => Map.get(args, "title"),
-      "state" => Map.get(args, "initial_state", %{})
-    }
-
-    try do
-      case Chat.create_canvas_with_message(space_id, participant_id, canvas_attrs) do
-        {:ok, canvas, _message} ->
-          {:ok, %{id: canvas.id, title: canvas.title, type: canvas.canvas_type}}
-
-        {:error, reason} ->
-          {:error,
-           %{
-             error: "Failed to create canvas: #{inspect(reason)}",
-             recoverable: true,
-             suggestion: "Verify the space_id is valid and the agent is a participant"
-           }}
-      end
-    rescue
-      e ->
-        {:error,
-         %{
-           error: "Failed to create canvas: #{Exception.message(e)}",
-           recoverable: true,
-           suggestion: "Verify the space_id is valid and the agent is a participant"
-         }}
+      {:error, _} = err ->
+        err
     end
+  rescue
+    e ->
+      {:error,
+       %{
+         error: "Failed to create canvas: #{Exception.message(e)}",
+         recoverable: true,
+         suggestion: "Verify the space_id is valid and the agent is a participant"
+       }}
   end
 
-  def execute("canvas_update", args, _context) do
+  def execute("canvas_update", args, context) do
+    # Legacy canvas_update wrote without base_revision; use a describe lookup
+    # to fetch current so callers that haven't migrated don't crash.
     canvas_id = Map.get(args, "canvas_id")
-    patches = Map.get(args, "patches", %{})
 
-    case Chat.get_canvas(canvas_id) do
-      nil ->
-        {:error,
-         %{
-           error: "Canvas not found: #{canvas_id}",
-           recoverable: false,
-           suggestion: "Use canvas_create to create a new canvas instead"
-         }}
+    with {:ok, %{revision: rev}} <- Platform.Chat.Canvas.Server.describe(canvas_id) do
+      patched_args = Map.put(args, "base_revision", rev)
 
-      canvas ->
-        case Chat.update_canvas_state(canvas, patches) do
-          {:ok, updated} ->
-            {:ok, %{id: updated.id, title: updated.title, type: updated.canvas_type}}
+      case Platform.Chat.Canvas.ToolHandlers.patch(patched_args, context) do
+        {:ok, payload} ->
+          canvas = Chat.get_canvas(canvas_id)
 
-          {:error, reason} ->
-            {:error,
-             %{
-               error: "Failed to update canvas: #{inspect(reason)}",
-               recoverable: true,
-               suggestion: "Check that the patches are valid JSON-compatible maps"
-             }}
-        end
+          {:ok,
+           %{
+             id: payload.canvas_id,
+             title: canvas && canvas.title,
+             kind: canvas && Platform.Chat.CanvasDocument.root_kind(canvas.document),
+             revision: payload.revision
+           }}
+
+        {:error, _} = err ->
+          err
+      end
+    else
+      {:error, reason} ->
+        {:error, %{error: "canvas_update: #{inspect(reason)}", recoverable: true}}
     end
   end
 
@@ -1402,7 +1403,7 @@ defmodule Platform.Federation.ToolSurface do
          %{
            id: c.id,
            title: c.title,
-           type: c.canvas_type,
+           kind: Platform.Chat.CanvasDocument.root_kind(c.document),
            inserted_at: format_datetime(c.inserted_at),
            updated_at: format_datetime(c.updated_at)
          }
@@ -1428,7 +1429,7 @@ defmodule Platform.Federation.ToolSurface do
           result = %{
             id: canvas.id,
             title: canvas.title,
-            type: canvas.canvas_type,
+            kind: Platform.Chat.CanvasDocument.root_kind(canvas.document),
             space_id: canvas.space_id,
             inserted_at: format_datetime(canvas.inserted_at),
             updated_at: format_datetime(canvas.updated_at)
@@ -1436,7 +1437,7 @@ defmodule Platform.Federation.ToolSurface do
 
           result =
             if mode == "full" do
-              Map.put(result, :state, canvas.state)
+              Map.put(result, :document, canvas.document)
             else
               result
             end

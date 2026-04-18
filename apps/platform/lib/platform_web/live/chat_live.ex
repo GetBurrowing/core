@@ -363,10 +363,7 @@ defmodule PlatformWeb.ChatLive do
   def handle_event("canvas_create", %{"canvas" => canvas_params}, socket) do
     with space when not is_nil(space) <- socket.assigns.active_space,
          participant when not is_nil(participant) <- socket.assigns.current_participant do
-      attrs =
-        canvas_params
-        |> Map.take(["title", "canvas_type"])
-        |> Map.put("state", CanvasHooks.default_state(canvas_params["canvas_type"]))
+      attrs = Map.take(canvas_params, ["title"])
 
       case Chat.create_canvas_with_message(space.id, participant.id, attrs) do
         {:ok, canvas, message} ->

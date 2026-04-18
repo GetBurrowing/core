@@ -184,28 +184,34 @@ defmodule Platform.Chat.SchemaTest do
         %{
           space_id: Ecto.UUID.generate(),
           created_by: Ecto.UUID.generate(),
-          canvas_type: "table",
           title: "My Canvas"
         },
         overrides
       )
     end
 
-    test "valid changeset" do
-      assert Canvas.changeset(%Canvas{}, canvas_attrs()).valid?
+    test "valid changeset seeds a default document when omitted" do
+      changeset = Canvas.changeset(%Canvas{}, canvas_attrs())
+      assert changeset.valid?
+      assert changeset |> Ecto.Changeset.get_field(:document) |> Map.get("root")
     end
 
-    test "invalid canvas_type is rejected" do
-      changeset = Canvas.changeset(%Canvas{}, canvas_attrs(%{canvas_type: "spreadsheet"}))
+    test "accepts a valid canonical document" do
+      doc = Platform.Chat.CanvasDocument.new()
+
+      changeset =
+        Canvas.changeset(%Canvas{}, canvas_attrs(%{document: doc}))
+
+      assert changeset.valid?
+    end
+
+    test "rejects a document with an unknown kind" do
+      doc =
+        Platform.Chat.CanvasDocument.new()
+        |> put_in(["root", "type"], "not_a_kind")
+
+      changeset = Canvas.changeset(%Canvas{}, canvas_attrs(%{document: doc}))
       refute changeset.valid?
-      assert %{canvas_type: [_]} = errors_on(changeset)
-    end
-
-    test "all valid canvas_types are accepted" do
-      for ct <- ~w(table form code diagram dashboard custom) do
-        changeset = Canvas.changeset(%Canvas{}, canvas_attrs(%{canvas_type: ct}))
-        assert changeset.valid?, "expected canvas_type=#{ct} to be valid"
-      end
     end
 
     test "missing created_by fails validation" do

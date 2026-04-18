@@ -35,17 +35,18 @@ defmodule Platform.Federation.ToolSurfaceTest do
   defp unique_slug, do: "test-#{System.unique_integer([:positive])}"
 
   describe "tool_definitions/0" do
-    test "returns all 40 tools with required components" do
+    test "returns all 41 tools with required components" do
       tools = ToolSurface.tool_definitions()
-      assert length(tools) == 40
+      assert length(tools) == 41
 
       tool_names = Enum.map(tools, & &1.name)
       assert "send_media" in tool_names
       assert "react" in tool_names
       assert "space_list" in tool_names
       assert "space_leave" in tool_names
-      assert "canvas_create" in tool_names
-      assert "canvas_update" in tool_names
+      assert "canvas.create" in tool_names
+      assert "canvas.patch" in tool_names
+      assert "canvas.describe" in tool_names
       assert "project_list" in tool_names
       assert "epic_list" in tool_names
       assert "task_create" in tool_names
@@ -139,17 +140,41 @@ defmodule Platform.Federation.ToolSurfaceTest do
         agent_participant_id: participant.id
       }
 
+      document = %{
+        "version" => 1,
+        "revision" => 1,
+        "root" => %{
+          "id" => "root",
+          "type" => "stack",
+          "props" => %{"gap" => 12},
+          "children" => [
+            %{
+              "id" => "t",
+              "type" => "table",
+              "props" => %{
+                "columns" => ["Name", "Owner"],
+                "rows" => [%{"Name" => "One", "Owner" => "You"}]
+              },
+              "children" => []
+            }
+          ]
+        },
+        "theme" => %{},
+        "bindings" => %{},
+        "meta" => %{}
+      }
+
       {:ok, result} =
         ToolSurface.execute(
           "canvas_create",
           %{
-            "canvas_type" => "table",
-            "title" => "Test Table"
+            "title" => "Test Table",
+            "document" => document
           },
           context
         )
 
-      assert result.type == "table"
+      assert result.kind == "stack"
       assert result.title == "Test Table"
       assert is_binary(result.id)
     end
@@ -1153,7 +1178,6 @@ defmodule Platform.Federation.ToolSurfaceTest do
     test "canvas_list returns canvases in a space", ctx do
       {:ok, canvas, _msg} =
         Chat.create_canvas_with_message(ctx.space.id, ctx.participant.id, %{
-          "canvas_type" => "table",
           "title" => "Test Canvas"
         })
 
@@ -1167,7 +1191,7 @@ defmodule Platform.Federation.ToolSurfaceTest do
       assert length(results) >= 1
       entry = Enum.find(results, &(&1.id == canvas.id))
       assert entry.title == "Test Canvas"
-      assert entry.type == "table"
+      assert entry.kind == "stack"
       assert is_binary(entry.inserted_at)
     end
 
@@ -1189,9 +1213,7 @@ defmodule Platform.Federation.ToolSurfaceTest do
     test "canvas_get returns summary by default", ctx do
       {:ok, canvas, _msg} =
         Chat.create_canvas_with_message(ctx.space.id, ctx.participant.id, %{
-          "canvas_type" => "code",
-          "title" => "My Code",
-          "state" => %{"language" => "elixir", "code" => "IO.puts(:hello)"}
+          "title" => "My Code"
         })
 
       {:ok, result} =
@@ -1203,17 +1225,15 @@ defmodule Platform.Federation.ToolSurfaceTest do
 
       assert result.id == canvas.id
       assert result.title == "My Code"
-      assert result.type == "code"
+      assert result.kind == "stack"
       assert result.space_id == ctx.space.id
-      refute Map.has_key?(result, :state)
+      refute Map.has_key?(result, :document)
     end
 
-    test "canvas_get with mode=full includes state", ctx do
+    test "canvas_get with mode=full includes the document", ctx do
       {:ok, canvas, _msg} =
         Chat.create_canvas_with_message(ctx.space.id, ctx.participant.id, %{
-          "canvas_type" => "table",
-          "title" => "Data Table",
-          "state" => %{"rows" => [%{"a" => 1}]}
+          "title" => "Data Table"
         })
 
       {:ok, result} =
@@ -1224,7 +1244,8 @@ defmodule Platform.Federation.ToolSurfaceTest do
         )
 
       assert result.id == canvas.id
-      assert is_map(result.state)
+      assert is_map(result.document)
+      assert result.document["root"]["type"] == "stack"
     end
 
     test "canvas_get with non-existent canvas returns error", ctx do
@@ -1244,7 +1265,6 @@ defmodule Platform.Federation.ToolSurfaceTest do
 
       {:ok, canvas, _msg} =
         Chat.create_canvas_with_message(other_space.id, other_participant.id, %{
-          "canvas_type" => "table",
           "title" => "Secret Canvas"
         })
 

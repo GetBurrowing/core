@@ -12,6 +12,7 @@ defmodule Platform.Chat.Message do
     field(:space_id, :binary_id)
     field(:thread_id, :binary_id)
     field(:participant_id, :binary_id)
+    field(:canvas_id, :binary_id)
     field(:content_type, :string, default: "text")
     field(:content, :string)
     field(:structured_content, :map, default: %{})
@@ -27,7 +28,6 @@ defmodule Platform.Chat.Message do
     # Shape: [%{emoji: "👍", count: 2, reacted_by_me: true}, ...].
     field(:reactions, {:array, :map}, virtual: true, default: [])
 
-    # Only inserted_at — no updated_at (no timestamps() macro).
     field(:inserted_at, :utc_datetime_usec, autogenerate: {DateTime, :utc_now, []})
   end
 
@@ -37,6 +37,7 @@ defmodule Platform.Chat.Message do
       :space_id,
       :thread_id,
       :participant_id,
+      :canvas_id,
       :content_type,
       :content,
       :structured_content,

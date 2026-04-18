@@ -45,3 +45,7 @@ config :phoenix,
 config :platform, :start_attention_router, false
 config :platform, :start_system_event_scheduler, false
 config :platform, :memory_provider, Platform.Memory.Providers.Null
+
+# Canvas server persists synchronously in tests so the SQL sandbox owns the
+# write and teardown doesn't race with background Task.Supervisor children.
+config :platform, :canvas_persist_sync, true

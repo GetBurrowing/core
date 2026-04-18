@@ -327,18 +327,42 @@ defmodule PlatformWeb.RuntimeChannelTest do
       {:ok, _reply, socket} =
         subscribe_and_join(socket, "runtime:#{ctx.runtime.runtime_id}", %{})
 
+      document = %{
+        "version" => 1,
+        "revision" => 1,
+        "root" => %{
+          "id" => "root",
+          "type" => "stack",
+          "props" => %{"gap" => 12},
+          "children" => [
+            %{
+              "id" => "t",
+              "type" => "table",
+              "props" => %{
+                "columns" => ["Name"],
+                "rows" => [%{"Name" => "One"}]
+              },
+              "children" => []
+            }
+          ]
+        },
+        "theme" => %{},
+        "bindings" => %{},
+        "meta" => %{}
+      }
+
       push(socket, "tool_call", %{
         "call_id" => "call-1",
-        "tool" => "canvas_create",
+        "tool" => "canvas.create",
         "args" => %{
           "space_id" => ctx.space.id,
-          "canvas_type" => "table",
-          "title" => "Runtime Canvas"
+          "title" => "Runtime Canvas",
+          "document" => document
         }
       })
 
       assert_push "tool_result", %{call_id: "call-1", status: "ok", result: result}
-      assert result.type == "table"
+      assert result.kind == "stack"
       assert result.title == "Runtime Canvas"
     end
   end

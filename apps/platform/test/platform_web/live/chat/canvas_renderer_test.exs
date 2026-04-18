@@ -5,652 +5,287 @@ defmodule PlatformWeb.Chat.CanvasRendererTest do
   import Phoenix.LiveViewTest, only: [rendered_to_string: 1]
 
   alias PlatformWeb.Chat.CanvasRenderer
+  alias Platform.Chat.Canvas
+  alias Platform.Chat.Canvas.Renderer
+  alias Platform.Chat.CanvasDocument
 
-  # ---------------------------------------------------------------------------
-  # Helpers — pure functions (no rendering required)
-  # ---------------------------------------------------------------------------
+  defp build_canvas(document, overrides \\ %{}) do
+    base = %Canvas{
+      id: "test-canvas",
+      space_id: "test-space",
+      created_by: "test-user",
+      title: "Test Canvas",
+      document: document,
+      inserted_at: ~U[2026-01-01 00:00:00Z],
+      updated_at: ~U[2026-01-01 00:00:00Z]
+    }
 
-  describe "url_canvas?/1" do
-    test "returns true when url key is present and non-empty" do
-      assert CanvasRenderer.url_canvas?(%{"url" => "https://example.com"})
+    Map.merge(base, overrides)
+  end
+
+  defp render_node_html(node) do
+    assigns = %{node: node}
+
+    ~H"""
+    <Renderer.render_node node={@node} />
+    """
+    |> rendered_to_string()
+  end
+
+  defp render_canvas(canvas, opts \\ %{}) do
+    assigns =
+      %{canvas: canvas, inline: Map.get(opts, :inline, false)}
+
+    ~H"""
+    <CanvasRenderer.canvas_document canvas={@canvas} inline={@inline} />
+    """
+    |> rendered_to_string()
+  end
+
+  describe "canvas_document/1" do
+    test "renders a valid canonical document" do
+      doc =
+        CanvasDocument.new()
+        |> put_in(["root", "children"], [
+          %{
+            "id" => "h1",
+            "type" => "heading",
+            "props" => %{"value" => "Hello World", "level" => 1},
+            "children" => []
+          }
+        ])
+
+      canvas = build_canvas(doc)
+      html = render_canvas(canvas)
+
+      assert html =~ "Hello World"
+      assert html =~ "<h1"
+      assert html =~ "canvas-doc-test-canvas"
     end
 
-    test "returns false for empty url" do
-      refute CanvasRenderer.url_canvas?(%{"url" => ""})
+    test "renders a removal placeholder for soft-deleted canvases" do
+      canvas =
+        build_canvas(CanvasDocument.new(), %{deleted_at: ~U[2026-01-01 00:00:00Z]})
+
+      html = render_canvas(canvas)
+      assert html =~ "This canvas was removed"
     end
 
-    test "returns false when url key is absent" do
-      refute CanvasRenderer.url_canvas?(%{})
+    test "renders an error shell for invalid documents" do
+      canvas = build_canvas(%{"not_a_canvas" => true})
+      html = render_canvas(canvas)
+      assert html =~ "invalid document"
     end
   end
 
-  describe "a2ui_canvas?/1" do
-    test "returns true when a2ui_content is present and non-empty" do
-      assert CanvasRenderer.a2ui_canvas?(%{"a2ui_content" => ~s({"type":"text"})})
-    end
-
-    test "returns false for empty a2ui_content" do
-      refute CanvasRenderer.a2ui_canvas?(%{"a2ui_content" => ""})
-    end
-
-    test "returns false when key is absent" do
-      refute CanvasRenderer.a2ui_canvas?(%{})
-    end
-  end
-
-  describe "canonical_document?/1" do
-    test "returns true for a valid canonical doc" do
-      assert CanvasRenderer.canonical_document?(%{
-               "version" => 1,
-               "root" => %{"type" => "stack", "props" => %{}, "children" => []}
-             })
-    end
-
-    test "returns false when root is missing" do
-      refute CanvasRenderer.canonical_document?(%{"version" => 1})
-    end
-
-    test "returns false when version is missing" do
-      refute CanvasRenderer.canonical_document?(%{
-               "root" => %{"type" => "stack", "props" => %{}, "children" => []}
-             })
-    end
-
-    test "returns false for empty map" do
-      refute CanvasRenderer.canonical_document?(%{})
-    end
-  end
-
-  describe "parse_a2ui/1" do
-    test "parses single-line JSON" do
-      input = ~s({"type":"text","props":{"value":"hello"}})
-      [node] = CanvasRenderer.parse_a2ui(input)
-      assert node["type"] == "text"
-    end
-
-    test "parses multiple JSONL lines" do
-      input = ~s({"type":"text"}\n{"type":"badge"})
-      nodes = CanvasRenderer.parse_a2ui(input)
-      assert length(nodes) == 2
-    end
-
-    test "skips invalid JSON lines" do
-      input = "not json\n{\"type\":\"text\"}"
-      [node] = CanvasRenderer.parse_a2ui(input)
-      assert node["type"] == "text"
-    end
-
-    test "returns empty list for nil" do
-      assert [] = CanvasRenderer.parse_a2ui(nil)
-    end
-
-    test "returns empty list for empty string" do
-      assert [] = CanvasRenderer.parse_a2ui("")
-    end
-  end
-
-  # ---------------------------------------------------------------------------
-  # Component rendering helpers
-  # ---------------------------------------------------------------------------
-
-  # Render a single render_node call and return the HTML string
-  defp render_node(node) do
-    assigns = %{}
-    rendered_to_string(~H|<CanvasRenderer.render_node node={node} />|)
-  end
-
-  # ---------------------------------------------------------------------------
-  # render_node — existing node types (smoke tests)
-  # ---------------------------------------------------------------------------
-
-  describe "render_node/1 — stack" do
-    test "renders a stack container" do
-      node = %{"type" => "stack", "props" => %{"gap" => 12}, "children" => []}
-      html = render_node(node)
-      assert html =~ "flex-col"
-    end
-
-    test "renders stack children recursively" do
+  describe "Renderer.render_node/1 — kind dispatch" do
+    test "renders stack and nested text" do
       node = %{
+        "id" => "root",
         "type" => "stack",
-        "props" => %{},
+        "props" => %{"gap" => 8},
         "children" => [
-          %{"type" => "text", "props" => %{"value" => "hello"}, "children" => []}
+          %{"id" => "a", "type" => "text", "props" => %{"value" => "Hello"}, "children" => []}
         ]
       }
 
-      html = render_node(node)
-      assert html =~ "hello"
-    end
-  end
-
-  describe "render_node/1 — text" do
-    test "renders text value" do
-      node = %{"type" => "text", "props" => %{"value" => "Hello world"}, "children" => []}
-      html = render_node(node)
-      assert html =~ "Hello world"
+      html = render_node_html(node)
+      assert html =~ "flex flex-col"
+      assert html =~ "Hello"
     end
 
-    test "applies size class" do
-      node = %{"type" => "text", "props" => %{"value" => "X", "size" => "xl"}, "children" => []}
-      html = render_node(node)
-      assert html =~ "text-xl"
-    end
-
-    test "applies weight class" do
+    test "renders row horizontally" do
       node = %{
-        "type" => "text",
-        "props" => %{"value" => "X", "weight" => "bold"},
+        "id" => "r",
+        "type" => "row",
+        "props" => %{"gap" => 4},
         "children" => []
       }
 
-      html = render_node(node)
-      assert html =~ "font-bold"
+      html = render_node_html(node)
+      assert html =~ "flex flex-row"
     end
 
-    test "coerces list-of-content-blocks value into text without crashing" do
+    test "renders card with title and children" do
       node = %{
-        "type" => "text",
+        "id" => "c",
+        "type" => "card",
+        "props" => %{"title" => "Overview"},
+        "children" => [
+          %{"id" => "t", "type" => "text", "props" => %{"value" => "inside"}, "children" => []}
+        ]
+      }
+
+      html = render_node_html(node)
+      assert html =~ "Overview"
+      assert html =~ "inside"
+    end
+
+    test "renders heading with the correct level" do
+      node = %{
+        "id" => "h",
+        "type" => "heading",
+        "props" => %{"value" => "Title", "level" => 2},
+        "children" => []
+      }
+
+      html = render_node_html(node)
+      assert html =~ "<h2"
+      assert html =~ "Title"
+    end
+
+    test "renders markdown content" do
+      node = %{
+        "id" => "m",
+        "type" => "markdown",
+        "props" => %{"content" => "Hello **world**"},
+        "children" => []
+      }
+
+      html = render_node_html(node)
+      assert html =~ "Hello"
+      assert html =~ "world"
+    end
+
+    test "renders badge" do
+      node = %{
+        "id" => "b",
+        "type" => "badge",
+        "props" => %{"value" => "NEW"},
+        "children" => []
+      }
+
+      html = render_node_html(node)
+      assert html =~ "NEW"
+    end
+
+    test "renders image" do
+      node = %{
+        "id" => "i",
+        "type" => "image",
+        "props" => %{"src" => "/img.png", "alt" => "Preview"},
+        "children" => []
+      }
+
+      html = render_node_html(node)
+      assert html =~ "/img.png"
+      assert html =~ "Preview"
+    end
+
+    test "renders code with source and language" do
+      node = %{
+        "id" => "c",
+        "type" => "code",
+        "props" => %{"language" => "elixir", "source" => "IO.puts(:ok)"},
+        "children" => []
+      }
+
+      html = render_node_html(node)
+      assert html =~ "IO.puts"
+      assert html =~ "elixir"
+    end
+
+    test "renders mermaid with data-source" do
+      node = %{
+        "id" => "diag",
+        "type" => "mermaid",
+        "props" => %{"source" => "graph TD\n  A --> B"},
+        "children" => []
+      }
+
+      html = render_node_html(node)
+      assert html =~ "mermaid-diag"
+      assert html =~ "graph TD"
+    end
+
+    test "renders table with rows" do
+      node = %{
+        "id" => "t",
+        "type" => "table",
         "props" => %{
-          "value" => [%{"type" => "text", "text" => "Block one"}, %{"text" => "Block two"}]
+          "columns" => ["Name", "Status"],
+          "rows" => [%{"Name" => "Alice", "Status" => "Active"}]
         },
         "children" => []
       }
 
-      html = render_node(node)
-      assert html =~ "Block one"
-      assert html =~ "Block two"
+      html = render_node_html(node)
+      assert html =~ "Alice"
+      assert html =~ "Active"
+      assert html =~ "Name"
     end
-  end
 
-  describe "render_node/1 — markdown" do
-    test "renders string content" do
+    test "renders checklist with checklist_item children" do
       node = %{
-        "type" => "markdown",
-        "props" => %{"content" => "hello world"},
-        "children" => []
+        "id" => "cl",
+        "type" => "checklist",
+        "props" => %{"title" => "Todo"},
+        "children" => [
+          %{
+            "id" => "ci1",
+            "type" => "checklist_item",
+            "props" => %{"label" => "First task", "state" => "pending"},
+            "children" => []
+          },
+          %{
+            "id" => "ci2",
+            "type" => "checklist_item",
+            "props" => %{"label" => "Done task", "state" => "complete"},
+            "children" => []
+          }
+        ]
       }
 
-      html = render_node(node)
-      assert html =~ "hello world"
+      html = render_node_html(node)
+      assert html =~ "Todo"
+      assert html =~ "First task"
+      assert html =~ "Done task"
     end
 
-    test "coerces list-of-content-blocks content into text without crashing" do
-      # Regression: agents occasionally write Anthropic-style content blocks
-      # into `content`; phoenix_html refuses to render a list containing a map.
+    test "renders form with fields" do
       node = %{
-        "type" => "markdown",
+        "id" => "f",
+        "type" => "form",
         "props" => %{
-          "content" => [
-            %{"type" => "text", "text" => "line 1"},
-            %{"type" => "text", "text" => "line 2"}
+          "title" => "Feedback",
+          "fields" => [
+            %{"name" => "notes", "label" => "Notes", "type" => "textarea"}
           ]
         },
         "children" => []
       }
 
-      html = render_node(node)
-      assert html =~ "line 1"
-      assert html =~ "line 2"
+      html = render_node_html(node)
+      assert html =~ "Feedback"
+      assert html =~ "Notes"
+      assert html =~ "textarea"
     end
 
-    test "renders nil content as empty string" do
-      node = %{"type" => "markdown", "props" => %{}, "children" => []}
-      html = render_node(node)
-      assert html =~ "<pre"
-    end
-  end
-
-  describe "render_node/1 — badge" do
-    test "renders badge value" do
-      node = %{"type" => "badge", "props" => %{"value" => "NEW"}, "children" => []}
-      html = render_node(node)
-      assert html =~ "NEW"
-      assert html =~ "rounded-full"
-    end
-  end
-
-  describe "render_node/1 — heading" do
-    test "renders h1 at level 1" do
+    test "renders action_row with buttons" do
       node = %{
-        "type" => "heading",
-        "props" => %{"value" => "Title", "level" => 1},
+        "id" => "ar",
+        "type" => "action_row",
+        "props" => %{
+          "label" => "Choices",
+          "actions" => [
+            %{"label" => "Yes", "value" => "yes", "variant" => "primary"},
+            %{"label" => "No", "value" => "no"}
+          ]
+        },
         "children" => []
       }
 
-      html = render_node(node)
-      assert html =~ "<h1"
-      assert html =~ "Title"
+      html = render_node_html(node)
+      assert html =~ "Choices"
+      assert html =~ "Yes"
+      assert html =~ "No"
+      assert html =~ "phx-click=\"canvas_action_click\""
     end
 
-    test "renders h3 at level 3" do
-      node = %{
-        "type" => "heading",
-        "props" => %{"value" => "Sub", "level" => 3},
-        "children" => []
-      }
-
-      html = render_node(node)
-      assert html =~ "<h3"
-    end
-
-    test "defaults to h2 when level missing" do
-      node = %{"type" => "heading", "props" => %{"value" => "Default"}, "children" => []}
-      html = render_node(node)
-      assert html =~ "<h2"
-    end
-  end
-
-  describe "render_node/1 — unknown node" do
-    test "renders fallback for unknown type" do
-      node = %{"type" => "frobnicator", "props" => %{}, "children" => []}
-      html = render_node(node)
+    test "renders unknown kind as fallback" do
+      node = %{"id" => "x", "type" => "no_such_kind", "props" => %{}, "children" => []}
+      html = render_node_html(node)
       assert html =~ "unknown node type"
-      assert html =~ "frobnicator"
-    end
-
-    test "renders nothing for nil node" do
-      html = render_node(nil)
-      assert html == "" or not (html =~ "<")
-    end
-  end
-
-  # ---------------------------------------------------------------------------
-  # render_node/1 — checklist (new, stage 1)
-  # ---------------------------------------------------------------------------
-
-  describe "render_node/1 — checklist" do
-    test "renders card-checklist container" do
-      node = %{
-        "type" => "checklist",
-        "props" => %{},
-        "children" => []
-      }
-
-      html = render_node(node)
-      assert html =~ "card-checklist"
-    end
-
-    test "renders optional title" do
-      node = %{
-        "type" => "checklist",
-        "props" => %{"title" => "Release Tasks"},
-        "children" => []
-      }
-
-      html = render_node(node)
-      assert html =~ "Release Tasks"
-    end
-
-    test "renders progress counter when children present" do
-      node = %{
-        "type" => "checklist",
-        "props" => %{"title" => "Work"},
-        "children" => [
-          %{
-            "type" => "checklist_item",
-            "props" => %{"label" => "Item 1", "state" => "complete"},
-            "children" => []
-          },
-          %{
-            "type" => "checklist_item",
-            "props" => %{"label" => "Item 2", "state" => "pending"},
-            "children" => []
-          }
-        ]
-      }
-
-      html = render_node(node)
-      assert html =~ "1 / 2 tasks"
-    end
-
-    test "renders checklist_item children" do
-      node = %{
-        "type" => "checklist",
-        "props" => %{},
-        "children" => [
-          %{
-            "type" => "checklist_item",
-            "props" => %{"label" => "Do the thing", "state" => "pending"},
-            "children" => []
-          }
-        ]
-      }
-
-      html = render_node(node)
-      assert html =~ "Do the thing"
-    end
-  end
-
-  # ---------------------------------------------------------------------------
-  # render_node/1 — checklist_item (new, stage 1)
-  # ---------------------------------------------------------------------------
-
-  describe "render_node/1 — checklist_item" do
-    test "renders label" do
-      node = %{
-        "type" => "checklist_item",
-        "props" => %{"label" => "Write tests", "state" => "pending"},
-        "children" => []
-      }
-
-      html = render_node(node)
-      assert html =~ "Write tests"
-    end
-
-    test "emits data-state attribute" do
-      node = %{
-        "type" => "checklist_item",
-        "props" => %{"label" => "Active item", "state" => "active"},
-        "children" => []
-      }
-
-      html = render_node(node)
-      assert html =~ ~s[data-state="active"]
-    end
-
-    test "emits data-state=complete for complete items" do
-      node = %{
-        "type" => "checklist_item",
-        "props" => %{"label" => "Done", "state" => "complete"},
-        "children" => []
-      }
-
-      html = render_node(node)
-      assert html =~ ~s[data-state="complete"]
-      assert html =~ "line-through"
-      assert html =~ "text-success"
-    end
-
-    test "emits data-state=pending for pending items" do
-      node = %{
-        "type" => "checklist_item",
-        "props" => %{"label" => "Pending", "state" => "pending"},
-        "children" => []
-      }
-
-      html = render_node(node)
-      assert html =~ ~s[data-state="pending"]
-      refute html =~ "line-through"
-    end
-
-    test "defaults to pending state when state prop absent" do
-      node = %{
-        "type" => "checklist_item",
-        "props" => %{"label" => "No state prop"},
-        "children" => []
-      }
-
-      html = render_node(node)
-      assert html =~ ~s[data-state="pending"]
-    end
-
-    test "renders optional note" do
-      node = %{
-        "type" => "checklist_item",
-        "props" => %{"label" => "Item", "state" => "pending", "note" => "Due tomorrow"},
-        "children" => []
-      }
-
-      html = render_node(node)
-      assert html =~ "Due tomorrow"
-    end
-
-    test "omits note when note prop absent" do
-      node = %{
-        "type" => "checklist_item",
-        "props" => %{"label" => "Item", "state" => "pending"},
-        "children" => []
-      }
-
-      html = render_node(node)
-      refute html =~ "Due"
-    end
-  end
-
-  # ---------------------------------------------------------------------------
-  # render_node/1 — action_row (new, stage 2)
-  # ---------------------------------------------------------------------------
-
-  describe "render_node/1 — action_row" do
-    test "renders flex container" do
-      node = %{
-        "type" => "action_row",
-        "props" => %{},
-        "children" => []
-      }
-
-      html = render_node(node)
-      assert html =~ "flex"
-    end
-
-    test "renders optional label" do
-      node = %{
-        "type" => "action_row",
-        "props" => %{"label" => "Actions"},
-        "children" => []
-      }
-
-      html = render_node(node)
-      assert html =~ "Actions"
-    end
-
-    test "renders action_button children" do
-      node = %{
-        "type" => "action_row",
-        "props" => %{},
-        "children" => [
-          %{
-            "type" => "action_button",
-            "props" => %{"label" => "Approve", "event" => "design_approved", "value" => "ok"},
-            "children" => []
-          }
-        ]
-      }
-
-      html = render_node(node)
-      assert html =~ "Approve"
-    end
-  end
-
-  # ---------------------------------------------------------------------------
-  # render_node/1 — action_button (new, stage 2)
-  # ---------------------------------------------------------------------------
-
-  describe "render_node/1 — action_button" do
-    test "renders button label" do
-      node = %{
-        "type" => "action_button",
-        "props" => %{"label" => "Approve", "value" => "approved"},
-        "children" => []
-      }
-
-      html = render_node(node)
-      assert html =~ "Approve"
-      assert html =~ "btn"
-    end
-
-    test "sets phx-click=canvas_action" do
-      node = %{
-        "type" => "action_button",
-        "props" => %{"label" => "Go", "value" => "go"},
-        "children" => []
-      }
-
-      html = render_node(node)
-      assert html =~ ~s[phx-click="canvas_action"]
-    end
-
-    test "sets phx-value-value from value prop" do
-      node = %{
-        "type" => "action_button",
-        "props" => %{"label" => "Act", "value" => "my_action"},
-        "children" => []
-      }
-
-      html = render_node(node)
-      assert html =~ ~s[phx-value-value="my_action"]
-    end
-
-    test "sets phx-value-canvas-id from canvas_id prop" do
-      node = %{
-        "type" => "action_button",
-        "props" => %{"label" => "Act", "value" => "x", "canvas_id" => "canvas-abc-123"},
-        "children" => []
-      }
-
-      html = render_node(node)
-      assert html =~ ~s[phx-value-canvas-id="canvas-abc-123"]
-    end
-
-    test "applies primary variant class" do
-      node = %{
-        "type" => "action_button",
-        "props" => %{"label" => "OK", "value" => "ok", "variant" => "primary"},
-        "children" => []
-      }
-
-      html = render_node(node)
-      assert html =~ "btn-primary"
-    end
-
-    test "applies danger variant class" do
-      node = %{
-        "type" => "action_button",
-        "props" => %{"label" => "Delete", "value" => "delete", "variant" => "danger"},
-        "children" => []
-      }
-
-      html = render_node(node)
-      assert html =~ "btn-error"
-    end
-
-    test "applies ghost variant class" do
-      node = %{
-        "type" => "action_button",
-        "props" => %{"label" => "Cancel", "value" => "cancel", "variant" => "ghost"},
-        "children" => []
-      }
-
-      html = render_node(node)
-      assert html =~ "btn-ghost"
-    end
-
-    test "defaults to outline for unknown or missing variant" do
-      node = %{
-        "type" => "action_button",
-        "props" => %{"label" => "X", "value" => "x"},
-        "children" => []
-      }
-
-      html = render_node(node)
-      assert html =~ "btn-outline"
-    end
-
-    test "renders default label when label prop absent" do
-      node = %{
-        "type" => "action_button",
-        "props" => %{"value" => "x"},
-        "children" => []
-      }
-
-      html = render_node(node)
-      assert html =~ "Action"
-    end
-  end
-
-  # ---------------------------------------------------------------------------
-  # flat_nodes_array? / normalize_flat_nodes
-  # ---------------------------------------------------------------------------
-
-  describe "flat_nodes_array?/1" do
-    test "returns true for non-empty nodes array" do
-      assert CanvasRenderer.flat_nodes_array?(%{"nodes" => [%{"type" => "text"}]})
-    end
-
-    test "returns false for empty nodes array" do
-      refute CanvasRenderer.flat_nodes_array?(%{"nodes" => []})
-    end
-
-    test "returns false when nodes key is absent" do
-      refute CanvasRenderer.flat_nodes_array?(%{})
-    end
-
-    test "returns false for canonical document" do
-      refute CanvasRenderer.flat_nodes_array?(%{"version" => 1, "root" => %{"type" => "stack"}})
-    end
-  end
-
-  describe "normalize_flat_nodes/1" do
-    test "wraps flat nodes into a stack root" do
-      state = %{
-        "nodes" => [
-          %{"type" => "text", "value" => "hello"},
-          %{"type" => "badge", "value" => "tag"}
-        ]
-      }
-
-      root = CanvasRenderer.normalize_flat_nodes(state)
-
-      assert root["type"] == "stack"
-      assert length(root["children"]) == 2
-    end
-
-    test "moves inlined props under props key" do
-      state = %{
-        "nodes" => [
-          %{"type" => "text", "value" => "hello", "size" => "lg"}
-        ]
-      }
-
-      root = CanvasRenderer.normalize_flat_nodes(state)
-      [child] = root["children"]
-
-      assert child["type"] == "text"
-      assert child["props"]["value"] == "hello"
-      assert child["props"]["size"] == "lg"
-      refute Map.has_key?(child, "value")
-    end
-
-    test "preserves already-nested props" do
-      state = %{
-        "nodes" => [
-          %{"type" => "text", "props" => %{"value" => "hello"}}
-        ]
-      }
-
-      root = CanvasRenderer.normalize_flat_nodes(state)
-      [child] = root["children"]
-
-      assert child["props"]["value"] == "hello"
-    end
-
-    test "normalizes nested children recursively" do
-      state = %{
-        "nodes" => [
-          %{
-            "type" => "checklist",
-            "title" => "Tasks",
-            "children" => [
-              %{"type" => "checklist_item", "label" => "Do thing", "state" => "complete"}
-            ]
-          }
-        ]
-      }
-
-      root = CanvasRenderer.normalize_flat_nodes(state)
-      [checklist] = root["children"]
-
-      assert checklist["props"]["title"] == "Tasks"
-      [item] = checklist["children"]
-      assert item["props"]["label"] == "Do thing"
-      assert item["props"]["state"] == "complete"
-    end
-
-    test "returns empty stack for non-nodes state" do
-      root = CanvasRenderer.normalize_flat_nodes(%{"foo" => "bar"})
-      assert root["type"] == "stack"
-      assert root["children"] == []
     end
   end
 end

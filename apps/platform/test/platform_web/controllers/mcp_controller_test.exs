@@ -89,7 +89,9 @@ defmodule PlatformWeb.MCPControllerTest do
       names = Enum.map(tools, & &1["name"])
       assert "federation_status" in names
       assert "task_create" in names
-      assert "canvas_create" in names
+      assert "canvas.create" in names
+      assert "canvas.patch" in names
+      assert "canvas.describe" in names
       assert Enum.all?(tools, &Map.has_key?(&1, "inputSchema"))
     end
 
@@ -101,7 +103,7 @@ defmodule PlatformWeb.MCPControllerTest do
       names = Enum.map(tools, & &1["name"])
       assert "federation_status" in names
       refute "task_create" in names
-      refute "canvas_create" in names
+      refute "canvas.create" in names
     end
 
     test "returns an empty list when no bundles are allowed", %{conn: conn} do

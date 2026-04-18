@@ -254,31 +254,38 @@ defmodule PlatformWeb.ChatLiveTest do
 
     {:ok, canvas, _message} =
       Chat.create_canvas_with_message(space.id, participant.id, %{
-        canvas_type: "custom",
-        title: "Out-of-band canvas",
-        state: %{}
+        title: "Out-of-band canvas"
       })
 
-    updated_state = %{
+    updated_document = %{
       "version" => 1,
+      "revision" => 2,
       "root" => %{
+        "id" => "root",
         "type" => "stack",
         "props" => %{"gap" => 8},
         "children" => [
           %{
+            "id" => "h1",
             "type" => "heading",
-            "props" => %{"level" => 3, "value" => "Out-of-band render test"}
+            "props" => %{"level" => 3, "value" => "Out-of-band render test"},
+            "children" => []
           },
           %{
+            "id" => "m1",
             "type" => "markdown",
-            "props" => %{"content" => "Canvas should render the latest stored state."}
+            "props" => %{"content" => "Canvas should render the latest stored state."},
+            "children" => []
           }
         ]
-      }
+      },
+      "theme" => %{},
+      "bindings" => %{},
+      "meta" => %{}
     }
 
     canvas
-    |> Canvas.changeset(%{"state" => updated_state})
+    |> Canvas.changeset(%{"document" => updated_document})
     |> Repo.update!()
 
     render_click(view, "canvas_open", %{"canvas-id" => canvas.id})

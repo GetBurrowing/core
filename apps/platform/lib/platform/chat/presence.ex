@@ -132,4 +132,86 @@ defmodule Platform.Chat.Presence do
   defp native_agent_indicator(%{reachable?: true}), do: :online
   defp native_agent_indicator(%{configured?: true}), do: :offline
   defp native_agent_indicator(_status), do: :missing
+
+  # ── Canvas engagement (ADR 0036) ────────────────────────────────────────
+  #
+  # Canvas engagement is a facet of space presence, not a parallel channel.
+  # Each participant's meta can carry an optional `canvas` bag describing the
+  # canvas they are currently engaged with:
+  #
+  #     %{
+  #       canvas_id: "...",
+  #       engagement: :viewing | :editing,
+  #       focus_node_id: "...",       # only when :editing
+  #       kind_state: %{...}          # kind-specific cursor/selection
+  #     }
+  #
+  # Presence is opt-in by intentional interaction — opening a detail panel,
+  # focusing an editable node, entering a canvas-centric space view. Passive
+  # scroll-past does NOT register.
+
+  @doc """
+  Set the canvas engagement bag on `key`'s presence meta in `space_id`.
+
+  Merges into any existing meta; pass `nil` as the canvas meta to clear.
+  """
+  @spec set_canvas_engagement(pid(), binary(), binary(), map() | nil) ::
+          {:ok, binary()} | {:error, term()}
+  def set_canvas_engagement(pid, space_id, key, canvas_meta) do
+    update_in_space(pid, space_id, key, fn existing ->
+      case canvas_meta do
+        nil -> Map.delete(existing, :canvas)
+        %{} -> Map.put(existing, :canvas, canvas_meta)
+      end
+    end)
+  end
+
+  @doc "Clear canvas engagement for `key` in `space_id`."
+  @spec clear_canvas_engagement(pid(), binary(), binary()) ::
+          {:ok, binary()} | {:error, term()}
+  def clear_canvas_engagement(pid, space_id, key) do
+    set_canvas_engagement(pid, space_id, key, nil)
+  end
+
+  @doc """
+  List participants currently engaged with a canvas in a space.
+
+  Returns `%{viewing: [%{key, meta}], editing: [%{key, meta}]}`. Viewers
+  may also be listed under `:editing` when a focus node is set — that is
+  the stronger signal, so `:editing` takes precedence.
+  """
+  @spec list_canvas_engagement(binary(), binary()) :: %{viewing: [map()], editing: [map()]}
+  def list_canvas_engagement(space_id, canvas_id) do
+    space_id
+    |> list_space()
+    |> Enum.reduce(%{viewing: [], editing: []}, fn {key, %{metas: metas}}, acc ->
+      metas
+      |> Enum.find(fn m ->
+        case Map.get(m, :canvas) do
+          %{canvas_id: ^canvas_id} -> true
+          _ -> false
+        end
+      end)
+      |> case do
+        nil ->
+          acc
+
+        meta ->
+          canvas_meta = meta.canvas
+
+          entry = %{
+            key: key,
+            participant_type: Map.get(meta, :participant_type),
+            display_name: Map.get(meta, :display_name),
+            focus_node_id: Map.get(canvas_meta, :focus_node_id),
+            kind_state: Map.get(canvas_meta, :kind_state, %{})
+          }
+
+          case Map.get(canvas_meta, :engagement) do
+            :editing -> %{acc | editing: [entry | acc.editing]}
+            _ -> %{acc | viewing: [entry | acc.viewing]}
+          end
+      end
+    end)
+  end
 end

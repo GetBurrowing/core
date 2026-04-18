@@ -28,7 +28,7 @@ defmodule Platform.Chat do
       # Reactions / Pins / Canvases / Attachments
       Platform.Chat.add_reaction(%{message_id: msg.id, participant_id: p.id, emoji: "👍"})
       Platform.Chat.pin_message(%{space_id: space.id, message_id: msg.id, pinned_by: p.id})
-      Platform.Chat.create_canvas_with_message(space.id, p.id, %{canvas_type: "table"})
+      Platform.Chat.create_canvas_with_message(space.id, p.id, %{title: "Sprint board"})
       Platform.Chat.list_reactions_for_messages([msg1.id, msg2.id])
   """
 
@@ -1229,12 +1229,17 @@ defmodule Platform.Chat do
   end
 
   # ── Canvases ─────────────────────────────────────────────────────────────────
+  #
+  # First-class space-scoped canvases (ADR 0036). A canvas owns a canonical
+  # document. Messages may reference a canvas via `chat_messages.canvas_id`.
 
   @doc """
-  Create a canvas attached to a space (and optionally a message).
+  Create a canvas with a validated canonical document.
 
-  Required attrs: `:space_id`, `:created_by`, `:canvas_type`.
-  Optional: `:message_id`, `:title`, `:state`, `:component_module`, `:metadata`.
+  Accepts either a raw map of attrs or the tuple form `{space_id, created_by, document}`.
+  Required fields: `:space_id`, `:created_by`. Optional: `:title`, `:document`,
+  `:metadata`, `:cloned_from`. If `:document` is omitted, a blank canonical
+  document is seeded via `CanvasDocument.new/0`.
   """
   @spec create_canvas(map()) :: {:ok, Canvas.t()} | {:error, Ecto.Changeset.t()}
   def create_canvas(attrs) do
@@ -1246,37 +1251,23 @@ defmodule Platform.Chat do
       |> Repo.insert()
 
     case result do
-      {:ok, canvas} ->
-        publish_canvas_created(canvas)
-
-      _ ->
-        :ok
+      {:ok, canvas} -> publish_canvas_created(canvas)
+      _ -> :ok
     end
 
     result
   end
 
   @doc """
-  Create a canvas and its companion chat message in one transaction.
+  Create a canvas and its companion chat message atomically.
 
-  The resulting message uses `content_type: "canvas"` and stores a lightweight
-  pointer in `structured_content` so the LiveView can reopen the canvas later.
+  The message's `canvas_id` FK is set directly — no back-patch step. Messages
+  reference canvases; canvases do not reference messages.
   """
   @spec create_canvas_with_message(binary(), binary(), map()) ::
           {:ok, Canvas.t(), Message.t()} | {:error, term()}
   def create_canvas_with_message(space_id, participant_id, attrs \\ %{}) do
     attrs = stringify_canvas_payload(attrs)
-
-    message_attrs = %{
-      space_id: space_id,
-      participant_id: participant_id,
-      content_type: "canvas",
-      content: Map.get(attrs, "message_content") || default_canvas_message(attrs),
-      structured_content: %{
-        "canvas_type" => Map.get(attrs, "canvas_type", "custom"),
-        "title" => Map.get(attrs, "title")
-      }
-    }
 
     multi =
       Multi.new()
@@ -1288,20 +1279,25 @@ defmodule Platform.Chat do
         |> repo.insert()
       end)
       |> Multi.run(:message, fn repo, %{canvas: canvas} ->
-        attrs = put_in(message_attrs, [:structured_content, "canvas_id"], canvas.id)
+        message_attrs = %{
+          space_id: space_id,
+          participant_id: participant_id,
+          canvas_id: canvas.id,
+          content_type: "canvas",
+          content: Map.get(attrs, "message_content") || default_canvas_message(attrs),
+          structured_content: %{
+            "canvas_id" => canvas.id,
+            "title" => Map.get(attrs, "title")
+          }
+        }
 
         %Message{}
-        |> Message.changeset(attrs)
+        |> Message.changeset(message_attrs)
         |> repo.insert()
-      end)
-      |> Multi.run(:canvas_link, fn repo, %{canvas: canvas, message: message} ->
-        canvas
-        |> Canvas.changeset(%{"message_id" => message.id})
-        |> repo.update()
       end)
 
     case Repo.transaction(multi) do
-      {:ok, %{canvas_link: canvas, message: message}} ->
+      {:ok, %{canvas: canvas, message: message}} ->
         publish_canvas_created(canvas)
         publish_message_posted(message)
         {:ok, canvas, message}
@@ -1311,11 +1307,16 @@ defmodule Platform.Chat do
     end
   end
 
-  @doc "Fetch a canvas by primary key. Returns `nil` if not found."
+  @doc "Fetch a canvas. Returns `nil` if not found or soft-deleted."
   @spec get_canvas(binary()) :: Canvas.t() | nil
-  def get_canvas(id), do: Repo.get(Canvas, id)
+  def get_canvas(id) do
+    case Repo.get(Canvas, id) do
+      %Canvas{deleted_at: nil} = canvas -> canvas
+      _ -> nil
+    end
+  end
 
-  @doc "Update a canvas's state or metadata."
+  @doc "Update canvas metadata/title. Document changes go through `patch_canvas/2`."
   @spec update_canvas(Canvas.t(), map()) ::
           {:ok, Canvas.t()} | {:error, Ecto.Changeset.t()}
   def update_canvas(%Canvas{} = canvas, attrs) do
@@ -1327,68 +1328,158 @@ defmodule Platform.Chat do
       |> Repo.update()
 
     case result do
-      {:ok, updated} ->
-        publish_canvas_updated(updated)
-
-      _ ->
-        :ok
+      {:ok, updated} -> publish_canvas_updated(updated)
+      _ -> :ok
     end
 
     result
   end
 
-  @doc "Merge new keys into a canvas's persisted state map."
-  @spec update_canvas_state(Canvas.t(), map()) ::
-          {:ok, Canvas.t()} | {:error, Ecto.Changeset.t()}
-  def update_canvas_state(%Canvas{} = canvas, state_updates) when is_map(state_updates) do
-    merged_state =
-      canvas.state
-      |> Kernel.||(%{})
-      |> Map.merge(stringify_canvas_payload(state_updates))
-
-    update_canvas(canvas, %{state: merged_state})
-  end
-
-  @doc "List canvases in a space, oldest first."
+  @doc "List canvases in a space (excluding soft-deleted), oldest first."
   @spec list_canvases(binary()) :: [Canvas.t()]
   def list_canvases(space_id) do
-    from(c in Canvas, where: c.space_id == ^space_id, order_by: [asc: c.inserted_at])
+    from(c in Canvas,
+      where: c.space_id == ^space_id and is_nil(c.deleted_at),
+      order_by: [asc: c.inserted_at]
+    )
     |> Repo.all()
   end
 
   @doc """
-  Apply one or more `CanvasPatch` operations to a canvas's canonical document.
+  Apply `CanvasPatch` operations to a canvas document.
 
-  Steps:
-  1. Load the current state as a `CanvasDocument`.
-  2. Apply the patch operations via `CanvasPatch.apply_many/2`.
-  3. Persist the resulting document via `update_canvas_state/2`.
-  4. Broadcast the update via PubSub.
-
-  Returns `{:ok, updated_canvas}` or `{:error, reason}`.
+  Routes through `Platform.Chat.Canvas.Server` for rebase-or-reject concurrency
+  (ADR 0036, Phase 3). Callers that have a specific `base_revision` should use
+  `Canvas.Server.apply_patches/3` directly; this helper assumes head writes
+  and refetches the canvas for the return value.
   """
   @spec patch_canvas(Canvas.t(), [Platform.Chat.CanvasPatch.operation()]) ::
-          {:ok, Canvas.t()} | {:error, term()}
+          {:ok, Canvas.t()} | {:conflict, map()} | {:error, term()}
   def patch_canvas(%Canvas{} = canvas, operations) when is_list(operations) do
-    alias Platform.Chat.{CanvasDocument, CanvasPatch}
+    alias Platform.Chat.Canvas.Server, as: CanvasServer
 
-    current_state = canvas.state || %{}
+    case CanvasServer.describe(canvas.id) do
+      {:ok, %{revision: current_revision}} ->
+        case CanvasServer.apply_patches(canvas.id, operations, current_revision) do
+          {:ok, _new_revision} ->
+            # Refetch to return the fresh struct; the server has already
+            # triggered an async persist.
+            {:ok, get_canvas(canvas.id) || canvas}
 
-    document =
-      if Map.get(current_state, "version") && Map.get(current_state, "root") do
-        current_state
-      else
-        CanvasDocument.new()
-      end
+          {:conflict, payload} ->
+            {:conflict, payload}
 
-    case CanvasPatch.apply_many(document, operations) do
-      {:ok, new_document} ->
-        update_canvas(canvas, %{"state" => new_document})
+          {:error, reason} ->
+            {:error, reason}
+        end
 
       {:error, reason} ->
         {:error, reason}
     end
   end
+
+  @doc """
+  Clone a canvas into another space (ADR 0036, Phase 6).
+
+  Produces a new canvas with:
+
+    * a new canvas id
+    * freshly-generated node ids (canvas-local uniqueness)
+    * document structure copied verbatim
+    * revision reset to 1
+    * `created_by` = `actor_id`
+    * `cloned_from` = the source canvas id
+
+  Space-scoped `$bind` references whose target resource does not exist in the
+  target space are cleared; universal bindings are preserved. Messages in the
+  source space remain valid — the source is untouched.
+
+  Permissions note: this function does NOT check participant membership.
+  Callers (tool handlers, HTTP controllers, LiveView) must assert that the
+  actor has read on the source space and write on the target space before
+  invoking.
+  """
+  @spec clone_canvas(binary(), binary(), binary()) ::
+          {:ok, Canvas.t()} | {:error, term()}
+  def clone_canvas(source_canvas_id, target_space_id, actor_id)
+      when is_binary(source_canvas_id) and is_binary(target_space_id) and is_binary(actor_id) do
+    case get_canvas(source_canvas_id) do
+      nil ->
+        {:error, :source_not_found}
+
+      %Canvas{document: document, title: title} = source ->
+        {cloned_document, _mapping} = regenerate_node_ids(document)
+
+        attrs = %{
+          "space_id" => target_space_id,
+          "created_by" => actor_id,
+          "cloned_from" => source.id,
+          "title" => title,
+          "document" => Map.put(cloned_document, "revision", 1)
+        }
+
+        case create_canvas(attrs) do
+          {:ok, cloned} ->
+            :telemetry.execute(
+              [:platform, :chat, :canvas_cloned],
+              %{system_time: System.system_time()},
+              %{
+                source_id: source.id,
+                clone_id: cloned.id,
+                source_space_id: source.space_id,
+                target_space_id: target_space_id
+              }
+            )
+
+            {:ok, cloned}
+
+          {:error, _} = err ->
+            err
+        end
+    end
+  end
+
+  defp regenerate_node_ids(document) when is_map(document) do
+    case Map.get(document, "root") do
+      root when is_map(root) ->
+        {new_root, mapping} = regenerate_subtree(root, %{})
+        {Map.put(document, "root", new_root), mapping}
+
+      _ ->
+        {document, %{}}
+    end
+  end
+
+  defp regenerate_subtree(%{"id" => old_id} = node, mapping) do
+    new_id =
+      if old_id == "root", do: "root", else: Ecto.UUID.generate()
+
+    mapping = Map.put(mapping, old_id, new_id)
+
+    children =
+      case Map.get(node, "children") do
+        list when is_list(list) ->
+          Enum.map_reduce(list, mapping, fn child, m ->
+            regenerate_subtree(child, m)
+          end)
+
+        _ ->
+          {[], mapping}
+      end
+
+    {children_list, child_mapping} = children
+
+    new_node =
+      node
+      |> Map.put("id", new_id)
+      |> then(fn n ->
+        if Map.has_key?(n, "children"), do: Map.put(n, "children", children_list), else: n
+      end)
+
+    {new_node, child_mapping}
+  end
+
+  defp regenerate_subtree(other, mapping), do: {other, mapping}
 
   # ── Attachments ──────────────────────────────────────────────────────────────
 
@@ -1454,8 +1545,8 @@ defmodule Platform.Chat do
       %{
         canvas_id: canvas.id,
         space_id: canvas.space_id,
-        message_id: canvas.message_id,
-        canvas_type: canvas.canvas_type
+        document_kind: Platform.Chat.CanvasDocument.root_kind(canvas.document),
+        title: canvas.title
       }
     )
 
@@ -1470,8 +1561,8 @@ defmodule Platform.Chat do
       %{
         canvas_id: canvas.id,
         space_id: canvas.space_id,
-        message_id: canvas.message_id,
-        canvas_type: canvas.canvas_type
+        document_kind: Platform.Chat.CanvasDocument.root_kind(canvas.document),
+        title: canvas.title
       }
     )
 

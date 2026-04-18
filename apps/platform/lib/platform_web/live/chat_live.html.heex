@@ -481,10 +481,10 @@
             >
               <div class="min-w-0">
                 <p class="truncate text-sm font-semibold text-base-content">
-                  {canvas.title || CanvasHooks.humanize_type(canvas.canvas_type)}
+                  {canvas.title || CanvasHooks.humanize_kind(canvas)}
                 </p>
                 <p class="text-[11px] uppercase tracking-widest text-base-content/50">
-                  {CanvasHooks.humanize_type(canvas.canvas_type)}
+                  {CanvasHooks.humanize_kind(canvas)}
                 </p>
               </div>
 
@@ -525,21 +525,6 @@
                 placeholder="Sprint planning board"
                 class="input input-bordered w-full"
               />
-            </div>
-
-            <div class="space-y-1.5">
-              <label class="text-xs font-semibold uppercase tracking-widest text-base-content/50">
-                Canvas type
-              </label>
-              <select name="canvas[canvas_type]" class="select select-bordered w-full">
-                <option
-                  :for={type <- @canvas_types}
-                  value={type}
-                  selected={@new_canvas_form[:canvas_type].value == type}
-                >
-                  {CanvasHooks.humanize_type(type)}
-                </option>
-              </select>
             </div>
 
             <button
@@ -719,7 +704,7 @@
                   {CanvasHooks.message_canvas_title(msg, @canvases_by_message_id)}
                 </p>
                 <p class="text-[11px] uppercase tracking-widest text-base-content/50">
-                  {CanvasHooks.message_canvas_type(msg, @canvases_by_message_id)} canvas
+                  Canvas
                 </p>
               </div>
             </div>

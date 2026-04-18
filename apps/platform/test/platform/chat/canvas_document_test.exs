@@ -3,22 +3,17 @@ defmodule Platform.Chat.CanvasDocumentTest do
 
   alias Platform.Chat.CanvasDocument
 
-  describe "new/1" do
-    test "creates a blank document with default kind ui" do
+  describe "new/0" do
+    test "creates a blank document with a stack root" do
       doc = CanvasDocument.new()
       assert doc["version"] == 1
-      assert doc["kind"] == "ui"
       assert doc["revision"] == 1
       assert is_map(doc["root"])
       assert doc["root"]["type"] == "stack"
       assert doc["root"]["id"] == "root"
       assert doc["bindings"] == %{}
       assert doc["meta"] == %{}
-    end
-
-    test "creates a document with custom kind" do
-      doc = CanvasDocument.new("ui")
-      assert doc["kind"] == "ui"
+      assert doc["theme"] == %{}
     end
   end
 
@@ -39,12 +34,6 @@ defmodule Platform.Chat.CanvasDocumentTest do
       assert Enum.any?(errors, &String.contains?(&1, "version"))
     end
 
-    test "rejects invalid kind" do
-      doc = CanvasDocument.new() |> Map.put("kind", "invalid")
-      assert {:error, errors} = CanvasDocument.validate(doc)
-      assert Enum.any?(errors, &String.contains?(&1, "kind"))
-    end
-
     test "rejects zero revision" do
       doc = CanvasDocument.new() |> Map.put("revision", 0)
       assert {:error, errors} = CanvasDocument.validate(doc)
@@ -60,16 +49,16 @@ defmodule Platform.Chat.CanvasDocumentTest do
       assert Enum.any?(errors, &String.contains?(&1, "id"))
     end
 
-    test "rejects root with unknown type" do
+    test "rejects root with unknown kind" do
       doc =
         CanvasDocument.new()
-        |> put_in(["root", "type"], "unknown_type")
+        |> put_in(["root", "type"], "unknown_kind")
 
       assert {:error, errors} = CanvasDocument.validate(doc)
-      assert Enum.any?(errors, &String.contains?(&1, "unknown_type"))
+      assert Enum.any?(errors, &String.contains?(&1, "unknown_kind"))
     end
 
-    test "validates a document with children" do
+    test "validates a document with text children" do
       doc =
         CanvasDocument.new()
         |> put_in(["root", "children"], [
@@ -88,11 +77,23 @@ defmodule Platform.Chat.CanvasDocumentTest do
       doc =
         CanvasDocument.new()
         |> put_in(["root", "children"], [
-          %{"type" => "text", "props" => %{}}
+          %{"type" => "text", "props" => %{"value" => ""}}
         ])
 
       assert {:error, errors} = CanvasDocument.validate(doc)
       assert Enum.any?(errors, &String.contains?(&1, "id"))
+    end
+
+    test "rejects illegal child kind under checklist" do
+      doc =
+        CanvasDocument.new()
+        |> put_in(["root", "type"], "checklist")
+        |> put_in(["root", "children"], [
+          %{"id" => "bad", "type" => "text", "props" => %{"value" => "no"}, "children" => []}
+        ])
+
+      assert {:error, errors} = CanvasDocument.validate(doc)
+      assert Enum.any?(errors, &String.contains?(&1, "not allowed"))
     end
   end
 
@@ -120,29 +121,6 @@ defmodule Platform.Chat.CanvasDocumentTest do
       assert node["props"]["value"] == "Hello"
     end
 
-    test "finds a deeply nested node" do
-      doc =
-        CanvasDocument.new()
-        |> put_in(["root", "children"], [
-          %{
-            "id" => "card-1",
-            "type" => "card",
-            "props" => %{},
-            "children" => [
-              %{
-                "id" => "deep-text",
-                "type" => "text",
-                "props" => %{"value" => "deep"},
-                "children" => []
-              }
-            ]
-          }
-        ])
-
-      node = CanvasDocument.get_node(doc, "deep-text")
-      assert node["id"] == "deep-text"
-    end
-
     test "returns nil for missing node" do
       doc = CanvasDocument.new()
       assert is_nil(CanvasDocument.get_node(doc, "nonexistent"))
@@ -164,75 +142,29 @@ defmodule Platform.Chat.CanvasDocumentTest do
     end
   end
 
-  describe "seed/2" do
-    test "seeds a table document" do
-      doc =
-        CanvasDocument.seed("table", %{
-          "columns" => ["Name", "Status"],
-          "rows" => [%{"Name" => "Task 1", "Status" => "Done"}]
-        })
-
-      assert {:ok, _} = CanvasDocument.validate(doc)
-      [table_node] = doc["root"]["children"]
-      assert table_node["type"] == "table"
-      assert table_node["props"]["columns"] == ["Name", "Status"]
-      assert length(table_node["props"]["rows"]) == 1
+  describe "root_kind/1" do
+    test "returns the root node kind" do
+      doc = CanvasDocument.new()
+      assert CanvasDocument.root_kind(doc) == "stack"
     end
 
-    test "seeds a code document" do
-      doc =
-        CanvasDocument.seed("code", %{
-          "language" => "elixir",
-          "source" => "IO.puts(\"hello\")"
-        })
+    test "returns nil for malformed document" do
+      assert CanvasDocument.root_kind(%{}) == nil
+    end
+  end
 
-      assert {:ok, _} = CanvasDocument.validate(doc)
-      [code_node] = doc["root"]["children"]
-      assert code_node["type"] == "code"
-      assert code_node["props"]["language"] == "elixir"
-      assert code_node["props"]["source"] =~ "hello"
+  describe "canonical?/1" do
+    test "detects a valid canonical document" do
+      assert CanvasDocument.canonical?(CanvasDocument.new())
     end
 
-    test "seeds a diagram document" do
-      doc =
-        CanvasDocument.seed("diagram", %{
-          "source" => "graph TD\n  A --> B",
-          "diagram_title" => "Flow"
-        })
-
-      assert {:ok, _} = CanvasDocument.validate(doc)
-      children = doc["root"]["children"]
-      assert length(children) == 2
-      heading = Enum.find(children, &(&1["type"] == "heading"))
-      assert heading["props"]["value"] == "Flow"
-      mermaid = Enum.find(children, &(&1["type"] == "mermaid"))
-      assert mermaid["props"]["source"] =~ "graph TD"
+    test "rejects a document whose root kind isn't registered" do
+      doc = CanvasDocument.new() |> put_in(["root", "type"], "unknown")
+      refute CanvasDocument.canonical?(doc)
     end
 
-    test "seeds a dashboard document" do
-      doc =
-        CanvasDocument.seed("dashboard", %{
-          "metrics" => [
-            %{"label" => "Open items", "value" => 5, "trend" => "↑"},
-            %{"label" => "Closed", "value" => 12}
-          ]
-        })
-
-      assert {:ok, _} = CanvasDocument.validate(doc)
-      [row] = doc["root"]["children"]
-      assert row["type"] == "row"
-      assert length(row["children"]) == 2
-    end
-
-    test "seeds an unknown type as blank document with meta" do
-      doc = CanvasDocument.seed("unknown_type", %{"foo" => "bar"})
-      assert {:ok, _} = CanvasDocument.validate(doc)
-      assert doc["meta"]["foo"] == "bar"
-    end
-
-    test "seeds with empty data" do
-      doc = CanvasDocument.seed("table", %{})
-      assert {:ok, _} = CanvasDocument.validate(doc)
+    test "rejects a non-document map" do
+      refute CanvasDocument.canonical?(%{"nodes" => []})
     end
   end
 end

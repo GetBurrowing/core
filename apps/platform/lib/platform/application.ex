@@ -25,7 +25,9 @@ defmodule Platform.Application do
            {Registry, keys: :unique, name: Platform.Agents.Registry},
            {Registry, keys: :unique, name: Platform.Execution.Registry},
            {Registry, keys: :unique, name: Platform.Orchestration.Registry},
+           {Registry, keys: :unique, name: Platform.Chat.Registry},
            Platform.Agents.RuntimeSupervisor,
+           Platform.Chat.CanvasSupervisor,
            # ContextBroker — must start after the agent registry/runtime tree
            Platform.Agents.ContextBroker,
            # Context plane supervisor — must start after PubSub

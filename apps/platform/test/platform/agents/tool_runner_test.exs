@@ -22,46 +22,41 @@ defmodule Platform.Agents.ToolRunnerTest do
                  "name" => "canvas_create",
                  "call_id" => "call-1",
                  "arguments" =>
-                   Jason.encode!(%{"title" => "Fresh Metrics", "canvas_type" => "dashboard"})
+                   Jason.encode!(%{
+                     "title" => "Fresh Dashboard",
+                     "document" => %{
+                       "version" => 1,
+                       "revision" => 1,
+                       "root" => %{
+                         "id" => "root",
+                         "type" => "stack",
+                         "props" => %{"gap" => 12},
+                         "children" => [
+                           %{
+                             "id" => "heading-1",
+                             "type" => "heading",
+                             "props" => %{"value" => "Fresh Dashboard", "level" => 2},
+                             "children" => []
+                           }
+                         ]
+                       },
+                       "theme" => %{},
+                       "bindings" => %{},
+                       "meta" => %{}
+                     }
+                   })
                }
              ]
            }}
 
-        output ->
-          if is_binary(output) and String.contains?(output, "requires initial_state.metrics") do
-            {:ok,
-             %{
-               content: "",
-               model: Keyword.fetch!(opts, :model),
-               usage: %{},
-               tool_calls: [
-                 %{
-                   "name" => "canvas_create",
-                   "call_id" => "call-2",
-                   "arguments" =>
-                     Jason.encode!(%{
-                       "title" => "Fresh Metrics",
-                       "canvas_type" => "dashboard",
-                       "initial_state" => %{
-                         "metrics" => [
-                           %{"label" => "Revenue", "value" => "$99k", "trend" => "↑"},
-                           %{"label" => "Users", "value" => "12,340", "trend" => "↑"},
-                           %{"label" => "Churn", "value" => "1.8%", "trend" => "↓"}
-                         ]
-                       }
-                     })
-                 }
-               ]
-             }}
-          else
-            {:ok,
-             %{
-               content: "Created the dashboard.",
-               model: Keyword.fetch!(opts, :model),
-               usage: %{},
-               tool_calls: []
-             }}
-          end
+        _output ->
+          {:ok,
+           %{
+             content: "Created the dashboard.",
+             model: Keyword.fetch!(opts, :model),
+             usage: %{},
+             tool_calls: []
+           }}
       end
     end
 
@@ -95,7 +90,7 @@ defmodule Platform.Agents.ToolRunnerTest do
     :ok
   end
 
-  test "canvas_create retries when required initial_state is missing and only persists the successful canvas" do
+  test "canvas_create persists a canonical document" do
     Application.put_env(:platform, :codex_auth_file, write_auth_file!())
 
     {:ok, space} =
@@ -127,54 +122,16 @@ defmodule Platform.Agents.ToolRunnerTest do
     assert length(canvases) == 1
 
     [canvas] = canvases
-    [row] = get_in(canvas.state, ["root", "children"])
-    assert row["type"] == "row"
-    assert length(row["children"]) == 3
+    assert canvas.document["version"] == 1
+    assert canvas.document["root"]["type"] == "stack"
+
+    [heading] = canvas.document["root"]["children"]
+    assert heading["type"] == "heading"
+    assert heading["props"]["value"] == "Fresh Dashboard"
 
     [message] = Chat.list_messages(space.id, limit: 5)
     assert message.content_type == "canvas"
-    assert message.structured_content["canvas_id"] == canvas.id
-  end
-
-  test "canvas_create can infer dashboard metrics from the user request when the model omits initial_state" do
-    Application.put_env(:platform, :codex_auth_file, write_auth_file!())
-
-    {:ok, space} =
-      Chat.create_space(%{
-        name: "Infer Canvas Test",
-        slug: "infer-canvas-test-#{System.unique_integer([:positive])}",
-        kind: "channel"
-      })
-
-    {:ok, participant} =
-      Chat.add_participant(space.id, %{
-        participant_type: "agent",
-        participant_id: Ecto.UUID.generate(),
-        display_name: "Zip",
-        joined_at: DateTime.utc_now()
-      })
-
-    user_message =
-      "Create a dashboard canvas titled Retry Metrics with metrics Revenue=$123k ↑, Users=9,876 ↑, Churn=1.2% ↓, NPS=81 →. Use canvas_create with full initial_state."
-
-    assert {:ok, %{content: "Created the dashboard."}} =
-             ToolRunner.run(
-               "system prompt",
-               [%{"role" => "user", "content" => user_message}],
-               tool_context: %{
-                 space_id: space.id,
-                 participant_id: participant.id,
-                 user_message: user_message
-               }
-             )
-
-    [canvas] = Chat.list_canvases(space.id)
-    [row] = get_in(canvas.state, ["root", "children"])
-    assert length(row["children"]) == 4
-
-    first_card = Enum.at(row["children"], 0)
-    first_value = Enum.at(first_card["children"], 1)
-    assert first_value["props"]["value"] == "$123k"
+    assert message.canvas_id == canvas.id
   end
 
   defp write_auth_file! do
