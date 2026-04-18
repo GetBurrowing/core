@@ -35,14 +35,15 @@ defmodule Platform.Federation.ToolSurfaceTest do
   defp unique_slug, do: "test-#{System.unique_integer([:positive])}"
 
   describe "tool_definitions/0" do
-    test "returns all 39 tools with required components" do
+    test "returns all 40 tools with required components" do
       tools = ToolSurface.tool_definitions()
-      assert length(tools) == 39
+      assert length(tools) == 40
 
       tool_names = Enum.map(tools, & &1.name)
       assert "send_media" in tool_names
       assert "react" in tool_names
       assert "space_list" in tool_names
+      assert "space_leave" in tool_names
       assert "canvas_create" in tool_names
       assert "canvas_update" in tool_names
       assert "project_list" in tool_names
@@ -554,6 +555,158 @@ defmodule Platform.Federation.ToolSurfaceTest do
 
       assert length(results) == 1
       assert hd(results).name == "DM"
+    end
+
+    # ── space_leave ──────────────────────────────────────────────────────
+
+    test "space_leave removes the calling agent from the space (self-leave)" do
+      ensure_active_agent_store()
+
+      agent = create_agent()
+      space = create_space(%{name: "DM Stuck", kind: "dm", slug: unique_slug()})
+
+      {:ok, participant} =
+        Chat.ensure_agent_participant(space.id, agent, display_name: agent.name)
+
+      {:ok, result} =
+        ToolSurface.execute("space_leave", %{"space_id" => space.id}, %{agent_id: agent.id})
+
+      assert result.space_id == space.id
+      assert result.agent_id == agent.id
+      assert result.participant_id == participant.id
+      assert result.removed == true
+      assert result.self_removed == true
+      assert %DateTime{} = result.left_at
+
+      reloaded = Repo.reload!(participant)
+      assert reloaded.left_at != nil
+    end
+
+    test "space_leave removes a different agent when agent_id is provided" do
+      ensure_active_agent_store()
+
+      higgins = create_agent(%{name: "Higgins"})
+      geordi = create_agent(%{name: "Geordi"})
+      space = create_space(%{name: "Engineering"})
+
+      {:ok, _higgins_p} =
+        Chat.ensure_agent_participant(space.id, higgins, display_name: "Higgins")
+
+      {:ok, geordi_p} =
+        Chat.ensure_agent_participant(space.id, geordi, display_name: "Geordi")
+
+      {:ok, result} =
+        ToolSurface.execute(
+          "space_leave",
+          %{"space_id" => space.id, "agent_id" => geordi.id},
+          %{agent_id: higgins.id}
+        )
+
+      assert result.agent_id == geordi.id
+      assert result.participant_id == geordi_p.id
+      assert result.self_removed == false
+
+      assert Repo.reload!(geordi_p).left_at != nil
+      # Caller stays put.
+      refute Chat.list_participants(space.id) |> Enum.any?(&(&1.participant_id == geordi.id))
+      assert Chat.list_participants(space.id) |> Enum.any?(&(&1.participant_id == higgins.id))
+    end
+
+    test "space_leave returns an error when the target agent is not in the space" do
+      ensure_active_agent_store()
+
+      agent = create_agent()
+      space = create_space()
+
+      assert {:error, error} =
+               ToolSurface.execute(
+                 "space_leave",
+                 %{"space_id" => space.id},
+                 %{agent_id: agent.id}
+               )
+
+      assert error.error =~ "not an active participant"
+      assert error.recoverable == false
+    end
+
+    test "space_leave refuses to remove human participants (agent-only tool)" do
+      ensure_active_agent_store()
+
+      caller = create_agent()
+      space = create_space()
+      human = create_participant(space.id, %{display_name: "Rowan"})
+
+      # Try to target the human's participant_id — the helper filters on
+      # participant_type="agent", so this should come back with not-found
+      # rather than actually soft-leaving the human.
+      {:error, error} =
+        ToolSurface.execute(
+          "space_leave",
+          %{"space_id" => space.id, "agent_id" => human.participant_id},
+          %{agent_id: caller.id}
+        )
+
+      assert error.error =~ "not an active participant"
+      assert Repo.reload!(human).left_at == nil
+    end
+
+    test "space_leave is idempotent — already-left participants return not-found" do
+      ensure_active_agent_store()
+
+      agent = create_agent()
+      space = create_space()
+
+      {:ok, participant} =
+        Chat.ensure_agent_participant(space.id, agent, display_name: agent.name)
+
+      # First call leaves cleanly.
+      {:ok, _} =
+        ToolSurface.execute("space_leave", %{"space_id" => space.id}, %{agent_id: agent.id})
+
+      assert Repo.reload!(participant).left_at != nil
+
+      # Second call: the participant now has left_at set, so the active-only
+      # query returns nil and the tool surfaces a clear error.
+      {:error, error} =
+        ToolSurface.execute("space_leave", %{"space_id" => space.id}, %{agent_id: agent.id})
+
+      assert error.error =~ "not an active participant"
+    end
+
+    test "space_leave clears the active-agent mutex if the leaver was holding it" do
+      ensure_active_agent_store()
+
+      agent = create_agent()
+      space = create_space()
+
+      {:ok, participant} =
+        Chat.ensure_agent_participant(space.id, agent, display_name: agent.name)
+
+      Platform.Chat.ActiveAgentStore.set_active(space.id, participant.id)
+      assert Platform.Chat.ActiveAgentStore.get_active(space.id) == participant.id
+
+      {:ok, _} =
+        ToolSurface.execute("space_leave", %{"space_id" => space.id}, %{agent_id: agent.id})
+
+      assert Platform.Chat.ActiveAgentStore.get_active(space.id) == nil
+    end
+
+    test "space_leave requires space_id" do
+      agent = create_agent()
+
+      assert {:error, error} =
+               ToolSurface.execute("space_leave", %{}, %{agent_id: agent.id})
+
+      assert error.error =~ "space_id is required"
+    end
+
+    test "space_leave requires an identifiable caller when agent_id arg is omitted" do
+      space = create_space()
+
+      assert {:error, error} =
+               ToolSurface.execute("space_leave", %{"space_id" => space.id}, %{})
+
+      assert error.error =~ "identity unresolved"
     end
 
     # ── send_media ───────────────────────────────────────────────────────
@@ -1122,6 +1275,23 @@ defmodule Platform.Federation.ToolSurfaceTest do
   end
 
   # ── Helpers ──────────────────────────────────────────────────────────
+
+  # `space_leave` calls ActiveAgentStore.clear_if_match/2 — start the GenServer
+  # the first time a test needs it and allow the test process to share the
+  # repo sandbox connection.
+  defp ensure_active_agent_store do
+    alias Ecto.Adapters.SQL.Sandbox
+    alias Platform.Chat.ActiveAgentStore
+
+    pid =
+      case Process.whereis(ActiveAgentStore) do
+        nil -> start_supervised!({ActiveAgentStore, []})
+        existing -> existing
+      end
+
+    Sandbox.allow(Repo, self(), pid)
+    :ok
+  end
 
   defp create_agent(attrs \\ %{}) do
     defaults = %{

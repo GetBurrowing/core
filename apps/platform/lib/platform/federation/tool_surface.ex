@@ -8,11 +8,13 @@ defmodule Platform.Federation.ToolSurface do
   require Logger
 
   alias Platform.Chat
-  alias Platform.Chat.ContextPlane
+  alias Platform.Chat.{ActiveAgentStore, ContextPlane, Participant}
   alias Platform.Org.Context, as: OrgContext
   alias Platform.Tasks
   alias Platform.Tasks.{Plan, PlanEngine, Stage, Validation}
   alias Platform.Repo
+
+  import Ecto.Query, only: [from: 2]
 
   @bundles ~w(canvas messaging task plan review space context_read federation org_context)
 
@@ -338,6 +340,26 @@ defmodule Platform.Federation.ToolSurface do
         limitations: "Only returns spaces the agent is a participant in",
         when_to_use:
           "When you need to discover available spaces or find a space ID for proactive messaging"
+      },
+      %{
+        name: "space_leave",
+        description:
+          "Remove an agent from a Suite space. Defaults to removing the calling agent (self-leave). Pass `agent_id` to remove a different agent — for example if you were asked to evict another agent who shouldn't be present. Soft-leave: the participant record is kept with `left_at` set, so message history is preserved. Useful when an agent was invited by accident — especially to a DM where `directed` attention would otherwise keep the agent listening forever.",
+        parameters: %{
+          space_id: %{type: "string", required: true, description: "UUID of the Suite space"},
+          agent_id: %{
+            type: "string",
+            required: false,
+            description:
+              "UUID of the agent to remove. Omit to leave the space yourself (the calling agent)."
+          }
+        },
+        returns:
+          "`{space_id, agent_id, participant_id, removed: true, left_at}` on success. If the target was the active-agent mutex holder, the mutex is cleared as a side effect.",
+        limitations:
+          "Only removes agent participants (not humans). Target must currently be an active participant (left_at IS NULL) in the space. If the target is the principal agent of an execution space with a live task, the space's task will orphan until re-assigned — use deliberately.",
+        when_to_use:
+          "When you were invited to a space you shouldn't be in (e.g. a private DM you're stuck listening to), or when asked to remove another agent who shouldn't be present."
       }
     ]
   end
@@ -1161,6 +1183,82 @@ defmodule Platform.Federation.ToolSurface do
      Enum.map(spaces, fn s ->
        %{id: s.id, name: s.name, kind: s.kind, description: s.description}
      end)}
+  end
+
+  def execute("space_leave", args, context) do
+    space_id = Map.get(args, "space_id")
+    calling_agent_id = Map.get(context, :agent_id)
+    target_agent_id = Map.get(args, "agent_id") || calling_agent_id
+
+    cond do
+      not is_binary(space_id) or space_id == "" ->
+        {:error,
+         %{
+           error: "space_id is required",
+           recoverable: false,
+           suggestion: "Provide a valid Suite space UUID"
+         }}
+
+      not is_binary(target_agent_id) or target_agent_id == "" ->
+        {:error,
+         %{
+           error: "Caller identity unresolved and no agent_id supplied",
+           recoverable: false,
+           suggestion:
+             "This tool needs either a context-bound calling agent or an explicit agent_id parameter"
+         }}
+
+      true ->
+        case find_active_agent_participant(space_id, target_agent_id) do
+          nil ->
+            {:error,
+             %{
+               error:
+                 "Agent #{target_agent_id} is not an active participant in space #{space_id}",
+               recoverable: false,
+               suggestion:
+                 "Verify the space_id and agent_id. The agent may already have left, or was never added. Non-agent (human) participants cannot be removed via this tool."
+             }}
+
+          %Participant{} = participant ->
+            case Chat.remove_participant(participant) do
+              {:ok, removed} ->
+                ActiveAgentStore.clear_if_match(space_id, removed.id)
+
+                {:ok,
+                 %{
+                   space_id: space_id,
+                   agent_id: target_agent_id,
+                   participant_id: removed.id,
+                   removed: true,
+                   left_at: removed.left_at,
+                   self_removed: target_agent_id == calling_agent_id
+                 }}
+
+              {:error, changeset} ->
+                {:error,
+                 %{
+                   error: "Failed to remove participant: #{inspect(changeset.errors)}",
+                   recoverable: true,
+                   suggestion: "Retry; if this persists the participant record may be corrupt"
+                 }}
+            end
+        end
+    end
+  end
+
+  # Returns the active (left_at IS NULL) agent-participant record for `agent_id`
+  # in `space_id`, or nil if none. Scoped to participant_type="agent" so this
+  # helper cannot accidentally remove a human participant with the same UUID.
+  defp find_active_agent_participant(space_id, agent_id) do
+    from(p in Participant,
+      where:
+        p.space_id == ^space_id and
+          p.participant_id == ^agent_id and
+          p.participant_type == "agent" and
+          is_nil(p.left_at)
+    )
+    |> Repo.one()
   end
 
   # ── Canvas tools ─────────────────────────────────────────────────────────
