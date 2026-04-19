@@ -9,6 +9,8 @@ defmodule Platform.Chat.Canvas.ToolHandlers do
   `{:error, %{recoverable: true, ...}}` payloads the model can self-correct on.
   """
 
+  require Logger
+
   alias Platform.Chat
   alias Platform.Chat.Canvas.Server, as: CanvasServer
   alias Platform.Chat.CanvasDocument
@@ -20,7 +22,8 @@ defmodule Platform.Chat.Canvas.ToolHandlers do
     space_id = Map.get(args, "space_id") || Map.get(context, :space_id)
     participant_id = Map.get(context, :agent_participant_id) || Map.get(context, :participant_id)
     agent_id = Map.get(context, :agent_id)
-    document = args |> Map.get("document") |> decode_if_string()
+    raw_document = Map.get(args, "document") || Map.get(args, "initial_state")
+    document = decode_if_string(raw_document)
     title = Map.get(args, "title")
 
     cond do
@@ -42,11 +45,22 @@ defmodule Platform.Chat.Canvas.ToolHandlers do
          }}
 
       not is_map(document) ->
+        Logger.warning(
+          "[Canvas.ToolHandlers] canvas.create rejected: document unusable. " <>
+            "agent=#{inspect(agent_id)} space=#{inspect(space_id)} " <>
+            "arg_keys=#{inspect(Map.keys(args))} " <>
+            "raw_type=#{describe(raw_document)} decoded_type=#{describe(document)} " <>
+            "raw_preview=#{raw_document |> inspect() |> String.slice(0, 300)}"
+        )
+
         {:error,
          %{
-           error: "canvas.create requires a canonical document object",
+           error:
+             "canvas.create requires a canonical document object (got #{describe(document)}). Pass `document` as a nested JSON object, not a string; see canvas.describe on an existing canvas for a valid shape.",
            recoverable: true,
-           suggestion: "See canvas.describe on an existing canvas for a valid document shape."
+           got_type: describe(document),
+           accepted_keys: ["document", "initial_state"],
+           received_keys: Map.keys(args)
          }}
 
       true ->
