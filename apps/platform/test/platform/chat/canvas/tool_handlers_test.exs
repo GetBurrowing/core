@@ -80,6 +80,37 @@ defmodule Platform.Chat.Canvas.ToolHandlersTest do
       assert payload.error =~ "document"
     end
 
+    test "auto-fills version/revision/root.id on a minimal agent-emitted doc" do
+      %{space: space, participant: participant} = setup_space()
+
+      minimal_doc = %{
+        "root" => %{
+          "type" => "stack",
+          "children" => [
+            %{
+              "type" => "text",
+              "props" => %{"value" => "hello"}
+            }
+          ]
+        }
+      }
+
+      args = %{"space_id" => space.id, "title" => "minimal", "document" => minimal_doc}
+      context = %{agent_participant_id: participant.id}
+
+      assert {:ok, result} = ToolHandlers.create(args, context)
+      assert result.kind == "stack"
+      assert result.revision == 1
+
+      {:ok, %{document: doc}} = Platform.Chat.Canvas.Server.describe(result.canvas_id)
+      assert doc["version"] == 1
+      assert doc["root"]["id"] == "root"
+      [text] = doc["root"]["children"]
+      assert is_binary(text["id"]) and text["id"] != ""
+
+      on_exit(fn -> Platform.Chat.Canvas.Server.stop(result.canvas_id) end)
+    end
+
     test "accepts a stringified document (MCP client stringification fallback)" do
       %{space: space, participant: participant} = setup_space()
 

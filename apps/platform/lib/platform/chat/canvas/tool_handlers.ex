@@ -64,7 +64,7 @@ defmodule Platform.Chat.Canvas.ToolHandlers do
          }}
 
       true ->
-        with {:ok, valid_doc} <- validate_document(document) do
+        with {:ok, valid_doc} <- validate_document(normalize_document(document)) do
           attrs = %{
             "title" => title,
             "document" => valid_doc
@@ -165,6 +165,50 @@ defmodule Platform.Chat.Canvas.ToolHandlers do
   end
 
   # ── Helpers ─────────────────────────────────────────────────────────────
+
+  # Auto-fill trivial scaffolding fields so minimal agent-emitted docs work:
+  # `version`, `revision`, `theme`, `bindings`, `meta` default to sane values,
+  # and every node with a missing/empty `id` gets one (root → "root",
+  # everyone else → a fresh UUID). Validation still runs after, so truly
+  # malformed shapes (unknown kinds, illegal children) still surface as
+  # errors — we're only filling in what has one obvious value.
+  defp normalize_document(doc) when is_map(doc) do
+    doc
+    |> Map.put_new("version", 1)
+    |> Map.put_new("revision", 1)
+    |> Map.put_new("theme", %{})
+    |> Map.put_new("bindings", %{})
+    |> Map.put_new("meta", %{})
+    |> Map.update("root", nil, &normalize_node(&1, "root"))
+  end
+
+  defp normalize_document(other), do: other
+
+  defp normalize_node(node, fallback_id) when is_map(node) do
+    id =
+      case Map.get(node, "id") do
+        v when is_binary(v) and v != "" -> v
+        _ -> fallback_id
+      end
+
+    children =
+      case Map.get(node, "children") do
+        list when is_list(list) ->
+          Enum.map(list, &normalize_node(&1, Ecto.UUID.generate()))
+
+        _ ->
+          nil
+      end
+
+    node
+    |> Map.put("id", id)
+    |> Map.put_new("props", %{})
+    |> then(fn n ->
+      if children, do: Map.put(n, "children", children), else: n
+    end)
+  end
+
+  defp normalize_node(other, _fallback), do: other
 
   defp validate_document(document) do
     case CanvasDocument.validate(document) do
