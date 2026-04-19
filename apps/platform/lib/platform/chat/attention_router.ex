@@ -440,15 +440,26 @@ defmodule Platform.Chat.AttentionRouter do
   defp return_empty, do: []
 
   defp maybe_send_push(participant_id, sender_name, %Message{content: content}) do
-    body = if is_binary(content), do: String.slice(content, 0, 200), else: ""
+    # Skip in test env. The spawned Task races with Ecto sandbox teardown:
+    # when a test finishes, its Repo connection owner exits, and an
+    # in-flight `Repo.all(Subscription)` inside this Task raises a
+    # `DBConnection.ConnectionError` — loud, and sometimes cascades into
+    # failures on other tests sharing the pool. Tests don't exercise push
+    # (no subscriptions, no VAPID keys), so short-circuiting here costs
+    # nothing and eliminates the flake.
+    if Application.get_env(:platform, :env) != :test do
+      body = if is_binary(content), do: String.slice(content, 0, 200), else: ""
 
-    Task.start(fn ->
-      Platform.Push.send_notification(participant_id, %{
-        title: "#{sender_name} in Suite",
-        body: body,
-        url: "/chat"
-      })
-    end)
+      Task.start(fn ->
+        Platform.Push.send_notification(participant_id, %{
+          title: "#{sender_name} in Suite",
+          body: body,
+          url: "/chat"
+        })
+      end)
+    end
+
+    :ok
   rescue
     _ -> :ok
   end
