@@ -948,26 +948,36 @@ defmodule PlatformWeb.TasksLiveTest do
     assert user_participant.display_name == "Tasks Test User"
   end
 
-  test "left execution participant is rejoined when the task detail opens", %{conn: conn} do
+  test "dismissed execution participant is not silently re-added on task-detail open (ADR 0038)",
+       %{conn: conn} do
     project = create_project()
     task = create_task(project, %{title: "Rejoin Task", status: "in_progress"})
     {:ok, space} = ExecutionSpace.find_or_create(task.id)
 
     {conn, user} = authenticated_conn_with_user(conn)
 
+    # Add the user, then hard-dismiss them (ADR 0038).
     {:ok, participant} =
       Chat.add_participant(space.id, %{
         participant_type: "user",
         participant_id: user.id,
         display_name: "Tasks Test User",
-        joined_at: DateTime.utc_now(),
-        left_at: DateTime.utc_now()
+        joined_at: DateTime.utc_now()
       })
+
+    {:ok, _} = Chat.remove_participant(participant)
 
     {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
 
-    refreshed = Chat.get_participant(participant.id)
-    assert refreshed.left_at == nil
+    # Opening the task detail adds the viewing user as a participant (this
+    # is an explicit, page-load "ensure I'm here" path, not a dismissal
+    # resurrection — it creates a fresh row rather than reviving the
+    # deleted one).
+    assert %Chat.Participant{id: new_id} =
+             Chat.list_participants(space.id, participant_type: "user")
+             |> Enum.find(&(&1.participant_id == user.id))
+
+    refute new_id == participant.id
 
     html =
       render_submit(view, "send_steering_message", %{

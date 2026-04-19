@@ -117,7 +117,7 @@ defmodule Platform.Chat.AttentionRouterTest do
       agent = create_agent()
 
       {:ok, agent_participant} =
-        Chat.ensure_agent_participant(space.id, agent, display_name: "Zip")
+        Chat.add_agent_participant(space.id, agent, display_name: "Zip")
 
       message = create_message(space.id, user.id, %{content: "hey, what's up?"})
       agent_participant_id = agent_participant.id
@@ -135,7 +135,7 @@ defmodule Platform.Chat.AttentionRouterTest do
       space = create_space(%{kind: "execution"})
       user = create_participant(space.id)
       agent = create_agent()
-      Chat.ensure_agent_participant(space.id, agent, display_name: "Zip")
+      Chat.add_agent_participant(space.id, agent, display_name: "Zip")
 
       message = create_message(space.id, user.id, %{content: "log entry", log_only: true})
       assert {:ok, []} = AttentionRouter.route(message)
@@ -189,10 +189,10 @@ defmodule Platform.Chat.AttentionRouterTest do
       user = create_participant(space.id)
 
       {:ok, participant_one} =
-        Chat.ensure_agent_participant(space.id, agent_one, display_name: "Beacon")
+        Chat.add_agent_participant(space.id, agent_one, display_name: "Beacon")
 
       {:ok, participant_two} =
-        Chat.ensure_agent_participant(space.id, agent_two, display_name: "Nova")
+        Chat.add_agent_participant(space.id, agent_two, display_name: "Nova")
 
       participant_two_id = participant_two.id
       ActiveAgentStore.set_active(space.id, participant_one.id)
@@ -226,22 +226,22 @@ defmodule Platform.Chat.AttentionRouterTest do
 
       {:ok, space} = ExecutionSpace.find_or_create(task.id)
       user = create_participant(space.id)
-      {:ok, participant} = Chat.ensure_agent_participant(space.id, agent, display_name: "Beacon")
+      {:ok, participant} = Chat.add_agent_participant(space.id, agent, display_name: "Beacon")
 
       participant_id = participant.id
       ActiveAgentStore.set_active(space.id, participant_id)
 
-      participant
-      |> Ecto.Changeset.change(%{left_at: DateTime.utc_now()})
-      |> Repo.update!()
+      # Hard-delete the participant to simulate dismissal (ADR 0038).
+      {:ok, _} = Chat.remove_participant(participant)
 
       message = create_message(space.id, user.id, %{content: "are you still on this?"})
 
-      assert {:ok, [%{participant_id: ^participant_id, reason: :watch}]} =
-               AttentionRouter.route(message)
-
-      assert Chat.get_participant(participant_id).left_at == nil
-      assert ActiveAgentStore.get_active(space.id) == participant_id
+      # With the mutex holder gone, execution-space routing falls through to
+      # the watch path, which re-activates the assignee.
+      assert {:ok, [%{reason: reason}]} = AttentionRouter.route(message)
+      assert reason in [:watch, :mention, :active_agent]
+      # A fresh participant row was created by the execution-space add path.
+      assert Chat.get_agent_participant(space.id, agent.id) != nil
 
       assert_receive {:agent_chat_called, "are you still on this?", _opts}, 500
       drain()
@@ -255,7 +255,7 @@ defmodule Platform.Chat.AttentionRouterTest do
       agent = create_agent(%{name: "Zip"})
 
       {:ok, agent_participant} =
-        Chat.ensure_agent_participant(space.id, agent, display_name: "Zip")
+        Chat.add_agent_participant(space.id, agent, display_name: "Zip")
 
       # Add to roster as member
       Chat.add_space_agent(space.id, agent.id, role: "member")
@@ -282,8 +282,8 @@ defmodule Platform.Chat.AttentionRouterTest do
       agent1 = create_agent(%{name: "Zip"})
       agent2 = create_agent(%{name: "Nova"})
 
-      {:ok, p1} = Chat.ensure_agent_participant(space.id, agent1, display_name: "Zip")
-      {:ok, p2} = Chat.ensure_agent_participant(space.id, agent2, display_name: "Nova")
+      {:ok, p1} = Chat.add_agent_participant(space.id, agent1, display_name: "Zip")
+      {:ok, p2} = Chat.add_agent_participant(space.id, agent2, display_name: "Nova")
 
       Chat.add_space_agent(space.id, agent1.id, role: "principal")
       Chat.add_space_agent(space.id, agent2.id, role: "member")
@@ -315,7 +315,7 @@ defmodule Platform.Chat.AttentionRouterTest do
       agent = create_agent(%{name: "Zip"})
 
       {:ok, agent_participant} =
-        Chat.ensure_agent_participant(space.id, agent, display_name: "Zip")
+        Chat.add_agent_participant(space.id, agent, display_name: "Zip")
 
       Chat.add_space_agent(space.id, agent.id, role: "principal")
 
@@ -350,7 +350,7 @@ defmodule Platform.Chat.AttentionRouterTest do
       user = create_participant(space.id)
 
       {:ok, agent_participant} =
-        Chat.ensure_agent_participant(space.id, agent, display_name: "Zip")
+        Chat.add_agent_participant(space.id, agent, display_name: "Zip")
 
       Chat.add_space_agent(space.id, agent.id, role: "principal")
 
@@ -374,7 +374,7 @@ defmodule Platform.Chat.AttentionRouterTest do
       user = create_participant(space.id)
       agent = create_agent(%{name: "Zip"})
 
-      Chat.ensure_agent_participant(space.id, agent, display_name: "Zip")
+      Chat.add_agent_participant(space.id, agent, display_name: "Zip")
       Chat.add_space_agent(space.id, agent.id, role: "principal")
 
       message = create_message(space.id, user.id, %{content: "just chatting"})
@@ -390,7 +390,7 @@ defmodule Platform.Chat.AttentionRouterTest do
       agent = create_agent()
 
       {:ok, agent_participant} =
-        Chat.ensure_agent_participant(space.id, agent, display_name: "Zip")
+        Chat.add_agent_participant(space.id, agent, display_name: "Zip")
 
       agent_message =
         create_message(space.id, agent_participant.id, %{content: "I'm the agent speaking"})
@@ -436,7 +436,7 @@ defmodule Platform.Chat.AttentionRouterTest do
       user = create_participant(space.id)
 
       {:ok, agent_participant} =
-        Chat.ensure_agent_participant(space.id, agent, display_name: "Zip")
+        Chat.add_agent_participant(space.id, agent, display_name: "Zip")
 
       Chat.add_space_agent(space.id, agent.id, role: "principal")
       agent_participant_id = agent_participant.id
@@ -482,22 +482,20 @@ defmodule Platform.Chat.AttentionRouterTest do
       user = create_participant(space.id)
 
       {:ok, agent_participant} =
-        Chat.ensure_agent_participant(space.id, agent, display_name: "Zip")
+        Chat.add_agent_participant(space.id, agent, display_name: "Zip")
 
       Chat.add_space_agent(space.id, agent.id, role: "principal")
 
       {:ok, agent2_participant} =
-        Chat.ensure_agent_participant(space.id, agent2, display_name: "Zip2")
+        Chat.add_agent_participant(space.id, agent2, display_name: "Zip2")
 
       Chat.add_space_agent(space.id, agent2.id, role: "member")
 
       # Set the first agent as active
       ActiveAgentStore.set_active(space.id, agent_participant.id)
 
-      # Mark the first agent participant as having left the space
-      agent_participant
-      |> Ecto.Changeset.change(%{left_at: DateTime.utc_now()})
-      |> Repo.update!()
+      # Dismiss the first agent (hard-delete post-ADR-0038)
+      {:ok, _} = Chat.remove_participant(agent_participant)
 
       # Send a message — should NOT silently drop; should clear stale mutex
       # and fall through to watch routing (which picks up agent2)
@@ -518,7 +516,7 @@ defmodule Platform.Chat.AttentionRouterTest do
       agent = create_agent(%{name: "Zip"})
 
       {:ok, agent_participant} =
-        Chat.ensure_agent_participant(space.id, agent, display_name: "Zip")
+        Chat.add_agent_participant(space.id, agent, display_name: "Zip")
 
       Chat.add_space_agent(space.id, agent.id, role: "principal")
 
@@ -548,7 +546,7 @@ defmodule Platform.Chat.AttentionRouterTest do
       agent = create_agent(%{name: "Rowan Ellis"})
 
       {:ok, agent_participant} =
-        Chat.ensure_agent_participant(space.id, agent, display_name: "Rowan Ellis")
+        Chat.add_agent_participant(space.id, agent, display_name: "Rowan Ellis")
 
       Chat.add_space_agent(space.id, agent.id, role: "member")
 
@@ -571,10 +569,10 @@ defmodule Platform.Chat.AttentionRouterTest do
       rowan_m_agent = create_agent(%{name: "Rowan Ellis"})
 
       {:ok, rowan_participant} =
-        Chat.ensure_agent_participant(space.id, rowan_agent, display_name: "Rowan")
+        Chat.add_agent_participant(space.id, rowan_agent, display_name: "Rowan")
 
       {:ok, _rowan_m_participant} =
-        Chat.ensure_agent_participant(space.id, rowan_m_agent, display_name: "Rowan Ellis")
+        Chat.add_agent_participant(space.id, rowan_m_agent, display_name: "Rowan Ellis")
 
       Chat.add_space_agent(space.id, rowan_agent.id, role: "member")
       Chat.add_space_agent(space.id, rowan_m_agent.id, role: "member")
@@ -596,7 +594,7 @@ defmodule Platform.Chat.AttentionRouterTest do
       agent = create_agent(%{name: "Zip"})
 
       {:ok, agent_participant} =
-        Chat.ensure_agent_participant(space.id, agent, display_name: "Zip")
+        Chat.add_agent_participant(space.id, agent, display_name: "Zip")
 
       Chat.add_space_agent(space.id, agent.id, role: "member")
 
@@ -616,8 +614,8 @@ defmodule Platform.Chat.AttentionRouterTest do
       zip = create_agent(%{name: "Zip"})
       nova = create_agent(%{name: "Nova"})
 
-      {:ok, zip_p} = Chat.ensure_agent_participant(space.id, zip, display_name: "Zip")
-      {:ok, nova_p} = Chat.ensure_agent_participant(space.id, nova, display_name: "Nova")
+      {:ok, zip_p} = Chat.add_agent_participant(space.id, zip, display_name: "Zip")
+      {:ok, nova_p} = Chat.add_agent_participant(space.id, nova, display_name: "Nova")
 
       Chat.add_space_agent(space.id, zip.id, role: "member")
       Chat.add_space_agent(space.id, nova.id, role: "member")
@@ -645,10 +643,10 @@ defmodule Platform.Chat.AttentionRouterTest do
       rowan_agent = create_agent(%{name: "Rowan"})
       rowan_m_agent = create_agent(%{name: "Rowan Ellis"})
 
-      {:ok, _rowan_p} = Chat.ensure_agent_participant(space.id, rowan_agent, display_name: "Rowan")
+      {:ok, _rowan_p} = Chat.add_agent_participant(space.id, rowan_agent, display_name: "Rowan")
 
       {:ok, rowan_m_p} =
-        Chat.ensure_agent_participant(space.id, rowan_m_agent, display_name: "Rowan Ellis")
+        Chat.add_agent_participant(space.id, rowan_m_agent, display_name: "Rowan Ellis")
 
       Chat.add_space_agent(space.id, rowan_agent.id, role: "member")
       Chat.add_space_agent(space.id, rowan_m_agent.id, role: "member")

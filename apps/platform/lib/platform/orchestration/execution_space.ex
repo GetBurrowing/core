@@ -58,7 +58,7 @@ defmodule Platform.Orchestration.ExecutionSpace do
   """
   @spec add_participant(binary(), binary()) :: {:ok, Participant.t()} | {:error, term()}
   def add_participant(space_id, agent_id) do
-    Chat.ensure_agent_participant(space_id, agent_id, attention_mode: "all")
+    Chat.add_agent_participant(space_id, agent_id, attention_mode: "all")
   end
 
   @doc """
@@ -77,11 +77,8 @@ defmodule Platform.Orchestration.ExecutionSpace do
            participant_type: "agent",
            participant_id: system_id
          ) do
-      %Participant{left_at: nil} = p ->
-        {:ok, p}
-
       %Participant{} = p ->
-        Chat.update_participant(p, %{left_at: nil})
+        {:ok, p}
 
       nil ->
         Chat.add_participant(space_id, %{

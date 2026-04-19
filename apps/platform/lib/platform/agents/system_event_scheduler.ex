@@ -187,7 +187,7 @@ defmodule Platform.Agents.SystemEventScheduler do
     with {:ok, space} <- ensure_system_space(agent),
          {:ok, system_participant} <- ensure_system_participant(space),
          {:ok, agent_participant} <-
-           Chat.ensure_agent_participant(space.id, agent, display_name: agent.name),
+           Chat.add_agent_participant(space.id, agent, display_name: agent.name),
          {:ok, message} <- post_instruction(space, system_participant, event_type) do
       signal = %{
         participant_id: agent_participant.id,

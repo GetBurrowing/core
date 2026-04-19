@@ -176,7 +176,7 @@ defmodule Platform.Federation do
   @doc "Ensure the runtime's linked agent has a participant in the given space."
   def ensure_runtime_agent_participant(%AgentRuntime{agent_id: agent_id} = _runtime, space_id)
       when is_binary(agent_id) do
-    Chat.ensure_agent_participant(space_id, agent_id)
+    Chat.add_agent_participant(space_id, agent_id)
   end
 
   def ensure_runtime_agent_participant(_runtime, _space_id) do
@@ -194,8 +194,7 @@ defmodule Platform.Federation do
     from(p in Participant,
       join: s in Space,
       on: s.id == p.space_id,
-      where:
-        p.participant_type == "agent" and p.participant_id == ^agent_id and is_nil(p.left_at),
+      where: p.participant_type == "agent" and p.participant_id == ^agent_id,
       select: %{
         space_id: s.id,
         space_name: s.name,

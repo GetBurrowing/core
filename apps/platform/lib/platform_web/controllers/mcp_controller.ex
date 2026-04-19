@@ -127,8 +127,8 @@ defmodule PlatformWeb.MCPController do
   defp lookup_participant(_space_id, nil), do: nil
 
   defp lookup_participant(space_id, agent_id) do
-    case Chat.ensure_agent_participant(space_id, agent_id) do
-      {:ok, participant} -> participant.id
+    case Chat.get_agent_participant(space_id, agent_id) do
+      %Chat.Participant{id: id} -> id
       _ -> nil
     end
   end

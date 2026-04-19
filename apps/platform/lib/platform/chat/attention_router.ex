@@ -358,18 +358,13 @@ defmodule Platform.Chat.AttentionRouter do
           ActiveAgentStore.set_active(space.id, active_participant_id)
           [%{participant_id: active_participant_id, reason: :active_agent}]
         else
-          # Active agent not in recipients — check whether they're still an
-          # active (non-left) participant in the space.  If they are, they are
-          # simply the message author and we skip routing for this message.
-          # If they're NOT an active participant any more (left_at is set or
-          # record deleted), the mutex is stale — clear it and fall through to
-          # watch-mode so the feedback still reaches an agent.
+          # Active agent not in recipients — check whether they're still a
+          # participant in the space (post-ADR-0038 the row either exists or
+          # has been hard-deleted). If they are, they're the message author
+          # and we skip routing. If the row is gone, the mutex is stale —
+          # clear it and fall through to watch-mode.
           still_active =
-            Repo.exists?(
-              from(p in Participant,
-                where: p.id == ^active_participant_id and is_nil(p.left_at)
-              )
-            )
+            Repo.exists?(from(p in Participant, where: p.id == ^active_participant_id))
 
           if still_active do
             # Author is still present — skip routing for this message.
@@ -394,11 +389,7 @@ defmodule Platform.Chat.AttentionRouter do
           [%{participant_id: active_participant_id, reason: :active_agent}]
         else
           still_active =
-            Repo.exists?(
-              from(p in Participant,
-                where: p.id == ^active_participant_id and is_nil(p.left_at)
-              )
-            )
+            Repo.exists?(from(p in Participant, where: p.id == ^active_participant_id))
 
           if still_active do
             []
@@ -414,7 +405,7 @@ defmodule Platform.Chat.AttentionRouter do
     with task_id when is_binary(task_id) <- execution_space_task_id(space),
          %TaskRecord{assignee_type: "agent", assignee_id: agent_id} when is_binary(agent_id) <-
            Repo.get(TaskRecord, task_id) do
-      Chat.ensure_agent_participant(space.id, agent_id, attention_mode: "all")
+      Chat.add_agent_participant(space.id, agent_id, attention_mode: "all")
     else
       _ -> {:error, :no_execution_assignee}
     end
@@ -509,7 +500,19 @@ defmodule Platform.Chat.AttentionRouter do
 
   defp mentioned?(_participant, _message), do: false
 
-  defp extract_bracketed_tokens(content) do
+  @doc """
+  Extract ADR 0037 `@[Display Name]` bracketed mention tokens from content.
+
+  Returns `{tokens, legacy_zone}` where:
+    * `tokens` is the list of display-name strings captured between brackets
+    * `legacy_zone` is the original content with the bracketed forms stripped,
+      suitable for the legacy `@name` substring check.
+
+  Public so `Chat.post_message` can use the same parser to resolve
+  mention-based reinvites without duplicating the regex.
+  """
+  @spec extract_bracketed_tokens(String.t()) :: {[String.t()], String.t()}
+  def extract_bracketed_tokens(content) when is_binary(content) do
     tokens =
       ~r/@\[([^\[\]]+)\]/
       |> Regex.scan(content, capture: :all_but_first)
@@ -518,6 +521,8 @@ defmodule Platform.Chat.AttentionRouter do
     legacy_zone = Regex.replace(~r/@\[([^\[\]]+)\]/, content, "")
     {tokens, legacy_zone}
   end
+
+  def extract_bracketed_tokens(_), do: {[], ""}
 
   defp name_mention?(name, bracketed_tokens, legacy_zone) do
     name in bracketed_tokens or String.contains?(legacy_zone, "@#{name}")
@@ -530,7 +535,7 @@ defmodule Platform.Chat.AttentionRouter do
   # ── Query helpers ───────────────────────────────────────────────────────────
 
   defp active_participants(space_id) do
-    from(p in Participant, where: p.space_id == ^space_id and is_nil(p.left_at))
+    from(p in Participant, where: p.space_id == ^space_id)
     |> Repo.all()
   end
 

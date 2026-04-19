@@ -543,10 +543,8 @@ defmodule PlatformWeb.ControlCenterLiveTest do
       )
 
     assert participant.attention_mode == "all"
-    assert is_nil(participant.left_at)
-
-    roster = Repo.get_by!(Platform.Chat.SpaceAgent, space_id: space.id, agent_id: agent.id)
-    assert roster.role == "principal"
+    # Under ADR 0038 the roster is the same row.
+    assert participant.role == "principal"
   end
 
   test "suspend federated runtime updates status", %{conn: conn} do

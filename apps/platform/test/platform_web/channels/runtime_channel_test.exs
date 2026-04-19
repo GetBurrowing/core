@@ -44,7 +44,7 @@ defmodule PlatformWeb.RuntimeChannelTest do
     space = create_space()
 
     {:ok, agent_participant} =
-      Chat.ensure_agent_participant(space.id, agent, display_name: agent.name)
+      Chat.add_agent_participant(space.id, agent, display_name: agent.name)
 
     %{
       runtime: runtime,

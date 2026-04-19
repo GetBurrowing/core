@@ -127,7 +127,7 @@ defmodule Platform.Chat.PresenceTest do
       {:ok, space} =
         Chat.create_space(%{name: "General", slug: "presence-agent", kind: "channel"})
 
-      {:ok, _participant} = Chat.ensure_agent_participant(space.id, agent)
+      {:ok, _participant} = Chat.add_agent_participant(space.id, agent)
 
       offline = ChatPresence.native_agent_presence(space.id, workspace_path: workspace)
       assert offline.configured?

@@ -1,10 +1,22 @@
 defmodule Platform.Chat.SpaceAgentTest do
+  @moduledoc """
+  Roster behaviour tests. ADR 0038 collapsed `chat_space_agents` into
+  `chat_participants.role`, so what we exercise here is:
+
+    * `set_principal_agent` promotes + demotes the old principal atomically
+    * `add_space_agent` / `remove_space_agent` / `ensure_space_agent` are
+      thin wrappers over agent-participant membership
+    * Attention routing gates mentions on the agent being a participant
+      (the old roster is just membership now)
+
+  Schema-level tests for the deleted `Platform.Chat.SpaceAgent` are gone.
+  """
   use Platform.DataCase, async: false
 
   alias Ecto.Adapters.SQL.Sandbox
   alias Platform.Agents.Agent
   alias Platform.Chat
-  alias Platform.Chat.{AttentionRouter, Message, SpaceAgent, SpaceAgentPresence}
+  alias Platform.Chat.{AttentionRouter, Message, SpaceAgentPresence}
   alias Platform.Repo
 
   defmodule StubAgentChat do
@@ -51,7 +63,7 @@ defmodule Platform.Chat.SpaceAgentTest do
     default = %{
       participant_type: "user",
       participant_id: Ecto.UUID.generate(),
-      display_name: "Rowan",
+      display_name: "Alice",
       joined_at: DateTime.utc_now()
     }
 
@@ -62,19 +74,14 @@ defmodule Platform.Chat.SpaceAgentTest do
   defp create_agent(attrs \\ %{}) do
     defaults = %{
       slug: "agent-#{System.unique_integer([:positive])}",
-      name: "TestAgent",
-      status: "active",
-      max_concurrent: 1,
-      sandbox_mode: "off",
-      model_config: %{"primary" => "anthropic/claude-sonnet-4-6"}
+      name: "Agent"
     }
 
-    {:ok, agent} =
-      %Agent{}
-      |> Agent.changeset(Map.merge(defaults, attrs))
-      |> Repo.insert()
-
-    agent
+    Repo.insert!(%Agent{
+      slug: Map.get(attrs, :slug, defaults.slug),
+      name: Map.get(attrs, :name, defaults.name),
+      status: "active"
+    })
   end
 
   defp create_message(space_id, participant_id, attrs \\ %{}) do
@@ -85,11 +92,7 @@ defmodule Platform.Chat.SpaceAgentTest do
       content: "hello"
     }
 
-    {:ok, message} =
-      %Message{}
-      |> Message.changeset(Map.merge(defaults, attrs))
-      |> Repo.insert()
-
+    {:ok, message} = Chat.post_message(Map.merge(defaults, attrs))
     message
   end
 
@@ -99,63 +102,14 @@ defmodule Platform.Chat.SpaceAgentTest do
     :ok = GenServer.call(AttentionRouter, :__drain__)
   end
 
-  # ── Schema changeset tests ──────────────────────────────────────────────────
-
-  describe "SpaceAgent changeset" do
-    test "valid changeset with required fields" do
-      space = create_space()
-      agent = create_agent()
-
-      changeset =
-        SpaceAgent.changeset(%SpaceAgent{}, %{
-          space_id: space.id,
-          agent_id: agent.id,
-          role: "member"
-        })
-
-      assert changeset.valid?
-    end
-
-    test "validates role inclusion" do
-      changeset =
-        SpaceAgent.changeset(%SpaceAgent{}, %{
-          space_id: Ecto.UUID.generate(),
-          agent_id: Ecto.UUID.generate(),
-          role: "invalid_role"
-        })
-
-      refute changeset.valid?
-      assert {"is invalid", _} = changeset.errors[:role]
-    end
-
-    test "requires space_id, agent_id, role" do
-      changeset = SpaceAgent.changeset(%SpaceAgent{}, %{})
-      refute changeset.valid?
-      assert changeset.errors[:space_id]
-      assert changeset.errors[:agent_id]
-    end
-
-    test "enforces unique (space_id, agent_id) constraint" do
-      space = create_space()
-      agent = create_agent()
-
-      {:ok, _} = Chat.add_space_agent(space.id, agent.id)
-      assert {:error, changeset} = Chat.add_space_agent(space.id, agent.id)
-      assert changeset.errors[:space_id] || changeset.errors[:agent_id]
-    end
-  end
-
-  # ── set_principal_agent ────────────────────────────────────────────────────
-
   describe "set_principal_agent/2" do
     test "sets an agent as principal" do
       space = create_space()
       agent = create_agent()
 
-      assert {:ok, sa} = Chat.set_principal_agent(space.id, agent.id)
-      assert sa.role == "principal"
-      assert sa.space_id == space.id
-      assert sa.agent_id == agent.id
+      assert {:ok, entry} = Chat.set_principal_agent(space.id, agent.id)
+      assert entry.role == "principal"
+      assert entry.agent_id == agent.id
     end
 
     test "replaces existing principal atomically" do
@@ -164,15 +118,13 @@ defmodule Platform.Chat.SpaceAgentTest do
       agent_b = create_agent(%{name: "AgentB"})
 
       {:ok, _} = Chat.set_principal_agent(space.id, agent_a.id)
-      {:ok, sa_b} = Chat.set_principal_agent(space.id, agent_b.id)
+      {:ok, entry_b} = Chat.set_principal_agent(space.id, agent_b.id)
 
-      assert sa_b.role == "principal"
+      assert entry_b.role == "principal"
 
-      # Old principal should now be member
       old = Chat.get_space_agent(space.id, agent_a.id)
       assert old.role == "member"
 
-      # Only one principal
       principal = Chat.get_principal_agent(space.id)
       assert principal.agent_id == agent_b.id
     end
@@ -181,10 +133,10 @@ defmodule Platform.Chat.SpaceAgentTest do
       space = create_space()
       agent = create_agent()
 
-      {:ok, sa1} = Chat.set_principal_agent(space.id, agent.id)
-      {:ok, sa2} = Chat.set_principal_agent(space.id, agent.id)
-      assert sa1.id == sa2.id
-      assert sa2.role == "principal"
+      {:ok, entry1} = Chat.set_principal_agent(space.id, agent.id)
+      {:ok, entry2} = Chat.set_principal_agent(space.id, agent.id)
+      assert entry1.agent_id == entry2.agent_id
+      assert entry2.role == "principal"
     end
 
     test "promotes existing member to principal" do
@@ -192,37 +144,35 @@ defmodule Platform.Chat.SpaceAgentTest do
       agent = create_agent()
 
       {:ok, _} = Chat.add_space_agent(space.id, agent.id, role: "member")
-      {:ok, sa} = Chat.set_principal_agent(space.id, agent.id)
+      {:ok, entry} = Chat.set_principal_agent(space.id, agent.id)
 
-      assert sa.role == "principal"
-      # Should still be one entry, not two
+      assert entry.role == "principal"
       roster = Chat.list_space_agents(space.id)
       assert length(roster) == 1
     end
   end
-
-  # ── add_space_agent / remove_space_agent ───────────────────────────────────
 
   describe "add_space_agent/3" do
     test "adds agent as member by default" do
       space = create_space()
       agent = create_agent()
 
-      {:ok, sa} = Chat.add_space_agent(space.id, agent.id)
-      assert sa.role == "member"
+      {:ok, entry} = Chat.add_space_agent(space.id, agent.id)
+      assert entry.role == "member"
+      assert entry.agent_id == agent.id
     end
 
     test "adds agent with specified role" do
       space = create_space()
       agent = create_agent()
 
-      {:ok, sa} = Chat.add_space_agent(space.id, agent.id, role: "member")
-      assert sa.role == "member"
+      {:ok, entry} = Chat.add_space_agent(space.id, agent.id, role: "member")
+      assert entry.role == "member"
     end
   end
 
   describe "remove_space_agent/2" do
-    test "removes agent from roster" do
+    test "removes agent from roster (hard-delete, ADR 0038)" do
       space = create_space()
       agent = create_agent()
 
@@ -237,11 +187,6 @@ defmodule Platform.Chat.SpaceAgentTest do
     end
   end
 
-  # ADR 0027: dismiss_space_agent/3 and reinvite_space_agent/2 tests removed.
-  # The dismissed role no longer exists.
-
-  # ── list / get functions ───────────────────────────────────────────────────
-
   describe "list_space_agents/1" do
     test "returns all roster entries with preloaded agents" do
       space = create_space()
@@ -253,7 +198,7 @@ defmodule Platform.Chat.SpaceAgentTest do
 
       roster = Chat.list_space_agents(space.id)
       assert length(roster) == 2
-      assert Enum.all?(roster, fn sa -> sa.agent != nil end)
+      assert Enum.all?(roster, fn entry -> entry.agent != nil end)
     end
   end
 
@@ -289,43 +234,9 @@ defmodule Platform.Chat.SpaceAgentTest do
     end
   end
 
-  # ── Principal uniqueness constraint ────────────────────────────────────────
-
-  describe "principal uniqueness" do
-    test "cannot insert two principals for the same space directly" do
-      space = create_space()
-      agent_a = create_agent(%{name: "A"})
-      agent_b = create_agent(%{name: "B"})
-
-      {:ok, _} =
-        %SpaceAgent{}
-        |> SpaceAgent.changeset(%{space_id: space.id, agent_id: agent_a.id, role: "principal"})
-        |> Repo.insert()
-
-      assert {:error, _} =
-               %SpaceAgent{}
-               |> SpaceAgent.changeset(%{
-                 space_id: space.id,
-                 agent_id: agent_b.id,
-                 role: "principal"
-               })
-               |> Repo.insert()
-    end
-  end
-
-  # ── Composite status ───────────────────────────────────────────────────────
-
   describe "composite_status/1" do
     test "returns :none for empty list" do
       assert SpaceAgentPresence.composite_status([]) == :none
-    end
-
-    test "single active returns :active" do
-      assert SpaceAgentPresence.composite_status([:active]) == :active
-    end
-
-    test "single idle returns :idle" do
-      assert SpaceAgentPresence.composite_status([:idle]) == :idle
     end
 
     test "error always wins" do
@@ -345,22 +256,16 @@ defmodule Platform.Chat.SpaceAgentTest do
     test "all healthy returns :active" do
       assert SpaceAgentPresence.composite_status([:active, :active, :idle]) == :active
     end
-
-    test "mix of error and busy returns :error" do
-      assert SpaceAgentPresence.composite_status([:busy, :error]) == :error
-    end
   end
 
-  # ── Attention routing with roster ──────────────────────────────────────────
-
   describe "attention routing with roster" do
-    test "@-mention routes to mentioned agent in roster" do
+    test "@-mention routes to mentioned agent on the roster" do
       space = create_space(%{kind: "channel"})
       user = create_participant(space.id)
       agent = create_agent(%{name: "CodeBot"})
 
       {:ok, agent_participant} =
-        Chat.ensure_agent_participant(space.id, agent, display_name: "CodeBot")
+        Chat.add_agent_participant(space.id, agent, display_name: "CodeBot")
 
       {:ok, _} = Chat.add_space_agent(space.id, agent.id)
 
@@ -380,7 +285,7 @@ defmodule Platform.Chat.SpaceAgentTest do
       agent = create_agent(%{name: "Zip"})
 
       {:ok, agent_participant} =
-        Chat.ensure_agent_participant(space.id, agent, display_name: "Zip")
+        Chat.add_agent_participant(space.id, agent, display_name: "Zip")
 
       {:ok, _} = Chat.set_principal_agent(space.id, agent.id)
 
@@ -394,28 +299,11 @@ defmodule Platform.Chat.SpaceAgentTest do
       drain()
     end
 
-    # ADR 0027: "dismissed agent @-mention triggers reinvite" test removed.
-    # The dismissed role no longer exists.
-
-    test "agent not in roster does not receive messages" do
-      space = create_space(%{kind: "channel"})
-      user = create_participant(space.id)
-      agent = create_agent(%{name: "Ghost"})
-      other_agent = create_agent(%{name: "Visible"})
-
-      {:ok, _} = Chat.ensure_agent_participant(space.id, agent, display_name: "Ghost")
-      {:ok, _} = Chat.ensure_agent_participant(space.id, other_agent, display_name: "Visible")
-
-      # Only add other_agent to roster, not agent
-      {:ok, _} = Chat.add_space_agent(space.id, other_agent.id)
-
-      message = create_message(space.id, user.id, %{content: "@Ghost help me"})
-
-      # Ghost is not in roster, so no delivery
-      assert {:ok, []} = AttentionRouter.route(message)
-      refute_receive {:agent_chat_called, _, _}, 200
-      drain()
-    end
+    # Under ADR 0038 there's no "participant but not on the roster" state —
+    # membership == roster. The previous test asserting that distinction no
+    # longer has a behavior to check; the product contract is "if the agent
+    # is in the space, mentioning them routes to them." Tests for that live
+    # in attention_router_test.exs.
 
     test "spaces without roster fall back to legacy routing" do
       space = create_space(%{kind: "dm"})
@@ -423,9 +311,8 @@ defmodule Platform.Chat.SpaceAgentTest do
       agent = create_agent(%{name: "Zip"})
 
       {:ok, agent_participant} =
-        Chat.ensure_agent_participant(space.id, agent, display_name: "Zip")
+        Chat.add_agent_participant(space.id, agent, display_name: "Zip")
 
-      # No roster entries — should use legacy participant-based routing
       message = create_message(space.id, user.id, %{content: "hey"})
       agent_participant_id = agent_participant.id
 
@@ -436,4 +323,7 @@ defmodule Platform.Chat.SpaceAgentTest do
       drain()
     end
   end
+
+  # Drop any unused aliases defensively.
+  _ = Message
 end

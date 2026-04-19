@@ -45,7 +45,6 @@ defmodule Platform.Chat do
     Pin,
     Reaction,
     Space,
-    SpaceAgent,
     Thread
   }
 
@@ -150,7 +149,6 @@ defmodule Platform.Chat do
         where:
           p.participant_type == "agent" and
             p.participant_id == ^agent_id and
-            is_nil(p.left_at) and
             is_nil(s.archived_at),
         order_by: [asc: s.inserted_at]
       )
@@ -196,9 +194,7 @@ defmodule Platform.Chat do
         where:
           s.kind == "dm" and s.is_direct == true and is_nil(s.archived_at) and
             p1.participant_type == "user" and p1.participant_id == ^user_id and
-            is_nil(p1.left_at) and
-            p2.participant_type == ^target_type and p2.participant_id == ^target_id and
-            is_nil(p2.left_at),
+            p2.participant_type == ^target_type and p2.participant_id == ^target_id,
         limit: 1,
         select: s
       )
@@ -235,7 +231,7 @@ defmodule Platform.Chat do
       if target_type == "agent" do
         case Repo.get(Agent, target_id) do
           %Agent{} = agent ->
-            ensure_agent_participant(space.id, agent)
+            add_agent_participant(space.id, agent)
 
           nil ->
             {:error, :agent_not_found}
@@ -301,7 +297,7 @@ defmodule Platform.Chat do
           Multi.run(multi, {:participant, idx}, fn _repo, %{space: space} ->
             if type == "agent" do
               case Repo.get(Agent, id) do
-                %Agent{} = agent -> ensure_agent_participant(space.id, agent)
+                %Agent{} = agent -> add_agent_participant(space.id, agent)
                 nil -> {:error, :agent_not_found}
               end
             else
@@ -360,7 +356,7 @@ defmodule Platform.Chat do
       on: m.space_id == s.id and is_nil(m.deleted_at),
       where:
         p.participant_type == "user" and p.participant_id == ^user_id and
-          is_nil(p.left_at) and is_nil(s.archived_at),
+          is_nil(s.archived_at),
       group_by: s.id,
       order_by: [desc: fragment("COALESCE(MAX(?), ?)", m.inserted_at, s.inserted_at)],
       select: s
@@ -381,10 +377,7 @@ defmodule Platform.Chat do
   end
 
   def display_name_for_space(%Space{kind: "dm"}, participants, current_user_id) do
-    other =
-      Enum.find(participants, fn p ->
-        p.participant_id != current_user_id and is_nil(p.left_at)
-      end)
+    other = Enum.find(participants, fn p -> p.participant_id != current_user_id end)
 
     case other do
       %Participant{display_name: name} when is_binary(name) and name != "" -> name
@@ -395,7 +388,7 @@ defmodule Platform.Chat do
   def display_name_for_space(%Space{kind: "group"}, participants, current_user_id) do
     names =
       participants
-      |> Enum.filter(fn p -> p.participant_id != current_user_id and is_nil(p.left_at) end)
+      |> Enum.filter(fn p -> p.participant_id != current_user_id end)
       |> Enum.map(fn p -> p.display_name || "User" end)
 
     case names do
@@ -471,29 +464,17 @@ defmodule Platform.Chat do
   def get_participant(id), do: Repo.get(Participant, id)
 
   @doc """
-  List participants in a space.
-
-  By default only active participants (left_at IS NULL) are returned.
+  List participants in a space (ADR 0038: all rows are active).
 
   ## Options
 
     * `:participant_type` — filter by `"user"` or `"agent"`
-    * `:include_left`     — include participants who have left (default: `false`)
   """
   @spec list_participants(binary(), keyword()) :: [Participant.t()]
   def list_participants(space_id, opts \\ []) do
-    include_left = Keyword.get(opts, :include_left, false)
     participant_type = Keyword.get(opts, :participant_type)
 
-    base =
-      if include_left do
-        from(p in Participant, where: p.space_id == ^space_id, order_by: [asc: p.joined_at])
-      else
-        from(p in Participant,
-          where: p.space_id == ^space_id and is_nil(p.left_at),
-          order_by: [asc: p.joined_at]
-        )
-      end
+    base = from(p in Participant, where: p.space_id == ^space_id, order_by: [asc: p.joined_at])
 
     base =
       if participant_type do
@@ -549,76 +530,85 @@ defmodule Platform.Chat do
     end
   end
 
-  @doc "Soft-remove a participant by setting `left_at` to now."
+  @doc """
+  Hard-delete a participant row (ADR 0038). Messages/pins/canvases
+  authored by this participant survive via the author_* snapshot columns.
+
+  Returns `{:ok, participant}` with the deleted struct for backward
+  compatibility with callers that want telemetry on who was removed.
+  """
   @spec remove_participant(Participant.t()) ::
           {:ok, Participant.t()} | {:error, Ecto.Changeset.t()}
   def remove_participant(%Participant{} = participant) do
-    result =
-      participant
-      |> Participant.changeset(%{left_at: DateTime.utc_now()})
-      |> Repo.update()
-
-    case result do
-      {:ok, p} ->
+    case Repo.delete(participant) do
+      {:ok, deleted} ->
         :telemetry.execute(
           [:platform, :chat, :participant_removed],
           %{system_time: System.system_time()},
-          %{space_id: p.space_id, participant_id: p.id}
+          %{space_id: deleted.space_id, participant_id: deleted.id}
         )
 
-        ChatPubSub.broadcast(p.space_id, {:participant_left, p})
+        ChatPubSub.broadcast(deleted.space_id, {:participant_left, deleted})
+        {:ok, deleted}
 
-      _ ->
-        :ok
+      {:error, _} = error ->
+        error
     end
-
-    result
   end
 
   @doc """
-  Ensure an agent is an active participant in the space.
+  Insert an agent participant row for the space. Returns the existing row
+  if one already exists; otherwise inserts a fresh one. Never resurrects —
+  dismissal is durable, and `reinvite_mentioned_agents/1` is the only path
+  that brings a dismissed agent back (ADR 0038).
   """
-  @spec ensure_agent_participant(binary(), Agent.t() | binary(), keyword()) ::
+  @spec add_agent_participant(binary(), Agent.t() | binary(), keyword()) ::
           {:ok, Participant.t()} | {:error, term()}
-  def ensure_agent_participant(space_id, agent_or_id, opts \\ [])
+  def add_agent_participant(space_id, agent_or_id, opts \\ [])
 
-  def ensure_agent_participant(space_id, %Agent{} = agent, opts) do
-    display_name = Keyword.get(opts, :display_name, agent.name)
-    attention_mode = Keyword.get(opts, :attention_mode, "mention")
-    joined_at = Keyword.get(opts, :joined_at, DateTime.utc_now())
-
+  def add_agent_participant(space_id, %Agent{} = agent, opts) do
     case Repo.get_by(Participant,
            space_id: space_id,
            participant_type: "agent",
            participant_id: agent.id
          ) do
+      %Participant{} = existing ->
+        {:ok, existing}
+
       nil ->
         add_participant(space_id, %{
           participant_type: "agent",
           participant_id: agent.id,
-          display_name: display_name,
-          attention_mode: attention_mode,
-          joined_at: joined_at
-        })
-
-      %Participant{left_at: nil} = participant ->
-        {:ok, participant}
-
-      %Participant{} = participant ->
-        update_participant(participant, %{
-          left_at: nil,
-          display_name: display_name,
-          attention_mode: attention_mode,
-          joined_at: joined_at
+          display_name: Keyword.get(opts, :display_name, agent.name),
+          attention_mode: Keyword.get(opts, :attention_mode, "mention"),
+          joined_at: Keyword.get(opts, :joined_at, DateTime.utc_now())
         })
     end
   end
 
-  def ensure_agent_participant(space_id, agent_id, opts) when is_binary(agent_id) do
+  def add_agent_participant(space_id, agent_id, opts) when is_binary(agent_id) do
     case Repo.get(Agent, agent_id) do
-      %Agent{} = agent -> ensure_agent_participant(space_id, agent, opts)
+      %Agent{} = agent -> add_agent_participant(space_id, agent, opts)
       nil -> {:error, :not_found}
     end
+  end
+
+  @doc """
+  Strict participant lookup — returns the row if present or `nil`. Use
+  this in read paths (tool surface, runtime channel, responder context
+  load) where an agent calling without being in the space is an error to
+  surface, not a reason to auto-join.
+  """
+  @spec get_agent_participant(binary(), Agent.t() | binary()) :: Participant.t() | nil
+  def get_agent_participant(space_id, %Agent{id: agent_id}),
+    do: get_agent_participant(space_id, agent_id)
+
+  def get_agent_participant(space_id, agent_id) when is_binary(agent_id) do
+    Repo.get_by(Participant,
+      space_id: space_id,
+      participant_type: "agent",
+      participant_id: agent_id
+    )
   end
 
   # ── Messages ────────────────────────────────────────────────────────────────
@@ -631,6 +621,8 @@ defmodule Platform.Chat do
   """
   @spec post_message(map(), keyword()) :: {:ok, Message.t()} | {:error, Ecto.Changeset.t()}
   def post_message(attrs, opts \\ []) do
+    attrs = put_author_snapshot(attrs, :participant_id, :author)
+
     result =
       %Message{}
       |> Message.changeset(attrs)
@@ -638,6 +630,7 @@ defmodule Platform.Chat do
 
     case result do
       {:ok, msg} ->
+        reinvite_mentioned_agents(msg)
         publish_message_posted(msg, opts)
 
       _ ->
@@ -657,6 +650,8 @@ defmodule Platform.Chat do
           {:ok, Message.t(), [Attachment.t()]} | {:error, term()}
   def post_message_with_attachments(attrs, attachment_attrs_list, opts \\ [])
       when is_list(attachment_attrs_list) do
+    attrs = put_author_snapshot(attrs, :participant_id, :author)
+
     multi =
       Multi.new()
       |> Multi.insert(:message, Message.changeset(%Message{}, attrs))
@@ -682,6 +677,7 @@ defmodule Platform.Chat do
           |> Enum.sort_by(fn {{:attachment, index}, _value} -> index end)
           |> Enum.map(fn {_key, attachment} -> attachment end)
 
+        reinvite_mentioned_agents(message)
         publish_message_posted(message, opts)
         {:ok, message, attachments}
 
@@ -1170,6 +1166,8 @@ defmodule Platform.Chat do
   """
   @spec pin_message(map()) :: {:ok, Pin.t()} | {:error, Ecto.Changeset.t()}
   def pin_message(attrs) do
+    attrs = put_author_snapshot(attrs, :pinned_by, :pinned_by)
+
     result =
       %Pin{}
       |> Pin.changeset(attrs)
@@ -1243,7 +1241,10 @@ defmodule Platform.Chat do
   """
   @spec create_canvas(map()) :: {:ok, Canvas.t()} | {:error, Ecto.Changeset.t()}
   def create_canvas(attrs) do
-    attrs = stringify_canvas_payload(attrs)
+    attrs =
+      attrs
+      |> stringify_canvas_payload()
+      |> put_canvas_creator_snapshot()
 
     result =
       %Canvas{}
@@ -1268,6 +1269,7 @@ defmodule Platform.Chat do
           {:ok, Canvas.t(), Message.t()} | {:error, term()}
   def create_canvas_with_message(space_id, participant_id, attrs \\ %{}) do
     attrs = stringify_canvas_payload(attrs)
+    snapshot = author_snapshot_for(participant_id)
 
     multi =
       Multi.new()
@@ -1275,21 +1277,25 @@ defmodule Platform.Chat do
         attrs
         |> Map.put("space_id", space_id)
         |> Map.put("created_by", participant_id)
+        |> Map.put("created_by_display_name", snapshot[:author_display_name])
+        |> Map.put("created_by_participant_type", snapshot[:author_participant_type])
         |> then(&Canvas.changeset(%Canvas{}, &1))
         |> repo.insert()
       end)
       |> Multi.run(:message, fn repo, %{canvas: canvas} ->
-        message_attrs = %{
-          space_id: space_id,
-          participant_id: participant_id,
-          canvas_id: canvas.id,
-          content_type: "canvas",
-          content: Map.get(attrs, "message_content") || default_canvas_message(attrs),
-          structured_content: %{
-            "canvas_id" => canvas.id,
-            "title" => Map.get(attrs, "title")
+        message_attrs =
+          %{
+            space_id: space_id,
+            participant_id: participant_id,
+            canvas_id: canvas.id,
+            content_type: "canvas",
+            content: Map.get(attrs, "message_content") || default_canvas_message(attrs),
+            structured_content: %{
+              "canvas_id" => canvas.id,
+              "title" => Map.get(attrs, "title")
+            }
           }
-        }
+          |> Map.merge(snapshot)
 
         %Message{}
         |> Message.changeset(message_attrs)
@@ -1588,73 +1594,234 @@ defmodule Platform.Chat do
 
   defp stringify_canvas_payload(value), do: value
 
+  # ── Mention-based reinvite (ADR 0038) ──────────────────────────────────────
+  #
+  # An @-mention of an agent who isn't currently an active participant brings
+  # them back. This is the ONLY path that should resurrect a dismissed agent
+  # — the contract the product owner wants is "dismiss = gone; @mention = back".
+  # Agents must be on the space's roster; we don't add agents out of thin air.
+
+  defp reinvite_mentioned_agents(%Message{space_id: space_id, content: content})
+       when is_binary(content) and content != "" do
+    {bracketed, _legacy_zone} =
+      Platform.Chat.AttentionRouter.extract_bracketed_tokens(String.downcase(content))
+
+    case bracketed do
+      [] ->
+        :ok
+
+      tokens ->
+        # Any active agent in the space's workspace is eligible. Match by
+        # slug OR display name (case-insensitive). Currently-present
+        # participants are handled by the attention router; this path only
+        # fires an insert-if-missing, so already-present agents are no-ops.
+        workspace_id =
+          Repo.get(Space, space_id)
+          |> case do
+            %Space{workspace_id: wid} -> wid
+            _ -> nil
+          end
+
+        from(a in Platform.Agents.Agent, where: a.status != "archived")
+        |> maybe_scope_to_workspace(workspace_id)
+        |> Repo.all()
+        |> Enum.each(fn agent ->
+          slug = String.downcase(agent.slug || "")
+          name = String.downcase(agent.name || "")
+
+          if slug in tokens or name in tokens do
+            reinstate_on_mention(space_id, agent)
+          end
+        end)
+
+        :ok
+    end
+  end
+
+  # Single-tenant/default-org setups leave `workspace_id: nil` on both
+  # agents and spaces; in that case skip the scope filter and trust the
+  # name-match. Otherwise, scope to the space's workspace.
+  defp maybe_scope_to_workspace(query, nil), do: query
+
+  defp maybe_scope_to_workspace(query, workspace_id) do
+    from(a in query, where: a.workspace_id == ^workspace_id or is_nil(a.workspace_id))
+  end
+
+  defp reinvite_mentioned_agents(_), do: :ok
+
+  # Mention-reinvite. Post-ADR-0038 there's no soft-dismissed state —
+  # either the row exists (already in the space) or it doesn't (dismissed
+  # and hard-deleted). So "reinvite" is just an add-if-missing.
+  defp reinstate_on_mention(space_id, %Platform.Agents.Agent{} = agent) do
+    case add_agent_participant(space_id, agent, attention_mode: "mention") do
+      {:ok, _} -> :ok
+      _ -> :ok
+    end
+  end
+
+  # ── Author snapshots (ADR 0038) ────────────────────────────────────────────
+  #
+  # Snapshot the authoring participant's identity onto the owning row so
+  # rendering never depends on the participant still existing. If the
+  # caller already supplied snapshot fields, they're preserved.
+
+  defp put_author_snapshot(attrs, source_key, role) do
+    pid = fetch_map(attrs, source_key)
+
+    cond do
+      already_snapshotted?(attrs, role) ->
+        attrs
+
+      is_binary(pid) ->
+        Map.merge(snapshot_map(author_snapshot_for(pid), role), attrs)
+
+      true ->
+        attrs
+    end
+  end
+
+  defp put_canvas_creator_snapshot(attrs) do
+    cond do
+      Map.get(attrs, "created_by_display_name") not in [nil, ""] ->
+        attrs
+
+      is_binary(Map.get(attrs, "created_by")) ->
+        snap = author_snapshot_for(Map.get(attrs, "created_by"))
+
+        attrs
+        |> Map.put("created_by_display_name", snap[:author_display_name])
+        |> Map.put("created_by_participant_type", snap[:author_participant_type])
+
+      true ->
+        attrs
+    end
+  end
+
+  defp author_snapshot_for(participant_id) when is_binary(participant_id) do
+    case Repo.get(Participant, participant_id) do
+      %Participant{} = p ->
+        %{
+          author_display_name: p.display_name,
+          author_avatar_url: p.avatar_url,
+          author_participant_type: p.participant_type,
+          author_agent_id: if(p.participant_type == "agent", do: p.participant_id),
+          author_user_id: if(p.participant_type == "user", do: p.participant_id)
+        }
+
+      nil ->
+        %{}
+    end
+  end
+
+  defp author_snapshot_for(_), do: %{}
+
+  # Translate the canonical `:author_*` shape into role-specific keys. The
+  # message path uses `author_*` directly; pins use `pinned_by_*`.
+  defp snapshot_map(snap, :author), do: snap
+
+  defp snapshot_map(snap, :pinned_by) do
+    %{
+      pinned_by_display_name: snap[:author_display_name],
+      pinned_by_participant_type: snap[:author_participant_type]
+    }
+  end
+
+  defp already_snapshotted?(attrs, :author) do
+    fetch_map(attrs, :author_display_name) not in [nil, ""]
+  end
+
+  defp already_snapshotted?(attrs, :pinned_by) do
+    fetch_map(attrs, :pinned_by_display_name) not in [nil, ""]
+  end
+
+  defp fetch_map(map, key) when is_map(map) do
+    Map.get(map, key) || Map.get(map, Atom.to_string(key))
+  end
+
+  defp fetch_map(_, _), do: nil
+
   # ── Space Agent Roster ──────────────────────────────────────────────────────
+  #
+  # ADR 0038 Phase 5 unified the roster into `chat_participants`. There is
+  # no separate `chat_space_agents` table anymore; `participant.role`
+  # carries `principal | member | admin | observer` for agent rows, and
+  # membership is just the presence of the row.
+  #
+  # The helpers below return maps shaped `%{agent_id, role, agent}` for
+  # backward compatibility with UI and roster-status callers.
+
+  @type roster_entry :: %{
+          required(:agent_id) => binary(),
+          required(:role) => String.t(),
+          required(:agent) => Agent.t() | nil,
+          required(:inserted_at) => DateTime.t() | nil
+        }
 
   @doc """
-  Set the principal agent for a space.
-
-  Atomically removes any existing principal and sets the new one.
-  If the agent already exists in the roster, promotes it; otherwise inserts.
+  Set the principal agent for a space. Demotes any existing principal to
+  `member` and promotes the target (inserting a participant row if needed).
   """
   @spec set_principal_agent(binary(), binary()) ::
-          {:ok, SpaceAgent.t()} | {:error, term()}
+          {:ok, roster_entry()} | {:error, term()}
   def set_principal_agent(space_id, agent_id) do
     Multi.new()
     |> Multi.run(:demote_existing, fn repo, _changes ->
-      case repo.get_by(SpaceAgent, space_id: space_id, role: "principal") do
+      case repo.get_by(Participant,
+             space_id: space_id,
+             participant_type: "agent",
+             role: "principal"
+           ) do
         nil ->
           {:ok, nil}
 
-        %SpaceAgent{agent_id: ^agent_id} = existing ->
-          # Already principal — no-op for demotion
+        %Participant{participant_id: ^agent_id} = existing ->
           {:ok, existing}
 
-        %SpaceAgent{} = existing ->
+        %Participant{} = existing ->
           existing
-          |> SpaceAgent.changeset(%{role: "member"})
+          |> Participant.changeset(%{role: "member"})
           |> repo.update()
       end
     end)
     |> Multi.run(:promote, fn repo, %{demote_existing: demoted} ->
       case demoted do
-        %SpaceAgent{agent_id: ^agent_id} ->
-          # Already principal
+        %Participant{participant_id: ^agent_id} ->
           {:ok, demoted}
 
         _ ->
-          case repo.get_by(SpaceAgent, space_id: space_id, agent_id: agent_id) do
-            nil ->
-              %SpaceAgent{}
-              |> SpaceAgent.changeset(%{
-                space_id: space_id,
-                agent_id: agent_id,
-                role: "principal"
-              })
-              |> repo.insert()
-
-            %SpaceAgent{} = existing ->
+          case repo.get_by(Participant,
+                 space_id: space_id,
+                 participant_type: "agent",
+                 participant_id: agent_id
+               ) do
+            %Participant{} = existing ->
               existing
-              |> SpaceAgent.changeset(%{role: "principal"})
+              |> Participant.changeset(%{role: "principal"})
               |> repo.update()
+
+            nil ->
+              case Repo.get(Agent, agent_id) do
+                %Agent{} = agent ->
+                  add_participant(space_id, %{
+                    participant_type: "agent",
+                    participant_id: agent.id,
+                    display_name: agent.name,
+                    role: "principal",
+                    attention_mode: "all",
+                    joined_at: DateTime.utc_now()
+                  })
+
+                nil ->
+                  {:error, :agent_not_found}
+              end
           end
       end
     end)
     |> Repo.transaction()
     |> case do
-      {:ok, %{promote: space_agent}} ->
-        :telemetry.execute(
-          [:platform, :chat, :agent_roster_changed],
-          %{system_time: System.system_time()},
-          %{space_id: space_id, agent_id: agent_id, action: :set_principal}
-        )
-
-        Phoenix.PubSub.broadcast(
-          Platform.PubSub,
-          "space_agents:#{space_id}",
-          {:roster_changed, space_id}
-        )
-
-        {:ok, space_agent}
+      {:ok, %{promote: %Participant{} = participant}} ->
+        broadcast_roster_changed(space_id, agent_id, :set_principal)
+        {:ok, participant_to_roster_entry(participant)}
 
       {:error, _step, reason, _} ->
         {:error, reason}
@@ -1662,134 +1829,161 @@ defmodule Platform.Chat do
   end
 
   @doc """
-  Add an agent to a space's roster.
+  Add an agent to a space's roster. Idempotent insert; if the agent is
+  already a participant the existing row is returned unchanged.
 
   ## Options
 
     * `:role` — `"member"` (default) or `"principal"`
   """
   @spec add_space_agent(binary(), binary(), keyword()) ::
-          {:ok, SpaceAgent.t()} | {:error, term()}
+          {:ok, roster_entry()} | {:error, term()}
   def add_space_agent(space_id, agent_id, opts \\ []) do
     role = Keyword.get(opts, :role, "member")
 
-    result =
-      %SpaceAgent{}
-      |> SpaceAgent.changeset(%{space_id: space_id, agent_id: agent_id, role: role})
-      |> Repo.insert()
+    cond do
+      role == "principal" ->
+        set_principal_agent(space_id, agent_id)
 
-    case result do
-      {:ok, sa} ->
-        :telemetry.execute(
-          [:platform, :chat, :agent_roster_changed],
-          %{system_time: System.system_time()},
-          %{space_id: space_id, agent_id: agent_id, action: :added}
-        )
+      true ->
+        case Repo.get(Agent, agent_id) do
+          nil ->
+            {:error, :agent_not_found}
 
-        Phoenix.PubSub.broadcast(
-          Platform.PubSub,
-          "space_agents:#{space_id}",
-          {:roster_changed, space_id}
-        )
+          %Agent{} = agent ->
+            case add_agent_participant(space_id, agent,
+                   display_name: agent.name,
+                   joined_at: DateTime.utc_now()
+                 ) do
+              {:ok, participant} ->
+                broadcast_roster_changed(space_id, agent_id, :added)
+                {:ok, participant_to_roster_entry(participant)}
 
-        {:ok, sa}
-
-      error ->
-        error
+              error ->
+                error
+            end
+        end
     end
   end
 
-  @doc "Remove an agent from a space entirely (hard delete)."
+  @doc "Remove an agent from a space entirely (hard delete, ADR 0038)."
   @spec remove_space_agent(binary(), binary()) :: :ok | {:error, :not_found}
   def remove_space_agent(space_id, agent_id) do
-    case Repo.get_by(SpaceAgent, space_id: space_id, agent_id: agent_id) do
+    case get_agent_participant(space_id, agent_id) do
       nil ->
         {:error, :not_found}
 
-      %SpaceAgent{} = sa ->
-        Repo.delete!(sa)
-
-        :telemetry.execute(
-          [:platform, :chat, :agent_roster_changed],
-          %{system_time: System.system_time()},
-          %{space_id: space_id, agent_id: agent_id, action: :removed}
-        )
-
-        Phoenix.PubSub.broadcast(
-          Platform.PubSub,
-          "space_agents:#{space_id}",
-          {:roster_changed, space_id}
-        )
-
+      %Participant{} = participant ->
+        {:ok, _} = Repo.delete(participant)
+        broadcast_roster_changed(space_id, agent_id, :removed)
         :ok
     end
   end
 
   @doc """
-  Ensure an agent exists in a space's roster.
-
-  This is idempotent:
-  - `role: "principal"` promotes the agent to principal via `set_principal_agent/2`
-  - `role: "member"` inserts a member row if missing, otherwise returns the
-    existing roster entry without demoting a principal
+  Ensure an agent is on a space's roster. Idempotent.
+  `:role` controls whether the ensure also promotes to principal.
   """
   @spec ensure_space_agent(binary(), binary(), keyword()) ::
-          {:ok, SpaceAgent.t()} | {:error, term()}
+          {:ok, roster_entry()} | {:error, term()}
   def ensure_space_agent(space_id, agent_id, opts \\ []) do
     role = Keyword.get(opts, :role, "member")
 
-    case role do
-      "principal" ->
+    case {role, get_agent_participant(space_id, agent_id)} do
+      {"principal", _} ->
         set_principal_agent(space_id, agent_id)
 
-      _ ->
-        case Repo.get_by(SpaceAgent, space_id: space_id, agent_id: agent_id) do
-          %SpaceAgent{} = existing -> {:ok, existing}
-          nil -> add_space_agent(space_id, agent_id, role: "member")
-        end
+      {_, %Participant{} = existing} ->
+        {:ok, participant_to_roster_entry(existing)}
+
+      {_, nil} ->
+        add_space_agent(space_id, agent_id, role: "member")
     end
   end
 
-  # ADR 0027: dismiss_space_agent/3 and reinvite_space_agent/2 removed.
-  # The 'dismissed' role no longer exists — use remove_space_agent/2 instead.
-
-  @doc "List all agents in a space's roster, with preloaded agent data."
-  @spec list_space_agents(binary()) :: [SpaceAgent.t()]
+  @doc "List all agents in a space's roster with agent preloaded."
+  @spec list_space_agents(binary()) :: [roster_entry()]
   def list_space_agents(space_id) do
-    from(sa in SpaceAgent,
-      where: sa.space_id == ^space_id,
-      preload: [:agent],
-      order_by: [asc: sa.inserted_at]
-    )
-    |> Repo.all()
+    participants =
+      from(p in Participant,
+        where: p.space_id == ^space_id and p.participant_type == "agent",
+        order_by: [asc: p.joined_at]
+      )
+      |> Repo.all()
+
+    preload_roster_entries(participants)
   end
 
   @doc "Get the principal agent for a space. Returns `nil` if none set."
-  @spec get_principal_agent(binary()) :: SpaceAgent.t() | nil
+  @spec get_principal_agent(binary()) :: roster_entry() | nil
   def get_principal_agent(space_id) do
-    from(sa in SpaceAgent,
-      where: sa.space_id == ^space_id and sa.role == "principal",
-      preload: [:agent],
-      limit: 1
-    )
-    |> Repo.one()
+    case Repo.one(
+           from(p in Participant,
+             where:
+               p.space_id == ^space_id and
+                 p.participant_type == "agent" and
+                 p.role == "principal",
+             limit: 1
+           )
+         ) do
+      nil -> nil
+      %Participant{} = p -> preload_roster_entries([p]) |> List.first()
+    end
   end
 
-  @doc "Get a specific space agent entry."
-  @spec get_space_agent(binary(), binary()) :: SpaceAgent.t() | nil
+  @doc "Get a specific space-agent roster entry, or `nil` if not present."
+  @spec get_space_agent(binary(), binary()) :: roster_entry() | nil
   def get_space_agent(space_id, agent_id) do
-    Repo.get_by(SpaceAgent, space_id: space_id, agent_id: agent_id)
+    case get_agent_participant(space_id, agent_id) do
+      nil -> nil
+      %Participant{} = p -> preload_roster_entries([p]) |> List.first()
+    end
   end
 
-  @doc "List all agents in a space's roster (all roles are active now — ADR 0027)."
-  @spec list_active_space_agents(binary()) :: [SpaceAgent.t()]
-  def list_active_space_agents(space_id) do
-    from(sa in SpaceAgent,
-      where: sa.space_id == ^space_id,
-      preload: [:agent],
-      order_by: [asc: sa.inserted_at]
+  @doc "Alias kept for call sites that still use the older name."
+  @spec list_active_space_agents(binary()) :: [roster_entry()]
+  def list_active_space_agents(space_id), do: list_space_agents(space_id)
+
+  defp preload_roster_entries([]), do: []
+
+  defp preload_roster_entries(participants) do
+    agent_ids = Enum.map(participants, & &1.participant_id) |> Enum.uniq()
+
+    agents_by_id =
+      Repo.all(from(a in Agent, where: a.id in ^agent_ids))
+      |> Map.new(&{&1.id, &1})
+
+    Enum.map(participants, fn p ->
+      %{
+        agent_id: p.participant_id,
+        role: p.role,
+        agent: Map.get(agents_by_id, p.participant_id),
+        inserted_at: p.joined_at
+      }
+    end)
+  end
+
+  defp participant_to_roster_entry(%Participant{} = p) do
+    %{
+      agent_id: p.participant_id,
+      role: p.role,
+      agent: Repo.get(Agent, p.participant_id),
+      inserted_at: p.joined_at
+    }
+  end
+
+  defp broadcast_roster_changed(space_id, agent_id, action) do
+    :telemetry.execute(
+      [:platform, :chat, :agent_roster_changed],
+      %{system_time: System.system_time()},
+      %{space_id: space_id, agent_id: agent_id, action: action}
     )
-    |> Repo.all()
+
+    Phoenix.PubSub.broadcast(
+      Platform.PubSub,
+      "space_agents:#{space_id}",
+      {:roster_changed, space_id}
+    )
   end
 
   # ── Unread counts ──────────────────────────────────────────────────────────
@@ -1811,9 +2005,7 @@ defmodule Platform.Chat do
   @spec unread_counts_for_user(binary()) :: %{binary() => non_neg_integer()}
   def unread_counts_for_user(user_id) do
     from(p in Participant,
-      where:
-        p.participant_id == ^user_id and is_nil(p.left_at) and
-          p.participant_type == "user",
+      where: p.participant_id == ^user_id and p.participant_type == "user",
       select: {p.space_id, p.last_read_message_id, p.id}
     )
     |> Repo.all()

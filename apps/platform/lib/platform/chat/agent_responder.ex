@@ -286,8 +286,8 @@ defmodule Platform.Chat.AgentResponder do
          %Participant{} = author <- Chat.get_participant(message.participant_id),
          :ok <- check_agent_loop(author, participant_id, space_id),
          %Agent{} = agent <- Repo.get(Agent, participant.participant_id),
-         {:ok, active_agent_participant} <-
-           Chat.ensure_agent_participant(space_id, agent, display_name: agent.name),
+         %Participant{} = active_agent_participant <-
+           Chat.get_agent_participant(space_id, agent),
          history <- build_history(space_id, message, active_agent_participant.id) do
       {:ok,
        %{
@@ -325,10 +325,6 @@ defmodule Platform.Chat.AgentResponder do
   end
 
   defp build_history(space_id, %Message{} = message, agent_participant_id) do
-    participants =
-      Chat.list_participants(space_id, include_left: true)
-      |> Map.new(fn participant -> {participant.id, participant} end)
-
     opts =
       if is_binary(message.thread_id) do
         [thread_id: message.thread_id, limit: @history_limit]
@@ -341,16 +337,19 @@ defmodule Platform.Chat.AgentResponder do
     |> Enum.reject(&(&1.id == message.id))
     |> Enum.sort_by(& &1.inserted_at, fn left, right -> DateTime.compare(left, right) != :gt end)
     |> Enum.flat_map(fn item ->
-      case history_message(item, participants, agent_participant_id) do
+      case history_message(item, agent_participant_id) do
         nil -> []
         entry -> [entry]
       end
     end)
   end
 
+  # Author role + display name come off the message's author snapshot
+  # (ADR 0038). We no longer need a live participants map — the whole
+  # point of the snapshot is that dismissed/re-added authors still read
+  # cleanly from the message row.
   defp history_message(
          %Message{content_type: "text", content: content} = message,
-         participants,
          agent_id
        )
        when is_binary(content) do
@@ -359,26 +358,25 @@ defmodule Platform.Chat.AgentResponder do
     if trimmed == "" do
       nil
     else
-      participant = Map.get(participants, message.participant_id)
-
       role =
-        if message.participant_id == agent_id, do: "assistant", else: history_role(participant)
+        cond do
+          message.participant_id == agent_id -> "assistant"
+          message.author_participant_type == "agent" -> "assistant"
+          true -> "user"
+        end
 
-      %{role: role, content: history_content(trimmed, participant, role)}
+      %{role: role, content: history_content(trimmed, message, role)}
     end
   end
 
-  defp history_message(_message, _participants, _agent_id), do: nil
+  defp history_message(_message, _agent_id), do: nil
 
-  defp history_role(%Participant{participant_type: "agent"}), do: "assistant"
-  defp history_role(_participant), do: "user"
-
-  defp history_content(content, %Participant{display_name: name}, "user")
+  defp history_content(content, %Message{author_display_name: name}, "user")
        when is_binary(name) and name != "" do
     "#{name}: #{content}"
   end
 
-  defp history_content(content, _participant, _role), do: content
+  defp history_content(content, _message, _role), do: content
 
   defp build_external_signal(signal, space_id), do: build_external_signal(signal, space_id, nil)
 

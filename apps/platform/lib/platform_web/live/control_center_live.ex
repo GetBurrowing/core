@@ -336,7 +336,7 @@ defmodule PlatformWeb.ControlCenterLive do
       ) do
     attention_mode = if role == "principal", do: "all", else: "mention"
 
-    case Platform.Chat.ensure_agent_participant(space_id, agent, attention_mode: attention_mode) do
+    case Platform.Chat.add_agent_participant(space_id, agent, attention_mode: attention_mode) do
       {:ok, _participant} ->
         case Platform.Chat.ensure_space_agent(space_id, agent.id, role: role) do
           {:ok, _space_agent} ->

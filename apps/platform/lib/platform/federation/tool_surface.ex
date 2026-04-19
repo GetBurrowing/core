@@ -359,7 +359,7 @@ defmodule Platform.Federation.ToolSurface do
       %{
         name: "space_leave",
         description:
-          "Remove an agent from a Suite space. Defaults to removing the calling agent (self-leave). Pass `agent_id` to remove a different agent — for example if you were asked to evict another agent who shouldn't be present. Soft-leave: the participant record is kept with `left_at` set, so message history is preserved. Useful when an agent was invited by accident — especially to a DM where `directed` attention would otherwise keep the agent listening forever.",
+          "Remove an agent from a Suite space. Defaults to removing the calling agent (self-leave). Pass `agent_id` to remove a different agent — for example if you were asked to evict another agent who shouldn't be present. Hard-delete: the participant row is removed. Message history stays attributed via author-identity snapshots on each message (ADR 0038). To return, a user needs to @-mention the agent in a new message.",
         parameters: %{
           space_id: %{type: "string", required: true, description: "UUID of the Suite space"},
           agent_id: %{
@@ -370,9 +370,9 @@ defmodule Platform.Federation.ToolSurface do
           }
         },
         returns:
-          "`{space_id, agent_id, participant_id, removed: true, left_at}` on success. If the target was the active-agent mutex holder, the mutex is cleared as a side effect.",
+          "`{space_id, agent_id, participant_id, removed: true, removed_at, self_removed}` on success. If the target was the active-agent mutex holder, the mutex is cleared as a side effect.",
         limitations:
-          "Only removes agent participants (not humans). Target must currently be an active participant (left_at IS NULL) in the space. If the target is the principal agent of an execution space with a live task, the space's task will orphan until re-assigned — use deliberately.",
+          "Only removes agent participants (not humans). Target must currently be a participant in the space. If the target is the principal agent of an execution space with a live task, the space's task will orphan until re-assigned — use deliberately.",
         when_to_use:
           "When you were invited to a space you shouldn't be in (e.g. a private DM you're stuck listening to), or when asked to remove another agent who shouldn't be present."
       }
@@ -1299,14 +1299,14 @@ defmodule Platform.Federation.ToolSurface do
                    agent_id: target_agent_id,
                    participant_id: removed.id,
                    removed: true,
-                   left_at: removed.left_at,
+                   removed_at: DateTime.utc_now(),
                    self_removed: target_agent_id == calling_agent_id
                  }}
 
-              {:error, changeset} ->
+              {:error, reason} ->
                 {:error,
                  %{
-                   error: "Failed to remove participant: #{inspect(changeset.errors)}",
+                   error: "Failed to remove participant: #{inspect(reason)}",
                    recoverable: true,
                    suggestion: "Retry; if this persists the participant record may be corrupt"
                  }}
@@ -1315,16 +1315,16 @@ defmodule Platform.Federation.ToolSurface do
     end
   end
 
-  # Returns the active (left_at IS NULL) agent-participant record for `agent_id`
-  # in `space_id`, or nil if none. Scoped to participant_type="agent" so this
-  # helper cannot accidentally remove a human participant with the same UUID.
+  # Look up the agent's participant row in a space. Post-ADR-0038 there is
+  # no dismissed-but-present state — the row exists iff the agent is in the
+  # space. Scoped to participant_type="agent" so a user participant with a
+  # colliding UUID can't be matched here.
   defp find_active_agent_participant(space_id, agent_id) do
     from(p in Participant,
       where:
         p.space_id == ^space_id and
           p.participant_id == ^agent_id and
-          p.participant_type == "agent" and
-          is_nil(p.left_at)
+          p.participant_type == "agent"
     )
     |> Repo.one()
   end
@@ -2712,21 +2712,14 @@ defmodule Platform.Federation.ToolSurface do
          }}
 
       true ->
-        participant =
-          Repo.get_by(Chat.Participant,
-            space_id: space_id,
-            participant_type: "agent",
-            participant_id: agent_id
-          )
-
-        case participant do
-          %{left_at: nil} ->
+        case Chat.get_agent_participant(space_id, agent_id) do
+          %Chat.Participant{} ->
             :ok
 
           _ ->
             {:error,
              %{
-               error: "Access denied: agent is not an active participant in space #{space_id}",
+               error: "Access denied: agent is not a participant in space #{space_id}",
                recoverable: false,
                suggestion: "Use space_list to find spaces the agent has access to"
              }}
@@ -2738,8 +2731,8 @@ defmodule Platform.Federation.ToolSurface do
     agent_id = Map.get(context, :agent_id)
 
     if agent_id && space_id do
-      case Chat.ensure_agent_participant(space_id, agent_id) do
-        {:ok, participant} -> participant.id
+      case Chat.get_agent_participant(space_id, agent_id) do
+        %Chat.Participant{id: id} -> id
         _ -> nil
       end
     end

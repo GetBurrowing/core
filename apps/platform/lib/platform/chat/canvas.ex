@@ -24,6 +24,10 @@ defmodule Platform.Chat.Canvas do
     field(:metadata, :map, default: %{})
     field(:deleted_at, :utc_datetime_usec)
 
+    # Creator identity snapshot (ADR 0038). See Message schema.
+    field(:created_by_display_name, :string)
+    field(:created_by_participant_type, :string)
+
     timestamps(type: :utc_datetime_usec)
   end
 
@@ -36,7 +40,9 @@ defmodule Platform.Chat.Canvas do
       :title,
       :document,
       :metadata,
-      :deleted_at
+      :deleted_at,
+      :created_by_display_name,
+      :created_by_participant_type
     ])
     |> validate_required([:space_id, :created_by])
     |> validate_document()

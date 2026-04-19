@@ -575,15 +575,13 @@
           <div class="flex-shrink-0 mt-0.5 message-avatar">
             <%= if MapSet.member?(@agent_participant_ids, msg.participant_id) do %>
               <div class="w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold select-none bg-base-300 text-primary msg-agent-avatar">
-                {PresenceHooks.avatar_initial(@participants_map, msg.participant_id)}
+                {PresenceHooks.avatar_initial(@participants_map, msg)}
               </div>
             <% else %>
               <.human_avatar
-                name={PresenceHooks.sender_name(@participants_map, msg.participant_id)}
-                avatar_url={
-                  PresenceHooks.sender_avatar_url(@participants_map, msg.participant_id)
-                }
-                seed={PresenceHooks.sender_avatar_seed(@participants_map, msg.participant_id)}
+                name={PresenceHooks.sender_name(@participants_map, msg)}
+                avatar_url={PresenceHooks.sender_avatar_url(@participants_map, msg)}
+                seed={PresenceHooks.sender_avatar_seed(@participants_map, msg)}
                 size="md"
               />
             <% end %>
@@ -599,7 +597,7 @@
                   else: "text-base-content"
                 )
               ]}>
-                {PresenceHooks.sender_name(@participants_map, msg.participant_id)}
+                {PresenceHooks.sender_name(@participants_map, msg)}
                 <span
                   :if={MapSet.member?(@agent_participant_ids, msg.participant_id)}
                   class="msg-agent-badge"
@@ -861,7 +859,7 @@
                           do: "ai-name"
                         )
                       ]}>
-                        {PresenceHooks.sender_name(@participants_map, tmsg.participant_id)}
+                        {PresenceHooks.sender_name(@participants_map, tmsg)}
                       </span>
                       <span
                         :if={MapSet.member?(@agent_participant_ids, tmsg.participant_id)}

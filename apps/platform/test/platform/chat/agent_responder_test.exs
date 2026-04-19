@@ -85,11 +85,10 @@ defmodule Platform.Chat.AgentResponderTest do
       content: "hello"
     }
 
-    {:ok, message} =
-      %Message{}
-      |> Message.changeset(Map.merge(defaults, attrs))
-      |> Repo.insert()
-
+    # Go through Chat.post_message so author_* snapshots get populated
+    # (ADR 0038). Historical tests that asserted on prefixed history
+    # content depended on the snapshot being set.
+    {:ok, message} = Platform.Chat.post_message(Map.merge(defaults, attrs))
     message
   end
 
@@ -104,7 +103,7 @@ defmodule Platform.Chat.AgentResponderTest do
       agent = create_agent()
 
       {:ok, agent_participant} =
-        Chat.ensure_agent_participant(space.id, agent, display_name: "Zip")
+        Chat.add_agent_participant(space.id, agent, display_name: "Zip")
 
       message = create_message(space.id, user.id, %{content: "hey @zip can you help?"})
 
@@ -132,7 +131,7 @@ defmodule Platform.Chat.AgentResponderTest do
       agent = create_agent(%{slug: "main-2", name: "Zip"})
 
       {:ok, agent_participant} =
-        Chat.ensure_agent_participant(space.id, agent, display_name: "Zip")
+        Chat.add_agent_participant(space.id, agent, display_name: "Zip")
 
       _older_user = create_message(space.id, user.id, %{content: "Earlier context"})
       _older_agent = create_message(space.id, agent_participant.id, %{content: "Previous reply"})

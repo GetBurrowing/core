@@ -447,8 +447,8 @@ defmodule PlatformWeb.RuntimeChannel do
     if is_nil(agent_id) or is_nil(space_id) do
       nil
     else
-      case Chat.ensure_agent_participant(space_id, agent_id) do
-        {:ok, participant} -> participant.id
+      case Chat.get_agent_participant(space_id, agent_id) do
+        %Chat.Participant{id: id} -> id
         _ -> nil
       end
     end

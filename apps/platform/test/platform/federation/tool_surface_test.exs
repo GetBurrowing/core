@@ -591,10 +591,10 @@ defmodule Platform.Federation.ToolSurfaceTest do
       space = create_space(%{name: "Engineering"})
 
       {:ok, higgins_p} =
-        Chat.ensure_agent_participant(space.id, higgins, display_name: "Higgins")
+        Chat.add_agent_participant(space.id, higgins, display_name: "Higgins")
 
       {:ok, _geordi_p} =
-        Chat.ensure_agent_participant(space.id, geordi, display_name: "Geordi")
+        Chat.add_agent_participant(space.id, geordi, display_name: "Geordi")
 
       {:ok, rows} = ToolSurface.execute("space_list_agents", %{"space_id" => space.id}, %{})
 
@@ -612,8 +612,8 @@ defmodule Platform.Federation.ToolSurfaceTest do
       geordi = create_agent(%{name: "Geordi"})
       space = create_space(%{name: "Mixed"})
 
-      {:ok, _} = Chat.ensure_agent_participant(space.id, higgins, display_name: "Higgins")
-      {:ok, geordi_p} = Chat.ensure_agent_participant(space.id, geordi, display_name: "Geordi")
+      {:ok, _} = Chat.add_agent_participant(space.id, higgins, display_name: "Higgins")
+      {:ok, geordi_p} = Chat.add_agent_participant(space.id, geordi, display_name: "Geordi")
 
       # Human participant — uses a raw UUID, no corresponding agent row.
       human_user_id = Ecto.UUID.generate()
@@ -649,7 +649,7 @@ defmodule Platform.Federation.ToolSurfaceTest do
       space = create_space(%{name: "DM Stuck", kind: "dm", slug: unique_slug()})
 
       {:ok, participant} =
-        Chat.ensure_agent_participant(space.id, agent, display_name: agent.name)
+        Chat.add_agent_participant(space.id, agent, display_name: agent.name)
 
       {:ok, result} =
         ToolSurface.execute("space_leave", %{"space_id" => space.id}, %{agent_id: agent.id})
@@ -659,10 +659,10 @@ defmodule Platform.Federation.ToolSurfaceTest do
       assert result.participant_id == participant.id
       assert result.removed == true
       assert result.self_removed == true
-      assert %DateTime{} = result.left_at
+      assert %DateTime{} = result.removed_at
 
-      reloaded = Repo.reload!(participant)
-      assert reloaded.left_at != nil
+      # Hard-delete (ADR 0038): the row is gone.
+      assert Chat.get_agent_participant(space.id, agent.id) == nil
     end
 
     test "space_leave removes a different agent when agent_id is provided" do
@@ -673,10 +673,10 @@ defmodule Platform.Federation.ToolSurfaceTest do
       space = create_space(%{name: "Engineering"})
 
       {:ok, _higgins_p} =
-        Chat.ensure_agent_participant(space.id, higgins, display_name: "Higgins")
+        Chat.add_agent_participant(space.id, higgins, display_name: "Higgins")
 
       {:ok, geordi_p} =
-        Chat.ensure_agent_participant(space.id, geordi, display_name: "Geordi")
+        Chat.add_agent_participant(space.id, geordi, display_name: "Geordi")
 
       {:ok, result} =
         ToolSurface.execute(
@@ -689,7 +689,7 @@ defmodule Platform.Federation.ToolSurfaceTest do
       assert result.participant_id == geordi_p.id
       assert result.self_removed == false
 
-      assert Repo.reload!(geordi_p).left_at != nil
+      assert Chat.get_agent_participant(space.id, geordi.id) == nil
       # Caller stays put.
       refute Chat.list_participants(space.id) |> Enum.any?(&(&1.participant_id == geordi.id))
       assert Chat.list_participants(space.id) |> Enum.any?(&(&1.participant_id == higgins.id))
@@ -721,7 +721,7 @@ defmodule Platform.Federation.ToolSurfaceTest do
 
       # Try to target the human's participant_id — the helper filters on
       # participant_type="agent", so this should come back with not-found
-      # rather than actually soft-leaving the human.
+      # rather than actually removing the human.
       {:error, error} =
         ToolSurface.execute(
           "space_leave",
@@ -730,7 +730,8 @@ defmodule Platform.Federation.ToolSurfaceTest do
         )
 
       assert error.error =~ "not an active participant"
-      assert Repo.reload!(human).left_at == nil
+      # Human is still a participant.
+      assert Repo.reload!(human)
     end
 
     test "space_leave is idempotent — already-left participants return not-found" do
@@ -739,17 +740,17 @@ defmodule Platform.Federation.ToolSurfaceTest do
       agent = create_agent()
       space = create_space()
 
-      {:ok, participant} =
-        Chat.ensure_agent_participant(space.id, agent, display_name: agent.name)
+      {:ok, _participant} =
+        Chat.add_agent_participant(space.id, agent, display_name: agent.name)
 
-      # First call leaves cleanly.
+      # First call removes cleanly.
       {:ok, _} =
         ToolSurface.execute("space_leave", %{"space_id" => space.id}, %{agent_id: agent.id})
 
-      assert Repo.reload!(participant).left_at != nil
+      assert Chat.get_agent_participant(space.id, agent.id) == nil
 
-      # Second call: the participant now has left_at set, so the active-only
-      # query returns nil and the tool surfaces a clear error.
+      # Second call: the participant row is gone, so the lookup returns nil
+      # and the tool surfaces a clear error.
       {:error, error} =
         ToolSurface.execute("space_leave", %{"space_id" => space.id}, %{agent_id: agent.id})
 
@@ -763,7 +764,7 @@ defmodule Platform.Federation.ToolSurfaceTest do
       space = create_space()
 
       {:ok, participant} =
-        Chat.ensure_agent_participant(space.id, agent, display_name: agent.name)
+        Chat.add_agent_participant(space.id, agent, display_name: agent.name)
 
       Platform.Chat.ActiveAgentStore.set_active(space.id, participant.id)
       assert Platform.Chat.ActiveAgentStore.get_active(space.id) == participant.id

@@ -224,7 +224,22 @@ defmodule PlatformWeb.ChatLive.PresenceHooks do
 
   # ── Template helpers (used across MessageList, Threads, Mentions) ────
 
-  @doc "Display name for a participant id, from the identity map."
+  @doc """
+  Display name for a participant.
+
+  Accepts either a bare participant id (legacy — used by search and typing
+  indicators) or a message struct. For a message, the live participant map
+  is preferred so renames propagate; the author snapshot (ADR 0038) is the
+  fallback when the participant is no longer in the space (dismissed).
+  """
+  def sender_name(participants_map, %{participant_id: pid} = msg) do
+    case Map.get(participants_map, pid) do
+      %{name: name} when is_binary(name) and name != "" -> name
+      name when is_binary(name) and name != "" -> name
+      _ -> author_snapshot_name(msg)
+    end
+  end
+
   def sender_name(participants_map, participant_id) do
     case Map.get(participants_map, participant_id) do
       %{name: name} when is_binary(name) and name != "" -> name
@@ -233,7 +248,14 @@ defmodule PlatformWeb.ChatLive.PresenceHooks do
     end
   end
 
-  @doc "Avatar URL for a participant id (nil if none)."
+  @doc "Avatar URL for a participant or message (nil if none)."
+  def sender_avatar_url(participants_map, %{participant_id: pid} = msg) do
+    case Map.get(participants_map, pid) do
+      %{avatar_url: avatar_url} when is_binary(avatar_url) -> avatar_url
+      _ -> author_snapshot_avatar_url(msg)
+    end
+  end
+
   def sender_avatar_url(participants_map, participant_id) do
     case Map.get(participants_map, participant_id) do
       %{avatar_url: avatar_url} when is_binary(avatar_url) -> avatar_url
@@ -241,7 +263,16 @@ defmodule PlatformWeb.ChatLive.PresenceHooks do
     end
   end
 
-  @doc "Deterministic seed for the dicebear avatar (falls back to name / id)."
+  @doc "Deterministic seed for the dicebear avatar."
+  def sender_avatar_seed(participants_map, %{participant_id: pid} = msg) do
+    case Map.get(participants_map, pid) do
+      %{avatar_seed: avatar_seed} when not is_nil(avatar_seed) -> avatar_seed
+      %{name: name} when is_binary(name) and name != "" -> name
+      name when is_binary(name) and name != "" -> name
+      _ -> author_snapshot_name(msg) || pid || "user"
+    end
+  end
+
   def sender_avatar_seed(participants_map, participant_id) do
     case Map.get(participants_map, participant_id) do
       %{avatar_seed: avatar_seed} when not is_nil(avatar_seed) -> avatar_seed
@@ -251,9 +282,21 @@ defmodule PlatformWeb.ChatLive.PresenceHooks do
     end
   end
 
-  @doc "Single-letter initial for an avatar."
-  def avatar_initial(participants_map, participant_id) do
-    sender_name(participants_map, participant_id)
+  defp author_snapshot_name(%{author_display_name: name})
+       when is_binary(name) and name != "",
+       do: name
+
+  defp author_snapshot_name(_), do: "User"
+
+  defp author_snapshot_avatar_url(%{author_avatar_url: url})
+       when is_binary(url) and url != "",
+       do: url
+
+  defp author_snapshot_avatar_url(_), do: nil
+
+  @doc "Single-letter initial for an avatar. Accepts id or message struct."
+  def avatar_initial(participants_map, participant_or_message) do
+    sender_name(participants_map, participant_or_message)
     |> String.trim()
     |> String.first()
     |> case do
@@ -376,13 +419,16 @@ defmodule PlatformWeb.ChatLive.PresenceHooks do
 
   # ── Agent presence bootstrap ─────────────────────────────────────────
 
+  # Bootstrap the native agent's *runtime* on LV mount — sandbox plumbing
+  # and a boot kick if unreachable. Does NOT add the agent as a space
+  # participant; that is an explicit act (DM creation, admin action, or
+  # @-mention per ADR 0038). Auto-adding here is what caused Higgins to
+  # reappear after every dismissal.
   defp ensure_native_agent_presence(space_id) do
     status = WorkspaceBootstrap.status()
 
     case status do
-      %{configured?: true, agent: %{} = agent} ->
-        _ = Chat.ensure_agent_participant(space_id, agent, display_name: agent.name)
-
+      %{configured?: true, agent: %{}} ->
         if status.pid, do: allow_runtime_sandbox(status.pid)
 
         unless status.reachable? do

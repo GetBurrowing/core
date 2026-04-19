@@ -20,6 +20,17 @@ defmodule Platform.Chat.Message do
     field(:edited_at, :utc_datetime_usec)
     field(:deleted_at, :utc_datetime_usec)
     field(:log_only, :boolean, default: false)
+
+    # Author identity snapshot (ADR 0038). Populated at write time from the
+    # authoring participant and treated as source of truth for rendering. A
+    # participant leaving or being dismissed does not mutate these fields, so
+    # historical messages keep the name + avatar they had when they spoke.
+    field(:author_display_name, :string)
+    field(:author_avatar_url, :string)
+    field(:author_participant_type, :string)
+    field(:author_agent_id, :binary_id)
+    field(:author_user_id, :binary_id)
+
     field(:search_rank, :float, virtual: true)
     field(:search_headline, :string, virtual: true)
 
@@ -44,7 +55,12 @@ defmodule Platform.Chat.Message do
       :metadata,
       :edited_at,
       :deleted_at,
-      :log_only
+      :log_only,
+      :author_display_name,
+      :author_avatar_url,
+      :author_participant_type,
+      :author_agent_id,
+      :author_user_id
     ])
     |> validate_required([:space_id, :participant_id, :content_type])
     |> validate_inclusion(:content_type, @content_types)

@@ -88,13 +88,13 @@ defmodule Platform.Chat.SpaceAgentPresence do
   @doc """
   Build a list of `{space_agent, status}` tuples for UI rendering.
   """
-  @spec roster_with_status(binary()) :: [{Chat.SpaceAgent.t(), atom()}]
+  @spec roster_with_status(binary()) :: [{Chat.roster_entry(), atom()}]
   def roster_with_status(space_id) do
     space_id
     |> Chat.list_space_agents()
-    |> Enum.map(fn sa ->
-      status = agent_status(sa.agent)
-      {sa, status}
+    |> Enum.map(fn entry ->
+      status = agent_status(entry.agent)
+      {entry, status}
     end)
   end
 

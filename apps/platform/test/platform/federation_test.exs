@@ -3,6 +3,7 @@ defmodule Platform.FederationTest do
 
   alias Platform.Accounts.User
   alias Platform.Agents.{Agent, AgentRuntime}
+  alias Platform.Chat
   alias Platform.Federation
   alias Platform.Repo
 
@@ -80,7 +81,7 @@ defmodule Platform.FederationTest do
     end
 
     test "auto-adds the federated agent to every non-archived channel space in its workspace" do
-      alias Platform.Chat.{Space, SpaceAgent}
+      alias Platform.Chat.Space
 
       workspace_id = Ecto.UUID.generate()
 
@@ -126,17 +127,17 @@ defmodule Platform.FederationTest do
 
       {:ok, _} = Federation.link_agent(runtime, agent)
 
-      assert %SpaceAgent{role: "member"} =
-               Repo.get_by(SpaceAgent, space_id: general.id, agent_id: agent.id)
+      general_entry = Chat.get_space_agent(general.id, agent.id)
+      assert general_entry.role == "member"
 
-      assert %SpaceAgent{role: "member"} =
-               Repo.get_by(SpaceAgent, space_id: random.id, agent_id: agent.id)
+      random_entry = Chat.get_space_agent(random.id, agent.id)
+      assert random_entry.role == "member"
 
-      refute Repo.get_by(SpaceAgent, space_id: archived.id, agent_id: agent.id)
+      refute Chat.get_space_agent(archived.id, agent.id)
     end
 
     test "auto-roster adds nil-workspace agents to nil-workspace channel spaces (single-tenant)" do
-      alias Platform.Chat.{Space, SpaceAgent}
+      alias Platform.Chat.Space
 
       # Single-tenant / default-org setup: both agents and spaces have
       # workspace_id: nil. Auto-roster must still match them together.
@@ -161,12 +162,11 @@ defmodule Platform.FederationTest do
       {:ok, linked} = Federation.link_agent(runtime, agent)
       assert is_nil(linked.workspace_id)
 
-      assert %SpaceAgent{role: "member"} =
-               Repo.get_by(SpaceAgent, space_id: general.id, agent_id: agent.id)
+      assert %{role: "member"} = Chat.get_space_agent(general.id, agent.id)
     end
 
     test "auto-roster does NOT leak across workspaces" do
-      alias Platform.Chat.{Space, SpaceAgent}
+      alias Platform.Chat.Space
 
       # Agent in workspace A should NOT be rostered into workspace B's spaces.
       workspace_a = Ecto.UUID.generate()
@@ -202,12 +202,12 @@ defmodule Platform.FederationTest do
 
       {:ok, _} = Federation.link_agent(runtime, agent_a)
 
-      assert Repo.get_by(SpaceAgent, space_id: space_a.id, agent_id: agent_a.id)
-      refute Repo.get_by(SpaceAgent, space_id: space_b.id, agent_id: agent_a.id)
+      assert Chat.get_space_agent(space_a.id, agent_a.id)
+      refute Chat.get_space_agent(space_b.id, agent_a.id)
     end
 
     test "auto-roster is idempotent when called again on an already-rostered agent" do
-      alias Platform.Chat.{Space, SpaceAgent}
+      alias Platform.Chat.Space
 
       workspace_id = Ecto.UUID.generate()
 
@@ -226,15 +226,11 @@ defmodule Platform.FederationTest do
       :ok = Federation.auto_roster_federated_agent(agent)
       :ok = Federation.auto_roster_federated_agent(agent)
 
-      count =
-        Repo.aggregate(
-          Ecto.Query.from(sa in SpaceAgent,
-            where: sa.space_id == ^general.id and sa.agent_id == ^agent.id
-          ),
-          :count
-        )
+      # Idempotent: a second auto_roster call does not create a second row.
+      entries =
+        Chat.list_space_agents(general.id) |> Enum.filter(&(&1.agent_id == agent.id))
 
-      assert count == 1
+      assert length(entries) == 1
     end
   end
 
