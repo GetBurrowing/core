@@ -370,10 +370,11 @@ defmodule Platform.Chat.Canvas.Server do
         :ok
 
       canvas ->
-        canvas
-        |> Canvas.changeset(%{"document" => document})
-        |> Repo.update()
-        |> case do
+        # Route through Chat.update_canvas so the :canvas_updated PubSub
+        # broadcast fires. Writing directly via Repo.update skips the
+        # space-topic broadcast the LiveView listens on, leaving the UI
+        # showing stale pre-patch content even though the DB is current.
+        case Chat.update_canvas(canvas, %{"document" => document}) do
           {:ok, _} ->
             :ok
 

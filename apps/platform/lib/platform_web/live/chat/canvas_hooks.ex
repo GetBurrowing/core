@@ -4,7 +4,7 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
 
   Owns:
 
-    * Assigns: `:canvases`, `:canvases_by_message_id`, `:active_canvas`,
+    * Assigns: `:canvases`, `:canvases_by_id`, `:active_canvas`,
       `:show_canvases`, `:new_canvas_form`
     * Events:  `"canvas_panel_toggle"`, `"canvas_close"`,
       `"canvas_open_mobile"`, `"canvas_patch"`, `"canvas_action_click"`,
@@ -31,7 +31,7 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
   def attach(socket) do
     socket
     |> assign(:canvases, [])
-    |> assign(:canvases_by_message_id, %{})
+    |> assign(:canvases_by_id, %{})
     |> assign(:active_canvas, nil)
     |> assign(:show_canvases, false)
     |> assign_new_form()
@@ -46,7 +46,7 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
 
     socket
     |> assign(:canvases, canvases)
-    |> assign(:canvases_by_message_id, build_map(canvases))
+    |> assign(:canvases_by_id, build_map(canvases))
     |> assign(:active_canvas, nil)
     |> assign(:show_canvases, false)
     |> assign_new_form()
@@ -63,7 +63,7 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
 
     socket
     |> assign(:canvases, canvases)
-    |> assign(:canvases_by_message_id, build_map(canvases))
+    |> assign(:canvases_by_id, build_map(canvases))
     |> maybe_update_active(canvas)
   end
 
@@ -99,15 +99,30 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
     {:halt, assign(socket, :active_canvas, nil)}
   end
 
-  defp handle_event("canvas_open_mobile", %{"message-id" => message_id}, socket) do
-    case Map.get(socket.assigns.canvases_by_message_id, message_id) do
+  defp handle_event("canvas_open_mobile", params, socket) do
+    canvas_id =
+      Map.get(params, "canvas-id") ||
+        case Map.get(params, "message-id") do
+          nil ->
+            nil
+
+          mid ->
+            case Chat.get_message(mid) do
+              %{canvas_id: cid} when is_binary(cid) -> cid
+              _ -> nil
+            end
+        end
+
+    case canvas_id && find(socket, canvas_id) do
       nil ->
         {:halt, socket}
 
-      canvas ->
-        active = find(socket, canvas.id) || canvas
-        register_canvas_engagement(socket, active, :viewing)
-        {:halt, assign(socket, :active_canvas, active)}
+      %{} = canvas ->
+        register_canvas_engagement(socket, canvas, :viewing)
+        {:halt, assign(socket, :active_canvas, canvas)}
+
+      _ ->
+        {:halt, socket}
     end
   end
 
@@ -180,8 +195,8 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
   def humanize_kind(_), do: "Canvas"
 
   @doc "Title for a canvas attached to a message (fallbacks through structured_content)."
-  def message_canvas_title(message, canvases_by_message_id) do
-    case Map.get(canvases_by_message_id, message.id) do
+  def message_canvas_title(message, canvases_by_id) do
+    case Map.get(canvases_by_id, message.canvas_id) do
       %{title: title} when is_binary(title) and title != "" ->
         title
 
@@ -226,14 +241,11 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
     assign(socket, :new_canvas_form, to_form(params, as: :canvas))
   end
 
+  # Keyed by canvas.id so templates can look up via `msg.canvas_id`.
+  # Replaces the old `canvases_by_message_id` (pre-ADR-0036) that used the
+  # now-removed `chat_canvases.message_id` column.
   defp build_map(canvases) do
-    canvases
-    |> Enum.reduce(%{}, fn canvas, acc ->
-      # Find messages that reference this canvas so we can show the inline embed.
-      # The mapping is derived at render time from chat_messages.canvas_id; we
-      # keep a shadow map keyed by canvas id for backward compatibility.
-      Map.put(acc, canvas.id, canvas)
-    end)
+    Map.new(canvases, fn canvas -> {canvas.id, canvas} end)
   end
 
   defp register_canvas_engagement(socket, canvas, engagement) do

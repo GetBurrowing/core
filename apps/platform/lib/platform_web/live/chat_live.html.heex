@@ -686,22 +686,22 @@
               :if={msg.content_type == "canvas"}
               class="mt-1"
             >
-              <div :if={Map.get(@canvases_by_message_id, msg.id)} class="min-w-0 overflow-hidden">
+              <div :if={Map.get(@canvases_by_id, msg.canvas_id)} class="min-w-0 overflow-hidden">
                 <.canvas_document
-                  canvas={Map.get(@canvases_by_message_id, msg.id)}
+                  canvas={Map.get(@canvases_by_id, msg.canvas_id)}
                   inline={true}
                   dom_id_base="chat-message-inline"
                 />
               </div>
 
               <div
-                :if={is_nil(Map.get(@canvases_by_message_id, msg.id))}
+                :if={is_nil(Map.get(@canvases_by_id, msg.canvas_id))}
                 phx-click="canvas_open_mobile"
                 phx-value-message-id={msg.id}
                 class="rounded-lg bg-base-200 px-3 py-2 cursor-pointer hover:bg-base-300 transition-colors"
               >
                 <p class="truncate text-sm font-semibold text-base-content">
-                  {CanvasHooks.message_canvas_title(msg, @canvases_by_message_id)}
+                  {CanvasHooks.message_canvas_title(msg, @canvases_by_id)}
                 </p>
                 <p class="text-[11px] uppercase tracking-widest text-base-content/50">
                   Canvas
