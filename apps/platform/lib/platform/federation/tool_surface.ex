@@ -17,7 +17,7 @@ defmodule Platform.Federation.ToolSurface do
 
   import Ecto.Query, only: [from: 2]
 
-  @bundles ~w(canvas messaging task plan review space context_read federation org_context)
+  @bundles ~w(canvas messaging task plan review space context_read federation org_context skill)
 
   @doc "Known capability bundle names."
   def all_bundles, do: @bundles
@@ -51,6 +51,7 @@ defmodule Platform.Federation.ToolSurface do
   defp tools_for_bundle("context_read"), do: tag(context_read_tools(), "context_read")
   defp tools_for_bundle("federation"), do: tag(federation_tools(), "federation")
   defp tools_for_bundle("org_context"), do: tag(org_context_tools(), "org_context")
+  defp tools_for_bundle("skill"), do: tag(skill_tools(), "skill")
   defp tools_for_bundle(_), do: []
 
   defp tag(tools, bundle), do: Enum.map(tools, &Map.put(&1, :bundle, bundle))
@@ -68,6 +69,77 @@ defmodule Platform.Federation.ToolSurface do
           "Only shows active runtimes. Presence data is in-memory and resets on restart.",
         when_to_use:
           "When you need to diagnose connectivity issues or verify which agent runtimes are currently reachable"
+      }
+    ]
+  end
+
+  defp skill_tools do
+    [
+      %{
+        name: "skill.list",
+        description:
+          "List registered skills (centrally-distributed markdown playbooks). Returns summaries without the content body. Use `query` to filter by case-insensitive substring against name, description, or slug.",
+        parameters: %{
+          query: %{
+            type: "string",
+            required: false,
+            description: "Case-insensitive substring to filter by. Omit to list everything."
+          }
+        },
+        returns:
+          "%{count, skills: [%{id, slug, name, description, content_size, inserted_at, updated_at}]}",
+        limitations:
+          "Returns every matching skill in one call — no pagination. Content body is omitted; fetch with skill.get.",
+        when_to_use:
+          "Before picking a playbook for a task, or when you need to check whether a skill already exists."
+      },
+      %{
+        name: "skill.get",
+        description: "Fetch a full skill (including markdown content) by slug or id.",
+        parameters: %{
+          slug: %{
+            type: "string",
+            required: false,
+            description: "Skill slug (preferred lookup key)."
+          },
+          id: %{
+            type: "string",
+            required: false,
+            description: "Skill UUID (alternative lookup key)."
+          }
+        },
+        returns: "%{id, slug, name, description, content, inserted_at, updated_at}",
+        limitations: "Exactly one of `slug` or `id` is required.",
+        when_to_use:
+          "After skill.list has told you the skill exists and you want to read it; before skill.upsert to fetch current content for editing."
+      },
+      %{
+        name: "skill.upsert",
+        description:
+          "Create or update a skill by name. Slug is derived from the name. Existing skills with the same slug are replaced (content + description).",
+        parameters: %{
+          name: %{
+            type: "string",
+            required: true,
+            description: "Human-readable name. Slug is derived from this."
+          },
+          description: %{
+            type: "string",
+            required: false,
+            description: "One-line summary shown in skill.list."
+          },
+          content: %{
+            type: "string",
+            required: true,
+            description: "Full markdown body of the skill playbook."
+          }
+        },
+        returns:
+          "%{id, slug, name, description, content, inserted_at, updated_at, action: :created | :updated}",
+        limitations:
+          "Partial updates are not supported — pass the full content on every update. Two skills with the same slug-able name would collide; use a more specific name to disambiguate.",
+        when_to_use:
+          "When you want to publish a new playbook or iterate on an existing one without touching the DB directly."
       }
     ]
   end
@@ -1384,6 +1456,17 @@ defmodule Platform.Federation.ToolSurface do
 
   def execute("canvas.template", args, context),
     do: Platform.Chat.Canvas.ToolHandlers.template(args, context)
+
+  # ── Skill tools ─────────────────────────────────────────────────────────
+
+  def execute("skill.list", args, context),
+    do: Platform.Skills.ToolHandlers.list(args, context)
+
+  def execute("skill.get", args, context),
+    do: Platform.Skills.ToolHandlers.get(args, context)
+
+  def execute("skill.upsert", args, context),
+    do: Platform.Skills.ToolHandlers.upsert(args, context)
 
   # Legacy underscore-names kept for one release — delegate to the new handlers.
   def execute("canvas_create", args, context) do

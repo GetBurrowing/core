@@ -14,7 +14,7 @@ defmodule Platform.Agents.AgentRuntime do
   @valid_statuses ~w(pending active suspended revoked)
   @valid_trust_levels ~w(viewer participant collaborator admin)
   @valid_transports ~w(websocket)
-  @valid_bundles ~w(federation space context_read messaging review canvas task plan org_context)
+  @valid_bundles ~w(federation space context_read messaging review canvas task plan org_context skill)
 
   @default_allowed_bundles ~w(federation space context_read messaging)
 

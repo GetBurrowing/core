@@ -35,9 +35,9 @@ defmodule Platform.Federation.ToolSurfaceTest do
   defp unique_slug, do: "test-#{System.unique_integer([:positive])}"
 
   describe "tool_definitions/0" do
-    test "returns all 44 tools with required components" do
+    test "returns all 47 tools with required components" do
       tools = ToolSurface.tool_definitions()
-      assert length(tools) == 44
+      assert length(tools) == 47
 
       tool_names = Enum.map(tools, & &1.name)
       assert "send_media" in tool_names
@@ -50,6 +50,9 @@ defmodule Platform.Federation.ToolSurfaceTest do
       assert "canvas.describe" in tool_names
       assert "canvas.list_kinds" in tool_names
       assert "canvas.template" in tool_names
+      assert "skill.list" in tool_names
+      assert "skill.get" in tool_names
+      assert "skill.upsert" in tool_names
       assert "project_list" in tool_names
       assert "epic_list" in tool_names
       assert "task_create" in tool_names
