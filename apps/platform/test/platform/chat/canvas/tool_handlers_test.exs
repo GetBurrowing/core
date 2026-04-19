@@ -80,6 +80,25 @@ defmodule Platform.Chat.Canvas.ToolHandlersTest do
       assert payload.error =~ "document"
     end
 
+    test "accepts a stringified document (MCP client stringification fallback)" do
+      %{space: space, participant: participant} = setup_space()
+
+      stringified_doc = Jason.encode!(valid_document())
+
+      args = %{
+        "space_id" => space.id,
+        "title" => "stringy doc",
+        "document" => stringified_doc
+      }
+
+      context = %{agent_participant_id: participant.id}
+
+      assert {:ok, result} = ToolHandlers.create(args, context)
+      assert result.kind == "stack"
+
+      on_exit(fn -> Platform.Chat.Canvas.Server.stop(result.canvas_id) end)
+    end
+
     test "rejects an invalid document with recoverable=true" do
       %{space: space, participant: participant} = setup_space()
 
@@ -193,6 +212,38 @@ defmodule Platform.Chat.Canvas.ToolHandlersTest do
       assert payload.recoverable == true
       assert payload.conflict.reason == :target_deleted
       assert payload.suggestion =~ "canvas.describe"
+    end
+
+    test "accepts stringified operation args (MCP stringification fallback)" do
+      %{space: space, participant: participant} = setup_space()
+
+      {:ok, %{canvas_id: canvas_id}} =
+        ToolHandlers.create(
+          %{"space_id" => space.id, "document" => valid_document()},
+          %{agent_participant_id: participant.id}
+        )
+
+      on_exit(fn -> Platform.Chat.Canvas.Server.stop(canvas_id) end)
+
+      stringified_child =
+        Jason.encode!(%{
+          "id" => "fresh",
+          "type" => "text",
+          "props" => %{"value" => "hi"},
+          "children" => []
+        })
+
+      assert {:ok, payload} =
+               ToolHandlers.patch(
+                 %{
+                   "canvas_id" => canvas_id,
+                   "base_revision" => 1,
+                   "operations" => [["append_child", "root", stringified_child]]
+                 },
+                 %{}
+               )
+
+      assert payload.revision == 2
     end
 
     test "rejects unrecognized operation shapes" do

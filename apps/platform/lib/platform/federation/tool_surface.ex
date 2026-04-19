@@ -489,7 +489,8 @@ defmodule Platform.Federation.ToolSurface do
             type: "object",
             required: true,
             description:
-              "Canonical document. See canvas.describe on an existing canvas for a valid shape."
+              "Canonical document. See canvas.describe on an existing canvas for a valid shape. Pass as a nested object, not a JSON string.",
+            schema: Platform.Chat.Canvas.Tools.document_schema()
           }
         },
         returns: "%{canvas_id, title, kind, revision}",
@@ -511,7 +512,16 @@ defmodule Platform.Federation.ToolSurface do
             type: "array",
             required: true,
             description:
-              "Each op is [\"set_props\", id, props] | [\"replace_children\", id, children] | [\"append_child\", parent_id, child] | [\"delete_node\", id] | [\"replace_document\", doc]."
+              "Each op is [\"set_props\", id, props] | [\"replace_children\", id, children] | [\"append_child\", parent_id, child] | [\"delete_node\", id] | [\"replace_document\", doc]. Pass nested objects (props, children, child, doc) as objects/arrays, not JSON strings.",
+            schema: %{
+              type: "array",
+              minItems: 1,
+              items: %{
+                type: "array",
+                description:
+                  "Tuple: first element is the operation name, remaining elements are its arguments."
+              }
+            }
           }
         },
         returns: "%{canvas_id, revision} on success, structured conflict on rejection",

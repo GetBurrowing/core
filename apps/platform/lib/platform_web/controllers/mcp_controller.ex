@@ -160,10 +160,21 @@ defmodule PlatformWeb.MCPController do
   end
 
   defp property_schema(meta) when is_map(meta) do
-    %{
-      type: meta[:type] || "string",
-      description: meta[:description] || ""
-    }
+    # If the tool declares a full JSON Schema for this parameter (under
+    # `:schema`), prefer it verbatim — this is how complex nested types
+    # (document trees, patch operations) surface proper structure to MCP
+    # clients instead of leaving them to guess from a bare `{type: "object"}`.
+    case meta[:schema] do
+      nil ->
+        %{
+          type: meta[:type] || "string",
+          description: meta[:description] || ""
+        }
+
+      schema when is_map(schema) ->
+        schema
+        |> Map.put_new(:description, meta[:description] || "")
+    end
   end
 
   defp property_schema(_), do: %{type: "string"}

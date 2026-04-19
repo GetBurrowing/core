@@ -19,7 +19,8 @@ defmodule Platform.Chat.Canvas.ToolHandlers do
   def create(args, context) do
     space_id = Map.get(args, "space_id") || Map.get(context, :space_id)
     participant_id = Map.get(context, :agent_participant_id) || Map.get(context, :participant_id)
-    document = Map.get(args, "document")
+    agent_id = Map.get(context, :agent_id)
+    document = args |> Map.get("document") |> decode_if_string()
     title = Map.get(args, "title")
 
     cond do
@@ -33,8 +34,11 @@ defmodule Platform.Chat.Canvas.ToolHandlers do
       not is_binary(participant_id) ->
         {:error,
          %{
-           error: "canvas.create requires an authenticated participant context",
-           recoverable: false
+           error:
+             "canvas.create: agent #{inspect(agent_id)} is not a participant in space #{inspect(space_id)} — join the space first (ask a human to @mention you there, or be added to the roster) before creating canvases in it.",
+           recoverable: false,
+           agent_id: agent_id,
+           space_id: space_id
          }}
 
       not is_map(document) ->
@@ -192,22 +196,57 @@ defmodule Platform.Chat.Canvas.ToolHandlers do
     end)
   end
 
-  defp parse_op(["set_props", id, props]) when is_binary(id) and is_map(props),
-    do: {:ok, {:set_props, id, props}}
+  defp parse_op(["set_props", id, props]) when is_binary(id) do
+    case decode_if_string(props) do
+      p when is_map(p) -> {:ok, {:set_props, id, p}}
+      _ -> {:error, "set_props: props must be an object (got #{describe(props)})"}
+    end
+  end
 
-  defp parse_op(["replace_children", id, children])
-       when is_binary(id) and is_list(children),
-       do: {:ok, {:replace_children, id, children}}
+  defp parse_op(["replace_children", id, children]) when is_binary(id) do
+    case decode_if_string(children) do
+      c when is_list(c) -> {:ok, {:replace_children, id, c}}
+      _ -> {:error, "replace_children: children must be an array (got #{describe(children)})"}
+    end
+  end
 
-  defp parse_op(["append_child", id, child]) when is_binary(id) and is_map(child),
-    do: {:ok, {:append_child, id, child}}
+  defp parse_op(["append_child", id, child]) when is_binary(id) do
+    case decode_if_string(child) do
+      c when is_map(c) -> {:ok, {:append_child, id, c}}
+      _ -> {:error, "append_child: child must be an object (got #{describe(child)})"}
+    end
+  end
 
   defp parse_op(["delete_node", id]) when is_binary(id), do: {:ok, {:delete_node, id}}
 
-  defp parse_op(["replace_document", doc]) when is_map(doc),
-    do: {:ok, {:replace_document, doc}}
+  defp parse_op(["replace_document", doc]) do
+    case decode_if_string(doc) do
+      d when is_map(d) -> {:ok, {:replace_document, d}}
+      _ -> {:error, "replace_document: doc must be an object (got #{describe(doc)})"}
+    end
+  end
 
   defp parse_op(other), do: {:error, "unrecognized operation: #{inspect(other)}"}
+
+  # Some MCP clients (and some LLM providers) serialize nested object
+  # arguments as JSON strings. Accept either shape transparently so callers
+  # don't have to know the wire encoding their gateway chose.
+  defp decode_if_string(s) when is_binary(s) do
+    case Jason.decode(s) do
+      {:ok, decoded} when is_map(decoded) or is_list(decoded) -> decoded
+      _ -> s
+    end
+  end
+
+  defp decode_if_string(other), do: other
+
+  defp describe(v) when is_binary(v), do: "string"
+  defp describe(v) when is_list(v), do: "array"
+  defp describe(v) when is_map(v), do: "object"
+  defp describe(v) when is_integer(v), do: "integer"
+  defp describe(v) when is_boolean(v), do: "boolean"
+  defp describe(nil), do: "null"
+  defp describe(_), do: "other"
 
   defp presence_for_canvas(_canvas) do
     # Phase 5 wires this to the per-space presence engagement bag. For now
