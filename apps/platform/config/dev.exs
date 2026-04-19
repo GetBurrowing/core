@@ -64,6 +64,20 @@ config :platform, PlatformWeb.Endpoint,
     ]
   ]
 
+# Default Repo config for local dev. Matches the `postgres` role created
+# in CONTRIBUTING.md setup. `runtime.exs` overrides this with DATABASE_URL
+# when set, so you can point at a different instance without editing this
+# file.
+config :platform, Platform.Repo,
+  username: System.get_env("PGUSER", "postgres"),
+  password: System.get_env("PGPASSWORD", "postgres"),
+  hostname: System.get_env("PGHOST", "localhost"),
+  port: String.to_integer(System.get_env("PGPORT", "5432")),
+  database: System.get_env("PLATFORM_DEV_DATABASE", "platform_dev"),
+  stacktrace: true,
+  show_sensitive_data_on_connection_error: true,
+  pool_size: 10
+
 # Enable dev routes for dashboard and mailbox
 config :platform, dev_routes: true
 
