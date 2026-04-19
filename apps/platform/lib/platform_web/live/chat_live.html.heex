@@ -570,6 +570,8 @@
           }
           data-participant-id={msg.participant_id}
           data-date={msg.inserted_at && DateTime.to_date(msg.inserted_at) |> Date.to_iso8601()}
+          data-message-id={msg.id}
+          phx-hook="LongpressMenu"
         >
           <%!-- Avatar circle (hidden when grouped with previous message via JS) --%>
           <div class="flex-shrink-0 mt-0.5 message-avatar">
@@ -1246,6 +1248,109 @@
         {emoji}
       </button>
     </div>
+  </div>
+</div>
+
+<%!--
+  Long-press menu (mobile). V3 "lift-and-center" pattern.
+  Scrim + blur fade in, target message clones and animates to viewport
+  center via MessageLift JS hook, emoji pill floats above the lifted
+  clone, action card floats below. Position of pill/card is driven by
+  a --clone-half-h CSS var set by the hook at mount.
+  Phase 4 wires the action events (Copy, Open in thread, Pin) and
+  closes the menu after each.
+--%>
+<div
+  :if={@longpress_menu_for}
+  id="longpress-menu"
+  class="fixed inset-0 z-50"
+  role="dialog"
+  aria-label="Message actions"
+  data-target-message-id={@longpress_menu_for}
+  phx-hook="MessageLift"
+>
+  <div
+    class="absolute inset-0 longpress-scrim"
+    phx-click="close_longpress_menu"
+    aria-hidden="true"
+  >
+  </div>
+
+  <%!-- Emoji quick-react pill, floats above the lifted clone.
+       Each tap fires `react` (persists the reaction via Chat.toggle_reaction
+       → close_picker/1 closes both reaction_picker_for and longpress_menu_for). --%>
+  <div class="longpress-pill" role="group" aria-label="Quick reactions">
+    <button
+      :for={emoji <- ~w(👍 🎉 ✅ ❤️ 😂 🙏)}
+      type="button"
+      class="longpress-pill-btn"
+      title={"React with #{emoji}"}
+      phx-click="react"
+      phx-value-message-id={@longpress_menu_for}
+      phx-value-emoji={emoji}
+    >
+      {emoji}
+    </button>
+    <div class="longpress-pill-divider" aria-hidden="true"></div>
+    <button
+      type="button"
+      class="longpress-pill-btn longpress-pill-more"
+      title="More emoji"
+      aria-label="More emoji"
+      phx-click={
+        JS.push("open_reaction_picker", value: %{"message-id" => @longpress_menu_for})
+        |> JS.push("close_longpress_menu")
+      }
+    >
+      <span class="hero-plus size-4"></span>
+    </button>
+  </div>
+
+  <%!-- Action card, floats below the lifted clone. --%>
+  <div class="longpress-card" role="menu" aria-label="Message actions">
+    <button
+      type="button"
+      id="longpress-copy-btn"
+      class="longpress-card-row"
+      role="menuitem"
+      phx-hook="CopyToClipboard"
+      data-clipboard-text={@longpress_menu_content}
+      phx-click="close_longpress_menu"
+    >
+      <span class="longpress-card-label">Copy message</span>
+      <span class="hero-document-duplicate size-[18px] longpress-card-icon"></span>
+    </button>
+    <div class="longpress-card-divider" aria-hidden="true"></div>
+    <button
+      type="button"
+      class="longpress-card-row"
+      role="menuitem"
+      phx-click={
+        JS.push("open_thread", value: %{"message-id" => @longpress_menu_for})
+        |> JS.push("close_longpress_menu")
+      }
+    >
+      <span class="longpress-card-label">Open in thread</span>
+      <span class="hero-chat-bubble-left-right size-[18px] longpress-card-icon"></span>
+    </button>
+    <div class="longpress-card-divider" aria-hidden="true"></div>
+    <button
+      type="button"
+      class="longpress-card-row"
+      role="menuitem"
+      phx-click={
+        JS.push("pin_toggle",
+          value: %{
+            "message-id" => @longpress_menu_for,
+            "space-id" => @active_space && @active_space.id
+          }
+        )
+        |> JS.push("close_longpress_menu")
+      }
+    >
+      <span class="longpress-card-label">Pin to channel</span>
+      <span class="hero-map-pin size-[18px] longpress-card-icon"></span>
+    </button>
   </div>
 </div>
 

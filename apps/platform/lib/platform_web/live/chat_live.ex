@@ -22,6 +22,7 @@ defmodule PlatformWeb.ChatLive do
   import PlatformWeb.Chat.CanvasRenderer, only: [canvas_document: 1]
   import PlatformWeb.ChatLive.Partials
 
+  alias Phoenix.LiveView.JS
   alias Platform.Accounts
   alias Platform.Chat
   alias Platform.Chat.ActiveAgentStore

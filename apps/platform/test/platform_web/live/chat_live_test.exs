@@ -812,6 +812,129 @@ defmodule PlatformWeb.ChatLiveTest do
     end
   end
 
+  # ── Long-press menu (mobile) ────────────────────────────────────────────────
+
+  describe "long-press menu" do
+    test "opening the menu renders the dialog with the target message id",
+         %{conn: conn} do
+      conn = authenticated_conn(conn)
+      {:ok, view, html} = live(conn, ~p"/chat/general")
+
+      refute html =~ ~s(id="longpress-menu")
+
+      view
+      |> form("#compose-form", compose: %{text: "longpress target"})
+      |> render_submit()
+
+      space = Chat.get_space_by_slug("general")
+      [msg | _] = Chat.list_messages(space.id)
+
+      html = render_hook(view, "open_longpress_menu", %{"message_id" => msg.id})
+
+      assert html =~ ~s(id="longpress-menu")
+      assert html =~ ~s(aria-label="Message actions")
+      # The MessageLift hook reads the target via this attribute and clones
+      # the corresponding DOM element on mount.
+      assert html =~ ~s(data-target-message-id="#{msg.id}")
+      assert html =~ ~s(phx-hook="MessageLift")
+      # Scrim + pill + card all render together; JS positions pill and card
+      # relative to the lifted clone via the --clone-half-h CSS var.
+      assert html =~ "longpress-scrim"
+      assert html =~ "longpress-pill"
+      assert html =~ "longpress-card"
+      assert html =~ ~s(aria-label="Quick reactions")
+      # Emojis should all be present in the pill.
+      for emoji <- ~w(👍 🎉 ✅ ❤️ 😂 🙏) do
+        assert html =~ emoji
+      end
+
+      # Action labels.
+      assert html =~ "Copy message"
+      assert html =~ "Open in thread"
+      assert html =~ "Pin to channel"
+    end
+
+    test "closing the menu removes it from the DOM", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/chat/general")
+
+      view
+      |> form("#compose-form", compose: %{text: "longpress close"})
+      |> render_submit()
+
+      space = Chat.get_space_by_slug("general")
+      [msg | _] = Chat.list_messages(space.id)
+
+      html = render_hook(view, "open_longpress_menu", %{"message_id" => msg.id})
+      assert html =~ ~s(id="longpress-menu")
+
+      html = render_click(view, "close_longpress_menu", %{})
+      refute html =~ ~s(id="longpress-menu")
+    end
+
+    test "message bubbles carry the LongpressMenu hook and data-message-id",
+         %{conn: conn} do
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/chat/general")
+
+      view
+      |> form("#compose-form", compose: %{text: "longpress attach"})
+      |> render_submit()
+
+      space = Chat.get_space_by_slug("general")
+      [msg | _] = Chat.list_messages(space.id)
+
+      html = render(view)
+      assert html =~ ~s(phx-hook="LongpressMenu")
+      assert html =~ ~s(data-message-id="#{msg.id}")
+    end
+
+    test "opening the menu loads the message content for the Copy button",
+         %{conn: conn} do
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/chat/general")
+
+      view
+      |> form("#compose-form", compose: %{text: "content for copy"})
+      |> render_submit()
+
+      space = Chat.get_space_by_slug("general")
+      [msg | _] = Chat.list_messages(space.id)
+
+      html = render_hook(view, "open_longpress_menu", %{"message_id" => msg.id})
+
+      # CopyToClipboard hook reads this to write to navigator.clipboard.
+      assert html =~ ~s(data-clipboard-text="content for copy")
+      assert html =~ ~s(phx-hook="CopyToClipboard")
+      assert html =~ ~s(id="longpress-copy-btn")
+    end
+
+    test "tapping an emoji in the pill persists a reaction and closes the menu",
+         %{conn: conn} do
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/chat/general")
+
+      view
+      |> form("#compose-form", compose: %{text: "pill react target"})
+      |> render_submit()
+
+      space = Chat.get_space_by_slug("general")
+      [msg | _] = Chat.list_messages(space.id)
+
+      render_hook(view, "open_longpress_menu", %{"message_id" => msg.id})
+
+      # Fire the same event the pill emits (phx-click="react" with
+      # message-id + emoji as phx-value-* attributes).
+      html = render_click(view, "react", %{"message-id" => msg.id, "emoji" => "🎉"})
+
+      # Reaction persisted.
+      assert [%{emoji: "🎉"}] = Chat.list_reactions(msg.id)
+
+      # Menu closed — close_picker/1 now also resets :longpress_menu_for.
+      refute html =~ ~s(id="longpress-menu")
+    end
+  end
+
   # ── Threads ──────────────────────────────────────────────────────────────────
 
   describe "threads" do

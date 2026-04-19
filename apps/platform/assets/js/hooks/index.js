@@ -8,9 +8,11 @@ import InlineFocus from "./inline_focus"
 import InlineThread from "./inline_thread"
 import KanbanDragDrop from "./kanban_drag_drop"
 import LastChatLink from "./last_chat_link"
+import LongpressMenu from "./longpress_menu"
 import MarkdownEditor from "./markdown_editor"
 import LocalTime from "./local_time"
 import MeetingBar from "./meeting_bar"
+import MessageLift from "./message_lift"
 import MeetingCaptions from "./meeting_captions"
 import MeetingClient from "./meeting_client"
 import MeetingRoom from "./meeting_room"
@@ -34,6 +36,7 @@ export default {
   KanbanDragDrop,
   LastChatLink,
   LocalTime,
+  LongpressMenu,
   MarkdownEditor,
   MeetingBar,
   MeetingCaptions,
@@ -41,6 +44,7 @@ export default {
   MeetingRoom,
   MeetingTimer,
   MermaidDiagram,
+  MessageLift,
   PushSubscribe,
   ResizableSidebar,
   ScrollToBottom,
