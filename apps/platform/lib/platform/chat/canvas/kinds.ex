@@ -69,6 +69,154 @@ defmodule Platform.Chat.Canvas.Kinds do
   def names, do: Enum.map(@modules, & &1.name())
 
   @doc """
+  Ergonomic kind summaries for agent-facing discovery tools.
+
+  Each entry bundles the essentials an agent needs to emit a valid node of
+  this kind without parsing the recursive JSON Schema: a one-line
+  description, the child rule, a props-summary map ({name => brief}), and
+  an example node. Intended for `canvas.list_kinds` and prescriptive
+  validation error payloads.
+  """
+  @spec summaries() :: [map()]
+  def summaries do
+    Enum.map(@modules, fn mod ->
+      name = mod.name()
+
+      %{
+        kind: name,
+        description: describe(name),
+        accepts_children: children_rule(mod.children()),
+        props: props_summary(mod.schema(), mod.styling()),
+        example: example_node(mod, name)
+      }
+    end)
+  end
+
+  defp describe("stack"), do: "Vertical flex container. Accepts any children."
+  defp describe("row"), do: "Horizontal flex container. Accepts any children."
+  defp describe("card"), do: "Bordered card with optional title. Accepts any children."
+  defp describe("text"), do: "Plain text leaf with size/weight styling."
+  defp describe("markdown"), do: "Pre-formatted text/markdown content leaf."
+  defp describe("heading"), do: "H1–H4 heading."
+  defp describe("badge"), do: "Small rounded label."
+  defp describe("image"), do: "Image leaf. Requires `src`."
+  defp describe("code"), do: "Syntax-highlighted code block. Requires `source`."
+  defp describe("mermaid"), do: "Mermaid diagram (client-side rendered)."
+  defp describe("table"), do: "Tabular data. `columns` + `rows` as props; no children."
+  defp describe("form"), do: "Form with inline fields. Emits a `submitted` event on send."
+
+  defp describe("action_row"),
+    do: "Horizontal row of action buttons, each emitting an `action` event."
+
+  defp describe("checklist"), do: "Titled checklist. Children must be `checklist_item` nodes."
+  defp describe("checklist_item"), do: "Single checklist row."
+  defp describe(_), do: ""
+
+  defp children_rule(:none), do: "none"
+  defp children_rule(:any), do: "any"
+  defp children_rule(list) when is_list(list), do: Enum.join(list, ", ")
+
+  defp props_summary(schema, styling) do
+    required =
+      Map.get(schema, "required", []) ++ Map.get(styling, "required", [])
+
+    props_map =
+      Map.merge(
+        Map.get(schema, "properties", %{}),
+        Map.get(styling, "properties", %{})
+      )
+
+    Map.new(props_map, fn {k, p} -> {k, brief(p, k in required)} end)
+  end
+
+  defp brief(%{"type" => "integer"} = p, required?) do
+    range =
+      case {p["minimum"], p["maximum"]} do
+        {nil, nil} -> ""
+        {lo, nil} -> " (>= #{lo})"
+        {nil, hi} -> " (<= #{hi})"
+        {lo, hi} -> " (#{lo}–#{hi})"
+      end
+
+    marker(required?) <> "integer" <> range
+  end
+
+  defp brief(%{"type" => "string", "enum" => values}, required?) do
+    marker(required?) <> "string: " <> Enum.join(values, " | ")
+  end
+
+  defp brief(%{"type" => "string"}, required?), do: marker(required?) <> "string"
+  defp brief(%{"type" => "boolean"}, required?), do: marker(required?) <> "boolean"
+
+  defp brief(%{"type" => "array", "items" => items}, required?) do
+    item_type = Map.get(items, "type", "object")
+    marker(required?) <> "array of " <> item_type
+  end
+
+  defp brief(%{"type" => "object"}, required?), do: marker(required?) <> "object"
+  defp brief(%{"type" => type}, required?), do: marker(required?) <> to_string(type)
+  defp brief(_, required?), do: marker(required?) <> "any"
+
+  defp marker(true), do: "required, "
+  defp marker(false), do: ""
+
+  defp example_node(mod, name) do
+    node = %{
+      "id" => "example-#{name}",
+      "type" => name,
+      "props" => mod.defaults(),
+      "children" => example_children(mod.children())
+    }
+
+    case mod.children() do
+      :none -> Map.delete(node, "children")
+      _ -> node
+    end
+    |> fill_required_props(mod.schema())
+  end
+
+  defp example_children(:none), do: []
+  defp example_children(:any), do: []
+
+  defp example_children(whitelist) when is_list(whitelist) do
+    Enum.map(whitelist, fn child_kind ->
+      case get(child_kind) do
+        nil ->
+          %{"id" => "child", "type" => child_kind, "props" => %{}, "children" => []}
+
+        mod ->
+          example_node(mod, child_kind)
+      end
+    end)
+  end
+
+  defp fill_required_props(node, schema) do
+    required = Map.get(schema, "required", [])
+    props = node["props"] || %{}
+
+    filled =
+      Enum.reduce(required, props, fn key, acc ->
+        Map.put_new(acc, key, placeholder_for(schema, key))
+      end)
+
+    Map.put(node, "props", filled)
+  end
+
+  defp placeholder_for(schema, key) do
+    prop = get_in(schema, ["properties", key]) || %{}
+
+    case prop do
+      %{"enum" => [first | _]} -> first
+      %{"type" => "integer"} -> 1
+      %{"type" => "boolean"} -> false
+      %{"type" => "array"} -> []
+      %{"type" => "object"} -> %{}
+      %{"type" => "string"} -> "example-#{key}"
+      _ -> "example-#{key}"
+    end
+  end
+
+  @doc """
   Build JSON Schema definitions for every kind. Keyed by kind name, each entry
   is a JSON Schema `object` describing that kind's node shape (id, type, props,
   children).

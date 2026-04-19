@@ -540,6 +540,35 @@ defmodule Platform.Federation.ToolSurface do
           "%{canvas_id, title, space_id, kind, revision, document, presence, recent_events}",
         limitations: "Only works for canvases in spaces the agent is a participant in.",
         when_to_use: "Before emitting canvas.patch, or to present canvas state to a user"
+      },
+      %{
+        name: "canvas.list_kinds",
+        description:
+          "List every registered canvas node kind with a one-line description, its child rule, a props summary, and an example node. Call this first if you're not sure what to emit in canvas.create.",
+        parameters: %{},
+        returns: "%{kinds: [%{kind, description, accepts_children, props, example}]}",
+        limitations: "Static — same output regardless of caller or space.",
+        when_to_use:
+          "Before canvas.create when you need to pick a kind or remember props; before canvas.patch when building replacement child nodes."
+      },
+      %{
+        name: "canvas.template",
+        description:
+          "Fetch a named canonical canvas document you can pass directly to canvas.create. With no `name`, returns the list of available templates.",
+        parameters: %{
+          name: %{
+            type: "string",
+            required: false,
+            description:
+              "One of: empty, text, heading_and_text, checklist, table, form, code, dashboard. Omit to list all available templates."
+          }
+        },
+        returns:
+          "%{name, description, document} for a specific template; %{templates: [...]} otherwise",
+        limitations:
+          "Templates are static starter shapes. Customize the returned document before passing to canvas.create.",
+        when_to_use:
+          "When you want a known-good canvas shape to adjust rather than hand-building a document from scratch."
       }
     ]
   end
@@ -1349,6 +1378,12 @@ defmodule Platform.Federation.ToolSurface do
 
   def execute("canvas.describe", args, context),
     do: Platform.Chat.Canvas.ToolHandlers.describe(args, context)
+
+  def execute("canvas.list_kinds", args, context),
+    do: Platform.Chat.Canvas.ToolHandlers.list_kinds(args, context)
+
+  def execute("canvas.template", args, context),
+    do: Platform.Chat.Canvas.ToolHandlers.template(args, context)
 
   # Legacy underscore-names kept for one release — delegate to the new handlers.
   def execute("canvas_create", args, context) do

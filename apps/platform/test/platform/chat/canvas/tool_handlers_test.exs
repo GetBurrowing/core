@@ -176,6 +176,54 @@ defmodule Platform.Chat.Canvas.ToolHandlersTest do
     end
   end
 
+  describe "canvas.list_kinds" do
+    test "returns summaries for every registered kind" do
+      {:ok, %{kinds: kinds}} = ToolHandlers.list_kinds(%{}, %{})
+
+      assert is_list(kinds)
+      names = Enum.map(kinds, & &1.kind)
+      assert "stack" in names
+      assert "checklist" in names
+      assert "checklist_item" in names
+
+      stack = Enum.find(kinds, &(&1.kind == "stack"))
+      assert stack.accepts_children == "any"
+      assert is_map(stack.props)
+      assert is_map(stack.example)
+      assert stack.example["type"] == "stack"
+    end
+  end
+
+  describe "canvas.template" do
+    test "lists templates when called with no name" do
+      {:ok, %{templates: templates}} = ToolHandlers.template(%{}, %{})
+
+      names = Enum.map(templates, & &1.name)
+      assert "empty" in names
+      assert "checklist" in names
+      assert "dashboard" in names
+    end
+
+    test "returns a fully-valid document for a known name" do
+      {:ok, result} = ToolHandlers.template(%{"name" => "checklist"}, %{})
+
+      assert result.name == "checklist"
+      assert is_map(result.document)
+      assert result.document["version"] == 1
+      assert result.document["root"]["type"] == "stack"
+
+      # Round-trip: the returned doc must actually pass CanvasDocument validation.
+      assert {:ok, _} = Platform.Chat.CanvasDocument.validate(result.document)
+    end
+
+    test "returns error with available list for unknown name" do
+      assert {:error, payload} = ToolHandlers.template(%{"name" => "not-a-template"}, %{})
+
+      assert payload.recoverable == true
+      assert "empty" in payload.available
+    end
+  end
+
   describe "canvas.patch" do
     test "applies valid operations and bumps revision" do
       %{space: space, participant: participant} = setup_space()
@@ -275,6 +323,27 @@ defmodule Platform.Chat.Canvas.ToolHandlersTest do
                )
 
       assert payload.revision == 2
+    end
+
+    test "validation errors include prescriptive example + template list" do
+      %{space: space, participant: participant} = setup_space()
+
+      bad_doc = %{"root" => %{"type" => "not_a_kind", "props" => %{}, "children" => []}}
+
+      assert {:error, payload} =
+               ToolHandlers.create(
+                 %{"space_id" => space.id, "document" => bad_doc},
+                 %{agent_participant_id: participant.id}
+               )
+
+      assert payload.recoverable == true
+      assert is_list(payload.reasons)
+      assert is_map(payload.minimal_valid_example)
+      assert payload.minimal_valid_example["version"] == 1
+      assert payload.minimal_valid_example["root"]["type"] == "stack"
+      assert "empty" in payload.available_templates
+      assert "checklist" in payload.available_templates
+      assert payload.suggestion =~ "canvas.list_kinds"
     end
 
     test "rejects unrecognized operation shapes" do

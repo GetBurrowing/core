@@ -12,7 +12,9 @@ defmodule Platform.Chat.Canvas.ToolHandlers do
   require Logger
 
   alias Platform.Chat
+  alias Platform.Chat.Canvas.Kinds
   alias Platform.Chat.Canvas.Server, as: CanvasServer
+  alias Platform.Chat.Canvas.Templates
   alias Platform.Chat.CanvasDocument
   alias Platform.Chat.PubSub, as: ChatPubSub
 
@@ -164,6 +166,45 @@ defmodule Platform.Chat.Canvas.ToolHandlers do
     end
   end
 
+  @doc """
+  canvas.list_kinds — return ergonomic summaries of every registered node
+  kind. Agents call this once to discover what they can emit, without
+  having to parse the recursive discriminated-union JSON Schema.
+  """
+  @spec list_kinds(map(), map()) :: {:ok, map()}
+  def list_kinds(_args, _context) do
+    {:ok, %{kinds: Kinds.summaries()}}
+  end
+
+  @doc """
+  canvas.template — return a named canonical document. Agents that can't
+  reason about the schema from scratch can pick a template by name and
+  pass the returned `document` straight to `canvas.create`, adjusting as
+  needed. When called with no name, returns the list of available
+  templates.
+  """
+  @spec template(map(), map()) :: {:ok, map()} | {:error, map()}
+  def template(args, _context) do
+    case Map.get(args, "name") do
+      name when is_binary(name) and name != "" ->
+        case Templates.get(name) do
+          nil ->
+            {:error,
+             %{
+               error: "canvas.template: unknown template #{inspect(name)}",
+               recoverable: true,
+               available: Enum.map(Templates.list(), & &1.name)
+             }}
+
+          template ->
+            {:ok, template}
+        end
+
+      _ ->
+        {:ok, %{templates: Templates.list()}}
+    end
+  end
+
   # ── Helpers ─────────────────────────────────────────────────────────────
 
   # Auto-fill trivial scaffolding fields so minimal agent-emitted docs work:
@@ -219,7 +260,12 @@ defmodule Platform.Chat.Canvas.ToolHandlers do
         {:error,
          %{
            error: "document invalid: #{Enum.join(reasons, "; ")}",
-           recoverable: true
+           recoverable: true,
+           reasons: reasons,
+           suggestion:
+             "Discover shape via `canvas.list_kinds` (node catalog) or `canvas.template` (named starter docs). The example below is known-good — adjust and retry.",
+           minimal_valid_example: Templates.minimal_example(),
+           available_templates: Enum.map(Templates.list(), & &1.name)
          }}
     end
   end
