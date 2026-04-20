@@ -225,15 +225,28 @@ defmodule Platform.Chat.Canvas.ToolHandlers do
 
   defp normalize_document(other), do: other
 
-  defp normalize_node(node, fallback_id) when is_map(node) do
+  defp normalize_node(node, fallback_id) do
+    case decode_if_string(node) do
+      map when is_map(map) -> normalize_map_node(map, fallback_id)
+      other -> other
+    end
+  end
+
+  defp normalize_map_node(node, fallback_id) do
     id =
       case Map.get(node, "id") do
         v when is_binary(v) and v != "" -> v
         _ -> fallback_id
       end
 
+    props =
+      case decode_if_string(Map.get(node, "props", %{})) do
+        p when is_map(p) -> p
+        _ -> %{}
+      end
+
     children =
-      case Map.get(node, "children") do
+      case decode_if_string(Map.get(node, "children")) do
         list when is_list(list) ->
           Enum.map(list, &normalize_node(&1, Ecto.UUID.generate()))
 
@@ -243,13 +256,11 @@ defmodule Platform.Chat.Canvas.ToolHandlers do
 
     node
     |> Map.put("id", id)
-    |> Map.put_new("props", %{})
+    |> Map.put("props", props)
     |> then(fn n ->
       if children, do: Map.put(n, "children", children), else: n
     end)
   end
-
-  defp normalize_node(other, _fallback), do: other
 
   defp validate_document(document) do
     case CanvasDocument.validate(document) do

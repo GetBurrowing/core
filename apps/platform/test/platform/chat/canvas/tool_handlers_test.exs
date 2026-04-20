@@ -130,6 +130,94 @@ defmodule Platform.Chat.Canvas.ToolHandlersTest do
       on_exit(fn -> Platform.Chat.Canvas.Server.stop(result.canvas_id) end)
     end
 
+    test "accepts stringified nested children (per-child client stringification)" do
+      %{space: space, participant: participant} = setup_space()
+
+      stringified_child =
+        Jason.encode!(%{
+          "id" => "h",
+          "type" => "heading",
+          "props" => %{"value" => "Hello", "level" => 2},
+          "children" => []
+        })
+
+      doc_with_stringy_child = %{
+        "version" => 1,
+        "revision" => 1,
+        "root" => %{
+          "id" => "root",
+          "type" => "stack",
+          "props" => %{"gap" => 12},
+          "children" => [stringified_child]
+        },
+        "theme" => %{},
+        "bindings" => %{},
+        "meta" => %{}
+      }
+
+      args = %{
+        "space_id" => space.id,
+        "title" => "stringy child",
+        "document" => doc_with_stringy_child
+      }
+
+      context = %{agent_participant_id: participant.id}
+
+      assert {:ok, result} = ToolHandlers.create(args, context)
+      assert result.kind == "stack"
+
+      {:ok, %{document: doc}} = CanvasServer.describe(result.canvas_id)
+      [child] = doc["root"]["children"]
+      assert child["type"] == "heading"
+      assert child["props"]["value"] == "Hello"
+
+      on_exit(fn -> CanvasServer.stop(result.canvas_id) end)
+    end
+
+    test "accepts stringified props on a nested node" do
+      %{space: space, participant: participant} = setup_space()
+
+      doc_with_stringy_props = %{
+        "version" => 1,
+        "revision" => 1,
+        "root" => %{
+          "id" => "root",
+          "type" => "stack",
+          "props" => Jason.encode!(%{"gap" => 12}),
+          "children" => [
+            %{
+              "id" => "h",
+              "type" => "heading",
+              "props" => Jason.encode!(%{"value" => "Hello", "level" => 2}),
+              "children" => []
+            }
+          ]
+        },
+        "theme" => %{},
+        "bindings" => %{},
+        "meta" => %{}
+      }
+
+      args = %{
+        "space_id" => space.id,
+        "title" => "stringy props",
+        "document" => doc_with_stringy_props
+      }
+
+      context = %{agent_participant_id: participant.id}
+
+      assert {:ok, result} = ToolHandlers.create(args, context)
+      assert result.kind == "stack"
+
+      {:ok, %{document: doc}} = CanvasServer.describe(result.canvas_id)
+      assert doc["root"]["props"]["gap"] == 12
+      [child] = doc["root"]["children"]
+      assert child["props"]["value"] == "Hello"
+      assert child["props"]["level"] == 2
+
+      on_exit(fn -> CanvasServer.stop(result.canvas_id) end)
+    end
+
     test "rejects an invalid document with recoverable=true" do
       %{space: space, participant: participant} = setup_space()
 
