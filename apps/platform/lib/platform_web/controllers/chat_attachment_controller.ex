@@ -5,7 +5,9 @@ defmodule PlatformWeb.ChatAttachmentController do
   alias Platform.Chat.AttachmentStorage
 
   def show(conn, %{"id" => id}) do
-    case Chat.get_visible_attachment(id) do
+    principal = conn.assigns[:principal]
+
+    case Chat.get_visible_attachment_for_principal(id, principal) do
       nil ->
         send_resp(conn, :not_found, "Not found")
 

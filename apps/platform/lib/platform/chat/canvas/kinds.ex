@@ -300,6 +300,7 @@ defmodule Platform.Chat.Canvas.Kinds do
     with :ok <- validate_id(node, path),
          {:ok, mod} <- validate_type(node, path),
          :ok <- validate_props(mod, node, path),
+         :ok <- validate_kind_props(mod, node, path),
          :ok <- validate_children(mod, node, path) do
       :ok
     end
@@ -327,6 +328,24 @@ defmodule Platform.Chat.Canvas.Kinds do
 
   defp validate_props(_mod, _node, path),
     do: {:error, ["node at #{path} \"props\" must be a map"]}
+
+  # Delegates semantic validation to the kind module's `validate_props/1`.
+  # The default `:ok` injected by `use Platform.Chat.Canvas.Kind` means
+  # kinds without custom rules are a no-op here.
+  defp validate_kind_props(mod, %{"props" => props}, path) when is_map(props) do
+    case mod.validate_props(props) do
+      :ok ->
+        :ok
+
+      {:error, reason} when is_binary(reason) ->
+        {:error, ["node at #{path} #{reason}"]}
+
+      {:error, reasons} when is_list(reasons) ->
+        {:error, Enum.map(reasons, &"node at #{path} #{&1}")}
+    end
+  end
+
+  defp validate_kind_props(_mod, _node, _path), do: :ok
 
   defp validate_children(mod, node, path) do
     case {mod.children(), Map.get(node, "children")} do

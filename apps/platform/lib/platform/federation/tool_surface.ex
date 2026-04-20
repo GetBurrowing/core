@@ -17,7 +17,7 @@ defmodule Platform.Federation.ToolSurface do
 
   import Ecto.Query, only: [from: 2]
 
-  @bundles ~w(canvas messaging task plan review space context_read federation org_context skill)
+  @bundles ~w(canvas messaging task plan review space context_read federation org_context skill attachment)
 
   @doc "Known capability bundle names."
   def all_bundles, do: @bundles
@@ -52,6 +52,7 @@ defmodule Platform.Federation.ToolSurface do
   defp tools_for_bundle("federation"), do: tag(federation_tools(), "federation")
   defp tools_for_bundle("org_context"), do: tag(org_context_tools(), "org_context")
   defp tools_for_bundle("skill"), do: tag(skill_tools(), "skill")
+  defp tools_for_bundle("attachment"), do: tag(attachment_tools(), "attachment")
   defp tools_for_bundle(_), do: []
 
   defp tag(tools, bundle), do: Enum.map(tools, &Map.put(&1, :bundle, bundle))
@@ -69,6 +70,69 @@ defmodule Platform.Federation.ToolSurface do
           "Only shows active runtimes. Presence data is in-memory and resets on restart.",
         when_to_use:
           "When you need to diagnose connectivity issues or verify which agent runtimes are currently reachable"
+      }
+    ]
+  end
+
+  defp attachment_tools do
+    [
+      %{
+        name: "attachment.upload_inline",
+        description:
+          "Upload bytes as a base64 string in a single call (ADR 0039). Use for payloads up to the configured inline limit (default 25 MB). Returns a /chat/attachments/<id> URL suitable for referencing as a canvas image src or embedding in a message.",
+        parameters: %{
+          space_id: %{type: "string", required: true, description: "Target space UUID"},
+          filename: %{type: "string", required: true, description: "Client-reported filename"},
+          content_type: %{
+            type: "string",
+            required: true,
+            description: "MIME type (e.g. image/png)"
+          },
+          data_base64: %{
+            type: "string",
+            required: true,
+            description: "Base64-encoded file bytes"
+          },
+          canvas_id: %{
+            type: "string",
+            required: false,
+            description: "Attach to a specific canvas (space_id is still required)"
+          }
+        },
+        returns: "%{id, url, byte_size, content_hash, content_type, deduplicated}",
+        limitations:
+          "Capped at :inline_upload_max_bytes (default 25 MB). Use attachment.upload_start for larger files. Dedup is per-space — identical content in the same space returns the canonical id.",
+        when_to_use:
+          "When you have bytes in hand and they fit under the inline cap. Ideal for screenshots, diagrams, small documents."
+      },
+      %{
+        name: "attachment.upload_start",
+        description:
+          "Reserve a pending attachment row and get back a presigned POST URL to stream raw bytes to (ADR 0039). Use for files larger than the inline cap, or when the agent wants to hand off bytes via a plain HTTP POST.",
+        parameters: %{
+          space_id: %{type: "string", required: true, description: "Target space UUID"},
+          filename: %{type: "string", required: true, description: "Client-reported filename"},
+          content_type: %{
+            type: "string",
+            required: true,
+            description: "MIME type — the POST's Content-Type header must match"
+          },
+          byte_size: %{
+            type: "integer",
+            required: true,
+            description: "Declared size in bytes; enforced at POST time"
+          },
+          canvas_id: %{
+            type: "string",
+            required: false,
+            description: "Attach to a specific canvas"
+          }
+        },
+        returns: "%{id, upload_url, expires_at, max_bytes, url}",
+        limitations:
+          "Capped at :upload_max_bytes (default 500 MB). The reservation TTL is :pending_ttl_seconds (default 15 min); expired pending rows are reaped.",
+        when_to_use:
+          "Files over the inline cap, or any case where streaming bytes directly is preferable to base64-in-JSON."
       }
     ]
   end
@@ -1467,6 +1531,14 @@ defmodule Platform.Federation.ToolSurface do
 
   def execute("skill.upsert", args, context),
     do: Platform.Skills.ToolHandlers.upsert(args, context)
+
+  # ── Attachment tools (ADR 0039) ─────────────────────────────────────────
+
+  def execute("attachment.upload_inline", args, context),
+    do: Platform.Chat.Attachments.ToolHandlers.upload_inline(args, context)
+
+  def execute("attachment.upload_start", args, context),
+    do: Platform.Chat.Attachments.ToolHandlers.upload_start(args, context)
 
   # Legacy underscore-names kept for one release — delegate to the new handlers.
   def execute("canvas_create", args, context) do

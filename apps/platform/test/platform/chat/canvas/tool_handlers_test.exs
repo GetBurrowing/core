@@ -381,6 +381,39 @@ defmodule Platform.Chat.Canvas.ToolHandlersTest do
       assert payload.suggestion =~ "canvas.describe"
     end
 
+    test "rejects an image src that isn't /chat/attachments/<uuid> (ADR 0039 phase 6)" do
+      %{space: space, participant: participant} = setup_space()
+
+      {:ok, %{canvas_id: canvas_id}} =
+        ToolHandlers.create(
+          %{"space_id" => space.id, "document" => valid_document()},
+          %{agent_participant_id: participant.id}
+        )
+
+      on_exit(fn -> CanvasServer.stop(canvas_id) end)
+
+      illegal_image = %{
+        "id" => "kitten",
+        "type" => "image",
+        "props" => %{"src" => "https://placekitten.com/600/300"}
+      }
+
+      assert {:error, payload} =
+               ToolHandlers.patch(
+                 %{
+                   "canvas_id" => canvas_id,
+                   "base_revision" => 1,
+                   "operations" => [["append_child", "root", illegal_image]]
+                 },
+                 %{}
+               )
+
+      assert payload.recoverable == true
+      assert payload.conflict.reason == :schema_violation
+      assert payload.conflict.message =~ "path-relative"
+      assert payload.conflict.message =~ "attachment.upload_inline"
+    end
+
     test "accepts stringified operation args (MCP stringification fallback)" do
       %{space: space, participant: participant} = setup_space()
 

@@ -1,6 +1,6 @@
 # ADR 0039: Agent-Uploadable Attachments
 
-**Status:** Proposed
+**Status:** Accepted
 **Date:** 2026-04-19
 **Deciders:** Rowan
 **Related:** ADR 0008 (Chat Backend), ADR 0034 (MCP Endpoint & Capability Bundles), ADR 0036 (Canvases as First-Class Surfaces)

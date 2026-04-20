@@ -1,37 +1,43 @@
-#!/usr/bin/env bash
-set -euo pipefail
+#!/bin/sh
+# GITBUTLER_MANAGED_HOOK_V1
+# This hook is managed by GitButler to prevent accidental commits on the workspace branch.
+# Your original pre-commit hook has been preserved as 'pre-commit-user'.
 
-repo_root="$(git rev-parse --show-toplevel)"
+HOOKS_DIR=$(dirname "$0")
 
-if ! command -v mix >/dev/null 2>&1; then
-  echo "[pre-commit] mix not found; skipping apps/platform auto-format." >&2
-  exit 0
+# Run user's hook first if it exists - if it fails, stop here
+if [ -x "$HOOKS_DIR/pre-commit-user" ]; then
+    "$HOOKS_DIR/pre-commit-user" "$@" || exit $?
 fi
 
-staged=()
-while IFS= read -r -d '' path; do
-  staged+=("$path")
-done < <(git -C "$repo_root" diff --cached --name-only --diff-filter=ACMR -z)
+# Get the current branch name
+BRANCH=$(git symbolic-ref --short HEAD 2>/dev/null)
 
-repo_files=()
-app_files=()
-for path in "${staged[@]}"; do
-  case "$path" in
-    apps/platform/*.ex | apps/platform/*.exs | apps/platform/*.heex)
-      repo_files+=("$path")
-      app_files+=("${path#apps/platform/}")
-      ;;
-  esac
-done
-
-if [ ${#repo_files[@]} -eq 0 ]; then
-  exit 0
+if [ "$BRANCH" = "gitbutler/workspace" ]; then
+    echo ""
+    echo "GITBUTLER_ERROR: Cannot commit directly to gitbutler/workspace branch."
+    echo ""
+    echo "GitButler manages commits on this branch. Please use GitButler to commit your changes:"
+    echo "  - Use the GitButler app to create commits"
+    echo "  - Or run 'but commit' from the command line"
+    echo ""
+    echo "If you want to exit GitButler mode and use normal git:"
+    echo "  - Run 'but teardown' to switch to a regular branch"
+    echo "  - Or directly checkout another branch: git checkout <branch>"
+    echo ""
+    echo "If you no longer have the GitButler CLI installed, you can simply remove this hook and checkout another branch:"
+    printf '  rm "%s/pre-commit"\n' "$HOOKS_DIR"
+    echo ""
+    exit 1
 fi
 
-echo "[pre-commit] mix format ${#repo_files[@]} staged file(s) in apps/platform"
-(
-  cd "$repo_root/apps/platform"
-  mix format "${app_files[@]}"
-)
+# Not on workspace branch - run user's original hook if it exists
+if [ -x "$HOOKS_DIR/pre-commit-user" ]; then
+    echo ""
+    echo "WARNING: GitButler's pre-commit hook is still installed but you're not on gitbutler/workspace."
+    echo "If you're no longer using GitButler, you can restore your original hook:"
+    printf '  mv "%s/pre-commit-user" "%s/pre-commit"\n' "$HOOKS_DIR" "$HOOKS_DIR"
+    echo ""
+fi
 
-git -C "$repo_root" add -- "${repo_files[@]}"
+exit 0

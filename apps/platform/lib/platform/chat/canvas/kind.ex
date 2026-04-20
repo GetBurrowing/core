@@ -60,6 +60,18 @@ defmodule Platform.Chat.Canvas.Kind do
   """
   @callback render(assigns :: map()) :: Phoenix.LiveView.Rendered.t()
 
+  @doc """
+  Optional semantic validation for props beyond the JSON schema shape.
+
+  Runs after the `Kinds` pipeline confirms `"props"` is a map but before
+  children are validated. Return `:ok` to accept, or `{:error, reason}` /
+  `{:error, [reason, ...]}` with human-readable messages to surface
+  through the canvas validation error stream.
+  """
+  @callback validate_props(props :: map()) :: :ok | {:error, String.t() | [String.t()]}
+
+  @optional_callbacks validate_props: 1
+
   defmacro __using__(_opts) do
     quote do
       @behaviour Platform.Chat.Canvas.Kind
@@ -82,8 +94,14 @@ defmodule Platform.Chat.Canvas.Kind do
       def presence_shape, do: :none
       def defaults, do: %{}
       def children, do: :none
+      def validate_props(_props), do: :ok
 
-      defoverridable styling: 0, events: 0, presence_shape: 0, defaults: 0, children: 0
+      defoverridable styling: 0,
+                     events: 0,
+                     presence_shape: 0,
+                     defaults: 0,
+                     children: 0,
+                     validate_props: 1
     end
   end
 end

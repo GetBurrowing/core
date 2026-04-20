@@ -26,7 +26,8 @@ config :platform, :oidc,
 
 config :platform,
   chat_attachments_root: Path.join(System.tmp_dir!(), "platform_test_chat_uploads"),
-  skip_attachment_storage_check: true
+  skip_attachment_storage_check: true,
+  attachment_signing_key: "test-attachment-signing-key-0123456789abcdef"
 
 # Print only warnings and errors during test
 config :logger, level: :warning

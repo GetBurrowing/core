@@ -35,7 +35,7 @@ defmodule Platform.Chat do
   import Ecto.Query
 
   alias Ecto.Multi
-  alias Platform.Agents.Agent
+  alias Platform.Agents.{Agent, AgentRuntime}
 
   alias Platform.Chat.{
     Attachment,
@@ -662,6 +662,7 @@ defmodule Platform.Chat do
         Multi.run(multi, {:attachment, index}, fn repo, %{message: message} ->
           attachment_attrs
           |> Map.put(:message_id, message.id)
+          |> Map.put(:space_id, message.space_id)
           |> then(&Attachment.changeset(%Attachment{}, &1))
           |> repo.insert()
         end)
@@ -1505,11 +1506,9 @@ defmodule Platform.Chat do
   # ── Attachments ──────────────────────────────────────────────────────────────
 
   @doc """
-  Record a new attachment for a message.
-
-  Required attrs: `:message_id` (integer), `:filename`, `:content_type`,
-  `:byte_size`, `:storage_key`.
-  Optional: `:metadata`.
+  Record a new attachment. Required: `:filename`, `:content_type`, `:byte_size`,
+  `:storage_key`. Provide `:space_id` and/or `:message_id` to anchor ownership
+  (ADR 0039 allows space- or canvas-scoped attachments without a parent message).
   """
   @spec create_attachment(map()) :: {:ok, Attachment.t()} | {:error, Ecto.Changeset.t()}
   def create_attachment(attrs) do
@@ -1523,18 +1522,72 @@ defmodule Platform.Chat do
   def get_attachment(id), do: Repo.get(Attachment, id)
 
   @doc """
-  Fetch an attachment only when its parent message still exists and is not soft-deleted.
+  Fetch an attachment for the viewer.
+
+  Message-owned attachments remain gated on the parent message being
+  non-deleted. Space-owned or canvas-owned attachments (nil `message_id`,
+  introduced in ADR 0039) have no parent message to check, so they pass
+  through as long as the row exists.
   """
   @spec get_visible_attachment(binary()) :: Attachment.t() | nil
   def get_visible_attachment(id) do
     from(a in Attachment,
-      join: m in Message,
+      left_join: m in Message,
       on: m.id == a.message_id,
-      where: a.id == ^id and is_nil(m.deleted_at),
+      where: a.id == ^id and (is_nil(a.message_id) or is_nil(m.deleted_at)),
       select: a
     )
     |> Repo.one()
   end
+
+  @doc """
+  Fetch an attachment for a principal (ADR 0039 phase 3).
+
+  Extends `get_visible_attachment/1` with a space-membership check so the
+  same route can serve session users and runtime bearers:
+
+    - `{:user, user_id}` — must be a `participant_type: "user"` participant in
+      `attachment.space_id`.
+    - `{:runtime, %AgentRuntime{}}` — the runtime's `agent_id` must be a
+      `participant_type: "agent"` participant in `attachment.space_id`.
+
+  Attachments without a `space_id` (legacy rows pre-1a backfill) fall back to
+  the message-deleted check alone, so existing behavior is preserved.
+  """
+  @spec get_visible_attachment_for_principal(
+          binary(),
+          {:user, binary()} | {:runtime, AgentRuntime.t()}
+        ) :: Attachment.t() | nil
+  def get_visible_attachment_for_principal(id, principal) do
+    case get_visible_attachment(id) do
+      nil ->
+        nil
+
+      %Attachment{space_id: nil} = attachment ->
+        attachment
+
+      %Attachment{space_id: space_id} = attachment ->
+        if principal_is_member?(space_id, principal), do: attachment, else: nil
+    end
+  end
+
+  defp principal_is_member?(space_id, {:user, user_id}) when is_binary(user_id) do
+    Repo.exists?(
+      from(p in Participant,
+        where:
+          p.space_id == ^space_id and
+            p.participant_type == "user" and
+            p.participant_id == ^user_id
+      )
+    )
+  end
+
+  defp principal_is_member?(space_id, {:runtime, %AgentRuntime{agent_id: agent_id}})
+       when is_binary(agent_id) do
+    not is_nil(get_agent_participant(space_id, agent_id))
+  end
+
+  defp principal_is_member?(_space_id, _principal), do: false
 
   @doc "List attachments for a message, oldest first."
   @spec list_attachments(binary()) :: [Attachment.t()]

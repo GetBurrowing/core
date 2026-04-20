@@ -56,6 +56,8 @@ defmodule Platform.Application do
            Platform.Chat.Presence,
            # Vault OAuth token refresh worker — must start after Repo and Vault.Encryption
            Platform.Vault.RefreshWorker,
+           # Reap expired pending attachments (ADR 0039) — needs Repo
+           Platform.Chat.AttachmentReaper,
            # Start to serve requests, typically the last entry
            PlatformWeb.Endpoint
          ])

@@ -268,6 +268,63 @@ defmodule Platform.ChatTest do
     end
   end
 
+  describe "create_attachment/1 (ADR 0039)" do
+    test "accepts a space_id-only payload (no message_id)" do
+      space = create_space()
+
+      assert {:ok, attachment} =
+               Chat.create_attachment(%{
+                 space_id: space.id,
+                 filename: "orphan.txt",
+                 content_type: "text/plain",
+                 byte_size: 3,
+                 storage_key: "chat/test/orphan.txt"
+               })
+
+      assert attachment.space_id == space.id
+      assert is_nil(attachment.message_id)
+      assert attachment.state == "ready"
+    end
+  end
+
+  describe "get_visible_attachment/1 (ADR 0039)" do
+    test "returns an attachment with message_id: nil when space-scoped" do
+      space = create_space()
+
+      {:ok, attachment} =
+        Chat.create_attachment(%{
+          space_id: space.id,
+          filename: "canvas-only.png",
+          content_type: "image/png",
+          byte_size: 42,
+          storage_key: "chat/test/canvas-only.png"
+        })
+
+      assert %{id: id, message_id: nil} = attachment
+      assert %{id: ^id} = Chat.get_visible_attachment(id)
+    end
+
+    test "still hides attachments whose owning message is soft-deleted" do
+      space = create_space()
+      participant = create_participant(space.id)
+      message = create_message(space.id, participant.id)
+
+      {:ok, attachment} =
+        Chat.create_attachment(%{
+          message_id: message.id,
+          space_id: space.id,
+          filename: "deleted.txt",
+          content_type: "text/plain",
+          byte_size: 3,
+          storage_key: "chat/test/deleted.txt"
+        })
+
+      {:ok, _} = Chat.delete_message(message)
+
+      assert Chat.get_visible_attachment(attachment.id) == nil
+    end
+  end
+
   describe "list_attachments_for_messages/1" do
     test "returns attachments grouped by message_id" do
       space = create_space()

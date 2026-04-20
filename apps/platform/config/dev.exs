@@ -83,7 +83,9 @@ config :platform, dev_routes: true
 
 # Dev machines don't need to pre-provision /data/platform/chat_uploads.
 # The upload path falls back to a tmp dir via AttachmentStorage.storage_root/0.
-config :platform, skip_attachment_storage_check: true
+config :platform,
+  skip_attachment_storage_check: true,
+  attachment_signing_key: "dev-attachment-signing-key-do-not-use-in-prod"
 
 # Do not include metadata nor timestamps in development logs
 config :logger, :default_formatter, format: "[$level] $message\n"
