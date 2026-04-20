@@ -1352,6 +1352,21 @@ defmodule Platform.Chat do
   end
 
   @doc """
+  List the ids of non-deleted messages that reference a given canvas.
+  Used by the chat LiveView to know which stream items to re-insert when
+  `{:canvas_updated, canvas}` fires — stream items otherwise keep their
+  render snapshot from insert time and miss the updated document.
+  """
+  @spec list_message_ids_for_canvas(binary()) :: [binary()]
+  def list_message_ids_for_canvas(canvas_id) when is_binary(canvas_id) do
+    from(m in Message,
+      where: m.canvas_id == ^canvas_id and is_nil(m.deleted_at),
+      select: m.id
+    )
+    |> Repo.all()
+  end
+
+  @doc """
   Apply `CanvasPatch` operations to a canvas document.
 
   Routes through `Platform.Chat.Canvas.Server` for rebase-or-reject concurrency

@@ -233,6 +233,57 @@ defmodule PlatformWeb.ChatLiveTest do
     assert html =~ "agent avatar stays separate"
   end
 
+  test "inline canvas in the message stream refreshes on :canvas_updated", %{conn: conn} do
+    conn = authenticated_conn(conn)
+    {:ok, view, _html} = live(conn, ~p"/chat/general", on_error: :warn)
+
+    user = Repo.get_by!(User, email: "chat_test@example.com")
+    space = Repo.get_by!(Chat.Space, slug: "general")
+
+    participant =
+      Repo.get_by(Chat.Participant,
+        space_id: space.id,
+        participant_type: "user",
+        participant_id: user.id
+      ) ||
+        elem(
+          Chat.add_participant(space.id, %{participant_type: "user", participant_id: user.id}),
+          1
+        )
+
+    {:ok, canvas, _message} =
+      Chat.create_canvas_with_message(space.id, participant.id, %{
+        title: "Inline refresh test"
+      })
+
+    refute render(view) =~ "INLINE_REFRESH_TOKEN"
+
+    patched_document = %{
+      "version" => 1,
+      "revision" => 2,
+      "root" => %{
+        "id" => "root",
+        "type" => "stack",
+        "props" => %{},
+        "children" => [
+          %{
+            "id" => "m1",
+            "type" => "markdown",
+            "props" => %{"content" => "INLINE_REFRESH_TOKEN body"},
+            "children" => []
+          }
+        ]
+      },
+      "theme" => %{},
+      "bindings" => %{},
+      "meta" => %{}
+    }
+
+    {:ok, _updated} = Chat.update_canvas(canvas, %{"document" => patched_document})
+
+    assert render(view) =~ "INLINE_REFRESH_TOKEN"
+  end
+
   test "opening a canvas refetches latest state from the database", %{conn: conn} do
     conn = authenticated_conn(conn)
 

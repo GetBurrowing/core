@@ -549,6 +549,21 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
       {:halt, socket}
   end
 
+  # LiveView streams render items once on insert and don't auto-refresh when
+  # external assigns change. Inline canvas cards read `@canvases_by_id[msg.canvas_id]`,
+  # so a canvas patch that only updates that assign leaves the stream item frozen
+  # at its insert-time snapshot. Re-insert the referencing message(s) here so the
+  # template re-renders with the updated canvas. `:cont` so CanvasHooks still runs
+  # after us and refreshes `canvases_by_id` before the final diff is computed.
+  defp handle_info({:canvas_updated, canvas}, socket) do
+    socket =
+      canvas.id
+      |> Chat.list_message_ids_for_canvas()
+      |> Enum.reduce(socket, &reinsert_stream_message(&2, &1))
+
+    {:cont, socket}
+  end
+
   defp handle_info(
          {:agent_reply_chunk,
           %{chunk_id: chunk_id, text: text, done: done, participant_id: participant_id}},
