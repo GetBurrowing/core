@@ -156,6 +156,11 @@
 .chat-markdown p { margin: 0.25em 0; }
 .chat-markdown ul,
 .chat-markdown ol { margin: 0.25em 0; padding-left: 1.5em; }
+/* Restore list markers — Tailwind v4 preflight resets list-style globally. */
+.chat-markdown ul { list-style-type: disc; }
+.chat-markdown ol { list-style-type: decimal; }
+.chat-markdown ul ul { list-style-type: circle; }
+.chat-markdown ol ol { list-style-type: lower-alpha; }
 .chat-markdown li { margin: 0.1em 0; }
 
 .chat-markdown blockquote {
@@ -201,6 +206,10 @@
 .task-markdown p { margin: 0.15em 0; }
 .task-markdown ul,
 .task-markdown ol { margin: 0.15em 0; padding-left: 1.25em; }
+.task-markdown ul { list-style-type: disc; }
+.task-markdown ol { list-style-type: decimal; }
+.task-markdown ul ul { list-style-type: circle; }
+.task-markdown ol ol { list-style-type: lower-alpha; }
 .task-markdown li { margin: 0.05em 0; }
 .task-markdown blockquote { margin: 0.3em 0; }
 .task-markdown .code-block-wrapper pre { padding: 0.5em 0.75em; font-size: 0.75em; }

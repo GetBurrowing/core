@@ -717,7 +717,7 @@
 
             <div
               :if={msg.content_type != "canvas" and present?(msg.content)}
-              class="prose prose-sm max-w-none text-sm text-base-content break-words chat-markdown"
+              class="text-sm text-base-content break-words chat-markdown"
             >
               {Platform.Chat.ContentRenderer.render_message(msg.content)}
             </div>
@@ -1009,7 +1009,7 @@
               {PresenceHooks.sender_name(@participants_map, entry.participant_id)}
             </div>
             <div
-              class="prose prose-sm max-w-none text-sm text-base-content/80 border-l-2 pl-3"
+              class="text-sm text-base-content/80 border-l-2 pl-3"
               style="border-color: color-mix(in oklch, var(--agent-accent, oklch(82% 0.12 207)) 30%, transparent);"
             >
               {entry.text}<span
