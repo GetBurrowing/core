@@ -1,54 +1,69 @@
-// Long-press gesture detector for chat messages (mobile).
+// Double-tap gesture detector for chat messages (mobile).
 //
 // Fires `open_longpress_menu` with the hook element's `data-message-id`
-// when the user holds a finger on the bubble for LONGPRESS_MS without
-// moving. Any touchmove or early touchend cancels the timer — which
-// preserves native iOS text selection: short hold = our menu, long hold
-// (past iOS's ~500ms threshold) = iOS selection takes over since we've
-// already fired and moved on, and drag-to-select cancels our timer on
-// the first move.
+// when the user taps twice within DOUBLE_TAP_MS on the same message
+// bubble. Exits early when the bubble is flagged `data-is-own-message`:
+// double-tap on the current user's own message is reserved for the
+// upcoming edit gesture (see PR2).
+//
+// Why double-tap (not long-press): the PWA's 450ms long-press detector
+// competed with the browser's native text-selection menu (Chrome on
+// Android, Safari on iOS). Both open popups on the same gesture, which
+// led to duplicate menus and accidentally-triggered actions like "Pin
+// to channel". Double-tap has no native overload — tap-to-zoom is
+// suppressed by viewport meta + `touch-action: manipulation` — so we
+// own the gesture cleanly.
 //
 // Desktop mouse interaction is intentionally unhandled — the chat keeps
 // its existing hover action bar on pointer devices.
 
-const LONGPRESS_MS = 450
-const HAPTIC_MS = 30
+const DOUBLE_TAP_MS = 300
+const DOUBLE_TAP_MAX_MOVE_PX = 12
+const HAPTIC_MS = 20
 
 const LongpressMenu = {
   mounted() {
-    this._timer = null
+    this._lastTapAt = 0
+    this._lastTapX = 0
+    this._lastTapY = 0
 
-    this._onTouchStart = (e) => this.startTimer(e)
-    this._onCancel = () => this.clearTimer()
-
-    this.el.addEventListener("touchstart", this._onTouchStart, { passive: true })
-    this.el.addEventListener("touchmove", this._onCancel, { passive: true })
-    this.el.addEventListener("touchend", this._onCancel, { passive: true })
-    this.el.addEventListener("touchcancel", this._onCancel, { passive: true })
+    this._onTouchEnd = (e) => this.handleTap(e)
+    this.el.addEventListener("touchend", this._onTouchEnd, { passive: true })
   },
 
   destroyed() {
-    this.clearTimer()
-    this.el.removeEventListener("touchstart", this._onTouchStart)
-    this.el.removeEventListener("touchmove", this._onCancel)
-    this.el.removeEventListener("touchend", this._onCancel)
-    this.el.removeEventListener("touchcancel", this._onCancel)
+    this.el.removeEventListener("touchend", this._onTouchEnd)
   },
 
-  startTimer() {
-    this.clearTimer()
-    this._timer = setTimeout(() => this.trigger(), LONGPRESS_MS)
-  },
+  handleTap(e) {
+    // Own-message double-tap is reserved for edit (PR2). Skip entirely
+    // so the browser's native text-selection flow isn't disrupted on
+    // the author's own bubbles.
+    if (this.el.dataset.isOwnMessage === "true") {
+      this._lastTapAt = 0
+      return
+    }
 
-  clearTimer() {
-    if (this._timer) {
-      clearTimeout(this._timer)
-      this._timer = null
+    const touch = e.changedTouches && e.changedTouches[0]
+    if (!touch) return
+
+    const now = Date.now()
+    const dx = touch.clientX - this._lastTapX
+    const dy = touch.clientY - this._lastTapY
+    const withinTime = now - this._lastTapAt < DOUBLE_TAP_MS
+    const withinMove = dx * dx + dy * dy < DOUBLE_TAP_MAX_MOVE_PX ** 2
+
+    if (withinTime && withinMove) {
+      this.trigger()
+      this._lastTapAt = 0
+    } else {
+      this._lastTapAt = now
+      this._lastTapX = touch.clientX
+      this._lastTapY = touch.clientY
     }
   },
 
   trigger() {
-    this._timer = null
     const messageId = this.el.dataset.messageId
     if (!messageId) return
     if (navigator.vibrate) navigator.vibrate(HAPTIC_MS)

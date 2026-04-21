@@ -863,10 +863,10 @@ defmodule PlatformWeb.ChatLiveTest do
     end
   end
 
-  # ── Long-press menu (mobile) ────────────────────────────────────────────────
+  # ── Quick-react popover (mobile double-tap) ─────────────────────────────────
 
-  describe "long-press menu" do
-    test "opening the menu renders the dialog with the target message id",
+  describe "quick-react popover" do
+    test "opening the popover renders the dialog with the target message id",
          %{conn: conn} do
       conn = authenticated_conn(conn)
       {:ok, view, html} = live(conn, ~p"/chat/general")
@@ -874,7 +874,7 @@ defmodule PlatformWeb.ChatLiveTest do
       refute html =~ ~s(id="longpress-menu")
 
       view
-      |> form("#compose-form", compose: %{text: "longpress target"})
+      |> form("#compose-form", compose: %{text: "double-tap target"})
       |> render_submit()
 
       space = Chat.get_space_by_slug("general")
@@ -888,29 +888,32 @@ defmodule PlatformWeb.ChatLiveTest do
       # the corresponding DOM element on mount.
       assert html =~ ~s(data-target-message-id="#{msg.id}")
       assert html =~ ~s(phx-hook="MessageLift")
-      # Scrim + pill + card all render together; JS positions pill and card
-      # relative to the lifted clone via the --clone-half-h CSS var.
+      # Scrim + pill render together; the Copy / Open-in-thread / Pin action
+      # card was removed when long-press was replaced with double-tap, since
+      # the card surfaced actions that either duplicated the browser's
+      # native selection menu (Copy) or were frequently triggered by
+      # accident (Pin).
       assert html =~ "longpress-scrim"
       assert html =~ "longpress-pill"
-      assert html =~ "longpress-card"
+      # Action card container and its rows are gone — verified via the
+      # container class (checking the row labels would false-positive on
+      # the desktop hover-bar, which reuses strings like "Copy message"
+      # as button titles).
+      refute html =~ "longpress-card"
+      refute html =~ "longpress-card-label"
       assert html =~ ~s(aria-label="Quick reactions")
       # Emojis should all be present in the pill.
       for emoji <- ~w(👍 🎉 ✅ ❤️ 😂 🙏) do
         assert html =~ emoji
       end
-
-      # Action labels.
-      assert html =~ "Copy message"
-      assert html =~ "Open in thread"
-      assert html =~ "Pin to channel"
     end
 
-    test "closing the menu removes it from the DOM", %{conn: conn} do
+    test "closing the popover removes it from the DOM", %{conn: conn} do
       conn = authenticated_conn(conn)
       {:ok, view, _html} = live(conn, ~p"/chat/general")
 
       view
-      |> form("#compose-form", compose: %{text: "longpress close"})
+      |> form("#compose-form", compose: %{text: "double-tap close"})
       |> render_submit()
 
       space = Chat.get_space_by_slug("general")
@@ -923,44 +926,29 @@ defmodule PlatformWeb.ChatLiveTest do
       refute html =~ ~s(id="longpress-menu")
     end
 
-    test "message bubbles carry the LongpressMenu hook and data-message-id",
+    test "message bubbles carry the LongpressMenu hook, data-message-id, and data-is-own-message",
          %{conn: conn} do
       conn = authenticated_conn(conn)
       {:ok, view, _html} = live(conn, ~p"/chat/general")
 
       view
-      |> form("#compose-form", compose: %{text: "longpress attach"})
+      |> form("#compose-form", compose: %{text: "double-tap attach"})
       |> render_submit()
 
       space = Chat.get_space_by_slug("general")
       [msg | _] = Chat.list_messages(space.id)
 
       html = render(view)
+      # Hook name retained for minimal churn; the JS now listens for
+      # double-tap rather than a 450ms hold.
       assert html =~ ~s(phx-hook="LongpressMenu")
       assert html =~ ~s(data-message-id="#{msg.id}")
+      # Authorship flag is what the JS reads to skip firing on the
+      # current user's own bubbles (reserved for edit gesture, PR2).
+      assert html =~ ~s(data-is-own-message="true")
     end
 
-    test "opening the menu loads the message content for the Copy button",
-         %{conn: conn} do
-      conn = authenticated_conn(conn)
-      {:ok, view, _html} = live(conn, ~p"/chat/general")
-
-      view
-      |> form("#compose-form", compose: %{text: "content for copy"})
-      |> render_submit()
-
-      space = Chat.get_space_by_slug("general")
-      [msg | _] = Chat.list_messages(space.id)
-
-      html = render_hook(view, "open_longpress_menu", %{"message_id" => msg.id})
-
-      # CopyToClipboard hook reads this to write to navigator.clipboard.
-      assert html =~ ~s(data-clipboard-text="content for copy")
-      assert html =~ ~s(phx-hook="CopyToClipboard")
-      assert html =~ ~s(id="longpress-copy-btn")
-    end
-
-    test "tapping an emoji in the pill persists a reaction and closes the menu",
+    test "tapping an emoji in the pill persists a reaction and closes the popover",
          %{conn: conn} do
       conn = authenticated_conn(conn)
       {:ok, view, _html} = live(conn, ~p"/chat/general")
@@ -981,7 +969,7 @@ defmodule PlatformWeb.ChatLiveTest do
       # Reaction persisted.
       assert [%{emoji: "🎉"}] = Chat.list_reactions(msg.id)
 
-      # Menu closed — close_picker/1 now also resets :longpress_menu_for.
+      # Popover closed — close_picker/1 also resets :longpress_menu_for.
       refute html =~ ~s(id="longpress-menu")
     end
   end

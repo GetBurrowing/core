@@ -16,8 +16,8 @@
 // the animation, restore the original's opacity, and remove the clone
 // after the CSS transition completes.
 //
-// Scrim blur + action row (emoji pill + action card) render through
-// regular LV in the menu fragment — see chat_live.html.heex.
+// Scrim blur + emoji pill render through regular LV in the menu
+// fragment — see chat_live.html.heex.
 
 const MessageLift = {
   mounted() {
@@ -60,9 +60,10 @@ const MessageLift = {
     clone.style.setProperty("--lift-dy", `${dy}px`)
 
     // Expose the clone's post-lift half-height to the LV menu fragment so
-    // the emoji pill (above) and action card (below) can position
-    // themselves relative to where the clone lands. 1.02 matches the CSS
-    // scale on .message-lift.lifted.
+    // the emoji pill (above the clone) can position itself relative to
+    // where the clone lands. 1.02 matches the CSS scale on
+    // .message-lift.lifted. The action card below the clone was removed
+    // when long-press became double-tap — see longpress_menu.js.
     this.el.style.setProperty("--clone-half-h", `${(rect.height * 1.02) / 2}px`)
 
     document.body.appendChild(clone)

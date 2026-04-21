@@ -571,6 +571,12 @@
           data-participant-id={msg.participant_id}
           data-date={msg.inserted_at && DateTime.to_date(msg.inserted_at) |> Date.to_iso8601()}
           data-message-id={msg.id}
+          data-is-own-message={
+            if(@current_participant && msg.participant_id == @current_participant.id,
+              do: "true",
+              else: "false"
+            )
+          }
           phx-hook="LongpressMenu"
         >
           <%!-- Avatar circle (hidden when grouped with previous message via JS) --%>
@@ -1252,13 +1258,17 @@
 </div>
 
 <%!--
-  Long-press menu (mobile). V3 "lift-and-center" pattern.
-  Scrim + blur fade in, target message clones and animates to viewport
-  center via MessageLift JS hook, emoji pill floats above the lifted
-  clone, action card floats below. Position of pill/card is driven by
-  a --clone-half-h CSS var set by the hook at mount.
-  Phase 4 wires the action events (Copy, Open in thread, Pin) and
-  closes the menu after each.
+  Quick-react popover (mobile). Triggered by double-tap on a message
+  authored by someone else — see the `LongpressMenu` JS hook, which
+  despite the legacy name now listens for a double-tap gesture rather
+  than a 450ms hold. Scrim + blur fade in, target message clones and
+  animates to viewport center via `MessageLift`, and the emoji pill
+  floats above the lifted clone. Pill position is driven by
+  `--clone-half-h`, set by the hook at mount. The historical action
+  card (Copy / Open in thread / Pin) was removed: Copy duplicated the
+  browser's native selection menu on mobile, and Pin was frequently
+  triggered by accident. Thread-open is deferred to a follow-up UX
+  pass; desktop still exposes both via the hover action bar.
 --%>
 <div
   :if={@longpress_menu_for}
@@ -1303,53 +1313,6 @@
       }
     >
       <span class="hero-plus size-4"></span>
-    </button>
-  </div>
-
-  <%!-- Action card, floats below the lifted clone. --%>
-  <div class="longpress-card" role="menu" aria-label="Message actions">
-    <button
-      type="button"
-      id="longpress-copy-btn"
-      class="longpress-card-row"
-      role="menuitem"
-      phx-hook="CopyToClipboard"
-      data-clipboard-text={@longpress_menu_content}
-      phx-click="close_longpress_menu"
-    >
-      <span class="longpress-card-label">Copy message</span>
-      <span class="hero-document-duplicate size-[18px] longpress-card-icon"></span>
-    </button>
-    <div class="longpress-card-divider" aria-hidden="true"></div>
-    <button
-      type="button"
-      class="longpress-card-row"
-      role="menuitem"
-      phx-click={
-        JS.push("open_thread", value: %{"message-id" => @longpress_menu_for})
-        |> JS.push("close_longpress_menu")
-      }
-    >
-      <span class="longpress-card-label">Open in thread</span>
-      <span class="hero-chat-bubble-left-right size-[18px] longpress-card-icon"></span>
-    </button>
-    <div class="longpress-card-divider" aria-hidden="true"></div>
-    <button
-      type="button"
-      class="longpress-card-row"
-      role="menuitem"
-      phx-click={
-        JS.push("pin_toggle",
-          value: %{
-            "message-id" => @longpress_menu_for,
-            "space-id" => @active_space && @active_space.id
-          }
-        )
-        |> JS.push("close_longpress_menu")
-      }
-    >
-      <span class="longpress-card-label">Pin to channel</span>
-      <span class="hero-map-pin size-[18px] longpress-card-icon"></span>
     </button>
   </div>
 </div>
