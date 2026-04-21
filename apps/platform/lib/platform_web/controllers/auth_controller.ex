@@ -78,13 +78,22 @@ defmodule PlatformWeb.AuthController do
     invalid_state(conn)
   end
 
-  def dev_login(conn, _params) do
+  def dev_login(conn, params) do
+    # `?as=<slug>` lets E2E tests log in as distinct users in parallel
+    # browser contexts without touching OIDC. The default "dev-local-user"
+    # is preserved for the interactive `/dev/login` link.
+    {sub, email, name} =
+      case Map.get(params, "as") do
+        nil ->
+          {"dev-local-user", "dev@localhost", "Dev User"}
+
+        slug when is_binary(slug) ->
+          slug = String.downcase(slug)
+          {"dev-#{slug}", "#{slug}@localhost", "Dev #{String.capitalize(slug)}"}
+      end
+
     {:ok, user} =
-      Accounts.find_or_create_from_oidc(%{
-        sub: "dev-local-user",
-        email: "dev@localhost",
-        name: "Dev User"
-      })
+      Accounts.find_or_create_from_oidc(%{sub: sub, email: email, name: name})
 
     space = Platform.Chat.get_space_by_slug("general")
 
@@ -92,7 +101,7 @@ defmodule PlatformWeb.AuthController do
       Platform.Chat.add_participant(space.id, %{
         participant_type: "user",
         participant_id: user.id,
-        display_name: user.name || "Dev User",
+        display_name: user.name || name,
         joined_at: DateTime.utc_now()
       })
     end
