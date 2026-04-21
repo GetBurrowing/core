@@ -25,15 +25,23 @@ const ComposeInput = {
 
       if (!this._draftKey) return;
 
-      const currentValue = this.el.value || "";
-      const storedValue = localStorage.getItem(this._draftKey) || "";
-
       if (keyChanged) {
-        if (currentValue !== "") {
-          if (currentValue !== storedValue) {
-            localStorage.setItem(this._draftKey, currentValue);
-          }
-        } else if (storedValue !== "") {
+        // Textareas don't auto-sync `.value` with new child text after a
+        // morphdom patch, so on space change `el.value` still holds the
+        // previous space's typed content even though LiveView rendered
+        // the new space's server-side draft into the textarea's
+        // defaultValue. Re-sync explicitly — otherwise the stale value
+        // below would be written into the new key's localStorage and
+        // poison the next restore.
+        this.el.value = this.el.defaultValue || "";
+
+        const currentValue = this.el.value;
+        const storedValue = localStorage.getItem(this._draftKey) || "";
+
+        // If the server had no stored draft but localStorage does (e.g.
+        // after a page refresh where the in-memory :drafts map was
+        // reinitialized), restore from localStorage.
+        if (currentValue === "" && storedValue !== "") {
           this.el.value = storedValue;
           this.el.dispatchEvent(new Event("input", { bubbles: true }));
         }
@@ -41,6 +49,9 @@ const ComposeInput = {
         return;
       }
 
+      // Same-key update: keep localStorage mirrored to textarea content.
+      const currentValue = this.el.value || "";
+      const storedValue = localStorage.getItem(this._draftKey) || "";
       if (currentValue === "") {
         localStorage.removeItem(this._draftKey);
       } else if (currentValue !== storedValue) {
