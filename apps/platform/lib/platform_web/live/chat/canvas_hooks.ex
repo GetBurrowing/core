@@ -20,11 +20,12 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
   require Logger
 
   import Phoenix.Component, only: [assign: 3, to_form: 2]
-  import Phoenix.LiveView, only: [attach_hook: 4]
+  import Phoenix.LiveView, only: [attach_hook: 4, put_flash: 3]
 
   alias Platform.Chat
   alias Platform.Chat.Canvas.Server, as: CanvasServer
   alias Platform.Chat.Presence
+  alias Platform.Chat.PubSub, as: ChatPubSub
 
   @doc "Attach canvas handlers. Call from `ChatLive.mount/3`."
   @spec attach(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
@@ -34,6 +35,7 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
     |> assign(:canvases_by_id, %{})
     |> assign(:active_canvas, nil)
     |> assign(:show_canvases, false)
+    |> assign(:recent_canvas_events, [])
     |> assign_new_form()
     |> attach_hook(:canvas_events, :handle_event, &handle_event/3)
     |> attach_hook(:canvas_info, :handle_info, &handle_info/2)
@@ -44,12 +46,21 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
   def load_for_space(socket, space_id) do
     canvases = Chat.list_canvases(space_id)
 
+    unsubscribe_all_canvases(socket)
+    Enum.each(canvases, fn c -> ChatPubSub.subscribe_canvas(c.id) end)
+
     socket
     |> assign(:canvases, canvases)
     |> assign(:canvases_by_id, build_map(canvases))
     |> assign(:active_canvas, nil)
     |> assign(:show_canvases, false)
     |> assign_new_form()
+  end
+
+  defp unsubscribe_all_canvases(socket) do
+    Enum.each(Map.get(socket.assigns, :canvases, []), fn c ->
+      ChatPubSub.unsubscribe_canvas(c.id)
+    end)
   end
 
   @doc "Merge a canvas into hook state."
@@ -60,6 +71,11 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
       |> Enum.reject(&(&1.id == canvas.id))
       |> Kernel.++([canvas])
       |> Enum.sort_by(& &1.inserted_at, DateTime)
+
+    # Subscribe to the canvas topic if this is a first-sight canvas for this
+    # LiveView. Phoenix.PubSub dedups within a single pid, so re-subscribing
+    # on an already-known canvas is a no-op.
+    ChatPubSub.subscribe_canvas(canvas.id)
 
     socket
     |> assign(:canvases, canvases)
@@ -184,8 +200,44 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
 
   defp handle_info({:canvas_created, canvas}, socket), do: {:halt, put(socket, canvas)}
   defp handle_info({:canvas_updated, canvas}, socket), do: {:halt, put(socket, canvas)}
-  defp handle_info({:canvas_event, _canvas_id, _name, _payload}, socket), do: {:halt, socket}
+
+  # Canvas kind emissions (action-row click, form submit, checklist toggle, …)
+  # arrive here via `ChatPubSub.broadcast_canvas/2`. Events are signals — they
+  # don't mutate the document. For user-visible feedback we flash a short
+  # description + log; agent-runtime forwarding is a separate subscriber.
+  defp handle_info({:canvas_event, canvas_id, event}, socket) when is_map(event) do
+    Logger.debug("[canvas_event] canvas=#{canvas_id} #{inspect(event)}")
+
+    {:halt,
+     socket
+     |> assign(:recent_canvas_events, prepend_event(socket, canvas_id, event))
+     |> put_flash(:info, flash_for(event))}
+  end
+
   defp handle_info(_msg, socket), do: {:cont, socket}
+
+  @recent_events_cap 20
+
+  defp prepend_event(socket, canvas_id, event) do
+    prior = Map.get(socket.assigns, :recent_canvas_events, [])
+
+    entry = %{
+      canvas_id: canvas_id,
+      event: event,
+      at: DateTime.utc_now()
+    }
+
+    [entry | prior] |> Enum.take(@recent_events_cap)
+  end
+
+  defp flash_for(%{"name" => "action", "node_id" => id, "value" => v}),
+    do: "Canvas action: #{id} → #{inspect(v)}"
+
+  defp flash_for(%{"name" => "submitted", "node_id" => id}),
+    do: "Canvas form submitted: #{id}"
+
+  defp flash_for(%{"name" => name}), do: "Canvas event: #{name}"
+  defp flash_for(_), do: "Canvas event received"
 
   @doc "Human-readable summary of the canvas's root document kind."
   def humanize_kind(%{document: %{"root" => %{"type" => t}}}) when is_binary(t) do

@@ -284,6 +284,73 @@ defmodule PlatformWeb.ChatLiveTest do
     assert render(view) =~ "INLINE_REFRESH_TOKEN"
   end
 
+  test "clicking an action_row button surfaces a flash via :canvas_event broadcast", %{
+    conn: conn
+  } do
+    conn = authenticated_conn(conn)
+    {:ok, view, _html} = live(conn, ~p"/chat/general", on_error: :warn)
+
+    user = Repo.get_by!(User, email: "chat_test@example.com")
+    space = Repo.get_by!(Chat.Space, slug: "general")
+
+    participant =
+      Repo.get_by(Chat.Participant,
+        space_id: space.id,
+        participant_type: "user",
+        participant_id: user.id
+      ) ||
+        elem(
+          Chat.add_participant(space.id, %{participant_type: "user", participant_id: user.id}),
+          1
+        )
+
+    action_doc = %{
+      "version" => 1,
+      "revision" => 1,
+      "root" => %{
+        "id" => "root",
+        "type" => "stack",
+        "props" => %{},
+        "children" => [
+          %{
+            "id" => "ar-demo",
+            "type" => "action_row",
+            "props" => %{
+              "actions" => [
+                %{"label" => "Approve", "value" => "approve", "variant" => "primary"},
+                %{"label" => "Reject", "value" => "reject", "variant" => "danger"}
+              ]
+            },
+            "children" => []
+          }
+        ]
+      },
+      "theme" => %{},
+      "bindings" => %{},
+      "meta" => %{}
+    }
+
+    {:ok, canvas, _message} =
+      Chat.create_canvas_with_message(space.id, participant.id, %{
+        "title" => "Action row test",
+        "document" => action_doc
+      })
+
+    # Open the canvas so canvas_action_click can resolve the target via active_canvas.
+    render_click(view, "canvas_open", %{"canvas-id" => canvas.id})
+
+    # Simulate a click on the "Approve" button. Emits {:canvas_event, canvas_id, %{...}}
+    # which the handler consumes (pattern-matched as 3-tuple; the prior 4-tuple mismatch
+    # silently dropped every click).
+    render_click(view, "canvas_action_click", %{
+      "node-id" => "ar-demo",
+      "value" => "approve"
+    })
+
+    assert render(view) =~ "Canvas action: ar-demo"
+    assert render(view) =~ "approve"
+  end
+
   test "opening a canvas refetches latest state from the database", %{conn: conn} do
     conn = authenticated_conn(conn)
 
