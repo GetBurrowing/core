@@ -33,6 +33,32 @@ defmodule Platform.Chat.PubSubTest do
     end
   end
 
+  describe "spaces_topic/0 + subscribe_spaces/0 + broadcast_space_event/1" do
+    test "returns the expected global topic string" do
+      assert ChatPubSub.spaces_topic() == "chat:spaces"
+    end
+
+    test "subscribed process receives space-lifecycle broadcasts" do
+      ChatPubSub.subscribe_spaces()
+      space = %{id: "abc", kind: "channel", slug: "x", name: "X"}
+      ChatPubSub.broadcast_space_event({:space_created, space})
+      assert_receive {:space_created, ^space}, 500
+    end
+
+    test "non-subscribed process does not receive space-lifecycle events" do
+      # Intentionally not subscribing
+      ChatPubSub.broadcast_space_event({:space_created, %{id: "ignored"}})
+      refute_receive {:space_created, _}, 200
+    end
+
+    test "unsubscribed process no longer receives space-lifecycle events" do
+      ChatPubSub.subscribe_spaces()
+      ChatPubSub.unsubscribe_spaces()
+      ChatPubSub.broadcast_space_event({:space_created, %{id: "after_unsub"}})
+      refute_receive {:space_created, _}, 200
+    end
+  end
+
   describe "broadcast_from/3" do
     test "sender does not receive its own broadcast" do
       space_id = Ecto.UUID.generate()

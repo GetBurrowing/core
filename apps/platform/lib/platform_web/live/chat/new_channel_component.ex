@@ -46,9 +46,16 @@ defmodule PlatformWeb.ChatLive.NewChannelComponent do
         send(self(), {:new_channel_navigate, "/chat/#{space.slug}"})
         {:noreply, socket}
 
-      {:error, _changeset} ->
-        send(self(), {:new_channel_flash, :error, "Could not create channel. Name may be taken."})
+      {:error, changeset} ->
+        send(self(), {:new_channel_flash, :error, format_error(changeset)})
         {:noreply, socket}
+    end
+  end
+
+  defp format_error(%Ecto.Changeset{} = changeset) do
+    case changeset.errors do
+      [{field, {msg, _}} | _] -> "#{Phoenix.Naming.humanize(field)} #{msg}."
+      _ -> "Could not create channel. Please try again."
     end
   end
 
@@ -59,8 +66,6 @@ defmodule PlatformWeb.ChatLive.NewChannelComponent do
       <div
         :if={@open}
         class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
-        phx-click="new_channel_close"
-        phx-target={@myself}
       >
         <div
           class="bg-base-100 rounded-xl shadow-xl w-full max-w-md p-6"
@@ -76,6 +81,9 @@ defmodule PlatformWeb.ChatLive.NewChannelComponent do
                 type="text"
                 class="input input-bordered w-full"
                 placeholder="e.g. engineering"
+                autocapitalize="none"
+                autocorrect="off"
+                spellcheck="false"
                 required
               />
             </div>

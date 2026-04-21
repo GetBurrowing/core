@@ -74,6 +74,10 @@ defmodule Platform.Chat do
           %{space_id: space.id, slug: space.slug, kind: space.kind}
         )
 
+        # Broadcast on the global space-lifecycle topic so connected chat
+        # sessions can surface the new channel without requiring a refresh.
+        ChatPubSub.broadcast_space_event({:space_created, space})
+
       _ ->
         :ok
     end

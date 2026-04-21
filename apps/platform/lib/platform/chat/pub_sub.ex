@@ -52,6 +52,14 @@ defmodule Platform.Chat.PubSub do
   @spec canvas_topic(binary()) :: String.t()
   def canvas_topic(canvas_id), do: "chat:canvas:#{canvas_id}"
 
+  @doc """
+  Returns the global topic for space-lifecycle events (creation, archival).
+
+  Subscribers receive `{:space_created, space}` and `{:space_archived, space}`.
+  """
+  @spec spaces_topic() :: String.t()
+  def spaces_topic, do: "chat:spaces"
+
   # ── Subscribe ────────────────────────────────────────────────────────────────
 
   @doc """
@@ -82,6 +90,24 @@ defmodule Platform.Chat.PubSub do
     Phoenix.PubSub.unsubscribe(@pubsub, canvas_topic(canvas_id))
   end
 
+  @doc """
+  Subscribe the calling process to the global space-lifecycle topic.
+
+  Used by ChatLive to receive `{:space_created, space}` events so newly
+  created channels appear live in every connected user's sidebar without
+  a refresh.
+  """
+  @spec subscribe_spaces() :: :ok | {:error, term()}
+  def subscribe_spaces do
+    Phoenix.PubSub.subscribe(@pubsub, spaces_topic())
+  end
+
+  @doc "Unsubscribe the calling process from the global space-lifecycle topic."
+  @spec unsubscribe_spaces() :: :ok
+  def unsubscribe_spaces do
+    Phoenix.PubSub.unsubscribe(@pubsub, spaces_topic())
+  end
+
   # ── Broadcast ────────────────────────────────────────────────────────────────
 
   @doc """
@@ -109,5 +135,11 @@ defmodule Platform.Chat.PubSub do
   @spec broadcast_canvas(binary(), term()) :: :ok
   def broadcast_canvas(canvas_id, event) do
     Phoenix.PubSub.broadcast(@pubsub, canvas_topic(canvas_id), event)
+  end
+
+  @doc "Broadcast a space-lifecycle event to every connected chat session."
+  @spec broadcast_space_event(term()) :: :ok
+  def broadcast_space_event(event) do
+    Phoenix.PubSub.broadcast(@pubsub, spaces_topic(), event)
   end
 end

@@ -177,6 +177,19 @@ defmodule Platform.Chat.ConversationTest do
     test "fails without slug" do
       assert {:error, %Ecto.Changeset{}} = Chat.create_channel(%{name: "Test"})
     end
+
+    test "broadcasts {:space_created, space} on the global spaces topic" do
+      alias Platform.Chat.PubSub, as: ChatPubSub
+
+      ChatPubSub.subscribe_spaces()
+      slug = unique_slug()
+      assert {:ok, space} = Chat.create_channel(%{name: "Announce", slug: slug})
+
+      assert_receive {:space_created, %{id: id, kind: "channel"}}, 500
+      assert id == space.id
+
+      ChatPubSub.unsubscribe_spaces()
+    end
   end
 
   # ── list_user_conversations ────────────────────────────────────────────────

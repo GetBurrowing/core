@@ -23,6 +23,7 @@
         phx-click="new_channel_open"
         class="text-base-content/40 hover:text-primary"
         title="New channel"
+        aria-label="New channel"
       >
         <span class="hero-plus size-4"></span>
       </button>
@@ -113,9 +114,18 @@
       </header>
 
       <nav class="flex-1 overflow-y-auto py-2">
-        <p class="px-4 py-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
-          Channels
-        </p>
+        <div class="flex items-center justify-between px-4 py-1">
+          <p class="text-xs font-semibold uppercase tracking-widest text-base-content/50">
+            Channels
+          </p>
+          <button
+            phx-click={JS.push("new_channel_open") |> JS.push("close_mobile_browser")}
+            class="text-base-content/40 hover:text-primary"
+            aria-label="New channel"
+          >
+            <span class="hero-plus size-4"></span>
+          </button>
+        </div>
         <.link
           :for={space <- @channels}
           navigate={~p"/chat/#{space.slug}"}

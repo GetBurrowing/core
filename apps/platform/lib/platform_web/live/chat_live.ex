@@ -88,8 +88,11 @@ defmodule PlatformWeb.ChatLive do
 
     # Subscribe to chat pubsub for unread counts in background conversations
     # (active space subscription happens in handle_params).
+    # Also subscribe to the global space-lifecycle topic so newly created
+    # channels appear in the sidebar without requiring a refresh.
     if connected?(socket) do
       Enum.each(all_spaces, &ChatPubSub.subscribe(&1.id))
+      ChatPubSub.subscribe_spaces()
     end
 
     space_ids = Enum.map(all_spaces, & &1.id)
@@ -460,6 +463,23 @@ defmodule PlatformWeb.ChatLive do
   def handle_info({:new_channel_flash, kind, msg}, socket) do
     {:noreply, put_flash(socket, kind, msg)}
   end
+
+  def handle_info({:space_created, %{kind: "channel"} = space}, socket) do
+    # Re-fetch sidebar lists so the new channel appears immediately for every
+    # connected session, not just the creator. Subscribe to the new space's
+    # topic for unread counts.
+    ChatPubSub.subscribe(space.id)
+
+    channels = Chat.list_spaces(kind: "channel")
+    dm_conversations = socket.assigns.dm_conversations
+
+    {:noreply,
+     socket
+     |> assign(:channels, channels)
+     |> assign(:spaces, channels ++ dm_conversations)}
+  end
+
+  def handle_info({:space_created, _space}, socket), do: {:noreply, socket}
 
   def handle_info({:new_conversation_closed}, socket) do
     {:noreply, assign(socket, :show_new_conversation_modal, false)}
