@@ -1667,7 +1667,11 @@ defmodule Platform.Chat do
   # An @-mention of an agent who isn't currently an active participant brings
   # them back. This is the ONLY path that should resurrect a dismissed agent
   # — the contract the product owner wants is "dismiss = gone; @mention = back".
-  # Agents must be on the space's roster; we don't add agents out of thin air.
+  #
+  # DMs are exempt: mentioning an agent in a DM must NOT auto-add them. DMs
+  # are private by contract; only agents already on the DM's roster receive
+  # attention routing. Channels continue to support the mention-reinvite
+  # contract.
 
   defp reinvite_mentioned_agents(%Message{space_id: space_id, content: content})
        when is_binary(content) and content != "" do
@@ -1679,30 +1683,35 @@ defmodule Platform.Chat do
         :ok
 
       tokens ->
-        # Any active agent in the space's workspace is eligible. Match by
-        # slug OR display name (case-insensitive). Currently-present
-        # participants are handled by the attention router; this path only
-        # fires an insert-if-missing, so already-present agents are no-ops.
-        workspace_id =
-          Repo.get(Space, space_id)
-          |> case do
-            %Space{workspace_id: wid} -> wid
-            _ -> nil
-          end
+        space = Repo.get(Space, space_id)
 
-        from(a in Platform.Agents.Agent, where: a.status != "archived")
-        |> maybe_scope_to_workspace(workspace_id)
-        |> Repo.all()
-        |> Enum.each(fn agent ->
-          slug = String.downcase(agent.slug || "")
-          name = String.downcase(agent.name || "")
+        cond do
+          is_nil(space) ->
+            :ok
 
-          if slug in tokens or name in tokens do
-            reinstate_on_mention(space_id, agent)
-          end
-        end)
+          space.kind == "dm" ->
+            # DM privacy guard: do not auto-add agents to DMs on @-mention.
+            :ok
 
-        :ok
+          true ->
+            # Any active agent in the space's workspace is eligible. Match by
+            # slug OR display name (case-insensitive). Currently-present
+            # participants are handled by the attention router; this path only
+            # fires an insert-if-missing, so already-present agents are no-ops.
+            from(a in Platform.Agents.Agent, where: a.status != "archived")
+            |> maybe_scope_to_workspace(space.workspace_id)
+            |> Repo.all()
+            |> Enum.each(fn agent ->
+              slug = String.downcase(agent.slug || "")
+              name = String.downcase(agent.name || "")
+
+              if slug in tokens or name in tokens do
+                reinstate_on_mention(space_id, agent)
+              end
+            end)
+
+            :ok
+        end
     end
   end
 

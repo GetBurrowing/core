@@ -168,6 +168,47 @@ defmodule Platform.Chat.DismissalRegressionTest do
     end
   end
 
+  describe "4. DMs are exempt from mention-reinvite (privacy)" do
+    test "post_message with @[Name] in a DM does NOT add the agent as a participant" do
+      # DMs must never auto-add on mention. Contrast with describe 2 above,
+      # which exercises the channel-kind mention-reinvite contract.
+      dm = create_space(%{kind: "dm"})
+      author = create_user_participant(dm.id)
+      agent = create_agent(%{name: "Higgins"})
+
+      assert Chat.get_agent_participant(dm.id, agent.id) == nil
+
+      {:ok, _msg} =
+        Chat.post_message(%{
+          space_id: dm.id,
+          participant_id: author.id,
+          content_type: "text",
+          content: "hey @[Higgins] pls join"
+        })
+
+      assert Chat.get_agent_participant(dm.id, agent.id) == nil
+    end
+
+    test "in a DM, @-mentioning a current agent participant is a no-op" do
+      dm = create_space(%{kind: "dm"})
+      author = create_user_participant(dm.id)
+      agent = create_agent(%{name: "Saru"})
+
+      {:ok, %Participant{id: original_id}} = Chat.add_agent_participant(dm.id, agent)
+
+      {:ok, _msg} =
+        Chat.post_message(%{
+          space_id: dm.id,
+          participant_id: author.id,
+          content_type: "text",
+          content: "ping @[Saru]"
+        })
+
+      still_there = Chat.get_agent_participant(dm.id, agent.id)
+      assert %Participant{id: ^original_id} = still_there
+    end
+  end
+
   # Routing-after-reinvite is covered end-to-end in
   # `Platform.Chat.SpaceAgentTest` (which starts AttentionRouter) and in
   # the lane smoke verified during the ADR 0038 rollout. Not repeated
