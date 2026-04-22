@@ -114,15 +114,24 @@ defmodule PlatformWeb.ChatLive do
 
   @impl true
   def handle_params(%{"space_slug" => slug_or_id}, _url, socket) do
-    # Save the outgoing channel's draft before switching
+    # Save the outgoing channel's draft AND cancel any staged uploads —
+    # the upload slots are LV-process-scoped, not per-space, so without
+    # an explicit cancel, a file staged in space A remains visible and
+    # send-eligible in space B's composer (BACKLOG #10).
     socket =
       if prev = socket.assigns.active_space do
         ChatPubSub.unsubscribe(prev.id)
         Phoenix.PubSub.unsubscribe(Platform.PubSub, "active_agent:#{prev.id}")
 
-        socket
-        |> PresenceHooks.leave_space(prev.id)
-        |> MessagesHooks.save_draft(prev.id)
+        {main_cancelled, socket} = UploadHooks.cancel_all(socket, :attachments)
+        {thread_cancelled, socket} = UploadHooks.cancel_all(socket, :thread_attachments)
+
+        socket =
+          socket
+          |> PresenceHooks.leave_space(prev.id)
+          |> MessagesHooks.save_draft(prev.id)
+
+        flash_cancelled_uploads(socket, main_cancelled + thread_cancelled)
       else
         socket
       end
@@ -639,6 +648,18 @@ defmodule PlatformWeb.ChatLive do
 
   defp image_attachment?(attachment) do
     String.starts_with?(attachment.content_type || "", "image/")
+  end
+
+  defp flash_cancelled_uploads(socket, 0), do: socket
+
+  defp flash_cancelled_uploads(socket, count) do
+    noun = if count == 1, do: "upload", else: "uploads"
+
+    put_flash(
+      socket,
+      :info,
+      "Canceled #{count} pending #{noun} from the previous space. Re-select the file(s) to send here."
+    )
   end
 
   defp attachment_url(attachment), do: ~p"/chat/attachments/#{attachment.id}"

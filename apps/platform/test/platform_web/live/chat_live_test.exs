@@ -643,6 +643,42 @@ defmodule PlatformWeb.ChatLiveTest do
       assert attachment.filename == "hello.txt"
       assert html =~ "/chat/attachments/#{attachment.id}"
     end
+
+    test "staged uploads are cancelled when navigating to another space (BACKLOG #10)",
+         %{conn: conn} do
+      conn = authenticated_conn(conn)
+
+      {:ok, _} = Chat.create_space(%{name: "Other", slug: "other", kind: "channel"})
+
+      {:ok, view, _html} = live(conn, ~p"/chat/general")
+
+      upload =
+        file_input(view, "#compose-form", :attachments, [
+          %{name: "leak.txt", content: "would-leak", type: "text/plain"}
+        ])
+
+      # Open the staging dialog and progress the upload so the entry
+      # is both staged server-side AND visible in the DOM. The
+      # dialog-close path has its own cancel, so we keep the dialog
+      # open to exercise the space-transition cancel path.
+      view |> element("button[phx-click=upload_dialog_open]") |> render_click()
+      assert render_upload(upload, "leak.txt") =~ "leak.txt"
+
+      # Navigate to another space without closing the dialog or
+      # sending. Both /chat/:space_slug routes map to the same
+      # LiveView so handle_params fires in-process, which is the seam
+      # where we cancel. Use render_patch (same-LV patch) rather than
+      # live_redirect (which may remount).
+      html = render_patch(view, ~p"/chat/other")
+
+      # Flash surfaces on the destination render so the user knows
+      # their staged file was dropped (and can re-select if intended).
+      assert html =~ "Canceled 1 pending upload from the previous space"
+
+      # Re-open the staging dialog in the new space: no leaked entry.
+      view |> element("button[phx-click=upload_dialog_open]") |> render_click()
+      refute render(view) =~ "leak.txt"
+    end
   end
 
   # ── Reactions ────────────────────────────────────────────────────────────────

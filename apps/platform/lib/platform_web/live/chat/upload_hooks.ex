@@ -61,6 +61,35 @@ defmodule PlatformWeb.ChatLive.UploadHooks do
     |> assign(:upload_tagged_agents, MapSet.new())
   end
 
+  @doc """
+  Cancel every staged upload entry for the named slot.
+
+  Returns `{count, socket}` so the caller can decide whether to surface
+  a flash message. Use when the parent scope (space, panel) goes away
+  and staged entries should not carry over — per BACKLOG #10, staging
+  an image in one space and navigating to another left the preview
+  visible AND send-eligible in the new composer.
+
+  Safe to call when no entries are staged — returns `{0, socket}`
+  unchanged.
+  """
+  @spec cancel_all(Phoenix.LiveView.Socket.t(), atom()) ::
+          {non_neg_integer(), Phoenix.LiveView.Socket.t()}
+  def cancel_all(socket, upload_name) when is_atom(upload_name) do
+    case Map.get(socket.assigns[:uploads] || %{}, upload_name) do
+      %{entries: entries} when is_list(entries) ->
+        socket =
+          Enum.reduce(entries, socket, fn entry, acc ->
+            cancel_upload(acc, upload_name, entry.ref)
+          end)
+
+        {length(entries), socket}
+
+      _ ->
+        {0, socket}
+    end
+  end
+
   # ── Hook callbacks ────────────────────────────────────────────────────
 
   defp handle_event("upload_dialog_open", _params, socket) do
@@ -68,11 +97,7 @@ defmodule PlatformWeb.ChatLive.UploadHooks do
   end
 
   defp handle_event("upload_dialog_close", _params, socket) do
-    socket =
-      Enum.reduce(socket.assigns.uploads.attachments.entries, socket, fn entry, acc ->
-        cancel_upload(acc, :attachments, entry.ref)
-      end)
-
+    {_count, socket} = cancel_all(socket, :attachments)
     {:halt, reset(socket)}
   end
 
