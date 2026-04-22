@@ -1012,12 +1012,18 @@ body, .font-fabrikam, * {
   width: 100%; height: 100%; object-fit: cover;
 }
 .gallery-placeholder {
-  width: 100%; height: 100%; display: flex; flex-direction: column;
+  position: absolute; inset: 0;
+  width: 100%; height: 100%; display: none; flex-direction: column;
   align-items: center; justify-content: center; gap: 6px;
   background: linear-gradient(135deg, var(--bg-card) 0%, var(--bg-surface) 100%);
-  color: var(--text-muted); font-size: 12px;
+  color: var(--text-muted); font-size: 12px; padding: 8px; text-align: center;
+  word-break: break-all;
 }
 .gallery-placeholder svg { width: 32px; height: 32px; opacity: 0.4; }
+.gallery-item.broken img { display: none; }
+.gallery-item.broken .gallery-placeholder { display: flex; }
+.gallery-item.broken .gallery-filename,
+.gallery-item.broken .gallery-overlay { display: none; }
 .gallery-filename {
   position: absolute; bottom: 0; left: 0; right: 0; padding: 6px 10px;
   background: linear-gradient(transparent, rgba(0,0,0,0.75));

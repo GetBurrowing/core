@@ -51,6 +51,93 @@ defmodule Platform.Chat.AttachmentStorageTest do
         File.rm(src)
       end
     end
+
+    test "re-infers content_type when client reports application/octet-stream with a known image extension",
+         %{root: _root} do
+      src = Path.join(System.tmp_dir!(), "att-src-#{Ecto.UUID.generate()}.png")
+      File.write!(src, <<137, 80, 78, 71>>)
+
+      try do
+        assert {:ok, meta} =
+                 AttachmentStorage.persist_upload(src, "photo.png", "application/octet-stream")
+
+        assert meta.content_type == "image/png"
+      after
+        File.rm(src)
+      end
+    end
+
+    test "keeps application/octet-stream when the extension is unknown", %{root: _root} do
+      src = Path.join(System.tmp_dir!(), "att-src-#{Ecto.UUID.generate()}.bin")
+      File.write!(src, "opaque-bytes")
+
+      try do
+        assert {:ok, meta} =
+                 AttachmentStorage.persist_upload(
+                   src,
+                   "mystery.unknownext",
+                   "application/octet-stream"
+                 )
+
+        assert meta.content_type == "application/octet-stream"
+      after
+        File.rm(src)
+      end
+    end
+
+    test "does NOT re-label .html to text/html (XSS allowlist — stored XSS prevention)",
+         %{root: _root} do
+      src = Path.join(System.tmp_dir!(), "att-src-#{Ecto.UUID.generate()}.html")
+      File.write!(src, "<script>alert(1)</script>")
+
+      try do
+        assert {:ok, meta} =
+                 AttachmentStorage.persist_upload(src, "evil.html", "application/octet-stream")
+
+        assert meta.content_type == "application/octet-stream"
+      after
+        File.rm(src)
+      end
+    end
+
+    test "does NOT re-label .svg to image/svg+xml (SVG can embed scripts)", %{root: _root} do
+      src = Path.join(System.tmp_dir!(), "att-src-#{Ecto.UUID.generate()}.svg")
+      File.write!(src, "<svg></svg>")
+
+      try do
+        assert {:ok, meta} =
+                 AttachmentStorage.persist_upload(src, "icon.svg", "application/octet-stream")
+
+        assert meta.content_type == "application/octet-stream"
+      after
+        File.rm(src)
+      end
+    end
+
+    test "re-infers content_type for nil client_type with image extension", %{root: _root} do
+      src = Path.join(System.tmp_dir!(), "att-src-#{Ecto.UUID.generate()}.webp")
+      File.write!(src, "webp-bytes")
+
+      try do
+        assert {:ok, meta} = AttachmentStorage.persist_upload(src, "pic.webp", nil)
+        assert meta.content_type == "image/webp"
+      after
+        File.rm(src)
+      end
+    end
+
+    test "falls back to application/octet-stream for nil client_type with non-allowlisted extension",
+         %{root: _root} do
+      src = Path.join(System.tmp_dir!(), "att-src-#{Ecto.UUID.generate()}.html")
+      File.write!(src, "<b>safe-as-download</b>")
+
+      try do
+        assert {:ok, meta} = AttachmentStorage.persist_upload(src, "note.html", nil)
+        assert meta.content_type == "application/octet-stream"
+      after
+        File.rm(src)
+      end
+    end
   end
 
   describe "ensure_writable!/0" do

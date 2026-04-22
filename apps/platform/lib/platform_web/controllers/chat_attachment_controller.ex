@@ -15,7 +15,12 @@ defmodule PlatformWeb.ChatAttachmentController do
         path = AttachmentStorage.path_for(attachment.storage_key)
 
         if File.exists?(path) do
-          send_download(conn, {:file, path},
+          conn
+          # Prevent MIME-sniffing: the stored content_type is authoritative.
+          # Without this, a browser can reinterpret a response as HTML based on
+          # its bytes, bypassing the safe-override allowlist in AttachmentStorage.
+          |> put_resp_header("x-content-type-options", "nosniff")
+          |> send_download({:file, path},
             filename: attachment.filename,
             content_type: attachment.content_type,
             disposition: disposition_for(attachment.content_type)
