@@ -37,6 +37,26 @@ topbar.config({barColors: {0: "#29d"}, shadowColor: "rgba(0, 0, 0, .3)"})
 window.addEventListener("phx:page-loading-start", _info => topbar.show(300))
 window.addEventListener("phx:page-loading-stop", _info => topbar.hide())
 
+// Diagnostic: surface LiveView socket close codes + errors in the console
+// so the cause of an "Attempting to reconnect" toast can be identified
+// without inspecting the DOM. Close-code map:
+//   1000  normal — ignored
+//   1001  going away (server shutting down — deploy/restart)
+//   1006  abnormal close (network blip, proxy idle timeout)
+//   1011  server-side internal error (LV process crashed)
+// When a telemetry beacon endpoint exists this can be forwarded server-side.
+// Today the console is enough to correlate toasts with root cause.
+// `e.reason` is server-controlled and must be treated as potentially sensitive
+// before any future server-side forwarding — redact/allowlist it then.
+liveSocket.socket.onClose(e => {
+  if (e.code !== 1000) {
+    console.warn("[lv-socket] close", {code: e.code, reason: e.reason, wasClean: e.wasClean})
+  }
+})
+liveSocket.socket.onError(e => {
+  console.warn("[lv-socket] error", e)
+})
+
 // connect if there are any LiveViews on the page
 liveSocket.connect()
 
