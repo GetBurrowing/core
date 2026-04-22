@@ -138,7 +138,7 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
       Chat.mark_space_read(participant.id, latest_message.id)
     end
 
-    enriched = enrich_messages_with_reactions(messages, participant)
+    enriched = enrich_messages_with_reactions(messages, socket)
     attachments_map = build_attachments_map(messages)
     thread_previews = Chat.thread_previews_for_messages(Enum.map(messages, & &1.id))
 
@@ -167,7 +167,7 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
   @spec stream_insert_message(Phoenix.LiveView.Socket.t(), map(), [map()]) ::
           Phoenix.LiveView.Socket.t()
   def stream_insert_message(socket, message, attachments \\ []) do
-    enriched = enrich_with_reactions(message, socket.assigns.current_participant)
+    enriched = enrich_with_reactions(message, socket)
 
     socket
     |> stream_insert(:messages, enriched)
@@ -226,7 +226,7 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
 
       case post_message_with_upload(socket, :attachments, attrs) do
         {:ok, socket, msg, attachments} ->
-          enriched = enrich_with_reactions(msg, socket.assigns.current_participant)
+          enriched = enrich_with_reactions(msg, socket)
 
           {:halt,
            socket
@@ -469,7 +469,7 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
       end
 
       if is_nil(msg.thread_id) do
-        enriched = enrich_with_reactions(msg, current_participant)
+        enriched = enrich_with_reactions(msg, socket)
 
         {:halt,
          socket
@@ -495,7 +495,7 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
 
   defp handle_info({:message_updated, msg}, socket) do
     attachments = Chat.list_attachments(msg.id)
-    enriched = enrich_with_reactions(msg, socket.assigns.current_participant)
+    enriched = enrich_with_reactions(msg, socket)
 
     {:halt,
      socket
@@ -611,7 +611,7 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
         socket
 
       msg ->
-        enriched = enrich_with_reactions(msg, socket.assigns.current_participant)
+        enriched = enrich_with_reactions(msg, socket)
         stream_insert(socket, :messages, enriched)
     end
   end
@@ -645,10 +645,20 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
 
   defp maybe_update_inline_thread(socket, _msg), do: socket
 
+  # Cap on eagerly-hydrated reactor names per emoji. A message with more
+  # reactors than this fills its :reactors list with the first N and
+  # exposes the remainder via :extra_count so the UI can show
+  # "and N others." 20 is a guess — tune if real data shows hot reactions
+  # with many more participants.
+  @reactor_list_cap 20
+
   # Bulk-enrich a list of messages with their current reaction groups.
   # Used when loading a space: one batched query, then group per message.
-  defp enrich_messages_with_reactions(messages, current_participant) do
-    my_id = current_participant && current_participant.id
+  defp enrich_messages_with_reactions(messages, socket) do
+    my_id = socket.assigns[:current_participant] && socket.assigns.current_participant.id
+    participants_map = socket.assigns[:participants_map] || %{}
+    agent_ids = socket.assigns[:agent_participant_ids] || MapSet.new()
+
     raw = Chat.list_reactions_for_messages(Enum.map(messages, & &1.id))
 
     Enum.map(messages, fn msg ->
@@ -658,11 +668,7 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
         reactions
         |> Enum.group_by(& &1.emoji)
         |> Enum.map(fn {emoji, rs} ->
-          %{
-            emoji: emoji,
-            count: length(rs),
-            reacted_by_me: Enum.any?(rs, &(&1.participant_id == my_id))
-          }
+          build_reaction_group(emoji, rs, my_id, participants_map, agent_ids)
         end)
         |> Enum.sort_by(& &1.emoji)
 
@@ -673,21 +679,90 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
   # Single-message enrichment. Used on every stream_insert (new message,
   # message updated, reaction added/removed) so the stream item always
   # carries the current reaction groups.
-  defp enrich_with_reactions(msg, current_participant) do
-    my_id = current_participant && current_participant.id
+  defp enrich_with_reactions(msg, socket) do
+    my_id = socket.assigns[:current_participant] && socket.assigns.current_participant.id
+    participants_map = socket.assigns[:participants_map] || %{}
+    agent_ids = socket.assigns[:agent_participant_ids] || MapSet.new()
 
     groups =
       msg.id
-      |> Chat.list_reactions_grouped()
-      |> Enum.map(fn g ->
+      |> Chat.list_reactions()
+      |> Enum.group_by(& &1.emoji)
+      |> Enum.map(fn {emoji, rs} ->
+        build_reaction_group(emoji, rs, my_id, participants_map, agent_ids)
+      end)
+      |> Enum.sort_by(& &1.emoji)
+
+    %{msg | reactions: groups}
+  end
+
+  # Build one `%{emoji, count, reacted_by_me, reactors, extra_count}` group
+  # from an emoji and its raw `%Reaction{}` rows. Hydrates up to
+  # @reactor_list_cap names via the live participants map, falls back to
+  # the row's reactor snapshot (captured at write time, survives hard-
+  # delete), then to `Chat.get_participant/1`, then to "Someone."
+  defp build_reaction_group(emoji, raw_reactions, my_id, participants_map, agent_ids) do
+    count = length(raw_reactions)
+    participant_ids = Enum.map(raw_reactions, & &1.participant_id)
+
+    reactors =
+      raw_reactions
+      |> Enum.take(@reactor_list_cap)
+      |> Enum.map(fn r ->
         %{
-          emoji: g.emoji,
-          count: g.count,
-          reacted_by_me: my_id in g.participants
+          id: r.participant_id,
+          name: resolve_reactor_name(r, participants_map),
+          is_agent: reactor_is_agent?(r, agent_ids)
         }
       end)
 
-    %{msg | reactions: groups}
+    %{
+      emoji: emoji,
+      count: count,
+      reacted_by_me: my_id in participant_ids,
+      reactors: reactors,
+      extra_count: max(0, count - @reactor_list_cap)
+    }
+  end
+
+  # Live participants map wins (renames propagate). Row snapshot is the
+  # fallback for hard-deleted / dismissed participants — it mirrors the
+  # message author snapshot pattern from ADR 0038 but on `chat_reactions`.
+  # No live-DB fallback: if both the live map AND the snapshot miss, we
+  # return "Someone" rather than hit `Chat.get_participant/1` — that path
+  # was an N+1 (fires once per reactor per emoji per message on every
+  # render) and is only relevant for reactions created before the
+  # `backfill_reactor_snapshots` migration landed. The backfill is
+  # idempotent and runs back-to-back with the schema migration, so the
+  # window is effectively sub-second; warn loudly if it somehow persists.
+  defp resolve_reactor_name(%{participant_id: pid} = reaction, participants_map) do
+    case Map.get(participants_map, pid) do
+      %{name: name} when is_binary(name) and name != "" ->
+        name
+
+      _ ->
+        case reaction.reactor_display_name do
+          name when is_binary(name) and name != "" ->
+            name
+
+          _ ->
+            Logger.warning(
+              "reactor_name fallback: missing snapshot for participant_id=#{inspect(pid)} (backfill may be pending)"
+            )
+
+            "Someone"
+        end
+    end
+  end
+
+  # Prefer live presence (handles user→agent-account edge cases), then
+  # fall back to the snapshot participant type (survives hard-delete).
+  defp reactor_is_agent?(%{participant_id: pid} = reaction, agent_ids) do
+    cond do
+      MapSet.member?(agent_ids, pid) -> true
+      reaction.reactor_participant_type == "agent" -> true
+      true -> false
+    end
   end
 
   defp build_attachments_map(messages) do

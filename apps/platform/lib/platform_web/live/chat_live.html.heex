@@ -786,9 +786,15 @@
             >
               <button
                 :for={r <- msg.reactions}
+                id={"reaction-#{msg.id}-#{r.emoji}"}
+                phx-hook="ReactorPopover"
                 phx-click="react"
                 phx-value-message-id={msg.id}
                 phx-value-emoji={r.emoji}
+                data-emoji={r.emoji}
+                data-reactors={Jason.encode!(r.reactors)}
+                data-extra-count={r.extra_count}
+                aria-label={reactor_aria_label(r)}
                 class={[
                   "flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs transition-colors",
                   "hover:bg-base-300",

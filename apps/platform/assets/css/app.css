@@ -1421,3 +1421,99 @@ body, .font-fabrikam, * {
   margin: 0 2px;
 }
 
+
+/* Reactor popover — desktop-only hover affordance on reaction pills.
+   Rendered as a portal to document.body by the ReactorPopover hook so
+   Phoenix LV's stream_insert doesn't tear it down mid-interaction. */
+.reactor-popover {
+  max-width: 280px;
+  min-width: 160px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--color-base-100, #fff);
+  border: 1px solid var(--color-base-300, #e5e7eb);
+  box-shadow:
+    0 12px 32px -8px rgba(0, 0, 0, 0.22),
+    0 0 0 1px rgba(0, 0, 0, 0.02);
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--color-base-content, #18181b);
+  animation: reactor-popover-in 120ms ease-out both;
+  pointer-events: auto;
+}
+
+.reactor-popover.reactor-popover-out {
+  animation: reactor-popover-out 120ms ease-in both;
+}
+
+.reactor-popover-head {
+  font-size: 10px;
+  color: var(--color-base-content, #71717a);
+  opacity: 0.6;
+  margin-bottom: 6px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-weight: 600;
+}
+
+.reactor-popover-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.reactor-popover-row {
+  padding: 2px 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.reactor-popover-agent {
+  font-size: 9px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: var(--color-primary, #0ea5e9);
+  color: var(--color-primary-content, #fff);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.reactor-popover-overflow {
+  padding: 6px 0 0;
+  margin-top: 4px;
+  border-top: 1px solid var(--color-base-300, #e5e7eb);
+  color: var(--color-base-content, #71717a);
+  opacity: 0.65;
+  font-size: 12px;
+  font-style: italic;
+}
+
+@keyframes reactor-popover-in {
+  from {
+    opacity: 0;
+    transform: translateY(3px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes reactor-popover-out {
+  from {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(3px) scale(0.98);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reactor-popover,
+  .reactor-popover.reactor-popover-out {
+    animation: none;
+  }
+}

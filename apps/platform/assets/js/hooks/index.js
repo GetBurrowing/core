@@ -19,6 +19,7 @@ import MeetingRoom from "./meeting_room"
 import MeetingTimer from "./meeting_timer"
 import MermaidDiagram from "./mermaid_diagram"
 import PushSubscribe from "./push_subscribe"
+import ReactorPopover from "./reactor_popover"
 import ResizableSidebar from "./resizable_sidebar"
 import ScrollToBottom from "./scroll_to_bottom"
 import SwipeDrawer from "./swipe_drawer"
@@ -46,6 +47,7 @@ export default {
   MermaidDiagram,
   MessageLift,
   PushSubscribe,
+  ReactorPopover,
   ResizableSidebar,
   ScrollToBottom,
   SwipeDrawer,

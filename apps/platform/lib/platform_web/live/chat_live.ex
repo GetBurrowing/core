@@ -662,6 +662,38 @@ defmodule PlatformWeb.ChatLive do
   defp present?(value) when is_binary(value), do: String.trim(value) != ""
   defp present?(_value), do: false
 
+  # Accessible label for a reaction pill — screen readers get the reactor
+  # list without having to open the popover (desktop-only affordance).
+  # Mobile users rely on this label for the same information.
+  defp reactor_aria_label(%{emoji: emoji, reactors: reactors, extra_count: extra}) do
+    names = reactors |> Enum.map(& &1.name) |> Enum.reject(&(&1 in [nil, ""]))
+
+    people =
+      case names do
+        [] ->
+          "Someone"
+
+        [one] ->
+          one
+
+        [first, second] ->
+          "#{first} and #{second}"
+
+        list ->
+          {init, [last]} = Enum.split(list, -1)
+          "#{Enum.join(init, ", ")}, and #{last}"
+      end
+
+    tail =
+      cond do
+        extra == 0 -> ""
+        extra == 1 -> " and 1 other"
+        true -> " and #{extra} others"
+      end
+
+    "#{people}#{tail} reacted with #{emoji}"
+  end
+
   defp format_bytes(size) when is_integer(size) and size < 1_024, do: "#{size} B"
 
   defp format_bytes(size) when is_integer(size) and size < 1_048_576,

@@ -861,6 +861,166 @@ defmodule PlatformWeb.ChatLiveTest do
       assert html =~ "safety message"
     end
 
+    test "reaction pill carries data-reactors JSON and aria-label with reactor names",
+         %{conn: conn} do
+      # Desktop reactor-popover feature: the server embeds the reactor list
+      # in data-reactors on each pill (read lazily on hover by the JS hook)
+      # and emits an aria-label on the pill itself so screen readers get
+      # the full list without needing to open the popover. Mobile is
+      # intentionally no-op on the hook side, but the aria-label is
+      # rendered on every platform.
+      conn = authenticated_conn(conn)
+
+      space =
+        Chat.get_space_by_slug("general") ||
+          elem(Chat.create_space(%{name: "General", slug: "general", kind: "channel"}), 1)
+
+      alice = insert_chat_user(%{name: "Alice", email: "alice@example.com", oidc_sub: "alice"})
+      bob = insert_chat_user(%{name: "Bob", email: "bob@example.com", oidc_sub: "bob"})
+
+      alice_participant = add_user_message(space, alice, "pizza or thai?")
+      [msg | _] = Chat.list_messages(space.id)
+
+      {:ok, bob_participant} =
+        Chat.add_participant(space.id, %{
+          participant_type: "user",
+          participant_id: bob.id,
+          display_name: bob.name,
+          joined_at: DateTime.utc_now()
+        })
+
+      {:ok, _} =
+        Chat.add_reaction(%{
+          message_id: msg.id,
+          participant_id: alice_participant.id,
+          emoji: "🍕"
+        })
+
+      {:ok, _} =
+        Chat.add_reaction(%{
+          message_id: msg.id,
+          participant_id: bob_participant.id,
+          emoji: "🍕"
+        })
+
+      {:ok, _view, html} = live(conn, ~p"/chat/general")
+
+      # Pill carries the data attributes the hook reads.
+      assert html =~ ~s(phx-hook="ReactorPopover")
+      assert html =~ ~s(data-emoji="🍕")
+
+      # Both reactor names are embedded in the JSON payload (order
+      # follows insertion; the test doesn't pin order).
+      assert html =~ "Alice"
+      assert html =~ "Bob"
+      assert html =~ ~s(data-reactors=)
+
+      # aria-label on the pill itself renders the human-readable list
+      # regardless of hook activation.
+      assert html =~ "Alice and Bob reacted with 🍕" ||
+               html =~ "Bob and Alice reacted with 🍕"
+    end
+
+    test "reactor name survives hard-delete of the participant",
+         %{conn: conn} do
+      # Snapshot parity with ADR 0038: when a participant is hard-deleted
+      # from a space, the reactions they made keep the display name they
+      # had at reaction-time. The ON DELETE SET NULL FK nulls the
+      # reaction's participant_id but leaves the snapshot columns, and
+      # the read-path falls back to them.
+      conn = authenticated_conn(conn)
+
+      space =
+        Chat.get_space_by_slug("general") ||
+          elem(Chat.create_space(%{name: "General", slug: "general", kind: "channel"}), 1)
+
+      author =
+        insert_chat_user(%{name: "Author", email: "author@example.com", oidc_sub: "author"})
+
+      reactor = insert_chat_user(%{name: "Zoe", email: "zoe@example.com", oidc_sub: "zoe"})
+
+      _author_participant = add_user_message(space, author, "vote on this")
+      [msg | _] = Chat.list_messages(space.id)
+
+      {:ok, reactor_participant} =
+        Chat.add_participant(space.id, %{
+          participant_type: "user",
+          participant_id: reactor.id,
+          display_name: reactor.name,
+          joined_at: DateTime.utc_now()
+        })
+
+      {:ok, _} =
+        Chat.add_reaction(%{
+          message_id: msg.id,
+          participant_id: reactor_participant.id,
+          emoji: "👍"
+        })
+
+      # Sanity: snapshot was captured at write time.
+      [reaction] = Chat.list_reactions(msg.id)
+      assert reaction.reactor_display_name == "Zoe"
+      assert reaction.reactor_participant_type == "user"
+
+      # Hard-delete the reactor's participant row (simulating dismissal).
+      # The FK is ON DELETE SET NULL, so the reaction row survives with
+      # participant_id: nil and the snapshot intact.
+      Repo.delete!(reactor_participant)
+
+      [reaction_after] = Chat.list_reactions(msg.id)
+      assert reaction_after.participant_id == nil
+      assert reaction_after.reactor_display_name == "Zoe"
+
+      # LV load still renders Zoe's name via the snapshot fallback —
+      # aria-label gets the right reactor even though the live
+      # participants_map no longer contains them.
+      {:ok, _view, html} = live(conn, ~p"/chat/general")
+
+      assert html =~ "Zoe"
+      assert html =~ "Zoe reacted with 👍"
+    end
+
+    test "reactor popover marks agent reactors with is_agent=true",
+         %{conn: conn} do
+      # Agents react via the same Participant/Reaction path humans do.
+      # The reactor list must flag them so the UI can render the AI badge.
+      conn = authenticated_conn(conn)
+
+      space =
+        Chat.get_space_by_slug("general") ||
+          elem(Chat.create_space(%{name: "General", slug: "general", kind: "channel"}), 1)
+
+      user = insert_chat_user(%{name: "Marlowe", email: "marlowe@example.com", oidc_sub: "marlowe"})
+      agent = insert_chat_agent(%{name: "Higgins", slug: "higgins"})
+
+      _user_participant = add_user_message(space, user, "anyone around?")
+      [msg | _] = Chat.list_messages(space.id)
+
+      {:ok, agent_participant} =
+        Chat.add_participant(space.id, %{
+          participant_type: "agent",
+          participant_id: agent.id,
+          display_name: agent.name,
+          joined_at: DateTime.utc_now()
+        })
+
+      {:ok, _} =
+        Chat.add_reaction(%{
+          message_id: msg.id,
+          participant_id: agent_participant.id,
+          emoji: "✅"
+        })
+
+      {:ok, _view, html} = live(conn, ~p"/chat/general")
+
+      # JSON attribute must carry is_agent:true for the agent reactor.
+      # The Jason encoder escapes quotes in HTML attributes, so match
+      # permissively across the encoding.
+      assert html =~ ~s(data-emoji="✅")
+      assert html =~ "Higgins"
+      assert html =~ ~s("is_agent":true) || html =~ ~s(&quot;is_agent&quot;:true)
+    end
+
     test "opening the reaction picker renders the popover for the target message",
          %{conn: conn} do
       conn = authenticated_conn(conn)

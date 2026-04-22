@@ -1008,13 +1008,24 @@ defmodule Platform.Chat do
   @doc """
   Add a reaction to a message.
 
-  Required attrs: `:message_id` (integer), `:participant_id`, `:emoji`.
+  Required attrs: `:message_id`, `:participant_id`, `:emoji`.
+
+  Captures a reactor identity snapshot (display name, avatar, participant
+  type) from the current `chat_participants` row — mirrors ADR 0038's
+  author snapshots on `chat_messages`. If the participant is hard-deleted
+  from the space later, the reactor's name still renders in reactor
+  popovers and MCP tool output.
+
+  Callers MAY override the snapshot fields via `attrs` (e.g. tests
+  asserting specific snapshot state); when absent, we look them up.
   """
   @spec add_reaction(map()) :: {:ok, Reaction.t()} | {:error, Ecto.Changeset.t()}
   def add_reaction(attrs) do
+    attrs_with_snapshot = maybe_put_reactor_snapshot(attrs)
+
     result =
       %Reaction{}
-      |> Reaction.changeset(attrs)
+      |> Reaction.changeset(attrs_with_snapshot)
       |> Repo.insert()
 
     case result do
@@ -1035,6 +1046,48 @@ defmodule Platform.Chat do
     end
 
     result
+  end
+
+  # Stamp reactor-identity snapshot from the current participant row if
+  # the caller didn't pass one. A missing participant still inserts the
+  # reaction cleanly — the snapshot fields stay nil and the read-path
+  # falls through to `get_participant/1` and eventually "Someone."
+  defp maybe_put_reactor_snapshot(attrs) do
+    attrs = normalize_attr_keys(attrs)
+    participant_id = Map.get(attrs, :participant_id)
+
+    snapshot_present? =
+      Map.has_key?(attrs, :reactor_display_name) or
+        Map.has_key?(attrs, :reactor_participant_type)
+
+    cond do
+      snapshot_present? ->
+        attrs
+
+      is_binary(participant_id) ->
+        case Repo.get(Participant, participant_id) do
+          %Participant{} = p ->
+            attrs
+            |> Map.put_new(:reactor_display_name, p.display_name)
+            |> Map.put_new(:reactor_avatar_url, p.avatar_url)
+            |> Map.put_new(:reactor_participant_type, p.participant_type)
+
+          _ ->
+            attrs
+        end
+
+      true ->
+        attrs
+    end
+  end
+
+  defp normalize_attr_keys(%{} = attrs) do
+    Map.new(attrs, fn
+      {k, v} when is_atom(k) -> {k, v}
+      {k, v} when is_binary(k) -> {String.to_existing_atom(k), v}
+    end)
+  rescue
+    ArgumentError -> attrs
   end
 
   @doc "Remove a reaction from a message. Returns `{:error, :not_found}` if absent."
