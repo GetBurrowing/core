@@ -256,7 +256,7 @@ defmodule PlatformWeb.ChatLive.Partials do
       </div>
     </div>
 
-    <div :if={@canvas} class="fixed inset-0 z-50 flex flex-col bg-base-100 lg:hidden">
+    <div :if={@canvas} class="fixed inset-0 z-50 flex flex-col bg-base-100 lg:hidden safe-area-x">
       <header class="flex h-12 flex-shrink-0 items-center justify-between border-b border-base-300 px-4 safe-area-top">
         <div class="min-w-0">
           <p class="text-sm font-semibold">Live Canvas</p>
@@ -386,7 +386,7 @@ defmodule PlatformWeb.ChatLive.Partials do
 
     <div
       :if={@in_meeting}
-      class="fixed inset-0 z-50 flex flex-col bg-base-100 lg:hidden"
+      class="fixed inset-0 z-50 flex flex-col bg-base-100 lg:hidden safe-area-x"
     >
       <header class="flex h-12 flex-shrink-0 items-center justify-between border-b border-base-300 px-4 safe-area-top">
         <div class="flex items-center gap-2 min-w-0">

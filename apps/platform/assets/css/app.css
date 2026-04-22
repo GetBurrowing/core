@@ -129,13 +129,26 @@
 /* Make LiveView wrapper divs transparent for layout */
 [data-phx-session], [data-phx-teleported-src] { display: contents }
 
-/* iOS PWA safe area support */
+/* iOS PWA safe area support. Includes left/right for landscape-notch
+   handling on iPhone — full-screen mobile overlays (chat drawer,
+   meeting panel, canvas overlay) must respect these inset axes to
+   avoid content clipping under the notch in landscape orientation. */
 @supports (padding: env(safe-area-inset-top)) {
   .safe-area-top {
     padding-top: env(safe-area-inset-top);
   }
   .safe-area-bottom {
     padding-bottom: env(safe-area-inset-bottom);
+  }
+  .safe-area-left {
+    padding-left: env(safe-area-inset-left);
+  }
+  .safe-area-right {
+    padding-right: env(safe-area-inset-right);
+  }
+  .safe-area-x {
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
   }
 }
 
@@ -1133,6 +1146,18 @@ body, .font-fabrikam, * {
   line-height: 1.5;
 }
 
+/* iOS Safari auto-zooms any input with font-size < 16px on focus, and
+   combined with the viewport's locked `maximum-scale=1` (intentional
+   per org convention — see ORG_AGENTS.md "Mobile PWA viewport is
+   locked"), the user can get "unmoored / stuck zoomed." Fix at the
+   source: bump the composer font to 16px on touch devices. Desktop
+   keeps 14px so the compose bar stays compact. */
+@media (hover: none) {
+  .compose-pill-bar textarea {
+    font-size: 16px;
+  }
+}
+
 /* Attach button inside pill */
 .compose-pill-attach {
   width: 32px;
@@ -1144,6 +1169,20 @@ body, .font-fabrikam, * {
   flex-shrink: 0;
   align-self: center;
   margin-bottom: 2px;
+}
+
+/* Raise composer tap targets to Apple HIG (44pt) / Material (48dp) on
+   touch devices. Desktop keeps the compact sizes for hover-driven use. */
+@media (hover: none) {
+  .compose-pill-attach {
+    width: 44px;
+    height: 44px;
+  }
+  .compose-pill-send {
+    width: 44px !important;
+    height: 44px !important;
+    min-height: 44px !important;
+  }
 }
 
 /* Send button pill style */
