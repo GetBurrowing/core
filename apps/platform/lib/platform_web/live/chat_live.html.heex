@@ -799,7 +799,7 @@
 
             <div
               :if={msg.reactions != []}
-              class="flex flex-wrap gap-1 mt-0.5"
+              class="reaction-row flex flex-wrap gap-1 mt-0.5"
             >
               <button
                 :for={r <- msg.reactions}
@@ -813,7 +813,7 @@
                 data-extra-count={r.extra_count}
                 aria-label={reactor_aria_label(r)}
                 class={[
-                  "flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs transition-colors",
+                  "reaction-pill flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs transition-colors",
                   "hover:bg-base-300",
                   r.reacted_by_me && "border-primary bg-primary/10 text-primary",
                   !r.reacted_by_me && "border-base-300 text-base-content/60"
@@ -824,7 +824,8 @@
               </button>
 
               <button
-                class="flex items-center gap-1 rounded-full border border-dashed border-base-300 px-2 py-0.5 text-xs text-base-content/40 hover:bg-base-300 hover:text-base-content transition-colors opacity-0 group-hover:opacity-100"
+                class="reaction-add-btn flex items-center gap-1 rounded-full border border-dashed border-base-300 px-2 py-0.5 text-xs text-base-content/40 hover:bg-base-300 hover:text-base-content"
+                aria-label="Add reaction"
                 phx-click="open_reaction_picker"
                 phx-value-message-id={msg.id}
               >
@@ -1244,20 +1245,35 @@
   user_id={@user_id}
 />
 
-<%!-- Reaction picker popover --%>
+<%!--
+  Reaction picker — bottom sheet on mobile, centered modal on desktop.
+  Shape is controlled by the `reaction-picker` CSS class: below the
+  640px breakpoint the panel slides up from the bottom with safe-area
+  padding (matches iOS/Android conventions); above it centers as a
+  modal card. Escape key closes via phx-window-keydown so keyboard
+  users have parity with backdrop click.
+--%>
 <div
   :if={@reaction_picker_for}
   id="reaction-picker"
-  class="fixed inset-0 z-50 flex items-center justify-center"
+  class="reaction-picker fixed inset-0 z-50"
+  phx-window-keydown="close_reaction_picker"
+  phx-key="Escape"
 >
   <div
-    class="absolute inset-0 bg-base-content/20"
+    class="reaction-picker-scrim absolute inset-0 bg-base-content/20"
     phx-click="close_reaction_picker"
     aria-hidden="true"
   >
   </div>
+  <%!--
+    `role="dialog"` without `aria-modal="true"` is an intentional
+    downgrade: we don't yet have a focus trap or return-focus-on-close,
+    so claiming modality to assistive tech would be a false promise.
+    Full focus management lands in PR B (search + a11y feature pass).
+  --%>
   <div
-    class="relative z-10 w-80 rounded-lg border border-base-300 bg-base-100 p-3 shadow-xl"
+    class="reaction-picker-panel rounded-lg border border-base-300 bg-base-100 p-3 shadow-xl"
     role="dialog"
     aria-label="Add reaction"
   >
@@ -1269,12 +1285,13 @@
         type="button"
         phx-click="close_reaction_picker"
         title="Close"
-        class="rounded p-1 text-base-content/50 hover:bg-base-200 hover:text-base-content"
+        aria-label="Close reaction picker"
+        class="reaction-picker-close rounded p-1 text-base-content/50 hover:bg-base-200 hover:text-base-content"
       >
-        <span class="hero-x-mark size-4"></span>
+        <span class="hero-x-mark size-5"></span>
       </button>
     </div>
-    <div class="grid grid-cols-8 gap-1">
+    <div class="reaction-picker-grid">
       <button
         :for={emoji <- @reaction_picker_emojis}
         type="button"
@@ -1282,7 +1299,8 @@
         phx-value-message-id={@reaction_picker_for}
         phx-value-emoji={emoji}
         title={"React with #{emoji}"}
-        class="rounded px-1.5 py-1 text-lg hover:bg-base-200 transition-colors"
+        aria-label={"React with #{emoji}"}
+        class="reaction-picker-tile rounded hover:bg-base-200 transition-colors"
       >
         {emoji}
       </button>
