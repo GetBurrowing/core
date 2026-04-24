@@ -76,9 +76,13 @@ defmodule Platform.Agents.SystemEventSchedulerTest do
   defmodule DispatchTest do
     use Platform.DataCase
 
+    import ExUnit.CaptureLog
+
     alias Platform.Agents.Agent
     alias Platform.Agents.SystemEventScheduler
     alias Platform.Chat
+    alias Platform.Chat.Message
+    alias Platform.Chat.Space
 
     @valid_agent_attrs %{
       slug: "test-agent",
@@ -90,6 +94,17 @@ defmodule Platform.Agents.SystemEventSchedulerTest do
       %Agent{}
       |> Agent.changeset(Map.merge(@valid_agent_attrs, attrs))
       |> Repo.insert!()
+    end
+
+    defp read_system_space_messages(agent) do
+      %Space{id: space_id} = Chat.get_space_by_slug("system-#{agent.slug}")
+
+      Repo.all(
+        from(m in Message,
+          where: m.space_id == ^space_id,
+          order_by: [asc: m.inserted_at]
+        )
+      )
     end
 
     describe "system_events field" do
@@ -206,6 +221,100 @@ defmodule Platform.Agents.SystemEventSchedulerTest do
 
         assert reloaded_a.system_events == []
         assert reloaded_b.system_events == ["daily_summary"]
+      end
+    end
+
+    describe "daily_summary digest injection" do
+      test "posted instruction contains the activity digest header" do
+        agent = create_agent(%{system_events: ["daily_summary"]})
+
+        {:ok, _pid} =
+          start_supervised({SystemEventScheduler, check_interval_ms: :timer.hours(24)})
+
+        SystemEventScheduler.fire_now("daily_summary")
+
+        messages = read_system_space_messages(agent)
+
+        assert Enum.any?(messages, fn m ->
+                 String.contains?(m.content, "## Activity since") and
+                   String.contains?(m.content, "org_memory_append")
+               end)
+      end
+
+      test "dreaming instruction does not interpolate the digest placeholder" do
+        agent = create_agent(%{system_events: ["dreaming"]})
+
+        {:ok, _pid} =
+          start_supervised({SystemEventScheduler, check_interval_ms: :timer.hours(24)})
+
+        SystemEventScheduler.fire_now("dreaming")
+
+        messages = read_system_space_messages(agent)
+
+        assert Enum.any?(messages, fn m ->
+                 String.contains?(m.content, "dreaming mode")
+               end)
+
+        refute Enum.any?(messages, fn m ->
+                 String.contains?(m.content, "{activity_digest}")
+               end)
+      end
+    end
+
+    describe "external runtime handling" do
+      test "skips dispatch when external runtime is offline, logs warning" do
+        user =
+          Repo.insert!(%Platform.Accounts.User{
+            email: "sched_test_#{System.unique_integer([:positive])}@example.com",
+            name: "Sched Test User",
+            oidc_sub: "oidc-sched-test-#{System.unique_integer([:positive])}"
+          })
+
+        {:ok, runtime} =
+          Platform.Federation.register_runtime(user.id, %{
+            runtime_id: "offline-runtime-#{System.unique_integer([:positive])}"
+          })
+
+        agent =
+          create_agent(%{
+            slug: "external-historian",
+            runtime_type: "external",
+            runtime_id: runtime.id,
+            system_events: ["daily_summary"]
+          })
+
+        {:ok, _pid} =
+          start_supervised({SystemEventScheduler, check_interval_ms: :timer.hours(24)})
+
+        log =
+          capture_log(fn ->
+            SystemEventScheduler.fire_now("daily_summary")
+          end)
+
+        assert log =~ "external runtime #{runtime.id} is offline"
+
+        # No system space should have been created since dispatch was skipped
+        # before the ensure_system_space step.
+        refute Chat.get_space_by_slug("system-#{agent.slug}")
+      end
+    end
+
+    describe "ambiguity when multiple agents claim same event" do
+      test "picks the oldest agent and logs a warning" do
+        older = create_agent(%{slug: "older-historian", system_events: ["daily_summary"]})
+        newer = create_agent(%{slug: "newer-historian", system_events: ["daily_summary"]})
+
+        {:ok, _pid} =
+          start_supervised({SystemEventScheduler, check_interval_ms: :timer.hours(24)})
+
+        log =
+          capture_log(fn ->
+            SystemEventScheduler.fire_now("daily_summary")
+          end)
+
+        assert log =~ "multiple agents flagged for daily_summary"
+        assert Chat.get_space_by_slug("system-#{older.slug}") != nil
+        assert Chat.get_space_by_slug("system-#{newer.slug}") == nil
       end
     end
   end

@@ -792,4 +792,127 @@ defmodule PlatformWeb.ControlCenterLiveTest do
     assert created.model_config["primary"] == "anthropic/claude-opus-4-6"
     assert created.status == "active"
   end
+
+  # ── Historian toggle ────────────────────────────────────────────
+
+  describe "Historian role" do
+    test "toggling on persists both daily_summary and dreaming, shows badge",
+         %{conn: conn} do
+      agent = create_agent(%{name: "Archive"})
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/control/#{agent.slug}")
+
+      html =
+        view
+        |> form("#agent-config-form",
+          config: %{
+            name: "Archive",
+            status: "active",
+            primary_model: "anthropic/claude-sonnet-4-6",
+            fallback_models: "",
+            thinking_default: "medium",
+            max_concurrent: 1,
+            sandbox_mode: "off",
+            historian: "on"
+          }
+        )
+        |> render_submit()
+
+      updated = Repo.get!(Agent, agent.id)
+      assert "daily_summary" in updated.system_events
+      assert "dreaming" in updated.system_events
+      assert html =~ "Historian"
+    end
+
+    test "toggling off clears system_events", %{conn: conn} do
+      agent =
+        create_agent(%{
+          name: "WasHistorian",
+          system_events: ["daily_summary", "dreaming"]
+        })
+
+      conn = authenticated_conn(conn)
+      {:ok, view, html} = live(conn, ~p"/control/#{agent.slug}")
+
+      assert html =~ "Historian"
+
+      view
+      |> form("#agent-config-form",
+        config: %{
+          name: "WasHistorian",
+          status: "active",
+          primary_model: "anthropic/claude-sonnet-4-6",
+          fallback_models: "",
+          thinking_default: "medium",
+          max_concurrent: 1,
+          sandbox_mode: "off",
+          historian: "off"
+        }
+      )
+      |> render_submit()
+
+      updated = Repo.get!(Agent, agent.id)
+      assert updated.system_events == []
+    end
+
+    test "checkbox is disabled when another agent is already Historian",
+         %{conn: conn} do
+      _other =
+        create_agent(%{
+          name: "CurrentHistorian",
+          system_events: ["daily_summary", "dreaming"]
+        })
+
+      target = create_agent(%{name: "Candidate"})
+
+      conn = authenticated_conn(conn)
+      {:ok, _view, html} = live(conn, ~p"/control/#{target.slug}")
+
+      assert html =~ "Another agent is currently Historian"
+      assert html =~ ~r/name="config\[historian\]"[^>]*disabled/
+    end
+
+    test "federated agent's Identity form exposes the Historian toggle",
+         %{conn: conn} do
+      user =
+        Repo.insert!(%User{
+          email: "hist_fed_#{System.unique_integer([:positive])}@example.com",
+          name: "Hist Fed User",
+          oidc_sub: "oidc-hist-fed-#{System.unique_integer([:positive])}"
+        })
+
+      {:ok, runtime} =
+        Federation.register_runtime(user.id, %{
+          runtime_id: "hist-runtime-#{System.unique_integer([:positive])}",
+          display_name: "Hist OpenClaw"
+        })
+
+      {:ok, runtime, _token} = Federation.activate_runtime(runtime)
+
+      agent =
+        create_agent(%{
+          name: "Federated Historian",
+          runtime_type: "external",
+          runtime_id: runtime.id
+        })
+
+      conn = init_test_session(conn, current_user_id: user.id)
+      {:ok, view, html} = live(conn, ~p"/control/#{agent.slug}")
+
+      assert html =~ ~r/name="config\[historian\]"/
+
+      view
+      |> form("#federated-identity-form",
+        config: %{
+          name: "Federated Historian",
+          historian: "on"
+        }
+      )
+      |> render_submit()
+
+      updated = Repo.get!(Agent, agent.id)
+      assert "daily_summary" in updated.system_events
+      assert "dreaming" in updated.system_events
+    end
+  end
 end

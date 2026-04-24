@@ -732,6 +732,44 @@ defmodule Platform.Chat do
   end
 
   @doc """
+  Returns messages across all spaces within a time window.
+
+  Used by the Historian's activity digest. Filters out DMs and non-chat
+  space kinds (system, execution), deleted messages, log-only messages,
+  and non-conversational content types by default.
+
+  ## Options
+
+    * `:window_end`      — upper bound (exclusive); default `DateTime.utc_now/0`
+    * `:include_kinds`   — list of space kinds to include; default `~w(channel group)`
+    * `:content_types`   — list of content_types to include; default `~w(text agent_action)`
+
+  Messages are ordered by `inserted_at` ASC to make grouping-by-space
+  and chronological formatting straightforward downstream.
+  """
+  @spec list_messages_since(DateTime.t(), keyword()) :: [Message.t()]
+  def list_messages_since(%DateTime{} = window_start, opts \\ []) do
+    window_end = Keyword.get(opts, :window_end, DateTime.utc_now())
+    include_kinds = Keyword.get(opts, :include_kinds, ~w(channel group))
+    content_types = Keyword.get(opts, :content_types, ~w(text agent_action))
+
+    from(m in Message,
+      join: s in Space,
+      on: s.id == m.space_id,
+      where:
+        m.inserted_at >= ^window_start and
+          m.inserted_at < ^window_end and
+          is_nil(m.deleted_at) and
+          m.log_only == false and
+          m.content_type in ^content_types and
+          s.kind in ^include_kinds and
+          is_nil(s.archived_at),
+      order_by: [asc: m.inserted_at]
+    )
+    |> Repo.all()
+  end
+
+  @doc """
   For a list of message IDs, returns thread preview data for any that have threads with replies.
 
   Returns `%{message_id => %{thread_id: id, reply_count: count, last_reply_at: datetime}}`.

@@ -208,6 +208,32 @@ defmodule Platform.Tasks do
   end
 
   @doc """
+  Returns tasks whose `updated_at` falls within the given window.
+
+  Used by the Historian's activity digest to surface tasks that changed
+  status, gained/lost assignees, or were otherwise touched in the window.
+  Captures current state only — if a task transitioned multiple times
+  within the window, only the latest status is observable.
+
+  ## Options
+
+    * `:window_end` — upper bound (exclusive); default `DateTime.utc_now/0`
+  """
+  @spec list_tasks_updated_since(DateTime.t(), keyword()) :: [Task.t()]
+  def list_tasks_updated_since(%DateTime{} = window_start, opts \\ []) do
+    window_end = Keyword.get(opts, :window_end, DateTime.utc_now())
+
+    from(t in Task,
+      where:
+        t.updated_at >= ^window_start and
+          t.updated_at < ^window_end and
+          is_nil(t.deleted_at),
+      order_by: [asc: t.updated_at]
+    )
+    |> Repo.all()
+  end
+
+  @doc """
   Transition a task's status, enforcing valid transitions per ADR 0018 §7.
   """
   def transition_task_status(%Task{} = task, new_status) do
