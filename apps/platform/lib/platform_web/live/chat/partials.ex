@@ -287,7 +287,7 @@ defmodule PlatformWeb.ChatLive.Partials do
     <div
       :if={@in_meeting}
       id="meeting-panel"
-      class="hidden lg:flex w-96 flex-shrink-0 flex-col border-l border-base-300 bg-base-100"
+      class="relative hidden lg:flex w-96 flex-shrink-0 flex-col border-l border-base-300 bg-base-100"
     >
       <div class="flex h-12 flex-shrink-0 items-center justify-between border-b border-base-300 px-4">
         <div class="flex items-center gap-2 min-w-0">
@@ -297,13 +297,16 @@ defmodule PlatformWeb.ChatLive.Partials do
           </p>
           <span id="meeting-duration" class="text-xs text-base-content/50 tabular-nums">0:00</span>
         </div>
-        <button
-          phx-click="meeting_leave"
-          class="btn btn-ghost btn-xs text-error"
-          title="Leave meeting"
-        >
-          <span class="hero-x-mark size-4"></span>
-        </button>
+        <div class="flex items-center gap-1">
+          <.soundboard_menu id="soundboard-menu-desktop" />
+          <button
+            phx-click="meeting_leave"
+            class="btn btn-ghost btn-xs text-error"
+            title="Leave meeting"
+          >
+            <span class="hero-x-mark size-4"></span>
+          </button>
+        </div>
       </div>
 
       <div class="flex-1 overflow-y-auto p-3">
@@ -379,6 +382,12 @@ defmodule PlatformWeb.ChatLive.Partials do
         </button>
       </div>
 
+      <div
+        data-soundboard-toasts
+        class="pointer-events-none absolute bottom-20 inset-x-0 z-10 flex flex-col items-center gap-1"
+      >
+      </div>
+
       <%!-- JS owns the children (track.attach outputs); ignore on re-render
            so toggling mic/camera doesn't wipe the <audio> elements. --%>
       <div id="meeting-media" class="hidden" phx-update="ignore"></div>
@@ -398,11 +407,20 @@ defmodule PlatformWeb.ChatLive.Partials do
             0:00
           </span>
         </div>
-        <button phx-click="meeting_leave" class="btn btn-ghost btn-xs" title="Back to chat">
-          <span class="hero-arrow-left size-4"></span>
-          <span class="text-xs">Chat</span>
-        </button>
+        <div class="flex items-center gap-1">
+          <.soundboard_menu id="soundboard-menu-mobile" />
+          <button phx-click="meeting_leave" class="btn btn-ghost btn-xs" title="Back to chat">
+            <span class="hero-arrow-left size-4"></span>
+            <span class="text-xs">Chat</span>
+          </button>
+        </div>
       </header>
+
+      <div
+        data-soundboard-toasts
+        class="pointer-events-none absolute bottom-24 inset-x-0 z-10 flex flex-col items-center gap-1"
+      >
+      </div>
 
       <div class="flex-1 overflow-y-auto p-4">
         <%!-- JS owns the children (meeting_client.js injects tiles); ignore on re-render --%>
@@ -471,6 +489,49 @@ defmodule PlatformWeb.ChatLive.Partials do
         >
           <span class="hero-phone-x-mark size-6"></span>
         </button>
+      </div>
+    </div>
+    """
+  end
+
+  @doc """
+  Soundboard icon + hover/focus popover showing the 1–8 key mappings and
+  the per-user mute toggle. The MeetingSoundboard JS hook queries
+  `[data-soundboard-mute]` checkboxes and `[data-soundboard-toasts]`
+  containers — this component renders them; the hook owns behavior.
+  """
+  attr :id, :string, required: true
+
+  def soundboard_menu(assigns) do
+    ~H"""
+    <div id={@id} class="group relative">
+      <button
+        type="button"
+        class="btn btn-ghost btn-xs"
+        aria-label="Soundboard — keyboard mappings and mute toggle"
+      >
+        <span class="hero-musical-note size-4"></span>
+      </button>
+      <div class="hidden group-hover:block group-focus-within:block absolute top-full right-0 mt-1 w-56 bg-base-200 border border-base-300 rounded-lg p-3 shadow-lg z-20">
+        <p class="text-xs font-semibold mb-2 text-base-content/70">
+          Press 1–7 during a call
+        </p>
+        <div class="grid grid-cols-[auto_1fr] gap-x-2 gap-y-1 text-xs items-center">
+          <kbd class="kbd kbd-xs">1</kbd><span>Gong</span>
+          <kbd class="kbd kbd-xs">2</kbd><span>Air horn</span>
+          <kbd class="kbd kbd-xs">3</kbd><span>Applause</span>
+          <kbd class="kbd kbd-xs">4</kbd><span>Crickets</span>
+          <kbd class="kbd kbd-xs">5</kbd><span>Faahh</span>
+          <kbd class="kbd kbd-xs">6</kbd><span>Shocked</span>
+          <kbd class="kbd kbd-xs">7</kbd><span>Suspense</span>
+        </div>
+        <label class="mt-3 pt-2 border-t border-base-300 flex items-center gap-2 text-xs cursor-pointer">
+          <input
+            type="checkbox"
+            class="checkbox checkbox-xs"
+            data-soundboard-mute
+          /> Mute incoming sounds
+        </label>
       </div>
     </div>
     """

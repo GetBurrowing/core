@@ -35,6 +35,11 @@ apps/platform/priv/meetings.yml
 # Claude Code per-machine settings (project-shared settings.json may be committed)
 .claude/settings.local.json
 
+# Local developer Makefile (not part of the canonical build)
+/Makefile
+/mise.toml
+/.mise.toml
+
 # GitButler-installed hooks (local machine artifacts from `but setup`).
 # The canonical pre-commit (mix format) is tracked; GitButler shelves it as
 # pre-commit-user while its shim occupies pre-commit. Run
