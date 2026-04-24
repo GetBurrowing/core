@@ -775,7 +775,7 @@ body, .font-fabrikam, * {
   --bg-card: #1E1E1E;
   --bg-hover: #252525;
   --bg-elevated: #1A1A1A;
-  --border: #2A2A2A;
+  --ui-border: #2A2A2A;
   --border-focus: #3A3A3A;
   --text-primary: #E5E5E5;
   --text-secondary: #B0B0B0;
@@ -785,7 +785,7 @@ body, .font-fabrikam, * {
   --radius-lg: 14px;
   --radius-pill: 28px;
   --transition: 150ms ease;
-  --shadow-elevated: 0 8px 32px rgba(0,0,0,0.5), 0 0 0 1px var(--border);
+  --shadow-elevated: 0 8px 32px rgba(0,0,0,0.5), 0 0 0 1px var(--ui-border);
   --agent-beacon: #06B6D4;
   --agent-builder: #A855F7;
   --agent-pixel: #F59E0B;
@@ -800,12 +800,12 @@ body, .font-fabrikam, * {
   --bg-card: #FFFFFF;
   --bg-hover: #F0F0F0;
   --bg-elevated: #FFFFFF;
-  --border: #E0E0E0;
+  --ui-border: #E0E0E0;
   --border-focus: #CCC;
   --text-primary: #0F172A;
   --text-secondary: #64748B;
   --text-muted: #94A3B8;
-  --shadow-elevated: 0 8px 32px rgba(0,0,0,0.12), 0 0 0 1px var(--border);
+  --shadow-elevated: 0 8px 32px rgba(0,0,0,0.12), 0 0 0 1px var(--ui-border);
 }
 
 /* ── Upload Backdrop ───────────────────────────────── */
@@ -828,7 +828,7 @@ body, .font-fabrikam, * {
 /* Panel Header */
 .upload-header {
   display: flex; align-items: center; padding: 16px 20px;
-  border-bottom: 1px solid var(--border); gap: 12px;
+  border-bottom: 1px solid var(--ui-border); gap: 12px;
 }
 .upload-header-icon {
   width: 36px; height: 36px; border-radius: 10px; background: var(--cyan-dim);
@@ -850,7 +850,7 @@ body, .font-fabrikam, * {
 /* Drop Zone (empty state) */
 .upload-dropzone {
   margin: 16px 20px; padding: 48px 32px;
-  border: 2px dashed var(--border); border-radius: 12px;
+  border: 2px dashed var(--ui-border); border-radius: 12px;
   display: flex; flex-direction: column; align-items: center; gap: 12px;
   text-align: center; transition: var(--transition); cursor: pointer;
 }
@@ -881,7 +881,7 @@ body, .font-fabrikam, * {
 }
 .upload-thumb {
   position: relative; aspect-ratio: 4/3; border-radius: var(--radius-sm);
-  overflow: hidden; border: 1px solid var(--border); cursor: pointer;
+  overflow: hidden; border: 1px solid var(--ui-border); cursor: pointer;
   transition: var(--transition); background: var(--bg-card);
 }
 .upload-thumb:hover { border-color: var(--cyan-muted); }
@@ -910,7 +910,7 @@ body, .font-fabrikam, * {
 
 /* Add More tile */
 .upload-add-tile {
-  aspect-ratio: 4/3; border-radius: var(--radius-sm); border: 1px dashed var(--border);
+  aspect-ratio: 4/3; border-radius: var(--radius-sm); border: 1px dashed var(--ui-border);
   display: flex; flex-direction: column; align-items: center; justify-content: center;
   gap: 4px; cursor: pointer; transition: var(--transition);
   color: var(--text-muted); font-size: 11px; background: transparent;
@@ -923,7 +923,7 @@ body, .font-fabrikam, * {
 
 /* Agent Tag Section */
 .upload-agent-section {
-  padding: 12px 20px; border-top: 1px solid var(--border);
+  padding: 12px 20px; border-top: 1px solid var(--ui-border);
 }
 .upload-agent-label {
   font-size: 11px; font-weight: 700; text-transform: uppercase;
@@ -933,7 +933,7 @@ body, .font-fabrikam, * {
 .agent-chip {
   display: flex; align-items: center; gap: 5px; padding: 5px 12px;
   border-radius: 20px; font-size: 12px; font-weight: 600; cursor: pointer;
-  transition: var(--transition); border: 1px solid var(--border);
+  transition: var(--transition); border: 1px solid var(--ui-border);
   background: transparent; font-family: inherit; color: var(--text-secondary);
 }
 .agent-chip:hover { background: var(--bg-hover); }
@@ -958,7 +958,7 @@ body, .font-fabrikam, * {
 }
 .upload-comment-input {
   width: 100%; padding: 10px 14px; background: var(--bg-surface);
-  border: 1px solid var(--border); border-radius: var(--radius-md);
+  border: 1px solid var(--ui-border); border-radius: var(--radius-md);
   color: var(--text-primary); font-size: 13px; font-family: inherit;
   outline: none; resize: vertical; min-height: 64px; max-height: 120px;
   transition: var(--transition);
@@ -969,13 +969,13 @@ body, .font-fabrikam, * {
 /* Panel Footer */
 .upload-footer {
   display: flex; align-items: center; justify-content: space-between;
-  padding: 14px 20px; border-top: 1px solid var(--border); gap: 12px;
+  padding: 14px 20px; border-top: 1px solid var(--ui-border); gap: 12px;
 }
 .upload-count { font-size: 12px; color: var(--text-muted); }
 .upload-count strong { color: var(--text-secondary); }
 .upload-footer-actions { display: flex; gap: 8px; }
 .upload-btn-cancel {
-  padding: 8px 18px; border-radius: 8px; border: 1px solid var(--border);
+  padding: 8px 18px; border-radius: 8px; border: 1px solid var(--ui-border);
   background: transparent; color: var(--text-secondary); font-size: 13px;
   font-weight: 500; cursor: pointer; transition: var(--transition); font-family: inherit;
 }
@@ -1004,7 +1004,7 @@ body, .font-fabrikam, * {
 .gallery-item {
   position: relative; border-radius: var(--radius-sm); overflow: hidden;
   background: var(--bg-card); cursor: pointer; aspect-ratio: 16/10;
-  border: 1px solid var(--border); transition: var(--transition);
+  border: 1px solid var(--ui-border); transition: var(--transition);
 }
 .gallery-item:hover { border-color: var(--cyan-muted); }
 .gallery-item.span-2 { grid-column: span 2; }

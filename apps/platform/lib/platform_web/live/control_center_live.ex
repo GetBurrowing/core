@@ -58,6 +58,7 @@ defmodule PlatformWeb.ControlCenterLive do
      |> assign(:agent_credentials, [])
      |> assign(:platform_credentials, [])
      |> assign(:config_form, to_form(%{}, as: :config))
+     |> assign(:other_historian_exists, false)
      |> assign(
        :create_agent_form,
        to_form(AgentData.default_create_agent_params(), as: :create_agent)
@@ -522,6 +523,7 @@ defmodule PlatformWeb.ControlCenterLive do
                 federation_spaces={@federation_spaces}
                 show_add_space_modal={@show_add_space_modal}
                 available_spaces={@available_spaces}
+                other_historian_exists={@other_historian_exists}
               />
             </div>
 
@@ -536,6 +538,7 @@ defmodule PlatformWeb.ControlCenterLive do
                   config_form={@config_form}
                   model_chain_result={@model_chain_result}
                   selected_agent_directory_entry={@selected_agent_directory_entry}
+                  other_historian_exists={@other_historian_exists}
                 />
 
                 <AgentDetail.workspace_editor
@@ -625,6 +628,7 @@ defmodule PlatformWeb.ControlCenterLive do
     |> assign(:agent_credentials, [])
     |> assign(:platform_credentials, [])
     |> assign(:config_form, to_form(%{}, as: :config))
+    |> assign(:other_historian_exists, false)
     |> assign(
       :create_agent_form,
       to_form(AgentData.default_create_agent_params(), as: :create_agent)
@@ -696,6 +700,7 @@ defmodule PlatformWeb.ControlCenterLive do
       :config_form,
       AgentData.build_config_form(agent, Keyword.get(opts, :config_params, %{}))
     )
+    |> assign(:other_historian_exists, AgentData.another_historian_exists?(agent.id))
     |> assign(
       :selected_agent_directory_entry,
       AgentData.find_agent_directory_entry(socket.assigns.agents, agent.slug)

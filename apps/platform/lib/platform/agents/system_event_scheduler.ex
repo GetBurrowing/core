@@ -23,9 +23,10 @@ defmodule Platform.Agents.SystemEventScheduler do
 
   import Ecto.Query
 
-  alias Platform.Agents.Agent
+  alias Platform.Agents.{Agent, ActivityDigest}
   alias Platform.Chat
   alias Platform.Chat.AgentResponder
+  alias Platform.Federation.RuntimePresence
   alias Platform.Repo
 
   # ── Defaults ─────────────────────────────────────────────────────────────────
@@ -39,13 +40,16 @@ defmodule Platform.Agents.SystemEventScheduler do
 
   @instruction_templates %{
     "daily_summary" => """
-    You are performing your daily summary for {date}. \
-    Start by calling `space_list` to see all spaces you participate in. \
-    Then call `space_get_messages` on each active space to review today's \
-    activity. Write a concise summary of what happened today, including key \
-    decisions, progress, blockers, and open questions. Use the \
-    `org_memory_append` tool to record this summary as a daily memory entry \
-    dated {date}.
+    You are the Historian. Below is the activity from the last 24 hours \
+    across all non-DM spaces in the organisation.
+
+    {activity_digest}
+
+    Write a concise daily summary for {date} capturing key decisions, \
+    completed work, milestones, blockers, and notable events. Use the \
+    `org_memory_append` tool with `memory_type="daily"` and `date="{date}"` \
+    to record it. If the window was quiet, write a short note to that effect \
+    rather than skipping the entry.
     """,
     "dreaming" => """
     You are in dreaming mode. Review recent daily memory entries using \
@@ -56,6 +60,8 @@ defmodule Platform.Agents.SystemEventScheduler do
     and preserve existing content that is still relevant.
     """
   }
+
+  @daily_window_hours 24
 
   # ── Public API ───────────────────────────────────────────────────────────────
 
@@ -175,16 +181,35 @@ defmodule Platform.Agents.SystemEventScheduler do
   end
 
   defp agent_for_event(event_type) do
-    from(a in Agent,
-      where: a.status == "active",
-      where: fragment("? @> ?", a.system_events, ^[event_type]),
-      limit: 1
-    )
-    |> Repo.one()
+    agents =
+      from(a in Agent,
+        where: a.status == "active",
+        where: fragment("? @> ?", a.system_events, ^[event_type]),
+        order_by: [asc: a.inserted_at],
+        limit: 2
+      )
+      |> Repo.all()
+
+    case agents do
+      [] ->
+        nil
+
+      [agent] ->
+        agent
+
+      [agent | _rest] = multiple ->
+        Logger.warning(
+          "[SystemEventScheduler] multiple agents flagged for #{event_type}: " <>
+            "#{inspect(Enum.map(multiple, & &1.slug))} — using #{agent.slug}"
+        )
+
+        agent
+    end
   end
 
   defp dispatch_to_agent(%Agent{} = agent, event_type) do
-    with {:ok, space} <- ensure_system_space(agent),
+    with :ok <- ensure_runtime_reachable(agent, event_type),
+         {:ok, space} <- ensure_system_space(agent),
          {:ok, system_participant} <- ensure_system_participant(space),
          {:ok, agent_participant} <-
            Chat.add_agent_participant(space.id, agent, display_name: agent.name),
@@ -207,6 +232,27 @@ defmodule Platform.Agents.SystemEventScheduler do
         {:error, reason}
     end
   end
+
+  # Skip dispatch when the external agent's runtime is known to be offline —
+  # avoids posting an instruction that will dead-letter immediately. Built-in
+  # agents always pass this check.
+  defp ensure_runtime_reachable(
+         %Agent{runtime_type: "external", runtime_id: runtime_id},
+         event_type
+       )
+       when is_binary(runtime_id) do
+    if RuntimePresence.online?(runtime_id) do
+      :ok
+    else
+      Logger.warning(
+        "[SystemEventScheduler] skipping #{event_type}: external runtime #{runtime_id} is offline"
+      )
+
+      {:error, :runtime_offline}
+    end
+  end
+
+  defp ensure_runtime_reachable(%Agent{}, _event_type), do: :ok
 
   # ── Space + participant helpers ──────────────────────────────────────────────
 
@@ -250,7 +296,11 @@ defmodule Platform.Agents.SystemEventScheduler do
 
   defp post_instruction(space, system_participant, event_type) do
     template = Map.fetch!(@instruction_templates, event_type)
-    content = String.replace(template, "{date}", Date.to_iso8601(Date.utc_today()))
+
+    content =
+      template
+      |> String.replace("{date}", Date.to_iso8601(Date.utc_today()))
+      |> maybe_inject_digest(event_type)
 
     Chat.post_message(%{
       space_id: space.id,
@@ -260,4 +310,13 @@ defmodule Platform.Agents.SystemEventScheduler do
       metadata: %{"source" => "system_event", "event_type" => event_type}
     })
   end
+
+  defp maybe_inject_digest(template, "daily_summary") do
+    window_end = DateTime.utc_now()
+    window_start = DateTime.add(window_end, -@daily_window_hours * 3_600, :second)
+    digest = ActivityDigest.build(window_start, window_end)
+    String.replace(template, "{activity_digest}", digest)
+  end
+
+  defp maybe_inject_digest(template, _event_type), do: template
 end

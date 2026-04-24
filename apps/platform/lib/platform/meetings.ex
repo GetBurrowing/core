@@ -580,6 +580,31 @@ defmodule Platform.Meetings do
   def get_transcript_with_segments(id), do: Repo.get(Transcript, id)
 
   @doc """
+  Returns completed transcripts whose `completed_at` falls within the window.
+
+  Used by the Historian's activity digest. Only status="complete" transcripts
+  are returned; in-progress or failed transcripts are skipped.
+
+  ## Options
+
+    * `:window_end` — upper bound (exclusive); default `DateTime.utc_now/0`
+  """
+  @spec list_transcripts_since(DateTime.t(), keyword()) :: [Transcript.t()]
+  def list_transcripts_since(%DateTime{} = window_start, opts \\ []) do
+    window_end = Keyword.get(opts, :window_end, DateTime.utc_now())
+
+    from(t in Transcript,
+      where:
+        t.status == "complete" and
+          not is_nil(t.completed_at) and
+          t.completed_at >= ^window_start and
+          t.completed_at < ^window_end,
+      order_by: [asc: t.completed_at]
+    )
+    |> Repo.all()
+  end
+
+  @doc """
   Find the active transcript for a room, or create one if none exists.
 
   Returns `{:ok, transcript}` in both cases.

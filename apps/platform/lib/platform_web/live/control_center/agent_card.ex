@@ -52,6 +52,12 @@ defmodule PlatformWeb.ControlCenter.AgentCard do
           >
             <span class="hero-globe-alt h-3 w-3" /> Federated
           </span>
+          <span
+            :if={"daily_summary" in (@agent[:system_events] || [])}
+            class="inline-flex items-center gap-1 rounded-full bg-primary/15 px-2 py-0.5 text-primary"
+          >
+            <span class="hero-book-open h-3 w-3" /> Historian
+          </span>
         </div>
       </.link>
     </article>
