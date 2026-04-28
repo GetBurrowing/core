@@ -20,6 +20,10 @@
     <link rel="apple-touch-icon" sizes="180x180" href="/images/apple-touch-icon.png" />
     <meta name="theme-color" content="#000000" />
     <meta name="vapid-public-key" content={Platform.Push.vapid_public_key()} />
+    <meta
+      name="webmcp-enabled"
+      content={to_string(Application.get_env(:platform, :webmcp_enabled, false))}
+    />
     <link phx-track-static rel="stylesheet" href={~p"/assets/css/app.css"} />
     <script defer phx-track-static type="text/javascript" src={~p"/assets/js/app.js"}>
     </script>

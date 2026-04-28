@@ -74,31 +74,65 @@ if ("serviceWorker" in navigator) {
 }
 
 // ── WebMCP tool registration (Chrome 146+ with flag enabled) ──────────────
-if (typeof navigator.modelContext !== "undefined") {
+//
+// Gated by `config :platform, :webmcp_enabled` (rendered as <meta name="webmcp-enabled">).
+// Default: on in dev, off everywhere else. Override with WEBMCP_ENABLED=true|false.
+//
+// Security: tools drive the UI as the authenticated user and ride the LV
+// socket's already-authenticated channel. Inputs interpolated into CSS
+// selectors are regex-validated to prevent attribute-selector injection;
+// string args are length-capped to bound LV-socket DOS / runaway payloads.
+// Origin allowlist is not feasible — modelContext does not expose caller
+// origin to the execute() callback. See BACKLOG #14.
+const webmcpEnabled =
+  document.querySelector('meta[name="webmcp-enabled"]')?.content === "true";
+
+if (webmcpEnabled && typeof navigator.modelContext !== "undefined") {
+  // Single source of truth for DOM selectors so a UI refactor fails loudly here,
+  // not silently for tool callers.
+  const SEL = {
+    composeInput: "#compose-form input[type='text'], #compose-form textarea",
+    composeForm: "#compose-form",
+    canvasTitleInput: "input[name='canvas[title]']",
+    chatSearchInput: "#chat-search-form input[type='text']",
+    spaceHeader: "header .truncate.font-semibold",
+    sidebarSpaceLinks: "nav a[href^='/chat/']",
+  };
+
+  const MAX_TEXT = 10000;
+  const MAX_QUERY = 500;
+  const MAX_TITLE = 200;
+
+  // Charset allowlists for values interpolated into querySelector strings.
+  // Not strict format validators — the goal is to reject any character that
+  // could break out of an attribute-selector context (quotes, brackets,
+  // whitespace, etc.) before it reaches the selector.
+  const SLUG_RE = /^[a-z0-9_-]{1,64}$/;
+  const SAFE_ID_RE = /^[a-z0-9-]{1,36}$/i;
+
+  const errorResult = (msg) => ({ content: [{ type: "text", text: msg }] });
+
+  // Use the right prototype's setter so LV picks up changes for both <input>
+  // and <textarea>; using the input-only prototype on a textarea silently no-ops.
+  const setNativeValue = (el, value) => {
+    const proto = el.tagName === "TEXTAREA"
+      ? window.HTMLTextAreaElement.prototype
+      : window.HTMLInputElement.prototype;
+    Object.getOwnPropertyDescriptor(proto, "value").set.call(el, value);
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+  };
+
   navigator.modelContext.registerTool({
     name: "send_message",
     description: "Send a chat message in the currently active Suite chat space. The message will appear from the authenticated user.",
-    input: {
-      type: "object",
-      properties: {
-        text: {
-          type: "string",
-          description: "The message content to send"
-        }
-      },
-      required: ["text"]
-    },
+    input: { type: "object", properties: { text: { type: "string", description: "The message content to send" } }, required: ["text"] },
     async execute({ text }) {
-      const input = document.querySelector("#compose-form input[type='text'], #compose-form textarea");
-      const form = document.getElementById("compose-form");
-      if (!input || !form) {
-        return { content: [{ type: "text", text: "Error: chat compose form not found on this page" }] };
-      }
-      // Set value and dispatch input event so LiveView picks it up
-      const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
-      nativeInputValueSetter.call(input, text);
-      input.dispatchEvent(new Event("input", { bubbles: true }));
-      // Submit the form
+      if (typeof text !== "string") return errorResult("Error: text must be a string");
+      if (text.length > MAX_TEXT) return errorResult(`Error: text exceeds ${MAX_TEXT} character limit`);
+      const input = document.querySelector(SEL.composeInput);
+      const form = document.querySelector(SEL.composeForm);
+      if (!input || !form) return errorResult("Error: chat compose form not found on this page");
+      setNativeValue(input, text);
       await new Promise(r => setTimeout(r, 50));
       form.dispatchEvent(new Event("submit", { bubbles: true }));
       return { content: [{ type: "text", text: `Message sent: "${text}"` }] };
@@ -110,8 +144,11 @@ if (typeof navigator.modelContext !== "undefined") {
     description: "Navigate to a different chat space/channel by clicking its link in the sidebar",
     input: { type: "object", properties: { slug: { type: "string", description: "The space slug to navigate to (e.g. 'general')" } }, required: ["slug"] },
     async execute({ slug }) {
+      if (typeof slug !== "string" || !SLUG_RE.test(slug)) {
+        return errorResult("Error: slug must match [a-z0-9_-]{1,64}");
+      }
       const link = document.querySelector(`a[href="/chat/${slug}"]`);
-      if (!link) return { content: [{ type: "text", text: `Space "${slug}" not found in sidebar` }] };
+      if (!link) return errorResult(`Space "${slug}" not found in sidebar`);
       link.click();
       return { content: [{ type: "text", text: `Navigated to #${slug}` }] };
     }
@@ -122,9 +159,9 @@ if (typeof navigator.modelContext !== "undefined") {
     description: "Get the current page state: active space, message count, participant info",
     input: { type: "object", properties: {} },
     async execute() {
-      const space = document.querySelector("header .truncate.font-semibold")?.textContent?.trim() || "unknown";
+      const space = document.querySelector(SEL.spaceHeader)?.textContent?.trim() || "unknown";
       const messages = document.querySelectorAll("[id^='messages-']").length;
-      const compose = !!document.getElementById("compose-form");
+      const compose = !!document.querySelector(SEL.composeForm);
       return { content: [{ type: "text", text: JSON.stringify({ space, messageCount: messages, composeAvailable: compose, url: window.location.href }) }] };
     }
   });
@@ -134,11 +171,11 @@ if (typeof navigator.modelContext !== "undefined") {
     description: "Search chat messages using the search bar",
     input: { type: "object", properties: { query: { type: "string", description: "Search query" } }, required: ["query"] },
     async execute({ query }) {
-      const input = document.querySelector("#chat-search-form input[type='text']");
-      if (!input) return { content: [{ type: "text", text: "Search input not found" }] };
-      const nativeSet = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
-      nativeSet.call(input, query);
-      input.dispatchEvent(new Event("input", { bubbles: true }));
+      if (typeof query !== "string") return errorResult("Error: query must be a string");
+      if (query.length > MAX_QUERY) return errorResult(`Error: query exceeds ${MAX_QUERY} character limit`);
+      const input = document.querySelector(SEL.chatSearchInput);
+      if (!input) return errorResult("Search input not found");
+      setNativeValue(input, query);
       await new Promise(r => setTimeout(r, 500));
       const results = document.querySelectorAll("[phx-click='search_open_result']").length;
       return { content: [{ type: "text", text: JSON.stringify({ query, resultCount: results }) }] };
@@ -148,20 +185,21 @@ if (typeof navigator.modelContext !== "undefined") {
   navigator.modelContext.registerTool({
     name: "create_canvas",
     description: "Create a new live canvas in the current chat space",
-    input: { type: "object", properties: { title: { type: "string", description: "Canvas title" }, type: { type: "string", description: "Canvas type: table, form, code, diagram, dashboard, custom", enum: ["table", "form", "code", "diagram", "dashboard", "custom"] } }, required: ["title", "type"] },
-    async execute({ title, type }) {
-      const titleInput = document.querySelector("input[name='canvas[title]']");
-      const typeSelect = document.querySelector("select[name='canvas[canvas_type]']");
+    // Note: the prior `type` parameter targeted a `select[name='canvas[canvas_type]']`
+    // that does not exist in the canvas form (only `canvas[title]` is rendered, and
+    // the server-side `canvas_create` handler only reads `["title"]`). Dropped to
+    // match reality.
+    input: { type: "object", properties: { title: { type: "string", description: "Canvas title" } }, required: ["title"] },
+    async execute({ title }) {
+      if (typeof title !== "string") return errorResult("Error: title must be a string");
+      if (title.length > MAX_TITLE) return errorResult(`Error: title exceeds ${MAX_TITLE} character limit`);
+      const titleInput = document.querySelector(SEL.canvasTitleInput);
       const form = titleInput?.closest("form");
-      if (!titleInput || !typeSelect || !form) return { content: [{ type: "text", text: "Canvas creation form not found. Open the canvases panel first." }] };
-      const nativeSet = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value").set;
-      nativeSet.call(titleInput, title);
-      titleInput.dispatchEvent(new Event("input", { bubbles: true }));
-      typeSelect.value = type;
-      typeSelect.dispatchEvent(new Event("change", { bubbles: true }));
+      if (!titleInput || !form) return errorResult("Canvas creation form not found. Open the canvases panel first.");
+      setNativeValue(titleInput, title);
       await new Promise(r => setTimeout(r, 100));
       form.dispatchEvent(new Event("submit", { bubbles: true }));
-      return { content: [{ type: "text", text: `Canvas "${title}" (${type}) creation submitted` }] };
+      return { content: [{ type: "text", text: `Canvas "${title}" creation submitted` }] };
     }
   });
 
@@ -170,7 +208,7 @@ if (typeof navigator.modelContext !== "undefined") {
     description: "List all available chat spaces/channels visible in the sidebar",
     input: { type: "object", properties: {} },
     async execute() {
-      const links = document.querySelectorAll("nav a[href^='/chat/']");
+      const links = document.querySelectorAll(SEL.sidebarSpaceLinks);
       const spaces = Array.from(links).map(a => {
         const slug = a.getAttribute("href").replace("/chat/", "");
         const name = a.textContent.trim().replace(/^#\s*/, "");
@@ -185,14 +223,24 @@ if (typeof navigator.modelContext !== "undefined") {
     description: "Open a thread panel for a specific message by clicking its thread button",
     input: { type: "object", properties: { messageId: { type: "string", description: "The message ID to open the thread for" } }, required: ["messageId"] },
     async execute({ messageId }) {
+      if (typeof messageId !== "string" || !SAFE_ID_RE.test(messageId)) {
+        return errorResult("Error: messageId must match [a-z0-9-]{1,36}");
+      }
       const btn = document.querySelector(`[phx-click="open_thread"][phx-value-message-id="${messageId}"]`);
-      if (!btn) return { content: [{ type: "text", text: `Thread button not found for message ${messageId}` }] };
+      if (!btn) return errorResult(`Thread button not found for message ${messageId}`);
       btn.click();
       return { content: [{ type: "text", text: `Thread opened for message ${messageId}` }] };
     }
   });
 
-  console.log("[WebMCP] Suite tools registered:", ["send_message", "navigate_space", "get_page_state", "search_messages", "create_canvas", "list_spaces", "toggle_thread"].join(", "));
+  // Dev-only debug aid; esbuild substitutes process.env.NODE_ENV at build time
+  // so this drops out of prod bundles even if WEBMCP_ENABLED=true is set.
+  if (process.env.NODE_ENV === "development") {
+    console.log(
+      "[WebMCP] Suite tools registered:",
+      ["send_message", "navigate_space", "get_page_state", "search_messages", "create_canvas", "list_spaces", "toggle_thread"].join(", ")
+    );
+  }
 }
 
 // The lines below enable quality of life phoenix_live_reload

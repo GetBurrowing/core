@@ -197,6 +197,20 @@ if vapid_public && vapid_private do
     private_key: vapid_private
 end
 
+# ── WebMCP tool surface (BACKLOG #14) ─────────────────────────────────────────
+# Gates registration of `navigator.modelContext` tools in app.js. Off by default
+# in prod; on by default in dev. Override with WEBMCP_ENABLED=true|false.
+# Tools drive the UI as the authenticated user and have no per-invocation
+# confirmation yet — keep off in prod until Option C ships.
+webmcp_enabled =
+  case System.get_env("WEBMCP_ENABLED") do
+    value when value in ["true", "1"] -> true
+    value when value in ["false", "0"] -> false
+    _ -> config_env() == :dev
+  end
+
+config :platform, :webmcp_enabled, webmcp_enabled
+
 # ── LiveKit (Meetings) ────────────────────────────────────────────────────────
 # Feature-gated: meetings are inert unless LIVEKIT_API_KEY + LIVEKIT_API_SECRET
 # are set. See ADR 0030.
