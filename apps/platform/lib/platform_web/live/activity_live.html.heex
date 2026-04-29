@@ -1,0 +1,83 @@
+<div class="mx-auto max-w-3xl p-6">
+  <header class="mb-6 flex items-end justify-between gap-4">
+    <div>
+      <h1 class="text-2xl font-bold">AI Activity</h1>
+      <p class="text-sm text-base-content/70">
+        Recent actions taken by AI agents in spaces you participate in.
+      </p>
+    </div>
+    <button
+      type="button"
+      phx-click="refresh"
+      class="btn btn-sm btn-ghost gap-2"
+      aria-label="Refresh activity"
+    >
+      <span class="hero-arrow-path size-4"></span>
+      <span>Refresh</span>
+    </button>
+  </header>
+
+  <div role="tablist" class="tabs tabs-boxed mb-6 inline-flex">
+    <button
+      :for={{label, _seconds} <- @ranges}
+      type="button"
+      role="tab"
+      phx-click="change_range"
+      phx-value-range={label}
+      class={["tab", @range == label && "tab-active"]}
+      aria-selected={@range == label}
+    >
+      {range_label(label)}
+    </button>
+  </div>
+
+  <div
+    :if={@actions == []}
+    class="rounded-2xl border border-base-300 bg-base-100 p-8 text-center text-sm text-base-content/60"
+  >
+    No AI activity in this window. Refresh to check again.
+  </div>
+
+  <ul :if={@actions != []} class="space-y-3" role="list">
+    <li
+      :for={action <- @actions}
+      class="flex items-start gap-3 rounded-2xl border border-base-300 bg-base-100 p-4"
+    >
+      <div class="flex-shrink-0 pt-1">
+        <span class={[
+          "inline-flex size-8 items-center justify-center rounded-full text-xs font-bold",
+          action.kind == :message && "bg-primary/10 text-primary",
+          action.kind == :canvas && "bg-secondary/10 text-secondary"
+        ]}>
+          {avatar_initial(action.agent_name)}
+        </span>
+      </div>
+
+      <div class="min-w-0 flex-1">
+        <div class="flex flex-wrap items-center gap-2 text-xs text-base-content/60">
+          <span class="font-semibold text-base-content/80">{action.agent_name}</span>
+          <span class="rounded-full bg-base-200 px-2 py-0.5 font-medium">
+            {kind_label(action.kind)}
+          </span>
+          <span title={DateTime.to_string(action.inserted_at)}>
+            {time_ago(action.inserted_at)}
+          </span>
+        </div>
+        <p class="mt-1 line-clamp-3 text-sm text-base-content/80 break-words">
+          {action_preview(action)}
+        </p>
+      </div>
+
+      <button
+        type="button"
+        phx-click="undo"
+        phx-value-kind={to_string(action.kind)}
+        phx-value-id={action.item.id}
+        data-confirm="Undo this AI action? It will be soft-deleted from the channel."
+        class="btn btn-sm btn-ghost text-error"
+      >
+        Undo
+      </button>
+    </li>
+  </ul>
+</div>

@@ -2227,4 +2227,151 @@ defmodule Platform.Chat do
       _ -> ChatPubSub.broadcast(msg.space_id, {:new_message, msg})
     end
   end
+
+  # ── AI Activity (Activity panel — list + undo agent-driven actions) ────────
+
+  @doc """
+  List recent AI-agent-driven actions (messages, canvases) in spaces the given
+  user participates in. Used by the Activity LiveView. Returns currently-active
+  items (not soft-deleted), sorted chronologically newest first.
+
+  Each result is a map: `%{kind: :message | :canvas, item: t, agent_name: name,
+  space_id: id, inserted_at: dt}`.
+
+  Options:
+    * `:since` (`DateTime`) — only items with `inserted_at >= since`. If omitted,
+      all-time history is returned.
+    * `:limit` (`integer`) — cap on combined results. Default `200`.
+  """
+  @spec list_recent_agent_actions(binary(), keyword()) :: [map()]
+  def list_recent_agent_actions(user_id, opts \\ []) when is_binary(user_id) do
+    since = Keyword.get(opts, :since)
+    limit = Keyword.get(opts, :limit, 200)
+
+    space_ids = list_space_ids_for_user(user_id)
+
+    if space_ids == [] do
+      []
+    else
+      messages = list_recent_agent_messages(space_ids, since, limit)
+      canvases = list_recent_agent_canvases(space_ids, since, limit)
+
+      (messages ++ canvases)
+      |> Enum.sort_by(& &1.inserted_at, {:desc, DateTime})
+      |> Enum.take(limit)
+    end
+  end
+
+  defp list_space_ids_for_user(user_id) do
+    from(p in Participant,
+      join: s in Space,
+      on: s.id == p.space_id,
+      where: p.participant_id == ^user_id and p.participant_type == "user",
+      where: is_nil(s.archived_at),
+      select: p.space_id,
+      distinct: true
+    )
+    |> Repo.all()
+  end
+
+  @doc """
+  Returns `true` if the given `user_id` is a participant in the given (non-archived)
+  `space_id`. Used as an authorization gate for actions scoped to a user's spaces
+  (e.g. the Activity panel's undo).
+  """
+  @spec user_in_space?(binary(), binary()) :: boolean()
+  def user_in_space?(user_id, space_id) when is_binary(user_id) and is_binary(space_id) do
+    query =
+      from(p in Participant,
+        join: s in Space,
+        on: s.id == p.space_id,
+        where:
+          p.participant_id == ^user_id and
+            p.participant_type == "user" and
+            p.space_id == ^space_id,
+        where: is_nil(s.archived_at),
+        limit: 1,
+        select: 1
+      )
+
+    Repo.one(query) != nil
+  end
+
+  defp list_recent_agent_messages(space_ids, since, limit) do
+    base =
+      Message
+      |> where([m], m.space_id in ^space_ids)
+      |> where([m], m.author_participant_type == "agent")
+      |> where([m], is_nil(m.deleted_at))
+      |> order_by([m], desc: m.inserted_at)
+      |> limit(^limit)
+
+    base = if since, do: where(base, [m], m.inserted_at >= ^since), else: base
+
+    base
+    |> Repo.all()
+    |> Enum.map(fn m ->
+      %{
+        kind: :message,
+        item: m,
+        agent_name: m.author_display_name || "Agent",
+        space_id: m.space_id,
+        inserted_at: m.inserted_at
+      }
+    end)
+  end
+
+  defp list_recent_agent_canvases(space_ids, since, limit) do
+    base =
+      Canvas
+      |> where([c], c.space_id in ^space_ids)
+      |> where([c], c.created_by_participant_type == "agent")
+      |> where([c], is_nil(c.deleted_at))
+      |> order_by([c], desc: c.inserted_at)
+      |> limit(^limit)
+
+    base = if since, do: where(base, [c], c.inserted_at >= ^since), else: base
+
+    base
+    |> Repo.all()
+    |> Enum.map(fn c ->
+      %{
+        kind: :canvas,
+        item: c,
+        agent_name: c.created_by_display_name || "Agent",
+        space_id: c.space_id,
+        inserted_at: c.inserted_at
+      }
+    end)
+  end
+
+  @doc """
+  Soft-delete a canvas. Sets `deleted_at` to the current timestamp,
+  emits telemetry, and broadcasts `{:canvas_deleted, canvas}` to the space.
+  """
+  @spec delete_canvas(Canvas.t()) :: {:ok, Canvas.t()} | {:error, Ecto.Changeset.t()}
+  def delete_canvas(%Canvas{} = canvas) do
+    # Use the dedicated soft-delete changeset so `validate_document/1` doesn't
+    # rewrite the stored document during a delete-only update.
+    result =
+      canvas
+      |> Canvas.delete_changeset(%{deleted_at: DateTime.utc_now()})
+      |> Repo.update()
+
+    case result do
+      {:ok, c} ->
+        :telemetry.execute(
+          [:platform, :chat, :canvas_deleted],
+          %{system_time: System.system_time()},
+          %{canvas_id: c.id, space_id: c.space_id}
+        )
+
+        ChatPubSub.broadcast(c.space_id, {:canvas_deleted, c})
+
+      _ ->
+        :ok
+    end
+
+    result
+  end
 end

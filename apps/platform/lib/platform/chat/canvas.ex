@@ -48,6 +48,17 @@ defmodule Platform.Chat.Canvas do
     |> validate_document()
   end
 
+  @doc """
+  Soft-delete-only changeset. Casts only `deleted_at` (set to a timestamp to
+  hide, or `nil` to restore). Skips `validate_document/1` so a delete update
+  cannot mutate the stored document or fail because of a doc that no longer
+  matches the live schema.
+  """
+  def delete_changeset(canvas, attrs) do
+    canvas
+    |> cast(attrs, [:deleted_at])
+  end
+
   defp validate_document(changeset) do
     case get_field(changeset, :document) do
       nil ->

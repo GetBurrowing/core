@@ -83,6 +83,28 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
     |> maybe_update_active(canvas)
   end
 
+  @doc "Remove a canvas from the socket's local list (paired with `{:canvas_deleted, canvas}` broadcasts)."
+  @spec remove(Phoenix.LiveView.Socket.t(), map()) :: Phoenix.LiveView.Socket.t()
+  def remove(socket, canvas) do
+    # Use safe assigns access — a {:canvas_deleted, _} broadcast can race with
+    # mount and arrive before :canvases / :canvases_by_id are initialized.
+    canvases =
+      socket.assigns
+      |> Map.get(:canvases, [])
+      |> Enum.reject(&(&1.id == canvas.id))
+
+    active =
+      case socket.assigns[:active_canvas] do
+        %{id: id} when id == canvas.id -> nil
+        other -> other
+      end
+
+    socket
+    |> assign(:canvases, canvases)
+    |> assign(:canvases_by_id, build_map(canvases))
+    |> assign(:active_canvas, active)
+  end
+
   @doc "Set the active canvas."
   @spec set_active(Phoenix.LiveView.Socket.t(), map() | nil) :: Phoenix.LiveView.Socket.t()
   def set_active(socket, canvas), do: assign(socket, :active_canvas, canvas)
@@ -200,6 +222,7 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
 
   defp handle_info({:canvas_created, canvas}, socket), do: {:halt, put(socket, canvas)}
   defp handle_info({:canvas_updated, canvas}, socket), do: {:halt, put(socket, canvas)}
+  defp handle_info({:canvas_deleted, canvas}, socket), do: {:halt, remove(socket, canvas)}
 
   # Canvas kind emissions (action-row click, form submit, checklist toggle, …)
   # arrive here via `ChatPubSub.broadcast_canvas/2`. Events are signals — they

@@ -313,6 +313,9 @@ defmodule PlatformWeb.ShellLive do
       PlatformWeb.ChatLive ->
         "Chat"
 
+      PlatformWeb.ActivityLive ->
+        "Activity"
+
       PlatformWeb.ControlCenterLive ->
         "Agent Resources"
 

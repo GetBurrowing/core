@@ -46,6 +46,15 @@
       <span :if={!@sidebar_collapsed} class="text-sm font-medium">Chat</span>
     </.link>
     <.link
+      navigate="/activity"
+      class={nav_item_class(@current_path, "/activity")}
+      phx-click="close_drawer"
+      title="Activity"
+    >
+      <span class="hero-sparkles size-5 flex-shrink-0"></span>
+      <span :if={!@sidebar_collapsed} class="text-sm font-medium">Activity</span>
+    </.link>
+    <.link
       navigate="/tasks"
       class={nav_item_class(@current_path, "/tasks")}
       phx-click="close_drawer"
