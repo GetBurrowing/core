@@ -3,7 +3,7 @@
     <div>
       <h1 class="text-2xl font-bold">AI Activity</h1>
       <p class="text-sm text-base-content/70">
-        Recent actions taken by AI agents in spaces you participate in.
+        Recent actions taken by AI agents in all spaces you have access to.
       </p>
     </div>
     <button
@@ -17,9 +17,9 @@
     </button>
   </header>
 
-  <div role="tablist" class="tabs tabs-boxed mb-6 inline-flex">
+  <div role="tablist" class="tabs tabs-boxed mb-3 inline-flex">
     <button
-      :for={{label, _seconds} <- @ranges}
+      :for={label <- @ranges}
       type="button"
       role="tab"
       phx-click="change_range"
@@ -31,11 +31,18 @@
     </button>
   </div>
 
+  <p class="mb-6 text-xs text-base-content/50">
+    Showing <span class="font-medium text-base-content/70">{length(@actions)}</span>
+    {if length(@actions) == 1, do: "item", else: "items"} from <span class="font-medium text-base-content/70">{range_label(@range)}</span>{if @has_more,
+      do: " (more available)",
+      else: ""}
+  </p>
+
   <div
     :if={@actions == []}
     class="rounded-2xl border border-base-300 bg-base-100 p-8 text-center text-sm text-base-content/60"
   >
-    No AI activity in this window. Refresh to check again.
+    No AI activity in this window. Try a wider range or refresh to check again.
   </div>
 
   <ul :if={@actions != []} class="space-y-3" role="list">
@@ -80,4 +87,15 @@
       </button>
     </li>
   </ul>
+
+  <div :if={@has_more} class="mt-4 flex justify-center">
+    <button
+      type="button"
+      phx-click="load_more"
+      class="btn btn-sm btn-outline"
+      aria-label="Load more activity"
+    >
+      Load more
+    </button>
+  </div>
 </div>

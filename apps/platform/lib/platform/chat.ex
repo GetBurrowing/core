@@ -2297,12 +2297,15 @@ defmodule Platform.Chat do
       all-time history is returned.
     * `:limit` (`integer`) — cap on combined results. Default `200`.
   """
-  @spec list_recent_agent_actions(binary(), keyword()) :: [map()]
-  def list_recent_agent_actions(user_id, opts \\ []) when is_binary(user_id) do
+  @spec list_recent_agent_actions(keyword()) :: [map()]
+  def list_recent_agent_actions(opts \\ []) do
     since = Keyword.get(opts, :since)
     limit = Keyword.get(opts, :limit, 200)
 
-    space_ids = list_space_ids_for_user(user_id)
+    # Scope to every non-archived, non-execution space. Single-tenant
+    # assumption — when workspace partitioning ships, this should re-scope
+    # to spaces in the user's workspace(s).
+    space_ids = list_accessible_space_ids()
 
     if space_ids == [] do
       []
@@ -2316,22 +2319,36 @@ defmodule Platform.Chat do
     end
   end
 
-  defp list_space_ids_for_user(user_id) do
-    from(p in Participant,
-      join: s in Space,
-      on: s.id == p.space_id,
-      where: p.participant_id == ^user_id and p.participant_type == "user",
-      where: is_nil(s.archived_at),
-      select: p.space_id,
-      distinct: true
+  defp list_accessible_space_ids do
+    from(s in Space,
+      where: is_nil(s.archived_at) and s.kind != "execution",
+      select: s.id
     )
     |> Repo.all()
   end
 
   @doc """
+  Returns `true` if the given `space_id` exists, is not archived, and is not an
+  execution space. Used as the access gate for cross-space surfaces like the
+  Activity panel's undo. Single-tenant — extend with workspace scoping when
+  multi-tenancy ships.
+  """
+  @spec space_accessible?(binary()) :: boolean()
+  def space_accessible?(space_id) when is_binary(space_id) do
+    query =
+      from(s in Space,
+        where: s.id == ^space_id and is_nil(s.archived_at) and s.kind != "execution",
+        limit: 1,
+        select: 1
+      )
+
+    Repo.one(query) != nil
+  end
+
+  @doc """
   Returns `true` if the given `user_id` is a participant in the given (non-archived)
-  `space_id`. Used as an authorization gate for actions scoped to a user's spaces
-  (e.g. the Activity panel's undo).
+  `space_id`. Stricter than `space_accessible?/1`; retained for callers that need
+  participant-level scoping rather than the broader "accessible" check.
   """
   @spec user_in_space?(binary(), binary()) :: boolean()
   def user_in_space?(user_id, space_id) when is_binary(user_id) and is_binary(space_id) do

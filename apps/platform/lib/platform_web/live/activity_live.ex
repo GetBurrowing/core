@@ -1,10 +1,12 @@
 defmodule PlatformWeb.ActivityLive do
   @moduledoc """
-  Activity panel — chronological view of AI-agent-driven actions in spaces the
-  current user participates in. Supports time-range filtering and one-click
-  undo (soft-delete) per item. Polls on mount/refresh; no live streaming.
+  Activity panel — chronological view of AI-agent-driven actions across all
+  accessible (non-archived) spaces. Supports time-range filtering, pagination
+  (10 items per page, "Load more" appends), and one-click undo per item.
 
-  See `Platform.Chat.list_recent_agent_actions/2` for the underlying query.
+  Polls on mount/refresh/load-more; no live streaming.
+
+  See `Platform.Chat.list_recent_agent_actions/1` for the underlying query.
   """
 
   use PlatformWeb, :live_view
@@ -12,19 +14,13 @@ defmodule PlatformWeb.ActivityLive do
   alias Platform.Chat
   alias Platform.Chat.{Canvas, Message}
 
-  @ranges [
-    {"1h", 3600},
-    {"24h", 86_400},
-    {"7d", 604_800},
-    {"30d", 2_592_000},
-    {"all", nil}
-  ]
-
+  @ranges ~w(1h 24h 7d 30d all)
   @default_range "1h"
+  @page_size 10
 
   @impl true
   def mount(_params, _session, socket) do
-    user_id = socket.assigns.current_user_id
+    {actions, has_more} = load_actions(@default_range, 1)
 
     {:ok,
      socket
@@ -32,55 +28,84 @@ defmodule PlatformWeb.ActivityLive do
      |> assign(:current_path, "/activity")
      |> assign(:range, @default_range)
      |> assign(:ranges, @ranges)
-     |> assign(:actions, load_actions(user_id, @default_range))}
+     |> assign(:page, 1)
+     |> assign(:page_size, @page_size)
+     |> assign(:actions, actions)
+     |> assign(:has_more, has_more)}
   end
 
   @impl true
   def handle_params(_params, _url, socket), do: {:noreply, socket}
 
   @impl true
-  def handle_event("change_range", %{"range" => range}, socket)
-      when range in ~w(1h 24h 7d 30d all) do
-    user_id = socket.assigns.current_user_id
+  def handle_event("change_range", %{"range" => range}, socket) do
+    # Defensive fallback: any unexpected range string resets to the default.
+    # Avoids crashing on stale clients sending old/invalid range values.
+    range = if range in @ranges, do: range, else: @default_range
+    {actions, has_more} = load_actions(range, 1)
 
     {:noreply,
      socket
      |> assign(:range, range)
-     |> assign(:actions, load_actions(user_id, range))}
+     |> assign(:page, 1)
+     |> assign(:actions, actions)
+     |> assign(:has_more, has_more)}
   end
 
   def handle_event("refresh", _params, socket) do
-    user_id = socket.assigns.current_user_id
+    {actions, has_more} = load_actions(socket.assigns.range, 1)
 
     {:noreply,
      socket
-     |> assign(:actions, load_actions(user_id, socket.assigns.range))
+     |> assign(:page, 1)
+     |> assign(:actions, actions)
+     |> assign(:has_more, has_more)
      |> put_flash(:info, "Refreshed")}
   end
 
-  def handle_event("undo", %{"kind" => "message", "id" => id}, socket) when is_binary(id) do
-    user_id = socket.assigns.current_user_id
+  def handle_event("load_more", _params, socket) do
+    next_page = socket.assigns.page + 1
+    {actions, has_more} = load_actions(socket.assigns.range, next_page)
 
-    with %Message{deleted_at: nil} = msg <- Chat.get_message(id) || :not_found,
-         true <- Chat.user_in_space?(user_id, msg.space_id),
+    {:noreply,
+     socket
+     |> assign(:page, next_page)
+     |> assign(:actions, actions)
+     |> assign(:has_more, has_more)}
+  end
+
+  def handle_event("undo", %{"kind" => "message", "id" => id}, socket) when is_binary(id) do
+    # Defensive shape: the resource must be agent-authored AND its space must
+    # be accessible (not archived). Drops the prior participant-membership
+    # gate to match the broadened "all accessible spaces" scope.
+    with %Message{deleted_at: nil, author_participant_type: "agent"} = msg <-
+           Chat.get_message(id) || :not_found,
+         true <- Chat.space_accessible?(msg.space_id),
          {:ok, _} <- Chat.delete_message(msg) do
+      {actions, has_more} = load_actions(socket.assigns.range, socket.assigns.page)
+
       {:noreply,
        socket
        |> put_flash(:info, "Message undone")
-       |> assign(:actions, load_actions(user_id, socket.assigns.range))}
+       |> assign(:actions, actions)
+       |> assign(:has_more, has_more)}
     else
       :not_found ->
         {:noreply, put_flash(socket, :error, "Message not found")}
 
       %Message{} ->
-        # already soft-deleted; refresh so the stale row drops out of view
+        # Either already-soft-deleted, or not agent-authored. Refresh the list
+        # in either case so the stale item drops out of view.
+        {actions, has_more} = load_actions(socket.assigns.range, socket.assigns.page)
+
         {:noreply,
          socket
          |> put_flash(:info, "Already undone")
-         |> assign(:actions, load_actions(user_id, socket.assigns.range))}
+         |> assign(:actions, actions)
+         |> assign(:has_more, has_more)}
 
       false ->
-        {:noreply, put_flash(socket, :error, "Not authorized")}
+        {:noreply, put_flash(socket, :error, "Space no longer accessible")}
 
       {:error, _} ->
         {:noreply, put_flash(socket, :error, "Failed to undo message")}
@@ -88,23 +113,29 @@ defmodule PlatformWeb.ActivityLive do
   end
 
   def handle_event("undo", %{"kind" => "canvas", "id" => id}, socket) when is_binary(id) do
-    user_id = socket.assigns.current_user_id
-
     # `Chat.get_canvas/1` already filters out soft-deleted canvases, so a stale
     # double-undo simply lands here as `nil`.
-    with %Canvas{} = canvas <- Chat.get_canvas(id) || :not_found,
-         true <- Chat.user_in_space?(user_id, canvas.space_id),
+    with %Canvas{created_by_participant_type: "agent"} = canvas <-
+           Chat.get_canvas(id) || :not_found,
+         true <- Chat.space_accessible?(canvas.space_id),
          {:ok, _} <- Chat.delete_canvas(canvas) do
+      {actions, has_more} = load_actions(socket.assigns.range, socket.assigns.page)
+
       {:noreply,
        socket
        |> put_flash(:info, "Canvas undone")
-       |> assign(:actions, load_actions(user_id, socket.assigns.range))}
+       |> assign(:actions, actions)
+       |> assign(:has_more, has_more)}
     else
       :not_found ->
         {:noreply, put_flash(socket, :error, "Canvas not found")}
 
+      %Canvas{} ->
+        # Canvas exists but was not agent-authored — refuse the undo.
+        {:noreply, put_flash(socket, :error, "Not an agent-created canvas")}
+
       false ->
-        {:noreply, put_flash(socket, :error, "Not authorized")}
+        {:noreply, put_flash(socket, :error, "Space no longer accessible")}
 
       {:error, _} ->
         {:noreply, put_flash(socket, :error, "Failed to undo canvas")}
@@ -117,16 +148,32 @@ defmodule PlatformWeb.ActivityLive do
     {:noreply, put_flash(socket, :error, "Unknown undo target")}
   end
 
-  defp load_actions(user_id, range) do
-    opts =
-      case Enum.find(@ranges, fn {r, _} -> r == range end) do
-        {_, nil} -> []
-        {_, seconds} -> [since: DateTime.add(DateTime.utc_now(), -seconds, :second)]
-        _ -> [since: DateTime.add(DateTime.utc_now(), -3600, :second)]
-      end
+  # ── Loader ─────────────────────────────────────────────────────────────────
 
-    Chat.list_recent_agent_actions(user_id, opts)
+  defp load_actions(range, page) do
+    target = page * @page_size
+
+    # Over-fetch by 1 so we can detect "is there a next page?" without an
+    # extra count query. Trim to `target` for display.
+    opts = [limit: target + 1]
+    opts = put_since(opts, since_for_range(range))
+
+    all = Chat.list_recent_agent_actions(opts)
+    has_more = length(all) > target
+    actions = Enum.take(all, target)
+
+    {actions, has_more}
   end
+
+  defp put_since(opts, nil), do: opts
+  defp put_since(opts, %DateTime{} = since), do: Keyword.put(opts, :since, since)
+
+  defp since_for_range("1h"), do: DateTime.add(DateTime.utc_now(), -3_600, :second)
+  defp since_for_range("24h"), do: DateTime.add(DateTime.utc_now(), -86_400, :second)
+  defp since_for_range("7d"), do: DateTime.add(DateTime.utc_now(), -604_800, :second)
+  defp since_for_range("30d"), do: DateTime.add(DateTime.utc_now(), -2_592_000, :second)
+  defp since_for_range("all"), do: nil
+  defp since_for_range(_), do: DateTime.add(DateTime.utc_now(), -3_600, :second)
 
   # ── Template helpers ──────────────────────────────────────────────────────
 
@@ -171,8 +218,8 @@ defmodule PlatformWeb.ActivityLive do
 
     cond do
       diff < 60 -> "just now"
-      diff < 3600 -> "#{div(diff, 60)}m ago"
-      diff < 86_400 -> "#{div(diff, 3600)}h ago"
+      diff < 3_600 -> "#{div(diff, 60)}m ago"
+      diff < 86_400 -> "#{div(diff, 3_600)}h ago"
       diff < 2_592_000 -> "#{div(diff, 86_400)}d ago"
       true -> Calendar.strftime(dt, "%b %-d")
     end
