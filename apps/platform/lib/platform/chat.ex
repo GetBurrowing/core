@@ -1061,10 +1061,30 @@ defmodule Platform.Chat do
   def add_reaction(attrs) do
     attrs_with_snapshot = maybe_put_reactor_snapshot(attrs)
 
+    msg_id = Map.get(attrs_with_snapshot, :message_id)
+    pid = Map.get(attrs_with_snapshot, :participant_id)
+    emoji = Map.get(attrs_with_snapshot, :emoji)
+
+    # If a *soft-deleted* row already exists for this (message, participant,
+    # emoji), resurrect it (clear `deleted_at`) instead of inserting a
+    # duplicate. Keeps the table clean and lets the partial unique index do
+    # its job. Active-row duplicates fall through to a regular insert and
+    # produce a natural `{:error, changeset}` with the unique_constraint
+    # violation — preserving the pre-soft-delete public API contract that
+    # callers (e.g. `Federation.ToolSurface`'s `react` handler) rely on to
+    # detect "already_reacted."
     result =
-      %Reaction{}
-      |> Reaction.changeset(attrs_with_snapshot)
-      |> Repo.insert()
+      case find_soft_deleted_reaction(msg_id, pid, emoji) do
+        %Reaction{} = soft_deleted ->
+          soft_deleted
+          |> Reaction.delete_changeset(%{deleted_at: nil})
+          |> Repo.update()
+
+        nil ->
+          %Reaction{}
+          |> Reaction.changeset(attrs_with_snapshot)
+          |> Repo.insert()
+      end
 
     case result do
       {:ok, r} ->
@@ -1084,6 +1104,20 @@ defmodule Platform.Chat do
     end
 
     result
+  end
+
+  defp find_soft_deleted_reaction(nil, _pid, _emoji), do: nil
+  defp find_soft_deleted_reaction(_msg_id, nil, _emoji), do: nil
+  defp find_soft_deleted_reaction(_msg_id, _pid, nil), do: nil
+
+  defp find_soft_deleted_reaction(msg_id, pid, emoji) do
+    from(r in Reaction,
+      where:
+        r.message_id == ^msg_id and r.participant_id == ^pid and r.emoji == ^emoji and
+          not is_nil(r.deleted_at),
+      limit: 1
+    )
+    |> Repo.one()
   end
 
   # Stamp reactor-identity snapshot from the current participant row if
@@ -1128,20 +1162,33 @@ defmodule Platform.Chat do
     ArgumentError -> attrs
   end
 
-  @doc "Remove a reaction from a message. Returns `{:error, :not_found}` if absent."
-  @spec remove_reaction(integer(), binary(), String.t()) ::
+  @doc """
+  Soft-delete a reaction (sets `deleted_at`). Returns `{:error, :not_found}`
+  if no active reaction exists for the (message, participant, emoji) triple.
+  Already soft-deleted rows are treated as not-found, since the user-visible
+  state is identical.
+  """
+  @spec remove_reaction(binary(), binary(), String.t()) ::
           {:ok, Reaction.t()} | {:error, :not_found | any()}
   def remove_reaction(message_id, participant_id, emoji) do
-    case Repo.get_by(Reaction,
-           message_id: message_id,
-           participant_id: participant_id,
-           emoji: emoji
-         ) do
+    query =
+      from(r in Reaction,
+        where:
+          r.message_id == ^message_id and
+            r.participant_id == ^participant_id and
+            r.emoji == ^emoji and
+            is_nil(r.deleted_at)
+      )
+
+    case Repo.one(query) do
       nil ->
         {:error, :not_found}
 
       reaction ->
-        with {:ok, deleted} <- Repo.delete(reaction) do
+        with {:ok, deleted} <-
+               reaction
+               |> Reaction.delete_changeset(%{deleted_at: DateTime.utc_now()})
+               |> Repo.update() do
           :telemetry.execute(
             [:platform, :chat, :reaction_removed],
             %{system_time: System.system_time()},
@@ -1165,11 +1212,11 @@ defmodule Platform.Chat do
     end
   end
 
-  @doc "List all reactions for a message, ordered by insertion time."
+  @doc "List active reactions for a message (soft-deleted rows excluded), ordered by insertion time."
   @spec list_reactions(binary()) :: [Reaction.t()]
   def list_reactions(message_id) do
     from(r in Reaction,
-      where: r.message_id == ^message_id,
+      where: r.message_id == ^message_id and is_nil(r.deleted_at),
       order_by: [asc: r.inserted_at]
     )
     |> Repo.all()
@@ -1216,11 +1263,18 @@ defmodule Platform.Chat do
           | {:ok, :removed, Reaction.t()}
           | {:error, any()}
   def toggle_reaction(message_id, participant_id, emoji) do
-    case Repo.get_by(Reaction,
-           message_id: message_id,
-           participant_id: participant_id,
-           emoji: emoji
-         ) do
+    # Treat a soft-deleted row as "not present" — toggling on it should re-add
+    # (handled by add_reaction/1's resurrection path), not remove.
+    query =
+      from(r in Reaction,
+        where:
+          r.message_id == ^message_id and
+            r.participant_id == ^participant_id and
+            r.emoji == ^emoji and
+            is_nil(r.deleted_at)
+      )
+
+    case Repo.one(query) do
       nil ->
         case add_reaction(%{message_id: message_id, participant_id: participant_id, emoji: emoji}) do
           {:ok, reaction} -> {:ok, :added, reaction}
@@ -1246,7 +1300,7 @@ defmodule Platform.Chat do
 
   def list_reactions_for_messages(message_ids) do
     from(r in Reaction,
-      where: r.message_id in ^message_ids,
+      where: r.message_id in ^message_ids and is_nil(r.deleted_at),
       order_by: [asc: r.inserted_at]
     )
     |> Repo.all()

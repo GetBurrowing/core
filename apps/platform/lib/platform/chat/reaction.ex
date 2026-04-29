@@ -18,6 +18,13 @@ defmodule Platform.Chat.Reaction do
     field(:reactor_participant_type, :string)
 
     field(:inserted_at, :utc_datetime_usec, autogenerate: {DateTime, :utc_now, []})
+
+    # Soft-delete timestamp. NULL = active. Set by `Chat.remove_reaction/3`.
+    # The unique index on (message_id, participant_id, emoji) is partial
+    # (WHERE deleted_at IS NULL), so a re-reaction after soft-delete is
+    # allowed at the storage layer; `Chat.add_reaction/1` prefers
+    # resurrection over inserting a duplicate.
+    field(:deleted_at, :utc_datetime_usec)
   end
 
   def changeset(reaction, attrs) do
@@ -32,5 +39,14 @@ defmodule Platform.Chat.Reaction do
     ])
     |> validate_required([:message_id, :participant_id, :emoji])
     |> unique_constraint(:emoji, name: :chat_reactions_unique)
+  end
+
+  @doc """
+  Soft-delete-only changeset. Casts only `deleted_at` (set to a timestamp to
+  hide, or `nil` to restore). Mirrors `Canvas.delete_changeset/2`.
+  """
+  def delete_changeset(reaction, attrs) do
+    reaction
+    |> cast(attrs, [:deleted_at])
   end
 end
