@@ -550,14 +550,38 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
 
   defp handle_info(
          {:agent_reply_chunk,
-          %{chunk_id: chunk_id, text: text, done: done, participant_id: participant_id}},
+          %{
+            space_id: space_id,
+            chunk_id: chunk_id,
+            text: text,
+            done: done,
+            participant_id: participant_id
+          }},
          socket
        ) do
-    if done do
-      {:halt, update(socket, :streaming_replies, &Map.delete(&1, chunk_id))}
-    else
-      entry = %{text: text, participant_id: participant_id}
-      {:halt, update(socket, :streaming_replies, &Map.put(&1, chunk_id, entry))}
+    active_space_id =
+      case socket.assigns[:active_space] do
+        %{id: id} -> id
+        _ -> nil
+      end
+
+    cond do
+      space_id != active_space_id ->
+        # BACKLOG #9 — privacy gate. ChatLive subscribes to every
+        # accessible space at mount so unread-count badges work, but
+        # agent reasoning chunks must only render in the space the
+        # user is currently viewing. Without this guard, a chunk from
+        # #general lands in the user's DM panel whenever they happen
+        # to be viewing the DM. Subscribers still receive the event
+        # (broadcast scope is unchanged); the render is gated.
+        {:halt, socket}
+
+      done ->
+        {:halt, update(socket, :streaming_replies, &Map.delete(&1, chunk_id))}
+
+      true ->
+        entry = %{text: text, participant_id: participant_id}
+        {:halt, update(socket, :streaming_replies, &Map.put(&1, chunk_id, entry))}
     end
   end
 
