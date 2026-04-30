@@ -14,8 +14,8 @@ defmodule PlatformWeb.ActivityLive do
   alias Platform.Chat
   alias Platform.Chat.{Canvas, Message}
 
-  @ranges ~w(1h 24h 7d 30d all)
-  @default_range "1h"
+  @ranges ~w(24h 7d 30d all)
+  @default_range "24h"
   @page_size 10
 
   @impl true
@@ -168,16 +168,16 @@ defmodule PlatformWeb.ActivityLive do
   defp put_since(opts, nil), do: opts
   defp put_since(opts, %DateTime{} = since), do: Keyword.put(opts, :since, since)
 
-  defp since_for_range("1h"), do: DateTime.add(DateTime.utc_now(), -3_600, :second)
   defp since_for_range("24h"), do: DateTime.add(DateTime.utc_now(), -86_400, :second)
   defp since_for_range("7d"), do: DateTime.add(DateTime.utc_now(), -604_800, :second)
   defp since_for_range("30d"), do: DateTime.add(DateTime.utc_now(), -2_592_000, :second)
   defp since_for_range("all"), do: nil
-  defp since_for_range(_), do: DateTime.add(DateTime.utc_now(), -3_600, :second)
+  # Fallback: stale clients (e.g. cached "1h" from before this PR retired it)
+  # resolve to the new default range rather than crashing the LiveView.
+  defp since_for_range(_), do: DateTime.add(DateTime.utc_now(), -86_400, :second)
 
   # ── Template helpers ──────────────────────────────────────────────────────
 
-  def range_label("1h"), do: "Last hour"
   def range_label("24h"), do: "Last 24 hours"
   def range_label("7d"), do: "Last 7 days"
   def range_label("30d"), do: "Last 30 days"
