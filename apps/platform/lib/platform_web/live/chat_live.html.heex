@@ -121,10 +121,11 @@
           </p>
           <button
             phx-click={JS.push("new_channel_open") |> JS.push("close_mobile_browser")}
-            class="text-base-content/40 hover:text-primary"
+            class="flex items-center justify-center size-11 rounded-lg text-base-content/60 hover:bg-base-300 hover:text-primary"
             aria-label="New channel"
+            title="New channel"
           >
-            <span class="hero-plus size-4"></span>
+            <span class="hero-plus size-5"></span>
           </button>
         </div>
         <.link
@@ -147,9 +148,19 @@
           <% end %>
         </.link>
 
-        <p class="px-4 py-1 mt-2 text-xs font-semibold uppercase tracking-widest text-base-content/50">
-          Direct Messages
-        </p>
+        <div class="flex items-center justify-between px-4 py-1 mt-2">
+          <p class="text-xs font-semibold uppercase tracking-widest text-base-content/50">
+            Direct Messages
+          </p>
+          <button
+            phx-click={JS.push("new_conversation_open") |> JS.push("close_mobile_browser")}
+            class="flex items-center justify-center size-11 rounded-lg text-base-content/60 hover:bg-base-300 hover:text-primary"
+            aria-label="New conversation"
+            title="New conversation"
+          >
+            <span class="hero-plus size-5"></span>
+          </button>
+        </div>
         <.link
           :for={space <- @dm_conversations}
           navigate={~p"/chat/#{space.slug || space.id}"}
@@ -173,7 +184,14 @@
           :if={@channels == [] and @dm_conversations == []}
           class="px-4 py-6 text-sm text-base-content/40 text-center"
         >
-          No conversations yet
+          <p>No conversations yet</p>
+          <button
+            type="button"
+            phx-click={JS.push("new_conversation_open") |> JS.push("close_mobile_browser")}
+            class="mt-3 inline-flex items-center gap-2 rounded-lg border border-base-300 bg-base-100 px-4 py-2 text-sm font-medium text-primary hover:bg-base-200"
+          >
+            <span class="hero-plus size-4"></span> Start your first conversation
+          </button>
         </div>
       </nav>
     </div>

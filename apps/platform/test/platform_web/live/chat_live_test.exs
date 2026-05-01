@@ -1305,6 +1305,55 @@ defmodule PlatformWeb.ChatLiveTest do
     end
   end
 
+  # ── Mobile drawer ────────────────────────────────────────────────────────────
+
+  describe "mobile drawer (new-conversation / new-channel)" do
+    test "toggling the mobile drawer exposes both 'new conversation' and 'new channel' buttons",
+         %{conn: conn} do
+      # Before PR 1 the desktop sidebar had the only "+"/new-conversation and
+      # "+"/new-channel affordances, wrapped in `<aside class="hidden lg:flex">`.
+      # On mobile that rendered as nothing — users could see existing
+      # conversations but had no way to start one. This test pins the mobile
+      # drawer's entry points.
+      conn = authenticated_conn(conn)
+      {:ok, view, html} = live(conn, ~p"/chat/general")
+
+      # Drawer is closed on initial load → the drawer's new-conversation
+      # affordance isn't rendered yet. (Desktop sidebar has its own
+      # `aria-label="New channel"` button — always in the DOM but hidden
+      # via `hidden lg:flex` on mobile — so we only refute the
+      # new-conversation affordance, which is drawer-only.)
+      refute html =~ ~s(aria-label="New conversation")
+
+      # Open the drawer.
+      html = render_click(view, "toggle_mobile_browser", %{})
+
+      # Both drawer affordances now render. They dispatch the same LV
+      # events the desktop sidebar uses — modal wiring is shared; only
+      # the trigger surfaces were missing on mobile.
+      assert html =~ ~s(aria-label="New conversation")
+      assert html =~ ~s(aria-label="New channel")
+      assert html =~ "new_conversation_open"
+      assert html =~ "new_channel_open"
+
+      # Precision: both "+ " buttons must chain `close_mobile_browser`
+      # after opening the modal, otherwise the modal renders behind the
+      # drawer. Bounded by 100 chars to ensure the two pushes are part
+      # of the same `phx-click` attribute, not just co-present elsewhere
+      # (the drawer header close button and sidebar links also fire
+      # `close_mobile_browser` on their own).
+      assert Regex.match?(
+               ~r/new_channel_open.{0,100}close_mobile_browser|close_mobile_browser.{0,100}new_channel_open/s,
+               html
+             )
+
+      assert Regex.match?(
+               ~r/new_conversation_open.{0,100}close_mobile_browser|close_mobile_browser.{0,100}new_conversation_open/s,
+               html
+             )
+    end
+  end
+
   # ── Threads ──────────────────────────────────────────────────────────────────
 
   describe "threads" do
