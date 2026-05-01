@@ -893,6 +893,36 @@ defmodule Platform.Chat do
     result
   end
 
+  @doc """
+  Restore a soft-deleted message by clearing `deleted_at`. Counterpart to
+  `delete_message/1`. Emits `:message_restored` telemetry and broadcasts
+  `{:message_restored, msg}` to the space topic so chat clients can re-stream
+  the row. Used by the Activity panel's Restore action (BACKLOG #15).
+  """
+  @spec restore_message(Message.t()) :: {:ok, Message.t()} | {:error, Ecto.Changeset.t()}
+  def restore_message(%Message{} = message) do
+    result =
+      message
+      |> Message.changeset(%{deleted_at: nil})
+      |> Repo.update()
+
+    case result do
+      {:ok, msg} ->
+        :telemetry.execute(
+          [:platform, :chat, :message_restored],
+          %{system_time: System.system_time()},
+          %{message_id: msg.id, space_id: msg.space_id}
+        )
+
+        ChatPubSub.broadcast(msg.space_id, {:message_restored, msg})
+
+      _ ->
+        :ok
+    end
+
+    result
+  end
+
   # ── Threads ─────────────────────────────────────────────────────────────────
 
   @doc """
@@ -1471,6 +1501,14 @@ defmodule Platform.Chat do
       _ -> nil
     end
   end
+
+  @doc """
+  Fetch a canvas including soft-deleted rows. Used by the Activity panel's
+  Restore flow, which specifically needs to load a soft-deleted canvas to
+  un-delete it. Returns `nil` only if no row with the given id exists.
+  """
+  @spec get_canvas_with_deleted(binary()) :: Canvas.t() | nil
+  def get_canvas_with_deleted(id), do: Repo.get(Canvas, id)
 
   @doc "Update canvas metadata/title. Document changes go through `patch_canvas/2`."
   @spec update_canvas(Canvas.t(), map()) ::
@@ -2301,6 +2339,7 @@ defmodule Platform.Chat do
   def list_recent_agent_actions(opts \\ []) do
     since = Keyword.get(opts, :since)
     limit = Keyword.get(opts, :limit, 200)
+    include_deleted = Keyword.get(opts, :include_deleted, false)
 
     # Scope to every non-archived, non-execution space. Single-tenant
     # assumption — when workspace partitioning ships, this should re-scope
@@ -2310,8 +2349,8 @@ defmodule Platform.Chat do
     if space_ids == [] do
       []
     else
-      messages = list_recent_agent_messages(space_ids, since, limit)
-      canvases = list_recent_agent_canvases(space_ids, since, limit)
+      messages = list_recent_agent_messages(space_ids, since, limit, include_deleted)
+      canvases = list_recent_agent_canvases(space_ids, since, limit, include_deleted)
 
       (messages ++ canvases)
       |> Enum.sort_by(& &1.inserted_at, {:desc, DateTime})
@@ -2368,14 +2407,16 @@ defmodule Platform.Chat do
     Repo.one(query) != nil
   end
 
-  defp list_recent_agent_messages(space_ids, since, limit) do
+  defp list_recent_agent_messages(space_ids, since, limit, include_deleted) do
     base =
       Message
       |> where([m], m.space_id in ^space_ids)
       |> where([m], m.author_participant_type == "agent")
-      |> where([m], is_nil(m.deleted_at))
       |> order_by([m], desc: m.inserted_at)
       |> limit(^limit)
+
+    base =
+      if include_deleted, do: base, else: where(base, [m], is_nil(m.deleted_at))
 
     base = if since, do: where(base, [m], m.inserted_at >= ^since), else: base
 
@@ -2387,19 +2428,22 @@ defmodule Platform.Chat do
         item: m,
         agent_name: m.author_display_name || "Agent",
         space_id: m.space_id,
-        inserted_at: m.inserted_at
+        inserted_at: m.inserted_at,
+        state: if(is_nil(m.deleted_at), do: :active, else: :undone)
       }
     end)
   end
 
-  defp list_recent_agent_canvases(space_ids, since, limit) do
+  defp list_recent_agent_canvases(space_ids, since, limit, include_deleted) do
     base =
       Canvas
       |> where([c], c.space_id in ^space_ids)
       |> where([c], c.created_by_participant_type == "agent")
-      |> where([c], is_nil(c.deleted_at))
       |> order_by([c], desc: c.inserted_at)
       |> limit(^limit)
+
+    base =
+      if include_deleted, do: base, else: where(base, [c], is_nil(c.deleted_at))
 
     base = if since, do: where(base, [c], c.inserted_at >= ^since), else: base
 
@@ -2411,7 +2455,8 @@ defmodule Platform.Chat do
         item: c,
         agent_name: c.created_by_display_name || "Agent",
         space_id: c.space_id,
-        inserted_at: c.inserted_at
+        inserted_at: c.inserted_at,
+        state: if(is_nil(c.deleted_at), do: :active, else: :undone)
       }
     end)
   end
@@ -2420,6 +2465,36 @@ defmodule Platform.Chat do
   Soft-delete a canvas. Sets `deleted_at` to the current timestamp,
   emits telemetry, and broadcasts `{:canvas_deleted, canvas}` to the space.
   """
+  @doc """
+  Restore a soft-deleted canvas by clearing `deleted_at`. Counterpart to
+  `delete_canvas/1`. Emits `:canvas_restored` telemetry and broadcasts
+  `{:canvas_restored, canvas}` to the space topic so chat clients can re-add
+  the row to their canvas list. Used by the Activity panel's Restore action.
+  """
+  @spec restore_canvas(Canvas.t()) :: {:ok, Canvas.t()} | {:error, Ecto.Changeset.t()}
+  def restore_canvas(%Canvas{} = canvas) do
+    result =
+      canvas
+      |> Canvas.delete_changeset(%{deleted_at: nil})
+      |> Repo.update()
+
+    case result do
+      {:ok, c} ->
+        :telemetry.execute(
+          [:platform, :chat, :canvas_restored],
+          %{system_time: System.system_time()},
+          %{canvas_id: c.id, space_id: c.space_id}
+        )
+
+        ChatPubSub.broadcast(c.space_id, {:canvas_restored, c})
+
+      _ ->
+        :ok
+    end
+
+    result
+  end
+
   @spec delete_canvas(Canvas.t()) :: {:ok, Canvas.t()} | {:error, Ecto.Changeset.t()}
   def delete_canvas(%Canvas{} = canvas) do
     # Use the dedicated soft-delete changeset so `validate_document/1` doesn't

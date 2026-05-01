@@ -513,6 +513,21 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
      |> SearchHooks.maybe_refresh()}
   end
 
+  # `reinsert_stream_message/2` fetches fresh from the DB (now with
+  # `deleted_at: nil`) and stream-inserts it. The chat template's
+  # `:if={is_nil(msg.deleted_at)}` predicate then renders the row
+  # again. Idempotent under duplicate delivery — DB is truth.
+  defp handle_info({:message_restored, msg}, socket) do
+    {:halt,
+     socket
+     |> reinsert_stream_message(msg.id)
+     |> SearchHooks.maybe_refresh()}
+  rescue
+    e ->
+      Logger.error("Message restore broadcast crashed: #{Exception.message(e)}")
+      {:halt, socket}
+  end
+
   # Reaction broadcasts just re-insert the affected message — `reinsert_stream_message/2`
   # fetches fresh from the DB and enriches with the current reaction groups, so the
   # stream item carries everything the template reads. Idempotent under duplicate

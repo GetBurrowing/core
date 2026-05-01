@@ -48,7 +48,10 @@
   <ul :if={@actions != []} class="space-y-3" role="list">
     <li
       :for={action <- @actions}
-      class="flex items-start gap-3 rounded-2xl border border-base-300 bg-base-100 p-4"
+      class={[
+        "flex items-start gap-3 rounded-2xl border border-base-300 bg-base-100 p-4",
+        action.state == :undone && "opacity-70"
+      ]}
     >
       <div class="flex-shrink-0 pt-1">
         <span class={[
@@ -66,25 +69,50 @@
           <span class="rounded-full bg-base-200 px-2 py-0.5 font-medium">
             {kind_label(action.kind)}
           </span>
+          <%!-- State pill renders ONLY on Undone rows. Active is the
+                unmarked default — putting an "Active" pill on every row
+                would be visual noise (Active is the common case). --%>
+          <span
+            :if={action.state == :undone}
+            class="rounded-full bg-warning/15 px-2 py-0.5 font-medium text-warning"
+          >
+            Undone
+          </span>
           <span title={DateTime.to_string(action.inserted_at)}>
             {time_ago(action.inserted_at)}
           </span>
         </div>
-        <p class="mt-1 line-clamp-3 text-sm text-base-content/80 break-words">
+        <p class={[
+          "mt-1 line-clamp-3 text-sm break-words",
+          action.state == :active && "text-base-content/80",
+          action.state == :undone && "text-base-content/60 line-through decoration-1"
+        ]}>
           {action_preview(action)}
         </p>
       </div>
 
-      <button
-        type="button"
-        phx-click="undo"
-        phx-value-kind={to_string(action.kind)}
-        phx-value-id={action.item.id}
-        data-confirm="Undo this AI action? It will be soft-deleted from the channel."
-        class="btn btn-sm btn-ghost text-error"
-      >
-        Undo
-      </button>
+      <%= if action.state == :active do %>
+        <button
+          type="button"
+          phx-click="undo"
+          phx-value-kind={to_string(action.kind)}
+          phx-value-id={action.item.id}
+          data-confirm="Undo this AI action? It will be soft-deleted from the channel."
+          class="btn btn-sm btn-ghost text-error"
+        >
+          Undo
+        </button>
+      <% else %>
+        <button
+          type="button"
+          phx-click="restore"
+          phx-value-kind={to_string(action.kind)}
+          phx-value-id={action.item.id}
+          class="btn btn-sm btn-ghost text-success"
+        >
+          Restore
+        </button>
+      <% end %>
     </li>
   </ul>
 

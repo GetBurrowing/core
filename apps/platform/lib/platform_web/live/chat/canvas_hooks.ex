@@ -223,6 +223,7 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
   defp handle_info({:canvas_created, canvas}, socket), do: {:halt, put(socket, canvas)}
   defp handle_info({:canvas_updated, canvas}, socket), do: {:halt, put(socket, canvas)}
   defp handle_info({:canvas_deleted, canvas}, socket), do: {:halt, remove(socket, canvas)}
+  defp handle_info({:canvas_restored, canvas}, socket), do: {:halt, put(socket, canvas)}
 
   # Canvas kind emissions (action-row click, form submit, checklist toggle, …)
   # arrive here via `ChatPubSub.broadcast_canvas/2`. Events are signals — they
