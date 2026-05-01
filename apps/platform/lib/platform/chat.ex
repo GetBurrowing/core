@@ -2335,6 +2335,54 @@ defmodule Platform.Chat do
       all-time history is returned.
     * `:limit` (`integer`) — cap on combined results. Default `200`.
   """
+  @doc """
+  Count of agent-driven actions visible to `list_recent_agent_actions/1` under
+  the same filter options. Used by the Activity panel for numbered-page
+  pagination (total page count = ceil(count / page_size)).
+
+  Accepts the same `:since` and `:include_deleted` options as the list
+  function. `:limit` is ignored (this is a count, not a slice).
+  """
+  @spec count_recent_agent_actions(keyword()) :: non_neg_integer()
+  def count_recent_agent_actions(opts \\ []) do
+    since = Keyword.get(opts, :since)
+    include_deleted = Keyword.get(opts, :include_deleted, false)
+
+    space_ids = list_accessible_space_ids()
+
+    if space_ids == [] do
+      0
+    else
+      msg_count = count_recent_agent_messages(space_ids, since, include_deleted)
+      canvas_count = count_recent_agent_canvases(space_ids, since, include_deleted)
+      msg_count + canvas_count
+    end
+  end
+
+  defp count_recent_agent_messages(space_ids, since, include_deleted) do
+    base =
+      Message
+      |> where([m], m.space_id in ^space_ids)
+      |> where([m], m.author_participant_type == "agent")
+
+    base = if include_deleted, do: base, else: where(base, [m], is_nil(m.deleted_at))
+    base = if since, do: where(base, [m], m.inserted_at >= ^since), else: base
+
+    Repo.aggregate(base, :count, :id)
+  end
+
+  defp count_recent_agent_canvases(space_ids, since, include_deleted) do
+    base =
+      Canvas
+      |> where([c], c.space_id in ^space_ids)
+      |> where([c], c.created_by_participant_type == "agent")
+
+    base = if include_deleted, do: base, else: where(base, [c], is_nil(c.deleted_at))
+    base = if since, do: where(base, [c], c.inserted_at >= ^since), else: base
+
+    Repo.aggregate(base, :count, :id)
+  end
+
   @spec list_recent_agent_actions(keyword()) :: [map()]
   def list_recent_agent_actions(opts \\ []) do
     since = Keyword.get(opts, :since)

@@ -11,8 +11,12 @@ defmodule PlatformWeb.ActivityLive do
       stability — pagination cannot skip or duplicate rows.
     * Pill renders only on Undone rows; Active is the unmarked default.
     * On Undo / Restore, the row stays visible in place — state flips,
-      button swaps. Hard refresh (Refresh button / Load more) re-applies
-      sort and the row may shift.
+      button swaps. Hard refresh (Refresh button / page navigation /
+      range change) re-applies sort and the row may shift.
+
+  Pagination is **numbered pages** (10 per page). Total page count comes
+  from `Chat.count_recent_agent_actions/1`. Each page navigation fetches
+  only that page's slice (over-fetch + slice on the server side).
 
   Polling-only; no live streaming. See `Platform.Chat.list_recent_agent_actions/1`.
   """
@@ -28,7 +32,7 @@ defmodule PlatformWeb.ActivityLive do
 
   @impl true
   def mount(_params, _session, socket) do
-    {actions, has_more} = load_actions(@default_range, 1)
+    {actions, page, total_pages} = load_page(@default_range, 1)
 
     {:ok,
      socket
@@ -36,10 +40,10 @@ defmodule PlatformWeb.ActivityLive do
      |> assign(:current_path, "/activity")
      |> assign(:range, @default_range)
      |> assign(:ranges, @ranges)
-     |> assign(:page, 1)
+     |> assign(:page, page)
+     |> assign(:total_pages, total_pages)
      |> assign(:page_size, @page_size)
-     |> assign(:actions, actions)
-     |> assign(:has_more, has_more)}
+     |> assign(:actions, actions)}
   end
 
   @impl true
@@ -48,36 +52,36 @@ defmodule PlatformWeb.ActivityLive do
   @impl true
   def handle_event("change_range", %{"range" => range}, socket) do
     range = if range in @ranges, do: range, else: @default_range
-    {actions, has_more} = load_actions(range, 1)
+    {actions, page, total_pages} = load_page(range, 1)
 
     {:noreply,
      socket
      |> assign(:range, range)
-     |> assign(:page, 1)
-     |> assign(:actions, actions)
-     |> assign(:has_more, has_more)}
+     |> assign(:page, page)
+     |> assign(:total_pages, total_pages)
+     |> assign(:actions, actions)}
   end
 
   def handle_event("refresh", _params, socket) do
-    {actions, has_more} = load_actions(socket.assigns.range, 1)
+    {actions, page, total_pages} = load_page(socket.assigns.range, socket.assigns.page)
 
     {:noreply,
      socket
-     |> assign(:page, 1)
+     |> assign(:page, page)
+     |> assign(:total_pages, total_pages)
      |> assign(:actions, actions)
-     |> assign(:has_more, has_more)
      |> put_flash(:info, "Refreshed")}
   end
 
-  def handle_event("load_more", _params, socket) do
-    next_page = socket.assigns.page + 1
-    {actions, has_more} = load_actions(socket.assigns.range, next_page)
+  def handle_event("goto_page", %{"page" => page_str}, socket) do
+    page = parse_page(page_str)
+    {actions, page, total_pages} = load_page(socket.assigns.range, page)
 
     {:noreply,
      socket
-     |> assign(:page, next_page)
-     |> assign(:actions, actions)
-     |> assign(:has_more, has_more)}
+     |> assign(:page, page)
+     |> assign(:total_pages, total_pages)
+     |> assign(:actions, actions)}
   end
 
   # ── Undo / Restore handlers ────────────────────────────────────────────────
@@ -101,15 +105,9 @@ defmodule PlatformWeb.ActivityLive do
         {:noreply, put_flash(socket, :error, "Message not found")}
 
       %Message{} ->
-        # Already soft-deleted, or not agent-authored. Refresh so the stale
-        # row drops out of the list.
-        {actions, has_more} = load_actions(socket.assigns.range, socket.assigns.page)
-
-        {:noreply,
-         socket
-         |> put_flash(:info, "Already undone")
-         |> assign(:actions, actions)
-         |> assign(:has_more, has_more)}
+        # Already soft-deleted or not agent-authored. Reload current page so
+        # the stale row drops out of view.
+        reload_current_page(socket, "Already undone", :info)
 
       false ->
         {:noreply, put_flash(socket, :error, "Space no longer accessible")}
@@ -120,7 +118,6 @@ defmodule PlatformWeb.ActivityLive do
   end
 
   def handle_event("undo", %{"kind" => "canvas", "id" => id}, socket) when is_binary(id) do
-    # `Chat.get_canvas/1` already filters out soft-deleted canvases.
     with %Canvas{created_by_participant_type: "agent"} = canvas <-
            Chat.get_canvas(id) || :not_found,
          true <- Chat.space_accessible?(canvas.space_id),
@@ -149,9 +146,6 @@ defmodule PlatformWeb.ActivityLive do
   end
 
   def handle_event("restore", %{"kind" => "message", "id" => id}, socket) when is_binary(id) do
-    # `Chat.get_message/1` does NOT filter soft-deleted, so it works for
-    # restore. We do require the message currently HAS a deleted_at, otherwise
-    # this is a no-op (already active).
     with %Message{author_participant_type: "agent"} = msg <-
            Chat.get_message(id) || :not_found,
          true <- not is_nil(msg.deleted_at) || :already_active,
@@ -166,17 +160,9 @@ defmodule PlatformWeb.ActivityLive do
         {:noreply, put_flash(socket, :error, "Message not found")}
 
       :already_active ->
-        # Already active, refresh to sync.
-        {actions, has_more} = load_actions(socket.assigns.range, socket.assigns.page)
-
-        {:noreply,
-         socket
-         |> put_flash(:info, "Already active")
-         |> assign(:actions, actions)
-         |> assign(:has_more, has_more)}
+        reload_current_page(socket, "Already active", :info)
 
       %Message{} ->
-        # Not agent-authored — refuse.
         {:noreply, put_flash(socket, :error, "Not an agent message")}
 
       false ->
@@ -188,7 +174,6 @@ defmodule PlatformWeb.ActivityLive do
   end
 
   def handle_event("restore", %{"kind" => "canvas", "id" => id}, socket) when is_binary(id) do
-    # Use the soft-delete-aware fetch — `Chat.get_canvas/1` filters those out.
     with %Canvas{created_by_participant_type: "agent"} = canvas <-
            Chat.get_canvas_with_deleted(id) || :not_found,
          true <- not is_nil(canvas.deleted_at) || :already_active,
@@ -203,13 +188,7 @@ defmodule PlatformWeb.ActivityLive do
         {:noreply, put_flash(socket, :error, "Canvas not found")}
 
       :already_active ->
-        {actions, has_more} = load_actions(socket.assigns.range, socket.assigns.page)
-
-        {:noreply,
-         socket
-         |> put_flash(:info, "Already active")
-         |> assign(:actions, actions)
-         |> assign(:has_more, has_more)}
+        reload_current_page(socket, "Already active", :info)
 
       %Canvas{} ->
         {:noreply, put_flash(socket, :error, "Not an agent-created canvas")}
@@ -226,23 +205,52 @@ defmodule PlatformWeb.ActivityLive do
     {:noreply, put_flash(socket, :error, "Unknown restore target")}
   end
 
-  # ── Loader ─────────────────────────────────────────────────────────────────
+  # ── Page loader ────────────────────────────────────────────────────────────
 
-  defp load_actions(range, page) do
-    target = page * @page_size
+  defp load_page(range, page) do
+    since = since_for_range(range)
 
-    # Always include soft-deleted rows; the LV renders state via the pill.
-    # Over-fetch by 1 so we can detect "is there a next page?" without an
-    # extra count query. Trim to `target` for display.
-    opts = [limit: target + 1, include_deleted: true]
-    opts = put_since(opts, since_for_range(range))
+    count_opts = [include_deleted: true]
+    count_opts = put_since(count_opts, since)
+    total = Chat.count_recent_agent_actions(count_opts)
 
-    all = Chat.list_recent_agent_actions(opts)
-    has_more = length(all) > target
-    actions = Enum.take(all, target)
+    total_pages = max(1, ceil_div(total, @page_size))
+    page = clamp(page, 1, total_pages)
 
-    {actions, has_more}
+    # Over-fetch up to (page * @page_size) items so we can slice the page's
+    # window. The list call's dual-stream merge means we need at least
+    # `page * @page_size` items in the merged-and-sorted result.
+    list_opts = [limit: page * @page_size, include_deleted: true]
+    list_opts = put_since(list_opts, since)
+
+    all = Chat.list_recent_agent_actions(list_opts)
+    actions = Enum.slice(all, (page - 1) * @page_size, @page_size)
+
+    {actions, page, total_pages}
   end
+
+  defp reload_current_page(socket, msg, kind) do
+    {actions, page, total_pages} = load_page(socket.assigns.range, socket.assigns.page)
+
+    {:noreply,
+     socket
+     |> put_flash(kind, msg)
+     |> assign(:page, page)
+     |> assign(:total_pages, total_pages)
+     |> assign(:actions, actions)}
+  end
+
+  defp parse_page(page_str) do
+    case Integer.parse(to_string(page_str)) do
+      {n, _} when n >= 1 -> n
+      _ -> 1
+    end
+  end
+
+  defp clamp(n, lo, hi), do: n |> max(lo) |> min(hi)
+
+  defp ceil_div(0, _denom), do: 0
+  defp ceil_div(num, denom) when num > 0, do: div(num + denom - 1, denom)
 
   defp put_since(opts, nil), do: opts
   defp put_since(opts, %DateTime{} = since), do: Keyword.put(opts, :since, since)
@@ -258,8 +266,7 @@ defmodule PlatformWeb.ActivityLive do
   # Updates a single action's `:state` (and the embedded item's `:deleted_at`
   # to keep the map self-consistent for downstream readers) without triggering
   # a full list reload. The row stays in its current sort position so the
-  # user sees an immediate, stable response to their click. On the next hard
-  # refresh / pagination, normal sort rules re-apply.
+  # user sees an immediate, stable response to their click.
 
   defp flip_state(actions, kind, id, new_state) do
     now = DateTime.utc_now()
@@ -324,4 +331,24 @@ defmodule PlatformWeb.ActivityLive do
   end
 
   def time_ago(_), do: ""
+
+  @doc """
+  Visible page numbers for a numbered-pagination nav. Returns a list of
+  integers and `:ellipsis` markers. For ≤7 total pages, shows them all;
+  otherwise shows 1, neighbors of current, and last with ellipses.
+  """
+  @spec visible_pages(integer(), integer()) :: [integer() | :ellipsis]
+  def visible_pages(_current, total) when total <= 7, do: Enum.to_list(1..total)
+
+  def visible_pages(current, total) when current <= 4 do
+    Enum.to_list(1..5) ++ [:ellipsis, total]
+  end
+
+  def visible_pages(current, total) when current >= total - 3 do
+    [1, :ellipsis] ++ Enum.to_list((total - 4)..total)
+  end
+
+  def visible_pages(current, total) do
+    [1, :ellipsis, current - 1, current, current + 1, :ellipsis, total]
+  end
 end
