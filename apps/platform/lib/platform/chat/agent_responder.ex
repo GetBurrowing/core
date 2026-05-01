@@ -138,7 +138,7 @@ defmodule Platform.Chat.AgentResponder do
 
     ChatPubSub.broadcast(
       space_id,
-      {:agent_typing, %{participant_id: agent_participant_id, typing: true}}
+      {:agent_typing, %{space_id: space_id, participant_id: agent_participant_id, typing: true}}
     )
 
     result =
@@ -167,7 +167,7 @@ defmodule Platform.Chat.AgentResponder do
 
     ChatPubSub.broadcast(
       space_id,
-      {:agent_typing, %{participant_id: agent_participant_id, typing: false}}
+      {:agent_typing, %{space_id: space_id, participant_id: agent_participant_id, typing: false}}
     )
 
     result
@@ -183,7 +183,7 @@ defmodule Platform.Chat.AgentResponder do
     # Show typing indicator immediately while the external runtime processes
     ChatPubSub.broadcast(
       space_id,
-      {:agent_typing, %{participant_id: agent_participant_id, typing: true}}
+      {:agent_typing, %{space_id: space_id, participant_id: agent_participant_id, typing: true}}
     )
 
     if is_nil(runtime_id) do

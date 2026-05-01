@@ -681,6 +681,74 @@ defmodule PlatformWeb.ChatLiveTest do
     end
   end
 
+  # ── Agent typing (BACKLOG #9) ──────────────────────────────────────────
+
+  describe "agent typing — space scoping" do
+    test "a typing broadcast from a non-active space does not flip the active LV's thinking label",
+         %{conn: conn} do
+      conn = authenticated_conn(conn)
+
+      {:ok, other_space} =
+        Chat.create_space(%{name: "Other", slug: "other", kind: "channel"})
+
+      {:ok, view, _html} = live(conn, ~p"/chat/general")
+
+      # ChatLive.mount subscribes to every space in the user's sidebar
+      # for unread-count updates — so the LV IS listening on `other_space`'s
+      # topic. Before this fix, the receiver used the participant_id only
+      # and would flip `:agent_typing_pids` regardless of which space the
+      # broadcast originated in, so Marlowe-in-a-DM saw Higgins-typing-in-
+      # #general. After the fix, the broadcast's :space_id must match
+      # `active_space.id` or the LV drops the event.
+      Platform.Chat.PubSub.broadcast(
+        other_space.id,
+        {:agent_typing,
+         %{
+           space_id: other_space.id,
+           participant_id: Ecto.UUID.generate(),
+           typing: true
+         }}
+      )
+
+      # Give the LV a tick to process the info message.
+      :ok = Process.sleep(50)
+
+      html = render(view)
+      refute html =~ "is thinking"
+    end
+
+    test "a typing broadcast whose space_id matches the active space still flips the label",
+         %{conn: conn} do
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/chat/general")
+
+      general = Chat.get_space_by_slug("general")
+      agent = insert_chat_agent(%{slug: "higgins-test", name: "Higgins"})
+
+      {:ok, agent_participant} =
+        Chat.add_participant(general.id, %{
+          participant_type: "agent",
+          participant_id: agent.id,
+          display_name: agent.name,
+          joined_at: DateTime.utc_now()
+        })
+
+      Platform.Chat.PubSub.broadcast(
+        general.id,
+        {:agent_typing,
+         %{
+           space_id: general.id,
+           participant_id: agent_participant.id,
+           typing: true
+         }}
+      )
+
+      :ok = Process.sleep(50)
+
+      assert render(view) =~ "is thinking"
+    end
+  end
+
   # ── Reactions ────────────────────────────────────────────────────────────────
 
   describe "reactions" do

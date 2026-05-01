@@ -127,7 +127,7 @@ defmodule PlatformWeb.RuntimeChannel do
         # Stop typing indicator when reply arrives
         Platform.Chat.PubSub.broadcast(
           space_id,
-          {:agent_typing, %{participant_id: participant_id, typing: false}}
+          {:agent_typing, %{space_id: space_id, participant_id: participant_id, typing: false}}
         )
 
         Chat.post_message(%{
@@ -182,7 +182,8 @@ defmodule PlatformWeb.RuntimeChannel do
     if agent_participant_id do
       Platform.Chat.PubSub.broadcast(
         space_id,
-        {:agent_typing, %{participant_id: agent_participant_id, typing: typing}}
+        {:agent_typing,
+         %{space_id: space_id, participant_id: agent_participant_id, typing: typing}}
       )
     end
 
@@ -284,7 +285,8 @@ defmodule PlatformWeb.RuntimeChannel do
         # Stop typing indicator
         Platform.Chat.PubSub.broadcast(
           space_id,
-          {:agent_typing, %{participant_id: agent_participant_id, typing: false}}
+          {:agent_typing,
+           %{space_id: space_id, participant_id: agent_participant_id, typing: false}}
         )
 
         # Decode and persist each attachment

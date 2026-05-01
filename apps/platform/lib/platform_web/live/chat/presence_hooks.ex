@@ -28,9 +28,16 @@ defmodule PlatformWeb.ChatLive.PresenceHooks do
     * `{:participant_left, participant}`
     * `%Phoenix.Socket.Broadcast{event: "presence_diff"}`
     * `:refresh_agent_presence`
-    * `{:agent_typing, %{typing: bool, participant_id: id}}` — also
-      updates `:composite_status` (owned by ShellLive on_mount); this
-      cross-LV write is preserved for compatibility.
+    * `{:agent_typing, %{space_id: id, typing: bool, participant_id: id}}`
+      — also updates `:composite_status` (owned by ShellLive on_mount);
+      this cross-LV write is preserved for compatibility. The `space_id`
+      was added for BACKLOG #9: because `ChatLive.mount/3` subscribes to
+      every space the user is in (for unread-count updates), typing
+      broadcasts from unrelated spaces would otherwise drive the active
+      space's "thinking" indicator. Messages whose `space_id` does not
+      match `socket.assigns.active_space.id` are dropped here. Older
+      broadcasts without `:space_id` are accepted (backwards-compatible)
+      so in-flight runtimes don't flicker during rollout.
 
   ## Usage
 
@@ -185,7 +192,37 @@ defmodule PlatformWeb.ChatLive.PresenceHooks do
     end
   end
 
-  defp handle_info({:agent_typing, %{typing: typing, participant_id: participant_id}}, socket) do
+  defp handle_info(
+         {:agent_typing, %{typing: typing, participant_id: participant_id} = payload},
+         socket
+       ) do
+    if space_scoped_to_active?(payload, socket) do
+      apply_agent_typing(socket, typing, participant_id)
+    else
+      {:cont, socket}
+    end
+  end
+
+  defp handle_info(_msg, socket), do: {:cont, socket}
+
+  # ── handle_info helpers ──────────────────────────────────────────────
+
+  defp space_scoped_to_active?(%{space_id: broadcast_space_id}, socket) do
+    case socket.assigns[:active_space] do
+      %{id: ^broadcast_space_id} -> true
+      _ -> false
+    end
+  end
+
+  # Backwards-compat: pre-fix broadcasts omit :space_id. Accept them so
+  # in-flight runtime processes from before the deploy don't have their
+  # typing indicators silently dropped. Every in-repo caller has been
+  # updated to include :space_id — this clause exists only for the rolling
+  # deploy window and can be removed once federation runtimes are known to
+  # have rebooted.
+  defp space_scoped_to_active?(_payload, _socket), do: true
+
+  defp apply_agent_typing(socket, typing, participant_id) do
     socket =
       socket
       |> update(:agent_typing_pids, fn pids ->
@@ -219,8 +256,6 @@ defmodule PlatformWeb.ChatLive.PresenceHooks do
 
     {:halt, socket}
   end
-
-  defp handle_info(_msg, socket), do: {:cont, socket}
 
   # ── Template helpers (used across MessageList, Threads, Mentions) ────
 
