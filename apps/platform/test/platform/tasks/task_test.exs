@@ -355,6 +355,74 @@ defmodule Platform.Tasks.TaskTest do
     end
   end
 
+  describe "require_approved_plan_for/2 (gating execution without an approved plan)" do
+    setup %{project: project} do
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Plan-gated task"})
+      %{task: task}
+    end
+
+    test "rejects transition_task into in_progress when no plan exists", %{task: task} do
+      assert {:error, :no_approved_plan} = Tasks.transition_task(task, "in_progress")
+    end
+
+    test "rejects transition_task into in_progress when only a draft plan exists", %{task: task} do
+      {:ok, _} = Tasks.create_plan(%{task_id: task.id, status: "draft"})
+      assert {:error, :no_approved_plan} = Tasks.transition_task(task, "in_progress")
+    end
+
+    test "rejects transition_task into in_progress when only a pending_review plan exists",
+         %{task: task} do
+      {:ok, _} = Tasks.create_plan(%{task_id: task.id, status: "pending_review"})
+      assert {:error, :no_approved_plan} = Tasks.transition_task(task, "in_progress")
+    end
+
+    test "allows transition_task into in_progress once a plan is approved", %{task: task} do
+      {:ok, _} = Tasks.create_plan(%{task_id: task.id, status: "approved"})
+      assert {:ok, updated} = Tasks.transition_task(task, "in_progress")
+      assert updated.status == "in_progress"
+    end
+
+    test "rejects drag-drop into in_progress when no plan exists", %{task: task} do
+      assert {:error, :no_approved_plan} = Tasks.drop_task_to_column(task, "in_progress")
+    end
+
+    test "rejects drag-drop into in_review when no plan exists", %{task: task} do
+      assert {:error, :no_approved_plan} = Tasks.drop_task_to_column(task, "in_review")
+    end
+
+    test "rejects drag-drop into done when no plan exists", %{task: task} do
+      assert {:error, :no_approved_plan} = Tasks.drop_task_to_column(task, "done")
+    end
+
+    test "allows drag-drop into in_progress once a plan is approved", %{task: task} do
+      {:ok, _} = Tasks.create_plan(%{task_id: task.id, status: "approved"})
+      assert {:ok, updated} = Tasks.drop_task_to_column(task, "in_progress")
+      assert updated.status == "in_progress"
+    end
+
+    test "allows non-execution transitions without a plan (e.g. backlog -> planning)",
+         %{task: task} do
+      assert {:ok, planning} = Tasks.transition_task(task, "planning")
+      assert planning.status == "planning"
+    end
+
+    test "allows intra-execution transitions even though plan may be executing/completed",
+         %{project: project} do
+      # Task already in_progress with an approved plan — moving to in_review
+      # should not be re-checked against current_plan (which may now return nil
+      # if the plan transitioned to executing or completed).
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Already running",
+          status: "in_progress"
+        })
+
+      assert {:ok, updated} = Tasks.transition_task(task, "in_review")
+      assert updated.status == "in_review"
+    end
+  end
+
   defp errors_on(changeset) do
     Ecto.Changeset.traverse_errors(changeset, fn {message, opts} ->
       Regex.replace(~r"%{(\w+)}", message, fn _, key ->

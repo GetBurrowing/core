@@ -370,6 +370,13 @@ defmodule PlatformWeb.TasksLive do
           {:error, :invalid_transition} ->
             put_flash(socket, :error, "Cannot transition to #{new_status} from #{task.status}.")
 
+          {:error, :no_approved_plan} ->
+            put_flash(
+              socket,
+              :error,
+              "Cannot start execution: this task has no approved plan. Create and approve a plan first."
+            )
+
           {:error, reason} ->
             put_flash(socket, :error, "Transition failed: #{inspect(reason)}")
         end
@@ -690,6 +697,14 @@ defmodule PlatformWeb.TasksLive do
              socket,
              :error,
              "Cannot move task from #{status_label(task.status)} to #{status_label(column_to_status(column))}."
+           )}
+
+        {:error, :no_approved_plan} ->
+          {:noreply,
+           put_flash(
+             socket,
+             :error,
+             "Cannot move task into #{status_label(column_to_status(column))}: no approved plan exists. Create and approve a plan first."
            )}
 
         {:error, reason} ->
@@ -1498,7 +1513,10 @@ defmodule PlatformWeb.TasksLive do
 
   defp available_transitions("backlog"), do: [{"planning", "Start Planning"}]
   defp available_transitions("planning"), do: [{"ready", "Mark Ready"}, {"backlog", "Back"}]
-  defp available_transitions("ready"), do: [{"in_progress", "Start"}, {"planning", "Back"}]
+  # ADR 0029: plan approval is the start signal. From `ready`, the only manual
+  # transition is back to planning to revise. Entering execution is gated by
+  # `Tasks.require_approved_plan_for/2` and triggered by approving a plan.
+  defp available_transitions("ready"), do: [{"planning", "Back"}]
 
   defp available_transitions("in_progress"),
     do: [{"in_review", "Submit for Review"}, {"done", "Mark Done"}]

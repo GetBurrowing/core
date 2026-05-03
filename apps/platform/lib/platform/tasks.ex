@@ -507,11 +507,42 @@ defmodule Platform.Tasks do
     |> Repo.one()
   end
 
+  # Statuses that represent execution (work has begun on the plan). Per
+  # ADR 0029 plan approval is the start signal; a task cannot enter any of
+  # these without an `approved` plan to execute against.
+  @execution_phase_statuses ~w(in_progress in_review deploying done)
+
+  @doc """
+  Returns `:ok` if `task` has an approved plan, otherwise
+  `{:error, :no_approved_plan}`. Used to gate transitions into execution
+  phases (`in_progress`, `in_review`, `deploying`, `done`).
+  """
+  def require_approved_plan_for(%Task{} = task, new_status) do
+    cond do
+      new_status not in @execution_phase_statuses ->
+        :ok
+
+      task.status in @execution_phase_statuses ->
+        # Already in execution; the gate was checked at entry. Don't
+        # re-check on intra-execution transitions (e.g. in_progress →
+        # in_review) since the approved plan may already be `executing`
+        # or `completed`.
+        :ok
+
+      current_plan(task.id) ->
+        :ok
+
+      true ->
+        {:error, :no_approved_plan}
+    end
+  end
+
   @doc """
   Transition a task's status and broadcast the change to the board topic.
   """
   def transition_task(%Task{} = task, new_status) do
-    with :ok <- maybe_prepare_transition(task, new_status),
+    with :ok <- require_approved_plan_for(task, new_status),
+         :ok <- maybe_prepare_transition(task, new_status),
          {:ok, updated} <- transition_task_status(task, new_status) do
       updated = Repo.preload(updated, [:project, :epic, plans: :stages])
       broadcast_board({:task_updated, updated})
@@ -568,18 +599,23 @@ defmodule Platform.Tasks do
       target_status ->
         allowed = Map.get(@valid_drop_transitions, task.status, [])
 
-        if target_status in allowed do
-          case task |> Task.changeset(%{status: target_status}) |> Repo.update() do
-            {:ok, updated} ->
-              updated = Repo.preload(updated, [:project, :epic, plans: :stages])
-              broadcast_board({:task_updated, updated})
-              {:ok, updated}
+        cond do
+          target_status not in allowed ->
+            {:error, :invalid_drop}
 
-            {:error, changeset} ->
-              {:error, changeset}
-          end
-        else
-          {:error, :invalid_drop}
+          require_approved_plan_for(task, target_status) == {:error, :no_approved_plan} ->
+            {:error, :no_approved_plan}
+
+          true ->
+            case task |> Task.changeset(%{status: target_status}) |> Repo.update() do
+              {:ok, updated} ->
+                updated = Repo.preload(updated, [:project, :epic, plans: :stages])
+                broadcast_board({:task_updated, updated})
+                {:ok, updated}
+
+              {:error, changeset} ->
+                {:error, changeset}
+            end
         end
     end
   end

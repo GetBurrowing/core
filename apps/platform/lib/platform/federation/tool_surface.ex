@@ -2016,6 +2016,16 @@ defmodule Platform.Federation.ToolSurface do
                suggestion: "Check task status with task_get first"
              }}
 
+          {:error, :no_approved_plan} ->
+            {:error,
+             %{
+               error:
+                 "Cannot start task: no approved plan exists for task #{task.id}. Per ADR 0029, plan approval is the start signal.",
+               recoverable: false,
+               suggestion:
+                 "Create a plan with plan_create, submit it with plan_submit, and have it approved (plan_approve) before starting the task. Approval transitions the task into in_progress automatically."
+             }}
+
           {:error, reason} ->
             {:error, %{error: "Failed to start task: #{inspect(reason)}", recoverable: true}}
         end
