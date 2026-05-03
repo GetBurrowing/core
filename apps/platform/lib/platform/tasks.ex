@@ -273,12 +273,32 @@ defmodule Platform.Tasks do
   # ── Plans ────────────────────────────────────────────────────────────────
 
   def create_plan(attrs) do
+    case task_id_from(attrs) do
+      nil ->
+        do_create_plan(attrs)
+
+      task_id ->
+        case latest_plan(task_id) do
+          %Plan{status: status} when status in ["draft", "pending_review"] ->
+            {:error, :plan_pending_review}
+
+          _ ->
+            do_create_plan(attrs)
+        end
+    end
+  end
+
+  defp do_create_plan(attrs) do
     attrs = maybe_set_plan_version(attrs)
 
     %Plan{}
     |> Plan.changeset(attrs)
     |> Repo.insert()
   end
+
+  defp task_id_from(%{task_id: id}) when is_binary(id), do: id
+  defp task_id_from(%{"task_id" => id}) when is_binary(id), do: id
+  defp task_id_from(_), do: nil
 
   def get_plan(id) do
     Plan

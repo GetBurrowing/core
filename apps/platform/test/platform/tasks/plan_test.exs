@@ -11,13 +11,32 @@ defmodule Platform.Tasks.PlanTest do
   end
 
   describe "create_plan/1" do
-    test "creates with auto-incremented version", %{task: task} do
+    test "creates with auto-incremented version after the previous plan is rejected", %{
+      task: task
+    } do
       assert {:ok, %Plan{} = plan1} = Tasks.create_plan(%{task_id: task.id})
       assert plan1.version == 1
       assert plan1.status == "draft"
 
+      # Cannot create another plan while v1 is still draft/pending_review.
+      {:ok, plan1} = Tasks.submit_plan_for_review(plan1)
+      assert {:error, :plan_pending_review} = Tasks.create_plan(%{task_id: task.id})
+
+      # After rejection, the next plan is allowed and gets the next version.
+      {:ok, _} = Tasks.reject_plan(plan1, Ecto.UUID.generate())
       assert {:ok, plan2} = Tasks.create_plan(%{task_id: task.id})
       assert plan2.version == 2
+    end
+
+    test "rejects a duplicate plan while one is in draft", %{task: task} do
+      assert {:ok, _} = Tasks.create_plan(%{task_id: task.id})
+      assert {:error, :plan_pending_review} = Tasks.create_plan(%{task_id: task.id})
+    end
+
+    test "rejects a duplicate plan while one is pending_review", %{task: task} do
+      {:ok, plan} = Tasks.create_plan(%{task_id: task.id})
+      {:ok, _} = Tasks.submit_plan_for_review(plan)
+      assert {:error, :plan_pending_review} = Tasks.create_plan(%{task_id: task.id})
     end
 
     test "respects explicit version", %{task: task} do
@@ -96,7 +115,10 @@ defmodule Platform.Tasks.PlanTest do
 
   describe "list_plans/1" do
     test "returns plans ordered by version", %{task: task} do
-      {:ok, _} = Tasks.create_plan(%{task_id: task.id})
+      # Two legitimate revisions: first is rejected, then a new one is drafted.
+      {:ok, plan1} = Tasks.create_plan(%{task_id: task.id})
+      {:ok, plan1} = Tasks.submit_plan_for_review(plan1)
+      {:ok, _} = Tasks.reject_plan(plan1, Ecto.UUID.generate())
       {:ok, _} = Tasks.create_plan(%{task_id: task.id})
 
       plans = Tasks.list_plans(task.id)

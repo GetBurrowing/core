@@ -2081,6 +2081,18 @@ defmodule Platform.Federation.ToolSurface do
         {:ok, plan} ->
           {:ok, serialize_plan(plan)}
 
+        {:error, :plan_pending_review} ->
+          existing = Tasks.latest_plan(task_id)
+
+          {:error,
+           %{
+             error:
+               "A plan for this task is already #{existing.status}; create a new plan only after the existing one is rejected.",
+             recoverable: false,
+             suggestion:
+               "Wait for human approval (or rejection) of plan v#{existing.version} (#{existing.id}). Use plan_get to read it; do not call plan_create again."
+           }}
+
         {:error, reason} ->
           {:error,
            %{

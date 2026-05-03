@@ -138,25 +138,45 @@ defmodule Platform.Orchestration.TaskRouter do
       "active" ->
         state = maybe_mark_review_task_in_review(state)
 
-        if waiting_for_human_review?(state) do
-          maybe_log_heartbeat_suppressed(
-            state,
-            find_stage(Tasks.current_plan(task_id), state.current_stage_id)
-          )
+        cond do
+          plan_awaiting_review?(task_id) ->
+            # A plan is sitting with the human; do not re-prompt the agent.
+            Logger.info(
+              "[TaskRouter] init suppressed dispatch for task=#{task_id}: plan awaiting human review"
+            )
 
-          send(self(), :dispatch)
-          {:ok, %{state | status: :waiting_human}}
-        else
-          {:ok, schedule_heartbeat(%{state | status: :running})}
+            {:ok, %{state | status: :waiting_human}}
+
+          waiting_for_human_review?(state) ->
+            maybe_log_heartbeat_suppressed(
+              state,
+              find_stage(Tasks.current_plan(task_id), state.current_stage_id)
+            )
+
+            send(self(), :dispatch)
+            {:ok, %{state | status: :waiting_human}}
+
+          true ->
+            {:ok, schedule_heartbeat(%{state | status: :running})}
         end
 
       "blocked" ->
         {:ok, %{state | status: :waiting_human}}
 
       _ ->
-        # Schedule initial dispatch on next tick
-        send(self(), :dispatch)
-        {:ok, state}
+        if plan_awaiting_review?(task_id) do
+          # A plan is sitting with the human; a fresh router (e.g. after a
+          # gateway/deploy restart) must not act as an unguarded heartbeat.
+          Logger.info(
+            "[TaskRouter] init suppressed dispatch for task=#{task_id}: plan awaiting human review"
+          )
+
+          {:ok, %{state | status: :waiting_human}}
+        else
+          # Schedule initial dispatch on next tick
+          send(self(), :dispatch)
+          {:ok, state}
+        end
     end
   end
 
@@ -593,7 +613,7 @@ defmodule Platform.Orchestration.TaskRouter do
 
       # No plan exists yet — send heartbeat normally so agent creates one,
       # but only if the dispatch cooldown has passed (handled by guard 1 above).
-      true ->
+      is_nil(plan) ->
         task = Tasks.get_task_detail(state.task_id)
 
         if task do
@@ -602,6 +622,16 @@ defmodule Platform.Orchestration.TaskRouter do
         else
           schedule_heartbeat(state)
         end
+
+      # Any other plan status (approved, executing, completed, superseded) means
+      # the task shouldn't actually be in `planning` phase. Don't re-prompt the
+      # agent — just reschedule and let the next reconcile sort it out.
+      true ->
+        Logger.debug(
+          "[TaskRouter] planning heartbeat: unexpected plan.status=#{plan.status} for task #{state.task_id}; suppressing without sending"
+        )
+
+        schedule_heartbeat(state)
     end
   end
 
@@ -1157,6 +1187,16 @@ defmodule Platform.Orchestration.TaskRouter do
 
   defp waiting_for_human_review?(%State{task_id: task_id} = state) do
     current_stage_type(state) == "manual_approval" and pending_review_request?(task_id)
+  end
+
+  # Plan-level "human is sitting with the latest plan" check. Distinct from
+  # `waiting_for_human_review?/1`, which is stage-level (manual_approval stage
+  # within an approved plan).
+  defp plan_awaiting_review?(task_id) do
+    case Tasks.latest_plan(task_id) do
+      %{status: "pending_review"} -> true
+      _ -> false
+    end
   end
 
   defp heartbeat_stage_type(%State{} = state) do
