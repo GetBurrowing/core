@@ -82,6 +82,194 @@ defmodule PlatformWeb.TasksLiveTest do
     })
   end
 
+  describe "per-phase assignee modal" do
+    test "Configure button + per-phase grid render in the detail panel", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      project = create_project()
+      a1 = create_agent("Dalton (Test)")
+      a2 = create_agent("Geordi (Test)")
+
+      task =
+        create_task(project, %{
+          title: "Modal test task",
+          status: "planning",
+          assignee_id: a1.id,
+          assignee_type: "agent",
+          phase_assignees: %{
+            "planning" => %{"assignee_id" => a1.id, "assignee_type" => "agent"},
+            "execution" => %{"assignee_id" => a2.id, "assignee_type" => "agent"},
+            "review" => %{"assignee_id" => a1.id, "assignee_type" => "agent"}
+          }
+        })
+
+      {:ok, view, _html} = live(conn, ~p"/tasks?task_id=#{task.id}")
+
+      # Detail panel grid shows all three phases with the right agents
+      rendered = render(view)
+      assert rendered =~ "Configure"
+      assert rendered =~ "Planning"
+      assert rendered =~ "Implementation"
+      assert rendered =~ "Validation"
+      assert rendered =~ "Dalton (Test)"
+      assert rendered =~ "Geordi (Test)"
+    end
+
+    test "Configure click opens modal and auto-detects Advanced for mixed assignees", %{
+      conn: conn
+    } do
+      conn = authenticated_conn(conn)
+      project = create_project()
+      a1 = create_agent("Dalton (Test)")
+      a2 = create_agent("Geordi (Test)")
+
+      task =
+        create_task(project, %{
+          title: "Modal opens advanced",
+          status: "planning",
+          phase_assignees: %{
+            "planning" => %{"assignee_id" => a1.id, "assignee_type" => "agent"},
+            "execution" => %{"assignee_id" => a2.id, "assignee_type" => "agent"},
+            "review" => %{"assignee_id" => a1.id, "assignee_type" => "agent"}
+          }
+        })
+
+      {:ok, view, _html} = live(conn, ~p"/tasks?task_id=#{task.id}")
+
+      view |> element("[phx-click=\"open_assignee_modal\"]") |> render_click()
+      modal = render(view)
+
+      assert modal =~ "Assign Agents"
+      assert modal =~ "One agent per phase. Build the DAG."
+      assert modal =~ ~r{phx-click="set_assignee_modal_mode"[^>]*phx-value-mode="simple"}
+      assert modal =~ ~r{phx-click="set_assignee_modal_mode"[^>]*phx-value-mode="advanced"}
+      # Active state on the Advanced button (auto-detected from mixed deps)
+      assert modal =~ ~r{phx-value-mode="advanced"[^>]*aria-pressed="true"}
+    end
+
+    test "Configure click opens modal in Simple when all phases share one agent", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      project = create_project()
+      a1 = create_agent("Solo (Test)")
+
+      entry = %{"assignee_id" => a1.id, "assignee_type" => "agent"}
+
+      task =
+        create_task(project, %{
+          title: "Modal opens simple",
+          status: "planning",
+          phase_assignees: %{"planning" => entry, "execution" => entry, "review" => entry}
+        })
+
+      {:ok, view, _html} = live(conn, ~p"/tasks?task_id=#{task.id}")
+
+      view |> element("[phx-click=\"open_assignee_modal\"]") |> render_click()
+      modal = render(view)
+
+      assert modal =~ "One agent for the whole task."
+      assert modal =~ ~r{phx-value-mode="simple"[^>]*aria-pressed="true"}
+    end
+
+    test "saving in Advanced writes per-phase assignees and updates task.assignee_id from current phase",
+         %{conn: conn} do
+      conn = authenticated_conn(conn)
+      project = create_project()
+      a1 = create_agent("Phase1 (Test)")
+      a2 = create_agent("Phase2 (Test)")
+      a3 = create_agent("Phase3 (Test)")
+
+      task =
+        create_task(project, %{
+          title: "Save advanced",
+          status: "planning",
+          assignee_id: nil
+        })
+
+      {:ok, view, _html} = live(conn, ~p"/tasks?task_id=#{task.id}")
+
+      view
+      |> element("[phx-click=\"open_assignee_modal\"]")
+      |> render_click()
+
+      # Force advanced mode (default would be simple since no existing assignees)
+      view
+      |> element("[phx-click=\"set_assignee_modal_mode\"][phx-value-mode=\"advanced\"]")
+      |> render_click()
+
+      view
+      |> form("form[phx-submit=\"save_assignees\"]", %{
+        "assignees" => %{
+          "planning" => a1.id,
+          "execution" => a2.id,
+          "review" => a3.id
+        }
+      })
+      |> render_submit()
+
+      reloaded = Tasks.get_task_record(task.id)
+      assert reloaded.phase_assignees["planning"]["assignee_id"] == a1.id
+      assert reloaded.phase_assignees["execution"]["assignee_id"] == a2.id
+      assert reloaded.phase_assignees["review"]["assignee_id"] == a3.id
+      # Task is in `planning`, so the top-level assignee_id derives from the planning slot.
+      assert reloaded.assignee_id == a1.id
+      assert reloaded.assignee_type == "agent"
+    end
+
+    test "saving in Simple writes the same agent into all three phase keys", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      project = create_project()
+      a1 = create_agent("Solo (Test)")
+
+      task = create_task(project, %{title: "Save simple", status: "planning"})
+
+      {:ok, view, _html} = live(conn, ~p"/tasks?task_id=#{task.id}")
+
+      view |> element("[phx-click=\"open_assignee_modal\"]") |> render_click()
+
+      view
+      |> form("form[phx-submit=\"save_assignees\"]", %{"assignees" => %{"all" => a1.id}})
+      |> render_submit()
+
+      reloaded = Tasks.get_task_record(task.id)
+      assert reloaded.phase_assignees["planning"]["assignee_id"] == a1.id
+      assert reloaded.phase_assignees["execution"]["assignee_id"] == a1.id
+      assert reloaded.phase_assignees["review"]["assignee_id"] == a1.id
+      assert reloaded.assignee_id == a1.id
+    end
+  end
+
+  describe "Tasks.current_phase + assignee derivation on transition" do
+    test "task.assignee_id is re-derived from phase_assignees when crossing a phase boundary",
+         %{conn: _conn} do
+      project = create_project()
+      planner = create_agent("Planner")
+      builder = create_agent("Builder")
+
+      {:ok, _} = Plan |> tap(fn _ -> :ok end) |> then(fn _ -> {:ok, :stub} end)
+
+      task =
+        create_task(project, %{
+          status: "planning",
+          assignee_id: planner.id,
+          assignee_type: "agent",
+          phase_assignees: %{
+            "planning" => %{"assignee_id" => planner.id, "assignee_type" => "agent"},
+            "execution" => %{"assignee_id" => builder.id, "assignee_type" => "agent"},
+            "review" => %{"assignee_id" => planner.id, "assignee_type" => "agent"}
+          }
+        })
+
+      # Need an approved plan so `transition_task(task, "in_progress")` passes
+      # the require_approved_plan_for guard from PR #263.
+      {:ok, _} = Tasks.create_plan(%{task_id: task.id, status: "approved", version: 1})
+
+      {:ok, updated} = Tasks.transition_task(task, "in_progress")
+
+      reloaded = Tasks.get_task_record(updated.id)
+      assert reloaded.status == "in_progress"
+      assert reloaded.assignee_id == builder.id
+    end
+  end
+
   defp create_user(attrs \\ %{}) do
     Repo.insert!(%User{
       email:

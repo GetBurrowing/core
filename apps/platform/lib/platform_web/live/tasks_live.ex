@@ -76,6 +76,9 @@ defmodule PlatformWeb.TasksLive do
      |> assign(:steering_attachment_intended, false)
      # Bottom sheet state
      |> assign(:show_task_sheet, false)
+     # Per-phase assignee modal
+     |> assign(:show_assignee_modal, false)
+     |> assign(:assignee_modal_mode, :simple)
      |> assign(:default_task_agent_id, default_task_agent_id)
      |> assign(
        :task_form,
@@ -387,23 +390,111 @@ defmodule PlatformWeb.TasksLive do
     {:noreply, socket}
   end
 
+  # ── Per-phase assignee modal ─────────────────────────────────────────────
+
+  def handle_event("open_assignee_modal", _params, socket) do
+    initial_mode =
+      case socket.assigns.selected_task do
+        %{phase_assignees: pa} when is_map(pa) and map_size(pa) > 0 ->
+          if all_phases_same_agent?(pa), do: :simple, else: :advanced
+
+        _ ->
+          :simple
+      end
+
+    {:noreply,
+     socket
+     |> assign(:show_assignee_modal, true)
+     |> assign(:assignee_modal_mode, initial_mode)}
+  end
+
+  def handle_event("close_assignee_modal", _params, socket) do
+    {:noreply, assign(socket, :show_assignee_modal, false)}
+  end
+
+  def handle_event("set_assignee_modal_mode", %{"mode" => mode}, socket) do
+    next =
+      case mode do
+        "advanced" -> :advanced
+        _ -> :simple
+      end
+
+    {:noreply, assign(socket, :assignee_modal_mode, next)}
+  end
+
+  def handle_event("save_assignees", %{"assignees" => params}, socket) do
+    task = socket.assigns.selected_task
+
+    if is_nil(task) do
+      {:noreply, socket}
+    else
+      mode = socket.assigns.assignee_modal_mode
+
+      attrs_by_phase =
+        case mode do
+          :simple ->
+            id = Map.get(params, "all", "")
+            entry = phase_entry(id)
+            %{"planning" => entry, "execution" => entry, "review" => entry}
+
+          :advanced ->
+            %{
+              "planning" => phase_entry(Map.get(params, "planning", "")),
+              "execution" => phase_entry(Map.get(params, "execution", "")),
+              "review" => phase_entry(Map.get(params, "review", ""))
+            }
+        end
+
+      case Tasks.set_phase_assignees(task, attrs_by_phase) do
+        {:ok, _} ->
+          {:noreply,
+           socket
+           |> assign(:show_assignee_modal, false)
+           |> refresh_board()
+           |> assign(:selected_task, Tasks.get_task_detail(task.id))
+           |> put_flash(:info, "Assignees saved.")}
+
+        {:error, _} ->
+          {:noreply, put_flash(socket, :error, "Failed to save assignees.")}
+      end
+    end
+  end
+
+  defp phase_entry(""), do: %{}
+  defp phase_entry(nil), do: %{}
+  defp phase_entry(agent_id), do: %{"assignee_id" => agent_id, "assignee_type" => "agent"}
+
+  defp all_phases_same_agent?(pa) do
+    ids =
+      ~w(planning execution review)
+      |> Enum.map(fn phase ->
+        case Map.get(pa, phase) do
+          %{"assignee_id" => id} -> id
+          _ -> nil
+        end
+      end)
+
+    case Enum.uniq(ids) do
+      [_single] -> true
+      _ -> false
+    end
+  end
+
+  # Back-compat: the old single-select dropdown used the `assign_agent`
+  # event. Forward it to the new path so any external clients still work.
   def handle_event("assign_agent", %{"agent_id" => agent_id}, socket) do
     task = socket.assigns.selected_task
 
     if task do
-      attrs =
-        if agent_id == "" do
-          %{assignee_id: nil, assignee_type: nil}
-        else
-          %{assignee_id: agent_id, assignee_type: "agent"}
-        end
+      entry = phase_entry(agent_id)
+      attrs = %{"planning" => entry, "execution" => entry, "review" => entry}
 
-      case Tasks.update_task(task, attrs) do
-        {:ok, updated} ->
+      case Tasks.set_phase_assignees(task, attrs) do
+        {:ok, _} ->
           {:noreply,
            socket
            |> refresh_board()
-           |> assign(:selected_task, Tasks.get_task_detail(updated.id))}
+           |> assign(:selected_task, Tasks.get_task_detail(task.id))}
 
         {:error, _} ->
           {:noreply, put_flash(socket, :error, "Failed to assign agent.")}
@@ -1346,6 +1437,33 @@ defmodule PlatformWeb.TasksLive do
   defp priority_badge_class("medium"), do: "badge badge-warning badge-outline badge-sm"
   defp priority_badge_class("low"), do: "badge badge-success badge-outline badge-sm"
   defp priority_badge_class(_), do: "badge badge-ghost badge-sm"
+
+  # ── Per-phase assignee helpers (used by the assignee modal templates) ───
+
+  defp phase_label("planning"), do: "Planning"
+  defp phase_label("execution"), do: "Implementation"
+  defp phase_label("review"), do: "Validation"
+  defp phase_label(other), do: String.capitalize(other)
+
+  defp current_phase_label(%{} = task), do: Tasks.current_phase(task)
+
+  defp phase_assignee_id(%{phase_assignees: pa}, phase) when is_map(pa) do
+    case Map.get(pa, phase) do
+      %{"assignee_id" => id} when is_binary(id) and id != "" -> id
+      _ -> nil
+    end
+  end
+
+  defp phase_assignee_id(_, _), do: nil
+
+  defp agent_name_for(_agents_by_id, nil), do: nil
+
+  defp agent_name_for(agents_by_id, agent_id) when is_map(agents_by_id) do
+    case Map.get(agents_by_id, agent_id) do
+      %{name: name} -> name
+      _ -> nil
+    end
+  end
 
   defp status_label("backlog"), do: "Backlog"
   defp status_label("planning"), do: "Planning"

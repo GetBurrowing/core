@@ -515,6 +515,99 @@ defmodule Platform.Tasks do
   # these without an `approved` plan to execute against.
   @execution_phase_statuses ~w(in_progress in_review deploying done)
 
+  # Map task status → orchestration phase for per-phase assignee resolution.
+  # Three phases: planning, execution, review (covers in_progress + deploying
+  # + done because they all carry the implementer assignee; review is its
+  # own validator handoff).
+  @status_to_phase %{
+    "backlog" => "planning",
+    "planning" => "planning",
+    "blocked" => "planning",
+    "in_progress" => "execution",
+    "deploying" => "execution",
+    "done" => "execution",
+    "in_review" => "review"
+  }
+
+  @doc """
+  Maps a task's current status to its orchestration phase. The phase is the
+  key used to look up the right assignee in `task.phase_assignees`.
+  """
+  @spec current_phase(%Task{} | String.t()) :: String.t()
+  def current_phase(%Task{status: status}), do: current_phase(status)
+
+  def current_phase(status) when is_binary(status),
+    do: Map.get(@status_to_phase, status, "planning")
+
+  @doc """
+  Returns `{assignee_id, assignee_type}` for the given task in the given
+  phase, or `{nil, nil}` if no per-phase assignee is configured.
+  """
+  @spec assignee_for_phase(%Task{}, String.t()) :: {String.t() | nil, String.t() | nil}
+  def assignee_for_phase(%Task{phase_assignees: pa}, phase) when is_map(pa) do
+    case Map.get(pa, phase) do
+      %{"assignee_id" => id, "assignee_type" => type} -> {id, type}
+      %{"assignee_id" => id} -> {id, "agent"}
+      _ -> {nil, nil}
+    end
+  end
+
+  def assignee_for_phase(_, _), do: {nil, nil}
+
+  @doc """
+  Set per-phase assignees on a task. `attrs_by_phase` is a map keyed by
+  phase ("planning" | "execution" | "review") with values
+  `%{"assignee_id" => id, "assignee_type" => type}`. Pass `nil` for a phase
+  to clear it.
+
+  After writing, the task's top-level `assignee_id` / `assignee_type` are
+  re-derived from `phase_assignees[current_phase(task)]` so existing read
+  paths (TaskRouter dispatch, kanban thumbnail, etc.) pick up the right
+  agent for the phase the task is currently in.
+
+  Returns `{:ok, task}` or `{:error, changeset}`.
+  """
+  @spec set_phase_assignees(%Task{}, map()) :: {:ok, %Task{}} | {:error, Ecto.Changeset.t()}
+  def set_phase_assignees(%Task{} = task, attrs_by_phase) when is_map(attrs_by_phase) do
+    merged =
+      task.phase_assignees
+      |> Kernel.||(%{})
+      |> Map.merge(stringify_phase_attrs(attrs_by_phase))
+
+    {derived_id, derived_type} =
+      assignee_for_phase(%{task | phase_assignees: merged}, current_phase(task))
+
+    task
+    |> Task.changeset(%{
+      phase_assignees: merged,
+      assignee_id: derived_id,
+      assignee_type: derived_type
+    })
+    |> Repo.update()
+    |> case do
+      {:ok, updated} ->
+        broadcast_board({:task_updated, Repo.preload(updated, [:project, :epic, plans: :stages])})
+        {:ok, updated}
+
+      error ->
+        error
+    end
+  end
+
+  defp stringify_phase_attrs(attrs) do
+    Map.new(attrs, fn
+      {phase, nil} ->
+        {to_string(phase), %{}}
+
+      {phase, %{} = inner} ->
+        {to_string(phase),
+         Map.new(inner, fn
+           {k, nil} -> {to_string(k), nil}
+           {k, v} -> {to_string(k), v}
+         end)}
+    end)
+  end
+
   @doc """
   Returns `:ok` if `task` has an approved plan, otherwise
   `{:error, :no_approved_plan}`. Used to gate transitions into execution
@@ -641,10 +734,53 @@ defmodule Platform.Tasks do
   defp maybe_finalize_transition(%Task{status: "in_progress"}, %Task{} = task, "in_review") do
     RuntimeSupervision.abandon_current_lease_for_task(task.id, "execution")
     TaskRouterWatcher.force_dispatch(task.id)
+    maybe_apply_phase_assignee(task)
+    :ok
+  end
+
+  defp maybe_finalize_transition(%Task{} = previous, %Task{} = task, _new_status) do
+    if current_phase(previous) != current_phase(task) do
+      maybe_apply_phase_assignee(task)
+    end
+
     :ok
   end
 
   defp maybe_finalize_transition(_previous_task, _task, _new_status), do: :ok
+
+  # When a task crosses a phase boundary, re-derive the top-level
+  # `assignee_id` / `assignee_type` from `phase_assignees[new_phase]`. This
+  # is what makes the per-phase modal actually take effect: the runtime
+  # router and every read path consults `task.assignee_id`, so it has to
+  # match the new phase's configured agent.
+  defp maybe_apply_phase_assignee(%Task{} = task) do
+    new_phase = current_phase(task)
+    {phase_id, phase_type} = assignee_for_phase(task, new_phase)
+
+    cond do
+      is_nil(phase_id) ->
+        :ok
+
+      phase_id == task.assignee_id and phase_type == task.assignee_type ->
+        :ok
+
+      true ->
+        task
+        |> Task.changeset(%{assignee_id: phase_id, assignee_type: phase_type})
+        |> Repo.update()
+        |> case do
+          {:ok, updated} ->
+            broadcast_board(
+              {:task_updated, Repo.preload(updated, [:project, :epic, plans: :stages])}
+            )
+
+            :ok
+
+          _error ->
+            :ok
+        end
+    end
+  end
 
   defp failed_manual_approval_validation(task_id) do
     case current_plan(task_id) do
