@@ -42,6 +42,24 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
   Only fall back to filesystem skill lookup if the payload clearly references a path without including the needed content.\
   """
 
+  @evidence_workflow_reference """
+  ## Submitting evidence for a `manual_approval` validation
+
+  Visual evidence (screenshots, rendered UI, diagrams) is the bottleneck where most agents stall. The path that actually works is a four-tool chain. Use it; don't improvise.
+
+  1. **Capture** — drive the `rock-node-screenshot` skill from hive (`openclaw nodes canvas navigate --node Rock <url>` then `openclaw nodes canvas snapshot --node Rock`). The snapshot is written as `MEDIA:/tmp/openclaw/openclaw-canvas-snapshot-<uuid>.jpg` on hive. Hive itself is headless — do NOT try to launch Chrome locally for browser screenshots. For non-browser visuals, fall back to `screen.snapshot`.
+
+  2. **Upload** — call `attachment.upload_start` (reserve a presigned URL), then `curl -X POST --data-binary '@<file>' <upload_url>` with the matching `Content-Type` and your CF-Access headers. The response gives `{id, url}` where `url` is `/chat/attachments/<uuid>` — that's what canvas image nodes accept. Do NOT use `attachment.upload_inline` for anything bigger than ~2 KB; long base64 strings round-trip-corrupt through tool-call envelopes and fail with `data_base64 is not valid base64` (a payload error, not a permissions error — easy to misdiagnose).
+
+  3. **Embed** — call `canvas.create` (or `canvas.patch ["append_child", ...]` on an existing canvas in the execution space) with an `image` node whose `src` is the `/chat/attachments/<uuid>` URL from step 2. Canvas image `src` MUST match `^/chat/attachments/<uuid>$` — external URLs and data URIs are rejected. Group multiple shots in a `stack` of `card`s with markdown captions explaining what's being shown.
+
+  4. **Submit** — call `review_request_create` with `validation_id` set to the `manual_approval` validation (NOT a `validation_evaluate` call — that's only for `test_pass` / `lint_pass`) and `items: [{label, canvas_id}]` pointing at the canvas from step 3. The review items appear inline on the task detail panel with approve/reject buttons. Items can mix `canvas_id` (visual) and `content` (text) — use `content` for tabular evidence, links, test summaries.
+
+  **Tool-name gotcha**: the Suite MCP HTTP endpoint registers tools with dots (`attachment.upload_start`); the Claude Code MCP wrapper exposes them with underscores. If you fall back to raw curl against `/mcp`, use the dot form or you'll get `not in allowed bundles` (which looks like a permissions denial but is actually a name-lookup miss).
+
+  **Do not** post screenshots via `suite_reply_with_media` and call them evidence — those messages don't reliably render in the reviewer's UI and the `manual_approval` gate doesn't watch the chat thread anyway. Evidence flows through `review_request_create`.\
+  """
+
   @doc "Heartbeat interval in milliseconds for the given stage type."
   @spec interval_ms(stage_type()) :: non_neg_integer() | nil
   def interval_ms(stage_type) do
@@ -109,7 +127,8 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
       repo_url: repo_url,
       default_branch: default_branch,
       task_slug: task_slug,
-      skills_reference: @skills_reference
+      skills_reference: @skills_reference,
+      evidence_workflow_reference: @evidence_workflow_reference
     }
 
     prompt =
@@ -130,7 +149,8 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
     assigns = %{
       task_title: task.title,
       stage_info: stage_info,
-      skills_reference: @skills_reference
+      skills_reference: @skills_reference,
+      evidence_workflow_reference: @evidence_workflow_reference
     }
 
     prompt =
@@ -421,6 +441,8 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
     Start from the concrete stage contract and any attached/bundled skill content in that payload before re-fetching broad task/project context.
     Avoid redundant task/plan lookup churn on the first turn unless an identifier is genuinely missing or the stage contract is ambiguous.
 
+    #{@evidence_workflow_reference}
+
     #{@skills_reference}
     """
     |> enrich_in_progress_prompt(task, stage)
@@ -469,6 +491,8 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
 
     The attention signal that delivered this message includes a `context` field with the full task hierarchy:
     project, epic, task metadata, approved plan with stages, and execution_space_id. Use it as your source of truth.
+
+    #{@evidence_workflow_reference}
 
     #{@skills_reference}
     """

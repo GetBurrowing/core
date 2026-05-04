@@ -52,7 +52,7 @@ defmodule Platform.Tasks.ContextHydratorTest do
             title: "Implement login",
             description: "Build the login flow",
             priority: "high",
-            dependencies: [%{"task_id" => "dep-1", "type" => "blocks"}]
+            dependencies: [%{"task_id" => Ecto.UUID.generate(), "kind" => "blocks"}]
           },
           attrs
         )

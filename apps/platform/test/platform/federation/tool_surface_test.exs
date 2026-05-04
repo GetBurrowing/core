@@ -35,9 +35,9 @@ defmodule Platform.Federation.ToolSurfaceTest do
   defp unique_slug, do: "test-#{System.unique_integer([:positive])}"
 
   describe "tool_definitions/0" do
-    test "returns all 49 tools with required components" do
+    test "returns all 51 tools with required components" do
       tools = ToolSurface.tool_definitions()
-      assert length(tools) == 49
+      assert length(tools) == 51
 
       tool_names = Enum.map(tools, & &1.name)
       assert "send_media" in tool_names
@@ -54,6 +54,7 @@ defmodule Platform.Federation.ToolSurfaceTest do
       assert "skill.get" in tool_names
       assert "skill.upsert" in tool_names
       assert "project_list" in tool_names
+      assert "project_update" in tool_names
       assert "epic_list" in tool_names
       assert "task_create" in tool_names
       assert "task_get" in tool_names
@@ -61,6 +62,7 @@ defmodule Platform.Federation.ToolSurfaceTest do
       assert "task_update" in tool_names
       assert "task_start" in tool_names
       assert "task_complete" in tool_names
+      assert "task_dependencies" in tool_names
       assert "plan_create" in tool_names
       assert "plan_get" in tool_names
       assert "plan_submit" in tool_names
@@ -263,6 +265,72 @@ defmodule Platform.Federation.ToolSurfaceTest do
 
       assert is_list(results)
       assert Enum.any?(results, fn p -> p.name == "Unique Project" end)
+    end
+
+    test "task_update sets deploy_target so the deploying-phase dispatch can pin a target" do
+      # Regression: deploy_target was castable on the schema but not exposed
+      # by task_update, leaving any task that auto-advanced to `deploying`
+      # without a target stuck waiting for a UI/psql change.
+      project = create_project()
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Deploy me"})
+
+      {:ok, result} =
+        ToolSurface.execute(
+          "task_update",
+          %{"task_id" => task.id, "deploy_target" => "production"},
+          %{}
+        )
+
+      reloaded = Tasks.get_task_record(task.id)
+      assert reloaded.deploy_target == "production"
+      # The result map mirrors the existing task_update return shape; we
+      # don't expand it here because the existing test above guards that
+      # surface — only assert the new field round-trips through the DB.
+      assert is_map(result)
+    end
+
+    test "project_update sets deploy_config.default_strategy" do
+      project = create_project(%{name: "Default-strategy project"})
+
+      {:ok, result} =
+        ToolSurface.execute(
+          "project_update",
+          %{
+            "project_id" => project.id,
+            "deploy_config" => %{"default_strategy" => %{"type" => "pr_merge"}}
+          },
+          %{}
+        )
+
+      assert result.deploy_config["default_strategy"] == %{"type" => "pr_merge"}
+
+      reloaded = Tasks.get_project(project.id)
+      assert reloaded.deploy_config["default_strategy"] == %{"type" => "pr_merge"}
+    end
+
+    test "project_update rejects unknown deploy strategy types with a recoverable error" do
+      project = create_project()
+
+      {:error, error} =
+        ToolSurface.execute(
+          "project_update",
+          %{
+            "project_id" => project.id,
+            "deploy_config" => %{"default_strategy" => %{"type" => "definitely-not-a-strategy"}}
+          },
+          %{}
+        )
+
+      assert error.recoverable == true
+      assert error.error =~ "unknown strategy type"
+    end
+
+    test "project_update returns not-found error for unknown project_id" do
+      {:error, error} =
+        ToolSurface.execute("project_update", %{"project_id" => Ecto.UUID.generate()}, %{})
+
+      assert error.recoverable == false
+      assert error.error =~ "Project not found"
     end
 
     test "unknown tool returns structured error" do
@@ -546,6 +614,119 @@ defmodule Platform.Federation.ToolSurfaceTest do
         ToolSurface.execute("task_complete", %{"task_id" => task.id}, %{})
 
       assert error.error =~ "Cannot transition"
+    end
+
+    # ── task_dependencies ────────────────────────────────────────────────
+
+    test "task_dependencies returns deps, unmet, and dependents for a task with both" do
+      project = create_project()
+      {:ok, dep_done} = Tasks.create_task(%{project_id: project.id, title: "Dep Done"})
+      {:ok, dep_done} = Tasks.transition_task_status(dep_done, "in_progress")
+      {:ok, dep_done} = Tasks.transition_task_status(dep_done, "done")
+
+      {:ok, dep_in_progress} =
+        Tasks.create_task(%{project_id: project.id, title: "Dep In Progress"})
+
+      {:ok, dep_in_progress} = Tasks.transition_task_status(dep_in_progress, "in_progress")
+
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Has deps",
+          dependencies: [
+            %{"task_id" => dep_done.id, "kind" => "blocks"},
+            %{"task_id" => dep_in_progress.id, "kind" => "blocks"}
+          ]
+        })
+
+      {:ok, dependent} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Listed-by",
+          dependencies: [%{"task_id" => task.id, "kind" => "blocks"}]
+        })
+
+      {:ok, result} =
+        ToolSurface.execute("task_dependencies", %{"task_id" => task.id}, %{})
+
+      assert length(result.deps) == 2
+      assert result.unmet == [dep_in_progress.id]
+
+      assert result.dependents == [
+               %{task_id: dependent.id, title: "Listed-by", status: "backlog"}
+             ]
+    end
+
+    test "task_dependencies preserves authored order of deps" do
+      project = create_project()
+      {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "Alpha"})
+      {:ok, b} = Tasks.create_task(%{project_id: project.id, title: "Bravo"})
+      {:ok, c} = Tasks.create_task(%{project_id: project.id, title: "Charlie"})
+
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Ordered deps",
+          dependencies: [
+            %{"task_id" => c.id, "kind" => "blocks"},
+            %{"task_id" => a.id, "kind" => "blocks"},
+            %{"task_id" => b.id, "kind" => "blocks"}
+          ]
+        })
+
+      {:ok, result} =
+        ToolSurface.execute("task_dependencies", %{"task_id" => task.id}, %{})
+
+      assert Enum.map(result.deps, & &1.task_id) == [c.id, a.id, b.id]
+      assert Enum.map(result.deps, & &1.kind) == ["blocks", "blocks", "blocks"]
+    end
+
+    test "task_dependencies returns empty arrays for a task with neither deps nor dependents" do
+      project = create_project()
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Lonely"})
+
+      {:ok, result} =
+        ToolSurface.execute("task_dependencies", %{"task_id" => task.id}, %{})
+
+      assert result == %{deps: [], unmet: [], dependents: []}
+    end
+
+    test "task_dependencies returns nil title/status for missing dep ids but keeps task_id + kind" do
+      project = create_project()
+      missing_id = Ecto.UUID.generate()
+      {:ok, real} = Tasks.create_task(%{project_id: project.id, title: "Real"})
+
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Mixed deps",
+          dependencies: [
+            %{"task_id" => missing_id, "kind" => "blocks"},
+            %{"task_id" => real.id, "kind" => "blocks"}
+          ]
+        })
+
+      {:ok, result} =
+        ToolSurface.execute("task_dependencies", %{"task_id" => task.id}, %{})
+
+      [first, second] = result.deps
+      assert first == %{task_id: missing_id, title: nil, kind: "blocks", status: nil}
+      assert second.task_id == real.id
+      assert second.title == "Real"
+      assert second.kind == "blocks"
+      assert second.status == "backlog"
+    end
+
+    test "task_dependencies returns not-found error for unknown task_id" do
+      {:error, error} =
+        ToolSurface.execute(
+          "task_dependencies",
+          %{"task_id" => Ecto.UUID.generate()},
+          %{}
+        )
+
+      assert error.error =~ "Task not found"
+      assert error.recoverable == false
     end
 
     # ── space_list ───────────────────────────────────────────────────────

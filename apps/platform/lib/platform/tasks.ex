@@ -186,6 +186,77 @@ defmodule Platform.Tasks do
   @doc "Get a task record from Postgres (no ETS merge)."
   def get_task_record(id), do: Repo.get(Task, id)
 
+  # ── Dependency helpers (canonical readers) ──────────────────────────────
+  #
+  # The JSONB shape is `[%{"task_id" => uuid, "kind" => "blocks"}, ...]`.
+  # These helpers are the single canonical reader so the shape isn't
+  # reinterpreted in five places (gate, sweep, UI, MCP tool, etc.).
+
+  @doc """
+  Return the dependency task ids for a task.
+
+  Accepts a `%Task{}` struct or a task id string. Returns `[]` for unknown
+  ids or tasks with no deps. Always returns the raw string ids exactly as
+  stored — no UUID normalization.
+  """
+  @spec dependency_task_ids(Task.t() | String.t()) :: [String.t()]
+  def dependency_task_ids(%Task{dependencies: deps}) when is_list(deps) do
+    deps
+    |> Enum.map(& &1["task_id"])
+    |> Enum.reject(&is_nil/1)
+  end
+
+  def dependency_task_ids(%Task{}), do: []
+
+  def dependency_task_ids(id) when is_binary(id) do
+    case get_task_record(id) do
+      %Task{} = task -> dependency_task_ids(task)
+      nil -> []
+    end
+  end
+
+  @doc """
+  Return the subset of a task's dependencies whose status is not `"done"`.
+
+  Accepts a `%Task{}` struct or a task id string. Self-references and
+  unknown ids (declared as deps but absent from the DB) are silently
+  dropped.
+
+  Returns `[%{id, title, status}]` — a thin shape suitable for surfacing
+  in UI / blocker messages without leaking the full Task schema.
+  """
+  @spec unmet_dependencies(Task.t() | String.t()) :: [
+          %{id: String.t(), title: String.t(), status: String.t()}
+        ]
+  def unmet_dependencies(%Task{} = task) do
+    ids =
+      task
+      |> dependency_task_ids()
+      |> Enum.reject(&(&1 == task.id))
+      |> Enum.uniq()
+
+    case ids do
+      [] ->
+        []
+
+      ids ->
+        Repo.all(
+          from(t in Task,
+            where: t.id in ^ids,
+            select: %{id: t.id, title: t.title, status: t.status}
+          )
+        )
+        |> Enum.reject(&(&1.status == "done"))
+    end
+  end
+
+  def unmet_dependencies(id) when is_binary(id) do
+    case get_task_record(id) do
+      %Task{} = task -> unmet_dependencies(task)
+      nil -> []
+    end
+  end
+
   def list_tasks_by_project(project_id) do
     Task
     |> where([t], t.project_id == ^project_id)
@@ -366,24 +437,57 @@ defmodule Platform.Tasks do
 
       task = Repo.get!(Task, updated_plan.task_id)
 
-      case task.status do
-        status when status in ["planning", "backlog"] ->
-          {:ok, _task} = transition_task_status(task, "in_progress")
-          :ok
+      previous_task = task
 
-        _ ->
-          :ok
-      end
+      finalized_task =
+        case task.status do
+          status when status in ["planning", "backlog"] ->
+            apply_dispatch_gate(task)
 
-      updated_plan
+          _ ->
+            nil
+        end
+
+      {updated_plan, previous_task, finalized_task}
     end)
     |> case do
-      {:ok, updated} ->
+      {:ok, {updated, previous_task, finalized_task}} ->
         broadcast_board({:plan_updated, updated})
+
+        if finalized_task do
+          finalized_task =
+            Repo.preload(finalized_task, [:project, :epic, plans: :stages])
+
+          broadcast_board({:task_updated, finalized_task})
+          maybe_finalize_transition(previous_task, finalized_task, finalized_task.status)
+        end
+
         {:ok, updated}
 
       {:error, reason} ->
         {:error, reason}
+    end
+  end
+
+  # Decide whether the just-approved task can move into execution or has to
+  # park in `blocked` until its dependencies finish. Returns the post-write
+  # task struct (status + metadata as persisted) so the caller can broadcast
+  # and run the per-phase finalize hook.
+  defp apply_dispatch_gate(%Task{} = task) do
+    case unmet_dependencies(task) do
+      [] ->
+        {:ok, updated} = transition_task_status(task, "in_progress")
+        updated
+
+      unmet ->
+        {:ok, blocked} = transition_task_status(task, "blocked")
+        existing_metadata = blocked.metadata || %{}
+
+        merged_metadata =
+          Map.put(existing_metadata, "unmet_dependencies", Enum.map(unmet, & &1.id))
+
+        {:ok, with_metadata} = update_task(blocked, %{metadata: merged_metadata})
+        with_metadata
     end
   end
 
@@ -738,6 +842,15 @@ defmodule Platform.Tasks do
     :ok
   end
 
+  defp maybe_finalize_transition(%Task{} = previous, %Task{} = task, "done") do
+    if current_phase(previous) != current_phase(task) do
+      maybe_apply_phase_assignee(task)
+    end
+
+    sweep_unblocked_dependents(task)
+    :ok
+  end
+
   defp maybe_finalize_transition(%Task{} = previous, %Task{} = task, _new_status) do
     if current_phase(previous) != current_phase(task) do
       maybe_apply_phase_assignee(task)
@@ -747,6 +860,73 @@ defmodule Platform.Tasks do
   end
 
   defp maybe_finalize_transition(_previous_task, _task, _new_status), do: :ok
+
+  # When a task reaches `done`, find every `blocked` task that listed it as
+  # a dependency and re-evaluate whether their other deps are also satisfied.
+  # Any whose remaining deps are all `done` transition back to `in_progress`
+  # and have `metadata["unmet_dependencies"]` cleared. The transition runs
+  # through `transition_task/2`, so chained completions cascade naturally
+  # without an explicit recursion loop.
+  defp sweep_unblocked_dependents(%Task{} = done_task) do
+    # The match list is a literal Elixir list (not a Jason-encoded string).
+    # Postgrex binds binary params as already-jsonb (a string scalar) when
+    # the column is jsonb, which breaks `$1::jsonb` casts of pre-encoded
+    # JSON. Passing the term lets Postgrex serialize it as a jsonb array.
+    match = [%{"task_id" => done_task.id}]
+
+    candidates =
+      Repo.all(
+        from(t in Task,
+          where:
+            t.status == "blocked" and
+              fragment("? @> ?", t.dependencies, ^match) and
+              is_nil(t.deleted_at)
+        )
+      )
+
+    Enum.each(candidates, fn blocked_task ->
+      case unmet_dependencies(blocked_task) do
+        [] -> unblock_task(blocked_task)
+        still_unmet -> refresh_unmet_metadata(blocked_task, still_unmet)
+      end
+    end)
+
+    :ok
+  end
+
+  # Sibling case: a dep just finished but other deps remain. Stay blocked
+  # but rewrite metadata["unmet_dependencies"] so dashboards reflect only
+  # the deps still gating the task instead of carrying the stale set.
+  defp refresh_unmet_metadata(%Task{} = blocked_task, still_unmet) do
+    new_ids = Enum.map(still_unmet, & &1.id)
+    metadata = blocked_task.metadata || %{}
+    current = Map.get(metadata, "unmet_dependencies", [])
+
+    if Enum.sort(new_ids) == Enum.sort(current) do
+      :ok
+    else
+      merged = Map.put(metadata, "unmet_dependencies", new_ids)
+      {:ok, _} = update_task(blocked_task, %{metadata: merged})
+      :ok
+    end
+  end
+
+  defp unblock_task(%Task{} = blocked_task) do
+    case transition_task(blocked_task, "in_progress") do
+      {:ok, unblocked} ->
+        metadata = unblocked.metadata || %{}
+
+        if Map.has_key?(metadata, "unmet_dependencies") do
+          cleared = Map.delete(metadata, "unmet_dependencies")
+          {:ok, _} = update_task(unblocked, %{metadata: cleared})
+        end
+
+        :ok
+
+      _ ->
+        :ok
+    end
+  end
 
   # When a task crosses a phase boundary, re-derive the top-level
   # `assignee_id` / `assignee_type` from `phase_assignees[new_phase]`. This

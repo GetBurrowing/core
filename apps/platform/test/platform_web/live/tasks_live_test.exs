@@ -270,6 +270,207 @@ defmodule PlatformWeb.TasksLiveTest do
     end
   end
 
+  describe "dependency UI" do
+    test "blocked card with two unmet deps renders the `Blocked · 2` badge", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      project = create_project()
+
+      a = create_task(project, %{title: "Dep A", status: "in_progress"})
+      x = create_task(project, %{title: "Dep X", status: "in_progress"})
+
+      _b =
+        create_task(project, %{
+          title: "Blocked B",
+          status: "blocked",
+          dependencies: [
+            %{"task_id" => a.id, "kind" => "blocks"},
+            %{"task_id" => x.id, "kind" => "blocks"}
+          ],
+          metadata: %{"unmet_dependencies" => [a.id, x.id]}
+        })
+
+      {:ok, _view, html} = live(conn, ~p"/tasks")
+
+      # Badge text + DaisyUI error class so we know it's the red badge,
+      # not the generic outline status pill.
+      assert html =~ "Blocked · 2"
+      assert html =~ ~r{badge badge-error badge-xs[^>]*>\s*Blocked · 2}
+    end
+
+    test "detail panel lists each dep title with the matching status icon", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      project = create_project()
+
+      a = create_task(project, %{title: "Alpha dep", status: "in_progress"})
+      {:ok, a} = Tasks.transition_task_status(a, "in_review")
+      {:ok, a} = Tasks.transition_task_status(a, "deploying")
+      {:ok, a} = Tasks.transition_task_status(a, "done")
+
+      x = create_task(project, %{title: "Xray dep", status: "in_progress"})
+      y = create_task(project, %{title: "Yankee dep", status: "planning"})
+
+      b =
+        create_task(project, %{
+          title: "Detail B",
+          status: "blocked",
+          dependencies: [
+            %{"task_id" => a.id, "kind" => "blocks"},
+            %{"task_id" => x.id, "kind" => "blocks"},
+            %{"task_id" => y.id, "kind" => "blocks"}
+          ]
+        })
+
+      {:ok, _view, html} = live(conn, ~p"/tasks?task_id=#{b.id}")
+
+      assert html =~ ~s(id="task-dependencies")
+      assert html =~ "Dependencies"
+      assert html =~ "Alpha dep"
+      assert html =~ "Xray dep"
+      assert html =~ "Yankee dep"
+
+      # The dep titles also appear as their own kanban cards, so scope the
+      # icon-co-location assertion to the Dependencies <ul> only.
+      deps_section = dependencies_section(html)
+      assert deps_section =~ "Alpha dep"
+      assert deps_section =~ "Xray dep"
+      assert deps_section =~ "Yankee dep"
+
+      # done → green check, in_progress → blue play, planning → amber pause.
+      assert window_around(deps_section, "Alpha dep") =~ "hero-check-circle-solid"
+      assert window_around(deps_section, "Xray dep") =~ "hero-play-circle-solid"
+      assert window_around(deps_section, "Yankee dep") =~ "hero-pause-circle-solid"
+    end
+
+    test "detail panel of a task without deps does not render the section", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      project = create_project()
+
+      c = create_task(project, %{title: "Lonely C", dependencies: []})
+
+      {:ok, _view, html} = live(conn, ~p"/tasks?task_id=#{c.id}")
+
+      refute html =~ ~s(id="task-dependencies")
+      # The section header text "Dependencies" should not appear anywhere
+      # in the rendered detail panel for a dep-free task.
+      refute html =~ ">Dependencies<"
+    end
+
+    test "missing dep id renders gray ✗ icon and a placeholder title", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      project = create_project()
+
+      ghost_id = Ecto.UUID.generate()
+
+      b =
+        create_task(project, %{
+          title: "Missing-dep B",
+          status: "blocked",
+          dependencies: [%{"task_id" => ghost_id, "kind" => "blocks"}]
+        })
+
+      {:ok, _view, html} = live(conn, ~p"/tasks?task_id=#{b.id}")
+
+      assert html =~ ~s(id="task-dependencies")
+      deps_section = dependencies_section(html)
+      assert deps_section =~ "(missing dependency)"
+      assert window_around(deps_section, "(missing dependency)") =~ "hero-x-circle-solid"
+    end
+
+    test "dependency rows render in the order the user authored them", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      project = create_project()
+
+      a = create_task(project, %{title: "Order Alpha"})
+      x = create_task(project, %{title: "Order Xray"})
+      y = create_task(project, %{title: "Order Yankee"})
+
+      # Authored deliberately out of any natural order.
+      b =
+        create_task(project, %{
+          title: "Detail order B",
+          dependencies: [
+            %{"task_id" => y.id, "kind" => "blocks"},
+            %{"task_id" => a.id, "kind" => "blocks"},
+            %{"task_id" => x.id, "kind" => "blocks"}
+          ]
+        })
+
+      {:ok, _view, html} = live(conn, ~p"/tasks?task_id=#{b.id}")
+
+      # The Dependencies <ul> should list the titles in author order.
+      [_, deps_section] = String.split(html, ~s(id="task-dependencies"), parts: 2)
+      [list_only | _] = String.split(deps_section, "</ul>", parts: 2)
+
+      iy = :binary.match(list_only, "Order Yankee") |> elem(0)
+      ia = :binary.match(list_only, "Order Alpha") |> elem(0)
+      ix = :binary.match(list_only, "Order Xray") |> elem(0)
+
+      assert iy < ia
+      assert ia < ix
+    end
+
+    test "detail panel does not render a raw metadata debug block", %{conn: conn} do
+      # The raw `inspect(task.metadata, pretty: true)` <pre> was debug debris.
+      # Whatever it contained (UUID lists, internal flags, deploy strategy) was
+      # noise to a human reviewer — humans can't resolve UUIDs by eye and the
+      # GUI doesn't help. Information worth showing belongs in a structured,
+      # human-readable section (like the Dependencies section above), not a
+      # raw map dump.
+      conn = authenticated_conn(conn)
+      project = create_project()
+
+      a = create_task(project, %{title: "Probe dep A", status: "in_progress"})
+
+      b =
+        create_task(project, %{
+          title: "Probe B",
+          status: "blocked",
+          dependencies: [%{"task_id" => a.id, "kind" => "blocks"}],
+          metadata: %{
+            "unmet_dependencies" => [a.id],
+            "some_other_internal_key" => "value"
+          }
+        })
+
+      {:ok, _view, html} = live(conn, ~p"/tasks?task_id=#{b.id}")
+
+      # No "Metadata" heading, no <pre> dump.
+      refute html =~ ">Metadata</h3>"
+      refute html =~ ~s|<pre class="rounded bg-base-200|
+      # And the noise that prompted this — bare UUIDs and internal-key dumps —
+      # is therefore not bleeding into the detail view. Dep info still flows
+      # through the Dependencies section as titles + status icons.
+      refute html =~ "some_other_internal_key"
+    end
+  end
+
+  # Returns just the Dependencies <ul> from the rendered HTML, so
+  # title-matching can't collide with kanban cards using the same titles.
+  defp dependencies_section(html) do
+    case String.split(html, ~s(id="task-dependencies"), parts: 2) do
+      [_, after_marker] ->
+        [scoped, _rest] = String.split(after_marker, "</ul>", parts: 2)
+        scoped
+
+      _ ->
+        ""
+    end
+  end
+
+  # Returns a ~400-char window around `needle` so a co-located icon class
+  # can be asserted without grepping the whole page.
+  defp window_around(html, needle) do
+    case :binary.match(html, needle) do
+      :nomatch ->
+        ""
+
+      {start, len} ->
+        before = max(start - 200, 0)
+        finish = min(start + len + 200, byte_size(html))
+        binary_part(html, before, finish - before)
+    end
+  end
+
   defp create_user(attrs \\ %{}) do
     Repo.insert!(%User{
       email:

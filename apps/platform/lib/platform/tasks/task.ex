@@ -11,6 +11,11 @@ defmodule Platform.Tasks.Task do
   # Per-phase assignee keys. Order matches the natural lifecycle progression.
   @phases ~w(planning execution review)
 
+  # Canonical dependency kinds. Future-proofed by name (string list) so we can
+  # add new kinds (e.g. "follows", "informs") without rewriting validators.
+  @valid_dependency_kinds ~w(blocks)
+  def valid_dependency_kinds, do: @valid_dependency_kinds
+
   schema "tasks" do
     belongs_to(:project, Platform.Tasks.Project)
     belongs_to(:epic, Platform.Tasks.Epic)
@@ -69,6 +74,7 @@ defmodule Platform.Tasks.Task do
     |> validate_inclusion(:status, @statuses)
     |> validate_inclusion(:priority, @priorities)
     |> validate_phase_assignees()
+    |> validate_dependencies()
     |> foreign_key_constraint(:project_id)
     |> foreign_key_constraint(:epic_id)
   end
@@ -98,4 +104,41 @@ defmodule Platform.Tasks.Task do
         add_error(changeset, :phase_assignees, "must be a map")
     end
   end
+
+  # Canonical dependency shape: `[%{"task_id" => uuid, "kind" => "blocks"}]`.
+  # Each entry must be a string-keyed map with a UUID `task_id` and a `kind`
+  # in `@valid_dependency_kinds`. `nil` and `[]` are allowed (no deps).
+  # JSONB round-trips strings, so we validate string keys, not atoms.
+  defp validate_dependencies(changeset) do
+    case get_change(changeset, :dependencies) do
+      nil ->
+        changeset
+
+      [] ->
+        changeset
+
+      deps when is_list(deps) ->
+        case Enum.find_index(deps, &(!valid_dependency_entry?(&1))) do
+          nil ->
+            changeset
+
+          idx ->
+            add_error(
+              changeset,
+              :dependencies,
+              "entry at index #{idx} is invalid: expected %{\"task_id\" => uuid, \"kind\" => one_of(#{Enum.join(@valid_dependency_kinds, "|")})}"
+            )
+        end
+
+      _other ->
+        add_error(changeset, :dependencies, "must be a list of dependency maps")
+    end
+  end
+
+  defp valid_dependency_entry?(%{"task_id" => task_id, "kind" => kind})
+       when is_binary(task_id) and is_binary(kind) do
+    kind in @valid_dependency_kinds and match?({:ok, _}, Ecto.UUID.cast(task_id))
+  end
+
+  defp valid_dependency_entry?(_), do: false
 end

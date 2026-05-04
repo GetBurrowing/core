@@ -195,7 +195,8 @@ defmodule Platform.Orchestration.PromptTemplates do
           "repo_url",
           "default_branch",
           "task_slug",
-          "skills_reference"
+          "skills_reference",
+          "evidence_workflow_reference"
         ],
         content: """
         Plan approved — execute the current stage.
@@ -238,6 +239,8 @@ defmodule Platform.Orchestration.PromptTemplates do
 
         Use `suite_org_memory_append` for daily notes (append-only). Use `suite_org_context_write` to update curated files (`ORG_MEMORY.md` for long-term knowledge, `ORG_AGENTS.md` for roster changes). Brief, concrete entries beat long essays — one decision per entry. Write memory alongside your stage work, not as a final cleanup step.
 
+        {{evidence_workflow_reference}}
+
         {{skills_reference}}
         """
       },
@@ -250,7 +253,8 @@ defmodule Platform.Orchestration.PromptTemplates do
         variables: [
           "task_title",
           "stage_info",
-          "skills_reference"
+          "skills_reference",
+          "evidence_workflow_reference"
         ],
         content: """
         Task is in review — exercise and validate the implementation.
@@ -283,6 +287,8 @@ defmodule Platform.Orchestration.PromptTemplates do
         - If review passes, let the plan engine advance the task; do not force status changes manually.
 
         The attention signal that delivered this message includes a `context` field with the full task hierarchy: project, epic, task metadata, approved plan with stages, and execution_space_id. Use it as your source of truth.
+
+        {{evidence_workflow_reference}}
 
         {{skills_reference}}
         """

@@ -1438,6 +1438,58 @@ defmodule PlatformWeb.TasksLive do
   defp priority_badge_class("low"), do: "badge badge-success badge-outline badge-sm"
   defp priority_badge_class(_), do: "badge badge-ghost badge-sm"
 
+  # ── Dependency helpers ─────────────────────────────────────────────────
+
+  # Cheap, per-card. Reads `metadata["unmet_dependencies"]` set by
+  # `Tasks.create_task/_/transition_*` whenever a task is parked or
+  # partially unblocked. No DB hit.
+  defp unmet_dependency_count(%Task{metadata: metadata}) when is_map(metadata) do
+    metadata
+    |> Map.get("unmet_dependencies", [])
+    |> length()
+  end
+
+  defp unmet_dependency_count(_), do: 0
+
+  # Resolves a task's declared dependency ids into `[%{id, title, status}]`
+  # rows in the order the user authored them. Issues a single `Repo.all`,
+  # so it's safe to call in the detail panel (one task per render) but NOT
+  # per-card on the kanban. Missing/deleted ids come back as
+  # `%{id: id, title: nil, status: nil}` so the template can render a
+  # placeholder + gray ✗ icon.
+  defp dependency_summary(%Task{} = task) do
+    ids = Tasks.dependency_task_ids(task)
+
+    case ids do
+      [] ->
+        []
+
+      ids ->
+        rows =
+          Repo.all(
+            from(t in Task,
+              where: t.id in ^ids,
+              select: %{id: t.id, title: t.title, status: t.status}
+            )
+          )
+
+        by_id = Map.new(rows, &{&1.id, &1})
+        Enum.map(ids, &Map.get(by_id, &1, %{id: &1, title: nil, status: nil}))
+    end
+  end
+
+  defp dependency_summary(_), do: []
+
+  # Heroicon class + colour for a dependency's status icon.
+  defp dependency_status_icon("done"), do: "hero-check-circle-solid text-success"
+  defp dependency_status_icon("in_progress"), do: "hero-play-circle-solid text-info"
+
+  defp dependency_status_icon(status)
+       when status in ~w(blocked planning backlog in_review deploying),
+       do: "hero-pause-circle-solid text-warning"
+
+  defp dependency_status_icon(_), do: "hero-x-circle-solid text-base-content/40"
+
   # ── Per-phase assignee helpers (used by the assignee modal templates) ───
 
   defp phase_label("planning"), do: "Planning"

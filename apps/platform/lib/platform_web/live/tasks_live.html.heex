@@ -265,6 +265,17 @@
                   {status_label(task.status)}
                 </span>
 
+                <%!-- Blocked-by-deps badge: only when status="blocked" AND
+                     metadata["unmet_dependencies"] is non-empty. Count is
+                     read straight from metadata (no per-card DB hit). --%>
+                <span
+                  :if={task.status == "blocked" and unmet_dependency_count(task) > 0}
+                  class="badge badge-error badge-xs"
+                  title="Waiting on dependencies"
+                >
+                  Blocked · {unmet_dependency_count(task)}
+                </span>
+
                 <%!-- Review badge --%>
                 <span
                   :if={Map.get(@review_counts, task.id, 0) > 0}
@@ -383,6 +394,33 @@
             @selected_task.updated_at
           )}
         </span>
+      </div>
+
+      <%!-- Dependencies — listed in author order, with a status icon per
+           row. Hidden entirely when the task has no deps. Resolved via
+           a single Repo.all per render (detail panel only). --%>
+      <% deps = dependency_summary(@selected_task) %>
+      <div :if={deps != []} id="task-dependencies" class="flex flex-col gap-2">
+        <span class="text-xs font-semibold uppercase tracking-wider text-base-content/50">
+          Dependencies
+        </span>
+        <ul class="flex flex-col gap-1 text-xs">
+          <li
+            :for={dep <- deps}
+            class="flex items-center gap-2 rounded bg-base-200 px-2 py-1"
+          >
+            <span class={"#{dependency_status_icon(dep.status)} size-4 shrink-0"}></span>
+            <span class="truncate flex-1">
+              {dep.title || "(missing dependency)"}
+            </span>
+            <span
+              :if={dep.status}
+              class="text-[10px] uppercase tracking-wider text-base-content/40"
+            >
+              {status_label(dep.status)}
+            </span>
+          </li>
+        </ul>
       </div>
 
       <%!-- Assignees by phase — opens a modal that lets the user wire one
@@ -1004,14 +1042,6 @@
             </div>
           </div>
         </div>
-      </div>
-
-      <%!-- Metadata --%>
-      <div :if={@selected_task.metadata != %{}} class="space-y-1">
-        <h3 class="text-xs font-semibold uppercase tracking-wider text-base-content/50">
-          Metadata
-        </h3>
-        <pre class="rounded bg-base-200 p-2 text-xs overflow-x-auto">{inspect(@selected_task.metadata, pretty: true)}</pre>
       </div>
     </div>
   </div>
