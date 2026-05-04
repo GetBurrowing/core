@@ -79,6 +79,11 @@ defmodule Platform.Audit.TelemetryHandler do
       event_type: event_type,
       actor_id: Map.get(metadata, :actor_id),
       actor_type: Map.get(metadata, :actor_type, "system"),
+      # ADR 0040: actor_org_id propagates the org owning the actor. NULL for
+      # legacy emitters and intra-org events; populated for federated events
+      # (where actor_id is an opaque OwnerHandle and actor_org_id identifies
+      # the originating peer org).
+      actor_org_id: Map.get(metadata, :actor_org_id),
       resource_type: Map.get(metadata, :resource_type),
       resource_id: Map.get(metadata, :resource_id),
       action: Map.get(metadata, :action, "execute") |> to_string(),
@@ -88,7 +93,7 @@ defmodule Platform.Audit.TelemetryHandler do
     }
   end
 
-  @top_level_keys ~w(actor_id actor_type resource_type resource_id action session_id ip_address)a
+  @top_level_keys ~w(actor_id actor_type actor_org_id resource_type resource_id action session_id ip_address)a
 
   defp build_metadata(measurements, metadata) do
     metadata

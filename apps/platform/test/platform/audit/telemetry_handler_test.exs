@@ -146,4 +146,76 @@ defmodule Platform.Audit.TelemetryHandlerTest do
       assert "test-after" in actions
     end
   end
+
+  describe "actor_org_id threading (ADR 0040)" do
+    test "actor_org_id from telemetry metadata persists to audit_events.actor_org_id" do
+      user_id = Ecto.UUID.generate()
+      org_id = Ecto.UUID.generate()
+
+      :telemetry.execute(
+        [:platform, :auth, :callback],
+        %{system_time: System.system_time()},
+        %{
+          action: "success",
+          actor_id: user_id,
+          actor_type: "user",
+          actor_org_id: org_id,
+          ip_address: "10.0.0.1"
+        }
+      )
+
+      [event] = Audit.list(event_type: "platform.auth.callback")
+      assert event.actor_id == user_id
+      assert event.actor_org_id == org_id
+    end
+
+    test "actor_org_id is excluded from metadata blob (top-level field deduplication)" do
+      :telemetry.execute(
+        [:platform, :auth, :login],
+        %{},
+        %{
+          action: "redirect",
+          actor_id: Ecto.UUID.generate(),
+          actor_org_id: Ecto.UUID.generate(),
+          ip_address: "10.0.0.1"
+        }
+      )
+
+      [event] = Audit.list(event_type: "platform.auth.login")
+      refute Map.has_key?(event.metadata, "actor_org_id")
+    end
+
+    test "events without actor_org_id leave the column NULL" do
+      :telemetry.execute(
+        [:platform, :auth, :login],
+        %{system_time: System.system_time()},
+        %{action: "redirect", ip_address: "10.0.0.1"}
+      )
+
+      [event] = Audit.list(event_type: "platform.auth.login")
+      assert is_nil(event.actor_org_id)
+    end
+
+    test "federated_user actor_type with both actor_id (handle) and actor_org_id" do
+      pseudonymous_handle = Ecto.UUID.generate()
+      peer_org_id = Ecto.UUID.generate()
+
+      :telemetry.execute(
+        [:platform, :auth, :callback],
+        %{system_time: System.system_time()},
+        %{
+          action: "success",
+          actor_id: pseudonymous_handle,
+          actor_type: "federated_user",
+          actor_org_id: peer_org_id,
+          ip_address: "203.0.113.1"
+        }
+      )
+
+      [event] = Audit.list(event_type: "platform.auth.callback")
+      assert event.actor_type == "federated_user"
+      assert event.actor_id == pseudonymous_handle
+      assert event.actor_org_id == peer_org_id
+    end
+  end
 end
