@@ -61,11 +61,13 @@ defmodule Platform.Tasks.TasksContextTest do
   end
 
   describe "task status transition chain" do
-    test "backlog → planning → ready → in_progress → in_review → deploying → done" do
+    test "backlog → planning → in_progress → in_review → deploying → done" do
       {:ok, project} = Tasks.create_project(%{name: "Status Project"})
       {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Full chain"})
 
-      transitions = ~w(planning ready in_progress in_review deploying done)
+      # Per ADR 0029, plan approval transitions planning → in_progress
+      # directly. The `ready` intermediate gate has been removed.
+      transitions = ~w(planning in_progress in_review deploying done)
 
       final_task =
         Enum.reduce(transitions, task, fn status, t ->

@@ -25,7 +25,7 @@ defmodule PlatformWeb.TasksLive do
 
   # Statuses that map into each kanban column
   @column_statuses %{
-    "backlog" => ~w(backlog planning ready blocked),
+    "backlog" => ~w(backlog planning blocked),
     "in_progress" => ~w(in_progress),
     "in_review" => ~w(in_review),
     "deploying" => ~w(deploying),
@@ -1349,7 +1349,6 @@ defmodule PlatformWeb.TasksLive do
 
   defp status_label("backlog"), do: "Backlog"
   defp status_label("planning"), do: "Planning"
-  defp status_label("ready"), do: "Ready"
   defp status_label("in_progress"), do: "In Progress"
   defp status_label("in_review"), do: "In Review"
   defp status_label("deploying"), do: "Deploying"
@@ -1512,11 +1511,11 @@ defmodule PlatformWeb.TasksLive do
   defp deletable_task?(_), do: false
 
   defp available_transitions("backlog"), do: [{"planning", "Start Planning"}]
-  defp available_transitions("planning"), do: [{"ready", "Mark Ready"}, {"backlog", "Back"}]
-  # ADR 0029: plan approval is the start signal. From `ready`, the only manual
-  # transition is back to planning to revise. Entering execution is gated by
-  # `Tasks.require_approved_plan_for/2` and triggered by approving a plan.
-  defp available_transitions("ready"), do: [{"planning", "Back"}]
+  # ADR 0029: plan approval is the start signal. From `planning`, the only
+  # manual transition is back to backlog to abandon. Entering execution is
+  # gated by `Tasks.require_approved_plan_for/2` and triggered by approving
+  # a plan, which transitions the task directly into `in_progress`.
+  defp available_transitions("planning"), do: [{"backlog", "Back"}]
 
   defp available_transitions("in_progress"),
     do: [{"in_review", "Submit for Review"}, {"done", "Mark Done"}]

@@ -185,7 +185,6 @@ defmodule Platform.Orchestration.TaskRouterTest do
            plan: plan
          } do
       {:ok, task} = Tasks.transition_task(task, "planning")
-      {:ok, task} = Tasks.transition_task(task, "ready")
       {:ok, _task} = Tasks.transition_task(task, "in_progress")
 
       {:ok, review_stage} =
@@ -252,7 +251,6 @@ defmodule Platform.Orchestration.TaskRouterTest do
       Process.sleep(50)
 
       {:ok, task} = Tasks.transition_task(task, "planning")
-      {:ok, task} = Tasks.transition_task(task, "ready")
       {:ok, _task} = Tasks.transition_task(task, "in_progress")
 
       approved_plan =
@@ -280,7 +278,6 @@ defmodule Platform.Orchestration.TaskRouterTest do
       Process.sleep(50)
 
       {:ok, task} = Tasks.transition_task(task, "planning")
-      {:ok, task} = Tasks.transition_task(task, "ready")
       {:ok, task} = Tasks.transition_task(task, "in_progress")
 
       completed_plan =
@@ -304,7 +301,6 @@ defmodule Platform.Orchestration.TaskRouterTest do
       Process.sleep(50)
 
       {:ok, task} = Tasks.transition_task(task, "planning")
-      {:ok, task} = Tasks.transition_task(task, "ready")
       {:ok, task} = Tasks.transition_task(task, "in_progress")
       {:ok, _task} = Tasks.transition_task(task, "in_review")
 
@@ -330,7 +326,6 @@ defmodule Platform.Orchestration.TaskRouterTest do
       Process.sleep(50)
 
       {:ok, task} = Tasks.transition_task(task, "planning")
-      {:ok, task} = Tasks.transition_task(task, "ready")
       {:ok, _task} = Tasks.transition_task(task, "in_progress")
 
       {:ok, review_stage} =
@@ -369,7 +364,6 @@ defmodule Platform.Orchestration.TaskRouterTest do
       Process.sleep(50)
 
       {:ok, task} = Tasks.transition_task(task, "planning")
-      {:ok, task} = Tasks.transition_task(task, "ready")
       {:ok, task} = Tasks.transition_task(task, "in_progress")
       {:ok, _task} = Tasks.transition_task(task, "in_review")
 
@@ -754,7 +748,6 @@ defmodule Platform.Orchestration.TaskRouterTest do
 
       # Transition task through to deploying
       {:ok, task} = Tasks.transition_task(task, "planning")
-      {:ok, task} = Tasks.transition_task(task, "ready")
       {:ok, task} = Tasks.transition_task(task, "in_progress")
       {:ok, _task} = Tasks.transition_task(task, "deploying")
 

@@ -53,16 +53,19 @@ defmodule Platform.Tasks do
   @type summary :: %Summary{}
   @type detail :: %Detail{}
 
-  # ── Valid status transitions (ADR 0018 §7) ───────────────────────────────
+  # ── Valid status transitions (ADR 0018 §7, ADR 0029) ─────────────────────
+  #
+  # Per ADR 0029, plan approval is the start signal — there is no separate
+  # `ready` gate. A task in `planning` whose plan reaches `approved`
+  # transitions deterministically into `in_progress` via `approve_plan/2`.
 
   @valid_task_transitions %{
     "backlog" => ~w(planning blocked in_progress),
-    "planning" => ~w(in_progress ready blocked backlog),
-    "ready" => ~w(in_progress blocked planning),
+    "planning" => ~w(in_progress blocked backlog),
     "in_progress" => ~w(in_review deploying blocked done),
     "in_review" => ~w(deploying in_progress blocked),
     "deploying" => ~w(done in_progress blocked),
-    "blocked" => ~w(backlog planning ready in_progress in_review deploying),
+    "blocked" => ~w(backlog planning in_progress in_review deploying),
     "done" => []
   }
 
@@ -364,7 +367,7 @@ defmodule Platform.Tasks do
       task = Repo.get!(Task, updated_plan.task_id)
 
       case task.status do
-        status when status in ["planning", "ready", "backlog"] ->
+        status when status in ["planning", "backlog"] ->
           {:ok, _task} = transition_task_status(task, "in_progress")
           :ok
 
@@ -563,7 +566,6 @@ defmodule Platform.Tasks do
   @valid_drop_transitions %{
     "backlog" => ~w(in_progress in_review deploying done),
     "planning" => ~w(backlog in_progress in_review deploying done),
-    "ready" => ~w(backlog in_progress in_review deploying done),
     "blocked" => ~w(backlog in_progress in_review deploying done),
     "in_progress" => ~w(backlog in_review deploying done),
     "in_review" => ~w(backlog in_progress deploying done),

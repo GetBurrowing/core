@@ -72,11 +72,6 @@ defmodule Platform.Orchestration.TaskRouterWatcherTest do
       assert TaskRouterWatcher.should_run?(task) == false
     end
 
-    test "returns false for ready task" do
-      task = %{assignee_type: "agent", assignee_id: "some-uuid", status: "ready"}
-      assert TaskRouterWatcher.should_run?(task) == false
-    end
-
     test "returns false for task without agent assignee (nil assignee_id)" do
       task = %{assignee_type: "agent", assignee_id: nil, status: "in_progress"}
       assert TaskRouterWatcher.should_run?(task) == false

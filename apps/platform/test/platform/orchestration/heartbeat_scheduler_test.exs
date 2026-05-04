@@ -325,10 +325,13 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
     end
 
     test "fallback generates generic assignment prompt" do
+      # `dispatch_prompt/3` has explicit clauses for planning / in_progress
+      # / in_review / deploying. Use `backlog` (no specific clause) so the
+      # generic fallback at the bottom runs.
       task = %{
         title: "Fix auth bug",
         description: "Auth is broken",
-        status: "ready",
+        status: "backlog",
         priority: "high"
       }
 
@@ -336,7 +339,7 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
 
       assert prompt =~ "Fix auth bug"
       assert prompt =~ "Auth is broken"
-      assert prompt =~ "ready"
+      assert prompt =~ "backlog"
       assert prompt =~ "high"
       assert prompt =~ "assigned"
     end

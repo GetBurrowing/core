@@ -777,7 +777,7 @@ defmodule Platform.Federation.ToolSurface do
             type: "string",
             required: false,
             description:
-              "Initial status: backlog (default), planning, ready, in_progress, in_review, deploying, done, blocked"
+              "Initial status: backlog (default), planning, in_progress, in_review, deploying, done, blocked"
           },
           priority: %{
             type: "string",
@@ -884,7 +884,8 @@ defmodule Platform.Federation.ToolSurface do
           }
         },
         returns: "Updated task object with status in_progress",
-        limitations: "Task must be in backlog, planning, or ready status",
+        limitations:
+          "Task must be in backlog or planning status (per ADR 0029, plan approval transitions to in_progress automatically — manual task_start is for the no-plan-required edge case)",
         when_to_use: "When task is fully specced and ready to begin"
       }
     ]
@@ -2011,7 +2012,7 @@ defmodule Platform.Federation.ToolSurface do
             {:error,
              %{
                error:
-                 "Cannot start task from status #{task.status}. Must be backlog, planning, or ready.",
+                 "Cannot start task from status #{task.status}. Must be backlog or planning (per ADR 0029, plan approval transitions to in_progress automatically).",
                recoverable: true,
                suggestion: "Check task status with task_get first"
              }}

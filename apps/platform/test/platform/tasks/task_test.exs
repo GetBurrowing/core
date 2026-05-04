@@ -48,9 +48,8 @@ defmodule Platform.Tasks.TaskTest do
       assert {:ok, task} = Tasks.transition_task_status(task, "planning")
       assert task.status == "planning"
 
-      assert {:ok, task} = Tasks.transition_task_status(task, "ready")
-      assert task.status == "ready"
-
+      # Per ADR 0029, plan approval transitions planning → in_progress
+      # directly. The `ready` intermediate gate has been removed.
       assert {:ok, task} = Tasks.transition_task_status(task, "in_progress")
       assert task.status == "in_progress"
 
@@ -290,11 +289,6 @@ defmodule Platform.Tasks.TaskTest do
       {:ok, task} =
         Tasks.create_task(%{project_id: project.id, title: "Planning", status: "planning"})
 
-      assert {:ok, _} = Tasks.soft_delete_task(task)
-    end
-
-    test "soft-deletes a ready task", %{project: project} do
-      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Ready", status: "ready"})
       assert {:ok, _} = Tasks.soft_delete_task(task)
     end
 

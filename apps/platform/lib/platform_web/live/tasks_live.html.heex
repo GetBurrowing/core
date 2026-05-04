@@ -259,7 +259,7 @@
                   {task.priority}
                 </span>
                 <span
-                  :if={task.status in ~w(blocked planning ready)}
+                  :if={task.status in ~w(blocked planning)}
                   class="badge badge-outline badge-xs"
                 >
                   {status_label(task.status)}
