@@ -334,7 +334,7 @@ defmodule Platform.Orchestration.PromptTemplates do
 
         ### Strategy-specific instructions
 
-        **pr_merge**: Open PR from task branch against {{default_branch}}, wait for CI to pass, then request human merge approval via `suite_review_request_create`.
+        **pr_merge**: Open PR from task branch against {{default_branch}}, wait for CI to go green, then merge the PR in GitHub. The `pr_merged` validation auto-passes via the `pull_request.closed` webhook — do NOT create a `suite_review_request_create`.
         **docker_deploy**: SSH to target, pull image, compose up, health check, push evidence.
         **skill_driven**: Execute the attached skill's deploy procedure, confirm via manual approval.
         **manual**: Create a review request describing what needs to be deployed; wait for human confirmation.

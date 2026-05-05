@@ -249,11 +249,11 @@ defmodule Platform.Tasks.PlanEngineTest do
       assert deploy_stage.position == 2
       assert deploy_stage.status == "running"
 
-      # Deploy stage should have validations
+      # Deploy stage should have a single pr_merged validation
       validations = Tasks.list_validations(deploy_stage.id)
-      assert length(validations) == 2
+      assert length(validations) == 1
       kinds = Enum.map(validations, & &1.kind) |> Enum.sort()
-      assert kinds == ["ci_passed", "manual_approval"]
+      assert kinds == ["pr_merged"]
 
       # Task should be in deploying status
       updated_task = Tasks.get_task_record(task.id)
@@ -455,8 +455,7 @@ defmodule Platform.Tasks.PlanEngineTest do
       assert {:ok, [stage_def]} = PlanEngine.build_deploy_plan(task.id)
       assert stage_def.name == "Deploy: PR merge"
       assert stage_def.position == 1
-      assert %{kind: "ci_passed"} in stage_def.validations
-      assert %{kind: "manual_approval"} in stage_def.validations
+      assert stage_def.validations == [%{kind: "pr_merged"}]
     end
 
     test "positions deploy stage after existing plan stages" do
@@ -517,7 +516,7 @@ defmodule Platform.Tasks.PlanEngineTest do
                PlanEngine.build_deploy_plan("00000000-0000-0000-0000-000000000000")
     end
 
-    test "auto_merge true uses ci_check for pr_merged" do
+    test "auto_merge true still emits a single pr_merged validation" do
       {:ok, project} =
         Tasks.create_project(%{
           name: "Auto Merge Test #{System.unique_integer([:positive])}",
@@ -536,8 +535,7 @@ defmodule Platform.Tasks.PlanEngineTest do
         })
 
       assert {:ok, [stage_def]} = PlanEngine.build_deploy_plan(task.id)
-      assert %{kind: "ci_passed"} in stage_def.validations
-      assert %{kind: "ci_check"} in stage_def.validations
+      assert stage_def.validations == [%{kind: "pr_merged"}]
     end
   end
 end

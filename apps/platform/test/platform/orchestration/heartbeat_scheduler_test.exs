@@ -250,14 +250,14 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
       assert prompt =~ "Current stage_id: `stage-review-local`"
     end
 
-    test "deploying generates deploy prompt with strategy instructions" do
+    test "deploying generates deploy prompt for pr_merge with single pr_merged validation" do
       task = %{
         id: "task-deploy-1",
         title: "Deploy feature",
         description: "Ship the feature",
         status: "deploying",
         priority: "high",
-        deploy_strategy: %{"type" => "pr_merge", "config" => %{"require_ci_pass" => true}},
+        deploy_strategy: %{"type" => "pr_merge", "config" => %{"auto_merge" => false}},
         project: %{repo_url: "https://github.com/test/app", default_branch: "main"}
       }
 
@@ -267,10 +267,7 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
         id: "stage-deploy-1",
         position: 2,
         name: "Deploy: PR merge",
-        validations: [
-          %{id: "val-test-1", kind: "test_pass"},
-          %{id: "val-manual-1", kind: "manual_approval"}
-        ]
+        validations: [%{id: "val-pr-merged-1", kind: "pr_merged"}]
       }
 
       prompt = HeartbeatScheduler.dispatch_prompt(task, plan, stage)
@@ -278,17 +275,24 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
       assert prompt =~ "Deploy feature"
       assert prompt =~ "deploying"
       assert prompt =~ "pr_merge"
-      assert prompt =~ "validation_pass"
       assert prompt =~ "report_blocker"
 
-      # Deploy contract with phase-appropriate validation instructions
+      # Deploy contract with the new single pr_merged validation
       assert prompt =~ "Deploy Stage Contract"
       assert prompt =~ "Current stage_id: `stage-deploy-1`"
-      assert prompt =~ "validation_id=`val-test-1`"
-      assert prompt =~ "validation_id=`val-manual-1`"
-      # manual_approval gets review_request instruction, not validation_pass
-      assert prompt =~ "suite_review_request_create"
-      assert prompt =~ "human must merge"
+      assert prompt =~ "validation_id=`val-pr-merged-1`"
+      # pr_merged auto-passes via webhook — agent must NOT create a review
+      # request and must NOT call validation_pass directly. The prompt may
+      # still mention `suite_review_request_create` in a *negative* form
+      # (e.g. "do NOT create a suite_review_request_create"), so assert on
+      # the prohibition rather than on absence of the bare token.
+      assert prompt =~ "pull_request.closed` webhook"
+      assert prompt =~ "Merge the PR in GitHub"
+      assert prompt =~ "Do NOT create a `suite_review_request_create`"
+      # No pr_merge stage should ever surface the legacy manual_approval
+      # validation since the builder no longer emits it.
+      refute prompt =~ "manual_approval"
+
       # blocker instruction specific to deploy
       assert prompt =~ "do NOT attempt code fixes"
 

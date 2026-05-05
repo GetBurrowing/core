@@ -130,8 +130,8 @@ defmodule Platform.Tasks.AutoMergerTest do
     end
   end
 
-  describe "auto_merge false → manual_approval still required" do
-    test "pr_merge with auto_merge: false does not auto-merge" do
+  describe "pr_merge → single pr_merged validation regardless of auto_merge" do
+    test "pr_merge with auto_merge: false does not auto-merge but still uses pr_merged" do
       strategy = %{
         "type" => "pr_merge",
         "config" => %{"auto_merge" => false}
@@ -140,15 +140,15 @@ defmodule Platform.Tasks.AutoMergerTest do
       # should_auto_merge? returns false
       refute AutoMerger.should_auto_merge?(strategy)
 
-      # DeployStageBuilder uses manual_approval for pr_merged validation
+      # DeployStageBuilder emits a single pr_merged validation; the merge gate
+      # is the GitHub pull_request.closed webhook, not a manual_approval row.
       stage_def =
         Platform.Tasks.DeployStageBuilder.build_stage(strategy, 1)
 
-      pr_merged_validation = Enum.find(stage_def.validations, &(&1.kind != "ci_passed"))
-      assert pr_merged_validation.kind == "manual_approval"
+      assert stage_def.validations == [%{kind: "pr_merged"}]
     end
 
-    test "pr_merge with auto_merge: true uses ci_check for pr_merged" do
+    test "pr_merge with auto_merge: true also uses a single pr_merged validation" do
       strategy = %{
         "type" => "pr_merge",
         "config" => %{"auto_merge" => true}
@@ -159,8 +159,7 @@ defmodule Platform.Tasks.AutoMergerTest do
       stage_def =
         Platform.Tasks.DeployStageBuilder.build_stage(strategy, 1)
 
-      pr_merged_validation = Enum.find(stage_def.validations, &(&1.kind != "ci_passed"))
-      assert pr_merged_validation.kind == "ci_check"
+      assert stage_def.validations == [%{kind: "pr_merged"}]
     end
   end
 end

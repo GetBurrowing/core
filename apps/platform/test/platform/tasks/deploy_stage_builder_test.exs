@@ -10,11 +10,10 @@ defmodule Platform.Tasks.DeployStageBuilderTest do
   end
 
   describe "build_stage/2 — pr_merge" do
-    test "auto_merge false: uses ci_passed + manual_approval for pr_merged" do
+    test "auto_merge false: emits a single pr_merged validation" do
       strategy = %{
         "type" => "pr_merge",
         "config" => %{
-          "require_ci_pass" => true,
           "require_review_approval" => false,
           "auto_merge" => false
         }
@@ -24,14 +23,15 @@ defmodule Platform.Tasks.DeployStageBuilderTest do
 
       assert result.name == "Deploy: PR merge"
       assert result.position == 4
-      assert result.validations == [%{kind: "ci_passed"}, %{kind: "manual_approval"}]
+      assert result.validations == [%{kind: "pr_merged"}]
       assert result.description =~ "PR merge flow"
-      assert result.description =~ "CI must pass"
+      assert result.description =~ "pr_merged validation"
       assert result.description =~ "Auto-merge is disabled"
-      assert result.description =~ "manual_approval"
+      refute result.description =~ "manual_approval"
+      refute result.description =~ "ci_passed"
     end
 
-    test "auto_merge true: uses ci_passed + ci_check for pr_merged" do
+    test "auto_merge true: still emits a single pr_merged validation" do
       strategy = %{
         "type" => "pr_merge",
         "config" => %{"auto_merge" => true, "merge_method" => "squash"}
@@ -39,9 +39,11 @@ defmodule Platform.Tasks.DeployStageBuilderTest do
 
       result = DeployStageBuilder.build_stage(strategy, 1)
 
-      assert result.validations == [%{kind: "ci_passed"}, %{kind: "ci_check"}]
+      assert result.validations == [%{kind: "pr_merged"}]
       assert result.description =~ "Auto-merge is enabled"
       assert result.description =~ "merge method: squash"
+      refute result.description =~ "ci_check"
+      refute result.description =~ "manual_approval"
     end
 
     test "auto_merge true defaults merge_method to squash" do
@@ -64,14 +66,14 @@ defmodule Platform.Tasks.DeployStageBuilderTest do
       assert result.description =~ "PR review approval is required"
     end
 
-    test "works with empty config (defaults)" do
+    test "works with empty config (defaults to single pr_merged validation)" do
       strategy = %{"type" => "pr_merge"}
       result = DeployStageBuilder.build_stage(strategy, 2)
 
       assert result.name == "Deploy: PR merge"
       assert result.position == 2
-      # Default: auto_merge false → manual_approval
-      assert result.validations == [%{kind: "ci_passed"}, %{kind: "manual_approval"}]
+      # Always a single pr_merged validation regardless of auto_merge
+      assert result.validations == [%{kind: "pr_merged"}]
     end
   end
 

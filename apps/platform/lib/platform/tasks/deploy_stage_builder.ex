@@ -8,12 +8,13 @@ defmodule Platform.Tasks.DeployStageBuilder do
 
   ## CI & Merge Validations
 
-  For `pr_merge` strategy, the builder uses:
-  - `ci_passed` — auto-evaluated by the GitHub CI webhook when
-    `check_suite.completed` or `workflow_run.completed` fires
-  - `pr_merged` — if `auto_merge: true`, uses `ci_check` kind (deterministic,
-    auto-resolved by the AutoMerger after CI passes); if `auto_merge: false`
-    (default), uses `manual_approval` kind (human clicks merge)
+  For `pr_merge` strategy, the builder uses a single validation:
+  - `pr_merged` — auto-evaluated by the GitHub `pull_request.closed` webhook
+    when the PR is merged. CI is implied because GitHub branch protection
+    (and the auto-merge wait-for-CI behavior) prevent a merge before checks
+    pass. Whether the merge is performed by a human or by the AutoMerger,
+    the validation is satisfied the same way: the webhook marks `pr_merged`
+    as passed.
 
   For `docker_deploy` strategy:
   - `ci_passed` — auto-evaluated by webhook
@@ -47,17 +48,16 @@ defmodule Platform.Tasks.DeployStageBuilder do
 
   def build_stage(%{"type" => "pr_merge"} = strategy, position) do
     config = Map.get(strategy, "config", %{})
-    auto_merge = Map.get(config, "auto_merge", false)
 
-    # ci_passed is always present (auto-evaluated by webhook)
-    # pr_merged kind depends on auto_merge config
-    pr_merged_kind = if auto_merge, do: "ci_check", else: "manual_approval"
-
+    # Single pr_merged validation auto-evaluated by the GitHub
+    # pull_request.closed webhook. CI is implied via branch protection
+    # / auto-merge wait-for-CI — no separate ci_passed gate is needed
+    # at the deploy stage.
     %{
       name: "Deploy: PR merge",
       description: pr_merge_description(config),
       position: position,
-      validations: [%{kind: "ci_passed"}, %{kind: pr_merged_kind}]
+      validations: [%{kind: "pr_merged"}]
     }
   end
 
@@ -148,7 +148,6 @@ defmodule Platform.Tasks.DeployStageBuilder do
   # ── Private helpers ────────────────────────────────────────────────────
 
   defp pr_merge_description(config) do
-    require_ci = Map.get(config, "require_ci_pass", true)
     auto_merge = Map.get(config, "auto_merge", false)
     require_review = Map.get(config, "require_review_approval", false)
     merge_method = Map.get(config, "merge_method", "squash")
@@ -156,10 +155,10 @@ defmodule Platform.Tasks.DeployStageBuilder do
     parts = [
       "Deploy via PR merge flow.",
       "Push the task branch and open a PR against the default branch.",
-      if(require_ci,
-        do: "CI must pass before merge (ci_passed validation, auto-evaluated by webhook).",
-        else: nil
-      ),
+      "Stage completes when the PR is merged " <>
+        "(pr_merged validation, auto-evaluated by the GitHub pull_request.closed webhook).",
+      "CI is enforced by GitHub branch protection / auto-merge wait-for-CI " <>
+        "before the merge is allowed; no separate CI gate is tracked here.",
       if(require_review,
         do: "PR review approval is required.",
         else: "PR review approval is not required."
@@ -168,7 +167,7 @@ defmodule Platform.Tasks.DeployStageBuilder do
         do:
           "Auto-merge is enabled — PR will be merged automatically when CI passes " <>
             "(merge method: #{merge_method}).",
-        else: "Auto-merge is disabled — a human must merge the PR (manual_approval validation)."
+        else: "Auto-merge is disabled — a human merges the PR via GitHub."
       )
     ]
 

@@ -3,7 +3,8 @@ defmodule PlatformWeb.GithubWebhookController do
   Receives GitHub webhook events and processes them.
 
   Handles:
-  - `pull_request` events with `action: "closed"` + `merged: true` → changelog entries
+  - `pull_request` events with `action: "closed"` + `merged: true` → changelog
+    entries and auto-evaluate the task's pending `pr_merged` validation
   - `check_suite.completed` → auto-evaluate `ci_passed` validations via PlanEngine
   - `workflow_run.completed` → auto-evaluate `ci_passed` validations via PlanEngine
 
@@ -302,7 +303,13 @@ defmodule PlatformWeb.GithubWebhookController do
       merged_at: merged_at
     }
 
-    case Changelog.create_entry(attrs) do
+    result = Changelog.create_entry(attrs)
+
+    if task_id do
+      maybe_evaluate_pr_merged_validation(task_id, pr, merged_at)
+    end
+
+    case result do
       {:ok, entry} ->
         Logger.info("[Changelog] Created entry for PR ##{entry.pr_number}: #{entry.title}")
         conn |> put_status(:created) |> json(%{status: "created", id: entry.id})
@@ -319,6 +326,48 @@ defmodule PlatformWeb.GithubWebhookController do
         conn |> put_status(:unprocessable_entity) |> json(%{status: "error", errors: errors})
     end
   end
+
+  defp maybe_evaluate_pr_merged_validation(task_id, pr, merged_at) do
+    case find_pending_pr_merged_validation(task_id) do
+      nil ->
+        Logger.debug("[Webhook] No pending pr_merged validation for task #{task_id} on PR merge")
+
+        :ok
+
+      validation ->
+        evidence = %{
+          "pr_url" => pr["html_url"],
+          "merged_at" => format_merged_at(merged_at),
+          "merged_by" => get_in(pr, ["merged_by", "login"]) || get_in(pr, ["user", "login"]),
+          "merge_commit_sha" => pr["merge_commit_sha"]
+        }
+
+        case PlanEngine.evaluate_validation(validation.id, %{
+               status: "passed",
+               evidence: evidence,
+               evaluated_by: "github_webhook"
+             }) do
+          {:ok, updated} ->
+            Logger.info(
+              "[Webhook] Evaluated pr_merged validation #{updated.id} as passed " <>
+                "for task #{task_id} (PR #{pr["html_url"]})"
+            )
+
+            :ok
+
+          {:error, reason} ->
+            Logger.warning(
+              "[Webhook] Failed to evaluate pr_merged validation for task #{task_id}: " <>
+                inspect(reason)
+            )
+
+            :error
+        end
+    end
+  end
+
+  defp format_merged_at(%DateTime{} = dt), do: DateTime.to_iso8601(dt)
+  defp format_merged_at(_), do: nil
 
   defp parse_datetime(nil), do: DateTime.utc_now()
 

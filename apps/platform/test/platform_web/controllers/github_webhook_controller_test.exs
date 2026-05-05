@@ -317,6 +317,120 @@ defmodule PlatformWeb.GithubWebhookControllerTest do
     end
   end
 
+  # ── pull_request.closed (merged) → pr_merged validation auto-eval ───────
+
+  describe "POST #{@github_webhook_path} — merged PR auto-evaluates pr_merged" do
+    test "marks pending pr_merged validation as passed with evidence", %{conn: conn} do
+      %{task: task, pr_validation: pr_validation} = create_task_with_ci_validation!()
+
+      payload =
+        merged_pr_payload(%{
+          "pull_request" => %{
+            "merged" => true,
+            "title" => "feat: ship the thing",
+            "number" => System.unique_integer([:positive]),
+            "html_url" => "https://github.com/test/ci-repo/pull/42",
+            "merge_commit_sha" => "deadbeef0011",
+            "merged_at" => "2026-05-05T12:34:56Z",
+            "body" => "ships",
+            "user" => %{"login" => "agent-bot"},
+            "merged_by" => %{"login" => "human-merger"},
+            "head" => %{"ref" => "task/#{task.id}"}
+          }
+        })
+
+      conn = post(conn, @github_webhook_path, payload)
+      assert %{"status" => "created"} = json_response(conn, 201)
+
+      updated = Platform.Repo.get!(Platform.Tasks.Validation, pr_validation.id)
+      assert updated.status == "passed"
+      assert updated.evaluated_by == "github_webhook"
+      assert updated.evidence["pr_url"] == "https://github.com/test/ci-repo/pull/42"
+      assert updated.evidence["merge_commit_sha"] == "deadbeef0011"
+      assert updated.evidence["merged_by"] == "human-merger"
+      assert is_binary(updated.evidence["merged_at"])
+    end
+
+    test "falls back to PR author when merged_by is absent", %{conn: conn} do
+      %{task: task, pr_validation: pr_validation} = create_task_with_ci_validation!()
+
+      payload =
+        merged_pr_payload(%{
+          "pull_request" => %{
+            "merged" => true,
+            "title" => "feat: no merger field",
+            "number" => System.unique_integer([:positive]),
+            "html_url" => "https://github.com/test/ci-repo/pull/43",
+            "merge_commit_sha" => "abc123",
+            "merged_at" => "2026-05-05T12:00:00Z",
+            "body" => "",
+            "user" => %{"login" => "fallback-author"},
+            "head" => %{"ref" => "task/#{task.id}"}
+          }
+        })
+
+      conn = post(conn, @github_webhook_path, payload)
+      assert %{"status" => "created"} = json_response(conn, 201)
+
+      updated = Platform.Repo.get!(Platform.Tasks.Validation, pr_validation.id)
+      assert updated.status == "passed"
+      assert updated.evidence["merged_by"] == "fallback-author"
+    end
+
+    test "is a no-op for tasks without a pending pr_merged validation", %{conn: conn} do
+      task = create_task!()
+
+      payload =
+        merged_pr_payload(%{
+          "pull_request" => %{
+            "merged" => true,
+            "title" => "feat: no validation",
+            "number" => System.unique_integer([:positive]),
+            "html_url" => "https://github.com/test/repo/pull/100",
+            "merge_commit_sha" => "feedface",
+            "merged_at" => "2026-05-05T12:00:00Z",
+            "body" => "",
+            "user" => %{"login" => "noone"},
+            "head" => %{"ref" => "task/#{task.id}"}
+          }
+        })
+
+      # Webhook still succeeds (changelog entry is created); no validation exists to update.
+      conn = post(conn, @github_webhook_path, payload)
+      assert %{"status" => "created"} = json_response(conn, 201)
+    end
+
+    test "does not touch validations on stages owned by other tasks", %{conn: conn} do
+      %{task: task_a, pr_validation: pr_validation_a} = create_task_with_ci_validation!()
+      %{pr_validation: pr_validation_b} = create_task_with_ci_validation!()
+
+      # Merge PR for task_a only
+      payload =
+        merged_pr_payload(%{
+          "pull_request" => %{
+            "merged" => true,
+            "title" => "feat: merge A only",
+            "number" => System.unique_integer([:positive]),
+            "html_url" => "https://github.com/test/ci-repo/pull/77",
+            "merge_commit_sha" => "aaaaaaa",
+            "merged_at" => "2026-05-05T12:00:00Z",
+            "body" => "",
+            "user" => %{"login" => "rowan"},
+            "head" => %{"ref" => "task/#{task_a.id}"}
+          }
+        })
+
+      conn = post(conn, @github_webhook_path, payload)
+      assert %{"status" => "created"} = json_response(conn, 201)
+
+      a_after = Platform.Repo.get!(Platform.Tasks.Validation, pr_validation_a.id)
+      b_after = Platform.Repo.get!(Platform.Tasks.Validation, pr_validation_b.id)
+
+      assert a_after.status == "passed"
+      assert b_after.status == "pending"
+    end
+  end
+
   # ── HMAC signature verification tests ───────────────────────────────────
 
   describe "HMAC signature verification" do

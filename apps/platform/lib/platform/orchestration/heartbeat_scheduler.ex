@@ -581,26 +581,20 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
   end
 
   defp deploy_strategy_instructions("pr_merge", config, repo_url, default_branch, task_slug) do
-    require_ci = Map.get(config, "require_ci_pass", true)
     auto_merge = Map.get(config, "auto_merge", false)
-
-    ci_instruction =
-      if require_ci,
-        do:
-          "3. Wait for CI to pass. Check with `gh run list --branch task/#{task_slug}` and push `test_pass` evidence when green.",
-        else: ""
 
     merge_instruction =
       if auto_merge,
-        do: "4. PR will auto-merge when checks pass.",
+        do:
+          "4. Merge the PR via GitHub (auto-merge is enabled — it will merge automatically once CI is green). The `pr_merged` validation auto-passes when GitHub fires the `pull_request.closed` webhook.",
         else:
-          "4. A human must merge the PR. Create a review request via `suite_review_request_create` for the `manual_approval` validation."
+          "4. Merge the PR in GitHub once CI is green (the human or agent with merge rights clicks the merge button). The `pr_merged` validation auto-passes when GitHub fires the `pull_request.closed` webhook — do NOT create a `suite_review_request_create`."
 
     """
     ## PR Merge Deploy Flow
     1. Ensure all changes are committed and pushed to `task/#{task_slug}`.
     2. Open a PR against `#{default_branch}` on #{repo_url} if not already open.
-    #{ci_instruction}
+    3. Wait for CI to go green on the PR (GitHub branch protection / auto-merge waits for CI before allowing the merge — you do not need to push a separate `ci_passed` validation).
     #{merge_instruction}
     """
   end
@@ -839,6 +833,9 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
             case kind do
               "manual_approval" ->
                 "- `manual_approval` → validation_id=`#{id}` (create a `suite_review_request_create` with the PR URL and CI status as evidence; do NOT self-approve — a human must merge)"
+
+              "pr_merged" ->
+                "- `pr_merged` → validation_id=`#{id}` (merge the PR in GitHub once CI is green; the `pull_request.closed` webhook auto-passes this validation. Do NOT create a `suite_review_request_create` and do NOT call `validation_pass` yourself.)"
 
               _ ->
                 "- `#{kind}` → validation_id=`#{id}` (use `validation_pass` when the check passes, then call `stage_complete` with `stage_id=#{stage_id}` once all required validations are passed)"
