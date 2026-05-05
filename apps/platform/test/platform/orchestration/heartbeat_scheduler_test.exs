@@ -546,4 +546,194 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
       refute prompt =~ "unknown"
     end
   end
+
+  describe "dispatch_prompt/4 — provider-aware guidance" do
+    @claude_marker "For Claude Code agents (mandatory)"
+
+    defp planning_task do
+      %{
+        id: "task-019df0e1",
+        title: "Provider-aware dispatch prompts",
+        description: "Make Claude agents spawn subagents per task",
+        status: "planning",
+        priority: "medium"
+      }
+    end
+
+    defp in_progress_task do
+      %{
+        id: "task-019df0e1",
+        title: "Provider-aware dispatch prompts",
+        description: "Make Claude agents spawn subagents per task",
+        status: "in_progress",
+        priority: "medium",
+        project: %{repo_url: "https://github.com/test/router", default_branch: "main"}
+      }
+    end
+
+    defp in_review_task do
+      %{
+        id: "task-019df0e1",
+        title: "Provider-aware dispatch prompts",
+        description: "Make Claude agents spawn subagents per task",
+        status: "in_review",
+        priority: "medium"
+      }
+    end
+
+    defp simple_plan_with_stage do
+      stage = %{id: "stage-1", position: 1, name: "review", validations: []}
+      {%{version: 1, stages: [stage]}, stage}
+    end
+
+    defp claude_runtime do
+      %Platform.Agents.AgentRuntime{
+        runtime_id: "rowan-claude-agent-1",
+        metadata: %{"client_info" => %{"product" => "claude_channel", "version" => "0.2.0"}}
+      }
+    end
+
+    defp openclaw_runtime do
+      %Platform.Agents.AgentRuntime{
+        runtime_id: "rowan-coder",
+        metadata: %{"client_info" => %{"product" => "openclaw", "version" => "0.6.2"}}
+      }
+    end
+
+    defp claude_agent do
+      %Platform.Agents.Agent{slug: "dalton", model_config: %{"primary" => "claude-opus-4-7"}}
+    end
+
+    defp openclaw_agent do
+      %Platform.Agents.Agent{slug: "geordi", model_config: %{"primary" => "qwen3-coder"}}
+    end
+
+    test "planning dispatch to Claude-channel runtime contains the Claude block" do
+      prompt =
+        HeartbeatScheduler.dispatch_prompt(planning_task(), nil, nil,
+          agent: claude_agent(),
+          runtime: claude_runtime()
+        )
+
+      assert prompt =~ @claude_marker
+      assert prompt =~ "subagent with fresh context"
+    end
+
+    test "planning dispatch to OpenClaw runtime omits the Claude block" do
+      prompt =
+        HeartbeatScheduler.dispatch_prompt(planning_task(), nil, nil,
+          agent: openclaw_agent(),
+          runtime: openclaw_runtime()
+        )
+
+      refute prompt =~ @claude_marker
+    end
+
+    test "planning dispatch with no agent context renders cleanly (back-compat)" do
+      prompt = HeartbeatScheduler.dispatch_prompt(planning_task(), nil, nil)
+
+      refute prompt =~ @claude_marker
+      assert prompt =~ "Provider-aware dispatch prompts"
+      assert prompt =~ "plan_create"
+    end
+
+    test "planning dispatch falls back to model name when runtime metadata is empty" do
+      bare_runtime = %Platform.Agents.AgentRuntime{runtime_id: "rt", metadata: %{}}
+
+      prompt =
+        HeartbeatScheduler.dispatch_prompt(planning_task(), nil, nil,
+          agent: claude_agent(),
+          runtime: bare_runtime
+        )
+
+      assert prompt =~ @claude_marker
+    end
+
+    test "in_progress dispatch to Claude-channel runtime contains the Claude block" do
+      {plan, stage} = simple_plan_with_stage()
+
+      prompt =
+        HeartbeatScheduler.dispatch_prompt(in_progress_task(), plan, stage,
+          agent: claude_agent(),
+          runtime: claude_runtime()
+        )
+
+      assert prompt =~ @claude_marker
+    end
+
+    test "in_progress dispatch to OpenClaw runtime omits the Claude block" do
+      {plan, stage} = simple_plan_with_stage()
+
+      prompt =
+        HeartbeatScheduler.dispatch_prompt(in_progress_task(), plan, stage,
+          agent: openclaw_agent(),
+          runtime: openclaw_runtime()
+        )
+
+      refute prompt =~ @claude_marker
+    end
+
+    test "in_progress dispatch with no agent context renders cleanly (back-compat)" do
+      {plan, stage} = simple_plan_with_stage()
+      prompt = HeartbeatScheduler.dispatch_prompt(in_progress_task(), plan, stage)
+
+      refute prompt =~ @claude_marker
+      assert prompt =~ "Plan approved"
+    end
+
+    test "in_review dispatch to Claude-channel runtime contains the Claude block" do
+      {plan, stage} = simple_plan_with_stage()
+
+      prompt =
+        HeartbeatScheduler.dispatch_prompt(in_review_task(), plan, stage,
+          agent: claude_agent(),
+          runtime: claude_runtime()
+        )
+
+      assert prompt =~ @claude_marker
+    end
+
+    test "in_review dispatch to OpenClaw runtime omits the Claude block" do
+      {plan, stage} = simple_plan_with_stage()
+
+      prompt =
+        HeartbeatScheduler.dispatch_prompt(in_review_task(), plan, stage,
+          agent: openclaw_agent(),
+          runtime: openclaw_runtime()
+        )
+
+      refute prompt =~ @claude_marker
+    end
+
+    test "in_review dispatch with no agent context renders cleanly (back-compat)" do
+      {plan, stage} = simple_plan_with_stage()
+      prompt = HeartbeatScheduler.dispatch_prompt(in_review_task(), plan, stage)
+
+      refute prompt =~ @claude_marker
+      assert prompt =~ "Task is in review"
+    end
+
+    test "deploying dispatch ignores provider context (no Claude block)" do
+      # The deploying clause exists but is intentionally not provider-aware in
+      # this iteration — deploy work is mostly tooling, not agent reasoning.
+      task = %{
+        id: "task-019df0e1",
+        title: "Provider-aware dispatch prompts",
+        description: "...",
+        status: "deploying",
+        priority: "medium",
+        project: %{repo_url: "https://github.com/test/router", default_branch: "main"}
+      }
+
+      {plan, stage} = simple_plan_with_stage()
+
+      prompt =
+        HeartbeatScheduler.dispatch_prompt(task, plan, stage,
+          agent: claude_agent(),
+          runtime: claude_runtime()
+        )
+
+      refute prompt =~ @claude_marker
+    end
+  end
 end

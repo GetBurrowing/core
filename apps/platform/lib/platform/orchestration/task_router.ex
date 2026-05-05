@@ -14,6 +14,7 @@ defmodule Platform.Orchestration.TaskRouter do
   require Logger
 
   alias Platform.Execution.CredentialLease
+  alias Platform.Federation
 
   alias Platform.Orchestration.{
     ContextAssembler,
@@ -212,7 +213,10 @@ defmodule Platform.Orchestration.TaskRouter do
       state = maybe_lease_deploy_credentials(state, task, stage)
 
       context = ContextAssembler.build(state.task_id, state.deploy_lease)
-      prompt = HeartbeatScheduler.dispatch_prompt(task, plan, stage)
+      {agent, runtime} = Federation.lookup_assignment(state.assignee.id)
+
+      prompt =
+        HeartbeatScheduler.dispatch_prompt(task, plan, stage, agent: agent, runtime: runtime)
 
       case dispatch_attention(state.assignee, state.task_id, "task_assigned", context, prompt) do
         :ok ->

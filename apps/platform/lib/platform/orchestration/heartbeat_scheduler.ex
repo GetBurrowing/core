@@ -18,6 +18,7 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
   """
 
   alias Platform.Orchestration.PromptTemplates
+  alias Platform.Orchestration.ProviderGuidance
 
   @type stage_type :: String.t()
 
@@ -97,12 +98,17 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
   - in_review — run validations, do not self-approve gates
   - fallback — generic assignment prompt
   """
-  @spec dispatch_prompt(map(), map() | nil, map() | nil) :: String.t()
-  def dispatch_prompt(%{status: "planning"} = task, nil, nil) do
+  @spec dispatch_prompt(map(), map() | nil, map() | nil, keyword()) :: String.t()
+  def dispatch_prompt(task, plan, stage, opts \\ [])
+
+  def dispatch_prompt(%{status: "planning"} = task, nil, nil, opts) do
+    provider_guidance = resolve_provider_guidance(opts)
+
     assigns = %{
       task_title: task.title,
       task_description: task.description || "No description provided.",
       task_priority: task.priority,
+      provider_specific_guidance: provider_guidance,
       skills_reference: @skills_reference
     }
 
@@ -111,15 +117,16 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
         rendered
 
       {:error, :not_found} ->
-        hardcoded_dispatch_planning(task)
+        hardcoded_dispatch_planning(task, provider_guidance)
     end
   end
 
-  def dispatch_prompt(%{status: "in_progress"} = task, plan, stage) do
+  def dispatch_prompt(%{status: "in_progress"} = task, plan, stage, opts) do
     stage_info = format_stage_info(plan, stage)
     repo_url = project_attr(task, :repo_url, "")
     default_branch = resolve_branch(task)
     task_slug = short_task_id(task)
+    provider_guidance = resolve_provider_guidance(opts)
 
     assigns = %{
       task_title: task.title,
@@ -127,6 +134,7 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
       repo_url: repo_url,
       default_branch: default_branch,
       task_slug: task_slug,
+      provider_specific_guidance: provider_guidance,
       skills_reference: @skills_reference,
       evidence_workflow_reference: @evidence_workflow_reference
     }
@@ -137,18 +145,20 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
           rendered
 
         {:error, :not_found} ->
-          hardcoded_dispatch_in_progress(task, plan, stage)
+          hardcoded_dispatch_in_progress(task, plan, stage, provider_guidance)
       end
 
     enrich_in_progress_prompt(prompt, task, stage)
   end
 
-  def dispatch_prompt(%{status: "in_review"} = task, plan, stage) do
+  def dispatch_prompt(%{status: "in_review"} = task, plan, stage, opts) do
     stage_info = format_stage_info(plan, stage)
+    provider_guidance = resolve_provider_guidance(opts)
 
     assigns = %{
       task_title: task.title,
       stage_info: stage_info,
+      provider_specific_guidance: provider_guidance,
       skills_reference: @skills_reference,
       evidence_workflow_reference: @evidence_workflow_reference
     }
@@ -159,13 +169,13 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
           rendered
 
         {:error, :not_found} ->
-          hardcoded_dispatch_in_review(task, plan, stage)
+          hardcoded_dispatch_in_review(task, plan, stage, provider_guidance)
       end
 
     enrich_in_review_prompt(prompt, task, stage)
   end
 
-  def dispatch_prompt(%{status: "deploying"} = task, plan, stage) do
+  def dispatch_prompt(%{status: "deploying"} = task, plan, stage, _opts) do
     stage_info = format_stage_info(plan, stage)
     repo_url = project_attr(task, :repo_url, "")
     default_branch = resolve_branch(task)
@@ -199,7 +209,7 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
     enrich_deploying_prompt(prompt, task, stage)
   end
 
-  def dispatch_prompt(task, plan, stage) do
+  def dispatch_prompt(task, plan, stage, _opts) do
     stage_info = format_stage_info(plan, stage)
 
     assigns = %{
@@ -218,6 +228,12 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
       {:error, :not_found} ->
         hardcoded_dispatch_fallback(task, plan, stage)
     end
+  end
+
+  defp resolve_provider_guidance(opts) when is_list(opts) do
+    agent = Keyword.get(opts, :agent)
+    runtime = Keyword.get(opts, :runtime)
+    ProviderGuidance.for_agent(agent, runtime)
   end
 
   @doc """
@@ -372,13 +388,15 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
 
   # ── Hardcoded fallback prompts ─────────────────────────────────────────
 
-  defp hardcoded_dispatch_planning(task) do
+  defp hardcoded_dispatch_planning(task, provider_guidance \\ "") do
     """
     You have been assigned a task that requires a plan before any implementation begins.
 
     Task: #{task.title}
     Description: #{task.description || "No description provided."}
     Priority: #{task.priority}
+
+    #{provider_guidance}
 
     Create a plan using the plan_create tool. The plan will be reviewed by a human before work starts — make it specific enough that they can meaningfully approve or reject it.
 
@@ -425,14 +443,16 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
     """
   end
 
-  defp hardcoded_dispatch_in_progress(task, plan, stage) do
+  defp hardcoded_dispatch_in_progress(task, plan, stage, provider_guidance \\ "") do
     stage_info = format_stage_info(plan, stage)
 
     """
     Plan approved — execute the current stage.
 
     Task: #{task.title}
-    #{stage_info}\
+    #{stage_info}
+    #{provider_guidance}
+
     Push evidence using validation_pass or stage_complete as you finish each step. \
     Post commentary to the execution space so reviewers can follow along. \
     Use report_blocker if you are stuck.
@@ -448,14 +468,16 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
     |> enrich_in_progress_prompt(task, stage)
   end
 
-  defp hardcoded_dispatch_in_review(task, plan, stage) do
+  defp hardcoded_dispatch_in_review(task, plan, stage, provider_guidance \\ "") do
     stage_info = format_stage_info(plan, stage)
 
     """
     Task is in review — exercise and validate the implementation.
 
     Task: #{task.title}
-    #{stage_info}\
+    #{stage_info}
+    #{provider_guidance}
+
     Your job is experiential review: exercise the feature in a running environment and produce \
     evidence that it works as intended. Tests and lint were already validated during execution — \
     do not re-check them here.

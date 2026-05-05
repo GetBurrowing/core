@@ -143,13 +143,21 @@ defmodule Platform.Orchestration.PromptTemplates do
         description:
           "Sent when a task is first assigned and needs a plan created. " <>
             "Instructs the agent to create and submit a plan before starting work.",
-        variables: ["task_title", "task_description", "task_priority", "skills_reference"],
+        variables: [
+          "task_title",
+          "task_description",
+          "task_priority",
+          "provider_specific_guidance",
+          "skills_reference"
+        ],
         content: """
         You have been assigned a task that requires a plan before any implementation begins.
 
         Task: {{task_title}}
         Description: {{task_description}}
         Priority: {{task_priority}}
+
+        {{provider_specific_guidance}}
 
         Create a plan using the plan_create tool. The plan will be reviewed by a human before work starts — make it specific enough that they can meaningfully approve or reject it.
 
@@ -195,6 +203,7 @@ defmodule Platform.Orchestration.PromptTemplates do
           "repo_url",
           "default_branch",
           "task_slug",
+          "provider_specific_guidance",
           "skills_reference",
           "evidence_workflow_reference"
         ],
@@ -202,7 +211,10 @@ defmodule Platform.Orchestration.PromptTemplates do
         Plan approved — execute the current stage.
 
         Task: {{task_title}}
-        {{stage_info}}Push evidence using validation_pass or stage_complete as you finish each step. Post commentary to the execution space so reviewers can follow along. Use report_blocker if you are stuck.
+        {{stage_info}}
+        {{provider_specific_guidance}}
+
+        Push evidence using validation_pass or stage_complete as you finish each step. Post commentary to the execution space so reviewers can follow along. Use report_blocker if you are stuck.
 
         ## Git Workflow (CRITICAL)
         Repository: {{repo_url}}
@@ -253,6 +265,7 @@ defmodule Platform.Orchestration.PromptTemplates do
         variables: [
           "task_title",
           "stage_info",
+          "provider_specific_guidance",
           "skills_reference",
           "evidence_workflow_reference"
         ],
@@ -260,7 +273,10 @@ defmodule Platform.Orchestration.PromptTemplates do
         Task is in review — exercise and validate the implementation.
 
         Task: {{task_title}}
-        {{stage_info}}Your job is experiential review: exercise the feature in a running environment and produce evidence that it works as intended. Tests and lint were already validated during execution — do not re-check them here.
+        {{stage_info}}
+        {{provider_specific_guidance}}
+
+        Your job is experiential review: exercise the feature in a running environment and produce evidence that it works as intended. Tests and lint were already validated during execution — do not re-check them here.
 
         ## How to review
         - Start a local dev server for the worktree (reference the dev server skill via attached skills if available)

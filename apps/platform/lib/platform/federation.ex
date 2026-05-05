@@ -211,6 +211,26 @@ defmodule Platform.Federation do
   def get_runtime_for_agent(%Agent{runtime_id: nil}), do: nil
   def get_runtime_for_agent(%Agent{runtime_id: rid}), do: get_runtime(rid)
 
+  @doc """
+  Lookup `{agent, runtime}` for an external runtime_id string.
+
+  Returns `{nil, nil}` if no runtime exists, `{nil, %AgentRuntime{}}` if the
+  runtime exists but isn't linked to an agent, or `{%Agent{}, %AgentRuntime{}}`
+  for fully-linked entries. Used by orchestration to resolve a dispatch
+  assignee map (`%{type: :federated, id: "rowan-claude-agent-1"}`) into the
+  agent + runtime structs needed for provider-aware behavior.
+  """
+  @spec lookup_assignment(String.t() | nil) :: {Agent.t() | nil, AgentRuntime.t() | nil}
+  def lookup_assignment(runtime_id) when is_binary(runtime_id) do
+    case get_runtime_by_runtime_id(runtime_id) do
+      nil -> {nil, nil}
+      %AgentRuntime{agent_id: nil} = runtime -> {nil, runtime}
+      %AgentRuntime{agent_id: agent_id} = runtime -> {Repo.get(Agent, agent_id), runtime}
+    end
+  end
+
+  def lookup_assignment(_), do: {nil, nil}
+
   @doc "List spaces an agent participates in, with the participant's attention_mode."
   def agent_spaces(%Agent{id: agent_id}) do
     from(p in Participant,
