@@ -561,8 +561,45 @@
         <h3 class="text-xs font-semibold uppercase tracking-wider text-base-content/50">
           Plan
         </h3>
+        <% {rejected_plans, active_plans} = partition_plans(@selected_task) %>
+
+        <%!-- Folded rejected revisions (oldest first). Each row is a clickable
+             summary that reveals the full plan body when expanded. --%>
         <div
-          :for={plan <- @selected_task.plans}
+          :for={plan <- rejected_plans}
+          class="rounded-box border border-base-300/60 bg-base-200/20 overflow-hidden"
+        >
+          <% expanded? = plan_expanded?(@expanded_plans, plan) %>
+          <button
+            type="button"
+            data-role="plan-summary"
+            data-plan-id={plan.id}
+            phx-click={if expanded?, do: "collapse_plan", else: "expand_plan"}
+            phx-value-plan-id={plan.id}
+            class="flex h-8 w-full items-center gap-2 px-3 text-xs text-base-content/50 hover:bg-base-200/40 transition-colors"
+          >
+            <span class={[
+              "hero-chevron-right size-3 shrink-0 transition-transform",
+              expanded? && "rotate-90"
+            ]}>
+            </span>
+            <span class="flex-1 text-left truncate">{plan_summary_label(plan)}</span>
+          </button>
+          <div
+            :if={expanded?}
+            data-role="plan-body"
+            data-plan-id={plan.id}
+            class="border-t border-base-300/60 p-3 space-y-2 bg-base-200/30"
+          >
+            <.plan_body plan={plan} />
+          </div>
+        </div>
+
+        <%!-- Active plans render in full, exactly as before. --%>
+        <div
+          :for={plan <- active_plans}
+          data-role="plan-body"
+          data-plan-id={plan.id}
           class={"rounded-box border p-3 space-y-2 #{if plan.status == "pending_review", do: "border-warning bg-warning/5", else: "border-base-300 bg-base-200/30"}"}
         >
           <div class="flex items-center justify-between">
@@ -574,7 +611,9 @@
               {plan.status}
             </span>
           </div>
-          <%!-- Approve / Reject buttons — prominent, above stages --%>
+          <%!-- Approve / Reject buttons — prominent, above stages. Only the
+               active pending_review plan gets these; folded rejected
+               revisions never re-render the buttons. --%>
           <div :if={plan.status == "pending_review"} class="flex gap-2">
             <button
               class="btn btn-sm btn-success flex-1"
@@ -591,35 +630,7 @@
               Reject
             </button>
           </div>
-          <div :for={stage <- plan.stages || []}>
-            <div class="flex items-center gap-2 text-sm">
-              <span class={"size-4 #{stage_status_icon(stage.status)}"}></span>
-              <span class="flex-1">{stage.name}</span>
-              <span class="text-xs text-base-content/40">{stage.status}</span>
-            </div>
-            <div
-              :if={stage.description}
-              class="prose prose-sm max-w-none text-xs text-base-content/60 chat-markdown task-markdown mt-1 ml-6"
-            >
-              {Platform.Chat.ContentRenderer.render_message(stage.description)}
-            </div>
-          </div>
-          <%!-- Validations per stage --%>
-          <div
-            :for={stage <- plan.stages || []}
-            :if={stage.validations != [] && is_list(stage.validations)}
-          >
-            <div class="ml-6 space-y-1">
-              <div
-                :for={v <- stage.validations}
-                class="flex items-center gap-2 text-xs text-base-content/60"
-              >
-                <span class={"size-3 #{stage_status_icon(v.status)}"}></span>
-                <span>{v.kind}</span>
-                <span class="text-base-content/30">{v.status}</span>
-              </div>
-            </div>
-          </div>
+          <.plan_body plan={plan} />
         </div>
       </div>
 

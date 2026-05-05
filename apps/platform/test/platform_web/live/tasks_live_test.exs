@@ -912,6 +912,179 @@ defmodule PlatformWeb.TasksLiveTest do
     assert updated_plan.status == "rejected"
   end
 
+  describe "plan revision folding" do
+    # Helper: insert a rejected plan revision directly. We bypass
+    # `Tasks.reject_plan/2` because that requires the plan to be in
+    # `pending_review` first, and these tests want to fast-path to
+    # multiple historical rejections without exercising the full lifecycle.
+    defp insert_rejected_plan(task, version) do
+      Repo.insert!(%Plan{
+        task_id: task.id,
+        status: "rejected",
+        version: version
+      })
+    end
+
+    test "task with rejected + active plans renders one summary per rejected plan and a body for the active plan",
+         %{conn: conn} do
+      project = create_project()
+      task = create_task(project, %{title: "Folding task A", status: "planning"})
+
+      _r1 = insert_rejected_plan(task, 1)
+      _r2 = insert_rejected_plan(task, 2)
+
+      {:ok, active} = Tasks.create_plan(%{task_id: task.id, version: 3, status: "draft"})
+
+      {:ok, _stage} =
+        Tasks.create_stage(%{
+          plan_id: active.id,
+          position: 1,
+          name: "Build it",
+          status: "pending"
+        })
+
+      {:ok, _active} = Tasks.submit_plan_for_review(active)
+
+      conn = authenticated_conn(conn)
+      {:ok, _view, html} = live(conn, ~p"/tasks/#{task.id}")
+
+      summary_count =
+        html |> String.split(~s(data-role="plan-summary")) |> length() |> Kernel.-(1)
+
+      body_count = html |> String.split(~s(data-role="plan-body")) |> length() |> Kernel.-(1)
+
+      assert summary_count == 2
+      # Only the active plan body is rendered by default; rejected plans are
+      # collapsed and contribute zero `plan-body` rows.
+      assert body_count == 1
+      # And the visible body is the v3 active plan, not v1/v2.
+      assert html =~ "Build it"
+      assert html =~ "Approve Plan"
+    end
+
+    test "clicking a folded summary expands that plan's body; clicking again collapses it",
+         %{conn: conn} do
+      project = create_project()
+      task = create_task(project, %{title: "Folding task B", status: "planning"})
+
+      r1 = insert_rejected_plan(task, 1)
+
+      {:ok, _stage} =
+        Tasks.create_stage(%{
+          plan_id: r1.id,
+          position: 1,
+          name: "Old stage from v1",
+          status: "pending"
+        })
+
+      {:ok, active} = Tasks.create_plan(%{task_id: task.id, version: 2, status: "approved"})
+
+      {:ok, _stage} =
+        Tasks.create_stage(%{
+          plan_id: active.id,
+          position: 1,
+          name: "Current stage",
+          status: "pending"
+        })
+
+      conn = authenticated_conn(conn)
+      {:ok, view, html} = live(conn, ~p"/tasks/#{task.id}")
+
+      # Sanity check: the rejected plan's stage is hidden by default.
+      refute html =~ "Old stage from v1"
+
+      # Expand the rejected plan.
+      html =
+        view
+        |> element(~s([data-role="plan-summary"][data-plan-id="#{r1.id}"]))
+        |> render_click()
+
+      assert html =~ "Old stage from v1"
+      assert html =~ ~s(data-role="plan-body" data-plan-id="#{r1.id}")
+
+      # Collapse it again — body for r1 disappears.
+      html =
+        view
+        |> element(~s([data-role="plan-summary"][data-plan-id="#{r1.id}"]))
+        |> render_click()
+
+      refute html =~ "Old stage from v1"
+      refute html =~ ~s(data-role="plan-body" data-plan-id="#{r1.id}")
+    end
+
+    test "task with zero rejected plans renders no plan-summary rows", %{conn: conn} do
+      project = create_project()
+      task = create_task(project, %{title: "Folding task C", status: "planning"})
+
+      {:ok, active} = Tasks.create_plan(%{task_id: task.id, version: 1, status: "approved"})
+
+      {:ok, _stage} =
+        Tasks.create_stage(%{
+          plan_id: active.id,
+          position: 1,
+          name: "Only stage",
+          status: "pending"
+        })
+
+      conn = authenticated_conn(conn)
+      {:ok, _view, html} = live(conn, ~p"/tasks/#{task.id}")
+
+      refute html =~ ~s(data-role="plan-summary")
+      assert html =~ "Only stage"
+    end
+
+    test "active plan still renders stages, validations, and Approve/Reject buttons unchanged",
+         %{conn: conn} do
+      project = create_project()
+      task = create_task(project, %{title: "Folding task D", status: "planning"})
+
+      _r1 = insert_rejected_plan(task, 1)
+
+      {:ok, active} = Tasks.create_plan(%{task_id: task.id, version: 2, status: "draft"})
+
+      {:ok, stage} =
+        Tasks.create_stage(%{
+          plan_id: active.id,
+          position: 1,
+          name: "Live stage",
+          status: "pending"
+        })
+
+      {:ok, _v} =
+        Tasks.create_validation(%{stage_id: stage.id, kind: "test_pass", status: "pending"})
+
+      {:ok, _active} = Tasks.submit_plan_for_review(active)
+
+      conn = authenticated_conn(conn)
+      {:ok, _view, html} = live(conn, ~p"/tasks/#{task.id}")
+
+      assert html =~ "Live stage"
+      assert html =~ "test_pass"
+      assert html =~ "Approve Plan"
+      assert html =~ "phx-click=\"approve_plan\""
+      assert html =~ "phx-click=\"reject_plan\""
+      # The single rejected revision still folds — one summary, one body
+      # (the active plan).
+      summary_count =
+        html |> String.split(~s(data-role="plan-summary")) |> length() |> Kernel.-(1)
+
+      assert summary_count == 1
+    end
+
+    test "plan_summary_label/1 with updated_at returns 'Plan vN — rejected on YYYY-MM-DD'" do
+      ts = ~U[2026-05-04 12:34:56.000000Z]
+      plan = %Plan{version: 1, status: "rejected", updated_at: ts}
+
+      assert PlatformWeb.TasksLive.plan_summary_label(plan) ==
+               "Plan v1 — rejected on 2026-05-04"
+    end
+
+    test "plan_summary_label/1 falls back when updated_at is nil" do
+      plan = %Plan{version: 7, status: "rejected", updated_at: nil}
+      assert PlatformWeb.TasksLive.plan_summary_label(plan) == "Plan v7 — rejected"
+    end
+  end
+
   test "in_review task detail does not show direct approve/return status buttons", %{conn: conn} do
     project = create_project()
     task = create_task(project, %{title: "Review Flow Task", status: "in_review"})

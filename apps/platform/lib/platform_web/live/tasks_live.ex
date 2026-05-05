@@ -64,6 +64,10 @@ defmodule PlatformWeb.TasksLive do
      |> assign(:review_counts, pending_review_counts(all_tasks))
      |> assign(:selected_task, nil)
      |> assign(:show_detail, false)
+     # Plan revision folding state — IDs of plans the user has explicitly
+     # toggled open. Active (non-rejected) plans are expanded by default
+     # via `default_expanded_plan_ids/1` whenever `:selected_task` changes.
+     |> assign(:expanded_plans, MapSet.new())
      # Execution log state
      |> assign(:execution_space_id, nil)
      |> assign(:execution_log, [])
@@ -159,7 +163,7 @@ defmodule PlatformWeb.TasksLive do
 
           {:noreply,
            socket
-           |> assign(:selected_task, task)
+           |> assign_selected_task(task)
            |> assign(:show_detail, true)
            |> assign(:execution_space_id, space_id)
            |> assign(:execution_log, log)
@@ -368,7 +372,7 @@ defmodule PlatformWeb.TasksLive do
             socket
             |> put_flash(:info, "Task moved to #{new_status}.")
             |> refresh_board()
-            |> assign(:selected_task, Tasks.get_task_detail(updated.id))
+            |> assign_selected_task(Tasks.get_task_detail(updated.id))
 
           {:error, :invalid_transition} ->
             put_flash(socket, :error, "Cannot transition to #{new_status} from #{task.status}.")
@@ -451,7 +455,7 @@ defmodule PlatformWeb.TasksLive do
            socket
            |> assign(:show_assignee_modal, false)
            |> refresh_board()
-           |> assign(:selected_task, Tasks.get_task_detail(task.id))
+           |> assign_selected_task(Tasks.get_task_detail(task.id))
            |> put_flash(:info, "Assignees saved.")}
 
         {:error, _} ->
@@ -494,7 +498,7 @@ defmodule PlatformWeb.TasksLive do
           {:noreply,
            socket
            |> refresh_board()
-           |> assign(:selected_task, Tasks.get_task_detail(task.id))}
+           |> assign_selected_task(Tasks.get_task_detail(task.id))}
 
         {:error, _} ->
           {:noreply, put_flash(socket, :error, "Failed to assign agent.")}
@@ -587,6 +591,30 @@ defmodule PlatformWeb.TasksLive do
       end
     else
       {:noreply, put_flash(socket, :error, "Plan not found or not pending review.")}
+    end
+  end
+
+  # ── Plan revision folding events ───────────────────────────────────────
+
+  def handle_event("expand_plan", %{"plan-id" => plan_id}, socket) do
+    case Ecto.UUID.cast(plan_id) do
+      {:ok, uuid} ->
+        {:noreply,
+         assign(socket, :expanded_plans, MapSet.put(socket.assigns.expanded_plans, uuid))}
+
+      :error ->
+        {:noreply, socket}
+    end
+  end
+
+  def handle_event("collapse_plan", %{"plan-id" => plan_id}, socket) do
+    case Ecto.UUID.cast(plan_id) do
+      {:ok, uuid} ->
+        {:noreply,
+         assign(socket, :expanded_plans, MapSet.delete(socket.assigns.expanded_plans, uuid))}
+
+      :error ->
+        {:noreply, socket}
     end
   end
 
@@ -1315,7 +1343,7 @@ defmodule PlatformWeb.TasksLive do
         end
 
       socket
-      |> assign(:selected_task, updated)
+      |> assign_selected_task(updated)
       |> assign(:pending_reviews, pending_reviews)
       |> assign(:review_canvases, review_canvases)
       |> assign(:review_output_ids, review_output_ids)
@@ -1762,4 +1790,110 @@ defmodule PlatformWeb.TasksLive do
   defp upload_error_to_string(:too_many_files), do: "Too many files selected"
   defp upload_error_to_string(:not_accepted), do: "File type is not accepted"
   defp upload_error_to_string(error), do: inspect(error)
+
+  # ── Plan revision folding helpers ───────────────────────────────────────
+
+  # Centralised assign for `:selected_task` that also resets the per-task
+  # `:expanded_plans` MapSet so the active plan(s) start expanded and any
+  # rejected plans the user previously toggled open in another task don't
+  # leak across selections.
+  defp assign_selected_task(socket, nil) do
+    socket
+    |> assign(:selected_task, nil)
+    |> assign(:expanded_plans, MapSet.new())
+  end
+
+  defp assign_selected_task(socket, %Task{} = task) do
+    socket
+    |> assign(:selected_task, task)
+    |> assign(:expanded_plans, MapSet.new(default_expanded_plan_ids(task)))
+  end
+
+  # Returns `{rejected_plans, active_plans}` where `rejected_plans` are the
+  # plans with `status == "rejected"` sorted oldest-first by `version`, and
+  # `active_plans` is everything else in the order it was preloaded (the
+  # heex render path historically just iterated `task.plans` directly).
+  def partition_plans(%Task{plans: plans}), do: partition_plans(plans)
+
+  def partition_plans(plans) when is_list(plans) do
+    {rejected, active} = Enum.split_with(plans, &(&1.status == "rejected"))
+    {Enum.sort_by(rejected, & &1.version), active}
+  end
+
+  def partition_plans(_), do: {[], []}
+
+  # IDs of plans that should be expanded by default — every non-rejected
+  # plan, so existing behavior (active plan shown in full) is preserved.
+  defp default_expanded_plan_ids(%Task{plans: plans}), do: default_expanded_plan_ids(plans)
+
+  defp default_expanded_plan_ids(plans) when is_list(plans) do
+    plans
+    |> Enum.reject(&(&1.status == "rejected"))
+    |> Enum.map(& &1.id)
+  end
+
+  defp default_expanded_plan_ids(_), do: []
+
+  defp plan_expanded?(%MapSet{} = expanded_plans, %Plan{id: id}),
+    do: MapSet.member?(expanded_plans, id)
+
+  defp plan_expanded?(_expanded_plans, _plan), do: false
+
+  # Human-readable summary string used in the folded row for a rejected
+  # plan revision. Falls back gracefully when `updated_at` is missing.
+  #
+  # TODO: once the Plan schema gains a real `rejection_reason` field, surface
+  # it here (see ADR backlog: per-plan revision reasons).
+  def plan_summary_label(%Plan{version: version, updated_at: %DateTime{} = updated_at}) do
+    "Plan v#{version} — rejected on #{Calendar.strftime(updated_at, "%Y-%m-%d")}"
+  end
+
+  def plan_summary_label(%Plan{version: version, updated_at: %NaiveDateTime{} = updated_at}) do
+    "Plan v#{version} — rejected on #{Calendar.strftime(updated_at, "%Y-%m-%d")}"
+  end
+
+  def plan_summary_label(%Plan{version: version}) do
+    "Plan v#{version} — rejected"
+  end
+
+  # Function component: renders the inner body of a plan — stages with their
+  # status icons + descriptions, then per-stage validations. Shared between
+  # the active-plan render and the expanded folded-plan body.
+  attr :plan, :any, required: true
+
+  defp plan_body(assigns) do
+    ~H"""
+    <div>
+      <div :for={stage <- @plan.stages || []}>
+        <div class="flex items-center gap-2 text-sm">
+          <span class={"size-4 #{stage_status_icon(stage.status)}"}></span>
+          <span class="flex-1">{stage.name}</span>
+          <span class="text-xs text-base-content/40">{stage.status}</span>
+        </div>
+        <div
+          :if={stage.description}
+          class="prose prose-sm max-w-none text-xs text-base-content/60 chat-markdown task-markdown mt-1 ml-6"
+        >
+          {Platform.Chat.ContentRenderer.render_message(stage.description)}
+        </div>
+      </div>
+      <%!-- Validations per stage --%>
+      <div
+        :for={stage <- @plan.stages || []}
+        :if={stage.validations != [] && is_list(stage.validations)}
+      >
+        <div class="ml-6 space-y-1">
+          <div
+            :for={v <- stage.validations}
+            class="flex items-center gap-2 text-xs text-base-content/60"
+          >
+            <span class={"size-3 #{stage_status_icon(v.status)}"}></span>
+            <span>{v.kind}</span>
+            <span class="text-base-content/30">{v.status}</span>
+          </div>
+        </div>
+      </div>
+    </div>
+    """
+  end
 end
