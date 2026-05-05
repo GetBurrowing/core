@@ -1554,6 +1554,24 @@ defmodule PlatformWeb.TasksLive do
   defp status_label("blocked"), do: "Blocked"
   defp status_label(other), do: other
 
+  # Task-aware status badge: when a task is in `planning` AND has a plan
+  # waiting on human review, surface "Plan Ready" with a warning badge to
+  # signal action-needed. All other cases fall through to `status_label/1`
+  # with the neutral outline badge. Requires `:plans` preloaded — both
+  # `Tasks.list_all_tasks/1` and `Tasks.get_task_detail/1` do this.
+  defp task_display_status(%Task{status: "planning", plans: plans} = _task)
+       when is_list(plans) do
+    if Enum.any?(plans, &(&1.status == "pending_review")) do
+      {"Plan Ready", "badge badge-warning"}
+    else
+      {status_label("planning"), "badge badge-outline"}
+    end
+  end
+
+  defp task_display_status(%Task{status: status} = _task) do
+    {status_label(status), "badge badge-outline"}
+  end
+
   defp column_header_class("backlog"), do: "text-base-content/60"
   defp column_header_class("in_progress"), do: "text-info"
   defp column_header_class("in_review"), do: "text-warning"

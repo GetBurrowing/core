@@ -1590,4 +1590,94 @@ defmodule PlatformWeb.TasksLiveTest do
     assert html =~
              "The attachment upload could not be stored in the execution log. Please try again."
   end
+
+  # ── task_display_status / Plan Ready label ────────────────────────────
+
+  describe "task_display_status / Plan Ready label" do
+    defp insert_plan!(task, status, version \\ 1) do
+      Repo.insert!(%Plan{
+        task_id: task.id,
+        version: version,
+        status: status
+      })
+    end
+
+    test "planning task with no plans renders Planning + outline badge", %{conn: conn} do
+      project = create_project()
+      task = create_task(project, %{title: "Planning No Plans", status: "planning"})
+
+      conn = authenticated_conn(conn)
+      {:ok, _view, html} = live(conn, ~p"/tasks/#{task.id}")
+
+      assert html =~ "Planning"
+      refute html =~ "Plan Ready"
+      # The detail-panel status badge uses the outline class.
+      assert html =~ "badge badge-outline"
+    end
+
+    test "planning task with draft plan still renders Planning", %{conn: conn} do
+      project = create_project()
+      task = create_task(project, %{title: "Planning Draft", status: "planning"})
+      insert_plan!(task, "draft")
+
+      conn = authenticated_conn(conn)
+      {:ok, _view, html} = live(conn, ~p"/tasks/#{task.id}")
+
+      assert html =~ "Planning"
+      refute html =~ "Plan Ready"
+    end
+
+    test "planning task with pending_review plan renders Plan Ready + warning badge",
+         %{conn: conn} do
+      project = create_project()
+      task = create_task(project, %{title: "Plan Ready Task", status: "planning"})
+      insert_plan!(task, "pending_review")
+
+      conn = authenticated_conn(conn)
+      {:ok, _view, html} = live(conn, ~p"/tasks/#{task.id}")
+
+      assert html =~ "Plan Ready"
+      assert html =~ "badge badge-warning"
+    end
+
+    test "planning task with approved plan still renders Planning (transitional)",
+         %{conn: conn} do
+      project = create_project()
+      task = create_task(project, %{title: "Planning Approved", status: "planning"})
+      insert_plan!(task, "approved")
+
+      conn = authenticated_conn(conn)
+      {:ok, _view, html} = live(conn, ~p"/tasks/#{task.id}")
+
+      assert html =~ "Planning"
+      refute html =~ "Plan Ready"
+    end
+
+    test "planning task with rejected plan renders Planning", %{conn: conn} do
+      project = create_project()
+      task = create_task(project, %{title: "Planning Rejected", status: "planning"})
+      insert_plan!(task, "rejected")
+
+      conn = authenticated_conn(conn)
+      {:ok, _view, html} = live(conn, ~p"/tasks/#{task.id}")
+
+      assert html =~ "Planning"
+      refute html =~ "Plan Ready"
+    end
+
+    test "non-planning task (in_progress) renders status_label unchanged with outline badge",
+         %{conn: conn} do
+      project = create_project()
+      task = create_task(project, %{title: "In Progress Control", status: "in_progress"})
+      # Even with a pending_review plan, a non-planning task is not "Plan Ready".
+      insert_plan!(task, "pending_review")
+
+      conn = authenticated_conn(conn)
+      {:ok, _view, html} = live(conn, ~p"/tasks/#{task.id}")
+
+      assert html =~ "In Progress"
+      refute html =~ "Plan Ready"
+      assert html =~ "badge badge-outline"
+    end
+  end
 end

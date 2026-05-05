@@ -258,11 +258,12 @@
                 <span :if={task.priority} class={priority_badge_class(task.priority)}>
                   {task.priority}
                 </span>
+                <% {status_badge_label, status_badge_class} = task_display_status(task) %>
                 <span
-                  :if={task.status in ~w(blocked planning)}
-                  class="badge badge-outline badge-xs"
+                  :if={task.status in ~w(blocked planning in_review deploying)}
+                  class={"#{status_badge_class} badge-xs"}
                 >
-                  {status_label(task.status)}
+                  {status_badge_label}
                 </span>
 
                 <%!-- Blocked-by-deps badge: only when status="blocked" AND
@@ -360,7 +361,8 @@
 
       <%!-- Status + Priority --%>
       <div class="flex flex-wrap items-center gap-2">
-        <span class="badge badge-outline">{status_label(@selected_task.status)}</span>
+        <% {detail_status_label, detail_status_class} = task_display_status(@selected_task) %>
+        <span class={detail_status_class}>{detail_status_label}</span>
         <span :if={@selected_task.priority} class={priority_badge_class(@selected_task.priority)}>
           {String.capitalize(@selected_task.priority)}
         </span>
