@@ -736,6 +736,218 @@ defmodule Platform.Orchestration.TaskRouterTest do
     end
   end
 
+  describe "manual_approval review-request suppression" do
+    test "creating a pending review_request mid-task suppresses the next :dispatch", %{
+      task: task,
+      assignee: assignee,
+      stage: stage
+    } do
+      Phoenix.PubSub.subscribe(Platform.PubSub, "runtime:#{assignee.id}")
+
+      {:ok, task} = Tasks.transition_task(task, "planning")
+      {:ok, _task} = Tasks.transition_task(task, "in_progress")
+
+      {:ok, pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
+
+      # Consume the initial dispatch attention
+      assert_receive %Phoenix.Socket.Broadcast{
+                       event: "attention",
+                       payload: %{signal: %{reason: "task_assigned"}}
+                     },
+                     1_000
+
+      # Capture initial execution-space message count
+      space = ExecutionSpace.find_by_task_id(task.id)
+      initial_count = length(ExecutionSpace.list_messages_with_participants(space.id))
+
+      # Open a manual_approval validation on the existing running stage and
+      # create a pending review request against it
+      {:ok, manual_validation} =
+        Tasks.create_validation(%{stage_id: stage.id, kind: "manual_approval"})
+
+      {:ok, _request} =
+        Platform.Tasks.ReviewRequests.create_review_request(%{
+          validation_id: manual_validation.id,
+          task_id: task.id,
+          execution_space_id: space.id,
+          items: [%{label: "Solo check"}]
+        })
+
+      # Wait for the :review_request_pending broadcast to be processed
+      Process.sleep(100)
+
+      # Status should have flipped to :waiting_human via the new handler
+      status_before_dispatch = TaskRouter.current_status(task.id)
+      assert status_before_dispatch.status == :waiting_human
+
+      # Now trigger an explicit :dispatch — it must be suppressed
+      send(pid, :dispatch)
+
+      refute_receive %Phoenix.Socket.Broadcast{
+                       event: "attention",
+                       payload: %{signal: %{reason: "task_assigned"}}
+                     },
+                     400
+
+      Process.sleep(50)
+
+      status = TaskRouter.current_status(task.id)
+      assert status.status == :waiting_human
+
+      messages = ExecutionSpace.list_messages_with_participants(space.id)
+      new_messages = Enum.drop(messages, initial_count) |> Enum.map(& &1.content)
+
+      awaiting_logs =
+        Enum.filter(new_messages, &String.contains?(&1, "awaiting human review"))
+
+      assert length(awaiting_logs) >= 1
+    end
+
+    test "approving all items wakes the router and schedules a heartbeat", %{
+      task: task,
+      assignee: assignee,
+      stage: stage
+    } do
+      Phoenix.PubSub.subscribe(Platform.PubSub, "runtime:#{assignee.id}")
+
+      {:ok, task} = Tasks.transition_task(task, "planning")
+      {:ok, _task} = Tasks.transition_task(task, "in_progress")
+
+      {:ok, pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
+
+      assert_receive %Phoenix.Socket.Broadcast{event: "attention"}, 1_000
+
+      space = ExecutionSpace.find_by_task_id(task.id)
+
+      {:ok, manual_validation} =
+        Tasks.create_validation(%{stage_id: stage.id, kind: "manual_approval"})
+
+      {:ok, request} =
+        Platform.Tasks.ReviewRequests.create_review_request(%{
+          validation_id: manual_validation.id,
+          task_id: task.id,
+          execution_space_id: space.id,
+          items: [%{label: "UI"}]
+        })
+
+      Process.sleep(100)
+      assert TaskRouter.current_status(task.id).status == :waiting_human
+
+      {:ok, _} = Platform.Tasks.ReviewRequests.approve_item(hd(request.items).id, "rowan")
+      Process.sleep(150)
+
+      status = TaskRouter.current_status(task.id)
+      assert status.status == :running
+
+      # Heartbeat must have been (re-)scheduled
+      internal_state = :sys.get_state(pid)
+      assert internal_state.heartbeat_ref != nil
+    end
+
+    test "rejecting an item wakes the router AND re-dispatches with the in_progress prompt",
+         %{
+           task: task,
+           assignee: assignee,
+           stage: stage
+         } do
+      Phoenix.PubSub.subscribe(Platform.PubSub, "runtime:#{assignee.id}")
+
+      {:ok, task} = Tasks.transition_task(task, "planning")
+      {:ok, _task} = Tasks.transition_task(task, "in_progress")
+
+      {:ok, _pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
+      assert_receive %Phoenix.Socket.Broadcast{event: "attention"}, 1_000
+
+      space = ExecutionSpace.find_by_task_id(task.id)
+
+      {:ok, manual_validation} =
+        Tasks.create_validation(%{stage_id: stage.id, kind: "manual_approval"})
+
+      {:ok, request} =
+        Platform.Tasks.ReviewRequests.create_review_request(%{
+          validation_id: manual_validation.id,
+          task_id: task.id,
+          execution_space_id: space.id,
+          items: [%{label: "UI"}]
+        })
+
+      Process.sleep(100)
+      assert TaskRouter.current_status(task.id).status == :waiting_human
+
+      {:ok, _} =
+        Platform.Tasks.ReviewRequests.reject_item(hd(request.items).id, "rowan", "Needs work")
+
+      # Expect a fresh dispatch (task_assigned) after rejection
+      assert_receive %Phoenix.Socket.Broadcast{
+                       event: "attention",
+                       payload: %{signal: %{reason: "task_assigned"}}
+                     },
+                     1_500
+
+      Process.sleep(50)
+      status = TaskRouter.current_status(task.id)
+      assert status.status == :running
+    end
+
+    test "handle_possible_stall is a no-op while suppressed", %{
+      task: task,
+      assignee: assignee,
+      stage: stage
+    } do
+      Phoenix.PubSub.subscribe(Platform.PubSub, "runtime:#{assignee.id}")
+
+      {:ok, task} = Tasks.transition_task(task, "planning")
+      {:ok, _task} = Tasks.transition_task(task, "in_progress")
+
+      {:ok, pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
+      assert_receive %Phoenix.Socket.Broadcast{event: "attention"}, 1_000
+
+      space = ExecutionSpace.find_by_task_id(task.id)
+
+      {:ok, manual_validation} =
+        Tasks.create_validation(%{stage_id: stage.id, kind: "manual_approval"})
+
+      {:ok, _request} =
+        Platform.Tasks.ReviewRequests.create_review_request(%{
+          validation_id: manual_validation.id,
+          task_id: task.id,
+          execution_space_id: space.id,
+          items: [%{label: "UI"}]
+        })
+
+      Process.sleep(100)
+      assert TaskRouter.current_status(task.id).status == :waiting_human
+
+      # Force a stall scenario and tick a heartbeat — :waiting_human guard
+      # at the top of handle_info(:heartbeat, ...) must short-circuit.
+      stale_at = DateTime.add(DateTime.utc_now(), -60 * 60, :second)
+
+      :sys.replace_state(pid, fn s ->
+        %{
+          s
+          | last_dispatch_at: stale_at,
+            last_runtime_event_at: stale_at,
+            stage_started_at: stale_at,
+            escalation_count: 5
+        }
+      end)
+
+      send(pid, :heartbeat)
+
+      refute_receive %Phoenix.Socket.Broadcast{
+                       event: "attention",
+                       payload: %{signal: %{reason: "task_heartbeat"}}
+                     },
+                     400
+
+      Process.sleep(50)
+      status = TaskRouter.current_status(task.id)
+      assert status.status == :waiting_human
+      # Escalation count should NOT have advanced (no stall path)
+      assert status.escalation_count == 5
+    end
+  end
+
   describe "deploy stage failure recovery" do
     test "handle_deploy_stage_failure returns state and router stays alive", %{
       task: task,

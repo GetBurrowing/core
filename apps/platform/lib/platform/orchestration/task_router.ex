@@ -103,6 +103,7 @@ defmodule Platform.Orchestration.TaskRouter do
   @impl true
   def init(%{task_id: task_id, assignee: assignee}) do
     Tasks.subscribe_board()
+    ReviewRequests.subscribe_for_task(task_id)
 
     execution_space_id =
       case ExecutionSpace.find_or_create(task_id) do
@@ -205,83 +206,32 @@ defmodule Platform.Orchestration.TaskRouter do
   def handle_info(:dispatch, state) do
     task = Tasks.get_task_detail(state.task_id)
 
-    if task do
-      plan = Tasks.current_plan(state.task_id)
-      stage = current_running_stage(plan)
+    cond do
+      task == nil ->
+        Logger.warning("[TaskRouter] task #{state.task_id} not found, stopping")
+        {:stop, :normal, state}
 
-      # Lease deploy credentials if this is a deploy stage
-      state = maybe_lease_deploy_credentials(state, task, stage)
+      pending_review_request?(state.task_id) ->
+        # Pre-dispatch guard: a manual_approval review is open against this
+        # task; suppress the dispatch entirely until a human dispositions it.
+        plan = Tasks.current_plan(state.task_id)
 
-      context = ContextAssembler.build(state.task_id, state.deploy_lease)
-      {agent, runtime} = Federation.lookup_assignment(state.assignee.id)
+        maybe_log_heartbeat_suppressed(
+          state,
+          find_stage(plan, state.current_stage_id),
+          reason: "awaiting_human_review"
+        )
 
-      prompt =
-        HeartbeatScheduler.dispatch_prompt(task, plan, stage, agent: agent, runtime: runtime)
+        state =
+          state
+          |> Map.put(:task_status, task.status)
+          |> cancel_heartbeat()
+          |> Map.put(:status, :waiting_human)
 
-      case dispatch_attention(state.assignee, state.task_id, "task_assigned", context, prompt) do
-        :ok ->
-          # Post log message to execution space after successful runtime dispatch so
-          # boot retries do not duplicate task-assigned chatter.
-          if state.execution_space_id do
-            stage_count = if plan, do: length(plan.stages || []), else: 0
-            stage_pos = if stage, do: stage.position, else: 1
+        {:noreply, state}
 
-            log_content =
-              "Task assigned: #{task.title} | Stage: #{stage_pos}/#{stage_count} | Assignee: #{state.assignee.id} | Heartbeat: #{heartbeat_interval_min(stage)}min"
-
-            ExecutionSpace.post_log(state.execution_space_id, log_content)
-
-            ExecutionSpace.post_engagement(state.execution_space_id, prompt,
-              metadata: %{"reason" => "task_assigned"}
-            )
-          end
-
-          state =
-            state
-            |> Map.put(:status, :running)
-            |> Map.put(:last_dispatch_at, DateTime.utc_now())
-            |> Map.put(:task_status, task.status)
-            |> maybe_set_stage(stage)
-            |> maybe_mark_review_task_in_review()
-
-          state =
-            if waiting_for_human_review?(state) do
-              state |> cancel_heartbeat() |> Map.put(:status, :waiting_human)
-            else
-              schedule_heartbeat(state)
-            end
-
-          {:noreply, state}
-
-        {:error, :endpoint_not_ready} ->
-          Logger.warning(
-            "[TaskRouter] endpoint not ready for task #{state.task_id}; retrying dispatch"
-          )
-
-          Process.send_after(self(), :dispatch, 1_000)
-          {:noreply, state}
-
-        {:error, _reason} ->
-          state =
-            state
-            |> Map.put(:status, :running)
-            |> Map.put(:last_dispatch_at, DateTime.utc_now())
-            |> Map.put(:task_status, task.status)
-            |> maybe_set_stage(stage)
-            |> maybe_mark_review_task_in_review()
-
-          state =
-            if waiting_for_human_review?(state) do
-              state |> cancel_heartbeat() |> Map.put(:status, :waiting_human)
-            else
-              schedule_heartbeat(state)
-            end
-
-          {:noreply, state}
-      end
-    else
-      Logger.warning("[TaskRouter] task #{state.task_id} not found, stopping")
-      {:stop, :normal, state}
+      true ->
+        do_dispatch(state, task)
     end
   end
 
@@ -517,6 +467,48 @@ defmodule Platform.Orchestration.TaskRouter do
     {:noreply, state}
   end
 
+  # Review-request PubSub: a manual_approval review is open against this task
+  def handle_info(
+        {:review_request_pending, %{task_id: tid}},
+        %State{task_id: tid} = state
+      ) do
+    plan = Tasks.current_plan(state.task_id)
+    stage = find_stage(plan, state.current_stage_id) || current_running_stage(plan)
+
+    maybe_log_heartbeat_suppressed(state, stage, reason: "awaiting_human_review")
+
+    state =
+      state
+      |> cancel_heartbeat()
+      |> Map.put(:status, :waiting_human)
+
+    {:noreply, state}
+  end
+
+  def handle_info({:review_request_pending, _}, state), do: {:noreply, state}
+
+  # Review-request PubSub: a human dispositioned the gate; resume the agent
+  def handle_info(
+        {:review_request_resolved, %{task_id: tid, outcome: outcome}},
+        %State{task_id: tid} = state
+      ) do
+    state =
+      state
+      |> Map.put(:status, :running)
+      |> schedule_heartbeat()
+
+    if outcome == :failed do
+      # ReviewRequests already posted the consolidated feedback to the
+      # execution space; redispatch so the agent picks up the in_progress
+      # prompt that includes that feedback.
+      send(self(), :dispatch)
+    end
+
+    {:noreply, state}
+  end
+
+  def handle_info({:review_request_resolved, _}, state), do: {:noreply, state}
+
   # Ignore unrelated board events
   def handle_info({:plan_updated, _plan}, state), do: {:noreply, state}
   def handle_info({:task_updated, _task}, state), do: {:noreply, state}
@@ -547,6 +539,82 @@ defmodule Platform.Orchestration.TaskRouter do
   end
 
   # ── Dispatch helpers ───────────────────────────────────────────────────
+
+  defp do_dispatch(state, task) do
+    plan = Tasks.current_plan(state.task_id)
+    stage = current_running_stage(plan)
+
+    # Lease deploy credentials if this is a deploy stage
+    state = maybe_lease_deploy_credentials(state, task, stage)
+
+    context = ContextAssembler.build(state.task_id, state.deploy_lease)
+    {agent, runtime} = Federation.lookup_assignment(state.assignee.id)
+
+    prompt =
+      HeartbeatScheduler.dispatch_prompt(task, plan, stage, agent: agent, runtime: runtime)
+
+    case dispatch_attention(state.assignee, state.task_id, "task_assigned", context, prompt) do
+      :ok ->
+        # Post log message to execution space after successful runtime dispatch so
+        # boot retries do not duplicate task-assigned chatter.
+        if state.execution_space_id do
+          stage_count = if plan, do: length(plan.stages || []), else: 0
+          stage_pos = if stage, do: stage.position, else: 1
+
+          log_content =
+            "Task assigned: #{task.title} | Stage: #{stage_pos}/#{stage_count} | Assignee: #{state.assignee.id} | Heartbeat: #{heartbeat_interval_min(stage)}min"
+
+          ExecutionSpace.post_log(state.execution_space_id, log_content)
+
+          ExecutionSpace.post_engagement(state.execution_space_id, prompt,
+            metadata: %{"reason" => "task_assigned"}
+          )
+        end
+
+        state =
+          state
+          |> Map.put(:status, :running)
+          |> Map.put(:last_dispatch_at, DateTime.utc_now())
+          |> Map.put(:task_status, task.status)
+          |> maybe_set_stage(stage)
+          |> maybe_mark_review_task_in_review()
+
+        state =
+          if waiting_for_human_review?(state) do
+            state |> cancel_heartbeat() |> Map.put(:status, :waiting_human)
+          else
+            schedule_heartbeat(state)
+          end
+
+        {:noreply, state}
+
+      {:error, :endpoint_not_ready} ->
+        Logger.warning(
+          "[TaskRouter] endpoint not ready for task #{state.task_id}; retrying dispatch"
+        )
+
+        Process.send_after(self(), :dispatch, 1_000)
+        {:noreply, state}
+
+      {:error, _reason} ->
+        state =
+          state
+          |> Map.put(:status, :running)
+          |> Map.put(:last_dispatch_at, DateTime.utc_now())
+          |> Map.put(:task_status, task.status)
+          |> maybe_set_stage(stage)
+          |> maybe_mark_review_task_in_review()
+
+        state =
+          if waiting_for_human_review?(state) do
+            state |> cancel_heartbeat() |> Map.put(:status, :waiting_human)
+          else
+            schedule_heartbeat(state)
+          end
+
+        {:noreply, state}
+    end
+  end
 
   defp dispatch_attention(%{type: :federated, id: runtime_id}, task_id, reason, context, prompt) do
     task_status = context[:task][:status] || context[:task]["status"]
@@ -857,9 +925,17 @@ defmodule Platform.Orchestration.TaskRouter do
              "execution.progress",
              "execution.unblocked"
            ] ->
-        base_state
-        |> Map.put(:status, :running)
-        |> schedule_heartbeat()
+        if still_awaiting_human?(base_state) do
+          # A manual-review gate is still pending; runtime activity must not
+          # re-arm the heartbeat or flip us out of the suppressed state.
+          base_state
+          |> cancel_heartbeat()
+          |> Map.put(:status, :waiting_human)
+        else
+          base_state
+          |> Map.put(:status, :running)
+          |> schedule_heartbeat()
+        end
 
       "execution.blocked" ->
         task = Tasks.get_task_detail(state.task_id)
@@ -877,9 +953,15 @@ defmodule Platform.Orchestration.TaskRouter do
         |> Map.put(:status, :waiting_human)
 
       "execution.finished" ->
-        base_state
-        |> cancel_heartbeat()
-        |> Map.put(:status, :running)
+        if still_awaiting_human?(base_state) do
+          base_state
+          |> cancel_heartbeat()
+          |> Map.put(:status, :waiting_human)
+        else
+          base_state
+          |> cancel_heartbeat()
+          |> Map.put(:status, :running)
+        end
 
       type when type in ["execution.failed", "execution.abandoned", "assignment.rejected"] ->
         task = Tasks.get_task_detail(state.task_id)
@@ -931,16 +1013,28 @@ defmodule Platform.Orchestration.TaskRouter do
     |> max(0)
   end
 
-  defp maybe_log_heartbeat_suppressed(%State{execution_space_id: nil}, _stage), do: :ok
+  defp maybe_log_heartbeat_suppressed(state, stage, opts \\ [])
 
-  defp maybe_log_heartbeat_suppressed(%State{} = state, stage) do
+  defp maybe_log_heartbeat_suppressed(%State{execution_space_id: nil}, _stage, _opts), do: :ok
+
+  defp maybe_log_heartbeat_suppressed(%State{} = state, stage, opts) do
     task = Tasks.get_task_detail(state.task_id)
 
     if task do
+      reason = Keyword.get(opts, :reason, "manual_approval")
+
+      message =
+        case reason do
+          "awaiting_human_review" ->
+            "Dispatch suppressed: awaiting human review on a manual_approval validation"
+
+          _ ->
+            "Heartbeat suppressed: waiting for manual approval before more agent work"
+        end
+
       ExecutionSpace.post_log(
         state.execution_space_id,
-        "Heartbeat suppressed: waiting for manual approval before more agent work | " <>
-          diagnostic_snapshot(state, task, stage_override: stage)
+        message <> " | " <> diagnostic_snapshot(state, task, stage_override: stage)
       )
     end
   end
@@ -1083,6 +1177,9 @@ defmodule Platform.Orchestration.TaskRouter do
       manual_approval_stage?(stage) and pending_review_request?(state.task_id) ->
         "heartbeat=suppressed_waiting_human"
 
+      pending_review_request?(state.task_id) ->
+        "heartbeat=awaiting_human_review"
+
       state.status == :waiting_human ->
         "heartbeat=waiting_human"
 
@@ -1190,7 +1287,44 @@ defmodule Platform.Orchestration.TaskRouter do
   end
 
   defp waiting_for_human_review?(%State{task_id: task_id} = state) do
-    current_stage_type(state) == "manual_approval" and pending_review_request?(task_id)
+    (current_stage_type(state) == "manual_approval" and pending_review_request?(task_id)) or
+      manual_approval_gate_pending?(task_id)
+  end
+
+  # True when the task has a pending review_request whose validation belongs to
+  # the currently-running stage — even if that stage's *type* (per
+  # `current_stage_type/1`) is "coding"/"review"/etc. This covers the case
+  # where a code stage carries a manual_approval validation alongside
+  # automated checks: as soon as a review request is open, the agent must be
+  # paused regardless of whether the dominant stage type is "manual_approval".
+  defp manual_approval_gate_pending?(task_id) do
+    pending = ReviewRequests.list_pending_for_task(task_id)
+
+    case pending do
+      [] ->
+        false
+
+      requests ->
+        plan = Tasks.current_plan(task_id)
+        stage = current_running_stage(plan)
+
+        cond do
+          # Anything pending against this task is a gate.
+          stage == nil -> true
+          true -> Enum.any?(requests, &review_request_attached_to_stage?(&1, stage))
+        end
+    end
+  end
+
+  defp review_request_attached_to_stage?(request, stage) do
+    validation_id = Map.get(request, :validation_id)
+    stage_validations = stage_validations(stage)
+
+    Enum.any?(stage_validations, &(&1.id == validation_id))
+  end
+
+  defp still_awaiting_human?(%State{task_id: task_id}) do
+    pending_review_request?(task_id)
   end
 
   # Plan-level "human is sitting with the latest plan" check. Distinct from

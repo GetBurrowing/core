@@ -298,6 +298,51 @@ defmodule Platform.Tasks.ReviewRequestsTest do
     end
   end
 
+  # ── PubSub broadcasts ───────────────────────────────────────────────────
+
+  describe "PubSub broadcasts" do
+    test "subscribe_for_task/1 receives :review_request_pending on create", ctx do
+      :ok = ReviewRequests.subscribe_for_task(ctx.task.id)
+
+      assert {:ok, request} = create_request(ctx, ["Desktop"])
+
+      assert_receive {:review_request_pending,
+                      %{
+                        task_id: task_id,
+                        validation_id: validation_id,
+                        request_id: request_id
+                      }},
+                     500
+
+      assert task_id == ctx.task.id
+      assert validation_id == ctx.validation.id
+      assert request_id == request.id
+    end
+
+    test ":review_request_resolved fires with outcome :passed when all items approved", ctx do
+      {:ok, request} = create_request(ctx, ["A", "B"])
+      :ok = ReviewRequests.subscribe_for_task(ctx.task.id)
+
+      for item <- request.items do
+        {:ok, _} = ReviewRequests.approve_item(item.id, "rowan")
+      end
+
+      assert_receive {:review_request_resolved, %{outcome: :passed, request_id: rid}}, 500
+      assert rid == request.id
+    end
+
+    test ":review_request_resolved fires with outcome :failed when an item is rejected", ctx do
+      {:ok, request} = create_request(ctx, ["Desktop", "Mobile"])
+      :ok = ReviewRequests.subscribe_for_task(ctx.task.id)
+
+      [item | _] = request.items
+      {:ok, _} = ReviewRequests.reject_item(item.id, "rowan", "Needs work")
+
+      assert_receive {:review_request_resolved, %{outcome: :failed, request_id: rid}}, 500
+      assert rid == request.id
+    end
+  end
+
   # ── Helpers ─────────────────────────────────────────────────────────────
 
   defp create_request(ctx, labels) do

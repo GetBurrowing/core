@@ -25,6 +25,28 @@ defmodule Platform.Tasks.ReviewRequests do
   alias Platform.Tasks
   alias Platform.Tasks.{PlanEngine, ReviewItem, ReviewRequest, Validation}
 
+  # ── PubSub ─────────────────────────────────────────────────────────────
+
+  @doc """
+  Build the per-task review-request PubSub topic.
+
+  Subscribers get `{:review_request_pending, payload}` whenever a new
+  manual-approval review request is created for the task and
+  `{:review_request_resolved, payload}` whenever one is dispositioned.
+  """
+  @spec topic_for_task(String.t()) :: String.t()
+  def topic_for_task(task_id), do: "review_requests:" <> to_string(task_id)
+
+  @doc "Subscribe the calling process to the review-request topic for `task_id`."
+  @spec subscribe_for_task(String.t()) :: :ok | {:error, term()}
+  def subscribe_for_task(task_id) do
+    Phoenix.PubSub.subscribe(Platform.PubSub, topic_for_task(task_id))
+  end
+
+  defp broadcast_for_task(task_id, message) do
+    Phoenix.PubSub.broadcast(Platform.PubSub, topic_for_task(task_id), message)
+  end
+
   # ── Create ──────────────────────────────────────────────────────────────
 
   @doc """
@@ -54,28 +76,47 @@ defmodule Platform.Tasks.ReviewRequests do
 
     with :ok <- maybe_reopen_manual_approval(validation_id),
          :ok <- maybe_transition_task_to_in_review(task_id) do
-      Repo.transaction(fn ->
-        case %ReviewRequest{} |> ReviewRequest.changeset(request_attrs) |> Repo.insert() do
-          {:ok, request} ->
-            items =
-              Enum.map(items_input, fn item_attrs ->
-                item_attrs =
-                  item_attrs
-                  |> normalize_string_keys()
-                  |> Map.put(:review_request_id, request.id)
+      result =
+        Repo.transaction(fn ->
+          case %ReviewRequest{} |> ReviewRequest.changeset(request_attrs) |> Repo.insert() do
+            {:ok, request} ->
+              items =
+                Enum.map(items_input, fn item_attrs ->
+                  item_attrs =
+                    item_attrs
+                    |> normalize_string_keys()
+                    |> Map.put(:review_request_id, request.id)
 
-                case %ReviewItem{} |> ReviewItem.changeset(item_attrs) |> Repo.insert() do
-                  {:ok, item} -> item
-                  {:error, changeset} -> Repo.rollback(changeset)
-                end
-              end)
+                  case %ReviewItem{} |> ReviewItem.changeset(item_attrs) |> Repo.insert() do
+                    {:ok, item} -> item
+                    {:error, changeset} -> Repo.rollback(changeset)
+                  end
+                end)
 
-            %{request | items: items}
+              %{request | items: items}
 
-          {:error, changeset} ->
-            Repo.rollback(changeset)
-        end
-      end)
+            {:error, changeset} ->
+              Repo.rollback(changeset)
+          end
+        end)
+
+      case result do
+        {:ok, request} = ok ->
+          broadcast_for_task(request.task_id, {
+            :review_request_pending,
+            %{
+              task_id: request.task_id,
+              validation_id: request.validation_id,
+              request_id: request.id,
+              execution_space_id: request.execution_space_id
+            }
+          })
+
+          ok
+
+        other ->
+          other
+      end
     end
   end
 
@@ -259,6 +300,18 @@ defmodule Platform.Tasks.ReviewRequests do
         maybe_return_task_to_in_progress(request.task_id)
       end
     end)
+
+    outcome = if Enum.all?(request.items, &(&1.status == "approved")), do: :passed, else: :failed
+
+    broadcast_for_task(request.task_id, {
+      :review_request_resolved,
+      %{
+        task_id: request.task_id,
+        validation_id: request.validation_id,
+        request_id: request.id,
+        outcome: outcome
+      }
+    })
 
     :resolved
   end
