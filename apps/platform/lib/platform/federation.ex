@@ -72,6 +72,28 @@ defmodule Platform.Federation do
     |> Repo.update()
   end
 
+  @doc """
+  Shallow-merge new top-level keys into a runtime's `metadata` map and
+  persist the result via the regular changeset path.
+
+  Existing top-level keys not present in `new_keys` are preserved. The
+  merge is intentionally shallow at the top level: setting
+  `"client_info"` REPLACES the nested map under that key — the caller is
+  responsible for assembling the full nested structure they want stored.
+
+  Writes through `AgentRuntime.changeset/2` so validations and
+  `updated_at` stay consistent with the rest of the runtime mutations.
+  """
+  @spec update_metadata(AgentRuntime.t(), map()) ::
+          {:ok, AgentRuntime.t()} | {:error, Ecto.Changeset.t()}
+  def update_metadata(%AgentRuntime{} = runtime, new_keys) when is_map(new_keys) do
+    merged = Map.merge(runtime.metadata || %{}, new_keys)
+
+    runtime
+    |> AgentRuntime.changeset(%{metadata: merged})
+    |> Repo.update()
+  end
+
   @doc "Generate a new auth token for a runtime, replacing any existing one."
   def generate_runtime_token(%AgentRuntime{} = runtime) do
     {raw_token, hash} = generate_token_pair()

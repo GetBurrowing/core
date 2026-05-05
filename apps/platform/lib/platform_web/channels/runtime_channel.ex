@@ -14,15 +14,29 @@ defmodule PlatformWeb.RuntimeChannel do
   alias Platform.Federation.RuntimePresence
   alias Platform.Federation.ToolSurface
 
+  @valid_client_products ~w(openclaw claude_channel)
+
   @impl true
-  def join("runtime:" <> runtime_id, _params, socket) do
+  def join("runtime:" <> runtime_id, params, socket) do
     if runtime_id == socket.assigns.runtime_id do
+      {client_info, declared?} = resolve_client_info(params)
+      socket = assign(socket, :client_info, client_info)
+
       # Ensure the runtime's agent has a last_connected_at timestamp
       if runtime = Federation.get_runtime(socket.assigns.runtime_pk) do
         Platform.Agents.AgentRuntime.changeset(runtime, %{
           last_connected_at: DateTime.utc_now()
         })
         |> Platform.Repo.update()
+
+        # Persist client_info only when the joining runtime actually
+        # declared something. Legacy bridges that connect without a
+        # client_info payload stay "unknown"/absent so we can tell the
+        # difference between "they explicitly said unknown" and "we
+        # haven't heard from them yet".
+        if declared? do
+          persist_client_info(runtime, client_info)
+        end
 
         agent_name =
           case runtime.agent_id && Platform.Repo.get(Platform.Agents.Agent, runtime.agent_id) do
@@ -31,7 +45,8 @@ defmodule PlatformWeb.RuntimeChannel do
           end
 
         Logger.info(
-          "[RuntimeChannel] runtime connected: runtime_id=#{runtime_id} agent=#{inspect(agent_name)}"
+          "[RuntimeChannel] runtime connected: runtime_id=#{runtime_id} " <>
+            "agent=#{inspect(agent_name)} client_product=#{client_info.product}"
         )
       end
 
@@ -453,6 +468,54 @@ defmodule PlatformWeb.RuntimeChannel do
         %Chat.Participant{id: id} -> id
         _ -> nil
       end
+    end
+  end
+
+  # Resolve params["client_info"] into a normalized {info, declared?} pair.
+  #
+  # `declared?` is true iff the joining client supplied a `client_info`
+  # map at all. We use it to skip persistence for legacy bridges so the
+  # row's metadata stays untouched (more honest signal than persisting a
+  # bogus "unknown" they never sent).
+  defp resolve_client_info(params) do
+    case params do
+      %{"client_info" => %{} = ci} ->
+        product =
+          case Map.get(ci, "product") do
+            p when p in @valid_client_products -> p
+            _ -> "unknown"
+          end
+
+        version =
+          case Map.get(ci, "version") do
+            v when is_binary(v) -> v
+            _ -> nil
+          end
+
+        {%{product: product, version: version}, true}
+
+      _ ->
+        {%{product: "unknown", version: nil}, false}
+    end
+  end
+
+  defp persist_client_info(runtime, %{product: product, version: version}) do
+    payload = %{
+      "client_info" => %{
+        "product" => product,
+        "version" => version,
+        "last_seen_at" => DateTime.utc_now() |> DateTime.to_iso8601()
+      }
+    }
+
+    case Federation.update_metadata(runtime, payload) do
+      {:ok, _updated} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.warning("[RuntimeChannel] failed to persist client_info: #{inspect(reason)}")
+
+        :ok
     end
   end
 end

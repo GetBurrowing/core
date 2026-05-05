@@ -74,4 +74,36 @@ defmodule Platform.Agents.AgentRuntime do
   def verify_token(raw_token, stored_hash) do
     hash_token(raw_token) == stored_hash
   end
+
+  @valid_client_products ~w(openclaw claude_channel)
+
+  @doc """
+  Reads `metadata["client_info"]["product"]` from a runtime (or any map
+  with a `:metadata` key) and returns one of `"openclaw"`,
+  `"claude_channel"`, or `"unknown"`.
+
+  The `"unknown"` case covers:
+
+    * no `client_info` ever set,
+    * missing `product` key inside `client_info`,
+    * a value not in the allowlist (defensive — blocks accidental drift).
+
+  Pure function, no DB access. Works on freshly-loaded structs whose
+  `metadata` map has string keys (jsonb round-trip).
+  """
+  @spec client_product(%__MODULE__{} | %{metadata: map()}) :: String.t()
+  def client_product(%{metadata: metadata}) when is_map(metadata) do
+    metadata
+    |> Map.get("client_info", %{})
+    |> case do
+      m when is_map(m) -> Map.get(m, "product")
+      _ -> nil
+    end
+    |> classify_product()
+  end
+
+  def client_product(_), do: "unknown"
+
+  defp classify_product(product) when product in @valid_client_products, do: product
+  defp classify_product(_), do: "unknown"
 end

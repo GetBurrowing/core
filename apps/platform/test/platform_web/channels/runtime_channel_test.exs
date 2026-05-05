@@ -117,6 +117,86 @@ defmodule PlatformWeb.RuntimeChannelTest do
     end
   end
 
+  describe "client_info handshake on join" do
+    test "join with valid client_info stashes assigns and persists to metadata", ctx do
+      {:ok, socket} =
+        connect(PlatformWeb.RuntimeSocket, %{
+          "runtime_id" => ctx.runtime.runtime_id,
+          "token" => ctx.raw_token
+        })
+
+      {:ok, _reply, joined_socket} =
+        subscribe_and_join(socket, "runtime:#{ctx.runtime.runtime_id}", %{
+          "client_info" => %{"product" => "openclaw", "version" => "1.2.3"}
+        })
+
+      assert joined_socket.assigns.client_info == %{product: "openclaw", version: "1.2.3"}
+
+      reloaded = Repo.get(Platform.Agents.AgentRuntime, ctx.runtime.id)
+      assert reloaded.metadata["client_info"]["product"] == "openclaw"
+      assert reloaded.metadata["client_info"]["version"] == "1.2.3"
+      assert is_binary(reloaded.metadata["client_info"]["last_seen_at"])
+    end
+
+    test "join without client_info defaults to unknown and does not touch metadata", ctx do
+      original_metadata = ctx.runtime.metadata || %{}
+
+      {:ok, socket} =
+        connect(PlatformWeb.RuntimeSocket, %{
+          "runtime_id" => ctx.runtime.runtime_id,
+          "token" => ctx.raw_token
+        })
+
+      {:ok, _reply, joined_socket} =
+        subscribe_and_join(socket, "runtime:#{ctx.runtime.runtime_id}", %{})
+
+      assert joined_socket.assigns.client_info == %{product: "unknown", version: nil}
+
+      reloaded = Repo.get(Platform.Agents.AgentRuntime, ctx.runtime.id)
+      # Metadata should be unchanged — no client_info ever written.
+      assert reloaded.metadata == original_metadata
+      refute Map.has_key?(reloaded.metadata || %{}, "client_info")
+    end
+
+    test "join with bogus product lands as unknown but is still persisted", ctx do
+      {:ok, socket} =
+        connect(PlatformWeb.RuntimeSocket, %{
+          "runtime_id" => ctx.runtime.runtime_id,
+          "token" => ctx.raw_token
+        })
+
+      {:ok, _reply, joined_socket} =
+        subscribe_and_join(socket, "runtime:#{ctx.runtime.runtime_id}", %{
+          "client_info" => %{"product" => "definitely_not_a_real_product"}
+        })
+
+      assert joined_socket.assigns.client_info == %{product: "unknown", version: nil}
+
+      reloaded = Repo.get(Platform.Agents.AgentRuntime, ctx.runtime.id)
+      # Client DID declare something, just garbage — we persist the
+      # defensive "unknown" so we have a record of the failed declaration.
+      assert reloaded.metadata["client_info"]["product"] == "unknown"
+      assert reloaded.metadata["client_info"]["version"] == nil
+      assert is_binary(reloaded.metadata["client_info"]["last_seen_at"])
+    end
+
+    test "AgentRuntime.client_product/1 round-trips the persisted value end-to-end", ctx do
+      {:ok, socket} =
+        connect(PlatformWeb.RuntimeSocket, %{
+          "runtime_id" => ctx.runtime.runtime_id,
+          "token" => ctx.raw_token
+        })
+
+      {:ok, _reply, _joined_socket} =
+        subscribe_and_join(socket, "runtime:#{ctx.runtime.runtime_id}", %{
+          "client_info" => %{"product" => "claude_channel", "version" => "0.9.0"}
+        })
+
+      reloaded = Repo.get(Platform.Agents.AgentRuntime, ctx.runtime.id)
+      assert Platform.Agents.AgentRuntime.client_product(reloaded) == "claude_channel"
+    end
+  end
+
   describe "reply message" do
     test "posts to space as agent", ctx do
       {:ok, socket} =
