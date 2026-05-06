@@ -1,7 +1,9 @@
 defmodule Platform.Chat.Canvas.Kinds.Markdown do
-  @moduledoc "Pre-formatted markdown/text content leaf."
+  @moduledoc "Markdown content leaf — rendered through the canonical chat pipeline."
 
   use Platform.Chat.Canvas.Kind
+
+  alias Platform.Chat.ContentRenderer
 
   def children, do: :none
 
@@ -28,8 +30,11 @@ defmodule Platform.Chat.Canvas.Kinds.Markdown do
       |> assign(:class_overrides, props["class_overrides"])
 
     ~H"""
-    <div class={["rounded-xl border border-base-300 bg-base-200 p-3", @class_overrides]}>
-      <pre class="whitespace-pre-wrap text-xs leading-5 text-base-content/80 font-mono">{@content}</pre>
+    <div class={[
+      "prose prose-sm max-w-none text-sm text-base-content/80 chat-markdown",
+      @class_overrides
+    ]}>
+      {ContentRenderer.render_message(@content)}
     </div>
     """
   end

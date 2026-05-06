@@ -134,7 +134,7 @@ defmodule PlatformWeb.Chat.CanvasRendererTest do
       assert html =~ "Title"
     end
 
-    test "renders markdown content" do
+    test "renders markdown content as HTML, not raw source" do
       node = %{
         "id" => "m",
         "type" => "markdown",
@@ -145,6 +145,57 @@ defmodule PlatformWeb.Chat.CanvasRendererTest do
       html = render_node_html(node)
       assert html =~ "Hello"
       assert html =~ "world"
+      # The literal asterisks should NOT appear — Earmark should have
+      # converted them to a <strong> tag.
+      assert html =~ "<strong>world</strong>"
+      refute html =~ "**world**"
+    end
+
+    test "markdown bold renders as <strong>" do
+      node = %{
+        "id" => "m",
+        "type" => "markdown",
+        "props" => %{"content" => "this is **emphasised** copy"},
+        "children" => []
+      }
+
+      html = render_node_html(node)
+      assert html =~ "<strong>emphasised</strong>"
+      refute html =~ "**emphasised**"
+    end
+
+    test "markdown link renders as <a href> with target=_blank" do
+      node = %{
+        "id" => "m",
+        "type" => "markdown",
+        "props" => %{"content" => "see [the docs](https://example.com)"},
+        "children" => []
+      }
+
+      html = render_node_html(node)
+      assert html =~ ~s(href="https://example.com")
+      assert html =~ ~s(target="_blank")
+      assert html =~ "the docs</a>"
+      refute html =~ "[the docs]"
+    end
+
+    test "markdown bulleted list renders as <ul><li>" do
+      node = %{
+        "id" => "m",
+        "type" => "markdown",
+        "props" => %{"content" => "- one\n- two\n- three"},
+        "children" => []
+      }
+
+      html = render_node_html(node)
+      assert html =~ "<ul>"
+      assert html =~ "<li>"
+      # All three list items should appear inside <li> tags. Earmark puts
+      # the text on its own line with surrounding whitespace, so match
+      # loosely on each item's text.
+      assert html =~ ~r{<li>\s*one\s*</li>}
+      assert html =~ ~r{<li>\s*two\s*</li>}
+      assert html =~ ~r{<li>\s*three\s*</li>}
     end
 
     test "renders badge" do
