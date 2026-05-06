@@ -2789,7 +2789,7 @@ defmodule Platform.Federation.ToolSurface do
     {:ok, files}
   end
 
-  def execute("org_memory_append", args, _context) do
+  def execute("org_memory_append", args, context) do
     content = Map.get(args, "content")
 
     if is_nil(content) or content == "" do
@@ -2801,7 +2801,7 @@ defmodule Platform.Federation.ToolSurface do
        }}
     else
       memory_type = Map.get(args, "memory_type", "daily")
-      authored_by = Map.get(args, "authored_by")
+      authored_by = Map.get(args, "authored_by") || Map.get(context, :agent_id)
       workspace_id = Map.get(args, "workspace_id")
       metadata = Map.get(args, "metadata", %{})
 

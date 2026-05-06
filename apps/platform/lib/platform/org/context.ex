@@ -386,6 +386,55 @@ defmodule Platform.Org.Context do
     |> Repo.all()
   end
 
+  @doc """
+  Resolve `authored_by` ids on a list of memory entries (or the grouped
+  `[{date, [entries]}]` form returned by `recent_memory/2`) to a lookup map:
+
+      %{author_id => %{kind: :agent | :user, name: String.t(), color: String.t() | nil}}
+
+  Unknown ids are omitted — callers should fall back to displaying the raw id.
+  """
+  @spec resolve_authors([MemoryEntry.t()] | [{Date.t(), [MemoryEntry.t()]}]) ::
+          %{binary() => %{kind: :agent | :user, name: String.t(), color: String.t() | nil}}
+  def resolve_authors(entries) when is_list(entries) do
+    ids = entries |> Enum.flat_map(&extract_author_ids/1) |> Enum.uniq()
+
+    if ids == [] do
+      %{}
+    else
+      agents =
+        from(a in Platform.Agents.Agent, where: a.id in ^ids)
+        |> Repo.all()
+        |> Map.new(fn agent ->
+          {agent.id, %{kind: :agent, name: agent.name, color: agent.color}}
+        end)
+
+      remaining = Enum.reject(ids, &Map.has_key?(agents, &1))
+
+      users =
+        remaining
+        |> Platform.Accounts.get_users_map()
+        |> Map.new(fn {id, user} ->
+          {id, %{kind: :user, name: user_name(user), color: nil}}
+        end)
+
+      Map.merge(agents, users)
+    end
+  end
+
+  defp extract_author_ids(%MemoryEntry{authored_by: nil}), do: []
+  defp extract_author_ids(%MemoryEntry{authored_by: id}), do: [id]
+  defp extract_author_ids({_date, entries}), do: Enum.flat_map(entries, &extract_author_ids/1)
+  defp extract_author_ids(_), do: []
+
+  defp user_name(user) do
+    case user do
+      %{name: name} when is_binary(name) and name != "" -> name
+      %{email: email} when is_binary(email) -> email
+      _ -> "User"
+    end
+  end
+
   # ── Build context ────────────────────────────────────────────────────
 
   @doc """

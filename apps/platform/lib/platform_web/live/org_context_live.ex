@@ -22,6 +22,7 @@ defmodule PlatformWeb.OrgContextLive do
      |> assign(:confirm_delete, nil)
      |> assign(:view_mode, :files)
      |> assign(:memory_entries, [])
+     |> assign(:memory_authors, %{})
      |> assign(:memory_search, "")}
   end
 
@@ -35,7 +36,7 @@ defmodule PlatformWeb.OrgContextLive do
          |> push_patch(to: ~p"/org-context")}
 
       file ->
-        preview = render_preview(file.content)
+        preview = render_markdown(file.content)
 
         {:noreply,
          socket
@@ -82,7 +83,7 @@ defmodule PlatformWeb.OrgContextLive do
 
   @impl true
   def handle_event("update_preview", %{"content" => content}, socket) do
-    preview = render_preview(content)
+    preview = render_markdown(content)
 
     {:noreply,
      socket
@@ -101,7 +102,7 @@ defmodule PlatformWeb.OrgContextLive do
          }) do
       {:ok, updated_file} ->
         files = Context.list_files()
-        preview = render_preview(updated_file.content)
+        preview = render_markdown(updated_file.content)
 
         {:noreply,
          socket
@@ -220,11 +221,13 @@ defmodule PlatformWeb.OrgContextLive do
   @impl true
   def handle_event("switch_to_memory", _params, socket) do
     entries = Context.recent_memory(7)
+    authors = Context.resolve_authors(entries)
 
     {:noreply,
      socket
      |> assign(:view_mode, :memory)
      |> assign(:memory_entries, entries)
+     |> assign(:memory_authors, authors)
      |> assign(:selected_file, nil)
      |> assign(:editing, false)
      |> assign(:creating, false)}
@@ -234,10 +237,12 @@ defmodule PlatformWeb.OrgContextLive do
   def handle_event("memory_search", %{"query" => query}, socket) do
     opts = if query == "", do: [], else: [query: query]
     entries = Context.recent_memory(7, opts)
+    authors = Context.resolve_authors(entries)
 
     {:noreply,
      socket
      |> assign(:memory_entries, entries)
+     |> assign(:memory_authors, authors)
      |> assign(:memory_search, query)}
   end
 
@@ -377,7 +382,7 @@ defmodule PlatformWeb.OrgContextLive do
       <%!-- Main content area --%>
       <div class="flex flex-1 flex-col overflow-hidden">
         <%= if @view_mode == :memory do %>
-          <.memory_feed entries={@memory_entries} />
+          <.memory_feed entries={@memory_entries} authors={@memory_authors} />
         <% else %>
           <%= if @creating do %>
             <.create_panel
@@ -724,16 +729,18 @@ defmodule PlatformWeb.OrgContextLive do
                         <span class="text-xs font-medium text-base-content/60">
                           {String.capitalize(String.replace(entry.memory_type, "_", " "))}
                         </span>
-                        <span :if={entry.authored_by} class="text-xs text-base-content/30">
-                          by {truncate_id(entry.authored_by)}
-                        </span>
+                        <.author_byline
+                          :if={entry.authored_by}
+                          authors={@authors}
+                          id={entry.authored_by}
+                        />
                         <span class="ml-auto text-xs text-base-content/30">
                           {Calendar.strftime(entry.inserted_at, "%H:%M")}
                         </span>
                       </div>
-                      <div class="prose prose-sm max-w-none text-base-content/80">
-                        {entry.content}
-                      </div>
+                      <article class="prose prose-sm max-w-none text-base-content">
+                        {raw(render_markdown(entry.content))}
+                      </article>
                     </div>
                   <% end %>
                 </div>
@@ -746,12 +753,46 @@ defmodule PlatformWeb.OrgContextLive do
     """
   end
 
+  attr(:authors, :map, required: true)
+  attr(:id, :string, required: true)
+
+  defp author_byline(assigns) do
+    case Map.get(assigns.authors, assigns.id) do
+      %{kind: :agent, name: name} ->
+        assigns = assign(assigns, :name, name)
+
+        ~H"""
+        <span class="inline-flex items-center gap-1 text-xs text-base-content/40">
+          <span class="hero-cpu-chip size-3"></span>
+          <span>{@name}</span>
+        </span>
+        """
+
+      %{kind: :user, name: name} ->
+        assigns = assign(assigns, :name, name)
+
+        ~H"""
+        <span class="inline-flex items-center gap-1 text-xs text-base-content/40">
+          <span class="hero-user size-3"></span>
+          <span>{@name}</span>
+        </span>
+        """
+
+      _ ->
+        ~H"""
+        <span class="text-xs text-base-content/30">
+          by {truncate_id(@id)}
+        </span>
+        """
+    end
+  end
+
   # ── Helpers ─────────────────────────────────────────────────────────────
 
-  defp render_preview(nil), do: ""
-  defp render_preview(""), do: ""
+  defp render_markdown(nil), do: ""
+  defp render_markdown(""), do: ""
 
-  defp render_preview(content) do
+  defp render_markdown(content) do
     options = %Earmark.Options{
       code_class_prefix: "language-",
       smartypants: false,
