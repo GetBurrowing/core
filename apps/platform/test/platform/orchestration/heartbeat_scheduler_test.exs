@@ -136,6 +136,11 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
       assert prompt =~ "Current stage_id: `stage-123`"
       assert prompt =~ "validation_id=`val-123`"
       assert prompt =~ "task_id=task-1234abcd"
+
+      # CDP evidence-capture path is embedded via @evidence_workflow_reference.
+      assert prompt =~ "127.0.0.1:9222"
+      assert prompt =~ "cdp_capture.sh"
+      refute prompt =~ "rock-node-screenshot"
     end
 
     test "in_progress omits git workflow for placeholder repos and still includes completion contract" do
@@ -214,6 +219,13 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
       # No e2e_behavior content (that lives in dispatch.review_e2e now)
       refute prompt =~ "e2e_behavior"
       refute prompt =~ "evaluation_payload"
+
+      # CDP evidence-capture path (rock-node-screenshot is no longer canonical
+      # for the dispatch flow; visual evidence runs through hive-local CDP).
+      assert prompt =~ "127.0.0.1:9222"
+      assert prompt =~ "cdp_capture.sh"
+      refute prompt =~ "rock-node-screenshot"
+      refute prompt =~ "openclaw nodes canvas navigate"
     end
 
     test "in_review does not include repo-specific git checks" do

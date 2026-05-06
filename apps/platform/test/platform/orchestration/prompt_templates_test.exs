@@ -81,6 +81,29 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
       assert content =~ "manual_approval"
       assert content =~ "review_request_create" or content =~ "suite_review_request_create"
     end
+
+    test "evidence-capture step routes through hive-local CDP, not rock-node-screenshot" do
+      # The capture step is interpolated from HeartbeatScheduler's
+      # @evidence_workflow_reference into dispatch.in_progress and
+      # dispatch.in_review. Asserting on the rendered dispatch prompt is
+      # done in heartbeat_scheduler_test; here we check the template
+      # itself still names the placeholder so the evidence-workflow text
+      # actually reaches the agent.
+      content = PromptTemplates.default_content_for_slug("dispatch.in_review")
+
+      assert content =~ "{{evidence_workflow_reference}}",
+             "dispatch.in_review must keep the evidence_workflow_reference placeholder"
+    end
+  end
+
+  describe "default_content_for_slug/1 — dispatch.in_progress" do
+    test "carries the evidence_workflow_reference placeholder for the CDP capture step" do
+      content = PromptTemplates.default_content_for_slug("dispatch.in_progress")
+      assert is_binary(content)
+
+      assert content =~ "{{evidence_workflow_reference}}",
+             "dispatch.in_progress must keep the evidence_workflow_reference placeholder"
+    end
   end
 
   describe "default_content_for_slug/1 — dispatch.review_e2e" do
