@@ -153,6 +153,15 @@ defmodule Platform.Tasks do
     task
     |> Task.changeset(attrs)
     |> Repo.update()
+    |> case do
+      {:ok, updated} ->
+        preloaded = Repo.preload(updated, [:project, :epic, plans: :stages])
+        broadcast_board({:task_updated, preloaded})
+        {:ok, updated}
+
+      error ->
+        error
+    end
   end
 
   # ── Soft delete ─────────────────────────────────────────────────────────

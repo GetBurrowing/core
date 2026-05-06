@@ -1980,6 +1980,346 @@ defmodule PlatformWeb.TasksLiveTest do
     end
   end
 
+  describe "inline title edit (stage 1)" do
+    test "update_task_title persists the new title and clears editing state", %{conn: conn} do
+      project = create_project()
+      task = create_task(project, %{title: "Original Title"})
+
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
+
+      # Click-to-edit puts the detail panel into editing state.
+      render_click(view, "start_edit_title", %{"task-id" => task.id})
+      assert render(view) =~ "data-role=\"detail-title-input\""
+
+      # Submit a new title via the same event the input fires on Enter/blur.
+      render_hook(view, "update_task_title", %{
+        "value" => "Renamed Title",
+        "task-id" => task.id
+      })
+
+      updated = Tasks.get_task_record(task.id)
+      assert updated.title == "Renamed Title"
+
+      # Editing state cleared, new title rendered.
+      html = render(view)
+      assert html =~ "Renamed Title"
+      assert html =~ "data-role=\"detail-title\""
+      refute html =~ "data-role=\"detail-title-input\""
+    end
+
+    test "Tasks.update_task broadcasts :task_updated to subscribers", %{conn: _conn} do
+      project = create_project()
+      task = create_task(project, %{title: "Broadcast Task"})
+
+      Tasks.subscribe_board()
+      {:ok, _updated} = Tasks.update_task(task, %{title: "Broadcast Task v2"})
+
+      assert_receive {:task_updated, %{id: id, title: "Broadcast Task v2"}}, 1_000
+      assert id == task.id
+    end
+
+    test "blank title is rejected with a flash and does not persist", %{conn: conn} do
+      project = create_project()
+      task = create_task(project, %{title: "Keep Me"})
+
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
+
+      render_hook(view, "update_task_title", %{"value" => "   ", "task-id" => task.id})
+
+      assert render(view) =~ "Title cannot be empty"
+      assert Tasks.get_task_record(task.id).title == "Keep Me"
+    end
+
+    test "kanban card title click opens the inline editor (not the detail panel)",
+         %{conn: conn} do
+      project = create_project()
+      task = create_task(project, %{title: "Card Edit Task"})
+
+      conn = authenticated_conn(conn)
+      {:ok, view, html} = live(conn, ~p"/tasks")
+
+      # The h3 title carries its own `phx-click="start_edit_title"`, and
+      # Phoenix LiveView's window-level click listener uses
+      # `closestPhxBinding` — so the inner phx-click fires and the outer
+      # card-body `phx-click="select_task"` does not.
+      assert html =~ ~s|data-role="card-title"|
+      assert html =~ ~s|phx-click="start_edit_title"|
+
+      # Triggering the inline event directly leaves the detail panel closed
+      # (i.e. start_edit_title does not redirect to /tasks/:id).
+      render_click(view, "start_edit_title", %{"task-id" => task.id})
+      html = render(view)
+      assert html =~ ~s|data-role="card-title-input"|
+      # No detail panel: the slide-in only renders its title h2 when
+      # @show_detail; we assert the absence of detail-title.
+      refute html =~ ~s|data-role="detail-title"|
+    end
+
+    test "detail panel title edit does not break navigation back to /tasks", %{conn: conn} do
+      project = create_project()
+      task = create_task(project, %{title: "Navigable Task"})
+
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
+
+      render_click(view, "start_edit_title", %{"task-id" => task.id})
+
+      render_hook(view, "update_task_title", %{
+        "value" => "Navigable Task v2",
+        "task-id" => task.id
+      })
+
+      # Closing the detail panel still works after an edit.
+      render_click(view, "close_detail")
+      assert render(view) =~ "Navigable Task v2"
+    end
+  end
+
+  describe "priority + deploy_target dropdowns (stage 2)" do
+    test "changing priority via update_task_field persists and rerenders", %{conn: conn} do
+      project = create_project()
+      task = create_task(project, %{title: "Bump Me", priority: "medium"})
+
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
+
+      render_hook(view, "update_task_field", %{
+        "field" => "priority",
+        "value" => "high",
+        "task-id" => task.id
+      })
+
+      assert Tasks.get_task_record(task.id).priority == "high"
+    end
+
+    test "invalid priority value flashes a changeset error and does not persist", %{conn: conn} do
+      project = create_project()
+      task = create_task(project, %{title: "Sticky Priority", priority: "medium"})
+
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
+
+      render_hook(view, "update_task_field", %{
+        "field" => "priority",
+        "value" => "ULTRA",
+        "task-id" => task.id
+      })
+
+      assert render(view) =~ "Could not update priority"
+      assert Tasks.get_task_record(task.id).priority == "medium"
+    end
+
+    test "deploy_target select renders only the project's configured targets", %{conn: conn} do
+      project = create_project()
+
+      {:ok, project} =
+        Tasks.update_project(project, %{
+          deploy_config: %{"deploy_targets" => ["production", "exp"]}
+        })
+
+      task = create_task(project, %{title: "Deploy Target Task"})
+
+      conn = authenticated_conn(conn)
+      {:ok, view, html} = live(conn, ~p"/tasks/#{task.id}")
+
+      assert html =~ ~s|data-role="deploy-target-select"|
+      assert html =~ ~s|value="production"|
+      assert html =~ ~s|value="exp"|
+      # Targets from other projects are not present.
+      refute html =~ ~s|value="some_other_target"|
+
+      render_hook(view, "update_task_field", %{
+        "field" => "deploy_target",
+        "value" => "exp",
+        "task-id" => task.id
+      })
+
+      assert Tasks.get_task_record(task.id).deploy_target == "exp"
+    end
+
+    test "non-whitelisted field name flashes an error and does not persist", %{conn: conn} do
+      project = create_project()
+      task = create_task(project, %{title: "Locked Down", priority: "low"})
+
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
+
+      render_hook(view, "update_task_field", %{
+        "field" => "status",
+        "value" => "done",
+        "task-id" => task.id
+      })
+
+      assert render(view) =~ "is not editable"
+      assert Tasks.get_task_record(task.id).status == "backlog"
+    end
+  end
+
+  describe "assignee dropdown (stage 3)" do
+    test "assignee select renders all agents and reflects current assignee", %{conn: conn} do
+      project = create_project()
+      a1 = create_agent("Higgins (Test)")
+      a2 = create_agent("Mycroft (Test)")
+
+      task =
+        create_task(project, %{title: "Pickable", assignee_id: a1.id, assignee_type: "agent"})
+
+      conn = authenticated_conn(conn)
+      {:ok, _view, html} = live(conn, ~p"/tasks/#{task.id}")
+
+      assert html =~ ~s|data-role="assignee-select"|
+      assert html =~ "Higgins (Test)"
+      assert html =~ "Mycroft (Test)"
+      assert html =~ ~s|value="#{a1.id}" selected|
+    end
+
+    test "selecting a different agent persists the new assignee", %{conn: conn} do
+      project = create_project()
+      a1 = create_agent("Geordi (Test)")
+      a2 = create_agent("Dalton (Test)")
+
+      task =
+        create_task(project, %{title: "Reassign Me", assignee_id: a1.id, assignee_type: "agent"})
+
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
+
+      render_hook(view, "update_task_field", %{
+        "field" => "assignee_id",
+        "value" => a2.id,
+        "task-id" => task.id
+      })
+
+      updated = Tasks.get_task_record(task.id)
+      assert updated.assignee_id == a2.id
+      assert updated.assignee_type == "agent"
+    end
+
+    test "clearing the assignee (empty string → nil) persists nil id and nil type", %{conn: conn} do
+      project = create_project()
+      a1 = create_agent("Departing (Test)")
+
+      task =
+        create_task(project, %{title: "Unassign Me", assignee_id: a1.id, assignee_type: "agent"})
+
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
+
+      render_hook(view, "update_task_field", %{
+        "field" => "assignee_id",
+        "value" => "",
+        "task-id" => task.id
+      })
+
+      updated = Tasks.get_task_record(task.id)
+      assert is_nil(updated.assignee_id)
+      assert is_nil(updated.assignee_type)
+    end
+  end
+
+  describe "description editor (stage 4)" do
+    test "Edit button swaps the rendered markdown for a textarea", %{conn: conn} do
+      project = create_project()
+      task = create_task(project, %{title: "Editable Desc", description: "Hello **world**"})
+
+      conn = authenticated_conn(conn)
+      {:ok, view, html} = live(conn, ~p"/tasks/#{task.id}")
+
+      assert html =~ ~s|data-role="description-rendered"|
+      # Earmark renders the bold via <strong>.
+      assert html =~ "<strong>world</strong>"
+
+      html = render_click(view, "start_edit_description")
+      assert html =~ ~s|data-role="description-textarea"|
+      assert html =~ ~s|data-role="description-save"|
+      refute html =~ ~s|data-role="description-rendered"|
+    end
+
+    test "save persists the new description and re-renders the markdown", %{conn: conn} do
+      project = create_project()
+      task = create_task(project, %{title: "Save Test", description: "Old text"})
+
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
+
+      render_click(view, "start_edit_description")
+
+      html =
+        view
+        |> form(~s|form[data-role="description-form"]|, %{
+          "description" => "## New heading\n\nFresh body."
+        })
+        |> render_submit()
+
+      # Persisted.
+      assert Tasks.get_task_record(task.id).description == "## New heading\n\nFresh body."
+      # Rendered HTML, not raw markdown — ContentRenderer caps headings at h3
+      # (downgrade_headings/1 in content_renderer.ex), so `##` becomes `<h3>`
+      # once sanitized. We match the rendered tag close (Earmark inserts a
+      # newline between the opening tag and the text, so checking for the
+      # close is the most stable way to assert the heading rendered).
+      assert html =~ "New heading</h3>"
+      assert html =~ "Fresh body."
+      assert html =~ ~s|data-role="description-rendered"|
+      refute html =~ ~s|data-role="description-textarea"|
+      # The raw markdown shouldn't appear (a leak would mean the textarea
+      # value got rendered without going through Earmark).
+      refute html =~ "## New heading"
+    end
+
+    test "cancel discards local edit state without persisting", %{conn: conn} do
+      project = create_project()
+      task = create_task(project, %{title: "Cancel Test", description: "Untouched"})
+
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
+
+      render_click(view, "start_edit_description")
+      html = render_click(view, "cancel_edit_description")
+
+      assert html =~ ~s|data-role="description-rendered"|
+      refute html =~ ~s|data-role="description-textarea"|
+      assert Tasks.get_task_record(task.id).description == "Untouched"
+    end
+
+    test "concurrent edit — second LV session sees the broadcast and re-renders",
+         %{conn: conn} do
+      project = create_project()
+      task = create_task(project, %{title: "Concurrent", description: "v0"})
+
+      # Session A and Session B both view the same task.
+      {conn_a, _user_a} = authenticated_conn_with_user(conn)
+      {conn_b, _user_b} = authenticated_conn_with_user(conn)
+
+      {:ok, view_a, _html_a} = live(conn_a, ~p"/tasks/#{task.id}")
+      {:ok, view_b, _html_b} = live(conn_b, ~p"/tasks/#{task.id}")
+
+      # A saves a new description.
+      render_click(view_a, "start_edit_description")
+
+      view_a
+      |> form(~s|form[data-role="description-form"]|, %{"description" => "v1 from A"})
+      |> render_submit()
+
+      # B's view receives the broadcast and re-renders the new content.
+      html_b = render(view_b)
+      assert html_b =~ "v1 from A"
+    end
+
+    test "task without description shows an empty-state placeholder", %{conn: conn} do
+      project = create_project()
+      task = create_task(project, %{title: "Empty Desc", description: nil})
+
+      conn = authenticated_conn(conn)
+      {:ok, _view, html} = live(conn, ~p"/tasks/#{task.id}")
+
+      assert html =~ ~s|data-role="description-empty"|
+      assert html =~ "click Edit to add one"
+    end
+  end
+
   describe "create-task FAB visibility" do
     test "FAB renders without max-md:hidden when no task is selected", %{conn: conn} do
       project = create_project()

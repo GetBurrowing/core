@@ -169,7 +169,32 @@
 
               <%!-- Title row --%>
               <div class="flex items-start justify-between gap-2">
-                <h3 class="text-sm font-medium leading-snug">{task.title}</h3>
+                <%= if @editing_task_title_id == task.id do %>
+                  <input
+                    type="text"
+                    name="value"
+                    value={task.title}
+                    phx-blur="update_task_title"
+                    phx-value-task-id={task.id}
+                    phx-hook="InlineEdit"
+                    data-submit-event="update_task_title"
+                    data-task-id={task.id}
+                    id={"card-title-input-#{task.id}"}
+                    data-role="card-title-input"
+                    class="input input-xs input-bordered text-sm font-medium leading-snug flex-1"
+                  />
+                <% else %>
+                  <h3
+                    id={"card-title-#{task.id}"}
+                    class="text-sm font-medium leading-snug cursor-text hover:bg-base-200 rounded px-1 -mx-1 flex-1"
+                    phx-click="start_edit_title"
+                    phx-value-task-id={task.id}
+                    data-role="card-title"
+                    title="Click to edit"
+                  >
+                    {task.title}
+                  </h3>
+                <% end %>
                 <div class="flex items-center gap-1 flex-shrink-0">
                   <%!-- Active run indicator --%>
                   <span
@@ -324,7 +349,32 @@
     class="fixed inset-y-0 right-0 z-30 flex w-full max-w-lg flex-col border-l border-base-300 bg-base-100 shadow-xl safe-area-top"
   >
     <div class="flex items-center justify-between border-b border-base-300 px-4 py-3">
-      <h2 class="text-sm font-semibold truncate">{@selected_task.title}</h2>
+      <%= if @editing_task_title_id == @selected_task.id do %>
+        <input
+          type="text"
+          name="value"
+          value={@selected_task.title}
+          phx-blur="update_task_title"
+          phx-value-task-id={@selected_task.id}
+          phx-hook="InlineEdit"
+          data-submit-event="update_task_title"
+          data-task-id={@selected_task.id}
+          data-role="detail-title-input"
+          class="input input-sm input-bordered text-sm font-semibold flex-1 mr-2"
+          id={"detail-title-input-#{@selected_task.id}"}
+        />
+      <% else %>
+        <h2
+          id={"detail-title-#{@selected_task.id}"}
+          class="text-sm font-semibold truncate cursor-text hover:bg-base-200 rounded px-1 -mx-1 flex-1"
+          phx-click="start_edit_title"
+          phx-value-task-id={@selected_task.id}
+          data-role="detail-title"
+          title="Click to edit"
+        >
+          {@selected_task.title}
+        </h2>
+      <% end %>
       <div class="flex items-center gap-1">
         <button
           :if={deletable_task?(@selected_task)}
@@ -372,6 +422,115 @@
         <span :if={@selected_task.epic} class="text-xs text-base-content/50">
           / {(@selected_task.epic && @selected_task.epic.name) || "—"}
         </span>
+      </div>
+
+      <%!-- Inline-editable metadata: priority + deploy_target.
+           Both are <select>s wired to the generic `update_task_field`
+           event. Hidden `field`/`task-id` inputs travel with the change
+           because `phx-change` only carries form params. --%>
+      <div class="grid grid-cols-2 gap-3">
+        <form
+          phx-change="update_task_field"
+          class="flex flex-col gap-1"
+          data-role="priority-form"
+        >
+          <input type="hidden" name="field" value="priority" />
+          <input type="hidden" name="task-id" value={@selected_task.id} />
+          <label
+            for={"priority-select-#{@selected_task.id}"}
+            class="text-xs font-semibold uppercase tracking-wider text-base-content/50"
+          >
+            Priority
+          </label>
+          <select
+            id={"priority-select-#{@selected_task.id}"}
+            name="value"
+            data-role="priority-select"
+            class="select select-sm select-bordered"
+          >
+            <option
+              :for={p <- Platform.Tasks.Task.priorities()}
+              value={p}
+              selected={@selected_task.priority == p}
+            >
+              {String.capitalize(p)}
+            </option>
+          </select>
+        </form>
+
+        <% project_targets = project_deploy_targets(@selected_task.project) %>
+        <form
+          phx-change="update_task_field"
+          class="flex flex-col gap-1"
+          data-role="deploy-target-form"
+        >
+          <input type="hidden" name="field" value="deploy_target" />
+          <input type="hidden" name="task-id" value={@selected_task.id} />
+          <label
+            for={"deploy-target-select-#{@selected_task.id}"}
+            class="text-xs font-semibold uppercase tracking-wider text-base-content/50"
+          >
+            Deploy target
+          </label>
+          <select
+            id={"deploy-target-select-#{@selected_task.id}"}
+            name="value"
+            data-role="deploy-target-select"
+            disabled={project_targets == []}
+            class="select select-sm select-bordered"
+          >
+            <option value="" selected={is_nil(@selected_task.deploy_target)}>
+              {if project_targets == [], do: "(no targets configured)", else: "(none)"}
+            </option>
+            <option
+              :for={t <- project_targets}
+              value={t}
+              selected={@selected_task.deploy_target == t}
+            >
+              {deploy_target_label(t)}
+            </option>
+          </select>
+        </form>
+      </div>
+
+      <%!-- Inline-editable task-level assignee.
+           Distinct from the per-phase assignee modal (which writes
+           `phase_assignees`); this sets the top-level `assignee_id` and
+           is the value the kanban thumbnail / TaskRouter dispatch reads.
+           Reuses `@agents` already fetched at mount for the per-phase
+           modal landed in 019df0d7. --%>
+      <div :if={@agents != []} class="flex flex-col gap-1">
+        <form
+          phx-change="update_task_field"
+          class="flex flex-col gap-1"
+          data-role="assignee-form"
+        >
+          <input type="hidden" name="field" value="assignee_id" />
+          <input type="hidden" name="task-id" value={@selected_task.id} />
+          <label
+            for={"assignee-select-#{@selected_task.id}"}
+            class="text-xs font-semibold uppercase tracking-wider text-base-content/50"
+          >
+            Assignee (task-level)
+          </label>
+          <select
+            id={"assignee-select-#{@selected_task.id}"}
+            name="value"
+            data-role="assignee-select"
+            class="select select-sm select-bordered"
+          >
+            <option value="" selected={is_nil(@selected_task.assignee_id)}>
+              Unassigned
+            </option>
+            <option
+              :for={a <- @agents}
+              value={a.id}
+              selected={@selected_task.assignee_id == a.id}
+            >
+              {a.name}
+            </option>
+          </select>
+        </form>
       </div>
 
       <%!-- Reporter + Dates + Assignee name --%>
@@ -489,17 +648,68 @@
         </span>
       </div>
 
-      <%!-- Description --%>
-      <div :if={@selected_task.description} class="space-y-1">
-        <h3 class="text-xs font-semibold uppercase tracking-wider text-base-content/50">
-          Description
-        </h3>
-        <div
-          id={"task-desc-#{@selected_task.id}"}
-          class="prose prose-sm max-w-none text-sm text-base-content/80 chat-markdown task-markdown"
-        >
-          {Platform.Chat.ContentRenderer.render_message(@selected_task.description)}
+      <%!-- Description — click "Edit" to swap the rendered markdown for a
+           textarea + Save/Cancel. Toggle, not split-preview, per the
+           plan's "cheaper path that's still nice". --%>
+      <div class="space-y-1" data-role="description-block">
+        <div class="flex items-center justify-between gap-2">
+          <h3 class="text-xs font-semibold uppercase tracking-wider text-base-content/50">
+            Description
+          </h3>
+          <button
+            :if={!@editing_description}
+            type="button"
+            phx-click="start_edit_description"
+            data-role="description-edit-button"
+            class="btn btn-xs btn-ghost gap-1"
+          >
+            <span class="hero-pencil-square size-3"></span> Edit
+          </button>
         </div>
+
+        <%= if @editing_description do %>
+          <form
+            phx-submit="save_description"
+            data-role="description-form"
+            class="space-y-2"
+          >
+            <textarea
+              name="description"
+              rows="8"
+              data-role="description-textarea"
+              class="textarea textarea-bordered w-full text-sm font-mono"
+            >{@selected_task.description}</textarea>
+            <div class="flex gap-2">
+              <button type="submit" class="btn btn-primary btn-sm" data-role="description-save">
+                Save
+              </button>
+              <button
+                type="button"
+                phx-click="cancel_edit_description"
+                class="btn btn-ghost btn-sm"
+                data-role="description-cancel"
+              >
+                Cancel
+              </button>
+            </div>
+          </form>
+        <% else %>
+          <div
+            :if={@selected_task.description}
+            id={"task-desc-#{@selected_task.id}"}
+            data-role="description-rendered"
+            class="prose prose-sm max-w-none text-sm text-base-content/80 chat-markdown task-markdown"
+          >
+            {Platform.Chat.ContentRenderer.render_message(@selected_task.description)}
+          </div>
+          <p
+            :if={!@selected_task.description}
+            data-role="description-empty"
+            class="text-sm text-base-content/40 italic"
+          >
+            No description yet — click Edit to add one.
+          </p>
+        <% end %>
       </div>
 
       <%!-- Skills --%>

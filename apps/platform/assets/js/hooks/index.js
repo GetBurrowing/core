@@ -5,6 +5,7 @@ import CopyToClipboard from "./copy_to_clipboard"
 import DragDropUpload from "./drag_drop_upload"
 import ExecutionLogScroll from "./execution_log_scroll"
 import FilePickerTrigger from "./file_picker_trigger"
+import InlineEdit from "./inline_edit"
 import InlineFocus from "./inline_focus"
 import InlineThread from "./inline_thread"
 import KanbanDragDrop from "./kanban_drag_drop"
@@ -36,6 +37,7 @@ export default {
   DragDropUpload,
   ExecutionLogScroll,
   FilePickerTrigger,
+  InlineEdit,
   InlineFocus,
   InlineThread,
   KanbanDragDrop,

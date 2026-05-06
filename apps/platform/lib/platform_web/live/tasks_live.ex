@@ -116,6 +116,11 @@ defmodule PlatformWeb.TasksLive do
      |> assign(:attached_skills, [])
      |> assign(:available_skills, Skills.list_skills())
      |> assign(:confirm_delete, false)
+     # Inline-edit state — id of task whose title is being edited (kanban card or
+     # detail panel). nil when no edit in progress. Description has its own
+     # boolean assign to keep the state minimal.
+     |> assign(:editing_task_title_id, nil)
+     |> assign(:editing_description, false)
      |> allow_upload(:task_attachments,
        accept: :any,
        auto_upload: true,
@@ -306,6 +311,174 @@ defmodule PlatformWeb.TasksLive do
      |> assign(:active_review_canvas, nil)
      |> assign(:confirm_delete, false)
      |> push_patch(to: ~p"/tasks")}
+  end
+
+  # ── Inline edit events (title / generic field / description) ────────────
+
+  def handle_event("start_edit_title", %{"task-id" => task_id}, socket) do
+    {:noreply, assign(socket, :editing_task_title_id, task_id)}
+  end
+
+  def handle_event("cancel_edit_title", _params, socket) do
+    {:noreply, assign(socket, :editing_task_title_id, nil)}
+  end
+
+  def handle_event("update_task_title", %{"value" => raw_title, "task-id" => task_id}, socket) do
+    new_title = String.trim(raw_title)
+
+    socket =
+      cond do
+        new_title == "" ->
+          socket
+          |> assign(:editing_task_title_id, nil)
+          |> put_flash(:error, "Title cannot be empty.")
+
+        true ->
+          case Tasks.get_task_record(task_id) do
+            nil ->
+              socket
+              |> assign(:editing_task_title_id, nil)
+              |> put_flash(:error, "Task not found.")
+
+            task ->
+              if task.title == new_title do
+                # No-op: same title, just clear the editing state.
+                assign(socket, :editing_task_title_id, nil)
+              else
+                case Tasks.update_task(task, %{title: new_title}) do
+                  {:ok, _updated} ->
+                    # Refresh the originating session immediately. The broadcast
+                    # also fires for any other connected LV sessions.
+                    socket
+                    |> assign(:editing_task_title_id, nil)
+                    |> refresh_board()
+                    |> reload_selected_task()
+
+                  {:error, _changeset} ->
+                    socket
+                    |> assign(:editing_task_title_id, nil)
+                    |> put_flash(:error, "Could not update title.")
+                end
+              end
+          end
+      end
+
+    {:noreply, socket}
+  end
+
+  # ── Generic field update (priority / deploy_target / assignee_id) ───────
+  #
+  # Whitelisted to avoid arbitrary attribute writes from the wire. Empty
+  # strings normalize to `nil` (used by the assignee dropdown's "Unassigned"
+  # option and by deploy_target's "(none)" option). Other unknown fields
+  # flash a generic error.
+
+  @editable_task_fields ~w(priority deploy_target assignee_id)
+
+  def handle_event(
+        "update_task_field",
+        %{"field" => field, "value" => value, "task-id" => task_id},
+        socket
+      )
+      when field in @editable_task_fields do
+    normalized = if value == "", do: nil, else: value
+
+    attrs =
+      case field do
+        "assignee_id" ->
+          # When clearing/setting the top-level assignee from the inline
+          # dropdown we keep both keys in lockstep so legacy readers don't
+          # see an orphaned id without a type.
+          if is_nil(normalized) do
+            %{assignee_id: nil, assignee_type: nil}
+          else
+            %{assignee_id: normalized, assignee_type: "agent"}
+          end
+
+        _ ->
+          %{String.to_existing_atom(field) => normalized}
+      end
+
+    socket =
+      case Tasks.get_task_record(task_id) do
+        nil ->
+          put_flash(socket, :error, "Task not found.")
+
+        task ->
+          case Tasks.update_task(task, attrs) do
+            {:ok, _updated} ->
+              # Refresh the originating session immediately so the change is
+              # visible without waiting for the broadcast round-trip.
+              socket
+              |> refresh_board()
+              |> reload_selected_task()
+
+            {:error, %Ecto.Changeset{} = cs} ->
+              put_flash(
+                socket,
+                :error,
+                "Could not update #{field}: #{changeset_error(cs, field)}"
+              )
+
+            {:error, _} ->
+              put_flash(socket, :error, "Could not update #{field}.")
+          end
+      end
+
+    {:noreply, socket}
+  end
+
+  def handle_event("update_task_field", %{"field" => field}, socket) do
+    {:noreply, put_flash(socket, :error, "Field '#{field}' is not editable.")}
+  end
+
+  # ── Description editor events (toggle render ↔ textarea) ───────────────
+  #
+  # Boolean assign rather than per-task id because only one detail panel is
+  # open at a time. Save persists via Tasks.update_task/2 (broadcast then
+  # refreshes the description for any other connected LV session); Cancel
+  # just discards local state without touching the DB.
+
+  def handle_event("start_edit_description", _params, socket) do
+    {:noreply, assign(socket, :editing_description, true)}
+  end
+
+  def handle_event("cancel_edit_description", _params, socket) do
+    {:noreply, assign(socket, :editing_description, false)}
+  end
+
+  def handle_event("save_description", %{"description" => new_desc}, socket) do
+    task = socket.assigns.selected_task
+
+    socket =
+      cond do
+        is_nil(task) ->
+          assign(socket, :editing_description, false)
+
+        task.description == new_desc ->
+          # No-op when unchanged; just close the editor.
+          assign(socket, :editing_description, false)
+
+        true ->
+          case Tasks.update_task(task, %{description: new_desc}) do
+            {:ok, _updated} ->
+              # Update the local assigns immediately so the LV re-renders the
+              # new markdown in the same response — the broadcast also fires
+              # but lands as a separate handle_info on this and other LV
+              # sessions; relying on it for the originating session would
+              # leave the textarea visible until the next tick.
+              socket
+              |> assign(:editing_description, false)
+              |> reload_selected_task()
+
+            {:error, _changeset} ->
+              socket
+              |> assign(:editing_description, false)
+              |> put_flash(:error, "Could not save description.")
+          end
+      end
+
+    {:noreply, socket}
   end
 
   # ── Task deletion events ────────────────────────────────────────────────
@@ -1414,6 +1587,42 @@ defmodule PlatformWeb.TasksLive do
   end
 
   # ── View helpers ───────────────────────────────────────────────────────
+
+  # Pulls the first changeset error message for the given field if any —
+  # the inline-edit handlers only ever write one field at a time, so this
+  # is enough to surface a meaningful flash without dragging in the full
+  # `traverse_errors` machinery.
+  defp changeset_error(%Ecto.Changeset{errors: errors}, field) do
+    field_atom =
+      if is_atom(field) do
+        field
+      else
+        try do
+          String.to_existing_atom(field)
+        rescue
+          ArgumentError -> nil
+        end
+      end
+
+    case Keyword.get(errors, field_atom) do
+      {msg, opts} ->
+        Enum.reduce(opts, msg, fn {k, v}, acc ->
+          String.replace(acc, "%{#{k}}", to_string(v))
+        end)
+
+      _ ->
+        "invalid value"
+    end
+  end
+
+  # Deploy targets configured on a project (`project.deploy_config["deploy_targets"]`).
+  # Always returns a list of strings; falls back to `[]` when unconfigured so
+  # the dropdown gracefully empties out instead of crashing.
+  defp project_deploy_targets(%{deploy_config: %{"deploy_targets" => targets}})
+       when is_list(targets),
+       do: Enum.filter(targets, &is_binary/1)
+
+  defp project_deploy_targets(_), do: []
 
   defp deploy_target_label("hive_production"), do: "Hive Production"
   defp deploy_target_label("github_pr"), do: "GitHub PR"

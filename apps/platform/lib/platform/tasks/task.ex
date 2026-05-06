@@ -44,6 +44,7 @@ defmodule Platform.Tasks.Task do
   end
 
   def statuses, do: @statuses
+  def priorities, do: @priorities
   def phases, do: @phases
 
   @deletable_statuses ~w(backlog planning blocked done)
