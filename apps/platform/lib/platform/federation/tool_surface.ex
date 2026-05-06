@@ -942,18 +942,19 @@ defmodule Platform.Federation.ToolSurface do
       %{
         name: "plan_create",
         description:
-          "Create a new execution plan for a task with stages and validations, all in a single transaction.",
+          "Create a new execution plan for a task with stages and validations, all in a single transaction. Plan IMPLEMENTATION and validation only — the system auto-injects the deploy stage (PR, CI, merge) when the task transitions to deploying status. Do NOT author a 'Deploy via PR merge' / 'Open PR' / 'Watch CI' / 'Merge' stage; that is the deployer's job.",
         parameters: %{
           task_id: %{type: "string", required: true, description: "The task to create a plan for"},
           stages: %{
             type: "array",
             required: true,
             description:
-              "Array of stage objects: {name, description, position, validations: [{kind, evaluation_payload?}]}. Valid validation kinds: ci_check, ci_passed, pr_merged, lint_pass, type_check, test_pass, manual_approval, e2e_behavior. The e2e_behavior kind requires an evaluation_payload map with keys setup/actions/expected (the planner authors an adversarial test plan the review agent will execute — include 2-5 e2e_behavior validations covering happy path, edges, and regression-prone scenarios; do NOT pre-write failure_feedback, the review agent observes failures at review time)."
+              "Array of IMPLEMENTATION stage objects: {name, description, position, validations: [{kind, evaluation_payload?}]}. Valid validation kinds for planner-authored stages: lint_pass, type_check, test_pass, manual_approval, e2e_behavior. Do NOT include a deploy stage — the system auto-injects one (with ci_passed / pr_merged / etc. validations) at deploying time from the project's resolved deploy strategy. The e2e_behavior kind requires an evaluation_payload map with keys setup/actions/expected (the planner authors an adversarial test plan the review agent will execute — include 2-5 e2e_behavior validations covering happy path, edges, and regression-prone scenarios; do NOT pre-write failure_feedback, the review agent observes failures at review time)."
           }
         },
         returns: "The created plan with stages and validations preloaded",
-        limitations: "Requires a valid task_id. Stages must have unique positions.",
+        limitations:
+          "Requires a valid task_id. Stages must have unique positions. Do not include a deploy stage; the system auto-injects one from the resolved deploy strategy.",
         when_to_use: "When you need to define a multi-stage execution plan for a task"
       },
       %{

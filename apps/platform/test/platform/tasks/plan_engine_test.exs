@@ -359,6 +359,58 @@ defmodule Platform.Tasks.PlanEngineTest do
       assert deploy_stage != nil
     end
 
+    test "auto-injects deploy stage even when planner submitted a plan with NO deploy stage",
+         %{project: project} do
+      # Regression guard for the role-separation change: the planner's
+      # responsibility is implementation + validation only. The deploy stage
+      # is the deployer's domain and is auto-injected by PlanEngine when all
+      # planner-authored stages are complete and the task is in a deployable
+      # status. This test verifies that a plan submitted with ONLY
+      # implementation stages still ends up running the deploy strategy.
+      strategy = %{"type" => "pr_merge", "config" => %{"auto_merge" => true}}
+
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Planner omitted deploy stage",
+          status: "in_progress",
+          deploy_strategy: strategy
+        })
+
+      # Two implementation-only stages — NO "Deploy: …" stage authored by the planner.
+      {:ok, plan} = Tasks.create_plan(%{task_id: task.id, status: "approved"})
+      {:ok, build} = Tasks.create_stage(%{plan_id: plan.id, position: 1, name: "Build feature"})
+      {:ok, _test} = Tasks.create_stage(%{plan_id: plan.id, position: 2, name: "Test feature"})
+
+      # No "Deploy: ..." stage was authored by the planner.
+      stage_names_before = plan.id |> Tasks.list_stages() |> Enum.map(& &1.name)
+      refute Enum.any?(stage_names_before, &String.starts_with?(&1, "Deploy:"))
+
+      # Run the implementation stages to completion.
+      {:ok, _} = PlanEngine.start_stage(build.id)
+      {:ok, _} = PlanEngine.advance(plan.id)
+      # Test stage was auto-started by maybe_advance_next; advance again to drain it.
+      {:ok, plan_after_impl} = PlanEngine.advance(plan.id)
+
+      # The system must have auto-injected the deploy stage from the resolved
+      # pr_merge strategy, transitioned the task to "deploying", and started
+      # that stage — even though the planner never authored one.
+      deploy_stage =
+        Enum.find(plan_after_impl.stages, &String.starts_with?(&1.name, "Deploy:"))
+
+      assert deploy_stage != nil,
+             "expected PlanEngine to auto-inject a deploy stage when the planner omitted one"
+
+      assert deploy_stage.name == "Deploy: PR merge"
+      assert deploy_stage.status == "running"
+
+      validations = Tasks.list_validations(deploy_stage.id)
+      assert Enum.map(validations, & &1.kind) == ["pr_merged"]
+
+      updated_task = Tasks.get_task_record(task.id)
+      assert updated_task.status == "deploying"
+    end
+
     test "does not double-inject deploy stage on second advance", %{project: project} do
       strategy = %{"type" => "manual"}
 

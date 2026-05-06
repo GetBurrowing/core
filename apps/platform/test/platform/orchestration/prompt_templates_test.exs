@@ -64,6 +64,37 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
       # v2: the worked examples MUST NOT include a failure_feedback field.
       refute content =~ "\"failure_feedback\":"
     end
+
+    test "scopes the planner to implementation + validation only — system auto-injects the deploy stage" do
+      # Clear separation of concerns: planner plans, deployer deploys. The
+      # planner must NOT author a deploy / open-PR / merge stage; the system
+      # auto-injects it from the resolved deploy strategy when the task
+      # transitions to `deploying` (see PlanEngine.maybe_inject_deploy_or_complete/2
+      # and DeployStageBuilder.build_stage/2).
+      content = PromptTemplates.default_content_for_slug("dispatch.planning")
+
+      # Role-separation guidance the planner must read.
+      assert content =~ "system auto-injects"
+      assert content =~ "Deployer"
+      assert content =~ "deploying"
+      assert content =~ "Stage scope"
+
+      # Explicit forbid-list: the template names the deploy-authoring phrases
+      # the planner MUST NOT emit as stages. The phrases appear ONCE inside
+      # that forbid list (a "Do NOT include …" sentence) and nowhere else.
+      assert content =~ "Do NOT include a stage like"
+
+      for phrase <- ["Deploy via PR merge", "Open PR", "Watch CI"] do
+        occurrences = content |> String.split(phrase) |> length() |> Kernel.-(1)
+
+        assert occurrences == 1,
+               "expected #{inspect(phrase)} to appear exactly once (inside the forbid list); got #{occurrences}"
+      end
+
+      # The forbid list and the auto-inject explanation must occur together.
+      assert content =~
+               ~r/Do NOT include a stage like.*Deploy via PR merge.*Open PR.*Watch CI.*Merge/s
+    end
   end
 
   describe "default_content_for_slug/1 — dispatch.in_review" do

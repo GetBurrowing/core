@@ -78,8 +78,8 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
       assert prompt =~ "Implementation stages"
       assert prompt =~ "test_pass"
       assert prompt =~ "lint_pass"
-      assert prompt =~ "Push branch when implementation stages are complete"
-      assert prompt =~ "do NOT open a PR yet"
+      assert prompt =~ "Push the branch when implementation stages are complete"
+      assert prompt =~ "do NOT open a PR"
       assert prompt =~ "manual_approval"
 
       # New e2e_behavior + scoping guidance — v2 plurals: 2-5 adversarial validations,
@@ -101,6 +101,24 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
       assert prompt =~ "code_review"
       assert prompt =~ "Forbidden"
       assert prompt =~ "high"
+
+      # Role-separation: planner must NOT author a deploy stage. The system
+      # auto-injects it from the resolved deploy strategy when the task
+      # transitions to `deploying` (see PlanEngine.maybe_inject_deploy_or_complete/2).
+      assert prompt =~ "system auto-injects"
+      assert prompt =~ "Deployer"
+      assert prompt =~ "Stage scope"
+      assert prompt =~ "Do NOT include a stage like"
+
+      # The forbid-list names the deploy-authoring phrases the planner MUST
+      # NOT emit; each appears ONCE inside that forbid sentence and nowhere
+      # else in the prompt body.
+      for phrase <- ["Deploy via PR merge", "Open PR", "Watch CI"] do
+        occurrences = prompt |> String.split(phrase) |> length() |> Kernel.-(1)
+
+        assert occurrences == 1,
+               "expected #{inspect(phrase)} to appear exactly once (inside the forbid list); got #{occurrences}"
+      end
     end
 
     test "in_progress generates execution prompt with git workflow and completion contract" do

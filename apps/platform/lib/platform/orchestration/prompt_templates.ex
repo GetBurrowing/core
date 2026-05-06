@@ -161,12 +161,23 @@ defmodule Platform.Orchestration.PromptTemplates do
 
         Create a plan using the plan_create tool. The plan will be reviewed by a human before work starts — make it specific enough that they can meaningfully approve or reject it.
 
+        ## Stage scope (planner's responsibility)
+
+        Plan **implementation and validation only**. The system auto-injects the deploy stage when the task transitions to `deploying` status — you do NOT include it. Specifically:
+
+        - **Planner** designs implementation stages (`test_pass` + `lint_pass`, plus `manual_approval` on UI-rendering stages) and the per-task `e2e_behavior` adversarial test plan.
+        - **Implementer** executes each implementation stage.
+        - **Review agent** runs the `e2e_behavior` cases at review time.
+        - **Deployer** (auto-spawned at `deploying`) opens the PR, polls CI, follows the deploy strategy (`pr_merge` / `docker_deploy` / `skill_driven` / `manual`), and bounces the task back to `in_progress` if CI fails.
+
+        Do NOT include a stage like "Deploy via PR merge", "Open PR", "Watch CI", or "Merge". Those are the deployer's job, not the planner's. The system auto-injects the deploy stage from the resolved deploy strategy when it is needed.
+
         A good plan stage must include:
         - A clear name (not just a category label)
         - A description that explains: what specifically will be changed, which files will be modified or created, what the implementation approach is, and why that approach was chosen
         - Appropriate per-stage validations (see "Validation kinds" below)
 
-        Aim for 3–7 stages. Each stage should represent a discrete, reviewable unit of work. "Client-side draft persistence" with no further detail is not acceptable — describe the actual change.
+        Aim for 3–7 implementation stages. Each stage should represent a discrete, reviewable unit of work. "Client-side draft persistence" with no further detail is not acceptable — describe the actual change.
 
         Example of a good stage description:
         "Add a module-level drafts Map to ComposeInput JS hook (assets/js/hooks/compose_input.js). On every input event, store the current textarea value keyed by space_id (read from data-space-id attribute on the element). On mounted(), restore any saved draft and push it to the server via compose_changed event. On compose_reset, delete the draft for that space."

@@ -414,15 +414,26 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
 
     Create a plan using the plan_create tool. The plan will be reviewed by a human before work starts — make it specific enough that they can meaningfully approve or reject it.
 
+    ## Stage scope (planner's responsibility)
+
+    Plan **implementation and validation only**. The system auto-injects the deploy stage when the task transitions to `deploying` status — you do NOT include it. Specifically:
+
+    - **Planner** designs implementation stages (`test_pass` + `lint_pass`, plus `manual_approval` on UI-rendering stages) and the per-task `e2e_behavior` adversarial test plan.
+    - **Implementer** executes each implementation stage.
+    - **Review agent** runs the `e2e_behavior` cases at review time.
+    - **Deployer** (auto-spawned at `deploying`) opens the PR, polls CI, follows the deploy strategy (`pr_merge` / `docker_deploy` / `skill_driven` / `manual`), and bounces the task back to `in_progress` if CI fails.
+
+    Do NOT include a stage like "Deploy via PR merge", "Open PR", "Watch CI", or "Merge". Those are the deployer's job, not the planner's. The system auto-injects the deploy stage from the resolved deploy strategy when it is needed.
+
     ## Plan structure
 
-    The plan covers the full task lifecycle: implementation AND review. Structure it in two sections:
+    The plan covers implementation AND task-level review. Structure it in two sections:
 
     **Implementation stages** (run in `in_progress`):
     - Each stage represents a discrete, reviewable unit of work
     - Validations: use `test_pass` and `lint_pass` for code changes
     - `manual_approval` ONLY on stages that visually re-render UI (see "Validation kinds" below)
-    - Push branch when implementation stages are complete — do NOT open a PR yet
+    - Push the branch when implementation stages are complete — do NOT open a PR (the auto-injected deploy stage handles PR + CI + merge)
 
     **Task-level review (one or more per task)**:
     - Author 2-5 `e2e_behavior` validations that adversarially test different aspects of the
