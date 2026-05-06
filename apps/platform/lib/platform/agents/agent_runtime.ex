@@ -16,7 +16,7 @@ defmodule Platform.Agents.AgentRuntime do
   @valid_transports ~w(websocket)
   @valid_bundles ~w(federation space context_read messaging review canvas task plan org_context skill attachment)
 
-  @default_allowed_bundles ~w(federation space context_read messaging attachment)
+  @default_allowed_bundles ~w(federation space context_read messaging attachment skill)
 
   schema "agent_runtimes" do
     field(:runtime_id, :string)

@@ -13,6 +13,33 @@ defmodule Platform.Agents.AgentRuntimeTest do
   alias Platform.Federation
   alias Platform.Repo
 
+  describe "default_allowed_bundles/0 (pure)" do
+    test "includes \"skill\" so federated runtimes get DB-shipped skill access by default" do
+      assert "skill" in AgentRuntime.default_allowed_bundles()
+    end
+
+    test "every default bundle is in the valid bundle allowlist" do
+      defaults = AgentRuntime.default_allowed_bundles()
+      valid = AgentRuntime.valid_bundles()
+      assert Enum.all?(defaults, &(&1 in valid))
+    end
+  end
+
+  describe "newly-registered runtime (DB)" do
+    test "receives the default allowed_bundles, including \"skill\"" do
+      user = create_user()
+
+      {:ok, runtime} =
+        Federation.register_runtime(user.id, %{
+          runtime_id: "rt-default-bundles-#{System.unique_integer([:positive])}"
+        })
+
+      reloaded = Repo.get!(AgentRuntime, runtime.id)
+      assert "skill" in reloaded.allowed_bundles
+      assert reloaded.allowed_bundles == AgentRuntime.default_allowed_bundles()
+    end
+  end
+
   describe "client_product/1 (pure)" do
     test "returns \"openclaw\" when metadata.client_info.product is \"openclaw\"" do
       runtime = %AgentRuntime{

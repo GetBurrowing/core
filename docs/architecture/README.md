@@ -11,5 +11,6 @@ System and ADR-level architecture for Startup Suite Core.
 | [Suite Shell — ADR 0009](./05-suite-shell-adr-0009.md) | Navigation frame, auth, surfaces |
 | [Execution Runners — ADR 0011](./06-execution-runners-adr-0011.md) | Tasks/Execution control plane, context plane, runner isolation, fast kill semantics |
 | [Control Center Modules — ADR 0016](./control-center-modules.md) | ControlCenterLive modularization: components, event handlers, data layer |
+| [Skill MCP Surface](./skill-mcp-surface.md) | Audit of the `skill.*` tool surface, bundle gating, and per-plugin access paths |
 
 Rendered PNGs are in [`renders/`](./renders/).
