@@ -1979,4 +1979,35 @@ defmodule PlatformWeb.TasksLiveTest do
       assert html =~ "2 test cases"
     end
   end
+
+  describe "create-task FAB visibility" do
+    test "FAB renders without max-md:hidden when no task is selected", %{conn: conn} do
+      project = create_project()
+      _task = create_task(project, %{title: "FAB Visibility Task"})
+
+      conn = authenticated_conn(conn)
+      {:ok, _view, html} = live(conn, ~p"/tasks")
+
+      # The FAB button is the one wired to toggle_task_sheet.
+      [fab_attrs] = Regex.run(~r/<button[^>]*phx-click="toggle_task_sheet"[^>]*>/, html)
+
+      assert fab_attrs =~ "btn-primary"
+      assert fab_attrs =~ "btn-circle"
+      refute fab_attrs =~ "max-md:hidden"
+    end
+
+    test "FAB renders with max-md:hidden when a task is selected", %{conn: conn} do
+      project = create_project()
+      task = create_task(project, %{title: "FAB Hidden Task"})
+
+      conn = authenticated_conn(conn)
+      {:ok, _view, html} = live(conn, ~p"/tasks/#{task.id}")
+
+      [fab_attrs] = Regex.run(~r/<button[^>]*phx-click="toggle_task_sheet"[^>]*>/, html)
+
+      assert fab_attrs =~ "btn-primary"
+      assert fab_attrs =~ "btn-circle"
+      assert fab_attrs =~ "max-md:hidden"
+    end
+  end
 end

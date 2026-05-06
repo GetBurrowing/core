@@ -1092,7 +1092,10 @@
   <%!-- FAB: Create Task --%>
   <button
     phx-click="toggle_task_sheet"
-    class="btn btn-primary btn-circle fixed bottom-[calc(env(safe-area-inset-bottom)+1.5rem)] right-6 z-30 shadow-lg"
+    class={[
+      "btn btn-primary btn-circle fixed bottom-[calc(env(safe-area-inset-bottom)+1.5rem)] right-6 z-30 shadow-lg",
+      @selected_task && "max-md:hidden"
+    ]}
   >
     <span class="hero-plus size-6"></span>
   </button>
