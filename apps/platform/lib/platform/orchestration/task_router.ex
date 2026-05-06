@@ -555,9 +555,14 @@ defmodule Platform.Orchestration.TaskRouter do
 
     context = ContextAssembler.build(state.task_id, state.deploy_lease)
     {agent, runtime} = Federation.lookup_assignment(state.assignee.id)
+    previous_rejection_reason = context && Map.get(context, :previous_rejection_reason)
 
     prompt =
-      HeartbeatScheduler.dispatch_prompt(task, plan, stage, agent: agent, runtime: runtime)
+      HeartbeatScheduler.dispatch_prompt(task, plan, stage,
+        agent: agent,
+        runtime: runtime,
+        previous_rejection_reason: previous_rejection_reason
+      )
 
     case dispatch_attention(state.assignee, state.task_id, "task_assigned", context, prompt) do
       :ok ->

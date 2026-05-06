@@ -159,5 +159,54 @@ defmodule Platform.Orchestration.ContextAssemblerTest do
       names = Enum.map(context.skills, & &1.name) |> Enum.sort()
       assert names == ["Project Skill", "Task Skill"]
     end
+
+    test "previous_rejection_reason is nil when no plans were rejected", %{task: task} do
+      # The seeded plan in setup is approved, so no qualifying rejected plan exists.
+      context = ContextAssembler.build(task.id)
+      assert context.previous_rejection_reason == nil
+    end
+
+    test "previous_rejection_reason surfaces the latest rejected plan's reason",
+         %{task: task} do
+      {:ok, rejected_plan} =
+        Tasks.create_plan(%{
+          task_id: task.id,
+          status: "rejected",
+          version: 2,
+          rejection_reason: "scope creep — split into two tasks"
+        })
+
+      context = ContextAssembler.build(task.id)
+      assert context.previous_rejection_reason == "scope creep — split into two tasks"
+
+      # And the higher-version rejected plan wins over earlier ones.
+      {:ok, _newer} =
+        Tasks.create_plan(%{
+          task_id: task.id,
+          status: "rejected",
+          version: 3,
+          rejection_reason: "missing failure-mode coverage"
+        })
+
+      context2 = ContextAssembler.build(task.id)
+      assert context2.previous_rejection_reason == "missing failure-mode coverage"
+
+      # Pin the IDs so the compiler doesn't dead-code-eliminate the asserts.
+      assert is_binary(rejected_plan.id)
+    end
+
+    test "previous_rejection_reason ignores rejected plans with nil reason",
+         %{task: task} do
+      {:ok, _no_reason} =
+        Tasks.create_plan(%{
+          task_id: task.id,
+          status: "rejected",
+          version: 2,
+          rejection_reason: nil
+        })
+
+      context = ContextAssembler.build(task.id)
+      assert context.previous_rejection_reason == nil
+    end
   end
 end

@@ -1083,6 +1083,130 @@ defmodule PlatformWeb.TasksLiveTest do
       plan = %Plan{version: 7, status: "rejected", updated_at: nil}
       assert PlatformWeb.TasksLive.plan_summary_label(plan) == "Plan v7 — rejected"
     end
+
+    test "plan_summary_label/1 appends a quoted excerpt when rejection_reason is set and short" do
+      ts = ~U[2026-05-04 12:34:56.000000Z]
+
+      plan = %Plan{
+        version: 1,
+        status: "rejected",
+        updated_at: ts,
+        rejection_reason: "needs more tests"
+      }
+
+      assert PlatformWeb.TasksLive.plan_summary_label(plan) ==
+               ~s(Plan v1 — rejected on 2026-05-04 — "needs more tests")
+    end
+
+    test "plan_summary_label/1 truncates long rejection_reason to 60 chars + ellipsis" do
+      ts = ~U[2026-05-04 12:34:56.000000Z]
+
+      long_reason =
+        "This rejection reason is intentionally far longer than sixty characters so we can verify truncation."
+
+      plan = %Plan{
+        version: 1,
+        status: "rejected",
+        updated_at: ts,
+        rejection_reason: long_reason
+      }
+
+      label = PlatformWeb.TasksLive.plan_summary_label(plan)
+      expected_excerpt = String.slice(long_reason, 0, 60) <> "…"
+
+      assert label == ~s(Plan v1 — rejected on 2026-05-04 — "#{expected_excerpt}")
+    end
+
+    test "plan_summary_label/1 with nil rejection_reason returns the date-only label (legacy rows)" do
+      ts = ~U[2026-05-04 12:34:56.000000Z]
+      plan = %Plan{version: 4, status: "rejected", updated_at: ts, rejection_reason: nil}
+
+      assert PlatformWeb.TasksLive.plan_summary_label(plan) ==
+               "Plan v4 — rejected on 2026-05-04"
+    end
+
+    test "expanded rejected-plan body shows the full Rejection reason section when set",
+         %{conn: conn} do
+      project = create_project()
+      task = create_task(project, %{title: "Folding task E", status: "planning"})
+
+      reason =
+        "The plan skipped end-to-end coverage for the deploy stage and we need a manual_approval gate added."
+
+      r1 =
+        Repo.insert!(%Plan{
+          task_id: task.id,
+          status: "rejected",
+          version: 1,
+          rejection_reason: reason
+        })
+
+      {:ok, _stage} =
+        Tasks.create_stage(%{
+          plan_id: r1.id,
+          position: 1,
+          name: "Old stage from v1",
+          status: "pending"
+        })
+
+      {:ok, _active} = Tasks.create_plan(%{task_id: task.id, version: 2, status: "approved"})
+
+      conn = authenticated_conn(conn)
+      {:ok, view, html} = live(conn, ~p"/tasks/#{task.id}")
+
+      # Folded summary truncates to 60 chars; full body text is hidden.
+      truncated = String.slice(reason, 0, 60)
+      assert html =~ truncated
+      refute html =~ ~s(data-role="plan-rejection-reason")
+
+      # Expand — the full reason now renders inside the dedicated section.
+      html =
+        view
+        |> element(~s([data-role="plan-summary"][data-plan-id="#{r1.id}"]))
+        |> render_click()
+
+      assert html =~ ~s(data-role="plan-rejection-reason")
+      assert html =~ "Rejection reason"
+      assert html =~ reason
+    end
+
+    test "expanded rejected-plan body omits the Rejection reason section when reason is nil (legacy)",
+         %{conn: conn} do
+      project = create_project()
+      task = create_task(project, %{title: "Folding task F", status: "planning"})
+
+      r1 =
+        Repo.insert!(%Plan{
+          task_id: task.id,
+          status: "rejected",
+          version: 1,
+          rejection_reason: nil
+        })
+
+      {:ok, _stage} =
+        Tasks.create_stage(%{
+          plan_id: r1.id,
+          position: 1,
+          name: "Old stage from v1",
+          status: "pending"
+        })
+
+      {:ok, _active} = Tasks.create_plan(%{task_id: task.id, version: 2, status: "approved"})
+
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
+
+      html =
+        view
+        |> element(~s([data-role="plan-summary"][data-plan-id="#{r1.id}"]))
+        |> render_click()
+
+      # Body itself should expand and show the stage…
+      assert html =~ "Old stage from v1"
+      # …but no empty rejection-reason box.
+      refute html =~ ~s(data-role="plan-rejection-reason")
+      refute html =~ "Rejection reason"
+    end
   end
 
   test "in_review task detail does not show direct approve/return status buttons", %{conn: conn} do
@@ -2348,6 +2472,153 @@ defmodule PlatformWeb.TasksLiveTest do
       assert fab_attrs =~ "btn-primary"
       assert fab_attrs =~ "btn-circle"
       assert fab_attrs =~ "max-md:hidden"
+    end
+  end
+
+  describe "reopen-with-feedback button + modal" do
+    # Drives a fresh task all the way to `done` with an `approved` plan in
+    # place so `Tasks.reopen_with_feedback/3` has something to reject.
+    # Mirrors the setup used in plan_test.exs reopen_with_feedback specs.
+    defp create_done_task_with_plan(project, title \\ "Reopen Target Task") do
+      task = create_task(project, %{title: title, status: "planning"})
+      {:ok, plan} = Tasks.create_plan(%{task_id: task.id, version: 1, status: "draft"})
+
+      {:ok, _stage} =
+        Tasks.create_stage(%{plan_id: plan.id, position: 1, name: "Stage 1", status: "pending"})
+
+      {:ok, plan} = Tasks.submit_plan_for_review(plan)
+      {:ok, _plan} = Tasks.approve_plan(plan, "system")
+
+      # approve_plan moves the task into in_progress via the dispatch gate;
+      # walk it the rest of the way so it lands in `done` with an approved
+      # plan still attached.
+      {:ok, t} = Tasks.transition_task_status(Tasks.get_task_record(task.id), "in_review")
+      {:ok, t} = Tasks.transition_task_status(t, "deploying")
+      {:ok, t} = Tasks.transition_task_status(t, "done")
+      t
+    end
+
+    test "Reopen-with-feedback button is rendered for done tasks", %{conn: conn} do
+      project = create_project()
+      task = create_done_task_with_plan(project, "Done — should show reopen")
+
+      conn = authenticated_conn(conn)
+      {:ok, _view, html} = live(conn, ~p"/tasks/#{task.id}")
+
+      assert html =~ ~s|data-role="reopen-task-button"|
+      assert html =~ "Reopen with feedback"
+    end
+
+    for status <- ~w(planning in_progress in_review backlog) do
+      @tag status: status
+      test "Reopen-with-feedback button is hidden for #{status} tasks", %{
+        conn: conn,
+        status: status
+      } do
+        project = create_project()
+        task = create_task(project, %{title: "Non-done #{status}", status: status})
+
+        conn = authenticated_conn(conn)
+        {:ok, _view, html} = live(conn, ~p"/tasks/#{task.id}")
+
+        refute html =~ ~s|data-role="reopen-task-button"|
+      end
+    end
+
+    test "clicking the Reopen button opens the modal with an empty textarea", %{conn: conn} do
+      project = create_project()
+      task = create_done_task_with_plan(project, "Open-modal task")
+
+      conn = authenticated_conn(conn)
+      {:ok, view, html} = live(conn, ~p"/tasks/#{task.id}")
+
+      # Modal not present until the button is clicked.
+      refute html =~ ~s|id="reopen-modal"|
+
+      html =
+        view
+        |> element(~s|button[data-role="reopen-task-button"]|)
+        |> render_click()
+
+      assert html =~ ~s|id="reopen-modal"|
+      assert html =~ ~s|data-role="reopen-reason-textarea"|
+      # Submit is disabled while reason is blank.
+      assert html =~
+               ~r/<button[^>]*data-role="reopen-submit-button"[^>]*disabled/
+
+      # Hint visible on empty.
+      assert html =~ ~s|data-role="reopen-reason-hint"|
+    end
+
+    test "submitting a non-empty reason reopens the task and closes the modal", %{conn: conn} do
+      project = create_project()
+      task = create_done_task_with_plan(project, "Submit-valid task")
+
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
+
+      view
+      |> element(~s|button[data-role="reopen-task-button"]|)
+      |> render_click()
+
+      html =
+        view
+        |> form(~s|#reopen-modal form|, %{"reason" => "Spec missed the auth flow"})
+        |> render_submit()
+
+      assert html =~ "Task reopened."
+      # Modal closed.
+      refute html =~ ~s|id="reopen-modal"|
+
+      # Task back in planning, plan rejected with reason persisted.
+      reloaded = Tasks.get_task_detail(task.id)
+      assert reloaded.status == "planning"
+
+      latest = Tasks.latest_plan(task.id)
+      assert latest.status == "rejected"
+      assert latest.rejection_reason == "Spec missed the auth flow"
+    end
+
+    test "submitting a blank reason keeps the modal open with an error flash", %{conn: conn} do
+      project = create_project()
+      task = create_done_task_with_plan(project, "Blank-reason task")
+
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
+
+      view
+      |> element(~s|button[data-role="reopen-task-button"]|)
+      |> render_click()
+
+      # Whitespace-only reason — server-side check rejects.
+      html =
+        view
+        |> form(~s|#reopen-modal form|, %{"reason" => "   \n\t  "})
+        |> render_submit()
+
+      assert html =~ "A reason is required to reopen the task."
+      # Modal stays open.
+      assert html =~ ~s|id="reopen-modal"|
+
+      # Task remains in `done`.
+      assert Tasks.get_task_record(task.id).status == "done"
+    end
+
+    test "Cancel closes the modal without persisting", %{conn: conn} do
+      project = create_project()
+      task = create_done_task_with_plan(project, "Cancel-modal task")
+
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
+
+      view
+      |> element(~s|button[data-role="reopen-task-button"]|)
+      |> render_click()
+
+      html = render_click(view, "close_reopen_modal")
+
+      refute html =~ ~s|id="reopen-modal"|
+      assert Tasks.get_task_record(task.id).status == "done"
     end
   end
 end

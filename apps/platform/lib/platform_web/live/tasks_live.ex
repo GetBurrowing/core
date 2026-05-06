@@ -83,6 +83,11 @@ defmodule PlatformWeb.TasksLive do
      # Per-phase assignee modal
      |> assign(:show_assignee_modal, false)
      |> assign(:assignee_modal_mode, :simple)
+     # Reopen-with-feedback modal (done tasks). Reset to closed/empty on
+     # mount; reopened tasks return to `planning`, where a new plan is
+     # authored, so this state lives only as long as the modal is open.
+     |> assign(:show_reopen_modal, false)
+     |> assign(:reopen_reason, "")
      |> assign(:default_task_agent_id, default_task_agent_id)
      |> assign(
        :task_form,
@@ -634,6 +639,100 @@ defmodule PlatformWeb.TasksLive do
         {:error, _} ->
           {:noreply, put_flash(socket, :error, "Failed to save assignees.")}
       end
+    end
+  end
+
+  # ── Reopen-with-feedback modal ──────────────────────────────────────────
+
+  def handle_event("open_reopen_modal", _params, socket) do
+    {:noreply,
+     socket
+     |> assign(:show_reopen_modal, true)
+     |> assign(:reopen_reason, "")}
+  end
+
+  def handle_event("close_reopen_modal", _params, socket) do
+    {:noreply,
+     socket
+     |> assign(:show_reopen_modal, false)
+     |> assign(:reopen_reason, "")}
+  end
+
+  def handle_event("reopen_reason_changed", params, socket) do
+    # The textarea phx-change can ship the value either as a top-level
+    # `"reason"` string or wrapped under a form prefix; accept either to
+    # stay defensive against changes to the wrapping form shape.
+    reason =
+      cond do
+        is_binary(Map.get(params, "reason")) -> Map.get(params, "reason")
+        is_binary(Map.get(params, "value")) -> Map.get(params, "value")
+        true -> ""
+      end
+
+    {:noreply, assign(socket, :reopen_reason, reason)}
+  end
+
+  def handle_event("submit_reopen", params, socket) do
+    task = socket.assigns.selected_task
+
+    # Allow the form-submitted `reason` to override the assign for the rare
+    # race where phx-change hasn't landed yet, but fall back to the assign
+    # if the form payload omits it.
+    reason =
+      case Map.get(params, "reason") do
+        v when is_binary(v) -> v
+        _ -> socket.assigns.reopen_reason
+      end
+
+    cond do
+      is_nil(task) ->
+        {:noreply,
+         socket
+         |> assign(:show_reopen_modal, false)
+         |> assign(:reopen_reason, "")
+         |> put_flash(:error, "No task selected.")}
+
+      String.trim(reason || "") == "" ->
+        # Defensive: the Submit button is disabled client-side, but if the
+        # event makes it through we keep the modal open and surface the
+        # validation error rather than silently no-oping.
+        {:noreply, put_flash(socket, :error, "A reason is required to reopen the task.")}
+
+      true ->
+        by_user_id = socket.assigns[:current_user_id]
+
+        case Tasks.reopen_with_feedback(task.id, reason, by_user_id) do
+          {:ok, _task} ->
+            {:noreply,
+             socket
+             |> assign(:show_reopen_modal, false)
+             |> assign(:reopen_reason, "")
+             |> put_flash(:info, "Task reopened.")
+             |> refresh_board()
+             |> reload_selected_task()}
+
+          {:error, :reason_required} ->
+            {:noreply, put_flash(socket, :error, "A reason is required to reopen the task.")}
+
+          {:error, :not_done} ->
+            {:noreply,
+             socket
+             |> assign(:show_reopen_modal, false)
+             |> assign(:reopen_reason, "")
+             |> put_flash(:error, "Only tasks in `done` can be reopened.")
+             |> refresh_board()
+             |> reload_selected_task()}
+
+          {:error, :no_plan} ->
+            {:noreply,
+             socket
+             |> assign(:show_reopen_modal, false)
+             |> assign(:reopen_reason, "")
+             |> put_flash(:error, "Cannot reopen: this task has no active plan to reject.")}
+
+          {:error, reason} ->
+            {:noreply, put_flash(socket, :error, "Reopen failed: #{inspect(reason)}")}
+        end
     end
   end
 
@@ -2066,21 +2165,51 @@ defmodule PlatformWeb.TasksLive do
 
   defp plan_expanded?(_expanded_plans, _plan), do: false
 
+  # Treats nil and whitespace-only strings as absent. Used by the
+  # template to skip rendering empty rejection-reason boxes on legacy
+  # rows pre-migration.
+  defp present?(nil), do: false
+  defp present?(""), do: false
+  defp present?(value) when is_binary(value), do: String.trim(value) != ""
+  defp present?(_), do: false
+
   # Human-readable summary string used in the folded row for a rejected
-  # plan revision. Falls back gracefully when `updated_at` is missing.
-  #
-  # TODO: once the Plan schema gains a real `rejection_reason` field, surface
-  # it here (see ADR backlog: per-plan revision reasons).
-  def plan_summary_label(%Plan{version: version, updated_at: %DateTime{} = updated_at}) do
-    "Plan v#{version} — rejected on #{Calendar.strftime(updated_at, "%Y-%m-%d")}"
+  # plan revision. When the plan carries a `rejection_reason`, append a
+  # truncated, quoted excerpt so reviewers can scan history without
+  # expanding every row. Falls back gracefully when `updated_at` is
+  # missing or when the reason is nil (legacy rows pre-migration).
+  def plan_summary_label(%Plan{version: version, updated_at: %DateTime{} = updated_at} = plan) do
+    base = "Plan v#{version} — rejected on #{Calendar.strftime(updated_at, "%Y-%m-%d")}"
+    append_rejection_excerpt(base, plan.rejection_reason)
   end
 
-  def plan_summary_label(%Plan{version: version, updated_at: %NaiveDateTime{} = updated_at}) do
-    "Plan v#{version} — rejected on #{Calendar.strftime(updated_at, "%Y-%m-%d")}"
+  def plan_summary_label(
+        %Plan{version: version, updated_at: %NaiveDateTime{} = updated_at} = plan
+      ) do
+    base = "Plan v#{version} — rejected on #{Calendar.strftime(updated_at, "%Y-%m-%d")}"
+    append_rejection_excerpt(base, plan.rejection_reason)
   end
 
-  def plan_summary_label(%Plan{version: version}) do
-    "Plan v#{version} — rejected"
+  def plan_summary_label(%Plan{version: version} = plan) do
+    base = "Plan v#{version} — rejected"
+    append_rejection_excerpt(base, plan.rejection_reason)
+  end
+
+  # Appends a truncated, quoted rejection-reason excerpt to the summary
+  # label. Truncation cap is 60 chars with a single-character ellipsis
+  # appended past that. nil/blank reason → no change (legacy rows).
+  defp append_rejection_excerpt(label, nil), do: label
+  defp append_rejection_excerpt(label, ""), do: label
+
+  defp append_rejection_excerpt(label, reason) when is_binary(reason) do
+    excerpt =
+      if String.length(reason) > 60 do
+        String.slice(reason, 0, 60) <> "…"
+      else
+        reason
+      end
+
+    "#{label} — \"#{excerpt}\""
   end
 
   # Function component: renders the inner body of a plan. Each stage card

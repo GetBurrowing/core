@@ -14,6 +14,10 @@ defmodule Platform.Tasks.Plan do
     # Generic actor identifier: may be a user UUID or a system/runtime label.
     field(:approved_by, :string)
     field(:approved_at, :utc_datetime_usec)
+    # Free-text reason captured when a plan is rejected. Reused by the
+    # reopen-with-feedback flow (see task 019dfad1). Validation lives
+    # in the UI/lifecycle layers, not here.
+    field(:rejection_reason, :string)
 
     has_many(:stages, Platform.Tasks.Stage)
 
@@ -24,7 +28,14 @@ defmodule Platform.Tasks.Plan do
 
   def changeset(plan, attrs) do
     plan
-    |> cast(attrs, [:task_id, :status, :version, :approved_by, :approved_at])
+    |> cast(attrs, [
+      :task_id,
+      :status,
+      :version,
+      :approved_by,
+      :approved_at,
+      :rejection_reason
+    ])
     |> validate_required([:task_id, :version])
     |> validate_inclusion(:status, @statuses)
     |> unique_constraint([:task_id, :version])

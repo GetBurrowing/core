@@ -65,6 +65,31 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
       refute content =~ "\"failure_feedback\":"
     end
 
+    test "carries the previous_rejection_reason placeholder for the reopen-with-feedback flow" do
+      # Task 019dfad1 stage 3: a re-dispatched planner (after a reopen-with-
+      # feedback) needs to see what didn't work last time. The template
+      # exposes a {{previous_rejection_reason}} placeholder pre-rendered by
+      # the heartbeat scheduler — empty string when no qualifying plan
+      # exists, otherwise the bounded "## Previous attempt — what didn't
+      # work" section.
+      content = PromptTemplates.default_content_for_slug("dispatch.planning")
+
+      assert content =~ "{{previous_rejection_reason}}",
+             "dispatch.planning must keep the previous_rejection_reason placeholder"
+
+      # The hardcoded defaults declare the variable so prod's
+      # PromptTemplate row carries the right schema after a fresh seed
+      # (force-update migrations refresh content but not the variables
+      # list — the next clean seed picks up the new list).
+      defaults = PromptTemplates.default_templates()
+      planning = Enum.find(defaults, &(&1.slug == "dispatch.planning"))
+
+      assert planning, "dispatch.planning should appear in default_templates/0"
+
+      assert "previous_rejection_reason" in planning.variables,
+             "dispatch.planning variables list must include previous_rejection_reason"
+    end
+
     test "scopes the planner to implementation + validation only — system auto-injects the deploy stage" do
       # Clear separation of concerns: planner plans, deployer deploys. The
       # planner must NOT author a deploy / open-PR / merge stage; the system

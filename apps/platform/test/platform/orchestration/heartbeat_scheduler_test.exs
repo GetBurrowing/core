@@ -121,6 +121,45 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
       end
     end
 
+    test "planning dispatch surfaces previous_rejection_reason as a bounded section when set" do
+      # Task 019dfad1 stage 3 — reopen-with-feedback: when the planner is
+      # re-dispatched, the prompt must include "## Previous attempt — what
+      # didn't work" with the verbatim rejection reason and a "Design v2 to
+      # address that" instruction. Reason flows in via opts (assembled by
+      # ContextAssembler.find_latest_rejected_reason/1 + plumbed through
+      # task_router.do_dispatch/2).
+      task = %{
+        title: "Reopened task",
+        description: "Was rejected once already",
+        status: "planning",
+        priority: "medium"
+      }
+
+      reason = "scope creep — split into two tasks"
+
+      prompt =
+        HeartbeatScheduler.dispatch_prompt(task, nil, nil, previous_rejection_reason: reason)
+
+      assert prompt =~ "## Previous attempt — what didn't work"
+      assert prompt =~ reason
+      assert prompt =~ "Design v2 to address that"
+    end
+
+    test "planning dispatch omits the previous-attempt section when reason is nil or empty" do
+      task = %{
+        title: "Fresh planning task",
+        description: "No prior rejection",
+        status: "planning",
+        priority: "medium"
+      }
+
+      for opts <- [[], [previous_rejection_reason: nil], [previous_rejection_reason: ""]] do
+        prompt = HeartbeatScheduler.dispatch_prompt(task, nil, nil, opts)
+        refute prompt =~ "## Previous attempt — what didn't work"
+        refute prompt =~ "Design v2 to address that"
+      end
+    end
+
     test "in_progress generates execution prompt with git workflow and completion contract" do
       task = %{
         id: "task-1234abcd",

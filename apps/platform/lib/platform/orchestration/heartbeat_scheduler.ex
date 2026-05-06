@@ -103,12 +103,14 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
 
   def dispatch_prompt(%{status: "planning"} = task, nil, nil, opts) do
     provider_guidance = resolve_provider_guidance(opts)
+    previous_rejection_reason = resolve_previous_rejection_reason(opts)
 
     assigns = %{
       task_title: task.title,
       task_description: task.description || "No description provided.",
       task_priority: task.priority,
       provider_specific_guidance: provider_guidance,
+      previous_rejection_reason: render_previous_rejection_section(previous_rejection_reason),
       skills_reference: @skills_reference
     }
 
@@ -117,7 +119,7 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
         rendered
 
       {:error, :not_found} ->
-        hardcoded_dispatch_planning(task, provider_guidance)
+        hardcoded_dispatch_planning(task, provider_guidance, previous_rejection_reason)
     end
   end
 
@@ -248,6 +250,37 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
     agent = Keyword.get(opts, :agent)
     runtime = Keyword.get(opts, :runtime)
     ProviderGuidance.for_agent(agent, runtime)
+  end
+
+  # Pull the previous-rejection reason out of dispatch opts. Used by the
+  # reopen-with-feedback flow (task 019dfad1) — the planner's redispatch
+  # surfaces what didn't work last time.
+  defp resolve_previous_rejection_reason(opts) when is_list(opts) do
+    case Keyword.get(opts, :previous_rejection_reason) do
+      reason when is_binary(reason) ->
+        trimmed = String.trim(reason)
+        if trimmed == "", do: nil, else: trimmed
+
+      _ ->
+        nil
+    end
+  end
+
+  # Render the "## Previous attempt — what didn't work" section for the
+  # planning template. Pre-renders to a string at the assigns layer so the
+  # template body can rely on simple `{{previous_rejection_reason}}`
+  # substitution without conditional logic in the mustache layer.
+  defp render_previous_rejection_section(nil), do: ""
+  defp render_previous_rejection_section(""), do: ""
+
+  defp render_previous_rejection_section(reason) when is_binary(reason) do
+    """
+    ## Previous attempt — what didn't work
+
+    #{reason}
+
+    Design v2 to address that.
+    """
   end
 
   @doc """
@@ -402,7 +435,13 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
 
   # ── Hardcoded fallback prompts ─────────────────────────────────────────
 
-  defp hardcoded_dispatch_planning(task, provider_guidance \\ "") do
+  defp hardcoded_dispatch_planning(
+         task,
+         provider_guidance \\ "",
+         previous_rejection_reason \\ nil
+       ) do
+    previous_rejection_section = render_previous_rejection_section(previous_rejection_reason)
+
     """
     You have been assigned a task that requires a plan before any implementation begins.
 
@@ -412,6 +451,7 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
 
     #{provider_guidance}
 
+    #{previous_rejection_section}
     Create a plan using the plan_create tool. The plan will be reviewed by a human before work starts — make it specific enough that they can meaningfully approve or reject it.
 
     ## Stage scope (planner's responsibility)

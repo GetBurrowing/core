@@ -17,7 +17,8 @@ defmodule Platform.Orchestration.ContextAssembler do
   Build a full context snapshot for the given task.
 
   Returns a map with `:project`, `:epic`, `:task`, `:plan`,
-  `:execution_space_id`, and optionally `:deploy_credentials` keys.
+  `:execution_space_id`, `:previous_rejection_reason`, and optionally
+  `:deploy_credentials` keys.
 
   The optional `deploy_lease` argument, when provided, causes the lease's
   env vars to be included under `:deploy_credentials` so the executing agent
@@ -46,6 +47,7 @@ defmodule Platform.Orchestration.ContextAssembler do
           |> Enum.map(fn {skill, _source} -> %{name: skill.name, content: skill.content} end)
 
         resolved_deploy_strategy = Tasks.resolve_deploy_strategy(task)
+        previous_rejection_reason = find_latest_rejected_reason(task.plans)
 
         base = %{
           project: serialize_project(task.project),
@@ -55,6 +57,7 @@ defmodule Platform.Orchestration.ContextAssembler do
           execution_space_id: execution_space_id,
           skills: skills,
           resolved_deploy_strategy: resolved_deploy_strategy,
+          previous_rejection_reason: previous_rejection_reason,
           org: Org.Context.build_context()
         }
 
@@ -71,6 +74,24 @@ defmodule Platform.Orchestration.ContextAssembler do
     |> Enum.filter(&(&1.status in ["approved", "completed"]))
     |> Enum.sort_by(& &1.version, :desc)
     |> List.first()
+  end
+
+  # Find the most-recent rejected plan with a non-nil rejection_reason and
+  # return its reason. Operates on the preloaded plans list — no extra Repo
+  # round trip. Powers the reopen-with-feedback flow (task 019dfad1) so the
+  # planner sees what didn't work last time.
+  defp find_latest_rejected_reason(nil), do: nil
+  defp find_latest_rejected_reason([]), do: nil
+
+  defp find_latest_rejected_reason(plans) do
+    plans
+    |> Enum.filter(&(&1.status == "rejected" and not is_nil(&1.rejection_reason)))
+    |> Enum.sort_by(& &1.version, :desc)
+    |> List.first()
+    |> case do
+      nil -> nil
+      plan -> plan.rejection_reason
+    end
   end
 
   defp serialize_project(nil), do: nil

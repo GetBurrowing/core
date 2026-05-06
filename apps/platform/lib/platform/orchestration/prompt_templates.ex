@@ -86,7 +86,7 @@ defmodule Platform.Orchestration.PromptTemplates do
   """
   @spec default_content_for_slug(String.t()) :: String.t() | nil
   def default_content_for_slug(slug) do
-    case Enum.find(default_templates(), &(&1.slug == slug)) do
+    case Enum.find(do_default_templates(), &(&1.slug == slug)) do
       %{content: content} -> content
       nil -> nil
     end
@@ -99,7 +99,7 @@ defmodule Platform.Orchestration.PromptTemplates do
   """
   @spec seed_defaults() :: :ok
   def seed_defaults do
-    Enum.each(default_templates(), fn template ->
+    Enum.each(do_default_templates(), fn template ->
       case get_template_by_slug(template.slug) do
         nil ->
           {:ok, _} = create_template(template)
@@ -111,6 +111,14 @@ defmodule Platform.Orchestration.PromptTemplates do
 
     :ok
   end
+
+  @doc """
+  Return the hardcoded default template descriptors (slug, name,
+  description, variables, content). Exposed so tests and migrations can
+  inspect the registered metadata — the seed path uses the same list.
+  """
+  @spec default_templates() :: [map()]
+  def default_templates, do: do_default_templates()
 
   # ── Private ──────────────────────────────────────────────────────────────
 
@@ -129,7 +137,7 @@ defmodule Platform.Orchestration.PromptTemplates do
     end)
   end
 
-  defp default_templates do
+  defp do_default_templates do
     skills_reference =
       "The dispatch context includes attached skills under the `skills` key. " <>
         "Treat bundled skill content in that payload as authoritative for this task before trying to rediscover skills from disk. " <>
@@ -148,6 +156,7 @@ defmodule Platform.Orchestration.PromptTemplates do
           "task_description",
           "task_priority",
           "provider_specific_guidance",
+          "previous_rejection_reason",
           "skills_reference"
         ],
         content: """
@@ -159,6 +168,7 @@ defmodule Platform.Orchestration.PromptTemplates do
 
         {{provider_specific_guidance}}
 
+        {{previous_rejection_reason}}
         Create a plan using the plan_create tool. The plan will be reviewed by a human before work starts — make it specific enough that they can meaningfully approve or reject it.
 
         ## Stage scope (planner's responsibility)

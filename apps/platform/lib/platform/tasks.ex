@@ -66,7 +66,7 @@ defmodule Platform.Tasks do
     "in_review" => ~w(deploying in_progress blocked),
     "deploying" => ~w(done in_progress blocked),
     "blocked" => ~w(backlog planning in_progress in_review deploying),
-    "done" => []
+    "done" => ~w(planning)
   }
 
   # ── Projects ─────────────────────────────────────────────────────────────
@@ -502,8 +502,27 @@ defmodule Platform.Tasks do
 
   def approve_plan(_plan, _approved_by), do: {:error, :invalid_transition}
 
-  def reject_plan(%Plan{status: "pending_review"} = plan, _rejected_by) do
-    case plan |> Plan.changeset(%{status: "rejected"}) |> Repo.update() do
+  @doc """
+  Reject a plan, optionally persisting a free-text reason.
+
+  Accepts plans in `pending_review` (the original planning-rejection flow)
+  as well as `approved` / `completed` (the reopen-with-feedback flow added
+  in task 019dfad1, where a done task gets reopened and its current active
+  plan is retroactively marked rejected with the reviewer's feedback).
+
+  The 2-arity form delegates with `reason: nil`.
+  """
+  def reject_plan(%Plan{} = plan, rejected_by), do: reject_plan(plan, rejected_by, nil)
+
+  def reject_plan(%Plan{status: status} = plan, _rejected_by, reason)
+      when status in ["pending_review", "approved", "completed"] do
+    attrs =
+      case reason do
+        nil -> %{status: "rejected"}
+        r -> %{status: "rejected", rejection_reason: r}
+      end
+
+    case plan |> Plan.changeset(attrs) |> Repo.update() do
       {:ok, updated} ->
         broadcast_board({:plan_updated, updated})
         {:ok, updated}
@@ -513,7 +532,91 @@ defmodule Platform.Tasks do
     end
   end
 
-  def reject_plan(_plan, _rejected_by), do: {:error, :invalid_transition}
+  def reject_plan(_plan, _rejected_by, _reason), do: {:error, :invalid_transition}
+
+  @doc """
+  Reopen a `done` task and capture the reviewer's feedback on the plan that
+  was just delivered.
+
+  Atomic: marks the most-recent active plan (`approved` or `completed`) as
+  rejected with `reason` persisted to its `rejection_reason`, then transitions
+  the task `done → planning`. Both updates are wrapped in a single
+  `Repo.transaction/1`; if either step fails the whole reopen aborts.
+
+  Refusal cases:
+    * `{:error, :not_done}` — task is not currently in `done`
+    * `{:error, :reason_required}` — `reason` is nil or blank/whitespace
+    * `{:error, :no_plan}` — defensive invariant; a done task should always
+      have an active plan, but if somehow none is found we abort rather than
+      silently leave the task in a half-reopened state
+
+  On success returns `{:ok, task}` with the task preloaded for board
+  refresh, and broadcasts `{:task_updated, task}` + `{:plan_updated, plan}`
+  on the board topic.
+  """
+  @spec reopen_with_feedback(String.t(), String.t() | nil, String.t()) ::
+          {:ok, Task.t()}
+          | {:error, :not_done | :reason_required | :no_plan | term()}
+  def reopen_with_feedback(task_id, reason, by_user_id) when is_binary(task_id) do
+    cond do
+      is_nil(reason) or String.trim(reason) == "" ->
+        {:error, :reason_required}
+
+      true ->
+        Repo.transaction(fn ->
+          case Repo.get(Task, task_id) do
+            nil ->
+              Repo.rollback(:not_found)
+
+            %Task{status: status} when status != "done" ->
+              Repo.rollback(:not_done)
+
+            %Task{} = task ->
+              case latest_active_plan(task.id) do
+                nil ->
+                  Repo.rollback(:no_plan)
+
+                %Plan{} = plan ->
+                  case reject_plan(plan, by_user_id, reason) do
+                    {:ok, rejected_plan} ->
+                      case task
+                           |> Task.changeset(%{status: "planning"})
+                           |> Repo.update() do
+                        {:ok, updated_task} ->
+                          {updated_task, rejected_plan}
+
+                        {:error, changeset} ->
+                          Repo.rollback(changeset)
+                      end
+
+                    {:error, reason} ->
+                      Repo.rollback(reason)
+                  end
+              end
+          end
+        end)
+        |> case do
+          {:ok, {task, plan}} ->
+            preloaded = Repo.preload(task, [:project, :epic, plans: :stages])
+            broadcast_board({:task_updated, preloaded})
+            broadcast_board({:plan_updated, plan})
+            {:ok, preloaded}
+
+          {:error, reason} ->
+            {:error, reason}
+        end
+    end
+  end
+
+  # Most-recent plan in an "active" state — approved or completed. Used by
+  # reopen_with_feedback to find the plan the task was executing against.
+  defp latest_active_plan(task_id) do
+    Plan
+    |> where([p], p.task_id == ^task_id and p.status in ["approved", "completed"])
+    |> order_by([p], desc: p.version)
+    |> limit(1)
+    |> Repo.one()
+  end
 
   # ── Stages ───────────────────────────────────────────────────────────────
 

@@ -634,6 +634,22 @@
         </button>
       </div>
 
+      <%!-- Reopen-with-feedback button (done tasks only).
+           Sits adjacent to the transition-buttons block so it reads as a
+           top-level task action. Opens a modal that captures a free-form
+           reason; Tasks.reopen_with_feedback/3 rejects the active plan and
+           moves the task back to `planning`. --%>
+      <div :if={@selected_task.status == "done"} class="flex flex-wrap gap-2">
+        <button
+          type="button"
+          phx-click="open_reopen_modal"
+          data-role="reopen-task-button"
+          class="btn btn-sm btn-warning gap-1"
+        >
+          <span class="hero-arrow-uturn-left size-4"></span> Reopen with feedback
+        </button>
+      </div>
+
       <%!-- Deploy strategy --%>
       <div class="flex items-center gap-2">
         <span class="text-xs font-semibold uppercase tracking-wider text-base-content/50">
@@ -803,6 +819,22 @@
             data-plan-id={plan.id}
             class="border-t border-base-300/60 p-3 space-y-2 bg-base-200/30"
           >
+            <%!-- Full rejection reason. Renders nothing for legacy rows
+                 where `rejection_reason` is nil so the body doesn't grow
+                 an empty box. --%>
+            <div
+              :if={present?(plan.rejection_reason)}
+              data-role="plan-rejection-reason"
+              data-plan-id={plan.id}
+              class="rounded border border-base-300/60 bg-base-100/40 px-3 py-2"
+            >
+              <p class="text-[10px] uppercase tracking-wider text-base-content/50 mb-1">
+                Rejection reason
+              </p>
+              <p class="text-xs italic text-base-content/70 whitespace-pre-wrap">
+                {plan.rejection_reason}
+              </p>
+            </div>
             <.plan_body plan={plan} />
           </div>
         </div>
@@ -1296,6 +1328,87 @@
           dom_id_base="tasks-review-modal"
         />
       </div>
+    </div>
+  </div>
+
+  <%!-- Reopen-with-feedback modal (mirrors the assignee-modal shape:
+       mobile-first bottom sheet on small screens, centered dialog on
+       >=sm). Submit is disabled client-side until the textarea has
+       non-whitespace content; the server also re-validates and surfaces
+       `:reason_required` as a flash if the client check is bypassed. --%>
+  <div
+    :if={@show_reopen_modal && @selected_task}
+    class="fixed inset-0 z-50 flex items-end sm:items-center justify-center"
+    id="reopen-modal"
+  >
+    <%!-- Backdrop --%>
+    <div class="absolute inset-0 bg-black/40" phx-click="close_reopen_modal" />
+
+    <%!-- Sheet / dialog --%>
+    <div class="relative w-full max-w-lg rounded-t-2xl sm:rounded-2xl bg-base-100 shadow-2xl pb-[env(safe-area-inset-bottom)] max-h-[90vh] overflow-y-auto">
+      <%!-- Header --%>
+      <div class="flex items-center justify-between border-b border-base-300 px-4 py-3">
+        <div class="min-w-0">
+          <h2 class="text-base font-semibold">Reopen with feedback</h2>
+          <p class="mt-0.5 text-xs text-base-content/60 truncate">
+            {@selected_task.title}
+          </p>
+        </div>
+        <button
+          type="button"
+          phx-click="close_reopen_modal"
+          class="btn btn-sm btn-ghost btn-square"
+          aria-label="Close"
+        >
+          <span class="hero-x-mark size-4"></span>
+        </button>
+      </div>
+
+      <%!-- Form body --%>
+      <form phx-submit="submit_reopen" class="flex flex-col gap-3 px-4 py-4">
+        <div class="flex flex-col gap-1">
+          <label
+            for="reopen-reason-textarea"
+            class="text-xs font-semibold uppercase tracking-wider text-base-content/60"
+          >
+            Why is this being reopened?
+          </label>
+          <textarea
+            id="reopen-reason-textarea"
+            name="reason"
+            data-role="reopen-reason-textarea"
+            rows="5"
+            phx-change="reopen_reason_changed"
+            placeholder="Describe what's wrong, what's missing, or what should change. The active plan will be rejected with this reason and the task will return to planning."
+            class="textarea textarea-bordered w-full text-sm"
+          >{@reopen_reason}</textarea>
+          <p
+            :if={String.trim(@reopen_reason) == ""}
+            class="text-xs text-base-content/50"
+            data-role="reopen-reason-hint"
+          >
+            A reason is required so the planner has context for the next revision.
+          </p>
+        </div>
+
+        <div class="flex items-center justify-end gap-2 pt-1">
+          <button
+            type="button"
+            phx-click="close_reopen_modal"
+            class="btn btn-ghost btn-sm"
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            data-role="reopen-submit-button"
+            class="btn btn-warning btn-sm"
+            disabled={String.trim(@reopen_reason) == ""}
+          >
+            Reopen task
+          </button>
+        </div>
+      </form>
     </div>
   </div>
 
