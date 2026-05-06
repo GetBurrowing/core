@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Poll a local Suite Phoenix dev server until /dev/login responds.
+#
+# Usage: wait-for-server.sh <port>
+# Exits 0 on success, 1 on timeout. Up to 60 s, polling every 2 s.
 set -euo pipefail
 
 PORT="${1:-}"
@@ -17,7 +21,6 @@ for _ in $(seq 1 "$ATTEMPTS"); do
     echo >&2
     exit 0
   fi
-
   printf '.' >&2
   sleep 2
 done

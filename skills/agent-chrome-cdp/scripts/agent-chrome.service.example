@@ -1,0 +1,25 @@
+# systemd user-unit template for the dedicated agent Chrome.
+#
+# Drop this file at ~/.config/systemd/user/agent-chrome.service, edit ExecStart
+# to point at the launch script in your checkout (or copy launch-chrome.sh into
+# ~/.local/bin/), then:
+#
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now agent-chrome.service
+
+[Unit]
+Description=Dedicated Chrome with CDP for agent automation
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+Environment=HEADLESS=1
+Environment=PROFILE_DIR=%h/.cache/agent-chrome-profile
+ExecStart=%h/.local/bin/launch-chrome.sh
+ExecStop=%h/.local/bin/stop-chrome.sh
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
