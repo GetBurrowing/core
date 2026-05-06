@@ -21,7 +21,7 @@ defmodule PlatformWeb.ChatLive.Partials do
   alias PlatformWeb.ChatLive.CanvasHooks
 
   @doc "Notification opt-in banner (when push permission is 'prompt')."
-  attr :push_permission, :string, required: true
+  attr(:push_permission, :string, required: true)
 
   def notification_banner(assigns) do
     ~H"""
@@ -45,11 +45,11 @@ defmodule PlatformWeb.ChatLive.Partials do
   end
 
   @doc "Upload staging dialog — drop zone, thumb grid, agent tag chips, caption, send."
-  attr :open, :boolean, required: true
-  attr :active_space, :any, default: nil
-  attr :uploads, :any, required: true
-  attr :caption, :string, default: ""
-  attr :tagged_agents, :any, required: true
+  attr(:open, :boolean, required: true)
+  attr(:active_space, :any, default: nil)
+  attr(:uploads, :any, required: true)
+  attr(:caption, :string, default: "")
+  attr(:tagged_agents, :any, required: true)
 
   def upload_dialog(assigns) do
     ~H"""
@@ -76,6 +76,8 @@ defmodule PlatformWeb.ChatLive.Partials do
 
         <div
           :if={@uploads.attachments.entries == []}
+          id="upload-dropzone"
+          phx-hook="FilePickerTrigger"
           class="upload-dropzone"
           phx-click={Phoenix.LiveView.JS.dispatch("click", to: "#upload-file-trigger")}
         >
@@ -91,6 +93,8 @@ defmodule PlatformWeb.ChatLive.Partials do
           <div class="upload-dropzone-or">or</div>
           <button
             type="button"
+            id="upload-browse-btn"
+            phx-hook="FilePickerTrigger"
             class="upload-browse-btn"
             phx-click={Phoenix.LiveView.JS.dispatch("click", to: "#upload-file-trigger")}
           >
@@ -141,6 +145,8 @@ defmodule PlatformWeb.ChatLive.Partials do
             </div>
             <button
               type="button"
+              id="upload-add-more"
+              phx-hook="FilePickerTrigger"
               class="upload-add-tile"
               phx-click={Phoenix.LiveView.JS.dispatch("click", to: "#upload-file-trigger")}
             >
@@ -232,7 +238,7 @@ defmodule PlatformWeb.ChatLive.Partials do
   end
 
   @doc "Active-canvas side panel (desktop) and full-screen overlay (mobile)."
-  attr :canvas, :any, default: nil
+  attr(:canvas, :any, default: nil)
 
   def canvas_overlay(assigns) do
     ~H"""
@@ -276,11 +282,11 @@ defmodule PlatformWeb.ChatLive.Partials do
   end
 
   @doc "In-meeting UI — desktop side panel + mobile full-screen overlay."
-  attr :in_meeting, :boolean, required: true
-  attr :active_space, :any, default: nil
-  attr :mic_enabled, :boolean, required: true
-  attr :camera_enabled, :boolean, required: true
-  attr :screen_share_enabled, :boolean, required: true
+  attr(:in_meeting, :boolean, required: true)
+  attr(:active_space, :any, default: nil)
+  attr(:mic_enabled, :boolean, required: true)
+  attr(:camera_enabled, :boolean, required: true)
+  attr(:screen_share_enabled, :boolean, required: true)
 
   def meeting_panel(assigns) do
     ~H"""
@@ -500,7 +506,7 @@ defmodule PlatformWeb.ChatLive.Partials do
   `[data-soundboard-mute]` checkboxes and `[data-soundboard-toasts]`
   containers — this component renders them; the hook owns behavior.
   """
-  attr :id, :string, required: true
+  attr(:id, :string, required: true)
 
   def soundboard_menu(assigns) do
     ~H"""
@@ -538,7 +544,7 @@ defmodule PlatformWeb.ChatLive.Partials do
   end
 
   @doc "Full-screen image lightbox (click to dismiss)."
-  attr :url, :string, default: nil
+  attr(:url, :string, default: nil)
 
   def image_lightbox(assigns) do
     ~H"""

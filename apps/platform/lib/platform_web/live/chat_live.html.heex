@@ -1161,10 +1161,11 @@
             </div>
           </div>
 
-          <%!-- Hidden file input — outside pill bar to avoid flex layout interference --%>
+          <%!-- Hidden file input — outside pill bar to avoid flex layout interference.
+               sr-only (not display:none) so iOS Safari allows programmatic .click(). --%>
           <.live_file_input
             upload={@uploads.attachments}
-            class="hidden"
+            class="sr-only"
             id="upload-file-trigger"
           />
 
@@ -1172,6 +1173,8 @@
           <div class="compose-pill-bar">
             <button
               type="button"
+              id="compose-attach-button"
+              phx-hook="UploadButton"
               phx-click="upload_dialog_open"
               class="compose-pill-attach cursor-pointer text-base-content/50 hover:bg-base-300/50 transition-colors"
               title="Attach files"

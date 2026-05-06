@@ -4,6 +4,7 @@ import ComposeInput from "./compose_input"
 import CopyToClipboard from "./copy_to_clipboard"
 import DragDropUpload from "./drag_drop_upload"
 import ExecutionLogScroll from "./execution_log_scroll"
+import FilePickerTrigger from "./file_picker_trigger"
 import InlineFocus from "./inline_focus"
 import InlineThread from "./inline_thread"
 import KanbanDragDrop from "./kanban_drag_drop"
@@ -25,6 +26,7 @@ import ResizableSidebar from "./resizable_sidebar"
 import ScrollToBottom from "./scroll_to_bottom"
 import SwipeDrawer from "./swipe_drawer"
 import ThemeToggle from "./theme_toggle"
+import UploadButton from "./upload_button"
 
 export default {
   ChatState,
@@ -33,6 +35,7 @@ export default {
   CopyToClipboard,
   DragDropUpload,
   ExecutionLogScroll,
+  FilePickerTrigger,
   InlineFocus,
   InlineThread,
   KanbanDragDrop,
@@ -54,4 +57,5 @@ export default {
   ScrollToBottom,
   SwipeDrawer,
   ThemeToggle,
+  UploadButton,
 }
