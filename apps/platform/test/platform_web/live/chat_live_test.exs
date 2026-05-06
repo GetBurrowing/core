@@ -156,6 +156,99 @@ defmodule PlatformWeb.ChatLiveTest do
     assert html =~ "data-draft-key=\"chat-draft:"
   end
 
+  test "data-draft-key on the main composer is scoped to the active space's id and updates on channel switch",
+       %{conn: conn} do
+    conn = authenticated_conn(conn)
+
+    general =
+      Chat.get_space_by_slug("general") ||
+        elem(Chat.create_space(%{name: "General", slug: "general", kind: "channel"}), 1)
+
+    {:ok, other} = Chat.create_space(%{name: "Other", slug: "other", kind: "channel"})
+
+    {:ok, view, html_a} = live(conn, ~p"/chat/general")
+
+    # On /chat/general the key must be space-scoped to general's id —
+    # if it were a constant, drafts would leak across channels.
+    assert html_a =~ "data-draft-key=\"chat-draft:#{general.id}\""
+    refute html_a =~ "data-draft-key=\"chat-draft:#{other.id}\""
+
+    # Patch (same-LV handle_params) to /chat/other — the key must
+    # change. Morphdom uses this attribute change to trigger the JS
+    # hook's `_syncDraftState` and re-sync el.value to defaultValue.
+    html_b = render_patch(view, ~p"/chat/other")
+    assert html_b =~ "data-draft-key=\"chat-draft:#{other.id}\""
+    refute html_b =~ "data-draft-key=\"chat-draft:#{general.id}\""
+  end
+
+  test "compose drafts are saved per-space and restored on channel switch", %{conn: conn} do
+    conn = authenticated_conn(conn)
+
+    _general =
+      Chat.get_space_by_slug("general") ||
+        elem(Chat.create_space(%{name: "General", slug: "general", kind: "channel"}), 1)
+
+    {:ok, _other} = Chat.create_space(%{name: "Other", slug: "other", kind: "channel"})
+
+    {:ok, view, _html} = live(conn, ~p"/chat/general")
+
+    # Use a unique sentinel so a stray match elsewhere in the page
+    # (channel name, message body, etc.) won't false-positive the assertions.
+    sentinel_a = "ZZZ-draft-for-general-#{System.unique_integer([:positive])}"
+
+    view
+    |> form("#compose-form", compose: %{text: sentinel_a})
+    |> render_change()
+
+    # Patching to /chat/other triggers save_draft(prev.id) + restore_draft(other.id).
+    # Other has no saved draft, so its textarea body must NOT contain general's text.
+    html_other = render_patch(view, ~p"/chat/other")
+    refute html_other =~ sentinel_a
+
+    # Patching back to /chat/general restores the previously-saved draft from
+    # the server-side :drafts map. The textarea body re-renders with the text.
+    html_general_again = render_patch(view, ~p"/chat/general")
+    assert html_general_again =~ sentinel_a
+  end
+
+  test "sending a message clears the composer (server-side textarea body + push compose_reset event)",
+       %{conn: conn} do
+    conn = authenticated_conn(conn)
+
+    _general =
+      Chat.get_space_by_slug("general") ||
+        elem(Chat.create_space(%{name: "General", slug: "general", kind: "channel"}), 1)
+
+    {:ok, view, _html} = live(conn, ~p"/chat/general")
+
+    sentinel = "ZZZ-just-sent-#{System.unique_integer([:positive])}"
+
+    # Submit the form (phx-submit="send_message")
+    view
+    |> form("#compose-form", compose: %{text: sentinel})
+    |> render_submit()
+
+    # The server MUST push a `compose_reset` event so the JS hook clears
+    # `el.value` and the localStorage draft. Without this push, the textarea
+    # keeps showing the just-sent text (browser quirk: textarea defaultValue
+    # changes don't auto-sync to .value after user input).
+    assert_push_event(view, "compose_reset", %{})
+
+    # Server-side, the form's `[:text].value` is also cleared — the textarea
+    # body in the next render should not contain the sentinel. (The message
+    # itself appears in the message stream; we check the form region.)
+    html = render(view)
+    # The message body is in the stream and is allowed to contain the sentinel
+    # there; we want the textarea body specifically to not contain it.
+    # Phoenix.HTML.Form.normalize_value("text", "") renders "" inside the textarea.
+    refute html =~ ~s(<textarea\n              name="compose[text]"\n) <> ".*" <> sentinel
+    # Tighter: form must serialize text="" — easier check: no <textarea ...>SENTINEL</textarea>
+    refute Regex.match?(
+             ~r/<textarea[^>]*name="compose\[text\]"[^>]*>[^<]*#{Regex.escape(sentinel)}[^<]*<\/textarea>/s,
+             html
+           )
+  end
+
   test "sending a message renders it once in the chat", %{conn: conn} do
     conn = authenticated_conn(conn)
     {:ok, view, _html} = live(conn, ~p"/chat/general")

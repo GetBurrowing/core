@@ -228,12 +228,19 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
         {:ok, socket, msg, attachments} ->
           enriched = enrich_with_reactions(msg, socket)
 
+          # `assign_compose("")` clears the form server-side, but morphdom
+          # doesn't reliably re-sync a textarea's `.value` from the new
+          # `defaultValue` once the user has typed into it (browser quirk).
+          # Push the `compose_reset` event so the JS hook
+          # (compose_input.js:128) explicitly clears `el.value` AND removes
+          # the localStorage draft for this space.
           {:halt,
            socket
            |> stream_insert(:messages, enriched)
            |> put_attachment_map_entry(msg.id, attachments)
            |> assign_compose("")
-           |> update(:drafts, &Map.delete(&1, space.id))}
+           |> update(:drafts, &Map.delete(&1, space.id))
+           |> Phoenix.LiveView.push_event("compose_reset", %{})}
 
         {:noop, socket} ->
           {:halt, socket}
