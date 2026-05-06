@@ -22,6 +22,14 @@ defmodule Platform.Tasks.DeployStageBuilder do
 
   For `fly` strategy:
   - Same as `docker_deploy`
+
+  ## Note on `e2e_behavior`
+
+  `e2e_behavior` validations are *task-level* (not produced by deploy strategies).
+  They are authored by the planning agent and routed to a synthetic task-level
+  review stage by `PlanEngine` during plan ingestion — this builder only emits
+  deterministic deploy-time validations (`pr_merged`, `ci_passed`, `test_pass`,
+  `manual_approval`). Do NOT add `e2e_behavior` to any deploy-stage definition.
   """
 
   @valid_strategy_types ~w(none pr_merge docker_deploy fly skill_driven manual)

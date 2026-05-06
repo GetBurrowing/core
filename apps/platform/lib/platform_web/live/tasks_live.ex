@@ -1874,15 +1874,31 @@ defmodule PlatformWeb.TasksLive do
     "Plan v#{version} — rejected"
   end
 
-  # Function component: renders the inner body of a plan — stages with their
-  # status icons + descriptions, then per-stage validations. Shared between
-  # the active-plan render and the expanded folded-plan body.
-  attr :plan, :any, required: true
+  # Function component: renders the inner body of a plan. Each stage card
+  # carries its own per-stage validations (test_pass / lint_pass /
+  # manual_approval) inline — there is no longer a trailing flat list of
+  # validations under the stage list. Task-level `e2e_behavior` validations
+  # live on a synthetic "Task-level review" stage (see
+  # PlanEngine.route_e2e_behavior_validations/1) and render in a dedicated
+  # section below the stages list so they read as a task-wide gate.
+  attr(:plan, :any, required: true)
 
   defp plan_body(assigns) do
+    {stages, e2e_validations} = split_e2e_behavior_validations(assigns.plan.stages || [])
+
+    assigns =
+      assigns
+      |> Map.put(:stages, stages)
+      |> Map.put(:e2e_validations, e2e_validations)
+
     ~H"""
-    <div>
-      <div :for={stage <- @plan.stages || []}>
+    <div data-role="plan-body-inner" class="space-y-3">
+      <div
+        :for={stage <- @stages}
+        data-role="stage-card"
+        data-stage-id={stage.id}
+        class="space-y-1"
+      >
         <div class="flex items-center gap-2 text-sm">
           <span class={"size-4 #{stage_status_icon(stage.status)}"}></span>
           <span class="flex-1">{stage.name}</span>
@@ -1894,24 +1910,163 @@ defmodule PlatformWeb.TasksLive do
         >
           {Platform.Chat.ContentRenderer.render_message(stage.description)}
         </div>
-      </div>
-      <%!-- Validations per stage --%>
-      <div
-        :for={stage <- @plan.stages || []}
-        :if={stage.validations != [] && is_list(stage.validations)}
-      >
-        <div class="ml-6 space-y-1">
-          <div
+        <%!-- Per-stage validation badges (inline, inside the stage card) --%>
+        <div
+          :if={is_list(stage.validations) and stage.validations != []}
+          data-role="stage-validations"
+          class="ml-6 flex flex-wrap gap-1.5"
+        >
+          <span
             :for={v <- stage.validations}
-            class="flex items-center gap-2 text-xs text-base-content/60"
+            data-role="stage-validation-badge"
+            data-validation-kind={v.kind}
+            data-validation-id={v.id}
+            class={"badge badge-sm gap-1 #{validation_badge_class(v.status)}"}
+            title={"#{v.kind} — #{v.status}"}
           >
             <span class={"size-3 #{stage_status_icon(v.status)}"}></span>
             <span>{v.kind}</span>
-            <span class="text-base-content/30">{v.status}</span>
+            <a
+              :if={validation_evidence_link(v)}
+              href={validation_evidence_link(v)}
+              target="_blank"
+              class="link link-hover ml-1 text-[10px] uppercase tracking-wide"
+            >
+              evidence
+            </a>
+          </span>
+        </div>
+      </div>
+
+      <%!-- E2E Behavior — task-level behavioral review gate (one or more per task —
+          the planner-authored adversarial test plan, user-approved at plan time). --%>
+      <div
+        :if={@e2e_validations != []}
+        data-role="e2e-behavior-section"
+        class="mt-3 rounded-box border border-base-300 bg-base-200/30 p-3 space-y-2"
+      >
+        <div class="flex items-center gap-2">
+          <span class="text-xs font-semibold uppercase tracking-wider text-base-content/60">
+            E2E Behavior
+          </span>
+          <span class="text-[10px] text-base-content/40">
+            task-level review · {length(@e2e_validations)} test cases
+          </span>
+        </div>
+
+        <div
+          :for={v <- @e2e_validations}
+          data-role="e2e-behavior-validation"
+          data-validation-id={v.id}
+          class="space-y-2 rounded border border-base-300 bg-base-100/40 p-2 text-xs"
+        >
+          <div class="flex items-center gap-2">
+            <span class={"size-3 #{stage_status_icon(v.status)}"}></span>
+            <span class={"badge badge-xs #{validation_badge_class(v.status)}"}>{v.status}</span>
+            <span :if={v.evaluated_by} class="text-base-content/50">
+              by {v.evaluated_by}
+            </span>
+            <a
+              :if={validation_evidence_link(v)}
+              href={validation_evidence_link(v)}
+              target="_blank"
+              class="link link-hover ml-auto text-[10px] uppercase tracking-wide"
+            >
+              evidence
+            </a>
           </div>
+
+          <%= for {label, key} <- [
+                {"Setup", "setup"},
+                {"Actions", "actions"},
+                {"Expected", "expected"}
+              ] do %>
+            <% value = e2e_payload_field(v, key) %>
+            <div :if={value} data-role={"e2e-#{key}"} class="space-y-0.5">
+              <div class="text-[10px] font-semibold uppercase tracking-wider text-base-content/50">
+                {label}
+              </div>
+              <pre class="whitespace-pre-wrap break-words rounded bg-base-100 p-2 text-[11px] leading-snug text-base-content/80">{value}</pre>
+            </div>
+          <% end %>
         </div>
       </div>
     </div>
     """
   end
+
+  # ── plan_body helpers ────────────────────────────────────────────────────
+
+  # Pull e2e_behavior validations out of the per-stage flow and surface them
+  # as a dedicated task-level section. The plan engine routes them to a
+  # synthetic "Task-level review" stage (see
+  # PlanEngine.route_e2e_behavior_validations/1); if that stage carries ONLY
+  # e2e_behavior validations and has no description authored by a planner,
+  # we hide the now-empty stage card to avoid duplicate rendering.
+  defp split_e2e_behavior_validations(stages) when is_list(stages) do
+    {hidden_stages, kept_stages, e2es} =
+      Enum.reduce(stages, {[], [], []}, fn stage, {hidden, kept, e2e_acc} ->
+        validations = if is_list(stage.validations), do: stage.validations, else: []
+
+        {e2e_here, rest} =
+          Enum.split_with(validations, fn v -> v.kind == "e2e_behavior" end)
+
+        new_e2e_acc = e2e_acc ++ e2e_here
+
+        cond do
+          # Stage entirely dedicated to e2e_behavior — drop it from the stage
+          # list; the dedicated section will render the validations.
+          e2e_here != [] and rest == [] ->
+            {[stage | hidden], kept, new_e2e_acc}
+
+          # Stage carries e2e_behavior alongside other validations — keep
+          # the stage but strip the e2e validations off it.
+          true ->
+            updated_stage = %{stage | validations: rest}
+            {hidden, [updated_stage | kept], new_e2e_acc}
+        end
+      end)
+
+    _ = hidden_stages
+    {Enum.reverse(kept_stages), e2es}
+  end
+
+  defp split_e2e_behavior_validations(_), do: {[], []}
+
+  # Color/style mapping for validation badges. Reuses DaisyUI badge utility
+  # classes so no new CSS is needed.
+  defp validation_badge_class("passed"), do: "badge-success"
+  defp validation_badge_class("failed"), do: "badge-error"
+  defp validation_badge_class("running"), do: "badge-info"
+  defp validation_badge_class(_), do: "badge-ghost"
+
+  # Evidence on a Validation is a free-form map. Surface a link only when the
+  # planner / evaluator wrote a `url`, `evidence_url`, `link`, or `canvas_id`
+  # entry — otherwise the badge stays plain.
+  defp validation_evidence_link(%{evidence: evidence}) when is_map(evidence) do
+    Map.get(evidence, "url") || Map.get(evidence, :url) ||
+      Map.get(evidence, "evidence_url") || Map.get(evidence, :evidence_url) ||
+      Map.get(evidence, "link") || Map.get(evidence, :link)
+  end
+
+  defp validation_evidence_link(_), do: nil
+
+  # Pull a single string field from an e2e_behavior evaluation_payload,
+  # tolerant of string or atom keys.
+  defp e2e_payload_field(%{evaluation_payload: payload}, key) when is_map(payload) do
+    case Map.get(payload, key) || Map.get(payload, safe_atom(key)) do
+      value when is_binary(value) -> value
+      _ -> nil
+    end
+  end
+
+  defp e2e_payload_field(_, _), do: nil
+
+  defp safe_atom(key) when is_binary(key) do
+    String.to_existing_atom(key)
+  rescue
+    ArgumentError -> nil
+  end
+
+  defp safe_atom(_), do: nil
 end

@@ -15,7 +15,19 @@ defmodule Platform.Tasks.ValidationRegistryTest do
       assert "test_pass" in kinds
       assert "code_review" in kinds
       assert "manual_approval" in kinds
-      assert length(kinds) == 8
+      assert "e2e_behavior" in kinds
+      assert length(kinds) == 9
+    end
+  end
+
+  describe "e2e_behavior definition" do
+    test "is registered as non-deterministic with planner-authored description" do
+      assert {:ok, definition} = ValidationRegistry.get("e2e_behavior")
+      assert definition.kind == "e2e_behavior"
+      assert definition.label == "E2E Behavior"
+      assert definition.deterministic == false
+      assert definition.description =~ "Planner-authored"
+      refute ValidationRegistry.deterministic?("e2e_behavior")
     end
   end
 
@@ -74,7 +86,7 @@ defmodule Platform.Tasks.ValidationRegistryTest do
   describe "all/0" do
     test "returns all definitions" do
       definitions = ValidationRegistry.all()
-      assert length(definitions) == 8
+      assert length(definitions) == 9
 
       for def <- definitions do
         assert is_binary(def.kind)

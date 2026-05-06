@@ -214,6 +214,12 @@ defmodule Platform.Orchestration.TaskRouter do
       pending_review_request?(state.task_id) ->
         # Pre-dispatch guard: a manual_approval review is open against this
         # task; suppress the dispatch entirely until a human dispositions it.
+        #
+        # Invariant: `e2e_behavior` validations DO NOT suppress dispatch.
+        # They are agent-driven (the review agent runs the script and
+        # dispositions via validation_evaluate), not human-gated. Review
+        # requests are reserved for `manual_approval` validations only — see
+        # `pending_review_request?/1` and `ReviewRequests.list_pending_for_task/1`.
         plan = Tasks.current_plan(state.task_id)
 
         maybe_log_heartbeat_suppressed(
@@ -1368,6 +1374,12 @@ defmodule Platform.Orchestration.TaskRouter do
     if stage do
       # Check if all remaining (pending) validations on this stage are manual_approval.
       # If so, treat the stage as a human gate — no heartbeat should fire.
+      #
+      # `e2e_behavior` is intentionally NOT included here: it is agent-driven
+      # (review agent executes the script and dispositions), so heartbeats must
+      # continue and dispatch must not be suppressed. Stages whose only pending
+      # validation is `e2e_behavior` fall through to `infer_stage_type/1` and
+      # are treated as a normal "review" stage for cadence purposes.
       pending_validations =
         (stage.validations || [])
         |> Enum.filter(&(&1.status == "pending"))

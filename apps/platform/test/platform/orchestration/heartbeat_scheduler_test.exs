@@ -61,7 +61,7 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
   end
 
   describe "dispatch_prompt/3" do
-    test "planning without plan instructs agent to create a plan" do
+    test "planning without plan instructs agent to create a plan with e2e_behavior + scoped manual_approval" do
       task = %{
         title: "Fix auth bug",
         description: "Auth is broken",
@@ -80,17 +80,26 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
       assert prompt =~ "lint_pass"
       assert prompt =~ "Push branch when implementation stages are complete"
       assert prompt =~ "do NOT open a PR yet"
-      assert prompt =~ "Final review stage"
-      assert prompt =~ "take a screenshot or canvas snapshot as evidence"
       assert prompt =~ "manual_approval"
-      assert prompt =~ "suite_review_request_create"
 
-      assert prompt =~
-               "screenshot into the execution space so the human can review before approving"
+      # New e2e_behavior + scoping guidance — v2 plurals: 2-5 adversarial validations,
+      # no planner-supplied failure_feedback.
+      assert prompt =~ "e2e_behavior"
+      assert prompt =~ "evaluation_payload"
+      assert prompt =~ "setup"
+      assert prompt =~ "actions"
+      assert prompt =~ "expected"
+      refute prompt =~ "\"failure_feedback\":"
+      assert prompt =~ "2-5"
+      assert prompt =~ "adversarial"
 
-      assert prompt =~ "open the PR and include the PR link as evidence on the final validation"
-      assert prompt =~ "Do NOT include `code_review` as a validation kind"
-      assert prompt =~ "Do not begin implementation until approved"
+      # UI-touching tokens (matches stage 2 heuristic)
+      assert prompt =~ ".heex"
+      assert prompt =~ "tasks_live.ex"
+
+      # Forbids code_review and overscoping
+      assert prompt =~ "code_review"
+      assert prompt =~ "Forbidden"
       assert prompt =~ "high"
     end
 
@@ -155,7 +164,7 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
       assert prompt =~ "report_blocker"
     end
 
-    test "in_review generates experiential review prompt" do
+    test "in_review with manual_approval pending renders the UI judgment review prompt" do
       task = %{
         id: "task-review-1",
         title: "Review task",
@@ -172,47 +181,39 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
         position: 1,
         name: "review",
         validations: [
-          %{id: "val-pass-1", kind: "test_pass"},
-          %{id: "val-manual-1", kind: "manual_approval"}
+          %{id: "val-pass-1", kind: "test_pass", status: "passed"},
+          %{id: "val-manual-1", kind: "manual_approval", status: "pending"}
         ]
       }
 
       prompt = HeartbeatScheduler.dispatch_prompt(task, plan, stage)
 
-      # Experiential review focus
+      # UI judgment focus (post stage-4 split)
       assert prompt =~ "Review task"
-      assert prompt =~ "exercise and validate the implementation"
-      assert prompt =~ "experiential review"
+      assert prompt =~ "manual_approval"
       assert prompt =~ "screenshots"
       assert prompt =~ "local dev server"
 
       # Review tools
-      assert prompt =~ "suite_validation_evaluate"
       assert prompt =~ "suite_review_request_create"
-      assert prompt =~ "manual_approval"
       assert prompt =~ "Do NOT self-approve `manual_approval` validations"
 
-      # Validation contract
+      # Validation contract (enrichment)
       assert prompt =~ "Current task_id: `task-review-1`"
       assert prompt =~ "Current stage_id: `stage-review-1`"
-      assert prompt =~ "validation_id=`val-pass-1`"
       assert prompt =~ "validation_id=`val-manual-1`"
 
       # Lifecycle rules
       assert prompt =~ "Do NOT call `task_update` for lifecycle status changes"
-      assert prompt =~ "fail the relevant validation"
-      assert prompt =~ "in_progress"
 
       # No deploy concerns
       refute prompt =~ "Open a PR"
       refute prompt =~ "open a PR"
       refute prompt =~ "CI status"
-      refute prompt =~ "branch freshness"
-      refute prompt =~ "merge conflict"
 
-      # No mechanical re-checks
-      refute prompt =~ "tests passed"
-      refute prompt =~ "lint clean"
+      # No e2e_behavior content (that lives in dispatch.review_e2e now)
+      refute prompt =~ "e2e_behavior"
+      refute prompt =~ "evaluation_payload"
     end
 
     test "in_review does not include repo-specific git checks" do
@@ -358,6 +359,193 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
       assert prompt =~ "v2"
       assert prompt =~ "stage 2/3"
       assert prompt =~ "coding"
+    end
+
+    test "in_review with pending e2e_behavior renders dispatch.review_e2e (NOT dispatch.in_review)" do
+      task = %{
+        id: "task-e2e-1",
+        title: "Render dependency badges",
+        description: "Make blocked-by chips render and update live",
+        status: "in_review",
+        priority: "medium",
+        execution_space_id: "exec-space-99",
+        project: %{repo_url: "git@github.com:acme/widgets.git", default_branch: "main"}
+      }
+
+      plan = %{version: 1, stages: [%{}]}
+
+      stage = %{
+        id: "stage-task-level-review",
+        position: 1,
+        name: "Task-level review",
+        validations: [
+          %{
+            id: "val-e2e-1",
+            kind: "e2e_behavior",
+            status: "pending",
+            evaluation_payload: %{
+              "setup" => "create A and B",
+              "actions" => "complete A, refresh B",
+              "expected" => "B's badge clears within 2 seconds"
+            }
+          }
+        ]
+      }
+
+      prompt = HeartbeatScheduler.dispatch_prompt(task, plan, stage)
+
+      # Routed to the e2e template — v2 plural form, no failure_feedback in payload
+      assert prompt =~ "evaluation_payload"
+      assert prompt =~ "behavioral review"
+      assert prompt =~ "val-e2e-1"
+      assert prompt =~ "create A and B"
+      assert prompt =~ "B's badge clears within 2 seconds"
+      assert prompt =~ "exec-space-99"
+      refute prompt =~ "\"failure_feedback\":"
+
+      # NOT the manual_approval prompt — its core tokens are absent.
+      # (The e2e prompt does mention "do NOT create a suite_review_request_create" as a
+      # forbidden action, so we don't refute that exact string; instead we check for
+      # markers unique to dispatch.in_review.)
+      refute prompt =~ "UI judgment"
+      refute prompt =~ "Do NOT self-approve `manual_approval` validations"
+    end
+
+    test "in_review with both e2e_behavior and manual_approval pending → e2e wins" do
+      task = %{
+        id: "task-mixed",
+        title: "Mixed review task",
+        status: "in_review",
+        priority: "medium",
+        execution_space_id: "exec-mixed",
+        project: %{repo_url: "git@github.com:acme/widgets.git", default_branch: "main"}
+      }
+
+      plan = %{version: 1, stages: [%{}]}
+
+      stage = %{
+        id: "stage-mixed",
+        position: 1,
+        name: "Task-level review",
+        validations: [
+          %{id: "val-manual", kind: "manual_approval", status: "pending"},
+          %{
+            id: "val-e2e",
+            kind: "e2e_behavior",
+            status: "pending",
+            evaluation_payload: %{
+              "setup" => "s",
+              "actions" => "a",
+              "expected" => "e"
+            }
+          }
+        ]
+      }
+
+      prompt = HeartbeatScheduler.dispatch_prompt(task, plan, stage)
+
+      # E2E wins — agent-driven gate fires before human gate
+      assert prompt =~ "behavioral review"
+      assert prompt =~ "val-e2e"
+    end
+  end
+
+  describe "select_review_template/2" do
+    test "returns dispatch.in_review with empty assigns for empty pending list" do
+      assert {"dispatch.in_review", %{}} = HeartbeatScheduler.select_review_template([])
+    end
+
+    test "returns dispatch.in_review for manual_approval-only pending" do
+      pending = [%{id: "v1", kind: "manual_approval", status: "pending"}]
+      assert {"dispatch.in_review", %{}} = HeartbeatScheduler.select_review_template(pending)
+    end
+
+    test "returns dispatch.review_e2e with all pending e2e validations rendered as JSON" do
+      pending = [
+        %{
+          id: "val-99",
+          kind: "e2e_behavior",
+          status: "pending",
+          evaluation_payload: %{"setup" => "x"}
+        }
+      ]
+
+      assert {"dispatch.review_e2e", assigns} =
+               HeartbeatScheduler.select_review_template(pending, %{
+                 id: "task-1",
+                 execution_space_id: "exec-1"
+               })
+
+      # v2: assigns carry a JSON array of {validation_id, evaluation_payload}
+      # objects under pending_e2e_validations_json — singular validation_id /
+      # evaluation_payload_json keys are gone.
+      refute Map.has_key?(assigns, :validation_id)
+      refute Map.has_key?(assigns, :evaluation_payload_json)
+      assert is_binary(assigns.pending_e2e_validations_json)
+      assert assigns.pending_e2e_validations_json =~ "val-99"
+      assert assigns.pending_e2e_validations_json =~ "setup"
+      assert assigns.execution_space_id == "exec-1"
+    end
+
+    test "e2e wins when both kinds are pending" do
+      pending = [
+        %{id: "vm", kind: "manual_approval", status: "pending"},
+        %{
+          id: "ve",
+          kind: "e2e_behavior",
+          status: "pending",
+          evaluation_payload: %{"setup" => "x"}
+        }
+      ]
+
+      assert {"dispatch.review_e2e", assigns} =
+               HeartbeatScheduler.select_review_template(pending)
+
+      assert assigns.pending_e2e_validations_json =~ "ve"
+    end
+
+    test "returns dispatch.review_e2e with all pending e2e validations when more than one is pending" do
+      # v2: the planner authors 2-5 adversarial e2e validations per task; the
+      # dispatcher must hand the review agent ALL of them in one shot, not just
+      # the first one Enum.find finds.
+      pending = [
+        %{
+          id: "val-aaa",
+          kind: "e2e_behavior",
+          status: "pending",
+          evaluation_payload: %{"setup" => "s-a", "actions" => "a-a", "expected" => "e-a"}
+        },
+        %{
+          id: "val-bbb",
+          kind: "e2e_behavior",
+          status: "pending",
+          evaluation_payload: %{"setup" => "s-b", "actions" => "a-b", "expected" => "e-b"}
+        },
+        %{
+          id: "val-ccc",
+          kind: "e2e_behavior",
+          status: "pending",
+          evaluation_payload: %{"setup" => "s-c", "actions" => "a-c", "expected" => "e-c"}
+        }
+      ]
+
+      assert {"dispatch.review_e2e", assigns} =
+               HeartbeatScheduler.select_review_template(pending, %{
+                 id: "task-multi",
+                 execution_space_id: "exec-multi"
+               })
+
+      json = assigns.pending_e2e_validations_json
+
+      # All three validation_ids show up in the rendered JSON.
+      assert json =~ "val-aaa"
+      assert json =~ "val-bbb"
+      assert json =~ "val-ccc"
+
+      # Each payload's setup field is included.
+      assert json =~ "s-a"
+      assert json =~ "s-b"
+      assert json =~ "s-c"
     end
   end
 

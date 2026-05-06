@@ -736,6 +736,44 @@ defmodule Platform.Orchestration.TaskRouterTest do
     end
   end
 
+  describe "e2e_behavior does not suppress dispatch (agent-driven gate)" do
+    test "an e2e_behavior validation is not human-gated — no review request, no suppression", %{
+      task: task,
+      assignee: assignee,
+      stage: stage
+    } do
+      Phoenix.PubSub.subscribe(Platform.PubSub, "runtime:#{assignee.id}")
+
+      {:ok, task} = Tasks.transition_task(task, "planning")
+      {:ok, _task} = Tasks.transition_task(task, "in_progress")
+
+      {:ok, _pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
+
+      assert_receive %Phoenix.Socket.Broadcast{event: "attention"}, 1_000
+
+      # Add an e2e_behavior validation to the running stage. Crucially, no
+      # review request is created — e2e_behavior is agent-driven (the review
+      # agent runs the script and dispositions via validation_evaluate).
+      {:ok, _e2e_validation} =
+        Tasks.create_validation(%{
+          stage_id: stage.id,
+          kind: "e2e_behavior",
+          evaluation_payload: %{
+            "setup" => "x",
+            "actions" => "y",
+            "expected" => "z"
+          }
+        })
+
+      Process.sleep(100)
+
+      # Router must NOT be in :waiting_human state — only manual_approval +
+      # pending review_request flips it.
+      status = TaskRouter.current_status(task.id)
+      refute status.status == :waiting_human
+    end
+  end
+
   describe "manual_approval review-request suppression" do
     test "creating a pending review_request mid-task suppresses the next :dispatch", %{
       task: task,

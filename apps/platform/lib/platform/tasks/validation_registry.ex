@@ -65,6 +65,13 @@ defmodule Platform.Tasks.ValidationRegistry do
       label: "Manual Approval",
       deterministic: false,
       description: "Wait for human gate in Review domain"
+    },
+    %{
+      kind: "e2e_behavior",
+      label: "E2E Behavior",
+      deterministic: false,
+      description:
+        "Planner-authored behavioral script executed by the review agent in a dev environment"
     }
   ]
 

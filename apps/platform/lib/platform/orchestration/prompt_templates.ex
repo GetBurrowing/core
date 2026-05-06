@@ -164,12 +164,57 @@ defmodule Platform.Orchestration.PromptTemplates do
         A good plan stage must include:
         - A clear name (not just a category label)
         - A description that explains: what specifically will be changed, which files will be modified or created, what the implementation approach is, and why that approach was chosen
-        - Appropriate validations: use test_pass and lint_pass for code changes. Use manual_approval for any stage that requires a human to visually verify a UI change — when you reach that stage, post a screenshot as a canvas into the execution space so the human can review it. Do NOT include code_review as a validation kind — it is not supported.
+        - Appropriate per-stage validations (see "Validation kinds" below)
 
         Aim for 3–7 stages. Each stage should represent a discrete, reviewable unit of work. "Client-side draft persistence" with no further detail is not acceptable — describe the actual change.
 
         Example of a good stage description:
         "Add a module-level drafts Map to ComposeInput JS hook (assets/js/hooks/compose_input.js). On every input event, store the current textarea value keyed by space_id (read from data-space-id attribute on the element). On mounted(), restore any saved draft and push it to the server via compose_changed event. On compose_reset, delete the draft for that space."
+
+        ## Validation kinds
+
+        Per-stage validations (attach to the implementation stage they protect):
+        - `test_pass` and `lint_pass` for any stage that touches code.
+        - `manual_approval` ONLY on stages that visually re-render UI. UI-touching means the stage modifies one of: `.heex` templates, `assets/js/`, `assets/css/`, `app.css`, `compose_input`, `chat_live`, `tasks_live.ex`, `_web/live/`, or `_web/components/`. If the stage description mentions one of those tokens, attach `manual_approval` and post a screenshot as a canvas into the execution space when you reach that stage. If the stage is pure backend / DB / refactor with no rendered UI change, do NOT attach manual_approval — overscoped human gates kill cycle time.
+
+        Task-level validation (attach to ONE stage; the engine routes them to a single per-task review gate):
+        - `e2e_behavior` — include 2-5 e2e_behavior validations that adversarially test different aspects of the feature. Each is one independently-dispositioned test case that the review agent will run; cover the happy path, edge cases, and regression-prone scenarios. The user reviews and approves this test plan at plan time, so be specific. Each carries an `evaluation_payload` map with these keys (all required, all strings):
+          - `setup`: how the review agent should prepare the dev environment (fixtures, seeds, etc.)
+          - `actions`: the concrete steps to perform against the running feature
+          - `expected`: the observable behavior that constitutes success
+        - Do NOT include a `failure_feedback` field — the actual failure observation IS the feedback (the review agent posts what it expected vs what it actually saw on a failed verdict). Pre-writing failures at plan time is wrong because you cannot predict them.
+        - The plan engine lifts every e2e_behavior validation to a single synthetic task-level review stage automatically — do NOT attach them to multiple stages and do NOT create a manual review stage just for them.
+
+        Worked e2e_behavior payload examples (for a "task dependency blocker UI" task — show two adversarial cases side-by-side):
+
+        Case A — happy path:
+        ```
+        {
+          "kind": "e2e_behavior",
+          "evaluation_payload": {
+            "setup": "Create two tasks A and B in the same project; mark task B as depending on task A (kind: blocks).",
+            "actions": "Open task B in the detail panel and look at the Dependencies section. Then mark task A as done via task_complete and refresh task B.",
+            "expected": "Before completion, task B's panel shows task A under 'Blocked by' with an unmet badge. After task A completes, task B's panel removes the unmet badge and the task transitions out of 'blocked' status within 2 seconds."
+          }
+        }
+        ```
+
+        Case B — regression-prone edge case (cycle / multi-dep):
+        ```
+        {
+          "kind": "e2e_behavior",
+          "evaluation_payload": {
+            "setup": "Create three tasks A, B, C; mark B depending on A and C; mark A depending on a non-existent UUID.",
+            "actions": "Open task B's detail panel; complete only task C; refresh.",
+            "expected": "Task B's 'Blocked by' list shows two entries (A unmet, C met). After completing C, only A remains unmet; B does not auto-transition out of blocked because A is still pending. The orphan-dep on A renders with a nil title fallback rather than crashing."
+          }
+        }
+        ```
+
+        Forbidden:
+        - `code_review` is NOT a supported validation kind — do not include it.
+        - Pre-writing `failure_feedback` in the evaluation_payload — the review agent observes failures and posts them at review time.
+        - `manual_approval` on stages with no UI work (ingestion logs a warning when this happens).
 
         Submit the plan with plan_submit when complete. Do not begin implementation until the plan is approved.
 
@@ -258,10 +303,11 @@ defmodule Platform.Orchestration.PromptTemplates do
       },
       %{
         slug: "dispatch.in_review",
-        name: "In-Review Dispatch Prompt",
+        name: "In-Review Dispatch Prompt (manual_approval / UI judgment)",
         description:
-          "Sent when a task is in_review. " <>
-            "Instructs the agent to exercise and validate the implementation experientially.",
+          "Sent when a task is in_review and the pending validation is `manual_approval`. " <>
+            "Behavioral validation (`e2e_behavior`) is handled by the dedicated " <>
+            "`dispatch.review_e2e` template instead.",
         variables: [
           "task_title",
           "stage_info",
@@ -270,41 +316,129 @@ defmodule Platform.Orchestration.PromptTemplates do
           "evidence_workflow_reference"
         ],
         content: """
-        Task is in review — exercise and validate the implementation.
+        Task is in review — produce a human-judgment review request for the UI / manual_approval gate.
 
         Task: {{task_title}}
         {{stage_info}}
         {{provider_specific_guidance}}
 
-        Your job is experiential review: exercise the feature in a running environment and produce evidence that it works as intended. Tests and lint were already validated during execution — do not re-check them here.
+        This prompt covers UI judgment (`manual_approval`) only. Behavioral end-to-end review is
+        dispatched separately under its own template — if the pending review validation is not
+        `manual_approval`, the dispatcher routes elsewhere.
 
-        ## How to review
+        Your job: capture concrete UI evidence and surface the human gate. Tests and lint were already
+        validated during execution — do not re-check them here.
+
+        ## How to review (UI judgment)
         - Start a local dev server for the worktree (reference the dev server skill via attached skills if available)
-        - For UI changes: navigate to the relevant pages, take screenshots, verify visual correctness and interaction behavior
-        - For non-UI changes: exercise the feature via API calls, CLI, or functional tests that demonstrate the behavior
+        - Navigate to the relevant pages, take screenshots, verify visual correctness and interaction behavior
         - Post screenshots, canvas snapshots, or other concrete evidence into the execution space
 
         ## First-turn rule (CRITICAL)
         - Do NOT spend your first substantive turn re-discovering broad task/plan state if the dispatch already provides `Current task_id`, `Current stage_id`, `validation_id`, and `execution_space_id`.
-        - For a `manual_approval` review stage, your first substantive turn should do the real review work and then create the human gate:
-          1. exercise the implementation in a running environment,
+        - Your first substantive turn should do the real review work and then create the human gate:
+          1. exercise the UI in a running environment,
           2. publish concrete evidence into the execution space,
           3. call `suite_review_request_create` for the provided `validation_id` with labelled checklist items and links to that evidence.
         - Only call `suite_task_get`, `suite_plan_get`, or `suite_validation_list` if an identifier is actually missing or the dispatch context is contradicted by direct evidence.
         - Reach the evidence + review-request step in the same attempt unless a real blocker prevents it.
 
         ## Review rules
-        - Use `suite_validation_evaluate` for deterministic review validations (`passed` / `failed`).
         - Use `suite_review_request_create` for `manual_approval` validations — include labelled checklist items plus screenshots/canvas/evidence links.
         - Do NOT call `stage_complete` before the required review request and evidence have been created.
         - Do NOT self-approve `manual_approval` validations.
         - Do NOT call `task_update` for lifecycle status changes — review outcomes flow through validations and review requests.
-        - If the feature does not work as intended, fail the relevant validation with concrete reproduction details so the task can return to `in_progress`.
-        - If review passes, let the plan engine advance the task; do not force status changes manually.
 
         The attention signal that delivered this message includes a `context` field with the full task hierarchy: project, epic, task metadata, approved plan with stages, and execution_space_id. Use it as your source of truth.
 
         {{evidence_workflow_reference}}
+
+        {{skills_reference}}
+        """
+      },
+      %{
+        slug: "dispatch.review_e2e",
+        name: "E2E Behavioral Review Dispatch Prompt",
+        description:
+          "Sent when a task is in_review and one or more pending validations are `e2e_behavior`. " <>
+            "Walks the review agent through executing each planner-authored adversarial test case " <>
+            "in a worktree dev server, then dispositioning each validation independently.",
+        variables: [
+          "task_title",
+          "pending_e2e_validations_json",
+          "execution_space_id",
+          "repo_url",
+          "task_slug",
+          "skills_reference"
+        ],
+        content: """
+        Task is in behavioral review — execute each planner-authored e2e_behavior test case and disposition each validation independently.
+
+        Task: {{task_title}}
+        Execution space: {{execution_space_id}}
+        Repository: {{repo_url}}
+        Task slug: {{task_slug}}
+
+        ## What is e2e_behavior
+
+        The planner authored an adversarial test plan (a list of `e2e_behavior` validations) describing
+        what user-visible behavior must hold for this task to be considered done. Each validation is one
+        independently-dispositioned test case. Your job is to execute every test case in a running dev
+        environment and report pass/fail per validation with concrete evidence.
+
+        ## Pending e2e_behavior validations (pre-rendered as JSON)
+
+        You have one or more pending e2e_behavior validations on this task. Each entry below carries a
+        `validation_id` and an `evaluation_payload`. Run each one in turn.
+
+        ```
+        {{pending_e2e_validations_json}}
+        ```
+
+        Each `evaluation_payload` contains three fields:
+        - `setup`: prepare the dev environment (fixtures, seeds, etc.)
+        - `actions`: concrete steps to perform against the running feature
+        - `expected`: the observable behavior that constitutes success
+
+        There is no planner-supplied `failure_feedback` — on a failed verdict, you (the review agent) compose the
+        feedback yourself from what you actually observed. That is the failure_feedback.
+
+        ## How to review
+
+        1. Start a worktree dev server for this task — reference the `suite-dev-server` skill from the bundled skills payload. The skill explains hive-only constraints and DB seeding.
+        2. For each pending validation in the list above:
+           a. Perform the `setup` steps from its payload (creating fixtures via Suite MCP tools or DB seeds, depending on what the script asks for).
+           b. Perform the `actions` against the running feature.
+           c. Compare the observed behavior to `expected`.
+           d. Disposition that single validation (see below) before moving to the next test case. Failures on one validation do NOT short-circuit the rest — run them all.
+
+        ## Disposition (per validation)
+
+        On success — observed behavior matches `expected`:
+        - Call `suite_validation_evaluate` with the matching `validation_id`, `status: "passed"`, and
+          `evidence: %{observed: "<what you saw>", notes: "<any caveats>"}`.
+
+        On failure — observed behavior does NOT match `expected`:
+        - Compose your own observation: describe what you EXPECTED (verbatim from the validation's `expected`
+          field), what you ACTUALLY OBSERVED, and any diagnostic detail (logs, screenshots, console output,
+          stack traces) that will help the implementing agent reproduce and fix.
+        - Call `suite_validation_evaluate` with the matching `validation_id`, `status: "failed"`, and
+          `evidence: %{observed: "<what you saw>", expected: "<verbatim from the payload>", diagnostics: "<logs/details>"}`.
+        - Post that same observation into the execution space ({{execution_space_id}}) so the implementing
+          agent reads it on the next dispatch — your observation IS the failure_feedback.
+
+        ## Forbidden
+
+        - Do NOT call `task_update` to bounce the task status. The plan engine handles the
+          in_review→in_progress transition automatically when any `e2e_behavior` validation fails.
+        - Do NOT create a `suite_review_request_create` for `e2e_behavior` — it is agent-driven, not
+          human-gated. Review requests are reserved for `manual_approval` validations.
+        - Do NOT self-approve. Disposition is your call to make based on observed behavior, but only
+          mark `passed` if that test case's `expected` clause was actually met.
+        - Do NOT skip validations. Run every pending e2e_behavior test case even if an earlier one failed.
+
+        The attention signal that delivered this message includes a `context` field with the full task
+        hierarchy: project, epic, task metadata, approved plan with stages, and execution_space_id.
 
         {{skills_reference}}
         """

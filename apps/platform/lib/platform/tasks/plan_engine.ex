@@ -191,6 +191,197 @@ defmodule Platform.Tasks.PlanEngine do
     end)
   end
 
+  # ── Plan ingestion: e2e_behavior routing + UI heuristic ───────────────────
+
+  # File-path / module-name tokens that strongly imply a stage actually renders
+  # or modifies user-visible UI. Used by the heuristic safety net (see
+  # `check_manual_approval_heuristic/1`) — purely advisory; planner authority wins.
+  @ui_tokens [
+    ".heex",
+    "tasks_live.ex",
+    "assets/js/",
+    "assets/css/",
+    "compose_input",
+    "app.css",
+    "chat_live",
+    "_web/live/",
+    "_web/components/"
+  ]
+
+  @doc """
+  Re-route any `e2e_behavior` validations in a list of planner-authored
+  stage_input maps to a single task-level review stage.
+
+  Behavior:
+  - If any stage already has `kind: "e2e_behavior"` validations, strip them
+    from that stage and collect them all into one final review stage.
+  - If a stage already exists whose name matches "review"/"validation" (the
+    final task-level review stage), append the e2e_behavior validations to its
+    validations list. Otherwise, synthesize a new "Task-level review" stage at
+    `max_position + 1` carrying just the lifted e2e_behavior validations.
+  - If multiple e2e_behavior validations were emitted, all are kept (the
+    planner template forbids this; we don't enforce here so a misbehaving
+    planner can still surface for the human reviewer to catch).
+
+  Stage maps use string OR atom keys (planner output is JSON-derived → strings;
+  in-process callers may use atoms). The returned list preserves the input
+  shape (string-keyed if input was string-keyed).
+  """
+  @spec route_e2e_behavior_validations([map()]) :: [map()]
+  def route_e2e_behavior_validations(stages_input) when is_list(stages_input) do
+    {stripped_stages, e2e_validations} =
+      Enum.map_reduce(stages_input, [], fn stage, acc ->
+        validations = stage_validations_field(stage)
+
+        {kept, lifted} =
+          Enum.split_with(validations, fn v ->
+            (Map.get(v, "kind") || Map.get(v, :kind)) != "e2e_behavior"
+          end)
+
+        new_stage = put_stage_validations(stage, kept)
+        {new_stage, acc ++ lifted}
+      end)
+
+    case e2e_validations do
+      [] ->
+        stripped_stages
+
+      _ ->
+        attach_e2e_validations_to_review_stage(stripped_stages, e2e_validations)
+    end
+  end
+
+  def route_e2e_behavior_validations(other), do: other
+
+  @doc """
+  Log warnings about manual_approval scoping based on a hybrid heuristic.
+
+  - Warns when a stage description contains UI tokens (`.heex`, `assets/js/`, etc.)
+    but the planner did NOT include a `manual_approval` validation — likely a
+    missed UI gate.
+  - Warns when a stage has a `manual_approval` validation but the description
+    contains zero UI tokens — likely overscoping.
+
+  Always returns the input untouched. Planner authority wins; heuristics only
+  surface likely mistakes for human reviewers.
+  """
+  @spec check_manual_approval_heuristic([map()]) :: [map()]
+  def check_manual_approval_heuristic(stages_input) when is_list(stages_input) do
+    Enum.each(stages_input, fn stage ->
+      desc = stage_field(stage, "description") || ""
+      name = stage_field(stage, "name") || "<unnamed stage>"
+      validations = stage_validations_field(stage)
+
+      has_manual_approval? =
+        Enum.any?(validations, fn v ->
+          (Map.get(v, "kind") || Map.get(v, :kind)) == "manual_approval"
+        end)
+
+      ui_touching? = ui_touching?(desc)
+
+      cond do
+        ui_touching? and not has_manual_approval? ->
+          Logger.warning(
+            "[PlanEngine] likely missed UI manual_approval — stage \"#{name}\" description " <>
+              "contains UI-touching tokens but no manual_approval validation. " <>
+              "Planner authority wins; flagging for human review."
+          )
+
+        has_manual_approval? and not ui_touching? ->
+          Logger.warning(
+            "[PlanEngine] likely overscoped manual_approval — stage \"#{name}\" carries a " <>
+              "manual_approval validation but description has zero UI-touching tokens. " <>
+              "Planner authority wins; flagging for human review."
+          )
+
+        true ->
+          :ok
+      end
+    end)
+
+    stages_input
+  end
+
+  def check_manual_approval_heuristic(other), do: other
+
+  # Pure helper exposed for the heuristic and for tests.
+  @spec ui_touching?(String.t() | nil) :: boolean()
+  def ui_touching?(nil), do: false
+
+  def ui_touching?(description) when is_binary(description) do
+    Enum.any?(@ui_tokens, &String.contains?(description, &1))
+  end
+
+  def ui_touching?(_), do: false
+
+  defp stage_field(stage, key) when is_map(stage) do
+    Map.get(stage, key) || Map.get(stage, String.to_existing_atom(key))
+  rescue
+    ArgumentError -> Map.get(stage, key)
+  end
+
+  defp stage_validations_field(stage) when is_map(stage) do
+    Map.get(stage, "validations") || Map.get(stage, :validations) || []
+  end
+
+  defp put_stage_validations(stage, validations) when is_map(stage) do
+    cond do
+      Map.has_key?(stage, "validations") ->
+        Map.put(stage, "validations", validations)
+
+      Map.has_key?(stage, :validations) ->
+        Map.put(stage, :validations, validations)
+
+      # Originally absent — pick a key style consistent with other stage keys.
+      Map.has_key?(stage, "name") or Map.has_key?(stage, "description") ->
+        Map.put(stage, "validations", validations)
+
+      true ->
+        Map.put(stage, :validations, validations)
+    end
+  end
+
+  defp attach_e2e_validations_to_review_stage(stages_input, e2e_validations) do
+    review_idx =
+      Enum.find_index(stages_input, fn stage ->
+        name = String.downcase(stage_field(stage, "name") || "")
+
+        # An existing "task-level review" or generic "review"/"validation" stage
+        # is reused; "Deploy: ..." stages are NEVER reused as the e2e gate.
+        not String.starts_with?(name, "deploy:") and
+          (String.contains?(name, "review") or String.contains?(name, "validation"))
+      end)
+
+    case review_idx do
+      nil ->
+        stages_input ++ [synthesize_task_level_review_stage(stages_input, e2e_validations)]
+
+      idx ->
+        List.update_at(stages_input, idx, fn stage ->
+          existing = stage_validations_field(stage)
+          put_stage_validations(stage, existing ++ e2e_validations)
+        end)
+    end
+  end
+
+  defp synthesize_task_level_review_stage(existing_stages, e2e_validations) do
+    next_position =
+      existing_stages
+      |> Enum.map(&(stage_field(&1, "position") || 0))
+      |> Enum.max(fn -> 0 end)
+      |> Kernel.+(1)
+
+    %{
+      "name" => "Task-level review",
+      "description" =>
+        "Synthesized by the plan engine to host the planner-authored e2e_behavior validation " <>
+          "as a single per-task review gate. The review agent executes the behavioral script " <>
+          "in a dev environment and dispositions the validation.",
+      "position" => next_position,
+      "validations" => e2e_validations
+    }
+  end
+
   @doc """
   Build deploy stages for a task based on its resolved deploy strategy.
 
@@ -487,11 +678,14 @@ defmodule Platform.Tasks.PlanEngine do
 
     # Create validation records for the deploy stage
     for validation_def <- stage_def.validations do
-      {:ok, _} =
-        Tasks.create_validation(%{
+      attrs =
+        %{
           stage_id: deploy_stage.id,
           kind: validation_def.kind
-        })
+        }
+        |> maybe_put_evaluation_payload(validation_def)
+
+      {:ok, _} = Tasks.create_validation(attrs)
     end
 
     # Start the deploy stage immediately
@@ -525,6 +719,20 @@ defmodule Platform.Tasks.PlanEngine do
         Repo.preload(Repo.get!(Plan, plan.id), stages_query())
     end
   end
+
+  # Pull `:evaluation_payload` (or string-keyed equivalent) out of a validation
+  # definition map and merge it into the create-validation attrs map. Used both
+  # for deploy-stage builder output (which won't carry one) and for plan ingestion
+  # paths that pass planner-authored e2e_behavior payloads through.
+  defp maybe_put_evaluation_payload(attrs, validation_def) when is_map(validation_def) do
+    case Map.get(validation_def, :evaluation_payload) ||
+           Map.get(validation_def, "evaluation_payload") do
+      nil -> attrs
+      payload -> Map.put(attrs, :evaluation_payload, payload)
+    end
+  end
+
+  defp maybe_put_evaluation_payload(attrs, _), do: attrs
 
   defp max_position(stages) do
     stages

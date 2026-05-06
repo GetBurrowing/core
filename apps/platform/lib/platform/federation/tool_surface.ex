@@ -949,7 +949,7 @@ defmodule Platform.Federation.ToolSurface do
             type: "array",
             required: true,
             description:
-              "Array of stage objects: {name, description, position, validations: [{kind}]}. Valid validation kinds: ci_check, lint_pass, type_check, test_pass, code_review, manual_approval"
+              "Array of stage objects: {name, description, position, validations: [{kind, evaluation_payload?}]}. Valid validation kinds: ci_check, ci_passed, pr_merged, lint_pass, type_check, test_pass, manual_approval, e2e_behavior. The e2e_behavior kind requires an evaluation_payload map with keys setup/actions/expected (the planner authors an adversarial test plan the review agent will execute — include 2-5 e2e_behavior validations covering happy path, edges, and regression-prone scenarios; do NOT pre-write failure_feedback, the review agent observes failures at review time)."
           }
         },
         returns: "The created plan with stages and validations preloaded",
@@ -2212,7 +2212,15 @@ defmodule Platform.Federation.ToolSurface do
 
   def execute("plan_create", args, _context) do
     task_id = Map.get(args, "task_id")
-    stages_input = Map.get(args, "stages", [])
+    raw_stages_input = Map.get(args, "stages", [])
+
+    # Pre-persistence rewrites:
+    # 1. Lift any e2e_behavior validations into a single task-level review stage.
+    # 2. Log advisory warnings about manual_approval scoping (planner authority wins).
+    stages_input =
+      raw_stages_input
+      |> Platform.Tasks.PlanEngine.route_e2e_behavior_validations()
+      |> Platform.Tasks.PlanEngine.check_manual_approval_heuristic()
 
     if is_nil(task_id) do
       {:error,
@@ -2241,10 +2249,14 @@ defmodule Platform.Federation.ToolSurface do
                       stage_input
                       |> Map.get("validations", [])
                       |> Enum.map(fn v_input ->
-                        case Tasks.create_validation(%{
-                               stage_id: stage.id,
-                               kind: Map.get(v_input, "kind")
-                             }) do
+                        attrs =
+                          %{
+                            stage_id: stage.id,
+                            kind: Map.get(v_input, "kind")
+                          }
+                          |> maybe_put_evaluation_payload(v_input)
+
+                        case Tasks.create_validation(attrs) do
                           {:ok, validation} -> validation
                           {:error, reason} -> Repo.rollback(reason)
                         end
@@ -3017,12 +3029,24 @@ defmodule Platform.Federation.ToolSurface do
       kind: validation.kind,
       status: validation.status,
       evidence: validation.evidence,
+      evaluation_payload: Map.get(validation, :evaluation_payload),
       evaluated_by: validation.evaluated_by,
       evaluated_at: format_datetime(validation.evaluated_at),
       inserted_at: format_datetime(validation.inserted_at),
       updated_at: format_datetime(validation.updated_at)
     }
   end
+
+  # Pull `evaluation_payload` from a planner-supplied validation map (string-keyed
+  # since it arrived through MCP) and merge into create-validation attrs.
+  defp maybe_put_evaluation_payload(attrs, v_input) when is_map(v_input) do
+    case Map.get(v_input, "evaluation_payload") || Map.get(v_input, :evaluation_payload) do
+      nil -> attrs
+      payload -> Map.put(attrs, :evaluation_payload, payload)
+    end
+  end
+
+  defp maybe_put_evaluation_payload(attrs, _), do: attrs
 
   defp serialize_review_request(request) do
     items =
