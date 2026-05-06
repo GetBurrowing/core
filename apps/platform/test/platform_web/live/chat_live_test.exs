@@ -956,6 +956,55 @@ defmodule PlatformWeb.ChatLiveTest do
       assert count_occurrences(html, "<span>🎉</span>") == 0
     end
 
+    test "react event in one LV broadcasts the new pill to a peer LV in the same space",
+         %{conn: _conn} do
+      # The existing "a reaction from another participant" test bypasses the
+      # `react` event handler — it calls Chat.add_reaction/1 directly to fire
+      # the broadcast. That covers handle_info, but does NOT lock in the
+      # contract that clicking the action-bar button on one user's LV causes
+      # a peer user's LV to re-render with the new pill.
+      #
+      # This test mounts two LVs as different users, has user A click `react`
+      # on their own message, and asserts user B's rendered HTML grows the
+      # pill — verifying the full path:
+      #   LV-A:react event → Chat.toggle_reaction/3 → ChatPubSub.broadcast →
+      #   LV-B:handle_info({:reaction_added, _}) → reinsert_stream_message.
+      alice =
+        insert_chat_user(%{email: "alice@example.com", oidc_sub: "alice-sub", name: "Alice"})
+
+      bob = insert_chat_user(%{email: "bob@example.com", oidc_sub: "bob-sub", name: "Bob"})
+
+      conn_a = init_test_session(Phoenix.ConnTest.build_conn(), current_user_id: alice.id)
+      conn_b = init_test_session(Phoenix.ConnTest.build_conn(), current_user_id: bob.id)
+
+      {:ok, view_a, _} = live(conn_a, ~p"/chat/general")
+      {:ok, view_b, _} = live(conn_b, ~p"/chat/general")
+
+      view_a
+      |> form("#compose-form", compose: %{text: "two-LV PubSub target"})
+      |> render_submit()
+
+      space = Chat.get_space_by_slug("general")
+      [msg | _] = Chat.list_messages(space.id)
+
+      # Sanity: B sees the message (confirms B's subscription is live).
+      assert render(view_b) =~ "two-LV PubSub target"
+
+      # Alice clicks 👍 via the `react` event on her own message.
+      render_click(view_a, "react", %{"message-id" => msg.id, "emoji" => "👍"})
+
+      # Bob's LV — without any client-side interaction — must show the pill.
+      html_b = render(view_b)
+      assert count_occurrences(html_b, "<span>👍</span><span>1</span>") == 1
+
+      # Inverse: Alice toggles off via a second `react` click → Bob's pill
+      # disappears. Locks in the remove-broadcast path of the same contract.
+      render_click(view_a, "react", %{"message-id" => msg.id, "emoji" => "👍"})
+
+      html_b_after_remove = render(view_b)
+      assert count_occurrences(html_b_after_remove, "<span>👍</span>") == 0
+    end
+
     test "duplicate reaction_added delivery does not double-count",
          %{conn: conn} do
       # Stream-shape refactor guarantee: reactions ride on the stream item,
