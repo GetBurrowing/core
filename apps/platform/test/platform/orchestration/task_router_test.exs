@@ -235,9 +235,18 @@ defmodule Platform.Orchestration.TaskRouterTest do
         |> ExecutionSpace.list_messages_with_participants()
         |> Enum.map(& &1.content)
 
-      assert Enum.any?(
+      # Task 019e00cb stage 2 wired `HeartbeatScheduler.heartbeat_suppressible?/2`
+      # into `maybe_log_heartbeat_suppressed/3`. This scenario satisfies the
+      # predicate (running manual_approval stage, every pending validation linked
+      # to the open review_request) so the per-tick "Heartbeat suppressed" log
+      # is intentionally elided — the review_request itself is the visible
+      # signal. The assertions above (`status == :waiting_human`,
+      # `current_stage_id`, task status `in_review`) cover the state-machine
+      # transition; we just need to confirm we are NOT spamming the noise log.
+      refute Enum.any?(
                messages,
-               &String.contains?(&1, "Heartbeat suppressed: waiting for manual approval")
+               &(String.contains?(&1, "Heartbeat suppressed") or
+                   String.contains?(&1, "Dispatch suppressed"))
              )
     end
 
@@ -983,6 +992,310 @@ defmodule Platform.Orchestration.TaskRouterTest do
       assert status.status == :waiting_human
       # Escalation count should NOT have advanced (no stall path)
       assert status.escalation_count == 5
+    end
+  end
+
+  describe "heartbeat_suppressible?/2 predicate wiring (task 019e00cb stage 2)" do
+    # Each test exercises one of the three call sites that the predicate gates:
+    #   1. send_heartbeat short-circuit at the top of handle_info(:heartbeat, …)
+    #   2. maybe_log_heartbeat_suppressed/3 — the per-tick "Dispatch suppressed"
+    #      execution-space message that piles up
+    #   3. handle_possible_stall/2 — the "Stall detected | Escalation N/M" log
+    #      and escalation count bump
+    #
+    # The shared setup below builds a stage whose ONLY pending validation is a
+    # manual_approval already linked to an open review request — i.e. the
+    # predicate's "true" path. Variant tests then mutate that shape to exercise
+    # the false branches (mixed kinds, missing linkage, no pending validations).
+
+    defp seed_linked_manual_approval(task, stage, space) do
+      {:ok, manual_validation} =
+        Tasks.create_validation(%{stage_id: stage.id, kind: "manual_approval"})
+
+      {:ok, request} =
+        Platform.Tasks.ReviewRequests.create_review_request(%{
+          validation_id: manual_validation.id,
+          task_id: task.id,
+          execution_space_id: space.id,
+          items: [%{label: "Visual check"}]
+        })
+
+      {manual_validation, request}
+    end
+
+    defp drop_seed_validations(stage) do
+      # The shared setup creates a default test_pass validation on the stage.
+      # Several predicate tests need the stage's pending set to be exactly the
+      # manual_approval(s) we add — so wipe the seeded test_pass first.
+      Platform.Repo.delete_all(
+        from(v in Platform.Tasks.Validation, where: v.stage_id == ^stage.id)
+      )
+    end
+
+    test "all-linked manual_approval pending → handle_info(:heartbeat) takes the suppress branch (no attention dispatch)",
+         %{
+           task: task,
+           assignee: assignee,
+           stage: stage
+         } do
+      Phoenix.PubSub.subscribe(Platform.PubSub, "runtime:#{assignee.id}")
+
+      {:ok, task} = Tasks.transition_task(task, "planning")
+      {:ok, _task} = Tasks.transition_task(task, "in_progress")
+
+      stage
+      |> Ecto.Changeset.change(%{status: "running", started_at: DateTime.utc_now()})
+      |> Platform.Repo.update!()
+
+      {:ok, pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
+      assert_receive %Phoenix.Socket.Broadcast{event: "attention"}, 1_000
+
+      space = ExecutionSpace.find_by_task_id(task.id)
+      drop_seed_validations(stage)
+      seed_linked_manual_approval(task, stage, space)
+
+      # The :review_request_pending PubSub flips status → :waiting_human, so
+      # to exercise the line-253 short-circuit specifically we re-arm the router
+      # to :running and force-tick :heartbeat.
+      Process.sleep(100)
+
+      :sys.replace_state(pid, fn s ->
+        %{s | status: :running, current_stage_id: stage.id, heartbeat_ref: nil}
+      end)
+
+      send(pid, :heartbeat)
+
+      refute_receive %Phoenix.Socket.Broadcast{
+                       event: "attention",
+                       payload: %{signal: %{reason: "task_heartbeat"}}
+                     },
+                     400
+    end
+
+    test "all-linked manual_approval pending → maybe_log_heartbeat_suppressed posts no execution-space log",
+         %{
+           task: task,
+           assignee: assignee,
+           stage: stage
+         } do
+      Phoenix.PubSub.subscribe(Platform.PubSub, "runtime:#{assignee.id}")
+
+      {:ok, task} = Tasks.transition_task(task, "planning")
+      {:ok, _task} = Tasks.transition_task(task, "in_progress")
+
+      stage
+      |> Ecto.Changeset.change(%{status: "running", started_at: DateTime.utc_now()})
+      |> Platform.Repo.update!()
+
+      {:ok, pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
+      assert_receive %Phoenix.Socket.Broadcast{event: "attention"}, 1_000
+
+      space = ExecutionSpace.find_by_task_id(task.id)
+      drop_seed_validations(stage)
+      seed_linked_manual_approval(task, stage, space)
+
+      Process.sleep(100)
+
+      # Snapshot messages BEFORE forcing a redundant :dispatch tick.
+      baseline = ExecutionSpace.list_messages_with_participants(space.id)
+      baseline_count = length(baseline)
+
+      # The :dispatch handler hits the pre-dispatch guard at line 214 which
+      # calls maybe_log_heartbeat_suppressed/3. With the predicate gate, that
+      # call must NOT post a "Dispatch suppressed" line.
+      send(pid, :dispatch)
+      Process.sleep(150)
+
+      after_msgs = ExecutionSpace.list_messages_with_participants(space.id)
+      new_msgs = Enum.drop(after_msgs, baseline_count) |> Enum.map(& &1.content)
+
+      suppression_logs =
+        Enum.filter(new_msgs, fn m ->
+          String.contains?(m, "Dispatch suppressed") or
+            String.contains?(m, "Heartbeat suppressed")
+        end)
+
+      assert suppression_logs == [],
+             "expected predicate gate to swallow suppression log, got: #{inspect(suppression_logs)}"
+    end
+
+    test "all-linked manual_approval pending → handle_possible_stall does NOT escalate even when forced past :waiting_human guard",
+         %{
+           task: task,
+           assignee: assignee,
+           stage: stage
+         } do
+      Phoenix.PubSub.subscribe(Platform.PubSub, "runtime:#{assignee.id}")
+
+      {:ok, task} = Tasks.transition_task(task, "planning")
+      {:ok, _task} = Tasks.transition_task(task, "in_progress")
+
+      stage
+      |> Ecto.Changeset.change(%{status: "running", started_at: DateTime.utc_now()})
+      |> Platform.Repo.update!()
+
+      {:ok, pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
+      assert_receive %Phoenix.Socket.Broadcast{event: "attention"}, 1_000
+
+      space = ExecutionSpace.find_by_task_id(task.id)
+      drop_seed_validations(stage)
+      seed_linked_manual_approval(task, stage, space)
+
+      Process.sleep(100)
+
+      # Force-arm :running with a stale activity timestamp so the heartbeat
+      # path WOULD reach handle_possible_stall absent the new predicate gate.
+      stale_at = DateTime.add(DateTime.utc_now(), -60 * 60, :second)
+
+      :sys.replace_state(pid, fn s ->
+        %{
+          s
+          | status: :running,
+            current_stage_id: stage.id,
+            heartbeat_ref: nil,
+            last_dispatch_at: stale_at,
+            last_runtime_event_at: stale_at,
+            last_evidence_at: stale_at,
+            stage_started_at: stale_at,
+            escalation_count: 0
+        }
+      end)
+
+      baseline = ExecutionSpace.list_messages_with_participants(space.id)
+      baseline_count = length(baseline)
+
+      send(pid, :heartbeat)
+      Process.sleep(150)
+
+      status = TaskRouter.current_status(task.id)
+
+      assert status.escalation_count == 0,
+             "predicate gate must short-circuit handle_possible_stall — escalation count must not bump"
+
+      after_msgs = ExecutionSpace.list_messages_with_participants(space.id)
+      new_msgs = Enum.drop(after_msgs, baseline_count) |> Enum.map(& &1.content)
+
+      stall_logs = Enum.filter(new_msgs, &String.contains?(&1, "Stall detected"))
+
+      assert stall_logs == [],
+             "expected no Stall detected log, got: #{inspect(stall_logs)}"
+    end
+
+    test "manual_approval pending but review_request linkage missing → guardrail b keeps Stall detected log alive",
+         %{
+           task: task,
+           assignee: assignee,
+           stage: stage
+         } do
+      Phoenix.PubSub.subscribe(Platform.PubSub, "runtime:#{assignee.id}")
+
+      {:ok, task} = Tasks.transition_task(task, "planning")
+      {:ok, _task} = Tasks.transition_task(task, "in_progress")
+
+      stage
+      |> Ecto.Changeset.change(%{status: "running", started_at: DateTime.utc_now()})
+      |> Platform.Repo.update!()
+
+      {:ok, pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
+      assert_receive %Phoenix.Socket.Broadcast{event: "attention"}, 1_000
+
+      space = ExecutionSpace.find_by_task_id(task.id)
+      drop_seed_validations(stage)
+
+      # Add a manual_approval validation but DO NOT create a linked review_request.
+      # Predicate must return false (broken linkage) → escalation path runs.
+      {:ok, _manual_validation} =
+        Tasks.create_validation(%{stage_id: stage.id, kind: "manual_approval"})
+
+      Process.sleep(50)
+
+      stale_at = DateTime.add(DateTime.utc_now(), -60 * 60, :second)
+
+      :sys.replace_state(pid, fn s ->
+        %{
+          s
+          | status: :running,
+            current_stage_id: stage.id,
+            heartbeat_ref: nil,
+            last_dispatch_at: stale_at,
+            last_runtime_event_at: stale_at,
+            last_evidence_at: stale_at,
+            stage_started_at: stale_at,
+            escalation_count: 0
+        }
+      end)
+
+      baseline = ExecutionSpace.list_messages_with_participants(space.id)
+      baseline_count = length(baseline)
+
+      send(pid, :heartbeat)
+      Process.sleep(200)
+
+      after_msgs = ExecutionSpace.list_messages_with_participants(space.id)
+      new_msgs = Enum.drop(after_msgs, baseline_count) |> Enum.map(& &1.content)
+
+      stall_logs = Enum.filter(new_msgs, &String.contains?(&1, "Stall detected"))
+
+      assert length(stall_logs) >= 1,
+             "guardrail b: missing review_request linkage must NOT suppress stall log; got messages=#{inspect(new_msgs)}"
+    end
+
+    test "mixed pending validations (test_pass + manual_approval) → predicate returns false; suppression NOT applied",
+         %{
+           task: task,
+           assignee: assignee,
+           stage: stage
+         } do
+      Phoenix.PubSub.subscribe(Platform.PubSub, "runtime:#{assignee.id}")
+
+      {:ok, task} = Tasks.transition_task(task, "planning")
+      {:ok, _task} = Tasks.transition_task(task, "in_progress")
+
+      # Mark the seeded stage as running so the heartbeat path resolves it.
+      stage
+      |> Ecto.Changeset.change(%{status: "running", started_at: DateTime.utc_now()})
+      |> Platform.Repo.update!()
+
+      {:ok, pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
+      assert_receive %Phoenix.Socket.Broadcast{event: "attention"}, 1_000
+
+      # Keep the seeded test_pass validation (mixed kinds) AND add a linked
+      # manual_approval. Predicate must return false because not every pending
+      # validation is a manual_approval.
+      space = ExecutionSpace.find_by_task_id(task.id)
+      seed_linked_manual_approval(task, stage, space)
+
+      Process.sleep(100)
+
+      stale_at = DateTime.add(DateTime.utc_now(), -60 * 60, :second)
+
+      :sys.replace_state(pid, fn s ->
+        %{
+          s
+          | status: :running,
+            current_stage_id: stage.id,
+            heartbeat_ref: nil,
+            last_dispatch_at: stale_at,
+            last_runtime_event_at: stale_at,
+            last_evidence_at: stale_at,
+            stage_started_at: stale_at,
+            escalation_count: 0
+        }
+      end)
+
+      baseline = ExecutionSpace.list_messages_with_participants(space.id)
+      baseline_count = length(baseline)
+
+      send(pid, :heartbeat)
+      Process.sleep(200)
+
+      after_msgs = ExecutionSpace.list_messages_with_participants(space.id)
+      new_msgs = Enum.drop(after_msgs, baseline_count) |> Enum.map(& &1.content)
+
+      stall_logs = Enum.filter(new_msgs, &String.contains?(&1, "Stall detected"))
+
+      assert length(stall_logs) >= 1,
+             "mixed pending kinds (test_pass + manual_approval) must NOT suppress stall log; got=#{inspect(new_msgs)}"
     end
   end
 

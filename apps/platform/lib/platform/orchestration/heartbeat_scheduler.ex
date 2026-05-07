@@ -19,6 +19,8 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
 
   alias Platform.Orchestration.PromptTemplates
   alias Platform.Orchestration.ProviderGuidance
+  alias Platform.Tasks.ReviewRequest
+  alias Platform.Tasks.Stage
 
   @type stage_type :: String.t()
 
@@ -85,6 +87,77 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
   @doc "Returns true if the stage type is a human gate that should skip heartbeats."
   @spec manual_approval?(stage_type()) :: boolean()
   def manual_approval?(stage_type), do: stage_type == "manual_approval"
+
+  @doc """
+  Decide whether heartbeats should be suppressed for `stage` because every
+  pending validation on it is a `manual_approval` already linked to an open
+  review request awaiting a human.
+
+  Pure 2-arity predicate — takes already-loaded data and performs no DB calls,
+  so it can be unit-tested cheaply and called from the periodic loop without
+  per-tick query overhead. Stage 2 of task 019e00cb wires this into the
+  `TaskRouter` heartbeat path; this stage adds the predicate only.
+
+  Returns `true` iff ALL of the following hold:
+    * `stage` has at least one pending validation,
+    * every pending validation has `kind: "manual_approval"`,
+    * every such manual_approval validation has at least one matching open
+      `review_request` in `pending_review_requests` whose `validation_id`
+      points back at it.
+
+  Returns `false` when any of the following holds (the regular advance /
+  heartbeat path keeps emitting for visibility):
+    * the stage has no pending validations (the regular advance path handles
+      empty-pending — this predicate explicitly opts out so that callers do
+      not accidentally suppress on completed stages),
+    * any pending validation is non-`manual_approval` (mixed kinds mean the
+      agent still has work to do — keep nudging it),
+    * any manual_approval validation lacks a linked open review request in
+      the supplied list (broken or missing linkage — guardrail: keep
+      heartbeats alive for visibility rather than silently stalling).
+
+  ## Inputs
+
+    * `stage` — a `Stage.t()` (or compatible map) whose `:validations`
+      association is already loaded. Both atom-keyed structs and string-keyed
+      maps are accepted, mirroring the rest of this module's helpers.
+    * `pending_review_requests` — a list of `ReviewRequest.t()` (or
+      compatible maps) representing the OPEN review requests for the task.
+      Callers are responsible for filtering by `status == "pending"` before
+      calling — this predicate trusts the supplied list.
+  """
+  @spec heartbeat_suppressible?(Stage.t() | map(), [ReviewRequest.t() | map()]) :: boolean()
+  def heartbeat_suppressible?(stage, pending_review_requests)
+      when is_list(pending_review_requests) do
+    pending = pending_validations_for_stage(stage)
+
+    cond do
+      pending == [] ->
+        false
+
+      not Enum.all?(pending, &manual_approval_validation?/1) ->
+        false
+
+      true ->
+        Enum.all?(pending, &has_matching_open_review_request?(&1, pending_review_requests))
+    end
+  end
+
+  def heartbeat_suppressible?(_stage, _pending_review_requests), do: false
+
+  defp manual_approval_validation?(validation) do
+    kind = Map.get(validation, :kind) || Map.get(validation, "kind")
+    kind == "manual_approval"
+  end
+
+  defp has_matching_open_review_request?(validation, review_requests) do
+    validation_id = Map.get(validation, :id) || Map.get(validation, "id")
+
+    validation_id != nil and
+      Enum.any?(review_requests, fn rr ->
+        (Map.get(rr, :validation_id) || Map.get(rr, "validation_id")) == validation_id
+      end)
+  end
 
   @doc """
   Generate the initial dispatch prompt sent when a task is first assigned.

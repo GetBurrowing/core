@@ -250,7 +250,15 @@ defmodule Platform.Orchestration.TaskRouter do
 
     stage_type = heartbeat_stage_type(state)
 
-    if HeartbeatScheduler.manual_approval?(stage_type) do
+    # Heartbeat short-circuit: when the running stage is a manual_approval gate
+    # whose pending validations are all linked to open review_requests, suppress
+    # the dispatch and reschedule for the next tick. The pure predicate
+    # `HeartbeatScheduler.heartbeat_suppressible?/2` is the single source of truth
+    # for this decision (task 019e00cb stage 1). Guardrail b: when a pending
+    # manual_approval is NOT linked to a review_request, the predicate returns
+    # false and we fall through to the normal heartbeat path so the agent gets
+    # nudged to fix the broken linkage instead of stalling silently.
+    if heartbeat_suppressible_for_state?(state) do
       {:noreply, schedule_heartbeat(state)}
     else
       interval_ms = HeartbeatScheduler.interval_ms(stage_type) || 0
@@ -788,6 +796,21 @@ defmodule Platform.Orchestration.TaskRouter do
   defp handle_possible_stall(%State{status: :waiting_human} = state, _task), do: state
 
   defp handle_possible_stall(state, task) do
+    # Predicate gate (task 019e00cb stage 2): a stalled-but-correctly-linked
+    # manual_approval stage is NOT a stall — it is a task waiting on a human
+    # who can see the review_request. Skip escalation / "Stall detected" log
+    # entirely so we don't pile up false-alarm escalation noise in the
+    # execution space. Guardrail b (predicate returns false on broken linkage)
+    # keeps the original escalation path alive when the review_request is
+    # missing or detached from the stage.
+    if heartbeat_suppressible_for_state?(state) do
+      state
+    else
+      do_handle_possible_stall(state, task)
+    end
+  end
+
+  defp do_handle_possible_stall(state, task) do
     stage_type = heartbeat_stage_type(state)
     max_esc = HeartbeatScheduler.max_escalations(stage_type) || 2
     new_count = state.escalation_count + 1
@@ -1029,6 +1052,28 @@ defmodule Platform.Orchestration.TaskRouter do
   defp maybe_log_heartbeat_suppressed(%State{execution_space_id: nil}, _stage, _opts), do: :ok
 
   defp maybe_log_heartbeat_suppressed(%State{} = state, stage, opts) do
+    # Predicate gate (task 019e00cb stage 2): when every pending validation on
+    # this stage is a manual_approval already linked to an open review_request,
+    # the suppression is "expected" and we don't post a per-tick log. The
+    # review_request itself is the visible signal a human needs. Posting the
+    # same "Dispatch suppressed" line on every heartbeat tick was the message
+    # pile-up Rowan reported.
+    #
+    # Some call sites pass `stage = nil` when `current_stage_id` is unset
+    # (early dispatch, pre-stage_transitioned). Fall back to the running stage
+    # in that case so the predicate has the data it needs.
+    resolved_stage =
+      stage ||
+        state.task_id |> Tasks.current_plan() |> current_running_stage()
+
+    if heartbeat_suppressible_for_task?(state.task_id, resolved_stage) do
+      :ok
+    else
+      do_log_heartbeat_suppressed(state, stage, opts)
+    end
+  end
+
+  defp do_log_heartbeat_suppressed(%State{} = state, stage, opts) do
     task = Tasks.get_task_detail(state.task_id)
 
     if task do
@@ -1360,6 +1405,29 @@ defmodule Platform.Orchestration.TaskRouter do
 
   defp pending_review_request?(task_id) do
     ReviewRequests.list_pending_for_task(task_id) != []
+  end
+
+  # Stage 2 wiring of `HeartbeatScheduler.heartbeat_suppressible?/2`. Loads the
+  # current stage and the task's open review_requests, then defers to the pure
+  # predicate. Each call performs one DB query (`list_pending_for_task/1`) plus
+  # an in-memory plan lookup; we accept the per-tick query because the heartbeat
+  # path is sparse (per-task interval is minutes, not seconds) and the existing
+  # diagnostic/logging path already issues comparable queries on the same tick.
+  defp heartbeat_suppressible_for_state?(%State{task_id: task_id} = state) do
+    plan = Tasks.current_plan(task_id)
+
+    stage =
+      find_stage(plan, state.current_stage_id) ||
+        current_running_stage(plan)
+
+    heartbeat_suppressible_for_task?(task_id, stage)
+  end
+
+  defp heartbeat_suppressible_for_task?(_task_id, nil), do: false
+
+  defp heartbeat_suppressible_for_task?(task_id, stage) do
+    pending_requests = ReviewRequests.list_pending_for_task(task_id)
+    HeartbeatScheduler.heartbeat_suppressible?(stage, pending_requests)
   end
 
   defp maybe_mark_review_task_in_review(%State{} = state) do

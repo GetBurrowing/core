@@ -60,6 +60,167 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
     end
   end
 
+  describe "heartbeat_suppressible?/2" do
+    # Stage 1 of task 019e00cb: pure 2-arity predicate. The suppression policy
+    # is deliberately conservative — we only suppress when EVERY pending
+    # validation is a manual_approval AND every manual_approval has at least
+    # one matching open review_request in the supplied list. Any other shape
+    # falls back to false so the regular heartbeat / advance path runs.
+
+    test "returns true when every pending manual_approval has a linked review_request" do
+      stage = %{
+        id: "stage-1",
+        validations: [
+          %{id: "val-mp-1", kind: "manual_approval", status: "pending"},
+          %{id: "val-mp-2", kind: "manual_approval", status: "pending"}
+        ]
+      }
+
+      review_requests = [
+        %{id: "rr-1", validation_id: "val-mp-1", status: "pending"},
+        %{id: "rr-2", validation_id: "val-mp-2", status: "pending"}
+      ]
+
+      assert HeartbeatScheduler.heartbeat_suppressible?(stage, review_requests) == true
+    end
+
+    test "returns true for a single pending manual_approval with one matching review_request" do
+      stage = %{
+        id: "stage-1",
+        validations: [
+          %{id: "val-mp-1", kind: "manual_approval", status: "pending"}
+        ]
+      }
+
+      review_requests = [
+        %{id: "rr-1", validation_id: "val-mp-1", status: "pending"}
+      ]
+
+      assert HeartbeatScheduler.heartbeat_suppressible?(stage, review_requests) == true
+    end
+
+    test "returns false when pending validations include a non-manual_approval kind" do
+      stage = %{
+        id: "stage-1",
+        validations: [
+          %{id: "val-mp-1", kind: "manual_approval", status: "pending"},
+          %{id: "val-tp-1", kind: "test_pass", status: "pending"}
+        ]
+      }
+
+      review_requests = [
+        %{id: "rr-1", validation_id: "val-mp-1", status: "pending"}
+      ]
+
+      # Mixed kinds = agent still has work to do — do not suppress.
+      assert HeartbeatScheduler.heartbeat_suppressible?(stage, review_requests) == false
+    end
+
+    test "returns false when a pending manual_approval has no review_request in the list" do
+      stage = %{
+        id: "stage-1",
+        validations: [
+          %{id: "val-mp-1", kind: "manual_approval", status: "pending"}
+        ]
+      }
+
+      assert HeartbeatScheduler.heartbeat_suppressible?(stage, []) == false
+    end
+
+    test "returns false when the supplied review_request points at a different validation" do
+      stage = %{
+        id: "stage-1",
+        validations: [
+          %{id: "val-mp-1", kind: "manual_approval", status: "pending"}
+        ]
+      }
+
+      # rr exists, but its validation_id doesn't match the pending validation —
+      # broken/missing linkage. Guardrail: keep emitting heartbeats for
+      # visibility rather than silently stalling.
+      review_requests = [
+        %{id: "rr-1", validation_id: "val-other", status: "pending"}
+      ]
+
+      assert HeartbeatScheduler.heartbeat_suppressible?(stage, review_requests) == false
+    end
+
+    test "returns false when the stage has no pending validations" do
+      # All validations are passed/failed/etc — the regular advance path
+      # handles this. This predicate returns false so the caller's existing
+      # logic runs unchanged (this is NOT a suppression case).
+      stage = %{
+        id: "stage-1",
+        validations: [
+          %{id: "val-mp-1", kind: "manual_approval", status: "passed"},
+          %{id: "val-tp-1", kind: "test_pass", status: "passed"}
+        ]
+      }
+
+      review_requests = [
+        %{id: "rr-1", validation_id: "val-mp-1", status: "resolved"}
+      ]
+
+      assert HeartbeatScheduler.heartbeat_suppressible?(stage, review_requests) == false
+    end
+
+    test "returns false defensively for a stage with no validations at all" do
+      stage = %{id: "stage-empty", validations: []}
+      assert HeartbeatScheduler.heartbeat_suppressible?(stage, []) == false
+    end
+
+    test "only the supplied stage's validations matter — sibling-stage validations don't leak" do
+      # Stage A is what we're checking — it has a single pending manual_approval
+      # with a matching review request, so suppression is true regardless of
+      # what's happening on stage B (a sibling whose validations are NOT in
+      # the supplied stage map).
+      stage_a = %{
+        id: "stage-a",
+        validations: [
+          %{id: "val-a-mp", kind: "manual_approval", status: "pending"}
+        ]
+      }
+
+      # Sibling-stage data the caller did NOT pass into the predicate. The
+      # predicate must not consult anything outside `stage` and
+      # `pending_review_requests`. We assert that by constructing a mismatched
+      # sibling stage and never handing it to the function.
+      _stage_b = %{
+        id: "stage-b",
+        validations: [
+          %{id: "val-b-tp", kind: "test_pass", status: "pending"}
+        ]
+      }
+
+      # The review request list is task-scoped — it can include rrs for other
+      # stages' validations. The predicate must ignore those when matching.
+      review_requests = [
+        %{id: "rr-a", validation_id: "val-a-mp", status: "pending"},
+        %{id: "rr-b-noise", validation_id: "val-b-mp-not-in-stage-a", status: "pending"}
+      ]
+
+      assert HeartbeatScheduler.heartbeat_suppressible?(stage_a, review_requests) == true
+    end
+
+    test "accepts string-keyed maps for both stage and review_requests" do
+      # Defensive shape compatibility — the rest of this module accepts both
+      # atom-keyed structs and string-keyed maps via Map.get fallbacks. The
+      # predicate must not crash on either.
+      stage = %{
+        "id" => "stage-1",
+        "validations" => [
+          %{"id" => "val-mp-1", "kind" => "manual_approval", "status" => "pending"}
+        ]
+      }
+
+      review_requests = [
+        %{"id" => "rr-1", "validation_id" => "val-mp-1", "status" => "pending"}
+      ]
+
+      assert HeartbeatScheduler.heartbeat_suppressible?(stage, review_requests) == true
+    end
+  end
+
   describe "dispatch_prompt/3" do
     test "planning without plan instructs agent to create a plan with e2e_behavior + scoped manual_approval" do
       task = %{
