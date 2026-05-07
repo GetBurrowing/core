@@ -1,10 +1,9 @@
 defmodule Platform.Org.MemoryEntry do
   @moduledoc """
-  Schema for org-level memory entries (daily notes, long-term memories).
+  Schema for org-level memory entries — short-lived, append-only notes.
 
-  These entries mirror OpenClaw's daily memory files (memory/YYYY-MM-DD.md)
-  but at the organizational level. Agents append entries to record decisions,
-  milestones, and notable events.
+  Entries surface in agent context as `ORG_NOTES-YYYY-MM-DD` (last 2 days).
+  For curated long-term knowledge, use `ORG_MEMORY.md` via `Platform.Org.Context.upsert_context_file/3`.
   """
 
   use Ecto.Schema
@@ -13,11 +12,8 @@ defmodule Platform.Org.MemoryEntry do
   @primary_key {:id, Platform.Types.UUIDv7, autogenerate: true}
   @foreign_key_type :binary_id
 
-  @memory_types ~w(daily long_term)
-
   schema "org_memory_entries" do
     field(:workspace_id, :binary_id)
-    field(:memory_type, :string, default: "daily")
     field(:date, :date)
     field(:content, :string)
     field(:authored_by, :binary_id)
@@ -27,12 +23,11 @@ defmodule Platform.Org.MemoryEntry do
   end
 
   @required ~w(content date)a
-  @optional ~w(workspace_id memory_type authored_by metadata)a
+  @optional ~w(workspace_id authored_by metadata)a
 
   def changeset(entry, attrs) do
     entry
     |> cast(attrs, @required ++ @optional)
     |> validate_required(@required)
-    |> validate_inclusion(:memory_type, @memory_types)
   end
 end

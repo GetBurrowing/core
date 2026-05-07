@@ -3,9 +3,12 @@ defmodule Platform.Org.Context do
   Business logic for org-level context files and memory entries.
 
   Provides CRUD for versioned context files (ORG_IDENTITY.md, etc.),
-  append-only memory entries (daily, long_term), and a `build_context/1`
-  function that assembles workspace files and recent daily entries into a
-  map suitable for injection into agent sessions.
+  append-only short-term memory entries, and a `build_context/1` function
+  that assembles workspace files and the last 2 days of memory entries into
+  a map suitable for injection into agent sessions.
+
+  Curated long-term knowledge lives in `ORG_MEMORY.md` (a context file),
+  not in memory entries.
 
   ## Quick reference
 
@@ -223,8 +226,8 @@ defmodule Platform.Org.Context do
   @doc """
   Append a memory entry.
 
-  Attrs should include `:content`, `:date`, and optionally `:memory_type`,
-  `:workspace_id`, `:authored_by`, `:metadata`.
+  Attrs should include `:content`, `:date`, and optionally `:workspace_id`,
+  `:authored_by`, `:metadata`.
   """
   @spec append_memory_entry(map(), keyword()) ::
           {:ok, MemoryEntry.t()} | {:error, Ecto.Changeset.t()}
@@ -243,7 +246,6 @@ defmodule Platform.Org.Context do
           %{system_time: System.system_time()},
           %{
             memory_entry_id: entry.id,
-            memory_type: entry.memory_type,
             date: entry.date,
             workspace_id: entry.workspace_id
           }
@@ -276,7 +278,6 @@ defmodule Platform.Org.Context do
 
     * `:query` - natural-language query for semantic retrieval (falls back
       to case-insensitive substring match if memory-service is unavailable)
-    * `:memory_type` - filter by memory type
     * `:date_from` - include entries on/after this date
     * `:date_to` - include entries on/before this date
     * `:workspace_id` - scope to a workspace
@@ -340,7 +341,6 @@ defmodule Platform.Org.Context do
 
     MemoryEntry
     |> filter_workspace(workspace_id)
-    |> maybe_filter_memory_type(Keyword.get(opts, :memory_type))
     |> maybe_filter_date_from(Keyword.get(opts, :date_from))
     |> maybe_filter_date_to(Keyword.get(opts, :date_to))
     |> maybe_filter_query(Keyword.get(opts, :query))
@@ -360,7 +360,7 @@ defmodule Platform.Org.Context do
 
   defp memory_search_opts(opts) do
     opts
-    |> Keyword.take([:workspace_id, :memory_type, :date_from, :date_to, :limit])
+    |> Keyword.take([:workspace_id, :date_from, :date_to, :limit])
     |> Enum.reject(fn {_k, v} -> is_nil(v) end)
   end
 
@@ -441,7 +441,7 @@ defmodule Platform.Org.Context do
   Assemble org context for injection into an agent session.
 
   Returns a map of filename => content, including workspace context files
-  and the last 2 days of daily memory entries as `ORG_NOTES-YYYY-MM-DD`.
+  and the last 2 days of memory entries as `ORG_NOTES-YYYY-MM-DD`.
 
   ## Options
 
@@ -461,7 +461,6 @@ defmodule Platform.Org.Context do
     daily_entries =
       search_memory_entries(
         workspace_id: workspace_id,
-        memory_type: "daily",
         date_from: yesterday,
         date_to: today,
         limit: 1000
@@ -490,12 +489,6 @@ defmodule Platform.Org.Context do
 
   defp filter_workspace(queryable, workspace_id) do
     where(queryable, [r], r.workspace_id == ^workspace_id)
-  end
-
-  defp maybe_filter_memory_type(query, nil), do: query
-
-  defp maybe_filter_memory_type(query, type) do
-    where(query, [m], m.memory_type == ^to_string(type))
   end
 
   defp maybe_filter_date_from(query, nil), do: query

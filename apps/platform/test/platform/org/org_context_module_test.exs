@@ -133,16 +133,14 @@ defmodule Platform.Org.ContextModuleTest do
   # ── Memory entries ───────────────────────────────────────────────────
 
   describe "append_memory_entry/2" do
-    test "inserts a daily memory entry" do
+    test "inserts a memory entry" do
       {:ok, entry} =
         Context.append_memory_entry(%{
           content: "Shipped v1",
-          date: ~D[2026-04-08],
-          memory_type: "daily"
+          date: ~D[2026-04-08]
         })
 
       assert entry.content == "Shipped v1"
-      assert entry.memory_type == "daily"
     end
 
     test "emits telemetry on append" do
@@ -158,7 +156,7 @@ defmodule Platform.Org.ContextModuleTest do
         })
 
       assert_received {[:platform, :org, :memory_entry_written], ^ref, %{system_time: _},
-                       %{memory_entry_id: id, memory_type: "daily", date: ~D[2026-04-08]}}
+                       %{memory_entry_id: id, date: ~D[2026-04-08]}}
 
       assert id == entry.id
     end
@@ -175,22 +173,19 @@ defmodule Platform.Org.ContextModuleTest do
       {:ok, e1} =
         Context.append_memory_entry(%{
           content: "Deployed FHIR service",
-          date: ~D[2026-04-07],
-          memory_type: "daily"
+          date: ~D[2026-04-07]
         })
 
       {:ok, e2} =
         Context.append_memory_entry(%{
           content: "Fixed auth bug",
-          date: ~D[2026-04-08],
-          memory_type: "daily"
+          date: ~D[2026-04-08]
         })
 
       {:ok, e3} =
         Context.append_memory_entry(%{
           content: "Architecture decision: use FHIR R4",
-          date: ~D[2026-04-06],
-          memory_type: "long_term"
+          date: ~D[2026-04-06]
         })
 
       %{entries: [e1, e2, e3]}
@@ -205,12 +200,6 @@ defmodule Platform.Org.ContextModuleTest do
       entries = Context.search_memory_entries(query: "FHIR")
       assert length(entries) == 2
       assert Enum.all?(entries, &String.contains?(&1.content, "FHIR"))
-    end
-
-    test "filters by memory_type" do
-      entries = Context.search_memory_entries(memory_type: "long_term")
-      assert length(entries) == 1
-      assert hd(entries).memory_type == "long_term"
     end
 
     test "filters by date_from" do
@@ -257,30 +246,26 @@ defmodule Platform.Org.ContextModuleTest do
       {:ok, _} =
         Context.append_memory_entry(%{
           content: "Morning standup notes",
-          date: today,
-          memory_type: "daily"
+          date: today
         })
 
       {:ok, _} =
         Context.append_memory_entry(%{
           content: "Afternoon retro",
-          date: today,
-          memory_type: "daily"
+          date: today
         })
 
       {:ok, _} =
         Context.append_memory_entry(%{
           content: "Yesterday's deploy",
-          date: yesterday,
-          memory_type: "daily"
+          date: yesterday
         })
 
       # Old entry — should NOT appear
       {:ok, _} =
         Context.append_memory_entry(%{
           content: "Ancient history",
-          date: ~D[2026-01-01],
-          memory_type: "daily"
+          date: ~D[2026-01-01]
         })
 
       ctx = Context.build_context()

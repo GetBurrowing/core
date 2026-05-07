@@ -172,37 +172,12 @@ defmodule Platform.Org.ContextTest do
       assert %{content: ["can't be blank"], date: ["can't be blank"]} = errors_on(changeset)
     end
 
-    test "validates memory_type is daily or long_term" do
-      changeset =
-        MemoryEntry.changeset(%MemoryEntry{}, %{
-          content: "test",
-          date: ~D[2026-04-08],
-          memory_type: "invalid"
-        })
-
-      refute changeset.valid?
-      assert %{memory_type: ["is invalid"]} = errors_on(changeset)
-    end
-
-    test "defaults memory_type to daily" do
-      {:ok, entry} =
-        %MemoryEntry{}
-        |> MemoryEntry.changeset(%{
-          content: "Daily note",
-          date: ~D[2026-04-08]
-        })
-        |> Repo.insert()
-
-      assert entry.memory_type == "daily"
-    end
-
     test "inserts with metadata" do
       {:ok, entry} =
         %MemoryEntry{}
         |> MemoryEntry.changeset(%{
           content: "Architectural decision",
           date: ~D[2026-04-08],
-          memory_type: "long_term",
           metadata: %{"tags" => ["architecture", "decision"]}
         })
         |> Repo.insert()

@@ -29,29 +29,33 @@ Individual agents have persistent personal knowledge via SOUL.md, MEMORY.md, AGE
 | inserted_at  | utc_datetime_usec   |                                            |
 | updated_at   | utc_datetime_usec   |                                            |
 
-**`org_memory_entries`** — append-only log for daily notes and long-term memory:
+**`org_memory_entries`** — append-only log for short-lived notes:
 
 | Column      | Type                | Notes                                       |
 |-------------|---------------------|---------------------------------------------|
 | id          | bigserial           | PK, monotonic ordering                      |
 | workspace_id| uuid (nullable)     | Same multi-tenancy insurance                |
-| memory_type | text                | `daily` or `long_term`                      |
-| date        | date                | Relevant date for daily entries              |
+| date        | date                | Relevant date for the entry                 |
 | content     | text                |                                             |
 | authored_by | uuid                |                                             |
 | metadata    | jsonb               |                                             |
 | inserted_at | utc_datetime_usec   |                                             |
 
+> **Update (2026-05): `memory_type` column dropped.** The original two-type
+> design (`daily` + `long_term`) overlapped with `ORG_MEMORY.md`. The model
+> is now: `org_memory_entries` for short-term notes, `ORG_MEMORY.md` as the
+> sole canonical long-term store curated by the dreaming/historian agent.
+
 ### Default Seed Files
 
 - **ORG_IDENTITY.md** — who the org is, mission, values, product summary
-- **ORG_MEMORY.md** — long-term curated org knowledge (analogue to agent MEMORY.md)
+- **ORG_MEMORY.md** — curated long-term org knowledge — decisions, patterns, lessons (analogue to agent MEMORY.md)
 - **ORG_AGENTS.md** — registered agents and their roles
+
 ### Memory Model
 
-- `ORG_MEMORY.md` holds long-term curated knowledge (manually written or agent-curated)
-- `org_memory_entries` with `memory_type=daily` provides rolling daily notes, surfaced to agents as `ORG_NOTES-YYYY-MM-DD` (analogue to agent daily memory files)
-- `org_memory_entries` with `memory_type=long_term` backs the curated ORG_MEMORY.md content
+- `ORG_MEMORY.md` is the canonical long-term store: curated knowledge, manually written or maintained by the dreaming agent via `org_context_write`.
+- `org_memory_entries` is append-only, short-lived: the last 2 days surface to agents as `ORG_NOTES-YYYY-MM-DD`. Older entries remain searchable via `org_memory_search`.
 
 ### Access Control (v1)
 

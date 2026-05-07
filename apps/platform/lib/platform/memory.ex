@@ -111,6 +111,8 @@ defmodule Platform.Memory do
     %{
       id: to_string(Map.get(attrs, :id) || Map.get(attrs, "id")),
       content: Map.get(attrs, :content) || Map.get(attrs, "content"),
+      # Org memory entries no longer carry a type — they always normalize to
+      # "daily". Kept on the wire for backwards compatibility with providers.
       memory_type:
         (Map.get(attrs, :memory_type) || Map.get(attrs, "memory_type") || "daily")
         |> to_string(),

@@ -16,7 +16,6 @@ defmodule Platform.Memory.TelemetryHandlerTest do
       {:ok, entry} =
         OrgContext.append_memory_entry(%{
           content: "Test entry for telemetry",
-          memory_type: "daily",
           date: Date.utc_today()
         })
 
@@ -35,7 +34,6 @@ defmodule Platform.Memory.TelemetryHandlerTest do
         %{system_time: System.system_time()},
         %{
           memory_entry_id: Ecto.UUID.generate(),
-          memory_type: "daily",
           date: Date.utc_today(),
           workspace_id: nil
         },
@@ -49,7 +47,6 @@ defmodule Platform.Memory.TelemetryHandlerTest do
       {:ok, entry} =
         OrgContext.append_memory_entry(%{
           content: "Entry for direct handler test",
-          memory_type: "long_term",
           date: Date.utc_today()
         })
 
@@ -60,7 +57,6 @@ defmodule Platform.Memory.TelemetryHandlerTest do
         %{system_time: System.system_time()},
         %{
           memory_entry_id: entry.id,
-          memory_type: entry.memory_type,
           date: entry.date,
           workspace_id: entry.workspace_id
         },

@@ -79,7 +79,6 @@ defmodule Platform.MemoryTest do
       struct = %Platform.Org.MemoryEntry{
         id: "01abc",
         content: "decision content",
-        memory_type: "decision",
         date: ~D[2026-04-16],
         workspace_id: nil,
         metadata: %{"tag" => "infra"}
@@ -92,7 +91,7 @@ defmodule Platform.MemoryTest do
                          %{
                            id: "01abc",
                            content: "decision content",
-                           memory_type: "decision",
+                           memory_type: "daily",
                            date: "2026-04-16",
                            workspace_id: nil,
                            metadata: %{"tag" => "infra"}

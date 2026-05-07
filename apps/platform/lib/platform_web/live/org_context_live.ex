@@ -698,7 +698,7 @@ defmodule PlatformWeb.OrgContextLive do
             <span class="hero-light-bulb mb-3 size-12 text-base-content/20 block"></span>
             <h3 class="text-base font-medium text-base-content/50">No memory entries yet</h3>
             <p class="mt-1 text-sm text-base-content/40 max-w-sm text-center">
-              Memory entries are created by agents as they work. Daily notes and long-term insights will appear here.
+              Memory entries are created by agents as they work. Short-term notes will appear here; long-term insights live in ORG_MEMORY.md.
             </p>
           </div>
         <% else %>
@@ -721,14 +721,7 @@ defmodule PlatformWeb.OrgContextLive do
                   <%= for entry <- entries do %>
                     <div class="rounded-lg border border-base-300 bg-base-100 p-4">
                       <div class="mb-2 flex items-center gap-2">
-                        <span class={[
-                          "inline-block size-2 rounded-full",
-                          if(entry.memory_type == "daily", do: "bg-info", else: "bg-success")
-                        ]}>
-                        </span>
-                        <span class="text-xs font-medium text-base-content/60">
-                          {String.capitalize(String.replace(entry.memory_type, "_", " "))}
-                        </span>
+                        <span class="inline-block size-2 rounded-full bg-info"></span>
                         <.author_byline
                           :if={entry.authored_by}
                           authors={@authors}

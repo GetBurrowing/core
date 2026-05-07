@@ -242,7 +242,7 @@ defmodule Platform.Orchestration.PromptTemplates do
         The attention signal that delivered this message includes a `context` field with the full task hierarchy: project (name, repo_url, tech_stack), epic (name, description, acceptance_criteria), task metadata, current plan with stages, and execution_space_id. Use it for full context when writing your plan.
 
         ## Organization Context
-        The `context.org` field carries org-level knowledge: ORG_IDENTITY.md (mission, values, product summary), ORG_MEMORY.md (long-term curated decisions), ORG_AGENTS.md (roster), and recent ORG_NOTES-YYYY-MM-DD daily notes. Read these before writing your plan — they often explain constraints, patterns, or prior decisions that should shape your approach.
+        The `context.org` field carries org-level knowledge: ORG_IDENTITY.md (mission, values, product summary), ORG_MEMORY.md (curated org knowledge — decisions, patterns, lessons), ORG_AGENTS.md (roster), and recent ORG_NOTES-YYYY-MM-DD daily notes. Read these before writing your plan — they often explain constraints, patterns, or prior decisions that should shape your approach.
 
         ## Writing to Org Memory
         Org memory writes are a first-class responsibility. When planning surfaces a decision worth preserving, record it. Qualifying moments include:
@@ -252,7 +252,7 @@ defmodule Platform.Orchestration.PromptTemplates do
         - Blockers resolved (what broke, how, what to watch next time)
         - Milestones completed (what shipped, what it enables)
 
-        Use `suite_org_memory_append` for daily notes (append-only). Use `suite_org_context_write` to update curated files (`ORG_MEMORY.md` for long-term knowledge, `ORG_AGENTS.md` for roster changes). Brief, concrete entries beat long essays — one decision per entry.
+        Use `suite_org_memory_append` for short-lived notes about today's activity (append-only, surfaces in `ORG_NOTES-YYYY-MM-DD`). For anything worth preserving — decisions, patterns, lessons — update `ORG_MEMORY.md` via `suite_org_context_write`. `ORG_MEMORY.md` is the canonical long-term store; do not try to record long-term entries via `suite_org_memory_append`. Brief, concrete entries beat long essays — one decision per entry.
 
         {{skills_reference}}
         """
@@ -305,7 +305,7 @@ defmodule Platform.Orchestration.PromptTemplates do
         Avoid redundant task/plan lookup churn on the first turn unless an identifier is genuinely missing or the stage contract is ambiguous.
 
         ## Organization Context
-        The `context.org` field carries org-level knowledge: ORG_IDENTITY.md (mission, values, product summary), ORG_MEMORY.md (long-term curated decisions), ORG_AGENTS.md (roster), and recent ORG_NOTES-YYYY-MM-DD daily notes. Check these before making non-obvious choices — they often encode constraints or prior decisions that apply here.
+        The `context.org` field carries org-level knowledge: ORG_IDENTITY.md (mission, values, product summary), ORG_MEMORY.md (curated org knowledge — decisions, patterns, lessons), ORG_AGENTS.md (roster), and recent ORG_NOTES-YYYY-MM-DD daily notes. Check these before making non-obvious choices — they often encode constraints or prior decisions that apply here.
 
         ## Writing to Org Memory
         Org memory writes are a first-class responsibility. As you execute, record decisions and milestones that future agents and humans will care about. Qualifying moments include:
@@ -315,7 +315,7 @@ defmodule Platform.Orchestration.PromptTemplates do
         - Blockers resolved (what broke, how, what to watch next time)
         - Milestones completed (what shipped, what it enables)
 
-        Use `suite_org_memory_append` for daily notes (append-only). Use `suite_org_context_write` to update curated files (`ORG_MEMORY.md` for long-term knowledge, `ORG_AGENTS.md` for roster changes). Brief, concrete entries beat long essays — one decision per entry. Write memory alongside your stage work, not as a final cleanup step.
+        Use `suite_org_memory_append` for short-lived notes about today's activity (append-only, surfaces in `ORG_NOTES-YYYY-MM-DD`). For anything worth preserving — decisions, patterns, lessons — update `ORG_MEMORY.md` via `suite_org_context_write`. `ORG_MEMORY.md` is the canonical long-term store; do not try to record long-term entries via `suite_org_memory_append`. Brief, concrete entries beat long essays — one decision per entry. Write memory alongside your stage work, not as a final cleanup step.
 
         {{evidence_workflow_reference}}
 

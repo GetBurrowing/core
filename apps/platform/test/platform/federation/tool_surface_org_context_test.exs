@@ -178,7 +178,7 @@ defmodule Platform.Federation.ToolSurfaceOrgContextTest do
   end
 
   describe "org_memory_append" do
-    test "creates a daily memory entry" do
+    test "creates a memory entry" do
       clear_seeded_data()
 
       {:ok, result} =
@@ -189,12 +189,11 @@ defmodule Platform.Federation.ToolSurfaceOrgContextTest do
         )
 
       assert result.content == "Deployed v2.1 to production"
-      assert result.memory_type == "daily"
       assert result.date == Date.to_iso8601(Date.utc_today())
       assert is_binary(result.id)
     end
 
-    test "creates a long_term memory entry with specific date" do
+    test "creates a memory entry with specific date" do
       clear_seeded_data()
 
       {:ok, result} =
@@ -202,13 +201,12 @@ defmodule Platform.Federation.ToolSurfaceOrgContextTest do
           "org_memory_append",
           %{
             "content" => "Architecture decision: use event sourcing",
-            "memory_type" => "long_term",
             "date" => "2026-01-15"
           },
           %{}
         )
 
-      assert result.memory_type == "long_term"
+      assert result.content == "Architecture decision: use event sourcing"
       assert result.date == "2026-01-15"
     end
 
@@ -238,15 +236,13 @@ defmodule Platform.Federation.ToolSurfaceOrgContextTest do
       {:ok, _} =
         OrgContext.append_memory_entry(%{
           content: "Entry one",
-          date: Date.utc_today(),
-          memory_type: "daily"
+          date: Date.utc_today()
         })
 
       {:ok, _} =
         OrgContext.append_memory_entry(%{
           content: "Entry two",
-          date: Date.utc_today(),
-          memory_type: "daily"
+          date: Date.utc_today()
         })
 
       {:ok, result} = ToolSurface.execute("org_memory_search", %{}, %{})
@@ -260,15 +256,13 @@ defmodule Platform.Federation.ToolSurfaceOrgContextTest do
       {:ok, _} =
         OrgContext.append_memory_entry(%{
           content: "Deployed v2.1",
-          date: Date.utc_today(),
-          memory_type: "daily"
+          date: Date.utc_today()
         })
 
       {:ok, _} =
         OrgContext.append_memory_entry(%{
           content: "Fixed login bug",
-          date: Date.utc_today(),
-          memory_type: "daily"
+          date: Date.utc_today()
         })
 
       {:ok, result} =
@@ -277,44 +271,19 @@ defmodule Platform.Federation.ToolSurfaceOrgContextTest do
       assert Enum.all?(result, fn e -> String.contains?(e.content, "Deployed") end)
     end
 
-    test "filters by memory_type" do
-      clear_seeded_data()
-
-      {:ok, _} =
-        OrgContext.append_memory_entry(%{
-          content: "Daily note",
-          date: Date.utc_today(),
-          memory_type: "daily"
-        })
-
-      {:ok, _} =
-        OrgContext.append_memory_entry(%{
-          content: "Long-term note",
-          date: Date.utc_today(),
-          memory_type: "long_term"
-        })
-
-      {:ok, result} =
-        ToolSurface.execute("org_memory_search", %{"memory_type" => "long_term"}, %{})
-
-      assert Enum.all?(result, fn e -> e.memory_type == "long_term" end)
-    end
-
     test "filters by date range" do
       clear_seeded_data()
 
       {:ok, _} =
         OrgContext.append_memory_entry(%{
           content: "Old entry",
-          date: ~D[2026-01-01],
-          memory_type: "daily"
+          date: ~D[2026-01-01]
         })
 
       {:ok, _} =
         OrgContext.append_memory_entry(%{
           content: "Recent entry",
-          date: ~D[2026-04-01],
-          memory_type: "daily"
+          date: ~D[2026-04-01]
         })
 
       {:ok, result} =
@@ -350,8 +319,7 @@ defmodule Platform.Federation.ToolSurfaceOrgContextTest do
         {:ok, _} =
           OrgContext.append_memory_entry(%{
             content: "Entry #{i}",
-            date: Date.utc_today(),
-            memory_type: "daily"
+            date: Date.utc_today()
           })
       end
 

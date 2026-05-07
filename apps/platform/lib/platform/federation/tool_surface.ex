@@ -289,17 +289,12 @@ defmodule Platform.Federation.ToolSurface do
       %{
         name: "org_memory_append",
         description:
-          "Append a daily or long-term memory entry. Memory entries are append-only and timestamped.",
+          "Append a short-lived memory entry — a note about today's activity. Entries are append-only, surface in agent context as `ORG_NOTES-YYYY-MM-DD` for the last 2 days. For curated long-term knowledge (decisions, patterns, lessons), update `ORG_MEMORY.md` via `org_context_write` instead.",
         parameters: %{
           content: %{
             type: "string",
             required: true,
             description: "The content of the memory entry"
-          },
-          memory_type: %{
-            type: "string",
-            required: false,
-            description: "Type of memory: 'daily' or 'long_term' (default: 'daily')"
           },
           date: %{
             type: "string",
@@ -322,10 +317,10 @@ defmodule Platform.Federation.ToolSurface do
             description: "Optional metadata map to attach to the entry"
           }
         },
-        returns: "The created memory entry with id, content, memory_type, date, and timestamps",
+        returns: "The created memory entry with id, content, date, and timestamps",
         limitations: "Memory entries are append-only and cannot be edited or deleted.",
         when_to_use:
-          "When you need to record observations, decisions, or notes for future reference"
+          "When you need to record short-lived observations or notes about today's activity. For long-term knowledge, use `org_context_write` on `ORG_MEMORY.md`."
       },
       %{
         name: "org_memory_search",
@@ -337,11 +332,6 @@ defmodule Platform.Federation.ToolSurface do
             required: false,
             description:
               "Search query — used for semantic similarity when the memory service is configured, or case-insensitive substring match as fallback"
-          },
-          memory_type: %{
-            type: "string",
-            required: false,
-            description: "Filter by memory type: 'daily' or 'long_term'"
           },
           date_from: %{
             type: "string",
@@ -365,11 +355,11 @@ defmodule Platform.Federation.ToolSurface do
           }
         },
         returns:
-          "Array of memory entry objects with id, content, memory_type, date, timestamps, and score (when semantic search is active)",
+          "Array of memory entry objects with id, content, date, timestamps, and score (when semantic search is active)",
         limitations:
           "Falls back to substring matching when no external memory service is configured. Default limit is 50.",
         when_to_use:
-          "When you need to recall past observations, decisions, or notes from org memory"
+          "When you need to recall past observations or notes from org memory entries. For long-term curated knowledge, read `ORG_MEMORY.md` via `org_context_read` instead."
       }
     ]
   end
@@ -2813,7 +2803,6 @@ defmodule Platform.Federation.ToolSurface do
          suggestion: "Provide content for the memory entry"
        }}
     else
-      memory_type = Map.get(args, "memory_type", "daily")
       authored_by = Map.get(args, "authored_by") || Map.get(context, :agent_id)
       workspace_id = Map.get(args, "workspace_id")
       metadata = Map.get(args, "metadata", %{})
@@ -2836,7 +2825,6 @@ defmodule Platform.Federation.ToolSurface do
         date ->
           attrs = %{
             content: content,
-            memory_type: memory_type,
             date: date,
             authored_by: authored_by,
             metadata: metadata
@@ -2861,7 +2849,6 @@ defmodule Platform.Federation.ToolSurface do
   def execute("org_memory_search", args, _context) do
     workspace_id = Map.get(args, "workspace_id")
     query = Map.get(args, "query")
-    memory_type = Map.get(args, "memory_type")
     limit = Map.get(args, "limit", 50)
 
     date_from = parse_optional_date(Map.get(args, "date_from"))
@@ -2889,7 +2876,6 @@ defmodule Platform.Federation.ToolSurface do
           [
             workspace_id: workspace_id,
             query: query,
-            memory_type: memory_type,
             date_from: date_from,
             date_to: date_to,
             limit: limit
@@ -3194,7 +3180,6 @@ defmodule Platform.Federation.ToolSurface do
     %{
       id: entry.id,
       content: entry.content,
-      memory_type: entry.memory_type,
       date: Date.to_iso8601(entry.date),
       authored_by: entry.authored_by,
       workspace_id: entry.workspace_id,
