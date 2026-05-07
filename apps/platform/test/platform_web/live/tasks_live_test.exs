@@ -579,6 +579,118 @@ defmodule PlatformWeb.TasksLiveTest do
     refute html =~ "Project Two Task"
   end
 
+  describe "last-selected-project persistence (LastProject hook)" do
+    test "wrapper carries data-selected-project-id reflecting the current selection",
+         %{conn: conn} do
+      project = create_project()
+      _t = create_task(project, %{title: "Wrapper Task"})
+
+      conn = authenticated_conn(conn)
+      {:ok, view, html} = live(conn, ~p"/tasks")
+
+      # On first mount with no selection, the wrapper carries the All Projects
+      # sentinel — the JS hook reads this attribute to mirror state into
+      # localStorage, so it must be present and accurate.
+      assert html =~ ~s|id="tasks-last-project"|
+      assert html =~ ~s|phx-hook="LastProject"|
+      assert html =~ ~s|data-selected-project-id="__all__"|
+
+      # After selecting a project, the wrapper should reflect the UUID.
+      html = render_click(view, "select_project", %{"id" => project.id})
+      assert html =~ ~s|data-selected-project-id="#{project.id}"|
+
+      # Clearing the filter snaps the wrapper back to the sentinel.
+      html = render_click(view, "clear_filters")
+      assert html =~ ~s|data-selected-project-id="__all__"|
+    end
+
+    test "select_project with a stale/deleted UUID falls back to All Projects",
+         %{conn: conn} do
+      project = create_project()
+      _t1 = create_task(project, %{title: "Visible Task"})
+
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+
+      stale_id = Ecto.UUID.generate()
+
+      # The hook may push a UUID that no longer points at a project. The
+      # handler should treat that as a clear-filters and not crash.
+      html = render_click(view, "select_project", %{"id" => stale_id})
+
+      assert html =~ ~s|data-selected-project-id="__all__"|
+      # Board still renders (not blank/erroring) and the original task is
+      # visible because we fell back to All Projects.
+      assert html =~ "Visible Task"
+    end
+
+    test "clear_filters resets selection to All Projects", %{conn: conn} do
+      p1 = create_project()
+      p2 = create_project()
+      _t1 = create_task(p1, %{title: "P1 Task"})
+      _t2 = create_task(p2, %{title: "P2 Task"})
+
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+
+      # Narrow to p1
+      html = render_click(view, "select_project", %{"id" => p1.id})
+      assert html =~ "P1 Task"
+      refute html =~ "P2 Task"
+
+      # Clear — both visible again, sentinel restored on the wrapper
+      html = render_click(view, "clear_filters")
+      assert html =~ ~s|data-selected-project-id="__all__"|
+      assert html =~ "P1 Task"
+      assert html =~ "P2 Task"
+    end
+
+    test "select_project pushes selected_project_changed with the project id",
+         %{conn: conn} do
+      project = create_project()
+      _t = create_task(project, %{title: "Push Event Task"})
+
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+
+      project_id = project.id
+      render_click(view, "select_project", %{"id" => project.id})
+      assert_push_event(view, "selected_project_changed", %{id: ^project_id})
+    end
+
+    test "select_project with a stale UUID still pushes selected_project_changed with __all__",
+         %{conn: conn} do
+      # This is the regression that the e2e_behavior Case C caught: when the
+      # server falls back from a stale UUID to the All Projects view, it MUST
+      # still emit selected_project_changed so the JS hook can overwrite the
+      # stale value in localStorage. Previously the hook relied on a
+      # `data-selected-project-id` DOM diff, which never fired when the wrapper
+      # was already at "__all__".
+      _project = create_project()
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+
+      stale_id = Ecto.UUID.generate()
+      render_click(view, "select_project", %{"id" => stale_id})
+      assert_push_event(view, "selected_project_changed", %{id: "__all__"})
+    end
+
+    test "clear_filters pushes selected_project_changed with __all__", %{conn: conn} do
+      project = create_project()
+      _t = create_task(project, %{title: "Clear Push Task"})
+
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+
+      project_id = project.id
+      render_click(view, "select_project", %{"id" => project.id})
+      assert_push_event(view, "selected_project_changed", %{id: ^project_id})
+
+      render_click(view, "clear_filters")
+      assert_push_event(view, "selected_project_changed", %{id: "__all__"})
+    end
+  end
+
   test "PubSub updates refresh the board", %{conn: conn} do
     project = create_project()
     task = create_task(project, %{title: "PubSub Task", status: "backlog"})

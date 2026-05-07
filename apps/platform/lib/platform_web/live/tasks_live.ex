@@ -259,15 +259,33 @@ defmodule PlatformWeb.TasksLive do
   end
 
   def handle_event("select_project", %{"id" => project_id}, socket) do
-    epics = enrich_epics(Tasks.list_epics_for_project(project_id))
+    # Stale-id fallback: a restored localStorage value may reference a project
+    # that has since been deleted (or that the current user can no longer see).
+    # `Tasks.get_project/1` returns nil in that case — we drop back to the
+    # All Projects view rather than render a blank board.
+    case Tasks.get_project(project_id) do
+      nil ->
+        {:noreply,
+         socket
+         |> assign(:selected_project_id, nil)
+         |> assign(:selected_epic_id, nil)
+         |> assign(:epics, enrich_epics(Tasks.list_epics_for_project(nil)))
+         |> assign(:show_project_sheet, false)
+         |> refresh_board()
+         |> push_selected_project_changed()}
 
-    {:noreply,
-     socket
-     |> assign(:selected_project_id, project_id)
-     |> assign(:selected_epic_id, nil)
-     |> assign(:epics, epics)
-     |> assign(:show_project_sheet, false)
-     |> refresh_board()}
+      _project ->
+        epics = enrich_epics(Tasks.list_epics_for_project(project_id))
+
+        {:noreply,
+         socket
+         |> assign(:selected_project_id, project_id)
+         |> assign(:selected_epic_id, nil)
+         |> assign(:epics, epics)
+         |> assign(:show_project_sheet, false)
+         |> refresh_board()
+         |> push_selected_project_changed()}
+    end
   end
 
   def handle_event("select_epic", %{"id" => epic_id}, socket) do
@@ -294,7 +312,19 @@ defmodule PlatformWeb.TasksLive do
      |> assign(:selected_epic_id, nil)
      |> assign(:epics, enrich_epics(Tasks.list_epics_for_project(nil)))
      |> assign(:show_project_sheet, false)
-     |> refresh_board()}
+     |> refresh_board()
+     |> push_selected_project_changed()}
+  end
+
+  # Push the canonical post-handler selection back to the client so the
+  # LastProject JS hook can keep localStorage in sync. This MUST fire after
+  # both `select_project` (including the stale-UUID fallback path) and
+  # `clear_filters` — relying solely on a wrapper-attribute DOM diff misses
+  # the case where the server-side state was already at the same value
+  # (e.g. fallback from a stale UUID → nil when nil was the initial render).
+  defp push_selected_project_changed(socket) do
+    id = socket.assigns.selected_project_id || "__all__"
+    push_event(socket, "selected_project_changed", %{id: id})
   end
 
   def handle_event("select_task", %{"id" => task_id}, socket) do

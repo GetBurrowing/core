@@ -1,0 +1,71 @@
+// LastProject — persists and restores the user's last-selected project on the
+// /tasks board via localStorage. Stage 1 of task 019e031c.
+//
+// Storage contract (committed at planning time):
+//   key:       "suite:tasks-last-project-id"
+//   sentinel:  "__all__" (server maps to selected_project_id: nil)
+//   project:   raw UUID string
+//
+// The hook lives on the outermost /tasks wrapper, which contains both the
+// desktop sidebar and the mobile sheet — so a single instance covers both
+// selection sites.
+//
+// Persistence flow:
+//   - On `mounted()`, read localStorage and push `select_project` /
+//     `clear_filters` to the server to restore the previous selection.
+//   - The server emits a `selected_project_changed` event from the
+//     `select_project` and `clear_filters` handlers (including the
+//     stale-UUID fallback path that maps a missing UUID → nil). The hook
+//     subscribes via `handleEvent` and writes the authoritative `id` to
+//     localStorage. This is event-driven (not DOM-diff-driven) so a
+//     fallback that doesn't change the rendered wrapper still triggers
+//     the localStorage cleanup.
+//   - We also keep a wrapper-attribute persistence pass (`updated()` +
+//     mount-time `persistFromDom`) as a belt-and-braces fallback for any
+//     state-change path that doesn't go through the two handlers above.
+
+const LAST_PROJECT_KEY = "suite:tasks-last-project-id";
+const ALL_PROJECTS_SENTINEL = "__all__";
+
+const LastProject = {
+  mounted() {
+    // Subscribe to the server's authoritative selection event before pushing
+    // anything — guarantees the response from the restore push lands in our
+    // listener even if it arrives before the next mounted-callback tick.
+    this.handleEvent("selected_project_changed", ({ id }) => {
+      const value = id == null ? ALL_PROJECTS_SENTINEL : String(id);
+      localStorage.setItem(LAST_PROJECT_KEY, value);
+    });
+
+    const stored = localStorage.getItem(LAST_PROJECT_KEY);
+    if (stored == null) {
+      // First visit — record current state without pushing anything.
+      this.persistFromDom();
+      return;
+    }
+
+    const current = this.el.dataset.selectedProjectId || ALL_PROJECTS_SENTINEL;
+    if (stored === current) {
+      // Already in the desired state; nothing to do.
+      return;
+    }
+
+    if (stored === ALL_PROJECTS_SENTINEL) {
+      this.pushEvent("clear_filters", {});
+    } else {
+      this.pushEvent("select_project", { id: stored });
+    }
+  },
+
+  updated() {
+    this.persistFromDom();
+  },
+
+  persistFromDom() {
+    const value = this.el.dataset.selectedProjectId || ALL_PROJECTS_SENTINEL;
+    localStorage.setItem(LAST_PROJECT_KEY, value);
+  },
+};
+
+export { LAST_PROJECT_KEY, ALL_PROJECTS_SENTINEL };
+export default LastProject;
