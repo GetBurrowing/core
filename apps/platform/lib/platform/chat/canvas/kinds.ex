@@ -20,6 +20,7 @@ defmodule Platform.Chat.Canvas.Kinds do
     Image,
     Code,
     Mermaid,
+    Embed,
     Form,
     ActionRow,
     Checklist,
@@ -38,6 +39,7 @@ defmodule Platform.Chat.Canvas.Kinds do
     Image,
     Code,
     Mermaid,
+    Embed,
     Form,
     ActionRow,
     Checklist,
@@ -102,6 +104,11 @@ defmodule Platform.Chat.Canvas.Kinds do
   defp describe("image"), do: "Image leaf. Requires `src`."
   defp describe("code"), do: "Syntax-highlighted code block. Requires `source`."
   defp describe("mermaid"), do: "Mermaid diagram (client-side rendered)."
+
+  defp describe("embed"),
+    do:
+      "Sandboxed inline-HTML mockup. `srcdoc` carries a complete HTML document; rendered as an iframe with `sandbox=\"\"` (no JS execution)."
+
   defp describe("table"), do: "Tabular data. `columns` + `rows` as props; no children."
   defp describe("form"), do: "Form with inline fields. Emits a `submitted` event on send."
 

@@ -333,6 +333,20 @@ defmodule PlatformWeb.Chat.CanvasRendererTest do
       assert html =~ "phx-click=\"canvas_action_click\""
     end
 
+    test "renders embed as a sandboxed iframe" do
+      node = %{
+        "id" => "e1",
+        "type" => "embed",
+        "props" => %{"srcdoc" => "<!doctype html><body>hi</body>"}
+      }
+
+      html = render_node_html(node)
+      assert html =~ "<iframe"
+      # The critical security contract: empty-string sandbox attribute.
+      assert html =~ ~s|sandbox=""|
+      refute html =~ ~r/sandbox="[^"]+"/
+    end
+
     test "renders unknown kind as fallback" do
       node = %{"id" => "x", "type" => "no_such_kind", "props" => %{}, "children" => []}
       html = render_node_html(node)
