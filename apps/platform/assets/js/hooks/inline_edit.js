@@ -4,14 +4,9 @@
 //      event (default `update_task_title`). We push an explicit event in
 //      addition to the `phx-blur` that fires on focus loss so behavior is
 //      predictable on slow connections / when blur and Enter race.
-//   2. Escape blurs the field (which also triggers the existing
-//      `cancel_edit_title` server-side handler if wired via `phx-blur`).
+//   2. Escape blurs the field (which fires the wired `phx-blur` handler,
+//      typically `update_task_title`, so the value is committed on cancel).
 //   3. the field auto-focuses and selects its existing text on mount.
-//
-// Note: stopping click propagation is *not* necessary here — Phoenix
-// LiveView's click listener uses `closestPhxBinding` and only fires the
-// innermost matching `phx-click`, so a kanban card's outer `phx-click`
-// won't double-fire when the user clicks an inner `phx-click` element.
 //
 // HTML usage on the input that replaces the title once editing starts:
 //   <input phx-hook="InlineEdit" phx-blur="update_task_title"

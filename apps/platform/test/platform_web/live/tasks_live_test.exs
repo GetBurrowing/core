@@ -2112,6 +2112,9 @@ defmodule PlatformWeb.TasksLiveTest do
       conn = authenticated_conn(conn)
       {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
 
+      # v2: detail-panel edits are gated on edit_mode. Engage it first.
+      render_click(view, "toggle_edit_mode")
+
       # Click-to-edit puts the detail panel into editing state.
       render_click(view, "start_edit_title", %{"task-id" => task.id})
       assert render(view) =~ "data-role=\"detail-title-input\""
@@ -2150,13 +2153,15 @@ defmodule PlatformWeb.TasksLiveTest do
       conn = authenticated_conn(conn)
       {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
 
+      # v2: enter edit mode so the update handler isn't gated out.
+      render_click(view, "toggle_edit_mode")
       render_hook(view, "update_task_title", %{"value" => "   ", "task-id" => task.id})
 
       assert render(view) =~ "Title cannot be empty"
       assert Tasks.get_task_record(task.id).title == "Keep Me"
     end
 
-    test "kanban card title click opens the inline editor (not the detail panel)",
+    test "kanban card title is plain text in v2 stage 3 (no inline-edit affordance)",
          %{conn: conn} do
       project = create_project()
       task = create_task(project, %{title: "Card Edit Task"})
@@ -2164,21 +2169,30 @@ defmodule PlatformWeb.TasksLiveTest do
       conn = authenticated_conn(conn)
       {:ok, view, html} = live(conn, ~p"/tasks")
 
-      # The h3 title carries its own `phx-click="start_edit_title"`, and
-      # Phoenix LiveView's window-level click listener uses
-      # `closestPhxBinding` — so the inner phx-click fires and the outer
-      # card-body `phx-click="select_task"` does not.
+      # The kanban-card title is rendered as a plain <h3> with no
+      # `phx-click="start_edit_title"` and no InlineEdit hook. Edits must
+      # go through the detail panel + explicit edit-mode toggle.
       assert html =~ ~s|data-role="card-title"|
-      assert html =~ ~s|phx-click="start_edit_title"|
 
-      # Triggering the inline event directly leaves the detail panel closed
-      # (i.e. start_edit_title does not redirect to /tasks/:id).
-      render_click(view, "start_edit_title", %{"task-id" => task.id})
-      html = render(view)
-      assert html =~ ~s|data-role="card-title-input"|
-      # No detail panel: the slide-in only renders its title h2 when
-      # @show_detail; we assert the absence of detail-title.
-      refute html =~ ~s|data-role="detail-title"|
+      card_title_h3 =
+        Regex.run(~r|<h3[^>]*data-role="card-title"[^>]*>|, html)
+        |> List.first()
+
+      refute card_title_h3 =~ "phx-click=\"start_edit_title\""
+      refute card_title_h3 =~ "phx-hook=\"InlineEdit\""
+
+      # The legacy inline-edit input variant is also gone.
+      refute html =~ ~s|data-role="card-title-input"|
+
+      # Clicking the title bubbles up to the card-level `phx-click="select_task"`
+      # and opens the detail panel (verified via the patched URL + selected_task
+      # assign). Phoenix LiveTest dispatches the click to the innermost matching
+      # `phx-click`, so we trigger the card-level event that bubbling would.
+      render_click(view, "select_task", %{"id" => task.id})
+      html_after = render(view)
+
+      assert html_after =~ ~s|data-role="detail-title"|
+      assert html_after =~ "Card Edit Task"
     end
 
     test "detail panel title edit does not break navigation back to /tasks", %{conn: conn} do
@@ -2188,6 +2202,7 @@ defmodule PlatformWeb.TasksLiveTest do
       conn = authenticated_conn(conn)
       {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
 
+      render_click(view, "toggle_edit_mode")
       render_click(view, "start_edit_title", %{"task-id" => task.id})
 
       render_hook(view, "update_task_title", %{
@@ -2209,6 +2224,9 @@ defmodule PlatformWeb.TasksLiveTest do
       conn = authenticated_conn(conn)
       {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
 
+      # v2: edit-mode required.
+      render_click(view, "toggle_edit_mode")
+
       render_hook(view, "update_task_field", %{
         "field" => "priority",
         "value" => "high",
@@ -2224,6 +2242,8 @@ defmodule PlatformWeb.TasksLiveTest do
 
       conn = authenticated_conn(conn)
       {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
+
+      render_click(view, "toggle_edit_mode")
 
       render_hook(view, "update_task_field", %{
         "field" => "priority",
@@ -2246,8 +2266,10 @@ defmodule PlatformWeb.TasksLiveTest do
       task = create_task(project, %{title: "Deploy Target Task"})
 
       conn = authenticated_conn(conn)
-      {:ok, view, html} = live(conn, ~p"/tasks/#{task.id}")
+      {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
 
+      # v2: select only renders in edit mode.
+      html = render_click(view, "toggle_edit_mode")
       assert html =~ ~s|data-role="deploy-target-select"|
       assert html =~ ~s|value="production"|
       assert html =~ ~s|value="exp"|
@@ -2270,6 +2292,8 @@ defmodule PlatformWeb.TasksLiveTest do
       conn = authenticated_conn(conn)
       {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
 
+      render_click(view, "toggle_edit_mode")
+
       render_hook(view, "update_task_field", %{
         "field" => "status",
         "value" => "done",
@@ -2291,8 +2315,10 @@ defmodule PlatformWeb.TasksLiveTest do
         create_task(project, %{title: "Pickable", assignee_id: a1.id, assignee_type: "agent"})
 
       conn = authenticated_conn(conn)
-      {:ok, _view, html} = live(conn, ~p"/tasks/#{task.id}")
+      {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
 
+      # v2: select only renders in edit mode.
+      html = render_click(view, "toggle_edit_mode")
       assert html =~ ~s|data-role="assignee-select"|
       assert html =~ "Higgins (Test)"
       assert html =~ "Mycroft (Test)"
@@ -2309,6 +2335,8 @@ defmodule PlatformWeb.TasksLiveTest do
 
       conn = authenticated_conn(conn)
       {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
+
+      render_click(view, "toggle_edit_mode")
 
       render_hook(view, "update_task_field", %{
         "field" => "assignee_id",
@@ -2330,6 +2358,8 @@ defmodule PlatformWeb.TasksLiveTest do
 
       conn = authenticated_conn(conn)
       {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
+
+      render_click(view, "toggle_edit_mode")
 
       render_hook(view, "update_task_field", %{
         "field" => "assignee_id",
@@ -2355,6 +2385,8 @@ defmodule PlatformWeb.TasksLiveTest do
       # Earmark renders the bold via <strong>.
       assert html =~ "<strong>world</strong>"
 
+      # v2: edit button only renders in edit mode.
+      render_click(view, "toggle_edit_mode")
       html = render_click(view, "start_edit_description")
       assert html =~ ~s|data-role="description-textarea"|
       assert html =~ ~s|data-role="description-save"|
@@ -2368,6 +2400,7 @@ defmodule PlatformWeb.TasksLiveTest do
       conn = authenticated_conn(conn)
       {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
 
+      render_click(view, "toggle_edit_mode")
       render_click(view, "start_edit_description")
 
       html =
@@ -2400,6 +2433,7 @@ defmodule PlatformWeb.TasksLiveTest do
       conn = authenticated_conn(conn)
       {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
 
+      render_click(view, "toggle_edit_mode")
       render_click(view, "start_edit_description")
       html = render_click(view, "cancel_edit_description")
 
@@ -2420,7 +2454,8 @@ defmodule PlatformWeb.TasksLiveTest do
       {:ok, view_a, _html_a} = live(conn_a, ~p"/tasks/#{task.id}")
       {:ok, view_b, _html_b} = live(conn_b, ~p"/tasks/#{task.id}")
 
-      # A saves a new description.
+      # A engages edit mode and saves a new description.
+      render_click(view_a, "toggle_edit_mode")
       render_click(view_a, "start_edit_description")
 
       view_a
@@ -2437,9 +2472,14 @@ defmodule PlatformWeb.TasksLiveTest do
       task = create_task(project, %{title: "Empty Desc", description: nil})
 
       conn = authenticated_conn(conn)
-      {:ok, _view, html} = live(conn, ~p"/tasks/#{task.id}")
+      {:ok, view, html} = live(conn, ~p"/tasks/#{task.id}")
 
+      # Off: placeholder reads simple ("No description yet."), no Edit hint.
       assert html =~ ~s|data-role="description-empty"|
+      refute html =~ "click Edit to add one"
+
+      # On: placeholder mentions the Edit affordance now visible.
+      html = render_click(view, "toggle_edit_mode")
       assert html =~ "click Edit to add one"
     end
   end
@@ -2619,6 +2659,359 @@ defmodule PlatformWeb.TasksLiveTest do
 
       refute html =~ ~s|id="reopen-modal"|
       assert Tasks.get_task_record(task.id).status == "done"
+    end
+  end
+
+  describe "detail panel edit-mode toggle (v2 stage 1)" do
+    test "default state: detail panel renders with edit_mode=false and pencil button present",
+         %{conn: conn} do
+      project = create_project()
+      task = create_task(project, %{title: "Edit-mode default off"})
+
+      conn = authenticated_conn(conn)
+      {:ok, _view, html} = live(conn, ~p"/tasks/#{task.id}")
+
+      assert html =~ ~s|data-role="edit-mode-toggle"|
+      assert html =~ ~s|data-edit-mode="false"|
+      refute html =~ ~s|data-role="edit-mode-indicator"|
+    end
+
+    test "toggle_edit_mode flips :edit_mode to true and rerenders", %{conn: conn} do
+      project = create_project()
+      task = create_task(project, %{title: "Toggle on"})
+
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
+
+      html = render_click(view, "toggle_edit_mode")
+
+      assert html =~ ~s|data-edit-mode="true"|
+      assert html =~ ~s|data-role="edit-mode-indicator"|
+      refute html =~ ~s|data-edit-mode="false"|
+    end
+
+    test "toggle_edit_mode twice flips back to false", %{conn: conn} do
+      project = create_project()
+      task = create_task(project, %{title: "Toggle on then off"})
+
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
+
+      render_click(view, "toggle_edit_mode")
+      html = render_click(view, "toggle_edit_mode")
+
+      assert html =~ ~s|data-edit-mode="false"|
+      refute html =~ ~s|data-role="edit-mode-indicator"|
+    end
+
+    test "selecting a different task resets edit_mode to false even if previous was true",
+         %{conn: conn} do
+      project = create_project()
+      task_a = create_task(project, %{title: "Task A"})
+      task_b = create_task(project, %{title: "Task B"})
+
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/tasks/#{task_a.id}")
+
+      # Engage edit mode on Task A.
+      html = render_click(view, "toggle_edit_mode")
+      assert html =~ ~s|data-edit-mode="true"|
+
+      # Navigate to Task B via the same select_task patch the kanban uses.
+      {:ok, view_b, _} = live(conn, ~p"/tasks/#{task_b.id}")
+      html_b = render(view_b)
+
+      assert html_b =~ "Task B"
+      assert html_b =~ ~s|data-edit-mode="false"|
+      refute html_b =~ ~s|data-role="edit-mode-indicator"|
+    end
+
+    test "close_detail clears edit_mode (re-opening starts read-only)", %{conn: conn} do
+      project = create_project()
+      task = create_task(project, %{title: "Close clears edit-mode"})
+
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
+
+      # Toggle on, then close.
+      render_click(view, "toggle_edit_mode")
+      render_click(view, "close_detail")
+
+      # Re-open the same task — fresh navigation, edit_mode should be false.
+      {:ok, view_reopen, _} = live(conn, ~p"/tasks/#{task.id}")
+      html = render(view_reopen)
+
+      assert html =~ ~s|data-edit-mode="false"|
+      refute html =~ ~s|data-role="edit-mode-indicator"|
+    end
+
+    test "toggling edit-mode off also clears in-progress inline title edit", %{conn: conn} do
+      project = create_project()
+      task = create_task(project, %{title: "Stranded edit cleanup"})
+
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
+
+      # Open edit mode, then start an inline title edit. The input should be visible.
+      render_click(view, "toggle_edit_mode")
+      render_click(view, "start_edit_title", %{"task-id" => task.id})
+      assert render(view) =~ ~s|data-role="detail-title-input"|
+
+      # Toggle edit mode off — the in-progress inline edit should close so we
+      # don't leave a stranded input visible in read-only state.
+      html = render_click(view, "toggle_edit_mode")
+      refute html =~ ~s|data-role="detail-title-input"|
+      assert html =~ ~s|data-role="detail-title"|
+    end
+  end
+
+  # Stage 2 of the v2 plan wires the @edit_mode toggle (stage 1) into the
+  # detail-panel edit affordances. With edit_mode=false the panel renders
+  # plain text/badges (no triggers); with edit_mode=true the v1 inputs/forms
+  # come back, wrapped in a dashed-border affordance. Server-side guards
+  # no-op the write handlers when edit_mode is false.
+  describe "edit-mode field gating (v2 stage 2)" do
+    test "title is rendered as a plain h2 (no phx-click) when edit_mode is off",
+         %{conn: conn} do
+      project = create_project()
+      task = create_task(project, %{title: "Read-only Title"})
+
+      conn = authenticated_conn(conn)
+      {:ok, _view, html} = live(conn, ~p"/tasks/#{task.id}")
+
+      # detail-title is present with data-editable="false" and no click handler.
+      assert html =~ ~s|data-role="detail-title"|
+      assert html =~ ~s|data-editable="false"|
+
+      detail_h2 =
+        Regex.run(~r|<h2[^>]*data-role="detail-title"[^>]*>|, html)
+        |> List.first()
+
+      refute detail_h2 =~ ~s|phx-click="start_edit_title"|
+    end
+
+    test "title becomes click-to-edit and shows the dashed affordance when edit_mode is on",
+         %{conn: conn} do
+      project = create_project()
+      task = create_task(project, %{title: "Editable Title"})
+
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
+
+      html = render_click(view, "toggle_edit_mode")
+
+      assert html =~ ~s|data-role="detail-title"|
+      assert html =~ ~s|data-editable="true"|
+
+      detail_h2 =
+        Regex.run(~r|<h2[^>]*data-role="detail-title"[^>]*>|, html)
+        |> List.first()
+
+      assert detail_h2 =~ ~s|phx-click="start_edit_title"|
+      assert detail_h2 =~ "border-dashed"
+    end
+
+    test "start_edit_title is a no-op when edit_mode is off", %{conn: conn} do
+      project = create_project()
+      task = create_task(project, %{title: "Cannot edit"})
+
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
+
+      render_click(view, "start_edit_title", %{"task-id" => task.id})
+      html = render(view)
+
+      refute html =~ ~s|data-role="detail-title-input"|
+    end
+
+    test "update_task_title is a no-op when edit_mode is off (server-side guard)",
+         %{conn: conn} do
+      project = create_project()
+      task = create_task(project, %{title: "Locked Title"})
+
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
+
+      render_hook(view, "update_task_title", %{
+        "value" => "Sneaky update",
+        "task-id" => task.id
+      })
+
+      assert Tasks.get_task_record(task.id).title == "Locked Title"
+    end
+
+    test "priority + deploy_target render as read-only badges when edit_mode is off",
+         %{conn: conn} do
+      project = create_project()
+
+      {:ok, project} =
+        Tasks.update_project(project, %{
+          deploy_config: %{"deploy_targets" => ["production", "exp"]}
+        })
+
+      task =
+        create_task(project, %{
+          title: "Read-only meta",
+          priority: "high",
+          deploy_target: "exp"
+        })
+
+      conn = authenticated_conn(conn)
+      {:ok, _view, html} = live(conn, ~p"/tasks/#{task.id}")
+
+      assert html =~ ~s|data-role="priority-readonly"|
+      assert html =~ ~s|data-role="deploy-target-readonly"|
+      refute html =~ ~s|data-role="priority-select"|
+      refute html =~ ~s|data-role="deploy-target-select"|
+    end
+
+    test "priority + deploy_target reveal the v1 selects (with dashed border) when edit_mode is on",
+         %{conn: conn} do
+      project = create_project()
+
+      {:ok, project} =
+        Tasks.update_project(project, %{
+          deploy_config: %{"deploy_targets" => ["production", "exp"]}
+        })
+
+      task = create_task(project, %{title: "Editable meta", priority: "low"})
+
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
+
+      html = render_click(view, "toggle_edit_mode")
+
+      assert html =~ ~s|data-role="priority-select"|
+      assert html =~ ~s|data-role="deploy-target-select"|
+      assert html =~ ~s|data-role="priority-form"|
+      assert html =~ "border-dashed"
+      refute html =~ ~s|data-role="priority-readonly"|
+      refute html =~ ~s|data-role="deploy-target-readonly"|
+    end
+
+    test "update_task_field for priority is a no-op when edit_mode is off (server-side guard)",
+         %{conn: conn} do
+      project = create_project()
+      task = create_task(project, %{title: "Locked Priority", priority: "low"})
+
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
+
+      render_hook(view, "update_task_field", %{
+        "field" => "priority",
+        "value" => "high",
+        "task-id" => task.id
+      })
+
+      assert Tasks.get_task_record(task.id).priority == "low"
+    end
+
+    test "update_task_field for deploy_target is a no-op when edit_mode is off",
+         %{conn: conn} do
+      project = create_project()
+
+      {:ok, project} =
+        Tasks.update_project(project, %{
+          deploy_config: %{"deploy_targets" => ["production"]}
+        })
+
+      task = create_task(project, %{title: "Locked Deploy"})
+
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
+
+      render_hook(view, "update_task_field", %{
+        "field" => "deploy_target",
+        "value" => "production",
+        "task-id" => task.id
+      })
+
+      assert is_nil(Tasks.get_task_record(task.id).deploy_target)
+    end
+
+    test "assignee renders as read-only badge when edit_mode is off", %{conn: conn} do
+      project = create_project()
+      a1 = create_agent("Holmes (Test)")
+
+      task =
+        create_task(project, %{
+          title: "Read-only assignee",
+          assignee_id: a1.id,
+          assignee_type: "agent"
+        })
+
+      conn = authenticated_conn(conn)
+      {:ok, _view, html} = live(conn, ~p"/tasks/#{task.id}")
+
+      assert html =~ ~s|data-role="assignee-readonly"|
+      refute html =~ ~s|data-role="assignee-select"|
+    end
+
+    test "update_task_field for assignee_id is a no-op when edit_mode is off",
+         %{conn: conn} do
+      project = create_project()
+      a1 = create_agent("Original (Test)")
+      a2 = create_agent("Sneaky (Test)")
+
+      task =
+        create_task(project, %{
+          title: "Locked Assignee",
+          assignee_id: a1.id,
+          assignee_type: "agent"
+        })
+
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
+
+      render_hook(view, "update_task_field", %{
+        "field" => "assignee_id",
+        "value" => a2.id,
+        "task-id" => task.id
+      })
+
+      assert Tasks.get_task_record(task.id).assignee_id == a1.id
+    end
+
+    test "description Edit button is hidden when edit_mode is off", %{conn: conn} do
+      project = create_project()
+      task = create_task(project, %{title: "Read-only desc", description: "Body"})
+
+      conn = authenticated_conn(conn)
+      {:ok, view, html} = live(conn, ~p"/tasks/#{task.id}")
+
+      refute html =~ ~s|data-role="description-edit-button"|
+      assert html =~ ~s|data-role="description-rendered"|
+
+      html = render_click(view, "toggle_edit_mode")
+      assert html =~ ~s|data-role="description-edit-button"|
+    end
+
+    test "start_edit_description is a no-op when edit_mode is off", %{conn: conn} do
+      project = create_project()
+      task = create_task(project, %{title: "Locked Desc", description: "Stay"})
+
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
+
+      render_click(view, "start_edit_description")
+      html = render(view)
+
+      refute html =~ ~s|data-role="description-textarea"|
+      assert html =~ ~s|data-role="description-rendered"|
+    end
+
+    test "save_description is a no-op when edit_mode is off (server-side guard)",
+         %{conn: conn} do
+      project = create_project()
+      task = create_task(project, %{title: "Locked Desc Body", description: "Original"})
+
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
+
+      # Bypass the UI gate by sending the event directly while edit_mode is off.
+      render_hook(view, "save_description", %{"description" => "Sneaky"})
+
+      assert Tasks.get_task_record(task.id).description == "Original"
     end
   end
 end

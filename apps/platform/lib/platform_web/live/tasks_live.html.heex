@@ -168,33 +168,20 @@
               </p>
 
               <%!-- Title row --%>
+              <%!--
+                v2 stage 3: kanban-card title is plain text. Clicking it
+                bubbles to the card's outer `phx-click="select_task"` and
+                opens the detail panel, where the title can be edited via
+                the explicit edit-mode toggle.
+              --%>
               <div class="flex items-start justify-between gap-2">
-                <%= if @editing_task_title_id == task.id do %>
-                  <input
-                    type="text"
-                    name="value"
-                    value={task.title}
-                    phx-blur="update_task_title"
-                    phx-value-task-id={task.id}
-                    phx-hook="InlineEdit"
-                    data-submit-event="update_task_title"
-                    data-task-id={task.id}
-                    id={"card-title-input-#{task.id}"}
-                    data-role="card-title-input"
-                    class="input input-xs input-bordered text-sm font-medium leading-snug flex-1"
-                  />
-                <% else %>
-                  <h3
-                    id={"card-title-#{task.id}"}
-                    class="text-sm font-medium leading-snug cursor-text hover:bg-base-200 rounded px-1 -mx-1 flex-1"
-                    phx-click="start_edit_title"
-                    phx-value-task-id={task.id}
-                    data-role="card-title"
-                    title="Click to edit"
-                  >
-                    {task.title}
-                  </h3>
-                <% end %>
+                <h3
+                  id={"card-title-#{task.id}"}
+                  class="text-sm font-medium leading-snug flex-1"
+                  data-role="card-title"
+                >
+                  {task.title}
+                </h3>
                 <div class="flex items-center gap-1 flex-shrink-0">
                   <%!-- Active run indicator --%>
                   <span
@@ -349,33 +336,64 @@
     class="fixed inset-y-0 right-0 z-30 flex w-full max-w-lg flex-col border-l border-base-300 bg-base-100 shadow-xl safe-area-top"
   >
     <div class="flex items-center justify-between border-b border-base-300 px-4 py-3">
-      <%= if @editing_task_title_id == @selected_task.id do %>
-        <input
-          type="text"
-          name="value"
-          value={@selected_task.title}
-          phx-blur="update_task_title"
-          phx-value-task-id={@selected_task.id}
-          phx-hook="InlineEdit"
-          data-submit-event="update_task_title"
-          data-task-id={@selected_task.id}
-          data-role="detail-title-input"
-          class="input input-sm input-bordered text-sm font-semibold flex-1 mr-2"
-          id={"detail-title-input-#{@selected_task.id}"}
-        />
-      <% else %>
-        <h2
-          id={"detail-title-#{@selected_task.id}"}
-          class="text-sm font-semibold truncate cursor-text hover:bg-base-200 rounded px-1 -mx-1 flex-1"
-          phx-click="start_edit_title"
-          phx-value-task-id={@selected_task.id}
-          data-role="detail-title"
-          title="Click to edit"
-        >
-          {@selected_task.title}
-        </h2>
+      <%= cond do %>
+        <% @edit_mode and @editing_task_title_id == @selected_task.id -> %>
+          <input
+            type="text"
+            name="value"
+            value={@selected_task.title}
+            phx-blur="update_task_title"
+            phx-value-task-id={@selected_task.id}
+            phx-hook="InlineEdit"
+            data-submit-event="update_task_title"
+            data-task-id={@selected_task.id}
+            data-role="detail-title-input"
+            class="input input-sm input-bordered text-sm font-semibold flex-1 mr-2"
+            id={"detail-title-input-#{@selected_task.id}"}
+          />
+        <% @edit_mode -> %>
+          <h2
+            id={"detail-title-#{@selected_task.id}"}
+            class="text-sm font-semibold truncate cursor-text rounded px-1 -mx-1 flex-1 border border-dashed border-base-300 hover:border-base-content/40 hover:bg-base-200"
+            phx-click="start_edit_title"
+            phx-value-task-id={@selected_task.id}
+            data-role="detail-title"
+            data-editable="true"
+            title="Click to edit"
+          >
+            {@selected_task.title}
+          </h2>
+        <% true -> %>
+          <h2
+            id={"detail-title-#{@selected_task.id}"}
+            class="text-sm font-semibold truncate flex-1"
+            data-role="detail-title"
+            data-editable="false"
+          >
+            {@selected_task.title}
+          </h2>
       <% end %>
       <div class="flex items-center gap-1">
+        <span
+          :if={@edit_mode}
+          class="badge badge-sm badge-primary badge-outline"
+          data-role="edit-mode-indicator"
+        >
+          Edit mode
+        </span>
+        <button
+          class={[
+            "btn btn-sm btn-square",
+            if(@edit_mode, do: "btn-primary", else: "btn-ghost")
+          ]}
+          phx-click="toggle_edit_mode"
+          title="Toggle edit mode"
+          data-role="edit-mode-toggle"
+          data-edit-mode={to_string(@edit_mode)}
+          aria-pressed={to_string(@edit_mode)}
+        >
+          <span class="hero-pencil-square size-4"></span>
+        </button>
         <button
           :if={deletable_task?(@selected_task)}
           class="btn btn-sm btn-ghost btn-square text-error"
@@ -424,113 +442,165 @@
         </span>
       </div>
 
-      <%!-- Inline-editable metadata: priority + deploy_target.
-           Both are <select>s wired to the generic `update_task_field`
-           event. Hidden `field`/`task-id` inputs travel with the change
+      <%!-- Priority + deploy_target metadata.
+           Off (read-only): plain badges/labels.
+           On (edit_mode): <select>s wired to the generic `update_task_field`
+           event, wrapped in a dashed border affordance to signal "click to
+           edit". Hidden `field`/`task-id` inputs travel with the change
            because `phx-change` only carries form params. --%>
+      <% project_targets = project_deploy_targets(@selected_task.project) %>
       <div class="grid grid-cols-2 gap-3">
-        <form
-          phx-change="update_task_field"
-          class="flex flex-col gap-1"
-          data-role="priority-form"
-        >
-          <input type="hidden" name="field" value="priority" />
-          <input type="hidden" name="task-id" value={@selected_task.id} />
-          <label
-            for={"priority-select-#{@selected_task.id}"}
-            class="text-xs font-semibold uppercase tracking-wider text-base-content/50"
+        <%= if @edit_mode do %>
+          <form
+            phx-change="update_task_field"
+            class="flex flex-col gap-1 rounded border border-dashed border-base-300 hover:border-base-content/40 p-1"
+            data-role="priority-form"
+            data-editable="true"
           >
-            Priority
-          </label>
-          <select
-            id={"priority-select-#{@selected_task.id}"}
-            name="value"
-            data-role="priority-select"
-            class="select select-sm select-bordered"
-          >
-            <option
-              :for={p <- Platform.Tasks.Task.priorities()}
-              value={p}
-              selected={@selected_task.priority == p}
+            <input type="hidden" name="field" value="priority" />
+            <input type="hidden" name="task-id" value={@selected_task.id} />
+            <label
+              for={"priority-select-#{@selected_task.id}"}
+              class="text-xs font-semibold uppercase tracking-wider text-base-content/50"
             >
-              {String.capitalize(p)}
-            </option>
-          </select>
-        </form>
+              Priority
+            </label>
+            <select
+              id={"priority-select-#{@selected_task.id}"}
+              name="value"
+              data-role="priority-select"
+              class="select select-sm select-bordered cursor-pointer"
+            >
+              <option
+                :for={p <- Platform.Tasks.Task.priorities()}
+                value={p}
+                selected={@selected_task.priority == p}
+              >
+                {String.capitalize(p)}
+              </option>
+            </select>
+          </form>
 
-        <% project_targets = project_deploy_targets(@selected_task.project) %>
-        <form
-          phx-change="update_task_field"
-          class="flex flex-col gap-1"
-          data-role="deploy-target-form"
-        >
-          <input type="hidden" name="field" value="deploy_target" />
-          <input type="hidden" name="task-id" value={@selected_task.id} />
-          <label
-            for={"deploy-target-select-#{@selected_task.id}"}
-            class="text-xs font-semibold uppercase tracking-wider text-base-content/50"
+          <form
+            phx-change="update_task_field"
+            class="flex flex-col gap-1 rounded border border-dashed border-base-300 hover:border-base-content/40 p-1"
+            data-role="deploy-target-form"
+            data-editable="true"
           >
-            Deploy target
-          </label>
-          <select
-            id={"deploy-target-select-#{@selected_task.id}"}
-            name="value"
-            data-role="deploy-target-select"
-            disabled={project_targets == []}
-            class="select select-sm select-bordered"
-          >
-            <option value="" selected={is_nil(@selected_task.deploy_target)}>
-              {if project_targets == [], do: "(no targets configured)", else: "(none)"}
-            </option>
-            <option
-              :for={t <- project_targets}
-              value={t}
-              selected={@selected_task.deploy_target == t}
+            <input type="hidden" name="field" value="deploy_target" />
+            <input type="hidden" name="task-id" value={@selected_task.id} />
+            <label
+              for={"deploy-target-select-#{@selected_task.id}"}
+              class="text-xs font-semibold uppercase tracking-wider text-base-content/50"
             >
-              {deploy_target_label(t)}
-            </option>
-          </select>
-        </form>
+              Deploy target
+            </label>
+            <select
+              id={"deploy-target-select-#{@selected_task.id}"}
+              name="value"
+              data-role="deploy-target-select"
+              disabled={project_targets == []}
+              class="select select-sm select-bordered cursor-pointer"
+            >
+              <option value="" selected={is_nil(@selected_task.deploy_target)}>
+                {if project_targets == [], do: "(no targets configured)", else: "(none)"}
+              </option>
+              <option
+                :for={t <- project_targets}
+                value={t}
+                selected={@selected_task.deploy_target == t}
+              >
+                {deploy_target_label(t)}
+              </option>
+            </select>
+          </form>
+        <% else %>
+          <div class="flex flex-col gap-1" data-role="priority-readonly" data-editable="false">
+            <span class="text-xs font-semibold uppercase tracking-wider text-base-content/50">
+              Priority
+            </span>
+            <span class={[
+              "badge badge-sm",
+              if(@selected_task.priority,
+                do: priority_badge_class(@selected_task.priority),
+                else: "badge-ghost"
+              )
+            ]}>
+              {if @selected_task.priority,
+                do: String.capitalize(@selected_task.priority),
+                else: "—"}
+            </span>
+          </div>
+
+          <div
+            class="flex flex-col gap-1"
+            data-role="deploy-target-readonly"
+            data-editable="false"
+          >
+            <span class="text-xs font-semibold uppercase tracking-wider text-base-content/50">
+              Deploy target
+            </span>
+            <span class="badge badge-sm badge-outline">
+              {cond do
+                @selected_task.deploy_target -> deploy_target_label(@selected_task.deploy_target)
+                project_targets == [] -> "(no targets configured)"
+                true -> "(none)"
+              end}
+            </span>
+          </div>
+        <% end %>
       </div>
 
-      <%!-- Inline-editable task-level assignee.
+      <%!-- Task-level assignee. Off: plain badge. On: <select>.
            Distinct from the per-phase assignee modal (which writes
            `phase_assignees`); this sets the top-level `assignee_id` and
            is the value the kanban thumbnail / TaskRouter dispatch reads.
            Reuses `@agents` already fetched at mount for the per-phase
            modal landed in 019df0d7. --%>
       <div :if={@agents != []} class="flex flex-col gap-1">
-        <form
-          phx-change="update_task_field"
-          class="flex flex-col gap-1"
-          data-role="assignee-form"
-        >
-          <input type="hidden" name="field" value="assignee_id" />
-          <input type="hidden" name="task-id" value={@selected_task.id} />
-          <label
-            for={"assignee-select-#{@selected_task.id}"}
-            class="text-xs font-semibold uppercase tracking-wider text-base-content/50"
+        <%= if @edit_mode do %>
+          <form
+            phx-change="update_task_field"
+            class="flex flex-col gap-1 rounded border border-dashed border-base-300 hover:border-base-content/40 p-1"
+            data-role="assignee-form"
+            data-editable="true"
           >
-            Assignee (task-level)
-          </label>
-          <select
-            id={"assignee-select-#{@selected_task.id}"}
-            name="value"
-            data-role="assignee-select"
-            class="select select-sm select-bordered"
-          >
-            <option value="" selected={is_nil(@selected_task.assignee_id)}>
-              Unassigned
-            </option>
-            <option
-              :for={a <- @agents}
-              value={a.id}
-              selected={@selected_task.assignee_id == a.id}
+            <input type="hidden" name="field" value="assignee_id" />
+            <input type="hidden" name="task-id" value={@selected_task.id} />
+            <label
+              for={"assignee-select-#{@selected_task.id}"}
+              class="text-xs font-semibold uppercase tracking-wider text-base-content/50"
             >
-              {a.name}
-            </option>
-          </select>
-        </form>
+              Assignee (task-level)
+            </label>
+            <select
+              id={"assignee-select-#{@selected_task.id}"}
+              name="value"
+              data-role="assignee-select"
+              class="select select-sm select-bordered cursor-pointer"
+            >
+              <option value="" selected={is_nil(@selected_task.assignee_id)}>
+                Unassigned
+              </option>
+              <option
+                :for={a <- @agents}
+                value={a.id}
+                selected={@selected_task.assignee_id == a.id}
+              >
+                {a.name}
+              </option>
+            </select>
+          </form>
+        <% else %>
+          <div data-role="assignee-readonly" data-editable="false" class="flex flex-col gap-1">
+            <span class="text-xs font-semibold uppercase tracking-wider text-base-content/50">
+              Assignee (task-level)
+            </span>
+            <span class="badge badge-sm badge-outline">
+              {assignee_name(@selected_task, @agent_names) || "Unassigned"}
+            </span>
+          </div>
+        <% end %>
       </div>
 
       <%!-- Reporter + Dates + Assignee name --%>
@@ -666,14 +736,24 @@
 
       <%!-- Description — click "Edit" to swap the rendered markdown for a
            textarea + Save/Cancel. Toggle, not split-preview, per the
-           plan's "cheaper path that's still nice". --%>
-      <div class="space-y-1" data-role="description-block">
+           plan's "cheaper path that's still nice". Edit button is only
+           rendered when @edit_mode is true; in read-only mode the
+           rendered markdown is the only thing visible. --%>
+      <div
+        class={[
+          "space-y-1",
+          @edit_mode &&
+            "rounded border border-dashed border-base-300 hover:border-base-content/40 p-1"
+        ]}
+        data-role="description-block"
+        data-editable={to_string(@edit_mode)}
+      >
         <div class="flex items-center justify-between gap-2">
           <h3 class="text-xs font-semibold uppercase tracking-wider text-base-content/50">
             Description
           </h3>
           <button
-            :if={!@editing_description}
+            :if={@edit_mode and !@editing_description}
             type="button"
             phx-click="start_edit_description"
             data-role="description-edit-button"
@@ -683,7 +763,7 @@
           </button>
         </div>
 
-        <%= if @editing_description do %>
+        <%= if @edit_mode and @editing_description do %>
           <form
             phx-submit="save_description"
             data-role="description-form"
@@ -723,7 +803,9 @@
             data-role="description-empty"
             class="text-sm text-base-content/40 italic"
           >
-            No description yet — click Edit to add one.
+            {if @edit_mode,
+              do: "No description yet — click Edit to add one.",
+              else: "No description yet."}
           </p>
         <% end %>
       </div>

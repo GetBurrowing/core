@@ -126,6 +126,11 @@ defmodule PlatformWeb.TasksLive do
      # boolean assign to keep the state minimal.
      |> assign(:editing_task_title_id, nil)
      |> assign(:editing_description, false)
+     # Detail-panel edit-mode toggle. When false, the panel is read-only;
+     # when true, inline-edit affordances become interactive (gating wired in
+     # stage 2). Reset to false on task switch and on close_detail so each
+     # selection starts read-only.
+     |> assign(:edit_mode, false)
      |> allow_upload(:task_attachments,
        accept: :any,
        auto_upload: true,
@@ -315,18 +320,48 @@ defmodule PlatformWeb.TasksLive do
      |> assign(:output_canvases, [])
      |> assign(:active_review_canvas, nil)
      |> assign(:confirm_delete, false)
+     |> assign(:edit_mode, false)
      |> push_patch(to: ~p"/tasks")}
   end
 
   # ── Inline edit events (title / generic field / description) ────────────
 
+  # Detail-panel edit-mode toggle. Flips `:edit_mode`. When toggling OFF,
+  # also clear any in-progress inline edits (`:editing_task_title_id`,
+  # `:editing_description`) so disengaging edit mode doesn't leave a
+  # stranded textarea visible. The actual gating of edit affordances on
+  # `@edit_mode` happens in stage 2; stage 1 only wires the toggle state.
+  def handle_event("toggle_edit_mode", _params, socket) do
+    new_edit_mode = !socket.assigns.edit_mode
+
+    socket =
+      if new_edit_mode do
+        assign(socket, :edit_mode, true)
+      else
+        socket
+        |> assign(:edit_mode, false)
+        |> assign(:editing_task_title_id, nil)
+        |> assign(:editing_description, false)
+      end
+
+    {:noreply, socket}
+  end
+
+  # Server-side defense-in-depth: when @edit_mode is false, the detail-panel
+  # affordances that would emit these events aren't rendered (gated in
+  # tasks_live.html.heex), but a stray invocation from elsewhere (kanban,
+  # legacy hook, devtools) must not be able to mutate the task. Each
+  # write-path handler below has a `%{assigns: %{edit_mode: false}}` clause
+  # that no-ops before the v1 implementation runs.
+  def handle_event("start_edit_title", _params, %{assigns: %{edit_mode: false}} = socket),
+    do: {:noreply, socket}
+
   def handle_event("start_edit_title", %{"task-id" => task_id}, socket) do
     {:noreply, assign(socket, :editing_task_title_id, task_id)}
   end
 
-  def handle_event("cancel_edit_title", _params, socket) do
-    {:noreply, assign(socket, :editing_task_title_id, nil)}
-  end
+  def handle_event("update_task_title", _params, %{assigns: %{edit_mode: false}} = socket),
+    do: {:noreply, socket}
 
   def handle_event("update_task_title", %{"value" => raw_title, "task-id" => task_id}, socket) do
     new_title = String.trim(raw_title)
@@ -379,6 +414,9 @@ defmodule PlatformWeb.TasksLive do
   # flash a generic error.
 
   @editable_task_fields ~w(priority deploy_target assignee_id)
+
+  def handle_event("update_task_field", _params, %{assigns: %{edit_mode: false}} = socket),
+    do: {:noreply, socket}
 
   def handle_event(
         "update_task_field",
@@ -444,6 +482,9 @@ defmodule PlatformWeb.TasksLive do
   # refreshes the description for any other connected LV session); Cancel
   # just discards local state without touching the DB.
 
+  def handle_event("start_edit_description", _params, %{assigns: %{edit_mode: false}} = socket),
+    do: {:noreply, socket}
+
   def handle_event("start_edit_description", _params, socket) do
     {:noreply, assign(socket, :editing_description, true)}
   end
@@ -451,6 +492,9 @@ defmodule PlatformWeb.TasksLive do
   def handle_event("cancel_edit_description", _params, socket) do
     {:noreply, assign(socket, :editing_description, false)}
   end
+
+  def handle_event("save_description", _params, %{assigns: %{edit_mode: false}} = socket),
+    do: {:noreply, socket}
 
   def handle_event("save_description", %{"description" => new_desc}, socket) do
     task = socket.assigns.selected_task
@@ -2127,12 +2171,14 @@ defmodule PlatformWeb.TasksLive do
     socket
     |> assign(:selected_task, nil)
     |> assign(:expanded_plans, MapSet.new())
+    |> assign(:edit_mode, false)
   end
 
   defp assign_selected_task(socket, %Task{} = task) do
     socket
     |> assign(:selected_task, task)
     |> assign(:expanded_plans, MapSet.new(default_expanded_plan_ids(task)))
+    |> assign(:edit_mode, false)
   end
 
   # Returns `{rejected_plans, active_plans}` where `rejected_plans` are the
