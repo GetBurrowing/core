@@ -26,6 +26,7 @@ defmodule Platform.Agents.SystemEventScheduler do
   alias Platform.Agents.{Agent, ActivityDigest}
   alias Platform.Chat
   alias Platform.Chat.AgentResponder
+  alias Platform.Federation
   alias Platform.Federation.RuntimePresence
   alias Platform.Repo
 
@@ -240,19 +241,33 @@ defmodule Platform.Agents.SystemEventScheduler do
   # Skip dispatch when the external agent's runtime is known to be offline —
   # avoids posting an instruction that will dead-letter immediately. Built-in
   # agents always pass this check.
+  #
+  # `agent.runtime_id` is the FK to `agent_runtimes.id` (UUID); presence is
+  # keyed by the human-readable `agent_runtimes.runtime_id` string set by
+  # RuntimeChannel.join. Resolve the runtime row before checking presence.
   defp ensure_runtime_reachable(
-         %Agent{runtime_type: "external", runtime_id: runtime_id},
+         %Agent{runtime_type: "external", runtime_id: runtime_pk} = agent,
          event_type
        )
-       when is_binary(runtime_id) do
-    if RuntimePresence.online?(runtime_id) do
-      :ok
-    else
-      Logger.warning(
-        "[SystemEventScheduler] skipping #{event_type}: external runtime #{runtime_id} is offline"
-      )
+       when is_binary(runtime_pk) do
+    case Federation.get_runtime(runtime_pk) do
+      %{runtime_id: runtime_id} ->
+        if RuntimePresence.online?(runtime_id) do
+          :ok
+        else
+          Logger.warning(
+            "[SystemEventScheduler] skipping #{event_type}: external runtime #{runtime_id} is offline"
+          )
 
-      {:error, :runtime_offline}
+          {:error, :runtime_offline}
+        end
+
+      nil ->
+        Logger.warning(
+          "[SystemEventScheduler] skipping #{event_type}: agent #{agent.slug} runtime row not found (pk=#{runtime_pk})"
+        )
+
+        {:error, :runtime_not_found}
     end
   end
 

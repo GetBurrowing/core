@@ -262,7 +262,7 @@ defmodule Platform.Agents.SystemEventSchedulerTest do
     end
 
     describe "external runtime handling" do
-      test "skips dispatch when external runtime is offline, logs warning" do
+      setup do
         user =
           Repo.insert!(%Platform.Accounts.User{
             email: "sched_test_#{System.unique_integer([:positive])}@example.com",
@@ -270,10 +270,10 @@ defmodule Platform.Agents.SystemEventSchedulerTest do
             oidc_sub: "oidc-sched-test-#{System.unique_integer([:positive])}"
           })
 
+        runtime_id_string = "ext-runtime-#{System.unique_integer([:positive])}"
+
         {:ok, runtime} =
-          Platform.Federation.register_runtime(user.id, %{
-            runtime_id: "offline-runtime-#{System.unique_integer([:positive])}"
-          })
+          Platform.Federation.register_runtime(user.id, %{runtime_id: runtime_id_string})
 
         agent =
           create_agent(%{
@@ -283,6 +283,14 @@ defmodule Platform.Agents.SystemEventSchedulerTest do
             system_events: ["daily_summary"]
           })
 
+        {:ok, agent: agent, runtime: runtime, runtime_id_string: runtime_id_string}
+      end
+
+      test "skips dispatch when external runtime is offline, logs warning",
+           %{agent: agent, runtime_id_string: runtime_id_string} do
+        # Ensure presence map is clean so the runtime is genuinely offline.
+        Platform.Federation.RuntimePresence.untrack(runtime_id_string)
+
         {:ok, _pid} =
           start_supervised({SystemEventScheduler, check_interval_ms: :timer.hours(24)})
 
@@ -291,11 +299,32 @@ defmodule Platform.Agents.SystemEventSchedulerTest do
             SystemEventScheduler.fire_now("daily_summary")
           end)
 
-        assert log =~ "external runtime #{runtime.id} is offline"
+        assert log =~ "external runtime #{runtime_id_string} is offline"
 
         # No system space should have been created since dispatch was skipped
         # before the ensure_system_space step.
         refute Chat.get_space_by_slug("system-#{agent.slug}")
+      end
+
+      test "dispatches when external runtime presence is tracked under its string runtime_id",
+           %{agent: agent, runtime_id_string: runtime_id_string} do
+        # Mark the runtime online the same way RuntimeChannel.join does — by the
+        # human-readable runtime_id string, not the UUID PK. This is the case
+        # the prior implementation got wrong: it checked presence by UUID and
+        # never found a match, so dispatch always reported runtime_offline.
+        Platform.Federation.RuntimePresence.track(runtime_id_string)
+        on_exit(fn -> Platform.Federation.RuntimePresence.untrack(runtime_id_string) end)
+
+        {:ok, _pid} =
+          start_supervised({SystemEventScheduler, check_interval_ms: :timer.hours(24)})
+
+        log =
+          capture_log(fn ->
+            SystemEventScheduler.fire_now("daily_summary")
+          end)
+
+        refute log =~ "is offline"
+        assert Chat.get_space_by_slug("system-#{agent.slug}") != nil
       end
     end
 
