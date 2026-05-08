@@ -29,6 +29,15 @@ const MessageLift = {
 
     const rect = target.getBoundingClientRect()
 
+    // Tall-message mode: when the target message is taller than ~60% of the
+    // viewport, the "lift to viewport center" animation pushes both the
+    // clone and the floating emoji pill off-screen (the pill is positioned
+    // at `top: calc(50% - --clone-half-h - 12px)`, which goes negative once
+    // the half-height exceeds the viewport center). For tall messages we
+    // skip the lift and let CSS pin the pill to the viewport bottom via
+    // `[data-tall-message="true"]` — see app.css.
+    const isTall = rect.height > window.innerHeight * 0.6
+
     // Dim the original immediately to prevent a double-render flash.
     target.dataset.messageLiftOrigOpacity = target.style.opacity || ""
     target.dataset.messageLiftOrigPointerEvents = target.style.pointerEvents || ""
@@ -49,22 +58,33 @@ const MessageLift = {
     clone.style.zIndex = "60"
     clone.style.pointerEvents = "none"
 
-    const centerX = window.innerWidth / 2
-    const centerY = window.innerHeight / 2
-    const targetCenterX = rect.left + rect.width / 2
-    const targetCenterY = rect.top + rect.height / 2
-    const dx = centerX - targetCenterX
-    const dy = centerY - targetCenterY
+    if (isTall) {
+      // Skip the translate; an oversized clone has no meaningful "center"
+      // to lift toward. The dim alone signals which message is being acted
+      // on. Zero --clone-half-h so the existing CSS top calc collapses
+      // safely; the [data-tall-message] selector handles pill placement.
+      this.el.dataset.tallMessage = "true"
+      clone.style.setProperty("--lift-dx", "0px")
+      clone.style.setProperty("--lift-dy", "0px")
+      this.el.style.setProperty("--clone-half-h", "0px")
+    } else {
+      const centerX = window.innerWidth / 2
+      const centerY = window.innerHeight / 2
+      const targetCenterX = rect.left + rect.width / 2
+      const targetCenterY = rect.top + rect.height / 2
+      const dx = centerX - targetCenterX
+      const dy = centerY - targetCenterY
 
-    clone.style.setProperty("--lift-dx", `${dx}px`)
-    clone.style.setProperty("--lift-dy", `${dy}px`)
+      clone.style.setProperty("--lift-dx", `${dx}px`)
+      clone.style.setProperty("--lift-dy", `${dy}px`)
 
-    // Expose the clone's post-lift half-height to the LV menu fragment so
-    // the emoji pill (above the clone) can position itself relative to
-    // where the clone lands. 1.02 matches the CSS scale on
-    // .message-lift.lifted. The action card below the clone was removed
-    // when long-press became double-tap — see longpress_menu.js.
-    this.el.style.setProperty("--clone-half-h", `${(rect.height * 1.02) / 2}px`)
+      // Expose the clone's post-lift half-height to the LV menu fragment so
+      // the emoji pill (above the clone) can position itself relative to
+      // where the clone lands. 1.02 matches the CSS scale on
+      // .message-lift.lifted. The action card below the clone was removed
+      // when long-press became double-tap — see longpress_menu.js.
+      this.el.style.setProperty("--clone-half-h", `${(rect.height * 1.02) / 2}px`)
+    }
 
     document.body.appendChild(clone)
 
