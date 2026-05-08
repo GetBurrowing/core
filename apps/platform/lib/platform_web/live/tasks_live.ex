@@ -2250,10 +2250,20 @@ defmodule PlatformWeb.TasksLive do
   defp present?(_), do: false
 
   # Human-readable summary string used in the folded row for a rejected
-  # plan revision. When the plan carries a `rejection_reason`, append a
-  # truncated, quoted excerpt so reviewers can scan history without
-  # expanding every row. Falls back gracefully when `updated_at` is
-  # missing or when the reason is nil (legacy rows pre-migration).
+  # plan revision. When the plan was auto-superseded by a newer revision
+  # (`superseded_by_plan_id` non-nil + `:superseded_by` association
+  # loaded), render a concise "superseded by vN on DATE" label and skip
+  # the rejection_reason excerpt — the supersession IS the reason and
+  # the canned excerpt would just be redundant. Otherwise (manual reject
+  # via the 019dfad1 free-text path, or legacy/edge cases) fall through
+  # to the original "rejected on DATE — \"reason excerpt\"" rendering.
+  def plan_summary_label(
+        %Plan{superseded_by_plan_id: sup_id, superseded_by: %Plan{} = sup} = plan
+      )
+      when not is_nil(sup_id) do
+    "Plan v#{plan.version} — superseded by v#{sup.version}#{format_supersession_date(plan.updated_at)}"
+  end
+
   def plan_summary_label(%Plan{version: version, updated_at: %DateTime{} = updated_at} = plan) do
     base = "Plan v#{version} — rejected on #{Calendar.strftime(updated_at, "%Y-%m-%d")}"
     append_rejection_excerpt(base, plan.rejection_reason)
@@ -2270,6 +2280,17 @@ defmodule PlatformWeb.TasksLive do
     base = "Plan v#{version} — rejected"
     append_rejection_excerpt(base, plan.rejection_reason)
   end
+
+  # Date suffix for the supersession label. Mirrors the format used by
+  # the rejected-on rendering. Tolerates missing/non-loaded timestamps
+  # gracefully — falls back to no suffix rather than crashing the row.
+  defp format_supersession_date(%DateTime{} = dt),
+    do: " on #{Calendar.strftime(dt, "%Y-%m-%d")}"
+
+  defp format_supersession_date(%NaiveDateTime{} = dt),
+    do: " on #{Calendar.strftime(dt, "%Y-%m-%d")}"
+
+  defp format_supersession_date(_), do: ""
 
   # Appends a truncated, quoted rejection-reason excerpt to the summary
   # label. Truncation cap is 60 chars with a single-character ellipsis

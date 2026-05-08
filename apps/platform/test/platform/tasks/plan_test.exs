@@ -140,6 +140,72 @@ defmodule Platform.Tasks.PlanTest do
     end
   end
 
+  describe "superseded_by_plan_id field" do
+    test "is part of the schema" do
+      assert :superseded_by_plan_id in Plan.__schema__(:fields)
+      # Self-FK is preloadable via the :superseded_by association.
+      assert :superseded_by in Plan.__schema__(:associations)
+    end
+
+    test "is cast by changeset/2 when provided", %{task: task} do
+      successor_id = Ecto.UUID.generate()
+
+      changeset =
+        Plan.changeset(%Plan{}, %{
+          task_id: task.id,
+          version: 1,
+          superseded_by_plan_id: successor_id
+        })
+
+      assert changeset.valid?
+      assert get_change(changeset, :superseded_by_plan_id) == successor_id
+    end
+
+    test "is optional (changeset valid without it)", %{task: task} do
+      changeset = Plan.changeset(%Plan{}, %{task_id: task.id, version: 1})
+      assert changeset.valid?
+      refute Map.has_key?(changeset.changes, :superseded_by_plan_id)
+    end
+
+    test "an unknown UUID fails the foreign-key constraint at insert time",
+         %{task: task} do
+      bogus_successor = Ecto.UUID.generate()
+
+      assert {:error, changeset} =
+               %Plan{}
+               |> Plan.changeset(%{
+                 task_id: task.id,
+                 version: 99,
+                 superseded_by_plan_id: bogus_successor
+               })
+               |> Platform.Repo.insert()
+
+      # Cast itself accepts the value (binary_id is permissive); the FK
+      # constraint surfaces as a changeset error after the insert attempt.
+      assert {_, _} = changeset.errors[:superseded_by_plan_id]
+    end
+
+    test "round-trips through the database with a real predecessor → successor link",
+         %{task: task} do
+      {:ok, plan_v1} = Tasks.create_plan(%{task_id: task.id})
+      # Need plan_v1 in a non-blocking status before creating v2.
+      {:ok, plan_v1} = Tasks.submit_plan_for_review(plan_v1)
+      {:ok, _} = Tasks.reject_plan(plan_v1, Ecto.UUID.generate())
+      {:ok, plan_v2} = Tasks.create_plan(%{task_id: task.id})
+
+      {:ok, plan_v1_updated} =
+        plan_v1
+        |> Plan.changeset(%{superseded_by_plan_id: plan_v2.id})
+        |> Platform.Repo.update()
+
+      assert plan_v1_updated.superseded_by_plan_id == plan_v2.id
+
+      reloaded = Platform.Repo.get!(Plan, plan_v1.id) |> Platform.Repo.preload(:superseded_by)
+      assert reloaded.superseded_by_plan_id == plan_v2.id
+      assert reloaded.superseded_by.id == plan_v2.id
+    end
+  end
+
   describe "list_plans/1" do
     test "returns plans ordered by version", %{task: task} do
       # Two legitimate revisions: first is rejected, then a new one is drafted.
@@ -200,6 +266,149 @@ defmodule Platform.Tasks.PlanTest do
       {:ok, plan} = Tasks.create_plan(%{task_id: task.id})
       # status: "draft"
       assert {:error, :invalid_transition} = Tasks.reject_plan(plan, "actor", "x")
+    end
+  end
+
+  describe "approve_plan/2 auto-supersession" do
+    # Helper: drive a task to having an approved v1 in place.
+    defp approve_v1(task) do
+      {:ok, plan} = Tasks.create_plan(%{task_id: task.id})
+      {:ok, plan} = Tasks.submit_plan_for_review(plan)
+      {:ok, plan} = Tasks.approve_plan(plan, "system")
+      plan
+    end
+
+    defp draft_and_review(task) do
+      {:ok, plan} = Tasks.create_plan(%{task_id: task.id})
+      {:ok, plan} = Tasks.submit_plan_for_review(plan)
+      plan
+    end
+
+    test "approving v2 auto-rejects an approved v1 with successor link + reason", %{task: task} do
+      v1 = approve_v1(task)
+      assert v1.status == "approved"
+
+      v2_pending = draft_and_review(task)
+      assert {:ok, v2} = Tasks.approve_plan(v2_pending, "system")
+      assert v2.status == "approved"
+
+      reloaded_v1 = Platform.Repo.get!(Plan, v1.id)
+      assert reloaded_v1.status == "rejected"
+      assert reloaded_v1.superseded_by_plan_id == v2.id
+      assert reloaded_v1.rejection_reason == "Superseded by plan v#{v2.version}"
+    end
+
+    test "approving v2 auto-rejects a completed v1", %{task: task} do
+      v1 = approve_v1(task)
+      # Force v1 to "completed" to simulate the completion path.
+      {:ok, v1_completed} =
+        v1 |> Plan.changeset(%{status: "completed"}) |> Platform.Repo.update()
+
+      v2_pending = draft_and_review(task)
+      assert {:ok, v2} = Tasks.approve_plan(v2_pending, "system")
+      assert v2.status == "approved"
+
+      reloaded_v1 = Platform.Repo.get!(Plan, v1_completed.id)
+      assert reloaded_v1.status == "rejected"
+      assert reloaded_v1.superseded_by_plan_id == v2.id
+      assert reloaded_v1.rejection_reason == "Superseded by plan v#{v2.version}"
+    end
+
+    test "approving v2 leaves a manually-rejected v1 untouched", %{task: task} do
+      # v1: pending_review → manually rejected with custom reason.
+      {:ok, v1} = Tasks.create_plan(%{task_id: task.id})
+      {:ok, v1} = Tasks.submit_plan_for_review(v1)
+
+      {:ok, v1_rejected} =
+        Tasks.reject_plan(v1, Ecto.UUID.generate(), "Did not address auth path")
+
+      v2_pending = draft_and_review(task)
+      assert {:ok, v2} = Tasks.approve_plan(v2_pending, "system")
+      assert v2.status == "approved"
+
+      reloaded_v1 = Platform.Repo.get!(Plan, v1_rejected.id)
+      assert reloaded_v1.status == "rejected"
+      # Manual rejection metadata preserved — supersession does NOT overwrite.
+      assert is_nil(reloaded_v1.superseded_by_plan_id)
+      assert reloaded_v1.rejection_reason == "Did not address auth path"
+    end
+
+    test "approving the lone v1 with no siblings is a no-op for supersession", %{task: task} do
+      plan = draft_and_review(task)
+      assert {:ok, approved} = Tasks.approve_plan(plan, "system")
+      assert approved.status == "approved"
+      # No other plans exist; supersession path is empty and harmless.
+      assert Tasks.list_plans(task.id) |> length() == 1
+    end
+
+    test "current_plan/1 returns v2 after auto-supersession", %{task: task} do
+      _v1 = approve_v1(task)
+      v2_pending = draft_and_review(task)
+      {:ok, v2} = Tasks.approve_plan(v2_pending, "system")
+
+      current = Tasks.current_plan(task.id)
+      assert current.id == v2.id
+      assert current.version == v2.version
+    end
+
+    test "broadcasts {:plan_updated, supersedee} BEFORE {:plan_updated, new_plan}", %{task: task} do
+      v1 = approve_v1(task)
+
+      :ok = Tasks.subscribe_board()
+
+      v2_pending = draft_and_review(task)
+      {:ok, v2} = Tasks.approve_plan(v2_pending, "system")
+
+      # The supersedee (v1 → rejected) is broadcast first…
+      assert_receive {:plan_updated, %Plan{id: id1, status: "rejected"} = sup}
+      assert id1 == v1.id
+      assert sup.superseded_by_plan_id == v2.id
+
+      # …then the newly-approved v2.
+      assert_receive {:plan_updated, %Plan{id: id2, status: "approved"}}
+      assert id2 == v2.id
+    end
+
+    test "atomicity: a DB-level constraint violation on supersession rolls back the new plan",
+         %{task: task} do
+      v1 = approve_v1(task)
+      v2_pending = draft_and_review(task)
+
+      # Force the supersession `Repo.update!/1` to raise by planting a
+      # row-level CHECK that the supersession write will violate. We add
+      # a transient CHECK constraint that forbids `superseded_by_plan_id`
+      # being set on the v1 row. The constraint is dropped at the end of
+      # the test by the sandbox transaction rollback.
+      #
+      # Side note: the sandbox executes each test inside a SAVEPOINT;
+      # adding a constraint here is sandboxed and cleaned up automatically.
+      Platform.Repo.query!(
+        "ALTER TABLE plans ADD CONSTRAINT no_supersession_v1 " <>
+          "CHECK (id <> '#{v1.id}'::uuid OR superseded_by_plan_id IS NULL)"
+      )
+
+      # Now `approve_plan` runs the supersession `Repo.update!` against
+      # v1 with `superseded_by_plan_id: v2.id`, which violates the CHECK.
+      # `Repo.update!` raises (Ecto.ConstraintError or Postgrex.Error)
+      # and `Repo.transaction` rolls back.
+      result =
+        try do
+          Tasks.approve_plan(v2_pending, "system")
+        rescue
+          e in [Ecto.ConstraintError, Postgrex.Error] -> {:rescued, e.__struct__}
+        end
+
+      assert match?({:rescued, _}, result)
+
+      # v2 must NOT be approved — the transaction rolled back.
+      reloaded_v2 = Platform.Repo.get!(Plan, v2_pending.id)
+      assert reloaded_v2.status == "pending_review"
+      assert is_nil(reloaded_v2.approved_at)
+
+      # v1's status is unchanged.
+      reloaded_v1 = Platform.Repo.get!(Plan, v1.id)
+      assert reloaded_v1.status == "approved"
+      assert is_nil(reloaded_v1.superseded_by_plan_id)
     end
   end
 

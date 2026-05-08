@@ -1237,6 +1237,49 @@ defmodule PlatformWeb.TasksLiveTest do
                "Plan v4 — rejected on 2026-05-04"
     end
 
+    test "plan_summary_label/1 renders supersession label and skips the rejection_reason excerpt" do
+      ts = ~U[2026-05-07 09:00:00.000000Z]
+      sup_id = Ecto.UUID.generate()
+
+      plan = %Plan{
+        version: 1,
+        status: "rejected",
+        updated_at: ts,
+        rejection_reason: "Superseded by plan v2",
+        superseded_by_plan_id: sup_id,
+        superseded_by: %Plan{version: 2}
+      }
+
+      label = PlatformWeb.TasksLive.plan_summary_label(plan)
+
+      assert label == "Plan v1 — superseded by v2 on 2026-05-07"
+      refute label =~ "rejected on"
+      refute label =~ ~s("Superseded by plan v2")
+    end
+
+    test "plan_summary_label/1 with superseded_by_plan_id but missing :superseded_by falls through to rejected label" do
+      ts = ~U[2026-05-04 12:34:56.000000Z]
+
+      # Pattern guard: %Plan{} on :superseded_by requires the assoc loaded.
+      # If it isn't (defensive: legacy row, partial preload), we still render
+      # something useful rather than crashing.
+      plan = %Plan{
+        version: 1,
+        status: "rejected",
+        updated_at: ts,
+        rejection_reason: "design flaw",
+        superseded_by_plan_id: Ecto.UUID.generate(),
+        superseded_by: %Ecto.Association.NotLoaded{
+          __field__: :superseded_by,
+          __cardinality__: :one,
+          __owner__: Plan
+        }
+      }
+
+      assert PlatformWeb.TasksLive.plan_summary_label(plan) ==
+               ~s(Plan v1 — rejected on 2026-05-04 — "design flaw")
+    end
+
     test "expanded rejected-plan body shows the full Rejection reason section when set",
          %{conn: conn} do
       project = create_project()
@@ -1318,6 +1361,63 @@ defmodule PlatformWeb.TasksLiveTest do
       # …but no empty rejection-reason box.
       refute html =~ ~s(data-role="plan-rejection-reason")
       refute html =~ "Rejection reason"
+    end
+
+    test "auto-superseded v1 folded summary shows 'superseded by v2' instead of the canned reason excerpt",
+         %{conn: conn} do
+      project = create_project()
+      task = create_task(project, %{title: "Supersession task", status: "planning"})
+
+      # v1: approved, will be auto-superseded when v2 is approved.
+      {:ok, v1} = Tasks.create_plan(%{task_id: task.id, version: 1, status: "approved"})
+
+      # v2: pending_review → approve, which auto-supersedes v1.
+      {:ok, v2} =
+        Tasks.create_plan(%{task_id: task.id, version: 2, status: "pending_review"})
+
+      {:ok, _approved_v2} = Tasks.approve_plan(v2, "test-user")
+
+      conn = authenticated_conn(conn)
+      {:ok, _view, html} = live(conn, ~p"/tasks/#{task.id}")
+
+      # Folded v1 row carries the supersession label…
+      assert html =~ "superseded by v2"
+      assert html =~ "Plan v1 — superseded by v2"
+
+      # …and does NOT carry the redundant rejection_reason excerpt that
+      # approve_plan/2 wrote into v1 (`"Superseded by plan v2"`).
+      refute html =~ ~s("Superseded by plan v2")
+
+      # Sanity: v1 actually carries the supersession FK in the DB.
+      reloaded_v1 = Repo.get!(Plan, v1.id)
+      assert reloaded_v1.superseded_by_plan_id == v2.id
+      assert reloaded_v1.status == "rejected"
+    end
+
+    test "manually rejected plan with free-text reason still shows the quoted excerpt (no regression)",
+         %{conn: conn} do
+      project = create_project()
+      task = create_task(project, %{title: "Manual reject task", status: "planning"})
+
+      _r1 =
+        Repo.insert!(%Plan{
+          task_id: task.id,
+          status: "rejected",
+          version: 1,
+          rejection_reason: "design flaw",
+          superseded_by_plan_id: nil
+        })
+
+      {:ok, _active} = Tasks.create_plan(%{task_id: task.id, version: 2, status: "approved"})
+
+      conn = authenticated_conn(conn)
+      {:ok, _view, html} = live(conn, ~p"/tasks/#{task.id}")
+
+      # Manual-reject path — quoted excerpt still renders (019dfad1 behavior).
+      # HTML-escaped quotes (`&quot;`) wrap the reason in the rendered DOM.
+      assert html =~ "design flaw"
+      assert html =~ "rejected on"
+      refute html =~ "superseded by"
     end
   end
 

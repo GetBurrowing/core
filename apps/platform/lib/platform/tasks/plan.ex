@@ -18,6 +18,10 @@ defmodule Platform.Tasks.Plan do
     # reopen-with-feedback flow (see task 019dfad1). Validation lives
     # in the UI/lifecycle layers, not here.
     field(:rejection_reason, :string)
+    # Self-referential FK pointing to the plan that replaced this one.
+    # Set by the auto-supersession lifecycle helper (stage 2 of task
+    # 019dfd5a). Nullable: plans that were never superseded leave it nil.
+    belongs_to(:superseded_by, Platform.Tasks.Plan, foreign_key: :superseded_by_plan_id)
 
     has_many(:stages, Platform.Tasks.Stage)
 
@@ -34,11 +38,13 @@ defmodule Platform.Tasks.Plan do
       :version,
       :approved_by,
       :approved_at,
-      :rejection_reason
+      :rejection_reason,
+      :superseded_by_plan_id
     ])
     |> validate_required([:task_id, :version])
     |> validate_inclusion(:status, @statuses)
     |> unique_constraint([:task_id, :version])
     |> foreign_key_constraint(:task_id)
+    |> foreign_key_constraint(:superseded_by_plan_id)
   end
 end

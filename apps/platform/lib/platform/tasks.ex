@@ -439,6 +439,28 @@ defmodule Platform.Tasks do
     now = DateTime.utc_now()
 
     Repo.transaction(fn ->
+      # Auto-supersede any older sibling plans that are still active
+      # (`approved` or `completed`). Manual rejections (`rejected`) are
+      # left untouched so the original `rejection_reason` is preserved.
+      siblings =
+        from(p in Plan,
+          where:
+            p.task_id == ^plan.task_id and p.id != ^plan.id and
+              p.status in ["approved", "completed"]
+        )
+        |> Repo.all()
+
+      superseded_siblings =
+        Enum.map(siblings, fn sibling ->
+          sibling
+          |> Plan.changeset(%{
+            status: "rejected",
+            superseded_by_plan_id: plan.id,
+            rejection_reason: "Superseded by plan v#{plan.version}"
+          })
+          |> Repo.update!()
+        end)
+
       {:ok, updated_plan} =
         plan
         |> Plan.changeset(%{status: "approved", approved_by: approved_by, approved_at: now})
@@ -457,10 +479,16 @@ defmodule Platform.Tasks do
             nil
         end
 
-      {updated_plan, previous_task, finalized_task}
+      {updated_plan, previous_task, finalized_task, superseded_siblings}
     end)
     |> case do
-      {:ok, {updated, previous_task, finalized_task}} ->
+      {:ok, {updated, previous_task, finalized_task, superseded_siblings}} ->
+        # Broadcast supersedee transitions FIRST so observers fold v1 before
+        # expanding v2 — preserves the "newer plan replaces older" UX order.
+        Enum.each(superseded_siblings, fn sibling ->
+          broadcast_board({:plan_updated, sibling})
+        end)
+
         broadcast_board({:plan_updated, updated})
 
         if finalized_task do
@@ -722,7 +750,7 @@ defmodule Platform.Tasks do
     Task
     |> where([t], t.id == ^task_id)
     |> where([t], is_nil(t.deleted_at))
-    |> preload([:project, :epic, plans: [stages: :validations]])
+    |> preload([:project, :epic, plans: [:superseded_by, stages: :validations]])
     |> Repo.one()
   end
 
