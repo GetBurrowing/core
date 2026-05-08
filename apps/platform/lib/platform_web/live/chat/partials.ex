@@ -74,12 +74,21 @@ defmodule PlatformWeb.ChatLive.Partials do
           </button>
         </div>
 
-        <div
+        <%!-- Native HTML semantics: a <label for={input.id}> opens the file
+             picker on click without any JS dispatch, which sidesteps:
+               (a) the `live_file_input` hardcoded `id={@upload.ref}` collision
+                   that silently dropped any user-supplied id;
+               (b) the iOS gesture-loss problem when JS.dispatch routes the
+                   click through an async boundary.
+             `phx-drop-target={@upload.ref}` is Phoenix's native drag-drop
+             registration — drops on this label register entries through the
+             same code path as the file picker. --%>
+        <label
           :if={@uploads.attachments.entries == []}
           id="upload-dropzone"
-          phx-hook="FilePickerTrigger"
+          for={@uploads.attachments.ref}
+          phx-drop-target={@uploads.attachments.ref}
           class="upload-dropzone"
-          phx-click={Phoenix.LiveView.JS.dispatch("click", to: "#upload-file-trigger")}
         >
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
             <path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4" /><polyline points="17 8 12 3 7 8" /><line
@@ -91,20 +100,14 @@ defmodule PlatformWeb.ChatLive.Partials do
           </svg>
           <div class="upload-dropzone-title">Drag & drop images here</div>
           <div class="upload-dropzone-or">or</div>
-          <button
-            type="button"
-            id="upload-browse-btn"
-            phx-hook="FilePickerTrigger"
-            class="upload-browse-btn"
-            phx-click={Phoenix.LiveView.JS.dispatch("click", to: "#upload-file-trigger")}
-          >
+          <span id="upload-browse-btn" class="upload-browse-btn">
             Browse files
-          </button>
+          </span>
           <div class="upload-dropzone-sub">You can also paste images with ⌘V</div>
           <div class="upload-dropzone-formats">
             PNG · JPG · GIF · WebP · SVG — max 15 MB each
           </div>
-        </div>
+        </label>
 
         <div :if={@uploads.attachments.entries != []} class="upload-grid-area">
           <div class="upload-grid">
@@ -137,24 +140,23 @@ defmodule PlatformWeb.ChatLive.Partials do
               </button>
               <div
                 :if={entry.progress > 0 and entry.progress < 100}
-                style="position:absolute;bottom:0;left:0;right:0;height:3px;background:rgba(0,0,0,0.3)"
+                class="upload-thumb-progress-overlay"
+                style="position:absolute;inset:0;background:rgba(0,0,0,0.55);display:flex;align-items:center;justify-content:center;color:#FFF;font-size:14px;font-weight:600;pointer-events:none"
               >
-                <div style={"height:100%;background:var(--cyan);width:#{entry.progress}%;transition:width 300ms ease"}>
-                </div>
+                {entry.progress}% uploading…
               </div>
             </div>
-            <button
-              type="button"
+            <%!-- Same label-for trick as the dropzone (see comment above). --%>
+            <label
               id="upload-add-more"
-              phx-hook="FilePickerTrigger"
+              for={@uploads.attachments.ref}
               class="upload-add-tile"
-              phx-click={Phoenix.LiveView.JS.dispatch("click", to: "#upload-file-trigger")}
             >
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" />
               </svg>
               Add more
-            </button>
+            </label>
           </div>
         </div>
 
@@ -199,37 +201,54 @@ defmodule PlatformWeb.ChatLive.Partials do
           </div>
         </div>
 
-        <div :if={@uploads.attachments.entries != []} class="upload-comment">
-          <form phx-change="upload_caption_change" phx-submit="upload_send">
+        <%!-- Caption + Send. The textarea and submit button live OUTSIDE
+             #upload-send-form (which holds only the file input and is rendered
+             unconditionally in chat_live.html.heex) and target it via the
+             HTML5 `form="upload-send-form"` cross-form attribute. This avoids
+             the chicken-and-egg defect from the prior shipping attempt where
+             the form was `:if`-guarded on `entries != []` — so on first
+             paste/drop, `inputEl.form` resolved to null and LV's pushInput
+             after `LiveUploader.trackFiles` had nowhere to serialize, and
+             the entry never registered. With the form always present, paste
+             on an empty modal works on the very first attempt. --%>
+        <div :if={@uploads.attachments.entries != []}>
+          <div class="upload-comment">
             <textarea
               name="caption"
+              form="upload-send-form"
               class="upload-comment-input"
               placeholder="Add a comment about these images..."
               phx-debounce="200"
             >{@caption}</textarea>
-          </form>
-        </div>
-
-        <div :if={@uploads.attachments.entries != []} class="upload-footer">
-          <div class="upload-count">
-            <strong>{length(@uploads.attachments.entries)}</strong>
-            {if length(@uploads.attachments.entries) == 1, do: "image", else: "images"} selected
           </div>
-          <div class="upload-footer-actions">
-            <button type="button" class="upload-btn-cancel" phx-click="upload_dialog_close">
-              Cancel
-            </button>
-            <button
-              type="button"
-              class="upload-btn-send"
-              phx-click="upload_send"
-              disabled={@uploads.attachments.entries == []}
-            >
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
-                <line x1="22" y1="2" x2="11" y2="13" /><polygon points="22 2 15 22 11 13 2 9 22 2" />
-              </svg>
-              Send to {"##{(@active_space && @active_space.name) || ""}"}
-            </button>
+
+          <div class="upload-footer">
+            <div class="upload-count">
+              <strong>{length(@uploads.attachments.entries)}</strong>
+              {if length(@uploads.attachments.entries) == 1, do: "image", else: "images"} selected
+            </div>
+            <div class="upload-footer-actions">
+              <button type="button" class="upload-btn-cancel" phx-click="upload_dialog_close">
+                Cancel
+              </button>
+              <button
+                type="submit"
+                form="upload-send-form"
+                class="upload-btn-send"
+                disabled={
+                  @uploads.attachments.entries == [] or
+                    Enum.any?(
+                      @uploads.attachments.entries,
+                      &(&1.progress > 0 and &1.progress < 100)
+                    )
+                }
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                  <line x1="22" y1="2" x2="11" y2="13" /><polygon points="22 2 15 22 11 13 2 9 22 2" />
+                </svg>
+                Send to {"##{(@active_space && @active_space.name) || ""}"}
+              </button>
+            </div>
           </div>
         </div>
       </div>

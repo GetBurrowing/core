@@ -71,14 +71,12 @@ defmodule PlatformWeb.ChatLive do
       |> assign(:lightbox_url, nil)
       |> allow_upload(:attachments,
         accept: :any,
-        auto_upload: true,
         max_entries: @max_upload_entries,
         max_file_size: @max_upload_size,
         progress: &handle_upload_progress/3
       )
       |> allow_upload(:thread_attachments,
         accept: :any,
-        auto_upload: true,
         max_entries: @max_upload_entries,
         max_file_size: @max_upload_size,
         progress: &handle_upload_progress/3

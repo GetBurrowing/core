@@ -101,8 +101,20 @@ defmodule PlatformWeb.ChatLive.UploadHooks do
     {:halt, reset(socket)}
   end
 
-  defp handle_event("upload_caption_change", %{"caption" => text}, socket) do
-    {:halt, assign(socket, :upload_caption, text)}
+  defp handle_event("upload_caption_change", params, socket) do
+    # The form `#upload-send-form` is the upload-trigger form: its `phx-change`
+    # fires for ANY input change inside it, including the file input itself
+    # (when a file is added LV serializes the whole form and sends a "change"
+    # event whose phxEvent is the form's phx-change). For those file-input
+    # change events the params look like `%{"_target" => ["attachments"]}` —
+    # no `caption` key, because the caption textarea lives outside the form
+    # and links back via the HTML5 `form="upload-send-form"` attribute, which
+    # serializeForm does NOT walk. Treat that as a no-op (LV's upload
+    # preflight runs separately, regardless of the change handler).
+    case params do
+      %{"caption" => text} -> {:halt, assign(socket, :upload_caption, text)}
+      _ -> {:halt, socket}
+    end
   end
 
   defp handle_event("upload_entry_cancel", %{"ref" => ref}, socket) do

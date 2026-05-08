@@ -4,14 +4,24 @@
 // it's in the synchronous call stack of a direct user gesture. Phoenix
 // LiveView's phx-click sends an event to the server, which re-renders the
 // DOM with the upload dialog — but by then the user gesture context is lost,
-// so JS.dispatch("click", to: "#upload-file-trigger") inside the dialog
-// no longer triggers the native file picker.
+// so dispatching a click into the dialog no longer triggers the native
+// file picker.
 //
 // Fix: On mobile (pointer: coarse), clicking the + button directly and
 // synchronously clicks the hidden file input, opening the native picker
 // within the user gesture. Once the user selects files, we push
-// "show_upload_dialog" to open the staging dialog. On desktop, the
-// existing phx-click="show_upload_dialog" flow is preserved unchanged.
+// "upload_dialog_open" to open the staging dialog. On desktop, the
+// existing phx-click="upload_dialog_open" flow is preserved unchanged.
+//
+// We locate the file input via `#upload-send-form input[type="file"]` —
+// `live_file_input` hardcodes `id={@upload.ref}` (which Phoenix randomises
+// across renders), so a fixed id selector is unreliable. The
+// always-present `#upload-send-form` is stable and contains exactly one
+// file input: the one for `:attachments`.
+function findFileInput() {
+  return document.querySelector("#upload-send-form input[type=\"file\"]");
+}
+
 const UploadButton = {
   mounted() {
     this._isMobile = window.matchMedia("(pointer: coarse)").matches;
@@ -19,31 +29,23 @@ const UploadButton = {
     if (this._isMobile) {
       this._onClick = (e) => {
         // Look up the file input fresh each time (LiveView may re-render it)
-        const fileInput = document.getElementById("upload-file-trigger");
+        const fileInput = findFileInput();
         if (!fileInput) {
-          console.warn("[UploadButton] #upload-file-trigger not found in DOM");
+          console.warn("[UploadButton] file input not found in #upload-send-form");
           return; // Let phx-click fire as fallback
         }
-        // Guard: iOS won't open picker if the input is display:none or zero-size
-        const style = window.getComputedStyle(fileInput);
-        if (style.display === "none") {
-          console.warn("[UploadButton] file input has display:none — iOS will ignore .click()");
-        }
-        if (fileInput) {
-          // Synchronous .click() within the user tap gesture — iOS allows this
-          fileInput.click();
-          // Prevent the phx-click from also firing (it would open the empty
-          // dialog before the user has selected files)
-          e.stopPropagation();
-        }
+        // Synchronous .click() within the user tap gesture — iOS allows this
+        fileInput.click();
+        // Prevent the phx-click from also firing (it would open the empty
+        // dialog before the user has selected files)
+        e.stopPropagation();
       };
 
       // Use capture phase so we run before LiveView's delegated phx-click
       this.el.addEventListener("click", this._onClick, { capture: true });
 
       // When the user finishes selecting files, open the staging dialog.
-      // We listen directly on the file input. LiveView's auto_upload will
-      // handle queuing the files; we just need to open the dialog UI.
+      // We listen directly on the file input.
       this._bindFileInput();
     }
   },
@@ -56,7 +58,7 @@ const UploadButton = {
   },
 
   _bindFileInput() {
-    const fileInput = document.getElementById("upload-file-trigger");
+    const fileInput = findFileInput();
     // Only re-bind if the element changed
     if (fileInput && fileInput !== this._fileInput) {
       // Clean up old listener
@@ -66,8 +68,6 @@ const UploadButton = {
       this._fileInput = fileInput;
       this._onFileChange = () => {
         // Open the staging dialog after iOS native picker returns selected files.
-        // Server handler name on this branch is `upload_dialog_open` (matches the
-        // desktop phx-click on the + button).
         this.pushEvent("upload_dialog_open", {});
       };
       this._fileInput.addEventListener("change", this._onFileChange);

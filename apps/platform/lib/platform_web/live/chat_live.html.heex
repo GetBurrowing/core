@@ -1161,14 +1161,6 @@
             </div>
           </div>
 
-          <%!-- Hidden file input — outside pill bar to avoid flex layout interference.
-               sr-only (not display:none) so iOS Safari allows programmatic .click(). --%>
-          <.live_file_input
-            upload={@uploads.attachments}
-            class="sr-only"
-            id="upload-file-trigger"
-          />
-
           <%!-- Pill-shaped compose bar --%>
           <div class="compose-pill-bar">
             <button
@@ -1220,6 +1212,27 @@
             </p>
           </div>
         </.form>
+
+        <%!-- Always-present upload submission form. Lives OUTSIDE #compose-form
+             (HTML forbids nested forms) so the modal's Send button + textarea
+             can target it via the HTML5 `form="upload-send-form"` attribute.
+             The form is rendered unconditionally so:
+               (a) `inputEl.form` resolves on first paste (no chicken-and-egg
+                   with `:if={entries != []}` form-rendering).
+               (b) LiveView's `pushInput` → `pushFormSubmit` always finds the
+                   form to serialize when the user submits.
+             The hidden file input (`live_file_input`) is the form's only
+             direct child; visible UI for caption + Send lives inside the
+             modal panel and links back to this form via `form=...`. --%>
+        <form
+          :if={@active_space}
+          id="upload-send-form"
+          phx-submit="upload_send"
+          phx-change="upload_caption_change"
+          class="hidden"
+        >
+          <.live_file_input upload={@uploads.attachments} class="sr-only" />
+        </form>
 
         <p :if={is_nil(@current_participant) && @active_space} class="mt-1 text-xs text-error">
           Unable to join space — messages are read-only.
