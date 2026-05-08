@@ -14,7 +14,7 @@ config :platform, PlatformWeb.Endpoint,
   force_ssl: [
     rewrite_on: [:x_forwarded_proto],
     exclude: [
-      paths: ["/health", "/runtime/ws/websocket"],
+      paths: ["/health", "/runtime/ws/websocket", "/live/websocket"],
       hosts: ["localhost", "127.0.0.1"]
     ]
   ]
