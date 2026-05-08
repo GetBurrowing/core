@@ -156,7 +156,24 @@ defmodule PlatformWeb.ShellLive do
           {:halt, assign(socket, :drawer_open, false)}
 
         "toggle_sidebar", _params, socket ->
-          {:halt, assign(socket, :sidebar_collapsed, !socket.assigns.sidebar_collapsed)}
+          next = !socket.assigns.sidebar_collapsed
+
+          socket =
+            socket
+            |> assign(:sidebar_collapsed, next)
+            |> push_event("sidebar_collapsed_changed", %{collapsed: next})
+
+          {:halt, socket}
+
+        "sidebar_hydrate", %{"collapsed" => collapsed}, socket
+        when is_boolean(collapsed) ->
+          # Idempotent: only re-assign if the hook's localStorage value differs
+          # from the current default, to avoid an unnecessary re-render.
+          if collapsed == socket.assigns.sidebar_collapsed do
+            {:halt, socket}
+          else
+            {:halt, assign(socket, :sidebar_collapsed, collapsed)}
+          end
 
         "toggle_presence_panel", _params, socket ->
           {:halt, assign(socket, :show_presence_panel, !socket.assigns.show_presence_panel)}

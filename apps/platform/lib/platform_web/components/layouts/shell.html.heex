@@ -1,4 +1,12 @@
 <div class="flex h-screen overflow-hidden bg-base-100 safe-area-top">
+  <%!-- Sidebar collapse persistence hook (localStorage) --%>
+  <div
+    id="sidebar-collapse-hook"
+    phx-hook="SidebarCollapse"
+    data-collapsed={if @sidebar_collapsed, do: "true", else: "false"}
+    class="hidden"
+  >
+  </div>
   <%!-- Mobile backdrop overlay (only rendered when drawer is open) --%>
   <%= if @drawer_open do %>
     <div
