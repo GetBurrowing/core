@@ -230,9 +230,20 @@ defmodule Platform.Chat.AgentResponder do
           author_name =
             if author_participant, do: author_participant.display_name, else: "unknown"
 
+          trigger_attachments =
+            context.message.id
+            |> List.wrap()
+            |> Chat.list_attachments_for_messages()
+            |> Map.get(context.message.id, [])
+            |> serialize_attachments()
+
           payload = %{
             signal: build_external_signal(signal, space_id, context.agent),
-            message: %{content: context.user_message, author: author_name},
+            message: %{
+              content: context.user_message,
+              author: author_name,
+              attachments: trigger_attachments
+            },
             history: context.history,
             context: bundle,
             tools: tools
@@ -332,12 +343,23 @@ defmodule Platform.Chat.AgentResponder do
         [top_level_only: true, limit: @history_limit]
       end
 
-    space_id
-    |> Chat.list_messages(opts)
-    |> Enum.reject(&(&1.id == message.id))
-    |> Enum.sort_by(& &1.inserted_at, fn left, right -> DateTime.compare(left, right) != :gt end)
-    |> Enum.flat_map(fn item ->
-      case history_message(item, agent_participant_id) do
+    candidates =
+      space_id
+      |> Chat.list_messages(opts)
+      |> Enum.reject(&(&1.id == message.id))
+      |> Enum.sort_by(& &1.inserted_at, fn left, right ->
+        DateTime.compare(left, right) != :gt
+      end)
+
+    attachments_by_msg =
+      candidates
+      |> Enum.map(& &1.id)
+      |> Chat.list_attachments_for_messages()
+
+    Enum.flat_map(candidates, fn item ->
+      attachments = serialize_attachments(Map.get(attachments_by_msg, item.id, []))
+
+      case history_message(item, agent_participant_id, attachments) do
         nil -> []
         entry -> [entry]
       end
@@ -350,7 +372,8 @@ defmodule Platform.Chat.AgentResponder do
   # cleanly from the message row.
   defp history_message(
          %Message{content_type: "text", content: content} = message,
-         agent_id
+         agent_id,
+         attachments
        )
        when is_binary(content) do
     trimmed = String.trim(content)
@@ -365,11 +388,22 @@ defmodule Platform.Chat.AgentResponder do
           true -> "user"
         end
 
-      %{role: role, content: history_content(trimmed, message, role)}
+      %{role: role, content: history_content(trimmed, message, role), attachments: attachments}
     end
   end
 
-  defp history_message(_message, _agent_id), do: nil
+  defp history_message(_message, _agent_id, _attachments), do: nil
+
+  defp serialize_attachments(attachments) do
+    Enum.map(attachments, fn a ->
+      %{
+        url: "/chat/attachments/#{a.id}",
+        content_type: a.content_type,
+        byte_size: a.byte_size,
+        filename: a.filename
+      }
+    end)
+  end
 
   defp history_content(content, %Message{author_display_name: name}, "user")
        when is_binary(name) and name != "" do

@@ -35,9 +35,9 @@ defmodule Platform.Federation.ToolSurfaceTest do
   defp unique_slug, do: "test-#{System.unique_integer([:positive])}"
 
   describe "tool_definitions/0" do
-    test "returns all 51 tools with required components" do
+    test "returns all 52 tools with required components" do
       tools = ToolSurface.tool_definitions()
-      assert length(tools) == 51
+      assert length(tools) == 52
 
       tool_names = Enum.map(tools, & &1.name)
       assert "send_media" in tool_names
@@ -85,6 +85,7 @@ defmodule Platform.Federation.ToolSurfaceTest do
       assert "canvas_get" in tool_names
       assert "attachment.upload_inline" in tool_names
       assert "attachment.upload_start" in tool_names
+      assert "attachment.get_inline" in tool_names
 
       for tool <- tools do
         assert Map.has_key?(tool, :name)
@@ -1287,6 +1288,60 @@ defmodule Platform.Federation.ToolSurfaceTest do
       assert hd(results).content == "Message 3"
       assert is_binary(hd(results).id)
       assert is_binary(hd(results).inserted_at)
+      # Stage 1: every row carries an attachments array (empty when none).
+      for row <- results, do: assert(row.attachments == [])
+    end
+
+    test "space_get_messages returns attachments for messages that have them", ctx do
+      {:ok, msg_with_attachment} =
+        Chat.post_message(%{
+          space_id: ctx.space.id,
+          participant_id: ctx.participant.id,
+          content_type: "text",
+          content: "with attachment"
+        })
+
+      {:ok, plain_msg} =
+        Chat.post_message(%{
+          space_id: ctx.space.id,
+          participant_id: ctx.participant.id,
+          content_type: "text",
+          content: "no attachment"
+        })
+
+      {:ok, attachment} =
+        Chat.create_attachment(%{
+          space_id: ctx.space.id,
+          message_id: msg_with_attachment.id,
+          filename: "diagram.png",
+          content_type: "image/png",
+          byte_size: 9,
+          storage_key: "chat/test/d-#{Ecto.UUID.generate()}.png",
+          state: "ready"
+        })
+
+      {:ok, results} =
+        ToolSurface.execute(
+          "space_get_messages",
+          %{"space_id" => ctx.space.id},
+          ctx.context
+        )
+
+      attached_row = Enum.find(results, &(&1.id == msg_with_attachment.id))
+      plain_row = Enum.find(results, &(&1.id == plain_msg.id))
+
+      assert plain_row.attachments == []
+
+      assert [
+               %{
+                 url: url,
+                 content_type: "image/png",
+                 byte_size: 9,
+                 filename: "diagram.png"
+               }
+             ] = attached_row.attachments
+
+      assert url == "/chat/attachments/#{attachment.id}"
     end
 
     test "space_get_messages caps at 20", ctx do
@@ -1538,6 +1593,111 @@ defmodule Platform.Federation.ToolSurfaceTest do
         )
 
       assert error.error =~ "Agent identity required"
+    end
+
+    # ── attachment.get_inline ──────────────────────────────────────
+
+    test "attachment.get_inline returns base64 bytes for in-space caller", ctx do
+      root =
+        Path.join(System.tmp_dir!(), "att-inline-test-#{Ecto.UUID.generate()}")
+
+      prev = Application.get_env(:platform, :chat_attachments_root)
+      Application.put_env(:platform, :chat_attachments_root, root)
+
+      on_exit(fn ->
+        File.rm_rf(root)
+
+        if prev do
+          Application.put_env(:platform, :chat_attachments_root, prev)
+        else
+          Application.delete_env(:platform, :chat_attachments_root)
+        end
+      end)
+
+      bytes = "hello-bytes"
+      storage_key = "chat/test/inline-#{Ecto.UUID.generate()}.bin"
+      target = Path.join(root, storage_key)
+      File.mkdir_p!(Path.dirname(target))
+      File.write!(target, bytes)
+
+      {:ok, attachment} =
+        Chat.create_attachment(%{
+          space_id: ctx.space.id,
+          filename: "blob.bin",
+          content_type: "application/octet-stream",
+          byte_size: byte_size(bytes),
+          storage_key: storage_key,
+          state: "ready"
+        })
+
+      {:ok, result} =
+        ToolSurface.execute(
+          "attachment.get_inline",
+          %{"attachment_id" => attachment.id},
+          ctx.context
+        )
+
+      assert result.content_type == "application/octet-stream"
+      assert result.byte_size == byte_size(bytes)
+      assert result.filename == "blob.bin"
+      assert {:ok, ^bytes} = Base.decode64(result.data_base64)
+    end
+
+    test "attachment.get_inline rejects payloads above the 25MB cap", ctx do
+      {:ok, attachment} =
+        Chat.create_attachment(%{
+          space_id: ctx.space.id,
+          filename: "huge.bin",
+          content_type: "application/octet-stream",
+          # 25MB + 1 byte
+          byte_size: 25 * 1024 * 1024 + 1,
+          storage_key: "chat/test/huge-#{Ecto.UUID.generate()}.bin",
+          state: "ready"
+        })
+
+      {:error, error} =
+        ToolSurface.execute(
+          "attachment.get_inline",
+          %{"attachment_id" => attachment.id},
+          ctx.context
+        )
+
+      assert error.reason == :too_large
+      assert error.error =~ "exceeds inline read cap"
+    end
+
+    test "attachment.get_inline denied for caller not in attachment's space", ctx do
+      other_space = create_space(%{name: "Other"})
+
+      {:ok, attachment} =
+        Chat.create_attachment(%{
+          space_id: other_space.id,
+          filename: "secret.bin",
+          content_type: "application/octet-stream",
+          byte_size: 4,
+          storage_key: "chat/test/s-#{Ecto.UUID.generate()}.bin",
+          state: "ready"
+        })
+
+      {:error, error} =
+        ToolSurface.execute(
+          "attachment.get_inline",
+          %{"attachment_id" => attachment.id},
+          ctx.context
+        )
+
+      assert error.error =~ "not a participant"
+    end
+
+    test "attachment.get_inline 404 when attachment does not exist", ctx do
+      {:error, error} =
+        ToolSurface.execute(
+          "attachment.get_inline",
+          %{"attachment_id" => Ecto.UUID.generate()},
+          ctx.context
+        )
+
+      assert error.error =~ "not found"
     end
   end
 

@@ -2,9 +2,12 @@ defmodule Platform.Chat.AgentResponderTest do
   use Platform.DataCase, async: false
 
   alias Ecto.Adapters.SQL.Sandbox
+  alias Platform.Accounts.User
   alias Platform.Agents.Agent
+  alias Platform.Agents.AgentRuntime
   alias Platform.Chat
-  alias Platform.Chat.{AttentionRouter, Message}
+  alias Platform.Chat.AttentionRouter
+  alias Platform.Federation.RuntimePresence
   alias Platform.Repo
 
   defmodule StubAgentChat do
@@ -149,12 +152,174 @@ defmodule Platform.Chat.AgentResponderTest do
       assert_receive {:agent_chat_called, "@zip pick this up", opts}, 500
 
       assert opts[:history] == [
-               %{role: "user", content: "Alice: Earlier context"},
-               %{role: "assistant", content: "Previous reply"},
-               %{role: "user", content: "Alice: No summon here"}
+               %{role: "user", content: "Alice: Earlier context", attachments: []},
+               %{role: "assistant", content: "Previous reply", attachments: []},
+               %{role: "user", content: "Alice: No summon here", attachments: []}
              ]
 
       assert :ok = GenServer.call(AttentionRouter, :__drain__)
+    end
+  end
+
+  describe "external runtime payload attachments" do
+    test "history entries carry attachment metadata; entries with none get []" do
+      space = create_space()
+      user = create_participant(space.id)
+      agent = create_agent(%{slug: "main-attach", name: "Zip"})
+
+      {:ok, agent_participant} =
+        Chat.add_agent_participant(space.id, agent, display_name: "Zip")
+
+      older_with =
+        create_message(space.id, user.id, %{content: "Image attached"})
+
+      {:ok, _att} =
+        Chat.create_attachment(%{
+          space_id: space.id,
+          message_id: older_with.id,
+          filename: "shot.png",
+          content_type: "image/png",
+          byte_size: 4,
+          storage_key: "chat/test/shot-#{Ecto.UUID.generate()}.png",
+          state: "ready"
+        })
+
+      _older_text = create_message(space.id, agent_participant.id, %{content: "Got it"})
+      mention = create_message(space.id, user.id, %{content: "@zip pick this up"})
+
+      assert {:ok, _} = AttentionRouter.route(mention)
+      assert_receive {:agent_chat_called, "@zip pick this up", opts}, 500
+
+      history = opts[:history]
+      assert is_list(history)
+      assert length(history) == 2
+
+      [first, second] = history
+
+      assert first.role == "user"
+      assert first.content == "Alice: Image attached"
+
+      assert [%{filename: "shot.png", content_type: "image/png", byte_size: 4, url: url}] =
+               first.attachments
+
+      assert url =~ ~r|^/chat/attachments/[0-9a-fA-F-]{36}$|
+
+      assert second.role == "assistant"
+      assert second.attachments == []
+
+      assert :ok = GenServer.call(AttentionRouter, :__drain__)
+    end
+
+    test "external dispatch payload carries trigger and history attachments" do
+      space = create_space()
+      user = create_participant(space.id)
+
+      # Register an external runtime + presence so dispatch_to_external proceeds
+      runtime_pres = Process.whereis(RuntimePresence) || start_supervised!(RuntimePresence)
+      Sandbox.allow(Repo, self(), runtime_pres)
+
+      owner =
+        Repo.insert!(%User{
+          email: "ar-test-#{System.unique_integer([:positive])}@example.com",
+          name: "AR Owner",
+          oidc_sub: "oidc-ar-#{System.unique_integer([:positive])}"
+        })
+
+      runtime_token = "rt-#{System.unique_integer([:positive])}"
+
+      runtime =
+        Repo.insert!(%AgentRuntime{
+          owner_user_id: owner.id,
+          status: "active",
+          runtime_id: runtime_token,
+          display_name: "ext-rt"
+        })
+
+      RuntimePresence.track(runtime.runtime_id)
+
+      agent =
+        create_agent(%{
+          slug: "ext-agent",
+          name: "Ext",
+          runtime_type: "external",
+          runtime_id: runtime.id
+        })
+
+      {:ok, _agent_participant} =
+        Chat.add_agent_participant(space.id, agent, display_name: "Ext")
+
+      # History message with an attachment, plus one without.
+      older_with = create_message(space.id, user.id, %{content: "earlier with file"})
+
+      {:ok, _att_history} =
+        Chat.create_attachment(%{
+          space_id: space.id,
+          message_id: older_with.id,
+          filename: "report.pdf",
+          content_type: "application/pdf",
+          byte_size: 12,
+          storage_key: "chat/test/r-#{Ecto.UUID.generate()}.pdf",
+          state: "ready"
+        })
+
+      _older_no_att = create_message(space.id, user.id, %{content: "earlier no file"})
+
+      # Trigger message itself has an attachment + an @mention.
+      trigger = create_message(space.id, user.id, %{content: "@ext look at this"})
+
+      {:ok, trigger_att} =
+        Chat.create_attachment(%{
+          space_id: space.id,
+          message_id: trigger.id,
+          filename: "shot.png",
+          content_type: "image/png",
+          byte_size: 7,
+          storage_key: "chat/test/s-#{Ecto.UUID.generate()}.png",
+          state: "ready"
+        })
+
+      topic = "runtime:#{runtime.runtime_id}"
+      :ok = PlatformWeb.Endpoint.subscribe(topic)
+
+      assert {:ok, _} = AttentionRouter.route(trigger)
+
+      assert_receive %Phoenix.Socket.Broadcast{
+                       topic: ^topic,
+                       event: "attention",
+                       payload: payload
+                     },
+                     1500
+
+      assert payload.message.content =~ "look at this"
+      assert payload.message.author == "Alice"
+
+      assert [%{url: url, filename: "shot.png", content_type: "image/png", byte_size: 7}] =
+               payload.message.attachments
+
+      assert url == "/chat/attachments/#{trigger_att.id}"
+
+      # History should contain entries; the entry whose content matches
+      # "earlier with file" must include the report.pdf attachment, the
+      # other should have an empty list.
+      with_attach =
+        Enum.find(payload.history, fn h ->
+          is_binary(h.content) and h.content =~ "earlier with file"
+        end)
+
+      without_attach =
+        Enum.find(payload.history, fn h ->
+          is_binary(h.content) and h.content =~ "earlier no file"
+        end)
+
+      assert [%{filename: "report.pdf", content_type: "application/pdf", byte_size: 12}] =
+               with_attach.attachments
+
+      assert without_attach.attachments == []
+
+      assert :ok = GenServer.call(AttentionRouter, :__drain__)
+
+      RuntimePresence.untrack(runtime.runtime_id)
+      _ = AgentRuntime
     end
   end
 end

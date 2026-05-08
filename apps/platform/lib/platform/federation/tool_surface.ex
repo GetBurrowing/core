@@ -106,6 +106,24 @@ defmodule Platform.Federation.ToolSurface do
           "When you have bytes in hand and they fit under the inline cap. Ideal for screenshots, diagrams, small documents."
       },
       %{
+        name: "attachment.get_inline",
+        description:
+          "Read an attachment back as base64 inline bytes (ADR 0039 phase 7). Loads the row, fetches the stored bytes, base64-encodes them, and returns the decoded payload along with content_type, byte_size, and filename. Cap is 25 MB; for larger files use a presigned download URL (follow-up).",
+        parameters: %{
+          attachment_id: %{
+            type: "string",
+            required: true,
+            description:
+              "Attachment UUID (from message.attachments[].url or another tool's payload)"
+          }
+        },
+        returns: "%{content_type, byte_size, data_base64, filename}",
+        limitations:
+          "Capped at 25 MB. Caller agent must be a participant in the space the attachment belongs to. Attachments without a parent message space (legacy rows) are not retrievable here.",
+        when_to_use:
+          "When you need to read attachment bytes — e.g. to OCR an image, summarize a document, or hand bytes to a tool that does not accept URLs."
+      },
+      %{
         name: "attachment.upload_start",
         description:
           "Reserve a pending attachment row and get back a presigned POST URL to stream raw bytes to (ADR 0039). Use for files larger than the inline cap, or when the agent wants to hand off bytes via a plain HTTP POST.",
@@ -562,7 +580,7 @@ defmodule Platform.Federation.ToolSurface do
           }
         },
         returns:
-          "Array of message objects with id, participant_id, content_type, content, inserted_at",
+          "Array of message objects with id, participant_id, content_type, content, inserted_at, attachments. Each attachments entry is %{url, content_type, byte_size, filename}; the array is empty when the message has no attachments.",
         limitations:
           "Only works for spaces the agent is a participant in. Max 20 messages per call.",
         when_to_use: "When you need to read the recent conversation history in a space"
@@ -1578,6 +1596,9 @@ defmodule Platform.Federation.ToolSurface do
   def execute("attachment.upload_start", args, context),
     do: Platform.Chat.Attachments.ToolHandlers.upload_start(args, context)
 
+  def execute("attachment.get_inline", args, context),
+    do: Platform.Chat.Attachments.ToolHandlers.get_inline(args, context)
+
   # Legacy underscore-names kept for one release — delegate to the new handlers.
   def execute("canvas_create", args, context) do
     case Platform.Chat.Canvas.ToolHandlers.create(args, context) do
@@ -1676,6 +1697,7 @@ defmodule Platform.Federation.ToolSurface do
       opts = if before_id, do: Keyword.put(opts, :before_id, before_id), else: opts
 
       messages = Chat.list_messages(space_id, opts)
+      attachments_by_msg = Chat.list_attachments_for_messages(Enum.map(messages, & &1.id))
 
       {:ok,
        Enum.map(messages, fn m ->
@@ -1685,10 +1707,22 @@ defmodule Platform.Federation.ToolSurface do
            content_type: m.content_type,
            content: String.slice(m.content || "", 0, 500),
            thread_id: m.thread_id,
-           inserted_at: format_datetime(m.inserted_at)
+           inserted_at: format_datetime(m.inserted_at),
+           attachments: serialize_attachments(Map.get(attachments_by_msg, m.id, []))
          }
        end)}
     end
+  end
+
+  defp serialize_attachments(attachments) do
+    Enum.map(attachments, fn a ->
+      %{
+        url: "/chat/attachments/#{a.id}",
+        content_type: a.content_type,
+        byte_size: a.byte_size,
+        filename: a.filename
+      }
+    end)
   end
 
   def execute("canvas_list", args, context) do

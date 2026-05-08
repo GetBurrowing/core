@@ -5,10 +5,11 @@ defmodule Platform.Chat.Attachments.ToolHandlers do
     * `upload_inline/2` — base64 body; capped at `:inline_upload_max_bytes`.
     * `upload_start/2` — reserves a pending row and returns a presigned URL
       the agent POSTs raw bytes to within `:pending_ttl_seconds`.
+    * `get_inline/2` — reads the bytes back as base64 (capped at 25 MB).
 
-  Both paths dedup on `(space_id, content_hash)` at finalize and return a
-  `/chat/attachments/<id>` URL the agent can reference as a canvas image
-  `src` (phase 6) or hand back to a user.
+  Both upload paths dedup on `(space_id, content_hash)` at finalize and
+  return a `/chat/attachments/<id>` URL the agent can reference as a canvas
+  image `src` (phase 6) or hand back to a user.
   """
 
   require Logger
@@ -23,6 +24,7 @@ defmodule Platform.Chat.Attachments.ToolHandlers do
   import Ecto.Query, only: [from: 2]
 
   @storage_prefix "chat"
+  @inline_read_max_bytes 25 * 1024 * 1024
 
   @spec upload_inline(map(), map()) :: {:ok, map()} | {:error, map()}
   def upload_inline(args, context) do
@@ -109,6 +111,28 @@ defmodule Platform.Chat.Attachments.ToolHandlers do
         {:error, %Ecto.Changeset{} = cs} ->
           {:error, %{error: "attachment.upload_start: #{inspect(cs.errors)}", recoverable: true}}
       end
+    end
+  end
+
+  @doc """
+  Read an attachment as base64 inline bytes. Caller must be a participant
+  in the space the attachment belongs to. Capped at #{@inline_read_max_bytes}
+  bytes (25 MB). Returns `%{content_type, byte_size, data_base64, filename}`.
+  """
+  @spec get_inline(map(), map()) :: {:ok, map()} | {:error, map()}
+  def get_inline(args, context) do
+    with {:ok, attachment_id} <- require_string(args, "attachment_id"),
+         {:ok, attachment} <- fetch_attachment(attachment_id),
+         :ok <- require_member(attachment.space_id, context),
+         :ok <- check_inline_read_size(attachment.byte_size),
+         {:ok, bytes} <- read_bytes(attachment.storage_key) do
+      {:ok,
+       %{
+         content_type: attachment.content_type,
+         byte_size: byte_size(bytes),
+         data_base64: Base.encode64(bytes),
+         filename: attachment.filename
+       }}
     end
   end
 
@@ -235,18 +259,36 @@ defmodule Platform.Chat.Attachments.ToolHandlers do
   end
 
   defp require_member(space_id, context) do
-    participant_id =
-      Map.get(context, :agent_participant_id) || Map.get(context, :participant_id)
+    cond do
+      not is_binary(space_id) ->
+        {:error,
+         %{
+           error: "attachment: target attachment has no space_id; cannot authorize",
+           recoverable: false
+         }}
 
-    if is_binary(participant_id) do
-      :ok
-    else
-      {:error,
-       %{
-         error:
-           "attachment: agent #{inspect(Map.get(context, :agent_id))} is not a participant in space #{inspect(space_id)} — join the space first.",
-         recoverable: false
-       }}
+      assert_agent_in_space(space_id, context) ->
+        :ok
+
+      true ->
+        {:error,
+         %{
+           error:
+             "attachment: agent #{inspect(Map.get(context, :agent_id))} is not a participant in space #{inspect(space_id)} — join the space first.",
+           recoverable: false
+         }}
+    end
+  end
+
+  defp assert_agent_in_space(space_id, context) do
+    case Map.get(context, :agent_id) do
+      agent_id when is_binary(agent_id) ->
+        match?(%Platform.Chat.Participant{}, Chat.get_agent_participant(space_id, agent_id))
+
+      _ ->
+        # Fall back to the loose check used by upload paths, which only
+        # requires *a* participant_id to be present in the context.
+        is_binary(Map.get(context, :agent_participant_id) || Map.get(context, :participant_id))
     end
   end
 
@@ -288,6 +330,54 @@ defmodule Platform.Chat.Attachments.ToolHandlers do
           :error ->
             {:error, %{error: "attachment: data_base64 is not valid base64", recoverable: true}}
         end
+    end
+  end
+
+  defp fetch_attachment(id) do
+    case Chat.get_attachment(id) do
+      %Attachment{} = attachment ->
+        {:ok, attachment}
+
+      nil ->
+        {:error,
+         %{
+           error: "attachment: not found: #{inspect(id)}",
+           recoverable: false
+         }}
+    end
+  end
+
+  defp check_inline_read_size(size) do
+    if is_integer(size) and size <= @inline_read_max_bytes do
+      :ok
+    else
+      {:error,
+       %{
+         error:
+           "attachment: payload exceeds inline read cap (#{size} > #{@inline_read_max_bytes} bytes)",
+         recoverable: false,
+         limit: @inline_read_max_bytes,
+         reason: :too_large
+       }}
+    end
+  end
+
+  defp read_bytes(storage_key) do
+    case adapter().read_stream(storage_key) do
+      {:ok, stream} ->
+        bytes =
+          stream
+          |> Enum.to_list()
+          |> IO.iodata_to_binary()
+
+        {:ok, bytes}
+
+      {:error, reason} ->
+        {:error,
+         %{
+           error: "attachment: read failed: #{inspect(reason)}",
+           recoverable: true
+         }}
     end
   end
 
