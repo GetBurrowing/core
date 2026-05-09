@@ -15,8 +15,15 @@ defmodule Platform.Chat.Canvas.Renderer do
   @doc """
   Render a single canvas node. Looks up the kind module from the registry and
   delegates; kind modules recurse back through this function for their children.
+
+  `dom_id_scope` is an optional string used by kinds that need to attach JS
+  hooks via a unique DOM id. The same node is sometimes rendered into two
+  places at once (e.g. the chat-panel and mobile-overlay copies of the active
+  canvas), so kinds that mint ids from the node id must namespace them by the
+  outer render scope to avoid duplicate-id warnings and broken hook bindings.
   """
   attr :node, :map, required: true
+  attr :dom_id_scope, :string, default: nil
 
   def render_node(assigns) do
     node = assigns.node

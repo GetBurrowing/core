@@ -8,6 +8,7 @@
 @source "../css";
 @source "../js";
 @source "../../lib/platform_web";
+@source "../../lib/platform/chat/canvas/kinds";
 
 /* Safelist: dynamic classes generated at runtime that Tailwind cannot scan */
 @layer utilities {

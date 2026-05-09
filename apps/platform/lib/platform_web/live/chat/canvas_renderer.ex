@@ -52,7 +52,7 @@ defmodule PlatformWeb.Chat.CanvasRenderer do
           phx-click={if(@inline, do: "canvas_open")}
           phx-value-canvas-id={if(@inline, do: @canvas.id)}
         >
-          <Renderer.render_node node={@root_node} />
+          <Renderer.render_node node={@root_node} dom_id_scope={@id_suffix} />
         </div>
         """
 

@@ -31,6 +31,7 @@ defmodule Platform.Chat.Canvas.Kinds.Stack do
   end
 
   attr :node, :map, required: true
+  attr :dom_id_scope, :string, default: nil
 
   def render(assigns) do
     props = assigns.node["props"] || %{}
@@ -41,7 +42,11 @@ defmodule Platform.Chat.Canvas.Kinds.Stack do
       class={["flex flex-col", @props["class_overrides"]]}
       style={"gap: #{@props["gap"] || 8}px"}
     >
-      <Renderer.render_node :for={child <- @node["children"] || []} node={child} />
+      <Renderer.render_node
+        :for={child <- @node["children"] || []}
+        node={child}
+        dom_id_scope={@dom_id_scope}
+      />
     </div>
     """
   end

@@ -19,6 +19,7 @@ defmodule Platform.Chat.Canvas.Kinds.Checklist do
   end
 
   attr :node, :map, required: true
+  attr :dom_id_scope, :string, default: nil
 
   def render(assigns) do
     props = assigns.node["props"] || %{}
@@ -48,7 +49,11 @@ defmodule Platform.Chat.Canvas.Kinds.Checklist do
           {@complete} / {@total} tasks
         </span>
       </div>
-      <Renderer.render_node :for={child <- @node["children"] || []} node={child} />
+      <Renderer.render_node
+        :for={child <- @node["children"] || []}
+        node={child}
+        dom_id_scope={@dom_id_scope}
+      />
     </div>
     """
   end

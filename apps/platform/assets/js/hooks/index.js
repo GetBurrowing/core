@@ -3,6 +3,7 @@ import CodeBlock from "./code_block"
 import ComposeInput from "./compose_input"
 import CopyToClipboard from "./copy_to_clipboard"
 import DragDropUpload from "./drag_drop_upload"
+import EmbedCanvasScale from "./embed_canvas_scale"
 import ExecutionLogScroll from "./execution_log_scroll"
 import InlineEdit from "./inline_edit"
 import InlineFocus from "./inline_focus"
@@ -36,6 +37,7 @@ export default {
   ComposeInput,
   CopyToClipboard,
   DragDropUpload,
+  EmbedCanvasScale,
   ExecutionLogScroll,
   InlineEdit,
   InlineFocus,
