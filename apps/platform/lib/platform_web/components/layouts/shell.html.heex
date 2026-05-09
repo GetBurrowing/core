@@ -177,100 +177,159 @@
         </span>
       </div>
       <div class="flex items-center gap-2">
-        <%!-- Roster presence indicator --%>
-        <div :if={assigns[:principal_name]} class="relative">
-          <button
-            phx-click="toggle_roster"
-            class="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium text-base-content/70 hover:bg-base-300 transition-colors"
-            title="Agent roster"
-          >
-            <span class={[
-              "inline-block size-2 rounded-full",
-              Platform.Chat.SpaceAgentPresence.dot_color(@composite_status)
-            ]} />
-            <span>Agents</span>
-          </button>
+        <%!-- Roster presence indicator. Wrapped in <.async_result> so the
+             initial assign_async load shows a spinner without blocking page
+             paint. After PubSub-driven refreshes (refresh_roster/2) the
+             assigns remain in %AsyncResult{ok?: true} shape, so this
+             component continues to render the resolved branch. --%>
+        <.async_result :let={principal_name} assign={@principal_name}>
+          <:loading>
+            <span
+              class="loading loading-spinner loading-xs text-base-content/40"
+              data-test-id="shell-roster-loading"
+              title="Loading roster"
+            >
+            </span>
+          </:loading>
+          <:failed>
+            <%!-- Neutral fallback so a transient DB blip doesn't blank the bar --%>
+            <span
+              class="inline-block size-2 rounded-full bg-base-content/20"
+              data-test-id="shell-roster-failed"
+              title="Roster unavailable"
+            >
+            </span>
+          </:failed>
+          <%= if principal_name do %>
+            <div class="relative">
+              <button
+                phx-click="toggle_roster"
+                class="flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium text-base-content/70 hover:bg-base-300 transition-colors"
+                title="Agent roster"
+                data-test-id="shell-roster-button"
+              >
+                <.async_result :let={composite} assign={@composite_status}>
+                  <:loading>
+                    <span class="loading loading-spinner loading-xs"></span>
+                  </:loading>
+                  <:failed>
+                    <span class="inline-block size-2 rounded-full bg-base-content/20" />
+                  </:failed>
+                  <span class={[
+                    "inline-block size-2 rounded-full",
+                    Platform.Chat.SpaceAgentPresence.dot_color(composite)
+                  ]} />
+                </.async_result>
+                <span>Agents</span>
+              </button>
 
-          <%!-- Roster dropdown panel --%>
-          <div
-            :if={assigns[:roster_open] && @roster_open}
-            class="absolute right-0 top-full mt-1 z-50 w-64 max-w-[calc(100vw-1rem)] rounded-lg border border-base-300 bg-base-200 shadow-lg"
-          >
-            <div class="p-3 space-y-1">
-              <%= for {sa, status} <- @roster_items do %>
-                <div class="flex items-center justify-between py-1.5 px-2 rounded hover:bg-base-300 group">
-                  <div class="flex items-center gap-2">
-                    <span class={[
-                      "inline-block size-2 rounded-full",
-                      Platform.Chat.SpaceAgentPresence.dot_color(status)
-                    ]} />
-                    <span class="text-sm font-medium">
-                      {if sa.role == "principal", do: sa.agent.name, else: "@#{sa.agent.name}"}
-                    </span>
-                    <span
-                      :if={sa.role == "principal"}
-                      class="text-[10px] text-base-content/40 uppercase"
-                    >
-                      principal
-                    </span>
-                  </div>
-                  <div class="flex items-center gap-2">
-                    <span class="text-xs text-base-content/50">{status}</span>
-                    <button
-                      :if={sa.role != "principal"}
-                      phx-click="dismiss_agent"
-                      phx-value-agent-id={sa.agent_id}
-                      phx-value-space-id={sa.space_id}
-                      class="hidden group-hover:inline text-xs text-base-content/40 hover:text-error transition-colors"
-                      title="Remove agent"
-                    >
-                      Remove
-                    </button>
-                  </div>
+              <%!-- Roster dropdown panel --%>
+              <div
+                :if={assigns[:roster_open] && @roster_open}
+                class="absolute right-0 top-full mt-1 z-50 w-64 max-w-[calc(100vw-1rem)] rounded-lg border border-base-300 bg-base-200 shadow-lg"
+              >
+                <div class="p-3 space-y-1">
+                  <.async_result :let={roster_items} assign={@roster_items}>
+                    <:loading>
+                      <div class="flex items-center justify-center py-4">
+                        <span class="loading loading-spinner loading-sm"></span>
+                      </div>
+                    </:loading>
+                    <:failed>
+                      <div class="text-xs text-base-content/40 px-2 py-2">
+                        Roster unavailable
+                      </div>
+                    </:failed>
+                    <%= for {sa, status} <- roster_items do %>
+                      <div class="flex items-center justify-between py-1.5 px-2 rounded hover:bg-base-300 group">
+                        <div class="flex items-center gap-2">
+                          <span class={[
+                            "inline-block size-2 rounded-full",
+                            Platform.Chat.SpaceAgentPresence.dot_color(status)
+                          ]} />
+                          <span class="text-sm font-medium">
+                            {if sa.role == "principal",
+                              do: sa.agent.name,
+                              else: "@#{sa.agent.name}"}
+                          </span>
+                          <span
+                            :if={sa.role == "principal"}
+                            class="text-[10px] text-base-content/40 uppercase"
+                          >
+                            principal
+                          </span>
+                        </div>
+                        <div class="flex items-center gap-2">
+                          <span class="text-xs text-base-content/50">{status}</span>
+                          <button
+                            :if={sa.role != "principal"}
+                            phx-click="dismiss_agent"
+                            phx-value-agent-id={sa.agent_id}
+                            phx-value-space-id={sa.space_id}
+                            class="hidden group-hover:inline text-xs text-base-content/40 hover:text-error transition-colors"
+                            title="Remove agent"
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      </div>
+                    <% end %>
+                  </.async_result>
+                </div>
+              </div>
+            </div>
+          <% else %>
+            <%!-- Legacy status dot (no space / no principal configured) --%>
+            <span
+              :if={assigns[:agent_status]}
+              class={"inline-block size-2 rounded-full #{agent_status_color(@agent_status)}"}
+            >
+            </span>
+            <span :if={assigns[:agent_status]} class="text-xs text-base-content/50">
+              {agent_status_label(@agent_status)}
+            </span>
+          <% end %>
+        </.async_result>
+
+        <%!-- Human presence indicator --%>
+        <.async_result :let={presence_list} assign={@presence_list}>
+          <:loading>
+            <span
+              class="loading loading-spinner loading-xs text-base-content/40"
+              data-test-id="shell-presence-loading"
+              title="Loading participants"
+            >
+            </span>
+          </:loading>
+          <:failed>
+            <%!-- Quietly hide on failure rather than show a broken count --%>
+          </:failed>
+          <div class="relative">
+            <button
+              phx-click="toggle_presence_panel"
+              class="flex items-center gap-1 text-xs text-base-content/50 hover:text-base-content transition-colors"
+              title="Online participants"
+            >
+              <span class="hero-user-group size-4"></span>
+              <span>{Enum.count(presence_list, & &1.online)}</span>
+            </button>
+
+            <div
+              :if={assigns[:show_presence_panel] && @show_presence_panel}
+              class="absolute right-0 top-full mt-1 z-50 w-56 max-w-[calc(100vw-1rem)] rounded-lg border border-base-300 bg-base-100 shadow-lg p-2"
+            >
+              <div class="text-[10px] uppercase tracking-widest text-base-content/40 px-2 mb-1">
+                Participants
+              </div>
+              <%= for user <- presence_list do %>
+                <div class="flex items-center gap-2 py-1.5 px-2 rounded">
+                  <span class={"inline-block size-2 rounded-full #{if user.online, do: "bg-green-500", else: "bg-zinc-400"}"} />
+                  <span class="text-sm text-base-content/70">{user.name}</span>
                 </div>
               <% end %>
             </div>
           </div>
-        </div>
-
-        <%!-- Legacy status dot (when no roster configured) --%>
-        <span
-          :if={!assigns[:principal_name] && assigns[:agent_status]}
-          class={"inline-block size-2 rounded-full #{agent_status_color(@agent_status)}"}
-        >
-        </span>
-        <span
-          :if={!assigns[:principal_name] && assigns[:agent_status]}
-          class="text-xs text-base-content/50"
-        >
-          {agent_status_label(@agent_status)}
-        </span>
-        <%!-- Human presence indicator --%>
-        <div :if={assigns[:presence_list]} class="relative">
-          <button
-            phx-click="toggle_presence_panel"
-            class="flex items-center gap-1 text-xs text-base-content/50 hover:text-base-content transition-colors"
-            title="Online participants"
-          >
-            <span class="hero-user-group size-4"></span>
-            <span>{Enum.count(@presence_list, & &1.online)}</span>
-          </button>
-
-          <div
-            :if={assigns[:show_presence_panel] && @show_presence_panel}
-            class="absolute right-0 top-full mt-1 z-50 w-56 max-w-[calc(100vw-1rem)] rounded-lg border border-base-300 bg-base-100 shadow-lg p-2"
-          >
-            <div class="text-[10px] uppercase tracking-widest text-base-content/40 px-2 mb-1">
-              Participants
-            </div>
-            <%= for user <- @presence_list do %>
-              <div class="flex items-center gap-2 py-1.5 px-2 rounded">
-                <span class={"inline-block size-2 rounded-full #{if user.online, do: "bg-green-500", else: "bg-zinc-400"}"} />
-                <span class="text-sm text-base-content/70">{user.name}</span>
-              </div>
-            <% end %>
-          </div>
-        </div>
+        </.async_result>
 
         <%!-- Caption toggle (visible when in a meeting) --%>
         <button

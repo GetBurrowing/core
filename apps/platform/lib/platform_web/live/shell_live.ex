@@ -5,6 +5,7 @@ defmodule PlatformWeb.ShellLive do
   import Phoenix.Component
   import Phoenix.LiveView
 
+  alias Phoenix.LiveView.AsyncResult
   alias Platform.Accounts
   alias Platform.Agents.{Agent, AgentServer, WorkspaceBootstrap}
   alias Platform.Chat
@@ -32,24 +33,48 @@ defmodule PlatformWeb.ShellLive do
 
     active_module = derive_active_module(socket.view)
 
-    # Load the default space roster eagerly so the status dot renders on mount
-    {roster_space_id, roster_socket} = load_default_roster(socket)
+    # Synchronous placeholders so the page paints immediately. Heavy DB work
+    # (roster lookup + presence list build) is deferred via `assign_async/3`
+    # below so the WS-connected mount returns to the client without blocking
+    # on Postgres round-trips. The four async-managed assigns are seeded as
+    # `AsyncResult.loading/0` so the template's `<.async_result>` component
+    # has a valid struct to dispatch on for both the disconnected (static)
+    # render and the WS-connected pre-resolution render.
+    socket =
+      socket
+      |> assign(:roster_items, AsyncResult.loading())
+      |> assign(:composite_status, AsyncResult.loading())
+      |> assign(:principal_name, AsyncResult.loading())
+      |> assign(:presence_list, AsyncResult.loading())
+      |> assign(:roster_space_id, nil)
 
-    # Subscribe to live roster updates when connected
-    if connected?(socket) && roster_space_id do
-      Phoenix.PubSub.subscribe(Platform.PubSub, "space_agents:#{roster_space_id}")
-      ChatPubSub.subscribe(roster_space_id)
-    end
+    # Schedule async load + PubSub subscribes only on the WS-connected mount.
+    # Static/disconnected render skips this entirely (placeholders ship to the
+    # browser, then the connected mount runs and resolves them).
+    #
+    # NOTE: assign_async runs the function in a separate Task process, so we
+    # capture the LV pid up front and send :roster_resolved back to ourselves
+    # once the space_id is known. The existing :roster_updates handle_info
+    # hook reacts to that message to install PubSub subscribes on the LV
+    # process (the Task can't subscribe on our behalf — the messages would
+    # land in the wrong mailbox).
+    socket =
+      if connected?(socket) do
+        lv_pid = self()
 
-    # Subscribe to user-level meeting state for the persistent mini-bar
-    if connected?(socket) && is_binary(raw_user_id) do
-      MeetingState.subscribe(raw_user_id)
-    end
-
-    presence_list = if roster_space_id, do: build_presence_list(roster_space_id), else: []
+        socket
+        |> assign_async(
+          [:roster_items, :composite_status, :principal_name],
+          fn -> async_load_roster(lv_pid) end
+        )
+        |> assign_async(:presence_list, fn -> async_load_presence(lv_pid) end)
+        |> maybe_subscribe_meeting_state(raw_user_id)
+      else
+        socket
+      end
 
     socket =
-      roster_socket
+      socket
       |> assign(:current_user, current_user)
       |> assign(:current_user_id, raw_user_id)
       |> assign(:current_path, "/")
@@ -58,9 +83,7 @@ defmodule PlatformWeb.ShellLive do
       |> assign(:sidebar_collapsed, false)
       |> assign(:active_module, active_module)
       |> assign(:roster_open, false)
-      |> assign(:roster_space_id, roster_space_id)
       |> assign(:show_presence_panel, false)
-      |> assign(:presence_list, presence_list)
       |> assign(:captions_enabled, false)
       |> assign(:meeting_active, false)
       |> assign(:meeting_space_id, nil)
@@ -83,6 +106,25 @@ defmodule PlatformWeb.ShellLive do
          |> assign(:on_meeting_page, on_meeting_page)}
       end)
       |> attach_hook(:roster_updates, :handle_info, fn
+        # The async roster loader sends this once it knows the space_id.
+        # Subscribe in the LV process so future PubSub messages land here,
+        # and assign the bare space_id (so non-template readers like the
+        # presence_diff handler below get a binary, not %AsyncResult{}).
+        {:roster_resolved, sid}, socket when is_binary(sid) ->
+          # Idempotent guard — assign_async could re-run on reset; only
+          # subscribe once per space_id per LV.
+          if socket.assigns[:roster_space_id] != sid do
+            Phoenix.PubSub.subscribe(Platform.PubSub, "space_agents:#{sid}")
+            ChatPubSub.subscribe(sid)
+            {:halt, assign(socket, :roster_space_id, sid)}
+          else
+            {:halt, socket}
+          end
+
+        {:roster_resolved, nil}, socket ->
+          # Async load found no spaces; nothing to subscribe to.
+          {:halt, socket}
+
         {:roster_changed, space_id}, socket ->
           {:halt, refresh_roster(socket, space_id)}
 
@@ -95,10 +137,15 @@ defmodule PlatformWeb.ShellLive do
                 []
               end
             rescue
-              _ -> socket.assigns[:presence_list] || []
+              _ ->
+                case socket.assigns[:presence_list] do
+                  %AsyncResult{result: prev} when is_list(prev) -> prev
+                  prev when is_list(prev) -> prev
+                  _ -> []
+                end
             end
 
-          {:halt, assign(socket, :presence_list, list)}
+          {:halt, assign(socket, :presence_list, async_ok(socket.assigns[:presence_list], list))}
 
         {:meeting_joined, %{space_id: space_id, space_name: space_name}}, socket ->
           path = socket.assigns[:current_path] || "/"
@@ -245,6 +292,10 @@ defmodule PlatformWeb.ShellLive do
   end
 
   @doc false
+  # Synchronous refresh path used by PubSub (`{:roster_changed, sid}`) and the
+  # `dismiss_agent` event. Wraps each updated assign in `AsyncResult.ok/2` so
+  # the template's `<.async_result>` component continues to see an
+  # `%AsyncResult{ok?: true}` shape after the initial async load resolves.
   def refresh_roster(socket, space_id) when is_binary(space_id) do
     roster_items = SpaceAgentPresence.roster_with_status(space_id)
 
@@ -265,35 +316,76 @@ defmodule PlatformWeb.ShellLive do
     composite = SpaceAgentPresence.composite_status(active_statuses)
 
     socket
-    |> assign(:roster_items, roster_items)
-    |> assign(:principal_name, principal_name)
-    |> assign(:composite_status, composite)
+    |> assign(:roster_items, async_ok(socket.assigns[:roster_items], roster_items))
+    |> assign(:principal_name, async_ok(socket.assigns[:principal_name], principal_name))
+    |> assign(:composite_status, async_ok(socket.assigns[:composite_status], composite))
   end
 
   def refresh_roster(socket, _), do: socket
 
-  defp load_default_roster(socket) do
+  # Wrap a value in an AsyncResult.ok, reusing the existing async result if
+  # present (preserves the assign's identity for LV diffing). Falls back to
+  # building a fresh AsyncResult so synchronous callers (refresh_roster on a
+  # non-async-bootstrapped socket) still get the right shape.
+  defp async_ok(%AsyncResult{} = existing, value), do: AsyncResult.ok(existing, value)
+  defp async_ok(_other, value), do: AsyncResult.ok(AsyncResult.loading(), value)
+
+  # Async loader: runs in a Task, returns {:ok, %{...assigns}} for the four
+  # roster keys. Sends {:roster_resolved, sid} back to the LV so it can install
+  # PubSub subscribes on its own process (Tasks can't subscribe on the LV's
+  # behalf — messages would land in the wrong mailbox).
+  defp async_load_roster(lv_pid) do
     case first_space() do
-      %{id: space_id} ->
-        socket =
-          socket
-          |> assign(:roster_items, [])
-          |> assign(:composite_status, :none)
-          |> assign(:principal_name, nil)
-          |> refresh_roster(space_id)
-
-        {space_id, socket}
-
       nil ->
-        socket =
-          socket
-          |> assign(:roster_items, [])
-          |> assign(:composite_status, :none)
-          |> assign(:principal_name, nil)
+        send(lv_pid, {:roster_resolved, nil})
 
-        {nil, socket}
+        {:ok,
+         %{
+           roster_items: [],
+           composite_status: :none,
+           principal_name: nil
+         }}
+
+      %{id: sid} ->
+        items = SpaceAgentPresence.roster_with_status(sid)
+
+        principal_name =
+          case Enum.find(items, fn {sa, _} -> sa.role == "principal" end) do
+            {sa, _} -> sa.agent.name
+            nil -> nil
+          end
+
+        active_statuses =
+          items
+          |> Enum.reject(fn {sa, _} -> sa.role == "dismissed" end)
+          |> Enum.map(fn {_sa, status} -> status end)
+
+        composite = SpaceAgentPresence.composite_status(active_statuses)
+
+        send(lv_pid, {:roster_resolved, sid})
+
+        {:ok,
+         %{
+           roster_items: items,
+           composite_status: composite,
+           principal_name: principal_name
+         }}
     end
   end
+
+  defp async_load_presence(_lv_pid) do
+    case first_space() do
+      nil -> {:ok, %{presence_list: []}}
+      %{id: sid} -> {:ok, %{presence_list: build_presence_list(sid)}}
+    end
+  end
+
+  defp maybe_subscribe_meeting_state(socket, raw_user_id) when is_binary(raw_user_id) do
+    MeetingState.subscribe(raw_user_id)
+    socket
+  end
+
+  defp maybe_subscribe_meeting_state(socket, _), do: socket
 
   defp build_presence_list(space_id) do
     online_ids =
