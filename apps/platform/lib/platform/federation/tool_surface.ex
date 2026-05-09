@@ -713,6 +713,48 @@ defmodule Platform.Federation.ToolSurface do
           "Templates are static starter shapes. Customize the returned document before passing to canvas.create.",
         when_to_use:
           "When you want a known-good canvas shape to adjust rather than hand-building a document from scratch."
+      },
+      %{
+        name: "canvas.versions",
+        description:
+          "List a canvas's revision history newest-first. Each entry is the revision number, write timestamp, written_by attribution snapshot, and a 1-sentence op_summary derived from the patch ops. Pair with canvas.restore to roll back.",
+        parameters: %{
+          canvas_id: %{type: "string", required: true},
+          limit: %{
+            type: "integer",
+            required: false,
+            description: "Max entries (default 20, max 100)"
+          },
+          before_revision: %{
+            type: "integer",
+            required: false,
+            description: "Cursor — return only versions strictly older than this revision"
+          }
+        },
+        returns:
+          "%{canvas_id, versions: [%{revision, written_at, written_by, op_summary}], next_cursor}",
+        limitations:
+          "Only works for canvases in spaces the agent is a participant in. Versions older than the table's existence are not back-filled.",
+        when_to_use:
+          "Before canvas.restore so you can show the user (or the model) what's available; or after a destructive patch to find a known-good revision to roll back to."
+      },
+      %{
+        name: "canvas.restore",
+        description:
+          "Replace the live canvas with the document from a historical revision. The restore is itself a write — it produces a new revision row at current+1 with ops marked as restore_from_revision.",
+        parameters: %{
+          canvas_id: %{type: "string", required: true},
+          revision: %{
+            type: "integer",
+            required: true,
+            description: "The historical revision to restore"
+          }
+        },
+        returns: "%{canvas_id, revision (the new revision), restored_from}",
+        limitations:
+          "Restore obeys the same authorization gate as canvas.patch. The previous live document remains in history under its original revision number — restore never deletes prior versions.",
+        when_to_use:
+          "When a patch clobbered something the user wanted back, or to revert to an approved snapshot."
       }
     ]
   end
@@ -1576,6 +1618,12 @@ defmodule Platform.Federation.ToolSurface do
 
   def execute("canvas.template", args, context),
     do: Platform.Chat.Canvas.ToolHandlers.template(args, context)
+
+  def execute("canvas.versions", args, context),
+    do: Platform.Chat.Canvas.VersionHandlers.versions(args, context)
+
+  def execute("canvas.restore", args, context),
+    do: Platform.Chat.Canvas.VersionHandlers.restore(args, context)
 
   # ── Skill tools ─────────────────────────────────────────────────────────
 

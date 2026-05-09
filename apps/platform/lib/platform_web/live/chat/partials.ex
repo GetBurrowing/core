@@ -258,19 +258,35 @@ defmodule PlatformWeb.ChatLive.Partials do
 
   @doc "Active-canvas side panel (desktop) and full-screen overlay (mobile)."
   attr(:canvas, :any, default: nil)
+  attr(:show_versions_panel, :boolean, default: false)
+  attr(:canvas_versions, :list, default: [])
+  attr(:restore_confirm_revision, :integer, default: nil)
 
   def canvas_overlay(assigns) do
     ~H"""
     <div
       :if={@canvas}
-      class="hidden lg:flex w-96 flex-shrink-0 flex-col border-l border-base-300 bg-base-100"
+      class="hidden lg:flex w-96 flex-shrink-0 flex-col border-l border-base-300 bg-base-100 relative"
     >
       <div class="flex h-12 flex-shrink-0 items-center justify-between border-b border-base-300 px-4">
-        <div class="min-w-0">
-          <p class="text-sm font-semibold">Live Canvas</p>
-          <p class="truncate text-xs text-base-content/50">
-            {@canvas.title || CanvasHooks.humanize_kind(@canvas)}
-          </p>
+        <div class="min-w-0 flex items-center gap-2">
+          <div class="min-w-0">
+            <p class="text-sm font-semibold">Live Canvas</p>
+            <p class="truncate text-xs text-base-content/50">
+              {@canvas.title || CanvasHooks.humanize_kind(@canvas)}
+            </p>
+          </div>
+          <button
+            phx-click="canvas_versions_toggle"
+            class={[
+              "btn btn-ghost btn-xs",
+              @show_versions_panel && "text-primary"
+            ]}
+            title="Version history"
+            aria-label="Toggle version history"
+          >
+            <span class="hero-clock size-4"></span>
+          </button>
         </div>
         <button phx-click="canvas_close" class="btn btn-ghost btn-xs" title="Close canvas">
           <span class="hero-x-mark size-4"></span>
@@ -279,15 +295,34 @@ defmodule PlatformWeb.ChatLive.Partials do
       <div class="flex-1 overflow-y-auto px-4 py-4">
         <.canvas_document canvas={@canvas} dom_id_base="chat-live-canvas-panel" />
       </div>
+      <.canvas_versions_panel
+        :if={@show_versions_panel}
+        canvas={@canvas}
+        versions={@canvas_versions}
+        restore_confirm_revision={@restore_confirm_revision}
+      />
     </div>
 
     <div :if={@canvas} class="fixed inset-0 z-50 flex flex-col bg-base-100 lg:hidden safe-area-x">
       <header class="flex h-12 flex-shrink-0 items-center justify-between border-b border-base-300 px-4 safe-area-top">
-        <div class="min-w-0">
-          <p class="text-sm font-semibold">Live Canvas</p>
-          <p class="truncate text-xs text-base-content/50">
-            {@canvas.title || CanvasHooks.humanize_kind(@canvas)}
-          </p>
+        <div class="min-w-0 flex items-center gap-2">
+          <div class="min-w-0">
+            <p class="text-sm font-semibold">Live Canvas</p>
+            <p class="truncate text-xs text-base-content/50">
+              {@canvas.title || CanvasHooks.humanize_kind(@canvas)}
+            </p>
+          </div>
+          <button
+            phx-click="canvas_versions_toggle"
+            class={[
+              "btn btn-ghost btn-xs",
+              @show_versions_panel && "text-primary"
+            ]}
+            title="Version history"
+            aria-label="Toggle version history"
+          >
+            <span class="hero-clock size-4"></span>
+          </button>
         </div>
         <button phx-click="canvas_close" class="btn btn-ghost btn-xs" title="Close canvas">
           <span class="hero-x-mark size-4"></span>
@@ -295,6 +330,119 @@ defmodule PlatformWeb.ChatLive.Partials do
       </header>
       <div class="flex-1 overflow-y-auto px-4 py-4">
         <.canvas_document canvas={@canvas} dom_id_base="chat-live-canvas-overlay" />
+      </div>
+      <.canvas_versions_panel
+        :if={@show_versions_panel}
+        canvas={@canvas}
+        versions={@canvas_versions}
+        restore_confirm_revision={@restore_confirm_revision}
+        mobile
+      />
+    </div>
+    """
+  end
+
+  attr(:canvas, :any, required: true)
+  attr(:versions, :list, default: [])
+  attr(:restore_confirm_revision, :integer, default: nil)
+  attr(:mobile, :boolean, default: false)
+
+  def canvas_versions_panel(assigns) do
+    ~H"""
+    <div
+      id={"canvas-versions-panel-#{(@mobile && "mobile") || "desktop"}-#{@canvas.id}"}
+      class={[
+        "absolute inset-y-0 right-0 z-30 flex w-80 flex-col border-l border-base-300 bg-base-100 shadow-xl transition-transform",
+        @mobile && "fixed top-12 bottom-0"
+      ]}
+    >
+      <div class="flex h-12 flex-shrink-0 items-center justify-between border-b border-base-300 px-4">
+        <p class="text-sm font-semibold">Version history</p>
+        <button
+          phx-click="canvas_versions_close"
+          class="btn btn-ghost btn-xs"
+          title="Close version history"
+        >
+          <span class="hero-x-mark size-4"></span>
+        </button>
+      </div>
+
+      <div class="flex-1 overflow-y-auto">
+        <ul class="divide-y divide-base-300">
+          <li
+            :for={v <- @versions}
+            id={"canvas-version-#{@canvas.id}-#{v.revision}"}
+            class={[
+              "px-4 py-3 hover:bg-base-200 group",
+              @restore_confirm_revision == v.revision && "bg-warning/10"
+            ]}
+          >
+            <div class="flex items-start justify-between gap-2">
+              <div class="min-w-0 flex-1">
+                <div class="flex items-center gap-2">
+                  <span class="text-sm font-semibold tabular-nums">v{v.revision}</span>
+                  <span class="text-xs text-base-content/50">{v.relative_time}</span>
+                </div>
+                <p class="truncate text-xs text-base-content/70">
+                  <span
+                    :if={v.author_type_badge}
+                    class={[
+                      "inline-block rounded px-1 mr-1 text-[10px] uppercase tabular-nums",
+                      v.author_badge_class
+                    ]}
+                  >
+                    {v.author_type_badge}
+                  </span>
+                  {v.author_name}
+                </p>
+                <p class="truncate text-xs text-base-content/50 mt-0.5">{v.op_summary}</p>
+              </div>
+              <div class="flex flex-col gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                <button
+                  type="button"
+                  phx-click="canvas_versions_restore_prompt"
+                  phx-value-revision={v.revision}
+                  class="btn btn-ghost btn-xs text-warning"
+                  title="Restore this revision"
+                >
+                  Restore
+                </button>
+              </div>
+            </div>
+
+            <div
+              :if={@restore_confirm_revision == v.revision}
+              class="mt-3 rounded border border-warning/40 bg-warning/5 p-3"
+            >
+              <p class="text-xs text-base-content/80 mb-2">
+                Replace current canvas with revision {v.revision}? The current state stays in history as a new revision.
+              </p>
+              <div class="flex justify-end gap-2">
+                <button
+                  type="button"
+                  phx-click="canvas_versions_restore_cancel"
+                  class="btn btn-ghost btn-xs"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  phx-click="canvas_versions_restore_confirm"
+                  phx-value-revision={v.revision}
+                  class="btn btn-warning btn-xs"
+                >
+                  Restore v{v.revision}
+                </button>
+              </div>
+            </div>
+          </li>
+          <li
+            :if={@versions == []}
+            class="px-4 py-6 text-center text-xs text-base-content/50"
+          >
+            No version history yet.
+          </li>
+        </ul>
       </div>
     </div>
     """

@@ -1248,7 +1248,12 @@
       />
     </div>
 
-    <.canvas_overlay canvas={@active_canvas} />
+    <.canvas_overlay
+      canvas={@active_canvas}
+      show_versions_panel={@show_versions_panel}
+      canvas_versions={@canvas_versions}
+      restore_confirm_revision={@restore_confirm_revision}
+    />
 
     <.meeting_panel
       in_meeting={@in_meeting}

@@ -48,6 +48,7 @@ defmodule Platform.Chat do
     Thread
   }
 
+  alias Platform.Chat.Canvas.Versions, as: CanvasVersions
   alias Platform.Chat.PubSub, as: ChatPubSub
   alias Platform.Repo
 
@@ -1426,17 +1427,34 @@ defmodule Platform.Chat do
       |> stringify_canvas_payload()
       |> put_canvas_creator_snapshot()
 
-    result =
-      %Canvas{}
-      |> Canvas.changeset(attrs)
-      |> Repo.insert()
+    multi =
+      Multi.new()
+      |> Multi.insert(:canvas, Canvas.changeset(%Canvas{}, attrs))
+      |> Multi.merge(fn %{canvas: canvas} ->
+        version_revision = canvas_version_revision(canvas)
 
-    case result do
-      {:ok, canvas} -> publish_canvas_created(canvas)
-      _ -> :ok
+        CanvasVersions.multi_insert(
+          Multi.new(),
+          :canvas_version,
+          canvas.id,
+          version_revision,
+          canvas.document,
+          CanvasVersions.attribution_from_canvas(canvas),
+          nil
+        )
+      end)
+
+    case Repo.transaction(multi) do
+      {:ok, %{canvas: canvas}} ->
+        publish_canvas_created(canvas)
+        {:ok, canvas}
+
+      {:error, :canvas, %Ecto.Changeset{} = changeset, _} ->
+        {:error, changeset}
+
+      {:error, _step, reason, _} ->
+        {:error, reason}
     end
-
-    result
   end
 
   @doc """
@@ -1480,6 +1498,30 @@ defmodule Platform.Chat do
         %Message{}
         |> Message.changeset(message_attrs)
         |> repo.insert()
+      end)
+      |> Multi.merge(fn %{canvas: canvas} ->
+        version_revision = canvas_version_revision(canvas)
+
+        attribution =
+          CanvasVersions.attribution_from_fields(%{
+            type: snapshot[:author_participant_type] || "unknown",
+            id: participant_id,
+            display_name: snapshot[:author_display_name],
+            slug:
+              if(snapshot[:author_participant_type] == "agent",
+                do: snapshot[:author_agent_id]
+              )
+          })
+
+        CanvasVersions.multi_insert(
+          Multi.new(),
+          :canvas_version,
+          canvas.id,
+          version_revision,
+          canvas.document,
+          attribution,
+          nil
+        )
       end)
 
     case Repo.transaction(multi) do
@@ -1815,7 +1857,12 @@ defmodule Platform.Chat do
     ChatPubSub.broadcast_canvas(canvas.id, {:canvas_updated, canvas})
   end
 
-  defp publish_canvas_updated(canvas) do
+  @doc """
+  Public so out-of-module write paths (e.g. `Canvas.Server.do_persist/5`)
+  can fire the same broadcast/telemetry as `update_canvas/2`. UI relies on
+  the space-topic broadcast to refresh stream-rendered canvas messages.
+  """
+  def publish_canvas_updated(canvas) do
     :telemetry.execute(
       [:platform, :chat, :canvas_updated],
       %{system_time: System.system_time()},
@@ -1943,6 +1990,17 @@ defmodule Platform.Chat do
         attrs
     end
   end
+
+  # Pull the integer revision number out of a freshly-inserted canvas's
+  # document. New canvases are seeded with revision 1; if a caller passes an
+  # already-rich document (e.g. clones, restores) the document carries the
+  # revision verbatim. Default to 1 — the same fallback the kind-renderer
+  # uses for missing revisions.
+  defp canvas_version_revision(%Canvas{document: %{"revision" => r}})
+       when is_integer(r) and r > 0,
+       do: r
+
+  defp canvas_version_revision(_), do: 1
 
   defp put_canvas_creator_snapshot(attrs) do
     cond do

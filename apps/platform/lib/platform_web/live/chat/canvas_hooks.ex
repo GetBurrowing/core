@@ -24,6 +24,7 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
 
   alias Platform.Chat
   alias Platform.Chat.Canvas.Server, as: CanvasServer
+  alias Platform.Chat.Canvas.Versions, as: CanvasVersions
   alias Platform.Chat.Presence
   alias Platform.Chat.PubSub, as: ChatPubSub
 
@@ -36,6 +37,9 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
     |> assign(:active_canvas, nil)
     |> assign(:show_canvases, false)
     |> assign(:recent_canvas_events, [])
+    |> assign(:show_versions_panel, false)
+    |> assign(:canvas_versions, [])
+    |> assign(:restore_confirm_revision, nil)
     |> assign_new_form()
     |> attach_hook(:canvas_events, :handle_event, &handle_event/3)
     |> attach_hook(:canvas_info, :handle_info, &handle_info/2)
@@ -218,10 +222,99 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
     {:halt, socket}
   end
 
+  defp handle_event("canvas_versions_toggle", _params, socket) do
+    if socket.assigns.show_versions_panel do
+      {:halt,
+       socket
+       |> assign(:show_versions_panel, false)
+       |> assign(:restore_confirm_revision, nil)}
+    else
+      versions = load_versions(socket.assigns.active_canvas)
+
+      {:halt,
+       socket
+       |> assign(:show_versions_panel, true)
+       |> assign(:canvas_versions, versions)
+       |> assign(:restore_confirm_revision, nil)}
+    end
+  end
+
+  defp handle_event("canvas_versions_close", _params, socket) do
+    {:halt,
+     socket
+     |> assign(:show_versions_panel, false)
+     |> assign(:restore_confirm_revision, nil)}
+  end
+
+  defp handle_event("canvas_versions_restore_prompt", %{"revision" => rev_str}, socket) do
+    case Integer.parse(to_string(rev_str)) do
+      {rev, ""} -> {:halt, assign(socket, :restore_confirm_revision, rev)}
+      _ -> {:halt, socket}
+    end
+  end
+
+  defp handle_event("canvas_versions_restore_cancel", _params, socket) do
+    {:halt, assign(socket, :restore_confirm_revision, nil)}
+  end
+
+  defp handle_event("canvas_versions_restore_confirm", %{"revision" => rev_str}, socket) do
+    canvas = socket.assigns.active_canvas
+
+    with {rev, ""} <- Integer.parse(to_string(rev_str)),
+         %{} <- canvas,
+         %{} = version <- CanvasVersions.get(canvas.id, rev) do
+      attribution = caller_attribution(socket, canvas.space_id)
+
+      case CanvasServer.describe(canvas.id) do
+        {:ok, %{revision: current_rev}} ->
+          ops = [{:replace_document, version.document}]
+
+          case CanvasServer.apply_patches(canvas.id, ops, current_rev, attribution) do
+            {:ok, new_rev} ->
+              # Re-tag the just-written ops to mark this as a restore (best
+              # effort — async write may race; ignore failure).
+              tag_restore_ops(canvas.id, new_rev, rev)
+
+              versions = load_versions(canvas)
+
+              {:halt,
+               socket
+               |> assign(:canvas_versions, versions)
+               |> assign(:restore_confirm_revision, nil)
+               |> put_flash(:info, "Restored revision #{rev} as v#{new_rev}.")}
+
+            {:conflict, _} ->
+              {:halt, put_flash(socket, :error, "Restore failed: canvas state changed.")}
+
+            {:error, reason} ->
+              {:halt, put_flash(socket, :error, "Restore failed: #{inspect(reason)}")}
+          end
+
+        _ ->
+          {:halt, put_flash(socket, :error, "Could not load current canvas state.")}
+      end
+    else
+      _ -> {:halt, put_flash(socket, :error, "Restore failed: revision not found.")}
+    end
+  end
+
   defp handle_event(_event, _params, socket), do: {:cont, socket}
 
   defp handle_info({:canvas_created, canvas}, socket), do: {:halt, put(socket, canvas)}
-  defp handle_info({:canvas_updated, canvas}, socket), do: {:halt, put(socket, canvas)}
+
+  defp handle_info({:canvas_updated, canvas}, socket) do
+    socket = put(socket, canvas)
+
+    socket =
+      if socket.assigns[:show_versions_panel] && active_canvas_id(socket) == canvas.id do
+        assign(socket, :canvas_versions, load_versions(canvas))
+      else
+        socket
+      end
+
+    {:halt, socket}
+  end
+
   defp handle_info({:canvas_deleted, canvas}, socket), do: {:halt, remove(socket, canvas)}
   defp handle_info({:canvas_restored, canvas}, socket), do: {:halt, put(socket, canvas)}
 
@@ -351,6 +444,116 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
     case socket.assigns.active_canvas do
       %{id: id} when id == canvas.id -> assign(socket, :active_canvas, canvas)
       _ -> socket
+    end
+  end
+
+  # ── Version history (task 019e0ac0) ──────────────────────────────────────
+
+  @doc false
+  @spec load_versions(map() | nil) :: [map()]
+  def load_versions(nil), do: []
+
+  def load_versions(canvas) do
+    canvas.id
+    |> CanvasVersions.list_for_canvas(limit: 50)
+    |> Enum.map(&decorate_version/1)
+  end
+
+  defp decorate_version(row) do
+    written_by = row.written_by || %{}
+    type = Map.get(written_by, "type") || "unknown"
+    name = Map.get(written_by, "display_name") || "Unknown"
+
+    %{
+      revision: row.revision,
+      written_at: row.written_at,
+      relative_time: relative_time(row.written_at),
+      author_name: name,
+      author_type_badge: type_badge(type),
+      author_badge_class: badge_class(type),
+      op_summary: CanvasVersions.op_summary(row)
+    }
+  end
+
+  defp type_badge("agent"), do: "AGENT"
+  defp type_badge("user"), do: "USER"
+  defp type_badge("federated"), do: "FED"
+  defp type_badge("external"), do: "EXT"
+  defp type_badge("system"), do: "SYS"
+  defp type_badge(other) when is_binary(other), do: String.upcase(other)
+  defp type_badge(_), do: nil
+
+  defp badge_class("agent"), do: "bg-primary/20 text-primary"
+  defp badge_class("user"), do: "bg-success/20 text-success"
+  defp badge_class("federated"), do: "bg-info/20 text-info"
+  defp badge_class("external"), do: "bg-warning/20 text-warning"
+  defp badge_class(_), do: "bg-base-300 text-base-content/70"
+
+  defp relative_time(nil), do: ""
+
+  defp relative_time(%DateTime{} = dt) do
+    diff = DateTime.diff(DateTime.utc_now(), dt, :second)
+
+    cond do
+      diff < 60 -> "just now"
+      diff < 3600 -> "#{div(diff, 60)}m ago"
+      diff < 86_400 -> "#{div(diff, 3600)}h ago"
+      diff < 604_800 -> "#{div(diff, 86_400)}d ago"
+      true -> Calendar.strftime(dt, "%Y-%m-%d")
+    end
+  end
+
+  defp relative_time(_), do: ""
+
+  defp active_canvas_id(socket) do
+    case socket.assigns[:active_canvas] do
+      %{id: id} -> id
+      _ -> nil
+    end
+  end
+
+  defp caller_attribution(socket, space_id) do
+    case socket.assigns do
+      %{current_participant: %{} = p} ->
+        CanvasVersions.attribution_for_participant(p)
+
+      %{current_user: %{id: uid} = u} ->
+        CanvasVersions.attribution_from_fields(%{
+          type: "user",
+          id: uid,
+          display_name: Map.get(u, :name) || Map.get(u, :email)
+        })
+
+      _ ->
+        # Fall back to nothing — version row records system attribution.
+        _ = space_id
+        %{}
+    end
+  end
+
+  # The version row is written async by Canvas.Server. Briefly poll for it
+  # then update the ops field to reflect the restore intent. Best effort.
+  defp tag_restore_ops(canvas_id, revision, source_revision) do
+    Task.start(fn -> do_tag_restore_ops(canvas_id, revision, source_revision, 0) end)
+  end
+
+  defp do_tag_restore_ops(_canvas_id, _revision, _source_revision, attempt) when attempt > 25,
+    do: :ok
+
+  defp do_tag_restore_ops(canvas_id, revision, source_revision, attempt) do
+    case CanvasVersions.get(canvas_id, revision) do
+      nil ->
+        Process.sleep(20)
+        do_tag_restore_ops(canvas_id, revision, source_revision, attempt + 1)
+
+      version ->
+        version
+        |> Ecto.Changeset.change(%{
+          ops: %{"ops" => [["restore_from_revision", source_revision]]}
+        })
+        |> Platform.Repo.update()
+
+        :ok
     end
   end
 end

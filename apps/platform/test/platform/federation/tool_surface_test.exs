@@ -35,13 +35,15 @@ defmodule Platform.Federation.ToolSurfaceTest do
   defp unique_slug, do: "test-#{System.unique_integer([:positive])}"
 
   describe "tool_definitions/0" do
-    test "returns all 52 tools with required components" do
+    test "returns all 54 tools with required components" do
       tools = ToolSurface.tool_definitions()
-      assert length(tools) == 52
+      assert length(tools) == 54
 
       tool_names = Enum.map(tools, & &1.name)
       assert "send_media" in tool_names
       assert "react" in tool_names
+      assert "canvas.versions" in tool_names
+      assert "canvas.restore" in tool_names
       assert "space_list" in tool_names
       assert "space_list_agents" in tool_names
       assert "space_leave" in tool_names

@@ -44,8 +44,10 @@ defmodule Platform.Chat.Canvas.Server do
 
   require Logger
 
+  alias Ecto.Multi
   alias Platform.Chat
   alias Platform.Chat.{Canvas, CanvasDocument, CanvasPatch}
+  alias Platform.Chat.Canvas.Versions, as: CanvasVersions
   alias Platform.Chat.PubSub, as: ChatPubSub
   alias Platform.Repo
 
@@ -111,8 +113,28 @@ defmodule Platform.Chat.Canvas.Server do
           | {:error, term()}
   def apply_patches(canvas_id, operations, base_revision)
       when is_binary(canvas_id) and is_list(operations) and is_integer(base_revision) do
+    apply_patches(canvas_id, operations, base_revision, %{})
+  end
+
+  @doc """
+  Same as `apply_patches/3` but with an explicit `written_by_attribution` —
+  the denormalized author shape recorded on the resulting `canvas_versions`
+  row (task 019e0ac0). Pass an empty map for callers that don't have an
+  identity in scope (system writes, tests); the row will record
+  `%{"type" => "unknown"}` and downstream UI will render that as "system".
+  """
+  @spec apply_patches(binary(), [CanvasPatch.operation()], non_neg_integer(), map()) ::
+          {:ok, pos_integer()}
+          | {:conflict, conflict_payload()}
+          | {:error, term()}
+  def apply_patches(canvas_id, operations, base_revision, written_by_attribution)
+      when is_binary(canvas_id) and is_list(operations) and is_integer(base_revision) and
+             is_map(written_by_attribution) do
     with {:ok, _pid} <- start_server(canvas_id) do
-      GenServer.call(via(canvas_id), {:apply_patches, operations, base_revision})
+      GenServer.call(
+        via(canvas_id),
+        {:apply_patches, operations, base_revision, written_by_attribution}
+      )
     end
   end
 
@@ -184,10 +206,20 @@ defmodule Platform.Chat.Canvas.Server do
   end
 
   @impl true
-  def handle_call({:apply_patches, operations, base_revision}, _from, %State{} = state) do
+  def handle_call(
+        {:apply_patches, operations, base_revision, written_by_attribution},
+        _from,
+        %State{} = state
+      ) do
     case apply_with_rebase(state, operations, base_revision) do
       {:ok, new_document, new_revision} ->
-        persist_async(state.canvas_id, new_document)
+        persist_async(
+          state.canvas_id,
+          new_document,
+          new_revision,
+          operations,
+          written_by_attribution
+        )
 
         ChatPubSub.broadcast_canvas(
           state.canvas_id,
@@ -214,6 +246,13 @@ defmodule Platform.Chat.Canvas.Server do
       {:error, reason} ->
         {:reply, {:error, reason}, state}
     end
+  end
+
+  # Backwards-compatible 3-arity variant — direct callers (older tests and
+  # anything that hasn't migrated to apply_patches/4) still work, attribution
+  # defaults to "unknown".
+  def handle_call({:apply_patches, operations, base_revision}, from, %State{} = state) do
+    handle_call({:apply_patches, operations, base_revision, %{}}, from, state)
   end
 
   def handle_call(:describe, _from, %State{} = state) do
@@ -352,39 +391,80 @@ defmodule Platform.Chat.Canvas.Server do
 
   # ── Persistence ─────────────────────────────────────────────────────────
 
-  defp persist_async(canvas_id, document) do
+  defp persist_async(canvas_id, document, revision, operations, attribution) do
     if Application.get_env(:platform, :canvas_persist_sync, false) do
-      do_persist(canvas_id, document)
+      do_persist(canvas_id, document, revision, operations, attribution)
     else
       Task.Supervisor.start_child(Platform.TaskSupervisor, fn ->
-        do_persist(canvas_id, document)
+        do_persist(canvas_id, document, revision, operations, attribution)
       end)
     end
 
     :ok
   end
 
-  defp do_persist(canvas_id, document) do
+  # Writes the canvas update + the canvas_versions row in a single
+  # transaction so a successful patch always has a corresponding history row,
+  # and a failed write never leaves a half-recorded version (task 019e0ac0).
+  defp do_persist(canvas_id, document, revision, operations, attribution) do
     case Repo.get(Canvas, canvas_id) do
       nil ->
         :ok
 
       canvas ->
-        # Route through Chat.update_canvas so the :canvas_updated PubSub
-        # broadcast fires. Writing directly via Repo.update skips the
-        # space-topic broadcast the LiveView listens on, leaving the UI
-        # showing stale pre-patch content even though the DB is current.
-        case Chat.update_canvas(canvas, %{"document" => document}) do
-          {:ok, _} ->
+        normalized_attribution = normalize_attribution(attribution)
+        ops_for_storage = ops_for_storage(operations)
+
+        multi =
+          Multi.new()
+          |> Multi.update(:canvas, Canvas.changeset(canvas, %{"document" => document}))
+          |> CanvasVersions.multi_insert(
+            :canvas_version,
+            canvas_id,
+            revision,
+            document,
+            normalized_attribution,
+            ops_for_storage
+          )
+
+        case Repo.transaction(multi) do
+          {:ok, %{canvas: updated}} ->
+            # Mirror Chat.update_canvas's broadcast — the LiveView listens on
+            # the space topic for :canvas_updated to refresh stream-rendered
+            # canvas messages.
+            Chat.publish_canvas_updated(updated)
             :ok
 
-          {:error, reason} ->
+          {:error, step, reason, _} ->
             Logger.warning(
-              "[Canvas.Server] persist failed canvas=#{canvas_id} reason=#{inspect(reason)}"
+              "[Canvas.Server] persist failed canvas=#{canvas_id} step=#{inspect(step)} " <>
+                "reason=#{inspect(reason)}"
             )
         end
     end
   end
+
+  # Tuples don't survive JSONB encoding — ops are stored as the same `[op_name,
+  # ...args]` shape that arrives over the wire from the MCP layer. Internal
+  # callers may pass the tuple form (`{:set_props, id, props}`); convert here.
+  defp ops_for_storage(nil), do: nil
+  defp ops_for_storage([]), do: []
+
+  defp ops_for_storage(ops) when is_list(ops) do
+    Enum.map(ops, fn
+      {name, a, b} when is_atom(name) -> [Atom.to_string(name), a, b]
+      {name, a} when is_atom(name) -> [Atom.to_string(name), a]
+      {name, a, b, c} when is_atom(name) -> [Atom.to_string(name), a, b, c]
+      list when is_list(list) -> list
+      other -> other
+    end)
+  end
+
+  defp normalize_attribution(attr) when is_map(attr) and map_size(attr) > 0 do
+    CanvasVersions.attribution_from_fields(attr)
+  end
+
+  defp normalize_attribution(_), do: %{"type" => "unknown"}
 
   defp via(canvas_id), do: {:via, Registry, {Platform.Chat.Registry, {:canvas, canvas_id}}}
 end

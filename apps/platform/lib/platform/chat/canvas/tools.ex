@@ -20,7 +20,13 @@ defmodule Platform.Chat.Canvas.Tools do
 
   alias Platform.Chat.Canvas.Kinds
 
-  @tool_names ["canvas.create", "canvas.patch", "canvas.describe"]
+  @tool_names [
+    "canvas.create",
+    "canvas.patch",
+    "canvas.describe",
+    "canvas.versions",
+    "canvas.restore"
+  ]
 
   @doc "Tool names handled by this module."
   @spec tool_names() :: [String.t()]
@@ -32,7 +38,9 @@ defmodule Platform.Chat.Canvas.Tools do
     [
       create_tool(),
       patch_tool(),
-      describe_tool()
+      describe_tool(),
+      versions_tool(),
+      restore_tool()
     ]
   end
 
@@ -93,6 +101,49 @@ defmodule Platform.Chat.Canvas.Tools do
         "required" => ["canvas_id"],
         "properties" => %{
           "canvas_id" => %{"type" => "string"}
+        }
+      }
+    }
+  end
+
+  # ── canvas.versions ──────────────────────────────────────────────────────
+
+  defp versions_tool do
+    %{
+      "name" => "canvas.versions",
+      "description" =>
+        "List a canvas's revision history newest-first. Each entry has revision, written_at, written_by, and a 1-sentence op_summary. Use limit + before_revision to paginate. Same auth gate as canvas.describe.",
+      "parameters" => %{
+        "type" => "object",
+        "additionalProperties" => false,
+        "required" => ["canvas_id"],
+        "properties" => %{
+          "canvas_id" => %{"type" => "string"},
+          "limit" => %{"type" => "integer", "minimum" => 1, "maximum" => 100},
+          "before_revision" => %{
+            "type" => "integer",
+            "minimum" => 1,
+            "description" => "Cursor — return only revisions strictly less than this"
+          }
+        }
+      }
+    }
+  end
+
+  # ── canvas.restore ───────────────────────────────────────────────────────
+
+  defp restore_tool do
+    %{
+      "name" => "canvas.restore",
+      "description" =>
+        "Replace the live canvas with the document from a historical revision. The restore is itself a write — it produces a new revision row at current+1. Same auth gate as canvas.patch.",
+      "parameters" => %{
+        "type" => "object",
+        "additionalProperties" => false,
+        "required" => ["canvas_id", "revision"],
+        "properties" => %{
+          "canvas_id" => %{"type" => "string"},
+          "revision" => %{"type" => "integer", "minimum" => 1}
         }
       }
     }
