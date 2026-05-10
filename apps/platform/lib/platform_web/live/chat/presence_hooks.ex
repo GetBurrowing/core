@@ -222,7 +222,12 @@ defmodule PlatformWeb.ChatLive.PresenceHooks do
   # have rebooted.
   defp space_scoped_to_active?(_payload, _socket), do: true
 
-  defp apply_agent_typing(socket, typing, participant_id) do
+  # Public for unit-test access (cross-LV `:composite_status` write must
+  # stay wrapped in `%AsyncResult{}` — see test in
+  # `presence_hooks_test.exs`). Not part of the public API; called only
+  # from the `{:agent_typing, …}` `handle_info` clause above.
+  @doc false
+  def apply_agent_typing(socket, typing, participant_id) do
     socket =
       socket
       |> update(:agent_typing_pids, fn pids ->
@@ -235,16 +240,31 @@ defmodule PlatformWeb.ChatLive.PresenceHooks do
 
     any_typing = not MapSet.equal?(socket.assigns.agent_typing_pids, MapSet.new())
 
-    # Cross-LV write: :composite_status is owned by ShellLive on_mount.
+    # Cross-LV write: :composite_status is owned by ShellLive on_mount and
+    # is bound to `<.async_result>` in the shell template, so it MUST stay
+    # in `%AsyncResult{}` shape — a bare atom here crashes the LV render
+    # with `FunctionClauseError` on `Phoenix.Component.async_result/1`.
+    # `ShellLive.async_ok/2` reuses the existing AsyncResult when present
+    # (preserves LV diffing) and lazily wraps `AsyncResult.loading/0` when
+    # the assign hasn't been seeded yet (e.g. test sockets).
     socket =
       if socket.assigns[:principal_name] do
         if any_typing do
-          assign(socket, :composite_status, :busy)
+          assign(
+            socket,
+            :composite_status,
+            PlatformWeb.ShellLive.async_ok(socket.assigns[:composite_status], :busy)
+          )
         else
           case socket.assigns[:active_space] do
             %{id: space_id} ->
               composite = SpaceAgentPresence.composite_status_for_space(space_id)
-              assign(socket, :composite_status, composite)
+
+              assign(
+                socket,
+                :composite_status,
+                PlatformWeb.ShellLive.async_ok(socket.assigns[:composite_status], composite)
+              )
 
             _ ->
               socket

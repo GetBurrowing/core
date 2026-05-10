@@ -323,12 +323,22 @@ defmodule PlatformWeb.ShellLive do
 
   def refresh_roster(socket, _), do: socket
 
-  # Wrap a value in an AsyncResult.ok, reusing the existing async result if
-  # present (preserves the assign's identity for LV diffing). Falls back to
-  # building a fresh AsyncResult so synchronous callers (refresh_roster on a
-  # non-async-bootstrapped socket) still get the right shape.
-  defp async_ok(%AsyncResult{} = existing, value), do: AsyncResult.ok(existing, value)
-  defp async_ok(_other, value), do: AsyncResult.ok(AsyncResult.loading(), value)
+  @doc """
+  Canonical wrap-or-rewrap helper for the AsyncResult-bound shell assigns
+  (`:roster_items`, `:composite_status`, `:principal_name`, `:presence_list`).
+
+  Reuses the existing `%AsyncResult{}` when present so LV diffing keeps the
+  assign identity stable; falls back to wrapping a fresh `AsyncResult.loading/0`
+  for synchronous callers (e.g. `refresh_roster/2` on a non-async-bootstrapped
+  socket, or cross-LV writers like `PlatformWeb.ChatLive.PresenceHooks` that
+  update `:composite_status` from `apply_agent_typing/3`).
+
+  Public so cross-LV writers can keep the assign in the shape the
+  `<.async_result>` template component requires; assigning a bare atom would
+  crash the render with `FunctionClauseError`.
+  """
+  def async_ok(%AsyncResult{} = existing, value), do: AsyncResult.ok(existing, value)
+  def async_ok(_other, value), do: AsyncResult.ok(AsyncResult.loading(), value)
 
   # Async loader: runs in a Task, returns {:ok, %{...assigns}} for the four
   # roster keys. Sends {:roster_resolved, sid} back to the LV so it can install
