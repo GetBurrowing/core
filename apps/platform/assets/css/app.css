@@ -1780,6 +1780,17 @@ body, .font-fabrikam, * {
   padding-bottom: env(safe-area-inset-bottom, 0);
 }
 
+/* Desktop: hide the bottom-nav entirely (the desktop left rail in
+   shell.html.heex provides cross-surface nav). The markup carries
+   `lg:hidden`, but `.bottom-nav { display: flex }` lives outside any
+   @layer and wins the cascade tie against the Tailwind utility — this
+   explicit min-width override is the authoritative hide at lg+. */
+@media (min-width: 1024px) {
+  .bottom-nav {
+    display: none;
+  }
+}
+
 [data-theme="light"] .bottom-nav {
   background: oklch(98% 0 0 / 0.96);
   border-top-color: rgba(0, 0, 0, 0.08);
