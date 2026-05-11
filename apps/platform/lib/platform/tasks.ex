@@ -745,6 +745,27 @@ defmodule Platform.Tasks do
   defp maybe_filter_epic(query, nil), do: query
   defp maybe_filter_epic(query, id), do: where(query, [t], t.epic_id == ^id)
 
+  @doc """
+  Count tasks currently in progress for a given user.
+
+  Used by the mobile bottom-nav (`PlatformWeb.Components.BottomNav`) to
+  render the badge on the Tasks tab. v1 just counts in-progress tasks
+  assigned to this user; clear-on-visit / unread-tracking is a future
+  enhancement.
+
+  Returns an integer (0 when no user_id, no matches, or query errors).
+  """
+  @spec count_in_progress_for_user(binary() | nil) :: non_neg_integer()
+  def count_in_progress_for_user(nil), do: 0
+
+  def count_in_progress_for_user(user_id) when is_binary(user_id) do
+    Task
+    |> where([t], is_nil(t.deleted_at))
+    |> where([t], t.status == "in_progress")
+    |> where([t], t.assignee_id == ^user_id)
+    |> Repo.aggregate(:count)
+  end
+
   @doc "Get a task with full detail: project, epic, plans with stages and validations."
   def get_task_detail(task_id) do
     Task

@@ -49,7 +49,7 @@ defmodule PlatformWeb.MeetingBarLive do
       phx-hook="MeetingBar"
       data-started-at={@started_at && DateTime.to_iso8601(@started_at)}
       class={[
-        "fixed bottom-0 inset-x-0 z-40 h-12 bg-base-200 border-t border-base-300 shadow-lg flex items-center gap-3 px-4",
+        "fixed bottom-[var(--bottom-nav-height,0px)] inset-x-0 z-40 h-12 bg-base-200 border-t border-base-300 shadow-lg flex items-center gap-3 px-4",
         if(@sidebar_collapsed, do: "lg:left-14", else: "lg:left-56"),
         if(!@meeting_active || @on_meeting_page, do: "hidden")
       ]}

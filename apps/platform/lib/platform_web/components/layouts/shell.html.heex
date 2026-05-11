@@ -159,14 +159,13 @@
       class="flex h-10 items-center justify-between border-b border-base-300 bg-base-200/60 px-4"
     >
       <div class="flex items-center gap-2">
-        <%!-- Hamburger button (mobile only) --%>
-        <button
-          class="rounded-lg p-1 text-base-content/60 hover:bg-base-300 hover:text-base-content lg:hidden"
-          phx-click="toggle_drawer"
-          aria-label="Open menu"
-        >
-          <span class="hero-bars-3 size-5"></span>
-        </button>
+        <%!-- Hamburger button hidden — replaced on mobile by the persistent
+             bottom-nav (task 019e1322 Stage 1) and by the desktop left rail
+             at lg+. Keeping the markup commented-out (rather than deleted)
+             so anyone reading shell.html.heex sees the migration intent.
+
+             <button class="lg:hidden" phx-click="toggle_drawer">…hero-bars-3…</button>
+        --%>
         <%!-- Active module name (mobile only) --%>
         <span class="text-sm font-semibold lg:hidden">
           {@active_module}
@@ -384,7 +383,7 @@
       :if={@captions_enabled}
       id="meeting-captions"
       phx-hook="MeetingCaptions"
-      class="fixed bottom-4 left-1/2 -translate-x-1/2 z-30 w-full max-w-2xl px-4 py-3 rounded-xl bg-black/75 backdrop-blur-sm text-sm text-white shadow-lg transition-opacity duration-300"
+      class="fixed bottom-[calc(1rem+var(--bottom-nav-height,0px))] left-1/2 -translate-x-1/2 z-30 w-full max-w-2xl px-4 py-3 rounded-xl bg-black/75 backdrop-blur-sm text-sm text-white shadow-lg transition-opacity duration-300"
       aria-live="polite"
       aria-label="Meeting captions"
     >
@@ -393,6 +392,20 @@
     <main class="flex-1 overflow-hidden">
       {@inner_content}
     </main>
+
+    <%!-- Mobile bottom-nav (task 019e1322) — replaces the shell hamburger as
+         the primary cross-surface navigation on phones. lg:hidden inside the
+         component itself so desktop continues to use the existing left rail
+         (lines 1-150 above). Tasks badge ships at 0 in Stage 1; Stage 3
+         wires the live count via shell_live.ex `@tasks_count` assign. --%>
+    <.bottom_nav active_module={@active_module} tasks_count={@tasks_count} />
+
+    <%!-- Mobile More sheet (task 019e1322 Stage 2) — bottom sheet that surfaces
+         the long-tail destinations (Skills, Changelog, Agent Resources, Org
+         Context, Usage, Admin·Prompts, Admin·Federation) plus the profile +
+         sign-out row. Triggered by `phx-click="open_more_sheet"` on the More
+         tab in <.bottom_nav>. lg:hidden inside the component itself. --%>
+    <.more_sheet open={@more_sheet_open} current_user={@current_user} />
 
     <%!-- Persistent meeting bar (survives navigation) --%>
     <.live_component

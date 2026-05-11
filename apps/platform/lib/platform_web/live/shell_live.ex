@@ -14,6 +14,7 @@ defmodule PlatformWeb.ShellLive do
   alias Platform.Chat.SpaceAgentPresence
   alias Platform.Meetings.State, as: MeetingState
   alias Platform.Repo
+  alias Platform.Tasks
 
   def on_mount(:default, _params, session, socket) do
     raw_user_id = session["current_user_id"]
@@ -62,6 +63,13 @@ defmodule PlatformWeb.ShellLive do
       if connected?(socket) do
         lv_pid = self()
 
+        # Subscribe once per LV to the tasks board topic so the bottom-nav
+        # Tasks badge stays live (task 019e1322 Stage 3). We don't need a
+        # per-user topic — the board topic broadcasts every {:task_*}
+        # event; we filter by assignee in handle_info before recomputing
+        # the count.
+        Platform.Tasks.subscribe_board()
+
         socket
         |> assign_async(
           [:roster_items, :composite_status, :principal_name],
@@ -80,8 +88,10 @@ defmodule PlatformWeb.ShellLive do
       |> assign(:current_path, "/")
       |> assign(:agent_status, default_agent_status())
       |> assign(:drawer_open, false)
+      |> assign(:more_sheet_open, false)
       |> assign(:sidebar_collapsed, false)
       |> assign(:active_module, active_module)
+      |> assign(:tasks_count, compute_tasks_count(raw_user_id))
       |> assign(:roster_open, false)
       |> assign(:show_presence_panel, false)
       |> assign(:captions_enabled, false)
@@ -195,12 +205,37 @@ defmodule PlatformWeb.ShellLive do
         _msg, socket ->
           {:cont, socket}
       end)
+      # Tasks-board PubSub → recompute the badge count for the current user
+      # (task 019e1322 Stage 3). Single Repo.aggregate, runs in the LV
+      # process, idempotent. Filtering by assignee inside the query is
+      # cheaper than filtering messages here.
+      |> attach_hook(:tasks_count_refresh, :handle_info, fn
+        {evt, _payload}, socket
+        when evt in [:task_created, :task_updated, :task_deleted] ->
+          new_count = compute_tasks_count(socket.assigns[:current_user_id])
+
+          if new_count == socket.assigns[:tasks_count] do
+            {:cont, socket}
+          else
+            {:cont, assign(socket, :tasks_count, new_count)}
+          end
+
+        _msg, socket ->
+          {:cont, socket}
+      end)
       |> attach_hook(:drawer_events, :handle_event, fn
         "toggle_drawer", _params, socket ->
           {:halt, assign(socket, :drawer_open, !socket.assigns.drawer_open)}
 
         "close_drawer", _params, socket ->
           {:halt, assign(socket, :drawer_open, false)}
+
+        # Mobile bottom-nav More tab → opens the long-tail sheet (task 019e1322 Stage 2)
+        "open_more_sheet", _params, socket ->
+          {:halt, assign(socket, :more_sheet_open, true)}
+
+        "close_more_sheet", _params, socket ->
+          {:halt, assign(socket, :more_sheet_open, false)}
 
         "toggle_sidebar", _params, socket ->
           next = !socket.assigns.sidebar_collapsed
@@ -463,5 +498,19 @@ defmodule PlatformWeb.ShellLive do
         |> String.replace("Live", "")
         |> String.replace("_", " ")
     end
+  end
+
+  # Initial badge count for the bottom-nav Tasks tab. Wraps Platform.Tasks
+  # so the call site stays compact + we can swap in clear-on-visit logic
+  # later without touching mount.
+  defp compute_tasks_count(user_id) do
+    Tasks.count_in_progress_for_user(user_id)
+  rescue
+    # Fail-open: a count error shouldn't block the shell from mounting.
+    # Bottom-nav just renders 0 → badge hidden. Logged for observability.
+    e ->
+      require Logger
+      Logger.warning("[ShellLive] tasks_count compute failed: #{inspect(e)}")
+      0
   end
 end

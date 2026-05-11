@@ -117,6 +117,70 @@ defmodule Platform.Tasks.TasksContextTest do
     end
   end
 
+  describe "count_in_progress_for_user/1 (mobile bottom-nav badge — task 019e1322)" do
+    setup do
+      {:ok, project} = Tasks.create_project(%{name: "Badge Test"})
+      user_a = Ecto.UUID.generate()
+      user_b = Ecto.UUID.generate()
+      %{project: project, user_a: user_a, user_b: user_b}
+    end
+
+    test "returns 0 for nil user_id" do
+      assert Tasks.count_in_progress_for_user(nil) == 0
+    end
+
+    test "returns 0 when user has no in-progress tasks", %{user_a: user_a} do
+      assert Tasks.count_in_progress_for_user(user_a) == 0
+    end
+
+    test "counts only in_progress tasks assigned to the user", %{
+      project: project,
+      user_a: user_a,
+      user_b: user_b
+    } do
+      {:ok, _t1} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Mine, in-progress 1",
+          status: "in_progress",
+          assignee_id: user_a,
+          assignee_type: "user"
+        })
+
+      {:ok, _t2} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Mine, in-progress 2",
+          status: "in_progress",
+          assignee_id: user_a,
+          assignee_type: "user"
+        })
+
+      # Other user — not counted.
+      {:ok, _t3} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Other user's in-progress",
+          status: "in_progress",
+          assignee_id: user_b,
+          assignee_type: "user"
+        })
+
+      # Mine, but wrong status — not counted.
+      {:ok, _t4} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Mine, but backlog",
+          status: "backlog",
+          assignee_id: user_a,
+          assignee_type: "user"
+        })
+
+      assert Tasks.count_in_progress_for_user(user_a) == 2
+      assert Tasks.count_in_progress_for_user(user_b) == 1
+    end
+  end
+
   describe "dependency schema + helpers" do
     setup do
       {:ok, project} = Tasks.create_project(%{name: "Dep Project"})

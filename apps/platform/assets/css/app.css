@@ -1747,3 +1747,346 @@ body, .font-fabrikam, * {
 .prose-sm h3 { font-size: 1.1em; }
 .prose-sm h4 { font-size: 1em; }
 .prose-sm pre { font-size: 0.8em; }
+
+/* ── Mobile bottom-tab nav (task 019e1322 Stage 1) ─────────────────────
+   Persistent tab bar at the bottom of the viewport, mobile-only
+   (lg:hidden in the markup). Replaces the shell hamburger drawer per
+   ui-ux-pro-max `bottom-nav-limit` + `tab-bar-ios` rules. Cinema Mobile
+   aesthetic — alpha-modulated hairline border, easing curve from #11.
+
+   --bottom-nav-height clearance variable: 0 by default so desktop layouts
+   are unaffected; switches to 56px (matching .bottom-nav-tab min-height)
+   below `lg:` so any viewport-anchored element (FABs, meeting bar, captions,
+   side panels) can offset above the nav with `calc(... + var(--bottom-nav-height))`.
+   ──────────────────────────────────────────────────────────────────── */
+:root {
+  --bottom-nav-height: 0px;
+}
+@media (max-width: 1023.98px) {
+  :root {
+    --bottom-nav-height: 56px;
+  }
+}
+
+.bottom-nav {
+  position: sticky;
+  bottom: 0;
+  z-index: 30;
+  display: flex;
+  background: oklch(8% 0 0 / 0.96);
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  backdrop-filter: blur(12px);
+  /* iOS home-indicator safe-area; falls back to 0 on Android / non-notch. */
+  padding-bottom: env(safe-area-inset-bottom, 0);
+}
+
+[data-theme="light"] .bottom-nav {
+  background: oklch(98% 0 0 / 0.96);
+  border-top-color: rgba(0, 0, 0, 0.08);
+}
+
+.bottom-nav-tab {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  padding: 8px 0;
+  min-height: 56px;
+  color: oklch(50% 0 0);
+  position: relative;
+  cursor: pointer;
+  transition: color 200ms cubic-bezier(0.16, 1, 0.3, 1),
+              transform 100ms cubic-bezier(0.16, 1, 0.3, 1);
+  background: transparent;
+  border: 0;
+  text-decoration: none;
+}
+
+.bottom-nav-tab:hover {
+  color: oklch(70% 0 0);
+}
+
+.bottom-nav-tab:active {
+  transform: scale(0.97);
+}
+
+.bottom-nav-tab--active {
+  color: var(--color-primary);
+}
+
+.bottom-nav-tab--active::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 28px;
+  height: 3px;
+  background: var(--color-primary);
+  border-radius: 0 0 3px 3px;
+}
+
+.bottom-nav-icon {
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+}
+
+.bottom-nav-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  line-height: 1;
+}
+
+.bottom-nav-badge {
+  position: absolute;
+  top: 6px;
+  right: calc(50% - 22px);
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 9999px;
+  background: var(--color-primary);
+  color: oklch(15% 0 0);
+  font-size: 9px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* 2px border in the bottom-nav background color isolates the badge from
+     the icon visually (per ui-ux-pro-max badge-separation guideline). */
+  border: 2px solid oklch(8% 0 0);
+}
+
+[data-theme="light"] .bottom-nav-badge {
+  border-color: oklch(98% 0 0);
+}
+
+/* ── Mobile More sheet (task 019e1322 Stage 2) ─────────────────────────
+   Bottom sheet with Workspace + Admin sections and a profile/sign-out
+   row. Triggered by the More tab in `.bottom-nav`. Cinema Mobile
+   aesthetic — slide-up animation with the same easing curve as #11.
+   ──────────────────────────────────────────────────────────────────── */
+.more-sheet-root {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  pointer-events: none; /* root is a layout container; children opt in */
+}
+
+.more-sheet-scrim {
+  position: absolute;
+  inset: 0;
+  background: oklch(0% 0 0 / 0.55);
+  backdrop-filter: blur(2px);
+  pointer-events: auto;
+  cursor: pointer;
+  animation: more-sheet-fade-in 200ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+.more-sheet-panel {
+  position: relative;
+  background: oklch(12% 0 0);
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  border-top-left-radius: 1.25rem;
+  border-top-right-radius: 1.25rem;
+  box-shadow: 0 -16px 64px rgba(0, 0, 0, 0.5);
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  pointer-events: auto;
+  padding-bottom: env(safe-area-inset-bottom, 0);
+  animation: more-sheet-slide-up 280ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+[data-theme="light"] .more-sheet-panel {
+  background: oklch(98% 0 0);
+  border-top-color: rgba(0, 0, 0, 0.08);
+}
+
+.more-sheet-handle {
+  align-self: center;
+  width: 40px;
+  height: 5px;
+  border-radius: 9999px;
+  background: rgba(255, 255, 255, 0.15);
+  margin-top: 8px;
+  margin-bottom: 4px;
+}
+
+[data-theme="light"] .more-sheet-handle {
+  background: rgba(0, 0, 0, 0.18);
+}
+
+.more-sheet-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 16px 12px;
+}
+
+.more-sheet-title {
+  font-size: 15px;
+  font-weight: 600;
+  margin: 0;
+}
+
+.more-sheet-close {
+  width: 36px;
+  height: 36px;
+  border-radius: 9999px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 0;
+  color: oklch(70% 0 0);
+  cursor: pointer;
+  transition: background 200ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.more-sheet-close:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: oklch(95% 0 0);
+}
+
+.more-sheet-close svg {
+  width: 18px;
+  height: 18px;
+}
+
+.more-sheet-list {
+  overflow-y: auto;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  padding-bottom: 12px;
+}
+
+[data-theme="light"] .more-sheet-list {
+  border-top-color: rgba(0, 0, 0, 0.08);
+}
+
+.more-sheet-section-label {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: oklch(50% 0 0);
+  padding: 12px 16px 4px;
+  margin: 0;
+}
+
+.more-sheet-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 16px;
+  min-height: 52px;
+  font-size: 14px;
+  color: oklch(95% 0 0);
+  text-decoration: none;
+  cursor: pointer;
+  transition: background 150ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+[data-theme="light"] .more-sheet-row {
+  color: oklch(15% 0 0);
+}
+
+.more-sheet-row:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+[data-theme="light"] .more-sheet-row:hover {
+  background: rgba(0, 0, 0, 0.04);
+}
+
+.more-sheet-row:active {
+  transform: scale(0.99);
+}
+
+.more-sheet-icon {
+  width: 22px;
+  height: 22px;
+  color: oklch(70% 0 0);
+  flex-shrink: 0;
+}
+
+[data-theme="light"] .more-sheet-icon {
+  color: oklch(40% 0 0);
+}
+
+.more-sheet-divider {
+  height: 1px;
+  background: rgba(255, 255, 255, 0.08);
+  margin: 6px 16px;
+}
+
+[data-theme="light"] .more-sheet-divider {
+  background: rgba(0, 0, 0, 0.08);
+}
+
+.more-sheet-profile {
+  padding: 12px 16px;
+  min-height: 60px;
+}
+
+.more-sheet-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 9999px;
+  background: linear-gradient(135deg, oklch(70% 0.14 200), oklch(60% 0.18 280));
+  color: oklch(98% 0 0);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.more-sheet-profile-info {
+  flex: 1;
+  min-width: 0;
+}
+
+.more-sheet-profile-name {
+  font-weight: 500;
+  font-size: 14px;
+  line-height: 1.2;
+}
+
+.more-sheet-profile-meta {
+  font-size: 11px;
+  color: oklch(50% 0 0);
+  margin-top: 2px;
+}
+
+.more-sheet-chevron {
+  width: 16px;
+  height: 16px;
+  color: oklch(50% 0 0);
+  flex-shrink: 0;
+}
+
+@keyframes more-sheet-fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes more-sheet-slide-up {
+  from { transform: translateY(100%); }
+  to { transform: translateY(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .more-sheet-scrim,
+  .more-sheet-panel {
+    animation: none;
+  }
+}

@@ -353,7 +353,7 @@ defmodule PlatformWeb.ChatLive.Partials do
       id={"canvas-versions-panel-#{(@mobile && "mobile") || "desktop"}-#{@canvas.id}"}
       class={[
         "absolute inset-y-0 right-0 z-30 flex w-80 flex-col border-l border-base-300 bg-base-100 shadow-xl transition-transform",
-        @mobile && "fixed top-12 bottom-0"
+        @mobile && "fixed top-12 bottom-[var(--bottom-nav-height,0px)]"
       ]}
     >
       <div class="flex h-12 flex-shrink-0 items-center justify-between border-b border-base-300 px-4">

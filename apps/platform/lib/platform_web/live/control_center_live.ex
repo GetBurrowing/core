@@ -597,7 +597,7 @@ defmodule PlatformWeb.ControlCenterLive do
         :if={@agents != [] && is_nil(@selected_agent) && !@show_onboarding_chooser}
         type="button"
         phx-click="open_onboarding_chooser"
-        class="fixed bottom-6 right-6 z-40 btn btn-primary btn-circle shadow-lg lg:hidden"
+        class="fixed bottom-[calc(1.5rem+var(--bottom-nav-height,0px))] right-6 z-40 btn btn-primary btn-circle shadow-lg lg:hidden"
       >
         <span class="hero-plus h-6 w-6" />
       </button>
