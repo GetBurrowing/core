@@ -1865,102 +1865,11 @@ body, .font-fabrikam, * {
   border-color: oklch(98% 0 0);
 }
 
-/* ── Mobile More sheet (task 019e1322 Stage 2) ─────────────────────────
-   Bottom sheet with Workspace + Admin sections and a profile/sign-out
-   row. Triggered by the More tab in `.bottom-nav`. Cinema Mobile
-   aesthetic — slide-up animation with the same easing curve as #11.
+/* ── More-sheet content classes (task 019e0d4b Stage 2) ───────────────
+   The chrome (root, scrim, panel, handle, header, title, close) was
+   removed when more_sheet.ex was refactored to use the generic
+   <.sheet> component. Only the in-body content classes remain below.
    ──────────────────────────────────────────────────────────────────── */
-.more-sheet-root {
-  position: fixed;
-  inset: 0;
-  z-index: 50;
-  display: flex;
-  flex-direction: column;
-  justify-content: flex-end;
-  pointer-events: none; /* root is a layout container; children opt in */
-}
-
-.more-sheet-scrim {
-  position: absolute;
-  inset: 0;
-  background: oklch(0% 0 0 / 0.55);
-  backdrop-filter: blur(2px);
-  pointer-events: auto;
-  cursor: pointer;
-  animation: more-sheet-fade-in 200ms cubic-bezier(0.16, 1, 0.3, 1) both;
-}
-
-.more-sheet-panel {
-  position: relative;
-  background: oklch(12% 0 0);
-  border-top: 1px solid rgba(255, 255, 255, 0.08);
-  border-top-left-radius: 1.25rem;
-  border-top-right-radius: 1.25rem;
-  box-shadow: 0 -16px 64px rgba(0, 0, 0, 0.5);
-  max-height: 80vh;
-  display: flex;
-  flex-direction: column;
-  pointer-events: auto;
-  padding-bottom: env(safe-area-inset-bottom, 0);
-  animation: more-sheet-slide-up 280ms cubic-bezier(0.16, 1, 0.3, 1) both;
-}
-
-[data-theme="light"] .more-sheet-panel {
-  background: oklch(98% 0 0);
-  border-top-color: rgba(0, 0, 0, 0.08);
-}
-
-.more-sheet-handle {
-  align-self: center;
-  width: 40px;
-  height: 5px;
-  border-radius: 9999px;
-  background: rgba(255, 255, 255, 0.15);
-  margin-top: 8px;
-  margin-bottom: 4px;
-}
-
-[data-theme="light"] .more-sheet-handle {
-  background: rgba(0, 0, 0, 0.18);
-}
-
-.more-sheet-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 6px 16px 12px;
-}
-
-.more-sheet-title {
-  font-size: 15px;
-  font-weight: 600;
-  margin: 0;
-}
-
-.more-sheet-close {
-  width: 36px;
-  height: 36px;
-  border-radius: 9999px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: transparent;
-  border: 0;
-  color: oklch(70% 0 0);
-  cursor: pointer;
-  transition: background 200ms cubic-bezier(0.16, 1, 0.3, 1);
-}
-
-.more-sheet-close:hover {
-  background: rgba(255, 255, 255, 0.05);
-  color: oklch(95% 0 0);
-}
-
-.more-sheet-close svg {
-  width: 18px;
-  height: 18px;
-}
-
 .more-sheet-list {
   overflow-y: auto;
   border-top: 1px solid rgba(255, 255, 255, 0.08);
@@ -2074,19 +1983,146 @@ body, .font-fabrikam, * {
   flex-shrink: 0;
 }
 
-@keyframes more-sheet-fade-in {
-  from { opacity: 0; }
-  to { opacity: 1; }
-}
 
-@keyframes more-sheet-slide-up {
-  from { transform: translateY(100%); }
-  to { transform: translateY(0); }
+/* ----------------------------------------------------------------------------
+ * <.sheet> component (PlatformWeb.Components.Sheet)
+ * Spec: docs/design-system/components/sheet.md §3
+ * ----------------------------------------------------------------------------*/
+
+@layer components {
+  .sheet {
+    position: fixed;
+    inset: 0;
+    z-index: 100;
+    pointer-events: none;
+    visibility: hidden;
+  }
+  .sheet.sheet-open {
+    pointer-events: auto;
+    visibility: visible;
+  }
+
+  .sheet-backdrop {
+    position: absolute;
+    inset: 0;
+    background: rgba(0, 0, 0, 0);
+    transition: background 0.2s ease;
+  }
+  .sheet-open .sheet-backdrop {
+    background: rgba(0, 0, 0, 0.5);
+  }
+
+  .sheet-panel {
+    position: absolute;
+    background: var(--color-base-100);
+    box-shadow: 0 -4px 24px rgba(0, 0, 0, 0.12);
+    transform: translateY(100%);
+    transition: transform 0.25s cubic-bezier(0.32, 0.72, 0, 1);
+    display: flex;
+    flex-direction: column;
+    max-height: 90vh;
+  }
+  .sheet-open .sheet-panel {
+    transform: translateY(0);
+  }
+
+  .sheet-bottom .sheet-panel {
+    bottom: 0;
+    left: 0;
+    right: 0;
+    border-radius: 1rem 1rem 0 0;
+  }
+
+  .sheet-right .sheet-panel {
+    top: 0;
+    right: 0;
+    bottom: 0;
+    transform: translateX(100%);
+    width: min(420px, 100vw);
+    max-height: none;
+    border-radius: 1rem 0 0 1rem;
+  }
+  .sheet-right.sheet-open .sheet-panel {
+    transform: translateX(0);
+  }
+
+  .sheet-left .sheet-panel {
+    top: 0;
+    left: 0;
+    bottom: 0;
+    transform: translateX(-100%);
+    width: min(420px, 100vw);
+    max-height: none;
+    border-radius: 0 1rem 1rem 0;
+  }
+  .sheet-left.sheet-open .sheet-panel {
+    transform: translateX(0);
+  }
+
+  .sheet-top .sheet-panel {
+    top: 0;
+    left: 0;
+    right: 0;
+    transform: translateY(-100%);
+    border-radius: 0 0 1rem 1rem;
+  }
+  .sheet-top.sheet-open .sheet-panel {
+    transform: translateY(0);
+  }
+
+  .sheet-handle {
+    width: 36px;
+    height: 4px;
+    background: var(--color-base-300);
+    border-radius: 999px;
+    margin: 0.5rem auto 0;
+  }
+
+  .sheet-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 1rem 1.5rem 0.75rem;
+    border-bottom: 1px solid var(--color-base-300);
+  }
+  .sheet-title {
+    margin: 0;
+    font-size: 1.125rem;
+    font-weight: 600;
+  }
+
+  .sheet-body {
+    flex: 1;
+    padding: 1.5rem;
+    overflow-y: auto;
+  }
+
+  .sheet-actions {
+    display: flex;
+    gap: 0.5rem;
+    justify-content: flex-end;
+    padding: 1rem 1.5rem;
+    border-top: 1px solid var(--color-base-300);
+  }
+
+  /* Desktop (>= 768px): bottom sheet floats as a centered card. */
+  @media (min-width: 768px) {
+    .sheet-bottom .sheet-panel {
+      max-width: 480px;
+      left: 50%;
+      transform: translate(-50%, 100%);
+      border-radius: 1rem;
+      bottom: 1.5rem;
+    }
+    .sheet-bottom.sheet-open .sheet-panel {
+      transform: translate(-50%, 0);
+    }
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .more-sheet-scrim,
-  .more-sheet-panel {
-    animation: none;
+  .sheet-panel,
+  .sheet-backdrop {
+    transition: none !important;
   }
 }

@@ -26,8 +26,8 @@ import PushSubscribe from "./push_subscribe"
 import ReactorPopover from "./reactor_popover"
 import ResizableSidebar from "./resizable_sidebar"
 import ScrollToBottom from "./scroll_to_bottom"
+import Sheet from "./sheet"
 import SidebarCollapse from "./sidebar_collapse"
-import SwipeDrawer from "./swipe_drawer"
 import ThemeToggle from "./theme_toggle"
 import UploadButton from "./upload_button"
 
@@ -60,8 +60,8 @@ export default {
   ReactorPopover,
   ResizableSidebar,
   ScrollToBottom,
+  Sheet,
   SidebarCollapse,
-  SwipeDrawer,
   ThemeToggle,
   UploadButton,
 }

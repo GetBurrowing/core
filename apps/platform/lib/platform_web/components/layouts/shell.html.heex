@@ -7,37 +7,20 @@
     class="hidden"
   >
   </div>
-  <%!-- Mobile backdrop overlay (only rendered when drawer is open) --%>
-  <%= if @drawer_open do %>
-    <div
-      class="fixed inset-0 z-40 bg-black/50 lg:hidden"
-      phx-click="close_drawer"
-      aria-hidden="true"
-    />
-  <% end %>
-
-  <%!-- Sidebar / mobile drawer nav --%>
+  <%!-- Desktop-only sidebar (lg+ width). Mobile users get the bottom-nav
+       added in #13; the original mobile drawer is gone (task 019e0d4b
+       Stage 2 cleanup — orphaned post-#13). The desktop collapse-to-icons
+       mode is preserved via `:sidebar_collapsed`. --%>
   <nav
     id="shell-sidebar"
-    phx-hook="SwipeDrawer"
     class={[
-      "flex flex-col gap-2 border-r border-base-300 bg-base-200 py-4 px-2 transition-all duration-200 ease-in-out",
-      "fixed inset-y-0 left-0 z-50 lg:relative lg:translate-x-0",
-      if(@drawer_open, do: "translate-x-0", else: "-translate-x-full lg:translate-x-0"),
+      "hidden lg:flex flex-col gap-2 border-r border-base-300 bg-base-200 py-4 px-2 transition-all duration-200 ease-in-out",
       if(@sidebar_collapsed, do: "lg:w-14", else: "w-56")
     ]}
   >
-    <%!-- Drawer header --%>
-    <div class="mb-4 flex items-center justify-between px-2">
+    <%!-- Sidebar header --%>
+    <div class="mb-4 flex items-center px-2">
       <span :if={!@sidebar_collapsed} class="text-lg font-bold">⚡</span>
-      <%!-- Close button (mobile only) --%>
-      <button
-        class="rounded-lg p-1 text-base-content/60 hover:bg-base-300 hover:text-base-content lg:hidden"
-        phx-click="close_drawer"
-        aria-label="Close menu"
-      >
-        <span class="hero-x-mark size-5"></span>
-      </button>
     </div>
 
     <%!-- Module navigation links --%>
@@ -47,7 +30,6 @@
       phx-hook="LastChatLink"
       data-default-chat-path="/chat"
       class={nav_item_class(@current_path, "/chat")}
-      phx-click="close_drawer"
       title="Chat"
     >
       <span class="hero-chat-bubble-left-right size-5 flex-shrink-0"></span>
@@ -56,7 +38,6 @@
     <.link
       navigate="/activity"
       class={nav_item_class(@current_path, "/activity")}
-      phx-click="close_drawer"
       title="Activity"
     >
       <span class="hero-sparkles size-5 flex-shrink-0"></span>
@@ -65,7 +46,6 @@
     <.link
       navigate="/tasks"
       class={nav_item_class(@current_path, "/tasks")}
-      phx-click="close_drawer"
       title="Tasks"
     >
       <span class="hero-rectangle-stack size-5 flex-shrink-0"></span>
@@ -74,7 +54,6 @@
     <.link
       navigate="/skills"
       class={nav_item_class(@current_path, "/skills")}
-      phx-click="close_drawer"
       title="Skills"
     >
       <span class="hero-book-open size-5 flex-shrink-0"></span>
@@ -83,7 +62,6 @@
     <.link
       navigate="/changelog"
       class={nav_item_class(@current_path, "/changelog")}
-      phx-click="close_drawer"
       title="Changelog"
     >
       <span class="hero-newspaper size-5 flex-shrink-0"></span>
@@ -92,7 +70,6 @@
     <.link
       navigate="/control"
       class={nav_item_class(@current_path, "/control")}
-      phx-click="close_drawer"
       title="Agent Resources"
     >
       <span class="hero-cog-6-tooth size-5 flex-shrink-0"></span>
@@ -101,7 +78,6 @@
     <.link
       navigate="/org-context"
       class={nav_item_class(@current_path, "/org-context")}
-      phx-click="close_drawer"
       title="Org Context"
     >
       <span class="hero-building-library size-5 flex-shrink-0"></span>
@@ -110,7 +86,6 @@
     <.link
       navigate="/control/usage"
       class={nav_item_class(@current_path, "/control/usage")}
-      phx-click="close_drawer"
       title="Usage"
     >
       <span class="hero-chart-bar-square size-5 flex-shrink-0"></span>
@@ -119,7 +94,6 @@
     <.link
       navigate="/admin/prompts"
       class={nav_item_class(@current_path, "/admin/prompts")}
-      phx-click="close_drawer"
       title="Admin · Prompts"
     >
       <span class="hero-wrench-screwdriver size-5 flex-shrink-0"></span>
@@ -128,7 +102,6 @@
     <.link
       navigate="/admin/federation"
       class={nav_item_class(@current_path, "/admin/federation")}
-      phx-click="close_drawer"
       title="Admin · Federation"
     >
       <span class="hero-signal size-5 flex-shrink-0"></span>
@@ -159,13 +132,8 @@
       class="flex h-10 items-center justify-between border-b border-base-300 bg-base-200/60 px-4"
     >
       <div class="flex items-center gap-2">
-        <%!-- Hamburger button hidden — replaced on mobile by the persistent
-             bottom-nav (task 019e1322 Stage 1) and by the desktop left rail
-             at lg+. Keeping the markup commented-out (rather than deleted)
-             so anyone reading shell.html.heex sees the migration intent.
-
-             <button class="lg:hidden" phx-click="toggle_drawer">…hero-bars-3…</button>
-        --%>
+        <%!-- Mobile primary nav is the bottom-nav from #13; the original
+             hamburger + drawer pattern was deleted in task 019e0d4b Stage 2. --%>
         <%!-- Active module name (mobile only) --%>
         <span class="text-sm font-semibold lg:hidden">
           {@active_module}

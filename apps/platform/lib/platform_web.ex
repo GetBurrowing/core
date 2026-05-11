@@ -82,6 +82,7 @@ defmodule PlatformWeb do
       # Core UI components
       import PlatformWeb.CoreComponents
       import PlatformWeb.AvatarComponents
+      import PlatformWeb.Components.Sheet
 
       # Common modules used in templates
       alias Phoenix.LiveView.JS

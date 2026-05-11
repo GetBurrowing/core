@@ -216,31 +216,22 @@
                       </span>
                     <% end %>
                   <% end %>
-                  <%!-- Three-dot menu --%>
-                  <div :if={deletable_task?(task)} class="dropdown dropdown-end" phx-click="noop">
-                    <div
-                      tabindex="0"
-                      role="button"
-                      class="btn btn-ghost btn-xs btn-square opacity-0 group-hover:opacity-100 transition-opacity"
-                      title="Task actions"
-                    >
-                      <span class="hero-ellipsis-vertical size-4"></span>
-                    </div>
-                    <ul
-                      tabindex="0"
-                      class="dropdown-content z-50 menu menu-sm p-1 shadow-lg bg-base-100 rounded-box w-36 border border-base-300"
-                    >
-                      <li>
-                        <button
-                          phx-click="select_task_and_delete"
-                          phx-value-id={task.id}
-                          class="text-error"
-                        >
-                          <span class="hero-trash size-4"></span> Delete
-                        </button>
-                      </li>
-                    </ul>
-                  </div>
+                  <%!-- Three-dot menu — opens a bottom sheet on mobile + a centered
+                       sheet on desktop. Replaced the inert DaisyUI dropdown
+                       (task 019e0d4b stage 2). The icon stays opacity-0 / hover-
+                       reveal on desktop; on mobile it's always visible since
+                       there's no hover signal.  --%>
+                  <button
+                    :if={deletable_task?(task)}
+                    type="button"
+                    phx-click="open_task_actions"
+                    phx-value-id={task.id}
+                    aria-label="Task actions"
+                    title="Task actions"
+                    class="btn btn-ghost btn-xs btn-square opacity-100 lg:opacity-0 lg:group-hover:opacity-100 transition-opacity"
+                  >
+                    <span class="hero-ellipsis-vertical size-4"></span>
+                  </button>
                 </div>
               </div>
 
@@ -1510,40 +1501,33 @@
     <span class="hero-plus size-6"></span>
   </button>
 
-  <%!-- Mobile project sheet (slide-over) --%>
-  <div
-    :if={@show_project_sheet}
-    class="fixed inset-0 z-40 flex md:hidden"
+  <%!-- Mobile project filter sheet (task 019e0d4b stage 3 sub a). Slides
+       in from the left on mobile, hidden entirely on md+ where the project
+       filter lives in a different surface. --%>
+  <.sheet
+    id="project-sheet"
+    open={@show_project_sheet}
+    placement={:left}
+    on_close="close_project_sheet"
+    class="md:hidden"
   >
-    <div class="absolute inset-0 bg-black/40" phx-click="close_project_sheet" />
-    <aside class="relative flex w-64 flex-col bg-base-100 shadow-xl safe-area-top">
-      <div class="flex items-center justify-between border-b border-base-300 px-3 py-3">
-        <span class="text-xs font-semibold uppercase tracking-widest text-base-content/60">
-          Projects
-        </span>
-        <button phx-click="close_project_sheet" class="btn btn-ghost btn-xs btn-square">
-          <span class="hero-x-mark size-4"></span>
-        </button>
-      </div>
-
-      <div class="flex-1 overflow-y-auto">
-        <button
-          :for={project <- @projects}
-          phx-click="select_project"
-          phx-value-id={project.id}
-          class={"w-full text-left px-3 py-2 text-sm hover:bg-base-200 #{if @selected_project_id == project.id, do: "bg-base-200 font-medium"}"}
-        >
-          {project.name}
-        </button>
-      </div>
-
-      <div class="border-t border-base-300 p-2">
-        <button phx-click="clear_filters" class="btn btn-xs btn-ghost w-full">
-          All Projects
-        </button>
-      </div>
-    </aside>
-  </div>
+    <:title>Projects</:title>
+    <div class="flex flex-col">
+      <button
+        :for={project <- @projects}
+        phx-click="select_project"
+        phx-value-id={project.id}
+        class={"w-full text-left px-3 py-2 text-sm hover:bg-base-200 #{if @selected_project_id == project.id, do: "bg-base-200 font-medium"}"}
+      >
+        {project.name}
+      </button>
+    </div>
+    <:actions>
+      <button phx-click="clear_filters" class="btn btn-xs btn-ghost w-full">
+        All Projects
+      </button>
+    </:actions>
+  </.sheet>
 
   <%!-- Per-phase assignee modal (mobile-first; full-screen sheet on small,
        centered dialog on >=sm) --%>
@@ -1686,272 +1670,294 @@
     </div>
   </div>
 
-  <%!-- Bottom sheet backdrop + panel --%>
-  <div
-    :if={@show_task_sheet}
-    class="fixed inset-0 z-40 flex items-end justify-center"
-  >
-    <%!-- Backdrop --%>
-    <div
-      class="absolute inset-0 bg-black/40"
-      phx-click="close_task_sheet"
-    />
+  <%!-- New-task sheet (task 019e0d4b stage 3 sub b). Bottom sheet on mobile,
+       centered card on desktop per <.sheet> spec §3 @media(min-width: 768px).
+       The form lives inside :inner_block; submit buttons stay inside the form
+       for proper form-submission semantics (not in :actions slot).
 
-    <%!-- Sheet --%>
-    <div class="relative w-full max-w-lg rounded-t-2xl bg-base-100 shadow-2xl transition-transform duration-300 pb-[env(safe-area-inset-bottom)]">
-      <%!-- Header --%>
-      <div class="flex items-center justify-between border-b border-base-300 px-4 py-3">
-        <h2 class="text-sm font-semibold">New Task</h2>
-        <button class="btn btn-sm btn-ghost btn-square" phx-click="close_task_sheet">
-          <span class="hero-x-mark size-4"></span>
-        </button>
+       :if={@show_task_sheet} on the Sheet itself (rather than open={@flag})
+       — the form has many select dropdowns (project, epic, agent) that would
+       otherwise leak option text into the always-rendered DOM and break
+       refute-by-text assertions in the existing test suite (e.g. the epic-
+       toggle-collapse test). --%>
+  <.sheet
+    :if={@show_task_sheet}
+    id="task-sheet"
+    open={true}
+    placement={:bottom}
+    on_close="close_task_sheet"
+  >
+    <:title>New Task</:title>
+    <.form
+      for={@task_form}
+      phx-change="validate_task"
+      phx-submit="create_task"
+      class="space-y-4"
+    >
+      <%!-- Title --%>
+      <div>
+        <label class="label label-text text-xs font-medium">Title *</label>
+        <input
+          type="text"
+          name="task[title]"
+          value={@task_form[:title].value}
+          required
+          placeholder="Add unread badges"
+          class="input input-bordered input-sm w-full"
+        />
       </div>
 
-      <%!-- Form --%>
-      <.form
-        for={@task_form}
-        phx-change="validate_task"
-        phx-submit="create_task"
-        class="max-h-[75vh] overflow-y-auto p-4 space-y-4"
-      >
-        <%!-- Title --%>
-        <div>
-          <label class="label label-text text-xs font-medium">Title *</label>
-          <input
-            type="text"
-            name="task[title]"
-            value={@task_form[:title].value}
-            required
-            placeholder="Add unread badges"
-            class="input input-bordered input-sm w-full"
-          />
-        </div>
-
-        <%!-- Project --%>
-        <div>
-          <label class="label label-text text-xs font-medium">Project *</label>
-          <select name="task[project_id]" class="select select-bordered select-sm w-full" required>
-            <option value="">Select project</option>
-            <option
-              :for={project <- @projects}
-              value={project.id}
-              selected={@task_form[:project_id].value == project.id}
-            >
-              {project.name}
-            </option>
-          </select>
-        </div>
-
-        <%!-- What --%>
-        <div>
-          <label class="label label-text text-xs font-medium">What *</label>
-          <textarea
-            name="task[what]"
-            required
-            placeholder="What is being changed or added?"
-            style="line-height:1.5;padding:6px 12px;min-height:33px;max-height:200px;overflow-y:auto;field-sizing:content"
-            class="textarea textarea-bordered w-full text-sm"
-          >{@sheet_what}</textarea>
-        </div>
-
-        <%!-- Why --%>
-        <div>
-          <label class="label label-text text-xs font-medium">Why *</label>
-          <textarea
-            name="task[why]"
-            required
-            placeholder="Why is this change needed?"
-            style="line-height:1.5;padding:6px 12px;min-height:33px;max-height:200px;overflow-y:auto;field-sizing:content"
-            class="textarea textarea-bordered w-full text-sm"
-          >{@sheet_why}</textarea>
-        </div>
-
-        <%!-- Epic --%>
-        <div>
-          <label class="label label-text text-xs font-medium">Epic</label>
-          <select name="task[epic_id]" class="select select-bordered select-sm w-full">
-            <option value="">None</option>
-            <option
-              :for={epic <- @epics}
-              value={epic.id}
-              selected={@task_form[:epic_id].value == epic.id}
-            >
-              {epic.name}
-            </option>
-          </select>
-        </div>
-
-        <%!-- Agent --%>
-        <div>
-          <label class="label label-text text-xs font-medium">Agent</label>
-          <select name="task[assignee_id]" class="select select-bordered select-sm w-full">
-            <option value="">None</option>
-            <option
-              :for={agent <- @agents}
-              value={agent.id}
-              selected={@task_form[:assignee_id].value == agent.id}
-            >
-              {agent.name}
-            </option>
-          </select>
-          <input type="hidden" name="task[assignee_type]" value="agent" />
-        </div>
-
-        <%!-- Deploy Strategy --%>
-        <div>
-          <label class="label label-text text-xs font-medium">Deploy Strategy</label>
-          <select
-            name="task[deploy_strategy_type]"
-            id="deploy-strategy-type"
-            class="select select-bordered select-sm w-full"
-            phx-change="validate_task"
+      <%!-- Project --%>
+      <div>
+        <label class="label label-text text-xs font-medium">Project *</label>
+        <select name="task[project_id]" class="select select-bordered select-sm w-full" required>
+          <option value="">Select project</option>
+          <option
+            :for={project <- @projects}
+            value={project.id}
+            selected={@task_form[:project_id].value == project.id}
           >
-            <option value="inherit">Inherit from project</option>
-            <option value="pr_merge">PR Merge</option>
-            <option value="docker_deploy">Docker Deploy</option>
-            <option value="skill_driven">Skill Driven</option>
-            <option value="manual">Manual</option>
-            <option value="none">None (skip deploy)</option>
-          </select>
-        </div>
-        <%!-- Auto-merge config — visible only when PR Merge is selected --%>
-        <div
-          :if={@deploy_strategy_type == "pr_merge"}
-          class="space-y-2 pl-2 border-l-2 border-base-300"
+            {project.name}
+          </option>
+        </select>
+      </div>
+
+      <%!-- What --%>
+      <div>
+        <label class="label label-text text-xs font-medium">What *</label>
+        <textarea
+          name="task[what]"
+          required
+          placeholder="What is being changed or added?"
+          style="line-height:1.5;padding:6px 12px;min-height:33px;max-height:200px;overflow-y:auto;field-sizing:content"
+          class="textarea textarea-bordered w-full text-sm"
+        >{@sheet_what}</textarea>
+      </div>
+
+      <%!-- Why --%>
+      <div>
+        <label class="label label-text text-xs font-medium">Why *</label>
+        <textarea
+          name="task[why]"
+          required
+          placeholder="Why is this change needed?"
+          style="line-height:1.5;padding:6px 12px;min-height:33px;max-height:200px;overflow-y:auto;field-sizing:content"
+          class="textarea textarea-bordered w-full text-sm"
+        >{@sheet_why}</textarea>
+      </div>
+
+      <%!-- Epic --%>
+      <div>
+        <label class="label label-text text-xs font-medium">Epic</label>
+        <select name="task[epic_id]" class="select select-bordered select-sm w-full">
+          <option value="">None</option>
+          <option
+            :for={epic <- @epics}
+            value={epic.id}
+            selected={@task_form[:epic_id].value == epic.id}
+          >
+            {epic.name}
+          </option>
+        </select>
+      </div>
+
+      <%!-- Agent --%>
+      <div>
+        <label class="label label-text text-xs font-medium">Agent</label>
+        <select name="task[assignee_id]" class="select select-bordered select-sm w-full">
+          <option value="">None</option>
+          <option
+            :for={agent <- @agents}
+            value={agent.id}
+            selected={@task_form[:assignee_id].value == agent.id}
+          >
+            {agent.name}
+          </option>
+        </select>
+        <input type="hidden" name="task[assignee_type]" value="agent" />
+      </div>
+
+      <%!-- Deploy Strategy --%>
+      <div>
+        <label class="label label-text text-xs font-medium">Deploy Strategy</label>
+        <select
+          name="task[deploy_strategy_type]"
+          id="deploy-strategy-type"
+          class="select select-bordered select-sm w-full"
+          phx-change="validate_task"
         >
-          <label class="label cursor-pointer justify-start gap-2">
-            <input
-              type="checkbox"
-              name="task[auto_merge]"
-              value="true"
-              checked={@auto_merge_enabled}
-              class="toggle toggle-sm toggle-primary"
-              phx-click="toggle_auto_merge"
-            />
-            <span class="label-text text-xs">
-              Auto-merge after CI passes
-            </span>
-            <div
-              class="tooltip tooltip-right"
-              data-tip="When enabled, PRs are automatically merged after CI passes. When disabled, a human must click merge."
-            >
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                class="h-3.5 w-3.5 opacity-50"
-                viewBox="0 0 20 20"
-                fill="currentColor"
-              >
-                <path
-                  fill-rule="evenodd"
-                  d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z"
-                  clip-rule="evenodd"
-                />
-              </svg>
-            </div>
-          </label>
-          <div :if={@auto_merge_enabled}>
-            <label class="label label-text text-xs font-medium">Merge Method</label>
-            <select
-              name="task[merge_method]"
-              class="select select-bordered select-xs w-full"
-            >
-              <option value="squash" selected={@merge_method == "squash"}>Squash</option>
-              <option value="merge" selected={@merge_method == "merge"}>Merge commit</option>
-              <option value="rebase" selected={@merge_method == "rebase"}>Rebase</option>
-            </select>
-          </div>
-        </div>
-
-        <%!-- Validation Mode --%>
-        <div>
-          <label class="label label-text text-xs font-medium">Validation</label>
-          <div class="flex flex-wrap gap-2">
-            <button
-              type="button"
-              phx-click="toggle_validation_mode"
-              phx-value-mode="show_me"
-              class={"btn btn-sm #{if MapSet.member?(@validation_modes, "show_me"), do: "btn-primary", else: "btn-outline"}"}
-            >
-              Show me
-            </button>
-            <button
-              type="button"
-              phx-click="toggle_validation_mode"
-              phx-value-mode="handle_it"
-              class={"btn btn-sm #{if MapSet.member?(@validation_modes, "handle_it"), do: "btn-primary", else: "btn-outline"}"}
-            >
-              Handle it
-            </button>
-            <button
-              type="button"
-              phx-click="toggle_validation_mode"
-              phx-value-mode="manual"
-              class={"btn btn-sm #{if MapSet.member?(@validation_modes, "manual"), do: "btn-primary", else: "btn-outline"}"}
-            >
-              Manual
-            </button>
-          </div>
-          <textarea
-            :if={MapSet.member?(@validation_modes, "manual")}
-            name="task[manual_validation_text]"
-            placeholder="Describe the validation criteria..."
-            style="line-height:1.5;padding:6px 12px;min-height:33px;max-height:200px;overflow-y:auto;field-sizing:content"
-            class="textarea textarea-bordered mt-2 w-full text-sm"
-          >{@manual_validation_text}</textarea>
-        </div>
-
-        <%!-- Attachments --%>
-        <div>
-          <label class="label label-text text-xs font-medium">Attachments</label>
-          <.live_file_input
-            upload={@uploads.task_attachments}
-            class="file-input file-input-bordered file-input-sm w-full"
+          <option value="inherit">Inherit from project</option>
+          <option value="pr_merge">PR Merge</option>
+          <option value="docker_deploy">Docker Deploy</option>
+          <option value="skill_driven">Skill Driven</option>
+          <option value="manual">Manual</option>
+          <option value="none">None (skip deploy)</option>
+        </select>
+      </div>
+      <%!-- Auto-merge config — visible only when PR Merge is selected --%>
+      <div
+        :if={@deploy_strategy_type == "pr_merge"}
+        class="space-y-2 pl-2 border-l-2 border-base-300"
+      >
+        <label class="label cursor-pointer justify-start gap-2">
+          <input
+            type="checkbox"
+            name="task[auto_merge]"
+            value="true"
+            checked={@auto_merge_enabled}
+            class="toggle toggle-sm toggle-primary"
+            phx-click="toggle_auto_merge"
           />
+          <span class="label-text text-xs">
+            Auto-merge after CI passes
+          </span>
           <div
-            :for={entry <- @uploads.task_attachments.entries}
-            class="mt-2 flex items-center gap-2 text-xs"
+            class="tooltip tooltip-right"
+            data-tip="When enabled, PRs are automatically merged after CI passes. When disabled, a human must click merge."
           >
-            <span class="flex-1 truncate">{entry.client_name}</span>
-            <span class="text-base-content/40">
-              {Float.round(entry.client_size / 1_000, 1)} KB
-            </span>
-            <button
-              type="button"
-              phx-click="cancel_task_upload"
-              phx-value-ref={entry.ref}
-              class="btn btn-ghost btn-xs btn-square"
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              class="h-3.5 w-3.5 opacity-50"
+              viewBox="0 0 20 20"
+              fill="currentColor"
             >
-              <span class="hero-x-mark size-3"></span>
-            </button>
+              <path
+                fill-rule="evenodd"
+                d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z"
+                clip-rule="evenodd"
+              />
+            </svg>
           </div>
-          <div
-            :for={err <- upload_errors(@uploads.task_attachments)}
-            class="mt-1 text-xs text-error"
+        </label>
+        <div :if={@auto_merge_enabled}>
+          <label class="label label-text text-xs font-medium">Merge Method</label>
+          <select
+            name="task[merge_method]"
+            class="select select-bordered select-xs w-full"
           >
-            {err}
-          </div>
+            <option value="squash" selected={@merge_method == "squash"}>Squash</option>
+            <option value="merge" selected={@merge_method == "merge"}>Merge commit</option>
+            <option value="rebase" selected={@merge_method == "rebase"}>Rebase</option>
+          </select>
         </div>
+      </div>
 
-        <%!-- Submit buttons --%>
-        <div class="flex gap-2 pt-2">
+      <%!-- Validation Mode --%>
+      <div>
+        <label class="label label-text text-xs font-medium">Validation</label>
+        <div class="flex flex-wrap gap-2">
           <button
-            type="submit"
-            name="task[action]"
-            value="create"
-            class="btn btn-primary btn-sm flex-1"
+            type="button"
+            phx-click="toggle_validation_mode"
+            phx-value-mode="show_me"
+            class={"btn btn-sm #{if MapSet.member?(@validation_modes, "show_me"), do: "btn-primary", else: "btn-outline"}"}
           >
-            Create Task
+            Show me
           </button>
           <button
-            type="submit"
-            name="task[action]"
-            value="create_and_plan"
-            class="btn btn-secondary btn-sm flex-1"
+            type="button"
+            phx-click="toggle_validation_mode"
+            phx-value-mode="handle_it"
+            class={"btn btn-sm #{if MapSet.member?(@validation_modes, "handle_it"), do: "btn-primary", else: "btn-outline"}"}
           >
-            Create & Request Plan
+            Handle it
+          </button>
+          <button
+            type="button"
+            phx-click="toggle_validation_mode"
+            phx-value-mode="manual"
+            class={"btn btn-sm #{if MapSet.member?(@validation_modes, "manual"), do: "btn-primary", else: "btn-outline"}"}
+          >
+            Manual
           </button>
         </div>
-      </.form>
+        <textarea
+          :if={MapSet.member?(@validation_modes, "manual")}
+          name="task[manual_validation_text]"
+          placeholder="Describe the validation criteria..."
+          style="line-height:1.5;padding:6px 12px;min-height:33px;max-height:200px;overflow-y:auto;field-sizing:content"
+          class="textarea textarea-bordered mt-2 w-full text-sm"
+        >{@manual_validation_text}</textarea>
+      </div>
+
+      <%!-- Attachments --%>
+      <div>
+        <label class="label label-text text-xs font-medium">Attachments</label>
+        <.live_file_input
+          upload={@uploads.task_attachments}
+          class="file-input file-input-bordered file-input-sm w-full"
+        />
+        <div
+          :for={entry <- @uploads.task_attachments.entries}
+          class="mt-2 flex items-center gap-2 text-xs"
+        >
+          <span class="flex-1 truncate">{entry.client_name}</span>
+          <span class="text-base-content/40">
+            {Float.round(entry.client_size / 1_000, 1)} KB
+          </span>
+          <button
+            type="button"
+            phx-click="cancel_task_upload"
+            phx-value-ref={entry.ref}
+            class="btn btn-ghost btn-xs btn-square"
+          >
+            <span class="hero-x-mark size-3"></span>
+          </button>
+        </div>
+        <div
+          :for={err <- upload_errors(@uploads.task_attachments)}
+          class="mt-1 text-xs text-error"
+        >
+          {err}
+        </div>
+      </div>
+
+      <%!-- Submit buttons --%>
+      <div class="flex gap-2 pt-2">
+        <button
+          type="submit"
+          name="task[action]"
+          value="create"
+          class="btn btn-primary btn-sm flex-1"
+        >
+          Create Task
+        </button>
+        <button
+          type="submit"
+          name="task[action]"
+          value="create_and_plan"
+          class="btn btn-secondary btn-sm flex-1"
+        >
+          Create & Request Plan
+        </button>
+      </div>
+    </.form>
+  </.sheet>
+
+  <%!-- Per-row task-actions sheet (task 019e0d4b stage 2). Replaces the
+       inert mobile DaisyUI dropdown that used to live inline in each
+       task row. Single sheet at the page bottom; renders only when
+       @open_task_actions_id is set. The sheet's :open attr drives the
+       slide-in animation; @open_task_actions_id is the source of truth
+       for which row's actions are showing. --%>
+  <.sheet
+    :if={@open_task_actions_id}
+    id="task-actions-sheet"
+    open={true}
+    placement={:bottom}
+    on_close="close_task_actions"
+  >
+    <:title>Task actions</:title>
+    <div class="flex flex-col gap-1">
+      <button
+        type="button"
+        phx-click="select_task_and_delete"
+        phx-value-id={@open_task_actions_id}
+        class="flex items-center gap-3 rounded-lg px-4 py-3 text-left text-error hover:bg-base-200 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-error/60"
+      >
+        <span class="hero-trash size-5"></span>
+        <span class="font-medium">Delete task</span>
+      </button>
     </div>
-  </div>
+  </.sheet>
 </div>

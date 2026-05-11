@@ -87,7 +87,6 @@ defmodule PlatformWeb.ShellLive do
       |> assign(:current_user_id, raw_user_id)
       |> assign(:current_path, "/")
       |> assign(:agent_status, default_agent_status())
-      |> assign(:drawer_open, false)
       |> assign(:more_sheet_open, false)
       |> assign(:sidebar_collapsed, false)
       |> assign(:active_module, active_module)
@@ -224,12 +223,6 @@ defmodule PlatformWeb.ShellLive do
           {:cont, socket}
       end)
       |> attach_hook(:drawer_events, :handle_event, fn
-        "toggle_drawer", _params, socket ->
-          {:halt, assign(socket, :drawer_open, !socket.assigns.drawer_open)}
-
-        "close_drawer", _params, socket ->
-          {:halt, assign(socket, :drawer_open, false)}
-
         # Mobile bottom-nav More tab → opens the long-tail sheet (task 019e1322 Stage 2)
         "open_more_sheet", _params, socket ->
           {:halt, assign(socket, :more_sheet_open, true)}

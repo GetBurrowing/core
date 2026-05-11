@@ -80,6 +80,8 @@ defmodule PlatformWeb.TasksLive do
      |> assign(:steering_attachment_intended, false)
      # Bottom sheet state
      |> assign(:show_task_sheet, false)
+     # Per-row task-actions sheet (3-dot menu): nil = closed, task.id = sheet open for that row
+     |> assign(:open_task_actions_id, nil)
      # Per-phase assignee modal
      |> assign(:show_assignee_modal, false)
      |> assign(:assignee_modal_mode, :simple)
@@ -256,6 +258,16 @@ defmodule PlatformWeb.TasksLive do
 
   def handle_event("close_project_sheet", _params, socket) do
     {:noreply, assign(socket, :show_project_sheet, false)}
+  end
+
+  # Open the per-row task-actions sheet (Sheet-based replacement for the
+  # DaisyUI dropdown that was inert on mobile — task 019e0d4b stage 2).
+  def handle_event("open_task_actions", %{"id" => task_id}, socket) do
+    {:noreply, assign(socket, :open_task_actions_id, task_id)}
+  end
+
+  def handle_event("close_task_actions", _params, socket) do
+    {:noreply, assign(socket, :open_task_actions_id, nil)}
   end
 
   def handle_event("select_project", %{"id" => project_id}, socket) do
@@ -570,6 +582,7 @@ defmodule PlatformWeb.TasksLive do
     {:noreply,
      socket
      |> assign(:confirm_delete, true)
+     |> assign(:open_task_actions_id, nil)
      |> push_patch(to: ~p"/tasks/#{task_id}")}
   end
 
