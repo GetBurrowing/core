@@ -21,6 +21,22 @@ defmodule Platform.Chat.Message do
     field(:deleted_at, :utc_datetime_usec)
     field(:log_only, :boolean, default: false)
 
+    # Editable-messages contract (docs/contracts/editable-messages-contract.md).
+    # `frozen_at` non-null means PATCH /api/messages/:id returns 409. The
+    # `frozen_by_participant_id` records who froze it (whose action triggered
+    # the freeze) for the 409 payload's `freezing_action` context. Per the
+    # check constraint, the two are both-or-neither.
+    field(:frozen_at, :utc_datetime_usec)
+    field(:frozen_by_participant_id, :binary_id)
+
+    # Non-null only on agent correction messages (Policy 3 — agents correct
+    # via a NEW message with `corrects_message_id` set, not by editing).
+    field(:corrects_message_id, :binary_id)
+
+    # Virtual: count of rows in chat_message_versions for this message. UI
+    # renders the "(edited)" affix when this is > 1.
+    field(:versions_count, :integer, virtual: true)
+
     # Author identity snapshot (ADR 0038). Populated at write time from the
     # authoring participant and treated as source of truth for rendering. A
     # participant leaving or being dismissed does not mutate these fields, so
@@ -60,9 +76,35 @@ defmodule Platform.Chat.Message do
       :author_avatar_url,
       :author_participant_type,
       :author_agent_id,
-      :author_user_id
+      :author_user_id,
+      :frozen_at,
+      :frozen_by_participant_id,
+      :corrects_message_id
     ])
     |> validate_required([:space_id, :participant_id, :content_type])
     |> validate_inclusion(:content_type, @content_types)
+    |> validate_frozen_both_or_neither()
+  end
+
+  # Mirrors the DB-level check constraint `frozen_both_or_neither`. Catching
+  # it in the changeset gives a clean validation error before the database
+  # raises, and lets callers display a field-level message in the UI.
+  defp validate_frozen_both_or_neither(changeset) do
+    frozen_at = get_field(changeset, :frozen_at)
+    frozen_by = get_field(changeset, :frozen_by_participant_id)
+
+    case {frozen_at, frozen_by} do
+      {nil, nil} ->
+        changeset
+
+      {%DateTime{}, <<_::binary>>} ->
+        changeset
+
+      {%DateTime{}, nil} ->
+        add_error(changeset, :frozen_by_participant_id, "is required when frozen_at is set")
+
+      {nil, <<_::binary>>} ->
+        add_error(changeset, :frozen_at, "is required when frozen_by_participant_id is set")
+    end
   end
 end
