@@ -21,6 +21,8 @@ defmodule PlatformWeb.ChatLive do
 
   import PlatformWeb.Chat.CanvasRenderer, only: [canvas_document: 1]
   import PlatformWeb.ChatLive.Partials
+  import PlatformWeb.Components.ChatHelpers
+  import PlatformWeb.Components.ChatMessage, only: [chat_message: 1, local_time: 1]
 
   alias Phoenix.LiveView.JS
   alias Platform.Accounts
@@ -64,6 +66,8 @@ defmodule PlatformWeb.ChatLive do
       |> assign(:mobile_browser_open, false)
       |> assign(:show_new_channel_modal, false)
       |> assign(:show_new_conversation_modal, false)
+      # Per-message actions sheet (3-dot menu): nil when closed, msg.id when open
+      |> assign(:open_message_actions_id, nil)
       |> assign(:show_settings, false)
       |> assign(:quick_emojis, @quick_emojis)
       |> assign(:push_permission, "unknown")
@@ -201,6 +205,26 @@ defmodule PlatformWeb.ChatLive do
 
   def handle_event("close_mobile_browser", _params, socket) do
     {:noreply, assign(socket, :mobile_browser_open, false)}
+  end
+
+  # Per-message actions sheet (3-dot menu on chat messages — task 019e0f29
+  # Stage 3). Replaces the inert DaisyUI dropdown placeholder added in
+  # Stage 2 with a real bottom sheet on mobile / centered card on desktop.
+  def handle_event("open_message_actions", %{"id" => msg_id}, socket) do
+    {:noreply, assign(socket, :open_message_actions_id, msg_id)}
+  end
+
+  def handle_event("close_message_actions", _params, socket) do
+    {:noreply, assign(socket, :open_message_actions_id, nil)}
+  end
+
+  # Placeholder for the Edit affordance (task 019e0f29 Stage 4). The
+  # inline editor + author/freeze enforcement land in Stage 5, which
+  # consumes the editable-messages contract's PATCH /api/messages/:id
+  # path with the 409-on-frozen response. For now we accept the click
+  # silently so the UI doesn't crash; Stage 5 swaps in the editor.
+  def handle_event("edit_message_clicked", _params, socket) do
+    {:noreply, socket}
   end
 
   # Coordinator: Search event that also writes MessagesHooks state
@@ -505,25 +529,6 @@ defmodule PlatformWeb.ChatLive do
 
   def handle_info(_msg, socket), do: {:noreply, socket}
 
-  attr(:id, :string, required: true)
-  attr(:timestamp, :any, default: nil)
-  attr(:class, :string, default: nil)
-
-  defp local_time(assigns) do
-    ~H"""
-    <time
-      :if={match?(%DateTime{}, @timestamp)}
-      id={@id}
-      datetime={DateTime.to_iso8601(@timestamp)}
-      data-local-time={DateTime.to_iso8601(@timestamp)}
-      phx-hook="LocalTime"
-      class={@class}
-    >
-      {format_timestamp(@timestamp)}
-    </time>
-    """
-  end
-
   # Valid slug pattern: lowercase alphanumerics separated by hyphens (1–64 chars).
   # This intentionally excludes anything with underscores, uppercase, special chars,
   # or tool-artifact strings like "__from_file__" that should never create real spaces.
@@ -631,23 +636,6 @@ defmodule PlatformWeb.ChatLive do
     end
   end
 
-  defp relative_time(nil), do: ""
-
-  defp relative_time(datetime) do
-    diff = DateTime.diff(DateTime.utc_now(), datetime, :second)
-
-    cond do
-      diff < 60 -> "just now"
-      diff < 3600 -> "#{div(diff, 60)}m ago"
-      diff < 86400 -> "#{div(diff, 3600)}h ago"
-      true -> "#{div(diff, 86400)}d ago"
-    end
-  end
-
-  defp image_attachment?(attachment) do
-    String.starts_with?(attachment.content_type || "", "image/")
-  end
-
   defp flash_cancelled_uploads(socket, 0), do: socket
 
   defp flash_cancelled_uploads(socket, count) do
@@ -659,8 +647,6 @@ defmodule PlatformWeb.ChatLive do
       "Canceled #{count} pending #{noun} from the previous space. Re-select the file(s) to send here."
     )
   end
-
-  defp attachment_url(attachment), do: ~p"/chat/attachments/#{attachment.id}"
 
   defp search_headline(message) do
     headline =
@@ -678,60 +664,6 @@ defmodule PlatformWeb.ChatLive do
     |> Phoenix.HTML.raw()
   end
 
-  defp present?(value) when is_binary(value), do: String.trim(value) != ""
-  defp present?(_value), do: false
-
-  # Accessible label for a reaction pill — screen readers get the reactor
-  # list without having to open the popover (desktop-only affordance).
-  # Mobile users rely on this label for the same information.
-  defp reactor_aria_label(%{emoji: emoji, reactors: reactors, extra_count: extra}) do
-    names = reactors |> Enum.map(& &1.name) |> Enum.reject(&(&1 in [nil, ""]))
-
-    people =
-      case names do
-        [] ->
-          "Someone"
-
-        [one] ->
-          one
-
-        [first, second] ->
-          "#{first} and #{second}"
-
-        list ->
-          {init, [last]} = Enum.split(list, -1)
-          "#{Enum.join(init, ", ")}, and #{last}"
-      end
-
-    tail =
-      cond do
-        extra == 0 -> ""
-        extra == 1 -> " and 1 other"
-        true -> " and #{extra} others"
-      end
-
-    "#{people}#{tail} reacted with #{emoji}"
-  end
-
-  defp format_bytes(size) when is_integer(size) and size < 1_024, do: "#{size} B"
-
-  defp format_bytes(size) when is_integer(size) and size < 1_048_576,
-    do: "#{Float.round(size / 1_024, 1)} KB"
-
-  defp format_bytes(size) when is_integer(size) and size < 1_073_741_824,
-    do: "#{Float.round(size / 1_048_576, 1)} MB"
-
-  defp format_bytes(size) when is_integer(size), do: "#{Float.round(size / 1_073_741_824, 1)} GB"
-  defp format_bytes(_size), do: "—"
-
-  defp format_timestamp(nil), do: ""
-
-  defp format_timestamp(%DateTime{} = dt) do
-    Calendar.strftime(dt, "%I:%M %p")
-  end
-
-  defp format_timestamp(_), do: ""
-
   defp format_message_date(nil), do: ""
 
   defp format_message_date(%DateTime{} = dt) do
@@ -746,6 +678,20 @@ defmodule PlatformWeb.ChatLive do
   end
 
   defp format_message_date(_), do: ""
+
+  # Composer empty-state check for the send button's disabled attribute.
+  # The form value can be nil (initial render), a binary, or a Phoenix.HTML.Form.normalize_value-shaped
+  # value. Treat whitespace-only as empty so a stray space doesn't enable Send.
+  defp composer_empty?(form) do
+    case form && form[:text] do
+      %{value: value} -> blank?(value)
+      _ -> true
+    end
+  end
+
+  defp blank?(nil), do: true
+  defp blank?(value) when is_binary(value), do: String.trim(value) == ""
+  defp blank?(_), do: true
 
   @impl true
   def terminate(_reason, socket) do

@@ -13,7 +13,7 @@
   <aside
     id="chat-sidebar"
     phx-hook="ResizableSidebar"
-    class="hidden lg:flex relative flex-shrink-0 flex-col border-r border-base-300 bg-base-200"
+    class="hidden lg:flex relative flex-shrink-0 flex-col border-r border-base-content/10 bg-base-200"
   >
     <%!-- Channels section --%>
     <div class="border-b border-base-300 px-4 py-3 flex items-center justify-between">
@@ -226,21 +226,25 @@
     >
       <header
         :if={@active_space}
-        class="flex h-12 flex-shrink-0 items-center justify-between border-b border-base-300 px-5"
+        class="flex h-12 flex-shrink-0 items-center justify-between border-b border-base-content/10 px-5"
       >
         <div class="flex items-center gap-2 overflow-hidden">
-          <%!-- Mobile: tappable title to open browser --%>
-          <button
-            phx-click="toggle_mobile_browser"
-            class="flex items-center gap-2 overflow-hidden lg:hidden"
-            aria-label="Browse channels"
-          >
+          <%!-- Mobile: static channel name. Channel switching now happens via the
+               pills strip below the header (Refined Option A — Marlowe approval
+               2026-05-10). The previous tap-channel-name-to-open-browser flow
+               was confusing with the shell's hamburger menu — both opened
+               drawers, so users could tap one when they meant the other. The
+               pills strip makes channel switching 1-tap and removes the
+               dual-affordance ambiguity. The overflow magnifying-glass icon at
+               the right of the strip still opens the full channel browser
+               (this template's @mobile_browser_open overlay) for the long-tail
+               jump-to-channel case. --%>
+          <div class="flex items-center gap-2 overflow-hidden lg:hidden">
             <span :if={@active_space.kind == "channel"} class="text-base-content/50">#</span>
             <span class="truncate font-semibold">
               {space_header_name(@active_space, @space_participants, @user_id)}
             </span>
-            <span class="hero-chevron-down size-4 text-base-content/40 flex-shrink-0"></span>
-          </button>
+          </div>
           <%!-- Desktop: static title --%>
           <span class="hidden lg:flex items-center gap-2 overflow-hidden">
             <span
@@ -413,6 +417,79 @@
           </button>
         </div>
       </header>
+
+      <%!-- Mobile-only channel pills strip — Refined Option A nav (Marlowe approval 2026-05-10).
+           Replaces the previous tap-channel-name-to-open-browser flow. Renders @channels
+           as horizontally-scrollable pills with the active channel highlighted. The
+           overflow magnifying-glass icon at the end opens the existing
+           @mobile_browser_open overlay (which has the full channel + DM list and is
+           the long-tail jump-to-channel surface). 1-tap channel switching for the
+           pills shown; 2-tap (overflow → search/select) for the long tail.
+
+           Pinning is NOT in this Stage 1A — channels appear in the existing order
+           (alphabetical via Chat.list_spaces). A follow-up Stage 1B will add
+           localStorage-backed pinning + long-press to pin/unpin. --%>
+      <nav
+        :if={@active_space}
+        class="lg:hidden flex items-center gap-2 overflow-x-auto px-4 py-2 border-b border-base-content/10"
+        style="scrollbar-width: none; -webkit-overflow-scrolling: touch;"
+        aria-label="Channel switcher"
+      >
+        <.link
+          :for={space <- @channels}
+          navigate={~p"/chat/#{space.slug}"}
+          class={[
+            "flex items-center gap-1.5 px-3 py-1.5 rounded-full whitespace-nowrap text-[13px] font-medium shrink-0 transition-all",
+            "active:scale-[0.97] ease-[cubic-bezier(0.16,1,0.3,1)]",
+            if @active_space.id == space.id do
+              "bg-primary text-primary-content shadow-[0_0_16px_oklch(0.78_0.14_207_/_0.18)]"
+            else
+              "bg-base-200 text-base-content/70 border border-base-content/10 hover:bg-base-300"
+            end
+          ]}
+        >
+          <span class={[
+            if(@active_space.id == space.id,
+              do: "text-primary-content/80",
+              else: "text-base-content/40"
+            )
+          ]}>#</span>{space.name}<span
+            :if={unread_label(Map.get(@unread_counts, space.id, 0))}
+            class="inline-flex items-center justify-center min-w-[18px] h-[18px] rounded-full text-[10px] font-bold tabular-nums bg-primary text-primary-content border border-base-100"
+          >{unread_label(Map.get(@unread_counts, space.id, 0))}</span>
+        </.link>
+
+        <%!-- DM pills (after channels, no divider for now to keep mobile compact) --%>
+        <.link
+          :for={space <- @dm_conversations}
+          navigate={~p"/chat/#{space.slug || space.id}"}
+          class={[
+            "flex items-center gap-1.5 px-3 py-1.5 rounded-full whitespace-nowrap text-[13px] font-medium shrink-0 transition-all",
+            "active:scale-[0.97] ease-[cubic-bezier(0.16,1,0.3,1)]",
+            if @active_space.id == space.id do
+              "bg-primary text-primary-content shadow-[0_0_16px_oklch(0.78_0.14_207_/_0.18)]"
+            else
+              "bg-base-200 text-base-content/70 border border-base-content/10 hover:bg-base-300"
+            end
+          ]}
+        >
+          {sidebar_display_name(space, @user_id)}<span
+            :if={unread_label(Map.get(@unread_counts, space.id, 0))}
+            class="inline-flex items-center justify-center min-w-[18px] h-[18px] rounded-full text-[10px] font-bold tabular-nums bg-primary text-primary-content border border-base-100"
+          >{unread_label(Map.get(@unread_counts, space.id, 0))}</span>
+        </.link>
+
+        <%!-- Overflow: opens the existing mobile_browser overlay for jump-to-channel + DMs.
+             Magnifying-glass icon (not + or chevron) communicates "search/find more". --%>
+        <button
+          phx-click="toggle_mobile_browser"
+          class="flex items-center justify-center w-9 h-9 rounded-full shrink-0 bg-base-200 border border-base-content/10 text-base-content/50 hover:text-primary hover:bg-base-300 transition-colors"
+          aria-label="Search channels and direct messages"
+          title="Search channels and DMs"
+        >
+          <span class="hero-magnifying-glass size-4"></span>
+        </button>
+      </nav>
 
       <div
         :if={present?(@search_query)}
@@ -608,473 +685,26 @@
         phx-update="stream"
         phx-hook="ScrollToBottom"
       >
-        <div
+        <.chat_message
           :for={{dom_id, msg} <- @streams.messages}
           :if={is_nil(msg.deleted_at)}
-          id={dom_id}
-          class={[
-            "group relative flex gap-3 rounded-xl px-2 py-2 transition-colors",
-            MapSet.member?(@agent_participant_ids, msg.participant_id) && "msg-agent",
-            @highlighted_message_id == msg.id && "bg-primary/5 ring-1 ring-primary/20",
-            @current_participant && msg.participant_id == @current_participant.id &&
-              !MapSet.member?(@agent_participant_ids, msg.participant_id) && "bg-base-200/60"
-          ]}
-          style={
-            if MapSet.member?(@agent_participant_ids, msg.participant_id) do
-              accent =
-                Map.get(
-                  @agent_colors_map,
-                  msg.participant_id,
-                  Platform.Agents.ColorPalette.default_accent()
-                )
-
-              "--agent-accent: #{accent};"
-            end
-          }
-          data-participant-id={msg.participant_id}
-          data-date={msg.inserted_at && DateTime.to_date(msg.inserted_at) |> Date.to_iso8601()}
-          data-message-id={msg.id}
-          data-is-own-message={
-            if(@current_participant && msg.participant_id == @current_participant.id,
-              do: "true",
-              else: "false"
-            )
-          }
-          phx-hook="LongpressMenu"
-        >
-          <%!-- Avatar circle (hidden when grouped with previous message via JS) --%>
-          <div class="flex-shrink-0 mt-0.5 message-avatar">
-            <%= if MapSet.member?(@agent_participant_ids, msg.participant_id) do %>
-              <div class="w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold select-none bg-base-300 text-primary msg-agent-avatar">
-                {PresenceHooks.avatar_initial(@participants_map, msg)}
-              </div>
-            <% else %>
-              <.human_avatar
-                name={PresenceHooks.sender_name(@participants_map, msg)}
-                avatar_url={PresenceHooks.sender_avatar_url(@participants_map, msg)}
-                seed={PresenceHooks.sender_avatar_seed(@participants_map, msg)}
-                size="md"
-              />
-            <% end %>
-          </div>
-
-          <%!-- Message body --%>
-          <div class="flex-1 min-w-0">
-            <div class="flex items-baseline gap-2 message-header">
-              <span class={[
-                "text-sm font-bold",
-                if(MapSet.member?(@agent_participant_ids, msg.participant_id),
-                  do: "msg-agent-name",
-                  else: "text-base-content"
-                )
-              ]}>
-                {PresenceHooks.sender_name(@participants_map, msg)}
-                <span
-                  :if={MapSet.member?(@agent_participant_ids, msg.participant_id)}
-                  class="msg-agent-badge"
-                >
-                  AI
-                </span>
-              </span>
-              <.local_time
-                id={"message-time-#{msg.id}"}
-                timestamp={msg.inserted_at}
-                class="text-[10px] text-base-content/40"
-              />
-
-              <div class="ml-auto hidden group-hover:flex items-center gap-1">
-                <button
-                  :for={emoji <- @quick_emojis}
-                  phx-click="react"
-                  phx-value-message-id={msg.id}
-                  phx-value-emoji={emoji}
-                  title={"React with #{emoji}"}
-                  class="rounded px-1.5 py-0.5 text-sm hover:bg-base-300 transition-colors"
-                >
-                  {emoji}
-                </button>
-
-                <button
-                  phx-click="open_reaction_picker"
-                  phx-value-message-id={msg.id}
-                  title="More reactions"
-                  class="rounded px-1.5 py-0.5 text-xs text-base-content/50 hover:text-base-content hover:bg-base-300 transition-colors"
-                >
-                  <span class="hero-face-smile size-4"></span>
-                </button>
-
-                <button
-                  :if={present?(msg.content)}
-                  phx-hook="CopyToClipboard"
-                  id={"copy-msg-#{msg.id}"}
-                  data-clipboard-text={msg.content}
-                  title="Copy message"
-                  class="rounded px-1.5 py-0.5 text-xs text-base-content/50 hover:text-base-content hover:bg-base-300 transition-colors"
-                >
-                  <span class="hero-clipboard-document-list size-4"></span>
-                </button>
-
-                <button
-                  phx-click="toggle_inline_thread"
-                  phx-value-message-id={msg.id}
-                  title="Reply"
-                  class="rounded px-1.5 py-0.5 text-xs text-base-content/50 hover:text-base-content hover:bg-base-300 transition-colors"
-                >
-                  <span class="hero-chat-bubble-left-right size-4"></span>
-                </button>
-
-                <button
-                  phx-click="toggle_inline_thread"
-                  phx-value-message-id={msg.id}
-                  title="Open thread"
-                  class="rounded px-1.5 py-0.5 text-xs text-base-content/40 hover:text-base-content/60 hover:bg-base-300 transition-colors"
-                >
-                  <span class="hero-arrow-top-right-on-square size-4"></span>
-                </button>
-
-                <button
-                  phx-click="pin_toggle"
-                  phx-value-message-id={msg.id}
-                  phx-value-space-id={msg.space_id}
-                  title={if MapSet.member?(@pinned_message_ids, msg.id), do: "Unpin", else: "Pin"}
-                  class="rounded px-1.5 py-0.5 text-xs text-base-content/50 hover:text-base-content hover:bg-base-300 transition-colors"
-                >
-                  <span class={[
-                    "size-4",
-                    if(MapSet.member?(@pinned_message_ids, msg.id),
-                      do: "hero-bookmark-solid",
-                      else: "hero-bookmark"
-                    )
-                  ]}>
-                  </span>
-                </button>
-              </div>
-            </div>
-
-            <div
-              :if={msg.content_type == "canvas"}
-              class="mt-1"
-            >
-              <div :if={Map.get(@canvases_by_id, msg.canvas_id)} class="min-w-0 overflow-hidden">
-                <.canvas_document
-                  canvas={Map.get(@canvases_by_id, msg.canvas_id)}
-                  inline={true}
-                  dom_id_base="chat-message-inline"
-                />
-              </div>
-
-              <div
-                :if={is_nil(Map.get(@canvases_by_id, msg.canvas_id))}
-                phx-click="canvas_open_mobile"
-                phx-value-message-id={msg.id}
-                class="rounded-lg bg-base-200 px-3 py-2 cursor-pointer hover:bg-base-300 transition-colors"
-              >
-                <p class="truncate text-sm font-semibold text-base-content">
-                  {CanvasHooks.message_canvas_title(msg, @canvases_by_id)}
-                </p>
-                <p class="text-[11px] uppercase tracking-widest text-base-content/50">
-                  Canvas
-                </p>
-              </div>
-            </div>
-
-            <div
-              :if={msg.content_type != "canvas" and present?(msg.content)}
-              class="text-sm text-base-content break-words chat-markdown"
-            >
-              {Platform.Chat.ContentRenderer.render_message(msg.content)}
-            </div>
-
-            <%!-- Image gallery --%>
-            <% images = Enum.filter(Map.get(@attachments_map, msg.id, []), &image_attachment?/1) %>
-            <% non_images =
-              Enum.reject(Map.get(@attachments_map, msg.id, []), &image_attachment?/1) %>
-            <div
-              :if={images != []}
-              class={"image-gallery count-#{min(length(images), 5)}"}
-            >
-              <div
-                :for={{attachment, idx} <- Enum.with_index(images)}
-                phx-click="open_lightbox"
-                phx-value-url={attachment_url(attachment)}
-                class={"gallery-item cursor-pointer#{if length(images) == 3 and idx == 0, do: " span-2", else: ""}"}
-              >
-                <img
-                  src={attachment_url(attachment)}
-                  alt={attachment.filename}
-                  loading="lazy"
-                  onerror="this.closest('.gallery-item').classList.add('broken')"
-                />
-                <div class="gallery-placeholder">
-                  <svg
-                    aria-hidden="true"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="2"
-                  >
-                    <rect x="3" y="3" width="18" height="18" rx="2" /><circle
-                      cx="8.5"
-                      cy="8.5"
-                      r="1.5"
-                    /><path d="M21 15l-5-5L5 21" />
-                  </svg>
-                  <span>{attachment.filename}</span>
-                </div>
-                <span class="gallery-filename">{attachment.filename}</span>
-                <div class="gallery-overlay">
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <circle cx="11" cy="11" r="8" /><line x1="21" y1="21" x2="16.65" y2="16.65" /><line
-                      x1="11"
-                      y1="8"
-                      x2="11"
-                      y2="14"
-                    /><line x1="8" y1="11" x2="14" y2="11" />
-                  </svg>
-                </div>
-              </div>
-            </div>
-            <div :if={non_images != []} class="mt-1 flex flex-col gap-2">
-              <a
-                :for={attachment <- non_images}
-                href={attachment_url(attachment)}
-                target="_blank"
-                rel="noopener noreferrer"
-                class="inline-flex w-fit items-center gap-2 rounded bg-base-200 px-2 py-1 text-sm text-primary hover:bg-base-300 hover:no-underline"
-              >
-                <span class="hero-paper-clip size-4"></span>
-                <span>{attachment.filename}</span>
-                <span class="text-xs text-base-content/40">
-                  ({format_bytes(attachment.byte_size)})
-                </span>
-              </a>
-            </div>
-
-            <div
-              :if={msg.reactions != []}
-              class="reaction-row flex flex-wrap gap-1 mt-0.5"
-            >
-              <button
-                :for={r <- msg.reactions}
-                id={"reaction-#{msg.id}-#{r.emoji}"}
-                phx-hook="ReactorPopover"
-                phx-click="react"
-                phx-value-message-id={msg.id}
-                phx-value-emoji={r.emoji}
-                data-emoji={r.emoji}
-                data-reactors={Jason.encode!(r.reactors)}
-                data-extra-count={r.extra_count}
-                aria-label={reactor_aria_label(r)}
-                class={[
-                  "reaction-pill flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs transition-colors",
-                  "hover:bg-base-300",
-                  r.reacted_by_me && "border-primary bg-primary/10 text-primary",
-                  !r.reacted_by_me && "border-base-300 text-base-content/60"
-                ]}
-              >
-                <span>{r.emoji}</span>
-                <span>{r.count}</span>
-              </button>
-
-              <button
-                class="reaction-add-btn flex items-center gap-1 rounded-full border border-dashed border-base-300 px-2 py-0.5 text-xs text-base-content/40 hover:bg-base-300 hover:text-base-content"
-                aria-label="Add reaction"
-                phx-click="open_reaction_picker"
-                phx-value-message-id={msg.id}
-              >
-                <span class="hero-plus size-4"></span>
-              </button>
-            </div>
-
-            <%!-- Inline thread: indicator + expanded thread --%>
-            <div :if={
-              Map.has_key?(@thread_previews, msg.id) or
-                MapSet.member?(@expanded_threads, msg.id)
-            }>
-              <%!-- Thread indicator (collapsed state) --%>
-              <div
-                :if={not MapSet.member?(@expanded_threads, msg.id)}
-                phx-click="toggle_inline_thread"
-                phx-value-message-id={msg.id}
-                class="thread-indicator"
-              >
-                <div class="thread-avatars">
-                  <div class="t-av ai">↩</div>
-                </div>
-                <span class="ti-count">
-                  {Map.get(@thread_previews, msg.id, %{}) |> Map.get(:reply_count, 0)}
-                  {if Map.get(@thread_previews, msg.id, %{}) |> Map.get(:reply_count, 0) == 1,
-                    do: "reply",
-                    else: "replies"}
-                </span>
-                <span
-                  :if={Map.get(@thread_previews, msg.id, %{}) |> Map.get(:last_reply_at)}
-                  class="ti-time"
-                >
-                  · {relative_time(
-                    Map.get(@thread_previews, msg.id, %{})
-                    |> Map.get(:last_reply_at)
-                  )}
-                </span>
-              </div>
-
-              <%!-- Expanded thread --%>
-              <div
-                :if={MapSet.member?(@expanded_threads, msg.id)}
-                class="thread-replies"
-                id={"inline-thread-#{msg.id}"}
-                phx-hook="InlineThread"
-              >
-                <div
-                  :for={tmsg <- Map.get(@inline_thread_messages, msg.id, [])}
-                  class={[
-                    "thread-reply",
-                    if(MapSet.member?(@agent_participant_ids, tmsg.participant_id),
-                      do: "agent-reply"
-                    )
-                  ]}
-                >
-                  <div
-                    class={[
-                      "msg-avatar",
-                      if(MapSet.member?(@agent_participant_ids, tmsg.participant_id),
-                        do: "ai",
-                        else: "human"
-                      )
-                    ]}
-                    style="width:28px;height:28px;font-size:10px"
-                  >
-                    {PresenceHooks.avatar_initial(@participants_map, tmsg.participant_id)}
-                  </div>
-                  <div class="msg-body">
-                    <div class="msg-header">
-                      <span class={[
-                        "msg-username",
-                        if(MapSet.member?(@agent_participant_ids, tmsg.participant_id),
-                          do: "ai-name"
-                        )
-                      ]}>
-                        {PresenceHooks.sender_name(@participants_map, tmsg)}
-                      </span>
-                      <span
-                        :if={MapSet.member?(@agent_participant_ids, tmsg.participant_id)}
-                        class="ai-badge"
-                      >
-                        AI
-                      </span>
-                      <.local_time
-                        id={"inline-thread-ts-#{tmsg.id}"}
-                        timestamp={tmsg.inserted_at}
-                        class="msg-time"
-                      />
-                    </div>
-                    <div class="msg-text">
-                      {Platform.Chat.ContentRenderer.render_message(tmsg.content)}
-                    </div>
-                  </div>
-                </div>
-
-                <%!-- Thread composer --%>
-                <div class="thread-composer" style="flex-direction: column; align-items: stretch;">
-                  <.form
-                    for={%{}}
-                    id={"inline-thread-compose-form-#{msg.id}"}
-                    phx-submit="send_inline_thread_message"
-                    class="thread-composer-form"
-                    style="position: relative;"
-                  >
-                    <%!-- @mention autocomplete dropdown (inline thread) --%>
-                    <div
-                      :if={
-                        @mention_suggestions != [] &&
-                          @mention_source == "inline-thread-compose-form-#{msg.id}"
-                      }
-                      style="position: absolute; bottom: 100%; left: 0; z-index: 50; width: 16rem; margin-bottom: 4px;"
-                    >
-                      <div class="rounded-xl border border-base-300 bg-base-100 shadow-lg overflow-hidden">
-                        <div class="py-1">
-                          <button
-                            :for={{suggestion, idx} <- Enum.with_index(@mention_suggestions)}
-                            type="button"
-                            data-mention-suggestion={if idx == 0, do: "first"}
-                            phx-click={
-                              JS.dispatch("chat:insert-mention",
-                                to: "#inline-thread-compose-#{msg.id}",
-                                detail: %{name: suggestion.display_name || "User"}
-                              )
-                            }
-                            class="flex w-full items-center gap-2 px-3 py-2 text-sm hover:bg-base-200 text-left transition-colors"
-                          >
-                            <div class="w-6 h-6 rounded-full bg-primary text-primary-content flex items-center justify-center text-xs font-bold flex-shrink-0">
-                              {(suggestion.display_name || "U")
-                              |> String.trim()
-                              |> String.first()
-                              |> String.upcase()}
-                            </div>
-                            <span class="flex-1 truncate font-medium">
-                              {suggestion.display_name || "User"}
-                            </span>
-                            <span class={[
-                              "rounded-full px-1.5 py-0.5 text-[10px] uppercase tracking-wider",
-                              suggestion.participant_type == "agent" &&
-                                "bg-primary/10 text-primary",
-                              suggestion.participant_type != "agent" &&
-                                "bg-base-300 text-base-content/50"
-                            ]}>
-                              {suggestion.participant_type}
-                            </span>
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                    <input
-                      type="hidden"
-                      name="inline_thread_compose[message_id]"
-                      value={msg.id}
-                    />
-                    <input
-                      type="text"
-                      name="inline_thread_compose[text]"
-                      id={"inline-thread-compose-#{msg.id}"}
-                      placeholder="Reply in thread..."
-                      autocomplete="off"
-                      class="thread-input"
-                      phx-hook="ComposeInput"
-                    />
-                    <button
-                      type="submit"
-                      class="thread-send"
-                      disabled={is_nil(@current_participant)}
-                      title="Reply"
-                    >
-                      <span class="hero-paper-airplane size-3.5 -rotate-45"></span>
-                    </button>
-                  </.form>
-                </div>
-
-                <%!-- Collapse thread --%>
-                <button
-                  phx-click="toggle_inline_thread"
-                  phx-value-message-id={msg.id}
-                  class="thread-collapse"
-                >
-                  ▲ Collapse thread
-                </button>
-              </div>
-            </div>
-          </div>
-          <%!-- end message body --%>
-
-          <%!-- Left-gutter reply button (desktop, hidden until hover via CSS) --%>
-          <button
-            phx-click="toggle_inline_thread"
-            phx-value-message-id={msg.id}
-            class="msg-reply-gutter"
-            title="Reply"
-          >
-            ↩
-          </button>
-        </div>
+          dom_id={dom_id}
+          msg={msg}
+          current_participant={@current_participant}
+          agent_participant_ids={@agent_participant_ids}
+          agent_colors_map={@agent_colors_map}
+          participants_map={@participants_map}
+          quick_emojis={@quick_emojis}
+          pinned_message_ids={@pinned_message_ids}
+          highlighted_message_id={@highlighted_message_id}
+          canvases_by_id={@canvases_by_id}
+          attachments_map={@attachments_map}
+          thread_previews={@thread_previews}
+          expanded_threads={@expanded_threads}
+          inline_thread_messages={@inline_thread_messages}
+          mention_suggestions={@mention_suggestions}
+          mention_source={@mention_source}
+        />
       </div>
 
       <%!-- Streaming reply bubbles --%>
@@ -1149,7 +779,7 @@
             :if={@mention_suggestions != [] && @mention_source == "compose-form"}
             class="relative"
           >
-            <div class="absolute bottom-0 left-0 z-50 w-64 rounded-xl border border-base-300 bg-base-100 shadow-lg overflow-hidden">
+            <div class="absolute bottom-0 left-0 z-50 w-64 rounded-2xl border border-base-content/10 bg-base-100 shadow-lg overflow-hidden">
               <div class="py-1">
                 <button
                   :for={{suggestion, idx} <- Enum.with_index(@mention_suggestions)}
@@ -1223,7 +853,8 @@
             <button
               type="submit"
               class="compose-pill-send"
-              disabled={is_nil(@current_participant)}
+              disabled={is_nil(@current_participant) or composer_empty?(@compose_form)}
+              aria-label="Send message"
               title="Send"
             >
               <span class="hero-paper-airplane size-4 -rotate-45"></span>
@@ -1443,3 +1074,85 @@
 </div>
 
 <.image_lightbox url={@lightbox_url} />
+
+<%!-- Per-message actions sheet (task 019e0f29 Stage 3 — fixes Marlowe's bug
+     report that the chat-message 3-dot dropdown didn't open on touch).
+     Single Sheet at the page bottom, sourced by :open_message_actions_id;
+     same pattern as the per-row task-actions sheet from Task 05 Stage 2.
+
+     Actions are the chat-message hover-toolbar's text-able actions
+     (Copy / Pin / Reply). Quick-emoji react row + reaction picker are
+     deferred — they'd need their own design beyond a simple action list.
+     The Edit item lands in Stage 4 once the editable-messages contract
+     ships. --%>
+<.sheet
+  :if={@open_message_actions_id}
+  id="message-actions-sheet"
+  open={true}
+  placement={:bottom}
+  on_close="close_message_actions"
+>
+  <:title>Message actions</:title>
+  <div class="flex flex-col gap-1">
+    <button
+      type="button"
+      phx-click={
+        Phoenix.LiveView.JS.push("toggle_inline_thread",
+          value: %{"message-id" => @open_message_actions_id}
+        )
+        |> Phoenix.LiveView.JS.push("close_message_actions")
+      }
+      class="flex items-center gap-3 rounded-lg px-4 py-3 text-left text-base-content hover:bg-base-200 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60"
+    >
+      <span class="hero-chat-bubble-left-right size-5 text-base-content/70"></span>
+      <span class="font-medium">Reply in thread</span>
+    </button>
+    <button
+      type="button"
+      phx-click={
+        Phoenix.LiveView.JS.push("pin_toggle", value: %{"message-id" => @open_message_actions_id})
+        |> Phoenix.LiveView.JS.push("close_message_actions")
+      }
+      class="flex items-center gap-3 rounded-lg px-4 py-3 text-left text-base-content hover:bg-base-200 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60"
+    >
+      <span class="hero-bookmark size-5 text-base-content/70"></span>
+      <span class="font-medium">Pin / Unpin</span>
+    </button>
+    <button
+      type="button"
+      phx-click={
+        Phoenix.LiveView.JS.push("open_reaction_picker",
+          value: %{"message-id" => @open_message_actions_id}
+        )
+        |> Phoenix.LiveView.JS.push("close_message_actions")
+      }
+      class="flex items-center gap-3 rounded-lg px-4 py-3 text-left text-base-content hover:bg-base-200 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60"
+    >
+      <span class="hero-face-smile size-5 text-base-content/70"></span>
+      <span class="font-medium">Add reaction</span>
+    </button>
+    <%!-- Edit affordance — Stage 4 of task 019e0f29. Visibility filter
+         (own non-agent text messages only, per Policy 3 of the editable-
+         messages contract) requires resolving the message struct from
+         @open_message_actions_id, which the LV streams don't allow at the
+         template level. Stage 5 wires both the editor + the visibility
+         filter together once the editor lifts the message into a dedicated
+         socket assign. For now the item always renders; clicks fire the
+         placeholder `edit_message_clicked` event that Stage 5 connects to
+         the editor. The server-side 403 in the editable-messages contract
+         (Policy 3) is the ultimate authz gate regardless. --%>
+    <button
+      type="button"
+      phx-click={
+        Phoenix.LiveView.JS.push("edit_message_clicked",
+          value: %{"message-id" => @open_message_actions_id}
+        )
+        |> Phoenix.LiveView.JS.push("close_message_actions")
+      }
+      class="flex items-center gap-3 rounded-lg px-4 py-3 text-left text-base-content hover:bg-base-200 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60"
+    >
+      <span class="hero-pencil-square size-5 text-base-content/70"></span>
+      <span class="font-medium">Edit message</span>
+    </button>
+  </div>
+</.sheet>
