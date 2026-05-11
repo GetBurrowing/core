@@ -23,6 +23,15 @@ defmodule PlatformWeb.Router do
     plug(PlatformWeb.Plugs.RequireAuth)
   end
 
+  # JSON-API auth: same session check as :require_auth but returns 401 JSON
+  # on failure instead of redirecting. Mounted on /api/* routes that need
+  # an authenticated browser session (e.g. PATCH /api/messages/:id).
+  pipeline :require_auth_api do
+    plug(:accepts, ["json"])
+    plug(:fetch_session)
+    plug(PlatformWeb.Plugs.RequireAuthAPI)
+  end
+
   # Attachment reads accept either a browser session or a runtime bearer
   # token. The plug assigns `conn.assigns.principal` in either shape so the
   # controller can authorize against the attachment's `space_id`.
@@ -94,6 +103,16 @@ defmodule PlatformWeb.Router do
   scope "/api/internal", PlatformWeb do
     pipe_through(:api)
     post("/usage-events", UsageEventController, :create)
+  end
+
+  # Editable-messages API (task 019df568-97a4). PATCH for author-only
+  # edits; GET versions for the Version History popover. Both require
+  # an authenticated browser session via :require_auth_api.
+  scope "/api/messages", PlatformWeb do
+    pipe_through(:require_auth_api)
+
+    patch("/:id", MessageController, :update)
+    get("/:id/versions", MessageController, :versions)
   end
 
   scope "/api/meetings", PlatformWeb do
