@@ -1791,6 +1791,13 @@ body, .font-fabrikam, * {
    ──────────────────────────────────────────────────────────────────── */
 :root {
   --bottom-nav-height: 0px;
+  /* Persistent meeting bar height. Set inline on the shell root to 3rem
+     when `@meeting_active` is true (see shell.html.heex). The :root
+     default of 0px keeps any `calc(... + var(--meeting-bar-height))`
+     consumer well-behaved when no meeting is active. Reserving this on
+     the shell's padding-bottom is what keeps the chat composer above
+     the fixed-positioned meeting bar (meeting_bar_live.ex:52). */
+  --meeting-bar-height: 0px;
 }
 @media (max-width: 1023.98px) {
   :root {

@@ -1,4 +1,7 @@
-<div class="flex h-screen overflow-hidden bg-base-100 safe-area-top">
+<div
+  class="flex h-screen overflow-hidden bg-base-100 safe-area-top pb-[var(--meeting-bar-height,0px)]"
+  style={"--meeting-bar-height: " <> (if @meeting_active, do: "3rem", else: "0px")}
+>
   <%!-- Sidebar collapse persistence hook (localStorage) --%>
   <div
     id="sidebar-collapse-hook"
