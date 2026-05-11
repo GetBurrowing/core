@@ -45,12 +45,13 @@
       of <span class="font-medium text-base-content/70">{@total_pages}</span>
     </p>
 
-    <div
-      :if={@actions == []}
-      class="rounded-2xl border border-base-300 bg-base-100 p-8 text-center text-sm text-base-content/60"
-    >
-      No AI activity in this window. Try a wider range or refresh to check again.
-    </div>
+    <%!-- Empty state per docs/design-system/03-voice.md §5.4 — Activity uses
+         :minimal per Marlowe's 2026-05-09 pin (no conversational chrome). --%>
+    <.empty_state :if={@actions == []} variant={:minimal}>
+      <:body>
+        When your agents start working, what they do appears here. Try a wider date range, or connect an agent to start.
+      </:body>
+    </.empty_state>
 
     <ul :if={@actions != []} class="space-y-3" role="list">
       <li

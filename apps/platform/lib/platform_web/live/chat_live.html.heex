@@ -50,9 +50,22 @@
         <% end %>
       </.link>
 
-      <div :if={@channels == []} class="px-4 py-2 text-xs text-base-content/40">
-        No channels yet
-      </div>
+      <%!-- Empty state per docs/design-system/03-voice.md §5.1 — brand-new
+           user with no spaces. Conversational variant invites the user to
+           create a space or connect their first agent.
+
+           Chip events wired to EXISTING functionality (best practice: don't
+           fabricate stub handlers — reuse the closest semantic match):
+           - "+ Create a space" → new_channel_open (existing handler, opens
+             the new-channel modal; channels ARE the Suite space concept).
+           - "+ Connect an agent" → JS.navigate("/control") (Agent Resources
+             page, where you connect agents). --%>
+      <.empty_state :if={@channels == []} variant={:conversational}>
+        <:system_message>— no spaces yet —</:system_message>
+        <:body>Welcome to Suite. To get started, create a space or connect your agent.</:body>
+        <:chips label="+ Create a space" event="new_channel_open" />
+        <:chips label="+ Connect an agent" event={JS.navigate(~p"/control")} />
+      </.empty_state>
     </nav>
 
     <%!-- Direct Messages section --%>
@@ -88,9 +101,13 @@
         <% end %>
       </.link>
 
-      <div :if={@dm_conversations == []} class="px-4 py-2 text-xs text-base-content/40">
-        No conversations yet
-      </div>
+      <%!-- Empty state per docs/design-system/03-voice.md §5.1 — DMs are
+           empty. Conversational variant with chip to start a DM. --%>
+      <.empty_state :if={@dm_conversations == []} variant={:conversational}>
+        <:system_message>— no DMs yet —</:system_message>
+        <:body>Direct messages will show up here once you start a conversation.</:body>
+        <:chips label="+ Start a DM" event="new_conversation_open" />
+      </.empty_state>
     </nav>
 
     <%!-- Drag handle for sidebar resize --%>
@@ -180,19 +197,23 @@
           <% end %>
         </.link>
 
-        <div
+        <%!-- Empty state per docs/design-system/03-voice.md §5.1 — mobile
+             combined view (no channels AND no DMs). Chip event is a JS
+             chain so opening the new-conversation flow also closes the
+             mobile browser overlay. --%>
+        <.empty_state
           :if={@channels == [] and @dm_conversations == []}
-          class="px-4 py-6 text-sm text-base-content/40 text-center"
+          variant={:conversational}
         >
-          <p>No conversations yet</p>
-          <button
-            type="button"
-            phx-click={JS.push("new_conversation_open") |> JS.push("close_mobile_browser")}
-            class="mt-3 inline-flex items-center gap-2 rounded-lg border border-base-300 bg-base-100 px-4 py-2 text-sm font-medium text-primary hover:bg-base-200"
-          >
-            <span class="hero-plus size-4"></span> Start your first conversation
-          </button>
-        </div>
+          <:system_message>— no conversations yet —</:system_message>
+          <:body>
+            Start your first conversation. Pick a channel or DM someone in your space.
+          </:body>
+          <:chips
+            label="+ Start your first conversation"
+            event={JS.push("new_conversation_open") |> JS.push("close_mobile_browser")}
+          />
+        </.empty_state>
       </nav>
     </div>
   <% end %>
@@ -447,12 +468,25 @@
             </p>
           </button>
 
-          <div
-            :if={@search_results == []}
-            class="rounded-xl border border-dashed border-base-300 bg-base-100 px-3 py-4 text-sm text-base-content/50"
+          <%!-- Empty state per docs/design-system/03-voice.md §5.5 — search
+               no-results uses :standard with the magnifying-glass icon. --%>
+          <.empty_state
+            :if={@search_results == [] and present?(@search_query)}
+            variant={:standard}
+            icon_name="hero-magnifying-glass"
           >
-            No messages matched this search yet.
-          </div>
+            <:title>No matches</:title>
+            <:body>No messages match "{@search_query}".</:body>
+            <:actions>
+              <button
+                type="button"
+                phx-click="search_clear"
+                class="btn btn-ghost btn-sm w-full"
+              >
+                Clear search
+              </button>
+            </:actions>
+          </.empty_state>
         </div>
       </div>
 

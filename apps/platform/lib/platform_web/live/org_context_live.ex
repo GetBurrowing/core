@@ -407,7 +407,7 @@ defmodule PlatformWeb.OrgContextLive do
                 />
               <% end %>
             <% else %>
-              <.empty_state />
+              <.no_file_selected_panel />
             <% end %>
           <% end %>
         <% end %>
@@ -418,7 +418,11 @@ defmodule PlatformWeb.OrgContextLive do
 
   # ── Sub-components ──────────────────────────────────────────────────────
 
-  defp empty_state(assigns) do
+  # Renamed from `empty_state` to avoid colliding with the new
+  # PlatformWeb.Components.EmptyState global import (task 019e0d4b-9576
+  # Stage 1). This is a "select a file" hint, not a true empty-list state,
+  # so it stays a local component rather than migrating to <.empty_state>.
+  defp no_file_selected_panel(assigns) do
     ~H"""
     <div class="flex flex-1 items-center justify-center">
       <div class="text-center">

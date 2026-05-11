@@ -315,12 +315,17 @@
             </div>
           </div>
 
-          <div
-            :if={Map.get(@columns, col_key, []) == []}
-            class="flex flex-1 items-center justify-center p-4 text-xs text-base-content/30"
-          >
-            No tasks
-          </div>
+          <%!-- Per-column empty state. SPEC DEVIATION: spec §5.3 says
+               :conversational with chips, but that's per-COLUMN here on a
+               kanban with 4-5 columns — N Saru bubbles + chip pairs would
+               clutter the board. :minimal keeps the column readable. The
+               broader "no tasks anywhere" board-level conversational state
+               is a separate concern that doesn't exist on this surface
+               (no board-level @all_tasks == [] check); add later if Marlowe
+               wants the V3 voice on the kanban-empty case. --%>
+          <.empty_state :if={Map.get(@columns, col_key, []) == []} variant={:minimal}>
+            <:body>No tasks</:body>
+          </.empty_state>
         </div>
       </div>
     </div>
