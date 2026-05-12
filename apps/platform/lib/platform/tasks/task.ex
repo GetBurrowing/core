@@ -5,7 +5,7 @@ defmodule Platform.Tasks.Task do
   @primary_key {:id, Platform.Types.UUIDv7, autogenerate: true}
   @foreign_key_type :binary_id
 
-  @statuses ~w(backlog planning in_progress in_review deploying done blocked)
+  @statuses ~w(backlog planning in_progress in_review deploying done blocked stack_pending)
   @priorities ~w(low medium high critical)
 
   # Per-phase assignee keys. Order matches the natural lifecycle progression.
@@ -19,6 +19,7 @@ defmodule Platform.Tasks.Task do
   schema "tasks" do
     belongs_to(:project, Platform.Tasks.Project)
     belongs_to(:epic, Platform.Tasks.Epic)
+    belongs_to(:stack, Platform.Tasks.Stack)
     field(:title, :string)
     field(:description, :string)
     field(:status, :string, default: "backlog")
@@ -35,6 +36,7 @@ defmodule Platform.Tasks.Task do
     field(:deploy_strategy, :map)
     field(:dependencies, {:array, :map}, default: [])
     field(:metadata, :map, default: %{})
+    field(:stack_position, :integer)
     field(:reported_by, :string)
     field(:deleted_at, :utc_datetime_usec)
 
@@ -47,7 +49,7 @@ defmodule Platform.Tasks.Task do
   def priorities, do: @priorities
   def phases, do: @phases
 
-  @deletable_statuses ~w(backlog planning blocked done)
+  @deletable_statuses ~w(backlog planning blocked done stack_pending)
   def deletable_statuses, do: @deletable_statuses
 
   def deletable?(%__MODULE__{status: status}), do: status in @deletable_statuses
@@ -57,6 +59,7 @@ defmodule Platform.Tasks.Task do
     |> cast(attrs, [
       :project_id,
       :epic_id,
+      :stack_id,
       :title,
       :description,
       :status,
@@ -68,6 +71,7 @@ defmodule Platform.Tasks.Task do
       :deploy_strategy,
       :dependencies,
       :metadata,
+      :stack_position,
       :reported_by,
       :deleted_at
     ])
@@ -78,6 +82,7 @@ defmodule Platform.Tasks.Task do
     |> validate_dependencies()
     |> foreign_key_constraint(:project_id)
     |> foreign_key_constraint(:epic_id)
+    |> foreign_key_constraint(:stack_id)
   end
 
   # `phase_assignees` keys must be in `@phases`. Each value should be a map

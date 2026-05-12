@@ -417,6 +417,44 @@ defmodule Platform.Tasks.TaskTest do
     end
   end
 
+  describe "stack_pending status + stack assoc" do
+    test "stack_pending is included in statuses/0" do
+      assert "stack_pending" in Task.statuses()
+    end
+
+    test "stack_pending is included in deletable_statuses/0" do
+      assert "stack_pending" in Task.deletable_statuses()
+    end
+
+    test "changeset accepts status: stack_pending", %{project: project} do
+      changeset =
+        Task.changeset(%Task{}, %{
+          project_id: project.id,
+          title: "Stack pending task",
+          status: "stack_pending"
+        })
+
+      assert changeset.valid?
+      assert get_change(changeset, :status) == "stack_pending"
+    end
+
+    test "changeset casts stack_id and stack_position cleanly", %{project: project} do
+      stack_uuid = Ecto.UUID.generate()
+
+      changeset =
+        Task.changeset(%Task{}, %{
+          project_id: project.id,
+          title: "Stacked task",
+          stack_id: stack_uuid,
+          stack_position: 1
+        })
+
+      assert changeset.valid?
+      assert get_change(changeset, :stack_id) == stack_uuid
+      assert get_change(changeset, :stack_position) == 1
+    end
+  end
+
   defp errors_on(changeset) do
     Ecto.Changeset.traverse_errors(changeset, fn {message, opts} ->
       Regex.replace(~r"%{(\w+)}", message, fn _, key ->
