@@ -68,6 +68,14 @@ defmodule PlatformWeb.ChatLive do
       |> assign(:show_new_conversation_modal, false)
       # Per-message actions sheet (3-dot menu): nil when closed, msg.id when open
       |> assign(:open_message_actions_id, nil)
+      # Inline edit state (task 019e0f29 Stage 5). `editing_message_id` is
+      # the id of the message whose bubble is currently swapped for the
+      # editor; nil means no edit in progress. `pending_save_edit` carries
+      # %{message_id, body} when the user has clicked Save on an edit
+      # that shortens the original — the removal-warning modal is open and
+      # waiting on their confirmation.
+      |> assign(:editing_message_id, nil)
+      |> assign(:pending_save_edit, nil)
       |> assign(:show_settings, false)
       |> assign(:quick_emojis, @quick_emojis)
       |> assign(:push_permission, "unknown")
@@ -218,13 +226,122 @@ defmodule PlatformWeb.ChatLive do
     {:noreply, assign(socket, :open_message_actions_id, nil)}
   end
 
-  # Placeholder for the Edit affordance (task 019e0f29 Stage 4). The
-  # inline editor + author/freeze enforcement land in Stage 5, which
-  # consumes the editable-messages contract's PATCH /api/messages/:id
-  # path with the 409-on-frozen response. For now we accept the click
-  # silently so the UI doesn't crash; Stage 5 swaps in the editor.
-  def handle_event("edit_message_clicked", _params, socket) do
-    {:noreply, socket}
+  # ── Inline edit flow (task 019e0f29 Stage 5) ────────────────────────────
+  # Stage 4 left a placeholder; Stage 5 wires the full editor.
+  # `edit_message_clicked` opens the editor by setting editing_message_id;
+  # the chat_message component swaps the bubble for chat_message_editor
+  # when @editing_message_id matches the row's msg id. `cancel_edit`
+  # closes the editor. `save_edit` is the form-submit handler — it
+  # branches on the `removes_content` flag the JS hook set:
+  #   - "true"  → stash the pending edit, surface the removal-warning
+  #               modal (Section F.4 Policy 4 of the contract).
+  #   - "false" → fire the edit immediately.
+  # `confirm_save_edit` / `cancel_save_edit` handle the modal buttons.
+
+  def handle_event("edit_message_clicked", params, socket) do
+    msg_id = params["message-id"] || params["message_id"]
+    {:noreply, assign(socket, :editing_message_id, msg_id)}
+  end
+
+  def handle_event("cancel_edit", _params, socket) do
+    {:noreply,
+     socket
+     |> assign(:editing_message_id, nil)
+     |> assign(:pending_save_edit, nil)}
+  end
+
+  def handle_event(
+        "save_edit",
+        %{"message_id" => message_id, "body" => body, "removes_content" => flag},
+        socket
+      ) do
+    if flag == "true" do
+      # Stash the pending edit and let the removal-warning modal open
+      # via the @pending_save_edit assign. Keep the editor open in the
+      # background so a Cancel on the modal keeps the user's draft.
+      {:noreply, assign(socket, :pending_save_edit, %{message_id: message_id, body: body})}
+    else
+      apply_save_edit(socket, message_id, body)
+    end
+  end
+
+  def handle_event("confirm_save_edit", _params, socket) do
+    case socket.assigns.pending_save_edit do
+      %{message_id: message_id, body: body} ->
+        socket = assign(socket, :pending_save_edit, nil)
+        apply_save_edit(socket, message_id, body)
+
+      _ ->
+        {:noreply, socket}
+    end
+  end
+
+  def handle_event("cancel_save_edit", _params, socket) do
+    # Modal dismissed; keep the editor open with the user's draft so
+    # they can revise.
+    {:noreply, assign(socket, :pending_save_edit, nil)}
+  end
+
+  defp apply_save_edit(socket, message_id, body) do
+    participant = socket.assigns.current_participant
+
+    with %Platform.Chat.Message{} = msg <- Platform.Repo.get(Platform.Chat.Message, message_id),
+         {:ok, original} <- {:ok, msg},
+         :ok <- authorize_edit(msg, participant) do
+      case Platform.Chat.Messages.Edit.apply_edit(msg, participant, body) do
+        {:ok, updated} ->
+          {:noreply,
+           socket
+           |> assign(:editing_message_id, nil)
+           |> MessagesHooks.stream_insert_message(updated)}
+
+        {:error, :frozen, freezing_action} ->
+          # Revert the bubble (we didn't optimistically swap content, but
+          # the editor is open — close it and toast). Per Section F.4 of
+          # the contract, name the freezing participant when known.
+          {:noreply,
+           socket
+           |> assign(:editing_message_id, nil)
+           |> MessagesHooks.stream_insert_message(original)
+           |> put_flash(:error, frozen_toast_message(freezing_action))}
+
+        {:error, _changeset} ->
+          {:noreply,
+           socket
+           |> assign(:editing_message_id, nil)
+           |> MessagesHooks.stream_insert_message(original)
+           |> put_flash(:error, "Could not save your edit. Try again.")}
+      end
+    else
+      nil ->
+        # Message disappeared between edit-open and save.
+        {:noreply,
+         socket
+         |> assign(:editing_message_id, nil)
+         |> put_flash(:error, "Message no longer exists.")}
+
+      {:error, :forbidden} ->
+        {:noreply,
+         socket
+         |> assign(:editing_message_id, nil)
+         |> put_flash(:error, "You can only edit your own messages.")}
+    end
+  end
+
+  defp authorize_edit(_msg, nil), do: {:error, :forbidden}
+
+  defp authorize_edit(%Platform.Chat.Message{participant_id: pid}, %{id: pid}), do: :ok
+
+  defp authorize_edit(_msg, _participant), do: {:error, :forbidden}
+
+  defp frozen_toast_message(freezing_action) do
+    case freezing_action do
+      %{participant_display_name: name} when is_binary(name) and name != "" ->
+        "#{name} began work on this message while you were editing — your edit was not saved."
+
+      _ ->
+        "An agent began work on this message while you were editing — your edit was not saved."
+    end
   end
 
   # Coordinator: Search event that also writes MessagesHooks state

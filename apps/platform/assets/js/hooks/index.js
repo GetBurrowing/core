@@ -22,6 +22,7 @@ import MeetingRoom from "./meeting_room"
 import MeetingSoundboard from "./meeting_soundboard"
 import MeetingTimer from "./meeting_timer"
 import MermaidDiagram from "./mermaid_diagram"
+import MessageEditor from "./message_editor"
 import PushSubscribe from "./push_subscribe"
 import ReactorPopover from "./reactor_popover"
 import ResizableSidebar from "./resizable_sidebar"
@@ -55,6 +56,7 @@ export default {
   MeetingSoundboard,
   MeetingTimer,
   MermaidDiagram,
+  MessageEditor,
   MessageLift,
   PushSubscribe,
   ReactorPopover,

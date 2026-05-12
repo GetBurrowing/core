@@ -37,6 +37,7 @@ defmodule PlatformWeb.Components.ChatMessage do
   attr :inline_thread_messages, :map, required: true
   attr :mention_suggestions, :list, default: []
   attr :mention_source, :any, default: nil
+  attr :editing_message_id, :any, default: nil
 
   def chat_message(assigns) do
     ~H"""
@@ -259,8 +260,19 @@ defmodule PlatformWeb.Components.ChatMessage do
           </div>
         </div>
 
+        <%!-- Inline editor (task 019e0f29 Stage 5). When this message is
+             the one being edited, render the editor in place of the
+             bubble. Otherwise render the bubble as before. --%>
+        <PlatformWeb.Components.ChatMessageEditor.chat_message_editor
+          :if={@editing_message_id == @msg.id}
+          msg={@msg}
+        />
+
         <div
-          :if={@msg.content_type != "canvas" and present?(@msg.content)}
+          :if={
+            @editing_message_id != @msg.id and @msg.content_type != "canvas" and
+              present?(@msg.content)
+          }
           class="text-sm text-base-content break-words chat-markdown"
         >
           {Platform.Chat.ContentRenderer.render_message(@msg.content)}

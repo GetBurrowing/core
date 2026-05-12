@@ -36,7 +36,8 @@ defmodule PlatformWeb.MessageController do
 
   import Ecto.Query
 
-  alias Platform.Chat.{Message, MessageVersions, Participant, PubSub}
+  alias Platform.Chat.{Message, MessageVersions, Participant}
+  alias Platform.Chat.Messages.Edit
   alias Platform.Repo
 
   @max_content_length 10_000
@@ -177,83 +178,23 @@ defmodule PlatformWeb.MessageController do
   # ──────────────────────────────────────────────────────────────────────────
 
   defp apply_edit(conn, message, participant, content) do
-    now = DateTime.utc_now()
-    previous_content = message.content || ""
-
-    txn_result =
-      Repo.transaction(fn ->
-        with {:ok, updated} <-
-               message |> Message.changeset(%{content: content, edited_at: now}) |> Repo.update(),
-             {:ok, version} <-
-               MessageVersions.record_edit(updated.id, %{
-                 content: content,
-                 edited_at: now,
-                 edited_by_participant_id: participant.id,
-                 edited_by_display_name: participant.display_name || "(unknown)"
-               }) do
-          {updated, version}
-        else
-          {:error, changeset} -> Repo.rollback(changeset)
-        end
-      end)
-
-    case txn_result do
-      {:ok, {updated, version}} ->
-        broadcast_edit(updated, previous_content, content, version, participant)
-        emit_telemetry(updated)
+    # All freeze-check + transactional update + broadcast + telemetry
+    # logic lives in Platform.Chat.Messages.Edit so the LiveView's
+    # inline editor (task 019e0f29 Stage 5) uses the same code path.
+    case Edit.apply_edit(message, participant, content) do
+      {:ok, updated} ->
         render_envelope(conn, updated)
 
+      {:error, :frozen, freezing_action} ->
+        # Defensive — `check_not_frozen/1` runs upstream, but the
+        # message could have been frozen by another process between
+        # the fetch and the apply. Map to the same 409 envelope.
+        render_error(conn, :conflict, "frozen", %{freezing_action: freezing_action})
+
       {:error, _changeset} ->
-        # Schema-level rejection (e.g. content too long that the DB
-        # would refuse). Should be rare since we validated above; fall
-        # back to 422 with the changeset's errors.
         render_error(conn, :unprocessable_entity, "validation_failed", %{})
     end
   end
-
-  defp broadcast_edit(updated, previous_content, new_content, version, participant) do
-    payload = %{
-      message: updated,
-      previous_content: previous_content,
-      version_number: version.version_number,
-      edited_by_participant_id: participant.id,
-      removed_substrings: compute_removed_substrings(previous_content, new_content)
-    }
-
-    PubSub.broadcast(updated.space_id, {:message_edited, payload})
-  end
-
-  defp emit_telemetry(message) do
-    :telemetry.execute(
-      [:platform, :chat, :message_edited],
-      %{system_time: System.system_time()},
-      %{message_id: message.id, space_id: message.space_id}
-    )
-  end
-
-  # Section C.3 — detect shortened / removed-substring edits so in-context
-  # agents can react to retractions. Algorithm: word-tokenize previous and
-  # new content; collect runs of consecutive words that appear in previous
-  # but not in new. Detection only — false positives are acceptable, false
-  # negatives are not. Whitespace defines word boundaries.
-  defp compute_removed_substrings(previous, new) do
-    prev_words = String.split(previous, ~r/\s+/, trim: true)
-    new_set = MapSet.new(String.split(new, ~r/\s+/, trim: true))
-
-    {final_run, runs} =
-      Enum.reduce(prev_words, {[], []}, fn word, {current_run, acc} ->
-        if MapSet.member?(new_set, word) do
-          {[], maybe_append_run(current_run, acc)}
-        else
-          {[word | current_run], acc}
-        end
-      end)
-
-    final_run |> maybe_append_run(runs) |> Enum.reverse()
-  end
-
-  defp maybe_append_run([], acc), do: acc
-  defp maybe_append_run(run, acc), do: [run |> Enum.reverse() |> Enum.join(" ") | acc]
 
   # ──────────────────────────────────────────────────────────────────────────
   # Rendering

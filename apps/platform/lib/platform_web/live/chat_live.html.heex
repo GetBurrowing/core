@@ -706,6 +706,7 @@
           inline_thread_messages={@inline_thread_messages}
           mention_suggestions={@mention_suggestions}
           mention_source={@mention_source}
+          editing_message_id={@editing_message_id}
         />
       </div>
 
@@ -1087,6 +1088,49 @@
      deferred — they'd need their own design beyond a simple action list.
      The Edit item lands in Stage 4 once the editable-messages contract
      ships. --%>
+<%!-- Removal-warning modal (task 019e0f29 Stage 5, contract Section F.4
+     Policy 4). Surfaces only when the user's edit shortens / removes
+     content. Copy locked in by Marlowe on 2026-05-11 review round 1:
+     terse, factual, no editorial. Buttons: Cancel (keeps editor open
+     with the user's draft) / Edit anyway (fires the actual edit). --%>
+<div
+  :if={@pending_save_edit}
+  id="edit-removal-warning"
+  class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
+  phx-window-keydown="cancel_save_edit"
+  phx-key="escape"
+>
+  <div
+    role="dialog"
+    aria-modal="true"
+    aria-labelledby="edit-removal-warning-title"
+    class="w-full max-w-md rounded-2xl border border-base-content/10 bg-base-100 p-5 shadow-xl"
+  >
+    <h2 id="edit-removal-warning-title" class="text-base font-semibold text-base-content">
+      Edit removes text.
+    </h2>
+    <p class="mt-2 text-sm text-base-content/70">
+      Agents that already read this still have the original in their memory.
+    </p>
+    <div class="mt-4 flex items-center justify-end gap-2">
+      <button
+        type="button"
+        phx-click="cancel_save_edit"
+        class="rounded-md px-3 py-1.5 text-sm text-base-content/70 hover:bg-base-300 hover:text-base-content transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60"
+      >
+        Cancel
+      </button>
+      <button
+        type="button"
+        phx-click="confirm_save_edit"
+        class="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-content hover:bg-primary/90 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60"
+      >
+        Edit anyway
+      </button>
+    </div>
+  </div>
+</div>
+
 <.sheet
   :if={@open_message_actions_id}
   id="message-actions-sheet"
