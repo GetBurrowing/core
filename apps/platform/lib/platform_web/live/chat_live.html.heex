@@ -1088,6 +1088,19 @@
      deferred — they'd need their own design beyond a simple action list.
      The Edit item lands in Stage 4 once the editable-messages contract
      ships. --%>
+<%!-- Listener for scroll-to-message events from the correction header
+     (task 019e0f29 Stage 6, contract Section D.4). Hidden div; the
+     ChatScrollToMessage hook drives smooth scroll + brief pulse. --%>
+<div id="chat-scroll-to-message-listener" phx-hook="ChatScrollToMessage" class="hidden"></div>
+
+<%!-- Version history popover (task 019e0f29 Stage 6, contract Section D.2).
+     Surfaces when @version_history is set (clicking the `(edited)` affix on
+     a message bubble). --%>
+<PlatformWeb.Components.ChatVersionHistory.chat_version_history
+  open={@version_history != nil}
+  versions={(@version_history && @version_history.versions) || []}
+/>
+
 <%!-- Removal-warning modal (task 019e0f29 Stage 5, contract Section F.4
      Policy 4). Surfaces only when the user's edit shortens / removes
      content. Copy locked in by Marlowe on 2026-05-11 review round 1:

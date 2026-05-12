@@ -1165,6 +1165,23 @@ body, .font-fabrikam, * {
   50% { border-color: var(--cyan-muted); }
 }
 
+/* Chat message "you've been scrolled to" pulse (task 019e0f29 Stage 6).
+   Briefly highlights a message row when the user clicks the
+   "Correction to earlier message" header on a correction (contract
+   Section D.4). The .chat-message-pulse class is added by the
+   ChatScrollToMessage JS hook for ~1.5s and then removed. */
+@keyframes chat-message-pulse-once {
+  0%, 100% { background-color: transparent; }
+  20%, 60% { background-color: rgba(0, 191, 255, 0.18); }
+}
+.chat-message-pulse {
+  animation: chat-message-pulse-once 1.5s ease-in-out;
+  border-radius: 1rem;
+}
+@media (prefers-reduced-motion: reduce) {
+  .chat-message-pulse { animation: none; }
+}
+
 /* ── Fabrikam Design System — Pill-shaped Chat Input Bar ─────────────── */
 .compose-input-area {
   padding: 12px 20px 16px;

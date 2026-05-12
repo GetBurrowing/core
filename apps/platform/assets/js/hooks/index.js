@@ -1,3 +1,4 @@
+import ChatScrollToMessage from "./chat_scroll_to_message"
 import ChatState from "./chat_state"
 import CodeBlock from "./code_block"
 import ComposeInput from "./compose_input"
@@ -33,6 +34,7 @@ import ThemeToggle from "./theme_toggle"
 import UploadButton from "./upload_button"
 
 export default {
+  ChatScrollToMessage,
   ChatState,
   CodeBlock,
   ComposeInput,

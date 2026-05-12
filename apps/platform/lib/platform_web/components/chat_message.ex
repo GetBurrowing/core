@@ -114,6 +114,21 @@ defmodule PlatformWeb.Components.ChatMessage do
             timestamp={@msg.inserted_at}
             class="text-[10px] text-base-content/40"
           />
+          <%!-- (edited) affix per contract Section D.1 — visible only on
+               messages with >1 version row (i.e. at least one edit on top
+               of the original v1). Clicking opens the version history
+               popover (Section D.2). --%>
+          <button
+            :if={is_integer(Map.get(@msg, :versions_count)) && @msg.versions_count > 1}
+            type="button"
+            phx-click="show_version_history"
+            phx-value-message-id={@msg.id}
+            aria-label="Show edit history"
+            title="View version history"
+            class="text-[10px] text-base-content/40 hover:text-base-content/70 hover:underline transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60 focus-visible:ring-offset-1 focus-visible:ring-offset-base-100 rounded"
+          >
+            (edited)
+          </button>
 
           <div class="ml-auto hidden group-hover:flex items-center gap-1">
             <button
@@ -259,6 +274,21 @@ defmodule PlatformWeb.Components.ChatMessage do
             </p>
           </div>
         </div>
+
+        <%!-- Correction header (task 019e0f29 Stage 6, contract Section D.4).
+             When this message is a correction (`corrects_message_id` non-nil),
+             prepend a clickable header that scrolls to the original message
+             and briefly pulses it via a CSS keyframe. --%>
+        <button
+          :if={Map.get(@msg, :corrects_message_id)}
+          type="button"
+          phx-click="scroll_to_message"
+          phx-value-id={@msg.corrects_message_id}
+          class="flex items-center gap-1 text-[11px] text-base-content/60 hover:text-base-content/80 transition-colors mb-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60 rounded"
+        >
+          <span class="hero-arrow-up-circle size-3.5"></span>
+          <span>Correction to earlier message</span>
+        </button>
 
         <%!-- Inline editor (task 019e0f29 Stage 5). When this message is
              the one being edited, render the editor in place of the

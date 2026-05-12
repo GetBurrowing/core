@@ -76,6 +76,9 @@ defmodule PlatformWeb.ChatLive do
       # waiting on their confirmation.
       |> assign(:editing_message_id, nil)
       |> assign(:pending_save_edit, nil)
+      # Version history popover (task 019e0f29 Stage 6). nil when closed;
+      # %{message_id, versions} when open. Filled by show_version_history.
+      |> assign(:version_history, nil)
       |> assign(:show_settings, false)
       |> assign(:quick_emojis, @quick_emojis)
       |> assign(:push_permission, "unknown")
@@ -224,6 +227,27 @@ defmodule PlatformWeb.ChatLive do
 
   def handle_event("close_message_actions", _params, socket) do
     {:noreply, assign(socket, :open_message_actions_id, nil)}
+  end
+
+  # ── Version history popover (task 019e0f29 Stage 6, contract Section D.2)
+  # Clicking the `(edited)` affix opens this; the popover lists prior
+  # versions newest-first.
+
+  def handle_event("show_version_history", %{"message-id" => message_id}, socket) do
+    versions = Platform.Chat.MessageVersions.list_versions(message_id)
+
+    {:noreply, assign(socket, :version_history, %{message_id: message_id, versions: versions})}
+  end
+
+  def handle_event("close_version_history", _params, socket) do
+    {:noreply, assign(socket, :version_history, nil)}
+  end
+
+  # Click target on the "Correction to earlier message" header (Section D.4).
+  # Pushes a custom event to the client so a small JS handler can scroll the
+  # message stream to the target and apply a brief pulse animation.
+  def handle_event("scroll_to_message", %{"id" => target_id}, socket) do
+    {:noreply, push_event(socket, "chat:scroll-to-message", %{id: target_id})}
   end
 
   # ── Inline edit flow (task 019e0f29 Stage 5) ────────────────────────────

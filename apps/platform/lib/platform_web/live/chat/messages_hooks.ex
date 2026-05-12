@@ -138,7 +138,11 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
       Chat.mark_space_read(participant.id, latest_message.id)
     end
 
-    enriched = enrich_messages_with_reactions(messages, socket)
+    enriched =
+      messages
+      |> Enum.map(&enrich_versions_count/1)
+      |> enrich_messages_with_reactions(socket)
+
     attachments_map = build_attachments_map(messages)
     thread_previews = Chat.thread_previews_for_messages(Enum.map(messages, & &1.id))
 
@@ -167,7 +171,10 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
   @spec stream_insert_message(Phoenix.LiveView.Socket.t(), map(), [map()]) ::
           Phoenix.LiveView.Socket.t()
   def stream_insert_message(socket, message, attachments \\ []) do
-    enriched = enrich_with_reactions(message, socket)
+    enriched =
+      message
+      |> enrich_versions_count()
+      |> enrich_with_reactions(socket)
 
     socket
     |> stream_insert(:messages, enriched)
@@ -511,6 +518,21 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
      |> SearchHooks.maybe_refresh()}
   end
 
+  # Realtime edit event (task 019e0f29 Stage 6, contract Section c).
+  # `Platform.Chat.Messages.Edit.apply_edit/3` broadcasts this on the space
+  # topic after every successful edit. The payload carries the post-edit
+  # `Message` struct plus diff metadata. Stream-update the row so all
+  # subscribers see the new body + bumped `versions_count` + refreshed
+  # `(edited)` affix without a page reload. Agents interested in the diff
+  # (Section F.1 routing) consume the payload at their own layer; the LV
+  # only cares about the visible message changing.
+  defp handle_info({:message_edited, %{message: msg}}, socket) do
+    enriched = msg |> enrich_versions_count() |> enrich_with_reactions(socket)
+    {:halt, stream_insert(socket, :messages, enriched)}
+  end
+
+  defp handle_info({:message_edited, _}, socket), do: {:halt, socket}
+
   defp handle_info({:message_deleted, msg}, socket) do
     {:halt,
      socket
@@ -725,6 +747,16 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
   # Single-message enrichment. Used on every stream_insert (new message,
   # message updated, reaction added/removed) so the stream item always
   # carries the current reaction groups.
+  # Populate the virtual `versions_count` field from chat_message_versions.
+  # Stage 6 (task 019e0f29) — the (edited) affix in chat_message.ex reads
+  # this. Cheap to call (single COUNT query); applied at every stream
+  # insert/update so the affix stays in sync with the DB.
+  defp enrich_versions_count(%Platform.Chat.Message{} = msg) do
+    %{msg | versions_count: Platform.Chat.MessageVersions.count_versions(msg.id)}
+  end
+
+  defp enrich_versions_count(msg), do: msg
+
   defp enrich_with_reactions(msg, socket) do
     my_id = socket.assigns[:current_participant] && socket.assigns.current_participant.id
     participants_map = socket.assigns[:participants_map] || %{}
