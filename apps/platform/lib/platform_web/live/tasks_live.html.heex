@@ -861,6 +861,8 @@
 
         <%= if @edit_mode and @editing_description do %>
           <form
+            id="task-description-form"
+            phx-hook="ButtonLoading"
             phx-submit="save_description"
             data-role="description-form"
             class="space-y-2"
@@ -1157,6 +1159,7 @@
           <.form
             for={@steering_compose_form}
             id="steering-compose-form"
+            phx-hook="ButtonLoading"
             phx-submit="send_steering_message"
             phx-change="steering_changed"
             class="mt-2 border-t border-base-300 pt-2"
@@ -1547,7 +1550,12 @@
       </div>
 
       <%!-- Form body --%>
-      <form phx-submit="submit_reopen" class="flex flex-col gap-3 px-4 py-4">
+      <form
+        id="task-reopen-form"
+        phx-hook="ButtonLoading"
+        phx-submit="submit_reopen"
+        class="flex flex-col gap-3 px-4 py-4"
+      >
         <div class="flex flex-col gap-1">
           <label
             for="reopen-reason-textarea"
@@ -1701,7 +1709,12 @@
       </div>
 
       <%!-- Form body --%>
-      <form phx-submit="save_assignees" class="flex flex-col gap-3 px-4 py-4">
+      <form
+        id="task-assignees-form"
+        phx-hook="ButtonLoading"
+        phx-submit="save_assignees"
+        class="flex flex-col gap-3 px-4 py-4"
+      >
         <%!-- Simple mode --%>
         <div :if={@assignee_modal_mode == :simple} class="flex flex-col gap-1">
           <label class="text-xs font-semibold uppercase tracking-wider text-base-content/60">
@@ -1794,6 +1807,8 @@
     <:title>New Task</:title>
     <.form
       for={@task_form}
+      id="create-task-form"
+      phx-hook="ButtonLoading"
       phx-change="validate_task"
       phx-submit="create_task"
       class="space-y-4"

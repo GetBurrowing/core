@@ -273,6 +273,8 @@
           <%!-- Promote to channel button for groups --%>
           <form
             :if={@active_space.kind == "group" && !@active_space.is_direct}
+            id="promote-to-channel-form"
+            phx-hook="ButtonLoading"
             phx-submit="promote_to_channel"
             class="hidden lg:flex items-center gap-1 ml-2"
           >
@@ -646,6 +648,7 @@
           <.form
             for={@new_canvas_form}
             id="new-canvas-form"
+            phx-hook="ButtonLoading"
             phx-submit="canvas_create"
             class="space-y-3 rounded-2xl border border-base-300 bg-base-100 p-4"
           >
@@ -773,6 +776,7 @@
           :if={@active_space}
           for={@compose_form}
           id="compose-form"
+          phx-hook="ButtonLoading"
           phx-submit="send_message"
           phx-change="compose_changed"
           class="flex flex-col gap-2"
@@ -895,6 +899,7 @@
         <form
           :if={@active_space}
           id="upload-send-form"
+          phx-hook="ButtonLoading"
           phx-submit="upload_send"
           phx-change="upload_caption_change"
           class="hidden"

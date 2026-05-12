@@ -149,17 +149,57 @@
 }
 
 /* ──────────────────────────────────────────────────────
-   Button loading state — visualize phx-click-loading.
+   Button loading state — visualize phx-click-loading / phx-submit-loading.
    Anchored to audit 1B-A11Y-6. See docs/design-system/02-components.md §2.1.
-   Spinner icon is rendered by the Button component, not by CSS.
-   Delay-before-show (~100ms) is wired in the JS hook, not here.
+
+   The JS hook `button_loading.js` flips `aria-busy="true"` on submit
+   buttons after a 100ms delay (avoids spinner flicker on near-instant
+   round-trips). The CSS below then dims the button content and renders
+   a pseudo-element spinner — no per-button markup changes required.
+
+   The universal `prefers-reduced-motion` rule below (~line 172) auto-
+   disables the spinner rotation for users who request reduced motion.
    ────────────────────────────────────────────────────── */
 @layer components {
-  .phx-click-loading .btn,
   .btn[aria-busy="true"] {
     cursor: wait;
-    opacity: 0.7;
     pointer-events: none;
+    position: relative;
+  }
+
+  .btn[aria-busy="true"] > * {
+    opacity: 0.5;
+  }
+
+  .btn[aria-busy="true"]::after {
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 1rem;
+    height: 1rem;
+    margin-top: -0.5rem;
+    margin-left: -0.5rem;
+    border: 2px solid currentColor;
+    border-right-color: transparent;
+    border-radius: 50%;
+    animation: btn-spinner-rotate 0.6s linear infinite;
+  }
+
+  /* Smaller spinner for btn-xs / btn-sm */
+  .btn-xs[aria-busy="true"]::after,
+  .btn-sm[aria-busy="true"]::after {
+    width: 0.75rem;
+    height: 0.75rem;
+    margin-top: -0.375rem;
+    margin-left: -0.375rem;
+    border-width: 1.5px;
+  }
+}
+
+@keyframes btn-spinner-rotate {
+  to {
+    transform: rotate(360deg);
   }
 }
 
