@@ -253,17 +253,14 @@ defmodule Platform.Federation.ToolSurfaceStacksTest do
   end
 
   describe "stack_start end-to-end" do
-    test "flips a forming stack to in_progress (cascade pending T4)" do
+    test "flips a forming stack to in_progress and cascades members (ADR 0041 T4)" do
       project = create_project()
 
       %{stack_id: stack_id} =
         create_stack_via_tool(project.id, unique_slug("e2e-start"), "Start Me")
 
-      # Two members: a clean root and a child blocked on it. Once T4
-      # lands the cascade, `root_task` should flip to `in_progress` and
-      # `child_task` should flip to `stack_pending`. For T3 we only
-      # assert what stage 1's implementation actually does: the
-      # stack-level status flips; member statuses stay untouched.
+      # Two members: a clean root and a child blocked on it. T4 cascade:
+      # root → in_progress, child → stack_pending.
       {:ok, root_task} = Tasks.create_task(%{project_id: project.id, title: "Root"})
 
       {:ok, child_task} =
@@ -272,6 +269,11 @@ defmodule Platform.Federation.ToolSurfaceStacksTest do
           title: "Child",
           dependencies: [%{"task_id" => root_task.id, "kind" => "blocks"}]
         })
+
+      # Root needs an approved plan to clear the
+      # `require_approved_plan_for` gate when transitioning to
+      # `in_progress`. Child does not — it's going to `stack_pending`.
+      {:ok, _} = Tasks.create_plan(%{task_id: root_task.id, status: "approved"})
 
       {:ok, _} =
         ToolSurface.execute(
@@ -292,21 +294,18 @@ defmodule Platform.Federation.ToolSurfaceStacksTest do
 
       assert started.status == "in_progress"
       assert started.id == stack_id
+      # `started` and `parked` arrays are part of the cascade payload.
+      assert is_list(started.started)
+      assert is_list(started.parked)
 
-      # TODO(T4): once the cascade lands, also assert that root members
-      # flipped to "in_progress" and non-root members flipped to
-      # "stack_pending" via a follow-up `stack_get` round-trip.
       {:ok, after_start} =
         ToolSurface.execute("stack_get", %{"stack_id" => stack_id}, %{})
 
       root_member = Enum.find(after_start.members, &(&1.id == root_task.id))
       child_member = Enum.find(after_start.members, &(&1.id == child_task.id))
 
-      # Stage 1's stack_start is stack-level only; members are still in
-      # their pre-existing status (`backlog`). When T4 wires
-      # Stacks.start_stack/1 these refutes should flip to asserts.
-      assert root_member.status == "backlog"
-      assert child_member.status == "backlog"
+      assert root_member.status == "in_progress"
+      assert child_member.status == "stack_pending"
     end
   end
 

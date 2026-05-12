@@ -60,13 +60,19 @@ defmodule Platform.Tasks do
   # transitions deterministically into `in_progress` via `approve_plan/2`.
 
   @valid_task_transitions %{
-    "backlog" => ~w(planning blocked in_progress),
+    "backlog" => ~w(planning blocked in_progress stack_pending),
     "planning" => ~w(in_progress blocked backlog),
-    "in_progress" => ~w(in_review deploying blocked done),
+    "in_progress" => ~w(in_review deploying blocked done stack_pending),
     "in_review" => ~w(deploying in_progress blocked),
     "deploying" => ~w(done in_progress blocked),
     "blocked" => ~w(backlog planning in_progress in_review deploying),
-    "done" => ~w(planning)
+    "done" => ~w(planning),
+    # ADR 0041 stack lifecycle: `stack_pending` is the "deps not yet rollup-merged"
+    # waiting state. The dispatcher (TaskRouterWatcher) intentionally does NOT
+    # treat `stack_pending` as active — see `@active_statuses` there. A
+    # `stack_pending` task is promoted to `in_progress` only via the in-stack
+    # unblock sweep (`Stacks.try_promote/1`), never directly by the dispatcher.
+    "stack_pending" => ~w(in_progress blocked backlog)
   }
 
   # ── Projects ─────────────────────────────────────────────────────────────
@@ -157,12 +163,39 @@ defmodule Platform.Tasks do
       {:ok, updated} ->
         preloaded = Repo.preload(updated, [:project, :epic, plans: :stages])
         broadcast_board({:task_updated, preloaded})
+        maybe_sweep_stack_after_update(task, updated)
         {:ok, updated}
 
       error ->
         error
     end
   end
+
+  # ADR 0041 stack-internal dep sweep. When a stack member's
+  # `metadata["merged_into_rollup_at"]` transitions from nil/absent to a
+  # value, promote any `stack_pending` members whose deps just cleared.
+  #
+  # This is a separate code path from the existing done-threshold sweep
+  # (`sweep_unblocked_dependents/1` below): different source-task status
+  # (any, vs. `done`), different candidate-task status (`stack_pending`
+  # vs. `blocked`), different threshold (rollup-merge vs. `done`). They
+  # do not overlap.
+  defp maybe_sweep_stack_after_update(%Task{} = before, %Task{stack_id: stack_id} = after_task)
+       when is_binary(stack_id) do
+    before_stamp = stamp(before.metadata)
+    after_stamp = stamp(after_task.metadata)
+
+    if is_nil(before_stamp) and not is_nil(after_stamp) do
+      Platform.Tasks.Stacks.sweep_stack_dependents(after_task)
+    end
+
+    :ok
+  end
+
+  defp maybe_sweep_stack_after_update(_before, _after_task), do: :ok
+
+  defp stamp(%{} = metadata), do: Map.get(metadata, "merged_into_rollup_at")
+  defp stamp(_), do: nil
 
   # ── Soft delete ─────────────────────────────────────────────────────────
 
@@ -996,10 +1029,16 @@ defmodule Platform.Tasks do
 
   defp maybe_prepare_transition(_task, _new_status), do: :ok
 
-  defp maybe_finalize_transition(%Task{status: "in_progress"}, %Task{} = task, "in_review") do
+  defp maybe_finalize_transition(
+         %Task{status: "in_progress"} = previous,
+         %Task{} = task,
+         "in_review"
+       ) do
     RuntimeSupervision.abandon_current_lease_for_task(task.id, "execution")
     TaskRouterWatcher.force_dispatch(task.id)
     maybe_apply_phase_assignee(task)
+    maybe_recompute_stack(task)
+    maybe_handle_regression(previous, task, "in_review")
     :ok
   end
 
@@ -1009,18 +1048,43 @@ defmodule Platform.Tasks do
     end
 
     sweep_unblocked_dependents(task)
+    maybe_recompute_stack(task)
+    maybe_handle_regression(previous, task, "done")
     :ok
   end
 
-  defp maybe_finalize_transition(%Task{} = previous, %Task{} = task, _new_status) do
+  defp maybe_finalize_transition(%Task{} = previous, %Task{} = task, new_status) do
     if current_phase(previous) != current_phase(task) do
       maybe_apply_phase_assignee(task)
     end
 
+    maybe_recompute_stack(task)
+    maybe_handle_regression(previous, task, new_status)
     :ok
   end
 
   defp maybe_finalize_transition(_previous_task, _task, _new_status), do: :ok
+
+  # ADR 0041 §"Status divergence handling": any member status change
+  # triggers a stack-level rollup-status recompute. Short-circuits when
+  # the task is not a stack member.
+  defp maybe_recompute_stack(%Task{stack_id: nil}), do: :ok
+
+  defp maybe_recompute_stack(%Task{stack_id: stack_id}) when is_binary(stack_id) do
+    Platform.Tasks.Stacks.recompute_stack_status(stack_id)
+    :ok
+  end
+
+  # ADR 0041 §"Status divergence handling": when a stack member regresses
+  # (backward lifecycle step), re-evaluate downstream stack members.
+  # Cross-stack regressions short-circuit inside the handler.
+  defp maybe_handle_regression(%Task{} = previous, %Task{} = updated, new_status) do
+    if Platform.Tasks.Stacks.regression?(previous.status, new_status) do
+      Platform.Tasks.Stacks.handle_member_regression(updated, previous.status)
+    end
+
+    :ok
+  end
 
   # When a task reaches `done`, find every `blocked` task that listed it as
   # a dependency and re-evaluate whether their other deps are also satisfied.

@@ -67,6 +67,15 @@ defmodule Platform.Orchestration.TaskRouterWatcherTest do
       assert TaskRouterWatcher.should_run?(task) == false
     end
 
+    # ADR 0041 stack lifecycle: stack_pending tasks must be invisible to
+    # the dispatcher. The dispatch gate (`Stacks.unblocked_in_stack?/1` +
+    # `Stacks.try_promote/1`) is the only path out of stack_pending; the
+    # watcher must NEVER spin a router for one.
+    test "returns false for stack_pending task (ADR 0041 dispatch gate)" do
+      task = %{assignee_type: "agent", assignee_id: "some-uuid", status: "stack_pending"}
+      assert TaskRouterWatcher.should_run?(task) == false
+    end
+
     test "returns false for backlog task" do
       task = %{assignee_type: "agent", assignee_id: "some-uuid", status: "backlog"}
       assert TaskRouterWatcher.should_run?(task) == false

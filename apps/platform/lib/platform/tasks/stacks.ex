@@ -81,6 +81,101 @@ defmodule Platform.Tasks.Stacks do
   end
 
   @doc """
+  Status cascade for `stack_start`: transition a `forming` stack to
+  `in_progress` and fan its members out per ADR 0041 §"Status cascade —
+  entering a stack".
+
+  Behavior:
+
+    * Stack must be at `forming` to start — any other status returns
+      `{:error, :invalid_stack_status}`.
+    * Compute `executable_members/1` (level-0 roots in the in-stack DAG).
+    * Transition every root currently at `backlog` to `in_progress` via
+      `Tasks.transition_task/2`. Roots already past `backlog` are left
+      alone — the cascade is additive, not destructive.
+    * Transition every non-root member currently at `backlog` to
+      `stack_pending` via `Tasks.transition_task/2`. Same backlog-only
+      filter so we never overwrite committed work.
+    * Flip the stack-level status from `forming` to `in_progress`.
+
+  Returns `{:ok, %{stack: stack, started: roots, parked: pending}}` on
+  success. Per-member transition failures (e.g. a root with no
+  approved plan) are surfaced in the returned shape as
+  `{:partial, %{stack: stack, started: ok_roots, parked: ok_pending,
+  errors: errors}}` so the caller can choose to halt-and-fix or
+  proceed.
+  """
+  @spec start_stack(Stack.t() | binary()) ::
+          {:ok, %{stack: Stack.t(), started: [Task.t()], parked: [Task.t()]}}
+          | {:partial,
+             %{
+               stack: Stack.t(),
+               started: [Task.t()],
+               parked: [Task.t()],
+               errors: [%{task_id: String.t(), target_status: String.t(), reason: term()}]
+             }}
+          | {:error, :invalid_stack_status | :stack_not_found | term()}
+  def start_stack(%Stack{status: status}) when status != "forming",
+    do: {:error, :invalid_stack_status}
+
+  def start_stack(%Stack{} = stack) do
+    members = members(stack)
+    roots = executable_members(stack)
+    root_ids = MapSet.new(roots, & &1.id)
+
+    {started, root_errors} =
+      Enum.reduce(roots, {[], []}, fn member, {ok, errors} ->
+        cascade_member(member, "in_progress", ok, errors)
+      end)
+
+    non_roots = Enum.reject(members, &MapSet.member?(root_ids, &1.id))
+
+    {parked, pending_errors} =
+      Enum.reduce(non_roots, {[], []}, fn member, {ok, errors} ->
+        cascade_member(member, "stack_pending", ok, errors)
+      end)
+
+    case Stack.changeset(stack, %{status: "in_progress"}) |> Repo.update() do
+      {:ok, updated} ->
+        result = %{
+          stack: updated,
+          started: Enum.reverse(started),
+          parked: Enum.reverse(parked)
+        }
+
+        case root_errors ++ pending_errors do
+          [] -> {:ok, result}
+          errors -> {:partial, Map.put(result, :errors, Enum.reverse(errors))}
+        end
+
+      {:error, changeset} ->
+        {:error, changeset}
+    end
+  end
+
+  def start_stack(stack_id) when is_binary(stack_id) do
+    case Repo.get(Stack, stack_id) do
+      %Stack{} = stack -> start_stack(stack)
+      nil -> {:error, :stack_not_found}
+    end
+  end
+
+  # Only members at `backlog` are dragged forward by the cascade — anything
+  # already past backlog is treated as committed work that the operator
+  # explicitly advanced, and we don't overwrite it.
+  defp cascade_member(%Task{status: "backlog"} = member, target, ok, errors) do
+    case Tasks.transition_task(member, target) do
+      {:ok, updated} ->
+        {[updated | ok], errors}
+
+      {:error, reason} ->
+        {ok, [%{task_id: member.id, target_status: target, reason: reason} | errors]}
+    end
+  end
+
+  defp cascade_member(_member, _target, ok, errors), do: {ok, errors}
+
+  @doc """
   Terminal transition: mark a stack `abandoned` and record the reason.
 
   Per ADR 0041 (Lifecycle / Rollback / abandon), the per-member handling on
@@ -362,6 +457,14 @@ defmodule Platform.Tasks.Stacks do
   Cross-stack deps (deps pointing at tasks NOT in this stack) are
   ignored here on purpose — they're gated by the existing
   `done`-threshold sweep.
+
+  This function is the dispatch gate's contract: the dispatcher
+  (`Platform.Orchestration.TaskRouterWatcher`) intentionally excludes
+  `stack_pending` from its active-status set so a `stack_pending` task
+  is invisible to dispatch. `unblocked_in_stack?/1` answers the
+  separate question of whether the task is ready to be promoted out of
+  `stack_pending` and become visible to the dispatcher — see
+  `try_promote/1` below.
   """
   @spec unblocked_in_stack?(Task.t()) :: boolean()
   def unblocked_in_stack?(%Task{stack_id: nil}), do: false
@@ -406,6 +509,49 @@ defmodule Platform.Tasks.Stacks do
   defp threshold_cleared?(_), do: false
 
   @doc """
+  Promote a `stack_pending` member to `in_progress` iff its in-stack deps
+  have all cleared the ADR 0041 §"Unblock threshold".
+
+  Behavior:
+
+    * Task is not in any stack (`stack_id` nil) → `:noop`.
+    * Task is in a stack but not at `stack_pending` → `:noop`.
+    * Task is at `stack_pending` and deps NOT cleared → `:noop`.
+    * Task is at `stack_pending` and deps cleared → transitions
+      `stack_pending` → `in_progress` via `Tasks.transition_task/2`. That
+      call emits the standard `{:task_updated, task}` board broadcast which
+      `TaskRouterWatcher` already consumes, so the dispatcher picks the
+      promoted task up on the next event.
+
+  Returns `{:ok, task}` on a successful transition, `:noop` for any
+  case that should leave the task untouched, or `{:error, reason}` if
+  the transition itself fails.
+  """
+  @spec try_promote(Task.t() | binary()) ::
+          {:ok, Task.t()} | :noop | {:error, term()}
+  def try_promote(%Task{stack_id: nil}), do: :noop
+
+  def try_promote(%Task{status: "stack_pending"} = task) do
+    if unblocked_in_stack?(task) do
+      case Tasks.transition_task(task, "in_progress") do
+        {:ok, updated} -> {:ok, updated}
+        {:error, reason} -> {:error, reason}
+      end
+    else
+      :noop
+    end
+  end
+
+  def try_promote(%Task{}), do: :noop
+
+  def try_promote(task_id) when is_binary(task_id) do
+    case Repo.get(Task, task_id) do
+      %Task{} = task -> try_promote(task)
+      nil -> {:error, :task_not_found}
+    end
+  end
+
+  @doc """
   Given a stack and a member task that just crossed the unblock threshold
   (its `merged_into_rollup_at` was just stamped), return the list of
   current `stack_pending` members that are now unblocked.
@@ -430,6 +576,181 @@ defmodule Platform.Tasks.Stacks do
         just_merged_id in Tasks.dependency_task_ids(member) and
         unblocked_in_stack?(member)
     end)
+  end
+
+  @doc """
+  Stack-internal dependent sweep — the second of the two unblock paths
+  in the engine.
+
+  Keyed on a stack member's `metadata["merged_into_rollup_at"]` being
+  newly set (typically by the deployer when a member's branch is merged
+  into the stack rollup branch). Finds every other stack member whose
+  status is `stack_pending` and whose dependency list includes the
+  just-merged task, then promotes any whose in-stack deps have now all
+  cleared the unblock threshold via `try_promote/1`.
+
+  Partition with the existing cross-stack sweep (`tasks.ex` ~L1031,
+  `sweep_unblocked_dependents/1`): that sweep matches `status==blocked`
+  and uses the `done`-threshold; this sweep matches `status==stack_pending`
+  and uses the rollup-merge threshold. They do NOT overlap — distinct
+  source-task statuses, distinct candidate-task statuses, distinct
+  thresholds.
+
+  Returns `{:ok, promoted}` where `promoted` is the list of `{:ok, task}`
+  results from successful promotions (failures are dropped, mirroring
+  the existing sweep's permissive behavior). A non-stack-member task or
+  a stack member without `merged_into_rollup_at` set is a no-op
+  returning `{:ok, []}`.
+  """
+  @spec sweep_stack_dependents(Task.t()) :: {:ok, [Task.t()]}
+  def sweep_stack_dependents(%Task{stack_id: nil}), do: {:ok, []}
+
+  def sweep_stack_dependents(%Task{metadata: metadata}) when not is_map(metadata),
+    do: {:ok, []}
+
+  def sweep_stack_dependents(%Task{stack_id: stack_id, metadata: metadata} = task)
+      when is_binary(stack_id) do
+    if is_nil(Map.get(metadata, "merged_into_rollup_at")) do
+      {:ok, []}
+    else
+      promoted =
+        stack_id
+        |> unblocked_after(task)
+        |> Enum.reduce([], fn member, acc ->
+          case try_promote(member) do
+            {:ok, updated} -> [updated | acc]
+            _ -> acc
+          end
+        end)
+        |> Enum.reverse()
+
+      {:ok, promoted}
+    end
+  end
+
+  # ── Regression handling (ADR 0041 §"Status divergence handling") ─────────
+
+  # Ordering for regression detection only — higher index == "further
+  # along the lifecycle". `stack_pending`/`blocked`/`backlog`/`planning`
+  # are intentionally treated as the same conceptual rung; the only
+  # comparison that matters is whether the new rung is strictly LOWER
+  # than the old rung among the execution-phase statuses.
+  @status_progression %{
+    "backlog" => 0,
+    "planning" => 0,
+    "blocked" => 0,
+    "stack_pending" => 0,
+    "in_progress" => 1,
+    "in_review" => 2,
+    "deploying" => 3,
+    "done" => 4
+  }
+
+  @doc """
+  Detect whether `prev_status -> new_status` is a regression in the
+  ADR 0041 lifecycle order (a backward step among the execution-phase
+  rungs).
+
+  Returns `true` for transitions like `in_review -> in_progress`,
+  `deploying -> in_review`, `in_progress -> stack_pending`. Returns
+  `false` for forward transitions or no-ops.
+  """
+  @spec regression?(String.t(), String.t()) :: boolean()
+  def regression?(prev, new) when is_binary(prev) and is_binary(new) do
+    Map.get(@status_progression, new, 0) < Map.get(@status_progression, prev, 0)
+  end
+
+  @doc """
+  Handle a stack member regressing (status moving backward).
+
+  Per ADR 0041 §"Status divergence handling":
+
+    1. Recompute the stack rollup status. (No-op here — already wired
+       into `Tasks.maybe_finalize_transition/3`'s tail via
+       `maybe_recompute_stack/1`, so we don't double-recompute.)
+    2. For every downstream member (another stack member listing this
+       task in its dependencies) currently at `in_progress`:
+       - If the downstream has NOT committed work (heuristic: no plan
+         stage has reached `status: "passed"`) AND its unblock
+         threshold is no longer met → revert it to `stack_pending` via
+         `Tasks.transition_task/2`.
+       - Otherwise leave its status alone and stamp
+         `metadata["stack_dep_regressed_at"]` with the current
+         timestamp so the UI / operator can see that an upstream dep
+         regressed.
+
+  Cross-stack regressions are silenced: a task without a `stack_id`
+  short-circuits with `:ok` (the existing done-threshold sweep is the
+  cross-stack path and is NOT modified by this handler).
+
+  Returns `{:ok, %{reverted: [Task.t()], flagged: [Task.t()]}}` on
+  success.
+  """
+  @spec handle_member_regression(Task.t(), String.t()) ::
+          :ok | {:ok, %{reverted: [Task.t()], flagged: [Task.t()]}}
+  def handle_member_regression(%Task{stack_id: nil}, _prev_status), do: :ok
+
+  def handle_member_regression(%Task{stack_id: stack_id} = task, _prev_status)
+      when is_binary(stack_id) do
+    members = members(stack_id)
+    member_ids = MapSet.new(members, & &1.id)
+
+    downstream =
+      members
+      |> Enum.reject(&(&1.id == task.id))
+      |> Enum.filter(fn member ->
+        task.id in (member
+                    |> Tasks.dependency_task_ids()
+                    |> Enum.filter(&MapSet.member?(member_ids, &1)))
+      end)
+
+    Enum.reduce(downstream, {[], []}, fn member, {reverted, flagged} ->
+      cond do
+        member.status != "in_progress" ->
+          {reverted, flagged}
+
+        unblocked_in_stack?(member) ->
+          # Threshold still met — no need to revert. Don't flag either,
+          # since nothing was actually invalidated.
+          {reverted, flagged}
+
+        committed_work?(member) ->
+          # Threshold no longer met but work exists — record the regression
+          # marker without disrupting the in-flight task.
+          case mark_dep_regressed(member) do
+            {:ok, updated} -> {reverted, [updated | flagged]}
+            _ -> {reverted, flagged}
+          end
+
+        true ->
+          case Tasks.transition_task(member, "stack_pending") do
+            {:ok, updated} -> {[updated | reverted], flagged}
+            _ -> {reverted, flagged}
+          end
+      end
+    end)
+    |> then(fn {reverted, flagged} ->
+      {:ok, %{reverted: Enum.reverse(reverted), flagged: Enum.reverse(flagged)}}
+    end)
+  end
+
+  # "Committed work" heuristic: any stage on any plan for this task has
+  # reached `status: "passed"` (the engine's stage_complete signal).
+  defp committed_work?(%Task{id: task_id}) do
+    Repo.exists?(
+      from(s in Platform.Tasks.Stage,
+        join: p in Platform.Tasks.Plan,
+        on: s.plan_id == p.id,
+        where: p.task_id == ^task_id and s.status == "passed"
+      )
+    )
+  end
+
+  defp mark_dep_regressed(%Task{} = member) do
+    metadata = member.metadata || %{}
+    stamp = DateTime.utc_now() |> DateTime.to_iso8601()
+    merged = Map.put(metadata, "stack_dep_regressed_at", stamp)
+    Tasks.update_task(member, %{metadata: merged})
   end
 
   # ── Membership internals ─────────────────────────────────────────────────

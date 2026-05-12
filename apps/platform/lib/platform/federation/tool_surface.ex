@@ -1113,15 +1113,16 @@ defmodule Platform.Federation.ToolSurface do
       %{
         name: "stack_start",
         description:
-          "Transition a stack from `forming` to `in_progress`. v1: flips the stack's status only — root members are not yet auto-cascaded into `in_progress`, and non-root members are not yet sent to `stack_pending`. Use the per-task lifecycle (task_start / plan_approve) to drive individual members until T4 wires the cascade.",
+          "Transition a stack from `forming` to `in_progress` and fan its members out per ADR 0041 §\"Status cascade — entering a stack\". Level-0 roots (members with no in-stack deps) move from `backlog` to `in_progress`; non-root members move from `backlog` to `stack_pending`. Members already past `backlog` are left alone — the cascade is additive.",
         parameters: %{
           stack_id: %{type: "string", required: true, description: "The stack to start"}
         },
-        returns: "The updated stack record (status: `in_progress`).",
+        returns:
+          "The updated stack record (status: `in_progress`) plus `started` (the roots moved to `in_progress`) and `parked` (the non-roots moved to `stack_pending`). Per-member transition failures (e.g. a root with no approved plan) surface in a `cascade_errors` array.",
         limitations:
-          "v1 cascade NOT YET WIRED: this tool does NOT yet transition roots → in_progress or non-roots → stack_pending. T4 will replace this body with Stacks.start_stack/1.",
+          "Refuses to run when the stack is not currently at `forming`. Members without an approved plan will fail the `in_progress` transition and appear in `cascade_errors`; the stack-level status still advances to `in_progress`.",
         when_to_use:
-          "When a stack's membership is finalized and you want the engine (once wired) to begin dispatching its level-0 roots."
+          "When a stack's membership is finalized and you want the engine to begin dispatching its level-0 roots."
       }
     ]
   end
@@ -2658,23 +2659,51 @@ defmodule Platform.Federation.ToolSurface do
          }}
 
       %Stack{} = stack ->
-        # TODO(T4): wire to Stacks.start_stack/1 once T4 ships — that will
-        # also cascade roots to `in_progress` and non-roots to
-        # `stack_pending`. For T3 (this stage) we only flip the stack-level
-        # status; per-member transitions happen via the existing task
-        # lifecycle (task_start / plan_approve).
-        case Stacks.update_stack(stack, %{status: "in_progress"}) do
-          {:ok, %Stack{} = updated} ->
-            {:ok, serialize_stack(updated)}
+        case Stacks.start_stack(stack) do
+          {:ok, %{stack: updated, started: started, parked: parked}} ->
+            {:ok, stack_start_payload(updated, started, parked, [])}
 
-          {:error, changeset} ->
+          {:partial, %{stack: updated, started: started, parked: parked, errors: errors}} ->
+            {:ok, stack_start_payload(updated, started, parked, errors)}
+
+          {:error, :invalid_stack_status} ->
+            {:error,
+             %{
+               error: "Stack is not at `forming`; only forming stacks can be started.",
+               recoverable: false,
+               suggestion: "Check the stack's current status via stack_get."
+             }}
+
+          {:error, %Ecto.Changeset{} = changeset} ->
             {:error,
              %{
                error: "Failed to start stack: #{inspect_errors(changeset)}",
                recoverable: true,
                suggestion: "Check the stack's current status"
              }}
+
+          {:error, other} ->
+            {:error,
+             %{
+               error: "Failed to start stack: #{inspect(other)}",
+               recoverable: true
+             }}
         end
+    end
+  end
+
+  defp stack_start_payload(%Stack{} = stack, started, parked, errors) do
+    payload =
+      stack
+      |> serialize_stack()
+      |> Map.merge(%{
+        started: Enum.map(started, &serialize_stack_member/1),
+        parked: Enum.map(parked, &serialize_stack_member/1)
+      })
+
+    case errors do
+      [] -> payload
+      _ -> Map.put(payload, :cascade_errors, errors)
     end
   end
 
