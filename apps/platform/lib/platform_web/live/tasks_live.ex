@@ -23,6 +23,16 @@ defmodule PlatformWeb.TasksLive do
     {"done", "Done"}
   ]
 
+  # Mobile list iterates this order so actionable work surfaces first.
+  # Desktop kanban (md+) keeps @kanban_columns left-to-right.
+  @mobile_columns [
+    {"in_progress", "In Progress"},
+    {"in_review", "In Review"},
+    {"deploying", "Deploying"},
+    {"backlog", "Backlog"},
+    {"done", "Done"}
+  ]
+
   # Statuses that map into each kanban column
   @column_statuses %{
     "backlog" => ~w(backlog planning blocked),
@@ -60,6 +70,8 @@ defmodule PlatformWeb.TasksLive do
      |> assign(:all_tasks, all_tasks)
      |> assign(:columns, group_by_column(all_tasks))
      |> assign(:kanban_columns, @kanban_columns)
+     |> assign(:mobile_columns, @mobile_columns)
+     |> assign(:active_status_filter, "in_progress")
      |> assign(:pending_plan_count, count_pending_plans(all_tasks))
      |> assign(:review_counts, pending_review_counts(all_tasks))
      |> assign(:selected_task, nil)
@@ -315,6 +327,16 @@ defmodule PlatformWeb.TasksLive do
 
   def handle_event("toggle_epics_panel", _params, socket) do
     {:noreply, assign(socket, :epics_collapsed, !socket.assigns.epics_collapsed)}
+  end
+
+  # Mobile-only: status-filter pill bar above the section-grouped task list.
+  # Validates the incoming status against @mobile_columns to ignore garbage.
+  def handle_event("filter_by_status", %{"status" => status}, socket) do
+    if Enum.any?(@mobile_columns, fn {key, _label} -> key == status end) do
+      {:noreply, assign(socket, :active_status_filter, status)}
+    else
+      {:noreply, socket}
+    end
   end
 
   def handle_event("clear_filters", _params, socket) do
@@ -1986,6 +2008,16 @@ defmodule PlatformWeb.TasksLive do
 
   defp empty_board?(columns) when is_map(columns) do
     Enum.all?(columns, fn {_key, tasks} -> tasks == [] end)
+  end
+
+  # Used by the mobile-list empty state. Looks up the label that matches the
+  # currently active status filter so the empty-state message reads
+  # naturally — 'No tasks in In Progress.' rather than 'No tasks in in_progress.'
+  defp active_status_label(status, columns) do
+    case Enum.find(columns, fn {key, _label} -> key == status end) do
+      {_key, label} -> label
+      nil -> status
+    end
   end
 
   defp has_active_run?(%Task{} = _task) do

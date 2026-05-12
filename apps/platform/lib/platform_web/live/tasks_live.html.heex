@@ -147,75 +147,138 @@
     <%!-- Mobile task list — section-grouped vertical layout (audit 1B-USE-2).
          Replaces the horizontal kanban below md:. The kanban below this block
          is hidden on mobile via the same breakpoint, so desktop stays
-         unchanged. Each section renders only if its column has tasks. --%>
+         unchanged.
+
+         Status-filter pill bar (Marlowe + Rowan, 2026-05-12) reuses the chat
+         channel-pill pattern. Default-active = "in_progress" so users land
+         on actionable work; previously the section iteration began at
+         "Backlog" which buried in-progress work below the scroll fold. The
+         @mobile_columns order (in_progress first) controls both the pill
+         order and the rendered-section order — desktop @kanban_columns is
+         unchanged. --%>
     <div
       :if={!(@show_detail && @selected_task)}
       id="tasks-mobile-list"
-      class="md:hidden flex-1 overflow-y-auto px-3 pb-24"
+      class="md:hidden flex flex-1 flex-col overflow-hidden"
     >
-      <div
-        :for={{col_key, col_label} <- @kanban_columns}
-        :if={Map.get(@columns, col_key, []) != []}
-        class="mt-4 first:mt-2"
+      <nav
+        id="tasks-status-filter-pills"
+        phx-hook="TasksStatusFilter"
+        class="flex items-center gap-2 overflow-x-auto px-3 py-2 border-b border-base-content/10 shrink-0"
+        style="scrollbar-width: none; -webkit-overflow-scrolling: touch;"
+        aria-label="Filter tasks by status"
       >
-        <h2 class="text-xs font-semibold uppercase tracking-widest text-base-content/50 mb-2 px-1">
-          {col_label} · {length(Map.get(@columns, col_key, []))}
-        </h2>
-        <div class="flex flex-col gap-2">
-          <% column_tasks = Map.get(@columns, col_key, []) %>
-          <%= for task <- column_tasks do %>
-            <% assignee = assignee_identity(task, @users_by_id, @agents_by_id) %>
-            <button
-              type="button"
-              phx-click="select_task"
-              phx-value-id={task.id}
-              class="flex flex-col gap-1.5 rounded-box border border-base-300 bg-base-100 p-3 text-left transition-colors hover:bg-base-200/60 focus-visible-ring"
-              data-task-id={task.id}
-            >
-              <div class="flex items-start gap-2">
-                <span
-                  class={["mt-1.5 size-2 shrink-0 rounded-full", status_dot_class(col_key)]}
-                  aria-hidden="true"
-                >
-                </span>
-                <span class="text-sm font-medium leading-snug flex-1">{task.title}</span>
-                <span
-                  :if={has_active_run?(task)}
-                  class="mt-1.5 inline-block size-2 shrink-0 rounded-full bg-success animate-pulse"
-                  title="Active run"
-                >
-                </span>
-              </div>
-              <div class="flex items-center gap-1.5 pl-4 text-xs text-base-content/60">
-                <%= if assignee do %>
-                  <%= if assignee.type == :user do %>
-                    <.human_avatar
-                      name={assignee.name}
-                      avatar_url={assignee.avatar_url}
-                      seed={assignee.seed}
-                      size="xs"
-                      class="size-4 shrink-0"
-                    />
-                  <% else %>
-                    <span class="flex size-4 shrink-0 items-center justify-center rounded-full bg-accent/15 text-[9px] font-bold text-accent">
-                      {agent_initials(assignee.name)}
-                    </span>
-                  <% end %>
-                  <span class="truncate">{assignee.name}</span>
-                  <span aria-hidden="true">·</span>
-                <% end %>
-                <span :if={task.inserted_at} class="whitespace-nowrap">
-                  {relative_time(task.inserted_at)}
-                </span>
-              </div>
-            </button>
-          <% end %>
-        </div>
-      </div>
+        <button
+          :for={{col_key, col_label} <- @mobile_columns}
+          type="button"
+          phx-click="filter_by_status"
+          phx-value-status={col_key}
+          aria-pressed={@active_status_filter == col_key}
+          class={[
+            "flex items-center gap-1.5 px-3 py-1.5 rounded-full whitespace-nowrap text-[13px] font-medium shrink-0 transition-all",
+            "active:scale-[0.97] ease-[cubic-bezier(0.16,1,0.3,1)]",
+            if @active_status_filter == col_key do
+              "bg-primary text-primary-content shadow-[0_0_16px_oklch(0.78_0.14_207_/_0.18)]"
+            else
+              "bg-base-200 text-base-content/70 border border-base-content/10 hover:bg-base-300"
+            end
+          ]}
+        >
+          <span class={["size-1.5 rounded-full", status_dot_class(col_key)]} aria-hidden="true">
+          </span>
+          {col_label}
+          <span
+            :if={length(Map.get(@columns, col_key, [])) > 0}
+            class={[
+              "inline-flex items-center justify-center min-w-[18px] h-[18px] rounded-full text-[10px] font-bold tabular-nums",
+              if(@active_status_filter == col_key,
+                do: "bg-primary-content/20 text-primary-content",
+                else: "bg-base-300 text-base-content/70"
+              )
+            ]}
+          >
+            {length(Map.get(@columns, col_key, []))}
+          </span>
+        </button>
+      </nav>
 
-      <.empty_state :if={empty_board?(@columns)} variant={:minimal}>
-        <:body>No tasks yet — tap the + button to create one.</:body>
-      </.empty_state>
+      <div class="flex-1 overflow-y-auto px-3 pb-24">
+        <div
+          :for={{col_key, col_label} <- @mobile_columns}
+          :if={@active_status_filter == col_key && Map.get(@columns, col_key, []) != []}
+          class="mt-4 first:mt-2"
+        >
+          <h2 class="text-xs font-semibold uppercase tracking-widest text-base-content/50 mb-2 px-1">
+            {col_label} · {length(Map.get(@columns, col_key, []))}
+          </h2>
+          <div class="flex flex-col gap-2">
+            <% column_tasks = Map.get(@columns, col_key, []) %>
+            <%= for task <- column_tasks do %>
+              <% assignee = assignee_identity(task, @users_by_id, @agents_by_id) %>
+              <button
+                type="button"
+                phx-click="select_task"
+                phx-value-id={task.id}
+                class="flex flex-col gap-1.5 rounded-box border border-base-300 bg-base-100 p-3 text-left transition-colors hover:bg-base-200/60 focus-visible-ring"
+                data-task-id={task.id}
+              >
+                <div class="flex items-start gap-2">
+                  <span
+                    class={["mt-1.5 size-2 shrink-0 rounded-full", status_dot_class(col_key)]}
+                    aria-hidden="true"
+                  >
+                  </span>
+                  <span class="text-sm font-medium leading-snug flex-1">{task.title}</span>
+                  <span
+                    :if={has_active_run?(task)}
+                    class="mt-1.5 inline-block size-2 shrink-0 rounded-full bg-success animate-pulse"
+                    title="Active run"
+                  >
+                  </span>
+                </div>
+                <div class="flex items-center gap-1.5 pl-4 text-xs text-base-content/60">
+                  <%= if assignee do %>
+                    <%= if assignee.type == :user do %>
+                      <.human_avatar
+                        name={assignee.name}
+                        avatar_url={assignee.avatar_url}
+                        seed={assignee.seed}
+                        size="xs"
+                        class="size-4 shrink-0"
+                      />
+                    <% else %>
+                      <span class="flex size-4 shrink-0 items-center justify-center rounded-full bg-accent/15 text-[9px] font-bold text-accent">
+                        {agent_initials(assignee.name)}
+                      </span>
+                    <% end %>
+                    <span class="truncate">{assignee.name}</span>
+                    <span aria-hidden="true">·</span>
+                  <% end %>
+                  <span :if={task.inserted_at} class="whitespace-nowrap">
+                    {relative_time(task.inserted_at)}
+                  </span>
+                </div>
+              </button>
+            <% end %>
+          </div>
+        </div>
+
+        <.empty_state :if={empty_board?(@columns)} variant={:minimal}>
+          <:body>No tasks yet — tap the + button to create one.</:body>
+        </.empty_state>
+
+        <.empty_state
+          :if={
+            !empty_board?(@columns) &&
+              Map.get(@columns, @active_status_filter, []) == []
+          }
+          variant={:minimal}
+        >
+          <:body>
+            No tasks in {active_status_label(@active_status_filter, @mobile_columns)}.
+          </:body>
+        </.empty_state>
+      </div>
     </div>
 
     <%!-- Kanban board (desktop). Hidden on mobile in favor of the

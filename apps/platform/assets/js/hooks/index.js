@@ -31,6 +31,7 @@ import ResizableSidebar from "./resizable_sidebar"
 import ScrollToBottom from "./scroll_to_bottom"
 import Sheet from "./sheet"
 import SidebarCollapse from "./sidebar_collapse"
+import TasksStatusFilter from "./tasks_status_filter"
 import ThemeToggle from "./theme_toggle"
 import UploadButton from "./upload_button"
 
@@ -68,6 +69,7 @@ export default {
   ScrollToBottom,
   Sheet,
   SidebarCollapse,
+  TasksStatusFilter,
   ThemeToggle,
   UploadButton,
 }
