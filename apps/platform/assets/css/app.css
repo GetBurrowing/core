@@ -59,7 +59,7 @@
   --color-secondary-content: oklch(100% 0 0);
   --color-accent: oklch(82% 0.12 207);       /* cyan */
   --color-accent-content: oklch(0% 0 0);
-  --color-neutral: oklch(55% 0.01 0);         /* #888888 */
+  --color-neutral: oklch(45% 0.01 0);         /* ~#737373 — bumped from 55% to fix WCAG 1.4.3 AA contrast vs --color-neutral-content (3.54:1 → 4.7:1) per audit 1B-A11Y-5 */
   --color-neutral-content: oklch(100% 0 0);
   --color-info: oklch(82% 0.12 207);         /* cyan */
   --color-info-content: oklch(0% 0 0);
@@ -126,6 +126,81 @@
 
 /* Use the data attribute for dark mode  */
 @custom-variant dark (&:where([data-theme=dark], [data-theme=dark] *));
+
+/* ──────────────────────────────────────────────────────
+   Focus ring — canonical spec per docs/design-system/04-accessibility.md §1.
+   Anchored to audit 1B-A11Y-1 (no custom focus-visible rules; chat/activity/shell had 0).
+   ────────────────────────────────────────────────────── */
+@layer utilities {
+  .focus-visible-ring:focus-visible {
+    outline: none;
+    box-shadow:
+      0 0 0 2px var(--color-base-100),
+      0 0 0 4px var(--color-primary);
+    border-radius: inherit;
+  }
+
+  /* Inputs use no-offset variant (border itself acts as offset). */
+  .input.focus-visible-ring:focus-visible,
+  .textarea.focus-visible-ring:focus-visible,
+  .select.focus-visible-ring:focus-visible {
+    box-shadow: 0 0 0 2px var(--color-primary);
+  }
+}
+
+/* ──────────────────────────────────────────────────────
+   Button loading state — visualize phx-click-loading.
+   Anchored to audit 1B-A11Y-6. See docs/design-system/02-components.md §2.1.
+   Spinner icon is rendered by the Button component, not by CSS.
+   Delay-before-show (~100ms) is wired in the JS hook, not here.
+   ────────────────────────────────────────────────────── */
+@layer components {
+  .phx-click-loading .btn,
+  .btn[aria-busy="true"] {
+    cursor: wait;
+    opacity: 0.7;
+    pointer-events: none;
+  }
+}
+
+/* ──────────────────────────────────────────────────────
+   Motion preference — broaden prefers-reduced-motion to all animations.
+   Anchored to audit 1B-A11Y-3. Previously only .reactor-popover honored the
+   preference (rule below at ~line 1700); now the universal rule covers
+   typing dots, sheet slides, drawer transitions, modal fades, etc.
+   ────────────────────────────────────────────────────── */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ──────────────────────────────────────────────────────
+   Skip-link — keyboard users can jump past nav.
+   Per docs/design-system/04-accessibility.md §3.3.
+   ────────────────────────────────────────────────────── */
+.skip-link {
+  position: absolute;
+  top: -100px;
+  left: 0;
+  z-index: 1000;
+}
+.skip-link:focus-visible {
+  position: fixed;
+  top: 8px;
+  left: 8px;
+  padding: 0.5rem 1rem;
+  background: var(--color-primary);
+  color: var(--color-primary-content);
+  border-radius: 0.375rem;
+  font-weight: 600;
+  text-decoration: none;
+}
 
 /* Make LiveView wrapper divs transparent for layout */
 [data-phx-session], [data-phx-teleported-src] { display: contents }
