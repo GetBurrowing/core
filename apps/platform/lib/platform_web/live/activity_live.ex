@@ -333,6 +333,40 @@ defmodule PlatformWeb.ActivityLive do
   def time_ago(_), do: ""
 
   @doc """
+  Groups a list of actions by their inserted_at date (UTC), returning
+  `[{date, [action]}]` in reverse chronological order. Used by the
+  Activity feed to render day-section headers above each group.
+
+  UTC is intentional — `time_ago/1` already uses UTC for the relative
+  label, so the date boundary here matches what the user sees on each
+  item ("3h ago" rolls into the right day-bucket).
+  """
+  @spec group_actions_by_day([map()]) :: [{Date.t(), [map()]}]
+  def group_actions_by_day(actions) when is_list(actions) do
+    actions
+    |> Enum.group_by(fn action -> DateTime.to_date(action.inserted_at) end)
+    |> Enum.sort_by(fn {date, _actions} -> date end, {:desc, Date})
+  end
+
+  @doc """
+  Renders the section header label for a given date relative to today.
+  Today/yesterday use the relative phrase + explicit date; same-year
+  dates use weekday + month/day; older dates include the year.
+  """
+  @spec day_header_label(Date.t()) :: String.t()
+  def day_header_label(%Date{} = date) do
+    today = Date.utc_today()
+    diff = Date.diff(today, date)
+
+    cond do
+      diff == 0 -> "Today · " <> Calendar.strftime(date, "%b %-d")
+      diff == 1 -> "Yesterday · " <> Calendar.strftime(date, "%b %-d")
+      date.year == today.year -> Calendar.strftime(date, "%a, %b %-d")
+      true -> Calendar.strftime(date, "%b %-d, %Y")
+    end
+  end
+
+  @doc """
   Visible page numbers for a numbered-pagination nav. Returns a list of
   integers and `:ellipsis` markers. For ≤7 total pages, shows them all;
   otherwise shows 1, neighbors of current, and last with ellipses.
