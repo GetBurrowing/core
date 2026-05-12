@@ -421,6 +421,102 @@ defmodule Platform.Tasks.Stacks do
     |> Repo.all()
   end
 
+  @doc """
+  List stacks with the precomputed board-card display data the kanban view
+  needs to render a collapsed stack card and its inline expansion (ADR 0041
+  §"UI surface — Board view"; T7 stage 1).
+
+  Returns a list of `{%Stack{}, board_data}` tuples ordered by
+  `updated_at` descending. `board_data` is a map with:
+
+    * `:members` — list of member task structs ordered by `stack_position`
+      ascending. Each member is a regular `%Task{}` (no extra preloads;
+      the existing detail-panel flow handles deep loads).
+    * `:member_count` — `length(members)`.
+    * `:dep_edge_count` — count of dependency edges among members
+      restricted to the in-stack subgraph (deps from a member pointing
+      at another member of the same stack). Self-edges are dropped
+      defensively.
+    * `:ready_count` — members whose status is in `~w(in_review
+      deploying done)`, matching ADR 0041's "ready" threshold for the
+      `3/4 ready` rollup-progress text.
+
+  Filters mirror `list_stacks/1` (`:project_id`, `:status`). Excluded
+  statuses (`abandoned`) are NOT filtered here — callers may want to
+  show abandoned stacks for audit; the tasks-live board passes through
+  the same project filter the task list uses and accepts whatever
+  statuses the backing data carries.
+
+  Implementation note: two-query fetch (stacks, then all member tasks
+  for those stacks) followed by an in-memory group_by. The kanban
+  board typically renders single-digit stack counts per project, so
+  N+1 over `members/1` would also be acceptable, but the two-query
+  form keeps the page-load cost flat as project size grows.
+  """
+  @spec list_stacks_with_members(map() | keyword()) :: [{Stack.t(), map()}]
+  def list_stacks_with_members(filters \\ %{})
+
+  def list_stacks_with_members(filters) when is_list(filters) do
+    list_stacks_with_members(Map.new(filters))
+  end
+
+  def list_stacks_with_members(filters) when is_map(filters) do
+    stacks =
+      Stack
+      |> filter_by_project(Map.get(filters, :project_id))
+      |> filter_by_status(Map.get(filters, :status))
+      |> order_by([s], desc: s.updated_at)
+      |> Repo.all()
+
+    case stacks do
+      [] ->
+        []
+
+      stacks ->
+        stack_ids = Enum.map(stacks, & &1.id)
+
+        members_by_stack =
+          Task
+          |> where([t], t.stack_id in ^stack_ids and is_nil(t.deleted_at))
+          |> order_by([t], asc: t.stack_position)
+          |> Repo.all()
+          |> Enum.group_by(& &1.stack_id)
+
+        Enum.map(stacks, fn stack ->
+          members = Map.get(members_by_stack, stack.id, [])
+          {stack, build_board_data(members)}
+        end)
+    end
+  end
+
+  # Public-ish (private) helper exposed for tests that want to build the
+  # board-data map from a hand-seeded member list without touching the DB.
+  @doc false
+  def build_board_data(members) when is_list(members) do
+    member_ids_set = MapSet.new(members, & &1.id)
+
+    dep_edge_count =
+      Enum.reduce(members, 0, fn %Task{id: from_id} = m, acc ->
+        in_stack_deps =
+          m
+          |> Tasks.dependency_task_ids()
+          |> Enum.reject(&(&1 == from_id))
+          |> Enum.filter(&MapSet.member?(member_ids_set, &1))
+          |> Enum.uniq()
+
+        acc + length(in_stack_deps)
+      end)
+
+    ready_count = Enum.count(members, &(&1.status in ~w(in_review deploying done)))
+
+    %{
+      members: members,
+      member_count: length(members),
+      dep_edge_count: dep_edge_count,
+      ready_count: ready_count
+    }
+  end
+
   # ── DAG validation / status recompute ────────────────────────────────────
 
   @doc """

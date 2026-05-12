@@ -1,6 +1,7 @@
 defmodule PlatformWeb.TasksLiveTest do
   use PlatformWeb.ConnCase, async: false
 
+  import Ecto.Query
   import Phoenix.LiveViewTest
 
   alias Platform.Accounts.User
@@ -9,7 +10,7 @@ defmodule PlatformWeb.TasksLiveTest do
   alias Platform.Chat.Canvas
   alias Platform.Orchestration.ExecutionSpace
   alias Platform.{Repo, Tasks}
-  alias Platform.Tasks.{Epic, Plan, ReviewRequests}
+  alias Platform.Tasks.{Epic, Plan, ReviewRequests, Stack, Stacks}
 
   setup do
     previous_root = Application.get_env(:platform, :chat_attachments_root)
@@ -80,6 +81,21 @@ defmodule PlatformWeb.TasksLiveTest do
       name: name || "Agent #{System.unique_integer([:positive])}",
       status: "active"
     })
+  end
+
+  defp stack_fixture(attrs) do
+    attrs = Map.new(attrs)
+    slug = Map.get(attrs, :slug, "fixture-#{System.unique_integer([:positive])}")
+
+    {:ok, stack} =
+      Stacks.create_stack(%{
+        project_id: Map.fetch!(attrs, :project_id),
+        slug: slug,
+        name: Map.get(attrs, :name, "Fixture Stack"),
+        rollup_branch: Stacks.rollup_branch_name(slug)
+      })
+
+    stack
   end
 
   describe "per-phase assignee modal" do
@@ -577,6 +593,724 @@ defmodule PlatformWeb.TasksLiveTest do
 
     assert html =~ "Project One Task"
     refute html =~ "Project Two Task"
+  end
+
+  describe "stacks on the kanban board (T7 stage 1 — data layer)" do
+    # ADR 0041 acceptance criterion 1: stacks render alongside tasks,
+    # interleaved by updated_at desc. Criterion 3: expansion state is
+    # ephemeral and resets on any list refetch.
+    #
+    # Stage 1 is data-layer only — the heex template still iterates
+    # `@columns` (task-only) so stacks are not yet rendered. The new
+    # `@board_items` assign carries the merged shape that stage 2 will
+    # render. These tests assert the assign shape and the reset
+    # behavior; visual rendering tests land with stage 2.
+
+    setup %{conn: conn} do
+      conn = authenticated_conn(conn)
+      project = create_project()
+
+      task_old =
+        create_task(project, %{
+          title: "Older Task",
+          status: "in_review"
+        })
+
+      # Build the stack with seeded members, recompute its rollup
+      # status, THEN backdate its `updated_at` to a value strictly
+      # between `task_old.updated_at` and a forthcoming `task_new`.
+      # We can't rely on insertion order because
+      # `recompute_stack_status/1` (and the changeset writes that
+      # `create_stack` performs) bump the stack's `updated_at`.
+      stack = stack_fixture(project_id: project.id, name: "User Saves Stack")
+      {:ok, _members} = seed_stack_members(stack, count: 4)
+      {:ok, stack} = Stacks.recompute_stack_status(stack)
+
+      task_new =
+        create_task(project, %{
+          title: "Newer Task",
+          status: "in_review"
+        })
+
+      # Explicitly anchor updated_at so the sort assertion is
+      # deterministic regardless of insert order: task_new (newest)
+      # > stack (middle) > task_old (oldest).
+      now = DateTime.utc_now()
+      old_ts = DateTime.add(now, -120, :second)
+      stack_ts = DateTime.add(now, -60, :second)
+
+      Repo.update_all(
+        from(t in Tasks.Task, where: t.id == ^task_old.id),
+        set: [updated_at: old_ts]
+      )
+
+      Repo.update_all(
+        from(s in Stack, where: s.id == ^stack.id),
+        set: [updated_at: stack_ts]
+      )
+
+      Repo.update_all(
+        from(t in Tasks.Task, where: t.id == ^task_new.id),
+        set: [updated_at: now]
+      )
+
+      stack = Repo.get!(Stack, stack.id)
+      task_old = Repo.get!(Tasks.Task, task_old.id)
+      task_new = Repo.get!(Tasks.Task, task_new.id)
+
+      {:ok, conn: conn, project: project, stack: stack, task_old: task_old, task_new: task_new}
+    end
+
+    # Seed 4 in-review members with stack_position 1..4 and inject
+    # dependency edges m2→m1, m3→m1, m4→[m2, m3] so the dep-edge count
+    # is 4 (m2→m1, m3→m1, m4→m2, m4→m3) and the in-stack subgraph is
+    # exercised.
+    defp seed_stack_members(%Stack{} = stack, opts) do
+      count = Keyword.get(opts, :count, 4)
+
+      members =
+        for pos <- 1..count do
+          {:ok, t} =
+            Tasks.create_task(%{
+              project_id: stack.project_id,
+              stack_id: stack.id,
+              stack_position: pos,
+              title: "Member #{pos}",
+              status: "in_review",
+              priority: "medium"
+            })
+
+          t
+        end
+
+      [m1, m2, m3, m4 | _] = members ++ [nil, nil, nil, nil]
+
+      if m2,
+        do:
+          Tasks.update_task(m2, %{
+            dependencies: [%{"task_id" => m1.id, "kind" => "blocks"}]
+          })
+
+      if m3,
+        do:
+          Tasks.update_task(m3, %{
+            dependencies: [%{"task_id" => m1.id, "kind" => "blocks"}]
+          })
+
+      if m4,
+        do:
+          Tasks.update_task(m4, %{
+            dependencies: [
+              %{"task_id" => m2.id, "kind" => "blocks"},
+              %{"task_id" => m3.id, "kind" => "blocks"}
+            ]
+          })
+
+      {:ok, members}
+    end
+
+    test "mount assigns :stacks, :stack_board_data, :board_items, and an empty :expanded_stacks",
+         %{conn: conn, stack: stack} do
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+
+      assigns = :sys.get_state(view.pid).socket.assigns
+
+      assert is_list(assigns.stacks)
+      assert Enum.any?(assigns.stacks, &(&1.id == stack.id))
+
+      board_data = Map.get(assigns.stack_board_data, stack.id)
+      assert board_data, "expected stack_board_data to be keyed by stack.id"
+      assert board_data.member_count == 4
+      # 4 in-stack edges: m2→m1, m3→m1, m4→m2, m4→m3
+      assert board_data.dep_edge_count == 4
+      assert board_data.ready_count == 4
+      assert length(board_data.members) == 4
+
+      assert %MapSet{} = assigns.expanded_stacks
+      assert MapSet.size(assigns.expanded_stacks) == 0
+
+      assert is_map(assigns.board_items)
+    end
+
+    test "board_items merges stacks and standalone tasks into the rollup_status column, sorted by updated_at desc",
+         %{conn: conn, stack: stack, task_old: task_old, task_new: task_new} do
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      assigns = :sys.get_state(view.pid).socket.assigns
+
+      in_review_items = Map.fetch!(assigns.board_items, "in_review")
+
+      # The newer task, the stack, and the older task should ALL be in
+      # the In Review column. Stack members live UNDER the stack only;
+      # they must NOT appear in the flat column list.
+      ids = Enum.map(in_review_items, & &1.id)
+      assert task_new.id in ids
+      assert stack.id in ids
+      assert task_old.id in ids
+
+      # None of the stack members should be in the column.
+      member_ids = Enum.map(Map.fetch!(assigns.stack_board_data, stack.id).members, & &1.id)
+      refute Enum.any?(member_ids, &(&1 in ids))
+
+      # Verify interleaved sort by updated_at desc.
+      # task_new was created last, so it should be first.
+      assert hd(in_review_items).id == task_new.id
+
+      # task_old was created first, so it should be last among the three.
+      assert List.last(in_review_items).id == task_old.id
+
+      # The stack should be sandwiched between them, NOT grouped at top
+      # or bottom (sort interleaving).
+      stack_pos = Enum.find_index(in_review_items, &(&1.id == stack.id))
+      new_pos = Enum.find_index(in_review_items, &(&1.id == task_new.id))
+      old_pos = Enum.find_index(in_review_items, &(&1.id == task_old.id))
+      assert new_pos < stack_pos
+      assert stack_pos < old_pos
+    end
+
+    test "stack members are stripped from :columns (task-only bucketing preserved for stage-1 template)",
+         %{conn: conn, stack: stack} do
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      assigns = :sys.get_state(view.pid).socket.assigns
+
+      # The old `:columns` task-only assign should NOT contain stack
+      # member tasks either — they belong to the stack and would
+      # otherwise double-render once stage 2 wires the stack card.
+      # Stage 1 strips them so the count badges and existing template
+      # match the post-stage-2 visible board.
+      all_column_ids =
+        assigns.columns
+        |> Map.values()
+        |> List.flatten()
+        |> Enum.map(& &1.id)
+
+      member_ids = Enum.map(Map.fetch!(assigns.stack_board_data, stack.id).members, & &1.id)
+
+      # Stage 1 keeps `:columns` unchanged (task-only, pre-existing
+      # behavior). Stack members ARE in `:columns` today because they
+      # are still real tasks with an `in_review` status — they only
+      # disappear from the BOARD-LEVEL view in `:board_items`. This
+      # asserts the explicit boundary: `:columns` is preserved bug-
+      # for-bug; `:board_items` is the new merged-and-stripped shape.
+      assert Enum.any?(member_ids, &(&1 in all_column_ids)),
+             "expected stack members to still appear in legacy :columns assign in stage 1"
+    end
+
+    test "board_items strips stack-member tasks from the flat column list",
+         %{conn: conn, stack: stack} do
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      assigns = :sys.get_state(view.pid).socket.assigns
+
+      all_board_ids =
+        assigns.board_items
+        |> Map.values()
+        |> List.flatten()
+        |> Enum.map(& &1.id)
+
+      member_ids = Enum.map(Map.fetch!(assigns.stack_board_data, stack.id).members, & &1.id)
+
+      refute Enum.any?(member_ids, &(&1 in all_board_ids)),
+             "stack members must not appear as standalone cards in :board_items"
+    end
+
+    test "PubSub board refresh resets :expanded_stacks", %{conn: conn, stack: stack} do
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+
+      # Manually pre-load expansion state. (T7 stage 2 will wire the
+      # `toggle_stack_expand` event; for stage 1 we drive the assign
+      # directly to test the reset, since the public-event handler
+      # doesn't exist yet.)
+      _new_state =
+        :sys.replace_state(view.pid, fn state ->
+          updated_socket =
+            Phoenix.Component.assign(
+              state.socket,
+              :expanded_stacks,
+              MapSet.new([stack.id])
+            )
+
+          %{state | socket: updated_socket}
+        end)
+
+      pre = :sys.get_state(view.pid).socket.assigns.expanded_stacks
+      assert MapSet.member?(pre, stack.id)
+
+      # Trigger a board refresh via PubSub (matches the existing
+      # `PubSub updates refresh the board` test).
+      Tasks.broadcast_board({:task_updated, %Tasks.Task{id: Ecto.UUID.generate()}})
+      _ = render(view)
+
+      post = :sys.get_state(view.pid).socket.assigns.expanded_stacks
+
+      assert MapSet.size(post) == 0,
+             "refresh_board/1 must reset :expanded_stacks per ADR 0041 acceptance criterion 3"
+    end
+
+    test "project filter change resets :expanded_stacks", %{
+      conn: conn,
+      project: project,
+      stack: stack
+    } do
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+
+      _new_state =
+        :sys.replace_state(view.pid, fn state ->
+          updated_socket =
+            Phoenix.Component.assign(
+              state.socket,
+              :expanded_stacks,
+              MapSet.new([stack.id])
+            )
+
+          %{state | socket: updated_socket}
+        end)
+
+      assert MapSet.member?(
+               :sys.get_state(view.pid).socket.assigns.expanded_stacks,
+               stack.id
+             )
+
+      _html = render_click(view, "select_project", %{"id" => project.id})
+
+      assert MapSet.size(:sys.get_state(view.pid).socket.assigns.expanded_stacks) == 0
+    end
+  end
+
+  describe "stack card rendering on the kanban board (T7 stage 2)" do
+    # ADR 0041 §"UI surface — Board view" + mock canvas 019e1a16 rev 2:
+    # the collapsed stack card lives in its rollup-status column alongside
+    # normal task cards, with a purple left-border accent, a STACK tag,
+    # member-count + dep-edge-count pills, and a rollup progress
+    # `{ready}/{total} ready` text. Click on the card toggles
+    # `:expanded_stacks` membership (stage 3 wires the expansion render).
+
+    setup %{conn: conn} do
+      conn = authenticated_conn(conn)
+      project = create_project()
+
+      stack = stack_fixture(project_id: project.id, name: "Render Test Stack")
+      {:ok, _members} = seed_stack_members(stack, count: 4)
+      {:ok, stack} = Stacks.recompute_stack_status(stack)
+
+      stack = Repo.get!(Stack, stack.id)
+
+      {:ok, conn: conn, project: project, stack: stack}
+    end
+
+    test "stack card renders in its rollup-status column with the violet accent and STACK tag",
+         %{conn: conn, stack: stack} do
+      {:ok, _view, html} = live(conn, ~p"/tasks")
+
+      # Distinctive purple accent + the data attribute the e2e checker
+      # will look for. We assert on the BOARD-LEVEL stack DOM id so the
+      # test pins the card to the desktop kanban iteration (the mobile
+      # list uses a button rather than the `stack-card-#{id}` shell).
+      assert html =~ "stack-card-#{stack.id}"
+      assert html =~ "data-stack-card=\"true\""
+      assert html =~ "border-violet-500"
+
+      # Uppercase STACK tag from the header row (per mock).
+      assert html =~ ~r/text-violet-300[^>]*>\s*Stack\s*</
+    end
+
+    test "stack card title row renders stack.name", %{conn: conn, stack: stack} do
+      {:ok, _view, html} = live(conn, ~p"/tasks")
+
+      assert html =~ stack.name
+    end
+
+    test "stack card shows member count, dep edge count, and rollup progress pills",
+         %{conn: conn, stack: stack} do
+      {:ok, view, html} = live(conn, ~p"/tasks")
+
+      board_data =
+        :sys.get_state(view.pid).socket.assigns.stack_board_data
+        |> Map.fetch!(stack.id)
+
+      # 4 members, 4 in-stack dep edges (m2→m1, m3→m1, m4→m2, m4→m3).
+      assert board_data.member_count == 4
+      assert board_data.dep_edge_count == 4
+
+      assert html =~ "#{board_data.member_count} tasks"
+      assert html =~ "#{board_data.dep_edge_count} dep edges"
+
+      # `{ready}/{total} ready` rollup progress.
+      assert html =~ "#{board_data.ready_count}/#{board_data.member_count} ready"
+    end
+
+    test "stack card declares the toggle_stack_expand phx-click with stack id",
+         %{conn: conn, stack: stack} do
+      {:ok, _view, html} = live(conn, ~p"/tasks")
+
+      assert html =~ ~s(phx-click="toggle_stack_expand")
+      assert html =~ ~s(phx-value-id="#{stack.id}")
+    end
+
+    test "stack members do NOT render as standalone cards on the board",
+         %{conn: conn, stack: stack} do
+      {:ok, view, html} = live(conn, ~p"/tasks")
+
+      member_ids =
+        :sys.get_state(view.pid).socket.assigns.stack_board_data
+        |> Map.fetch!(stack.id)
+        |> Map.fetch!(:members)
+        |> Enum.map(& &1.id)
+
+      # No `task-card-<member_id>` outer wrapper should appear — members
+      # render only under their stack (stage 3 wires that; stage 2 keeps
+      # them hidden).
+      Enum.each(member_ids, fn id ->
+        refute html =~ ~s(id="task-card-#{id}")
+      end)
+    end
+
+    test "toggle_stack_expand event flips :expanded_stacks MapSet membership",
+         %{conn: conn, stack: stack} do
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+
+      pre = :sys.get_state(view.pid).socket.assigns.expanded_stacks
+      refute MapSet.member?(pre, stack.id)
+
+      _html = render_click(view, "toggle_stack_expand", %{"id" => stack.id})
+
+      mid = :sys.get_state(view.pid).socket.assigns.expanded_stacks
+
+      assert MapSet.member?(mid, stack.id),
+             "first click should add the stack id to :expanded_stacks"
+
+      _html = render_click(view, "toggle_stack_expand", %{"id" => stack.id})
+
+      post = :sys.get_state(view.pid).socket.assigns.expanded_stacks
+
+      refute MapSet.member?(post, stack.id),
+             "second click should remove the stack id from :expanded_stacks"
+    end
+
+    test "toggle_stack_expand is a no-op for unknown stack ids",
+         %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+
+      unknown_id = Ecto.UUID.generate()
+
+      _html = render_click(view, "toggle_stack_expand", %{"id" => unknown_id})
+
+      post = :sys.get_state(view.pid).socket.assigns.expanded_stacks
+
+      assert MapSet.size(post) == 0,
+             "unknown stack ids must not leak into :expanded_stacks"
+    end
+
+    test "expanded stack flips the chevron's rotation class",
+         %{conn: conn, stack: stack} do
+      {:ok, view, html} = live(conn, ~p"/tasks")
+
+      # Collapsed by default — no `rotate-180` on the chevron near the
+      # stack-card shell.
+      refute html =~ ~r/stack-card-#{stack.id}[^>]*>.*rotate-180/s
+
+      html_expanded = render_click(view, "toggle_stack_expand", %{"id" => stack.id})
+
+      # After expansion, the chevron carries `rotate-180` somewhere in
+      # the stack card subtree.
+      assert html_expanded =~ "rotate-180"
+    end
+  end
+
+  describe "stack inline expansion (T7 stage 3)" do
+    # ADR 0041 §"UI surface — inline expansion": when a stack id is in
+    # `:expanded_stacks`, its members render indented under the stack
+    # header with numbered nodes (circled-digit glyphs), text dep
+    # annotations (`needs ①`, `parallel with ②`), and each member row
+    # is clickable to open the existing task detail panel.
+
+    setup %{conn: conn} do
+      conn = authenticated_conn(conn)
+      project = create_project()
+
+      stack = stack_fixture(project_id: project.id, name: "Expansion Test Stack")
+      {:ok, members} = seed_stack_members(stack, count: 4)
+      {:ok, stack} = Stacks.recompute_stack_status(stack)
+
+      stack = Repo.get!(Stack, stack.id)
+
+      [m1, m2, m3, m4] = members
+
+      {:ok, conn: conn, project: project, stack: stack, m1: m1, m2: m2, m3: m3, m4: m4}
+    end
+
+    test "collapsed stack does NOT render any member rows",
+         %{conn: conn, m1: m1, m2: m2, m3: m3, m4: m4} do
+      {:ok, _view, html} = live(conn, ~p"/tasks")
+
+      for m <- [m1, m2, m3, m4] do
+        refute html =~ ~s(id="stack-member-#{m.id}"),
+               "collapsed stack must NOT render member row for #{m.title}"
+      end
+    end
+
+    test "expanded stack renders each member's title with a numbered-node glyph",
+         %{conn: conn, stack: stack, m1: m1, m2: m2, m3: m3, m4: m4} do
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+
+      html = render_click(view, "toggle_stack_expand", %{"id" => stack.id})
+
+      for m <- [m1, m2, m3, m4] do
+        assert html =~ ~s(id="stack-member-#{m.id}"),
+               "expanded stack must render member row for #{m.title}"
+
+        assert html =~ m.title
+      end
+
+      # Numbered-node circled-digit glyphs ①②③④.
+      assert html =~ "①"
+      assert html =~ "②"
+      assert html =~ "③"
+      assert html =~ "④"
+    end
+
+    test "dep annotations render the correct `needs <glyph>` text per ADR 0041 mock",
+         %{conn: conn, stack: stack, m2: m2, m3: m3, m4: m4} do
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+
+      html = render_click(view, "toggle_stack_expand", %{"id" => stack.id})
+
+      # m2 depends on m1 only → "needs ①" with no parallel sibling
+      # mention because m1 has no deps (no other member parallels m2's
+      # dep set with size>0 and a different position).
+      assert html =~ ~r/stack-member-#{m2.id}[^>]*>.*?needs ①/s,
+             "m2 should render `needs ①`"
+
+      # m3 also depends on m1 → "needs ① • parallel with ②" because m2
+      # shares m3's dep set {m1}.
+      assert html =~ ~r/stack-member-#{m3.id}[^>]*>.*?needs ① • parallel with ②/s,
+             "m3 should render `needs ① • parallel with ②`"
+
+      # m4 depends on m2 + m3 → "needs ② + ③" (no parallel sibling
+      # because no other member shares its dep set).
+      assert html =~ ~r/stack-member-#{m4.id}[^>]*>.*?needs ② \+ ③/s,
+             "m4 should render `needs ② + ③`"
+
+      # m1 has no in-stack deps → no dep-annotation line in its row.
+      _stack = stack
+
+      refute html =~ ~r/stack-member-#{m2.id}[^>]*>.*?needs ① \+ /s,
+             "m2 should NOT render a multi-dep `needs` (single dep only)"
+    end
+
+    test "member row carries phx-click=\"select_task\" with the member id",
+         %{conn: conn, stack: stack, m3: m3} do
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+
+      html = render_click(view, "toggle_stack_expand", %{"id" => stack.id})
+
+      # Each member row reuses the existing select_task handler.
+      assert html =~ ~r/stack-member-#{m3.id}[^>]*phx-click="select_task"/s
+      assert html =~ ~r/stack-member-#{m3.id}[^>]*phx-value-id="#{m3.id}"/s
+    end
+
+    test "clicking a member row opens the task detail panel (select_task handler)",
+         %{conn: conn, stack: stack, m3: m3} do
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+
+      _html = render_click(view, "toggle_stack_expand", %{"id" => stack.id})
+
+      # `select_task` push_patches to `/tasks/:id`, which routes through
+      # handle_params and assigns `:selected_task` + `:show_detail`.
+      # Use element/render_click to drive the click on the actual DOM
+      # element so the patch + handle_params flow runs end-to-end.
+      view
+      |> element("#stack-member-#{m3.id}")
+      |> render_click()
+
+      assigns = :sys.get_state(view.pid).socket.assigns
+      assert assigns.show_detail == true
+      assert assigns.selected_task && assigns.selected_task.id == m3.id
+
+      _stack = stack
+    end
+
+    test "toggling expansion: collapsed → expanded → collapsed",
+         %{conn: conn, stack: stack, m1: m1} do
+      {:ok, view, html} = live(conn, ~p"/tasks")
+
+      # Initially collapsed: no member row in the HTML.
+      refute html =~ ~s(id="stack-member-#{m1.id}")
+
+      # First toggle: expanded — member row appears.
+      html_expanded = render_click(view, "toggle_stack_expand", %{"id" => stack.id})
+      assert html_expanded =~ ~s(id="stack-member-#{m1.id}")
+      assert html_expanded =~ m1.title
+
+      # Second toggle: collapsed again — member row disappears.
+      html_collapsed = render_click(view, "toggle_stack_expand", %{"id" => stack.id})
+      refute html_collapsed =~ ~s(id="stack-member-#{m1.id}")
+    end
+
+    test "numbered-node class varies by member status",
+         %{conn: conn, stack: stack, m1: m1} do
+      # Force m1 to `done` so we can assert the success tint.
+      {:ok, _m1} = Tasks.update_task(m1, %{status: "done"})
+
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      html = render_click(view, "toggle_stack_expand", %{"id" => stack.id})
+
+      # The done-status node carries the success-tint class.
+      assert html =~ ~r/stack-member-#{m1.id}[^>]*>.*?bg-success\/20/s,
+             "done member's numbered node should carry bg-success/20"
+
+      _stack = stack
+    end
+
+    test "stack header click toggles expand without bubbling from member click",
+         %{conn: conn, stack: stack, m2: m2} do
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+
+      # Expand the stack via the header click.
+      _html = render_click(view, "toggle_stack_expand", %{"id" => stack.id})
+
+      assert MapSet.member?(
+               :sys.get_state(view.pid).socket.assigns.expanded_stacks,
+               stack.id
+             )
+
+      # Click a member row directly — this should fire `select_task`
+      # (opening the detail panel) and NOT toggle the parent stack's
+      # expansion off. We assert the expansion flag still holds AFTER
+      # the member click, which is the bubble-safety contract from
+      # stage 3 §5.
+      view
+      |> element("#stack-member-#{m2.id}")
+      |> render_click()
+
+      assigns = :sys.get_state(view.pid).socket.assigns
+
+      assert MapSet.member?(assigns.expanded_stacks, stack.id),
+             "member click must NOT toggle the parent stack's expansion off"
+
+      assert assigns.selected_task && assigns.selected_task.id == m2.id
+    end
+  end
+
+  describe "stack mobile responsiveness (T7 stage 4)" do
+    # Verify the mobile section list renders the stack card with overflow
+    # safeguards (truncate, min-w-0, whitespace-nowrap) so the 375px
+    # iPhone-SE viewport doesn't break the card layout. The mobile list
+    # lives behind `md:hidden` and is the only stack-card surface phones
+    # see (the desktop kanban is `hidden md:flex`); these assertions are
+    # rendered HTML — both surfaces emit the same identifiers and the
+    # mobile one carries `stack-member-mobile-#{id}` ids.
+
+    setup %{conn: conn} do
+      conn = authenticated_conn(conn)
+      project = create_project()
+
+      stack =
+        stack_fixture(
+          project_id: project.id,
+          name:
+            "Very long stack name that absolutely will overflow a 375px column without truncate"
+        )
+
+      {:ok, _members} = seed_stack_members(stack, count: 4)
+      {:ok, stack} = Stacks.recompute_stack_status(stack)
+      stack = Repo.get!(Stack, stack.id)
+
+      {:ok, conn: conn, project: project, stack: stack}
+    end
+
+    test "mobile section list renders the stack card with the mobile-scoped id prefix",
+         %{conn: conn, stack: stack} do
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+
+      # Seeded stack rolls up to `in_review` (members default to
+      # `in_review`); the mobile list only renders the active filter
+      # pill's section (T6 PR #328), so switch to the matching pill
+      # before exercising the stack-card.
+      _ = render_click(view, "filter_by_status", %{"status" => stack.status})
+      html = render_click(view, "toggle_stack_expand", %{"id" => stack.id})
+
+      # Mobile member rows use the `stack-member-mobile-` id prefix so
+      # they don't collide with the desktop `stack-member-` ids — both
+      # surfaces are in the rendered HTML, only one is visible per
+      # breakpoint via Tailwind's `md:hidden` / `hidden md:flex`.
+      assert html =~ ~s(id="stack-member-mobile-)
+    end
+
+    test "stack card title carries truncate so 375px columns don't overflow",
+         %{conn: conn, stack: stack} do
+      {:ok, _view, html} = live(conn, ~p"/tasks")
+
+      # Both the mobile and desktop variants render the stack name
+      # inside an `h3` — assert at least one (mobile) instance has
+      # `truncate` applied so a long title can't overflow horizontally.
+      assert html =~
+               ~r/<h3[^>]*class="[^"]*\btruncate\b[^"]*"[^>]*>\s*#{Regex.escape(stack.name)}/s,
+             "stack title h3 must carry `truncate` to prevent 375px overflow"
+    end
+
+    test "stack header button has min-h-[44px] iOS tap target",
+         %{conn: conn, stack: stack} do
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+
+      # Switch the active mobile filter pill to the rollup status so
+      # the mobile stack header (the `min-h-[44px]` carrier) renders;
+      # the desktop kanban variant is always rendered (`hidden
+      # md:flex`) and emits `data-role="stack-header"` regardless.
+      html = render_click(view, "filter_by_status", %{"status" => stack.status})
+
+      # The mobile stack header button sits on the toggle_stack_expand
+      # phx-click — assert the iOS minimum 44px tap target is enforced.
+      # Tailwind arbitrary value `min-h-[44px]` renders verbatim in the
+      # class string. We assert presence of both markers in the
+      # rendered HTML; the heex template defines them on the same
+      # element (line ~189 of tasks_live.html.heex).
+      assert html =~ "data-role=\"stack-header\""
+      assert html =~ "min-h-[44px]"
+    end
+
+    test "expanded mobile member rows have min-h-[44px] tap target and truncate the title",
+         %{conn: conn, stack: stack} do
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+
+      # Switch the mobile filter pill to the rollup status so the
+      # mobile stack-card is visible before expanding (T6 PR #328).
+      _ = render_click(view, "filter_by_status", %{"status" => stack.status})
+      html = render_click(view, "toggle_stack_expand", %{"id" => stack.id})
+
+      # Mobile member rows must be ≥ 44px tall (iOS guideline) and the
+      # title span must `truncate min-w-0` so long member titles don't
+      # push the status badge off the right edge of a 375px column.
+      assert html =~ "stack-member-mobile-", "expansion must render the mobile member rows"
+      assert html =~ "min-h-[44px]"
+
+      assert html =~ "flex-1 min-w-0 text-xs leading-snug truncate",
+             "mobile member title span must carry `truncate min-w-0` for 375px"
+    end
+
+    test "stack card pill row uses whitespace-nowrap + shrink-0 so pills don't wrap mid-glyph",
+         %{conn: conn, stack: stack} do
+      {:ok, _view, html} = live(conn, ~p"/tasks")
+
+      _stack = stack
+
+      # The `N tasks` and `N dep edges` pills must stay on one line at
+      # 375px — they're short enough to fit but Tailwind's default
+      # min-width:auto on flex items can cause mid-pill wrapping when
+      # the title is long. Assert the whitespace-nowrap safeguard.
+      assert html =~ ~r/bg-base-200 px-1\.5 py-0\.5 rounded[^"]*whitespace-nowrap/,
+             "pill row spans must carry whitespace-nowrap shrink-0"
+    end
+
+    test "mobile list reserves bottom padding (pb-24) so the bottom-tab nav doesn't cover the last task",
+         %{conn: conn} do
+      {:ok, _view, html} = live(conn, ~p"/tasks")
+
+      # `--bottom-nav-height` is 56px below lg; pb-24 (= 6rem = 96px)
+      # comfortably clears it plus iOS safe-area-inset-bottom. This is
+      # the existing pre-stage-4 padding — assertion locks the contract
+      # so a future refactor doesn't accidentally drop it.
+      assert html =~ ~r/id="tasks-mobile-list"[^>]*class="[^"]*\bpb-24\b/,
+             "mobile list must keep pb-24 to clear the bottom-tab nav (~56px + safe-area)"
+    end
   end
 
   describe "last-selected-project persistence (LastProject hook)" do

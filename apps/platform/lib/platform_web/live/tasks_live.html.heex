@@ -159,8 +159,11 @@
     <div
       :if={!(@show_detail && @selected_task)}
       id="tasks-mobile-list"
-      class="md:hidden flex flex-1 flex-col overflow-hidden"
+      class="md:hidden flex flex-1 flex-col overflow-hidden pb-24"
     >
+      <%!-- T6 status-filter pill nav (PR #328). Counts are derived from
+           `@board_items` so stack cards contribute to the per-pill
+           total — `@columns` is task-only and would undercount. --%>
       <nav
         id="tasks-status-filter-pills"
         phx-hook="TasksStatusFilter"
@@ -188,7 +191,7 @@
           </span>
           {col_label}
           <span
-            :if={length(Map.get(@columns, col_key, [])) > 0}
+            :if={length(Map.get(@board_items, col_key, [])) > 0}
             class={[
               "inline-flex items-center justify-center min-w-[18px] h-[18px] rounded-full text-[10px] font-bold tabular-nums",
               if(@active_status_filter == col_key,
@@ -197,80 +200,193 @@
               )
             ]}
           >
-            {length(Map.get(@columns, col_key, []))}
+            {length(Map.get(@board_items, col_key, []))}
           </span>
         </button>
       </nav>
 
+      <%!-- T7 mobile section list, rebased on top of T6's pill filter.
+           Iterates `@mobile_columns` for ordering + only renders the
+           active-filter section. Items come from `@board_items` so
+           stack cards interleave with standalone tasks (sorted by
+           `updated_at`, ADR 0041). Stack cards include the stage-3
+           expansion contract (`stack-member-mobile-#{id}` rows + dep
+           annotations). Empty-state checks also use `@board_items`. --%>
       <div class="flex-1 overflow-y-auto px-3 pb-24">
         <div
           :for={{col_key, col_label} <- @mobile_columns}
-          :if={@active_status_filter == col_key && Map.get(@columns, col_key, []) != []}
+          :if={@active_status_filter == col_key && Map.get(@board_items, col_key, []) != []}
           class="mt-4 first:mt-2"
         >
           <h2 class="text-xs font-semibold uppercase tracking-widest text-base-content/50 mb-2 px-1">
-            {col_label} · {length(Map.get(@columns, col_key, []))}
+            {col_label} · {length(Map.get(@board_items, col_key, []))}
           </h2>
           <div class="flex flex-col gap-2">
-            <% column_tasks = Map.get(@columns, col_key, []) %>
-            <%= for task <- column_tasks do %>
-              <% assignee = assignee_identity(task, @users_by_id, @agents_by_id) %>
-              <button
-                type="button"
-                phx-click="select_task"
-                phx-value-id={task.id}
-                class="flex flex-col gap-1.5 rounded-box border border-base-300 bg-base-100 p-3 text-left transition-colors hover:bg-base-200/60 focus-visible-ring"
-                data-task-id={task.id}
-              >
-                <div class="flex items-start gap-2">
-                  <span
-                    class={["mt-1.5 size-2 shrink-0 rounded-full", status_dot_class(col_key)]}
-                    aria-hidden="true"
+            <% column_items = Map.get(@board_items, col_key, []) %>
+            <%= for item <- column_items do %>
+              <%= case item.__struct__ do %>
+                <% Platform.Tasks.Stack -> %>
+                  <% board_data =
+                    Map.get(@stack_board_data, item.id, %{
+                      member_count: 0,
+                      dep_edge_count: 0,
+                      ready_count: 0,
+                      members: []
+                    }) %>
+                  <div
+                    data-stack-card="true"
+                    data-stack-id={item.id}
+                    data-expanded={
+                      if(MapSet.member?(@expanded_stacks, item.id), do: "true", else: "false")
+                    }
+                    class="flex flex-col rounded-box border-l-4 border-violet-500 border border-base-300 bg-base-100"
                   >
-                  </span>
-                  <span class="text-sm font-medium leading-snug flex-1">{task.title}</span>
-                  <span
-                    :if={has_active_run?(task)}
-                    class="mt-1.5 inline-block size-2 shrink-0 rounded-full bg-success animate-pulse"
-                    title="Active run"
+                    <button
+                      type="button"
+                      phx-click="toggle_stack_expand"
+                      phx-value-id={item.id}
+                      data-role="stack-header"
+                      class="flex min-w-0 flex-col gap-1.5 p-3 text-left transition-colors hover:bg-base-200/60 focus-visible-ring min-h-[44px]"
+                    >
+                      <div class="flex min-w-0 items-center gap-2">
+                        <span
+                          class="hero-rectangle-stack size-4 shrink-0 text-violet-300"
+                          aria-hidden="true"
+                        >
+                        </span>
+                        <span class="text-[9px] font-semibold uppercase tracking-wider text-violet-300 shrink-0">
+                          Stack
+                        </span>
+                        <span class="ml-auto text-[10px] text-base-content/50 font-medium whitespace-nowrap shrink-0">
+                          {board_data.ready_count}/{board_data.member_count} ready
+                        </span>
+                        <span
+                          class={[
+                            "hero-chevron-down size-3 text-violet-300 transition-transform shrink-0",
+                            MapSet.member?(@expanded_stacks, item.id) && "rotate-180"
+                          ]}
+                          aria-hidden="true"
+                        >
+                        </span>
+                      </div>
+                      <h3 class="text-sm font-medium leading-snug truncate min-w-0">
+                        {item.name}
+                      </h3>
+                      <div class="flex min-w-0 items-center gap-1.5 text-[10px] text-base-content/60">
+                        <span class="bg-base-200 px-1.5 py-0.5 rounded whitespace-nowrap shrink-0">
+                          {board_data.member_count} tasks
+                        </span>
+                        <span class="bg-base-200 px-1.5 py-0.5 rounded whitespace-nowrap shrink-0">
+                          {board_data.dep_edge_count} dep edges
+                        </span>
+                      </div>
+                    </button>
+                    <div
+                      :if={MapSet.member?(@expanded_stacks, item.id)}
+                      data-role="stack-members"
+                      data-stack-id={item.id}
+                      class="flex flex-col gap-1.5 px-3 pb-3 pl-4"
+                    >
+                      <%= for member <- Enum.sort_by(board_data.members, & &1.stack_position) do %>
+                        <% {member_status_label, member_status_class} =
+                          task_display_status(member) %>
+                        <% member_dep_text = dep_annotation_text(member, board_data.members) %>
+                        <button
+                          type="button"
+                          id={"stack-member-mobile-#{member.id}"}
+                          data-stack-member="true"
+                          data-member-id={member.id}
+                          data-stack-position={member.stack_position}
+                          phx-click="select_task"
+                          phx-value-id={member.id}
+                          class="relative rounded border border-base-200/60 bg-base-100 py-3 pl-8 pr-2 text-left transition-colors hover:bg-base-200/60 min-h-[44px]"
+                        >
+                          <span class={[
+                            "absolute left-1 top-3 inline-flex size-5 items-center justify-center rounded-full text-[10px] font-semibold",
+                            member_node_class(member.status)
+                          ]}>
+                            {stack_position_glyph(member.stack_position)}
+                          </span>
+                          <div class="flex min-w-0 items-center gap-2">
+                            <span class="flex-1 min-w-0 text-xs leading-snug truncate">
+                              {member.title}
+                            </span>
+                            <span class={"#{member_status_class} badge-xs whitespace-nowrap shrink-0"}>
+                              {member_status_label}
+                            </span>
+                          </div>
+                          <div
+                            :if={member_dep_text}
+                            data-role="dep-annotation"
+                            class="mt-1 text-[10px] text-base-content/50"
+                          >
+                            <span class="text-violet-400" aria-hidden="true">↑</span>
+                            {member_dep_text}
+                          </div>
+                        </button>
+                      <% end %>
+                    </div>
+                  </div>
+                <% _ -> %>
+                  <% task = item %>
+                  <% assignee = assignee_identity(task, @users_by_id, @agents_by_id) %>
+                  <button
+                    type="button"
+                    phx-click="select_task"
+                    phx-value-id={task.id}
+                    class="flex flex-col gap-1.5 rounded-box border border-base-300 bg-base-100 p-3 text-left transition-colors hover:bg-base-200/60 focus-visible-ring"
+                    data-task-id={task.id}
                   >
-                  </span>
-                </div>
-                <div class="flex items-center gap-1.5 pl-4 text-xs text-base-content/60">
-                  <%= if assignee do %>
-                    <%= if assignee.type == :user do %>
-                      <.human_avatar
-                        name={assignee.name}
-                        avatar_url={assignee.avatar_url}
-                        seed={assignee.seed}
-                        size="xs"
-                        class="size-4 shrink-0"
-                      />
-                    <% else %>
-                      <span class="flex size-4 shrink-0 items-center justify-center rounded-full bg-accent/15 text-[9px] font-bold text-accent">
-                        {agent_initials(assignee.name)}
+                    <div class="flex items-start gap-2">
+                      <span
+                        class={["mt-1.5 size-2 shrink-0 rounded-full", status_dot_class(col_key)]}
+                        aria-hidden="true"
+                      >
                       </span>
-                    <% end %>
-                    <span class="truncate">{assignee.name}</span>
-                    <span aria-hidden="true">·</span>
-                  <% end %>
-                  <span :if={task.inserted_at} class="whitespace-nowrap">
-                    {relative_time(task.inserted_at)}
-                  </span>
-                </div>
-              </button>
+                      <span class="text-sm font-medium leading-snug flex-1">{task.title}</span>
+                      <span
+                        :if={has_active_run?(task)}
+                        class="mt-1.5 inline-block size-2 shrink-0 rounded-full bg-success animate-pulse"
+                        title="Active run"
+                      >
+                      </span>
+                    </div>
+                    <div class="flex items-center gap-1.5 pl-4 text-xs text-base-content/60">
+                      <%= if assignee do %>
+                        <%= if assignee.type == :user do %>
+                          <.human_avatar
+                            name={assignee.name}
+                            avatar_url={assignee.avatar_url}
+                            seed={assignee.seed}
+                            size="xs"
+                            class="size-4 shrink-0"
+                          />
+                        <% else %>
+                          <span class="flex size-4 shrink-0 items-center justify-center rounded-full bg-accent/15 text-[9px] font-bold text-accent">
+                            {agent_initials(assignee.name)}
+                          </span>
+                        <% end %>
+                        <span class="truncate">{assignee.name}</span>
+                        <span aria-hidden="true">·</span>
+                      <% end %>
+                      <span :if={task.inserted_at} class="whitespace-nowrap">
+                        {relative_time(task.inserted_at)}
+                      </span>
+                    </div>
+                  </button>
+              <% end %>
             <% end %>
           </div>
         </div>
 
-        <.empty_state :if={empty_board?(@columns)} variant={:minimal}>
+        <.empty_state :if={empty_board?(@board_items)} variant={:minimal}>
           <:body>No tasks yet — tap the + button to create one.</:body>
         </.empty_state>
 
         <.empty_state
           :if={
-            !empty_board?(@columns) &&
-              Map.get(@columns, @active_status_filter, []) == []
+            !empty_board?(@board_items) &&
+              Map.get(@board_items, @active_status_filter, []) == []
           }
           variant={:minimal}
         >
@@ -300,172 +416,306 @@
             {col_label}
           </h2>
           <span class="badge badge-ghost badge-xs">
-            {length(Map.get(@columns, col_key, []))}
+            {length(Map.get(@board_items, col_key, []))}
           </span>
         </div>
 
-        <%!-- Task cards --%>
+        <%!-- Board items (task cards + collapsed stack cards).
+             Pattern-match on `item.__struct__`: %Platform.Tasks.Stack{}
+             renders the new collapsed stack card; %Platform.Tasks.Task{}
+             keeps the existing task card rendering. Stacks are NOT
+             draggable (stack-level reordering is out of scope for T7) —
+             only tasks carry `draggable="true"` and the KanbanDragDrop
+             hook's drag handlers. --%>
         <div class="flex flex-1 flex-col gap-2 overflow-y-auto px-2 pb-2">
-          <div
-            :for={task <- Map.get(@columns, col_key, [])}
-            id={"task-card-#{task.id}"}
-            data-task-id={task.id}
-            draggable="true"
-            class="group card card-compact cursor-grab border border-base-300 bg-base-100 shadow-sm transition-all hover:shadow-md active:cursor-grabbing"
-            phx-click="select_task"
-            phx-value-id={task.id}
-          >
-            <div class="card-body gap-1 p-3">
-              <%!-- Project name --%>
-              <p
-                :if={task.project}
-                class="text-[10px] font-medium uppercase tracking-wider text-base-content/40"
-              >
-                {task.project.name}
-              </p>
+          <%= for item <- Map.get(@board_items, col_key, []) do %>
+            <%= case item.__struct__ do %>
+              <% Platform.Tasks.Stack -> %>
+                <% board_data =
+                  Map.get(@stack_board_data, item.id, %{
+                    member_count: 0,
+                    dep_edge_count: 0,
+                    ready_count: 0
+                  }) %>
+                <%!-- Collapsed stack card. Purple violet-500 left border
+                     accent matches mock canvas 019e1a16 rev 2
+                     (`--stk: #7b5cff`). Clicking the HEADER toggles
+                     `:expanded_stacks` MapSet membership; the
+                     expansion render is a sibling block so member
+                     clicks do NOT bubble back into the toggle handler
+                     (stage 3 §5). --%>
+                <div
+                  id={"stack-card-#{item.id}"}
+                  data-stack-card="true"
+                  data-stack-id={item.id}
+                  data-expanded={
+                    if(MapSet.member?(@expanded_stacks, item.id), do: "true", else: "false")
+                  }
+                  class="group card card-compact border-l-4 border-violet-500 border border-base-300 bg-base-100 shadow-sm transition-all hover:shadow-md"
+                >
+                  <%!-- Header click target. Restricted to the header so
+                       clicks on member rows below don't toggle
+                       expansion. --%>
+                  <div
+                    class="card-body cursor-pointer gap-1.5 p-3"
+                    phx-click="toggle_stack_expand"
+                    phx-value-id={item.id}
+                    data-role="stack-header"
+                  >
+                    <%!-- Header row: icon + STACK tag + rollup progress --%>
+                    <div class="flex min-w-0 items-center gap-1.5">
+                      <span
+                        class="hero-rectangle-stack size-4 shrink-0 text-violet-300"
+                        aria-hidden="true"
+                      >
+                      </span>
+                      <span class="text-[9px] font-semibold uppercase tracking-wider text-violet-300 shrink-0">
+                        Stack
+                      </span>
+                      <span class="ml-auto text-[10px] text-base-content/50 font-medium whitespace-nowrap shrink-0">
+                        {board_data.ready_count}/{board_data.member_count} ready
+                      </span>
+                    </div>
 
-              <%!-- Title row --%>
-              <%!--
+                    <%!-- Title row --%>
+                    <h3 class="text-sm font-medium leading-snug truncate min-w-0">{item.name}</h3>
+
+                    <%!-- Pills row: member count + dep edge count +
+                         chevron. --%>
+                    <div class="flex min-w-0 items-center gap-1.5 text-[10px] text-base-content/60">
+                      <span class="bg-base-200 px-1.5 py-0.5 rounded font-medium whitespace-nowrap shrink-0">
+                        {board_data.member_count} tasks
+                      </span>
+                      <span class="bg-base-200 px-1.5 py-0.5 rounded font-medium whitespace-nowrap shrink-0">
+                        {board_data.dep_edge_count} dep edges
+                      </span>
+                      <span
+                        class={[
+                          "hero-chevron-down size-3 ml-auto text-violet-300 transition-transform shrink-0",
+                          MapSet.member?(@expanded_stacks, item.id) && "rotate-180"
+                        ]}
+                        aria-hidden="true"
+                      >
+                      </span>
+                    </div>
+                  </div>
+
+                  <%!-- Inline expansion — members rendered indented
+                       below the header when this stack id is in
+                       `:expanded_stacks`. Each row is its own
+                       `phx-click="select_task"` target reusing the
+                       task detail-panel handler (T8 will later add a
+                       stack-level detail panel for header clicks). --%>
+                  <div
+                    :if={MapSet.member?(@expanded_stacks, item.id)}
+                    data-role="stack-members"
+                    data-stack-id={item.id}
+                    class="flex flex-col gap-1.5 px-3 pb-3 pl-4"
+                  >
+                    <%= for member <- Enum.sort_by(board_data.members, & &1.stack_position) do %>
+                      <% {status_label, status_class} = task_display_status(member) %>
+                      <% dep_text =
+                        dep_annotation_text(member, board_data.members) %>
+                      <div
+                        id={"stack-member-#{member.id}"}
+                        data-stack-member="true"
+                        data-member-id={member.id}
+                        data-stack-position={member.stack_position}
+                        phx-click="select_task"
+                        phx-value-id={member.id}
+                        class="relative cursor-pointer rounded border border-base-200/60 bg-base-100 py-2 pl-8 pr-2 transition-colors hover:bg-base-200/60 min-h-[44px]"
+                      >
+                        <span class={[
+                          "absolute left-1 top-2 inline-flex size-5 items-center justify-center rounded-full text-[10px] font-semibold",
+                          member_node_class(member.status)
+                        ]}>
+                          {stack_position_glyph(member.stack_position)}
+                        </span>
+                        <div class="flex min-w-0 items-center gap-2">
+                          <span class="flex-1 min-w-0 text-xs leading-snug truncate">
+                            {member.title}
+                          </span>
+                          <span class={"#{status_class} badge-xs whitespace-nowrap shrink-0"}>
+                            {status_label}
+                          </span>
+                        </div>
+                        <div
+                          :if={dep_text}
+                          data-role="dep-annotation"
+                          class="mt-1 text-[10px] text-base-content/50"
+                        >
+                          <span class="text-violet-400" aria-hidden="true">↑</span> {dep_text}
+                        </div>
+                      </div>
+                    <% end %>
+                  </div>
+                </div>
+              <% _ -> %>
+                <% task = item %>
+                <div
+                  id={"task-card-#{task.id}"}
+                  data-task-id={task.id}
+                  draggable="true"
+                  class="group card card-compact cursor-grab border border-base-300 bg-base-100 shadow-sm transition-all hover:shadow-md active:cursor-grabbing"
+                  phx-click="select_task"
+                  phx-value-id={task.id}
+                >
+                  <div class="card-body gap-1 p-3">
+                    <%!-- Project name --%>
+                    <p
+                      :if={task.project}
+                      class="text-[10px] font-medium uppercase tracking-wider text-base-content/40"
+                    >
+                      {task.project.name}
+                    </p>
+
+                    <%!-- Title row --%>
+                    <%!--
                 v2 stage 3: kanban-card title is plain text. Clicking it
                 bubbles to the card's outer `phx-click="select_task"` and
                 opens the detail panel, where the title can be edited via
                 the explicit edit-mode toggle.
               --%>
-              <div class="flex items-start justify-between gap-2">
-                <h3
-                  id={"card-title-#{task.id}"}
-                  class="text-sm font-medium leading-snug flex-1"
-                  data-role="card-title"
-                >
-                  {task.title}
-                </h3>
-                <div class="flex items-center gap-1 flex-shrink-0">
-                  <%!-- Active run indicator --%>
-                  <span
-                    :if={has_active_run?(task)}
-                    class="inline-block size-2 rounded-full bg-success animate-pulse"
-                    title="Active run"
-                  />
-                  <%!-- Assignee --%>
-                  <% assignee = assignee_identity(task, @users_by_id, @agents_by_id) %>
-                  <%= if assignee do %>
-                    <%= if assignee.type == :user do %>
-                      <.human_avatar
-                        name={assignee.name}
-                        avatar_url={assignee.avatar_url}
-                        seed={assignee.seed}
-                        size="xs"
-                        class="shrink-0"
-                        title={assignee.name}
-                      />
-                    <% else %>
-                      <span
-                        class="flex size-5 items-center justify-center rounded-full bg-accent/15 text-[10px] font-bold text-accent ring-1 ring-accent/20"
-                        title={assignee.name}
-                        data-avatar-kind="agent"
+                    <div class="flex items-start justify-between gap-2">
+                      <h3
+                        id={"card-title-#{task.id}"}
+                        class="text-sm font-medium leading-snug flex-1"
+                        data-role="card-title"
                       >
-                        {agent_initials(assignee.name)}
-                      </span>
-                    <% end %>
-                  <% end %>
-                  <%!-- Three-dot menu — opens a bottom sheet on mobile + a centered
+                        {task.title}
+                      </h3>
+                      <div class="flex items-center gap-1 flex-shrink-0">
+                        <%!-- Active run indicator --%>
+                        <span
+                          :if={has_active_run?(task)}
+                          class="inline-block size-2 rounded-full bg-success animate-pulse"
+                          title="Active run"
+                        />
+                        <%!-- Assignee --%>
+                        <% assignee = assignee_identity(task, @users_by_id, @agents_by_id) %>
+                        <%= if assignee do %>
+                          <%= if assignee.type == :user do %>
+                            <.human_avatar
+                              name={assignee.name}
+                              avatar_url={assignee.avatar_url}
+                              seed={assignee.seed}
+                              size="xs"
+                              class="shrink-0"
+                              title={assignee.name}
+                            />
+                          <% else %>
+                            <span
+                              class="flex size-5 items-center justify-center rounded-full bg-accent/15 text-[10px] font-bold text-accent ring-1 ring-accent/20"
+                              title={assignee.name}
+                              data-avatar-kind="agent"
+                            >
+                              {agent_initials(assignee.name)}
+                            </span>
+                          <% end %>
+                        <% end %>
+                        <%!-- Three-dot menu — opens a bottom sheet on mobile + a centered
                        sheet on desktop. Replaced the inert DaisyUI dropdown
                        (task 019e0d4b stage 2). The icon stays opacity-0 / hover-
                        reveal on desktop; on mobile it's always visible since
                        there's no hover signal.  --%>
-                  <button
-                    :if={deletable_task?(task)}
-                    type="button"
-                    phx-click="open_task_actions"
-                    phx-value-id={task.id}
-                    aria-label="Task actions"
-                    title="Task actions"
-                    class="btn btn-ghost btn-xs btn-square opacity-100 lg:opacity-0 lg:group-hover:opacity-100 transition-opacity"
-                  >
-                    <span class="hero-ellipsis-vertical size-4"></span>
-                  </button>
-                </div>
-              </div>
+                        <button
+                          :if={deletable_task?(task)}
+                          type="button"
+                          phx-click="open_task_actions"
+                          phx-value-id={task.id}
+                          aria-label="Task actions"
+                          title="Task actions"
+                          class="btn btn-ghost btn-xs btn-square opacity-100 lg:opacity-0 lg:group-hover:opacity-100 transition-opacity"
+                        >
+                          <span class="hero-ellipsis-vertical size-4"></span>
+                        </button>
+                      </div>
+                    </div>
 
-              <%!-- Author + assignee + date --%>
-              <div
-                :if={task.reported_by || assignee_name(task, @agent_names) || task.inserted_at}
-                class="mt-1 flex items-center gap-1.5 text-[10px] text-base-content/40"
-              >
-                <span
-                  :if={task.reported_by}
-                  class="truncate max-w-[100px]"
-                  title={"Reported by " <> (task.reported_by || "")}
-                >
-                  {task.reported_by}
-                </span>
-                <span :if={
-                  task.reported_by && (assignee_name(task, @agent_names) || task.inserted_at)
-                }>
-                  ·
-                </span>
-                <span :if={assignee_name(task, @agent_names)} class="truncate max-w-[100px]">
-                  → {assignee_name(task, @agent_names)}
-                </span>
-                <span :if={assignee_name(task, @agent_names) && task.inserted_at}>·</span>
-                <span :if={task.inserted_at} class="whitespace-nowrap">
-                  {relative_time(task.inserted_at)}
-                </span>
-              </div>
+                    <%!-- Author + assignee + date --%>
+                    <div
+                      :if={
+                        task.reported_by || assignee_name(task, @agent_names) || task.inserted_at
+                      }
+                      class="mt-1 flex items-center gap-1.5 text-[10px] text-base-content/40"
+                    >
+                      <span
+                        :if={task.reported_by}
+                        class="truncate max-w-[100px]"
+                        title={"Reported by " <> (task.reported_by || "")}
+                      >
+                        {task.reported_by}
+                      </span>
+                      <span :if={
+                        task.reported_by &&
+                          (assignee_name(task, @agent_names) || task.inserted_at)
+                      }>
+                        ·
+                      </span>
+                      <span :if={assignee_name(task, @agent_names)} class="truncate max-w-[100px]">
+                        → {assignee_name(task, @agent_names)}
+                      </span>
+                      <span :if={assignee_name(task, @agent_names) && task.inserted_at}>·</span>
+                      <span :if={task.inserted_at} class="whitespace-nowrap">
+                        {relative_time(task.inserted_at)}
+                      </span>
+                    </div>
 
-              <%!-- Bottom row: priority + progress --%>
-              <div class="mt-1 flex items-center gap-2">
-                <span :if={task.priority} class={priority_badge_class(task.priority)}>
-                  {task.priority}
-                </span>
-                <% {status_badge_label, status_badge_class} = task_display_status(task) %>
-                <span
-                  :if={task.status in ~w(blocked planning in_review deploying)}
-                  class={"#{status_badge_class} badge-xs"}
-                >
-                  {status_badge_label}
-                </span>
+                    <%!-- Bottom row: priority + progress --%>
+                    <div class="mt-1 flex items-center gap-2">
+                      <span :if={task.priority} class={priority_badge_class(task.priority)}>
+                        {task.priority}
+                      </span>
+                      <% {status_badge_label, status_badge_class} = task_display_status(task) %>
+                      <span
+                        :if={task.status in ~w(blocked planning in_review deploying)}
+                        class={"#{status_badge_class} badge-xs"}
+                      >
+                        {status_badge_label}
+                      </span>
 
-                <%!-- Blocked-by-deps badge: only when status="blocked" AND
+                      <%!-- Blocked-by-deps badge: only when status="blocked" AND
                      metadata["unmet_dependencies"] is non-empty. Count is
                      read straight from metadata (no per-card DB hit). --%>
-                <span
-                  :if={task.status == "blocked" and unmet_dependency_count(task) > 0}
-                  class="badge badge-error badge-xs"
-                  title="Waiting on dependencies"
-                >
-                  Blocked · {unmet_dependency_count(task)}
-                </span>
+                      <span
+                        :if={task.status == "blocked" and unmet_dependency_count(task) > 0}
+                        class="badge badge-error badge-xs"
+                        title="Waiting on dependencies"
+                      >
+                        Blocked · {unmet_dependency_count(task)}
+                      </span>
 
-                <%!-- Review badge --%>
-                <span
-                  :if={Map.get(@review_counts, task.id, 0) > 0}
-                  class="badge badge-warning badge-xs gap-1"
-                >
-                  <span class="hero-eye size-3"></span>
-                  {Map.get(@review_counts, task.id)} review
-                </span>
+                      <%!-- Review badge --%>
+                      <span
+                        :if={Map.get(@review_counts, task.id, 0) > 0}
+                        class="badge badge-warning badge-xs gap-1"
+                      >
+                        <span class="hero-eye size-3"></span>
+                        {Map.get(@review_counts, task.id)} review
+                      </span>
 
-                <%!-- Plan stage progress --%>
-                <% progress = plan_progress(task) %>
-                <div :if={progress} class="flex flex-1 items-center gap-1">
-                  <progress
-                    class="progress progress-primary h-1 flex-1"
-                    value={elem(progress, 0)}
-                    max={elem(progress, 1)}
-                  />
-                  <span class="text-[10px] text-base-content/40">
-                    {elem(progress, 0)}/{elem(progress, 1)}
-                  </span>
-                </div>
-              </div>
+                      <%!-- Plan stage progress --%>
+                      <% progress = plan_progress(task) %>
+                      <div :if={progress} class="flex flex-1 items-center gap-1">
+                        <progress
+                          class="progress progress-primary h-1 flex-1"
+                          value={elem(progress, 0)}
+                          max={elem(progress, 1)}
+                        />
+                        <span class="text-[10px] text-base-content/40">
+                          {elem(progress, 0)}/{elem(progress, 1)}
+                        </span>
+                      </div>
+                    </div>
 
-              <%!-- Per ADR 0029, plan approval is the only start signal.
+                    <%!-- Per ADR 0029, plan approval is the only start signal.
                    No separate manual "Start" button on the card. The user
                    approves a plan from the detail panel, and the task
                    transitions automatically. --%>
-            </div>
-          </div>
+                  </div>
+                </div>
+            <% end %>
+          <% end %>
 
           <%!-- Per-column empty state. SPEC DEVIATION: spec §5.3 says
                :conversational with chips, but that's per-COLUMN here on a
@@ -475,7 +725,7 @@
                is a separate concern that doesn't exist on this surface
                (no board-level @all_tasks == [] check); add later if Marlowe
                wants the V3 voice on the kanban-empty case. --%>
-          <.empty_state :if={Map.get(@columns, col_key, []) == []} variant={:minimal}>
+          <.empty_state :if={Map.get(@board_items, col_key, []) == []} variant={:minimal}>
             <:body>No tasks</:body>
           </.empty_state>
         </div>

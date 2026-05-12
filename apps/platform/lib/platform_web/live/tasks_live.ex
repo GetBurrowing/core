@@ -13,7 +13,7 @@ defmodule PlatformWeb.TasksLive do
   alias Platform.Repo
   alias Platform.Skills
   alias Platform.Tasks
-  alias Platform.Tasks.{Plan, ReviewRequest, ReviewRequests, Task}
+  alias Platform.Tasks.{Plan, ReviewRequest, ReviewRequests, Stack, Stacks, Task}
 
   @kanban_columns [
     {"backlog", "Backlog"},
@@ -51,6 +51,8 @@ defmodule PlatformWeb.TasksLive do
 
     projects = Tasks.list_projects()
     all_tasks = Tasks.list_all_tasks()
+    stack_entries = Stacks.list_stacks_with_members(%{})
+    {stack_board_data, stacks} = split_stack_entries(stack_entries)
     users = Accounts.list_users()
     users_by_id = Map.new(users, &{&1.id, &1})
     agents = Chat.list_agents_for_picker()
@@ -68,7 +70,21 @@ defmodule PlatformWeb.TasksLive do
      |> assign(:projects_collapsed, false)
      |> assign(:show_project_sheet, false)
      |> assign(:all_tasks, all_tasks)
+     |> assign(:stacks, stacks)
+     |> assign(:stack_board_data, stack_board_data)
+     # `:columns` continues to hold task-only buckets so the existing
+     # heex template (which references `task.project`, `task.title`,
+     # `task.inserted_at`, etc.) does not crash on `%Stack{}` rows
+     # before stage 2 wires the stack-card variant. The new
+     # `:board_items` assign carries the merged-and-sorted shape per
+     # ADR 0041 acceptance criterion 1; stage 2 switches the template
+     # over to it. See `group_board_items/2`.
      |> assign(:columns, group_by_column(all_tasks))
+     |> assign(:board_items, group_board_items(all_tasks, stack_entries))
+     # Ephemeral expansion state: ids of stacks the user has clicked open
+     # on the board (ADR 0041 acceptance criterion 3). MUST reset on
+     # every list refetch — see `refresh_board/1`.
+     |> assign(:expanded_stacks, MapSet.new())
      |> assign(:kanban_columns, @kanban_columns)
      |> assign(:mobile_columns, @mobile_columns)
      |> assign(:active_status_filter, "in_progress")
@@ -363,6 +379,34 @@ defmodule PlatformWeb.TasksLive do
 
   def handle_event("select_task", %{"id" => task_id}, socket) do
     {:noreply, push_patch(socket, to: ~p"/tasks/#{task_id}")}
+  end
+
+  # Toggle a stack card's expansion state on the kanban board (T7 stage 2).
+  #
+  # Stage 2 only manages the `:expanded_stacks` MapSet — the rendered
+  # expansion (indented member rows + dep annotations) lands in stage 3.
+  # Clicking the collapsed card flips the chevron orientation; the row
+  # list itself does not appear until stage 3 wires the heex.
+  #
+  # No-op if the id is not currently in `:stacks` (defensive against
+  # stale DOM after PubSub refresh removed the stack).
+  def handle_event("toggle_stack_expand", %{"id" => stack_id}, socket) do
+    known? = Enum.any?(socket.assigns.stacks, &(&1.id == stack_id))
+
+    if known? do
+      expanded = socket.assigns.expanded_stacks
+
+      next =
+        if MapSet.member?(expanded, stack_id) do
+          MapSet.delete(expanded, stack_id)
+        else
+          MapSet.put(expanded, stack_id)
+        end
+
+      {:noreply, assign(socket, :expanded_stacks, next)}
+    else
+      {:noreply, socket}
+    end
   end
 
   def handle_event("close_detail", _params, socket) do
@@ -1672,12 +1716,67 @@ defmodule PlatformWeb.TasksLive do
 
   # ── Private — Kanban helpers ───────────────────────────────────────────
 
+  # Task-only kanban bucketing. Preserved verbatim alongside the new
+  # `group_board_items/2` because the existing heex template still
+  # iterates `@columns` and accesses Task-only fields
+  # (`task.project.name`, `task.assignee_id`, etc). Stage 2 of T7
+  # switches the template over to `@board_items`; at that point this
+  # function is removed and `:columns` follows.
   defp group_by_column(tasks) do
     Enum.reduce(@kanban_columns, %{}, fn {col_key, _label}, acc ->
       statuses = Map.get(@column_statuses, col_key, [])
       col_tasks = Enum.filter(tasks, &(&1.status in statuses))
       Map.put(acc, col_key, col_tasks)
     end)
+  end
+
+  # Bucket %Task{} and %Stack{} into kanban columns, sorted within each
+  # column by `updated_at` descending so stacks interleave with normal
+  # tasks per ADR 0041 acceptance criterion 1.
+  #
+  # `stack_entries` is the `[{%Stack{}, board_data}, ...]` shape returned
+  # by `Stacks.list_stacks_with_members/1`. Only the `%Stack{}` is placed
+  # in the column; `board_data` lives in the `:stack_board_data` assign
+  # (keyed by stack id) so the template can look it up without changing
+  # the entry shape downstream consumers pattern-match on.
+  #
+  # A task that belongs to a stack (`stack_id != nil`) is suppressed from
+  # the flat column list — it renders only under its parent stack card
+  # in stage 2. This matches the dispatch's "stack members render under
+  # the stack card, not also as their own cards in the column" rule.
+  #
+  # Discriminate-by-`__struct__`: a column entry is either `%Task{}` or
+  # `%Stack{}`. The template will pattern-match `case item.__struct__`
+  # (per stage 2 description) — no extra `:_kind` tag is added.
+  defp group_board_items(tasks, stack_entries) do
+    standalone_tasks = Enum.filter(tasks, &is_nil(&1.stack_id))
+
+    Enum.reduce(@kanban_columns, %{}, fn {col_key, _label}, acc ->
+      statuses = Map.get(@column_statuses, col_key, [])
+      col_tasks = Enum.filter(standalone_tasks, &(&1.status in statuses))
+
+      col_stacks =
+        stack_entries
+        |> Enum.map(&elem(&1, 0))
+        |> Enum.filter(&(&1.status in statuses))
+
+      merged =
+        (col_tasks ++ col_stacks)
+        |> Enum.sort_by(& &1.updated_at, {:desc, DateTime})
+
+      Map.put(acc, col_key, merged)
+    end)
+  end
+
+  # Split `[{stack, board_data}, ...]` into `{%{stack_id => board_data},
+  # [stack, ...]}`. The board-data map is what the template consults for
+  # member_count / dep_edge_count / ready_count / members per card.
+  defp split_stack_entries(stack_entries) when is_list(stack_entries) do
+    Enum.reduce(stack_entries, {%{}, []}, fn {%Stack{} = stack, board_data},
+                                             {data_acc, stacks_acc} ->
+      {Map.put(data_acc, stack.id, board_data), [stack | stacks_acc]}
+    end)
+    |> then(fn {data_acc, stacks_acc} -> {data_acc, Enum.reverse(stacks_acc)} end)
   end
 
   defp refresh_board(socket) do
@@ -1698,9 +1797,26 @@ defmodule PlatformWeb.TasksLive do
 
     tasks = Tasks.list_all_tasks(opts)
 
+    stack_filters =
+      case socket.assigns.selected_project_id do
+        nil -> %{}
+        id -> %{project_id: id}
+      end
+
+    stack_entries = Stacks.list_stacks_with_members(stack_filters)
+    {stack_board_data, stacks} = split_stack_entries(stack_entries)
+
     socket
     |> assign(:all_tasks, tasks)
+    |> assign(:stacks, stacks)
+    |> assign(:stack_board_data, stack_board_data)
     |> assign(:columns, group_by_column(tasks))
+    |> assign(:board_items, group_board_items(tasks, stack_entries))
+    # Per ADR 0041 acceptance criterion 3, any list refetch collapses
+    # ephemeral expansion. `refresh_board/1` is the common funnel for
+    # project / epic / filter changes AND every PubSub board event, so
+    # resetting here covers all the reset triggers in one place.
+    |> assign(:expanded_stacks, MapSet.new())
     |> assign(:pending_plan_count, count_pending_plans(tasks))
     |> assign(:review_counts, pending_review_counts(tasks))
   end
@@ -1987,6 +2103,108 @@ defmodule PlatformWeb.TasksLive do
 
   defp task_display_status(%Task{status: status} = _task) do
     {status_label(status), "badge badge-outline"}
+  end
+
+  # ── Stack expansion helpers (T7 stage 3) ────────────────────────────────
+  #
+  # Numbered-node glyph for a member's `stack_position`. Positions 1..10
+  # map to the unicode circled digits per ADR 0041 §"UI surface — inline
+  # expansion"; positions 11+ fall back to `(N)` so the layout never
+  # breaks on absurdly large stacks.
+  defp stack_position_glyph(pos) when is_integer(pos) and pos in 1..10 do
+    Enum.at(~w(① ② ③ ④ ⑤ ⑥ ⑦ ⑧ ⑨ ⑩), pos - 1)
+  end
+
+  defp stack_position_glyph(pos) when is_integer(pos), do: "(#{pos})"
+  defp stack_position_glyph(_), do: "(?)"
+
+  # Styling for the round numbered node next to a member's title. Varies
+  # by status per mock canvas 019e1a16 rev 2: done → success tint,
+  # in_review → warning tint, stack_pending / backlog → dashed gray,
+  # everything else → neutral base-300 ring.
+  defp member_node_class("done"), do: "bg-success/20 text-success border border-success/40"
+
+  defp member_node_class("in_review"),
+    do: "bg-warning/20 text-warning border border-warning/40"
+
+  defp member_node_class("stack_pending"),
+    do: "bg-base-300 text-base-content/40 border border-base-300 border-dashed"
+
+  defp member_node_class("backlog"),
+    do: "bg-base-300 text-base-content/40 border border-base-300 border-dashed"
+
+  defp member_node_class(_),
+    do: "bg-base-200 text-base-content/70 border border-base-300"
+
+  # Render the dep-annotation line for a single in-stack member. The
+  # output mirrors the mock's `needs ① • parallel with ②` text:
+  #
+  #   * `needs <glyph>[ + <glyph>...]` — joined with ` + ` when the
+  #     member has multiple in-stack predecessors.
+  #   * `parallel with <glyph>[ + ...]` — appended (separated by ` • `)
+  #     when another in-stack member at a different position shares the
+  #     same dep set (siblings runnable in parallel).
+  #
+  # Returns `nil` when the member has no in-stack deps AND no parallel
+  # siblings — the template suppresses the dep-line entirely in that
+  # case (per mock: member ① has no annotation line).
+  defp dep_annotation_text(%Task{} = member, members) when is_list(members) do
+    member_ids = MapSet.new(members, & &1.id)
+
+    self_deps =
+      member
+      |> Tasks.dependency_task_ids()
+      |> Enum.reject(&(&1 == member.id))
+      |> Enum.filter(&MapSet.member?(member_ids, &1))
+      |> Enum.uniq()
+
+    case self_deps do
+      [] ->
+        nil
+
+      _ ->
+        needs =
+          self_deps
+          |> Enum.map(fn dep_id ->
+            members
+            |> Enum.find(&(&1.id == dep_id))
+            |> case do
+              nil -> nil
+              %Task{stack_position: pos} -> stack_position_glyph(pos)
+            end
+          end)
+          |> Enum.reject(&is_nil/1)
+          |> Enum.join(" + ")
+
+        parallel =
+          members
+          |> Enum.filter(fn other ->
+            other.id != member.id and
+              other.stack_position != member.stack_position and
+              dep_set(other, member_ids) == MapSet.new(self_deps) and
+              MapSet.size(dep_set(other, member_ids)) > 0
+          end)
+          |> Enum.map(&stack_position_glyph(&1.stack_position))
+          |> Enum.sort()
+          |> Enum.join(" + ")
+
+        cond do
+          needs == "" -> nil
+          parallel == "" -> "needs #{needs}"
+          true -> "needs #{needs} • parallel with #{parallel}"
+        end
+    end
+  end
+
+  defp dep_annotation_text(_, _), do: nil
+
+  # In-stack dep id set for a member (used by `parallel with` detection).
+  defp dep_set(%Task{} = task, member_ids_set) do
+    task
+    |> Tasks.dependency_task_ids()
+    |> Enum.reject(&(&1 == task.id))
+    |> Enum.filter(&MapSet.member?(member_ids_set, &1))
+    |> MapSet.new()
   end
 
   defp column_header_class("backlog"), do: "text-base-content/60"
