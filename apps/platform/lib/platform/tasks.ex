@@ -1039,6 +1039,7 @@ defmodule Platform.Tasks do
     maybe_apply_phase_assignee(task)
     maybe_recompute_stack(task)
     maybe_handle_regression(previous, task, "in_review")
+    maybe_merge_into_rollup(task, "in_review")
     :ok
   end
 
@@ -1072,6 +1073,21 @@ defmodule Platform.Tasks do
 
   defp maybe_recompute_stack(%Task{stack_id: stack_id}) when is_binary(stack_id) do
     Platform.Tasks.Stacks.recompute_stack_status(stack_id)
+    :ok
+  end
+
+  # ADR 0041 §"Rollup-branch merge" — when a stack member transitions
+  # into a state where its branch can join the rollup (currently
+  # `in_review`), fire the deployer's per-member merge. The deployer
+  # itself enforces the precise readiness gate (review-stage
+  # validations all `passed`) and idempotency, so this seam is
+  # intentionally permissive: we always invoke when the trigger
+  # condition fires and let the deployer decide whether to act.
+  defp maybe_merge_into_rollup(%Task{stack_id: nil}, _to), do: :ok
+
+  defp maybe_merge_into_rollup(%Task{stack_id: stack_id} = task, to)
+       when is_binary(stack_id) do
+    _ = Platform.Tasks.StackDeployer.handle_member_transition(task, :transitioned, to)
     :ok
   end
 

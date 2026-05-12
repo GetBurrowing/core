@@ -47,6 +47,14 @@ config :platform, :start_attention_router, false
 config :platform, :start_system_event_scheduler, false
 config :platform, :memory_provider, Platform.Memory.Providers.Null
 
+# StackDeployer (T5) — tests run synchronously and use a no-op git
+# runner by default so existing Stacks tests don't shell out. Tests that
+# care about deployer behavior swap in their own runner via
+# Application.put_env in their setup block.
+config :platform, :stack_deployer,
+  git_runner: Platform.Tasks.StackDeployer.NoopRunner,
+  async: false
+
 # Canvas server persists synchronously in tests so the SQL sandbox owns the
 # write and teardown doesn't race with background Task.Supervisor children.
 config :platform, :canvas_persist_sync, true

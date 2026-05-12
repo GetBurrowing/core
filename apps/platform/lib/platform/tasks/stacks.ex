@@ -16,7 +16,7 @@ defmodule Platform.Tasks.Stacks do
 
   alias Platform.Repo
   alias Platform.Tasks
-  alias Platform.Tasks.{Stack, Task}
+  alias Platform.Tasks.{Stack, StackDeployer, Task}
 
   @slug_regex ~r/^[a-z0-9][a-z0-9-]*$/
   @max_slug_length 60
@@ -137,6 +137,15 @@ defmodule Platform.Tasks.Stacks do
 
     case Stack.changeset(stack, %{status: "in_progress"}) |> Repo.update() do
       {:ok, updated} ->
+        # Stage 1 of T5: kick off rollup-branch creation as soon as the
+        # stack flips into `in_progress`. The deployer runs async so
+        # the cascade returns quickly, and any failure is logged via
+        # `Logger.warning` rather than crashing the cascade. We invoke
+        # via Stacks for testability — handle_stack_transition is the
+        # public seam and is itself a no-op when `from`/`to` don't
+        # match.
+        _ = StackDeployer.handle_stack_transition(updated, :forming, :in_progress)
+
         result = %{
           stack: updated,
           started: Enum.reverse(started),

@@ -5,7 +5,13 @@ defmodule Platform.Tasks.Stack do
   @primary_key {:id, Platform.Types.UUIDv7, autogenerate: true}
   @foreign_key_type :binary_id
 
-  @statuses ~w(forming in_progress in_review deploying done abandoned)
+  # `blocked` is added per T5 stage 2 (rollup-merge conflict-halts-stack):
+  # when a member branch fails to auto-merge into the stack rollup,
+  # `Platform.Tasks.StackDeployer.merge_member_into_rollup/1` flips the
+  # stack to `blocked` and records the conflict in `metadata.conflict`.
+  # ADR 0041 §"Rollup-branch merge" mandates this halt; the enum was
+  # widened here rather than in T1 because T1 had no producer for it.
+  @statuses ~w(forming in_progress in_review deploying done abandoned blocked)
 
   schema "task_stacks" do
     belongs_to(:project, Platform.Tasks.Project)
@@ -16,6 +22,7 @@ defmodule Platform.Tasks.Stack do
     field(:status, :string, default: "forming")
     field(:rollup_branch, :string)
     field(:base_branch, :string, default: "main")
+    field(:metadata, :map, default: %{})
 
     has_many(:tasks, Platform.Tasks.Task, foreign_key: :stack_id)
 
@@ -34,7 +41,8 @@ defmodule Platform.Tasks.Stack do
       :description,
       :status,
       :rollup_branch,
-      :base_branch
+      :base_branch,
+      :metadata
     ])
     |> validate_required([:project_id, :slug, :name, :rollup_branch])
     |> validate_inclusion(:status, @statuses)

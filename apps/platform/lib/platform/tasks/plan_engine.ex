@@ -25,7 +25,7 @@ defmodule Platform.Tasks.PlanEngine do
   require Logger
 
   alias Platform.Tasks
-  alias Platform.Tasks.{DeployStageBuilder, Plan, Stage, Task, Validation}
+  alias Platform.Tasks.{DeployStageBuilder, Plan, Stage, StackDeployer, Task, Validation}
 
   @valid_stage_transitions %{
     "pending" => ~w(running skipped),
@@ -148,8 +148,51 @@ defmodule Platform.Tasks.PlanEngine do
           :ok
       end
 
+      # ADR 0041 (T5 stage 3) — when a validation pass resolves the
+      # last pending validation on a stack member's review stage, the
+      # member is now review-ready. The in_review transition's earlier
+      # rollup-merge attempt may have no-op'd as `:not_ready`; re-fire
+      # the deployer hook so the merge can now proceed. The deployer
+      # is idempotent (already-merged short-circuits) and enforces its
+      # own readiness gate.
+      if status == "passed" do
+        maybe_retrigger_stack_member_merge(updated.stage_id)
+      end
+
       updated
     end)
+  end
+
+  defp maybe_retrigger_stack_member_merge(stage_id) do
+    query =
+      from(s in Stage,
+        join: p in Plan,
+        on: p.id == s.plan_id,
+        join: t in Task,
+        on: t.id == p.task_id,
+        where: s.id == ^stage_id,
+        where: not is_nil(t.stack_id),
+        where: t.status == "in_review",
+        select: t
+      )
+
+    case Repo.one(query) do
+      nil ->
+        :ok
+
+      %Task{} = task ->
+        _ = StackDeployer.handle_member_transition(task, :validation_passed, :in_review)
+        :ok
+    end
+  rescue
+    # The hook is best-effort — never crash evaluate_validation if the
+    # deployer-side lookup or dispatch fails.
+    error ->
+      Logger.warning(
+        "[PlanEngine] stack-member merge re-trigger failed: #{Exception.message(error)}"
+      )
+
+      :ok
   end
 
   @doc """
@@ -641,26 +684,43 @@ defmodule Platform.Tasks.PlanEngine do
         |> Repo.get!(plan.task_id)
         |> Repo.preload(:project)
 
-      strategy = Tasks.resolve_deploy_strategy(task)
+      cond do
+        is_binary(task.stack_id) ->
+          # ADR 0041 (T5 stage 3) — stack members never get a per-task
+          # deploy stage. The stack rollup PR (T6) carries the deploy
+          # for all members. The per-task plan completes when its
+          # review stages pass; the stack-level deployer takes over
+          # from there.
+          Logger.info(
+            "[StackDeployer] task #{task.id} is in stack #{task.stack_id}; deferring to " <>
+              "stack deployer (skipping per-task deploy stage injection)"
+          )
 
-      case DeployStageBuilder.build_stage(strategy, max_position(stages) + 1) do
-        :skip ->
-          # Strategy is "none" — complete normally
           {:ok, completed} = complete_plan(plan)
           Repo.preload(completed, stages_query())
 
-        stage_def ->
-          if task.status in @deployable_statuses do
-            inject_deploy_stage(plan, task, stage_def, strategy)
-          else
-            # Task can't transition to deploying (e.g. backlog, planning) — complete normally
-            Logger.info(
-              "[PlanEngine] skipping deploy injection for task #{task.id} " <>
-                "(status: #{task.status}, not deployable)"
-            )
+        true ->
+          strategy = Tasks.resolve_deploy_strategy(task)
 
-            {:ok, completed} = complete_plan(plan)
-            Repo.preload(completed, stages_query())
+          case DeployStageBuilder.build_stage(strategy, max_position(stages) + 1) do
+            :skip ->
+              # Strategy is "none" — complete normally
+              {:ok, completed} = complete_plan(plan)
+              Repo.preload(completed, stages_query())
+
+            stage_def ->
+              if task.status in @deployable_statuses do
+                inject_deploy_stage(plan, task, stage_def, strategy)
+              else
+                # Task can't transition to deploying (e.g. backlog, planning) — complete normally
+                Logger.info(
+                  "[PlanEngine] skipping deploy injection for task #{task.id} " <>
+                    "(status: #{task.status}, not deployable)"
+                )
+
+                {:ok, completed} = complete_plan(plan)
+                Repo.preload(completed, stages_query())
+              end
           end
       end
     end

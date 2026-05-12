@@ -435,6 +435,47 @@ defmodule Platform.Tasks.PlanEngineTest do
       {:ok, plan_v2} = PlanEngine.advance(plan.id)
       assert length(plan_v2.stages) == 2
     end
+
+    # ── ADR 0041 (T5 stage 3): stack-member deploy-injection guard ───────
+
+    test "stack member does NOT get a per-task deploy stage injected", %{project: project} do
+      alias Platform.Tasks.Stacks
+
+      {:ok, stack} =
+        Stacks.create_stack(%{
+          project_id: project.id,
+          slug: "no-deploy-#{System.unique_integer([:positive])}",
+          name: "No Deploy Stack",
+          rollup_branch: "stack/no-deploy"
+        })
+
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Stack member task",
+          status: "in_progress",
+          deploy_strategy: %{"type" => "pr_merge", "config" => %{}}
+        })
+
+      {:ok, task} = Tasks.update_task(task, %{stack_id: stack.id, stack_position: 1})
+
+      {:ok, plan} = Tasks.create_plan(%{task_id: task.id, status: "approved"})
+      {:ok, s1} = Tasks.create_stage(%{plan_id: plan.id, position: 1, name: "Build"})
+      {:ok, _} = PlanEngine.start_stage(s1.id)
+
+      # Advance — s1 passes; the plan would normally inject a Deploy
+      # stage, but the stack-member guard MUST skip injection and
+      # complete the plan instead. T6's stack rollup PR carries the
+      # deploy for all members.
+      {:ok, updated_plan} = PlanEngine.advance(plan.id)
+
+      assert updated_plan.status == "completed"
+      assert length(updated_plan.stages) == 1
+
+      # Task status MUST NOT have been moved to "deploying"
+      reloaded = Tasks.get_task_record(task.id)
+      refute reloaded.status == "deploying"
+    end
   end
 
   # ── Full lifecycle ────────────────────────────────────────────────────

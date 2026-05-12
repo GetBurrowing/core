@@ -164,50 +164,66 @@ defmodule PlatformWeb.GithubWebhookController do
   defp maybe_trigger_auto_merge(task_id, branch) do
     task = Tasks.get_task_detail(task_id)
 
-    if task do
-      task = Tasks.ensure_project_loaded(task)
-      strategy = Tasks.resolve_deploy_strategy(task)
+    cond do
+      is_nil(task) ->
+        :ok
 
-      if AutoMerger.should_auto_merge?(strategy) do
-        # Find the pending pr_merged validation for this task
-        case find_pending_pr_merged_validation(task_id) do
-          nil ->
-            Logger.debug(
-              "[Webhook] No pending pr_merged validation for auto-merge on task #{task_id}"
-            )
+      AutoMerger.defer_for_stack?(task) ->
+        # ADR 0041 (T5 stage 3) — stack members never open their own
+        # PRs. The stack rollup PR (T6) carries the deploy. Skip the
+        # per-task auto-merge entirely.
+        Logger.info(
+          "[StackDeployer] task #{task.id} is in stack #{task.stack_id}; deferring to " <>
+            "stack deployer (skipping per-task auto-merge for branch #{branch})"
+        )
 
-          pr_validation ->
-            # Find the PR number from the branch
-            repo_url = task.project && task.project.repo_url
-            method = AutoMerger.merge_method(strategy)
+      true ->
+        task = Tasks.ensure_project_loaded(task)
+        strategy = Tasks.resolve_deploy_strategy(task)
 
-            if repo_url do
-              # Spawn async task for the merge (with timeout)
-              Elixir.Task.start(fn ->
-                case find_pr_number_for_branch(repo_url, branch) do
-                  {:ok, pr_number} ->
-                    result = AutoMerger.execute_merge(repo_url, pr_number, method)
-                    AutoMerger.record_merge_result(pr_validation.id, result)
-
-                  {:error, reason} ->
-                    Logger.warning(
-                      "[Webhook] Could not find PR for branch #{branch}: #{inspect(reason)}"
-                    )
-
-                    AutoMerger.record_merge_result(
-                      pr_validation.id,
-                      {:error, :not_found,
-                       "Could not find PR for branch #{branch}: #{inspect(reason)}"}
-                    )
-                end
-              end)
-            else
-              Logger.warning(
-                "[Webhook] No repo_url configured for task #{task_id}, skipping auto-merge"
+        if AutoMerger.should_auto_merge?(strategy) do
+          # Find the pending pr_merged validation for this task
+          case find_pending_pr_merged_validation(task_id) do
+            nil ->
+              Logger.debug(
+                "[Webhook] No pending pr_merged validation for auto-merge on task #{task_id}"
               )
-            end
+
+            pr_validation ->
+              # Find the PR number from the branch
+              repo_url = task.project && task.project.repo_url
+              method = AutoMerger.merge_method(strategy)
+
+              if repo_url do
+                # Spawn async task for the merge (with timeout)
+                Elixir.Task.start(fn ->
+                  case find_pr_number_for_branch(repo_url, branch) do
+                    {:ok, pr_number} ->
+                      # Pass the task so AutoMerger's defense-in-depth
+                      # guard short-circuits if stack_id was set after
+                      # the controller-level check.
+                      result = AutoMerger.execute_merge(task, repo_url, pr_number, method)
+                      AutoMerger.record_merge_result(pr_validation.id, result)
+
+                    {:error, reason} ->
+                      Logger.warning(
+                        "[Webhook] Could not find PR for branch #{branch}: #{inspect(reason)}"
+                      )
+
+                      AutoMerger.record_merge_result(
+                        pr_validation.id,
+                        {:error, :not_found,
+                         "Could not find PR for branch #{branch}: #{inspect(reason)}"}
+                      )
+                  end
+                end)
+              else
+                Logger.warning(
+                  "[Webhook] No repo_url configured for task #{task_id}, skipping auto-merge"
+                )
+              end
+          end
         end
-      end
     end
   end
 
@@ -328,6 +344,31 @@ defmodule PlatformWeb.GithubWebhookController do
   end
 
   defp maybe_evaluate_pr_merged_validation(task_id, pr, merged_at) do
+    task = Tasks.get_task_record(task_id)
+
+    cond do
+      AutoMerger.defer_for_stack?(task) ->
+        # ADR 0041 (T5 stage 3) — stack members' per-task `pr_merged`
+        # validations are auto-passed by the stack rollup PR's merge
+        # webhook fan-out (T6 owns that). DO NOT auto-pass from the
+        # per-task webhook; the per-task branch shouldn't be opening
+        # PRs in the first place (the auto-merge guard prevents that),
+        # but if a webhook fires for a member's individual branch
+        # somehow, the per-task path must NOT pre-empt T6.
+        Logger.info(
+          "[StackDeployer] task #{task_id} is in stack #{task.stack_id}; deferring to " <>
+            "stack deployer (skipping per-task pr_merged auto-pass for PR " <>
+            "#{pr["html_url"]})"
+        )
+
+        :ok
+
+      true ->
+        do_evaluate_pr_merged_validation(task_id, pr, merged_at)
+    end
+  end
+
+  defp do_evaluate_pr_merged_validation(task_id, pr, merged_at) do
     case find_pending_pr_merged_validation(task_id) do
       nil ->
         Logger.debug("[Webhook] No pending pr_merged validation for task #{task_id} on PR merge")

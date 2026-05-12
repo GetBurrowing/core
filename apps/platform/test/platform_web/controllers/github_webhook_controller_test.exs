@@ -468,6 +468,79 @@ defmodule PlatformWeb.GithubWebhookControllerTest do
 
   # ── Auto-merge query tests ─────────────────────────────────────────────
 
+  # ── ADR 0041 (T5 stage 3): stack-member guards ──────────────────────────
+
+  describe "stack-member pr_merged webhook guard" do
+    alias Platform.Tasks.Stacks
+
+    test "does NOT auto-pass a stack member's per-task pr_merged validation",
+         %{conn: conn} do
+      # Build a task with a pending pr_merged validation, then enroll it
+      # into a stack. The per-task webhook MUST defer to T6's rollup-PR
+      # fan-out and leave the validation pending.
+      %{task: task, pr_validation: pr_validation, project: project} =
+        create_task_with_ci_validation!()
+
+      {:ok, stack} =
+        Stacks.create_stack(%{
+          project_id: project.id,
+          slug: "guard-test-#{System.unique_integer([:positive])}",
+          name: "Guard Test",
+          rollup_branch: "stack/guard-test"
+        })
+
+      {:ok, _enrolled} = Tasks.update_task(task, %{stack_id: stack.id, stack_position: 1})
+
+      payload =
+        merged_pr_payload(%{
+          "pull_request" => %{
+            "merged" => true,
+            "title" => "feat: stack member should defer",
+            "number" => System.unique_integer([:positive]),
+            "html_url" => "https://github.com/test/ci-repo/pull/88",
+            "merge_commit_sha" => "deadbabe",
+            "merged_at" => "2026-05-12T12:00:00Z",
+            "body" => "",
+            "user" => %{"login" => "agent-bot"},
+            "head" => %{"ref" => "task/#{task.id}"}
+          }
+        })
+
+      conn = post(conn, @github_webhook_path, payload)
+      assert %{"status" => "created"} = json_response(conn, 201)
+
+      # Validation must remain pending — T6 owns this fan-out.
+      reloaded = Platform.Repo.get!(Platform.Tasks.Validation, pr_validation.id)
+      assert reloaded.status == "pending"
+    end
+
+    test "non-stack tasks still auto-pass their pr_merged (regression guard)",
+         %{conn: conn} do
+      %{task: task, pr_validation: pr_validation} = create_task_with_ci_validation!()
+
+      payload =
+        merged_pr_payload(%{
+          "pull_request" => %{
+            "merged" => true,
+            "title" => "feat: lone task still passes",
+            "number" => System.unique_integer([:positive]),
+            "html_url" => "https://github.com/test/ci-repo/pull/89",
+            "merge_commit_sha" => "abc987",
+            "merged_at" => "2026-05-12T12:00:00Z",
+            "body" => "",
+            "user" => %{"login" => "agent-bot"},
+            "head" => %{"ref" => "task/#{task.id}"}
+          }
+        })
+
+      conn = post(conn, @github_webhook_path, payload)
+      assert %{"status" => "created"} = json_response(conn, 201)
+
+      reloaded = Platform.Repo.get!(Platform.Tasks.Validation, pr_validation.id)
+      assert reloaded.status == "passed"
+    end
+  end
+
   describe "find_pending_pr_merged_validation/1" do
     test "finds pending pr_merged validation on running deploy stage" do
       %{task: task, pr_validation: pr_validation} = create_task_with_ci_validation!()

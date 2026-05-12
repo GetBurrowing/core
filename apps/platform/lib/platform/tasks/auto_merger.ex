@@ -13,9 +13,25 @@ defmodule Platform.Tasks.AutoMerger do
   Called by `GithubWebhookController` after `ci_passed` validation passes.
   If auto-merge is enabled, the controller spawns an async task to merge
   and evaluate the `pr_merged` validation.
+
+  ## Stack-member guard (T5 stage 3)
+
+  Stack members never open their own PRs — the stack rollup PR (T6)
+  carries the deploy. Per ADR 0041, the per-task auto-merger MUST defer
+  for any task with a non-nil `stack_id`. Two guards live in this module
+  and `GithubWebhookController`:
+
+    1. `defer_for_stack?/1` — predicate the webhook checks before
+       spawning the merge task.
+    2. `execute_merge/4` — task-aware overload that returns
+       `{:ok, :deferred}` for stack members and never shells out.
+
+  Defense-in-depth: even if a caller forgets the predicate, the
+  task-aware `execute_merge/4` short-circuits the shell-out.
   """
 
   alias Platform.Tasks.PlanEngine
+  alias Platform.Tasks.Task, as: TaskRecord
 
   require Logger
 
@@ -42,6 +58,60 @@ defmodule Platform.Tasks.AutoMerger do
   end
 
   def merge_method(_), do: "squash"
+
+  @doc """
+  Returns true when the given task is a stack member and the per-task
+  auto-merger MUST defer to the stack-level rollup deploy.
+
+  Accepts a `%Task{}` struct, a task id (binary), or `nil` (returns
+  `false` — no task context, can't be a stack member).
+  """
+  @spec defer_for_stack?(TaskRecord.t() | binary() | nil) :: boolean()
+  def defer_for_stack?(%TaskRecord{stack_id: stack_id}) when is_binary(stack_id), do: true
+  def defer_for_stack?(%TaskRecord{}), do: false
+
+  def defer_for_stack?(task_id) when is_binary(task_id) do
+    case Platform.Tasks.get_task_record(task_id) do
+      %TaskRecord{} = task -> defer_for_stack?(task)
+      nil -> false
+    end
+  end
+
+  def defer_for_stack?(nil), do: false
+
+  @doc """
+  Task-aware overload of `execute_merge/3` that short-circuits for
+  stack-member tasks per ADR 0041 (T5 stage 3).
+
+  Behavior:
+
+    * Stack member (`task.stack_id != nil`) — logs and returns
+      `{:ok, :deferred}` WITHOUT shelling out. The stack rollup PR
+      owns the deploy; per-task PR-merge is forbidden.
+    * Non-stack task — delegates to `execute_merge/3`.
+
+  This is the entry point used by `GithubWebhookController` so the
+  guard runs uniformly across the auto-merge code path.
+  """
+  @spec execute_merge(TaskRecord.t() | nil, String.t(), pos_integer(), String.t()) ::
+          {:ok, String.t() | :deferred} | {:error, atom(), String.t()}
+  def execute_merge(%TaskRecord{stack_id: stack_id} = task, _repo_url, pr_number, _method)
+      when is_binary(stack_id) do
+    Logger.info(
+      "[StackDeployer] task #{task.id} is in stack #{stack_id}; deferring to stack deployer " <>
+        "(skipping per-task auto-merge of PR ##{pr_number})"
+    )
+
+    {:ok, :deferred}
+  end
+
+  def execute_merge(%TaskRecord{} = _task, repo_url, pr_number, method) do
+    execute_merge(repo_url, pr_number, method)
+  end
+
+  def execute_merge(nil, repo_url, pr_number, method) do
+    execute_merge(repo_url, pr_number, method)
+  end
 
   @doc """
   Execute a PR merge via `gh pr merge`.
@@ -102,8 +172,17 @@ defmodule Platform.Tasks.AutoMerger do
   On success, evaluates the validation as passed with the merge SHA.
   On failure, evaluates as failed with the error details.
   """
-  @spec record_merge_result(String.t(), {:ok, String.t()} | {:error, atom(), String.t()}) ::
+  @spec record_merge_result(
+          String.t(),
+          {:ok, String.t() | :deferred} | {:error, atom(), String.t()}
+        ) ::
           {:ok, term()} | {:error, term()}
+  def record_merge_result(_validation_id, {:ok, :deferred}) do
+    # Stack-member deferred path — the per-task pr_merged validation
+    # stays pending; the stack rollup PR's merge will fan out via T6.
+    {:ok, :deferred}
+  end
+
   def record_merge_result(validation_id, {:ok, merge_sha}) do
     PlanEngine.evaluate_validation(validation_id, %{
       status: "passed",
