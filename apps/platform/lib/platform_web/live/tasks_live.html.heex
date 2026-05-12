@@ -68,6 +68,7 @@
           phx-click="toggle_project_sheet"
           class="btn btn-ghost btn-xs btn-square md:hidden"
           title="Projects"
+          aria-label="Open projects menu"
         >
           <span class="hero-bars-3 size-4"></span>
         </button>
@@ -86,7 +87,11 @@
         <span :if={@selected_epic_id}>
           / <span :for={e <- @epics} :if={e.id == @selected_epic_id}>{e.name}</span>
         </span>
-        <button phx-click="clear_filters" class="btn btn-ghost btn-xs btn-square ml-1">
+        <button
+          phx-click="clear_filters"
+          class="btn btn-ghost btn-xs btn-square ml-1"
+          aria-label="Clear filters"
+        >
           <span class="hero-x-mark size-3"></span>
         </button>
       </div>
@@ -98,7 +103,12 @@
         <span class="text-xs font-semibold uppercase tracking-widest text-base-content/50">
           Epics
         </span>
-        <button phx-click="toggle_epics_panel" class="btn btn-ghost btn-xs btn-square">
+        <button
+          phx-click="toggle_epics_panel"
+          class="btn btn-ghost btn-xs btn-square"
+          aria-label={if @epics_collapsed, do: "Expand epics", else: "Collapse epics"}
+          aria-expanded={if @epics_collapsed, do: "false", else: "true"}
+        >
           <span class={"size-4 transition-transform #{if @epics_collapsed, do: "hero-chevron-down", else: "hero-chevron-up"}"}>
           </span>
         </button>
@@ -389,6 +399,7 @@
           ]}
           phx-click="toggle_edit_mode"
           title="Toggle edit mode"
+          aria-label="Toggle edit mode"
           data-role="edit-mode-toggle"
           data-edit-mode={to_string(@edit_mode)}
           aria-pressed={to_string(@edit_mode)}
@@ -400,10 +411,15 @@
           class="btn btn-sm btn-ghost btn-square text-error"
           phx-click="request_delete_task"
           title="Delete task"
+          aria-label="Delete task"
         >
           <span class="hero-trash size-4"></span>
         </button>
-        <button class="btn btn-sm btn-ghost btn-square" phx-click="close_detail">
+        <button
+          class="btn btn-sm btn-ghost btn-square"
+          phx-click="close_detail"
+          aria-label="Close task details"
+        >
           <span class="hero-x-mark size-4"></span>
         </button>
       </div>
@@ -1400,7 +1416,11 @@
             {Platform.Chat.CanvasDocument.root_kind(@active_review_canvas.document) || "canvas"}
           </div>
         </div>
-        <button class="btn btn-ghost btn-sm btn-square" phx-click="close_review_canvas">
+        <button
+          class="btn btn-ghost btn-sm btn-square"
+          phx-click="close_review_canvas"
+          aria-label="Close review canvas"
+        >
           <span class="hero-x-mark size-4"></span>
         </button>
       </div>
