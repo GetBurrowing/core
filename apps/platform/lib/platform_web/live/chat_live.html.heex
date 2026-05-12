@@ -435,6 +435,19 @@
         style="scrollbar-width: none; -webkit-overflow-scrolling: touch;"
         aria-label="Channel switcher"
       >
+        <%!-- Search/jump button anchored at the LEFT of the pills strip
+             (Rowan request, Marlowe approval 2026-05-11). Sticks to the left
+             edge so it stays in reach even as the channel pills overflow
+             horizontally and scroll. --%>
+        <button
+          phx-click="toggle_mobile_browser"
+          class="flex items-center justify-center w-9 h-9 rounded-full shrink-0 bg-base-200 border border-base-content/10 text-base-content/50 hover:text-primary hover:bg-base-300 transition-colors sticky left-0 z-10"
+          aria-label="Search channels and direct messages"
+          title="Search channels and DMs"
+        >
+          <span class="hero-magnifying-glass size-4"></span>
+        </button>
+
         <.link
           :for={space <- @channels}
           navigate={~p"/chat/#{space.slug}"}
@@ -478,17 +491,6 @@
             class="inline-flex items-center justify-center min-w-[18px] h-[18px] rounded-full text-[10px] font-bold tabular-nums bg-primary text-primary-content border border-base-100"
           >{unread_label(Map.get(@unread_counts, space.id, 0))}</span>
         </.link>
-
-        <%!-- Overflow: opens the existing mobile_browser overlay for jump-to-channel + DMs.
-             Magnifying-glass icon (not + or chevron) communicates "search/find more". --%>
-        <button
-          phx-click="toggle_mobile_browser"
-          class="flex items-center justify-center w-9 h-9 rounded-full shrink-0 bg-base-200 border border-base-content/10 text-base-content/50 hover:text-primary hover:bg-base-300 transition-colors"
-          aria-label="Search channels and direct messages"
-          title="Search channels and DMs"
-        >
-          <span class="hero-magnifying-glass size-4"></span>
-        </button>
       </nav>
 
       <div
