@@ -508,14 +508,18 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
   end
 
   defp handle_info({:message_updated, msg}, socket) do
-    attachments = Chat.list_attachments(msg.id)
-    enriched = enrich_with_reactions(msg, socket)
+    if same_active_space?(socket, msg) do
+      attachments = Chat.list_attachments(msg.id)
+      enriched = enrich_with_reactions(msg, socket)
 
-    {:halt,
-     socket
-     |> stream_insert(:messages, enriched)
-     |> put_attachment_map_entry(msg.id, attachments)
-     |> SearchHooks.maybe_refresh()}
+      {:halt,
+       socket
+       |> stream_insert(:messages, enriched)
+       |> put_attachment_map_entry(msg.id, attachments)
+       |> SearchHooks.maybe_refresh()}
+    else
+      {:halt, socket}
+    end
   end
 
   # Realtime edit event (task 019e0f29 Stage 6, contract Section c).
@@ -527,19 +531,27 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
   # (Section F.1 routing) consume the payload at their own layer; the LV
   # only cares about the visible message changing.
   defp handle_info({:message_edited, %{message: msg}}, socket) do
-    enriched = msg |> enrich_versions_count() |> enrich_with_reactions(socket)
-    {:halt, stream_insert(socket, :messages, enriched)}
+    if same_active_space?(socket, msg) do
+      enriched = msg |> enrich_versions_count() |> enrich_with_reactions(socket)
+      {:halt, stream_insert(socket, :messages, enriched)}
+    else
+      {:halt, socket}
+    end
   end
 
   defp handle_info({:message_edited, _}, socket), do: {:halt, socket}
 
   defp handle_info({:message_deleted, msg}, socket) do
-    {:halt,
-     socket
-     |> stream_delete(:messages, msg)
-     |> delete_attachment_map_entry(msg.id)
-     |> delete_thread_attachment_map_entry(msg.id)
-     |> SearchHooks.maybe_refresh()}
+    if same_active_space?(socket, msg) do
+      {:halt,
+       socket
+       |> stream_delete(:messages, msg)
+       |> delete_attachment_map_entry(msg.id)
+       |> delete_thread_attachment_map_entry(msg.id)
+       |> SearchHooks.maybe_refresh()}
+    else
+      {:halt, socket}
+    end
   end
 
   # `reinsert_stream_message/2` fetches fresh from the DB (now with
@@ -547,10 +559,14 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
   # `:if={is_nil(msg.deleted_at)}` predicate then renders the row
   # again. Idempotent under duplicate delivery — DB is truth.
   defp handle_info({:message_restored, msg}, socket) do
-    {:halt,
-     socket
-     |> reinsert_stream_message(msg.id)
-     |> SearchHooks.maybe_refresh()}
+    if same_active_space?(socket, msg) do
+      {:halt,
+       socket
+       |> reinsert_stream_message(msg.id)
+       |> SearchHooks.maybe_refresh()}
+    else
+      {:halt, socket}
+    end
   rescue
     e ->
       Logger.error("Message restore broadcast crashed: #{Exception.message(e)}")
@@ -562,7 +578,11 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
   # stream item carries everything the template reads. Idempotent under duplicate
   # delivery (DB is truth), immune to out-of-order events.
   defp handle_info({:reaction_added, reaction}, socket) do
-    {:halt, reinsert_stream_message(socket, reaction.message_id)}
+    if message_in_active_space?(socket, reaction.message_id) do
+      {:halt, reinsert_stream_message(socket, reaction.message_id)}
+    else
+      {:halt, socket}
+    end
   rescue
     e ->
       Logger.error("Reaction broadcast (added) crashed: #{Exception.message(e)}")
@@ -570,7 +590,11 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
   end
 
   defp handle_info({:reaction_removed, data}, socket) do
-    {:halt, reinsert_stream_message(socket, data.message_id)}
+    if message_in_active_space?(socket, data.message_id) do
+      {:halt, reinsert_stream_message(socket, data.message_id)}
+    else
+      {:halt, socket}
+    end
   rescue
     e ->
       Logger.error("Reaction broadcast (removed) crashed: #{Exception.message(e)}")
@@ -959,4 +983,43 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
       _ -> false
     end
   end
+
+  # Cross-space broadcast guard. The chat LiveView subscribes to ALL the user's
+  # spaces on mount (chat_live.ex:104) so sidebar features like unread counts
+  # update in real time. That means message-broadcast handlers receive events
+  # from every subscribed space, not just the currently-active one. Without
+  # this guard, edits / deletes / reactions in space A leak into the user's
+  # view of space B as ghost rows in the :messages stream.
+  defp same_active_space?(socket, %{space_id: space_id}) when is_binary(space_id) do
+    case socket.assigns[:active_space] do
+      %{id: ^space_id} -> true
+      _ -> false
+    end
+  end
+
+  defp same_active_space?(_socket, _payload), do: false
+
+  # Reaction payloads carry only `message_id`, not `space_id`. Look up the parent
+  # message's space and compare. The DB hit only fires when the broadcast is
+  # actually delivered to this LV process; in the cross-space case it gates the
+  # leak with one extra `Repo.get/2`, which is cheap relative to the alternative
+  # (ghost rows in the visible stream).
+  defp message_in_active_space?(socket, message_id) when is_binary(message_id) do
+    active_id =
+      case socket.assigns[:active_space] do
+        %{id: id} -> id
+        _ -> nil
+      end
+
+    if is_nil(active_id) do
+      false
+    else
+      case Chat.get_message(message_id) do
+        %{space_id: ^active_id} -> true
+        _ -> false
+      end
+    end
+  end
+
+  defp message_in_active_space?(_socket, _message_id), do: false
 end
