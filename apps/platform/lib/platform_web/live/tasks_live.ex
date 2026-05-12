@@ -1974,6 +1974,20 @@ defmodule PlatformWeb.TasksLive do
   defp column_header_class("done"), do: "text-success"
   defp column_header_class(_), do: "text-base-content/60"
 
+  # Used by the mobile task list (tasks_live.html.heex) — color-coded dots
+  # mirror the column header colors so the visual cue is consistent across
+  # mobile (dot per card) and desktop (column header) layouts.
+  defp status_dot_class("backlog"), do: "bg-base-content/30"
+  defp status_dot_class("in_progress"), do: "bg-info"
+  defp status_dot_class("in_review"), do: "bg-warning"
+  defp status_dot_class("deploying"), do: "bg-secondary"
+  defp status_dot_class("done"), do: "bg-success"
+  defp status_dot_class(_), do: "bg-base-content/30"
+
+  defp empty_board?(columns) when is_map(columns) do
+    Enum.all?(columns, fn {_key, tasks} -> tasks == [] end)
+  end
+
   defp has_active_run?(%Task{} = _task) do
     # TODO: check active runs via Execution plane when wired up
     false

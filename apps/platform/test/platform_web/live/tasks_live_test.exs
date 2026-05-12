@@ -530,7 +530,7 @@ defmodule PlatformWeb.TasksLiveTest do
 
     html =
       view
-      |> element("[phx-click=\"select_task\"][phx-value-id=\"#{task.id}\"]")
+      |> element("#task-card-#{task.id}")
       |> render_click()
 
     assert html =~ "Clickable Task"
