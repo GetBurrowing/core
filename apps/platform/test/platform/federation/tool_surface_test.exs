@@ -35,9 +35,9 @@ defmodule Platform.Federation.ToolSurfaceTest do
   defp unique_slug, do: "test-#{System.unique_integer([:positive])}"
 
   describe "tool_definitions/0" do
-    test "returns all 54 tools with required components" do
+    test "returns all 61 tools with required components" do
       tools = ToolSurface.tool_definitions()
-      assert length(tools) == 54
+      assert length(tools) == 61
 
       tool_names = Enum.map(tools, & &1.name)
       assert "send_media" in tool_names
@@ -65,6 +65,13 @@ defmodule Platform.Federation.ToolSurfaceTest do
       assert "task_start" in tool_names
       assert "task_complete" in tool_names
       assert "task_dependencies" in tool_names
+      assert "stack_create" in tool_names
+      assert "stack_get" in tool_names
+      assert "stack_list" in tool_names
+      assert "stack_add" in tool_names
+      assert "stack_eject" in tool_names
+      assert "stack_abandon" in tool_names
+      assert "stack_start" in tool_names
       assert "plan_create" in tool_names
       assert "plan_get" in tool_names
       assert "plan_submit" in tool_names
@@ -1207,6 +1214,317 @@ defmodule Platform.Federation.ToolSurfaceTest do
         )
 
       assert error.error =~ "emoji is required"
+    end
+
+    # ── Stack tools (ADR 0041) ────────────────────────────────────────
+
+    test "stack_create creates a stack and returns stack_id + rollup_branch" do
+      project = create_project()
+      slug = "shim-create-#{System.unique_integer([:positive])}"
+
+      {:ok, result} =
+        ToolSurface.execute(
+          "stack_create",
+          %{"project_id" => project.id, "slug" => slug, "name" => "Shim Create"},
+          %{}
+        )
+
+      assert is_binary(result.stack_id)
+      assert result.rollup_branch == "stack/#{slug}"
+    end
+
+    test "stack_create returns slug_taken envelope on duplicate slug within project" do
+      project = create_project()
+      slug = "shim-dup-#{System.unique_integer([:positive])}"
+
+      {:ok, _} =
+        ToolSurface.execute(
+          "stack_create",
+          %{"project_id" => project.id, "slug" => slug, "name" => "First"},
+          %{}
+        )
+
+      {:error, error} =
+        ToolSurface.execute(
+          "stack_create",
+          %{"project_id" => project.id, "slug" => slug, "name" => "Second"},
+          %{}
+        )
+
+      assert error.code == "slug_taken"
+      assert error.recoverable == true
+    end
+
+    test "stack_create with invalid slug returns a clean error envelope" do
+      project = create_project()
+
+      {:error, error} =
+        ToolSurface.execute(
+          "stack_create",
+          %{"project_id" => project.id, "slug" => "Bad Slug!", "name" => "Bad"},
+          %{}
+        )
+
+      refute Map.get(error, :code) == "slug_taken"
+      assert error.recoverable == true
+      assert error.error =~ "Failed to create stack"
+    end
+
+    test "stack_get returns stack, members, edges, executable_now, cross_stack_deps" do
+      project = create_project()
+      slug = "shim-get-#{System.unique_integer([:positive])}"
+
+      {:ok, %{stack_id: stack_id}} =
+        ToolSurface.execute(
+          "stack_create",
+          %{"project_id" => project.id, "slug" => slug, "name" => "Shim Get"},
+          %{}
+        )
+
+      {:ok, t1} = Tasks.create_task(%{project_id: project.id, title: "Root"})
+
+      {:ok, t2} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Child",
+          dependencies: [%{"task_id" => t1.id, "kind" => "blocks"}]
+        })
+
+      {:ok, _} =
+        ToolSurface.execute("stack_add", %{"stack_id" => stack_id, "task_id" => t1.id}, %{})
+
+      {:ok, _} =
+        ToolSurface.execute("stack_add", %{"stack_id" => stack_id, "task_id" => t2.id}, %{})
+
+      {:ok, result} = ToolSurface.execute("stack_get", %{"stack_id" => stack_id}, %{})
+
+      assert result.stack.id == stack_id
+      assert result.stack.slug == slug
+      assert length(result.members) == 2
+      assert Enum.any?(result.edges, &(&1.from_task_id == t2.id and &1.to_task_id == t1.id))
+      assert t1.id in result.executable_now
+      refute t2.id in result.executable_now
+      assert result.cross_stack_deps == []
+    end
+
+    test "stack_get returns not-found envelope when stack missing" do
+      {:error, error} =
+        ToolSurface.execute("stack_get", %{"stack_id" => Ecto.UUID.generate()}, %{})
+
+      assert error.error =~ "Stack not found"
+      assert error.recoverable == false
+    end
+
+    test "stack_list filters by project_id" do
+      project_a = create_project()
+      project_b = create_project()
+
+      slug_a = "list-a-#{System.unique_integer([:positive])}"
+      slug_b = "list-b-#{System.unique_integer([:positive])}"
+
+      {:ok, _} =
+        ToolSurface.execute(
+          "stack_create",
+          %{"project_id" => project_a.id, "slug" => slug_a, "name" => "A"},
+          %{}
+        )
+
+      {:ok, _} =
+        ToolSurface.execute(
+          "stack_create",
+          %{"project_id" => project_b.id, "slug" => slug_b, "name" => "B"},
+          %{}
+        )
+
+      {:ok, results} =
+        ToolSurface.execute("stack_list", %{"project_id" => project_a.id}, %{})
+
+      slugs = Enum.map(results, & &1.slug)
+      assert slug_a in slugs
+      refute slug_b in slugs
+    end
+
+    test "stack_add returns task_id + stack_id + stack_position on success" do
+      project = create_project()
+      slug = "shim-add-#{System.unique_integer([:positive])}"
+
+      {:ok, %{stack_id: stack_id}} =
+        ToolSurface.execute(
+          "stack_create",
+          %{"project_id" => project.id, "slug" => slug, "name" => "Shim Add"},
+          %{}
+        )
+
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "T"})
+
+      {:ok, result} =
+        ToolSurface.execute("stack_add", %{"stack_id" => stack_id, "task_id" => task.id}, %{})
+
+      assert result.task_id == task.id
+      assert result.stack_id == stack_id
+      assert result.stack_position == 1
+    end
+
+    test "stack_add returns already_in_stack envelope when task is already a member" do
+      project = create_project()
+      slug = "shim-add-dup-#{System.unique_integer([:positive])}"
+
+      {:ok, %{stack_id: stack_id}} =
+        ToolSurface.execute(
+          "stack_create",
+          %{"project_id" => project.id, "slug" => slug, "name" => "Dup Add"},
+          %{}
+        )
+
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "T"})
+
+      {:ok, _} =
+        ToolSurface.execute("stack_add", %{"stack_id" => stack_id, "task_id" => task.id}, %{})
+
+      {:error, error} =
+        ToolSurface.execute("stack_add", %{"stack_id" => stack_id, "task_id" => task.id}, %{})
+
+      assert error.code == "already_in_stack"
+    end
+
+    test "stack_eject returns task_id + stack_id on success" do
+      project = create_project()
+      slug = "shim-eject-#{System.unique_integer([:positive])}"
+
+      {:ok, %{stack_id: stack_id}} =
+        ToolSurface.execute(
+          "stack_create",
+          %{"project_id" => project.id, "slug" => slug, "name" => "Eject"},
+          %{}
+        )
+
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Ejectable"})
+
+      {:ok, _} =
+        ToolSurface.execute("stack_add", %{"stack_id" => stack_id, "task_id" => task.id}, %{})
+
+      {:ok, result} =
+        ToolSurface.execute("stack_eject", %{"stack_id" => stack_id, "task_id" => task.id}, %{})
+
+      assert result.task_id == task.id
+      assert result.stack_id == stack_id
+    end
+
+    test "stack_eject returns not_in_stack envelope when task isn't a member" do
+      project = create_project()
+      slug = "shim-eject-miss-#{System.unique_integer([:positive])}"
+
+      {:ok, %{stack_id: stack_id}} =
+        ToolSurface.execute(
+          "stack_create",
+          %{"project_id" => project.id, "slug" => slug, "name" => "Eject Miss"},
+          %{}
+        )
+
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Floating"})
+
+      {:error, error} =
+        ToolSurface.execute("stack_eject", %{"stack_id" => stack_id, "task_id" => task.id}, %{})
+
+      assert error.code == "not_in_stack"
+    end
+
+    test "stack_eject returns has_dependents envelope with dependents payload" do
+      project = create_project()
+      slug = "shim-eject-deps-#{System.unique_integer([:positive])}"
+
+      {:ok, %{stack_id: stack_id}} =
+        ToolSurface.execute(
+          "stack_create",
+          %{"project_id" => project.id, "slug" => slug, "name" => "Eject Deps"},
+          %{}
+        )
+
+      {:ok, root} = Tasks.create_task(%{project_id: project.id, title: "Root"})
+
+      {:ok, child} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Child",
+          dependencies: [%{"task_id" => root.id, "kind" => "blocks"}]
+        })
+
+      {:ok, _} =
+        ToolSurface.execute("stack_add", %{"stack_id" => stack_id, "task_id" => root.id}, %{})
+
+      {:ok, _} =
+        ToolSurface.execute("stack_add", %{"stack_id" => stack_id, "task_id" => child.id}, %{})
+
+      {:error, error} =
+        ToolSurface.execute("stack_eject", %{"stack_id" => stack_id, "task_id" => root.id}, %{})
+
+      assert error.code == "has_dependents"
+      assert Enum.any?(error.dependents, &(&1.id == child.id))
+    end
+
+    test "stack_abandon flips status to abandoned and records reason" do
+      project = create_project()
+      slug = "shim-abandon-#{System.unique_integer([:positive])}"
+
+      {:ok, %{stack_id: stack_id}} =
+        ToolSurface.execute(
+          "stack_create",
+          %{"project_id" => project.id, "slug" => slug, "name" => "Abandon Me"},
+          %{}
+        )
+
+      {:ok, result} =
+        ToolSurface.execute(
+          "stack_abandon",
+          %{"stack_id" => stack_id, "reason" => "scope change"},
+          %{}
+        )
+
+      assert result.status == "abandoned"
+      assert result.description =~ "scope change"
+    end
+
+    test "stack_start transitions a forming stack to in_progress" do
+      project = create_project()
+      slug = "shim-start-#{System.unique_integer([:positive])}"
+
+      {:ok, %{stack_id: stack_id}} =
+        ToolSurface.execute(
+          "stack_create",
+          %{"project_id" => project.id, "slug" => slug, "name" => "Start Me"},
+          %{}
+        )
+
+      {:ok, result} =
+        ToolSurface.execute("stack_start", %{"stack_id" => stack_id}, %{})
+
+      assert result.status == "in_progress"
+    end
+
+    test "task_create with stack_id attaches the new task to the stack" do
+      project = create_project()
+      slug = "shim-tc-stack-#{System.unique_integer([:positive])}"
+
+      {:ok, %{stack_id: stack_id}} =
+        ToolSurface.execute(
+          "stack_create",
+          %{"project_id" => project.id, "slug" => slug, "name" => "TC Stack"},
+          %{}
+        )
+
+      {:ok, result} =
+        ToolSurface.execute(
+          "task_create",
+          %{
+            "project_id" => project.id,
+            "title" => "Stacked task",
+            "stack_id" => stack_id
+          },
+          %{}
+        )
+
+      assert result.stack_id == stack_id
+      assert result.stack_position == 1
     end
   end
 

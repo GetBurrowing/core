@@ -12,7 +12,7 @@ defmodule Platform.Federation.ToolSurface do
   alias Platform.Chat.{ActiveAgentStore, ContextPlane, Participant}
   alias Platform.Org.Context, as: OrgContext
   alias Platform.Tasks
-  alias Platform.Tasks.{Plan, PlanEngine, Stage, Task, Validation}
+  alias Platform.Tasks.{Plan, PlanEngine, Stack, Stacks, Stage, Task, Validation}
   alias Platform.Repo
 
   import Ecto.Query, only: [from: 2]
@@ -869,10 +869,18 @@ defmodule Platform.Federation.ToolSurface do
             type: "string",
             required: false,
             description: "ID of the user or agent to assign"
+          },
+          stack_id: %{
+            type: "string",
+            required: false,
+            description:
+              "Optional task-stack to attach this task to (ADR 0041). When set, the created task is added to the stack via Stacks.add_task — the in-stack DAG is re-validated, cross-stack dep edges are rejected, and the stack's rollup status is recomputed. Use to create-into-a-stack in one call."
           }
         },
-        returns: "The created task object with id, title, status, priority",
-        limitations: "Requires a valid project_id",
+        returns:
+          "The created task object with id, title, status, priority. When stack_id is supplied, the response also includes stack_id and stack_position.",
+        limitations:
+          "Requires a valid project_id. If stack_id is supplied, the stack must exist and the resulting in-stack DAG must remain acyclic with no cross-stack dependency edges.",
         when_to_use: "When you need to track a work item, feature, bug, or action item"
       },
       %{
@@ -983,6 +991,137 @@ defmodule Platform.Federation.ToolSurface do
           "Read-only. Does not mutate dependency state or trigger unblock sweeps — finishing a dep through task_complete is what cascades the unblock.",
         when_to_use:
           "When deciding whether you can start a task, surfacing what's blocking you in a status update, or estimating the blast radius of completing a task."
+      },
+      %{
+        name: "stack_create",
+        description:
+          "Create a new task stack (ADR 0041). Task stacks group co-related tasks that ship together as a single rollup PR. The rollup branch is auto-derived from the slug as `stack/<slug>`.",
+        parameters: %{
+          project_id: %{
+            type: "string",
+            required: true,
+            description: "Project this stack belongs to"
+          },
+          slug: %{
+            type: "string",
+            required: true,
+            description:
+              "Short URL-safe identifier (lowercase alphanumeric + hyphens, max 60 chars). Must be unique per project."
+          },
+          name: %{type: "string", required: true, description: "Human-friendly stack name"},
+          description: %{type: "string", required: false, description: "Optional description"},
+          epic_id: %{
+            type: "string",
+            required: false,
+            description: "Optional epic this stack belongs under"
+          },
+          base_branch: %{
+            type: "string",
+            required: false,
+            description: "Branch the rollup is cut from (defaults to `main`)"
+          }
+        },
+        returns: "%{stack_id, rollup_branch} — the new stack id and its derived rollup branch.",
+        limitations:
+          "Slug must be unique within the project and pass valid_slug?/1. Stack starts in `forming` status with no members.",
+        when_to_use:
+          "When you need to group multiple co-related tasks into a single ship-unit with one rollup PR."
+      },
+      %{
+        name: "stack_get",
+        description:
+          "Get a task stack with its members, in-stack dependency edges, and which members are executable right now (no in-stack predecessors).",
+        parameters: %{
+          stack_id: %{type: "string", required: true, description: "The stack to fetch"}
+        },
+        returns:
+          "%{stack: %{id, slug, name, status, rollup_branch, base_branch, description}, members: [%{id, title, status, stack_position, dependencies}], edges: [%{from_task_id, to_task_id, kind}], executable_now: [task_id], cross_stack_deps: [%{from_task_id, to_task_id, kind}]}. `edges` are in-stack dep edges only; cross-stack dep edges (deps to tasks in OTHER stacks) surface separately under `cross_stack_deps`. Deps pointing at non-stack tasks are silently dropped per ADR 0041.",
+        limitations:
+          "Returns an error envelope if the stack does not exist. `executable_now` is empty when the in-stack DAG fails validation (cycle or cross-stack-dep) — inspect `edges` / `cross_stack_deps` to diagnose.",
+        when_to_use:
+          "When inspecting a stack's current shape, members, in-stack dep graph, or which members are runnable now."
+      },
+      %{
+        name: "stack_list",
+        description: "List task stacks, optionally filtered by project and/or status.",
+        parameters: %{
+          project_id: %{
+            type: "string",
+            required: false,
+            description: "Filter by project"
+          },
+          status: %{
+            type: "string",
+            required: false,
+            description:
+              "Filter by status: forming, in_progress, in_review, deploying, done, abandoned"
+          }
+        },
+        returns:
+          "Array of stack objects (same shape as `stack_get`'s `stack` field), ordered by inserted_at descending.",
+        limitations: "Returns all matching stacks; no pagination yet (matches list_stacks/1).",
+        when_to_use: "When you need an overview of stacks in a project or by lifecycle status."
+      },
+      %{
+        name: "stack_add",
+        description:
+          "Attach an existing task to a stack as a new member. Validates the resulting in-stack DAG: cycles and cross-stack dep edges are rejected (atomically rolled back).",
+        parameters: %{
+          stack_id: %{type: "string", required: true, description: "The stack to attach to"},
+          task_id: %{type: "string", required: true, description: "The task to attach"}
+        },
+        returns:
+          "%{task_id, stack_id, stack_position} on success. Error envelopes carry a `code` field: `already_in_stack`, `cycle` (with `path` of task ids), `cross_stack_dep` (with `from_task_id` and `to_task_id`).",
+        limitations:
+          "Task must not already be in any stack. The in-stack DAG must remain acyclic and contain no cross-stack dep edges after the add; otherwise the attach is rolled back.",
+        when_to_use:
+          "When grouping an existing task into a stack. To create-and-attach in one call, pass `stack_id` to `task_create` instead."
+      },
+      %{
+        name: "stack_eject",
+        description:
+          "Detach a task from its stack. Refuses if other in-stack members declare this task as a dep — they must be ejected or have the dep removed first.",
+        parameters: %{
+          stack_id: %{type: "string", required: true, description: "The stack to detach from"},
+          task_id: %{type: "string", required: true, description: "The task to detach"}
+        },
+        returns:
+          "%{task_id, stack_id} (the stack the task was removed from). Error envelopes carry a `code` field: `not_in_stack`, `has_dependents` (with `dependents: [%{id, title}]`).",
+        limitations:
+          "Task's status is intentionally left as-is (per ADR 0041) — the caller decides whether to send it back to backlog. The stack's rollup status is recomputed.",
+        when_to_use:
+          "When removing a member from a stack — e.g., after a scope change or to break a stuck stack apart."
+      },
+      %{
+        name: "stack_abandon",
+        description:
+          "Terminal: mark a stack `abandoned` and record the reason. Per-member handling lands in a later T2 stage; today this only flips the stack-level status and stamps the reason into `description`.",
+        parameters: %{
+          stack_id: %{type: "string", required: true, description: "The stack to abandon"},
+          reason: %{
+            type: "string",
+            required: false,
+            description: "Free-text reason; appended to the stack's description"
+          }
+        },
+        returns: "The updated stack record (status: `abandoned`).",
+        limitations:
+          "Terminal: abandoned stacks are never auto-recomputed back to another status. Members are NOT yet cleared off the stack — that handling lands with the membership stage's eject_task wiring.",
+        when_to_use:
+          "When a stack's scope is no longer wanted and you want to record that decision explicitly."
+      },
+      %{
+        name: "stack_start",
+        description:
+          "Transition a stack from `forming` to `in_progress`. v1: flips the stack's status only — root members are not yet auto-cascaded into `in_progress`, and non-root members are not yet sent to `stack_pending`. Use the per-task lifecycle (task_start / plan_approve) to drive individual members until T4 wires the cascade.",
+        parameters: %{
+          stack_id: %{type: "string", required: true, description: "The stack to start"}
+        },
+        returns: "The updated stack record (status: `in_progress`).",
+        limitations:
+          "v1 cascade NOT YET WIRED: this tool does NOT yet transition roots → in_progress or non-roots → stack_pending. T4 will replace this body with Stacks.start_stack/1.",
+        when_to_use:
+          "When a stack's membership is finalized and you want the engine (once wired) to begin dispatching its level-0 roots."
       }
     ]
   end
@@ -1960,15 +2099,37 @@ defmodule Platform.Federation.ToolSurface do
       {:ok, task} ->
         Tasks.broadcast_board({:task_created, task})
 
-        {:ok,
-         %{
-           id: task.id,
-           title: task.title,
-           status: task.status,
-           priority: task.priority,
-           project_id: task.project_id,
-           epic_id: task.epic_id
-         }}
+        case Map.get(args, "stack_id") do
+          nil ->
+            {:ok,
+             %{
+               id: task.id,
+               title: task.title,
+               status: task.status,
+               priority: task.priority,
+               project_id: task.project_id,
+               epic_id: task.epic_id
+             }}
+
+          stack_id ->
+            case Stacks.add_task(stack_id, task) do
+              {:ok, updated} ->
+                {:ok,
+                 %{
+                   id: updated.id,
+                   title: updated.title,
+                   status: updated.status,
+                   priority: updated.priority,
+                   project_id: updated.project_id,
+                   epic_id: updated.epic_id,
+                   stack_id: updated.stack_id,
+                   stack_position: updated.stack_position
+                 }}
+
+              {:error, _} = err ->
+                stack_add_error_envelope(err)
+            end
+        end
 
       {:error, changeset} ->
         {:error,
@@ -2280,6 +2441,423 @@ defmodule Platform.Federation.ToolSurface do
     )
     |> Enum.map(fn row -> %{task_id: row.id, title: row.title, status: row.status} end)
   end
+
+  # ── Stack tools (ADR 0041) ───────────────────────────────────────────────
+
+  def execute("stack_create", args, _context) do
+    slug = Map.get(args, "slug")
+
+    attrs =
+      %{
+        project_id: Map.get(args, "project_id"),
+        slug: slug,
+        name: Map.get(args, "name"),
+        description: Map.get(args, "description"),
+        epic_id: Map.get(args, "epic_id"),
+        rollup_branch: slug && Stacks.rollup_branch_name(slug)
+      }
+      |> maybe_put_base_branch(Map.get(args, "base_branch"))
+
+    case Stacks.create_stack(attrs) do
+      {:ok, %Stack{} = stack} ->
+        {:ok, %{stack_id: stack.id, rollup_branch: stack.rollup_branch}}
+
+      {:error, %Ecto.Changeset{} = changeset} ->
+        if slug_taken?(changeset) do
+          {:error,
+           %{
+             code: "slug_taken",
+             error: "Slug '#{slug}' is already in use in this project",
+             recoverable: true,
+             suggestion: "Pick a different slug or reuse the existing stack"
+           }}
+        else
+          {:error,
+           %{
+             error: "Failed to create stack: #{inspect_errors(changeset)}",
+             recoverable: true,
+             suggestion:
+               "Check that project_id, slug, and name are provided and that slug is valid"
+           }}
+        end
+    end
+  end
+
+  def execute("stack_get", args, _context) do
+    stack_id = Map.get(args, "stack_id")
+
+    case stack_id && Stacks.get_stack(stack_id) do
+      nil ->
+        {:error,
+         %{
+           error: "Stack not found: #{inspect(stack_id)}",
+           recoverable: false,
+           suggestion: "Use stack_list to find available stacks"
+         }}
+
+      %Stack{} = stack ->
+        members = Stacks.members(stack)
+        executable_ids = stack |> Stacks.executable_members() |> Enum.map(& &1.id)
+        {edges, cross_stack_deps} = classify_member_edges(members)
+
+        {:ok,
+         %{
+           stack: serialize_stack(stack),
+           members: Enum.map(members, &serialize_stack_member/1),
+           edges: edges,
+           executable_now: executable_ids,
+           cross_stack_deps: cross_stack_deps
+         }}
+    end
+  end
+
+  def execute("stack_list", args, _context) do
+    filters =
+      %{}
+      |> maybe_put_filter(:project_id, Map.get(args, "project_id"))
+      |> maybe_put_filter(:status, Map.get(args, "status"))
+
+    stacks = Stacks.list_stacks(filters)
+    {:ok, Enum.map(stacks, &serialize_stack/1)}
+  end
+
+  def execute("stack_add", args, _context) do
+    stack_id = Map.get(args, "stack_id")
+    task_id = Map.get(args, "task_id")
+
+    cond do
+      is_nil(stack_id) ->
+        {:error,
+         %{error: "stack_id is required", recoverable: true, suggestion: "Provide a stack_id"}}
+
+      is_nil(task_id) ->
+        {:error,
+         %{error: "task_id is required", recoverable: true, suggestion: "Provide a task_id"}}
+
+      true ->
+        case Stacks.add_task(stack_id, task_id) do
+          {:ok, %Task{} = task} ->
+            {:ok,
+             %{
+               task_id: task.id,
+               stack_id: task.stack_id,
+               stack_position: task.stack_position
+             }}
+
+          {:error, _} = err ->
+            stack_add_error_envelope(err)
+
+          {:error, _, _} = err ->
+            stack_add_error_envelope(err)
+        end
+    end
+  end
+
+  def execute("stack_eject", args, _context) do
+    stack_id = Map.get(args, "stack_id")
+    task_id = Map.get(args, "task_id")
+
+    cond do
+      is_nil(stack_id) ->
+        {:error,
+         %{error: "stack_id is required", recoverable: true, suggestion: "Provide a stack_id"}}
+
+      is_nil(task_id) ->
+        {:error,
+         %{error: "task_id is required", recoverable: true, suggestion: "Provide a task_id"}}
+
+      true ->
+        case Stacks.eject_task(stack_id, task_id) do
+          {:ok, %Task{} = task} ->
+            {:ok, %{task_id: task.id, stack_id: stack_id}}
+
+          {:error, :not_in_stack} ->
+            {:error,
+             %{
+               code: "not_in_stack",
+               error: "Task #{task_id} is not a member of stack #{stack_id}",
+               recoverable: false,
+               suggestion: "Use stack_get to inspect the stack's current members"
+             }}
+
+          {:error, {:has_dependents, dependents}} ->
+            {:error,
+             %{
+               code: "has_dependents",
+               error: "Task #{task_id} cannot be ejected: other in-stack members depend on it",
+               recoverable: true,
+               suggestion:
+                 "Eject the dependent members first or remove the dep edge before retrying",
+               dependents: Enum.map(dependents, fn d -> %{id: d.id, title: d.title} end)
+             }}
+
+          {:error, :stack_not_found} ->
+            {:error,
+             %{
+               error: "Stack not found: #{stack_id}",
+               recoverable: false,
+               suggestion: "Use stack_list to find available stacks"
+             }}
+
+          {:error, :task_not_found} ->
+            {:error,
+             %{
+               error: "Task not found: #{task_id}",
+               recoverable: false,
+               suggestion: "Use task_list to find available tasks"
+             }}
+
+          {:error, reason} ->
+            {:error,
+             %{
+               error: "Failed to eject task: #{inspect(reason)}",
+               recoverable: true
+             }}
+        end
+    end
+  end
+
+  def execute("stack_abandon", args, _context) do
+    stack_id = Map.get(args, "stack_id")
+    reason = Map.get(args, "reason")
+
+    case stack_id && Stacks.get_stack(stack_id) do
+      nil ->
+        {:error,
+         %{
+           error: "Stack not found: #{inspect(stack_id)}",
+           recoverable: false,
+           suggestion: "Use stack_list to find available stacks"
+         }}
+
+      %Stack{} = stack ->
+        case Stacks.abandon_stack(stack, reason) do
+          {:ok, %Stack{} = updated} ->
+            {:ok, serialize_stack(updated)}
+
+          {:error, changeset} ->
+            {:error,
+             %{
+               error: "Failed to abandon stack: #{inspect_errors(changeset)}",
+               recoverable: true
+             }}
+        end
+    end
+  end
+
+  def execute("stack_start", args, _context) do
+    stack_id = Map.get(args, "stack_id")
+
+    case stack_id && Stacks.get_stack(stack_id) do
+      nil ->
+        {:error,
+         %{
+           error: "Stack not found: #{inspect(stack_id)}",
+           recoverable: false,
+           suggestion: "Use stack_list to find available stacks"
+         }}
+
+      %Stack{} = stack ->
+        # TODO(T4): wire to Stacks.start_stack/1 once T4 ships — that will
+        # also cascade roots to `in_progress` and non-roots to
+        # `stack_pending`. For T3 (this stage) we only flip the stack-level
+        # status; per-member transitions happen via the existing task
+        # lifecycle (task_start / plan_approve).
+        case Stacks.update_stack(stack, %{status: "in_progress"}) do
+          {:ok, %Stack{} = updated} ->
+            {:ok, serialize_stack(updated)}
+
+          {:error, changeset} ->
+            {:error,
+             %{
+               error: "Failed to start stack: #{inspect_errors(changeset)}",
+               recoverable: true,
+               suggestion: "Check the stack's current status"
+             }}
+        end
+    end
+  end
+
+  # ── Stack helpers ────────────────────────────────────────────────────────
+
+  defp serialize_stack(%Stack{} = stack) do
+    %{
+      id: stack.id,
+      slug: stack.slug,
+      name: stack.name,
+      status: stack.status,
+      rollup_branch: stack.rollup_branch,
+      base_branch: stack.base_branch,
+      description: stack.description,
+      project_id: stack.project_id,
+      epic_id: stack.epic_id,
+      inserted_at: format_datetime(stack.inserted_at),
+      updated_at: format_datetime(stack.updated_at)
+    }
+  end
+
+  defp serialize_stack_member(%Task{} = task) do
+    %{
+      id: task.id,
+      title: task.title,
+      status: task.status,
+      stack_position: task.stack_position,
+      dependencies: task.dependencies || []
+    }
+  end
+
+  # Partition each member's declared dep edges into:
+  #   * in-stack edges  → `%{from_task_id, to_task_id, kind}` lists keyed by
+  #     whether the dep target is one of the current members.
+  #   * cross-stack edges → deps pointing at tasks that exist in some OTHER
+  #     stack. We surface these separately so the caller can see WHY a
+  #     validate_dag-driven `executable_now` came back empty.
+  #
+  # Self-edges are dropped (matches Stacks/Tasks conventions). Edges to
+  # tasks with no stack_id are silently dropped (they don't block the
+  # in-stack DAG per ADR 0041).
+  defp classify_member_edges(members) do
+    member_ids = MapSet.new(members, & &1.id)
+
+    {in_stack_edges, external_edges, external_ids} =
+      Enum.reduce(members, {[], [], MapSet.new()}, fn %Task{id: from_id, dependencies: deps} =
+                                                        _member,
+                                                      {in_acc, ext_acc, ext_ids} ->
+        deps
+        |> List.wrap()
+        |> Enum.reduce({in_acc, ext_acc, ext_ids}, fn dep, {ia, ea, ei} ->
+          dep_id = Map.get(dep, "task_id")
+          kind = Map.get(dep, "kind")
+
+          cond do
+            is_nil(dep_id) or dep_id == from_id ->
+              {ia, ea, ei}
+
+            MapSet.member?(member_ids, dep_id) ->
+              {[%{from_task_id: from_id, to_task_id: dep_id, kind: kind} | ia], ea, ei}
+
+            true ->
+              {ia, [{from_id, dep_id, kind} | ea], MapSet.put(ei, dep_id)}
+          end
+        end)
+      end)
+
+    foreign_stack_by_id =
+      case MapSet.size(external_ids) do
+        0 ->
+          %{}
+
+        _ ->
+          ids = MapSet.to_list(external_ids)
+
+          from(t in Task,
+            where: t.id in ^ids and not is_nil(t.stack_id),
+            select: {t.id, t.stack_id}
+          )
+          |> Repo.all()
+          |> Map.new()
+      end
+
+    cross_stack =
+      external_edges
+      |> Enum.filter(fn {_from_id, dep_id, _kind} ->
+        Map.has_key?(foreign_stack_by_id, dep_id)
+      end)
+      |> Enum.map(fn {from_id, dep_id, kind} ->
+        %{from_task_id: from_id, to_task_id: dep_id, kind: kind}
+      end)
+      |> Enum.reverse()
+
+    {Enum.reverse(in_stack_edges), cross_stack}
+  end
+
+  # Map `Stacks.add_task/2` error shapes to MCP envelopes with stable
+  # `code` keys.
+  defp stack_add_error_envelope({:error, :already_in_stack}) do
+    {:error,
+     %{
+       code: "already_in_stack",
+       error: "Task is already a member of a stack",
+       recoverable: false,
+       suggestion: "Eject the task from its current stack before attaching it elsewhere"
+     }}
+  end
+
+  defp stack_add_error_envelope({:error, :stack_not_found}) do
+    {:error,
+     %{
+       error: "Stack not found",
+       recoverable: false,
+       suggestion: "Use stack_list to find available stacks"
+     }}
+  end
+
+  defp stack_add_error_envelope({:error, :task_not_found}) do
+    {:error,
+     %{
+       error: "Task not found",
+       recoverable: false,
+       suggestion: "Use task_list to find available tasks"
+     }}
+  end
+
+  defp stack_add_error_envelope({:error, :cycle, path}) when is_list(path) do
+    {:error,
+     %{
+       code: "cycle",
+       error: "Adding the task would introduce a cycle in the in-stack dependency DAG",
+       recoverable: true,
+       suggestion: "Remove the offending dep edge(s) before re-attaching",
+       path: Enum.map(path, & &1.id)
+     }}
+  end
+
+  defp stack_add_error_envelope({:error, :cross_stack_dep, %{from: from, to_task_id: to_id}}) do
+    {:error,
+     %{
+       code: "cross_stack_dep",
+       error:
+         "Member declares a dependency on a task in another stack — cross-stack deps are forbidden",
+       recoverable: true,
+       suggestion:
+         "Move both tasks into the same stack, or drop the cross-stack dep edge before re-attaching",
+       from_task_id: from.id,
+       to_task_id: to_id
+     }}
+  end
+
+  defp stack_add_error_envelope({:error, %Ecto.Changeset{} = changeset}) do
+    {:error,
+     %{
+       error: "Failed to attach task to stack: #{inspect_errors(changeset)}",
+       recoverable: true
+     }}
+  end
+
+  defp stack_add_error_envelope({:error, reason}) do
+    {:error, %{error: "Failed to attach task to stack: #{inspect(reason)}", recoverable: true}}
+  end
+
+  # The composite unique index `task_stacks_slug_project_uniq` is on
+  # `[:project_id, :slug]`; Ecto surfaces the violation on whichever field
+  # the unique_constraint/3 call named, which currently is `:project_id`
+  # (Stack.changeset/2). Match either so renaming the constraint anchor
+  # later doesn't silently break this detection.
+  defp slug_taken?(%Ecto.Changeset{errors: errors}) do
+    Enum.any?(errors, fn
+      {field, {_msg, opts}} when field in [:slug, :project_id] ->
+        Keyword.get(opts, :constraint) == :unique
+
+      _ ->
+        false
+    end)
+  end
+
+  defp maybe_put_filter(filters, _key, nil), do: filters
+  defp maybe_put_filter(filters, key, value), do: Map.put(filters, key, value)
+
+  defp maybe_put_base_branch(attrs, nil), do: attrs
+  defp maybe_put_base_branch(attrs, value), do: Map.put(attrs, :base_branch, value)
 
   # ── Plan / Stage / Validation tools ──────────────────────────────────────
 
