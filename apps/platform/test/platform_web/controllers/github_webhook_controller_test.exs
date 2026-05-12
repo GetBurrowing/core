@@ -589,4 +589,451 @@ defmodule PlatformWeb.GithubWebhookControllerTest do
       assert found.id == ci_check_val.id
     end
   end
+
+  # ── ADR 0041 (T6 stages 1+2): rollup-PR webhook fan-out + stack done ───
+
+  describe "stack rollup-branch webhook fan-out" do
+    alias Platform.Tasks.Stacks
+
+    # Build a stack with N members, each with an approved plan whose
+    # running review stage carries a pending pr_merged validation. This
+    # is the steady-state shape the rollup-PR webhook expects: every
+    # member has just finished its review and is waiting for the rollup
+    # PR's merge to flip pr_merged → passed.
+    defp build_stack_with_members!(member_count, opts \\ []) when member_count > 0 do
+      slug =
+        Keyword.get(opts, :slug, "rollup-fanout-#{System.unique_integer([:positive])}")
+
+      rollup_branch = "stack/#{slug}"
+
+      {:ok, project} =
+        Tasks.create_project(%{
+          name: "Stack Rollup Fan-Out #{System.unique_integer([:positive])}",
+          repo_url: "https://github.com/test/stack-repo"
+        })
+
+      {:ok, stack} =
+        Stacks.create_stack(%{
+          project_id: project.id,
+          slug: slug,
+          name: "Rollup Fan-Out",
+          rollup_branch: rollup_branch
+        })
+
+      members =
+        for position <- 1..member_count do
+          {:ok, task} =
+            Tasks.create_task(%{
+              project_id: project.id,
+              title: "Stack member #{position}"
+            })
+
+          # Steady-state shape per ADR 0041 §"Stack-level deploy": every
+          # member is sitting at `in_review` with a pending pr_merged
+          # validation on a running review stage, waiting for the rollup
+          # PR to merge. The fan-out controller now requires this (an
+          # unexpected status raises an `unexpected_status:*` anomaly).
+          {:ok, task} =
+            Tasks.update_task(task, %{
+              stack_id: stack.id,
+              stack_position: position,
+              status: "in_review"
+            })
+
+          {:ok, plan} = Tasks.create_plan(%{task_id: task.id, status: "approved"})
+
+          {:ok, stage} =
+            Tasks.create_stage(%{
+              plan_id: plan.id,
+              position: 1,
+              name: "Review",
+              description: "Review stage"
+            })
+
+          {:ok, _} = Tasks.transition_stage(stage, "running")
+
+          {:ok, pr_validation} =
+            Tasks.create_validation(%{stage_id: stage.id, kind: "pr_merged"})
+
+          %{task: task, plan: plan, stage: stage, pr_validation: pr_validation}
+        end
+
+      %{project: project, stack: stack, rollup_branch: rollup_branch, members: members}
+    end
+
+    defp rollup_merged_payload(rollup_branch, overrides \\ %{}) do
+      pr =
+        Map.merge(
+          %{
+            "merged" => true,
+            "title" => "feat: stack rollup",
+            "number" => System.unique_integer([:positive]),
+            "html_url" =>
+              "https://github.com/test/stack-repo/pull/#{System.unique_integer([:positive])}",
+            "merge_commit_sha" => "rollup#{System.unique_integer([:positive])}",
+            "merged_at" => "2026-05-12T12:00:00Z",
+            "body" => "",
+            "user" => %{"login" => "merge-bot"},
+            "merged_by" => %{"login" => "human-merger"},
+            "head" => %{"ref" => rollup_branch}
+          },
+          overrides
+        )
+
+      %{"action" => "closed", "pull_request" => pr}
+    end
+
+    test "happy path: 4 members all pass + stack transitions to done with rollup_merge metadata",
+         %{conn: conn} do
+      %{stack: stack, rollup_branch: rollup_branch, members: members} =
+        build_stack_with_members!(4)
+
+      merge_sha = "rollup-happy-#{System.unique_integer([:positive])}"
+
+      payload =
+        rollup_merged_payload(rollup_branch, %{
+          "merge_commit_sha" => merge_sha,
+          "merged_at" => "2026-05-12T13:00:00Z"
+        })
+
+      conn = post(conn, @github_webhook_path, payload)
+      assert %{"status" => "created"} = json_response(conn, 201)
+
+      for %{pr_validation: pr_validation, task: task} <- members do
+        updated = Platform.Repo.get!(Platform.Tasks.Validation, pr_validation.id)
+
+        assert updated.status == "passed",
+               "expected member #{task.id} pr_merged to be passed, got #{updated.status}"
+
+        assert updated.evaluated_by == "github_webhook"
+        assert updated.evidence["fanned_out_from_stack_rollup_pr"] == true
+        assert updated.evidence["stack_id"] == stack.id
+        assert updated.evidence["stack_rollup_branch"] == rollup_branch
+        assert updated.evidence["member_task_id"] == task.id
+      end
+
+      # Stage 2: stack transitions to done with rollup_merge metadata.
+      reloaded_stack = Platform.Repo.get!(Platform.Tasks.Stack, stack.id)
+      assert reloaded_stack.status == "done"
+
+      rollup_merge = Map.get(reloaded_stack.metadata, "rollup_merge")
+      assert is_map(rollup_merge)
+      assert rollup_merge["merge_commit_sha"] == merge_sha
+      assert is_binary(rollup_merge["merged_at"])
+      assert rollup_merge["anomalies"] == []
+      refute Map.has_key?(rollup_merge, "degraded")
+
+      member_ids = Enum.map(members, & &1.task.id)
+      assert Enum.sort(rollup_merge["members_passed"]) == Enum.sort(member_ids)
+    end
+
+    test "non-stack task branch still hits the per-task path (regression)",
+         %{conn: conn} do
+      %{task: task, pr_validation: pr_validation} = create_task_with_ci_validation!()
+
+      # Plain task/<uuid> branch, NOT a stack/<slug> branch.
+      payload =
+        merged_pr_payload(%{
+          "pull_request" => %{
+            "merged" => true,
+            "title" => "feat: plain task PR",
+            "number" => System.unique_integer([:positive]),
+            "html_url" => "https://github.com/test/ci-repo/pull/777",
+            "merge_commit_sha" => "plain777",
+            "merged_at" => "2026-05-12T12:00:00Z",
+            "body" => "",
+            "user" => %{"login" => "agent-bot"},
+            "head" => %{"ref" => "task/#{task.id}"}
+          }
+        })
+
+      conn = post(conn, @github_webhook_path, payload)
+      assert %{"status" => "created"} = json_response(conn, 201)
+
+      reloaded = Platform.Repo.get!(Platform.Tasks.Validation, pr_validation.id)
+      assert reloaded.status == "passed"
+      # Per-task path: evidence is NOT marked as a stack fan-out.
+      refute Map.get(reloaded.evidence, "fanned_out_from_stack_rollup_pr")
+    end
+
+    test "partial anomalies: unexpected_status + no_pending_pr_merged are recorded per the T6 contract",
+         %{conn: conn} do
+      # Contract (T6 stage 3 / validation
+      # 019e1a3d-936e-7456-b85c-b911132dd66a):
+      #
+      #   Stack S with 3 members.
+      #     M1: in_review + pending pr_merged          → happy
+      #     M2: in_progress + pending pr_merged        → unexpected_status anomaly
+      #     M3: in_review + pr_merged ALREADY failed   → no_pending_pr_merged anomaly
+      #
+      #   Expected: M1 passed; M2 anomaly reason starts
+      #   "unexpected_status:in_progress"; M3 anomaly reason
+      #   "no_pending_pr_merged"; Stack → done; two anomalies; degraded unset
+      #   because M1 passed.
+      %{stack: stack, rollup_branch: rollup_branch, members: [m1, m2, m3]} =
+        build_stack_with_members!(3)
+
+      # Demote M2 to `in_progress`. Its pr_merged validation is LEFT
+      # pending — the controller must NOT pass it, because the member
+      # status is outside the accepted set (in_review/deploying).
+      {:ok, _} = Tasks.update_task(m2.task, %{status: "in_progress"})
+
+      # Pre-fail M3's pr_merged so the lookup for a *pending* one comes
+      # back nil. M3's task status stays at `in_review` so the only
+      # reason it lands in anomalies is no_pending_pr_merged.
+      m3.pr_validation
+      |> Platform.Tasks.Validation.changeset(%{status: "failed"})
+      |> Platform.Repo.update!()
+
+      payload = rollup_merged_payload(rollup_branch)
+      conn = post(conn, @github_webhook_path, payload)
+      assert %{"status" => "created"} = json_response(conn, 201)
+
+      # M1: passed with fan-out evidence.
+      m1_reloaded = Platform.Repo.get!(Platform.Tasks.Validation, m1.pr_validation.id)
+      assert m1_reloaded.status == "passed"
+      assert m1_reloaded.evidence["fanned_out_from_stack_rollup_pr"] == true
+      assert m1_reloaded.evidence["member_task_id"] == m1.task.id
+
+      # M2: UNCHANGED. The fan-out saw an unexpected status and bailed
+      # BEFORE touching the validation. Status stays "pending", and the
+      # validation evidence carries no fan-out marker.
+      m2_reloaded = Platform.Repo.get!(Platform.Tasks.Validation, m2.pr_validation.id)
+      assert m2_reloaded.status == "pending"
+      refute Map.get(m2_reloaded.evidence || %{}, "fanned_out_from_stack_rollup_pr")
+
+      # M3: still failed (we set that up).
+      m3_reloaded = Platform.Repo.get!(Platform.Tasks.Validation, m3.pr_validation.id)
+      assert m3_reloaded.status == "failed"
+
+      # Stack: done; members_passed has just M1; two anomalies; degraded
+      # unset because at least one member (M1) actually passed.
+      reloaded_stack = Platform.Repo.get!(Platform.Tasks.Stack, stack.id)
+      assert reloaded_stack.status == "done"
+
+      rollup_merge = Map.get(reloaded_stack.metadata, "rollup_merge")
+      assert is_map(rollup_merge)
+      refute Map.has_key?(rollup_merge, "degraded")
+      assert rollup_merge["members_passed"] == [m1.task.id]
+
+      anomalies = rollup_merge["anomalies"]
+      assert is_list(anomalies)
+      assert length(anomalies) == 2
+
+      anomalies_by_task = Map.new(anomalies, &{&1["task_id"], &1})
+
+      m2_anomaly = Map.fetch!(anomalies_by_task, m2.task.id)
+      assert m2_anomaly["reason"] == "unexpected_status:in_progress"
+      assert m2_anomaly["member_status"] == "in_progress"
+      assert is_binary(m2_anomaly["recorded_at"])
+
+      m3_anomaly = Map.fetch!(anomalies_by_task, m3.task.id)
+      assert m3_anomaly["reason"] == "no_pending_pr_merged"
+      assert m3_anomaly["member_status"] == "in_review"
+      assert is_binary(m3_anomaly["recorded_at"])
+    end
+
+    test "webhook for non-existent stack/<slug> branch is a no-op (no crash)",
+         %{conn: conn} do
+      # No stack with this rollup branch exists. Also no task/<uuid>
+      # match. The webhook should accept the event, log nothing
+      # actionable, and return 201 (the changelog entry still gets
+      # created because the PR is otherwise valid).
+      payload =
+        merged_pr_payload(%{
+          "pull_request" => %{
+            "merged" => true,
+            "title" => "feat: stale rollup branch",
+            "number" => System.unique_integer([:positive]),
+            "html_url" => "https://github.com/test/stack-repo/pull/999",
+            "merge_commit_sha" => "stale999",
+            "merged_at" => "2026-05-12T12:00:00Z",
+            "body" => "",
+            "user" => %{"login" => "agent-bot"},
+            "head" => %{"ref" => "stack/does-not-exist-#{System.unique_integer([:positive])}"}
+          }
+        })
+
+      conn = post(conn, @github_webhook_path, payload)
+      assert %{"status" => "created"} = json_response(conn, 201)
+    end
+
+    test "abandoned stack is skipped (no fan-out)", %{conn: conn} do
+      %{stack: stack, rollup_branch: rollup_branch, members: [m1 | _]} =
+        build_stack_with_members!(2,
+          slug: "abandoned-stack-#{System.unique_integer([:positive])}"
+        )
+
+      # Mark the stack abandoned. The fan-out lookup excludes abandoned
+      # stacks — a stale stack/<slug> branch in the repo should not
+      # re-pass member validations.
+      {:ok, _} = Stacks.update_stack(stack, %{status: "abandoned"})
+
+      payload = rollup_merged_payload(rollup_branch)
+      conn = post(conn, @github_webhook_path, payload)
+      assert %{"status" => "created"} = json_response(conn, 201)
+
+      # Validation stays pending.
+      reloaded = Platform.Repo.get!(Platform.Tasks.Validation, m1.pr_validation.id)
+      assert reloaded.status == "pending"
+    end
+
+    # ── Stage 2: degraded path + defensive rescue + idempotency ─────────────
+
+    test "all anomalies: stack still transitions to done with degraded=true + ERROR log",
+         %{conn: conn} do
+      import ExUnit.CaptureLog
+
+      %{stack: stack, rollup_branch: rollup_branch, members: members} =
+        build_stack_with_members!(3,
+          slug: "all-anomalies-#{System.unique_integer([:positive])}"
+        )
+
+      # Knock EVERY member's pr_merged validation out of "pending" so
+      # every member becomes an anomaly during fan-out.
+      for %{pr_validation: pr_validation} <- members do
+        pr_validation
+        |> Platform.Tasks.Validation.changeset(%{status: "passed"})
+        |> Platform.Repo.update!()
+      end
+
+      payload = rollup_merged_payload(rollup_branch)
+
+      log =
+        capture_log(fn ->
+          conn = post(conn, @github_webhook_path, payload)
+          assert %{"status" => "created"} = json_response(conn, 201)
+        end)
+
+      # ERROR log fires because zero members passed.
+      assert log =~ "ZERO passed members"
+      assert log =~ "degraded"
+
+      # Stack still transitions to done with degraded flag and empty
+      # members_passed but populated anomalies.
+      reloaded_stack = Platform.Repo.get!(Platform.Tasks.Stack, stack.id)
+      assert reloaded_stack.status == "done"
+
+      rollup_merge = Map.get(reloaded_stack.metadata, "rollup_merge")
+      assert is_map(rollup_merge)
+      assert rollup_merge["degraded"] == true
+      assert rollup_merge["members_passed"] == []
+      assert length(rollup_merge["anomalies"]) == length(members)
+
+      for anomaly <- rollup_merge["anomalies"] do
+        assert is_binary(anomaly["task_id"])
+        assert anomaly["reason"] == "no_pending_pr_merged"
+      end
+    end
+
+    test "defensive: exception in stack path is caught, falls back to per-task path, returns 2xx",
+         %{conn: conn} do
+      import ExUnit.CaptureLog
+
+      # Build BOTH a stack (so the fan-out branch is entered) and a
+      # plain task whose branch is on the PR. The webhook should
+      # rescue the induced exception and fall back to the per-task
+      # path, which evaluates the per-task pr_merged validation.
+      %{rollup_branch: rollup_branch} =
+        build_stack_with_members!(2,
+          slug: "rescue-test-#{System.unique_integer([:positive])}"
+        )
+
+      %{task: fallback_task, pr_validation: fallback_validation} =
+        create_task_with_ci_validation!()
+
+      # Use the test-only :webhook_stack_fault process-dict hook to make
+      # process_stack_merged_pr/4 raise. Process-dict scope makes this
+      # safe for `async: true` since Phoenix runs the controller in the
+      # test's own process when invoked via `post/2`.
+      Process.put(:webhook_stack_fault, :raise)
+
+      try do
+        payload =
+          rollup_merged_payload(rollup_branch, %{
+            "body" => "Task: #{fallback_task.id}"
+          })
+
+        log =
+          capture_log(fn ->
+            # Webhook STILL returns 2xx despite the rescued exception.
+            conn = post(conn, @github_webhook_path, payload)
+            assert %{"status" => "created"} = json_response(conn, 201)
+          end)
+
+        # ERROR logged with the exception detail.
+        assert log =~ "Stack rollup fan-out raised"
+        assert log =~ "synthetic webhook stack fault"
+
+        # Fallback per-task path executed: the fallback task's
+        # pr_merged validation (linked via the body's "Refs task ..."
+        # extraction) is now passed.
+        reloaded = Platform.Repo.get!(Platform.Tasks.Validation, fallback_validation.id)
+        assert reloaded.status == "passed"
+      after
+        Process.delete(:webhook_stack_fault)
+      end
+    end
+
+    test "idempotent: replaying the same webhook leaves stack done with original metadata intact",
+         %{conn: conn} do
+      %{stack: stack, rollup_branch: rollup_branch, members: members} =
+        build_stack_with_members!(3,
+          slug: "idempotent-#{System.unique_integer([:positive])}"
+        )
+
+      payload =
+        rollup_merged_payload(rollup_branch, %{
+          "merge_commit_sha" => "first-merge-sha",
+          "number" => System.unique_integer([:positive])
+        })
+
+      # First delivery: full fan-out + stack→done.
+      conn1 = post(conn, @github_webhook_path, payload)
+      assert %{"status" => "created"} = json_response(conn1, 201)
+
+      first_stack = Platform.Repo.get!(Platform.Tasks.Stack, stack.id)
+      assert first_stack.status == "done"
+      first_rollup_merge = Map.get(first_stack.metadata, "rollup_merge")
+      assert first_rollup_merge["merge_commit_sha"] == "first-merge-sha"
+
+      # Snapshot validations after the first run.
+      first_validations =
+        for %{pr_validation: v} <- members do
+          reloaded = Platform.Repo.get!(Platform.Tasks.Validation, v.id)
+          {reloaded.id, reloaded.status, reloaded.updated_at, reloaded.evidence}
+        end
+
+      # Second delivery with a DIFFERENT commit sha (simulating a
+      # replay carrying drift). Use a fresh PR number so the changelog
+      # insert succeeds (the dedup guard would 422 a same-PR replay
+      # before the fan-out runs at all).
+      replay_payload =
+        rollup_merged_payload(rollup_branch, %{
+          "merge_commit_sha" => "replay-merge-sha",
+          "number" => System.unique_integer([:positive])
+        })
+
+      conn2 = post(conn, @github_webhook_path, replay_payload)
+      assert %{"status" => "created"} = json_response(conn2, 201)
+
+      # Stack stays at done; rollup_merge metadata is the ORIGINAL —
+      # the replay did not clobber history with the new sha.
+      second_stack = Platform.Repo.get!(Platform.Tasks.Stack, stack.id)
+      assert second_stack.status == "done"
+      second_rollup_merge = Map.get(second_stack.metadata, "rollup_merge")
+      assert second_rollup_merge["merge_commit_sha"] == "first-merge-sha"
+
+      # Member validations are NOT re-evaluated on replay (no new
+      # `updated_at`, evidence unchanged).
+      for {first, %{pr_validation: v}} <- Enum.zip(first_validations, members) do
+        {id, first_status, first_updated_at, first_evidence} = first
+        reloaded = Platform.Repo.get!(Platform.Tasks.Validation, v.id)
+        assert reloaded.id == id
+        assert reloaded.status == first_status
+        assert reloaded.updated_at == first_updated_at
+        assert reloaded.evidence == first_evidence
+      end
+    end
+  end
 end

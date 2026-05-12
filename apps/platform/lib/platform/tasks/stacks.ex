@@ -46,6 +46,29 @@ defmodule Platform.Tasks.Stacks do
   def get_stack!(id) when is_binary(id), do: Repo.get!(Stack, id)
 
   @doc """
+  Look up a non-abandoned stack by its rollup-branch name.
+
+  Used by the GitHub webhook controller (T6) to detect whether a merged
+  PR's head branch corresponds to a stack rollup branch, so the
+  `pr_merged` validation can be fanned out across all member tasks.
+  Abandoned stacks are excluded; if a stale stack/<slug> branch survives
+  in the repo, its webhook should fall through to the no-op path rather
+  than re-pass member validations.
+
+  Returns the `%Stack{}` or `nil`. `nil` for any non-binary input so
+  callers don't have to pre-filter `head_branch == nil`.
+  """
+  @spec get_stack_by_rollup_branch(String.t() | nil) :: Stack.t() | nil
+  def get_stack_by_rollup_branch(rollup_branch) when is_binary(rollup_branch) do
+    Stack
+    |> where([s], s.rollup_branch == ^rollup_branch and s.status != "abandoned")
+    |> limit(1)
+    |> Repo.one()
+  end
+
+  def get_stack_by_rollup_branch(_), do: nil
+
+  @doc """
   List stacks, optionally filtered by `:project_id` and/or `:status`.
 
   Results are ordered by `inserted_at` descending so the most recent stacks
@@ -79,6 +102,78 @@ defmodule Platform.Tasks.Stacks do
     |> Stack.changeset(attrs)
     |> Repo.update()
   end
+
+  @doc """
+  Terminal transition for the rollup-PR merge path (T6 stage 2).
+
+  Marks `stack` as `done` and records the rollup-merge summary into
+  `stack.metadata["rollup_merge"]`. Existing metadata keys are
+  preserved (deep merge at the top level; the `rollup_merge` subtree
+  is replaced wholesale because each rollup-PR merge produces a single
+  canonical summary).
+
+  Expected `attrs` shape:
+
+      %{
+        passed_member_ids: [task_id, ...],
+        anomalies: [%{"task_id" => id, "reason" => "...", "recorded_at" => iso8601}, ...],
+        merge_commit_sha: sha,
+        merged_at: %DateTime{} | iso8601_string
+      }
+
+  When `passed_member_ids` is empty (every member was an anomaly), the
+  resulting `metadata["rollup_merge"]["degraded"]` flag is set to
+  `true` and the caller is expected to emit an ERROR log alongside.
+  The stack still transitions to `done` so the rollup-PR's deploy
+  surface accurately reflects what happened on GitHub; the degraded
+  flag signals that no member validations were actually flipped here
+  and operator triage is warranted.
+
+  Idempotency: a stack already at `done` with `metadata["rollup_merge"]`
+  populated is left untouched; the function returns `{:ok, stack}`
+  with the existing metadata so a replayed webhook does NOT clobber
+  the original history.
+  """
+  @spec complete_rollup_merge(Stack.t(), %{
+          optional(:passed_member_ids) => [String.t()],
+          optional(:anomalies) => [map()],
+          optional(:merge_commit_sha) => String.t() | nil,
+          optional(:merged_at) => DateTime.t() | String.t() | nil
+        }) :: {:ok, Stack.t()} | {:error, Ecto.Changeset.t()}
+  def complete_rollup_merge(%Stack{} = stack, attrs) when is_map(attrs) do
+    base_meta = if is_map(stack.metadata), do: stack.metadata, else: %{}
+
+    if stack.status == "done" and Map.has_key?(base_meta, "rollup_merge") do
+      {:ok, stack}
+    else
+      passed = Map.get(attrs, :passed_member_ids, [])
+      anomalies = Map.get(attrs, :anomalies, [])
+      sha = Map.get(attrs, :merge_commit_sha)
+      merged_at = format_merged_at(Map.get(attrs, :merged_at))
+
+      rollup_merge =
+        %{
+          "merged_at" => merged_at,
+          "merge_commit_sha" => sha,
+          "members_passed" => passed,
+          "anomalies" => anomalies
+        }
+        |> maybe_set_degraded(passed)
+
+      new_meta = Map.put(base_meta, "rollup_merge", rollup_merge)
+
+      stack
+      |> Stack.changeset(%{status: "done", metadata: new_meta})
+      |> Repo.update()
+    end
+  end
+
+  defp maybe_set_degraded(rollup_merge, []), do: Map.put(rollup_merge, "degraded", true)
+  defp maybe_set_degraded(rollup_merge, _passed), do: rollup_merge
+
+  defp format_merged_at(%DateTime{} = dt), do: DateTime.to_iso8601(dt)
+  defp format_merged_at(str) when is_binary(str), do: str
+  defp format_merged_at(_), do: nil
 
   @doc """
   Status cascade for `stack_start`: transition a `forming` stack to
