@@ -247,46 +247,66 @@
                     }
                     class="flex flex-col rounded-box border-l-4 border-violet-500 border border-base-300 bg-base-100"
                   >
-                    <button
-                      type="button"
-                      phx-click="toggle_stack_expand"
-                      phx-value-id={item.id}
-                      data-role="stack-header"
-                      class="flex min-w-0 flex-col gap-1.5 p-3 text-left transition-colors hover:bg-base-200/60 focus-visible-ring min-h-[44px]"
-                    >
-                      <div class="flex min-w-0 items-center gap-2">
-                        <span
-                          class="hero-rectangle-stack size-4 shrink-0 text-violet-300"
-                          aria-hidden="true"
-                        >
-                        </span>
-                        <span class="text-[9px] font-semibold uppercase tracking-wider text-violet-300 shrink-0">
-                          Stack
-                        </span>
-                        <span class="ml-auto text-[10px] text-base-content/50 font-medium whitespace-nowrap shrink-0">
-                          {board_data.ready_count}/{board_data.member_count} ready
-                        </span>
+                    <%!-- T8 stage 1: header opens the stack detail
+                         panel. Chevron is split into its own sibling
+                         button so the inline-expansion toggle remains
+                         reachable without bubbling through the panel
+                         opener (Discord "click thread to enter" pattern,
+                         Option A in the T8 dispatch). --%>
+                    <div class="relative flex min-w-0 items-stretch">
+                      <button
+                        type="button"
+                        phx-click="open_stack_detail"
+                        phx-value-id={item.id}
+                        data-role="stack-header"
+                        class="flex min-w-0 flex-1 flex-col gap-1.5 p-3 text-left transition-colors hover:bg-base-200/60 focus-visible-ring min-h-[44px]"
+                      >
+                        <div class="flex min-w-0 items-center gap-2 pr-7">
+                          <span
+                            class="hero-rectangle-stack size-4 shrink-0 text-violet-300"
+                            aria-hidden="true"
+                          >
+                          </span>
+                          <span class="text-[9px] font-semibold uppercase tracking-wider text-violet-300 shrink-0">
+                            Stack
+                          </span>
+                          <span class="ml-auto text-[10px] text-base-content/50 font-medium whitespace-nowrap shrink-0">
+                            {board_data.ready_count}/{board_data.member_count} ready
+                          </span>
+                        </div>
+                        <h3 class="text-sm font-medium leading-snug truncate min-w-0">
+                          {item.name}
+                        </h3>
+                        <div class="flex min-w-0 items-center gap-1.5 text-[10px] text-base-content/60">
+                          <span class="bg-base-200 px-1.5 py-0.5 rounded whitespace-nowrap shrink-0">
+                            {board_data.member_count} tasks
+                          </span>
+                          <span class="bg-base-200 px-1.5 py-0.5 rounded whitespace-nowrap shrink-0">
+                            {board_data.dep_edge_count} dep edges
+                          </span>
+                        </div>
+                      </button>
+                      <button
+                        type="button"
+                        phx-click="toggle_stack_expand"
+                        phx-value-id={item.id}
+                        data-role="stack-chevron"
+                        aria-label="Toggle stack expansion"
+                        aria-expanded={
+                          if(MapSet.member?(@expanded_stacks, item.id), do: "true", else: "false")
+                        }
+                        class="absolute right-0 top-0 flex h-11 w-9 items-center justify-center text-violet-300 transition-colors hover:bg-base-200/60 focus-visible-ring"
+                      >
                         <span
                           class={[
-                            "hero-chevron-down size-3 text-violet-300 transition-transform shrink-0",
+                            "hero-chevron-down size-3 transition-transform",
                             MapSet.member?(@expanded_stacks, item.id) && "rotate-180"
                           ]}
                           aria-hidden="true"
                         >
                         </span>
-                      </div>
-                      <h3 class="text-sm font-medium leading-snug truncate min-w-0">
-                        {item.name}
-                      </h3>
-                      <div class="flex min-w-0 items-center gap-1.5 text-[10px] text-base-content/60">
-                        <span class="bg-base-200 px-1.5 py-0.5 rounded whitespace-nowrap shrink-0">
-                          {board_data.member_count} tasks
-                        </span>
-                        <span class="bg-base-200 px-1.5 py-0.5 rounded whitespace-nowrap shrink-0">
-                          {board_data.dep_edge_count} dep edges
-                        </span>
-                      </div>
-                    </button>
+                      </button>
+                    </div>
                     <div
                       :if={MapSet.member?(@expanded_stacks, item.id)}
                       data-role="stack-members"
@@ -459,51 +479,73 @@
                   }
                   class="group card card-compact border-l-4 border-violet-500 border border-base-300 bg-base-100 shadow-sm transition-all hover:shadow-md"
                 >
-                  <%!-- Header click target. Restricted to the header so
-                       clicks on member rows below don't toggle
-                       expansion. --%>
-                  <div
-                    class="card-body cursor-pointer gap-1.5 p-3"
-                    phx-click="toggle_stack_expand"
-                    phx-value-id={item.id}
-                    data-role="stack-header"
-                  >
-                    <%!-- Header row: icon + STACK tag + rollup progress --%>
-                    <div class="flex min-w-0 items-center gap-1.5">
-                      <span
-                        class="hero-rectangle-stack size-4 shrink-0 text-violet-300"
-                        aria-hidden="true"
-                      >
-                      </span>
-                      <span class="text-[9px] font-semibold uppercase tracking-wider text-violet-300 shrink-0">
-                        Stack
-                      </span>
-                      <span class="ml-auto text-[10px] text-base-content/50 font-medium whitespace-nowrap shrink-0">
-                        {board_data.ready_count}/{board_data.member_count} ready
-                      </span>
+                  <%!-- T8 stage 1: header opens the stack detail panel.
+                       Chevron is split into its own sibling button so
+                       the inline-expansion toggle remains reachable
+                       without bubbling through the panel opener
+                       (Discord "click thread to enter" pattern, Option A
+                       in the T8 dispatch). The chevron button uses
+                       `onclick=stopPropagation` so its click does NOT
+                       bubble up into the surrounding header div's
+                       phx-click. --%>
+                  <div class="relative">
+                    <div
+                      class="card-body cursor-pointer gap-1.5 p-3 pr-9"
+                      phx-click="open_stack_detail"
+                      phx-value-id={item.id}
+                      data-role="stack-header"
+                    >
+                      <%!-- Header row: icon + STACK tag + rollup progress --%>
+                      <div class="flex min-w-0 items-center gap-1.5">
+                        <span
+                          class="hero-rectangle-stack size-4 shrink-0 text-violet-300"
+                          aria-hidden="true"
+                        >
+                        </span>
+                        <span class="text-[9px] font-semibold uppercase tracking-wider text-violet-300 shrink-0">
+                          Stack
+                        </span>
+                        <span class="ml-auto text-[10px] text-base-content/50 font-medium whitespace-nowrap shrink-0">
+                          {board_data.ready_count}/{board_data.member_count} ready
+                        </span>
+                      </div>
+
+                      <%!-- Title row --%>
+                      <h3 class="text-sm font-medium leading-snug truncate min-w-0">
+                        {item.name}
+                      </h3>
+
+                      <%!-- Pills row: member count + dep edge count. --%>
+                      <div class="flex min-w-0 items-center gap-1.5 text-[10px] text-base-content/60">
+                        <span class="bg-base-200 px-1.5 py-0.5 rounded font-medium whitespace-nowrap shrink-0">
+                          {board_data.member_count} tasks
+                        </span>
+                        <span class="bg-base-200 px-1.5 py-0.5 rounded font-medium whitespace-nowrap shrink-0">
+                          {board_data.dep_edge_count} dep edges
+                        </span>
+                      </div>
                     </div>
-
-                    <%!-- Title row --%>
-                    <h3 class="text-sm font-medium leading-snug truncate min-w-0">{item.name}</h3>
-
-                    <%!-- Pills row: member count + dep edge count +
-                         chevron. --%>
-                    <div class="flex min-w-0 items-center gap-1.5 text-[10px] text-base-content/60">
-                      <span class="bg-base-200 px-1.5 py-0.5 rounded font-medium whitespace-nowrap shrink-0">
-                        {board_data.member_count} tasks
-                      </span>
-                      <span class="bg-base-200 px-1.5 py-0.5 rounded font-medium whitespace-nowrap shrink-0">
-                        {board_data.dep_edge_count} dep edges
-                      </span>
+                    <button
+                      type="button"
+                      phx-click="toggle_stack_expand"
+                      phx-value-id={item.id}
+                      data-role="stack-chevron"
+                      onclick="event.stopPropagation()"
+                      aria-label="Toggle stack expansion"
+                      aria-expanded={
+                        if(MapSet.member?(@expanded_stacks, item.id), do: "true", else: "false")
+                      }
+                      class="absolute right-1 top-2 flex h-9 w-7 items-center justify-center text-violet-300 hover:bg-base-200 rounded transition-colors focus-visible-ring"
+                    >
                       <span
                         class={[
-                          "hero-chevron-down size-3 ml-auto text-violet-300 transition-transform shrink-0",
+                          "hero-chevron-down size-3 transition-transform",
                           MapSet.member?(@expanded_stacks, item.id) && "rotate-180"
                         ]}
                         aria-hidden="true"
                       >
                       </span>
-                    </div>
+                    </button>
                   </div>
 
                   <%!-- Inline expansion — members rendered indented
@@ -1810,6 +1852,360 @@
           </div>
         </div>
       </div>
+    </div>
+  </div>
+
+  <%!-- Stack detail panel (T8 stage 1 — slide-in from right).
+       Mirrors the per-task detail container shape so the two panels
+       feel visually identical. Stage 1 ships head + action row;
+       stages 2-5 fill in meta-grid, dep DAG, members list, and
+       mobile takeover. Purple accent (#7b5cff) matches mock canvas
+       019e1a16 rev 2 (.stk-tag style). --%>
+  <%!-- T8 stage 5: mobile takeover + sticky action bar.
+       Container responsive classes:
+       - On mobile (<md): `inset-0 max-w-full` so the panel fills the
+         viewport edge-to-edge as a full-screen takeover.
+       - On md+ (desktop): `md:inset-y-0 md:left-auto md:right-0
+         md:max-w-lg` reverts to the slide-in shape from stages 1-4.
+       Bottom edge mirrors PR #335's per-task panel pattern: stops at
+       the top of the bottom-nav (including iOS home-indicator safe-
+       area) via `bottom-[calc(env(safe-area-inset-bottom)+var(--bottom-
+       nav-height,0px))]` on the panel container itself. No
+       defense-in-depth `pb-` on the inner scroller — PR #335 stripped
+       that pattern as dead space. --%>
+  <div
+    :if={@show_stack_detail && @selected_stack}
+    id="stack-detail-panel"
+    data-role="stack-detail-panel"
+    data-stack-id={@selected_stack.id}
+    class="fixed inset-0 md:inset-y-0 md:left-auto md:right-0 bottom-[calc(env(safe-area-inset-bottom)+var(--bottom-nav-height,0px))] z-30 flex w-full max-w-full md:max-w-lg flex-col border-l border-base-300 bg-base-100 shadow-xl safe-area-top"
+  >
+    <%!-- Head/app bar. On mobile the chrome is a back arrow + Stack
+         tag + overflow kebab (matching the mock's `.detail-appbar`).
+         On desktop the head retains the stage 1 shape: title + close X
+         button on the right. The back arrow + kebab carry `md:hidden`;
+         the desktop close X carries `hidden md:flex`. The Stack tag
+         and title/description block render on both viewports. --%>
+    <div class="flex items-start justify-between gap-3 border-b border-base-300 px-4 py-3">
+      <%!-- Mobile back arrow: same handler as the desktop close X. --%>
+      <button
+        type="button"
+        class="btn btn-sm btn-ghost btn-square shrink-0 md:hidden"
+        phx-click="close_stack_detail"
+        aria-label="Back"
+        data-role="stack-detail-back"
+      >
+        <span class="hero-arrow-left size-4"></span>
+      </button>
+      <div class="flex min-w-0 flex-1 flex-col gap-1.5">
+        <div class="flex min-w-0 items-center gap-2">
+          <span
+            class="hero-rectangle-stack size-4 shrink-0 text-violet-300"
+            aria-hidden="true"
+          >
+          </span>
+          <span
+            class="text-[9px] font-semibold uppercase tracking-wider shrink-0"
+            style="color:#7b5cff"
+            data-role="stack-tag"
+          >
+            Stack
+          </span>
+        </div>
+        <h2
+          id={"stack-detail-title-#{@selected_stack.id}"}
+          class="text-lg font-semibold leading-tight truncate"
+          data-role="stack-detail-title"
+        >
+          {@selected_stack.name}
+        </h2>
+        <p
+          :if={@selected_stack.description && @selected_stack.description != ""}
+          class="text-xs text-base-content/60 leading-snug"
+          data-role="stack-detail-description"
+        >
+          {@selected_stack.description}
+        </p>
+      </div>
+      <%!-- Mobile overflow kebab. No-op trigger for now (visual parity
+           with the mock); when stack-level overflow actions land they
+           wire here. --%>
+      <button
+        type="button"
+        class="btn btn-sm btn-ghost btn-square shrink-0 md:hidden"
+        aria-label="Stack actions"
+        data-role="stack-detail-overflow"
+      >
+        <span class="hero-ellipsis-vertical size-4"></span>
+      </button>
+      <%!-- Desktop close X. Hidden on mobile (the back arrow replaces
+           it on the left); visible on md+ where the slide-in shape
+           keeps the close affordance on the right. --%>
+      <button
+        type="button"
+        class="hidden md:flex btn btn-sm btn-ghost btn-square shrink-0"
+        phx-click="close_stack_detail"
+        aria-label="Close stack details"
+        data-role="stack-detail-close"
+      >
+        <span class="hero-x-mark size-4"></span>
+      </button>
+    </div>
+
+    <%!-- Meta-grid (T8 stage 2): 4-cell summary under the head.
+         Desktop = 4 columns horizontal; mobile baseline 2x2 lands in
+         stage 5. Cells: status (color-coded), members (count · ready),
+         dep-edges (count · valid DAG / cycle detected), branch (mono).
+         Computed via `stack_meta/2` to keep the template clean. --%>
+    <% meta = stack_meta(@selected_stack, @selected_stack_members) %>
+    <div
+      class="grid grid-cols-2 md:grid-cols-4 gap-2 border-b border-base-300 px-4 py-3"
+      data-role="stack-detail-meta"
+    >
+      <div class="meta-cell rounded-md bg-base-300 p-2" data-role="meta-cell-status">
+        <div class="text-xs font-semibold uppercase tracking-wider text-base-content/50">
+          Status
+        </div>
+        <div
+          class={"mt-1 text-sm font-medium #{meta.status.class}"}
+          data-role="meta-cell-status-value"
+        >
+          {meta.status.label}
+        </div>
+      </div>
+      <div class="meta-cell rounded-md bg-base-300 p-2" data-role="meta-cell-members">
+        <div class="text-xs font-semibold uppercase tracking-wider text-base-content/50">
+          Members
+        </div>
+        <div class="mt-1 text-sm font-medium" data-role="meta-cell-members-value">
+          {meta.members.text}
+        </div>
+      </div>
+      <div class="meta-cell rounded-md bg-base-300 p-2" data-role="meta-cell-dep-edges">
+        <div class="text-xs font-semibold uppercase tracking-wider text-base-content/50">
+          Dep edges
+        </div>
+        <div
+          class={"mt-1 text-sm font-medium #{dep_edges_class(meta.dep_edges)}"}
+          data-role="meta-cell-dep-edges-value"
+        >
+          {meta.dep_edges.text}
+        </div>
+      </div>
+      <div class="meta-cell rounded-md bg-base-300 p-2" data-role="meta-cell-branch">
+        <div class="text-xs font-semibold uppercase tracking-wider text-base-content/50">
+          Branch
+        </div>
+        <div
+          class="mt-1 truncate font-mono text-xs text-base-content"
+          data-role="meta-cell-branch-value"
+          title={meta.branch}
+        >
+          {meta.branch}
+        </div>
+      </div>
+    </div>
+
+    <%!-- Body: stage 3 ships the dep DAG SVG in the left column; stage 4
+         adds the members list in the right column (mobile collapses to a
+         single column in stage 5). The body is a 2-column grid so the
+         DAG and members list share width 1:1 on desktop. --%>
+    <% dag = stack_dag_layout(@selected_stack_members)
+    {dag_w, dag_h} = dag.viewbox %>
+    <div
+      class="flex-1 overflow-y-auto p-4 grid grid-cols-1 md:grid-cols-2 gap-4"
+      data-role="stack-detail-body"
+    >
+      <%!-- Left column: dep DAG. `.dag` matches the mock chrome
+           (rounded base-300 backdrop, modest padding). The SVG scales
+           fluidly via `w-full h-auto`; viewBox keeps the aspect lock
+           and the topological positions so node ② and ③ visibly share
+           a row when they're parallel siblings. --%>
+      <div class="dag rounded bg-base-300 p-2" data-role="stack-detail-dag">
+        <svg
+          viewBox={"0 0 #{dag_w} #{dag_h}"}
+          xmlns="http://www.w3.org/2000/svg"
+          class="w-full h-auto block"
+          data-role="stack-detail-dag-svg"
+        >
+          <%!-- Edges render as dashed lines with no arrowhead per Rowan's
+               T8 stage-5 review: direction is implicit from the
+               topological-row layout (sources are above targets), so
+               the marker-end arrowhead is intentionally omitted. --%>
+          <%= for edge <- dag.edges do %>
+            <line
+              x1={edge.x1}
+              y1={edge.y1}
+              x2={edge.x2}
+              y2={edge.y2}
+              stroke="#7b5cff"
+              stroke-width="1.4"
+              stroke-dasharray="6,4"
+              data-role="stack-detail-dag-edge"
+              data-from-id={edge.from_id}
+              data-to-id={edge.to_id}
+            />
+          <% end %>
+          <%= for node <- dag.nodes do %>
+            <% style = dag_node_style(node.status) %>
+            <g data-role="stack-detail-dag-node" data-node-id={node.id}>
+              <rect
+                x={node.x}
+                y={node.y}
+                width={node.w}
+                height={node.h}
+                rx="6"
+                fill={style.fill}
+                stroke={style.stroke}
+                stroke-width="1.2"
+                stroke-dasharray={style.dasharray}
+                data-status={node.status}
+              />
+              <text
+                x={node.x + 12}
+                y={node.y + 18}
+                font-size="11"
+                font-weight="700"
+                fill={style.num_color}
+              >
+                {node.num}
+              </text>
+              <text x={node.x + 26} y={node.y + 18} font-size="9" fill={style.text}>
+                {dag_node_label(node.label)}
+              </text>
+              <text
+                x={node.x + 26}
+                y={node.y + 34}
+                font-size="7"
+                letter-spacing="0.5"
+                fill={style.caption_color}
+              >
+                {style.caption}
+              </text>
+            </g>
+          <% end %>
+        </svg>
+      </div>
+      <%!-- Right column: linear members list (T8 stage 4). One row per
+           in-stack member ordered by `stack_position`. Each row carries
+           a circular position badge (status-coloured), the truncated
+           title, a status pill on the right, and an optional dep
+           annotation line below ("depends on ① + ②" /
+           "depends on ① (parallel with ②)") suppressed when the member
+           has no in-stack predecessors. Rows are clickable: clicking
+           one push_patches to /tasks/:id and closes this stack panel
+           (close-and-open behavior — the per-task detail slides in to
+           replace the stack panel). --%>
+      <div
+        class="flex flex-col gap-2 overflow-y-auto"
+        data-role="stack-detail-members"
+      >
+        <div
+          class="flex items-center gap-2"
+          data-role="stack-detail-members-header"
+        >
+          <span class="text-xs font-semibold uppercase tracking-wider text-base-content/60">
+            Members
+          </span>
+          <span class="text-[10px] text-base-content/50">(dispatch order)</span>
+        </div>
+        <div class="mlist flex flex-col gap-1.5" data-role="stack-detail-members-list">
+          <%= for member <- @selected_stack_members do %>
+            <% {pill_label, pill_class} = member_status_pill(member.status)
+            annotation = member_dep_annotation(member, @selected_stack_members) %>
+            <div
+              class="mlist-item rounded-md bg-base-300 border border-base-300 p-2 cursor-pointer hover:bg-base-200 transition-colors"
+              phx-click="select_task"
+              phx-value-id={member.id}
+              data-role="stack-detail-member-row"
+              data-member-id={member.id}
+              data-member-status={member.status}
+            >
+              <div class="flex items-center gap-2">
+                <span
+                  class={"inline-flex size-5 items-center justify-center rounded-full text-[11px] font-semibold shrink-0 #{member_node_class(member.status)}"}
+                  data-role="stack-detail-member-num"
+                >
+                  {stack_position_glyph(member.stack_position)}
+                </span>
+                <span
+                  class="flex-1 truncate text-sm text-base-content"
+                  data-role="stack-detail-member-title"
+                >
+                  {member.title}
+                </span>
+                <span
+                  class={"shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider #{pill_class}"}
+                  data-role="stack-detail-member-pill"
+                >
+                  {pill_label}
+                </span>
+              </div>
+              <div
+                :if={annotation}
+                class="pl-7 text-[10px] text-base-content/50"
+                data-role="stack-detail-member-deps"
+              >
+                {annotation}
+              </div>
+            </div>
+          <% end %>
+        </div>
+      </div>
+    </div>
+
+    <%!-- Action row: Abandon (ghost) + View rollup PR (primary).
+         The PR anchor is disabled when no rollup PR has been opened
+         yet (metadata.rollup_pr.url is nil). --%>
+    <% rollup_pr_url =
+      case @selected_stack.metadata do
+        %{"rollup_pr" => %{"url" => url}} when is_binary(url) and url != "" -> url
+        _ -> nil
+      end %>
+    <%!-- Sticky bottom action bar (T8 stage 5). `mt-auto sticky
+         bottom-0` keeps Abandon + View rollup PR pinned to the
+         viewport bottom on mobile (where the panel is full-screen
+         and the body scrolls beneath); on desktop the same bar
+         renders flush with the panel bottom for placement
+         consistency. The panel container's
+         `bottom-[calc(env(safe-area-inset-bottom)+var(--bottom-nav-
+         height,0px))]` constraint (PR #335 pattern) keeps the bar
+         from being occluded by the bottom-tab nav on iOS — no
+         defense-in-depth pb on this bar is required. --%>
+    <div
+      class="mt-auto sticky bottom-0 flex gap-2 border-t border-base-300 bg-base-100 px-4 py-3"
+      data-role="stack-detail-actions"
+    >
+      <button
+        type="button"
+        class="btn btn-ghost btn-sm flex-1"
+        phx-click="abandon_stack"
+        data-confirm="Abandon this stack? This cannot be undone."
+        data-role="stack-detail-abandon"
+      >
+        Abandon
+      </button>
+      <%= if rollup_pr_url do %>
+        <a
+          href={rollup_pr_url}
+          target="_blank"
+          rel="noopener"
+          class="btn btn-primary btn-sm flex-1"
+          data-role="stack-detail-rollup-pr"
+        >
+          View rollup PR
+        </a>
+      <% else %>
+        <button
+          type="button"
+          class="btn btn-primary btn-sm flex-1 btn-disabled"
+          disabled
+          aria-disabled="true"
+          data-role="stack-detail-rollup-pr"
+        >
+          View rollup PR
+        </button>
+      <% end %>
     </div>
   </div>
 

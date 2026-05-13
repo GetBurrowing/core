@@ -94,6 +94,13 @@ defmodule PlatformWeb.TasksLive do
      |> assign(:review_counts, pending_review_counts(all_tasks))
      |> assign(:selected_task, nil)
      |> assign(:show_detail, false)
+     # Stack detail panel state (T8 stage 1). `:selected_stack` is the
+     # `%Platform.Tasks.Stack{}` whose detail panel is open, with
+     # `:members` preloaded for downstream stages (DAG, members list).
+     # `:show_stack_detail` gates the slide-in container.
+     |> assign(:selected_stack, nil)
+     |> assign(:selected_stack_members, [])
+     |> assign(:show_stack_detail, false)
      # Plan revision folding state — IDs of plans the user has explicitly
      # toggled open. Active (non-rejected) plans are expanded by default
      # via `default_expanded_plan_ids/1` whenever `:selected_task` changes.
@@ -380,7 +387,16 @@ defmodule PlatformWeb.TasksLive do
   end
 
   def handle_event("select_task", %{"id" => task_id}, socket) do
-    {:noreply, push_patch(socket, to: ~p"/tasks/#{task_id}")}
+    # T8 stage 4: clicking a stack member row (or any other select_task
+    # source) should close the stack detail panel so the two slide-ins
+    # don't fight for the same screen real-estate. The per-task panel
+    # then opens via push_patch → handle_params/3.
+    {:noreply,
+     socket
+     |> assign(:selected_stack, nil)
+     |> assign(:selected_stack_members, [])
+     |> assign(:show_stack_detail, false)
+     |> push_patch(to: ~p"/tasks/#{task_id}")}
   end
 
   # Toggle a stack card's expansion state on the kanban board (T7 stage 2).
@@ -408,6 +424,63 @@ defmodule PlatformWeb.TasksLive do
       {:noreply, assign(socket, :expanded_stacks, next)}
     else
       {:noreply, socket}
+    end
+  end
+
+  # Open the stack detail slide-in panel (T8 stage 1).
+  #
+  # Loads the stack + its members (ordered by `stack_position`) and
+  # flips `:show_stack_detail` true. The dedicated per-task detail
+  # panel is closed first so the two slide-ins don't overlap.
+  #
+  # Defensive: a click on a stale DOM node whose stack id no longer
+  # exists in the database is a no-op rather than a crash.
+  def handle_event("open_stack_detail", %{"id" => stack_id}, socket) do
+    case Stacks.get_stack(stack_id) do
+      nil ->
+        {:noreply, socket}
+
+      %Stack{} = stack ->
+        members = Stacks.members(stack)
+
+        {:noreply,
+         socket
+         |> assign(:selected_stack, stack)
+         |> assign(:selected_stack_members, members)
+         |> assign(:show_stack_detail, true)
+         # Close the per-task panel so the two slide-ins don't stack.
+         |> assign(:selected_task, nil)
+         |> assign(:show_detail, false)}
+    end
+  end
+
+  # Close the stack detail panel (T8 stage 1).
+  def handle_event("close_stack_detail", _params, socket) do
+    {:noreply,
+     socket
+     |> assign(:selected_stack, nil)
+     |> assign(:selected_stack_members, [])
+     |> assign(:show_stack_detail, false)}
+  end
+
+  # Stub abandon handler (T8 stage 1). Calls Stacks.abandon_stack/2 and
+  # closes the panel on success. Confirm-modal UX is deferred — for
+  # stage 1 we wire the event end-to-end so the button is functional.
+  def handle_event("abandon_stack", _params, %{assigns: %{selected_stack: nil}} = socket),
+    do: {:noreply, socket}
+
+  def handle_event("abandon_stack", _params, socket) do
+    case Stacks.abandon_stack(socket.assigns.selected_stack) do
+      {:ok, _stack} ->
+        {:noreply,
+         socket
+         |> assign(:selected_stack, nil)
+         |> assign(:selected_stack_members, [])
+         |> assign(:show_stack_detail, false)
+         |> put_flash(:info, "Stack abandoned.")}
+
+      {:error, _changeset} ->
+        {:noreply, put_flash(socket, :error, "Could not abandon stack.")}
     end
   end
 
@@ -2107,6 +2180,436 @@ defmodule PlatformWeb.TasksLive do
     {status_label(status), "badge badge-outline"}
   end
 
+  # ── Stack detail meta-grid helpers (T8 stage 2) ─────────────────────────
+  #
+  # Pure helpers that compute the four meta-grid cell values from a
+  # `%Stack{}` and its preloaded member list. Returned shape:
+  #
+  #     %{
+  #       status:     %{label: "In Review",  class: "text-warning"},
+  #       members:    %{count: 4, ready_count: 3, text: "4 · 3 ready"},
+  #       dep_edges:  %{count: 3, valid?: true,  text: "3 · valid DAG"},
+  #       branch:     "stack/user-keyed-saves"
+  #     }
+  #
+  # Kept private to TasksLive (UI-only); the upstream `Stacks` context
+  # already exposes member_count/dep_edge_count/ready_count via
+  # `build_board_data/1` for the T7 board card, but stage 2's "ready"
+  # rule is broader (counts merged_into_rollup_at members too) and the
+  # color/label mapping is UI concern, so we compute fresh here rather
+  # than reuse the board-data map.
+  @spec stack_meta(Stack.t(), [Task.t()]) :: map()
+  defp stack_meta(%Stack{} = stack, members) when is_list(members) do
+    %{
+      status: stack_meta_status(stack),
+      members: stack_meta_members(members),
+      dep_edges: stack_meta_dep_edges(members),
+      branch: stack.rollup_branch || ""
+    }
+  end
+
+  defp stack_meta_status(%Stack{status: status}) do
+    %{label: status_label(status), class: stack_status_text_class(status)}
+  end
+
+  # Color tone for the status cell value text. Mirrors the badge
+  # palette used elsewhere (in_review→warning, in_progress→info,
+  # done→success, deploying→secondary). `forming` and `abandoned`
+  # are dimmed since they're transient/terminal-without-ship states.
+  defp stack_status_text_class("in_review"), do: "text-warning"
+  defp stack_status_text_class("in_progress"), do: "text-info"
+  defp stack_status_text_class("done"), do: "text-success"
+  defp stack_status_text_class("deploying"), do: "text-secondary"
+  defp stack_status_text_class("blocked"), do: "text-error"
+  defp stack_status_text_class(_), do: "text-base-content/50"
+
+  defp stack_meta_members(members) when is_list(members) do
+    count = length(members)
+    ready_count = Enum.count(members, &member_ready?/1)
+    %{count: count, ready_count: ready_count, text: "#{count} · #{ready_count} ready"}
+  end
+
+  # A member is "ready" (in the meta-grid sense) when its branch has
+  # been merged into the rollup OR its status has crossed the unblock
+  # threshold (in_review/deploying/done). Stamping happens after a
+  # merge succeeds, so the OR catches members that are status-ready
+  # but not yet merged AND members that are merged-but-back-pending.
+  defp member_ready?(%Task{status: status, metadata: metadata}) do
+    status in ["in_review", "deploying", "done"] or
+      (is_map(metadata) and not is_nil(Map.get(metadata, "merged_into_rollup_at")))
+  end
+
+  defp stack_meta_dep_edges(members) when is_list(members) do
+    member_ids_set = MapSet.new(members, & &1.id)
+
+    # Build [{from_id, to_id}, ...] of in-stack edges. Mirrors
+    # `Stacks.build_board_data/1`'s edge-count logic but also keeps
+    # the full edge list so we can run a Kahn check for cycles.
+    edges =
+      Enum.flat_map(members, fn %Task{id: from_id} = m ->
+        m
+        |> Tasks.dependency_task_ids()
+        |> Enum.reject(&(&1 == from_id))
+        |> Enum.filter(&MapSet.member?(member_ids_set, &1))
+        |> Enum.uniq()
+        |> Enum.map(&{from_id, &1})
+      end)
+
+    valid? = acyclic?(member_ids_set, edges)
+
+    text =
+      if valid? do
+        "#{length(edges)} · valid DAG"
+      else
+        "#{length(edges)} · cycle detected"
+      end
+
+    %{count: length(edges), valid?: valid?, text: text}
+  end
+
+  # Tone class for the dep-edges cell value: success-tinted when the
+  # subgraph is acyclic, error-tinted when a cycle is detected.
+  defp dep_edges_class(%{valid?: true}), do: "text-base-content"
+  defp dep_edges_class(%{valid?: false}), do: "text-error"
+
+  # Lightweight Kahn-style topological check. Returns true iff every
+  # node can be peeled away in some order — i.e. the graph is acyclic.
+  # Edges are `{from, to}` where `from` depends on `to`. Treating `from`
+  # as the dependent, `from` has an incoming "dependency" edge from
+  # `to`, so we count `from` occurrences as in-degree (= number of
+  # un-peeled deps remaining). Roots (members with no in-stack deps)
+  # start at in-degree 0 and peel first; removing them decrements the
+  # in-degree of any member that had THEM as a dep.
+  defp acyclic?(node_ids_set, edges) do
+    in_degree =
+      Enum.reduce(edges, Map.new(node_ids_set, &{&1, 0}), fn {from, _to}, acc ->
+        Map.update(acc, from, 1, &(&1 + 1))
+      end)
+
+    do_acyclic(in_degree, edges)
+  end
+
+  defp do_acyclic(in_degree, _edges) when map_size(in_degree) == 0, do: true
+
+  defp do_acyclic(in_degree, edges) do
+    case Enum.find(in_degree, fn {_id, deg} -> deg == 0 end) do
+      nil ->
+        false
+
+      {id, _} ->
+        in_degree = Map.delete(in_degree, id)
+
+        # Removing `id` (a peeled root) frees any member whose dep set
+        # included `id` — those are edges `{dependent, id}`; decrement
+        # in_degree of `dependent`.
+        in_degree =
+          Enum.reduce(edges, in_degree, fn
+            {dependent, ^id}, acc -> Map.update(acc, dependent, 0, &max(&1 - 1, 0))
+            _, acc -> acc
+          end)
+
+        do_acyclic(in_degree, edges)
+    end
+  end
+
+  # ── Stack DAG layout (T8 stage 3) ───────────────────────────────────────
+  #
+  # `stack_dag_layout/1` is a UI-only positioning helper that turns a list
+  # of stack member tasks into a render-ready bag of nodes + edges + a
+  # viewBox tuple. The dep DAG SVG in the stack detail panel renders
+  # straight off this struct.
+  #
+  # Algorithm:
+  #
+  #   1. Build the in-stack edge list `{from_id, to_id}` where `from`
+  #      depends on `to`. Edges leaving the stack are dropped — only
+  #      sibling-to-sibling deps land on the canvas.
+  #   2. Assign each node a topological **level** (row index) equal to the
+  #      longest path from a root (in-degree 0) to that node. This means
+  #      siblings runnable in parallel land on the same row even if one
+  #      has a transitive ancestor that the other lacks. Nodes with cyclic
+  #      deps fall back to level 0 so the layout never crashes; the meta-
+  #      grid surfaces "cycle detected" separately.
+  #   3. Within each level, sort by `stack_position` (stable, deterministic)
+  #      and distribute columns left-to-right starting from 0.
+  #   4. Translate (level, col) → pixel (x, y) via `@dag_*` constants.
+  #      Edge endpoints anchor to bottom-center of source, top-center of
+  #      target so arrows visibly flow downward (matches mock).
+  #
+  # The output map is the same shape used by the template, so the heex
+  # can iterate `nodes` and `edges` without further computation.
+  #
+  # Pixel constants (mock canvas 019e1a16 rev 2 dimensions):
+  #   row_height = 76    (vertical stride between rows)
+  #   col_width  = 160   (horizontal stride between columns)
+  #   node_w     = 140   (rect width)
+  #   node_h     = 44    (rect height)
+  #   pad        = 8     (left/top padding inside the viewBox)
+  @dag_row_height 76
+  @dag_col_width 160
+  @dag_node_w 140
+  @dag_node_h 44
+  @dag_pad 8
+
+  @spec stack_dag_layout([Task.t()]) :: %{
+          nodes: [map()],
+          edges: [map()],
+          viewbox: {non_neg_integer(), non_neg_integer()}
+        }
+  defp stack_dag_layout([]) do
+    %{nodes: [], edges: [], viewbox: {0, 0}}
+  end
+
+  defp stack_dag_layout(members) when is_list(members) do
+    member_by_id = Map.new(members, &{&1.id, &1})
+    member_id_set = MapSet.new(members, & &1.id)
+
+    # Edge list: `{from, to}` where `from` depends on `to` (so `to` is
+    # the predecessor / parent in the DAG). Only in-stack deps survive.
+    edges =
+      Enum.flat_map(members, fn %Task{id: from_id} = m ->
+        m
+        |> Tasks.dependency_task_ids()
+        |> Enum.reject(&(&1 == from_id))
+        |> Enum.filter(&MapSet.member?(member_id_set, &1))
+        |> Enum.uniq()
+        |> Enum.map(&{from_id, &1})
+      end)
+
+    levels = dag_levels(members, edges)
+
+    # Group node ids by level; within a level, sort by stack_position so
+    # the layout is deterministic and matches "dispatch order" left-to-
+    # right within each row.
+    by_level =
+      members
+      |> Enum.group_by(fn %Task{id: id} -> Map.get(levels, id, 0) end)
+      |> Map.new(fn {lvl, ms} ->
+        sorted = Enum.sort_by(ms, & &1.stack_position)
+        {lvl, sorted}
+      end)
+
+    max_cols =
+      by_level
+      |> Map.values()
+      |> Enum.map(&length/1)
+      |> Enum.max(fn -> 1 end)
+
+    num_levels = (by_level |> Map.keys() |> Enum.max(fn -> 0 end)) + 1
+
+    nodes =
+      by_level
+      |> Enum.flat_map(fn {level, ms} ->
+        ms
+        |> Enum.with_index()
+        |> Enum.map(fn {%Task{} = m, col} ->
+          x = @dag_pad + col * @dag_col_width + div(@dag_col_width - @dag_node_w, 2)
+          y = @dag_pad + level * @dag_row_height
+
+          %{
+            id: m.id,
+            level: level,
+            col: col,
+            x: x,
+            y: y,
+            w: @dag_node_w,
+            h: @dag_node_h,
+            status: m.status,
+            label: m.title,
+            num: stack_position_glyph(m.stack_position)
+          }
+        end)
+      end)
+      |> Enum.sort_by(& &1.id)
+
+    node_by_id = Map.new(nodes, &{&1.id, &1})
+
+    # Edge endpoints: source bottom-center → target top-center. Edges
+    # whose endpoints aren't both placed (shouldn't happen for in-stack
+    # edges, but guard anyway) are dropped.
+    edge_records =
+      edges
+      |> Enum.flat_map(fn {from_id, to_id} ->
+        with %{} = src <- Map.get(node_by_id, to_id),
+             %{} = dst <- Map.get(node_by_id, from_id) do
+          [
+            %{
+              from_id: from_id,
+              to_id: to_id,
+              x1: src.x + div(src.w, 2),
+              y1: src.y + src.h,
+              x2: dst.x + div(dst.w, 2),
+              y2: dst.y
+            }
+          ]
+        else
+          _ -> []
+        end
+      end)
+
+    # viewBox: width = max columns * col_width + 2*pad ; height = rows *
+    # row_height + node_h + 2*pad (so the bottom row's full rect fits).
+    width = max(max_cols, 1) * @dag_col_width + 2 * @dag_pad
+    height = num_levels * @dag_row_height + @dag_node_h - @dag_row_height + 2 * @dag_pad
+    height = max(height, @dag_node_h + 2 * @dag_pad)
+
+    _ = member_by_id
+
+    %{nodes: nodes, edges: edge_records, viewbox: {width, height}}
+  end
+
+  # Compute a level map `%{node_id => longest_path_from_root}` via
+  # topological propagation. Roots (no in-stack deps) start at 0; each
+  # successor's level becomes `max(parent_level + 1)` across its parents.
+  # If the graph contains a cycle, nodes that never get processed default
+  # to level 0 (the dep-edges meta-cell already flags cycles separately).
+  defp dag_levels(members, edges) do
+    # `parents` :: %{node_id => MapSet of predecessor ids}
+    parents =
+      Enum.reduce(edges, Map.new(members, fn %{id: id} -> {id, MapSet.new()} end), fn {from, to},
+                                                                                      acc ->
+        Map.update(acc, from, MapSet.new([to]), &MapSet.put(&1, to))
+      end)
+
+    # `children` :: %{node_id => MapSet of successor ids}
+    children =
+      Enum.reduce(edges, Map.new(members, fn %{id: id} -> {id, MapSet.new()} end), fn {from, to},
+                                                                                      acc ->
+        Map.update(acc, to, MapSet.new([from]), &MapSet.put(&1, from))
+      end)
+
+    in_degree = Map.new(parents, fn {id, ps} -> {id, MapSet.size(ps)} end)
+
+    roots =
+      in_degree
+      |> Enum.filter(fn {_id, deg} -> deg == 0 end)
+      |> Enum.map(&elem(&1, 0))
+
+    initial_levels = Map.new(roots, &{&1, 0})
+
+    do_dag_levels(roots, in_degree, children, initial_levels)
+  end
+
+  defp do_dag_levels([], _in_degree, _children, levels), do: levels
+
+  defp do_dag_levels([id | rest], in_degree, children, levels) do
+    parent_level = Map.get(levels, id, 0)
+    succs = Map.get(children, id, MapSet.new())
+
+    {in_degree, levels, queued} =
+      Enum.reduce(succs, {in_degree, levels, []}, fn child, {ind, lvls, q} ->
+        child_level = max(Map.get(lvls, child, 0), parent_level + 1)
+        ind = Map.update(ind, child, 0, &max(&1 - 1, 0))
+        lvls = Map.put(lvls, child, child_level)
+
+        q =
+          if Map.get(ind, child, 0) == 0 do
+            [child | q]
+          else
+            q
+          end
+
+        {ind, lvls, q}
+      end)
+
+    do_dag_levels(rest ++ Enum.reverse(queued), in_degree, children, levels)
+  end
+
+  # Status → fill / stroke / caption / dasharray for a DAG node rect.
+  # Mirrors the mock canvas 019e1a16 rev 2 palette:
+  #   done       → green tint  (#7df0c0 stroke #3aa97c)
+  #   in_review  → yellow tint (#ffd66e stroke #a37c3a)
+  #   in_progress→ blue tint   (#7fd4f9 stroke #3a7ca3)
+  #   waiting    → dashed gray (stack_pending / backlog)
+  #   else       → neutral gray
+  #
+  # Captions are uppercase short codes (DONE / REVIEW / PROGRESS /
+  # WAITING / status-string) — chosen to fit inside the 140px rect.
+  defp dag_node_style("done") do
+    %{
+      fill: "rgba(0,255,157,0.12)",
+      stroke: "#3aa97c",
+      text: "#e6e9ee",
+      num_color: "#7df0c0",
+      caption_color: "#7df0c0",
+      caption: "DONE",
+      dasharray: nil
+    }
+  end
+
+  defp dag_node_style("in_review") do
+    %{
+      fill: "rgba(255,190,0,0.12)",
+      stroke: "#a37c3a",
+      text: "#e6e9ee",
+      num_color: "#ffd66e",
+      caption_color: "#ffd66e",
+      caption: "REVIEW",
+      dasharray: nil
+    }
+  end
+
+  defp dag_node_style("in_progress") do
+    %{
+      fill: "rgba(58,191,248,0.12)",
+      stroke: "#3a7ca3",
+      text: "#e6e9ee",
+      num_color: "#7fd4f9",
+      caption_color: "#7fd4f9",
+      caption: "PROGRESS",
+      dasharray: nil
+    }
+  end
+
+  defp dag_node_style("deploying") do
+    %{
+      fill: "rgba(186,112,255,0.12)",
+      stroke: "#7b5cff",
+      text: "#e6e9ee",
+      num_color: "#bba1ff",
+      caption_color: "#bba1ff",
+      caption: "DEPLOY",
+      dasharray: nil
+    }
+  end
+
+  defp dag_node_style(status) when status in ["stack_pending", "backlog"] do
+    %{
+      fill: "rgba(255,255,255,0.03)",
+      stroke: "#3d4451",
+      text: "#a6adba",
+      num_color: "#6e7681",
+      caption_color: "#6e7681",
+      caption: "WAITING",
+      dasharray: "4,3"
+    }
+  end
+
+  defp dag_node_style(other) do
+    %{
+      fill: "rgba(255,255,255,0.04)",
+      stroke: "#3d4451",
+      text: "#a6adba",
+      num_color: "#6e7681",
+      caption_color: "#6e7681",
+      caption: other |> to_string() |> String.upcase(),
+      dasharray: nil
+    }
+  end
+
+  # Truncate a node label to roughly the rect width (140px). Falls back
+  # to a 14-char hard cap with ellipsis. Empty/nil labels render blank.
+  defp dag_node_label(nil), do: ""
+  defp dag_node_label(""), do: ""
+
+  defp dag_node_label(label) when is_binary(label) do
+    if String.length(label) > 14 do
+      String.slice(label, 0, 13) <> "…"
+    else
+      label
+    end
+  end
+
   # ── Stack expansion helpers (T7 stage 3) ────────────────────────────────
   #
   # Numbered-node glyph for a member's `stack_position`. Positions 1..10
@@ -2208,6 +2711,95 @@ defmodule PlatformWeb.TasksLive do
     |> Enum.filter(&MapSet.member?(member_ids_set, &1))
     |> MapSet.new()
   end
+
+  # ── Stack members list helpers (T8 stage 4) ─────────────────────────────
+  #
+  # `member_dep_annotation/2` builds the "depends on ① + ②" /
+  # "depends on ① (parallel with ②)" sub-line that appears under each
+  # member row in the linear members list (right column of the stack
+  # detail panel body). This is a sibling of `dep_annotation_text/2`
+  # which serves the inline T7 board-card expansion using the older
+  # "needs ① • parallel with ②" format. The two formats diverged on
+  # purpose: the panel mock (canvas 019e1a16 rev 2) uses the longer
+  # "depends on" wording with parens for parallels, while the inline
+  # board card stays terse with "needs". Returns `nil` when the member
+  # has no in-stack predecessors so the template can suppress the row.
+  #
+  # Parallel detection: members at a different `stack_position` whose
+  # in-stack dep set is identical to this member's. Same shape as the
+  # DAG layout's same-level grouping so the textual annotation and the
+  # SVG layout never disagree about who is parallel with whom.
+  defp member_dep_annotation(%Task{} = member, members) when is_list(members) do
+    member_ids = MapSet.new(members, & &1.id)
+
+    self_deps =
+      member
+      |> Tasks.dependency_task_ids()
+      |> Enum.reject(&(&1 == member.id))
+      |> Enum.filter(&MapSet.member?(member_ids, &1))
+      |> Enum.uniq()
+
+    case self_deps do
+      [] ->
+        nil
+
+      _ ->
+        depends_on =
+          self_deps
+          |> Enum.map(fn dep_id ->
+            members
+            |> Enum.find(&(&1.id == dep_id))
+            |> case do
+              nil -> nil
+              %Task{stack_position: pos} -> stack_position_glyph(pos)
+            end
+          end)
+          |> Enum.reject(&is_nil/1)
+          |> Enum.join(" + ")
+
+        parallel =
+          members
+          |> Enum.filter(fn other ->
+            other.id != member.id and
+              other.stack_position != member.stack_position and
+              dep_set(other, member_ids) == MapSet.new(self_deps) and
+              MapSet.size(dep_set(other, member_ids)) > 0
+          end)
+          |> Enum.map(&stack_position_glyph(&1.stack_position))
+          |> Enum.sort()
+          |> Enum.join(" + ")
+
+        cond do
+          depends_on == "" -> nil
+          parallel == "" -> "depends on #{depends_on}"
+          true -> "depends on #{depends_on} (parallel with #{parallel})"
+        end
+    end
+  end
+
+  defp member_dep_annotation(_, _), do: nil
+
+  # Status pill class + label for a stack member row in the linear list.
+  # Mirrors the four mock tones (.b-status-done / -rev / -prog / -wait)
+  # so the right-column pills colour-match the DAG node fills exactly.
+  defp member_status_pill("done"),
+    do: {"Done", "bg-success/20 text-success"}
+
+  defp member_status_pill("in_review"),
+    do: {"Review", "bg-warning/20 text-warning"}
+
+  defp member_status_pill("in_progress"),
+    do: {"In Progress", "bg-info/20 text-info"}
+
+  defp member_status_pill("deploying"),
+    do: {"Deploying", "bg-secondary/20 text-secondary"}
+
+  defp member_status_pill(status) when status in ["stack_pending", "backlog"],
+    do:
+      {"Waiting", "bg-base-300 text-base-content/50 border border-dashed border-base-content/20"}
+
+  defp member_status_pill(other),
+    do: {status_label(other), "bg-base-300 text-base-content/70"}
 
   defp column_header_class("backlog"), do: "text-base-content/60"
   defp column_header_class("in_progress"), do: "text-info"

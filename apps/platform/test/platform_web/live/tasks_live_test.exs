@@ -3984,4 +3984,1288 @@ defmodule PlatformWeb.TasksLiveTest do
       assert Tasks.get_task_record(task.id).description == "Original"
     end
   end
+
+  describe "stack detail panel — head and actions (T8 stage 1)" do
+    # ADR 0041 §"UI surface — Stack detail" + mock canvas 019e1a16 rev 2:
+    # clicking a stack card on the kanban board (or its header) opens a
+    # right-side slide-in panel mirroring the per-task detail container.
+    # Stage 1 ships head (icon + Stack tag + title + description + close)
+    # and the action row (Abandon ghost + View rollup PR primary, the
+    # latter disabled until metadata.rollup_pr.url is present).
+
+    setup %{conn: conn} do
+      conn = authenticated_conn(conn)
+      project = create_project()
+
+      stack =
+        stack_fixture(
+          project_id: project.id,
+          name: "user-keyed-saves",
+          slug: "user-keyed-saves"
+        )
+
+      {:ok, members} = seed_stack_members(stack, count: 4)
+      {:ok, stack} = Stacks.recompute_stack_status(stack)
+      stack = Repo.get!(Stack, stack.id)
+
+      {:ok, conn: conn, project: project, stack: stack, members: members}
+    end
+
+    # Find every HTML opening tag (`<tag ...>`) in `html` whose attribute
+    # cluster matches `marker_re` (e.g. `~r/data-role="foo"/`). Returns
+    # `[{:ok, tag_str}, ...]`. Used to assert on a single element's
+    # attribute cluster regardless of attribute order.
+    defp extract_open_tags(html, marker_re) do
+      ~r/<[a-zA-Z]+[^>]*>/
+      |> Regex.scan(html)
+      |> Enum.map(fn [tag] -> tag end)
+      |> Enum.filter(&Regex.match?(marker_re, &1))
+      |> Enum.map(&{:ok, &1})
+    end
+
+    test "open_stack_detail event sets :selected_stack and :show_stack_detail",
+         %{conn: conn, stack: stack} do
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+
+      pre = :sys.get_state(view.pid).socket.assigns
+      assert pre.selected_stack == nil
+      assert pre.show_stack_detail == false
+
+      _html = render_click(view, "open_stack_detail", %{"id" => stack.id})
+
+      post = :sys.get_state(view.pid).socket.assigns
+      assert post.show_stack_detail == true
+      assert post.selected_stack && post.selected_stack.id == stack.id
+      assert is_list(post.selected_stack_members)
+      assert length(post.selected_stack_members) == 4
+    end
+
+    test "open_stack_detail closes the per-task detail panel if it was open",
+         %{conn: conn, stack: stack, members: [m1 | _]} do
+      {:ok, view, _html} = live(conn, ~p"/tasks/#{m1.id}")
+
+      assigns = :sys.get_state(view.pid).socket.assigns
+      assert assigns.show_detail == true
+
+      _html = render_click(view, "open_stack_detail", %{"id" => stack.id})
+
+      assigns = :sys.get_state(view.pid).socket.assigns
+      assert assigns.show_stack_detail == true
+      assert assigns.show_detail == false
+      assert assigns.selected_task == nil
+    end
+
+    test "open_stack_detail with an unknown id is a no-op",
+         %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+
+      _html = render_click(view, "open_stack_detail", %{"id" => Ecto.UUID.generate()})
+
+      assigns = :sys.get_state(view.pid).socket.assigns
+      assert assigns.show_stack_detail == false
+      assert assigns.selected_stack == nil
+    end
+
+    test "panel renders the stack name, description, close button, and Stack tag",
+         %{conn: conn, stack: stack} do
+      {:ok, stack} =
+        Stacks.update_stack(stack, %{
+          description: "Migrate retro saves from per-room to per-user."
+        })
+
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      html = render_click(view, "open_stack_detail", %{"id" => stack.id})
+
+      assert html =~ ~s(id="stack-detail-panel")
+      assert html =~ ~s(data-role="stack-detail-panel")
+      assert html =~ ~s(data-role="stack-detail-title")
+      assert html =~ stack.name
+      assert html =~ ~s(data-role="stack-detail-description")
+      assert html =~ "Migrate retro saves from per-room to per-user."
+      assert html =~ ~s(data-role="stack-detail-close")
+      # Purple Stack tag (mock .stk-tag style — uppercase + #7b5cff).
+      assert html =~ ~s(data-role="stack-tag")
+      assert html =~ "#7b5cff"
+    end
+
+    test "panel renders the action row with Abandon and View rollup PR buttons",
+         %{conn: conn, stack: stack} do
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      html = render_click(view, "open_stack_detail", %{"id" => stack.id})
+
+      assert html =~ ~s(data-role="stack-detail-actions")
+      assert html =~ ~s(data-role="stack-detail-abandon")
+      assert html =~ "Abandon"
+      assert html =~ ~s(data-role="stack-detail-rollup-pr")
+      assert html =~ "View rollup PR"
+    end
+
+    test "View rollup PR is disabled when metadata.rollup_pr.url is nil",
+         %{conn: conn, stack: stack} do
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      html = render_click(view, "open_stack_detail", %{"id" => stack.id})
+
+      # When there's no rollup PR yet, the View button renders as a
+      # disabled <button>, NOT an <a href> link. Match the rollup-PR
+      # element by isolating its opening tag (everything up to `>`).
+      [{:ok, rollup_tag}] = extract_open_tags(html, ~r/data-role="stack-detail-rollup-pr"/)
+      assert rollup_tag =~ "disabled"
+      refute rollup_tag =~ ~r/href=/
+      # And it's a <button>, not an <a>.
+      assert String.starts_with?(rollup_tag, "<button")
+    end
+
+    test "View rollup PR is an enabled anchor when metadata.rollup_pr.url is present",
+         %{conn: conn, stack: stack} do
+      {:ok, _stack} =
+        Stacks.update_stack(stack, %{
+          metadata: %{
+            "rollup_pr" => %{"url" => "https://github.com/foo/bar/pull/42", "number" => 42}
+          }
+        })
+
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      html = render_click(view, "open_stack_detail", %{"id" => stack.id})
+
+      [{:ok, rollup_tag}] = extract_open_tags(html, ~r/data-role="stack-detail-rollup-pr"/)
+      assert rollup_tag =~ ~s(href="https://github.com/foo/bar/pull/42")
+      refute rollup_tag =~ "disabled"
+      assert String.starts_with?(rollup_tag, "<a ")
+    end
+
+    test "abandon_stack event abandons the stack and closes the panel",
+         %{conn: conn, stack: stack} do
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      _html = render_click(view, "open_stack_detail", %{"id" => stack.id})
+
+      assigns = :sys.get_state(view.pid).socket.assigns
+      assert assigns.show_stack_detail == true
+
+      _html = render_click(view, "abandon_stack", %{})
+
+      assigns = :sys.get_state(view.pid).socket.assigns
+      assert assigns.show_stack_detail == false
+      assert assigns.selected_stack == nil
+
+      assert Repo.get!(Stack, stack.id).status == "abandoned"
+    end
+
+    test "close_stack_detail clears :selected_stack and :show_stack_detail",
+         %{conn: conn, stack: stack} do
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      _html = render_click(view, "open_stack_detail", %{"id" => stack.id})
+
+      assert :sys.get_state(view.pid).socket.assigns.show_stack_detail == true
+
+      _html = render_click(view, "close_stack_detail", %{})
+
+      assigns = :sys.get_state(view.pid).socket.assigns
+      assert assigns.show_stack_detail == false
+      assert assigns.selected_stack == nil
+      assert assigns.selected_stack_members == []
+    end
+
+    test "stack card header on the kanban board fires open_stack_detail (Option A)",
+         %{conn: conn, stack: stack} do
+      # Per the T8 stage 1 click-target decision: the stack card's
+      # header is now the panel-opener (Option A — Discord "click thread
+      # to enter" pattern). The chevron icon retains toggle_stack_expand
+      # as a separate sibling button so inline expansion stays reachable.
+      {:ok, _view, html} = live(conn, ~p"/tasks")
+
+      # Header element carries open_stack_detail with the stack id.
+      # Match the opening tag (no `>` until the attr cluster ends), in
+      # either attr order.
+      assert html =~
+               ~r/<[a-z]+[^>]*phx-click="open_stack_detail"[^>]*phx-value-id="#{stack.id}"[^>]*data-role="stack-header"/ or
+               html =~
+                 ~r/<[a-z]+[^>]*data-role="stack-header"[^>]*phx-click="open_stack_detail"[^>]*phx-value-id="#{stack.id}"/
+
+      # Chevron retains toggle_stack_expand on its own button.
+      assert html =~
+               ~r/<[a-z]+[^>]*phx-click="toggle_stack_expand"[^>]*phx-value-id="#{stack.id}"[^>]*data-role="stack-chevron"/ or
+               html =~
+                 ~r/<[a-z]+[^>]*data-role="stack-chevron"[^>]*phx-click="toggle_stack_expand"[^>]*phx-value-id="#{stack.id}"/
+    end
+  end
+
+  describe "stack detail panel — meta-grid (T8 stage 2)" do
+    # Mock canvas 019e1a16 rev 2: a 4-cell summary card under the head
+    # — Status / Members / Dep edges / Branch — laid out as 4 desktop
+    # columns. Stage 2 ships data-only cells (no event wiring).
+    #
+    # Two seed shapes are used. `seed_stack_members_3edges/1` builds a
+    # 4-member stack with exactly 3 in-stack dep edges (1→2, 1→3, 2→4)
+    # so the dep-edges cell can be asserted on a clean integer; the T7
+    # `seed_stack_members/2` defaults to 4 edges (it adds 3→4) which we
+    # avoid here so the assertions stay literal.
+
+    setup %{conn: conn} do
+      conn = authenticated_conn(conn)
+      project = create_project()
+
+      stack =
+        stack_fixture(
+          project_id: project.id,
+          name: "user-keyed-saves",
+          slug: "user-keyed-saves"
+        )
+
+      {:ok, members} = seed_stack_members_3edges(stack)
+      {:ok, stack} = Stacks.recompute_stack_status(stack)
+      stack = Repo.get!(Stack, stack.id)
+
+      {:ok, conn: conn, project: project, stack: stack, members: members}
+    end
+
+    # 4-member fixture with exactly 3 in-stack edges:
+    #   m2 → m1, m3 → m1, m4 → m2     (no m4 → m3 edge)
+    # Statuses: m1=done, m2=done, m3=in_review, m4=stack_pending.
+    # Marks m1 and m2 as merged_into_rollup_at so the "ready" count
+    # exercises both the status-based AND the merged-stamp-based
+    # branches of `member_ready?/1`.
+    defp seed_stack_members_3edges(%Stack{} = stack) do
+      m1 = create_member(stack, 1, "Add user_id column", "done", merged: true)
+      m2 = create_member(stack, 2, "Wire admin save fallback", "done", merged: true)
+      m3 = create_member(stack, 3, "Forward-auth header", "in_review")
+      m4 = create_member(stack, 4, "User-scoped save list", "stack_pending")
+
+      {:ok, m2} =
+        Tasks.update_task(m2, %{dependencies: [%{"task_id" => m1.id, "kind" => "blocks"}]})
+
+      {:ok, m3} =
+        Tasks.update_task(m3, %{dependencies: [%{"task_id" => m1.id, "kind" => "blocks"}]})
+
+      {:ok, m4} =
+        Tasks.update_task(m4, %{dependencies: [%{"task_id" => m2.id, "kind" => "blocks"}]})
+
+      {:ok, [m1, m2, m3, m4]}
+    end
+
+    defp create_member(stack, pos, title, status, opts \\ []) do
+      metadata =
+        if Keyword.get(opts, :merged, false) do
+          %{
+            "merged_into_rollup_at" => %{
+              "sha" => "abc#{pos}",
+              "at" => "2026-05-12T00:00:00Z"
+            }
+          }
+        else
+          %{}
+        end
+
+      {:ok, t} =
+        Tasks.create_task(%{
+          project_id: stack.project_id,
+          stack_id: stack.id,
+          stack_position: pos,
+          title: title,
+          status: status,
+          priority: "medium",
+          metadata: metadata
+        })
+
+      t
+    end
+
+    # Helper: open the stack panel and return its rendered HTML.
+    defp open_panel(conn, stack) do
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      render_click(view, "open_stack_detail", %{"id" => stack.id})
+    end
+
+    test "renders the 4-cell meta-grid with Status / Members / Dep edges / Branch labels",
+         %{conn: conn, stack: stack} do
+      html = open_panel(conn, stack)
+
+      assert html =~ ~s(data-role="stack-detail-meta")
+      assert html =~ ~s(data-role="meta-cell-status")
+      assert html =~ ~s(data-role="meta-cell-members")
+      assert html =~ ~s(data-role="meta-cell-dep-edges")
+      assert html =~ ~s(data-role="meta-cell-branch")
+
+      # Uppercase labels per mock.
+      assert html =~ "Status"
+      assert html =~ "Members"
+      assert html =~ "Dep edges"
+      assert html =~ "Branch"
+    end
+
+    test "Status cell renders the rollup status label with the correct color tone",
+         %{conn: conn, stack: stack} do
+      # Setup left status as in_review (m3 in_review + m1/m2 done +
+      # m4 stack_pending → recompute → in_review NOT, since stack_pending
+      # is not in {in_review,deploying,done}). Force in_review.
+      {:ok, _} =
+        stack
+        |> Stack.changeset(%{status: "in_review"})
+        |> Repo.update()
+
+      html = open_panel(conn, Repo.get!(Stack, stack.id))
+
+      # Locate the value div and assert color + label.
+      [{:ok, val}] =
+        Regex.scan(~r/<div[^>]*data-role="meta-cell-status-value"[^>]*>[^<]*<\/div>/, html)
+        |> Enum.map(&{:ok, hd(&1)})
+        |> Enum.take(1)
+
+      assert val =~ "text-warning"
+      assert val =~ "In Review"
+    end
+
+    test "Status cell color tone tracks each rollup status",
+         %{conn: conn, stack: stack} do
+      cases = [
+        {"in_review", "text-warning"},
+        {"in_progress", "text-info"},
+        {"done", "text-success"},
+        {"deploying", "text-secondary"},
+        {"forming", "text-base-content/50"}
+      ]
+
+      for {raw_status, expected_class} <- cases do
+        fresh = Repo.get!(Stack, stack.id)
+
+        {:ok, _} =
+          fresh
+          |> Stack.changeset(%{status: raw_status})
+          |> Repo.update()
+
+        html = open_panel(conn, Repo.get!(Stack, stack.id))
+
+        [{:ok, val}] =
+          Regex.scan(~r/<div[^>]*data-role="meta-cell-status-value"[^>]*>[^<]*<\/div>/, html)
+          |> Enum.map(&{:ok, hd(&1)})
+          |> Enum.take(1)
+
+        assert val =~ expected_class,
+               "expected status=#{raw_status} cell to carry class #{expected_class}, got: #{val}"
+      end
+    end
+
+    test "Members cell shows '<count> · <ready_count> ready' counting status AND merged stamp",
+         %{conn: conn, stack: stack} do
+      # Fixture: 4 members. Ready by status (in_review/deploying/done):
+      # m1=done, m2=done, m3=in_review → 3 ready.
+      # m1 and m2 ALSO have merged_into_rollup_at, m4 has neither.
+      # The "or merged" branch is exercised; total ready stays 3.
+      html = open_panel(conn, stack)
+
+      [{:ok, val}] =
+        Regex.scan(~r/<div[^>]*data-role="meta-cell-members-value"[^>]*>[^<]*<\/div>/, html)
+        |> Enum.map(&{:ok, hd(&1)})
+        |> Enum.take(1)
+
+      assert val =~ "4 · 3 ready"
+    end
+
+    test "Members cell counts a 'merged but back to in_progress' member as ready",
+         %{conn: conn, stack: stack, members: [_m1, _m2, _m3, m4]} do
+      # Move m4 from stack_pending → in_progress AND stamp its
+      # merged_into_rollup_at. The "or merged" branch must catch it
+      # so ready jumps from 3 to 4 even though in_progress is NOT in
+      # the status threshold list.
+      {:ok, _} =
+        Tasks.update_task(m4, %{
+          status: "in_progress",
+          metadata: %{
+            "merged_into_rollup_at" => %{"sha" => "abc4", "at" => "2026-05-12T00:00:00Z"}
+          }
+        })
+
+      html = open_panel(conn, stack)
+
+      [{:ok, val}] =
+        Regex.scan(~r/<div[^>]*data-role="meta-cell-members-value"[^>]*>[^<]*<\/div>/, html)
+        |> Enum.map(&{:ok, hd(&1)})
+        |> Enum.take(1)
+
+      assert val =~ "4 · 4 ready"
+    end
+
+    test "Dep edges cell shows '3 · valid DAG' for an acyclic 4-member graph",
+         %{conn: conn, stack: stack} do
+      html = open_panel(conn, stack)
+
+      [{:ok, val}] =
+        Regex.scan(~r/<div[^>]*data-role="meta-cell-dep-edges-value"[^>]*>[^<]*<\/div>/, html)
+        |> Enum.map(&{:ok, hd(&1)})
+        |> Enum.take(1)
+
+      assert val =~ "3 · valid DAG"
+      # Acyclic → no error tone.
+      refute val =~ "text-error"
+    end
+
+    test "Dep edges cell switches to error tone with 'cycle detected' when the in-stack graph cycles",
+         %{conn: conn, stack: stack, members: [m1, m2, _m3, _m4]} do
+      # Inject a cycle: make m1 depend on m2 (m2 already depends on
+      # m1 from the seed). The in-stack subgraph now contains the
+      # 2-cycle m1↔m2 and the meta-grid must surface that.
+      {:ok, _} =
+        Tasks.update_task(m1, %{dependencies: [%{"task_id" => m2.id, "kind" => "blocks"}]})
+
+      html = open_panel(conn, stack)
+
+      [{:ok, val}] =
+        Regex.scan(~r/<div[^>]*data-role="meta-cell-dep-edges-value"[^>]*>[^<]*<\/div>/, html)
+        |> Enum.map(&{:ok, hd(&1)})
+        |> Enum.take(1)
+
+      assert val =~ "cycle detected"
+      assert val =~ "text-error"
+    end
+
+    test "Branch cell renders rollup_branch in monospace truncate styling",
+         %{conn: conn, stack: stack} do
+      # The fixture's slug is `user-keyed-saves` so the rollup branch
+      # is `stack/user-keyed-saves` (per Stacks.rollup_branch_name/1).
+      html = open_panel(conn, stack)
+
+      [{:ok, val}] =
+        Regex.scan(
+          ~r/<div[^>]*data-role="meta-cell-branch-value"[^>]*>[^<]*<\/div>/,
+          html
+        )
+        |> Enum.map(&{:ok, hd(&1)})
+        |> Enum.take(1)
+
+      assert val =~ "font-mono"
+      assert val =~ "truncate"
+      assert val =~ stack.rollup_branch
+      assert stack.rollup_branch == "stack/user-keyed-saves"
+    end
+
+    test "meta-grid sits between the head and the action row inside the panel",
+         %{conn: conn, stack: stack} do
+      html = open_panel(conn, stack)
+
+      head_at = :binary.match(html, ~s(data-role="stack-detail-title")) |> elem(0)
+      meta_at = :binary.match(html, ~s(data-role="stack-detail-meta")) |> elem(0)
+      actions_at = :binary.match(html, ~s(data-role="stack-detail-actions")) |> elem(0)
+
+      assert head_at < meta_at, "expected meta-grid to render BELOW the head"
+      assert meta_at < actions_at, "expected meta-grid to render ABOVE the action row"
+    end
+
+    test "desktop meta-grid uses 4-column layout",
+         %{conn: conn, stack: stack} do
+      html = open_panel(conn, stack)
+
+      [{:ok, container}] =
+        Regex.scan(~r/<div[^>]*data-role="stack-detail-meta"[^>]*>/, html)
+        |> Enum.map(&{:ok, hd(&1)})
+        |> Enum.take(1)
+
+      assert container =~ "grid-cols-4"
+      assert container =~ "gap-2"
+    end
+  end
+
+  describe "stack detail panel — dep DAG (T8 stage 3)" do
+    # Mock canvas 019e1a16 rev 2: the body's left column renders the
+    # in-stack dependency graph as inline SVG with topological layout.
+    # Members 1→none, 2→[1], 3→[1], 4→[2,3] gives the canonical
+    # diamond shape (① top, ② + ③ in parallel, ④ at the bottom).
+    # All assertions exercise the rendered HTML so the layout helper
+    # `stack_dag_layout/1` and the SVG template are tested as one
+    # surface — same pattern as the stage-2 meta-grid suite above.
+
+    setup %{conn: conn} do
+      conn = authenticated_conn(conn)
+      project = create_project()
+
+      stack =
+        stack_fixture(
+          project_id: project.id,
+          name: "user-keyed-saves",
+          slug: "user-keyed-saves"
+        )
+
+      {:ok, members} = seed_stack_members_4edges(stack)
+      {:ok, stack} = Stacks.recompute_stack_status(stack)
+      stack = Repo.get!(Stack, stack.id)
+
+      {:ok, conn: conn, project: project, stack: stack, members: members}
+    end
+
+    # 4-member fixture matching the mock exactly:
+    #   m2 → m1, m3 → m1, m4 → m2, m4 → m3   (4 in-stack edges)
+    # Statuses: m1=done, m2=done, m3=in_review, m4=stack_pending.
+    # Note this differs from `seed_stack_members_3edges/1` (stage 2
+    # avoids the m4→m3 edge to keep the dep-edge count literal); stage
+    # 3 needs the diamond closure so node ④ has parents on both sides.
+    defp seed_stack_members_4edges(%Stack{} = stack) do
+      m1 = create_member(stack, 1, "Add user_id column", "done", merged: true)
+      m2 = create_member(stack, 2, "Wire admin save fallback", "done", merged: true)
+      m3 = create_member(stack, 3, "Forward-auth header", "in_review")
+      m4 = create_member(stack, 4, "User-scoped save list", "stack_pending")
+
+      {:ok, m2} =
+        Tasks.update_task(m2, %{dependencies: [%{"task_id" => m1.id, "kind" => "blocks"}]})
+
+      {:ok, m3} =
+        Tasks.update_task(m3, %{dependencies: [%{"task_id" => m1.id, "kind" => "blocks"}]})
+
+      {:ok, m4} =
+        Tasks.update_task(m4, %{
+          dependencies: [
+            %{"task_id" => m2.id, "kind" => "blocks"},
+            %{"task_id" => m3.id, "kind" => "blocks"}
+          ]
+        })
+
+      {:ok, [m1, m2, m3, m4]}
+    end
+
+    # Helper: extract the integer y attribute from each <rect> in the
+    # DAG SVG (one rect per node). Returns rects in document order.
+    # Scopes to the panel SVG block so heroicon <rect> elements (none
+    # currently, but future-proofing) don't bleed in.
+    defp dag_rect_ys(html) do
+      svg = panel_svg_block(html)
+
+      ~r/<rect[^>]*\sy="(\d+)"[^>]*>/
+      |> Regex.scan(svg)
+      |> Enum.map(fn [_, y] -> String.to_integer(y) end)
+    end
+
+    # Pull the panel SVG's viewBox as `{w, h}` integers. The panel SVG
+    # is the only SVG that carries `data-role="stack-detail-dag-svg"`;
+    # all other SVGs on the page are heroicons (24x24 viewBox) which
+    # would otherwise collide with a naive `viewBox="..."` regex.
+    defp panel_viewbox(html) do
+      svg = panel_svg_block(html)
+      [[_, w, h]] = Regex.scan(~r/viewBox="0 0 (\d+) (\d+)"/, svg)
+      {String.to_integer(w), String.to_integer(h)}
+    end
+
+    # Slice the HTML to the panel SVG block (opening tag through the
+    # closing `</svg>`). The panel SVG is uniquely tagged via
+    # `data-role="stack-detail-dag-svg"` on its opening tag, so a
+    # single regex grabs the whole element. Returns "" if not present
+    # (defensive — every test in this suite opens the panel first).
+    defp panel_svg_block(html) do
+      case Regex.run(
+             ~r/<svg[^>]*data-role="stack-detail-dag-svg"[^>]*>.*?<\/svg>/s,
+             html
+           ) do
+        [block] -> block
+        _ -> ""
+      end
+    end
+
+    test "panel body renders the DAG SVG container with stack-detail-dag role",
+         %{conn: conn, stack: stack} do
+      html = open_panel(conn, stack)
+
+      assert html =~ ~s(data-role="stack-detail-dag")
+      assert html =~ ~s(data-role="stack-detail-dag-svg")
+      # Wrapped in the .dag chrome (rounded base-300 backdrop) per mock.
+      assert html =~ "dag rounded bg-base-300 p-2"
+    end
+
+    test "DAG edges render as dashed purple lines with no arrowhead marker",
+         %{conn: conn, stack: stack} do
+      html = open_panel(conn, stack)
+      svg = panel_svg_block(html)
+
+      # Per Rowan's T8 stage-5 feedback ("dashed lines, no hard point"),
+      # the arrowhead marker is removed entirely — direction is
+      # implicit from the topological-row layout.
+      refute svg =~ ~s(<marker id="stack-dag-arrow"),
+             "expected the stack-dag-arrow marker definition to be removed"
+
+      refute svg =~ "marker-end=",
+             "expected no edge to reference an arrowhead marker"
+
+      # Every edge line carries the dashed stroke spec and the
+      # canonical mock-canvas purple (#7b5cff).
+      edges =
+        Regex.scan(~r/<line[^>]*data-role="stack-detail-dag-edge"[^>]*>/, svg)
+        |> Enum.map(&hd/1)
+
+      assert edges != [], "expected at least one edge line in the DAG"
+
+      for edge <- edges do
+        assert edge =~ ~s(stroke-dasharray="6,4"),
+               "expected edge to be dashed (6,4): #{edge}"
+
+        assert edge =~ ~s(stroke="#7b5cff"),
+               "expected edge to use canonical purple stroke: #{edge}"
+      end
+    end
+
+    test "DAG renders one <rect> per member (4 nodes) and one <line> per edge (4 edges)",
+         %{conn: conn, stack: stack} do
+      html = open_panel(conn, stack)
+
+      rects = Regex.scan(~r/<rect[^>]*data-status="/, html)
+      lines = Regex.scan(~r/<line[^>]*data-role="stack-detail-dag-edge"/, html)
+
+      assert length(rects) == 4, "expected 4 node rects, got #{length(rects)}"
+      assert length(lines) == 4, "expected 4 dep edges, got #{length(lines)}"
+    end
+
+    test "topological levels: ① at level 0, ② + ③ share level 1, ④ at level 2",
+         %{conn: conn, stack: stack, members: [m1, m2, m3, m4]} do
+      html = open_panel(conn, stack)
+
+      ys = node_y_by_id(html, [m1, m2, m3, m4])
+
+      # m1 is the only root; m2 and m3 have m1 as their sole parent;
+      # m4 has both m2 and m3 as parents → strict 0/1/1/2 assignment.
+      assert ys[m1.id] < ys[m2.id], "expected ① above ②"
+      assert ys[m1.id] < ys[m3.id], "expected ① above ③"
+      assert ys[m2.id] == ys[m3.id], "expected ② and ③ on the same row (parallelism)"
+      assert ys[m4.id] > ys[m2.id], "expected ④ below ②/③"
+
+      # Three distinct rows total → row stride matches the constant
+      # (76px). The exact equality keeps the layout regression-tight.
+      distinct_levels = ys |> Map.values() |> Enum.uniq() |> Enum.sort()
+      assert length(distinct_levels) == 3
+      [r0, r1, r2] = distinct_levels
+      assert r1 - r0 == 76
+      assert r2 - r1 == 76
+    end
+
+    test "edges anchor source bottom-center and target top-center (downward arrows)",
+         %{conn: conn, stack: stack, members: [m1, m2, _m3, _m4]} do
+      html = open_panel(conn, stack)
+
+      ys = node_y_by_id(html, [m1, m2])
+
+      # Pull the edge whose data-from-id=m2.id, data-to-id=m1.id (m2
+      # depends on m1). Source is m1 (top of the canvas), target is m2.
+      # Phoenix renders <line> as `<line ...></line>` (closing tag, not
+      # self-closing) so the regex stops at the first `>`.
+      [edge_html] =
+        Regex.scan(
+          ~r/<line[^>]*data-from-id="#{m2.id}"[^>]*data-to-id="#{m1.id}"[^>]*>/s,
+          html
+        )
+        |> Enum.map(&hd/1)
+
+      [_, y1] = Regex.run(~r/y1="(\d+)"/, edge_html)
+      [_, y2] = Regex.run(~r/y2="(\d+)"/, edge_html)
+
+      # y1 = bottom of m1 = m1.y + 44 (node_h). y2 = top of m2 = m2.y.
+      assert String.to_integer(y1) == ys[m1.id] + 44
+      assert String.to_integer(y2) == ys[m2.id]
+    end
+
+    test "node fill colors track member status (done=green, in_review=yellow, waiting=dashed)",
+         %{conn: conn, stack: stack} do
+      html = open_panel(conn, stack)
+
+      # done → green tint per the mock palette
+      assert html =~ ~S|fill="rgba(0,255,157,0.12)"|
+      assert html =~ ~s(stroke="#3aa97c")
+      # in_review → yellow tint
+      assert html =~ ~S|fill="rgba(255,190,0,0.12)"|
+      assert html =~ ~s(stroke="#a37c3a")
+      # stack_pending → dashed border (waiting style)
+      assert html =~ ~s(stroke-dasharray="4,3")
+    end
+
+    test "node captions surface uppercase status codes (DONE / REVIEW / WAITING)",
+         %{conn: conn, stack: stack} do
+      svg = panel_svg_block(open_panel(conn, stack))
+
+      # The captions live inside the SVG rect's text element. HEEx
+      # interpolation surrounds the value with whitespace, so match
+      # against the SVG block with whitespace tolerance. Two `done`
+      # members → DONE appears at least once, plus REVIEW and WAITING.
+      assert svg =~ ~r/>\s*DONE\s*</
+      assert svg =~ ~r/>\s*REVIEW\s*</
+      assert svg =~ ~r/>\s*WAITING\s*</
+    end
+
+    test "circled-digit position glyphs render inside each node",
+         %{conn: conn, stack: stack} do
+      svg = panel_svg_block(open_panel(conn, stack))
+
+      # Per ADR 0041 § "UI surface — inline expansion" — same glyphs
+      # as the linear members list, recycled inside the SVG rect.
+      assert svg =~ "①"
+      assert svg =~ "②"
+      assert svg =~ "③"
+      assert svg =~ "④"
+    end
+
+    test "single-node stack: one rect, zero edges, sensible viewBox",
+         %{conn: conn, project: project} do
+      stack = stack_fixture(project_id: project.id, name: "solo", slug: "solo")
+      _m1 = create_member(stack, 1, "Lone task", "in_progress")
+
+      html = open_panel(conn, stack)
+
+      rects = Regex.scan(~r/<rect[^>]*data-status="/, html)
+      lines = Regex.scan(~r/<line[^>]*data-role="stack-detail-dag-edge"/, html)
+      assert length(rects) == 1
+      assert lines == []
+
+      # viewBox is `0 0 W H` — both should be positive integers and
+      # not collapse to a 0×0 canvas. Scope the match to the panel
+      # SVG (other heroicon SVGs in the page also carry viewBox).
+      {w, h} = panel_viewbox(html)
+      assert w > 0
+      assert h > 0
+    end
+
+    test "single chain (1→2→3) places nodes on three distinct levels",
+         %{conn: conn, project: project} do
+      stack = stack_fixture(project_id: project.id, name: "chain", slug: "chain")
+      m1 = create_member(stack, 1, "First", "done")
+      m2 = create_member(stack, 2, "Second", "done")
+      m3 = create_member(stack, 3, "Third", "in_review")
+
+      {:ok, _} =
+        Tasks.update_task(m2, %{dependencies: [%{"task_id" => m1.id, "kind" => "blocks"}]})
+
+      {:ok, _} =
+        Tasks.update_task(m3, %{dependencies: [%{"task_id" => m2.id, "kind" => "blocks"}]})
+
+      html = open_panel(conn, stack)
+
+      ys = node_y_by_id(html, [m1, m2, m3])
+
+      assert ys[m1.id] < ys[m2.id]
+      assert ys[m2.id] < ys[m3.id]
+      assert ys |> Map.values() |> Enum.uniq() |> length() == 3
+    end
+
+    test "layout is deterministic — same input produces same SVG y-positions",
+         %{conn: conn, stack: stack, members: [m1, m2, m3, m4]} do
+      html_a = open_panel(conn, stack)
+      html_b = open_panel(conn, stack)
+
+      ys_a = node_y_by_id(html_a, [m1, m2, m3, m4])
+      ys_b = node_y_by_id(html_b, [m1, m2, m3, m4])
+
+      assert ys_a == ys_b
+
+      # ViewBox is also stable across renders.
+      assert panel_viewbox(html_a) == panel_viewbox(html_b)
+    end
+
+    test "DAG sits in the LEFT column of the panel body grid (members slot at right)",
+         %{conn: conn, stack: stack} do
+      html = open_panel(conn, stack)
+
+      dag_at = :binary.match(html, ~s(data-role="stack-detail-dag")) |> elem(0)
+      members_at = :binary.match(html, ~s(data-role="stack-detail-members")) |> elem(0)
+
+      assert dag_at < members_at, "expected DAG to render before the members column"
+
+      # Body container uses a responsive grid: single column on mobile
+      # (DAG above members), 2 columns on md+ for the desktop side-by-
+      # side layout. The mobile-first switch landed in stage 5.
+      assert html =~ ~s(grid grid-cols-1 md:grid-cols-2 gap-4)
+    end
+
+    # Helper: parse `<g data-role="stack-detail-dag-node" data-node-id="<id>">`
+    # blocks and return %{member.id => integer y of its rect}. Pulls the
+    # node's `<rect>` y attribute (which is the topological row anchor).
+    defp node_y_by_id(html, members) do
+      Enum.reduce(members, %{}, fn m, acc ->
+        case Regex.run(
+               ~r/<g[^>]*data-node-id="#{m.id}"[^>]*>\s*<rect[^>]*\sy="(\d+)"/,
+               html
+             ) do
+          [_, y] -> Map.put(acc, m.id, String.to_integer(y))
+          _ -> acc
+        end
+      end)
+    end
+
+    # Sanity: dag_rect_ys/1 helper used only by the next assertion's
+    # belt-and-suspenders check on raw rect y count.
+    test "every rect carries an integer y attribute (no nil/missing positions)",
+         %{conn: conn, stack: stack} do
+      html = open_panel(conn, stack)
+
+      ys = dag_rect_ys(html)
+      assert length(ys) == 4
+      assert Enum.all?(ys, &(&1 >= 0))
+    end
+  end
+
+  describe "stack detail panel — members list (T8 stage 4)" do
+    # Mock canvas 019e1a16 rev 2: the body's right column renders the
+    # linear members list, ordered by `stack_position`. Each row carries
+    # the position glyph (status-coloured circle), the title, a status
+    # pill on the right, and an optional dep-annotation sub-line. Rows
+    # are clickable: phx-click="select_task" with the member id; the
+    # handler push_patches to /tasks/:id AND closes this stack panel
+    # (close-and-open behaviour per the T8 stage 4 task description).
+
+    setup %{conn: conn} do
+      conn = authenticated_conn(conn)
+      project = create_project()
+
+      stack =
+        stack_fixture(
+          project_id: project.id,
+          name: "user-keyed-saves",
+          slug: "user-keyed-saves"
+        )
+
+      # Reuse the diamond fixture from stage 3 — it gives us:
+      #   m1 (root, done), m2 + m3 in parallel (both depend on m1),
+      #   m4 depends on m2 + m3. Exercises every annotation path:
+      #   none / single-dep / single-dep-with-parallel / multi-dep.
+      {:ok, members} = seed_members_4_diamond(stack)
+      {:ok, stack} = Stacks.recompute_stack_status(stack)
+      stack = Repo.get!(Stack, stack.id)
+
+      {:ok, conn: conn, project: project, stack: stack, members: members}
+    end
+
+    # Same diamond shape as `seed_stack_members_4edges/1` but defined
+    # locally so this describe block stays self-contained (the stage-3
+    # block's helper is private to that describe scope and ExUnit doesn't
+    # share defp helpers across describe blocks within the same module).
+    defp seed_members_4_diamond(%Stack{} = stack) do
+      m1 = create_member(stack, 1, "Add user_id column", "done", merged: true)
+      m2 = create_member(stack, 2, "Wire admin save fallback", "done", merged: true)
+      m3 = create_member(stack, 3, "Forward-auth header", "in_review")
+      m4 = create_member(stack, 4, "User-scoped save list", "stack_pending")
+
+      {:ok, m2} =
+        Tasks.update_task(m2, %{dependencies: [%{"task_id" => m1.id, "kind" => "blocks"}]})
+
+      {:ok, m3} =
+        Tasks.update_task(m3, %{dependencies: [%{"task_id" => m1.id, "kind" => "blocks"}]})
+
+      {:ok, m4} =
+        Tasks.update_task(m4, %{
+          dependencies: [
+            %{"task_id" => m2.id, "kind" => "blocks"},
+            %{"task_id" => m3.id, "kind" => "blocks"}
+          ]
+        })
+
+      {:ok, [m1, m2, m3, m4]}
+    end
+
+    # Helper: pull the substring between the members-list opening tag
+    # and its closing </div>. We use a non-greedy match through the
+    # known structural boundary (the action-bar role) so we never bleed
+    # into the action bar below or the DAG block above.
+    defp members_block(html) do
+      case Regex.run(
+             ~r/data-role="stack-detail-members-list".*?(?=data-role="stack-detail-actions")/s,
+             html
+           ) do
+        [block] -> block
+        _ -> ""
+      end
+    end
+
+    test "panel body renders the members list container with stack-detail-members role",
+         %{conn: conn, stack: stack} do
+      html = open_panel(conn, stack)
+
+      assert html =~ ~s(data-role="stack-detail-members")
+      assert html =~ ~s(data-role="stack-detail-members-list")
+      # Section heading + dispatch-order hint per mock canvas 019e1a16.
+      assert html =~ ~s(data-role="stack-detail-members-header")
+      assert html =~ "Members"
+      assert html =~ "(dispatch order)"
+    end
+
+    test "renders one row per member with the title and position glyph",
+         %{conn: conn, stack: stack, members: [m1, m2, m3, m4]} do
+      html = open_panel(conn, stack)
+
+      block = members_block(html)
+
+      # Four rows total, one per member.
+      rows = Regex.scan(~r/data-role="stack-detail-member-row"/, block)
+      assert length(rows) == 4
+
+      # Titles render verbatim.
+      assert block =~ m1.title
+      assert block =~ m2.title
+      assert block =~ m3.title
+      assert block =~ m4.title
+
+      # Position glyphs ① ② ③ ④ all surface inside the list.
+      assert block =~ "①"
+      assert block =~ "②"
+      assert block =~ "③"
+      assert block =~ "④"
+    end
+
+    test "rows render in stack_position order regardless of fixture insert order",
+         %{conn: conn, stack: stack, members: [m1, m2, m3, m4]} do
+      html = open_panel(conn, stack)
+
+      block = members_block(html)
+
+      m1_at = :binary.match(block, m1.id) |> elem(0)
+      m2_at = :binary.match(block, m2.id) |> elem(0)
+      m3_at = :binary.match(block, m3.id) |> elem(0)
+      m4_at = :binary.match(block, m4.id) |> elem(0)
+
+      assert m1_at < m2_at
+      assert m2_at < m3_at
+      assert m3_at < m4_at
+    end
+
+    test "status pills colour-track each member's status",
+         %{conn: conn, stack: stack} do
+      html = open_panel(conn, stack)
+
+      block = members_block(html)
+
+      # done (m1, m2) → "Done" + success tone
+      assert block =~ "Done"
+      assert block =~ "text-success"
+      # in_review (m3) → "Review" + warning tone
+      assert block =~ "Review"
+      assert block =~ "text-warning"
+      # stack_pending (m4) → "Waiting" + dashed border tone
+      assert block =~ "Waiting"
+      assert block =~ "border-dashed"
+    end
+
+    test "member ① with no in-stack deps has no annotation row",
+         %{conn: conn, stack: stack, members: [m1 | _]} do
+      html = open_panel(conn, stack)
+
+      # Locate the m1 row block (its rendered region) and verify the
+      # member-deps role is absent within it. The row is uniquely
+      # identified by data-member-id = m1.id.
+      [row_open] =
+        Regex.run(
+          ~r/<div[^>]*data-role="stack-detail-member-row"[^>]*data-member-id="#{m1.id}"[^>]*>.*?<\/div>\s*<\/div>/s,
+          html
+        )
+        |> List.wrap()
+
+      refute row_open =~ ~s(data-role="stack-detail-member-deps")
+    end
+
+    test "member ② renders 'depends on ①' annotation",
+         %{conn: conn, stack: stack, members: [_m1, m2 | _]} do
+      html = open_panel(conn, stack)
+
+      [row] =
+        Regex.run(
+          ~r/<div[^>]*data-member-id="#{m2.id}"[^>]*>.*?<\/div>\s*<\/div>/s,
+          html
+        )
+        |> List.wrap()
+
+      assert row =~ ~s(data-role="stack-detail-member-deps")
+      assert row =~ "depends on ①"
+      # No parens — m2 has no parallel sibling at this point... wait,
+      # m3 IS a parallel sibling of m2 (both depend solely on m1). The
+      # annotation should therefore include "(parallel with ③)".
+      assert row =~ "parallel with ③"
+    end
+
+    test "member ③ renders 'depends on ① (parallel with ②)' annotation",
+         %{conn: conn, stack: stack, members: [_m1, _m2, m3 | _]} do
+      html = open_panel(conn, stack)
+
+      [row] =
+        Regex.run(
+          ~r/<div[^>]*data-member-id="#{m3.id}"[^>]*>.*?<\/div>\s*<\/div>/s,
+          html
+        )
+        |> List.wrap()
+
+      assert row =~ "depends on ① (parallel with ②)"
+    end
+
+    test "member ④ renders 'depends on ② + ③' annotation (multi-dep, no parallel)",
+         %{conn: conn, stack: stack, members: [_m1, _m2, _m3, m4]} do
+      html = open_panel(conn, stack)
+
+      [row] =
+        Regex.run(
+          ~r/<div[^>]*data-member-id="#{m4.id}"[^>]*>.*?<\/div>\s*<\/div>/s,
+          html
+        )
+        |> List.wrap()
+
+      assert row =~ "depends on ② + ③"
+      # m4 has no parallel sibling — it's the only member at level 2.
+      refute row =~ "parallel with"
+    end
+
+    test "row carries phx-click=select_task with the member id",
+         %{conn: conn, stack: stack, members: [_m1, _m2, m3 | _]} do
+      html = open_panel(conn, stack)
+
+      assert html =~
+               ~r/<div[^>]*phx-click="select_task"[^>]*phx-value-id="#{m3.id}"[^>]*data-role="stack-detail-member-row"/ or
+               html =~
+                 ~r/<div[^>]*data-role="stack-detail-member-row"[^>]*phx-click="select_task"[^>]*phx-value-id="#{m3.id}"/
+    end
+
+    test "clicking a member row closes the stack panel and opens the per-task detail",
+         %{conn: conn, stack: stack, members: [_m1, _m2, m3 | _]} do
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+
+      # Open the stack panel first.
+      _ = render_click(view, "open_stack_detail", %{"id" => stack.id})
+
+      pre = :sys.get_state(view.pid).socket.assigns
+      assert pre.show_stack_detail == true
+      assert pre.show_detail == false
+
+      # Click member row ③ → push_patch to /tasks/:id AND close panel.
+      _ = render_click(view, "select_task", %{"id" => m3.id})
+
+      post = :sys.get_state(view.pid).socket.assigns
+      assert post.show_stack_detail == false
+      assert post.selected_stack == nil
+      assert post.selected_stack_members == []
+      # The per-task detail panel is now open with m3 selected.
+      assert post.show_detail == true
+      assert post.selected_task && post.selected_task.id == m3.id
+    end
+
+    test "members list sits in the RIGHT column (after the DAG) of the body grid",
+         %{conn: conn, stack: stack} do
+      html = open_panel(conn, stack)
+
+      dag_at = :binary.match(html, ~s(data-role="stack-detail-dag")) |> elem(0)
+
+      members_at =
+        :binary.match(html, ~s(data-role="stack-detail-members-list")) |> elem(0)
+
+      assert dag_at < members_at
+    end
+
+    test "member_dep_annotation/2 is pure: same input → same output",
+         %{conn: conn, stack: stack} do
+      html_a = open_panel(conn, stack)
+      html_b = open_panel(conn, stack)
+
+      assert members_block(html_a) == members_block(html_b)
+    end
+  end
+
+  describe "stack detail panel — mobile layout (T8 stage 5)" do
+    # Mock canvas 019e1a16 rev 2 (right-hand "Stack detail (mobile)"
+    # phone): on viewports <md the slide-in panel becomes a full-screen
+    # takeover with a back arrow + Stack tag + overflow kebab in the
+    # app bar, the meta-grid collapses to 2x2, the body switches to
+    # one column (DAG above members), and the action bar is sticky to
+    # the bottom. On md+ the panel reverts to the stage 1-4 slide-in
+    # shape with a 4-col meta-grid, side-by-side body, and the same
+    # action bar at the bottom.
+    #
+    # The container also adopts PR #335's bottom-clearance pattern
+    # (`bottom-[calc(env(safe-area-inset-bottom)+var(--bottom-nav-
+    # height,0px))]`) so the panel ends flush with the visible top of
+    # the bottom-tab nav on iOS, with no defense-in-depth pb on the
+    # inner scroll container.
+
+    setup %{conn: conn} do
+      conn = authenticated_conn(conn)
+      project = create_project()
+
+      stack =
+        stack_fixture(
+          project_id: project.id,
+          name: "user-keyed-saves",
+          slug: "user-keyed-saves"
+        )
+
+      {:ok, members} = seed_stack_members(stack, count: 4)
+      {:ok, stack} = Stacks.recompute_stack_status(stack)
+      stack = Repo.get!(Stack, stack.id)
+
+      {:ok, conn: conn, project: project, stack: stack, members: members}
+    end
+
+    # Helper: open the stack panel and return rendered HTML.
+    defp open_stage5_panel(conn, stack) do
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      render_click(view, "open_stack_detail", %{"id" => stack.id})
+    end
+
+    # Helper: extract the opening tag for a single element by its
+    # data-role, so we can assert on the full attribute cluster
+    # regardless of attribute order.
+    defp open_tag_for(html, role) do
+      case Regex.run(~r/<[a-zA-Z]+[^>]*data-role="#{role}"[^>]*>/, html) do
+        [tag] -> tag
+        _ -> nil
+      end
+    end
+
+    test "panel container carries mobile takeover + desktop slide-in classes",
+         %{conn: conn, stack: stack} do
+      html = open_stage5_panel(conn, stack)
+      tag = open_tag_for(html, "stack-detail-panel")
+      refute is_nil(tag), "expected stack-detail-panel container to render"
+
+      # Mobile: full-screen takeover (`inset-0` + `max-w-full`).
+      assert tag =~ "inset-0"
+      assert tag =~ "max-w-full"
+
+      # Desktop: slide-in shape (`md:inset-y-0 md:left-auto md:right-0`
+      # + `md:max-w-lg`).
+      assert tag =~ "md:inset-y-0"
+      assert tag =~ "md:left-auto"
+      assert tag =~ "md:right-0"
+      assert tag =~ "md:max-w-lg"
+    end
+
+    test "panel container adopts PR #335's bottom-nav clearance pattern",
+         %{conn: conn, stack: stack} do
+      html = open_stage5_panel(conn, stack)
+      tag = open_tag_for(html, "stack-detail-panel")
+      refute is_nil(tag)
+
+      # PR #335's canonical pattern: bottom edge stops at the top of
+      # the bottom-nav (incl. iOS home-indicator safe-area) via the
+      # `--bottom-nav-height` CSS var + env(safe-area-inset-bottom).
+      assert tag =~ "bottom-[calc(env(safe-area-inset-bottom)+var(--bottom-nav-height,0px))]"
+    end
+
+    test "inner body scroll container does NOT re-introduce a defense-in-depth pb-",
+         %{conn: conn, stack: stack} do
+      html = open_stage5_panel(conn, stack)
+      tag = open_tag_for(html, "stack-detail-body")
+      refute is_nil(tag)
+
+      # PR #335 stripped the inner-scroller `pb-[calc(...)]` from the
+      # per-task panel because the container's bottom constraint
+      # already accounts for the nav. We follow the same rule for the
+      # stack panel — no `pb-[calc(env(safe-area-inset-bottom)...)]`
+      # on the body scroller.
+      refute tag =~ "pb-[calc(env(safe-area-inset-bottom)"
+    end
+
+    test "meta-grid collapses to 2 cols on mobile and 4 cols on md+",
+         %{conn: conn, stack: stack} do
+      html = open_stage5_panel(conn, stack)
+      tag = open_tag_for(html, "stack-detail-meta")
+      refute is_nil(tag)
+
+      assert tag =~ "grid-cols-2"
+      assert tag =~ "md:grid-cols-4"
+    end
+
+    test "body switches to 1 col on mobile (DAG above members) and 2 cols on md+",
+         %{conn: conn, stack: stack} do
+      html = open_stage5_panel(conn, stack)
+      tag = open_tag_for(html, "stack-detail-body")
+      refute is_nil(tag)
+
+      assert tag =~ "grid-cols-1"
+      assert tag =~ "md:grid-cols-2"
+
+      # On mobile the single column means DAG renders ABOVE members in
+      # source order; the existing stage-4 ordering test
+      # ("members list sits in the RIGHT column (after the DAG)")
+      # already confirms DAG precedes members in the DOM. Re-assert
+      # the source ordering here for stage-5 documentation purposes.
+      dag_at = :binary.match(html, ~s(data-role="stack-detail-dag")) |> elem(0)
+
+      members_at =
+        :binary.match(html, ~s(data-role="stack-detail-members")) |> elem(0)
+
+      assert dag_at < members_at,
+             "DAG should appear before members in the DOM so mobile single-column lays DAG above"
+    end
+
+    test "mobile-only chrome: back arrow + overflow kebab carry md:hidden",
+         %{conn: conn, stack: stack} do
+      html = open_stage5_panel(conn, stack)
+
+      back_tag = open_tag_for(html, "stack-detail-back")
+      refute is_nil(back_tag), "expected mobile back arrow to render"
+      assert back_tag =~ "md:hidden"
+      # The back arrow uses the same close handler as the desktop X.
+      assert back_tag =~ ~s(phx-click="close_stack_detail")
+      # Hero icon: arrow-left, per the mock's `←`.
+      assert html =~ "hero-arrow-left"
+
+      kebab_tag = open_tag_for(html, "stack-detail-overflow")
+      refute is_nil(kebab_tag), "expected mobile overflow kebab to render"
+      assert kebab_tag =~ "md:hidden"
+      assert html =~ "hero-ellipsis-vertical"
+    end
+
+    test "desktop close X is gated to md+ (`hidden md:flex`)",
+         %{conn: conn, stack: stack} do
+      html = open_stage5_panel(conn, stack)
+
+      close_tag = open_tag_for(html, "stack-detail-close")
+      refute is_nil(close_tag), "expected desktop close X to render"
+
+      assert close_tag =~ "hidden"
+      assert close_tag =~ "md:flex"
+      # Sanity: the close X still wires to close_stack_detail.
+      assert close_tag =~ ~s(phx-click="close_stack_detail")
+    end
+
+    test "action bar is sticky to the bottom (mt-auto sticky bottom-0)",
+         %{conn: conn, stack: stack} do
+      html = open_stage5_panel(conn, stack)
+
+      tag = open_tag_for(html, "stack-detail-actions")
+      refute is_nil(tag), "expected stack-detail-actions bar to render"
+
+      # `mt-auto` so the bar pushes to the bottom of the flex column;
+      # `sticky bottom-0` so it pins to the viewport bottom while the
+      # body scrolls beneath on mobile.
+      assert tag =~ "mt-auto"
+      assert tag =~ "sticky"
+      assert tag =~ "bottom-0"
+      # Opaque background so scrolled content doesn't bleed through.
+      assert tag =~ "bg-base-100"
+      # Top border separates it visually from the scrollable body.
+      assert tag =~ "border-t"
+    end
+
+    test "Stack tag + title + description still render alongside the new chrome",
+         %{conn: conn, stack: stack} do
+      {:ok, stack} =
+        Stacks.update_stack(stack, %{
+          description: "Migrate retro saves from per-room to per-user."
+        })
+
+      html = open_stage5_panel(conn, stack)
+
+      # Stage 1 contract — head still surfaces Stack tag, title, and
+      # description regardless of viewport.
+      assert html =~ ~s(data-role="stack-tag")
+      assert html =~ "Stack"
+      assert html =~ ~s(data-role="stack-detail-title")
+      assert html =~ stack.name
+      assert html =~ ~s(data-role="stack-detail-description")
+      assert html =~ "Migrate retro saves from per-room to per-user."
+    end
+
+    test "abandon + view rollup PR buttons stay inside the sticky action bar",
+         %{conn: conn, stack: stack} do
+      html = open_stage5_panel(conn, stack)
+
+      # The action bar block (between its opening tag and the panel's
+      # closing </div>) should still contain both stage-1 buttons.
+      [actions_block] =
+        Regex.run(
+          ~r/data-role="stack-detail-actions".*?(?=<\/div>\s*<\/div>\s*<%!--|<\/div>\s*<\/div>\s*<div\s)/s,
+          html
+        ) || ["", ""]
+
+      # If the block-extraction heuristic above misses, fall back to a
+      # broad whole-html search — both buttons must still render.
+      block = if actions_block == "", do: html, else: actions_block
+
+      assert block =~ ~s(data-role="stack-detail-abandon")
+      assert block =~ ~s(data-role="stack-detail-rollup-pr")
+    end
+  end
 end
