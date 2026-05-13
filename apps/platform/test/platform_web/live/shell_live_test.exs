@@ -19,6 +19,25 @@ defmodule PlatformWeb.ShellLiveTest do
     init_test_session(conn, current_user_id: user.id)
   end
 
+  # PWA app-shell scroll lock regression. The root shell container must
+  # constrain itself to the dynamic viewport (`h-[100dvh]`) and refuse to
+  # scroll (`overflow-hidden`) so the bottom-tab nav stays functionally
+  # rooted on mobile — without these classes, the body itself scrolls and
+  # drags the chrome out of view (Rowan's mobile review-request hotfix,
+  # supersedes the inner `pb-` clearance from PR #331). Asserting the
+  # literal class string keeps the fix from being quietly removed during
+  # refactors.
+  test "shell root container locks to viewport height (PWA scroll lock)", %{conn: conn} do
+    conn = authenticated_conn(conn)
+    {:ok, _view, html} = live(conn, ~p"/tasks")
+
+    assert html =~ "h-[100dvh]"
+    assert html =~ "overflow-hidden"
+    # The main surface must contain its own iOS rubber-band so an inner
+    # panel's overscroll cannot displace the chrome.
+    assert html =~ "overscroll-contain"
+  end
+
   test "shell loads principal_name and composite_status when a space with agents exists", %{
     conn: conn
   } do

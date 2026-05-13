@@ -1,5 +1,13 @@
+<%!-- PWA app-shell scroll lock: the shell occupies exactly the visual
+     viewport (100dvh — collapses correctly when the iOS URL bar shows /
+     hides) and `overflow-hidden` prevents the document itself from
+     scrolling. Combined with the html/body lock in app.css, the bottom-
+     tab nav (rendered later in the inner flex column) is functionally
+     rooted: only the inner content scroller (per-LiveView, `overflow-y-
+     auto`) can scroll, so the chrome stays put on mobile. PR #331's
+     pb-clearance on inner panels remains as defense-in-depth. --%>
 <div
-  class="flex h-screen overflow-hidden bg-base-100 safe-area-top pb-[var(--meeting-bar-height,0px)]"
+  class="flex h-[100dvh] overflow-hidden bg-base-100 safe-area-top pb-[var(--meeting-bar-height,0px)]"
   style={"--meeting-bar-height: " <> (if @meeting_active, do: "3rem", else: "0px")}
 >
   <%!-- Sidebar collapse persistence hook (localStorage) --%>
@@ -359,8 +367,13 @@
       aria-label="Meeting captions"
     >
     </div>
-    <%!-- Surface --%>
-    <main class="flex-1 overflow-hidden">
+    <%!-- Surface. `flex-1` claims the remaining vertical space inside
+         the inner column; `overflow-hidden` keeps the surface itself
+         from scrolling (per-LiveView panels supply their own
+         `overflow-y-auto` scrollers). `overscroll-contain` stops iOS
+         rubber-band from propagating up and revealing/displacing the
+         chrome (top app bar, bottom-tab nav). --%>
+    <main class="flex-1 overflow-hidden overscroll-contain">
       {@inner_content}
     </main>
 

@@ -245,6 +245,28 @@
 /* Make LiveView wrapper divs transparent for layout */
 [data-phx-session], [data-phx-teleported-src] { display: contents }
 
+/* PWA app-shell scroll lock. Pin the document to the visual viewport so
+   nothing outside the shell can scroll — neither the body itself nor any
+   external trigger (browser toolbar resize, on-screen keyboard, etc.)
+   can drag the chrome (top app bar, bottom-tab nav) out of view on
+   mobile. Pairs with shell.html.heex's `h-[100dvh] overflow-hidden flex`
+   root and the per-surface `overflow-y-auto` scrollers — the only
+   elements allowed to scroll are inner panels, never the document.
+
+   `100dvh` (dynamic viewport height) collapses correctly when the iOS
+   URL bar shows/hides, unlike the legacy `100vh` which always reflects
+   the largest possible viewport and overflows the visible area.
+
+   `overscroll-behavior: none` here is a backstop; per-scroller
+   `overscroll-contain` (e.g., main in shell.html.heex) is what stops
+   iOS rubber-band on the inner panels from propagating up. */
+html,
+body {
+  height: 100dvh;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
 /* iOS PWA safe area support. Includes left/right for landscape-notch
    handling on iPhone — full-screen mobile overlays (chat drawer,
    meeting panel, canvas overlay) must respect these inset axes to
