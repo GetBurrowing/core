@@ -93,18 +93,26 @@ defmodule Platform.Repo.Migrations.AddMessageEditHistory do
     create(unique_index(:chat_message_versions, [:message_id, :version_number]))
     create(index(:chat_message_versions, [:message_id]))
 
+    # Flush before the backfill: `create table` is queued by Ecto.Migration and
+    # only sent to Postgres on flush/end-of-block, but `backfill_v1_rows/0`
+    # calls `Repo.insert_all` directly, which bypasses the queue. Without this
+    # flush, the INSERT runs before the CREATE TABLE and fails with
+    # "relation \"chat_message_versions\" does not exist" on any DB with
+    # existing chat_messages rows to backfill.
+    flush()
+
     # ── 3. Backfill v1 rows for every existing chat_messages row ─────────────
     backfill_v1_rows()
-
-    flush()
   end
 
   def down do
     drop(table(:chat_message_versions))
 
-    drop(index(:chat_messages, [:corrects_message_id],
-      name: :chat_messages_corrects_message_id_partial_index
-    ))
+    drop(
+      index(:chat_messages, [:corrects_message_id],
+        name: :chat_messages_corrects_message_id_partial_index
+      )
+    )
 
     drop(constraint(:chat_messages, :frozen_both_or_neither))
 
