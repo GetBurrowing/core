@@ -24,6 +24,48 @@
  * needs a coarse "did the edit shorten / remove anything" signal to
  * gate the pre-submit modal.
  */
+
+/**
+ * Pure detection function for the removal-warning gate (editable-messages
+ * contract Section f, Policy 4).
+ *
+ * Whitespace-tokenize both strings, normalize each token by stripping
+ * leading/trailing Unicode punctuation/symbol code points and
+ * lowercasing, then return true iff any normalized prev-token is missing
+ * from the normalized next-set.
+ *
+ * Server-aligned in structure: the server's compute_removed_substrings/2
+ * (apps/platform/lib/platform/chat/messages/edit.ex) uses the same
+ * whitespace split (~r/\s+/, trim: true) and the same set-membership
+ * check. The client adds light punctuation+case normalization so an
+ * additive edit that moves trailing/leading punctuation (e.g.
+ * "tomorrow?" → "tomorrow at 10am?") no longer trips the user-facing
+ * warning. The server may still surface those tokens in the agent
+ * payload — that's out of scope for this predicate, which only gates
+ * the pre-submit warning modal where false positives erode trust.
+ *
+ * Acceptable false positives (matching or relaxing server behavior):
+ *   - URL edits: a URL is a single whitespace-bounded token, so any
+ *     change to it flags removal.
+ *   - Repeated-word collapses: "go go go" → "go" reports no removal
+ *     because token sets are identical — matches server.
+ *   - Apostrophe-contraction expansions: "don't" → "do not" reports
+ *     removal because the token "don't" is not in {do, not}. Fixing
+ *     this would require a contraction table; out of scope for Stage 2.
+ */
+export function shortenedOrRemoved(original, next) {
+  const prevTokens = tokenize(original)
+  const nextSet = new Set(tokenize(next))
+  return prevTokens.some(t => !nextSet.has(t))
+}
+
+function tokenize(s) {
+  return s
+    .split(/\s+/)
+    .map(t => t.toLowerCase().replace(/^[\p{P}\p{S}]+|[\p{P}\p{S}]+$/gu, ""))
+    .filter(t => t.length > 0)
+}
+
 const MessageEditor = {
   mounted() {
     this.textarea = this.el.querySelector("textarea[name='body']")
@@ -53,7 +95,8 @@ const MessageEditor = {
     }
 
     this.onInput = () => {
-      this.flagInput.value = this.shortenedOrRemoved(this.textarea.value) ? "true" : "false"
+      this.flagInput.value =
+        shortenedOrRemoved(this.original, this.textarea.value) ? "true" : "false"
     }
 
     this.textarea.addEventListener("keydown", this.onKeyDown)
@@ -64,40 +107,6 @@ const MessageEditor = {
     if (!this.textarea) return
     this.textarea.removeEventListener("keydown", this.onKeyDown)
     this.textarea.removeEventListener("input", this.onInput)
-  },
-
-  /**
-   * Returns true when `next` is shorter than the original OR removes a
-   * contiguous substring of the original. Two cases that both indicate
-   * the user is dropping text agents may have read:
-   *
-   *   1. shorter length: trivially shortens — e.g. truncating the
-   *      message or deleting words from the middle.
-   *   2. equal/longer length BUT a contiguous run of the original is
-   *      missing: the user edited mid-message (e.g. replaced a phrase
-   *      with a longer one, but the original phrase no longer appears).
-   *
-   * Detection only; false positives are acceptable (e.g. user reorders
-   * words). False negatives — claiming nothing was removed when it was —
-   * are not. Mirrors the server-side diff philosophy in the contract.
-   */
-  shortenedOrRemoved(next) {
-    if (next.length < this.original.length) return true
-
-    // Slide a 5-character window across the original; if any window is
-    // absent from `next`, we count that as a removal. 5 is small enough
-    // to catch deletions of short words and big enough to be tolerant
-    // of single-character typos elsewhere.
-    if (this.original.length < 5) {
-      return !next.includes(this.original)
-    }
-
-    for (let i = 0; i <= this.original.length - 5; i++) {
-      const window = this.original.slice(i, i + 5)
-      if (!next.includes(window)) return true
-    }
-
-    return false
   }
 }
 
