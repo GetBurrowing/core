@@ -4,8 +4,9 @@
      scrolling. Combined with the html/body lock in app.css, the bottom-
      tab nav (rendered later in the inner flex column) is functionally
      rooted: only the inner content scroller (per-LiveView, `overflow-y-
-     auto`) can scroll, so the chrome stays put on mobile. PR #331's
-     pb-clearance on inner panels remains as defense-in-depth. --%>
+     auto`) can scroll, so the chrome stays put on mobile. Fixed-position
+     panels (e.g. tasks/skills detail) bound their own bottom edge to
+     `var(--bottom-nav-height)` so they don't sit behind the nav. --%>
 <div
   class="flex h-[100dvh] overflow-hidden bg-base-100 safe-area-top pb-[var(--meeting-bar-height,0px)]"
   style={"--meeting-bar-height: " <> (if @meeting_active, do: "3rem", else: "0px")}

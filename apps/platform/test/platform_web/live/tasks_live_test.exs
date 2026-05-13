@@ -553,14 +553,17 @@ defmodule PlatformWeb.TasksLiveTest do
     assert html =~ "Description"
   end
 
-  # Mobile bottom-nav clearance regression: the persistent .bottom-nav (56px,
-  # see app.css `--bottom-nav-height`) is rendered after the detail panel in
-  # the shell layout, so without padding the bottom-most content (review-
-  # request approve/reject buttons, status transition pills) gets occluded
-  # on phones. Asserting the literal class string keeps the fix from being
-  # quietly removed during refactors. Tied to "fix(mobile): clear bottom-tab
-  # nav from fixed panels so review buttons stay tappable".
-  test "detail panel scroll container reserves space for the mobile bottom-nav",
+  # Mobile bottom-nav clearance regression: the persistent .bottom-nav
+  # (56px on phones, see app.css `--bottom-nav-height`) is rendered after
+  # the fixed detail panel in the shell layout. Without bounding the
+  # panel's bottom edge to the nav height, the bottom-most panel content
+  # (review-request approve/reject buttons, status transition pills) sits
+  # behind the nav on phones. The original PR #331 fix padded the inner
+  # scroller; the follow-up (this PR) bounds the panel container itself,
+  # which is cleaner and removes the dead-space below content the inner-
+  # padding strategy created. Asserting the bound on the container keeps
+  # the fix from being quietly removed during refactors.
+  test "detail panel container bottom edge stops at the mobile bottom-nav",
        %{conn: conn} do
     project = create_project()
     task = create_task(project, %{title: "Clearance Task"})
@@ -568,7 +571,7 @@ defmodule PlatformWeb.TasksLiveTest do
     conn = authenticated_conn(conn)
     {:ok, _view, html} = live(conn, ~p"/tasks/#{task.id}")
 
-    assert html =~ "pb-[calc(env(safe-area-inset-bottom)+var(--bottom-nav-height,0px)+1rem)]"
+    assert html =~ "bottom-[calc(env(safe-area-inset-bottom)+var(--bottom-nav-height,0px))]"
   end
 
   test "task status transitions work from the detail panel", %{conn: conn} do
@@ -1318,16 +1321,19 @@ defmodule PlatformWeb.TasksLiveTest do
              "pill row spans must carry whitespace-nowrap shrink-0"
     end
 
-    test "mobile list reserves bottom padding (pb-24) so the bottom-tab nav doesn't cover the last task",
+    test "mobile list inner scroller reserves bottom padding (pb-24) so the last task isn't flush with the bottom-nav",
          %{conn: conn} do
       {:ok, _view, html} = live(conn, ~p"/tasks")
 
       # `--bottom-nav-height` is 56px below lg; pb-24 (= 6rem = 96px)
-      # comfortably clears it plus iOS safe-area-inset-bottom. This is
-      # the existing pre-stage-4 padding — assertion locks the contract
-      # so a future refactor doesn't accidentally drop it.
-      assert html =~ ~r/id="tasks-mobile-list"[^>]*class="[^"]*\bpb-24\b/,
-             "mobile list must keep pb-24 to clear the bottom-tab nav (~56px + safe-area)"
+      # comfortably clears it plus iOS safe-area-inset-bottom. The
+      # padding lives on the inner `overflow-y-auto` scroller. The
+      # outer `tasks-mobile-list` wrapper used to also carry pb-24
+      # (pre-PR #334, when the shell wasn't properly bounded); that
+      # copy was removed because it shows up as dead space below the
+      # scroller now that the shell is correctly 100dvh-rooted.
+      assert html =~ ~r/<div class="flex-1 overflow-y-auto px-3 pb-24"/,
+             "mobile list scroller must keep pb-24 to clear the bottom-tab nav (~56px + safe-area)"
     end
   end
 

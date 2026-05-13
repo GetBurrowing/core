@@ -43,10 +43,14 @@
     </div>
   </div>
 
-  <%!-- Detail panel (slide-in from right) --%>
+  <%!-- Detail panel (slide-in from right). Bottom edge clears both the
+       bottom-nav row (`--bottom-nav-height`: 56px phones, 0 desktop)
+       AND iOS home-indicator safe-area-inset-bottom — the nav absorbs
+       the safe-area via its own padding-bottom, so the panel must
+       clear both to land flush with the visible nav top. --%>
   <div
     :if={@show_detail && @selected_skill}
-    class="fixed inset-y-0 right-0 z-30 flex w-full max-w-2xl flex-col border-l border-base-300 bg-base-100 shadow-xl safe-area-top"
+    class="fixed top-0 bottom-[calc(env(safe-area-inset-bottom)+var(--bottom-nav-height,0px))] right-0 z-30 flex w-full max-w-2xl flex-col border-l border-base-300 bg-base-100 shadow-xl safe-area-top"
   >
     <div class="flex items-center justify-between border-b border-base-300 px-4 py-3">
       <h2 class="text-sm font-semibold truncate">{@selected_skill.name}</h2>
@@ -63,11 +67,9 @@
       </div>
     </div>
 
-    <%!-- Mobile bottom-nav clearance: matches the task detail panel's
-         padding so the Save button at the form's bottom isn't occluded
-         by the persistent .bottom-nav (56px on phones, 0 on desktop via
-         --bottom-nav-height). --%>
-    <div class="flex-1 overflow-y-auto p-4 space-y-5 pb-[calc(env(safe-area-inset-bottom)+var(--bottom-nav-height,0px)+1rem)]">
+    <%!-- Inner scroller. Panel container (above) ends at the bottom-nav
+         so standard `p-4` padding is enough on every viewport. --%>
+    <div class="flex-1 overflow-y-auto p-4 space-y-5">
       <.form
         for={@edit_form}
         phx-change="validate_edit"

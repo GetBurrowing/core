@@ -156,10 +156,16 @@
          @mobile_columns order (in_progress first) controls both the pill
          order and the rendered-section order — desktop @kanban_columns is
          unchanged. --%>
+    <%!-- The inner scroll container (`flex-1 overflow-y-auto pb-24`)
+         provides comfortable scroll-end padding so the last task isn't
+         flush with the bottom-nav. The outer wrapper used to also carry
+         pb-24 (pre-PR #334, when the shell wasn't properly bounded);
+         that's now redundant and shows up as ~96px of empty space below
+         the scroller. --%>
     <div
       :if={!(@show_detail && @selected_task)}
       id="tasks-mobile-list"
-      class="md:hidden flex flex-1 flex-col overflow-hidden pb-24"
+      class="md:hidden flex flex-1 flex-col overflow-hidden"
     >
       <%!-- T6 status-filter pill nav (PR #328). Counts are derived from
            `@board_items` so stack cards contribute to the per-pill
@@ -733,10 +739,18 @@
     </div>
   </div>
 
-  <%!-- Task detail panel (slide-in from right) --%>
+  <%!-- Task detail panel (slide-in from right). Bottom edge stops at
+       the top of the bottom-nav, including iOS home-indicator safe-
+       area: `--bottom-nav-height` is the nav's content row (56px on
+       phones, 0 on desktop) and the nav adds
+       `env(safe-area-inset-bottom)` below itself for the indicator.
+       Without that env() addition the panel and nav don't meet on iOS
+       — there's a ~34px gap where the panel ends above the nav's
+       safe-area. Replaces PR #331's inner-scroller `pb-[calc(...)]`,
+       which left visible dead space below content. --%>
   <div
     :if={@show_detail && @selected_task}
-    class="fixed inset-y-0 right-0 z-30 flex w-full max-w-lg flex-col border-l border-base-300 bg-base-100 shadow-xl safe-area-top"
+    class="fixed top-0 bottom-[calc(env(safe-area-inset-bottom)+var(--bottom-nav-height,0px))] right-0 z-30 flex w-full max-w-lg flex-col border-l border-base-300 bg-base-100 shadow-xl safe-area-top"
   >
     <div class="flex items-center justify-between border-b border-base-300 px-4 py-3">
       <%= cond do %>
@@ -817,13 +831,11 @@
       </div>
     </div>
 
-    <%!-- Mobile bottom-nav clearance: the persistent .bottom-nav (56px,
-         see app.css `--bottom-nav-height`) is rendered after this fixed
-         panel in the shell layout, so without padding the bottom-most
-         content (review-request approve/reject buttons, status transition
-         pills) gets occluded on phones. The calc collapses to `+ 1rem`
-         on >=lg viewports because `--bottom-nav-height` is 0 there. --%>
-    <div class="flex-1 overflow-y-auto p-4 space-y-5 pb-[calc(env(safe-area-inset-bottom)+var(--bottom-nav-height,0px)+1rem)]">
+    <%!-- Inner scroller. The panel container (above) is bounded by
+         `--bottom-nav-height`, so the scroll viewport already ends at
+         the top of the bottom-tab nav and standard `p-4` padding
+         suffices on every viewport. --%>
+    <div class="flex-1 overflow-y-auto p-4 space-y-5">
       <%!-- Delete confirmation --%>
       <div
         :if={@confirm_delete}
