@@ -135,8 +135,13 @@
     </button>
   </nav>
 
-  <%!-- Main content area --%>
-  <div class="flex flex-1 flex-col overflow-hidden">
+  <%!-- Main content area. min-w-0 + min-h-0: this column is flex-1 inside
+       a flex row (the shell root) AND a flex-col itself, so its children
+       (header, main, bottom-nav) need a bounded parent. Without min-h-0
+       the column inherits min-height: auto and grows to its intrinsic
+       content height, which on long chat threads pushes the bottom-tab
+       nav out of the visible viewport on iOS. --%>
+  <div class="flex flex-1 flex-col overflow-hidden min-w-0 min-h-0">
     <%!-- Top bar --%>
     <header
       id="utility-bar"
@@ -372,8 +377,19 @@
          from scrolling (per-LiveView panels supply their own
          `overflow-y-auto` scrollers). `overscroll-contain` stops iOS
          rubber-band from propagating up and revealing/displacing the
-         chrome (top app bar, bottom-tab nav). --%>
-    <main class="flex-1 overflow-hidden overscroll-contain">
+         chrome (top app bar, bottom-tab nav).
+
+         `min-h-0` is the load-bearing addition (post-#333): inside the
+         shell's flex-col inner content column, flex items default to
+         `min-height: auto` which means <main> refuses to shrink below
+         its intrinsic content height. With a long chat thread that
+         intrinsic height blows past the viewport — pushing the
+         bottom-tab nav (the next flex sibling) off-screen on iOS Safari
+         / PWA standalone even though the shell root is correctly
+         100dvh-bounded. min-h-0 lets <main> actually receive the
+         bounded `flex-1` height so its internal scrollers
+         (#message-list etc.) can scroll on their own. --%>
+    <main class="flex-1 min-h-0 overflow-hidden overscroll-contain">
       {@inner_content}
     </main>
 

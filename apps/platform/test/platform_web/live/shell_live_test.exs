@@ -38,6 +38,30 @@ defmodule PlatformWeb.ShellLiveTest do
     assert html =~ "overscroll-contain"
   end
 
+  # Shell main + inner-content-column min-h-0 regression. Take 2 of the
+  # PWA scroll lock (Rowan's report after #333 merged): #333 rooted the
+  # OUTER shell chrome, but the inner content column and <main> were
+  # still using default `min-height: auto` so a long inner panel could
+  # blow past their flex-1 allocation and push the bottom-tab nav
+  # off-screen on iOS WebKit. min-h-0 lets the flex children actually
+  # shrink to their bounded `flex-1` height — which is what makes the
+  # internal scrollers (#message-list, etc.) own the scroll instead of
+  # the document.
+  test "shell inner content column and main set min-h-0 for iOS flex sizing", %{conn: conn} do
+    conn = authenticated_conn(conn)
+    {:ok, _view, html} = live(conn, ~p"/tasks")
+
+    # Inner column: flex-col that holds header + main + bottom-nav.
+    # Without min-h-0 on this container, flex children inherit
+    # min-height: auto and the column grows to its intrinsic content
+    # height, defeating the h-[100dvh] root.
+    assert html =~ ~r/<div[^>]*class="[^"]*flex flex-1 flex-col overflow-hidden[^"]*min-h-0/
+    # <main>: must also set min-h-0 so it can shrink past its
+    # intrinsic content height when the LiveView's surface is taller
+    # than the available viewport.
+    assert html =~ ~r/<main[^>]*class="[^"]*flex-1 min-h-0/
+  end
+
   test "shell loads principal_name and composite_status when a space with agents exists", %{
     conn: conn
   } do

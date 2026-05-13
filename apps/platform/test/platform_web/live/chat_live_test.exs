@@ -156,6 +156,43 @@ defmodule PlatformWeb.ChatLiveTest do
     assert html =~ "data-draft-key=\"chat-draft:"
   end
 
+  # PWA scroll-lock take 2 (Rowan's mobile follow-up after #333). Even
+  # with the shell chrome correctly rooted at h-[100dvh], the chat
+  # surface itself was blowing the layout from the inside: long message
+  # threads pushed past the viewport and dragged the bottom-tab nav with
+  # them on iOS Safari / PWA standalone. Root cause: the chat root
+  # container, the inner flex row, the chat-drop-zone flex column, and
+  # the #message-list scroller all relied on the default `min-height:
+  # auto` for flex items, which on WebKit refuses to shrink below
+  # intrinsic content height. Adding min-h-0 lets the flex children
+  # actually receive their bounded `flex-1` height — which is what
+  # forces #message-list to scroll on its own instead of letting the
+  # surface push the bottom-tab nav out of the viewport.
+  #
+  # Asserting the literal class strings here keeps the fix from being
+  # quietly removed during refactors (mocked render tests cannot
+  # exercise iOS WebKit layout, so the visual verification lives in CDP
+  # screenshots on the PR; this guards the wiring).
+  test "chat surface flex containers set min-h-0 (PWA scroll lock take 2)", %{conn: conn} do
+    conn = authenticated_conn(conn)
+    {:ok, _view, html} = live(conn, ~p"/chat/general")
+
+    # Chat root: flex h-full overflow-hidden + min-h-0
+    assert html =~ ~r/<div[^>]*class="flex h-full min-h-0 overflow-hidden"/
+    # Inner flex row: must also set min-h-0 so the chat-drop-zone column
+    # below it actually receives a bounded height.
+    assert html =~ ~r/<div[^>]*class="flex flex-1 overflow-hidden min-w-0 min-h-0"/
+    # chat-drop-zone (the flex-col that owns #message-list + composer):
+    # min-h-0 lets the message-list flex-1 actually shrink and scroll.
+    assert html =~
+             ~r/id="chat-drop-zone"[^>]*class="flex flex-1 flex-col overflow-hidden min-w-0 min-h-0"/
+
+    # #message-list: must also set min-h-0 + overscroll-contain so iOS
+    # rubber-band is bounded to the message list itself.
+    assert html =~
+             ~r/id="message-list"[^>]*class="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain/
+  end
+
   test "data-draft-key on the main composer is scoped to the active space's id and updates on channel switch",
        %{conn: conn} do
     conn = authenticated_conn(conn)
