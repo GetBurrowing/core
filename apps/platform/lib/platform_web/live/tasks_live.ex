@@ -23,13 +23,15 @@ defmodule PlatformWeb.TasksLive do
     {"done", "Done"}
   ]
 
-  # Mobile list iterates this order so actionable work surfaces first.
-  # Desktop kanban (md+) keeps @kanban_columns left-to-right.
+  # Mobile pill order matches desktop @kanban_columns. Backlog stays first
+  # for visual parity with desktop; @active_status_filter still defaults to
+  # "in_progress" in mount/3 so users land on actionable work — the previous
+  # reorder confused that "default-active" intent with "list order" itself.
   @mobile_columns [
+    {"backlog", "Backlog"},
     {"in_progress", "In Progress"},
     {"in_review", "In Review"},
     {"deploying", "Deploying"},
-    {"backlog", "Backlog"},
     {"done", "Done"}
   ]
 
