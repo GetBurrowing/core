@@ -553,6 +553,24 @@ defmodule PlatformWeb.TasksLiveTest do
     assert html =~ "Description"
   end
 
+  # Mobile bottom-nav clearance regression: the persistent .bottom-nav (56px,
+  # see app.css `--bottom-nav-height`) is rendered after the detail panel in
+  # the shell layout, so without padding the bottom-most content (review-
+  # request approve/reject buttons, status transition pills) gets occluded
+  # on phones. Asserting the literal class string keeps the fix from being
+  # quietly removed during refactors. Tied to "fix(mobile): clear bottom-tab
+  # nav from fixed panels so review buttons stay tappable".
+  test "detail panel scroll container reserves space for the mobile bottom-nav",
+       %{conn: conn} do
+    project = create_project()
+    task = create_task(project, %{title: "Clearance Task"})
+
+    conn = authenticated_conn(conn)
+    {:ok, _view, html} = live(conn, ~p"/tasks/#{task.id}")
+
+    assert html =~ "pb-[calc(env(safe-area-inset-bottom)+var(--bottom-nav-height,0px)+1rem)]"
+  end
+
   test "task status transitions work from the detail panel", %{conn: conn} do
     project = create_project()
     task = create_task(project, %{title: "Transition Task", status: "backlog"})

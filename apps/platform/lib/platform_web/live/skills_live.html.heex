@@ -63,7 +63,11 @@
       </div>
     </div>
 
-    <div class="flex-1 overflow-y-auto p-4 space-y-5">
+    <%!-- Mobile bottom-nav clearance: matches the task detail panel's
+         padding so the Save button at the form's bottom isn't occluded
+         by the persistent .bottom-nav (56px on phones, 0 on desktop via
+         --bottom-nav-height). --%>
+    <div class="flex-1 overflow-y-auto p-4 space-y-5 pb-[calc(env(safe-area-inset-bottom)+var(--bottom-nav-height,0px)+1rem)]">
       <.form
         for={@edit_form}
         phx-change="validate_edit"
