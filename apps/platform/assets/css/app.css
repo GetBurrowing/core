@@ -1974,9 +1974,13 @@ body, .font-fabrikam, * {
   background: oklch(8% 0 0 / 0.96);
   border-top: 1px solid rgba(255, 255, 255, 0.08);
   backdrop-filter: blur(12px);
-  /* Home-indicator clearance lives on the parent; align-items:flex-end
-     keeps icons hugging the icon-zone bottom so there's no dead band. */
-  padding-bottom: env(safe-area-inset-bottom, 0px);
+  /* Don't add env(safe-area-inset-bottom) here: the shell now uses
+     h-[100svh] (small viewport height), which excludes the iOS gesture
+     zone from the rendered viewport. The bottom-nav sits at the bottom
+     of that 100svh shell, just above the gesture area — so the home
+     indicator never overlaps interactive content, and adding env-
+     padding here would double-account and re-introduce dead space
+     (the bug Rowan tracked through PRs #335/#336/#337). */
 }
 
 /* Desktop: hide the bottom-nav entirely (the desktop left rail in
