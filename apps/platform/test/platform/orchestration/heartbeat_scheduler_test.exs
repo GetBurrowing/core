@@ -680,6 +680,108 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
     end
   end
 
+  describe "skill-discovery step in hardcoded fallback dispatch prompts" do
+    # These exercise the no-DB fallback path: with no prompt_templates rows
+    # seeded, `dispatch_prompt/*` renders the `@skills_reference`-backed
+    # `hardcoded_dispatch_*` strings. Stage 1 of task 019e280d added the
+    # explicit skill-discovery step to `@skills_reference`, so it must appear
+    # in every fallback variant.
+
+    test "planning fallback names skill_list and skill_get" do
+      task = %{
+        title: "Wire up the task stack panel",
+        description: "Add a panel",
+        status: "planning",
+        priority: "medium"
+      }
+
+      prompt = HeartbeatScheduler.dispatch_prompt(task, nil, nil)
+
+      assert prompt =~ "skill_list"
+      assert prompt =~ "skill_get"
+      assert prompt =~ "Skill discovery"
+      assert prompt =~ "Derive this task's domain"
+    end
+
+    test "in_progress fallback names skill_list and skill_get" do
+      task = %{
+        id: "task-skill-ip",
+        title: "Implement canvas kind",
+        description: "Add a canvas kind",
+        status: "in_progress",
+        priority: "medium",
+        project: %{repo_url: "https://github.com/test/router", default_branch: "main"}
+      }
+
+      plan = %{version: 1, stages: [%{}]}
+      stage = %{id: "stage-skill-ip", position: 1, name: "coding", validations: []}
+
+      prompt = HeartbeatScheduler.dispatch_prompt(task, plan, stage)
+
+      assert prompt =~ "skill_list"
+      assert prompt =~ "skill_get"
+      assert prompt =~ "Skill discovery"
+    end
+
+    test "in_review fallback names skill_list and skill_get" do
+      task = %{
+        id: "task-skill-ir",
+        title: "Review the migration",
+        description: "Check it",
+        status: "in_review",
+        priority: "medium",
+        project: %{repo_url: "https://github.com/test/router", default_branch: "main"}
+      }
+
+      plan = %{version: 1, stages: [%{}]}
+
+      stage = %{
+        id: "stage-skill-ir",
+        position: 1,
+        name: "review",
+        validations: [%{id: "val-skill-manual", kind: "manual_approval", status: "pending"}]
+      }
+
+      prompt = HeartbeatScheduler.dispatch_prompt(task, plan, stage)
+
+      assert prompt =~ "skill_list"
+      assert prompt =~ "skill_get"
+    end
+
+    test "generic fallback names skill_list and skill_get" do
+      task = %{
+        title: "Some backlog task",
+        description: "Do the thing",
+        status: "backlog",
+        priority: "low"
+      }
+
+      prompt = HeartbeatScheduler.dispatch_prompt(task, nil, nil)
+
+      assert prompt =~ "skill_list"
+      assert prompt =~ "skill_get"
+    end
+
+    test "fallback discovery is phrased as active tool calls, not a skills-key read" do
+      # Regression guard mirroring the prompt_templates_test guard — the
+      # hardcoded fallback must stay in sync and must not revert to passive
+      # 'check the skills key' phrasing.
+      task = %{
+        title: "Regression guard task",
+        description: "Guard the phrasing",
+        status: "planning",
+        priority: "medium"
+      }
+
+      prompt = HeartbeatScheduler.dispatch_prompt(task, nil, nil)
+
+      refute prompt =~ "check the `skills` key"
+      refute prompt =~ "check the skills key"
+      refute prompt =~ "read the attached skills object"
+      assert prompt =~ "calling `skill_list` / `skill_get` yourself"
+    end
+  end
+
   describe "select_review_template/2" do
     test "returns dispatch.in_review with empty assigns for empty pending list" do
       assert {"dispatch.in_review", %{}} = HeartbeatScheduler.select_review_template([])

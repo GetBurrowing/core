@@ -252,4 +252,155 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
       assert template.content == expected
     end
   end
+
+  describe "skill-discovery step in dispatch templates" do
+    # Two groups of dispatch templates carry the skill guidance differently:
+    #
+    #  * `dispatch.fallback` bakes the prompt_templates.ex `skills_reference`
+    #    local directly into its `content` via `#{...}` interpolation, so the
+    #    discovery text is present in `default_content_for_slug/1` verbatim.
+    #  * `dispatch.planning` / `.in_progress` / `.in_review` / `.review_e2e`
+    #    carry a `{{skills_reference}}` placeholder; the discovery text is
+    #    supplied at render time (HeartbeatScheduler passes `@skills_reference`).
+    #    For those, `default_content_for_slug/1` shows the placeholder and
+    #    `render_template/2` shows the interpolated text.
+    #
+    # heartbeat_scheduler_test.exs covers the end-to-end content on the
+    # hardcoded fallback path.
+    @placeholder_slugs ~w(
+      dispatch.planning
+      dispatch.in_progress
+      dispatch.in_review
+      dispatch.review_e2e
+    )
+    @all_dispatch_slugs ["dispatch.fallback" | @placeholder_slugs]
+
+    # Mirrors the prompt_templates.ex `skills_reference` local, used as the
+    # render-time assign so the test exercises the real interpolation path
+    # for the placeholder slugs.
+    @skills_reference_text "## Skill discovery — do this BEFORE you start executing\n\n" <>
+                             "Derive this task's domain. Call the `skill_list` MCP tool yourself. " <>
+                             "Call the `skill_get` MCP tool. " <>
+                             "Discovery happens by calling `skill_list` / `skill_get` yourself."
+
+    test "dispatch.fallback bakes the skill-discovery step directly into its content" do
+      # dispatch.fallback interpolates the prompt_templates.ex `skills_reference`
+      # local with `#{...}`, so the discovery text is present verbatim — this
+      # directly asserts the Stage-1 edit to that local landed.
+      content = PromptTemplates.default_content_for_slug("dispatch.fallback")
+      assert is_binary(content)
+
+      assert content =~ "skill_list",
+             "expected dispatch.fallback to name the skill_list tool"
+
+      assert content =~ "skill_get",
+             "expected dispatch.fallback to name the skill_get tool"
+
+      assert content =~ "Derive this task's domain",
+             "expected dispatch.fallback to carry the discovery-instruction fragment"
+
+      assert content =~ "Skill discovery",
+             "expected dispatch.fallback to carry the skill-discovery section header"
+
+      # Regression guard — discovery must be active tool calls, not a skills-key read.
+      refute content =~ "check the `skills` key"
+      refute content =~ "check the skills key"
+      refute content =~ "read the attached skills object"
+
+      assert content =~ "calling `skill_list` / `skill_get` yourself",
+             "dispatch.fallback discovery must direct the agent to call the tools itself"
+    end
+
+    test "every placeholder dispatch slug wires the {{skills_reference}} placeholder" do
+      for slug <- @placeholder_slugs do
+        content = PromptTemplates.default_content_for_slug(slug)
+        assert is_binary(content), "expected #{slug} to be a registered template"
+
+        assert content =~ "{{skills_reference}}",
+               "expected #{slug} to interpolate the skills_reference placeholder"
+      end
+    end
+
+    test "every dispatch slug declares skills_reference as a template variable" do
+      for slug <- @all_dispatch_slugs do
+        descriptor = Enum.find(PromptTemplates.default_templates(), &(&1.slug == slug))
+        assert descriptor, "expected #{slug} to be a registered default template"
+
+        assert "skills_reference" in descriptor.variables,
+               "expected #{slug} to declare skills_reference as a variable"
+      end
+    end
+
+    test "render_template interpolates the skill-discovery step into placeholder slugs" do
+      :ok = PromptTemplates.seed_defaults()
+
+      assigns = %{
+        task_title: "Wire up the task-stack detail panel",
+        task_description: "Add a panel showing stack members",
+        task_priority: "medium",
+        task_id: "abcd1234",
+        task_slug: "abcd1234",
+        execution_space_id: "11111111-1111-1111-1111-111111111111",
+        repo_url: "git@github.com:acme/widgets.git",
+        plan_version: 1,
+        stage_name: "coding",
+        stage_position: 1,
+        validations_summary: "test_pass, lint_pass",
+        skills_reference: @skills_reference_text
+      }
+
+      for slug <- @placeholder_slugs do
+        assert {:ok, rendered} = PromptTemplates.render_template(slug, assigns)
+
+        assert rendered =~ "skill_list",
+               "expected rendered #{slug} to carry skill_list after {{skills_reference}} interpolation"
+
+        assert rendered =~ "skill_get",
+               "expected rendered #{slug} to carry skill_get after {{skills_reference}} interpolation"
+
+        assert rendered =~ "Derive this task's domain",
+               "expected rendered #{slug} to carry the discovery-instruction fragment"
+
+        # The placeholder must be fully consumed — no literal {{skills_reference}}
+        # left in the rendered output.
+        refute rendered =~ "{{skills_reference}}",
+               "expected #{slug} to fully interpolate the skills_reference placeholder"
+      end
+    end
+
+    test "render_template skill-discovery is phrased as active tool calls, NOT a skills-key read" do
+      # Regression guard: a future edit must not revert the discovery step to
+      # the passive 'check the skills key' / 'read the attached skills object'
+      # phrasing — the agent receives rendered text, not an introspectable
+      # object, so 'the skills key' is not an actionable discovery mechanism.
+      :ok = PromptTemplates.seed_defaults()
+
+      assigns = %{
+        task_title: "Regression guard",
+        task_description: "Guard the phrasing",
+        task_priority: "medium",
+        task_id: "abcd1234",
+        task_slug: "abcd1234",
+        execution_space_id: "11111111-1111-1111-1111-111111111111",
+        repo_url: "git@github.com:acme/widgets.git",
+        skills_reference: @skills_reference_text
+      }
+
+      for slug <- @placeholder_slugs do
+        assert {:ok, rendered} = PromptTemplates.render_template(slug, assigns)
+
+        refute rendered =~ "check the `skills` key",
+               "#{slug}: discovery must not say 'check the skills key'"
+
+        refute rendered =~ "check the skills key",
+               "#{slug}: discovery must not say 'check the skills key'"
+
+        refute rendered =~ "read the attached skills object",
+               "#{slug}: discovery must not say 'read the attached skills object'"
+
+        assert rendered =~ "calling `skill_list` / `skill_get` yourself",
+               "#{slug}: discovery must direct the agent to call the tools itself"
+      end
+    end
+  end
 end

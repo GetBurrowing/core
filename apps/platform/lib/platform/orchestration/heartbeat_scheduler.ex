@@ -39,8 +39,22 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
   @default_cadence {10 * 60_000, 25 * 60_000, 2}
 
   @skills_reference """
-  The dispatch context includes attached skills under the `skills` key. \
-  Treat bundled skill content in that payload as authoritative for this task before trying to rediscover skills from disk. \
+  ## Skill discovery — do this BEFORE you start executing
+
+  Skills encode org conventions you may not have; load the right one before improvising. \
+  Discovery is an active step, not a passive read — the payload bundler does NOT always pre-attach the skill you need:
+
+  1. Derive this task's domain from its title and description (e.g. "task stack", "canvas", "migration", "LiveView").
+  2. Call the `skill_list` MCP tool yourself and scan the returned skills for one plausibly matching that domain \
+  (a task mentioning "task stack" -> the `task-stack-creation` skill; "canvas" -> a `canvas-*` skill). \
+  Do NOT assume the right skill was pre-attached to the payload.
+  3. If a skill matches, call the `skill_get` MCP tool to fetch its full content and follow it as authoritative.
+
+  Discovery happens by calling `skill_list` / `skill_get` yourself — do NOT treat "the `skills` key" or an attached \
+  skills object as your discovery mechanism, because you receive rendered text, not an introspectable object.
+
+  If the dispatch context did attach skill content inline, still treat that bundled content as authoritative for this task \
+  before trying to rediscover skills from disk. \
   Read and follow any relevant bundled skills — they describe conventions, repo layout, deploy targets, and how to delegate work. \
   Only fall back to filesystem skill lookup if the payload clearly references a path without including the needed content.\
   """
