@@ -1,23 +1,23 @@
 <%!-- PWA app-shell scroll lock: the shell occupies exactly the full
-     viewport. `h-[100dvh]` MUST match the `html, body { height: 100dvh }`
-     lock in app.css — if the shell is shorter than the body (the
-     `h-[100svh]` regression from PR #339), the body background shows
-     through the difference as a dead band below the bottom-tab nav, and
-     the nav — `position: sticky; bottom: 0` — anchors to the short
-     shell's edge instead of the screen edge. `overflow-hidden` prevents
+     viewport. `h-[100vh]` MUST match the `html, body { height: 100vh }`
+     lock in app.css. NOT `100dvh`/`100svh` — in an installed iOS PWA
+     those resolve to the inset-short viewport (e.g. 793px on iPhone 16)
+     while `100vh` resolves to the full screen (852px); the shorter
+     value leaves a ~59px strip uncovered at the bottom (see the app.css
+     comment for the on-device measurements). `overflow-hidden` prevents
      the document itself from scrolling; combined with the html/body lock
      in app.css, only the inner content scroller (per-LiveView,
      `overflow-y-auto`) can scroll, so the chrome stays put on mobile.
 
-     The home-indicator gesture zone is handled by `padding-bottom:
+     Insets: `safe-area-top` padding below clears the top Dynamic Island;
+     the home-indicator zone is handled by `padding-bottom:
      env(safe-area-inset-bottom)` on `.bottom-nav` itself (app.css) — the
      nav background flows into the gesture zone while the icons stay at
-     `flex-end` above it. Status-bar inset is handled by `safe-area-top`
-     below. Fixed-position panels (e.g. tasks/skills detail) bound their
-     bottom edge to `var(--bottom-nav-height)` so they don't sit behind
-     the nav. --%>
+     `flex-end` above it. Fixed-position panels (e.g. tasks/skills detail)
+     bound their bottom edge to `var(--bottom-nav-height)` so they don't
+     sit behind the nav. --%>
 <div
-  class="flex h-[100dvh] overflow-hidden bg-base-100 safe-area-top pb-[var(--meeting-bar-height,0px)]"
+  class="flex h-[100vh] overflow-hidden bg-base-100 safe-area-top pb-[var(--meeting-bar-height,0px)]"
   style={"--meeting-bar-height: " <> (if @meeting_active, do: "3rem", else: "0px")}
 >
   <%!-- Sidebar collapse persistence hook (localStorage) --%>

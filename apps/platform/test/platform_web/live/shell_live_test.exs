@@ -20,26 +20,26 @@ defmodule PlatformWeb.ShellLiveTest do
   end
 
   # PWA app-shell scroll lock regression. The root shell container must
-  # constrain itself to the dynamic viewport (`h-[100dvh]`) and refuse to
-  # scroll (`overflow-hidden`) so the bottom-tab nav stays functionally
-  # rooted on mobile — without these classes, the body itself scrolls and
-  # drags the chrome out of view (Rowan's mobile review-request hotfix,
-  # supersedes the inner `pb-` clearance from PR #331). Asserting the
-  # literal class string keeps the fix from being quietly removed during
-  # refactors.
+  # constrain itself to the viewport (`h-[100vh]`) and refuse to scroll
+  # (`overflow-hidden`) so the bottom-tab nav stays functionally rooted on
+  # mobile — without these classes, the body itself scrolls and drags the
+  # chrome out of view (Rowan's mobile review-request hotfix, supersedes
+  # the inner `pb-` clearance from PR #331). Asserting the literal class
+  # string keeps the fix from being quietly removed during refactors.
   test "shell root container locks to viewport height (PWA scroll lock)", %{conn: conn} do
     conn = authenticated_conn(conn)
     {:ok, _view, html} = live(conn, ~p"/tasks")
 
-    # h-[100dvh] MUST match the `html, body { height: 100dvh }` lock in
-    # app.css. PR #339 switched this to h-[100svh] on the theory that svh
-    # "excludes the gesture zone" — but that made the shell SHORTER than
-    # the body, so the body background showed through as a dead band below
-    # the bottom-tab nav, and the sticky nav anchored to the short shell's
-    # edge instead of the screen edge. The home-indicator zone is handled
-    # by `padding-bottom: env(safe-area-inset-bottom)` on `.bottom-nav`
-    # itself, NOT by shrinking the shell.
-    assert html =~ "h-[100dvh]"
+    # h-[100vh] MUST match the `html, body { height: 100vh }` lock in
+    # app.css — and it must be 100vh, NOT 100dvh/100svh. In an installed
+    # iOS PWA, 100dvh/100svh resolve to the inset-short viewport (793px on
+    # iPhone 16) while 100vh resolves to the full screen (852px); the
+    # shorter value leaves a ~59px uncovered strip at the bottom. PRs
+    # #339/#350/#351 chased this through svh and env-padding before the
+    # on-device Web Inspector measurement (2026-05-14) confirmed the fix
+    # is simply 100vh. Top inset → `safe-area-top`; bottom inset →
+    # `padding-bottom: env(safe-area-inset-bottom)` on `.bottom-nav`.
+    assert html =~ "h-[100vh]"
     assert html =~ "overflow-hidden"
     # The main surface must contain its own iOS rubber-band so an inner
     # panel's overscroll cannot displace the chrome.
