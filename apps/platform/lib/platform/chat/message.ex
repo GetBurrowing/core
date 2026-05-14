@@ -55,6 +55,15 @@ defmodule Platform.Chat.Message do
     # Shape: [%{emoji: "👍", count: 2, reacted_by_me: true}, ...].
     field(:reactions, {:array, :map}, virtual: true, default: [])
 
+    # Day-bucket label (YYYY-MM-DD) attached at stream-insert time when
+    # this message is the first of its calendar day in the visible list
+    # (task 019e21c7 Stage 5). Render the date separator inline above the
+    # message row when this is non-nil. Computed server-side because
+    # `#message-list` carries `phx-update="stream"` — JS-injected
+    # separator siblings get stripped by morphdom on every reconcile,
+    # so the separator must live INSIDE the stream item to survive.
+    field(:day_label, :string, virtual: true, default: nil)
+
     field(:inserted_at, :utc_datetime_usec, autogenerate: {DateTime, :utc_now, []})
   end
 

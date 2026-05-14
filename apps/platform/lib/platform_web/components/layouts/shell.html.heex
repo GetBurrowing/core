@@ -401,7 +401,10 @@
          100dvh-bounded. min-h-0 lets <main> actually receive the
          bounded `flex-1` height so its internal scrollers
          (#message-list etc.) can scroll on their own. --%>
-    <main class="flex-1 min-h-0 overflow-hidden overscroll-contain">
+    <main
+      data-scroll-container
+      class="flex-1 min-h-0 overflow-hidden overscroll-contain"
+    >
       {@inner_content}
     </main>
 

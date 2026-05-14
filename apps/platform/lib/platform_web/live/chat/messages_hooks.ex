@@ -116,6 +116,8 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
     |> assign(:inline_thread_messages, %{})
     |> assign(:streaming_replies, %{})
     |> assign(:drafts, %{})
+    |> assign(:msg_day_labels, %{})
+    |> assign(:last_msg_day, nil)
     |> assign_compose("")
     |> assign_thread_compose("")
     |> stream(:messages, [])
@@ -143,6 +145,8 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
       |> Enum.map(&enrich_versions_count/1)
       |> enrich_messages_with_reactions(socket)
 
+    {labelled, day_labels, last_day} = label_messages_for_initial_load(enriched)
+
     attachments_map = build_attachments_map(messages)
     thread_previews = Chat.thread_previews_for_messages(Enum.map(messages, & &1.id))
 
@@ -157,7 +161,9 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
     |> assign(:expanded_threads, MapSet.new())
     |> assign(:inline_thread_messages, %{})
     |> assign(:streaming_replies, %{})
-    |> stream(:messages, enriched, reset: true)
+    |> assign(:msg_day_labels, day_labels)
+    |> assign(:last_msg_day, last_day)
+    |> stream(:messages, labelled, reset: true)
     |> restore_draft(space.id)
   end
 
@@ -177,7 +183,7 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
       |> enrich_with_reactions(socket)
 
     socket
-    |> stream_insert(:messages, enriched)
+    |> stream_insert_with_day_label(enriched)
     |> put_attachment_map_entry(message.id, attachments)
   end
 
@@ -243,7 +249,7 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
           # the localStorage draft for this space.
           {:halt,
            socket
-           |> stream_insert(:messages, enriched)
+           |> stream_insert_with_day_label(enriched)
            |> put_attachment_map_entry(msg.id, attachments)
            |> assign_compose("")
            |> update(:drafts, &Map.delete(&1, space.id))
@@ -487,7 +493,7 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
 
         {:halt,
          socket
-         |> stream_insert(:messages, enriched)
+         |> stream_insert_with_day_label(enriched)
          |> put_attachment_map_entry(msg.id, attachments)
          |> SearchHooks.maybe_refresh()}
       else
@@ -514,7 +520,7 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
 
       {:halt,
        socket
-       |> stream_insert(:messages, enriched)
+       |> stream_reinsert_with_day_label(enriched)
        |> put_attachment_map_entry(msg.id, attachments)
        |> SearchHooks.maybe_refresh()}
     else
@@ -533,7 +539,7 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
   defp handle_info({:message_edited, %{message: msg}}, socket) do
     if same_active_space?(socket, msg) do
       enriched = msg |> enrich_versions_count() |> enrich_with_reactions(socket)
-      {:halt, stream_insert(socket, :messages, enriched)}
+      {:halt, stream_reinsert_with_day_label(socket, enriched)}
     else
       {:halt, socket}
     end
@@ -594,6 +600,7 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
       {:halt,
        socket
        |> stream_delete(:messages, msg)
+       |> drop_day_label(msg.id)
        |> delete_attachment_map_entry(msg.id)
        |> delete_thread_attachment_map_entry(msg.id)
        |> SearchHooks.maybe_refresh()}
@@ -752,7 +759,7 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
 
       msg ->
         enriched = enrich_with_reactions(msg, socket)
-        stream_insert(socket, :messages, enriched)
+        stream_reinsert_with_day_label(socket, enriched)
     end
   end
 
@@ -845,6 +852,111 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
 
     %{msg | reactions: groups}
   end
+
+  # ── Day-bucket separator labels (task 019e21c7 Stage 5) ───────────────
+  #
+  # The chat message list lives inside `phx-update="stream"`, so anything
+  # the JS hook injects as a SIBLING of a stream item gets ripped out by
+  # morphdom's reconciliation on the next stream patch. The previous
+  # `applyDateSeparators` JS hook rebuilt the separators in `updated()`
+  # — visually stable, but every existing separator DOM node was being
+  # destroyed and recreated on every `stream_insert`, exactly the thrash
+  # commits a481f87 + b7a926b were supposed to prevent.
+  #
+  # The fix is structural: the separator must live INSIDE the
+  # stream-managed message row. We attach a virtual `:day_label` (the
+  # message's calendar date as YYYY-MM-DD) to each message that is the
+  # *first* of its day in the visible stream; the row template renders
+  # the divider above the message body when this is non-nil. Because the
+  # separator is now a child of the LV-tracked stream item, morphdom
+  # reconciles it via the stable phx-id and never destroys it.
+  #
+  # We track two pieces of socket state:
+  #   * `:msg_day_labels` — `%{msg_id => YYYY-MM-DD | nil}`. Stable
+  #     identity for re-inserts (reaction toggles, edits, canvas patches
+  #     re-rendering the row) so the same message keeps the same label
+  #     across the lifetime of the LV.
+  #   * `:last_msg_day` — the calendar date of the most-recently *new*
+  #     message appended to the stream. Compared against an incoming
+  #     `stream_insert` to decide whether the new row crosses a day
+  #     boundary.
+  #
+  # `stream_insert_with_day_label/2` is for *new* messages (post,
+  # broadcast); `stream_reinsert_with_day_label/2` is for in-place
+  # updates (edits, reactions, canvas re-renders) — those preserve the
+  # existing label so the separator stays put.
+
+  # Walk the initial-load message list left-to-right, marking the first
+  # message of each calendar day with a `:day_label`. Returns
+  # `{labelled_messages, %{msg_id => label_or_nil}, last_day_seen}`.
+  defp label_messages_for_initial_load(messages) do
+    {rev_labelled, day_labels, last_day} =
+      Enum.reduce(messages, {[], %{}, nil}, fn msg, {acc, labels, prev_day} ->
+        date = message_day(msg)
+
+        label =
+          cond do
+            is_nil(date) -> nil
+            date == prev_day -> nil
+            true -> date
+          end
+
+        {[%{msg | day_label: label} | acc], Map.put(labels, msg.id, label), date || prev_day}
+      end)
+
+    {Enum.reverse(rev_labelled), day_labels, last_day}
+  end
+
+  # `stream_insert` for a *new* message: compute the day_label by
+  # comparing against `:last_msg_day`, update both `:msg_day_labels` and
+  # `:last_msg_day`, then insert with the label baked into the message.
+  defp stream_insert_with_day_label(socket, msg) do
+    date = message_day(msg)
+    prev_day = socket.assigns[:last_msg_day]
+
+    label =
+      cond do
+        is_nil(date) -> nil
+        date == prev_day -> nil
+        true -> date
+      end
+
+    new_labels = Map.put(socket.assigns[:msg_day_labels] || %{}, msg.id, label)
+    next_last_day = date || prev_day
+
+    socket
+    |> assign(:msg_day_labels, new_labels)
+    |> assign(:last_msg_day, next_last_day)
+    |> stream_insert(:messages, %{msg | day_label: label})
+  end
+
+  # `stream_insert` for an *existing* message (edit, reaction, canvas
+  # patch). Reuses the previously-computed label so the separator
+  # doesn't shift; if the message somehow has no entry yet (e.g. a
+  # canvas re-render firing before the message ever rode the new-message
+  # path), fall back to the new-message logic so we still get a stable
+  # label.
+  defp stream_reinsert_with_day_label(socket, msg) do
+    labels = socket.assigns[:msg_day_labels] || %{}
+
+    case Map.fetch(labels, msg.id) do
+      {:ok, label} ->
+        stream_insert(socket, :messages, %{msg | day_label: label})
+
+      :error ->
+        stream_insert_with_day_label(socket, msg)
+    end
+  end
+
+  defp drop_day_label(socket, msg_id) do
+    update(socket, :msg_day_labels, &Map.delete(&1 || %{}, msg_id))
+  end
+
+  defp message_day(%{inserted_at: %DateTime{} = dt}) do
+    dt |> DateTime.to_date() |> Date.to_iso8601()
+  end
+
+  defp message_day(_), do: nil
 
   # Build one `%{emoji, count, reacted_by_me, reactors, extra_count}` group
   # from an emoji and its raw `%Reaction{}` rows. Hydrates up to
