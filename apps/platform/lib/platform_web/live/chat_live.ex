@@ -66,8 +66,13 @@ defmodule PlatformWeb.ChatLive do
       |> assign(:mobile_browser_open, false)
       |> assign(:show_new_channel_modal, false)
       |> assign(:show_new_conversation_modal, false)
-      # Per-message actions sheet (3-dot menu): nil when closed, msg.id when open
+      # Per-message actions sheet (3-dot menu): nil when closed, msg.id when open.
+      # The matching message struct is lifted into :open_message_actions_msg so
+      # the sheet template can gate items (e.g. "Edit message") on per-message
+      # attributes like author and content_type without needing access to the
+      # stream row at template time.
       |> assign(:open_message_actions_id, nil)
+      |> assign(:open_message_actions_msg, nil)
       # Inline edit state (task 019e0f29 Stage 5). `editing_message_id` is
       # the id of the message whose bubble is currently swapped for the
       # editor; nil means no edit in progress. `pending_save_edit` carries
@@ -222,11 +227,22 @@ defmodule PlatformWeb.ChatLive do
   # Stage 3). Replaces the inert DaisyUI dropdown placeholder added in
   # Stage 2 with a real bottom sheet on mobile / centered card on desktop.
   def handle_event("open_message_actions", %{"id" => msg_id}, socket) do
-    {:noreply, assign(socket, :open_message_actions_id, msg_id)}
+    # Lift the message struct alongside the id so the sheet template can
+    # gate items (e.g. "Edit message") on per-message attributes (author,
+    # content_type) — see chat_live.html.heex around the Edit affordance.
+    msg = Platform.Chat.get_message(msg_id)
+
+    {:noreply,
+     socket
+     |> assign(:open_message_actions_id, msg_id)
+     |> assign(:open_message_actions_msg, msg)}
   end
 
   def handle_event("close_message_actions", _params, socket) do
-    {:noreply, assign(socket, :open_message_actions_id, nil)}
+    {:noreply,
+     socket
+     |> assign(:open_message_actions_id, nil)
+     |> assign(:open_message_actions_msg, nil)}
   end
 
   # ── Version history popover (task 019e0f29 Stage 6, contract Section D.2)

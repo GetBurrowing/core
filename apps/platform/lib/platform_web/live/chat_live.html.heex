@@ -1214,17 +1214,19 @@
       <span class="hero-face-smile size-5 text-base-content/70"></span>
       <span class="font-medium">Add reaction</span>
     </button>
-    <%!-- Edit affordance — Stage 4 of task 019e0f29. Visibility filter
-         (own non-agent text messages only, per Policy 3 of the editable-
-         messages contract) requires resolving the message struct from
-         @open_message_actions_id, which the LV streams don't allow at the
-         template level. Stage 5 wires both the editor + the visibility
-         filter together once the editor lifts the message into a dedicated
-         socket assign. For now the item always renders; clicks fire the
-         placeholder `edit_message_clicked` event that Stage 5 connects to
-         the editor. The server-side 403 in the editable-messages contract
-         (Policy 3) is the ultimate authz gate regardless. --%>
+    <%!-- Edit affordance — Policy 3 of the editable-messages contract
+         (own non-agent text messages only). The message struct is lifted
+         into @open_message_actions_msg by the open_message_actions
+         handler so the visibility filter can be evaluated at template
+         render time. The hover-pencil affordance on the chat row was
+         removed in task 019e2452; this sheet item is now the SOLE edit
+         entry point on all viewports. --%>
     <button
+      :if={
+        @open_message_actions_msg && @current_participant &&
+          @open_message_actions_msg.participant_id == @current_participant.id &&
+          @open_message_actions_msg.content_type == "text"
+      }
       type="button"
       phx-click={
         Phoenix.LiveView.JS.push("edit_message_clicked",

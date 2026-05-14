@@ -177,38 +177,6 @@ defmodule PlatformWeb.Components.ChatMessage do
                 <span class="hero-clipboard-document-list size-4"></span>
               </button>
 
-              <%!-- Edit affordance (task 019e0f29 Stage 4 — placed AFTER Copy
-                 per the plan). Visible only on the current user's own
-                 non-agent text messages (Policy 3 of the editable-messages
-                 contract — agents cannot self-edit; humans cannot edit
-                 agent messages). When `frozen_at` is set (Policy 2 — an
-                 agent has begun work), render with disabled styling and
-                 a tooltip; the phx-click is suppressed via :if-nil so the
-                 click does nothing. Placeholder event name — Stage 5
-                 connects it to the inline editor. --%>
-              <button
-                :if={
-                  @current_participant && @msg.participant_id == @current_participant.id &&
-                    @current_participant.participant_type == "user" &&
-                    @msg.content_type == "text"
-                }
-                type="button"
-                phx-click={if is_nil(@msg.frozen_at), do: "edit_message_clicked"}
-                phx-value-message-id={@msg.id}
-                aria-label="Edit message"
-                aria-disabled={if @msg.frozen_at, do: "true"}
-                title={edit_affordance_title(@msg, @participants_map)}
-                class={[
-                  "rounded px-1.5 py-0.5 text-xs text-base-content/50 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60 focus-visible:ring-offset-1 focus-visible:ring-offset-base-100",
-                  if(@msg.frozen_at,
-                    do: "opacity-50 cursor-not-allowed",
-                    else: "hover:text-base-content hover:bg-base-300"
-                  )
-                ]}
-              >
-                <span class="hero-pencil-square size-4"></span>
-              </button>
-
               <button
                 phx-click="toggle_inline_thread"
                 phx-value-message-id={@msg.id}
@@ -661,26 +629,4 @@ defmodule PlatformWeb.Components.ChatMessage do
   end
 
   defp format_day_label(_), do: ""
-
-  # Tooltip text for the Edit affordance on a message row. When the
-  # message is frozen, surfaces the freezing-participant's display name
-  # (per the editable-messages contract Section B.5 freezing_action
-  # payload) so the user can see *who* is acting on the message.
-  defp edit_affordance_title(%{frozen_at: nil}, _participants_map), do: "Edit message"
-
-  defp edit_affordance_title(%{frozen_by_participant_id: nil}, _participants_map) do
-    "An agent has begun work on this message — send a follow-up to revise."
-  end
-
-  defp edit_affordance_title(msg, participants_map) do
-    base = "An agent has begun work on this message — send a follow-up to revise."
-
-    case Map.get(participants_map, msg.frozen_by_participant_id) do
-      %{display_name: name} when is_binary(name) and name != "" ->
-        base <> " (started by #{name})"
-
-      _ ->
-        base
-    end
-  end
 end
