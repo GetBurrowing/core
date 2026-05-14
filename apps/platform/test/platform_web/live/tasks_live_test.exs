@@ -896,6 +896,78 @@ defmodule PlatformWeb.TasksLiveTest do
     end
   end
 
+  describe "forming-rollup stacks render in the Backlog column" do
+    # Regression: a stack whose members are all `backlog` derives a
+    # `forming` rollup status (Stacks.rollup_status_for/1). Before the
+    # fix, `@column_statuses` had no bucket for `forming`, so the card
+    # rendered in NO column — invisible until `stack_start` cascaded a
+    # member to in_progress (which then bumped the rollup to in_progress
+    # and made the card pop into the In Progress column out of nowhere).
+    # Bucketing `forming` under Backlog keeps stacks visible from
+    # creation, where pending plan-approvals are expected to live.
+
+    setup %{conn: conn} do
+      conn = authenticated_conn(conn)
+      project = create_project()
+      stack = stack_fixture(project_id: project.id, name: "Forming Stack Fixture")
+      {:ok, members} = seed_forming_members(stack, count: 2)
+      {:ok, stack} = Stacks.recompute_stack_status(stack)
+      {:ok, conn: conn, project: project, stack: stack, members: members}
+    end
+
+    defp seed_forming_members(%Stack{} = stack, opts) do
+      count = Keyword.get(opts, :count, 2)
+
+      members =
+        for pos <- 1..count do
+          {:ok, t} =
+            Tasks.create_task(%{
+              project_id: stack.project_id,
+              stack_id: stack.id,
+              stack_position: pos,
+              title: "Forming Member #{pos}",
+              status: "backlog",
+              priority: "medium"
+            })
+
+          t
+        end
+
+      {:ok, members}
+    end
+
+    test "stack with all-backlog members has rollup status :forming", %{stack: stack} do
+      assert stack.status == "forming"
+    end
+
+    test "forming stack appears in :board_items[\"backlog\"]",
+         %{conn: conn, stack: stack} do
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      assigns = :sys.get_state(view.pid).socket.assigns
+
+      backlog_ids =
+        assigns.board_items
+        |> Map.fetch!("backlog")
+        |> Enum.map(& &1.id)
+
+      assert stack.id in backlog_ids,
+             "forming-rollup stack must render in the Backlog column"
+    end
+
+    test "forming stack does NOT leak into other columns",
+         %{conn: conn, stack: stack} do
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      assigns = :sys.get_state(view.pid).socket.assigns
+
+      for col <- ~w(in_progress in_review deploying done) do
+        ids = assigns.board_items |> Map.fetch!(col) |> Enum.map(& &1.id)
+
+        refute stack.id in ids,
+               "forming-rollup stack must not appear in #{col} column"
+      end
+    end
+  end
+
   describe "stack card rendering on the kanban board (T7 stage 2)" do
     # ADR 0041 §"UI surface — Board view" + mock canvas 019e1a16 rev 2:
     # the collapsed stack card lives in its rollup-status column alongside

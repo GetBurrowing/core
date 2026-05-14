@@ -35,9 +35,17 @@ defmodule PlatformWeb.TasksLive do
     {"done", "Done"}
   ]
 
-  # Statuses that map into each kanban column
+  # Statuses that map into each kanban column.
+  #
+  # `forming` is a *stack* rollup status (Stacks.rollup_status_for/1):
+  # it's what a freshly-created stack is in until any member advances
+  # past `backlog`. Bucketing it under the Backlog column keeps stacks
+  # visible from the moment they're created — without this entry, a
+  # forming stack rendered in NO column and was effectively invisible
+  # until `stack_start` cascaded a member to in_progress. No task ever
+  # has status `forming`, so this only affects stacks.
   @column_statuses %{
-    "backlog" => ~w(backlog planning blocked),
+    "backlog" => ~w(backlog planning blocked forming),
     "in_progress" => ~w(in_progress),
     "in_review" => ~w(in_review),
     "deploying" => ~w(deploying),
