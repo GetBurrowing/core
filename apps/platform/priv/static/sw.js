@@ -17,7 +17,7 @@
 // cache that isn't the current CACHE_NAME, so the version bump below
 // wipes anything leaked under suite-v1 as a one-shot.
 
-const CACHE_NAME = "suite-v3";
+const CACHE_NAME = "suite-v4";
 
 // Static-asset path matchers. A request must match BOTH a known static
 // prefix AND a static-asset extension to be eligible for caching. This

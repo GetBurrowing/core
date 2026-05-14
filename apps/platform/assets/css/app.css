@@ -1964,23 +1964,21 @@ body, .font-fabrikam, * {
   bottom: 0;
   z-index: 30;
   display: flex;
-  /* align-items: flex-end pushes the row of .bottom-nav-tab items to the
-     bottom of the content area (above the parent's padding-bottom). In
-     iOS PWA standalone (env=34px), the safe-area padding becomes the
-     home-indicator overlay zone, while icons hug the bottom of the icon
-     row directly above it — no visible dead space. In iOS Safari browser
-     (env=0), the alignment is a no-op and icons fill the 56px nav. */
   align-items: flex-end;
   background: oklch(8% 0 0 / 0.96);
   border-top: 1px solid rgba(255, 255, 255, 0.08);
   backdrop-filter: blur(12px);
-  /* Don't add env(safe-area-inset-bottom) here: the shell now uses
-     h-[100svh] (small viewport height), which excludes the iOS gesture
-     zone from the rendered viewport. The bottom-nav sits at the bottom
-     of that 100svh shell, just above the gesture area — so the home
-     indicator never overlaps interactive content, and adding env-
-     padding here would double-account and re-introduce dead space
-     (the bug Rowan tracked through PRs #335/#336/#337). */
+  /* Both the shell's h-[100svh] AND env(safe-area-inset-bottom) padding
+     here are required for a flush iOS PWA bottom-nav. With
+     viewport-fit=cover (set on the meta tag in root.html.heex), the
+     layout viewport extends across the home-indicator gesture zone — so
+     the .bottom-nav at sticky bottom: 0 sits right at the screen edge,
+     but its background does NOT reach into the gesture zone unless the
+     element itself is taller. This padding extends the bg downward into
+     the gesture zone, eliminating the dark band under the icons that
+     PR #339 left behind. The icons remain at flex-end of the un-padded
+     content area, ABOVE the home indicator. */
+  padding-bottom: env(safe-area-inset-bottom, 0px);
 }
 
 /* Desktop: hide the bottom-nav entirely (the desktop left rail in
