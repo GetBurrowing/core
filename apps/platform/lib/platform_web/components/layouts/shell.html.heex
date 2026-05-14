@@ -1,25 +1,23 @@
-<%!-- PWA app-shell scroll lock: the shell occupies exactly the SMALL
-     visual viewport (100svh — excludes the iOS safe-area-inset-bottom
-     gesture zone so the home indicator never overlaps interactive
-     content, and excludes the safe-area-inset-top status bar handled by
-     `safe-area-top` below). `overflow-hidden` prevents the document
-     itself from scrolling. Combined with the html/body lock in app.css,
-     the bottom-tab nav (rendered later in the inner flex column) is
-     functionally rooted: only the inner content scroller (per-LiveView,
+<%!-- PWA app-shell scroll lock: the shell occupies exactly the full
+     viewport. `h-[100dvh]` MUST match the `html, body { height: 100dvh }`
+     lock in app.css — if the shell is shorter than the body (the
+     `h-[100svh]` regression from PR #339), the body background shows
+     through the difference as a dead band below the bottom-tab nav, and
+     the nav — `position: sticky; bottom: 0` — anchors to the short
+     shell's edge instead of the screen edge. `overflow-hidden` prevents
+     the document itself from scrolling; combined with the html/body lock
+     in app.css, only the inner content scroller (per-LiveView,
      `overflow-y-auto`) can scroll, so the chrome stays put on mobile.
-     Fixed-position panels (e.g. tasks/skills detail) bound their own
-     bottom edge to `var(--bottom-nav-height)` so they don't sit behind
-     the nav.
 
-     `100svh` vs `100dvh`: with `100dvh` (the original) the shell
-     stretches across the safe-area-inset-bottom zone too, leaving the
-     bottom-nav appearing to have ~34px of dead band below its icons
-     (Rowan's PRs #335/#336/#337 chased the symptom without unblocking
-     the root cause). `100svh` excludes that zone — the bottom-nav now
-     sits flush above the gesture area, no padding-bottom needed on the
-     nav. --%>
+     The home-indicator gesture zone is handled by `padding-bottom:
+     env(safe-area-inset-bottom)` on `.bottom-nav` itself (app.css) — the
+     nav background flows into the gesture zone while the icons stay at
+     `flex-end` above it. Status-bar inset is handled by `safe-area-top`
+     below. Fixed-position panels (e.g. tasks/skills detail) bound their
+     bottom edge to `var(--bottom-nav-height)` so they don't sit behind
+     the nav. --%>
 <div
-  class="flex h-[100svh] overflow-hidden bg-base-100 safe-area-top pb-[var(--meeting-bar-height,0px)]"
+  class="flex h-[100dvh] overflow-hidden bg-base-100 safe-area-top pb-[var(--meeting-bar-height,0px)]"
   style={"--meeting-bar-height: " <> (if @meeting_active, do: "3rem", else: "0px")}
 >
   <%!-- Sidebar collapse persistence hook (localStorage) --%>

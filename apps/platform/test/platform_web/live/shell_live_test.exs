@@ -31,13 +31,15 @@ defmodule PlatformWeb.ShellLiveTest do
     conn = authenticated_conn(conn)
     {:ok, _view, html} = live(conn, ~p"/tasks")
 
-    # h-[100svh] (small-viewport-height) excludes the iOS safe-area-inset-
-    # bottom gesture zone so the bottom-tab nav sits flush above the home
-    # indicator without a visible dead band. Earlier revisions used
-    # h-[100dvh] which stretched the shell across the gesture zone and
-    # required env-padding workarounds (PRs #335/#336/#337) — superseded
-    # by #339's switch to 100svh.
-    assert html =~ "h-[100svh]"
+    # h-[100dvh] MUST match the `html, body { height: 100dvh }` lock in
+    # app.css. PR #339 switched this to h-[100svh] on the theory that svh
+    # "excludes the gesture zone" — but that made the shell SHORTER than
+    # the body, so the body background showed through as a dead band below
+    # the bottom-tab nav, and the sticky nav anchored to the short shell's
+    # edge instead of the screen edge. The home-indicator zone is handled
+    # by `padding-bottom: env(safe-area-inset-bottom)` on `.bottom-nav`
+    # itself, NOT by shrinking the shell.
+    assert html =~ "h-[100dvh]"
     assert html =~ "overflow-hidden"
     # The main surface must contain its own iOS rubber-band so an inner
     # panel's overscroll cannot displace the chrome.
