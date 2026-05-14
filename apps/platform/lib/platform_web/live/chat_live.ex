@@ -264,14 +264,31 @@ defmodule PlatformWeb.ChatLive do
 
   def handle_event("edit_message_clicked", params, socket) do
     msg_id = params["message-id"] || params["message_id"]
-    {:noreply, assign(socket, :editing_message_id, msg_id)}
+
+    with %Platform.Chat.Message{} = msg <-
+           Platform.Repo.get(Platform.Chat.Message, msg_id),
+         :ok <- authorize_edit(msg, socket.assigns.current_participant) do
+      {:noreply,
+       socket
+       |> assign(:editing_message_id, msg_id)
+       |> MessagesHooks.reinsert_stream_message(msg_id)}
+    else
+      _ -> {:noreply, socket}
+    end
   end
 
   def handle_event("cancel_edit", _params, socket) do
-    {:noreply,
-     socket
-     |> assign(:editing_message_id, nil)
-     |> assign(:pending_save_edit, nil)}
+    msg_id = socket.assigns.editing_message_id
+
+    socket =
+      socket
+      |> assign(:editing_message_id, nil)
+      |> assign(:pending_save_edit, nil)
+
+    case msg_id do
+      nil -> {:noreply, socket}
+      id -> {:noreply, MessagesHooks.reinsert_stream_message(socket, id)}
+    end
   end
 
   def handle_event(

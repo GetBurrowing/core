@@ -752,7 +752,17 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
     |> Enum.reverse()
   end
 
-  defp reinsert_stream_message(socket, msg_id) do
+  @doc """
+  Re-renders a single stream row by fetching the latest message from the DB
+  and stream_inserting it (with day-label bookkeeping). Used when a row-level
+  attribute (e.g. editing flag, reactions, version count) changes and the
+  stream row needs to pick up the new attrs without clobbering the
+  attachments_map — unlike `stream_insert_message/3`, this helper does not
+  touch attachment state.
+
+  Returns the socket unchanged when the message no longer exists.
+  """
+  def reinsert_stream_message(socket, msg_id) do
     case Chat.get_message(msg_id) do
       nil ->
         socket

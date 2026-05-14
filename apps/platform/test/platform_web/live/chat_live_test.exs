@@ -2029,4 +2029,79 @@ defmodule PlatformWeb.ChatLiveTest do
       assert has_element?(view, "#inline-thread-compose-#{msg.id}")
     end
   end
+
+  describe "edit message handlers (streams attr-propagation contract)" do
+    # NOTE: These tests verify handler logic and the authorization gate.
+    # They do NOT reproduce the streams-attr-propagation bug that
+    # motivated task 019e1e78 — LiveView's render_click + render(view)
+    # re-renders the full component tree from current assigns on every
+    # call, bypassing the client-side DOM-patch race where that bug
+    # actually manifests. The four e2e_behavior cases attached to the
+    # task plan are the real regression coverage; these tests cover
+    # handler logic and the auth check.
+
+    test "edit_message_clicked on own message renders the inline editor", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/chat/general")
+
+      view
+      |> form("#compose-form", compose: %{text: "own message ready to edit"})
+      |> render_submit()
+
+      space = Chat.get_space_by_slug("general")
+      [msg | _] = Chat.list_messages(space.id)
+
+      # Pre-condition: editor is not rendered yet (editing_message_id is nil)
+      refute has_element?(view, "#msg-editor-#{msg.id}")
+
+      render_click(view, "edit_message_clicked", %{"message-id" => msg.id})
+
+      assert has_element?(view, "#msg-editor-#{msg.id}")
+      assert render(view) =~ "own message ready to edit"
+    end
+
+    test "edit_message_clicked on another participant's message is silently denied",
+         %{conn: conn} do
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/chat/general")
+
+      # Seed a message authored by a DIFFERENT user — the authenticated
+      # session is not the author, so authorize_edit must refuse and the
+      # editor must NOT render.
+      space = Chat.get_space_by_slug("general")
+
+      other_user =
+        insert_chat_user(%{email: "other-author@example.com", oidc_sub: "other-sub-edit"})
+
+      add_user_message(space, other_user, "not yours to edit")
+
+      [other_msg | _] = Chat.list_messages(space.id)
+      refute has_element?(view, "#msg-editor-#{other_msg.id}")
+
+      render_click(view, "edit_message_clicked", %{"message-id" => other_msg.id})
+
+      refute has_element?(view, "#msg-editor-#{other_msg.id}")
+    end
+
+    test "cancel_edit clears editing state and re-renders the bubble", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/chat/general")
+
+      view
+      |> form("#compose-form", compose: %{text: "cancel-me message"})
+      |> render_submit()
+
+      space = Chat.get_space_by_slug("general")
+      [msg | _] = Chat.list_messages(space.id)
+
+      # Open the editor first
+      render_click(view, "edit_message_clicked", %{"message-id" => msg.id})
+      assert has_element?(view, "#msg-editor-#{msg.id}")
+
+      # Cancel — editor disappears, bubble content remains visible
+      render_click(view, "cancel_edit", %{})
+      refute has_element?(view, "#msg-editor-#{msg.id}")
+      assert render(view) =~ "cancel-me message"
+    end
+  end
 end
