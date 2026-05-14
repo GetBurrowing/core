@@ -924,6 +924,131 @@ defmodule Platform.Chat do
     result
   end
 
+  @doc """
+  Returns the set of message ids in `space_id` that are "in context" for
+  `agent_participant_id` per the editable-messages Policy 2 contract.
+
+  In-context = union of:
+
+    1. **Mention arm** — messages whose content contains `@[DisplayName]` or
+       legacy `@displayname` resolving to the agent participant's
+       `display_name`. Mirrors `AttentionRouter` mention semantics.
+
+    2. **Task arm** — when `space_id` is an execution space whose
+       `metadata->>'task_id'` resolves to a task assigned to this agent
+       (`tasks.assignee_id` == the participant's underlying agent id) AND
+       whose status is `"planning"` or `"in_progress"`, every non-deleted
+       message in the space is task-linked. Closed/done tasks are excluded
+       so historical linkage doesn't eternally freeze old messages.
+
+  Both arms are scoped to the single `space_id` argument — cross-space
+  leakage is impossible by construction.
+
+  Returns a `MapSet` of message ids. Returns an empty set if the
+  participant doesn't exist in the space, the space doesn't exist, or no
+  messages match either arm.
+
+  Used by Policy 2's task-scoped and ad-hoc freeze triggers (task
+  `019e1e80-4230-7a79-ac73-c157975b3999`).
+  """
+  @spec in_context_message_ids_for_agent(binary(), binary()) :: MapSet.t()
+  def in_context_message_ids_for_agent(agent_participant_id, space_id)
+      when is_binary(agent_participant_id) and is_binary(space_id) do
+    case Repo.get(Participant, agent_participant_id) do
+      nil ->
+        MapSet.new()
+
+      %Participant{space_id: ^space_id} = participant ->
+        mention_ids = mention_arm_message_ids(participant, space_id)
+        task_ids = task_arm_message_ids(participant, space_id)
+        MapSet.union(mention_ids, task_ids)
+
+      %Participant{} ->
+        # Participant exists but is in a different space — empty (no cross-space leakage).
+        MapSet.new()
+    end
+  end
+
+  defp mention_arm_message_ids(%Participant{display_name: nil}, _space_id), do: MapSet.new()
+
+  defp mention_arm_message_ids(%Participant{display_name: ""}, _space_id), do: MapSet.new()
+
+  defp mention_arm_message_ids(%Participant{display_name: display_name}, space_id) do
+    # Match ADR 0037 bracketed (@[Name]) or legacy (@name) mention forms.
+    # Display name is escaped for ILIKE so `%` or `_` in a name doesn't
+    # accidentally widen the match.
+    escaped = escape_ilike(display_name)
+    bracketed = "%@[" <> escaped <> "]%"
+    legacy = "%@" <> escaped <> "%"
+
+    ids =
+      from(m in Message,
+        where:
+          m.space_id == ^space_id and
+            is_nil(m.deleted_at) and
+            (ilike(m.content, ^bracketed) or ilike(m.content, ^legacy)),
+        select: m.id
+      )
+      |> Repo.all()
+
+    MapSet.new(ids)
+  end
+
+  defp task_arm_message_ids(%Participant{participant_id: nil}, _space_id), do: MapSet.new()
+
+  defp task_arm_message_ids(
+         %Participant{participant_type: "agent", participant_id: agent_id},
+         space_id
+       )
+       when is_binary(agent_id) do
+    # The given space is task-linked for this agent IFF:
+    #   space.kind == "execution"
+    #   AND space.metadata->>'task_id' resolves to a task whose
+    #       assignee_id == agent_id AND status IN (planning, in_progress).
+    # If yes, every non-deleted message in the space is task-linked.
+    case Repo.get(Space, space_id) do
+      %Space{kind: "execution", metadata: %{} = metadata} ->
+        task_id = Map.get(metadata, "task_id") || Map.get(metadata, :task_id)
+
+        if is_binary(task_id) and task_linked?(task_id, agent_id) do
+          ids =
+            from(m in Message,
+              where: m.space_id == ^space_id and is_nil(m.deleted_at),
+              select: m.id
+            )
+            |> Repo.all()
+
+          MapSet.new(ids)
+        else
+          MapSet.new()
+        end
+
+      _ ->
+        MapSet.new()
+    end
+  end
+
+  defp task_arm_message_ids(_participant, _space_id), do: MapSet.new()
+
+  defp task_linked?(task_id, agent_id) do
+    from(t in Platform.Tasks.Task,
+      where:
+        t.id == ^task_id and
+          t.assignee_id == ^agent_id and
+          t.status in ["planning", "in_progress"] and
+          is_nil(t.deleted_at),
+      select: t.id
+    )
+    |> Repo.exists?()
+  end
+
+  defp escape_ilike(string) do
+    string
+    |> String.replace("\\", "\\\\")
+    |> String.replace("%", "\\%")
+    |> String.replace("_", "\\_")
+  end
+
   # ── Threads ─────────────────────────────────────────────────────────────────
 
   @doc """

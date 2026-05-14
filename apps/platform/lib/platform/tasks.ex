@@ -503,19 +503,19 @@ defmodule Platform.Tasks do
 
       previous_task = task
 
-      finalized_task =
+      {finalized_task, frozen_messages} =
         case task.status do
           status when status in ["planning", "backlog"] ->
             apply_dispatch_gate(task)
 
           _ ->
-            nil
+            {nil, []}
         end
 
-      {updated_plan, previous_task, finalized_task, superseded_siblings}
+      {updated_plan, previous_task, finalized_task, frozen_messages, superseded_siblings}
     end)
     |> case do
-      {:ok, {updated, previous_task, finalized_task, superseded_siblings}} ->
+      {:ok, {updated, previous_task, finalized_task, frozen_messages, superseded_siblings}} ->
         # Broadcast supersedee transitions FIRST so observers fold v1 before
         # expanding v2 — preserves the "newer plan replaces older" UX order.
         Enum.each(superseded_siblings, fn sibling ->
@@ -532,6 +532,13 @@ defmodule Platform.Tasks do
           maybe_finalize_transition(previous_task, finalized_task, finalized_task.status)
         end
 
+        # Policy 2 freeze broadcast — post-commit so subscribers never see a
+        # stale event for a transaction that later rolled back.
+        Platform.Chat.FreezePolicy.broadcast_frozen(frozen_messages, %{
+          reason: :task_in_progress,
+          task_id: finalized_task && finalized_task.id
+        })
+
         {:ok, updated}
 
       {:error, reason} ->
@@ -540,14 +547,23 @@ defmodule Platform.Tasks do
   end
 
   # Decide whether the just-approved task can move into execution or has to
-  # park in `blocked` until its dependencies finish. Returns the post-write
-  # task struct (status + metadata as persisted) so the caller can broadcast
-  # and run the per-phase finalize hook.
+  # park in `blocked` until its dependencies finish. Returns `{task, frozen}`
+  # where `task` is the post-write struct and `frozen` is the list of
+  # messages frozen by Policy 2 (empty unless the task moved into
+  # `:in_progress`). Broadcasting `frozen` is the caller's responsibility
+  # — it should fire post-commit to avoid stale events on rollback.
   defp apply_dispatch_gate(%Task{} = task) do
     case unmet_dependencies(task) do
       [] ->
         {:ok, updated} = transition_task_status(task, "in_progress")
-        updated
+
+        case Platform.Chat.FreezePolicy.freeze_messages_for_task(updated) do
+          {:ok, frozen} ->
+            {updated, frozen}
+
+          {:error, reason} ->
+            Repo.rollback(reason)
+        end
 
       unmet ->
         {:ok, blocked} = transition_task_status(task, "blocked")
@@ -557,7 +573,7 @@ defmodule Platform.Tasks do
           Map.put(existing_metadata, "unmet_dependencies", Enum.map(unmet, & &1.id))
 
         {:ok, with_metadata} = update_task(blocked, %{metadata: merged_metadata})
-        with_metadata
+        {with_metadata, []}
     end
   end
 
@@ -933,18 +949,73 @@ defmodule Platform.Tasks do
 
   @doc """
   Transition a task's status and broadcast the change to the board topic.
+
+  When `new_status` is `"in_progress"`, the status flip and the Policy 2
+  freeze of any messages in the task's execution space happen inside a
+  single `Repo.transaction/1` — see
+  `apps/platform/audit/2026-05-13-policy-2-freeze-trigger/design.md` for
+  the atomicity rationale. If any freeze fails (changeset error), the
+  whole transaction rolls back: the task stays in its original status and
+  no messages get partially frozen.
+
+  After the transaction commits successfully, two broadcasts fire on the
+  affected space's chat topic:
+
+    * `{:messages_frozen, message_ids, %{reason: :task_in_progress, task_id: id}}`
+      — consumed by `PlatformWeb.Live.Chat.MessagesHooks` to refresh
+      per-row `(edited)`-affordance state without a full reload.
+
+  Non-`in_progress` transitions skip the freeze path entirely and behave
+  exactly as before.
   """
   def transition_task(%Task{} = task, new_status) do
     with :ok <- require_approved_plan_for(task, new_status),
          :ok <- maybe_prepare_transition(task, new_status),
-         {:ok, updated} <- transition_task_status(task, new_status) do
+         {:ok, %{updated: updated, frozen: frozen}} <-
+           transition_with_policy2_freeze(task, new_status) do
       updated = Repo.preload(updated, [:project, :epic, plans: :stages])
       broadcast_board({:task_updated, updated})
       maybe_finalize_transition(task, updated, new_status)
+
+      Platform.Chat.FreezePolicy.broadcast_frozen(frozen, %{
+        reason: :task_in_progress,
+        task_id: updated.id
+      })
+
       {:ok, updated}
     else
       error ->
         error
+    end
+  end
+
+  # Atomic status flip + Policy 2 task-scoped freeze when entering :in_progress.
+  # Delegates the actual freeze to `Platform.Chat.FreezePolicy` so the Tasks
+  # domain doesn't reach into Chat schemas directly. Both writes share one
+  # `Repo.transaction` so a freeze failure rolls back the status update —
+  # no silent partial freeze, no half-flipped state.
+  defp transition_with_policy2_freeze(%Task{} = task, "in_progress") do
+    Repo.transaction(fn ->
+      case transition_task_status(task, "in_progress") do
+        {:ok, updated} ->
+          case Platform.Chat.FreezePolicy.freeze_messages_for_task(updated) do
+            {:ok, frozen_messages} ->
+              %{updated: updated, frozen: frozen_messages}
+
+            {:error, reason} ->
+              Repo.rollback(reason)
+          end
+
+        {:error, reason} ->
+          Repo.rollback(reason)
+      end
+    end)
+  end
+
+  defp transition_with_policy2_freeze(%Task{} = task, new_status) do
+    case transition_task_status(task, new_status) do
+      {:ok, updated} -> {:ok, %{updated: updated, frozen: []}}
+      error -> error
     end
   end
 

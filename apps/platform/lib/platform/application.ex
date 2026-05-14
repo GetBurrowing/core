@@ -58,6 +58,10 @@ defmodule Platform.Application do
            Platform.Vault.RefreshWorker,
            # Reap expired pending attachments (ADR 0039) — needs Repo
            Platform.Chat.AttachmentReaper,
+           # Policy 2 ad-hoc freeze listener (consumer side of D-6) —
+           # subscribes to "chat:agent_runtime" and freezes in-context
+           # messages on :agent_first_state_op signals. Needs Repo + PubSub.
+           Platform.Chat.AdHocFreezeListener,
            # Start to serve requests, typically the last entry
            PlatformWeb.Endpoint
          ])

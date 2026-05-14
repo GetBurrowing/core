@@ -541,6 +541,54 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
 
   defp handle_info({:message_edited, _}, socket), do: {:halt, socket}
 
+  # Policy 2 freeze broadcast (task 019e1e80 Stage 3). Fired after a task
+  # transitions to :in_progress and Platform.Tasks.transition_task freezes
+  # the messages in its execution space. We re-stream each affected message
+  # so the bubble's `(edited)` pencil-button re-renders from
+  # `chat_message.ex:159–180`, which reads `frozen_at` to switch its
+  # affordance tooltip to the disabled state — no full reload required.
+  defp handle_info(
+         {:messages_frozen, message_ids, %{} = _meta},
+         socket
+       )
+       when is_list(message_ids) do
+    case message_ids do
+      [] ->
+        {:halt, socket}
+
+      [first_id | rest_ids] ->
+        # Fetch the first message once for the space-identity check and
+        # reuse the same struct in the stream-insert loop — avoids a
+        # duplicate Repo.get on the hot path.
+        case Platform.Chat.get_message(first_id) do
+          %Platform.Chat.Message{} = first_msg ->
+            if same_active_space?(socket, first_msg) do
+              socket = stream_insert_frozen(socket, first_msg)
+
+              socket =
+                Enum.reduce(rest_ids, socket, fn id, acc ->
+                  case Platform.Chat.get_message(id) do
+                    %Platform.Chat.Message{} = msg -> stream_insert_frozen(acc, msg)
+                    _ -> acc
+                  end
+                end)
+
+              {:halt, socket}
+            else
+              {:halt, socket}
+            end
+
+          _ ->
+            {:halt, socket}
+        end
+    end
+  end
+
+  defp stream_insert_frozen(socket, %Platform.Chat.Message{} = msg) do
+    enriched = msg |> enrich_versions_count() |> enrich_with_reactions(socket)
+    stream_insert(socket, :messages, enriched)
+  end
+
   defp handle_info({:message_deleted, msg}, socket) do
     if same_active_space?(socket, msg) do
       {:halt,
