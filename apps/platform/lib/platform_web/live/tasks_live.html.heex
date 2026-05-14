@@ -2112,7 +2112,8 @@
         <div class="mlist flex flex-col gap-1.5" data-role="stack-detail-members-list">
           <%= for member <- @selected_stack_members do %>
             <% {pill_label, pill_class} = member_status_pill(member.status)
-            annotation = member_dep_annotation(member, @selected_stack_members) %>
+            annotation = member_dep_annotation(member, @selected_stack_members)
+            assignment = member_assignment_badge(member) %>
             <div
               class="mlist-item rounded-md bg-base-300 border border-base-300 p-2 cursor-pointer hover:bg-base-200 transition-colors"
               phx-click="select_task"
@@ -2134,6 +2135,33 @@
                 >
                   {member.title}
                 </span>
+                <%!-- Assignment badge (ADR 0041): `inherited` = follows the
+                     stack-level default; `override` = carries an individual
+                     assignee, protected from stack-level fan-out. Overridden
+                     rows expose an inline "clear" action that returns the
+                     member to inheriting. --%>
+                <%= if assignment == "override" do %>
+                  <button
+                    type="button"
+                    class="shrink-0 inline-flex items-center gap-0.5 rounded bg-warning/20 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-warning hover:bg-warning/30"
+                    phx-click="clear_member_override"
+                    phx-value-id={member.id}
+                    data-confirm="Clear this member's individual override and return it to inheriting the stack default?"
+                    data-role="stack-detail-member-assignment"
+                    data-assignment="override"
+                    title="Clear override — return to inheriting the stack default"
+                  >
+                    override <span class="hero-x-mark size-3"></span>
+                  </button>
+                <% else %>
+                  <span
+                    class="shrink-0 rounded bg-base-content/10 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-base-content/60"
+                    data-role="stack-detail-member-assignment"
+                    data-assignment="inherited"
+                  >
+                    inherited
+                  </span>
+                <% end %>
                 <span
                   class={"shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider #{pill_class}"}
                   data-role="stack-detail-member-pill"
@@ -2176,6 +2204,17 @@
       class="mt-auto sticky bottom-0 flex gap-2 border-t border-base-300 bg-base-100 px-4 py-3"
       data-role="stack-detail-actions"
     >
+      <%!-- Assign Agents (ADR 0041): opens the stack-level assignee modal.
+           The stack-level assignment fans out to every member that is not
+           individually overridden. --%>
+      <button
+        type="button"
+        class="btn btn-ghost btn-sm flex-1"
+        phx-click="open_stack_assignee_modal"
+        data-role="stack-detail-assign-agents"
+      >
+        <span class="hero-user-group size-4"></span> Assign Agents
+      </button>
       <button
         type="button"
         class="btn btn-ghost btn-sm flex-1"
@@ -2504,6 +2543,146 @@
           <button
             type="button"
             phx-click="close_assignee_modal"
+            class="btn btn-sm btn-ghost"
+          >
+            Cancel
+          </button>
+          <button type="submit" class="btn btn-sm btn-primary">Save</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <%!-- Stack-level assignee modal (ADR 0041 — assign agents at the stack
+       level). Mirrors the per-task assignee modal: simple/advanced
+       segmented control, same sheet-on-mobile / dialog-on-desktop shape.
+       The stack-level assignment is the default that fans out to every
+       member that is not individually overridden. --%>
+  <div
+    :if={@show_stack_assignee_modal && @selected_stack}
+    class="fixed inset-0 z-50 flex items-end sm:items-center justify-center"
+    id="stack-assignee-modal"
+  >
+    <%!-- Backdrop --%>
+    <div class="absolute inset-0 bg-black/40" phx-click="close_stack_assignee_modal" />
+
+    <%!-- Sheet / dialog --%>
+    <div class="relative w-full max-w-lg rounded-t-2xl sm:rounded-2xl bg-base-100 shadow-2xl pb-[env(safe-area-inset-bottom)] max-h-[90vh] overflow-y-auto">
+      <%!-- Header --%>
+      <div class="flex items-center justify-between border-b border-base-300 px-4 py-3">
+        <div>
+          <h2 class="text-base font-semibold">Assign Agents</h2>
+          <p class="mt-0.5 text-xs text-base-content/60">
+            {@selected_stack.name} · stack-level default
+          </p>
+        </div>
+        <button
+          type="button"
+          phx-click="close_stack_assignee_modal"
+          class="btn btn-sm btn-ghost btn-square"
+          aria-label="Close"
+        >
+          <span class="hero-x-mark size-4"></span>
+        </button>
+      </div>
+
+      <%!-- Mode toggle (segmented) --%>
+      <div class="flex items-center justify-between px-4 py-3 border-b border-base-300 gap-3">
+        <p class="text-xs text-base-content/60 leading-snug">
+          {if @stack_assignee_modal_mode == :advanced,
+            do: "One agent per phase, applied to every member.",
+            else: "One agent for the whole stack."}
+        </p>
+        <div class="join shrink-0">
+          <button
+            type="button"
+            phx-click="set_stack_assignee_modal_mode"
+            phx-value-mode="simple"
+            class={[
+              "btn btn-sm join-item",
+              @stack_assignee_modal_mode == :simple && "btn-primary",
+              @stack_assignee_modal_mode != :simple && "btn-ghost"
+            ]}
+            aria-pressed={if @stack_assignee_modal_mode == :simple, do: "true", else: "false"}
+          >
+            Simple
+          </button>
+          <button
+            type="button"
+            phx-click="set_stack_assignee_modal_mode"
+            phx-value-mode="advanced"
+            class={[
+              "btn btn-sm join-item",
+              @stack_assignee_modal_mode == :advanced && "btn-primary",
+              @stack_assignee_modal_mode != :advanced && "btn-ghost"
+            ]}
+            aria-pressed={if @stack_assignee_modal_mode == :advanced, do: "true", else: "false"}
+          >
+            Advanced
+          </button>
+        </div>
+      </div>
+
+      <%!-- Form body --%>
+      <form
+        id="stack-assignees-form"
+        phx-hook="ButtonLoading"
+        phx-submit="save_stack_assignees"
+        class="flex flex-col gap-3 px-4 py-4"
+      >
+        <%!-- Simple mode --%>
+        <div :if={@stack_assignee_modal_mode == :simple} class="flex flex-col gap-1">
+          <label class="text-xs font-semibold uppercase tracking-wider text-base-content/60">
+            Agent (all phases)
+          </label>
+          <select
+            name="assignees[all]"
+            class="select select-bordered select-sm w-full"
+          >
+            <option value="">Unassigned</option>
+            <option
+              :for={agent <- @agents}
+              value={agent.id}
+              selected={stack_phase_assignee_id(@selected_stack, "execution") == agent.id}
+            >
+              {agent.name}
+            </option>
+          </select>
+        </div>
+
+        <%!-- Advanced mode: per-phase pickers --%>
+        <div :if={@stack_assignee_modal_mode == :advanced} class="flex flex-col gap-3">
+          <div :for={phase <- ~w(planning execution review)} class="flex flex-col gap-1">
+            <label class="text-xs font-semibold uppercase tracking-wider text-base-content/60">
+              {phase_label(phase)}
+            </label>
+            <select
+              name={"assignees[" <> phase <> "]"}
+              class="select select-bordered select-sm w-full"
+            >
+              <option value="">Unassigned</option>
+              <option
+                :for={agent <- @agents}
+                value={agent.id}
+                selected={stack_phase_assignee_id(@selected_stack, phase) == agent.id}
+              >
+                {agent.name}
+              </option>
+            </select>
+          </div>
+
+          <p class="mt-1 text-[11px] text-base-content/50">
+            This stack-level assignment is the default. It fans out to every member that
+            isn't individually overridden — members with their own assignment are left
+            untouched.
+          </p>
+        </div>
+
+        <%!-- Actions --%>
+        <div class="mt-2 flex justify-end gap-2 border-t border-base-300 pt-3">
+          <button
+            type="button"
+            phx-click="close_stack_assignee_modal"
             class="btn btn-sm btn-ghost"
           >
             Cancel

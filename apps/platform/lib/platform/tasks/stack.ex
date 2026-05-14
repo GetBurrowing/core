@@ -1,4 +1,22 @@
 defmodule Platform.Tasks.Stack do
+  @moduledoc """
+  Schema for a task stack (ADR 0041).
+
+  ## Stack-level agent assignment (`metadata["phase_assignees"]`)
+
+  `metadata["phase_assignees"]` is the canonical stack-level default agent
+  assignment. It is shaped identically to `tasks.phase_assignees`: a map
+  keyed by phase (`"planning"` | `"execution"` | `"review"`), with values
+  `%{"assignee_id" => uuid, "assignee_type" => "agent"}`.
+
+  This default fans out to every member that is not individually
+  overridden (a member is overridden when `task.metadata["assignee_override"]`
+  is `true`). No schema field is needed — `metadata` is already a cast
+  `:map` column. Read/normalize the stack-level map via
+  `Platform.Tasks.Stacks.stack_phase_assignees/1`; write + percolate via
+  `Platform.Tasks.Stacks.set_stack_phase_assignees/2`.
+  """
+
   use Ecto.Schema
   import Ecto.Changeset
 

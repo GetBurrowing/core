@@ -130,6 +130,11 @@ defmodule PlatformWeb.TasksLive do
      # Per-phase assignee modal
      |> assign(:show_assignee_modal, false)
      |> assign(:assignee_modal_mode, :simple)
+     # Stack-level assignee modal (ADR 0041 — assign agents at the stack
+     # level; the default fans out to un-overridden members). Mirrors the
+     # per-task assignee modal's simple/advanced segmented pattern.
+     |> assign(:show_stack_assignee_modal, false)
+     |> assign(:stack_assignee_modal_mode, :simple)
      # Reopen-with-feedback modal (done tasks). Reset to closed/empty on
      # mount; reopened tasks return to `planning`, where a new plan is
      # authored, so this state lives only as long as the modal is open.
@@ -863,7 +868,17 @@ defmodule PlatformWeb.TasksLive do
             }
         end
 
-      case Tasks.set_phase_assignees(task, attrs_by_phase) do
+      # An individual assignment from this modal protects the task from
+      # stack-level fan-out — stamp `metadata["assignee_override"] = true`
+      # so `Stacks.set_stack_phase_assignees/2` skips it.
+      result =
+        with {:ok, updated} <- Tasks.set_phase_assignees(task, attrs_by_phase) do
+          Tasks.update_task(updated, %{
+            metadata: Map.put(updated.metadata || %{}, "assignee_override", true)
+          })
+        end
+
+      case result do
         {:ok, _} ->
           {:noreply,
            socket
@@ -969,6 +984,125 @@ defmodule PlatformWeb.TasksLive do
           {:error, reason} ->
             {:noreply, put_flash(socket, :error, "Reopen failed: #{inspect(reason)}")}
         end
+    end
+  end
+
+  # ── Stack-level assignee modal (ADR 0041) ───────────────────────────────
+
+  def handle_event(
+        "open_stack_assignee_modal",
+        _params,
+        %{assigns: %{selected_stack: nil}} = socket
+      ),
+      do: {:noreply, socket}
+
+  def handle_event("open_stack_assignee_modal", _params, socket) do
+    initial_mode =
+      case Stacks.stack_phase_assignees(socket.assigns.selected_stack) do
+        pa when is_map(pa) and map_size(pa) > 0 ->
+          if all_phases_same_agent?(pa), do: :simple, else: :advanced
+
+        _ ->
+          :simple
+      end
+
+    {:noreply,
+     socket
+     |> assign(:show_stack_assignee_modal, true)
+     |> assign(:stack_assignee_modal_mode, initial_mode)}
+  end
+
+  def handle_event("close_stack_assignee_modal", _params, socket) do
+    {:noreply, assign(socket, :show_stack_assignee_modal, false)}
+  end
+
+  def handle_event("set_stack_assignee_modal_mode", %{"mode" => mode}, socket) do
+    next =
+      case mode do
+        "advanced" -> :advanced
+        _ -> :simple
+      end
+
+    {:noreply, assign(socket, :stack_assignee_modal_mode, next)}
+  end
+
+  def handle_event("save_stack_assignees", %{"assignees" => params}, socket) do
+    stack = socket.assigns.selected_stack
+
+    if is_nil(stack) do
+      {:noreply, socket}
+    else
+      mode = socket.assigns.stack_assignee_modal_mode
+
+      attrs_by_phase =
+        case mode do
+          :simple ->
+            entry = phase_entry(Map.get(params, "all", ""))
+            %{"planning" => entry, "execution" => entry, "review" => entry}
+
+          :advanced ->
+            %{
+              "planning" => phase_entry(Map.get(params, "planning", "")),
+              "execution" => phase_entry(Map.get(params, "execution", "")),
+              "review" => phase_entry(Map.get(params, "review", ""))
+            }
+        end
+
+      case Stacks.set_stack_phase_assignees(stack, attrs_by_phase) do
+        {:ok, %{percolated: percolated, skipped: skipped}} ->
+          {:noreply,
+           socket
+           |> assign(:show_stack_assignee_modal, false)
+           |> refresh_board()
+           |> reload_selected_stack()
+           |> put_flash(
+             :info,
+             "Stack assignees saved — #{length(percolated)} member(s) updated" <>
+               skipped_suffix(skipped)
+           )}
+
+        {:error, _} ->
+          {:noreply, put_flash(socket, :error, "Failed to save stack assignees.")}
+      end
+    end
+  end
+
+  def handle_event("clear_member_override", %{"id" => task_id}, socket) do
+    case Stacks.clear_member_override(task_id) do
+      {:ok, _task} ->
+        {:noreply,
+         socket
+         |> refresh_board()
+         |> reload_selected_stack()
+         |> put_flash(:info, "Member returned to inheriting the stack default.")}
+
+      {:error, _reason} ->
+        {:noreply, put_flash(socket, :error, "Could not clear the member override.")}
+    end
+  end
+
+  defp skipped_suffix([]), do: "."
+
+  defp skipped_suffix(skipped),
+    do: ", #{length(skipped)} with an individual override left untouched."
+
+  # Reload `:selected_stack` + `:selected_stack_members` from the DB so the
+  # stack detail panel reflects writes (stack-level assignment, override
+  # clears). No-op when no stack panel is open.
+  defp reload_selected_stack(%{assigns: %{selected_stack: nil}} = socket), do: socket
+
+  defp reload_selected_stack(%{assigns: %{selected_stack: %Stack{id: id}}} = socket) do
+    case Stacks.get_stack(id) do
+      nil ->
+        socket
+        |> assign(:selected_stack, nil)
+        |> assign(:selected_stack_members, [])
+        |> assign(:show_stack_detail, false)
+
+      %Stack{} = stack ->
+        socket
+        |> assign(:selected_stack, stack)
+        |> assign(:selected_stack_members, Stacks.members(stack))
     end
   end
 
@@ -2151,6 +2285,23 @@ defmodule PlatformWeb.TasksLive do
   end
 
   defp phase_assignee_id(_, _), do: nil
+
+  # Stack-level analogue of `phase_assignee_id/2` — reads the stack's
+  # `metadata["phase_assignees"]` default for the stack assignee modal.
+  defp stack_phase_assignee_id(%Stack{} = stack, phase) do
+    case Stacks.stack_phase_assignees(stack) |> Map.get(phase) do
+      %{"assignee_id" => id} when is_binary(id) and id != "" -> id
+      _ -> nil
+    end
+  end
+
+  defp stack_phase_assignee_id(_, _), do: nil
+
+  # Whether a stack member is following the stack-level default
+  # (`"inherited"`) or carries an individual assignee override
+  # (`"override"`). Drives the per-member badge in the stack detail panel.
+  defp member_assignment_badge(member),
+    do: (Stacks.member_overridden?(member) && "override") || "inherited"
 
   defp agent_name_for(_agents_by_id, nil), do: nil
 

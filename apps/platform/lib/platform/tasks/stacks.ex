@@ -325,6 +325,15 @@ defmodule Platform.Tasks.Stacks do
   set; on `:cycle` or `:cross_stack_dep` the transaction is rolled back
   and the error tuple is returned unchanged. On success, calls
   `recompute_stack_status/1` and returns `{:ok, task}`.
+
+  ## Stack-level assignment inheritance (ADR 0041)
+
+  If the stack has a stack-level `phase_assignees` map AND the joining
+  task is NOT individually overridden (`task.metadata["assignee_override"]`
+  is not `true`), the stack default is applied to the new member via
+  `Platform.Tasks.set_phase_assignees/2` inside this transaction (after
+  the `stack_id` write, before `recompute_stack_status/1`). A task that
+  carries its own `assignee_override` flag keeps its own assignment.
   """
   @spec add_task(Stack.t() | binary(), Task.t() | binary()) ::
           {:ok, Task.t()}
@@ -338,8 +347,9 @@ defmodule Platform.Tasks.Stacks do
              {:ok, %Task{} = task} <- load_task(task_or_id),
              :ok <- ensure_not_in_stack(task),
              position = next_stack_position(stack.id),
-             {:ok, updated_task} <-
+             {:ok, attached_task} <-
                Tasks.update_task(task, %{stack_id: stack.id, stack_position: position}),
+             {:ok, updated_task} <- maybe_inherit_stack_assignees(stack, attached_task),
              {:ok, _levels} <- normalize_dag_result(validate_dag(stack)),
              {:ok, _stack} <- recompute_stack_status(stack) do
           updated_task
@@ -1211,6 +1221,233 @@ defmodule Platform.Tasks.Stacks do
   end
 
   # ── Pure helpers ─────────────────────────────────────────────────────────
+
+  @doc """
+  Return the normalized stack-level `phase_assignees` map from a stack's
+  metadata (ADR 0041 stack-level agent assignment).
+
+  Mirrors `Platform.Tasks.Task.validate_phase_assignees/1`: unknown phase
+  keys are dropped, and malformed per-phase entries (anything that is not
+  a map with at least an `"assignee_id"`) are dropped. Defaults to `%{}`
+  for a stack with no metadata, non-map metadata, or no `"phase_assignees"`
+  key. The `@phases` list is reused from `Platform.Tasks.Task` rather than
+  redefined here.
+
+  Returned shape: `%{phase => %{"assignee_id" => uuid, "assignee_type" => type}}`.
+  """
+  @spec stack_phase_assignees(Stack.t() | map() | nil) :: map()
+  def stack_phase_assignees(%Stack{metadata: metadata}), do: stack_phase_assignees(metadata)
+
+  def stack_phase_assignees(metadata) when is_map(metadata) do
+    case Map.get(metadata, "phase_assignees") do
+      pa when is_map(pa) ->
+        pa
+        |> Map.take(Task.phases())
+        |> Enum.flat_map(fn {phase, entry} ->
+          case normalize_phase_entry(entry) do
+            nil -> []
+            normalized -> [{phase, normalized}]
+          end
+        end)
+        |> Map.new()
+
+      _ ->
+        %{}
+    end
+  end
+
+  def stack_phase_assignees(_), do: %{}
+
+  # A valid per-phase entry is a map carrying a non-nil `"assignee_id"`.
+  # `"assignee_type"` defaults to `"agent"` (matching `Tasks.assignee_for_phase/2`).
+  defp normalize_phase_entry(%{"assignee_id" => nil}), do: nil
+
+  defp normalize_phase_entry(%{"assignee_id" => id} = entry) when is_binary(id) do
+    %{"assignee_id" => id, "assignee_type" => Map.get(entry, "assignee_type") || "agent"}
+  end
+
+  defp normalize_phase_entry(_), do: nil
+
+  @doc """
+  Return `{assignee_id, assignee_type}` for the stack-level default in the
+  given phase, or `{nil, nil}` if no stack-level assignee is configured for
+  that phase.
+
+  Mirrors `Platform.Tasks.assignee_for_phase/2`, but reads from the stack's
+  `metadata["phase_assignees"]` (via `stack_phase_assignees/1`) instead of a
+  task's `phase_assignees`.
+  """
+  @spec stack_assignee_for_phase(Stack.t() | map() | nil, String.t()) ::
+          {String.t() | nil, String.t() | nil}
+  def stack_assignee_for_phase(stack_or_metadata, phase) when is_binary(phase) do
+    case stack_phase_assignees(stack_or_metadata) |> Map.get(phase) do
+      %{"assignee_id" => id, "assignee_type" => type} -> {id, type}
+      _ -> {nil, nil}
+    end
+  end
+
+  # ── Stack-level agent assignment (ADR 0041) ──────────────────────────────
+
+  @doc """
+  Set the stack-level `phase_assignees` default and percolate it to every
+  member that is not individually overridden.
+
+  `attrs_by_phase` is a map keyed by phase (`"planning"` | `"execution"` |
+  `"review"`) with values `%{"assignee_id" => id, "assignee_type" => type}`,
+  identical to the shape `Platform.Tasks.set_phase_assignees/2` accepts.
+
+  In a single `Repo.transaction`:
+
+    1. The normalized map is merged into `stack.metadata["phase_assignees"]`
+       and persisted via `update_stack/2`. Other metadata keys are
+       preserved; the `phase_assignees` subtree is merged phase-by-phase so
+       a partial update (e.g. only `"execution"`) leaves the other phases
+       intact.
+    2. For every member returned by `members/1` whose
+       `metadata["assignee_override"]` is NOT `true`, the merged
+       stack-level map is applied via `Platform.Tasks.set_phase_assignees/2`.
+       That reuses the existing changeset + `maybe_apply_phase_assignee`
+       re-derivation + board broadcast, so the task router and every read
+       path see the new current-phase assignee.
+
+  Members flagged `assignee_override` are skipped entirely — a stack-level
+  reassignment must never clobber an individually-assigned member.
+
+  Returns `{:ok, %{stack: stack, percolated: [task], skipped: [task]}}` on
+  success, where `percolated` are the members that received the new
+  default and `skipped` are the overridden members left untouched.
+  """
+  @spec set_stack_phase_assignees(Stack.t() | binary(), map()) ::
+          {:ok, %{stack: Stack.t(), percolated: [Task.t()], skipped: [Task.t()]}}
+          | {:error, :stack_not_found | term()}
+  def set_stack_phase_assignees(stack_or_id, attrs_by_phase) when is_map(attrs_by_phase) do
+    Repo.transaction(fn ->
+      with {:ok, %Stack{} = stack} <- load_stack(stack_or_id),
+           merged_map = merge_stack_phase_assignees(stack, attrs_by_phase),
+           new_metadata = Map.put(stack.metadata || %{}, "phase_assignees", merged_map),
+           {:ok, updated_stack} <- update_stack(stack, %{metadata: new_metadata}) do
+        {percolated, skipped} =
+          updated_stack
+          |> members()
+          |> Enum.split_with(&(not member_overridden?(&1)))
+
+        percolated_tasks =
+          Enum.map(percolated, fn member ->
+            case Tasks.set_phase_assignees(member, merged_map) do
+              {:ok, updated} -> updated
+              {:error, reason} -> Repo.rollback(reason)
+            end
+          end)
+
+        %{stack: updated_stack, percolated: percolated_tasks, skipped: skipped}
+      else
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
+  end
+
+  @doc """
+  Return the current stack-level `phase_assignees` default merged with a
+  partial `attrs_by_phase` update.
+
+  The merge is phase-by-phase: phases present in `attrs_by_phase` replace
+  the stored phase entry; phases absent from `attrs_by_phase` are carried
+  through from the existing stack-level map. The result is normalized via
+  `stack_phase_assignees/1` semantics (unknown keys / malformed entries
+  dropped) so the persisted map is always well-formed.
+  """
+  @spec merge_stack_phase_assignees(Stack.t() | map() | nil, map()) :: map()
+  def merge_stack_phase_assignees(stack_or_metadata, attrs_by_phase)
+      when is_map(attrs_by_phase) do
+    current = stack_phase_assignees(stack_or_metadata)
+
+    incoming =
+      attrs_by_phase
+      |> Map.new(fn {phase, entry} -> {to_string(phase), entry} end)
+      |> Map.take(Task.phases())
+      |> Enum.flat_map(fn {phase, entry} ->
+        case normalize_phase_entry(entry) do
+          nil -> [{phase, :clear}]
+          normalized -> [{phase, normalized}]
+        end
+      end)
+      |> Map.new()
+
+    Enum.reduce(incoming, current, fn
+      {phase, :clear}, acc -> Map.delete(acc, phase)
+      {phase, entry}, acc -> Map.put(acc, phase, entry)
+    end)
+  end
+
+  @doc """
+  Whether a stack member is individually overridden — i.e. its
+  `metadata["assignee_override"]` is `true`.
+
+  An overridden member is excluded from stack-level fan-out: its assignment
+  was set by hand and stack-level reassignment must not touch it.
+  """
+  @spec member_overridden?(Task.t() | map() | nil) :: boolean()
+  def member_overridden?(%Task{metadata: metadata}), do: member_overridden?(metadata)
+
+  def member_overridden?(metadata) when is_map(metadata),
+    do: Map.get(metadata, "assignee_override") == true
+
+  def member_overridden?(_), do: false
+
+  @doc """
+  Clear a member's individual override and return it to inheriting the
+  stack-level default.
+
+  Unsets `task.metadata["assignee_override"]` and, if the member's stack
+  has a stack-level `phase_assignees` map, re-applies that default via
+  `Platform.Tasks.set_phase_assignees/2`. Runs in a single transaction.
+
+  Returns `{:ok, task}` (the re-inheriting member), `{:error, :not_in_stack}`
+  for a task with no `stack_id`, `{:error, :task_not_found}` /
+  `{:error, :stack_not_found}` for missing rows, or `{:error, reason}` if a
+  write fails.
+  """
+  @spec clear_member_override(Task.t() | binary()) ::
+          {:ok, Task.t()}
+          | {:error, :not_in_stack | :task_not_found | :stack_not_found | term()}
+  def clear_member_override(task_or_id) do
+    Repo.transaction(fn ->
+      with {:ok, %Task{} = task} <- load_task(task_or_id),
+           :ok <- ensure_has_stack(task),
+           {:ok, %Stack{} = stack} <- load_stack(task.stack_id),
+           cleared_metadata = Map.delete(task.metadata || %{}, "assignee_override"),
+           {:ok, cleared_task} <- Tasks.update_task(task, %{metadata: cleared_metadata}) do
+        stack_map = stack_phase_assignees(stack)
+
+        if stack_map == %{} do
+          cleared_task
+        else
+          case Tasks.set_phase_assignees(cleared_task, stack_map) do
+            {:ok, updated} -> updated
+            {:error, reason} -> Repo.rollback(reason)
+          end
+        end
+      else
+        {:error, reason} -> Repo.rollback(reason)
+      end
+    end)
+  end
+
+  # Apply the stack-level default to a freshly-attached member, unless the
+  # member is individually overridden or the stack has no stack-level map.
+  # Used inside `add_task/2`'s transaction.
+  defp maybe_inherit_stack_assignees(%Stack{} = stack, %Task{} = task) do
+    stack_map = stack_phase_assignees(stack)
+
+    cond do
+      stack_map == %{} -> {:ok, task}
+      member_overridden?(task) -> {:ok, task}
+      true -> Tasks.set_phase_assignees(task, stack_map)
+    end
+  end
+
+  defp ensure_has_stack(%Task{stack_id: nil}), do: {:error, :not_in_stack}
+  defp ensure_has_stack(%Task{stack_id: stack_id}) when is_binary(stack_id), do: :ok
 
   @doc """
   Build the canonical rollup-branch name for a slug.

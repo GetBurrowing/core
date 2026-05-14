@@ -1535,6 +1535,275 @@ defmodule Platform.Tasks.StacksTest do
     end
   end
 
+  describe "stack_phase_assignees/1" do
+    test "returns %{} for a stack with no phase_assignees metadata" do
+      stack = stack_fixture()
+      assert Stacks.stack_phase_assignees(stack) == %{}
+    end
+
+    test "returns %{} for non-map metadata or nil" do
+      assert Stacks.stack_phase_assignees(nil) == %{}
+      assert Stacks.stack_phase_assignees("nope") == %{}
+      assert Stacks.stack_phase_assignees(%{}) == %{}
+    end
+
+    test "returns the normalized map from metadata" do
+      agent = Ecto.UUID.generate()
+
+      stack =
+        stack_with_phase_assignees(%{
+          "planning" => %{"assignee_id" => agent, "assignee_type" => "agent"},
+          "execution" => %{"assignee_id" => agent, "assignee_type" => "agent"},
+          "review" => %{"assignee_id" => agent, "assignee_type" => "agent"}
+        })
+
+      pa = Stacks.stack_phase_assignees(stack)
+      assert pa["planning"] == %{"assignee_id" => agent, "assignee_type" => "agent"}
+      assert pa["execution"]["assignee_id"] == agent
+      assert pa["review"]["assignee_id"] == agent
+    end
+
+    test "drops unknown phase keys" do
+      agent = Ecto.UUID.generate()
+
+      stack =
+        stack_with_phase_assignees(%{
+          "planning" => %{"assignee_id" => agent},
+          "bogus" => %{"assignee_id" => agent},
+          "deploy" => %{"assignee_id" => agent}
+        })
+
+      pa = Stacks.stack_phase_assignees(stack)
+      assert Map.keys(pa) == ["planning"]
+    end
+
+    test "drops malformed per-phase entries and defaults assignee_type to agent" do
+      agent = Ecto.UUID.generate()
+
+      stack =
+        stack_with_phase_assignees(%{
+          "planning" => %{"assignee_id" => agent},
+          "execution" => %{"assignee_id" => nil},
+          "review" => "garbage"
+        })
+
+      pa = Stacks.stack_phase_assignees(stack)
+      assert pa == %{"planning" => %{"assignee_id" => agent, "assignee_type" => "agent"}}
+    end
+  end
+
+  describe "stack_assignee_for_phase/2" do
+    test "returns {nil, nil} when no stack-level assignee for the phase" do
+      stack = stack_fixture()
+      assert Stacks.stack_assignee_for_phase(stack, "planning") == {nil, nil}
+    end
+
+    test "returns {id, type} for a configured phase" do
+      agent = Ecto.UUID.generate()
+
+      stack =
+        stack_with_phase_assignees(%{
+          "execution" => %{"assignee_id" => agent, "assignee_type" => "agent"}
+        })
+
+      assert Stacks.stack_assignee_for_phase(stack, "execution") == {agent, "agent"}
+      assert Stacks.stack_assignee_for_phase(stack, "planning") == {nil, nil}
+    end
+  end
+
+  describe "set_stack_phase_assignees/2" do
+    test "writes the stack-level default and percolates to all un-overridden members" do
+      project = project_fixture()
+      stack = stack_fixture(project_id: project.id)
+      {:ok, m1} = Tasks.create_task(%{project_id: project.id, title: "M1"})
+      {:ok, m2} = Tasks.create_task(%{project_id: project.id, title: "M2"})
+      {:ok, _} = Stacks.add_task(stack, m1)
+      {:ok, _} = Stacks.add_task(stack, m2)
+
+      agent = Ecto.UUID.generate()
+
+      assert {:ok, %{stack: updated_stack, percolated: percolated, skipped: []}} =
+               Stacks.set_stack_phase_assignees(stack, all_phases(agent))
+
+      assert Stacks.stack_phase_assignees(updated_stack) == all_phases(agent)
+      assert length(percolated) == 2
+
+      for member <- [m1, m2] do
+        reloaded = Repo.get!(Task, member.id)
+        assert reloaded.phase_assignees["planning"]["assignee_id"] == agent
+        assert reloaded.phase_assignees["execution"]["assignee_id"] == agent
+        assert reloaded.phase_assignees["review"]["assignee_id"] == agent
+        # current phase for a backlog task is "planning"
+        assert reloaded.assignee_id == agent
+      end
+    end
+
+    test "skips members flagged assignee_override and reports them in :skipped" do
+      project = project_fixture()
+      stack = stack_fixture(project_id: project.id)
+      {:ok, m1} = Tasks.create_task(%{project_id: project.id, title: "M1"})
+      {:ok, m2} = Tasks.create_task(%{project_id: project.id, title: "M2"})
+      {:ok, _} = Stacks.add_task(stack, m1)
+      {:ok, m2} = Stacks.add_task(stack, m2)
+
+      agent_b = Ecto.UUID.generate()
+      m2 = stamp_override(m2, agent_b)
+
+      agent_a = Ecto.UUID.generate()
+
+      assert {:ok, %{percolated: [percolated], skipped: [skipped]}} =
+               Stacks.set_stack_phase_assignees(stack, all_phases(agent_a))
+
+      assert percolated.id == m1.id
+      assert skipped.id == m2.id
+
+      # m1 inherited agent_a
+      assert Repo.get!(Task, m1.id).assignee_id == agent_a
+      # m2 kept its individual override (agent_b)
+      m2_reloaded = Repo.get!(Task, m2.id)
+      assert m2_reloaded.assignee_id == agent_b
+      assert m2_reloaded.phase_assignees["execution"]["assignee_id"] == agent_b
+    end
+
+    test "merges partial updates phase-by-phase, leaving other phases intact" do
+      stack = stack_fixture()
+      agent_a = Ecto.UUID.generate()
+      agent_b = Ecto.UUID.generate()
+
+      {:ok, _} = Stacks.set_stack_phase_assignees(stack, all_phases(agent_a))
+
+      assert {:ok, %{stack: updated}} =
+               Stacks.set_stack_phase_assignees(stack, %{
+                 "execution" => %{"assignee_id" => agent_b, "assignee_type" => "agent"}
+               })
+
+      pa = Stacks.stack_phase_assignees(updated)
+      assert pa["planning"]["assignee_id"] == agent_a
+      assert pa["execution"]["assignee_id"] == agent_b
+      assert pa["review"]["assignee_id"] == agent_a
+    end
+
+    test "returns {:error, :stack_not_found} for an unknown stack id" do
+      assert {:error, :stack_not_found} =
+               Stacks.set_stack_phase_assignees(Ecto.UUID.generate(), %{})
+    end
+
+    test "preserves other metadata keys on the stack" do
+      stack = stack_fixture()
+
+      {:ok, stack} =
+        stack
+        |> Stack.changeset(%{metadata: %{"keep" => "this"}})
+        |> Repo.update()
+
+      agent = Ecto.UUID.generate()
+      {:ok, %{stack: updated}} = Stacks.set_stack_phase_assignees(stack, all_phases(agent))
+
+      assert updated.metadata["keep"] == "this"
+      assert updated.metadata["phase_assignees"]["planning"]["assignee_id"] == agent
+    end
+  end
+
+  describe "add_task/2 — stack-level assignment inheritance" do
+    test "a joining task with no override inherits the stack-level default" do
+      project = project_fixture()
+      stack = stack_fixture(project_id: project.id)
+      agent = Ecto.UUID.generate()
+      {:ok, _} = Stacks.set_stack_phase_assignees(stack, all_phases(agent))
+
+      {:ok, newcomer} = Tasks.create_task(%{project_id: project.id, title: "Late joiner"})
+      assert {:ok, joined} = Stacks.add_task(stack, newcomer)
+
+      assert joined.phase_assignees["planning"]["assignee_id"] == agent
+      assert joined.phase_assignees["execution"]["assignee_id"] == agent
+      assert joined.phase_assignees["review"]["assignee_id"] == agent
+      assert joined.assignee_id == agent
+    end
+
+    test "a joining task flagged assignee_override keeps its own assignment" do
+      project = project_fixture()
+      stack = stack_fixture(project_id: project.id)
+      agent_a = Ecto.UUID.generate()
+      {:ok, _} = Stacks.set_stack_phase_assignees(stack, all_phases(agent_a))
+
+      agent_b = Ecto.UUID.generate()
+      {:ok, newcomer} = Tasks.create_task(%{project_id: project.id, title: "Self-assigned"})
+      newcomer = stamp_override(newcomer, agent_b)
+
+      assert {:ok, joined} = Stacks.add_task(stack, newcomer)
+      assert joined.assignee_id == agent_b
+      assert joined.phase_assignees["execution"]["assignee_id"] == agent_b
+    end
+
+    test "a joining task is untouched when the stack has no stack-level default" do
+      project = project_fixture()
+      stack = stack_fixture(project_id: project.id)
+      {:ok, newcomer} = Tasks.create_task(%{project_id: project.id, title: "Plain"})
+
+      assert {:ok, joined} = Stacks.add_task(stack, newcomer)
+      assert joined.phase_assignees == %{}
+      assert joined.assignee_id == nil
+    end
+  end
+
+  describe "clear_member_override/1" do
+    test "unsets the override flag and re-applies the stack-level default" do
+      project = project_fixture()
+      stack = stack_fixture(project_id: project.id)
+      {:ok, m1} = Tasks.create_task(%{project_id: project.id, title: "M1"})
+      {:ok, m1} = Stacks.add_task(stack, m1)
+
+      agent_b = Ecto.UUID.generate()
+      m1 = stamp_override(m1, agent_b)
+
+      agent_a = Ecto.UUID.generate()
+      {:ok, _} = Stacks.set_stack_phase_assignees(stack, all_phases(agent_a))
+
+      # m1 was skipped, still on agent_b
+      assert Repo.get!(Task, m1.id).assignee_id == agent_b
+
+      assert {:ok, cleared} = Stacks.clear_member_override(m1)
+      refute Stacks.member_overridden?(cleared)
+      assert cleared.assignee_id == agent_a
+      assert cleared.phase_assignees["execution"]["assignee_id"] == agent_a
+    end
+
+    test "just clears the flag when the stack has no stack-level default" do
+      project = project_fixture()
+      stack = stack_fixture(project_id: project.id)
+      {:ok, m1} = Tasks.create_task(%{project_id: project.id, title: "M1"})
+      {:ok, m1} = Stacks.add_task(stack, m1)
+
+      agent_b = Ecto.UUID.generate()
+      m1 = stamp_override(m1, agent_b)
+
+      assert {:ok, cleared} = Stacks.clear_member_override(m1)
+      refute Stacks.member_overridden?(cleared)
+      # no stack default to re-apply — keeps its existing phase_assignees
+      assert cleared.phase_assignees["execution"]["assignee_id"] == agent_b
+    end
+
+    test "returns {:error, :not_in_stack} for a task with no stack_id" do
+      project = project_fixture()
+      {:ok, free} = Tasks.create_task(%{project_id: project.id, title: "Free"})
+      assert {:error, :not_in_stack} = Stacks.clear_member_override(free)
+    end
+
+    test "returns {:error, :task_not_found} for an unknown task id" do
+      assert {:error, :task_not_found} = Stacks.clear_member_override(Ecto.UUID.generate())
+    end
+  end
+
+  describe "member_overridden?/1" do
+    test "true only when metadata.assignee_override == true" do
+      assert Stacks.member_overridden?(%{"assignee_override" => true})
+      refute Stacks.member_overridden?(%{"assignee_override" => false})
+      refute Stacks.member_overridden?(%{"assignee_override" => "true"})
+      refute Stacks.member_overridden?(%{})
+      refute Stacks.member_overridden?(nil)
+    end
+  end
+
   # ── Helpers ──────────────────────────────────────────────────────────────
 
   # Bypass the broadcast pipeline + status-transition guards for setup —
@@ -1576,6 +1845,47 @@ defmodule Platform.Tasks.StacksTest do
 
   defp short_id do
     Ecto.UUID.generate() |> String.slice(0, 8)
+  end
+
+  defp project_fixture do
+    {:ok, project} =
+      Tasks.create_project(%{name: "Stacks App " <> Ecto.UUID.generate()})
+
+    project
+  end
+
+  # All three phases assigned to one agent — the "simple mode" shape.
+  defp all_phases(agent_id) do
+    %{
+      "planning" => %{"assignee_id" => agent_id, "assignee_type" => "agent"},
+      "execution" => %{"assignee_id" => agent_id, "assignee_type" => "agent"},
+      "review" => %{"assignee_id" => agent_id, "assignee_type" => "agent"}
+    }
+  end
+
+  # Mimic the per-task assignee modal save path: set all-phase assignees on
+  # the task AND stamp metadata["assignee_override"] = true.
+  defp stamp_override(%Task{} = task, agent_id) do
+    {:ok, task} = Tasks.set_phase_assignees(task, all_phases(agent_id))
+
+    {:ok, task} =
+      Tasks.update_task(task, %{
+        metadata: Map.put(task.metadata || %{}, "assignee_override", true)
+      })
+
+    task
+  end
+
+  # Create a stack and stamp a raw `phase_assignees` map into its metadata,
+  # bypassing normalization so read-helper tests can exercise malformed input.
+  defp stack_with_phase_assignees(phase_assignees) do
+    stack = stack_fixture()
+
+    stack
+    |> Stack.changeset(%{
+      metadata: Map.put(stack.metadata || %{}, "phase_assignees", phase_assignees)
+    })
+    |> Repo.update!()
   end
 
   defp errors_on(changeset) do

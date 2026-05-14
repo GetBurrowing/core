@@ -20,6 +20,7 @@ defmodule Platform.Federation.ToolSurfaceStacksTest do
   use Platform.DataCase, async: false
 
   alias Platform.Federation.ToolSurface
+  alias Platform.Repo
   alias Platform.Tasks
   alias Platform.Tasks.Task
 
@@ -415,5 +416,139 @@ defmodule Platform.Federation.ToolSurfaceStacksTest do
       assert error.error =~ "Stack not found"
       assert error.recoverable == false
     end
+  end
+
+  describe "stack_assign_agents end-to-end" do
+    test "simple mode assigns one agent to all phases and percolates to members" do
+      project = create_project()
+      slug = unique_slug("e2e-assign")
+      %{stack_id: stack_id} = create_stack_via_tool(project.id, slug)
+
+      {:ok, m1} = Tasks.create_task(%{project_id: project.id, title: "Member 1"})
+      {:ok, m2} = Tasks.create_task(%{project_id: project.id, title: "Member 2"})
+
+      {:ok, _} =
+        ToolSurface.execute(
+          "stack_add",
+          %{"stack_id" => stack_id, "task_id" => m1.id},
+          %{}
+        )
+
+      {:ok, _} =
+        ToolSurface.execute(
+          "stack_add",
+          %{"stack_id" => stack_id, "task_id" => m2.id},
+          %{}
+        )
+
+      agent = Ecto.UUID.generate()
+
+      {:ok, result} =
+        ToolSurface.execute(
+          "stack_assign_agents",
+          %{"stack_id" => stack_id, "assignee_id" => agent},
+          %{}
+        )
+
+      assert result.stack_id == stack_id
+      assert result.phase_assignees["planning"]["assignee_id"] == agent
+      assert result.phase_assignees["execution"]["assignee_id"] == agent
+      assert result.phase_assignees["review"]["assignee_id"] == agent
+      assert Enum.sort(result.percolated) == Enum.sort([m1.id, m2.id])
+      assert result.skipped == []
+
+      # Round-trip through stack_get: stack default + member badges.
+      {:ok, get_result} = ToolSurface.execute("stack_get", %{"stack_id" => stack_id}, %{})
+      assert get_result.stack.phase_assignees["execution"]["assignee_id"] == agent
+
+      for member <- get_result.members do
+        assert member.assignment == "inherited"
+        assert member.assignee_id == agent
+      end
+    end
+
+    test "advanced mode assigns per-phase ids" do
+      project = create_project()
+      slug = unique_slug("e2e-assign-adv")
+      %{stack_id: stack_id} = create_stack_via_tool(project.id, slug)
+
+      planner = Ecto.UUID.generate()
+      executor = Ecto.UUID.generate()
+      reviewer = Ecto.UUID.generate()
+
+      {:ok, result} =
+        ToolSurface.execute(
+          "stack_assign_agents",
+          %{
+            "stack_id" => stack_id,
+            "planning" => planner,
+            "execution" => executor,
+            "review" => reviewer
+          },
+          %{}
+        )
+
+      assert result.phase_assignees["planning"]["assignee_id"] == planner
+      assert result.phase_assignees["execution"]["assignee_id"] == executor
+      assert result.phase_assignees["review"]["assignee_id"] == reviewer
+    end
+
+    test "skips members with an individual override and reports them" do
+      project = create_project()
+      slug = unique_slug("e2e-assign-skip")
+      %{stack_id: stack_id} = create_stack_via_tool(project.id, slug)
+
+      {:ok, m1} = Tasks.create_task(%{project_id: project.id, title: "Inheriting"})
+      {:ok, m2} = Tasks.create_task(%{project_id: project.id, title: "Overridden"})
+
+      {:ok, _} =
+        ToolSurface.execute("stack_add", %{"stack_id" => stack_id, "task_id" => m1.id}, %{})
+
+      {:ok, _} =
+        ToolSurface.execute("stack_add", %{"stack_id" => stack_id, "task_id" => m2.id}, %{})
+
+      # m2 carries an individual override.
+      agent_b = Ecto.UUID.generate()
+      {:ok, m2} = Tasks.set_phase_assignees(Repo.get!(Task, m2.id), all_phase_attrs(agent_b))
+
+      {:ok, _} =
+        Tasks.update_task(m2, %{metadata: Map.put(m2.metadata || %{}, "assignee_override", true)})
+
+      agent_a = Ecto.UUID.generate()
+
+      {:ok, result} =
+        ToolSurface.execute(
+          "stack_assign_agents",
+          %{"stack_id" => stack_id, "assignee_id" => agent_a},
+          %{}
+        )
+
+      assert result.percolated == [m1.id]
+      assert result.skipped == [%{task_id: m2.id, reason: "individual_override"}]
+
+      {:ok, get_result} = ToolSurface.execute("stack_get", %{"stack_id" => stack_id}, %{})
+      by_id = Map.new(get_result.members, &{&1.id, &1})
+      assert by_id[m1.id].assignment == "inherited"
+      assert by_id[m1.id].assignee_id == agent_a
+      assert by_id[m2.id].assignment == "override"
+      assert by_id[m2.id].assignee_id == agent_b
+    end
+
+    test "returns a not-found error envelope for a missing stack" do
+      {:error, error} =
+        ToolSurface.execute(
+          "stack_assign_agents",
+          %{"stack_id" => Ecto.UUID.generate(), "assignee_id" => Ecto.UUID.generate()},
+          %{}
+        )
+
+      assert error.error =~ "Stack not found"
+      assert error.recoverable == false
+    end
+  end
+
+  defp all_phase_attrs(agent_id) do
+    entry = %{"assignee_id" => agent_id, "assignee_type" => "agent"}
+    %{"planning" => entry, "execution" => entry, "review" => entry}
   end
 end

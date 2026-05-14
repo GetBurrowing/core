@@ -1123,6 +1123,42 @@ defmodule Platform.Federation.ToolSurface do
           "Refuses to run when the stack is not currently at `forming`. Members without an approved plan will fail the `in_progress` transition and appear in `cascade_errors`; the stack-level status still advances to `in_progress`.",
         when_to_use:
           "When a stack's membership is finalized and you want the engine to begin dispatching its level-0 roots."
+      },
+      %{
+        name: "stack_assign_agents",
+        description:
+          "Assign agents at the stack level (ADR 0041). The stack-level assignment is the default that fans out to every member task that is NOT individually overridden. Pass `assignee_id` for the simple all-phases case, OR per-phase `planning`/`execution`/`review` ids for the advanced case. Percolation reuses the per-task phase-assignee pipeline so each member's derived top-level assignee_id is re-derived for its current phase. Members flagged with an individual override are skipped and never clobbered.",
+        parameters: %{
+          stack_id: %{type: "string", required: true, description: "The stack to assign"},
+          assignee_id: %{
+            type: "string",
+            required: false,
+            description:
+              "Simple mode: one agent id applied to all three phases (planning, execution, review). Pass an empty string to clear all phases. Ignored if any per-phase id is also given."
+          },
+          planning: %{
+            type: "string",
+            required: false,
+            description: "Advanced mode: agent id for the planning phase (empty string clears it)"
+          },
+          execution: %{
+            type: "string",
+            required: false,
+            description:
+              "Advanced mode: agent id for the execution phase (empty string clears it)"
+          },
+          review: %{
+            type: "string",
+            required: false,
+            description: "Advanced mode: agent id for the review phase (empty string clears it)"
+          }
+        },
+        returns:
+          "%{stack_id, phase_assignees: %{phase => %{assignee_id, assignee_type}}, percolated: [task_id], skipped: [%{task_id, reason: \"individual_override\"}]}. `percolated` are the members that received the stack default; `skipped` are members left untouched because they carry an individual assignee override.",
+        limitations:
+          "Provide either `assignee_id` (simple) or per-phase ids (advanced) — if any per-phase id is given, `assignee_id` is ignored. Members with `metadata.assignee_override == true` are never overwritten; clear the override first to make them inherit again. Partial per-phase updates are merged phase-by-phase onto the existing stack default.",
+        when_to_use:
+          "When you want to assign agents once at the stack level instead of drilling into each member task individually."
       }
     ]
   end
@@ -2512,6 +2548,10 @@ defmodule Platform.Federation.ToolSurface do
     end
   end
 
+  # `stack_get` also surfaces the stack-level phase_assignees default and a
+  # per-member inherited-vs-overridden flag (see serialize_stack/1 and
+  # serialize_stack_member/1).
+
   def execute("stack_list", args, _context) do
     filters =
       %{}
@@ -2692,6 +2732,83 @@ defmodule Platform.Federation.ToolSurface do
     end
   end
 
+  def execute("stack_assign_agents", args, _context) do
+    stack_id = Map.get(args, "stack_id")
+
+    case stack_id && Stacks.get_stack(stack_id) do
+      nil ->
+        {:error,
+         %{
+           error: "Stack not found: #{inspect(stack_id)}",
+           recoverable: false,
+           suggestion: "Use stack_list to find available stacks"
+         }}
+
+      %Stack{} = stack ->
+        attrs_by_phase = build_stack_assignee_attrs(args)
+
+        case Stacks.set_stack_phase_assignees(stack, attrs_by_phase) do
+          {:ok, %{stack: updated, percolated: percolated, skipped: skipped}} ->
+            {:ok,
+             %{
+               stack_id: updated.id,
+               phase_assignees: Stacks.stack_phase_assignees(updated),
+               percolated: Enum.map(percolated, & &1.id),
+               skipped:
+                 Enum.map(skipped, fn %Task{id: id} ->
+                   %{task_id: id, reason: "individual_override"}
+                 end)
+             }}
+
+          {:error, %Ecto.Changeset{} = changeset} ->
+            {:error,
+             %{
+               error: "Failed to assign agents: #{inspect_errors(changeset)}",
+               recoverable: true,
+               suggestion: "Check the assignee ids are valid"
+             }}
+
+          {:error, other} ->
+            {:error,
+             %{
+               error: "Failed to assign agents: #{inspect(other)}",
+               recoverable: true
+             }}
+        end
+    end
+  end
+
+  # Build the `attrs_by_phase` map from the tool args. If any per-phase id
+  # (`planning`/`execution`/`review`) is present, advanced mode is used and
+  # the simple `assignee_id` is ignored; otherwise simple mode applies the
+  # single `assignee_id` to all three phases. An empty string clears a
+  # phase. Phases entirely absent from the args are omitted from the map so
+  # `set_stack_phase_assignees/2` merges them phase-by-phase.
+  defp build_stack_assignee_attrs(args) do
+    per_phase = ["planning", "execution", "review"]
+    has_per_phase? = Enum.any?(per_phase, &Map.has_key?(args, &1))
+
+    if has_per_phase? do
+      per_phase
+      |> Enum.filter(&Map.has_key?(args, &1))
+      |> Map.new(fn phase -> {phase, stack_phase_entry(Map.get(args, phase))} end)
+    else
+      case Map.fetch(args, "assignee_id") do
+        {:ok, id} ->
+          entry = stack_phase_entry(id)
+          %{"planning" => entry, "execution" => entry, "review" => entry}
+
+        :error ->
+          %{}
+      end
+    end
+  end
+
+  defp stack_phase_entry(id) when is_binary(id) and id != "",
+    do: %{"assignee_id" => id, "assignee_type" => "agent"}
+
+  defp stack_phase_entry(_), do: %{}
+
   defp stack_start_payload(%Stack{} = stack, started, parked, errors) do
     payload =
       stack
@@ -2720,6 +2837,8 @@ defmodule Platform.Federation.ToolSurface do
       description: stack.description,
       project_id: stack.project_id,
       epic_id: stack.epic_id,
+      # Stack-level agent assignment default (ADR 0041). `%{}` when unset.
+      phase_assignees: Stacks.stack_phase_assignees(stack),
       inserted_at: format_datetime(stack.inserted_at),
       updated_at: format_datetime(stack.updated_at)
     }
@@ -2731,7 +2850,12 @@ defmodule Platform.Federation.ToolSurface do
       title: task.title,
       status: task.status,
       stack_position: task.stack_position,
-      dependencies: task.dependencies || []
+      dependencies: task.dependencies || [],
+      # Whether this member follows the stack-level default (`"inherited"`)
+      # or carries an individual assignee override (`"override"`).
+      assignment: if(Stacks.member_overridden?(task), do: "override", else: "inherited"),
+      assignee_id: task.assignee_id,
+      assignee_type: task.assignee_type
     }
   end
 

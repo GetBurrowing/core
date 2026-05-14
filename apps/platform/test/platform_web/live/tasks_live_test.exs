@@ -10,7 +10,7 @@ defmodule PlatformWeb.TasksLiveTest do
   alias Platform.Chat.Canvas
   alias Platform.Orchestration.ExecutionSpace
   alias Platform.{Repo, Tasks}
-  alias Platform.Tasks.{Epic, Plan, ReviewRequests, Stack, Stacks}
+  alias Platform.Tasks.{Epic, Plan, ReviewRequests, Stack, Stacks, Task}
 
   setup do
     previous_root = Application.get_env(:platform, :chat_attachments_root)
@@ -5338,6 +5338,144 @@ defmodule PlatformWeb.TasksLiveTest do
 
       assert block =~ ~s(data-role="stack-detail-abandon")
       assert block =~ ~s(data-role="stack-detail-rollup-pr")
+    end
+  end
+
+  describe "stack detail panel — Assign Agents control + inheritance badges (ADR 0041)" do
+    setup %{conn: conn} do
+      conn = authenticated_conn(conn)
+      project = create_project()
+      agent_a = create_agent("Agent A (Test)")
+      agent_b = create_agent("Agent B (Test)")
+
+      stack =
+        stack_fixture(
+          project_id: project.id,
+          name: "assign-agents-stack",
+          slug: "assign-agents-#{System.unique_integer([:positive])}"
+        )
+
+      {:ok, m1} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          stack_id: stack.id,
+          stack_position: 1,
+          title: "Member 1",
+          status: "backlog"
+        })
+
+      {:ok, m2} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          stack_id: stack.id,
+          stack_position: 2,
+          title: "Member 2",
+          status: "backlog"
+        })
+
+      {:ok,
+       conn: conn,
+       project: project,
+       stack: stack,
+       m1: m1,
+       m2: m2,
+       agent_a: agent_a,
+       agent_b: agent_b}
+    end
+
+    test "Assign Agents button renders in the stack detail action row",
+         %{conn: conn, stack: stack} do
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      html = render_click(view, "open_stack_detail", %{"id" => stack.id})
+
+      assert html =~ ~s(data-role="stack-detail-assign-agents")
+      assert html =~ "Assign Agents"
+    end
+
+    test "open_stack_assignee_modal opens the stack assignee modal",
+         %{conn: conn, stack: stack} do
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      render_click(view, "open_stack_detail", %{"id" => stack.id})
+
+      html = render_click(view, "open_stack_assignee_modal", %{})
+
+      assert html =~ ~s(id="stack-assignee-modal")
+      assert html =~ ~s(id="stack-assignees-form")
+    end
+
+    test "save_stack_assignees (simple mode) percolates to un-overridden members",
+         %{conn: conn, stack: stack, m1: m1, m2: m2, agent_a: agent_a} do
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      render_click(view, "open_stack_detail", %{"id" => stack.id})
+      render_click(view, "open_stack_assignee_modal", %{})
+
+      render_submit(view, "save_stack_assignees", %{"assignees" => %{"all" => agent_a.id}})
+
+      assert Repo.get!(Task, m1.id).assignee_id == agent_a.id
+      assert Repo.get!(Task, m2.id).assignee_id == agent_a.id
+
+      stack = Repo.get!(Stack, stack.id)
+      assert Stacks.stack_phase_assignees(stack)["execution"]["assignee_id"] == agent_a.id
+
+      # Modal closed; both members badged inherited.
+      html = render(view)
+      refute html =~ ~s(id="stack-assignee-modal")
+      assert html =~ ~s(data-assignment="inherited")
+    end
+
+    test "members list shows inherited vs override badges",
+         %{conn: conn, stack: stack, m1: m1, agent_b: agent_b} do
+      # m1 carries an individual override.
+      {:ok, m1} = Tasks.set_phase_assignees(m1, all_phase_attrs(agent_b.id))
+
+      {:ok, _} =
+        Tasks.update_task(m1, %{metadata: Map.put(m1.metadata || %{}, "assignee_override", true)})
+
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      html = render_click(view, "open_stack_detail", %{"id" => stack.id})
+
+      # Both badges present: m1 override, m2 inherited.
+      assert html =~ ~s(data-assignment="override")
+      assert html =~ ~s(data-assignment="inherited")
+    end
+
+    test "clear_member_override returns a member to inheriting the stack default",
+         %{conn: conn, stack: stack, m1: m1, agent_a: agent_a, agent_b: agent_b} do
+      # m1 overridden to agent_b.
+      {:ok, m1} = Tasks.set_phase_assignees(m1, all_phase_attrs(agent_b.id))
+
+      {:ok, _} =
+        Tasks.update_task(m1, %{metadata: Map.put(m1.metadata || %{}, "assignee_override", true)})
+
+      # Stack default set to agent_a (m1 skipped because overridden).
+      {:ok, _} = Stacks.set_stack_phase_assignees(stack, all_phase_attrs(agent_a.id))
+      assert Repo.get!(Task, m1.id).assignee_id == agent_b.id
+
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      render_click(view, "open_stack_detail", %{"id" => stack.id})
+
+      render_click(view, "clear_member_override", %{"id" => m1.id})
+
+      reloaded = Repo.get!(Task, m1.id)
+      refute Stacks.member_overridden?(reloaded)
+      assert reloaded.assignee_id == agent_a.id
+    end
+
+    test "the per-task assignee modal save stamps metadata.assignee_override",
+         %{conn: conn, m1: m1, agent_b: agent_b} do
+      {:ok, view, _html} = live(conn, ~p"/tasks?task_id=#{m1.id}")
+      render_click(view, "open_assignee_modal", %{})
+
+      render_submit(view, "save_assignees", %{"assignees" => %{"all" => agent_b.id}})
+
+      reloaded = Repo.get!(Task, m1.id)
+      assert Stacks.member_overridden?(reloaded)
+      assert reloaded.assignee_id == agent_b.id
+    end
+
+    defp all_phase_attrs(agent_id) do
+      entry = %{"assignee_id" => agent_id, "assignee_type" => "agent"}
+      %{"planning" => entry, "execution" => entry, "review" => entry}
     end
   end
 end
