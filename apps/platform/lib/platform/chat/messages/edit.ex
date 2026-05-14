@@ -115,7 +115,37 @@ defmodule Platform.Chat.Messages.Edit do
       removed_substrings: compute_removed_substrings(previous_content, new_content)
     }
 
+    # Space-wide broadcast — kept for LiveView user clients (the chat panel
+    # halts the event for agent-impersonating sockets at messages_hooks.ex,
+    # but user UIs use this to refresh the `(edited)` affordance).
     PubSub.broadcast(updated.space_id, {:message_edited, payload})
+
+    # Policy 1 narrow scoping (editable-messages contract Section f, task
+    # 019e1e83): in addition to the space-wide broadcast above, fan out the
+    # same event to per-participant runtime topics for the agents that are
+    # entitled to it (mentioned in the body OR assignee of the task linked
+    # to this space via chat_spaces.metadata.task_id). LiveView user sockets
+    # continue to subscribe to the space topic and are unaffected.
+    #
+    # Note: as of this commit there is no agent-side consumer subscribing to
+    # `chat:participant:<id>` for `{:message_edited}` — the broadcast is a
+    # silent no-op until one is added. That deferral is deliberate (see
+    # audit/2026-05-13-policy-1-broadcaster/03-stage3-deferred.md): shipping
+    # the producer half locks in the privacy-by-construction shape so any
+    # future consumer just subscribes to the right topic.
+    case Platform.Chat.eligible_edit_recipients_for_message(updated) do
+      [] ->
+        :ok
+
+      recipient_ids when is_list(recipient_ids) ->
+        Enum.each(recipient_ids, fn participant_id ->
+          Phoenix.PubSub.broadcast(
+            Platform.PubSub,
+            "chat:participant:" <> participant_id,
+            {:message_edited, payload}
+          )
+        end)
+    end
   end
 
   defp emit_telemetry(message) do

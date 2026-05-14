@@ -130,4 +130,47 @@ defmodule Platform.Chat.Messages.EditTest do
       assert [] = Edit.compute_removed_substrings("", "hello world")
     end
   end
+
+  # ── Policy 1 per-participant fan-out (task 019e1e83 Stage 2) ─────────────
+
+  describe "apply_edit/3 — Policy 1 per-participant fan-out" do
+    test "broadcasts {:message_edited, _} on chat:participant:<id> for each entitled recipient" do
+      space = create_space!()
+      alice = add_participant!(space.id, "Alice")
+      msg = post_message!(space.id, alice.id, "hey @[Alice] take a look")
+
+      :ok = Phoenix.PubSub.subscribe(Platform.PubSub, "chat:participant:" <> alice.id)
+
+      assert {:ok, _} = Edit.apply_edit(msg, alice, "hey @[Alice] take a look now")
+
+      assert_receive {:message_edited, payload}, 1_000
+      assert payload.message.id == msg.id
+      assert payload.edited_by_participant_id == alice.id
+    end
+
+    test "does NOT broadcast on chat:participant:<id> for non-entitled participants" do
+      space = create_space!()
+      alice = add_participant!(space.id, "Alice")
+      bob = add_participant!(space.id, "Bob")
+      msg = post_message!(space.id, alice.id, "hey @[Alice] take a look")
+
+      :ok = Phoenix.PubSub.subscribe(Platform.PubSub, "chat:participant:" <> bob.id)
+
+      assert {:ok, _} = Edit.apply_edit(msg, alice, "hey @[Alice] take a look now")
+
+      refute_receive {:message_edited, _}, 200
+    end
+
+    test "still broadcasts on the space topic even when no per-participant recipients match" do
+      space = create_space!()
+      alice = add_participant!(space.id, "Alice")
+      msg = post_message!(space.id, alice.id, "daily standup notes")
+
+      :ok = PubSub.subscribe(space.id)
+
+      assert {:ok, _} = Edit.apply_edit(msg, alice, "daily standup notes draft")
+
+      assert_receive {:message_edited, _payload}, 1_000
+    end
+  end
 end

@@ -771,6 +771,67 @@ defmodule Platform.Chat do
   end
 
   @doc """
+  Returns the deduplicated list of participant ids (the chat_participants
+  `id` column, the same value used as the `chat:participant:<id>` PubSub
+  topic suffix) entitled to receive `{:message_edited, payload}` for this
+  message per Policy 1 of the editable-messages contract.
+
+  Eligible set is the union of:
+    1. Participants of the message's chat space whose body matches the
+       canonical mention predicate
+       (`Platform.Chat.AttentionRouter.mentioned?/2`, which covers ADR
+       0037 `@[Display Name]` bracketed form, legacy `@name` substring
+       form, the participant's id, and user-configured
+       `attention_config["keywords"]`).
+    2. Agent participants of the message's space whose `participant_id`
+       matches the `assignee_id` of the task linked to the space via
+       `chat_spaces.metadata["task_id"]` (the same execution-space-binding
+       pattern AttentionRouter and Policy 2 freeze use).
+
+  The two clauses are unioned and deduplicated so an agent that is both
+  `@`-mentioned and task-assigned receives the broadcast exactly once.
+
+  Pure read, idempotent. Returns `[]` when no participants match, when
+  the space has no `metadata["task_id"]`, when the linked task is missing,
+  or when the assignee is a user (not an agent). The caller is
+  `Platform.Chat.Messages.Edit` (Stage 2 of task 019e1e83), which
+  broadcasts to each entitled participant's runtime topic in addition to
+  the existing space-wide broadcast that user LiveView clients subscribe to.
+  """
+  @spec eligible_edit_recipients_for_message(Message.t()) :: [binary()]
+  def eligible_edit_recipients_for_message(%Message{space_id: space_id} = message)
+      when is_binary(space_id) do
+    participants = list_participants(space_id)
+
+    mentioned_ids =
+      participants
+      |> Enum.filter(&Platform.Chat.AttentionRouter.mentioned?(&1, message))
+      |> Enum.map(& &1.id)
+
+    assignee_ids = task_assignee_participant_ids_for_space(space_id, participants)
+
+    Enum.uniq(mentioned_ids ++ assignee_ids)
+  end
+
+  def eligible_edit_recipients_for_message(_), do: []
+
+  defp task_assignee_participant_ids_for_space(space_id, participants) do
+    with %Space{metadata: %{"task_id" => task_id}} <- Repo.get(Space, space_id),
+         true <- is_binary(task_id),
+         %Platform.Tasks.Task{assignee_type: "agent", assignee_id: assignee_id} <-
+           Repo.get(Platform.Tasks.Task, task_id),
+         true <- is_binary(assignee_id) do
+      participants
+      |> Enum.filter(fn p ->
+        p.participant_type == "agent" and p.participant_id == assignee_id
+      end)
+      |> Enum.map(& &1.id)
+    else
+      _ -> []
+    end
+  end
+
+  @doc """
   For a list of message IDs, returns thread preview data for any that have threads with replies.
 
   Returns `%{message_id => %{thread_id: id, reply_count: count, last_reply_at: datetime}}`.

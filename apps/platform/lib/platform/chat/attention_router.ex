@@ -487,7 +487,17 @@ defmodule Platform.Chat.AttentionRouter do
   # A single message may mix both forms (e.g. autocompleted `@[Rowan]` plus a
   # manually-typed `@alice`) — both route correctly, and `@Rowan` substring
   # inside `@[Rowan]` does not leak into the legacy check.
-  defp mentioned?(%Participant{} = p, %Message{content: content}) when is_binary(content) do
+  @doc """
+  True iff `participant` is @-mentioned in `message`'s content per ADR 0037.
+
+  Matches the bracketed form `@[Display Name]`, the legacy `@name` substring
+  form, the participant's id, and any user-configured `attention_config["keywords"]`.
+  Used both internally by the routing pipeline and externally by
+  `Platform.Chat.eligible_edit_recipients_for_message/1` (Policy 1 narrow
+  notification scoping for the editable-messages contract).
+  """
+  @spec mentioned?(Participant.t(), Message.t()) :: boolean()
+  def mentioned?(%Participant{} = p, %Message{content: content}) when is_binary(content) do
     downcased = String.downcase(content)
     {bracketed_tokens, legacy_zone} = extract_bracketed_tokens(downcased)
 
@@ -509,7 +519,7 @@ defmodule Platform.Chat.AttentionRouter do
     name_match or id_match or keyword_match
   end
 
-  defp mentioned?(_participant, _message), do: false
+  def mentioned?(_participant, _message), do: false
 
   @doc """
   Extract ADR 0037 `@[Display Name]` bracketed mention tokens from content.
