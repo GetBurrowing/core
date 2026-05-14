@@ -121,6 +121,44 @@ defmodule Platform.ChatTest do
     end
   end
 
+  # ── Batch message fetch ──────────────────────────────────────────────────────
+
+  describe "get_messages_by_ids/1" do
+    test "returns matching messages, drops missing ids, ignores deleted" do
+      space = create_space()
+      other_space = create_space()
+      p = create_participant(space.id)
+      p_other = create_participant(other_space.id)
+
+      m1 = create_message(space.id, p.id, %{content: "one"})
+      m2 = create_message(space.id, p.id, %{content: "two"})
+      m_other = create_message(other_space.id, p_other.id, %{content: "elsewhere"})
+
+      # Soft-delete m2 to confirm it's filtered out
+      {:ok, _} =
+        m2
+        |> Ecto.Changeset.change(deleted_at: DateTime.utc_now())
+        |> Platform.Repo.update()
+
+      missing_id = Ecto.UUID.generate()
+
+      result = Chat.get_messages_by_ids([m1.id, m2.id, m_other.id, missing_id])
+      result_ids = MapSet.new(result, & &1.id)
+
+      # m1 included; m2 excluded (deleted); m_other included (cross-space OK);
+      # missing_id silently dropped
+      assert MapSet.member?(result_ids, m1.id)
+      refute MapSet.member?(result_ids, m2.id)
+      assert MapSet.member?(result_ids, m_other.id)
+      refute MapSet.member?(result_ids, missing_id)
+      assert length(result) == 2
+    end
+
+    test "returns [] for empty input without a DB query" do
+      assert Chat.get_messages_by_ids([]) == []
+    end
+  end
+
   # ── Reactions ─────────────────────────────────────────────────────────────────
 
   describe "add_reaction/1 and remove_reaction/3" do

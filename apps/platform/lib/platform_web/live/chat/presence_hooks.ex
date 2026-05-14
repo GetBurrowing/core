@@ -63,6 +63,7 @@ defmodule PlatformWeb.ChatLive.PresenceHooks do
   alias Platform.Chat.Presence, as: ChatPresence
   alias Platform.Chat.SpaceAgentPresence
   alias Platform.Repo
+  alias PlatformWeb.ChatLive.MessagesHooks
 
   @agent_presence_refresh_ms 30_000
 
@@ -145,6 +146,7 @@ defmodule PlatformWeb.ChatLive.PresenceHooks do
     |> assign(:agent_presence, agent_presence)
     |> assign(:agent_status, PlatformWeb.ShellLive.default_agent_status())
     |> assign(:agent_typing_pids, MapSet.new())
+    |> reinsert_rendered_messages()
     |> schedule_refresh()
   end
 
@@ -159,12 +161,30 @@ defmodule PlatformWeb.ChatLive.PresenceHooks do
       end
 
     {:halt,
-     update(socket, :participants_map, fn map ->
+     socket
+     |> update(:participants_map, fn map ->
        Map.put(map, participant.id, participant_identity(participant, user))
-     end)}
+     end)
+     |> reinsert_rendered_messages()}
   end
 
   defp handle_info({:participant_left, _participant}, socket), do: {:halt, socket}
+
+  # Re-render every currently-rendered chat-message row so they pick up
+  # the new participants_map / agent_colors_map / agent_participant_ids.
+  # Phoenix LiveView streams don't auto-re-render existing rows when a
+  # parent assign changes (only stream_insert/delete triggers a re-render),
+  # so without this call the rows would silently keep their stale author
+  # chip / color / membership data. See task 019e245b audit and
+  # 019e273f Stage 4.
+  #
+  # The `:rendered_message_ids` MapSet is maintained by MessagesHooks
+  # (Stage 3 of 019e273f); empty MapSet → no DB call, safe no-op for
+  # call sites that fire before the chat is mounted.
+  defp reinsert_rendered_messages(socket) do
+    ids = socket.assigns[:rendered_message_ids] || MapSet.new()
+    MessagesHooks.reinsert_stream_messages(socket, MapSet.to_list(ids))
+  end
 
   defp handle_info(%Phoenix.Socket.Broadcast{event: "presence_diff"}, socket) do
     online_count =

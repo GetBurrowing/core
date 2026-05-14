@@ -733,6 +733,27 @@ defmodule Platform.Chat do
   end
 
   @doc """
+  Fetch multiple non-deleted messages by primary key in a single query.
+
+  Returns matching `%Message{}` records; missing or deleted ids are
+  silently dropped. Order is not preserved — callers must sort if needed.
+
+  Used by `PlatformWeb.Live.Chat.MessagesHooks.reinsert_stream_messages/2`
+  to refresh many currently-rendered stream rows after a parent assign
+  changes, avoiding the N+1 that would result from per-message
+  `get_message/1` calls.
+  """
+  @spec get_messages_by_ids([binary()]) :: [Message.t()]
+  def get_messages_by_ids([]), do: []
+
+  def get_messages_by_ids(ids) when is_list(ids) do
+    from(m in Message,
+      where: m.id in ^ids and is_nil(m.deleted_at)
+    )
+    |> Repo.all()
+  end
+
+  @doc """
   Returns messages across all spaces within a time window.
 
   Used by the Historian's activity digest. Filters out DMs and non-chat

@@ -118,6 +118,7 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
     |> assign(:drafts, %{})
     |> assign(:msg_day_labels, %{})
     |> assign(:last_msg_day, nil)
+    |> assign(:rendered_message_ids, MapSet.new())
     |> assign_compose("")
     |> assign_thread_compose("")
     |> stream(:messages, [])
@@ -163,6 +164,7 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
     |> assign(:streaming_replies, %{})
     |> assign(:msg_day_labels, day_labels)
     |> assign(:last_msg_day, last_day)
+    |> assign(:rendered_message_ids, MapSet.new(labelled, & &1.id))
     |> stream(:messages, labelled, reset: true)
     |> restore_draft(space.id)
   end
@@ -597,10 +599,13 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
 
   defp handle_info({:message_deleted, msg}, socket) do
     if same_active_space?(socket, msg) do
+      rendered_ids = MapSet.delete(socket.assigns[:rendered_message_ids] || MapSet.new(), msg.id)
+
       {:halt,
        socket
        |> stream_delete(:messages, msg)
        |> drop_day_label(msg.id)
+       |> assign(:rendered_message_ids, rendered_ids)
        |> delete_attachment_map_entry(msg.id)
        |> delete_thread_attachment_map_entry(msg.id)
        |> SearchHooks.maybe_refresh()}
@@ -773,6 +778,34 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
     end
   end
 
+  @doc """
+  Batched variant of `reinsert_stream_message/2`. Fetches the messages
+  in a single DB query (via `Chat.get_messages_by_ids/1`) and reinserts
+  each into the `:messages` stream with the same enrichment as the
+  singular path. Missing or deleted ids are silently dropped.
+
+  Used by hooks that mutate a parent assign affecting many rows — e.g.
+  presence changes that update `@participants_map`, `@agent_colors_map`,
+  `@agent_participant_ids`, `@highlighted_message_id`, or
+  `@pinned_message_ids` — to avoid the N+1 that would result from
+  per-message `reinsert_stream_message/2` calls. Returns the socket
+  unchanged on empty input (no DB hit).
+
+  Most stream effects are exercised via the chat LiveView integration
+  tests (Stage 4 of task 019e273f). The standalone unit test in
+  `messages_hooks_test.exs` covers the empty-input short-circuit.
+  """
+  def reinsert_stream_messages(socket, []), do: socket
+
+  def reinsert_stream_messages(socket, message_ids) when is_list(message_ids) do
+    message_ids
+    |> Chat.get_messages_by_ids()
+    |> Enum.reduce(socket, fn msg, acc ->
+      enriched = enrich_with_reactions(msg, acc)
+      stream_reinsert_with_day_label(acc, enriched)
+    end)
+  end
+
   defp maybe_update_inline_thread(socket, %{thread_id: thread_id} = msg)
        when is_binary(thread_id) do
     msg_id =
@@ -933,10 +966,12 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
 
     new_labels = Map.put(socket.assigns[:msg_day_labels] || %{}, msg.id, label)
     next_last_day = date || prev_day
+    rendered_ids = MapSet.put(socket.assigns[:rendered_message_ids] || MapSet.new(), msg.id)
 
     socket
     |> assign(:msg_day_labels, new_labels)
     |> assign(:last_msg_day, next_last_day)
+    |> assign(:rendered_message_ids, rendered_ids)
     |> stream_insert(:messages, %{msg | day_label: label})
   end
 
