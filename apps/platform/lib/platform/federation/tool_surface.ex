@@ -10,6 +10,7 @@ defmodule Platform.Federation.ToolSurface do
   alias Platform.Agents.Agent
   alias Platform.Chat
   alias Platform.Chat.{ActiveAgentStore, ContextPlane, Participant}
+  alias Platform.Meetings
   alias Platform.Org.Context, as: OrgContext
   alias Platform.Tasks
   alias Platform.Tasks.{Plan, PlanEngine, Stack, Stacks, Stage, Task, Validation}
@@ -1245,6 +1246,37 @@ defmodule Platform.Federation.ToolSurface do
           "Provide either `assignee_id` (simple) or per-phase ids (advanced) — if any per-phase id is given, `assignee_id` is ignored. Members with `metadata.assignee_override == true` are never overwritten; clear the override first to make them inherit again. Partial per-phase updates are merged phase-by-phase onto the existing stack default.",
         when_to_use:
           "When you want to assign agents once at the stack level instead of drilling into each member task individually."
+      },
+      %{
+        name: "meeting_create",
+        description:
+          "Create a durable meeting in a project (ADR 0042). A meeting is a persistent record with its own backing chat space (the future intent panel) and a LiveKit room name — distinct from an ephemeral LiveKit call. Status starts at `scheduled`.",
+        parameters: %{
+          project_id: %{
+            type: "string",
+            required: true,
+            description: "The project to create the meeting in"
+          },
+          name: %{type: "string", required: true, description: "Human-readable meeting name"},
+          slug: %{
+            type: "string",
+            required: false,
+            description:
+              "URL-friendly slug, unique per project. Auto-generated from the name (with a numeric suffix on collision) when omitted."
+          },
+          host_participant_id: %{
+            type: "string",
+            required: false,
+            description:
+              "chat_participants id of the meeting host/owner. When omitted, defaults to the calling agent — it is added to the meeting's backing chat space as the principal participant and set as host."
+          }
+        },
+        returns:
+          "The created meeting map: id, project_id, name, slug, status, chat_space_id, livekit_room_name, host_participant_id, started_at, ended_at.",
+        limitations:
+          "Requires a valid project_id and name. If an explicit slug collides with an existing meeting in the project, a clean changeset error is returned (auto-generated slugs are de-duplicated instead).",
+        when_to_use:
+          "When you need to spin up a persistent meeting surface for a project — a kickoff, sync, design review, or retro."
       }
     ]
   end
@@ -2261,6 +2293,43 @@ defmodule Platform.Federation.ToolSurface do
            recoverable: true,
            suggestion: "Check that project_id is valid and title is provided"
          }}
+    end
+  end
+
+  def execute("meeting_create", args, context) do
+    attrs =
+      %{
+        project_id: Map.get(args, "project_id"),
+        name: Map.get(args, "name"),
+        slug: Map.get(args, "slug"),
+        host_participant_id: Map.get(args, "host_participant_id")
+      }
+      |> Map.reject(fn {_k, v} -> is_nil(v) end)
+
+    case Meetings.create_meeting(attrs) do
+      {:ok, meeting} ->
+        meeting = maybe_default_host_participant(meeting, args, context)
+        {:ok, serialize_meeting(meeting)}
+
+      {:error, {:missing, field}} ->
+        {:error,
+         %{
+           error: "Missing required argument: #{field}",
+           recoverable: true,
+           suggestion: "meeting_create requires project_id and name"
+         }}
+
+      {:error, %Ecto.Changeset{} = changeset} ->
+        {:error,
+         %{
+           error: "Failed to create meeting: #{inspect_errors(changeset)}",
+           recoverable: true,
+           suggestion:
+             "Check that project_id is valid; if you passed an explicit slug it must be unique within the project."
+         }}
+
+      {:error, reason} ->
+        {:error, %{error: "Failed to create meeting: #{inspect(reason)}", recoverable: true}}
     end
   end
 
@@ -4311,6 +4380,52 @@ defmodule Platform.Federation.ToolSurface do
         _ -> nil
       end
     end
+  end
+
+  # When `meeting_create` was called without an explicit host_participant_id,
+  # default the host to the calling agent: add it to the meeting's backing
+  # chat space as the principal participant and stamp it onto the meeting.
+  # Best-effort — if the agent context is absent or the roster op fails the
+  # meeting is returned host-less rather than erroring.
+  defp maybe_default_host_participant(meeting, args, context) do
+    agent_id = Map.get(context, :agent_id)
+
+    cond do
+      not is_nil(Map.get(args, "host_participant_id")) ->
+        meeting
+
+      is_nil(agent_id) ->
+        meeting
+
+      true ->
+        with {:ok, _roster} <-
+               Chat.add_space_agent(meeting.chat_space_id, agent_id, role: "principal"),
+             %Chat.Participant{id: participant_id} <-
+               Chat.get_agent_participant(meeting.chat_space_id, agent_id),
+             {:ok, updated} <-
+               meeting
+               |> Ecto.Changeset.change(host_participant_id: participant_id)
+               |> Repo.update() do
+          updated
+        else
+          _ -> meeting
+        end
+    end
+  end
+
+  defp serialize_meeting(meeting) do
+    %{
+      id: meeting.id,
+      project_id: meeting.project_id,
+      name: meeting.name,
+      slug: meeting.slug,
+      status: meeting.status,
+      chat_space_id: meeting.chat_space_id,
+      livekit_room_name: meeting.livekit_room_name,
+      host_participant_id: meeting.host_participant_id,
+      started_at: format_datetime(meeting.started_at),
+      ended_at: format_datetime(meeting.ended_at)
+    }
   end
 
   defp format_datetime(nil), do: nil
