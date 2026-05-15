@@ -17,11 +17,41 @@ defmodule Platform.Meetings do
   import Ecto.Query
 
   alias Platform.Agents.Agent
-  alias Platform.Meetings.{Participant, Recording, Room, Transcript}
+  alias Platform.Meetings.{Meeting, Participant, Recording, Room, Transcript}
   alias Platform.Meetings.PubSub, as: MeetingsPubSub
   alias Platform.Repo
 
   require Logger
+
+  # ── Meeting records (ADR 0042) ────────────────────────────────────────────
+  #
+  # SCAFFOLD: the authoritative Meeting context API is owned by sibling
+  # task 019e2474-11c1 ("Meetings: schema, context, MCP create_meeting
+  # tool") in the meeting-module-basic-v2 stack. The function below is
+  # the minimal read surface that `PlatformWeb.MeetingLive` (this stack
+  # member's embedded chat panel) binds against. At rollup, reconcile
+  # with the sibling's broader context API.
+
+  @doc """
+  Fetch a meeting by its URL slug, preloading the bound `:chat_space`.
+
+  Returns the `%Meeting{}` (with `:chat_space` populated) or `nil` when
+  no meeting matches. `MeetingLive` treats `nil` as a clean not-found
+  and redirects rather than crashing. The chat space's `slug` is needed
+  to drive the embedded `live_render(ChatLive)` panel.
+
+  Sibling task 019e2474-11c1 ships a project-scoped `(project_id,
+  slug)` arity. This single-arg lookup is what the `/meetings/:slug`
+  route binds against pre-rollup; at rollup we reconcile to the
+  project-scoped version.
+  """
+  @spec get_meeting_by_slug(String.t()) :: Meeting.t() | nil
+  def get_meeting_by_slug(slug) when is_binary(slug) do
+    case Repo.get_by(Meeting, slug: slug) do
+      nil -> nil
+      meeting -> Repo.preload(meeting, :chat_space)
+    end
+  end
 
   # ── Configuration ─────────────────────────────────────────────────────────
 

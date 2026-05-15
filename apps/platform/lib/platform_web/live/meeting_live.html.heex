@@ -1,0 +1,283 @@
+<%!--
+  MeetingLive — meeting shell + embedded chat panel placeholder
+  (ADR 0042, task 019e2475-87a8 stage 1).
+
+  Meetings UI defaults to LIGHT mode (`data-theme="light"` on the root
+  wrapper).
+
+  Embedding strategy chosen for the chat panel: option (b), live_render
+  of `PlatformWeb.MeetingChatPanelLive` with the meeting's chat space
+  slug passed via session. See the @moduledoc on `PlatformWeb.MeetingLive`
+  for the rationale.
+
+  PLACEHOLDER slots for sibling stack members (this branch ships the
+  chat panel only):
+    * left rail        → 019e2475-4395 (sectioned participant list)
+    * center stage     → 019e2474-bc7c (stage-mode renderers)
+    * bottom strip     → 019e2475-0037 (video tiles)
+--%>
+<%= if @meeting do %>
+  <div data-theme="light" class="flex h-full flex-col bg-base-100 text-base-content">
+    <%!-- ── Top bar ──────────────────────────────────────────────────────── --%>
+    <header class="flex h-12 flex-shrink-0 items-center gap-3 border-b border-base-300 bg-base-200/60 px-3">
+      <%!-- Meeting name --%>
+      <div class="flex min-w-0 items-center gap-2">
+        <span class="hero-video-camera size-5 flex-shrink-0 text-primary"></span>
+        <h1 class="truncate text-sm font-semibold">{@meeting.name}</h1>
+      </div>
+
+      <div class="flex-1"></div>
+
+      <%!-- Segmented-control STUB. The actual mode-switcher logic ships
+           in sibling 019e2474-bc7c; this renders the disabled skeleton
+           + hero-icon labels so the layout settles. Active state keys
+           off @current_stage_mode. --%>
+      <div
+        class="join"
+        role="group"
+        aria-label="Stage mode"
+        data-stage-mode-control="stub"
+      >
+        <button
+          :for={mode <- @stage_modes}
+          type="button"
+          disabled
+          aria-label={stage_mode_label(mode)}
+          aria-pressed={to_string(@current_stage_mode == mode)}
+          title={stage_mode_label(mode)}
+          class={[
+            "join-item btn btn-sm gap-1.5 border-base-300",
+            if(@current_stage_mode == mode,
+              do: "btn-primary",
+              else: "btn-ghost text-base-content/60"
+            )
+          ]}
+        >
+          <span class={[stage_mode_icon(mode), "size-4"]}></span>
+          <span class="hidden sm:inline">{stage_mode_label(mode)}</span>
+        </button>
+      </div>
+
+      <%!-- Chat-panel toggle (stage 3). Mobile-only — `lg:hidden`.
+           On desktop the right column is always visible (`hidden
+           lg:flex` on the aside) so the toggle would be a no-op there.
+           Hero-icon only (no emoji) per the intent-panel-host
+           greppability + the e2e_behavior validation refusing emoji
+           codepoints. --%>
+      <button
+        type="button"
+        phx-click="toggle_chat_panel"
+        aria-label="Toggle chat panel"
+        aria-expanded={to_string(@chat_panel_open)}
+        aria-controls="meeting-chat-drawer"
+        title="Toggle chat panel"
+        class="btn btn-sm btn-ghost btn-square text-base-content/60 lg:hidden"
+        data-role="chat-panel-toggle"
+      >
+        <span class="hero-chat-bubble-left-right size-5"></span>
+      </button>
+    </header>
+
+    <%!-- ── Body: left rail + center stage + chat panel ─────────────────── --%>
+    <div class="flex min-h-0 flex-1">
+      <%!-- Left rail PLACEHOLDER. Sibling 019e2475-4395 fills this with
+           the sectioned participant list. --%>
+      <aside
+        class="hidden w-60 flex-shrink-0 flex-col border-r border-base-300 bg-base-200/40 lg:flex"
+        data-pane="left-rail"
+      >
+        <div
+          class="flex h-full items-center justify-center text-xs text-base-content/40"
+          data-placeholder="left-rail"
+        >
+          <span class="hero-user-group size-5"></span>
+          <span class="ml-2">Participant rail (sibling stack member).</span>
+        </div>
+      </aside>
+
+      <%!-- Center stage. PLACEHOLDER: sibling 019e2474-bc7c renders the
+           active stage mode here. --%>
+      <main
+        class="flex min-w-0 flex-1 items-center justify-center bg-base-100 p-4"
+        data-pane="center-stage"
+        data-stage-mode={@current_stage_mode}
+      >
+        <div
+          class="flex h-full w-full flex-col items-center justify-center rounded-xl border border-dashed border-base-300 text-base-content/40"
+          data-placeholder="center-stage"
+        >
+          <span class={[stage_mode_icon(@current_stage_mode), "size-10"]}></span>
+          <p class="mt-2 text-sm font-medium">
+            {stage_mode_label(@current_stage_mode)} stage
+          </p>
+          <p class="mt-0.5 text-xs">Stage renderer ships in a sibling stack member.</p>
+        </div>
+      </main>
+
+      <%!-- Right pane: embedded chat panel (THIS task's deliverable).
+           Stage 1 shipped the embed; stage 2 polished the framing
+           (HEADER + ~320px desktop width); stage 3 (this) adds the
+           mobile drawer + top-bar toggle.
+
+           Layout strategy — ONE aside, two presentations:
+             * `>=lg` (desktop): in-flow right column. The aside is
+               `lg:static lg:flex` etc. and IGNORES @chat_panel_open
+               entirely, so the desktop pane never collapses.
+             * `<lg` (mobile/tablet): the same aside is `fixed inset-y-0
+               right-0` with `translate-x-full` by default and
+               `translate-x-0` when @chat_panel_open. A backdrop element
+               sits underneath when open; its phx-click also dispatches
+               toggle_chat_panel for backdrop-dismiss.
+
+           Critically the embedded `live_render` lives in EXACTLY ONE
+           DOM node (this aside). Rendering it twice with the same id
+           would collide; positioning the single node responsively keeps
+           the embed canonical.
+
+           Bottom edge: the meeting page is mounted under the `:shell`
+           layout which carries the `--bottom-nav-height` CSS var (56px
+           mobile, 0px desktop) plus the standard `safe-area-inset-
+           bottom` env. The desktop column is in-flow above the bottom
+           strip so it doesn't need an explicit bottom offset. The
+           mobile drawer DOES — its `bottom-[calc(env(safe-area-inset-
+           bottom)+var(--bottom-nav-height,0px))]` mirrors the task
+           detail panel pattern (tasks_live.html.heex line ~795/1881)
+           so it never sits over the bottom-nav or iOS home indicator.
+           The composer inside MeetingChatPanelLive ALSO carries
+           `pb-[max(0.5rem,env(safe-area-inset-bottom))]` (line 266)
+           which is now harmless (the drawer container already absorbs
+           the inset) but kept for the desktop / drawer-not-fullheight
+           case.
+
+           The pane wrapper carries data-pane="chat-panel" and the
+           *embedded LV* root carries data-intent-panel-host="true" for
+           the future intent-panel migration (greppable hook). The
+           header caption text "placeholder for intent panel (ADR 0042)"
+           is also intentionally greppable for the same migration. --%>
+
+      <%!-- Mobile drawer backdrop. Only on `<lg` AND only when the
+           drawer is open. phx-click closes the drawer. Sits below the
+           drawer (z-30) but above the meeting body. --%>
+      <div
+        :if={@chat_panel_open}
+        phx-click="toggle_chat_panel"
+        aria-hidden="true"
+        class="fixed inset-0 z-30 bg-black/30 backdrop-blur-sm lg:hidden"
+        data-role="chat-panel-backdrop"
+      >
+      </div>
+
+      <aside
+        id="meeting-chat-drawer"
+        class={
+          [
+            # Shared
+            "flex flex-col border-l border-base-300 bg-base-100",
+            # Mobile drawer (default <lg). Fixed slide-in from right with
+            # safe-area-aware bottom edge (mirrors PR #335 / tasks_live
+            # pattern). z-40 above the backdrop (z-30). max-w caps so a
+            # phone landscape doesn't get a 100% drawer.
+            "fixed top-12 right-0 z-40 w-80 max-w-[85vw] shadow-xl transition-transform duration-200 ease-out",
+            "bottom-[calc(env(safe-area-inset-bottom)+var(--bottom-nav-height,0px))]",
+            if(@chat_panel_open, do: "translate-x-0", else: "translate-x-full"),
+            # Desktop (>=lg): in-flow right column, IGNORES the assign.
+            # Reset every fixed/transform property the mobile state set.
+            "lg:static lg:top-auto lg:bottom-auto lg:right-auto lg:z-auto lg:w-80 lg:max-w-none lg:flex-shrink-0 lg:translate-x-0 lg:shadow-none lg:transition-none"
+          ]
+        }
+        data-pane="chat-panel"
+        data-chat-panel-open={to_string(@chat_panel_open)}
+      >
+        <%!-- Pane header: meeting name + intent-panel placeholder caption.
+             The caption text is intentional and must be greppable later;
+             do NOT change its wording without updating the future-Rowan
+             migration hook (`rg 'placeholder for intent panel \(ADR
+             0042\)'`). --%>
+        <header
+          class="flex flex-shrink-0 items-start gap-2 border-b border-base-300 bg-base-200/40 px-3 py-2"
+          data-pane-section="header"
+        >
+          <div class="flex min-w-0 flex-1 flex-col gap-0.5">
+            <div class="flex min-w-0 items-center gap-2">
+              <span class="hero-chat-bubble-left-right size-4 flex-shrink-0 text-base-content/60">
+              </span>
+              <h2 class="truncate text-sm font-semibold text-base-content">
+                {@meeting.name}
+              </h2>
+            </div>
+            <p class="text-[11px] leading-tight text-base-content/50">
+              Discussion · placeholder for intent panel (ADR 0042)
+            </p>
+          </div>
+          <%!-- Mobile-only close button inside the drawer header. The
+               top-bar toggle handles open; this gives a one-tap close
+               that doesn't require backdrop-tap (e.g. for a wide
+               drawer that covers the whole viewport). --%>
+          <button
+            type="button"
+            phx-click="toggle_chat_panel"
+            aria-label="Close chat panel"
+            title="Close"
+            class="btn btn-ghost btn-xs btn-square text-base-content/60 lg:hidden"
+            data-role="chat-panel-close"
+          >
+            <span class="hero-x-mark size-4"></span>
+          </button>
+        </header>
+
+        <%!-- Body wrapper: flex-1/min-h-0 lets the embedded LV consume
+             the remaining vertical space *below* the header, while its
+             own internal scroll region (overflow-y-auto on the messages
+             list) stays clamped to that space. Without min-h-0 the
+             messages list would be unable to shrink and would push the
+             composer off-screen. --%>
+        <div class="flex min-h-0 flex-1 flex-col" data-pane-section="body">
+          <%= if @meeting.chat_space && @meeting.chat_space.slug do %>
+            {live_render(@socket, PlatformWeb.MeetingChatPanelLive,
+              id: "meeting-chat-panel-#{@meeting.id}",
+              session: %{"chat_space_slug" => @meeting.chat_space.slug}
+            )}
+          <% else %>
+            <div
+              class="flex h-full items-center justify-center text-xs text-base-content/40"
+              data-placeholder="chat-panel-empty"
+            >
+              <span class="hero-chat-bubble-left-right size-5"></span>
+              <span class="ml-2">No discussion bound to this meeting.</span>
+            </div>
+          <% end %>
+        </div>
+      </aside>
+    </div>
+
+    <%!-- Bottom strip PLACEHOLDER. Sibling 019e2475-0037 fills this with
+         mixed video tiles. --%>
+    <footer
+      class="h-[120px] flex-shrink-0 border-t border-base-300 bg-base-200/40 pb-[env(safe-area-inset-bottom)]"
+      data-pane="bottom-strip"
+    >
+      <div
+        class="flex h-full items-center justify-center text-xs text-base-content/40"
+        data-placeholder="bottom-strip"
+      >
+        <span class="hero-film size-5"></span>
+        <span class="ml-2">Video tiles ship in a sibling stack member.</span>
+      </div>
+    </footer>
+  </div>
+<% else %>
+  <%!-- `:index` action — lightweight placeholder. The real meetings
+       index (list / create) is out of scope for this task; this keeps
+       the sidebar nav link resolving cleanly. --%>
+  <div
+    data-theme="light"
+    class="flex h-full flex-col items-center justify-center bg-base-100 text-base-content"
+  >
+    <span class="hero-video-camera size-12 text-base-content/30"></span>
+    <h1 class="mt-3 text-lg font-semibold">Meetings</h1>
+    <p class="mt-1 max-w-sm text-center text-sm text-base-content/50">
+      Open a meeting from its link to enter the staged collaboration surface.
+      The meetings index is coming soon.
+    </p>
+  </div>
+<% end %>

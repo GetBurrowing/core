@@ -469,6 +469,9 @@ defmodule PlatformWeb.ShellLive do
       PlatformWeb.TasksLive ->
         "Tasks"
 
+      PlatformWeb.MeetingLive ->
+        "Meetings"
+
       PlatformWeb.SkillsLive ->
         "Skills"
 

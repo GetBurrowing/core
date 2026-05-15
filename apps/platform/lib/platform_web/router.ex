@@ -86,6 +86,8 @@ defmodule PlatformWeb.Router do
       live("/activity", ActivityLive, :index)
       live("/tasks", TasksLive, :index)
       live("/tasks/:task_id", TasksLive, :show)
+      live("/meetings", MeetingLive, :index)
+      live("/meetings/:slug", MeetingLive, :show)
       live("/skills", SkillsLive, :index)
       live("/skills/:slug", SkillsLive, :show)
       live("/changelog", ChangelogLive, :index)

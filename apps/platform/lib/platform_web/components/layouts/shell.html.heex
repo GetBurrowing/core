@@ -73,6 +73,14 @@
       <span :if={!@sidebar_collapsed} class="text-sm font-medium">Tasks</span>
     </.link>
     <.link
+      navigate="/meetings"
+      class={nav_item_class(@current_path, "/meetings")}
+      title="Meetings"
+    >
+      <span class="hero-video-camera size-5 flex-shrink-0"></span>
+      <span :if={!@sidebar_collapsed} class="text-sm font-medium">Meetings</span>
+    </.link>
+    <.link
       navigate="/skills"
       class={nav_item_class(@current_path, "/skills")}
       title="Skills"
