@@ -8,19 +8,18 @@ defmodule Platform.Meetings.Meeting do
   globally-unique `livekit_room_name` for the voice/video room.
 
   This is distinct from `Platform.Meetings.Room`, which tracks ephemeral
-  LiveKit call state keyed 1:1 to a chat space. A `Meeting` is the
-  persistent record the Meeting LiveView reads from.
+  LiveKit call state keyed 1:1 to a chat space. A `Meeting` is the persistent
+  record the Meeting LiveView reads from.
 
-  SCAFFOLD CO-OWNERSHIP — task 019e2475-87a8 (this task: embedded chat
-  panel as intent-panel placeholder), sibling task 019e2475-4395 (left
-  rail), and sibling task 019e2474-11c1 ("Meetings: schema, context,
-  MCP create_meeting tool") all ship a `Platform.Meetings.Meeting`
-  module bound to this table. The definitions are kept bit-for-bit in
-  sync so the meeting-module-basic-v2 stack rollup is a no-op merge.
-  The fields stage 1 of THIS task reads are: `name`, `slug`,
-  `chat_space_id`, plus the preloaded `:chat_space` association
-  (we need the space's `slug` to drive the embedded chat panel's
-  live_render session). Anything else is owned by 019e2474-11c1.
+  SCAFFOLD CO-OWNERSHIP — task 019e2475-87a8 (embedded chat panel as
+  intent-panel placeholder), sibling task 019e2475-4395 (left rail), and
+  this task 019e2474-11c1 ("Meetings: schema, context, MCP create_meeting
+  tool") all ship a `Platform.Meetings.Meeting` module bound to this table.
+  The definitions are kept bit-for-bit in sync so the meeting-module-basic-v2
+  stack rollup is a no-op merge. The fields stage 1 of the embedded-chat-panel
+  task reads are: `name`, `slug`, `chat_space_id`, plus the preloaded
+  `:chat_space` association (we need the space's `slug` to drive the embedded
+  chat panel's live_render session). Anything else is owned by 019e2474-11c1.
   """
   use Ecto.Schema
   import Ecto.Changeset
@@ -54,6 +53,9 @@ defmodule Platform.Meetings.Meeting do
 
   @doc """
   Changeset for creating a meeting.
+
+  Validates required fields, the status enum, and the per-project slug +
+  global livekit_room_name unique constraints.
   """
   def changeset(meeting, attrs) do
     meeting
@@ -65,5 +67,31 @@ defmodule Platform.Meetings.Meeting do
     |> foreign_key_constraint(:project_id)
     |> foreign_key_constraint(:host_participant_id)
     |> foreign_key_constraint(:chat_space_id)
+  end
+
+  @doc """
+  Changeset for transitioning a meeting's status.
+
+  Only legal transitions are allowed:
+
+    * `scheduled → live` (stamps `started_at`)
+    * `live → ended` (stamps `ended_at`)
+
+  Any other transition adds an error on `:status` rather than silently
+  flipping the value.
+  """
+  def status_changeset(%__MODULE__{status: from} = meeting, to, attrs \\ %{}) do
+    meeting
+    |> cast(attrs, [:started_at, :ended_at])
+    |> put_change(:status, to)
+    |> validate_inclusion(:status, @statuses)
+    |> validate_transition(from, to)
+  end
+
+  defp validate_transition(changeset, "scheduled", "live"), do: changeset
+  defp validate_transition(changeset, "live", "ended"), do: changeset
+
+  defp validate_transition(changeset, from, to) do
+    add_error(changeset, :status, "illegal transition from #{from} to #{to}")
   end
 end

@@ -35,9 +35,9 @@ defmodule Platform.Federation.ToolSurfaceTest do
   defp unique_slug, do: "test-#{System.unique_integer([:positive])}"
 
   describe "tool_definitions/0" do
-    test "returns all 65 tools with required components" do
+    test "returns all 66 tools with required components" do
       tools = ToolSurface.tool_definitions()
-      assert length(tools) == 65
+      assert length(tools) == 66
 
       tool_names = Enum.map(tools, & &1.name)
       assert "send_media" in tool_names
@@ -76,6 +76,7 @@ defmodule Platform.Federation.ToolSurfaceTest do
       assert "stack_start" in tool_names
       assert "stack_start_planning" in tool_names
       assert "stack_assign_agents" in tool_names
+      assert "meeting_create" in tool_names
       assert "plan_create" in tool_names
       assert "plan_get" in tool_names
       assert "plan_submit" in tool_names
@@ -232,6 +233,93 @@ defmodule Platform.Federation.ToolSurfaceTest do
         )
 
       assert error.error =~ "project_id"
+      assert error.recoverable == true
+    end
+
+    # ── meeting_create ───────────────────────────────────────────────────
+
+    test "meeting_create creates a meeting and returns the meeting map" do
+      project = create_project()
+
+      {:ok, result} =
+        ToolSurface.execute(
+          "meeting_create",
+          %{"project_id" => project.id, "name" => "Kickoff"},
+          %{}
+        )
+
+      assert result.name == "Kickoff"
+      assert result.slug == "kickoff"
+      assert result.project_id == project.id
+      assert result.status == "scheduled"
+      assert is_binary(result.id)
+      assert is_binary(result.chat_space_id)
+      assert is_binary(result.livekit_room_name)
+    end
+
+    test "meeting_create defaults host_participant_id to the calling agent's principal participant" do
+      project = create_project()
+      agent = create_agent()
+
+      {:ok, result} =
+        ToolSurface.execute(
+          "meeting_create",
+          %{"project_id" => project.id, "name" => "Sync"},
+          %{agent_id: agent.id}
+        )
+
+      assert is_binary(result.host_participant_id)
+
+      participant = Chat.get_agent_participant(result.chat_space_id, agent.id)
+      assert participant.id == result.host_participant_id
+      assert participant.role == "principal"
+    end
+
+    test "meeting_create honors an explicit host_participant_id" do
+      project = create_project()
+      space = create_space()
+      host = create_participant(space.id)
+
+      {:ok, result} =
+        ToolSurface.execute(
+          "meeting_create",
+          %{
+            "project_id" => project.id,
+            "name" => "Planning",
+            "host_participant_id" => host.id
+          },
+          %{}
+        )
+
+      assert result.host_participant_id == host.id
+    end
+
+    test "meeting_create without project_id returns a recoverable error" do
+      {:error, error} =
+        ToolSurface.execute("meeting_create", %{"name" => "No project"}, %{})
+
+      assert error.error =~ "project_id"
+      assert error.recoverable == true
+    end
+
+    test "meeting_create with a colliding explicit slug returns a changeset error, not a crash" do
+      project = create_project()
+
+      {:ok, _first} =
+        ToolSurface.execute(
+          "meeting_create",
+          %{"project_id" => project.id, "name" => "Retro", "slug" => "retro"},
+          %{}
+        )
+
+      {:error, error} =
+        ToolSurface.execute(
+          "meeting_create",
+          %{"project_id" => project.id, "name" => "Another Retro", "slug" => "retro"},
+          %{}
+        )
+
+      assert error.error =~ "meeting"
       assert error.recoverable == true
     end
 

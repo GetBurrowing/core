@@ -17,6 +17,7 @@ defmodule Platform.Meetings do
   import Ecto.Query
 
   alias Platform.Agents.Agent
+  alias Platform.Chat
   alias Platform.Meetings.{Meeting, Participant, Recording, Room, Transcript}
   alias Platform.Meetings.PubSub, as: MeetingsPubSub
   alias Platform.Repo
@@ -107,6 +108,191 @@ defmodule Platform.Meetings do
   @doc "Subscribe to the global presence summary topic for sidebar indicators."
   @spec subscribe_to_presence_summary() :: :ok | {:error, term()}
   defdelegate subscribe_to_presence_summary(), to: MeetingsPubSub, as: :subscribe_presence_summary
+
+  # ── Meetings (durable entity, ADR 0042) ──────────────────────────────────
+  #
+  # The `meetings` table is the persistent meeting record the Meeting
+  # LiveView reads from. It is distinct from `meeting_rooms` (ephemeral
+  # LiveKit call state, keyed 1:1 to a chat space): a `Meeting` is
+  # project-scoped, has a slug + status lifecycle (scheduled → live →
+  # ended), and embeds a backing chat space.
+
+  @doc """
+  Returns the PubSub topic for a project's meeting lifecycle events:
+  `"projects:{project_id}:meetings"`.
+  """
+  @spec project_meetings_topic(binary()) :: String.t()
+  def project_meetings_topic(project_id), do: "projects:#{project_id}:meetings"
+
+  @doc "Subscribe the calling process to a project's meeting lifecycle events."
+  @spec subscribe_to_project_meetings(binary()) :: :ok | {:error, term()}
+  def subscribe_to_project_meetings(project_id) do
+    Phoenix.PubSub.subscribe(Platform.PubSub, project_meetings_topic(project_id))
+  end
+
+  @doc """
+  Create a durable meeting.
+
+  Required attrs: `:project_id`, `:name`.
+  Optional: `:slug` (auto-generated from `:name` when omitted, with a
+  numeric suffix appended if it collides within the project),
+  `:host_participant_id`.
+
+  Wraps the backing chat-space creation and the meeting insert in a single
+  `Repo.transaction/1` — if either fails, neither is persisted. The
+  `livekit_room_name` is derived from the meeting id per ADR 0030 room
+  naming conventions (`"meeting-{uuid}"`).
+
+  On success, broadcasts `{:meeting_created, meeting}` on the project's
+  PubSub topic and returns `{:ok, meeting}`.
+  """
+  @spec create_meeting(map()) :: {:ok, Meeting.t()} | {:error, Ecto.Changeset.t() | term()}
+  def create_meeting(attrs) when is_map(attrs) do
+    attrs = normalize_attrs(attrs)
+    project_id = attrs[:project_id]
+    name = attrs[:name]
+
+    with :ok <- require_present(project_id, :project_id),
+         :ok <- require_present(name, :name) do
+      slug = resolve_slug(project_id, attrs[:slug], name)
+
+      result =
+        Repo.transaction(fn ->
+          space =
+            case Chat.create_space(%{
+                   name: name,
+                   kind: "meeting",
+                   metadata: %{"project_id" => project_id}
+                 }) do
+              {:ok, space} -> space
+              {:error, changeset} -> Repo.rollback(changeset)
+            end
+
+          meeting_id = Platform.Types.UUIDv7.generate()
+
+          meeting_attrs = %{
+            project_id: project_id,
+            host_participant_id: attrs[:host_participant_id],
+            chat_space_id: space.id,
+            slug: slug,
+            name: name,
+            status: "scheduled",
+            livekit_room_name: "meeting-#{meeting_id}"
+          }
+
+          changeset =
+            %Meeting{}
+            |> Meeting.changeset(meeting_attrs)
+            |> Ecto.Changeset.put_change(:id, meeting_id)
+
+          case Repo.insert(changeset) do
+            {:ok, meeting} -> meeting
+            {:error, changeset} -> Repo.rollback(changeset)
+          end
+        end)
+
+      case result do
+        {:ok, meeting} ->
+          Phoenix.PubSub.broadcast(
+            Platform.PubSub,
+            project_meetings_topic(project_id),
+            {:meeting_created, meeting}
+          )
+
+          {:ok, meeting}
+
+        {:error, _} = error ->
+          error
+      end
+    end
+  end
+
+  @doc "Get a meeting by ID. Returns `nil` if not found."
+  @spec get_meeting(binary()) :: Meeting.t() | nil
+  def get_meeting(id), do: Repo.get(Meeting, id)
+
+  @doc "Get a meeting by its per-project slug. Returns `nil` if not found."
+  @spec get_meeting_by_slug(binary(), String.t()) :: Meeting.t() | nil
+  def get_meeting_by_slug(project_id, slug) do
+    Repo.get_by(Meeting, project_id: project_id, slug: slug)
+  end
+
+  @doc "List all meetings for a project, newest first."
+  @spec list_meetings_for_project(binary()) :: [Meeting.t()]
+  def list_meetings_for_project(project_id) do
+    Meeting
+    |> where([m], m.project_id == ^project_id)
+    |> order_by([m], desc: m.inserted_at)
+    |> Repo.all()
+  end
+
+  @doc """
+  Transition a meeting from `scheduled` to `live`, stamping `started_at`.
+
+  Returns `{:error, changeset}` (with an `:status` error) on any illegal
+  transition — e.g. starting an already-ended meeting.
+  """
+  @spec start_meeting(Meeting.t()) :: {:ok, Meeting.t()} | {:error, Ecto.Changeset.t()}
+  def start_meeting(%Meeting{} = meeting) do
+    meeting
+    |> Meeting.status_changeset("live", %{started_at: DateTime.utc_now()})
+    |> Repo.update()
+  end
+
+  @doc """
+  Transition a meeting from `live` to `ended`, stamping `ended_at`.
+
+  Returns `{:error, changeset}` on any illegal transition.
+  """
+  @spec end_meeting(Meeting.t()) :: {:ok, Meeting.t()} | {:error, Ecto.Changeset.t()}
+  def end_meeting(%Meeting{} = meeting) do
+    meeting
+    |> Meeting.status_changeset("ended", %{ended_at: DateTime.utc_now()})
+    |> Repo.update()
+  end
+
+  # ── Meeting helpers (private) ────────────────────────────────────────────
+
+  defp normalize_attrs(attrs) do
+    Map.new(attrs, fn
+      {k, v} when is_binary(k) -> {String.to_existing_atom(k), v}
+      {k, v} -> {k, v}
+    end)
+  rescue
+    ArgumentError -> Map.new(attrs, fn {k, v} -> {k, v} end)
+  end
+
+  defp require_present(value, _field) when is_binary(value) and value != "", do: :ok
+  defp require_present(_value, field), do: {:error, {:missing, field}}
+
+  # Resolves the slug for a new meeting: an explicit slug is used as-is
+  # (the changeset's unique constraint still guards collisions), otherwise
+  # the name is slugified and a numeric suffix appended until it is free
+  # within the project.
+  defp resolve_slug(_project_id, slug, _name) when is_binary(slug) and slug != "", do: slug
+
+  defp resolve_slug(project_id, _slug, name) do
+    base = slugify(name)
+    dedupe_slug(project_id, base, base, 1)
+  end
+
+  defp dedupe_slug(project_id, candidate, base, n) do
+    case get_meeting_by_slug(project_id, candidate) do
+      nil -> candidate
+      _ -> dedupe_slug(project_id, "#{base}-#{n + 1}", base, n + 1)
+    end
+  end
+
+  defp slugify(name) do
+    slug =
+      name
+      |> String.downcase()
+      |> String.replace(~r/[^a-z0-9\s-]/u, "")
+      |> String.replace(~r/\s+/, "-")
+      |> String.trim("-")
+
+    if slug == "", do: "meeting", else: slug
+  end
 
   # ── Rooms ────────────────────────────────────────────────────────────────
 
