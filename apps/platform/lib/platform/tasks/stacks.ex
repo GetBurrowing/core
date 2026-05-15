@@ -466,10 +466,176 @@ defmodule Platform.Tasks.Stacks do
            {:ok, _stack} <- recompute_stack_status(stack) do
         updated_task
       else
+        # `eject_task` predates the 3-tuple `:not_in_stack` shape and its
+        # callers (incl. existing tests + the `stack_eject` MCP envelope at
+        # tool_surface.ex:2776) match on the bare 2-tuple. Collapse here so
+        # the new shape stays scoped to the dependency-edge surfaces.
+        {:error, :not_in_stack, _task_id} -> Repo.rollback(:not_in_stack)
         {:error, reason} -> Repo.rollback(reason)
       end
     end)
   end
+
+  @doc """
+  Add an in-stack dependency edge from `from_task_id` to `to_task_id`.
+
+  Mirrors the `add_task/2` shape: loads the stack and both endpoint tasks
+  fresh inside a `Repo.transaction`, runs membership/self guards
+  up-front, delegates to `Platform.Tasks.add_dependency/3` (stage 1 of
+  this skill) for the JSONB read-modify-write, then runs
+  `validate_dag/1` against the now-augmented edge set so multi-hop
+  cycles get caught and the dep write is rolled back atomically when
+  they're found.
+
+  `opts` accepts `:kind` (default `"blocks"`).
+
+  ## Up-front guards
+
+    * `{:error, :stack_not_found}` — the stack id has no row
+    * `{:error, :task_not_found}` — either endpoint id has no row
+    * `{:error, :self_edge}` — `from_task_id == to_task_id`
+    * `{:error, :not_in_stack, offending_task_id}` — one endpoint's
+      `stack_id` does not match the supplied stack id (covers both "not
+      in any stack" and "member of a different stack" — `validate_dag/1`
+      would also flag cross-stack deps, but the explicit membership
+      check is a cleaner up-front signal for an explicitly stack-scoped
+      tool). The id of the offending endpoint is threaded out so MCP
+      callers can render it in error envelopes without a follow-up
+      lookup.
+
+  ## Errors bubbled from stage 1 unchanged
+
+    * `{:error, :duplicate_edge}` — the same `(to_task_id, kind)` pair
+      already exists on `from_task`
+    * `{:error, :self_edge}` — same condition as the up-front guard,
+      defensively repeated by `Tasks.add_dependency/3`
+
+  ## Errors from DAG validation (transaction rolled back)
+
+    * `{:error, :cycle, path}` — the new edge introduces a cycle in the
+      in-stack subgraph; the dep write is undone before returning.
+
+  Returns `{:ok, %{from_task_id, to_task_id, kind, executable_now}}` on
+  success, where `executable_now` is the recomputed
+  `executable_members/1` id list so callers don't need a follow-up
+  `stack_get` to see the new ready set.
+  """
+  @spec add_dependency_edge(Stack.t() | binary(), binary(), binary(), keyword()) ::
+          {:ok,
+           %{
+             from_task_id: binary(),
+             to_task_id: binary(),
+             kind: String.t(),
+             executable_now: [binary()]
+           }}
+          | {:error, :stack_not_found | :task_not_found | :self_edge}
+          | {:error, :not_in_stack, binary()}
+          | {:error, :duplicate_edge}
+          | {:error, :cycle, [Task.t()]}
+          | {:error, term()}
+  def add_dependency_edge(stack_or_id, from_task_id, to_task_id, opts \\ [])
+      when is_binary(from_task_id) and is_binary(to_task_id) do
+    kind = Keyword.get(opts, :kind, "blocks")
+
+    txn =
+      Repo.transaction(fn ->
+        with {:ok, %Stack{} = stack} <- load_stack(stack_or_id),
+             :ok <- ensure_distinct_endpoints(from_task_id, to_task_id),
+             {:ok, %Task{} = from_task} <- load_task(from_task_id),
+             {:ok, %Task{} = to_task} <- load_task(to_task_id),
+             :ok <- ensure_in_stack(stack, from_task),
+             :ok <- ensure_in_stack(stack, to_task),
+             {:ok, _updated_from} <- Tasks.add_dependency(from_task, to_task_id, kind),
+             {:ok, _levels} <- normalize_dag_result(validate_dag(stack)),
+             {:ok, _stack} <- recompute_stack_status(stack) do
+          %{
+            from_task_id: from_task_id,
+            to_task_id: to_task_id,
+            kind: kind,
+            executable_now: stack |> executable_members() |> Enum.map(& &1.id)
+          }
+        else
+          {:error, :not_in_stack, task_id} -> Repo.rollback({:not_in_stack, task_id})
+          {:error, reason} -> Repo.rollback(reason)
+        end
+      end)
+
+    case txn do
+      {:error, {:cycle, path}} -> {:error, :cycle, path}
+      {:error, {:cross_stack_dep, payload}} -> {:error, :cross_stack_dep, payload}
+      {:error, {:not_in_stack, task_id}} -> {:error, :not_in_stack, task_id}
+      other -> other
+    end
+  end
+
+  @doc """
+  Remove an in-stack dependency edge from `from_task_id` to `to_task_id`.
+
+  Mirrors `add_dependency_edge/4` — same membership/self guards,
+  delegates to `Platform.Tasks.remove_dependency/3` for the JSONB
+  read-modify-write, and runs `validate_dag/1` defensively (removal
+  cannot create a cycle, but the cheap re-validation keeps the
+  recomputed-status path identical to the add side).
+
+  `opts` accepts `:kind` (default `"blocks"`).
+
+  Returns `{:error, :not_an_edge}` when no `(to_task_id, kind)` entry
+  exists on `from_task` (so callers can disambiguate an idempotent
+  re-remove from a successful one). All other guards match the add
+  side.
+
+  Returns `{:ok, %{from_task_id, to_task_id, kind, executable_now}}` on
+  success.
+  """
+  @spec remove_dependency_edge(Stack.t() | binary(), binary(), binary(), keyword()) ::
+          {:ok,
+           %{
+             from_task_id: binary(),
+             to_task_id: binary(),
+             kind: String.t(),
+             executable_now: [binary()]
+           }}
+          | {:error, :stack_not_found | :task_not_found | :self_edge}
+          | {:error, :not_in_stack, binary()}
+          | {:error, :not_an_edge}
+          | {:error, term()}
+  def remove_dependency_edge(stack_or_id, from_task_id, to_task_id, opts \\ [])
+      when is_binary(from_task_id) and is_binary(to_task_id) do
+    kind = Keyword.get(opts, :kind, "blocks")
+
+    txn =
+      Repo.transaction(fn ->
+        with {:ok, %Stack{} = stack} <- load_stack(stack_or_id),
+             :ok <- ensure_distinct_endpoints(from_task_id, to_task_id),
+             {:ok, %Task{} = from_task} <- load_task(from_task_id),
+             {:ok, %Task{} = to_task} <- load_task(to_task_id),
+             :ok <- ensure_in_stack(stack, from_task),
+             :ok <- ensure_in_stack(stack, to_task),
+             {:ok, _updated_from} <- Tasks.remove_dependency(from_task, to_task_id, kind),
+             {:ok, _levels} <- normalize_dag_result(validate_dag(stack)),
+             {:ok, _stack} <- recompute_stack_status(stack) do
+          %{
+            from_task_id: from_task_id,
+            to_task_id: to_task_id,
+            kind: kind,
+            executable_now: stack |> executable_members() |> Enum.map(& &1.id)
+          }
+        else
+          {:error, :not_in_stack, task_id} -> Repo.rollback({:not_in_stack, task_id})
+          {:error, reason} -> Repo.rollback(reason)
+        end
+      end)
+
+    case txn do
+      {:error, {:cycle, path}} -> {:error, :cycle, path}
+      {:error, {:cross_stack_dep, payload}} -> {:error, :cross_stack_dep, payload}
+      {:error, {:not_in_stack, task_id}} -> {:error, :not_in_stack, task_id}
+      other -> other
+    end
+  end
+
+  defp ensure_distinct_endpoints(id, id) when is_binary(id), do: {:error, :self_edge}
+  defp ensure_distinct_endpoints(_from, _to), do: :ok
 
   @doc """
   List the (non-deleted) members of a stack, ordered by `stack_position` asc.
@@ -1042,6 +1208,7 @@ defmodule Platform.Tasks.Stacks do
   defp ensure_not_in_stack(%Task{}), do: {:error, :already_in_stack}
 
   defp ensure_in_stack(%Stack{id: stack_id}, %Task{stack_id: stack_id}), do: :ok
+  defp ensure_in_stack(_stack, %Task{id: task_id}), do: {:error, :not_in_stack, task_id}
   defp ensure_in_stack(_stack, _task), do: {:error, :not_in_stack}
 
   defp ensure_no_in_stack_dependents(%Stack{id: stack_id}, %Task{id: task_id}) do

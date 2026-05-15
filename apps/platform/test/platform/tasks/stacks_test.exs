@@ -269,6 +269,203 @@ defmodule Platform.Tasks.StacksTest do
     end
   end
 
+  describe "add_dependency_edge/4 and remove_dependency_edge/4" do
+    test "happy add: writes edge, recomputes executable_now" do
+      {:ok, project} = Tasks.create_project(%{name: "Edge Add Happy"})
+      stack = stack_fixture(project_id: project.id)
+      {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "A"})
+      {:ok, b} = Tasks.create_task(%{project_id: project.id, title: "B"})
+      {:ok, _} = Stacks.add_task(stack, a)
+      {:ok, _} = Stacks.add_task(stack, b)
+
+      assert {:ok, result} = Stacks.add_dependency_edge(stack, b.id, a.id)
+
+      assert result.from_task_id == b.id
+      assert result.to_task_id == a.id
+      assert result.kind == "blocks"
+      # B now blocks on A → only A is executable.
+      assert result.executable_now == [a.id]
+
+      # Confirm the dep was actually persisted on B.
+      reloaded_b = Repo.get(Task, b.id)
+      assert Tasks.dependency_task_ids(reloaded_b) == [a.id]
+    end
+
+    test "happy remove: clears edge, recomputes executable_now" do
+      {:ok, project} = Tasks.create_project(%{name: "Edge Remove Happy"})
+      stack = stack_fixture(project_id: project.id)
+      {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "A"})
+      {:ok, b} = Tasks.create_task(%{project_id: project.id, title: "B"})
+      {:ok, _} = Stacks.add_task(stack, a)
+      {:ok, _} = Stacks.add_task(stack, b)
+      {:ok, _} = Stacks.add_dependency_edge(stack, b.id, a.id)
+
+      assert {:ok, result} = Stacks.remove_dependency_edge(stack, b.id, a.id)
+
+      assert result.from_task_id == b.id
+      assert result.to_task_id == a.id
+      assert result.kind == "blocks"
+      # Both members are roots again after the edge is gone.
+      assert Enum.sort(result.executable_now) == Enum.sort([a.id, b.id])
+
+      reloaded_b = Repo.get(Task, b.id)
+      assert Tasks.dependency_task_ids(reloaded_b) == []
+    end
+
+    test "cycle rejection rolls back the dep write atomically" do
+      {:ok, project} = Tasks.create_project(%{name: "Edge Cycle Rollback"})
+      stack = stack_fixture(project_id: project.id)
+      {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "A"})
+      {:ok, b} = Tasks.create_task(%{project_id: project.id, title: "B"})
+      {:ok, _} = Stacks.add_task(stack, a)
+      {:ok, _} = Stacks.add_task(stack, b)
+      # Existing edge: B → A. Now try A → B which would close the cycle.
+      {:ok, _} = Stacks.add_dependency_edge(stack, b.id, a.id)
+
+      assert {:error, :cycle, path} = Stacks.add_dependency_edge(stack, a.id, b.id)
+      assert is_list(path)
+      path_ids = Enum.map(path, & &1.id)
+      assert a.id in path_ids
+      assert b.id in path_ids
+
+      # The cycle-creating dep on A was rolled back: A still has no deps.
+      reloaded_a = Repo.get(Task, a.id)
+      assert Tasks.dependency_task_ids(reloaded_a) == []
+
+      # B's pre-existing edge is untouched.
+      reloaded_b = Repo.get(Task, b.id)
+      assert Tasks.dependency_task_ids(reloaded_b) == [a.id]
+    end
+
+    test "rejects cross-stack endpoint as :not_in_stack" do
+      {:ok, project} = Tasks.create_project(%{name: "Edge Cross Stack"})
+      stack_a = stack_fixture(project_id: project.id, slug: "ea-a")
+      stack_b = stack_fixture(project_id: project.id, slug: "ea-b")
+      {:ok, a1} = Tasks.create_task(%{project_id: project.id, title: "A1"})
+      {:ok, a2} = Tasks.create_task(%{project_id: project.id, title: "A2"})
+      {:ok, b1} = Tasks.create_task(%{project_id: project.id, title: "B1"})
+      {:ok, _} = Stacks.add_task(stack_a, a1)
+      {:ok, _} = Stacks.add_task(stack_a, a2)
+      {:ok, _} = Stacks.add_task(stack_b, b1)
+
+      # Target lives in a DIFFERENT stack — wrapper threads the
+      # offending task id (b1) so callers can render a concrete msg.
+      assert {:error, :not_in_stack, offending_id} =
+               Stacks.add_dependency_edge(stack_a, a1.id, b1.id)
+
+      assert offending_id == b1.id
+
+      # No write happened.
+      reloaded_a1 = Repo.get(Task, a1.id)
+      assert Tasks.dependency_task_ids(reloaded_a1) == []
+    end
+
+    test "rejects non-member endpoint as :not_in_stack" do
+      {:ok, project} = Tasks.create_project(%{name: "Edge Non Member"})
+      stack = stack_fixture(project_id: project.id)
+      {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "A"})
+      {:ok, free} = Tasks.create_task(%{project_id: project.id, title: "Free"})
+      {:ok, _} = Stacks.add_task(stack, a)
+
+      # `free` is not in any stack — wrapper names `free` as the offender.
+      assert {:error, :not_in_stack, offending_to} =
+               Stacks.add_dependency_edge(stack, a.id, free.id)
+
+      assert offending_to == free.id
+
+      # And the inverse: `from` is the non-member, so `free` is named.
+      assert {:error, :not_in_stack, offending_from} =
+               Stacks.add_dependency_edge(stack, free.id, a.id)
+
+      assert offending_from == free.id
+    end
+
+    test "rejects self-edge up front" do
+      {:ok, project} = Tasks.create_project(%{name: "Edge Self"})
+      stack = stack_fixture(project_id: project.id)
+      {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "A"})
+      {:ok, _} = Stacks.add_task(stack, a)
+
+      assert {:error, :self_edge} = Stacks.add_dependency_edge(stack, a.id, a.id)
+      assert {:error, :self_edge} = Stacks.remove_dependency_edge(stack, a.id, a.id)
+    end
+
+    test "duplicate add returns :duplicate_edge and is idempotent on the dep list" do
+      {:ok, project} = Tasks.create_project(%{name: "Edge Duplicate"})
+      stack = stack_fixture(project_id: project.id)
+      {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "A"})
+      {:ok, b} = Tasks.create_task(%{project_id: project.id, title: "B"})
+      {:ok, _} = Stacks.add_task(stack, a)
+      {:ok, _} = Stacks.add_task(stack, b)
+      {:ok, _} = Stacks.add_dependency_edge(stack, b.id, a.id)
+
+      assert {:error, :duplicate_edge} = Stacks.add_dependency_edge(stack, b.id, a.id)
+
+      reloaded_b = Repo.get(Task, b.id)
+      # Still exactly one edge — no double-write from the failed second add.
+      assert Tasks.dependency_task_ids(reloaded_b) == [a.id]
+      assert length(reloaded_b.dependencies) == 1
+    end
+
+    test "duplicate remove returns :not_an_edge" do
+      {:ok, project} = Tasks.create_project(%{name: "Edge Not An Edge"})
+      stack = stack_fixture(project_id: project.id)
+      {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "A"})
+      {:ok, b} = Tasks.create_task(%{project_id: project.id, title: "B"})
+      {:ok, _} = Stacks.add_task(stack, a)
+      {:ok, _} = Stacks.add_task(stack, b)
+      {:ok, _} = Stacks.add_dependency_edge(stack, b.id, a.id)
+      {:ok, _} = Stacks.remove_dependency_edge(stack, b.id, a.id)
+
+      assert {:error, :not_an_edge} = Stacks.remove_dependency_edge(stack, b.id, a.id)
+    end
+
+    test "stack_not_found / task_not_found surface cleanly" do
+      {:ok, project} = Tasks.create_project(%{name: "Edge Missing"})
+      stack = stack_fixture(project_id: project.id)
+      {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "A"})
+      {:ok, _} = Stacks.add_task(stack, a)
+
+      missing_id = Ecto.UUID.generate()
+
+      assert {:error, :stack_not_found} =
+               Stacks.add_dependency_edge(missing_id, a.id, a.id)
+
+      assert {:error, :task_not_found} =
+               Stacks.add_dependency_edge(stack, a.id, missing_id)
+
+      assert {:error, :task_not_found} =
+               Stacks.add_dependency_edge(stack, missing_id, a.id)
+    end
+
+    test "executable_now reflects multi-edge state after a chain of mutations" do
+      {:ok, project} = Tasks.create_project(%{name: "Edge Multi Edge"})
+      stack = stack_fixture(project_id: project.id)
+      {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "A"})
+      {:ok, b} = Tasks.create_task(%{project_id: project.id, title: "B"})
+      {:ok, c} = Tasks.create_task(%{project_id: project.id, title: "C"})
+      {:ok, _} = Stacks.add_task(stack, a)
+      {:ok, _} = Stacks.add_task(stack, b)
+      {:ok, _} = Stacks.add_task(stack, c)
+
+      # Initially: all three are roots.
+      initial = Stacks.executable_members(stack) |> Enum.map(& &1.id)
+      assert Enum.sort(initial) == Enum.sort([a.id, b.id, c.id])
+
+      # B → A: now A and C are roots.
+      {:ok, after_first} = Stacks.add_dependency_edge(stack, b.id, a.id)
+      assert Enum.sort(after_first.executable_now) == Enum.sort([a.id, c.id])
+
+      # C → A: only A is a root.
+      {:ok, after_second} = Stacks.add_dependency_edge(stack, c.id, a.id)
+      assert after_second.executable_now == [a.id]
+
+      # Remove C → A: A and C are roots again.
+      {:ok, after_remove} = Stacks.remove_dependency_edge(stack, c.id, a.id)
+      assert Enum.sort(after_remove.executable_now) == Enum.sort([a.id, c.id])
+    end
+  end
+
   describe "members/1" do
     test "returns members ordered by stack_position ascending" do
       {:ok, project} = Tasks.create_project(%{name: "Members Order"})

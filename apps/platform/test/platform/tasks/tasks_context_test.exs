@@ -363,6 +363,106 @@ defmodule Platform.Tasks.TasksContextTest do
     end
   end
 
+  describe "add_dependency/3 + remove_dependency/3 (atomic edge helpers)" do
+    setup do
+      {:ok, project} = Tasks.create_project(%{name: "Edge Project"})
+      {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "A"})
+      {:ok, b} = Tasks.create_task(%{project_id: project.id, title: "B"})
+      %{project: project, a: a, b: b}
+    end
+
+    test "add_dependency/3 appends a new edge with default kind", %{a: a, b: b} do
+      assert {:ok, updated} = Tasks.add_dependency(b, a.id)
+
+      assert updated.dependencies == [%{"task_id" => a.id, "kind" => "blocks"}]
+    end
+
+    test "add_dependency/3 accepts a task id string", %{a: a, b: b} do
+      assert {:ok, updated} = Tasks.add_dependency(b.id, a.id, "blocks")
+
+      assert updated.dependencies == [%{"task_id" => a.id, "kind" => "blocks"}]
+    end
+
+    test "add_dependency/3 is idempotent: re-adding the same edge returns :duplicate_edge",
+         %{a: a, b: b} do
+      assert {:ok, updated} = Tasks.add_dependency(b, a.id)
+      assert {:error, :duplicate_edge} = Tasks.add_dependency(updated, a.id)
+
+      # State on disk is the single edge — not duplicated.
+      reloaded = Tasks.get_task_record(b.id)
+      assert reloaded.dependencies == [%{"task_id" => a.id, "kind" => "blocks"}]
+    end
+
+    test "add_dependency/3 rejects a self-edge", %{a: a} do
+      assert {:error, :self_edge} = Tasks.add_dependency(a, a.id)
+    end
+
+    test "add_dependency/3 returns :task_not_found for unknown task id", %{a: a} do
+      bogus = Ecto.UUID.generate()
+      assert {:error, :task_not_found} = Tasks.add_dependency(bogus, a.id)
+    end
+
+    test "add_dependency/3 preserves existing edges when appending", %{
+      project: project,
+      a: a,
+      b: b
+    } do
+      {:ok, c} = Tasks.create_task(%{project_id: project.id, title: "C"})
+
+      {:ok, b1} = Tasks.add_dependency(b, a.id)
+      {:ok, b2} = Tasks.add_dependency(b1, c.id)
+
+      assert length(b2.dependencies) == 2
+      assert %{"task_id" => a.id, "kind" => "blocks"} in b2.dependencies
+      assert %{"task_id" => c.id, "kind" => "blocks"} in b2.dependencies
+    end
+
+    test "remove_dependency/3 drops the matching edge", %{a: a, b: b} do
+      {:ok, b1} = Tasks.add_dependency(b, a.id)
+      assert b1.dependencies != []
+
+      assert {:ok, b2} = Tasks.remove_dependency(b1, a.id)
+      assert b2.dependencies == []
+    end
+
+    test "remove_dependency/3 accepts a task id string", %{a: a, b: b} do
+      {:ok, _b1} = Tasks.add_dependency(b, a.id)
+      assert {:ok, b2} = Tasks.remove_dependency(b.id, a.id, "blocks")
+      assert b2.dependencies == []
+    end
+
+    test "remove_dependency/3 returns :not_an_edge when the edge is absent", %{a: a, b: b} do
+      assert {:error, :not_an_edge} = Tasks.remove_dependency(b, a.id)
+    end
+
+    test "remove_dependency/3 returns :not_an_edge when the kind doesn't match", %{a: a, b: b} do
+      {:ok, b1} = Tasks.add_dependency(b, a.id, "blocks")
+      # Currently the only valid kind is "blocks"; assert that a non-matching
+      # kind on remove is treated as absent edge rather than removing the
+      # "blocks" edge that exists. We pick a string the changeset would
+      # reject on insert but that we never use to mutate state — pure read.
+      assert {:error, :not_an_edge} = Tasks.remove_dependency(b1, a.id, "wat")
+
+      # Original "blocks" edge is untouched.
+      reloaded = Tasks.get_task_record(b.id)
+      assert reloaded.dependencies == [%{"task_id" => a.id, "kind" => "blocks"}]
+    end
+
+    test "remove_dependency/3 returns :task_not_found for unknown task id", %{a: a} do
+      bogus = Ecto.UUID.generate()
+      assert {:error, :task_not_found} = Tasks.remove_dependency(bogus, a.id)
+    end
+
+    test "remove_dependency/3 preserves siblings", %{project: project, a: a, b: b} do
+      {:ok, c} = Tasks.create_task(%{project_id: project.id, title: "C"})
+      {:ok, b1} = Tasks.add_dependency(b, a.id)
+      {:ok, b2} = Tasks.add_dependency(b1, c.id)
+
+      assert {:ok, b3} = Tasks.remove_dependency(b2, a.id)
+      assert b3.dependencies == [%{"task_id" => c.id, "kind" => "blocks"}]
+    end
+  end
+
   describe "approve_plan dependency gate" do
     setup do
       {:ok, project} = Tasks.create_project(%{name: "Gate Project"})

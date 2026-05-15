@@ -299,6 +299,117 @@ defmodule Platform.Tasks do
     end
   end
 
+  # ── Dependency edge helpers (atomic JSONB read-modify-write) ────────────
+  #
+  # `add_dependency/3` and `remove_dependency/3` are the canonical edge-level
+  # mutators for the `task.dependencies` JSONB column. They take a `%Task{}`
+  # struct (or task id), a target task id, and an optional `kind` (default
+  # `"blocks"`), and append/remove the matching `%{"task_id", "kind"}` entry.
+  # The new list is written via `update_task/2` so the existing changeset
+  # (`validate_dependencies/1` in `Platform.Tasks.Task`) and the
+  # `{:task_updated, task}` board broadcast both run.
+  #
+  # These helpers are stack-agnostic: no DAG validation, no membership
+  # checks, no cross-stack guard. The DAG/stack-scoped semantics are layered
+  # on top in `Platform.Tasks.Stacks` inside a `Repo.transaction` so they can
+  # roll back cleanly. See ADR 0041.
+
+  @doc """
+  Append a dependency edge `(target_task_id, kind)` to `task.dependencies`.
+
+  Accepts a `%Task{}` struct or a task id string. `kind` defaults to
+  `"blocks"`. Returns `{:ok, updated_task}` on success.
+
+  Errors:
+    * `{:error, :task_not_found}` — given task id has no record
+    * `{:error, :self_edge}` — `target_task_id` equals the task's own id
+    * `{:error, :duplicate_edge}` — the same `(target_task_id, kind)` pair
+      already exists on the task
+
+  This is a pure single-row update against the dependencies JSONB list. It
+  performs no DAG validation, no membership check, and no cross-stack guard
+  — those are layered on top by `Platform.Tasks.Stacks` for the in-stack
+  MCP tools.
+  """
+  @spec add_dependency(Task.t() | String.t(), String.t(), String.t()) ::
+          {:ok, Task.t()}
+          | {:error, :task_not_found | :self_edge | :duplicate_edge | Ecto.Changeset.t()}
+  def add_dependency(task_or_id, target_task_id, kind \\ "blocks")
+
+  def add_dependency(%Task{} = task, target_task_id, kind)
+      when is_binary(target_task_id) and is_binary(kind) do
+    cond do
+      target_task_id == task.id ->
+        {:error, :self_edge}
+
+      edge_present?(task.dependencies, target_task_id, kind) ->
+        {:error, :duplicate_edge}
+
+      true ->
+        new_deps = (task.dependencies || []) ++ [%{"task_id" => target_task_id, "kind" => kind}]
+        update_task(task, %{dependencies: new_deps})
+    end
+  end
+
+  def add_dependency(id, target_task_id, kind) when is_binary(id) do
+    case get_task_record(id) do
+      %Task{} = task -> add_dependency(task, target_task_id, kind)
+      nil -> {:error, :task_not_found}
+    end
+  end
+
+  @doc """
+  Remove the dependency edge `(target_task_id, kind)` from `task.dependencies`.
+
+  Accepts a `%Task{}` struct or a task id string. `kind` defaults to
+  `"blocks"`. Returns `{:ok, updated_task}` on success.
+
+  Errors:
+    * `{:error, :task_not_found}` — given task id has no record
+    * `{:error, :not_an_edge}` — no entry matching `(target_task_id, kind)`
+      exists on the task; callers can disambiguate this from a successful
+      idempotent removal
+
+  Like `add_dependency/3`, this is stack-agnostic — no DAG validation, no
+  membership checks. Cycle detection on removal is unnecessary, but the
+  Stacks-layer wrapper still runs `validate_dag/1` defensively.
+  """
+  @spec remove_dependency(Task.t() | String.t(), String.t(), String.t()) ::
+          {:ok, Task.t()}
+          | {:error, :task_not_found | :not_an_edge | Ecto.Changeset.t()}
+  def remove_dependency(task_or_id, target_task_id, kind \\ "blocks")
+
+  def remove_dependency(%Task{} = task, target_task_id, kind)
+      when is_binary(target_task_id) and is_binary(kind) do
+    deps = task.dependencies || []
+
+    if edge_present?(deps, target_task_id, kind) do
+      new_deps =
+        Enum.reject(deps, fn dep ->
+          dep["task_id"] == target_task_id and dep["kind"] == kind
+        end)
+
+      update_task(task, %{dependencies: new_deps})
+    else
+      {:error, :not_an_edge}
+    end
+  end
+
+  def remove_dependency(id, target_task_id, kind) when is_binary(id) do
+    case get_task_record(id) do
+      %Task{} = task -> remove_dependency(task, target_task_id, kind)
+      nil -> {:error, :task_not_found}
+    end
+  end
+
+  defp edge_present?(deps, target_task_id, kind) when is_list(deps) do
+    Enum.any?(deps, fn dep ->
+      dep["task_id"] == target_task_id and dep["kind"] == kind
+    end)
+  end
+
+  defp edge_present?(_deps, _target_task_id, _kind), do: false
+
   def list_tasks_by_project(project_id) do
     Task
     |> where([t], t.project_id == ^project_id)

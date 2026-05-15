@@ -1078,6 +1078,74 @@ defmodule Platform.Federation.ToolSurface do
           "When grouping an existing task into a stack. To create-and-attach in one call, pass `stack_id` to `task_create` instead."
       },
       %{
+        name: "stack_add_dependency",
+        description:
+          "Add an in-stack dependency edge from `from_task_id` to `to_task_id` (read: `from` blocks on `to`). Both endpoints must already be members of the same stack; the resulting in-stack DAG is validated atomically (cycles roll back).",
+        parameters: %{
+          stack_id: %{
+            type: "string",
+            required: true,
+            description: "The stack both endpoints must belong to"
+          },
+          from_task_id: %{
+            type: "string",
+            required: true,
+            description: "The dependent task (the one that gains a new dep entry)"
+          },
+          to_task_id: %{
+            type: "string",
+            required: true,
+            description: "The task being depended on"
+          },
+          kind: %{
+            type: "string",
+            required: false,
+            description:
+              "Edge kind; defaults to `\"blocks\"`. Allowed values: #{Enum.join(Platform.Tasks.Task.valid_dependency_kinds(), ", ")}."
+          }
+        },
+        returns:
+          "%{from_task_id, to_task_id, kind, executable_now} on success, where `executable_now` is the recomputed in-stack ready set (member ids with no unresolved in-stack deps).",
+        limitations:
+          "Both endpoints must be members of the given stack — non-members or cross-stack endpoints return `not_in_stack`. Self-edges (`from == to`) return `self_edge`. A duplicate `(to_task_id, kind)` already on `from_task` returns `duplicate_edge`. Adds that would close a cycle return `cycle` (with `path`); rare cross-stack-DAG slips return `cross_stack_dep`. All errors roll back atomically.",
+        when_to_use:
+          "When wiring or reshuffling an existing stack's dependency DAG without touching membership. To attach a new task with an initial dep set, prefer `stack_add` after creating the task with `dependencies` populated."
+      },
+      %{
+        name: "stack_remove_dependency",
+        description:
+          "Remove an in-stack dependency edge from `from_task_id` to `to_task_id`. Mirrors `stack_add_dependency` — same membership/self guards.",
+        parameters: %{
+          stack_id: %{
+            type: "string",
+            required: true,
+            description: "The stack both endpoints must belong to"
+          },
+          from_task_id: %{
+            type: "string",
+            required: true,
+            description: "The dependent task (the one whose dep entry is removed)"
+          },
+          to_task_id: %{
+            type: "string",
+            required: true,
+            description: "The task being un-depended on"
+          },
+          kind: %{
+            type: "string",
+            required: false,
+            description:
+              "Edge kind to remove; defaults to `\"blocks\"`. Allowed values: #{Enum.join(Platform.Tasks.Task.valid_dependency_kinds(), ", ")}."
+          }
+        },
+        returns:
+          "%{from_task_id, to_task_id, executable_now} on success. `executable_now` is the recomputed in-stack ready set after the removal.",
+        limitations:
+          "Both endpoints must be members of the given stack — non-members or cross-stack endpoints return `not_in_stack`. Self-edges return `self_edge`. If no `(to_task_id, kind)` entry exists on `from_task`, returns `not_an_edge` so callers can disambiguate idempotent re-removes from successful ones.",
+        when_to_use:
+          "When breaking an in-stack dep edge — e.g., to unblock a member after a scope change, or to dissolve a chain before ejecting a task."
+      },
+      %{
         name: "stack_eject",
         description:
           "Detach a task from its stack. Refuses if other in-stack members declare this task as a dep — they must be ejected or have the dep removed first.",
@@ -2612,6 +2680,99 @@ defmodule Platform.Federation.ToolSurface do
     end
   end
 
+  def execute("stack_add_dependency", args, _context) do
+    stack_id = Map.get(args, "stack_id")
+    from_task_id = Map.get(args, "from_task_id")
+    to_task_id = Map.get(args, "to_task_id")
+    kind = Map.get(args, "kind", "blocks")
+
+    cond do
+      is_nil(stack_id) ->
+        {:error,
+         %{error: "stack_id is required", recoverable: true, suggestion: "Provide a stack_id"}}
+
+      is_nil(from_task_id) ->
+        {:error,
+         %{
+           error: "from_task_id is required",
+           recoverable: true,
+           suggestion: "Provide a from_task_id"
+         }}
+
+      is_nil(to_task_id) ->
+        {:error,
+         %{
+           error: "to_task_id is required",
+           recoverable: true,
+           suggestion: "Provide a to_task_id"
+         }}
+
+      true ->
+        case Stacks.add_dependency_edge(stack_id, from_task_id, to_task_id, kind: kind) do
+          {:ok, %{} = result} ->
+            {:ok,
+             %{
+               from_task_id: result.from_task_id,
+               to_task_id: result.to_task_id,
+               kind: result.kind,
+               executable_now: result.executable_now
+             }}
+
+          {:error, _} = err ->
+            stack_dependency_error_envelope(err)
+
+          {:error, _, _} = err ->
+            stack_dependency_error_envelope(err)
+        end
+    end
+  end
+
+  def execute("stack_remove_dependency", args, _context) do
+    stack_id = Map.get(args, "stack_id")
+    from_task_id = Map.get(args, "from_task_id")
+    to_task_id = Map.get(args, "to_task_id")
+    kind = Map.get(args, "kind", "blocks")
+
+    cond do
+      is_nil(stack_id) ->
+        {:error,
+         %{error: "stack_id is required", recoverable: true, suggestion: "Provide a stack_id"}}
+
+      is_nil(from_task_id) ->
+        {:error,
+         %{
+           error: "from_task_id is required",
+           recoverable: true,
+           suggestion: "Provide a from_task_id"
+         }}
+
+      is_nil(to_task_id) ->
+        {:error,
+         %{
+           error: "to_task_id is required",
+           recoverable: true,
+           suggestion: "Provide a to_task_id"
+         }}
+
+      true ->
+        case Stacks.remove_dependency_edge(stack_id, from_task_id, to_task_id, kind: kind) do
+          {:ok, %{} = result} ->
+            {:ok,
+             %{
+               from_task_id: result.from_task_id,
+               to_task_id: result.to_task_id,
+               executable_now: result.executable_now
+             }}
+
+          {:error, _} = err ->
+            stack_dependency_error_envelope(err)
+
+          {:error, _, _} = err ->
+            stack_dependency_error_envelope(err)
+        end
+    end
+  end
+
   def execute("stack_eject", args, _context) do
     stack_id = Map.get(args, "stack_id")
     task_id = Map.get(args, "task_id")
@@ -3057,6 +3218,125 @@ defmodule Platform.Federation.ToolSurface do
 
   defp stack_add_error_envelope({:error, reason}) do
     {:error, %{error: "Failed to attach task to stack: #{inspect(reason)}", recoverable: true}}
+  end
+
+  # Map `Stacks.add_dependency_edge/4` and `remove_dependency_edge/4`
+  # error shapes to MCP envelopes with stable `code` keys. Reuses the
+  # `cycle` and `cross_stack_dep` codes verbatim from
+  # `stack_add_error_envelope/1` so callers see the same envelope shape
+  # regardless of which surface produced it.
+  defp stack_dependency_error_envelope({:error, :self_edge}) do
+    {:error,
+     %{
+       code: "self_edge",
+       error: "from_task_id and to_task_id must differ — a task cannot depend on itself",
+       recoverable: true,
+       suggestion: "Pass two distinct task ids for from_task_id / to_task_id"
+     }}
+  end
+
+  defp stack_dependency_error_envelope({:error, :not_in_stack, task_id})
+       when is_binary(task_id) do
+    {:error,
+     %{
+       code: "not_in_stack",
+       error: "Task #{task_id} is not a member of the given stack",
+       recoverable: true,
+       suggestion: "Add the task to this stack first via stack_add.",
+       offending_task_id: task_id
+     }}
+  end
+
+  # Retained for backward compatibility — the wrapper now threads the
+  # offending task id (3-tuple), but anything that still surfaces the
+  # bare 2-tuple keeps mapping to the same code without an id.
+  defp stack_dependency_error_envelope({:error, :not_in_stack}) do
+    {:error,
+     %{
+       code: "not_in_stack",
+       error: "Both endpoints must be members of the given stack",
+       recoverable: true,
+       suggestion:
+         "Use stack_get to inspect the stack's members and stack_add to attach any missing endpoint"
+     }}
+  end
+
+  defp stack_dependency_error_envelope({:error, :duplicate_edge}) do
+    {:error,
+     %{
+       code: "duplicate_edge",
+       error: "from_task already declares this (to_task_id, kind) dependency",
+       recoverable: false,
+       suggestion: "Inspect the from task's dependencies before re-adding the edge"
+     }}
+  end
+
+  defp stack_dependency_error_envelope({:error, :not_an_edge}) do
+    {:error,
+     %{
+       code: "not_an_edge",
+       error: "from_task does not declare a (to_task_id, kind) dependency to remove",
+       recoverable: false,
+       suggestion:
+         "Use task_dependencies on from_task_id to inspect its current edges before removing"
+     }}
+  end
+
+  defp stack_dependency_error_envelope({:error, :stack_not_found}) do
+    {:error,
+     %{
+       error: "Stack not found",
+       recoverable: false,
+       suggestion: "Use stack_list to find available stacks"
+     }}
+  end
+
+  defp stack_dependency_error_envelope({:error, :task_not_found}) do
+    {:error,
+     %{
+       error: "Task not found",
+       recoverable: false,
+       suggestion: "Use task_list to find available tasks"
+     }}
+  end
+
+  defp stack_dependency_error_envelope({:error, :cycle, path}) when is_list(path) do
+    {:error,
+     %{
+       code: "cycle",
+       error: "Adding the dependency edge would introduce a cycle in the in-stack DAG",
+       recoverable: true,
+       suggestion: "Remove the offending dep edge(s) before re-adding",
+       path: Enum.map(path, & &1.id)
+     }}
+  end
+
+  defp stack_dependency_error_envelope(
+         {:error, :cross_stack_dep, %{from: from, to_task_id: to_id}}
+       ) do
+    {:error,
+     %{
+       code: "cross_stack_dep",
+       error:
+         "Member declares a dependency on a task in another stack — cross-stack deps are forbidden",
+       recoverable: true,
+       suggestion:
+         "Move both tasks into the same stack, or drop the cross-stack dep edge before retrying",
+       from_task_id: from.id,
+       to_task_id: to_id
+     }}
+  end
+
+  defp stack_dependency_error_envelope({:error, %Ecto.Changeset{} = changeset}) do
+    {:error,
+     %{
+       error: "Failed to update dependency edge: #{inspect_errors(changeset)}",
+       recoverable: true
+     }}
+  end
+
+  defp stack_dependency_error_envelope({:error, reason}) do
+    {:error, %{error: "Failed to update dependency edge: #{inspect(reason)}", recoverable: true}}
   end
 
   # The composite unique index `task_stacks_slug_project_uniq` is on

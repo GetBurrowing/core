@@ -35,9 +35,9 @@ defmodule Platform.Federation.ToolSurfaceTest do
   defp unique_slug, do: "test-#{System.unique_integer([:positive])}"
 
   describe "tool_definitions/0" do
-    test "returns all 63 tools with required components" do
+    test "returns all 65 tools with required components" do
       tools = ToolSurface.tool_definitions()
-      assert length(tools) == 63
+      assert length(tools) == 65
 
       tool_names = Enum.map(tools, & &1.name)
       assert "send_media" in tool_names
@@ -69,6 +69,8 @@ defmodule Platform.Federation.ToolSurfaceTest do
       assert "stack_get" in tool_names
       assert "stack_list" in tool_names
       assert "stack_add" in tool_names
+      assert "stack_add_dependency" in tool_names
+      assert "stack_remove_dependency" in tool_names
       assert "stack_eject" in tool_names
       assert "stack_abandon" in tool_names
       assert "stack_start" in tool_names
@@ -1462,6 +1464,351 @@ defmodule Platform.Federation.ToolSurfaceTest do
 
       assert error.code == "has_dependents"
       assert Enum.any?(error.dependents, &(&1.id == child.id))
+    end
+
+    test "stack_add_dependency wires an edge between two members and reports executable_now" do
+      project = create_project()
+      slug = "shim-dep-add-#{System.unique_integer([:positive])}"
+
+      {:ok, %{stack_id: stack_id}} =
+        ToolSurface.execute(
+          "stack_create",
+          %{"project_id" => project.id, "slug" => slug, "name" => "Dep Add"},
+          %{}
+        )
+
+      {:ok, root} = Tasks.create_task(%{project_id: project.id, title: "Root"})
+      {:ok, child} = Tasks.create_task(%{project_id: project.id, title: "Child"})
+
+      {:ok, _} =
+        ToolSurface.execute("stack_add", %{"stack_id" => stack_id, "task_id" => root.id}, %{})
+
+      {:ok, _} =
+        ToolSurface.execute("stack_add", %{"stack_id" => stack_id, "task_id" => child.id}, %{})
+
+      {:ok, result} =
+        ToolSurface.execute(
+          "stack_add_dependency",
+          %{
+            "stack_id" => stack_id,
+            "from_task_id" => child.id,
+            "to_task_id" => root.id
+          },
+          %{}
+        )
+
+      assert result.from_task_id == child.id
+      assert result.to_task_id == root.id
+      assert result.kind == "blocks"
+      # `child` now blocks on `root` — only `root` is executable_now.
+      assert result.executable_now == [root.id]
+    end
+
+    test "stack_add_dependency returns self_edge envelope for from == to" do
+      project = create_project()
+      slug = "shim-dep-self-#{System.unique_integer([:positive])}"
+
+      {:ok, %{stack_id: stack_id}} =
+        ToolSurface.execute(
+          "stack_create",
+          %{"project_id" => project.id, "slug" => slug, "name" => "Dep Self"},
+          %{}
+        )
+
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Solo"})
+
+      {:ok, _} =
+        ToolSurface.execute("stack_add", %{"stack_id" => stack_id, "task_id" => task.id}, %{})
+
+      {:error, error} =
+        ToolSurface.execute(
+          "stack_add_dependency",
+          %{
+            "stack_id" => stack_id,
+            "from_task_id" => task.id,
+            "to_task_id" => task.id
+          },
+          %{}
+        )
+
+      assert error.code == "self_edge"
+    end
+
+    test "stack_remove_dependency drops an edge and reports executable_now" do
+      project = create_project()
+      slug = "shim-dep-rm-#{System.unique_integer([:positive])}"
+
+      {:ok, %{stack_id: stack_id}} =
+        ToolSurface.execute(
+          "stack_create",
+          %{"project_id" => project.id, "slug" => slug, "name" => "Dep Rm"},
+          %{}
+        )
+
+      {:ok, root} = Tasks.create_task(%{project_id: project.id, title: "Root"})
+      {:ok, child} = Tasks.create_task(%{project_id: project.id, title: "Child"})
+
+      {:ok, _} =
+        ToolSurface.execute("stack_add", %{"stack_id" => stack_id, "task_id" => root.id}, %{})
+
+      {:ok, _} =
+        ToolSurface.execute("stack_add", %{"stack_id" => stack_id, "task_id" => child.id}, %{})
+
+      {:ok, _} =
+        ToolSurface.execute(
+          "stack_add_dependency",
+          %{
+            "stack_id" => stack_id,
+            "from_task_id" => child.id,
+            "to_task_id" => root.id
+          },
+          %{}
+        )
+
+      {:ok, result} =
+        ToolSurface.execute(
+          "stack_remove_dependency",
+          %{
+            "stack_id" => stack_id,
+            "from_task_id" => child.id,
+            "to_task_id" => root.id
+          },
+          %{}
+        )
+
+      assert result.from_task_id == child.id
+      assert result.to_task_id == root.id
+      # With the edge dropped, both members are executable.
+      assert Enum.sort(result.executable_now) == Enum.sort([root.id, child.id])
+    end
+
+    test "stack_remove_dependency returns not_an_edge envelope when no such edge exists" do
+      project = create_project()
+      slug = "shim-dep-rm-miss-#{System.unique_integer([:positive])}"
+
+      {:ok, %{stack_id: stack_id}} =
+        ToolSurface.execute(
+          "stack_create",
+          %{"project_id" => project.id, "slug" => slug, "name" => "Dep Rm Miss"},
+          %{}
+        )
+
+      {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "A"})
+      {:ok, b} = Tasks.create_task(%{project_id: project.id, title: "B"})
+
+      {:ok, _} =
+        ToolSurface.execute("stack_add", %{"stack_id" => stack_id, "task_id" => a.id}, %{})
+
+      {:ok, _} =
+        ToolSurface.execute("stack_add", %{"stack_id" => stack_id, "task_id" => b.id}, %{})
+
+      {:error, error} =
+        ToolSurface.execute(
+          "stack_remove_dependency",
+          %{
+            "stack_id" => stack_id,
+            "from_task_id" => a.id,
+            "to_task_id" => b.id
+          },
+          %{}
+        )
+
+      assert error.code == "not_an_edge"
+    end
+
+    test "stack_add_dependency returns cycle envelope with path when the edge would close a cycle" do
+      project = create_project()
+      slug = "shim-dep-cycle-#{System.unique_integer([:positive])}"
+
+      {:ok, %{stack_id: stack_id}} =
+        ToolSurface.execute(
+          "stack_create",
+          %{"project_id" => project.id, "slug" => slug, "name" => "Dep Cycle"},
+          %{}
+        )
+
+      {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "A"})
+      {:ok, b} = Tasks.create_task(%{project_id: project.id, title: "B"})
+
+      {:ok, _} =
+        ToolSurface.execute("stack_add", %{"stack_id" => stack_id, "task_id" => a.id}, %{})
+
+      {:ok, _} =
+        ToolSurface.execute("stack_add", %{"stack_id" => stack_id, "task_id" => b.id}, %{})
+
+      # First edge B → A is fine.
+      {:ok, _} =
+        ToolSurface.execute(
+          "stack_add_dependency",
+          %{
+            "stack_id" => stack_id,
+            "from_task_id" => b.id,
+            "to_task_id" => a.id
+          },
+          %{}
+        )
+
+      # A → B would close the cycle.
+      {:error, error} =
+        ToolSurface.execute(
+          "stack_add_dependency",
+          %{
+            "stack_id" => stack_id,
+            "from_task_id" => a.id,
+            "to_task_id" => b.id
+          },
+          %{}
+        )
+
+      assert error.code == "cycle"
+      assert is_list(error.path)
+      assert a.id in error.path
+      assert b.id in error.path
+
+      # Cycle-creating dep on A was rolled back.
+      reloaded_a = Repo.get(Platform.Tasks.Task, a.id)
+      assert Tasks.dependency_task_ids(reloaded_a) == []
+    end
+
+    test "stack_add_dependency returns duplicate_edge envelope when the edge already exists" do
+      project = create_project()
+      slug = "shim-dep-dup-#{System.unique_integer([:positive])}"
+
+      {:ok, %{stack_id: stack_id}} =
+        ToolSurface.execute(
+          "stack_create",
+          %{"project_id" => project.id, "slug" => slug, "name" => "Dep Dup"},
+          %{}
+        )
+
+      {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "A"})
+      {:ok, b} = Tasks.create_task(%{project_id: project.id, title: "B"})
+
+      {:ok, _} =
+        ToolSurface.execute("stack_add", %{"stack_id" => stack_id, "task_id" => a.id}, %{})
+
+      {:ok, _} =
+        ToolSurface.execute("stack_add", %{"stack_id" => stack_id, "task_id" => b.id}, %{})
+
+      {:ok, _} =
+        ToolSurface.execute(
+          "stack_add_dependency",
+          %{
+            "stack_id" => stack_id,
+            "from_task_id" => b.id,
+            "to_task_id" => a.id
+          },
+          %{}
+        )
+
+      # Re-adding the same edge surfaces duplicate_edge.
+      {:error, error} =
+        ToolSurface.execute(
+          "stack_add_dependency",
+          %{
+            "stack_id" => stack_id,
+            "from_task_id" => b.id,
+            "to_task_id" => a.id
+          },
+          %{}
+        )
+
+      assert error.code == "duplicate_edge"
+
+      # No double-write — still exactly one dep on B.
+      reloaded_b = Repo.get(Platform.Tasks.Task, b.id)
+      assert Tasks.dependency_task_ids(reloaded_b) == [a.id]
+    end
+
+    test "stack_add_dependency returns not_in_stack envelope for a non-member endpoint" do
+      project = create_project()
+      slug = "shim-dep-nonmember-#{System.unique_integer([:positive])}"
+
+      {:ok, %{stack_id: stack_id}} =
+        ToolSurface.execute(
+          "stack_create",
+          %{"project_id" => project.id, "slug" => slug, "name" => "Dep Non Member"},
+          %{}
+        )
+
+      {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "A"})
+      {:ok, free} = Tasks.create_task(%{project_id: project.id, title: "Free"})
+
+      {:ok, _} =
+        ToolSurface.execute("stack_add", %{"stack_id" => stack_id, "task_id" => a.id}, %{})
+
+      # `free` is not a member of any stack.
+      {:error, error} =
+        ToolSurface.execute(
+          "stack_add_dependency",
+          %{
+            "stack_id" => stack_id,
+            "from_task_id" => a.id,
+            "to_task_id" => free.id
+          },
+          %{}
+        )
+
+      assert error.code == "not_in_stack"
+      # The envelope must NAME the offending endpoint so callers can
+      # render an actionable message without a follow-up lookup.
+      assert error.offending_task_id == free.id
+      assert error.error =~ free.id
+
+      # No write happened.
+      reloaded_a = Repo.get(Platform.Tasks.Task, a.id)
+      assert Tasks.dependency_task_ids(reloaded_a) == []
+    end
+
+    test "stack_add_dependency returns not_in_stack envelope when target lives in a different stack" do
+      project = create_project()
+      slug_a = "shim-dep-cross-a-#{System.unique_integer([:positive])}"
+      slug_b = "shim-dep-cross-b-#{System.unique_integer([:positive])}"
+
+      {:ok, %{stack_id: stack_a_id}} =
+        ToolSurface.execute(
+          "stack_create",
+          %{"project_id" => project.id, "slug" => slug_a, "name" => "Dep Cross A"},
+          %{}
+        )
+
+      {:ok, %{stack_id: stack_b_id}} =
+        ToolSurface.execute(
+          "stack_create",
+          %{"project_id" => project.id, "slug" => slug_b, "name" => "Dep Cross B"},
+          %{}
+        )
+
+      {:ok, a1} = Tasks.create_task(%{project_id: project.id, title: "A1"})
+      {:ok, b1} = Tasks.create_task(%{project_id: project.id, title: "B1"})
+
+      {:ok, _} =
+        ToolSurface.execute("stack_add", %{"stack_id" => stack_a_id, "task_id" => a1.id}, %{})
+
+      {:ok, _} =
+        ToolSurface.execute("stack_add", %{"stack_id" => stack_b_id, "task_id" => b1.id}, %{})
+
+      # a1 in stack_a, b1 in stack_b — wrapper rejects with :not_in_stack
+      # before the cross-stack-DAG check ever runs, and names b1 as the
+      # offender (the endpoint that doesn't belong to the supplied stack).
+      {:error, error} =
+        ToolSurface.execute(
+          "stack_add_dependency",
+          %{
+            "stack_id" => stack_a_id,
+            "from_task_id" => a1.id,
+            "to_task_id" => b1.id
+          },
+          %{}
+        )
+
+      assert error.code == "not_in_stack"
+      assert error.offending_task_id == b1.id
+      assert error.error =~ b1.id
+
+      # No write happened.
+      reloaded_a1 = Repo.get(Platform.Tasks.Task, a1.id)
+      assert Tasks.dependency_task_ids(reloaded_a1) == []
     end
 
     test "stack_abandon flips status to abandoned and records reason" do
