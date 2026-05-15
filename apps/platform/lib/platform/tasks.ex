@@ -63,7 +63,14 @@ defmodule Platform.Tasks do
     "backlog" => ~w(planning blocked in_progress stack_pending cancelled),
     "planning" => ~w(in_progress blocked backlog cancelled),
     "in_progress" => ~w(in_review deploying blocked done stack_pending cancelled),
-    "in_review" => ~w(deploying in_progress blocked),
+    # ADR 0041 (task 019e2be4): `done` is reachable from `in_review` for stack
+    # members whose terminal transition is the rollup-PR merge fan-out — they
+    # never own a per-task deploy stage, so they jump in_review → done. Solo
+    # tasks still ride in_review → deploying → done because the engine auto-
+    # injects a per-task deploy stage for them; this widening is safe because
+    # the automated pipeline only emits in_review → done from the stack
+    # rollup-PR webhook fan-out path.
+    "in_review" => ~w(deploying in_progress blocked done),
     "deploying" => ~w(done in_progress blocked),
     "blocked" => ~w(backlog planning in_progress in_review deploying cancelled),
     "done" => ~w(planning),

@@ -14,6 +14,8 @@ defmodule Platform.Tasks.Stacks do
 
   import Ecto.Query
 
+  require Logger
+
   alias Platform.Repo
   alias Platform.Tasks
   alias Platform.Tasks.{Stack, StackDeployer, Task}
@@ -821,19 +823,63 @@ defmodule Platform.Tasks.Stacks do
     members = members(stack.id)
     new_status = rollup_status_for(members)
 
-    if new_status == stack.status do
-      {:ok, stack}
-    else
-      stack
-      |> Stack.changeset(%{status: new_status})
-      |> Repo.update()
+    result =
+      if new_status == stack.status do
+        {:ok, stack}
+      else
+        stack
+        |> Stack.changeset(%{status: new_status})
+        |> Repo.update()
+      end
+
+    # Piggy-back: any state change that re-rolls up the stack should also
+    # re-attempt the rollup PR open. The deployer's `maybe_open_stack_pr/1`
+    # is idempotent — it noops when the rollup PR is already open or when
+    # not all members are ready — so calling it on every recompute is safe.
+    # Failures here are logged but never propagated; the recompute return
+    # value is the source of truth for callers.
+    case result do
+      {:ok, %Stack{} = updated} -> trigger_pr_open(updated)
+      _ -> :ok
     end
+
+    result
   end
 
   def recompute_stack_status(stack_id) when is_binary(stack_id) do
     case Repo.get(Stack, stack_id) do
       %Stack{} = stack -> recompute_stack_status(stack)
       nil -> {:error, :stack_not_found}
+    end
+  end
+
+  # Wrap `StackDeployer.maybe_open_stack_pr/1` so a deployer crash or
+  # `{:error, _}` return is logged but never propagates back into the
+  # recompute return value. The deployer's gate is internally idempotent
+  # (`:already_open` / `:not_ready`), so re-firing on every recompute is
+  # safe.
+  defp trigger_pr_open(%Stack{} = stack) do
+    try do
+      case StackDeployer.maybe_open_stack_pr(stack) do
+        {:ok, _outcome} ->
+          :ok
+
+        {:error, reason} ->
+          Logger.warning(
+            "[Stacks] recompute_stack_status piggy-back: maybe_open_stack_pr " <>
+              "failed for stack #{stack.id}: #{inspect(reason)}"
+          )
+
+          :ok
+      end
+    rescue
+      e ->
+        Logger.warning(
+          "[Stacks] recompute_stack_status piggy-back: maybe_open_stack_pr " <>
+            "raised for stack #{stack.id}: #{Exception.message(e)}"
+        )
+
+        :ok
     end
   end
 

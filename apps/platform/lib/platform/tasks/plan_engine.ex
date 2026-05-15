@@ -691,12 +691,25 @@ defmodule Platform.Tasks.PlanEngine do
           # for all members. The per-task plan completes when its
           # review stages pass; the stack-level deployer takes over
           # from there.
+          #
+          # Task 019e2be4 stage 1: fire the rollup-merge trigger here.
+          # `handle_member_transition/3` is async-aware (config
+          # `:platform, :stack_deployer, async: true|false`) and
+          # idempotent: the deployer noops when the member's commit is
+          # already on the rollup branch (`{:ok, :already_merged}`),
+          # when the review-stage validations haven't all passed
+          # (`{:ok, :not_ready}`), or when the task is not actually a
+          # stack member. Calling it on every plan completion in this
+          # branch is therefore safe and is the missing seam this task
+          # closes — without it, members that complete via plan-engine
+          # advance never get assembled onto the stack rollup.
           Logger.info(
             "[StackDeployer] task #{task.id} is in stack #{task.stack_id}; deferring to " <>
               "stack deployer (skipping per-task deploy stage injection)"
           )
 
           {:ok, completed} = complete_plan(plan)
+          _ = StackDeployer.handle_member_transition(task, :plan_completed, :in_review)
           Repo.preload(completed, stages_query())
 
         true ->

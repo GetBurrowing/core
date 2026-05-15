@@ -1,5 +1,11 @@
 defmodule Platform.Tasks.StacksTest do
-  use Platform.DataCase, async: true
+  # async: false because the `recompute_stack_status/1` piggy-back fires
+  # `StackDeployer.maybe_open_stack_pr/1`, which reads the global
+  # `:platform, :stack_deployer` config (git_runner). The
+  # `recompute_stack_status piggy-back` describe block swaps in a FakeRunner
+  # via `Application.put_env`, which is not safe to share across async
+  # processes.
+  use Platform.DataCase, async: false
 
   alias Platform.Repo
   alias Platform.Tasks
@@ -1842,6 +1848,130 @@ defmodule Platform.Tasks.StacksTest do
     end
   end
 
+  describe "recompute_stack_status/1 — maybe_open_stack_pr piggy-back" do
+    alias Platform.Tasks.StacksTest.RecomputePrHookRunner
+
+    setup :install_pr_hook_runner
+
+    test "fully-ready stack: recompute opens the rollup PR (piggy-back fires)", %{
+      project: project
+    } do
+      pr_url = "https://github.com/test/repo/pull/4242"
+      RecomputePrHookRunner.set_pr_response({:ok, %{number: 4242, url: pr_url}})
+
+      stack = stack_for_pr_hook!(project, slug: "ready-#{short_id()}")
+
+      _ = stamp_merged_member!(project, stack, sha: "shaone1", position: 1)
+      _ = stamp_merged_member!(project, stack, sha: "shatwo2", position: 2)
+
+      # Members all stamped at "in_review"; rollup_status_for/1 returns
+      # "in_review" — a real status change from the default "forming" →
+      # recompute writes the row AND fires the piggy-back. The deployer's
+      # `do_open_stack_pr/2` then performs its own write, flipping the
+      # stack to "deploying"; that's why the in-memory recompute return
+      # is "in_review" but the reloaded row is "deploying".
+      assert {:ok, recomputed} = Stacks.recompute_stack_status(stack)
+      assert recomputed.status == "in_review"
+
+      # Exactly ONE rollup PR shell-out from the piggy-back path.
+      assert [pr_call] = RecomputePrHookRunner.pr_calls()
+      assert pr_call.stack_id == stack.id
+
+      reloaded = Stacks.get_stack(stack.id)
+      assert reloaded.status == "deploying"
+      assert reloaded.metadata["rollup_pr"]["number"] == 4242
+      assert reloaded.metadata["rollup_pr"]["url"] == pr_url
+    end
+
+    test "partially-ready stack: recompute does NOT open the PR (deployer noop)", %{
+      project: project
+    } do
+      stack = stack_for_pr_hook!(project, slug: "partial-#{short_id()}")
+
+      # 1 merged + 1 unmerged → all_members_ready?/1 returns false.
+      _ = stamp_merged_member!(project, stack, sha: "halfway1", position: 1)
+      _ = stamp_unmerged_member!(project, stack, position: 2)
+
+      assert {:ok, recomputed} = Stacks.recompute_stack_status(stack)
+      # Mixed in_progress + in_review members → in_progress rollup.
+      assert recomputed.status == "in_progress"
+
+      # Piggy-back fired but the deployer's gate returned :not_ready.
+      assert RecomputePrHookRunner.pr_calls() == []
+
+      reloaded = Stacks.get_stack(stack.id)
+      assert is_nil(get_in(reloaded.metadata || %{}, ["rollup_pr"]))
+    end
+
+    test "already-open rollup PR: recompute is no-op for the deployer (idempotent)", %{
+      project: project
+    } do
+      stack = stack_for_pr_hook!(project, slug: "alreadyopen-#{short_id()}")
+
+      # Members at "deploying" so `rollup_status_for/1` keeps the stack at
+      # "deploying" — no DB write — but the piggy-back still fires.
+      m1 = stamp_merged_member!(project, stack, sha: "openme1", position: 1)
+      m2 = stamp_merged_member!(project, stack, sha: "openme2", position: 2)
+      {:ok, _} = Tasks.update_task(m1, %{status: "deploying"})
+      {:ok, _} = Tasks.update_task(m2, %{status: "deploying"})
+
+      # Pre-stamp metadata.rollup_pr so the deployer gate short-circuits.
+      pr_meta = %{
+        "number" => 7,
+        "url" => "https://github.com/test/repo/pull/7",
+        "opened_at" => DateTime.utc_now() |> DateTime.to_iso8601()
+      }
+
+      {:ok, locked} =
+        Stacks.update_stack(stack, %{
+          status: "deploying",
+          metadata: Map.put(stack.metadata || %{}, "rollup_pr", pr_meta)
+        })
+
+      assert {:ok, recomputed} = Stacks.recompute_stack_status(locked)
+      # Stack already at "deploying" — no DB write, but piggy-back still fires.
+      assert recomputed.status == "deploying"
+
+      # Deployer hit the :already_open guard; no PR shell-out.
+      assert RecomputePrHookRunner.pr_calls() == []
+
+      # Metadata preserved.
+      reloaded = Stacks.get_stack(stack.id)
+      assert reloaded.metadata["rollup_pr"]["number"] == 7
+    end
+
+    test "deployer raise: recompute return value is unchanged (failure isolated)", %{
+      project: project
+    } do
+      stack = stack_for_pr_hook!(project, slug: "boom-#{short_id()}")
+      _ = stamp_merged_member!(project, stack, sha: "boomshe1", position: 1)
+      _ = stamp_merged_member!(project, stack, sha: "boomshe2", position: 2)
+
+      # Make the runner's open_stack_pr raise. The piggy-back catches
+      # the exception, logs, and returns :ok without disturbing the
+      # recompute_stack_status return.
+      RecomputePrHookRunner.set_pr_response({:raise, "synthetic git boom"})
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          # The recompute return value is the in-memory rollup result —
+          # NOT affected by the deployer's downstream write or its raise.
+          # Members at "in_review" → rollup says "in_review".
+          assert {:ok, recomputed} = Stacks.recompute_stack_status(stack)
+          assert recomputed.status == "in_review"
+          assert recomputed.id == stack.id
+        end)
+
+      # The raise was logged via the piggy-back's rescue (failure isolated).
+      assert log =~ "[Stacks] recompute_stack_status piggy-back"
+      assert log =~ "raised for stack #{stack.id}"
+
+      # Crucially: the recompute call itself returned `{:ok, _}` rather
+      # than propagating the deployer raise. That's the failure-isolation
+      # contract this stage establishes.
+    end
+  end
+
   describe "stack_phase_assignees/1" do
     test "returns %{} for a stack with no phase_assignees metadata" do
       stack = stack_fixture()
@@ -2201,5 +2331,158 @@ defmodule Platform.Tasks.StacksTest do
         opts |> Keyword.get(String.to_existing_atom(key), key) |> to_string()
       end)
     end)
+  end
+
+  # ── recompute_stack_status piggy-back fixtures ─────────────────────────────
+  #
+  # In-memory `GitRunner` for the piggy-back tests. We only care about
+  # whether `open_stack_pr/1` was called (and that it can be made to raise);
+  # all other callbacks return safe defaults so the deployer's other code
+  # paths can run unimpeded if the gate happens to fire.
+  defmodule RecomputePrHookRunner do
+    @moduledoc false
+    @behaviour Platform.Tasks.StackDeployer.GitRunner
+
+    use Agent
+
+    def start_link(_opts \\ []) do
+      Agent.start_link(
+        fn ->
+          %{
+            pr_response: {:ok, %{number: 1, url: "https://github.com/test/repo/pull/1"}},
+            pr_calls: []
+          }
+        end,
+        name: __MODULE__
+      )
+    end
+
+    def stop, do: Agent.stop(__MODULE__)
+
+    def set_pr_response(response),
+      do: Agent.update(__MODULE__, &Map.put(&1, :pr_response, response))
+
+    def pr_calls, do: Agent.get(__MODULE__, & &1.pr_calls) |> Enum.reverse()
+
+    @impl true
+    def ensure_rollup_branch(_args), do: {:ok, %{status: :already_exists, base_sha: nil}}
+
+    @impl true
+    def merge_member_into_rollup(_args),
+      do: {:ok, %{status: :merged, merge_sha: "0000000000000000000000000000000000000000"}}
+
+    @impl true
+    def open_stack_pr(args) do
+      response =
+        Agent.get_and_update(__MODULE__, fn state ->
+          {state.pr_response, %{state | pr_calls: [args | state.pr_calls]}}
+        end)
+
+      case response do
+        # Raise on the caller side so we don't crash the Agent process.
+        {:raise, msg} -> raise RuntimeError, message: msg
+        other -> other
+      end
+    end
+
+    @impl true
+    def diff_stat(_args), do: {:ok, ""}
+
+    @impl true
+    def revert_member_merge(_args),
+      do: {:ok, %{status: :reverted, revert_sha: "0000000000000000000000000000000000000000"}}
+
+    @impl true
+    def close_stack_pr(_args), do: {:ok, :closed}
+  end
+
+  defp install_pr_hook_runner(_ctx) do
+    prev = Application.get_env(:platform, :stack_deployer, [])
+
+    {:ok, _} = RecomputePrHookRunner.start_link()
+
+    Application.put_env(:platform, :stack_deployer,
+      git_runner: RecomputePrHookRunner,
+      async: false
+    )
+
+    on_exit(fn ->
+      Application.put_env(:platform, :stack_deployer, prev)
+
+      try do
+        RecomputePrHookRunner.stop()
+      catch
+        :exit, _ -> :ok
+      end
+    end)
+
+    {:ok, project} =
+      Tasks.create_project(%{
+        name: "Recompute PR Hook " <> Ecto.UUID.generate(),
+        repo_url: "https://github.com/test/recompute-pr-hook-" <> short_id()
+      })
+
+    %{project: project}
+  end
+
+  defp stack_for_pr_hook!(project, opts) do
+    slug = Keyword.get(opts, :slug, "pr-hook-" <> short_id())
+
+    {:ok, stack} =
+      Stacks.create_stack(%{
+        project_id: project.id,
+        slug: slug,
+        name: "PR-hook stack #{slug}",
+        rollup_branch: Stacks.rollup_branch_name(slug)
+      })
+
+    stack
+  end
+
+  # Create a stack member already stamped as merged-into-rollup (status
+  # in_review + metadata.merged_into_rollup_at). Mirrors the helper in
+  # `stack_deployer_test.exs` so the deployer's `all_members_ready?/1`
+  # gate sees the member as ready.
+  defp stamp_merged_member!(project, stack, opts) do
+    sha = Keyword.fetch!(opts, :sha)
+    position = Keyword.get(opts, :position, 1)
+    title = Keyword.get(opts, :title, "Merged member " <> short_id())
+
+    {:ok, task} =
+      Tasks.create_task(%{
+        project_id: project.id,
+        title: title,
+        status: "in_review"
+      })
+
+    {:ok, task} =
+      Tasks.update_task(task, %{
+        stack_id: stack.id,
+        stack_position: position,
+        metadata: %{
+          "merged_into_rollup_at" => %{
+            "sha" => sha,
+            "at" => DateTime.utc_now() |> DateTime.to_iso8601()
+          }
+        }
+      })
+
+    task
+  end
+
+  defp stamp_unmerged_member!(project, stack, opts) do
+    position = Keyword.get(opts, :position, 1)
+
+    {:ok, task} =
+      Tasks.create_task(%{
+        project_id: project.id,
+        title: "Unmerged " <> short_id(),
+        status: "in_progress"
+      })
+
+    {:ok, task} =
+      Tasks.update_task(task, %{stack_id: stack.id, stack_position: position})
+
+    task
   end
 end

@@ -63,9 +63,17 @@ defmodule Platform.Tasks.TaskTest do
       assert task.status == "done"
     end
 
-    test "in_review cannot go directly to done", %{project: project} do
+    # Task 019e2be4 stage 1: `in_review → done` is now permitted at the
+    # automated pipeline layer to support the stack rollup-PR fan-out (a
+    # member that rides the stack PR has no per-task deploy stage and must
+    # jump straight to done when the rollup PR merges). Solo tasks still
+    # take in_review → deploying → done because the plan engine injects a
+    # per-task deploy stage for them; nothing in the engine emits the
+    # short-circuit transition for solo tasks.
+    test "in_review can transition directly to done (stack rollup fan-out)", %{project: project} do
       {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "T", status: "in_review"})
-      assert {:error, :invalid_transition} = Tasks.transition_task_status(task, "done")
+      assert {:ok, updated} = Tasks.transition_task_status(task, "done")
+      assert updated.status == "done"
     end
 
     test "deploying can go to in_progress or blocked", %{project: project} do

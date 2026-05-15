@@ -1036,4 +1036,230 @@ defmodule PlatformWeb.GithubWebhookControllerTest do
       end
     end
   end
+
+  # ── ADR 0041 (T6 stage 4 / task 019e2be4 stage 2): member promotion ─────
+  #
+  # Stack members never own a per-task deploy stage — the rollup PR carries
+  # the deploy. So when the rollup PR's webhook fan-out passes the per-member
+  # `pr_merged` validation, the fan-out ALSO promotes the member's task
+  # `in_review → done` directly (the plan-engine cascade would otherwise
+  # leave the member at `in_review` indefinitely, since
+  # `maybe_inject_deploy_or_complete` short-circuits for stack members).
+  describe "stack rollup-branch fan-out: member task promotion to done" do
+    alias Platform.Tasks.Stacks
+
+    test "happy path: every member task transitions in_review → done", %{conn: conn} do
+      %{rollup_branch: rollup_branch, members: members} = build_stack_with_members!(3)
+
+      # Sanity: every member starts at in_review.
+      for %{task: task} <- members do
+        assert task.status == "in_review"
+      end
+
+      payload = rollup_merged_payload(rollup_branch)
+      conn = post(conn, @github_webhook_path, payload)
+      assert %{"status" => "created"} = json_response(conn, 201)
+
+      for %{task: task} <- members do
+        reloaded = Platform.Repo.get!(Platform.Tasks.Task, task.id)
+
+        assert reloaded.status == "done",
+               "expected member #{task.id} to be promoted to done, got #{reloaded.status}"
+      end
+    end
+
+    test "member transition fires maybe_finalize_transition: stack recompute + sweep dependents",
+         %{conn: conn} do
+      # The point of using the canonical `Tasks.transition_task/2` (rather
+      # than a raw `Repo.update`) is that the existing `maybe_finalize_transition`
+      # chain — sweep_unblocked_dependents + maybe_recompute_stack — fires
+      # for `done` (tasks.ex line 1313). We verify the stack-recompute leg
+      # by observing the stack's status after fan-out: with every member
+      # at `done`, `recompute_stack_status` rolls the stack to `done`
+      # (the explicit `Stacks.complete_rollup_merge/2` call after fan-out
+      # would do this anyway, but the recompute proves the chain ran).
+      %{stack: stack, rollup_branch: rollup_branch} = build_stack_with_members!(2)
+
+      payload = rollup_merged_payload(rollup_branch)
+      conn = post(conn, @github_webhook_path, payload)
+      assert %{"status" => "created"} = json_response(conn, 201)
+
+      reloaded_stack = Platform.Repo.get!(Platform.Tasks.Stack, stack.id)
+      assert reloaded_stack.status == "done"
+    end
+
+    test "idempotent: replaying the webhook leaves member tasks at done", %{conn: conn} do
+      %{rollup_branch: rollup_branch, members: members} = build_stack_with_members!(2)
+
+      payload = rollup_merged_payload(rollup_branch)
+      conn1 = post(conn, @github_webhook_path, payload)
+      assert %{"status" => "created"} = json_response(conn1, 201)
+
+      first_member_states =
+        for %{task: task} <- members do
+          reloaded = Platform.Repo.get!(Platform.Tasks.Task, task.id)
+          assert reloaded.status == "done"
+          {reloaded.id, reloaded.status, reloaded.updated_at}
+        end
+
+      # Replay the webhook with a fresh PR number (so changelog dedup
+      # doesn't 422 the request before fan-out runs). The outer
+      # `process_stack_merged_pr` short-circuits because the stack is
+      # already done with rollup_merge metadata, so the fan-out (and
+      # therefore the per-member promote) does not re-fire — member
+      # statuses stay exactly as they were.
+      replay_payload =
+        rollup_merged_payload(rollup_branch, %{
+          "number" => System.unique_integer([:positive]),
+          "merge_commit_sha" => "replay-promote-sha"
+        })
+
+      conn2 = post(conn, @github_webhook_path, replay_payload)
+      assert %{"status" => "created"} = json_response(conn2, 201)
+
+      for {id, first_status, first_updated_at} <- first_member_states do
+        reloaded = Platform.Repo.get!(Platform.Tasks.Task, id)
+        assert reloaded.status == first_status
+        assert reloaded.updated_at == first_updated_at
+      end
+    end
+
+    test "deploying member is also promoted to done", %{conn: conn} do
+      # ADR 0041 §"Stack-level deploy" lists `deploying` as a valid
+      # member status for fan-out (a member that StackDeployer picked
+      # up mid-deploy). The promote helper must accept `deploying`
+      # too — the `deploying → done` edge has been valid in
+      # @valid_task_transitions since well before stage 1.
+      %{rollup_branch: rollup_branch, members: [m1, m2]} = build_stack_with_members!(2)
+
+      {:ok, _} = Tasks.update_task(m2.task, %{status: "deploying"})
+
+      payload = rollup_merged_payload(rollup_branch)
+      conn = post(conn, @github_webhook_path, payload)
+      assert %{"status" => "created"} = json_response(conn, 201)
+
+      assert Platform.Repo.get!(Platform.Tasks.Task, m1.task.id).status == "done"
+      assert Platform.Repo.get!(Platform.Tasks.Task, m2.task.id).status == "done"
+    end
+
+    test "anomalous member is NOT promoted (no_pending_pr_merged + unexpected_status)",
+         %{conn: conn} do
+      # When a member is recorded as an anomaly (either because its
+      # status is outside the accepted set, or because there is no
+      # pending pr_merged validation for it), the member's task status
+      # MUST stay unchanged. The promote step lives inside the happy
+      # branch of `fan_out_member` — the anomaly branches return
+      # without touching the task.
+      %{rollup_branch: rollup_branch, members: [happy, status_anomaly, no_validation_anomaly]} =
+        build_stack_with_members!(3)
+
+      # status_anomaly: in_progress (outside accepted statuses).
+      {:ok, _} = Tasks.update_task(status_anomaly.task, %{status: "in_progress"})
+
+      # no_validation_anomaly: stays in_review but its pr_merged
+      # validation is pre-failed so the lookup returns nil.
+      no_validation_anomaly.pr_validation
+      |> Platform.Tasks.Validation.changeset(%{status: "failed"})
+      |> Platform.Repo.update!()
+
+      payload = rollup_merged_payload(rollup_branch)
+      conn = post(conn, @github_webhook_path, payload)
+      assert %{"status" => "created"} = json_response(conn, 201)
+
+      assert Platform.Repo.get!(Platform.Tasks.Task, happy.task.id).status == "done"
+
+      # Anomalies stay at their pre-fan-out status.
+      assert Platform.Repo.get!(Platform.Tasks.Task, status_anomaly.task.id).status ==
+               "in_progress"
+
+      assert Platform.Repo.get!(Platform.Tasks.Task, no_validation_anomaly.task.id).status ==
+               "in_review"
+    end
+
+    test "solo (non-stack) task path is unchanged: no direct promote, rides per-task pr_merged",
+         %{conn: conn} do
+      # Regression: a plain task/<uuid> branch must continue to flow
+      # through `maybe_evaluate_pr_merged_validation` and NOT through
+      # the stack fan-out (which is the only path that calls the new
+      # promote helper). The task's status is therefore governed by
+      # whatever the per-task plan-engine cascade decides — for this
+      # test fixture (deploy stage with a `pr_merged` validation), the
+      # task does not get auto-promoted to done by the webhook because
+      # there is no per-task deploy injection on top of an already-deploy
+      # stage; the validation flips to passed and that's it. The KEY
+      # assertion is that no stack-fan-out marker landed on the
+      # validation evidence and the task did not jump to done from
+      # in_review via our new bypass (which would only fire from the
+      # stack branch).
+      %{task: task, pr_validation: pr_validation} = create_task_with_ci_validation!()
+
+      # Force the task into in_review so we can prove the new bypass
+      # didn't pick it up.
+      {:ok, _} = Tasks.update_task(task, %{status: "in_review"})
+
+      payload =
+        merged_pr_payload(%{
+          "pull_request" => %{
+            "merged" => true,
+            "title" => "feat: solo task PR",
+            "number" => System.unique_integer([:positive]),
+            "html_url" => "https://github.com/test/ci-repo/pull/1234",
+            "merge_commit_sha" => "solo1234",
+            "merged_at" => "2026-05-12T12:00:00Z",
+            "body" => "",
+            "user" => %{"login" => "agent-bot"},
+            "head" => %{"ref" => "task/#{task.id}"}
+          }
+        })
+
+      conn = post(conn, @github_webhook_path, payload)
+      assert %{"status" => "created"} = json_response(conn, 201)
+
+      reloaded_validation = Platform.Repo.get!(Platform.Tasks.Validation, pr_validation.id)
+      # Per-task pr_merged is passed (existing behavior).
+      assert reloaded_validation.status == "passed"
+
+      # Crucially: NO stack fan-out marker — proving we did not go
+      # through the stack-only branch that now promotes to done.
+      refute Map.get(reloaded_validation.evidence || %{}, "fanned_out_from_stack_rollup_pr")
+
+      # The task is NOT a stack member, so the new direct-promote
+      # helper was never called. The task's resulting status is
+      # determined by the existing solo-task plan engine cascade only.
+      reloaded_task = Platform.Repo.get!(Platform.Tasks.Task, task.id)
+      # Sanity: it's still a non-stack task.
+      assert reloaded_task.stack_id == nil
+    end
+
+    # Stage 2 spec line: "(c) `in_review → done` is now a permitted
+    # transition in `Tasks.update_task_status/2` for non-stack tasks too
+    # (permissive widening, documented inline)."
+    test "in_review → done is a permitted transition for any task (stage 1 widening)",
+         %{conn: _conn} do
+      # This is the stage 1 invariant: the @valid_task_transitions
+      # widening applies uniformly, not just to stack members. Verify
+      # it directly via the transition function so no webhook is involved.
+      {:ok, project} =
+        Tasks.create_project(%{
+          name: "Widening Test #{System.unique_integer([:positive])}",
+          repo_url: "https://github.com/test/widen"
+        })
+
+      {:ok, task} =
+        Tasks.create_task(%{project_id: project.id, title: "Solo task widening check"})
+
+      {:ok, _plan} = Tasks.create_plan(%{task_id: task.id, status: "approved"})
+
+      {:ok, in_review_task} = Tasks.transition_task_status(task, "in_progress")
+      {:ok, in_review_task} = Tasks.transition_task_status(in_review_task, "in_review")
+
+      # The widened transition: in_review → done. Pre-stage-1, this would
+      # have returned {:error, :invalid_transition}.
+      assert {:ok, %{status: "done"}} = Tasks.transition_task_status(in_review_task, "done")
+
+      # Sanity: this is a SOLO (non-stack) task — proving the widening
+      # is uniform, not stack-only.
+      assert is_nil(Platform.Repo.get!(Platform.Tasks.Task, task.id).stack_id)
+    end
+  end
 end

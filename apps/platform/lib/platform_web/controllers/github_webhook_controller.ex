@@ -670,6 +670,26 @@ defmodule PlatformWeb.GithubWebhookController do
                 "for stack member task #{member.id} (stack #{stack.id})"
             )
 
+            # Task 019e2be4 stage 2: stack members never own a per-task
+            # deploy stage (the rollup PR carries the deploy for the whole
+            # stack), so passing `pr_merged` does NOT trigger an
+            # `in_review → deploying → done` cascade through the plan
+            # engine. Promote the member directly to `done` here.
+            #
+            # The `in_review → done` edge in `@valid_task_transitions`
+            # (stage 1's widening) makes this a legal transition for the
+            # automated pipeline; `Tasks.transition_task/2` is the
+            # canonical entry point so `maybe_finalize_transition` for
+            # `done` (sweep_unblocked_dependents + maybe_recompute_stack +
+            # maybe_handle_regression) still fires.
+            #
+            # Idempotency: if the member is already `done` (replay or
+            # out-of-order webhook), `transition_task/2` returns
+            # `{:error, :invalid_transition}` because `done` has no
+            # outbound edges. We swallow that case and treat it as a
+            # no-op so the fan-out still records the member as passed.
+            promote_member_to_done(stack, member)
+
             # Tag the in-memory struct with the member task id so
             # `process_stack_merged_pr/4` can build `passed_member_ids`
             # without re-querying.
@@ -692,6 +712,54 @@ defmodule PlatformWeb.GithubWebhookController do
 
             {passed_acc, [anomaly | anomaly_acc]}
         end
+    end
+  end
+
+  # Promote a stack member task `in_review → done` after the rollup PR
+  # merges (task 019e2be4 stage 2). See call site in `fan_out_member/4`
+  # for the full rationale. Returns `:ok` on success or recoverable
+  # idempotent no-op; logs and returns `:error` on hard failure but
+  # never raises (the outer transaction must not roll back the
+  # validation pass just because the status flip failed).
+  defp promote_member_to_done(%Stack{} = stack, %Task{status: "done"} = member) do
+    Logger.debug(
+      "[Webhook] Stack #{stack.id} fan-out: member #{member.id} already done; " <>
+        "skipping promote (idempotent replay)"
+    )
+
+    :ok
+  end
+
+  defp promote_member_to_done(%Stack{} = stack, %Task{} = member) do
+    case Tasks.transition_task(member, "done") do
+      {:ok, _updated} ->
+        Logger.info(
+          "[Webhook] Stack #{stack.id} fan-out: member task #{member.id} promoted " <>
+            "#{member.status} → done"
+        )
+
+        :ok
+
+      {:error, :invalid_transition} ->
+        # Should not normally happen — the only valid sources for fan-out
+        # are `in_review` and `deploying`, and stage 1 widened both of
+        # those to allow → done. Log warn rather than crash so the
+        # validation pass still sticks.
+        Logger.warning(
+          "[Webhook] Stack #{stack.id} fan-out: refusing to promote member " <>
+            "#{member.id} from #{member.status} → done (invalid_transition); " <>
+            "leaving status unchanged"
+        )
+
+        :error
+
+      {:error, reason} ->
+        Logger.warning(
+          "[Webhook] Stack #{stack.id} fan-out: failed to promote member " <>
+            "#{member.id} from #{member.status} → done: #{inspect(reason)}"
+        )
+
+        :error
     end
   end
 
