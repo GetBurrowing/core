@@ -21,7 +21,7 @@ defmodule Platform.Tasks do
   alias Platform.Orchestration.{RuntimeSupervision, TaskRouterSupervisor, TaskRouterWatcher}
   alias Platform.Repo
 
-  alias Platform.Tasks.{Epic, Plan, PlanEngine, Project, Stage, Task, Validation}
+  alias Platform.Tasks.{Epic, Plan, PlanEngine, Project, ReviewRequest, Stage, Task, Validation}
 
   # ── Legacy summary/detail structs (backward compat) ──────────────────────
 
@@ -902,6 +902,128 @@ defmodule Platform.Tasks do
     |> order_by([p], desc: p.version)
     |> limit(1)
     |> Repo.one()
+  end
+
+  # ── View predicates (UI badge logic — task 019e2c25) ────────────────────
+  #
+  # `needs_human_action?/1` and `needs_human_action?/2` answer the question
+  # "does this task need a human to look at it right now?" used by the
+  # member-row, mobile-card, and stack-detail badges. The predicate returns
+  # `true` when any of the following is true:
+  #
+  #   1. The task's status is `in_review` — the dispatcher has parked it on
+  #      a manual_approval gate awaiting reviewer disposition.
+  #   2. The task has at least one pending `review_request` — a manual
+  #      approval has been submitted and is waiting for items to be approved
+  #      or rejected. (This is the per-task warning-badge case in the
+  #      desktop board.)
+  #   3. The task's latest plan is in `pending_review` — the "Plan Ready"
+  #      case where a planner has submitted a plan that has not been
+  #      approved yet. Mirrors `task_display_status/1` in `tasks_live.ex`.
+  #
+  # The 2-arity form takes a precomputed pending review count as the second
+  # arg. Batch callers (the LV's stack detail panel) already compute counts
+  # over a member list with `pending_review_counts/1` and should pass that
+  # integer in to avoid an extra DB round-trip per row. The 1-arity form
+  # exists for the no-batch call sites and queries the DB directly.
+  #
+  # Both forms read `task.status` and `task.plans` off the struct — the
+  # caller is responsible for preloading `:plans` (which `list_all_tasks/1`,
+  # `get_task_detail/1`, and `Stacks.members/1`-callers that subsequently
+  # preload all do) before relying on the plan-pending-review branch.
+  # When `:plans` is not loaded, that branch is skipped (status + count
+  # branches still resolve correctly).
+
+  @doc """
+  Returns `true` when `task` needs a human to take action on it — either
+  the task is sitting in `in_review`, has a pending review_request, or its
+  latest plan is in `pending_review`.
+
+  Use this for "needs feedback" badges. For batch callers that already have
+  a precomputed pending-review count for the task, prefer
+  `needs_human_action?/2` to avoid an extra DB query per task.
+  """
+  @spec needs_human_action?(Task.t()) :: boolean()
+  def needs_human_action?(%Task{} = task) do
+    needs_human_action?(task, pending_review_count_for_task(task.id))
+  end
+
+  @doc """
+  Same as `needs_human_action?/1` but accepts an explicit
+  `pending_review_count`. Used by batch UI call sites (e.g. the stack
+  detail member rows) that already compute pending counts across a list of
+  task ids and want to avoid one query per row.
+
+  Pass `0` when you have no count and don't want a DB query — this skips
+  the "pending review request" branch entirely. Pass `nil` to fall through
+  to the 1-arity form's DB lookup.
+  """
+  @spec needs_human_action?(Task.t(), non_neg_integer() | nil) :: boolean()
+  def needs_human_action?(%Task{} = task, nil), do: needs_human_action?(task)
+
+  def needs_human_action?(%Task{} = task, pending_review_count)
+      when is_integer(pending_review_count) and pending_review_count >= 0 do
+    needs_human_action_reason(task, pending_review_count) != nil
+  end
+
+  @doc """
+  Returns the *reason* `task` needs a human action, or `nil` when none of
+  the trigger conditions apply.
+
+  Possible reasons (precedence order):
+
+    * `:review_request_pending` — there is at least one open review_request
+      for the task. **Ranked above `:plan_pending_review`** because a live
+      review request is the more actionable / urgent signal: it represents
+      a human-targeted ask raised mid-stream (manual approval, feedback
+      gate), whereas `:plan_pending_review` is the task's normal process
+      state. When both apply, the contract says "ALSO show Needs review",
+      so a single-reason predicate must surface the review-request label.
+    * `:plan_pending_review` — the task's latest plan is in `pending_review`
+      ("Plan ready" badge). Reported when no open review_request exists.
+    * `:validation_failed` — the task is parked on `in_review` after a
+      manual_approval gate (status-driven fallback that covers the common
+      case).
+    * `nil` — task does not currently need human attention.
+
+  Mirrors the truthy branches of `needs_human_action?/2` but lets callers
+  (badge label / data-action-reason) discriminate. Same preload
+  expectations apply: the `:plan_pending_review` branch is skipped when
+  `:plans` is not loaded.
+  """
+  @spec needs_human_action_reason(Task.t(), non_neg_integer() | nil) ::
+          :plan_pending_review | :review_request_pending | :validation_failed | nil
+  def needs_human_action_reason(%Task{} = task, nil) do
+    needs_human_action_reason(task, pending_review_count_for_task(task.id))
+  end
+
+  def needs_human_action_reason(%Task{} = task, pending_review_count)
+      when is_integer(pending_review_count) and pending_review_count >= 0 do
+    cond do
+      pending_review_count > 0 -> :review_request_pending
+      plan_pending_review?(task) -> :plan_pending_review
+      task.status == "in_review" -> :validation_failed
+      true -> nil
+    end
+  end
+
+  # Inspects `task.plans` for any plan in `pending_review`. Returns `false`
+  # when `:plans` is not preloaded (rather than triggering a lazy query) so
+  # the predicate stays cheap for callers that only care about status +
+  # count.
+  defp plan_pending_review?(%Task{plans: plans}) when is_list(plans) do
+    Enum.any?(plans, &(&1.status == "pending_review"))
+  end
+
+  defp plan_pending_review?(_task), do: false
+
+  # Counts pending review_requests for a single task. Used by the 1-arity
+  # `needs_human_action?/1`. Batch callers should use the LV's
+  # `pending_review_counts/1` helper instead.
+  defp pending_review_count_for_task(task_id) do
+    ReviewRequest
+    |> where([rr], rr.task_id == ^task_id and rr.status == "pending")
+    |> Repo.aggregate(:count, :id)
   end
 
   # ── Stages ───────────────────────────────────────────────────────────────

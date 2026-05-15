@@ -61,6 +61,17 @@ defmodule PlatformWeb.TasksLive do
 
     projects = Tasks.list_projects()
     all_tasks = Tasks.list_all_tasks()
+    # Stage-5 of task 019e2c25: subscribe to per-task ReviewRequests topics
+    # so the badge live-updates within 2s when a manual_approval review_request
+    # fires while a stack-detail panel is open. Tracked in
+    # `:review_request_subscriptions` (MapSet of task_ids) so `refresh_board/1`
+    # can diff and (re)subscribe as the board's task set changes.
+    initial_task_ids = MapSet.new(all_tasks, & &1.id)
+
+    if connected?(socket) do
+      Enum.each(initial_task_ids, &ReviewRequests.subscribe_for_task/1)
+    end
+
     stack_entries = Stacks.list_stacks_with_members(%{})
     {stack_board_data, stacks} = split_stack_entries(stack_entries)
     users = Accounts.list_users()
@@ -100,6 +111,7 @@ defmodule PlatformWeb.TasksLive do
      |> assign(:active_status_filter, "in_progress")
      |> assign(:pending_plan_count, count_pending_plans(all_tasks))
      |> assign(:review_counts, pending_review_counts(all_tasks))
+     |> assign(:review_request_subscriptions, initial_task_ids)
      |> assign(:selected_task, nil)
      |> assign(:show_detail, false)
      # Stack detail panel state (T8 stage 1). `:selected_stack` is the
@@ -108,6 +120,10 @@ defmodule PlatformWeb.TasksLive do
      # `:show_stack_detail` gates the slide-in container.
      |> assign(:selected_stack, nil)
      |> assign(:selected_stack_members, [])
+     # Stage-2 of task 019e2c25: per-member pending-review counts powering the
+     # "Needs review" / "Plan ready" badge on stack-detail member rows.
+     # Keyed by member task id → integer count of open review_requests.
+     |> assign(:selected_stack_member_review_counts, %{})
      |> assign(:show_stack_detail, false)
      # Plan revision folding state — IDs of plans the user has explicitly
      # toggled open. Active (non-rejected) plans are expanded by default
@@ -416,6 +432,7 @@ defmodule PlatformWeb.TasksLive do
      socket
      |> assign(:selected_stack, nil)
      |> assign(:selected_stack_members, [])
+     |> assign(:selected_stack_member_review_counts, %{})
      |> assign(:show_stack_detail, false)
      |> push_patch(to: ~p"/tasks/#{task_id}")}
   end
@@ -462,12 +479,13 @@ defmodule PlatformWeb.TasksLive do
         {:noreply, socket}
 
       %Stack{} = stack ->
-        members = Stacks.members(stack)
+        {members, counts} = load_stack_member_panel_data(stack)
 
         {:noreply,
          socket
          |> assign(:selected_stack, stack)
          |> assign(:selected_stack_members, members)
+         |> assign(:selected_stack_member_review_counts, counts)
          |> assign(:show_stack_detail, true)
          # Close the per-task panel so the two slide-ins don't stack.
          |> assign(:selected_task, nil)
@@ -481,6 +499,7 @@ defmodule PlatformWeb.TasksLive do
      socket
      |> assign(:selected_stack, nil)
      |> assign(:selected_stack_members, [])
+     |> assign(:selected_stack_member_review_counts, %{})
      |> assign(:show_stack_detail, false)}
   end
 
@@ -497,6 +516,7 @@ defmodule PlatformWeb.TasksLive do
          socket
          |> assign(:selected_stack, nil)
          |> assign(:selected_stack_members, [])
+         |> assign(:selected_stack_member_review_counts, %{})
          |> assign(:show_stack_detail, false)
          |> put_flash(:info, "Stack abandoned.")}
 
@@ -517,20 +537,26 @@ defmodule PlatformWeb.TasksLive do
   def handle_event("start_stack_planning", _params, socket) do
     case Stacks.start_planning(socket.assigns.selected_stack) do
       {:ok, %{stack: stack, planning: planning}} ->
+        {members, counts} = load_stack_member_panel_data(stack)
+
         {:noreply,
          socket
          |> assign(:selected_stack, stack)
-         |> assign(:selected_stack_members, Stacks.members(stack))
+         |> assign(:selected_stack_members, members)
+         |> assign(:selected_stack_member_review_counts, counts)
          |> put_flash(
            :info,
            "Started planning for #{length(planning)} #{member_word(length(planning))}."
          )}
 
       {:partial, %{stack: stack, planning: planning, errors: errors}} ->
+        {members, counts} = load_stack_member_panel_data(stack)
+
         {:noreply,
          socket
          |> assign(:selected_stack, stack)
-         |> assign(:selected_stack_members, Stacks.members(stack))
+         |> assign(:selected_stack_members, members)
+         |> assign(:selected_stack_member_review_counts, counts)
          |> put_flash(
            :error,
            "Started planning for #{length(planning)} #{member_word(length(planning))}; " <>
@@ -1142,13 +1168,30 @@ defmodule PlatformWeb.TasksLive do
         socket
         |> assign(:selected_stack, nil)
         |> assign(:selected_stack_members, [])
+        |> assign(:selected_stack_member_review_counts, %{})
         |> assign(:show_stack_detail, false)
 
       %Stack{} = stack ->
+        {members, counts} = load_stack_member_panel_data(stack)
+
         socket
         |> assign(:selected_stack, stack)
-        |> assign(:selected_stack_members, Stacks.members(stack))
+        |> assign(:selected_stack_members, members)
+        |> assign(:selected_stack_member_review_counts, counts)
     end
+  end
+
+  # Stage-2 of task 019e2c25 (badge wiring): preload `:plans` on the stack's
+  # members so `Tasks.needs_human_action?/2` can resolve the
+  # `:plan_pending_review` branch off the struct, and compute the
+  # pending-review-request counts (Map of member id → integer) used by the
+  # same predicate. Centralised here so every site that loads the panel's
+  # member list (`open_stack_detail`, `start_stack_planning`,
+  # `reload_selected_stack`) feeds the assigns the badge depends on.
+  defp load_stack_member_panel_data(%Stack{} = stack) do
+    members = stack |> Stacks.members() |> Repo.preload(:plans)
+    counts = pending_review_counts(members)
+    {members, counts}
   end
 
   defp phase_entry(""), do: %{}
@@ -1750,7 +1793,7 @@ defmodule PlatformWeb.TasksLive do
 
   @impl true
   def handle_info({:task_updated, _task}, socket) do
-    {:noreply, socket |> refresh_board() |> reload_selected_task()}
+    {:noreply, socket |> refresh_board() |> reload_selected_task() |> reload_selected_stack()}
   end
 
   def handle_info({:task_created, _task}, socket) do
@@ -1774,7 +1817,20 @@ defmodule PlatformWeb.TasksLive do
   end
 
   def handle_info({:plan_updated, _plan}, socket) do
-    {:noreply, socket |> refresh_board() |> reload_selected_task()}
+    {:noreply, socket |> refresh_board() |> reload_selected_task() |> reload_selected_stack()}
+  end
+
+  # Stage-5 of task 019e2c25: per-task ReviewRequests broadcasts. Refresh the
+  # board (kanban + mobile section list both consume `:review_counts`) and
+  # reload the open stack-detail panel so the per-member badge re-evaluates
+  # within the 2s contract budget. `reload_selected_task` covers the
+  # detail-panel pending-reviews list when a single task is open.
+  def handle_info({:review_request_pending, _payload}, socket) do
+    {:noreply, socket |> refresh_board() |> reload_selected_task() |> reload_selected_stack()}
+  end
+
+  def handle_info({:review_request_resolved, _payload}, socket) do
+    {:noreply, socket |> refresh_board() |> reload_selected_task() |> reload_selected_stack()}
   end
 
   # Execution space PubSub — re-fetch log on any new message
@@ -2166,6 +2222,26 @@ defmodule PlatformWeb.TasksLive do
     |> assign(:expanded_stacks, MapSet.new())
     |> assign(:pending_plan_count, count_pending_plans(tasks))
     |> assign(:review_counts, pending_review_counts(tasks))
+    |> sync_review_request_subscriptions(tasks)
+  end
+
+  # Stage-5 of task 019e2c25: keep our review_requests:<task_id> subscription
+  # set in sync with the visible board. Subscribes to any task we are not yet
+  # following and unsubscribes from tasks that have left the board (filter
+  # change, deletion, project switch). No-op on disconnected socket — the
+  # mount-time guard already skipped the initial subscribe in that case.
+  defp sync_review_request_subscriptions(socket, tasks) do
+    if connected?(socket) do
+      current = socket.assigns[:review_request_subscriptions] || MapSet.new()
+      desired = MapSet.new(tasks, & &1.id)
+
+      Enum.each(MapSet.difference(desired, current), &ReviewRequests.subscribe_for_task/1)
+      Enum.each(MapSet.difference(current, desired), &ReviewRequests.unsubscribe_for_task/1)
+
+      assign(socket, :review_request_subscriptions, desired)
+    else
+      socket
+    end
   end
 
   defp reload_selected_task(socket) do
@@ -3089,6 +3165,34 @@ defmodule PlatformWeb.TasksLive do
 
   defp member_status_pill(other),
     do: {status_label(other), "bg-base-300 text-base-content/70"}
+
+  # Stage-2 of task 019e2c25: maps the `Tasks.needs_human_action_reason/2`
+  # atom to a `{label, data-action-reason-string}` tuple used by the
+  # stack-detail member-row badge. The string is what we expose via
+  # `data-action-reason` so tests + dataview drilldowns can target the
+  # exact predicate branch. `nil` reason → `{nil, nil}`, which the
+  # template's `:if` condition uses to suppress the badge.
+  defp stack_member_action_label(:plan_pending_review), do: {"Plan ready", "plan_pending_review"}
+
+  defp stack_member_action_label(:review_request_pending),
+    do: {"Needs review", "review_request_pending"}
+
+  defp stack_member_action_label(:validation_failed), do: {"Needs review", "validation_failed"}
+  defp stack_member_action_label(nil), do: {nil, nil}
+
+  # Stage-4 follow-up of task 019e2c25 (post-rejection fix): on the
+  # mobile surfaces (stack-member rows and solo task cards) the existing
+  # `task_display_status/1` chip ALREADY surfaces "Plan Ready" with a
+  # warning badge for the `:plan_pending_review` case (status="planning"
+  # + a plan in `pending_review`). Rendering the action chip there too
+  # produces a doubled chip ("Plan Ready" + "Plan ready") on the same
+  # row. Suppress the action chip for that branch on mobile — the status
+  # chip is the single signal. Action chip still surfaces for
+  # `:review_request_pending` and `:validation_failed`, which the status
+  # chip does NOT cover. Desktop stack-detail uses `member_status_pill/1`
+  # (no "Plan Ready" overlap), so no change there.
+  defp mobile_stack_member_action_label(:plan_pending_review), do: {nil, nil}
+  defp mobile_stack_member_action_label(reason), do: stack_member_action_label(reason)
 
   defp column_header_class("backlog"), do: "text-base-content/60"
   defp column_header_class("in_progress"), do: "text-info"

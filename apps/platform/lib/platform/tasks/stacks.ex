@@ -706,10 +706,20 @@ defmodule Platform.Tasks.Stacks do
       stacks ->
         stack_ids = Enum.map(stacks, & &1.id)
 
+        # `:plans` preload is required by Tasks.needs_human_action_reason/2's
+        # `:plan_pending_review` branch (task 019e2c25 stage 4 — mobile
+        # stack-member badge). Members are otherwise rendered against the
+        # board's `@review_counts` map, but the plan-pending-review check
+        # reads `task.plans` directly (predicate returns false when not
+        # preloaded rather than triggering a lazy query). Adding the
+        # preload here keeps the board view (only caller) consistent with
+        # the desktop stack-detail panel, which already preloads `:plans`
+        # via `load_stack_member_panel_data/1` in TasksLive.
         members_by_stack =
           Task
           |> where([t], t.stack_id in ^stack_ids and is_nil(t.deleted_at))
           |> order_by([t], asc: t.stack_position)
+          |> preload(:plans)
           |> Repo.all()
           |> Enum.group_by(& &1.stack_id)
 

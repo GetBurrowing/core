@@ -1004,6 +1004,192 @@ defmodule Platform.Tasks.TasksContextTest do
     end
   end
 
+  describe "needs_human_action?/1 and /2 (task 019e2c25 — badge predicate)" do
+    setup do
+      {:ok, project} = Tasks.create_project(%{name: "Badge Project"})
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Badge Task"})
+      %{project: project, task: task}
+    end
+
+    test "returns true when task status is in_review", %{task: task} do
+      {:ok, in_review} = Tasks.transition_task_status(task, "planning")
+      {:ok, in_review} = Tasks.transition_task_status(in_review, "in_progress")
+      {:ok, in_review} = Tasks.transition_task_status(in_review, "in_review")
+
+      reloaded =
+        in_review.id
+        |> Tasks.get_task_record()
+        |> Platform.Repo.preload(:plans)
+
+      assert Tasks.needs_human_action?(reloaded)
+    end
+
+    test "returns true when there is at least one pending review_request", %{task: task} do
+      # Land the task in `in_progress` and stand up a manual_approval gate
+      # with a pending review request. We toggle the task back to a non-
+      # in_review status post-creation to isolate the "pending request"
+      # branch from the "status == in_review" branch.
+      {:ok, plan} = Tasks.create_plan(%{task_id: task.id})
+
+      {:ok, stage} =
+        Tasks.create_stage(%{plan_id: plan.id, position: 1, name: "Review Stage"})
+
+      {:ok, _} = Platform.Tasks.PlanEngine.start_stage(stage.id)
+
+      {:ok, validation} =
+        Tasks.create_validation(%{stage_id: stage.id, kind: "manual_approval"})
+
+      {:ok, _request} =
+        Platform.Tasks.ReviewRequests.create_review_request(%{
+          validation_id: validation.id,
+          task_id: task.id,
+          items: [%{label: "Desktop view"}]
+        })
+
+      # `create_review_request/1` transitions the task to `in_review`. Pull
+      # it back to `in_progress` so the `status == "in_review"` branch
+      # cannot mask the pending-request branch we want to assert on.
+      task
+      |> Ecto.Changeset.change(%{status: "in_progress"})
+      |> Platform.Repo.update!()
+
+      reloaded =
+        task.id
+        |> Tasks.get_task_record()
+        |> Platform.Repo.preload(:plans)
+
+      assert reloaded.status == "in_progress"
+      assert Tasks.needs_human_action?(reloaded)
+    end
+
+    test "returns true when latest plan is in pending_review", %{task: task} do
+      # Move task into `planning` and submit a plan for review without
+      # approving it. Mirrors the "Plan Ready" UX case.
+      {:ok, planning_task} = Tasks.transition_task_status(task, "planning")
+      {:ok, plan} = Tasks.create_plan(%{task_id: planning_task.id})
+      {:ok, _plan} = Tasks.submit_plan_for_review(plan)
+
+      reloaded =
+        planning_task.id
+        |> Tasks.get_task_record()
+        |> Platform.Repo.preload(:plans)
+
+      assert Enum.any?(reloaded.plans, &(&1.status == "pending_review"))
+      assert Tasks.needs_human_action?(reloaded)
+    end
+
+    test "returns false for backlog/planning/in_progress/deploying/done with no plans or requests",
+         %{task: task} do
+      reloaded =
+        task.id
+        |> Tasks.get_task_record()
+        |> Platform.Repo.preload(:plans)
+
+      # backlog (default)
+      refute Tasks.needs_human_action?(reloaded)
+
+      # Walk through statuses that should NOT trigger the badge.
+      for target <- ~w(planning in_progress deploying done) do
+        moved =
+          if reloaded.status == target do
+            reloaded
+          else
+            stepped = step_through_to(reloaded, target)
+            stepped.id |> Tasks.get_task_record() |> Platform.Repo.preload(:plans)
+          end
+
+        refute Tasks.needs_human_action?(moved),
+               "expected needs_human_action?/1 to be false for status=#{target}"
+      end
+    end
+
+    test "needs_human_action_reason/2 ranks :review_request_pending above :plan_pending_review (stage 5)",
+         %{task: task} do
+      # Stage-5 re-rank (019e2c25): when BOTH a pending plan_review AND an
+      # open review_request apply to a task, the predicate must surface
+      # `:review_request_pending` because the contract says "ALSO show
+      # Needs review" — i.e. the live review request is the more
+      # actionable signal. Prior to this change the cond ranked
+      # plan_pending_review first, so the M2 demo task could not change
+      # badge while the plan was still pending_review.
+      {:ok, planning_task} = Tasks.transition_task_status(task, "planning")
+      {:ok, plan} = Tasks.create_plan(%{task_id: planning_task.id})
+      {:ok, _plan} = Tasks.submit_plan_for_review(plan)
+
+      reloaded =
+        planning_task.id
+        |> Tasks.get_task_record()
+        |> Platform.Repo.preload(:plans)
+
+      # Sanity: with no pending review_requests, plan_pending_review still wins.
+      assert Tasks.needs_human_action_reason(reloaded, 0) == :plan_pending_review
+
+      # With a pending review_request count, review_request_pending takes precedence.
+      assert Tasks.needs_human_action_reason(reloaded, 1) == :review_request_pending
+      assert Tasks.needs_human_action_reason(reloaded, 5) == :review_request_pending
+    end
+
+    test "needs_human_action_reason/2 still returns :plan_pending_review when only plan signal applies",
+         %{task: task} do
+      # Stage-5 guardrail: re-ranking must not regress the single-signal
+      # plan-pending-review case. With zero pending review_requests, the
+      # predicate continues to surface :plan_pending_review.
+      {:ok, planning_task} = Tasks.transition_task_status(task, "planning")
+      {:ok, plan} = Tasks.create_plan(%{task_id: planning_task.id})
+      {:ok, _plan} = Tasks.submit_plan_for_review(plan)
+
+      reloaded =
+        planning_task.id
+        |> Tasks.get_task_record()
+        |> Platform.Repo.preload(:plans)
+
+      assert Tasks.needs_human_action_reason(reloaded, 0) == :plan_pending_review
+    end
+
+    test "/2 with explicit count uses the count and skips the per-task DB query", %{task: task} do
+      reloaded =
+        task.id
+        |> Tasks.get_task_record()
+        |> Platform.Repo.preload(:plans)
+
+      # No DB pending requests exist for this task — but passing a
+      # positive count must still flip the predicate to true. This proves
+      # the count branch is wired up and the DB is not consulted.
+      assert Tasks.needs_human_action?(reloaded, 1)
+      assert Tasks.needs_human_action?(reloaded, 5)
+
+      # Explicit zero with no other signals stays false.
+      refute Tasks.needs_human_action?(reloaded, 0)
+
+      # `nil` falls through to the 1-arity DB lookup, which finds no
+      # pending requests and (with no in_review status / pending plan)
+      # returns false.
+      refute Tasks.needs_human_action?(reloaded, nil)
+    end
+  end
+
+  defp step_through_to(task, "planning"), do: step_status(task, "planning")
+
+  defp step_through_to(task, "in_progress") do
+    task
+    |> step_status("planning")
+    |> step_status("in_progress")
+  end
+
+  defp step_through_to(task, "deploying") do
+    task
+    |> step_status("planning")
+    |> step_status("in_progress")
+    |> step_status("in_review")
+    |> step_status("deploying")
+  end
+
+  defp step_through_to(task, "done") do
+    task
+    |> step_through_to("deploying")
+    |> step_done()
+  end
+
   defp drive_to_done(task) do
     task
     |> step_status("in_progress")

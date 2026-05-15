@@ -317,6 +317,31 @@
                         <% {member_status_label, member_status_class} =
                           task_display_status(member) %>
                         <% member_dep_text = dep_annotation_text(member, board_data.members) %>
+                        <%!-- Badges-for-tasks-that-need-feedback (task
+                             019e2c25 stage 4): mobile stack-member rows
+                             mirror the desktop stack-detail badge from
+                             stage 2 / mobile solo card from stage 3.
+                             Reuses `@review_counts` (the board-wide
+                             review_request count map populated in
+                             refresh_board/1, which already covers stack
+                             members because list_all_tasks/1 returns
+                             them) — same source as the mobile solo card.
+                             `:plans` is preloaded on members via
+                             list_stacks_with_members/1 so the
+                             `:plan_pending_review` branch resolves. --%>
+                        <% member_review_count = Map.get(@review_counts, member.id, 0) %>
+                        <% member_action_reason =
+                          Tasks.needs_human_action_reason(member, member_review_count) %>
+                        <%!-- Post-rejection fix (stage 4): use
+                             `mobile_action_label/1` instead of
+                             `stack_member_action_label/1` so the
+                             `:plan_pending_review` branch does NOT
+                             render an action chip — the adjacent
+                             `task_display_status/1` "Plan Ready" status
+                             chip is the single signal. Other reasons
+                             still render the action chip. --%>
+                        <% {member_action_label, member_action_reason_attr} =
+                          mobile_stack_member_action_label(member_action_reason) %>
                         <button
                           type="button"
                           id={"stack-member-mobile-#{member.id}"}
@@ -333,9 +358,18 @@
                           ]}>
                             {stack_position_glyph(member.stack_position)}
                           </span>
-                          <div class="flex min-w-0 items-center gap-2">
+                          <div class="flex min-w-0 flex-wrap items-center gap-2">
                             <span class="flex-1 min-w-0 text-xs leading-snug truncate">
                               {member.title}
+                            </span>
+                            <span
+                              :if={member_action_label}
+                              class="badge badge-warning badge-xs gap-1 whitespace-nowrap shrink-0"
+                              data-role="stack-member-mobile-action"
+                              data-action-reason={member_action_reason_attr}
+                            >
+                              <span class="hero-eye size-3"></span>
+                              {member_action_label}
                             </span>
                             <span class={"#{member_status_class} badge-xs whitespace-nowrap shrink-0"}>
                               {member_status_label}
@@ -356,6 +390,17 @@
                 <% _ -> %>
                   <% task = item %>
                   <% assignee = assignee_identity(task, @users_by_id, @agents_by_id) %>
+                  <% mobile_review_count = Map.get(@review_counts, task.id, 0) %>
+                  <% mobile_action_reason =
+                    Tasks.needs_human_action_reason(task, mobile_review_count) %>
+                  <%!-- Post-rejection fix (stage 4): same doubled-chip
+                       pattern as the mobile stack-member row above —
+                       the `task_display_status/1` "Plan Ready" badge
+                       below already covers `:plan_pending_review`, so
+                       suppress the action chip there. --%>
+                  <% {mobile_action_label, mobile_action_reason_attr} =
+                    mobile_stack_member_action_label(mobile_action_reason) %>
+                  <% {mobile_status_label, mobile_status_class} = task_display_status(task) %>
                   <button
                     type="button"
                     phx-click="select_task"
@@ -377,7 +422,7 @@
                       >
                       </span>
                     </div>
-                    <div class="flex items-center gap-1.5 pl-4 text-xs text-base-content/60">
+                    <div class="flex flex-wrap items-center gap-1.5 pl-4 text-xs text-base-content/60">
                       <%= if assignee do %>
                         <%= if assignee.type == :user do %>
                           <.human_avatar
@@ -397,6 +442,31 @@
                       <% end %>
                       <span :if={task.inserted_at} class="whitespace-nowrap">
                         {relative_time(task.inserted_at)}
+                      </span>
+                      <%!-- Badges-for-tasks-that-need-feedback (task
+                           019e2c25 stage 3): mobile solo task cards now
+                           render the same warning chip the stack-detail
+                           rows + desktop kanban surface. The status badge
+                           `task_display_status/1` is also rendered for the
+                           four "interesting" statuses so "Plan Ready"
+                           appears on mobile (previously hidden — that's
+                           why a pending-review plan was invisible on the
+                           mobile board). Mirrors the desktop kanban
+                           gating in tasks_live.html.heex line ~717-723. --%>
+                      <span
+                        :if={task.status in ~w(blocked planning in_review deploying)}
+                        class={"#{mobile_status_class} badge-xs"}
+                      >
+                        {mobile_status_label}
+                      </span>
+                      <span
+                        :if={mobile_action_label}
+                        class="badge badge-warning badge-xs gap-1"
+                        data-role="mobile-task-action"
+                        data-action-reason={mobile_action_reason_attr}
+                      >
+                        <span class="hero-eye size-3"></span>
+                        {mobile_action_label}
                       </span>
                     </div>
                   </button>
@@ -2113,7 +2183,10 @@
           <%= for member <- @selected_stack_members do %>
             <% {pill_label, pill_class} = member_status_pill(member.status)
             annotation = member_dep_annotation(member, @selected_stack_members)
-            assignment = member_assignment_badge(member) %>
+            assignment = member_assignment_badge(member)
+            review_count = Map.get(@selected_stack_member_review_counts, member.id, 0)
+            action_reason = Tasks.needs_human_action_reason(member, review_count)
+            {action_label, action_reason_attr} = stack_member_action_label(action_reason) %>
             <div
               class="mlist-item rounded-md bg-base-300 border border-base-300 p-2 cursor-pointer hover:bg-base-200 transition-colors"
               phx-click="select_task"
@@ -2162,6 +2235,23 @@
                     inherited
                   </span>
                 <% end %>
+                <%!-- Badges-for-tasks-that-need-feedback (task 019e2c25
+                     stage 2): per-row "Needs review" / "Plan ready"
+                     warning chip rendered when Tasks.needs_human_action?
+                     evaluates true for this member. The data-action-reason
+                     attribute carries the precise predicate branch
+                     (`plan_pending_review`, `review_request_pending`,
+                     `validation_failed`) so the badge is targetable from
+                     tests + dataview drilldowns. --%>
+                <span
+                  :if={action_label}
+                  class="shrink-0 badge badge-warning badge-xs gap-1"
+                  data-role="stack-detail-member-action"
+                  data-action-reason={action_reason_attr}
+                >
+                  <span class="hero-eye size-3"></span>
+                  {action_label}
+                </span>
                 <span
                   class={"shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider #{pill_class}"}
                   data-role="stack-detail-member-pill"

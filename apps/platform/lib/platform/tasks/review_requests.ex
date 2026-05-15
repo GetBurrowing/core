@@ -43,6 +43,12 @@ defmodule Platform.Tasks.ReviewRequests do
     Phoenix.PubSub.subscribe(Platform.PubSub, topic_for_task(task_id))
   end
 
+  @doc "Unsubscribe the calling process from the review-request topic for `task_id`."
+  @spec unsubscribe_for_task(String.t()) :: :ok
+  def unsubscribe_for_task(task_id) do
+    Phoenix.PubSub.unsubscribe(Platform.PubSub, topic_for_task(task_id))
+  end
+
   defp broadcast_for_task(task_id, message) do
     Phoenix.PubSub.broadcast(Platform.PubSub, topic_for_task(task_id), message)
   end

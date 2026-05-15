@@ -5720,4 +5720,495 @@ defmodule PlatformWeb.TasksLiveTest do
       %{"planning" => entry, "execution" => entry, "review" => entry}
     end
   end
+
+  describe "stack detail panel — needs-action badge on member rows (task 019e2c25 stage 2)" do
+    # Stage 2 of "Badges for Tasks that need feedback": each member row in
+    # the stack-detail panel shows a `data-role="stack-detail-member-action"`
+    # warning chip ("Needs review" / "Plan ready") when
+    # `Tasks.needs_human_action?/2` is true. The chip's
+    # `data-action-reason` attribute carries the precise predicate branch
+    # so tests can target it deterministically. Wired into both
+    # `:plan_updated` and `:task_updated` PubSub messages so the badge
+    # reacts live without a manual reload.
+
+    setup %{conn: conn} do
+      conn = authenticated_conn(conn)
+      project = create_project()
+
+      stack =
+        stack_fixture(
+          project_id: project.id,
+          name: "Needs-Action Stack #{System.unique_integer([:positive])}",
+          slug: "needs-action-#{System.unique_integer([:positive])}"
+        )
+
+      {:ok, conn: conn, project: project, stack: stack}
+    end
+
+    # Build a single stack member with the supplied status. Returns the
+    # task struct (no plans, no review_requests) — caller layers those on
+    # to drive the predicate's three branches.
+    defp seed_member(stack, status, pos \\ 1) do
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: stack.project_id,
+          stack_id: stack.id,
+          stack_position: pos,
+          title: "Member #{pos}",
+          status: status,
+          priority: "medium"
+        })
+
+      task
+    end
+
+    test "(a) member with a `pending_review` plan shows the badge with reason `plan_pending_review`",
+         %{conn: conn, stack: stack} do
+      member = seed_member(stack, "planning")
+
+      {:ok, _plan} =
+        Tasks.create_plan(%{task_id: member.id, version: 1, status: "pending_review"})
+
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      html = render_click(view, "open_stack_detail", %{"id" => stack.id})
+
+      assert html =~ ~s(data-role="stack-detail-member-action")
+      assert html =~ ~s(data-action-reason="plan_pending_review")
+      assert html =~ "Plan ready"
+    end
+
+    test "(b) member with an open `manual_approval` ReviewRequest shows the badge with reason `review_request_pending`",
+         %{conn: conn, stack: stack} do
+      member = seed_member(stack, "in_progress")
+
+      {:ok, plan} =
+        Tasks.create_plan(%{task_id: member.id, version: 1, status: "approved"})
+
+      {:ok, stage} =
+        Tasks.create_stage(%{
+          plan_id: plan.id,
+          name: "Manual review",
+          position: 1,
+          status: "running"
+        })
+
+      {:ok, validation} =
+        Tasks.create_validation(%{
+          stage_id: stage.id,
+          kind: "manual_approval",
+          status: "pending"
+        })
+
+      {:ok, _request} =
+        ReviewRequests.create_review_request(%{
+          validation_id: validation.id,
+          task_id: member.id,
+          status: "pending",
+          items: [
+            %{kind: "artifact", label: "Review me", status: "pending", content: "..."}
+          ]
+        })
+
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      html = render_click(view, "open_stack_detail", %{"id" => stack.id})
+
+      assert html =~ ~s(data-role="stack-detail-member-action")
+      assert html =~ ~s(data-action-reason="review_request_pending")
+      assert html =~ "Needs review"
+    end
+
+    test "(c) member with neither a pending plan nor a pending review_request shows no badge",
+         %{conn: conn, stack: stack} do
+      _member = seed_member(stack, "in_progress")
+
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      html = render_click(view, "open_stack_detail", %{"id" => stack.id})
+
+      # The row exists, but the action badge does not.
+      assert html =~ ~s(data-role="stack-detail-member-row")
+      refute html =~ ~s(data-role="stack-detail-member-action")
+    end
+
+    test "(d) badge re-renders after a `:plan_updated` PubSub broadcast while the panel is open",
+         %{conn: conn, stack: stack} do
+      member = seed_member(stack, "planning")
+
+      # Start with an *approved* plan — no badge.
+      {:ok, plan} =
+        Tasks.create_plan(%{task_id: member.id, version: 1, status: "approved"})
+
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      pre_html = render_click(view, "open_stack_detail", %{"id" => stack.id})
+
+      refute pre_html =~ ~s(data-role="stack-detail-member-action")
+
+      # Flip the plan to pending_review and broadcast — no LV reload, just
+      # the PubSub message the live application would receive in
+      # production. The handler must reload the stack panel so the badge
+      # appears live.
+      {:ok, updated_plan} =
+        plan
+        |> Plan.changeset(%{status: "pending_review"})
+        |> Repo.update()
+
+      Tasks.broadcast_board({:plan_updated, updated_plan})
+
+      # Force the LV to process the queued message before we render.
+      _ = :sys.get_state(view.pid)
+      post_html = render(view)
+
+      assert post_html =~ ~s(data-role="stack-detail-member-action")
+      assert post_html =~ ~s(data-action-reason="plan_pending_review")
+      assert post_html =~ "Plan ready"
+    end
+
+    test "(e) badge re-renders within the live cycle when a `:review_request_pending` PubSub broadcast fires (stage 5 fix)",
+         %{conn: conn, stack: stack} do
+      # Stage-5 fix (019e2c25 e2e_behavior re-pass): mount/3 now subscribes
+      # to `Platform.Tasks.ReviewRequests.topic_for_task/1` for every task
+      # on the board, and `handle_info({:review_request_pending, _}, ...)`
+      # triggers `refresh_board + reload_selected_stack` so the badge
+      # surfaces within the 2s live-update budget. Prior to the fix the
+      # broadcast went unconsumed and the panel stayed stale until manual
+      # reload — which was the single failed clause in the e2e review.
+      member = seed_member(stack, "in_progress")
+
+      {:ok, plan} =
+        Tasks.create_plan(%{task_id: member.id, version: 1, status: "approved"})
+
+      {:ok, stage} =
+        Tasks.create_stage(%{
+          plan_id: plan.id,
+          name: "Manual review",
+          position: 1,
+          status: "running"
+        })
+
+      {:ok, validation} =
+        Tasks.create_validation(%{
+          stage_id: stage.id,
+          kind: "manual_approval",
+          status: "pending"
+        })
+
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      pre_html = render_click(view, "open_stack_detail", %{"id" => stack.id})
+
+      # No review_request yet → no badge.
+      refute pre_html =~ ~s(data-role="stack-detail-member-action")
+
+      # Insert the request — `create_review_request/1` already broadcasts
+      # `{:review_request_pending, ...}` on `review_requests:<task_id>`.
+      {:ok, _request} =
+        ReviewRequests.create_review_request(%{
+          validation_id: validation.id,
+          task_id: member.id,
+          status: "pending",
+          items: [
+            %{kind: "artifact", label: "Review me", status: "pending", content: "..."}
+          ]
+        })
+
+      # Force the LV to drain its mailbox before we render so the test is
+      # deterministic — the production flow lands within 2s via the
+      # PubSub fanout, but the test process should not race the LV.
+      _ = :sys.get_state(view.pid)
+      post_html = render(view)
+
+      assert post_html =~ ~s(data-role="stack-detail-member-action")
+      assert post_html =~ ~s(data-action-reason="review_request_pending")
+      assert post_html =~ "Needs review"
+    end
+  end
+
+  describe "mobile solo task card — needs-action + status badges (task 019e2c25 stage 3)" do
+    # Stage 3 of "Badges for Tasks that need feedback": the mobile-only
+    # solo task card (the `<% _ -> %>` arm of the mobile @board_items
+    # loop) renders the same warning chip the stack-detail rows + desktop
+    # kanban already surface, plus the previously-hidden
+    # `task_display_status/1` badge so "Plan Ready" appears on mobile.
+    # The action chip carries `data-role="mobile-task-action"` so tests
+    # can target it without coupling to layout.
+
+    setup %{conn: conn} do
+      conn = authenticated_conn(conn)
+      project = create_project()
+      {:ok, conn: conn, project: project}
+    end
+
+    # Build a solo task (no stack) attached to the project. Status is
+    # explicit so each test can drive the predicate's three branches and
+    # ensure the active mobile-filter pill matches.
+    defp seed_solo_task(project, status) do
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Solo Task #{System.unique_integer([:positive])}",
+          status: status,
+          priority: "medium"
+        })
+
+      task
+    end
+
+    test "(a) mobile card with `pending_review` plan shows ONLY the 'Plan Ready' status badge (no doubled action chip)",
+         %{conn: conn, project: project} do
+      # Post-rejection fix (stage 4): the action chip and the status
+      # chip both surfaced "Plan ready" / "Plan Ready" for the
+      # `:plan_pending_review` branch, doubling-up signals on the same
+      # row. The status chip is now the single signal on mobile —
+      # `mobile_stack_member_action_label/1` returns `{nil, nil}` for
+      # `:plan_pending_review`, suppressing the action chip's `:if`.
+      task = seed_solo_task(project, "planning")
+
+      {:ok, _plan} =
+        Tasks.create_plan(%{task_id: task.id, version: 1, status: "pending_review"})
+
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      # Switch the mobile pill to the task's column so the mobile card is
+      # rendered (mobile only renders the active filter section).
+      # `planning` status maps to the `backlog` column per
+      # `@column_statuses` in tasks_live.ex.
+      html = render_click(view, "filter_by_status", %{"status" => "backlog"})
+
+      # Sanity: card is rendered.
+      assert html =~ ~s(data-task-id="#{task.id}")
+
+      # Status badge ("Plan Ready") IS present — single signal.
+      assert html =~ "Plan Ready"
+
+      # Action badge for `plan_pending_review` is suppressed on mobile —
+      # the status badge already says "Plan Ready" and rendering both
+      # produced a doubled chip Rowan rejected on Apr 2026 review.
+      refute html =~ ~s(data-role="mobile-task-action")
+      refute html =~ ~s(data-action-reason="plan_pending_review")
+    end
+
+    test "(b) mobile card with pending review_request shows 'Needs review' action badge",
+         %{conn: conn, project: project} do
+      task = seed_solo_task(project, "in_progress")
+
+      {:ok, plan} =
+        Tasks.create_plan(%{task_id: task.id, version: 1, status: "approved"})
+
+      {:ok, stage} =
+        Tasks.create_stage(%{
+          plan_id: plan.id,
+          name: "Manual review",
+          position: 1,
+          status: "running"
+        })
+
+      {:ok, validation} =
+        Tasks.create_validation(%{
+          stage_id: stage.id,
+          kind: "manual_approval",
+          status: "pending"
+        })
+
+      {:ok, _request} =
+        ReviewRequests.create_review_request(%{
+          validation_id: validation.id,
+          task_id: task.id,
+          status: "pending",
+          items: [
+            %{kind: "artifact", label: "Review me", status: "pending", content: "..."}
+          ]
+        })
+
+      # Re-load — creating the manual_approval validation transitions the
+      # task to `in_review` automatically (Tasks orchestrator), and the
+      # mobile pill must match that current status.
+      task = Repo.get!(Task, task.id)
+
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      html = render_click(view, "filter_by_status", %{"status" => task.status})
+
+      assert html =~ ~s(data-role="mobile-task-action")
+      assert html =~ ~s(data-action-reason="review_request_pending")
+      assert html =~ "Needs review"
+    end
+
+    test "(c) mobile card with no pending action shows neither badge",
+         %{conn: conn, project: project} do
+      task = seed_solo_task(project, "in_progress")
+
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      html = render_click(view, "filter_by_status", %{"status" => task.status})
+
+      # The card itself must be present (sanity check — otherwise a
+      # rendering regression would silently let the negative assertion
+      # below pass).
+      assert html =~ ~s(data-task-id="#{task.id}")
+
+      # No action badge.
+      refute html =~ ~s(data-role="mobile-task-action")
+      # No status chip (the `in_progress` status is not in the
+      # `~w(blocked planning in_review deploying)` allow-list that gates
+      # the mobile + desktop status badges). The literal "In Review"
+      # appears in the mobile filter pill nav, so target the *badge*
+      # markup that gates "Plan Ready" instead — neither the warning
+      # badge text nor the pending-review-plan attribute should leak.
+      refute html =~ "Plan Ready"
+      refute html =~ ~s(data-action-reason="plan_pending_review")
+    end
+  end
+
+  describe "mobile stack-member rows — needs-action badge (task 019e2c25 stage 4)" do
+    # Stage 4 of "Badges for Tasks that need feedback": the mobile-only
+    # stack-member rows (the `id={"stack-member-mobile-#{member.id}"}`
+    # buttons under an expanded mobile stack card) mirror the desktop
+    # stack-detail badge from stage 2 + the mobile solo-card badge from
+    # stage 3. The chip carries `data-role="stack-member-mobile-action"`
+    # so tests target it without coupling to layout, and reuses the
+    # board-wide `@review_counts` map (populated in refresh_board/1 over
+    # all tasks including stack members) — no new source of truth.
+    #
+    # Plans must be preloaded on members for the
+    # `:plan_pending_review` predicate branch to resolve. That preload
+    # was added to `Stacks.list_stacks_with_members/1` as part of this
+    # stage (the only caller in the live view).
+    #
+    # The mobile board only renders the active filter pill's section
+    # (T6 PR #328), so each test calls `filter_by_status` to switch the
+    # pill to the stack's rollup status before `toggle_stack_expand`
+    # to surface the member rows.
+
+    setup %{conn: conn} do
+      conn = authenticated_conn(conn)
+      project = create_project()
+
+      stack =
+        stack_fixture(
+          project_id: project.id,
+          name: "Mobile Needs-Action Stack #{System.unique_integer([:positive])}",
+          slug: "mobile-needs-action-#{System.unique_integer([:positive])}"
+        )
+
+      {:ok, conn: conn, project: project, stack: stack}
+    end
+
+    # Build a single stack member with the supplied status. Returns the
+    # task struct (no plans, no review_requests) — caller layers those
+    # on to drive the predicate's branches.
+    defp seed_mobile_member(stack, status, pos \\ 1) do
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: stack.project_id,
+          stack_id: stack.id,
+          stack_position: pos,
+          title: "Mobile Member #{pos}",
+          status: status,
+          priority: "medium"
+        })
+
+      task
+    end
+
+    # Recompute the stack rollup so its status matches the seeded
+    # member(s) and the mobile filter pill's `status == stack.status`
+    # gate makes the stack card visible on the mobile section list.
+    defp refresh_stack_rollup(stack) do
+      {:ok, stack} = Stacks.recompute_stack_status(stack)
+      Repo.get!(Stack, stack.id)
+    end
+
+    test "(a) mobile stack-member with `pending_review` plan shows ONLY the 'Plan Ready' status chip (no doubled action chip)",
+         %{conn: conn, stack: stack} do
+      # Post-rejection fix (stage 4): the mobile stack-member row's
+      # `task_display_status/1` chip already surfaces "Plan Ready"
+      # (warning badge) for `status="planning"` + pending-review plan.
+      # Stage 4's action chip rendered "Plan ready" for the same case
+      # — two chips on the same row Rowan rejected. The mobile-only
+      # `mobile_stack_member_action_label/1` returns `{nil, nil}` for
+      # `:plan_pending_review` so the action chip's `:if` collapses.
+      member = seed_mobile_member(stack, "planning")
+
+      {:ok, _plan} =
+        Tasks.create_plan(%{task_id: member.id, version: 1, status: "pending_review"})
+
+      _stack = refresh_stack_rollup(stack)
+
+      # `planning` member status rolls up to stack status `forming`, which
+      # `@column_statuses` buckets under the `backlog` mobile pill (the
+      # `filter_by_status` handler only accepts `@mobile_columns` keys —
+      # raw `forming` is rejected).
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      _ = render_click(view, "filter_by_status", %{"status" => "backlog"})
+      html = render_click(view, "toggle_stack_expand", %{"id" => stack.id})
+
+      # Row exists.
+      assert html =~ ~s(id="stack-member-mobile-#{member.id}")
+
+      # Status chip (existing "Plan Ready" via `task_display_status/1`)
+      # is the single signal.
+      assert html =~ "Plan Ready"
+
+      # Action chip is suppressed for the `:plan_pending_review`
+      # branch on mobile — no doubled chip.
+      refute html =~ ~s(data-role="stack-member-mobile-action")
+      refute html =~ ~s(data-action-reason="plan_pending_review")
+    end
+
+    test "(b) mobile stack-member with pending review_request shows badge with reason `review_request_pending`",
+         %{conn: conn, stack: stack} do
+      member = seed_mobile_member(stack, "in_progress")
+
+      {:ok, plan} =
+        Tasks.create_plan(%{task_id: member.id, version: 1, status: "approved"})
+
+      {:ok, stage} =
+        Tasks.create_stage(%{
+          plan_id: plan.id,
+          name: "Manual review",
+          position: 1,
+          status: "running"
+        })
+
+      {:ok, validation} =
+        Tasks.create_validation(%{
+          stage_id: stage.id,
+          kind: "manual_approval",
+          status: "pending"
+        })
+
+      {:ok, _request} =
+        ReviewRequests.create_review_request(%{
+          validation_id: validation.id,
+          task_id: member.id,
+          status: "pending",
+          items: [
+            %{kind: "artifact", label: "Review me", status: "pending", content: "..."}
+          ]
+        })
+
+      # Creating the manual_approval validation transitions the member
+      # to `in_review`; recompute the stack rollup so the mobile pill
+      # for `in_review` makes the stack card visible.
+      stack = refresh_stack_rollup(stack)
+
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      _ = render_click(view, "filter_by_status", %{"status" => stack.status})
+      html = render_click(view, "toggle_stack_expand", %{"id" => stack.id})
+
+      assert html =~ ~s(id="stack-member-mobile-#{member.id}")
+      assert html =~ ~s(data-role="stack-member-mobile-action")
+      assert html =~ ~s(data-action-reason="review_request_pending")
+      assert html =~ "Needs review"
+    end
+
+    test "(c) mobile stack-member with neither pending plan nor pending review_request shows no badge",
+         %{conn: conn, stack: stack} do
+      member = seed_mobile_member(stack, "in_progress")
+      stack = refresh_stack_rollup(stack)
+
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      _ = render_click(view, "filter_by_status", %{"status" => stack.status})
+      html = render_click(view, "toggle_stack_expand", %{"id" => stack.id})
+
+      # The row exists (sanity), but the action badge does not.
+      assert html =~ ~s(id="stack-member-mobile-#{member.id}")
+      refute html =~ ~s(data-role="stack-member-mobile-action")
+    end
+  end
 end
