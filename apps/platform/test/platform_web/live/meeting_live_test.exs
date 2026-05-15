@@ -1100,10 +1100,23 @@ defmodule PlatformWeb.MeetingLiveTest do
       assert html =~ ~s(data-gallery-grid)
 
       # Three video tiles, one per human; agent is omitted from the
-      # gallery grid. The MeetingVideoTile JS hook attribute appears
-      # once per tile.
+      # gallery grid. Scope the count to the gallery section: the
+      # bottom strip (sibling 019e2475-0037) also renders MeetingVideoTile
+      # hooks, so a global count would over-report.
+      gallery_section =
+        case String.split(html, ~s(data-gallery-grid)) do
+          [_, after_grid | _] ->
+            case String.split(after_grid, ~s(data-pane="bottom-strip")) do
+              [grid_html | _] -> grid_html
+              _ -> after_grid
+            end
+
+          _ ->
+            ""
+        end
+
       tile_count =
-        Regex.scan(~r/phx-hook="MeetingVideoTile"/, html)
+        Regex.scan(~r/phx-hook="MeetingVideoTile"/, gallery_section)
         |> length()
 
       assert tile_count == 3

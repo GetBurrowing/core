@@ -585,4 +585,39 @@ defmodule PlatformWeb.MeetingLive do
   @spec speaking?(Platform.Chat.Participant.t(), MapSet.t()) :: boolean()
   def speaking?(%{id: id}, %MapSet{} = ids), do: MapSet.member?(ids, id)
   def speaking?(_participant, _ids), do: false
+
+  # ── Bottom-strip helpers (task 019e2475-0037) ────────────────────────────
+  #
+  # The bottom strip composes `<.video_tile>` for human participants on the
+  # left and `<.agent_tile>` for agent participants on the right.
+
+  @doc "Filter participants to the human (`user`) subset for the bottom strip."
+  def strip_humans(participants) when is_list(participants) do
+    Enum.filter(participants, fn
+      %{participant_type: "user"} -> true
+      _ -> false
+    end)
+  end
+
+  def strip_humans(_), do: []
+
+  @doc "Filter participants to the agent subset for the bottom strip."
+  def strip_agents(participants) when is_list(participants) do
+    Enum.filter(participants, fn
+      %{participant_type: "agent"} -> true
+      _ -> false
+    end)
+  end
+
+  def strip_agents(_), do: []
+
+  @doc """
+  Role label for an agent participant. Reads `attention_config["role"]`
+  when present; returns `nil` otherwise (the tile renders `"agent"` as
+  fallback).
+  """
+  def agent_role(%{attention_config: %{"role" => role}}) when is_binary(role) and role != "",
+    do: role
+
+  def agent_role(_participant), do: nil
 end
