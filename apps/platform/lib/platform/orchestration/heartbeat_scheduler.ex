@@ -212,17 +212,16 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
 
   def dispatch_prompt(%{status: "in_progress"} = task, plan, stage, opts) do
     stage_info = format_stage_info(plan, stage)
-    repo_url = project_attr(task, :repo_url, "")
-    default_branch = resolve_branch(task)
-    task_slug = short_task_id(task)
     provider_guidance = resolve_provider_guidance(opts)
 
     assigns = %{
       task_title: task.title,
       stage_info: stage_info,
-      repo_url: repo_url,
-      default_branch: default_branch,
-      task_slug: task_slug,
+      # Pre-rendered Git Workflow block — single source of truth shared with
+      # the hardcoded fallback's enrichment path (git_workflow_section/1).
+      # Stack-aware: full-UUID worktree/branch + stack membership block for
+      # stack members, legacy 8-char-slug section for non-stack tasks.
+      git_workflow_block: git_workflow_section(task),
       provider_specific_guidance: provider_guidance,
       skills_reference: @skills_reference,
       evidence_workflow_reference: @evidence_workflow_reference
@@ -282,7 +281,10 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
     stage_info = format_stage_info(plan, stage)
     repo_url = project_attr(task, :repo_url, "")
     default_branch = resolve_branch(task)
-    task_slug = short_task_id(task)
+    # member_slug/1 — full UUID for a stack member so the deploy-phase branch
+    # reference matches the per-member branch created at in_progress; legacy
+    # 8-char slug for a non-stack task (output unchanged).
+    task_slug = member_slug(task)
 
     # Extract strategy from the task context (preloaded by TaskRouter)
     resolved_strategy = resolve_task_deploy_strategy(task)
@@ -771,7 +773,9 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
       pending_e2e_validations_json: encode_payload_json(rendered),
       execution_space_id: task_field(task, :execution_space_id) || "",
       repo_url: project_attr(task || %{}, :repo_url, ""),
-      task_slug: short_task_id(task || %{})
+      # member_slug/1 — a review agent that spins up a worktree dev server must
+      # land in the stack member's full-UUID worktree, not a truncated prefix.
+      task_slug: member_slug(task || %{})
     }
   end
 
@@ -866,7 +870,9 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
     strategy_config = Map.get(resolved_strategy, "config", %{})
     repo_url = project_attr(task, :repo_url, "")
     default_branch = resolve_branch(task)
-    task_slug = short_task_id(task)
+    # member_slug/1 — keeps the deploy-phase branch reference consistent with
+    # the per-member branch a stack member was given at in_progress.
+    task_slug = member_slug(task)
 
     strategy_instructions =
       deploy_strategy_instructions(
@@ -1239,7 +1245,24 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
     end
   end
 
+  # Build the "## Git Workflow (CRITICAL)" block for a dispatch prompt.
+  #
+  # Non-stack tasks get the legacy section verbatim — slug is the 8-char
+  # `short_task_id/1`, output is byte-for-byte unchanged.
+  #
+  # Stack members (ADR 0041, detected via `stack_membership/1`) get a section
+  # whose worktree path + branch use the FULL task UUID (`member_slug/1`), so
+  # siblings minted in one batch can never collide on a shared id prefix. A
+  # `## Task Stack Membership` sub-block names the stack_id, the rollup branch,
+  # and flags the task as a stack member.
   defp git_workflow_section(task) do
+    case stack_membership(task) do
+      nil -> non_stack_git_workflow_section(task)
+      membership -> stack_member_git_workflow_section(task, membership)
+    end
+  end
+
+  defp non_stack_git_workflow_section(task) do
     repo_url = project_attr(task, :repo_url, "")
     default_branch = resolve_branch(task)
     task_slug = short_task_id(task)
@@ -1263,6 +1286,44 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
        - Push the branch: `git push -u origin task/#{task_slug}`
        - Do NOT open a PR yet — PR opening happens in the deploy phase
     4. NEVER work on an existing branch. ALWAYS branch from latest origin/#{default_branch}.
+    """
+  end
+
+  defp stack_member_git_workflow_section(task, membership) do
+    repo_url = project_attr(task, :repo_url, "")
+    default_branch = resolve_branch(task)
+    # Full UUID — collision-free across siblings that share an id prefix.
+    task_slug = member_slug(task)
+    rollup_branch = membership.rollup_branch || "stack/#{membership.stack_slug}"
+
+    """
+
+    ## Git Workflow (CRITICAL)
+    Repository: #{repo_url}
+    Base branch: #{default_branch}
+
+    1. Create a worktree from the latest #{default_branch} branch:
+       ```
+       git fetch origin
+       git worktree add ../worktrees/#{task_slug} -b task/#{task_slug} origin/#{default_branch}
+       cd ../worktrees/#{task_slug}
+       ```
+    2. Do ALL work in the worktree directory.
+    3. When implementation is complete:
+       - Run the full test suite and lint checks
+       - Commit all changes with a descriptive message referencing task #{full_task_id(task)}
+       - Push the branch: `git push -u origin task/#{task_slug}`
+       - Do NOT open a PR yet — PR opening happens in the deploy phase
+    4. NEVER work on an existing branch. ALWAYS branch from latest origin/#{default_branch}.
+
+    ## Task Stack Membership
+    This task is a stack member (part of task stack `#{membership.stack_id}`).
+    - stack_id: `#{membership.stack_id}`
+    - Rollup branch: `#{rollup_branch}`
+    - Your member branch `task/#{task_slug}` is cut from `origin/#{default_branch}` \
+    INDEPENDENTLY — it does not branch off a sibling's work.
+    - The ROLLUP branch `#{rollup_branch}` is what reconciles sibling members. \
+    Do NOT depend on a sibling member's unpushed work; treat each member branch as isolated.
     """
   end
 
@@ -1335,6 +1396,68 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
     |> to_string()
     |> String.split("-")
     |> List.first()
+  end
+
+  @doc false
+  # Full, un-truncated task UUID — the counterpart of `short_task_id/1`. Stack
+  # members route worktree/branch slugs through the full id so siblings minted
+  # in one batch (which share a first hyphen-segment) never collide.
+  def full_task_id(task) do
+    task
+    |> Map.get(:id, Map.get(task, "id", "task"))
+    |> to_string()
+  end
+
+  @doc false
+  # Detect task-stack membership (ADR 0041, fully merged to main). A real stack
+  # member carries its membership in the `tasks.stack_id` column (a non-nil FK
+  # into `task_stacks`), NOT in `task.metadata` — an earlier implementation
+  # inspected `task.metadata` keys, which never fired because the orchestrator
+  # never writes stack context there. Returns `nil` for a non-stack task
+  # (`stack_id` nil or blank), otherwise a map
+  # `%{stack_id, stack_slug, rollup_branch}` sourced from the preloaded
+  # `task.stack` association (`Platform.Tasks.Stack`: `slug`, `rollup_branch`,
+  # `base_branch`). The rollup branch falls back to `"stack/<slug>"` when the
+  # stack row has no explicit `rollup_branch`.
+  def stack_membership(task) do
+    stack_id = Map.get(task, :stack_id) || Map.get(task, "stack_id")
+
+    if is_binary(stack_id) and String.trim(stack_id) != "" do
+      stack = stack_assoc(task)
+      stack_slug = stack && (Map.get(stack, :slug) || Map.get(stack, "slug"))
+
+      rollup_branch =
+        case stack && (Map.get(stack, :rollup_branch) || Map.get(stack, "rollup_branch")) do
+          rb when is_binary(rb) and rb != "" -> rb
+          _ when is_binary(stack_slug) and stack_slug != "" -> "stack/#{stack_slug}"
+          _ -> nil
+        end
+
+      %{stack_id: stack_id, stack_slug: stack_slug, rollup_branch: rollup_branch}
+    else
+      nil
+    end
+  end
+
+  # Pull the preloaded `:stack` association off the task. Returns `nil` when the
+  # association is absent or not loaded (`%Ecto.Association.NotLoaded{}`) — the
+  # caller still flags the task a stack member off `stack_id` alone and falls
+  # back to a `stack/<stack_id-prefix>`-free rollup branch only when no slug is
+  # available.
+  defp stack_assoc(task) do
+    case Map.get(task, :stack) || Map.get(task, "stack") do
+      %Ecto.Association.NotLoaded{} -> nil
+      %{} = stack -> stack
+      _ -> nil
+    end
+  end
+
+  @doc false
+  # The single chokepoint every worktree/branch slug routes through: the full
+  # UUID for a stack member (collision-free), the legacy 8-char prefix for a
+  # non-stack task (keeps existing dispatch output byte-for-byte unchanged).
+  def member_slug(task) do
+    if stack_membership(task), do: full_task_id(task), else: short_task_id(task)
   end
 
   defp format_elapsed(seconds) when seconds < 60, do: "#{seconds} seconds"

@@ -160,6 +160,101 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
       assert content =~ "{{evidence_workflow_reference}}",
              "dispatch.in_progress must keep the evidence_workflow_reference placeholder"
     end
+
+    test "uses a single pre-rendered {{git_workflow_block}} variable, not piecewise task_slug" do
+      content = PromptTemplates.default_content_for_slug("dispatch.in_progress")
+
+      # The Git Workflow section is now pre-rendered at the assigns layer
+      # (HeartbeatScheduler.git_workflow_section/1) so the DB template and the
+      # hardcoded enrichment path share one source of truth.
+      assert content =~ "{{git_workflow_block}}"
+      refute content =~ "{{task_slug}}"
+      refute content =~ "git worktree add ../worktrees/{{task_slug}}"
+    end
+
+    test "the variables list registers git_workflow_block and drops task_slug" do
+      descriptor =
+        PromptTemplates.default_templates()
+        |> Enum.find(&(&1.slug == "dispatch.in_progress"))
+
+      assert descriptor
+      assert "git_workflow_block" in descriptor.variables
+      refute "task_slug" in descriptor.variables
+    end
+
+    test "render_template interpolates a pre-rendered non-stack git workflow block verbatim" do
+      :ok = PromptTemplates.seed_defaults()
+
+      git_block = """
+
+      ## Git Workflow (CRITICAL)
+      Repository: https://github.com/test/router
+      Base branch: main
+
+      1. Create a worktree from the latest main branch:
+         ```
+         git fetch origin
+         git worktree add ../worktrees/019e2474 -b task/019e2474 origin/main
+         cd ../worktrees/019e2474
+         ```
+      """
+
+      assigns = %{
+        task_title: "Ordinary task",
+        stage_info: "Plan: v1 (stage 1/1 — coding)",
+        git_workflow_block: git_block,
+        provider_specific_guidance: "",
+        skills_reference: "Use bundled skills.",
+        evidence_workflow_reference: "CDP capture at 127.0.0.1:9222"
+      }
+
+      assert {:ok, rendered} = PromptTemplates.render_template("dispatch.in_progress", assigns)
+
+      assert rendered =~ "Ordinary task"
+      assert rendered =~ "git worktree add ../worktrees/019e2474 -b task/019e2474 origin/main"
+      refute rendered =~ "Task Stack Membership"
+      refute rendered =~ "{{task_slug}}"
+    end
+
+    test "render_template interpolates a pre-rendered stack-member git workflow block" do
+      :ok = PromptTemplates.seed_defaults()
+
+      git_block = """
+
+      ## Git Workflow (CRITICAL)
+      Repository: https://github.com/test/router
+      Base branch: main
+
+      1. Create a worktree from the latest main branch:
+         ```
+         git fetch origin
+         git worktree add ../worktrees/019e2474-11c1-7000-8000-000000000001 -b task/019e2474-11c1-7000-8000-000000000001 origin/main
+         cd ../worktrees/019e2474-11c1-7000-8000-000000000001
+         ```
+
+      ## Task Stack Membership
+      This task is a stack member (part of task stack `019e2782-09d6-7e2c-9502-c106290e5add`).
+      - stack_id: `019e2782-09d6-7e2c-9502-c106290e5add`
+      - Rollup branch: `stack/meeting-module`
+      """
+
+      assigns = %{
+        task_title: "Stack member task",
+        stage_info: "Plan: v1 (stage 1/1 — coding)",
+        git_workflow_block: git_block,
+        provider_specific_guidance: "",
+        skills_reference: "Use bundled skills.",
+        evidence_workflow_reference: "CDP capture at 127.0.0.1:9222"
+      }
+
+      assert {:ok, rendered} = PromptTemplates.render_template("dispatch.in_progress", assigns)
+
+      assert rendered =~
+               "git worktree add ../worktrees/019e2474-11c1-7000-8000-000000000001 -b task/019e2474-11c1-7000-8000-000000000001"
+
+      assert rendered =~ "## Task Stack Membership"
+      assert rendered =~ "stack_id: `019e2782-09d6-7e2c-9502-c106290e5add`"
+    end
   end
 
   describe "default_content_for_slug/1 — dispatch.review_e2e" do

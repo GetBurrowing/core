@@ -820,7 +820,7 @@ defmodule Platform.Tasks do
     Task
     |> where([t], t.id == ^task_id)
     |> where([t], is_nil(t.deleted_at))
-    |> preload([:project, :epic, plans: [:superseded_by, stages: :validations]])
+    |> preload([:project, :epic, :stack, plans: [:superseded_by, stages: :validations]])
     |> Repo.one()
   end
 

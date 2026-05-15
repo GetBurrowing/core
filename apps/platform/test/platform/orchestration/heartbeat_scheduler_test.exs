@@ -1260,4 +1260,422 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
       refute prompt =~ @claude_marker
     end
   end
+
+  describe "stack_membership/1" do
+    test "returns nil for a task with no stack_id" do
+      assert HeartbeatScheduler.stack_membership(%{id: "019e2790-f954-7032-8578-bb4569d889c0"}) ==
+               nil
+    end
+
+    test "returns nil when stack_id is nil" do
+      task = %{id: "t1", stack_id: nil, stack: nil}
+      assert HeartbeatScheduler.stack_membership(task) == nil
+    end
+
+    test "returns nil when stack_id is blank or whitespace" do
+      assert HeartbeatScheduler.stack_membership(%{id: "t1", stack_id: ""}) == nil
+      assert HeartbeatScheduler.stack_membership(%{id: "t1", stack_id: "   "}) == nil
+    end
+
+    test "ignores a stale stack_id key inside metadata — only the column counts" do
+      # The earlier (no-op) implementation read membership off `task.metadata`.
+      # A metadata key alone, with a nil `stack_id` column, is NOT a stack member.
+      task = %{
+        id: "t1",
+        stack_id: nil,
+        metadata: %{"stack_id" => "019e2782-09d6-7e2c-9502-c106290e5add"}
+      }
+
+      assert HeartbeatScheduler.stack_membership(task) == nil
+    end
+
+    test "returns a populated map for a real stack member (stack_id column + preloaded stack)" do
+      task = %{
+        id: "019e2474-11c1-7000-8000-000000000001",
+        stack_id: "019e2782-09d6-7e2c-9502-c106290e5add",
+        stack: %{
+          id: "019e2782-09d6-7e2c-9502-c106290e5add",
+          slug: "meeting-module",
+          rollup_branch: "stack/meeting-module"
+        }
+      }
+
+      assert HeartbeatScheduler.stack_membership(task) == %{
+               stack_id: "019e2782-09d6-7e2c-9502-c106290e5add",
+               stack_slug: "meeting-module",
+               rollup_branch: "stack/meeting-module"
+             }
+    end
+
+    test "derives rollup_branch from the stack slug when the stack row has none" do
+      task = %{
+        id: "t1",
+        stack_id: "019e3000-0000-7000-8000-000000000001",
+        stack: %{
+          id: "019e3000-0000-7000-8000-000000000001",
+          slug: "solo-stack",
+          rollup_branch: nil
+        }
+      }
+
+      assert HeartbeatScheduler.stack_membership(task) == %{
+               stack_id: "019e3000-0000-7000-8000-000000000001",
+               stack_slug: "solo-stack",
+               rollup_branch: "stack/solo-stack"
+             }
+    end
+
+    test "still flags a stack member when the :stack association is not loaded" do
+      # `stack_id` alone is authoritative for membership; an unloaded assoc just
+      # means no slug/rollup_branch is available.
+      task = %{
+        id: "t1",
+        stack_id: "019e2782-09d6-7e2c-9502-c106290e5add",
+        stack: %Ecto.Association.NotLoaded{
+          __field__: :stack,
+          __owner__: Platform.Tasks.Task,
+          __cardinality__: :one
+        }
+      }
+
+      assert HeartbeatScheduler.stack_membership(task) == %{
+               stack_id: "019e2782-09d6-7e2c-9502-c106290e5add",
+               stack_slug: nil,
+               rollup_branch: nil
+             }
+    end
+  end
+
+  describe "full_task_id/1" do
+    test "returns the complete UUID, not the 8-char prefix" do
+      task = %{id: "019e2474-11c1-7000-8000-000000000001"}
+      assert HeartbeatScheduler.full_task_id(task) == "019e2474-11c1-7000-8000-000000000001"
+    end
+
+    test "falls back to \"task\" when no id is present" do
+      assert HeartbeatScheduler.full_task_id(%{}) == "task"
+    end
+  end
+
+  describe "member_slug/1" do
+    test "returns the full UUID for a stack member" do
+      task = %{
+        id: "019e2474-11c1-7000-8000-000000000001",
+        stack_id: "019e2782-09d6-7e2c-9502-c106290e5add",
+        stack: %{id: "019e2782-09d6-7e2c-9502-c106290e5add", slug: "meeting-module"}
+      }
+
+      assert HeartbeatScheduler.member_slug(task) == "019e2474-11c1-7000-8000-000000000001"
+    end
+
+    test "returns the short 8-char prefix for a non-stack task" do
+      task = %{id: "019e2474-11c1-7000-8000-000000000001", stack_id: nil}
+      assert HeartbeatScheduler.member_slug(task) == "019e2474"
+    end
+  end
+
+  describe "git_workflow_section via in_progress dispatch — stack members" do
+    setup do
+      {plan, stage} = simple_plan_with_stage()
+      {:ok, plan: plan, stage: stage}
+    end
+
+    # A `task_stacks` row as the orchestrator preloads it onto `task.stack`.
+    defp meeting_module_stack do
+      %{
+        id: "019e2782-09d6-7e2c-9502-c106290e5add",
+        slug: "meeting-module",
+        rollup_branch: "stack/meeting-module"
+      }
+    end
+
+    test "stack-member dispatch uses the FULL task UUID for worktree path and branch", %{
+      plan: plan,
+      stage: stage
+    } do
+      task = %{
+        id: "019e2474-11c1-7000-8000-000000000001",
+        title: "Stack member task",
+        status: "in_progress",
+        priority: "high",
+        project: %{repo_url: "https://github.com/test/router", default_branch: "main"},
+        stack_id: "019e2782-09d6-7e2c-9502-c106290e5add",
+        stack: meeting_module_stack()
+      }
+
+      prompt = HeartbeatScheduler.dispatch_prompt(task, plan, stage)
+
+      assert prompt =~ "Git Workflow (CRITICAL)"
+
+      assert prompt =~
+               "git worktree add ../worktrees/019e2474-11c1-7000-8000-000000000001 -b task/019e2474-11c1-7000-8000-000000000001 origin/main"
+
+      assert prompt =~ "cd ../worktrees/019e2474-11c1-7000-8000-000000000001"
+      assert prompt =~ "git push -u origin task/019e2474-11c1-7000-8000-000000000001"
+      # The truncated 8-char prefix must NOT appear as a worktree/branch slug.
+      refute prompt =~ "../worktrees/019e2474 "
+      refute prompt =~ "-b task/019e2474 "
+    end
+
+    test "stack-member dispatch includes the Task Stack Membership block", %{
+      plan: plan,
+      stage: stage
+    } do
+      task = %{
+        id: "019e2474-11c1-7000-8000-000000000001",
+        title: "Stack member task",
+        status: "in_progress",
+        priority: "high",
+        project: %{repo_url: "https://github.com/test/router", default_branch: "main"},
+        stack_id: "019e2782-09d6-7e2c-9502-c106290e5add",
+        stack: meeting_module_stack()
+      }
+
+      prompt = HeartbeatScheduler.dispatch_prompt(task, plan, stage)
+
+      assert prompt =~ "## Task Stack Membership"
+      assert prompt =~ "This task is a stack member"
+      assert prompt =~ "stack_id: `019e2782-09d6-7e2c-9502-c106290e5add`"
+      assert prompt =~ "Rollup branch: `stack/meeting-module`"
+      # Independent-branching instruction per the task contract.
+      assert prompt =~ "INDEPENDENTLY"
+      assert prompt =~ "Do NOT depend on a sibling member's unpushed work"
+    end
+
+    test "rollup branch is derived from stack_slug when not explicitly stored", %{
+      plan: plan,
+      stage: stage
+    } do
+      task = %{
+        id: "019e3000-0000-7000-8000-000000000001",
+        title: "Solo stack member",
+        status: "in_progress",
+        priority: "medium",
+        project: %{repo_url: "https://github.com/test/router", default_branch: "main"},
+        stack_id: "019e3000-0000-7000-8000-0000000000ff",
+        stack: %{
+          id: "019e3000-0000-7000-8000-0000000000ff",
+          slug: "solo-stack",
+          rollup_branch: nil
+        }
+      }
+
+      prompt = HeartbeatScheduler.dispatch_prompt(task, plan, stage)
+
+      assert prompt =~ "## Task Stack Membership"
+      assert prompt =~ "Rollup branch: `stack/solo-stack`"
+    end
+
+    test "two stack members with a shared id prefix get DISTINCT worktree paths", %{
+      plan: plan,
+      stage: stage
+    } do
+      stack = meeting_module_stack()
+      stack_id = stack.id
+
+      task_f = %{
+        id: "019e2474-11c1-7000-8000-000000000001",
+        title: "Member F",
+        status: "in_progress",
+        priority: "high",
+        project: %{repo_url: "https://github.com/test/router", default_branch: "main"},
+        stack_id: stack_id,
+        stack: stack
+      }
+
+      task_g = %{
+        id: "019e2474-609d-7000-8000-000000000002",
+        title: "Member G",
+        status: "in_progress",
+        priority: "high",
+        project: %{repo_url: "https://github.com/test/router", default_branch: "main"},
+        stack_id: stack_id,
+        stack: stack
+      }
+
+      prompt_f = HeartbeatScheduler.dispatch_prompt(task_f, plan, stage)
+      prompt_g = HeartbeatScheduler.dispatch_prompt(task_g, plan, stage)
+
+      assert prompt_f =~ "../worktrees/019e2474-11c1-7000-8000-000000000001"
+      assert prompt_g =~ "../worktrees/019e2474-609d-7000-8000-000000000002"
+      refute prompt_f =~ "019e2474-609d-7000-8000-000000000002"
+      refute prompt_g =~ "019e2474-11c1-7000-8000-000000000001"
+    end
+
+    test "non-stack task dispatch has NO Task Stack Membership block and uses the 8-char slug", %{
+      plan: plan,
+      stage: stage
+    } do
+      task = %{
+        id: "019e2474-11c1-7000-8000-000000000003",
+        title: "Ordinary task",
+        status: "in_progress",
+        priority: "medium",
+        project: %{repo_url: "https://github.com/test/router", default_branch: "main"},
+        stack_id: nil
+      }
+
+      prompt = HeartbeatScheduler.dispatch_prompt(task, plan, stage)
+
+      refute prompt =~ "Task Stack Membership"
+      assert prompt =~ "git worktree add ../worktrees/019e2474 -b task/019e2474 origin/main"
+      assert prompt =~ "git push -u origin task/019e2474"
+    end
+
+    test "placeholder-repo stack member strips the whole Git Workflow + Stack Membership block",
+         %{plan: plan, stage: stage} do
+      # maybe_strip_git_workflow/2 must still match the new block shape — for a
+      # stack member the regex has to consume the trailing Task Stack Membership
+      # sub-block too, not leave it dangling.
+      task = %{
+        id: "019e2474-11c1-7000-8000-000000000004",
+        title: "Placeholder stack member",
+        status: "in_progress",
+        priority: "medium",
+        project: %{
+          repo_url: "https://example.invalid/local-task-lifecycle-proof",
+          default_branch: "main"
+        },
+        stack_id: "019e2782-09d6-7e2c-9502-c106290e5add",
+        stack: meeting_module_stack()
+      }
+
+      prompt = HeartbeatScheduler.dispatch_prompt(task, plan, stage)
+
+      refute prompt =~ "Git Workflow (CRITICAL)"
+      refute prompt =~ "Task Stack Membership"
+      refute prompt =~ "example.invalid"
+    end
+  end
+
+  describe "stack-aware slug propagation — deploying + review dispatch surfaces" do
+    test "deploying dispatch for a stack member references the full-UUID branch" do
+      task = %{
+        id: "019e2474-11c1-7000-8000-000000000001",
+        title: "Stack member deploy",
+        description: "Ship it",
+        status: "deploying",
+        priority: "high",
+        deploy_strategy: %{"type" => "pr_merge", "config" => %{"auto_merge" => false}},
+        project: %{repo_url: "https://github.com/test/app", default_branch: "main"},
+        stack_id: "019e2782-09d6-7e2c-9502-c106290e5add",
+        stack: %{
+          id: "019e2782-09d6-7e2c-9502-c106290e5add",
+          slug: "meeting-module",
+          rollup_branch: "stack/meeting-module"
+        }
+      }
+
+      plan = %{version: 1, stages: [%{}, %{}]}
+
+      stage = %{
+        id: "stage-deploy-1",
+        position: 2,
+        name: "Deploy: PR merge",
+        validations: [%{id: "val-pr-merged-1", kind: "pr_merged"}]
+      }
+
+      prompt = HeartbeatScheduler.dispatch_prompt(task, plan, stage)
+
+      assert prompt =~ "task/019e2474-11c1-7000-8000-000000000001"
+      # The truncated prefix must NOT be referenced as a branch.
+      refute prompt =~ "pushed to `task/019e2474`"
+    end
+
+    test "deploying dispatch for a non-stack task references the 8-char branch unchanged" do
+      task = %{
+        id: "019e2474-11c1-7000-8000-000000000002",
+        title: "Ordinary deploy",
+        description: "Ship it",
+        status: "deploying",
+        priority: "high",
+        deploy_strategy: %{"type" => "pr_merge", "config" => %{"auto_merge" => false}},
+        project: %{repo_url: "https://github.com/test/app", default_branch: "main"},
+        stack_id: nil
+      }
+
+      plan = %{version: 1, stages: [%{}, %{}]}
+
+      stage = %{
+        id: "stage-deploy-2",
+        position: 2,
+        name: "Deploy: PR merge",
+        validations: [%{id: "val-pr-merged-2", kind: "pr_merged"}]
+      }
+
+      prompt = HeartbeatScheduler.dispatch_prompt(task, plan, stage)
+
+      assert prompt =~ "pushed to `task/019e2474`"
+    end
+
+    test "in_progress and deploying dispatch for the same stack member name the SAME branch" do
+      base = %{
+        id: "019e3000-0000-7000-8000-0000000000aa",
+        title: "Lifecycle-consistent stack member",
+        description: "Ship it",
+        priority: "high",
+        deploy_strategy: %{"type" => "pr_merge", "config" => %{"auto_merge" => false}},
+        project: %{repo_url: "https://github.com/test/app", default_branch: "main"},
+        stack_id: "019e3000-0000-7000-8000-0000000000bb",
+        stack: %{
+          id: "019e3000-0000-7000-8000-0000000000bb",
+          slug: "deploy-stack",
+          rollup_branch: "stack/deploy-stack"
+        }
+      }
+
+      plan = %{version: 1, stages: [%{}, %{}]}
+      in_progress_stage = %{id: "s1", position: 1, name: "coding", validations: []}
+      deploy_stage = %{id: "s2", position: 2, name: "Deploy", validations: []}
+
+      in_progress_prompt =
+        HeartbeatScheduler.dispatch_prompt(
+          Map.put(base, :status, "in_progress"),
+          plan,
+          in_progress_stage
+        )
+
+      deploying_prompt =
+        HeartbeatScheduler.dispatch_prompt(
+          Map.put(base, :status, "deploying"),
+          plan,
+          deploy_stage
+        )
+
+      assert in_progress_prompt =~ "task/019e3000-0000-7000-8000-0000000000aa"
+      assert deploying_prompt =~ "task/019e3000-0000-7000-8000-0000000000aa"
+    end
+
+    test "e2e review assigns for a stack member carry the full-UUID slug" do
+      task = %{
+        id: "019e2474-11c1-7000-8000-000000000001",
+        execution_space_id: "space-1",
+        project: %{repo_url: "https://github.com/test/app"},
+        stack_id: "019e2782-09d6-7e2c-9502-c106290e5add",
+        stack: %{id: "019e2782-09d6-7e2c-9502-c106290e5add", slug: "meeting-module"}
+      }
+
+      pending = [%{id: "val-e2e-1", kind: "e2e_behavior", evaluation_payload: %{"setup" => "x"}}]
+
+      {template_slug, assigns} = HeartbeatScheduler.select_review_template(pending, task)
+
+      assert template_slug == "dispatch.review_e2e"
+      assert assigns.task_slug == "019e2474-11c1-7000-8000-000000000001"
+    end
+
+    test "e2e review assigns for a non-stack task carry the 8-char slug unchanged" do
+      task = %{
+        id: "019e2474-11c1-7000-8000-000000000002",
+        execution_space_id: "space-2",
+        project: %{repo_url: "https://github.com/test/app"},
+        stack_id: nil
+      }
+
+      pending = [%{id: "val-e2e-2", kind: "e2e_behavior", evaluation_payload: %{"setup" => "y"}}]
+
+      {_template_slug, assigns} = HeartbeatScheduler.select_review_template(pending, task)
+
+      assert assigns.task_slug == "019e2474"
+    end
+  end
 end

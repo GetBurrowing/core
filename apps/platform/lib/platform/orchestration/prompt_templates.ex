@@ -276,9 +276,7 @@ defmodule Platform.Orchestration.PromptTemplates do
         variables: [
           "task_title",
           "stage_info",
-          "repo_url",
-          "default_branch",
-          "task_slug",
+          "git_workflow_block",
           "provider_specific_guidance",
           "skills_reference",
           "evidence_workflow_reference"
@@ -291,25 +289,7 @@ defmodule Platform.Orchestration.PromptTemplates do
         {{provider_specific_guidance}}
 
         Push evidence using validation_pass or stage_complete as you finish each step. Post commentary to the execution space so reviewers can follow along. Use report_blocker if you are stuck.
-
-        ## Git Workflow (CRITICAL)
-        Repository: {{repo_url}}
-        Base branch: {{default_branch}}
-
-        1. Create a worktree from the latest {{default_branch}} branch:
-           ```
-           git fetch origin
-           git worktree add ../worktrees/{{task_slug}} -b task/{{task_slug}} origin/{{default_branch}}
-           cd ../worktrees/{{task_slug}}
-           ```
-        2. Do ALL work in the worktree directory.
-        3. When implementation is complete:
-           - Run the full test suite and lint checks
-           - Commit all changes with a descriptive message referencing task {{task_slug}}
-           - Push the branch: `git push -u origin task/{{task_slug}}`
-           - Do NOT open a PR yet — PR opening happens in the deploy phase
-        4. NEVER work on an existing branch. ALWAYS branch from latest origin/{{default_branch}}.
-
+        {{git_workflow_block}}
         The attention signal that delivered this message includes a `context` field with the full task hierarchy: project, epic, task metadata, approved plan with stages, and execution_space_id. Use it as your source of truth.
         Start from the concrete stage contract and any attached/bundled skill content in that payload before re-fetching broad task/project context.
         Avoid redundant task/plan lookup churn on the first turn unless an identifier is genuinely missing or the stage contract is ambiguous.
