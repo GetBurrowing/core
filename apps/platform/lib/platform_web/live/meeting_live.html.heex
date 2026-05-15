@@ -397,19 +397,81 @@
       </aside>
     </div>
 
-    <%!-- Bottom strip PLACEHOLDER. Sibling 019e2475-0037 fills this with
-         mixed video tiles. --%>
+    <%!-- Bottom strip (task 019e2475-0037): horizontal flex row composing
+         one `<.video_tile>` per human (left) and one `<.agent_tile>` per
+         agent (right), with a thin vertical divider between sections.
+         Strip height: 96px on `<lg`, 120px on `lg`+. Bottom edge respects
+         `safe-area-inset-bottom` so the iOS home indicator never overlaps
+         the tiles. --%>
     <footer
-      class="h-[120px] flex-shrink-0 border-t border-base-300 bg-base-200/40 pb-[env(safe-area-inset-bottom)]"
+      id="meeting-bottom-strip"
+      class={[
+        "flex flex-shrink-0 items-stretch gap-2 overflow-x-auto overscroll-contain",
+        "border-t border-base-300 bg-base-200/40 px-2 py-2",
+        "h-[96px] lg:h-[120px]",
+        "pb-[calc(0.5rem+env(safe-area-inset-bottom))]"
+      ]}
       data-pane="bottom-strip"
+      data-tile-count-humans={length(strip_humans(assigns[:participants]))}
+      data-tile-count-agents={length(strip_agents(assigns[:participants]))}
     >
-      <div
-        class="flex h-full items-center justify-center text-xs text-base-content/40"
-        data-placeholder="bottom-strip"
+      <%!-- Human section: one `<.video_tile>` per human participant.
+           Empty-state stays silent so the strip doesn't churn when humans
+           join/leave. --%>
+      <section
+        class="flex h-full items-stretch gap-2"
+        data-section="humans"
+        aria-label="Participants"
       >
-        <span class="hero-film size-5"></span>
-        <span class="ml-2">Video tiles ship in a sibling stack member.</span>
+        <PlatformWeb.Components.Meeting.VideoTile.video_tile
+          :for={participant <- strip_humans(assigns[:participants])}
+          participant={
+            %{
+              identity: "strip:user:" <> (participant.participant_id || ""),
+              name: participant.display_name || "Participant"
+            }
+          }
+          video_track={false}
+          audio_muted?={!Map.get(participant.attention_config || %{}, "mic_on", false)}
+          speaking?={false}
+          avatar_url={participant.avatar_url}
+        />
+      </section>
+
+      <%!-- Vertical divider: only when BOTH sections have at least one
+           tile. --%>
+      <div
+        :if={
+          strip_humans(assigns[:participants]) != [] and
+            strip_agents(assigns[:participants]) != []
+        }
+        class="h-full w-px flex-shrink-0 self-stretch border-l border-base-300"
+        data-role="strip-divider"
+        aria-hidden="true"
+      >
       </div>
+
+      <%!-- Agent section: one `<.agent_tile>` per agent participant. --%>
+      <section
+        class="flex h-full items-stretch gap-2"
+        data-section="agents"
+        aria-label="Agent presence"
+      >
+        <PlatformWeb.Components.Meeting.AgentTile.agent_tile
+          :for={participant <- strip_agents(assigns[:participants])}
+          agent_participant={
+            %{
+              identity: "agent:" <> (participant.participant_id || ""),
+              id: participant.id,
+              name: participant.display_name || "Agent"
+            }
+          }
+          role={agent_role(participant)}
+          activity_state={:idle}
+          accent_color={nil}
+          avatar_url={participant.avatar_url}
+        />
+      </section>
     </footer>
   </div>
 <% else %>
