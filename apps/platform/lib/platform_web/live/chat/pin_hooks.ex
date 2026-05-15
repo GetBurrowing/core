@@ -27,6 +27,7 @@ defmodule PlatformWeb.ChatLive.PinHooks do
   import Phoenix.LiveView, only: [attach_hook: 4]
 
   alias Platform.Chat
+  alias PlatformWeb.ChatLive.MessagesHooks
 
   @doc """
   Attach Pin handlers to the socket. Call from `ChatLive.mount/3`.
@@ -50,6 +51,10 @@ defmodule PlatformWeb.ChatLive.PinHooks do
   """
   @spec load_for_space(Phoenix.LiveView.Socket.t(), binary()) :: Phoenix.LiveView.Socket.t()
   def load_for_space(socket, space_id) do
+    # No reinsert needed here: MessagesHooks.enter_space (called immediately
+    # before this in chat_live.ex's space-enter pipeline) does
+    # stream(:messages, ..., reset: true) which re-renders every row from
+    # scratch. Re-rendering them again right after would be redundant.
     pins = Chat.list_pins(space_id)
     pinned_message_ids = MapSet.new(pins, & &1.message_id)
 
@@ -94,7 +99,8 @@ defmodule PlatformWeb.ChatLive.PinHooks do
     {:halt,
      socket
      |> assign(:pins, pins)
-     |> assign(:pinned_message_ids, pinned_message_ids)}
+     |> assign(:pinned_message_ids, pinned_message_ids)
+     |> MessagesHooks.reinsert_stream_messages(filtered_for_rendered(socket, [pin.message_id]))}
   end
 
   defp handle_info({:pin_removed, %{message_id: msg_id}}, socket) do
@@ -104,8 +110,20 @@ defmodule PlatformWeb.ChatLive.PinHooks do
     {:halt,
      socket
      |> assign(:pins, pins)
-     |> assign(:pinned_message_ids, pinned_message_ids)}
+     |> assign(:pinned_message_ids, pinned_message_ids)
+     |> MessagesHooks.reinsert_stream_messages(filtered_for_rendered(socket, [msg_id]))}
   end
 
   defp handle_info(_msg, socket), do: {:cont, socket}
+
+  # Filter message ids to those currently rendered in the :messages stream.
+  # Prevents stream_reinsert_with_day_label from falling through to
+  # stream_insert_with_day_label and silently INSERTING a non-DOM message
+  # out-of-order — e.g. when another user pins a message older than the
+  # current client's loaded chat window. See task 019e2740 (this batch)
+  # for the architect-flagged hazard.
+  defp filtered_for_rendered(socket, ids) do
+    rendered = socket.assigns[:rendered_message_ids] || MapSet.new()
+    Enum.filter(ids, &MapSet.member?(rendered, &1))
+  end
 end

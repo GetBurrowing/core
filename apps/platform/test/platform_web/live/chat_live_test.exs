@@ -2000,6 +2000,88 @@ defmodule PlatformWeb.ChatLiveTest do
       html_closed = render_click(view, "pin_panel_toggle", %{})
       refute html_closed =~ "Pinned Messages"
     end
+
+    # NOTE: Same LiveViewTest limitation as the edit-message describe block —
+    # `render(view)` re-renders the full component tree from current assigns,
+    # so it bypasses the morphdom stream-row race where the actual bug
+    # manifests in real browsers. These tests verify the *wiring*: that
+    # :pinned_message_ids updates and that the reinsert doesn't grow
+    # :rendered_message_ids. Manual browser verification at PR time is the
+    # actual bug-resistance proof.
+    test "pin_toggle reinserts the row without growing :rendered_message_ids",
+         %{conn: conn} do
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/chat/general")
+
+      view
+      |> form("#compose-form", compose: %{text: "pin propagation target"})
+      |> render_submit()
+
+      space = Chat.get_space_by_slug("general")
+      [msg | _] = Chat.list_messages(space.id)
+
+      # Capture baseline: the message must be in :rendered_message_ids
+      assigns_before = :sys.get_state(view.pid).socket.assigns
+      rendered_before = Map.get(assigns_before, :rendered_message_ids, MapSet.new())
+      assert MapSet.member?(rendered_before, msg.id)
+      size_before = MapSet.size(rendered_before)
+
+      # Trigger pin: Chat.pin_message broadcasts {:pin_added, pin} via PubSub.
+      # render_click returns BEFORE the handle_info fires; the follow-up
+      # render(view) call below flushes the LV's mailbox so the broadcast
+      # is processed. Don't delete the render(view) "redundant" call.
+      render_click(view, "pin_toggle", %{"message-id" => msg.id, "space-id" => msg.space_id})
+      _ = render(view)
+
+      assigns_after = :sys.get_state(view.pid).socket.assigns
+
+      assert MapSet.member?(assigns_after.pinned_message_ids, msg.id),
+             ":pinned_message_ids should contain the toggled message after the PubSub roundtrip"
+
+      rendered_after = Map.get(assigns_after, :rendered_message_ids, MapSet.new())
+
+      assert MapSet.size(rendered_after) == size_before,
+             "reinsert of an in-DOM row must not grow :rendered_message_ids"
+    end
+
+    test "second pin_toggle (unpin) clears the message id from :pinned_message_ids",
+         %{conn: conn} do
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/chat/general")
+
+      view
+      |> form("#compose-form", compose: %{text: "unpin me target"})
+      |> render_submit()
+
+      space = Chat.get_space_by_slug("general")
+      [msg | _] = Chat.list_messages(space.id)
+
+      # First pin
+      render_click(view, "pin_toggle", %{"message-id" => msg.id, "space-id" => msg.space_id})
+      _ = render(view)
+
+      pinned_after_first = :sys.get_state(view.pid).socket.assigns.pinned_message_ids
+      assert MapSet.member?(pinned_after_first, msg.id)
+
+      size_after_first =
+        :sys.get_state(view.pid).socket.assigns
+        |> Map.get(:rendered_message_ids, MapSet.new())
+        |> MapSet.size()
+
+      # Second toggle = unpin (pin_hooks.ex:70 checks MapSet.member? to decide)
+      render_click(view, "pin_toggle", %{"message-id" => msg.id, "space-id" => msg.space_id})
+      _ = render(view)
+
+      assigns_after_unpin = :sys.get_state(view.pid).socket.assigns
+
+      refute MapSet.member?(assigns_after_unpin.pinned_message_ids, msg.id),
+             ":pinned_message_ids should no longer contain the message after the unpin roundtrip"
+
+      rendered_after_unpin = Map.get(assigns_after_unpin, :rendered_message_ids, MapSet.new())
+
+      assert MapSet.size(rendered_after_unpin) == size_after_first,
+             "reinsert of an in-DOM row on unpin must not grow :rendered_message_ids"
+    end
   end
 
   # ── Settings modal ──────────────────────────────────────────────────────────
