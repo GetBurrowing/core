@@ -2200,10 +2200,26 @@
          height,0px))]` constraint (PR #335 pattern) keeps the bar
          from being occluded by the bottom-tab nav on iOS — no
          defense-in-depth pb on this bar is required. --%>
+    <% has_backlog_member? =
+      Enum.any?(@selected_stack_members, &(&1.status == "backlog")) %>
     <div
       class="mt-auto sticky bottom-0 flex gap-2 border-t border-base-300 bg-base-100 px-4 py-3"
       data-role="stack-detail-actions"
     >
+      <%!-- Start Planning (T8 stage 3): stack-level mirror of the per-task
+           "Start Planning" button. Cascades every `backlog` member to
+           `planning` via Stacks.start_planning/1. Rendered only when the
+           stack has at least one `backlog` member — a stack with nothing
+           to plan does not show the control. --%>
+      <button
+        :if={has_backlog_member?}
+        type="button"
+        class="btn btn-ghost btn-sm flex-1"
+        phx-click="start_stack_planning"
+        data-role="stack-detail-start-planning"
+      >
+        <span class="hero-play size-4"></span> Start Planning
+      </button>
       <%!-- Assign Agents (ADR 0041): opens the stack-level assignee modal.
            The stack-level assignment fans out to every member that is not
            individually overridden. --%>

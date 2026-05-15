@@ -280,6 +280,59 @@ defmodule Platform.Tasks.Stacks do
   defp cascade_member(_member, _target, ok, errors), do: {ok, errors}
 
   @doc """
+  Stack-level "Start Planning": fan the planning lifecycle action out to
+  every constituent member.
+
+  Mirrors `start_stack/1`'s cascade machinery, but as a backlog-only
+  fan-out into `planning`:
+
+    * Loads `members/1` and, for every member currently at `backlog`,
+      transitions it `backlog -> planning` via `Tasks.transition_task/2`
+      using the same `cascade_member/4` reducer. Members already past
+      `backlog` (`planning`, `stack_pending`, `in_progress`, …) are left
+      untouched — never illegally re-transitioned.
+    * Does NOT itself write the stack status: `Tasks.transition_task/2`
+      already runs `maybe_recompute_stack/1`, and a stack of all-`planning`
+      members correctly rolls up to `forming` per `rollup_status_for/1`.
+
+  Returns `{:ok, %{stack: stack, planning: [Task.t()]}}` on full success
+  (an empty stack returns `planning: []`), `{:partial, %{stack: stack,
+  planning: [...], errors: [...]}}` when some members fail to transition,
+  and `{:error, :stack_not_found}` for an unknown id.
+  """
+  @spec start_planning(Stack.t() | binary()) ::
+          {:ok, %{stack: Stack.t(), planning: [Task.t()]}}
+          | {:partial,
+             %{
+               stack: Stack.t(),
+               planning: [Task.t()],
+               errors: [%{task_id: String.t(), target_status: String.t(), reason: term()}]
+             }}
+          | {:error, :stack_not_found | term()}
+  def start_planning(%Stack{} = stack) do
+    members = members(stack)
+
+    {planning, errors} =
+      Enum.reduce(members, {[], []}, fn member, {ok, errs} ->
+        cascade_member(member, "planning", ok, errs)
+      end)
+
+    result = %{stack: stack, planning: Enum.reverse(planning)}
+
+    case errors do
+      [] -> {:ok, result}
+      errs -> {:partial, Map.put(result, :errors, Enum.reverse(errs))}
+    end
+  end
+
+  def start_planning(stack_id) when is_binary(stack_id) do
+    case Repo.get(Stack, stack_id) do
+      %Stack{} = stack -> start_planning(stack)
+      nil -> {:error, :stack_not_found}
+    end
+  end
+
+  @doc """
   Terminal transition: mark a stack `abandoned` and record the reason.
 
   Per ADR 0041 (Lifecycle / Rollback / abandon), the per-member handling on

@@ -497,6 +497,43 @@ defmodule PlatformWeb.TasksLive do
     end
   end
 
+  # Stack-level "Start Planning" cascade (T8 stage 3). Mirrors the per-task
+  # "Start Planning" button at the stack level: calls Stacks.start_planning/1,
+  # which transitions every `backlog` member to `planning` (members already
+  # past `backlog` are left untouched). On success/partial, reloads
+  # `:selected_stack` + `:selected_stack_members` so the panel reflects the
+  # new member statuses, and flashes a result summary.
+  def handle_event("start_stack_planning", _params, %{assigns: %{selected_stack: nil}} = socket),
+    do: {:noreply, socket}
+
+  def handle_event("start_stack_planning", _params, socket) do
+    case Stacks.start_planning(socket.assigns.selected_stack) do
+      {:ok, %{stack: stack, planning: planning}} ->
+        {:noreply,
+         socket
+         |> assign(:selected_stack, stack)
+         |> assign(:selected_stack_members, Stacks.members(stack))
+         |> put_flash(
+           :info,
+           "Started planning for #{length(planning)} #{member_word(length(planning))}."
+         )}
+
+      {:partial, %{stack: stack, planning: planning, errors: errors}} ->
+        {:noreply,
+         socket
+         |> assign(:selected_stack, stack)
+         |> assign(:selected_stack_members, Stacks.members(stack))
+         |> put_flash(
+           :error,
+           "Started planning for #{length(planning)} #{member_word(length(planning))}; " <>
+             "#{length(errors)} failed to transition."
+         )}
+
+      {:error, _reason} ->
+        {:noreply, put_flash(socket, :error, "Could not start planning for this stack.")}
+    end
+  end
+
   def handle_event("close_detail", _params, socket) do
     unsubscribe_execution_space(socket)
 
@@ -3278,6 +3315,10 @@ defmodule PlatformWeb.TasksLive do
   defp present?(""), do: false
   defp present?(value) when is_binary(value), do: String.trim(value) != ""
   defp present?(_), do: false
+
+  # Singular/plural "member" for stack-cascade flash summaries.
+  defp member_word(1), do: "member"
+  defp member_word(_), do: "members"
 
   # Human-readable summary string used in the folded row for a rejected
   # plan revision. When the plan was auto-superseded by a newer revision

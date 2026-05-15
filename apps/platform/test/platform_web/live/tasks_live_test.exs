@@ -4261,6 +4261,162 @@ defmodule PlatformWeb.TasksLiveTest do
     end
   end
 
+  describe "stack detail panel — Start Planning control (task 019e294c stage 3)" do
+    # Stage 3 mirrors the per-task "Start Planning" button at the stack
+    # level. The button must:
+    #   * render in the stack-detail-actions row only when ≥1 member is
+    #     at `backlog` (no backlog members → nothing to plan, hide the
+    #     button), and
+    #   * dispatch a `start_stack_planning` event that calls
+    #     Stacks.start_planning/1, reloads :selected_stack +
+    #     :selected_stack_members, and flashes a result summary.
+
+    setup %{conn: conn} do
+      conn = authenticated_conn(conn)
+      project = create_project()
+      {:ok, conn: conn, project: project}
+    end
+
+    defp seed_stack_with_member_statuses(project, statuses) do
+      stack =
+        stack_fixture(
+          project_id: project.id,
+          name: "Plan Me #{System.unique_integer([:positive])}",
+          slug: "plan-me-#{System.unique_integer([:positive])}"
+        )
+
+      members =
+        statuses
+        |> Enum.with_index(1)
+        |> Enum.map(fn {status, pos} ->
+          {:ok, t} =
+            Tasks.create_task(%{
+              project_id: project.id,
+              stack_id: stack.id,
+              stack_position: pos,
+              title: "Member #{pos}",
+              status: status,
+              priority: "medium"
+            })
+
+          t
+        end)
+
+      {:ok, stack} = Stacks.recompute_stack_status(stack)
+      {Repo.get!(Stack, stack.id), members}
+    end
+
+    test "Start Planning button renders when the stack has at least one backlog member",
+         %{conn: conn, project: project} do
+      {stack, _members} = seed_stack_with_member_statuses(project, ["backlog", "backlog"])
+
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      html = render_click(view, "open_stack_detail", %{"id" => stack.id})
+
+      # Button is present in the action row with the documented event +
+      # data-role markers.
+      assert html =~ ~s(data-role="stack-detail-start-planning")
+      assert html =~ "Start Planning"
+      assert html =~ ~s(phx-click="start_stack_planning")
+    end
+
+    test "Start Planning button is hidden when no member is at backlog",
+         %{conn: conn, project: project} do
+      {stack, _members} =
+        seed_stack_with_member_statuses(project, ["planning", "stack_pending"])
+
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      html = render_click(view, "open_stack_detail", %{"id" => stack.id})
+
+      # The detail panel is open (action row is rendered) but the
+      # Start Planning control is suppressed.
+      assert html =~ ~s(data-role="stack-detail-actions")
+      refute html =~ ~s(data-role="stack-detail-start-planning")
+    end
+
+    test "Start Planning button is hidden when the stack has no members",
+         %{conn: conn, project: project} do
+      stack =
+        stack_fixture(
+          project_id: project.id,
+          name: "Empty",
+          slug: "empty-#{System.unique_integer([:positive])}"
+        )
+
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      html = render_click(view, "open_stack_detail", %{"id" => stack.id})
+
+      assert html =~ ~s(data-role="stack-detail-actions")
+      refute html =~ ~s(data-role="stack-detail-start-planning")
+    end
+
+    test "start_stack_planning event transitions every backlog member and reloads the panel",
+         %{conn: conn, project: project} do
+      {stack, members} =
+        seed_stack_with_member_statuses(project, ["backlog", "backlog", "backlog"])
+
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      _html = render_click(view, "open_stack_detail", %{"id" => stack.id})
+
+      pre = :sys.get_state(view.pid).socket.assigns
+      assert Enum.all?(pre.selected_stack_members, &(&1.status == "backlog"))
+
+      _html = render_click(view, "start_stack_planning", %{})
+
+      post = :sys.get_state(view.pid).socket.assigns
+      # :selected_stack_members was reloaded → all three members now
+      # report `planning` from the panel state.
+      assert length(post.selected_stack_members) == 3
+      assert Enum.all?(post.selected_stack_members, &(&1.status == "planning"))
+
+      # DB state matches the panel state.
+      member_ids = Enum.map(members, & &1.id)
+      reloaded = Repo.all(from(t in Task, where: t.id in ^member_ids, select: t.status))
+      assert Enum.all?(reloaded, &(&1 == "planning"))
+
+      # :selected_stack is still the same stack id (panel stays open).
+      assert post.selected_stack && post.selected_stack.id == stack.id
+      assert post.show_stack_detail == true
+
+      # Result summary is flashed.
+      assert Phoenix.Flash.get(post.flash, :info) =~ "Started planning for 3 members"
+    end
+
+    test "start_stack_planning only advances backlog members and leaves the rest untouched",
+         %{conn: conn, project: project} do
+      {stack, [backlog_member, planning_member, parked_member]} =
+        seed_stack_with_member_statuses(project, ["backlog", "planning", "stack_pending"])
+
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      _html = render_click(view, "open_stack_detail", %{"id" => stack.id})
+      _html = render_click(view, "start_stack_planning", %{})
+
+      assert Repo.get!(Task, backlog_member.id).status == "planning"
+      assert Repo.get!(Task, planning_member.id).status == "planning"
+      assert Repo.get!(Task, parked_member.id).status == "stack_pending"
+
+      assigns = :sys.get_state(view.pid).socket.assigns
+      assert Phoenix.Flash.get(assigns.flash, :info) =~ "Started planning for 1 member"
+    end
+
+    test "start_stack_planning is a no-op when no stack is selected",
+         %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+
+      pre = :sys.get_state(view.pid).socket.assigns
+      assert pre.selected_stack == nil
+
+      _html = render_click(view, "start_stack_planning", %{})
+
+      post = :sys.get_state(view.pid).socket.assigns
+      assert post.selected_stack == nil
+      # No flash, no crash — handler short-circuits via the
+      # `selected_stack: nil` guard.
+      assert Phoenix.Flash.get(post.flash, :info) in [nil, ""]
+      assert Phoenix.Flash.get(post.flash, :error) in [nil, ""]
+    end
+  end
+
   describe "stack detail panel — meta-grid (T8 stage 2)" do
     # Mock canvas 019e1a16 rev 2: a 4-cell summary card under the head
     # — Status / Members / Dep edges / Branch — laid out as 4 desktop

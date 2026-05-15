@@ -924,6 +924,116 @@ defmodule Platform.Tasks.StacksTest do
     end
   end
 
+  describe "start_planning/1" do
+    test "fans every backlog member backlog -> planning" do
+      {:ok, project} = Tasks.create_project(%{name: "Start planning happy"})
+      stack = stack_fixture(project_id: project.id)
+
+      {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "Member A"})
+      {:ok, b} = Tasks.create_task(%{project_id: project.id, title: "Member B"})
+      {:ok, c} = Tasks.create_task(%{project_id: project.id, title: "Member C"})
+
+      {:ok, _} = Stacks.add_task(stack, a)
+      {:ok, _} = Stacks.add_task(stack, b)
+      {:ok, _} = Stacks.add_task(stack, c)
+
+      assert {:ok, %{stack: updated, planning: planning}} = Stacks.start_planning(stack)
+
+      planning_ids = planning |> Enum.map(& &1.id) |> Enum.sort()
+      assert planning_ids == Enum.sort([a.id, b.id, c.id])
+      assert Enum.all?(planning, &(&1.status == "planning"))
+
+      # Every member is now at `planning` in the DB.
+      assert Enum.all?(Stacks.members(stack), &(&1.status == "planning"))
+
+      # An all-`planning` stack rolls up to `forming` (no member has
+      # advanced past forming).
+      assert updated.status == "forming"
+      assert {:ok, recomputed} = Stacks.recompute_stack_status(updated)
+      assert recomputed.status == "forming"
+    end
+
+    test "only advances backlog members, leaving the rest untouched" do
+      {:ok, project} = Tasks.create_project(%{name: "Start planning mixed"})
+      stack = stack_fixture(project_id: project.id)
+
+      {:ok, bl_a} = Tasks.create_task(%{project_id: project.id, title: "Backlog A"})
+      {:ok, bl_b} = Tasks.create_task(%{project_id: project.id, title: "Backlog B"})
+      {:ok, planning_already} = Tasks.create_task(%{project_id: project.id, title: "Planning"})
+      {:ok, parked} = Tasks.create_task(%{project_id: project.id, title: "Parked"})
+
+      {:ok, _} = Stacks.add_task(stack, bl_a)
+      {:ok, _} = Stacks.add_task(stack, bl_b)
+      {:ok, attached_planning} = Stacks.add_task(stack, planning_already)
+      {:ok, attached_parked} = Stacks.add_task(stack, parked)
+
+      # Pre-advance two members past `backlog` before the cascade.
+      set_member_status(stack, attached_planning, "planning")
+      set_member_status(stack, attached_parked, "stack_pending")
+
+      assert {:ok, %{planning: planning}} = Stacks.start_planning(stack)
+
+      # Exactly the two backlog members advanced — no :invalid_transition
+      # error leaked for the already-advanced members.
+      planning_ids = planning |> Enum.map(& &1.id) |> Enum.sort()
+      assert planning_ids == Enum.sort([bl_a.id, bl_b.id])
+
+      # The pre-advanced members are left at their existing status.
+      assert Tasks.get_task_record(attached_planning.id).status == "planning"
+      assert Tasks.get_task_record(attached_parked.id).status == "stack_pending"
+    end
+
+    test "an empty stack returns {:ok, planning: []}" do
+      stack = stack_fixture()
+
+      assert {:ok, %{stack: returned, planning: []}} = Stacks.start_planning(stack)
+      assert returned.id == stack.id
+      assert returned.status == "forming"
+    end
+
+    test "a stack with no backlog members is a safe no-op" do
+      {:ok, project} = Tasks.create_project(%{name: "Start planning no-op"})
+      stack = stack_fixture(project_id: project.id)
+
+      {:ok, t} = Tasks.create_task(%{project_id: project.id, title: "Already planning"})
+      {:ok, attached} = Stacks.add_task(stack, t)
+      set_member_status(stack, attached, "planning")
+
+      assert {:ok, %{planning: []}} = Stacks.start_planning(stack)
+      assert Tasks.get_task_record(attached.id).status == "planning"
+    end
+
+    test "re-invoking after a full cascade is idempotent" do
+      {:ok, project} = Tasks.create_project(%{name: "Start planning idempotent"})
+      stack = stack_fixture(project_id: project.id)
+
+      {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "Member A"})
+      {:ok, b} = Tasks.create_task(%{project_id: project.id, title: "Member B"})
+      {:ok, _} = Stacks.add_task(stack, a)
+      {:ok, _} = Stacks.add_task(stack, b)
+
+      assert {:ok, %{planning: first}} = Stacks.start_planning(stack)
+      assert length(first) == 2
+
+      # Second invocation finds nothing at `backlog` — no re-transition,
+      # no error.
+      assert {:ok, %{planning: []}} = Stacks.start_planning(stack)
+      assert Enum.all?(Stacks.members(stack), &(&1.status == "planning"))
+    end
+
+    test "accepts a stack id and returns {:error, :stack_not_found} for an unknown id" do
+      {:ok, project} = Tasks.create_project(%{name: "Start planning by id"})
+      stack = stack_fixture(project_id: project.id)
+      {:ok, t} = Tasks.create_task(%{project_id: project.id, title: "Member"})
+      {:ok, _} = Stacks.add_task(stack, t)
+
+      assert {:ok, %{planning: [planned]}} = Stacks.start_planning(stack.id)
+      assert planned.id == t.id
+
+      assert {:error, :stack_not_found} = Stacks.start_planning(Ecto.UUID.generate())
+    end
+  end
+
   describe "regression?/2" do
     test "returns true for backward lifecycle steps" do
       assert Stacks.regression?("in_review", "in_progress")

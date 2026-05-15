@@ -1125,6 +1125,24 @@ defmodule Platform.Federation.ToolSurface do
           "When a stack's membership is finalized and you want the engine to begin dispatching its level-0 roots."
       },
       %{
+        name: "stack_start_planning",
+        description:
+          "Stack-level \"Start Planning\" lifecycle action. Fans the `backlog -> planning` transition out to every constituent member currently at `backlog`; members already past `backlog` (`planning`, `stack_pending`, `in_progress`, …) are left untouched — the cascade is additive. Does not write the stack status itself: an all-`planning` stack rolls up to `forming` per the ADR 0041 status mapping.",
+        parameters: %{
+          stack_id: %{
+            type: "string",
+            required: true,
+            description: "The stack to start planning"
+          }
+        },
+        returns:
+          "The stack record plus `planning` (the members moved from `backlog` to `planning`). Per-member transition failures surface in a `cascade_errors` array. An empty stack — or one with no `backlog` members — returns an empty `planning` list.",
+        limitations:
+          "Members that fail the `planning` transition appear in `cascade_errors`; the stack-level status still recomputes from its members. Safe to re-invoke: a stack with no `backlog` members is a no-op returning an empty `planning` list.",
+        when_to_use:
+          "When you want every backlog member of a stack to enter the planning phase at once — the headless mirror of the per-task \"Start Planning\" button."
+      },
+      %{
         name: "stack_assign_agents",
         description:
           "Assign agents at the stack level (ADR 0041). The stack-level assignment is the default that fans out to every member task that is NOT individually overridden. Pass `assignee_id` for the simple all-phases case, OR per-phase `planning`/`execution`/`review` ids for the advanced case. Percolation reuses the per-task phase-assignee pipeline so each member's derived top-level assignee_id is re-derived for its current phase. Members flagged with an individual override are skipped and never clobbered.",
@@ -2732,6 +2750,44 @@ defmodule Platform.Federation.ToolSurface do
     end
   end
 
+  def execute("stack_start_planning", args, _context) do
+    stack_id = Map.get(args, "stack_id")
+
+    case stack_id && Stacks.get_stack(stack_id) do
+      nil ->
+        {:error,
+         %{
+           error: "Stack not found: #{inspect(stack_id)}",
+           recoverable: false,
+           suggestion: "Use stack_list to find available stacks"
+         }}
+
+      %Stack{} = stack ->
+        case Stacks.start_planning(stack) do
+          {:ok, %{stack: updated, planning: planning}} ->
+            {:ok, stack_start_planning_payload(updated, planning, [])}
+
+          {:partial, %{stack: updated, planning: planning, errors: errors}} ->
+            {:ok, stack_start_planning_payload(updated, planning, errors)}
+
+          {:error, :stack_not_found} ->
+            {:error,
+             %{
+               error: "Stack not found: #{inspect(stack_id)}",
+               recoverable: false,
+               suggestion: "Use stack_list to find available stacks"
+             }}
+
+          {:error, other} ->
+            {:error,
+             %{
+               error: "Failed to start planning: #{inspect(other)}",
+               recoverable: true
+             }}
+        end
+    end
+  end
+
   def execute("stack_assign_agents", args, _context) do
     stack_id = Map.get(args, "stack_id")
 
@@ -2817,6 +2873,18 @@ defmodule Platform.Federation.ToolSurface do
         started: Enum.map(started, &serialize_stack_member/1),
         parked: Enum.map(parked, &serialize_stack_member/1)
       })
+
+    case errors do
+      [] -> payload
+      _ -> Map.put(payload, :cascade_errors, errors)
+    end
+  end
+
+  defp stack_start_planning_payload(%Stack{} = stack, planning, errors) do
+    payload =
+      stack
+      |> serialize_stack()
+      |> Map.put(:planning, Enum.map(planning, &serialize_stack_member/1))
 
     case errors do
       [] -> payload

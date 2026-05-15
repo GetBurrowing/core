@@ -35,9 +35,9 @@ defmodule Platform.Federation.ToolSurfaceTest do
   defp unique_slug, do: "test-#{System.unique_integer([:positive])}"
 
   describe "tool_definitions/0" do
-    test "returns all 62 tools with required components" do
+    test "returns all 63 tools with required components" do
       tools = ToolSurface.tool_definitions()
-      assert length(tools) == 62
+      assert length(tools) == 63
 
       tool_names = Enum.map(tools, & &1.name)
       assert "send_media" in tool_names
@@ -72,6 +72,7 @@ defmodule Platform.Federation.ToolSurfaceTest do
       assert "stack_eject" in tool_names
       assert "stack_abandon" in tool_names
       assert "stack_start" in tool_names
+      assert "stack_start_planning" in tool_names
       assert "stack_assign_agents" in tool_names
       assert "plan_create" in tool_names
       assert "plan_get" in tool_names
@@ -1500,6 +1501,124 @@ defmodule Platform.Federation.ToolSurfaceTest do
         ToolSurface.execute("stack_start", %{"stack_id" => stack_id}, %{})
 
       assert result.status == "in_progress"
+    end
+
+    test "stack_start_planning cascades backlog members to planning and lists them" do
+      project = create_project()
+      slug = "shim-start-planning-#{System.unique_integer([:positive])}"
+
+      {:ok, %{stack_id: stack_id}} =
+        ToolSurface.execute(
+          "stack_create",
+          %{"project_id" => project.id, "slug" => slug, "name" => "Plan Me"},
+          %{}
+        )
+
+      {:ok, m1} = Tasks.create_task(%{project_id: project.id, title: "Member 1"})
+      {:ok, m2} = Tasks.create_task(%{project_id: project.id, title: "Member 2"})
+
+      {:ok, _} =
+        ToolSurface.execute("stack_add", %{"stack_id" => stack_id, "task_id" => m1.id}, %{})
+
+      {:ok, _} =
+        ToolSurface.execute("stack_add", %{"stack_id" => stack_id, "task_id" => m2.id}, %{})
+
+      {:ok, result} =
+        ToolSurface.execute("stack_start_planning", %{"stack_id" => stack_id}, %{})
+
+      # Payload carries the serialized stack plus a `planning` list of the
+      # members moved out of `backlog`.
+      assert result.id == stack_id
+      # An all-`planning` stack rolls up to `forming`.
+      assert result.status == "forming"
+      planning_ids = result.planning |> Enum.map(& &1.id) |> Enum.sort()
+      assert planning_ids == Enum.sort([m1.id, m2.id])
+      assert Enum.all?(result.planning, &(&1.status == "planning"))
+      # No failures → no `cascade_errors` key on a clean cascade.
+      refute Map.has_key?(result, :cascade_errors)
+    end
+
+    test "stack_start_planning on a stack with no backlog members returns an empty planning list" do
+      project = create_project()
+      slug = "shim-start-planning-empty-#{System.unique_integer([:positive])}"
+
+      {:ok, %{stack_id: stack_id}} =
+        ToolSurface.execute(
+          "stack_create",
+          %{"project_id" => project.id, "slug" => slug, "name" => "Nothing To Plan"},
+          %{}
+        )
+
+      {:ok, result} =
+        ToolSurface.execute("stack_start_planning", %{"stack_id" => stack_id}, %{})
+
+      assert result.id == stack_id
+      assert result.planning == []
+      refute Map.has_key?(result, :cascade_errors)
+    end
+
+    test "stack_start_planning returns a not-found envelope for a missing stack" do
+      {:error, error} =
+        ToolSurface.execute(
+          "stack_start_planning",
+          %{"stack_id" => Ecto.UUID.generate()},
+          %{}
+        )
+
+      assert error.error =~ "Stack not found"
+      assert error.recoverable == false
+    end
+
+    test "stack_start_planning maps a partial cascade into a cascade_errors payload" do
+      project = create_project()
+      slug = "shim-start-planning-partial-#{System.unique_integer([:positive])}"
+
+      {:ok, %{stack_id: stack_id}} =
+        ToolSurface.execute(
+          "stack_create",
+          %{"project_id" => project.id, "slug" => slug, "name" => "Partial Plan"},
+          %{}
+        )
+
+      {:ok, ok_member} = Tasks.create_task(%{project_id: project.id, title: "Healthy"})
+      {:ok, bad_member} = Tasks.create_task(%{project_id: project.id, title: "Will Fail"})
+
+      {:ok, _} =
+        ToolSurface.execute(
+          "stack_add",
+          %{"stack_id" => stack_id, "task_id" => ok_member.id},
+          %{}
+        )
+
+      {:ok, _} =
+        ToolSurface.execute(
+          "stack_add",
+          %{"stack_id" => stack_id, "task_id" => bad_member.id},
+          %{}
+        )
+
+      # Corrupt bad_member's title at the DB level (bypassing the
+      # changeset) so the `backlog -> planning` transition changeset
+      # fails `validate_required(:title)`. The cascade then yields
+      # `{:partial, ...}`, which the tool maps into a `cascade_errors`
+      # array on the payload.
+      Ecto.Adapters.SQL.query!(
+        Repo,
+        "UPDATE tasks SET title = '' WHERE id = $1",
+        [Ecto.UUID.dump!(bad_member.id)]
+      )
+
+      {:ok, result} =
+        ToolSurface.execute("stack_start_planning", %{"stack_id" => stack_id}, %{})
+
+      # Only the healthy member advanced.
+      assert [planned] = result.planning
+      assert planned.id == ok_member.id
+      assert planned.status == "planning"
+
+      # The failed member surfaces in `cascade_errors`.
+      assert [%{task_id: failed_id, target_status: "planning"} | _] = result.cascade_errors
+      assert failed_id == bad_member.id
     end
 
     test "task_create with stack_id attaches the new task to the stack" do

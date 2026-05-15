@@ -310,6 +310,96 @@ defmodule Platform.Federation.ToolSurfaceStacksTest do
     end
   end
 
+  describe "stack_start_planning end-to-end" do
+    test "cascades every backlog member to planning and round-trips through stack_get" do
+      project = create_project()
+
+      %{stack_id: stack_id} =
+        create_stack_via_tool(project.id, unique_slug("e2e-start-planning"), "Plan Me")
+
+      {:ok, m1} = Tasks.create_task(%{project_id: project.id, title: "Member 1"})
+      {:ok, m2} = Tasks.create_task(%{project_id: project.id, title: "Member 2"})
+      {:ok, m3} = Tasks.create_task(%{project_id: project.id, title: "Member 3"})
+
+      for task <- [m1, m2, m3] do
+        {:ok, _} =
+          ToolSurface.execute(
+            "stack_add",
+            %{"stack_id" => stack_id, "task_id" => task.id},
+            %{}
+          )
+      end
+
+      {:ok, result} =
+        ToolSurface.execute("stack_start_planning", %{"stack_id" => stack_id}, %{})
+
+      assert result.id == stack_id
+      # An all-`planning` stack rolls up to `forming` per ADR 0041.
+      assert result.status == "forming"
+      planning_ids = result.planning |> Enum.map(& &1.id) |> Enum.sort()
+      assert planning_ids == Enum.sort([m1.id, m2.id, m3.id])
+
+      # Round-trip: every member now reads `planning` from stack_get.
+      {:ok, after_plan} = ToolSurface.execute("stack_get", %{"stack_id" => stack_id}, %{})
+      assert Enum.all?(after_plan.members, &(&1.status == "planning"))
+    end
+
+    test "only advances backlog members and is a safe no-op on re-invocation" do
+      project = create_project()
+
+      %{stack_id: stack_id} =
+        create_stack_via_tool(project.id, unique_slug("e2e-start-planning-mixed"), "Mixed Plan")
+
+      {:ok, backlog_member} = Tasks.create_task(%{project_id: project.id, title: "Backlog"})
+      {:ok, ahead_member} = Tasks.create_task(%{project_id: project.id, title: "Already ahead"})
+
+      {:ok, _} =
+        ToolSurface.execute(
+          "stack_add",
+          %{"stack_id" => stack_id, "task_id" => backlog_member.id},
+          %{}
+        )
+
+      {:ok, _} =
+        ToolSurface.execute(
+          "stack_add",
+          %{"stack_id" => stack_id, "task_id" => ahead_member.id},
+          %{}
+        )
+
+      # Pre-advance one member past backlog before the cascade.
+      Repo.get!(Task, ahead_member.id)
+      |> Task.changeset(%{status: "planning"})
+      |> Repo.update!()
+
+      {:ok, result} =
+        ToolSurface.execute("stack_start_planning", %{"stack_id" => stack_id}, %{})
+
+      # Only the backlog member is reported under `planning`; the
+      # already-`planning` member is left untouched, no error leaked.
+      assert [planned] = result.planning
+      assert planned.id == backlog_member.id
+
+      # Re-invoking finds nothing at backlog — empty `planning`, no error.
+      {:ok, second} =
+        ToolSurface.execute("stack_start_planning", %{"stack_id" => stack_id}, %{})
+
+      assert second.planning == []
+    end
+
+    test "returns a not-found error envelope for a missing stack" do
+      {:error, error} =
+        ToolSurface.execute(
+          "stack_start_planning",
+          %{"stack_id" => Ecto.UUID.generate()},
+          %{}
+        )
+
+      assert error.error =~ "Stack not found"
+      assert error.recoverable == false
+    end
+  end
+
   describe "stack_eject and stack_abandon end-to-end" do
     test "stack_eject detaches a member and returns task_id + stack_id" do
       project = create_project()
