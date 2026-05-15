@@ -137,6 +137,7 @@ defmodule PlatformWeb.MeetingLive do
   alias Platform.Chat.PubSub, as: ChatPubSub
   alias Platform.Meetings
   alias Platform.Repo
+  alias Platform.Tasks
 
   # Stage modes per ADR 0042's "Stage modes" table. Canvas is the default
   # (meetings are often artifact-driven).
@@ -204,13 +205,32 @@ defmodule PlatformWeb.MeetingLive do
   end
 
   def handle_params(_params, _url, socket) do
-    # `:index` action — lightweight placeholder. The real meetings index
-    # (list / create) is out of scope for this task; the sidebar nav
-    # link points here so it resolves cleanly.
+    # `:index` action — grouped meetings list (live / upcoming / ended)
+    # plus an empty-state when no meetings exist. Pre-project-routing
+    # the index lists every meeting; per-project subscription keeps
+    # `{:meeting_created, _}` / `{:meeting_ended, _}` / `{:meeting_started, _}`
+    # broadcasts flowing in.
+    projects = Tasks.list_projects()
+    project_ids = Enum.map(projects, & &1.id)
+
+    if connected?(socket) do
+      Enum.each(project_ids, &Meetings.subscribe_to_project_meetings/1)
+    end
+
+    meetings = Meetings.list_all_meetings()
+    grouped = group_meetings_by_status(meetings)
+
     {:noreply,
      socket
      |> assign(:page_title, "Meetings")
-     |> assign(:meeting, nil)}
+     |> assign(:meeting, nil)
+     |> assign(:meetings, meetings)
+     |> assign(:grouped_meetings, grouped)
+     |> assign(:meeting_subscribed_project_ids, project_ids)
+     |> assign_new(:projects, fn -> projects end)
+     |> assign_new(:show_start_meeting_sheet, fn -> false end)
+     |> assign_new(:start_meeting_form, fn -> blank_start_meeting_form(projects) end)
+     |> assign_new(:start_meeting_error, fn -> nil end)}
   end
 
   # ── Events ───────────────────────────────────────────────────────────────
@@ -289,6 +309,99 @@ defmodule PlatformWeb.MeetingLive do
     {:noreply, push_event(socket, "toggle-screen-share", %{})}
   end
 
+  # ── Start-meeting FAB + bottom-sheet (`:index` action only) ──────────────
+  #
+  # The FAB lives only on the meetings index. Clicking it flips
+  # `:show_start_meeting_sheet` so the bottom-sheet wrapper renders. The
+  # sheet collects { name, project_id, description } and submits to
+  # `Platform.Meetings.create_meeting/1`. On success, we close the sheet,
+  # flash, and `push_navigate` to `/meetings/<slug>` so the user lands
+  # straight inside the new meeting.
+
+  def handle_event("open_start_meeting_sheet", _params, socket) do
+    projects = socket.assigns[:projects] || []
+
+    {:noreply,
+     socket
+     |> assign(:show_start_meeting_sheet, true)
+     |> assign(:start_meeting_form, blank_start_meeting_form(projects))
+     |> assign(:start_meeting_error, nil)}
+  end
+
+  def handle_event("close_start_meeting_sheet", _params, socket) do
+    {:noreply,
+     socket
+     |> assign(:show_start_meeting_sheet, false)
+     |> assign(:start_meeting_error, nil)}
+  end
+
+  # Live-update form state on input change so re-render keeps the user's
+  # input in the sheet (otherwise an inline-validation render wipes it).
+  def handle_event("start_meeting_form_change", %{"start_meeting" => attrs}, socket) do
+    {:noreply,
+     assign(socket, :start_meeting_form, %{
+       "name" => Map.get(attrs, "name", ""),
+       "project_id" => Map.get(attrs, "project_id", ""),
+       "description" => Map.get(attrs, "description", "")
+     })}
+  end
+
+  def handle_event("start_meeting", %{"start_meeting" => attrs}, socket) do
+    name = attrs |> Map.get("name", "") |> to_string() |> String.trim()
+    project_id = attrs |> Map.get("project_id", "") |> to_string() |> String.trim()
+    description = attrs |> Map.get("description", "") |> to_string()
+
+    cond do
+      name == "" ->
+        {:noreply,
+         socket
+         |> assign(:start_meeting_form, %{
+           "name" => name,
+           "project_id" => project_id,
+           "description" => description
+         })
+         |> assign(:start_meeting_error, "Name is required.")}
+
+      project_id == "" ->
+        {:noreply,
+         socket
+         |> assign(:start_meeting_form, %{
+           "name" => name,
+           "project_id" => project_id,
+           "description" => description
+         })
+         |> assign(:start_meeting_error, "Project is required.")}
+
+      true ->
+        case Meetings.create_meeting(%{
+               project_id: project_id,
+               name: name
+             }) do
+          {:ok, meeting} ->
+            {:noreply,
+             socket
+             |> assign(:show_start_meeting_sheet, false)
+             |> assign(:start_meeting_error, nil)
+             |> assign(
+               :start_meeting_form,
+               blank_start_meeting_form(socket.assigns[:projects] || [])
+             )
+             |> put_flash(:info, "Meeting started.")
+             |> push_navigate(to: ~p"/meetings/#{meeting.slug}")}
+
+          {:error, _reason} ->
+            {:noreply,
+             socket
+             |> assign(:start_meeting_form, %{
+               "name" => name,
+               "project_id" => project_id,
+               "description" => description
+             })
+             |> assign(:start_meeting_error, "Could not start meeting.")}
+        end
+    end
+  end
+
   # ── PubSub ───────────────────────────────────────────────────────────────
 
   @impl true
@@ -328,6 +441,25 @@ defmodule PlatformWeb.MeetingLive do
     case socket.assigns[:meeting_canvas] do
       %{id: id} when id == canvas.id -> {:noreply, assign(socket, :meeting_canvas, canvas)}
       _ -> {:noreply, socket}
+    end
+  end
+
+  # Index PubSub: a peer (or this user) created/started/ended a meeting.
+  # Re-query the global list and re-group rather than insertion-sort the
+  # assigns — the dataset is small (one row per meeting per project) and
+  # simplicity beats cleverness here. Subscribe-once-per-project ensures
+  # the broadcast lands on a process that owns these assigns.
+  def handle_info({tag, %Meetings.Meeting{}}, socket)
+      when tag in [:meeting_created, :meeting_started, :meeting_ended] do
+    if Map.has_key?(socket.assigns, :meetings) do
+      meetings = Meetings.list_all_meetings()
+
+      {:noreply,
+       socket
+       |> assign(:meetings, meetings)
+       |> assign(:grouped_meetings, group_meetings_by_status(meetings))}
+    else
+      {:noreply, socket}
     end
   end
 
@@ -397,6 +529,89 @@ defmodule PlatformWeb.MeetingLive do
   end
 
   defp parse_stage_mode(_), do: :error
+
+  # ── Index helpers (`:index` action) ──────────────────────────────────────
+  #
+  # The meetings index groups meetings by status so the live ones float to
+  # the top, the upcoming (`scheduled`) sit in the middle, and ended sink
+  # to the bottom. Section order is intentional — a viewer scanning the
+  # page wants "what's happening right now" first.
+
+  @meeting_status_sections [:live, :upcoming, :ended]
+
+  @doc """
+  Sections rendered by the meetings index, in display order.
+
+  Public so tests + the heex template can iterate without hard-coding
+  the order in two places.
+  """
+  def meeting_status_sections, do: @meeting_status_sections
+
+  @doc """
+  Group a list of meetings into a `%{live: …, upcoming: …, ended: …}` map.
+
+  Each bucket is itself ordered newest-first. `scheduled` rows land in
+  `:upcoming`; anything else (defensive) falls through to `:upcoming`.
+  """
+  @spec group_meetings_by_status([Meetings.Meeting.t()]) :: %{
+          live: [Meetings.Meeting.t()],
+          upcoming: [Meetings.Meeting.t()],
+          ended: [Meetings.Meeting.t()]
+        }
+  def group_meetings_by_status(meetings) when is_list(meetings) do
+    base = %{live: [], upcoming: [], ended: []}
+
+    grouped =
+      Enum.reduce(meetings, base, fn meeting, acc ->
+        bucket = status_bucket(meeting.status)
+        Map.update!(acc, bucket, &[meeting | &1])
+      end)
+
+    # `Enum.reduce/3` builds each list in reverse insertion order. The
+    # input is already newest-first (Repo `desc: :inserted_at`), so a
+    # reverse here restores newest-first within each bucket.
+    %{
+      live: Enum.reverse(grouped.live),
+      upcoming: Enum.reverse(grouped.upcoming),
+      ended: Enum.reverse(grouped.ended)
+    }
+  end
+
+  def group_meetings_by_status(_), do: %{live: [], upcoming: [], ended: []}
+
+  defp status_bucket("live"), do: :live
+  defp status_bucket("ended"), do: :ended
+  defp status_bucket(_), do: :upcoming
+
+  # Default start-meeting form values. When exactly one project exists we
+  # pre-fill it so a single-project workspace doesn't show a useless
+  # one-option select.
+  defp blank_start_meeting_form(projects) when is_list(projects) do
+    project_id =
+      case projects do
+        [%{id: id}] -> id
+        _ -> ""
+      end
+
+    %{"name" => "", "project_id" => project_id, "description" => ""}
+  end
+
+  defp blank_start_meeting_form(_), do: %{"name" => "", "project_id" => "", "description" => ""}
+
+  @doc "Human label for a meeting status section."
+  def meeting_section_label(:live), do: "Live now"
+  def meeting_section_label(:upcoming), do: "Upcoming"
+  def meeting_section_label(:ended), do: "Ended"
+
+  @doc "Hero-icon class for a meeting status section."
+  def meeting_section_icon(:live), do: "hero-signal"
+  def meeting_section_icon(:upcoming), do: "hero-calendar"
+  def meeting_section_icon(:ended), do: "hero-archive-box"
+
+  @doc "Status-pill tone class for a meeting status."
+  def meeting_status_pill(:live), do: "badge badge-error gap-1"
+  def meeting_status_pill(:upcoming), do: "badge badge-info gap-1"
+  def meeting_status_pill(:ended), do: "badge badge-ghost gap-1"
 
   @doc "Hero-icon class for a stage-mode segmented-control button."
   def stage_mode_icon(:canvas), do: "hero-rectangle-stack"

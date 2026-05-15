@@ -227,28 +227,70 @@ defmodule Platform.Meetings do
   end
 
   @doc """
+  List every meeting across all projects, newest first.
+
+  Used by the global `/meetings` index LV (no project context in the
+  route). When project-scoped routing arrives the index will narrow to
+  `list_meetings_for_project/1`.
+  """
+  @spec list_all_meetings() :: [Meeting.t()]
+  def list_all_meetings do
+    Meeting
+    |> order_by([m], desc: m.inserted_at)
+    |> Repo.all()
+  end
+
+  @doc """
   Transition a meeting from `scheduled` to `live`, stamping `started_at`.
 
   Returns `{:error, changeset}` (with an `:status` error) on any illegal
-  transition — e.g. starting an already-ended meeting.
+  transition — e.g. starting an already-ended meeting. On success broadcasts
+  `{:meeting_started, meeting}` on the project's PubSub topic so the
+  meetings index can re-group without a poll.
   """
   @spec start_meeting(Meeting.t()) :: {:ok, Meeting.t()} | {:error, Ecto.Changeset.t()}
   def start_meeting(%Meeting{} = meeting) do
-    meeting
-    |> Meeting.status_changeset("live", %{started_at: DateTime.utc_now()})
-    |> Repo.update()
+    case meeting
+         |> Meeting.status_changeset("live", %{started_at: DateTime.utc_now()})
+         |> Repo.update() do
+      {:ok, updated} = ok ->
+        Phoenix.PubSub.broadcast(
+          Platform.PubSub,
+          project_meetings_topic(updated.project_id),
+          {:meeting_started, updated}
+        )
+
+        ok
+
+      error ->
+        error
+    end
   end
 
   @doc """
   Transition a meeting from `live` to `ended`, stamping `ended_at`.
 
-  Returns `{:error, changeset}` on any illegal transition.
+  Returns `{:error, changeset}` on any illegal transition. On success
+  broadcasts `{:meeting_ended, meeting}` on the project's PubSub topic
+  so the meetings index can re-group without a poll.
   """
   @spec end_meeting(Meeting.t()) :: {:ok, Meeting.t()} | {:error, Ecto.Changeset.t()}
   def end_meeting(%Meeting{} = meeting) do
-    meeting
-    |> Meeting.status_changeset("ended", %{ended_at: DateTime.utc_now()})
-    |> Repo.update()
+    case meeting
+         |> Meeting.status_changeset("ended", %{ended_at: DateTime.utc_now()})
+         |> Repo.update() do
+      {:ok, updated} = ok ->
+        Phoenix.PubSub.broadcast(
+          Platform.PubSub,
+          project_meetings_topic(updated.project_id),
+          {:meeting_ended, updated}
+        )
+
+        ok
+
+      error ->
+        error
+    end
   end
 
   # ── Meeting helpers (private) ────────────────────────────────────────────

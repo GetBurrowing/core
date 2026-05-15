@@ -1186,4 +1186,427 @@ defmodule PlatformWeb.MeetingLiveTest do
       assert MeetingLive.gallery_identity(%{}) == "user:unknown"
     end
   end
+
+  # ── Meetings index (:index action, stage 1 of task 019e2ca8) ─────────────
+
+  describe ":index action — empty state" do
+    test "renders the no-meetings empty state when zero meetings exist", %{conn: conn} do
+      {conn, _user} = authenticated_conn(conn)
+
+      # Defensive: drop any meetings other tests in this run might have
+      # seeded, so the empty branch is exercised in isolation.
+      Repo.delete_all(Meeting)
+
+      {:ok, _view, html} = live(conn, ~p"/meetings")
+
+      assert html =~ ~s(data-empty-state="meetings-index")
+      assert html =~ "No meetings yet"
+      # FAB-pair vocabulary (stage 2 will mount the real button — the
+      # empty-state copy + icon must already match).
+      assert html =~ "Start a meeting"
+      assert html =~ "hero-video-camera"
+      # And no rows section at all.
+      refute html =~ ~s(data-region="meetings-list")
+      refute html =~ ~s(data-role="meeting-row")
+    end
+  end
+
+  describe ":index action — grouped sections" do
+    setup %{conn: conn} do
+      {conn, user} = authenticated_conn(conn)
+      Repo.delete_all(Meeting)
+      project = create_project()
+      {:ok, conn: conn, user: user, project: project}
+    end
+
+    defp seed_meeting_with_status(project, opts) do
+      slug = Keyword.fetch!(opts, :slug)
+      name = Keyword.get(opts, :name, "Meeting #{slug}")
+      status = Keyword.get(opts, :status, "scheduled")
+
+      space = create_space()
+      meeting_id = Platform.Types.UUIDv7.generate()
+
+      attrs = %{
+        project_id: project.id,
+        chat_space_id: space.id,
+        slug: slug,
+        name: name,
+        livekit_room_name: "meeting-#{meeting_id}",
+        status: status
+      }
+
+      {:ok, meeting} =
+        %Meeting{id: meeting_id}
+        |> Meeting.changeset(attrs)
+        |> Repo.insert()
+
+      meeting
+    end
+
+    test "renders one section per non-empty status bucket with rows linking to /meetings/<slug>",
+         %{conn: conn, project: project} do
+      live_meeting =
+        seed_meeting_with_status(project,
+          slug: "live-now",
+          name: "Live Standup",
+          status: "live"
+        )
+
+      upcoming =
+        seed_meeting_with_status(project,
+          slug: "next-week",
+          name: "Quarterly Review",
+          status: "scheduled"
+        )
+
+      ended =
+        seed_meeting_with_status(project,
+          slug: "yesterday",
+          name: "Closed Postmortem",
+          status: "ended"
+        )
+
+      {:ok, _view, html} = live(conn, ~p"/meetings")
+
+      # Empty state is GONE.
+      refute html =~ ~s(data-empty-state="meetings-index")
+
+      # Three sections render with their data-section markers.
+      assert html =~ ~s(data-section="live")
+      assert html =~ ~s(data-section="upcoming")
+      assert html =~ ~s(data-section="ended")
+
+      # Each meeting's name + slug shows up.
+      assert html =~ live_meeting.name
+      assert html =~ upcoming.name
+      assert html =~ ended.name
+
+      # Each row links to /meetings/<slug>.
+      assert html =~ ~s(href="/meetings/#{live_meeting.slug}")
+      assert html =~ ~s(href="/meetings/#{upcoming.slug}")
+      assert html =~ ~s(href="/meetings/#{ended.slug}")
+
+      # Status pill labels — one per section.
+      assert html =~ "Live now"
+      assert html =~ "Upcoming"
+      assert html =~ "Ended"
+    end
+
+    test "section ordering is live → upcoming → ended", %{conn: conn, project: project} do
+      seed_meeting_with_status(project, slug: "ord-live", status: "live")
+      seed_meeting_with_status(project, slug: "ord-upcoming", status: "scheduled")
+      seed_meeting_with_status(project, slug: "ord-ended", status: "ended")
+
+      {:ok, _view, html} = live(conn, ~p"/meetings")
+
+      live_pos = :binary.match(html, ~s(data-section="live")) |> elem(0)
+      upcoming_pos = :binary.match(html, ~s(data-section="upcoming")) |> elem(0)
+      ended_pos = :binary.match(html, ~s(data-section="ended")) |> elem(0)
+
+      assert live_pos < upcoming_pos
+      assert upcoming_pos < ended_pos
+    end
+
+    test "sections with zero rows are omitted (not rendered as empty headers)",
+         %{conn: conn, project: project} do
+      # Only an upcoming meeting — live and ended sections must NOT render.
+      seed_meeting_with_status(project, slug: "only-upcoming", status: "scheduled")
+
+      {:ok, _view, html} = live(conn, ~p"/meetings")
+
+      assert html =~ ~s(data-section="upcoming")
+      refute html =~ ~s(data-section="live")
+      refute html =~ ~s(data-section="ended")
+    end
+  end
+
+  describe ":index action — PubSub live updates" do
+    setup %{conn: conn} do
+      {conn, _user} = authenticated_conn(conn)
+      Repo.delete_all(Meeting)
+      project = create_project()
+      {:ok, conn: conn, project: project}
+    end
+
+    test ":meeting_created PubSub message updates the rendered list without remount",
+         %{conn: conn, project: project} do
+      {:ok, view, html} = live(conn, ~p"/meetings")
+
+      # Empty to start.
+      assert html =~ ~s(data-empty-state="meetings-index")
+
+      # Create a meeting via the context — broadcasts on the project topic.
+      {:ok, _space} =
+        Chat.create_space(%{
+          name: "Pub Pre-existing",
+          slug: "pub-pre-existing-#{System.unique_integer([:positive])}",
+          kind: "channel"
+        })
+
+      {:ok, meeting} =
+        Platform.Meetings.create_meeting(%{
+          project_id: project.id,
+          name: "Brand New Meeting"
+        })
+
+      # Force the LV to flush the inbound :meeting_created broadcast.
+      html = render(view)
+
+      refute html =~ ~s(data-empty-state="meetings-index")
+      assert html =~ "Brand New Meeting"
+      assert html =~ ~s(data-meeting-id="#{meeting.id}")
+      assert html =~ ~s(href="/meetings/#{meeting.slug}")
+    end
+
+    test ":meeting_ended PubSub message re-groups the row into the ended section",
+         %{conn: conn, project: project} do
+      # Seed a live meeting first.
+      {:ok, space} =
+        Chat.create_space(%{
+          name: "End me",
+          slug: "end-me-#{System.unique_integer([:positive])}",
+          kind: "channel"
+        })
+
+      meeting_id = Platform.Types.UUIDv7.generate()
+
+      {:ok, meeting} =
+        %Meeting{id: meeting_id}
+        |> Meeting.changeset(%{
+          project_id: project.id,
+          chat_space_id: space.id,
+          slug: "end-me",
+          name: "Ending Meeting",
+          livekit_room_name: "meeting-#{meeting_id}",
+          status: "live"
+        })
+        |> Repo.insert()
+
+      {:ok, view, html} = live(conn, ~p"/meetings")
+
+      assert html =~ ~s(data-section="live")
+      refute html =~ ~s(data-section="ended")
+
+      # End it; broadcast should land on the LV's project subscription.
+      {:ok, _ended} = Platform.Meetings.end_meeting(meeting)
+
+      html = render(view)
+
+      refute html =~ ~s(data-section="live")
+      assert html =~ ~s(data-section="ended")
+      assert html =~ "Ending Meeting"
+    end
+  end
+
+  # ── group_meetings_by_status/1 (pure helper) ─────────────────────────────
+
+  describe "group_meetings_by_status/1" do
+    alias PlatformWeb.MeetingLive
+
+    test "buckets by status with `scheduled` → :upcoming" do
+      m1 = %Meeting{id: "1", status: "live", name: "L"}
+      m2 = %Meeting{id: "2", status: "scheduled", name: "S"}
+      m3 = %Meeting{id: "3", status: "ended", name: "E"}
+
+      grouped = MeetingLive.group_meetings_by_status([m1, m2, m3])
+
+      assert [%{id: "1"}] = grouped.live
+      assert [%{id: "2"}] = grouped.upcoming
+      assert [%{id: "3"}] = grouped.ended
+    end
+
+    test "preserves input order within a bucket" do
+      m1 = %Meeting{id: "newer", status: "live"}
+      m2 = %Meeting{id: "older", status: "live"}
+
+      grouped = MeetingLive.group_meetings_by_status([m1, m2])
+      assert [%{id: "newer"}, %{id: "older"}] = grouped.live
+    end
+
+    test "returns empty buckets for non-list input" do
+      assert %{live: [], upcoming: [], ended: []} =
+               MeetingLive.group_meetings_by_status(nil)
+    end
+
+    test "unknown status defensively falls into :upcoming" do
+      m = %Meeting{id: "x", status: "weird"}
+      grouped = MeetingLive.group_meetings_by_status([m])
+      assert [%{id: "x"}] = grouped.upcoming
+    end
+  end
+
+  # ── Start-meeting FAB + bottom-sheet (stage 2 of task 019e2ca8) ──────────
+
+  describe ":index action — Start-meeting FAB" do
+    setup %{conn: conn} do
+      {conn, user} = authenticated_conn(conn)
+      Repo.delete_all(Meeting)
+      project = create_project()
+      {:ok, conn: conn, user: user, project: project}
+    end
+
+    test "FAB renders on /meetings (index action) with hero-video-camera icon", %{
+      conn: conn
+    } do
+      {:ok, _view, html} = live(conn, ~p"/meetings")
+
+      assert html =~ ~s(data-role="start-meeting-fab")
+      assert html =~ ~s(phx-click="open_start_meeting_sheet")
+      # Uses the same hero icon as the sidebar nav meeting glyph for
+      # visual consistency.
+      assert html =~ "hero-video-camera"
+      # Mobile reachability: safe-area-inset-bottom offset *and*
+      # bottom-nav-height clearance so the FAB never sits behind the
+      # mobile bottom nav (mirrors tasks_live FAB pattern).
+      assert html =~
+               "bottom-[calc(env(safe-area-inset-bottom)+1.5rem+var(--bottom-nav-height,0px))]"
+
+      # Bottom-right placement, primary daisyUI variant, circular.
+      assert html =~ "btn-primary"
+      assert html =~ "btn-circle"
+      assert html =~ "right-6"
+    end
+
+    test "FAB does NOT render on /meetings/:slug (show action)", %{
+      conn: conn
+    } do
+      {meeting, _space} =
+        create_meeting(%{slug: "no-fab-on-show", name: "No FAB Here"})
+
+      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      refute html =~ ~s(data-role="start-meeting-fab")
+    end
+
+    test "clicking the FAB opens the start-meeting sheet", %{conn: conn} do
+      {:ok, view, html} = live(conn, ~p"/meetings")
+
+      # Sheet is closed by default.
+      refute html =~ ~s(data-role="start-meeting-sheet")
+
+      open_html =
+        view
+        |> element(~s([data-role="start-meeting-fab"]))
+        |> render_click()
+
+      assert open_html =~ ~s(data-role="start-meeting-sheet")
+      # Sheet header + form fields are rendered.
+      assert open_html =~ "Start a meeting"
+      assert open_html =~ ~s(name="start_meeting[name]")
+      assert open_html =~ ~s(name="start_meeting[project_id]")
+      assert open_html =~ ~s(name="start_meeting[description]")
+    end
+
+    test "close button + backdrop dismiss the sheet", %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/meetings")
+
+      # Open via FAB.
+      _ = view |> element(~s([data-role="start-meeting-fab"])) |> render_click()
+      assert render(view) =~ ~s(data-role="start-meeting-sheet")
+
+      # Close via close-button.
+      closed_html =
+        view
+        |> element(~s([data-role="start-meeting-sheet-close"]))
+        |> render_click()
+
+      refute closed_html =~ ~s(data-role="start-meeting-sheet")
+
+      # Re-open and dismiss via backdrop.
+      _ = view |> element(~s([data-role="start-meeting-fab"])) |> render_click()
+      assert render(view) =~ ~s(data-role="start-meeting-sheet")
+
+      backdrop_closed =
+        view
+        |> element(~s([data-role="start-meeting-sheet-backdrop"]))
+        |> render_click()
+
+      refute backdrop_closed =~ ~s(data-role="start-meeting-sheet")
+    end
+
+    test "submitting valid params creates a meeting and navigates to its slug", %{
+      conn: conn,
+      project: project
+    } do
+      {:ok, view, _html} = live(conn, ~p"/meetings")
+
+      # Open the sheet first.
+      _ = view |> element(~s([data-role="start-meeting-fab"])) |> render_click()
+
+      # Submit the form. push_navigate should redirect us to the new
+      # meeting's /meetings/<slug>.
+      result =
+        view
+        |> form("#start-meeting-form",
+          start_meeting: %{
+            "name" => "Synthesis Sync",
+            "project_id" => project.id,
+            "description" => "Quick check-in"
+          }
+        )
+        |> render_submit()
+
+      assert {:error, {:live_redirect, %{to: to}}} = result
+      assert to =~ ~r{^/meetings/}
+
+      # The meeting now exists in the DB with the submitted name.
+      assert [%Meeting{name: "Synthesis Sync"} = created] = Repo.all(Meeting)
+      assert to == "/meetings/#{created.slug}"
+    end
+
+    test "submitting with a blank name shows an inline error and keeps the sheet open", %{
+      conn: conn,
+      project: project
+    } do
+      {:ok, view, _html} = live(conn, ~p"/meetings")
+
+      _ = view |> element(~s([data-role="start-meeting-fab"])) |> render_click()
+
+      html =
+        view
+        |> form("#start-meeting-form",
+          start_meeting: %{
+            "name" => "",
+            "project_id" => project.id,
+            "description" => ""
+          }
+        )
+        |> render_submit()
+
+      # No meeting was created.
+      assert Repo.all(Meeting) == []
+
+      # Sheet stays open and the inline error renders.
+      assert html =~ ~s(data-role="start-meeting-sheet")
+      assert html =~ ~s(data-role="start-meeting-error")
+      assert html =~ "Name is required"
+    end
+
+    test "submitting with no project_id shows an inline error and keeps the sheet open", %{
+      conn: conn
+    } do
+      # Drop all projects so the form has nothing to pre-fill with.
+      Repo.delete_all(Platform.Tasks.Project)
+
+      {:ok, view, _html} = live(conn, ~p"/meetings")
+
+      _ = view |> element(~s([data-role="start-meeting-fab"])) |> render_click()
+
+      html =
+        view
+        |> form("#start-meeting-form",
+          start_meeting: %{
+            "name" => "Project-less Meeting",
+            "project_id" => "",
+            "description" => ""
+          }
+        )
+        |> render_submit()
+
+      assert Repo.all(Meeting) == []
+      assert html =~ ~s(data-role="start-meeting-sheet")
+      assert html =~ "Project is required"
+    end
+  end
 end

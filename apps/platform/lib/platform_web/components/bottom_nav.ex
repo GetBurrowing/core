@@ -1,6 +1,6 @@
 defmodule PlatformWeb.Components.BottomNav do
   @moduledoc """
-  Mobile-only bottom tab bar (Chat / Tasks / Activity / More).
+  Mobile-only bottom tab bar (Chat / Tasks / Meetings / Activity / More).
 
   Replaces the shell hamburger drawer as the primary cross-surface
   navigation on mobile. Per the ui-ux-pro-max `bottom-nav-limit` and
@@ -85,6 +85,27 @@ defmodule PlatformWeb.Components.BottomNav do
         >
           {format_badge_count(@tasks_count)}
         </span>
+      </.link>
+
+      <.link
+        navigate={~p"/meetings"}
+        class={["bottom-nav-tab", tab_active_class(@active_module, "Meetings")]}
+        aria-label="Meetings"
+        aria-current={tab_aria_current(@active_module, "Meetings")}
+      >
+        <svg
+          class="bottom-nav-icon"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+          stroke-linejoin="round"
+          aria-hidden="true"
+        >
+          <path d="m15.75 10.5 4.72-4.72a.75.75 0 0 1 1.28.53v11.38a.75.75 0 0 1-1.28.53l-4.72-4.72M4.5 18.75h9a2.25 2.25 0 0 0 2.25-2.25v-9a2.25 2.25 0 0 0-2.25-2.25h-9A2.25 2.25 0 0 0 2.25 7.5v9a2.25 2.25 0 0 0 2.25 2.25Z" />
+        </svg>
+        <span class="bottom-nav-label">Meetings</span>
       </.link>
 
       <.link
