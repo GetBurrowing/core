@@ -138,7 +138,7 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
       assert content =~ "review_request_create" or content =~ "suite_review_request_create"
     end
 
-    test "evidence-capture step routes through hive-local CDP, not rock-node-screenshot" do
+    test "evidence-capture step routes through hive-local CDP" do
       # The capture step is interpolated from HeartbeatScheduler's
       # @evidence_workflow_reference into dispatch.in_progress and
       # dispatch.in_review. Asserting on the rendered dispatch prompt is
