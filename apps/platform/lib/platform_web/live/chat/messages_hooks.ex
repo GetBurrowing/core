@@ -35,7 +35,7 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
     * `:thread_previews` — parent_msg_id → %{thread_id, reply_count, last_reply_at}
     * `:expanded_threads` — MapSet of parent_msg_ids with inline threads open
     * `:inline_thread_messages` — parent_msg_id → [thread messages]
-    * `:highlighted_message_id`, `:highlighted_thread_message_id`
+    * `:highlighted_message_id`
     * `:streaming_replies`
     * `:drafts` — space_id → compose text
 
@@ -314,8 +314,7 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
      socket
      |> assign(:active_thread, nil)
      |> assign(:thread_messages, [])
-     |> assign(:thread_attachments_map, %{})
-     |> assign(:highlighted_thread_message_id, nil)}
+     |> assign(:thread_attachments_map, %{})}
   end
 
   defp handle_event(

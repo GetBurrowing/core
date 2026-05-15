@@ -61,7 +61,6 @@ defmodule PlatformWeb.ChatLive do
       |> assign(:channels, channels)
       |> assign(:dm_conversations, dm_conversations)
       |> assign(:active_space, nil)
-      |> assign(:highlighted_thread_message_id, nil)
       |> assign(:current_participant, nil)
       |> assign(:mobile_browser_open, false)
       |> assign(:show_new_channel_modal, false)
@@ -420,9 +419,9 @@ defmodule PlatformWeb.ChatLive do
           if parent_msg_id do
             socket
             |> MessagesHooks.open_thread_context(parent_msg_id, thread_msgs)
-            |> SearchHooks.set_highlights(parent_msg_id, nil)
+            |> SearchHooks.set_highlights(parent_msg_id)
           else
-            SearchHooks.set_highlights(socket, message.id, nil)
+            SearchHooks.set_highlights(socket, message.id)
           end
 
         {:noreply, socket}
@@ -431,7 +430,7 @@ defmodule PlatformWeb.ChatLive do
         {:noreply,
          socket
          |> MessagesHooks.reset_thread_panel()
-         |> SearchHooks.set_highlights(message.id, nil)}
+         |> SearchHooks.set_highlights(message.id)}
     end
   end
 
