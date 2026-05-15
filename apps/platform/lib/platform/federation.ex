@@ -94,6 +94,21 @@ defmodule Platform.Federation do
     |> Repo.update()
   end
 
+  @doc """
+  Replace a runtime's `allowed_bundles` set.
+
+  Bundles are validated against `AgentRuntime.valid_bundles/0` via the
+  changeset's `validate_subset`. Pass an empty list to deny all bundles
+  (the runtime will still authenticate but `tools/list` returns nothing).
+  """
+  @spec update_allowed_bundles(AgentRuntime.t(), [String.t()]) ::
+          {:ok, AgentRuntime.t()} | {:error, Ecto.Changeset.t()}
+  def update_allowed_bundles(%AgentRuntime{} = runtime, bundles) when is_list(bundles) do
+    runtime
+    |> AgentRuntime.changeset(%{allowed_bundles: bundles})
+    |> Repo.update()
+  end
+
   @doc "Generate a new auth token for a runtime, replacing any existing one."
   def generate_runtime_token(%AgentRuntime{} = runtime) do
     {raw_token, hash} = generate_token_pair()

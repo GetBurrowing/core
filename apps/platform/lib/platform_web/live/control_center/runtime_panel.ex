@@ -5,7 +5,7 @@ defmodule PlatformWeb.ControlCenter.RuntimePanel do
   """
   use Phoenix.Component
 
-  alias Platform.Agents.Agent
+  alias Platform.Agents.{Agent, AgentRuntime}
   alias Platform.Federation
 
   import PlatformWeb.ControlCenter.Helpers
@@ -108,6 +108,41 @@ defmodule PlatformWeb.ControlCenter.RuntimePanel do
           <span>Last connected</span>
           <span class="text-xs">{format_datetime(@fed_runtime.last_connected_at)}</span>
         </div>
+      </div>
+
+      <%!-- Allowed bundles editor --%>
+      <div class="rounded-2xl border border-base-300 bg-base-200/40 p-4 text-sm">
+        <div class="flex items-center justify-between gap-3">
+          <span class="font-semibold">Allowed capability bundles</span>
+          <span class="text-[11px] uppercase tracking-widest text-base-content/50">
+            {length(@fed_runtime.allowed_bundles)} of {length(AgentRuntime.valid_bundles())}
+          </span>
+        </div>
+        <p class="mt-1 text-xs text-base-content/55">
+          Scopes both <code>tools/list</code>
+          and <code>tools/call</code>
+          on the MCP endpoint and federation channel.
+        </p>
+        <form phx-submit="update_runtime_bundles" class="mt-3 space-y-2">
+          <div class="grid grid-cols-2 gap-x-3 gap-y-1.5 sm:grid-cols-3">
+            <label
+              :for={bundle <- AgentRuntime.valid_bundles()}
+              class="inline-flex cursor-pointer items-center gap-2 text-xs"
+            >
+              <input
+                type="checkbox"
+                name="bundles[]"
+                value={bundle}
+                checked={bundle in @fed_runtime.allowed_bundles}
+                class="checkbox checkbox-xs"
+              />
+              <span class="font-mono">{bundle}</span>
+            </label>
+          </div>
+          <div class="flex justify-end">
+            <button type="submit" class="btn btn-primary btn-sm">Save bundles</button>
+          </div>
+        </form>
       </div>
 
       <%!-- Regenerated token display --%>

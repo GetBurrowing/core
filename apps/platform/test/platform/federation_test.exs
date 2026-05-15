@@ -65,6 +65,49 @@ defmodule Platform.FederationTest do
     end
   end
 
+  describe "update_allowed_bundles/2" do
+    test "replaces the set of allowed bundles when all values are valid" do
+      user = create_user()
+
+      {:ok, runtime} =
+        Federation.register_runtime(user.id, %{
+          runtime_id: "test-runtime-#{System.unique_integer([:positive])}"
+        })
+
+      {:ok, updated} =
+        Federation.update_allowed_bundles(runtime, ~w(federation space task plan))
+
+      assert Enum.sort(updated.allowed_bundles) == ~w(federation plan space task)
+    end
+
+    test "rejects bundle values outside the valid set" do
+      user = create_user()
+
+      {:ok, runtime} =
+        Federation.register_runtime(user.id, %{
+          runtime_id: "test-runtime-#{System.unique_integer([:positive])}"
+        })
+
+      assert {:error, %Ecto.Changeset{} = changeset} =
+               Federation.update_allowed_bundles(runtime, ~w(federation not_a_bundle))
+
+      refute changeset.valid?
+      assert Keyword.has_key?(changeset.errors, :allowed_bundles)
+    end
+
+    test "accepts an empty list (denies all bundles)" do
+      user = create_user()
+
+      {:ok, runtime} =
+        Federation.register_runtime(user.id, %{
+          runtime_id: "test-runtime-#{System.unique_integer([:positive])}"
+        })
+
+      {:ok, updated} = Federation.update_allowed_bundles(runtime, [])
+      assert updated.allowed_bundles == []
+    end
+  end
+
   describe "link_agent/2" do
     test "associates an agent with the runtime" do
       user = create_user()

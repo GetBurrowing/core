@@ -86,6 +86,36 @@ defmodule PlatformWeb.ControlCenter.RuntimeEvents do
     {:noreply, assign(socket, :regenerated_token, nil)}
   end
 
+  def handle(
+        "update_runtime_bundles",
+        params,
+        %{assigns: %{selected_agent: %Agent{runtime_id: rid}}} = socket
+      )
+      when is_binary(rid) do
+    bundles = params |> Map.get("bundles", []) |> List.wrap()
+
+    case Federation.get_runtime(rid) do
+      %{} = runtime ->
+        case Federation.update_allowed_bundles(runtime, bundles) do
+          {:ok, _} ->
+            {:noreply, socket |> put_flash(:info, "Allowed bundles updated.") |> reload(socket)}
+
+          {:error, _changeset} ->
+            {:noreply,
+             put_flash(
+               socket,
+               :error,
+               "Could not update bundles. One or more values are not in the valid set."
+             )}
+        end
+
+      nil ->
+        {:noreply, put_flash(socket, :error, "Runtime not found.")}
+    end
+  end
+
+  def handle("update_runtime_bundles", _params, socket), do: {:noreply, socket}
+
   # Delegate reload back to the main LiveView module
   defp reload(socket, _original_socket) do
     PlatformWeb.ControlCenterLive.reload_selected_agent(socket)

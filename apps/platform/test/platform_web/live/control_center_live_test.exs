@@ -650,6 +650,49 @@ defmodule PlatformWeb.ControlCenterLiveTest do
     refute html =~ "copy-regen-token"
   end
 
+  test "update runtime bundles persists the submitted set", %{conn: conn} do
+    user =
+      Repo.insert!(%User{
+        email: "fed_bundles_#{System.unique_integer([:positive])}@example.com",
+        name: "Fed Bundles User",
+        oidc_sub: "oidc-fed-bundles-#{System.unique_integer([:positive])}"
+      })
+
+    {:ok, runtime} =
+      Federation.register_runtime(user.id, %{
+        runtime_id: "bundles-runtime-#{System.unique_integer([:positive])}",
+        display_name: "Bundles Test"
+      })
+
+    {:ok, runtime, _token} = Federation.activate_runtime(runtime)
+
+    agent =
+      create_agent(%{
+        name: "Bundles Agent",
+        runtime_type: "external",
+        runtime_id: runtime.id
+      })
+
+    conn = init_test_session(conn, current_user_id: user.id)
+    {:ok, view, html} = live(conn, ~p"/control/#{agent.slug}")
+
+    # The bundle form should render with the current bundles checked.
+    assert html =~ "Allowed capability bundles"
+    assert html =~ ~s(name="bundles[]")
+
+    new_bundles = ~w(federation space task plan org_context)
+
+    html =
+      view
+      |> element("form[phx-submit=\"update_runtime_bundles\"]")
+      |> render_submit(%{"bundles" => new_bundles})
+
+    assert html =~ "Allowed bundles updated"
+
+    assert Enum.sort(Repo.get!(AgentRuntime, runtime.id).allowed_bundles) ==
+             Enum.sort(new_bundles)
+  end
+
   # ── Agent deletion ─────────────────────────────────────────────────
 
   test "request delete shows confirm dialog and cancel dismisses it", %{conn: conn} do

@@ -315,6 +315,9 @@ defmodule PlatformWeb.ControlCenterLive do
   def handle_event("dismiss_regenerated_token", params, socket),
     do: RuntimeEvents.handle("dismiss_regenerated_token", params, socket)
 
+  def handle_event("update_runtime_bundles", params, socket),
+    do: RuntimeEvents.handle("update_runtime_bundles", params, socket)
+
   # ── Add agent to space ─────────────────────────────────────────────
 
   def handle_event("show_add_space_modal", _params, socket) do
