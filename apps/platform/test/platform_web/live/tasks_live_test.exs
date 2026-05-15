@@ -6211,4 +6211,1080 @@ defmodule PlatformWeb.TasksLiveTest do
       refute html =~ ~s(data-role="stack-member-mobile-action")
     end
   end
+
+  describe "stack detail panel — needs-feedback chrome pill (task 019e2c27 stage 2)" do
+    # Stage 2 of "Task Stacks Review Rollup": the stack-detail panel chrome
+    # surfaces a "Needs feedback (N)" badge whenever
+    # `Stacks.count_pending_reviews/1` > 0. Hidden entirely when the count
+    # is 0 so the chrome stays clean. Click target wires
+    # `phx-click="open_stack_feedback_overlay"` — a stage-2 stub that flips
+    # `:show_stack_feedback_overlay`; stage 3 will render the actual rollup
+    # overlay against that assign.
+    #
+    # The pill MUST refresh in response to `:review_request_pending` and
+    # `:review_request_resolved` PubSub broadcasts (wired through
+    # `reload_selected_stack` in the badges PR that just landed).
+    #
+    # Regression guard: the per-row "Needs review" / "Plan ready" badge
+    # owned by task 019e2c25 — `data-role="stack-detail-member-action"` —
+    # must remain on the page when the chrome pill is rendered. The chrome
+    # pill is purely additive at the panel header level.
+
+    setup %{conn: conn} do
+      conn = authenticated_conn(conn)
+      project = create_project()
+
+      stack =
+        stack_fixture(
+          project_id: project.id,
+          name: "Rollup Pill Stack #{System.unique_integer([:positive])}",
+          slug: "rollup-pill-#{System.unique_integer([:positive])}"
+        )
+
+      {:ok, conn: conn, project: project, stack: stack}
+    end
+
+    # Single member with the supplied status. Returns the task struct.
+    defp seed_rollup_member(stack, status, pos \\ 1) do
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: stack.project_id,
+          stack_id: stack.id,
+          stack_position: pos,
+          title: "Rollup Member #{pos}",
+          status: status,
+          priority: "medium"
+        })
+
+      task
+    end
+
+    # Stand up an open manual_approval ReviewRequest on `task` and return
+    # `{validation, request}`. Mirrors the seed pattern from the badges
+    # describe block above.
+    defp seed_pending_review_request(task) do
+      {:ok, plan} =
+        Tasks.create_plan(%{task_id: task.id, version: 1, status: "approved"})
+
+      {:ok, stage} =
+        Tasks.create_stage(%{
+          plan_id: plan.id,
+          name: "Manual review",
+          position: 1,
+          status: "running"
+        })
+
+      {:ok, validation} =
+        Tasks.create_validation(%{
+          stage_id: stage.id,
+          kind: "manual_approval",
+          status: "pending"
+        })
+
+      {:ok, request} =
+        ReviewRequests.create_review_request(%{
+          validation_id: validation.id,
+          task_id: task.id,
+          status: "pending",
+          items: [
+            %{kind: "artifact", label: "Review me", status: "pending", content: "..."}
+          ]
+        })
+
+      {validation, request}
+    end
+
+    test "(a) chrome pill renders with the correct label format when count > 0",
+         %{conn: conn, stack: stack} do
+      m1 = seed_rollup_member(stack, "in_progress", 1)
+      m2 = seed_rollup_member(stack, "in_progress", 2)
+
+      _ = seed_pending_review_request(m1)
+      _ = seed_pending_review_request(m2)
+
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      html = render_click(view, "open_stack_detail", %{"id" => stack.id})
+
+      assert html =~ ~s(data-role="stack-detail-needs-feedback-pill")
+      assert html =~ ~s(data-pending-count="2")
+      assert html =~ "Needs feedback (2)"
+      # Wired to the stage-2 handler stub — the overlay itself lands in
+      # stage 3, but the click target must be observably present.
+      assert html =~ ~s(phx-click="open_stack_feedback_overlay")
+      # Hero-eye icon (matches the badge guideline).
+      assert html =~ "hero-eye"
+
+      # Server-side assign matches the rendered count (1 RR per member, 2
+      # members → 2 pending across the stack).
+      assigns = :sys.get_state(view.pid).socket.assigns
+      assert assigns.selected_stack_pending_review_count == 2
+    end
+
+    test "(b) chrome pill is hidden entirely when the count is 0",
+         %{conn: conn, stack: stack} do
+      _ = seed_rollup_member(stack, "in_progress", 1)
+      _ = seed_rollup_member(stack, "in_progress", 2)
+
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      html = render_click(view, "open_stack_detail", %{"id" => stack.id})
+
+      # No clutter on the chrome — the pill block does not render at all.
+      refute html =~ ~s(data-role="stack-detail-needs-feedback-pill")
+      refute html =~ "Needs feedback"
+
+      assigns = :sys.get_state(view.pid).socket.assigns
+      assert assigns.selected_stack_pending_review_count == 0
+    end
+
+    test "(c) chrome pill re-renders on `:review_request_pending` PubSub (count increments)",
+         %{conn: conn, stack: stack} do
+      m1 = seed_rollup_member(stack, "in_progress", 1)
+      m2 = seed_rollup_member(stack, "in_progress", 2)
+
+      # Start with one pending RR — pill shows "Needs feedback (1)".
+      _ = seed_pending_review_request(m1)
+
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      pre_html = render_click(view, "open_stack_detail", %{"id" => stack.id})
+
+      assert pre_html =~ ~s(data-role="stack-detail-needs-feedback-pill")
+      assert pre_html =~ "Needs feedback (1)"
+
+      # Insert a second RR. `create_review_request/1` broadcasts
+      # `{:review_request_pending, ...}` on `review_requests:<task_id>`;
+      # mount/3 has subscribed to every initial board task so the LV
+      # consumes it without manual reload (badges-task wiring).
+      _ = seed_pending_review_request(m2)
+
+      _ = :sys.get_state(view.pid)
+      post_html = render(view)
+
+      assert post_html =~ ~s(data-pending-count="2")
+      assert post_html =~ "Needs feedback (2)"
+    end
+
+    test "(d) chrome pill re-renders on `:review_request_resolved` PubSub (count decrements)",
+         %{conn: conn, stack: stack} do
+      m1 = seed_rollup_member(stack, "in_progress", 1)
+      m2 = seed_rollup_member(stack, "in_progress", 2)
+
+      {_v1, r1} = seed_pending_review_request(m1)
+      _ = seed_pending_review_request(m2)
+
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      pre_html = render_click(view, "open_stack_detail", %{"id" => stack.id})
+
+      assert pre_html =~ ~s(data-pending-count="2")
+      assert pre_html =~ "Needs feedback (2)"
+
+      # Resolve r1 — the items must all flip to a non-pending status so
+      # `list_pending_for_task/1` no longer counts the request. Use the
+      # public approval path that broadcasts `:review_request_resolved`.
+      Enum.each(r1.items, fn item ->
+        {:ok, _} = ReviewRequests.approve_item(item.id, "tester ok")
+      end)
+
+      _ = :sys.get_state(view.pid)
+      post_html = render(view)
+
+      assert post_html =~ ~s(data-pending-count="1")
+      assert post_html =~ "Needs feedback (1)"
+    end
+
+    test "(e) chrome pill click toggles `:show_stack_feedback_overlay`",
+         %{conn: conn, stack: stack} do
+      m1 = seed_rollup_member(stack, "in_progress", 1)
+      _ = seed_pending_review_request(m1)
+
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      _html = render_click(view, "open_stack_detail", %{"id" => stack.id})
+
+      assert :sys.get_state(view.pid).socket.assigns.show_stack_feedback_overlay == false
+
+      _html = render_click(view, "open_stack_feedback_overlay", %{})
+      assert :sys.get_state(view.pid).socket.assigns.show_stack_feedback_overlay == true
+
+      _html = render_click(view, "open_stack_feedback_overlay", %{})
+      assert :sys.get_state(view.pid).socket.assigns.show_stack_feedback_overlay == false
+    end
+
+    test "(f) regression: chrome pill does NOT clobber the stack-detail-member-action row badge",
+         %{conn: conn, stack: stack} do
+      # Same fixture shape as describe-block (b) above — a member with a
+      # pending plan AND a pending review_request. The row-level chip from
+      # task 019e2c25 (`stack-detail-member-action`) MUST still render
+      # alongside the chrome-level pill from this task. Boundary guard:
+      # the chrome surface is purely additive, the row surface is owned
+      # by the badges task.
+      member = seed_rollup_member(stack, "in_progress", 1)
+      _ = seed_pending_review_request(member)
+
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      html = render_click(view, "open_stack_detail", %{"id" => stack.id})
+
+      # Chrome pill is present (stage 2 of THIS task).
+      assert html =~ ~s(data-role="stack-detail-needs-feedback-pill")
+      assert html =~ "Needs feedback (1)"
+
+      # Row badge from sibling task 019e2c25 still present — same fixture
+      # that drove its describe block (b). If a future change here removes
+      # this surface this assertion will catch it.
+      assert html =~ ~s(data-role="stack-detail-member-action")
+      assert html =~ ~s(data-action-reason="review_request_pending")
+    end
+  end
+
+  describe "stack detail panel — feedback overlay (task 019e2c27 stage 3)" do
+    # Stage 3 of "Task Stacks Review Rollup": clicking the chrome pill
+    # (stage 2) toggles `:show_stack_feedback_overlay`; this stage renders
+    # the overlay content when that assign is true. The overlay floats
+    # OVER the stack pane (NOT inline) and lists every open ReviewRequest
+    # for the stack's members, each with the member task title + the
+    # canvas content rendered inline via `CanvasRenderer.canvas_document`
+    # (same component the per-task `active_review_canvas` modal uses).
+    # Approve / reject buttons render DISABLED in this stage — stage 4
+    # wires them. Close button + backdrop click dismiss.
+
+    setup %{conn: conn} do
+      conn = authenticated_conn(conn)
+      project = create_project()
+
+      stack =
+        stack_fixture(
+          project_id: project.id,
+          name: "Overlay Stack #{System.unique_integer([:positive])}",
+          slug: "overlay-stack-#{System.unique_integer([:positive])}"
+        )
+
+      {:ok, conn: conn, project: project, stack: stack}
+    end
+
+    defp seed_overlay_member(stack, status, pos \\ 1) do
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: stack.project_id,
+          stack_id: stack.id,
+          stack_position: pos,
+          title: "Overlay Member #{pos}",
+          status: status,
+          priority: "medium"
+        })
+
+      task
+    end
+
+    # Drop a canvas with a minimal valid document in a freshly created
+    # space, return its id. Used so the overlay's inline canvas-render
+    # path can be asserted end-to-end against the same CanvasRenderer
+    # the per-task review modal uses.
+    defp seed_canvas_for_overlay(label \\ "Overlay") do
+      suffix = System.unique_integer([:positive])
+
+      {:ok, space} =
+        Chat.create_space(%{
+          name: "Overlay Canvas Space #{suffix}",
+          slug: "overlay-canvas-space-#{suffix}",
+          kind: "channel"
+        })
+
+      {:ok, participant} =
+        Chat.add_participant(space.id, %{
+          participant_type: "user",
+          participant_id: Ecto.UUID.generate(),
+          display_name: "Reviewer",
+          joined_at: DateTime.utc_now()
+        })
+
+      doc = %{
+        "version" => 1,
+        "revision" => 1,
+        "root" => %{
+          "id" => "root",
+          "type" => "stack",
+          "props" => %{"gap" => 8},
+          "children" => [
+            %{
+              "id" => "text-1",
+              "type" => "text",
+              "props" => %{"value" => "Overlay canvas body — #{label}"},
+              "children" => []
+            }
+          ]
+        }
+      }
+
+      {:ok, canvas} =
+        Chat.create_canvas(%{
+          "space_id" => space.id,
+          "created_by" => participant.id,
+          "title" => "Overlay Canvas #{label}",
+          "document" => doc
+        })
+
+      canvas
+    end
+
+    defp seed_overlay_review_request(task, canvas \\ nil) do
+      {:ok, plan} =
+        Tasks.create_plan(%{task_id: task.id, version: 1, status: "approved"})
+
+      {:ok, stage} =
+        Tasks.create_stage(%{
+          plan_id: plan.id,
+          name: "Manual review",
+          position: 1,
+          status: "running"
+        })
+
+      {:ok, validation} =
+        Tasks.create_validation(%{
+          stage_id: stage.id,
+          kind: "manual_approval",
+          status: "pending"
+        })
+
+      item_attrs =
+        case canvas do
+          %{id: cid} ->
+            %{kind: "artifact", label: "Item with canvas", status: "pending", canvas_id: cid}
+
+          nil ->
+            %{
+              kind: "artifact",
+              label: "Item with content",
+              status: "pending",
+              content: "Free-form review content."
+            }
+        end
+
+      {:ok, request} =
+        ReviewRequests.create_review_request(%{
+          validation_id: validation.id,
+          task_id: task.id,
+          status: "pending",
+          items: [item_attrs]
+        })
+
+      {validation, request}
+    end
+
+    test "(a) overlay is hidden by default when `:show_stack_feedback_overlay` is false",
+         %{conn: conn, stack: stack} do
+      m1 = seed_overlay_member(stack, "in_progress", 1)
+      _ = seed_overlay_review_request(m1)
+
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      html = render_click(view, "open_stack_detail", %{"id" => stack.id})
+
+      # Panel + chrome pill present; overlay panel absent.
+      assert html =~ ~s(data-role="stack-detail-panel")
+      assert html =~ ~s(data-role="stack-detail-needs-feedback-pill")
+      refute html =~ ~s(id="stack-feedback-overlay")
+      refute html =~ ~s(data-role="stack-feedback-overlay-panel")
+
+      assert :sys.get_state(view.pid).socket.assigns.show_stack_feedback_overlay == false
+    end
+
+    test "(b) clicking the chrome pill renders the overlay with N items matching `list_open_review_requests/1`",
+         %{conn: conn, stack: stack} do
+      m1 = seed_overlay_member(stack, "in_progress", 1)
+      m2 = seed_overlay_member(stack, "in_progress", 2)
+
+      c1 = seed_canvas_for_overlay("one")
+      c2 = seed_canvas_for_overlay("two")
+
+      _ = seed_overlay_review_request(m1, c1)
+      _ = seed_overlay_review_request(m2, c2)
+
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      _ = render_click(view, "open_stack_detail", %{"id" => stack.id})
+      html = render_click(view, "open_stack_feedback_overlay", %{})
+
+      assert html =~ ~s(id="stack-feedback-overlay")
+      assert html =~ ~s(data-role="stack-feedback-overlay-panel")
+
+      # Count attribute mirrors list_open_review_requests/1's length.
+      expected_count = length(Stacks.list_open_review_requests(stack))
+      assert expected_count == 2
+
+      # One overlay item per ReviewRequest.
+      item_count =
+        html
+        |> String.split(~s(data-role="stack-feedback-overlay-item"))
+        |> length()
+        |> Kernel.-(1)
+
+      assert item_count == expected_count
+
+      # Both member titles appear (task drill links).
+      assert html =~ "Overlay Member 1"
+      assert html =~ "Overlay Member 2"
+
+      # Header copy reflects the count + plural form.
+      assert html =~ "2 pending requests"
+    end
+
+    test "(c) each overlay item renders the canvas content inline via CanvasRenderer",
+         %{conn: conn, stack: stack} do
+      m1 = seed_overlay_member(stack, "in_progress", 1)
+      c1 = seed_canvas_for_overlay("inline")
+      _ = seed_overlay_review_request(m1, c1)
+
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      _ = render_click(view, "open_stack_detail", %{"id" => stack.id})
+      html = render_click(view, "open_stack_feedback_overlay", %{})
+
+      # Inline canvas wrapper carries our data-role marker AND the
+      # canvas id so a future test can drill in further.
+      assert html =~ ~s(data-role="stack-feedback-overlay-canvas")
+      assert html =~ ~s(data-canvas-id="#{c1.id}")
+
+      # CanvasRenderer emits id="canvas-doc-<canvas_id>-..." for every
+      # valid document — gold-standard marker the per-task
+      # `active_review_canvas` modal also produces.
+      assert html =~ ~s(id="canvas-doc-#{c1.id}-)
+
+      # Body text from the seeded document made it through the render.
+      assert html =~ "Overlay canvas body — inline"
+    end
+
+    test "(d) overlay renders approve + reject affordances enabled with stage-4 wiring",
+         %{conn: conn, stack: stack} do
+      m1 = seed_overlay_member(stack, "in_progress", 1)
+      _ = seed_overlay_review_request(m1)
+
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      _ = render_click(view, "open_stack_detail", %{"id" => stack.id})
+      html = render_click(view, "open_stack_feedback_overlay", %{})
+
+      assert html =~ ~s(data-role="stack-feedback-overlay-approve")
+      assert html =~ ~s(data-role="stack-feedback-overlay-reject")
+
+      # Stage 4 contract: buttons are enabled (no `disabled` attribute,
+      # no `btn-disabled` daisyUI marker) and carry the phx-click +
+      # phx-value-id wiring against the new handlers.
+      refute html =~ ~r/data-role="stack-feedback-overlay-approve"[^>]*disabled/s
+      refute html =~ ~r/disabled[^>]*data-role="stack-feedback-overlay-approve"/s
+      refute html =~ ~r/data-role="stack-feedback-overlay-reject"[^>]*btn-disabled/s
+
+      assert html =~ ~s(phx-click="stack_feedback_approve_item")
+      assert html =~ ~s(phx-click="toggle_stack_feedback_reject")
+    end
+
+    test "(e) close button collapses the overlay",
+         %{conn: conn, stack: stack} do
+      m1 = seed_overlay_member(stack, "in_progress", 1)
+      _ = seed_overlay_review_request(m1)
+
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      _ = render_click(view, "open_stack_detail", %{"id" => stack.id})
+      open_html = render_click(view, "open_stack_feedback_overlay", %{})
+
+      assert open_html =~ ~s(data-role="stack-feedback-overlay-panel")
+
+      closed_html = render_click(view, "close_stack_feedback_overlay", %{})
+      refute closed_html =~ ~s(data-role="stack-feedback-overlay-panel")
+
+      # Stack panel is still mounted — closing the overlay drops the
+      # user back on the stack pane (NOT the board).
+      assert closed_html =~ ~s(data-role="stack-detail-panel")
+      assert :sys.get_state(view.pid).socket.assigns.show_stack_feedback_overlay == false
+      assert :sys.get_state(view.pid).socket.assigns.show_stack_detail == true
+    end
+
+    test "(f) backdrop click dismisses the overlay",
+         %{conn: conn, stack: stack} do
+      m1 = seed_overlay_member(stack, "in_progress", 1)
+      _ = seed_overlay_review_request(m1)
+
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      _ = render_click(view, "open_stack_detail", %{"id" => stack.id})
+      _ = render_click(view, "open_stack_feedback_overlay", %{})
+
+      assert :sys.get_state(view.pid).socket.assigns.show_stack_feedback_overlay == true
+
+      # Backdrop wires the same dismiss event — the test exercises the
+      # event the backdrop emits (`close_stack_feedback_overlay`).
+      closed_html = render_click(view, "close_stack_feedback_overlay", %{})
+
+      refute closed_html =~ ~s(data-role="stack-feedback-overlay-panel")
+      assert :sys.get_state(view.pid).socket.assigns.show_stack_feedback_overlay == false
+    end
+
+    test "(g) opening overlay refreshes the snapshot — PubSub drops between mount and open are not stale",
+         %{conn: conn, stack: stack} do
+      m1 = seed_overlay_member(stack, "in_progress", 1)
+      m2 = seed_overlay_member(stack, "in_progress", 2)
+
+      # Start with one RR — pill shows count=1, overlay would have 1 row.
+      _ = seed_overlay_review_request(m1)
+
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      _ = render_click(view, "open_stack_detail", %{"id" => stack.id})
+
+      # Add a second RR; live wiring also catches this via PubSub, but
+      # `open_stack_feedback_overlay` MUST also re-snapshot so a tab
+      # that missed a broadcast still sees the freshest data when the
+      # user actually opens the overlay.
+      _ = seed_overlay_review_request(m2)
+
+      open_html = render_click(view, "open_stack_feedback_overlay", %{})
+
+      assert open_html =~ ~s(data-role="stack-feedback-overlay-panel")
+
+      item_count =
+        open_html
+        |> String.split(~s(data-role="stack-feedback-overlay-item"))
+        |> length()
+        |> Kernel.-(1)
+
+      assert item_count == 2
+
+      assigns = :sys.get_state(view.pid).socket.assigns
+      assert length(assigns.selected_stack_open_review_requests) == 2
+    end
+
+    test "(h) overlay row falls back to free-form content when item has no canvas_id",
+         %{conn: conn, stack: stack} do
+      m1 = seed_overlay_member(stack, "in_progress", 1)
+      # No canvas — item carries content only.
+      _ = seed_overlay_review_request(m1, nil)
+
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      _ = render_click(view, "open_stack_detail", %{"id" => stack.id})
+      html = render_click(view, "open_stack_feedback_overlay", %{})
+
+      refute html =~ ~s(data-role="stack-feedback-overlay-canvas")
+      assert html =~ ~s(data-role="stack-feedback-overlay-content")
+      assert html =~ "Free-form review content."
+    end
+
+    test "(i) overlay does NOT modify the row chrome owned by sibling task 019e2c25",
+         %{conn: conn, stack: stack} do
+      # Boundary guard: opening the overlay should not touch
+      # `data-role="stack-detail-member-row"` or
+      # `data-role="stack-detail-member-action"` — those belong to the
+      # badges task. The overlay is a separate floating surface.
+      m1 = seed_overlay_member(stack, "in_progress", 1)
+      _ = seed_overlay_review_request(m1)
+
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      pre_html = render_click(view, "open_stack_detail", %{"id" => stack.id})
+
+      assert pre_html =~ ~s(data-role="stack-detail-member-row")
+      assert pre_html =~ ~s(data-role="stack-detail-member-action")
+
+      open_html = render_click(view, "open_stack_feedback_overlay", %{})
+
+      # Row chrome is still on the page even with the overlay open —
+      # the panel is mounted underneath, just visually replaced.
+      assert open_html =~ ~s(data-role="stack-detail-member-row")
+      assert open_html =~ ~s(data-role="stack-detail-member-action")
+    end
+  end
+
+  describe "stack detail panel — feedback overlay approve/reject wiring (task 019e2c27 stage 4)" do
+    # Stage 4 of "Task Stacks Review Rollup": the approve + reject
+    # buttons (stage 3 stubs) get wired against
+    # `Platform.Tasks.ReviewRequests.approve_item/2` and `reject_item/3`,
+    # with optimistic removal from the overlay assigns + count
+    # decrement, and PubSub `:review_request_resolved` server-state
+    # convergence on top.
+
+    alias Platform.Tasks.ReviewItem
+    alias Platform.Tasks.Validation
+
+    setup %{conn: conn} do
+      conn = authenticated_conn(conn)
+      project = create_project()
+
+      stack =
+        stack_fixture(
+          project_id: project.id,
+          name: "Stage4 Stack #{System.unique_integer([:positive])}",
+          slug: "stage4-stack-#{System.unique_integer([:positive])}"
+        )
+
+      {:ok, conn: conn, project: project, stack: stack}
+    end
+
+    # Local copies of the stage-3 helpers — kept private to this describe
+    # block so a future refactor of either set stays scoped.
+    defp seed_s4_member(stack, status, pos \\ 1) do
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: stack.project_id,
+          stack_id: stack.id,
+          stack_position: pos,
+          title: "Stage4 Member #{pos}",
+          status: status,
+          priority: "medium"
+        })
+
+      task
+    end
+
+    defp seed_s4_review_request(task) do
+      {:ok, plan} =
+        Tasks.create_plan(%{task_id: task.id, version: 1, status: "approved"})
+
+      {:ok, stage} =
+        Tasks.create_stage(%{
+          plan_id: plan.id,
+          name: "Manual review",
+          position: 1,
+          status: "running"
+        })
+
+      {:ok, validation} =
+        Tasks.create_validation(%{
+          stage_id: stage.id,
+          kind: "manual_approval",
+          status: "pending"
+        })
+
+      {:ok, request} =
+        ReviewRequests.create_review_request(%{
+          validation_id: validation.id,
+          task_id: task.id,
+          status: "pending",
+          items: [
+            %{
+              kind: "artifact",
+              label: "Item with content",
+              status: "pending",
+              content: "Free-form review content."
+            }
+          ]
+        })
+
+      [item] = request.items
+      {validation, request, item}
+    end
+
+    test "(a) clicking Approve fires the event, updates the DB, and removes the item from the overlay",
+         %{conn: conn, stack: stack} do
+      m1 = seed_s4_member(stack, "in_progress", 1)
+      {_v, request, item} = seed_s4_review_request(m1)
+
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      _ = render_click(view, "open_stack_detail", %{"id" => stack.id})
+      open_html = render_click(view, "open_stack_feedback_overlay", %{})
+
+      # Sanity: button is rendered ENABLED (no disabled attr / class).
+      refute open_html =~ ~r/data-role="stack-feedback-overlay-approve"[^>]*\sdisabled/s
+      refute open_html =~ ~r/data-role="stack-feedback-overlay-approve"[^>]*btn-disabled/s
+
+      # Pre-click: assigns + DB both show the pending item.
+      pre = :sys.get_state(view.pid).socket.assigns
+      assert pre.selected_stack_pending_review_count == 1
+      assert length(pre.selected_stack_open_review_requests) == 1
+      assert Repo.get!(ReviewItem, item.id).status == "pending"
+
+      after_html =
+        render_click(view, "stack_feedback_approve_item", %{"id" => item.id})
+
+      # DB: item is now approved + the parent request resolved (last
+      # pending item flipped → maybe_resolve_request/1).
+      reloaded = Repo.get!(ReviewItem, item.id)
+      assert reloaded.status == "approved"
+      assert Repo.get!(Platform.Tasks.ReviewRequest, request.id).status != "pending"
+
+      # Assigns: optimistic drop removed the RR (its last item went away)
+      # and the chrome pill count came down with it.
+      post = :sys.get_state(view.pid).socket.assigns
+      assert post.selected_stack_open_review_requests == []
+      assert post.selected_stack_pending_review_count == 0
+
+      # The DOM no longer carries the approve button for that item (the
+      # row is gone) — the overlay rendered the empty state instead.
+      refute after_html =~ ~s(data-review-item-id="#{item.id}")
+      assert after_html =~ ~s(data-role="stack-feedback-overlay-empty")
+    end
+
+    test "(b) clicking Reject toggles the feedback textarea, submitting it rejects in the DB and drops the item",
+         %{conn: conn, stack: stack} do
+      m1 = seed_s4_member(stack, "in_progress", 1)
+      {_v, request, item} = seed_s4_review_request(m1)
+
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      _ = render_click(view, "open_stack_detail", %{"id" => stack.id})
+      _ = render_click(view, "open_stack_feedback_overlay", %{})
+
+      # Reject button is enabled.
+      open_assigns = :sys.get_state(view.pid).socket.assigns
+      assert MapSet.size(open_assigns.stack_feedback_reject_open) == 0
+
+      # First click toggles the form open.
+      toggled_html =
+        render_click(view, "toggle_stack_feedback_reject", %{"id" => item.id})
+
+      assert toggled_html =~ ~s(data-role="stack-feedback-overlay-reject-form")
+      assert toggled_html =~ ~s(data-role="stack-feedback-overlay-reject-text")
+
+      toggled_assigns = :sys.get_state(view.pid).socket.assigns
+      assert MapSet.member?(toggled_assigns.stack_feedback_reject_open, item.id)
+
+      # Submitting reject lands in the DB with the feedback string.
+      after_html =
+        render_click(view, "stack_feedback_reject_item", %{
+          "id" => item.id,
+          "feedback" => "Needs more detail in section two."
+        })
+
+      reloaded = Repo.get!(ReviewItem, item.id)
+      assert reloaded.status == "needs_revision"
+      assert reloaded.feedback == "Needs more detail in section two."
+      assert Repo.get!(Platform.Tasks.ReviewRequest, request.id).status != "pending"
+
+      # Assigns: optimistic drop applied + reject draft cleared.
+      post = :sys.get_state(view.pid).socket.assigns
+      assert post.selected_stack_open_review_requests == []
+      assert post.selected_stack_pending_review_count == 0
+      refute MapSet.member?(post.stack_feedback_reject_open, item.id)
+      refute Map.has_key?(post.stack_feedback_reject_text, item.id)
+
+      refute after_html =~ ~s(data-review-item-id="#{item.id}")
+    end
+
+    test "(c) external PubSub :review_request_resolved converges the overlay to server state",
+         %{conn: conn, stack: stack} do
+      m1 = seed_s4_member(stack, "in_progress", 1)
+      {_v, _rr, item} = seed_s4_review_request(m1)
+
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      _ = render_click(view, "open_stack_detail", %{"id" => stack.id})
+      _ = render_click(view, "open_stack_feedback_overlay", %{})
+
+      pre = :sys.get_state(view.pid).socket.assigns
+      assert pre.selected_stack_pending_review_count == 1
+      assert length(pre.selected_stack_open_review_requests) == 1
+
+      # Externally approve via the API directly (mirrors another tab /
+      # another agent landing the disposition) WITHOUT going through
+      # our handler. Then fire the resolved broadcast the same shape
+      # `maybe_resolve_request/1` would.
+      {:ok, _} = ReviewRequests.approve_item(item.id, "external-agent")
+
+      send(view.pid, {:review_request_resolved, %{task_id: m1.id}})
+
+      # Wait one render cycle.
+      _ = render(view)
+
+      post = :sys.get_state(view.pid).socket.assigns
+      assert post.selected_stack_open_review_requests == []
+      assert post.selected_stack_pending_review_count == 0
+    end
+
+    test "(d) reject_item handler tolerates pre-collected text when no `feedback` param is supplied",
+         %{conn: conn, stack: stack} do
+      m1 = seed_s4_member(stack, "in_progress", 1)
+      {_v, _rr, item} = seed_s4_review_request(m1)
+
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      _ = render_click(view, "open_stack_detail", %{"id" => stack.id})
+      _ = render_click(view, "open_stack_feedback_overlay", %{})
+      _ = render_click(view, "toggle_stack_feedback_reject", %{"id" => item.id})
+
+      # Type into the textarea (the buffer assign is the source of truth).
+      _ =
+        render_keyup(view, "update_stack_feedback_reject_text", %{
+          "id" => item.id,
+          "value" => "Buffered feedback"
+        })
+
+      buffered = :sys.get_state(view.pid).socket.assigns.stack_feedback_reject_text
+      assert Map.get(buffered, item.id) == "Buffered feedback"
+
+      # Submit WITHOUT the feedback key — handler must fall back to the
+      # buffered draft so the in-flight assign is the source of truth
+      # even if the template's `phx-value-feedback` is stripped.
+      _ = render_click(view, "stack_feedback_reject_item", %{"id" => item.id})
+
+      reloaded = Repo.get!(ReviewItem, item.id)
+      assert reloaded.status == "needs_revision"
+      assert reloaded.feedback == "Buffered feedback"
+    end
+
+    test "(e) close_stack_feedback_overlay clears in-flight reject form state",
+         %{conn: conn, stack: stack} do
+      m1 = seed_s4_member(stack, "in_progress", 1)
+      {_v, _rr, item} = seed_s4_review_request(m1)
+
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      _ = render_click(view, "open_stack_detail", %{"id" => stack.id})
+      _ = render_click(view, "open_stack_feedback_overlay", %{})
+      _ = render_click(view, "toggle_stack_feedback_reject", %{"id" => item.id})
+
+      _ =
+        render_keyup(view, "update_stack_feedback_reject_text", %{
+          "id" => item.id,
+          "value" => "half typed"
+        })
+
+      mid = :sys.get_state(view.pid).socket.assigns
+      assert MapSet.member?(mid.stack_feedback_reject_open, item.id)
+      assert Map.get(mid.stack_feedback_reject_text, item.id) == "half typed"
+
+      _ = render_click(view, "close_stack_feedback_overlay", %{})
+
+      post = :sys.get_state(view.pid).socket.assigns
+      assert post.show_stack_feedback_overlay == false
+      assert MapSet.size(post.stack_feedback_reject_open) == 0
+      assert post.stack_feedback_reject_text == %{}
+
+      # Validation alias keeps the compiler from complaining about an
+      # otherwise-unused alias at the top of this describe block.
+      _ = Validation
+    end
+  end
+
+  describe "stack detail panel — live-refresh on RR churn (task 019e2c27 stage 5)" do
+    # Stage 5 of "Task Stacks Review Rollup": wires the LiveView to
+    # `Platform.Tasks.ReviewRequests.subscribe_for_task/1` for every
+    # member of the open stack so the chrome pill (and the rollup
+    # overlay, when open) refresh within the live cycle when an
+    # external actor creates, approves, or rejects a review_request
+    # on any member — without the user touching the panel.
+    #
+    # The board-level subscriptions from the badges task already cover
+    # every visible task at mount, but the stack panel can hold members
+    # outside the board's current filter; the stack-scoped subscription
+    # set is the safety net. On close it unwinds itself WITHOUT
+    # disturbing any task ids the board is still subscribed to.
+
+    setup %{conn: conn} do
+      conn = authenticated_conn(conn)
+      project = create_project()
+
+      stack =
+        stack_fixture(
+          project_id: project.id,
+          name: "Stage5 Stack #{System.unique_integer([:positive])}",
+          slug: "stage5-stack-#{System.unique_integer([:positive])}"
+        )
+
+      {:ok, conn: conn, project: project, stack: stack}
+    end
+
+    defp seed_s5_member(stack, status, pos \\ 1) do
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: stack.project_id,
+          stack_id: stack.id,
+          stack_position: pos,
+          title: "Stage5 Member #{pos}",
+          status: status,
+          priority: "medium"
+        })
+
+      task
+    end
+
+    defp seed_s5_review_request(task) do
+      {:ok, plan} =
+        Tasks.create_plan(%{task_id: task.id, version: 1, status: "approved"})
+
+      {:ok, stage} =
+        Tasks.create_stage(%{
+          plan_id: plan.id,
+          name: "Manual review",
+          position: 1,
+          status: "running"
+        })
+
+      {:ok, validation} =
+        Tasks.create_validation(%{
+          stage_id: stage.id,
+          kind: "manual_approval",
+          status: "pending"
+        })
+
+      {:ok, request} =
+        ReviewRequests.create_review_request(%{
+          validation_id: validation.id,
+          task_id: task.id,
+          status: "pending",
+          items: [
+            %{kind: "artifact", label: "Stage5 review item", status: "pending", content: "..."}
+          ]
+        })
+
+      {validation, request}
+    end
+
+    test "(a) panel open + external RR created on stack member → chrome pill count increments live",
+         %{conn: conn, stack: stack} do
+      # Two members, NEITHER has a pending RR at mount — so the chrome
+      # pill stays hidden initially. The wiring under test must
+      # subscribe to every member's review_requests:<task_id> topic
+      # the moment the panel opens, so the external creation below
+      # (which broadcasts `:review_request_pending`) reaches us and
+      # bumps the pill within the live cycle.
+      m1 = seed_s5_member(stack, "in_progress", 1)
+      m2 = seed_s5_member(stack, "in_progress", 2)
+
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      pre_html = render_click(view, "open_stack_detail", %{"id" => stack.id})
+
+      # Sanity: nothing pending pre-create — pill stays hidden.
+      refute pre_html =~ ~s(data-role="stack-detail-needs-feedback-pill")
+      assert :sys.get_state(view.pid).socket.assigns.selected_stack_pending_review_count == 0
+
+      # External actor creates a pending RR on m1 — broadcasts
+      # `{:review_request_pending, ...}` on `review_requests:<m1.id>`.
+      _ = seed_s5_review_request(m1)
+      _ = :sys.get_state(view.pid)
+      after_first = render(view)
+
+      assert after_first =~ ~s(data-role="stack-detail-needs-feedback-pill")
+      assert after_first =~ ~s(data-pending-count="1")
+      assert after_first =~ "Needs feedback (1)"
+
+      # And again on a different member — the subscription set is
+      # genuinely per-member, not just the first one we touched.
+      _ = seed_s5_review_request(m2)
+      _ = :sys.get_state(view.pid)
+      after_second = render(view)
+
+      assert after_second =~ ~s(data-pending-count="2")
+      assert after_second =~ "Needs feedback (2)"
+    end
+
+    test "(b) overlay open + external RR created → overlay row + count both refresh live",
+         %{conn: conn, stack: stack} do
+      m1 = seed_s5_member(stack, "in_progress", 1)
+      m2 = seed_s5_member(stack, "in_progress", 2)
+
+      # Start with one pending RR so the overlay actually opens (the
+      # stage-3 overlay still renders an empty state when there are 0
+      # rows, but a non-empty start makes the assertions concrete).
+      _ = seed_s5_review_request(m1)
+
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      _ = render_click(view, "open_stack_detail", %{"id" => stack.id})
+      open_html = render_click(view, "open_stack_feedback_overlay", %{})
+
+      assert open_html =~ ~s(data-role="stack-feedback-overlay-panel")
+      assert :sys.get_state(view.pid).socket.assigns.selected_stack_pending_review_count == 1
+
+      pre_rows =
+        open_html
+        |> String.split(~s(data-role="stack-feedback-overlay-item"))
+        |> length()
+        |> Kernel.-(1)
+
+      assert pre_rows == 1
+
+      # External actor creates a second RR on m2. The
+      # `:review_request_pending` PubSub broadcast should refresh the
+      # overlay assigns (not just the pill count), since the overlay
+      # is open.
+      _ = seed_s5_review_request(m2)
+      _ = :sys.get_state(view.pid)
+      post_html = render(view)
+
+      post = :sys.get_state(view.pid).socket.assigns
+      assert post.selected_stack_pending_review_count == 2
+      assert length(post.selected_stack_open_review_requests) == 2
+
+      assert post_html =~ ~s(data-pending-count="2")
+
+      post_rows =
+        post_html
+        |> String.split(~s(data-role="stack-feedback-overlay-item"))
+        |> length()
+        |> Kernel.-(1)
+
+      assert post_rows == 2
+    end
+
+    test "(c) overlay open + external approve_item on a different member → row disappears, count decrements live",
+         %{conn: conn, stack: stack} do
+      m1 = seed_s5_member(stack, "in_progress", 1)
+      m2 = seed_s5_member(stack, "in_progress", 2)
+
+      _ = seed_s5_review_request(m1)
+      {_v2, r2} = seed_s5_review_request(m2)
+      [item_on_m2] = r2.items
+
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      _ = render_click(view, "open_stack_detail", %{"id" => stack.id})
+      _ = render_click(view, "open_stack_feedback_overlay", %{})
+
+      pre = :sys.get_state(view.pid).socket.assigns
+      assert pre.selected_stack_pending_review_count == 2
+      assert length(pre.selected_stack_open_review_requests) == 2
+
+      # External actor approves m2's only review item — this drives
+      # `maybe_resolve_request/1` and broadcasts
+      # `{:review_request_resolved, ...}` on
+      # `review_requests:<m2.id>`. The LV's stack-scoped subscription
+      # (NOT the click handler — we never click in this test) must
+      # consume it and refresh both the pill and the overlay.
+      {:ok, _} = ReviewRequests.approve_item(item_on_m2.id, "external tester")
+      _ = :sys.get_state(view.pid)
+      post_html = render(view)
+
+      post = :sys.get_state(view.pid).socket.assigns
+      assert post.selected_stack_pending_review_count == 1
+      assert length(post.selected_stack_open_review_requests) == 1
+      # The surviving RR is m1's — not m2's.
+      assert hd(post.selected_stack_open_review_requests).task_id == m1.id
+
+      assert post_html =~ ~s(data-pending-count="1")
+      assert post_html =~ "Needs feedback (1)"
+      refute post_html =~ ~s(data-review-item-id="#{item_on_m2.id}")
+    end
+
+    test "(d) close_stack_detail unwinds the per-member subscriptions, leaving board subs intact",
+         %{conn: conn, stack: stack} do
+      m1 = seed_s5_member(stack, "in_progress", 1)
+      m2 = seed_s5_member(stack, "in_progress", 2)
+
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      _ = render_click(view, "open_stack_detail", %{"id" => stack.id})
+
+      # While open: the stack-scoped subscription set must contain
+      # every member id.
+      mid = :sys.get_state(view.pid).socket.assigns
+      assert MapSet.member?(mid.stack_review_request_subscriptions, m1.id)
+      assert MapSet.member?(mid.stack_review_request_subscriptions, m2.id)
+
+      # The board-level set (from the badges-task wiring) already holds
+      # these too because the members were created BEFORE mount and so
+      # were caught by the initial subscribe-all-tasks at mount/3. This
+      # is the realistic overlap case — the unwind must NOT collateral-
+      # drop the board's subscription.
+      assert MapSet.member?(mid.review_request_subscriptions, m1.id)
+      assert MapSet.member?(mid.review_request_subscriptions, m2.id)
+
+      _ = render_click(view, "close_stack_detail", %{})
+
+      post = :sys.get_state(view.pid).socket.assigns
+      assert post.show_stack_detail == false
+      assert post.selected_stack == nil
+
+      # Stack-scoped set is empty — no member ids retained.
+      assert MapSet.size(post.stack_review_request_subscriptions) == 0
+
+      # Board-level set still holds both members. The unwind respected
+      # the overlap and only dropped subs the stack panel uniquely
+      # added.
+      assert MapSet.member?(post.review_request_subscriptions, m1.id)
+      assert MapSet.member?(post.review_request_subscriptions, m2.id)
+
+      # And the live-refresh stops touching the stack panel's assigns
+      # once it's closed: an external RR creation no longer drives
+      # `:selected_stack_pending_review_count` (it stays at the
+      # closed-panel default of 0). The board still consumes the
+      # broadcast via its own subscriptions, but the stack assigns
+      # are reset and stay reset.
+      _ = seed_s5_review_request(m1)
+      _ = :sys.get_state(view.pid)
+      post2 = :sys.get_state(view.pid).socket.assigns
+      assert post2.selected_stack_pending_review_count == 0
+      assert post2.selected_stack_open_review_requests == []
+    end
+  end
 end

@@ -1997,6 +1997,27 @@
           {@selected_stack.description}
         </p>
       </div>
+      <%!-- Stage 2 of task 019e2c27 (Stack-Level Review Rollup): chrome
+           pill that surfaces the count of open review_requests across
+           every member of this stack. Hidden entirely when the count
+           is 0 — the chrome stays clutter-free unless there's actual
+           feedback waiting. Sits between the title block and the
+           overflow kebab / close X so it's visible on both mobile
+           (left of the kebab) and desktop (left of the close X).
+           Click toggles `show_stack_feedback_overlay` via the stage-2
+           handler stub; stage 3 will render the actual rollup overlay. --%>
+      <button
+        :if={@selected_stack_pending_review_count > 0}
+        type="button"
+        class="badge badge-warning badge-sm gap-1 shrink-0 self-center cursor-pointer"
+        phx-click="open_stack_feedback_overlay"
+        aria-label={"Needs feedback (#{@selected_stack_pending_review_count})"}
+        data-role="stack-detail-needs-feedback-pill"
+        data-pending-count={@selected_stack_pending_review_count}
+      >
+        <span class="hero-eye size-3" aria-hidden="true"></span>
+        <span>Needs feedback ({@selected_stack_pending_review_count})</span>
+      </button>
       <%!-- Mobile overflow kebab. No-op trigger for now (visual parity
            with the mock); when stack-level overflow actions land they
            wire here. --%>
@@ -2351,6 +2372,274 @@
           View rollup PR
         </button>
       <% end %>
+    </div>
+  </div>
+
+  <%!-- Stage 3 of task 019e2c27 (Stack-Level Review Rollup): the rollup
+       overlay. Modal/takeover surface that floats OVER the stack pane
+       (NOT inline in it — the inline layout was the design Rowan rejected
+       from v1). Lists every open ReviewRequest across the stack's
+       members; each row renders the member task title + the canvas
+       content inline via the same CanvasRenderer.canvas_document
+       component the per-task `active_review_canvas` modal uses (gold-
+       standard pattern at line ~2410 below).
+
+       Layout:
+         * z-40 sits ABOVE the stack panel (z-30) so it visually replaces
+           the pane while keeping the panel mounted underneath — closing
+           the overlay returns the user directly to the stack pane.
+         * z-50 is reserved for the per-canvas `active_review_canvas`
+           modal, which a future stage may open from a drill-down here.
+         * Mobile (default): full-screen takeover (`inset-0`). The chrome
+           pill is the trigger so the user never lands on this surface
+           without a count to read; the takeover style matches the v2
+           plan's "full-screen takeover on 375x812".
+         * Desktop (md+): the panel is `max-w-lg` on the right edge; the
+           overlay mirrors that and pins to the same column so it
+           visually replaces the pane (NOT a small modal floating in the
+           board's empty space). Backdrop fills the rest of the viewport
+           with a black wash so it's clear the board is non-interactive.
+         * Bottom edge mirrors the stack-detail panel's safe-area
+           constraint so the takeover does not bleed under the bottom
+           nav on iOS PWA.
+         * Backdrop click dismisses (`close_stack_feedback_overlay`); the
+           top-right X is a redundant explicit close.
+
+       Stage-4 work (this stage): the approve/reject buttons on each
+       item are wired against `ReviewRequests.approve_item/2` +
+       `ReviewRequests.reject_item/3`. Approve is one-click; reject
+       expands an inline textarea (mirrors the per-task
+       `submit_review_feedback` UX) so the reviewer can give a reason. --%>
+  <div
+    :if={@show_stack_feedback_overlay && @selected_stack}
+    id="stack-feedback-overlay"
+    data-role="stack-feedback-overlay"
+    data-stack-id={@selected_stack.id}
+    class="fixed inset-0 z-40"
+  >
+    <%!-- Backdrop fills the viewport. On desktop the overlay panel is
+         pinned to the right column (md:max-w-lg) so the backdrop
+         visually wraps the rest of the board; click anywhere on the
+         backdrop to dismiss. --%>
+    <div
+      class="absolute inset-0 bg-black/50"
+      phx-click="close_stack_feedback_overlay"
+      data-role="stack-feedback-overlay-backdrop"
+    />
+    <%!-- Overlay panel — full-screen takeover on mobile, pinned to the
+         right edge on desktop matching the stack pane's column. --%>
+    <div
+      class="absolute inset-0 md:inset-y-0 md:left-auto md:right-0 bottom-[calc(env(safe-area-inset-bottom)+var(--bottom-nav-height,0px))] flex w-full max-w-full md:max-w-lg flex-col border-l border-base-300 bg-base-100 shadow-2xl safe-area-top"
+      data-role="stack-feedback-overlay-panel"
+    >
+      <%!-- Overlay header: title + count + close X. Mirrors the stack-
+           detail panel chrome shape for visual continuity, but uses the
+           "Needs feedback" label so the user understands this is the
+           drill-down from the chrome pill. --%>
+      <div class="flex items-center justify-between gap-3 border-b border-base-300 px-4 py-3">
+        <div class="flex min-w-0 items-center gap-2">
+          <span class="hero-eye size-4 shrink-0 text-warning" aria-hidden="true"></span>
+          <div class="min-w-0">
+            <div class="text-sm font-semibold leading-tight truncate">
+              Needs feedback
+            </div>
+            <div
+              class="text-xs text-base-content/60"
+              data-role="stack-feedback-overlay-count"
+            >
+              {@selected_stack_pending_review_count} pending {request_word(
+                @selected_stack_pending_review_count
+              )} across this stack
+            </div>
+          </div>
+        </div>
+        <button
+          type="button"
+          class="btn btn-ghost btn-sm btn-square shrink-0"
+          phx-click="close_stack_feedback_overlay"
+          aria-label="Close feedback overlay"
+          data-role="stack-feedback-overlay-close"
+        >
+          <span class="hero-x-mark size-4"></span>
+        </button>
+      </div>
+
+      <%!-- Scrollable body. Empty state is defensive: the chrome pill is
+           hidden when the count is 0, so the overlay should never open
+           with an empty list. If it does (e.g. PubSub flushed every RR
+           between click and render), surface a neutral copy instead of a
+           blank pane. --%>
+      <div class="flex-1 overflow-y-auto px-4 py-3">
+        <%= if @selected_stack_open_review_requests == [] do %>
+          <div
+            class="rounded-lg border border-dashed border-base-300 bg-base-200/50 p-6 text-center text-sm text-base-content/60"
+            data-role="stack-feedback-overlay-empty"
+          >
+            No pending feedback on this stack.
+          </div>
+        <% else %>
+          <ul class="flex flex-col gap-4" data-role="stack-feedback-overlay-list">
+            <li
+              :for={rr <- @selected_stack_open_review_requests}
+              class="rounded-xl border border-base-300 bg-base-100"
+              data-role="stack-feedback-overlay-item"
+              data-review-request-id={rr.id}
+              data-task-id={rr.task_id}
+            >
+              <%!-- Row header: member task title + drill-in link. --%>
+              <div class="flex items-start justify-between gap-2 border-b border-base-300 px-3 py-2">
+                <div class="min-w-0">
+                  <div class="text-[10px] font-semibold uppercase tracking-wider text-base-content/50">
+                    Member task
+                  </div>
+                  <%= if rr.member_task do %>
+                    <.link
+                      patch={~p"/tasks/#{rr.member_task.id}"}
+                      class="block truncate text-sm font-medium text-base-content hover:underline"
+                      data-role="stack-feedback-overlay-task-link"
+                    >
+                      {rr.member_task.title}
+                    </.link>
+                  <% else %>
+                    <span class="block truncate text-sm font-medium text-base-content/60">
+                      (member task missing)
+                    </span>
+                  <% end %>
+                </div>
+              </div>
+
+              <%!-- Items: each one carries the canvas (or text content)
+                   plus the (stage-4) approve/reject buttons. --%>
+              <ul class="flex flex-col gap-3 p-3">
+                <li
+                  :for={item <- rr.items || []}
+                  class="rounded-lg border border-base-300 bg-base-200/40 p-3"
+                  data-role="stack-feedback-overlay-review-item"
+                  data-review-item-id={item.id}
+                >
+                  <div class="mb-2 flex items-center justify-between gap-2">
+                    <div class="min-w-0 truncate text-xs font-semibold text-base-content/80">
+                      {item.label}
+                    </div>
+                    <div class="flex shrink-0 gap-1">
+                      <%!-- Stage 4 wiring: Approve fires a single
+                           `stack_feedback_approve_item` event with the
+                           item id. Reject toggles an inline textarea
+                           (mirrors the per-task `submit_review_feedback`
+                           UX) so a feedback string is collected before
+                           `ReviewRequests.reject_item/3` is called. --%>
+                      <button
+                        type="button"
+                        class="btn btn-success btn-xs"
+                        phx-click="stack_feedback_approve_item"
+                        phx-value-id={item.id}
+                        data-role="stack-feedback-overlay-approve"
+                        data-review-item-id={item.id}
+                        title="Approve this item"
+                      >
+                        <span class="hero-check size-3"></span> Approve
+                      </button>
+                      <button
+                        type="button"
+                        class="btn btn-error btn-xs"
+                        phx-click="toggle_stack_feedback_reject"
+                        phx-value-id={item.id}
+                        data-role="stack-feedback-overlay-reject"
+                        data-review-item-id={item.id}
+                        title="Reject this item with feedback"
+                      >
+                        <span class="hero-x-mark size-3"></span> Reject
+                      </button>
+                    </div>
+                  </div>
+
+                  <%!-- Reject feedback textarea + submit. Toggled by
+                       `toggle_stack_feedback_reject` (the Reject button
+                       above). Lives in overlay-scoped assigns
+                       (`:stack_feedback_reject_open` /
+                       `:stack_feedback_reject_text`) so opening this
+                       drawer here does NOT also expand the per-task
+                       review panel's separate reject UI underneath. --%>
+                  <div
+                    :if={MapSet.member?(@stack_feedback_reject_open, item.id)}
+                    class="mb-2 space-y-2"
+                    data-role="stack-feedback-overlay-reject-form"
+                    data-review-item-id={item.id}
+                  >
+                    <textarea
+                      class="textarea textarea-bordered textarea-xs w-full"
+                      placeholder="Describe what needs to change..."
+                      phx-keyup="update_stack_feedback_reject_text"
+                      phx-value-id={item.id}
+                      data-role="stack-feedback-overlay-reject-text"
+                      data-review-item-id={item.id}
+                    >{Map.get(@stack_feedback_reject_text, item.id, "")}</textarea>
+                    <button
+                      type="button"
+                      class="btn btn-warning btn-xs"
+                      phx-click="stack_feedback_reject_item"
+                      phx-value-id={item.id}
+                      phx-value-feedback={Map.get(@stack_feedback_reject_text, item.id, "")}
+                      data-role="stack-feedback-overlay-reject-submit"
+                      data-review-item-id={item.id}
+                    >
+                      Submit feedback
+                    </button>
+                  </div>
+                  <%!-- Canvas content (inline) — same component the per-
+                       task `active_review_canvas` modal uses. If the item
+                       carries free-form `content` instead of a canvas
+                       reference, render that as the fallback so the
+                       reviewer sees something either way. --%>
+                  <%= cond do %>
+                    <% canvas = is_binary(item.canvas_id) && Map.get(@selected_stack_open_review_canvases, item.canvas_id) -> %>
+                      <div
+                        class="rounded-md border border-base-300 bg-base-100 p-2"
+                        data-role="stack-feedback-overlay-canvas"
+                        data-canvas-id={canvas.id}
+                      >
+                        <PlatformWeb.Chat.CanvasRenderer.canvas_document
+                          canvas={canvas}
+                          show_header={false}
+                          dom_id_base={"stack-feedback-overlay-canvas-#{canvas.id}"}
+                        />
+                      </div>
+                    <% is_binary(item.content) and item.content != "" -> %>
+                      <pre
+                        class="overflow-x-auto whitespace-pre-wrap rounded-md border border-base-300 bg-base-100 p-2 text-xs text-base-content/80"
+                        data-role="stack-feedback-overlay-content"
+                      >{item.content}</pre>
+                    <% true -> %>
+                      <div
+                        class="rounded-md border border-dashed border-base-300 bg-base-100 p-2 text-xs text-base-content/50"
+                        data-role="stack-feedback-overlay-empty-item"
+                      >
+                        No reviewable content attached.
+                      </div>
+                  <% end %>
+                </li>
+              </ul>
+            </li>
+          </ul>
+        <% end %>
+      </div>
+
+      <%!-- Sticky bottom close button — mirrors the stack-detail panel
+           action bar so the dismiss target is reachable on tall mobile
+           viewports without scrolling all the way back up. --%>
+      <div
+        class="mt-auto sticky bottom-0 flex gap-2 border-t border-base-300 bg-base-100 px-4 py-3"
+        data-role="stack-feedback-overlay-actions"
+      >
+        <button
+          type="button"
+          class="btn btn-ghost btn-sm flex-1"
+          phx-click="close_stack_feedback_overlay"
+          data-role="stack-feedback-overlay-close-bottom"
+        >
+          Close
+        </button>
+      </div>
     </div>
   </div>
 

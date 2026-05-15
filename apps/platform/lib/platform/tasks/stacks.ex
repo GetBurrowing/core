@@ -18,7 +18,7 @@ defmodule Platform.Tasks.Stacks do
 
   alias Platform.Repo
   alias Platform.Tasks
-  alias Platform.Tasks.{Stack, StackDeployer, Task}
+  alias Platform.Tasks.{ReviewRequests, Stack, StackDeployer, Task}
 
   @slug_regex ~r/^[a-z0-9][a-z0-9-]*$/
   @max_slug_length 60
@@ -651,6 +651,41 @@ defmodule Platform.Tasks.Stacks do
     |> order_by([t], asc: t.stack_position)
     |> Repo.all()
   end
+
+  @doc """
+  List all open (pending) review requests across every member of a stack.
+
+  Composes over `members/1` and reuses
+  `Platform.Tasks.ReviewRequests.list_pending_for_task/1` so the per-task
+  scoping rules (status `"pending"`, items preloaded) stay in one place.
+  Resolved requests and tasks not in the stack are excluded by
+  construction.
+
+  Returns a flat list of `%ReviewRequest{}` structs ordered by
+  `inserted_at` descending (newest first), matching the per-task ordering
+  from `list_pending_for_task/1`.
+  """
+  @spec list_open_review_requests(Stack.t() | binary()) :: [
+          Platform.Tasks.ReviewRequest.t()
+        ]
+  def list_open_review_requests(%Stack{id: stack_id}),
+    do: list_open_review_requests(stack_id)
+
+  def list_open_review_requests(stack_id) when is_binary(stack_id) do
+    stack_id
+    |> members()
+    |> Enum.flat_map(&ReviewRequests.list_pending_for_task(&1.id))
+    |> Enum.sort_by(& &1.inserted_at, {:desc, DateTime})
+  end
+
+  @doc """
+  Count open (pending) review requests across every member of a stack.
+
+  Convenience wrapper around `list_open_review_requests/1` for callers
+  (e.g. the stack-detail chrome pill) that only need a number.
+  """
+  @spec count_pending_reviews(Stack.t() | binary()) :: non_neg_integer()
+  def count_pending_reviews(stack), do: length(list_open_review_requests(stack))
 
   @doc """
   List stacks with the precomputed board-card display data the kanban view

@@ -9,7 +9,7 @@ defmodule Platform.Tasks.StacksTest do
 
   alias Platform.Repo
   alias Platform.Tasks
-  alias Platform.Tasks.{Stack, Stacks, Task}
+  alias Platform.Tasks.{PlanEngine, ReviewRequests, Stack, Stacks, Task}
 
   describe "create_stack/1" do
     test "creates a stack with valid attrs" do
@@ -508,6 +508,69 @@ defmodule Platform.Tasks.StacksTest do
 
       ids = Stacks.members(stack) |> Enum.map(& &1.id)
       assert ids == [kept.id]
+    end
+  end
+
+  describe "list_open_review_requests/1 + count_pending_reviews/1" do
+    test "empty stack reports zero pending reviews and an empty list" do
+      stack = stack_fixture()
+
+      assert Stacks.list_open_review_requests(stack) == []
+      assert Stacks.list_open_review_requests(stack.id) == []
+      assert Stacks.count_pending_reviews(stack) == 0
+      assert Stacks.count_pending_reviews(stack.id) == 0
+    end
+
+    test "stack with two members each holding a pending RR rolls up to count=2" do
+      {:ok, project} = Tasks.create_project(%{name: "Rollup Two Pending"})
+      stack = stack_fixture(project_id: project.id)
+
+      {:ok, task_a} = Tasks.create_task(%{project_id: project.id, title: "Member A"})
+      {:ok, task_b} = Tasks.create_task(%{project_id: project.id, title: "Member B"})
+      {:ok, _} = Stacks.add_task(stack, task_a)
+      {:ok, _} = Stacks.add_task(stack, task_b)
+
+      {:ok, rr_a} = pending_review_request_for(task_a, "Item A")
+      {:ok, rr_b} = pending_review_request_for(task_b, "Item B")
+
+      assert Stacks.count_pending_reviews(stack) == 2
+
+      ids = Stacks.list_open_review_requests(stack) |> Enum.map(& &1.id) |> Enum.sort()
+      assert ids == Enum.sort([rr_a.id, rr_b.id])
+    end
+
+    test "resolved review requests are excluded from the rollup" do
+      {:ok, project} = Tasks.create_project(%{name: "Rollup Resolved Excluded"})
+      stack = stack_fixture(project_id: project.id)
+
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Member"})
+      {:ok, _} = Stacks.add_task(stack, task)
+
+      {:ok, rr} = pending_review_request_for(task, "Approve me")
+      [item] = rr.items
+      {:ok, _} = ReviewRequests.approve_item(item.id, "rowan")
+
+      # Sanity: the request itself should no longer be pending.
+      assert ReviewRequests.list_pending_for_task(task.id) == []
+
+      assert Stacks.count_pending_reviews(stack) == 0
+      assert Stacks.list_open_review_requests(stack) == []
+    end
+
+    test "review requests on tasks outside the stack are excluded" do
+      {:ok, project} = Tasks.create_project(%{name: "Rollup Scope"})
+      stack = stack_fixture(project_id: project.id)
+
+      {:ok, member} = Tasks.create_task(%{project_id: project.id, title: "Member"})
+      {:ok, outsider} = Tasks.create_task(%{project_id: project.id, title: "Outsider"})
+      {:ok, _} = Stacks.add_task(stack, member)
+
+      {:ok, member_rr} = pending_review_request_for(member, "Member item")
+      {:ok, _outsider_rr} = pending_review_request_for(outsider, "Outsider item")
+
+      ids = Stacks.list_open_review_requests(stack) |> Enum.map(& &1.id)
+      assert ids == [member_rr.id]
+      assert Stacks.count_pending_reviews(stack) == 1
     end
   end
 
@@ -2242,6 +2305,34 @@ defmodule Platform.Tasks.StacksTest do
   end
 
   # ── Helpers ──────────────────────────────────────────────────────────────
+
+  # Spin up the plan/stage/validation scaffolding a task needs before a
+  # `manual_approval` review request can be created, then submit one
+  # pending request with a single item. Returns the created `ReviewRequest`
+  # (with items preloaded). Used by the `list_open_review_requests`
+  # rollup tests to stand up cross-member review state without dragging
+  # the full plan engine into the assertions.
+  defp pending_review_request_for(%Task{id: task_id}, item_label) do
+    {:ok, plan} = Tasks.create_plan(%{task_id: task_id})
+
+    {:ok, stage} =
+      Tasks.create_stage(%{
+        plan_id: plan.id,
+        position: 1,
+        name: "Review stage " <> short_id()
+      })
+
+    {:ok, _} = PlanEngine.start_stage(stage.id)
+
+    {:ok, validation} =
+      Tasks.create_validation(%{stage_id: stage.id, kind: "manual_approval"})
+
+    ReviewRequests.create_review_request(%{
+      validation_id: validation.id,
+      task_id: task_id,
+      items: [%{label: item_label}]
+    })
+  end
 
   # Bypass the broadcast pipeline + status-transition guards for setup —
   # we're exercising the rollup math, not the dispatcher.

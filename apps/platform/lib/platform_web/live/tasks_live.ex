@@ -124,6 +124,53 @@ defmodule PlatformWeb.TasksLive do
      # "Needs review" / "Plan ready" badge on stack-detail member rows.
      # Keyed by member task id → integer count of open review_requests.
      |> assign(:selected_stack_member_review_counts, %{})
+     # Stage-2 of task 019e2c27 (Stack-Level Review Rollup): rollup count of
+     # pending review_requests across every member of the open stack. Drives
+     # the "Needs feedback (N)" pill on the stack-detail panel chrome.
+     # Computed via `Stacks.count_pending_reviews/1` whenever the panel is
+     # (re)loaded or `:review_request_pending` / `:review_request_resolved`
+     # PubSub fires. Hidden entirely when 0 — see the chrome-pill template.
+     # Mount-time defaults for the three assigns that back the stack
+     # rollup pill + overlay; see `assign_stack_review_state/2` for the
+     # canonical writer used by every subsequent state transition.
+     # The trio:
+     #
+     #   * `:selected_stack_pending_review_count` — pill count.
+     #   * `:selected_stack_open_review_requests` — list of `%ReviewRequest{}`
+     #     (preloaded items + virtual `:member_task`) the overlay enumerates.
+     #     Rendered by the stack-feedback overlay when
+     #     `:show_stack_feedback_overlay` is true.
+     #   * `:selected_stack_open_review_canvases` — `%{canvas_id => %Canvas{}}`
+     #     for every canvas referenced by an item, so the overlay renders
+     #     each canvas inline via the same `CanvasRenderer.canvas_document`
+     #     component the per-task `active_review_canvas` modal uses
+     #     (gold-standard pattern at tasks_live.html.heex ~line 2378).
+     |> assign(:selected_stack_pending_review_count, 0)
+     |> assign(:selected_stack_open_review_requests, [])
+     |> assign(:selected_stack_open_review_canvases, %{})
+     # Stage-5 of task 019e2c27: per-stack-member review_requests:<task_id>
+     # subscription set. The board-level `:review_request_subscriptions`
+     # already follows every task on the current project/epic view, but the
+     # stack-detail panel can hold open members that fall outside the
+     # board's filter (e.g. a project switch happens while the panel is
+     # open). Track stack-scoped subscriptions here so `open_stack_detail`
+     # can guarantee live-refresh for every member regardless of the
+     # board's subscription set, and `close_stack_detail` can unwind them
+     # WITHOUT clobbering any overlap with the board's set. MapSet of
+     # task_ids the stack panel is responsible for keeping subscribed.
+     |> assign(:stack_review_request_subscriptions, MapSet.new())
+     # Toggled by `open_stack_feedback_overlay` (the chrome-pill click).
+     # Stage 3 renders the rollup overlay (modal that floats OVER the
+     # stack pane, not inline) against this assign.
+     |> assign(:show_stack_feedback_overlay, false)
+     # Stage-4 of task 019e2c27: per-item reject-feedback toggle + text
+     # buffer, scoped to the stack-feedback overlay. Mirrors the per-task
+     # `:review_feedback_open` / `:review_items_feedback` pair but lives
+     # under a separate key so opening the reject textarea on a row in the
+     # overlay does not visually flip anything in the (hidden) per-task
+     # review panel underneath. Reset whenever the overlay closes.
+     |> assign(:stack_feedback_reject_open, MapSet.new())
+     |> assign(:stack_feedback_reject_text, %{})
      |> assign(:show_stack_detail, false)
      # Plan revision folding state — IDs of plans the user has explicitly
      # toggled open. Active (non-rejected) plans are expanded by default
@@ -433,6 +480,8 @@ defmodule PlatformWeb.TasksLive do
      |> assign(:selected_stack, nil)
      |> assign(:selected_stack_members, [])
      |> assign(:selected_stack_member_review_counts, %{})
+     |> assign_stack_review_state(nil)
+     |> assign(:show_stack_feedback_overlay, false)
      |> assign(:show_stack_detail, false)
      |> push_patch(to: ~p"/tasks/#{task_id}")}
   end
@@ -486,6 +535,8 @@ defmodule PlatformWeb.TasksLive do
          |> assign(:selected_stack, stack)
          |> assign(:selected_stack_members, members)
          |> assign(:selected_stack_member_review_counts, counts)
+         |> assign_stack_review_state(stack)
+         |> assign(:show_stack_feedback_overlay, false)
          |> assign(:show_stack_detail, true)
          # Close the per-task panel so the two slide-ins don't stack.
          |> assign(:selected_task, nil)
@@ -500,7 +551,138 @@ defmodule PlatformWeb.TasksLive do
      |> assign(:selected_stack, nil)
      |> assign(:selected_stack_members, [])
      |> assign(:selected_stack_member_review_counts, %{})
+     |> assign_stack_review_state(nil)
+     |> assign(:show_stack_feedback_overlay, false)
      |> assign(:show_stack_detail, false)}
+  end
+
+  # Stage-3 of task 019e2c27 (Stack-Level Review Rollup): toggle the
+  # rollup-overlay visibility from the chrome "Needs feedback (N)" pill.
+  # The overlay reads from `:selected_stack_open_review_requests` +
+  # `:selected_stack_open_review_canvases`, both maintained by
+  # `assign_stack_review_state/2` on every panel state transition (open,
+  # member status change, PubSub reload). When the user clicks the pill we
+  # refresh the snapshot once more so a long-open panel sees the freshest
+  # data the moment the overlay appears — cheap (it's the same two queries
+  # the pill already runs on PubSub) and removes a stale-state class of
+  # bugs from this surface.
+  def handle_event("open_stack_feedback_overlay", _params, socket) do
+    next = !socket.assigns.show_stack_feedback_overlay
+
+    socket =
+      if next and socket.assigns.selected_stack do
+        assign_stack_review_state(socket, socket.assigns.selected_stack)
+      else
+        socket
+      end
+
+    {:noreply, assign(socket, :show_stack_feedback_overlay, next)}
+  end
+
+  # Stage-3 of task 019e2c27: explicit close handler for the rollup
+  # overlay. Backdrop click + overlay X + close button all wire here so
+  # the dismiss path is one event regardless of the trigger. We only
+  # touch `:show_stack_feedback_overlay` — the stack panel itself stays
+  # open behind the overlay so closing the overlay returns the user
+  # directly to the stack pane.
+  def handle_event("close_stack_feedback_overlay", _params, socket) do
+    {:noreply, reset_stack_feedback_overlay(socket)}
+  end
+
+  # Stage-4 of task 019e2c27: approve a single review item from the stack-
+  # feedback overlay. Reuses `ReviewRequests.approve_item/2` (the same
+  # entry point the per-task review panel uses — `approve_review_item`
+  # handler at ~line 1480), then:
+  #
+  #   1. Optimistically drops the item from
+  #      `:selected_stack_open_review_requests` so the row vanishes
+  #      immediately (the request itself is dropped when its last pending
+  #      item is removed — matches `maybe_resolve_request/1`'s contract).
+  #   2. Decrements `:selected_stack_pending_review_count` only when the
+  #      request itself was resolved (i.e. the optimistic removal dropped
+  #      a whole RR), so the chrome pill mirrors the overlay list.
+  #   3. Server-state convergence still happens via the existing
+  #      `:review_request_resolved` PubSub handler (`reload_selected_stack`
+  #      → `assign_stack_review_state`), so if our optimistic guess is
+  #      off the next broadcast snaps everything back into shape.
+  def handle_event("stack_feedback_approve_item", %{"id" => item_id}, socket) do
+    reviewed_by = socket.assigns[:current_user_id] || "unknown"
+
+    case ReviewRequests.approve_item(item_id, reviewed_by) do
+      {:ok, _item} ->
+        {:noreply, drop_overlay_item(socket, item_id)}
+
+      {:error, _} ->
+        {:noreply, put_flash(socket, :error, "Failed to approve review item.")}
+    end
+  end
+
+  # Stage-4 of task 019e2c27: toggle the reject feedback textarea on a
+  # specific item in the stack-feedback overlay. Mirrors the per-task
+  # `toggle_review_feedback` shape (a MapSet of "open" item ids) but
+  # scoped to the overlay so a row's textarea state does not bleed into
+  # the per-task review panel below.
+  def handle_event("toggle_stack_feedback_reject", %{"id" => item_id}, socket) do
+    open = socket.assigns.stack_feedback_reject_open
+
+    next =
+      if MapSet.member?(open, item_id),
+        do: MapSet.delete(open, item_id),
+        else: MapSet.put(open, item_id)
+
+    {:noreply, assign(socket, :stack_feedback_reject_open, next)}
+  end
+
+  # Stage-4 of task 019e2c27: capture textarea keystrokes for an item's
+  # reject-feedback buffer. Lives in a Map keyed by item id so multiple
+  # rows can be in-flight simultaneously without their drafts colliding.
+  def handle_event(
+        "update_stack_feedback_reject_text",
+        %{"id" => item_id, "value" => text},
+        socket
+      ) do
+    {:noreply,
+     assign(
+       socket,
+       :stack_feedback_reject_text,
+       Map.put(socket.assigns.stack_feedback_reject_text, item_id, text)
+     )}
+  end
+
+  # Stage-4 of task 019e2c27: submit a reject + feedback for a single
+  # review item from the overlay. Reuses `ReviewRequests.reject_item/3`
+  # (same call the per-task `submit_review_feedback` handler makes). On
+  # success applies the same optimistic drop + count decrement as the
+  # approve handler and clears the in-flight draft for this item id; the
+  # `:review_request_resolved` PubSub handler still wins on conflict.
+  def handle_event(
+        "stack_feedback_reject_item",
+        %{"id" => item_id} = params,
+        socket
+      ) do
+    reviewed_by = socket.assigns[:current_user_id] || "unknown"
+
+    feedback =
+      Map.get(params, "feedback") ||
+        Map.get(socket.assigns.stack_feedback_reject_text, item_id, "")
+
+    case ReviewRequests.reject_item(item_id, reviewed_by, feedback) do
+      {:ok, _item} ->
+        {:noreply,
+         socket
+         |> assign(
+           :stack_feedback_reject_open,
+           MapSet.delete(socket.assigns.stack_feedback_reject_open, item_id)
+         )
+         |> assign(
+           :stack_feedback_reject_text,
+           Map.delete(socket.assigns.stack_feedback_reject_text, item_id)
+         )
+         |> drop_overlay_item(item_id)}
+
+      {:error, _} ->
+        {:noreply, put_flash(socket, :error, "Failed to submit feedback.")}
+    end
   end
 
   # Stub abandon handler (T8 stage 1). Calls Stacks.abandon_stack/2 and
@@ -517,6 +699,8 @@ defmodule PlatformWeb.TasksLive do
          |> assign(:selected_stack, nil)
          |> assign(:selected_stack_members, [])
          |> assign(:selected_stack_member_review_counts, %{})
+         |> assign_stack_review_state(nil)
+         |> assign(:show_stack_feedback_overlay, false)
          |> assign(:show_stack_detail, false)
          |> put_flash(:info, "Stack abandoned.")}
 
@@ -544,6 +728,7 @@ defmodule PlatformWeb.TasksLive do
          |> assign(:selected_stack, stack)
          |> assign(:selected_stack_members, members)
          |> assign(:selected_stack_member_review_counts, counts)
+         |> assign_stack_review_state(stack)
          |> put_flash(
            :info,
            "Started planning for #{length(planning)} #{member_word(length(planning))}."
@@ -557,6 +742,7 @@ defmodule PlatformWeb.TasksLive do
          |> assign(:selected_stack, stack)
          |> assign(:selected_stack_members, members)
          |> assign(:selected_stack_member_review_counts, counts)
+         |> assign_stack_review_state(stack)
          |> put_flash(
            :error,
            "Started planning for #{length(planning)} #{member_word(length(planning))}; " <>
@@ -1169,6 +1355,8 @@ defmodule PlatformWeb.TasksLive do
         |> assign(:selected_stack, nil)
         |> assign(:selected_stack_members, [])
         |> assign(:selected_stack_member_review_counts, %{})
+        |> assign_stack_review_state(nil)
+        |> assign(:show_stack_feedback_overlay, false)
         |> assign(:show_stack_detail, false)
 
       %Stack{} = stack ->
@@ -1178,6 +1366,7 @@ defmodule PlatformWeb.TasksLive do
         |> assign(:selected_stack, stack)
         |> assign(:selected_stack_members, members)
         |> assign(:selected_stack_member_review_counts, counts)
+        |> assign_stack_review_state(stack)
     end
   end
 
@@ -1192,6 +1381,114 @@ defmodule PlatformWeb.TasksLive do
     members = stack |> Stacks.members() |> Repo.preload(:plans)
     counts = pending_review_counts(members)
     {members, counts}
+  end
+
+  # Stage-3 of task 019e2c27 (rollup overlay): set the three assigns that
+  # back the stack-feedback chrome pill AND its overlay in one place so the
+  # COUNT (pill) and the LIST (overlay rows) are always derived from the
+  # same snapshot:
+  #
+  #   * `:selected_stack_pending_review_count` — integer powering the pill.
+  #   * `:selected_stack_open_review_requests` — list of `%ReviewRequest{}`
+  #     with `:items` preloaded AND a virtual `:member_task` field carrying
+  #     the owning `%Task{}` (used by the overlay to render the row label
+  #     "{member.title}").
+  #   * `:selected_stack_open_review_canvases` — `%{canvas_id => %Canvas{}}`
+  #     for every canvas referenced by an item, pre-loaded so the template
+  #     stays DB-free.
+  #
+  # Pass `nil` for `stack` to reset all three assigns to empty (closed-
+  # panel state). This is the only path that should touch these assigns
+  # outside the explicit overlay toggle handler.
+  defp assign_stack_review_state(socket, nil) do
+    socket
+    |> sync_stack_review_request_subscriptions(MapSet.new())
+    |> assign(:selected_stack_pending_review_count, 0)
+    |> assign(:selected_stack_open_review_requests, [])
+    |> assign(:selected_stack_open_review_canvases, %{})
+  end
+
+  defp assign_stack_review_state(socket, %Stack{} = stack) do
+    members = Stacks.members(stack)
+    requests = Stacks.list_open_review_requests(stack)
+    members_by_id = Map.new(members, &{&1.id, &1})
+
+    enriched =
+      Enum.map(requests, fn rr ->
+        Map.put(rr, :member_task, Map.get(members_by_id, rr.task_id))
+      end)
+
+    canvases = load_review_canvases(requests)
+
+    socket
+    |> sync_stack_review_request_subscriptions(MapSet.new(members, & &1.id))
+    |> assign(:selected_stack_pending_review_count, length(requests))
+    |> assign(:selected_stack_open_review_requests, enriched)
+    |> assign(:selected_stack_open_review_canvases, canvases)
+  end
+
+  # Stage-5 of task 019e2c27: keep the per-stack-member
+  # review_requests:<task_id> subscription set in sync with the open
+  # stack-detail panel's member set. Subscribes to any member we are not
+  # yet following AND unsubscribes from members that have left the panel
+  # (close, abandon, select_task, member removed via reload). On unsubscribe
+  # we skip task_ids that are ALSO held by the board-level
+  # `:review_request_subscriptions` set so the board's live-update
+  # contract (badges, count badges) is not collateral-damaged when the
+  # stack panel closes. Idempotent: subscribing twice to the same topic
+  # is a no-op in Phoenix.PubSub. No-op on disconnected socket.
+  defp sync_stack_review_request_subscriptions(socket, desired) do
+    if connected?(socket) do
+      current = socket.assigns[:stack_review_request_subscriptions] || MapSet.new()
+      board = socket.assigns[:review_request_subscriptions] || MapSet.new()
+
+      to_add = MapSet.difference(desired, current)
+      to_drop = MapSet.difference(MapSet.difference(current, desired), board)
+
+      Enum.each(to_add, &ReviewRequests.subscribe_for_task/1)
+      Enum.each(to_drop, &ReviewRequests.unsubscribe_for_task/1)
+
+      assign(socket, :stack_review_request_subscriptions, desired)
+    else
+      socket
+    end
+  end
+
+  # Stage-4 of task 019e2c27: full reset of the stack-feedback overlay
+  # surface state. Used by `close_stack_feedback_overlay` and every other
+  # site that drops the overlay (stack panel close, stack abandon, etc.)
+  # so a half-typed reject draft doesn't survive across opens.
+  defp reset_stack_feedback_overlay(socket) do
+    socket
+    |> assign(:show_stack_feedback_overlay, false)
+    |> assign(:stack_feedback_reject_open, MapSet.new())
+    |> assign(:stack_feedback_reject_text, %{})
+  end
+
+  # Stage-4 of task 019e2c27: optimistic per-item removal in the overlay
+  # after an approve / reject lands. Walks
+  # `:selected_stack_open_review_requests`, drops the matching item, and
+  # drops any RR that loses its last item. The pending-review count is
+  # recomputed from the resulting list so the chrome pill mirrors the
+  # overlay's row count exactly. The `:review_request_resolved` PubSub
+  # broadcast still fires from `maybe_resolve_request/1` on the server,
+  # and the existing handler at ~line 1947 runs
+  # `reload_selected_stack/1` (→ `assign_stack_review_state/2`) to
+  # converge on server state, so any optimistic drift is reconciled.
+  defp drop_overlay_item(socket, item_id) do
+    requests = socket.assigns.selected_stack_open_review_requests
+
+    pruned =
+      requests
+      |> Enum.map(fn rr ->
+        items = Enum.reject(rr.items || [], &(&1.id == item_id))
+        Map.put(rr, :items, items)
+      end)
+      |> Enum.reject(&((&1.items || []) == []))
+
+    socket
+    |> assign(:selected_stack_open_review_requests, pruned)
+    |> assign(:selected_stack_pending_review_count, length(pruned))
   end
 
   defp phase_entry(""), do: %{}
@@ -3527,6 +3824,10 @@ defmodule PlatformWeb.TasksLive do
   # Singular/plural "member" for stack-cascade flash summaries.
   defp member_word(1), do: "member"
   defp member_word(_), do: "members"
+
+  # Singular/plural "request" for the stack-feedback overlay header copy.
+  defp request_word(1), do: "request"
+  defp request_word(_), do: "requests"
 
   # Human-readable summary string used in the folded row for a rejected
   # plan revision. When the plan was auto-superseded by a newer revision
