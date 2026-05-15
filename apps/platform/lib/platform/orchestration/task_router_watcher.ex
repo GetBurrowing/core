@@ -127,9 +127,14 @@ defmodule Platform.Orchestration.TaskRouterWatcher do
   Returns true if the given task should have a router running.
   """
   @spec should_run?(map()) :: boolean()
-  def should_run?(%{assignee_type: "agent", assignee_id: aid, status: status})
-      when not is_nil(aid) and status in @active_statuses,
-      do: true
+  def should_run?(%{assignee_type: "agent", assignee_id: aid, status: status} = task)
+      when not is_nil(aid) and status in @active_statuses do
+    # `deleted_at` is present on `%Task{}` structs loaded from the DB and
+    # absent on the plain maps some test helpers and transient PubSub
+    # payloads use. Both "key missing" and "key set to nil" mean "not
+    # deleted"; only an actual timestamp suppresses the router.
+    is_nil(Map.get(task, :deleted_at))
+  end
 
   def should_run?(_), do: false
 
@@ -307,7 +312,8 @@ defmodule Platform.Orchestration.TaskRouterWatcher do
       where:
         t.assignee_type == "agent" and
           not is_nil(t.assignee_id) and
-          t.status in @active_statuses
+          t.status in @active_statuses and
+          is_nil(t.deleted_at)
     )
     |> Repo.all()
   end

@@ -18,7 +18,7 @@ defmodule Platform.Tasks do
   alias Platform.{Artifacts, Context, Execution}
   alias Platform.Context.Session
   alias Platform.Execution.Run
-  alias Platform.Orchestration.{RuntimeSupervision, TaskRouterWatcher}
+  alias Platform.Orchestration.{RuntimeSupervision, TaskRouterSupervisor, TaskRouterWatcher}
   alias Platform.Repo
 
   alias Platform.Tasks.{Epic, Plan, PlanEngine, Project, Stage, Task, Validation}
@@ -60,19 +60,23 @@ defmodule Platform.Tasks do
   # transitions deterministically into `in_progress` via `approve_plan/2`.
 
   @valid_task_transitions %{
-    "backlog" => ~w(planning blocked in_progress stack_pending),
-    "planning" => ~w(in_progress blocked backlog),
-    "in_progress" => ~w(in_review deploying blocked done stack_pending),
+    "backlog" => ~w(planning blocked in_progress stack_pending cancelled),
+    "planning" => ~w(in_progress blocked backlog cancelled),
+    "in_progress" => ~w(in_review deploying blocked done stack_pending cancelled),
     "in_review" => ~w(deploying in_progress blocked),
     "deploying" => ~w(done in_progress blocked),
-    "blocked" => ~w(backlog planning in_progress in_review deploying),
+    "blocked" => ~w(backlog planning in_progress in_review deploying cancelled),
     "done" => ~w(planning),
     # ADR 0041 stack lifecycle: `stack_pending` is the "deps not yet rollup-merged"
     # waiting state. The dispatcher (TaskRouterWatcher) intentionally does NOT
     # treat `stack_pending` as active — see `@active_statuses` there. A
     # `stack_pending` task is promoted to `in_progress` only via the in-stack
     # unblock sweep (`Stacks.try_promote/1`), never directly by the dispatcher.
-    "stack_pending" => ~w(in_progress blocked backlog)
+    "stack_pending" => ~w(in_progress blocked backlog cancelled),
+    # Task 019e24ac stage 3: `cancelled` is an agent-reachable terminal status
+    # for fold/supersede. No outbound transitions — once an agent or operator
+    # cancels a task, it stays cancelled. To revive, create a new task.
+    "cancelled" => []
   }
 
   # ── Projects ─────────────────────────────────────────────────────────────
@@ -216,6 +220,14 @@ defmodule Platform.Tasks do
       |> Repo.update()
       |> case do
         {:ok, deleted} ->
+          # Stage 4: tear down router + lease synchronously so a
+          # soft-deleted task leaves the dispatch queue immediately
+          # instead of waiting on the 5-minute reconcile sweep. Mirrors
+          # the pattern used by `maybe_finalize_transition/3` for the
+          # in_progress→in_review hand-off below.
+          TaskRouterSupervisor.stop_assignment(deleted.id)
+          RuntimeSupervision.abandon_current_lease_for_task(deleted.id, "execution")
+
           broadcast_board({:task_deleted, deleted})
           {:ok, deleted}
 
@@ -435,6 +447,44 @@ defmodule Platform.Tasks do
   end
 
   @doc """
+  List non-deleted tasks, AND-composing whatever filters are supplied.
+
+  Takes an opts keyword list and applies each present filter together in a
+  single query — unlike the legacy single-purpose `list_tasks_by_*`
+  helpers, which can only express one filter at a time. This is the
+  composable entry point the `task_list` MCP handler uses so that, e.g.,
+  `project_id` + `status` together returns only matching-status tasks in
+  that project (no false positives).
+
+  ## Options
+
+    * `:project_id` — scope to a project
+    * `:epic_id` — scope to an epic
+    * `:status` — scope to a task-side status (`t.status`)
+
+  Unrecognized or `nil` options are ignored. With an empty list, returns all
+  non-deleted tasks (equivalent to `list_tasks_by_*` with no filter).
+
+  Note: this is `list_tasks/1` — distinct from the legacy ETS-based
+  `list_tasks/0` read-side below. It is defined without a default argument
+  on purpose so it does not collide with that arity-0 function.
+  """
+  @spec list_tasks(keyword()) :: [Task.t()]
+  def list_tasks(opts) when is_list(opts) do
+    project_id = Keyword.get(opts, :project_id)
+    epic_id = Keyword.get(opts, :epic_id)
+    status = Keyword.get(opts, :status)
+
+    Task
+    |> where([t], is_nil(t.deleted_at))
+    |> maybe_filter_project(project_id)
+    |> maybe_filter_epic(epic_id)
+    |> maybe_filter_status(status)
+    |> order_by([t], desc: t.inserted_at)
+    |> Repo.all()
+  end
+
+  @doc """
   Returns tasks whose `updated_at` falls within the given window.
 
   Used by the Historian's activity digest to surface tasks that changed
@@ -470,10 +520,35 @@ defmodule Platform.Tasks do
       task
       |> Task.changeset(%{status: new_status})
       |> Repo.update()
+      |> case do
+        {:ok, updated} = ok ->
+          maybe_dispatch_teardown(updated, new_status)
+          ok
+
+        error ->
+          error
+      end
     else
       {:error, :invalid_transition}
     end
   end
+
+  # Stage 4: cancellation is terminal (see @valid_task_transitions —
+  # `cancelled` has no outbound edges). Tear down the running router and
+  # any active execution lease synchronously so an agent that flips a
+  # task to `cancelled` removes it from the dispatch queue immediately
+  # instead of leaving a dangling router until the next reconcile sweep.
+  #
+  # Lives here (not just in `maybe_finalize_transition/3`) because the
+  # MCP `task_update` tool calls `transition_task_status/2` directly,
+  # bypassing `transition_task/2`. Both paths need the teardown.
+  defp maybe_dispatch_teardown(%Task{} = task, "cancelled") do
+    TaskRouterSupervisor.stop_assignment(task.id)
+    RuntimeSupervision.abandon_current_lease_for_task(task.id, "execution")
+    :ok
+  end
+
+  defp maybe_dispatch_teardown(_task, _new_status), do: :ok
 
   @doc """
   Resolve the effective deploy strategy for a task.
@@ -905,6 +980,9 @@ defmodule Platform.Tasks do
   defp maybe_filter_epic(query, nil), do: query
   defp maybe_filter_epic(query, id), do: where(query, [t], t.epic_id == ^id)
 
+  defp maybe_filter_status(query, nil), do: query
+  defp maybe_filter_status(query, status), do: where(query, [t], t.status == ^status)
+
   @doc """
   Count tasks currently in progress for a given user.
 
@@ -1233,6 +1311,23 @@ defmodule Platform.Tasks do
     sweep_unblocked_dependents(task)
     maybe_recompute_stack(task)
     maybe_handle_regression(previous, task, "done")
+    :ok
+  end
+
+  # Stage 4: cancellation is terminal (see @valid_task_transitions —
+  # `cancelled` has no outbound edges). The router + lease teardown is
+  # centralized in `transition_task_status/2 → maybe_dispatch_teardown/2`
+  # so it fires for both `transition_task/2` (which lands here via
+  # `transition_with_policy2_freeze`) and the MCP `task_update` path
+  # (which calls `transition_task_status/2` directly). This head still
+  # runs phase/stack/regression housekeeping like any other transition.
+  defp maybe_finalize_transition(%Task{} = previous, %Task{} = task, "cancelled") do
+    if current_phase(previous) != current_phase(task) do
+      maybe_apply_phase_assignee(task)
+    end
+
+    maybe_recompute_stack(task)
+    maybe_handle_regression(previous, task, "cancelled")
     :ok
   end
 

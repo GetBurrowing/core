@@ -257,6 +257,77 @@ defmodule Platform.Federation.ToolSurfaceTest do
       assert length(results) == 2
     end
 
+    test "task_list with project_id AND status composes filters — zero false positives (task 019e24ac)" do
+      project = create_project()
+
+      {:ok, _p1} =
+        Tasks.create_task(%{project_id: project.id, title: "Planning 1", status: "planning"})
+
+      {:ok, _p2} =
+        Tasks.create_task(%{project_id: project.id, title: "Planning 2", status: "planning"})
+
+      for n <- 1..4 do
+        {:ok, _} =
+          Tasks.create_task(%{project_id: project.id, title: "Done #{n}", status: "done"})
+      end
+
+      {:ok, results} =
+        ToolSurface.execute(
+          "task_list",
+          %{"project_id" => project.id, "status" => "planning"},
+          %{}
+        )
+
+      # The old mutually-exclusive `cond` dropped the status filter and
+      # returned all 6 tasks. The composed query returns only the 2 planning.
+      assert length(results) == 2
+      assert Enum.all?(results, &(&1.status == "planning"))
+      assert Enum.all?(results, &(&1.project_id == project.id))
+    end
+
+    test "task_list with epic_id AND status composes filters" do
+      project = create_project()
+      {:ok, epic} = Tasks.create_epic(%{project_id: project.id, name: "Epic E"})
+
+      {:ok, _} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          epic_id: epic.id,
+          title: "Planning",
+          status: "planning"
+        })
+
+      {:ok, _} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          epic_id: epic.id,
+          title: "Done",
+          status: "done"
+        })
+
+      {:ok, results} =
+        ToolSurface.execute(
+          "task_list",
+          %{"epic_id" => epic.id, "status" => "done"},
+          %{}
+        )
+
+      assert length(results) == 1
+      assert Enum.all?(results, &(&1.status == "done"))
+    end
+
+    test "task_list with no filters returns all non-deleted tasks" do
+      project = create_project()
+      {:ok, _} = Tasks.create_task(%{project_id: project.id, title: "Task A"})
+      {:ok, deleted} = Tasks.create_task(%{project_id: project.id, title: "Deleted"})
+      {:ok, _} = Tasks.soft_delete_task(deleted)
+
+      {:ok, results} = ToolSurface.execute("task_list", %{}, %{})
+
+      refute Enum.any?(results, &(&1.id == deleted.id))
+      assert Enum.any?(results, &(&1.project_id == project.id))
+    end
+
     test "task_update changes task fields" do
       project = create_project()
       {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Old title"})
@@ -279,6 +350,163 @@ defmodule Platform.Federation.ToolSurfaceTest do
 
       assert is_list(results)
       assert Enum.any?(results, fn p -> p.name == "Unique Project" end)
+    end
+
+    test "task_update to cancelled succeeds from in_progress (task 019e24ac stage 3)" do
+      # Regression: pre-stage-3 the agent-facing task_update returned
+      # "Invalid status transition from 'in_progress' to 'cancelled'" because
+      # `cancelled` was neither a valid Task.@statuses value nor a target in
+      # @valid_task_transitions. Stage 3 made it the agent-reachable terminal
+      # for fold/supersede; this test pins that the wire path actually flips.
+      project = create_project()
+
+      {:ok, task} =
+        Tasks.create_task(%{project_id: project.id, title: "Doomed", status: "in_progress"})
+
+      {:ok, result} =
+        ToolSurface.execute(
+          "task_update",
+          %{"task_id" => task.id, "status" => "cancelled"},
+          %{}
+        )
+
+      assert result.status == "cancelled"
+      assert Tasks.get_task_record(task.id).status == "cancelled"
+    end
+
+    test "task_update to cancelled succeeds from planning (the ghost-task path)" do
+      project = create_project()
+
+      {:ok, task} =
+        Tasks.create_task(%{project_id: project.id, title: "Never approved", status: "planning"})
+
+      {:ok, result} =
+        ToolSurface.execute(
+          "task_update",
+          %{"task_id" => task.id, "status" => "cancelled"},
+          %{}
+        )
+
+      assert result.status == "cancelled"
+    end
+
+    test "task_update from cancelled to anything else returns invalid-transition error" do
+      project = create_project()
+
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Already retired",
+          status: "cancelled"
+        })
+
+      {:error, error} =
+        ToolSurface.execute(
+          "task_update",
+          %{"task_id" => task.id, "status" => "in_progress"},
+          %{}
+        )
+
+      assert error.recoverable == true
+      assert error.error =~ "Invalid status transition from 'cancelled' to 'in_progress'"
+    end
+
+    test "task_list with status: 'cancelled' surfaces only cancelled tasks (stage 6 round-trip)" do
+      # Stage 3 made `cancelled` an agent-reachable terminal status; this
+      # asserts the tool-surface reverse direction — once a task is in
+      # `cancelled`, the wire-level task_list can find it by status. Without
+      # this an agent has no way to enumerate the cancelled (folded /
+      # superseded) tasks it just retired, which would push them off the
+      # list-tools surface entirely.
+      project = create_project()
+
+      {:ok, _live} =
+        Tasks.create_task(%{project_id: project.id, title: "Live", status: "in_progress"})
+
+      {:ok, cancelled1} =
+        Tasks.create_task(%{project_id: project.id, title: "Folded 1", status: "cancelled"})
+
+      {:ok, cancelled2} =
+        Tasks.create_task(%{project_id: project.id, title: "Folded 2", status: "cancelled"})
+
+      {:ok, results} =
+        ToolSurface.execute(
+          "task_list",
+          %{"project_id" => project.id, "status" => "cancelled"},
+          %{}
+        )
+
+      assert length(results) == 2
+      assert Enum.all?(results, &(&1.status == "cancelled"))
+      result_ids = Enum.map(results, & &1.id) |> MapSet.new()
+      assert MapSet.equal?(result_ids, MapSet.new([cancelled1.id, cancelled2.id]))
+    end
+
+    test "task_list composes project_id + epic_id + status as a three-way AND (stage 6 lock-in)" do
+      # Stage 2 fixed the two-filter `cond`; stage 6 pins the three-way
+      # composition at the MCP boundary so a future refactor of the
+      # tool_surface arg-stitching can't silently drop one of the three
+      # filters. We seed deliberate near-misses for each axis.
+      project = create_project()
+      other_project = create_project()
+
+      {:ok, epic} = Tasks.create_epic(%{project_id: project.id, name: "Target Epic"})
+      {:ok, other_epic} = Tasks.create_epic(%{project_id: project.id, name: "Other Epic"})
+
+      # The one row that matches all three filters.
+      {:ok, target} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          epic_id: epic.id,
+          title: "Target",
+          status: "planning"
+        })
+
+      # Same epic, same project, wrong status.
+      {:ok, _wrong_status} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          epic_id: epic.id,
+          title: "Wrong status",
+          status: "done"
+        })
+
+      # Same project, same status, wrong epic.
+      {:ok, _wrong_epic} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          epic_id: other_epic.id,
+          title: "Wrong epic",
+          status: "planning"
+        })
+
+      # Same epic id is project-scoped, so a cross-project leak via epic_id
+      # alone isn't really possible — but a row in the wrong project with
+      # the same status is, and we want to make sure project_id holds.
+      {:ok, _wrong_project} =
+        Tasks.create_task(%{
+          project_id: other_project.id,
+          title: "Wrong project",
+          status: "planning"
+        })
+
+      {:ok, results} =
+        ToolSurface.execute(
+          "task_list",
+          %{
+            "project_id" => project.id,
+            "epic_id" => epic.id,
+            "status" => "planning"
+          },
+          %{}
+        )
+
+      assert length(results) == 1
+      [only] = results
+      assert only.id == target.id
+      assert only.status == "planning"
+      assert only.epic_id == epic.id
+      assert only.project_id == project.id
     end
 
     test "task_update sets deploy_target so the deploying-phase dispatch can pin a target" do

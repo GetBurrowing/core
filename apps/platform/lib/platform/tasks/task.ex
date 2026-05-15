@@ -5,7 +5,13 @@ defmodule Platform.Tasks.Task do
   @primary_key {:id, Platform.Types.UUIDv7, autogenerate: true}
   @foreign_key_type :binary_id
 
-  @statuses ~w(backlog planning in_progress in_review deploying done blocked stack_pending)
+  # `cancelled` (task 019e24ac stage 3) is an agent-reachable terminal status
+  # for fold/supersede paths so a non-started task does not have to be walked
+  # through `in_progress` (which would spawn dispatchers) just to retire it.
+  # Terminal: see `@valid_task_transitions` in `Platform.Tasks` — `cancelled`
+  # has `[]` outbound. Soft-deletable: a cancelled task remains in
+  # `@deletable_statuses` so the UI can still fold it.
+  @statuses ~w(backlog planning in_progress in_review deploying done blocked stack_pending cancelled)
   @priorities ~w(low medium high critical)
 
   # Per-phase assignee keys. Order matches the natural lifecycle progression.
@@ -49,7 +55,7 @@ defmodule Platform.Tasks.Task do
   def priorities, do: @priorities
   def phases, do: @phases
 
-  @deletable_statuses ~w(backlog planning blocked done stack_pending)
+  @deletable_statuses ~w(backlog planning blocked done stack_pending cancelled)
   def deletable_statuses, do: @deletable_statuses
 
   def deletable?(%__MODULE__{status: status}), do: status in @deletable_statuses

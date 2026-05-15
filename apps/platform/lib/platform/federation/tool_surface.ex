@@ -2303,7 +2303,9 @@ defmodule Platform.Federation.ToolSurface do
                error: "Cannot transition task from '#{task.status}' to 'done'",
                recoverable: false,
                suggestion:
-                 "Check the task's current status — only in_progress and in_review can move to done"
+                 "Check the task's current status — only in_progress and deploying can move to done. " <>
+                   "If you want to retire a non-started task instead, use task_update with status='cancelled' " <>
+                   "(terminal, allowed from backlog/planning/in_progress/blocked/stack_pending)."
              }}
 
           {:error, changeset} ->
@@ -2318,20 +2320,19 @@ defmodule Platform.Federation.ToolSurface do
   end
 
   def execute("task_list", args, _context) do
-    tasks =
-      cond do
-        project_id = Map.get(args, "project_id") ->
-          Tasks.list_tasks_by_project(project_id)
+    # Compose every supplied filter together — passing project_id and status
+    # both must AND, not pick one branch. The old `cond` was mutually
+    # exclusive and silently dropped the status filter when project_id was
+    # also present, producing false positives.
+    opts =
+      [
+        project_id: Map.get(args, "project_id"),
+        epic_id: Map.get(args, "epic_id"),
+        status: Map.get(args, "status")
+      ]
+      |> Enum.reject(fn {_k, v} -> is_nil(v) end)
 
-        epic_id = Map.get(args, "epic_id") ->
-          Tasks.list_tasks_by_epic(epic_id)
-
-        status = Map.get(args, "status") ->
-          Tasks.list_tasks_by_status(status)
-
-        true ->
-          Tasks.list_all_tasks()
-      end
+    tasks = Tasks.list_tasks(opts)
 
     {:ok, Enum.map(tasks, &serialize_task/1)}
   end
@@ -2400,7 +2401,11 @@ defmodule Platform.Federation.ToolSurface do
              %{
                error: "Invalid status transition from '#{task.status}' to '#{status_change}'",
                recoverable: true,
-               suggestion: "Check allowed transitions for the current status"
+               suggestion:
+                 "Check allowed transitions for the current status. " <>
+                   "To retire a non-started task without walking it through in_progress, " <>
+                   "transition to 'cancelled' (terminal, allowed from backlog/planning/" <>
+                   "in_progress/blocked/stack_pending)."
              }}
 
           {:error, changeset} ->

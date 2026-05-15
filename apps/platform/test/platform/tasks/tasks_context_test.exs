@@ -117,6 +117,124 @@ defmodule Platform.Tasks.TasksContextTest do
     end
   end
 
+  describe "list_tasks/1 composable filters (task 019e24ac — Obs 2 false positives)" do
+    setup do
+      {:ok, project} = Tasks.create_project(%{name: "Filter Compose"})
+      {:ok, other_project} = Tasks.create_project(%{name: "Other Project"})
+      {:ok, epic} = Tasks.create_epic(%{project_id: project.id, name: "Compose Epic"})
+
+      # 2 planning + 4 done in `project` — mirrors the parent ticket's repro.
+      planning =
+        for n <- 1..2 do
+          {:ok, t} =
+            Tasks.create_task(%{
+              project_id: project.id,
+              epic_id: epic.id,
+              title: "Planning #{n}",
+              status: "planning"
+            })
+
+          t
+        end
+
+      done =
+        for n <- 1..4 do
+          {:ok, t} =
+            Tasks.create_task(%{
+              project_id: project.id,
+              epic_id: epic.id,
+              title: "Done #{n}",
+              status: "done"
+            })
+
+          t
+        end
+
+      # A planning task in a different project — must not leak into a
+      # project-scoped query.
+      {:ok, other_planning} =
+        Tasks.create_task(%{
+          project_id: other_project.id,
+          title: "Other planning",
+          status: "planning"
+        })
+
+      %{
+        project: project,
+        other_project: other_project,
+        epic: epic,
+        planning: planning,
+        done: done,
+        other_planning: other_planning
+      }
+    end
+
+    test "project_id + status compose — zero false positives", %{
+      project: project,
+      planning: planning
+    } do
+      result = Tasks.list_tasks(project_id: project.id, status: "planning")
+
+      # Exactly the 2 planning tasks in this project — none of the 4 done.
+      assert length(result) == 2
+      assert Enum.all?(result, &(&1.status == "planning"))
+      assert Enum.all?(result, &(&1.project_id == project.id))
+      assert MapSet.new(result, & &1.id) == MapSet.new(planning, & &1.id)
+    end
+
+    test "project_id + status does not leak tasks from other projects", %{
+      project: project,
+      other_planning: other_planning
+    } do
+      result = Tasks.list_tasks(project_id: project.id, status: "planning")
+      refute Enum.any?(result, &(&1.id == other_planning.id))
+    end
+
+    test "epic_id + status compose", %{epic: epic, planning: planning} do
+      result = Tasks.list_tasks(epic_id: epic.id, status: "planning")
+      assert length(result) == 2
+      assert MapSet.new(result, & &1.id) == MapSet.new(planning, & &1.id)
+    end
+
+    test "project_id alone returns every non-deleted task in the project", %{
+      project: project
+    } do
+      result = Tasks.list_tasks(project_id: project.id)
+      assert length(result) == 6
+      assert Enum.all?(result, &(&1.project_id == project.id))
+    end
+
+    test "status alone returns matching tasks across all projects", %{
+      planning: planning,
+      other_planning: other_planning
+    } do
+      result = Tasks.list_tasks(status: "planning")
+      ids = MapSet.new(result, & &1.id)
+      assert Enum.all?(result, &(&1.status == "planning"))
+      assert Enum.all?(planning, &MapSet.member?(ids, &1.id))
+      assert MapSet.member?(ids, other_planning.id)
+    end
+
+    test "empty opts returns all non-deleted tasks", %{project: project} do
+      result = Tasks.list_tasks([])
+      # 6 in `project` + 1 in `other_project`.
+      assert length(result) >= 7
+      assert Enum.all?(result, &is_nil(&1.deleted_at))
+      assert Enum.any?(result, &(&1.project_id == project.id))
+    end
+
+    test "soft-deleted tasks are excluded even when filters match", %{
+      project: project,
+      planning: [to_delete | _]
+    } do
+      {:ok, _} = Tasks.soft_delete_task(to_delete)
+
+      result = Tasks.list_tasks(project_id: project.id, status: "planning")
+      assert length(result) == 1
+      refute Enum.any?(result, &(&1.id == to_delete.id))
+    end
+  end
+
   describe "count_in_progress_for_user/1 (mobile bottom-nav badge — task 019e1322)" do
     setup do
       {:ok, project} = Tasks.create_project(%{name: "Badge Test"})

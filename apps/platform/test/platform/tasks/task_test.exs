@@ -94,6 +94,68 @@ defmodule Platform.Tasks.TaskTest do
     end
   end
 
+  describe "cancelled terminal status (task 019e24ac stage 3)" do
+    test "create_task/1 accepts cancelled as a valid initial status", %{project: project} do
+      assert {:ok, task} =
+               Tasks.create_task(%{
+                 project_id: project.id,
+                 title: "Born cancelled",
+                 status: "cancelled"
+               })
+
+      assert task.status == "cancelled"
+    end
+
+    test "Task.deletable?/1 says cancelled is soft-deletable", %{project: project} do
+      {:ok, task} =
+        Tasks.create_task(%{project_id: project.id, title: "T", status: "cancelled"})
+
+      assert Task.deletable?(task)
+      assert "cancelled" in Task.deletable_statuses()
+    end
+
+    for source <- ~w(backlog planning in_progress blocked stack_pending) do
+      test "transition #{source} -> cancelled is allowed", %{project: project} do
+        {:ok, task} =
+          Tasks.create_task(%{project_id: project.id, title: "T", status: unquote(source)})
+
+        assert {:ok, updated} = Tasks.transition_task_status(task, "cancelled")
+        assert updated.status == "cancelled"
+      end
+    end
+
+    test "transition in_review -> cancelled is rejected (not in allowed sources)", %{
+      project: project
+    } do
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "T", status: "in_review"})
+      assert {:error, :invalid_transition} = Tasks.transition_task_status(task, "cancelled")
+    end
+
+    test "transition deploying -> cancelled is rejected (would orphan a deploy in flight)", %{
+      project: project
+    } do
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "T", status: "deploying"})
+      assert {:error, :invalid_transition} = Tasks.transition_task_status(task, "cancelled")
+    end
+
+    test "transition done -> cancelled is rejected (done is its own terminal)", %{
+      project: project
+    } do
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "T", status: "done"})
+      assert {:error, :invalid_transition} = Tasks.transition_task_status(task, "cancelled")
+    end
+
+    test "cancelled is terminal — no outbound transitions allowed", %{project: project} do
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "T", status: "cancelled"})
+
+      for target <-
+            ~w(backlog planning in_progress in_review deploying done blocked stack_pending) do
+        assert {:error, :invalid_transition} = Tasks.transition_task_status(task, target),
+               "expected cancelled -> #{target} to be rejected, but it succeeded"
+      end
+    end
+  end
+
   describe "transition_task/2" do
     test "reopens a failed manual approval gate and abandons stale execution lease before moving back to in_review",
          %{project: project} do
@@ -346,6 +408,118 @@ defmodule Platform.Tasks.TaskTest do
       {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Filter Status"})
       {:ok, _} = Tasks.soft_delete_task(task)
       refute Enum.any?(Tasks.list_tasks_by_status("backlog"), &(&1.id == task.id))
+    end
+
+    # Stage 4: soft-delete must tear down any active execution lease
+    # synchronously so the task disappears from the dispatch queue
+    # immediately, not on the next 5-minute reconcile. (Router teardown
+    # is exercised in task_router_watcher_test.exs which is async: false
+    # — TaskRouterSupervisor is a singleton, incompatible with this
+    # async: true file.)
+    test "abandons the active execution lease synchronously", %{project: project} do
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Has Lease",
+          status: "backlog"
+        })
+
+      runtime_id = "runtime-soft-delete-lease-#{System.unique_integer([:positive])}"
+
+      {:ok, _event} =
+        RuntimeSupervision.record_event(%{
+          "task_id" => task.id,
+          "phase" => "execution",
+          "runtime_id" => runtime_id,
+          "event_type" => "execution.started"
+        })
+
+      lease_before = RuntimeSupervision.current_lease_for_task_runtime(task.id, runtime_id)
+      assert lease_before != nil
+      assert lease_before.status in ["active", "blocked"]
+
+      assert {:ok, _} = Tasks.soft_delete_task(task)
+
+      lease_after = RuntimeSupervision.current_lease_for_task_runtime(task.id, runtime_id)
+
+      assert lease_after == nil,
+             "soft_delete_task/1 must abandon any active execution lease inline " <>
+               "(current_lease_for_task_runtime filters out abandoned leases)"
+    end
+  end
+
+  # Stage 4: cancellation is a terminal status (added in stage 3). The
+  # transition path — both `transition_task_status/2` (used by the MCP
+  # `task_update` tool) and `transition_task/2` (used by internal
+  # callers) — must tear down the running router and any active lease
+  # synchronously so a cancelled task leaves the dispatch queue at once
+  # instead of waiting on the next 5-minute reconcile.
+  #
+  # Router teardown lives in task_router_watcher_test.exs (async: false)
+  # because TaskRouterSupervisor is a singleton; here we cover the lease
+  # half, which is safe under async: true.
+  describe "cancellation teardown (stage 4)" do
+    test "transition_task_status to 'cancelled' abandons the active execution lease", %{
+      project: project
+    } do
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Will Cancel With Lease",
+          status: "in_progress"
+        })
+
+      runtime_id = "runtime-cancel-lease-#{System.unique_integer([:positive])}"
+
+      {:ok, _event} =
+        RuntimeSupervision.record_event(%{
+          "task_id" => task.id,
+          "phase" => "execution",
+          "runtime_id" => runtime_id,
+          "event_type" => "execution.started"
+        })
+
+      lease_before = RuntimeSupervision.current_lease_for_task_runtime(task.id, runtime_id)
+      assert lease_before != nil
+      assert lease_before.status in ["active", "blocked"]
+
+      assert {:ok, cancelled} = Tasks.transition_task_status(task, "cancelled")
+      assert cancelled.status == "cancelled"
+
+      lease_after = RuntimeSupervision.current_lease_for_task_runtime(task.id, runtime_id)
+
+      assert lease_after == nil,
+             "transition to 'cancelled' must abandon any active execution lease inline " <>
+               "(current_lease_for_task_runtime filters out abandoned leases)"
+    end
+
+    test "non-cancelled transitions do NOT abandon the active lease", %{project: project} do
+      # Sanity check: the teardown is gated on new_status == 'cancelled'.
+      # A backlog → planning move must leave the lease intact.
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Stay Active",
+          status: "backlog"
+        })
+
+      runtime_id = "runtime-keep-lease-#{System.unique_integer([:positive])}"
+
+      {:ok, _event} =
+        RuntimeSupervision.record_event(%{
+          "task_id" => task.id,
+          "phase" => "execution",
+          "runtime_id" => runtime_id,
+          "event_type" => "execution.started"
+        })
+
+      assert RuntimeSupervision.current_lease_for_task_runtime(task.id, runtime_id) != nil
+
+      assert {:ok, _} = Tasks.transition_task_status(task, "planning")
+
+      lease_after = RuntimeSupervision.current_lease_for_task_runtime(task.id, runtime_id)
+      assert lease_after != nil
+      assert lease_after.status in ["active", "blocked"]
     end
   end
 

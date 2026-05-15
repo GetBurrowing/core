@@ -95,6 +95,39 @@ defmodule Platform.Orchestration.TaskRouterWatcherTest do
       task = %{assignee_type: nil, assignee_id: nil, status: "in_progress"}
       assert TaskRouterWatcher.should_run?(task) == false
     end
+
+    # Stage 4: a soft-deleted task is gone from the dispatch queue even
+    # if its other fields would otherwise qualify (active status + agent
+    # assignee). This was the root cause of the two ghost routers in
+    # task 019e24ac — the watcher kept rebooting them on every reconcile.
+    test "returns false for soft-deleted task with otherwise-active fields" do
+      task = %{
+        assignee_type: "agent",
+        assignee_id: "some-uuid",
+        status: "in_progress",
+        deleted_at: DateTime.utc_now()
+      }
+
+      assert TaskRouterWatcher.should_run?(task) == false
+    end
+
+    test "returns true for live task carrying an explicit nil deleted_at" do
+      task = %{
+        assignee_type: "agent",
+        assignee_id: "some-uuid",
+        status: "in_progress",
+        deleted_at: nil
+      }
+
+      assert TaskRouterWatcher.should_run?(task) == true
+    end
+
+    # Stage 4 + stage 3: `cancelled` is terminal and not in @active_statuses,
+    # so the existing status guard already excludes it. Lock that in.
+    test "returns false for cancelled task" do
+      task = %{assignee_type: "agent", assignee_id: "some-uuid", status: "cancelled"}
+      assert TaskRouterWatcher.should_run?(task) == false
+    end
   end
 
   # ── router_running?/1 ─────────────────────────────────────────────────
@@ -264,6 +297,200 @@ defmodule Platform.Orchestration.TaskRouterWatcherTest do
 
       # Orphaned router should be stopped since task is in backlog
       assert TaskRouterWatcher.router_running?(task.id) == false
+    end
+
+    # Stage 4: this is the regression test for the "ghost router"
+    # leak. Before stage 4, list_should_run_tasks/0 ignored
+    # `deleted_at`, so the watcher kept rebooting routers for tasks
+    # that the UI had soft-deleted weeks earlier (see ghost task ids
+    # 019df569-028c-704a-acb4-00b7d096f430 and
+    # 019df569-6051-7fa9-a638-9bc88dcce694 in the audit).
+    test "reconcile stops orphaned routers for soft-deleted tasks (ghost-router leak)", %{
+      task: task
+    } do
+      fake_assignee = %{
+        type: :federated,
+        id: "runtime-ghost-#{System.unique_integer([:positive])}"
+      }
+
+      # Put the task into a state that would normally keep its router alive:
+      # active status (in_progress) and an agent assignee.
+      {:ok, active} =
+        Tasks.update_task(task, %{
+          status: "in_progress",
+          assignee_type: "agent",
+          assignee_id: Ecto.UUID.generate()
+        })
+
+      {:ok, _pid} = TaskRouterSupervisor.start_assignment(active.id, fake_assignee)
+      assert TaskRouterWatcher.router_running?(active.id) == true
+
+      # Soft-delete the task directly via Repo so we exercise the
+      # watcher's DB query path (not the synchronous teardown in
+      # soft_delete_task/1, which is tested separately in task_test.exs).
+      Repo.update_all(
+        from(t in Platform.Tasks.Task, where: t.id == ^active.id),
+        set: [deleted_at: DateTime.utc_now()]
+      )
+
+      # Router is still running (we bypassed the synchronous teardown
+      # path), so reconcile must catch it.
+      assert TaskRouterWatcher.router_running?(active.id) == true
+
+      watcher_pid = Process.whereis(TaskRouterWatcher)
+      send(watcher_pid, :reconcile)
+      Process.sleep(300)
+
+      assert TaskRouterWatcher.router_running?(active.id) == false
+    end
+
+    # Stage 6: parallel of the soft-deleted reconcile sweep above, but for
+    # the `cancelled` terminal status. Stage 4 covered the inline teardown
+    # path (transition_task_status -> cancelled stops the router
+    # synchronously); this test exercises the FALLBACK reconcile path for
+    # rows that landed in `cancelled` without going through the inline
+    # teardown (e.g. the cleanup_ghost_tasks Mix task batch-updates rows
+    # via `Repo.update_all`, which bypasses the broadcast hook the watcher
+    # listens on, so the next reconcile is what actually retires the
+    # router). Without the cancelled predicate in list_should_run_tasks
+    # these would loop indefinitely.
+    test "reconcile stops orphaned routers for cancelled tasks (terminal-status leak)", %{
+      task: task
+    } do
+      fake_assignee = %{
+        type: :federated,
+        id: "runtime-cancelled-reconcile-#{System.unique_integer([:positive])}"
+      }
+
+      # Active state with an agent assignee — this is what would normally
+      # keep the router alive across reconcile sweeps.
+      {:ok, active} =
+        Tasks.update_task(task, %{
+          status: "in_progress",
+          assignee_type: "agent",
+          assignee_id: Ecto.UUID.generate()
+        })
+
+      {:ok, _pid} = TaskRouterSupervisor.start_assignment(active.id, fake_assignee)
+      assert TaskRouterWatcher.router_running?(active.id) == true
+
+      # Flip the row to `cancelled` directly via Repo so we bypass the
+      # synchronous teardown path in transition_task_status/2 and exercise
+      # the reconcile sweep instead.
+      Repo.update_all(
+        from(t in Platform.Tasks.Task, where: t.id == ^active.id),
+        set: [status: "cancelled"]
+      )
+
+      # Router is still running (we bypassed the broadcast hook), so
+      # reconcile must catch it.
+      assert TaskRouterWatcher.router_running?(active.id) == true
+
+      watcher_pid = Process.whereis(TaskRouterWatcher)
+      send(watcher_pid, :reconcile)
+      Process.sleep(300)
+
+      assert TaskRouterWatcher.router_running?(active.id) == false
+    end
+  end
+
+  # ── Stage 4 synchronous teardown (soft-delete + cancel) ────────────────
+  #
+  # The two paths that retire a task from the dispatch queue —
+  # `Tasks.soft_delete_task/1` and `Tasks.transition_task_status/2`
+  # with new_status == "cancelled" — must stop the running TaskRouter
+  # synchronously so the task is gone from `Registry` immediately,
+  # not on the next 5-minute reconcile sweep. Lives in this file
+  # (not task_test.exs) because TaskRouterSupervisor is a singleton
+  # that's incompatible with task_test.exs's async: true configuration.
+
+  describe "synchronous router teardown (stage 4)" do
+    test "soft_delete_task/1 stops the running router inline", %{task: task} do
+      fake_assignee = %{
+        type: :federated,
+        id: "runtime-soft-delete-router-#{System.unique_integer([:positive])}"
+      }
+
+      {:ok, pid} = TaskRouterSupervisor.start_assignment(task.id, fake_assignee)
+      ref = Process.monitor(pid)
+      assert TaskRouterWatcher.router_running?(task.id) == true
+
+      # Let the router's async :dispatch tick finish before we yank the
+      # task out from under it — otherwise its inflight Task.Supervised
+      # preload work outlives the test pid and orphans a sandbox
+      # connection, crashing the next test in the file.
+      Process.sleep(150)
+
+      assert {:ok, _} = Tasks.soft_delete_task(task)
+
+      # Wait for the router pid to actually go DOWN before exiting.
+      assert_receive {:DOWN, ^ref, :process, ^pid, _reason}, 1_000
+      Process.sleep(100)
+
+      refute TaskRouterWatcher.router_running?(task.id),
+             "soft_delete_task/1 must stop the TaskRouter inline, not wait on reconcile"
+    end
+
+    test "transition to 'cancelled' stops the running router inline", %{project: project} do
+      # Create a task already in an @active_status (planning) so we
+      # can transition it directly to cancelled in one step. Going
+      # through a chain of transitions broadcasts intermediate
+      # task_updated events to the watcher and races the test.
+      {:ok, planning_task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Cancellable",
+          status: "planning"
+        })
+
+      fake_assignee = %{
+        type: :federated,
+        id: "runtime-cancel-router-#{System.unique_integer([:positive])}"
+      }
+
+      {:ok, pid} = TaskRouterSupervisor.start_assignment(planning_task.id, fake_assignee)
+      ref = Process.monitor(pid)
+      assert TaskRouterWatcher.router_running?(planning_task.id) == true
+
+      # See note in soft_delete test above — let the router's async
+      # :dispatch tick finish before yanking the task.
+      Process.sleep(150)
+
+      assert {:ok, cancelled} = Tasks.transition_task_status(planning_task, "cancelled")
+      assert cancelled.status == "cancelled"
+
+      assert_receive {:DOWN, ^ref, :process, ^pid, _reason}, 1_000
+      Process.sleep(100)
+
+      refute TaskRouterWatcher.router_running?(planning_task.id),
+             "transition to 'cancelled' must stop the TaskRouter inline"
+    end
+
+    test "non-cancellation transitions leave the router alone", %{task: task} do
+      # Sanity check: the teardown is gated on new_status == 'cancelled'.
+      fake_assignee = %{
+        type: :federated,
+        id: "runtime-keep-router-#{System.unique_integer([:positive])}"
+      }
+
+      {:ok, pid} = TaskRouterSupervisor.start_assignment(task.id, fake_assignee)
+      ref = Process.monitor(pid)
+      assert TaskRouterWatcher.router_running?(task.id) == true
+
+      # See note in soft_delete test above — let the router's async
+      # :dispatch tick finish before transitioning.
+      Process.sleep(150)
+
+      assert {:ok, _} = Tasks.transition_task_status(task, "planning")
+
+      assert TaskRouterWatcher.router_running?(task.id) == true,
+             "non-cancellation transitions must leave the router alone"
+
+      # Cleanly stop and wait so we don't leak the sandbox connection
+      # to the next test (see note in soft_delete test above).
+      TaskRouterSupervisor.stop_assignment(task.id)
+      assert_receive {:DOWN, ^ref, :process, ^pid, _reason}, 1_000
+      Process.sleep(100)
     end
   end
 
