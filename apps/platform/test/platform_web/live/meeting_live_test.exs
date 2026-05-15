@@ -807,8 +807,8 @@ defmodule PlatformWeb.MeetingLiveTest do
         assert html =~ ~s(data-pane="bottom-strip"),
                "bottom strip unmounted after switching to #{mode}"
 
-        assert html =~ ~s(data-placeholder="participant-rail"),
-               "participant-rail placeholder unmounted after switching to #{mode}"
+        assert html =~ ~s(data-component="participant-rail"),
+               "participant rail unmounted after switching to #{mode}"
       end
     end
   end
