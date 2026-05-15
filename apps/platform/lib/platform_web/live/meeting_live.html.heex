@@ -1,19 +1,24 @@
 <%!--
-  MeetingLive — meeting shell + embedded chat panel placeholder
-  (ADR 0042, task 019e2475-87a8 stage 1).
+  MeetingLive — meeting shell + stage-mode switcher + embedded chat panel
+  (ADR 0042).
 
   Meetings UI defaults to LIGHT mode (`data-theme="light"` on the root
-  wrapper).
+  wrapper). Video-tile gradients stay dark INSIDE the tiles — those
+  represent video feeds, not chrome.
 
-  Embedding strategy chosen for the chat panel: option (b), live_render
-  of `PlatformWeb.MeetingChatPanelLive` with the meeting's chat space
-  slug passed via session. See the @moduledoc on `PlatformWeb.MeetingLive`
-  for the rationale.
+  THIS task (019e2474-bc7c) ships:
+    * the active stage-mode segmented control (top bar)
+    * the four center-stage renderers: Canvas / Screen / Gallery /
+      Whiteboard (`data-stage-mode` attribute drives renderer selection
+      and is the e2e/test contract — keep it stable).
 
-  PLACEHOLDER slots for sibling stack members (this branch ships the
-  chat panel only):
+  Sibling stack member 019e2475-87a8 ships the embedded chat panel
+  (right pane via `MeetingChatPanelLive`, the mobile drawer toggle, the
+  intent-panel-host migration hook). That surface is preserved
+  byte-identical for clean rollup.
+
+  PLACEHOLDER slots for sibling stack members:
     * left rail        → 019e2475-4395 (sectioned participant list)
-    * center stage     → 019e2474-bc7c (stage-mode renderers)
     * bottom strip     → 019e2475-0037 (video tiles)
 --%>
 <%= if @meeting do %>
@@ -28,27 +33,33 @@
 
       <div class="flex-1"></div>
 
-      <%!-- Segmented-control STUB. The actual mode-switcher logic ships
-           in sibling 019e2474-bc7c; this renders the disabled skeleton
-           + hero-icon labels so the layout settles. Active state keys
-           off @current_stage_mode. --%>
+      <%!-- Stage-mode segmented control (ADR 0042). Four hero-icon buttons;
+           clicking one pushes `set_stage_mode` with the target mode and
+           the LV swaps `@current_stage_mode`. The active button gets the
+           daisyui segmented-active treatment (`bg-base-200 text-primary`);
+           switching is pure presentation — the other modes' underlying
+           state is untouched. The control wraps/scrolls on narrow
+           viewports so it never overflows the top bar. --%>
       <div
-        class="join"
+        class="join flex-shrink-0 overflow-x-auto"
         role="group"
         aria-label="Stage mode"
-        data-stage-mode-control="stub"
+        data-stage-mode-control="active"
       >
         <button
           :for={mode <- @stage_modes}
           type="button"
-          disabled
+          phx-click="set_stage_mode"
+          phx-value-mode={mode}
           aria-label={stage_mode_label(mode)}
           aria-pressed={to_string(@current_stage_mode == mode)}
           title={stage_mode_label(mode)}
+          data-stage-mode-button={mode}
+          data-active={to_string(@current_stage_mode == mode)}
           class={[
-            "join-item btn btn-sm gap-1.5 border-base-300",
+            "join-item btn btn-sm min-h-11 gap-1.5 border-base-300",
             if(@current_stage_mode == mode,
-              do: "btn-primary",
+              do: "bg-base-200 text-primary",
               else: "btn-ghost text-base-content/60"
             )
           ]}
@@ -58,7 +69,7 @@
         </button>
       </div>
 
-      <%!-- Chat-panel toggle (stage 3). Mobile-only — `lg:hidden`.
+      <%!-- Chat-panel toggle (sibling stage 3). Mobile-only — `lg:hidden`.
            On desktop the right column is always visible (`hidden
            lg:flex` on the aside) so the toggle would be a no-op there.
            Hero-icon only (no emoji) per the intent-panel-host
@@ -81,43 +92,212 @@
     <%!-- ── Body: left rail + center stage + chat panel ─────────────────── --%>
     <div class="flex min-h-0 flex-1">
       <%!-- Left rail PLACEHOLDER. Sibling 019e2475-4395 fills this with
-           the sectioned participant list. --%>
+           the sectioned participant list. This shell shows a bare
+           scaffold list of the bound participants so Gallery-mode
+           tile-vs-rail invariants are testable pre-rollup. --%>
       <aside
         class="hidden w-60 flex-shrink-0 flex-col border-r border-base-300 bg-base-200/40 lg:flex"
         data-pane="left-rail"
       >
-        <div
-          class="flex h-full items-center justify-center text-xs text-base-content/40"
-          data-placeholder="left-rail"
-        >
-          <span class="hero-user-group size-5"></span>
-          <span class="ml-2">Participant rail (sibling stack member).</span>
+        <div class="flex items-center gap-2 border-b border-base-300 px-3 py-2">
+          <span class="hero-user-group size-4 text-base-content/60"></span>
+          <span class="text-xs font-semibold uppercase tracking-widest text-base-content/50">
+            Participants
+          </span>
+          <span class="ml-auto text-xs text-base-content/40">
+            {length(assigns[:participants] || [])}
+          </span>
         </div>
+        <%!-- PLACEHOLDER (sibling 019e2475-4395): bare participant list.
+             Mic state, host badge, muted, speaking highlight, and agent
+             role/provider chips are all that sibling's job. --%>
+        <ul class="min-h-0 flex-1 overflow-y-auto px-2 py-2" data-placeholder="participant-rail">
+          <li
+            :for={p <- assigns[:participants] || []}
+            class="flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm"
+          >
+            <span class={[
+              "size-4 flex-shrink-0 text-base-content/40",
+              if(p.participant_type == "agent",
+                do: "hero-cpu-chip",
+                else: "hero-user-circle"
+              )
+            ]}>
+            </span>
+            <span class="truncate">{p.display_name}</span>
+          </li>
+          <li
+            :if={(assigns[:participants] || []) == []}
+            class="px-2 py-1.5 text-xs text-base-content/40"
+          >
+            No participants yet.
+          </li>
+        </ul>
       </aside>
 
-      <%!-- Center stage. PLACEHOLDER: sibling 019e2474-bc7c renders the
-           active stage mode here. --%>
+      <%!-- Center stage. Renders one of four stage-mode components keyed
+           off @current_stage_mode. The `data-stage-mode` attribute drives
+           renderer selection and is the e2e/test contract — keep it
+           stable. --%>
       <main
         class="flex min-w-0 flex-1 items-center justify-center bg-base-100 p-4"
         data-pane="center-stage"
         data-stage-mode={@current_stage_mode}
       >
-        <div
-          class="flex h-full w-full flex-col items-center justify-center rounded-xl border border-dashed border-base-300 text-base-content/40"
-          data-placeholder="center-stage"
-        >
-          <span class={[stage_mode_icon(@current_stage_mode), "size-10"]}></span>
-          <p class="mt-2 text-sm font-medium">
-            {stage_mode_label(@current_stage_mode)} stage
-          </p>
-          <p class="mt-0.5 text-xs">Stage renderer ships in a sibling stack member.</p>
-        </div>
+        <%= cond do %>
+          <% @current_stage_mode == :canvas and assigns[:meeting_canvas] -> %>
+            <%!-- Canvas mode (active canvas). Reuse the chat canvas
+                 renderer so the meeting's surface stays visually
+                 consistent with how a canvas appears in chat. --%>
+            <div
+              class="flex h-full w-full justify-center overflow-y-auto"
+              data-placeholder="center-stage"
+              data-canvas-id={@meeting_canvas.id}
+            >
+              <div class="w-full max-w-3xl">
+                <.canvas_document
+                  canvas={@meeting_canvas}
+                  dom_id_base="meeting-stage"
+                />
+              </div>
+            </div>
+          <% @current_stage_mode == :canvas -> %>
+            <%!-- Canvas mode (empty state). Meeting has no canvas yet —
+                 surface a single CTA that mints one in the bound chat
+                 space and assigns it as the active meeting canvas. --%>
+            <div
+              class="flex h-full w-full flex-col items-center justify-center rounded-xl border border-dashed border-base-300 text-base-content/50"
+              data-placeholder="center-stage"
+              data-empty-state="canvas"
+            >
+              <span class="hero-rectangle-stack size-10 text-base-content/40"></span>
+              <p class="mt-2 text-sm font-medium text-base-content/70">No canvas yet</p>
+              <p class="mt-0.5 max-w-xs text-center text-xs">
+                Meetings work best when there's something to point at. Spin one up to start sketching.
+              </p>
+              <button
+                type="button"
+                phx-click="create_meeting_canvas"
+                class="btn btn-primary btn-sm mt-4 min-h-11 gap-1.5"
+                data-action="create-meeting-canvas"
+              >
+                <span class="hero-plus size-4"></span>
+                <span>Create canvas</span>
+              </button>
+            </div>
+          <% @current_stage_mode == :whiteboard -> %>
+            <%!-- Whiteboard mode (placeholder). The drawing surface is
+                 a separate stack and lands later; for now we render a
+                 centered "coming soon" card so the mode is visually
+                 distinguishable and the click target is real. --%>
+            <div
+              class="flex h-full w-full flex-col items-center justify-center rounded-xl border border-dashed border-base-300 text-base-content/40"
+              data-placeholder="center-stage"
+              data-coming-soon="whiteboard"
+            >
+              <span class="hero-pencil-square size-10"></span>
+              <p class="mt-2 text-sm font-medium text-base-content/70">Whiteboard</p>
+              <p class="mt-0.5 text-xs">Coming soon</p>
+            </div>
+          <% @current_stage_mode == :screen -> %>
+            <%!-- Screen mode. The active LiveKit screen-share track (any
+                 participant) is attached client-side by the
+                 `MeetingScreenShare` JS hook into `[data-screen-share-slot]`.
+                 When nobody is sharing, the empty-state `[data-screen-share-empty]`
+                 is visible and exposes a "Start sharing" CTA which forwards
+                 to the page-level `MeetingClient` hook via push_event
+                 `toggle-screen-share`. Mode-switch survival: the LiveKit
+                 Room lives on `window.__livekit_room`, so flipping to
+                 Gallery and back re-mounts this hook against the same
+                 room and synchronously reattaches the existing track. --%>
+            <div
+              id="meeting-screen-stage"
+              phx-hook="MeetingScreenShare"
+              class="relative flex h-full w-full items-center justify-center overflow-hidden rounded-xl bg-base-200"
+              data-placeholder="center-stage"
+              data-screen-share-active="false"
+            >
+              <%!-- Hook target: the JS attaches the <video> element here
+                   when a screen-share track is found. Hidden until a
+                   track lands so the empty-state shows through. --%>
+              <div
+                data-screen-share-slot
+                class="absolute inset-0 hidden h-full w-full"
+              >
+              </div>
+
+              <%!-- Empty state: visible when no screen-share is live. The
+                   hook toggles `hidden` on this node when it (de)attaches. --%>
+              <div
+                data-screen-share-empty
+                class="flex h-full w-full flex-col items-center justify-center text-base-content/50"
+              >
+                <span class="hero-computer-desktop size-10 text-base-content/40"></span>
+                <p class="mt-2 text-sm font-medium text-base-content/70">
+                  No active screen-share
+                </p>
+                <p class="mt-0.5 max-w-xs text-center text-xs">
+                  Anyone in the meeting can share their screen. Drop a window in to walk the team through it.
+                </p>
+                <button
+                  type="button"
+                  phx-click="meeting_start_screen_share"
+                  class="btn btn-primary btn-sm mt-4 min-h-11 gap-1.5"
+                  data-action="start-screen-share"
+                >
+                  <span class="hero-arrow-up-tray size-4"></span>
+                  <span>Start sharing</span>
+                </button>
+              </div>
+            </div>
+          <% @current_stage_mode == :gallery -> %>
+            <%!-- Gallery mode. Lay out one `<.video_tile>` per human
+                 participant in a responsive grid. Agents are excluded —
+                 Gallery is a face-grid and agents surface in the bottom
+                 strip's right-hand section via `<.agent_tile>` (sibling
+                 task 019e2475-0037). The same `MeetingVideoTile` hook
+                 powers the bottom-strip tiles, so identity strings are
+                 kept in sync via `gallery_identity/1`. --%>
+            <div
+              class="flex h-full w-full flex-col"
+              data-placeholder="center-stage"
+              data-gallery-tile-count={length(gallery_participants(assigns[:participants] || []))}
+            >
+              <%= if gallery_participants(assigns[:participants] || []) == [] do %>
+                <div class="flex h-full w-full flex-col items-center justify-center rounded-xl border border-dashed border-base-300 text-base-content/40">
+                  <span class="hero-squares-2x2 size-10"></span>
+                  <p class="mt-2 text-sm font-medium text-base-content/70">No participants yet</p>
+                  <p class="mt-0.5 text-xs">Tiles appear as people join the meeting.</p>
+                </div>
+              <% else %>
+                <div
+                  class="grid h-full w-full auto-rows-fr gap-2 overflow-y-auto p-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"
+                  data-gallery-grid
+                >
+                  <.video_tile
+                    :for={p <- gallery_participants(assigns[:participants] || [])}
+                    participant={
+                      %{
+                        identity: gallery_identity(p),
+                        name: p.display_name || "Participant"
+                      }
+                    }
+                    video_track={false}
+                    audio_muted?={false}
+                    speaking?={false}
+                    avatar_url={Map.get(p, :avatar_url)}
+                    class="h-full w-full"
+                  />
+                </div>
+              <% end %>
+            </div>
+        <% end %>
       </main>
 
-      <%!-- Right pane: embedded chat panel (THIS task's deliverable).
-           Stage 1 shipped the embed; stage 2 polished the framing
-           (HEADER + ~320px desktop width); stage 3 (this) adds the
-           mobile drawer + top-bar toggle.
+      <%!-- Right pane: embedded chat panel (sibling 019e2475-87a8).
+           Shipped fully via #364: the embed itself, the framing
+           (HEADER + ~320px desktop width), and the mobile drawer +
+           top-bar toggle.
 
            Layout strategy — ONE aside, two presentations:
              * `>=lg` (desktop): in-flow right column. The aside is
@@ -133,21 +313,6 @@
            DOM node (this aside). Rendering it twice with the same id
            would collide; positioning the single node responsively keeps
            the embed canonical.
-
-           Bottom edge: the meeting page is mounted under the `:shell`
-           layout which carries the `--bottom-nav-height` CSS var (56px
-           mobile, 0px desktop) plus the standard `safe-area-inset-
-           bottom` env. The desktop column is in-flow above the bottom
-           strip so it doesn't need an explicit bottom offset. The
-           mobile drawer DOES — its `bottom-[calc(env(safe-area-inset-
-           bottom)+var(--bottom-nav-height,0px))]` mirrors the task
-           detail panel pattern (tasks_live.html.heex line ~795/1881)
-           so it never sits over the bottom-nav or iOS home indicator.
-           The composer inside MeetingChatPanelLive ALSO carries
-           `pb-[max(0.5rem,env(safe-area-inset-bottom))]` (line 266)
-           which is now harmless (the drawer container already absorbs
-           the inset) but kept for the desktop / drawer-not-fullheight
-           case.
 
            The pane wrapper carries data-pane="chat-panel" and the
            *embedded LV* root carries data-intent-panel-host="true" for

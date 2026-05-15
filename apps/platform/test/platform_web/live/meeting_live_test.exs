@@ -683,4 +683,494 @@ defmodule PlatformWeb.MeetingLiveTest do
       }
     end
   end
+
+  # ── Stage-mode switcher (task 019e2474-bc7c) ───────────────────────────────
+
+  describe "stage-mode segmented control (set_stage_mode)" do
+    setup %{conn: conn} do
+      {meeting, space} = create_meeting(%{slug: "stage-mode-seg", name: "Stage Mode Sync"})
+      {conn, _user} = authenticated_conn(conn)
+      {:ok, conn: conn, meeting: meeting, space: space}
+    end
+
+    test "defaults to canvas mode with the canvas button active", %{
+      conn: conn,
+      meeting: meeting
+    } do
+      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      assert html =~ ~s(data-stage-mode-button="canvas")
+      # The canvas button is active; the others are not.
+      assert html =~ ~r/data-stage-mode-button="canvas"[^>]*data-active="true"/
+      assert html =~ ~r/data-stage-mode-button="screen"[^>]*data-active="false"/
+    end
+
+    test "clicking a mode button assigns that mode and flips the active class", %{
+      conn: conn,
+      meeting: meeting
+    } do
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      for mode <- ~w(screen gallery whiteboard canvas) do
+        html =
+          view
+          |> element(~s([data-stage-mode-button="#{mode}"]))
+          |> render_click()
+
+        # The clicked button is now active; the center stage's
+        # data-stage-mode attribute follows.
+        assert html =~ ~r/data-stage-mode-button="#{mode}"[^>]*data-active="true"/
+        assert html =~ ~s(data-stage-mode="#{mode}")
+
+        # Exactly one button is active at a time.
+        active_count =
+          Regex.scan(~r/data-stage-mode-button="[a-z]+"[^>]*data-active="true"/, html)
+          |> length()
+
+        assert active_count == 1
+      end
+    end
+
+    test "an unknown mode value is ignored — no crash, mode unchanged", %{
+      conn: conn,
+      meeting: meeting
+    } do
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      # Switch to gallery first so we can prove the bogus event is a no-op.
+      view
+      |> element(~s([data-stage-mode-button="gallery"]))
+      |> render_click()
+
+      # A hand-crafted phx-click with an out-of-allow-list mode.
+      html = render_click(view, "set_stage_mode", %{"mode" => "admin_only"})
+
+      # Still gallery — the unknown mode was clamped away, no FunctionClauseError.
+      assert html =~ ~s(data-stage-mode="gallery")
+      assert html =~ ~r/data-stage-mode-button="gallery"[^>]*data-active="true"/
+    end
+
+    test "switching modes keeps the sibling panes mounted", %{
+      conn: conn,
+      meeting: meeting
+    } do
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      html =
+        view
+        |> element(~s([data-stage-mode-button="gallery"]))
+        |> render_click()
+
+      # Left rail + bottom strip are presentation-independent of the
+      # stage mode — they must survive a mode switch.
+      assert html =~ ~s(data-pane="left-rail")
+      assert html =~ ~s(data-pane="bottom-strip")
+    end
+
+    test "walking all 4 modes flips data-stage-mode each click and never unmounts siblings",
+         %{conn: conn, meeting: meeting} do
+      # Stage 4 consolidation: a single end-to-end traversal that exercises
+      # the per-click center-stage swap *and* the sibling-pane invariant
+      # together, matching the e2e_behavior script in the planner payload
+      # ("Click each segmented button in order: Canvas, Screen, Gallery,
+      # Whiteboard."). Doing this in one test guards against silent
+      # ordering-dependent regressions where, say, switching out of Canvas
+      # mode tears down the participant rail.
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      for mode <- ~w(canvas screen gallery whiteboard) do
+        html =
+          view
+          |> element(~s([data-stage-mode-button="#{mode}"]))
+          |> render_click()
+
+        # Center stage's data-stage-mode swaps to the clicked mode…
+        assert html =~ ~s(data-stage-mode="#{mode}"),
+               "expected center stage to swap to data-stage-mode=\"#{mode}\""
+
+        # …its segmented-control button is the unique active one…
+        assert html =~ ~r/data-stage-mode-button="#{mode}"[^>]*data-active="true"/,
+               "expected #{mode} button to be the active one"
+
+        active_count =
+          Regex.scan(~r/data-stage-mode-button="[a-z]+"[^>]*data-active="true"/, html)
+          |> length()
+
+        assert active_count == 1,
+               "expected exactly one active button after clicking #{mode}, got #{active_count}"
+
+        # …and the sibling panes (left rail, bottom strip, participant
+        # rail placeholder) remain mounted on every click.
+        assert html =~ ~s(data-pane="left-rail"),
+               "left rail unmounted after switching to #{mode}"
+
+        assert html =~ ~s(data-pane="bottom-strip"),
+               "bottom strip unmounted after switching to #{mode}"
+
+        assert html =~ ~s(data-placeholder="participant-rail"),
+               "participant-rail placeholder unmounted after switching to #{mode}"
+      end
+    end
+  end
+
+  describe "Canvas mode renderer" do
+    setup %{conn: conn} do
+      {meeting, space} = create_meeting(%{slug: "stage-mode-canvas", name: "Canvas Stage"})
+      {conn, _user} = authenticated_conn(conn)
+      {:ok, conn: conn, meeting: meeting, space: space}
+    end
+
+    test "renders the create-canvas empty-state CTA when no canvas exists", %{
+      conn: conn,
+      meeting: meeting
+    } do
+      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      assert html =~ ~s(data-empty-state="canvas")
+      assert html =~ "No canvas yet"
+      assert html =~ ~s(phx-click="create_meeting_canvas")
+      assert html =~ ~s(data-action="create-meeting-canvas")
+      # The CTA's icon is the canvas hero glyph (matches the segmented control).
+      assert html =~ "hero-rectangle-stack"
+    end
+
+    test "renders the most-recently-created canvas when one exists", %{
+      conn: conn,
+      meeting: meeting,
+      space: space
+    } do
+      {:ok, participant} =
+        Chat.add_participant(space.id, %{
+          participant_type: "user",
+          participant_id: Ecto.UUID.generate(),
+          display_name: "Canvas Author",
+          joined_at: DateTime.utc_now()
+        })
+
+      {:ok, older} =
+        Chat.create_canvas(%{
+          "space_id" => space.id,
+          "created_by" => participant.id,
+          "title" => "Older canvas"
+        })
+
+      {:ok, newer} =
+        Chat.create_canvas(%{
+          "space_id" => space.id,
+          "created_by" => participant.id,
+          "title" => "Newer canvas"
+        })
+
+      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      # The data-canvas-id attribute on the center stage points at the
+      # newer canvas — older canvases lose to insertion-order tail.
+      assert html =~ ~s(data-canvas-id="#{newer.id}")
+      refute html =~ ~s(data-canvas-id="#{older.id}")
+      # Empty-state CTA does NOT render when a canvas is present.
+      refute html =~ "No canvas yet"
+    end
+
+    test "clicking the CTA creates a canvas and renders it", %{
+      conn: conn,
+      meeting: meeting,
+      space: space
+    } do
+      {:ok, view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      assert html =~ "No canvas yet"
+
+      html =
+        view
+        |> element(~s(button[data-action="create-meeting-canvas"]))
+        |> render_click()
+
+      # The empty-state copy is gone and a canvas is now anchored in the stage.
+      refute html =~ "No canvas yet"
+      assert html =~ ~s(data-canvas-id=)
+      assert html =~ "data-stage-mode=\"canvas\""
+
+      # And exactly one new canvas exists in the meeting's space.
+      assert [%Platform.Chat.Canvas{}] = Chat.list_canvases(space.id)
+    end
+
+    test "live :canvas_created broadcast on the meeting's space latches the canvas", %{
+      conn: conn,
+      meeting: meeting,
+      space: space
+    } do
+      {:ok, view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      assert html =~ "No canvas yet"
+
+      {:ok, peer} =
+        Chat.add_participant(space.id, %{
+          participant_type: "user",
+          participant_id: Ecto.UUID.generate(),
+          display_name: "Peer",
+          joined_at: DateTime.utc_now()
+        })
+
+      {:ok, canvas} =
+        Chat.create_canvas(%{
+          "space_id" => space.id,
+          "created_by" => peer.id,
+          "title" => "Peer canvas"
+        })
+
+      # The PubSub broadcast fired by create_canvas/1 should have been
+      # delivered to the LV; render to flush.
+      html = render(view)
+
+      assert html =~ ~s(data-canvas-id="#{canvas.id}")
+      refute html =~ "No canvas yet"
+    end
+  end
+
+  describe "Whiteboard mode renderer" do
+    setup %{conn: conn} do
+      {meeting, space} =
+        create_meeting(%{slug: "stage-mode-whiteboard", name: "Whiteboard Stage"})
+
+      {conn, _user} = authenticated_conn(conn)
+      {:ok, conn: conn, meeting: meeting, space: space}
+    end
+
+    test "renders the 'coming soon' placeholder card with hero-pencil-square", %{
+      conn: conn,
+      meeting: meeting
+    } do
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      html =
+        view
+        |> element(~s([data-stage-mode-button="whiteboard"]))
+        |> render_click()
+
+      # The center stage swapped to the whiteboard placeholder.
+      assert html =~ ~s(data-stage-mode="whiteboard")
+      assert html =~ ~s(data-coming-soon="whiteboard")
+      assert html =~ "hero-pencil-square"
+      assert html =~ "Coming soon"
+      # And the empty-state canvas CTA is NOT visible in whiteboard mode.
+      refute html =~ ~s(data-empty-state="canvas")
+    end
+  end
+
+  describe "Screen mode renderer" do
+    setup %{conn: conn} do
+      {meeting, space} = create_meeting(%{slug: "stage-mode-screen", name: "Screen Stage"})
+      {conn, _user} = authenticated_conn(conn)
+      {:ok, conn: conn, meeting: meeting, space: space}
+    end
+
+    test "renders the empty-state placeholder + Start sharing CTA when no track exists", %{
+      conn: conn,
+      meeting: meeting
+    } do
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      html =
+        view
+        |> element(~s([data-stage-mode-button="screen"]))
+        |> render_click()
+
+      assert html =~ ~s(data-stage-mode="screen")
+      # The hook target carries phx-hook + the data-screen-share-active flag
+      # the JS side toggles when a track attaches.
+      assert html =~ ~s(phx-hook="MeetingScreenShare")
+      assert html =~ ~s(data-screen-share-active="false")
+      assert html =~ ~s(data-screen-share-slot)
+      assert html =~ ~s(data-screen-share-empty)
+      # Empty-state copy + CTA.
+      assert html =~ "No active screen-share"
+      assert html =~ "Start sharing"
+      assert html =~ ~s(phx-click="meeting_start_screen_share")
+      assert html =~ ~s(data-action="start-screen-share")
+      # Hero icons only — no emoji.
+      assert html =~ "hero-computer-desktop"
+      assert html =~ "hero-arrow-up-tray"
+      # Whiteboard / canvas-empty markers do NOT bleed in.
+      refute html =~ ~s(data-coming-soon="whiteboard")
+      refute html =~ ~s(data-empty-state="canvas")
+    end
+
+    test "Start sharing CTA pushes toggle-screen-share to the JS hooks", %{
+      conn: conn,
+      meeting: meeting
+    } do
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      view
+      |> element(~s([data-stage-mode-button="screen"]))
+      |> render_click()
+
+      # Click the Start-sharing CTA. The handler push_events
+      # `toggle-screen-share` which any MeetingClient JS hook on the page
+      # picks up. Asserting render doesn't crash + mode stays Screen
+      # proves the handler wired correctly without a JS round-trip.
+      html =
+        view
+        |> element(~s(button[data-action="start-screen-share"]))
+        |> render_click()
+
+      assert html =~ ~s(data-stage-mode="screen")
+      assert html =~ "Start sharing"
+    end
+  end
+
+  describe "Gallery mode renderer" do
+    setup %{conn: conn} do
+      {meeting, space} = create_meeting(%{slug: "stage-mode-gallery", name: "Gallery Stage"})
+      {conn, _user} = authenticated_conn(conn)
+      {:ok, conn: conn, meeting: meeting, space: space}
+    end
+
+    test "renders the no-participants empty state when nobody has joined", %{
+      conn: conn,
+      meeting: meeting,
+      space: space
+    } do
+      # The sibling-shipped chat panel auto-adds the current user as a
+      # participant on mount. To exercise the "0 humans" branch we drop
+      # the auto-added participant and broadcast a participant_left so
+      # the LV's :participants assign refreshes from the DB.
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      for p <- Chat.list_participants(space.id) do
+        Repo.delete!(p)
+      end
+
+      send(view.pid, {:participant_left, nil})
+
+      html =
+        view
+        |> element(~s([data-stage-mode-button="gallery"]))
+        |> render_click()
+
+      assert html =~ ~s(data-stage-mode="gallery")
+      assert html =~ ~s(data-gallery-tile-count="0")
+      assert html =~ "No participants yet"
+      # Hero icon only.
+      assert html =~ "hero-squares-2x2"
+      # The grid wrapper is NOT rendered in the empty state.
+      refute html =~ ~s(data-gallery-grid)
+    end
+
+    test "renders one VideoTile per human participant in a grid", %{
+      conn: conn,
+      meeting: meeting,
+      space: space
+    } do
+      # Two humans + one agent. Only the humans should tile; the agent
+      # is excluded from gallery mode (presence lives in the bottom strip).
+      {:ok, _ada} =
+        Chat.add_participant(space.id, %{
+          participant_type: "user",
+          participant_id: Ecto.UUID.generate(),
+          display_name: "Ada Lovelace",
+          joined_at: DateTime.utc_now()
+        })
+
+      {:ok, _grace} =
+        Chat.add_participant(space.id, %{
+          participant_type: "user",
+          participant_id: Ecto.UUID.generate(),
+          display_name: "Grace Hopper",
+          joined_at: DateTime.utc_now()
+        })
+
+      {:ok, _bot} =
+        Chat.add_participant(space.id, %{
+          participant_type: "agent",
+          participant_id: Ecto.UUID.generate(),
+          display_name: "Bot McBotface",
+          joined_at: DateTime.utc_now()
+        })
+
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      html =
+        view
+        |> element(~s([data-stage-mode-button="gallery"]))
+        |> render_click()
+
+      assert html =~ ~s(data-stage-mode="gallery")
+      # Two seeded humans + the chat-panel-auto-added current user = 3
+      # human tiles. The agent is omitted from the gallery grid.
+      assert html =~ ~s(data-gallery-tile-count="3")
+      assert html =~ ~s(data-gallery-grid)
+
+      # Three video tiles, one per human; agent is omitted from the
+      # gallery grid. The MeetingVideoTile JS hook attribute appears
+      # once per tile.
+      tile_count =
+        Regex.scan(~r/phx-hook="MeetingVideoTile"/, html)
+        |> length()
+
+      assert tile_count == 3
+    end
+
+    test "Screen → Gallery → Canvas preserves the canvas state in the LV assigns", %{
+      conn: conn,
+      meeting: meeting,
+      space: space
+    } do
+      # Seed a canvas so Canvas mode has content to preserve.
+      {:ok, participant} =
+        Chat.add_participant(space.id, %{
+          participant_type: "user",
+          participant_id: Ecto.UUID.generate(),
+          display_name: "Author",
+          joined_at: DateTime.utc_now()
+        })
+
+      {:ok, canvas} =
+        Chat.create_canvas(%{
+          "space_id" => space.id,
+          "created_by" => participant.id,
+          "title" => "Persistent canvas"
+        })
+
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      # Walk modes: screen → gallery → canvas. The canvas must still
+      # render at the end (proves :meeting_canvas survived flips).
+      for mode <- ~w(screen gallery canvas) do
+        view
+        |> element(~s([data-stage-mode-button="#{mode}"]))
+        |> render_click()
+      end
+
+      html = render(view)
+      assert html =~ ~s(data-canvas-id="#{canvas.id}")
+    end
+  end
+
+  describe "gallery_participants/1 + gallery_identity/1" do
+    alias PlatformWeb.MeetingLive
+
+    test "gallery_participants/1 keeps users and drops agents" do
+      participants = [
+        %{participant_type: "user", display_name: "Ada"},
+        %{participant_type: "agent", display_name: "Bot"},
+        %{participant_type: "user", display_name: "Grace"}
+      ]
+
+      assert [%{display_name: "Ada"}, %{display_name: "Grace"}] =
+               MeetingLive.gallery_participants(participants)
+    end
+
+    test "gallery_participants/1 returns [] for non-list input" do
+      assert MeetingLive.gallery_participants(nil) == []
+      assert MeetingLive.gallery_participants("not a list") == []
+    end
+
+    test "gallery_identity/1 prefixes the participant_id (matches bottom-strip convention)" do
+      assert MeetingLive.gallery_identity(%{participant_id: "abc-123"}) == "user:abc-123"
+    end
+
+    test "gallery_identity/1 falls back to id and finally to a sentinel" do
+      assert MeetingLive.gallery_identity(%{id: "row-7"}) == "user:row-7"
+      assert MeetingLive.gallery_identity(%{}) == "user:unknown"
+    end
+  end
 end

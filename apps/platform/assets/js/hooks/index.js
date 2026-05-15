@@ -21,8 +21,10 @@ import MessageLift from "./message_lift"
 import MeetingCaptions from "./meeting_captions"
 import MeetingClient from "./meeting_client"
 import MeetingRoom from "./meeting_room"
+import MeetingScreenShare from "./meeting_screen_share"
 import MeetingSoundboard from "./meeting_soundboard"
 import MeetingTimer from "./meeting_timer"
+import MeetingVideoTile from "./meeting_video_tile"
 import MermaidDiagram from "./mermaid_diagram"
 import MessageEditor from "./message_editor"
 import PushSubscribe from "./push_subscribe"
@@ -58,8 +60,10 @@ export default {
   MeetingCaptions,
   MeetingClient,
   MeetingRoom,
+  MeetingScreenShare,
   MeetingSoundboard,
   MeetingTimer,
+  MeetingVideoTile,
   MermaidDiagram,
   MessageEditor,
   MessageLift,
