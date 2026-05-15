@@ -129,11 +129,14 @@ defmodule PlatformWeb.MeetingLive do
 
   import PlatformWeb.Chat.CanvasRenderer, only: [canvas_document: 1]
   import PlatformWeb.Components.Meeting.VideoTile, only: [video_tile: 1]
+  import PlatformWeb.Components.Meetings.ParticipantRail, only: [participant_rail: 1]
 
   alias Platform.Accounts
+  alias Platform.Agents.Agent
   alias Platform.Chat
   alias Platform.Chat.PubSub, as: ChatPubSub
   alias Platform.Meetings
+  alias Platform.Repo
 
   # Stage modes per ADR 0042's "Stage modes" table. Canvas is the default
   # (meetings are often artifact-driven).
@@ -186,12 +189,15 @@ defmodule PlatformWeb.MeetingLive do
           if meeting.chat_space_id, do: Chat.list_participants(meeting.chat_space_id), else: []
 
         meeting_canvas = latest_canvas(meeting.chat_space_id)
+        agents_by_id = load_agents_by_id(participants)
 
         {:noreply,
          socket
          |> assign(:page_title, "Meeting · #{meeting.name}")
          |> assign(:meeting, meeting)
          |> assign(:participants, participants)
+         |> assign(:agents_by_id, agents_by_id)
+         |> assign(:speaking_participant_ids, MapSet.new())
          |> assign(:meeting_canvas, meeting_canvas)
          |> assign(:current_stage_mode, :canvas)}
     end
@@ -334,10 +340,40 @@ defmodule PlatformWeb.MeetingLive do
 
   defp refresh_participants(%{assigns: %{meeting: %{chat_space_id: space_id}}} = socket)
        when is_binary(space_id) do
-    assign(socket, :participants, Chat.list_participants(space_id))
+    participants = Chat.list_participants(space_id)
+
+    socket
+    |> assign(:participants, participants)
+    |> assign(:agents_by_id, load_agents_by_id(participants))
   end
 
   defp refresh_participants(socket), do: socket
+
+  # Build a `%{agent_id => %Agent{}}` map for any agent-typed participants.
+  # Empty when no agents are seated. Drives the rail's role chip + status dot.
+  defp load_agents_by_id(participants) when is_list(participants) do
+    agent_ids =
+      participants
+      |> Enum.flat_map(fn
+        %{participant_type: "agent", participant_id: id} when is_binary(id) -> [id]
+        _ -> []
+      end)
+      |> Enum.uniq()
+
+    case agent_ids do
+      [] ->
+        %{}
+
+      ids ->
+        import Ecto.Query
+
+        from(a in Agent, where: a.id in ^ids)
+        |> Repo.all()
+        |> Map.new(&{&1.id, &1})
+    end
+  end
+
+  defp load_agents_by_id(_), do: %{}
 
   @doc """
   Per-meeting PubSub topic.
@@ -473,4 +509,80 @@ defmodule PlatformWeb.MeetingLive do
 
   def gallery_identity(%{id: id}) when is_binary(id) and id != "", do: "user:" <> id
   def gallery_identity(_), do: "user:unknown"
+
+  # ── Participant rail helpers (task 019e2475-4395) ────────────────────────
+  #
+  # Used by `PlatformWeb.Components.Meetings.ParticipantRail` to drive the
+  # left-rail sectioned participant list (humans on top, agents below).
+
+  @doc """
+  Split participants into `{humans, agents}` lists by `participant_type`.
+  """
+  @spec partition_participants([Platform.Chat.Participant.t()]) ::
+          {[Platform.Chat.Participant.t()], [Platform.Chat.Participant.t()]}
+  def partition_participants(participants) do
+    Enum.split_with(participants, &(&1.participant_type == "user"))
+  end
+
+  @doc """
+  Display string for an agent participant's role chip. Reads
+  `agent.metadata["role"]` when present; falls back to `"agent"`.
+  """
+  @spec agent_role_chip(Platform.Chat.Participant.t(), %{binary() => Agent.t()}) :: String.t()
+  def agent_role_chip(%{participant_type: "agent", participant_id: agent_id}, agents_by_id) do
+    case Map.get(agents_by_id, agent_id) do
+      %Agent{metadata: %{"role" => role}} when is_binary(role) and role != "" -> role
+      _ -> "agent"
+    end
+  end
+
+  def agent_role_chip(_p, _agents_by_id), do: "agent"
+
+  @doc """
+  Status-dot tone class for an agent participant. Maps the agent's `status`
+  enum onto a daisyUI tone (success/warning/neutral).
+  """
+  @spec agent_status_dot_class(Platform.Chat.Participant.t(), %{binary() => Agent.t()}) ::
+          String.t()
+  def agent_status_dot_class(
+        %{participant_type: "agent", participant_id: agent_id},
+        agents_by_id
+      ) do
+    case Map.get(agents_by_id, agent_id) do
+      %Agent{status: "active"} -> "bg-success"
+      %Agent{status: status} when status in ["idle", "paused"] -> "bg-warning"
+      _ -> "bg-base-content/30"
+    end
+  end
+
+  def agent_status_dot_class(_p, _agents_by_id), do: "bg-base-content/30"
+
+  @doc """
+  True when this participant is the meeting's host. Safe with `nil`
+  `host_participant_id`.
+  """
+  @spec host?(Platform.Chat.Participant.t(), Platform.Meetings.Meeting.t()) :: boolean()
+  def host?(_participant, %{host_participant_id: nil}), do: false
+
+  def host?(%{id: id}, %{host_participant_id: host_id}) when is_binary(host_id) do
+    id == host_id
+  end
+
+  def host?(_participant, _meeting), do: false
+
+  @doc """
+  True when the participant's mic is on. Reads
+  `participant.attention_config["mic_on"]`; defaults to `false`.
+  """
+  @spec mic_on?(Platform.Chat.Participant.t()) :: boolean()
+  def mic_on?(%{attention_config: %{"mic_on" => true}}), do: true
+  def mic_on?(_participant), do: false
+
+  @doc """
+  True when this participant is currently speaking. Driven by LiveKit
+  speaking-event hooks in later stages; defaults to `false` here.
+  """
+  @spec speaking?(Platform.Chat.Participant.t(), MapSet.t()) :: boolean()
+  def speaking?(%{id: id}, %MapSet{} = ids), do: MapSet.member?(ids, id)
+  def speaking?(_participant, _ids), do: false
 end

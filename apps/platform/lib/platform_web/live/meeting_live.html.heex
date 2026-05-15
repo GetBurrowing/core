@@ -91,10 +91,9 @@
 
     <%!-- ── Body: left rail + center stage + chat panel ─────────────────── --%>
     <div class="flex min-h-0 flex-1">
-      <%!-- Left rail PLACEHOLDER. Sibling 019e2475-4395 fills this with
-           the sectioned participant list. This shell shows a bare
-           scaffold list of the bound participants so Gallery-mode
-           tile-vs-rail invariants are testable pre-rollup. --%>
+      <%!-- Left rail (task 019e2475-4395): sectioned participant list.
+           Hosts/humans on top with mic + speaking + host-badge cues;
+           agents below a divider with role chip + status dot. --%>
       <aside
         class="hidden w-60 flex-shrink-0 flex-col border-r border-base-300 bg-base-200/40 lg:flex"
         data-pane="left-rail"
@@ -108,31 +107,14 @@
             {length(assigns[:participants] || [])}
           </span>
         </div>
-        <%!-- PLACEHOLDER (sibling 019e2475-4395): bare participant list.
-             Mic state, host badge, muted, speaking highlight, and agent
-             role/provider chips are all that sibling's job. --%>
-        <ul class="min-h-0 flex-1 overflow-y-auto px-2 py-2" data-placeholder="participant-rail">
-          <li
-            :for={p <- assigns[:participants] || []}
-            class="flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm"
-          >
-            <span class={[
-              "size-4 flex-shrink-0 text-base-content/40",
-              if(p.participant_type == "agent",
-                do: "hero-cpu-chip",
-                else: "hero-user-circle"
-              )
-            ]}>
-            </span>
-            <span class="truncate">{p.display_name}</span>
-          </li>
-          <li
-            :if={(assigns[:participants] || []) == []}
-            class="px-2 py-1.5 text-xs text-base-content/40"
-          >
-            No participants yet.
-          </li>
-        </ul>
+        <div class="min-h-0 flex-1 overflow-y-auto">
+          <.participant_rail
+            participants={assigns[:participants] || []}
+            agents_by_id={assigns[:agents_by_id] || %{}}
+            meeting={@meeting}
+            speaking_participant_ids={assigns[:speaking_participant_ids] || MapSet.new()}
+          />
+        </div>
       </aside>
 
       <%!-- Center stage. Renders one of four stage-mode components keyed
