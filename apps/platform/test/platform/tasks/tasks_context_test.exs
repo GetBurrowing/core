@@ -111,6 +111,119 @@ defmodule Platform.Tasks.TasksContextTest do
     end
   end
 
+  describe "epic broadcasts + changeset (task 019d60ca stage 1)" do
+    setup do
+      {:ok, project} = Tasks.create_project(%{name: "Epic Broadcast Project"})
+      :ok = Tasks.subscribe_board()
+      %{project: project}
+    end
+
+    test "create_epic/1 broadcasts {:epic_created, epic} on the board topic", %{
+      project: project
+    } do
+      {:ok, epic} =
+        Tasks.create_epic(%{
+          project_id: project.id,
+          name: "Newly Broadcast Epic"
+        })
+
+      assert_receive {:epic_created, %Platform.Tasks.Epic{} = received}
+      assert received.id == epic.id
+      assert received.project_id == project.id
+      assert received.name == "Newly Broadcast Epic"
+    end
+
+    test "create_epic/1 does NOT broadcast when the changeset is invalid", %{project: project} do
+      # Missing :name — should hit validate_required, never insert, never broadcast.
+      assert {:error, %Ecto.Changeset{}} =
+               Tasks.create_epic(%{project_id: project.id})
+
+      refute_receive {:epic_created, _}, 50
+    end
+
+    test "update_epic/2 broadcasts {:epic_updated, epic} on the board topic", %{
+      project: project
+    } do
+      {:ok, epic} =
+        Tasks.create_epic(%{project_id: project.id, name: "Original"})
+
+      # Drain the create-side broadcast so the assertion below is unambiguous.
+      assert_receive {:epic_created, _}
+
+      {:ok, updated} = Tasks.update_epic(epic, %{name: "Renamed"})
+
+      assert_receive {:epic_updated, %Platform.Tasks.Epic{} = received}
+      assert received.id == updated.id
+      assert received.name == "Renamed"
+    end
+
+    test "update_epic/2 does NOT broadcast when the changeset is invalid", %{project: project} do
+      {:ok, epic} = Tasks.create_epic(%{project_id: project.id, name: "Stable"})
+      assert_receive {:epic_created, _}
+
+      assert {:error, %Ecto.Changeset{}} = Tasks.update_epic(epic, %{name: ""})
+
+      refute_receive {:epic_updated, _}, 50
+    end
+
+    test "Epic changeset rejects missing name + project_id with friendly errors" do
+      cs = Platform.Tasks.Epic.changeset(%Platform.Tasks.Epic{}, %{})
+      refute cs.valid?
+
+      errors = errors_on(cs)
+      assert "can't be blank" in errors.name
+      assert "can't be blank" in errors.project_id
+    end
+
+    test "Epic changeset rejects empty-string name", %{project: project} do
+      cs =
+        Platform.Tasks.Epic.changeset(%Platform.Tasks.Epic{}, %{
+          project_id: project.id,
+          name: ""
+        })
+
+      refute cs.valid?
+      # validate_required is what catches an empty string here, since ""
+      # collapses to nil per Ecto's default :empty_values handling.
+      assert "can't be blank" in errors_on(cs).name
+    end
+
+    test "Epic changeset rejects an over-long name", %{project: project} do
+      cs =
+        Platform.Tasks.Epic.changeset(%Platform.Tasks.Epic{}, %{
+          project_id: project.id,
+          name: String.duplicate("x", 121)
+        })
+
+      refute cs.valid?
+      assert errors_on(cs).name |> Enum.any?(&String.contains?(&1, "120"))
+    end
+
+    test "Epic changeset accepts optional description + acceptance_criteria", %{
+      project: project
+    } do
+      cs =
+        Platform.Tasks.Epic.changeset(%Platform.Tasks.Epic{}, %{
+          project_id: project.id,
+          name: "With body",
+          description: "Long-form description.",
+          acceptance_criteria: "Users can sign in with email."
+        })
+
+      assert cs.valid?
+    end
+
+    test "Epic changeset accepts the bare minimum (project_id + name)", %{project: project} do
+      cs =
+        Platform.Tasks.Epic.changeset(%Platform.Tasks.Epic{}, %{
+          project_id: project.id,
+          name: "Minimal"
+        })
+
+      assert cs.valid?
+    end
+  end
+
   describe "legacy ETS-based list_tasks/0" do
     test "returns a list (may be empty without active runs)" do
       assert is_list(Tasks.list_tasks())

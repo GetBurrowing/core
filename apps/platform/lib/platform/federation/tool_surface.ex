@@ -834,6 +834,43 @@ defmodule Platform.Federation.ToolSurface do
         when_to_use: "When you need to configure an epic's target branch or deploy target"
       },
       %{
+        name: "epic_create",
+        description:
+          "Create a new epic in a project. Epics group related tasks under a shared theme, target branch, or deploy target.",
+        parameters: %{
+          project_id: %{
+            type: "string",
+            required: true,
+            description: "The project to create the epic in"
+          },
+          name: %{type: "string", required: true, description: "Epic name (1..120 chars)"},
+          description: %{type: "string", required: false, description: "Long-form epic body"},
+          acceptance_criteria: %{
+            type: "string",
+            required: false,
+            description: "Acceptance criteria for the epic"
+          },
+          status: %{
+            type: "string",
+            required: false,
+            description: "Initial status: open (default), in_progress, closed"
+          },
+          target_branch: %{
+            type: "string",
+            required: false,
+            description: "Git branch inherited by member tasks (e.g. feat/reskin)"
+          },
+          deploy_target: %{
+            type: "string",
+            required: false,
+            description: "Deploy target inherited by member tasks (e.g. exp, prod)"
+          }
+        },
+        returns: "The created epic object with id, name, project_id, status",
+        limitations: "Requires a valid project_id and name",
+        when_to_use: "When you need to organize related tasks under a new epic in a project"
+      },
+      %{
         name: "task_create",
         description:
           "Create a new task in a project. Tasks track work items on the kanban board.",
@@ -2216,8 +2253,8 @@ defmodule Platform.Federation.ToolSurface do
 
         case Tasks.update_epic(epic, attrs) do
           {:ok, updated} ->
-            Tasks.broadcast_board({:epic_updated, updated})
-
+            # Broadcast happens inside Tasks.update_epic/2 so all callers
+            # (UI + MCP) get parity with create_task/update_task.
             {:ok,
              %{
                id: updated.id,
@@ -2234,6 +2271,44 @@ defmodule Platform.Federation.ToolSurface do
                recoverable: true
              }}
         end
+    end
+  end
+
+  def execute("epic_create", args, _context) do
+    attrs =
+      %{
+        project_id: Map.get(args, "project_id"),
+        name: Map.get(args, "name"),
+        description: Map.get(args, "description"),
+        acceptance_criteria: Map.get(args, "acceptance_criteria"),
+        status: Map.get(args, "status", "open"),
+        target_branch: Map.get(args, "target_branch"),
+        deploy_target: Map.get(args, "deploy_target")
+      }
+      |> Map.reject(fn {_k, v} -> is_nil(v) end)
+
+    # NOTE: Tasks.create_epic/1 broadcasts {:epic_created, epic} itself
+    # (centralized in stage 1, commit c69e878), so do NOT broadcast here.
+    case Tasks.create_epic(attrs) do
+      {:ok, epic} ->
+        {:ok,
+         %{
+           id: epic.id,
+           name: epic.name,
+           description: epic.description,
+           project_id: epic.project_id,
+           status: epic.status,
+           target_branch: epic.target_branch,
+           deploy_target: epic.deploy_target
+         }}
+
+      {:error, changeset} ->
+        {:error,
+         %{
+           error: "Failed to create epic: #{inspect_errors(changeset)}",
+           recoverable: true,
+           suggestion: "Check that project_id is valid and name is provided"
+         }}
     end
   end
 

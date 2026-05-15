@@ -10,7 +10,7 @@ defmodule PlatformWeb.TasksLiveTest do
   alias Platform.Chat.Canvas
   alias Platform.Orchestration.ExecutionSpace
   alias Platform.{Repo, Tasks}
-  alias Platform.Tasks.{Epic, Plan, ReviewRequests, Stack, Stacks, Task}
+  alias Platform.Tasks.{Plan, ReviewRequests, Stack, Stacks, Task}
 
   setup do
     previous_root = Application.get_env(:platform, :chat_attachments_root)
@@ -3523,6 +3523,92 @@ defmodule PlatformWeb.TasksLiveTest do
       # On: placeholder mentions the Edit affordance now visible.
       html = render_click(view, "toggle_edit_mode")
       assert html =~ "click Edit to add one"
+    end
+  end
+
+  describe "epic creation" do
+    # Stage 3 of task 019d60ca: a second FAB stacked above the Create-Task
+    # FAB opens a bottom sheet for creating epics. Mirrors the new-task
+    # flow pattern.
+
+    test "renders the New Epic FAB", %{conn: conn} do
+      _project = create_project()
+      conn = authenticated_conn(conn)
+      {:ok, _view, html} = live(conn, ~p"/tasks")
+
+      # The new-epic FAB is the one wired to toggle_epic_sheet.
+      assert html =~ ~s|phx-click="toggle_epic_sheet"|
+      [fab_attrs] = Regex.run(~r/<button[^>]*phx-click="toggle_epic_sheet"[^>]*>/, html)
+      assert fab_attrs =~ "btn-secondary"
+      assert fab_attrs =~ "btn-circle"
+    end
+
+    test "opens the New Epic sheet on FAB click", %{conn: conn} do
+      _project = create_project()
+      conn = authenticated_conn(conn)
+      {:ok, view, html} = live(conn, ~p"/tasks")
+
+      # Sheet is closed initially — its content is gated by :if=show_epic_sheet.
+      refute html =~ "create-epic-form"
+
+      html = render_click(view, "toggle_epic_sheet")
+
+      assert html =~ "create-epic-form"
+      assert html =~ "New Epic"
+      # Project select renders when no project is filtered.
+      assert html =~ ~s|name="epic[project_id]"|
+    end
+
+    test "creates an epic on valid submit and closes the sheet", %{conn: conn} do
+      project = create_project()
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+
+      _ = render_click(view, "toggle_epic_sheet")
+
+      html =
+        view
+        |> form("#create-epic-form",
+          epic: %{
+            "name" => "Mobile redesign",
+            "project_id" => project.id,
+            "description" => "Refresh the mobile UX.",
+            "acceptance_criteria" => "Lighthouse > 90",
+            "target_branch" => "feature/mobile",
+            "deploy_target" => "staging"
+          }
+        )
+        |> render_submit()
+
+      # Flash + sheet closed.
+      assert html =~ "Epic created."
+      refute html =~ "create-epic-form"
+
+      # Epic exists for the project.
+      epics = Tasks.list_epics_for_project(project.id)
+      assert Enum.any?(epics, fn e -> e.name == "Mobile redesign" end)
+    end
+
+    test "shows inline errors on invalid submit and keeps sheet open", %{conn: conn} do
+      _project = create_project()
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+
+      _ = render_click(view, "toggle_epic_sheet")
+
+      html =
+        view
+        |> form("#create-epic-form",
+          epic: %{
+            "name" => "",
+            "project_id" => ""
+          }
+        )
+        |> render_submit()
+
+      # Sheet still open, error messaging present.
+      assert html =~ "create-epic-form"
+      assert html =~ "Could not create epic"
     end
   end
 

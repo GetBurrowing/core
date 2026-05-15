@@ -21,6 +21,26 @@ defmodule Platform.Tasks.Epic do
     timestamps(type: :utc_datetime_usec)
   end
 
+  @doc """
+  Build/validate an `Epic` changeset.
+
+  ## Required fields
+  - `:project_id` — every epic belongs to exactly one project. Foreign key
+    enforced at the DB level (`on_delete: :delete_all`).
+  - `:name` — human-readable label used in the kanban dropdown, breadcrumbs,
+    and MCP tool output. Must be 1..120 chars after trimming. The DB column
+    is `null: false` so `validate_required` is a redundant-but-friendly UI
+    gate that turns a Postgres NOT NULL into an Ecto changeset error.
+
+  ## Optional fields
+  - `:description`, `:acceptance_criteria` — long-form body text. Both are
+    nullable on purpose: epics are often created from a one-line title and
+    fleshed out later in the planning conversation.
+  - `:status` — defaults to `"open"`; constrained to `@statuses` via
+    `validate_inclusion`.
+  - `:target_branch`, `:deploy_target` — deploy-strategy hints inherited by
+    member tasks. Optional so non-deploy epics (research, design) work too.
+  """
   def changeset(epic, attrs) do
     epic
     |> cast(attrs, [
@@ -33,6 +53,7 @@ defmodule Platform.Tasks.Epic do
       :deploy_target
     ])
     |> validate_required([:project_id, :name])
+    |> validate_length(:name, min: 1, max: 120)
     |> validate_inclusion(:status, @statuses)
     |> foreign_key_constraint(:project_id)
   end

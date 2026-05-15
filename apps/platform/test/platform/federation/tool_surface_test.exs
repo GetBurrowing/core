@@ -35,9 +35,9 @@ defmodule Platform.Federation.ToolSurfaceTest do
   defp unique_slug, do: "test-#{System.unique_integer([:positive])}"
 
   describe "tool_definitions/0" do
-    test "returns all 66 tools with required components" do
+    test "returns all 67 tools with required components" do
       tools = ToolSurface.tool_definitions()
-      assert length(tools) == 66
+      assert length(tools) == 67
 
       tool_names = Enum.map(tools, & &1.name)
       assert "send_media" in tool_names
@@ -58,6 +58,7 @@ defmodule Platform.Federation.ToolSurfaceTest do
       assert "project_list" in tool_names
       assert "project_update" in tool_names
       assert "epic_list" in tool_names
+      assert "epic_create" in tool_names
       assert "task_create" in tool_names
       assert "task_get" in tool_names
       assert "task_list" in tool_names
@@ -234,6 +235,80 @@ defmodule Platform.Federation.ToolSurfaceTest do
 
       assert error.error =~ "project_id"
       assert error.recoverable == true
+    end
+
+    # ── epic_create ──────────────────────────────────────────────────────
+
+    test "epic_create creates an epic with project_id and name" do
+      project = create_project()
+
+      {:ok, result} =
+        ToolSurface.execute(
+          "epic_create",
+          %{
+            "project_id" => project.id,
+            "name" => "Reskin Q3",
+            "description" => "Quarter-three reskin work",
+            "target_branch" => "feat/reskin",
+            "deploy_target" => "exp"
+          },
+          %{}
+        )
+
+      assert result.name == "Reskin Q3"
+      assert result.description == "Quarter-three reskin work"
+      assert result.project_id == project.id
+      assert result.status == "open"
+      assert result.target_branch == "feat/reskin"
+      assert result.deploy_target == "exp"
+      assert is_binary(result.id)
+    end
+
+    test "epic_create without project_id returns error" do
+      {:error, error} =
+        ToolSurface.execute(
+          "epic_create",
+          %{"name" => "Orphan epic"},
+          %{}
+        )
+
+      assert error.error =~ "project_id"
+      assert error.recoverable == true
+      assert error.suggestion =~ "project_id"
+    end
+
+    test "epic_create without name returns error" do
+      project = create_project()
+
+      {:error, error} =
+        ToolSurface.execute(
+          "epic_create",
+          %{"project_id" => project.id},
+          %{}
+        )
+
+      assert error.error =~ "name"
+      assert error.recoverable == true
+    end
+
+    test "epic_create lands on epic_list for the project" do
+      project = create_project()
+
+      {:ok, created} =
+        ToolSurface.execute(
+          "epic_create",
+          %{"project_id" => project.id, "name" => "Round-trip Epic"},
+          %{}
+        )
+
+      {:ok, listed} =
+        ToolSurface.execute(
+          "epic_list",
+          %{"project_id" => project.id},
+          %{}
+        )
+
+      assert Enum.any?(listed, fn e -> e.id == created.id and e.name == "Round-trip Epic" end)
     end
 
     # ── meeting_create ───────────────────────────────────────────────────

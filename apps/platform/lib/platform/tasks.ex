@@ -118,12 +118,28 @@ defmodule Platform.Tasks do
     %Epic{}
     |> Epic.changeset(attrs)
     |> Repo.insert()
+    |> case do
+      {:ok, epic} ->
+        broadcast_board({:epic_created, epic})
+        {:ok, epic}
+
+      error ->
+        error
+    end
   end
 
   def update_epic(%Epic{} = epic, attrs) do
     epic
     |> Epic.changeset(attrs)
     |> Repo.update()
+    |> case do
+      {:ok, updated} ->
+        broadcast_board({:epic_updated, updated})
+        {:ok, updated}
+
+      error ->
+        error
+    end
   end
 
   def get_epic(id), do: Repo.get(Epic, id)

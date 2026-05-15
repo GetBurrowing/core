@@ -13,7 +13,7 @@ defmodule PlatformWeb.TasksLive do
   alias Platform.Repo
   alias Platform.Skills
   alias Platform.Tasks
-  alias Platform.Tasks.{Plan, ReviewRequest, ReviewRequests, Stack, Stacks, Task}
+  alias Platform.Tasks.{Epic, Plan, ReviewRequest, ReviewRequests, Stack, Stacks, Task}
 
   @kanban_columns [
     {"backlog", "Backlog"},
@@ -149,6 +149,14 @@ defmodule PlatformWeb.TasksLive do
      )
      |> assign(:sheet_what, "")
      |> assign(:sheet_why, "")
+     # New-Epic bottom sheet (mirrors :show_task_sheet / :task_form). Stage 3
+     # of task 019d60ca: a second FAB stacked above the Create-Task FAB opens
+     # this sheet; submit calls Tasks.create_epic/1 which broadcasts on success.
+     |> assign(:show_epic_sheet, false)
+     |> assign(
+       :epic_form,
+       to_form(Epic.changeset(%Epic{}, %{}), as: "epic")
+     )
      |> assign(:epics, enrich_epics(Tasks.list_epics_for_project(nil)))
      |> assign(:epics_collapsed, false)
      |> assign(:agents, agents)
@@ -1416,6 +1424,79 @@ defmodule PlatformWeb.TasksLive do
     {:noreply, assign(socket, :show_task_sheet, false)}
   end
 
+  # ── New-Epic bottom sheet (task 019d60ca stage 3) ──────────────────────
+  # Mirrors the toggle/close/validate/create quartet for tasks above. The
+  # epic sheet has fewer fields (no plan/validation/assignee — epics are
+  # pure containers) so the handlers are shorter, but the assign + form
+  # lifecycle is identical.
+
+  def handle_event("toggle_epic_sheet", _params, socket) do
+    showing = !socket.assigns.show_epic_sheet
+
+    socket =
+      if showing do
+        socket
+        |> assign(:show_epic_sheet, true)
+        |> assign(
+          :epic_form,
+          to_form(
+            Epic.changeset(%Epic{}, default_epic_form_attrs(socket)),
+            as: "epic"
+          )
+        )
+      else
+        assign(socket, :show_epic_sheet, false)
+      end
+
+    {:noreply, socket}
+  end
+
+  def handle_event("close_epic_sheet", _params, socket) do
+    {:noreply, assign(socket, :show_epic_sheet, false)}
+  end
+
+  def handle_event("validate_epic", %{"epic" => params}, socket) do
+    changeset =
+      %Epic{}
+      |> Epic.changeset(params)
+      |> Map.put(:action, :validate)
+
+    {:noreply, assign(socket, :epic_form, to_form(changeset, as: "epic"))}
+  end
+
+  def handle_event("create_epic", %{"epic" => params}, socket) do
+    # Pin project_id when the board is filtered; users picking from the
+    # filtered view shouldn't have to re-select it. The form hides the
+    # select in that mode, so without this merge the param would be missing.
+    attrs =
+      case socket.assigns.selected_project_id do
+        nil -> params
+        id -> Map.put_new(params, "project_id", id)
+      end
+
+    case Tasks.create_epic(attrs) do
+      {:ok, _epic} ->
+        # create_epic/1 already broadcasts {:epic_created, epic}; refresh_board
+        # will re-fetch and re-enrich the epics list via the existing pubsub
+        # path. Closing the sheet + flashing happens here for immediacy.
+        {:noreply,
+         socket
+         |> assign(:show_epic_sheet, false)
+         |> put_flash(:info, "Epic created.")
+         |> refresh_board()
+         |> assign(
+           :epics,
+           enrich_epics(Tasks.list_epics_for_project(socket.assigns.selected_project_id))
+         )}
+
+      {:error, changeset} ->
+        {:noreply,
+         socket
+         |> assign(:epic_form, to_form(changeset, as: "epic"))
+         |> put_flash(:error, "Could not create epic. Check the form for errors.")}
+    end
+  end
+
   def handle_event("validate_task", %{"task" => params}, socket) do
     Logger.debug(
       "[TasksLive] validate_task: deploy_strategy_type=#{inspect(Map.get(params, "deploy_strategy_type"))}"
@@ -1677,6 +1758,18 @@ defmodule PlatformWeb.TasksLive do
   end
 
   def handle_info({:task_deleted, _task}, socket) do
+    {:noreply, refresh_board(socket)}
+  end
+
+  def handle_info({:epic_created, _epic}, socket) do
+    # New epic — refresh the board so the epic dropdown + any epic-scoped
+    # filters pick it up immediately.
+    {:noreply, refresh_board(socket)}
+  end
+
+  def handle_info({:epic_updated, _epic}, socket) do
+    # Epic name/description/status may have changed; refresh so the rendered
+    # epic chips and the dropdown reflect the new state.
     {:noreply, refresh_board(socket)}
   end
 
@@ -3147,6 +3240,17 @@ defmodule PlatformWeb.TasksLive do
 
   defp default_task_form_attrs(agent_id) do
     %{"assignee_id" => agent_id, "assignee_type" => "agent"}
+  end
+
+  # Pre-populate the New-Epic form with the currently selected project (if
+  # any) so users on a filtered board don't have to re-select it. The form
+  # hides the project select entirely in that mode and renders a hidden
+  # input instead.
+  defp default_epic_form_attrs(socket) do
+    case socket.assigns[:selected_project_id] do
+      nil -> %{}
+      id -> %{"project_id" => id}
+    end
   end
 
   defp normalize_task_assignee(params, default_agent_id, requested_plan?) do

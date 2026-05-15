@@ -2395,6 +2395,20 @@
     <span class="hero-plus size-6"></span>
   </button>
 
+  <%!-- FAB: Create Epic (task 019d60ca stage 3, option A — stacked).
+       Sits 5rem above the Create-Task FAB so both are reachable on mobile
+       without overlap. Same mobile-hide guard when a task is open. --%>
+  <button
+    phx-click="toggle_epic_sheet"
+    class={[
+      "btn btn-secondary btn-circle fixed bottom-[calc(env(safe-area-inset-bottom)+5rem+var(--bottom-nav-height,0px))] right-6 z-30 shadow-lg",
+      @selected_task && "max-md:hidden"
+    ]}
+    aria-label="New epic"
+  >
+    <span class="hero-rectangle-stack size-6"></span>
+  </button>
+
   <%!-- Mobile project filter sheet (task 019e0d4b stage 3 sub a). Slides
        in from the left on mobile, hidden entirely on md+ where the project
        filter lives in a different surface. --%>
@@ -2970,6 +2984,141 @@
           class="btn btn-secondary btn-sm flex-1"
         >
           Create & Request Plan
+        </button>
+      </div>
+    </.form>
+  </.sheet>
+
+  <%!-- New-epic sheet (task 019d60ca stage 3). Mirrors the new-task sheet
+       wrapper styling so the mobile bottom-sheet pattern stays consistent
+       (env(safe-area-inset-bottom) padding, max-h-75vh scroll, rounded-t-2xl
+       drawer card). The form is intentionally smaller than tasks: epics are
+       containers with no agent / plan / validation knobs at create time. --%>
+  <.sheet
+    :if={@show_epic_sheet}
+    id="epic-sheet"
+    open={true}
+    placement={:bottom}
+    on_close="close_epic_sheet"
+  >
+    <:title>New Epic</:title>
+    <.form
+      for={@epic_form}
+      id="create-epic-form"
+      phx-change="validate_epic"
+      phx-submit="create_epic"
+      class="space-y-4"
+    >
+      <%!-- Name --%>
+      <div>
+        <label class="label label-text text-xs font-medium">Name *</label>
+        <input
+          type="text"
+          name="epic[name]"
+          value={@epic_form[:name].value}
+          required
+          placeholder="Mobile redesign"
+          class="input input-bordered input-sm w-full"
+        />
+        <p
+          :for={msg <- Enum.map(@epic_form[:name].errors, &translate_error/1)}
+          class="mt-1 text-xs text-error"
+        >
+          {msg}
+        </p>
+      </div>
+
+      <%!-- Project. When the board is filtered to a single project we hide
+           the picker entirely and pin via a hidden input — matches Rowan's
+           brief and removes a redundant click. Otherwise show a select. --%>
+      <%= if @selected_project_id do %>
+        <input type="hidden" name="epic[project_id]" value={@selected_project_id} />
+      <% else %>
+        <div>
+          <label class="label label-text text-xs font-medium">Project *</label>
+          <select
+            name="epic[project_id]"
+            class="select select-bordered select-sm w-full"
+            required
+          >
+            <option value="">Select project</option>
+            <option
+              :for={project <- @projects}
+              value={project.id}
+              selected={@epic_form[:project_id].value == project.id}
+            >
+              {project.name}
+            </option>
+          </select>
+          <p
+            :for={msg <- Enum.map(@epic_form[:project_id].errors, &translate_error/1)}
+            class="mt-1 text-xs text-error"
+          >
+            {msg}
+          </p>
+        </div>
+      <% end %>
+
+      <%!-- Description (optional) --%>
+      <div>
+        <label class="label label-text text-xs font-medium">Description</label>
+        <textarea
+          name="epic[description]"
+          placeholder="What is this epic about?"
+          style="line-height:1.5;padding:6px 12px;min-height:33px;max-height:200px;overflow-y:auto;field-sizing:content"
+          class="textarea textarea-bordered w-full text-sm"
+        >{@epic_form[:description].value}</textarea>
+      </div>
+
+      <%!-- Acceptance criteria (optional) --%>
+      <div>
+        <label class="label label-text text-xs font-medium">Acceptance criteria</label>
+        <textarea
+          name="epic[acceptance_criteria]"
+          placeholder="How will we know this epic is done?"
+          style="line-height:1.5;padding:6px 12px;min-height:33px;max-height:200px;overflow-y:auto;field-sizing:content"
+          class="textarea textarea-bordered w-full text-sm"
+        >{@epic_form[:acceptance_criteria].value}</textarea>
+      </div>
+
+      <%!-- Target branch (optional) --%>
+      <div>
+        <label class="label label-text text-xs font-medium">Target branch</label>
+        <input
+          type="text"
+          name="epic[target_branch]"
+          value={@epic_form[:target_branch].value}
+          placeholder="main"
+          class="input input-bordered input-sm w-full"
+        />
+      </div>
+
+      <%!-- Deploy target (optional) --%>
+      <div>
+        <label class="label label-text text-xs font-medium">Deploy target</label>
+        <input
+          type="text"
+          name="epic[deploy_target]"
+          value={@epic_form[:deploy_target].value}
+          placeholder="staging"
+          class="input input-bordered input-sm w-full"
+        />
+      </div>
+
+      <%!-- Submit + Cancel --%>
+      <div class="flex gap-2 pt-2">
+        <button
+          type="button"
+          phx-click="close_epic_sheet"
+          class="btn btn-ghost btn-sm flex-1"
+        >
+          Cancel
+        </button>
+        <button
+          type="submit"
+          class="btn btn-primary btn-sm flex-1"
+        >
+          Create Epic
         </button>
       </div>
     </.form>
