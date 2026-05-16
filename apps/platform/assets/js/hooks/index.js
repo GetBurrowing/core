@@ -7,6 +7,7 @@ import CopyToClipboard from "./copy_to_clipboard"
 import DragDropUpload from "./drag_drop_upload"
 import EmbedCanvasScale from "./embed_canvas_scale"
 import ExecutionLogScroll from "./execution_log_scroll"
+import InfiniteScroll from "./infinite_scroll"
 import InlineEdit from "./inline_edit"
 import InlineFocus from "./inline_focus"
 import InlineThread from "./inline_thread"
@@ -47,6 +48,7 @@ export default {
   DragDropUpload,
   EmbedCanvasScale,
   ExecutionLogScroll,
+  InfiniteScroll,
   InlineEdit,
   InlineFocus,
   InlineThread,

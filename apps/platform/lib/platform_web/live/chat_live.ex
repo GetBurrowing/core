@@ -392,6 +392,50 @@ defmodule PlatformWeb.ChatLive do
      |> assign(:open_message_actions_msg, nil)}
   end
 
+  # ── Infinite scroll (task 019e18fc Stage 3) ────────────────────────────────
+  #
+  # Top sentinel fires `load_older_messages` when it scrolls into view AND
+  # `:has_more_older` is true. Bottom sentinel fires `load_newer_messages`
+  # when visible AND `:newest_evicted?` is true (the bounded-DOM tail was
+  # pruned by a prior prepend; the user is scrolling back toward the live
+  # tail and needs it re-hydrated). Both delegate the actual fetch +
+  # stream mutation to `PlatformWeb.ChatLive.MessagesHooks` — see Stages
+  # 1 and 2 for the helper implementations.
+  #
+  # Authorization: both handlers gate on a present `:active_space`. A
+  # missing active_space means the user is on the no-space landing
+  # state, in which case there's nothing to paginate.
+
+  def handle_event("load_older_messages", _params, socket) do
+    case socket.assigns[:active_space] do
+      %{id: space_id} when is_binary(space_id) ->
+        socket =
+          socket
+          |> assign(:loading_older, true)
+          |> PlatformWeb.ChatLive.MessagesHooks.load_older_messages(space_id)
+
+        {:noreply, socket}
+
+      _ ->
+        {:noreply, socket}
+    end
+  end
+
+  def handle_event("load_newer_messages", _params, socket) do
+    case socket.assigns[:active_space] do
+      %{id: space_id} when is_binary(space_id) ->
+        socket =
+          socket
+          |> assign(:loading_newer, true)
+          |> PlatformWeb.ChatLive.MessagesHooks.load_newer_messages(space_id)
+
+        {:noreply, socket}
+
+      _ ->
+        {:noreply, socket}
+    end
+  end
+
   # ── Version history popover (task 019e0f29 Stage 6, contract Section D.2)
   # Clicking the `(edited)` affix opens this; the popover lists prior
   # versions newest-first.

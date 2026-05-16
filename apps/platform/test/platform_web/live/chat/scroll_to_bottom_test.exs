@@ -122,20 +122,27 @@ defmodule PlatformWeb.ChatLive.ScrollToBottomTest do
   end
 
   describe "ScrollToBottom hook wiring (#message-list contract)" do
-    test "message-list carries data-scroll-container + phx-hook=\"ScrollToBottom\"", %{conn: conn} do
+    test "message-list carries phx-hook=\"ScrollToBottom\" + phx-update=\"stream\"; scroll container is the wrapper ancestor",
+         %{conn: conn} do
       {conn, _user} = authenticated_conn(conn)
       {:ok, _view, html} = live(conn, ~p"/chat/general")
 
-      # data-scroll-container must live on #message-list itself so the
-      # hook's `closest("[data-scroll-container]")` finds the right
-      # ancestor (the element IS its own scroller). Stage 1 fix.
+      # Task 019e18fc Stage 3 (infinite scroll) moved data-scroll-container
+      # from #message-list onto a new `#chat-message-scroller` wrapper —
+      # the sentinels for infinite-scroll need to live INSIDE the scroll
+      # viewport, so the wrapper became the actual scroller and
+      # #message-list became a non-scrolling flex column inside it. The
+      # ScrollToBottom hook's `closest("[data-scroll-container]")` walk
+      # now resolves to the wrapper instead of #message-list — same
+      # contract intent, different anchor element.
       assert html =~
-               ~r/id="message-list"[^>]*data-scroll-container/,
-             "expected #message-list to opt into data-scroll-container — without it the hook " <>
-               "would climb to <main> (also marked) and scroll the wrong element on PWA layouts"
+               ~r/id="chat-message-scroller"[^>]*data-scroll-container/,
+             "expected #chat-message-scroller wrapper to carry data-scroll-container — " <>
+               "without it the ScrollToBottom hook climbs to <main> and scrolls the wrong element"
 
       # Hook attribute itself — without phx-hook=\"ScrollToBottom\" the
-      # observer never mounts and no scroll-to-bottom happens.
+      # observer never mounts and no scroll-to-bottom happens. Still
+      # bound on #message-list since the hook reads its child mutations.
       assert html =~ ~r/id="message-list"[^>]*phx-hook="ScrollToBottom"/,
              "phx-hook=\"ScrollToBottom\" must remain bound on #message-list"
 

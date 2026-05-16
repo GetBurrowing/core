@@ -187,10 +187,16 @@ defmodule PlatformWeb.ChatLiveTest do
     assert html =~
              ~r/id="chat-drop-zone"[^>]*class="flex flex-1 flex-col overflow-hidden min-w-0 min-h-0"/
 
-    # #message-list: must also set min-h-0 + overscroll-contain so iOS
-    # rubber-band is bounded to the message list itself.
+    # Scroll container (task 019e18fc Stage 3): infinite-scroll's
+    # IntersectionObserver needs the load-more sentinels INSIDE the
+    # scroll viewport, so the overflow + overscroll classes moved off
+    # #message-list onto a new `#chat-message-scroller` wrapper.
+    # #message-list itself is now a non-scrolling flex column inside
+    # that wrapper. The intent of this test (iOS rubber-band bounded
+    # via min-h-0 + overscroll-contain on the actual scroller) is
+    # preserved — the assertion target just moved up one level.
     assert html =~
-             ~r/id="message-list"[^>]*class="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain/
+             ~r/id="chat-message-scroller"[^>]*class="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain/
   end
 
   test "data-draft-key on the main composer is scoped to the active space's id and updates on channel switch",

@@ -710,34 +710,75 @@
            already has `overscroll-behavior: none` on body, but iOS WebKit
            respects the per-scroller setting more reliably than the
            ancestor chain). --%>
+      <%!-- Outer scroll wrapper for infinite scroll (task 019e18fc Stage
+           3). The sentinels live inside this wrapper as siblings of
+           #message-list — that way they're inside the scroll viewport
+           and the InfiniteScroll IntersectionObserver fires when the
+           user scrolls them into view. #message-list itself becomes a
+           non-scrolling flex column inside the wrapper. Overflow +
+           overscroll moved from #message-list to here. --%>
       <div
-        id="message-list"
+        id="chat-message-scroller"
         data-scroll-container
-        class="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain bg-base-100 px-5 py-4 flex flex-col space-y-1"
-        phx-update="stream"
-        phx-hook="ScrollToBottom"
+        class="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain bg-base-100"
       >
-        <.chat_message
-          :for={{dom_id, msg} <- @streams.messages}
-          :if={is_nil(msg.deleted_at)}
-          dom_id={dom_id}
-          msg={msg}
-          current_participant={@current_participant}
-          agent_participant_ids={@agent_participant_ids}
-          agent_colors_map={@agent_colors_map}
-          participants_map={@participants_map}
-          quick_emojis={@quick_emojis}
-          pinned_message_ids={@pinned_message_ids}
-          highlighted_message_id={@highlighted_message_id}
-          canvases_by_id={@canvases_by_id}
-          attachments_map={@attachments_map}
-          thread_previews={@thread_previews}
-          expanded_threads={@expanded_threads}
-          inline_thread_messages={@inline_thread_messages}
-          mention_suggestions={@mention_suggestions}
-          mention_source={@mention_source}
-          editing_message_id={@editing_message_id}
-        />
+        <%!-- Top sentinel: fires `load_older_messages` when visible AND
+             :has_more_older is true. --%>
+        <div
+          :if={@has_more_older}
+          id="chat-scroll-sentinel-top"
+          phx-hook="InfiniteScroll"
+          data-direction="older"
+          data-loading={if @loading_older, do: "true"}
+          class="flex justify-center py-2 text-xs text-base-content/40"
+        >
+          <span :if={@loading_older} class="hero-arrow-path size-3 animate-spin"></span>
+          <span :if={!@loading_older}>Loading older messages…</span>
+        </div>
+
+        <div
+          id="message-list"
+          class="px-5 py-4 flex flex-col space-y-1"
+          phx-update="stream"
+          phx-hook="ScrollToBottom"
+        >
+          <.chat_message
+            :for={{dom_id, msg} <- @streams.messages}
+            :if={is_nil(msg.deleted_at)}
+            dom_id={dom_id}
+            msg={msg}
+            current_participant={@current_participant}
+            agent_participant_ids={@agent_participant_ids}
+            agent_colors_map={@agent_colors_map}
+            participants_map={@participants_map}
+            quick_emojis={@quick_emojis}
+            pinned_message_ids={@pinned_message_ids}
+            highlighted_message_id={@highlighted_message_id}
+            canvases_by_id={@canvases_by_id}
+            attachments_map={@attachments_map}
+            thread_previews={@thread_previews}
+            expanded_threads={@expanded_threads}
+            inline_thread_messages={@inline_thread_messages}
+            mention_suggestions={@mention_suggestions}
+            mention_source={@mention_source}
+            editing_message_id={@editing_message_id}
+          />
+        </div>
+
+        <%!-- Bottom sentinel: fires `load_newer_messages` when visible AND
+             :newest_evicted? is true. Only renders after the live tail
+             has been evicted by a prepend (Stage 2's prune logic). --%>
+        <div
+          :if={@newest_evicted?}
+          id="chat-scroll-sentinel-bottom"
+          phx-hook="InfiniteScroll"
+          data-direction="newer"
+          data-loading={if @loading_newer, do: "true"}
+          class="flex justify-center py-2 text-xs text-base-content/40"
+        >
+          <span :if={@loading_newer} class="hero-arrow-path size-3 animate-spin"></span>
+          <span :if={!@loading_newer}>Loading newer messages…</span>
+        </div>
       </div>
 
       <%!-- Streaming reply bubbles --%>

@@ -81,6 +81,7 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
       stream: 4,
       stream_delete: 3,
       stream_insert: 3,
+      stream_insert: 4,
       consume_uploaded_entries: 3,
       uploaded_entries: 2
     ]
@@ -90,6 +91,17 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
   alias PlatformWeb.ChatLive.SearchHooks
 
   @message_limit 50
+
+  # Bounded-DOM cap for the chat message stream (task 019e18fc Stage 2,
+  # "virtual list" per Rowan Ellis 2026-05-15). Phoenix LiveView's
+  # built-in stream `:limit` only evicts from one fixed end (positive =
+  # evict beginning; negative = evict end), which doesn't handle the
+  # bidirectional case (prepend older = evict newest; append live tail
+  # = evict oldest). We manage eviction manually below in
+  # `load_older_messages/2` and `load_newer_messages/2`. UUIDv7 message
+  # ids sort lexicographically by time, so MapSet → sort → take-last gives
+  # the newest-end ids cheaply.
+  @stream_size_limit 300
 
   # Expanded emoji list offered in the "+" picker popover. Keep curated —
   # full emoji-picker-element with search/skin tones is tracked for V2.
@@ -118,7 +130,15 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
     |> assign(:drafts, %{})
     |> assign(:msg_day_labels, %{})
     |> assign(:last_msg_day, nil)
+    |> assign(:first_msg_day, nil)
     |> assign(:rendered_message_ids, MapSet.new())
+    |> assign(:earliest_message_id, nil)
+    |> assign(:latest_message_id, nil)
+    |> assign(:has_more_older, false)
+    |> assign(:loading_older, false)
+    |> assign(:loading_newer, false)
+    |> assign(:newest_evicted?, false)
+    |> assign(:evicted_tail_message_ids, MapSet.new())
     |> assign_compose("")
     |> assign_thread_compose("")
     |> stream(:messages, [])
@@ -148,6 +168,24 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
 
     {labelled, day_labels, last_day} = label_messages_for_initial_load(enriched)
 
+    # Cursor + boundary state for infinite scroll. `labelled` is in ASC
+    # order (oldest first), so the head is the cursor for "load older"
+    # and its day is the prepend-boundary day. The tail (last item) is
+    # the live-tail cursor for "load newer" — used to re-hydrate after
+    # the bottom of the bounded stream is evicted.
+    earliest = List.first(labelled)
+    earliest_id = earliest && earliest.id
+    first_day = earliest && message_day(earliest)
+
+    latest = List.last(labelled)
+    latest_id = latest && latest.id
+
+    has_more_older =
+      case earliest_id do
+        nil -> false
+        id -> Chat.has_more_messages_before?(space.id, before_id: id, top_level_only: true)
+      end
+
     attachments_map = build_attachments_map(messages)
     thread_previews = Chat.thread_previews_for_messages(Enum.map(messages, & &1.id))
 
@@ -164,9 +202,315 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
     |> assign(:streaming_replies, %{})
     |> assign(:msg_day_labels, day_labels)
     |> assign(:last_msg_day, last_day)
+    |> assign(:first_msg_day, first_day)
     |> assign(:rendered_message_ids, MapSet.new(labelled, & &1.id))
+    |> assign(:earliest_message_id, earliest_id)
+    |> assign(:latest_message_id, latest_id)
+    |> assign(:has_more_older, has_more_older)
+    |> assign(:loading_older, false)
+    |> assign(:loading_newer, false)
+    |> assign(:newest_evicted?, false)
+    |> assign(:evicted_tail_message_ids, MapSet.new())
     |> stream(:messages, labelled, reset: true)
     |> restore_draft(space.id)
+  end
+
+  @doc """
+  Fetch + prepend an older batch of messages to the stream (infinite
+  scroll, task 019e18fc). No-ops when there is no cursor or no more
+  history before the cursor.
+
+  Returns the socket with:
+    * the older batch `stream_insert`ed at the top (with day labels
+      computed against the existing `:first_msg_day` so the boundary
+      separator only fires when crossing a calendar day)
+    * `:earliest_message_id` updated to the new oldest
+    * `:has_more_older` updated via a fresh peek against the new cursor
+    * `:first_msg_day` updated to the new oldest day
+    * `:rendered_message_ids` extended with the new ids
+    * `:msg_day_labels` extended with the new id→label entries
+    * `:loading_older` cleared
+
+  `:attachments_map` and `:thread_previews` are extended via `Map.merge/2`
+  so existing entries (which the live tail may have just refreshed) are
+  preserved over the older-batch lookup.
+  """
+  @spec load_older_messages(Phoenix.LiveView.Socket.t(), binary()) ::
+          Phoenix.LiveView.Socket.t()
+  def load_older_messages(socket, space_id) when is_binary(space_id) do
+    case socket.assigns[:earliest_message_id] do
+      nil ->
+        assign(socket, :loading_older, false)
+
+      cursor ->
+        older =
+          space_id
+          |> Chat.list_messages(
+            limit: @message_limit,
+            before_id: cursor,
+            top_level_only: true
+          )
+          |> Enum.reverse()
+
+        if older == [] do
+          socket
+          |> assign(:has_more_older, false)
+          |> assign(:loading_older, false)
+        else
+          enriched =
+            older
+            |> Enum.map(&enrich_versions_count/1)
+            |> enrich_messages_with_reactions(socket)
+
+          {labelled, new_day_labels, new_first_day} =
+            label_messages_for_older_batch(enriched, socket.assigns[:first_msg_day])
+
+          new_ids = Enum.map(labelled, & &1.id)
+
+          new_earliest_id = List.first(labelled).id
+
+          has_more_older =
+            Chat.has_more_messages_before?(space_id,
+              before_id: new_earliest_id,
+              top_level_only: true
+            )
+
+          attachments_delta = build_attachments_map(older)
+
+          thread_previews_delta =
+            Chat.thread_previews_for_messages(new_ids)
+
+          :telemetry.execute(
+            [:platform, :chat, :older_messages_loaded],
+            %{count: length(older), system_time: System.system_time()},
+            %{space_id: space_id}
+          )
+
+          merged_attachments =
+            Map.merge(attachments_delta, socket.assigns.attachments_map || %{})
+
+          merged_thread_previews =
+            Map.merge(thread_previews_delta, socket.assigns.thread_previews || %{})
+
+          merged_day_labels =
+            Map.merge(socket.assigns[:msg_day_labels] || %{}, new_day_labels)
+
+          merged_rendered =
+            (socket.assigns[:rendered_message_ids] || MapSet.new())
+            |> MapSet.union(MapSet.new(new_ids))
+
+          # Prepend each labelled message to the stream. `at: 0` puts the
+          # newest of `labelled` (the bottom of the older batch) closest
+          # to the existing top — so iterating ASC and inserting at 0
+          # gives the correct visual order (oldest at the very top).
+          socket =
+            Enum.reduce(labelled, socket, fn msg, acc ->
+              stream_insert(acc, :messages, msg, at: 0)
+            end)
+            |> assign(:attachments_map, merged_attachments)
+            |> assign(:thread_previews, merged_thread_previews)
+            |> assign(:msg_day_labels, merged_day_labels)
+            |> assign(:rendered_message_ids, merged_rendered)
+            |> assign(:earliest_message_id, new_earliest_id)
+            |> assign(:first_msg_day, new_first_day)
+            |> assign(:has_more_older, has_more_older)
+            |> assign(:loading_older, false)
+
+          # Bounded-DOM cap (task 019e18fc Stage 2). If the prepend pushed
+          # us past @stream_size_limit, evict the newest-end (tail) ids
+          # to keep the DOM bounded. UUIDv7 ids sort lexicographically by
+          # time, so the LARGEST ids are the newest end.
+          prune_tail_if_over_limit(socket)
+        end
+    end
+  end
+
+  @doc """
+  Fetch + append a fresh slice of newer messages to re-hydrate the
+  live tail after `load_older_messages/2` evicted it (task 019e18fc
+  Stage 2). No-ops when `:newest_evicted?` is false or no cursor is
+  available.
+
+  Mirrors `load_older_messages/2`: uses the `:after_id` keyset, batch-
+  fetches per-message data, enriches with the existing initial-load
+  pipeline, appends via `stream_insert` (default `at: -1`).
+
+  After the append, if the in-DOM message count is once again over
+  `@stream_size_limit`, the OLD end (top) is pruned — this is the
+  symmetric case to `load_older_messages/2`'s tail-prune. The eviction
+  of older messages from the top is acceptable since the user is
+  scrolling toward the live tail and the older history can be re-
+  fetched via `load_older_messages/2` if they scroll back up.
+
+  Flips `:newest_evicted?` to false when the fetched batch reaches the
+  current live tail (no more `has_more_messages_after?`).
+  """
+  @spec load_newer_messages(Phoenix.LiveView.Socket.t(), binary()) ::
+          Phoenix.LiveView.Socket.t()
+  def load_newer_messages(socket, space_id) when is_binary(space_id) do
+    cond do
+      not socket.assigns[:newest_evicted?] ->
+        assign(socket, :loading_newer, false)
+
+      is_nil(socket.assigns[:latest_message_id]) ->
+        assign(socket, :loading_newer, false)
+
+      true ->
+        cursor = socket.assigns.latest_message_id
+
+        newer =
+          space_id
+          |> Chat.list_messages(
+            limit: @message_limit,
+            after_id: cursor,
+            top_level_only: true
+          )
+          # `list_messages` returns DESC (newest first). Reverse to ASC
+          # so we append the oldest-of-the-batch first and the newest
+          # last — that puts the live tail at the bottom of the stream.
+          |> Enum.reverse()
+
+        if newer == [] do
+          socket
+          |> assign(:newest_evicted?, false)
+          |> assign(:evicted_tail_message_ids, MapSet.new())
+          |> assign(:loading_newer, false)
+        else
+          enriched =
+            newer
+            |> Enum.map(&enrich_versions_count/1)
+            |> enrich_messages_with_reactions(socket)
+
+          # Use the existing stream_insert_with_day_label helper for each
+          # message so the day-label state (`:last_msg_day`,
+          # `:msg_day_labels`) stays consistent with what `:on_post` /
+          # `:on_broadcast` would produce. The helper appends at the
+          # default `at: -1` (end of stream) and updates the rendered
+          # set + day labels in lockstep.
+          attachments_delta = build_attachments_map(newer)
+          new_ids = Enum.map(enriched, & &1.id)
+
+          thread_previews_delta = Chat.thread_previews_for_messages(new_ids)
+
+          merged_attachments =
+            Map.merge(socket.assigns.attachments_map || %{}, attachments_delta)
+
+          merged_thread_previews =
+            Map.merge(socket.assigns.thread_previews || %{}, thread_previews_delta)
+
+          new_latest = List.last(enriched).id
+
+          :telemetry.execute(
+            [:platform, :chat, :newer_messages_loaded],
+            %{count: length(newer), system_time: System.system_time()},
+            %{space_id: space_id}
+          )
+
+          socket =
+            Enum.reduce(enriched, socket, &stream_insert_with_day_label(&2, &1))
+            |> assign(:attachments_map, merged_attachments)
+            |> assign(:thread_previews, merged_thread_previews)
+            |> assign(:latest_message_id, new_latest)
+            |> assign(:loading_newer, false)
+
+          # If we caught up to the current tip, clear the evicted-tail
+          # state. Otherwise the user can keep paging forward.
+          caught_up? =
+            not Chat.has_more_messages_after?(space_id,
+              after_id: new_latest,
+              top_level_only: true
+            )
+
+          socket =
+            if caught_up? do
+              socket
+              |> assign(:newest_evicted?, false)
+              |> assign(:evicted_tail_message_ids, MapSet.new())
+            else
+              socket
+            end
+
+          # Bounded-DOM cap: with the live tail now back in DOM, evict
+          # the OLDEST end if we're over the limit. Symmetric to the
+          # tail-prune on `load_older_messages/2`.
+          prune_head_if_over_limit(socket)
+        end
+    end
+  end
+
+  # Evict the newest-end (largest UUIDv7) ids if the in-DOM count is over
+  # the stream size cap. Called after `load_older_messages/2` prepends.
+  # Sets `:newest_evicted?` true so the bottom sentinel renders and the
+  # user can scroll back to rehydrate.
+  defp prune_tail_if_over_limit(socket) do
+    rendered = socket.assigns[:rendered_message_ids] || MapSet.new()
+    overflow = MapSet.size(rendered) - @stream_size_limit
+
+    if overflow > 0 do
+      sorted_ids = rendered |> Enum.sort()
+      ids_to_evict = Enum.take(sorted_ids, -overflow)
+
+      remaining = rendered |> MapSet.difference(MapSet.new(ids_to_evict))
+      new_latest_id = remaining |> Enum.sort() |> List.last()
+
+      evicted_set =
+        (socket.assigns[:evicted_tail_message_ids] || MapSet.new())
+        |> MapSet.union(MapSet.new(ids_to_evict))
+
+      socket =
+        Enum.reduce(ids_to_evict, socket, fn id, acc ->
+          stream_delete(acc, :messages, %{id: id})
+        end)
+
+      socket
+      |> assign(:rendered_message_ids, remaining)
+      |> assign(:latest_message_id, new_latest_id)
+      |> assign(:newest_evicted?, true)
+      |> assign(:evicted_tail_message_ids, evicted_set)
+    else
+      socket
+    end
+  end
+
+  # Symmetric to `prune_tail_if_over_limit/1` — called after
+  # `load_newer_messages/2` appends. Evicts the oldest-end (smallest
+  # UUIDv7) ids when the stream size cap is exceeded. Updates
+  # `:earliest_message_id` and re-checks `:has_more_older` because the
+  # cursor for "load older" now points further forward in time.
+  defp prune_head_if_over_limit(socket) do
+    rendered = socket.assigns[:rendered_message_ids] || MapSet.new()
+    overflow = MapSet.size(rendered) - @stream_size_limit
+
+    if overflow > 0 do
+      sorted_ids = rendered |> Enum.sort()
+      ids_to_evict = Enum.take(sorted_ids, overflow)
+
+      remaining = rendered |> MapSet.difference(MapSet.new(ids_to_evict))
+      new_earliest_id = remaining |> Enum.sort() |> List.first()
+
+      socket =
+        Enum.reduce(ids_to_evict, socket, fn id, acc ->
+          stream_delete(acc, :messages, %{id: id})
+        end)
+
+      space_id = socket.assigns[:active_space] && socket.assigns.active_space.id
+
+      has_more_older =
+        case {space_id, new_earliest_id} do
+          {sid, eid} when is_binary(sid) and is_binary(eid) ->
+            Chat.has_more_messages_before?(sid, before_id: eid, top_level_only: true)
+
+          _ ->
+            true
+        end
+
+      socket
+      |> assign(:rendered_message_ids, remaining)
+      |> assign(:earliest_message_id, new_earliest_id)
+      |> assign(:has_more_older, has_more_older)
+    else
+      socket
+    end
   end
 
   @doc """
@@ -927,6 +1271,58 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
   # broadcast); `stream_reinsert_with_day_label/2` is for in-place
   # updates (edits, reactions, canvas re-renders) — those preserve the
   # existing label so the separator stays put.
+
+  # Walk an older-batch message list (also ASC / oldest-first) left-to-
+  # right, marking the first message of each calendar day with a
+  # `:day_label`. The trailing day in the batch is compared against the
+  # currently-rendered `:first_msg_day` boundary: if they match, the last
+  # message of the batch must NOT be labelled (the existing top-of-list
+  # message already carries that day's separator). Returns
+  # `{labelled_messages, %{msg_id => label_or_nil}, new_first_day}`.
+  defp label_messages_for_older_batch(messages, current_first_day) do
+    {rev_labelled, day_labels, _} =
+      Enum.reduce(messages, {[], %{}, nil}, fn msg, {acc, labels, prev_day} ->
+        date = message_day(msg)
+
+        label =
+          cond do
+            is_nil(date) -> nil
+            date == prev_day -> nil
+            true -> date
+          end
+
+        {[%{msg | day_label: label} | acc], Map.put(labels, msg.id, label), date || prev_day}
+      end)
+
+    labelled = Enum.reverse(rev_labelled)
+
+    # If the trailing day of the older batch matches the existing
+    # boundary day, suppress the label on the last batch message so the
+    # separator stays anchored to the originally-rendered row above it.
+    {labelled, day_labels} =
+      case List.last(labelled) do
+        nil ->
+          {labelled, day_labels}
+
+        last_msg ->
+          last_date = message_day(last_msg)
+
+          if last_date != nil and last_date == current_first_day do
+            patched = List.replace_at(labelled, -1, %{last_msg | day_label: nil})
+            {patched, Map.put(day_labels, last_msg.id, nil)}
+          else
+            {labelled, day_labels}
+          end
+      end
+
+    new_first_day =
+      case List.first(labelled) do
+        nil -> current_first_day
+        first -> message_day(first) || current_first_day
+      end
+
+    {labelled, day_labels, new_first_day}
+  end
 
   # Walk the initial-load message list left-to-right, marking the first
   # message of each calendar day with a `:day_label`. Returns

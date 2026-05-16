@@ -703,6 +703,7 @@ defmodule Platform.Chat do
 
     * `:limit`     — max number of messages (default: 50)
     * `:before_id` — keyset cursor — only messages with `id < before_id`
+    * `:after_id`  — keyset cursor — only messages with `id > after_id`
     * `:thread_id` — filter to a specific thread
     * `:top_level_only` — when `true`, include only messages where `thread_id` is `NULL`
   """
@@ -710,6 +711,7 @@ defmodule Platform.Chat do
   def list_messages(space_id, opts \\ []) do
     limit = Keyword.get(opts, :limit, 50)
     before_id = Keyword.get(opts, :before_id)
+    after_id = Keyword.get(opts, :after_id)
     thread_id = Keyword.get(opts, :thread_id)
     top_level_only = Keyword.get(opts, :top_level_only, false)
 
@@ -728,8 +730,82 @@ defmodule Platform.Chat do
       end
 
     base = if before_id, do: where(base, [m], m.id < ^before_id), else: base
+    base = if after_id, do: where(base, [m], m.id > ^after_id), else: base
 
     Repo.all(base)
+  end
+
+  @doc """
+  Peek whether more non-deleted messages exist before the given cursor.
+  Used by the infinite-scroll UI to decide whether to keep rendering the
+  load-more sentinel. Single-row `LIMIT 1` query — cheap.
+
+  ## Options
+
+    * `:before_id`       — keyset cursor — only counts messages with `id < before_id`
+    * `:thread_id`       — filter to a specific thread
+    * `:top_level_only`  — when `true`, include only messages where `thread_id` is `NULL`
+  """
+  @spec has_more_messages_before?(binary(), keyword()) :: boolean()
+  def has_more_messages_before?(space_id, opts \\ []) do
+    before_id = Keyword.get(opts, :before_id)
+    thread_id = Keyword.get(opts, :thread_id)
+    top_level_only = Keyword.get(opts, :top_level_only, false)
+
+    base =
+      from(m in Message,
+        where: m.space_id == ^space_id and is_nil(m.deleted_at),
+        limit: 1,
+        select: 1
+      )
+
+    base =
+      cond do
+        thread_id -> where(base, [m], m.thread_id == ^thread_id)
+        top_level_only -> where(base, [m], is_nil(m.thread_id))
+        true -> base
+      end
+
+    base = if before_id, do: where(base, [m], m.id < ^before_id), else: base
+
+    Repo.exists?(base)
+  end
+
+  @doc """
+  Peek whether more non-deleted messages exist after the given cursor.
+  Used by the chat infinite-scroll UI to decide whether to keep
+  rendering the bottom (load-newer) sentinel after the live tail has
+  been evicted from the bounded stream. Single-row `LIMIT 1` query.
+
+  ## Options
+
+    * `:after_id`        — keyset cursor — only counts messages with `id > after_id`
+    * `:thread_id`       — filter to a specific thread
+    * `:top_level_only`  — when `true`, include only messages where `thread_id` is `NULL`
+  """
+  @spec has_more_messages_after?(binary(), keyword()) :: boolean()
+  def has_more_messages_after?(space_id, opts \\ []) do
+    after_id = Keyword.get(opts, :after_id)
+    thread_id = Keyword.get(opts, :thread_id)
+    top_level_only = Keyword.get(opts, :top_level_only, false)
+
+    base =
+      from(m in Message,
+        where: m.space_id == ^space_id and is_nil(m.deleted_at),
+        limit: 1,
+        select: 1
+      )
+
+    base =
+      cond do
+        thread_id -> where(base, [m], m.thread_id == ^thread_id)
+        top_level_only -> where(base, [m], is_nil(m.thread_id))
+        true -> base
+      end
+
+    base = if after_id, do: where(base, [m], m.id > ^after_id), else: base
+
+    Repo.exists?(base)
   end
 
   @doc """
