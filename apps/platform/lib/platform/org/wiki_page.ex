@@ -1,8 +1,8 @@
-defmodule Platform.Org.ContextFile do
+defmodule Platform.Org.WikiPage do
   @moduledoc """
-  Schema for org-level context files (ORG_IDENTITY.md, ORG_MEMORY.md, etc.).
+  Schema for org-level wiki pages (ORG_IDENTITY.md, ORG_MEMORY.md, etc.).
 
-  These files are analogous to OpenClaw workspace files (SOUL.md, MEMORY.md)
+  These pages are analogous to OpenClaw workspace files (SOUL.md, MEMORY.md)
   but scoped to the organization. Agents read and write them to maintain
   shared organizational context.
   """
@@ -19,7 +19,7 @@ defmodule Platform.Org.ContextFile do
     ORG_AGENTS.md
   )
 
-  schema "org_context_files" do
+  schema "org_wiki_pages" do
     field(:workspace_id, :binary_id)
     field(:file_key, :string)
     field(:content, :string, default: "")
@@ -38,7 +38,7 @@ defmodule Platform.Org.ContextFile do
     |> validate_required(@required)
     |> validate_inclusion(:file_key, @valid_file_keys)
     |> unique_constraint([:workspace_id, :file_key],
-      name: :org_context_files_workspace_id_file_key_index
+      name: :org_wiki_pages_workspace_id_file_key_index
     )
   end
 

@@ -3,14 +3,14 @@ defmodule Platform.Federation.ToolSurfaceOrgContextTest do
 
   alias Platform.Federation.ToolSurface
   alias Platform.Org.Context, as: OrgContext
-  alias Platform.Org.ContextFile
-  alias Platform.Org.MemoryEntry
+  alias Platform.Org.WikiPage
+  alias Platform.Org.WikiJournalEntry
   alias Platform.Repo
 
   # Clear seeded context files and memory entries so tests start clean.
   defp clear_seeded_data do
-    Repo.delete_all(ContextFile)
-    Repo.delete_all(MemoryEntry)
+    Repo.delete_all(WikiPage)
+    Repo.delete_all(WikiJournalEntry)
   end
 
   describe "tool_definitions/0 includes org context tools" do

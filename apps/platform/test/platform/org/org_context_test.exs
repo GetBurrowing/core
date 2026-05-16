@@ -2,8 +2,8 @@ defmodule Platform.Org.ContextTest do
   @moduledoc "Tests for org context file and memory entry schemas + seeds."
   use Platform.DataCase, async: true
 
-  alias Platform.Org.ContextFile
-  alias Platform.Org.MemoryEntry
+  alias Platform.Org.WikiPage
+  alias Platform.Org.WikiJournalEntry
   alias Platform.Org.Seeds
   alias Platform.Repo
 
@@ -18,15 +18,15 @@ defmodule Platform.Org.ContextTest do
   # Delete seeded context files to start each test with a clean slate.
   # The seed migration inserts defaults that would conflict with test inserts.
   defp clear_seeded_files do
-    Repo.delete_all(ContextFile)
+    Repo.delete_all(WikiPage)
   end
 
-  # ── ContextFile schema ──────────────────────────────────────────────────
+  # ── WikiPage schema ──────────────────────────────────────────────────
 
-  describe "ContextFile changeset" do
+  describe "WikiPage changeset" do
     test "valid changeset with required fields" do
       changeset =
-        ContextFile.changeset(%ContextFile{}, %{
+        WikiPage.changeset(%WikiPage{}, %{
           file_key: "ORG_IDENTITY.md",
           content: "# Identity"
         })
@@ -35,14 +35,14 @@ defmodule Platform.Org.ContextTest do
     end
 
     test "requires file_key" do
-      changeset = ContextFile.changeset(%ContextFile{}, %{content: "test"})
+      changeset = WikiPage.changeset(%WikiPage{}, %{content: "test"})
       refute changeset.valid?
       assert %{file_key: ["can't be blank"]} = errors_on(changeset)
     end
 
     test "validates file_key is in allowed list" do
       changeset =
-        ContextFile.changeset(%ContextFile{}, %{
+        WikiPage.changeset(%WikiPage{}, %{
           file_key: "INVALID.md",
           content: "test"
         })
@@ -52,9 +52,9 @@ defmodule Platform.Org.ContextTest do
     end
 
     test "accepts all allowed file keys" do
-      for key <- ContextFile.allowed_file_keys() do
+      for key <- WikiPage.allowed_file_keys() do
         changeset =
-          ContextFile.changeset(%ContextFile{}, %{
+          WikiPage.changeset(%WikiPage{}, %{
             file_key: key,
             content: "test content"
           })
@@ -67,29 +67,29 @@ defmodule Platform.Org.ContextTest do
       clear_seeded_files()
 
       {:ok, file} =
-        %ContextFile{}
-        |> ContextFile.changeset(%{file_key: "ORG_IDENTITY.md", content: "test"})
+        %WikiPage{}
+        |> WikiPage.changeset(%{file_key: "ORG_IDENTITY.md", content: "test"})
         |> Repo.insert()
 
       assert file.version == 1
     end
   end
 
-  # ── ContextFile update changeset ────────────────────────────────────────
+  # ── WikiPage update changeset ────────────────────────────────────────
 
-  describe "ContextFile update_changeset" do
+  describe "WikiPage update_changeset" do
     test "updates content and increments version" do
       clear_seeded_files()
 
       {:ok, file} =
-        %ContextFile{}
-        |> ContextFile.changeset(%{file_key: "ORG_MEMORY.md", content: "v1"})
+        %WikiPage{}
+        |> WikiPage.changeset(%{file_key: "ORG_MEMORY.md", content: "v1"})
         |> Repo.insert()
 
       assert file.version == 1
 
       changeset =
-        ContextFile.update_changeset(file, %{content: "v2"})
+        WikiPage.update_changeset(file, %{content: "v2"})
 
       assert changeset.valid?
     end
@@ -98,29 +98,29 @@ defmodule Platform.Org.ContextTest do
       clear_seeded_files()
 
       {:ok, file} =
-        %ContextFile{}
-        |> ContextFile.changeset(%{file_key: "ORG_AGENTS.md", content: "v1"})
+        %WikiPage{}
+        |> WikiPage.changeset(%{file_key: "ORG_AGENTS.md", content: "v1"})
         |> Repo.insert()
 
-      changeset = ContextFile.update_changeset(file, %{content: nil})
+      changeset = WikiPage.update_changeset(file, %{content: nil})
       refute changeset.valid?
     end
   end
 
-  # ── ContextFile uniqueness ─────────────────────────────────────────────
+  # ── WikiPage uniqueness ─────────────────────────────────────────────
 
-  describe "ContextFile uniqueness" do
+  describe "WikiPage uniqueness" do
     test "prevents duplicate file_key for same workspace_id" do
       clear_seeded_files()
 
       {:ok, _} =
-        %ContextFile{}
-        |> ContextFile.changeset(%{file_key: "ORG_IDENTITY.md", content: "first"})
+        %WikiPage{}
+        |> WikiPage.changeset(%{file_key: "ORG_IDENTITY.md", content: "first"})
         |> Repo.insert()
 
       {:error, changeset} =
-        %ContextFile{}
-        |> ContextFile.changeset(%{file_key: "ORG_IDENTITY.md", content: "second"})
+        %WikiPage{}
+        |> WikiPage.changeset(%{file_key: "ORG_IDENTITY.md", content: "second"})
         |> Repo.insert()
 
       assert %{workspace_id: ["has already been taken"]} = errors_on(changeset)
@@ -132,8 +132,8 @@ defmodule Platform.Org.ContextTest do
       ws2 = Ecto.UUID.generate()
 
       {:ok, _} =
-        %ContextFile{}
-        |> ContextFile.changeset(%{
+        %WikiPage{}
+        |> WikiPage.changeset(%{
           file_key: "ORG_IDENTITY.md",
           content: "ws1",
           workspace_id: ws1
@@ -141,8 +141,8 @@ defmodule Platform.Org.ContextTest do
         |> Repo.insert()
 
       {:ok, file2} =
-        %ContextFile{}
-        |> ContextFile.changeset(%{
+        %WikiPage{}
+        |> WikiPage.changeset(%{
           file_key: "ORG_IDENTITY.md",
           content: "ws2",
           workspace_id: ws2
@@ -153,12 +153,12 @@ defmodule Platform.Org.ContextTest do
     end
   end
 
-  # ── MemoryEntry schema ─────────────────────────────────────────────────
+  # ── WikiJournalEntry schema ─────────────────────────────────────────────────
 
-  describe "MemoryEntry changeset" do
+  describe "WikiJournalEntry changeset" do
     test "valid changeset with required fields" do
       changeset =
-        MemoryEntry.changeset(%MemoryEntry{}, %{
+        WikiJournalEntry.changeset(%WikiJournalEntry{}, %{
           content: "Decided to use FHIR R4",
           date: ~D[2026-04-08]
         })
@@ -167,15 +167,15 @@ defmodule Platform.Org.ContextTest do
     end
 
     test "requires content and date" do
-      changeset = MemoryEntry.changeset(%MemoryEntry{}, %{})
+      changeset = WikiJournalEntry.changeset(%WikiJournalEntry{}, %{})
       refute changeset.valid?
       assert %{content: ["can't be blank"], date: ["can't be blank"]} = errors_on(changeset)
     end
 
     test "inserts with metadata" do
       {:ok, entry} =
-        %MemoryEntry{}
-        |> MemoryEntry.changeset(%{
+        %WikiJournalEntry{}
+        |> WikiJournalEntry.changeset(%{
           content: "Architectural decision",
           date: ~D[2026-04-08],
           metadata: %{"tags" => ["architecture", "decision"]}
@@ -193,7 +193,7 @@ defmodule Platform.Org.ContextTest do
       clear_seeded_files()
       :ok = Seeds.seed_defaults()
 
-      files = Repo.all(ContextFile)
+      files = Repo.all(WikiPage)
       file_keys = Enum.map(files, & &1.file_key) |> Enum.sort()
 
       assert file_keys == [
@@ -208,7 +208,7 @@ defmodule Platform.Org.ContextTest do
       :ok = Seeds.seed_defaults()
       :ok = Seeds.seed_defaults()
 
-      files = Repo.all(ContextFile)
+      files = Repo.all(WikiPage)
       assert length(files) == 3
     end
 
@@ -216,15 +216,15 @@ defmodule Platform.Org.ContextTest do
       clear_seeded_files()
       :ok = Seeds.seed_defaults()
 
-      file = Repo.get_by!(ContextFile, file_key: "ORG_IDENTITY.md")
+      file = Repo.get_by!(WikiPage, file_key: "ORG_IDENTITY.md")
 
       file
-      |> ContextFile.update_changeset(%{content: "Custom identity"})
+      |> WikiPage.update_changeset(%{content: "Custom identity"})
       |> Repo.update!()
 
       :ok = Seeds.seed_defaults()
 
-      updated = Repo.get_by!(ContextFile, file_key: "ORG_IDENTITY.md")
+      updated = Repo.get_by!(WikiPage, file_key: "ORG_IDENTITY.md")
       assert updated.content == "Custom identity"
     end
 
@@ -232,7 +232,7 @@ defmodule Platform.Org.ContextTest do
       clear_seeded_files()
       :ok = Seeds.seed_defaults()
 
-      files = Repo.all(ContextFile)
+      files = Repo.all(WikiPage)
 
       for file <- files do
         assert String.length(file.content) > 0,

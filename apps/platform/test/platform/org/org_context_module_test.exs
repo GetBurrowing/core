@@ -3,17 +3,17 @@ defmodule Platform.Org.ContextModuleTest do
   use Platform.DataCase, async: true
 
   alias Platform.Org.Context
-  alias Platform.Org.ContextFile
-  alias Platform.Org.MemoryEntry
+  alias Platform.Org.WikiPage
+  alias Platform.Org.WikiJournalEntry
   alias Platform.Repo
 
   # Clear seeded context files so tests start clean.
   defp clear_seeded_files do
-    Repo.delete_all(ContextFile)
+    Repo.delete_all(WikiPage)
   end
 
   defp clear_memory_entries do
-    Repo.delete_all(MemoryEntry)
+    Repo.delete_all(WikiJournalEntry)
   end
 
   # ── Context file CRUD ────────────────────────────────────────────────

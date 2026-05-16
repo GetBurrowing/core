@@ -22,8 +22,8 @@ defmodule Platform.Org.Context do
   require Logger
 
   alias Platform.Memory
-  alias Platform.Org.ContextFile
-  alias Platform.Org.MemoryEntry
+  alias Platform.Org.WikiJournalEntry
+  alias Platform.Org.WikiPage
   alias Platform.Repo
 
   # ── Default templates ─────────────────────────────────────────────────
@@ -84,9 +84,9 @@ defmodule Platform.Org.Context do
   # ── Context files ────────────────────────────────────────────────────
 
   @doc "Fetch a single context file by file_key, optionally scoped to a workspace."
-  @spec get_context_file(String.t(), binary() | nil) :: ContextFile.t() | nil
+  @spec get_context_file(String.t(), binary() | nil) :: WikiPage.t() | nil
   def get_context_file(file_key, workspace_id \\ nil) do
-    ContextFile
+    WikiPage
     |> where([f], f.file_key == ^file_key)
     |> filter_workspace(workspace_id)
     |> Repo.one()
@@ -100,7 +100,7 @@ defmodule Platform.Org.Context do
 
   @doc "Gets a single org context file by ID."
   def get_file_by_id(id) do
-    Repo.get(ContextFile, id)
+    Repo.get(WikiPage, id)
   end
 
   @doc """
@@ -110,11 +110,11 @@ defmodule Platform.Org.Context do
 
     * `:workspace_id` - scope to a specific workspace (default: nil)
   """
-  @spec list_context_files(keyword()) :: [ContextFile.t()]
+  @spec list_context_files(keyword()) :: [WikiPage.t()]
   def list_context_files(opts \\ []) do
     workspace_id = Keyword.get(opts, :workspace_id)
 
-    ContextFile
+    WikiPage
     |> filter_workspace(workspace_id)
     |> order_by([f], asc: f.file_key)
     |> Repo.all()
@@ -131,33 +131,33 @@ defmodule Platform.Org.Context do
   returns `{:error, :stale}`.
   """
   @spec upsert_context_file(String.t(), map(), keyword()) ::
-          {:ok, ContextFile.t()} | {:error, Ecto.Changeset.t() | :stale}
+          {:ok, WikiPage.t()} | {:error, Ecto.Changeset.t() | :stale}
   def upsert_context_file(file_key, attrs, opts \\ []) do
     workspace_id = Keyword.get(opts, :workspace_id)
     expected_version = Keyword.get(opts, :expected_version)
 
     Repo.transaction(fn ->
       existing =
-        ContextFile
+        WikiPage
         |> where([f], f.file_key == ^file_key)
         |> filter_workspace(workspace_id)
         |> Repo.one()
 
       case existing do
         nil ->
-          %ContextFile{}
-          |> ContextFile.changeset(
+          %WikiPage{}
+          |> WikiPage.changeset(
             Map.merge(attrs, %{file_key: file_key, workspace_id: workspace_id})
           )
           |> Repo.insert()
           |> unwrap_or_rollback()
 
-        %ContextFile{} = file ->
+        %WikiPage{} = file ->
           if not is_nil(expected_version) and file.version != expected_version do
             Repo.rollback(:stale)
           else
             file
-            |> ContextFile.changeset(%{
+            |> WikiPage.changeset(%{
               content: Map.get(attrs, :content, Map.get(attrs, "content")),
               updated_by: Map.get(attrs, :updated_by, Map.get(attrs, "updated_by")),
               version: file.version + 1
@@ -207,8 +207,8 @@ defmodule Platform.Org.Context do
     Enum.each(@default_templates, fn {file_key, template} ->
       case get_file(file_key) do
         nil ->
-          %ContextFile{}
-          |> ContextFile.changeset(%{
+          %WikiPage{}
+          |> WikiPage.changeset(%{
             file_key: file_key,
             content: template,
             updated_by: updated_by
@@ -230,13 +230,13 @@ defmodule Platform.Org.Context do
   `:authored_by`, `:metadata`.
   """
   @spec append_memory_entry(map(), keyword()) ::
-          {:ok, MemoryEntry.t()} | {:error, Ecto.Changeset.t()}
+          {:ok, WikiJournalEntry.t()} | {:error, Ecto.Changeset.t()}
   def append_memory_entry(attrs, opts \\ []) do
     attrs = maybe_put_workspace(attrs, Keyword.get(opts, :workspace_id))
 
     result =
-      %MemoryEntry{}
-      |> MemoryEntry.changeset(attrs)
+      %WikiJournalEntry{}
+      |> WikiJournalEntry.changeset(attrs)
       |> Repo.insert()
 
     case result do
@@ -283,7 +283,7 @@ defmodule Platform.Org.Context do
     * `:workspace_id` - scope to a workspace
     * `:limit` - max results (default: 50)
   """
-  @spec search_memory_entries(keyword()) :: [MemoryEntry.t()]
+  @spec search_memory_entries(keyword()) :: [WikiJournalEntry.t()]
   def search_memory_entries(opts \\ []) do
     query = Keyword.get(opts, :query)
 
@@ -301,7 +301,7 @@ defmodule Platform.Org.Context do
   decide whether to fall back.
   """
   @spec search_memory_with_scores(String.t(), keyword()) ::
-          [{MemoryEntry.t(), float()}] | nil
+          [{WikiJournalEntry.t(), float()}] | nil
   def search_memory_with_scores(query, opts \\ []) when is_binary(query) do
     with true <- Memory.enabled?(),
          {:ok, hits} <- Memory.search(query, memory_search_opts(opts)) do
@@ -339,7 +339,7 @@ defmodule Platform.Org.Context do
     limit = Keyword.get(opts, :limit, 50)
     workspace_id = Keyword.get(opts, :workspace_id)
 
-    MemoryEntry
+    WikiJournalEntry
     |> filter_workspace(workspace_id)
     |> maybe_filter_date_from(Keyword.get(opts, :date_from))
     |> maybe_filter_date_to(Keyword.get(opts, :date_to))
@@ -352,7 +352,7 @@ defmodule Platform.Org.Context do
   defp fetch_entries_by_ids([], _workspace_id), do: []
 
   defp fetch_entries_by_ids(ids, workspace_id) do
-    MemoryEntry
+    WikiJournalEntry
     |> where([m], m.id in ^ids)
     |> filter_workspace(workspace_id)
     |> Repo.all()
@@ -377,11 +377,11 @@ defmodule Platform.Org.Context do
   end
 
   @doc "Fetches memory entries by a list of IDs."
-  @spec get_memory_entries_by_ids([binary()]) :: [MemoryEntry.t()]
+  @spec get_memory_entries_by_ids([binary()]) :: [WikiJournalEntry.t()]
   def get_memory_entries_by_ids([]), do: []
 
   def get_memory_entries_by_ids(ids) do
-    MemoryEntry
+    WikiJournalEntry
     |> where([m], m.id in ^ids)
     |> Repo.all()
   end
@@ -394,7 +394,7 @@ defmodule Platform.Org.Context do
 
   Unknown ids are omitted — callers should fall back to displaying the raw id.
   """
-  @spec resolve_authors([MemoryEntry.t()] | [{Date.t(), [MemoryEntry.t()]}]) ::
+  @spec resolve_authors([WikiJournalEntry.t()] | [{Date.t(), [WikiJournalEntry.t()]}]) ::
           %{binary() => %{kind: :agent | :user, name: String.t(), color: String.t() | nil}}
   def resolve_authors(entries) when is_list(entries) do
     ids = entries |> Enum.flat_map(&extract_author_ids/1) |> Enum.uniq()
@@ -422,8 +422,8 @@ defmodule Platform.Org.Context do
     end
   end
 
-  defp extract_author_ids(%MemoryEntry{authored_by: nil}), do: []
-  defp extract_author_ids(%MemoryEntry{authored_by: id}), do: [id]
+  defp extract_author_ids(%WikiJournalEntry{authored_by: nil}), do: []
+  defp extract_author_ids(%WikiJournalEntry{authored_by: id}), do: [id]
   defp extract_author_ids({_date, entries}), do: Enum.flat_map(entries, &extract_author_ids/1)
   defp extract_author_ids(_), do: []
 

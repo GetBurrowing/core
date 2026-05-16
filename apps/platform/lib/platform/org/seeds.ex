@@ -8,7 +8,7 @@ defmodule Platform.Org.Seeds do
   """
 
   alias Platform.Repo
-  alias Platform.Org.ContextFile
+  alias Platform.Org.WikiPage
 
   @default_files %{
     "ORG_IDENTITY.md" => """
@@ -48,11 +48,11 @@ defmodule Platform.Org.Seeds do
     Enum.each(@default_files, fn {file_key, content} ->
       query =
         if workspace_id do
-          from(f in ContextFile,
+          from(f in WikiPage,
             where: f.workspace_id == ^workspace_id and f.file_key == ^file_key
           )
         else
-          from(f in ContextFile,
+          from(f in WikiPage,
             where: is_nil(f.workspace_id) and f.file_key == ^file_key
           )
         end
@@ -60,7 +60,7 @@ defmodule Platform.Org.Seeds do
       exists? = Repo.exists?(query)
 
       unless exists? do
-        Repo.insert!(%ContextFile{
+        Repo.insert!(%WikiPage{
           workspace_id: workspace_id,
           file_key: file_key,
           content: String.trim(content),

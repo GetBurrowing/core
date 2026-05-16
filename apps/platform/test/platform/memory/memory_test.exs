@@ -76,7 +76,7 @@ defmodule Platform.MemoryTest do
     end
 
     test "accepts Ecto structs and flattens Date to ISO8601" do
-      struct = %Platform.Org.MemoryEntry{
+      struct = %Platform.Org.WikiJournalEntry{
         id: "01abc",
         content: "decision content",
         date: ~D[2026-04-16],
