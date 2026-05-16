@@ -12,10 +12,12 @@
       Whiteboard (`data-stage-mode` attribute drives renderer selection
       and is the e2e/test contract — keep it stable).
 
-  Sibling stack member 019e2475-87a8 ships the embedded chat panel
-  (right pane via `MeetingChatPanelLive`, the mobile drawer toggle, the
-  intent-panel-host migration hook). That surface is preserved
-  byte-identical for clean rollup.
+  Right pane embeds the canonical `PlatformWeb.ChatLive` surface in
+  its `:embedded` mode (stage 5 of 019e2d1a; replaced the earlier
+  `MeetingChatPanelLive` stub from sibling 019e2475-87a8). The mobile
+  drawer toggle + intent-panel-host migration marker are preserved on
+  the wrapping `<aside>`/`<div>`; only the embedded LV's identity
+  changed.
 
   PLACEHOLDER slots for sibling stack members:
     * left rail        → 019e2475-4395 (sectioned participant list)
@@ -23,6 +25,17 @@
 --%>
 <%= if @meeting do %>
   <div data-theme="light" class="flex h-full flex-col bg-base-100 text-base-content">
+    <%!-- LiveKit JS hooks. MeetingClient listens for `join-meeting` /
+         `leave-meeting` / `toggle-{mic,camera,screen-share}` push_events
+         from MeetingHooks (server-side) and drives the local WebRTC
+         session against `window.__livekit_room`. MeetingRoom subscribes
+         to remote-track events so `<.video_tile>` `MeetingVideoTile`
+         hooks can attach published tracks by identity. Both are present
+         in chat_live.html.heex:4-5 for the chat surface; mirror them
+         here so MeetingHooks' push_events have a listener. --%>
+    <div id="meeting-client" phx-hook="MeetingClient" class="hidden"></div>
+    <div id="meeting-room" phx-hook="MeetingRoom" class="hidden"></div>
+
     <%!-- ── Top bar ──────────────────────────────────────────────────────── --%>
     <header class="flex h-12 flex-shrink-0 items-center gap-3 border-b border-base-300 bg-base-200/60 px-3">
       <%!-- Meeting name --%>
@@ -32,6 +45,104 @@
       </div>
 
       <div class="flex-1"></div>
+
+      <%!-- Local-media controls + Join/Leave CTA. Visual treatment
+           mirrors meeting_bar_live.ex's mini-bar: hero-microphone /
+           hero-video-camera glyphs, base-content/70 when active, error-
+           toned when muted/off, base-content/40 when off. Each button
+           pushes the matching MeetingHooks event — the LiveKit lifecycle
+           lives there (see meeting_hooks.ex), no client-side state
+           here. --%>
+      <div class="flex flex-shrink-0 items-center gap-1" data-role="meeting-controls">
+        <button
+          type="button"
+          phx-click="meeting_toggle_mic"
+          aria-label={if @mic_enabled, do: "Mute mic", else: "Unmute mic"}
+          aria-pressed={to_string(@mic_enabled)}
+          title={if @mic_enabled, do: "Mute mic", else: "Unmute mic"}
+          data-role="meeting-mic"
+          data-active={to_string(@mic_enabled)}
+          class={[
+            "btn btn-sm btn-ghost btn-square min-h-11",
+            if(@mic_enabled,
+              do: "text-base-content/70",
+              else: "text-error bg-error/10 hover:bg-error/20"
+            )
+          ]}
+        >
+          <span class={[
+            "size-4",
+            if(@mic_enabled, do: "hero-microphone", else: "hero-microphone-slash")
+          ]}>
+          </span>
+        </button>
+
+        <button
+          type="button"
+          phx-click="meeting_toggle_camera"
+          aria-label={if @camera_enabled, do: "Turn off camera", else: "Turn on camera"}
+          aria-pressed={to_string(@camera_enabled)}
+          title={if @camera_enabled, do: "Turn off camera", else: "Turn on camera"}
+          data-role="meeting-camera"
+          data-active={to_string(@camera_enabled)}
+          class={[
+            "btn btn-sm btn-ghost btn-square min-h-11",
+            if(@camera_enabled,
+              do: "text-base-content/70",
+              else: "text-base-content/40"
+            )
+          ]}
+        >
+          <span class={[
+            "size-4",
+            if(@camera_enabled, do: "hero-video-camera", else: "hero-video-camera-slash")
+          ]}>
+          </span>
+        </button>
+
+        <button
+          type="button"
+          phx-click="meeting_toggle_screen_share"
+          aria-label={if @screen_share_enabled, do: "Stop sharing screen", else: "Share screen"}
+          aria-pressed={to_string(@screen_share_enabled)}
+          title={if @screen_share_enabled, do: "Stop sharing screen", else: "Share screen"}
+          data-role="meeting-screen-share"
+          data-active={to_string(@screen_share_enabled)}
+          class={[
+            "btn btn-sm btn-ghost btn-square min-h-11 hidden sm:inline-flex",
+            if(@screen_share_enabled,
+              do: "text-primary",
+              else: "text-base-content/40"
+            )
+          ]}
+        >
+          <span class="hero-computer-desktop size-4"></span>
+        </button>
+
+        <%= if @in_meeting do %>
+          <button
+            type="button"
+            phx-click="meeting_leave"
+            data-role="meeting-leave"
+            class="btn btn-sm btn-ghost min-h-11 gap-1.5 text-error hover:bg-error/10"
+            title="Leave meeting"
+          >
+            <span class="hero-phone-x-mark size-4"></span>
+            <span class="hidden sm:inline">Leave</span>
+          </button>
+        <% else %>
+          <button
+            type="button"
+            phx-click="meeting_join"
+            data-role="meeting-join"
+            class="btn btn-sm btn-primary min-h-11 gap-1.5"
+            title="Join meeting"
+          >
+            <span class="hero-video-camera size-4"></span>
+            <span class="hidden sm:inline">Join meeting</span>
+          </button>
+        <% end %>
+      </div>
 
       <%!-- Stage-mode segmented control (ADR 0042). Four hero-icon buttons;
            clicking one pushes `set_stage_mode` with the target mode and
@@ -335,27 +446,21 @@
         data-pane="chat-panel"
         data-chat-panel-open={to_string(@chat_panel_open)}
       >
-        <%!-- Pane header: meeting name + intent-panel placeholder caption.
-             The caption text is intentional and must be greppable later;
-             do NOT change its wording without updating the future-Rowan
-             migration hook (`rg 'placeholder for intent panel \(ADR
-             0042\)'`). --%>
+        <%!-- Pane header: meeting name + chat icon. The verbose
+             "placeholder for intent panel" caption is gone now that the
+             pane hosts the real chat surface (stage 5 of 019e2d1a). The
+             greppable migration marker `data-intent-panel-host="true"`
+             is preserved on the body wrapper below so a future intent-
+             panel swap-out can still find this surface with `rg`. --%>
         <header
-          class="flex flex-shrink-0 items-start gap-2 border-b border-base-300 bg-base-200/40 px-3 py-2"
+          class="flex flex-shrink-0 items-center gap-2 border-b border-base-300 bg-base-200/40 px-3 py-2"
           data-pane-section="header"
         >
-          <div class="flex min-w-0 flex-1 flex-col gap-0.5">
-            <div class="flex min-w-0 items-center gap-2">
-              <span class="hero-chat-bubble-left-right size-4 flex-shrink-0 text-base-content/60">
-              </span>
-              <h2 class="truncate text-sm font-semibold text-base-content">
-                {@meeting.name}
-              </h2>
-            </div>
-            <p class="text-[11px] leading-tight text-base-content/50">
-              Discussion · placeholder for intent panel (ADR 0042)
-            </p>
-          </div>
+          <span class="hero-chat-bubble-left-right size-4 flex-shrink-0 text-base-content/60">
+          </span>
+          <h2 class="min-w-0 flex-1 truncate text-sm font-semibold text-base-content">
+            {@meeting.name}
+          </h2>
           <%!-- Mobile-only close button inside the drawer header. The
                top-bar toggle handles open; this gives a one-tap close
                that doesn't require backdrop-tap (e.g. for a wide
@@ -377,12 +482,30 @@
              own internal scroll region (overflow-y-auto on the messages
              list) stays clamped to that space. Without min-h-0 the
              messages list would be unable to shrink and would push the
-             composer off-screen. --%>
-        <div class="flex min-h-0 flex-1 flex-col" data-pane-section="body">
+             composer off-screen.
+
+             Stage 5 (019e2d1a) swap: the stub `MeetingChatPanelLive`
+             is gone — we now `live_render` the real `PlatformWeb.ChatLive`
+             in its embedded mode, which seeds the active space from the
+             session and reuses the full chat affordance set (mentions,
+             attachments, reactions, threading, edits, link previews,
+             canvases). The intent-panel migration marker
+             (`data-intent-panel-host="true"`) is preserved on this
+             wrapper so future-Rowan can still grep for the swap-out
+             site when the real intent panel ships. --%>
+        <div
+          class="flex min-h-0 flex-1 flex-col"
+          data-pane-section="body"
+          data-intent-panel-host="true"
+          data-pane="meeting-chat-panel"
+        >
           <%= if @meeting.chat_space && @meeting.chat_space.slug do %>
-            {live_render(@socket, PlatformWeb.MeetingChatPanelLive,
+            {live_render(@socket, PlatformWeb.ChatLive.Embedded,
               id: "meeting-chat-panel-#{@meeting.id}",
-              session: %{"chat_space_slug" => @meeting.chat_space.slug}
+              session: %{
+                "chat_space_slug" => @meeting.chat_space.slug,
+                "current_user_id" => @user_id
+              }
             )}
           <% else %>
             <div
@@ -402,8 +525,18 @@
          agent (right), with a thin vertical divider between sections.
          Strip height: 96px on `<lg`, 120px on `lg`+. Bottom edge respects
          `safe-area-inset-bottom` so the iOS home indicator never overlaps
-         the tiles. --%>
+         the tiles.
+
+         Gallery-default reframe (stage 3, task 019e2d1a): the strip is
+         hidden in gallery mode so the responsive grid owns the full
+         vertical space. It re-renders in canvas / screen / whiteboard
+         modes as the compact "who's here" footer. Identity strings are
+         deliberately aligned with gallery (`"user:" <> pid` instead of
+         `"strip:user:" <> pid`) so the MeetingVideoTile hook reuses the
+         same DOM node across mode swaps and the LiveKit track stays
+         attached during the layout flip. --%>
     <footer
+      :if={@current_stage_mode != :gallery}
       id="meeting-bottom-strip"
       class={[
         "flex flex-shrink-0 items-stretch gap-2 overflow-x-auto overscroll-contain",
@@ -427,7 +560,7 @@
           :for={participant <- strip_humans(assigns[:participants])}
           participant={
             %{
-              identity: "strip:user:" <> (participant.participant_id || ""),
+              identity: gallery_identity(participant),
               name: participant.display_name || "Participant"
             }
           }

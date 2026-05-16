@@ -6,10 +6,10 @@ defmodule PlatformWeb.MeetingLive do
   this stack member's deliverable: the **stage-mode switcher** with
   Canvas / Screen / Gallery / Whiteboard renderers in the center stage.
 
-  Sibling stack member 019e2475-87a8 ships the embedded chat panel
-  (right pane, `MeetingChatPanelLive`) — the chat-panel infrastructure
-  in this module is owned by that sibling and kept byte-identical for
-  clean rollup.
+  The right pane embeds the canonical `PlatformWeb.ChatLive` surface in
+  its `embedded: true` mode (stage 5 of task 019e2d1a; replaced the
+  earlier `MeetingChatPanelLive` stub from the 019e2475-87a8 sibling).
+  See "Embedding choice" below.
 
   ## Stage modes (this stack member)
 
@@ -18,8 +18,7 @@ defmodule PlatformWeb.MeetingLive do
 
     * `:canvas`     — renders the most-recently-created canvas in the
                       meeting's chat space, or an empty-state CTA that
-                      creates one. Default mode (meetings are often
-                      artifact-driven).
+                      creates one.
     * `:screen`     — attaches the active LiveKit screen-share track via
                       the `MeetingScreenShare` JS hook into
                       `[data-screen-share-slot]`. Empty-state CTA pushes
@@ -28,6 +27,9 @@ defmodule PlatformWeb.MeetingLive do
     * `:gallery`    — one tile per human participant in a responsive
                       grid via the shared `<.video_tile>` component.
                       Agents are excluded (they live in the bottom strip).
+                      Default mode (the meeting opens face-first; the
+                      bottom strip is hidden in gallery so the grid owns
+                      the full vertical space).
     * `:whiteboard` — placeholder card; the real drawing surface is a
                       separate stack and lands later.
 
@@ -36,34 +38,45 @@ defmodule PlatformWeb.MeetingLive do
   state (canvas LV state, the LiveKit Room on `window.__livekit_room`,
   participant subscriptions) is untouched.
 
-  ## Embedding choice (sibling 019e2475-87a8 stage 1 contract)
+  ## Embedding choice (stage 5 of 019e2d1a — Option A)
 
-  The sibling task enumerated:
-    (a) reuse a `<.chat_panel space_id={...} />` style component if one
-        exists; or
-    (b) nest `PlatformWeb.ChatLive` via `live_render` with the meeting's
-        chat space slug.
+  Stage 5 swapped the ~150-line `MeetingChatPanelLive` stub for the
+  canonical `PlatformWeb.ChatLive` surface in its new `:embedded` mode.
+  The stub had only messages + composer; embedding ChatLive lights up
+  @mentions, attachments, reactions, threading, message editing, link
+  previews, and canvas embeds inside the meeting pane — the same
+  affordance set as `/chat/<slug>`.
 
-  Choice: **(b), with a meeting-owned nested LiveView**.
+  How embedded mode works (see ChatLive `mount/3` + chat_live.html.heex
+  `:if={!@embedded}` gates):
 
-  No `<.chat_panel>` carve-out exists in `chat_live.html.heex` (1243
-  lines, monolithic) and ChatLive itself (874 lines) reads `space_slug`
-  from URL params + does push_navigate-on-empty-slug. Teaching it to
-  bootstrap from session would leak meeting concerns into the chat
-  surface and complicate its already-busy lifecycle.
+    * The session passed to `live_render` carries
+      `{"chat_space_slug" => …, "embedded" => true, "current_user_id"
+      => …}`. URL params don't flow to a `live_render`d child, so
+      ChatLive's `mount/3` does the same setup `handle_params/3` does
+      for the slug path (active_space, current_participant, message
+      stream, mentions / pins / canvases / agents).
+    * Sidebar, mobile pills, mobile browser overlay, the desktop chat
+      header, settings / new-channel / new-conversation modals, the
+      meeting mini-bar, and the duplicate JS-hook anchors are all
+      suppressed in the embed via `:if={!@embedded}`.
+    * MeetingHooks are NOT attached on the embedded surface — the
+      parent MeetingLive already owns the LiveKit lifecycle, and a
+      second hook attach would double-subscribe to room presence.
 
-  Instead the sibling ships `PlatformWeb.MeetingChatPanelLive` — a small
-  meeting-owned LiveView nested via:
+  Render call:
 
-      <%= live_render(@socket, PlatformWeb.MeetingChatPanelLive,
+      <%= live_render(@socket, PlatformWeb.ChatLive,
             id: "meeting-chat-panel-\#{@meeting.id}",
-            session: %{"chat_space_slug" => @meeting.chat_space.slug}) %>
+            session: %{
+              "chat_space_slug" => @meeting.chat_space.slug,
+              "embedded" => true,
+              "current_user_id" => @user_id
+            }) %>
 
-  This satisfies the "live_render + chat space slug" rationale of
-  option (b) without contaminating ChatLive. When the real intent
-  panel ships, `MeetingChatPanelLive` is replaced wholesale; the
-  greppable `data-intent-panel-host="true"` attribute on the panel
-  root marks the surface for that migration.
+  The `data-intent-panel-host="true"` marker survives on the wrapping
+  `<div>` around the `live_render` so future-Rowan can still grep for
+  the migration site when the real intent panel ships.
 
   ## Layout
 
@@ -74,8 +87,8 @@ defmodule PlatformWeb.MeetingLive do
     * Center stage (flex-1): stage-mode renderers (THIS task).
     * Bottom strip (~120px): PLACEHOLDER slot for sibling 019e2475-0037's
       video tiles.
-    * Right pane (sibling 019e2475-87a8): the embedded chat panel via
-      `MeetingChatPanelLive`.
+    * Right pane: the embedded `PlatformWeb.ChatLive` surface (stage 5
+      of 019e2d1a; was `MeetingChatPanelLive`).
 
   ## Mobile drawer (sibling 019e2475-87a8 stage 3)
 
@@ -101,7 +114,10 @@ defmodule PlatformWeb.MeetingLive do
       with `:chat_space` preloaded (the panel needs the chat space's
       `slug` to drive `live_render`).
     * `:current_stage_mode` — one of `:canvas`, `:screen`, `:gallery`,
-      `:whiteboard` (see `stage_modes/0`), default `:canvas`.
+      `:whiteboard` (see `stage_modes/0`), default `:gallery`. The bottom
+      strip is hidden while in gallery (the grid is the full face-grid);
+      switching to canvas/screen/whiteboard reveals the strip as a
+      compact horizontal row.
     * `:participants` — `Platform.Chat.list_participants/1` for the
       meeting's bound chat space; drives the Gallery-mode tile grid
       and the participant-rail placeholder.
@@ -131,13 +147,13 @@ defmodule PlatformWeb.MeetingLive do
   import PlatformWeb.Components.Meeting.VideoTile, only: [video_tile: 1]
   import PlatformWeb.Components.Meetings.ParticipantRail, only: [participant_rail: 1]
 
-  alias Platform.Accounts
   alias Platform.Agents.Agent
   alias Platform.Chat
   alias Platform.Chat.PubSub, as: ChatPubSub
   alias Platform.Meetings
   alias Platform.Repo
   alias Platform.Tasks
+  alias PlatformWeb.ChatLive.MeetingHooks
 
   # Stage modes per ADR 0042's "Stage modes" table. Canvas is the default
   # (meetings are often artifact-driven).
@@ -167,7 +183,7 @@ defmodule PlatformWeb.MeetingLive do
   end
 
   @impl true
-  def handle_params(%{"slug" => slug}, _url, socket) do
+  def handle_params(%{"slug" => slug} = params, _url, socket) do
     case Meetings.get_meeting_by_slug(slug) do
       nil ->
         # Clean not-found path — no MatchError / Ecto.NoResultsError
@@ -192,15 +208,44 @@ defmodule PlatformWeb.MeetingLive do
         meeting_canvas = latest_canvas(meeting.chat_space_id)
         agents_by_id = load_agents_by_id(participants)
 
-        {:noreply,
-         socket
-         |> assign(:page_title, "Meeting · #{meeting.name}")
-         |> assign(:meeting, meeting)
-         |> assign(:participants, participants)
-         |> assign(:agents_by_id, agents_by_id)
-         |> assign(:speaking_participant_ids, MapSet.new())
-         |> assign(:meeting_canvas, meeting_canvas)
-         |> assign(:current_stage_mode, :canvas)}
+        # Resolve the viewer's existing participant row (read-only — the
+        # bridge that inserts a row on join lands in stage 4 of this
+        # task). MeetingHooks reads `:current_participant` at join time
+        # for the LiveKit identity's display name; `nil` is fine for the
+        # initial mount and join will simply no-op without crashing.
+        current_participant =
+          if meeting.chat_space_id,
+            do: find_participant(meeting.chat_space_id, socket.assigns.user_id),
+            else: nil
+
+        # Mirror ChatLive's plumbing so we can reuse MeetingHooks
+        # verbatim: it reads `:active_space` + `:current_participant`
+        # on `meeting_join`, owns the `:in_meeting` / mic / camera /
+        # screen-share assigns, and pushes the LiveKit-bound JS hook
+        # events into MeetingClient + MeetingRoom.
+        socket =
+          socket
+          |> assign(:page_title, "Meeting · #{meeting.name}")
+          |> assign(:meeting, meeting)
+          |> assign(:participants, participants)
+          |> assign(:agents_by_id, agents_by_id)
+          |> assign(:speaking_participant_ids, MapSet.new())
+          |> assign(:meeting_canvas, meeting_canvas)
+          |> assign(:current_stage_mode, :gallery)
+          |> assign(:active_space, meeting.chat_space)
+          |> assign(:current_participant, current_participant)
+          |> MeetingHooks.attach(List.wrap(meeting.chat_space_id))
+
+        # Auto-join on connected mount unless ?no_autojoin=true is set
+        # (the e2e tests in stage 7 use that escape hatch so they can
+        # assert the manual "Join" CTA path). `send(self(), :auto_join)`
+        # defers the join one tick so the LV is fully mounted before
+        # MeetingHooks reads `:active_space`.
+        if connected?(socket) and Map.get(params, "no_autojoin") != "true" do
+          send(self(), :auto_join)
+        end
+
+        {:noreply, socket}
     end
   end
 
@@ -267,6 +312,18 @@ defmodule PlatformWeb.MeetingLive do
   # thread carries a "canvas created" message — meetings ARE long-running
   # collaboration threads (ADR 0042), so the side-effect of a chat row is
   # a feature, not a leak.
+  #
+  # ## Participant requirement (no implicit join)
+  #
+  # `create_canvas_with_message/3` needs a participant_id to author both
+  # the canvas (`created_by`) and the companion chat message
+  # (`participant_id`). This handler used to *insert* the viewer as a
+  # participant on the fly via `ensure_participant/2` — that made canvas
+  # creation a join trigger, which was the wrong shape (ADR 0042: explicit
+  # join is owned by the meeting bar / livekit hook, not by side-effects
+  # of unrelated UI). We now refuse the create when the viewer has no
+  # participant row and flash a hint to join first. The legitimate join
+  # path is the meeting bar in a sibling stage.
   def handle_event("create_meeting_canvas", _params, socket) do
     %{meeting: meeting, user_id: user_id} = socket.assigns
 
@@ -275,14 +332,11 @@ defmodule PlatformWeb.MeetingLive do
         {:noreply, socket}
 
       true ->
-        participant = ensure_participant(meeting.chat_space_id, user_id)
+        case find_participant(meeting.chat_space_id, user_id) do
+          nil ->
+            {:noreply, put_flash(socket, :error, "Join the meeting to create a canvas.")}
 
-        cond do
-          is_nil(participant) ->
-            {:noreply,
-             put_flash(socket, :error, "Could not create canvas — participant lookup failed.")}
-
-          true ->
+          participant ->
             attrs = %{"title" => "#{meeting.name} canvas"}
 
             case Chat.create_canvas_with_message(meeting.chat_space_id, participant.id, attrs) do
@@ -404,7 +458,19 @@ defmodule PlatformWeb.MeetingLive do
 
   # ── PubSub ───────────────────────────────────────────────────────────────
 
+  # Auto-join trigger from handle_params/3. Delegates straight into
+  # MeetingHooks' public `join/1` so the LiveKit lifecycle (token mint,
+  # MeetingClient push_event, MeetingState broadcast) stays a single
+  # source of truth — same code path as the manual "Join meeting" CTA.
   @impl true
+  def handle_info(:auto_join, socket) do
+    if socket.assigns[:in_meeting] do
+      {:noreply, socket}
+    else
+      {:noreply, MeetingHooks.join(socket)}
+    end
+  end
+
   def handle_info({:participant_joined, _participant}, socket) do
     {:noreply, refresh_participants(socket)}
   end
@@ -467,6 +533,14 @@ defmodule PlatformWeb.MeetingLive do
   # reactions, pins, …). The shell only cares about roster + canvas
   # events; ignore the rest so a broadcast can't crash the LV.
   def handle_info(_event, socket), do: {:noreply, socket}
+
+  # Mirror ChatLive's terminate hook so a tab-close mid-meeting
+  # broadcasts the "left" event and the mini-bar doesn't ghost.
+  @impl true
+  def terminate(_reason, socket) do
+    MeetingHooks.on_terminate(socket)
+    :ok
+  end
 
   # ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -656,39 +730,14 @@ defmodule PlatformWeb.MeetingLive do
 
   defp newer?(_, _), do: false
 
-  # Resolve (or insert) the participant row for `user_id` in `space_id`.
-  # Mirrors the ChatLive helper so canvas creation has an author.
-  # ADR 0038: participant rows represent current membership only — no
-  # soft-delete reconciliation.
-  defp ensure_participant(space_id, user_id) do
-    existing =
-      space_id
-      |> Chat.list_participants()
-      |> Enum.find(fn p -> p.participant_id == user_id end)
-
-    case existing do
-      %Chat.Participant{} = p ->
-        p
-
-      nil ->
-        case Chat.add_participant(space_id, %{
-               participant_type: "user",
-               participant_id: user_id,
-               display_name: name_for_user(user_id),
-               joined_at: DateTime.utc_now()
-             }) do
-          {:ok, p} -> p
-          {:error, _} -> nil
-        end
-    end
-  end
-
-  defp name_for_user(user_id) do
-    case Accounts.get_user(user_id) do
-      %{name: name} when is_binary(name) and name != "" -> name
-      %{email: email} when is_binary(email) -> email
-      _ -> "User"
-    end
+  # Look up the existing participant row for `user_id` in `space_id`,
+  # returning `nil` if no such row exists. Read-only: this no longer
+  # inserts on miss (canvas creation is NOT a join trigger; the meeting
+  # bar / livekit hook owns the explicit join in a sibling stage).
+  defp find_participant(space_id, user_id) do
+    space_id
+    |> Chat.list_participants()
+    |> Enum.find(fn p -> p.participant_type == "user" and p.participant_id == user_id end)
   end
 
   # ── Gallery-mode helpers ─────────────────────────────────────────────────

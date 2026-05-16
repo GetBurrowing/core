@@ -48,15 +48,77 @@ defmodule PlatformWeb.ChatLive do
   @max_upload_size 15_000_000
   @impl true
   def mount(_params, session, socket) do
+    do_mount(session, socket, embedded?: false)
+  end
+
+  @doc """
+  Mount entrypoint used by `PlatformWeb.ChatLive.Embedded` to nest this
+  surface inside a parent LiveView (e.g. the meeting chat pane, ADR
+  0042 + stage 5 of task 019e2d1a).
+
+  We can't expose `ChatLive` itself as a child LV: Phoenix forbids any
+  module defining `handle_params/3` from being mounted as a child (raised
+  in `Phoenix.LiveView.Static.disconnected_nested_render/6`), and the
+  standalone surface needs `handle_params/3` so channel-to-channel
+  navigation is a patch and not a full remount (preserves drafts,
+  scroll position, presence).
+
+  The embedded mount reads `chat_space_slug` + `current_user_id` from
+  session (URL params don't flow to a `live_render`d child), seeds the
+  active space inline, and sets `:embedded` so the template's `:if={!@embedded}`
+  gates strip the sidebars / mobile pills / mobile browser / desktop
+  chat header / modals / duplicate JS-hook anchors / meeting mini-bar
+  off the rendered output. The embed does NOT attach MeetingHooks —
+  the parent surface owns the LiveKit lifecycle and a duplicate attach
+  would double-subscribe to room presence.
+  """
+  @spec embedded_mount(map(), map(), Phoenix.LiveView.Socket.t()) ::
+          {:ok, Phoenix.LiveView.Socket.t()}
+  def embedded_mount(_params, session, socket) do
+    do_mount(session, socket, embedded?: true)
+  end
+
+  # Shared mount body for both the URL-routed surface (`ChatLive.mount/3`)
+  # and the embedded surface (`ChatLive.embedded_mount/3` →
+  # `ChatLive.Embedded`). The two paths differ in three places:
+  #
+  #   * sidebar / DM list queries are skipped when embedded (no sidebar
+  #     to populate);
+  #   * cross-space PubSub subscriptions are skipped when embedded (only
+  #     one space matters);
+  #   * MeetingHooks is NOT attached when embedded — replaced with safe
+  #     defaults for the assigns the template references in the gates.
+  #
+  # Active-space resolution is split per-path:
+  #
+  #   * standalone surface defers to `handle_params/3` (called after
+  #     mount on the URL-routed surface) to read `params["space_slug"]`
+  #     and seed the active space + redirect on missing slug;
+  #   * embedded surface seeds inline from `session["chat_space_slug"]`
+  #     because URL params don't flow to nested LVs and `handle_params/3`
+  #     is forbidden on child LVs anyway.
+  defp do_mount(session, socket, opts) do
+    embedded? = Keyword.fetch!(opts, :embedded?)
     user_id = session["current_user_id"] || Ecto.UUID.generate()
-    channels = Chat.list_spaces(kind: "channel")
-    conversations = if user_id, do: Chat.list_user_conversations(user_id), else: []
-    dm_conversations = Enum.filter(conversations, fn s -> s.kind in ["dm", "group"] end)
+    # Only consulted on the embedded path; standalone uses handle_params.
+    embedded_space_slug = if embedded?, do: session["chat_space_slug"]
+
+    channels =
+      if embedded?, do: [], else: Chat.list_spaces(kind: "channel")
+
+    dm_conversations =
+      if embedded? do
+        []
+      else
+        conversations = if user_id, do: Chat.list_user_conversations(user_id), else: []
+        Enum.filter(conversations, fn s -> s.kind in ["dm", "group"] end)
+      end
 
     socket =
       socket
       |> assign(:page_title, "Chat")
       |> assign(:user_id, user_id)
+      |> assign(:embedded, embedded?)
       |> assign(:spaces, channels ++ dm_conversations)
       |> assign(:channels, channels)
       |> assign(:dm_conversations, dm_conversations)
@@ -107,7 +169,10 @@ defmodule PlatformWeb.ChatLive do
     # (active space subscription happens in handle_params).
     # Also subscribe to the global space-lifecycle topic so newly created
     # channels appear in the sidebar without requiring a refresh.
-    if connected?(socket) do
+    # In embedded mode we skip both: the embed only renders ONE space and
+    # has no sidebar to keep in sync, so the cross-space subscriptions
+    # would just be noise.
+    if connected?(socket) and not embedded? do
       Enum.each(all_spaces, &ChatPubSub.subscribe(&1.id))
       ChatPubSub.subscribe_spaces()
     end
@@ -124,9 +189,92 @@ defmodule PlatformWeb.ChatLive do
       |> UploadHooks.attach()
       |> CanvasHooks.attach()
       |> ActiveAgentHooks.attach()
-      |> MeetingHooks.attach(space_ids)
+
+    # Meeting hooks own join/leave for the LiveKit room. When embedded
+    # inside `MeetingLive`, the parent already owns the meeting lifecycle
+    # — attaching here would double-subscribe to presence and break the
+    # "Meet" button into a no-op (the parent meeting is already live).
+    # We still seed safe defaults so the template's `:if={!@embedded}`
+    # gates over the meeting-button affordances don't choke on missing
+    # assigns when something else references them at render time.
+    socket =
+      if embedded? do
+        socket
+        |> assign(:in_meeting, false)
+        |> assign(:meetings_enabled, false)
+        |> assign(:mic_enabled, false)
+        |> assign(:camera_enabled, false)
+        |> assign(:screen_share_enabled, false)
+        |> assign(:meeting_counts, %{})
+      else
+        MeetingHooks.attach(socket, space_ids)
+      end
+
+    # Embedded surfaces bootstrap the active space inline (URL params
+    # don't flow to nested LVs, and `handle_params/3` is forbidden on
+    # them anyway). The standalone surface defers to `handle_params/3`
+    # below.
+    socket =
+      if embedded? and is_binary(embedded_space_slug) do
+        bootstrap_embedded_space(socket, embedded_space_slug)
+      else
+        socket
+      end
 
     {:ok, socket}
+  end
+
+  # Active-space bootstrap for the embedded surface. Mirrors the
+  # success branch of `handle_params/3` minus three standalone-only
+  # behaviors:
+  #
+  #   * does NOT call `bootstrap_space/1` (the friendly-slug auto-create
+  #     path) — the embed must never mint channels from a meeting's
+  #     binding;
+  #   * does NOT `push_navigate(/chat)` when the slug points at nothing
+  #     — the embed degrades to an empty stream rather than navigating
+  #     the parent;
+  #   * does NOT call `ensure_participant/2` — the meeting bar / livekit
+  #     hook owns explicit join in MeetingLive, and a side-effecting
+  #     embed mount would step on that contract. We do a read-only
+  #     `find_user_participant/2` instead; the composer renders disabled
+  #     when nil and lights up after the user joins through the bar.
+  #
+  # Standalone surface still uses `ensure_participant/2` via
+  # `handle_params/3` because entering a channel via the URL is the
+  # canonical implicit-join trigger.
+  defp bootstrap_embedded_space(socket, slug_or_id) do
+    space =
+      Chat.get_space_by_slug(slug_or_id) ||
+        (valid_uuid?(slug_or_id) && Chat.get_space(slug_or_id))
+
+    case space do
+      nil ->
+        socket
+
+      space ->
+        if connected?(socket) do
+          ChatPubSub.subscribe(space.id)
+          Phoenix.PubSub.subscribe(Platform.PubSub, "active_agent:#{space.id}")
+        end
+
+        participant = find_user_participant(space.id, socket.assigns.user_id)
+        participants = Chat.list_participants(space.id)
+        page_title = space_page_title(space, participants, socket.assigns.user_id)
+
+        socket
+        |> assign(:page_title, page_title)
+        |> assign(:active_space, space)
+        |> assign(:current_participant, participant)
+        |> PresenceHooks.enter_space(space, participant, participants)
+        |> MessagesHooks.enter_space(space, participant)
+        |> SearchHooks.reset_for_space()
+        |> MentionsHooks.reset_for_space()
+        |> PinHooks.load_for_space(space.id)
+        |> CanvasHooks.load_for_space(space.id)
+        |> ActiveAgentHooks.resolve_for_space(space.id, participants)
+        |> clear_unread(space.id)
+    end
   end
 
   @impl true
@@ -799,6 +947,20 @@ defmodule PlatformWeb.ChatLive do
           {:error, _} -> nil
         end
     end
+  end
+
+  # Read-only counterpart to `ensure_participant/2`. Used by the embedded
+  # (live_render) mount path so that opening the meeting chat pane does
+  # NOT step on the meeting bar's explicit-join contract. Returns the
+  # existing user participant row when present, else `nil` — the embed
+  # renders in read-only mode (composer disabled) until the user joins
+  # the meeting through the bar.
+  defp find_user_participant(space_id, user_id) do
+    space_id
+    |> Chat.list_participants()
+    |> Enum.find(fn p ->
+      p.participant_type == "user" and p.participant_id == user_id
+    end)
   end
 
   defp name_for_user(user_id) do

@@ -1,12 +1,17 @@
-<div id="push-subscribe" phx-hook="PushSubscribe" class="hidden"></div>
+<%!-- Hidden JS-hook anchors. When embedded inside a parent surface
+     (e.g. MeetingLive), the parent already mounts these hooks; mounting
+     them a second time would create duplicate elements with the same id
+     (LiveKit Room would double-subscribe). Suppress them in embedded
+     mode and let the parent own the singletons. --%>
+<div :if={!@embedded} id="push-subscribe" phx-hook="PushSubscribe" class="hidden"></div>
 
-<div id="chat-state" phx-hook="ChatState" class="hidden"></div>
+<div :if={!@embedded} id="chat-state" phx-hook="ChatState" class="hidden"></div>
 
-<div id="meeting-client" phx-hook="MeetingClient" class="hidden"></div>
-<div id="meeting-room" phx-hook="MeetingRoom" class="hidden"></div>
-<div id="meeting-soundboard" phx-hook="MeetingSoundboard" class="hidden"></div>
+<div :if={!@embedded} id="meeting-client" phx-hook="MeetingClient" class="hidden"></div>
+<div :if={!@embedded} id="meeting-room" phx-hook="MeetingRoom" class="hidden"></div>
+<div :if={!@embedded} id="meeting-soundboard" phx-hook="MeetingSoundboard" class="hidden"></div>
 
-<.notification_banner push_permission={@push_permission} />
+<.notification_banner :if={!@embedded} push_permission={@push_permission} />
 
 <%!-- Chat root must claim the full height of <main> AND set min-h-0 so its
      descendant flex columns (chat-drop-zone, #message-list) can correctly
@@ -17,8 +22,11 @@
      PR #333 rooted the shell chrome but the chat surface was still
      blowing the layout from the inside. --%>
 <div class="flex h-full min-h-0 overflow-hidden">
-  <%!-- Desktop sidebar --%>
+  <%!-- Desktop sidebar — suppressed when embedded (e.g. inside the
+       meeting chat panel) since the embed scopes to a single space and
+       has no space-switching surface of its own. --%>
   <aside
+    :if={!@embedded}
     id="chat-sidebar"
     phx-hook="ResizableSidebar"
     class="hidden lg:flex relative flex-shrink-0 flex-col border-r border-base-content/10 bg-base-200"
@@ -125,8 +133,8 @@
     />
   </aside>
 
-  <%!-- Mobile channel browser overlay --%>
-  <%= if @mobile_browser_open do %>
+  <%!-- Mobile channel browser overlay — suppressed when embedded. --%>
+  <%= if @mobile_browser_open and !@embedded do %>
     <div class="fixed inset-0 z-40 flex flex-col bg-base-100 lg:hidden safe-area-x">
       <header class="flex h-12 flex-shrink-0 items-center justify-between border-b border-base-300 px-4 safe-area-top">
         <p class="text-sm font-semibold">Conversations</p>
@@ -233,7 +241,7 @@
       class="flex flex-1 flex-col overflow-hidden min-w-0 min-h-0"
     >
       <header
-        :if={@active_space}
+        :if={@active_space && !@embedded}
         class="flex h-12 flex-shrink-0 items-center justify-between border-b border-base-content/10 px-5"
       >
         <div class="flex items-center gap-2 overflow-hidden">
@@ -440,7 +448,7 @@
            (alphabetical via Chat.list_spaces). A follow-up Stage 1B will add
            localStorage-backed pinning + long-press to pin/unpin. --%>
       <nav
-        :if={@active_space}
+        :if={@active_space && !@embedded}
         class="lg:hidden flex items-center gap-2 overflow-x-auto px-4 py-2 border-b border-base-content/10"
         style="scrollbar-width: none; -webkit-overflow-scrolling: touch;"
         aria-label="Channel switcher"
@@ -947,7 +955,11 @@
       restore_confirm_revision={@restore_confirm_revision}
     />
 
+    <%!-- Embedded surfaces (e.g. inside MeetingLive) leave the meeting
+         mini-bar to the parent — the parent already owns the live
+         meeting state. Skip the panel here to avoid a double mini-bar. --%>
     <.meeting_panel
+      :if={!@embedded}
       in_meeting={@in_meeting}
       active_space={@active_space}
       mic_enabled={@mic_enabled}
@@ -957,7 +969,12 @@
   </div>
 </div>
 
+<%!-- Standalone-only modals: settings, new-channel, new-conversation.
+     The embedded surface (e.g. meeting chat panel) scopes to one space
+     and has no affordances to open these, so the components are skipped
+     to keep the embed lean. --%>
 <.live_component
+  :if={!@embedded}
   module={SettingsComponent}
   id="chat-settings"
   open={@show_settings}
@@ -965,12 +982,14 @@
 />
 
 <.live_component
+  :if={!@embedded}
   module={NewChannelComponent}
   id="chat-new-channel"
   open={@show_new_channel_modal}
 />
 
 <.live_component
+  :if={!@embedded}
   module={NewConversationComponent}
   id="chat-new-conversation"
   open={@show_new_conversation_modal}

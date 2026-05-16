@@ -55,6 +55,7 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
   import Phoenix.LiveView, only: [attach_hook: 4, push_event: 3, connected?: 1]
 
   alias Platform.Meetings
+  alias Platform.Meetings.Membership, as: MeetingsMembership
   alias Platform.Meetings.PubSub, as: MeetingsPubSub
   alias Platform.Meetings.State, as: MeetingState
 
@@ -71,7 +72,7 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
       |> assign(:in_meeting, false)
       |> assign(:meetings_enabled, Meetings.enabled?())
       |> assign(:mic_enabled, true)
-      |> assign(:camera_enabled, false)
+      |> assign(:camera_enabled, true)
       |> assign(:screen_share_enabled, false)
       |> assign(:meeting_counts, %{})
       |> attach_hook(:meeting_events, :handle_event, &handle_event/3)
@@ -100,36 +101,23 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
     :ok
   end
 
+  @doc """
+  Programmatically trigger a meeting join from outside the hook's own
+  `handle_event/3` path (e.g. an auto-join `handle_info/2` in
+  `PlatformWeb.MeetingLive`). Mirrors the `"meeting_join"` event handler
+  byte-for-byte — both call into this so the LiveKit lifecycle (token
+  mint, JS-hook push_event, `MeetingState` broadcast) stays in one
+  place.
+
+  Returns the new socket.
+  """
+  @spec join(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
+  def join(socket), do: do_join(socket)
+
   # ── Hook callbacks ────────────────────────────────────────────────────
 
   defp handle_event("meeting_join", _params, socket) do
-    with space when not is_nil(space) <- socket.assigns.active_space,
-         participant when not is_nil(participant) <- socket.assigns.current_participant,
-         {:ok, room} <- Meetings.ensure_room(space.id),
-         identity = "user:#{socket.assigns.user_id}",
-         name = participant.display_name || "User",
-         {:ok, token} <- Meetings.generate_token(room, %{identity: identity, name: name}) do
-      socket =
-        socket
-        |> assign(:in_meeting, true)
-        |> push_event("join-meeting", %{
-          token: token,
-          url: Meetings.livekit_url(),
-          room_name: room.livekit_room_name,
-          space_slug: space.slug
-        })
-
-      MeetingState.broadcast_joined(socket.assigns.user_id, space.id, space.name)
-
-      {:halt, socket}
-    else
-      {:error, reason} ->
-        Logger.warning("[ChatLive] meeting_join failed: #{inspect(reason)}")
-        {:halt, socket}
-
-      nil ->
-        {:halt, socket}
-    end
+    {:halt, do_join(socket)}
   end
 
   defp handle_event("meeting_leave", _params, socket) do
@@ -195,11 +183,82 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
 
   # ── Internals ────────────────────────────────────────────────────────
 
+  defp do_join(socket) do
+    # Stage 4 (task 019e2d1a) bugfix: the participant-row check used to
+    # gate this `with`, which meant a fresh user — one who has never
+    # touched the meeting's bound chat space and therefore has no
+    # `:current_participant` assign — silently no-op'd here. The
+    # Membership bridge then never ran, the LiveKit join never fired,
+    # and the e2e reviewer saw `data-gallery-tile-count='0'`.
+    #
+    # The fix inverts the guard: we require `user_id` (always present
+    # for authenticated mounts) + `:active_space`, then call
+    # `Membership.ensure_chat_space_participant/3` FIRST. That call is
+    # the canonical insert path AND a find-or-insert, so it doubles as
+    # the participant resolver — its return value becomes the
+    # `:current_participant` assign for the rest of the lifecycle.
+    # Only after that do we mint the LiveKit token and push to the JS
+    # hook.
+    with space when not is_nil(space) <- socket.assigns[:active_space],
+         user_id when is_binary(user_id) <- socket.assigns[:user_id],
+         display_name = resolve_display_name(socket),
+         {:ok, participant} <-
+           MeetingsMembership.ensure_chat_space_participant(space.id, user_id, display_name),
+         {:ok, room} <- Meetings.ensure_room(space.id),
+         identity = "user:#{user_id}",
+         name = participant.display_name || display_name,
+         {:ok, token} <- Meetings.generate_token(room, %{identity: identity, name: name}) do
+      socket =
+        socket
+        |> assign(:current_participant, participant)
+        |> assign(:in_meeting, true)
+        |> push_event("join-meeting", %{
+          token: token,
+          url: Meetings.livekit_url(),
+          room_name: room.livekit_room_name,
+          space_slug: space.slug
+        })
+
+      MeetingState.broadcast_joined(user_id, space.id, space.name)
+
+      socket
+    else
+      {:error, reason} ->
+        Logger.warning("[ChatLive] meeting_join failed: #{inspect(reason)}")
+        socket
+
+      nil ->
+        socket
+
+      _ ->
+        socket
+    end
+  end
+
+  # Pick the best available display name without depending on a
+  # pre-existing participant row. Order of preference:
+  #   1. existing `:current_participant.display_name` (set by MeetingLive
+  #      mount when the viewer already had a row),
+  #   2. `:current_user_display_name` if the host LV bothered to assign one,
+  #   3. `"User"` fallback — matches Membership's own default.
+  defp resolve_display_name(socket) do
+    case socket.assigns[:current_participant] do
+      %{display_name: name} when is_binary(name) and name != "" ->
+        name
+
+      _ ->
+        case socket.assigns[:current_user_display_name] do
+          name when is_binary(name) and name != "" -> name
+          _ -> "User"
+        end
+    end
+  end
+
   defp reset_meeting_state(socket) do
     socket
     |> assign(:in_meeting, false)
     |> assign(:mic_enabled, true)
-    |> assign(:camera_enabled, false)
+    |> assign(:camera_enabled, true)
     |> assign(:screen_share_enabled, false)
   end
 end

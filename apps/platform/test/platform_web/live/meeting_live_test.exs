@@ -1,17 +1,18 @@
 defmodule PlatformWeb.MeetingLiveTest do
   @moduledoc """
-  Tests for `PlatformWeb.MeetingLive` and the embedded
-  `PlatformWeb.MeetingChatPanelLive` (ADR 0042, task 019e2475-87a8
-  stage 1).
+  Tests for `PlatformWeb.MeetingLive` (ADR 0042).
 
-  Stage 1 ships:
-    * the meeting route + shell skeleton (light theme, top bar with
-      stage-mode stub, placeholders for sibling-owned panes)
-    * the embedded chat panel rendered via `live_render` of
-      `MeetingChatPanelLive` with the meeting's chat space slug
-    * the chat panel root with `data-intent-panel-host="true"` (the
-      future intent-panel migration's greppable hook)
-    * a defensive empty-render path if no chat_space is bound
+  ## Embedded chat surface
+
+  Stage 5 of task 019e2d1a swapped the original `MeetingChatPanelLive`
+  stub for the real `PlatformWeb.ChatLive` surface in its `:embedded`
+  mode (full mentions / attachments / reactions / threading / edit
+  support). These tests pin the embed contract: the chat pane in a
+  meeting renders the real `<.chat_message>` component, the composer
+  form, the mention dropdown trigger, the attachment-upload affordance,
+  and the meeting name in the pane header. The
+  `data-intent-panel-host="true"` marker survives on the wrapping
+  `<div>` for the future intent-panel migration's greppable hook.
   """
   use PlatformWeb.ConnCase, async: true
 
@@ -134,21 +135,41 @@ defmodule PlatformWeb.MeetingLiveTest do
     end
 
     test "renders the placeholder panes", %{conn: conn, meeting: meeting} do
-      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      # Gallery-default reframe (stage 3, task 019e2d1a): the bottom
+      # strip is hidden in gallery mode (the grid is the full face-grid),
+      # so on default mount it's absent. We assert its presence here by
+      # switching to canvas mode first — the test guarantees the strip
+      # *can* render, not that it's always present.
+      {:ok, view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
 
       assert html =~ ~s(data-pane="left-rail")
       assert html =~ ~s(data-pane="center-stage")
-      assert html =~ ~s(data-pane="bottom-strip")
       assert html =~ ~s(data-pane="chat-panel")
+      # On default-gallery mount, the strip is intentionally hidden.
+      refute html =~ ~s(data-pane="bottom-strip")
+
+      # Flip to canvas mode and the strip reappears as the compact
+      # "who's here" footer.
+      canvas_html =
+        view
+        |> element(~s([data-stage-mode-button="canvas"]))
+        |> render_click()
+
+      assert canvas_html =~ ~s(data-pane="bottom-strip")
     end
 
-    test "center stage carries data-stage-mode='canvas' by default", %{
+    test "center stage carries data-stage-mode='gallery' by default", %{
       conn: conn,
       meeting: meeting
     } do
+      # Gallery-default reframe (stage 3, task 019e2d1a): the meeting
+      # opens face-first. Previously canvas was the default; the bottom
+      # strip is now hidden in gallery so the grid owns the full
+      # vertical area, and switching to canvas/screen/whiteboard reveals
+      # the strip as the compact "who's here" footer.
       {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
 
-      assert html =~ ~s(data-stage-mode="canvas")
+      assert html =~ ~s(data-stage-mode="gallery")
     end
 
     test "top bar shows the meeting name", %{conn: conn, meeting: meeting} do
@@ -210,14 +231,17 @@ defmodule PlatformWeb.MeetingLiveTest do
       assert html =~ "Stage Two Header"
     end
 
-    test "chat panel header includes the verbatim intent-panel placeholder caption",
+    test "chat panel header drops the 'placeholder for intent panel' caption (stage 5 swap)",
          %{conn: conn, meeting: meeting} do
       {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
 
-      # Greppable caption (intentional verbatim string — see comment in
-      # meeting_live.html.heex). Future-Rowan will use this exact string
-      # to find the surface during the intent-panel migration.
-      assert html =~ "Discussion · placeholder for intent panel (ADR 0042)"
+      # Stage 5 (019e2d1a) replaced the stub MeetingChatPanelLive with
+      # the real ChatLive embed. The placeholder caption that named the
+      # stub as a surface-marker for the eventual intent panel is gone
+      # — the pane header now carries the meeting name + chat icon
+      # only. The greppable migration hook moved to the
+      # `data-intent-panel-host` data-attribute on the embed wrapper.
+      refute html =~ "placeholder for intent panel"
     end
 
     test "chat panel header uses hero-chat-bubble-left-right (no emoji)", %{
@@ -227,45 +251,53 @@ defmodule PlatformWeb.MeetingLiveTest do
       {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
 
       assert html =~ "hero-chat-bubble-left-right"
-      # Belt-and-suspenders: the header caption itself uses the middle
-      # dot (U+00B7) as its separator, NOT an emoji. Refute common chat
-      # emoji codepoints just in case a future drive-by edit reaches
-      # for one.
+      # Belt-and-suspenders: no emoji codepoints in the chrome.
       refute html =~ "💬"
       refute html =~ "💭"
     end
   end
 
-  describe "embedded chat panel — render path" do
+  describe "embedded chat panel — render path (stage 5: real ChatLive embed)" do
     setup %{conn: conn} do
       {meeting, space} = create_meeting(%{slug: "kickoff-chat", name: "Kickoff Chat"})
       {conn, user} = authenticated_conn(conn)
       {:ok, conn: conn, user: user, meeting: meeting, space: space}
     end
 
-    test "panel root carries data-intent-panel-host=\"true\"", %{
-      conn: conn,
-      meeting: meeting
-    } do
+    test "wrapping pane root carries data-intent-panel-host=\"true\" (migration marker)",
+         %{conn: conn, meeting: meeting} do
       {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
 
+      # The marker moved off the (now-deleted) stub root onto the
+      # wrapping `<div>` around the `live_render`. The data-pane
+      # marker co-locates so a future grep lands on the swap-out site.
       assert html =~ ~s(data-intent-panel-host="true")
+      assert html =~ ~s(data-pane="meeting-chat-panel")
     end
 
-    test "panel renders the meeting's chat-space messages on mount", %{
-      conn: conn,
-      meeting: meeting,
-      space: space
-    } do
+    test "panel renders the meeting's chat-space messages via the real <.chat_message> component",
+         %{conn: conn, meeting: meeting, space: space} do
       {_p1, _m1} = seed_message(space, "Alice", "first message")
       {_p2, _m2} = seed_message(space, "Bob", "second message")
 
-      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
 
-      assert html =~ "first message"
-      assert html =~ "second message"
-      assert html =~ "Alice"
-      assert html =~ "Bob"
+      panel_view = find_live_child(view, "meeting-chat-panel-#{meeting.id}")
+      panel_html = render(panel_view)
+
+      assert panel_html =~ "first message"
+      assert panel_html =~ "second message"
+      assert panel_html =~ "Alice"
+      assert panel_html =~ "Bob"
+
+      # The real chat_message component emits `data-message-id` on
+      # every rendered bubble — the grep marker the stage 5 spec calls
+      # for to confirm the embed uses the canonical component (rather
+      # than a re-implementation).
+      assert panel_html =~ ~s(data-message-id=)
+
+      # The stream container the canonical component renders into.
+      assert panel_html =~ ~s(id="message-list")
     end
 
     test "messages from a *different* space do NOT bleed into the panel", %{
@@ -275,36 +307,113 @@ defmodule PlatformWeb.MeetingLiveTest do
       other_space = create_space()
       seed_message(other_space, "Eve", "this should not appear")
 
-      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
 
-      refute html =~ "this should not appear"
+      panel_view = find_live_child(view, "meeting-chat-panel-#{meeting.id}")
+      panel_html = render(panel_view)
+
+      refute panel_html =~ "this should not appear"
     end
 
-    test "panel exposes a composer form scoped to the chat panel", %{
+    test "panel exposes the canonical compose-form with the @mention-aware textarea",
+         %{conn: conn, meeting: meeting} do
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      panel_view = find_live_child(view, "meeting-chat-panel-#{meeting.id}")
+      panel_html = render(panel_view)
+
+      # The real composer form id + name. ChatLive's textarea is
+      # named `compose[text]` (not the stub's `composer[text]`), so a
+      # passing test here also proves we're rendering the embedded
+      # ChatLive, not a remnant stub.
+      assert panel_html =~ ~s(id="compose-form")
+      assert panel_html =~ ~s(name="compose[text]")
+    end
+
+    test "panel exposes the attachment-upload affordance (real upload pipeline)", %{
       conn: conn,
       meeting: meeting
     } do
-      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
 
-      assert html =~ ~s(data-pane-section="composer")
-      assert html =~ ~s(name="composer[text]")
+      panel_view = find_live_child(view, "meeting-chat-panel-#{meeting.id}")
+      panel_html = render(panel_view)
+
+      # ChatLive's compose-attach button + the DragDropUpload drop-zone
+      # hook. The stub had neither.
+      assert panel_html =~ ~s(id="compose-attach-button")
+      assert panel_html =~ ~s(phx-hook="DragDropUpload")
     end
 
-    test "submitting the composer persists a message to the chat space", %{
-      conn: conn,
-      meeting: meeting,
-      space: space
-    } do
+    test "submitting the composer persists a message to the chat space when viewer is a participant",
+         %{conn: conn, meeting: meeting, space: space} do
+      {conn, user} = authenticated_conn(conn)
+
+      {:ok, _participant} =
+        Chat.add_participant(space.id, %{
+          participant_type: "user",
+          participant_id: user.id,
+          display_name: "Composer Author",
+          joined_at: DateTime.utc_now()
+        })
+
       {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
 
       panel_view = find_live_child(view, "meeting-chat-panel-#{meeting.id}")
 
       panel_view
-      |> form("form[phx-submit='send_message']", composer: %{text: "hello from composer"})
+      |> form("form#compose-form", compose: %{text: "hello from composer"})
       |> render_submit()
 
       messages = Chat.list_messages(space.id, top_level_only: true)
       assert Enum.any?(messages, &(&1.content == "hello from composer"))
+    end
+
+    test "typing '@' in the composer surfaces the mention dropdown", %{
+      conn: conn,
+      meeting: meeting,
+      space: space
+    } do
+      # Seed an agent participant so there is a mention target. ChatLive's
+      # mention pipeline only lists agent-typed participants in the
+      # dropdown by default.
+      {:ok, _agent} =
+        Chat.add_participant(space.id, %{
+          participant_type: "agent",
+          participant_id: Ecto.UUID.generate(),
+          display_name: "Mention Bot",
+          joined_at: DateTime.utc_now()
+        })
+
+      {conn, user} = authenticated_conn(conn)
+
+      {:ok, _participant} =
+        Chat.add_participant(space.id, %{
+          participant_type: "user",
+          participant_id: user.id,
+          display_name: "Mention Author",
+          joined_at: DateTime.utc_now()
+        })
+
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      panel_view = find_live_child(view, "meeting-chat-panel-#{meeting.id}")
+
+      # ChatLive's mention pipeline is wired to the JS-side ComposeInput
+      # hook, which pushes `mention_query` when the user types `@<query>`.
+      # Simulate that event directly — the server-side handler scans
+      # `:participants_map`, populates `:mention_suggestions`, and the
+      # template renders the dropdown with
+      # `data-mention-suggestion="first"` on the first hit.
+      render_hook(panel_view, "mention_query", %{"query" => "", "source" => "compose-form"})
+
+      panel_html = render(panel_view)
+
+      assert panel_html =~ ~s(data-mention-suggestion="first"),
+             "expected mention dropdown to render after `mention_query` event"
+
+      # And the agent we seeded is in the dropdown.
+      assert panel_html =~ "Mention Bot"
     end
 
     test "panel updates in real time when a message is broadcast on the space topic", %{
@@ -314,8 +423,6 @@ defmodule PlatformWeb.MeetingLiveTest do
     } do
       {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
 
-      # Post a message from a different process; the panel's PubSub
-      # subscription should pick it up.
       task =
         Task.async(fn ->
           {:ok, p} =
@@ -339,11 +446,8 @@ defmodule PlatformWeb.MeetingLiveTest do
 
       _msg = Task.await(task)
 
-      # Force a render to flush async messages.
       _ = render(view)
 
-      # The panel is a child LV; render it directly to capture its
-      # current HTML.
       panel_view = find_live_child(view, "meeting-chat-panel-#{meeting.id}")
       panel_html = render(panel_view)
 
@@ -510,48 +614,14 @@ defmodule PlatformWeb.MeetingLiveTest do
     end
   end
 
-  describe "embedded chat panel — defensive paths" do
-    test "MeetingChatPanelLive mounted with a missing chat_space slug renders an empty placeholder",
-         %{conn: conn} do
-      # The embed is a child LiveView routed via /meetings/:slug — its
-      # session is built from the meeting record. If the upstream
-      # meeting record points at a deleted chat_space (slug present
-      # but space row gone), the embed must render its own empty state
-      # rather than crashing the parent shell.
-      #
-      # We exercise this directly by mounting the embed from the
-      # `__live_render_test/2` helper-equivalent below: the embed is
-      # a regular `use PlatformWeb, :live_view`, so we route through
-      # the same `live_isolated/3` LiveViewTest helper.
-      {conn, _user} = authenticated_conn(conn)
-
-      {:ok, _view, html} =
-        live_isolated(conn, PlatformWeb.MeetingChatPanelLive,
-          session: %{"chat_space_slug" => "no-such-slug-#{System.unique_integer([:positive])}"}
-        )
-
-      assert html =~ ~s(data-pane-section="empty")
-      refute html =~ ~s(data-pane-section="composer")
-    end
-
-    test "MeetingChatPanelLive mounted without a slug session key renders an empty placeholder",
-         %{conn: conn} do
-      {conn, _user} = authenticated_conn(conn)
-
-      {:ok, _view, html} =
-        live_isolated(conn, PlatformWeb.MeetingChatPanelLive, session: %{})
-
-      assert html =~ ~s(data-pane-section="empty")
-    end
-  end
-
-  describe "consolidation pass (stage 4)" do
-    # Stage 4 is a pure tests stage. Most stage-4 spec items already
-    # have direct coverage from stages 1-3 (panel mount, intent-panel
-    # data attribute, greppable caption, mobile-toggle assign flip,
-    # defensive empty-render). This describe block fills the small
-    # remaining gaps and double-anchors the contracts that the stage 5
-    # e2e_behavior validations will grep for in the rendered HTML.
+  describe "consolidation pass (stage 5 swap audit)" do
+    # Stage 5 (019e2d1a) swapped the MeetingChatPanelLive stub for the
+    # real ChatLive embed. The stub-specific defensive paths (root id
+    # encoding the chat space, empty-state sentinel id, caption count)
+    # are gone; this describe block consolidates the *new* surface
+    # contracts: the wrapping div carries the migration marker, the
+    # placeholder caption is gone, and the mobile-drawer toggle assign
+    # flip stays idempotent.
 
     setup %{conn: conn} do
       {meeting, space} =
@@ -561,53 +631,29 @@ defmodule PlatformWeb.MeetingLiveTest do
       {:ok, conn: conn, user: user, meeting: meeting, space: space}
     end
 
-    test "panel root id explicitly encodes the bound chat_space.id (scope contract)", %{
-      conn: conn,
-      meeting: meeting,
-      space: space
-    } do
-      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
-
-      # The panel's root <div> id is `meeting-chat-panel-root-<chat_space_id>`
-      # (see meeting_chat_panel_live.ex render/1). Asserting the bound
-      # space id appears in the rendered id pins the scope contract:
-      # the embed renders for *this* meeting's chat space, not some
-      # other / cached / stale binding.
-      assert html =~ ~s(id="meeting-chat-panel-root-#{space.id}")
-      # And NOT the empty-state sentinel id.
-      refute html =~ ~s(id="meeting-chat-panel-root-empty")
-    end
-
-    test "data-intent-panel-host and data-pane='meeting-chat-panel' co-locate on the same root",
+    test "data-intent-panel-host and data-pane='meeting-chat-panel' co-locate on the wrapping div",
          %{conn: conn, meeting: meeting} do
       {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
 
-      # Stage 5's first e2e_behavior validation greps for
-      # `data-intent-panel-host`. Make sure it lives on the same DOM
-      # element as the embed's pane marker so future-Rowan can pivot
-      # from the grep result straight to the surface.
+      # The marker (and the pane-id) live on the wrapping `<div>` around
+      # the `live_render` of the embedded ChatLive, not on the embed's
+      # own root. Co-locating both attributes on a single element keeps
+      # the future-Rowan grep pivot intact.
       assert html =~
                ~r/data-intent-panel-host="true"[^>]*data-pane="meeting-chat-panel"|data-pane="meeting-chat-panel"[^>]*data-intent-panel-host="true"/
     end
 
-    test "placeholder caption appears exactly once (greppable single source of truth)", %{
+    test "placeholder caption is gone (stage 5 contract)", %{
       conn: conn,
       meeting: meeting
     } do
       {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
 
-      # Stage 5 grep validation: `rg 'placeholder for intent panel
-      # \(ADR 0042\)' apps/platform` should yield one canonical match
-      # per LV file. Belt-and-suspenders: confirm the rendered HTML
-      # also surfaces it exactly once so a future drive-by edit that
-      # accidentally duplicates the caption fails this test loudly.
-      occurrences =
-        html
-        |> String.split("placeholder for intent panel (ADR 0042)")
-        |> length()
-        |> Kernel.-(1)
-
-      assert occurrences == 1
+      # The stub's "Discussion · placeholder for intent panel (ADR 0042)"
+      # caption is removed in the swap. The migration marker moved to
+      # the wrapping div's data attributes.
+      refute html =~ "placeholder for intent panel"
+      refute html =~ "Discussion · placeholder"
     end
 
     test "toggle assign flip is *idempotent* (no drift across multiple cycles)", %{
@@ -634,21 +680,14 @@ defmodule PlatformWeb.MeetingLiveTest do
       end
     end
 
-    test "defensive empty render still carries data-intent-panel-host (migration hook is unconditional)",
-         %{conn: conn} do
-      # Even when the chat_space binding is missing, the panel must
-      # still expose `data-intent-panel-host="true"` so the future
-      # intent-panel migration's hook attaches uniformly. Pairs with
-      # the stage 1 defensive tests but pins the migration contract
-      # explicitly.
-      {conn, _user} = authenticated_conn(conn)
-
-      {:ok, _view, html} =
-        live_isolated(conn, PlatformWeb.MeetingChatPanelLive, session: %{})
-
-      assert html =~ ~s(data-intent-panel-host="true")
-      assert html =~ ~s(id="meeting-chat-panel-root-empty")
-    end
+    # NOTE: an "empty chat_space binding falls through to the placeholder"
+    # test used to live here; it required a meeting row with
+    # `chat_space_id: nil`, which the schema's required-field validation
+    # now rejects. The template's defensive `:if @meeting.chat_space &&
+    # @meeting.chat_space.slug do` branch is still in place as belt-and-
+    # suspenders defense (a chat_space row deleted out from under a
+    # meeting would fail the preload), but the regression test is gone
+    # since the persistence layer now enforces the invariant.
   end
 
   describe "PubSub topic shape (regression)" do
@@ -693,15 +732,18 @@ defmodule PlatformWeb.MeetingLiveTest do
       {:ok, conn: conn, meeting: meeting, space: space}
     end
 
-    test "defaults to canvas mode with the canvas button active", %{
+    test "defaults to gallery mode with the gallery button active", %{
       conn: conn,
       meeting: meeting
     } do
+      # Gallery-default reframe (stage 3, task 019e2d1a): the meeting
+      # opens face-first — gallery is the default mode.
       {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
 
-      assert html =~ ~s(data-stage-mode-button="canvas")
-      # The canvas button is active; the others are not.
-      assert html =~ ~r/data-stage-mode-button="canvas"[^>]*data-active="true"/
+      assert html =~ ~s(data-stage-mode-button="gallery")
+      # The gallery button is active; the others are not.
+      assert html =~ ~r/data-stage-mode-button="gallery"[^>]*data-active="true"/
+      assert html =~ ~r/data-stage-mode-button="canvas"[^>]*data-active="false"/
       assert html =~ ~r/data-stage-mode-button="screen"[^>]*data-active="false"/
     end
 
@@ -754,15 +796,20 @@ defmodule PlatformWeb.MeetingLiveTest do
       conn: conn,
       meeting: meeting
     } do
+      # Gallery-default reframe (stage 3, task 019e2d1a): the bottom
+      # strip is intentionally hidden in gallery mode (the grid is the
+      # face-grid), so we switch to canvas here to assert the strip is
+      # re-mountable post-flip. Left rail is mode-independent on every
+      # mode.
       {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
 
       html =
         view
-        |> element(~s([data-stage-mode-button="gallery"]))
+        |> element(~s([data-stage-mode-button="canvas"]))
         |> render_click()
 
       # Left rail + bottom strip are presentation-independent of the
-      # stage mode — they must survive a mode switch.
+      # non-gallery stage modes — they must survive a mode switch.
       assert html =~ ~s(data-pane="left-rail")
       assert html =~ ~s(data-pane="bottom-strip")
     end
@@ -776,6 +823,11 @@ defmodule PlatformWeb.MeetingLiveTest do
       # Whiteboard."). Doing this in one test guards against silent
       # ordering-dependent regressions where, say, switching out of Canvas
       # mode tears down the participant rail.
+      #
+      # Gallery-default reframe (stage 3, task 019e2d1a): the bottom
+      # strip is HIDDEN in gallery mode — the grid is the full face-grid
+      # and the strip is redundant. The strip must still be present on
+      # canvas / screen / whiteboard.
       {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
 
       for mode <- ~w(canvas screen gallery whiteboard) do
@@ -799,16 +851,23 @@ defmodule PlatformWeb.MeetingLiveTest do
         assert active_count == 1,
                "expected exactly one active button after clicking #{mode}, got #{active_count}"
 
-        # …and the sibling panes (left rail, bottom strip, participant
-        # rail placeholder) remain mounted on every click.
+        # …and the mode-independent panes (left rail, participant rail
+        # placeholder) remain mounted on every click.
         assert html =~ ~s(data-pane="left-rail"),
                "left rail unmounted after switching to #{mode}"
 
-        assert html =~ ~s(data-pane="bottom-strip"),
-               "bottom strip unmounted after switching to #{mode}"
-
         assert html =~ ~s(data-component="participant-rail"),
                "participant rail unmounted after switching to #{mode}"
+
+        # Bottom strip is present in canvas/screen/whiteboard, hidden in
+        # gallery (the grid owns the full vertical area there).
+        if mode == "gallery" do
+          refute html =~ ~s(data-pane="bottom-strip"),
+                 "bottom strip should be hidden in gallery mode"
+        else
+          assert html =~ ~s(data-pane="bottom-strip"),
+                 "bottom strip unmounted after switching to #{mode}"
+        end
       end
     end
   end
@@ -824,7 +883,15 @@ defmodule PlatformWeb.MeetingLiveTest do
       conn: conn,
       meeting: meeting
     } do
-      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      # Gallery-default reframe (stage 3, task 019e2d1a): the meeting
+      # opens in gallery mode, so we switch to canvas first to exercise
+      # the empty-state CTA.
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      html =
+        view
+        |> element(~s([data-stage-mode-button="canvas"]))
+        |> render_click()
 
       assert html =~ ~s(data-empty-state="canvas")
       assert html =~ "No canvas yet"
@@ -861,7 +928,14 @@ defmodule PlatformWeb.MeetingLiveTest do
           "title" => "Newer canvas"
         })
 
-      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      # Gallery-default reframe (stage 3, task 019e2d1a): switch to
+      # canvas mode so the canvas renderer takes the center stage.
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      html =
+        view
+        |> element(~s([data-stage-mode-button="canvas"]))
+        |> render_click()
 
       # The data-canvas-id attribute on the center stage points at the
       # newer canvas — older canvases lose to insertion-order tail.
@@ -871,12 +945,30 @@ defmodule PlatformWeb.MeetingLiveTest do
       refute html =~ "No canvas yet"
     end
 
-    test "clicking the CTA creates a canvas and renders it", %{
-      conn: conn,
-      meeting: meeting,
-      space: space
-    } do
-      {:ok, view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+    test "clicking the CTA creates a canvas and renders it when viewer is already a participant",
+         %{conn: conn, meeting: meeting, space: space} do
+      # Stage 1 (019e2d1a): create_meeting_canvas no longer side-effects a
+      # join. The viewer must already have a participant row in the
+      # meeting's chat space — set one up before clicking the CTA.
+      {conn, user} = authenticated_conn(conn)
+
+      {:ok, _participant} =
+        Chat.add_participant(space.id, %{
+          participant_type: "user",
+          participant_id: user.id,
+          display_name: "Already Joined",
+          joined_at: DateTime.utc_now()
+        })
+
+      # Gallery-default reframe (stage 3, task 019e2d1a): switch to
+      # canvas mode so the empty-state CTA is reachable.
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      html =
+        view
+        |> element(~s([data-stage-mode-button="canvas"]))
+        |> render_click()
+
       assert html =~ "No canvas yet"
 
       html =
@@ -893,12 +985,91 @@ defmodule PlatformWeb.MeetingLiveTest do
       assert [%Platform.Chat.Canvas{}] = Chat.list_canvases(space.id)
     end
 
+    test "clicking the CTA when viewer has no participant row flashes a hint and does NOT create a canvas",
+         %{conn: conn, meeting: meeting, space: space} do
+      # Stage 1 (019e2d1a): the wrong-trigger participant model is gone.
+      # Canvas creation must NOT insert the viewer into the meeting's chat
+      # space participants. Refuse the create + flash a hint.
+      #
+      # Stage 3 (019e2d1a): meeting opens in gallery — switch to canvas
+      # mode first so the empty-state CTA is reachable.
+      #
+      # Stage 4 bugfix (019e2d1a): the auto-join NOW inserts via the
+      # Membership bridge, so we use `?no_autojoin=true` to keep the
+      # stage-1 negative contract testable in isolation — canvas
+      # creation by itself MUST NOT trigger an insert.
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}?no_autojoin=true")
+
+      html =
+        view
+        |> element(~s([data-stage-mode-button="canvas"]))
+        |> render_click()
+
+      assert html =~ "No canvas yet"
+
+      # Sanity: no participants yet.
+      assert Chat.list_participants(space.id) == []
+
+      html =
+        view
+        |> element(~s(button[data-action="create-meeting-canvas"]))
+        |> render_click()
+
+      # Flash hint surfaced + no canvas + no participant row inserted.
+      assert html =~ "Join the meeting to create a canvas."
+      assert html =~ "No canvas yet"
+      assert Chat.list_canvases(space.id) == []
+      assert Chat.list_participants(space.id) == []
+    end
+
+    test "mount + create_meeting_canvas click leave participants empty when viewer hasn't joined",
+         %{conn: conn, meeting: meeting, space: space} do
+      # Stage 1 (019e2d1a) contract: neither MeetingLive.mount nor the
+      # create_meeting_canvas handler may insert the viewer as a
+      # participant in the meeting's chat space. The explicit join lives
+      # in the meeting bar / livekit hook in a sibling stage.
+      #
+      # Stage 3 (019e2d1a): meeting opens in gallery; switch to canvas
+      # mode so the CTA button is in the DOM to click.
+      #
+      # Stage 4 bugfix (019e2d1a): same `?no_autojoin=true` rationale —
+      # this test polices the "neither mount nor canvas-create inserts"
+      # contract, so we silence the auto-join to isolate the assertion.
+      assert Chat.list_participants(space.id) == []
+
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}?no_autojoin=true")
+
+      # After mount: still no participants.
+      assert Chat.list_participants(space.id) == []
+
+      view
+      |> element(~s([data-stage-mode-button="canvas"]))
+      |> render_click()
+
+      # After clicking the CTA: STILL no participants (the click flashes
+      # an error rather than inserting one on the fly).
+      view
+      |> element(~s(button[data-action="create-meeting-canvas"]))
+      |> render_click()
+
+      assert Chat.list_participants(space.id) == []
+    end
+
     test "live :canvas_created broadcast on the meeting's space latches the canvas", %{
       conn: conn,
       meeting: meeting,
       space: space
     } do
-      {:ok, view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      # Gallery-default reframe (stage 3, task 019e2d1a): switch to
+      # canvas mode so the empty-state CTA / canvas pane is visible
+      # before the broadcast lands and the renderer takes over.
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      html =
+        view
+        |> element(~s([data-stage-mode-button="canvas"]))
+        |> render_click()
+
       assert html =~ "No canvas yet"
 
       {:ok, peer} =
@@ -1029,17 +1200,23 @@ defmodule PlatformWeb.MeetingLiveTest do
       meeting: meeting,
       space: space
     } do
-      # The sibling-shipped chat panel auto-adds the current user as a
-      # participant on mount. To exercise the "0 humans" branch we drop
-      # the auto-added participant and broadcast a participant_left so
-      # the LV's :participants assign refreshes from the DB.
-      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      # Stage 1 (019e2d1a) dropped the eager participant-add side effect
+      # from MeetingChatPanelLive.mount and MeetingLive.create_meeting_canvas,
+      # so a fresh mount with no prior participants leaves the roster
+      # empty. The gallery empty-state should render directly with no
+      # setup teardown required.
+      #
+      # Stage 4 bugfix (019e2d1a): the auto-join now inserts via the
+      # Membership bridge, which would change the empty-state into a
+      # one-tile state and steal what this test is policing. Suppress
+      # auto-join with `?no_autojoin=true` so the gallery empty state
+      # is observable.
+      assert Chat.list_participants(space.id) == []
 
-      for p <- Chat.list_participants(space.id) do
-        Repo.delete!(p)
-      end
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}?no_autojoin=true")
 
-      send(view.pid, {:participant_left, nil})
+      # Belt-and-suspenders: confirm mount did NOT insert anyone.
+      assert Chat.list_participants(space.id) == []
 
       html =
         view
@@ -1062,6 +1239,10 @@ defmodule PlatformWeb.MeetingLiveTest do
     } do
       # Two humans + one agent. Only the humans should tile; the agent
       # is excluded from gallery mode (presence lives in the bottom strip).
+      #
+      # Stage 4 bugfix (019e2d1a): auto-join now inserts the viewer too,
+      # which would add a 3rd human tile and skew the count assertion.
+      # `?no_autojoin=true` keeps the test scoped to the seeded humans.
       {:ok, _ada} =
         Chat.add_participant(space.id, %{
           participant_type: "user",
@@ -1086,7 +1267,7 @@ defmodule PlatformWeb.MeetingLiveTest do
           joined_at: DateTime.utc_now()
         })
 
-      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}?no_autojoin=true")
 
       html =
         view
@@ -1094,12 +1275,13 @@ defmodule PlatformWeb.MeetingLiveTest do
         |> render_click()
 
       assert html =~ ~s(data-stage-mode="gallery")
-      # Two seeded humans + the chat-panel-auto-added current user = 3
-      # human tiles. The agent is omitted from the gallery grid.
-      assert html =~ ~s(data-gallery-tile-count="3")
+      # Stage 1 (019e2d1a) dropped the chat-panel auto-add side effect,
+      # so the gallery shows exactly the two seeded humans. The agent is
+      # omitted from the gallery grid.
+      assert html =~ ~s(data-gallery-tile-count="2")
       assert html =~ ~s(data-gallery-grid)
 
-      # Three video tiles, one per human; agent is omitted from the
+      # Two video tiles, one per human; agent is omitted from the
       # gallery grid. Scope the count to the gallery section: the
       # bottom strip (sibling 019e2475-0037) also renders MeetingVideoTile
       # hooks, so a global count would over-report.
@@ -1119,7 +1301,7 @@ defmodule PlatformWeb.MeetingLiveTest do
         Regex.scan(~r/phx-hook="MeetingVideoTile"/, gallery_section)
         |> length()
 
-      assert tile_count == 3
+      assert tile_count == 2
     end
 
     test "Screen → Gallery → Canvas preserves the canvas state in the LV assigns", %{
@@ -1155,6 +1337,157 @@ defmodule PlatformWeb.MeetingLiveTest do
 
       html = render(view)
       assert html =~ ~s(data-canvas-id="#{canvas.id}")
+    end
+  end
+
+  # ── Gallery-default reframe (stage 3, task 019e2d1a) ──────────────────────
+  #
+  # The meeting opens face-first: gallery is the default stage mode and
+  # the bottom strip is hidden in gallery so the grid owns the full
+  # vertical space. Switching to canvas/screen/whiteboard reveals the
+  # strip as the compact "who's here" footer. Identity strings are
+  # deliberately aligned (`"user:" <> pid` in BOTH the gallery grid and
+  # the bottom strip) so the MeetingVideoTile hook reuses the same DOM
+  # node across mode flips and the LiveKit track stays attached.
+
+  describe "gallery-default reframe (stage 3)" do
+    setup %{conn: conn} do
+      {meeting, space} = create_meeting(%{slug: "gallery-default", name: "Gallery Default"})
+      {conn, _user} = authenticated_conn(conn)
+      {:ok, conn: conn, meeting: meeting, space: space}
+    end
+
+    test "mount → :current_stage_mode is :gallery and the center stage carries data-stage-mode=\"gallery\"",
+         %{conn: conn, meeting: meeting} do
+      {:ok, view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      assert html =~ ~s(data-stage-mode="gallery")
+      assert :sys.get_state(view.pid).socket.assigns.current_stage_mode == :gallery
+    end
+
+    test "mount → no data-pane=\"bottom-strip\" element renders (gallery hides the strip)",
+         %{conn: conn, meeting: meeting} do
+      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      refute html =~ ~s(data-pane="bottom-strip")
+    end
+
+    test "render_click Canvas → center stage swaps to canvas renderer AND bottom strip reappears",
+         %{conn: conn, meeting: meeting} do
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      html =
+        view
+        |> element(~s([data-stage-mode-button="canvas"]))
+        |> render_click()
+
+      # Center stage now renders the canvas mode (empty-state CTA since
+      # no canvas seeded) and the data-stage-mode attribute follows.
+      assert html =~ ~s(data-stage-mode="canvas")
+      assert html =~ ~s(data-empty-state="canvas")
+      # And the bottom strip is now present.
+      assert html =~ ~s(data-pane="bottom-strip")
+    end
+
+    test "render_click Gallery after Canvas → bottom strip hidden again",
+         %{conn: conn, meeting: meeting} do
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      # Move to canvas first (strip should appear).
+      canvas_html =
+        view
+        |> element(~s([data-stage-mode-button="canvas"]))
+        |> render_click()
+
+      assert canvas_html =~ ~s(data-pane="bottom-strip")
+
+      # Back to gallery — strip is hidden again.
+      gallery_html =
+        view
+        |> element(~s([data-stage-mode-button="gallery"]))
+        |> render_click()
+
+      assert gallery_html =~ ~s(data-stage-mode="gallery")
+      refute gallery_html =~ ~s(data-pane="bottom-strip")
+    end
+
+    test "with 3 human participants, gallery renders 3 <.video_tile> nodes inside [data-gallery-grid]",
+         %{conn: conn, meeting: meeting, space: space} do
+      # Three humans + one agent. Only humans tile in gallery mode.
+      for name <- ~w(Ada Grace Hedy) do
+        {:ok, _} =
+          Chat.add_participant(space.id, %{
+            participant_type: "user",
+            participant_id: Ecto.UUID.generate(),
+            display_name: name,
+            joined_at: DateTime.utc_now()
+          })
+      end
+
+      {:ok, _bot} =
+        Chat.add_participant(space.id, %{
+          participant_type: "agent",
+          participant_id: Ecto.UUID.generate(),
+          display_name: "Bot",
+          joined_at: DateTime.utc_now()
+        })
+
+      # Gallery is the DEFAULT mode now — no click needed.
+      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      assert html =~ ~s(data-stage-mode="gallery")
+      assert html =~ ~s(data-gallery-tile-count="3")
+      assert html =~ ~s(data-gallery-grid)
+
+      # Scope the count to the gallery grid block. There is no bottom
+      # strip in gallery mode, so the entire suffix after [data-gallery-grid]
+      # is the grid section.
+      gallery_section =
+        case String.split(html, ~s(data-gallery-grid)) do
+          [_, after_grid | _] -> after_grid
+          _ -> ""
+        end
+
+      tile_count =
+        Regex.scan(~r/phx-hook="MeetingVideoTile"/, gallery_section)
+        |> length()
+
+      assert tile_count == 3
+    end
+
+    test "identity alignment: gallery and strip use the same `\"user:\" <> pid` format",
+         %{conn: conn, meeting: meeting, space: space} do
+      # Seed one human so both renderers have something to emit.
+      pid = Ecto.UUID.generate()
+
+      {:ok, _participant} =
+        Chat.add_participant(space.id, %{
+          participant_type: "user",
+          participant_id: pid,
+          display_name: "Ada Lovelace",
+          joined_at: DateTime.utc_now()
+        })
+
+      {:ok, view, gallery_html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      # Default gallery → the identity (emitted as `data-participant` by
+      # `<.video_tile>`) for this human in the grid is `"user:" <> pid`.
+      assert gallery_html =~ ~s(data-participant="user:#{pid}")
+      # And no `strip:user:` prefix anywhere (it was the old strip
+      # identity; the alignment in stage 3 drops the prefix).
+      refute gallery_html =~ "strip:user:"
+
+      # Flip to canvas mode so the bottom strip renders.
+      strip_html =
+        view
+        |> element(~s([data-stage-mode-button="canvas"]))
+        |> render_click()
+
+      assert strip_html =~ ~s(data-pane="bottom-strip")
+      # The strip's video tile uses the SAME identity as the gallery
+      # tile — this is the cross-mode track-attachment continuity hook.
+      assert strip_html =~ ~s(data-participant="user:#{pid}")
+      refute strip_html =~ "strip:user:"
     end
   end
 
@@ -1607,6 +1940,178 @@ defmodule PlatformWeb.MeetingLiveTest do
       assert Repo.all(Meeting) == []
       assert html =~ ~s(data-role="start-meeting-sheet")
       assert html =~ "Project is required"
+    end
+  end
+
+  # ── LiveKit wiring via MeetingHooks (task 019e2d1a stage 2) ──────────────
+  #
+  # Stage 2 wires the LiveKit lifecycle into MeetingLive by reusing
+  # `PlatformWeb.ChatLive.MeetingHooks`. Auto-join on connected mount
+  # mints a token and push_events `"join-meeting"` to the MeetingClient
+  # JS hook; mic/cam/screen-share buttons in the top bar push the
+  # corresponding toggle events; the "Leave" CTA pushes
+  # `"leave-meeting"` and flips `@in_meeting` back to false. These tests
+  # exercise the server-side surface — the JS hooks themselves are not
+  # mounted in LV tests, but the push_events ARE captured.
+
+  describe "LiveKit wiring (stage 2)" do
+    setup %{conn: conn} do
+      # MeetingHooks.do_join calls `Meetings.generate_token/2` which
+      # needs LIVEKIT_API_KEY + LIVEKIT_API_SECRET + LIVEKIT_URL in app
+      # env. The test runtime config doesn't set these (meetings are
+      # gated behind real LiveKit creds in production); stash a fake
+      # triple for the duration of this describe block and restore on
+      # exit so the global enabled?/0 gate stays inert elsewhere.
+      original = Application.get_env(:platform, :livekit, [])
+
+      Application.put_env(:platform, :livekit,
+        api_key: "test-livekit-key",
+        api_secret: "test-livekit-secret-0123456789abcdef",
+        url: "wss://livekit.test"
+      )
+
+      on_exit(fn -> Application.put_env(:platform, :livekit, original) end)
+
+      {meeting, space} =
+        create_meeting(%{slug: "livekit-wiring", name: "LiveKit Wiring"})
+
+      {conn, user} = authenticated_conn(conn)
+
+      # MeetingHooks.do_join also needs a `:current_participant` in
+      # the meeting's chat space — seed one for the viewer so the join
+      # path exits via the {:ok, token} branch and the push_event
+      # actually fires.
+      {:ok, _participant} =
+        Chat.add_participant(space.id, %{
+          participant_type: "user",
+          participant_id: user.id,
+          display_name: "LiveKit Viewer",
+          joined_at: DateTime.utc_now()
+        })
+
+      {:ok, conn: conn, user: user, meeting: meeting, space: space}
+    end
+
+    test "renders the two hidden MeetingClient/MeetingRoom hook nodes", %{
+      conn: conn,
+      meeting: meeting
+    } do
+      # The `?no_autojoin=true` escape hatch silences the auto-join so
+      # we can assert the static markup without racing the
+      # join-meeting push_event.
+      {:ok, _view, html} =
+        live(conn, ~p"/meetings/#{meeting.slug}?no_autojoin=true")
+
+      assert html =~ ~s(id="meeting-client")
+      assert html =~ ~s(phx-hook="MeetingClient")
+      assert html =~ ~s(id="meeting-room")
+      assert html =~ ~s(phx-hook="MeetingRoom")
+    end
+
+    test "auto-joins on connected mount and push_events join-meeting with token + url + room_name",
+         %{conn: conn, meeting: meeting} do
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      # The join lifecycle runs in MeetingHooks.do_join — token mint,
+      # MeetingState broadcast, then push_event. Asserting the payload
+      # carries token / url / room_name matches the JS hook's contract
+      # in meeting_client.js.
+      assert_push_event(view, "join-meeting", %{
+        token: token,
+        url: url,
+        room_name: room_name
+      })
+
+      assert is_binary(token) and token != ""
+      assert url == "wss://livekit.test"
+      assert is_binary(room_name) and room_name != ""
+
+      # And the LV reflects the in-meeting state so the top bar flips
+      # the CTA from "Join" to "Leave".
+      html = render(view)
+      assert html =~ ~s(data-role="meeting-leave")
+      refute html =~ ~s(data-role="meeting-join")
+    end
+
+    test "?no_autojoin=true skips the auto-join and leaves the Join CTA", %{
+      conn: conn,
+      meeting: meeting
+    } do
+      {:ok, view, html} =
+        live(conn, ~p"/meetings/#{meeting.slug}?no_autojoin=true")
+
+      # No auto-join fired → still showing the Join CTA, not the Leave CTA.
+      assert html =~ ~s(data-role="meeting-join")
+      refute html =~ ~s(data-role="meeting-leave")
+
+      # The manual click should still push the join-meeting event.
+      view
+      |> element(~s([data-role="meeting-join"]))
+      |> render_click()
+
+      assert_push_event(view, "join-meeting", %{token: _, url: _, room_name: _})
+    end
+
+    test "meeting_toggle_mic flips @mic_enabled and pushes toggle-mic", %{
+      conn: conn,
+      meeting: meeting
+    } do
+      {:ok, view, _html} =
+        live(conn, ~p"/meetings/#{meeting.slug}?no_autojoin=true")
+
+      # Default is mic ON (MeetingHooks.attach initial assigns).
+      html_before = render(view)
+      assert html_before =~ ~s(data-role="meeting-mic" data-active="true")
+
+      html_after =
+        view
+        |> element(~s([data-role="meeting-mic"]))
+        |> render_click()
+
+      assert html_after =~ ~s(data-role="meeting-mic" data-active="false")
+      assert_push_event(view, "toggle-mic", %{})
+    end
+
+    test "meeting_toggle_camera flips @camera_enabled and pushes toggle-camera",
+         %{conn: conn, meeting: meeting} do
+      {:ok, view, _html} =
+        live(conn, ~p"/meetings/#{meeting.slug}?no_autojoin=true")
+
+      # Default is camera ON (bugfix re-pass for task 019e2d1a — the
+      # spec expects the gallery entry state to show `hero-video-camera`
+      # rather than `hero-video-camera-slash`, which means the
+      # `:camera_enabled` assign must start `true`).
+      html_before = render(view)
+      assert html_before =~ ~s(data-role="meeting-camera" data-active="true")
+
+      html_after =
+        view
+        |> element(~s([data-role="meeting-camera"]))
+        |> render_click()
+
+      assert html_after =~ ~s(data-role="meeting-camera" data-active="false")
+      assert_push_event(view, "toggle-camera", %{})
+    end
+
+    test "meeting_leave click flips @in_meeting back to false and pushes leave-meeting",
+         %{conn: conn, meeting: meeting} do
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      # The auto-join push must clear from the queue before we assert
+      # the leave push lands — render once to flush.
+      _ = render(view)
+      assert render(view) =~ ~s(data-role="meeting-leave")
+
+      html_after =
+        view
+        |> element(~s([data-role="meeting-leave"]))
+        |> render_click()
+
+      # CTA flipped back to Join…
+      assert html_after =~ ~s(data-role="meeting-join")
+      refute html_after =~ ~s(data-role="meeting-leave")
+      # …and the leave-meeting event landed on the JS-hook channel.
+      assert_push_event(view, "leave-meeting", %{})
     end
   end
 end
