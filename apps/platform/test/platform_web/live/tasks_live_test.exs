@@ -1831,7 +1831,13 @@ defmodule PlatformWeb.TasksLiveTest do
     assert updated_plan.status == "approved"
   end
 
-  test "reject_plan transitions plan to rejected", %{conn: conn} do
+  test "reject_plan transitions plan to rejected (legacy 2-arity path)", %{conn: conn} do
+    # The pending_review card now opens an inline feedback drawer when
+    # the Reject button is clicked (see "reject-with-feedback inline UI"
+    # tests below) — the visible button no longer fires `reject_plan`
+    # directly. The 2-arity `Tasks.reject_plan/2` server-side handler is
+    # preserved as backwards-compat for older callers; we push the event
+    # programmatically here to assert the handler still works.
     project = create_project()
     task = create_task(project, %{title: "Rejectable Task", status: "planning"})
 
@@ -1843,15 +1849,165 @@ defmodule PlatformWeb.TasksLiveTest do
     conn = authenticated_conn(conn)
     {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
 
-    html =
-      view
-      |> element("button[phx-click=\"reject_plan\"]")
-      |> render_click()
+    html = render_click(view, "reject_plan", %{"plan-id" => plan.id})
 
     assert html =~ "Plan rejected."
 
     updated_plan = Tasks.get_plan(plan.id)
     assert updated_plan.status == "rejected"
+    # 2-arity path passes nil for reason — column should remain empty.
+    assert is_nil(updated_plan.rejection_reason)
+  end
+
+  # Pluck the rendered `<button …data-role="plan-reject-feedback-submit" …>`
+  # subtree for the given plan id so individual attribute assertions are
+  # robust to attribute ordering.
+  defp extract_submit_button(html, plan_id) do
+    needle = ~s(data-plan-id="#{plan_id}" data-role="plan-reject-feedback-submit")
+    # Walk backwards from the needle to the opening "<button" tag start.
+    case String.split(html, needle, parts: 2) do
+      [before, after_needle] ->
+        start = before |> String.split("<button", trim: false) |> List.last()
+        tail = after_needle |> String.split(">", parts: 2) |> hd()
+        "<button" <> start <> needle <> tail <> ">"
+
+      _ ->
+        # Fall back to the symmetric variant if the data-role comes first.
+        alt_needle = ~s(data-role="plan-reject-feedback-submit" data-plan-id="#{plan_id}")
+        [before, after_needle] = String.split(html, alt_needle, parts: 2)
+        start = before |> String.split("<button", trim: false) |> List.last()
+        tail = after_needle |> String.split(">", parts: 2) |> hd()
+        "<button" <> start <> alt_needle <> tail <> ">"
+    end
+  end
+
+  describe "reject-with-feedback inline UI (task 019e30be stage 1)" do
+    setup %{conn: conn} do
+      project = create_project()
+      task = create_task(project, %{title: "Feedback Reject Task", status: "planning"})
+
+      {:ok, plan} =
+        Tasks.create_plan(%{task_id: task.id, version: 1, status: "draft"})
+
+      {:ok, _stage} =
+        Tasks.create_stage(%{
+          plan_id: plan.id,
+          position: 1,
+          name: "Do the thing",
+          status: "pending"
+        })
+
+      {:ok, plan} = Tasks.submit_plan_for_review(plan)
+
+      conn = authenticated_conn(conn)
+      {:ok, view, html} = live(conn, ~p"/tasks/#{task.id}")
+
+      %{view: view, task: task, plan: plan, initial_html: html}
+    end
+
+    test "Reject button toggles an inline feedback drawer", %{view: view, plan: plan} do
+      # Drawer starts hidden — no textarea on initial render.
+      refute render(view) =~ ~s(data-role="plan-reject-feedback-form")
+
+      # Click Reject → the same toggle button now reads "Cancel" and the
+      # drawer is visible with a textarea + Confirm/Cancel buttons.
+      html =
+        view
+        |> element(~s(button[data-role="plan-reject-toggle"][data-plan-id="#{plan.id}"]))
+        |> render_click()
+
+      assert html =~ ~s(data-role="plan-reject-feedback-form")
+      assert html =~ ~s(data-role="plan-reject-feedback-text")
+      assert html =~ ~s(data-role="plan-reject-feedback-submit")
+      assert html =~ ~s(data-role="plan-reject-feedback-cancel")
+      # Button label flips to Cancel when expanded.
+      assert html =~ "Cancel"
+
+      # Submit button is disabled on a freshly-opened drawer (empty textarea).
+      submit_btn_html = extract_submit_button(html, plan.id)
+      assert submit_btn_html =~ "disabled"
+      assert submit_btn_html =~ ~s(aria-disabled="true")
+      assert submit_btn_html =~ "btn-disabled"
+    end
+
+    test "Cancel collapses the drawer without rejecting", %{view: view, plan: plan} do
+      view
+      |> element(~s(button[data-role="plan-reject-toggle"][data-plan-id="#{plan.id}"]))
+      |> render_click()
+
+      html =
+        view
+        |> element(~s(button[data-role="plan-reject-feedback-cancel"][data-plan-id="#{plan.id}"]))
+        |> render_click()
+
+      refute html =~ ~s(data-role="plan-reject-feedback-form")
+      # Plan is still pending_review — no rejection happened.
+      reloaded = Tasks.get_plan(plan.id)
+      assert reloaded.status == "pending_review"
+      assert is_nil(reloaded.rejection_reason)
+    end
+
+    test "submit with feedback rejects the plan and stores rejection_reason", %{
+      view: view,
+      plan: plan
+    } do
+      # Open drawer
+      view
+      |> element(~s(button[data-role="plan-reject-toggle"][data-plan-id="#{plan.id}"]))
+      |> render_click()
+
+      # Capture textarea keystrokes
+      render_keyup(
+        element(
+          view,
+          ~s(textarea[data-role="plan-reject-feedback-text"][data-plan-id="#{plan.id}"])
+        ),
+        %{"value" => "Use postgres instead of sqlite for the metrics store."}
+      )
+
+      # Submit
+      html =
+        view
+        |> element(~s(button[data-role="plan-reject-feedback-submit"][data-plan-id="#{plan.id}"]))
+        |> render_click()
+
+      assert html =~ "Plan rejected with feedback."
+
+      reloaded = Tasks.get_plan(plan.id)
+      assert reloaded.status == "rejected"
+      assert reloaded.rejection_reason == "Use postgres instead of sqlite for the metrics store."
+    end
+
+    test "submit with empty feedback keeps the drawer open and flashes an error", %{
+      view: view,
+      plan: plan
+    } do
+      opened_html =
+        view
+        |> element(~s(button[data-role="plan-reject-toggle"][data-plan-id="#{plan.id}"]))
+        |> render_click()
+
+      # Even on the empty-textarea bypass case, the client-side disabled
+      # attribute should be present BEFORE the server guard runs.
+      opened_submit_html = extract_submit_button(opened_html, plan.id)
+      assert opened_submit_html =~ "disabled"
+
+      # Server-side belt-and-suspenders: even if a DOM-bypass client posts
+      # the click directly (skipping the `disabled` attribute), the
+      # submit_reject_with_feedback handler must still flash an error and
+      # leave the plan untouched. We dispatch the event by name so the
+      # LiveViewTest disabled-button guard doesn't preempt the server.
+      html =
+        render_click(view, "submit_reject_with_feedback", %{"plan-id" => plan.id})
+
+      assert html =~ "Please describe what needs to change before rejecting."
+      # Drawer stays visible so the reviewer can fill it in.
+      assert html =~ ~s(data-role="plan-reject-feedback-form")
+
+      reloaded = Tasks.get_plan(plan.id)
+      assert reloaded.status == "pending_review"
+      assert is_nil(reloaded.rejection_reason)
+    end
   end
 
   describe "plan revision folding" do
@@ -2004,7 +2160,13 @@ defmodule PlatformWeb.TasksLiveTest do
       assert html =~ "test_pass"
       assert html =~ "Approve Plan"
       assert html =~ "phx-click=\"approve_plan\""
-      assert html =~ "phx-click=\"reject_plan\""
+      # Stage 1 of task 019e30be: Reject button now opens an inline
+      # feedback drawer instead of rejecting directly, so it fires
+      # `toggle_reject_feedback`. The `submit_reject_with_feedback`
+      # button inside the (initially-collapsed) drawer is what
+      # ultimately calls `Tasks.reject_plan/3`.
+      assert html =~ "phx-click=\"toggle_reject_feedback\""
+      assert html =~ ~s(data-role="plan-reject-toggle")
       # The single rejected revision still folds — one summary, one body
       # (the active plan).
       summary_count =

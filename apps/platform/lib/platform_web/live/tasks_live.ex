@@ -176,6 +176,17 @@ defmodule PlatformWeb.TasksLive do
      # toggled open. Active (non-rejected) plans are expanded by default
      # via `default_expanded_plan_ids/1` whenever `:selected_task` changes.
      |> assign(:expanded_plans, MapSet.new())
+     # Plan reject-with-feedback inline UI (stage 1 of task 019e30be).
+     # `:reject_plan_open` is the plan_id currently expanded inline (nil
+     # when collapsed); only one plan's reject drawer is open at a time
+     # since the pending_review card itself is exclusive per task. The
+     # `:reject_plan_feedback_text` buffer holds the in-flight draft so
+     # keystrokes survive LV re-renders without re-rendering the whole
+     # plan card on every character. The pair mirrors the per-review-item
+     # `:review_feedback_open` / `:review_items_feedback` pattern (~line
+     # 242), scaled down to the single-plan case.
+     |> assign(:reject_plan_open, nil)
+     |> assign(:reject_plan_feedback_text, "")
      # Execution log state
      |> assign(:execution_space_id, nil)
      |> assign(:execution_log, [])
@@ -1618,6 +1629,82 @@ defmodule PlatformWeb.TasksLive do
       end
     else
       {:noreply, put_flash(socket, :error, "Plan not found or not pending review.")}
+    end
+  end
+
+  # ── Reject-with-feedback inline UI (task 019e30be stage 1) ──────────────
+  # Three events drive the inline drawer that replaces the bare Reject
+  # button on a pending_review plan card. The backend pipeline (Plan
+  # `:rejection_reason` column, `Tasks.reject_plan/3`,
+  # `ContextAssembler.find_latest_rejected_reason/1`, dispatch template
+  # "Previous attempt" section) was already in place — the missing piece
+  # was the LV wiring that collects a feedback string before calling the
+  # 3-arity form. We mirror the gold-standard per-review-item handlers
+  # (`toggle_review_feedback` / `update_review_feedback_text` /
+  # `submit_review_feedback` ~line 1665) scaled down to one drawer at a
+  # time.
+  #
+  # The legacy 2-arity `reject_plan` handler above stays as-is: the
+  # existing test at `tasks_live_test.exs:1834` clicks it directly and
+  # asserts the "Plan rejected." flash, and rejection without feedback is
+  # still a valid power-user shortcut.
+
+  def handle_event("toggle_reject_feedback", %{"plan-id" => plan_id}, socket) do
+    next =
+      if socket.assigns.reject_plan_open == plan_id do
+        nil
+      else
+        plan_id
+      end
+
+    {:noreply,
+     socket
+     |> assign(:reject_plan_open, next)
+     |> assign(:reject_plan_feedback_text, "")}
+  end
+
+  def handle_event("update_reject_feedback_text", %{"value" => text}, socket) do
+    {:noreply, assign(socket, :reject_plan_feedback_text, text)}
+  end
+
+  def handle_event("submit_reject_with_feedback", %{"plan-id" => plan_id}, socket) do
+    plan =
+      case Ecto.UUID.cast(plan_id) do
+        {:ok, uuid} -> Repo.get(Plan, uuid)
+        :error -> nil
+      end
+
+    feedback = String.trim(socket.assigns.reject_plan_feedback_text || "")
+
+    cond do
+      is_nil(plan) or plan.status != "pending_review" ->
+        {:noreply, put_flash(socket, :error, "Plan not found or not pending review.")}
+
+      feedback == "" ->
+        # Keep the drawer open and surface a flash so the reviewer knows
+        # the textarea isn't optional. Empty submissions are disallowed —
+        # the whole point of this stage is to capture the "why" so the
+        # next planner has context to work with (ContextAssembler reads
+        # rejection_reason verbatim).
+        {:noreply,
+         put_flash(socket, :error, "Please describe what needs to change before rejecting.")}
+
+      true ->
+        rejected_by = socket.assigns[:current_user_id]
+
+        case Tasks.reject_plan(plan, rejected_by, feedback) do
+          {:ok, _} ->
+            {:noreply,
+             socket
+             |> assign(:reject_plan_open, nil)
+             |> assign(:reject_plan_feedback_text, "")
+             |> put_flash(:info, "Plan rejected with feedback.")
+             |> refresh_board()
+             |> reload_selected_task()}
+
+          {:error, _} ->
+            {:noreply, put_flash(socket, :error, "Failed to reject plan.")}
+        end
     end
   end
 

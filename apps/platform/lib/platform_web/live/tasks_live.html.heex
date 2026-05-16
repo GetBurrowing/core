@@ -1480,7 +1480,14 @@
           </div>
           <%!-- Approve / Reject buttons — prominent, above stages. Only the
                active pending_review plan gets these; folded rejected
-               revisions never re-render the buttons. --%>
+               revisions never re-render the buttons.
+
+               Reject is now a toggle: it opens an inline feedback drawer
+               (see the `:if={@reject_plan_open == plan.id}` block below)
+               and the actual rejection fires from the Confirm button
+               inside that drawer via `submit_reject_with_feedback`. The
+               legacy `reject_plan` event is still handled server-side
+               for tests / power users wiring the click directly. --%>
           <div :if={plan.status == "pending_review"} class="flex gap-2">
             <button
               class="btn btn-sm btn-success flex-1"
@@ -1491,11 +1498,80 @@
             </button>
             <button
               class="btn btn-sm btn-ghost btn-error"
-              phx-click="reject_plan"
+              phx-click="toggle_reject_feedback"
               phx-value-plan-id={plan.id}
+              data-role="plan-reject-toggle"
+              data-plan-id={plan.id}
+              aria-expanded={@reject_plan_open == plan.id}
             >
-              Reject
+              <span :if={@reject_plan_open == plan.id} class="hero-x-mark size-3 mr-1"></span>
+              {if @reject_plan_open == plan.id, do: "Cancel", else: "Reject"}
             </button>
+          </div>
+
+          <%!-- Inline reject-with-feedback drawer. Mirrors the per-review-
+               item pattern shipped in the stack-feedback overlay (~line
+               2563): a labelled textarea + Confirm / Cancel pair below
+               the toggle. The 16px `text-base` class on touch keeps iOS
+               from triggering form-zoom; the `pb-[env(safe-area-inset-
+               bottom)]` echoes the FAB safe-area handling so the buttons
+               stay reachable when the iOS keyboard pops the form into the
+               bottom of the viewport. --%>
+          <div
+            :if={plan.status == "pending_review" and @reject_plan_open == plan.id}
+            data-role="plan-reject-feedback-form"
+            data-plan-id={plan.id}
+            class="mt-2 space-y-2 rounded-lg border border-error/30 bg-error/5 p-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]"
+          >
+            <label
+              for={"plan-reject-feedback-#{plan.id}"}
+              class="block text-[10px] uppercase tracking-wider text-base-content/60"
+            >
+              What needs to change?
+            </label>
+            <textarea
+              id={"plan-reject-feedback-#{plan.id}"}
+              name="feedback"
+              rows="3"
+              class="textarea textarea-bordered w-full text-base resize-y min-h-[5rem]"
+              placeholder="Describe what the next plan should do differently…"
+              phx-keyup="update_reject_feedback_text"
+              phx-debounce="150"
+              data-role="plan-reject-feedback-text"
+              data-plan-id={plan.id}
+            >{@reject_plan_feedback_text}</textarea>
+            <div class="flex gap-2">
+              <button
+                type="button"
+                class={[
+                  "btn btn-sm btn-error flex-1",
+                  String.trim(@reject_plan_feedback_text || "") == "" && "btn-disabled opacity-50"
+                ]}
+                disabled={String.trim(@reject_plan_feedback_text || "") == ""}
+                aria-disabled={
+                  if(String.trim(@reject_plan_feedback_text || "") == "",
+                    do: "true",
+                    else: "false"
+                  )
+                }
+                phx-click="submit_reject_with_feedback"
+                phx-value-plan-id={plan.id}
+                data-role="plan-reject-feedback-submit"
+                data-plan-id={plan.id}
+              >
+                Confirm rejection
+              </button>
+              <button
+                type="button"
+                class="btn btn-sm btn-ghost"
+                phx-click="toggle_reject_feedback"
+                phx-value-plan-id={plan.id}
+                data-role="plan-reject-feedback-cancel"
+                data-plan-id={plan.id}
+              >
+                Cancel
+              </button>
+            </div>
           </div>
           <.plan_body plan={plan} />
         </div>

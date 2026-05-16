@@ -2,6 +2,7 @@ defmodule Platform.Orchestration.ContextAssemblerTest do
   use Platform.DataCase, async: false
 
   alias Platform.Orchestration.ContextAssembler
+  alias Platform.Orchestration.HeartbeatScheduler
   alias Platform.Skills
   alias Platform.Tasks
 
@@ -207,6 +208,56 @@ defmodule Platform.Orchestration.ContextAssemblerTest do
 
       context = ContextAssembler.build(task.id)
       assert context.previous_rejection_reason == nil
+    end
+  end
+
+  describe "rejection feedback chain (Tasks.reject_plan → ContextAssembler → dispatch_prompt)" do
+    # Regression test: pins the end-to-end chain that surfaces a planner's
+    # rejection feedback into the next planner dispatch. Any future change to
+    # Tasks.reject_plan, ContextAssembler.build, or HeartbeatScheduler's
+    # planning-status dispatch_prompt that breaks this wiring fails here.
+    test "reject feedback flows verbatim into the next planning dispatch prompt",
+         %{project: project} do
+      reason = "Stages too coarse — split stage 2 into two."
+      reviewer_id = "00000000-0000-0000-0000-000000000abc"
+
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Rejection chain task",
+          description: "Exercise the end-to-end rejection feedback chain.",
+          priority: "high",
+          status: "planning"
+        })
+
+      {:ok, plan_v1} =
+        Tasks.create_plan(%{
+          task_id: task.id,
+          status: "pending_review",
+          version: 1
+        })
+
+      # Step 1: reject the plan with feedback.
+      assert {:ok, rejected} = Tasks.reject_plan(plan_v1, reviewer_id, reason)
+      assert rejected.status == "rejected"
+      assert rejected.rejection_reason == reason
+
+      # Step 2: ContextAssembler surfaces that reason verbatim.
+      ctx = ContextAssembler.build(task.id)
+      assert ctx.previous_rejection_reason == reason
+
+      # Step 3: HeartbeatScheduler.dispatch_prompt threads it into the
+      # planning prompt's "Previous attempt" section verbatim.
+      planning_task = %{task | status: "planning"}
+
+      prompt =
+        HeartbeatScheduler.dispatch_prompt(planning_task, nil, nil,
+          previous_rejection_reason: ctx.previous_rejection_reason
+        )
+
+      assert prompt =~ "## Previous attempt — what didn't work"
+      assert prompt =~ reason
+      assert prompt =~ "Design v2 to address that"
     end
   end
 end
