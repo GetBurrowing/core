@@ -1261,19 +1261,6 @@
       <span class="hero-bookmark size-5 text-base-content/70"></span>
       <span class="font-medium">Pin / Unpin</span>
     </button>
-    <button
-      type="button"
-      phx-click={
-        Phoenix.LiveView.JS.push("open_reaction_picker",
-          value: %{"message-id" => @open_message_actions_id}
-        )
-        |> Phoenix.LiveView.JS.push("close_message_actions")
-      }
-      class="flex items-center gap-3 rounded-lg px-4 py-3 text-left text-base-content hover:bg-base-200 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60"
-    >
-      <span class="hero-face-smile size-5 text-base-content/70"></span>
-      <span class="font-medium">Add reaction</span>
-    </button>
     <%!-- Edit affordance — Policy 3 of the editable-messages contract
          (own non-agent text messages only). The message struct is lifted
          into @open_message_actions_msg by the open_message_actions

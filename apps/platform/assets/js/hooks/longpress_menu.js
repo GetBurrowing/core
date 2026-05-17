@@ -1,16 +1,17 @@
 // Double-tap gesture detector for chat messages (mobile).
 //
-// Fires one of two server events on a double-tap of a message bubble,
-// chosen by `data-is-own-message`:
-//   * own message  -> `open_message_actions` ({id: messageId}). The
-//     server opens the per-message bottom sheet (Edit / Pin / Reply /
-//     Add reaction) — same destination as the desktop 3-dot button.
-//   * others' msg  -> `open_longpress_menu` ({message_id}). The server
-//     opens the quick-react emoji pill over a lifted clone of the row.
+// Fires `open_message_actions` ({id: messageId}) on a double-tap of any
+// message bubble — own, others-human, or AI alike. The server opens the
+// per-message bottom sheet (Reply / Pin / Edit for own + text) which is
+// the unified mobile entry point for message actions. (Task 019e3402.)
 //
 // The desktop hover action bar is `hidden group-hover:flex`, which
 // touch devices never reveal, so on mobile this gesture is the only
-// way to reach Edit for your own messages. (Task 019e3233.)
+// way to reach the action sheet. The previous own-vs-others split (own
+// → bottom sheet, others → lifted-clone quick-react pill from task
+// 019e3233) is gone: Feature A's always-visible (+) below every message
+// is the canonical add-reaction path now, so the lifted-clone pill is
+// redundant.
 //
 // Why double-tap (not long-press): the PWA's 450ms long-press detector
 // competed with the browser's native text-selection menu (Chrome on
@@ -65,11 +66,7 @@ const LongpressMenu = {
     const messageId = this.el.dataset.messageId
     if (!messageId) return
     if (navigator.vibrate) navigator.vibrate(HAPTIC_MS)
-    if (this.el.dataset.isOwnMessage === "true") {
-      this.pushEvent("open_message_actions", { id: messageId })
-    } else {
-      this.pushEvent("open_longpress_menu", { message_id: messageId })
-    }
+    this.pushEvent("open_message_actions", { id: messageId })
   },
 }
 
