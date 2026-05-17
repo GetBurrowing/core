@@ -1,10 +1,16 @@
 // Double-tap gesture detector for chat messages (mobile).
 //
-// Fires `open_longpress_menu` with the hook element's `data-message-id`
-// when the user taps twice within DOUBLE_TAP_MS on the same message
-// bubble. Exits early when the bubble is flagged `data-is-own-message`:
-// double-tap on the current user's own message is reserved for the
-// upcoming edit gesture (see PR2).
+// Fires one of two server events on a double-tap of a message bubble,
+// chosen by `data-is-own-message`:
+//   * own message  -> `open_message_actions` ({id: messageId}). The
+//     server opens the per-message bottom sheet (Edit / Pin / Reply /
+//     Add reaction) — same destination as the desktop 3-dot button.
+//   * others' msg  -> `open_longpress_menu` ({message_id}). The server
+//     opens the quick-react emoji pill over a lifted clone of the row.
+//
+// The desktop hover action bar is `hidden group-hover:flex`, which
+// touch devices never reveal, so on mobile this gesture is the only
+// way to reach Edit for your own messages. (Task 019e3233.)
 //
 // Why double-tap (not long-press): the PWA's 450ms long-press detector
 // competed with the browser's native text-selection menu (Chrome on
@@ -36,14 +42,6 @@ const LongpressMenu = {
   },
 
   handleTap(e) {
-    // Own-message double-tap is reserved for edit (PR2). Skip entirely
-    // so the browser's native text-selection flow isn't disrupted on
-    // the author's own bubbles.
-    if (this.el.dataset.isOwnMessage === "true") {
-      this._lastTapAt = 0
-      return
-    }
-
     const touch = e.changedTouches && e.changedTouches[0]
     if (!touch) return
 
@@ -67,7 +65,11 @@ const LongpressMenu = {
     const messageId = this.el.dataset.messageId
     if (!messageId) return
     if (navigator.vibrate) navigator.vibrate(HAPTIC_MS)
-    this.pushEvent("open_longpress_menu", { message_id: messageId })
+    if (this.el.dataset.isOwnMessage === "true") {
+      this.pushEvent("open_message_actions", { id: messageId })
+    } else {
+      this.pushEvent("open_longpress_menu", { message_id: messageId })
+    }
   },
 }
 
