@@ -1201,6 +1201,33 @@ defmodule PlatformWeb.ChatLiveTest do
       assert html =~ "🎉"
     end
 
+    test "renders the (+) add-reaction button on a message with zero reactions",
+         %{conn: conn} do
+      # Locks in the always-render behavior (task 019e3402 Stage 1): the
+      # reaction-row wrapper used to be gated by `:if={@msg.reactions != []}`
+      # so the (+) only appeared once a message had a reaction. We removed
+      # that gate; this assertion guards against re-introducing it.
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/chat/general")
+
+      view
+      |> form("#compose-form", compose: %{text: "no reactions yet"})
+      |> render_submit()
+
+      space = Chat.get_space_by_slug("general")
+      [msg | _] = Chat.list_messages(space.id)
+
+      # Sanity-check: the message exists with zero reactions in the DB.
+      assert Chat.list_reactions(msg.id) == []
+
+      html = render(view)
+
+      # The (+) add-reaction button (the picker entry point below every
+      # message) MUST render even though the message has no reactions.
+      assert html =~ ~s(aria-label="Add reaction")
+      assert html =~ "reaction-add-btn"
+    end
+
     test "reacting to a message persists the reaction and updates the reaction count in the UI",
          %{conn: conn} do
       conn = authenticated_conn(conn)

@@ -158,15 +158,6 @@ defmodule PlatformWeb.Components.ChatMessage do
               </button>
 
               <button
-                phx-click="open_reaction_picker"
-                phx-value-message-id={@msg.id}
-                title="More reactions"
-                class="rounded px-1.5 py-0.5 text-xs text-base-content/50 hover:text-base-content hover:bg-base-300 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60 focus-visible:ring-offset-1 focus-visible:ring-offset-base-100"
-              >
-                <span class="hero-face-smile size-4"></span>
-              </button>
-
-              <button
                 :if={present?(@msg.content)}
                 phx-hook="CopyToClipboard"
                 id={"copy-msg-#{@msg.id}"}
@@ -357,7 +348,8 @@ defmodule PlatformWeb.Components.ChatMessage do
           </div>
 
           <div
-            :if={@msg.reactions != []}
+            role="toolbar"
+            aria-label="Message actions"
             class="reaction-row flex flex-wrap gap-1 mt-0.5"
           >
             <button
