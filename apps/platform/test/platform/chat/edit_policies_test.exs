@@ -26,7 +26,6 @@ defmodule Platform.Chat.EditPoliciesTest do
 
   alias Platform.Accounts.User
   alias Platform.Chat
-  alias Platform.Chat.MessageVersions
   alias Platform.Repo
 
   # ── Fixtures ────────────────────────────────────────────────────────────
@@ -92,7 +91,6 @@ defmodule Platform.Chat.EditPoliciesTest do
         )
       )
 
-    MessageVersions.record_v1!(msg)
     msg
   end
 

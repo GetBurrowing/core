@@ -89,7 +89,6 @@ defmodule Platform.Chat.EditPermissionsTest do
         content: content
       })
 
-    Platform.Chat.MessageVersions.record_v1!(msg)
     msg
   end
 

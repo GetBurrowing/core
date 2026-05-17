@@ -34,7 +34,6 @@ defmodule Platform.Chat.Messages.EditTest do
         content: content
       })
 
-    MessageVersions.record_v1!(msg)
     msg
   end
 

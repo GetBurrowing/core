@@ -28,7 +28,7 @@ defmodule Platform.Chat.Policy1EditScopingTest do
   use Platform.DataCase, async: false
 
   alias Platform.Chat
-  alias Platform.Chat.{MessageVersions, PubSub}
+  alias Platform.Chat.PubSub
   alias Platform.Chat.Messages.Edit
   alias Platform.Tasks
 
@@ -83,7 +83,6 @@ defmodule Platform.Chat.Policy1EditScopingTest do
         content: content
       })
 
-    MessageVersions.record_v1!(msg)
     msg
   end
 

@@ -48,11 +48,6 @@ defmodule PlatformWeb.MessageControllerTest do
         content: content
       })
 
-    # Backfill v1 row so version counting works (the migration backfilled
-    # pre-existing rows; in production Task 3+ will call record_v1!/1 from
-    # the message creation path, but Chat.post_message hasn't been wired
-    # yet for that).
-    MessageVersions.record_v1!(msg)
     msg
   end
 

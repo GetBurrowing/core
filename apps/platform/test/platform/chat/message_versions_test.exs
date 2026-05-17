@@ -2,7 +2,9 @@ defmodule Platform.Chat.MessageVersionsTest do
   use Platform.DataCase, async: false
 
   alias Platform.Chat
+  alias Platform.Chat.Message
   alias Platform.Chat.MessageVersions
+  alias Platform.Repo
 
   # ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -24,18 +26,22 @@ defmodule Platform.Chat.MessageVersionsTest do
     p
   end
 
+  # Bypasses Chat.post_message/2 (which now auto-records v1 inside its
+  # transaction) so these unit tests can exercise record_v1!/1 against a
+  # fresh message that has no version rows yet.
   defp create_message!(space_id, participant_id, opts \\ []) do
     content = Keyword.get(opts, :content, "original content")
+    display_name = Keyword.get(opts, :author_display_name, "Alice")
 
-    {:ok, msg} =
-      Chat.post_message(%{
-        space_id: space_id,
-        participant_id: participant_id,
-        content_type: "text",
-        content: content
-      })
-
-    msg
+    %Message{}
+    |> Message.changeset(%{
+      space_id: space_id,
+      participant_id: participant_id,
+      content_type: "text",
+      content: content,
+      author_display_name: display_name
+    })
+    |> Repo.insert!()
   end
 
   # ── record_v1!/1 ─────────────────────────────────────────────────────────────

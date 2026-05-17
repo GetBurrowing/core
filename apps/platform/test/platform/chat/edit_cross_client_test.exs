@@ -21,7 +21,6 @@ defmodule Platform.Chat.EditCrossClientTest do
 
   alias Platform.Accounts.User
   alias Platform.Chat
-  alias Platform.Chat.MessageVersions
   alias Platform.Repo
 
   defp insert_user!(slug) do
@@ -66,7 +65,6 @@ defmodule Platform.Chat.EditCrossClientTest do
         content: content
       })
 
-    MessageVersions.record_v1!(msg)
     msg
   end
 

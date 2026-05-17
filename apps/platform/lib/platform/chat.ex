@@ -49,6 +49,7 @@ defmodule Platform.Chat do
   }
 
   alias Platform.Chat.Canvas.Versions, as: CanvasVersions
+  alias Platform.Chat.MessageVersions
   alias Platform.Chat.PubSub, as: ChatPubSub
   alias Platform.Repo
 
@@ -628,21 +629,32 @@ defmodule Platform.Chat do
   def post_message(attrs, opts \\ []) do
     attrs = put_author_snapshot(attrs, :participant_id, :author)
 
+    # Wrap the insert + v1 history record in a single transaction. The
+    # v1 row is the source-of-truth baseline for the `(edited)` affix
+    # on chat_message.ex (gates on versions_count > 1). Without it,
+    # the first edit lands the version at 1 (not 2), and the indicator
+    # stays hidden after a user's first edit (task 019e2ce2).
     result =
-      %Message{}
-      |> Message.changeset(attrs)
-      |> Repo.insert()
+      Repo.transaction(fn ->
+        case %Message{} |> Message.changeset(attrs) |> Repo.insert() do
+          {:ok, msg} ->
+            _v1 = MessageVersions.record_v1!(msg)
+            msg
+
+          {:error, changeset} ->
+            Repo.rollback(changeset)
+        end
+      end)
 
     case result do
       {:ok, msg} ->
         reinvite_mentioned_agents(msg)
         publish_message_posted(msg, opts)
+        {:ok, msg}
 
-      _ ->
-        :ok
+      {:error, changeset} ->
+        {:error, changeset}
     end
-
-    result
   end
 
   @doc """
@@ -660,6 +672,13 @@ defmodule Platform.Chat do
     multi =
       Multi.new()
       |> Multi.insert(:message, Message.changeset(%Message{}, attrs))
+      # v1 history baseline — see post_message/2 comment for rationale.
+      # MessageVersions.record_v1!/1 raises on failure, which Multi.run
+      # converts to {:error, …} and rolls back the whole multi (incl.
+      # the message + attachments inserts above).
+      |> Multi.run(:v1_version, fn _repo, %{message: message} ->
+        {:ok, MessageVersions.record_v1!(message)}
+      end)
 
     multi =
       Enum.with_index(attachment_attrs_list)
