@@ -1258,7 +1258,7 @@ body, .font-fabrikam, * {
 
 .compose-pill-bar {
   display: flex;
-  align-items: flex-end;
+  align-items: center;
   gap: 10px;
   background: oklch(0.21 0 0);
   border: 1px solid rgba(255, 255, 255, 0.08);
@@ -1343,8 +1343,6 @@ body, .font-fabrikam, * {
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  align-self: center;
-  margin-bottom: 2px;
 }
 
 /* Raise composer tap targets to Apple HIG (44pt) / Material (48dp) on
@@ -1361,11 +1359,15 @@ body, .font-fabrikam, * {
   }
 }
 
-/* Send button pill style — Cinema Mobile cyan with subtle persistent glow */
+/* Send button pill style — Cinema Mobile cyan with subtle persistent glow.
+   width/height/min-height intentionally omit !important so the
+   @media (hover: none) override above (44px !important) wins on touch
+   devices. Source-order would otherwise let this desktop rule clobber the
+   mobile tap-target invariant. */
 .compose-pill-send {
-  width: 36px !important;
-  height: 36px !important;
-  min-height: 36px !important;
+  width: 36px;
+  height: 36px;
+  min-height: 36px;
   border-radius: 50% !important;
   background: oklch(0.75 0.15 207) !important;
   color: oklch(0.15 0 0) !important;
