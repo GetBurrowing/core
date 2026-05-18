@@ -234,4 +234,106 @@ defmodule PlatformWeb.ShellLiveTest do
     assert html =~ ~s(data-collapsed="false")
     assert_push_event(view, "sidebar_collapsed_changed", %{collapsed: false})
   end
+
+  # ---------------------------------------------------------------------
+  # Icon-rail integration (task 019e389b Stage 3)
+  #
+  # The component-level rendering contract is covered by IconRailTest.
+  # These tests check the *wiring*: shell layout passes the right assigns
+  # (current_path, is_fabrikam_user, sidebar_collapsed) to the icon-rail and
+  # bottom-rail at both breakpoints, and the Admin slot's DOM presence
+  # respects the is_fabrikam_user gate end-to-end.
+  # ---------------------------------------------------------------------
+
+  describe "icon-rail integration" do
+    test "renders the desktop icon-rail wrapper", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      {:ok, _view, html} = live(conn, ~p"/tasks")
+
+      assert html =~ ~s(data-icon-rail)
+      assert html =~ ~s(id="shell-sidebar")
+      assert html =~ ~s(aria-label="Main navigation")
+    end
+
+    test "renders the mobile bottom-rail wrapper", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      {:ok, _view, html} = live(conn, ~p"/tasks")
+
+      assert html =~ ~s(data-bottom-rail)
+    end
+
+    test "active-state marker tracks current_path on the desktop rail", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      {:ok, _view, html} = live(conn, ~p"/tasks")
+
+      # The Tasks tile carries the active class + aria-current=page when on /tasks.
+      # Attribute order between `data-destination` and `aria-current` is not
+      # guaranteed by the renderer, so accept either order.
+      assert html =~ ~r/icon-rail-tab--active[^"]*"[^>]*data-destination="tasks"/
+
+      assert html =~ ~r/data-destination="tasks"[^>]*aria-current="page"/s or
+               html =~ ~r/aria-current="page"[^>]*data-destination="tasks"/s
+    end
+
+    test "active-state marker tracks current_path on the mobile bottom-rail", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      {:ok, _view, html} = live(conn, ~p"/activity")
+
+      assert html =~ ~r/bottom-nav-tab--active[^"]*"[^>]*data-destination="activity"/
+    end
+
+    test "Admin tile renders on the desktop rail (stub treats every user as Fabrikam)", %{
+      conn: conn
+    } do
+      conn = authenticated_conn(conn)
+      {:ok, _view, html} = live(conn, ~p"/tasks")
+
+      # is_fabrikam_user?/1 is a stub returning true for every user (TODO MT/RBAC).
+      # The Admin tile is present in the icon-rail and the Admin section is
+      # present in the More sheet.
+      assert html =~ ~s(data-destination="admin")
+    end
+
+    test "Chat tile carries the LastChatLink hook so the link target gets rewritten", %{
+      conn: conn
+    } do
+      conn = authenticated_conn(conn)
+      {:ok, _view, html} = live(conn, ~p"/tasks")
+
+      assert html =~ ~s(id="shell-chat-link")
+      assert html =~ ~s(phx-hook="LastChatLink")
+      assert html =~ ~s(data-default-chat-path="/chat")
+    end
+
+    test "sidebar collapse flips the rail to lg:w-14", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+
+      render_hook(view, "sidebar_hydrate", %{"collapsed" => true})
+      html = render(view)
+
+      # Collapsed rail keeps the data-icon-rail marker but switches width class.
+      assert html =~ ~s(data-icon-rail)
+      assert html =~ "lg:w-14"
+    end
+  end
+
+  describe "Admin gate (is_fabrikam_user)" do
+    test "is_fabrikam_user assign is true by default (stub returns true)", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+
+      assert :sys.get_state(view.pid).socket.assigns.is_fabrikam_user == true
+    end
+
+    test "More sheet renders the Admin section when is_fabrikam_user is true", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      {:ok, _view, html} = live(conn, ~p"/tasks")
+
+      # Admin section header text + the data-destination on the admin tile both
+      # appear in the rendered More sheet (which is lg:hidden but still in the
+      # DOM at all breakpoints — the hide is CSS-only).
+      assert html =~ ">Admin<"
+    end
+  end
 end

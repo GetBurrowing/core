@@ -214,11 +214,8 @@ defmodule PlatformWeb.UsageLiveTest do
     assert html =~ "7 days"
   end
 
-  test "sidebar shows Usage nav item", %{conn: conn} do
-    conn = authenticated_conn(conn)
-    {:ok, _view, html} = live(conn, ~p"/control/usage")
-
-    assert html =~ "/control/usage"
-    assert html =~ "Usage"
-  end
+  # `test "sidebar shows Usage nav item"` was deleted in task 019e389b Stage 3
+  # — the icon-rail redesign intentionally drops Usage from primary nav. The
+  # surface is still reachable directly at /control/usage; nav-discoverability
+  # is parked until a future stack revisits the long-tail nav set.
 end

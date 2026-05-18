@@ -593,8 +593,11 @@ defmodule PlatformWeb.ChatLiveTest do
 
     {:ok, _view, html} = live(conn, ~p"/chat/general")
 
-    assert html =~ "Agent"
-    assert count_occurrences(html, "Agent") >= 1
+    # The chat surface mounts the shell layout (icon-rail present); the
+    # roster button "Agents" text is async-resolved, so we assert on the
+    # rail's stable marker rather than the old sidebar's "Agent Resources"
+    # link text (removed in task 019e389b Stage 3 — icon-rail rev).
+    assert html =~ ~s(data-icon-rail)
     refute html =~ "Zip online"
   end
 
@@ -643,7 +646,9 @@ defmodule PlatformWeb.ChatLiveTest do
 
     {:ok, _view, html} = live(conn, ~p"/chat/general")
 
-    assert html =~ "Agent"
+    # Smoke-check: shell layout mounted (icon-rail present). Old sidebar
+    # text-match on "Agent Resources" was dropped in task 019e389b Stage 3.
+    assert html =~ ~s(data-icon-rail)
     assert is_pid(AgentServer.whereis("zip"))
     assert AgentServer.whereis("sidecar") == nil
   end
@@ -675,7 +680,9 @@ defmodule PlatformWeb.ChatLiveTest do
 
     {:ok, _view, html} = live(conn, ~p"/chat/general")
 
-    assert html =~ "Agent"
+    # Smoke-check: shell layout mounted (icon-rail present). Old sidebar
+    # text-match on "Agent Resources" was dropped in task 019e389b Stage 3.
+    assert html =~ ~s(data-icon-rail)
     assert is_pid(AgentServer.whereis(agent.id))
   end
 

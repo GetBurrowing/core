@@ -28,130 +28,18 @@
     class="hidden"
   >
   </div>
-  <%!-- Desktop-only sidebar (lg+ width). Mobile users get the bottom-nav
-       added in #13; the original mobile drawer is gone (task 019e0d4b
-       Stage 2 cleanup — orphaned post-#13). The desktop collapse-to-icons
-       mode is preserved via `:sidebar_collapsed`. --%>
-  <nav
-    id="shell-sidebar"
-    class={[
-      "hidden lg:flex flex-col gap-2 border-r border-base-300 bg-base-200 py-4 px-2 transition-all duration-200 ease-in-out",
-      if(@sidebar_collapsed, do: "lg:w-14", else: "w-56")
-    ]}
-  >
-    <%!-- Sidebar header --%>
-    <div class="mb-4 flex items-center px-2">
-      <span :if={!@sidebar_collapsed} class="text-lg font-bold">⚡</span>
-    </div>
-
-    <%!-- Module navigation links --%>
-    <.link
-      id="shell-chat-link"
-      navigate="/chat"
-      phx-hook="LastChatLink"
-      data-default-chat-path="/chat"
-      class={nav_item_class(@current_path, "/chat")}
-      title="Chat"
-    >
-      <span class="hero-chat-bubble-left-right size-5 flex-shrink-0"></span>
-      <span :if={!@sidebar_collapsed} class="text-sm font-medium">Chat</span>
-    </.link>
-    <.link
-      navigate="/activity"
-      class={nav_item_class(@current_path, "/activity")}
-      title="Activity"
-    >
-      <span class="hero-sparkles size-5 flex-shrink-0"></span>
-      <span :if={!@sidebar_collapsed} class="text-sm font-medium">Activity</span>
-    </.link>
-    <.link
-      navigate="/tasks"
-      class={nav_item_class(@current_path, "/tasks")}
-      title="Tasks"
-    >
-      <span class="hero-rectangle-stack size-5 flex-shrink-0"></span>
-      <span :if={!@sidebar_collapsed} class="text-sm font-medium">Tasks</span>
-    </.link>
-    <.link
-      navigate="/meetings"
-      class={nav_item_class(@current_path, "/meetings")}
-      title="Meetings"
-    >
-      <span class="hero-video-camera size-5 flex-shrink-0"></span>
-      <span :if={!@sidebar_collapsed} class="text-sm font-medium">Meetings</span>
-    </.link>
-    <.link
-      navigate="/skills"
-      class={nav_item_class(@current_path, "/skills")}
-      title="Skills"
-    >
-      <span class="hero-book-open size-5 flex-shrink-0"></span>
-      <span :if={!@sidebar_collapsed} class="text-sm font-medium">Skills</span>
-    </.link>
-    <.link
-      navigate="/changelog"
-      class={nav_item_class(@current_path, "/changelog")}
-      title="Changelog"
-    >
-      <span class="hero-newspaper size-5 flex-shrink-0"></span>
-      <span :if={!@sidebar_collapsed} class="text-sm font-medium">Changelog</span>
-    </.link>
-    <.link
-      navigate="/control"
-      class={nav_item_class(@current_path, "/control")}
-      title="Agent Resources"
-    >
-      <span class="hero-cog-6-tooth size-5 flex-shrink-0"></span>
-      <span :if={!@sidebar_collapsed} class="text-sm font-medium">Agent Resources</span>
-    </.link>
-    <.link
-      navigate="/org-context"
-      class={nav_item_class(@current_path, "/org-context")}
-      title="Org Context"
-    >
-      <span class="hero-building-library size-5 flex-shrink-0"></span>
-      <span :if={!@sidebar_collapsed} class="text-sm font-medium">Org Context</span>
-    </.link>
-    <.link
-      navigate="/control/usage"
-      class={nav_item_class(@current_path, "/control/usage")}
-      title="Usage"
-    >
-      <span class="hero-chart-bar-square size-5 flex-shrink-0"></span>
-      <span :if={!@sidebar_collapsed} class="text-sm font-medium">Usage</span>
-    </.link>
-    <.link
-      navigate="/admin/prompts"
-      class={nav_item_class(@current_path, "/admin/prompts")}
-      title="Admin · Prompts"
-    >
-      <span class="hero-wrench-screwdriver size-5 flex-shrink-0"></span>
-      <span :if={!@sidebar_collapsed} class="text-sm font-medium">Admin · Prompts</span>
-    </.link>
-    <.link
-      navigate="/admin/federation"
-      class={nav_item_class(@current_path, "/admin/federation")}
-      title="Admin · Federation"
-    >
-      <span class="hero-signal size-5 flex-shrink-0"></span>
-      <span :if={!@sidebar_collapsed} class="text-sm font-medium">Admin · Federation</span>
-    </.link>
-
-    <div class="flex-1"></div>
-
-    <%!-- Collapse toggle (desktop only) --%>
-    <button
-      class="hidden lg:flex items-center justify-center rounded-lg p-1 text-base-content/40 hover:bg-base-300 hover:text-base-content transition-colors"
-      phx-click="toggle_sidebar"
-      title={if @sidebar_collapsed, do: "Expand sidebar", else: "Collapse sidebar"}
-    >
-      <span class={[
-        "size-5",
-        if(@sidebar_collapsed, do: "hero-chevron-right", else: "hero-chevron-left")
-      ]}>
-      </span>
-    </button>
-  </nav>
+  <%!-- Desktop icon-rail (lg+ width). Single-source-of-truth destination
+       list lives in PlatformWeb.Components.IconRail.destinations/1; the
+       template here just hands off current_path / is_fabrikam_user /
+       sidebar_collapsed and lets the component own the rendering. Mobile
+       gets the matching `<.bottom_rail>` below. Admin tiles are gated by
+       `is_fabrikam_user` and never render in the DOM for non-Fabrikam users (task
+       019e389b Stage 3 — replaces the inline 11-link sidebar). --%>
+  <.icon_rail
+    current_path={@current_path}
+    is_fabrikam_user={@is_fabrikam_user}
+    sidebar_collapsed={@sidebar_collapsed}
+  />
 
   <%!-- Main content area. min-w-0 + min-h-0: this column is flex-1 inside
        a flex row (the shell root) AND a flex-col itself, so its children
@@ -414,19 +302,25 @@
       {@inner_content}
     </main>
 
-    <%!-- Mobile bottom-nav (task 019e1322) — replaces the shell hamburger as
-         the primary cross-surface navigation on phones. lg:hidden inside the
-         component itself so desktop continues to use the existing left rail
-         (lines 1-150 above). Tasks badge ships at 0 in Stage 1; Stage 3
-         wires the live count via shell_live.ex `@tasks_count` assign. --%>
-    <.bottom_nav active_module={@active_module} tasks_count={@tasks_count} />
+    <%!-- Mobile bottom-rail (task 019e389b Stage 3) — keys off `current_path`
+         + `is_fabrikam_user` from the same single source of truth as the desktop
+         icon-rail above. lg:hidden inside the component itself so desktop
+         continues to use the icon-rail. Tasks-badge wiring is parked: the
+         old `<.bottom_nav>` rendered it; the icon-rail rev re-introduces
+         badge support in a later stage (badge data assign `@tasks_count`
+         still computed in `shell_live.ex` for the future). --%>
+    <.bottom_rail current_path={@current_path} is_fabrikam_user={@is_fabrikam_user} />
 
     <%!-- Mobile More sheet (task 019e1322 Stage 2) — bottom sheet that surfaces
          the long-tail destinations (Skills, Changelog, Agent Resources, Org
          Context, Usage, Admin·Prompts, Admin·Federation) plus the profile +
          sign-out row. Triggered by `phx-click="open_more_sheet"` on the More
          tab in <.bottom_nav>. lg:hidden inside the component itself. --%>
-    <.more_sheet open={@more_sheet_open} current_user={@current_user} />
+    <.more_sheet
+      open={@more_sheet_open}
+      current_user={@current_user}
+      is_fabrikam_user={@is_fabrikam_user}
+    />
 
     <%!-- Persistent meeting bar (survives navigation) --%>
     <.live_component

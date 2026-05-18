@@ -5,8 +5,10 @@ defmodule PlatformWeb.Layouts do
   """
   use PlatformWeb, :html
 
-  # Imported so the embedded shell.html.heex can call `<.bottom_nav .../>` directly.
-  import PlatformWeb.Components.BottomNav
+  # Imported so the embedded shell.html.heex can call `<.icon_rail .../>` and
+  # `<.bottom_rail .../>` directly. The icon-rail replaces the inline desktop
+  # sidebar links + the previous `<.bottom_nav>` component (task 019e389b).
+  import PlatformWeb.Components.IconRail
   import PlatformWeb.Components.MoreSheet
 
   # Embed all files in layouts/* within this module.
@@ -75,20 +77,6 @@ defmodule PlatformWeb.Layouts do
 
     <.flash_group flash={@flash} />
     """
-  end
-
-  @doc """
-  Returns CSS classes for a sidebar navigation item.
-  Highlights the item when the current path starts with the given path.
-  """
-  def nav_item_class(current_path, path) do
-    base = "flex items-center gap-3 px-3 py-2 rounded-lg transition-colors hover:bg-base-300"
-
-    if String.starts_with?(current_path, path) do
-      base <> " bg-base-300 text-primary"
-    else
-      base <> " text-base-content/60"
-    end
   end
 
   @doc "Returns a Tailwind color class for the agent status indicator."

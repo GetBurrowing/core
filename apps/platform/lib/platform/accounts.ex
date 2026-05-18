@@ -7,6 +7,18 @@ defmodule Platform.Accounts do
   def get_user(id), do: Repo.get(User, id)
 
   @doc """
+  Whether the given user is a Fabrikam admin (gates the Admin slot in the icon-rail
+  and the Admin section in the More sheet).
+
+  Stub: returns `true` for every user today. Multi-tenant org membership lives
+  on a downstream stack (see TODO below); until that ships, all current Suite
+  users are Fabrikam admins per product decision (Marlowe, 2026-05-18).
+  """
+  # TODO(MT/RBAC stack 019e3c49-6983-755a-8550-d76ccd680c2c): replace with Platform.Orgs.fabrikam_admin?/1
+  # All current users are Fabrikam admins (Marlowe 2026-05-18); stub returns true until MT/RBAC ships.
+  def is_fabrikam_user?(_user), do: true
+
+  @doc """
   Return a map of user id => user for the given ids.
   """
   @spec get_users_map([binary()]) :: %{binary() => User.t()}

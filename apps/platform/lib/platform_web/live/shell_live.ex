@@ -19,18 +19,20 @@ defmodule PlatformWeb.ShellLive do
   def on_mount(:default, _params, session, socket) do
     raw_user_id = session["current_user_id"]
 
-    current_user =
+    user_record =
       case raw_user_id do
-        user_id when is_binary(user_id) ->
-          case Accounts.get_user(user_id) do
-            %{name: name} when is_binary(name) and name != "" -> name
-            %{email: email} when is_binary(email) -> email
-            _ -> user_id
-          end
-
-        _ ->
-          session["user_email"] || session["user_id"] || "user"
+        user_id when is_binary(user_id) -> Accounts.get_user(user_id)
+        _ -> nil
       end
+
+    current_user =
+      case user_record do
+        %{name: name} when is_binary(name) and name != "" -> name
+        %{email: email} when is_binary(email) -> email
+        _ -> session["user_email"] || session["user_id"] || raw_user_id || "user"
+      end
+
+    is_fabrikam_user = Accounts.is_fabrikam_user?(user_record)
 
     active_module = derive_active_module(socket.view)
 
@@ -90,6 +92,7 @@ defmodule PlatformWeb.ShellLive do
       |> assign(:more_sheet_open, false)
       |> assign(:sidebar_collapsed, false)
       |> assign(:active_module, active_module)
+      |> assign(:is_fabrikam_user, is_fabrikam_user)
       |> assign(:tasks_count, compute_tasks_count(raw_user_id))
       |> assign(:roster_open, false)
       |> assign(:show_presence_panel, false)
