@@ -249,29 +249,46 @@
    nothing outside the shell can scroll — neither the body itself nor any
    external trigger (browser toolbar resize, on-screen keyboard, etc.)
    can drag the chrome (top app bar, bottom-tab nav) out of view on
-   mobile. Pairs with shell.html.heex's `h-[100vh] overflow-hidden flex`
+   mobile. Pairs with shell.html.heex's `h-[100dvh] overflow-hidden flex`
    root and the per-surface `overflow-y-auto` scrollers — the only
    elements allowed to scroll are inner panels, never the document.
 
-   `100vh` — NOT `100dvh`. In an installed iOS PWA (display: standalone,
-   viewport-fit=cover), `100dvh` resolves to the *inset-short* viewport
-   (e.g. 793px on an iPhone 16) while `100vh`/`100lvh` resolve to the
-   full screen (852px). iOS extends content under the top Dynamic Island
-   but does NOT bump the dynamic viewport height to the full screen, so
-   `100dvh` leaves a ~59px strip uncovered at the bottom — the document
-   simply doesn't reach the screen edge. `100vh` covers the full screen;
-   the top inset is handled by `safe-area-top` padding on the shell and
-   the bottom inset by `padding-bottom: env(safe-area-inset-bottom)` on
-   `.bottom-nav`. (Confirmed via Web Inspector on-device 2026-05-14.)
+   Two viewport-unit branches keyed off `display-mode`:
+
+   **Browser tab (default)** — `100dvh`. iOS Safari and Chrome render
+   a dynamic bottom URL/toolbar. `100vh` resolves to the *largest*
+   viewport (toolbar retracted), so a sticky/flex bottom-nav inside a
+   `100vh` shell hides BEHIND the toolbar when it's expanded. `100dvh`
+   tracks the visible viewport and keeps the bottom-nav always above
+   the toolbar. There's no home-indicator inset in a browser tab so
+   the dvh-short-vs-screen-edge problem doesn't apply.
+
+   **Installed PWA (`display-mode: standalone`)** — `100vh`. In a
+   standalone PWA (viewport-fit=cover), `100dvh` resolves to the
+   inset-short viewport (e.g. 793px on iPhone 16) while `100vh`/`100lvh`
+   resolve to the full screen (852px). iOS extends content under the
+   top Dynamic Island but does NOT bump the dynamic viewport height to
+   the full screen, so `100dvh` leaves a ~59px strip uncovered at the
+   bottom. `100vh` covers the full screen; the top inset is handled by
+   `safe-area-top` padding on the shell and the bottom inset by
+   `padding-bottom: env(safe-area-inset-bottom)` on `.bottom-nav`.
+   (Confirmed via Web Inspector on-device 2026-05-14.)
 
    `overscroll-behavior: none` here is a backstop; per-scroller
    `overscroll-contain` (e.g., main in shell.html.heex) is what stops
    iOS rubber-band on the inner panels from propagating up. */
 html,
 body {
-  height: 100vh;
+  height: 100dvh;
   overflow: hidden;
   overscroll-behavior: none;
+}
+
+@media all and (display-mode: standalone) {
+  html,
+  body {
+    height: 100vh;
+  }
 }
 
 /* iOS PWA safe area support. Includes left/right for landscape-notch

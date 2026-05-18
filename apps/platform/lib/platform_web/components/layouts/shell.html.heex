@@ -1,13 +1,23 @@
 <%!-- PWA app-shell scroll lock: the shell occupies exactly the full
-     viewport. `h-[100vh]` MUST match the `html, body { height: 100vh }`
-     lock in app.css. NOT `100dvh`/`100svh` — in an installed iOS PWA
-     those resolve to the inset-short viewport (e.g. 793px on iPhone 16)
-     while `100vh` resolves to the full screen (852px); the shorter
-     value leaves a ~59px strip uncovered at the bottom (see the app.css
-     comment for the on-device measurements). `overflow-hidden` prevents
-     the document itself from scrolling; combined with the html/body lock
-     in app.css, only the inner content scroller (per-LiveView,
-     `overflow-y-auto`) can scroll, so the chrome stays put on mobile.
+     viewport. The class string MUST match the `html, body` height rule
+     in app.css for both display modes:
+
+     **Browser tab (default)** — `h-[100dvh]`. iOS Safari + Chrome show
+     a dynamic bottom URL/toolbar; `100vh` reports the largest viewport
+     (toolbar retracted) so a flex-rooted bottom-nav inside a `100vh`
+     shell hides BEHIND the toolbar when it's expanded. `100dvh` tracks
+     the visible viewport and keeps the bottom-nav above the toolbar.
+
+     **Installed PWA (`display-mode: standalone`)** — overrides to
+     `h-[100vh]`. In standalone, `100dvh` resolves inset-short (~793px
+     on iPhone 16) vs `100vh` full screen (852px); using `100dvh` here
+     leaves a ~59px strip uncovered at the bottom. (See app.css comment
+     and on-device note 2026-05-14.)
+
+     `overflow-hidden` prevents the document itself from scrolling;
+     combined with the html/body lock in app.css, only the inner
+     content scroller (per-LiveView, `overflow-y-auto`) can scroll, so
+     the chrome stays put on mobile.
 
      Insets: `safe-area-top` padding below clears the top Dynamic Island;
      the home-indicator zone is handled by `padding-bottom:
@@ -17,7 +27,7 @@
      bound their bottom edge to `var(--bottom-nav-height)` so they don't
      sit behind the nav. --%>
 <div
-  class="flex h-[100vh] overflow-hidden bg-base-100 safe-area-top pb-[var(--meeting-bar-height,0px)]"
+  class="flex h-[100dvh] [@media(display-mode:standalone)]:h-[100vh] overflow-hidden bg-base-100 safe-area-top pb-[var(--meeting-bar-height,0px)]"
   style={"--meeting-bar-height: " <> (if @meeting_active, do: "3rem", else: "0px")}
 >
   <%!-- Sidebar collapse persistence hook (localStorage) --%>
