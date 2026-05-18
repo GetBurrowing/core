@@ -2050,12 +2050,39 @@ body, .font-fabrikam, * {
   border-radius: 0 0 3px 3px;
 }
 
+/* Desktop icon-rail clusters stack their tiles vertically. Without this,
+   the `<.link>` children render as default-inline `<a>` tags and flow
+   horizontally + wrap when the rail is expanded. */
+.icon-rail-cluster {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+}
+
 /* Desktop icon-rail active-tile accent — 3px LEFT-bar mirroring the
    mobile TOP-bar above. Same visual language, axis rotated.
    Sits alongside the `bg-base-300 text-primary` pill applied by
    icon_rail.ex's `desktop_active_class/2`. */
 .icon-rail-tab {
   position: relative;
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  padding: 0.5rem 0.625rem;
+  border-radius: 0.5rem;
+  color: var(--color-base-content);
+  text-decoration: none;
+}
+
+.icon-rail-tab:hover {
+  background: var(--color-base-300);
+}
+
+.icon-rail-label {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 0.875rem;
 }
 
 .icon-rail-tab--active::before {
