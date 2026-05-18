@@ -55,15 +55,15 @@ defmodule PlatformWeb.Components.IconRailTest do
   end
 
   describe "destinations/1" do
-    test "returns 9 destinations for a non-Fabrikam user (Admin filtered out)" do
+    test "returns 8 destinations for a non-Fabrikam user (Admin filtered out)" do
       list = destinations(is_fabrikam_user: false)
-      assert length(list) == 9
+      assert length(list) == 8
       refute Enum.any?(list, &(&1.key == :admin))
     end
 
-    test "returns all 10 destinations for a Fabrikam user (Admin included)" do
+    test "returns all 9 destinations for a Fabrikam user (Admin included)" do
       list = destinations(is_fabrikam_user: true)
-      assert length(list) == 10
+      assert length(list) == 9
       assert Enum.any?(list, &(&1.key == :admin))
     end
 
@@ -84,10 +84,10 @@ defmodule PlatformWeb.Components.IconRailTest do
       assert Enum.map(fabrikam_only, & &1.key) == [:admin]
     end
 
-    test "cluster assignment per Stage 4 contract" do
-      # Per plan v2 Stage 4 contract: Live = Chat / Tasks / Inbox / Activity;
-      # Working = Skills / Context / Memory / Prompts / Meetings;
-      # Admin = Admin.
+    test "cluster assignment" do
+      # Live = Chat / Tasks / Inbox / Activity
+      # Working = Skills / Context / Prompts / Meetings (Memory tabs under Context per Marlowe 2026-05-18)
+      # Admin = Admin
       by_key =
         destinations(is_fabrikam_user: true)
         |> Enum.into(%{}, fn dest -> {dest.key, dest.cluster} end)
@@ -99,9 +99,10 @@ defmodule PlatformWeb.Components.IconRailTest do
 
       assert by_key[:skills] == :working
       assert by_key[:context] == :working
-      assert by_key[:memory] == :working
       assert by_key[:prompts] == :working
       assert by_key[:meetings] == :working
+
+      refute Map.has_key?(by_key, :memory)
 
       assert by_key[:admin] == :admin
     end
@@ -152,12 +153,12 @@ defmodule PlatformWeb.Components.IconRailTest do
 
     test "renders 10 destination tiles for a Fabrikam user (Chat..Meetings + Admin)" do
       html = render_icon_rail(%{is_fabrikam_user: true})
-      assert count_data_destination_matches(html) == 10
+      assert count_data_destination_matches(html) == 9
     end
 
-    test "renders 9 destination tiles for a non-Fabrikam user (no Admin)" do
+    test "renders 8 destination tiles for a non-Fabrikam user (no Admin)" do
       html = render_icon_rail(%{is_fabrikam_user: false})
-      assert count_data_destination_matches(html) == 9
+      assert count_data_destination_matches(html) == 8
     end
 
     test "Admin slot uses mt-auto so it pins to the bottom of the rail" do

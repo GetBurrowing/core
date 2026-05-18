@@ -44,7 +44,8 @@ defmodule PlatformWeb.Components.MoreSheetTest do
       html = render_more_sheet(%{})
 
       # Working cluster keys per IconRail.canonical_destinations.
-      for key <- ["skills", "context", "memory", "prompts", "meetings"] do
+      # (Memory tabs under Context per Marlowe 2026-05-18; not its own destination.)
+      for key <- ["skills", "context", "prompts", "meetings"] do
         assert html =~ ~s(data-destination="#{key}"),
                "expected data-destination=#{inspect(key)} in the More sheet"
       end

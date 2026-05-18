@@ -293,8 +293,10 @@ defmodule PlatformWeb.Components.IconRail do
         fabrikam_only?: false
       },
       %{
+        # Inbox is a future "My Notifications" surface (stack 019e389b-53b9-...).
+        # Today the route renders a "Coming Soon" placeholder LV so the tile
+        # doesn't 404.
         key: :inbox,
-        # TODO: no /inbox route yet — Stage 3 reconciles.
         label: "Inbox",
         path: "/inbox",
         hero_icon: "hero-inbox",
@@ -320,20 +322,14 @@ defmodule PlatformWeb.Components.IconRail do
         fabrikam_only?: false
       },
       %{
+        # Memory is a TAB within the Context surface (Marlowe 2026-05-18),
+        # not a standalone destination. The /org-context LiveView owns
+        # both the Context and Memory tabs. Label includes "+ Memory" so
+        # users know the page contains both tabs.
         key: :context,
-        # TODO: closest existing route is /org-context; Stage 3 reconciles.
-        label: "Context",
+        label: "Context + Memory",
         path: "/org-context",
         hero_icon: "hero-building-library",
-        cluster: :working,
-        fabrikam_only?: false
-      },
-      %{
-        key: :memory,
-        # TODO: no /memory route yet — Stage 3 reconciles.
-        label: "Memory",
-        path: "/memory",
-        hero_icon: "hero-cpu-chip",
         cluster: :working,
         fabrikam_only?: false
       },

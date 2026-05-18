@@ -84,6 +84,7 @@ defmodule PlatformWeb.Router do
       live("/chat", ChatLive, :index)
       live("/chat/:space_slug", ChatLive, :show)
       live("/activity", ActivityLive, :index)
+      live("/inbox", InboxLive, :index)
       live("/tasks", TasksLive, :index)
       live("/tasks/:task_id", TasksLive, :show)
       live("/meetings", MeetingLive, :index)
