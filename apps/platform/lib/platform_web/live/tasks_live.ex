@@ -1693,7 +1693,17 @@ defmodule PlatformWeb.TasksLive do
         rejected_by = socket.assigns[:current_user_id]
 
         case Tasks.reject_plan(plan, rejected_by, feedback) do
-          {:ok, _} ->
+          {:ok, rejected_plan} ->
+            # v2 (task 019e30be stage 1): also post the feedback into the
+            # task's execution space so the planner re-dispatch picks it up
+            # via AttentionRouter — same channel as steering / review-item
+            # feedback. Mirrors review_requests.ex post_engagement pattern.
+            # Side-effect lives here (not in Tasks.reject_plan/3) because
+            # reject_plan is called from inside Tasks.reopen_with_feedback/3's
+            # Repo.transaction/1 — wrapping a chat post in that transaction
+            # would risk rolling back the rejection if the post fails.
+            post_rejection_feedback_to_execution_space(rejected_plan, rejected_by, feedback)
+
             {:noreply,
              socket
              |> assign(:reject_plan_open, nil)
@@ -1706,6 +1716,52 @@ defmodule PlatformWeb.TasksLive do
             {:noreply, put_flash(socket, :error, "Failed to reject plan.")}
         end
     end
+  end
+
+  # Post the reviewer's rejection feedback into the task's execution space.
+  #
+  # Failure here is logged but never raised — the rejection has already been
+  # persisted by `Tasks.reject_plan/3`. The space-post is the planner's
+  # signal; the persisted `rejection_reason` is the user-visible truth.
+  defp post_rejection_feedback_to_execution_space(_plan, _rejected_by, ""), do: :ok
+
+  defp post_rejection_feedback_to_execution_space(plan, rejected_by, feedback) do
+    case ExecutionSpace.find_by_task_id(plan.task_id) do
+      nil ->
+        :ok
+
+      space ->
+        body = compose_rejection_message(plan, rejected_by, feedback)
+
+        metadata = %{
+          "reason" => "plan_rejected",
+          "plan_id" => plan.id
+        }
+
+        case ExecutionSpace.post_engagement(space.id, body, metadata: metadata) do
+          {:ok, _msg} ->
+            :ok
+
+          {:error, reason} ->
+            require Logger
+
+            Logger.warning(
+              "Failed to post plan rejection feedback to execution space: #{inspect(reason)}"
+            )
+
+            :ok
+        end
+    end
+  end
+
+  defp compose_rejection_message(plan, rejected_by, feedback) do
+    name =
+      case rejected_by && Accounts.get_user(rejected_by) do
+        %{name: name} when is_binary(name) and name != "" -> name
+        _ -> "the reviewer"
+      end
+
+    "Plan v#{plan.version} rejected by #{name}:\n\n#{feedback}"
   end
 
   # ── Plan revision folding events ───────────────────────────────────────

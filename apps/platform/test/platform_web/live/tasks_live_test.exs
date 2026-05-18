@@ -2010,6 +2010,201 @@ defmodule PlatformWeb.TasksLiveTest do
     end
   end
 
+  describe "reject-with-feedback execution-space post (task 019e30be v2)" do
+    # v2 layers on top of v1: when the LiveView handler rejects a plan, it
+    # ALSO posts the feedback into the task's execution space so the
+    # planner re-dispatch picks it up via AttentionRouter — same channel
+    # as steering / review-item feedback.
+    #
+    # The side-effect lives in the LiveView handler (not Tasks.reject_plan/3)
+    # because reject_plan is called from inside Tasks.reopen_with_feedback/3's
+    # Repo.transaction/1. Wrapping a chat post in that transaction would
+    # risk rolling back the rejection if the post fails. These tests pin
+    # that boundary so the side-effect doesn't accidentally migrate into
+    # the context module.
+
+    setup %{conn: conn} do
+      project = create_project()
+      task = create_task(project, %{title: "Reject Feedback Post Task", status: "planning"})
+
+      {:ok, plan} = Tasks.create_plan(%{task_id: task.id, version: 1, status: "draft"})
+
+      {:ok, _stage} =
+        Tasks.create_stage(%{
+          plan_id: plan.id,
+          position: 1,
+          name: "Do the thing",
+          status: "pending"
+        })
+
+      {:ok, plan} = Tasks.submit_plan_for_review(plan)
+
+      # Pre-create an execution space so the LiveView handler has somewhere
+      # to post (mirrors the steady-state where TaskRouter has spun one up
+      # alongside the dispatch).
+      {:ok, exec_space} = ExecutionSpace.find_or_create(task.id)
+
+      {conn, user} = authenticated_conn_with_user(conn)
+      {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
+
+      %{view: view, task: task, plan: plan, exec_space: exec_space, user: user}
+    end
+
+    test "submit with feedback posts a planner-routable message into the execution space",
+         %{view: view, plan: plan, exec_space: exec_space, user: user} do
+      # Open drawer + type feedback.
+      view
+      |> element(~s(button[data-role="plan-reject-toggle"][data-plan-id="#{plan.id}"]))
+      |> render_click()
+
+      render_keyup(
+        element(
+          view,
+          ~s(textarea[data-role="plan-reject-feedback-text"][data-plan-id="#{plan.id}"])
+        ),
+        %{"value" => "Use postgres instead of sqlite for the metrics store."}
+      )
+
+      # Submit.
+      view
+      |> element(~s(button[data-role="plan-reject-feedback-submit"][data-plan-id="#{plan.id}"]))
+      |> render_click()
+
+      # Rejection persisted (v1 behaviour, unchanged).
+      reloaded = Tasks.get_plan(plan.id)
+      assert reloaded.status == "rejected"
+
+      # v2: an engagement message landed in the execution space, body
+      # contains the verbatim feedback + the reviewer's name, and metadata
+      # tags the source as plan_rejected so AttentionRouter / planner can
+      # disambiguate from generic steering chatter.
+      messages =
+        Repo.all(
+          from(m in Chat.Message, where: m.space_id == ^exec_space.id, order_by: m.inserted_at)
+        )
+
+      engagement_messages =
+        Enum.filter(messages, fn m -> Map.get(m.metadata || %{}, "reason") == "plan_rejected" end)
+
+      assert length(engagement_messages) == 1
+      [msg] = engagement_messages
+
+      # Body carries the feedback verbatim — ContextAssembler should be
+      # able to grep it out without massaging.
+      assert msg.content =~ "Use postgres instead of sqlite for the metrics store."
+      # And the rejecting user's display name so the planner has a who.
+      assert msg.content =~ user.name
+      # Metadata tags so non-message consumers can dispatch on intent.
+      assert Map.get(msg.metadata, "reason") == "plan_rejected"
+      assert Map.get(msg.metadata, "plan_id") == plan.id
+      # Engagement (log_only=false) so AttentionRouter actually routes it.
+      assert msg.log_only == false
+    end
+
+    test "submit with empty feedback does NOT post a stub message into the space",
+         %{view: view, plan: plan, exec_space: exec_space} do
+      # Open drawer but leave the textarea empty.
+      view
+      |> element(~s(button[data-role="plan-reject-toggle"][data-plan-id="#{plan.id}"]))
+      |> render_click()
+
+      # Bypass the DOM-disabled guard and fire the event directly so we
+      # exercise the server's empty-feedback branch.
+      render_click(view, "submit_reject_with_feedback", %{"plan-id" => plan.id})
+
+      # Plan stayed in pending_review (v1's empty-feedback guard).
+      reloaded = Tasks.get_plan(plan.id)
+      assert reloaded.status == "pending_review"
+
+      # And no plan_rejected engagement was posted — empty submissions
+      # MUST be silent on the chat channel, otherwise the planner would
+      # be re-dispatched with no actionable signal.
+      messages = Repo.all(from(m in Chat.Message, where: m.space_id == ^exec_space.id))
+
+      refute Enum.any?(messages, fn m ->
+               Map.get(m.metadata || %{}, "reason") == "plan_rejected"
+             end)
+    end
+
+    test "when Tasks.reject_plan fails (plan not pending_review), no space-post happens",
+         %{view: view, plan: plan, exec_space: exec_space} do
+      # Force the plan out of pending_review so the server-side guard in
+      # the handler triggers BEFORE reaching Tasks.reject_plan/3 — but we
+      # also want to belt-and-suspenders verify nothing got posted.
+      {:ok, _} =
+        plan
+        |> Ecto.Changeset.change(status: "approved")
+        |> Repo.update()
+
+      # Open drawer + type feedback.
+      view
+      |> element(~s(button[data-role="plan-reject-toggle"][data-plan-id="#{plan.id}"]))
+      |> render_click()
+
+      render_keyup(
+        element(
+          view,
+          ~s(textarea[data-role="plan-reject-feedback-text"][data-plan-id="#{plan.id}"])
+        ),
+        %{"value" => "Whatever — handler should refuse."}
+      )
+
+      # Submit — server should reject because status != pending_review.
+      view
+      |> element(~s(button[data-role="plan-reject-feedback-submit"][data-plan-id="#{plan.id}"]))
+      |> render_click()
+
+      # Plan still approved (rejection never happened).
+      reloaded = Tasks.get_plan(plan.id)
+      assert reloaded.status == "approved"
+
+      # And critically: no engagement was posted. The space-post must
+      # never fire on the failure branch — otherwise reviewers see a
+      # "Plan rejected by..." message for a rejection that didn't happen.
+      messages = Repo.all(from(m in Chat.Message, where: m.space_id == ^exec_space.id))
+
+      refute Enum.any?(messages, fn m ->
+               Map.get(m.metadata || %{}, "reason") == "plan_rejected"
+             end)
+    end
+
+    test "Tasks.reopen_with_feedback/3 does NOT post via the LiveView side-effect path",
+         %{task: task, plan: plan, exec_space: exec_space} do
+      # reopen_with_feedback calls Tasks.reject_plan/3 from inside a
+      # Repo.transaction/1. The space-post lives in the LiveView handler
+      # specifically to keep it OUT of that transaction. This test pins
+      # that boundary: reopening through the context path should reject
+      # the plan + flip the task back to planning WITHOUT triggering the
+      # LiveView's post_engagement side-effect.
+      #
+      # Setup: plan must be approved-or-completed, task must be done,
+      # for reopen_with_feedback to accept the call.
+      {:ok, _} = plan |> Ecto.Changeset.change(status: "approved") |> Repo.update()
+      {:ok, _} = task |> Ecto.Changeset.change(status: "done") |> Repo.update()
+
+      assert {:ok, reopened_task} =
+               Tasks.reopen_with_feedback(task.id, "Missed the spec entirely", "some-reviewer-id")
+
+      assert reopened_task.status == "planning"
+
+      # Plan flipped to rejected with the feedback persisted (the
+      # transactional context-layer behaviour).
+      reloaded = Tasks.get_plan(plan.id)
+      assert reloaded.status == "rejected"
+      assert reloaded.rejection_reason == "Missed the spec entirely"
+
+      # But the chat post — which belongs to the LiveView handler — did
+      # NOT fire. The context-layer reopen path is intentionally silent
+      # on the execution-space channel because its caller (the reopen UI)
+      # is responsible for any user-facing notification.
+      messages = Repo.all(from(m in Chat.Message, where: m.space_id == ^exec_space.id))
+
+      refute Enum.any?(messages, fn m ->
+               Map.get(m.metadata || %{}, "reason") == "plan_rejected"
+             end)
+    end
+  end
+
   describe "plan revision folding" do
     # Helper: insert a rejected plan revision directly. We bypass
     # `Tasks.reject_plan/2` because that requires the plan to be in
