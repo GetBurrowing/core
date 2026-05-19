@@ -20,6 +20,11 @@ defmodule Platform.Federation.ToolSurface do
 
   @bundles ~w(canvas messaging task plan review space context_read federation org_context skill attachment)
 
+  # Per-message content cap (graphemes) for space_get_messages /
+  # space_search_messages. Anything longer is sliced and flagged via the
+  # `content_truncated` boolean on the returned map.
+  @message_content_cap 64_000
+
   @doc "Known capability bundle names."
   def all_bundles, do: @bundles
 
@@ -2055,10 +2060,13 @@ defmodule Platform.Federation.ToolSurface do
 
       {:ok,
        Enum.map(messages, fn m ->
+         {trimmed_content, truncated?} = cap_content(m.content || "")
+
          %{
            id: m.id,
            participant_id: m.participant_id,
-           content: String.slice(m.content || "", 0, 500),
+           content: trimmed_content,
+           content_truncated: truncated?,
            search_headline: m.search_headline,
            inserted_at: format_datetime(m.inserted_at)
          }
@@ -2080,16 +2088,27 @@ defmodule Platform.Federation.ToolSurface do
 
       {:ok,
        Enum.map(messages, fn m ->
+         {trimmed_content, truncated?} = cap_content(m.content || "")
+
          %{
            id: m.id,
            participant_id: m.participant_id,
            content_type: m.content_type,
-           content: String.slice(m.content || "", 0, 500),
+           content: trimmed_content,
+           content_truncated: truncated?,
            thread_id: m.thread_id,
            inserted_at: format_datetime(m.inserted_at),
            attachments: serialize_attachments(Map.get(attachments_by_msg, m.id, []))
          }
        end)}
+    end
+  end
+
+  defp cap_content(content) when is_binary(content) do
+    if String.length(content) > @message_content_cap do
+      {String.slice(content, 0, @message_content_cap), true}
+    else
+      {content, false}
     end
   end
 

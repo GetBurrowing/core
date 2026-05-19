@@ -2592,6 +2592,52 @@ defmodule Platform.Federation.ToolSurfaceTest do
       assert msg1.id in ids
     end
 
+    test "space_get_messages returns full content for messages within cap", ctx do
+      body = String.duplicate("a", 1_000)
+
+      {:ok, posted} =
+        Chat.post_message(%{
+          space_id: ctx.space.id,
+          participant_id: ctx.participant.id,
+          content_type: "text",
+          content: body
+        })
+
+      {:ok, results} =
+        ToolSurface.execute(
+          "space_get_messages",
+          %{"space_id" => ctx.space.id},
+          ctx.context
+        )
+
+      row = Enum.find(results, &(&1.id == posted.id))
+      assert row.content == body
+      assert row.content_truncated == false
+    end
+
+    test "space_get_messages truncates content over cap and flags it", ctx do
+      body = String.duplicate("a", 64_001)
+
+      {:ok, posted} =
+        Chat.post_message(%{
+          space_id: ctx.space.id,
+          participant_id: ctx.participant.id,
+          content_type: "text",
+          content: body
+        })
+
+      {:ok, results} =
+        ToolSurface.execute(
+          "space_get_messages",
+          %{"space_id" => ctx.space.id},
+          ctx.context
+        )
+
+      row = Enum.find(results, &(&1.id == posted.id))
+      assert String.length(row.content) == 64_000
+      assert row.content_truncated == true
+    end
+
     # ── space_search_messages ──────────────────────────────────────
 
     test "space_search_messages returns matching messages", ctx do
@@ -2651,6 +2697,48 @@ defmodule Platform.Federation.ToolSurfaceTest do
         )
 
       assert error.error =~ "Access denied"
+    end
+
+    test "space_search_messages flags content_truncated for short and long hits", ctx do
+      # Short hit — well under cap, should come back untouched.
+      short_body = "watermelon harvest report"
+
+      {:ok, short_msg} =
+        Chat.post_message(%{
+          space_id: ctx.space.id,
+          participant_id: ctx.participant.id,
+          content_type: "text",
+          content: short_body
+        })
+
+      # Long hit — body contains the same query token but is over the cap.
+      long_body = "watermelon " <> String.duplicate("z", 64_001)
+
+      {:ok, long_msg} =
+        Chat.post_message(%{
+          space_id: ctx.space.id,
+          participant_id: ctx.participant.id,
+          content_type: "text",
+          content: long_body
+        })
+
+      {:ok, results} =
+        ToolSurface.execute(
+          "space_search_messages",
+          %{"space_id" => ctx.space.id, "query" => "watermelon"},
+          ctx.context
+        )
+
+      short_row = Enum.find(results, &(&1.id == short_msg.id))
+      long_row = Enum.find(results, &(&1.id == long_msg.id))
+
+      assert short_row, "expected short message in search results"
+      assert short_row.content == short_body
+      assert short_row.content_truncated == false
+
+      assert long_row, "expected long message in search results"
+      assert String.length(long_row.content) == 64_000
+      assert long_row.content_truncated == true
     end
 
     # ── canvas_list ────────────────────────────────────────────────
