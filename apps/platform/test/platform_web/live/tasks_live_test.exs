@@ -5779,15 +5779,27 @@ defmodule PlatformWeb.TasksLiveTest do
       tag = open_tag_for(html, "stack-detail-panel")
       refute is_nil(tag), "expected stack-detail-panel container to render"
 
-      # Mobile: full-screen takeover (`inset-0` + `max-w-full`).
-      assert tag =~ "inset-0"
+      # Mobile: full-screen takeover via explicit edge pins (NOT
+      # `inset-0` shorthand — see task 019e38c7 stage 1: `inset-0`'s
+      # `bottom:0` competed with the `bottom-[calc(...)]` override at
+      # the same specificity and broke iOS WebKit overflow handling).
+      assert tag =~ "top-0"
+      assert tag =~ "left-0"
+      assert tag =~ "right-0"
       assert tag =~ "max-w-full"
 
-      # Desktop: slide-in shape (`md:inset-y-0 md:left-auto md:right-0`
-      # + `md:max-w-lg`).
-      assert tag =~ "md:inset-y-0"
+      # The shorthand `inset-0` must NOT appear — it re-introduces the
+      # bottom:0 conflict that this stage fixed. Use a word-boundary
+      # match so `md:inset-y-0` (if reintroduced) wouldn't false-pass,
+      # and `inset-x-0` is also disallowed because it carries `left:0`
+      # without the `md:left-auto` reset needed for the desktop slide-in.
+      refute tag =~ ~r/(^|\s)inset-(0|y-0|x-0)(\s|$|")/
+
+      # Desktop: slide-in shape mirrors the per-task panel — `right-0`
+      # is shared with mobile; mobile's `left-0` resets via
+      # `md:left-auto` so the panel narrows to the right edge.
+      # `md:max-w-lg` constrains width.
       assert tag =~ "md:left-auto"
-      assert tag =~ "md:right-0"
       assert tag =~ "md:max-w-lg"
     end
 
@@ -5815,6 +5827,22 @@ defmodule PlatformWeb.TasksLiveTest do
       # stack panel — no `pb-[calc(env(safe-area-inset-bottom)...)]`
       # on the body scroller.
       refute tag =~ "pb-[calc(env(safe-area-inset-bottom)"
+    end
+
+    test "members column does NOT carry its own overflow-y-auto (single outer scroller wins)",
+         %{conn: conn, stack: stack} do
+      # Task 019e38c7 stage 1 regression pin. The body scroller
+      # (`stack-detail-body`, line ~2183) is the SOLE scroll viewport
+      # for the panel. A nested `overflow-y-auto` on the members
+      # column re-introduced on mobile single-column layouts caused
+      # iOS WebKit's momentum scroll to fight itself — the user
+      # could not reach the bottom rows. Keep the column as a plain
+      # flex stack with no overflow constraint.
+      html = open_stage5_panel(conn, stack)
+      tag = open_tag_for(html, "stack-detail-members")
+      refute is_nil(tag), "expected stack-detail-members container to render"
+      refute tag =~ "overflow-y-auto"
+      refute tag =~ "overflow-auto"
     end
 
     test "meta-grid collapses to 2 cols on mobile and 4 cols on md+",

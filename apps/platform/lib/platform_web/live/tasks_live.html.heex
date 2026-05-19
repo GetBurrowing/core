@@ -2007,24 +2007,27 @@
        stages 2-5 fill in meta-grid, dep DAG, members list, and
        mobile takeover. Purple accent (#7b5cff) matches mock canvas
        019e1a16 rev 2 (.stk-tag style). --%>
-  <%!-- T8 stage 5: mobile takeover + sticky action bar.
-       Container responsive classes:
-       - On mobile (<md): `inset-0 max-w-full` so the panel fills the
-         viewport edge-to-edge as a full-screen takeover.
-       - On md+ (desktop): `md:inset-y-0 md:left-auto md:right-0
-         md:max-w-lg` reverts to the slide-in shape from stages 1-4.
-       Bottom edge mirrors PR #335's per-task panel pattern: stops at
-       the top of the bottom-nav (including iOS home-indicator safe-
-       area) via `bottom-[calc(env(safe-area-inset-bottom)+var(--bottom-
-       nav-height,0px))]` on the panel container itself. No
-       defense-in-depth `pb-` on the inner scroller — PR #335 stripped
-       that pattern as dead space. --%>
+  <%!-- T8 stage 5 (revised stage 1 of task 019e38c7): mobile takeover
+       + sticky action bar. Container shape mirrors the per-task detail
+       panel at line ~865 EXACTLY — explicit `top-0 right-0
+       bottom-[calc(...)]` with no `inset-0` shorthand. The old shape
+       used `inset-0 ... bottom-[calc(...)]`: Tailwind's same-specificity
+       ordering left `inset-0`'s `bottom:0` competing with the calc
+       override on mobile, which broke iOS WebKit's overflow
+       calculations and left the body unscrollable below the fold.
+       Mobile widens to full screen via `left-0 max-w-full`; md+ narrows
+       to a right-edge slide-in via `md:left-auto md:max-w-lg`. Bottom
+       edge stops at the top of the bottom-nav (including iOS home-
+       indicator safe-area) via `bottom-[calc(env(safe-area-inset-
+       bottom)+var(--bottom-nav-height,0px))]` on the panel container.
+       No defense-in-depth `pb-` on the inner scroller — PR #335
+       stripped that pattern as dead space. --%>
   <div
     :if={@show_stack_detail && @selected_stack}
     id="stack-detail-panel"
     data-role="stack-detail-panel"
     data-stack-id={@selected_stack.id}
-    class="fixed inset-0 md:inset-y-0 md:left-auto md:right-0 bottom-[calc(env(safe-area-inset-bottom)+var(--bottom-nav-height,0px))] z-30 flex w-full max-w-full md:max-w-lg flex-col border-l border-base-300 bg-base-100 shadow-xl safe-area-top"
+    class="fixed top-0 left-0 md:left-auto right-0 bottom-[calc(env(safe-area-inset-bottom)+var(--bottom-nav-height,0px))] z-30 flex w-full max-w-full md:max-w-lg flex-col border-l border-base-300 bg-base-100 shadow-xl safe-area-top"
   >
     <%!-- Head/app bar. On mobile the chrome is a back arrow + Stack
          tag + overflow kebab (matching the mock's `.detail-appbar`).
@@ -2263,8 +2266,14 @@
            one push_patches to /tasks/:id and closes this stack panel
            (close-and-open behavior — the per-task detail slides in to
            replace the stack panel). --%>
+      <%!-- Members column. The outer body scroller (`stack-detail-body`)
+           handles vertical overflow for the entire panel; the column
+           itself must NOT carry its own `overflow-y-auto` or iOS
+           WebKit's momentum scroll fights itself on mobile (the
+           single-column grid stacks DAG above members and the user
+           can't reach the bottom rows). See task 019e38c7 stage 1. --%>
       <div
-        class="flex flex-col gap-2 overflow-y-auto"
+        class="flex flex-col gap-2"
         data-role="stack-detail-members"
       >
         <div
