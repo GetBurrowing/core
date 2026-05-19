@@ -169,4 +169,129 @@ defmodule PlatformWeb.Components.Meeting.VideoTileTest do
       assert html =~ ~s(data-testid="strip-tile")
     end
   end
+
+  # ── Layout attr (task 019e412a) ───────────────────────────────────────────
+  #
+  # The bottom strip and the gallery grid both compose <.video_tile>, but
+  # they have different sizing contracts. The :layout attr is what keeps
+  # both correct.
+  #
+  # :strip = "tile fills the container's height, width follows from
+  # aspect-video" (fixed-height flex row contract). The strip caller
+  # supplies a fixed height (`h-[96px] lg:h-[120px]`) and tiles scroll
+  # horizontally; 16:9 is preserved because there is no orthogonal width
+  # constraint.
+  #
+  # :gallery = "tile preserves 16:9 AND grows to whichever cell dimension
+  # binds first, letterboxing the other axis". Pure-CSS aspect-ratio
+  # with both width and height explicit becomes intrinsic and is
+  # ignored, so the actual sizing is done by a CSS container query in
+  # `apps/platform/assets/css/app.css` under
+  # `[data-gallery-cell] > .meeting-video-tile` — that selector picks
+  # `height: 100%; width: auto` for wider-than-16:9 cells and
+  # `width: 100%; height: auto` for narrower-than-16:9 cells, with
+  # `max-w-full max-h-full` clamps. The outer tile element here
+  # therefore carries NO width/height/aspect-ratio classes; the CSS
+  # rule applies them based on the parent's aspect.
+  #
+  # Why not inline `aspect-video h-full` (3ee579f, REJECTED): no
+  # max-bound caused tiles to overflow / shrink to floating thumbnails.
+  #
+  # Why not inline `h-full w-full` (f1e16f1, REJECTED): forcing both
+  # axes to 100% inside a tall cell distorts faces vertically. Rowan:
+  # "it shouldn't go long vertically, it should still fit the aspect
+  # ratio."
+  #
+  # The tests below pin the new container-query contract — the outer
+  # tile class string is intentionally minimal so the CSS rule is the
+  # single source of truth for sizing.
+  describe "video_tile/1 — :layout attr" do
+    test "layout=:strip (default) keeps the bottom-strip class string" do
+      assigns = %{p: participant()}
+
+      html =
+        rendered_to_string(~H"""
+        <.video_tile participant={@p} />
+        """)
+
+      [_, outer_class] =
+        Regex.run(~r/class="([^"]*meeting-video-tile[^"]*)"/, html)
+
+      outer_tokens = String.split(outer_class)
+
+      assert "aspect-video" in outer_tokens
+      assert "h-full" in outer_tokens
+      assert "shrink-0" in outer_tokens
+      # Gallery-only classes must NOT leak into the strip default.
+      refute "max-h-full" in outer_tokens
+      refute "max-w-full" in outer_tokens
+      refute "w-auto" in outer_tokens
+      refute "h-auto" in outer_tokens
+    end
+
+    test "explicit layout=:strip is identical to the default" do
+      assigns = %{p: participant()}
+
+      html =
+        rendered_to_string(~H"""
+        <.video_tile participant={@p} layout={:strip} />
+        """)
+
+      [_, outer_class] =
+        Regex.run(~r/class="([^"]*meeting-video-tile[^"]*)"/, html)
+
+      outer_tokens = String.split(outer_class)
+
+      assert "aspect-video" in outer_tokens
+      assert "h-full" in outer_tokens
+      assert "shrink-0" in outer_tokens
+      refute "max-h-full" in outer_tokens
+      refute "w-auto" in outer_tokens
+    end
+
+    test "layout=:gallery emits no inline sizing classes — CSS container query owns it" do
+      assigns = %{p: participant()}
+
+      html =
+        rendered_to_string(~H"""
+        <.video_tile participant={@p} layout={:gallery} />
+        """)
+
+      # Extract the OUTER tile element's class string so substring
+      # matches against the inner data-video-slot (which has `h-full
+      # w-full` of its own) don't poison the assertion.
+      [_, outer_class] =
+        Regex.run(~r/class="([^"]*meeting-video-tile[^"]*)"/, html)
+
+      outer_tokens = String.split(outer_class)
+
+      # Base presentation tokens still come from the shared class
+      # string — these are the only tokens we keep on the outer.
+      assert "meeting-video-tile" in outer_tokens
+      assert "group" in outer_tokens
+      assert "relative" in outer_tokens
+      assert "overflow-hidden" in outer_tokens
+      assert "rounded-lg" in outer_tokens
+      assert "bg-base-300" in outer_tokens
+
+      # NO inline sizing classes on the outer. The CSS rule in
+      # `assets/css/app.css` (selector
+      # `[data-gallery-cell] > .meeting-video-tile`) declares
+      # `aspect-ratio: 16/9; max-width: 100%; max-height: 100%;` and
+      # then, via container queries on the parent cell's aspect
+      # ratio, picks `height: 100%; width: auto` (wider cells) or
+      # `width: 100%; height: auto` (narrower cells). Keeping the
+      # inline class list clean ensures Tailwind utilities don't
+      # override the container-query CSS.
+      refute "aspect-video" in outer_tokens
+      refute "h-full" in outer_tokens
+      refute "w-full" in outer_tokens
+      refute "h-auto" in outer_tokens
+      refute "w-auto" in outer_tokens
+      refute "max-h-full" in outer_tokens
+      refute "max-w-full" in outer_tokens
+      refute "shrink-0" in outer_tokens
+      refute "shrink" in outer_tokens
+    end
+  end
 end

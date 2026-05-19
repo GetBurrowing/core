@@ -1287,14 +1287,22 @@ defmodule PlatformWeb.MeetingLiveTest do
       # omitted from the gallery grid.
       assert html =~ ~s(data-gallery-tile-count="2")
       assert html =~ ~s(data-gallery-grid)
+      # Task 019e412a: the grid shape is participant-count-driven, and
+      # 2 humans yields a vertical stack (1 col × 2 rows) so each tile
+      # gets a wide-short cell where a 16:9 tile fits at near-full
+      # width — much bigger than what a 2x1 horizontal split would
+      # produce in a portrait gallery interior.
+      assert html =~ ~s(data-gallery-grid-shape="grid-cols-1 grid-rows-2")
 
       # Two video tiles, one per human; agent is omitted from the
       # gallery grid. Scope the count to the gallery section: the
       # bottom strip (sibling 019e2475-0037) also renders MeetingVideoTile
-      # hooks, so a global count would over-report.
+      # hooks, so a global count would over-report. Task 019e412a added
+      # a sibling `data-gallery-grid-shape` attr, so the split anchor
+      # uses a regex word boundary to land ONLY on the bare attribute.
       gallery_section =
-        case String.split(html, ~s(data-gallery-grid)) do
-          [_, after_grid | _] ->
+        case Regex.split(~r/data-gallery-grid(?![-\w])/, html, parts: 2) do
+          [_, after_grid] ->
             case String.split(after_grid, ~s(data-pane="bottom-strip")) do
               [grid_html | _] -> grid_html
               _ -> after_grid
@@ -1309,6 +1317,35 @@ defmodule PlatformWeb.MeetingLiveTest do
         |> length()
 
       assert tile_count == 2
+
+      # Task 019e412a (stage 2 fix v3): each tile is wrapped in a
+      # `[data-gallery-cell]` size container. The container query in
+      # `assets/css/app.css` picks the binding axis per cell aspect
+      # ratio. We pin the wrapper count and presence here; the
+      # outer-tile-class invariants live in video_tile_test.exs.
+      cell_count =
+        Regex.scan(~r/data-gallery-cell(?![-\w])/, gallery_section)
+        |> length()
+
+      assert cell_count == 2
+
+      # The grid container itself must still own the full center-stage
+      # area. Pull it out of the full html with a class regex (it's a
+      # unique element keyed by data-gallery-grid). The grid is
+      # `grid h-full w-full auto-rows-fr ... place-items-center` so
+      # cells partition the visible interior with no left-over space
+      # AND wrappers center in their cells (the wrapper itself fills
+      # the cell as a size container for the inner tile's container
+      # query).
+      [_, grid_class] =
+        Regex.run(~r/class="([^"]*)"\s+data-gallery-grid(?![-\w])/, html)
+
+      grid_tokens = String.split(grid_class)
+
+      assert "h-full" in grid_tokens
+      assert "w-full" in grid_tokens
+      assert "auto-rows-fr" in grid_tokens
+      assert "place-items-center" in grid_tokens
     end
 
     test "Screen → Gallery → Canvas preserves the canvas state in the LV assigns", %{
@@ -1445,13 +1482,19 @@ defmodule PlatformWeb.MeetingLiveTest do
       assert html =~ ~s(data-stage-mode="gallery")
       assert html =~ ~s(data-gallery-tile-count="3")
       assert html =~ ~s(data-gallery-grid)
+      # Task 019e412a (v3): 3 humans → 1x3 vertical stack, so the
+      # tall portrait gallery interior yields wide-short cells where
+      # 16:9 tiles fit at ~462×260 instead of ~200×113.
+      assert html =~ ~s(data-gallery-grid-shape="grid-cols-1 grid-rows-3")
 
       # Scope the count to the gallery grid block. There is no bottom
       # strip in gallery mode, so the entire suffix after [data-gallery-grid]
-      # is the grid section.
+      # is the grid section. Word-boundary split so the new sibling
+      # `data-gallery-grid-shape` attr (task 019e412a) doesn't fool the
+      # anchor.
       gallery_section =
-        case String.split(html, ~s(data-gallery-grid)) do
-          [_, after_grid | _] -> after_grid
+        case Regex.split(~r/data-gallery-grid(?![-\w])/, html, parts: 2) do
+          [_, after_grid] -> after_grid
           _ -> ""
         end
 
@@ -1460,6 +1503,42 @@ defmodule PlatformWeb.MeetingLiveTest do
         |> length()
 
       assert tile_count == 3
+    end
+
+    test "with 1 human participant, gallery uses the 1x1 grid shape",
+         %{conn: conn, meeting: meeting, space: space} do
+      {:ok, _} =
+        Chat.add_participant(space.id, %{
+          participant_type: "user",
+          participant_id: Ecto.UUID.generate(),
+          display_name: "Solo",
+          joined_at: DateTime.utc_now()
+        })
+
+      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      assert html =~ ~s(data-gallery-tile-count="1")
+      assert html =~ ~s(data-gallery-grid-shape="grid-cols-1 grid-rows-1")
+    end
+
+    test "with 6 human participants, gallery uses the responsive 1x6 / sm:3x2 grid shape",
+         %{conn: conn, meeting: meeting, space: space} do
+      for name <- ~w(Ada Grace Hedy Edith Karen Sophie) do
+        {:ok, _} =
+          Chat.add_participant(space.id, %{
+            participant_type: "user",
+            participant_id: Ecto.UUID.generate(),
+            display_name: name,
+            joined_at: DateTime.utc_now()
+          })
+      end
+
+      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      assert html =~ ~s(data-gallery-tile-count="6")
+
+      assert html =~
+               ~s(data-gallery-grid-shape="grid-cols-1 grid-rows-6 sm:grid-cols-3 sm:grid-rows-2")
     end
 
     test "identity alignment: gallery and strip use the same `\"user:\" <> pid` format",
@@ -1524,6 +1603,107 @@ defmodule PlatformWeb.MeetingLiveTest do
     test "gallery_identity/1 falls back to id and finally to a sentinel" do
       assert MeetingLive.gallery_identity(%{id: "row-7"}) == "user:row-7"
       assert MeetingLive.gallery_identity(%{}) == "user:unknown"
+    end
+  end
+
+  # ── gallery_grid_class/1 (task 019e412a) ────────────────────────────────
+  #
+  # Drives the responsive grid shape of the gallery wrapper based on the
+  # participant count. The function returns a Tailwind class STRING (not
+  # a list) so the .heex caller can splice it into a class= list literal
+  # without `Enum.join`. Every literal class string MUST be statically
+  # discoverable by Tailwind v4's content scanner — that's why the
+  # function body avoids `"grid-cols-#{n}"` style interpolation.
+  #
+  # Mobile/desktop split: at <sm (<640px viewport) the layout collapses
+  # to a vertical stack (or 2 cols for very high counts) so each tile
+  # keeps a legible width. At sm+ the prior desktop-optimized shape is
+  # restored via the `sm:` prefix. The 80px legibility floor was the
+  # specific failure on the case-3 (6 participants × 390px) e2e review.
+  describe "gallery_grid_class/1" do
+    alias PlatformWeb.MeetingLive
+
+    test "returns 1x1 for 0 or 1 participants (the gallery container is single-tile)" do
+      assert MeetingLive.gallery_grid_class(0) == "grid-cols-1 grid-rows-1"
+      assert MeetingLive.gallery_grid_class(1) == "grid-cols-1 grid-rows-1"
+    end
+
+    test "2 participants stack vertically (1x2) so each tile is wide, not narrow" do
+      # The desktop gallery interior is roughly portrait (~624×780). A
+      # 2-cols-1-row split yields 312×780 cells where a 16:9 tile is
+      # width-bounded at 312×175 — tiny and surrounded by vertical
+      # letterbox. Stacking 1x2 yields 624×390 cells where the tile
+      # fits at 624×351 — ~4× the per-tile area. This was Rowan's
+      # explicit feedback after the f1e16f1 fix. Already vertical on
+      # mobile too, so no sm: override needed.
+      assert MeetingLive.gallery_grid_class(2) == "grid-cols-1 grid-rows-2"
+    end
+
+    test "3 participants stack vertically (1x3) for the same reason as 2" do
+      # 1x3 in a 624×780 container gives 624×260 cells where the 16:9
+      # tile fits at 462×260 — much bigger than the 200×113 a 3x1
+      # split would have produced. Already vertical on mobile too.
+      assert MeetingLive.gallery_grid_class(3) == "grid-cols-1 grid-rows-3"
+    end
+
+    test "4 participants stack on mobile (1x4) and form a 2x2 square at sm+" do
+      assert MeetingLive.gallery_grid_class(4) ==
+               "grid-cols-1 grid-rows-4 sm:grid-cols-2 sm:grid-rows-2"
+    end
+
+    test "5..6 stack on mobile (1xN) and fit a 3x2 rectangle at sm+" do
+      # Case-3 of the original e2e (6 participants × 390px viewport)
+      # failed when the desktop 3x2 shape was applied on mobile —
+      # tiles came out 111×63, below the 80px legibility floor. The
+      # mobile 1x6 layout gives 6 × ~210px tall tiles in a scrollable
+      # container.
+      assert MeetingLive.gallery_grid_class(5) ==
+               "grid-cols-1 grid-rows-5 sm:grid-cols-3 sm:grid-rows-2"
+
+      assert MeetingLive.gallery_grid_class(6) ==
+               "grid-cols-1 grid-rows-6 sm:grid-cols-3 sm:grid-rows-2"
+    end
+
+    test "7..9 stack on mobile (1xN) and fit a 3x3 square at sm+" do
+      assert MeetingLive.gallery_grid_class(7) ==
+               "grid-cols-1 grid-rows-7 sm:grid-cols-3 sm:grid-rows-3"
+
+      assert MeetingLive.gallery_grid_class(8) ==
+               "grid-cols-1 grid-rows-8 sm:grid-cols-3 sm:grid-rows-3"
+
+      assert MeetingLive.gallery_grid_class(9) ==
+               "grid-cols-1 grid-rows-9 sm:grid-cols-3 sm:grid-rows-3"
+    end
+
+    test "10..12 use 2 cols on mobile and fit a 4x3 rectangle at sm+" do
+      # At 10+ participants, single-column stacking gets unwieldy on
+      # mobile (10+ tiles × ~210px = 2100+ px of scroll). Switching to
+      # 2 cols keeps tile width ~180px (above the 80px floor) and
+      # halves the scroll distance.
+      assert MeetingLive.gallery_grid_class(10) ==
+               "grid-cols-2 grid-rows-5 sm:grid-cols-4 sm:grid-rows-3"
+
+      assert MeetingLive.gallery_grid_class(11) ==
+               "grid-cols-2 grid-rows-6 sm:grid-cols-4 sm:grid-rows-3"
+
+      assert MeetingLive.gallery_grid_class(12) ==
+               "grid-cols-2 grid-rows-6 sm:grid-cols-4 sm:grid-rows-3"
+    end
+
+    test "13..16 use 2 cols on mobile and fit a 4x4 square at sm+" do
+      assert MeetingLive.gallery_grid_class(13) ==
+               "grid-cols-2 grid-rows-7 sm:grid-cols-4 sm:grid-rows-4"
+
+      assert MeetingLive.gallery_grid_class(16) ==
+               "grid-cols-2 grid-rows-8 sm:grid-cols-4 sm:grid-rows-4"
+    end
+
+    test "17+ use 2 cols on mobile (bounded scroll) and 5x4 at sm+ with overflow" do
+      assert MeetingLive.gallery_grid_class(17) ==
+               "grid-cols-2 grid-rows-8 sm:grid-cols-5 sm:grid-rows-4"
+
+      assert MeetingLive.gallery_grid_class(100) ==
+               "grid-cols-2 grid-rows-8 sm:grid-cols-5 sm:grid-rows-4"
     end
   end
 

@@ -832,6 +832,65 @@ defmodule PlatformWeb.MeetingLive do
   def gallery_identity(%{id: id}) when is_binary(id) and id != "", do: "user:" <> id
   def gallery_identity(_), do: "user:unknown"
 
+  @doc """
+  Pick the grid shape (Tailwind class string) that maximizes per-tile area
+  for `count` 16:9 tiles in a roughly-portrait container (typical desktop
+  gallery interior is taller than wide once the bottom strip is hidden).
+  Returns the full `grid-cols-N` class plus a matching `grid-rows-M` class
+  so `auto-rows-fr` partitions the height evenly.
+
+  Mobile (< sm = <640px) defaults to a vertical stack so each tile keeps
+  legible width — at 390px viewport a horizontal split into 3 columns
+  yields ~111×63 tiles which fall below the 80px legibility floor. The
+  `sm:` prefix restores the desktop-optimized shape from `sm` upward.
+
+  Shapes (mobile / sm+ cols x rows):
+    1 -> 1x1 / 1x1
+    2 -> 1x2 / 1x2 (already vertical on both)
+    3 -> 1x3 / 1x3 (already vertical on both)
+    4 -> 1x4 / 2x2
+    5..6 -> 1xN / 3x2
+    7..9 -> 1xN / 3x3
+    10..12 -> 2xceil(N/2) / 4x3
+    13..16 -> 2xceil(N/2) / 4x4
+    17+ -> 2xceil(N/2) / 5x4 with overflow.
+
+  Why vertical stacking for 2 and 3 participants on desktop? In a roughly-
+  portrait gallery container (e.g. 624×780 desktop interior), splitting
+  horizontally into 2..3 columns yields tall, narrow cells (~312×780 or
+  200×780). A 16:9 tile centered in those cells is width-bounded and
+  tiny (312×175 or 200×113) with massive top/bottom letterboxing —
+  that's the "thumbnail floating in cell" look Rowan rejected.
+  Stacking vertically (1 col × 2..3 rows) gives wide-but-short cells
+  (624×390 or 624×260) where the 16:9 tile fits at 624×351 or 462×260
+  — roughly 4× the per-tile area for 2p.
+
+  Both axes are explicit-class so Tailwind's content scanner picks them up
+  as literal strings in the helper body (which is itself in a `.heex`-
+  reachable module). Don't switch to interpolation like
+  `"grid-cols-\#{n}"` — that goes invisible to the JIT.
+  """
+  @spec gallery_grid_class(non_neg_integer()) :: String.t()
+  def gallery_grid_class(count)
+  def gallery_grid_class(0), do: "grid-cols-1 grid-rows-1"
+  def gallery_grid_class(1), do: "grid-cols-1 grid-rows-1"
+  def gallery_grid_class(2), do: "grid-cols-1 grid-rows-2"
+  def gallery_grid_class(3), do: "grid-cols-1 grid-rows-3"
+  def gallery_grid_class(4), do: "grid-cols-1 grid-rows-4 sm:grid-cols-2 sm:grid-rows-2"
+  def gallery_grid_class(5), do: "grid-cols-1 grid-rows-5 sm:grid-cols-3 sm:grid-rows-2"
+  def gallery_grid_class(6), do: "grid-cols-1 grid-rows-6 sm:grid-cols-3 sm:grid-rows-2"
+  def gallery_grid_class(7), do: "grid-cols-1 grid-rows-7 sm:grid-cols-3 sm:grid-rows-3"
+  def gallery_grid_class(8), do: "grid-cols-1 grid-rows-8 sm:grid-cols-3 sm:grid-rows-3"
+  def gallery_grid_class(9), do: "grid-cols-1 grid-rows-9 sm:grid-cols-3 sm:grid-rows-3"
+  def gallery_grid_class(10), do: "grid-cols-2 grid-rows-5 sm:grid-cols-4 sm:grid-rows-3"
+  def gallery_grid_class(11), do: "grid-cols-2 grid-rows-6 sm:grid-cols-4 sm:grid-rows-3"
+  def gallery_grid_class(12), do: "grid-cols-2 grid-rows-6 sm:grid-cols-4 sm:grid-rows-3"
+  def gallery_grid_class(13), do: "grid-cols-2 grid-rows-7 sm:grid-cols-4 sm:grid-rows-4"
+  def gallery_grid_class(14), do: "grid-cols-2 grid-rows-7 sm:grid-cols-4 sm:grid-rows-4"
+  def gallery_grid_class(15), do: "grid-cols-2 grid-rows-8 sm:grid-cols-4 sm:grid-rows-4"
+  def gallery_grid_class(16), do: "grid-cols-2 grid-rows-8 sm:grid-cols-4 sm:grid-rows-4"
+  def gallery_grid_class(_n), do: "grid-cols-2 grid-rows-8 sm:grid-cols-5 sm:grid-rows-4"
+
   # ── Participant rail helpers (task 019e2475-4395) ────────────────────────
   #
   # Used by `PlatformWeb.Components.Meetings.ParticipantRail` to drive the

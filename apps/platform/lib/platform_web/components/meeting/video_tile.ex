@@ -45,6 +45,14 @@ defmodule PlatformWeb.Components.Meeting.VideoTile do
   attr(:speaking?, :boolean, default: false, doc: "renders active-speaker ring when true")
   attr(:avatar_url, :string, default: nil, doc: "avatar image for camera-off fallback")
   attr(:class, :any, default: nil, doc: "extra classes for the outer tile element")
+
+  attr(:layout, :atom,
+    default: :strip,
+    values: [:strip, :gallery],
+    doc:
+      "sizing strategy. :strip keeps `aspect-video h-full` for the fixed-height bottom strip; :gallery uses `aspect-video max-w-full max-h-full w-auto h-auto` so the tile preserves 16:9 and grows to whichever cell dimension fits first, letterboxing the other axis. The grid caller pairs this with `place-items-center` to center the tile in its cell."
+  )
+
   attr(:rest, :global)
 
   def video_tile(assigns) do
@@ -66,7 +74,7 @@ defmodule PlatformWeb.Components.Meeting.VideoTile do
       data-meeting-video-tile
       class={[
         "meeting-video-tile group relative overflow-hidden rounded-lg bg-base-300",
-        "aspect-video h-full shrink-0",
+        tile_layout_classes(@layout),
         @speaking? && "ring-2 ring-primary",
         @class
       ]}
@@ -111,6 +119,51 @@ defmodule PlatformWeb.Components.Meeting.VideoTile do
     </div>
     """
   end
+
+  # ── Sizing strategy ────────────────────────────────────────────────────────
+  # :strip is the original bottom-strip contract — the caller provides a
+  # fixed-height container (e.g. `h-[96px] lg:h-[120px]`) and the tile
+  # derives its width from 16:9. `h-full shrink-0` is correct there
+  # because there is no orthogonal width constraint to compete with.
+  #
+  # :gallery is the responsive-grid contract — the cell has BOTH a width
+  # AND a height (from `auto-rows-fr` + `grid-cols-N grid-rows-M`). The
+  # tile must PRESERVE 16:9 (no horizontal/vertical stretching that
+  # distorts faces) AND grow as large as the cell allows, letterboxing
+  # the unused axis with the grid container's `place-items-center`.
+  #
+  # `aspect-video max-w-full max-h-full w-auto h-auto` does exactly this:
+  # the aspect-video sets a 16:9 intrinsic ratio; max-w/max-h caps growth
+  # at the cell bounds; w-auto/h-auto lets the larger axis breathe to
+  # whichever dimension is the binding constraint. Pairing with
+  # `place-items-center` on the grid centers the tile in its cell.
+  #
+  # Why not `h-full w-full` (f1e16f1, REJECTED): forcing both axes to
+  # 100% inside a tall cell (e.g. 312×780 for 2p sideways) makes the
+  # tile 312×780 — tall, narrow, distorted. Rowan: "it shouldn't go long
+  # vertically".
+  #
+  # Why not bare `aspect-video h-full` (3ee579f, REJECTED): without
+  # max-bounds the tile blows past the cell in the unconstrained axis
+  # and the layout collapses to a small floating thumbnail.
+  # Gallery sizing: the tile preserves 16:9 AND grows as large as
+  # possible within its cell, letterboxing the unused axis. Pure-CSS
+  # `aspect-ratio` with explicit width AND height becomes intrinsic
+  # (effectively ignored), so we use a CSS container query keyed off
+  # the cell's aspect ratio to pick the binding axis (height-bound
+  # for wider-than-16:9 cells, width-bound for narrower-than-16:9
+  # cells). The actual CSS lives in `apps/platform/assets/css/app.css`
+  # under the `[data-gallery-cell] > .meeting-video-tile` selector
+  # — see the comment block there. Here we keep the class string
+  # minimal so the @container rules can take over.
+  #
+  # `:strip` is the original bottom-strip contract — the caller
+  # provides a fixed-height container and tiles derive width from
+  # 16:9. `h-full shrink-0` is correct because the strip has no
+  # orthogonal width constraint.
+  defp tile_layout_classes(:gallery), do: ""
+
+  defp tile_layout_classes(_), do: "aspect-video h-full shrink-0"
 
   # ── Participant field extraction ───────────────────────────────────────────
   # Tolerant of both maps and structs; falls back gracefully so a partially

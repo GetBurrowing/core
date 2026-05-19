@@ -446,23 +446,42 @@
                 </div>
               <% else %>
                 <div
-                  class="grid h-full w-full auto-rows-fr gap-2 overflow-y-auto p-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4"
+                  class={[
+                    "grid h-full w-full auto-rows-fr gap-2 overflow-y-auto p-1 place-items-center",
+                    gallery_grid_class(length(gallery_participants(assigns[:participants] || [])))
+                  ]}
                   data-gallery-grid
+                  data-gallery-grid-shape={
+                    gallery_grid_class(length(gallery_participants(assigns[:participants] || [])))
+                  }
                 >
-                  <.video_tile
+                  <%!-- Each cell is a `[data-gallery-cell]` size container
+                       (container-type: size). The tile inside uses a
+                       container query to pick its binding axis based
+                       on cell aspect ratio — see the
+                       `[data-gallery-cell] > .meeting-video-tile` CSS
+                       block in `apps/platform/assets/css/app.css`. The
+                       wrapper fills its grid cell so the container
+                       query has dimensions to work with. --%>
+                  <div
                     :for={p <- gallery_participants(assigns[:participants] || [])}
-                    participant={
-                      %{
-                        identity: gallery_identity(p),
-                        name: p.display_name || "Participant"
+                    class="grid h-full w-full place-items-center"
+                    data-gallery-cell
+                  >
+                    <.video_tile
+                      participant={
+                        %{
+                          identity: gallery_identity(p),
+                          name: p.display_name || "Participant"
+                        }
                       }
-                    }
-                    video_track={false}
-                    audio_muted?={false}
-                    speaking?={false}
-                    avatar_url={Map.get(p, :avatar_url)}
-                    class="h-full w-full"
-                  />
+                      video_track={false}
+                      audio_muted?={false}
+                      speaking?={false}
+                      avatar_url={Map.get(p, :avatar_url)}
+                      layout={:gallery}
+                    />
+                  </div>
                 </div>
               <% end %>
             </div>
