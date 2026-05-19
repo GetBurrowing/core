@@ -299,12 +299,15 @@ defmodule PlatformWeb.ChatLive.MessagesHooks do
             (socket.assigns[:rendered_message_ids] || MapSet.new())
             |> MapSet.union(MapSet.new(new_ids))
 
-          # Prepend each labelled message to the stream. `at: 0` puts the
-          # newest of `labelled` (the bottom of the older batch) closest
-          # to the existing top — so iterating ASC and inserting at 0
-          # gives the correct visual order (oldest at the very top).
+          # Prepend each labelled message to the stream. Consecutive
+          # `at: 0` inserts REVERSE the iteration order (each new item
+          # becomes the new index 0, shoving the previous one down), so
+          # iterate `labelled` from newest → oldest. That lands the
+          # oldest item at index 0 (top of stream) and the newest just
+          # above the existing top — giving ASC visual order within the
+          # batch.
           socket =
-            Enum.reduce(labelled, socket, fn msg, acc ->
+            Enum.reduce(Enum.reverse(labelled), socket, fn msg, acc ->
               stream_insert(acc, :messages, msg, at: 0)
             end)
             |> assign(:attachments_map, merged_attachments)
