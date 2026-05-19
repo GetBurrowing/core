@@ -1,7 +1,15 @@
+// Default width matches the expanded icon-rail (w-56 = 224px) so the channel
+// rail visually aligns with the primary nav on first paint.
+//
+// Key is :v2 so any saved value from the previous (208px) default is ignored
+// once — the next drag-resize re-pins under the new key.
+const STORAGE_KEY = "suite:sidebar_width:v2";
+const DEFAULT_WIDTH = 224;
+
 const ResizableSidebar = {
   mounted() {
-    const saved = localStorage.getItem("suite:sidebar_width");
-    const initialWidth = saved ? parseInt(saved, 10) : 208;
+    const saved = localStorage.getItem(STORAGE_KEY);
+    const initialWidth = saved ? parseInt(saved, 10) : DEFAULT_WIDTH;
     this.el.style.width = initialWidth + "px";
 
     this._handle = this.el.querySelector("[data-drag-handle]");
@@ -26,7 +34,7 @@ const ResizableSidebar = {
       document.body.classList.remove("sidebar-resizing");
       document.removeEventListener("mousemove", this._onMouseMove);
       document.removeEventListener("mouseup", this._onMouseUp);
-      localStorage.setItem("suite:sidebar_width", parseInt(this.el.style.width, 10));
+      localStorage.setItem(STORAGE_KEY, parseInt(this.el.style.width, 10));
     };
 
     this._handle.addEventListener("mousedown", this._onMouseDown);
