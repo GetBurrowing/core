@@ -13,6 +13,21 @@ defmodule Platform.Federation.ToolSurfaceOrgContextTest do
     Repo.delete_all(WikiJournalEntry)
   end
 
+  # Insert an alias row via raw SQL — the migration uses pure SQL so
+  # there's no Ecto schema for `org_wiki_aliases`. Used by the
+  # legacy-alias-resolution tests to seed a row pointing at a
+  # path-style canonical page.
+  defp seed_legacy_alias!(old_path, page_id) do
+    Ecto.Adapters.SQL.query!(
+      Repo,
+      "INSERT INTO org_wiki_aliases (old_path, current_id, inserted_at) " <>
+        "VALUES ($1, $2, now()) ON CONFLICT (old_path) DO NOTHING",
+      [old_path, Ecto.UUID.dump!(page_id)]
+    )
+
+    :ok
+  end
+
   describe "tool_definitions/0 includes org context tools" do
     test "includes all 5 org context tools" do
       tools = ToolSurface.tool_definitions()
@@ -48,25 +63,42 @@ defmodule Platform.Federation.ToolSurfaceOrgContextTest do
   end
 
   describe "org_context_read" do
-    test "returns file content when file exists" do
+    test "returns file content when file exists (path-style key)" do
       clear_seeded_data()
 
       {:ok, _file} =
-        OrgContext.upsert_context_file("ORG_IDENTITY.md", %{content: "We are Acme Corp"})
+        OrgContext.upsert_context_file("org/identity.md", %{content: "We are Acme Corp"})
 
+      {:ok, result} =
+        ToolSurface.execute("org_context_read", %{"file_key" => "org/identity.md"}, %{})
+
+      assert result.file_key == "org/identity.md"
+      assert result.content == "We are Acme Corp"
+      assert result.version == 1
+    end
+
+    test "alias resolves legacy ORG_IDENTITY.md → org/identity.md" do
+      clear_seeded_data()
+
+      # Seed the post-migration state: canonical path-style row + alias row.
+      {:ok, page} =
+        OrgContext.upsert_context_file("org/identity.md", %{content: "We are Acme Corp"})
+
+      seed_legacy_alias!("ORG_IDENTITY.md", page.id)
+
+      # V1 federation call with the legacy key still resolves through aliases.
       {:ok, result} =
         ToolSurface.execute("org_context_read", %{"file_key" => "ORG_IDENTITY.md"}, %{})
 
-      assert result.file_key == "ORG_IDENTITY.md"
+      assert result.file_key == "org/identity.md"
       assert result.content == "We are Acme Corp"
-      assert result.version == 1
     end
 
     test "returns error when file not found" do
       clear_seeded_data()
 
       {:error, error} =
-        ToolSurface.execute("org_context_read", %{"file_key" => "NONEXISTENT_FILE.md"}, %{})
+        ToolSurface.execute("org_context_read", %{"file_key" => "nonexistent/file.md"}, %{})
 
       assert error.error =~ "Context file not found"
       assert error.recoverable == true
@@ -81,17 +113,17 @@ defmodule Platform.Federation.ToolSurfaceOrgContextTest do
   end
 
   describe "org_context_write" do
-    test "creates a new context file" do
+    test "creates a new context file (path-style key)" do
       clear_seeded_data()
 
       {:ok, result} =
         ToolSurface.execute(
           "org_context_write",
-          %{"file_key" => "ORG_AGENTS.md", "content" => "Be excellent"},
+          %{"file_key" => "org/agents.md", "content" => "Be excellent"},
           %{}
         )
 
-      assert result.file_key == "ORG_AGENTS.md"
+      assert result.file_key == "org/agents.md"
       assert result.content == "Be excellent"
       assert result.version == 1
     end
@@ -100,7 +132,26 @@ defmodule Platform.Federation.ToolSurfaceOrgContextTest do
       clear_seeded_data()
 
       {:ok, _} =
-        OrgContext.upsert_context_file("ORG_AGENTS.md", %{content: "Version 1"})
+        OrgContext.upsert_context_file("org/agents.md", %{content: "Version 1"})
+
+      {:ok, result} =
+        ToolSurface.execute(
+          "org_context_write",
+          %{"file_key" => "org/agents.md", "content" => "Version 2"},
+          %{}
+        )
+
+      assert result.content == "Version 2"
+      assert result.version == 2
+    end
+
+    test "write via legacy key resolves to aliased canonical row" do
+      clear_seeded_data()
+
+      {:ok, page} =
+        OrgContext.upsert_context_file("org/agents.md", %{content: "Version 1"})
+
+      seed_legacy_alias!("ORG_AGENTS.md", page.id)
 
       {:ok, result} =
         ToolSurface.execute(
@@ -109,25 +160,28 @@ defmodule Platform.Federation.ToolSurfaceOrgContextTest do
           %{}
         )
 
+      # Wrote back to the canonical row — no new file created.
+      assert result.file_key == "org/agents.md"
       assert result.content == "Version 2"
       assert result.version == 2
+      assert Repo.aggregate(WikiPage, :count) == 1
     end
 
     test "returns version conflict error with stale expected_version" do
       clear_seeded_data()
 
       {:ok, _} =
-        OrgContext.upsert_context_file("ORG_AGENTS.md", %{content: "V1"})
+        OrgContext.upsert_context_file("org/agents.md", %{content: "V1"})
 
       # Update to v2
       {:ok, _} =
-        OrgContext.upsert_context_file("ORG_AGENTS.md", %{content: "V2"})
+        OrgContext.upsert_context_file("org/agents.md", %{content: "V2"})
 
       {:error, error} =
         ToolSurface.execute(
           "org_context_write",
           %{
-            "file_key" => "ORG_AGENTS.md",
+            "file_key" => "org/agents.md",
             "content" => "V3",
             "expected_version" => 1
           },
@@ -148,7 +202,7 @@ defmodule Platform.Federation.ToolSurfaceOrgContextTest do
 
     test "returns error when content is missing" do
       {:error, error} =
-        ToolSurface.execute("org_context_write", %{"file_key" => "ORG_IDENTITY.md"}, %{})
+        ToolSurface.execute("org_context_write", %{"file_key" => "org/identity.md"}, %{})
 
       assert error.error =~ "content is required"
       assert error.recoverable == true
@@ -163,17 +217,17 @@ defmodule Platform.Federation.ToolSurfaceOrgContextTest do
       assert result == []
     end
 
-    test "returns all context files" do
+    test "returns all context files with path-style keys" do
       clear_seeded_data()
 
-      {:ok, _} = OrgContext.upsert_context_file("ORG_IDENTITY.md", %{content: "A"})
-      {:ok, _} = OrgContext.upsert_context_file("ORG_MEMORY.md", %{content: "B"})
+      {:ok, _} = OrgContext.upsert_context_file("org/identity.md", %{content: "A"})
+      {:ok, _} = OrgContext.upsert_context_file("org/memory.md", %{content: "B"})
 
       {:ok, result} = ToolSurface.execute("org_context_list", %{}, %{})
 
       keys = Enum.map(result, & &1.file_key)
-      assert "ORG_IDENTITY.md" in keys
-      assert "ORG_MEMORY.md" in keys
+      assert "org/identity.md" in keys
+      assert "org/memory.md" in keys
     end
   end
 

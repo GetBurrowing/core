@@ -242,7 +242,8 @@ defmodule Platform.Federation.ToolSurface do
           file_key: %{
             type: "string",
             required: true,
-            description: "The key identifying the context file (e.g. 'ORG_IDENTITY.md')"
+            description:
+              "The key identifying the context file (e.g. 'org/identity.md'). Legacy uppercase keys like 'ORG_IDENTITY.md' still resolve via the alias table."
           },
           workspace_id: %{
             type: "string",
@@ -263,7 +264,8 @@ defmodule Platform.Federation.ToolSurface do
           file_key: %{
             type: "string",
             required: true,
-            description: "The key identifying the context file (e.g. 'ORG_IDENTITY.md')"
+            description:
+              "The key identifying the context file (e.g. 'org/identity.md'). Legacy uppercase keys like 'ORG_IDENTITY.md' still resolve via the alias table."
           },
           content: %{
             type: "string",
@@ -313,7 +315,7 @@ defmodule Platform.Federation.ToolSurface do
       %{
         name: "org_memory_append",
         description:
-          "Append a short-lived memory entry — a note about today's activity. Entries are append-only, surface in agent context as `ORG_NOTES-YYYY-MM-DD` for the last 2 days. For curated long-term knowledge (decisions, patterns, lessons), update `ORG_MEMORY.md` via `org_context_write` instead.",
+          "Append a short-lived memory entry — a note about today's activity. Entries are append-only, surface in agent context as `ORG_NOTES-YYYY-MM-DD` for the last 2 days. For curated long-term knowledge (decisions, patterns, lessons), update `org/memory.md` via `org_context_write` instead.",
         parameters: %{
           content: %{
             type: "string",
@@ -344,7 +346,7 @@ defmodule Platform.Federation.ToolSurface do
         returns: "The created memory entry with id, content, date, and timestamps",
         limitations: "Memory entries are append-only and cannot be edited or deleted.",
         when_to_use:
-          "When you need to record short-lived observations or notes about today's activity. For long-term knowledge, use `org_context_write` on `ORG_MEMORY.md`."
+          "When you need to record short-lived observations or notes about today's activity. For long-term knowledge, use `org_context_write` on `org/memory.md`."
       },
       %{
         name: "org_memory_search",
@@ -383,7 +385,7 @@ defmodule Platform.Federation.ToolSurface do
         limitations:
           "Falls back to substring matching when no external memory service is configured. Default limit is 50.",
         when_to_use:
-          "When you need to recall past observations or notes from org memory entries. For long-term curated knowledge, read `ORG_MEMORY.md` via `org_context_read` instead."
+          "When you need to recall past observations or notes from org memory entries. For long-term curated knowledge, read `org/memory.md` via `org_context_read` instead."
       }
     ]
   end
@@ -4035,7 +4037,7 @@ defmodule Platform.Federation.ToolSurface do
        %{
          error: "file_key is required",
          recoverable: true,
-         suggestion: "Provide a file_key such as 'ORG_IDENTITY.md'"
+         suggestion: "Provide a file_key such as 'org/identity.md'"
        }}
     else
       workspace_id = Map.get(args, "workspace_id")
@@ -4065,7 +4067,7 @@ defmodule Platform.Federation.ToolSurface do
          %{
            error: "file_key is required",
            recoverable: true,
-           suggestion: "Provide a file_key such as 'ORG_IDENTITY.md'"
+           suggestion: "Provide a file_key such as 'org/identity.md'"
          }}
 
       is_nil(content) ->

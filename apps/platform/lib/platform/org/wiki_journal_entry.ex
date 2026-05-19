@@ -3,7 +3,7 @@ defmodule Platform.Org.WikiJournalEntry do
   Schema for org-level wiki journal entries — short-lived, append-only notes.
 
   Entries surface in agent context as `ORG_NOTES-YYYY-MM-DD` (last 2 days).
-  For curated long-term knowledge, use `ORG_MEMORY.md` via `Platform.Org.Context.upsert_context_file/3`.
+  For curated long-term knowledge, use `org/memory.md` via `Platform.Org.Context.upsert_context_file/3`.
   """
 
   use Ecto.Schema

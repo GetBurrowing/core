@@ -21,16 +21,16 @@ defmodule Platform.Org.ContextModuleTest do
   describe "get_context_file/2" do
     test "returns nil when file does not exist" do
       clear_seeded_files()
-      assert Context.get_context_file("ORG_IDENTITY.md") == nil
+      assert Context.get_context_file("org/identity.md") == nil
     end
 
-    test "returns file by file_key" do
+    test "returns file by path-style file_key" do
       clear_seeded_files()
 
       {:ok, _} =
-        Context.upsert_context_file("ORG_IDENTITY.md", %{content: "hello"})
+        Context.upsert_context_file("org/identity.md", %{content: "hello"})
 
-      file = Context.get_context_file("ORG_IDENTITY.md")
+      file = Context.get_context_file("org/identity.md")
       assert file.content == "hello"
     end
 
@@ -39,13 +39,13 @@ defmodule Platform.Org.ContextModuleTest do
       ws = Ecto.UUID.generate()
 
       {:ok, _} =
-        Context.upsert_context_file("ORG_IDENTITY.md", %{content: "default"})
+        Context.upsert_context_file("org/identity.md", %{content: "default"})
 
       {:ok, _} =
-        Context.upsert_context_file("ORG_IDENTITY.md", %{content: "workspace"}, workspace_id: ws)
+        Context.upsert_context_file("org/identity.md", %{content: "workspace"}, workspace_id: ws)
 
-      assert Context.get_context_file("ORG_IDENTITY.md").content == "default"
-      assert Context.get_context_file("ORG_IDENTITY.md", ws).content == "workspace"
+      assert Context.get_context_file("org/identity.md").content == "default"
+      assert Context.get_context_file("org/identity.md", ws).content == "workspace"
     end
   end
 
@@ -53,12 +53,12 @@ defmodule Platform.Org.ContextModuleTest do
     test "returns all files for default workspace" do
       clear_seeded_files()
 
-      {:ok, _} = Context.upsert_context_file("ORG_IDENTITY.md", %{content: "a"})
-      {:ok, _} = Context.upsert_context_file("ORG_MEMORY.md", %{content: "b"})
+      {:ok, _} = Context.upsert_context_file("org/identity.md", %{content: "a"})
+      {:ok, _} = Context.upsert_context_file("org/memory.md", %{content: "b"})
 
       files = Context.list_context_files()
       assert length(files) == 2
-      assert Enum.map(files, & &1.file_key) == ["ORG_IDENTITY.md", "ORG_MEMORY.md"]
+      assert Enum.map(files, & &1.file_key) == ["org/identity.md", "org/memory.md"]
     end
   end
 
@@ -67,7 +67,7 @@ defmodule Platform.Org.ContextModuleTest do
       clear_seeded_files()
 
       {:ok, file} =
-        Context.upsert_context_file("ORG_IDENTITY.md", %{content: "new"})
+        Context.upsert_context_file("org/identity.md", %{content: "new"})
 
       assert file.version == 1
       assert file.content == "new"
@@ -76,10 +76,10 @@ defmodule Platform.Org.ContextModuleTest do
     test "updates existing file and increments version" do
       clear_seeded_files()
 
-      {:ok, v1} = Context.upsert_context_file("ORG_IDENTITY.md", %{content: "v1"})
+      {:ok, v1} = Context.upsert_context_file("org/identity.md", %{content: "v1"})
       assert v1.version == 1
 
-      {:ok, v2} = Context.upsert_context_file("ORG_IDENTITY.md", %{content: "v2"})
+      {:ok, v2} = Context.upsert_context_file("org/identity.md", %{content: "v2"})
       assert v2.version == 2
       assert v2.content == "v2"
     end
@@ -87,10 +87,10 @@ defmodule Platform.Org.ContextModuleTest do
     test "returns {:error, :stale} on version mismatch" do
       clear_seeded_files()
 
-      {:ok, _v1} = Context.upsert_context_file("ORG_IDENTITY.md", %{content: "v1"})
+      {:ok, _v1} = Context.upsert_context_file("org/identity.md", %{content: "v1"})
 
       assert {:error, :stale} =
-               Context.upsert_context_file("ORG_IDENTITY.md", %{content: "conflict"},
+               Context.upsert_context_file("org/identity.md", %{content: "conflict"},
                  expected_version: 999
                )
     end
@@ -98,10 +98,10 @@ defmodule Platform.Org.ContextModuleTest do
     test "succeeds with correct expected_version" do
       clear_seeded_files()
 
-      {:ok, v1} = Context.upsert_context_file("ORG_IDENTITY.md", %{content: "v1"})
+      {:ok, v1} = Context.upsert_context_file("org/identity.md", %{content: "v1"})
 
       {:ok, v2} =
-        Context.upsert_context_file("ORG_IDENTITY.md", %{content: "v2"},
+        Context.upsert_context_file("org/identity.md", %{content: "v2"},
           expected_version: v1.version
         )
 
@@ -117,16 +117,78 @@ defmodule Platform.Org.ContextModuleTest do
         ])
 
       {:ok, _file} =
-        Context.upsert_context_file("ORG_IDENTITY.md", %{content: "telemetry test"})
+        Context.upsert_context_file("org/identity.md", %{content: "telemetry test"})
 
       assert_received {[:platform, :org, :context_file_written], ^ref, %{system_time: _},
-                       %{file_key: "ORG_IDENTITY.md", version: 1, workspace_id: nil}}
+                       %{file_key: "org/identity.md", version: 1, workspace_id: nil}}
 
       # Update also emits
-      {:ok, _} = Context.upsert_context_file("ORG_IDENTITY.md", %{content: "v2"})
+      {:ok, _} = Context.upsert_context_file("org/identity.md", %{content: "v2"})
 
       assert_received {[:platform, :org, :context_file_written], ^ref, %{system_time: _},
-                       %{file_key: "ORG_IDENTITY.md", version: 2, workspace_id: nil}}
+                       %{file_key: "org/identity.md", version: 2, workspace_id: nil}}
+    end
+  end
+
+  # ── Legacy V1 alias resolution ───────────────────────────────────────
+
+  describe "V1 alias compat: legacy uppercase keys resolve through org_wiki_aliases" do
+    setup do
+      clear_seeded_files()
+
+      # Simulate the post-migration state: a canonical path-style row
+      # plus an alias row pointing at it. This is what the data migration
+      # at priv/repo/migrations/20260519210000_*.exs produces for every
+      # legacy row at upgrade time.
+      {:ok, page} =
+        %WikiPage{}
+        |> WikiPage.changeset(%{file_key: "org/identity.md", content: "We are Acme"})
+        |> Repo.insert()
+
+      seed_legacy_alias!("ORG_IDENTITY.md", page.id)
+
+      %{page: page}
+    end
+
+    # Insert an alias row via raw SQL — the migration uses pure SQL so
+    # there's no Ecto schema for `org_wiki_aliases`, and a fragment-based
+    # insert here is the cleanest way to seed one in tests.
+    defp seed_legacy_alias!(old_path, page_id) do
+      Ecto.Adapters.SQL.query!(
+        Repo,
+        "INSERT INTO org_wiki_aliases (old_path, current_id, inserted_at) " <>
+          "VALUES ($1, $2, now()) ON CONFLICT (old_path) DO NOTHING",
+        [old_path, Ecto.UUID.dump!(page_id)]
+      )
+
+      :ok
+    end
+
+    test "get_context_file/2 resolves legacy ORG_IDENTITY.md → org/identity.md", %{page: page} do
+      assert resolved = Context.get_context_file("ORG_IDENTITY.md")
+      assert resolved.id == page.id
+      assert resolved.file_key == "org/identity.md"
+      assert resolved.content == "We are Acme"
+    end
+
+    test "path-style and legacy lookups return the same row", %{page: page} do
+      direct = Context.get_context_file("org/identity.md")
+      via_alias = Context.get_context_file("ORG_IDENTITY.md")
+      assert direct.id == via_alias.id
+      assert direct.id == page.id
+    end
+
+    test "upsert via legacy key writes back to the aliased canonical row", %{page: page} do
+      {:ok, updated} = Context.upsert_context_file("ORG_IDENTITY.md", %{content: "v2"})
+
+      # Same underlying row — no duplicate created. file_key stays canonical.
+      assert updated.id == page.id
+      assert updated.file_key == "org/identity.md"
+      assert updated.content == "v2"
+      assert updated.version == page.version + 1
+
+      # Exactly one row exists.
+      assert Repo.aggregate(WikiPage, :count) == 1
     end
   end
 
@@ -237,8 +299,8 @@ defmodule Platform.Org.ContextModuleTest do
       clear_seeded_files()
       clear_memory_entries()
 
-      {:ok, _} = Context.upsert_context_file("ORG_IDENTITY.md", %{content: "We are Acme"})
-      {:ok, _} = Context.upsert_context_file("ORG_MEMORY.md", %{content: "Key decisions"})
+      {:ok, _} = Context.upsert_context_file("org/identity.md", %{content: "We are Acme"})
+      {:ok, _} = Context.upsert_context_file("org/memory.md", %{content: "Key decisions"})
 
       today = Date.utc_today()
       yesterday = Date.add(today, -1)
@@ -270,9 +332,9 @@ defmodule Platform.Org.ContextModuleTest do
 
       ctx = Context.build_context()
 
-      # Context files present
-      assert ctx["ORG_IDENTITY.md"] == "We are Acme"
-      assert ctx["ORG_MEMORY.md"] == "Key decisions"
+      # Context files present (path-style keys)
+      assert ctx["org/identity.md"] == "We are Acme"
+      assert ctx["org/memory.md"] == "Key decisions"
 
       # Today's notes concatenated
       today_key = "ORG_NOTES-#{Date.to_iso8601(today)}"

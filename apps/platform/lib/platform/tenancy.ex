@@ -10,7 +10,7 @@ defmodule Platform.Tenancy do
   ## Why `Platform.Tenancy` and not `Platform.Orgs`?
 
   The `Platform.Org` namespace is the legacy single-org memory / context
-  system (`Platform.Org.Context`, `Platform.Org.MemoryEntry`, etc.). To
+  system (`Platform.Org.Context`, `Platform.Org.WikiJournalEntry`, etc.). To
   avoid name collision and to make the multi-tenant intent clear in the
   call sites that adopt it, the multi-tenant API lives under
   `Platform.Tenancy.*`.

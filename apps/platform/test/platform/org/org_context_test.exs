@@ -27,7 +27,7 @@ defmodule Platform.Org.ContextTest do
     test "valid changeset with required fields" do
       changeset =
         WikiPage.changeset(%WikiPage{}, %{
-          file_key: "ORG_IDENTITY.md",
+          file_key: "org/identity.md",
           content: "# Identity"
         })
 
@@ -41,6 +41,10 @@ defmodule Platform.Org.ContextTest do
     end
 
     test "accepts arbitrary path-style file_keys (whitelist relaxed in T1)" do
+      # Mix of legacy uppercase (still accepted for back-compat at the
+      # changeset layer — alias resolution lives in Platform.Org.Context)
+      # and modern path-style keys including non-org/ namespaces unlocked
+      # by the whitelist removal.
       for key <- ~w(
             ORG_IDENTITY.md
             ORG_MEMORY.md
@@ -64,7 +68,7 @@ defmodule Platform.Org.ContextTest do
 
       {:ok, file} =
         %WikiPage{}
-        |> WikiPage.changeset(%{file_key: "ORG_IDENTITY.md", content: "test"})
+        |> WikiPage.changeset(%{file_key: "org/identity.md", content: "test"})
         |> Repo.insert()
 
       assert file.version == 1
@@ -79,7 +83,7 @@ defmodule Platform.Org.ContextTest do
 
       {:ok, file} =
         %WikiPage{}
-        |> WikiPage.changeset(%{file_key: "ORG_MEMORY.md", content: "v1"})
+        |> WikiPage.changeset(%{file_key: "org/memory.md", content: "v1"})
         |> Repo.insert()
 
       assert file.version == 1
@@ -95,7 +99,7 @@ defmodule Platform.Org.ContextTest do
 
       {:ok, file} =
         %WikiPage{}
-        |> WikiPage.changeset(%{file_key: "ORG_AGENTS.md", content: "v1"})
+        |> WikiPage.changeset(%{file_key: "org/agents.md", content: "v1"})
         |> Repo.insert()
 
       changeset = WikiPage.update_changeset(file, %{content: nil})
@@ -111,12 +115,12 @@ defmodule Platform.Org.ContextTest do
 
       {:ok, _} =
         %WikiPage{}
-        |> WikiPage.changeset(%{file_key: "ORG_IDENTITY.md", content: "first"})
+        |> WikiPage.changeset(%{file_key: "org/identity.md", content: "first"})
         |> Repo.insert()
 
       {:error, changeset} =
         %WikiPage{}
-        |> WikiPage.changeset(%{file_key: "ORG_IDENTITY.md", content: "second"})
+        |> WikiPage.changeset(%{file_key: "org/identity.md", content: "second"})
         |> Repo.insert()
 
       assert %{workspace_id: ["has already been taken"]} = errors_on(changeset)
@@ -130,7 +134,7 @@ defmodule Platform.Org.ContextTest do
       {:ok, _} =
         %WikiPage{}
         |> WikiPage.changeset(%{
-          file_key: "ORG_IDENTITY.md",
+          file_key: "org/identity.md",
           content: "ws1",
           workspace_id: ws1
         })
@@ -139,7 +143,7 @@ defmodule Platform.Org.ContextTest do
       {:ok, file2} =
         %WikiPage{}
         |> WikiPage.changeset(%{
-          file_key: "ORG_IDENTITY.md",
+          file_key: "org/identity.md",
           content: "ws2",
           workspace_id: ws2
         })
