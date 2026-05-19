@@ -9,6 +9,8 @@ defmodule Platform.Audit.EventOwnerOrgTest do
 
   use Platform.DataCase, async: true
 
+  import Platform.TenancyFixtures
+
   alias Platform.Audit.Event
   alias Platform.Repo
 
@@ -52,7 +54,7 @@ defmodule Platform.Audit.EventOwnerOrgTest do
     end
 
     test "actor_org_id persists to the database" do
-      org_id = Ecto.UUID.generate()
+      org_id = fabrikam_org_id()
 
       {:ok, event} =
         %Event{}

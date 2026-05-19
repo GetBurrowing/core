@@ -7,6 +7,8 @@ defmodule Platform.Federation.InvocationVisibilityGrantTest do
 
   use Platform.DataCase, async: true
 
+  import Platform.TenancyFixtures
+
   alias Platform.Federation.InvocationVisibilityGrant
   alias Platform.Repo
 
@@ -19,12 +21,17 @@ defmodule Platform.Federation.InvocationVisibilityGrantTest do
   end
 
   defp valid_attrs(overrides \\ %{}) do
+    # `grantee_org_id` and `granted_by_org_id` now FK into `orgs` — use
+    # the seeded Fabrikam org id so DB persistence smoke tests don't violate
+    # the FK constraint introduced by `20260519143600_create_orgs.exs`.
+    fabrikam = fabrikam_org_id()
+
     %{
       invocation_id: Ecto.UUID.generate(),
       grantee_user_id: Ecto.UUID.generate(),
-      grantee_org_id: Ecto.UUID.generate(),
+      grantee_org_id: fabrikam,
       granted_by_user_id: Ecto.UUID.generate(),
-      granted_by_org_id: Ecto.UUID.generate(),
+      granted_by_org_id: fabrikam,
       scope: "read_thinking_stream"
     }
     |> Map.merge(overrides)

@@ -1,6 +1,8 @@
 defmodule Platform.Audit.TelemetryHandlerTest do
   use Platform.DataCase
 
+  import Platform.TenancyFixtures
+
   alias Platform.Audit
   alias Platform.Audit.Event
   alias Platform.Audit.TelemetryHandler
@@ -150,7 +152,7 @@ defmodule Platform.Audit.TelemetryHandlerTest do
   describe "actor_org_id threading (ADR 0040)" do
     test "actor_org_id from telemetry metadata persists to audit_events.actor_org_id" do
       user_id = Ecto.UUID.generate()
-      org_id = Ecto.UUID.generate()
+      org_id = fabrikam_org_id()
 
       :telemetry.execute(
         [:platform, :auth, :callback],
@@ -176,7 +178,7 @@ defmodule Platform.Audit.TelemetryHandlerTest do
         %{
           action: "redirect",
           actor_id: Ecto.UUID.generate(),
-          actor_org_id: Ecto.UUID.generate(),
+          actor_org_id: fabrikam_org_id(),
           ip_address: "10.0.0.1"
         }
       )
@@ -198,7 +200,7 @@ defmodule Platform.Audit.TelemetryHandlerTest do
 
     test "federated_user actor_type with both actor_id (handle) and actor_org_id" do
       pseudonymous_handle = Ecto.UUID.generate()
-      peer_org_id = Ecto.UUID.generate()
+      peer_org_id = tenant_org_id("soylent")
 
       :telemetry.execute(
         [:platform, :auth, :callback],

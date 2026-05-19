@@ -1,0 +1,232 @@
+defmodule Platform.Tenancy do
+  @moduledoc """
+  Context module for the MT/RBAC foundation — orgs, memberships, and the
+  pure-function scope display helpers used by UI surfaces.
+
+  Lands stack member 1 of the MT/RBAC foundation per Plan 1 v3
+  (task 019e3c49-c1b1-75f1-9f61-e62877ef1641). Subsequent stack members
+  layer on `effective_value/3` resolution, MCP tools, and UI surfaces.
+
+  ## Why `Platform.Tenancy` and not `Platform.Orgs`?
+
+  The `Platform.Org` namespace is the legacy single-org memory / context
+  system (`Platform.Org.Context`, `Platform.Org.MemoryEntry`, etc.). To
+  avoid name collision and to make the multi-tenant intent clear in the
+  call sites that adopt it, the multi-tenant API lives under
+  `Platform.Tenancy.*`.
+
+  ## Two-tier hierarchy
+
+    * Root org (Fabrikam) — `parent_org_id IS NULL`. Exactly one row, enforced
+      at the DB level via a partial unique index.
+    * Tenant orgs (Soylent, Wayne-Tech, SXI, Paragon, future tenants) —
+      `parent_org_id` references the root.
+
+  ## Scope display helpers
+
+  `scope_color/1` and `scope_label/1` are **pure functions** — they
+  consult a static map keyed by slug atom. They do NOT hit the DB. This
+  makes them safe to call from hot LiveView render paths (e.g. activity
+  feeds, task lists). Adding a new tenant slug requires:
+
+    1. seeding the org row (data migration)
+    2. adding the slug → class / label entries below
+    3. (later, when the design-system token lands) adding the
+       `text-<slug>` and `bg-<slug>` utilities to `app.css`.
+  """
+
+  import Ecto.Query
+
+  alias Platform.Repo
+  alias Platform.Tenancy.Org
+  alias Platform.Tenancy.OrgMembership
+
+  # ── Org finders ───────────────────────────────────────────────────────
+
+  @doc "Fetch an org by id, raising on not found."
+  @spec get_org!(binary()) :: Org.t() | no_return()
+  def get_org!(id), do: Repo.get!(Org, id)
+
+  @doc "Fetch an org by slug. Returns `nil` if not found."
+  @spec get_org_by_slug(String.t()) :: Org.t() | nil
+  def get_org_by_slug(slug) when is_binary(slug), do: Repo.get_by(Org, slug: slug)
+
+  @doc "Fetch an org by slug, raising on not found."
+  @spec get_org_by_slug!(String.t()) :: Org.t() | no_return()
+  def get_org_by_slug!(slug) when is_binary(slug), do: Repo.get_by!(Org, slug: slug)
+
+  @doc "List every org (root + tenants)."
+  @spec list_orgs() :: [Org.t()]
+  def list_orgs, do: Repo.all(Org)
+
+  @doc """
+  List tenant orgs (excludes the root). Ordered by slug for stable display.
+  """
+  @spec list_tenants() :: [Org.t()]
+  def list_tenants do
+    Org
+    |> where([o], not is_nil(o.parent_org_id))
+    |> order_by([o], asc: o.slug)
+    |> Repo.all()
+  end
+
+  # ── Membership finders ────────────────────────────────────────────────
+
+  @doc """
+  List all memberships for a user, with the `:org` association preloaded.
+
+  Accepts either a `%Platform.Accounts.User{}` struct or any map/struct
+  carrying an `:id` field.
+  """
+  @spec list_user_memberships(%{:id => binary(), optional(atom()) => any()}) ::
+          [OrgMembership.t()]
+  def list_user_memberships(%{id: user_id}) do
+    OrgMembership
+    |> where([m], m.user_id == ^user_id)
+    |> preload(:org)
+    |> Repo.all()
+  end
+
+  # ── Role helpers ──────────────────────────────────────────────────────
+
+  @doc """
+  Is the user a Fabrikam (root) admin?
+
+  Returns `true` only if there is a membership row with `role == "admin"`
+  joined to the root org (`parent_org_id IS NULL`). Sub-org admins return
+  `false` from this check — they're admins of their tenant, not of the
+  root.
+
+  Returns `false` for `nil` or any non-user input.
+  """
+  @spec fabrikam_admin?(any()) :: boolean()
+  def fabrikam_admin?(%{id: user_id}) when is_binary(user_id) do
+    query =
+      from(m in OrgMembership,
+        join: o in Org,
+        on: o.id == m.org_id,
+        where: m.user_id == ^user_id and m.role == "admin" and is_nil(o.parent_org_id),
+        select: 1
+      )
+
+    Repo.exists?(query)
+  end
+
+  def fabrikam_admin?(_), do: false
+
+  @doc """
+  Is the user a member of the given org? Accepts either an org id (UUID
+  string) or a slug. Slug match is tried first, then UUID.
+
+  Strings that match neither a known slug nor the UUID-string shape
+  return `false` (rather than blowing up on an Ecto cast error). UUIDs
+  that don't reference a real org also return `false`.
+
+  Returns `false` for unknown users, unknown orgs, or non-string input.
+  """
+  @spec member_of?(any(), String.t()) :: boolean()
+  def member_of?(%{id: _} = user, org_id_or_slug) when is_binary(org_id_or_slug) do
+    case get_org_by_slug(org_id_or_slug) do
+      %Org{id: org_id} -> member_of_by_id?(user, org_id)
+      nil -> if uuid?(org_id_or_slug), do: member_of_by_id?(user, org_id_or_slug), else: false
+    end
+  end
+
+  def member_of?(_, _), do: false
+
+  defp member_of_by_id?(%{id: user_id}, org_id)
+       when is_binary(user_id) and is_binary(org_id) do
+    query =
+      from(m in OrgMembership,
+        where: m.user_id == ^user_id and m.org_id == ^org_id,
+        select: 1
+      )
+
+    Repo.exists?(query)
+  end
+
+  defp member_of_by_id?(_, _), do: false
+
+  defp uuid?(s) when is_binary(s) do
+    case Ecto.UUID.cast(s) do
+      {:ok, _} -> true
+      :error -> false
+    end
+  end
+
+  defp uuid?(_), do: false
+
+  @doc """
+  Classify an org as `:root` or `:tenant` based on `parent_org_id`.
+  """
+  @spec tier(Org.t()) :: :root | :tenant
+  def tier(%Org{parent_org_id: nil}), do: :root
+  def tier(%Org{}), do: :tenant
+
+  @doc """
+  Fetch the parent org for a tenant. Returns `nil` for the root.
+  """
+  @spec parent_org(Org.t()) :: Org.t() | nil
+  def parent_org(%Org{parent_org_id: nil}), do: nil
+  def parent_org(%Org{parent_org_id: parent_id}), do: Repo.get(Org, parent_id)
+
+  # ── Scope display (pure, DB-free) ─────────────────────────────────────
+
+  @scope_classes %{
+    fabrikam: "text-fabrikam",
+    soylent: "text-soylent",
+    wayne_tech: "text-wayne-tech",
+    sxi: "text-sxi",
+    paragon: "text-paragon"
+  }
+
+  @scope_labels %{
+    fabrikam: "Fabrikam",
+    soylent: "Soylent",
+    wayne_tech: "Wayne-Tech",
+    sxi: "SXI",
+    paragon: "Paragon"
+  }
+
+  @doc """
+  Tailwind text-color class for a scope slug.
+
+  Returns the fallback `"text-muted"` for unknown slugs (including unknown
+  binaries that would otherwise blow up `String.to_existing_atom/1`).
+  """
+  @spec scope_color(atom() | String.t()) :: String.t()
+  def scope_color(slug) when is_atom(slug), do: Map.get(@scope_classes, slug, "text-muted")
+  def scope_color(slug) when is_binary(slug), do: scope_color(safe_atom(slug))
+  def scope_color(_), do: "text-muted"
+
+  @doc """
+  Human-readable label for a scope slug.
+
+  Unknown slugs fall back to a capitalised echo of the input so UIs
+  don't render an empty string. (`String.capitalize/1` doesn't know
+  about hyphens — that's fine here, the unknown-slug path is a
+  defensive fallback only.)
+  """
+  @spec scope_label(atom() | String.t()) :: String.t()
+  def scope_label(slug) when is_atom(slug),
+    do: Map.get(@scope_labels, slug, slug |> to_string() |> String.capitalize())
+
+  def scope_label(slug) when is_binary(slug) do
+    case safe_atom(slug) do
+      :__unknown__ -> String.capitalize(slug)
+      atom -> Map.get(@scope_labels, atom, String.capitalize(slug))
+    end
+  end
+
+  def scope_label(_), do: ""
+
+  # Convert a binary slug to its atom representation IF the atom already
+  # exists in the runtime; otherwise return `:__unknown__` so the
+  # caller's fallback can fire. Using `String.to_existing_atom/1`
+  # prevents atom-table pollution from unbounded user input.
+  defp safe_atom(s) do
+    String.to_existing_atom(s)
+  rescue
+    ArgumentError -> :__unknown__
+  end
+end

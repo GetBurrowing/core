@@ -10,6 +10,7 @@ defmodule Platform.Orchestration.RuntimeSupervisionOwnerIdentityTest do
   use Platform.DataCase, async: false
 
   import ExUnit.CaptureLog
+  import Platform.TenancyFixtures
 
   alias Platform.Orchestration.{ExecutionLease, RuntimeEvent, RuntimeSupervision}
   alias Platform.Tasks
@@ -29,7 +30,7 @@ defmodule Platform.Orchestration.RuntimeSupervisionOwnerIdentityTest do
     test "is 'attributed' when both invoked_by_user_id and owner_org_id are present" do
       task = create_task!()
       user_id = Ecto.UUID.generate()
-      org_id = Ecto.UUID.generate()
+      org_id = fabrikam_org_id()
 
       assert {:ok, event} =
                RuntimeSupervision.record_event(%{
@@ -86,7 +87,7 @@ defmodule Platform.Orchestration.RuntimeSupervisionOwnerIdentityTest do
                  phase: "execution",
                  runtime_id: "runtime:test-partial-org",
                  event_type: "execution.started",
-                 owner_org_id: Ecto.UUID.generate()
+                 owner_org_id: fabrikam_org_id()
                })
 
       assert event.owner_attribution_status == "attribution_failed"
@@ -95,7 +96,7 @@ defmodule Platform.Orchestration.RuntimeSupervisionOwnerIdentityTest do
     test "string-keyed attrs work the same as atom-keyed" do
       task = create_task!()
       user_id = Ecto.UUID.generate()
-      org_id = Ecto.UUID.generate()
+      org_id = fabrikam_org_id()
 
       assert {:ok, event} =
                RuntimeSupervision.record_event(%{
@@ -121,7 +122,7 @@ defmodule Platform.Orchestration.RuntimeSupervisionOwnerIdentityTest do
       task = create_task!()
       user_a = Ecto.UUID.generate()
       user_b = Ecto.UUID.generate()
-      org_id = Ecto.UUID.generate()
+      org_id = fabrikam_org_id()
 
       # Pin the timestamp to a fixed microsecond so both events would have
       # produced an identical idempotency_key under the old shape.
@@ -172,7 +173,7 @@ defmodule Platform.Orchestration.RuntimeSupervisionOwnerIdentityTest do
         event_type: "execution.started",
         occurred_at: same_moment,
         invoked_by_user_id: user_id,
-        owner_org_id: Ecto.UUID.generate()
+        owner_org_id: fabrikam_org_id()
       }
 
       assert {:ok, event_1} = RuntimeSupervision.record_event(attrs)
@@ -208,7 +209,7 @@ defmodule Platform.Orchestration.RuntimeSupervisionOwnerIdentityTest do
     test "new lease populated from the initial event's owner fields" do
       task = create_task!()
       user_id = Ecto.UUID.generate()
-      org_id = Ecto.UUID.generate()
+      org_id = fabrikam_org_id()
 
       assert {:ok, _event} =
                RuntimeSupervision.record_event(%{
@@ -232,7 +233,7 @@ defmodule Platform.Orchestration.RuntimeSupervisionOwnerIdentityTest do
       # must keep the attribution it was created with.
       task = create_task!()
       original_user = Ecto.UUID.generate()
-      org_id = Ecto.UUID.generate()
+      org_id = fabrikam_org_id()
 
       # Event 1: creates lease WITH owner
       assert {:ok, _event_1} =
@@ -273,7 +274,7 @@ defmodule Platform.Orchestration.RuntimeSupervisionOwnerIdentityTest do
           occurred_at: DateTime.utc_now(),
           idempotency_key: "test-key",
           invoked_by_user_id: Ecto.UUID.generate(),
-          owner_org_id: Ecto.UUID.generate(),
+          owner_org_id: fabrikam_org_id(),
           owner_attribution_status: "attributed"
         })
 
@@ -306,7 +307,7 @@ defmodule Platform.Orchestration.RuntimeSupervisionOwnerIdentityTest do
           started_at: DateTime.utc_now(),
           expires_at: DateTime.add(DateTime.utc_now(), 3600),
           invoked_by_user_id: Ecto.UUID.generate(),
-          owner_org_id: Ecto.UUID.generate(),
+          owner_org_id: fabrikam_org_id(),
           owner_attribution_status: "attributed"
         })
 
@@ -390,7 +391,7 @@ defmodule Platform.Orchestration.RuntimeSupervisionOwnerIdentityTest do
               runtime_id: "runtime:has-owner",
               event_type: "execution.started",
               invoked_by_user_id: Ecto.UUID.generate(),
-              owner_org_id: Ecto.UUID.generate()
+              owner_org_id: fabrikam_org_id()
             })
         end)
 
@@ -431,7 +432,7 @@ defmodule Platform.Orchestration.RuntimeSupervisionOwnerIdentityTest do
     test "runtime_events has the new columns" do
       task = create_task!()
       user_id = Ecto.UUID.generate()
-      org_id = Ecto.UUID.generate()
+      org_id = fabrikam_org_id()
 
       {:ok, _event} =
         RuntimeSupervision.record_event(%{
@@ -452,7 +453,7 @@ defmodule Platform.Orchestration.RuntimeSupervisionOwnerIdentityTest do
     test "execution_leases has the new columns" do
       task = create_task!()
       user_id = Ecto.UUID.generate()
-      org_id = Ecto.UUID.generate()
+      org_id = fabrikam_org_id()
 
       {:ok, _event} =
         RuntimeSupervision.record_event(%{
