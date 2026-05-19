@@ -190,10 +190,17 @@ defmodule PlatformWeb.MeetingLiveTest do
       assert html =~ "hero-pencil-square"
     end
 
-    test "shell defaults to light mode", %{conn: conn, meeting: meeting} do
+    test "renders without forcing a local data-theme override (inherits shell theme)",
+         %{conn: conn, meeting: meeting} do
+      # Task 019e40ed: meetings used to hardcode `data-theme="light"` on
+      # the LV root, overriding the shell's dark mode. The wrapper must
+      # rely on the `data-theme` attribute set on `<html>` by the layout
+      # in `root.html.heex` instead — so neither "light" nor "dark"
+      # should appear as a local LV-rendered override.
       {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
 
-      assert html =~ ~s(data-theme="light")
+      refute html =~ ~s(data-theme="light")
+      refute html =~ ~s(data-theme="dark")
     end
   end
 
@@ -1541,6 +1548,21 @@ defmodule PlatformWeb.MeetingLiveTest do
       # And no rows section at all.
       refute html =~ ~s(data-region="meetings-list")
       refute html =~ ~s(data-role="meeting-row")
+    end
+
+    test "index renders without forcing a local data-theme override (inherits shell theme)",
+         %{conn: conn} do
+      # Task 019e40ed: the `:index` placeholder branch had the same
+      # hardcoded `data-theme="light"` as the `:show` shell — both must
+      # now inherit the shell's `data-theme` from `<html>` in
+      # `root.html.heex`.
+      {conn, _user} = authenticated_conn(conn)
+      Repo.delete_all(Meeting)
+
+      {:ok, _view, html} = live(conn, ~p"/meetings")
+
+      refute html =~ ~s(data-theme="light")
+      refute html =~ ~s(data-theme="dark")
     end
   end
 

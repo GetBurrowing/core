@@ -2,9 +2,11 @@
   MeetingLive — meeting shell + stage-mode switcher + embedded chat panel
   (ADR 0042).
 
-  Meetings UI defaults to LIGHT mode (`data-theme="light"` on the root
-  wrapper). Video-tile gradients stay dark INSIDE the tiles — those
-  represent video feeds, not chrome.
+  Meetings UI inherits the shell theme (`data-theme` is set on `<html>`
+  by the layout in `root.html.heex`). All chrome tokens are semantic
+  DaisyUI (`bg-base-100`, `text-base-content`, `border-base-300`).
+  Video-tile gradients stay dark inside the tiles — those represent
+  video feeds, not chrome.
 
   THIS task (019e2474-bc7c) ships:
     * the active stage-mode segmented control (top bar)
@@ -24,7 +26,7 @@
     * bottom strip     → 019e2475-0037 (video tiles)
 --%>
 <%= if @meeting do %>
-  <div data-theme="light" class="flex h-full flex-col bg-base-100 text-base-content">
+  <div class="flex h-full flex-col bg-base-100 text-base-content">
     <%!-- LiveKit JS hooks. MeetingClient listens for `join-meeting` /
          `leave-meeting` / `toggle-{mic,camera,screen-share}` push_events
          from MeetingHooks (server-side) and drives the local WebRTC
@@ -615,7 +617,6 @@
        is owned by stage 2 and lands later — the empty-state CTA below
        is the only action surface in this stage. --%>
   <div
-    data-theme="light"
     class="flex h-full min-h-0 flex-col bg-base-100 text-base-content"
     data-page="meetings-index"
   >
