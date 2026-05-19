@@ -58,3 +58,13 @@ config :platform, :stack_deployer,
 # Canvas server persists synchronously in tests so the SQL sandbox owns the
 # write and teardown doesn't race with background Task.Supervisor children.
 config :platform, :canvas_persist_sync, true
+
+# T2 (ADR-0041, task 019e41d9-8b50-7f11-bfd0-b667b453c8f2) ships a
+# scope-creep guard that asserts Platform.Org.Context has not changed
+# since T1 HEAD (commit 4d6d332). The constant below is the sha256 of
+# the file at that commit (`git show 4d6d332:apps/platform/lib/platform/org/context.ex`).
+# Regenerate this only when a future task (e.g. T5 retirement of
+# Org.Context) legitimately modifies the file — in the same commit.
+config :platform,
+       :t2_context_sha256_t1_head,
+       "55c726cc9c247c492e95ad28311b3225b66b8c156330fefff9cb4c63d7ee7f94"
