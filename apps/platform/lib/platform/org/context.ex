@@ -2,20 +2,29 @@ defmodule Platform.Org.Context do
   @moduledoc """
   Business logic for org-level context files and memory entries.
 
-  Provides CRUD for versioned context files (ORG_IDENTITY.md, etc.),
+  Provides CRUD for versioned context files (`org/identity.md`, etc.),
   append-only short-term memory entries, and a `build_context/1` function
   that assembles workspace files and the last 2 days of memory entries into
   a map suitable for injection into agent sessions.
 
-  Curated long-term knowledge lives in `ORG_MEMORY.md` (a context file),
+  Curated long-term knowledge lives in `org/memory.md` (a context file),
   not in memory entries.
+
+  ## V1 alias-compat
+
+  Legacy uppercase keys (`ORG_IDENTITY.md`, `ORG_MEMORY.md`, `ORG_AGENTS.md`)
+  continue to resolve transparently via the `org_wiki_aliases` table that
+  is backfilled by migration `20260519210000`. `get_context_file/2` and
+  `upsert_context_file/3` both fall back through the alias table when a
+  direct lookup misses, so V1 federation tools (`org_context_*`) keep
+  working until T5 retires them.
 
   ## Quick reference
 
       Platform.Org.Context.list_files()
-      Platform.Org.Context.get_file("ORG_IDENTITY.md")
-      Platform.Org.Context.upsert_file(%{file_key: "ORG_IDENTITY.md", content: "# Our Org", updated_by: user_id})
-      Platform.Org.Context.delete_file("CUSTOM_FILE.md")
+      Platform.Org.Context.get_file("org/identity.md")
+      Platform.Org.Context.upsert_file(%{file_key: "org/identity.md", content: "# Our Org", updated_by: user_id})
+      Platform.Org.Context.delete_file("custom/file.md")
   """
 
   import Ecto.Query
@@ -29,7 +38,7 @@ defmodule Platform.Org.Context do
   # ── Default templates ─────────────────────────────────────────────────
 
   @default_templates %{
-    "ORG_IDENTITY.md" => """
+    "org/identity.md" => """
     # Organization Identity
 
     ## Mission
@@ -44,7 +53,7 @@ defmodule Platform.Org.Context do
     ## Team
     _Who are the key people and what are their roles?_
     """,
-    "ORG_MEMORY.md" => """
+    "org/memory.md" => """
     # Organization Memory
 
     Long-term curated knowledge for the organization. Agents reference this
@@ -59,7 +68,7 @@ defmodule Platform.Org.Context do
     ## Lessons Learned
     _Capture insights from past experiences._
     """,
-    "ORG_AGENTS.md" => """
+    "org/agents.md" => """
     # Organization Agents
 
     Registry of agents and their roles within the organization.
@@ -83,12 +92,49 @@ defmodule Platform.Org.Context do
 
   # ── Context files ────────────────────────────────────────────────────
 
-  @doc "Fetch a single context file by file_key, optionally scoped to a workspace."
+  @doc """
+  Fetch a single context file by file_key, optionally scoped to a workspace.
+
+  Falls back through `org_wiki_aliases` when the direct lookup misses so
+  legacy V1 keys (`ORG_IDENTITY.md`, …) keep resolving after T1 migrated
+  pages to path-style keys.
+  """
   @spec get_context_file(String.t(), binary() | nil) :: WikiPage.t() | nil
   def get_context_file(file_key, workspace_id \\ nil) do
-    WikiPage
-    |> where([f], f.file_key == ^file_key)
-    |> filter_workspace(workspace_id)
+    direct =
+      WikiPage
+      |> where([f], f.file_key == ^file_key)
+      |> filter_workspace(workspace_id)
+      |> Repo.one()
+
+    case direct do
+      nil -> resolve_via_alias(file_key, workspace_id)
+      page -> page
+    end
+  end
+
+  # Look up `file_key` in `org_wiki_aliases` and return the page it points
+  # at, scoped to `workspace_id`. Aliases are global (no workspace
+  # column), so we still scope the page lookup to keep multi-tenant
+  # boundaries clean — workspace-scoped callers see only their row.
+  @spec resolve_via_alias(String.t(), binary() | nil) :: WikiPage.t() | nil
+  defp resolve_via_alias(file_key, nil) do
+    from(a in "org_wiki_aliases",
+      join: p in WikiPage,
+      on: p.id == a.current_id,
+      where: a.old_path == ^file_key and is_nil(p.workspace_id),
+      select: p
+    )
+    |> Repo.one()
+  end
+
+  defp resolve_via_alias(file_key, workspace_id) do
+    from(a in "org_wiki_aliases",
+      join: p in WikiPage,
+      on: p.id == a.current_id,
+      where: a.old_path == ^file_key and p.workspace_id == ^workspace_id,
+      select: p
+    )
     |> Repo.one()
   end
 
@@ -137,11 +183,18 @@ defmodule Platform.Org.Context do
     expected_version = Keyword.get(opts, :expected_version)
 
     Repo.transaction(fn ->
-      existing =
+      direct =
         WikiPage
         |> where([f], f.file_key == ^file_key)
         |> filter_workspace(workspace_id)
         |> Repo.one()
+
+      # If the caller passed a legacy V1 key (ORG_IDENTITY.md, …) and no
+      # direct row exists, resolve through the alias table so the write
+      # lands on the canonical path-style row instead of creating a
+      # duplicate. The page row keeps its current file_key — we don't
+      # rewrite it on the caller's behalf.
+      existing = direct || resolve_via_alias(file_key, workspace_id)
 
       case existing do
         nil ->

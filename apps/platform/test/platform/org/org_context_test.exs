@@ -193,9 +193,9 @@ defmodule Platform.Org.ContextTest do
       file_keys = Enum.map(files, & &1.file_key) |> Enum.sort()
 
       assert file_keys == [
-               "ORG_AGENTS.md",
-               "ORG_IDENTITY.md",
-               "ORG_MEMORY.md"
+               "org/agents.md",
+               "org/identity.md",
+               "org/memory.md"
              ]
     end
 
@@ -212,7 +212,7 @@ defmodule Platform.Org.ContextTest do
       clear_seeded_files()
       :ok = Seeds.seed_defaults()
 
-      file = Repo.get_by!(WikiPage, file_key: "ORG_IDENTITY.md")
+      file = Repo.get_by!(WikiPage, file_key: "org/identity.md")
 
       file
       |> WikiPage.update_changeset(%{content: "Custom identity"})
@@ -220,7 +220,7 @@ defmodule Platform.Org.ContextTest do
 
       :ok = Seeds.seed_defaults()
 
-      updated = Repo.get_by!(WikiPage, file_key: "ORG_IDENTITY.md")
+      updated = Repo.get_by!(WikiPage, file_key: "org/identity.md")
       assert updated.content == "Custom identity"
     end
 

@@ -2,23 +2,27 @@ defmodule Platform.Org.Seeds do
   @moduledoc """
   Seeds default org context files on first boot.
 
-  Inserts the default org context files (ORG_IDENTITY.md, ORG_MEMORY.md,
-  ORG_AGENTS.md) if they don't already exist.
-  Idempotent — safe to call multiple times.
+  Inserts the default org wiki pages (`org/identity.md`, `org/memory.md`,
+  `org/agents.md`) if they don't already exist. Idempotent — safe to call
+  multiple times.
+
+  Legacy V1 callers using the uppercase `ORG_*.md` keys continue to
+  resolve through the alias table backfilled by migration
+  `20260519210000_path_style_file_keys_and_alias_backfill`.
   """
 
   alias Platform.Repo
   alias Platform.Org.WikiPage
 
   @default_files %{
-    "ORG_IDENTITY.md" => """
+    "org/identity.md" => """
     # Org Identity
 
     _Describe your organization here — mission, values, what you're building._
 
     This file is shared with all agents on session start. Keep it concise and current.
     """,
-    "ORG_MEMORY.md" => """
+    "org/memory.md" => """
     # Org Memory
 
     _Curated long-term memory for the organization._
@@ -26,7 +30,7 @@ defmodule Platform.Org.Seeds do
     Record key decisions, architectural choices, lessons learned, and anything
     agents should remember across sessions. Agents can read and append to this file.
     """,
-    "ORG_AGENTS.md" => """
+    "org/agents.md" => """
     # Org Agents
 
     _Shared conventions and guidelines for all agents in this organization._
