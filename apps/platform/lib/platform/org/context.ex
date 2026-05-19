@@ -113,16 +113,34 @@ defmodule Platform.Org.Context do
     end
   end
 
+  # Sentinel used in `org_wiki_aliases.workspace_id` for org-scoped rows
+  # (no workspace). The migration that introduces the composite PK
+  # (`20260519220000_add_workspace_id_to_org_wiki_aliases.exs`) explains
+  # why a sentinel is required — Postgres can't keep NULL in a PK column.
+  @alias_nil_sentinel "00000000-0000-0000-0000-000000000000"
+
   # Look up `file_key` in `org_wiki_aliases` and return the page it points
-  # at, scoped to `workspace_id`. Aliases are global (no workspace
-  # column), so we still scope the page lookup to keep multi-tenant
-  # boundaries clean — workspace-scoped callers see only their row.
+  # at. Aliases are now per-workspace via composite PK
+  # `(workspace_id, old_path)`, so we filter the alias row itself by the
+  # caller's workspace. Org-scoped lookups (workspace_id == nil) match
+  # the sentinel UUID. The join still filters the page row to keep
+  # multi-tenant boundaries belt-and-suspenders tight.
+  #
+  # `org_wiki_aliases` has no Ecto schema (the migration is raw SQL), so
+  # the query needs an explicit `type(..., :binary_id)` cast on the
+  # workspace_id pin — without it Postgrex sees a 36-char string and
+  # rejects it for a `uuid` column.
   @spec resolve_via_alias(String.t(), binary() | nil) :: WikiPage.t() | nil
   defp resolve_via_alias(file_key, nil) do
+    sentinel = @alias_nil_sentinel
+
     from(a in "org_wiki_aliases",
       join: p in WikiPage,
       on: p.id == a.current_id,
-      where: a.old_path == ^file_key and is_nil(p.workspace_id),
+      where:
+        a.old_path == ^file_key and
+          a.workspace_id == type(^sentinel, :binary_id) and
+          is_nil(p.workspace_id),
       select: p
     )
     |> Repo.one()
@@ -132,7 +150,10 @@ defmodule Platform.Org.Context do
     from(a in "org_wiki_aliases",
       join: p in WikiPage,
       on: p.id == a.current_id,
-      where: a.old_path == ^file_key and p.workspace_id == ^workspace_id,
+      where:
+        a.old_path == ^file_key and
+          a.workspace_id == type(^workspace_id, :binary_id) and
+          p.workspace_id == ^workspace_id,
       select: p
     )
     |> Repo.one()

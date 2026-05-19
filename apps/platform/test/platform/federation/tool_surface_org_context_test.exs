@@ -16,13 +16,18 @@ defmodule Platform.Federation.ToolSurfaceOrgContextTest do
   # Insert an alias row via raw SQL — the migration uses pure SQL so
   # there's no Ecto schema for `org_wiki_aliases`. Used by the
   # legacy-alias-resolution tests to seed a row pointing at a
-  # path-style canonical page.
-  defp seed_legacy_alias!(old_path, page_id) do
+  # path-style canonical page. `workspace_id` defaults to the
+  # nil-sentinel UUID so org-scoped lookups (no workspace) match.
+  @nil_workspace_sentinel "00000000-0000-0000-0000-000000000000"
+
+  defp seed_legacy_alias!(old_path, page_id, opts \\ []) do
+    workspace_id = Keyword.get(opts, :workspace_id) || @nil_workspace_sentinel
+
     Ecto.Adapters.SQL.query!(
       Repo,
-      "INSERT INTO org_wiki_aliases (old_path, current_id, inserted_at) " <>
-        "VALUES ($1, $2, now()) ON CONFLICT (old_path) DO NOTHING",
-      [old_path, Ecto.UUID.dump!(page_id)]
+      "INSERT INTO org_wiki_aliases (workspace_id, old_path, current_id, inserted_at) " <>
+        "VALUES ($1, $2, $3, now()) ON CONFLICT (workspace_id, old_path) DO NOTHING",
+      [Ecto.UUID.dump!(workspace_id), old_path, Ecto.UUID.dump!(page_id)]
     )
 
     :ok
@@ -92,6 +97,48 @@ defmodule Platform.Federation.ToolSurfaceOrgContextTest do
 
       assert result.file_key == "org/identity.md"
       assert result.content == "We are Acme Corp"
+    end
+
+    test "per-workspace alias isolation: each workspace's legacy lookup hits its own page" do
+      clear_seeded_data()
+
+      ws_a = Ecto.UUID.generate()
+      ws_b = Ecto.UUID.generate()
+
+      {:ok, page_a} =
+        OrgContext.upsert_context_file(
+          "org/identity.md",
+          %{content: "Workspace A identity"},
+          workspace_id: ws_a
+        )
+
+      {:ok, page_b} =
+        OrgContext.upsert_context_file(
+          "org/identity.md",
+          %{content: "Workspace B identity"},
+          workspace_id: ws_b
+        )
+
+      seed_legacy_alias!("ORG_IDENTITY.md", page_a.id, workspace_id: ws_a)
+      seed_legacy_alias!("ORG_IDENTITY.md", page_b.id, workspace_id: ws_b)
+
+      {:ok, res_a} =
+        ToolSurface.execute(
+          "org_context_read",
+          %{"file_key" => "ORG_IDENTITY.md", "workspace_id" => ws_a},
+          %{}
+        )
+
+      {:ok, res_b} =
+        ToolSurface.execute(
+          "org_context_read",
+          %{"file_key" => "ORG_IDENTITY.md", "workspace_id" => ws_b},
+          %{}
+        )
+
+      assert res_a.content == "Workspace A identity"
+      assert res_b.content == "Workspace B identity"
+      refute res_a.content == res_b.content
     end
 
     test "returns error when file not found" do

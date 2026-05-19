@@ -152,13 +152,20 @@ defmodule Platform.Org.ContextModuleTest do
 
     # Insert an alias row via raw SQL — the migration uses pure SQL so
     # there's no Ecto schema for `org_wiki_aliases`, and a fragment-based
-    # insert here is the cleanest way to seed one in tests.
-    defp seed_legacy_alias!(old_path, page_id) do
+    # insert here is the cleanest way to seed one in tests. Pass
+    # `workspace_id: nil` (the default) for org-scoped aliases; the
+    # `00000000-…` sentinel is stamped server-side to satisfy the
+    # composite PK. Pass a UUID for workspace-scoped aliases.
+    @nil_workspace_sentinel "00000000-0000-0000-0000-000000000000"
+
+    defp seed_legacy_alias!(old_path, page_id, opts \\ []) do
+      workspace_id = Keyword.get(opts, :workspace_id) || @nil_workspace_sentinel
+
       Ecto.Adapters.SQL.query!(
         Repo,
-        "INSERT INTO org_wiki_aliases (old_path, current_id, inserted_at) " <>
-          "VALUES ($1, $2, now()) ON CONFLICT (old_path) DO NOTHING",
-        [old_path, Ecto.UUID.dump!(page_id)]
+        "INSERT INTO org_wiki_aliases (workspace_id, old_path, current_id, inserted_at) " <>
+          "VALUES ($1, $2, $3, now()) ON CONFLICT (workspace_id, old_path) DO NOTHING",
+        [Ecto.UUID.dump!(workspace_id), old_path, Ecto.UUID.dump!(page_id)]
       )
 
       :ok
@@ -189,6 +196,84 @@ defmodule Platform.Org.ContextModuleTest do
 
       # Exactly one row exists.
       assert Repo.aggregate(WikiPage, :count) == 1
+    end
+  end
+
+  describe "V1 alias compat: per-workspace isolation" do
+    test "two workspaces resolve the same legacy key to their own pages" do
+      clear_seeded_files()
+
+      ws_a = Ecto.UUID.generate()
+      ws_b = Ecto.UUID.generate()
+
+      {:ok, page_a} =
+        %WikiPage{}
+        |> WikiPage.changeset(%{
+          file_key: "org/identity.md",
+          content: "Workspace A",
+          workspace_id: ws_a
+        })
+        |> Repo.insert()
+
+      {:ok, page_b} =
+        %WikiPage{}
+        |> WikiPage.changeset(%{
+          file_key: "org/identity.md",
+          content: "Workspace B",
+          workspace_id: ws_b
+        })
+        |> Repo.insert()
+
+      seed_alias_with_ws!("ORG_IDENTITY.md", page_a.id, ws_a)
+      seed_alias_with_ws!("ORG_IDENTITY.md", page_b.id, ws_b)
+
+      assert Context.get_context_file("ORG_IDENTITY.md", ws_a).id == page_a.id
+      assert Context.get_context_file("ORG_IDENTITY.md", ws_a).content == "Workspace A"
+      assert Context.get_context_file("ORG_IDENTITY.md", ws_b).id == page_b.id
+      assert Context.get_context_file("ORG_IDENTITY.md", ws_b).content == "Workspace B"
+    end
+
+    test "org-scoped alias and workspace-scoped alias coexist for same legacy key" do
+      clear_seeded_files()
+
+      ws = Ecto.UUID.generate()
+
+      {:ok, org_page} =
+        %WikiPage{}
+        |> WikiPage.changeset(%{file_key: "org/identity.md", content: "Org-level"})
+        |> Repo.insert()
+
+      {:ok, ws_page} =
+        %WikiPage{}
+        |> WikiPage.changeset(%{
+          file_key: "org/identity.md",
+          content: "Workspace-level",
+          workspace_id: ws
+        })
+        |> Repo.insert()
+
+      # Org-scoped alias uses the sentinel workspace_id; ws-scoped uses ws.
+      seed_alias_with_ws!("ORG_IDENTITY.md", org_page.id, nil)
+      seed_alias_with_ws!("ORG_IDENTITY.md", ws_page.id, ws)
+
+      assert Context.get_context_file("ORG_IDENTITY.md").id == org_page.id
+      assert Context.get_context_file("ORG_IDENTITY.md").content == "Org-level"
+      assert Context.get_context_file("ORG_IDENTITY.md", ws).id == ws_page.id
+      assert Context.get_context_file("ORG_IDENTITY.md", ws).content == "Workspace-level"
+    end
+
+    # Helper for the per-workspace cases — explicit workspace_id arg.
+    defp seed_alias_with_ws!(old_path, page_id, workspace_id) do
+      ws = workspace_id || "00000000-0000-0000-0000-000000000000"
+
+      Ecto.Adapters.SQL.query!(
+        Repo,
+        "INSERT INTO org_wiki_aliases (workspace_id, old_path, current_id, inserted_at) " <>
+          "VALUES ($1, $2, $3, now()) ON CONFLICT (workspace_id, old_path) DO NOTHING",
+        [Ecto.UUID.dump!(ws), old_path, Ecto.UUID.dump!(page_id)]
+      )
+
+      :ok
     end
   end
 
