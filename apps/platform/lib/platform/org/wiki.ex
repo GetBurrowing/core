@@ -35,7 +35,20 @@ defmodule Platform.Org.Wiki do
   is the V1 surface and stays untouched; T5 will retire it.
   """
 
+  import Ecto.Query, only: [from: 2, where: 3, order_by: 3]
+
+  require Logger
+
+  alias Ecto.Adapters.SQL
+  alias Platform.Org.WikiPage
+  alias Platform.Repo
+
   @index_topic "org_wiki:index"
+
+  # Sentinel UUID for `org_wiki_aliases.workspace_id` when the alias
+  # is org-scoped (no workspace). Mirrors the migration that swapped
+  # the alias table to a composite (workspace_id, old_path) PK.
+  @alias_nil_sentinel "00000000-0000-0000-0000-000000000000"
 
   @typedoc """
   Attributes accepted by `upsert_page/3`. `:content` is the only
@@ -64,46 +77,242 @@ defmodule Platform.Org.Wiki do
 
   # ── Public API ────────────────────────────────────────────────────────
 
-  @doc "Fetch a wiki page by `file_key`, falling back through `org_wiki_aliases`."
-  @spec get_page(String.t(), keyword()) ::
-          Platform.Org.WikiPage.t() | nil
-  def get_page(_file_key, _opts \\ []), do: not_implemented()
+  @doc """
+  Fetch a wiki page by `file_key`.
 
-  @doc "List wiki pages in a workspace, ordered by `file_key asc`."
-  @spec list_pages(keyword()) :: [Platform.Org.WikiPage.t()]
-  def list_pages(_opts \\ []), do: not_implemented_list()
+  Falls back through `org_wiki_aliases` when the direct lookup misses
+  so legacy V1 keys (`ORG_IDENTITY.md`, …) keep resolving after T1's
+  path-style rename.
+
+  ## Options
+    * `:workspace_id` (default `nil` — org-scoped)
+  """
+  @spec get_page(String.t(), keyword()) :: WikiPage.t() | nil
+  def get_page(file_key, opts \\ []) when is_binary(file_key) do
+    workspace_id = Keyword.get(opts, :workspace_id)
+
+    direct =
+      WikiPage
+      |> where([p], p.file_key == ^file_key)
+      |> filter_workspace(workspace_id)
+      |> Repo.one()
+
+    direct || lookup_via_alias(file_key, workspace_id)
+  end
+
+  @doc """
+  List wiki pages in a workspace, ordered by `file_key asc`.
+
+  ## Options
+    * `:workspace_id` (default `nil` — org-scoped)
+  """
+  @spec list_pages(keyword()) :: [WikiPage.t()]
+  def list_pages(opts \\ []) do
+    workspace_id = Keyword.get(opts, :workspace_id)
+
+    WikiPage
+    |> filter_workspace(workspace_id)
+    |> order_by([p], asc: p.file_key)
+    |> Repo.all()
+  end
 
   @doc """
   Create or update a wiki page.
 
-  Parses frontmatter + wikilinks from `attrs.content`, writes the page
-  row with optimistic locking, materializes `org_wiki_links` (delete +
-  bulk insert), and emits `{:wiki_page_written, …}` on the index topic.
+  Single transaction:
+
+    1. Resolve the existing row (direct file_key, or via alias for V1
+       compatibility — the write lands on the canonical path-style row
+       in that case).
+    2. Parse frontmatter from `attrs.content`; store the parsed map in
+       `WikiPage.frontmatter` while keeping the ORIGINAL body
+       (delimiters and all) in `content`.
+    3. Insert/update with optimistic locking on `version`.
+    4. Replace `org_wiki_links` rows for the page (delete-all + bulk
+       insert from parsed wikilinks). Targets are resolved by
+       `file_key IN (...)` within the same workspace; unresolved
+       targets get `target_id: nil` and preserve `target_path`.
+    5. Emit telemetry `[:platform, :org, :wiki_page_written]` and
+       PubSub `{:wiki_page_written, payload}` on `"org_wiki:index"`.
+
+  ## Options
+    * `:workspace_id` (default `nil`)
+    * `:expected_version` — when set, a mismatch returns `{:error, :stale}`
   """
   @spec upsert_page(String.t(), page_attrs(), keyword()) ::
-          {:ok, Platform.Org.WikiPage.t()}
-          | {:error, Ecto.Changeset.t() | :stale | :not_implemented}
-  def upsert_page(_file_key, _attrs, _opts \\ []), do: not_implemented()
+          {:ok, WikiPage.t()} | {:error, Ecto.Changeset.t() | :stale}
+  def upsert_page(file_key, attrs, opts \\ []) when is_binary(file_key) and is_map(attrs) do
+    workspace_id = Keyword.get(opts, :workspace_id)
+    expected_version = Keyword.get(opts, :expected_version)
 
-  @doc "Delete a wiki page. Cascades `org_wiki_links` rows via the FK."
+    content =
+      Map.get(attrs, :content) || Map.get(attrs, "content") || ""
+
+    updated_by =
+      Map.get(attrs, :updated_by) || Map.get(attrs, "updated_by")
+
+    {frontmatter, _body_after_fm} = parse_frontmatter(content)
+    parsed_links = parse_wikilinks(content)
+
+    result =
+      Repo.transaction(fn ->
+        existing =
+          WikiPage
+          |> where([p], p.file_key == ^file_key)
+          |> filter_workspace(workspace_id)
+          |> Repo.one() ||
+            lookup_via_alias(file_key, workspace_id)
+
+        page =
+          case existing do
+            nil ->
+              %WikiPage{}
+              |> WikiPage.changeset(%{
+                file_key: file_key,
+                workspace_id: workspace_id,
+                content: content,
+                frontmatter: frontmatter,
+                updated_by: updated_by
+              })
+              |> Repo.insert()
+              |> unwrap_or_rollback()
+
+            %WikiPage{} = row ->
+              if not is_nil(expected_version) and row.version != expected_version do
+                Repo.rollback(:stale)
+              end
+
+              row
+              |> WikiPage.update_changeset(%{
+                content: content,
+                frontmatter: frontmatter,
+                updated_by: updated_by
+              })
+              |> Repo.update()
+              |> case do
+                {:ok, updated} -> updated
+                {:error, %Ecto.Changeset{errors: [version: _]}} -> Repo.rollback(:stale)
+                {:error, changeset} -> Repo.rollback(changeset)
+              end
+          end
+
+        materialize_links(page, parsed_links)
+
+        page
+      end)
+
+    case result do
+      {:ok, %WikiPage{} = page} ->
+        :telemetry.execute(
+          [:platform, :org, :wiki_page_written],
+          %{system_time: System.system_time()},
+          %{
+            page_id: page.id,
+            file_key: page.file_key,
+            version: page.version,
+            workspace_id: page.workspace_id
+          }
+        )
+
+        broadcast_index_event(:wiki_page_written, %{
+          page_id: page.id,
+          file_key: page.file_key,
+          version: page.version,
+          workspace_id: page.workspace_id
+        })
+
+        {:ok, page}
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  @doc """
+  Delete a wiki page. `org_wiki_links` rows referencing it cascade via
+  the FK's `on_delete: :delete_all`. Emits a `:wiki_page_deleted`
+  index event.
+
+  ## Options
+    * `:workspace_id` (default `nil`)
+  """
   @spec delete_page(String.t(), keyword()) ::
-          {:ok, Platform.Org.WikiPage.t()} | {:error, :not_found | :not_implemented}
-  def delete_page(_file_key, _opts \\ []), do: not_implemented()
+          {:ok, WikiPage.t()} | {:error, :not_found | Ecto.Changeset.t()}
+  def delete_page(file_key, opts \\ []) when is_binary(file_key) do
+    workspace_id = Keyword.get(opts, :workspace_id)
 
-  @doc "Pages that link TO `file_key` (via `org_wiki_links.target_path`)."
-  @spec backlinks(String.t(), keyword()) :: [Platform.Org.WikiPage.t()]
-  def backlinks(_file_key, _opts \\ []), do: not_implemented_list()
+    case get_page(file_key, workspace_id: workspace_id) do
+      nil ->
+        {:error, :not_found}
+
+      %WikiPage{} = page ->
+        case Repo.delete(page) do
+          {:ok, deleted} ->
+            broadcast_index_event(:wiki_page_deleted, %{
+              file_key: deleted.file_key,
+              workspace_id: deleted.workspace_id
+            })
+
+            {:ok, deleted}
+
+          {:error, _} = err ->
+            err
+        end
+    end
+  end
+
+  @doc """
+  Pages that link TO `file_key` (via `org_wiki_links.target_path`).
+
+  Two-step query: collect `source_id`s from link rows whose
+  `target_path` equals `file_key`, then load the distinct source page
+  rows in the caller's workspace. Workspace boundary is enforced on
+  the source page row so cross-tenant link rows can never leak.
+
+  ## Options
+    * `:workspace_id` (default `nil`)
+  """
+  @spec backlinks(String.t(), keyword()) :: [WikiPage.t()]
+  def backlinks(file_key, opts \\ []) when is_binary(file_key) do
+    workspace_id = Keyword.get(opts, :workspace_id)
+
+    # Raw SQL for the link side — `org_wiki_links` has no schema, so
+    # we can't lean on Ecto's auto-cast for `source_id`. Load the
+    # 16-byte binaries back to UUID strings before threading them
+    # into the `WikiPage` query.
+    %{rows: rows} =
+      SQL.query!(
+        Repo,
+        "SELECT DISTINCT source_id FROM org_wiki_links WHERE target_path = $1",
+        [file_key]
+      )
+
+    source_ids = Enum.map(rows, fn [bin] -> Ecto.UUID.load!(bin) end)
+
+    if source_ids == [] do
+      []
+    else
+      WikiPage
+      |> where([p], p.id in ^source_ids)
+      |> filter_workspace(workspace_id)
+      |> order_by([p], asc: p.file_key)
+      |> Repo.all()
+    end
+  end
 
   @doc """
   Resolve `file_key` through `org_wiki_aliases`.
 
-  Returns the page the alias points at, or `nil`. Workspace-scoped via
-  the composite PK on the alias table (see migration
-  `20260519220000_add_workspace_id_to_org_wiki_aliases.exs`).
+  Workspace-scoped via the composite PK on the alias table. Returns
+  the target page or `nil`.
+
+  ## Options
+    * `:workspace_id` (default `nil`)
   """
-  @spec resolve_alias(String.t(), keyword()) ::
-          Platform.Org.WikiPage.t() | nil
-  def resolve_alias(_file_key, _opts \\ []), do: not_implemented()
+  @spec resolve_alias(String.t(), keyword()) :: WikiPage.t() | nil
+  def resolve_alias(file_key, opts \\ []) when is_binary(file_key) do
+    lookup_via_alias(file_key, Keyword.get(opts, :workspace_id))
+  end
 
   # ── Pure parsers (filled in by Stage 2) ───────────────────────────────
 
@@ -181,27 +390,134 @@ defmodule Platform.Org.Wiki do
   @spec index_topic() :: String.t()
   def index_topic, do: @index_topic
 
-  # Broadcast helper used by Stage 3+ once writes are wired. Kept
-  # private; the index topic is exposed via `index_topic/0` for tests.
+  # Broadcast index events. Kept private; the index topic is exposed
+  # via `index_topic/0` so test code can subscribe.
   @spec broadcast_index_event(atom(), map()) :: :ok | {:error, term()}
   defp broadcast_index_event(event, payload)
        when is_atom(event) and is_map(payload) do
     Phoenix.PubSub.broadcast(Platform.PubSub, @index_topic, {event, payload})
   end
 
-  # Silence "unused" warnings until Stage 3 wires the broadcaster.
-  @doc false
-  def __broadcast_index_event__(event, payload),
-    do: broadcast_index_event(event, payload)
+  # ── Query helpers ─────────────────────────────────────────────────────
 
-  # Tiny helpers so each not-yet-implemented head has a matching return
-  # type for `@spec`. Kept private + tagged with the stage that fills
-  # them in.
-  @spec not_implemented() :: {:error, :not_implemented}
-  defp not_implemented, do: {:error, :not_implemented}
+  defp filter_workspace(queryable, nil) do
+    where(queryable, [p], is_nil(p.workspace_id))
+  end
 
-  @spec not_implemented_list() :: []
-  defp not_implemented_list, do: []
+  defp filter_workspace(queryable, workspace_id) do
+    where(queryable, [p], p.workspace_id == ^workspace_id)
+  end
+
+  # ── Alias resolution ──────────────────────────────────────────────────
+
+  # Workspace-scoped alias lookup. The alias table has a composite PK
+  # (workspace_id, old_path); org-scoped rows live under a sentinel
+  # UUID because Postgres can't store NULL in a PK column. The join
+  # to `org_wiki_pages` also filters by workspace so a malformed
+  # alias row can never leak a cross-tenant page.
+  @spec lookup_via_alias(String.t(), binary() | nil) :: WikiPage.t() | nil
+  defp lookup_via_alias(file_key, nil) do
+    sentinel = @alias_nil_sentinel
+
+    from(a in "org_wiki_aliases",
+      join: p in WikiPage,
+      on: p.id == a.current_id,
+      where:
+        a.old_path == ^file_key and
+          a.workspace_id == type(^sentinel, :binary_id) and
+          is_nil(p.workspace_id),
+      select: p
+    )
+    |> Repo.one()
+  end
+
+  defp lookup_via_alias(file_key, workspace_id) do
+    from(a in "org_wiki_aliases",
+      join: p in WikiPage,
+      on: p.id == a.current_id,
+      where:
+        a.old_path == ^file_key and
+          a.workspace_id == type(^workspace_id, :binary_id) and
+          p.workspace_id == ^workspace_id,
+      select: p
+    )
+    |> Repo.one()
+  end
+
+  # ── Link materialisation ──────────────────────────────────────────────
+
+  # Replace `org_wiki_links` rows for the page: delete all current
+  # rows for the source, then bulk-insert one row per parsed
+  # wikilink. Resolve `target_id` by file_key lookup within the
+  # source page's workspace; unresolved targets keep `target_id: nil`
+  # and `target_path` set so backlinks still work and a later upsert
+  # of the target leaves them for the next write to reconcile.
+  @spec materialize_links(WikiPage.t(), [wikilink()]) :: :ok
+  defp materialize_links(%WikiPage{} = page, parsed_links) do
+    # `org_wiki_links` has no Ecto schema (raw migration). For DELETE
+    # we drop to plain SQL — that keeps the UUID handling explicit and
+    # avoids Ecto's schemaless-query dump dance. For INSERT we use
+    # `Repo.insert_all/2` with hand-dumped 16-byte UUID binaries, which
+    # Postgrex accepts directly for `uuid` columns.
+    source_id_bin = Ecto.UUID.dump!(page.id)
+
+    SQL.query!(
+      Repo,
+      "DELETE FROM org_wiki_links WHERE source_id = $1",
+      [source_id_bin]
+    )
+
+    if parsed_links == [] do
+      :ok
+    else
+      target_paths = parsed_links |> Enum.map(& &1.target_path) |> Enum.uniq()
+      target_index = lookup_target_ids(target_paths, page.workspace_id)
+
+      now = DateTime.utc_now()
+
+      rows =
+        Enum.map(parsed_links, fn link ->
+          target_id_bin =
+            case Map.get(target_index, link.target_path) do
+              nil -> nil
+              id when is_binary(id) -> Ecto.UUID.dump!(id)
+            end
+
+          %{
+            id: Ecto.UUID.bingenerate(),
+            source_id: source_id_bin,
+            target_path: link.target_path,
+            target_id: target_id_bin,
+            display_text: link.display_text,
+            position: link.position,
+            inserted_at: now
+          }
+        end)
+
+      {_count, _} = Repo.insert_all("org_wiki_links", rows)
+      :ok
+    end
+  end
+
+  # Single workspace-scoped lookup for the set of target paths. Returns a
+  # map of `target_path => target_id`. Paths with no matching page are
+  # absent from the map (callers default to `nil`).
+  @spec lookup_target_ids([String.t()], binary() | nil) :: %{String.t() => binary()}
+  defp lookup_target_ids([], _workspace_id), do: %{}
+
+  defp lookup_target_ids(paths, workspace_id) do
+    WikiPage
+    |> where([p], p.file_key in ^paths)
+    |> filter_workspace(workspace_id)
+    |> Repo.all()
+    |> Map.new(fn p -> {p.file_key, p.id} end)
+  end
+
+  # Used inside `Repo.transaction/1` to either return the value or
+  # short-circuit by rolling back with the changeset error.
+  @spec unwrap_or_rollback({:ok, term()} | {:error, term()}) :: term()
+  defp unwrap_or_rollback({:ok, value}), do: value
+  defp unwrap_or_rollback({:error, reason}), do: Repo.rollback(reason)
 
   # ── Frontmatter parser internals ──────────────────────────────────────
 
