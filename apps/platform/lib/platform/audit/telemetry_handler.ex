@@ -31,7 +31,10 @@ defmodule Platform.Audit.TelemetryHandler do
     [:platform, :auth, :login],
     [:platform, :auth, :callback],
     [:platform, :auth, :logout],
-    [:platform, :auth, :access_blocked]
+    [:platform, :auth, :access_blocked],
+    # Stage 3 of task 019e41a9 — emitted by
+    # `Platform.Tenancy.promote_to_admin/2` and `revoke_admin/2`.
+    [:platform, :tenancy, :role_change]
   ]
 
   @doc "Attach the handler to all registered platform telemetry events."

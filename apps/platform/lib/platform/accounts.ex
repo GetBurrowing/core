@@ -79,23 +79,30 @@ defmodule Platform.Accounts do
   Find a user by OIDC `sub`, creating one if missing, or refreshing
   email/name/avatar from the OIDC payload.
 
-  ## Self-healing admin rule (Stage 2)
+  ## Self-healing admin rule (Stage 2) + manual-override overlay (Stage 3)
 
   Wrapped in `Ecto.Multi` so the user write and the Fabrikam-membership
   upsert are atomic:
 
     * **INSERT**: every new user gets an `org_memberships` row in Fabrikam
       with role derived from `Platform.Tenancy.derive_role_from_email/1`
-      (`:admin` for `@example.com`, `:member` otherwise).
+      (`:admin` for `@example.com`, `:member` otherwise). No lock exists
+      yet for a fresh user, so the rule always applies on first INSERT.
     * **UPDATE with email change**: if the email changes AND the new
-      email derives `:admin`, promote the user in Fabrikam. **No auto-revoke**
+      email derives `:admin`, promote the user in Fabrikam — UNLESS the
+      Fabrikam membership row has `roles_locked_at` set, in which case the
+      manual grant wins and the row is left untouched. **No auto-revoke**
       — a Fabrikam email changing to non-Fabrikam leaves the existing role
       untouched. Offboarding is explicitly out of scope (plan Stage 2).
     * **UPDATE without email change**: pure idempotent refresh of
       name/avatar; no membership write.
 
+  Both paths go through `Platform.Tenancy.apply_derived_role/1`, which
+  is the lock-aware entry point for the rule.
+
   See `Platform.Tenancy.derive_role_from_email/1` for the rule and the
-  WARNING about Fabrikam alias domains.
+  WARNING about Fabrikam alias domains. See `Platform.Tenancy.promote_to_admin/2`
+  / `revoke_admin/2` for the manual-override ops API.
   """
   def find_or_create_from_oidc(%{sub: sub, email: email, name: name} = oidc_user)
       when is_binary(sub) and is_binary(email) and is_binary(name) do
@@ -120,8 +127,11 @@ defmodule Platform.Accounts do
     Multi.new()
     |> Multi.insert(:user, changeset)
     |> Multi.run(:membership, fn _repo, %{user: user} ->
-      role = Tenancy.derive_role_from_email(user.email)
-      Tenancy.set_membership_role(user, :fabrikam, role)
+      # Fresh user → no row exists yet → no lock to honor. Going through
+      # `apply_derived_role/1` (rather than `set_membership_role/3`
+      # directly) keeps INSERT and UPDATE paths consistent: both ask the
+      # tenancy module for the lock-aware decision.
+      Tenancy.apply_derived_role(user)
     end)
     |> Repo.transaction()
     |> case do
@@ -151,16 +161,18 @@ defmodule Platform.Accounts do
   end
 
   # Promote only — no auto-revoke. If the email changed and the new
-  # email derives :admin, set the Fabrikam membership to :admin. Otherwise
-  # leave the existing membership row (if any) untouched. Returning
-  # `{:ok, :noop}` is harmless inside `Multi.run/3`.
+  # email derives :admin, set the Fabrikam membership to :admin VIA the
+  # lock-aware `apply_derived_role/1` — which is a no-op if the row is
+  # manually locked (Stage 3). Otherwise leave the existing membership
+  # row (if any) untouched. Returning `{:ok, :noop}` is harmless inside
+  # `Multi.run/3`.
   defp maybe_promote_on_email_change(%User{email: old_email}, %User{email: new_email})
        when old_email == new_email,
        do: {:ok, :noop}
 
   defp maybe_promote_on_email_change(%User{}, %User{email: new_email} = updated) do
     case Tenancy.derive_role_from_email(new_email) do
-      :admin -> Tenancy.set_membership_role(updated, :fabrikam, :admin)
+      :admin -> Tenancy.apply_derived_role(updated)
       :member -> {:ok, :noop}
     end
   end

@@ -31,6 +31,10 @@ defmodule Platform.Tenancy.OrgMembership do
     belongs_to(:org, Platform.Tenancy.Org)
 
     field(:role, :string)
+    # When set, the self-healing hook in `Platform.Accounts` skips
+    # evaluation for this row — manual grant wins. See Stage 3 migration
+    # `20260519220000_add_roles_locked_at_to_org_memberships.exs`.
+    field(:roles_locked_at, :utc_datetime_usec)
 
     timestamps()
   end
@@ -41,7 +45,7 @@ defmodule Platform.Tenancy.OrgMembership do
 
   def changeset(membership, attrs) do
     membership
-    |> cast(attrs, [:user_id, :org_id, :role])
+    |> cast(attrs, [:user_id, :org_id, :role, :roles_locked_at])
     |> validate_required([:user_id, :org_id, :role])
     |> validate_inclusion(:role, @roles)
     |> unique_constraint([:user_id, :org_id])

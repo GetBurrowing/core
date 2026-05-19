@@ -687,4 +687,202 @@ defmodule Platform.TenancyTest do
       refute changeset.valid?
     end
   end
+
+  # ── Denylist overlay + ops API (Stage 3) ─────────────────────────────
+  #
+  # Exercises the `roles_locked_at` overlay and the `promote_to_admin/2`
+  # / `revoke_admin/2` ops API on top of the Stage 2 self-healing hook.
+  # Skipped case (auto-revoke / lock-prevents-auto-revoke): there IS no
+  # auto-revoke in the current design — Stage 2 only auto-PROMOTES on
+  # email change, and offboarding is documented as out of scope for this
+  # task. That case would only matter if a future stage adds auto-revoke
+  # behavior. See plan task 019e41a9 Stage 2.
+
+  describe "denylist overlay + ops API" do
+    test "apply_derived_role/1 SKIPS evaluation when roles_locked_at is set (lock prevents auto-promote)" do
+      # Non-Fabrikam email → starts at :member, then we manually lock the row,
+      # then we change the email to @example.com and re-apply the rule.
+      # The lock should hold → role stays :member.
+      user = create_user!(%{email: "contractor@vendor.example"})
+      {:ok, membership} = Tenancy.apply_derived_role(user)
+      assert membership.role == "member"
+      assert is_nil(membership.roles_locked_at)
+
+      # Manually set the lock without changing the role.
+      {:ok, locked} =
+        membership
+        |> OrgMembership.changeset(%{roles_locked_at: DateTime.utc_now()})
+        |> Repo.update()
+
+      assert not is_nil(locked.roles_locked_at)
+
+      # Simulate email change to a Fabrikam address and re-apply the rule.
+      promoted_email_user = %{user | email: "contractor@example.com"}
+      {:ok, after_apply} = Tenancy.apply_derived_role(promoted_email_user)
+
+      # Lock holds — still :member, lock timestamp unchanged.
+      assert after_apply.role == "member"
+      assert after_apply.roles_locked_at == locked.roles_locked_at
+      assert fabrikam_role(user) == "member"
+    end
+
+    test "apply_derived_role/1 with no existing row inserts at the derived role (no lock to honor)" do
+      # Fresh user, no membership row yet → rule applies normally.
+      user = create_user!(%{email: "alice@example.com"})
+      assert fabrikam_membership_count(user) == 0
+
+      {:ok, membership} = Tenancy.apply_derived_role(user)
+
+      assert membership.role == "admin"
+      assert is_nil(membership.roles_locked_at)
+    end
+
+    test "apply_derived_role/1 with no lock applies the rule normally" do
+      user = create_user!(%{email: "alice@example.com"})
+      # First insert at :member with no lock, then re-apply → should promote.
+      create_membership!(user, Tenancy.get_org_by_slug!("fabrikam"), "member")
+
+      {:ok, after_apply} = Tenancy.apply_derived_role(user)
+
+      assert after_apply.role == "admin"
+      assert is_nil(after_apply.roles_locked_at)
+    end
+
+    test "apply_derived_role/1 returns {:error, :invalid_input} for non-user input" do
+      assert {:error, :invalid_input} = Tenancy.apply_derived_role(%{not_a: :user})
+    end
+
+    test "promote_to_admin/2 sets role=:admin AND roles_locked_at on a new row" do
+      user = create_user!(%{email: "partner@external.example"})
+
+      assert {:ok, membership} = Tenancy.promote_to_admin(user)
+      assert membership.role == "admin"
+      assert %DateTime{} = membership.roles_locked_at
+    end
+
+    test "promote_to_admin/2 promotes an existing :member row and sets the lock" do
+      user = create_user!(%{email: "partner@external.example"})
+      create_membership!(user, Tenancy.get_org_by_slug!("fabrikam"), "member")
+
+      assert {:ok, membership} = Tenancy.promote_to_admin(user)
+      assert membership.role == "admin"
+      assert %DateTime{} = membership.roles_locked_at
+    end
+
+    test "promote_to_admin/2 is idempotent on an already-admin-and-locked row (no write)" do
+      user = create_user!(%{email: "partner@external.example"})
+      assert {:ok, first} = Tenancy.promote_to_admin(user)
+      assert {:ok, second} = Tenancy.promote_to_admin(user)
+
+      assert first.id == second.id
+      # Re-call did not bump updated_at because no DB write happened.
+      assert first.updated_at == second.updated_at
+      assert first.roles_locked_at == second.roles_locked_at
+    end
+
+    test "revoke_admin/2 sets role=:member AND roles_locked_at on a new row" do
+      user = create_user!(%{email: "noadmin@example.com"})
+
+      assert {:ok, membership} = Tenancy.revoke_admin(user)
+      assert membership.role == "member"
+      assert %DateTime{} = membership.roles_locked_at
+    end
+
+    test "revoke_admin/2 demotes a Stage 2-auto-promoted admin and locks the row" do
+      # Create an @example.com user, then run the Stage 2 hook to give
+      # them admin. Now revoke_admin → :member + lock. Then re-apply the
+      # rule and assert it stays :member (lock holds).
+      user = create_user!(%{email: "contractor@example.com"})
+      {:ok, after_stage2} = Tenancy.apply_derived_role(user)
+      assert after_stage2.role == "admin"
+
+      assert {:ok, revoked} = Tenancy.revoke_admin(user)
+      assert revoked.role == "member"
+      assert %DateTime{} = revoked.roles_locked_at
+
+      # Re-run the rule — lock holds.
+      {:ok, after_apply} = Tenancy.apply_derived_role(user)
+      assert after_apply.role == "member"
+      assert fabrikam_role(user) == "member"
+    end
+
+    test "revoke_admin/2 is idempotent on an already-member-and-locked row (no write)" do
+      user = create_user!(%{email: "noadmin@example.com"})
+      assert {:ok, first} = Tenancy.revoke_admin(user)
+      assert {:ok, second} = Tenancy.revoke_admin(user)
+
+      assert first.id == second.id
+      assert first.updated_at == second.updated_at
+      assert first.roles_locked_at == second.roles_locked_at
+    end
+
+    test "promote_to_admin/2 returns {:error, :org_not_found} for an unknown org_slug" do
+      user = create_user!()
+
+      assert {:error, :org_not_found} =
+               Tenancy.promote_to_admin(user, org_slug: "definitely-not-a-real-slug")
+    end
+
+    test "revoke_admin/2 returns {:error, :org_not_found} for an unknown org_slug" do
+      user = create_user!()
+
+      assert {:error, :org_not_found} =
+               Tenancy.revoke_admin(user, org_slug: "definitely-not-a-real-slug")
+    end
+
+    test "promote_to_admin/2 returns {:error, :invalid_input} for non-user input" do
+      assert {:error, :invalid_input} = Tenancy.promote_to_admin(%{not_a: :user})
+    end
+
+    test "revoke_admin/2 returns {:error, :invalid_input} for non-user input" do
+      assert {:error, :invalid_input} = Tenancy.revoke_admin(%{not_a: :user})
+    end
+
+    test "promote_to_admin/2 emits a [:platform, :tenancy, :role_change] audit event" do
+      user = create_user!(%{email: "partner@external.example"})
+
+      Platform.Audit.subscribe()
+
+      assert {:ok, membership} =
+               Tenancy.promote_to_admin(user, actor_id: Ecto.UUID.generate(), reason: "elevation")
+
+      assert_receive {:audit_event, event}, 500
+      assert event.event_type == "platform.tenancy.role_change"
+      assert event.action == "promote_to_admin"
+      assert event.resource_type == "org_membership"
+      assert event.resource_id == membership.id
+      assert event.metadata["to_role"] == "admin"
+      assert event.metadata["target_user_id"] == user.id
+      assert event.metadata["reason"] == "elevation"
+    end
+
+    test "revoke_admin/2 emits a [:platform, :tenancy, :role_change] audit event" do
+      user = create_user!(%{email: "contractor@example.com"})
+      {:ok, _} = Tenancy.apply_derived_role(user)
+
+      Platform.Audit.subscribe()
+
+      assert {:ok, membership} =
+               Tenancy.revoke_admin(user, actor_id: Ecto.UUID.generate(), reason: "contractor")
+
+      assert_receive {:audit_event, event}, 500
+      assert event.event_type == "platform.tenancy.role_change"
+      assert event.action == "revoke_admin"
+      assert event.resource_id == membership.id
+      assert event.metadata["from_role"] == "admin"
+      assert event.metadata["to_role"] == "member"
+      assert event.metadata["reason"] == "contractor"
+    end
+
+    test "ops API defaults to actor_type=system when no actor_id is given" do
+      user = create_user!(%{email: "partner@external.example"})
+
+      Platform.Audit.subscribe()
+      assert {:ok, _} = Tenancy.promote_to_admin(user)
+
+      assert_receive {:audit_event, event}, 500
+      assert event.actor_type == "system"
+      assert is_nil(event.actor_id)
+    end
+  end
 end

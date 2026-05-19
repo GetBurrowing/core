@@ -50,6 +50,28 @@ defmodule Platform.Tenancy do
   > — keep the two in sync. Contractors temporarily on `@example.com`
   > should be denylisted via the `roles_locked_at` column (Stage 3 of
   > this task).
+
+  ## Manual-override overlay (Stage 3)
+
+  When `roles_locked_at` is non-nil on a membership row, the Stage 2
+  self-healing hook treats that row as **manually managed** and does
+  NOT re-evaluate the email-domain rule. Use `promote_to_admin/2` /
+  `revoke_admin/2` to set the lock; clearing the lock requires a
+  deliberate ops action (not exposed in this stage).
+
+  The lock-aware entry point that the accounts hook calls is
+  `apply_derived_role/1` — it consults `roles_locked_at` BEFORE
+  delegating to `set_membership_role/3`. `set_membership_role/3` itself
+  remains an unconditional setter, used by `promote_to_admin/2` and
+  `revoke_admin/2` to forcibly set both the role and the lock.
+
+  ## Audit pipeline
+
+  Every `promote_to_admin/2` and `revoke_admin/2` call emits a
+  `:telemetry` event `[:platform, :tenancy, :role_change]` which is
+  bridged to the canonical audit store by `Platform.Audit.TelemetryHandler`.
+  Subscribers can listen on `Platform.Audit.subscribe/1` (default topic
+  `"audit:all"`) or on `"audit:platform.tenancy.role_change"`.
   """
 
   import Ecto.Query
@@ -412,4 +434,253 @@ defmodule Platform.Tenancy do
         |> Repo.update()
     end
   end
+
+  # ── Manual-override overlay (Stage 3) ────────────────────────────────
+
+  @doc """
+  Lock-aware caller used by `Platform.Accounts.find_or_create_from_oidc/1`.
+
+  If a membership row exists for `{user, :fabrikam}` AND its `roles_locked_at`
+  is non-nil, this is a no-op and returns `{:ok, existing}` — the manual
+  grant wins. Otherwise the email-domain rule is evaluated and the row is
+  upserted via `set_membership_role/3`.
+
+  This is the function the accounts hook should call. `set_membership_role/3`
+  remains the unconditional setter for `promote_to_admin/2` /
+  `revoke_admin/2`.
+  """
+  @spec apply_derived_role(%{:id => binary(), :email => any(), optional(atom()) => any()}) ::
+          {:ok, OrgMembership.t() | :noop}
+          | {:error, :org_not_found}
+          | {:error, Ecto.Changeset.t()}
+  def apply_derived_role(%{id: user_id, email: email} = user) when is_binary(user_id) do
+    slug_str = normalize_slug(:fabrikam)
+
+    case get_org_by_slug(slug_str) do
+      nil ->
+        {:error, :org_not_found}
+
+      %Org{id: org_id} ->
+        case Repo.get_by(OrgMembership, user_id: user_id, org_id: org_id) do
+          %OrgMembership{roles_locked_at: %DateTime{}} = locked ->
+            # Manual grant wins — skip evaluation entirely.
+            {:ok, locked}
+
+          _ ->
+            role = derive_role_from_email(email)
+            set_membership_role(user, :fabrikam, role)
+        end
+    end
+  end
+
+  def apply_derived_role(_), do: {:error, :invalid_input}
+
+  @doc """
+  Promote `user` to `:admin` on the Fabrikam root org and set `roles_locked_at`
+  so the email-domain rule no longer overrides this row.
+
+  Use for non-Fabrikam collaborators who should hold admin (e.g. a partner
+  engineer who needs full operator access despite an external email).
+
+  ## Idempotency
+
+  Re-calling on a row that is already `{role: :admin, roles_locked_at: <non-nil>}`
+  is a no-op and returns `{:ok, membership}` without a DB write. Calling
+  on a `:member`-with-lock row promotes AND refreshes the lock timestamp.
+
+  ## Options
+
+    * `:org_slug` — defaults to `"fabrikam"`.
+    * `:actor_id` — UUID of the user/agent making the change. Defaults to
+      `nil` and `actor_type` defaults to `"system"`.
+    * `:actor_type` — one of `Platform.Audit.Event.actor_types/0`. Defaults
+      to `"system"` when no `:actor_id` is given, `"user"` otherwise.
+    * `:reason` — free-form audit string. Defaults to `nil`.
+
+  ## Audit
+
+  Emits `[:platform, :tenancy, :role_change]` telemetry with action
+  `"promote_to_admin"`, which the `Audit.TelemetryHandler` bridges into a
+  persisted `Platform.Audit.Event` and broadcasts on PubSub. See the
+  `## Audit pipeline` section in the module `@moduledoc`.
+  """
+  @spec promote_to_admin(
+          %{:id => binary(), optional(atom()) => any()},
+          keyword()
+        ) ::
+          {:ok, OrgMembership.t()} | {:error, :org_not_found} | {:error, Ecto.Changeset.t()}
+  def promote_to_admin(user, opts \\ []), do: set_managed_role(user, :admin, opts)
+
+  @doc """
+  Revoke admin on `user`'s Fabrikam membership — sets `role: :member` AND
+  `roles_locked_at` so the email-domain rule cannot re-promote them on
+  the next OIDC refresh.
+
+  Use for contractors on a `@example.com` email who should NOT have admin.
+
+  ## Idempotency
+
+  Re-calling on a row that is already `{role: :member, roles_locked_at: <non-nil>}`
+  is a no-op. Calling on `:admin` demotes AND sets the lock.
+
+  ## Options
+
+  Same shape as `promote_to_admin/2` — see there for details.
+
+  ## Audit
+
+  Emits `[:platform, :tenancy, :role_change]` telemetry with action
+  `"revoke_admin"`.
+  """
+  @spec revoke_admin(
+          %{:id => binary(), optional(atom()) => any()},
+          keyword()
+        ) ::
+          {:ok, OrgMembership.t()} | {:error, :org_not_found} | {:error, Ecto.Changeset.t()}
+  def revoke_admin(user, opts \\ []), do: set_managed_role(user, :member, opts)
+
+  # Core implementation for promote_to_admin / revoke_admin. Force-sets
+  # both `role` and `roles_locked_at` on the user's Fabrikam membership row
+  # and emits an audit event. Idempotent on already-target rows.
+  defp set_managed_role(%{id: user_id} = user, target_role, opts)
+       when is_binary(user_id) and target_role in [:admin, :member] do
+    slug_str = opts |> Keyword.get(:org_slug, "fabrikam") |> normalize_slug()
+    role_str = Atom.to_string(target_role)
+    now = DateTime.utc_now()
+
+    case get_org_by_slug(slug_str) do
+      nil ->
+        {:error, :org_not_found}
+
+      %Org{id: org_id} ->
+        existing = Repo.get_by(OrgMembership, user_id: user_id, org_id: org_id)
+
+        case write_managed_membership(existing, user_id, org_id, role_str, now) do
+          {:ok, membership, from_role} ->
+            emit_role_change_audit(
+              user_id: user_id,
+              membership: membership,
+              from_role: from_role,
+              to_role: role_str,
+              action: managed_action_name(target_role),
+              opts: opts
+            )
+
+            {:ok, membership}
+
+          {:error, _} = err ->
+            err
+        end
+    end
+  end
+
+  defp set_managed_role(_, _, _), do: {:error, :invalid_input}
+
+  defp managed_action_name(:admin), do: "promote_to_admin"
+  defp managed_action_name(:member), do: "revoke_admin"
+
+  # No row → insert with role + lock.
+  defp write_managed_membership(nil, user_id, org_id, role_str, now) do
+    %OrgMembership{}
+    |> OrgMembership.changeset(%{
+      user_id: user_id,
+      org_id: org_id,
+      role: role_str,
+      roles_locked_at: now
+    })
+    |> Repo.insert()
+    |> case do
+      {:ok, m} -> {:ok, m, nil}
+      {:error, _} = err -> err
+    end
+  end
+
+  # Row exists, already at target role AND locked → no-op (idempotent).
+  defp write_managed_membership(
+         %OrgMembership{role: same, roles_locked_at: %DateTime{}} = existing,
+         _user_id,
+         _org_id,
+         same,
+         _now
+       ) do
+    {:ok, existing, same}
+  end
+
+  # Row exists, target role but no lock → set the lock only (write).
+  defp write_managed_membership(
+         %OrgMembership{role: same, roles_locked_at: nil} = existing,
+         _user_id,
+         _org_id,
+         same,
+         now
+       ) do
+    existing
+    |> OrgMembership.changeset(%{roles_locked_at: now})
+    |> Repo.update()
+    |> case do
+      {:ok, m} -> {:ok, m, same}
+      {:error, _} = err -> err
+    end
+  end
+
+  # Row exists, role differs (or no lock) → set both.
+  defp write_managed_membership(
+         %OrgMembership{role: from_role} = existing,
+         _user_id,
+         _org_id,
+         role_str,
+         now
+       ) do
+    existing
+    |> OrgMembership.changeset(%{role: role_str, roles_locked_at: now})
+    |> Repo.update()
+    |> case do
+      {:ok, m} -> {:ok, m, from_role}
+      {:error, _} = err -> err
+    end
+  end
+
+  # Emit telemetry on the canonical audit pipeline. The
+  # `Audit.TelemetryHandler` persists to `audit_events` and broadcasts to
+  # PubSub. Registered in @events on that handler so it actually flows.
+  defp emit_role_change_audit(
+         user_id: user_id,
+         membership: %OrgMembership{} = membership,
+         from_role: from_role,
+         to_role: to_role,
+         action: action,
+         opts: opts
+       ) do
+    actor_id = Keyword.get(opts, :actor_id)
+
+    actor_type =
+      Keyword.get(opts, :actor_type, if(actor_id, do: "user", else: "system"))
+
+    reason = Keyword.get(opts, :reason)
+
+    :telemetry.execute(
+      [:platform, :tenancy, :role_change],
+      %{system_time: System.system_time()},
+      %{
+        actor_id: actor_id,
+        actor_type: actor_type,
+        action: action,
+        resource_type: "org_membership",
+        resource_id: membership.id,
+        target_user_id: user_id,
+        org_id: membership.org_id,
+        from_role: from_role,
+        to_role: to_role,
+        # ISO 8601 string (not a DateTime struct) because the audit
+        # handler's JSON-safe coercion can't traverse arbitrary structs.
+        locked_at: iso_or_nil(membership.roles_locked_at),
+        reason: reason
+      }
+    )
+
+    :ok
+  end
+
+  defp iso_or_nil(%DateTime{} = dt), do: DateTime.to_iso8601(dt)
+  defp iso_or_nil(_), do: nil
 end
