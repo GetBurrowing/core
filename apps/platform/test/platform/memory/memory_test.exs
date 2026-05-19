@@ -108,5 +108,24 @@ defmodule Platform.MemoryTest do
 
       assert_received {:captured, [%{id: "a"}, %{id: "b", memory_type: "daily"}]}
     end
+
+    test "preserves arbitrary memory_type strings (e.g. T3 \"page\" / \"journal\")" do
+      # The normalize/1 path defaults memory_type to "daily" only when
+      # absent; explicit values must survive. T3 (ADR-0041) ingests
+      # wiki pages with memory_type "page" and journal entries with
+      # "journal". Regression-guard: this test fails if anyone changes
+      # normalize/1 to coerce/whitelist memory_type.
+      {:ok, 2} =
+        Memory.ingest([
+          %{id: "p", content: "page", memory_type: "page", date: "2026-05-19"},
+          %{id: "j", content: "journal", memory_type: "journal", date: "2026-05-19"}
+        ])
+
+      assert_received {:captured,
+                       [
+                         %{id: "p", memory_type: "page"},
+                         %{id: "j", memory_type: "journal"}
+                       ]}
+    end
   end
 end
