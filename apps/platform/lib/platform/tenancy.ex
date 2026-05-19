@@ -87,6 +87,62 @@ defmodule Platform.Tenancy do
     |> Repo.all()
   end
 
+  @doc """
+  Pure-function variant of `fabrikam_admin?/1` that consumes the already-
+  preloaded `org_memberships` (with nested `:org`) on a user struct
+  instead of hitting the DB.
+
+  Returns `true` iff the preloaded list contains a membership with
+  `role == "admin"` joined to the root org (`parent_org_id == nil`).
+  Returns `false` for `nil`, unloaded associations, and any other shape.
+
+  Used on the hot authentication path (RequireAuth plug + LiveAuth
+  `on_mount`) where `Accounts.get_user/1` has already preloaded
+  memberships — calling `fabrikam_admin?/1` there would issue a redundant
+  query.
+  """
+  @spec fabrikam_admin_preloaded?(any()) :: boolean()
+  def fabrikam_admin_preloaded?(%{org_memberships: memberships}) when is_list(memberships) do
+    Enum.any?(memberships, fn
+      %OrgMembership{role: "admin", org: %Org{parent_org_id: nil}} -> true
+      _ -> false
+    end)
+  end
+
+  def fabrikam_admin_preloaded?(_), do: false
+
+  @doc """
+  Pure function — extracts the user's primary membership from an
+  already-preloaded user struct. **No DB call**.
+
+  Expects `Platform.Accounts.get_user/1` (or equivalent) to have
+  preloaded `:org_memberships` with the nested `:org` so the call sites
+  on the hot authentication path (RequireAuth plug, LiveAuth `on_mount`)
+  can derive membership without an extra round-trip.
+
+  Returns `%{org: %Org{}, role: :admin | :member}` for a user with at
+  least one membership, picking the first membership in the preloaded
+  list. Returns `nil` for:
+
+    * a user with no memberships (`org_memberships: []`)
+    * an unloaded association (`%Ecto.Association.NotLoaded{}`)
+    * a `nil` user
+    * any other shape
+
+  When a user has multiple memberships (multi-tenant power user) the
+  ordering is whatever the preload returned — which today is unordered.
+  Downstream call sites should NOT rely on the choice; a follow-up
+  stack member will add explicit org selection (Plan 3 in the MT/RBAC
+  roadmap).
+  """
+  @spec load_membership(any()) :: %{org: Org.t(), role: :admin | :member} | nil
+  def load_membership(%{org_memberships: [%OrgMembership{org: %Org{} = org, role: role} | _]})
+      when is_binary(role) do
+    %{org: org, role: String.to_existing_atom(role)}
+  end
+
+  def load_membership(_), do: nil
+
   # ── Role helpers ──────────────────────────────────────────────────────
 
   @doc """

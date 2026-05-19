@@ -3,6 +3,7 @@ defmodule PlatformWeb.Plugs.RequireAuth do
   import Phoenix.Controller
 
   alias Platform.Accounts
+  alias Platform.Tenancy
 
   def init(opts), do: opts
 
@@ -19,7 +20,9 @@ defmodule PlatformWeb.Plugs.RequireAuth do
             |> halt()
 
           user ->
-            assign(conn, :current_user, user)
+            conn
+            |> assign(:current_user, user)
+            |> assign_membership(user)
         end
 
       _ ->
@@ -29,6 +32,22 @@ defmodule PlatformWeb.Plugs.RequireAuth do
         |> redirect(to: "/auth/login")
         |> halt()
     end
+  end
+
+  # Pure-function derivation of MT/RBAC assigns from an already-preloaded
+  # user struct (task 019e3c4a stage 2). `Accounts.get_user/1` preloaded
+  # `:org_memberships` (with the nested `:org`) on the round-trip above,
+  # so this step does NOT issue an additional Repo query. Keeping the
+  # assigns set on the conn means controllers + LiveView mounts (via
+  # session round-trip + LiveAuth) see a consistent shape without each
+  # having to re-derive.
+  defp assign_membership(conn, user) do
+    membership = Tenancy.load_membership(user)
+    fabrikam_admin? = Tenancy.fabrikam_admin_preloaded?(user)
+
+    conn
+    |> assign(:current_user_org_membership, membership)
+    |> assign(:fabrikam_admin?, fabrikam_admin?)
   end
 
   defp emit_access_blocked(conn, reason, actor_id) do

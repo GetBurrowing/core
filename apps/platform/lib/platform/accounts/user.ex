@@ -12,6 +12,12 @@ defmodule Platform.Accounts.User do
     field(:avatar_url, :string)
     field(:avatar_source, Ecto.Enum, values: [:oidc, :local, :generated])
 
+    # MT/RBAC foundation (Plan 2 v3, task 019e3c4a). Users carry their
+    # org memberships so authenticated request hot paths can preload
+    # them on the same round-trip as the user fetch and avoid a
+    # follow-up query in plugs / LV `on_mount` hooks.
+    has_many(:org_memberships, Platform.Tenancy.OrgMembership)
+
     timestamps()
   end
 

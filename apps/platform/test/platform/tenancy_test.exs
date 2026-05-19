@@ -202,6 +202,96 @@ defmodule Platform.TenancyTest do
     end
   end
 
+  # ── fabrikam_admin_preloaded?/1 (pure variant — no DB call) ─────────────
+
+  describe "fabrikam_admin_preloaded?/1" do
+    test "true when the preloaded list has an admin membership on the root org" do
+      fabrikam = Tenancy.get_org_by_slug!("fabrikam")
+
+      user = %User{
+        id: Ecto.UUID.generate(),
+        org_memberships: [
+          %OrgMembership{role: "admin", org: fabrikam}
+        ]
+      }
+
+      assert Tenancy.fabrikam_admin_preloaded?(user)
+    end
+
+    test "false for a preloaded member-role Fabrikam membership" do
+      fabrikam = Tenancy.get_org_by_slug!("fabrikam")
+      user = %User{org_memberships: [%OrgMembership{role: "member", org: fabrikam}]}
+      refute Tenancy.fabrikam_admin_preloaded?(user)
+    end
+
+    test "false for an admin membership on a tenant org" do
+      soylent = Tenancy.get_org_by_slug!("soylent")
+      user = %User{org_memberships: [%OrgMembership{role: "admin", org: soylent}]}
+      refute Tenancy.fabrikam_admin_preloaded?(user)
+    end
+
+    test "false when the preloaded list is empty" do
+      refute Tenancy.fabrikam_admin_preloaded?(%User{org_memberships: []})
+    end
+
+    test "false when the association is unloaded" do
+      refute Tenancy.fabrikam_admin_preloaded?(%User{})
+    end
+
+    test "false for nil input" do
+      refute Tenancy.fabrikam_admin_preloaded?(nil)
+    end
+  end
+
+  # ── load_membership/1 (pure — no DB call) ────────────────────────────
+
+  describe "load_membership/1" do
+    test "returns %{org:, role:} for an admin user with a preloaded membership" do
+      fabrikam = Tenancy.get_org_by_slug!("fabrikam")
+      user = %User{org_memberships: [%OrgMembership{role: "admin", org: fabrikam}]}
+
+      assert %{org: %Org{slug: "fabrikam"}, role: :admin} = Tenancy.load_membership(user)
+    end
+
+    test "returns %{org:, role:} for a member user" do
+      soylent = Tenancy.get_org_by_slug!("soylent")
+      user = %User{org_memberships: [%OrgMembership{role: "member", org: soylent}]}
+
+      assert %{org: %Org{slug: "soylent"}, role: :member} = Tenancy.load_membership(user)
+    end
+
+    test "returns the first membership when multiple are preloaded" do
+      fabrikam = Tenancy.get_org_by_slug!("fabrikam")
+      sxi = Tenancy.get_org_by_slug!("sxi")
+
+      user = %User{
+        org_memberships: [
+          %OrgMembership{role: "admin", org: fabrikam},
+          %OrgMembership{role: "member", org: sxi}
+        ]
+      }
+
+      assert %{org: %Org{slug: "fabrikam"}, role: :admin} = Tenancy.load_membership(user)
+    end
+
+    test "returns nil when the user has no memberships" do
+      assert is_nil(Tenancy.load_membership(%User{org_memberships: []}))
+    end
+
+    test "returns nil when the association is unloaded" do
+      # Default association shape on a freshly built struct.
+      assert is_nil(Tenancy.load_membership(%User{}))
+    end
+
+    test "returns nil for nil input" do
+      assert is_nil(Tenancy.load_membership(nil))
+    end
+
+    test "returns nil for non-user input" do
+      assert is_nil(Tenancy.load_membership(%{not_a: :user}))
+    end
+  end
+
   # ── member_of?/2 ─────────────────────────────────────────────────────
 
   describe "member_of?/2" do

@@ -7,14 +7,33 @@ defmodule PlatformWeb.ShellLiveTest do
   alias Platform.Agents.Agent
   alias Platform.Chat
   alias Platform.Repo
+  alias Platform.Tenancy
+  alias Platform.Tenancy.OrgMembership
 
-  defp authenticated_conn(conn) do
+  defp authenticated_conn(conn, opts \\ []) do
+    role = Keyword.get(opts, :role, "admin")
+
     user =
       Repo.insert!(%User{
-        email: "shell_test@example.com",
+        email: "shell_test_#{System.unique_integer([:positive])}@example.com",
         name: "Shell Test User",
         oidc_sub: "oidc-shell-test-#{System.unique_integer([:positive])}"
       })
+
+    # MT/RBAC stack 2 (task 019e3c4a): the admin nav gate now reads
+    # `Tenancy.fabrikam_admin_preloaded?/1` instead of the
+    # `Accounts.is_fabrikam_user?/1` stub. Default test users are admin so
+    # the existing "renders rail / admin section" assertions keep working;
+    # tests that need a non-admin can pass `role: "member"`.
+    if role do
+      fabrikam = Tenancy.get_org_by_slug!("fabrikam")
+
+      Repo.insert!(%OrgMembership{
+        user_id: user.id,
+        org_id: fabrikam.id,
+        role: role
+      })
+    end
 
     init_test_session(conn, current_user_id: user.id)
   end
@@ -282,16 +301,26 @@ defmodule PlatformWeb.ShellLiveTest do
       assert html =~ ~r/bottom-nav-tab--active[^"]*"[^>]*data-destination="activity"/
     end
 
-    test "Admin tile renders on the desktop rail (stub treats every user as Fabrikam)", %{
+    test "Admin tile renders on the desktop rail for an admin user", %{
       conn: conn
     } do
-      conn = authenticated_conn(conn)
+      conn = authenticated_conn(conn, role: "admin")
       {:ok, _view, html} = live(conn, ~p"/tasks")
 
-      # is_fabrikam_user?/1 is a stub returning true for every user (TODO MT/RBAC).
-      # The Admin tile is present in the icon-rail and the Admin section is
-      # present in the More sheet.
+      # After MT/RBAC stack 2 (task 019e3c4a), the Admin tile is gated on
+      # `Tenancy.fabrikam_admin_preloaded?/1` instead of the
+      # `Accounts.is_fabrikam_user?/1` stub. Default test conn seeds an admin
+      # membership so the tile renders.
       assert html =~ ~s(data-destination="admin")
+    end
+
+    test "Admin tile is absent from the desktop rail for a non-admin (member) user", %{
+      conn: conn
+    } do
+      conn = authenticated_conn(conn, role: "member")
+      {:ok, _view, html} = live(conn, ~p"/tasks")
+
+      refute html =~ ~s(data-destination="admin")
     end
 
     test "Chat tile carries the LastChatLink hook so the link target gets rewritten", %{
@@ -318,22 +347,36 @@ defmodule PlatformWeb.ShellLiveTest do
     end
   end
 
-  describe "Admin gate (is_fabrikam_user)" do
-    test "is_fabrikam_user assign is true by default (stub returns true)", %{conn: conn} do
-      conn = authenticated_conn(conn)
+  describe "Admin gate (fabrikam_admin? + is_fabrikam_user)" do
+    test "is_fabrikam_user assign reflects real Fabrikam-root admin membership", %{conn: conn} do
+      conn = authenticated_conn(conn, role: "admin")
       {:ok, view, _html} = live(conn, ~p"/tasks")
 
       assert :sys.get_state(view.pid).socket.assigns.is_fabrikam_user == true
     end
 
-    test "More sheet renders the Admin section when is_fabrikam_user is true", %{conn: conn} do
-      conn = authenticated_conn(conn)
+    test "is_fabrikam_user is false for a Fabrikam member (non-admin)", %{conn: conn} do
+      conn = authenticated_conn(conn, role: "member")
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+
+      assert :sys.get_state(view.pid).socket.assigns.is_fabrikam_user == false
+    end
+
+    test "More sheet renders the Admin section for an admin user", %{conn: conn} do
+      conn = authenticated_conn(conn, role: "admin")
       {:ok, _view, html} = live(conn, ~p"/tasks")
 
       # Admin section header text + the data-destination on the admin tile both
       # appear in the rendered More sheet (which is lg:hidden but still in the
       # DOM at all breakpoints — the hide is CSS-only).
       assert html =~ ">Admin<"
+    end
+
+    test "More sheet does NOT render the Admin section for a member user", %{conn: conn} do
+      conn = authenticated_conn(conn, role: "member")
+      {:ok, _view, html} = live(conn, ~p"/tasks")
+
+      refute html =~ ~s(data-destination="admin")
     end
   end
 end

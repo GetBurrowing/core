@@ -79,7 +79,7 @@ defmodule PlatformWeb.Router do
     get("/api/transcripts/:id/download", TranscriptController, :show)
 
     live_session :authenticated,
-      on_mount: [PlatformWeb.ShellLive],
+      on_mount: [PlatformWeb.ShellLive, {PlatformWeb.LiveAuth, :default}],
       layout: {PlatformWeb.Layouts, :shell} do
       live("/chat", ChatLive, :index)
       live("/chat/:space_slug", ChatLive, :show)
@@ -95,10 +95,23 @@ defmodule PlatformWeb.Router do
       live("/control", ControlCenterLive, :index)
       live("/control/usage", UsageLive, :index)
       live("/control/:agent_slug", ControlCenterLive, :show)
-      live("/admin/prompts", AdminPromptsLive, :index)
-      live("/admin/prompts/:slug", AdminPromptsLive, :edit)
       live("/org-context", OrgContextLive, :index)
       live("/org-context/:file_key", OrgContextLive, :show)
+    end
+
+    # MT/RBAC stack 2 (task 019e3c4a) — `/admin/*` lives in its own
+    # `live_session` so the `:ensure_admin` hook can halt-and-redirect
+    # non-admin mounts. Keeps the same `ShellLive` + `LiveAuth :default`
+    # prefix so the shell chrome renders before the admin gate fires.
+    live_session :admin,
+      on_mount: [
+        PlatformWeb.ShellLive,
+        {PlatformWeb.LiveAuth, :default},
+        {PlatformWeb.LiveAuth, :ensure_admin}
+      ],
+      layout: {PlatformWeb.Layouts, :shell} do
+      live("/admin/prompts", AdminPromptsLive, :index)
+      live("/admin/prompts/:slug", AdminPromptsLive, :edit)
       live("/admin/federation", AdminFederationLive, :index)
     end
   end

@@ -32,7 +32,16 @@ defmodule PlatformWeb.ShellLive do
         _ -> session["user_email"] || session["user_id"] || raw_user_id || "user"
       end
 
-    is_fabrikam_user = Accounts.is_fabrikam_user?(user_record)
+    # MT/RBAC stack 2 (task 019e3c4a): admin nav is now gated on real
+    # Fabrikam-root admin membership, not the legacy `Accounts.is_fabrikam_user?/1`
+    # stub which returned `true` for every user. We use the *pure*
+    # `fabrikam_admin_preloaded?/1` variant so this lookup costs zero extra
+    # Repo queries — `Accounts.get_user/1` (called a few lines above)
+    # preloaded `:org_memberships` with the nested `:org`.
+    # Both assigns are kept so existing components (icon_rail, bottom_rail,
+    # more_sheet) that read `is_fabrikam_user` continue to render correctly
+    # while new code adopts `fabrikam_admin?` via the LiveAuth hook.
+    is_fabrikam_user = Platform.Tenancy.fabrikam_admin_preloaded?(user_record)
 
     active_module = derive_active_module(socket.view)
 
@@ -86,6 +95,7 @@ defmodule PlatformWeb.ShellLive do
     socket =
       socket
       |> assign(:current_user, current_user)
+      |> assign(:current_user_record, user_record)
       |> assign(:current_user_id, raw_user_id)
       |> assign(:current_path, "/")
       |> assign(:agent_status, default_agent_status())

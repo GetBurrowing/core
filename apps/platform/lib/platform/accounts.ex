@@ -4,7 +4,26 @@ defmodule Platform.Accounts do
   alias Platform.Accounts.User
   alias Platform.Repo
 
-  def get_user(id), do: Repo.get(User, id)
+  @doc """
+  Fetch a user by id with `:org_memberships` (and the nested `:org`)
+  preloaded so the hot authentication path (RequireAuth plug → LV
+  on_mount → admin nav gate) gets the user + their membership without
+  follow-up DB calls downstream.
+
+  Returns `nil` when no user exists with the given id.
+
+  See `Platform.Tenancy.load_membership/1` for the pure-function reader
+  that consumes the preloaded shape.
+  """
+  @spec get_user(binary() | nil) :: User.t() | nil
+  def get_user(id) when is_binary(id) do
+    case Repo.get(User, id) do
+      nil -> nil
+      user -> Repo.preload(user, org_memberships: :org)
+    end
+  end
+
+  def get_user(_), do: nil
 
   @doc """
   Whether the given user is a Fabrikam admin (gates the Admin slot in the icon-rail
