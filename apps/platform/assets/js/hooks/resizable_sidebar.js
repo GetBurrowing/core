@@ -6,11 +6,14 @@
 const STORAGE_KEY = "suite:sidebar_width:v2";
 const DEFAULT_WIDTH = 224;
 
+function currentWidth() {
+  const saved = localStorage.getItem(STORAGE_KEY);
+  return saved ? parseInt(saved, 10) : DEFAULT_WIDTH;
+}
+
 const ResizableSidebar = {
   mounted() {
-    const saved = localStorage.getItem(STORAGE_KEY);
-    const initialWidth = saved ? parseInt(saved, 10) : DEFAULT_WIDTH;
-    this.el.style.width = initialWidth + "px";
+    this.applyWidth();
 
     this._handle = this.el.querySelector("[data-drag-handle]");
     if (!this._handle) return;
@@ -38,6 +41,17 @@ const ResizableSidebar = {
     };
 
     this._handle.addEventListener("mousedown", this._onMouseDown);
+  },
+
+  // LiveView patches the aside element on diff-update and morphdom resets
+  // inline styles set during mount. Re-apply the width on every update so
+  // the rail stays at the configured size across LV re-renders.
+  updated() {
+    this.applyWidth();
+  },
+
+  applyWidth() {
+    this.el.style.width = currentWidth() + "px";
   },
 
   destroyed() {
