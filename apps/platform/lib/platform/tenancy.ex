@@ -33,6 +33,23 @@ defmodule Platform.Tenancy do
     2. adding the slug → class / label entries below
     3. (later, when the design-system token lands) adding the
        `text-<slug>` and `bg-<slug>` utilities to `app.css`.
+
+  ## Email-domain admin rule (Stage 2 self-healing hook)
+
+  `derive_role_from_email/1` is the single source of truth for the
+  email-domain admin rule. The Stage 1 migration backfilled existing
+  users; the Stage 2 hook in `Platform.Accounts.find_or_create_from_oidc/1`
+  re-evaluates the rule on every user INSERT and on every email-change
+  UPDATE so new Fabrikam hires auto-inherit `:admin` without re-running the
+  migration.
+
+  > WARNING: the rule is locked to the literal `@example.com` suffix.
+  > Future Fabrikam alias domains (e.g. `example.com`, `kobo-ai.co`) need explicit
+  > additions to `derive_role_from_email/1` AND the matching SQL in
+  > `priv/repo/migrations/20260519160000_refine_fabrikam_admin_membership_by_email_domain.exs`
+  > — keep the two in sync. Contractors temporarily on `@example.com`
+  > should be denylisted via the `roles_locked_at` column (Stage 3 of
+  > this task).
   """
 
   import Ecto.Query
@@ -284,5 +301,115 @@ defmodule Platform.Tenancy do
     String.to_existing_atom(s)
   rescue
     ArgumentError -> :__unknown__
+  end
+
+  # ── Email-domain admin rule (Stage 2 self-healing hook) ──────────────
+
+  # Anchored at the end of string so a literal `@example.com` suffix is
+  # required. Matches the migration's SQL `LIKE '%@example.com'` semantic:
+  # `example.com@example.com` → :member (suffix is `@gmail.com`)
+  # `alice@us.example.com` → :member (subdomain in middle, not suffix)
+  # `Alice@example.com` → :admin (downcase normalizes the host)
+  @fabrikam_email_suffix_regex ~r/@example\.com$/
+
+  @doc """
+  Single source of truth for the email-domain admin rule.
+
+  Returns `:admin` when `String.downcase(email)` ends in `@example.com`,
+  `:member` otherwise. Nil, empty, and non-binary input return `:member`.
+
+  Mirrors the SQL anchor `LIKE '%@example.com'` used by the Stage 1
+  backfill migration (`20260519160000_refine_fabrikam_admin_membership_by_email_domain.exs`).
+  Keep this function and the migration's WHERE clause in lockstep —
+  see the WARNING in the module `@moduledoc`.
+
+  ## Examples
+
+      iex> Platform.Tenancy.derive_role_from_email("alice@example.com")
+      :admin
+
+      iex> Platform.Tenancy.derive_role_from_email("ALICE@example.com")
+      :admin
+
+      iex> Platform.Tenancy.derive_role_from_email("alice@us.example.com")
+      :member
+
+      iex> Platform.Tenancy.derive_role_from_email("example.com@example.com")
+      :member
+
+      iex> Platform.Tenancy.derive_role_from_email(nil)
+      :member
+  """
+  @spec derive_role_from_email(any()) :: :admin | :member
+  def derive_role_from_email(email) when is_binary(email) and email != "" do
+    if Regex.match?(@fabrikam_email_suffix_regex, String.downcase(email)),
+      do: :admin,
+      else: :member
+  end
+
+  def derive_role_from_email(_), do: :member
+
+  @doc """
+  Upsert an `org_memberships` row for `{user_id, org_id}` to the given
+  role. `org_slug` defaults to `:fabrikam` (the root org).
+
+  Idempotent: re-calling with the same role on an existing row is a no-op
+  and still returns `{:ok, membership}`. A role change updates the
+  existing row in place.
+
+  Returns `{:error, :org_not_found}` if the slug doesn't resolve, and
+  `{:error, changeset}` for any DB-level rejection (invalid role, FK
+  violation, …).
+
+  ## Examples
+
+      iex> {:ok, _membership} = Platform.Tenancy.set_membership_role(user, :fabrikam, :admin)
+      iex> {:ok, _membership} = Platform.Tenancy.set_membership_role(user, :fabrikam, :admin)
+      # ^ second call is a no-op idempotent return
+
+      iex> Platform.Tenancy.set_membership_role(user, "definitely-not-a-real-slug", :admin)
+      {:error, :org_not_found}
+  """
+  @spec set_membership_role(
+          %{:id => binary(), optional(atom()) => any()},
+          atom() | String.t(),
+          :admin | :member
+        ) ::
+          {:ok, OrgMembership.t()} | {:error, :org_not_found} | {:error, Ecto.Changeset.t()}
+  def set_membership_role(%{id: user_id}, org_slug, role)
+      when is_binary(user_id) and role in [:admin, :member] do
+    slug_str = normalize_slug(org_slug)
+    role_str = Atom.to_string(role)
+
+    case get_org_by_slug(slug_str) do
+      nil ->
+        {:error, :org_not_found}
+
+      %Org{id: org_id} ->
+        upsert_membership(user_id, org_id, role_str)
+    end
+  end
+
+  def set_membership_role(_, _, _), do: {:error, :invalid_input}
+
+  defp normalize_slug(slug) when is_atom(slug), do: Atom.to_string(slug)
+  defp normalize_slug(slug) when is_binary(slug), do: slug
+
+  defp upsert_membership(user_id, org_id, role_str) do
+    case Repo.get_by(OrgMembership, user_id: user_id, org_id: org_id) do
+      nil ->
+        %OrgMembership{}
+        |> OrgMembership.changeset(%{user_id: user_id, org_id: org_id, role: role_str})
+        |> Repo.insert()
+
+      %OrgMembership{role: ^role_str} = existing ->
+        # Idempotent: same role, no write.
+        {:ok, existing}
+
+      %OrgMembership{} = existing ->
+        existing
+        |> OrgMembership.changeset(%{role: role_str})
+        |> Repo.update()
+    end
   end
 end

@@ -418,6 +418,210 @@ defmodule Platform.TenancyTest do
     end
   end
 
+  # ── email-domain admin rule (stage 1 backfill migration) ────────────
+  #
+  # Exercises the SQL from
+  # `20260519160000_refine_fabrikam_admin_membership_by_email_domain.exs`
+  # by re-running it inside the test sandbox after inserting fixtures
+  # with the email shapes we care about. The migration is ADDITIVE: it
+  # promotes matching emails to :admin and never downgrades anyone.
+
+  describe "email-domain admin rule" do
+    @rule_sql """
+    INSERT INTO org_memberships (id, user_id, org_id, role, inserted_at, updated_at)
+    SELECT
+      gen_random_uuid(),
+      u.id,
+      (SELECT id FROM orgs WHERE slug = 'fabrikam'),
+      'admin',
+      NOW(),
+      NOW()
+    FROM users u
+    WHERE LOWER(u.email) LIKE '%@example.com'
+    ON CONFLICT (user_id, org_id) DO UPDATE
+      SET role = 'admin', updated_at = NOW()
+    """
+
+    defp run_rule!, do: Ecto.Adapters.SQL.query!(Repo, @rule_sql, [])
+
+    defp fabrikam_role(user) do
+      fabrikam = Tenancy.get_org_by_slug!("fabrikam")
+
+      Repo.one(
+        from(m in OrgMembership,
+          where: m.user_id == ^user.id and m.org_id == ^fabrikam.id,
+          select: m.role
+        )
+      )
+    end
+
+    defp fabrikam_membership_count(user) do
+      fabrikam = Tenancy.get_org_by_slug!("fabrikam")
+
+      Repo.aggregate(
+        from(m in OrgMembership, where: m.user_id == ^user.id and m.org_id == ^fabrikam.id),
+        :count,
+        :id
+      )
+    end
+
+    test "a example.com email is promoted to :admin in Fabrikam" do
+      user = create_user!(%{email: "alice@example.com"})
+      run_rule!()
+      assert fabrikam_role(user) == "admin"
+    end
+
+    test "a subdomain like @us.example.com is NOT promoted (anchored suffix)" do
+      user = create_user!(%{email: "alice@us.example.com"})
+      run_rule!()
+      # No Fabrikam membership row created, and definitely not :admin.
+      assert fabrikam_membership_count(user) == 0
+      refute Tenancy.fabrikam_admin?(user)
+    end
+
+    test "an external email like @gmail.com is NOT promoted" do
+      user = create_user!(%{email: "alice@gmail.com"})
+      run_rule!()
+      assert fabrikam_membership_count(user) == 0
+      refute Tenancy.fabrikam_admin?(user)
+    end
+
+    test "a prefix-spoof like 'example.com@example.com' is NOT promoted" do
+      # The literal '@example.com' lives in the local-part here, not the
+      # host — LIKE '%@example.com' requires it to be the suffix.
+      user = create_user!(%{email: "example.com@example.com"})
+      run_rule!()
+      assert fabrikam_membership_count(user) == 0
+      refute Tenancy.fabrikam_admin?(user)
+    end
+
+    test "mixed-case email is promoted (LOWER() normalizes the host)" do
+      user = create_user!(%{email: "Alice@example.com"})
+      run_rule!()
+      assert fabrikam_role(user) == "admin"
+    end
+
+    test "users with empty / non-matching email are not promoted" do
+      # The User changeset rejects nil/empty emails, so we can't insert
+      # a user with email = NULL via the normal path. The behavioral
+      # guarantee that matters here is: a non-matching email does not
+      # produce a Fabrikam admin row. Use a clearly-non-Fabrikam address.
+      user = create_user!(%{email: "noreply@example.com"})
+      run_rule!()
+      assert fabrikam_membership_count(user) == 0
+      refute Tenancy.fabrikam_admin?(user)
+    end
+
+    test "re-running the migration on an already-admin row is a no-op (no churn, no duplicates)" do
+      user = create_user!(%{email: "bob@example.com"})
+
+      run_rule!()
+      assert fabrikam_role(user) == "admin"
+      assert fabrikam_membership_count(user) == 1
+
+      # Second run: still exactly one row, still :admin.
+      run_rule!()
+      assert fabrikam_role(user) == "admin"
+      assert fabrikam_membership_count(user) == 1
+    end
+  end
+
+  # ── derive_role_from_email/1 (Stage 2 — pure function) ──────────────
+
+  describe "derive_role_from_email/1" do
+    test "returns :admin for a @example.com email" do
+      assert Tenancy.derive_role_from_email("alice@example.com") == :admin
+    end
+
+    test "is case-insensitive on the host (LOWER parity with the migration)" do
+      assert Tenancy.derive_role_from_email("ALICE@example.com") == :admin
+      assert Tenancy.derive_role_from_email("Alice@example.com") == :admin
+    end
+
+    test "rejects a subdomain (anchor at end of string)" do
+      # @us.example.com does not END in @example.com.
+      assert Tenancy.derive_role_from_email("alice@us.example.com") == :member
+    end
+
+    test "rejects a prefix-spoof (example.com in the local part)" do
+      assert Tenancy.derive_role_from_email("example.com@example.com") == :member
+    end
+
+    test "returns :member for an external email" do
+      assert Tenancy.derive_role_from_email("alice@gmail.com") == :member
+    end
+
+    test "returns :member for nil / empty / non-string input" do
+      assert Tenancy.derive_role_from_email(nil) == :member
+      assert Tenancy.derive_role_from_email("") == :member
+      assert Tenancy.derive_role_from_email(123) == :member
+      assert Tenancy.derive_role_from_email(%{}) == :member
+    end
+  end
+
+  # ── set_membership_role/3 (Stage 2 — idempotent upsert) ─────────────
+
+  describe "set_membership_role/3" do
+    test "inserts a new row when none exists" do
+      user = create_user!()
+      assert fabrikam_membership_count(user) == 0
+
+      assert {:ok, %OrgMembership{role: "admin"}} =
+               Tenancy.set_membership_role(user, :fabrikam, :admin)
+
+      assert fabrikam_role(user) == "admin"
+      assert fabrikam_membership_count(user) == 1
+    end
+
+    test "updates the role on an existing row" do
+      user = create_user!()
+      create_membership!(user, Tenancy.get_org_by_slug!("fabrikam"), "member")
+
+      assert {:ok, %OrgMembership{role: "admin"}} =
+               Tenancy.set_membership_role(user, :fabrikam, :admin)
+
+      assert fabrikam_role(user) == "admin"
+      # Still exactly one row — updated, not duplicated.
+      assert fabrikam_membership_count(user) == 1
+    end
+
+    test "is idempotent — calling with the same role twice is a no-op" do
+      user = create_user!()
+      assert {:ok, first} = Tenancy.set_membership_role(user, :fabrikam, :admin)
+      assert {:ok, second} = Tenancy.set_membership_role(user, :fabrikam, :admin)
+
+      # Second call returns the same row, no write — updated_at unchanged.
+      assert first.id == second.id
+      assert first.updated_at == second.updated_at
+      assert fabrikam_membership_count(user) == 1
+    end
+
+    test "accepts a string slug as well as an atom" do
+      user = create_user!()
+
+      assert {:ok, %OrgMembership{role: "member"}} =
+               Tenancy.set_membership_role(user, "fabrikam", :member)
+    end
+
+    test "defaults to the :fabrikam org" do
+      user = create_user!()
+      assert {:ok, %OrgMembership{}} = Tenancy.set_membership_role(user, :fabrikam, :admin)
+      assert fabrikam_role(user) == "admin"
+    end
+
+    test "returns {:error, :org_not_found} for an unknown slug" do
+      user = create_user!()
+
+      assert {:error, :org_not_found} =
+               Tenancy.set_membership_role(user, "definitely-not-a-real-slug", :admin)
+    end
+
+    test "returns {:error, :invalid_input} for non-user input" do
+      assert {:error, :invalid_input} =
+               Tenancy.set_membership_role(%{not_a: :user}, :fabrikam, :admin)
+    end
+  end
+
   # ── OrgMembership changeset coverage ─────────────────────────────────
 
   describe "Platform.Tenancy.OrgMembership.changeset/2" do

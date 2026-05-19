@@ -1,8 +1,10 @@
 defmodule Platform.Accounts do
   import Ecto.Query
 
+  alias Ecto.Multi
   alias Platform.Accounts.User
   alias Platform.Repo
+  alias Platform.Tenancy
 
   @doc """
   Fetch a user by id with `:org_memberships` (and the nested `:org`)
@@ -73,24 +75,95 @@ defmodule Platform.Accounts do
     Repo.all(base)
   end
 
+  @doc """
+  Find a user by OIDC `sub`, creating one if missing, or refreshing
+  email/name/avatar from the OIDC payload.
+
+  ## Self-healing admin rule (Stage 2)
+
+  Wrapped in `Ecto.Multi` so the user write and the Fabrikam-membership
+  upsert are atomic:
+
+    * **INSERT**: every new user gets an `org_memberships` row in Fabrikam
+      with role derived from `Platform.Tenancy.derive_role_from_email/1`
+      (`:admin` for `@example.com`, `:member` otherwise).
+    * **UPDATE with email change**: if the email changes AND the new
+      email derives `:admin`, promote the user in Fabrikam. **No auto-revoke**
+      — a Fabrikam email changing to non-Fabrikam leaves the existing role
+      untouched. Offboarding is explicitly out of scope (plan Stage 2).
+    * **UPDATE without email change**: pure idempotent refresh of
+      name/avatar; no membership write.
+
+  See `Platform.Tenancy.derive_role_from_email/1` for the rule and the
+  WARNING about Fabrikam alias domains.
+  """
   def find_or_create_from_oidc(%{sub: sub, email: email, name: name} = oidc_user)
       when is_binary(sub) and is_binary(email) and is_binary(name) do
     attrs = build_oidc_user_attrs(oidc_user)
 
     case Repo.get_by(User, oidc_sub: sub) do
-      %User{} = user ->
-        user
-        |> User.changeset(refresh_oidc_user_attrs(user, attrs))
-        |> Repo.update()
+      %User{} = existing ->
+        update_user_with_membership_sync(existing, attrs)
 
       nil ->
-        %User{}
-        |> User.changeset(attrs)
-        |> Repo.insert()
+        insert_user_with_membership(attrs)
     end
   end
 
   def find_or_create_from_oidc(_attrs), do: {:error, :invalid_oidc_user}
+
+  # INSERT path: write the user, then upsert a Fabrikam membership at the
+  # derived role. Both writes share one transaction.
+  defp insert_user_with_membership(attrs) do
+    changeset = User.changeset(%User{}, attrs)
+
+    Multi.new()
+    |> Multi.insert(:user, changeset)
+    |> Multi.run(:membership, fn _repo, %{user: user} ->
+      role = Tenancy.derive_role_from_email(user.email)
+      Tenancy.set_membership_role(user, :fabrikam, role)
+    end)
+    |> Repo.transaction()
+    |> case do
+      {:ok, %{user: user}} -> {:ok, user}
+      {:error, :user, changeset, _changes} -> {:error, changeset}
+      {:error, :membership, reason, _changes} -> {:error, reason}
+    end
+  end
+
+  # UPDATE path: refresh user fields. If the email actually changed AND
+  # the new email derives :admin, promote in Fabrikam. Never auto-revoke.
+  defp update_user_with_membership_sync(%User{} = user, attrs) do
+    refreshed = refresh_oidc_user_attrs(user, attrs)
+    changeset = User.changeset(user, refreshed)
+
+    Multi.new()
+    |> Multi.update(:user, changeset)
+    |> Multi.run(:membership, fn _repo, %{user: updated} ->
+      maybe_promote_on_email_change(user, updated)
+    end)
+    |> Repo.transaction()
+    |> case do
+      {:ok, %{user: updated}} -> {:ok, updated}
+      {:error, :user, changeset, _changes} -> {:error, changeset}
+      {:error, :membership, reason, _changes} -> {:error, reason}
+    end
+  end
+
+  # Promote only — no auto-revoke. If the email changed and the new
+  # email derives :admin, set the Fabrikam membership to :admin. Otherwise
+  # leave the existing membership row (if any) untouched. Returning
+  # `{:ok, :noop}` is harmless inside `Multi.run/3`.
+  defp maybe_promote_on_email_change(%User{email: old_email}, %User{email: new_email})
+       when old_email == new_email,
+       do: {:ok, :noop}
+
+  defp maybe_promote_on_email_change(%User{}, %User{email: new_email} = updated) do
+    case Tenancy.derive_role_from_email(new_email) do
+      :admin -> Tenancy.set_membership_role(updated, :fabrikam, :admin)
+      :member -> {:ok, :noop}
+    end
+  end
 
   defp build_oidc_user_attrs(attrs) do
     avatar_url =
