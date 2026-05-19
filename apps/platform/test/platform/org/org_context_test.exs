@@ -40,19 +40,15 @@ defmodule Platform.Org.ContextTest do
       assert %{file_key: ["can't be blank"]} = errors_on(changeset)
     end
 
-    test "validates file_key is in allowed list" do
-      changeset =
-        WikiPage.changeset(%WikiPage{}, %{
-          file_key: "INVALID.md",
-          content: "test"
-        })
-
-      refute changeset.valid?
-      assert %{file_key: ["is invalid"]} = errors_on(changeset)
-    end
-
-    test "accepts all allowed file keys" do
-      for key <- WikiPage.allowed_file_keys() do
+    test "accepts arbitrary path-style file_keys (whitelist relaxed in T1)" do
+      for key <- ~w(
+            ORG_IDENTITY.md
+            ORG_MEMORY.md
+            ORG_AGENTS.md
+            org/identity.md
+            project/abc-123/decisions/2026-05.md
+            private/sloane/notes.md
+          ) do
         changeset =
           WikiPage.changeset(%WikiPage{}, %{
             file_key: key,
