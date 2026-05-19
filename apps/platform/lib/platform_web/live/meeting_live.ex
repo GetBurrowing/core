@@ -179,7 +179,19 @@ defmodule PlatformWeb.MeetingLive do
      # Mobile drawer state — defaults CLOSED. Desktop ignores this
      # assign (column is `hidden lg:flex`). See @moduledoc for the
      # reconciliation against the stack-spec's "defaults to true" line.
-     |> assign(:chat_panel_open, false)}
+     |> assign(:chat_panel_open, false)
+     # Desktop collapse state for the participant rail + chat pane
+     # (task 019e40f2). These are ORTHOGONAL to `:chat_panel_open`:
+     # `:chat_panel_open` is mobile-drawer (<lg), the new
+     # `:chat_panel_collapsed` flips the desktop chat aside between
+     # the wide (~320px) pane and a slim 48px collapsed rail. Same
+     # default-expanded posture as `:sidebar_collapsed` in
+     # `shell_live.ex` — first-time users see the full layout. The
+     # `SidebarCollapse` JS hook (parameterized via `data-*` attrs in
+     # stage 3) hydrates from localStorage so the preference survives
+     # navigation + reload.
+     |> assign(:participant_rail_collapsed, false)
+     |> assign(:chat_panel_collapsed, false)}
   end
 
   @impl true
@@ -283,6 +295,52 @@ defmodule PlatformWeb.MeetingLive do
   @impl true
   def handle_event("toggle_chat_panel", _params, socket) do
     {:noreply, update(socket, :chat_panel_open, &(!&1))}
+  end
+
+  # Desktop participant-rail collapse (task 019e40f2). Mirrors the
+  # `toggle_sidebar` shape in `shell_live.ex:236-244`: flip the assign,
+  # push a `*_collapsed_changed` browser event so the SidebarCollapse JS
+  # hook can mirror the value into localStorage. The matching
+  # `*_hydrate` handler below adopts a stored value on mount.
+  def handle_event("toggle_participant_rail", _params, socket) do
+    next = !socket.assigns.participant_rail_collapsed
+
+    {:noreply,
+     socket
+     |> assign(:participant_rail_collapsed, next)
+     |> push_event("meeting_participant_rail_collapsed_changed", %{collapsed: next})}
+  end
+
+  def handle_event("meeting_participant_rail_hydrate", %{"collapsed" => collapsed}, socket)
+      when is_boolean(collapsed) do
+    # Idempotent: skip the re-render when the hook's localStorage value
+    # matches the current assign.
+    if collapsed == socket.assigns.participant_rail_collapsed do
+      {:noreply, socket}
+    else
+      {:noreply, assign(socket, :participant_rail_collapsed, collapsed)}
+    end
+  end
+
+  # Desktop chat-pane collapse (task 019e40f2). Strictly DESKTOP — the
+  # mobile drawer continues to use `:chat_panel_open`. Same shape as
+  # `toggle_participant_rail` above.
+  def handle_event("toggle_meeting_chat_pane", _params, socket) do
+    next = !socket.assigns.chat_panel_collapsed
+
+    {:noreply,
+     socket
+     |> assign(:chat_panel_collapsed, next)
+     |> push_event("meeting_chat_pane_collapsed_changed", %{collapsed: next})}
+  end
+
+  def handle_event("meeting_chat_pane_hydrate", %{"collapsed" => collapsed}, socket)
+      when is_boolean(collapsed) do
+    if collapsed == socket.assigns.chat_panel_collapsed do
+      {:noreply, socket}
+    else
+      {:noreply, assign(socket, :chat_panel_collapsed, collapsed)}
+    end
   end
 
   # Stage-mode switching (ADR 0042). The segmented control in the top bar

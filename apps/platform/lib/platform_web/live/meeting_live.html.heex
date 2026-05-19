@@ -38,6 +38,36 @@
     <div id="meeting-client" phx-hook="MeetingClient" class="hidden"></div>
     <div id="meeting-room" phx-hook="MeetingRoom" class="hidden"></div>
 
+    <%!-- Desktop pane-collapse persistence (task 019e40f2). Two
+         instances of the SidebarCollapse hook, parameterized via
+         `data-*` attrs so each instance owns its own localStorage key.
+         Storage keys are namespaced under `suite.meeting.*` so they
+         never collide with the shell sidebar key
+         (`suite.sidebar.collapsed`). The hidden host divs carry
+         `data-collapsed` so the hook can compare against the LV's
+         current assign and only push a hydrate event when stored
+         value differs. --%>
+    <div
+      id="meeting-participant-rail-collapse-hook"
+      phx-hook="SidebarCollapse"
+      data-collapsed={if @participant_rail_collapsed, do: "true", else: "false"}
+      data-storage-key="suite.meeting.participant_rail.collapsed"
+      data-hydrate-event="meeting_participant_rail_hydrate"
+      data-change-event="meeting_participant_rail_collapsed_changed"
+      class="hidden"
+    >
+    </div>
+    <div
+      id="meeting-chat-pane-collapse-hook"
+      phx-hook="SidebarCollapse"
+      data-collapsed={if @chat_panel_collapsed, do: "true", else: "false"}
+      data-storage-key="suite.meeting.chat_pane.collapsed"
+      data-hydrate-event="meeting_chat_pane_hydrate"
+      data-change-event="meeting_chat_pane_collapsed_changed"
+      class="hidden"
+    >
+    </div>
+
     <%!-- ── Top bar ──────────────────────────────────────────────────────── --%>
     <header class="flex h-12 flex-shrink-0 items-center gap-3 border-b border-base-300 bg-base-200/60 px-3">
       <%!-- Meeting name --%>
@@ -206,8 +236,19 @@
     <div class="flex min-h-0 flex-1">
       <%!-- Left rail (task 019e2475-4395): sectioned participant list.
            Hosts/humans on top with mic + speaking + host-badge cues;
-           agents below a divider with role chip + status dot. --%>
+           agents below a divider with role chip + status dot.
+
+           Task 019e40f2 — desktop collapse: two presentations on
+           `>=lg`, mutually exclusive via `@participant_rail_collapsed`:
+             * expanded (default): the existing w-60 aside, with a
+               chevron-double-left button in the header that pushes
+               `toggle_participant_rail`.
+             * collapsed: a separate slim w-12 rail showing a
+               chevron-double-right + user-group icon + participant
+               count. Two-state render avoids participant-row reflow
+               and speaking-ring paint artifacts vs a width transition. --%>
       <aside
+        :if={!@participant_rail_collapsed}
         class="hidden w-60 flex-shrink-0 flex-col border-r border-base-300 bg-base-200/40 lg:flex"
         data-pane="left-rail"
       >
@@ -219,6 +260,17 @@
           <span class="ml-auto text-xs text-base-content/40">
             {length(assigns[:participants] || [])}
           </span>
+          <button
+            type="button"
+            phx-click="toggle_participant_rail"
+            aria-label="Collapse participants pane"
+            aria-expanded="true"
+            title="Collapse"
+            class="btn btn-ghost btn-xs btn-square text-base-content/40 hover:text-base-content hidden lg:inline-flex"
+            data-role="participant-rail-toggle"
+          >
+            <span class="hero-chevron-double-left size-4"></span>
+          </button>
         </div>
         <div class="min-h-0 flex-1 overflow-y-auto">
           <.participant_rail
@@ -228,6 +280,34 @@
             speaking_participant_ids={assigns[:speaking_participant_ids] || MapSet.new()}
           />
         </div>
+      </aside>
+
+      <%!-- Collapsed slim rail (task 019e40f2). Only renders on `>=lg`
+           AND when `@participant_rail_collapsed` is true. Carries the
+           same `data-pane="left-rail"` selector so consumers can find
+           "the left rail in either state", plus `data-pane-collapsed`
+           so tests + e2e can disambiguate. --%>
+      <aside
+        :if={@participant_rail_collapsed}
+        class="hidden w-12 flex-shrink-0 flex-col items-center border-r border-base-300 bg-base-200/40 py-2 lg:flex"
+        data-pane="left-rail"
+        data-pane-collapsed="true"
+      >
+        <button
+          type="button"
+          phx-click="toggle_participant_rail"
+          aria-label="Expand participants pane"
+          aria-expanded="false"
+          title="Expand participants"
+          class="btn btn-ghost btn-sm btn-square text-base-content/60 hover:text-base-content"
+          data-role="participant-rail-toggle"
+        >
+          <span class="hero-chevron-double-right size-4"></span>
+        </button>
+        <span class="hero-user-group mt-2 size-4 text-base-content/40" aria-hidden="true"></span>
+        <span class="mt-1 text-[10px] font-semibold text-base-content/40">
+          {length(assigns[:participants] || [])}
+        </span>
       </aside>
 
       <%!-- Center stage. Renders one of four stage-mode components keyed
@@ -440,9 +520,14 @@
             "fixed top-12 right-0 z-40 w-80 max-w-[85vw] shadow-xl transition-transform duration-200 ease-out",
             "bottom-[calc(env(safe-area-inset-bottom)+var(--bottom-nav-height,0px))]",
             if(@chat_panel_open, do: "translate-x-0", else: "translate-x-full"),
-            # Desktop (>=lg): in-flow right column, IGNORES the assign.
-            # Reset every fixed/transform property the mobile state set.
-            "lg:static lg:top-auto lg:bottom-auto lg:right-auto lg:z-auto lg:w-80 lg:max-w-none lg:flex-shrink-0 lg:translate-x-0 lg:shadow-none lg:transition-none"
+            # Desktop (>=lg): in-flow right column. The mobile drawer
+            # path stays byte-identical; only the `lg:*` classes consult
+            # `@chat_panel_collapsed`. When collapsed: `lg:!hidden`
+            # overrides the shared `flex` so the wide pane disappears at
+            # the desktop breakpoint while the embedded `live_render`
+            # stays in the DOM (preserves chat scroll + message stream).
+            "lg:static lg:top-auto lg:bottom-auto lg:right-auto lg:z-auto lg:max-w-none lg:flex-shrink-0 lg:translate-x-0 lg:shadow-none lg:transition-none",
+            if(@chat_panel_collapsed, do: "lg:!hidden", else: "lg:w-80")
           ]
         }
         data-pane="chat-panel"
@@ -463,6 +548,21 @@
           <h2 class="min-w-0 flex-1 truncate text-sm font-semibold text-base-content">
             {@meeting.name}
           </h2>
+          <%!-- Desktop-only collapse chevron (task 019e40f2). Hidden on
+               `<lg` so the mobile drawer header is byte-identical;
+               flips the wide chat pane to a slim 48px collapsed rail
+               at the right edge. --%>
+          <button
+            type="button"
+            phx-click="toggle_meeting_chat_pane"
+            aria-label="Collapse chat pane"
+            aria-expanded="true"
+            title="Collapse"
+            class="btn btn-ghost btn-xs btn-square text-base-content/60 hidden lg:inline-flex"
+            data-role="chat-pane-toggle"
+          >
+            <span class="hero-chevron-double-right size-4"></span>
+          </button>
           <%!-- Mobile-only close button inside the drawer header. The
                top-bar toggle handles open; this gives a one-tap close
                that doesn't require backdrop-tap (e.g. for a wide
@@ -519,6 +619,35 @@
             </div>
           <% end %>
         </div>
+      </aside>
+
+      <%!-- Collapsed slim chat rail (task 019e40f2). Mirror image of
+           the participant collapsed rail: only on `>=lg` AND when
+           `@chat_panel_collapsed`. Carries `data-pane="chat-panel"`
+           + `data-pane-collapsed="true"` so consumers can find "the
+           chat pane in either state". --%>
+      <aside
+        :if={@chat_panel_collapsed}
+        class="hidden w-12 flex-shrink-0 flex-col items-center border-l border-base-300 bg-base-200/40 py-2 lg:flex"
+        data-pane="chat-panel"
+        data-pane-collapsed="true"
+      >
+        <button
+          type="button"
+          phx-click="toggle_meeting_chat_pane"
+          aria-label="Expand chat pane"
+          aria-expanded="false"
+          title="Expand chat"
+          class="btn btn-ghost btn-sm btn-square text-base-content/60 hover:text-base-content"
+          data-role="chat-pane-toggle"
+        >
+          <span class="hero-chevron-double-left size-4"></span>
+        </button>
+        <span
+          class="hero-chat-bubble-left-right mt-2 size-4 text-base-content/40"
+          aria-hidden="true"
+        >
+        </span>
       </aside>
     </div>
 

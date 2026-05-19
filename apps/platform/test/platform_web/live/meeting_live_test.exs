@@ -2136,4 +2136,218 @@ defmodule PlatformWeb.MeetingLiveTest do
       assert_push_event(view, "leave-meeting", %{})
     end
   end
+
+  # ── Desktop pane collapse (task 019e40f2) ──────────────────────────────
+  #
+  # Two new desktop-only collapse affordances: the participant rail (left
+  # side) and the chat pane (right side). Both default expanded, flip via
+  # `phx-click` to a slim 48px rail, mirror their state into localStorage
+  # via the parameterized `SidebarCollapse` JS hook. Mobile is untouched —
+  # the existing `:chat_panel_open` drawer path keeps working byte-
+  # identically.
+  describe "desktop pane collapse (task 019e40f2)" do
+    setup %{conn: conn} do
+      {meeting, space} =
+        create_meeting(%{slug: "kickoff-collapse", name: "Collapse Meeting"})
+
+      {conn, user} = authenticated_conn(conn)
+      {:ok, conn: conn, user: user, meeting: meeting, space: space}
+    end
+
+    test "mounts with both collapse assigns false (expanded by default)", %{
+      conn: conn,
+      meeting: meeting
+    } do
+      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      # The wide left rail renders (no `data-pane-collapsed` attr).
+      assert html =~ ~s(data-pane="left-rail")
+      refute html =~ ~s(data-pane="left-rail" data-pane-collapsed)
+      # The wide chat aside renders, no slim chat rail in DOM.
+      assert html =~ ~s(data-pane="chat-panel")
+      refute html =~ ~s(data-pane-collapsed="true")
+    end
+
+    test "toggle_participant_rail flips the participant_rail_collapsed assign", %{
+      conn: conn,
+      meeting: meeting
+    } do
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      # Drive the event directly to decouple from heex selector specifics
+      # — the click-through path is covered by the next test.
+      after_collapse = render_hook(view, "toggle_participant_rail", %{})
+      assert after_collapse =~ ~s(data-pane="left-rail" data-pane-collapsed="true")
+      assert_push_event(view, "meeting_participant_rail_collapsed_changed", %{collapsed: true})
+
+      after_expand = render_hook(view, "toggle_participant_rail", %{})
+      refute after_expand =~ ~s(data-pane="left-rail" data-pane-collapsed="true")
+      assert_push_event(view, "meeting_participant_rail_collapsed_changed", %{collapsed: false})
+    end
+
+    test "toggle_meeting_chat_pane flips the chat_panel_collapsed assign", %{
+      conn: conn,
+      meeting: meeting
+    } do
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      after_collapse = render_hook(view, "toggle_meeting_chat_pane", %{})
+      # Slim chat rail now present with `data-pane="chat-panel"
+      # data-pane-collapsed="true"`.
+      assert after_collapse =~ ~s(data-pane="chat-panel" data-pane-collapsed="true")
+      # The wide aside hides on `>=lg` via the lg:!hidden class.
+      assert after_collapse =~ "lg:!hidden"
+      assert_push_event(view, "meeting_chat_pane_collapsed_changed", %{collapsed: true})
+
+      after_expand = render_hook(view, "toggle_meeting_chat_pane", %{})
+      refute after_expand =~ ~s(data-pane="chat-panel" data-pane-collapsed="true")
+      refute after_expand =~ "lg:!hidden"
+      assert_push_event(view, "meeting_chat_pane_collapsed_changed", %{collapsed: false})
+    end
+
+    test "meeting_participant_rail_hydrate adopts a stored value when different", %{
+      conn: conn,
+      meeting: meeting
+    } do
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      after_hydrate =
+        render_hook(view, "meeting_participant_rail_hydrate", %{"collapsed" => true})
+
+      assert after_hydrate =~ ~s(data-pane="left-rail" data-pane-collapsed="true")
+    end
+
+    test "meeting_chat_pane_hydrate adopts a stored value when different", %{
+      conn: conn,
+      meeting: meeting
+    } do
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      after_hydrate =
+        render_hook(view, "meeting_chat_pane_hydrate", %{"collapsed" => true})
+
+      assert after_hydrate =~ ~s(data-pane="chat-panel" data-pane-collapsed="true")
+    end
+
+    test "hydrate is idempotent when the value matches the current assign", %{
+      conn: conn,
+      meeting: meeting
+    } do
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      # Both default to false; a hydrate with false should be a no-op
+      # but must NOT crash.
+      _ = render_hook(view, "meeting_participant_rail_hydrate", %{"collapsed" => false})
+      _ = render_hook(view, "meeting_chat_pane_hydrate", %{"collapsed" => false})
+
+      html = render(view)
+      refute html =~ ~s(data-pane-collapsed="true")
+    end
+
+    test "clicking participant-rail-toggle in the expanded rail header collapses to slim rail",
+         %{conn: conn, meeting: meeting} do
+      {:ok, view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      # Starts expanded — the chevron-double-left header button is
+      # present, the slim rail is absent.
+      assert html =~ ~s(data-role="participant-rail-toggle")
+      assert html =~ "hero-chevron-double-left"
+      refute html =~ ~s(data-pane="left-rail" data-pane-collapsed="true")
+
+      # There's exactly one rendered participant-rail-toggle on the
+      # expanded view (the slim collapsed rail isn't in the DOM until
+      # after the toggle). Click it directly.
+      after_collapse =
+        view
+        |> element(~s([data-role="participant-rail-toggle"]))
+        |> render_click()
+
+      assert after_collapse =~ ~s(data-pane="left-rail" data-pane-collapsed="true")
+      # Slim rail header carries the mirrored chevron-double-right + a
+      # second user-group icon for the icon-only state.
+      assert after_collapse =~ "hero-chevron-double-right"
+    end
+
+    test "clicking chat-pane-toggle in the expanded chat pane header collapses to slim rail",
+         %{conn: conn, meeting: meeting} do
+      {:ok, view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      assert html =~ ~s(data-role="chat-pane-toggle")
+      refute html =~ ~s(data-pane="chat-panel" data-pane-collapsed="true")
+
+      # Exactly one chat-pane-toggle on the expanded view (in the chat
+      # pane header). The slim chat rail's toggle only appears after.
+      after_collapse =
+        view
+        |> element(~s([data-role="chat-pane-toggle"]))
+        |> render_click()
+
+      assert after_collapse =~ ~s(data-pane="chat-panel" data-pane-collapsed="true")
+      assert after_collapse =~ "lg:!hidden"
+    end
+
+    test "collapse toggle buttons carry `hidden lg:inline-flex` so they're invisible on mobile",
+         %{conn: conn, meeting: meeting} do
+      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      # Both toggle buttons must hide on `<lg` and render on `>=lg`.
+      # The participant-rail-toggle in the expanded header AND the
+      # chat-pane-toggle in the expanded chat header both carry
+      # `hidden lg:inline-flex`.
+      assert html =~
+               ~r/data-role="participant-rail-toggle"[^>]*hidden lg:inline-flex|hidden lg:inline-flex[^>]*data-role="participant-rail-toggle"/
+
+      assert html =~
+               ~r/data-role="chat-pane-toggle"[^>]*hidden lg:inline-flex|hidden lg:inline-flex[^>]*data-role="chat-pane-toggle"/
+    end
+
+    test "SidebarCollapse hook hosts are mounted with namespaced storage keys + event names",
+         %{conn: conn, meeting: meeting} do
+      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      # Two hidden hook hosts (one per pane), parameterized via
+      # `data-storage-key`, `data-hydrate-event`, `data-change-event`.
+      # Storage keys are namespaced under `suite.meeting.*` so they
+      # never collide with the shell sidebar key.
+      assert html =~ ~s(id="meeting-participant-rail-collapse-hook")
+      assert html =~ ~s(data-storage-key="suite.meeting.participant_rail.collapsed")
+      assert html =~ ~s(data-hydrate-event="meeting_participant_rail_hydrate")
+      assert html =~ ~s(data-change-event="meeting_participant_rail_collapsed_changed")
+
+      assert html =~ ~s(id="meeting-chat-pane-collapse-hook")
+      assert html =~ ~s(data-storage-key="suite.meeting.chat_pane.collapsed")
+      assert html =~ ~s(data-hydrate-event="meeting_chat_pane_hydrate")
+      assert html =~ ~s(data-change-event="meeting_chat_pane_collapsed_changed")
+
+      # Both hook hosts attach the SAME hook module (parameterized via
+      # the data-attrs above).
+      assert length(String.split(html, ~s(phx-hook="SidebarCollapse"))) - 1 >= 2
+    end
+
+    test "mobile drawer path is byte-identical — `:chat_panel_open` is orthogonal", %{
+      conn: conn,
+      meeting: meeting
+    } do
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      # Open the mobile drawer (the existing pre-task-019e40f2 path).
+      _ =
+        view
+        |> element(~s([data-role="chat-panel-toggle"]))
+        |> render_click()
+
+      html_open = render(view)
+      # Drawer attribute reflects the mobile state, NOT the collapse state.
+      assert html_open =~ ~s(data-chat-panel-open="true")
+      # Desktop collapse remains false — the two assigns are independent.
+      refute html_open =~ ~s(data-pane-collapsed="true")
+
+      # Now collapse the chat pane (desktop). The mobile drawer assign
+      # is unchanged.
+      _ = render_hook(view, "toggle_meeting_chat_pane", %{})
+      html_collapsed = render(view)
+      assert html_collapsed =~ ~s(data-chat-panel-open="true")
+      assert html_collapsed =~ ~s(data-pane="chat-panel" data-pane-collapsed="true")
+    end
+  end
 end
