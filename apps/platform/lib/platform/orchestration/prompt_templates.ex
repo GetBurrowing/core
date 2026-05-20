@@ -252,7 +252,7 @@ defmodule Platform.Orchestration.PromptTemplates do
         The attention signal that delivered this message includes a `context` field with the full task hierarchy: project (name, repo_url, tech_stack), epic (name, description, acceptance_criteria), task metadata, current plan with stages, and execution_space_id. Use it for full context when writing your plan.
 
         ## Organization Context
-        The `context.org` field carries org-level knowledge: org/identity.md (mission, values, product summary), org/memory.md (curated org knowledge — decisions, patterns, lessons), org/agents.md (roster), and recent ORG_NOTES-YYYY-MM-DD daily notes. Read these before writing your plan — they often explain constraints, patterns, or prior decisions that should shape your approach.
+        The `context.org` field carries org-level knowledge as a map of `path => content` for curated wiki pages flagged `preamble: true` in accessible namespaces (`org/*` always; your project's `project/<id>/*` when scoped to a task). Each page's content is wrapped in `<!-- BEGIN org-preamble page="<path>" version="<v>" -->` / `<!-- END org-preamble page="<path>" -->` markers so you can distinguish injected preamble from user input. Read these before writing your plan — they often explain constraints, patterns, or prior decisions that should shape your approach. The preamble is budgeted (~4096 tokens); to retrieve anything beyond the preamble, use the memory search tool (shipped separately).
 
         ## Writing to Org Memory
         Org memory writes are a first-class responsibility. When planning surfaces a decision worth preserving, record it. Qualifying moments include:
@@ -295,7 +295,7 @@ defmodule Platform.Orchestration.PromptTemplates do
         Avoid redundant task/plan lookup churn on the first turn unless an identifier is genuinely missing or the stage contract is ambiguous.
 
         ## Organization Context
-        The `context.org` field carries org-level knowledge: org/identity.md (mission, values, product summary), org/memory.md (curated org knowledge — decisions, patterns, lessons), org/agents.md (roster), and recent ORG_NOTES-YYYY-MM-DD daily notes. Check these before making non-obvious choices — they often encode constraints or prior decisions that apply here.
+        The `context.org` field carries org-level knowledge as a map of `path => content` for curated wiki pages flagged `preamble: true` in accessible namespaces (`org/*` always; your project's `project/<id>/*` when scoped to a task). Each page's content is wrapped in `<!-- BEGIN org-preamble page="<path>" version="<v>" -->` / `<!-- END org-preamble page="<path>" -->` markers so you can distinguish injected preamble from user input. Check these before making non-obvious choices — they often encode constraints or prior decisions that apply here. The preamble is budgeted (~4096 tokens); to retrieve anything beyond the preamble, use the memory search tool (shipped separately).
 
         ## Writing to Org Memory
         Org memory writes are a first-class responsibility. As you execute, record decisions and milestones that future agents and humans will care about. Qualifying moments include:
