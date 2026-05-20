@@ -13,7 +13,7 @@ defmodule Platform.Federation.ToolSurface do
   alias Platform.Meetings
   alias Platform.Org.Context, as: OrgContext
   alias Platform.Org.Wiki
-  alias Platform.Org.Wiki.{Journal, Routing}
+  alias Platform.Org.Wiki.{Journal, Routing, Search}
   alias Platform.Tasks
   alias Platform.Tasks.{Plan, PlanEngine, Stack, Stacks, Stage, Task, Validation}
   alias Platform.Repo
@@ -550,6 +550,51 @@ defmodule Platform.Federation.ToolSurface do
           "Cross-kind moves (page ↔ private) → `:ambiguous_kind`. Either-side gate failure surfaces that gate's error. Missing source → `:not_found`.",
         when_to_use:
           "When you (Historian) want to move a curated page to a new path while preserving its content + embeddings."
+      },
+      %{
+        name: "memory_search",
+        description:
+          "Hybrid (semantic + lexical) search across memory pages, journal entries, and chat messages. Results are source-tagged and ranked via Reciprocal Rank Fusion (k=60) across corpora. Message hits are filtered to spaces the calling agent participates in.",
+        parameters: %{
+          query: %{
+            type: "string",
+            required: true,
+            description: "Natural-language search query."
+          },
+          source: %{
+            type: "string",
+            required: false,
+            description:
+              "Restrict to one corpus: `\"page\"`, `\"journal\"`, or `\"message\"`. Omit for all three."
+          },
+          namespace: %{
+            type: "string",
+            required: false,
+            description:
+              "Restrict to a namespace prefix: `\"org\"`, `\"project/<uuid>\"`, or `\"space/<uuid>\"`."
+          },
+          since: %{
+            type: "string",
+            required: false,
+            description: "ISO date (YYYY-MM-DD). Only return hits at or after this date."
+          },
+          limit: %{
+            type: "integer",
+            required: false,
+            description: "Max results (default 20, max 100)."
+          },
+          workspace_id: %{
+            type: "string",
+            required: false,
+            description: "UUID of the workspace (default: org-level)."
+          }
+        },
+        returns:
+          "%{results: [%{source, id, path, space_id, content, score, semantic_rank, lexical_rank, authored_by, date_or_inserted_at}], fusion_constant_k: 60, truncated: boolean}",
+        limitations:
+          "Message hits are filtered to spaces the calling agent participates in (anonymous callers get no message hits). Deleted or orphaned rows are silently dropped. `truncated: true` indicates a channel hit its `2*limit` cap and a higher `limit` may surface more hits.",
+        when_to_use:
+          "When you need to recall information beyond the org preamble — past decisions, journal entries, relevant chat threads, or any cross-corpus lookup."
       }
     ]
   end
@@ -4478,6 +4523,17 @@ defmodule Platform.Federation.ToolSurface do
     end
   end
 
+  def execute("memory_search", args, context) do
+    with {:ok, query} <- require_string(args, "query", "memory_search") do
+      agent = load_agent(context)
+
+      case search_opts_from(args, agent) do
+        {:ok, opts} -> Search.search(query, opts)
+        {:error, _} = err -> err
+      end
+    end
+  end
+
   def execute(unknown_tool, _args, _context) do
     tool_names =
       tool_definitions()
@@ -4614,6 +4670,37 @@ defmodule Platform.Federation.ToolSurface do
 
       true ->
         :ok
+    end
+  end
+
+  # Build `Platform.Org.Wiki.Search.search_opts()` from the federation
+  # args + caller context. Validates the `since` arg via `parse_date/1`
+  # (reused from the V1 surface) and surfaces a clean envelope error
+  # for malformed dates rather than swallowing them.
+  defp search_opts_from(args, agent) do
+    case parse_optional_date(Map.get(args, "since")) do
+      {:error, reason} ->
+        {:error,
+         %{
+           error: "memory_search: invalid `since` (#{reason})",
+           code: :invalid_since,
+           recoverable: true,
+           suggestion: "Use ISO 8601 date format: YYYY-MM-DD"
+         }}
+
+      since ->
+        opts =
+          [
+            source: Map.get(args, "source"),
+            namespace: Map.get(args, "namespace"),
+            since: since,
+            limit: Map.get(args, "limit"),
+            workspace_id: Map.get(args, "workspace_id"),
+            agent: agent
+          ]
+          |> Enum.reject(fn {_k, v} -> is_nil(v) end)
+
+        {:ok, opts}
     end
   end
 

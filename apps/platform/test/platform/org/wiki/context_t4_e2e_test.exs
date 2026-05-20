@@ -251,10 +251,18 @@ defmodule Platform.Org.Wiki.ContextT4E2ETest do
     # timestamp collision is also counted here. None of these are T4
     # additions, so the spirit of the guard (T4 stayed in scope on its
     # own branch) is preserved.
+    #
+    # NOTE (T5 stage 4): the T5 stage-4 search migration
+    # (20260520020000_add_search_vector_to_org_wiki) is added under the
+    # T5 allow-list below so the count assertion still pins the T4
+    # boundary correctly.
     @t3_head_migrations_count 95
 
     @t4_allowed_new_migrations [
-      "20260520000000_refresh_dispatch_templates_for_wiki_preamble.exs"
+      "20260520000000_refresh_dispatch_templates_for_wiki_preamble.exs",
+      # T5 stage 4 additions (not T4 territory but tracked here so the
+      # count guard stays accurate as the stack accumulates).
+      "20260520020000_add_search_vector_to_org_wiki.exs"
     ]
 
     defp t4_root, do: Mix.Project.project_file() |> Path.dirname()
@@ -279,14 +287,16 @@ defmodule Platform.Org.Wiki.ContextT4E2ETest do
              """
     end
 
-    test "Platform.Federation.ToolSurface has no memory_20250818 / memory_search tool defs" do
+    test "Platform.Federation.ToolSurface has no memory_20250818 tool def" do
       contents = File.read!(Path.join(t4_root(), "lib/platform/federation/tool_surface.ex"))
 
       refute String.contains?(contents, "memory_20250818"),
              "T4 must NOT add a memory_20250818 tool — that's T5 territory."
 
-      refute String.contains?(contents, "\"memory_search\""),
-             "T4 must NOT add a memory_search tool — that's T5 territory."
+      # T5 stage 3 added the six Anthropic-trained memory_* tools and
+      # T5 stage 4 added memory_search. The earlier refute on
+      # "memory_search" stays retired here — the T4 boundary it
+      # encoded has rolled forward into T5.
     end
 
     test "T4 added only the allow-listed refresh migration; no other migrations" do
