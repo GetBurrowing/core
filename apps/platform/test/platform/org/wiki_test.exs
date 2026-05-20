@@ -229,13 +229,25 @@ defmodule Platform.Org.WikiTest do
       assert page_id == page.id
     end
 
-    test "delete_page emits :wiki_page_deleted" do
-      {:ok, _page} = Wiki.upsert_page("a.md", %{content: "v1"})
+    test "delete_page emits :wiki_page_deleted with page_id (T3 indexer needs id)" do
+      {:ok, page} = Wiki.upsert_page("a.md", %{content: "v1"})
       # Drop the create event before asserting on delete.
       assert_receive {:wiki_page_written, _}
 
       {:ok, _} = Wiki.delete_page("a.md")
-      assert_receive {:wiki_page_deleted, %{file_key: "a.md", workspace_id: nil}}
+
+      # ADR-0041 T3: the indexer deletes by entry id, not by file_key.
+      # The deleted struct is in scope at broadcast time, so we ship the
+      # id alongside file_key/workspace_id (one-line payload addition,
+      # no behavior change for T2 callers).
+      assert_receive {:wiki_page_deleted,
+                      %{
+                        page_id: deleted_id,
+                        file_key: "a.md",
+                        workspace_id: nil
+                      }}
+
+      assert deleted_id == page.id
     end
   end
 

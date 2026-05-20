@@ -25,7 +25,7 @@ defmodule Platform.Org.Wiki do
   T2 never indexes.
 
       {:wiki_page_written, %{page_id, file_key, version, workspace_id}}
-      {:wiki_page_deleted, %{file_key, workspace_id}}
+      {:wiki_page_deleted, %{page_id, file_key, workspace_id}}
 
   ## Scope (T2)
 
@@ -249,6 +249,7 @@ defmodule Platform.Org.Wiki do
         case Repo.delete(page) do
           {:ok, deleted} ->
             broadcast_index_event(:wiki_page_deleted, %{
+              page_id: deleted.id,
               file_key: deleted.file_key,
               workspace_id: deleted.workspace_id
             })
