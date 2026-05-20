@@ -45,7 +45,11 @@ config :phoenix,
 
 config :platform, :start_attention_router, false
 config :platform, :start_system_event_scheduler, false
-config :platform, :memory_provider, Platform.Memory.Providers.Null
+
+# T3 (ADR-0041): tests start their own Platform.Org.Wiki.Indexer per case
+# (so DataCase sandbox owns the Repo connection and tests don't fight a
+# real subscriber). Production defaults to true via Application.start/2.
+config :platform, :start_wiki_indexer, false
 
 # StackDeployer (T5) — tests run synchronously and use a no-op git
 # runner by default so existing Stacks tests don't shell out. Tests that

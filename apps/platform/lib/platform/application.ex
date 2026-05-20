@@ -68,6 +68,7 @@ defmodule Platform.Application do
       |> maybe_add_attention_router()
       |> maybe_add_node_client()
       |> maybe_add_system_event_scheduler()
+      |> maybe_add_wiki_indexer()
       |> ensure_task_router_watcher_after_endpoint()
 
     # See https://hexdocs.pm/elixir/Supervisor.html
@@ -115,6 +116,25 @@ defmodule Platform.Application do
     if Application.get_env(:platform, :start_system_event_scheduler, true) do
       idx = Enum.find_index(children, &(&1 == PlatformWeb.Endpoint)) || length(children)
       List.insert_at(children, idx, Platform.Agents.SystemEventScheduler)
+    else
+      children
+    end
+  end
+
+  # T3 (ADR-0041): Platform.Org.Wiki.Indexer subscribes to the
+  # "org_wiki:index" PubSub topic at init/1. Insert it after PubSub (its
+  # dependency) and before the agent supervisors, so any agent-driven
+  # wiki write has a subscriber attached. Tests set
+  # `:start_wiki_indexer` to false and start their own indexer per
+  # case — keeps DataCase-sandboxed tests from racing a real subscriber.
+  defp maybe_add_wiki_indexer(children) do
+    if Application.get_env(:platform, :start_wiki_indexer, true) do
+      insert_at =
+        Enum.find_index(children, fn child ->
+          child == Platform.Agents.RuntimeSupervisor
+        end) || length(children)
+
+      List.insert_at(children, insert_at, Platform.Org.Wiki.Indexer)
     else
       children
     end

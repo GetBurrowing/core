@@ -244,6 +244,133 @@ defmodule Platform.Org.Wiki.IndexerTest do
     end
   end
 
+  describe "supervision" do
+    test "restarts under a one_for_one supervisor and re-subscribes" do
+      # Start the indexer under a local Supervisor with restart: :permanent
+      # so we can verify it self-recovers (the real Application.start/2
+      # tree uses the same strategy).
+      sup_opts = [strategy: :one_for_one]
+
+      {:ok, sup} =
+        Supervisor.start_link(
+          [
+            Supervisor.child_spec(
+              {Indexer, tick_ms: 50, retry_initial_ms: 50, retry_max_ms: 200},
+              restart: :permanent
+            )
+          ],
+          sup_opts
+        )
+
+      on_exit(fn ->
+        # The supervisor isn't ExUnit-managed (we didn't use
+        # start_supervised), so tear it down manually. Use :shutdown
+        # since :normal would race the indexer's restart logic.
+        if Process.alive?(sup) do
+          ref = Process.monitor(sup)
+          Process.exit(sup, :shutdown)
+
+          receive do
+            {:DOWN, ^ref, :process, ^sup, _} -> :ok
+          after
+            1_000 -> :ok
+          end
+        end
+      end)
+
+      pid_before = Process.whereis(Indexer)
+      assert is_pid(pid_before) and Process.alive?(pid_before)
+
+      # First write — confirm the subscription is live.
+      {:ok, _} = Wiki.upsert_page("org/restart-pre.md", %{content: "before"})
+      assert_receive {:ingest, _}, 1_000
+
+      # Kill the indexer; the supervisor restarts it.
+      ref = Process.monitor(pid_before)
+      Process.exit(pid_before, :kill)
+      assert_receive {:DOWN, ^ref, :process, ^pid_before, :killed}, 1_000
+
+      # Wait for the supervisor to bring up the replacement.
+      pid_after = wait_for_indexer_restart(pid_before, 1_000)
+      assert is_pid(pid_after)
+      assert pid_after != pid_before
+      assert Process.alive?(pid_after)
+
+      # Second write — confirm the new indexer re-subscribed at init/1
+      # (otherwise it would never see this event).
+      {:ok, _} = Wiki.upsert_page("org/restart-post.md", %{content: "after"})
+      assert_receive {:ingest, _}, 1_000
+    end
+
+    defp wait_for_indexer_restart(old_pid, timeout_ms) do
+      deadline = System.monotonic_time(:millisecond) + timeout_ms
+      do_wait_for_restart(old_pid, deadline)
+    end
+
+    defp do_wait_for_restart(old_pid, deadline) do
+      case Process.whereis(Indexer) do
+        nil ->
+          if System.monotonic_time(:millisecond) > deadline do
+            flunk("Indexer did not restart within timeout")
+          else
+            Process.sleep(20)
+            do_wait_for_restart(old_pid, deadline)
+          end
+
+        ^old_pid ->
+          if System.monotonic_time(:millisecond) > deadline do
+            flunk("Indexer pid unchanged after kill")
+          else
+            Process.sleep(20)
+            do_wait_for_restart(old_pid, deadline)
+          end
+
+        pid when is_pid(pid) ->
+          pid
+      end
+    end
+  end
+
+  describe "end-to-end via the real PubSub topic" do
+    test "Wiki.upsert_page → indexer ingest with memory_type \"page\"" do
+      _pid = start_indexer!(tick_ms: 50)
+
+      {:ok, _} = Wiki.upsert_page("org/e2e-page.md", %{content: "page body"})
+
+      assert_receive {:ingest,
+                      [
+                        %{
+                          memory_type: "page",
+                          content: "page body",
+                          metadata: %{"file_key" => "org/e2e-page.md"}
+                        }
+                      ]},
+                     1_000
+    end
+
+    test "Journal.append → indexer ingest with memory_type \"journal\"" do
+      _pid = start_indexer!(tick_ms: 50)
+
+      {:ok, _} = Journal.append(%{content: "journal body", date: ~D[2026-05-19]})
+
+      assert_receive {:ingest, [%{memory_type: "journal", content: "journal body"}]},
+                     1_000
+    end
+
+    test "upsert then delete → ingest followed by delete with the page id" do
+      _pid = start_indexer!(tick_ms: 50)
+
+      {:ok, page} = Wiki.upsert_page("org/round-trip.md", %{content: "initial"})
+
+      assert_receive {:ingest, _}, 1_000
+
+      {:ok, _} = Wiki.delete_page("org/round-trip.md")
+
+      assert_receive {:delete, [id]}, 1_000
+      assert id == to_string(page.id)
+    end
+  end
+
   describe "telemetry" do
     test "emits :flushed event with corpus counts and latency" do
       ref = make_ref()
