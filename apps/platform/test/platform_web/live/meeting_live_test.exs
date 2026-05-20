@@ -877,6 +877,36 @@ defmodule PlatformWeb.MeetingLiveTest do
         end
       end
     end
+
+    # v2 (task 019e42f6): the server must emit a race-free relocation signal
+    # so the page-level MeetingClient hook can reparent the persistent local
+    # <video> into the now-active mode's dock. The bare assign alone gave JS
+    # no trigger — these tests pin the SERVER half of the contract (the JS
+    # reparent is covered by vitest + the e2e_behavior gate).
+    test "clicking a mode button pushes meeting_stage_mode_changed with the mode", %{
+      conn: conn,
+      meeting: meeting
+    } do
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      for mode <- ~w(canvas screen whiteboard gallery) do
+        view
+        |> element(~s([data-stage-mode-button="#{mode}"]))
+        |> render_click()
+
+        assert_push_event(view, "meeting_stage_mode_changed", %{mode: ^mode})
+      end
+    end
+
+    test "an unknown mode pushes no relocation event", %{conn: conn, meeting: meeting} do
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      # A hand-crafted phx-click with an out-of-allow-list mode hits the
+      # `:error` branch — no assign change AND no push_event.
+      render_click(view, "set_stage_mode", %{"mode" => "admin_only"})
+
+      refute_push_event(view, "meeting_stage_mode_changed", %{})
+    end
   end
 
   describe "Canvas mode renderer" do
@@ -2686,47 +2716,88 @@ defmodule PlatformWeb.MeetingLiveTest do
       {:ok, conn: conn, user: user, meeting: meeting, space: space}
     end
 
-    test "renders exactly one local-self-view node with a distinct, non-colliding id", %{
+    test "renders exactly one local-self-view PARKING node, hidden and id-stable", %{
       conn: conn,
-      meeting: meeting,
-      user: user
+      meeting: meeting
     } do
       {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
 
-      # Exactly one self-view anchor.
+      # Exactly one self-view parking slot.
       assert length(String.split(html, ~s(data-role="local-self-view"))) - 1 == 1
 
-      # The self-view tile uses the `local-self-view-` id prefix, distinct
-      # from the gallery/strip tiles' `video-tile-` prefix, so the three
-      # MeetingVideoTile instances for the local identity never collide.
-      assert html =~ ~s(id="local-self-view-user:#{user.id}")
+      # v2: the parking slot keeps its stable id + phx-update="ignore" so the
+      # MeetingClient hook owns a never-unmounted node — but it no longer
+      # renders the v1 inner self-view tile, and it is hidden / off-layout
+      # (no visible bottom-right PiP positioning classes).
       assert html =~ ~s(id="meeting-local-self-view")
-      # phx-update="ignore" keeps the node stable across mode-switch patches.
       assert html =~ ~s(phx-update="ignore")
+
+      parking_tag =
+        Regex.run(~r/<div[^>]*data-role="local-self-view"[^>]*>/, html) |> List.first()
+
+      assert parking_tag =~ "hidden", "parking slot should be hidden, got: #{parking_tag}"
+      # The v1 floating-PiP positioning is gone (no fixed bottom-right anchor).
+      refute parking_tag =~ "bottom-["
+      refute parking_tag =~ "aspect-video"
+      # No inner self-view tile is rendered into the parking slot anymore.
+      refute html =~ ~s(id="local-self-view-user:)
     end
 
-    test "the self-view node persists with an unchanged id across gallery/screen/canvas switches",
-         %{conn: conn, meeting: meeting, user: user} do
+    test "the self-view parking node persists with an unchanged id across gallery/screen/canvas switches",
+         %{conn: conn, meeting: meeting} do
       {:ok, view, gallery_html} = live(conn, ~p"/meetings/#{meeting.slug}")
-      expected_id = ~s(id="local-self-view-user:#{user.id}")
 
-      assert gallery_html =~ expected_id
+      assert gallery_html =~ ~s(id="meeting-local-self-view")
 
       screen_html =
         view |> element(~s([data-stage-mode-button="screen"])) |> render_click()
 
-      assert screen_html =~ expected_id
+      assert screen_html =~ ~s(id="meeting-local-self-view")
       assert screen_html =~ ~s(data-role="local-self-view")
 
       canvas_html =
         view |> element(~s([data-stage-mode-button="canvas"])) |> render_click()
 
-      assert canvas_html =~ expected_id
+      assert canvas_html =~ ~s(id="meeting-local-self-view")
 
       back_to_gallery =
         view |> element(~s([data-stage-mode-button="gallery"])) |> render_click()
 
-      assert back_to_gallery =~ expected_id
+      assert back_to_gallery =~ ~s(id="meeting-local-self-view")
+    end
+
+    test "gallery mode renders exactly one gallery dock for the local participant", %{
+      conn: conn,
+      meeting: meeting
+    } do
+      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      # Default mode is gallery → the local cell carries one gallery dock.
+      gallery_docks =
+        Regex.scan(~r/data-local-video-dock[^>]*data-dock-mode="gallery"/, html) |> length()
+
+      assert gallery_docks == 1, "expected exactly one gallery dock, got #{gallery_docks}"
+
+      # The local tile is flagged so MeetingVideoTile skips its self-attach.
+      assert html =~ ~s(data-local-dock="true")
+    end
+
+    test "canvas/screen/whiteboard render a strip dock for the local participant", %{
+      conn: conn,
+      meeting: meeting
+    } do
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      for mode <- ~w(canvas screen whiteboard) do
+        html =
+          view |> element(~s([data-stage-mode-button="#{mode}"])) |> render_click()
+
+        strip_docks =
+          Regex.scan(~r/data-local-video-dock[^>]*data-dock-mode="strip"/, html) |> length()
+
+        assert strip_docks == 1,
+               "expected exactly one strip dock in #{mode} mode, got #{strip_docks}"
+      end
     end
 
     test "omits the self-view when the viewer has no participant row", %{conn: conn} do

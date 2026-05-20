@@ -19,6 +19,14 @@ const MeetingVideoTile = {
     this._identity = this.el.dataset.participant
     this._videoEl = null
     this._attachedTrack = null
+    // v2 (task 019e42f6): the LOCAL participant's tile carries
+    // `data-local-dock="true"`. The single persistent local <video> is owned
+    // and reparented by the page-level MeetingClient hook (into
+    // [data-local-video-dock] per stage mode), so this tile must NOT attach
+    // its own camera track — that would duplicate the local <video> and
+    // resurrect the multi-element detach race v1 fought. Remote tiles are
+    // untouched and keep attaching their own tracks.
+    this._localDock = this.el.dataset.localDock === "true"
 
     this._boundTrackSubscribed = this._onTrackSubscribed.bind(this)
     this._boundTrackUnsubscribed = this._onTrackUnsubscribed.bind(this)
@@ -32,6 +40,7 @@ const MeetingVideoTile = {
     // The participant identity is stable per tile id, but re-bind defensively
     // in case the room reference changed between renders.
     this._identity = this.el.dataset.participant
+    this._localDock = this.el.dataset.localDock === "true"
     this._tryBind()
     this._syncExistingTrack()
   },
@@ -170,6 +179,11 @@ const MeetingVideoTile = {
   },
 
   _attach(track, participant) {
+    // v2 (task 019e42f6): a local-dock tile never attaches its own track —
+    // MeetingClient owns the single persistent local <video> and reparents it
+    // into this tile's sibling [data-local-video-dock]. Bailing here keeps
+    // exactly one live local <video> in the DOM.
+    if (this._localDock) return
     const slot = this._slot()
     if (!slot) return
     if (this._attachedTrack === track) return

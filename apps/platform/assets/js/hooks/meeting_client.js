@@ -21,11 +21,26 @@ const MeetingClient = {
     this._room = null
     this._tiles = new Map()
 
+    // v2 (task 019e42f6): the single persistent local self-view <video>.
+    // Born once in the [data-role="local-self-view"] parking slot, attached
+    // to the live camera track exactly once, then REPARENTED (appendChild,
+    // never detach) into the active stage mode's dock on every switch. This
+    // replaces v1's free-floating PiP: the element now docks into the
+    // gallery tile (gallery mode) or the bottom strip (canvas/screen/
+    // whiteboard). The track is never touched after first attach — only the
+    // element's parent changes — so the camera never goes black mid-switch.
+    this._localVideoEl = null
+    this._localVideoTrack = null
+
     this.handleEvent("join-meeting", (payload) => this._join(payload))
     this.handleEvent("leave-meeting", () => this._leave())
     this.handleEvent("toggle-mic", () => this._toggleMic())
     this.handleEvent("toggle-camera", () => this._toggleCamera())
     this.handleEvent("toggle-screen-share", () => this._toggleScreenShare())
+    // The server pushes this on every `set_stage_mode` (meeting_live.ex).
+    this.handleEvent("meeting_stage_mode_changed", ({ mode }) =>
+      this._dockLocalVideo(mode),
+    )
 
     // Migrate tiles between desktop/mobile grids when the viewport crosses
     // the lg breakpoint (rotation, window resize, dev tools toggle).
@@ -35,8 +50,113 @@ const MeetingClient = {
   },
 
   destroyed() {
+    this._teardownLocalVideo()
     this._leave()
     this._viewportQuery?.removeEventListener("change", this._onViewportChange)
+  },
+
+  // ── Local self-view: single persistent <video>, reparented per mode ──────
+
+  // The off-layout parking node the persistent local <video> is born in and
+  // returns to between docks. Stable id + phx-update="ignore" in the markup.
+  _localParkingSlot() {
+    return document.querySelector('[data-role="local-self-view"]')
+  },
+
+  // Read the active stage mode from the center-stage data attribute (the
+  // server's `data-stage-mode` contract). Defaults to gallery.
+  _currentStageMode() {
+    const stage = document.querySelector('[data-pane="center-stage"]')
+    return (stage && stage.dataset.stageMode) || "gallery"
+  },
+
+  // Create (once) the persistent local <video>, attach the camera track to
+  // it, park it, then dock it into the current mode. Idempotent on the
+  // element: a re-publish re-attaches the new track to the SAME element.
+  _attachLocalVideo(track) {
+    if (!track) return
+    this._localVideoTrack = track
+
+    if (!this._localVideoEl) {
+      const parking = this._localParkingSlot()
+      // Use single-element attach into a freshly-created node so we own one
+      // element; never the zero-arg attach() that mints elements globally.
+      const el = document.createElement("video")
+      el.autoplay = true
+      el.playsInline = true
+      el.muted = true
+      el.dataset.role = "local-self-video"
+      el.className = "h-full w-full object-cover"
+      el.style.transform = "scaleX(-1)" // mirror local feed (matches v1 tile)
+      this._localVideoEl = el
+      if (parking) parking.appendChild(el)
+    }
+
+    track.attach(this._localVideoEl)
+    this._localVideoEl.style.display = ""
+    this._dockLocalVideo(this._currentStageMode())
+  },
+
+  // Reparent the persistent local <video> into the dock for `mode`. Gallery
+  // → the gallery dock inside the local [data-gallery-cell]; everything else
+  // → the bottom-strip dock. If the dock isn't in the DOM yet (LV patch
+  // ordering), retry once on the next frame; if still absent, leave the
+  // video parked (never orphaned floating over content).
+  _dockLocalVideo(mode, _retried = false) {
+    const el = this._localVideoEl
+    if (!el) return
+
+    const selector =
+      mode === "gallery"
+        ? '[data-local-video-dock][data-dock-mode="gallery"]'
+        : '[data-local-video-dock][data-dock-mode="strip"]'
+    const dock = document.querySelector(selector)
+
+    if (!dock) {
+      if (!_retried) {
+        requestAnimationFrame(() => this._dockLocalVideo(mode, true))
+      } else {
+        // Park it rather than leave it floating in whatever stale parent.
+        const parking = this._localParkingSlot()
+        if (parking && el.parentElement !== parking) parking.appendChild(el)
+      }
+      return
+    }
+
+    // Move only the element — the MediaStreamTrack stays attached.
+    if (el.parentElement !== dock) dock.appendChild(el)
+  },
+
+  // Camera toggled OFF: keep the element + parking node, just stop painting
+  // and park it so the avatar fallback shows in the dock. The next
+  // publish re-attaches to the SAME element (preserves v1's re-engage win).
+  _suspendLocalVideo() {
+    if (this._localVideoTrack && this._localVideoEl) {
+      try {
+        this._localVideoTrack.detach(this._localVideoEl)
+      } catch (_) {
+        /* track may already be detached */
+      }
+    }
+    this._localVideoTrack = null
+    const el = this._localVideoEl
+    if (el) {
+      const parking = this._localParkingSlot()
+      if (parking && el.parentElement !== parking) parking.appendChild(el)
+    }
+  },
+
+  _teardownLocalVideo() {
+    if (this._localVideoTrack && this._localVideoEl) {
+      try {
+        this._localVideoTrack.detach(this._localVideoEl)
+      } catch (_) {
+        /* already detached */
+      }
+    }
+    if (this._localVideoEl) this._localVideoEl.remove()
+    this._localVideoEl = null
+    this._localVideoTrack = null
   },
 
   _rehomeTiles() {
@@ -74,12 +194,32 @@ const MeetingClient = {
       this._detachTrack(track, participant),
     )
     room.on(RoomEvent.LocalTrackPublished, (pub) => {
-      if (room.localParticipant) this._ensureTile(room.localParticipant)
+      // v2 (task 019e42f6): the local CAMERA is owned by the persistent
+      // self-view element + reparented per mode; do NOT route it through the
+      // imperative tile path. Screen-share still flows to its dedicated slot
+      // via _attachTrack. Other local video (none today) keeps the old path.
+      if (
+        pub.track &&
+        pub.kind === Track.Kind.Video &&
+        !isScreenShareSource(pub.track.source)
+      ) {
+        this._attachLocalVideo(pub.track)
+        return
+      }
       if (pub.track && pub.kind === Track.Kind.Video) {
         this._attachTrack(pub.track, room.localParticipant)
       }
     })
     room.on(RoomEvent.LocalTrackUnpublished, (pub) => {
+      if (
+        pub.kind === Track.Kind.Video &&
+        (!pub.track || !isScreenShareSource(pub.track.source))
+      ) {
+        // Camera off: keep the persistent element, park + clear it so the
+        // next publish re-attaches to the SAME element and re-docks.
+        this._suspendLocalVideo()
+        return
+      }
       if (pub.track) this._detachTrack(pub.track, room.localParticipant)
     })
     room.on(RoomEvent.ActiveSpeakersChanged, (speakers) => {
@@ -111,6 +251,21 @@ const MeetingClient = {
     }
 
     this._ensureTile(room.localParticipant)
+
+    // v2: if a local camera track is already published (e.g. fast re-join),
+    // adopt it into the persistent self-view + dock into the current mode so
+    // a fresh join lands the video in the right place without a switch.
+    for (const pub of room.localParticipant.trackPublications.values()) {
+      if (
+        pub.track &&
+        pub.kind === Track.Kind.Video &&
+        !isScreenShareSource(pub.track.source)
+      ) {
+        this._attachLocalVideo(pub.track)
+        break
+      }
+    }
+
     for (const participant of room.remoteParticipants.values()) {
       this._ensureTile(participant)
       for (const pub of participant.trackPublications.values()) {
@@ -134,6 +289,9 @@ const MeetingClient = {
     window.dispatchEvent(new CustomEvent("livekit:room-disconnected"))
     document.dispatchEvent(new CustomEvent("livekit:room-disconnected"))
     this._clearTiles()
+    // v2: drop the persistent local self-view so a stale camera frame
+    // doesn't linger after disconnect.
+    this._teardownLocalVideo()
     // Task 019e420f stage 3: leave + rejoin must not leave a stale
     // screen-share preview behind.
     if (this._screenShareTrack) {

@@ -264,4 +264,22 @@ describe("MeetingVideoTile attach/detach lifecycle", () => {
     tile._onLocalPublished({ track })
     expect(tile._attachedTrack).toBeNull()
   })
+
+  // ── v2: local-dock tiles never self-attach ────────────────────────────
+
+  it("a local-dock tile (data-local-dock) NEVER attaches its own track", () => {
+    // The local participant's per-mode tile is flagged data-local-dock so
+    // MeetingClient's single persistent <video> is the only live local feed.
+    const tile = buildTile("user:1")
+    tile._localDock = true
+
+    const track = fakeTrack()
+    tile._attach(track, { isLocal: true })
+
+    // No element minted, no track attached, slot stays hidden (avatar shows).
+    expect(tile._attachedTrack).toBeNull()
+    expect(tile._videoEl).toBeNull()
+    expect(tile._slotRef.children.length).toBe(0)
+    expect(track._attachedEls.length).toBe(0)
+  })
 })

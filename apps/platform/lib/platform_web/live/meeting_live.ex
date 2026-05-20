@@ -353,7 +353,19 @@ defmodule PlatformWeb.MeetingLive do
   def handle_event("set_stage_mode", %{"mode" => mode}, socket) do
     case parse_stage_mode(mode) do
       {:ok, stage_mode} ->
-        {:noreply, assign(socket, :current_stage_mode, stage_mode)}
+        # v2 (task 019e42f6): the local self-view <video> is reparented by
+        # the page-level `MeetingClient` hook into the dock for the now-active
+        # mode (gallery tile vs. bottom strip). The bare `assign` alone gives
+        # JS no race-free trigger — the per-mode tiles remount on the LV patch
+        # in an unpredictable order, so a hook `updated()` can't be relied on.
+        # Push an explicit named event to the always-mounted page hook (which
+        # holds `window.__livekit_room`) so relocation fires exactly once per
+        # switch. Mirrors the `*_collapsed_changed` push_event idiom above
+        # (lines ~311 / ~334).
+        {:noreply,
+         socket
+         |> assign(:current_stage_mode, stage_mode)
+         |> push_event("meeting_stage_mode_changed", %{mode: Atom.to_string(stage_mode)})}
 
       :error ->
         # Unknown mode — keep `:current_stage_mode` unchanged. No
