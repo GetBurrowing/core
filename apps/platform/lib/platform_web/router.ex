@@ -110,6 +110,7 @@ defmodule PlatformWeb.Router do
         {PlatformWeb.LiveAuth, :ensure_admin}
       ],
       layout: {PlatformWeb.Layouts, :shell} do
+      live("/admin", AdminLive, :index)
       live("/admin/prompts", AdminPromptsLive, :index)
       live("/admin/prompts/:slug", AdminPromptsLive, :edit)
       live("/admin/federation", AdminFederationLive, :index)

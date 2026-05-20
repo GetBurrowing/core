@@ -355,7 +355,7 @@ defmodule PlatformWeb.Components.IconRail do
       %{
         key: :admin,
         label: "Admin",
-        path: "/admin/prompts",
+        path: "/admin",
         hero_icon: "hero-cog-6-tooth",
         cluster: :admin,
         fabrikam_only?: true

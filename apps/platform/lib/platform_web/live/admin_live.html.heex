@@ -1,0 +1,96 @@
+<div class="flex h-full min-h-0 flex-col">
+  <%!-- Header --%>
+  <div class="flex items-center justify-between border-b border-base-300 px-4 py-3">
+    <div class="flex items-center gap-3">
+      <h1 class="text-sm font-semibold uppercase tracking-widest text-base-content/60">
+        Admin · Fabrikam Operations
+      </h1>
+    </div>
+  </div>
+
+  <%!-- Section cards --%>
+  <div class="flex-1 min-h-0 overflow-y-auto p-4">
+    <div class="mx-auto max-w-3xl space-y-3">
+      <.link
+        navigate="/control"
+        class="group block rounded-lg border border-base-300 bg-base-200 p-4 transition-colors hover:border-primary/40 hover:bg-base-300"
+      >
+        <div class="flex items-start gap-3">
+          <span class="hero-cog-6-tooth size-6 mt-0.5 flex-shrink-0 text-base-content/60"></span>
+          <div class="flex-1 min-w-0">
+            <div class="flex items-center justify-between gap-3">
+              <h2 class="text-base font-semibold text-base-content">Agent Resources</h2>
+              <span class="text-xs font-medium text-primary opacity-0 group-hover:opacity-100 transition-opacity">
+                Open →
+              </span>
+            </div>
+            <p class="mt-1 text-sm text-base-content/60">
+              Connect, manage, and federate agents across Suite runtimes.
+            </p>
+          </div>
+        </div>
+      </.link>
+
+      <.link
+        navigate="/admin/federation"
+        class="group block rounded-lg border border-base-300 bg-base-200 p-4 transition-colors hover:border-primary/40 hover:bg-base-300"
+      >
+        <div class="flex items-start gap-3">
+          <span class="hero-link size-6 mt-0.5 flex-shrink-0 text-base-content/60"></span>
+          <div class="flex-1 min-w-0">
+            <div class="flex items-center justify-between gap-3">
+              <h2 class="text-base font-semibold text-base-content">Agent Federation</h2>
+              <span class="text-xs font-medium text-primary opacity-0 group-hover:opacity-100 transition-opacity">
+                Open →
+              </span>
+            </div>
+            <p class="mt-1 text-sm text-base-content/60">
+              Federation health dashboard — runtime connections, dead-letter buffer, manual ping.
+            </p>
+          </div>
+        </div>
+      </.link>
+
+      <.link
+        navigate="/control/usage"
+        class="group block rounded-lg border border-base-300 bg-base-200 p-4 transition-colors hover:border-primary/40 hover:bg-base-300"
+      >
+        <div class="flex items-start gap-3">
+          <span class="hero-chart-bar size-6 mt-0.5 flex-shrink-0 text-base-content/60"></span>
+          <div class="flex-1 min-w-0">
+            <div class="flex items-center justify-between gap-3">
+              <h2 class="text-base font-semibold text-base-content">Usage / Cost Metering</h2>
+              <span class="text-xs font-medium text-primary opacity-0 group-hover:opacity-100 transition-opacity">
+                Open →
+              </span>
+            </div>
+            <p class="mt-1 text-sm text-base-content/60">
+              Per-task and per-agent usage events, latency, and cost rollups.
+            </p>
+          </div>
+        </div>
+      </.link>
+
+      <.link
+        navigate="/admin/prompts"
+        class="group block rounded-lg border border-base-300 bg-base-200 p-4 transition-colors hover:border-primary/40 hover:bg-base-300"
+      >
+        <div class="flex items-start gap-3">
+          <span class="hero-document-text size-6 mt-0.5 flex-shrink-0 text-base-content/60">
+          </span>
+          <div class="flex-1 min-w-0">
+            <div class="flex items-center justify-between gap-3">
+              <h2 class="text-base font-semibold text-base-content">Prompts</h2>
+              <span class="text-xs font-medium text-primary opacity-0 group-hover:opacity-100 transition-opacity">
+                Open →
+              </span>
+            </div>
+            <p class="mt-1 text-sm text-base-content/60">
+              Manage system prompt templates and per-agent prompt overrides.
+            </p>
+          </div>
+        </div>
+      </.link>
+    </div>
+  </div>
+</div>

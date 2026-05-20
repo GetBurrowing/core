@@ -45,6 +45,44 @@ defmodule PlatformWeb.AdminRouteGuardsTest do
     Plug.Test.init_test_session(conn, %{"current_user_id" => user.id})
   end
 
+  describe "/admin (landing page)" do
+    test "admin user reaches the page and sees all 4 section cards", %{conn: conn} do
+      user = create_user!()
+      fabrikam = Tenancy.get_org_by_slug!("fabrikam")
+      create_membership!(user, fabrikam, "admin")
+
+      {:ok, _view, html} = conn |> authenticated_conn(user) |> live(~p"/admin")
+
+      assert html =~ "Admin · Fabrikam Operations"
+      assert html =~ "Agent Resources"
+      assert html =~ "Agent Federation"
+      assert html =~ "Usage / Cost Metering"
+      assert html =~ "Prompts"
+      assert html =~ ~s(href="/control")
+      assert html =~ ~s(href="/admin/federation")
+      assert html =~ ~s(href="/control/usage")
+      assert html =~ ~s(href="/admin/prompts")
+    end
+
+    test "member user is redirected to /", %{conn: conn} do
+      user = create_user!()
+      fabrikam = Tenancy.get_org_by_slug!("fabrikam")
+      create_membership!(user, fabrikam, "member")
+
+      assert {:error, {:live_redirect, %{to: "/", flash: flash}}} =
+               conn |> authenticated_conn(user) |> live(~p"/admin")
+
+      assert Phoenix.Flash.get(flash, :error) =~ "don't have access"
+    end
+
+    test "user with no memberships is redirected to /", %{conn: conn} do
+      user = create_user!()
+
+      assert {:error, {:live_redirect, %{to: "/"}}} =
+               conn |> authenticated_conn(user) |> live(~p"/admin")
+    end
+  end
+
   describe "/admin/prompts" do
     test "admin user reaches the page", %{conn: conn} do
       user = create_user!()
@@ -95,16 +133,16 @@ defmodule PlatformWeb.AdminRouteGuardsTest do
   end
 
   describe "admin nav gating in shell" do
-    # Stage 4: the dedicated **Admin** cluster tile in the icon-rail /
-    # bottom-rail / more-sheet is the single piece of admin-only nav
-    # chrome — gated on `is_fabrikam_user`, which (after stack 2) is driven
-    # by `Tenancy.fabrikam_admin_preloaded?/1`. The shared **Prompts** tile
-    # (`/admin/prompts`, working cluster, `fabrikam_only?: false` by
-    # design — see `icon_rail.ex`) is visible to everyone today; admins
-    # additionally see the Admin cluster tile that points back at the
-    # same path. `/admin/federation` does not yet have a nav surface —
-    # it's only reachable by direct URL (and gated by the
-    # `live_session :admin` block at the router level).
+    # The dedicated **Admin** cluster tile in the icon-rail / bottom-rail /
+    # more-sheet is the single piece of admin-only nav chrome — gated on
+    # `is_fabrikam_user`, which (after stack 2) is driven by
+    # `Tenancy.fabrikam_admin_preloaded?/1`. The shared **Prompts** tile
+    # (`/admin/prompts`, working cluster, `fabrikam_only?: false` by design —
+    # see `icon_rail.ex`) is visible to everyone today. The Admin tile
+    # points at the landing page (`/admin`) which surfaces section cards
+    # for the Fabrikam-only sub-surfaces (Agent Resources, Agent Federation,
+    # Usage/Cost Metering, Prompts). `/admin/federation` is reachable via
+    # the landing page card or direct URL.
     test "admin user sees the Admin cluster tile in shell", %{conn: conn} do
       user = create_user!()
       fabrikam = Tenancy.get_org_by_slug!("fabrikam")
@@ -113,7 +151,7 @@ defmodule PlatformWeb.AdminRouteGuardsTest do
       {:ok, _view, html} = conn |> authenticated_conn(user) |> live(~p"/tasks")
 
       assert html =~ ~s(data-destination="admin")
-      assert html =~ "/admin/prompts"
+      assert html =~ ~s(href="/admin")
     end
 
     test "member user does NOT see the Admin cluster tile in shell", %{conn: conn} do
