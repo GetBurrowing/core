@@ -370,7 +370,7 @@ defmodule Platform.Org.Context do
 
   @doc """
   Vector-search variant that returns `[{entry, score}]` for callers that
-  need the similarity score alongside the entry (e.g. the `org_memory_search`
+  need the similarity score alongside the entry (e.g. the `memory_search`
   tool). Returns `nil` when memory-service is unavailable so callers can
   decide whether to fall back.
   """

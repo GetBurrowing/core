@@ -256,13 +256,21 @@ defmodule Platform.Org.Wiki.ContextT4E2ETest do
     # (20260520020000_add_search_vector_to_org_wiki) is added under the
     # T5 allow-list below so the count assertion still pins the T4
     # boundary correctly.
+    #
+    # NOTE (T5 stage 5): two more T5 migrations are allow-listed below
+    # — the prompt-template force-update for the V2 memory copy
+    # (20260520010000) and the agent-runtime allowed_bundles swap from
+    # `org_context` → `memory` (20260520030000).
     @t3_head_migrations_count 95
 
     @t4_allowed_new_migrations [
       "20260520000000_refresh_dispatch_templates_for_wiki_preamble.exs",
       # T5 stage 4 additions (not T4 territory but tracked here so the
       # count guard stays accurate as the stack accumulates).
-      "20260520020000_add_search_vector_to_org_wiki.exs"
+      "20260520020000_add_search_vector_to_org_wiki.exs",
+      # T5 stage 5 additions (V1 retirement + capability bundle swap).
+      "20260520010000_force_update_prompt_templates_memory_v2.exs",
+      "20260520030000_agent_runtime_memory_bundle.exs"
     ]
 
     defp t4_root, do: Mix.Project.project_file() |> Path.dirname()

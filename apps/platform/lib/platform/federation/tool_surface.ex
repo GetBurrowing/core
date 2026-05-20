@@ -11,7 +11,6 @@ defmodule Platform.Federation.ToolSurface do
   alias Platform.Chat
   alias Platform.Chat.{ActiveAgentStore, ContextPlane, Participant}
   alias Platform.Meetings
-  alias Platform.Org.Context, as: OrgContext
   alias Platform.Org.Wiki
   alias Platform.Org.Wiki.{Journal, Routing, Search}
   alias Platform.Tasks
@@ -20,7 +19,7 @@ defmodule Platform.Federation.ToolSurface do
 
   import Ecto.Query, only: [from: 2]
 
-  @bundles ~w(canvas messaging task plan review space context_read federation org_context memory skill attachment)
+  @bundles ~w(canvas messaging task plan review space context_read federation memory skill attachment)
 
   # Per-message content cap (graphemes) for space_get_messages /
   # space_search_messages. Anything longer is sliced and flagged via the
@@ -58,7 +57,6 @@ defmodule Platform.Federation.ToolSurface do
   defp tools_for_bundle("space"), do: tag(space_tools(), "space")
   defp tools_for_bundle("context_read"), do: tag(context_read_tools(), "context_read")
   defp tools_for_bundle("federation"), do: tag(federation_tools(), "federation")
-  defp tools_for_bundle("org_context"), do: tag(org_context_tools(), "org_context")
   defp tools_for_bundle("memory"), do: tag(memory_tools(), "memory")
   defp tools_for_bundle("skill"), do: tag(skill_tools(), "skill")
   defp tools_for_bundle("attachment"), do: tag(attachment_tools(), "attachment")
@@ -231,164 +229,6 @@ defmodule Platform.Federation.ToolSurface do
           "Partial updates are not supported — pass the full content on every update. Two skills with the same slug-able name would collide; use a more specific name to disambiguate.",
         when_to_use:
           "When you want to publish a new playbook or iterate on an existing one without touching the DB directly."
-      }
-    ]
-  end
-
-  defp org_context_tools do
-    [
-      %{
-        name: "org_context_read",
-        description:
-          "Read an org context file by key. Returns the file content, current version, and metadata.",
-        parameters: %{
-          file_key: %{
-            type: "string",
-            required: true,
-            description:
-              "The key identifying the context file (e.g. 'org/identity.md'). Legacy uppercase keys like 'ORG_IDENTITY.md' still resolve via the alias table."
-          },
-          workspace_id: %{
-            type: "string",
-            required: false,
-            description: "UUID of the workspace to scope to (default: org-level)"
-          }
-        },
-        returns: "The file object with file_key, content, version, updated_by, and timestamps",
-        limitations: "Returns nil if the file does not exist for the given key and workspace.",
-        when_to_use:
-          "When you need to read org-level context like identity, preferences, or guidelines"
-      },
-      %{
-        name: "org_context_write",
-        description:
-          "Write or update an org context file. Creates the file if it doesn't exist, or increments the version on update. Supports optimistic locking via expected_version.",
-        parameters: %{
-          file_key: %{
-            type: "string",
-            required: true,
-            description:
-              "The key identifying the context file (e.g. 'org/identity.md'). Legacy uppercase keys like 'ORG_IDENTITY.md' still resolve via the alias table."
-          },
-          content: %{
-            type: "string",
-            required: true,
-            description: "The full content to write to the file"
-          },
-          updated_by: %{
-            type: "string",
-            required: false,
-            description: "UUID of the agent or user performing the update"
-          },
-          workspace_id: %{
-            type: "string",
-            required: false,
-            description: "UUID of the workspace to scope to (default: org-level)"
-          },
-          expected_version: %{
-            type: "integer",
-            required: false,
-            description:
-              "Expected current version for optimistic locking. Write fails if the file has been modified since this version."
-          }
-        },
-        returns:
-          "The updated file object with file_key, content, version, updated_by, and timestamps",
-        limitations:
-          "If expected_version is supplied and doesn't match, returns a version conflict error.",
-        when_to_use:
-          "When you need to create or update org-level context files like identity, preferences, or guidelines"
-      },
-      %{
-        name: "org_context_list",
-        description: "List all available org context files with summary information.",
-        parameters: %{
-          workspace_id: %{
-            type: "string",
-            required: false,
-            description: "UUID of the workspace to scope to (default: org-level)"
-          }
-        },
-        returns:
-          "Array of file objects with file_key, content, version, updated_by, and timestamps",
-        limitations: "Returns an empty list if no context files exist.",
-        when_to_use:
-          "When you need to discover what org context files are available before reading or writing"
-      },
-      %{
-        name: "org_memory_append",
-        description:
-          "Append a short-lived memory entry — a note about today's activity. Entries are append-only, surface in agent context as `ORG_NOTES-YYYY-MM-DD` for the last 2 days. For curated long-term knowledge (decisions, patterns, lessons), update `org/memory.md` via `org_context_write` instead.",
-        parameters: %{
-          content: %{
-            type: "string",
-            required: true,
-            description: "The content of the memory entry"
-          },
-          date: %{
-            type: "string",
-            required: false,
-            description: "ISO 8601 date (YYYY-MM-DD) for the entry (default: today)"
-          },
-          authored_by: %{
-            type: "string",
-            required: false,
-            description: "UUID of the agent or user authoring the entry"
-          },
-          workspace_id: %{
-            type: "string",
-            required: false,
-            description: "UUID of the workspace to scope to (default: org-level)"
-          },
-          metadata: %{
-            type: "object",
-            required: false,
-            description: "Optional metadata map to attach to the entry"
-          }
-        },
-        returns: "The created memory entry with id, content, date, and timestamps",
-        limitations: "Memory entries are append-only and cannot be edited or deleted.",
-        when_to_use:
-          "When you need to record short-lived observations or notes about today's activity. For long-term knowledge, use `org_context_write` on `org/memory.md`."
-      },
-      %{
-        name: "org_memory_search",
-        description:
-          "Search org memory entries. Uses semantic search when an external memory service is configured, otherwise falls back to case-insensitive substring matching.",
-        parameters: %{
-          query: %{
-            type: "string",
-            required: false,
-            description:
-              "Search query — used for semantic similarity when the memory service is configured, or case-insensitive substring match as fallback"
-          },
-          date_from: %{
-            type: "string",
-            required: false,
-            description: "ISO 8601 date (YYYY-MM-DD) — include entries on or after this date"
-          },
-          date_to: %{
-            type: "string",
-            required: false,
-            description: "ISO 8601 date (YYYY-MM-DD) — include entries on or before this date"
-          },
-          workspace_id: %{
-            type: "string",
-            required: false,
-            description: "UUID of the workspace to scope to (default: org-level)"
-          },
-          limit: %{
-            type: "integer",
-            required: false,
-            description: "Maximum number of results to return (default: 50)"
-          }
-        },
-        returns:
-          "Array of memory entry objects with id, content, date, timestamps, and score (when semantic search is active)",
-        limitations:
-          "Falls back to substring matching when no external memory service is configured. Default limit is 50.",
-        when_to_use:
-          "When you need to recall past observations or notes from org memory entries. For long-term curated knowledge, read `org/memory.md` via `org_context_read` instead."
       }
     ]
   end
@@ -4236,196 +4076,6 @@ defmodule Platform.Federation.ToolSurface do
     {:ok, %{runtimes: runtimes}}
   end
 
-  # ── Org Context tools ────────────────────────────────────────────────
-
-  def execute("org_context_read", args, _context) do
-    file_key = Map.get(args, "file_key")
-
-    if is_nil(file_key) or file_key == "" do
-      {:error,
-       %{
-         error: "file_key is required",
-         recoverable: true,
-         suggestion: "Provide a file_key such as 'org/identity.md'"
-       }}
-    else
-      workspace_id = Map.get(args, "workspace_id")
-
-      case OrgContext.get_context_file(file_key, workspace_id) do
-        nil ->
-          {:error,
-           %{
-             error: "Context file not found: #{file_key}",
-             recoverable: true,
-             suggestion: "Use org_context_list to see available files"
-           }}
-
-        file ->
-          {:ok, serialize_context_file(file)}
-      end
-    end
-  end
-
-  def execute("org_context_write", args, _context) do
-    file_key = Map.get(args, "file_key")
-    content = Map.get(args, "content")
-
-    cond do
-      is_nil(file_key) or file_key == "" ->
-        {:error,
-         %{
-           error: "file_key is required",
-           recoverable: true,
-           suggestion: "Provide a file_key such as 'org/identity.md'"
-         }}
-
-      is_nil(content) ->
-        {:error,
-         %{
-           error: "content is required",
-           recoverable: true,
-           suggestion: "Provide content for the context file"
-         }}
-
-      true ->
-        workspace_id = Map.get(args, "workspace_id")
-        updated_by = Map.get(args, "updated_by")
-        expected_version = Map.get(args, "expected_version")
-
-        attrs = %{content: content, updated_by: updated_by}
-
-        opts =
-          [workspace_id: workspace_id]
-          |> maybe_put_opt(:expected_version, expected_version)
-
-        case OrgContext.upsert_context_file(file_key, attrs, opts) do
-          {:ok, file} ->
-            {:ok, serialize_context_file(file)}
-
-          {:error, :stale} ->
-            {:error,
-             %{
-               error: "Version conflict: the file was modified since you last read it",
-               recoverable: true,
-               suggestion:
-                 "Re-read the file with org_context_read to get the latest version, then retry"
-             }}
-
-          {:error, changeset} ->
-            {:error,
-             %{
-               error: "Failed to write context file: #{inspect_errors_safe(changeset)}",
-               recoverable: false,
-               suggestion: "Check the provided attributes and try again"
-             }}
-        end
-    end
-  end
-
-  def execute("org_context_list", args, _context) do
-    workspace_id = Map.get(args, "workspace_id")
-
-    files =
-      OrgContext.list_context_files(workspace_id: workspace_id)
-      |> Enum.map(&serialize_context_file/1)
-
-    {:ok, files}
-  end
-
-  def execute("org_memory_append", args, context) do
-    content = Map.get(args, "content")
-
-    if is_nil(content) or content == "" do
-      {:error,
-       %{
-         error: "content is required",
-         recoverable: true,
-         suggestion: "Provide content for the memory entry"
-       }}
-    else
-      authored_by = Map.get(args, "authored_by") || Map.get(context, :agent_id)
-      workspace_id = Map.get(args, "workspace_id")
-      metadata = Map.get(args, "metadata", %{})
-
-      date =
-        case Map.get(args, "date") do
-          nil -> Date.utc_today()
-          date_str -> parse_date(date_str)
-        end
-
-      case date do
-        {:error, reason} ->
-          {:error,
-           %{
-             error: "Invalid date format: #{reason}",
-             recoverable: true,
-             suggestion: "Use ISO 8601 date format: YYYY-MM-DD"
-           }}
-
-        date ->
-          attrs = %{
-            content: content,
-            date: date,
-            authored_by: authored_by,
-            metadata: metadata
-          }
-
-          case OrgContext.append_memory_entry(attrs, workspace_id: workspace_id) do
-            {:ok, entry} ->
-              {:ok, serialize_memory_entry(entry)}
-
-            {:error, changeset} ->
-              {:error,
-               %{
-                 error: "Failed to append memory entry: #{inspect_errors_safe(changeset)}",
-                 recoverable: false,
-                 suggestion: "Check the provided attributes and try again"
-               }}
-          end
-      end
-    end
-  end
-
-  def execute("org_memory_search", args, _context) do
-    workspace_id = Map.get(args, "workspace_id")
-    query = Map.get(args, "query")
-    limit = Map.get(args, "limit", 50)
-
-    date_from = parse_optional_date(Map.get(args, "date_from"))
-    date_to = parse_optional_date(Map.get(args, "date_to"))
-
-    case {date_from, date_to} do
-      {{:error, reason}, _} ->
-        {:error,
-         %{
-           error: "Invalid date_from format: #{reason}",
-           recoverable: true,
-           suggestion: "Use ISO 8601 date format: YYYY-MM-DD"
-         }}
-
-      {_, {:error, reason}} ->
-        {:error,
-         %{
-           error: "Invalid date_to format: #{reason}",
-           recoverable: true,
-           suggestion: "Use ISO 8601 date format: YYYY-MM-DD"
-         }}
-
-      {date_from, date_to} ->
-        opts =
-          [
-            workspace_id: workspace_id,
-            query: query,
-            date_from: date_from,
-            date_to: date_to,
-            limit: limit
-          ]
-          |> Enum.reject(fn {_k, v} -> is_nil(v) end)
-
-        {:ok, search_with_memory_service(query, opts)}
-    end
-  end
-
   # ── Memory tool dispatch (ADR-0041 T5) ──────────────────────────────────
   # Thin adapter: every clause gates through `Wiki.Routing` then routes to
   # `Wiki` (pages/private) or `Wiki.Journal` (journal). No direct `Repo`
@@ -5030,49 +4680,6 @@ defmodule Platform.Federation.ToolSurface do
 
   defp maybe_put(opts, key, value) when is_list(opts), do: Keyword.put(opts, key, value)
 
-  # ── Memory search helpers ────────────────────────────────────────────────
-
-  defp search_with_memory_service(query, opts) do
-    if Platform.Memory.enabled?() and is_binary(query) and query != "" do
-      case Platform.Memory.search(query, opts) do
-        {:ok, [_ | _] = scored_results} ->
-          hydrate_scored_results(scored_results)
-
-        {:ok, []} ->
-          db_fallback_search(opts)
-
-        {:error, reason} ->
-          Logger.warning("Memory provider search failed, falling back to DB: #{inspect(reason)}")
-          db_fallback_search(opts)
-      end
-    else
-      db_fallback_search(opts)
-    end
-  end
-
-  defp db_fallback_search(opts) do
-    OrgContext.search_memory_entries(opts)
-    |> Enum.map(&serialize_memory_entry/1)
-  end
-
-  defp hydrate_scored_results(scored_results) do
-    entry_ids = Enum.map(scored_results, & &1.entry_id)
-    score_map = Map.new(scored_results, &{&1.entry_id, &1.score})
-
-    entries_by_id =
-      OrgContext.get_memory_entries_by_ids(entry_ids)
-      |> Map.new(&{&1.id, &1})
-
-    # Preserve provider ranking order, skip entries not found in DB
-    scored_results
-    |> Enum.flat_map(fn %{entry_id: id} ->
-      case Map.get(entries_by_id, id) do
-        nil -> []
-        entry -> [Map.put(serialize_memory_entry(entry), :score, score_map[id])]
-      end
-    end)
-  end
-
   # ── Helpers ──────────────────────────────────────────────────────────────
 
   defp serialize_task(task) do
@@ -5338,32 +4945,6 @@ defmodule Platform.Federation.ToolSurface do
     |> inspect()
   end
 
-  # ── Org Context helpers ─────────────────────────────────────────────────
-
-  defp serialize_context_file(file) do
-    %{
-      file_key: file.file_key,
-      content: file.content,
-      version: file.version,
-      updated_by: file.updated_by,
-      workspace_id: file.workspace_id,
-      inserted_at: format_datetime(file.inserted_at),
-      updated_at: format_datetime(file.updated_at)
-    }
-  end
-
-  defp serialize_memory_entry(entry) do
-    %{
-      id: entry.id,
-      content: entry.content,
-      date: Date.to_iso8601(entry.date),
-      authored_by: entry.authored_by,
-      workspace_id: entry.workspace_id,
-      metadata: entry.metadata,
-      inserted_at: format_datetime(entry.inserted_at)
-    }
-  end
-
   defp parse_date(date_str) when is_binary(date_str) do
     case Date.from_iso8601(date_str) do
       {:ok, date} -> date
@@ -5381,7 +4962,4 @@ defmodule Platform.Federation.ToolSurface do
       date -> date
     end
   end
-
-  defp maybe_put_opt(opts, _key, nil), do: opts
-  defp maybe_put_opt(opts, key, value), do: Keyword.put(opts, key, value)
 end

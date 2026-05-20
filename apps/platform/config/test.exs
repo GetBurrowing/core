@@ -69,6 +69,11 @@ config :platform, :canvas_persist_sync, true
 # the file at that commit (`git show 4d6d332:apps/platform/lib/platform/org/context.ex`).
 # Regenerate this only when a future task (e.g. T5 retirement of
 # Org.Context) legitimately modifies the file — in the same commit.
+#
+# T5 stage 5 re-pinned this to absorb the one-line doc-comment fix
+# (`org_memory_search` → `memory_search` on the
+# `search_memory_with_scores/2` doc-string). The module body otherwise
+# remains untouched; T7 retires the module.
 config :platform,
        :t2_context_sha256_t1_head,
-       "55c726cc9c247c492e95ad28311b3225b66b8c156330fefff9cb4c63d7ee7f94"
+       "a4d5de2b4cc496ee4420b1a7531a5b88e66090350721143e353ab514c2fb78c2"

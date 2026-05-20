@@ -237,7 +237,7 @@ defmodule Platform.Agents.SystemEventSchedulerTest do
 
         assert Enum.any?(messages, fn m ->
                  String.contains?(m.content, "## Activity since") and
-                   String.contains?(m.content, "org_memory_append")
+                   String.contains?(m.content, "memory_create")
                end)
       end
 

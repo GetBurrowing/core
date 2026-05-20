@@ -680,7 +680,7 @@ defmodule PlatformWeb.ControlCenterLiveTest do
     assert html =~ "Allowed capability bundles"
     assert html =~ ~s(name="bundles[]")
 
-    new_bundles = ~w(federation space task plan org_context)
+    new_bundles = ~w(federation space task plan memory)
 
     html =
       view
