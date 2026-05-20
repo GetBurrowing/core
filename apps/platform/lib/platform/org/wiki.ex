@@ -315,6 +315,101 @@ defmodule Platform.Org.Wiki do
     lookup_via_alias(file_key, Keyword.get(opts, :workspace_id))
   end
 
+  @doc """
+  Rename a page from `old_file_key` to `new_file_key` within a single
+  `Repo.transaction/1`.
+
+  The transaction reads the source row, upserts a new row at
+  `new_file_key` carrying the source content + `updated_by`, and
+  deletes the source row. A partial failure rolls back both sides so
+  we never orphan a half-renamed page.
+
+  Two `:wiki_page_written` + one `:wiki_page_deleted` index events
+  fire downstream (one per `upsert_page/3` + `delete_page/2`). The T3
+  indexer translates those into a vector-store delete + re-ingest so
+  the embedding lands against the new path.
+
+  Routing/ACL checks (Historian-only on page paths, owner-only on
+  private paths) belong to the caller. T5 stage 3's `memory_rename`
+  tool clause gates BOTH `old_file_key` and `new_file_key` against
+  `Platform.Org.Wiki.Routing.gate_write/3` before invoking.
+
+  ## Options
+    * `:workspace_id` (default `nil`)
+    * `:updated_by`   — UUID written to the new row's `updated_by`
+      column. Defaults to the source row's existing `updated_by`.
+  """
+  @spec rename_page(String.t(), String.t(), keyword()) ::
+          {:ok, WikiPage.t()} | {:error, :not_found | :stale | Ecto.Changeset.t() | term()}
+  def rename_page(old_file_key, new_file_key, opts \\ [])
+      when is_binary(old_file_key) and is_binary(new_file_key) do
+    workspace_id = Keyword.get(opts, :workspace_id)
+
+    cond do
+      old_file_key == new_file_key ->
+        {:error, :same_path}
+
+      true ->
+        do_rename(old_file_key, new_file_key, workspace_id, opts)
+    end
+  end
+
+  defp do_rename(old_file_key, new_file_key, workspace_id, opts) do
+    # Outer transaction ensures the upsert + delete commit atomically.
+    # We pre-resolve the source row so a missing source short-circuits
+    # before any write, and we keep `upsert_page/3`'s own transaction
+    # nested (Ecto treats nested `Repo.transaction/1` as a savepoint
+    # on the outer transaction, so an inner `Repo.rollback/1` aborts
+    # the whole rename — which is the behaviour we want).
+    case Repo.transaction(fn ->
+           source =
+             WikiPage
+             |> where([p], p.file_key == ^old_file_key)
+             |> filter_workspace(workspace_id)
+             |> Repo.one() ||
+               lookup_via_alias(old_file_key, workspace_id)
+
+           case source do
+             nil ->
+               Repo.rollback(:not_found)
+
+             %WikiPage{} = page ->
+               updated_by = Keyword.get(opts, :updated_by, page.updated_by)
+
+               # Upsert the new path inside the outer transaction.
+               case upsert_page(
+                      new_file_key,
+                      %{content: page.content, updated_by: updated_by},
+                      workspace_id: workspace_id
+                    ) do
+                 {:ok, new_page} ->
+                   # Delete the source row. Skip the public
+                   # `delete_page/2` to avoid a redundant `get_page/2`
+                   # round-trip (we already loaded the row above).
+                   case Repo.delete(page) do
+                     {:ok, deleted} ->
+                       broadcast_index_event(:wiki_page_deleted, %{
+                         page_id: deleted.id,
+                         file_key: deleted.file_key,
+                         workspace_id: deleted.workspace_id
+                       })
+
+                       new_page
+
+                     {:error, reason} ->
+                       Repo.rollback(reason)
+                   end
+
+                 {:error, reason} ->
+                   Repo.rollback(reason)
+               end
+           end
+         end) do
+      {:ok, %WikiPage{} = page} -> {:ok, page}
+      {:error, _} = err -> err
+    end
+  end
+
   # ── Pure parsers (filled in by Stage 2) ───────────────────────────────
 
   @doc """

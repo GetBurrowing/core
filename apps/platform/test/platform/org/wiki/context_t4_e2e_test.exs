@@ -240,7 +240,18 @@ defmodule Platform.Org.Wiki.ContextT4E2ETest do
     # 20260505010000, 20260505020000, 20260506173000, 20260506210000,
     # 20260514210000). The guard below allow-lists that specific
     # migration; anything else fails.
-    @t3_head_migrations_count 92
+    #
+    # NOTE (T5 stage 3): the baseline was bumped from 92 to 95 when the
+    # T5 worktree merged T4 HEAD on top of `main`, picking up three
+    # tenancy migrations that landed on main after T4 branched
+    # (20260519134626_add_preferences_to_users,
+    #  20260519160000_refine_fabrikam_admin_membership_by_email_domain,
+    #  20260519220000_add_roles_locked_at_to_org_memberships). The T5
+    # stage-3 rename of 20260519220000 → 20260519220500 to resolve a
+    # timestamp collision is also counted here. None of these are T4
+    # additions, so the spirit of the guard (T4 stayed in scope on its
+    # own branch) is preserved.
+    @t3_head_migrations_count 95
 
     @t4_allowed_new_migrations [
       "20260520000000_refresh_dispatch_templates_for_wiki_preamble.exs"

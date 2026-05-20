@@ -12,13 +12,15 @@ defmodule Platform.Federation.ToolSurface do
   alias Platform.Chat.{ActiveAgentStore, ContextPlane, Participant}
   alias Platform.Meetings
   alias Platform.Org.Context, as: OrgContext
+  alias Platform.Org.Wiki
+  alias Platform.Org.Wiki.{Journal, Routing}
   alias Platform.Tasks
   alias Platform.Tasks.{Plan, PlanEngine, Stack, Stacks, Stage, Task, Validation}
   alias Platform.Repo
 
   import Ecto.Query, only: [from: 2]
 
-  @bundles ~w(canvas messaging task plan review space context_read federation org_context skill attachment)
+  @bundles ~w(canvas messaging task plan review space context_read federation org_context memory skill attachment)
 
   # Per-message content cap (graphemes) for space_get_messages /
   # space_search_messages. Anything longer is sliced and flagged via the
@@ -57,6 +59,7 @@ defmodule Platform.Federation.ToolSurface do
   defp tools_for_bundle("context_read"), do: tag(context_read_tools(), "context_read")
   defp tools_for_bundle("federation"), do: tag(federation_tools(), "federation")
   defp tools_for_bundle("org_context"), do: tag(org_context_tools(), "org_context")
+  defp tools_for_bundle("memory"), do: tag(memory_tools(), "memory")
   defp tools_for_bundle("skill"), do: tag(skill_tools(), "skill")
   defp tools_for_bundle("attachment"), do: tag(attachment_tools(), "attachment")
   defp tools_for_bundle(_), do: []
@@ -386,6 +389,167 @@ defmodule Platform.Federation.ToolSurface do
           "Falls back to substring matching when no external memory service is configured. Default limit is 50.",
         when_to_use:
           "When you need to recall past observations or notes from org memory entries. For long-term curated knowledge, read `org/memory.md` via `org_context_read` instead."
+      }
+    ]
+  end
+
+  # ── Memory tools (ADR-0041 T5) ───────────────────────────────────────────
+  # Anthropic memory-tool-trained naming. Path determines routing through
+  # `Platform.Org.Wiki.Routing`; the per-tool descriptions document the
+  # path-policy table so agents can read the rules from the catalog.
+  defp memory_tools do
+    [
+      %{
+        name: "memory_view",
+        description:
+          "Read a memory page or a day's journal entries. Returns the full body for pages/private notes, or a virtual concatenation of all entries for a journal day. Path determines routing: `org/page/...` / `project/<uuid>/page/...` / `space/<uuid>/page/...` (curated wiki), `*/journal/<YYYY-MM-DD>.md` (append-only journal), `space/<uuid>/private/<agent_id>/...` (owner-only scratch).",
+        parameters: %{
+          path: %{
+            type: "string",
+            required: true,
+            description:
+              "File-key path (e.g. `org/page/identity.md`, `org/journal/2026-05-20.md`, `space/<uuid>/private/<agent_id>/notes.md`)."
+          },
+          view_range: %{
+            type: "array",
+            required: false,
+            description:
+              "Two-element [start, end] (1-based, inclusive) line slice. Omit to return the full body."
+          },
+          workspace_id: %{
+            type: "string",
+            required: false,
+            description: "UUID of the workspace (default: org-level)."
+          }
+        },
+        returns:
+          "%{path, content, kind, version?, lines_returned, ...} — page/private hits include `version`/`frontmatter`/`updated_by`; journal hits include `date`/`entry_ids`/`namespace`.",
+        limitations:
+          "Private paths are gated to the owning agent. Unknown namespaces return `:rejected_namespace`. Missing rows return `:not_found`.",
+        when_to_use:
+          "When you need to read curated org/project/space pages, today's or a past day's journal, or your own private scratch notes."
+      },
+      %{
+        name: "memory_create",
+        description:
+          "Create a memory page or append a journal entry. Path determines routing: `org/page/...` / `project/<uuid>/page/...` / `space/<uuid>/page/...` (Historian-only writes), `*/journal/<YYYY-MM-DD>.md` (any agent appends), `space/<uuid>/private/<agent_id>/...` (owner only). Non-Historian writes to a page path return a `propose via journal` error with the suggested journal path.",
+        parameters: %{
+          path: %{
+            type: "string",
+            required: true,
+            description: "File-key path. See description for the path-policy table."
+          },
+          file_text: %{
+            type: "string",
+            required: true,
+            description:
+              "Content body. For journal entries this is the entry text appended for the path's date."
+          },
+          workspace_id: %{
+            type: "string",
+            required: false,
+            description: "UUID of the workspace (default: org-level)."
+          }
+        },
+        returns:
+          "%{path, kind, ...} — page/private hits include `version`/`frontmatter`/`updated_at`; journal hits include `entry_id`/`date`/`namespace`.",
+        limitations:
+          "Page writes require Historian role (`\"daily_summary\" in agent.system_events`). Private writes require ownership. Unknown namespaces are rejected.",
+        when_to_use:
+          "When you need to create a new page (Historian only), append a journal entry (any agent), or write to your own private scratch path."
+      },
+      %{
+        name: "memory_str_replace",
+        description:
+          "Replace exactly one occurrence of `old_str` with `new_str` in a memory page. Page paths only — journal paths return `:journal_immutable` (the Wiki.Journal contract is append-only; propose a change via `memory_create` against the day's journal path instead).",
+        parameters: %{
+          path: %{type: "string", required: true, description: "Page or private path."},
+          old_str: %{
+            type: "string",
+            required: true,
+            description: "Substring to replace. Must appear exactly once in the page body."
+          },
+          new_str: %{
+            type: "string",
+            required: true,
+            description: "Replacement substring."
+          },
+          workspace_id: %{
+            type: "string",
+            required: false,
+            description: "UUID of the workspace (default: org-level)."
+          }
+        },
+        returns: "%{path, version, kind, updated_at, frontmatter}",
+        limitations:
+          "Zero matches → `:no_match`. Multiple matches → `:ambiguous_match` (provide more surrounding context). Journal paths → `:journal_immutable`. Optimistic-lock conflict → `:version_conflict`.",
+        when_to_use:
+          "When you (Historian) are editing a curated page and want a targeted substitution rather than a full body rewrite."
+      },
+      %{
+        name: "memory_insert",
+        description:
+          "Insert `insert_text` before line `insert_line` (1-based) of a memory page. `insert_line = 1` prepends; `insert_line = line_count + 1` appends. Page paths only — journal paths return `:journal_immutable`.",
+        parameters: %{
+          path: %{type: "string", required: true, description: "Page or private path."},
+          insert_line: %{
+            type: "integer",
+            required: true,
+            description: "1-based line number to insert BEFORE. Range: `1..length(lines)+1`."
+          },
+          insert_text: %{
+            type: "string",
+            required: true,
+            description: "Text block to insert. Newlines preserved."
+          },
+          workspace_id: %{
+            type: "string",
+            required: false,
+            description: "UUID of the workspace (default: org-level)."
+          }
+        },
+        returns: "%{path, version, kind, updated_at, frontmatter}",
+        limitations:
+          "Out-of-range line numbers → `:out_of_range`. Journal paths → `:journal_immutable`. Optimistic-lock conflict → `:version_conflict`.",
+        when_to_use:
+          "When you (Historian) want to splice a block into a curated page at a known line."
+      },
+      %{
+        name: "memory_delete",
+        description:
+          "Delete a memory page. Page paths only — journal paths return `:journal_immutable`. The T3 indexer picks up the delete event and removes the embedding automatically.",
+        parameters: %{
+          path: %{type: "string", required: true, description: "Page or private path."},
+          workspace_id: %{
+            type: "string",
+            required: false,
+            description: "UUID of the workspace (default: org-level)."
+          }
+        },
+        returns: "%{path, kind, deleted: true}",
+        limitations:
+          "Page writes require Historian role; private writes require ownership. Missing rows → `:not_found`. Journal paths → `:journal_immutable`.",
+        when_to_use:
+          "When you (Historian) need to retire a page, or you (owner) want to clear your private scratch path."
+      },
+      %{
+        name: "memory_rename",
+        description:
+          "Atomically rename a memory page from `old_path` to `new_path`. Same-kind only (page ↔ page, private ↔ private — no cross-kind moves). Page paths only — journal paths return `:journal_immutable`. Gated against BOTH paths: the calling agent must be allowed to write to both `old_path` and `new_path`.",
+        parameters: %{
+          old_path: %{type: "string", required: true, description: "Current path."},
+          new_path: %{type: "string", required: true, description: "Target path."},
+          workspace_id: %{
+            type: "string",
+            required: false,
+            description: "UUID of the workspace (default: org-level)."
+          }
+        },
+        returns: "%{path: new_path, version, kind, updated_at, frontmatter}",
+        limitations:
+          "Cross-kind moves (page ↔ private) → `:ambiguous_kind`. Either-side gate failure surfaces that gate's error. Missing source → `:not_found`.",
+        when_to_use:
+          "When you (Historian) want to move a curated page to a new path while preserving its content + embeddings."
       }
     ]
   end
@@ -4217,6 +4381,103 @@ defmodule Platform.Federation.ToolSurface do
     end
   end
 
+  # ── Memory tool dispatch (ADR-0041 T5) ──────────────────────────────────
+  # Thin adapter: every clause gates through `Wiki.Routing` then routes to
+  # `Wiki` (pages/private) or `Wiki.Journal` (journal). No direct `Repo`
+  # calls here — the routing+domain modules own DB access.
+
+  def execute("memory_view", args, context) do
+    with {:ok, path} <- require_string(args, "path", "memory_view"),
+         agent = load_agent(context),
+         :ok <- gate_to_envelope(Routing.gate_read(agent, path)) do
+      class = Routing.classify(path)
+      workspace_id = Map.get(args, "workspace_id")
+      view_range = Map.get(args, "view_range")
+
+      case class.kind do
+        :page -> view_page(path, view_range, workspace_id, class)
+        :private -> view_page(path, view_range, workspace_id, class)
+        :journal -> view_journal(path, class, view_range, workspace_id)
+      end
+    end
+  end
+
+  def execute("memory_create", args, context) do
+    with {:ok, path} <- require_string(args, "path", "memory_create"),
+         {:ok, text} <- require_string(args, "file_text", "memory_create"),
+         agent = load_agent(context) do
+      class = Routing.classify(path)
+      workspace_id = Map.get(args, "workspace_id")
+
+      existing =
+        if class.kind in [:page, :private],
+          do: Wiki.get_page(path, workspace_id: workspace_id),
+          else: nil
+
+      gate_opts = if existing, do: [existing_page: existing], else: []
+
+      case gate_to_envelope(Routing.gate_write(agent, path, gate_opts)) do
+        :ok ->
+          do_memory_create(class, path, text, agent, workspace_id)
+
+        {:error, _} = err ->
+          err
+      end
+    end
+  end
+
+  def execute("memory_str_replace", args, context) do
+    with {:ok, path} <- require_string(args, "path", "memory_str_replace"),
+         {:ok, old_str} <- require_string(args, "old_str", "memory_str_replace"),
+         {:ok, new_str} <- require_string(args, "new_str", "memory_str_replace"),
+         agent = load_agent(context),
+         :ok <- ensure_page_kind(path, "memory_str_replace"),
+         existing = Wiki.get_page(path, workspace_id: Map.get(args, "workspace_id")),
+         :ok <- gate_to_envelope(Routing.gate_write(agent, path, existing_page: existing)) do
+      apply_str_replace(existing, path, old_str, new_str, agent, Map.get(args, "workspace_id"))
+    end
+  end
+
+  def execute("memory_insert", args, context) do
+    with {:ok, path} <- require_string(args, "path", "memory_insert"),
+         {:ok, insert_text} <- require_string(args, "insert_text", "memory_insert"),
+         {:ok, insert_line} <- require_integer(args, "insert_line", "memory_insert"),
+         agent = load_agent(context),
+         :ok <- ensure_page_kind(path, "memory_insert"),
+         existing = Wiki.get_page(path, workspace_id: Map.get(args, "workspace_id")),
+         :ok <- gate_to_envelope(Routing.gate_write(agent, path, existing_page: existing)) do
+      apply_insert(existing, path, insert_line, insert_text, agent, Map.get(args, "workspace_id"))
+    end
+  end
+
+  def execute("memory_delete", args, context) do
+    with {:ok, path} <- require_string(args, "path", "memory_delete"),
+         agent = load_agent(context),
+         :ok <- ensure_page_kind(path, "memory_delete"),
+         existing = Wiki.get_page(path, workspace_id: Map.get(args, "workspace_id")),
+         :ok <- gate_to_envelope(Routing.gate_write(agent, path, existing_page: existing)) do
+      do_memory_delete(path, Map.get(args, "workspace_id"))
+    end
+  end
+
+  def execute("memory_rename", args, context) do
+    with {:ok, old_path} <- require_string(args, "old_path", "memory_rename"),
+         {:ok, new_path} <- require_string(args, "new_path", "memory_rename"),
+         agent = load_agent(context),
+         workspace_id = Map.get(args, "workspace_id"),
+         :ok <- ensure_page_kind(old_path, "memory_rename"),
+         :ok <- ensure_page_kind(new_path, "memory_rename"),
+         :ok <- ensure_same_kind(old_path, new_path),
+         existing_old = Wiki.get_page(old_path, workspace_id: workspace_id),
+         existing_new = Wiki.get_page(new_path, workspace_id: workspace_id),
+         :ok <-
+           gate_to_envelope(Routing.gate_write(agent, old_path, existing_page: existing_old)),
+         :ok <-
+           gate_to_envelope(Routing.gate_write(agent, new_path, existing_page: existing_new)) do
+      do_memory_rename(old_path, new_path, agent, workspace_id)
+    end
+  end
+
   def execute(unknown_tool, _args, _context) do
     tool_names =
       tool_definitions()
@@ -4230,6 +4491,457 @@ defmodule Platform.Federation.ToolSurface do
        suggestion: "Available tools: #{tool_names}"
      }}
   end
+
+  # ── Memory tool helpers (ADR-0041 T5) ───────────────────────────────────
+
+  defp load_agent(context) when is_map(context) do
+    case Map.get(context, :agent) do
+      %Agent{} = a ->
+        a
+
+      _ ->
+        case Map.get(context, :agent_id) do
+          id when is_binary(id) -> Repo.get(Agent, id)
+          _ -> nil
+        end
+    end
+  end
+
+  defp load_agent(_), do: nil
+
+  defp require_string(args, key, tool) do
+    case Map.get(args, key) do
+      value when is_binary(value) and value != "" ->
+        {:ok, value}
+
+      _ ->
+        {:error,
+         %{
+           error: "#{tool}: `#{key}` is required",
+           recoverable: true,
+           suggestion: "Provide a non-empty `#{key}` argument."
+         }}
+    end
+  end
+
+  defp require_integer(args, key, tool) do
+    case Map.get(args, key) do
+      value when is_integer(value) ->
+        {:ok, value}
+
+      value when is_binary(value) ->
+        case Integer.parse(value) do
+          {n, ""} -> {:ok, n}
+          _ -> integer_required_error(tool, key)
+        end
+
+      _ ->
+        integer_required_error(tool, key)
+    end
+  end
+
+  defp integer_required_error(tool, key) do
+    {:error,
+     %{
+       error: "#{tool}: `#{key}` must be an integer",
+       recoverable: true,
+       suggestion: "Provide an integer value for `#{key}`."
+     }}
+  end
+
+  defp gate_to_envelope(:ok), do: :ok
+
+  defp gate_to_envelope({:error, %{code: code, message: msg, suggestion: sug, recoverable: rec}}) do
+    {:error,
+     %{
+       error: msg,
+       code: code,
+       recoverable: rec,
+       suggestion: sug
+     }}
+  end
+
+  defp ensure_page_kind(path, tool) do
+    case Routing.classify(path) do
+      %{kind: :page} ->
+        :ok
+
+      %{kind: :private} ->
+        :ok
+
+      %{kind: :journal, namespace: ns, journal_date: date} ->
+        suggestion =
+          "memory_create at #{ns}/journal/#{Date.to_iso8601(date || Date.utc_today())}.md"
+
+        {:error,
+         %{
+           error:
+             "#{tool}: journal entries are append-only. Use memory_create against the day's journal path.",
+           code: :journal_immutable,
+           recoverable: true,
+           suggestion: suggestion
+         }}
+
+      %{kind: :unknown} ->
+        gate_to_envelope(Routing.gate_read(nil, path))
+    end
+  end
+
+  defp ensure_same_kind(old_path, new_path) do
+    %{kind: old_kind, namespace: old_ns} = Routing.classify(old_path)
+    %{kind: new_kind, namespace: new_ns} = Routing.classify(new_path)
+
+    cond do
+      old_kind != new_kind ->
+        {:error,
+         %{
+           error:
+             "memory_rename: source and target must share the same kind (#{old_kind} != #{new_kind}). Use memory_create + memory_delete to move across kinds.",
+           code: :ambiguous_kind,
+           recoverable: false,
+           suggestion: "Pick a target path whose kind matches the source path."
+         }}
+
+      old_kind == :private and old_ns != new_ns ->
+        {:error,
+         %{
+           error:
+             "memory_rename: private paths cannot move between spaces. Source namespace=#{inspect(old_ns)} target namespace=#{inspect(new_ns)}.",
+           code: :ambiguous_kind,
+           recoverable: false,
+           suggestion: "Keep the namespace prefix identical when renaming a private path."
+         }}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp view_page(path, view_range, workspace_id, class) do
+    case Wiki.get_page(path, workspace_id: workspace_id) do
+      nil ->
+        not_found_error(path)
+
+      page ->
+        {sliced, lines_label} = slice_lines(page.content, view_range)
+
+        {:ok,
+         %{
+           path: path,
+           kind: Atom.to_string(class.kind),
+           content: sliced,
+           version: page.version,
+           frontmatter: page.frontmatter,
+           updated_by: page.updated_by,
+           updated_at: format_datetime(page.updated_at),
+           lines_returned: lines_label
+         }}
+    end
+  end
+
+  defp view_journal(path, class, view_range, workspace_id) do
+    namespace = class.namespace
+    date = class.journal_date
+
+    virtual =
+      Journal.virtual_page_for(date, workspace_id: workspace_id, namespace: namespace)
+
+    {sliced, lines_label} = slice_lines(virtual.content, view_range)
+
+    {:ok,
+     %{
+       path: path,
+       kind: "journal",
+       content: sliced,
+       date: Date.to_iso8601(date),
+       namespace: namespace,
+       entry_ids: virtual.entry_ids,
+       lines_returned: lines_label
+     }}
+  end
+
+  defp do_memory_create(%{kind: :journal} = class, path, text, agent, workspace_id) do
+    attrs =
+      %{
+        content: text,
+        date: class.journal_date,
+        workspace_id: workspace_id
+      }
+      |> maybe_put(:authored_by, agent && agent.id)
+
+    case Journal.append(attrs, namespace: class.namespace) do
+      {:ok, entry} ->
+        {:ok,
+         %{
+           path: path,
+           kind: "journal",
+           entry_id: entry.id,
+           date: Date.to_iso8601(entry.date),
+           namespace: class.namespace,
+           inserted_at: format_datetime(entry.inserted_at)
+         }}
+
+      {:error, %Ecto.Changeset{} = changeset} ->
+        changeset_error("memory_create", changeset)
+    end
+  end
+
+  defp do_memory_create(%{kind: kind} = _class, path, text, agent, workspace_id)
+       when kind in [:page, :private] do
+    attrs =
+      %{content: text}
+      |> maybe_put(:updated_by, agent && agent.id)
+
+    case Wiki.upsert_page(path, attrs, workspace_id: workspace_id) do
+      {:ok, page} ->
+        {:ok,
+         %{
+           path: page.file_key,
+           kind: Atom.to_string(kind),
+           version: page.version,
+           frontmatter: page.frontmatter,
+           updated_by: page.updated_by,
+           updated_at: format_datetime(page.updated_at)
+         }}
+
+      {:error, :stale} ->
+        version_conflict_error(path)
+
+      {:error, %Ecto.Changeset{} = changeset} ->
+        changeset_error("memory_create", changeset)
+    end
+  end
+
+  defp apply_str_replace(nil, path, _old, _new, _agent, _ws), do: not_found_error(path)
+
+  defp apply_str_replace(page, path, old_str, new_str, agent, workspace_id) do
+    occurrences = count_occurrences(page.content, old_str)
+
+    cond do
+      occurrences == 0 ->
+        {:error,
+         %{
+           error: "memory_str_replace: `old_str` not found in page body.",
+           code: :no_match,
+           recoverable: true,
+           suggestion:
+             "Read the page with memory_view, copy the exact substring (including whitespace), and retry."
+         }}
+
+      occurrences > 1 ->
+        {:error,
+         %{
+           error:
+             "memory_str_replace: `old_str` appears #{occurrences} times — provide more surrounding context so the match is unique.",
+           code: :ambiguous_match,
+           recoverable: true,
+           suggestion:
+             "Expand `old_str` to include unique surrounding text (a few lines before/after) so it matches exactly once."
+         }}
+
+      true ->
+        new_content = String.replace(page.content, old_str, new_str, global: false)
+
+        upsert_with_lock(path, new_content, page.version, agent, workspace_id, :page)
+    end
+  end
+
+  defp apply_insert(nil, path, _line, _text, _agent, _ws), do: not_found_error(path)
+
+  defp apply_insert(page, path, insert_line, insert_text, agent, workspace_id) do
+    lines = String.split(page.content, "\n", trim: false)
+    line_count = length(lines)
+    upper = line_count + 1
+
+    if insert_line < 1 or insert_line > upper do
+      {:error,
+       %{
+         error:
+           "memory_insert: `insert_line` #{insert_line} is out of range. Valid range: 1..#{upper}.",
+         code: :out_of_range,
+         recoverable: true,
+         suggestion:
+           "Pass an `insert_line` between 1 (prepend) and #{upper} (append after the last line)."
+       }}
+    else
+      {head, tail} = Enum.split(lines, insert_line - 1)
+      new_lines = head ++ [insert_text] ++ tail
+      new_content = Enum.join(new_lines, "\n")
+
+      upsert_with_lock(path, new_content, page.version, agent, workspace_id, :page)
+    end
+  end
+
+  defp upsert_with_lock(path, content, expected_version, agent, workspace_id, kind) do
+    attrs =
+      %{content: content}
+      |> maybe_put(:updated_by, agent && agent.id)
+
+    opts =
+      [workspace_id: workspace_id, expected_version: expected_version]
+      |> Enum.reject(fn {_, v} -> is_nil(v) end)
+
+    case Wiki.upsert_page(path, attrs, opts) do
+      {:ok, page} ->
+        {:ok,
+         %{
+           path: page.file_key,
+           kind: Atom.to_string(kind),
+           version: page.version,
+           frontmatter: page.frontmatter,
+           updated_by: page.updated_by,
+           updated_at: format_datetime(page.updated_at)
+         }}
+
+      {:error, :stale} ->
+        version_conflict_error(path)
+
+      {:error, %Ecto.Changeset{} = changeset} ->
+        changeset_error("memory_update", changeset)
+    end
+  end
+
+  defp do_memory_delete(path, workspace_id) do
+    case Wiki.delete_page(path, workspace_id: workspace_id) do
+      {:ok, page} ->
+        {:ok,
+         %{
+           path: page.file_key,
+           kind: classify_kind_string(path),
+           deleted: true
+         }}
+
+      {:error, :not_found} ->
+        not_found_error(path)
+
+      {:error, %Ecto.Changeset{} = changeset} ->
+        changeset_error("memory_delete", changeset)
+    end
+  end
+
+  defp do_memory_rename(old_path, new_path, agent, workspace_id) do
+    opts =
+      [workspace_id: workspace_id]
+      |> maybe_put(:updated_by, agent && agent.id)
+
+    case Wiki.rename_page(old_path, new_path, opts) do
+      {:ok, page} ->
+        {:ok,
+         %{
+           path: page.file_key,
+           kind: classify_kind_string(new_path),
+           version: page.version,
+           frontmatter: page.frontmatter,
+           updated_by: page.updated_by,
+           updated_at: format_datetime(page.updated_at)
+         }}
+
+      {:error, :not_found} ->
+        not_found_error(old_path)
+
+      {:error, :stale} ->
+        version_conflict_error(new_path)
+
+      {:error, :same_path} ->
+        {:error,
+         %{
+           error: "memory_rename: `old_path` and `new_path` are identical — nothing to rename.",
+           code: :same_path,
+           recoverable: true,
+           suggestion: "Pass a distinct `new_path`."
+         }}
+
+      {:error, %Ecto.Changeset{} = changeset} ->
+        changeset_error("memory_rename", changeset)
+
+      {:error, reason} ->
+        {:error,
+         %{
+           error: "memory_rename failed: #{inspect(reason)}",
+           code: :rename_failed,
+           recoverable: false,
+           suggestion: "Check both paths and the workspace_id, then retry."
+         }}
+    end
+  end
+
+  defp count_occurrences(string, substring) do
+    case String.split(string, substring) do
+      [_only] -> 0
+      parts -> length(parts) - 1
+    end
+  end
+
+  defp slice_lines(content, nil), do: {content, "all"}
+
+  defp slice_lines(content, [start, stop])
+       when is_integer(start) and is_integer(stop) and start >= 1 and stop >= start do
+    lines = String.split(content, "\n", trim: false)
+    actual_stop = min(stop, length(lines))
+
+    if start > length(lines) do
+      {"", "L#{start}-L#{stop} (empty: page has #{length(lines)} lines)"}
+    else
+      sliced =
+        lines
+        |> Enum.slice((start - 1)..(actual_stop - 1)//1)
+        |> Enum.join("\n")
+
+      {sliced, "L#{start}-L#{actual_stop}"}
+    end
+  end
+
+  defp slice_lines(content, _bad_range), do: {content, "all"}
+
+  defp not_found_error(path) do
+    {:error,
+     %{
+       error: "Page not found at path #{inspect(path)}.",
+       code: :not_found,
+       recoverable: true,
+       suggestion:
+         "Verify the path. For pages use `memory_view` to list candidates; for journal days check that the date has entries."
+     }}
+  end
+
+  defp version_conflict_error(path) do
+    {:error,
+     %{
+       error:
+         "Version conflict on #{inspect(path)} — the page was modified since your last read.",
+       code: :version_conflict,
+       recoverable: true,
+       suggestion:
+         "Re-read the page with memory_view, re-apply your change against the latest content, and retry."
+     }}
+  end
+
+  defp changeset_error(tool, %Ecto.Changeset{} = changeset) do
+    # Render Ecto errors as a string so the envelope is JSON-safe and no
+    # raw Changeset struct leaks across the federation boundary.
+    flat = inspect_errors_safe(changeset)
+
+    {:error,
+     %{
+       error: "#{tool} failed: #{flat}",
+       code: :changeset_invalid,
+       recoverable: false,
+       suggestion: "Check the provided arguments and retry."
+     }}
+  end
+
+  defp classify_kind_string(path) do
+    case Routing.classify(path) do
+      %{kind: kind} when kind in [:page, :private, :journal] -> Atom.to_string(kind)
+      _ -> "unknown"
+    end
+  end
+
+  defp maybe_put(map_or_kw, _key, nil), do: map_or_kw
+
+  defp maybe_put(%{} = map, key, value) when not is_struct(map), do: Map.put(map, key, value)
+
+  defp maybe_put(opts, key, value) when is_list(opts), do: Keyword.put(opts, key, value)
 
   # ── Memory search helpers ────────────────────────────────────────────────
 

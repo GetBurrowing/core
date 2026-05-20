@@ -306,10 +306,14 @@ defmodule Platform.Org.Wiki.Routing do
     suggested_path = "#{namespace}/journal/#{Date.to_iso8601(today)}.md"
     suggestion = "memory_create at #{suggested_path}"
 
+    # The literal substring "propose via journal" is load-bearing for the
+    # T5 e2e Case B contract — clients parse the error message for it.
+    # Keep this phrasing in sync with `test/platform/org/wiki/routing_test.exs`
+    # and the e2e Case B assertion in `tool_surface_t5_e2e_test.exs`.
     %{
       code: :historian_required,
       message:
-        "This path requires the Historian role. Propose the change via a journal entry instead — #{suggestion}.",
+        "This path requires the Historian role — propose via journal instead. Use #{suggestion} to append a journal entry.",
       suggestion: suggestion,
       recoverable: true
     }

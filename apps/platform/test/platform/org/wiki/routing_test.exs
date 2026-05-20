@@ -241,16 +241,16 @@ defmodule Platform.Org.Wiki.RoutingTest do
       assert {:error, err} =
                Routing.gate_write(plain_agent(), "org/page/charter.md", today: @today)
 
-      # stage 3 contract: literal "propose via a journal entry" prose + literal "memory_create at <ns>/journal/<YYYY-MM-DD>.md" suggestion.
-      # e2e Case B asserts on these exact substrings — do not reshape without updating memory_tools_test.exs.
+      # stage 3 contract: literal "propose via journal" substring + literal
+      # "memory_create at <ns>/journal/<YYYY-MM-DD>.md" suggestion. e2e
+      # Case B asserts on these exact substrings — do not reshape without
+      # updating memory_tools_test.exs and the e2e file in stage 6.
       assert err.code == :historian_required
       assert err.recoverable == true
       assert err.suggestion == "memory_create at org/journal/2026-05-20.md"
 
-      assert err.message ==
-               "This path requires the Historian role. " <>
-                 "Propose the change via a journal entry instead — " <>
-                 "memory_create at org/journal/2026-05-20.md."
+      assert String.contains?(err.message, "propose via journal")
+      assert String.contains?(err.message, "memory_create at org/journal/2026-05-20.md")
     end
 
     test "non-Historian on project/<uuid>/page/... gets project-scoped journal suggestion" do
@@ -354,9 +354,7 @@ defmodule Platform.Org.Wiki.RoutingTest do
                Routing.gate_read(plain_agent(), path, agent_space_ids: [@space_id])
 
       assert {:error, %{code: :not_owner}} =
-               Routing.gate_read(plain_agent(@other_agent_id), path,
-                 agent_space_ids: [@space_id]
-               )
+               Routing.gate_read(plain_agent(@other_agent_id), path, agent_space_ids: [@space_id])
     end
 
     test "private path read with nil agent gets :not_owner" do
