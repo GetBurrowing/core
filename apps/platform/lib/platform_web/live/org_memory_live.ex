@@ -1,4 +1,4 @@
-defmodule PlatformWeb.OrgContextLive do
+defmodule PlatformWeb.OrgMemoryLive do
   use PlatformWeb, :live_view
 
   alias Platform.Org.Context
@@ -9,7 +9,7 @@ defmodule PlatformWeb.OrgContextLive do
 
     {:ok,
      socket
-     |> assign(:page_title, "Org Context")
+     |> assign(:page_title, "Org Memory")
      |> assign(:files, files)
      |> assign(:selected_file, nil)
      |> assign(:editing, false)
@@ -33,7 +33,7 @@ defmodule PlatformWeb.OrgContextLive do
         {:noreply,
          socket
          |> put_flash(:error, "File not found: #{file_key}")
-         |> push_patch(to: ~p"/org-context")}
+         |> push_patch(to: ~p"/org_memory")}
 
       file ->
         preview = render_markdown(file.content)
@@ -62,7 +62,7 @@ defmodule PlatformWeb.OrgContextLive do
 
   @impl true
   def handle_event("select_file", %{"key" => file_key}, socket) do
-    {:noreply, push_patch(socket, to: ~p"/org-context/#{file_key}")}
+    {:noreply, push_patch(socket, to: ~p"/org_memory/#{file_key}")}
   end
 
   @impl true
@@ -173,7 +173,7 @@ defmodule PlatformWeb.OrgContextLive do
          socket
          |> assign(:files, files)
          |> assign(:creating, false)
-         |> push_patch(to: ~p"/org-context/#{file_key}")
+         |> push_patch(to: ~p"/org_memory/#{file_key}")
          |> put_flash(:info, "Created #{file_key}")}
 
       {:error, changeset} ->
@@ -205,7 +205,7 @@ defmodule PlatformWeb.OrgContextLive do
          socket
          |> assign(:files, files)
          |> assign(:confirm_delete, nil)
-         |> push_patch(to: ~p"/org-context")
+         |> push_patch(to: ~p"/org_memory")
          |> put_flash(:info, "Deleted #{file_key}")}
 
       {:error, _} ->
@@ -254,7 +254,7 @@ defmodule PlatformWeb.OrgContextLive do
     {:noreply,
      socket
      |> assign(:files, files)
-     |> put_flash(:info, "Default org context files created")}
+     |> put_flash(:info, "Default org memory files created")}
   end
 
   # ── Rendering ───────────────────────────────────────────────────────────
@@ -297,7 +297,7 @@ defmodule PlatformWeb.OrgContextLive do
           <%!-- Files header --%>
           <div class="flex items-center justify-between px-4 py-3">
             <h2 class="text-sm font-semibold uppercase tracking-wider text-base-content/50">
-              Context Files
+              Memory Files
             </h2>
             <button
               phx-click="show_create"
@@ -314,7 +314,7 @@ defmodule PlatformWeb.OrgContextLive do
               <div class="px-4 py-8 text-center">
                 <span class="hero-document-text mb-2 size-8 text-base-content/30 mx-auto block">
                 </span>
-                <p class="text-sm text-base-content/40 mb-3">No context files yet</p>
+                <p class="text-sm text-base-content/40 mb-3">No memory files yet</p>
                 <button
                   phx-click="seed_defaults"
                   class="btn btn-primary btn-xs"
@@ -427,9 +427,9 @@ defmodule PlatformWeb.OrgContextLive do
     <div class="flex flex-1 items-center justify-center">
       <div class="text-center">
         <span class="hero-document-text mb-3 size-16 text-base-content/20 mx-auto block"></span>
-        <h3 class="text-lg font-medium text-base-content/50">Org Context</h3>
+        <h3 class="text-lg font-medium text-base-content/50">Org Memory</h3>
         <p class="mt-1 text-sm text-base-content/40">
-          Select a file from the sidebar to view or edit organizational context.
+          Select a file from the sidebar to view or edit organizational memory.
         </p>
       </div>
     </div>
@@ -549,8 +549,8 @@ defmodule PlatformWeb.OrgContextLive do
             Cancel
           </button>
           <button
-            id="org-context-save-btn"
-            phx-click={JS.dispatch("org-context:save", to: "#org-context-editor")}
+            id="org-memory-save-btn"
+            phx-click={JS.dispatch("org-memory:save", to: "#org-memory-editor")}
             class="btn btn-primary btn-sm gap-1"
           >
             <span class="hero-check size-4"></span> Save
@@ -574,7 +574,7 @@ defmodule PlatformWeb.OrgContextLive do
             Markdown
           </div>
           <textarea
-            id="org-context-editor"
+            id="org-memory-editor"
             phx-hook="MarkdownEditor"
             phx-debounce="300"
             class="flex-1 resize-none bg-base-100 p-4 font-mono text-sm text-base-content focus:outline-none"
@@ -604,7 +604,7 @@ defmodule PlatformWeb.OrgContextLive do
       <%!-- Header --%>
       <div class="flex items-center justify-between border-b border-base-300 px-6 py-3">
         <div>
-          <h1 class="text-lg font-bold">Create Context File</h1>
+          <h1 class="text-lg font-bold">Create Memory File</h1>
           <p class="text-xs text-base-content/40">Choose a template or create a custom file</p>
         </div>
         <button phx-click="cancel_create" class="btn btn-ghost btn-sm">
@@ -815,7 +815,7 @@ defmodule PlatformWeb.OrgContextLive do
   defp template_description("ORG_MEMORY.md"), do: "Long-term curated org knowledge"
   defp template_description("ORG_AGENTS.md"), do: "Agent registry and roles"
   defp template_description("ORG_DIRECTORY.md"), do: "Auto-generated user/agent roster"
-  defp template_description(_), do: "Custom context file"
+  defp template_description(_), do: "Custom memory file"
 
   defp format_relative(datetime) do
     diff = DateTime.diff(DateTime.utc_now(), datetime, :second)

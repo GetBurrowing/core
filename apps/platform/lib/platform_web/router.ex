@@ -64,6 +64,14 @@ defmodule PlatformWeb.Router do
     get("/auth/oidc/callback", AuthController, :callback)
     get("/auth/logout", AuthController, :logout)
 
+    # T7 stage 2 (task 019e41da-3610-7972-8573-54121ea1f3f5): retired
+    # `/org-context[/:file_key]` paths 301-redirect to the new
+    # `/org_memory[/:file_key]` surface. Mounted in the unauthenticated
+    # `:browser` scope so old bookmarks redirect first, then the new
+    # path applies its own auth gate.
+    get("/org-context", PageController, :org_context_redirect)
+    get("/org-context/:file_key", PageController, :org_context_redirect)
+
     if Mix.env() == :dev do
       get("/dev/login", AuthController, :dev_login)
     end
@@ -95,8 +103,8 @@ defmodule PlatformWeb.Router do
       live("/control", ControlCenterLive, :index)
       live("/control/usage", UsageLive, :index)
       live("/control/:agent_slug", ControlCenterLive, :show)
-      live("/org-context", OrgContextLive, :index)
-      live("/org-context/:file_key", OrgContextLive, :show)
+      live("/org_memory", OrgMemoryLive, :index)
+      live("/org_memory/:file_key", OrgMemoryLive, :show)
     end
 
     # MT/RBAC stack 2 (task 019e3c4a) — `/admin/*` lives in its own

@@ -2,7 +2,7 @@
  * MarkdownEditor hook — sends content updates to the LiveView
  * for server-side markdown rendering and live preview.
  *
- * Used on the org context editor textarea. Debounced input events
+ * Used on the org memory editor textarea. Debounced input events
  * push "update_preview" with the current content.
  */
 const MarkdownEditor = {
@@ -35,7 +35,7 @@ const MarkdownEditor = {
     })
 
     // Save dispatched from toolbar button via JS.dispatch
-    this.el.addEventListener("org-context:save", () => {
+    this.el.addEventListener("org-memory:save", () => {
       this._save()
     })
 
