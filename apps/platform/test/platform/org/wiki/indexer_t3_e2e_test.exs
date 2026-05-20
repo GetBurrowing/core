@@ -222,9 +222,18 @@ defmodule Platform.Org.Wiki.IndexerT3E2ETest do
       "lib/platform/org/wiki/indexer/payload.ex"
     ]
 
+    # T3's scope-creep guard. The intent was "T3 didn't drift into T4/T5/
+    # T6/T7 territory" — assessed against T3's HEAD (commit abffe51).
+    #
+    # T4 (task 019e41d9-cd7f-7f0d-b986-5cb5c7509ebc) legitimately adds
+    # `lib/platform/org/wiki/context.ex` — the planned cross-task baton-
+    # pass. Removing that entry from the forbidden list as part of the
+    # T4 stage-2 commit so the guard stays green on T4's branch while
+    # still pinning T5/T6/T7 territory. The previously-listed
+    # `lib/platform/org/preamble_builder.ex` (an earlier P4 module name
+    # for the same surface) is also dropped — T4 chose the canonical
+    # `wiki/context.ex` location.
     @t3_forbidden_paths [
-      # T4: Platform.Org.Wiki.Context retrieval module
-      "lib/platform/org/wiki/context.ex",
       # T5: memory MCP tool surface delta
       # (federation/tool_surface.ex would only flip if T3 added memory_*
       # tools — full file existence is fine; we check it wasn't *modified*
@@ -232,9 +241,7 @@ defmodule Platform.Org.Wiki.IndexerT3E2ETest do
       # T6: historian / cursors
       "lib/platform/org/historian.ex",
       # T7: OrgMemoryLive
-      "lib/platform_web/live/org_memory_live.ex",
-      # T4 (alt): preamble builder
-      "lib/platform/org/preamble_builder.ex"
+      "lib/platform_web/live/org_memory_live.ex"
     ]
 
     defp t3_root, do: Mix.Project.project_file() |> Path.dirname()
