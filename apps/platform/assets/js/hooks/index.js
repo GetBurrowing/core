@@ -23,6 +23,7 @@ import MeetingCaptions from "./meeting_captions"
 import MeetingClient from "./meeting_client"
 import MeetingRoom from "./meeting_room"
 import MeetingScreenShare from "./meeting_screen_share"
+import MeetingShareButton from "./meeting_share_button"
 import MeetingSoundboard from "./meeting_soundboard"
 import MeetingTimer from "./meeting_timer"
 import MeetingVideoTile from "./meeting_video_tile"
@@ -63,6 +64,7 @@ export default {
   MeetingClient,
   MeetingRoom,
   MeetingScreenShare,
+  MeetingShareButton,
   MeetingSoundboard,
   MeetingTimer,
   MeetingVideoTile,

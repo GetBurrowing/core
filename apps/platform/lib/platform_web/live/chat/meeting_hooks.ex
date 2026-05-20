@@ -32,6 +32,11 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
       without the push_event)
     * `"meeting_toggle_mic"` / `"meeting_toggle_camera"` /
       `"meeting_toggle_screen_share"` — flip local state and push to JS
+    * `"meeting_screen_share_state"` — from `MeetingShareButton` JS hook;
+      mirrors the post-toggle screen-share enabled-state back to the
+      server WITHOUT pushing another browser event (the hook ran the
+      LiveKit work itself inside the click handler to keep the user-
+      activation flag alive for `getDisplayMedia`).
 
   ## Info handled
 
@@ -155,6 +160,16 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
      socket
      |> assign(:screen_share_enabled, !socket.assigns.screen_share_enabled)
      |> push_event("toggle-screen-share", %{})}
+  end
+
+  # Client-side mirror from `MeetingShareButton` (task 019e420f stage 2).
+  # The JS hook calls `setScreenShareEnabled` *inside* the click handler
+  # to preserve the browser's user-activation flag, then pushes the
+  # resulting boolean back here. We simply assign it — no push_event,
+  # because the JS has already done the LiveKit work.
+  defp handle_event("meeting_screen_share_state", %{"enabled" => enabled}, socket)
+       when is_boolean(enabled) do
+    {:halt, assign(socket, :screen_share_enabled, enabled)}
   end
 
   defp handle_event(_event, _params, socket), do: {:cont, socket}

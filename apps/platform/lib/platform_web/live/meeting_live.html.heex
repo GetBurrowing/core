@@ -37,6 +37,12 @@
          here so MeetingHooks' push_events have a listener. --%>
     <div id="meeting-client" phx-hook="MeetingClient" class="hidden"></div>
     <div id="meeting-room" phx-hook="MeetingRoom" class="hidden"></div>
+    <%!-- Media sink (task 019e420f stage 1): MeetingClient.attachTrack
+         routes incoming `<audio>` elements to `#meeting-media`. Without
+         this anchor it falls back to `document.body` — works but
+         pollutes the top-level DOM. `phx-update="ignore"` keeps the LV
+         from blowing away the children on re-render. --%>
+    <div id="meeting-media" class="hidden" phx-update="ignore"></div>
 
     <%!-- Desktop pane-collapse persistence (task 019e40f2). Two
          instances of the SidebarCollapse hook, parameterized via
@@ -132,9 +138,12 @@
           </span>
         </button>
 
+        <%!-- task 019e420f stage 2: client-side hook keeps the click
+             gesture alive across the call into getDisplayMedia(). --%>
         <button
+          id="meeting-share-btn-topbar"
+          phx-hook="MeetingShareButton"
           type="button"
-          phx-click="meeting_toggle_screen_share"
           aria-label={if @screen_share_enabled, do: "Stop sharing screen", else: "Share screen"}
           aria-pressed={to_string(@screen_share_enabled)}
           title={if @screen_share_enabled, do: "Stop sharing screen", else: "Share screen"}
@@ -414,11 +423,17 @@
                 <p class="mt-0.5 max-w-xs text-center text-xs">
                   Anyone in the meeting can share their screen. Drop a window in to walk the team through it.
                 </p>
+                <%!-- task 019e420f stage 2: hook owns the click so
+                     `getDisplayMedia()` runs inside the user gesture.
+                     Falls back to pushing `meeting_toggle_screen_share`
+                     when no LiveKit room is attached. --%>
                 <button
+                  id="meeting-share-btn-screen-cta"
+                  phx-hook="MeetingShareButton"
                   type="button"
-                  phx-click="meeting_start_screen_share"
                   class="btn btn-primary btn-sm mt-4 min-h-11 gap-1.5"
                   data-action="start-screen-share"
+                  data-role="meeting-share-button"
                 >
                   <span class="hero-arrow-up-tray size-4"></span>
                   <span>Start sharing</span>

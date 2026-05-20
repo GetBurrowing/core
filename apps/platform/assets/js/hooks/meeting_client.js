@@ -1,5 +1,21 @@
 import { Room, RoomEvent, Track } from "livekit-client"
 
+/**
+ * True when the LiveKit track / publication is a screen-share video
+ * source. LiveKit exposes `source` on both publications and tracks; we
+ * accept either. Mirrors the helper in `meeting_screen_share.js`.
+ *
+ * Task 019e420f stage 3: routes incoming screen-share tracks to a
+ * dedicated container instead of jamming them into a participant tile
+ * (where they render as a tiny 80×80 thumbnail).
+ */
+function isScreenShareSource(source) {
+  // LiveKit Track.Source.ScreenShare is the string "screen_share". The
+  // matching audio source is "screen_share_audio" — we don't route that
+  // to the dedicated container (it just plays through #meeting-media).
+  return source === Track.Source.ScreenShare || source === "screen_share"
+}
+
 const MeetingClient = {
   mounted() {
     this._room = null
@@ -118,6 +134,22 @@ const MeetingClient = {
     window.dispatchEvent(new CustomEvent("livekit:room-disconnected"))
     document.dispatchEvent(new CustomEvent("livekit:room-disconnected"))
     this._clearTiles()
+    // Task 019e420f stage 3: leave + rejoin must not leave a stale
+    // screen-share preview behind.
+    if (this._screenShareTrack) {
+      this._detachScreenShareTrack(this._screenShareTrack)
+    } else {
+      // Defensive: clear any orphaned slot state even if our tracking
+      // got out of sync with the room.
+      document
+        .querySelectorAll("[data-quickmeet-screen-share-slot]")
+        .forEach((slot) => {
+          while (slot.firstChild) slot.removeChild(slot.firstChild)
+          slot.classList.add("hidden")
+          slot.dataset.screenShareActive = "false"
+          delete slot.dataset.screenShareSharer
+        })
+    }
   },
 
   async _toggleMic() {
@@ -223,8 +255,36 @@ const MeetingClient = {
     this._tiles.clear()
   },
 
+  _screenShareSlot() {
+    // Find the *visible* dedicated screen-share slot. Quick Meet renders
+    // two: one in the desktop side pane (`lg:flex`, hidden below `lg`)
+    // and one in the mobile overlay (`lg:hidden`). The hidden one is
+    // display:none so its `offsetParent` is null; the visible one isn't.
+    // We pick whichever is currently rendered (parity with the
+    // `_grid()` matchMedia approach above).
+    const isDesktop = window.matchMedia("(min-width: 1024px)").matches
+    const desktopSlot = document.querySelector(
+      "[data-quickmeet-screen-share-slot][data-pane='desktop']",
+    )
+    const mobileSlot = document.querySelector(
+      "[data-quickmeet-screen-share-slot][data-pane='mobile']",
+    )
+
+    if (isDesktop) return desktopSlot || mobileSlot
+    return mobileSlot || desktopSlot
+  },
+
   _attachTrack(track, participant) {
     if (track.kind === Track.Kind.Video) {
+      // Task 019e420f stage 3: route screen-share video to a dedicated
+      // full-width container instead of cramming it into the
+      // participant's avatar tile (where it rendered ~80×80). Cameras
+      // continue to attach into the tile as before.
+      if (isScreenShareSource(track.source)) {
+        this._attachScreenShareTrack(track, participant)
+        return
+      }
+
       this._ensureTile(participant)
       const tile = this._tiles.get(participant.identity)
       if (!tile) return
@@ -253,7 +313,55 @@ const MeetingClient = {
     }
   },
 
+  /**
+   * Attach the first published screen-share track into the Quick Meet
+   * dedicated preview slot above the participants grid. Single-sharer
+   * policy: if a track is already attached, the second one is ignored
+   * until the first ends (mirrors `MeetingScreenShare._syncExistingTrack`).
+   */
+  _attachScreenShareTrack(track, participant) {
+    const slot = this._screenShareSlot()
+    if (!slot) return
+    if (this._screenShareTrack === track) return
+
+    // First-published-wins: if a different track is already attached,
+    // leave it alone — the user can stop sharing to free the slot.
+    if (this._screenShareTrack) return
+
+    const el = track.attach()
+    el.autoplay = true
+    el.playsInline = true
+    el.muted = true
+    el.className = "h-full w-full object-contain bg-black"
+
+    // Clear any prior <video> children defensively (e.g. a hot-reload
+    // landed mid-share and left a stale node).
+    while (slot.firstChild) slot.removeChild(slot.firstChild)
+    slot.appendChild(el)
+
+    slot.classList.remove("hidden")
+    slot.dataset.screenShareActive = "true"
+    if (participant?.identity) {
+      slot.dataset.screenShareSharer = participant.identity
+    }
+
+    const sharerLabel = slot.parentElement?.querySelector(
+      "[data-quickmeet-screen-share-sharer]",
+    )
+    if (sharerLabel) {
+      sharerLabel.textContent = participant?.name || participant?.identity || ""
+    }
+
+    this._screenShareTrack = track
+    this._screenShareEl = el
+  },
+
   _detachTrack(track, participant) {
+    if (track.kind === Track.Kind.Video && isScreenShareSource(track.source)) {
+      this._detachScreenShareTrack(track)
+      return
+    }
+
     const elements = track.detach()
     elements.forEach((el) => el.remove())
 
@@ -267,6 +375,40 @@ const MeetingClient = {
       const placeholder = tile.querySelector("[data-placeholder]")
       if (placeholder) placeholder.style.display = ""
     }
+  },
+
+  _detachScreenShareTrack(track) {
+    // Drop our own reference if this matches; otherwise still detach the
+    // <video> elements so a stale track doesn't keep painting.
+    try {
+      const elements = track.detach()
+      elements.forEach((el) => el.remove())
+    } catch (_) {
+      /* track may already be detached */
+    }
+
+    if (this._screenShareTrack && this._screenShareTrack !== track) {
+      // A different track ended — leave the currently-attached one alone.
+      return
+    }
+
+    this._screenShareTrack = null
+    this._screenShareEl = null
+
+    // Hide both slots — only one is visible at a time but resetting both
+    // keeps the orientation-flip path clean.
+    document
+      .querySelectorAll("[data-quickmeet-screen-share-slot]")
+      .forEach((slot) => {
+        while (slot.firstChild) slot.removeChild(slot.firstChild)
+        slot.classList.add("hidden")
+        slot.dataset.screenShareActive = "false"
+        delete slot.dataset.screenShareSharer
+        const sharerLabel = slot.parentElement?.querySelector(
+          "[data-quickmeet-screen-share-sharer]",
+        )
+        if (sharerLabel) sharerLabel.textContent = ""
+      })
   },
 
   _markSpeakers(identities) {

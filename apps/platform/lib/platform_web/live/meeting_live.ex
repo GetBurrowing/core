@@ -421,6 +421,27 @@ defmodule PlatformWeb.MeetingLive do
     {:noreply, push_event(socket, "toggle-screen-share", %{})}
   end
 
+  # Client-side mirror from the `MeetingShareButton` JS hook (task
+  # 019e420f stage 2). The hook calls `setScreenShareEnabled` *inside*
+  # the click handler — keeping the browser's user-activation flag alive
+  # for `getDisplayMedia` — then pushes the resulting boolean here. We
+  # just assign it; no `push_event`, because the JS already did the
+  # LiveKit work (pushing `toggle-screen-share` back would double-toggle).
+  #
+  # MeetingHooks.attach/2 also handles this event for the chat-surface
+  # Quick Meet panel, but the dedicated `/meetings/:slug` LiveView needs
+  # its own clause so a non-boolean (or any) payload doesn't crash the
+  # view by falling through to the catch-all.
+  def handle_event("meeting_screen_share_state", %{"enabled" => enabled}, socket)
+      when is_boolean(enabled) do
+    {:noreply, assign(socket, :screen_share_enabled, enabled)}
+  end
+
+  def handle_event("meeting_screen_share_state", _params, socket) do
+    # Defensive: a malformed payload is ignored without touching state.
+    {:noreply, socket}
+  end
+
   # ── Start-meeting FAB + bottom-sheet (`:index` action only) ──────────────
   #
   # The FAB lives only on the meetings index. Clicking it flips

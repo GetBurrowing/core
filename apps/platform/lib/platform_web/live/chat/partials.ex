@@ -483,6 +483,29 @@ defmodule PlatformWeb.ChatLive.Partials do
       </div>
 
       <div class="flex-1 overflow-y-auto p-3">
+        <%!-- Screen-share preview (task 019e420f stage 3). JS owns
+             these children — meeting_client.js attaches the live
+             `<video>` here when a peer publishes a screen-share track,
+             and toggles `hidden` based on the active state. Sits above
+             the participants grid so it's never cropped by avatar
+             tiles. `phx-update="ignore"` because the LV doesn't render
+             the video element itself. --%>
+        <div class="mb-2">
+          <div
+            data-quickmeet-screen-share-slot
+            data-pane="desktop"
+            data-screen-share-active="false"
+            phx-update="ignore"
+            id="meeting-screen-share-slot-desktop"
+            class="hidden aspect-video w-full overflow-hidden rounded-lg bg-black"
+          >
+          </div>
+          <p
+            data-quickmeet-screen-share-sharer
+            class="mt-1 text-xs text-base-content/50 truncate"
+          >
+          </p>
+        </div>
         <%!-- JS owns the children (meeting_client.js injects tiles); ignore on re-render --%>
         <div
           id="meeting-participants"
@@ -533,8 +556,13 @@ defmodule PlatformWeb.ChatLive.Partials do
           ]}>
           </span>
         </button>
+        <%!-- task 019e420f stage 2: client-side click handler. The
+             gesture must reach `getDisplayMedia()` without yielding to
+             the WebSocket; see `meeting_share_button.js`. --%>
         <button
-          phx-click="meeting_toggle_screen_share"
+          id="meeting-share-btn-desktop"
+          phx-hook="MeetingShareButton"
+          type="button"
           class={[
             "meeting-control-btn rounded-full p-2.5 transition-colors",
             if(@screen_share_enabled,
@@ -543,6 +571,7 @@ defmodule PlatformWeb.ChatLive.Partials do
             )
           ]}
           title={if @screen_share_enabled, do: "Stop sharing screen", else: "Share screen"}
+          data-role="meeting-share-button"
         >
           <span class="hero-computer-desktop size-5"></span>
         </button>
@@ -596,6 +625,24 @@ defmodule PlatformWeb.ChatLive.Partials do
       </div>
 
       <div class="flex-1 overflow-y-auto p-4">
+        <%!-- Screen-share preview (task 019e420f stage 3). See the
+             desktop variant for the rationale. --%>
+        <div class="mb-2">
+          <div
+            data-quickmeet-screen-share-slot
+            data-pane="mobile"
+            data-screen-share-active="false"
+            phx-update="ignore"
+            id="meeting-screen-share-slot-mobile"
+            class="hidden aspect-video w-full overflow-hidden rounded-lg bg-black"
+          >
+          </div>
+          <p
+            data-quickmeet-screen-share-sharer
+            class="mt-1 text-xs text-base-content/50 truncate"
+          >
+          </p>
+        </div>
         <%!-- JS owns the children (meeting_client.js injects tiles); ignore on re-render --%>
         <div
           id="meeting-participants-mobile"
@@ -644,8 +691,12 @@ defmodule PlatformWeb.ChatLive.Partials do
           ]}>
           </span>
         </button>
+        <%!-- task 019e420f stage 2: client-side click handler — see
+             the desktop variant above for the rationale. --%>
         <button
-          phx-click="meeting_toggle_screen_share"
+          id="meeting-share-btn-mobile"
+          phx-hook="MeetingShareButton"
+          type="button"
           class={[
             "meeting-control-btn rounded-full p-3 transition-colors",
             if(@screen_share_enabled,
@@ -653,6 +704,7 @@ defmodule PlatformWeb.ChatLive.Partials do
               else: "bg-base-200 text-base-content"
             )
           ]}
+          data-role="meeting-share-button"
         >
           <span class="hero-computer-desktop size-6"></span>
         </button>

@@ -1161,8 +1161,18 @@ defmodule PlatformWeb.MeetingLiveTest do
       # Empty-state copy + CTA.
       assert html =~ "No active screen-share"
       assert html =~ "Start sharing"
-      assert html =~ ~s(phx-click="meeting_start_screen_share")
+      # Stage 2 (task 019e420f): the CTA is now owned by the
+      # `MeetingShareButton` JS hook so the click gesture reaches
+      # `getDisplayMedia()` without a server round-trip. The old
+      # `phx-click="meeting_start_screen_share"` is gone — a round-trip
+      # would kill the browser's user-activation flag.
+      assert html =~ ~s(id="meeting-share-btn-screen-cta")
+      assert html =~ ~s(phx-hook="MeetingShareButton")
       assert html =~ ~s(data-action="start-screen-share")
+
+      refute html =~
+               ~r/id="meeting-share-btn-screen-cta"[^>]*phx-click="meeting_start_screen_share"/
+
       # Hero icons only — no emoji.
       assert html =~ "hero-computer-desktop"
       assert html =~ "hero-arrow-up-tray"
@@ -1171,27 +1181,33 @@ defmodule PlatformWeb.MeetingLiveTest do
       refute html =~ ~s(data-empty-state="canvas")
     end
 
-    test "Start sharing CTA pushes toggle-screen-share to the JS hooks", %{
-      conn: conn,
-      meeting: meeting
-    } do
+    test "Start sharing CTA is wired client-side via MeetingShareButton (no phx-click round-trip)",
+         %{
+           conn: conn,
+           meeting: meeting
+         } do
       {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
 
-      view
-      |> element(~s([data-stage-mode-button="screen"]))
-      |> render_click()
-
-      # Click the Start-sharing CTA. The handler push_events
-      # `toggle-screen-share` which any MeetingClient JS hook on the page
-      # picks up. Asserting render doesn't crash + mode stays Screen
-      # proves the handler wired correctly without a JS round-trip.
       html =
         view
-        |> element(~s(button[data-action="start-screen-share"]))
+        |> element(~s([data-stage-mode-button="screen"]))
         |> render_click()
 
-      assert html =~ ~s(data-stage-mode="screen")
-      assert html =~ "Start sharing"
+      # Stage 2 (task 019e420f): the CTA no longer pushes
+      # `meeting_start_screen_share` to the server. `getDisplayMedia()`
+      # is gesture-gated — the click must reach LiveKit *inside* the
+      # event handler, so `MeetingShareButton` owns it client-side and
+      # calls `setScreenShareEnabled` directly, then mirrors state back
+      # via `meeting_screen_share_state`.
+      assert html =~ ~s(button[^>]*data-action="start-screen-share") or
+               html =~ ~s(data-action="start-screen-share")
+
+      assert html =~ ~s(id="meeting-share-btn-screen-cta")
+      assert html =~ ~s(phx-hook="MeetingShareButton")
+
+      # The CTA must NOT carry the legacy phx-click anymore.
+      refute html =~
+               ~r/data-action="start-screen-share"[^>]*phx-click="meeting_start_screen_share"|phx-click="meeting_start_screen_share"[^>]*data-action="start-screen-share"/
     end
   end
 
@@ -2314,6 +2330,114 @@ defmodule PlatformWeb.MeetingLiveTest do
       refute html_after =~ ~s(data-role="meeting-leave")
       # …and the leave-meeting event landed on the JS-hook channel.
       assert_push_event(view, "leave-meeting", %{})
+    end
+  end
+
+  # ── Screen-share fix (task 019e420f) ──────────────────────────────
+  #
+  # Stages 1 + 2 + 3 of the screen-share fix:
+  #   * Stage 1: MeetingClient + MeetingRoom + meeting-media hooks mount
+  #     on the dedicated meeting page so the LiveKit Room survives
+  #     navigation.
+  #   * Stage 2: the screen-share button is wired via the
+  #     `MeetingShareButton` JS hook (client-side gesture preservation),
+  #     not via a phx-click that round-trips through the server.
+  #   * Stage 3: incoming screen-share tracks route to a dedicated
+  #     preview slot in Quick Meet, not into the per-participant tile.
+  describe "screen-share fix (task 019e420f)" do
+    setup %{conn: conn} do
+      {meeting, space} =
+        create_meeting(%{slug: "screen-share-fix", name: "Screen Share Fix"})
+
+      {conn, user} = authenticated_conn(conn)
+      {:ok, conn: conn, user: user, meeting: meeting, space: space}
+    end
+
+    test "MeetingClient + MeetingRoom hooks mount on the meeting page (stage 1)",
+         %{conn: conn, meeting: meeting} do
+      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}?no_autojoin=true")
+
+      # Stage 1 contract: the dedicated meeting page mounts MeetingClient
+      # so the LiveKit Room survives nav from /chat/<slug> → /meetings/<slug>.
+      assert html =~ ~s(id="meeting-client")
+      assert html =~ ~s(phx-hook="MeetingClient")
+      # MeetingRoom is the parity hook (track-event sink for video tiles).
+      assert html =~ ~s(id="meeting-room")
+      assert html =~ ~s(phx-hook="MeetingRoom")
+      # And a media sink for <audio> elements so they don't pollute body.
+      assert html =~ ~s(id="meeting-media")
+    end
+
+    test "screen-share button uses the MeetingShareButton hook, not phx-click (stage 2)",
+         %{conn: conn, meeting: meeting} do
+      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}?no_autojoin=true")
+
+      # Stage 2 contract: client-side click handler. The top-bar share
+      # button MUST use `phx-hook="MeetingShareButton"` so the gesture
+      # reaches `getDisplayMedia()` without yielding to the WebSocket.
+      assert html =~ ~s(id="meeting-share-btn-topbar")
+      assert html =~ ~s(phx-hook="MeetingShareButton")
+
+      # Belt-and-suspenders: the legacy phx-click that used to be on
+      # this button must NOT be present anymore (it would race the hook).
+      refute html =~
+               ~r/id="meeting-share-btn-topbar"[^>]*phx-click="meeting_toggle_screen_share"/
+    end
+
+    test "screen-mode CTA uses the MeetingShareButton hook (stage 2)", %{
+      conn: conn,
+      meeting: meeting
+    } do
+      {:ok, view, _html} =
+        live(conn, ~p"/meetings/#{meeting.slug}?no_autojoin=true")
+
+      html =
+        view
+        |> element(~s([data-stage-mode-button="screen"]))
+        |> render_click()
+
+      # The "Start sharing" CTA on the Screen-mode empty state is now
+      # owned by the MeetingShareButton hook (stage 2 wiring) instead of
+      # the server-roundtripped `meeting_start_screen_share` phx-click.
+      assert html =~ ~s(id="meeting-share-btn-screen-cta")
+      assert html =~ ~s(data-action="start-screen-share")
+
+      refute html =~
+               ~r/id="meeting-share-btn-screen-cta"[^>]*phx-click="meeting_start_screen_share"/
+    end
+
+    test "meeting_screen_share_state assigns the boolean and does NOT push toggle-screen-share",
+         %{conn: conn, meeting: meeting} do
+      {:ok, view, _html} =
+        live(conn, ~p"/meetings/#{meeting.slug}?no_autojoin=true")
+
+      # Default is FALSE (MeetingHooks.attach).
+      assert render(view) =~ ~s(data-role="meeting-screen-share" data-active="false")
+
+      # The JS hook (MeetingShareButton) pushes meeting_screen_share_state
+      # with the post-toggle boolean. We drive that directly here.
+      render_hook(view, "meeting_screen_share_state", %{"enabled" => true})
+
+      assert render(view) =~ ~s(data-role="meeting-screen-share" data-active="true")
+
+      # And: NO `toggle-screen-share` browser event was pushed. The JS
+      # hook already did the LiveKit work itself; pushing another event
+      # would double-toggle.
+      refute_push_event(view, "toggle-screen-share", %{})
+    end
+
+    test "meeting_screen_share_state with a non-boolean is ignored cleanly", %{
+      conn: conn,
+      meeting: meeting
+    } do
+      {:ok, view, _html} =
+        live(conn, ~p"/meetings/#{meeting.slug}?no_autojoin=true")
+
+      # Hand-crafted bad payload — the guard refuses it without crashing
+      # the LV. The assign stays at its default.
+      render_hook(view, "meeting_screen_share_state", %{"enabled" => "true"})
+
+      assert render(view) =~ ~s(data-role="meeting-screen-share" data-active="false")
     end
   end
 
