@@ -1,20 +1,27 @@
 defmodule Platform.Agents.SystemEventScheduler do
   @moduledoc """
-  Periodic scheduler that fires system events to designated agents.
+  Periodic scheduler that fires the `historian` system event to a designated
+  agent on an every-6h staggered cadence.
 
-  Two events in v1:
-  - `daily_summary` (23:00 UTC) — agent summarizes the day's activity
-  - `dreaming` (03:00 UTC) — agent consolidates short-term memory entries into ORG_MEMORY.md
+  V2 (ADR-0041 / T6) collapses the legacy `daily_summary` (23:00 UTC) and
+  `dreaming` (03:00 UTC) events into a single `historian` event that fires
+  at four anchor hours `[0, 6, 12, 18]` UTC. Per-workspace stagger is applied
+  via `offset_minutes = :erlang.phash2(workspace_id, 360)` so an org with N
+  workspaces gets a uniform distribution across each 6h window.
 
-  Each event can only be assigned to a single agent (one-agent-per-event).
+  Workspace fan-out is sourced from `Platform.Tasks.Projects.list_active_workspaces/0`
+  which returns `[nil]` for V1 (org-scope only). Each `(workspace_id, anchor_hour)`
+  pair is debounced independently, so a workspace fires 4× per day, once per
+  anchor.
+
+  Each system event can only be claimed by a single agent (one-agent-per-event).
   The scheduler posts a synthetic instruction message into a per-agent system
   space and dispatches via `AgentResponder`.
 
   ## Configuration
 
       config :platform, Platform.Agents.SystemEventScheduler,
-        check_interval_ms: 60_000,
-        events: %{"daily_summary" => 23, "dreaming" => 3}
+        check_interval_ms: 60_000
   """
 
   use GenServer
@@ -28,43 +35,41 @@ defmodule Platform.Agents.SystemEventScheduler do
   alias Platform.Chat.AgentResponder
   alias Platform.Federation
   alias Platform.Federation.RuntimePresence
+  alias Platform.Orchestration.PromptTemplates
   alias Platform.Repo
+  alias Platform.Tasks.Projects
 
   # ── Defaults ─────────────────────────────────────────────────────────────────
 
   @default_check_interval_ms :timer.seconds(60)
 
-  @default_events %{
-    "daily_summary" => 23,
-    "dreaming" => 3
-  }
+  # Every-6h staggered cadence — UTC anchor hours. Per-workspace minute offset
+  # is `:erlang.phash2(workspace_id, 360)`.
+  @anchors [0, 6, 12, 18]
 
-  @instruction_templates %{
-    "daily_summary" => """
-    You are the Historian. Below is the activity from the last 24 hours \
-    across all non-DM spaces in the organisation.
+  # Stagger modulus — 360 minutes covers the 6h window between anchors.
+  @stagger_modulus 360
 
-    {activity_digest}
+  # Single canonical system event. The legacy `daily_summary` + `dreaming`
+  # split is gone; the Historian role now bundles both behaviours under one
+  # event name.
+  @historian_event "historian"
 
-    Write a concise daily summary for {date} capturing key decisions, \
-    completed work, milestones, blockers, and notable events. Use the \
-    `org_memory_append` tool with `date="{date}"` to record it. If the \
-    window was quiet, write a short note to that effect rather than \
-    skipping the entry.
-    """,
-    "dreaming" => """
-    You are in dreaming mode (the historian role). Review recent short-term \
-    memory entries via `org_memory_search`. Look for patterns, recurring \
-    themes, emerging risks, and strategic insights. Read the current \
-    ORG_MEMORY.md with `org_context_read` (capture its `version`), then \
-    update it via `org_context_write` (passing `expected_version` for \
-    optimistic locking) with any new patterns, decisions, or lessons \
-    learned. ORG_MEMORY.md is the sole long-term org knowledge store — \
-    never try to record long-term insights via `org_memory_append`. Be \
-    selective: only add genuinely new insights, and preserve existing \
-    content that is still relevant.
-    """
-  }
+  # Literal default used as a fallback for empty DB (when prompt_templates has
+  # no `historian.scheduled` row yet). DB-backed templates take precedence via
+  # `PromptTemplates.render_template/2`.
+  @default_historian_instruction """
+  You are the Historian. Below is the activity from the last 24 hours \
+  across all non-DM spaces in the organisation.
+
+  {activity_digest}
+
+  Review recent journal entries and short-term memory. Curate durable \
+  knowledge into pages under `org/page/`, `project/<id>/page/`, and \
+  `space/<id>/page/`. Write transient notes to today's journal at \
+  `org/journal/{date}.md`. Be selective: only promote genuinely new \
+  insights and preserve existing content that is still relevant.
+  """
 
   @daily_window_hours 24
 
@@ -75,9 +80,9 @@ defmodule Platform.Agents.SystemEventScheduler do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
   end
 
-  @doc "Force-fire a specific event now (for testing/admin)."
+  @doc "Force-fire the historian event now (for testing/admin)."
   @spec fire_now(String.t()) :: :ok | {:error, term()}
-  def fire_now(event_type) do
+  def fire_now(event_type \\ @historian_event) do
     GenServer.call(__MODULE__, {:fire_now, event_type}, :timer.minutes(2))
   end
 
@@ -94,16 +99,15 @@ defmodule Platform.Agents.SystemEventScheduler do
           :check_interval_ms,
           Keyword.get(config, :check_interval_ms, @default_check_interval_ms)
         ),
-      events: Keyword.get(opts, :events, Keyword.get(config, :events, @default_events)),
-      next_fires: %{},
+      anchors: Keyword.get(opts, :anchors, Keyword.get(config, :anchors, @anchors)),
+      # Map of {workspace_id, anchor_hour} => %DateTime{} of last fire.
       last_fired: %{}
     }
 
-    state = %{state | next_fires: compute_all_next_fires(state.events)}
     schedule_check(state)
 
     Logger.info(
-      "[SystemEventScheduler] started (interval=#{state.check_interval_ms}ms, events=#{inspect(Map.keys(state.events))})"
+      "[SystemEventScheduler] started (interval=#{state.check_interval_ms}ms, anchors=#{inspect(state.anchors)})"
     )
 
     {:ok, state}
@@ -112,10 +116,9 @@ defmodule Platform.Agents.SystemEventScheduler do
   @impl GenServer
   def handle_info(:check, state) do
     now = DateTime.utc_now()
-    {fired, new_next_fires} = check_and_fire(now, state)
-    new_last_fired = Map.merge(state.last_fired, fired)
+    new_last_fired = check_and_fire(now, state)
     schedule_check(state)
-    {:noreply, %{state | next_fires: new_next_fires, last_fired: new_last_fired}}
+    {:noreply, %{state | last_fired: new_last_fired}}
   end
 
   @impl GenServer
@@ -130,45 +133,95 @@ defmodule Platform.Agents.SystemEventScheduler do
     Process.send_after(self(), :check, ms)
   end
 
-  defp compute_all_next_fires(events) do
-    now = DateTime.utc_now()
-    Map.new(events, fn {event, hour} -> {event, next_fire_time(now, hour)} end)
+  @doc """
+  Return the soonest `(anchor_hour, offset_minute)` fire time strictly in the
+  future for the given workspace.
+
+  The offset is `:erlang.phash2(workspace_id, 360)` minutes added to each
+  anchor hour. The function searches the next 48h horizon (today's anchors
+  + tomorrow's) and picks the earliest target strictly greater than `now`.
+  """
+  @spec next_fire_time(DateTime.t(), binary() | nil, [non_neg_integer()]) :: DateTime.t()
+  def next_fire_time(%DateTime{} = now, workspace_id, anchors) when is_list(anchors) do
+    offset_minutes = offset_for(workspace_id)
+
+    candidates =
+      for day_offset <- 0..1,
+          hour <- anchors do
+        base = %{now | hour: hour, minute: 0, second: 0, microsecond: {0, 6}}
+
+        base
+        |> DateTime.add(day_offset * 86_400, :second)
+        |> DateTime.add(offset_minutes * 60, :second)
+      end
+
+    candidates
+    |> Enum.filter(fn dt -> DateTime.compare(now, dt) == :lt end)
+    |> Enum.min_by(&DateTime.to_unix(&1, :microsecond))
   end
 
-  @doc false
-  def next_fire_time(%DateTime{} = now, target_hour) when is_integer(target_hour) do
-    today_target = %{now | hour: target_hour, minute: 0, second: 0, microsecond: {0, 6}}
+  @doc """
+  Per-workspace minute offset within an anchor window.
 
-    if DateTime.compare(now, today_target) == :lt do
-      today_target
-    else
-      DateTime.add(today_target, 86_400, :second)
-    end
-  end
+  V1 deterministic phash so adjacent UUIDs land at different minutes; a `nil`
+  workspace_id (org-scope V1 fan-out) hashes to a stable value too.
+  """
+  @spec offset_for(binary() | nil) :: non_neg_integer()
+  def offset_for(workspace_id), do: :erlang.phash2(workspace_id, @stagger_modulus)
 
   defp check_and_fire(now, state) do
-    Enum.reduce(state.next_fires, {%{}, state.next_fires}, fn {event, fire_at}, {fired, nf} ->
-      if should_fire?(now, fire_at, event, state.last_fired) do
-        Logger.info("[SystemEventScheduler] firing event=#{event}")
-        dispatch_event(event)
-        new_fire_at = next_fire_time(now, state.events[event])
-        {Map.put(fired, event, now), Map.put(nf, event, new_fire_at)}
-      else
-        {fired, nf}
-      end
+    workspaces = Projects.list_active_workspaces()
+
+    Enum.reduce(workspaces, state.last_fired, fn workspace_id, last_fired ->
+      Enum.reduce(state.anchors, last_fired, fn anchor_hour, lf ->
+        if anchor_due?(now, workspace_id, anchor_hour, lf) do
+          Logger.info(
+            "[SystemEventScheduler] firing historian event " <>
+              "workspace=#{inspect(workspace_id)} anchor=#{anchor_hour}"
+          )
+
+          dispatch_event(@historian_event)
+          Map.put(lf, {workspace_id, anchor_hour}, now)
+        else
+          lf
+        end
+      end)
     end)
   end
 
-  defp should_fire?(now, fire_at, event, last_fired) do
-    DateTime.compare(now, fire_at) != :lt and not fired_today?(event, last_fired)
+  # An anchor is "due" iff `now` is at or past today's `anchor_hour:offset_minute`
+  # AND we haven't already fired within the last anchor window (6h) for that
+  # `(workspace_id, anchor_hour)` pair.
+  defp anchor_due?(now, workspace_id, anchor_hour, last_fired) do
+    offset_minutes = offset_for(workspace_id)
+
+    base = %{now | hour: anchor_hour, minute: 0, second: 0, microsecond: {0, 6}}
+    target_today = DateTime.add(base, offset_minutes * 60, :second)
+
+    last = Map.get(last_fired, {workspace_id, anchor_hour})
+
+    DateTime.compare(now, target_today) != :lt and
+      not recently_fired?(workspace_id, anchor_hour, last)
   end
 
-  @doc false
-  def fired_today?(event, last_fired) do
-    case Map.get(last_fired, event) do
-      nil -> false
-      %DateTime{} = last -> Date.compare(DateTime.to_date(last), Date.utc_today()) == :eq
-    end
+  @doc """
+  True if the given `(workspace_id, anchor_hour)` pair was fired within the
+  same 6h anchor window as `now` (default: `DateTime.utc_now/0`).
+
+  Replaces the legacy `fired_today?/2` — keyed per-anchor so a workspace can
+  fire 4× per day (once per anchor) but never twice in the same window.
+  """
+  @spec recently_fired?(binary() | nil, non_neg_integer(), DateTime.t() | nil) :: boolean()
+  @spec recently_fired?(binary() | nil, non_neg_integer(), DateTime.t() | nil, DateTime.t()) ::
+          boolean()
+  def recently_fired?(workspace_id, anchor_hour, last_fired, now \\ DateTime.utc_now())
+
+  def recently_fired?(_workspace_id, _anchor_hour, nil, _now), do: false
+
+  def recently_fired?(_workspace_id, _anchor_hour, %DateTime{} = last, %DateTime{} = now) do
+    # Anchors are 6h apart. Once a window has elapsed (>6h) the same anchor
+    # next day is eligible again; within the window we stay debounced.
+    DateTime.diff(now, last, :second) < 6 * 3_600
   end
 
   # ── Dispatch ─────────────────────────────────────────────────────────────────
@@ -185,7 +238,27 @@ defmodule Platform.Agents.SystemEventScheduler do
     end
   end
 
-  defp agent_for_event(event_type) do
+  defp agent_for_event(@historian_event) do
+    do_agent_lookup(@historian_event)
+  end
+
+  # Defensive: legacy callers passing `"daily_summary"` or `"dreaming"` fall
+  # back to the historian agent. Logged so we can spot stragglers post-rollup.
+  defp agent_for_event(legacy) when legacy in ["daily_summary", "dreaming"] do
+    Logger.warning(
+      "[SystemEventScheduler] legacy event #{inspect(legacy)} received — " <>
+        "routing to historian (drop call site after T6 rollup)"
+    )
+
+    do_agent_lookup(@historian_event)
+  end
+
+  defp agent_for_event(other) do
+    Logger.warning("[SystemEventScheduler] unknown event #{inspect(other)} — skipping")
+    nil
+  end
+
+  defp do_agent_lookup(event_type) do
     agents =
       from(a in Agent,
         where: a.status == "active",
@@ -314,12 +387,24 @@ defmodule Platform.Agents.SystemEventScheduler do
   end
 
   defp post_instruction(space, system_participant, event_type) do
-    template = Map.fetch!(@instruction_templates, event_type)
+    date = Date.to_iso8601(Date.utc_today())
+    digest = activity_digest()
+
+    template_slug = template_slug_for(event_type)
 
     content =
-      template
-      |> String.replace("{date}", Date.to_iso8601(Date.utc_today()))
-      |> maybe_inject_digest(event_type)
+      case PromptTemplates.render_template(template_slug, %{
+             date: date,
+             activity_digest: digest
+           }) do
+        {:ok, rendered} ->
+          rendered
+
+        {:error, :not_found} ->
+          @default_historian_instruction
+          |> String.replace("{date}", date)
+          |> String.replace("{activity_digest}", digest)
+      end
 
     Chat.post_message(%{
       space_id: space.id,
@@ -330,12 +415,15 @@ defmodule Platform.Agents.SystemEventScheduler do
     })
   end
 
-  defp maybe_inject_digest(template, "daily_summary") do
+  defp template_slug_for(@historian_event), do: "historian.scheduled"
+  # Legacy mapping — drop after rollup confirms no straggler call sites.
+  defp template_slug_for("daily_summary"), do: "historian.scheduled"
+  defp template_slug_for("dreaming"), do: "historian.scheduled"
+  defp template_slug_for(_), do: "historian.scheduled"
+
+  defp activity_digest do
     window_end = DateTime.utc_now()
     window_start = DateTime.add(window_end, -@daily_window_hours * 3_600, :second)
-    digest = ActivityDigest.build(window_start, window_end)
-    String.replace(template, "{activity_digest}", digest)
+    ActivityDigest.build(window_start, window_end)
   end
-
-  defp maybe_inject_digest(template, _event_type), do: template
 end

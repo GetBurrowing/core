@@ -292,7 +292,7 @@ defmodule PlatformWeb.ControlCenter.AgentData do
       "sandbox_mode" => agent.sandbox_mode || "off",
       "color" => agent.color || "",
       "system_events" => agent.system_events || [],
-      "historian" => "daily_summary" in (agent.system_events || [])
+      "historian" => "historian" in (agent.system_events || [])
     }
 
     to_form(Map.merge(base, normalize_map(overrides)), as: :config)
@@ -303,14 +303,14 @@ defmodule PlatformWeb.ControlCenter.AgentData do
 
   Used to disable the Historian checkbox on the current agent's form when a
   different agent is the Historian. The check is based on presence of the
-  `daily_summary` system event (which implies dreaming too per the bundled
-  toggle).
+  single canonical `historian` system event (post-T6 — was previously a
+  bundle of `daily_summary` + `dreaming`).
   """
   @spec another_historian_exists?(binary() | nil) :: boolean()
   def another_historian_exists?(current_agent_id) do
     query =
       from(a in Agent,
-        where: fragment("? @> ?", a.system_events, ^["daily_summary"]),
+        where: fragment("? @> ?", a.system_events, ^["historian"]),
         select: a.id
       )
 
@@ -428,15 +428,15 @@ defmodule PlatformWeb.ControlCenter.AgentData do
     }
   end
 
-  # The Historian role bundles both daily_summary + dreaming system events
-  # behind a single UI toggle. If the param is missing entirely (e.g. a form
-  # that doesn't expose Historian), preserve the agent's current value rather
-  # than silently clearing it.
+  # Post-T6: the Historian role is a single canonical `historian` system
+  # event (was previously a bundle of `daily_summary` + `dreaming`). If the
+  # param is missing entirely (e.g. a form that doesn't expose Historian),
+  # preserve the agent's current value rather than silently clearing it.
   defp derive_system_events(params, %Agent{} = agent) do
     cond do
       Map.has_key?(params, "historian") ->
         case Map.get(params, "historian") do
-          "on" -> ["daily_summary", "dreaming"]
+          "on" -> ["historian"]
           _ -> []
         end
 
