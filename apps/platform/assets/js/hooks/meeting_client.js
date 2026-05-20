@@ -205,6 +205,12 @@ const MeetingClient = {
     return document.getElementById("meeting-media") || document.body
   },
 
+  // DEAD camera-path cruft (task 019e42f6): `_ensureTile`/`_grid` target the
+  // `#meeting-participants` / `#meeting-participants-mobile` grids that no
+  // longer exist in meeting_live.html.heex, so `_grid()` returns null and
+  // this path no-ops. The local camera lifecycle is owned entirely by the
+  // `MeetingVideoTile` hook now. Do NOT re-wire these — re-wiring would
+  // resurrect the global-detach race fixed in 019e42f6.
   _ensureTile(participant) {
     const grid = this._grid()
     if (!grid) return

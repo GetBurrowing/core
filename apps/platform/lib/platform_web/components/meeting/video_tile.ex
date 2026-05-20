@@ -46,6 +46,12 @@ defmodule PlatformWeb.Components.Meeting.VideoTile do
   attr(:avatar_url, :string, default: nil, doc: "avatar image for camera-off fallback")
   attr(:class, :any, default: nil, doc: "extra classes for the outer tile element")
 
+  attr(:id_prefix, :string,
+    default: "video-tile",
+    doc:
+      "prefix for the tile's dom id (`#{:id_prefix}-#{:identity}`). The default `video-tile` keeps the gallery + bottom-strip tiles sharing one dom id per identity (so MeetingVideoTile reuses the node across mode swaps). The persistent local self-view anchor (task 019e42f6) passes `local-self-view` to mint a DISTINCT, never-unmounted tile for the local identity that survives mode switches."
+  )
+
   attr(:layout, :atom,
     default: :strip,
     values: [:strip, :gallery],
@@ -67,7 +73,7 @@ defmodule PlatformWeb.Components.Meeting.VideoTile do
 
     ~H"""
     <div
-      id={"video-tile-#{@identity}"}
+      id={"#{@id_prefix}-#{@identity}"}
       phx-hook="MeetingVideoTile"
       data-participant={@identity}
       data-has-video={to_string(@has_video?)}

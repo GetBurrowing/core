@@ -144,13 +144,29 @@ const MeetingVideoTile = {
   _onLocalPublished(pub) {
     const lp = this._room?.localParticipant
     if (!lp || lp.identity !== this._identity) return
-    if (pub?.track && this._isVideo(pub.track)) this._attach(pub.track, lp)
+    const track = pub?.track
+    if (!track || !this._isVideo(track)) return
+    // Stage 2: defend against a stale `_attachedTrack` left over from a
+    // prior mode-switch global-detach. If we still hold a reference to a
+    // DIFFERENT (now-detached) track, tear it down first so `_attach`'s
+    // identity short-circuit (`this._attachedTrack === track`) doesn't
+    // wrongly no-op and leave the camera dark.
+    if (this._attachedTrack && this._attachedTrack !== track) this._detach()
+    this._attach(track, lp)
   },
 
   _onLocalUnpublished(pub) {
     const lp = this._room?.localParticipant
     if (!lp || lp.identity !== this._identity) return
-    if (pub?.track && this._isVideo(pub.track)) this._detach()
+    // Stage 2: LiveKit sometimes emits the unpublish with a nulled
+    // `pub.track`, so we can't rely on a track-identity match. Any
+    // camera-unpublish for OUR identity must clear `_attachedTrack` to
+    // null so a subsequent `localTrackPublished` reliably re-attaches.
+    // Guard against an audio-only unpublish round-tripping a real video
+    // track ref that isn't ours.
+    const track = pub?.track
+    if (track && !this._isVideo(track)) return
+    this._detach()
   },
 
   _attach(track, participant) {
@@ -186,8 +202,24 @@ const MeetingVideoTile = {
   _detach() {
     if (this._attachedTrack) {
       try {
-        const els = this._attachedTrack.detach()
-        els.forEach((el) => el.remove())
+        if (this._videoEl) {
+          // Stage 1 fix (root cause of "switching active tab drops video"):
+          // use the SINGLE-ELEMENT `track.detach(element)` overload so we
+          // only detach OUR slot's <video>. The zero-arg `track.detach()`
+          // detaches the MediaStreamTrack from EVERY <video> in the
+          // document — including the freshly-mounted sibling tile that
+          // shares the same MediaStreamTrack across a mode-switch LiveView
+          // patch — which black-screened the local camera with no recovery.
+          this._attachedTrack.detach(this._videoEl)
+        } else {
+          // Fallback: no element reference (track synced but element lost).
+          // Remove only the <video> nodes inside OUR slot so we still never
+          // rip the track out from under a sibling tile globally.
+          const slot = this._slot()
+          if (slot) {
+            slot.querySelectorAll("video").forEach((el) => el.remove())
+          }
+        }
       } catch (_) {
         /* track may already be detached */
       }

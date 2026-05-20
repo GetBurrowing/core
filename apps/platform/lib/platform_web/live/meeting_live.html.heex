@@ -242,7 +242,48 @@
     </header>
 
     <%!-- ── Body: left rail + center stage + chat panel ─────────────────── --%>
-    <div class="flex min-h-0 flex-1">
+    <div class="relative flex min-h-0 flex-1">
+      <%!-- Persistent local self-view anchor (task 019e42f6). The local
+           camera renders ONLY through MeetingVideoTile hooks, and the
+           per-mode center-stage + bottom-strip tiles physically remount
+           on every `set_stage_mode` patch — which is what dropped the
+           local video. This dedicated picture-in-picture tile lives
+           OUTSIDE both mode-switched subtrees and is wrapped in
+           `phx-update="ignore"` so LiveView NEVER destroys/recreates it
+           across a mode switch: the <video> stays mounted with a stable
+           id and keeps painting through gallery / screen / canvas /
+           whiteboard. It uses a DISTINCT dom id (`local-self-view-#{id}`
+           via `id_prefix`) so it never collides with the gallery/strip
+           tiles (`video-tile-#{id}`). `data-role="local-self-view"` is
+           the stable e2e/test contract (this task) — distinct from task
+           019e420f's `data-screen-share-slot`. Mobile-safe bottom offset
+           clears the safe-area inset + bottom nav (mirrors the bottom
+           strip footer). Hidden when the viewer has no participant row. --%>
+      <% self_view = local_self_view_participant(assigns[:current_participant]) %>
+      <div
+        :if={self_view}
+        id="meeting-local-self-view"
+        phx-update="ignore"
+        class="pointer-events-none absolute right-4 bottom-[calc(env(safe-area-inset-bottom)+1rem)] z-20 aspect-video w-28 sm:w-32 lg:w-40"
+        data-role="local-self-view"
+      >
+        <.video_tile
+          id_prefix="local-self-view"
+          participant={
+            %{
+              identity: gallery_identity(self_view),
+              name: self_view.display_name || "You"
+            }
+          }
+          video_track={false}
+          audio_muted?={false}
+          speaking?={false}
+          avatar_url={Map.get(self_view, :avatar_url)}
+          layout={:strip}
+          class="ring-1 ring-base-300/60 shadow-lg"
+        />
+      </div>
+
       <%!-- Left rail (task 019e2475-4395): sectioned participant list.
            Hosts/humans on top with mic + speaking + host-badge cues;
            agents below a divider with role chip + status dot.

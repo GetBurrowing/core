@@ -2654,4 +2654,90 @@ defmodule PlatformWeb.MeetingLiveTest do
       assert html_collapsed =~ ~s(data-pane="chat-panel" data-pane-collapsed="true")
     end
   end
+
+  # ── Persistent local self-view anchor (task 019e42f6) ──────────────────
+  #
+  # The bug: switching @current_stage_mode remounted the local camera tile
+  # (gallery cond arm <-> footer strip), and the JS hook's global
+  # `track.detach()` then black-screened the freshly-mounted sibling. The
+  # defense-in-depth fix is a dedicated self-view tile that lives OUTSIDE
+  # both mode-switched subtrees under `phx-update="ignore"`, so LiveView
+  # never destroys/recreates it on a `set_stage_mode` patch. These tests
+  # pin the SERVER contract — a single, id-stable `data-role="local-self-view"`
+  # node that persists across mode switches. The JS attach/detach lifecycle
+  # is covered by the vitest suite + the e2e_behavior gate (a LiveViewTest
+  # render does NOT exercise the JS hook, per ORG_MEMORY).
+  describe "local self-view anchor (task 019e42f6)" do
+    setup %{conn: conn} do
+      {meeting, space} = create_meeting(%{slug: "kickoff-selfview", name: "Self View"})
+      {conn, user} = authenticated_conn(conn)
+
+      # Add the viewer as a human participant keyed by `user.id` so
+      # `find_participant/2` resolves `@current_participant` and the
+      # self-view renders.
+      {:ok, _participant} =
+        Chat.add_participant(space.id, %{
+          participant_type: "user",
+          participant_id: user.id,
+          display_name: "Self View User",
+          joined_at: DateTime.utc_now()
+        })
+
+      {:ok, conn: conn, user: user, meeting: meeting, space: space}
+    end
+
+    test "renders exactly one local-self-view node with a distinct, non-colliding id", %{
+      conn: conn,
+      meeting: meeting,
+      user: user
+    } do
+      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      # Exactly one self-view anchor.
+      assert length(String.split(html, ~s(data-role="local-self-view"))) - 1 == 1
+
+      # The self-view tile uses the `local-self-view-` id prefix, distinct
+      # from the gallery/strip tiles' `video-tile-` prefix, so the three
+      # MeetingVideoTile instances for the local identity never collide.
+      assert html =~ ~s(id="local-self-view-user:#{user.id}")
+      assert html =~ ~s(id="meeting-local-self-view")
+      # phx-update="ignore" keeps the node stable across mode-switch patches.
+      assert html =~ ~s(phx-update="ignore")
+    end
+
+    test "the self-view node persists with an unchanged id across gallery/screen/canvas switches",
+         %{conn: conn, meeting: meeting, user: user} do
+      {:ok, view, gallery_html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      expected_id = ~s(id="local-self-view-user:#{user.id}")
+
+      assert gallery_html =~ expected_id
+
+      screen_html =
+        view |> element(~s([data-stage-mode-button="screen"])) |> render_click()
+
+      assert screen_html =~ expected_id
+      assert screen_html =~ ~s(data-role="local-self-view")
+
+      canvas_html =
+        view |> element(~s([data-stage-mode-button="canvas"])) |> render_click()
+
+      assert canvas_html =~ expected_id
+
+      back_to_gallery =
+        view |> element(~s([data-stage-mode-button="gallery"])) |> render_click()
+
+      assert back_to_gallery =~ expected_id
+    end
+
+    test "omits the self-view when the viewer has no participant row", %{conn: conn} do
+      # Fresh meeting + user with NO participant row → @current_participant
+      # is nil → self-view renders nothing.
+      {meeting, _space} = create_meeting(%{slug: "kickoff-no-selfview", name: "No Self"})
+      {conn, _user} = authenticated_conn(conn)
+
+      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      refute html =~ ~s(data-role="local-self-view")
+    end
+  end
 end

@@ -1003,6 +1003,28 @@ defmodule PlatformWeb.MeetingLive do
 
   def strip_humans(_), do: []
 
+  @doc """
+  Resolve the local viewer's participant row for the persistent self-view
+  anchor (task 019e42f6).
+
+  The self-view is an always-on picture-in-picture tile that lives OUTSIDE
+  the mode-switched center-stage / bottom-strip subtrees and carries
+  `phx-update="ignore"`, so LiveView never destroys/recreates it on a
+  `set_stage_mode` patch. That stable DOM node — combined with the
+  single-element `track.detach(element)` fix in `MeetingVideoTile` — is what
+  guarantees the local camera survives mode switches instead of going black.
+
+  Returns the matching human participant map, or `nil` when the viewer has
+  no participant row yet (render nothing). Matching `@current_participant`
+  by `participant_id` keeps the self-view identity aligned with the
+  gallery/strip tiles via `gallery_identity/1`.
+  """
+  def local_self_view_participant(%{participant_id: pid} = participant)
+      when is_binary(pid) and pid != "",
+      do: participant
+
+  def local_self_view_participant(_), do: nil
+
   @doc "Filter participants to the agent subset for the bottom strip."
   def strip_agents(participants) when is_list(participants) do
     Enum.filter(participants, fn
