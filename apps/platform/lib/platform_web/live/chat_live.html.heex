@@ -22,107 +22,274 @@
      PR #333 rooted the shell chrome but the chat surface was still
      blowing the layout from the inside. --%>
 <div class="flex h-full min-h-0 overflow-hidden">
-  <%!-- Desktop sidebar — suppressed when embedded (e.g. inside the
-       meeting chat panel) since the embed scopes to a single space and
-       has no space-switching surface of its own. --%>
+  <%!-- Desktop sidebar — sectioned channel rail (chat plan v2 Stage 2).
+
+       The `hidden lg:flex` responsive gate keeps this whole rail invisible
+       on mobile; the mobile flat-list path lives in the `mobile_browser_open`
+       overlay below and is intentionally untouched. Same pattern as the
+       icon-rail / bottom-rail split in shell.html.heex.
+
+       Section order:
+         1. Pinned   (renders only when non-empty; locked at top)
+         2. DMs      (always shown; renders empty-state when no DMs)
+         3. Sub-orgs (Paragon / Soylent / Fabrikam / Wayne-Tech / SXI, ALWAYS
+                      rendered as section headers — empty buckets get an
+                      empty-state hint instead of being suppressed)
+
+       Stage 3 will wire drag-and-drop on the `.channel-section-drag-handle`
+       affordance; today it's a static `☰` glyph that fades in on hover. --%>
   <aside
     :if={!@embedded}
     id="chat-sidebar"
     phx-hook="ResizableSidebar"
     class="hidden lg:flex relative flex-shrink-0 flex-col border-r border-base-content/10 bg-base-200"
   >
-    <%!-- Channels section --%>
-    <div class="border-b border-base-300 px-4 py-3 flex items-center justify-between">
-      <p class="text-xs font-semibold uppercase tracking-widest text-base-content/50">
-        Channels
-      </p>
-      <button
-        phx-click="new_channel_open"
-        class="text-base-content/40 hover:text-primary"
-        title="New channel"
-        aria-label="New channel"
-      >
-        <span class="hero-plus size-4"></span>
-      </button>
-    </div>
+    <nav
+      id="chat-section-list"
+      phx-hook="SectionReorder"
+      class="flex-1 overflow-y-auto py-2"
+      aria-label="Channel sections"
+    >
+      <%!-- Pinned section — only renders when non-empty.
+           Section key for `@expanded_sections` toggle: "pinned".
+           NOT reorderable (Stage 3) — Pinned + DMs lock to the top. --%>
+      <%= if @channel_sections.pinned != [] do %>
+        <section
+          class="channel-section group"
+          data-section-key="pinned"
+          data-section-reorderable="false"
+          aria-label="Pinned"
+        >
+          <div class="channel-section-header">
+            <span class="hero-bookmark-solid size-3.5 text-base-content/60"></span>
+            <p class="channel-section-label">Pinned</p>
+          </div>
+          <% {visible, hidden} =
+            PlatformWeb.ChatLive.split_section(
+              @channel_sections.pinned,
+              @expanded_sections,
+              "pinned"
+            ) %>
+          <.link
+            :for={space <- visible}
+            navigate={~p"/chat/#{space.slug || space.id}"}
+            class={[
+              "channel-row",
+              @active_space && @active_space.id == space.id && "channel-row--active"
+            ]}
+          >
+            <span class="text-base-content/40">#</span>
+            <span class="truncate flex-1">{space.name}</span>
+            <%!-- Active-row scope-pill for pinned channels (Stage 4). Scope
+                 is derived from the pinned space's own slug since the
+                 pinned bucket is heterogeneous (channels from any sub-org
+                 can be pinned). --%>
+            <span
+              :if={
+                @active_space && @active_space.id == space.id &&
+                  PlatformWeb.ChatLive.space_scope_atom(space)
+              }
+              class="channel-row-scope-pill"
+            >
+              <.scope_pill
+                scope={PlatformWeb.ChatLive.space_scope_atom(space)}
+                clickable={false}
+              />
+            </span>
+            <%= if unread_label(Map.get(@unread_counts, space.id, 0)) do %>
+              <span class="channel-row-unread-pill">
+                {unread_label(Map.get(@unread_counts, space.id, 0))}
+              </span>
+            <% end %>
+          </.link>
+          <%= if hidden != [] do %>
+            <button
+              type="button"
+              class="channel-section-show-more"
+              phx-click="toggle_section"
+              phx-value-section="pinned"
+            >
+              + {length(hidden)} more
+            </button>
+          <% end %>
+        </section>
+      <% end %>
 
-    <nav class="overflow-y-auto py-2">
-      <.link
-        :for={space <- @channels}
-        navigate={~p"/chat/#{space.slug}"}
-        class={[
-          "flex items-center gap-2 px-3 py-1.5 text-sm transition-colors",
-          "hover:bg-base-300 rounded mx-1",
-          @active_space && @active_space.id == space.id &&
-            "bg-primary/10 text-primary font-semibold border-l-2 border-primary"
-        ]}
+      <%!-- DMs section — always rendered, even when empty (Marlowe: empty
+           sections keep their header so the rail's structure is visible).
+           Section key: "dms". NOT reorderable (Stage 3) — locked under Pinned. --%>
+      <section
+        class="channel-section group"
+        data-section-key="dms"
+        data-section-reorderable="false"
+        aria-label="Direct Messages"
       >
-        <span class="text-base-content/40">#</span>
-        <span class="truncate flex-1">{space.name}</span>
-        <%= if unread_label(Map.get(@unread_counts, space.id, 0)) do %>
-          <span class="ml-1 flex-shrink-0 min-w-[1.125rem] h-[1.125rem] rounded-full bg-primary text-primary-content text-[0.6rem] font-bold flex items-center justify-center px-1 leading-none">
-            {unread_label(Map.get(@unread_counts, space.id, 0))}
-          </span>
+        <div class="channel-section-header">
+          <span class="hero-chat-bubble-left-right size-3.5 text-base-content/60"></span>
+          <p class="channel-section-label">Direct Messages</p>
+          <button
+            type="button"
+            phx-click="new_conversation_open"
+            class="text-base-content/40 hover:text-primary ml-auto"
+            title="New conversation"
+          >
+            <span class="hero-plus size-4"></span>
+          </button>
+        </div>
+        <%= if @channel_sections.dms == [] do %>
+          <p class="channel-section-empty">
+            No conversations yet — direct messages will appear here once you start one.
+          </p>
+        <% else %>
+          <% {visible, hidden} =
+            PlatformWeb.ChatLive.split_section(@channel_sections.dms, @expanded_sections, "dms") %>
+          <.link
+            :for={space <- visible}
+            navigate={~p"/chat/#{space.slug || space.id}"}
+            class={[
+              "channel-row",
+              @active_space && @active_space.id == space.id && "channel-row--active"
+            ]}
+          >
+            <span class="truncate flex-1">{sidebar_display_name(space, @user_id)}</span>
+            <%= if unread_label(Map.get(@unread_counts, space.id, 0)) do %>
+              <span class="channel-row-unread-pill">
+                {unread_label(Map.get(@unread_counts, space.id, 0))}
+              </span>
+            <% end %>
+          </.link>
+          <%= if hidden != [] do %>
+            <button
+              type="button"
+              class="channel-section-show-more"
+              phx-click="toggle_section"
+              phx-value-section="dms"
+            >
+              + {length(hidden)} more
+            </button>
+          <% end %>
         <% end %>
-      </.link>
+      </section>
 
-      <%!-- Empty state per docs/design-system/03-voice.md §5.1 — brand-new
-           user with no spaces. Conversational variant invites the user to
-           create a space or connect their first agent.
+      <%!-- Sub-org sections — alphabetical order (Paragon / Soylent /
+           Fabrikam / Wayne-Tech / SXI). ALWAYS rendered, even when empty; empty
+           buckets show an empty-state hint instead of being suppressed.
+           The right-edge `<.scope_pill clickable={false}>` makes the
+           org-provenance unambiguous (and matches the future scope-filter
+           affordance pattern). --%>
+      <%!-- Sub-org sections are filtered by @scope_filter when set (Stage 4).
+           nil filter → render all sub-org sections. An atom filter → render
+           only the matching bucket. The filter is toggled by clicking the
+           chat-header scope-pill above the message stream. --%>
+      <% visible_buckets =
+        if is_nil(@scope_filter) do
+          @section_order
+        else
+          filter_bucket = PlatformWeb.ChatLive.bucket_for_scope(@scope_filter)
+          Enum.filter(@section_order, fn b -> b == filter_bucket end)
+        end %>
+      <section
+        :for={bucket <- visible_buckets}
+        class="channel-section group"
+        data-section-key={bucket}
+        data-section-slug={section_slug(bucket)}
+        data-section-reorderable="true"
+        draggable="true"
+        aria-label={"#{bucket} channels"}
+      >
+        <div class="channel-section-header">
+          <p class="channel-section-label">{bucket}</p>
+          <.scope_pill
+            scope={sub_org_scope_atom(bucket)}
+            clickable={false}
+            active={@scope_filter == sub_org_scope_atom(bucket)}
+          />
+          <button
+            type="button"
+            class="channel-section-drag-handle"
+            aria-label={"Reorder #{bucket} section"}
+            tabindex="-1"
+            draggable="true"
+          >
+            ☰
+          </button>
+        </div>
+        <%= if Map.get(@channel_sections.sub_orgs, bucket, []) == [] do %>
+          <p class="channel-section-empty">
+            No channels yet — channels named matching this sub-org appear here.
+          </p>
+        <% else %>
+          <% bucket_spaces = Map.fetch!(@channel_sections.sub_orgs, bucket) %>
+          <% {visible, hidden} =
+            PlatformWeb.ChatLive.split_section(bucket_spaces, @expanded_sections, bucket) %>
+          <.link
+            :for={space <- visible}
+            navigate={~p"/chat/#{space.slug || space.id}"}
+            class={[
+              "channel-row",
+              @active_space && @active_space.id == space.id && "channel-row--active"
+            ]}
+          >
+            <span class="text-base-content/40">#</span>
+            <span class="truncate flex-1">{space.name}</span>
+            <%!-- Active-row scope-pill (chat plan v2 Stage 4) — right-aligned,
+                 non-clickable. The header pill above each section is the
+                 click-to-filter affordance; the active-row pill is purely
+                 a "you are here" provenance marker. --%>
+            <span
+              :if={@active_space && @active_space.id == space.id}
+              class="channel-row-scope-pill"
+            >
+              <.scope_pill scope={sub_org_scope_atom(bucket)} clickable={false} />
+            </span>
+            <%= if unread_label(Map.get(@unread_counts, space.id, 0)) do %>
+              <span class="channel-row-unread-pill">
+                {unread_label(Map.get(@unread_counts, space.id, 0))}
+              </span>
+            <% end %>
+          </.link>
+          <%= if hidden != [] do %>
+            <button
+              type="button"
+              class="channel-section-show-more"
+              phx-click="toggle_section"
+              phx-value-section={bucket}
+            >
+              + {length(hidden)} more
+            </button>
+          <% end %>
+        <% end %>
+      </section>
 
-           Chip events wired to EXISTING functionality (best practice: don't
-           fabricate stub handlers — reuse the closest semantic match):
-           - "+ Create a space" → new_channel_open (existing handler, opens
-             the new-channel modal; channels ARE the Suite space concept).
-           - "+ Connect an agent" → JS.navigate("/control") (Agent Resources
-             page, where you connect agents). --%>
-      <.empty_state :if={@channels == []} variant={:conversational}>
+      <%!-- Top-level new-channel affordance moved to the foot of the
+           sectioned rail. The Stage 1 design canvas put this near the
+           sub-org headers; Marlowe approved a single bottom-of-rail entry
+           point so it doesn't compete with the per-section drag handles. --%>
+      <div class="px-3 py-2 mt-2 border-t border-base-300">
+        <button
+          type="button"
+          phx-click="new_channel_open"
+          class="flex items-center gap-2 w-full px-2 py-1.5 text-sm text-base-content/70 hover:text-primary hover:bg-base-300 rounded transition-colors"
+          aria-label="New channel"
+        >
+          <span class="hero-plus size-4"></span>
+          <span>New channel</span>
+        </button>
+      </div>
+
+      <%!-- Brand-new-user empty state — surfaces when the user has no
+           channels AND no DMs at all. The sub-org headers above still
+           render (with their own empty-state hints), but a separate
+           top-level invite chip keeps the "Welcome to Suite" message
+           from Stage 1 visible. --%>
+      <.empty_state
+        :if={@channels == [] and @dm_conversations == []}
+        variant={:conversational}
+      >
         <:system_message>— no spaces yet —</:system_message>
         <:body>Welcome to Suite. To get started, create a space or connect your agent.</:body>
         <:chips label="+ Create a space" event="new_channel_open" />
         <:chips label="+ Connect an agent" event={JS.navigate(~p"/control")} />
-      </.empty_state>
-    </nav>
-
-    <%!-- Direct Messages section --%>
-    <div class="border-t border-b border-base-300 px-4 py-3 flex items-center justify-between">
-      <p class="text-xs font-semibold uppercase tracking-widest text-base-content/50">
-        Direct Messages
-      </p>
-      <button
-        phx-click="new_conversation_open"
-        class="text-base-content/40 hover:text-primary"
-        title="New conversation"
-      >
-        <span class="hero-plus size-4"></span>
-      </button>
-    </div>
-
-    <nav class="flex-1 overflow-y-auto py-2">
-      <.link
-        :for={space <- @dm_conversations}
-        navigate={~p"/chat/#{space.slug || space.id}"}
-        class={[
-          "flex items-center gap-2 px-3 py-1.5 text-sm transition-colors",
-          "hover:bg-base-300 rounded mx-1",
-          @active_space && @active_space.id == space.id &&
-            "bg-primary/10 text-primary font-semibold border-l-2 border-primary"
-        ]}
-      >
-        <span class="truncate flex-1">{sidebar_display_name(space, @user_id)}</span>
-        <%= if unread_label(Map.get(@unread_counts, space.id, 0)) do %>
-          <span class="ml-1 flex-shrink-0 min-w-[1.125rem] h-[1.125rem] rounded-full bg-primary text-primary-content text-[0.6rem] font-bold flex items-center justify-center px-1 leading-none">
-            {unread_label(Map.get(@unread_counts, space.id, 0))}
-          </span>
-        <% end %>
-      </.link>
-
-      <%!-- Empty state per docs/design-system/03-voice.md §5.1 — DMs are
-           empty. Conversational variant with chip to start a DM. --%>
-      <.empty_state :if={@dm_conversations == []} variant={:conversational}>
-        <:system_message>— no DMs yet —</:system_message>
-        <:body>Direct messages will show up here once you start a conversation.</:body>
-        <:chips label="+ Start a DM" event="new_conversation_open" />
       </.empty_state>
     </nav>
 
@@ -271,6 +438,21 @@
             </span>
             <span class="truncate font-bold text-base">
               {space_header_name(@active_space, @space_participants, @user_id)}
+            </span>
+            <%!-- Prominent chat-header scope-pill (chat plan v2 Stage 4).
+                 Only rendered for channels (DMs/groups have no scope). The
+                 wrapper class drives the larger-size visual variant; the
+                 inner pill remains clickable and pushes the `scope_filter`
+                 event with the channel's scope. Active state is implied
+                 from `@scope_filter` so a clicked-again pill reads as the
+                 currently-selected filter. --%>
+            <% header_scope = PlatformWeb.ChatLive.space_scope_atom(@active_space) %>
+            <span :if={header_scope} class="chat-header-scope-pill">
+              <.scope_pill
+                scope={header_scope}
+                clickable={true}
+                active={@scope_filter == header_scope}
+              />
             </span>
             <span
               :if={@active_space.kind == "channel" && @active_space.topic}

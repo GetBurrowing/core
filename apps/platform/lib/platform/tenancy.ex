@@ -265,6 +265,98 @@ defmodule Platform.Tenancy do
   def parent_org(%Org{parent_org_id: nil}), do: nil
   def parent_org(%Org{parent_org_id: parent_id}), do: Repo.get(Org, parent_id)
 
+  # ── Inheritance resolver ──────────────────────────────────────────────
+
+  # Maximum number of org ancestors we'll walk before giving up. The
+  # current two-tier design only ever needs 1 step (tenant → Fabrikam), but
+  # the resolver is written to support arbitrary depth for future use,
+  # so we cap at 16 as a defensive guard against a corrupt
+  # parent_org_id cycle (FK design prevents this, but belt + braces).
+  @effective_value_max_depth 16
+
+  @doc """
+  Inheritance resolver. Walks the `parent_org_id` chain upward from
+  `org` to find where `key` is defined and returns a tagged tuple
+  describing the resolution outcome.
+
+  Storage-agnostic via the required `:lookup_fn` opt — a 2-arity
+  function `(org, key) -> {:ok, value} | :error` the caller provides.
+  This keeps the resolver decoupled from the underlying store; Skills,
+  Context, Memory, and Prompts each pass their own lookup function over
+  their own table.
+
+  ## Return shapes
+
+    * `{:defined_here, value}` — `org` has its own value for `key` and
+      no ancestor defines it (or this is the root org).
+    * `{:overridden, value, parent_value}` — `org` has its own value
+      AND the nearest ancestor that defines `key` has a different (or
+      same — caller decides what "shadow" means) value, surfaced as
+      `parent_value`. Useful for an "overrides Fabrikam default" pill.
+    * `{:inherited, source_org, value}` — `org` does not define `key`,
+      but an ancestor does; `source_org` is the nearest ancestor that
+      defines it and `value` is that ancestor's value.
+    * `{:defined_here, default}` — no org in the chain defines `key`,
+      so the caller's `default` applies. We tag this as `:defined_here`
+      (with the default substituted) so call sites can render
+      "no inheritance" uniformly with the genuine `:defined_here` case.
+
+  ## Safety
+
+  Walks at most `#{@effective_value_max_depth}` ancestors before
+  bailing out and treating the chain as "no ancestor defines it".
+  Protects against a malformed `parent_org_id` cycle that bypasses the
+  FK design.
+
+  ## Example
+
+      iex> lookup = fn org, :skill -> Map.fetch(skills_by_org_id, org.id) end
+      iex> Tenancy.effective_value(soylent, :skill, "fallback", lookup_fn: lookup)
+      {:inherited, %Org{slug: "fabrikam"}, "fabrikam-default-skill"}
+
+  """
+  @spec effective_value(Org.t(), term(), term(), keyword()) ::
+          {:defined_here, term()}
+          | {:overridden, term(), term()}
+          | {:inherited, Org.t(), term()}
+  def effective_value(%Org{} = org, key, default, opts) do
+    lookup_fn = Keyword.fetch!(opts, :lookup_fn)
+
+    case lookup_fn.(org, key) do
+      {:ok, own_value} ->
+        case find_ancestor_value(org, key, lookup_fn, @effective_value_max_depth) do
+          {:ok, _source, parent_value} -> {:overridden, own_value, parent_value}
+          :error -> {:defined_here, own_value}
+        end
+
+      :error ->
+        case find_ancestor_value(org, key, lookup_fn, @effective_value_max_depth) do
+          {:ok, source_org, value} -> {:inherited, source_org, value}
+          :error -> {:defined_here, default}
+        end
+    end
+  end
+
+  # Walks the parent chain starting from `org`'s parent (NOT `org`
+  # itself), returning the first ancestor that defines `key`. Returns
+  # `:error` if the chain ends (root reached) or the depth budget runs
+  # out (cycle defense).
+  defp find_ancestor_value(_org, _key, _lookup_fn, 0), do: :error
+  defp find_ancestor_value(%Org{parent_org_id: nil}, _key, _lookup_fn, _depth), do: :error
+
+  defp find_ancestor_value(%Org{parent_org_id: parent_id}, key, lookup_fn, depth) do
+    case Repo.get(Org, parent_id) do
+      nil ->
+        :error
+
+      %Org{} = parent ->
+        case lookup_fn.(parent, key) do
+          {:ok, value} -> {:ok, parent, value}
+          :error -> find_ancestor_value(parent, key, lookup_fn, depth - 1)
+        end
+    end
+  end
+
   # ── Scope display (pure, DB-free) ─────────────────────────────────────
 
   @scope_classes %{

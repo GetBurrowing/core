@@ -35,13 +35,19 @@ defmodule PlatformWeb.Components.ScopePill do
   Use of Color). Screen readers get scope context via `aria-label` even
   on the non-clickable variant.
 
-  ## Futureproof seam (MT/RBAC stack)
+  ## Scope-color centralization
 
-  The private `scope_color/1` function hard-codes the 5 scope→Tailwind-class
-  mappings. When the MT/RBAC `019e3c49-6983-755a-8550-d76ccd680c2c`
-  (Stack B Colors+Inheritance) lands, the body of this helper becomes a
-  one-line delegation to `Platform.Orgs.scope_color/1` — the component's
-  public `:scope` attr API stays unchanged.
+  Scope → color tokens are centralized in two places:
+
+    * `Platform.Tenancy.scope_color/1` returns the Tailwind text-color
+      utility (`text-fabrikam`, `text-soylent`, …) for any scope slug.
+    * `apps/platform/assets/css/app.css` defines the matching `bg-*`,
+      `border-*`, `bg-*-active`, `bg-*-dot`, and `hover:bg-*/22`
+      utilities — all anchored to the same `oklch(...)` literals.
+
+  This component was previously inlining `bg-[oklch(...)]` arbitrary-value
+  classes; Stage 2 of Working surfaces plan v4 retired that pattern in
+  favor of the named utilities. The public `:scope` attr API is unchanged.
 
   ## Examples
 
@@ -174,64 +180,43 @@ defmodule PlatformWeb.Components.ScopePill do
     "inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs font-medium leading-none transition-colors"
   end
 
-  # ── Color mapping (futureproof seam) ────────────────────────────────
+  # ── Color mapping ───────────────────────────────────────────────────
   #
-  # TODO(MT/RBAC stack 019e3c49-6983-755a-8550-d76ccd680c2c):
-  # When Stack B (Colors+Inheritance) lands, replace the bodies of
-  # `chip_color_classes/2`, `chip_hover_classes/1`, and `scope_dot/1`
-  # with a one-line delegation to `Platform.Orgs.scope_color/1`.
-  # The public `:scope` attr API of this component stays unchanged.
+  # Resolves to the named utility classes defined in `app.css` (and
+  # surfaced as text-utilities by `Platform.Tenancy.scope_color/1`). The
+  # oklch literals themselves live in `app.css`; if you need to change a
+  # scope color, edit it there.
+  #
+  # Default (`active: false`) chip uses the 12% color-mix bg, the
+  # full-saturation text, and the 30% color-mix border. Active chip uses
+  # the full-saturation `bg-<slug>-active` (which also bakes in the
+  # contrast-safe text and shadow ring).
 
-  # Dark-mode oklch values from the visual reference canvas
-  # 019e3c34-c79f-7865-b636-d2ab60d0b556 (revision 3).
-  defp chip_color_classes(:fabrikam, false),
-    do: "bg-[oklch(72%_0.16_50/12%)] text-[oklch(72%_0.16_50)] border-[oklch(72%_0.16_50/30%)]"
+  defp chip_color_classes(scope, false) do
+    [
+      "bg-#{slug(scope)}",
+      Platform.Tenancy.scope_color(scope),
+      "border-#{slug(scope)}"
+    ]
+  end
 
-  defp chip_color_classes(:fabrikam, true),
-    do:
-      "bg-[oklch(72%_0.16_50)] text-[oklch(15%_0_0)] border-[oklch(72%_0.16_50)] shadow-[0_0_0_2px_oklch(72%_0.16_50/30%)]"
-
-  defp chip_color_classes(:soylent, false),
-    do: "bg-[oklch(65%_0.20_295/12%)] text-[oklch(65%_0.20_295)] border-[oklch(65%_0.20_295/30%)]"
-
-  defp chip_color_classes(:soylent, true),
-    do:
-      "bg-[oklch(65%_0.20_295)] text-[oklch(98%_0_0)] border-[oklch(65%_0.20_295)] shadow-[0_0_0_2px_oklch(65%_0.20_295/30%)]"
-
-  defp chip_color_classes(:wayne_tech, false),
-    do: "bg-[oklch(68%_0.15_240/12%)] text-[oklch(68%_0.15_240)] border-[oklch(68%_0.15_240/30%)]"
-
-  defp chip_color_classes(:wayne_tech, true),
-    do:
-      "bg-[oklch(68%_0.15_240)] text-[oklch(98%_0_0)] border-[oklch(68%_0.15_240)] shadow-[0_0_0_2px_oklch(68%_0.15_240/30%)]"
-
-  defp chip_color_classes(:sxi, false),
-    do: "bg-[oklch(70%_0.15_162/12%)] text-[oklch(70%_0.15_162)] border-[oklch(70%_0.15_162/30%)]"
-
-  defp chip_color_classes(:sxi, true),
-    do:
-      "bg-[oklch(70%_0.15_162)] text-[oklch(15%_0_0)] border-[oklch(70%_0.15_162)] shadow-[0_0_0_2px_oklch(70%_0.15_162/30%)]"
-
-  defp chip_color_classes(:paragon, false),
-    do: "bg-[oklch(80%_0.16_95/12%)] text-[oklch(80%_0.16_95)] border-[oklch(80%_0.16_95/30%)]"
-
-  defp chip_color_classes(:paragon, true),
-    do:
-      "bg-[oklch(80%_0.16_95)] text-[oklch(15%_0_0)] border-[oklch(80%_0.16_95)] shadow-[0_0_0_2px_oklch(80%_0.16_95/30%)]"
+  defp chip_color_classes(scope, true) do
+    "bg-#{slug(scope)}-active"
+  end
 
   # Hover state — bump default 12% bg to 22% color-mix on the button variant only.
-  defp chip_hover_classes(:fabrikam), do: "hover:bg-[oklch(72%_0.16_50/22%)]"
-  defp chip_hover_classes(:soylent), do: "hover:bg-[oklch(65%_0.20_295/22%)]"
-  defp chip_hover_classes(:wayne_tech), do: "hover:bg-[oklch(68%_0.15_240/22%)]"
-  defp chip_hover_classes(:sxi), do: "hover:bg-[oklch(70%_0.15_162/22%)]"
-  defp chip_hover_classes(:paragon), do: "hover:bg-[oklch(80%_0.16_95/22%)]"
+  defp chip_hover_classes(scope), do: "hover:bg-#{slug(scope)}/22"
 
   # Dot color — full saturation, redundant-signal-beyond-color cue.
-  defp scope_dot(:fabrikam), do: "bg-[oklch(72%_0.16_50)]"
-  defp scope_dot(:soylent), do: "bg-[oklch(65%_0.20_295)]"
-  defp scope_dot(:wayne_tech), do: "bg-[oklch(68%_0.15_240)]"
-  defp scope_dot(:sxi), do: "bg-[oklch(70%_0.15_162)]"
-  defp scope_dot(:paragon), do: "bg-[oklch(80%_0.16_95)]"
+  defp scope_dot(scope), do: "bg-#{slug(scope)}-dot"
+
+  # Atom slug → kebab-case fragment used in the Tailwind utility class names
+  # (e.g. :wayne_tech → "wayne-tech" so we get `bg-wayne-tech`).
+  defp slug(:fabrikam), do: "fabrikam"
+  defp slug(:soylent), do: "soylent"
+  defp slug(:wayne_tech), do: "wayne-tech"
+  defp slug(:sxi), do: "sxi"
+  defp slug(:paragon), do: "paragon"
 
   # ── Labels ─────────────────────────────────────────────────────────
 

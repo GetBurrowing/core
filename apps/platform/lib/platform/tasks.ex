@@ -1128,6 +1128,189 @@ defmodule Platform.Tasks do
   defp maybe_filter_status(query, nil), do: query
   defp maybe_filter_status(query, status), do: where(query, [t], t.status == ^status)
 
+  # ── Kanban column data shape ─────────────────────────────────────────────
+  #
+  # Stage 1 of the Tasks v2 plan (task 019e389c-1f65) introduces a 7-column
+  # kanban with a dedicated Planning column slotted between Backlog and In
+  # Progress, plus a dedicated Blocked column between In Progress and In
+  # Review. The data layer lives here so the LiveView can consume a stable
+  # shape — Stage 2 wires the .heex template over to it.
+  #
+  # Key ordering matches the visual column order.
+  #
+  # Status-to-bucket mapping (Marlowe's call 2026-05-19):
+  #   - `:blocked` gets its own bucket so a human or AI agent can see and
+  #     act on stuck work — keeping it visible is the whole point.
+  #   - `:cancelled` folds into the `:done` bucket. Cancelled and done share
+  #     the same "no further action required" semantic for the board, so
+  #     they collapse into a single visual column instead of giving cancel
+  #     its own.
+  #   - `:stack_pending` continues to be excluded from the rendered shape;
+  #     it represents pre-backlog stack queueing rather than active board
+  #     state. Callers that need the wider set should use `list_all_tasks/1`.
+  @kanban_status_keys [
+    :backlog,
+    :planning,
+    :in_progress,
+    :blocked,
+    :in_review,
+    :deploying,
+    :done
+  ]
+
+  # Statuses fetched from the DB but routed to a different bucket on the way
+  # in. Keep this list explicit so the bucketing rule survives future status
+  # additions: anything not in @kanban_status_keys + this map is excluded.
+  @status_bucket_overrides %{"cancelled" => :done}
+
+  @doc """
+  Group tasks into the 7 kanban-column buckets (Stage 1 of Tasks v2 plan).
+
+  Returns a map with exactly these keys, in this order:
+
+    * `:backlog`
+    * `:planning`
+    * `:in_progress`
+    * `:blocked`
+    * `:in_review`
+    * `:deploying`
+    * `:done`
+
+  Every key is present even when its bucket is empty, so the rendering
+  template can iterate the shape without nil-guards. Within each bucket,
+  tasks are ordered by `updated_at` descending (most-recently-touched
+  first), which matches how the existing board surfaces recency.
+
+  ## Options
+
+    * `:project_id` — narrow to a single project (same filter shape as
+      `list_all_tasks/1`).
+    * `:epic_id`    — narrow to a single epic.
+
+  Status routing (per Marlowe 2026-05-19):
+
+    * `:blocked` lands in its own `:blocked` bucket — visible so a human
+      or AI agent can take action to unblock.
+    * `:cancelled` is folded into the `:done` bucket — both share the
+      "no further action required" semantic, so they collapse into one
+      visual column.
+    * `:stack_pending` is excluded entirely from the rendered shape; it
+      represents pre-backlog stack queueing rather than active board
+      state. Callers that need the wider set should reach for
+      `list_all_tasks/1` instead.
+  """
+  @spec list_by_status(keyword()) :: %{atom() => [%Task{}]}
+  def list_by_status(opts \\ []) do
+    project_id = Keyword.get(opts, :project_id)
+    epic_id = Keyword.get(opts, :epic_id)
+
+    # Statuses we actually pull from the DB: the 7 directly-bucketed ones
+    # plus any whose tasks we fold into another bucket (e.g. cancelled →
+    # done). Anything outside this set is excluded from the board shape.
+    fetched_statuses =
+      (Enum.map(@kanban_status_keys, &Atom.to_string/1) ++
+         Map.keys(@status_bucket_overrides))
+      |> Enum.uniq()
+
+    tasks =
+      Task
+      |> where([t], is_nil(t.deleted_at))
+      |> where([t], t.status in ^fetched_statuses)
+      |> maybe_filter_project(project_id)
+      |> maybe_filter_epic(epic_id)
+      |> order_by([t], desc: t.updated_at)
+      # `plans: :stages` is required by the desktop kanban template,
+      # which renders per-card plan progress (`<passed>/<total>` stage
+      # counts) and the plan-pending-review badge. `list_all_tasks/1`
+      # carries the same preload set; keep them aligned so callers can
+      # swap between the two without surprise N+1s in the LV render.
+      |> preload([:project, :epic, plans: :stages])
+      |> Repo.all()
+
+    empty = Map.new(@kanban_status_keys, &{&1, []})
+
+    tasks
+    |> Enum.reduce(empty, fn task, acc ->
+      key = bucket_for_status(task.status)
+      Map.update!(acc, key, &[task | &1])
+    end)
+    # The reduce above prepends, which reverses the DB order. Re-reverse so
+    # each bucket ends up in `updated_at` desc order as documented.
+    |> Map.new(fn {key, list} -> {key, Enum.reverse(list)} end)
+  end
+
+  # Map a raw status string to the kanban bucket it belongs in. Direct
+  # statuses fall through to their matching atom; overrides (e.g.
+  # "cancelled" → :done) are looked up first.
+  defp bucket_for_status(status) when is_binary(status) do
+    case Map.fetch(@status_bucket_overrides, status) do
+      {:ok, bucket} -> bucket
+      :error -> String.to_existing_atom(status)
+    end
+  end
+
+  @doc """
+  Returns the canonical ordered list of kanban-column status keys.
+
+  Exposed so callers (LiveView, view helpers, future stages) can iterate
+  the columns without re-declaring the order — single source of truth.
+  """
+  @spec kanban_status_keys() :: [atom()]
+  def kanban_status_keys, do: @kanban_status_keys
+
+  # ── Scope-filter rail (Stage 3 of Tasks v2 plan, 2026-05-19) ──────────────
+  #
+  # Five sub-org scopes — fabrikam, soylent, wayne_tech, sxi, paragon — match the
+  # canonical scope list in `PlatformWeb.Components.ScopePill` (futureproof
+  # seam for the MT/RBAC stack 019e3c49). Today, `tasks` has no `org_id`
+  # column, so we can't bucket tasks per-org from the DB. The today-state
+  # contract (per the Stage 3 dispatch + the MT/RBAC plan) is to fold every
+  # task under `:fabrikam` and report 0 for the other four. Once `tasks.org_id`
+  # lands the body of `count_by_scope/0` becomes a `group_by org_id` query;
+  # the public API (a map keyed by the five scope atoms) stays unchanged so
+  # the LiveView's scope-rail render isn't coupled to the data shape.
+  @scope_keys [:fabrikam, :soylent, :wayne_tech, :sxi, :paragon]
+
+  @doc """
+  Returns the canonical list of scope atoms used by the scope-filter rail.
+
+  Exposed so the LiveView (and future callers) iterate the rail in a single
+  source of truth rather than re-declaring the order. Order mirrors
+  `PlatformWeb.Components.ScopePill.scopes/0`.
+  """
+  @spec scope_keys() :: [atom()]
+  def scope_keys, do: @scope_keys
+
+  @doc """
+  Count tasks per sub-org scope.
+
+  Returns a map with exactly the five scope keys (`:fabrikam`, `:soylent`,
+  `:wayne_tech`, `:sxi`, `:paragon`) populated as non-negative integers.
+
+  ## Today-state (pre-MT/RBAC-on-Tasks)
+
+  `tasks` has no `org_id` column yet, so the helper folds every non-deleted
+  task under `:fabrikam` and returns 0 for the other four scopes. This keeps the
+  scope rail rendering today without coupling the UI to a schema change.
+
+  ## Future state (post-task-orgs)
+
+  Once `tasks.org_id` lands, swap the body for a `group_by(t.org_id)`
+  aggregate; the public return shape stays the same so the LiveView's
+  scope-rail render is unaffected.
+  """
+  @spec count_by_scope() :: %{atom() => non_neg_integer()}
+  def count_by_scope do
+    total =
+      Task
+      |> where([t], is_nil(t.deleted_at))
+      |> Repo.aggregate(:count)
+
+    @scope_keys
+    |> Map.new(fn key -> {key, 0} end)
+    |> Map.put(:fabrikam, total)
+  end
+
   @doc """
   Count tasks currently in progress for a given user.
 

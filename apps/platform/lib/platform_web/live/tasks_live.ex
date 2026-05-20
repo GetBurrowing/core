@@ -15,18 +15,29 @@ defmodule PlatformWeb.TasksLive do
   alias Platform.Tasks
   alias Platform.Tasks.{Epic, Plan, ReviewRequest, ReviewRequests, Stack, Stacks, Task}
 
+  # Desktop kanban columns (Stage 2 of Tasks v2 plan, 2026-05-19). Seven
+  # explicit buckets — planning + blocked are split out from Backlog so
+  # users can see and act on them directly, and `cancelled` folds into
+  # Done (handled by `Platform.Tasks.list_by_status/1`).
+  #
+  # Column render order is the visual reading order across the board.
+  # String keys keep the template's HTML id / data-column / `phx-value-*`
+  # plumbing unchanged (atoms would serialize as ":backlog").
   @kanban_columns [
     {"backlog", "Backlog"},
+    {"planning", "Planning"},
     {"in_progress", "In Progress"},
+    {"blocked", "Blocked"},
     {"in_review", "In Review"},
     {"deploying", "Deploying"},
     {"done", "Done"}
   ]
 
-  # Mobile pill order matches desktop @kanban_columns. Backlog stays first
-  # for visual parity with desktop; @active_status_filter still defaults to
-  # "in_progress" in mount/3 so users land on actionable work — the previous
-  # reorder confused that "default-active" intent with "list order" itself.
+  # Mobile pill order — INTENTIONALLY left at the pre-Stage-2 5-bucket
+  # shape per the responsive-scope contract on the Stage 2 dispatch
+  # ("Mobile keeps the existing list view unchanged — DO NOT touch the
+  # mobile render path"). Planning + blocked tasks continue to roll up
+  # under the "Backlog" mobile pill via `@mobile_column_statuses`.
   @mobile_columns [
     {"backlog", "Backlog"},
     {"in_progress", "In Progress"},
@@ -35,22 +46,37 @@ defmodule PlatformWeb.TasksLive do
     {"done", "Done"}
   ]
 
-  # Statuses that map into each kanban column.
-  #
-  # `forming` is a *stack* rollup status (Stacks.rollup_status_for/1):
-  # it's what a freshly-created stack is in until any member advances
-  # past `backlog`. Bucketing it under the Backlog column keeps stacks
-  # visible from the moment they're created — without this entry, a
-  # forming stack rendered in NO column and was effectively invisible
-  # until `stack_start` cascaded a member to in_progress. No task ever
-  # has status `forming`, so this only affects stacks.
-  @column_statuses %{
+  # Statuses that map into each MOBILE kanban pill / section (5-bucket
+  # shape, unchanged for Stage 2). `forming` (stack rollup status) +
+  # planning + blocked all fold into the Backlog pill on mobile so
+  # forming/early-stage work stays visible from the moment it's created.
+  @mobile_column_statuses %{
     "backlog" => ~w(backlog planning blocked forming),
     "in_progress" => ~w(in_progress),
     "in_review" => ~w(in_review),
     "deploying" => ~w(deploying),
     "done" => ~w(done)
   }
+
+  # Statuses that map into each DESKTOP kanban column (7-bucket shape).
+  # Mirrors `Platform.Tasks.list_by_status/1` so the stack-bucketing
+  # helper below produces consistent buckets for the desktop board.
+  # `forming` lives under Planning (a fresh stack is being planned);
+  # `cancelled` folds into Done (matches the Stage 1 helper).
+  @desktop_column_statuses %{
+    "backlog" => ~w(backlog),
+    "planning" => ~w(planning forming),
+    "in_progress" => ~w(in_progress),
+    "blocked" => ~w(blocked),
+    "in_review" => ~w(in_review),
+    "deploying" => ~w(deploying),
+    "done" => ~w(done cancelled)
+  }
+
+  # Back-compat alias kept ONLY for any external callers / tests that
+  # referenced the old name. Internal call sites use the explicit
+  # mobile/desktop maps directly.
+  @column_statuses @mobile_column_statuses
 
   @max_upload_entries 5
   @max_upload_size 15_000_000
@@ -93,14 +119,25 @@ defmodule PlatformWeb.TasksLive do
      |> assign(:all_tasks, all_tasks)
      |> assign(:stacks, stacks)
      |> assign(:stack_board_data, stack_board_data)
-     # `:columns` continues to hold task-only buckets so the existing
-     # heex template (which references `task.project`, `task.title`,
-     # `task.inserted_at`, etc.) does not crash on `%Stack{}` rows
-     # before stage 2 wires the stack-card variant. The new
-     # `:board_items` assign carries the merged-and-sorted shape per
-     # ADR 0041 acceptance criterion 1; stage 2 switches the template
-     # over to it. See `group_board_items/2`.
-     |> assign(:columns, group_by_column(all_tasks))
+     # `:columns` carries the DESKTOP 7-bucket task map produced by
+     # `Platform.Tasks.list_by_status/1` (Stage 1 helper). Keys are
+     # atoms (`:backlog`, `:planning`, …, `:done`). The Stage-2 desktop
+     # kanban template iterates `@kanban_columns` (string keys) and
+     # looks up each column via `Map.get(@columns, String.to_atom(key),
+     # [])`. Cancelled tasks fold into `:done` (per the helper).
+     #
+     # `:board_items` keeps the legacy 5-bucket MOBILE shape (string
+     # keys, planning+blocked+forming rolled up under "backlog"). The
+     # mobile pill nav + section list read from this map and must not
+     # be reshaped at Stage 2 — see the responsive-scope contract on
+     # the Stage 2 dispatch ("DO NOT touch the mobile render path").
+     #
+     # `:desktop_stacks_by_column` parallels `:columns` for stacks:
+     # 7-bucket string-keyed map of `%Stack{}` lists. The desktop
+     # template merges tasks + stacks per column and sorts by
+     # `updated_at` desc inline.
+     |> assign(:columns, Tasks.list_by_status())
+     |> assign(:desktop_stacks_by_column, group_desktop_stacks(stack_entries))
      |> assign(:board_items, group_board_items(all_tasks, stack_entries))
      # Ephemeral expansion state: ids of stacks the user has clicked open
      # on the board (ADR 0041 acceptance criterion 3). MUST reset on
@@ -109,6 +146,15 @@ defmodule PlatformWeb.TasksLive do
      |> assign(:kanban_columns, @kanban_columns)
      |> assign(:mobile_columns, @mobile_columns)
      |> assign(:active_status_filter, "in_progress")
+     # Stage-3 of Tasks v2 (scope-filter rail, desktop only): `:scope_filter`
+     # is one of `:all`, `:fabrikam`, `:soylent`, `:wayne_tech`, `:sxi`,
+     # `:paragon`. Default `:all` keeps the board unchanged on first load.
+     # `:scope_counts` is the per-scope task count map computed by
+     # `Platform.Tasks.count_by_scope/0` (today-state: everything folds
+     # under :fabrikam until `tasks.org_id` lands). The mobile pill nav is
+     # unaffected — the rail is `hidden lg:flex` only.
+     |> assign(:scope_filter, :all)
+     |> assign(:scope_counts, Tasks.count_by_scope())
      |> assign(:pending_plan_count, count_pending_plans(all_tasks))
      |> assign(:review_counts, pending_review_counts(all_tasks))
      |> assign(:review_request_subscriptions, initial_task_ids)
@@ -457,6 +503,32 @@ defmodule PlatformWeb.TasksLive do
     else
       {:noreply, socket}
     end
+  end
+
+  # Desktop-only: scope-filter rail (Stage 3 of Tasks v2, 2026-05-19). Click
+  # narrows the kanban to a single sub-org scope; the "All" chip resets to
+  # the unfiltered view. The scope arrives as a string (Phoenix serializes
+  # `phx-value-scope={@scope}` from an atom into its string name), so we
+  # parse it against the canonical @scope_keys list — anything outside the
+  # known set is ignored rather than blowing up `String.to_existing_atom/1`.
+  #
+  # The rail is `hidden lg:flex` in the template; this handler only fires
+  # from the desktop rail and from the implicit "All" chip. Mobile pill nav
+  # is untouched per the responsive-scope contract.
+  def handle_event("scope_filter", %{"scope" => scope}, socket) do
+    case parse_scope(scope) do
+      {:ok, parsed} ->
+        {:noreply, assign(socket, :scope_filter, parsed)}
+
+      :error ->
+        {:noreply, socket}
+    end
+  end
+
+  # No-scope variant: the "All" chip in the rail dispatches without a
+  # phx-value-scope so users can reset the filter from a single click.
+  def handle_event("scope_filter", _params, socket) do
+    {:noreply, assign(socket, :scope_filter, :all)}
   end
 
   def handle_event("clear_filters", _params, socket) do
@@ -2559,23 +2631,23 @@ defmodule PlatformWeb.TasksLive do
 
   # ── Private — Kanban helpers ───────────────────────────────────────────
 
-  # Task-only kanban bucketing. Preserved verbatim alongside the new
-  # `group_board_items/2` because the existing heex template still
-  # iterates `@columns` and accesses Task-only fields
-  # (`task.project.name`, `task.assignee_id`, etc). Stage 2 of T7
-  # switches the template over to `@board_items`; at that point this
-  # function is removed and `:columns` follows.
+  # Task-only MOBILE bucketing. Iterates @mobile_columns (5 buckets) so
+  # the mobile pill nav + section list don't change shape under Stage 2.
+  # The corresponding desktop bucketing lives in
+  # `Platform.Tasks.list_by_status/1` (Stage 1) and is assigned to
+  # `:columns` directly — see `refresh_board/1` and `mount/3`.
   defp group_by_column(tasks) do
-    Enum.reduce(@kanban_columns, %{}, fn {col_key, _label}, acc ->
-      statuses = Map.get(@column_statuses, col_key, [])
+    Enum.reduce(@mobile_columns, %{}, fn {col_key, _label}, acc ->
+      statuses = Map.get(@mobile_column_statuses, col_key, [])
       col_tasks = Enum.filter(tasks, &(&1.status in statuses))
       Map.put(acc, col_key, col_tasks)
     end)
   end
 
-  # Bucket %Task{} and %Stack{} into kanban columns, sorted within each
-  # column by `updated_at` descending so stacks interleave with normal
-  # tasks per ADR 0041 acceptance criterion 1.
+  # Bucket %Task{} and %Stack{} into MOBILE kanban columns (5-bucket
+  # shape — backlog absorbs planning + blocked + forming). Sorted within
+  # each column by `updated_at` descending so stacks interleave with
+  # standalone tasks per ADR 0041 acceptance criterion 1.
   #
   # `stack_entries` is the `[{%Stack{}, board_data}, ...]` shape returned
   # by `Stacks.list_stacks_with_members/1`. Only the `%Stack{}` is placed
@@ -2584,18 +2656,16 @@ defmodule PlatformWeb.TasksLive do
   # the entry shape downstream consumers pattern-match on.
   #
   # A task that belongs to a stack (`stack_id != nil`) is suppressed from
-  # the flat column list — it renders only under its parent stack card
-  # in stage 2. This matches the dispatch's "stack members render under
-  # the stack card, not also as their own cards in the column" rule.
+  # the flat column list — it renders only under its parent stack card.
+  # Stack members on mobile use the same pattern.
   #
   # Discriminate-by-`__struct__`: a column entry is either `%Task{}` or
-  # `%Stack{}`. The template will pattern-match `case item.__struct__`
-  # (per stage 2 description) — no extra `:_kind` tag is added.
+  # `%Stack{}`. The template pattern-matches `case item.__struct__`.
   defp group_board_items(tasks, stack_entries) do
     standalone_tasks = Enum.filter(tasks, &is_nil(&1.stack_id))
 
-    Enum.reduce(@kanban_columns, %{}, fn {col_key, _label}, acc ->
-      statuses = Map.get(@column_statuses, col_key, [])
+    Enum.reduce(@mobile_columns, %{}, fn {col_key, _label}, acc ->
+      statuses = Map.get(@mobile_column_statuses, col_key, [])
       col_tasks = Enum.filter(standalone_tasks, &(&1.status in statuses))
 
       col_stacks =
@@ -2608,6 +2678,26 @@ defmodule PlatformWeb.TasksLive do
         |> Enum.sort_by(& &1.updated_at, {:desc, DateTime})
 
       Map.put(acc, col_key, merged)
+    end)
+  end
+
+  # Bucket %Stack{} entries into DESKTOP kanban columns (7-bucket shape,
+  # string-keyed for template parity with `@kanban_columns`). Returns a
+  # map of "<col_key>" => [%Stack{}, ...]. Tasks for the desktop board
+  # come from `Platform.Tasks.list_by_status/1` (assigned to `:columns`,
+  # atom-keyed); stacks live in this separate map so the template can
+  # merge them column-by-column without re-bucketing tasks too. The
+  # template sorts the merged list by `updated_at` desc inline.
+  defp group_desktop_stacks(stack_entries) do
+    Enum.reduce(@kanban_columns, %{}, fn {col_key, _label}, acc ->
+      statuses = Map.get(@desktop_column_statuses, col_key, [])
+
+      col_stacks =
+        stack_entries
+        |> Enum.map(&elem(&1, 0))
+        |> Enum.filter(&(&1.status in statuses))
+
+      Map.put(acc, col_key, col_stacks)
     end)
   end
 
@@ -2653,7 +2743,8 @@ defmodule PlatformWeb.TasksLive do
     |> assign(:all_tasks, tasks)
     |> assign(:stacks, stacks)
     |> assign(:stack_board_data, stack_board_data)
-    |> assign(:columns, group_by_column(tasks))
+    |> assign(:columns, Tasks.list_by_status(opts))
+    |> assign(:desktop_stacks_by_column, group_desktop_stacks(stack_entries))
     |> assign(:board_items, group_board_items(tasks, stack_entries))
     # Per ADR 0041 acceptance criterion 3, any list refetch collapses
     # ephemeral expansion. `refresh_board/1` is the common funnel for
@@ -2662,6 +2753,11 @@ defmodule PlatformWeb.TasksLive do
     |> assign(:expanded_stacks, MapSet.new())
     |> assign(:pending_plan_count, count_pending_plans(tasks))
     |> assign(:review_counts, pending_review_counts(tasks))
+    # Recompute the scope-rail counts whenever the board refreshes so the
+    # rail badges stay in sync with project/epic filter changes and PubSub
+    # board events. Cheap (single COUNT(*) today; will be one indexed
+    # GROUP BY org_id once MT/RBAC lands).
+    |> assign(:scope_counts, Tasks.count_by_scope())
     |> sync_review_request_subscriptions(tasks)
   end
 
@@ -3634,8 +3730,105 @@ defmodule PlatformWeb.TasksLive do
   defp mobile_stack_member_action_label(:plan_pending_review), do: {nil, nil}
   defp mobile_stack_member_action_label(reason), do: stack_member_action_label(reason)
 
+  # Bridge between the string-keyed `@kanban_columns` template iteration
+  # and the atom-keyed `:columns` map produced by
+  # `Platform.Tasks.list_by_status/1`. Returns the task list for the
+  # given column key (string), empty list if the column key doesn't map
+  # to a known kanban status atom. Wrapped in a function so the template
+  # doesn't have to deal with `String.to_existing_atom/1` inline.
+  defp tasks_in_column(columns, col_key) when is_map(columns) and is_binary(col_key) do
+    case Map.fetch(columns, String.to_existing_atom(col_key)) do
+      {:ok, list} -> list
+      :error -> []
+    end
+  rescue
+    ArgumentError -> []
+  end
+
+  defp tasks_in_column(_columns, _col_key), do: []
+
+  # Merge tasks (from `@columns`, atom-keyed) and stacks (from
+  # `@desktop_stacks_by_column`, string-keyed) into a single
+  # `updated_at`-desc list for one desktop kanban column. Mirrors the
+  # `group_board_items/2` per-column sort so stacks and standalone
+  # tasks interleave by recency (ADR 0041 acceptance criterion 1).
+  #
+  # Stack-member tasks (`stack_id != nil`) are suppressed here — they
+  # render only under their parent stack card, never as their own
+  # column entry. `Platform.Tasks.list_by_status/1` doesn't pre-filter
+  # stack members (it serves the wider task set), so the filter lives
+  # in this render-shaping layer.
+  defp desktop_column_items(columns, stacks_by_column, col_key) do
+    tasks =
+      columns
+      |> tasks_in_column(col_key)
+      |> Enum.filter(&is_nil(&1.stack_id))
+
+    stacks = Map.get(stacks_by_column || %{}, col_key, [])
+
+    (tasks ++ stacks)
+    |> Enum.sort_by(& &1.updated_at, {:desc, DateTime})
+  end
+
+  # Stage-3 wrapper: filters `desktop_column_items/3` through the active
+  # scope-rail selection. `:all` is the unfiltered passthrough. `:fabrikam`
+  # also returns the full list today because every task folds under :fabrikam
+  # until `tasks.org_id` lands (the same contract `count_by_scope/0`
+  # encodes). The other four scopes return an empty list today; once
+  # MT/RBAC ships this helper becomes the single seam to swap in real
+  # per-task scope filtering.
+  defp desktop_column_items_for_scope(columns, stacks_by_column, col_key, :all) do
+    desktop_column_items(columns, stacks_by_column, col_key)
+  end
+
+  defp desktop_column_items_for_scope(columns, stacks_by_column, col_key, :fabrikam) do
+    desktop_column_items(columns, stacks_by_column, col_key)
+  end
+
+  defp desktop_column_items_for_scope(_columns, _stacks_by_column, _col_key, scope)
+       when scope in [:soylent, :wayne_tech, :sxi, :paragon] do
+    []
+  end
+
+  defp desktop_column_items_for_scope(columns, stacks_by_column, col_key, _other) do
+    desktop_column_items(columns, stacks_by_column, col_key)
+  end
+
+  # Parse the inbound scope payload into the canonical atom. `"all"` is the
+  # rail's reset value; the five sub-org strings round-trip to their atoms
+  # via the explicit allowlist (Tasks.scope_keys/0). Returns `:error` for
+  # unknown values so the caller can ignore garbage without crashing.
+  defp parse_scope("all"), do: {:ok, :all}
+
+  defp parse_scope(scope) when is_binary(scope) do
+    Enum.find_value(Tasks.scope_keys(), :error, fn key ->
+      if Atom.to_string(key) == scope, do: {:ok, key}
+    end)
+  end
+
+  defp parse_scope(_), do: :error
+
+  # Stage-3 scope rail (2026-05-19): the "All" chip's badge count is the
+  # sum of every sub-org bucket. Reading from `@scope_counts` keeps the
+  # rail's denominator and per-chip counts wired to the same source of
+  # truth (today: all tasks fold under :fabrikam; future: real per-org
+  # buckets sum to the same total).
+  defp scope_count_total(scope_counts) when is_map(scope_counts) do
+    scope_counts
+    |> Map.values()
+    |> Enum.sum()
+  end
+
+  defp scope_count_total(_), do: 0
+
   defp column_header_class("backlog"), do: "text-base-content/60"
+  # Planning + blocked split out from Backlog in Stage 2 of Tasks v2.
+  # Planning leans on the neutral accent (work that hasn't started yet);
+  # blocked uses the error accent so it visually stands out — the whole
+  # point of the dedicated column is to surface things needing unblock.
+  defp column_header_class("planning"), do: "text-base-content/60"
   defp column_header_class("in_progress"), do: "text-info"
+  defp column_header_class("blocked"), do: "text-error"
   defp column_header_class("in_review"), do: "text-warning"
   defp column_header_class("deploying"), do: "text-secondary"
   defp column_header_class("done"), do: "text-success"

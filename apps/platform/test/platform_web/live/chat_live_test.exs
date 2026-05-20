@@ -131,8 +131,11 @@ defmodule PlatformWeb.ChatLiveTest do
     conn = authenticated_conn(conn)
     {:ok, _view, html} = live(conn, ~p"/chat")
 
-    # Shell layout and channel sidebar should be present
-    assert html =~ "Channels"
+    # Shell layout + sectioned channel sidebar should be present.
+    # The flat "Channels" header was replaced by per-section labels in
+    # chat plan v2 Stage 2 (Pinned / Direct Messages / sub-org sections);
+    # the DMs label is the cheapest stable hook on the desktop sidebar.
+    assert html =~ "Direct Messages"
     assert html =~ "Startup Suite"
   end
 

@@ -2,7 +2,10 @@ defmodule Platform.Tasks.TasksContextTest do
   @moduledoc "Integration tests for the Tasks context module."
   use Platform.DataCase, async: true
 
-  alias Platform.Tasks
+  import Ecto.Query, only: [from: 2]
+
+  alias Platform.{Repo, Tasks}
+  alias Platform.Tasks.Task
 
   describe "full hierarchy CRUD" do
     test "project → epic → task → plan → stage → validation" do
@@ -1165,6 +1168,315 @@ defmodule Platform.Tasks.TasksContextTest do
       # pending requests and (with no in_review status / pending plan)
       # returns false.
       refute Tasks.needs_human_action?(reloaded, nil)
+    end
+  end
+
+  describe "list_by_status/1 — 7-column kanban data shape (Tasks v2 stage 1)" do
+    # Stage 1 of task 019e389c-1f65 (revised 2026-05-19): a dedicated Planning
+    # bucket is added between Backlog and In Progress, and a dedicated Blocked
+    # bucket is added between In Progress and In Review. Cancelled tasks fold
+    # into the Done bucket; stack_pending is excluded. These tests pin the
+    # returned shape so Stage 2 (template wiring) and downstream consumers
+    # can rely on it.
+
+    setup do
+      {:ok, project} = Tasks.create_project(%{name: "Kanban Project"})
+      %{project: project}
+    end
+
+    test "returns exactly the 7 kanban-status keys, in canonical order", %{project: project} do
+      # Empty DB for this project — the shape must still expose all 7 keys.
+      _other_task = Tasks.create_task(%{project_id: project.id, title: "Untouched"})
+
+      buckets = Tasks.list_by_status()
+
+      assert Map.keys(buckets) |> Enum.sort() ==
+               Enum.sort([
+                 :backlog,
+                 :planning,
+                 :in_progress,
+                 :blocked,
+                 :in_review,
+                 :deploying,
+                 :done
+               ])
+
+      # kanban_status_keys/0 declares the canonical column order; assert the
+      # function itself agrees with the keys returned, so future reorderings
+      # update both in lockstep.
+      assert Tasks.kanban_status_keys() ==
+               [:backlog, :planning, :in_progress, :blocked, :in_review, :deploying, :done]
+    end
+
+    test "tasks with status :planning land under the :planning key", %{project: project} do
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Plan it",
+          status: "planning"
+        })
+
+      buckets = Tasks.list_by_status(project_id: project.id)
+
+      planning_ids = Enum.map(buckets.planning, & &1.id)
+      assert task.id in planning_ids
+
+      # And NOT under any other bucket — Stage 1's whole point is that
+      # `:planning` no longer leaks into the Backlog bucket.
+      for key <- [:backlog, :in_progress, :blocked, :in_review, :deploying, :done] do
+        other_ids = Enum.map(Map.fetch!(buckets, key), & &1.id)
+        refute task.id in other_ids, "expected planning task to be absent from #{inspect(key)}"
+      end
+    end
+
+    test "tasks with each non-planning status land under their respective key", %{
+      project: project
+    } do
+      {:ok, backlog} =
+        Tasks.create_task(%{project_id: project.id, title: "B", status: "backlog"})
+
+      {:ok, in_progress} =
+        Tasks.create_task(%{project_id: project.id, title: "I", status: "in_progress"})
+
+      {:ok, in_review} =
+        Tasks.create_task(%{project_id: project.id, title: "R", status: "in_review"})
+
+      {:ok, deploying} =
+        Tasks.create_task(%{project_id: project.id, title: "D", status: "deploying"})
+
+      {:ok, done} =
+        Tasks.create_task(%{project_id: project.id, title: "X", status: "done"})
+
+      buckets = Tasks.list_by_status(project_id: project.id)
+
+      assert Enum.map(buckets.backlog, & &1.id) == [backlog.id]
+      assert Enum.map(buckets.in_progress, & &1.id) == [in_progress.id]
+      assert Enum.map(buckets.in_review, & &1.id) == [in_review.id]
+      assert Enum.map(buckets.deploying, & &1.id) == [deploying.id]
+      assert Enum.map(buckets.done, & &1.id) == [done.id]
+      assert buckets.planning == []
+    end
+
+    test "an empty Planning bucket exists as [] so callers can iterate safely", %{
+      project: project
+    } do
+      # Seed only non-planning tasks. The :planning key still has to be
+      # present with an empty list so the rendering template can `for`-
+      # loop without `Map.get/3` nil-guards.
+      {:ok, _} = Tasks.create_task(%{project_id: project.id, title: "B", status: "backlog"})
+      {:ok, _} = Tasks.create_task(%{project_id: project.id, title: "I", status: "in_progress"})
+
+      buckets = Tasks.list_by_status(project_id: project.id)
+
+      assert Map.has_key?(buckets, :planning)
+      assert buckets.planning == []
+    end
+
+    test "within a bucket, tasks are ordered by updated_at descending", %{project: project} do
+      {:ok, older} =
+        Tasks.create_task(%{project_id: project.id, title: "Older", status: "planning"})
+
+      {:ok, newer} =
+        Tasks.create_task(%{project_id: project.id, title: "Newer", status: "planning"})
+
+      # Force a known temporal gap so we are not at the mercy of microsecond
+      # precision in the DB clock. Backdating `older.updated_at` is the
+      # simplest way to make the ordering deterministic without a `sleep`.
+      stale_time = DateTime.add(DateTime.utc_now(), -3600, :second) |> DateTime.truncate(:second)
+
+      from(t in Task, where: t.id == ^older.id)
+      |> Repo.update_all(set: [updated_at: stale_time])
+
+      buckets = Tasks.list_by_status(project_id: project.id)
+
+      ids = Enum.map(buckets.planning, & &1.id)
+      assert ids == [newer.id, older.id]
+    end
+
+    test "blocked tasks land under the :blocked key (own bucket)", %{project: project} do
+      # Marlowe's call 2026-05-19: blocked tasks get their own visible bucket
+      # so a human or AI agent can take action to unblock. Without this
+      # bucket they would be invisible on the board.
+      {:ok, blocked} =
+        Tasks.create_task(%{project_id: project.id, title: "Blocked", status: "blocked"})
+
+      buckets = Tasks.list_by_status(project_id: project.id)
+
+      blocked_ids = Enum.map(buckets.blocked, & &1.id)
+      assert blocked.id in blocked_ids
+
+      # And NOT under any other bucket — blocked is its own column, not a
+      # synonym for in_progress or in_review.
+      for key <- [:backlog, :planning, :in_progress, :in_review, :deploying, :done] do
+        other_ids = Enum.map(Map.fetch!(buckets, key), & &1.id)
+        refute blocked.id in other_ids, "expected blocked task to be absent from #{inspect(key)}"
+      end
+    end
+
+    test "cancelled tasks fold into the :done bucket", %{project: project} do
+      # Marlowe's call 2026-05-19: cancelled and done share the same
+      # "no further action required" semantic for the board, so they
+      # collapse into a single visual column rather than giving cancel
+      # its own. There is no :cancelled key in the returned shape.
+      {:ok, cancelled} =
+        Tasks.create_task(%{project_id: project.id, title: "Cancelled", status: "cancelled"})
+
+      buckets = Tasks.list_by_status(project_id: project.id)
+
+      done_ids = Enum.map(buckets.done, & &1.id)
+      assert cancelled.id in done_ids
+
+      # Defensive: there should be no `:cancelled` key at all in the shape.
+      refute Map.has_key?(buckets, :cancelled)
+
+      # And the cancelled task must not leak into any other bucket.
+      for key <- [:backlog, :planning, :in_progress, :blocked, :in_review, :deploying] do
+        other_ids = Enum.map(Map.fetch!(buckets, key), & &1.id)
+
+        refute cancelled.id in other_ids,
+               "expected cancelled task to be absent from #{inspect(key)}"
+      end
+    end
+
+    test "tasks with :stack_pending are excluded from the rendered shape", %{project: project} do
+      # `:stack_pending` represents pre-backlog stack queueing rather than
+      # active board state, so it gets no rendered column. Marlowe didn't
+      # speak to it in the 2026-05-19 revision; keeping the existing
+      # exclusion. Blocked and cancelled used to share this exclusion but
+      # are now bucketed (covered by the two tests above).
+      {:ok, stack_pending} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "StackPending",
+          status: "stack_pending"
+        })
+
+      buckets = Tasks.list_by_status(project_id: project.id)
+
+      all_ids =
+        buckets
+        |> Map.values()
+        |> List.flatten()
+        |> Enum.map(& &1.id)
+
+      refute stack_pending.id in all_ids
+    end
+
+    test "soft-deleted tasks are excluded from every bucket", %{project: project} do
+      {:ok, task} =
+        Tasks.create_task(%{project_id: project.id, title: "Going away", status: "planning"})
+
+      # Soft-delete via the supported context API to match production reads.
+      {:ok, _} = Tasks.soft_delete_task(task)
+
+      buckets = Tasks.list_by_status(project_id: project.id)
+      assert buckets.planning == []
+    end
+
+    test ":project_id option scopes results to one project", %{project: project} do
+      {:ok, other_project} = Tasks.create_project(%{name: "Other Project"})
+
+      {:ok, mine} =
+        Tasks.create_task(%{project_id: project.id, title: "Mine", status: "planning"})
+
+      {:ok, _theirs} =
+        Tasks.create_task(%{project_id: other_project.id, title: "Theirs", status: "planning"})
+
+      buckets = Tasks.list_by_status(project_id: project.id)
+
+      assert Enum.map(buckets.planning, & &1.id) == [mine.id]
+    end
+
+    test ":epic_id option scopes results to one epic", %{project: project} do
+      {:ok, epic} =
+        Tasks.create_epic(%{project_id: project.id, name: "Auth"})
+
+      {:ok, _other_epic} =
+        Tasks.create_epic(%{project_id: project.id, name: "Billing"})
+
+      {:ok, scoped} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          epic_id: epic.id,
+          title: "In epic",
+          status: "planning"
+        })
+
+      {:ok, _unscoped} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Out of epic",
+          status: "planning"
+        })
+
+      buckets = Tasks.list_by_status(epic_id: epic.id)
+
+      assert Enum.map(buckets.planning, & &1.id) == [scoped.id]
+    end
+  end
+
+  describe "count_by_scope/0 — sub-org scope counts (Tasks v2 stage 3)" do
+    # Stage 3 of task 019e389c-1f65-7018-bb54-e256ba29fd59 (2026-05-19): the
+    # desktop scope-filter rail pulls counts from `count_by_scope/0`. The
+    # today-state contract is to fold every non-deleted task under :fabrikam and
+    # return 0 for the other four sub-orgs, because `tasks` has no `org_id`
+    # column yet — once MT/RBAC lands the body of the helper becomes a real
+    # GROUP BY org_id but the public API stays unchanged.
+
+    setup do
+      {:ok, project} = Tasks.create_project(%{name: "Scope Project"})
+      %{project: project}
+    end
+
+    test "returns the five sub-org keys with non-negative integer counts", %{project: project} do
+      _t1 = Tasks.create_task(%{project_id: project.id, title: "Some task"})
+
+      counts = Tasks.count_by_scope()
+
+      assert Map.keys(counts) |> Enum.sort() ==
+               Enum.sort([:fabrikam, :soylent, :wayne_tech, :sxi, :paragon])
+
+      for {_key, value} <- counts do
+        assert is_integer(value) and value >= 0
+      end
+    end
+
+    test "scope_keys/0 matches the canonical PlatformWeb.Components.ScopePill list" do
+      # Single source of truth — if the rail's scope list ever drifts from
+      # the foundation component's list the rail can't render correctly.
+      assert Tasks.scope_keys() == PlatformWeb.Components.ScopePill.scopes()
+    end
+
+    test "today-state: all tasks fold under :fabrikam, other sub-orgs are 0", %{project: project} do
+      # Seed three tasks across different statuses. Since `tasks.org_id`
+      # doesn't exist yet, every one of them must land under :fabrikam.
+      {:ok, _} = Tasks.create_task(%{project_id: project.id, title: "B", status: "backlog"})
+      {:ok, _} = Tasks.create_task(%{project_id: project.id, title: "I", status: "in_progress"})
+      {:ok, _} = Tasks.create_task(%{project_id: project.id, title: "D", status: "done"})
+
+      counts = Tasks.count_by_scope()
+
+      assert counts.fabrikam >= 3
+      assert counts.soylent == 0
+      assert counts.wayne_tech == 0
+      assert counts.sxi == 0
+      assert counts.paragon == 0
+    end
+
+    test "soft-deleted tasks are excluded from the fabrikam count", %{project: project} do
+      {:ok, task} =
+        Tasks.create_task(%{project_id: project.id, title: "To delete", status: "backlog"})
+
+      before_count = Tasks.count_by_scope().fabrikam
+
+      # Soft-delete via the same deleted_at column the rest of the board reads.
+      task
+      |> Ecto.Changeset.change(deleted_at: DateTime.utc_now())
+      |> Repo.update!()
+
+      after_count = Tasks.count_by_scope().fabrikam
+
+      assert after_count == before_count - 1
     end
   end
 

@@ -11,6 +11,10 @@ defmodule Platform.Accounts.User do
     field(:oidc_sub, :string)
     field(:avatar_url, :string)
     field(:avatar_source, Ecto.Enum, values: [:oidc, :local, :generated])
+    # JSONB blob for lightweight per-user UI prefs (chat plan v2 Stage 3).
+    # Today: `chat_section_order` (list of sub-org slugs). See
+    # `Platform.Accounts.update_user_preference/3`.
+    field(:preferences, :map, default: %{})
 
     # MT/RBAC foundation (Plan 2 v3, task 019e3c4a). Users carry their
     # org memberships so authenticated request hot paths can preload
@@ -23,7 +27,7 @@ defmodule Platform.Accounts.User do
 
   def changeset(user, attrs) do
     user
-    |> cast(attrs, [:email, :name, :oidc_sub, :avatar_url, :avatar_source])
+    |> cast(attrs, [:email, :name, :oidc_sub, :avatar_url, :avatar_source, :preferences])
     |> validate_required([:email, :name, :oidc_sub])
     |> validate_format(:email, ~r/^[^\s]+@[^\s]+$/)
     |> unique_constraint(:email)

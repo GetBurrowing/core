@@ -35,8 +35,11 @@ defmodule PlatformWeb.PageControllerTest do
 
     {:ok, _view, html} = live(conn, ~p"/chat")
 
-    # Shell layout and channel sidebar should be present
+    # Shell layout and channel sidebar should be present. The sectioned
+    # rail (chat plan v2 Stage 2/3) replaced the flat "Channels" label
+    # with per-section headers — assert the rail's aria-label instead of
+    # the old top-level label that no longer exists.
     assert html =~ "Startup Suite"
-    assert html =~ "Channels"
+    assert html =~ ~s(aria-label="Channel sections")
   end
 end

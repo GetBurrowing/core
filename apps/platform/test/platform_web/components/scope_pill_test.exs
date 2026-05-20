@@ -41,34 +41,44 @@ defmodule PlatformWeb.Components.ScopePillTest do
     end
   end
 
-  describe "single-scope rendering — each scope renders correct color tokens" do
-    test "fabrikam renders with the fabrikam oklch values" do
+  describe "single-scope rendering — each scope renders the named utilities" do
+    test "fabrikam renders with the fabrikam named utility classes" do
       html = render_pill(%{scope: :fabrikam})
-      assert html =~ "oklch(72%_0.16_50/12%)"
+      assert html =~ "bg-fabrikam"
+      assert html =~ "text-fabrikam"
+      assert html =~ "border-fabrikam"
       assert html =~ ">Fabrikam</span>"
     end
 
-    test "soylent renders with the soylent oklch values" do
+    test "soylent renders with the soylent named utility classes" do
       html = render_pill(%{scope: :soylent})
-      assert html =~ "oklch(65%_0.20_295/12%)"
+      assert html =~ "bg-soylent"
+      assert html =~ "text-soylent"
+      assert html =~ "border-soylent"
       assert html =~ ">Soylent</span>"
     end
 
-    test "wayne_tech renders with the wayne_tech oklch values" do
+    test "wayne_tech renders with the wayne-tech named utility classes" do
       html = render_pill(%{scope: :wayne_tech})
-      assert html =~ "oklch(68%_0.15_240/12%)"
+      assert html =~ "bg-wayne-tech"
+      assert html =~ "text-wayne-tech"
+      assert html =~ "border-wayne-tech"
       assert html =~ ">Wayne-Tech</span>"
     end
 
-    test "sxi renders with the sxi oklch values" do
+    test "sxi renders with the sxi named utility classes" do
       html = render_pill(%{scope: :sxi})
-      assert html =~ "oklch(70%_0.15_162/12%)"
+      assert html =~ "bg-sxi"
+      assert html =~ "text-sxi"
+      assert html =~ "border-sxi"
       assert html =~ ">SXI</span>"
     end
 
-    test "paragon renders with the paragon oklch values" do
+    test "paragon renders with the paragon named utility classes" do
       html = render_pill(%{scope: :paragon})
-      assert html =~ "oklch(80%_0.16_95/12%)"
+      assert html =~ "bg-paragon"
+      assert html =~ "text-paragon"
+      assert html =~ "border-paragon"
       assert html =~ ">Paragon</span>"
     end
 
@@ -132,7 +142,7 @@ defmodule PlatformWeb.Components.ScopePillTest do
 
     test "has hover styling on the default (non-active) state" do
       html = render_pill(%{scope: :fabrikam})
-      assert html =~ "hover:bg-[oklch(72%_0.16_50/22%)]"
+      assert html =~ "hover:bg-fabrikam/22"
     end
   end
 
@@ -165,16 +175,22 @@ defmodule PlatformWeb.Components.ScopePillTest do
       assert html =~ "hero-check"
     end
 
-    test "applies the full-saturation background (not 12% color-mix)" do
+    test "applies the full-saturation background via bg-<scope>-active" do
       html = render_pill(%{scope: :fabrikam, active: true})
-      # Active = full-saturation bg, no `/12%` modifier on the bg utility.
-      assert html =~ "bg-[oklch(72%_0.16_50)]"
-      refute html =~ "bg-[oklch(72%_0.16_50/12%)]"
+      # Active state uses the named utility that bakes in full-saturation
+      # bg + contrast-safe text + outer-ring shadow.
+      assert html =~ "bg-fabrikam-active"
+      # Default-state bg utility must NOT appear on the active pill —
+      # the only `bg-fabrikam` substring on the active pill should be the
+      # active variant itself.
+      refute html =~ ~r{\bbg-fabrikam(?![-a-z/])}
     end
 
-    test "applies the soft outer ring via box-shadow utility" do
+    test "active utility carries the soft outer ring via box-shadow" do
+      # The shadow ring is baked into the `bg-<scope>-active` CSS rule in
+      # app.css; the rendered HTML only needs the class to be present.
       html = render_pill(%{scope: :fabrikam, active: true})
-      assert html =~ "shadow-[0_0_0_2px_oklch(72%_0.16_50/30%)]"
+      assert html =~ "bg-fabrikam-active"
     end
 
     test "aria-label flips to \"Currently filtered by {scope-name} scope\"" do
@@ -194,13 +210,15 @@ defmodule PlatformWeb.Components.ScopePillTest do
 
     test "does not apply hover style when active (active state is terminal)" do
       html = render_pill(%{scope: :fabrikam, active: true})
-      refute html =~ "hover:bg-[oklch(72%_0.16_50/22%)]"
+      refute html =~ "hover:bg-fabrikam/22"
     end
 
-    test "yellow-content scope (paragon) uses dark text for contrast on yellow fill" do
+    test "yellow-content scope (paragon) uses bg-paragon-active for dark-text contrast" do
       html = render_pill(%{scope: :paragon, active: true})
-      # Active paragon pill should use dark text (oklch(15%...)) on the yellow bg.
-      assert html =~ "text-[oklch(15%_0_0)]"
+      # Active paragon pill should use bg-paragon-active, whose CSS rule
+      # bakes in the dark-text contrast token (oklch(15% 0 0)) over the
+      # yellow fill. The rendered HTML only carries the class.
+      assert html =~ "bg-paragon-active"
     end
   end
 end

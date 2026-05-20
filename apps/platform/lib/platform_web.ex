@@ -83,6 +83,7 @@ defmodule PlatformWeb do
       import PlatformWeb.CoreComponents
       import PlatformWeb.AvatarComponents
       import PlatformWeb.Components.EmptyState
+      import PlatformWeb.Components.ScopePill
       import PlatformWeb.Components.Sheet
 
       # Common modules used in templates

@@ -23,6 +23,7 @@ defmodule PlatformWeb.ChatLive do
   import PlatformWeb.ChatLive.Partials
   import PlatformWeb.Components.ChatHelpers
   import PlatformWeb.Components.ChatMessage, only: [chat_message: 1, local_time: 1]
+  import PlatformWeb.Components.ScopePill, only: [scope_pill: 1]
 
   alias Phoenix.LiveView.JS
   alias Platform.Accounts
@@ -122,6 +123,19 @@ defmodule PlatformWeb.ChatLive do
       |> assign(:spaces, channels ++ dm_conversations)
       |> assign(:channels, channels)
       |> assign(:dm_conversations, dm_conversations)
+      |> assign(:channel_sections, channel_sections(channels, dm_conversations))
+      |> assign(:expanded_sections, MapSet.new())
+      # Per-user sub-org section order (chat plan v2 Stage 3). Hydrated from
+      # `users.preferences["chat_section_order"]` if set, otherwise defaults
+      # to alphabetical. Embedded/anonymous sessions (no real user row) get
+      # the default and stay there — `update_user_preference/3` no-ops on
+      # an unknown user_id, so DnD writes are simply ignored.
+      |> assign(:section_order, load_section_order(user_id))
+      # Sub-org scope filter (chat plan v2 Stage 4). nil = no filter, all
+      # sub-org sections render. An atom (one of @scope atoms) narrows the
+      # rail to the matching sub-org section only. Toggled by clicking a
+      # scope-pill via the `scope_filter` handler below.
+      |> assign(:scope_filter, nil)
       |> assign(:active_space, nil)
       |> assign(:current_participant, nil)
       |> assign(:mobile_browser_open, false)
@@ -347,6 +361,7 @@ defmodule PlatformWeb.ChatLive do
        |> assign(:channels, channels)
        |> assign(:dm_conversations, dm_convos)
        |> assign(:spaces, channels ++ dm_convos)
+       |> assign(:channel_sections, channel_sections(channels, dm_convos))
        |> clear_unread(space.id)}
     end
   end
@@ -368,6 +383,99 @@ defmodule PlatformWeb.ChatLive do
 
   def handle_event("close_mobile_browser", _params, socket) do
     {:noreply, assign(socket, :mobile_browser_open, false)}
+  end
+
+  # Sectioned-rail show-more toggle (chat plan v2 Stage 2). The rail caps each
+  # section at 8 visible rows by default; the `+ N more` button toggles the
+  # section key in/out of `@expanded_sections` (a MapSet of section keys).
+  # Section keys are stable strings: "pinned", "dms", "Paragon", "Soylent",
+  # "Fabrikam", "Wayne-Tech", "SXI".
+  def handle_event("toggle_section", %{"section" => key}, socket)
+      when is_binary(key) do
+    expanded = socket.assigns.expanded_sections || MapSet.new()
+
+    next =
+      if MapSet.member?(expanded, key) do
+        MapSet.delete(expanded, key)
+      else
+        MapSet.put(expanded, key)
+      end
+
+    {:noreply, assign(socket, :expanded_sections, next)}
+  end
+
+  # Scope filter (chat plan v2 Stage 4). Clicking a scope-pill in the
+  # sectioned rail (or the chat-header pill) narrows the visible sub-org
+  # sections to just that scope. Clicking the same scope again clears the
+  # filter (toggle semantics). Payload `scope` is the atom name as a
+  # string (e.g. "fabrikam", "wayne_tech"). Unknown values clear the filter.
+  #
+  # Future hook: Stack B (MT/RBAC) will replace the in-template filter
+  # with a `?scope=` query-string patch so the filter state is shareable.
+  # Until then we keep the state in-memory on the LV — no schema change
+  # required, and the per-tab volatility matches the rest of the rail's
+  # ephemeral UI state (e.g. `@expanded_sections`).
+  def handle_event("scope_filter", %{"scope" => raw}, socket) when is_binary(raw) do
+    incoming = parse_scope(raw)
+    current = socket.assigns.scope_filter
+
+    next =
+      cond do
+        is_nil(incoming) -> nil
+        current == incoming -> nil
+        true -> incoming
+      end
+
+    {:noreply, assign(socket, :scope_filter, next)}
+  end
+
+  # Sectioned-rail drag-reorder (chat plan v2 Stage 3). The JS hook
+  # (`section_reorder.js`) emits `{from: <slug>, to: <slug>}` after a drop
+  # onto another sub-org section. Reordering moves `from` into `to`'s slot
+  # in the list — the displaced section and everything after it shift one
+  # position toward `from`'s former slot (standard reorder semantics).
+  #
+  # Pinned + DMs are NOT reorderable — the JS hook drops their drag handle
+  # and the server-side guard rejects payloads whose slugs aren't sub-orgs,
+  # so this handler can assume both sides are valid bucket keys.
+  #
+  # Persistence: writes `users.preferences["chat_section_order"]` through
+  # `Platform.Accounts.update_user_preference/3`. Embedded/anonymous
+  # sessions silently fail-soft (`{:error, :not_found}`) since their
+  # generated user_id doesn't match a real users row — the in-memory
+  # reorder still flips so the rail feels responsive, but the next mount
+  # falls back to alphabetical (Marlowe's call: don't pollute the schema
+  # with throwaway anon prefs).
+  def handle_event("section_reordered", %{"from" => from_slug, "to" => to_slug}, socket)
+      when is_binary(from_slug) and is_binary(to_slug) do
+    current_order = socket.assigns.section_order || sub_org_order()
+    from_bucket = bucket_from_slug(from_slug)
+    to_bucket = bucket_from_slug(to_slug)
+
+    cond do
+      is_nil(from_bucket) or is_nil(to_bucket) ->
+        # Unknown slug (Pinned/DMs slugs aren't reorderable, and any other
+        # bogus payload is a client/version mismatch). Ignore silently.
+        {:noreply, socket}
+
+      true ->
+        new_order = compute_reorder(current_order, from_bucket, to_bucket)
+
+        if new_order == current_order do
+          {:noreply, socket}
+        else
+          # Best-effort persistence — anonymous sessions return :not_found
+          # but the in-memory assign still flips so the UI doesn't snap back.
+          _ =
+            Platform.Accounts.update_user_preference(
+              socket.assigns.user_id,
+              :chat_section_order,
+              new_order
+            )
+
+          {:noreply, assign(socket, :section_order, new_order)}
+        end
+    end
   end
 
   # Per-message actions sheet (3-dot menu on chat messages — task 019e0f29
@@ -872,7 +980,8 @@ defmodule PlatformWeb.ChatLive do
     {:noreply,
      socket
      |> assign(:channels, channels)
-     |> assign(:spaces, channels ++ dm_conversations)}
+     |> assign(:spaces, channels ++ dm_conversations)
+     |> assign(:channel_sections, channel_sections(channels, dm_conversations))}
   end
 
   def handle_info({:space_created, _space}, socket), do: {:noreply, socket}
@@ -1071,6 +1180,306 @@ defmodule PlatformWeb.ChatLive do
   defp blank?(nil), do: true
   defp blank?(value) when is_binary(value), do: String.trim(value) == ""
   defp blank?(_), do: true
+
+  # ── Section grouping (chat plan v2 Stage 1) ─────────────────────────────
+  #
+  # `channel_sections/2` derives the sidebar's sectioned rail shape from the
+  # already-loaded channel + DM lists. It is data-shape only; the template
+  # in Stage 2 will consume `@channel_sections` to render Pinned / DMs /
+  # sub-org section headers in a fixed order.
+  #
+  # Return shape:
+  #
+  #     %{
+  #       pinned:   [Space.t()],          # empty until channel-level pinning ships
+  #       dms:      [Space.t()],          # kind in ["dm", "group"]
+  #       sub_orgs: %{
+  #         "Paragon" => [Space.t()],
+  #         "Soylent" => [Space.t()],
+  #         "Fabrikam"     => [Space.t()],    # catch-all for anything not matching another bucket
+  #         "Wayne-Tech" => [Space.t()],
+  #         "SXI"      => [Space.t()]
+  #       }
+  #     }
+  #
+  # Classification precedence (highest wins):
+  #
+  #   1. Pinned non-DM channel → :pinned ONLY (NOT duplicated in its sub-org
+  #      bucket). The chat-rail v2 spec says "Pinned + DMs locked at top, then
+  #      sub-org sections" — we read "locked at top" as "shown above the
+  #      sub-orgs," not "appears twice." If product later wants duplication,
+  #      flip the `Enum.reject(channels, ...)` line below to keep the channel
+  #      in both buckets.
+  #   2. DM (`kind in ["dm", "group"]`) → :dms.
+  #   3. Channel slug matches a sub-org → that bucket.
+  #   4. Anything else → "Fabrikam" (today's default tenant).
+  #
+  # Sub-org bucket keys are stable string keys; the map preserves all 5 keys
+  # even when buckets are empty so Stage 2's template can render section
+  # headers without conditionals. Alphabetical render order is the template's
+  # responsibility (iterate over `@sub_org_order` or `Map.keys/1 |> Enum.sort/1`).
+  #
+  # Post-MT/RBAC seam: the `channel_scope/1` helper today does a name-match
+  # against the hardcoded sub-org slug list. After multi-tenant + RBAC ship,
+  # swap its body for `Platform.Orgs.slug(channel.org_id)` and the rest of
+  # this module keeps working unchanged.
+  #
+  # The `pinned_channel_ids` parameter is a hook for future channel-level
+  # pinning (no schema today). Callers pass an empty MapSet; once the
+  # `chat_pinned_channels` table or `metadata["pinned_by"]` convention lands,
+  # the caller can compute a MapSet of pinned ids and pass it here.
+  @sub_org_buckets ["Paragon", "Soylent", "Fabrikam", "Wayne-Tech", "SXI"]
+
+  @doc """
+  Group the user's channel + DM list into the sectioned-rail shape consumed
+  by the chat sidebar (Stage 1 of chat plan v2).
+
+  See module-level comment for the return shape, classification precedence,
+  and the post-MT/RBAC migration seam (`channel_scope/1`).
+  """
+  @spec channel_sections([Platform.Chat.Space.t()], [Platform.Chat.Space.t()]) :: %{
+          pinned: [Platform.Chat.Space.t()],
+          dms: [Platform.Chat.Space.t()],
+          sub_orgs: %{String.t() => [Platform.Chat.Space.t()]}
+        }
+  def channel_sections(channels, dm_conversations, pinned_channel_ids \\ MapSet.new())
+      when is_list(channels) and is_list(dm_conversations) do
+    {pinned, unpinned_channels} =
+      Enum.split_with(channels, fn ch -> MapSet.member?(pinned_channel_ids, ch.id) end)
+
+    empty_buckets = Map.new(@sub_org_buckets, fn slug -> {slug, []} end)
+
+    sub_orgs =
+      unpinned_channels
+      |> Enum.reduce(empty_buckets, fn channel, acc ->
+        bucket = channel_scope(channel)
+        Map.update(acc, bucket, [channel], fn existing -> existing ++ [channel] end)
+      end)
+
+    %{
+      pinned: pinned,
+      dms: dm_conversations,
+      sub_orgs: sub_orgs
+    }
+  end
+
+  # Today: exact (case-insensitive) match on channel slug against the
+  # hardcoded sub-org list, falling back to "Fabrikam" (the default tenant).
+  #
+  # Post-MT/RBAC: replace body with `Platform.Orgs.slug(channel.org_id)`
+  # (or whatever the new lookup is called). Until then this is the single
+  # point of change for sub-org assignment.
+  @sub_org_slug_to_bucket %{
+    "paragon" => "Paragon",
+    "soylent" => "Soylent",
+    "fabrikam" => "Fabrikam",
+    "wayne-tech" => "Wayne-Tech",
+    "sxi" => "SXI"
+  }
+
+  defp channel_scope(%{slug: slug}) when is_binary(slug) do
+    Map.get(@sub_org_slug_to_bucket, String.downcase(slug), "Fabrikam")
+  end
+
+  defp channel_scope(_channel), do: "Fabrikam"
+
+  # ── Sectioned-rail render helpers (chat plan v2 Stage 2) ───────────────
+  #
+  # The sub-org rail renders in fixed alphabetical order regardless of the
+  # `channel_sections/3` return-map iteration order. Exposed as a public
+  # helper so the template can iterate it without re-sorting on every render.
+  @doc """
+  The ordered list of sub-org bucket keys, alphabetical by display name.
+
+  Used by the sectioned-rail template to render sub-org sections in a
+  stable, predictable order. Note that `pinned` and `dms` are NOT sub-org
+  buckets — they're rendered separately above the sub-orgs.
+  """
+  @spec sub_org_order() :: [String.t()]
+  def sub_org_order, do: Enum.sort(@sub_org_buckets)
+
+  # ── Per-user section order (chat plan v2 Stage 3) ──────────────────────
+  #
+  # `load_section_order/1` reads `users.preferences["chat_section_order"]`
+  # and returns the saved order if valid (must be a permutation of the
+  # full @sub_org_buckets set). Anything malformed — missing key, wrong
+  # arity, unknown slugs, duplicates — falls back to alphabetical so a
+  # poisoned preference can't break the rail.
+  @doc """
+  Hydrate the user's saved sub-org section order from preferences.
+
+  Returns the saved list when it's a complete permutation of
+  `sub_org_order/0`; falls back to alphabetical otherwise (including for
+  anonymous user_ids that don't match a real users row).
+  """
+  @spec load_section_order(binary() | nil) :: [String.t()]
+  def load_section_order(nil), do: sub_org_order()
+
+  def load_section_order(user_id) when is_binary(user_id) do
+    prefs = Platform.Accounts.get_user_preferences(user_id)
+    saved = Map.get(prefs, "chat_section_order")
+
+    if valid_section_order?(saved) do
+      saved
+    else
+      sub_org_order()
+    end
+  end
+
+  # Defensive validation — a saved order is only honored when it's an
+  # exact-permutation match of the current sub_org bucket list. This means
+  # adding a new bucket in the future invalidates everyone's saved order
+  # (they fall back to alphabetical until they reorder again). Acceptable
+  # cost vs. quietly hiding a new bucket from existing users.
+  defp valid_section_order?(saved) when is_list(saved) do
+    canonical = sub_org_order()
+
+    length(saved) == length(canonical) and
+      Enum.all?(saved, &is_binary/1) and
+      Enum.sort(saved) == canonical
+  end
+
+  defp valid_section_order?(_), do: false
+
+  @doc """
+  Move `from` to `to`'s slot in `order`. The displaced item and everything
+  between shifts one position toward `from`'s former slot — standard
+  drag-reorder semantics.
+
+  Returns the input list unchanged when:
+    * `from == to` (drop on self)
+    * either slug is absent from `order` (defensive — JS shouldn't emit
+      this, but a stale render could)
+  """
+  @spec compute_reorder([String.t()], String.t(), String.t()) :: [String.t()]
+  def compute_reorder(order, from, to)
+      when is_list(order) and is_binary(from) and is_binary(to) do
+    cond do
+      from == to ->
+        order
+
+      from not in order or to not in order ->
+        order
+
+      true ->
+        without_from = Enum.reject(order, &(&1 == from))
+        target_idx = Enum.find_index(without_from, &(&1 == to))
+        List.insert_at(without_from, target_idx, from)
+    end
+  end
+
+  # Mapping from `channel_sections/3` string bucket keys to the atom values
+  # the `scope_pill` component takes. Called from the colocated heex
+  # template, hence defp + same-module visibility.
+  defp sub_org_scope_atom("Paragon"), do: :paragon
+  defp sub_org_scope_atom("Soylent"), do: :soylent
+  defp sub_org_scope_atom("Fabrikam"), do: :fabrikam
+  defp sub_org_scope_atom("Wayne-Tech"), do: :wayne_tech
+  defp sub_org_scope_atom("SXI"), do: :sxi
+
+  # Map a Space (or anything with a binary `:slug`) to its scope atom for
+  # the `scope_pill` component. Channels with no recognized slug fall back
+  # to `:fabrikam` (the default tenant — same precedence as `channel_scope/1`).
+  # DMs/groups (`kind in ["dm", "group"]`) return `nil` so the chat-header
+  # / active-row caller can suppress the pill on conversations that have
+  # no org-scope to label.
+  @doc false
+  @spec space_scope_atom(map() | nil) :: atom() | nil
+  def space_scope_atom(%{kind: kind}) when kind in ["dm", "group"], do: nil
+
+  def space_scope_atom(%{slug: slug}) when is_binary(slug) do
+    slug
+    |> String.downcase()
+    |> case do
+      "paragon" -> :paragon
+      "soylent" -> :soylent
+      "fabrikam" -> :fabrikam
+      "wayne-tech" -> :wayne_tech
+      "sxi" -> :sxi
+      _ -> :fabrikam
+    end
+  end
+
+  def space_scope_atom(_), do: nil
+
+  # Parse the inbound `scope_filter` payload's string scope name back into
+  # an atom. Returns nil for any value not in the canonical 5-scope set so
+  # a stale/malformed client payload silently clears the filter rather than
+  # crashing the LV. Whitelist (no String.to_existing_atom) keeps the surface
+  # impervious to atom-table flooding.
+  @doc false
+  @spec parse_scope(String.t()) :: atom() | nil
+  def parse_scope("paragon"), do: :paragon
+  def parse_scope("soylent"), do: :soylent
+  def parse_scope("fabrikam"), do: :fabrikam
+  def parse_scope("wayne_tech"), do: :wayne_tech
+  def parse_scope("sxi"), do: :sxi
+  def parse_scope(_), do: nil
+
+  # Inverse of `sub_org_scope_atom/1` — bucket-display-name from scope
+  # atom. Used by the template to gate sub-org section rendering when
+  # `@scope_filter` is set (Stage 4).
+  @doc false
+  @spec bucket_for_scope(atom()) :: String.t() | nil
+  def bucket_for_scope(:paragon), do: "Paragon"
+  def bucket_for_scope(:soylent), do: "Soylent"
+  def bucket_for_scope(:fabrikam), do: "Fabrikam"
+  def bucket_for_scope(:wayne_tech), do: "Wayne-Tech"
+  def bucket_for_scope(:sxi), do: "SXI"
+  def bucket_for_scope(_), do: nil
+
+  # Bucket display name → slug (lowercased; "Wayne-Tech" → "wayne-tech"). Used
+  # by the template to set `data-section-slug` on sub-org sections; the
+  # SectionReorder hook reads that attribute and sends slugs in its
+  # `section_reordered` payload. Slugs are the stable wire-format because
+  # they round-trip cleanly through HTML attributes and JSON keys.
+  defp section_slug("Wayne-Tech"), do: "wayne-tech"
+  defp section_slug(bucket) when is_binary(bucket), do: String.downcase(bucket)
+
+  # Inverse of `section_slug/1`. Used at the `section_reordered` event
+  # boundary to translate the JS hook's slug payload back to the bucket
+  # display name used everywhere else in this module. Reuses the existing
+  # `@sub_org_slug_to_bucket` mapping that was already needed by
+  # `channel_scope/1` for the classification pass.
+  @doc false
+  @spec bucket_from_slug(String.t()) :: String.t() | nil
+  def bucket_from_slug(slug) when is_binary(slug) do
+    Map.get(@sub_org_slug_to_bucket, String.downcase(slug))
+  end
+
+  def bucket_from_slug(_), do: nil
+
+  # Default visible row cap per section. Sections with more rows than this
+  # cap render the surplus behind a `+ N more` toggle.
+  @section_visible_cap 8
+
+  @doc """
+  Default visible-row cap per sectioned-rail section (8). Sections with more
+  rows than the cap collapse the surplus behind a `+ N more` toggle whose
+  state lives in `@expanded_sections`.
+  """
+  @spec section_visible_cap() :: pos_integer()
+  def section_visible_cap, do: @section_visible_cap
+
+  @doc """
+  Split a section's spaces into the always-visible prefix and the hidden
+  surplus, given the current `expanded_sections` MapSet and the section key.
+
+  Returns `{visible, hidden}` where:
+    * if the section is expanded (key in MapSet) → `{all, []}`
+    * if the section has ≤ cap rows → `{all, []}`
+    * otherwise → `{first 8, rest}`
+  """
+  @spec split_section([Platform.Chat.Space.t()], MapSet.t(String.t()), String.t()) ::
+          {[Platform.Chat.Space.t()], [Platform.Chat.Space.t()]}
+  def split_section(spaces, expanded_sections, key)
+      when is_list(spaces) and is_binary(key) do
+    cond do
+      MapSet.member?(expanded_sections, key) -> {spaces, []}
+      length(spaces) <= @section_visible_cap -> {spaces, []}
+      true -> Enum.split(spaces, @section_visible_cap)
+    end
+  end
 
   @impl true
   def terminate(_reason, socket) do

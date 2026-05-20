@@ -149,6 +149,117 @@
 }
 
 /* ──────────────────────────────────────────────────────
+   Sub-org scope colors — the canonical design-system mapping for the 5
+   sub-org scopes (Fabrikam, Soylent, Wayne-Tech, SXI, Paragon). These utility
+   classes replace the inline `bg-[oklch(...)]` arbitrary-value classes
+   that scope_pill.ex used to carry, and are referenced by `Platform.Tenancy.scope_color/1`.
+
+   Each scope ships a coordinated set of utilities:
+
+     - text-<slug>          — full-saturation text color (e.g. labels).
+     - bg-<slug>            — 12% color-mix background (chip default state).
+     - bg-<slug>-active     — full-saturation background (chip active state).
+     - border-<slug>        — 30% color-mix border (chip default state).
+     - bg-<slug>-dot        — full-saturation background, used for the
+                              redundant-signal-beyond-color dot.
+     - hover:bg-<slug>/22   — 22% color-mix hover state (chip default state).
+
+   Active-state pills need a contrast-safe text color over the
+   full-saturation fill; Fabrikam / SXI / Paragon take the dark text
+   token, Soylent / Wayne-Tech take the light text token. This mirrors
+   the existing logic in scope_pill.ex.
+
+   oklch literals are byte-identical to the values previously inlined in
+   scope_pill.ex (Stage 2 of Working surfaces plan v4). See
+   `Platform.Tenancy.scope_color/1` for the slug → class mapping.
+   ────────────────────────────────────────────────────── */
+@layer utilities {
+  /* ─ fabrikam ─ orange ─ */
+  .text-fabrikam { color: oklch(72% 0.16 50); }
+  .bg-fabrikam { background-color: oklch(72% 0.16 50 / 12%); }
+  .bg-fabrikam-active { background-color: oklch(72% 0.16 50); color: oklch(15% 0 0); box-shadow: 0 0 0 2px oklch(72% 0.16 50 / 30%); }
+  .border-fabrikam { border-color: oklch(72% 0.16 50 / 30%); }
+  .bg-fabrikam-dot { background-color: oklch(72% 0.16 50); }
+  .hover\:bg-fabrikam\/22:hover { background-color: oklch(72% 0.16 50 / 22%); }
+
+  /* ─ soylent ─ purple ─ */
+  .text-soylent { color: oklch(65% 0.20 295); }
+  .bg-soylent { background-color: oklch(65% 0.20 295 / 12%); }
+  .bg-soylent-active { background-color: oklch(65% 0.20 295); color: oklch(98% 0 0); box-shadow: 0 0 0 2px oklch(65% 0.20 295 / 30%); }
+  .border-soylent { border-color: oklch(65% 0.20 295 / 30%); }
+  .bg-soylent-dot { background-color: oklch(65% 0.20 295); }
+  .hover\:bg-soylent\/22:hover { background-color: oklch(65% 0.20 295 / 22%); }
+
+  /* ─ wayne-tech ─ blue ─ */
+  .text-wayne-tech { color: oklch(68% 0.15 240); }
+  .bg-wayne-tech { background-color: oklch(68% 0.15 240 / 12%); }
+  .bg-wayne-tech-active { background-color: oklch(68% 0.15 240); color: oklch(98% 0 0); box-shadow: 0 0 0 2px oklch(68% 0.15 240 / 30%); }
+  .border-wayne-tech { border-color: oklch(68% 0.15 240 / 30%); }
+  .bg-wayne-tech-dot { background-color: oklch(68% 0.15 240); }
+  .hover\:bg-wayne-tech\/22:hover { background-color: oklch(68% 0.15 240 / 22%); }
+
+  /* ─ sxi ─ green ─ */
+  .text-sxi { color: oklch(70% 0.15 162); }
+  .bg-sxi { background-color: oklch(70% 0.15 162 / 12%); }
+  .bg-sxi-active { background-color: oklch(70% 0.15 162); color: oklch(15% 0 0); box-shadow: 0 0 0 2px oklch(70% 0.15 162 / 30%); }
+  .border-sxi { border-color: oklch(70% 0.15 162 / 30%); }
+  .bg-sxi-dot { background-color: oklch(70% 0.15 162); }
+  .hover\:bg-sxi\/22:hover { background-color: oklch(70% 0.15 162 / 22%); }
+
+  /* ─ paragon ─ yellow ─ */
+  .text-paragon { color: oklch(80% 0.16 95); }
+  .bg-paragon { background-color: oklch(80% 0.16 95 / 12%); }
+  .bg-paragon-active { background-color: oklch(80% 0.16 95); color: oklch(15% 0 0); box-shadow: 0 0 0 2px oklch(80% 0.16 95 / 30%); }
+  .border-paragon { border-color: oklch(80% 0.16 95 / 30%); }
+  .bg-paragon-dot { background-color: oklch(80% 0.16 95); }
+  .hover\:bg-paragon\/22:hover { background-color: oklch(80% 0.16 95 / 22%); }
+}
+
+/* ──────────────────────────────────────────────────────
+   Inheritance pill — the shared primitive for surfacing where a value
+   comes from (Skills, Context, Memory, Prompts, …). Three visual states:
+
+     - .inheritance-pill--inherited  — muted, no accent.
+     - .inheritance-pill--defined    — accent matching sub-org scope.
+     - .inheritance-pill--overridden — accent + bold + "shadowed parent"
+                                       indicator (subtle outline).
+
+   Reads from `Platform.Tenancy.effective_value/4`. See
+   `PlatformWeb.Components.InheritancePill` for the component API.
+   ────────────────────────────────────────────────────── */
+@layer components {
+  .inheritance-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
+    padding: 0.125rem 0.5rem;
+    border-radius: 999px;
+    font-size: 0.75rem;
+    font-weight: 500;
+    line-height: 1;
+    border: 1px solid transparent;
+    transition: background-color 150ms ease, border-color 150ms ease;
+  }
+
+  .inheritance-pill--inherited {
+    color: var(--color-base-content);
+    opacity: 0.6;
+    background-color: var(--color-base-200);
+  }
+
+  .inheritance-pill--defined {
+    font-weight: 600;
+  }
+
+  .inheritance-pill--overridden {
+    font-weight: 700;
+    /* Subtle "shadowed parent" indicator — outline echoes the override
+       relationship without screaming for attention. */
+    box-shadow: inset 0 0 0 1px currentColor;
+  }
+}
+
+/* ──────────────────────────────────────────────────────
    Button loading state — visualize phx-click-loading / phx-submit-loading.
    Anchored to audit 1B-A11Y-6. See docs/design-system/02-components.md §2.1.
 
@@ -2578,5 +2689,103 @@ body, .font-fabrikam, * {
   [data-gallery-cell] > .meeting-video-tile {
     width: 100%;
     height: auto;
+  }
+}
+
+/* ── Sectioned channel rail (chat plan v2 Stage 2) ─────────────────────
+   Per-section container + header + row affordances. The rail is desktop
+   only; mobile uses the existing flat browser overlay (see
+   chat_live.html.heex `mobile_browser_open` block).
+
+   The drag-handle (`.channel-section-drag-handle`) is opacity-0 by
+   default and lifts to opacity-100 on `group-hover` of the parent
+   `<section>` — Stage 3 will wire the actual reorder DnD. Today the
+   handle is a static `☰` glyph; it exists in the DOM so screen-reader
+   structure is stable across stages.
+   --------------------------------------------------------------------- */
+@layer components {
+  .channel-section {
+    @apply px-2 py-2 border-b border-base-300/60;
+  }
+
+  .channel-section-header {
+    @apply flex items-center gap-2 px-2 pb-1.5;
+  }
+
+  .channel-section-label {
+    @apply text-xs font-semibold uppercase tracking-widest text-base-content/60;
+  }
+
+  /* Drag handle — invisible until the parent .channel-section is hovered.
+     Tailwind's `group-hover:` matches the `group` class on the section. */
+  .channel-section-drag-handle {
+    @apply ml-auto cursor-grab opacity-0 text-base-content/40 transition-opacity duration-150 group-hover:opacity-100;
+  }
+
+  .channel-section-drag-handle:active {
+    cursor: grabbing;
+  }
+
+  /* Drag-in-progress state on the source section (chat plan v2 Stage 3).
+     Fades the section while the user drags so the drop target reads as
+     the active surface. */
+  .channel-section--dragging {
+    @apply opacity-50;
+  }
+
+  /* Drop-target highlight (chat plan v2 Stage 3). A primary-color border
+     on the top edge of the hovered section signals "drop above here"
+     without re-laying out the rail. */
+  .channel-section--drop-target {
+    @apply border-t-2 border-t-primary;
+  }
+
+  /* Empty-state hint inside a sub-org section that has no channels yet. */
+  .channel-section-empty {
+    @apply px-2 py-1 text-xs italic text-base-content/40 leading-snug;
+  }
+
+  /* `+ N more` show-more toggle. Sits flush left under the visible rows. */
+  .channel-section-show-more {
+    @apply px-3 py-1 mx-1 text-xs font-medium text-base-content/60 hover:text-primary transition-colors;
+  }
+
+  /* Single channel / DM row — shared across all sections so we don't
+     introduce a parallel row style. Active state mirrors the previous
+     flat-list treatment. */
+  .channel-row {
+    @apply flex items-center gap-2 px-3 py-1.5 mx-1 text-sm rounded transition-colors hover:bg-base-300;
+  }
+
+  .channel-row--active {
+    @apply bg-primary/10 text-primary font-semibold border-l-2 border-primary;
+  }
+
+  /* Unread-count pill on a channel row. Identical sizing to the previous
+     inline classes but lifted out so we don't repeat the long utility
+     stack at every row. */
+  .channel-row-unread-pill {
+    @apply ml-1 flex-shrink-0 min-w-[1.125rem] h-[1.125rem] rounded-full bg-primary text-primary-content text-[0.6rem] font-bold flex items-center justify-center px-1 leading-none;
+  }
+
+  /* Active-row scope-pill wrapper (chat plan v2 Stage 4). Pinned to the
+     right side of the row, just before the unread-count pill. Inherits
+     `flex-shrink-0` so the channel-name truncates instead of the pill. */
+  .channel-row-scope-pill {
+    @apply ml-1 flex-shrink-0 inline-flex items-center;
+  }
+
+  /* Chat-header scope-pill — prominent size variant (chat plan v2 Stage 4).
+     The inner <.scope_pill> renders a button at xs size by default; the
+     wrapper bumps the pill to sm, gives it a softer ml gap from the
+     channel name, and a subtle ring so it reads as the chat-level
+     filter affordance rather than blending into the title. */
+  .chat-header-scope-pill {
+    @apply ml-2 inline-flex items-center;
+  }
+
+  .chat-header-scope-pill button[phx-click="scope_filter"],
+  .chat-header-scope-pill > span {
+    @apply px-2.5 py-1 text-sm gap-2;
   }
 }

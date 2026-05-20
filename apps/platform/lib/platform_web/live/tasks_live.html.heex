@@ -165,7 +165,7 @@
     <div
       :if={!(@show_detail && @selected_task)}
       id="tasks-mobile-list"
-      class="md:hidden flex flex-1 flex-col overflow-hidden"
+      class="lg:hidden flex flex-1 flex-col overflow-hidden"
     >
       <%!-- T6 status-filter pill nav (PR #328). Counts are derived from
            `@board_items` so stack cards contribute to the per-pill
@@ -493,18 +493,103 @@
       </div>
     </div>
 
-    <%!-- Kanban board (desktop). Hidden on mobile in favor of the
-         section-grouped list above. --%>
+    <%!-- Scope-filter rail (desktop, Stage 3 of Tasks v2 — 2026-05-19).
+         Five sub-org chips + an "All" reset, sitting above the kanban
+         board on lg+ viewports. Mobile keeps the 5-pill status nav
+         above — the rail is `hidden lg:flex` only, per the
+         responsive-scope contract.
+
+         Each sub-org chip uses the foundation `<.scope_pill />`
+         primitive (futureproof seam for the MT/RBAC stack
+         019e3c49). Counts come from `@scope_counts` populated by
+         `Platform.Tasks.count_by_scope/0` — today-state every task
+         folds under :fabrikam, so the other four show 0 until
+         `tasks.org_id` lands.
+
+         Click semantics: the "All" chip dispatches `scope_filter`
+         with `phx-value-scope="all"`; sub-org chips dispatch it with
+         their scope atom serialized to a string (`"fabrikam"`,
+         `"soylent"`, etc.). The server narrows the kanban render via
+         `desktop_column_items_for_scope/4`. --%>
+    <nav
+      id="tasks-scope-rail"
+      aria-label="Filter tasks by sub-org scope"
+      class="hidden lg:flex items-center gap-2 overflow-x-auto border-b border-base-content/10 px-4 py-2"
+    >
+      <button
+        type="button"
+        phx-click="scope_filter"
+        phx-value-scope="all"
+        aria-pressed={@scope_filter == :all}
+        data-scope-chip="all"
+        data-active={to_string(@scope_filter == :all)}
+        class={[
+          "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-medium leading-none transition-colors focus-visible-ring",
+          if(@scope_filter == :all,
+            do:
+              "bg-base-content text-base-100 border-base-content shadow-[0_0_0_2px_oklch(70%_0_0/30%)]",
+            else: "bg-base-200 text-base-content/70 border-base-content/15 hover:bg-base-300"
+          )
+        ]}
+      >
+        <span class="scope-pill-label">All</span>
+        <span class={[
+          "inline-flex items-center justify-center min-w-[18px] h-[18px] rounded-full text-[10px] font-bold tabular-nums",
+          if(@scope_filter == :all,
+            do: "bg-base-100/20 text-base-100",
+            else: "bg-base-300 text-base-content/70"
+          )
+        ]}>
+          {scope_count_total(@scope_counts)}
+        </span>
+      </button>
+      <span
+        :for={scope <- Platform.Tasks.scope_keys()}
+        data-scope-chip={Atom.to_string(scope)}
+        data-active={to_string(@scope_filter == scope)}
+        class="inline-flex items-center gap-1"
+      >
+        <.scope_pill scope={scope} active={@scope_filter == scope} />
+        <span class={[
+          "inline-flex items-center justify-center min-w-[18px] h-[18px] -ml-0.5 rounded-full text-[10px] font-bold tabular-nums",
+          if(@scope_filter == scope,
+            do: "bg-base-content/15 text-base-content",
+            else: "bg-base-200 text-base-content/60"
+          )
+        ]}>
+          {Map.get(@scope_counts, scope, 0)}
+        </span>
+      </span>
+    </nav>
+
+    <%!-- Kanban board (desktop, Stage 2 of Tasks v2 — 2026-05-19).
+         7 columns: Backlog / Planning / In Progress / Blocked /
+         In Review / Deploying / Done. Hidden below `lg` (1024px) — the
+         pill-filtered mobile list above covers tablet + phone since 7
+         columns don't fit comfortably under 1280px. At lg-1024 the
+         board overflows horizontally; the user scrolls inside the
+         board container.
+
+         Items per column come from `desktop_column_items/3` which
+         merges `@columns` (task-only, atom-keyed from
+         `Platform.Tasks.list_by_status/1`) with
+         `@desktop_stacks_by_column` (stack-only, string-keyed),
+         interleaved by `updated_at` desc per ADR 0041.
+
+         Stage 3 (2026-05-19): `desktop_column_items_for_scope/4`
+         wraps `desktop_column_items/3` with the active scope-rail
+         selection — `:all` and `:fabrikam` are passthrough today; the
+         other four scopes render empty until `tasks.org_id` lands. --%>
     <div
       id="kanban-board"
       phx-hook="KanbanDragDrop"
-      class="hidden md:flex flex-1 gap-4 overflow-x-auto p-4"
+      class="hidden lg:flex flex-1 gap-3 overflow-x-auto p-4"
     >
       <div
         :for={{col_key, col_label} <- @kanban_columns}
         id={"column-#{col_key}"}
         data-column={col_key}
-        class="flex w-72 min-w-[18rem] flex-shrink-0 flex-col rounded-box bg-base-200/50 transition-all duration-150"
+        class="flex w-56 min-w-[14rem] flex-shrink-0 flex-col rounded-box bg-base-200/50 transition-all duration-150"
       >
         <%!-- Column header --%>
         <div class="flex items-center justify-between px-3 py-2">
@@ -512,7 +597,14 @@
             {col_label}
           </h2>
           <span class="badge badge-ghost badge-xs">
-            {length(Map.get(@board_items, col_key, []))}
+            {length(
+              desktop_column_items_for_scope(
+                @columns,
+                @desktop_stacks_by_column,
+                col_key,
+                @scope_filter
+              )
+            )}
           </span>
         </div>
 
@@ -524,7 +616,7 @@
              only tasks carry `draggable="true"` and the KanbanDragDrop
              hook's drag handlers. --%>
         <div class="flex flex-1 flex-col gap-2 overflow-y-auto px-2 pb-2">
-          <%= for item <- Map.get(@board_items, col_key, []) do %>
+          <%= for item <- desktop_column_items_for_scope(@columns, @desktop_stacks_by_column, col_key, @scope_filter) do %>
             <%= case item.__struct__ do %>
               <% Platform.Tasks.Stack -> %>
                 <% board_data =
@@ -843,7 +935,17 @@
                is a separate concern that doesn't exist on this surface
                (no board-level @all_tasks == [] check); add later if Marlowe
                wants the V3 voice on the kanban-empty case. --%>
-          <.empty_state :if={Map.get(@board_items, col_key, []) == []} variant={:minimal}>
+          <.empty_state
+            :if={
+              desktop_column_items_for_scope(
+                @columns,
+                @desktop_stacks_by_column,
+                col_key,
+                @scope_filter
+              ) == []
+            }
+            variant={:minimal}
+          >
             <:body>No tasks</:body>
           </.empty_state>
         </div>

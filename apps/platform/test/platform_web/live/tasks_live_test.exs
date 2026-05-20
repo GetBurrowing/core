@@ -508,17 +508,57 @@ defmodule PlatformWeb.TasksLiveTest do
 
   # ── Kanban board tests ─────────────────────────────────────────────────
 
-  test "GET /tasks renders the kanban board", %{conn: conn} do
+  test "GET /tasks renders all 7 desktop kanban columns", %{conn: conn} do
     conn = authenticated_conn(conn)
     {:ok, _view, html} = live(conn, ~p"/tasks")
 
     assert html =~ "Tasks"
+    # Stage 2 of Tasks v2 (2026-05-19): 7 desktop columns. Each column's
+    # container id is `column-<status>` — assert each id is present so a
+    # casual textual hit on the column label (e.g. "Planning" anywhere
+    # else in the page) can't false-positive.
+    assert html =~ ~s(id="column-backlog")
+    assert html =~ ~s(id="column-planning")
+    assert html =~ ~s(id="column-in_progress")
+    assert html =~ ~s(id="column-blocked")
+    assert html =~ ~s(id="column-in_review")
+    assert html =~ ~s(id="column-deploying")
+    assert html =~ ~s(id="column-done")
     assert html =~ "Backlog"
+    assert html =~ "Planning"
     assert html =~ "In Progress"
+    assert html =~ "Blocked"
     assert html =~ "In Review"
     assert html =~ "Deploying"
     assert html =~ "Done"
     assert html =~ "All Projects"
+  end
+
+  test "desktop kanban renders Blocked column between In Progress and In Review",
+       %{conn: conn} do
+    conn = authenticated_conn(conn)
+    {:ok, _view, html} = live(conn, ~p"/tasks")
+
+    # The desktop kanban iterates `@kanban_columns` in render order. The
+    # contract from Marlowe's Stage 1 feedback is: Backlog / Planning / In
+    # Progress / Blocked / In Review / Deploying / Done. Find each
+    # column-id in the rendered HTML and assert the byte-positions are
+    # ordered — that's a robust ordering check that doesn't rely on
+    # whitespace or attribute order.
+    columns = ~w(backlog planning in_progress blocked in_review deploying done)
+
+    positions =
+      Enum.map(columns, fn col ->
+        marker = ~s(id="column-#{col}")
+
+        case :binary.match(html, marker) do
+          {start, _} -> {col, start}
+          :nomatch -> flunk("Column id `column-#{col}` not found in rendered HTML")
+        end
+      end)
+
+    assert positions == Enum.sort_by(positions, &elem(&1, 1)),
+           "Expected desktop column order #{inspect(columns)}, got #{inspect(positions)}"
   end
 
   test "kanban board groups tasks by status column", %{conn: conn} do
@@ -535,6 +575,261 @@ defmodule PlatformWeb.TasksLiveTest do
     assert html =~ "Beta In Progress"
     assert html =~ "Gamma In Review"
     assert html =~ "Delta Done"
+  end
+
+  test "planning + blocked tasks appear in their own desktop columns",
+       %{conn: conn} do
+    project = create_project()
+    _plan = create_task(project, %{title: "Planning Task Body", status: "planning"})
+    _block = create_task(project, %{title: "Blocked Task Body", status: "blocked"})
+
+    conn = authenticated_conn(conn)
+    {:ok, _view, html} = live(conn, ~p"/tasks")
+
+    # Both card titles must render in the desktop kanban (`column-planning`
+    # and `column-blocked` exist as their own buckets). Pre-Stage-2, they
+    # would have rolled up under Backlog.
+    assert html =~ "Planning Task Body"
+    assert html =~ "Blocked Task Body"
+  end
+
+  test "cancelled task renders under the Done column (folded by helper)",
+       %{conn: conn} do
+    project = create_project()
+    # Walk through the lifecycle to a terminal cancelled state. The
+    # transition_task helper enforces ADR 0018 §7 transitions; we just
+    # need any path into `cancelled`. Backlog → cancelled is allowed.
+    task = create_task(project, %{title: "Cancelled Task Body", status: "backlog"})
+    # `transition_task_status/2` is the lower-level path that enforces
+    # ADR 0018 §7 valid transitions without the execution-phase plan
+    # gate. Backlog → cancelled is allowed (cancellation is terminal).
+    {:ok, _} = Tasks.transition_task_status(task, "cancelled")
+
+    conn = authenticated_conn(conn)
+    {:ok, _view, html} = live(conn, ~p"/tasks")
+
+    # Per `Platform.Tasks.list_by_status/1`, cancelled folds into Done.
+    # Assert the card body renders AT ALL (it must, since `list_by_status`
+    # routes cancelled into the `:done` bucket that the desktop kanban
+    # template reads).
+    assert html =~ "Cancelled Task Body"
+  end
+
+  test "mobile pill nav renders the unchanged 5-bucket shape",
+       %{conn: conn} do
+    conn = authenticated_conn(conn)
+    {:ok, _view, html} = live(conn, ~p"/tasks")
+
+    # The mobile-list container carries the `lg:hidden` breakpoint as of
+    # Stage 2 (was md:hidden pre-Stage-2 — promoted to lg so the 7-col
+    # desktop kanban has room). The pill nav still iterates
+    # @mobile_columns (5 buckets) — planning + blocked roll up under
+    # Backlog on mobile per the responsive-scope contract.
+    assert html =~ ~s(id="tasks-mobile-list")
+    assert html =~ ~s(class="lg:hidden flex flex-1 flex-col overflow-hidden")
+    # The mobile pills should NOT include separate Planning / Blocked
+    # buttons (those are only present on desktop). `phx-value-status` is
+    # what backs the pill click handler, so absence of those values is
+    # the cleanest assertion.
+    refute html =~ ~s(phx-value-status="planning")
+    refute html =~ ~s(phx-value-status="blocked")
+  end
+
+  # ── Scope-filter rail (Stage 3 of Tasks v2 — 2026-05-19) ─────────────────
+
+  describe "scope-filter rail (Stage 3 — desktop only)" do
+    test "rail renders the All chip + 5 sub-org chips with counts", %{conn: conn} do
+      project = create_project()
+      _t1 = create_task(project, %{title: "Alpha", status: "in_progress"})
+      _t2 = create_task(project, %{title: "Beta", status: "backlog"})
+
+      conn = authenticated_conn(conn)
+      {:ok, _view, html} = live(conn, ~p"/tasks")
+
+      # Rail container exists with the desktop-only breakpoint.
+      assert html =~ ~s(id="tasks-scope-rail")
+      assert html =~ ~s(class="hidden lg:flex)
+
+      # All chip is present with its reset payload + label.
+      assert html =~ ~s(data-scope-chip="all")
+      assert html =~ ~s(phx-value-scope="all")
+
+      # Each sub-org chip is rendered via the foundation `<.scope_pill>`
+      # primitive; data-scope-chip is our wrapper hook that lets a test
+      # / Playwright loop target the chip without depending on the
+      # underlying ScopePill markup.
+      assert html =~ ~s(data-scope-chip="fabrikam")
+      assert html =~ ~s(data-scope-chip="soylent")
+      assert html =~ ~s(data-scope-chip="wayne_tech")
+      assert html =~ ~s(data-scope-chip="sxi")
+      assert html =~ ~s(data-scope-chip="paragon")
+
+      # The scope_pill primitive emits these labels — confirming the chips
+      # are actually rendered (not just the wrapper).
+      assert html =~ "Fabrikam"
+      assert html =~ "Soylent"
+      assert html =~ "Wayne-Tech"
+      assert html =~ "SXI"
+      assert html =~ "Paragon"
+    end
+
+    test "today-state: all tasks count under :fabrikam, others under 0", %{conn: conn} do
+      project = create_project()
+      # Clean DB for this test: count what we put in.
+      _t1 = create_task(project, %{title: "A", status: "backlog"})
+      _t2 = create_task(project, %{title: "B", status: "in_progress"})
+      _t3 = create_task(project, %{title: "C", status: "done"})
+
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+
+      counts = :sys.get_state(view.pid).socket.assigns.scope_counts
+
+      # Today-state contract: every task lives under :fabrikam until org_id
+      # ships. The rail rendering reads from this map.
+      assert counts.fabrikam >= 3
+      assert counts.soylent == 0
+      assert counts.wayne_tech == 0
+      assert counts.sxi == 0
+      assert counts.paragon == 0
+    end
+
+    test "default scope_filter is :all on mount", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      {:ok, view, html} = live(conn, ~p"/tasks")
+
+      assert :sys.get_state(view.pid).socket.assigns.scope_filter == :all
+      # The All chip is marked active on first paint.
+      assert html =~ ~s(data-scope-chip="all" data-active="true")
+    end
+
+    test "default :all scope shows all tasks across columns", %{conn: conn} do
+      project = create_project()
+      _t1 = create_task(project, %{title: "Alpha In Progress", status: "in_progress"})
+      _t2 = create_task(project, %{title: "Beta Backlog", status: "backlog"})
+      _t3 = create_task(project, %{title: "Gamma Done", status: "done"})
+
+      conn = authenticated_conn(conn)
+      {:ok, _view, html} = live(conn, ~p"/tasks")
+
+      assert html =~ "Alpha In Progress"
+      assert html =~ "Beta Backlog"
+      assert html =~ "Gamma Done"
+    end
+
+    test "clicking a scope chip pushes scope_filter event with the scope key", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+
+      # Drive the fabrikam chip via the inbound scope_filter event the same way
+      # ScopePill emits it (phx-value-scope is the atom serialized as
+      # string).
+      html =
+        view
+        |> render_click("scope_filter", %{"scope" => "fabrikam"})
+
+      assert :sys.get_state(view.pid).socket.assigns.scope_filter == :fabrikam
+      # The fabrikam chip is now marked active.
+      assert html =~ ~s(data-scope-chip="fabrikam" data-active="true")
+      # And the All chip is no longer marked active.
+      assert html =~ ~s(data-scope-chip="all" data-active="false")
+    end
+
+    test "fabrikam scope: kanban still shows all tasks (today-state passthrough)", %{conn: conn} do
+      project = create_project()
+      t1 = create_task(project, %{title: "Alpha Fabrikam Card", status: "in_progress"})
+      t2 = create_task(project, %{title: "Beta Fabrikam Card", status: "backlog"})
+
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+
+      html = render_click(view, "scope_filter", %{"scope" => "fabrikam"})
+
+      # Today-state: every task folds under :fabrikam, so filtering to :fabrikam
+      # is functionally a no-op for the desktop kanban (matches
+      # count_by_scope's contract). Both cards remain on the desktop
+      # board (`id="task-card-…"` markers are emitted only by the desktop
+      # render path — the mobile section list uses different markup).
+      assert html =~ ~s(id="task-card-#{t1.id}")
+      assert html =~ ~s(id="task-card-#{t2.id}")
+    end
+
+    test "non-fabrikam sub-org scope: kanban is empty today (no org_id yet)", %{conn: conn} do
+      project = create_project()
+      t1 = create_task(project, %{title: "Hidden Card Alpha", status: "in_progress"})
+      t2 = create_task(project, %{title: "Hidden Card Beta", status: "backlog"})
+
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+
+      html = render_click(view, "scope_filter", %{"scope" => "soylent"})
+
+      # Pre-MT/RBAC contract: filtering to a non-fabrikam scope produces an
+      # empty board because no task carries an org_id yet. The mobile
+      # path is unscoped so the card title still appears in the mobile
+      # list — assert specifically against the desktop card id markers,
+      # which only render from the kanban path.
+      refute html =~ ~s(id="task-card-#{t1.id}")
+      refute html =~ ~s(id="task-card-#{t2.id}")
+      # And the desktop kanban should be rendering the "No tasks" empty
+      # state per column.
+      assert html =~ "No tasks"
+    end
+
+    test "All chip resets filter back to :all from a sub-org scope", %{conn: conn} do
+      project = create_project()
+      task = create_task(project, %{title: "Roundtrip Card", status: "in_progress"})
+      task_marker = ~s(id="task-card-#{task.id}")
+
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+
+      # Pin to a non-fabrikam scope → desktop card marker disappears (mobile
+      # list keeps the title, so assert on the desktop-only id).
+      hidden = render_click(view, "scope_filter", %{"scope" => "sxi"})
+      refute hidden =~ task_marker
+
+      # All chip dispatches scope_filter with "all" → back to :all.
+      reset = render_click(view, "scope_filter", %{"scope" => "all"})
+      assert :sys.get_state(view.pid).socket.assigns.scope_filter == :all
+      assert reset =~ task_marker
+    end
+
+    test "unknown scope payload is a no-op (defensive)", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+
+      _ = render_click(view, "scope_filter", %{"scope" => "totally-not-a-scope"})
+
+      assert :sys.get_state(view.pid).socket.assigns.scope_filter == :all
+    end
+
+    test "rail is hidden on mobile (lg:flex container, no mobile pill collision)",
+         %{conn: conn} do
+      conn = authenticated_conn(conn)
+      {:ok, _view, html} = live(conn, ~p"/tasks")
+
+      # The rail container carries hidden lg:flex so mobile users only see
+      # the existing 5-pill status nav above the section-grouped list.
+      assert html =~ ~s(id="tasks-scope-rail")
+      assert html =~ "hidden lg:flex"
+
+      # The mobile pill nav (Stage 2) still renders unchanged on the same page.
+      assert html =~ ~s(id="tasks-status-filter-pills")
+      assert html =~ ~s(id="tasks-mobile-list")
+
+      # And the mobile pills do NOT contain the scope-chip data attribute —
+      # scope filtering is desktop-only.
+      assert html =~ ~s(data-scope-chip="fabrikam")
+
+      mobile_block =
+        case Regex.run(~r/id="tasks-status-filter-pills".*?<\/nav>/s, html) do
+          [match] -> match
+          _ -> ""
+        end
+
+      refute mobile_block =~ "data-scope-chip"
+    end
   end
 
   test "clicking a task card opens the detail panel", %{conn: conn} do

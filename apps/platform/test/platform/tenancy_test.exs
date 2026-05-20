@@ -43,6 +43,18 @@ defmodule Platform.TenancyTest do
     |> Repo.insert!()
   end
 
+  # Closure-over-a-map lookup function for the `effective_value/3`
+  # tests — keeps the tests storage-agnostic exactly like the resolver
+  # claims to be.
+  defp build_lookup(values_by_org_id) do
+    fn %Org{id: org_id}, key ->
+      case Map.fetch(values_by_org_id, {org_id, key}) do
+        {:ok, value} -> {:ok, value}
+        :error -> :error
+      end
+    end
+  end
+
   # ── Seed-data sanity ─────────────────────────────────────────────────
 
   describe "seed migration" do
@@ -883,6 +895,120 @@ defmodule Platform.TenancyTest do
       assert_receive {:audit_event, event}, 500
       assert event.actor_type == "system"
       assert is_nil(event.actor_id)
+    end
+  end
+
+  # ── effective_value/3 (inheritance resolver) ─────────────────────────
+
+  describe "effective_value/3" do
+    test ":defined_here when org has the key and no ancestor does" do
+      fabrikam = Tenancy.get_org_by_slug!("fabrikam")
+      lookup = build_lookup(%{{fabrikam.id, :greeting} => "Hi from Fabrikam"})
+
+      assert {:defined_here, "Hi from Fabrikam"} =
+               Tenancy.effective_value(fabrikam, :greeting, "fallback", lookup_fn: lookup)
+    end
+
+    test ":overridden when org defines the key AND an ancestor also defines it" do
+      fabrikam = Tenancy.get_org_by_slug!("fabrikam")
+      soylent = Tenancy.get_org_by_slug!("soylent")
+
+      lookup =
+        build_lookup(%{
+          {soylent.id, :greeting} => "Hi from Soylent",
+          {fabrikam.id, :greeting} => "Hi from Fabrikam"
+        })
+
+      assert {:overridden, "Hi from Soylent", "Hi from Fabrikam"} =
+               Tenancy.effective_value(soylent, :greeting, "fallback", lookup_fn: lookup)
+    end
+
+    test ":inherited when org has nothing and an ancestor defines the key" do
+      fabrikam = Tenancy.get_org_by_slug!("fabrikam")
+      soylent = Tenancy.get_org_by_slug!("soylent")
+
+      lookup = build_lookup(%{{fabrikam.id, :greeting} => "Hi from Fabrikam"})
+
+      assert {:inherited, %Org{id: source_id}, "Hi from Fabrikam"} =
+               Tenancy.effective_value(soylent, :greeting, "fallback", lookup_fn: lookup)
+
+      assert source_id == fabrikam.id
+    end
+
+    test ":defined_here with the default when no org in the chain defines the key" do
+      soylent = Tenancy.get_org_by_slug!("soylent")
+      lookup = build_lookup(%{})
+
+      assert {:defined_here, "fallback-default"} =
+               Tenancy.effective_value(soylent, :greeting, "fallback-default", lookup_fn: lookup)
+    end
+
+    test "deep ancestor walk — 3-level hierarchy, key defined only at the root" do
+      fabrikam = Tenancy.get_org_by_slug!("fabrikam")
+      soylent = Tenancy.get_org_by_slug!("soylent")
+
+      # Create a hypothetical sub-sub-org parented to Soylent. The
+      # seed only has two tiers; this test exercises the resolver's
+      # depth handling for the future-tier case Plan 1 v3 documents.
+      sub_sub =
+        %Org{}
+        |> Org.changeset(%{
+          name: "Soylent North",
+          slug: "soylent_north_#{System.unique_integer([:positive])}",
+          parent_org_id: soylent.id
+        })
+        |> Repo.insert!()
+
+      lookup = build_lookup(%{{fabrikam.id, :greeting} => "Hi from Fabrikam"})
+
+      assert {:inherited, %Org{id: source_id}, "Hi from Fabrikam"} =
+               Tenancy.effective_value(sub_sub, :greeting, "fallback", lookup_fn: lookup)
+
+      assert source_id == fabrikam.id
+    end
+
+    test "depth limit kicks in for an artificially deep / cyclic chain" do
+      # The Org FK constraint prevents a true `parent_org_id == id`
+      # cycle from being inserted normally, so we exercise the
+      # depth-budget clause directly by constructing a long chain of
+      # 17 orgs where the key isn't defined anywhere — the resolver
+      # should bail out and return `{:defined_here, default}` rather
+      # than recurse without bound.
+      fabrikam = Tenancy.get_org_by_slug!("fabrikam")
+
+      # Build a 17-deep chain: fabrikam <- d1 <- d2 <- ... <- d17. Walking
+      # from d17 to find `:greeting` should hit the 16-depth budget
+      # before reaching Fabrikam.
+      [bottom | _rest] =
+        Enum.reduce(1..17, [fabrikam], fn _i, [parent | _] = acc ->
+          n = System.unique_integer([:positive])
+
+          child =
+            %Org{}
+            |> Org.changeset(%{
+              name: "Deep #{n}",
+              slug: "deep_#{n}",
+              parent_org_id: parent.id
+            })
+            |> Repo.insert!()
+
+          [child | acc]
+        end)
+
+      # Only the root (Fabrikam) defines the key — but it's 17 hops up
+      # from the bottom, past the 16-depth budget.
+      lookup = build_lookup(%{{fabrikam.id, :greeting} => "Hi from Fabrikam"})
+
+      assert {:defined_here, "fallback"} =
+               Tenancy.effective_value(bottom, :greeting, "fallback", lookup_fn: lookup)
+    end
+
+    test "raises if :lookup_fn opt is missing" do
+      fabrikam = Tenancy.get_org_by_slug!("fabrikam")
+
+      assert_raise KeyError, fn ->
+        Tenancy.effective_value(fabrikam, :greeting, "fallback", [])
+      end
     end
   end
 end

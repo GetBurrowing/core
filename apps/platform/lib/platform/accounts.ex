@@ -224,4 +224,61 @@ defmodule Platform.Accounts do
   end
 
   defp normalize_optional_string(_value), do: nil
+
+  # ── User preferences (chat plan v2 Stage 3) ────────────────────────────
+  #
+  # `users.preferences` is a single JSONB column holding lightweight UI prefs
+  # keyed by string. Today's only consumer is the chat rail's
+  # `chat_section_order` (drag-reorder of sub-org sections); future stages
+  # can share the same column without another migration.
+  #
+  # `update_user_preference/3` is upsert-semantics: it merges the new key
+  # into the existing map and persists. Returns `{:ok, user}` on success;
+  # `{:error, :not_found}` when the user_id isn't a real row (anonymous
+  # sessions in chat use a generated UUID — Stage 3 callers no-op those).
+
+  @doc """
+  Get a user's full preferences map. Returns `%{}` for unknown users so
+  callers don't have to nil-guard.
+  """
+  @spec get_user_preferences(binary()) :: map()
+  def get_user_preferences(user_id) when is_binary(user_id) do
+    case get_user(user_id) do
+      %User{preferences: prefs} when is_map(prefs) -> prefs
+      %User{} -> %{}
+      nil -> %{}
+    end
+  end
+
+  def get_user_preferences(_), do: %{}
+
+  @doc """
+  Upsert a single preference key on the user. Merges into the existing
+  preferences map and persists atomically.
+
+  Accepts the key as atom or string; both round-trip through JSONB as
+  string. Callers should pick one convention and stick to it (Stage 3
+  uses `:chat_section_order`).
+
+  Returns `{:ok, %User{}}` on success or `{:error, :not_found}` when no
+  user with that id exists (anonymous chat sessions use a generated UUID
+  that doesn't match any row — Stage 3's `handle_event` no-ops on that).
+  """
+  @spec update_user_preference(binary(), atom() | String.t(), any()) ::
+          {:ok, User.t()} | {:error, :not_found | Ecto.Changeset.t()}
+  def update_user_preference(user_id, key, value) when is_binary(user_id) do
+    string_key = to_string(key)
+
+    case get_user(user_id) do
+      %User{} = user ->
+        next_prefs = Map.put(user.preferences || %{}, string_key, value)
+
+        user
+        |> User.changeset(%{preferences: next_prefs})
+        |> Repo.update()
+
+      nil ->
+        {:error, :not_found}
+    end
+  end
 end
