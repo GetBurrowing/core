@@ -40,7 +40,7 @@ defmodule Platform.Memory do
   @doc """
   Ingest memory entries for embedding + indexing.
 
-  Accepts structs (e.g. `%Platform.Org.MemoryEntry{}`) or maps with the
+  Accepts structs (e.g. `%Platform.Org.WikiJournalEntry{}`) or maps with the
   required shape (see `Platform.Memory.Provider.entry/0`). Normalizes each
   entry into the payload the provider expects.
   """

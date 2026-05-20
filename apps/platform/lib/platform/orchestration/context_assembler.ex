@@ -8,7 +8,7 @@ defmodule Platform.Orchestration.ContextAssembler do
   """
 
   alias Platform.Execution.CredentialLease
-  alias Platform.Org
+  alias Platform.Org.Wiki.Context, as: WikiContext
   alias Platform.Orchestration.ExecutionSpace
   alias Platform.Skills
   alias Platform.Tasks
@@ -58,7 +58,10 @@ defmodule Platform.Orchestration.ContextAssembler do
           skills: skills,
           resolved_deploy_strategy: resolved_deploy_strategy,
           previous_rejection_reason: previous_rejection_reason,
-          org: Org.Context.build_context()
+          # Budgeted, scope-aware org preamble (ADR-0041 T4). Passes the
+          # fully-loaded task struct so `project/<task.project_id>/`
+          # wiki pages flagged `preamble: true` resolve in scope.
+          org: WikiContext.build_preamble(task: task)
         }
 
         maybe_add_deploy_credentials(base, deploy_lease)

@@ -51,6 +51,37 @@ defmodule Platform.Memory.Providers.StartupSuiteTest do
       assert %{"entries" => [%{"id" => "a"}, %{"id" => "b"}]} = Jason.decode!(body)
     end
 
+    test "passes through arbitrary memory_type strings (e.g. \"page\", \"journal\") unchanged" do
+      # T3 (ADR-0041) stamps `memory_type: "page"` and `memory_type: "journal"`
+      # on the new corpora. memory-service models.py declares `memory_type:
+      # str = "daily"` with no enum constraint, so the value flows through
+      # untouched. This guards against a future regression where someone
+      # adds a Map.take/2 or whitelist that would strip unknown types.
+      test_pid = self()
+
+      install_stub(fn conn ->
+        send(test_pid, {:req, conn})
+        Req.Test.json(conn, %{"ingested" => 2})
+      end)
+
+      entries = [
+        %{id: "p1", content: "page content", memory_type: "page", date: "2026-05-19"},
+        %{id: "j1", content: "journal content", memory_type: "journal", date: "2026-05-19"}
+      ]
+
+      assert {:ok, 2} = StartupSuite.ingest(entries, config())
+
+      assert_receive {:req, conn}
+      {:ok, body, _conn} = Plug.Conn.read_body(conn)
+
+      assert %{
+               "entries" => [
+                 %{"id" => "p1", "memory_type" => "page"},
+                 %{"id" => "j1", "memory_type" => "journal"}
+               ]
+             } = Jason.decode!(body)
+    end
+
     test "returns {:error, {:http, status, body}} on non-2xx" do
       install_stub(fn conn ->
         conn
