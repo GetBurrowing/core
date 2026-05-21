@@ -50,9 +50,11 @@ defmodule PlatformWeb.Components.MoreSheet do
   )
 
   def more_sheet(assigns) do
+    is_fabrikam_user = Map.get(assigns, :is_fabrikam_user, false)
+
     assigns =
       assigns
-      |> assign(:working_destinations, working_destinations())
+      |> assign(:working_destinations, working_destinations(is_fabrikam_user))
       |> assign(:admin_destinations, admin_destinations())
 
     ~H"""
@@ -119,8 +121,12 @@ defmodule PlatformWeb.Components.MoreSheet do
     """
   end
 
-  defp working_destinations do
-    IconRail.destinations(is_fabrikam_user: true)
+  # Pass the actual is_fabrikam_user through so fabrikam_only? tiles (e.g. Prompts
+  # as of 2026-05-20) are correctly hidden from members. Previously this
+  # hardcoded `is_fabrikam_user: true` which leaked admin-only working-cluster
+  # tiles to every user in the More sheet.
+  defp working_destinations(is_fabrikam_user) do
+    IconRail.destinations(is_fabrikam_user: is_fabrikam_user)
     |> Enum.filter(&(&1.cluster == :working))
   end
 

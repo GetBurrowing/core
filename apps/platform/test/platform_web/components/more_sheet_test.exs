@@ -40,14 +40,27 @@ defmodule PlatformWeb.Components.MoreSheetTest do
   end
 
   describe "working cluster destinations" do
-    test "renders every working-cluster destination from IconRail.destinations/1" do
+    test "renders member-visible working-cluster destinations for a non-fabrikam user" do
       html = render_more_sheet(%{})
 
-      # Working cluster keys per IconRail.canonical_destinations.
+      # Working cluster keys visible to members per IconRail.canonical_destinations.
       # (Memory tabs under Context per Marlowe 2026-05-18; not its own destination.)
+      # Prompts is fabrikam_only?:true as of 2026-05-20 — visible only to admins;
+      # see fabrikam-only assertion in the next test.
+      for key <- ["skills", "context", "meetings"] do
+        assert html =~ ~s(data-destination="#{key}"),
+               "expected data-destination=#{inspect(key)} in the member-view More sheet"
+      end
+
+      refute html =~ ~s(data-destination="prompts")
+    end
+
+    test "renders all working-cluster destinations including Prompts for a fabrikam user" do
+      html = render_more_sheet(%{is_fabrikam_user: true})
+
       for key <- ["skills", "context", "prompts", "meetings"] do
         assert html =~ ~s(data-destination="#{key}"),
-               "expected data-destination=#{inspect(key)} in the More sheet"
+               "expected data-destination=#{inspect(key)} in the fabrikam-view More sheet"
       end
     end
 
