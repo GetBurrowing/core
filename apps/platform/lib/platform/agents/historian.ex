@@ -45,7 +45,7 @@ defmodule Platform.Agents.Historian do
   `last_processed_at` are excluded. If a corpus has no cursor row yet,
   all rows count.
   """
-  @spec pending_bytes(binary()) :: non_neg_integer()
+  @spec pending_bytes(binary() | nil) :: non_neg_integer()
   def pending_bytes(workspace_id) do
     Enum.reduce(@corpora, 0, fn corpus, acc ->
       acc + corpus_pending_bytes(workspace_id, corpus)
@@ -55,7 +55,7 @@ defmodule Platform.Agents.Historian do
   @doc """
   Returns `div(pending_bytes/1, 4)` — char/4 token heuristic.
   """
-  @spec pending_tokens(binary()) :: non_neg_integer()
+  @spec pending_tokens(binary() | nil) :: non_neg_integer()
   def pending_tokens(workspace_id) do
     div(pending_bytes(workspace_id), 4)
   end
@@ -63,8 +63,19 @@ defmodule Platform.Agents.Historian do
   @doc """
   Returns the max `last_run_at` across the four corpus cursor rows for
   `workspace_id`, or `nil` if no cursor has ever been stamped.
+
+  V1 fan-out passes `nil` for org-scope; the `is_nil/1` guard keeps Ecto from
+  rejecting the `column == nil` literal comparison.
   """
-  @spec last_run_at(binary()) :: DateTime.t() | nil
+  @spec last_run_at(binary() | nil) :: DateTime.t() | nil
+  def last_run_at(nil) do
+    from(c in HistorianCursor,
+      where: is_nil(c.workspace_id),
+      select: max(c.last_run_at)
+    )
+    |> Repo.one()
+  end
+
   def last_run_at(workspace_id) do
     from(c in HistorianCursor,
       where: c.workspace_id == ^workspace_id,
@@ -128,7 +139,15 @@ defmodule Platform.Agents.Historian do
     sum_corpus_bytes(corpus, workspace_id, last_at)
   end
 
-  @spec cursor_last_processed_at(binary(), String.t()) :: DateTime.t() | nil
+  @spec cursor_last_processed_at(binary() | nil, String.t()) :: DateTime.t() | nil
+  defp cursor_last_processed_at(nil, corpus) do
+    from(c in HistorianCursor,
+      where: is_nil(c.workspace_id) and c.corpus == ^corpus,
+      select: c.last_processed_at
+    )
+    |> Repo.one()
+  end
+
   defp cursor_last_processed_at(workspace_id, corpus) do
     from(c in HistorianCursor,
       where: c.workspace_id == ^workspace_id and c.corpus == ^corpus,
@@ -138,6 +157,17 @@ defmodule Platform.Agents.Historian do
   end
 
   # Pages corpus → org_context_files. Updated_at because pages mutate.
+  # nil workspace_id (V1 org-scope) → sum across rows with null workspace_id.
+  defp sum_corpus_bytes("pages", nil, last_at) do
+    query = from(f in "org_context_files", where: is_nil(f.workspace_id))
+    query = apply_cursor_filter(query, :updated_at, last_at)
+
+    query
+    |> select([f], sum(fragment("coalesce(octet_length(?), 0)", f.content)))
+    |> Repo.one()
+    |> to_non_neg()
+  end
+
   defp sum_corpus_bytes("pages", workspace_id, last_at) do
     query =
       from(f in "org_context_files",
@@ -154,6 +184,17 @@ defmodule Platform.Agents.Historian do
 
   # Journal corpus → org_memory_entries. Inserted_at because journal is
   # append-only (`updated_at: false` on the schema).
+  # nil workspace_id (V1 org-scope) → sum across rows with null workspace_id.
+  defp sum_corpus_bytes("journal", nil, last_at) do
+    query = from(e in "org_memory_entries", where: is_nil(e.workspace_id))
+    query = apply_cursor_filter(query, :inserted_at, last_at)
+
+    query
+    |> select([e], sum(fragment("coalesce(octet_length(?), 0)", e.content)))
+    |> Repo.one()
+    |> to_non_neg()
+  end
+
   defp sum_corpus_bytes("journal", workspace_id, last_at) do
     query =
       from(e in "org_memory_entries",

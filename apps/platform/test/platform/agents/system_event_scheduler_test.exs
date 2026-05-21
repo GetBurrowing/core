@@ -436,8 +436,398 @@ defmodule Platform.Agents.SystemEventSchedulerTest do
 
     alias Platform.Tasks.Projects
 
-    test "V1 fan-out returns [nil] (org-scope only)" do
-      assert Projects.list_active_workspaces() == [nil]
+    test "V1 fan-out returns the org-scope sentinel UUID" do
+      # Sentinel UUID per ADR-0041 T6 stage 5: org_historian_cursors enforces
+      # workspace_id NOT NULL, so the V1 org-scope fan-out uses a sentinel
+      # UUID instead of nil. Real multi-tenancy is a future task.
+      assert Projects.list_active_workspaces() == [Projects.org_scope_workspace_id()]
+      assert Projects.org_scope_workspace_id() == "00000000-0000-0000-0000-000000000000"
+    end
+  end
+
+  # ── 100k-token threshold + debounce (pure function) ─────────────────────────
+
+  defmodule ThresholdLogicTest do
+    @moduledoc """
+    Pure-function table for `SystemEventScheduler.should_fire_threshold?/5`.
+
+    Plan-mandated cases (T6 stage 5):
+      - under threshold = false
+      - over threshold, last_run nil = true
+      - over threshold, last_run 30min ago = false
+      - over threshold, last_run 61min ago = true
+    """
+    use ExUnit.Case, async: true
+
+    alias Platform.Agents.SystemEventScheduler
+
+    @threshold 100_000
+    @debounce_ms 60 * 60 * 1_000
+    @now ~U[2026-05-20 12:00:00.000000Z]
+
+    test "under threshold → false (no dispatch regardless of last_run_at)" do
+      refute SystemEventScheduler.should_fire_threshold?(
+               99_999,
+               nil,
+               @now,
+               @threshold,
+               @debounce_ms
+             )
+
+      refute SystemEventScheduler.should_fire_threshold?(
+               0,
+               nil,
+               @now,
+               @threshold,
+               @debounce_ms
+             )
+
+      # Even with a stale last_run_at, low pending → no fire.
+      stale = DateTime.add(@now, -:timer.hours(48), :millisecond)
+
+      refute SystemEventScheduler.should_fire_threshold?(
+               50_000,
+               stale,
+               @now,
+               @threshold,
+               @debounce_ms
+             )
+    end
+
+    test "over threshold + last_run nil → true (first run is always allowed)" do
+      assert SystemEventScheduler.should_fire_threshold?(
+               @threshold,
+               nil,
+               @now,
+               @threshold,
+               @debounce_ms
+             )
+
+      assert SystemEventScheduler.should_fire_threshold?(
+               @threshold * 2,
+               nil,
+               @now,
+               @threshold,
+               @debounce_ms
+             )
+    end
+
+    test "over threshold + last_run 30min ago → false (still within debounce)" do
+      last = DateTime.add(@now, -30 * 60 * 1_000, :millisecond)
+
+      refute SystemEventScheduler.should_fire_threshold?(
+               @threshold,
+               last,
+               @now,
+               @threshold,
+               @debounce_ms
+             )
+
+      refute SystemEventScheduler.should_fire_threshold?(
+               @threshold * 4,
+               last,
+               @now,
+               @threshold,
+               @debounce_ms
+             )
+    end
+
+    test "over threshold + last_run 61min ago → true (debounce elapsed)" do
+      last = DateTime.add(@now, -61 * 60 * 1_000, :millisecond)
+
+      assert SystemEventScheduler.should_fire_threshold?(
+               @threshold,
+               last,
+               @now,
+               @threshold,
+               @debounce_ms
+             )
+    end
+
+    test "boundary: exactly debounce_ms elapsed → true (>= semantics)" do
+      last = DateTime.add(@now, -@debounce_ms, :millisecond)
+
+      assert SystemEventScheduler.should_fire_threshold?(
+               @threshold,
+               last,
+               @now,
+               @threshold,
+               @debounce_ms
+             )
+    end
+
+    test "boundary: 1ms shy of debounce → false (still within window)" do
+      last = DateTime.add(@now, -(@debounce_ms - 1), :millisecond)
+
+      refute SystemEventScheduler.should_fire_threshold?(
+               @threshold,
+               last,
+               @now,
+               @threshold,
+               @debounce_ms
+             )
+    end
+
+    test "uses module defaults when threshold/debounce args omitted" do
+      # 100k pending, never run → defaults should permit fire.
+      assert SystemEventScheduler.should_fire_threshold?(100_000, nil, @now)
+      refute SystemEventScheduler.should_fire_threshold?(99_999, nil, @now)
+    end
+  end
+
+  # ── 100k-token threshold + debounce (integration) ───────────────────────────
+
+  defmodule ThresholdSweepTest do
+    @moduledoc """
+    Integration tests for the threshold sweep:
+      - inserts 100k+ tokens of journal content,
+      - calls `run_threshold_check_now/0`,
+      - asserts the scheduler dispatched the historian AND stamped
+        `Historian.last_run_at(nil)`.
+      - simulates clock advance by backdating `last_run_at` in the cursor table
+        between sweeps to verify debounce + post-debounce re-fire.
+    """
+    use Platform.DataCase
+
+    alias Platform.Agents.Agent
+    alias Platform.Agents.Historian
+    alias Platform.Agents.HistorianCursor
+    alias Platform.Agents.SystemEventScheduler
+    alias Platform.Chat
+    alias Platform.Chat.Message
+    alias Platform.Chat.Space
+    alias Platform.Org.MemoryEntry
+    alias Platform.Tasks.Projects
+
+    # V1 fan-out uses the org-scope sentinel UUID — `Projects.list_active_workspaces/0`
+    # returns `[org_scope_workspace_id()]`, so the threshold sweep evaluates that
+    # workspace_id and not `nil`.
+    @historian_workspace_id Projects.org_scope_workspace_id()
+
+    defp create_historian_agent do
+      %Agent{}
+      |> Agent.changeset(%{
+        slug: "threshold-historian",
+        name: "Threshold Historian",
+        status: "active",
+        system_events: ["historian"]
+      })
+      |> Repo.insert!()
+    end
+
+    defp insert_journal_chars!(workspace_id, n) when is_integer(n) and n > 0 do
+      %MemoryEntry{}
+      |> MemoryEntry.changeset(%{
+        workspace_id: workspace_id,
+        content: String.duplicate("x", n),
+        date: Date.utc_today()
+      })
+      |> Repo.insert!()
+    end
+
+    # Backdate every cursor row's `last_run_at` for `workspace_id` to `delta_ms`
+    # in the past, relative to now. Simulates "clock advance" without needing
+    # a mock clock — the debounce policy reads cursor `last_run_at` directly.
+    defp backdate_last_run!(workspace_id, delta_ms) when is_binary(workspace_id) do
+      past = DateTime.add(DateTime.utc_now(), -delta_ms, :millisecond)
+
+      {_, _} =
+        Repo.update_all(
+          from(c in HistorianCursor, where: c.workspace_id == ^workspace_id),
+          set: [last_run_at: past]
+        )
+
+      :ok
+    end
+
+    defp historian_messages(agent) do
+      case Chat.get_space_by_slug("system-#{agent.slug}") do
+        %Space{id: space_id} ->
+          Repo.all(
+            from(m in Message,
+              where: m.space_id == ^space_id,
+              order_by: [asc: m.inserted_at]
+            )
+          )
+
+        nil ->
+          []
+      end
+    end
+
+    describe "threshold sweep — fire path" do
+      test "inserts 100k+ tokens, sweep dispatches and stamps last_run_at" do
+        agent = create_historian_agent()
+
+        # 400k+ bytes ≈ 100k tokens (char/4 heuristic). Insert 410_000 bytes
+        # of journal content for the org-scope (nil) workspace so the
+        # Historian context module picks it up.
+        insert_journal_chars!(@historian_workspace_id, 410_000)
+
+        assert Historian.pending_tokens(@historian_workspace_id) >= 100_000
+        assert Historian.last_run_at(@historian_workspace_id) == nil
+
+        {:ok, _pid} =
+          start_supervised({SystemEventScheduler, check_interval_ms: :timer.hours(24)})
+
+        results = SystemEventScheduler.run_threshold_check_now()
+
+        assert {@historian_workspace_id, :fired} in results
+
+        # last_run_at must be stamped before the dispatch returns (the
+        # scheduler calls mark_run_started BEFORE the dispatch fan-out).
+        assert %DateTime{} = Historian.last_run_at(@historian_workspace_id)
+
+        # A system-space message was posted with the threshold-trigger metadata.
+        messages = historian_messages(agent)
+        assert length(messages) >= 1
+
+        first = hd(messages)
+        assert first.metadata["event_type"] == "historian"
+        assert first.metadata["trigger"] == "threshold"
+        assert first.metadata["source"] == "system_event"
+      end
+    end
+
+    describe "threshold sweep — debounce path" do
+      test "fire once, sweep within debounce window → no second dispatch" do
+        _agent = create_historian_agent()
+        insert_journal_chars!(@historian_workspace_id, 410_000)
+
+        {:ok, _pid} =
+          start_supervised({SystemEventScheduler, check_interval_ms: :timer.hours(24)})
+
+        # First sweep fires.
+        assert {@historian_workspace_id, :fired} in SystemEventScheduler.run_threshold_check_now()
+        first_run = Historian.last_run_at(@historian_workspace_id)
+        assert %DateTime{} = first_run
+
+        # Simulate 30min elapsed — still within the 1h debounce.
+        backdate_last_run!(@historian_workspace_id, 30 * 60 * 1_000)
+
+        results = SystemEventScheduler.run_threshold_check_now()
+        assert {@historian_workspace_id, :debounced} in results
+
+        # last_run_at must not have advanced (it was backdated, then the
+        # debounced sweep did not call mark_run_started).
+        after_debounce = Historian.last_run_at(@historian_workspace_id)
+        # Tolerance: it equals the backdate stamp ± microseconds; not advanced
+        # to "now". So it is strictly less than `now`.
+        assert DateTime.compare(after_debounce, DateTime.utc_now()) == :lt
+        # And it must be older than the original first_run (since we backdated).
+        assert DateTime.compare(after_debounce, first_run) == :lt
+      end
+
+      test "after debounce elapses, sweep dispatches again" do
+        _agent = create_historian_agent()
+        insert_journal_chars!(@historian_workspace_id, 410_000)
+
+        {:ok, _pid} =
+          start_supervised({SystemEventScheduler, check_interval_ms: :timer.hours(24)})
+
+        # First sweep fires.
+        assert {@historian_workspace_id, :fired} in SystemEventScheduler.run_threshold_check_now()
+
+        # Within debounce → no fire.
+        backdate_last_run!(@historian_workspace_id, 30 * 60 * 1_000)
+
+        assert {@historian_workspace_id, :debounced} in SystemEventScheduler.run_threshold_check_now()
+
+        # Past debounce (61min) → fire again.
+        backdate_last_run!(@historian_workspace_id, 61 * 60 * 1_000)
+
+        results = SystemEventScheduler.run_threshold_check_now()
+        assert {@historian_workspace_id, :fired} in results
+
+        # last_run_at advanced to ~now.
+        latest = Historian.last_run_at(@historian_workspace_id)
+        delta_ms = DateTime.diff(DateTime.utc_now(), latest, :millisecond)
+        assert delta_ms >= 0 and delta_ms < 5_000
+      end
+    end
+
+    describe "threshold sweep — under-threshold path" do
+      test "below 100k tokens → no dispatch" do
+        _agent = create_historian_agent()
+        # 4 bytes → 1 token, nowhere near 100k.
+        insert_journal_chars!(@historian_workspace_id, 4)
+
+        assert Historian.pending_tokens(@historian_workspace_id) < 100_000
+
+        {:ok, _pid} =
+          start_supervised({SystemEventScheduler, check_interval_ms: :timer.hours(24)})
+
+        results = SystemEventScheduler.run_threshold_check_now()
+        assert {@historian_workspace_id, :under_threshold} in results
+
+        # No run stamped; no message posted.
+        assert Historian.last_run_at(@historian_workspace_id) == nil
+      end
+    end
+
+    describe "threshold sweep — telemetry" do
+      test "fire emits [:platform, :agents, :historian_scheduler, :threshold_fired]" do
+        _agent = create_historian_agent()
+        insert_journal_chars!(@historian_workspace_id, 410_000)
+
+        {:ok, _pid} =
+          start_supervised({SystemEventScheduler, check_interval_ms: :timer.hours(24)})
+
+        test_pid = self()
+
+        handler_id = "threshold-fired-#{System.unique_integer([:positive])}"
+
+        :telemetry.attach(
+          handler_id,
+          [:platform, :agents, :historian_scheduler, :threshold_fired],
+          fn _event, measurements, metadata, _config ->
+            send(test_pid, {:telemetry_fired, measurements, metadata})
+          end,
+          nil
+        )
+
+        on_exit(fn -> :telemetry.detach(handler_id) end)
+
+        SystemEventScheduler.run_threshold_check_now()
+
+        assert_receive {:telemetry_fired, measurements, metadata}, 1_000
+        assert measurements.pending_tokens >= 100_000
+        assert metadata.workspace_id == @historian_workspace_id
+      end
+
+      test "debounced sweep emits [:platform, :agents, :historian_scheduler, :threshold_debounced]" do
+        _agent = create_historian_agent()
+        insert_journal_chars!(@historian_workspace_id, 410_000)
+
+        {:ok, _pid} =
+          start_supervised({SystemEventScheduler, check_interval_ms: :timer.hours(24)})
+
+        # Prime: fire once, then backdate to within debounce window.
+        SystemEventScheduler.run_threshold_check_now()
+        backdate_last_run!(@historian_workspace_id, 30 * 60 * 1_000)
+
+        test_pid = self()
+
+        handler_id = "threshold-debounced-#{System.unique_integer([:positive])}"
+
+        :telemetry.attach(
+          handler_id,
+          [:platform, :agents, :historian_scheduler, :threshold_debounced],
+          fn _event, measurements, metadata, _config ->
+            send(test_pid, {:telemetry_debounced, measurements, metadata})
+          end,
+          nil
+        )
+
+        on_exit(fn -> :telemetry.detach(handler_id) end)
+
+        SystemEventScheduler.run_threshold_check_now()
+
+        assert_receive {:telemetry_debounced, measurements, metadata}, 1_000
+        assert measurements.pending_tokens >= 100_000
+        assert metadata.workspace_id == @historian_workspace_id
+        assert %DateTime{} = metadata.last_run_at
+      end
     end
   end
 end
