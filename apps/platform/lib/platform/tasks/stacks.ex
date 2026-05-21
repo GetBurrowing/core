@@ -964,6 +964,35 @@ defmodule Platform.Tasks.Stacks do
   end
 
   @doc """
+  Return the stack members flattened into the order they should be merged
+  into the rollup branch — foundational members first.
+
+  On success this is `validate_dag/1`'s level structure flattened in level
+  order (level 0 roots, then level 1, …), i.e. a topological ordering of the
+  in-stack DAG. Members WITHIN a level are independent (parallel), so we
+  sort each level by `stack_position` for a deterministic, creation-ordered
+  tiebreak. A stack with members but ZERO declared edges collapses to a
+  single level, so the result is exactly `stack_position` (creation) order.
+
+  Fallback semantics: when the DAG is invalid (a dependency cycle or a
+  cross-stack edge), `validate_dag/1` returns `{:error, ...}`; we fall back
+  to `members/1`, which orders by `stack_position` (creation) order, so this
+  function never crashes on a cyclic stack.
+  """
+  @spec members_in_merge_order(Stack.t() | binary()) :: [Task.t()]
+  def members_in_merge_order(stack_or_id) do
+    case validate_dag(stack_or_id) do
+      {:ok, levels} ->
+        Enum.flat_map(levels, fn level ->
+          Enum.sort_by(level, & &1.stack_position)
+        end)
+
+      {:error, _reason, _detail} ->
+        members(stack_or_id)
+    end
+  end
+
+  @doc """
   Check whether a stack member's in-stack dependencies have all crossed the
   ADR 0041 §"Unblock threshold".
 

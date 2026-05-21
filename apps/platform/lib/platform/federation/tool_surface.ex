@@ -13,7 +13,7 @@ defmodule Platform.Federation.ToolSurface do
   alias Platform.Meetings
   alias Platform.Org.Context, as: OrgContext
   alias Platform.Tasks
-  alias Platform.Tasks.{Plan, PlanEngine, Stack, Stacks, Stage, Task, Validation}
+  alias Platform.Tasks.{Plan, PlanEngine, Stack, StackDeployer, Stacks, Stage, Task, Validation}
   alias Platform.Repo
 
   import Ecto.Query, only: [from: 2]
@@ -2751,6 +2751,9 @@ defmodule Platform.Federation.ToolSurface do
 
     case Stacks.create_stack(attrs) do
       {:ok, %Stack{} = stack} ->
+        # Eagerly ensure the rollup branch exists on origin at create-time
+        # (fire-and-forget, idempotent against the stack_start trigger).
+        StackDeployer.handle_stack_created(stack)
         {:ok, %{stack_id: stack.id, rollup_branch: stack.rollup_branch}}
 
       {:error, %Ecto.Changeset{} = changeset} ->
@@ -2789,6 +2792,7 @@ defmodule Platform.Federation.ToolSurface do
       %Stack{} = stack ->
         members = Stacks.members(stack)
         executable_ids = stack |> Stacks.executable_members() |> Enum.map(& &1.id)
+        merge_order_ids = stack |> Stacks.members_in_merge_order() |> Enum.map(& &1.id)
         {edges, cross_stack_deps} = classify_member_edges(members)
 
         {:ok,
@@ -2797,6 +2801,7 @@ defmodule Platform.Federation.ToolSurface do
            members: Enum.map(members, &serialize_stack_member/1),
            edges: edges,
            executable_now: executable_ids,
+           members_in_merge_order: merge_order_ids,
            cross_stack_deps: cross_stack_deps
          }}
     end

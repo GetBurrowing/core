@@ -803,6 +803,75 @@ defmodule Platform.Tasks.StacksTest do
     end
   end
 
+  describe "members_in_merge_order/1" do
+    test "linear chain a→b→c returns foundational-first [a, b, c]" do
+      {:ok, project} = Tasks.create_project(%{name: "Merge order chain"})
+      stack = stack_fixture(project_id: project.id)
+      {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "A"})
+
+      {:ok, b} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "B",
+          dependencies: [%{"task_id" => a.id, "kind" => "blocks"}]
+        })
+
+      {:ok, c} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "C",
+          dependencies: [%{"task_id" => b.id, "kind" => "blocks"}]
+        })
+
+      {:ok, _} = Stacks.add_task(stack, a)
+      {:ok, _} = Stacks.add_task(stack, b)
+      {:ok, _} = Stacks.add_task(stack, c)
+
+      assert [m0, m1, m2] = Stacks.members_in_merge_order(stack)
+      assert [m0.id, m1.id, m2.id] == [a.id, b.id, c.id]
+    end
+
+    test "no declared deps returns members in stack_position (creation) order" do
+      {:ok, project} = Tasks.create_project(%{name: "Merge order nodep"})
+      stack = stack_fixture(project_id: project.id)
+      {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "A"})
+      {:ok, b} = Tasks.create_task(%{project_id: project.id, title: "B"})
+      {:ok, c} = Tasks.create_task(%{project_id: project.id, title: "C"})
+
+      {:ok, _} = Stacks.add_task(stack, a)
+      {:ok, _} = Stacks.add_task(stack, b)
+      {:ok, _} = Stacks.add_task(stack, c)
+
+      assert ids = Stacks.members_in_merge_order(stack) |> Enum.map(& &1.id)
+      assert ids == [a.id, b.id, c.id]
+    end
+
+    test "dependency cycle falls back to stack_position order (does NOT raise)" do
+      {:ok, project} = Tasks.create_project(%{name: "Merge order cycle"})
+      stack = stack_fixture(project_id: project.id)
+      {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "A"})
+      {:ok, b} = Tasks.create_task(%{project_id: project.id, title: "B"})
+
+      # Attach both first (no deps so validate_dag passes), then patch in
+      # the back-edge to create a→b→a.
+      {:ok, attached_a} = Stacks.add_task(stack, a)
+      {:ok, attached_b} = Stacks.add_task(stack, b)
+
+      attached_a
+      |> Task.changeset(%{dependencies: [%{"task_id" => attached_b.id, "kind" => "blocks"}]})
+      |> Repo.update!()
+
+      attached_b
+      |> Task.changeset(%{dependencies: [%{"task_id" => attached_a.id, "kind" => "blocks"}]})
+      |> Repo.update!()
+
+      # validate_dag returns {:error, :cycle, _}; we fall back to members/1.
+      assert {:error, :cycle, _} = Stacks.validate_dag(stack)
+      assert ids = Stacks.members_in_merge_order(stack) |> Enum.map(& &1.id)
+      assert ids == [a.id, b.id]
+    end
+  end
+
   describe "unblocked_in_stack?/1" do
     test "returns false for non-member (stack_id nil)" do
       {:ok, project} = Tasks.create_project(%{name: "Unblock non-member"})

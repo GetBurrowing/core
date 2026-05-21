@@ -348,6 +348,69 @@ defmodule Platform.Tasks.StackDeployerTest do
     end
   end
 
+  # ── handle_stack_created/1 ────────────────────────────────────────────────
+
+  describe "handle_stack_created/1" do
+    test "fires create_rollup_branch at create-time with stack args" do
+      {:ok, _} =
+        FakeRunner.start_link(responses: [{:ok, %{status: :created, base_sha: "created00"}}])
+
+      project = project_with_repo!()
+      stack = stack_for!(project, slug: "created-hook")
+
+      :ok = StackDeployer.handle_stack_created(stack)
+
+      assert [call] = FakeRunner.calls()
+      assert call.rollup_branch == "stack/created-hook"
+      assert call.base_branch == "main"
+      assert call.project_id == project.id
+      assert call.repo_url == project.repo_url
+    end
+
+    test "project missing repo_url → no runner call, no raise" do
+      {:ok, _} = FakeRunner.start_link([])
+
+      project = project_without_repo!()
+      stack = stack_for!(project, slug: "created-no-remote")
+
+      assert :ok = StackDeployer.handle_stack_created(stack)
+      assert FakeRunner.calls() == []
+    end
+
+    test "runner error is swallowed (returns :ok); never raises" do
+      {:ok, _} =
+        FakeRunner.start_link(responses: [{:error, {:git_failed, ["push"], 1, "boom"}}])
+
+      project = project_with_repo!()
+      stack = stack_for!(project, slug: "created-swallow")
+
+      assert :ok = StackDeployer.handle_stack_created(stack)
+      assert [_] = FakeRunner.calls()
+    end
+
+    test "idempotent against handle_stack_transition/3 (both call ensure_rollup_branch)" do
+      {:ok, _} =
+        FakeRunner.start_link(
+          responses: [
+            {:ok, %{status: :created, base_sha: "first000"}},
+            {:ok, %{status: :already_exists, base_sha: "first000"}}
+          ]
+        )
+
+      project = project_with_repo!()
+      stack = stack_for!(project, slug: "created-idempotent")
+
+      assert :ok = StackDeployer.handle_stack_created(stack)
+      assert :ok = StackDeployer.handle_stack_transition(stack, :forming, :in_progress)
+
+      assert [
+               %{rollup_branch: "stack/created-idempotent"},
+               %{rollup_branch: "stack/created-idempotent"}
+             ] =
+               FakeRunner.calls()
+    end
+  end
+
   # ── Stacks.start_stack/1 integration ──────────────────────────────────────
 
   describe "integration with Stacks.start_stack/1" do
