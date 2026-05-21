@@ -68,6 +68,7 @@ defmodule Platform.Application do
       |> maybe_add_attention_router()
       |> maybe_add_node_client()
       |> maybe_add_system_event_scheduler()
+      |> maybe_add_meeting_historian_handler()
       |> ensure_task_router_watcher_after_endpoint()
 
     # See https://hexdocs.pm/elixir/Supervisor.html
@@ -115,6 +116,15 @@ defmodule Platform.Application do
     if Application.get_env(:platform, :start_system_event_scheduler, true) do
       idx = Enum.find_index(children, &(&1 == PlatformWeb.Endpoint)) || length(children)
       List.insert_at(children, idx, Platform.Agents.SystemEventScheduler)
+    else
+      children
+    end
+  end
+
+  defp maybe_add_meeting_historian_handler(children) do
+    if Application.get_env(:platform, :start_meeting_historian_handler, true) do
+      idx = Enum.find_index(children, &(&1 == PlatformWeb.Endpoint)) || length(children)
+      List.insert_at(children, idx, Platform.Agents.MeetingHistorianHandler)
     else
       children
     end

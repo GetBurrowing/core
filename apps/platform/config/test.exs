@@ -45,6 +45,7 @@ config :phoenix,
 
 config :platform, :start_attention_router, false
 config :platform, :start_system_event_scheduler, false
+config :platform, :start_meeting_historian_handler, false
 config :platform, :memory_provider, Platform.Memory.Providers.Null
 
 # StackDeployer (T5) — tests run synchronously and use a no-op git

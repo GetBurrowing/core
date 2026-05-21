@@ -28,15 +28,7 @@ defmodule Platform.Agents.SystemEventScheduler do
 
   require Logger
 
-  import Ecto.Query
-
-  alias Platform.Agents.{Agent, ActivityDigest, Historian}
-  alias Platform.Chat
-  alias Platform.Chat.AgentResponder
-  alias Platform.Federation
-  alias Platform.Federation.RuntimePresence
-  alias Platform.Orchestration.PromptTemplates
-  alias Platform.Repo
+  alias Platform.Agents.{Historian, HistorianDispatcher}
   alias Platform.Tasks.Projects
 
   # ── Defaults ─────────────────────────────────────────────────────────────────
@@ -63,24 +55,6 @@ defmodule Platform.Agents.SystemEventScheduler do
   # historian run before a threshold-triggered dispatch is eligible again.
   @default_threshold_tokens 100_000
   @default_debounce_ms 60 * 60 * 1_000
-
-  # Literal default used as a fallback for empty DB (when prompt_templates has
-  # no `historian.scheduled` row yet). DB-backed templates take precedence via
-  # `PromptTemplates.render_template/2`.
-  @default_historian_instruction """
-  You are the Historian. Below is the activity from the last 24 hours \
-  across all non-DM spaces in the organisation.
-
-  {activity_digest}
-
-  Review recent journal entries and short-term memory. Curate durable \
-  knowledge into pages under `org/page/`, `project/<id>/page/`, and \
-  `space/<id>/page/`. Write transient notes to today's journal at \
-  `org/journal/{date}.md`. Be selective: only promote genuinely new \
-  insights and preserve existing content that is still relevant.
-  """
-
-  @daily_window_hours 24
 
   # ── Public API ───────────────────────────────────────────────────────────────
 
@@ -411,6 +385,12 @@ defmodule Platform.Agents.SystemEventScheduler do
   end
 
   # ── Dispatch ─────────────────────────────────────────────────────────────────
+  #
+  # The full dispatch pipeline (agent lookup, runtime check, system space +
+  # participant resolution, prompt render, AgentResponder fan-out) lives
+  # in `Platform.Agents.HistorianDispatcher` so the scheduler and the
+  # meeting-ended handler share one implementation. This module only picks
+  # the right (template_slug, metadata) pair for each fire path.
 
   defp dispatch_event(event_type) do
     dispatch_event(event_type, template_slug_for(event_type), %{})
@@ -418,204 +398,27 @@ defmodule Platform.Agents.SystemEventScheduler do
 
   defp dispatch_event(event_type, template_slug, extra_metadata)
        when is_binary(template_slug) and is_map(extra_metadata) do
-    case agent_for_event(event_type) do
-      %Agent{} = agent ->
-        Logger.info("[SystemEventScheduler] dispatching #{event_type} to agent=#{agent.slug}")
-        dispatch_to_agent(agent, event_type, template_slug, extra_metadata)
-
-      nil ->
-        Logger.info("[SystemEventScheduler] no active agent flagged for #{event_type}, skipping")
-        :ok
-    end
+    normalized_event = normalize_event(event_type)
+    HistorianDispatcher.dispatch(normalized_event, template_slug, extra_metadata)
   end
 
-  defp agent_for_event(@historian_event) do
-    do_agent_lookup(@historian_event)
-  end
-
-  # Defensive: legacy callers passing `"daily_summary"` or `"dreaming"` fall
-  # back to the historian agent. Logged so we can spot stragglers post-rollup.
-  defp agent_for_event(legacy) when legacy in ["daily_summary", "dreaming"] do
+  # Defensive: legacy callers passing `"daily_summary"` or `"dreaming"` are
+  # remapped to the canonical `"historian"` event. Logged so we can spot
+  # stragglers post-rollup.
+  defp normalize_event(legacy) when legacy in ["daily_summary", "dreaming"] do
     Logger.warning(
       "[SystemEventScheduler] legacy event #{inspect(legacy)} received — " <>
         "routing to historian (drop call site after T6 rollup)"
     )
 
-    do_agent_lookup(@historian_event)
+    @historian_event
   end
 
-  defp agent_for_event(other) do
-    Logger.warning("[SystemEventScheduler] unknown event #{inspect(other)} — skipping")
-    nil
-  end
+  defp normalize_event(@historian_event), do: @historian_event
 
-  defp do_agent_lookup(event_type) do
-    agents =
-      from(a in Agent,
-        where: a.status == "active",
-        where: fragment("? @> ?", a.system_events, ^[event_type]),
-        order_by: [asc: a.inserted_at],
-        limit: 2
-      )
-      |> Repo.all()
-
-    case agents do
-      [] ->
-        nil
-
-      [agent] ->
-        agent
-
-      [agent | _rest] = multiple ->
-        Logger.warning(
-          "[SystemEventScheduler] multiple agents flagged for #{event_type}: " <>
-            "#{inspect(Enum.map(multiple, & &1.slug))} — using #{agent.slug}"
-        )
-
-        agent
-    end
-  end
-
-  defp dispatch_to_agent(%Agent{} = agent, event_type, template_slug, extra_metadata) do
-    with :ok <- ensure_runtime_reachable(agent, event_type),
-         {:ok, space} <- ensure_system_space(agent),
-         {:ok, system_participant} <- ensure_system_participant(space),
-         {:ok, agent_participant} <-
-           Chat.add_agent_participant(space.id, agent, display_name: agent.name),
-         {:ok, message} <-
-           post_instruction(space, system_participant, event_type, template_slug, extra_metadata) do
-      signal = %{
-        participant_id: agent_participant.id,
-        message_id: message.id,
-        space_id: space.id,
-        reason: :system_event,
-        metadata: Map.merge(%{event_type: event_type}, stringify_keys(extra_metadata))
-      }
-
-      AgentResponder.maybe_dispatch(signal)
-    else
-      {:error, reason} ->
-        Logger.error(
-          "[SystemEventScheduler] failed to dispatch #{event_type} to #{agent.slug}: #{inspect(reason)}"
-        )
-
-        {:error, reason}
-    end
-  end
-
-  # Coerce atom/integer/etc metadata values into the shape AgentResponder /
-  # downstream consumers expect (string keys); leave atom values alone.
-  defp stringify_keys(map) when is_map(map) do
-    Map.new(map, fn {k, v} -> {to_string(k), v} end)
-  end
-
-  # Skip dispatch when the external agent's runtime is known to be offline —
-  # avoids posting an instruction that will dead-letter immediately. Built-in
-  # agents always pass this check.
-  #
-  # `agent.runtime_id` is the FK to `agent_runtimes.id` (UUID); presence is
-  # keyed by the human-readable `agent_runtimes.runtime_id` string set by
-  # RuntimeChannel.join. Resolve the runtime row before checking presence.
-  defp ensure_runtime_reachable(
-         %Agent{runtime_type: "external", runtime_id: runtime_pk} = agent,
-         event_type
-       )
-       when is_binary(runtime_pk) do
-    case Federation.get_runtime(runtime_pk) do
-      %{runtime_id: runtime_id} ->
-        if RuntimePresence.online?(runtime_id) do
-          :ok
-        else
-          Logger.warning(
-            "[SystemEventScheduler] skipping #{event_type}: external runtime #{runtime_id} is offline"
-          )
-
-          {:error, :runtime_offline}
-        end
-
-      nil ->
-        Logger.warning(
-          "[SystemEventScheduler] skipping #{event_type}: agent #{agent.slug} runtime row not found (pk=#{runtime_pk})"
-        )
-
-        {:error, :runtime_not_found}
-    end
-  end
-
-  defp ensure_runtime_reachable(%Agent{}, _event_type), do: :ok
-
-  # ── Space + participant helpers ──────────────────────────────────────────────
-
-  defp ensure_system_space(%Agent{} = agent) do
-    slug = "system-#{agent.slug}"
-
-    case Chat.get_space_by_slug(slug) do
-      %Chat.Space{} = space ->
-        {:ok, space}
-
-      nil ->
-        Chat.create_space(%{
-          name: "#{agent.name} — System Events",
-          slug: slug,
-          kind: "system",
-          metadata: %{"system_event_space" => true, "agent_id" => agent.id}
-        })
-    end
-  end
-
-  @system_participant_sentinel "00000000-0000-0000-0000-000000000001"
-
-  defp ensure_system_participant(space) do
-    case Repo.get_by(Chat.Participant,
-           space_id: space.id,
-           participant_type: "user",
-           participant_id: @system_participant_sentinel
-         ) do
-      %Chat.Participant{} = p ->
-        {:ok, p}
-
-      nil ->
-        Chat.add_participant(space.id, %{
-          participant_type: "user",
-          participant_id: @system_participant_sentinel,
-          display_name: "System",
-          joined_at: DateTime.utc_now()
-        })
-    end
-  end
-
-  defp post_instruction(space, system_participant, event_type, template_slug, extra_metadata) do
-    date = Date.to_iso8601(Date.utc_today())
-    digest = activity_digest()
-
-    template_vars =
-      Map.merge(
-        %{date: date, activity_digest: digest},
-        extra_metadata
-      )
-
-    content =
-      case PromptTemplates.render_template(template_slug, template_vars) do
-        {:ok, rendered} ->
-          rendered
-
-        {:error, :not_found} ->
-          @default_historian_instruction
-          |> String.replace("{date}", date)
-          |> String.replace("{activity_digest}", digest)
-      end
-
-    Chat.post_message(%{
-      space_id: space.id,
-      participant_id: system_participant.id,
-      content_type: "text",
-      content: content,
-      metadata:
-        Map.merge(
-          %{"source" => "system_event", "event_type" => event_type},
-          stringify_keys(extra_metadata)
-        )
-    })
+  defp normalize_event(other) do
+    Logger.warning("[SystemEventScheduler] unknown event #{inspect(other)} — passing through")
+    other
   end
 
   defp template_slug_for(@historian_event), do: "historian.scheduled"
@@ -623,10 +426,4 @@ defmodule Platform.Agents.SystemEventScheduler do
   defp template_slug_for("daily_summary"), do: "historian.scheduled"
   defp template_slug_for("dreaming"), do: "historian.scheduled"
   defp template_slug_for(_), do: "historian.scheduled"
-
-  defp activity_digest do
-    window_end = DateTime.utc_now()
-    window_start = DateTime.add(window_end, -@daily_window_hours * 3_600, :second)
-    ActivityDigest.build(window_start, window_end)
-  end
 end
