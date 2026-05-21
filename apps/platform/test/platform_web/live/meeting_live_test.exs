@@ -81,6 +81,43 @@ defmodule PlatformWeb.MeetingLiveTest do
     {meeting, space}
   end
 
+  # Seed a LIVE meeting presence participant for `space` (task 019e4b3e:
+  # the rail/gallery now source from `Meetings.active_participants_for_space/1`,
+  # not durable chat membership). Ensures+activates the room, then inserts a
+  # `Meetings.Participant`. For `"user"` it creates a backing User so the
+  # preloaded identity resolves to a real name; for `"agent"` it creates a
+  # backing Agent. Returns the user/agent id used as the LiveKit identity.
+  defp seed_meeting_presence(space, participant_type, display_name) do
+    {:ok, room} = Platform.Meetings.ensure_room(space.id)
+    {:ok, room} = Platform.Meetings.activate_room(room)
+
+    attrs =
+      case participant_type do
+        "agent" ->
+          agent =
+            Repo.insert!(%Platform.Agents.Agent{
+              slug: "agent-#{System.unique_integer([:positive])}",
+              name: display_name,
+              status: "active"
+            })
+
+          %{agent_id: agent.id, display_name: display_name}
+
+        _ ->
+          user =
+            Repo.insert!(%User{
+              email: "seed_#{System.unique_integer([:positive])}@example.com",
+              name: display_name,
+              oidc_sub: "oidc-seed-#{System.unique_integer([:positive])}"
+            })
+
+          %{user_id: user.id, display_name: display_name}
+      end
+
+    {:ok, participant} = Platform.Meetings.participant_joined(room, attrs)
+    {participant, attrs[:user_id] || attrs[:agent_id]}
+  end
+
   defp seed_message(space, display_name, content) do
     {:ok, participant} =
       Chat.add_participant(space.id, %{
@@ -1296,29 +1333,9 @@ defmodule PlatformWeb.MeetingLiveTest do
       # Stage 4 bugfix (019e2d1a): auto-join now inserts the viewer too,
       # which would add a 3rd human tile and skew the count assertion.
       # `?no_autojoin=true` keeps the test scoped to the seeded humans.
-      {:ok, _ada} =
-        Chat.add_participant(space.id, %{
-          participant_type: "user",
-          participant_id: Ecto.UUID.generate(),
-          display_name: "Ada Lovelace",
-          joined_at: DateTime.utc_now()
-        })
-
-      {:ok, _grace} =
-        Chat.add_participant(space.id, %{
-          participant_type: "user",
-          participant_id: Ecto.UUID.generate(),
-          display_name: "Grace Hopper",
-          joined_at: DateTime.utc_now()
-        })
-
-      {:ok, _bot} =
-        Chat.add_participant(space.id, %{
-          participant_type: "agent",
-          participant_id: Ecto.UUID.generate(),
-          display_name: "Bot McBotface",
-          joined_at: DateTime.utc_now()
-        })
+      {_ada, _} = seed_meeting_presence(space, "user", "Ada Lovelace")
+      {_grace, _} = seed_meeting_presence(space, "user", "Grace Hopper")
+      {_bot, _} = seed_meeting_presence(space, "agent", "Bot McBotface")
 
       {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}?no_autojoin=true")
 
@@ -1505,22 +1522,10 @@ defmodule PlatformWeb.MeetingLiveTest do
          %{conn: conn, meeting: meeting, space: space} do
       # Three humans + one agent. Only humans tile in gallery mode.
       for name <- ~w(Ada Grace Hedy) do
-        {:ok, _} =
-          Chat.add_participant(space.id, %{
-            participant_type: "user",
-            participant_id: Ecto.UUID.generate(),
-            display_name: name,
-            joined_at: DateTime.utc_now()
-          })
+        seed_meeting_presence(space, "user", name)
       end
 
-      {:ok, _bot} =
-        Chat.add_participant(space.id, %{
-          participant_type: "agent",
-          participant_id: Ecto.UUID.generate(),
-          display_name: "Bot",
-          joined_at: DateTime.utc_now()
-        })
+      seed_meeting_presence(space, "agent", "Bot")
 
       # Gallery is the DEFAULT mode now — no click needed.
       {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
@@ -1553,13 +1558,7 @@ defmodule PlatformWeb.MeetingLiveTest do
 
     test "with 1 human participant, gallery uses the 1x1 grid shape",
          %{conn: conn, meeting: meeting, space: space} do
-      {:ok, _} =
-        Chat.add_participant(space.id, %{
-          participant_type: "user",
-          participant_id: Ecto.UUID.generate(),
-          display_name: "Solo",
-          joined_at: DateTime.utc_now()
-        })
+      seed_meeting_presence(space, "user", "Solo")
 
       {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
 
@@ -1570,13 +1569,7 @@ defmodule PlatformWeb.MeetingLiveTest do
     test "with 6 human participants, gallery uses the responsive 1x6 / sm:3x2 grid shape",
          %{conn: conn, meeting: meeting, space: space} do
       for name <- ~w(Ada Grace Hedy Edith Karen Sophie) do
-        {:ok, _} =
-          Chat.add_participant(space.id, %{
-            participant_type: "user",
-            participant_id: Ecto.UUID.generate(),
-            display_name: name,
-            joined_at: DateTime.utc_now()
-          })
+        seed_meeting_presence(space, "user", name)
       end
 
       {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
@@ -1589,16 +1582,9 @@ defmodule PlatformWeb.MeetingLiveTest do
 
     test "identity alignment: gallery and strip use the same `\"user:\" <> pid` format",
          %{conn: conn, meeting: meeting, space: space} do
-      # Seed one human so both renderers have something to emit.
-      pid = Ecto.UUID.generate()
-
-      {:ok, _participant} =
-        Chat.add_participant(space.id, %{
-          participant_type: "user",
-          participant_id: pid,
-          display_name: "Ada Lovelace",
-          joined_at: DateTime.utc_now()
-        })
+      # Seed one live human so both renderers have something to emit. The
+      # gallery_identity is `"user:" <> user_id` (the LiveKit identity).
+      {_participant, pid} = seed_meeting_presence(space, "user", "Ada Lovelace")
 
       {:ok, view, gallery_html} = live(conn, ~p"/meetings/#{meeting.slug}")
 
@@ -2702,15 +2688,28 @@ defmodule PlatformWeb.MeetingLiveTest do
       {meeting, space} = create_meeting(%{slug: "kickoff-selfview", name: "Self View"})
       {conn, user} = authenticated_conn(conn)
 
-      # Add the viewer as a human participant keyed by `user.id` so
-      # `find_participant/2` resolves `@current_participant` and the
-      # self-view renders.
+      # Add the viewer as a chat participant keyed by `user.id` so
+      # `find_participant/2` resolves `@current_participant` (still the
+      # chat-membership row — it drives the LiveKit identity), and as a
+      # LIVE meeting presence row so the viewer appears in `@participants`
+      # (now sourced from `Meetings.active_participants_for_space/1`). Both
+      # carry `user.id`, so `gallery_identity/1` aligns the self-view dock
+      # to the viewer's gallery/strip tile.
       {:ok, _participant} =
         Chat.add_participant(space.id, %{
           participant_type: "user",
           participant_id: user.id,
           display_name: "Self View User",
           joined_at: DateTime.utc_now()
+        })
+
+      {:ok, room} = Platform.Meetings.ensure_room(space.id)
+      {:ok, room} = Platform.Meetings.activate_room(room)
+
+      {:ok, _presence} =
+        Platform.Meetings.participant_joined(room, %{
+          user_id: user.id,
+          display_name: "Self View User"
         })
 
       {:ok, conn: conn, user: user, meeting: meeting, space: space}
@@ -2809,6 +2808,200 @@ defmodule PlatformWeb.MeetingLiveTest do
       {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
 
       refute html =~ ~s(data-role="local-self-view")
+    end
+  end
+
+  # ── Live presence bridge (task 019e4b3e — "Participant List not reflective") ─
+  #
+  # The rail/count must source from LIVE meeting presence
+  # (Meetings.active_participants_for_space/1) — preloaded :user/:agent,
+  # left_at-filtered — NOT from durable Chat membership (whose nil
+  # display_names render as the literal "User" and whose count is wrong).
+  describe "build_meeting_participants/1 + resolve_identity/1" do
+    alias Platform.Meetings.Participant, as: MeetingParticipant
+    alias PlatformWeb.MeetingLive
+
+    test "resolve_identity/1 prefers the preloaded user name and avatar" do
+      p = %MeetingParticipant{
+        user: %User{name: "Ada Lovelace", email: "ada@example.com", avatar_url: "/a.png"},
+        display_name: "stale join name"
+      }
+
+      assert {"Ada Lovelace", "/a.png"} = MeetingLive.resolve_identity(p)
+    end
+
+    test "resolve_identity/1 falls back to join display_name then email" do
+      p_email = %MeetingParticipant{
+        user: %User{name: nil, email: "grace@example.com", avatar_url: nil},
+        display_name: nil
+      }
+
+      assert {"grace@example.com", nil} = MeetingLive.resolve_identity(p_email)
+
+      p_join = %MeetingParticipant{
+        user: %User{name: nil, email: nil, avatar_url: nil},
+        display_name: "Joined As"
+      }
+
+      assert {"Joined As", nil} = MeetingLive.resolve_identity(p_join)
+    end
+
+    test "resolve_identity/1 uses the agent name for agent rows" do
+      p = %MeetingParticipant{
+        agent: %Platform.Agents.Agent{name: "Helper Bot"},
+        display_name: nil
+      }
+
+      assert {"Helper Bot", nil} = MeetingLive.resolve_identity(p)
+    end
+
+    test "resolve_identity/1 returns nil display_name for a genuinely-unknown row" do
+      # Orphaned presence row: user/agent not loaded, no join name. The
+      # render layer (not this fn) supplies the honest "Unknown participant".
+      p = %MeetingParticipant{user: nil, agent: nil, display_name: nil}
+      assert {nil, nil} = MeetingLive.resolve_identity(p)
+    end
+
+    test "build_meeting_participants/1 returns [] for nil space" do
+      assert MeetingLive.build_meeting_participants(nil) == []
+    end
+  end
+
+  describe "MeetingLive @participants sourced from live presence" do
+    alias Platform.Meetings
+
+    # Seed an ACTIVE room for the space and join `users` as live
+    # participants. Returns the list of inserted Meetings.Participant rows.
+    defp seed_active_participants(space, users) do
+      {:ok, room} = Meetings.ensure_room(space.id)
+      {:ok, room} = Meetings.activate_room(room)
+
+      Enum.map(users, fn user ->
+        {:ok, p} =
+          Meetings.participant_joined(room, %{
+            user_id: user.id,
+            display_name: user.name
+          })
+
+        p
+      end)
+    end
+
+    defp seed_user(name) do
+      Repo.insert!(%User{
+        email: "live_#{System.unique_integer([:positive])}@example.com",
+        name: name,
+        oidc_sub: "oidc-live-#{System.unique_integer([:positive])}"
+      })
+    end
+
+    test "rail renders real participant names and the live count, not \"User\"",
+         %{conn: conn} do
+      {meeting, space} = create_meeting(%{slug: "kickoff-live", name: "Kickoff Live"})
+      ada = seed_user("Ada Lovelace")
+      grace = seed_user("Grace Hopper")
+      seed_active_participants(space, [ada, grace])
+
+      {conn, _viewer} = authenticated_conn(conn)
+      {:ok, view, html} = live(conn, ~p"/meetings/#{meeting.slug}?no_autojoin=true")
+
+      assert html =~ "Ada Lovelace"
+      assert html =~ "Grace Hopper"
+
+      # Resolved rows must carry real names — the blanket "User" fallback
+      # (the bug symptom) must NOT appear in any participant-name span.
+      names =
+        :sys.get_state(view.pid).socket.assigns.participants
+        |> Enum.map(& &1.display_name)
+
+      assert "Ada Lovelace" in names
+      assert "Grace Hopper" in names
+      refute "User" in names
+
+      # Count assign reflects the live presence set (2), not membership.
+      assert length(:sys.get_state(view.pid).socket.assigns.participants) == 2
+    end
+
+    test "left_at participants are excluded from the live set", %{conn: conn} do
+      {meeting, space} = create_meeting(%{slug: "kickoff-left", name: "Kickoff Left"})
+      ada = seed_user("Ada Lovelace")
+      grace = seed_user("Grace Hopper")
+      [_ada_row, grace_row] = seed_active_participants(space, [ada, grace])
+
+      # Grace leaves.
+      grace_row
+      |> Platform.Meetings.Participant.changeset(%{left_at: DateTime.utc_now()})
+      |> Repo.update!()
+
+      {conn, _viewer} = authenticated_conn(conn)
+      {:ok, view, html} = live(conn, ~p"/meetings/#{meeting.slug}?no_autojoin=true")
+
+      assert html =~ "Ada Lovelace"
+      refute html =~ "Grace Hopper"
+      assert length(:sys.get_state(view.pid).socket.assigns.participants) == 1
+    end
+
+    test "a participant_left broadcast live-decrements the rail without reload",
+         %{conn: conn} do
+      {meeting, space} = create_meeting(%{slug: "kickoff-decr", name: "Kickoff Decr"})
+      ada = seed_user("Ada Lovelace")
+      grace = seed_user("Grace Hopper")
+      seed_active_participants(space, [ada, grace])
+
+      {conn, _viewer} = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}?no_autojoin=true")
+
+      assert length(:sys.get_state(view.pid).socket.assigns.participants) == 2
+
+      # Grace leaves via the context, which broadcasts {:participant_left, _}
+      # on the room topic AND a presence update on the space topic.
+      {:ok, room} = Meetings.ensure_room(space.id)
+      {:ok, _} = Meetings.participant_left(room, "Grace Hopper")
+
+      # Let the LV process the broadcast.
+      _ = render(view)
+      Process.sleep(50)
+      html = render(view)
+
+      assert html =~ "Ada Lovelace"
+      refute html =~ "Grace Hopper"
+      assert length(:sys.get_state(view.pid).socket.assigns.participants) == 1
+    end
+
+    test "an orphaned (nil user) presence row renders \"Unknown participant\" without poisoning resolved rows",
+         %{conn: conn} do
+      {meeting, space} = create_meeting(%{slug: "kickoff-orphan", name: "Kickoff Orphan"})
+      ada = seed_user("Ada Lovelace")
+
+      {:ok, room} = Meetings.ensure_room(space.id)
+      {:ok, room} = Meetings.activate_room(room)
+
+      # Ada resolves normally.
+      {:ok, _} = Meetings.participant_joined(room, %{user_id: ada.id, display_name: ada.name})
+
+      # Orphaned row: a presence row pointing at a user account that has
+      # since been deleted. The preload returns a nil `:user`, so
+      # `resolve_identity/1` yields nil and the render labels it honestly
+      # as "Unknown participant" rather than trusting the stale join name.
+      ghost =
+        Repo.insert!(%User{
+          email: "ghost_#{System.unique_integer([:positive])}@example.com",
+          name: "Stale Ghost Name",
+          oidc_sub: "oidc-ghost-#{System.unique_integer([:positive])}"
+        })
+
+      {:ok, _} =
+        Meetings.participant_joined(room, %{user_id: ghost.id, display_name: "Stale Ghost Name"})
+
+      Repo.delete!(ghost)
+
+      {conn, _viewer} = authenticated_conn(conn)
+      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}?no_autojoin=true")
+
+      assert html =~ "Ada Lovelace"
+      assert html =~ "Unknown participant"
+      # The stale join name of the deleted account is NOT trusted.
+      refute html =~ "Stale Ghost Name"
     end
   end
 end

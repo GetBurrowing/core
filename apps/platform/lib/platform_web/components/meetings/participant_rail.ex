@@ -67,14 +67,17 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
             ]}
           >
             <.human_avatar
-              name={p.display_name || "User"}
+              name={p.display_name || "Unknown participant"}
               avatar_url={p.avatar_url}
               seed={p.participant_id || p.id}
               size="sm"
               class="flex-shrink-0"
             />
-            <span class="min-w-0 flex-1 truncate font-medium text-base-content/90">
-              {p.display_name || "User"}
+            <span
+              class="min-w-0 flex-1 truncate font-medium text-base-content/90"
+              data-role="participant-name"
+            >
+              {p.display_name || "Unknown participant"}
             </span>
 
             <%!-- Host badge --%>

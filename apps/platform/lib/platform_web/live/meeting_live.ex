@@ -151,6 +151,7 @@ defmodule PlatformWeb.MeetingLive do
   alias Platform.Chat
   alias Platform.Chat.PubSub, as: ChatPubSub
   alias Platform.Meetings
+  alias Platform.Meetings.PubSub, as: MeetingsPubSub
   alias Platform.Repo
   alias Platform.Tasks
   alias PlatformWeb.ChatLive.MeetingHooks
@@ -209,13 +210,27 @@ defmodule PlatformWeb.MeetingLive do
         if connected?(socket) do
           if meeting.chat_space_id do
             ChatPubSub.subscribe(meeting.chat_space_id)
+            # Live meeting presence: `broadcast_presence_change` publishes
+            # `{:meeting_presence_update, …}` on this per-space topic for
+            # every LiveKit join/leave, so the rail/count stay live without
+            # depending on a room row existing at mount time. The granular
+            # `{:participant_joined,_}`/`{:participant_left,_}` events fire on
+            # the room topic (subscribed below when a room is active).
+            MeetingsPubSub.subscribe_presence(meeting.chat_space_id)
+
+            case Meetings.get_active_room(meeting.chat_space_id) do
+              %{id: room_id} -> MeetingsPubSub.subscribe_room(room_id)
+              _ -> :ok
+            end
           end
 
           Phoenix.PubSub.subscribe(Platform.PubSub, meeting_topic(meeting.id))
         end
 
         participants =
-          if meeting.chat_space_id, do: Chat.list_participants(meeting.chat_space_id), else: []
+          if meeting.chat_space_id,
+            do: build_meeting_participants(meeting.chat_space_id),
+            else: []
 
         meeting_canvas = latest_canvas(meeting.chat_space_id)
         agents_by_id = load_agents_by_id(participants)
@@ -574,6 +589,27 @@ defmodule PlatformWeb.MeetingLive do
     {:noreply, refresh_participants(socket)}
   end
 
+  # Live presence delta on the per-space topic. `broadcast_presence_change`
+  # fires this on every LiveKit join/leave (even before/after a room row
+  # exists), so it's the resilient signal that keeps the rail + count live
+  # without a manual refresh. We also (re)subscribe to the now-active room
+  # topic so the granular `{:participant_joined,_}`/`{:participant_left,_}`
+  # events flow if the room was activated after mount.
+  def handle_info({:meeting_presence_update, _payload}, socket) do
+    case socket.assigns[:meeting] do
+      %{chat_space_id: space_id} when is_binary(space_id) ->
+        case Meetings.get_active_room(space_id) do
+          %{id: room_id} -> MeetingsPubSub.subscribe_room(room_id)
+          _ -> :ok
+        end
+
+      _ ->
+        :ok
+    end
+
+    {:noreply, refresh_participants(socket)}
+  end
+
   # Live canvas-creation broadcasts on the meeting's chat-space topic.
   # If the meeting doesn't yet have a tracked canvas, latch on to this
   # one so a peer's "Create canvas" click flips this LV's center stage
@@ -637,7 +673,7 @@ defmodule PlatformWeb.MeetingLive do
 
   defp refresh_participants(%{assigns: %{meeting: %{chat_space_id: space_id}}} = socket)
        when is_binary(space_id) do
-    participants = Chat.list_participants(space_id)
+    participants = build_meeting_participants(space_id)
 
     socket
     |> assign(:participants, participants)
@@ -645,6 +681,120 @@ defmodule PlatformWeb.MeetingLive do
   end
 
   defp refresh_participants(socket), do: socket
+
+  @doc """
+  Build the participant view-model for the rail + gallery from LIVE meeting
+  presence (`Meetings.active_participants_for_space/1`) rather than durable
+  chat-space membership.
+
+  This is the root-cause fix for the "Participant List not reflective" bug:
+  the rail used to read `Chat.list_participants/1` (durable membership, whose
+  `display_name` is frequently nil and renders as the literal "User", and
+  whose count is membership not presence). `Meetings.Participant` rows are
+  fed by the LiveKit webhook (`participant_joined`/`participant_left`),
+  `left_at`-filtered, and preload `:user`/`:agent` — so this returns who is
+  actually in the room with their resolved identity.
+
+  Returns a list of maps shaped exactly like the `Chat.Participant`-derived
+  view-model the rail/gallery already pattern-match on: `:id`,
+  `:participant_id`, `:participant_type`, `:display_name`, `:avatar_url`,
+  `:attention_config`.
+  """
+  def build_meeting_participants(space_id) when is_binary(space_id) do
+    space_id
+    |> Meetings.active_participants_for_space()
+    |> Enum.map(&meeting_participant_view_model/1)
+  end
+
+  def build_meeting_participants(_), do: []
+
+  # Map a single live `Meetings.Participant` row into the rail/gallery
+  # view-model. `:participant_id` is the preloaded `user.id` / `agent.id`
+  # (NOT the meeting_participants row id) so `gallery_identity/1` produces
+  # the same `"user:<user_id>"` LiveKit identity MeetingHooks joins with.
+  defp meeting_participant_view_model(%Meetings.Participant{} = p) do
+    {participant_type, participant_id} =
+      cond do
+        is_binary(p.agent_id) -> {"agent", p.agent_id}
+        is_binary(p.user_id) -> {"user", p.user_id}
+        true -> {"user", nil}
+      end
+
+    {display_name, avatar_url} = resolve_identity(p)
+
+    %{
+      id: p.id,
+      participant_id: participant_id,
+      participant_type: participant_type,
+      display_name: display_name,
+      avatar_url: avatar_url,
+      # Live presence rows don't carry mic state yet; keep the key so the
+      # rail's `mic_on?/1` and the strip's `attention_config` reads stay
+      # total without special-casing nil.
+      attention_config: %{}
+    }
+  end
+
+  # Resolve `{display_name, avatar_url}` for a live meeting participant,
+  # preferring the strongest identity signal available.
+  #
+  #   * Agent rows: the preloaded agent name (then the join name).
+  #   * User rows WITH a loaded user: user.name, then the join name, then
+  #     user.email.
+  #   * Rows with NO loaded user and NO loaded agent (orphaned presence —
+  #     e.g. the backing account was deleted, which `on_delete: :nilify_all`
+  #     turns into a `user_id: nil` row): we deliberately return `nil` so
+  #     the render layer labels them "Unknown participant". An orphaned
+  #     identity is honestly unknown — not a generic "User" (the symptom
+  #     this task fixes), and we do NOT trust the stale join-time
+  #     `display_name` as if it were a live identity.
+  def resolve_identity(%Meetings.Participant{agent: %Agent{} = agent} = p) do
+    name =
+      first_present([
+        agent.name,
+        nilify(p.display_name)
+      ])
+
+    {name, nil}
+  end
+
+  def resolve_identity(%Meetings.Participant{user: %{} = user} = p) do
+    name =
+      first_present([
+        Map.get(user, :name),
+        nilify(p.display_name),
+        Map.get(user, :email)
+      ])
+
+    {name, Map.get(user, :avatar_url)}
+  end
+
+  # Orphaned presence row: neither user nor agent resolved. Honestly unknown.
+  def resolve_identity(%Meetings.Participant{}) do
+    {nil, nil}
+  end
+
+  defp first_present(candidates) do
+    Enum.find_value(candidates, fn
+      v when is_binary(v) ->
+        case String.trim(v) do
+          "" -> nil
+          _ -> v
+        end
+
+      _ ->
+        nil
+    end)
+  end
+
+  defp nilify(v) when is_binary(v) do
+    case String.trim(v) do
+      "" -> nil
+      _ -> v
+    end
+  end
+
+  defp nilify(_), do: nil
 
   # Build a `%{agent_id => %Agent{}}` map for any agent-typed participants.
   # Empty when no agents are seated. Drives the rail's role chip + status dot.

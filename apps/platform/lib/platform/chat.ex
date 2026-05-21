@@ -374,12 +374,23 @@ defmodule Platform.Chat do
   Compute a display name for a space relative to the current user.
 
   - Channel: space.name
+  - Meeting: space.name (falls back to "Meeting")
   - DM: the other participant's display_name
   - Group: comma-separated names (excluding current user), truncated
   """
   @spec display_name_for_space(Space.t(), [Participant.t()], binary()) :: String.t()
   def display_name_for_space(%Space{kind: "channel"} = space, _participants, _current_user_id) do
     space.name || "Unnamed Channel"
+  end
+
+  # Meeting spaces surface in the ChatLive sidebar/header like any other
+  # space (`space_page_title/3`, `space_header_name/3`, `sidebar_display_name/2`
+  # route non-"channel" kinds through here). Without this clause a
+  # `kind: "meeting"` space raised `FunctionClauseError` and crashed the
+  # LiveView — the gap two reviewers worked around today by re-seeding
+  # meeting spaces as channels. Mirrors the "channel" clause: just the name.
+  def display_name_for_space(%Space{kind: "meeting"} = space, _participants, _current_user_id) do
+    space.name || "Meeting"
   end
 
   def display_name_for_space(%Space{kind: "dm"}, participants, current_user_id) do

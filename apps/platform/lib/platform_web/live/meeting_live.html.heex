@@ -300,7 +300,7 @@
           <span class="text-xs font-semibold uppercase tracking-widest text-base-content/50">
             Participants
           </span>
-          <span class="ml-auto text-xs text-base-content/40">
+          <span class="ml-auto text-xs text-base-content/40" data-role="participant-count">
             {length(assigns[:participants] || [])}
           </span>
           <button
@@ -348,7 +348,10 @@
           <span class="hero-chevron-double-right size-4"></span>
         </button>
         <span class="hero-user-group mt-2 size-4 text-base-content/40" aria-hidden="true"></span>
-        <span class="mt-1 text-[10px] font-semibold text-base-content/40">
+        <span
+          class="mt-1 text-[10px] font-semibold text-base-content/40"
+          data-role="participant-count"
+        >
           {length(assigns[:participants] || [])}
         </span>
       </aside>
@@ -532,7 +535,7 @@
                       participant={
                         %{
                           identity: gallery_identity(p),
-                          name: p.display_name || "Participant"
+                          name: p.display_name || "Unknown participant"
                         }
                       }
                       video_track={false}
@@ -801,7 +804,7 @@
             participant={
               %{
                 identity: gallery_identity(participant),
-                name: participant.display_name || "Participant"
+                name: participant.display_name || "Unknown participant"
               }
             }
             video_track={false}
