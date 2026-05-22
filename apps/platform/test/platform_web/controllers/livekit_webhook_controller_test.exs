@@ -310,11 +310,11 @@ defmodule PlatformWeb.LivekitWebhookControllerTest do
 
   describe "POST #{@livekit_webhook_path} — unhandled events" do
     test "ignores unknown event types", %{conn: conn} do
-      payload = %{"event" => "participant_joined", "room" => %{"sid" => "room-1"}}
+      payload = %{"event" => "egress_started", "room" => %{"sid" => "room-1"}}
 
       conn = post(conn, @livekit_webhook_path, payload)
 
-      assert %{"status" => "ignored", "reason" => "unhandled event: participant_joined"} =
+      assert %{"status" => "ignored", "reason" => "unhandled event: egress_started"} =
                json_response(conn, 200)
     end
 
@@ -324,5 +324,148 @@ defmodule PlatformWeb.LivekitWebhookControllerTest do
       assert %{"status" => "ignored", "reason" => "no event field"} =
                json_response(conn, 200)
     end
+  end
+
+  # ── participant_joined / participant_left tests ──────────────────────────
+
+  describe "POST #{@livekit_webhook_path} — participant_joined" do
+    test "upserts a meeting_participants row with a resolvable user_id", %{conn: conn} do
+      %{room: room, user: user} = seed_room_and_user()
+
+      payload = %{
+        "event" => "participant_joined",
+        "room" => %{"name" => room.livekit_room_name},
+        "participant" => %{"identity" => "user:#{user.id}", "name" => "Ada Lovelace"}
+      }
+
+      conn = post(conn, @livekit_webhook_path, payload)
+      assert %{"status" => "ok"} = json_response(conn, 200)
+
+      [p] = Meetings.active_participants(room.id)
+      assert p.user_id == user.id
+      assert p.display_name == "Ada Lovelace"
+    end
+
+    test "resolves an agent identity to agent_id", %{conn: conn} do
+      %{room: room} = seed_room_and_user()
+      agent = seed_agent()
+
+      payload = %{
+        "event" => "participant_joined",
+        "room" => %{"name" => room.livekit_room_name},
+        "participant" => %{"identity" => "agent:#{agent.id}", "name" => "Summarizer"}
+      }
+
+      conn = post(conn, @livekit_webhook_path, payload)
+      assert %{"status" => "ok"} = json_response(conn, 200)
+
+      [p] = Meetings.active_participants(room.id)
+      assert p.agent_id == agent.id
+    end
+
+    test "resolves a flattened (no nested participant) payload", %{conn: conn} do
+      %{room: room, user: user} = seed_room_and_user()
+
+      payload = %{
+        "event" => "participant_joined",
+        "room" => %{"name" => room.livekit_room_name},
+        "identity" => "user:#{user.id}",
+        "name" => "Ada Lovelace"
+      }
+
+      conn = post(conn, @livekit_webhook_path, payload)
+      assert %{"status" => "ok"} = json_response(conn, 200)
+
+      [p] = Meetings.active_participants(room.id)
+      assert p.user_id == user.id
+    end
+
+    test "ignores an unknown room name without creating a row", %{conn: conn} do
+      payload = %{
+        "event" => "participant_joined",
+        "room" => %{"name" => "space-#{Ecto.UUID.generate()}"},
+        "participant" => %{"identity" => "user:#{Ecto.UUID.generate()}", "name" => "Nobody"}
+      }
+
+      conn = post(conn, @livekit_webhook_path, payload)
+      assert %{"status" => "ignored", "reason" => "unknown room"} = json_response(conn, 200)
+    end
+  end
+
+  describe "POST #{@livekit_webhook_path} — participant_left" do
+    test "sets left_at on the matching active row", %{conn: conn} do
+      %{room: room, user: user} = seed_room_and_user()
+
+      {:ok, _} =
+        Meetings.upsert_live_participant(room, %{
+          identity: "user:#{user.id}",
+          name: "Ada Lovelace"
+        })
+
+      payload = %{
+        "event" => "participant_left",
+        "room" => %{"name" => room.livekit_room_name},
+        "participant" => %{"identity" => "user:#{user.id}", "name" => "Ada Lovelace"}
+      }
+
+      conn = post(conn, @livekit_webhook_path, payload)
+      assert %{"status" => "ok"} = json_response(conn, 200)
+
+      assert Meetings.active_participants(room.id) == []
+    end
+
+    test "tolerates a leave for a participant that was never recorded", %{conn: conn} do
+      %{room: room} = seed_room_and_user()
+
+      payload = %{
+        "event" => "participant_left",
+        "room" => %{"name" => room.livekit_room_name},
+        "participant" => %{"identity" => "user:#{Ecto.UUID.generate()}", "name" => "Ghost"}
+      }
+
+      conn = post(conn, @livekit_webhook_path, payload)
+
+      assert %{"status" => "ignored", "reason" => "participant not found"} =
+               json_response(conn, 200)
+    end
+  end
+
+  defp seed_room_and_user do
+    {:ok, space} =
+      Platform.Chat.create_space(%{
+        name: "Webhook Test Space",
+        slug: "webhook-test-#{System.unique_integer([:positive])}",
+        kind: "channel"
+      })
+
+    {:ok, room} = Meetings.ensure_room(space.id)
+
+    n = System.unique_integer([:positive])
+
+    {:ok, user} =
+      %Platform.Accounts.User{}
+      |> Platform.Accounts.User.changeset(%{
+        name: "Ada Lovelace",
+        email: "ada-#{n}@example.com",
+        oidc_sub: "sub-#{n}"
+      })
+      |> Platform.Repo.insert()
+
+    %{room: room, user: user}
+  end
+
+  defp seed_agent do
+    n = System.unique_integer([:positive])
+
+    {:ok, agent} =
+      %Platform.Agents.Agent{}
+      |> Platform.Agents.Agent.changeset(%{
+        slug: "summarizer-#{n}",
+        name: "Summarizer",
+        status: "active"
+      })
+      |> Platform.Repo.insert()
+
+    agent
   end
 end

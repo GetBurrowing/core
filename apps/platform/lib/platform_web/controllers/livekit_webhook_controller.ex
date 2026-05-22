@@ -137,6 +137,68 @@ defmodule PlatformWeb.LivekitWebhookController do
   end
 
   @doc """
+  Handle `participant_joined` events — upsert a resolvable
+  `meeting_participants` row so the rail/gallery render the joiner's real
+  name (not the literal "User"). The webhook is the only server-side
+  signal that a participant actually connected to the LiveKit room.
+  """
+  def handle(conn, %{"event" => "participant_joined"} = params) do
+    participant = normalize_participant(params)
+
+    case lookup_room(params) do
+      nil ->
+        conn |> put_status(:ok) |> json(%{status: "ignored", reason: "unknown room"})
+
+      room ->
+        case Meetings.upsert_live_participant(room, %{
+               identity: participant["identity"],
+               name: participant["name"]
+             }) do
+          {:ok, p} ->
+            Logger.info(
+              "[LiveKit] participant_joined room=#{room.livekit_room_name} " <>
+                "identity=#{participant["identity"]} participant_id=#{p.id}"
+            )
+
+            conn |> put_status(:ok) |> json(%{status: "ok", participant_id: p.id})
+
+          {:error, reason} ->
+            Logger.warning(
+              "[LiveKit] participant_joined upsert failed for room #{room.livekit_room_name}: " <>
+                inspect(reason)
+            )
+
+            conn |> put_status(:unprocessable_entity) |> json(%{status: "error"})
+        end
+    end
+  end
+
+  @doc """
+  Handle `participant_left` events — set `left_at` on the matching active
+  row. Tolerates a leave for a participant we never recorded.
+  """
+  def handle(conn, %{"event" => "participant_left"} = params) do
+    participant = normalize_participant(params)
+
+    case lookup_room(params) do
+      nil ->
+        conn |> put_status(:ok) |> json(%{status: "ignored", reason: "unknown room"})
+
+      room ->
+        case Meetings.mark_live_participant_left(room, %{
+               identity: participant["identity"],
+               name: participant["name"]
+             }) do
+          {:ok, p} ->
+            conn |> put_status(:ok) |> json(%{status: "ok", participant_id: p.id})
+
+          {:error, :not_found} ->
+            conn |> put_status(:ok) |> json(%{status: "ignored", reason: "participant not found"})
+        end
+    end
+  end
+
+  @doc """
   Catch-all for unhandled event types.
   """
   def handle(conn, %{"event" => event} = _params) do
@@ -186,6 +248,24 @@ defmodule PlatformWeb.LivekitWebhookController do
       })
     end
   end
+
+  # Resolve the meeting room from a webhook payload. Room name lives at
+  # `room["name"]` (e.g. `"space-<uuid>"`); returns nil when absent or
+  # when no room row exists yet.
+  defp lookup_room(%{"room" => %{"name" => name}}) when is_binary(name) do
+    Meetings.get_room_by_name(name)
+  end
+
+  defp lookup_room(_params), do: nil
+
+  # LiveKit nests the participant under `participant`; older/flattened
+  # payloads put `identity`/`name` at the top level. Mirror the
+  # `seg["participant_identity"] || seg["identity"]` fallback in
+  # normalize_segment/1.
+  defp normalize_participant(%{"participant" => participant}) when is_map(participant),
+    do: participant
+
+  defp normalize_participant(params), do: params
 
   defp normalize_segment(seg) do
     %{

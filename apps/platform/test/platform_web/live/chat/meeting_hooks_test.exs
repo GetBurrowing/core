@@ -51,6 +51,19 @@ defmodule PlatformWeb.ChatLive.MeetingHooksTest do
     %Phoenix.LiveView.Socket{assigns: Map.put(assigns, :__changed__, %{})}
   end
 
+  # Insert a real user row directly (bypassing the changeset's name
+  # requirement) so we can exercise the name- and email-fallback branches
+  # of resolve_display_name/1.
+  defp create_user(name) do
+    n = System.unique_integer([:positive])
+
+    Platform.Repo.insert!(%Platform.Accounts.User{
+      name: name,
+      email: "user-#{n}@example.com",
+      oidc_sub: "sub-#{n}"
+    })
+  end
+
   # ── meeting_join → Membership.ensure_chat_space_participant/3 ─────────────
 
   describe "meeting_join participant insert (stage 4)" do
@@ -183,13 +196,15 @@ defmodule PlatformWeb.ChatLive.MeetingHooksTest do
       result = MeetingHooks.join(socket)
 
       # The join lifecycle DID run (in_meeting flipped) AND Membership
-      # inserted the canonical row using the "User" fallback display
-      # name (no current_participant means nothing to copy from).
+      # inserted the canonical row. With no current_participant AND no
+      # real user row to resolve a name from, resolve_display_name/1 now
+      # falls through to the neutral "Guest" default (v2: never the
+      # literal "User" — that's the bug v2 closes).
       assert result.assigns.in_meeting == true
       assert %Participant{participant_id: ^user_id} = result.assigns.current_participant
 
       participants = Chat.list_participants(space.id, participant_type: "user")
-      assert [%Participant{participant_id: ^user_id, display_name: "User"}] = participants
+      assert [%Participant{participant_id: ^user_id, display_name: "Guest"}] = participants
     end
 
     test "nil user_id short-circuits without crash and does NOT call Membership" do
@@ -215,6 +230,75 @@ defmodule PlatformWeb.ChatLive.MeetingHooksTest do
 
       assert result.assigns.in_meeting == false
       assert Platform.Repo.aggregate(Participant, :count, :id) == before_count
+    end
+  end
+
+  # ── resolve_display_name/1 hardening (stage 3) ────────────────────────────
+
+  describe "join name resolution (stage 3)" do
+    setup [:put_livekit_env]
+
+    test "resolves the real user's name when current_participant has a blank display_name" do
+      space = create_space()
+      user = create_user("Ada Lovelace")
+
+      # current_participant present but with a blank display_name — the
+      # pre-v2 code would have published the literal "User"; v2 falls
+      # through to the real user's name.
+      current_participant = %Participant{
+        id: Ecto.UUID.generate(),
+        space_id: space.id,
+        participant_type: "user",
+        participant_id: user.id,
+        display_name: ""
+      }
+
+      socket =
+        build_socket(%{
+          user_id: user.id,
+          active_space: space,
+          current_participant: current_participant,
+          in_meeting: false,
+          mic_enabled: true,
+          camera_enabled: false,
+          screen_share_enabled: false
+        })
+
+      result = MeetingHooks.join(socket)
+      assert result.assigns.in_meeting == true
+
+      [%Participant{display_name: name}] =
+        Chat.list_participants(space.id, participant_type: "user")
+
+      assert name == "Ada Lovelace"
+      refute name == "User"
+    end
+
+    test "resolves the real user's name even with no current_participant assign" do
+      # A fresh joiner (no chat_participants row yet) with a real user
+      # record must still publish their real name, not the literal "User".
+      space = create_space()
+      user = create_user("Grace Hopper")
+
+      socket =
+        build_socket(%{
+          user_id: user.id,
+          active_space: space,
+          current_participant: nil,
+          in_meeting: false,
+          mic_enabled: true,
+          camera_enabled: false,
+          screen_share_enabled: false
+        })
+
+      result = MeetingHooks.join(socket)
+      assert result.assigns.in_meeting == true
+
+      [%Participant{display_name: name}] =
+        Chat.list_participants(space.id, participant_type: "user")
+
+      assert name == "Grace Hopper"
+      refute name == "User"
     end
   end
 

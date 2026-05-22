@@ -59,6 +59,7 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
   import Phoenix.Component, only: [assign: 3]
   import Phoenix.LiveView, only: [attach_hook: 4, push_event: 3, connected?: 1]
 
+  alias Platform.Accounts
   alias Platform.Meetings
   alias Platform.Meetings.Membership, as: MeetingsMembership
   alias Platform.Meetings.PubSub, as: MeetingsPubSub
@@ -221,7 +222,10 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
            MeetingsMembership.ensure_chat_space_participant(space.id, user_id, display_name),
          {:ok, room} <- Meetings.ensure_room(space.id),
          identity = "user:#{user_id}",
-         name = participant.display_name || display_name,
+         # Prefer the hardened resolved name over a stale/blank participant
+         # row name (legacy rows may carry the literal "User") so the
+         # LiveKit-published tile shows the real name immediately.
+         name = grant_name(participant.display_name, display_name),
          {:ok, token} <- Meetings.generate_token(room, %{identity: identity, name: name}) do
       socket =
         socket
@@ -255,19 +259,53 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
   #   1. existing `:current_participant.display_name` (set by MeetingLive
   #      mount when the viewer already had a row),
   #   2. `:current_user_display_name` if the host LV bothered to assign one,
-  #   3. `"User"` fallback — matches Membership's own default.
+  #   3. the real user's `name`, then `email`, looked up by `:user_id`,
+  #   4. a neutral `"Guest"` default.
+  #
+  # This name is handed to LiveKit as the token `name` grant (do_join/1),
+  # so the published video tile shows the real name in the sub-second
+  # window BEFORE the `participant_joined` webhook lands and the rail
+  # re-resolves from the DB row. Returning "User" here would leak that
+  # literal onto the tile, which is exactly the bug v2 closes — so this
+  # falls all the way through to the user's name/email first.
   defp resolve_display_name(socket) do
-    case socket.assigns[:current_participant] do
-      %{display_name: name} when is_binary(name) and name != "" ->
+    cond do
+      is_binary(name = participant_display_name(socket.assigns[:current_participant])) and
+          name != "" ->
         name
 
-      _ ->
-        case socket.assigns[:current_user_display_name] do
-          name when is_binary(name) and name != "" -> name
-          _ -> "User"
-        end
+      is_binary(name = socket.assigns[:current_user_display_name]) and name != "" ->
+        name
+
+      is_binary(name = user_name_or_email(socket.assigns[:user_id])) and name != "" ->
+        name
+
+      true ->
+        "Guest"
     end
   end
+
+  defp participant_display_name(%{display_name: name}), do: name
+  defp participant_display_name(_), do: nil
+
+  # Choose the LiveKit `name` grant. The participant row's display_name
+  # wins only when it is a real, non-"User" name; otherwise fall back to
+  # the hardened resolved name.
+  defp grant_name(participant_name, _resolved)
+       when is_binary(participant_name) and participant_name != "" and participant_name != "User",
+       do: participant_name
+
+  defp grant_name(_participant_name, resolved), do: resolved
+
+  defp user_name_or_email(user_id) when is_binary(user_id) do
+    case Accounts.get_user(user_id) do
+      %{name: name} when is_binary(name) and name != "" -> name
+      %{email: email} when is_binary(email) and email != "" -> email
+      _ -> nil
+    end
+  end
+
+  defp user_name_or_email(_), do: nil
 
   defp reset_meeting_state(socket) do
     socket
