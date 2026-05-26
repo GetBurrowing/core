@@ -47,20 +47,145 @@ const MeetingClient = {
     this._viewportQuery = window.matchMedia("(min-width: 1024px)")
     this._onViewportChange = () => this._rehomeTiles()
     this._viewportQuery.addEventListener("change", this._onViewportChange)
+
+    // ── Reconnect survival (task 019e4b3e stage 1) ──────────────────────
+    // The live LiveKit Room object only exists inside this hook instance.
+    // Phoenix LiveView fires destroyed()/mounted() on a 1006 abnormal
+    // socket close (Rowan's console: publish track -> "LiveView not
+    // connected" -> code:1006 -> "disconnect from room"). If destroyed()
+    // disconnects the room, the media session dies and the camera never
+    // re-engages. So: a genuine page exit (pagehide/beforeunload) is the
+    // only thing that should tear the room down here; an LV element
+    // re-mount must ADOPT the still-connected room left on
+    // window.__livekit_room (mirrors meeting_room.js:32-52).
+    this._onPageHide = () => {
+      this._leave()
+    }
+    window.addEventListener("pagehide", this._onPageHide)
+    window.addEventListener("beforeunload", this._onPageHide)
+
+    // Adopt an existing connected room left behind by a prior hook
+    // instance (LV repatch/reconnect). Re-wire listeners + rebuild tiles
+    // WITHOUT reconnecting so the media session survives the remount.
+    const existing = window.__livekit_room || window.__livekitRoom
+    if (existing && existing.state === "connected") {
+      this._adoptRoom(existing)
+    }
   },
 
   destroyed() {
-    this._teardownLocalVideo()
-    this._leave()
+    // Do NOT disconnect the LiveKit room here. A destroyed() can be a
+    // transient LV repatch/reconnect (1006) — the room must outlive it so
+    // the next mounted() can re-adopt it. True leaves go through the
+    // server "leave-meeting" push + RoomEvent.Disconnected, and a real
+    // page exit goes through the pagehide/beforeunload listener above.
+    window.removeEventListener("pagehide", this._onPageHide)
+    window.removeEventListener("beforeunload", this._onPageHide)
     this._viewportQuery?.removeEventListener("change", this._onViewportChange)
+  },
+
+  // v4 case-3 fix: Phoenix LiveView calls reconnected() on the hook after
+  // its socket reconnects (Rowan's 1006 blip). On a pure socket reconnect
+  // the `#meeting-client` element is re-patched by morphdom from
+  // server-rendered HTML that carries NO `data-room-state` (it's a
+  // JS-owned attribute), so the breadcrumb the reviewer asserts gets
+  // stripped even though the LiveKit room never disconnected and survives
+  // on window.__livekit_room. Re-stamp it here against the surviving room
+  // so `dataset.roomState` returns to 'connected' after the reconnect
+  // settles — and re-reconcile camera/mic from committed intent so the
+  // local feed re-engages, mirroring the adopt path.
+  reconnected() {
+    const room = this._room || window.__livekit_room || window.__livekitRoom
+    if (room && room.state === "connected") {
+      this._emitState("connected", room)
+      this._reconcileLocalMedia(room)
+    }
+  },
+
+  // Adopt an already-connected Room object (reconnect/remount path). Wires
+  // the shared RoomEvent listeners, rebuilds local + remote tiles, and
+  // reconciles the local camera/mic against committed server intent —
+  // never re-connecting. Symmetric with meeting_room.js's _tryBind.
+  _adoptRoom(room) {
+    // Even when we've already adopted THIS room object (a pure LV repatch
+    // where the hook re-mounts against the same surviving Room), re-stamp
+    // the connection state: LiveView's morphdom patch re-renders the
+    // server-owned `#meeting-client` element, which carries no
+    // `data-room-state` (it's JS-owned), so the attribute gets WIPED on the
+    // patch. Re-emitting here puts `dataset.roomState='connected'` back
+    // without re-binding listeners or re-attaching media. This is the v4
+    // case-3 fix: the room survives the 1006 blip but the breadcrumb the
+    // reviewer asserts (`#meeting-client.dataset.roomState === 'connected'`)
+    // was absent after the reconnect settled.
+    if (this._room === room) {
+      this._emitState("connected", room)
+      return
+    }
+    this._room = room
+    window.__livekit_room = room
+    window.__livekitRoom = room
+
+    this._bindRoomEvents(room)
+    this._emitState("connected", room)
+
+    this._ensureTile(room.localParticipant)
+
+    // Re-attach an already-published local camera into the persistent
+    // self-view + dock for the current mode.
+    for (const pub of room.localParticipant.trackPublications.values()) {
+      if (
+        pub.track &&
+        pub.kind === Track.Kind.Video &&
+        !isScreenShareSource(pub.track.source)
+      ) {
+        this._attachLocalVideo(pub.track)
+        break
+      }
+    }
+
+    for (const participant of room.remoteParticipants.values()) {
+      this._ensureTile(participant)
+      for (const pub of participant.trackPublications.values()) {
+        if (pub.track) this._attachTrack(pub.track, participant)
+      }
+    }
+
+    // Reconcile camera/mic against committed intent (stage 3): the LV
+    // socket may still be settling, so read intent from the DOM dataset
+    // rather than waiting for a server push.
+    this._reconcileLocalMedia(room)
   },
 
   // ── Local self-view: single persistent <video>, reparented per mode ──────
 
   // The off-layout parking node the persistent local <video> is born in and
   // returns to between docks. Stable id + phx-update="ignore" in the markup.
+  //
+  // v4 stage 2: the /chat quick-meet panel renders TWO parking slots
+  // simultaneously — desktop side pane (`lg:flex`) and mobile overlay
+  // (`lg:hidden`) — tagged `data-pane="desktop"`/`"mobile"`. Pick the
+  // currently-visible pane (matchMedia, parity with `_grid()` /
+  // `_screenShareSlot()`) so the <video> parks in the on-screen panel.
+  // MeetingLive renders a SINGLE unscoped slot (no `data-pane`), so we
+  // fall back to the plain `[data-role="local-self-view"]` selector there.
   _localParkingSlot() {
-    return document.querySelector('[data-role="local-self-view"]')
+    return this._paneScoped('[data-role="local-self-view"]')
+  },
+
+  // Resolve the pane-scoped variant of `selector` for the visible viewport,
+  // falling back to a mobile/desktop sibling, then to the unscoped node
+  // (MeetingLive's single-layout surface, which carries no `data-pane`).
+  _paneScoped(selector) {
+    const desktop = document.querySelector(`${selector}[data-pane="desktop"]`)
+    const mobile = document.querySelector(`${selector}[data-pane="mobile"]`)
+    if (desktop || mobile) {
+      const isDesktop =
+        typeof window !== "undefined" && window.matchMedia
+          ? window.matchMedia("(min-width: 1024px)").matches
+          : true
+      return isDesktop ? desktop || mobile : mobile || desktop
+    }
+    return document.querySelector(selector)
   },
 
   // Read the active stage mode from the center-stage data attribute (the
@@ -110,7 +235,10 @@ const MeetingClient = {
       mode === "gallery"
         ? '[data-local-video-dock][data-dock-mode="gallery"]'
         : '[data-local-video-dock][data-dock-mode="strip"]'
-    const dock = document.querySelector(selector)
+    // v4 stage 2: pick the visible-pane dock on /chat (two coexisting
+    // quick-meet variants tagged data-pane); falls back to the unscoped
+    // dock on MeetingLive (single layout, no data-pane).
+    const dock = this._paneScoped(selector)
 
     if (!dock) {
       if (!_retried) {
@@ -167,24 +295,11 @@ const MeetingClient = {
     }
   },
 
-  async _join({ token, url }) {
-    if (this._room) {
-      console.warn("[MeetingClient] join-meeting while already connected; disconnecting first")
-      await this._room.disconnect().catch(() => {})
-      this._room = null
-    }
-
-    if (!token || !url) {
-      console.error("[MeetingClient] join-meeting missing token or url", { url })
-      return
-    }
-
-    const room = new Room({
-      adaptiveStream: true,
-      dynacast: true,
-      publishDefaults: { simulcast: true },
-    })
-
+  // Wire the shared RoomEvent listeners onto a Room. Factored out of
+  // `_join` (task 019e4b3e stage 1) so the adopt path (mounted() finding a
+  // surviving room after an LV reconnect) re-binds the identical handler
+  // set without duplicating them.
+  _bindRoomEvents(room) {
     room.on(RoomEvent.ParticipantConnected, (p) => this._ensureTile(p))
     room.on(RoomEvent.ParticipantDisconnected, (p) => this._removeTile(p.identity))
     room.on(RoomEvent.TrackSubscribed, (track, pub, participant) =>
@@ -226,10 +341,56 @@ const MeetingClient = {
       const identities = speakers.map((p) => p.identity)
       this._markSpeakers(identities)
     })
+
+    // ── Reconnect lifecycle (task 019e4b3e stages 3+4) ───────────────────
+    // LiveKit runs its own ICE-restart machinery; on a transient network
+    // blip the SFU can drop the local camera publication while the server's
+    // :camera_enabled intent still reads true. On Reconnected we reconcile
+    // local media against committed intent read from the DOM dataset
+    // (reconnect-safe — no dependency on a fresh LV push).
+    room.on(RoomEvent.Reconnecting, () => {
+      this._emitState("reconnecting", room)
+    })
+    room.on(RoomEvent.Reconnected, () => {
+      this._emitState("reconnected", room)
+      this._reconcileLocalMedia(room)
+    })
+
     room.on(RoomEvent.Disconnected, () => {
+      this._emitState("disconnected", room)
       this._cleanupRoom()
       this.pushEvent("meeting_left", {})
     })
+  },
+
+  async _join({ token, url }) {
+    // Adopt instead of disconnect-then-reconnect when we already hold a
+    // connected room (task 019e4b3e stage 1) — avoids the
+    // publish->disconnect->republish thrash seen in Rowan's console.
+    const existing = this._room || window.__livekit_room || window.__livekitRoom
+    if (existing && existing.state === "connected") {
+      this._adoptRoom(existing)
+      return
+    }
+
+    if (this._room) {
+      console.warn("[MeetingClient] join-meeting while already connected; disconnecting first")
+      await this._room.disconnect().catch(() => {})
+      this._room = null
+    }
+
+    if (!token || !url) {
+      console.error("[MeetingClient] join-meeting missing token or url", { url })
+      return
+    }
+
+    const room = new Room({
+      adaptiveStream: true,
+      dynacast: true,
+      publishDefaults: { simulcast: true },
+    })
+
+    this._bindRoomEvents(room)
 
     try {
       await room.connect(url, token)
@@ -243,6 +404,7 @@ const MeetingClient = {
     window.__livekitRoom = room
     window.dispatchEvent(new CustomEvent("livekit:room-connected", { detail: { room } }))
     document.dispatchEvent(new CustomEvent("livekit:room-connected", { detail: { room } }))
+    this._emitState("connected", room)
 
     try {
       await room.localParticipant.setMicrophoneEnabled(true)
@@ -272,6 +434,20 @@ const MeetingClient = {
         if (pub.track) this._attachTrack(pub.track, participant)
       }
     }
+
+    // v4 stage 2: drive the camera from committed server intent on the
+    // INITIAL join too — not just on Reconnected/adopt. `_join` previously
+    // only enabled the mic (line above), so a fresh /chat quick-meet join
+    // published audio-only and the camera never turned on (v3 e2e: "only
+    // the microphone track is published, 0 video publications"). Reusing
+    // the same intent-sourced reconcile keeps join + reconnect camera-
+    // engage on ONE code path so they can't drift, and honors a user who
+    // joined with camera intentionally off (data-camera-enabled="false").
+    // The resulting LocalTrackPublished fires _attachLocalVideo via
+    // _bindRoomEvents, which parks the <video> into the [data-role=
+    // "local-self-view"] slot (stage 2 change B adds one to the quick-meet
+    // panel) and docks it.
+    this._reconcileLocalMedia(room)
   },
 
   async _leave() {
@@ -307,6 +483,58 @@ const MeetingClient = {
           slot.dataset.screenShareActive = "false"
           delete slot.dataset.screenShareSharer
         })
+    }
+  },
+
+  // ── Reconnect signal + media reconcile (stages 3 + 4) ───────────────────
+
+  // Emit a deterministic, race-free reconnect/connection signal for tests
+  // (stage 5 e2e) AND prod observability. Sets `dataset.roomState` on the
+  // `#meeting-client` element and dispatches a `livekit:state` DOM
+  // CustomEvent carrying the local publishing booleans. The legacy
+  // `livekit:room-connected`/`-disconnected` events stay (back-compat with
+  // meeting_room.js). Rowan debugs from the Safari console, so a one-line
+  // console.info breadcrumb is left on each transition.
+  _emitState(state, room) {
+    if (this.el && this.el.dataset) this.el.dataset.roomState = state
+
+    const lp = room && room.localParticipant
+    const detail = {
+      state,
+      roomName: (room && room.name) || null,
+      localPublishing: {
+        camera: lp ? lp.isCameraEnabled === true : false,
+        mic: lp ? lp.isMicrophoneEnabled === true : false,
+      },
+    }
+
+    console.info("[MeetingClient] state", state)
+    document.dispatchEvent(new CustomEvent("livekit:state", { detail }))
+  },
+
+  // Reconcile the local camera/mic against committed server intent after a
+  // reconnect or remount-adopt (stage 3). Intent lives on the
+  // `#meeting-client` dataset (data-camera-enabled / data-mic-enabled),
+  // which the server controls — reading it is reconnect-safe and does not
+  // depend on a fresh LV push (Rowan's exact error was "unable to push hook
+  // event. LiveView not connected").
+  _reconcileLocalMedia(room) {
+    const lp = room && room.localParticipant
+    if (!lp) return
+    const ds = (this.el && this.el.dataset) || {}
+
+    const wantCamera = ds.cameraEnabled === "true"
+    const wantMic = ds.micEnabled === "true"
+
+    if (wantCamera && lp.isCameraEnabled === false) {
+      Promise.resolve(lp.setCameraEnabled(true)).catch((err) =>
+        console.warn("[MeetingClient] reconnect camera re-engage failed:", err),
+      )
+    }
+    if (wantMic && lp.isMicrophoneEnabled === false) {
+      Promise.resolve(lp.setMicrophoneEnabled(true)).catch((err) =>
+        console.warn("[MeetingClient] reconnect mic re-engage failed:", err),
+      )
     }
   },
 

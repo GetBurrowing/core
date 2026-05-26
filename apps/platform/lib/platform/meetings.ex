@@ -683,6 +683,37 @@ defmodule Platform.Meetings do
     end
   end
 
+  @doc """
+  Return the active (`left_at IS NULL`) participant row for a given user in
+  a space's current meeting, or `nil`.
+
+  Used by the LiveView reconnect path (`MeetingHooks.attach/1`) to detect
+  that a user was already in the live meeting before a transient socket
+  drop, so the reconnect mount can restore `:in_meeting` and re-push
+  `join-meeting` instead of resetting state. Resolves the active room via
+  `get_active_room/1` and matches on `user_id` (the FK the live join path
+  records via `upsert_live_participant/2`).
+  """
+  @spec active_participant_for_user_in_space(binary(), binary()) :: Participant.t() | nil
+  def active_participant_for_user_in_space(space_id, user_id)
+      when is_binary(space_id) and is_binary(user_id) do
+    case get_active_room(space_id) do
+      nil ->
+        nil
+
+      room ->
+        Repo.one(
+          from(p in Participant,
+            where: p.room_id == ^room.id and p.user_id == ^user_id and is_nil(p.left_at),
+            order_by: [desc: p.joined_at],
+            limit: 1
+          )
+        )
+    end
+  end
+
+  def active_participant_for_user_in_space(_space_id, _user_id), do: nil
+
   @doc "Count active participants for a space's current meeting."
   @spec active_participant_count(binary()) :: non_neg_integer()
   def active_participant_count(space_id) do

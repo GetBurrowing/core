@@ -454,6 +454,7 @@ defmodule PlatformWeb.ChatLive.Partials do
   attr(:mic_enabled, :boolean, required: true)
   attr(:camera_enabled, :boolean, required: true)
   attr(:screen_share_enabled, :boolean, required: true)
+  attr(:meeting_participants, :list, default: [])
 
   def meeting_panel(assigns) do
     ~H"""
@@ -506,11 +507,54 @@ defmodule PlatformWeb.ChatLive.Partials do
           >
           </p>
         </div>
+        <%!-- v4 stage 2: local self-view parking slot for the /chat
+             quick-meet panel. The page-level `MeetingClient` hook
+             (meeting_client.js) births the single persistent local
+             <video> in `[data-role="local-self-view"]` and then docks it
+             into `[data-local-video-dock][data-dock-mode="gallery"]`
+             below. This mirrors MeetingLive's
+             `#meeting-local-self-view` (meeting_live.html.heex:284) but
+             uses a DISTINCT id (`quickmeet-local-self-view`) so the two
+             surfaces never collide on a duplicate id when both are in the
+             DOM (the chat panel is embedded inside MeetingLive's right
+             pane). Single-mount invariant: only ONE of the two
+             `data-role="local-self-view"` nodes is rendered + visible per
+             page (MeetingLive on /meetings, this quick-meet on /chat), so
+             the global `querySelector('[data-role="local-self-view"]')`
+             in the hook resolves to whichever panel is mounted. Zero-size,
+             hidden, `phx-update="ignore"` so the LV patch never wipes the
+             hook-owned <video>. --%>
+        <div
+          id="quickmeet-local-self-view"
+          phx-update="ignore"
+          class="hidden"
+          data-role="local-self-view"
+          data-pane="desktop"
+        >
+        </div>
+        <.meeting_roster id="meeting-roster" participants={@meeting_participants} />
         <%!-- JS owns the children (meeting_client.js injects tiles); ignore on re-render --%>
         <div
           id="meeting-participants"
           phx-update="ignore"
           class="meeting-participant-grid gap-2"
+        >
+        </div>
+        <%!-- v4 stage 2: gallery dock the hook reparents the persistent
+             local <video> into. The quick-meet panel has a single
+             (non-staged) layout — there are no MeetingLive stage modes
+             here — so we give it ONE dock with `data-dock-mode="gallery"`,
+             the mode `_currentStageMode()` defaults to when no
+             `[data-pane="center-stage"]` is present (meeting_client.js
+             line 138-141). `phx-update="ignore"` so the LV patch never
+             detaches the docked <video>. --%>
+        <div
+          id="quickmeet-local-video-dock"
+          phx-update="ignore"
+          data-local-video-dock
+          data-dock-mode="gallery"
+          data-pane="desktop"
+          class="mt-2 aspect-video w-full overflow-hidden rounded-lg bg-base-300 empty:hidden"
         >
         </div>
         <div
@@ -643,11 +687,37 @@ defmodule PlatformWeb.ChatLive.Partials do
           >
           </p>
         </div>
+        <%!-- v4 stage 2: local self-view parking slot + gallery dock for
+             the MOBILE quick-meet overlay. Mirrors the desktop variant
+             above. Both desktop and mobile quick-meet variants coexist in
+             the chat-page DOM (one hidden by CSS at the lg breakpoint), so
+             the parking slot + dock carry `data-pane="mobile"` and
+             meeting_client.js picks the VISIBLE pane via matchMedia
+             (parity with `_grid()` / `_screenShareSlot()`), keeping the
+             local <video> docked in whichever overlay is on-screen. --%>
+        <div
+          id="quickmeet-local-self-view-mobile"
+          phx-update="ignore"
+          class="hidden"
+          data-role="local-self-view"
+          data-pane="mobile"
+        >
+        </div>
+        <.meeting_roster id="meeting-roster-mobile" participants={@meeting_participants} />
         <%!-- JS owns the children (meeting_client.js injects tiles); ignore on re-render --%>
         <div
           id="meeting-participants-mobile"
           phx-update="ignore"
           class="meeting-participant-grid gap-2"
+        >
+        </div>
+        <div
+          id="quickmeet-local-video-dock-mobile"
+          phx-update="ignore"
+          data-local-video-dock
+          data-dock-mode="gallery"
+          data-pane="mobile"
+          class="mt-2 aspect-video w-full overflow-hidden rounded-lg bg-base-300 empty:hidden"
         >
         </div>
         <div
@@ -717,6 +787,97 @@ defmodule PlatformWeb.ChatLive.Partials do
       </div>
     </div>
     """
+  end
+
+  @doc """
+  Server-presence participant roster for the /chat quick-meet panel
+  (task 019e4b3e v4 stage 3).
+
+  ROOT CAUSE 2 fix: the quick-meet rail used to be CLIENT-ONLY — the
+  `#meeting-participants` `phx-update="ignore"` grid was filled solely by
+  `MeetingClient._ensureTile` from the LiveKit participants the viewer's
+  OWN browser had subscribed. A webhook-driven participant (or a 2nd user
+  whose media this viewer hasn't subscribed yet) never appeared, and the
+  count was wrong. This roster is an LV-OWNED `:for` over
+  `Meetings.active_participants_for_space/1` (mirrors MeetingLive), so it
+  is the authoritative WHO-is-present surface (real name + count).
+
+  Coexistence with the live media: this roster renders name + count under
+  normal `phx-update`; the sibling `#meeting-participants` grid keeps its
+  `phx-update="ignore"` so the JS-attached `<video>`/`<audio>` tiles are
+  never wiped. The two are keyed off the same participant identity
+  (`participant_type` + `participant_id`) — the roster owns identity, the
+  media grid owns the live tracks. The literal "User" never renders: an
+  orphaned/unresolved identity falls through to "Unknown participant".
+  """
+  attr(:id, :string, required: true)
+  attr(:participants, :list, default: [])
+
+  def meeting_roster(assigns) do
+    ~H"""
+    <div id={@id} class="mb-2" data-role="meeting-roster">
+      <div class="mb-1 flex items-center justify-between px-0.5">
+        <span class="text-xs font-semibold uppercase tracking-wide text-base-content/50">
+          In this meeting
+        </span>
+        <span
+          class="text-xs tabular-nums text-base-content/50"
+          data-role="meeting-roster-count"
+        >
+          {length(@participants)}
+        </span>
+      </div>
+      <ul class="flex flex-col gap-1">
+        <li
+          :for={p <- @participants}
+          id={"#{@id}-row-#{roster_identity(p)}"}
+          data-role="meeting-roster-row"
+          data-identity={roster_identity(p)}
+          class="flex items-center gap-2 rounded-md px-2 py-1.5 hover:bg-base-200"
+        >
+          <span class="flex size-7 flex-shrink-0 items-center justify-center rounded-full bg-base-300 text-xs font-semibold uppercase">
+            {roster_initial(p)}
+          </span>
+          <span class="min-w-0 truncate text-sm">{roster_name(p)}</span>
+          <%!-- Per-identity media slot: meeting_client.js may attach the
+               live <video>/<audio> here by identity without the LV ever
+               wiping it (phx-update="ignore" on this leaf). --%>
+          <span
+            id={"#{@id}-media-#{roster_identity(p)}"}
+            data-media-slot
+            data-identity={roster_identity(p)}
+            phx-update="ignore"
+            class="ml-auto flex-shrink-0"
+          >
+          </span>
+        </li>
+      </ul>
+    </div>
+    """
+  end
+
+  # Stable LiveKit-style identity (`user:<id>` / `agent:<id>`) for a roster
+  # view-model row — the same key MeetingHooks.do_join mints and the media
+  # tiles attach by, so the roster row and its live track reconcile.
+  defp roster_identity(%{participant_type: type, participant_id: id})
+       when is_binary(type) and is_binary(id),
+       do: "#{type}:#{id}"
+
+  defp roster_identity(%{id: id}) when is_binary(id), do: id
+  defp roster_identity(_), do: nil
+
+  # The authoritative display name. Never the literal "User": an
+  # unresolved identity (nil display_name) is honestly "Unknown participant".
+  defp roster_name(%{display_name: name}) when is_binary(name) and name != "" and name != "User",
+    do: name
+
+  defp roster_name(_), do: "Unknown participant"
+
+  defp roster_initial(p) do
+    case roster_name(p) do
+      <<first::utf8, _rest::binary>> -> String.upcase(<<first::utf8>>)
+      _ -> "?"
+    end
   end
 
   @doc """

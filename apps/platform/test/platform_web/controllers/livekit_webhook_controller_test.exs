@@ -180,6 +180,33 @@ defmodule PlatformWeb.LivekitWebhookControllerTest do
       assert %{"status" => "ignored", "reason" => "no room identifier"} =
                json_response(conn, 200)
     end
+
+    test "deactivates an active room back to idle (v4 stage 1 symmetry)", %{conn: conn} do
+      {:ok, space} =
+        Platform.Chat.create_space(%{
+          name: "Finish Room Space",
+          slug: "finish-room-#{System.unique_integer([:positive])}",
+          kind: "channel"
+        })
+
+      {:ok, room} = Meetings.ensure_room(space.id)
+      {:ok, active_room} = Meetings.activate_room(room)
+      assert active_room.status == "active"
+      assert Meetings.get_active_room(space.id) != nil
+
+      payload = %{
+        "event" => "room_finished",
+        "room" => %{"sid" => active_room.id, "name" => active_room.livekit_room_name}
+      }
+
+      conn = post(conn, @livekit_webhook_path, payload)
+      assert json_response(conn, 200)
+
+      # The join-path activation is now reversed by the empty-room webhook
+      # so rooms don't leak as "active" forever.
+      assert Meetings.get_active_room(space.id) == nil
+      assert Meetings.get_room(active_room.id).status == "idle"
+    end
   end
 
   # ── transcription tests ─────────────────────────────────────────────────

@@ -53,8 +53,18 @@ defmodule PlatformWeb.LivekitWebhookController do
   @doc """
   Handle `room_finished` events — finalize transcript and trigger summary.
   """
-  def handle(conn, %{"event" => "room_finished", "room" => room} = _params) do
+  def handle(conn, %{"event" => "room_finished", "room" => room} = params) do
     room_id = room["sid"] || room["name"]
+
+    # Deactivation symmetry for task 019e4b3e v4 stage 1: a real join flips
+    # the room "active" (MeetingHooks.do_join → Meetings.activate_room).
+    # LiveKit's `room_finished` is the canonical empty-room signal, so flip
+    # the room back to "idle" + mark stragglers left here, otherwise rooms
+    # would leak as "active" forever once the join-path activation lands.
+    case lookup_room(params) do
+      %Meetings.Room{status: "active"} = active_room -> Meetings.finish_room(active_room)
+      _ -> :ok
+    end
 
     if room_id do
       case Meetings.get_transcript_for_room(room_id) do

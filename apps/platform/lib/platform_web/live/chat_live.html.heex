@@ -7,7 +7,20 @@
 
 <div :if={!@embedded} id="chat-state" phx-hook="ChatState" class="hidden"></div>
 
-<div :if={!@embedded} id="meeting-client" phx-hook="MeetingClient" class="hidden"></div>
+<%!-- data-camera-enabled / data-mic-enabled carry the server's committed
+     media intent. On a LiveKit reconnect (task 019e4b3e stage 3) the JS
+     hook reads these off the dataset to re-engage the camera/mic WITHOUT
+     waiting for a fresh LV push — reconnect-safe (Rowan's exact error was
+     "unable to push hook event. LiveView not connected"). --%>
+<div
+  :if={!@embedded}
+  id="meeting-client"
+  phx-hook="MeetingClient"
+  class="hidden"
+  data-camera-enabled={to_string(@camera_enabled)}
+  data-mic-enabled={to_string(@mic_enabled)}
+>
+</div>
 <div :if={!@embedded} id="meeting-room" phx-hook="MeetingRoom" class="hidden"></div>
 <div :if={!@embedded} id="meeting-soundboard" phx-hook="MeetingSoundboard" class="hidden"></div>
 
@@ -1188,6 +1201,7 @@
       mic_enabled={@mic_enabled}
       camera_enabled={@camera_enabled}
       screen_share_enabled={@screen_share_enabled}
+      meeting_participants={@meeting_participants}
     />
   </div>
 </div>

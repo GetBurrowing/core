@@ -35,7 +35,18 @@
          hooks can attach published tracks by identity. Both are present
          in chat_live.html.heex:4-5 for the chat surface; mirror them
          here so MeetingHooks' push_events have a listener. --%>
-    <div id="meeting-client" phx-hook="MeetingClient" class="hidden"></div>
+    <%!-- data-camera-enabled / data-mic-enabled: committed media intent the
+         JS hook reads on a LiveKit reconnect to re-engage media without a
+         fresh LV push (task 019e4b3e stage 3). MeetingHooks.attach/1 owns
+         :camera_enabled / :mic_enabled here just as it does in ChatLive. --%>
+    <div
+      id="meeting-client"
+      phx-hook="MeetingClient"
+      class="hidden"
+      data-camera-enabled={to_string(@camera_enabled)}
+      data-mic-enabled={to_string(@mic_enabled)}
+    >
+    </div>
     <div id="meeting-room" phx-hook="MeetingRoom" class="hidden"></div>
     <%!-- Media sink (task 019e420f stage 1): MeetingClient.attachTrack
          routes incoming `<audio>` elements to `#meeting-media`. Without

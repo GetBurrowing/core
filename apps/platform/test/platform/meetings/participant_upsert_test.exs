@@ -184,6 +184,73 @@ defmodule Platform.Meetings.ParticipantUpsertTest do
     end
   end
 
+  # ── active_participant_for_user_in_space/2 ───────────────────────────────
+
+  describe "active_participant_for_user_in_space/2" do
+    test "returns the active participant row for a user in the active meeting" do
+      room = create_room()
+      {:ok, room} = Meetings.activate_room(room)
+      user = create_user()
+
+      {:ok, joined} =
+        Meetings.upsert_live_participant(room, %{
+          identity: "user:#{user.id}",
+          name: "Ada Lovelace"
+        })
+
+      found = Meetings.active_participant_for_user_in_space(room.space_id, user.id)
+      assert found.id == joined.id
+      assert found.user_id == user.id
+    end
+
+    test "returns nil when the user has left the meeting" do
+      room = create_room()
+      {:ok, room} = Meetings.activate_room(room)
+      user = create_user()
+
+      {:ok, _} =
+        Meetings.upsert_live_participant(room, %{
+          identity: "user:#{user.id}",
+          name: "Ada Lovelace"
+        })
+
+      {:ok, _} =
+        Meetings.mark_live_participant_left(room, %{
+          identity: "user:#{user.id}",
+          name: "Ada Lovelace"
+        })
+
+      assert is_nil(Meetings.active_participant_for_user_in_space(room.space_id, user.id))
+    end
+
+    test "returns nil when no active room exists for the space" do
+      room = create_room()
+      user = create_user()
+
+      # Room is idle (not activated) → get_active_room/1 returns nil.
+      assert is_nil(Meetings.active_participant_for_user_in_space(room.space_id, user.id))
+    end
+
+    test "returns nil for a different user than the one in the meeting" do
+      room = create_room()
+      {:ok, room} = Meetings.activate_room(room)
+      user = create_user()
+      other = create_user("Grace Hopper")
+
+      {:ok, _} =
+        Meetings.upsert_live_participant(room, %{
+          identity: "user:#{user.id}",
+          name: "Ada Lovelace"
+        })
+
+      assert is_nil(Meetings.active_participant_for_user_in_space(room.space_id, other.id))
+    end
+
+    test "returns nil for non-binary args" do
+      assert is_nil(Meetings.active_participant_for_user_in_space(nil, nil))
+    end
+  end
+
   # ── mark_live_participant_left/2 ─────────────────────────────────────────
 
   describe "mark_live_participant_left/2" do

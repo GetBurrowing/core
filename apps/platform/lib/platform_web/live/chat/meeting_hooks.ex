@@ -57,7 +57,9 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
   require Logger
 
   import Phoenix.Component, only: [assign: 3]
-  import Phoenix.LiveView, only: [attach_hook: 4, push_event: 3, connected?: 1]
+
+  import Phoenix.LiveView,
+    only: [attach_hook: 4, push_event: 3, connected?: 1, get_connect_params: 1]
 
   alias Platform.Accounts
   alias Platform.Meetings
@@ -81,8 +83,11 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
       |> assign(:camera_enabled, true)
       |> assign(:screen_share_enabled, false)
       |> assign(:meeting_counts, %{})
+      |> assign(:meeting_participants, [])
       |> attach_hook(:meeting_events, :handle_event, &handle_event/3)
       |> attach_hook(:meeting_info, :handle_info, &handle_info/2)
+
+    socket = assign(socket, :meeting_reconnect?, reconnect_mount?(socket))
 
     if connected?(socket) and space_ids != [] do
       Enum.each(space_ids, &MeetingsPubSub.subscribe_presence/1)
@@ -94,18 +99,89 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
     end
   end
 
+  # A reconnect mount is one LiveView has re-established after a transient
+  # socket drop (Rowan's 1006). LiveView increments the `_mounts` connect
+  # param on every reconnect, so `> 0` distinguishes a reconnect from a
+  # fresh first mount. A first mount (`_mounts == 0` or absent, or a
+  # disconnected/static render) must still require the explicit Join
+  # button — only a reconnect auto-restores the user into the live meeting.
+  defp reconnect_mount?(socket) do
+    connected?(socket) and
+      case get_connect_params(socket) do
+        %{"_mounts" => mounts} when is_integer(mounts) -> mounts > 0
+        _ -> false
+      end
+  end
+
   @doc """
-  Clean up on LV termination — broadcast "left" so the mini-bar
-  doesn't ghost after a tab close while in a meeting.
+  Reconnect-aware meeting restore. Call from the host LiveView once the
+  active space is established (`ChatLive.handle_params/3`), passing the
+  active space struct.
+
+  When this mount is a reconnect (`attach/1` recorded `:meeting_reconnect?`
+  via the `_mounts` connect param) AND the user still has an active live
+  participant row in the space's current meeting, we treat it as a
+  reconnect-into-live-meeting: re-assign `:in_meeting=true` and re-push
+  `join-meeting` via `do_join/1` so the JS hook (stage 1) adopts the
+  surviving room or reconnects with a fresh token. A fresh first mount, or
+  a user who is not in the meeting, is left untouched (still requires the
+  explicit Join button).
+
+  Idempotent: a no-op when already `:in_meeting`, when not a reconnect, or
+  when no active participant row exists. The `:meeting_reconnect?` flag is
+  consumed (cleared) after the first attempt so a later `handle_params`
+  (space switch) does not re-trigger it.
+  """
+  @spec maybe_restore_on_reconnect(Phoenix.LiveView.Socket.t(), map() | nil) ::
+          Phoenix.LiveView.Socket.t()
+  def maybe_restore_on_reconnect(socket, space)
+
+  def maybe_restore_on_reconnect(socket, %{id: space_id} = _space) do
+    user_id = socket.assigns[:user_id]
+
+    cond do
+      socket.assigns[:meeting_reconnect?] != true ->
+        socket
+
+      socket.assigns[:in_meeting] ->
+        assign(socket, :meeting_reconnect?, false)
+
+      not is_binary(user_id) ->
+        assign(socket, :meeting_reconnect?, false)
+
+      Meetings.active_participant_for_user_in_space(space_id, user_id) ->
+        socket
+        |> assign(:meeting_reconnect?, false)
+        |> do_join()
+
+      true ->
+        assign(socket, :meeting_reconnect?, false)
+    end
+  end
+
+  def maybe_restore_on_reconnect(socket, _space), do: socket
+
+  @doc """
+  Clean up on LV termination.
+
+  Task 019e4b3e stage 2: a LiveView process dying does NOT mean the user
+  left the meeting. Phoenix tears the LV process down on a transient socket
+  drop (Rowan's 1006), and the LiveKit room is now kept alive across that
+  reconnect (stage 1). Broadcasting "left" here would evict a participant
+  who is merely reconnecting — the exact "I'm not in the participant list"
+  symptom for the reconnect case.
+
+  The authoritative leave signal is the LiveKit `participant_left` webhook
+  (wired in 8251a49) as a backup, plus the EXPLICIT `meeting_leave` /
+  `meeting_left` event handlers which now STAMP `left_at` on the durable
+  participant row server-side (v4 case-2 fix, see `stamp_local_left/1`) and
+  broadcast "left". `on_terminate/1` does NEITHER — it must not stamp
+  `left_at` (that would evict a merely-reconnecting participant) and must
+  not broadcast. It is intentionally a no-op for the meeting path; only an
+  explicit, user-initiated leave decrements the roster.
   """
   @spec on_terminate(Phoenix.LiveView.Socket.t()) :: :ok
-  def on_terminate(socket) do
-    if socket.assigns[:in_meeting] and socket.assigns[:user_id] do
-      MeetingState.broadcast_left(socket.assigns.user_id)
-    end
-
-    :ok
-  end
+  def on_terminate(_socket), do: :ok
 
   @doc """
   Programmatically trigger a meeting join from outside the hook's own
@@ -127,6 +203,7 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
   end
 
   defp handle_event("meeting_leave", _params, socket) do
+    stamp_local_left(socket)
     MeetingState.broadcast_left(socket.assigns.user_id)
 
     {:halt,
@@ -138,6 +215,7 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
   # Fired from meeting_client.js on RoomEvent.Disconnected (including
   # client-initiated leaves that already happened).
   defp handle_event("meeting_left", _params, socket) do
+    stamp_local_left(socket)
     MeetingState.broadcast_left(socket.assigns.user_id)
     {:halt, reset_meeting_state(socket)}
   end
@@ -186,7 +264,12 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
         Map.delete(socket.assigns.meeting_counts, space_id)
       end
 
-    {:halt, assign(socket, :meeting_counts, counts)}
+    socket =
+      socket
+      |> assign(:meeting_counts, counts)
+      |> maybe_refresh_roster(space_id)
+
+    {:halt, socket}
   end
 
   defp handle_info({:meeting_presence_summary, %{space_id: _space_id}}, socket) do
@@ -198,6 +281,111 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
   defp handle_info(_msg, socket), do: {:cont, socket}
 
   # ── Internals ────────────────────────────────────────────────────────
+
+  # Room lifecycle (task 019e4b3e v4 stage 1): `Meetings.activate_room/1`
+  # previously had ZERO callers, so `ensure_room/1` left rooms at the
+  # schema default `status="idle"`. `get_active_room/1` filters
+  # `status=="active"`, so `active_participants_for_space/1` (and the
+  # presence rail on BOTH the /meetings and /chat surfaces) always saw an
+  # empty list. A room must become "active" exactly when the first real
+  # participant joins — and `do_join/1` is the single shared join
+  # entrypoint (ChatLive `meeting_join` + MeetingLive `:auto_join` both
+  # route here), so activating here fixes presence sourcing on both
+  # surfaces in one place and keeps room-active + has-participant atomic.
+  #
+  # We gate on `status != "active"` so an already-active room skips the
+  # redundant write and the spurious `:room_activated`/presence broadcast.
+  #
+  # Deactivation symmetry lives in the LiveKit `room_finished` webhook
+  # (livekit_webhook_controller.ex), which calls `finish_room/1` when
+  # LiveKit reports the room emptied — so rooms don't leak as "active"
+  # forever. Explicit per-user leaves still flow through
+  # `meeting_leave`/`meeting_left` + the `participant_left` webhook.
+  defp activate_room_on_join(%{status: "active"} = room), do: {:ok, room}
+  defp activate_room_on_join(room), do: Meetings.activate_room(room)
+
+  # v4 case-2 fix: an EXPLICIT user-initiated leave (`meeting_leave` button
+  # OR `meeting_left` from RoomEvent.Disconnected) must STAMP the durable
+  # `meeting_participants` row's `left_at` server-side — not merely broadcast
+  # a presence COUNT signal. This is the symmetric gap to the join fix: join
+  # inserts the row via `upsert_live_participant/2` instead of relying on the
+  # LiveKit `participant_joined` webhook, so leave must stamp `left_at`
+  # instead of relying on the `participant_left` webhook — which (a) cannot
+  # reach the ephemeral dev container and (b) is fragile for clean leaves in
+  # prod. Without this, `active_participants_for_space/1` (which filters
+  # `left_at IS NULL`) keeps returning the leaver and the roster never
+  # decrements on other clients.
+  #
+  # The `participant_left` webhook stays as the idempotent backup for hard
+  # disconnects: stamping an already-left row resolves no active row and
+  # returns `{:error, :not_found}`, a safe no-op.
+  #
+  # CRITICAL asymmetry with `on_terminate/1`: a LiveView process dying (a
+  # transient 1006 socket blip) is NOT an explicit leave and must NOT stamp
+  # `left_at` — the v3/v4 reconnect design depends on the participant row
+  # surviving the remount so `maybe_restore_on_reconnect/2` can find it and
+  # restore `:in_meeting`. So ONLY this explicit-leave path stamps; the
+  # process-death path (`on_terminate/1`) remains a deliberate no-op.
+  #
+  # Public so the explicit-leave decrement contract can be unit-tested
+  # directly (the `handle_event/3` leave callbacks are private hook plumbing).
+  @doc false
+  @spec stamp_local_left(Phoenix.LiveView.Socket.t()) :: :ok
+  def stamp_local_left(socket) do
+    with space when not is_nil(space) <- socket.assigns[:active_space],
+         user_id when is_binary(user_id) <- socket.assigns[:user_id],
+         %Meetings.Room{} = room <- Meetings.get_active_room(space.id) do
+      Meetings.mark_live_participant_left(room, %{
+        identity: "user:#{user_id}",
+        name: nil
+      })
+    end
+
+    :ok
+  end
+
+  # v4 stage 3: build the server-presence roster for the /chat quick-meet
+  # rail. Delegates to `MeetingLive.build_meeting_participants/1` (the
+  # verified-working presence builder) so BOTH surfaces source the rail from
+  # ONE place: `Meetings.active_participants_for_space/1` (LiveKit-webhook-fed,
+  # `left_at`-filtered, identity-resolved). Returns the same view-model maps
+  # (`:id`, `:participant_id`, `:participant_type`, `:display_name`,
+  # `:avatar_url`) the rail renders — never the literal "User".
+  defp meeting_participants(space_id) when is_binary(space_id) do
+    PlatformWeb.MeetingLive.build_meeting_participants(space_id)
+  end
+
+  defp meeting_participants(_), do: []
+
+  @doc """
+  v4 stage 3: when a `:meeting_presence_update` arrives for the space whose
+  quick-meet panel this viewer is in, re-pull the server-presence roster so
+  the rail live-updates as a 2nd user (or a webhook-driven participant) joins
+  or leaves. This is what makes the rail SERVER-presence-sourced — the
+  `_ensureTile` client tiles only know the LiveKit participants THIS browser
+  has subscribed, so a webhook-written row would otherwise never appear in
+  another viewer's rail (the v3 e2e gap). A no-op when the viewer is not in a
+  meeting or the update is for a different space.
+
+  Public so the presence-refresh contract can be unit-tested directly
+  (the `handle_info/2` hook itself is private hook-callback plumbing).
+  """
+  @spec maybe_refresh_roster(Phoenix.LiveView.Socket.t(), binary()) ::
+          Phoenix.LiveView.Socket.t()
+  def maybe_refresh_roster(socket, space_id) do
+    if socket.assigns[:in_meeting] and active_space_id(socket) == space_id do
+      assign(socket, :meeting_participants, meeting_participants(space_id))
+    else
+      socket
+    end
+  end
+
+  defp active_space_id(socket) do
+    case socket.assigns[:active_space] do
+      %{id: id} -> id
+      _ -> nil
+    end
+  end
 
   defp do_join(socket) do
     # Stage 4 (task 019e2d1a) bugfix: the participant-row check used to
@@ -221,16 +409,36 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
          {:ok, participant} <-
            MeetingsMembership.ensure_chat_space_participant(space.id, user_id, display_name),
          {:ok, room} <- Meetings.ensure_room(space.id),
+         {:ok, room} <- activate_room_on_join(room),
          identity = "user:#{user_id}",
          # Prefer the hardened resolved name over a stale/blank participant
          # row name (legacy rows may carry the literal "User") so the
          # LiveKit-published tile shows the real name immediately.
          name = grant_name(participant.display_name, display_name),
+         # v4 fix: insert the joiner's `meeting_participants` row HERE, on the
+         # real join — not only via the LiveKit `participant_joined` webhook.
+         # `upsert_live_participant/2` is the ONLY writer of that table, and
+         # the webhook (livekit_webhook_controller) can't reach the ephemeral
+         # dev container, so the server-presence roster
+         # (`active_participants_for_space/1`, shared by /chat quick-meet AND
+         # /meetings) was always empty for a genuine local join. Dual-path,
+         # safe by design: this insert is deterministic + dev-testable, and
+         # the webhook stays as the idempotent backup for SFU-reported and
+         # remote participants. `upsert_live_participant/2` is
+         # find-or-reactivate keyed on (room_id, user_id), so when the prod
+         # `participant_joined` webhook later fires for the same `user:<id>`
+         # identity it returns the SAME row — no duplicate. The insert path
+         # broadcasts `{:participant_joined, p}` + presence_change internally,
+         # so the roster live-updates for this joiner and other subscribers
+         # without a second broadcast here.
+         {:ok, _live_participant} <-
+           Meetings.upsert_live_participant(room, %{identity: identity, name: name}),
          {:ok, token} <- Meetings.generate_token(room, %{identity: identity, name: name}) do
       socket =
         socket
         |> assign(:current_participant, participant)
         |> assign(:in_meeting, true)
+        |> assign(:meeting_participants, meeting_participants(space.id))
         |> push_event("join-meeting", %{
           token: token,
           url: Meetings.livekit_url(),

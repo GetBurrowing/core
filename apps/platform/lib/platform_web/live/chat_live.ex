@@ -350,6 +350,12 @@ defmodule PlatformWeb.ChatLive do
        |> assign(:page_title, page_title)
        |> assign(:active_space, space)
        |> assign(:current_participant, participant)
+       # Reconnect-aware meeting restore (task 019e4b3e stage 2): after a
+       # transient LV socket drop, if the user still has an active live
+       # participant row here, re-assign :in_meeting + re-push join-meeting
+       # so the LiveKit session (kept alive in stage 1) is rejoined. No-op
+       # on a fresh first mount — that still needs the explicit Join button.
+       |> MeetingHooks.maybe_restore_on_reconnect(space)
        |> PresenceHooks.enter_space(space, participant, participants)
        |> MessagesHooks.enter_space(space, participant)
        |> SearchHooks.reset_for_space()
