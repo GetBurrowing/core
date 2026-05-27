@@ -591,15 +591,21 @@ const MeetingClient = {
     return document.getElementById("meeting-media") || document.body
   },
 
-  // DEAD camera-path cruft (task 019e42f6): `_ensureTile`/`_grid` target the
-  // `#meeting-participants` / `#meeting-participants-mobile` grids that no
-  // longer exist in meeting_live.html.heex, so `_grid()` returns null and
-  // this path no-ops. The local camera lifecycle is owned entirely by the
-  // `MeetingVideoTile` hook now. Do NOT re-wire these — re-wiring would
+  // On MeetingLive (`/meetings`) the `#meeting-participants` grids no longer
+  // exist, so `_grid()` returns null and this path no-ops (the MeetingVideoTile
+  // hook owns rendering there). BUT the quick-meet panel (ChatLive) DOES still
+  // render `#meeting-participants` / `-mobile`, so this path is live there for
+  // REMOTE participant tiles. Do NOT re-wire the detach side — re-wiring would
   // resurrect the global-detach race fixed in 019e42f6.
   _ensureTile(participant) {
     const grid = this._grid()
     if (!grid) return
+    // The local participant is already shown by the self-view dock (live
+    // video) + the server roster row (name). A grid tile here is a redundant
+    // black duplicate — "(you)" with no video, since the local camera docks
+    // into [data-local-video-dock], not this tile. Skip it so the local user
+    // renders exactly once (parity with remote: one roster row + one tile).
+    if (participant.isLocal) return
     const { identity } = participant
     if (this._tiles.has(identity)) return
 
