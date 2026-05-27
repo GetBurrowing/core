@@ -197,4 +197,37 @@ defmodule Platform.Meetings.MeetingContextTest do
       assert {:error, %Ecto.Changeset{}} = Meetings.end_meeting(meeting)
     end
   end
+
+  describe "get_live_meeting_for_space/1" do
+    test "returns the live meeting bound to the chat space" do
+      project = create_project()
+      {:ok, meeting} = Meetings.create_meeting(%{project_id: project.id, name: "Sync"})
+      {:ok, live} = Meetings.start_meeting(meeting)
+
+      found = Meetings.get_live_meeting_for_space(live.chat_space_id)
+      assert found.id == live.id
+      assert found.status == "live"
+    end
+
+    test "returns nil when the space's meeting is only scheduled" do
+      project = create_project()
+      {:ok, meeting} = Meetings.create_meeting(%{project_id: project.id, name: "Sync"})
+
+      assert Meetings.get_live_meeting_for_space(meeting.chat_space_id) == nil
+    end
+
+    test "returns nil once the live meeting has ended" do
+      project = create_project()
+      {:ok, meeting} = Meetings.create_meeting(%{project_id: project.id, name: "Sync"})
+      {:ok, live} = Meetings.start_meeting(meeting)
+      {:ok, _ended} = Meetings.end_meeting(live)
+
+      assert Meetings.get_live_meeting_for_space(live.chat_space_id) == nil
+    end
+
+    test "returns nil for an unknown space and tolerates nil" do
+      assert Meetings.get_live_meeting_for_space(Ecto.UUID.generate()) == nil
+      assert Meetings.get_live_meeting_for_space(nil) == nil
+    end
+  end
 end

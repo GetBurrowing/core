@@ -66,6 +66,18 @@ defmodule PlatformWeb.LivekitWebhookController do
       _ -> :ok
     end
 
+    # End-meeting symmetry: `Meetings.start_meeting/1` drives a meeting
+    # scheduled → live on auto-join, but nothing transitions it live → ended.
+    # `room_finished` is LiveKit's canonical empty-room signal (fires ~20-30s
+    # after the last participant leaves), so end the space's live meeting here
+    # — otherwise it stays "Live now" forever. The status_changeset rejects
+    # illegal transitions, but we still guard on the live lookup so a space
+    # with only scheduled/ended meetings is a clean no-op.
+    case Meetings.get_live_meeting_for_space(space_id_from_room_name(room["name"])) do
+      %Meetings.Meeting{} = live_meeting -> Meetings.end_meeting(live_meeting)
+      _ -> :ok
+    end
+
     if room_id do
       case Meetings.get_transcript_for_room(room_id) do
         nil ->

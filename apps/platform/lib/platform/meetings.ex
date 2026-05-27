@@ -211,6 +211,28 @@ defmodule Platform.Meetings do
   @spec get_meeting(binary()) :: Meeting.t() | nil
   def get_meeting(id), do: Repo.get(Meeting, id)
 
+  @doc """
+  Return the most-recently-started `live` meeting bound to a chat space,
+  or `nil` when the space has no live meeting.
+
+  Meetings link to their backing chat space via `chat_space_id` (see
+  `create_meeting/1`). The LiveKit join path (`MeetingHooks.do_join/1`)
+  joins the `"space-<chat_space_id>"` room, so the `room_finished` webhook
+  resolves the empty room's space id and uses this to find the live meeting
+  to end. Returns the newest live meeting (by `started_at`) defensively in
+  case more than one is live for the space.
+  """
+  @spec get_live_meeting_for_space(binary() | nil) :: Meeting.t() | nil
+  def get_live_meeting_for_space(space_id) when is_binary(space_id) do
+    Meeting
+    |> where([m], m.chat_space_id == ^space_id and m.status == "live")
+    |> order_by([m], desc: m.started_at)
+    |> limit(1)
+    |> Repo.one()
+  end
+
+  def get_live_meeting_for_space(_space_id), do: nil
+
   @doc "Get a meeting by its per-project slug. Returns `nil` if not found."
   @spec get_meeting_by_slug(binary(), String.t()) :: Meeting.t() | nil
   def get_meeting_by_slug(project_id, slug) do

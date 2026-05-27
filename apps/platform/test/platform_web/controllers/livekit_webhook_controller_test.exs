@@ -181,6 +181,59 @@ defmodule PlatformWeb.LivekitWebhookControllerTest do
                json_response(conn, 200)
     end
 
+    test "ends the space's live meeting on room_finished", %{conn: conn} do
+      {:ok, project} = Platform.Tasks.create_project(%{name: "Webhook End #{unique_room_id()}"})
+
+      {:ok, meeting} =
+        Meetings.create_meeting(%{project_id: project.id, name: "End Me #{unique_room_id()}"})
+
+      {:ok, live} = Meetings.start_meeting(meeting)
+      assert live.status == "live"
+
+      # The LiveKit join path joins the `space-<chat_space_id>` room
+      # (Meetings.ensure_room/1), so room_finished fires for that name.
+      payload = %{
+        "event" => "room_finished",
+        "room" => %{"sid" => unique_room_id(), "name" => "space-#{live.chat_space_id}"}
+      }
+
+      conn = post(conn, @livekit_webhook_path, payload)
+      assert json_response(conn, 200)
+
+      ended = Meetings.get_meeting(live.id)
+      assert ended.status == "ended"
+      assert %DateTime{} = ended.ended_at
+    end
+
+    test "leaves a scheduled meeting unchanged (no illegal transition)", %{conn: conn} do
+      {:ok, project} = Platform.Tasks.create_project(%{name: "Webhook Sched #{unique_room_id()}"})
+
+      {:ok, meeting} =
+        Meetings.create_meeting(%{project_id: project.id, name: "Sched #{unique_room_id()}"})
+
+      assert meeting.status == "scheduled"
+
+      payload = %{
+        "event" => "room_finished",
+        "room" => %{"sid" => unique_room_id(), "name" => "space-#{meeting.chat_space_id}"}
+      }
+
+      conn = post(conn, @livekit_webhook_path, payload)
+      assert json_response(conn, 200)
+
+      assert Meetings.get_meeting(meeting.id).status == "scheduled"
+    end
+
+    test "unknown room/space does not crash and returns 200", %{conn: conn} do
+      payload = %{
+        "event" => "room_finished",
+        "room" => %{"sid" => unique_room_id(), "name" => "space-#{Ecto.UUID.generate()}"}
+      }
+
+      conn = post(conn, @livekit_webhook_path, payload)
+      assert json_response(conn, 200)
+    end
+
     test "deactivates an active room back to idle (v4 stage 1 symmetry)", %{conn: conn} do
       {:ok, space} =
         Platform.Chat.create_space(%{
