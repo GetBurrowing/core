@@ -809,3 +809,143 @@ describe("MeetingClient — quick-meet camera publish + dock (v4 stage 2)", () =
     expect(hook._localVideoEl.parentElement).toBe(galleryDesktop)
   })
 })
+
+// ── Quick-meet screen-share routing (/chat surface) ─────────────────────────
+// On /chat the page-level MeetingClient hook owns screen-share attach (there
+// is no MeetingScreenShare hook — that's the /meetings center-stage path). A
+// LOCAL screen-share publish must route through LocalTrackPublished →
+// _attachTrack → _attachScreenShareTrack into [data-quickmeet-screen-share-
+// slot], NOT the camera dock. The slot carries phx-update="ignore" + a stable
+// id in the markup, so once the <video> lands it survives LV patches.
+describe("MeetingClient — quick-meet screen-share routing", () => {
+  let priorWindow
+
+  function fakeScreenTrack(source = "screen_share") {
+    return {
+      kind: "video",
+      source,
+      _el: null,
+      attachCalls: 0,
+      detachCalls: 0,
+      attach() {
+        this.attachCalls += 1
+        this._el = fakeNode()
+        return this._el
+      },
+      detach() {
+        this.detachCalls += 1
+        const el = this._el
+        this._el = null
+        return el ? [el] : []
+      },
+    }
+  }
+
+  function buildScreenShareDoc() {
+    const slot = fakeNode({ pane: "desktop" })
+    slot.classList = {
+      _set: new Set(["hidden"]),
+      add(c) {
+        this._set.add(c)
+      },
+      remove(c) {
+        this._set.delete(c)
+      },
+      contains(c) {
+        return this._set.has(c)
+      },
+    }
+    slot.querySelectorAll = () => []
+    // sharer label sibling lookup via slot.parentElement?.querySelector
+    slot.parentElement = {
+      querySelector() {
+        return null
+      },
+    }
+    return {
+      _slot: slot,
+      createElement() {
+        return fakeNode()
+      },
+      querySelector(sel) {
+        if (sel === "[data-quickmeet-screen-share-slot][data-pane='desktop']")
+          return slot
+        return null
+      },
+      querySelectorAll() {
+        return [slot]
+      },
+    }
+  }
+
+  beforeEach(() => {
+    globalThis.console = globalThis.console || { warn() {}, info() {} }
+    priorWindow = globalThis.window
+    globalThis.window = {
+      matchMedia() {
+        return { matches: true, addEventListener() {}, removeEventListener() {} }
+      },
+    }
+  })
+
+  afterEach(() => {
+    delete globalThis.document
+    globalThis.window = priorWindow
+  })
+
+  it("a LOCAL screen-share publish lands in the screen-share slot, not the camera dock", () => {
+    globalThis.document = buildScreenShareDoc()
+    const hook = buildHook()
+    const track = fakeScreenTrack("screen_share")
+    const localParticipant = {
+      identity: "user:local",
+      name: "Ada",
+      isLocal: true,
+    }
+
+    // Mirror the LocalTrackPublished branch for a screen-share source: it is
+    // video AND a screen-share, so it routes to _attachTrack (NOT
+    // _attachLocalVideo, which is camera-only).
+    hook._attachTrack(track, localParticipant)
+
+    expect(track.attachCalls).toBe(1)
+    expect(globalThis.document._slot.children.length).toBe(1)
+    expect(globalThis.document._slot.classList.contains("hidden")).toBe(false)
+    expect(globalThis.document._slot.dataset.screenShareActive).toBe("true")
+    expect(globalThis.document._slot.dataset.screenShareSharer).toBe("user:local")
+    // No camera self-view element was minted for the screen-share.
+    expect(hook._localVideoEl).toBeNull()
+    expect(hook._screenShareTrack).toBe(track)
+  })
+
+  it("single-sharer policy: a second screen-share does not replace the first", () => {
+    globalThis.document = buildScreenShareDoc()
+    const hook = buildHook()
+    const first = fakeScreenTrack("screen_share")
+    const second = fakeScreenTrack("screen_share")
+
+    hook._attachTrack(first, { identity: "user:a" })
+    hook._attachTrack(second, { identity: "user:b" })
+
+    // First wins; the second is ignored until the first ends.
+    expect(first.attachCalls).toBe(1)
+    expect(second.attachCalls).toBe(0)
+    expect(hook._screenShareTrack).toBe(first)
+    expect(globalThis.document._slot.children.length).toBe(1)
+  })
+
+  it("detaching the active screen-share clears the slot and re-hides it", () => {
+    globalThis.document = buildScreenShareDoc()
+    const hook = buildHook()
+    const track = fakeScreenTrack("screen_share")
+    hook._attachTrack(track, { identity: "user:local" })
+    expect(globalThis.document._slot.children.length).toBe(1)
+
+    hook._detachScreenShareTrack(track)
+
+    expect(track.detachCalls).toBe(1)
+    expect(hook._screenShareTrack).toBeNull()
+    expect(globalThis.document._slot.classList.contains("hidden")).toBe(true)
+    expect(globalThis.document._slot.dataset.screenShareActive).toBe("false")
+  })
+})

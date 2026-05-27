@@ -459,9 +459,28 @@ defmodule PlatformWeb.MeetingLive do
   # Quick Meet panel, but the dedicated `/meetings/:slug` LiveView needs
   # its own clause so a non-boolean (or any) payload doesn't crash the
   # view by falling through to the catch-all.
+  # NOTE: on `/meetings` this event is intercepted by the attached
+  # `ChatLive.MeetingHooks.handle_event/3` (which returns `:halt`), so this
+  # module clause is NOT reached for `meeting_screen_share_state` here — the
+  # screen-share-not-displaying fix (auto-switch the stage to Screen on
+  # share-start so `[data-screen-share-slot]` is mounted) lives in MeetingHooks
+  # so it runs on the surface that actually has stage modes. This clause is
+  # kept as a defensive standalone handler (e.g. if MeetingHooks ever detaches)
+  # and mirrors the stage switch.
   def handle_event("meeting_screen_share_state", %{"enabled" => enabled}, socket)
       when is_boolean(enabled) do
-    {:noreply, assign(socket, :screen_share_enabled, enabled)}
+    socket = assign(socket, :screen_share_enabled, enabled)
+
+    socket =
+      if enabled and Map.get(socket.assigns, :current_stage_mode) != :screen do
+        socket
+        |> assign(:current_stage_mode, :screen)
+        |> push_event("meeting_stage_mode_changed", %{mode: "screen"})
+      else
+        socket
+      end
+
+    {:noreply, socket}
   end
 
   def handle_event("meeting_screen_share_state", _params, socket) do

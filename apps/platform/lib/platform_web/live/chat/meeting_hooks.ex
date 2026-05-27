@@ -248,10 +248,48 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
   # because the JS has already done the LiveKit work.
   defp handle_event("meeting_screen_share_state", %{"enabled" => enabled}, socket)
        when is_boolean(enabled) do
-    {:halt, assign(socket, :screen_share_enabled, enabled)}
+    {:halt, socket |> assign(:screen_share_enabled, enabled) |> maybe_switch_to_screen(enabled)}
   end
 
   defp handle_event(_event, _params, socket), do: {:cont, socket}
+
+  # Screen-share-not-displaying fix: when a share STARTS on `/meetings`, flip
+  # the center stage to Screen mode so `[data-screen-share-slot]` + the
+  # `MeetingScreenShare` hook are actually in the DOM to render the track.
+  #
+  # The top-bar share button (`MeetingShareButton`) is present in EVERY stage
+  # mode, but the published track only has a render target in Screen mode. A
+  # sharer in the default Gallery mode therefore published the track into a
+  # slot that wasn't mounted and saw nothing. This event is the
+  # `MeetingShareButton` mirror, and on `/meetings` it's routed through THIS
+  # attached hook (which `:halt`s before MeetingLive's own clause), so the
+  # stage switch has to live here to run on the surface that has stage modes.
+  #
+  # Guarded on `:current_stage_mode` being assigned: only MeetingLive assigns
+  # it. On the `/chat` quick-meet surface there are no stage modes (its
+  # always-mounted `[data-quickmeet-screen-share-slot]` renders the share
+  # without a switch), so this is a no-op there.
+  #
+  # We only auto-switch on the enable edge; on disable we leave the stage
+  # where the user put it (no jarring jump back). `meeting_stage_mode_changed`
+  # is pushed so the page-level `MeetingClient` hook re-docks the local
+  # self-view into the new mode's strip dock, parity with `set_stage_mode`.
+  defp maybe_switch_to_screen(socket, true) do
+    case Map.get(socket.assigns, :current_stage_mode) do
+      nil ->
+        socket
+
+      :screen ->
+        socket
+
+      _other ->
+        socket
+        |> assign(:current_stage_mode, :screen)
+        |> push_event("meeting_stage_mode_changed", %{mode: "screen"})
+    end
+  end
+
+  defp maybe_switch_to_screen(socket, false), do: socket
 
   defp handle_info(
          {:meeting_presence_update, %{space_id: space_id, active: active, count: count}},

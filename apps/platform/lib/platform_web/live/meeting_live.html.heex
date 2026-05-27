@@ -451,9 +451,23 @@
             >
               <%!-- Hook target: the JS attaches the <video> element here
                    when a screen-share track is found. Hidden until a
-                   track lands so the empty-state shows through. --%>
+                   track lands so the empty-state shows through.
+
+                   `phx-update="ignore"` + a stable id: the LV doesn't render
+                   the <video> itself (the `MeetingScreenShare` hook injects
+                   it), so without these morphdom discards the JS-owned child
+                   on ANY re-render (closing the "Meeting started" flash via
+                   `lv:clear-flash`, a presence/roster update, toggling the
+                   chat panel). The hook's `updated()` re-sync only re-attaches
+                   when it has NO track reference — but its reference survives
+                   the patch, so a wiped <video> would never come back and the
+                   shared screen vanished. Mirrors the quick-meet slot
+                   (`#meeting-screen-share-slot-desktop`, partials.ex) and the
+                   local-video docks fixed in #421. --%>
               <div
                 data-screen-share-slot
+                id="meeting-screen-share-slot"
+                phx-update="ignore"
                 class="absolute inset-0 hidden h-full w-full"
               >
               </div>

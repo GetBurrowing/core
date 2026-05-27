@@ -845,6 +845,50 @@ defmodule PlatformWeb.MeetingLiveTest do
       end
     end
 
+    test "starting a screen share auto-switches the stage to Screen mode", %{
+      conn: conn,
+      meeting: meeting
+    } do
+      # Screen-share-not-displaying fix: the top-bar share button lives in
+      # every stage mode, but the share track only has a render target
+      # (`[data-screen-share-slot]` + the `MeetingScreenShare` hook) in Screen
+      # mode. A sharer in the default Gallery mode published the track into a
+      # slot that wasn't mounted and saw nothing. The `MeetingShareButton` hook
+      # mirrors the post-toggle state via `meeting_screen_share_state`; on
+      # enable we flip the stage to Screen so the slot is in the DOM.
+      {:ok, view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      assert html =~ ~s(data-stage-mode="gallery")
+
+      html = render_hook(view, "meeting_screen_share_state", %{"enabled" => true})
+
+      assert html =~ ~s(data-stage-mode="screen"),
+             "starting a share must switch the center stage to Screen mode"
+
+      assert html =~ ~r/data-stage-mode-button="screen"[^>]*data-active="true"/
+      # The screen-share render target is now mounted.
+      assert html =~ "data-screen-share-slot"
+    end
+
+    test "stopping a screen share leaves the stage where the user put it", %{
+      conn: conn,
+      meeting: meeting
+    } do
+      # On disable we deliberately do NOT yank the stage back — a jarring jump
+      # away from whatever the user navigated to. We only auto-switch on the
+      # start (enable) edge.
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      # Park the user in Canvas mode.
+      view
+      |> element(~s([data-stage-mode-button="canvas"]))
+      |> render_click()
+
+      html = render_hook(view, "meeting_screen_share_state", %{"enabled" => false})
+
+      assert html =~ ~s(data-stage-mode="canvas"),
+             "stopping a share must not move the stage off the user's chosen mode"
+    end
+
     test "an unknown mode value is ignored — no crash, mode unchanged", %{
       conn: conn,
       meeting: meeting
