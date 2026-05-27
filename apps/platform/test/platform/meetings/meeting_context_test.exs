@@ -35,6 +35,26 @@ defmodule Platform.Meetings.MeetingContextTest do
       space = Chat.get_space(meeting.chat_space_id)
       assert space.kind == "meeting"
       assert space.metadata["project_id"] == project.id
+
+      # The backing chat space must carry a non-empty, globally-unique slug so
+      # the discussion panel (gated on `@meeting.chat_space.slug`) can mount the
+      # embedded chat instead of rendering "No discussion bound to this meeting."
+      assert space.slug == "meeting-#{meeting.id}"
+      refute space.slug in [nil, ""]
+    end
+
+    test "backing chat spaces get distinct, non-empty slugs across meetings" do
+      project = create_project()
+
+      assert {:ok, m1} = Meetings.create_meeting(%{project_id: project.id, name: "One"})
+      assert {:ok, m2} = Meetings.create_meeting(%{project_id: project.id, name: "Two"})
+
+      s1 = Chat.get_space(m1.chat_space_id)
+      s2 = Chat.get_space(m2.chat_space_id)
+
+      refute s1.slug in [nil, ""]
+      refute s2.slug in [nil, ""]
+      assert s1.slug != s2.slug
     end
 
     test "accepts string-keyed attrs" do
