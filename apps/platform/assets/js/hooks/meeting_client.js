@@ -102,6 +102,23 @@ const MeetingClient = {
     }
   },
 
+  // Re-dock the persistent local <video> after EVERY LiveView patch (task
+  // "flash-close-kills-video"). The single self-view <video> is created by
+  // this hook and REPARENTED (appendChild, never re-attach) into the active
+  // mode's dock. On `/meetings` that dock lives inside the server `:for` over
+  // gallery participants (meeting_live.html.heex) — it carries no stable id
+  // and no `phx-update="ignore"`, so ANY re-render (closing the "Meeting
+  // started" flash via `lv:clear-flash`, a presence/participant update, a
+  // control toggle) lets morphdom replace the dock node and discard the
+  // JS-injected <video>. Without an `updated()` callback nothing re-parented
+  // it, so the local camera feed vanished from the gallery. Re-docking here
+  // moves only the element into the (possibly freshly-rendered) dock — the
+  // live MediaStreamTrack is never touched, mirroring `_dockLocalVideo`'s
+  // reparent-not-reattach discipline. No-op when there's no local video.
+  updated() {
+    if (this._localVideoEl) this._dockLocalVideo(this._currentStageMode())
+  },
+
   // Adopt an already-connected Room object (reconnect/remount path). Wires
   // the shared RoomEvent listeners, rebuilds local + remote tiles, and
   // reconciles the local camera/mic against committed server intent —

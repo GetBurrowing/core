@@ -233,6 +233,78 @@ describe("MeetingClient — local self-view reparenting (v2)", () => {
     expect(hook._localVideoTrack).toBeNull()
     expect(el.parentElement).toBeNull()
   })
+
+  // ── updated() re-dock after an LV patch (flash-close-kills-video) ────────
+  // On `/meetings` the gallery dock lives inside the server `:for` over
+  // participants with no `phx-update="ignore"`, so any LV re-render (closing
+  // the "Meeting started" flash, a presence update, a control toggle) lets
+  // morphdom replace the dock node and orphan the JS-injected <video>. The
+  // `updated()` lifecycle re-docks the persistent element into the
+  // (possibly fresh) dock — moving only the element, never re-attaching the
+  // live track.
+  it("updated() re-docks the orphaned local <video> after an LV patch (gallery)", () => {
+    globalThis.document = buildDocument({ stageMode: "gallery" })
+    const hook = buildHook()
+    const track = fakeTrack()
+    hook._attachLocalVideo(track)
+    const el = hook._localVideoEl
+    expect(el.parentElement).toBe(globalThis.document._gallery)
+
+    // Simulate an LV patch (morphdom) that replaced the gallery dock node:
+    // the JS-injected <video> is orphaned (no parent) and a brand-new dock
+    // node is now what querySelector resolves to.
+    el.remove()
+    expect(el.parentElement).toBeNull()
+    const freshGallery = fakeNode({ localVideoDock: "", dockMode: "gallery" })
+    globalThis.document._gallery = freshGallery
+    const realQuery = globalThis.document.querySelector.bind(globalThis.document)
+    globalThis.document.querySelector = (sel) =>
+      sel === '[data-local-video-dock][data-dock-mode="gallery"]'
+        ? freshGallery
+        : realQuery(sel)
+
+    hook.updated()
+
+    // Re-parented into the NEW dock; the live track was never re-attached
+    // or detached during the re-dock.
+    expect(hook._localVideoEl).toBe(el)
+    expect(el.parentElement).toBe(freshGallery)
+    expect(track.attachCalls).toEqual([el])
+    expect(track.detachCalls).toEqual([])
+  })
+
+  it("updated() re-docks into the strip dock when the stage is non-gallery", () => {
+    globalThis.document = buildDocument({ stageMode: "canvas" })
+    const hook = buildHook()
+    const track = fakeTrack()
+    hook._attachLocalVideo(track)
+    const el = hook._localVideoEl
+    expect(el.parentElement).toBe(globalThis.document._strip)
+
+    el.remove()
+    const freshStrip = fakeNode({ localVideoDock: "", dockMode: "strip" })
+    globalThis.document._strip = freshStrip
+    const realQuery = globalThis.document.querySelector.bind(globalThis.document)
+    globalThis.document.querySelector = (sel) =>
+      sel === '[data-local-video-dock][data-dock-mode="strip"]'
+        ? freshStrip
+        : realQuery(sel)
+
+    hook.updated()
+
+    expect(el.parentElement).toBe(freshStrip)
+    expect(track.detachCalls).toEqual([])
+  })
+
+  it("updated() is a no-op when there is no local video", () => {
+    globalThis.document = buildDocument({ stageMode: "gallery" })
+    const hook = buildHook()
+    expect(hook._localVideoEl).toBeNull()
+
+    // Must not throw and must not mint an element.
+    expect(() => hook.updated()).not.toThrow()
+    expect(hook._localVideoEl).toBeNull()
+  })
 })
 
 /**

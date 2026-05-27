@@ -567,8 +567,21 @@
                          (the dock is empty). Only the local cell renders one.
                          See the `data-local-video-dock` contract note near
                          `#meeting-local-self-view`. --%>
+                    <%!-- Stable id + phx-update="ignore": the persistent
+                         local <video> is appendChild'd here by MeetingClient.
+                         This dock lives inside the server `:for` over gallery
+                         participants, so without `ignore` ANY LV re-render
+                         (closing the "Meeting started" flash, a presence
+                         update, a panel toggle) lets morphdom replace the
+                         node and discard the JS-injected <video>. There's
+                         exactly one local cell, so a single stable id is
+                         safe. Belt-and-suspenders with the hook's `updated()`
+                         re-dock (which only fires when the hook's own element
+                         is in the diff). --%>
                     <div
                       :if={local?}
+                      id="meeting-local-video-dock-gallery"
+                      phx-update="ignore"
                       class="pointer-events-none absolute inset-0 overflow-hidden rounded-lg"
                       data-local-video-dock
                       data-dock-mode="gallery"
@@ -827,8 +840,14 @@
           <%!-- Strip local-video dock: the reparent target in
                canvas/screen/whiteboard modes. `absolute inset-0` over the
                aspect-video strip tile so the reparented video fills it. --%>
+          <%!-- Stable id + phx-update="ignore" so morphdom never discards
+               the JS-injected local <video> on an LV re-render. Exactly one
+               local strip cell, so a single stable id is safe. See the
+               gallery dock rationale above. --%>
           <div
             :if={local?}
+            id="meeting-local-video-dock-strip"
+            phx-update="ignore"
             class="pointer-events-none absolute inset-0 overflow-hidden rounded-lg"
             data-local-video-dock
             data-dock-mode="strip"
