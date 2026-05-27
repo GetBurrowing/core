@@ -573,9 +573,31 @@ defmodule PlatformWeb.MeetingLive do
     if socket.assigns[:in_meeting] do
       {:noreply, socket}
     else
-      {:noreply, MeetingHooks.join(socket)}
+      # Transition a still-`scheduled` meeting to `live` BEFORE joining.
+      # `Meetings.start_meeting/1` had ZERO callers — the /meetings FAB only
+      # created (status="scheduled") then navigated here — so every meeting
+      # stayed "scheduled" forever and the index showed it under "Upcoming".
+      # Auto-join is the single chokepoint every join (FAB or direct link)
+      # flows through, so starting the meeting here covers all paths.
+      socket = socket |> maybe_start_meeting() |> MeetingHooks.join()
+      {:noreply, socket}
     end
   end
+
+  # Flip a `scheduled` meeting to `live` (stamping `started_at` and
+  # broadcasting `{:meeting_started, _}` so the index re-buckets it under
+  # "Live now"). Guarded on `"scheduled"` because `status_changeset` rejects
+  # illegal transitions (a live→live attempt errors); any other status is a
+  # no-op. On success the updated meeting is re-assigned so the render path
+  # sees the live status.
+  defp maybe_start_meeting(%{assigns: %{meeting: %{status: "scheduled"} = m}} = socket) do
+    case Meetings.start_meeting(m) do
+      {:ok, started} -> assign(socket, :meeting, started)
+      {:error, _} -> socket
+    end
+  end
+
+  defp maybe_start_meeting(socket), do: socket
 
   def handle_info({:participant_joined, _participant}, socket) do
     {:noreply, refresh_participants(socket)}

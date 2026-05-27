@@ -164,6 +164,34 @@ defmodule PlatformWeb.MeetingLiveTest do
     end
   end
 
+  describe "meeting lifecycle (start on auto-join)" do
+    test "auto-joining a scheduled meeting transitions it to live", %{conn: conn} do
+      {meeting, _space} = create_meeting(%{slug: "lifecycle-start", name: "Lifecycle Start"})
+      {conn, _user} = authenticated_conn(conn)
+
+      assert meeting.status == "scheduled"
+      assert is_nil(meeting.started_at)
+
+      # Connected mount fires `:auto_join`, which now flips a scheduled
+      # meeting to live before delegating to MeetingHooks.join/1.
+      {:ok, _view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      started = Repo.get!(Meeting, meeting.id)
+      assert started.status == "live"
+      refute is_nil(started.started_at)
+    end
+
+    test "opening with ?no_autojoin=true leaves a scheduled meeting scheduled", %{conn: conn} do
+      {meeting, _space} = create_meeting(%{slug: "lifecycle-noauto", name: "Lifecycle No Auto"})
+      {conn, _user} = authenticated_conn(conn)
+
+      {:ok, _view, _html} = live(conn, ~p"/meetings/#{meeting.slug}?no_autojoin=true")
+
+      still = Repo.get!(Meeting, meeting.id)
+      assert still.status == "scheduled"
+    end
+  end
+
   describe "shell skeleton (:show)" do
     setup %{conn: conn} do
       {meeting, space} = create_meeting(%{slug: "kickoff-shell", name: "Kickoff Sync"})
