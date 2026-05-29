@@ -64,8 +64,9 @@
       aria-label="Channel sections"
     >
       <%!-- Pinned section — only renders when non-empty.
-           Section key for `@expanded_sections` toggle: "pinned".
-           NOT reorderable (Stage 3) — Pinned + DMs lock to the top. --%>
+           NOT hideable (per chat sidebar v3 Stage 2 — hide button is
+           rendered on sub-org rows only). NOT reorderable — Pinned + DMs
+           lock to the top of the rail. --%>
       <%= if @channel_sections.pinned != [] do %>
         <section
           class="channel-section group"
@@ -77,14 +78,8 @@
             <span class="hero-bookmark-solid size-3.5 text-base-content/60"></span>
             <p class="channel-section-label">Pinned</p>
           </div>
-          <% {visible, hidden} =
-            PlatformWeb.ChatLive.split_section(
-              @channel_sections.pinned,
-              @expanded_sections,
-              "pinned"
-            ) %>
           <.link
-            :for={space <- visible}
+            :for={space <- @channel_sections.pinned}
             navigate={~p"/chat/#{space.slug || space.id}"}
             class={[
               "channel-row",
@@ -115,16 +110,6 @@
               </span>
             <% end %>
           </.link>
-          <%= if hidden != [] do %>
-            <button
-              type="button"
-              class="channel-section-show-more"
-              phx-click="toggle_section"
-              phx-value-section="pinned"
-            >
-              + {length(hidden)} more
-            </button>
-          <% end %>
         </section>
       <% end %>
 
@@ -154,10 +139,8 @@
             No conversations yet — direct messages will appear here once you start one.
           </p>
         <% else %>
-          <% {visible, hidden} =
-            PlatformWeb.ChatLive.split_section(@channel_sections.dms, @expanded_sections, "dms") %>
           <.link
-            :for={space <- visible}
+            :for={space <- @channel_sections.dms}
             navigate={~p"/chat/#{space.slug || space.id}"}
             class={[
               "channel-row",
@@ -171,16 +154,6 @@
               </span>
             <% end %>
           </.link>
-          <%= if hidden != [] do %>
-            <button
-              type="button"
-              class="channel-section-show-more"
-              phx-click="toggle_section"
-              phx-value-section="dms"
-            >
-              + {length(hidden)} more
-            </button>
-          <% end %>
         <% end %>
       </section>
 
@@ -210,6 +183,11 @@
         draggable="true"
         aria-label={"#{bucket} channels"}
       >
+        <%!-- Visible channels for this bucket. Hidden ones are surfaced
+             globally via the bottom-of-sidebar drawer (Stage 3 v3 / Option
+             B per Marlowe's review) — no per-section hidden affordance
+             lives inside this section anymore. --%>
+        <% bucket_spaces = Map.get(@channel_sections.sub_orgs, bucket, []) %>
         <div class="channel-section-header">
           <p class="channel-section-label">{bucket}</p>
           <.scope_pill
@@ -227,68 +205,67 @@
             ☰
           </button>
         </div>
-        <%= if Map.get(@channel_sections.sub_orgs, bucket, []) == [] do %>
+        <%= if bucket_spaces == [] do %>
           <p class="channel-section-empty">
             No channels yet — channels named matching this sub-org appear here.
           </p>
         <% else %>
-          <% bucket_spaces = Map.fetch!(@channel_sections.sub_orgs, bucket) %>
-          <% {visible, hidden} =
-            PlatformWeb.ChatLive.split_section(bucket_spaces, @expanded_sections, bucket) %>
-          <.link
-            :for={space <- visible}
-            navigate={~p"/chat/#{space.slug || space.id}"}
+          <div
+            :for={space <- bucket_spaces}
             class={[
-              "channel-row",
-              @active_space && @active_space.id == space.id && "channel-row--active"
+              "channel-row-wrap",
+              @active_space && @active_space.id == space.id && "channel-row-wrap--active"
             ]}
           >
-            <span class="text-base-content/40">#</span>
-            <span class="truncate flex-1">{space.name}</span>
-            <%!-- Active-row scope-pill (chat plan v2 Stage 4) — right-aligned,
-                 non-clickable. The header pill above each section is the
-                 click-to-filter affordance; the active-row pill is purely
-                 a "you are here" provenance marker. --%>
-            <span
-              :if={@active_space && @active_space.id == space.id}
-              class="channel-row-scope-pill"
+            <.link
+              navigate={~p"/chat/#{space.slug || space.id}"}
+              class={[
+                "channel-row",
+                @active_space && @active_space.id == space.id && "channel-row--active"
+              ]}
             >
-              <.scope_pill scope={sub_org_scope_atom(bucket)} clickable={false} />
-            </span>
-            <%= if unread_label(Map.get(@unread_counts, space.id, 0)) do %>
-              <span class="channel-row-unread-pill">
-                {unread_label(Map.get(@unread_counts, space.id, 0))}
+              <span class="text-base-content/40">#</span>
+              <span class="truncate flex-1">{space.name}</span>
+              <%!-- Active-row scope-pill (chat plan v2 Stage 4) — right-aligned,
+                   non-clickable. The header pill above each section is the
+                   click-to-filter affordance; the active-row pill is purely
+                   a "you are here" provenance marker. --%>
+              <span
+                :if={@active_space && @active_space.id == space.id}
+                class="channel-row-scope-pill"
+              >
+                <.scope_pill scope={sub_org_scope_atom(bucket)} clickable={false} />
               </span>
-            <% end %>
-          </.link>
-          <%= if hidden != [] do %>
+              <%= if unread_label(Map.get(@unread_counts, space.id, 0)) do %>
+                <span class="channel-row-unread-pill">
+                  {unread_label(Map.get(@unread_counts, space.id, 0))}
+                </span>
+              <% end %>
+            </.link>
+            <%!-- Per-channel hide affordance (chat sidebar v3 Stage 2). Sub-org
+                 rows ONLY (NOT Pinned, NOT DMs). Rendered as a SIBLING of the
+                 row link — never a child — so its click reaches LiveView's
+                 window-level `phx-click` listener. A <button> nested in the
+                 <a> is invalid HTML, and the old anti-navigation
+                 stopPropagation guard there also swallowed the hide event
+                 (LiveView binds click on `window` in the bubble phase, so
+                 stopPropagation killed it). Outside the anchor, clicking the
+                 button can't trigger navigation, so no propagation guard is
+                 needed. Revealed on wrapper :hover OR :focus-within for
+                 keyboard reach (WCAG 2.1.1). --%>
             <button
               type="button"
-              class="channel-section-show-more"
-              phx-click="toggle_section"
-              phx-value-section={bucket}
+              class="channel-row-hide-button"
+              phx-click="hide_channel"
+              phx-value-id={space.id}
+              aria-label={"Hide ##{space.name}"}
+              title="Hide channel"
             >
-              + {length(hidden)} more
+              <span class="hero-eye-slash size-3.5"></span>
             </button>
-          <% end %>
+          </div>
         <% end %>
       </section>
-
-      <%!-- Top-level new-channel affordance moved to the foot of the
-           sectioned rail. The Stage 1 design canvas put this near the
-           sub-org headers; Marlowe approved a single bottom-of-rail entry
-           point so it doesn't compete with the per-section drag handles. --%>
-      <div class="px-3 py-2 mt-2 border-t border-base-300">
-        <button
-          type="button"
-          phx-click="new_channel_open"
-          class="flex items-center gap-2 w-full px-2 py-1.5 text-sm text-base-content/70 hover:text-primary hover:bg-base-300 rounded transition-colors"
-          aria-label="New channel"
-        >
-          <span class="hero-plus size-4"></span>
-          <span>New channel</span>
-        </button>
-      </div>
 
       <%!-- Brand-new-user empty state — surfaces when the user has no
            channels AND no DMs at all. The sub-org headers above still
@@ -306,6 +283,156 @@
       </.empty_state>
     </nav>
 
+    <%!-- Undo toast — ephemeral 4-second affordance shown after a hide
+         (Stage 3 v3 follow-up per Marlowe's 2026-05-29 review). Lives as
+         an IN-FLOW `flex-shrink-0` sibling between the scrolling `<nav>`
+         (`flex-1`) above and the pinned "+ New channel" button below.
+         When the toast appears, the `flex-1` scroll nav absorbs its
+         height by shrinking — so "+ New channel" stays exactly where it
+         is, the drawer stays exactly where it is, and the toast doesn't
+         overlap any content. Trades a soft scroll-area compression for
+         stable pinned chrome (the right exchange — overlap with content
+         is the actual user complaint; transient scroll compression is
+         the standard chat-rail behavior, same way Slack/Discord handle
+         compose-area system notes).
+
+         role=status + aria-live=polite (NOT assertive) — hiding a
+         channel is non-destructive (nothing deleted, only user-filtered)
+         so a polite announcement is the right WCAG choice. The Undo
+         button shares its handler with the drawer's Show buttons via
+         do_unhide/2 in the LiveView, so the round-trip is identical
+         regardless of which way the user reverses the hide. Auto-clears
+         via a Process.send_after → handle_info({:clear_undo_toast,
+         space_id}) pair scheduled by the hide_channel handler. --%>
+    <div
+      :if={@undo_toast}
+      role="status"
+      aria-live="polite"
+      class="channel-undo-toast"
+    >
+      <span class="channel-undo-toast-message">
+        Hidden <span class="font-medium">#{@undo_toast.name}</span>
+      </span>
+      <button
+        type="button"
+        class="channel-undo-toast-button"
+        phx-click="undo_hide"
+        phx-value-id={@undo_toast.space_id}
+      >
+        Undo
+      </button>
+    </div>
+
+    <%!-- "+ New channel" — pinned rail chrome (Stage 3 v3 follow-up per
+         Marlowe's review). Lives as an UNCONDITIONAL `flex-shrink-0` sibling
+         of `<nav>` and the conditional bottom-region wrapper, so its
+         visual position never drifts based on channel count OR on whether
+         the undo toast / hidden drawer happens to be showing. The wrapper
+         was deliberately NOT merged into the bottom-region's `:if` block —
+         doing so would yank the button out of view whenever both toast
+         and drawer are absent, reintroducing the "position depends on
+         state" bug. Visual divider above is a top border using the same
+         `border-base-content/10` token the aside itself uses, so the
+         rail's separator language stays consistent. Reuses the
+         channel-row hover/text vocabulary so the button rhymes visually
+         with the section rows above. --%>
+    <button
+      type="button"
+      phx-click="new_channel_open"
+      aria-label="New channel"
+      class="flex-shrink-0 flex items-center gap-2 w-full border-t border-base-content/10 px-3 py-2 text-sm text-base-content/70 hover:text-primary hover:bg-base-300 transition-colors"
+    >
+      <span class="hero-plus size-4"></span>
+      <span>New channel</span>
+    </button>
+
+    <%!-- Bottom region (Stage 3 v3): hosts the global "N hidden channels"
+         drawer ONLY. Silent at N=0 — the wrapper is :if-gated to
+         `hidden_count > 0` so it disappears entirely when the user has
+         no hidden channels, keeping the sidebar foot empty in the clean
+         state. The undo toast used to live here too but moved up to its
+         own in-flow position above "+ New channel" — keeps pinned chrome
+         (+ New channel, drawer trigger) stable when a hide fires, since
+         the scroll-nav (flex-1) absorbs the toast's height instead. --%>
+    <% hidden_count =
+      @channel_sections.hidden_sub_orgs
+      |> Map.values()
+      |> Enum.map(&length/1)
+      |> Enum.sum() %>
+    <div
+      :if={hidden_count > 0}
+      class="flex-shrink-0 border-t border-base-content/10 px-2 py-2"
+    >
+      <%!-- Global "N hidden channels" drawer (Option B per Marlowe's v3
+           review). One quiet row at the rail's foot — silent at N=0 —
+           expanding upward into a scrollable grouped list. The panel
+           ALWAYS renders so the max-height CSS transition animates in
+           and out smoothly; the `--open` modifier on the wrapper drives
+           the transition. Internal scroll caps the panel at min(50vh,
+           360px) so it can't claim more than half the sidebar at very
+           high hidden counts. Each Show button shares the unhide_channel
+           handler with the (now-removed) v2 inline list, so behavior is
+           identical to v2 — only the trigger surface changed. --%>
+      <div
+        :if={hidden_count > 0}
+        class={[
+          "channel-hidden-drawer",
+          @hidden_drawer_open && "channel-hidden-drawer--open"
+        ]}
+      >
+        <div
+          id="hidden-drawer-panel"
+          class="channel-hidden-drawer-panel"
+          aria-hidden={if @hidden_drawer_open, do: "false", else: "true"}
+        >
+          <%= for {bucket, hidden_channels} <- @channel_sections.hidden_sub_orgs,
+                  hidden_channels != [] do %>
+            <div class="channel-hidden-drawer-group">
+              <div class="channel-hidden-drawer-group-label">
+                <.scope_pill scope={sub_org_scope_atom(bucket)} clickable={false} />
+              </div>
+              <ul class="channel-hidden-drawer-group-list">
+                <li
+                  :for={space <- hidden_channels}
+                  class="channel-hidden-drawer-item"
+                >
+                  <span class="text-base-content/40">#</span>
+                  <span class="truncate flex-1">{space.name}</span>
+                  <button
+                    type="button"
+                    class="channel-hidden-drawer-show"
+                    phx-click="unhide_channel"
+                    phx-value-id={space.id}
+                    aria-label={"Show ##{space.name}"}
+                  >
+                    Show
+                  </button>
+                </li>
+              </ul>
+            </div>
+          <% end %>
+        </div>
+        <button
+          type="button"
+          class="channel-hidden-drawer-trigger"
+          phx-click="toggle_hidden_drawer"
+          aria-expanded={if @hidden_drawer_open, do: "true", else: "false"}
+          aria-controls="hidden-drawer-panel"
+          aria-label={
+            if @hidden_drawer_open,
+              do: "Collapse hidden channels",
+              else: "Show #{hidden_count} hidden channels"
+          }
+        >
+          <span class="flex-1 text-left">
+            {hidden_count} hidden {if hidden_count == 1, do: "channel", else: "channels"}
+          </span>
+          <span class="channel-hidden-drawer-caret">
+            {if @hidden_drawer_open, do: "▾", else: "▴"}
+          </span>
+        </button>
+      </div>
+    </div>
     <%!-- Drag handle for sidebar resize --%>
     <div
       class="absolute right-0 inset-y-0 w-1 cursor-col-resize hover:bg-primary/40 active:bg-primary/60 transition-colors z-10"

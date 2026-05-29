@@ -29,6 +29,7 @@ defmodule PlatformWeb.ChatLive do
   alias Platform.Accounts
   alias Platform.Chat
   alias Platform.Chat.ActiveAgentStore
+  alias Platform.Chat.HiddenChannels
   alias Platform.Chat.PubSub, as: ChatPubSub
 
   alias PlatformWeb.ChatLive.ActiveAgentHooks
@@ -123,8 +124,30 @@ defmodule PlatformWeb.ChatLive do
       |> assign(:spaces, channels ++ dm_conversations)
       |> assign(:channels, channels)
       |> assign(:dm_conversations, dm_conversations)
-      |> assign(:channel_sections, channel_sections(channels, dm_conversations))
-      |> assign(:expanded_sections, MapSet.new())
+      |> assign(:hidden_channel_ids, Accounts.get_hidden_channel_ids(user_id))
+      |> assign(
+        :channel_sections,
+        channel_sections(
+          channels,
+          dm_conversations,
+          MapSet.new(),
+          Accounts.get_hidden_channel_ids(user_id)
+        )
+      )
+      # Stage 3 v3 (chat sidebar Option B): the global "N hidden channels"
+      # drawer at the sidebar bottom is collapsed by default. Toggled by
+      # `toggle_hidden_drawer` handler. (Replaces the v2 per-section
+      # `:hidden_visible_sections` MapSet — there's only one drawer now,
+      # not one expand-state per sub-org bucket.)
+      |> assign(:hidden_drawer_open, false)
+      # Stage 3 (chat sidebar v3): ephemeral undo affordance shown for 4s
+      # after a hide. `%{space_id: <uuid>, name: <channel name>}` while
+      # active, `nil` otherwise. Cleared by `{:clear_undo_toast, space_id}`
+      # handle_info scheduled via `Process.send_after/3` when the toast
+      # is set. The space_id-match guard in the clear handler means a
+      # second hide arriving inside the 4s window replaces the toast
+      # cleanly — the older timer's clear becomes a no-op.
+      |> assign(:undo_toast, nil)
       # Per-user sub-org section order (chat plan v2 Stage 3). Hydrated from
       # `users.preferences["chat_section_order"]` if set, otherwise defaults
       # to alphabetical. Embedded/anonymous sessions (no real user row) get
@@ -367,7 +390,10 @@ defmodule PlatformWeb.ChatLive do
        |> assign(:channels, channels)
        |> assign(:dm_conversations, dm_convos)
        |> assign(:spaces, channels ++ dm_convos)
-       |> assign(:channel_sections, channel_sections(channels, dm_convos))
+       |> assign(
+         :channel_sections,
+         channel_sections(channels, dm_convos, MapSet.new(), socket.assigns.hidden_channel_ids)
+       )
        |> clear_unread(space.id)}
     end
   end
@@ -391,23 +417,118 @@ defmodule PlatformWeb.ChatLive do
     {:noreply, assign(socket, :mobile_browser_open, false)}
   end
 
-  # Sectioned-rail show-more toggle (chat plan v2 Stage 2). The rail caps each
-  # section at 8 visible rows by default; the `+ N more` button toggles the
-  # section key in/out of `@expanded_sections` (a MapSet of section keys).
-  # Section keys are stable strings: "pinned", "dms", "Paragon", "Soylent",
-  # "Fabrikam", "Wayne-Tech", "SXI".
-  def handle_event("toggle_section", %{"section" => key}, socket)
-      when is_binary(key) do
-    expanded = socket.assigns.expanded_sections || MapSet.new()
+  # Per-channel hide affordance (chat sidebar v3 Stage 2). The sub-org
+  # row's eye-slash button posts `hide_channel` with `phx-value-id`. We
+  # persist the id into `users.preferences["hidden_channel_ids"]` via
+  # `Accounts.hide_channel/2` (no-op for anonymous-session UUIDs that
+  # don't match a real user row), then re-derive `@channel_sections`
+  # with the updated hidden MapSet.
+  #
+  # Pinned and DM rows do NOT render the hide button (template-level
+  # scope), so this handler is only reachable from sub-org rows. The
+  # filter inside `channel_sections/4` still drops hidden ids from the
+  # DMs bucket as a defense-in-depth, but the only path to add a DM id
+  # to the hidden set today is direct DB manipulation.
+  def handle_event("hide_channel", %{"id" => space_id}, socket) when is_binary(space_id) do
+    user_id = socket.assigns.user_id
 
-    next =
-      if MapSet.member?(expanded, key) do
-        MapSet.delete(expanded, key)
-      else
-        MapSet.put(expanded, key)
+    # Capture the channel name from the current assigns BEFORE we re-derive
+    # @channel_sections (which drops the hidden one from the visible map).
+    # Stage 3 surfaces this in the undo-toast — "Hidden #foo — [Undo]".
+    channel_name =
+      case Enum.find(socket.assigns.channels, fn ch -> ch.id == space_id end) do
+        %{name: name} -> name
+        _ -> nil
       end
 
-    {:noreply, assign(socket, :expanded_sections, next)}
+    _ = Accounts.hide_channel(user_id, space_id)
+    hidden = Accounts.get_hidden_channel_ids(user_id)
+
+    # Schedule auto-clear of the undo toast in 4s. The :clear_undo_toast
+    # handler only nils the assign when the toast still points at THIS
+    # space_id, so a second hide arriving inside the 4s window simply
+    # replaces the toast and the earlier timer's fire becomes a no-op —
+    # no need to track / cancel timer refs.
+    if channel_name, do: Process.send_after(self(), {:clear_undo_toast, space_id}, 4_000)
+
+    # Note: do NOT auto-collapse the hidden-channels drawer here. An earlier
+    # iteration did, because the toast was absolute-positioned and could
+    # overlap an expanded drawer panel. The toast is now in-flow above
+    # "+ New channel" (Marlowe's 2026-05-29 review), so the toast and an
+    # expanded drawer panel occupy different vertical bands and never
+    # collide — collapsing the drawer here would just yank the user's
+    # browsing context away for no UX win.
+    {:noreply,
+     socket
+     |> assign(:hidden_channel_ids, hidden)
+     |> assign(
+       :channel_sections,
+       channel_sections(
+         socket.assigns.channels,
+         socket.assigns.dm_conversations,
+         MapSet.new(),
+         hidden
+       )
+     )
+     |> assign(:undo_toast, channel_name && %{space_id: space_id, name: channel_name})}
+  end
+
+  # Stage 3 v3 (chat sidebar Option B). Toggle the single global
+  # `Hidden channels` drawer at the bottom of the sidebar. There's only one
+  # drawer state now (a boolean), not one expand-state per sub-org bucket
+  # as in v2 — Marlowe's review removed the per-section chips in favour of a
+  # single quieter affordance at the rail's foot.
+  def handle_event("toggle_hidden_drawer", _params, socket) do
+    {:noreply, assign(socket, :hidden_drawer_open, !socket.assigns.hidden_drawer_open)}
+  end
+
+  # Stage 3 (chat sidebar v3). Restore a hidden channel back into the
+  # sidebar. Reached from two paths: the inline "Show" button under an
+  # expanded Hidden (N) list (`unhide_channel`), and the undo toast's
+  # Undo button (`undo_hide`) — both do the same work. We also clear
+  # the undo toast when the channel being unhidden is the one currently
+  # advertised in it, so the toast doesn't linger after the user has
+  # explicitly reversed the action.
+  def handle_event("unhide_channel", %{"id" => space_id}, socket) when is_binary(space_id) do
+    {:noreply, do_unhide(socket, space_id)}
+  end
+
+  def handle_event("undo_hide", %{"id" => space_id}, socket) when is_binary(space_id) do
+    {:noreply, do_unhide(socket, space_id)}
+  end
+
+  defp do_unhide(socket, space_id) do
+    user_id = socket.assigns.user_id
+    _ = Accounts.unhide_channel(user_id, space_id)
+    hidden = Accounts.get_hidden_channel_ids(user_id)
+
+    cleared_toast =
+      case socket.assigns.undo_toast do
+        %{space_id: ^space_id} -> nil
+        other -> other
+      end
+
+    # Stage 3 v3: collapse the global Hidden drawer when the user has
+    # just unhidden the last remaining channel — the drawer trigger goes
+    # silent (template-level :if guard), so leaving `:hidden_drawer_open`
+    # stuck at true would cause the panel to re-pop expanded the next
+    # time the user hides something. Reset to closed instead.
+    drawer_open =
+      if MapSet.size(hidden) == 0, do: false, else: socket.assigns.hidden_drawer_open
+
+    socket
+    |> assign(:hidden_channel_ids, hidden)
+    |> assign(
+      :channel_sections,
+      channel_sections(
+        socket.assigns.channels,
+        socket.assigns.dm_conversations,
+        MapSet.new(),
+        hidden
+      )
+    )
+    |> assign(:undo_toast, cleared_toast)
+    |> assign(:hidden_drawer_open, drawer_open)
   end
 
   # Scope filter (chat plan v2 Stage 4). Clicking a scope-pill in the
@@ -420,7 +541,7 @@ defmodule PlatformWeb.ChatLive do
   # with a `?scope=` query-string patch so the filter state is shareable.
   # Until then we keep the state in-memory on the LV — no schema change
   # required, and the per-tab volatility matches the rest of the rail's
-  # ephemeral UI state (e.g. `@expanded_sections`).
+  # ephemeral UI state.
   def handle_event("scope_filter", %{"scope" => raw}, socket) when is_binary(raw) do
     incoming = parse_scope(raw)
     current = socket.assigns.scope_filter
@@ -987,7 +1108,15 @@ defmodule PlatformWeb.ChatLive do
      socket
      |> assign(:channels, channels)
      |> assign(:spaces, channels ++ dm_conversations)
-     |> assign(:channel_sections, channel_sections(channels, dm_conversations))}
+     |> assign(
+       :channel_sections,
+       channel_sections(
+         channels,
+         dm_conversations,
+         MapSet.new(),
+         socket.assigns.hidden_channel_ids
+       )
+     )}
   end
 
   def handle_info({:space_created, _space}, socket), do: {:noreply, socket}
@@ -1005,6 +1134,17 @@ defmodule PlatformWeb.ChatLive do
 
   def handle_info({:new_conversation_flash, kind, msg}, socket) do
     {:noreply, put_flash(socket, kind, msg)}
+  end
+
+  # Stage 3 (chat sidebar v3). Auto-clear the undo toast 4s after a hide.
+  # Only clear when the toast still points at this space_id — a later hide
+  # inside the 4s window replaces the toast, and the earlier timer firing
+  # here would otherwise wipe the newer toast prematurely.
+  def handle_info({:clear_undo_toast, space_id}, socket) do
+    case socket.assigns.undo_toast do
+      %{space_id: ^space_id} -> {:noreply, assign(socket, :undo_toast, nil)}
+      _ -> {:noreply, socket}
+    end
   end
 
   def handle_info(_msg, socket), do: {:noreply, socket}
@@ -1243,12 +1383,23 @@ defmodule PlatformWeb.ChatLive do
   See module-level comment for the return shape, classification precedence,
   and the post-MT/RBAC migration seam (`channel_scope/1`).
   """
-  @spec channel_sections([Platform.Chat.Space.t()], [Platform.Chat.Space.t()]) :: %{
+  @spec channel_sections(
+          [Platform.Chat.Space.t()],
+          [Platform.Chat.Space.t()],
+          MapSet.t(String.t()),
+          MapSet.t(String.t())
+        ) :: %{
           pinned: [Platform.Chat.Space.t()],
           dms: [Platform.Chat.Space.t()],
-          sub_orgs: %{String.t() => [Platform.Chat.Space.t()]}
+          sub_orgs: %{String.t() => [Platform.Chat.Space.t()]},
+          hidden_sub_orgs: %{String.t() => [Platform.Chat.Space.t()]}
         }
-  def channel_sections(channels, dm_conversations, pinned_channel_ids \\ MapSet.new())
+  def channel_sections(
+        channels,
+        dm_conversations,
+        pinned_channel_ids \\ MapSet.new(),
+        hidden_channel_ids \\ MapSet.new()
+      )
       when is_list(channels) and is_list(dm_conversations) do
     {pinned, unpinned_channels} =
       Enum.split_with(channels, fn ch -> MapSet.member?(pinned_channel_ids, ch.id) end)
@@ -1262,10 +1413,28 @@ defmodule PlatformWeb.ChatLive do
         Map.update(acc, bucket, [channel], fn existing -> existing ++ [channel] end)
       end)
 
+    # Drop hidden ids from sub-org buckets and DMs (Pinned is non-hideable
+    # per Stage 2 plan — pinned stays whole as defense-in-depth even if a
+    # pinned channel id somehow ended up in the user's hidden set).
+    # Stage 3: also expose the per-bucket hidden list under `hidden_sub_orgs`
+    # so the header `Hidden (N)` chip and the inline unhide list can render
+    # without re-doing the bucketing/filter in the template.
+    {visible_dms, _hidden_dms} = HiddenChannels.filter(dm_conversations, hidden_channel_ids)
+
+    bucketed =
+      Map.new(sub_orgs, fn {bucket, spaces} ->
+        {visible, hidden} = HiddenChannels.filter(spaces, hidden_channel_ids)
+        {bucket, %{visible: visible, hidden: hidden}}
+      end)
+
+    visible_sub_orgs = Map.new(bucketed, fn {bucket, %{visible: v}} -> {bucket, v} end)
+    hidden_sub_orgs = Map.new(bucketed, fn {bucket, %{hidden: h}} -> {bucket, h} end)
+
     %{
       pinned: pinned,
-      dms: dm_conversations,
-      sub_orgs: sub_orgs
+      dms: visible_dms,
+      sub_orgs: visible_sub_orgs,
+      hidden_sub_orgs: hidden_sub_orgs
     }
   end
 
@@ -1454,38 +1623,6 @@ defmodule PlatformWeb.ChatLive do
   end
 
   def bucket_from_slug(_), do: nil
-
-  # Default visible row cap per section. Sections with more rows than this
-  # cap render the surplus behind a `+ N more` toggle.
-  @section_visible_cap 8
-
-  @doc """
-  Default visible-row cap per sectioned-rail section (8). Sections with more
-  rows than the cap collapse the surplus behind a `+ N more` toggle whose
-  state lives in `@expanded_sections`.
-  """
-  @spec section_visible_cap() :: pos_integer()
-  def section_visible_cap, do: @section_visible_cap
-
-  @doc """
-  Split a section's spaces into the always-visible prefix and the hidden
-  surplus, given the current `expanded_sections` MapSet and the section key.
-
-  Returns `{visible, hidden}` where:
-    * if the section is expanded (key in MapSet) → `{all, []}`
-    * if the section has ≤ cap rows → `{all, []}`
-    * otherwise → `{first 8, rest}`
-  """
-  @spec split_section([Platform.Chat.Space.t()], MapSet.t(String.t()), String.t()) ::
-          {[Platform.Chat.Space.t()], [Platform.Chat.Space.t()]}
-  def split_section(spaces, expanded_sections, key)
-      when is_list(spaces) and is_binary(key) do
-    cond do
-      MapSet.member?(expanded_sections, key) -> {spaces, []}
-      length(spaces) <= @section_visible_cap -> {spaces, []}
-      true -> Enum.split(spaces, @section_visible_cap)
-    end
-  end
 
   @impl true
   def terminate(_reason, socket) do

@@ -2775,11 +2775,6 @@ body, .font-fabrikam, * {
     @apply px-2 py-1 text-xs italic text-base-content/40 leading-snug;
   }
 
-  /* `+ N more` show-more toggle. Sits flush left under the visible rows. */
-  .channel-section-show-more {
-    @apply px-3 py-1 mx-1 text-xs font-medium text-base-content/60 hover:text-primary transition-colors;
-  }
-
   /* Single channel / DM row — shared across all sections so we don't
      introduce a parallel row style. Active state mirrors the previous
      flat-list treatment. */
@@ -2787,8 +2782,169 @@ body, .font-fabrikam, * {
     @apply flex items-center gap-2 px-3 py-1.5 mx-1 text-sm rounded transition-colors hover:bg-base-300;
   }
 
+  /* Sub-org rows pair a navigate-link with a hide button as SIBLINGS inside
+     this wrapper (see the heex comment). The wrapper owns the horizontal
+     margin, rounding, and hover/active background so the highlight spans the
+     whole row — including the button. The scoped overrides below only touch
+     rows INSIDE a wrapper, so bare Pinned/DM `.channel-row`s are unaffected. */
+  .channel-row-wrap {
+    @apply flex items-center mx-1 rounded transition-colors hover:bg-base-300;
+  }
+
+  .channel-row-wrap > .channel-row {
+    @apply mx-0 flex-1 min-w-0 rounded-none hover:bg-transparent;
+  }
+
+  .channel-row-wrap--active {
+    @apply bg-primary/10;
+  }
+
+  /* Active tint lives on the wrapper; the inner link keeps only its text +
+     left-border treatment so the background isn't painted twice. */
+  .channel-row-wrap > .channel-row--active {
+    @apply bg-transparent;
+  }
+
+  /* Per-channel hide button (chat sidebar v3 Stage 2). Sub-org rows only;
+     hidden by default and revealed on wrapper :hover OR :focus-within. The
+     :focus-within branch is the WCAG 2.1.1 fix — keyboard-tab users must be
+     able to reveal and activate the button without a mouse. */
+  .channel-row-hide-button {
+    @apply flex-shrink-0 inline-flex items-center justify-center w-6 h-6 mr-1 rounded text-base-content/50 hover:text-base-content hover:bg-base-200 opacity-0 transition-opacity duration-75;
+  }
+
+  .channel-row-wrap:hover .channel-row-hide-button,
+  .channel-row-wrap:focus-within .channel-row-hide-button,
+  .channel-row-hide-button:focus-visible {
+    @apply opacity-100;
+  }
+
   .channel-row--active {
     @apply bg-primary/10 text-primary font-semibold border-l-2 border-primary;
+  }
+
+  /* ── Stage 3 v3 (chat sidebar Option B): global "N hidden channels"
+     drawer + supporting undo toast. The v2 per-section chip/footer rows
+     were removed in favour of one quiet entry at the rail's foot —
+     Marlowe's review judged per-section noise as the bigger problem than
+     per-section context loss. Pattern is closest to Notion's "N more"
+     row lifted from per-section to the sidebar level. */
+
+  /* Drawer wrapper sits as a regular flex child at the sidebar bottom
+     (no absolute positioning — so the toast above and the resize handle
+     to the right can't collide with it). */
+  .channel-hidden-drawer {
+    @apply flex flex-col rounded overflow-hidden;
+  }
+
+  /* The panel ALWAYS renders so the CSS height transition can animate
+     smoothly in BOTH directions. When closed, height: 0 + overflow hidden
+     hides the contents. When open, the height is FIXED at min(50vh,
+     360px) — not max-height — so the panel claims the same vertical
+     space regardless of how many channels are hidden (1 vs 20), and the
+     internal scroll engages whenever content exceeds the cap. This
+     trades a little empty space at low hidden counts for a consistent,
+     predictable footprint (per Marlowe's 2026-05-29 review: "fixed height
+     that gets adjusted appropriately to mobile"). Responsive by design
+     — caps at 360px on tall viewports, scales to 50vh on short ones. */
+  .channel-hidden-drawer-panel {
+    @apply overflow-y-auto transition-[height] duration-200 ease-out;
+    height: 0;
+  }
+
+  .channel-hidden-drawer--open .channel-hidden-drawer-panel {
+    height: min(50vh, 360px);
+    @apply mb-1;
+  }
+
+  .channel-hidden-drawer-group {
+    @apply px-1 py-1.5 space-y-1;
+  }
+
+  .channel-hidden-drawer-group-label {
+    @apply px-2 flex items-center;
+  }
+
+  .channel-hidden-drawer-group-list {
+    @apply space-y-0.5;
+  }
+
+  .channel-hidden-drawer-item {
+    @apply flex items-center gap-2 px-2 py-1 text-sm text-base-content/70 rounded hover:bg-base-300/60;
+  }
+
+  .channel-hidden-drawer-show {
+    @apply ml-auto flex-shrink-0 inline-flex items-center justify-center px-2 py-0.5 text-[0.7rem] font-medium rounded text-primary hover:bg-primary/10 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40;
+  }
+
+  /* Trigger row — silent at N=0 (the wrapper :if guards that). Visually
+     quiet by default so it reads as "rail chrome" not "actionable noise".
+     No leading eye icon — Marlowe's review explicitly removed it. */
+  .channel-hidden-drawer-trigger {
+    @apply flex items-center gap-2 px-3 py-2 min-h-[36px] rounded text-xs font-medium text-base-content/55 hover:text-base-content hover:bg-base-300/40 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40;
+  }
+
+  .channel-hidden-drawer-caret {
+    @apply inline-block text-[0.65rem] leading-none flex-shrink-0 transition-transform duration-150;
+  }
+
+  .channel-hidden-drawer--open .channel-hidden-drawer-caret {
+    @apply rotate-180;
+  }
+
+  /* Undo toast — ephemeral 4-second affordance shown after a hide. Lives
+     IN-FLOW as a flex-shrink-0 child of <aside>, sitting between the
+     scrolling channel nav (flex-1, absorbs the toast's height by
+     shrinking when it appears) and the pinned "+ New channel" button
+     below. This is per Marlowe's 2026-05-29 review: an earlier absolute-
+     positioned float trial overlapped scroll-area content for 4s and
+     felt intrusive; the in-flow approach trades a soft scroll-area
+     compression for stable pinned chrome and zero content overlap
+     (same pattern Slack uses for compose-area system messages).
+
+     Horizontal margin (mx-2) inset keeps the toast off the sidebar's
+     right resize handle; the rounded corners + shadow give it the
+     transient-affordance read distinct from the channel rows above.
+
+     role=status + aria-live=polite preserved — hiding a channel is
+     non-destructive (nothing deleted, only user-filtered), so a polite
+     SR announcement is the right WCAG choice. */
+  .channel-undo-toast {
+    @apply flex-shrink-0 flex items-center gap-3 mx-2 mb-2 px-3 py-2 rounded-md bg-base-300 text-base-content text-sm shadow-md;
+    animation: channel-undo-toast-enter 200ms ease-out;
+  }
+
+  /* Soft fade-in entrance. No slide — the element is in-flow, so the
+     real visual change is the flex layout absorbing its height (which
+     is necessarily instant); fading the toast's own opacity from 0→1
+     softens that change without adding a misleading "from somewhere"
+     direction. Exit is instant (LiveView removes the element on
+     :if=false; a fast cut on a 4-second ephemeral is fine — matches
+     Material's fast-out exit principle). */
+  @keyframes channel-undo-toast-enter {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+
+  /* WCAG 2.3.3 — disable the entrance animation entirely for users who
+     prefer reduced motion. The toast still announces via aria-live and
+     is visible immediately, just without any fade. */
+  @media (prefers-reduced-motion: reduce) {
+    .channel-undo-toast {
+      animation: none;
+    }
+  }
+
+  .channel-undo-toast-message {
+    @apply flex-1 min-w-0 truncate;
+  }
+
+  .channel-undo-toast-button {
+    @apply flex-shrink-0 inline-flex items-center justify-center px-2 py-0.5 text-xs font-semibold rounded text-primary hover:bg-primary/10 transition-colors;
   }
 
   /* Unread-count pill on a channel row. Identical sizing to the previous
