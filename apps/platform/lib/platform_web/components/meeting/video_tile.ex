@@ -86,8 +86,21 @@ defmodule PlatformWeb.Components.Meeting.VideoTile do
       ]}
       {@rest}
     >
-      <%!-- Video slot: JS hook appends the LiveKit <video> element here. --%>
+      <%!-- Video slot: JS hook appends the LiveKit <video> element here.
+           `phx-update="ignore"` + stable id: morphdom must NOT touch the
+           injected <video>. Without this, any LV re-render that touches a
+           sibling (new joiner added to `:participants`, stage_mode change,
+           speaking-ring toggle) wipes the <video> because LV thinks the
+           slot has no children. The hook's `_attach`/`_detach` already
+           toggles the `hidden` class on the slot, so the visibility state
+           still tracks `data-has-video` correctly even though morphdom
+           skips this subtree on subsequent patches.
+
+           Avatar fallback below intentionally stays morphdom-driven so
+           per-render attribute changes (name, avatar_url) still flow. --%>
       <div
+        id={"video-slot-#{@id_prefix}-#{@identity}"}
+        phx-update="ignore"
         data-video-slot
         class={[
           "absolute inset-0 h-full w-full",

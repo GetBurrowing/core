@@ -592,11 +592,18 @@
                          safe. Belt-and-suspenders with the hook's `updated()`
                          re-dock (which only fires when the hook's own element
                          is in the diff). --%>
+                    <%!-- Sizing: dropped `absolute inset-0` so the dock no
+                         longer overlays the WHOLE cell (which made the local
+                         video render extra-wide vs the 16:9-constrained remote
+                         tiles). CSS in app.css matches the dock to the same
+                         16:9 + container-query sizing as `.meeting-video-tile`
+                         under the same `[data-gallery-cell]` parent, so the
+                         dock + remote tiles are pixel-aligned. --%>
                     <div
                       :if={local?}
                       id="meeting-local-video-dock-gallery"
                       phx-update="ignore"
-                      class="pointer-events-none absolute inset-0 overflow-hidden rounded-lg"
+                      class="pointer-events-none overflow-hidden rounded-lg"
                       data-local-video-dock
                       data-dock-mode="gallery"
                     >

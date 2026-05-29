@@ -291,6 +291,15 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
 
   defp maybe_switch_to_screen(socket, false), do: socket
 
+  # Return `{:cont, socket}` so the event continues to the host LV's own
+  # `handle_info({:meeting_presence_update, _}, socket)` (notably
+  # `PlatformWeb.MeetingLive`, which uses this event to (a) re-subscribe to
+  # the now-active room topic and (b) refresh the server-presence roster on
+  # `/meetings`). Halting here previously starved MeetingLive of presence
+  # updates, so the room topic was never subscribed after activation and
+  # subsequent joiners' `{:participant_joined, p}` broadcasts never reached
+  # the existing viewers — symptom: a 2nd person joining your meeting got
+  # audio but no tile until you reloaded.
   defp handle_info(
          {:meeting_presence_update, %{space_id: space_id, active: active, count: count}},
          socket
@@ -307,7 +316,7 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
       |> assign(:meeting_counts, counts)
       |> maybe_refresh_roster(space_id)
 
-    {:halt, socket}
+    {:cont, socket}
   end
 
   defp handle_info({:meeting_presence_summary, %{space_id: _space_id}}, socket) do
