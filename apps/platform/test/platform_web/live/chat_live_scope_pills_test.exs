@@ -4,8 +4,8 @@ defmodule PlatformWeb.ChatLiveScopePillsTest do
   (chat plan v2 Stage 4).
 
   Coverage:
-    * Active channel row renders a `<.scope_pill>` with the channel's
-      scope dot color.
+    * Active channel row does NOT render a per-channel `.channel-row-scope-pill`
+      (removed in task 019e464d), while the section-header scope-pill is retained.
     * Chat header renders a prominent `<.scope_pill>` (size variant via
       `.chat-header-scope-pill` wrapper) when a channel is active.
     * Clicking the header pill pushes a `scope_filter` event with the
@@ -64,48 +64,39 @@ defmodule PlatformWeb.ChatLiveScopePillsTest do
     end
   end
 
-  describe "active-row scope-pill" do
-    test "active channel row in a sub-org section renders a scope-pill with the section's scope",
-         %{conn: conn} do
+  describe "per-channel-row scope-pill removal (task 019e464d)" do
+    # Before task 019e464d the active channel row rendered a
+    # `.channel-row-scope-pill` "you are here" provenance marker next to the
+    # channel name. That per-channel pill was redundant with the section
+    # header's own org-scope pill and has been removed. These tests lock in
+    # the removal AND prove we kept the section-header pill (the grouping cue).
+
+    test "active channel row does NOT render a per-channel scope-pill", %{conn: conn} do
       conn = authenticated_conn(conn)
-      # Slug "paragon" is classified into the Paragon sub-org bucket
-      # (see ChatLive.channel_scope/1). Navigating to /chat/paragon
-      # makes it the active space.
+      # Slug "paragon" is classified into the Paragon sub-org bucket and
+      # becomes the active space — the surface that used to grow a pill.
       create_channel("paragon")
 
       {:ok, _view, html} = live_at(conn, ~p"/chat/paragon")
       sidebar = desktop_sidebar(html)
 
-      # The active-row pill is wrapped in `.channel-row-scope-pill` and
-      # contains the static-variant scope-pill `<span>` whose
-      # aria-label is "Paragon scope" (ScopePill.aria_label_static/1).
-      assert sidebar =~ "channel-row-scope-pill",
-             "Expected active-row scope-pill wrapper to render on the active channel"
-
-      assert sidebar =~ ~s(aria-label="Paragon scope"),
-             "Expected the active-row scope-pill to carry the Paragon scope label"
+      refute sidebar =~ "channel-row-scope-pill",
+             "Active channel row should no longer render the per-channel scope-pill wrapper"
     end
 
-    test "non-active channel rows do NOT render a scope-pill", %{conn: conn} do
+    test "the section-header scope-pill is retained", %{conn: conn} do
       conn = authenticated_conn(conn)
-      # Seed two channels — one active (general → Fabrikam bucket), one not
-      # (paragon → Paragon bucket). The active-row pill should appear
-      # on the general row only.
-      create_channel("general")
+      # Removing the per-channel pill must NOT remove the section-header org
+      # pill — that's the grouping affordance we intentionally keep. The
+      # Paragon sub-org header always renders and carries a static
+      # scope-pill with aria-label "Paragon scope" (ScopePill.aria_label_static/1).
       create_channel("paragon")
 
-      {:ok, _view, html} = live_at(conn, ~p"/chat/general")
+      {:ok, _view, html} = live_at(conn, ~p"/chat/paragon")
       sidebar = desktop_sidebar(html)
 
-      # Only one `.channel-row-scope-pill` should be rendered (active row).
-      pill_count =
-        sidebar
-        |> String.split("channel-row-scope-pill")
-        |> length()
-        |> Kernel.-(1)
-
-      assert pill_count == 1,
-             "Expected exactly one active-row scope-pill, got #{pill_count}"
+      assert sidebar =~ ~s(aria-label="Paragon scope"),
+             "Section-header scope-pill should still render after the per-channel pill removal"
     end
   end
 

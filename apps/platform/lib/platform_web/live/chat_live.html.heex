@@ -88,22 +88,6 @@
           >
             <span class="text-base-content/40">#</span>
             <span class="truncate flex-1">{space.name}</span>
-            <%!-- Active-row scope-pill for pinned channels (Stage 4). Scope
-                 is derived from the pinned space's own slug since the
-                 pinned bucket is heterogeneous (channels from any sub-org
-                 can be pinned). --%>
-            <span
-              :if={
-                @active_space && @active_space.id == space.id &&
-                  PlatformWeb.ChatLive.space_scope_atom(space)
-              }
-              class="channel-row-scope-pill"
-            >
-              <.scope_pill
-                scope={PlatformWeb.ChatLive.space_scope_atom(space)}
-                clickable={false}
-              />
-            </span>
             <%= if unread_label(Map.get(@unread_counts, space.id, 0)) do %>
               <span class="channel-row-unread-pill">
                 {unread_label(Map.get(@unread_counts, space.id, 0))}
@@ -226,16 +210,6 @@
             >
               <span class="text-base-content/40">#</span>
               <span class="truncate flex-1">{space.name}</span>
-              <%!-- Active-row scope-pill (chat plan v2 Stage 4) — right-aligned,
-                   non-clickable. The header pill above each section is the
-                   click-to-filter affordance; the active-row pill is purely
-                   a "you are here" provenance marker. --%>
-              <span
-                :if={@active_space && @active_space.id == space.id}
-                class="channel-row-scope-pill"
-              >
-                <.scope_pill scope={sub_org_scope_atom(bucket)} clickable={false} />
-              </span>
               <%= if unread_label(Map.get(@unread_counts, space.id, 0)) do %>
                 <span class="channel-row-unread-pill">
                   {unread_label(Map.get(@unread_counts, space.id, 0))}

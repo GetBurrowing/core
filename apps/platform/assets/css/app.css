@@ -2954,13 +2954,6 @@ body, .font-fabrikam, * {
     @apply ml-1 flex-shrink-0 min-w-[1.125rem] h-[1.125rem] rounded-full bg-primary text-primary-content text-[0.6rem] font-bold flex items-center justify-center px-1 leading-none;
   }
 
-  /* Active-row scope-pill wrapper (chat plan v2 Stage 4). Pinned to the
-     right side of the row, just before the unread-count pill. Inherits
-     `flex-shrink-0` so the channel-name truncates instead of the pill. */
-  .channel-row-scope-pill {
-    @apply ml-1 flex-shrink-0 inline-flex items-center;
-  }
-
   /* Chat-header scope-pill — prominent size variant (chat plan v2 Stage 4).
      The inner <.scope_pill> renders a button at xs size by default; the
      wrapper bumps the pill to sm, gives it a softer ml gap from the
