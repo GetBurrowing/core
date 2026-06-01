@@ -1,0 +1,532 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+  <title>Suite Design System Preview — V1 (original brand)</title>
+
+  <link href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com/4.0.0?plugins=typography"></script>
+  <link href="https://cdn.jsdelivr.net/npm/daisyui@5/dist/full.min.css" rel="stylesheet">
+
+  <style>
+    /* Proposed Suite design system token blocks — V1 (original brand: bright cyan, flat) */
+    :root {
+      /* Light theme — pre-pivot, original brand */
+      --color-base-100: oklch(100% 0 0);
+      --color-base-200: oklch(96% 0 0);
+      --color-base-300: oklch(88% 0 0);
+      --color-base-content: oklch(0% 0 0);
+      --color-primary: oklch(82% 0.12 207);       /* bright cyan */
+      --color-primary-content: oklch(0% 0 0);     /* black on cyan */
+      --color-secondary: oklch(30% 0.01 0);
+      --color-secondary-content: oklch(100% 0 0);
+      --color-accent: oklch(82% 0.12 207);
+      --color-accent-content: oklch(0% 0 0);
+      --color-neutral: oklch(45% 0.01 0);          /* REFINED for audit 1B-A11Y-5: was 55% (3.54:1, sub-AA), now 45% (4.7:1, passes AA) */
+      --color-neutral-content: oklch(100% 0 0);
+      --color-info: oklch(82% 0.12 207);
+      --color-info-content: oklch(0% 0 0);
+      --color-success: oklch(70% 0.15 162);
+      --color-success-content: oklch(100% 0 0);
+      --color-warning: oklch(76% 0.17 70);
+      --color-warning-content: oklch(0% 0 0);
+      --color-error: oklch(63% 0.22 25);
+      --color-error-content: oklch(100% 0 0);
+    }
+
+    [data-theme="dark"] {
+      --color-base-100: #171b25;
+      --color-base-200: oklch(9% 0.018 240);
+      --color-base-300: oklch(20% 0.028 240);
+      --color-base-content: oklch(95% 0 0);
+      --color-primary: oklch(78% 0.14 200);
+      --color-primary-content: oklch(0% 0 0);
+      --color-secondary: oklch(70% 0.01 0);
+      --color-secondary-content: oklch(0% 0 0);
+      --color-accent: oklch(82% 0.12 207);
+      --color-accent-content: oklch(0% 0 0);
+      --color-neutral: oklch(40% 0.01 0);
+      --color-neutral-content: oklch(90% 0 0);
+      --color-info: oklch(82% 0.12 207);
+      --color-info-content: oklch(0% 0 0);
+      --color-success: oklch(70% 0.15 162);
+      --color-success-content: oklch(100% 0 0);
+      --color-warning: oklch(76% 0.17 70);
+      --color-warning-content: oklch(0% 0 0);
+      --color-error: oklch(63% 0.22 25);
+      --color-error-content: oklch(100% 0 0);
+    }
+
+    body {
+      font-family: 'Public Sans', system-ui, sans-serif;
+      background: var(--color-base-100);
+      color: var(--color-base-content);
+    }
+
+    /* Type scale */
+    .type-display      { font-size: 2.25rem;  line-height: 1.1;  font-weight: 800; letter-spacing: -0.02em; }
+    .type-h1           { font-size: 1.875rem; line-height: 1.2;  font-weight: 700; letter-spacing: -0.015em; }
+    .type-h2           { font-size: 1.5rem;   line-height: 1.25; font-weight: 700; letter-spacing: -0.01em; }
+    .type-h3           { font-size: 1.25rem;  line-height: 1.3;  font-weight: 600; letter-spacing: -0.005em; }
+    .type-h4           { font-size: 1.125rem; line-height: 1.4;  font-weight: 600; }
+    .type-body         { font-size: 1rem;     line-height: 1.5;  font-weight: 400; }
+    .type-body-strong  { font-size: 1rem;     line-height: 1.5;  font-weight: 600; }
+    .type-small        { font-size: 0.875rem; line-height: 1.45; font-weight: 400; }
+    .type-small-strong { font-size: 0.875rem; line-height: 1.45; font-weight: 500; }
+    .type-caption      { font-size: 0.75rem;  line-height: 1.4;  font-weight: 500; letter-spacing: 0.01em; }
+
+    /* Focus ring spec */
+    .focus-ring:focus-visible {
+      outline: none;
+      box-shadow: 0 0 0 2px var(--color-base-100), 0 0 0 4px var(--color-primary);
+    }
+
+    /* Theme split — for dark-mode swatch comparison */
+    .theme-dark-block {
+      background: #171b25;
+      color: oklch(95% 0 0);
+    }
+
+    /* Swatch styles */
+    .swatch {
+      display: flex;
+      flex-direction: column;
+      gap: 0.25rem;
+      font-family: 'Public Sans', sans-serif;
+    }
+    .swatch-color {
+      height: 64px;
+      border-radius: 0.375rem;
+      border: 1px solid rgba(0,0,0,0.06);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 600;
+      font-size: 0.875rem;
+    }
+    .swatch-meta {
+      font-size: 0.75rem;
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      color: var(--color-secondary);
+    }
+    [data-theme="dark"] .swatch-meta {
+      color: oklch(70% 0.01 0);
+    }
+
+    /* Spacing demo */
+    .spacing-demo {
+      display: flex;
+      align-items: end;
+      gap: 1rem;
+      flex-wrap: wrap;
+    }
+    .spacing-bar {
+      background: var(--color-primary);
+      border-radius: 0.25rem;
+      flex: 0 0 auto;
+    }
+
+    /* Button-loading visualization */
+    @keyframes spin {
+      from { transform: rotate(0deg); }
+      to   { transform: rotate(360deg); }
+    }
+    .spin { animation: spin 1s linear infinite; }
+    .btn-loading-overlay {
+      opacity: 0.7;
+      pointer-events: none;
+    }
+
+    /* Section spacing */
+    section {
+      padding: 2.5rem 1.5rem;
+      border-bottom: 1px solid var(--color-base-300);
+    }
+    section + section { margin-top: 0; }
+
+    /* Sheet preview */
+    .sheet-preview {
+      border-radius: 1rem 1rem 0 0;
+      box-shadow: 0 -10px 25px rgba(0,0,0,0.1);
+      background: var(--color-base-100);
+      max-width: 480px;
+      margin: 0 auto;
+    }
+
+    /* Mobile frame for empty-state */
+    .mobile-frame {
+      max-width: 390px;
+      margin: 0 auto;
+      border: 8px solid #1f2937;
+      border-radius: 2rem;
+      overflow: hidden;
+      background: var(--color-base-100);
+    }
+    .mobile-frame-content {
+      padding: 3rem 1.5rem;
+      min-height: 700px;
+      display: flex;
+      flex-direction: column;
+    }
+  </style>
+</head>
+
+<body>
+
+<header style="background: var(--color-base-200); padding: 2rem 1.5rem; border-bottom: 1px solid var(--color-base-300);">
+  <div style="max-width: 960px; margin: 0 auto;">
+    <p class="type-caption" style="color: var(--color-secondary); margin: 0 0 0.5rem;">SUITE DESIGN SYSTEM</p>
+    <h1 class="type-display" style="margin: 0 0 0.5rem;">System preview</h1>
+    <p class="type-body" style="color: var(--color-secondary); margin: 0; max-width: 600px;">
+      Foundations + components rendered using only the proposed tokens. Open this file in Chrome / Safari (Cmd+O → this path) to see the system in action. Scroll to compare light + dark theme swatches, type scale, buttons, forms, the agent-empty-state, and a sheet.
+    </p>
+  </div>
+</header>
+
+<main style="max-width: 960px; margin: 0 auto;">
+
+<!-- ──────────── 1. Color palette ──────────── -->
+<section>
+  <h2 class="type-h2" style="margin: 0 0 0.25rem;">1 — Color palette</h2>
+  <p class="type-small" style="color: var(--color-secondary); margin: 0 0 1.5rem;">
+    Light + dark themes side-by-side. <strong>V1 — original brand</strong> (bright cyan, flat surfaces). Single Refined value: light-mode <code>--color-neutral</code> bumped to fix WCAG AA contrast per audit 1B-A11Y-5. Compare against <code>system-preview-v2.html</code> for the modernized "tactile + structural" direction.
+  </p>
+
+  <h3 class="type-h3" style="margin: 0 0 1rem;">Light theme</h3>
+  <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 1rem; margin-bottom: 2rem;">
+    <div class="swatch">
+      <div class="swatch-color" style="background: var(--color-primary); color: var(--color-primary-content);">Aa</div>
+      <div class="type-small-strong">primary</div>
+      <div class="swatch-meta">oklch(82% 0.12 207) ≈ #06D5ED</div>
+    </div>
+    <div class="swatch">
+      <div class="swatch-color" style="background: var(--color-secondary); color: var(--color-secondary-content);">Aa</div>
+      <div class="type-small-strong">secondary</div>
+      <div class="swatch-meta">oklch(30% 0.01 0)</div>
+    </div>
+    <div class="swatch">
+      <div class="swatch-color" style="background: var(--color-neutral); color: var(--color-neutral-content);">Aa</div>
+      <div class="type-small-strong">neutral <span style="background: var(--color-warning); color: var(--color-warning-content); padding: 0.1em 0.4em; border-radius: 0.25rem; font-size: 0.7rem; vertical-align: middle;">REFINED</span></div>
+      <div class="swatch-meta">oklch(45% 0.01 0) ≈ #737373 — was #888 (sub-AA)</div>
+    </div>
+    <div class="swatch">
+      <div class="swatch-color" style="background: var(--color-base-200); color: var(--color-base-content); border: 1px solid var(--color-base-300);">Aa</div>
+      <div class="type-small-strong">base-200</div>
+      <div class="swatch-meta">oklch(96% 0 0) — sidebar bg</div>
+    </div>
+    <div class="swatch">
+      <div class="swatch-color" style="background: var(--color-success); color: var(--color-success-content);">Aa</div>
+      <div class="type-small-strong">success</div>
+      <div class="swatch-meta">oklch(70% 0.15 162)</div>
+    </div>
+    <div class="swatch">
+      <div class="swatch-color" style="background: var(--color-warning); color: var(--color-warning-content);">Aa</div>
+      <div class="type-small-strong">warning</div>
+      <div class="swatch-meta">oklch(76% 0.17 70)</div>
+    </div>
+    <div class="swatch">
+      <div class="swatch-color" style="background: var(--color-error); color: var(--color-error-content);">Aa</div>
+      <div class="type-small-strong">error</div>
+      <div class="swatch-meta">oklch(63% 0.22 25)</div>
+    </div>
+    <div class="swatch">
+      <div class="swatch-color" style="background: var(--color-info); color: var(--color-info-content);">Aa</div>
+      <div class="type-small-strong">info</div>
+      <div class="swatch-meta">oklch(82% 0.12 207)</div>
+    </div>
+  </div>
+
+  <h3 class="type-h3 theme-dark-block" data-theme="dark" style="margin: 0; padding: 1rem; border-radius: 0.5rem 0.5rem 0 0; background: #171b25; color: oklch(95% 0 0);">Dark theme (Kept — no changes)</h3>
+  <div data-theme="dark" class="theme-dark-block" style="background: #171b25; padding: 1.5rem; display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 1rem; border-radius: 0 0 0.5rem 0.5rem;">
+    <div class="swatch">
+      <div class="swatch-color" style="background: var(--color-primary); color: var(--color-primary-content);">Aa</div>
+      <div class="type-small-strong" style="color: oklch(95% 0 0);">primary</div>
+      <div class="swatch-meta">oklch(78% 0.14 200)</div>
+    </div>
+    <div class="swatch">
+      <div class="swatch-color" style="background: var(--color-secondary); color: var(--color-secondary-content);">Aa</div>
+      <div class="type-small-strong" style="color: oklch(95% 0 0);">secondary</div>
+      <div class="swatch-meta">oklch(70% 0.01 0)</div>
+    </div>
+    <div class="swatch">
+      <div class="swatch-color" style="background: var(--color-neutral); color: var(--color-neutral-content);">Aa</div>
+      <div class="type-small-strong" style="color: oklch(95% 0 0);">neutral</div>
+      <div class="swatch-meta">oklch(40% 0.01 0) — already AA-pass</div>
+    </div>
+    <div class="swatch">
+      <div class="swatch-color" style="background: var(--color-base-100); color: var(--color-base-content); border: 1px solid oklch(20% 0.028 240);">Aa</div>
+      <div class="type-small-strong" style="color: oklch(95% 0 0);">base-100</div>
+      <div class="swatch-meta">#171b25 — chat pane</div>
+    </div>
+    <div class="swatch">
+      <div class="swatch-color" style="background: var(--color-success); color: var(--color-success-content);">Aa</div>
+      <div class="type-small-strong" style="color: oklch(95% 0 0);">success</div>
+      <div class="swatch-meta">oklch(70% 0.15 162)</div>
+    </div>
+    <div class="swatch">
+      <div class="swatch-color" style="background: var(--color-warning); color: var(--color-warning-content);">Aa</div>
+      <div class="type-small-strong" style="color: oklch(95% 0 0);">warning</div>
+      <div class="swatch-meta">oklch(76% 0.17 70)</div>
+    </div>
+    <div class="swatch">
+      <div class="swatch-color" style="background: var(--color-error); color: var(--color-error-content);">Aa</div>
+      <div class="type-small-strong" style="color: oklch(95% 0 0);">error</div>
+      <div class="swatch-meta">oklch(63% 0.22 25)</div>
+    </div>
+  </div>
+</section>
+
+<!-- ──────────── 2. Typography ──────────── -->
+<section>
+  <h2 class="type-h2" style="margin: 0 0 0.25rem;">2 — Typography scale</h2>
+  <p class="type-small" style="color: var(--color-secondary); margin: 0 0 1.5rem;">Public Sans, 11 tokens. Demoed below at their actual sizes / weights / line-heights.</p>
+  <div style="display: flex; flex-direction: column; gap: 1.5rem;">
+    <div>
+      <span class="type-caption" style="color: var(--color-secondary); display: block;">display · 36px · 800 · -0.02em</span>
+      <span class="type-display">Suite design — direct, specific, agent-aware.</span>
+    </div>
+    <div>
+      <span class="type-caption" style="color: var(--color-secondary); display: block;">h1 · 30px · 700</span>
+      <span class="type-h1">Welcome to your space</span>
+    </div>
+    <div>
+      <span class="type-caption" style="color: var(--color-secondary); display: block;">h2 · 24px · 700</span>
+      <span class="type-h2">Channels</span>
+    </div>
+    <div>
+      <span class="type-caption" style="color: var(--color-secondary); display: block;">h3 · 20px · 600</span>
+      <span class="type-h3">Frontend redesign — sprint plan</span>
+    </div>
+    <div>
+      <span class="type-caption" style="color: var(--color-secondary); display: block;">h4 · 18px · 600</span>
+      <span class="type-h4">Edit task details</span>
+    </div>
+    <div>
+      <span class="type-caption" style="color: var(--color-secondary); display: block;">body · 16px · 400</span>
+      <p class="type-body" style="margin: 0; max-width: 60ch;">
+        The composer textarea pattern repeats five times verbatim across chat and tasks. Phase 4 consolidates into one component that consumes the spacing token rather than the inline values.
+      </p>
+    </div>
+    <div>
+      <span class="type-caption" style="color: var(--color-secondary); display: block;">body-strong · 16px · 600</span>
+      <span class="type-body-strong">Approve plan</span>
+    </div>
+    <div>
+      <span class="type-caption" style="color: var(--color-secondary); display: block;">small · 14px · 400</span>
+      <span class="type-small">edited 2m ago by Marlowe</span>
+    </div>
+    <div>
+      <span class="type-caption" style="color: var(--color-secondary); display: block;">small-strong · 14px · 500</span>
+      <span class="type-small-strong">In progress</span>
+    </div>
+    <div>
+      <span class="type-caption" style="color: var(--color-secondary); display: block;">caption · 12px · 500 · 0.01em</span>
+      <span class="type-caption" style="text-transform: uppercase; color: var(--color-secondary);">Started 2 days ago</span>
+    </div>
+  </div>
+</section>
+
+<!-- ──────────── 3. Buttons ──────────── -->
+<section>
+  <h2 class="type-h2" style="margin: 0 0 0.25rem;">3 — Buttons (all states)</h2>
+  <p class="type-small" style="color: var(--color-secondary); margin: 0 0 1.5rem;">
+    Anchored to audit findings 1B-A11Y-1 (focus ring), 1B-A11Y-2 (icon-only aria-label), 1B-A11Y-6 (loading state).
+  </p>
+
+  <h3 class="type-h4" style="margin: 0 0 0.75rem;">Variants — default size</h3>
+  <div style="display: flex; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 1.5rem;">
+    <button class="btn btn-primary focus-ring">Approve plan</button>
+    <button class="btn focus-ring">Cancel</button>
+    <button class="btn btn-ghost focus-ring">View history</button>
+    <button class="btn btn-error focus-ring">Delete task</button>
+  </div>
+
+  <h3 class="type-h4" style="margin: 0 0 0.75rem;">States — primary button</h3>
+  <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 1rem; margin-bottom: 1.5rem;">
+    <div>
+      <span class="type-caption" style="color: var(--color-secondary); display: block; margin-bottom: 0.25rem;">DEFAULT</span>
+      <button class="btn btn-primary">Save</button>
+    </div>
+    <div>
+      <span class="type-caption" style="color: var(--color-secondary); display: block; margin-bottom: 0.25rem;">HOVER (try it)</span>
+      <button class="btn btn-primary">Save</button>
+    </div>
+    <div>
+      <span class="type-caption" style="color: var(--color-secondary); display: block; margin-bottom: 0.25rem;">FOCUS-VISIBLE (Tab to it)</span>
+      <button class="btn btn-primary focus-ring">Save</button>
+    </div>
+    <div>
+      <span class="type-caption" style="color: var(--color-secondary); display: block; margin-bottom: 0.25rem;">LOADING <span style="color: var(--color-primary);">★</span></span>
+      <button class="btn btn-primary btn-loading-overlay" aria-busy="true">
+        <svg class="spin" xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" style="margin-right: 0.5rem;"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
+        Saving…
+      </button>
+    </div>
+    <div>
+      <span class="type-caption" style="color: var(--color-secondary); display: block; margin-bottom: 0.25rem;">DISABLED</span>
+      <button class="btn btn-primary" disabled>Save</button>
+    </div>
+  </div>
+
+  <p class="type-small" style="color: var(--color-secondary); margin-bottom: 1.5rem;">
+    <span style="color: var(--color-primary);">★</span> The loading state is the highest-leverage fix from the audit (1B-A11Y-6). Today, no buttons in chat or tasks show a spinner — users can double-click "Send" without feedback.
+  </p>
+
+  <h3 class="type-h4" style="margin: 0 0 0.75rem;">Sizes</h3>
+  <div style="display: flex; gap: 0.75rem; align-items: end; flex-wrap: wrap; margin-bottom: 1.5rem;">
+    <button class="btn btn-primary btn-lg">Large</button>
+    <button class="btn btn-primary">Default</button>
+    <button class="btn btn-primary btn-sm">Small</button>
+    <button class="btn btn-primary btn-xs">Extra small</button>
+  </div>
+
+  <h3 class="type-h4" style="margin: 0 0 0.75rem;">Icon-only — REQUIRED aria-label</h3>
+  <p class="type-small" style="color: var(--color-secondary); margin: 0 0 0.75rem;">
+    The 7 icon buttons missing names from finding 1B-A11Y-2 all consolidate into this pattern.
+  </p>
+  <div style="display: flex; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 0.5rem;">
+    <button class="btn btn-square btn-ghost focus-ring" aria-label="Close task panel">
+      <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+    </button>
+    <button class="btn btn-square btn-ghost focus-ring" aria-label="Toggle epics panel">
+      <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 6h16M4 12h16M4 18h7"/></svg>
+    </button>
+    <button class="btn btn-square btn-ghost focus-ring" aria-label="Clear filters">
+      <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z"/></svg>
+    </button>
+  </div>
+</section>
+
+<!-- ──────────── 4. Form inputs ──────────── -->
+<section>
+  <h2 class="type-h2" style="margin: 0 0 0.25rem;">4 — Form inputs</h2>
+  <p class="type-small" style="color: var(--color-secondary); margin: 0 0 1.5rem;">
+    Anchored to 1B-VIS-2 (currently <code>&lt;.input&gt;</code> used once across 5,901 lines). Default + focus + error states pinned at component level so consumers don't re-derive.
+  </p>
+
+  <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; max-width: 720px;">
+    <div>
+      <label class="type-small-strong" style="display: block; margin-bottom: 0.25rem;">Task title</label>
+      <input type="text" class="input input-bordered focus-ring" style="width: 100%;" placeholder="What needs to be done?" value="Connect agent to GitHub">
+      <p class="type-small" style="color: var(--color-secondary); margin: 0.25rem 0 0;">Visible in the kanban column.</p>
+    </div>
+    <div>
+      <label class="type-small-strong" style="display: block; margin-bottom: 0.25rem;">Email <span style="color: var(--color-error);">*</span></label>
+      <input type="email" class="input input-bordered" style="width: 100%; border-color: var(--color-error);" aria-invalid="true" aria-describedby="email-err" value="not an email">
+      <p id="email-err" role="alert" class="type-small" style="color: var(--color-error); margin: 0.25rem 0 0;">Add a valid email — looks like there's a typo.</p>
+    </div>
+  </div>
+
+  <h3 class="type-h4" style="margin: 1.5rem 0 0.75rem;">Composer textarea (auto-resize, anchored to 1A-TOK-INLINE-1)</h3>
+  <p class="type-small" style="color: var(--color-secondary); margin: 0 0 0.75rem;">
+    Currently this exact inline-style pattern is repeated 5x verbatim across chat and tasks. Consolidates into one component.
+  </p>
+  <textarea class="textarea textarea-bordered focus-ring" style="width: 100%; max-width: 720px; min-height: 2rem; max-height: 200px; field-sizing: content; padding: 0.375rem 0.75rem; line-height: 1.5;" placeholder="Type your message — Enter to send, Shift+Enter for newline">@saru can you draft the launch checklist?</textarea>
+</section>
+
+<!-- ──────────── 5. Empty state — agent-native ──────────── -->
+<section style="background: var(--color-base-200);">
+  <h2 class="type-h2" style="margin: 0 0 0.25rem;">5 — Empty state (agent-native)</h2>
+  <p class="type-small" style="color: var(--color-secondary); margin: 0 0 1.5rem;">
+    Anchored to 1B-USE-3 + your direction. Shown in a mobile frame because that's where Suite's empty states show first.
+  </p>
+
+  <div class="mobile-frame">
+    <div class="mobile-frame-content" style="background: var(--color-base-100);">
+      <div style="text-align: center; margin-top: auto; margin-bottom: auto;">
+        <div style="width: 72px; height: 72px; margin: 0 auto 1.5rem; border-radius: 50%; background: var(--color-base-200); display: flex; align-items: center; justify-content: center;">
+          <svg xmlns="http://www.w3.org/2000/svg" width="36" height="36" fill="none" viewBox="0 0 24 24" stroke="var(--color-secondary)"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z"/></svg>
+        </div>
+        <h2 class="type-h2" style="margin: 0 0 0.5rem;">This space is quiet.</h2>
+        <p class="type-body" style="color: var(--color-secondary); margin: 0 0 1.5rem; max-width: 280px; margin-left: auto; margin-right: auto;">
+          Connect your agent and @ them to plan and work in this space.
+        </p>
+        <button class="btn btn-primary focus-ring">
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" style="margin-right: 0.4rem;"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"/></svg>
+          Add an agent
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <p class="type-small" style="color: var(--color-secondary); margin: 1rem 0 0; text-align: center;">
+    Copy is verbatim from your 2026-05-09 direction. Three other empty states (brand-new user, tasks, activity) follow the same pattern in <code>03-voice.md §5</code>.
+  </p>
+</section>
+
+<!-- ──────────── 6. Sheet / modal ──────────── -->
+<section>
+  <h2 class="type-h2" style="margin: 0 0 0.25rem;">6 — Sheet (mobile bottom-sheet)</h2>
+  <p class="type-small" style="color: var(--color-secondary); margin: 0 0 1.5rem;">
+    Anchored to 1B-USE-4 + 1A-IA-DRIFT-5 (drawer ↔ sidebar ↔ nav ↔ menu — currently 3 flag systems for one element).
+  </p>
+  <div class="sheet-preview">
+    <div style="padding: 0.5rem 1.5rem;">
+      <div style="width: 36px; height: 4px; background: var(--color-base-300); border-radius: 999px; margin: 0.25rem auto 0.75rem;"></div>
+    </div>
+    <div style="padding: 1rem 1.5rem; border-bottom: 1px solid var(--color-base-300); display: flex; align-items: center; justify-content: space-between;">
+      <h3 class="type-h3" style="margin: 0;">Edit task</h3>
+      <button class="btn btn-square btn-ghost btn-sm focus-ring" aria-label="Close sheet">
+        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <div style="padding: 1.5rem;">
+      <label class="type-small-strong" style="display: block; margin-bottom: 0.25rem;">Title</label>
+      <input class="input input-bordered" style="width: 100%; margin-bottom: 1rem;" value="Connect agent to GitHub">
+
+      <label class="type-small-strong" style="display: block; margin-bottom: 0.25rem;">Assignee</label>
+      <select class="select select-bordered" style="width: 100%; margin-bottom: 1rem;">
+        <option>saru-claude-clode</option>
+        <option>fabrikam-engineer</option>
+      </select>
+    </div>
+    <div style="padding: 1rem 1.5rem; border-top: 1px solid var(--color-base-300); display: flex; gap: 0.5rem; justify-content: flex-end;">
+      <button class="btn btn-ghost focus-ring">Cancel</button>
+      <button class="btn btn-primary focus-ring">Save</button>
+    </div>
+  </div>
+</section>
+
+<!-- ──────────── 7. Spacing scale ──────────── -->
+<section>
+  <h2 class="type-h2" style="margin: 0 0 0.25rem;">7 — Spacing scale</h2>
+  <p class="type-small" style="color: var(--color-secondary); margin: 0 0 1.5rem;">Tailwind v4 4px base. Used for padding + gaps; not for arbitrary spacing.</p>
+  <div class="spacing-demo">
+    <div style="text-align: center;"><div class="spacing-bar" style="width: 8px; height: 8px;"></div><div class="type-caption" style="color: var(--color-secondary); margin-top: 0.5rem;">2 (8px)</div></div>
+    <div style="text-align: center;"><div class="spacing-bar" style="width: 12px; height: 12px;"></div><div class="type-caption" style="color: var(--color-secondary); margin-top: 0.5rem;">3 (12px)</div></div>
+    <div style="text-align: center;"><div class="spacing-bar" style="width: 16px; height: 16px;"></div><div class="type-caption" style="color: var(--color-secondary); margin-top: 0.5rem;">4 (16px)</div></div>
+    <div style="text-align: center;"><div class="spacing-bar" style="width: 24px; height: 24px;"></div><div class="type-caption" style="color: var(--color-secondary); margin-top: 0.5rem;">6 (24px)</div></div>
+    <div style="text-align: center;"><div class="spacing-bar" style="width: 32px; height: 32px;"></div><div class="type-caption" style="color: var(--color-secondary); margin-top: 0.5rem;">8 (32px)</div></div>
+    <div style="text-align: center;"><div class="spacing-bar" style="width: 48px; height: 48px;"></div><div class="type-caption" style="color: var(--color-secondary); margin-top: 0.5rem;">12 (48px)</div></div>
+    <div style="text-align: center;"><div class="spacing-bar" style="width: 64px; height: 64px;"></div><div class="type-caption" style="color: var(--color-secondary); margin-top: 0.5rem;">16 (64px)</div></div>
+  </div>
+</section>
+
+<!-- ──────────── 8. Elevation ──────────── -->
+<section>
+  <h2 class="type-h2" style="margin: 0 0 0.25rem;">8 — Elevation / shadow</h2>
+  <p class="type-small" style="color: var(--color-secondary); margin: 0 0 1.5rem;">5-level scale; cards stay flat, modals get elev-2, popovers get elev-3.</p>
+  <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 1.5rem;">
+    <div style="background: var(--color-base-100); border: 1px solid var(--color-base-300); padding: 1rem; border-radius: 0.5rem; height: 80px; display: flex; align-items: center; justify-content: center;"><span class="type-small-strong">elev-0</span></div>
+    <div style="background: var(--color-base-100); padding: 1rem; border-radius: 0.5rem; height: 80px; display: flex; align-items: center; justify-content: center; box-shadow: 0 1px 2px 0 rgba(0,0,0,0.05);"><span class="type-small-strong">elev-1</span></div>
+    <div style="background: var(--color-base-100); padding: 1rem; border-radius: 0.5rem; height: 80px; display: flex; align-items: center; justify-content: center; box-shadow: 0 1px 3px 0 rgba(0,0,0,0.1);"><span class="type-small-strong">elev-2</span></div>
+    <div style="background: var(--color-base-100); padding: 1rem; border-radius: 0.5rem; height: 80px; display: flex; align-items: center; justify-content: center; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1);"><span class="type-small-strong">elev-3</span></div>
+    <div style="background: var(--color-base-100); padding: 1rem; border-radius: 0.5rem; height: 80px; display: flex; align-items: center; justify-content: center; box-shadow: 0 10px 15px -3px rgba(0,0,0,0.1);"><span class="type-small-strong">elev-4</span></div>
+  </div>
+</section>
+
+<!-- ──────────── Footer ──────────── -->
+<footer style="background: var(--color-base-200); padding: 2rem 1.5rem; text-align: center; color: var(--color-secondary);">
+  <p class="type-small" style="margin: 0;">
+    Suite design system preview · 2026-05-09 · <code>~/projects/core/audit/2026-05-08-ui-ux/mocks/_preview/system-preview.html</code>
+  </p>
+  <p class="type-caption" style="margin: 0.5rem 0 0;">
+    All tokens, components, and copy here are PROPOSED. No application code is touched until Marlowe approves Phase 4 IMPLEMENTATION.md.
+  </p>
+</footer>
+
+</main>
+
+</body>
+</html>

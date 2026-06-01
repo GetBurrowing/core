@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+  <title>Suite Design System — V1 vs V2 side-by-side</title>
+  <link href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+  <style>
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      padding: 0;
+      height: 100%;
+      font-family: 'Public Sans', system-ui, sans-serif;
+      background: #0a0f14;
+      color: #fff;
+      overflow: hidden;
+    }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0.75rem 1.25rem;
+      background: #171b25;
+      border-bottom: 1px solid #2a3340;
+      height: 56px;
+      flex-shrink: 0;
+    }
+    .topbar h1 {
+      margin: 0;
+      font-size: 1rem;
+      font-weight: 600;
+      letter-spacing: -0.01em;
+    }
+    .topbar .legend {
+      display: flex;
+      gap: 1.5rem;
+      font-size: 0.8125rem;
+      color: #9aa5b1;
+    }
+    .legend strong { color: #fff; font-weight: 600; }
+
+    .frames {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      height: calc(100vh - 56px);
+      gap: 0;
+    }
+
+    .frame-wrapper {
+      display: flex;
+      flex-direction: column;
+      border-right: 1px solid #2a3340;
+      min-width: 0;
+    }
+    .frame-wrapper:last-child { border-right: none; }
+
+    .frame-header {
+      padding: 0.5rem 1rem;
+      background: #1a2332;
+      font-size: 0.8125rem;
+      font-weight: 600;
+      color: #fff;
+      border-bottom: 1px solid #2a3340;
+      flex-shrink: 0;
+    }
+    .frame-header .meta {
+      font-weight: 400;
+      color: #9aa5b1;
+      margin-left: 0.5rem;
+    }
+    .frame-header.v1 { border-left: 4px solid #06D5ED; }
+    .frame-header.v2 { border-left: 4px solid oklch(55% 0.15 250); }
+
+    iframe {
+      flex: 1;
+      width: 100%;
+      border: none;
+      background: #fff;
+    }
+
+    /* Mobile fallback — stack vertically when too narrow */
+    @media (max-width: 900px) {
+      .frames {
+        grid-template-columns: 1fr;
+        height: auto;
+        overflow: auto;
+      }
+      html, body { overflow: auto; height: auto; }
+      .frame-wrapper { border-right: none; border-bottom: 1px solid #2a3340; height: 100vh; }
+    }
+  </style>
+</head>
+<body>
+
+<div class="topbar">
+  <h1>Suite Design System — V1 vs V2 side-by-side</h1>
+  <div class="legend">
+    <span><strong>Left: V1</strong> · original (cyan, flat)</span>
+    <span><strong>Right: V2</strong> · modernized (indigo, tactile)</span>
+  </div>
+</div>
+
+<div class="frames">
+  <div class="frame-wrapper">
+    <div class="frame-header v1">
+      V1 · original
+      <span class="meta">file: <code>system-preview.html</code></span>
+    </div>
+    <iframe src="./system-preview.html" title="V1 preview"></iframe>
+  </div>
+  <div class="frame-wrapper">
+    <div class="frame-header v2">
+      V2 · modernized (Gemini-inspired)
+      <span class="meta">file: <code>system-preview-v2.html</code></span>
+    </div>
+    <iframe src="./system-preview-v2.html" title="V2 preview"></iframe>
+  </div>
+</div>
+
+</body>
+</html>

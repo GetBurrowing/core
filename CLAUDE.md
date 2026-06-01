@@ -122,6 +122,15 @@ Elixir 1.15+/OTP 28, Phoenix 1.8/LiveView 1.1, PostgreSQL 16, Tailwind CSS 4/Dai
 - CI runs format check + full test suite on every push/PR to `main`
 - Docker images published to `ghcr.io/startup-suite/core`
 
+## Work Tracking
+
+**Plans, bugs, features, and architectural follow-ups are tracked in Suite Tasks** under the "Startup Suite" project — not in any local file.
+
+- **Source of truth:** Suite Tasks board for the Startup Suite project (project ID `019d1357-cb08-7023-b165-fd19e9462316`).
+- **Retired:** `BACKLOG.md` was a transitional file-based tracker. Migrated to Suite Tasks on 2026-05-01 and is now a tombstone redirect — **do not add new entries to it.**
+- **Filing new work:** use the Suite Tasks MCP tools — `mcp__suite__task_create`, `mcp__suite__task_list`, `mcp__suite__task_update`, `mcp__suite__task_complete`. Set `project_id` to the Startup Suite UUID. Pick a status: `backlog` (default), `planning`, `ready`, `in_progress`, `in_review`, `deploying`, `done`, `blocked`.
+- **Closing work:** when shipping a fix that closes a tracked task, mark the task `done` (or via `task_complete`) with a reference to the merged PR in the description. Don't leave it for "later."
+
 ## Key Docs
 
 - Architecture decisions: `docs/decisions/` (25+ ADRs)
