@@ -556,7 +556,20 @@
                          Remote tiles attach their own track unchanged. --%>
                     <% local? =
                       gallery_identity(p) == gallery_identity(assigns[:current_participant]) %>
+                    <%!-- `id_prefix="gallery-tile"` (not the shared default
+                         `video-tile`) so the gallery tile and the bottom-strip
+                         tile for the SAME participant have DISTINCT DOM ids.
+                         The shared id used to encourage morphdom to move/reuse
+                         the node across stage_mode swaps, but in practice the
+                         move path dropped the injected remote `<video>` on
+                         every gallery↔strip transition while the local
+                         self-view (reparented separately by MeetingClient)
+                         survived. Distinct ids → clean destroy-and-mount:
+                         `_detach` runs cleanly on the old tile,
+                         `_syncExistingTrack` rebinds the live track on the
+                         freshly mounted tile in the new location. --%>
                     <.video_tile
+                      id_prefix="gallery-tile"
                       participant={
                         %{
                           identity: gallery_identity(p),
@@ -845,7 +858,11 @@
         >
           <% local? =
             gallery_identity(participant) == gallery_identity(assigns[:current_participant]) %>
+          <%!-- `id_prefix="strip-tile"` mirrors `gallery-tile` above; see the
+               rationale on the gallery `<.video_tile>` for why we deliberately
+               give the two surfaces DIFFERENT dom ids per participant. --%>
           <PlatformWeb.Components.Meeting.VideoTile.video_tile
+            id_prefix="strip-tile"
             participant={
               %{
                 identity: gallery_identity(participant),
