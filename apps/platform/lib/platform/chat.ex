@@ -171,6 +171,19 @@ defmodule Platform.Chat do
     |> Repo.update()
   end
 
+  @doc """
+  Assign a channel space to an org by setting `chat_spaces.org_id`.
+
+  This is the Stage-1 seam (chat sidebar v2) that replaces name-pattern
+  bucketing: a channel's sub-org membership becomes a real FK to `orgs.id`.
+  Pass `org_id = nil` to clear the assignment.
+  """
+  @spec assign_space_org(Space.t(), binary() | nil) ::
+          {:ok, Space.t()} | {:error, Ecto.Changeset.t()}
+  def assign_space_org(%Space{} = space, org_id) when is_binary(org_id) or is_nil(org_id) do
+    update_space(space, %{org_id: org_id})
+  end
+
   @doc "Soft-archive a space by setting `archived_at` to now."
   @spec archive_space(Space.t()) :: {:ok, Space.t()} | {:error, Ecto.Changeset.t()}
   def archive_space(%Space{} = space) do

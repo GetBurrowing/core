@@ -2746,6 +2746,16 @@ body, .font-fabrikam, * {
     @apply text-xs font-semibold uppercase tracking-widest text-base-content/60;
   }
 
+  /* Color-only section swatch in the section header. Communicates the section's
+     scope COLOR (via a `bg-<token>-dot` utility) and nothing else — the section
+     name is the text identity beside it. Replaces the old scope_pill whose
+     visible text was derived from the color token, which made a recolor look
+     like a rename. `flex-shrink-0` so it never collapses; `aria-hidden` in the
+     markup since it's decorative. */
+  .channel-section-color-dot {
+    @apply inline-block size-2 flex-shrink-0 rounded-full;
+  }
+
   /* Drag handle — invisible until the parent .channel-section is hovered.
      Tailwind's `group-hover:` matches the `group` class on the section. */
   .channel-section-drag-handle {
@@ -2821,6 +2831,188 @@ body, .font-fabrikam, * {
 
   .channel-row--active {
     @apply bg-primary/10 text-primary font-semibold border-l-2 border-primary;
+  }
+
+  /* ── Edit-layout mode (chat sidebar Stage 5) ──────────────────────────
+     Desktop-only per-user arrangement affordances. None of these alter the
+     normal-mode rail — every control is gated behind @sidebar_edit in the
+     template, and the wrapper `--editing` modifier only reflows when the
+     user opts into editing. */
+
+  /* "Done" toggle shown in the sidebar header while in personal-edit mode.
+     (Normal mode no longer renders this — the entry point is the overflow
+     "More" menu below.) Reused for the admin "Done (admin)" via its own
+     accented rule. */
+  .channel-edit-toggle {
+    @apply flex-shrink-0 rounded px-2 py-1 text-xs font-medium text-base-content/70 hover:text-primary hover:bg-base-300 transition-colors;
+  }
+
+  .channel-edit-toggle[aria-pressed="true"] {
+    @apply text-primary bg-primary/10;
+  }
+
+  /* ── Sidebar layout overflow menu (chat sidebar header) ───────────────
+     The ~260px rail can't fit two text toggles, so both edit entry points
+     collapse into ONE kebab/"More" button + popover (ui-ux-pro overflow-menu
+     pattern). All of this is desktop-only — the whole aside is `hidden
+     lg:flex`. Dark-theme tokens match the rail (base-200 surface). */
+
+  /* The "More" (kebab) trigger in normal mode. Square, compact, quiet until
+     hover/open so it doesn't compete with the CHANNELS label. */
+  .channel-sidebar-menu-button {
+    @apply inline-flex items-center justify-center w-7 h-7 rounded text-base-content/60 hover:text-base-content hover:bg-base-300 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60;
+  }
+
+  .channel-sidebar-menu-button[aria-expanded="true"] {
+    @apply text-base-content bg-base-300;
+  }
+
+  /* The popover itself. Absolutely positioned and anchored to the header's
+     position:relative wrapper (`.channel-sidebar-menu`), pinned to the right
+     edge so it stays WITHIN / over the sidebar and never floats over the chat
+     pane. Containment comes from `right-0` + the rail being wider than the
+     fixed `w-48` (192px) menu. */
+  .channel-sidebar-menu-popover {
+    @apply absolute right-0 top-full z-30 mt-1 flex w-48 flex-col overflow-hidden rounded-lg border border-base-content/10 bg-base-100 py-1 shadow-lg;
+  }
+
+  /* One menu row. Left-aligned, full-width tap target, hover highlight. */
+  .channel-sidebar-menu-item {
+    @apply flex w-full items-center px-3 py-2 text-left text-sm text-base-content/80 hover:bg-base-200 hover:text-base-content transition-colors focus-visible:outline-none focus-visible:bg-base-200;
+  }
+
+  /* The admin entry point — warning accent so "Edit company default" reads as
+     a company-wide action, consistent with the admin-edit mode chrome. */
+  .channel-sidebar-menu-item--admin {
+    @apply text-warning/90 hover:text-warning;
+  }
+
+  /* Quiet mode label shown beside "Done" while in an edit mode, so the row
+     states which layout is being edited without a second control. Truncates
+     rather than overflowing at narrow widths. */
+  .channel-edit-mode-label {
+    @apply min-w-0 truncate text-xs font-medium text-base-content/60;
+  }
+
+  /* Admin variant of the mode label — admin accent to match admin-edit chrome. */
+  .channel-edit-mode-label--admin {
+    @apply text-warning/90;
+  }
+
+  /* Grab handle on each channel row (edit mode). Cursor signals draggable;
+     the actual drag is owned by the ChannelMembershipDrag hook, which only
+     starts on this element so a row-link click still navigates. */
+  .channel-row-grab {
+    @apply flex-shrink-0 inline-flex items-center justify-center w-5 ml-1 cursor-grab select-none text-base-content/40 leading-none;
+  }
+
+  .channel-row-grab:active {
+    cursor: grabbing;
+  }
+
+  /* Keyboard move-up / move-down controls (edit mode) — the WCAG 2.1.1
+     keyboard alternative to drag. Always visible in edit mode (not
+     hover-gated) so keyboard users can reach them by tabbing. */
+  .channel-row-move-controls {
+    @apply flex-shrink-0 inline-flex items-center;
+  }
+
+  .channel-row-move-button {
+    @apply inline-flex items-center justify-center w-5 h-5 rounded text-base-content/50 hover:text-base-content hover:bg-base-200 transition-colors;
+  }
+
+  .channel-row-move-button:disabled {
+    @apply opacity-30 cursor-not-allowed hover:bg-transparent hover:text-base-content/50;
+  }
+
+  /* Per-section Hide control in the section header (edit mode). Mirrors the
+     section drag handle's quiet treatment but stays visible in edit mode. */
+  .channel-section-hide-button {
+    @apply inline-flex items-center justify-center w-6 h-6 rounded text-base-content/50 hover:text-base-content hover:bg-base-200 transition-colors;
+  }
+
+  /* Dragged channel row — faded while a drag is in flight (mirrors the
+     section-drag treatment for visual consistency). */
+  .channel-row-wrap--dragging {
+    @apply opacity-50;
+  }
+
+  /* Drop-target highlight on a section receiving a channel drop. Distinct
+     class from the section-reorder drop-target so a channel drag and a
+     section drag never share highlight state. */
+  .channel-section--channel-drop-target {
+    @apply bg-primary/5 rounded;
+  }
+
+  /* "Reset to default layout" button at the rail foot (edit mode). Reuses
+     the "+ New channel" visual vocabulary so the rail's chrome stays
+     consistent. */
+  .channel-reset-layout-button {
+    @apply flex-shrink-0 flex items-center gap-2 w-full px-3 py-2 text-sm text-base-content/70 hover:text-primary hover:bg-base-300 transition-colors;
+  }
+
+  /* ── Fabrikam-admin "Edit default" mode (chat sidebar Stage 6) ────────────
+     Curate the company-wide default sidebar. Visually DISTINCT from the
+     personal "Edit layout" controls (warning accent) so an admin can always
+     tell they are editing what everyone sees, not just their own view. All
+     controls are gated behind @sidebar_admin_edit + @fabrikam_admin? in the
+     template; every write re-authorizes server-side via Sidebar.* . */
+
+  /* "Done (admin)" exit button shown in the sidebar header while in admin-edit
+     mode (the entry point is now the overflow "More" menu). Warning-tinted so
+     it never reads as the neutral personal "Done". */
+  .channel-admin-edit-toggle {
+    @apply flex-shrink-0 rounded px-2 py-1 text-xs font-medium text-warning/80 hover:text-warning hover:bg-warning/10 transition-colors;
+  }
+
+  .channel-admin-edit-toggle[aria-pressed="true"] {
+    @apply text-warning bg-warning/15;
+  }
+
+  /* Inline rename form + input in a section header (admin-edit). The input
+     stretches to fill the label slot; submit-on-Enter persists the rename. */
+  .channel-section-rename-form {
+    @apply flex-1 min-w-0;
+  }
+
+  .channel-section-rename-input {
+    @apply w-full rounded border border-warning/40 bg-base-100 px-1.5 py-0.5 text-sm font-medium text-base-content focus:border-warning focus:outline-none;
+  }
+
+  /* Compact recolor palette under a section header (admin-edit). The 5 scope
+     tokens are the only choices — no free-form picker. */
+  .channel-section-palette {
+    @apply flex items-center gap-1.5 px-3 pb-1;
+  }
+
+  /* One color swatch. Active token gets a ring so the current color reads.
+     Each swatch reuses the canonical `bg-<slug>-dot` scope color. */
+  .channel-section-swatch {
+    @apply inline-block size-4 rounded-full ring-1 ring-base-content/15 transition-transform hover:scale-110 focus:outline-none focus:ring-2 focus:ring-warning;
+  }
+
+  .channel-section-swatch--active {
+    @apply ring-2 ring-warning ring-offset-1 ring-offset-base-200;
+  }
+
+  .channel-section-swatch--fabrikam {
+    background-color: oklch(72% 0.16 50);
+  }
+
+  .channel-section-swatch--soylent {
+    background-color: oklch(65% 0.2 295);
+  }
+
+  .channel-section-swatch--wayne-tech {
+    background-color: oklch(68% 0.15 240);
+  }
+
+  .channel-section-swatch--sxi {
+    background-color: oklch(70% 0.15 162);
+  }
+
+  .channel-section-swatch--paragon {
+    background-color: oklch(80% 0.16 95);
   }
 
   /* ── Stage 3 v3 (chat sidebar Option B): global "N hidden channels"

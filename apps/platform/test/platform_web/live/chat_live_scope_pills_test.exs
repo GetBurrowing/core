@@ -68,8 +68,13 @@ defmodule PlatformWeb.ChatLiveScopePillsTest do
     # Before task 019e464d the active channel row rendered a
     # `.channel-row-scope-pill` "you are here" provenance marker next to the
     # channel name. That per-channel pill was redundant with the section
-    # header's own org-scope pill and has been removed. These tests lock in
-    # the removal AND prove we kept the section-header pill (the grouping cue).
+    # header's own org-scope cue and has been removed. These tests lock in the
+    # removal AND prove the section header keeps a grouping cue.
+    #
+    # Task 019e467d then replaced the section-header *scope_pill* (whose visible
+    # TEXT was derived from the color token, so a recolor looked like a rename)
+    # with a color-ONLY dot. The grouping cue is retained as the dot; the text
+    # identity is now exclusively `section.name`.
 
     test "active channel row does NOT render a per-channel scope-pill", %{conn: conn} do
       conn = authenticated_conn(conn)
@@ -84,19 +89,29 @@ defmodule PlatformWeb.ChatLiveScopePillsTest do
              "Active channel row should no longer render the per-channel scope-pill wrapper"
     end
 
-    test "the section-header scope-pill is retained", %{conn: conn} do
+    test "the section-header color dot is retained (color-only, no text label)",
+         %{conn: conn} do
       conn = authenticated_conn(conn)
-      # Removing the per-channel pill must NOT remove the section-header org
-      # pill — that's the grouping affordance we intentionally keep. The
-      # Paragon sub-org header always renders and carries a static
-      # scope-pill with aria-label "Paragon scope" (ScopePill.aria_label_static/1).
+      # Removing the per-channel pill must NOT remove the section-header grouping
+      # cue. Post-019e467d that cue is a COLOR-ONLY dot (`bg-<token>-dot`), not a
+      # text-bearing scope pill — recoloring a section must change only its dot,
+      # never any name/label. So the Paragon section header carries the
+      # `bg-paragon-dot` swatch but NO "Paragon scope" pill text.
       create_channel("paragon")
 
       {:ok, _view, html} = live_at(conn, ~p"/chat/paragon")
       sidebar = desktop_sidebar(html)
 
-      assert sidebar =~ ~s(aria-label="Paragon scope"),
-             "Section-header scope-pill should still render after the per-channel pill removal"
+      assert sidebar =~ "channel-section-color-dot",
+             "Section header should render a color-only dot as the grouping cue"
+
+      assert sidebar =~ "bg-paragon-dot",
+             "Paragon section dot should carry the paragon color utility"
+
+      # The old color-derived pill text is gone from the section header — the
+      # dot is decorative (aria-hidden) and the only identity text is the name.
+      refute sidebar =~ ~s(aria-label="Paragon scope"),
+             "Section header must no longer render a text-bearing scope pill"
     end
   end
 

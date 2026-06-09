@@ -31,6 +31,7 @@ defmodule PlatformWeb.ChatLive do
   alias Platform.Chat.ActiveAgentStore
   alias Platform.Chat.HiddenChannels
   alias Platform.Chat.PubSub, as: ChatPubSub
+  alias Platform.Chat.Sidebar
 
   alias PlatformWeb.ChatLive.ActiveAgentHooks
   alias PlatformWeb.ChatLive.CanvasHooks
@@ -148,17 +149,67 @@ defmodule PlatformWeb.ChatLive do
       # second hide arriving inside the 4s window replaces the toast
       # cleanly — the older timer's clear becomes a no-op.
       |> assign(:undo_toast, nil)
-      # Per-user sub-org section order (chat plan v2 Stage 3). Hydrated from
-      # `users.preferences["chat_section_order"]` if set, otherwise defaults
-      # to alphabetical. Embedded/anonymous sessions (no real user row) get
-      # the default and stay there — `update_user_preference/3` no-ops on
-      # an unknown user_id, so DnD writes are simply ignored.
-      |> assign(:section_order, load_section_order(user_id))
+      # Per-user sub-org section order (chat plan v2 Stage 3) is stored in
+      # `users.preferences["chat_section_order"]` as a list of section IDS and
+      # read fresh by `Sidebar.resolve_for_user/2` whenever the rail is
+      # recomputed — there's no separate cached `@section_order` assign. The
+      # reorder math derives its baseline from the rendered `@sidebar_sections`
+      # ids, so a renamed/recolored section keeps its slot. Embedded/anonymous
+      # sessions (no real user row) get the position-driven default and stay
+      # there — `put_section_order/2` no-ops on an unknown user_id.
+      #
+      # Resolver-driven sub-org sections (chat sidebar v3 Stage 4). The rail
+      # renders from this list of `%{section, channels}` entries — org-default
+      # sections merged with the user's personal arrangement, channels placed
+      # by `chat_spaces.org_id`. Recomputed in the same handlers that refresh
+      # `@channel_sections` (channel switch, hide/unhide, space_created) plus
+      # on a `:sidebar_changed` invalidation broadcast.
+      |> assign(
+        :sidebar_sections,
+        resolve_sidebar_sections(
+          user_id,
+          channels,
+          Accounts.get_hidden_channel_ids(user_id)
+        )
+      )
       # Sub-org scope filter (chat plan v2 Stage 4). nil = no filter, all
       # sub-org sections render. An atom (one of @scope atoms) narrows the
       # rail to the matching sub-org section only. Toggled by clicking a
       # scope-pill via the `scope_filter` handler below.
       |> assign(:scope_filter, nil)
+      # Desktop "Edit layout" mode (chat sidebar Stage 5). When true the
+      # sub-org rail shows per-channel grab handles, per-section Hide/Show
+      # controls, and a "Reset to default layout" button; channel rows
+      # become draggable (ChannelMembershipDrag hook) and gain keyboard
+      # move-up/move-down controls. Default off — the rail navigates as
+      # normal until the user opts into editing. Desktop only (the whole
+      # rail is `hidden lg:flex`); mobile is out of scope for this stack.
+      |> assign(:sidebar_edit, false)
+      # Fabrikam-admin "Edit default" mode (chat sidebar Stage 6). A SEPARATE mode
+      # from the personal "Edit layout" (@sidebar_edit): admin-edit routes the
+      # same gestures to the GLOBAL org default (Sidebar Stage 2 API) instead
+      # of the acting user's prefs, so a Fabrikam admin curates what every user
+      # sees by default. Visible ONLY to Fabrikam admins (@fabrikam_admin? gate) and
+      # mutually exclusive with @sidebar_edit — entering one exits the other.
+      #
+      # We compute @fabrikam_admin? here from the resolved user_id (rather than
+      # relying solely on the LiveAuth `:default` on_mount that also assigns it
+      # on the /chat route) so the assign is guaranteed present on BOTH mount
+      # paths — the standalone surface AND the embedded child LV (which mounts
+      # via `embedded_mount/3` and does not run the LiveAuth on_mount chain).
+      # The actor we pass to every Sidebar.* admin write is `%{id: user_id}`,
+      # the same shape fabrikam_admin?/1 authorizes, so the client-side toggle and
+      # the server-side gate agree. Desktop only — the whole rail is
+      # `hidden lg:flex`; the admin toggle lives inside that aside.
+      |> assign(:fabrikam_admin?, Platform.Tenancy.fabrikam_admin?(%{id: user_id}))
+      |> assign(:sidebar_admin_edit, false)
+      # Sidebar layout overflow menu (chat sidebar header). The "CHANNELS"
+      # header is a ~260px rail that can't fit two text toggles (personal
+      # "Edit layout" + admin "Edit default"), so both entry points collapse
+      # into ONE kebab/"More" button that opens this popover. `false` = closed.
+      # Entering either edit mode (toggle_sidebar_edit / _admin_edit) closes it
+      # so the header never shows both the menu and an active edit mode at once.
+      |> assign(:sidebar_menu_open, false)
       |> assign(:active_space, nil)
       |> assign(:current_participant, nil)
       |> assign(:mobile_browser_open, false)
@@ -212,6 +263,15 @@ defmodule PlatformWeb.ChatLive do
     if connected?(socket) and not embedded? do
       Enum.each(all_spaces, &ChatPubSub.subscribe(&1.id))
       ChatPubSub.subscribe_spaces()
+      # Per-user sidebar-invalidation topic (Stage 4): a `:sidebar_changed`
+      # broadcast (Stage 5 personal arrangement writes) triggers a resolver
+      # recompute for this user's OTHER tabs.
+      ChatPubSub.subscribe_sidebar(user_id)
+      # Shared org-default topic (Stage 6): a `:sidebar_defaults_changed`
+      # broadcast from a Fabrikam-admin curation write (rename / recolor / reorder
+      # / reassign) triggers a resolver recompute in EVERY connected session,
+      # so an admin's default change is visible to all users live.
+      ChatPubSub.subscribe_sidebar_defaults()
     end
 
     space_ids = Enum.map(all_spaces, & &1.id)
@@ -394,6 +454,14 @@ defmodule PlatformWeb.ChatLive do
          :channel_sections,
          channel_sections(channels, dm_convos, MapSet.new(), socket.assigns.hidden_channel_ids)
        )
+       |> assign(
+         :sidebar_sections,
+         resolve_sidebar_sections(
+           socket.assigns.user_id,
+           channels,
+           socket.assigns.hidden_channel_ids
+         )
+       )
        |> clear_unread(space.id)}
     end
   end
@@ -470,6 +538,14 @@ defmodule PlatformWeb.ChatLive do
          hidden
        )
      )
+     |> assign(
+       :sidebar_sections,
+       resolve_sidebar_sections(
+         user_id,
+         socket.assigns.channels,
+         hidden
+       )
+     )
      |> assign(:undo_toast, channel_name && %{space_id: space_id, name: channel_name})}
   end
 
@@ -527,6 +603,14 @@ defmodule PlatformWeb.ChatLive do
         hidden
       )
     )
+    |> assign(
+      :sidebar_sections,
+      resolve_sidebar_sections(
+        user_id,
+        socket.assigns.channels,
+        hidden
+      )
+    )
     |> assign(:undo_toast, cleared_toast)
     |> assign(:hidden_drawer_open, drawer_open)
   end
@@ -556,53 +640,434 @@ defmodule PlatformWeb.ChatLive do
     {:noreply, assign(socket, :scope_filter, next)}
   end
 
-  # Sectioned-rail drag-reorder (chat plan v2 Stage 3). The JS hook
-  # (`section_reorder.js`) emits `{from: <slug>, to: <slug>}` after a drop
-  # onto another sub-org section. Reordering moves `from` into `to`'s slot
-  # in the list — the displaced section and everything after it shift one
-  # position toward `from`'s former slot (standard reorder semantics).
+  # ── Edit-layout mode (chat sidebar Stage 5) ────────────────────────────
   #
-  # Pinned + DMs are NOT reorderable — the JS hook drops their drag handle
-  # and the server-side guard rejects payloads whose slugs aren't sub-orgs,
-  # so this handler can assume both sides are valid bucket keys.
+  # Desktop per-user arrangement. All writes target the CURRENT user's prefs
+  # only — the user id comes from the `@user_id` assign (seeded in mount from
+  # the session), NEVER from the client payload, so a forged payload can't
+  # rearrange another user's sidebar. Each write broadcasts `:sidebar_changed`
+  # on the user's own topic (so other tabs of the same user converge) and
+  # recomputes `@sidebar_sections` locally for an immediate optimistic update.
+
+  # Flip the rail between normal (navigate) and personal-edit (rearrange) mode.
+  # Entering personal-edit always exits admin-edit (Stage 6) — the two modes
+  # are mutually exclusive so the admin can never have both sets of gestures
+  # routing at once (personal → user prefs, admin → org default).
+  def handle_event("toggle_sidebar_edit", _params, socket) do
+    {:noreply,
+     socket
+     |> assign(:sidebar_edit, !socket.assigns.sidebar_edit)
+     |> assign(:sidebar_admin_edit, false)
+     # Entering (or leaving) personal-edit always closes the overflow menu —
+     # the header shows the menu OR an active mode's "Done" control, never both.
+     |> assign(:sidebar_menu_open, false)
+     # Clear any active scope filter so editing always sees the full rail —
+     # otherwise a filtered-out section is unreachable (and a recolor could
+     # make the section being edited vanish from the filtered view).
+     |> assign(:scope_filter, nil)}
+  end
+
+  # Open/close the sidebar layout overflow menu (chat sidebar header). The
+  # menu is the SINGLE entry point that fans out to personal-edit and (for
+  # Fabrikam admins) admin-edit, so the ~260px rail header only ever hosts one
+  # control. Closing on phx-click-away / Escape is handled in the template;
+  # this handler is the explicit toggle on the "More" button itself.
+  def handle_event("toggle_sidebar_menu", _params, socket) do
+    {:noreply, assign(socket, :sidebar_menu_open, !socket.assigns.sidebar_menu_open)}
+  end
+
+  # Close the sidebar overflow menu without toggling a mode. Bound to the
+  # menu container's phx-click-away and a phx-window-keydown Escape so a
+  # click outside or the Escape key dismisses the popover.
+  def handle_event("close_sidebar_menu", _params, socket) do
+    {:noreply, assign(socket, :sidebar_menu_open, false)}
+  end
+
+  # ── Fabrikam-admin "Edit default" mode (chat sidebar Stage 6) ──────────────
   #
-  # Persistence: writes `users.preferences["chat_section_order"]` through
-  # `Platform.Accounts.update_user_preference/3`. Embedded/anonymous
-  # sessions silently fail-soft (`{:error, :not_found}`) since their
-  # generated user_id doesn't match a real users row — the in-memory
-  # reorder still flips so the rail feels responsive, but the next mount
-  # falls back to alphabetical (Marlowe's call: don't pollute the schema
-  # with throwaway anon prefs).
-  def handle_event("section_reordered", %{"from" => from_slug, "to" => to_slug}, socket)
-      when is_binary(from_slug) and is_binary(to_slug) do
-    current_order = socket.assigns.section_order || sub_org_order()
-    from_bucket = bucket_from_slug(from_slug)
-    to_bucket = bucket_from_slug(to_slug)
+  # A SEPARATE mode from the personal "Edit layout" above. Visible ONLY to
+  # Fabrikam admins and routes gestures to the GLOBAL org default (Sidebar Stage 2
+  # API), not the acting user's prefs. Every write re-checks authorization
+  # SERVER-SIDE by going through `Sidebar.*`, which gates on
+  # `Tenancy.fabrikam_admin?/1` — the toggle + controls are an affordance, never
+  # the gate. A forged event from a non-admin client returns
+  # `{:error, :unauthorized}` and we no-op (with a flash). On success we
+  # recompute the acting admin's own `@sidebar_sections` and broadcast
+  # `:sidebar_defaults_changed` so every OTHER connected session refreshes.
+
+  # Flip the rail between normal and admin-edit (curate org default) mode.
+  # Entering admin-edit always exits personal-edit (mutual exclusivity). We
+  # re-check `@fabrikam_admin?` here too so a forged toggle from a non-admin
+  # client can't even open the mode (the per-gesture Sidebar gate is the real
+  # backstop, but refusing to flip the assign keeps the UI honest).
+  def handle_event("toggle_sidebar_admin_edit", _params, socket) do
+    if socket.assigns.fabrikam_admin? do
+      {:noreply,
+       socket
+       |> assign(:sidebar_admin_edit, !socket.assigns.sidebar_admin_edit)
+       |> assign(:sidebar_edit, false)
+       # Entering (or leaving) admin-edit always closes the overflow menu.
+       |> assign(:sidebar_menu_open, false)
+       # Clear any active scope filter so the admin always curates the full
+       # rail — a recolor must never make the edited section drop out of view.
+       |> assign(:scope_filter, nil)}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  # Rename an org-default section (admin-edit). Inline form per section header.
+  def handle_event("rename_section_default", %{"section_id" => section_id} = params, socket)
+      when is_binary(section_id) do
+    name = String.trim(params["name"] || "")
 
     cond do
-      is_nil(from_bucket) or is_nil(to_bucket) ->
-        # Unknown slug (Pinned/DMs slugs aren't reorderable, and any other
-        # bogus payload is a client/version mismatch). Ignore silently.
+      name == "" ->
         {:noreply, socket}
 
       true ->
-        new_order = compute_reorder(current_order, from_bucket, to_bucket)
+        case Sidebar.rename_section(%{id: socket.assigns.user_id}, section_id, name) do
+          {:ok, _section} ->
+            {:noreply, recompute_sidebar_after_admin_write(socket)}
 
-        if new_order == current_order do
-          {:noreply, socket}
-        else
-          # Best-effort persistence — anonymous sessions return :not_found
-          # but the in-memory assign still flips so the UI doesn't snap back.
-          _ =
-            Platform.Accounts.update_user_preference(
-              socket.assigns.user_id,
-              :chat_section_order,
-              new_order
-            )
+          {:error, :unauthorized} ->
+            {:noreply, put_flash(socket, :error, "You don't have permission to do that.")}
 
-          {:noreply, assign(socket, :section_order, new_order)}
+          {:error, _other} ->
+            {:noreply, put_flash(socket, :error, "Could not rename the section.")}
         end
     end
+  end
+
+  # Recolor an org-default section (admin-edit). `color` is one of the 5 scope
+  # tokens (fabrikam / soylent / wayne-tech / sxi / paragon) — the compact palette
+  # in the section header.
+  def handle_event(
+        "recolor_section_default",
+        %{"section_id" => section_id, "color" => color},
+        socket
+      )
+      when is_binary(section_id) and is_binary(color) do
+    if valid_scope_token?(color) do
+      case Sidebar.recolor_section(%{id: socket.assigns.user_id}, section_id, color) do
+        {:ok, _section} ->
+          {:noreply, recompute_sidebar_after_admin_write(socket)}
+
+        {:error, :unauthorized} ->
+          {:noreply, put_flash(socket, :error, "You don't have permission to do that.")}
+
+        {:error, _other} ->
+          {:noreply, put_flash(socket, :error, "Could not recolor the section.")}
+      end
+    else
+      {:noreply, socket}
+    end
+  end
+
+  # Reassign a channel to another section GLOBALLY (admin-edit channel drag).
+  # The ChannelMembershipDrag hook pushes this (instead of `channel_moved`)
+  # when `data-admin-edit="true"`. We resolve the TARGET section's owning
+  # `org_id` from `@sidebar_sections` (already loaded) and call
+  # `Sidebar.reassign_channel/3`, which sets `chat_spaces.org_id` globally and
+  # prunes per-user placement overrides so the admin move wins everywhere.
+  def handle_event(
+        "channel_reassigned",
+        %{"channel_id" => channel_id, "target_section_id" => section_id},
+        socket
+      )
+      when is_binary(channel_id) and is_binary(section_id) do
+    case section_org_id(socket.assigns.sidebar_sections, section_id) do
+      nil ->
+        {:noreply, socket}
+
+      org_id ->
+        case Sidebar.reassign_channel(%{id: socket.assigns.user_id}, channel_id, org_id) do
+          {:ok, _space} ->
+            {:noreply, recompute_sidebar_after_admin_write(socket)}
+
+          {:error, :unauthorized} ->
+            {:noreply, put_flash(socket, :error, "You don't have permission to do that.")}
+
+          {:error, _other} ->
+            {:noreply, put_flash(socket, :error, "Could not move the channel.")}
+        end
+    end
+  end
+
+  # Channel drag-drop OR keyboard move. The hook emits the TARGET section's
+  # resulting channel-id order; `Sidebar.put_channel_order/3` records that
+  # order for the section AND removes those channels from every other section
+  # (single-placement invariant), which is exactly how a cross-section move
+  # is persisted. We re-derive `@sidebar_sections` so the row appears under
+  # its new section immediately.
+  def handle_event(
+        "channel_moved",
+        %{"channel_id" => channel_id, "target_section_id" => section_id, "ordered_ids" => ids},
+        socket
+      )
+      when is_binary(channel_id) and is_binary(section_id) and is_list(ids) do
+    {:noreply, apply_channel_move(socket, section_id, ids)}
+  end
+
+  # Keyboard alternative to the drag (WCAG 2.1.1 — no drag-only affordance).
+  # Each channel row in edit mode renders focusable Up/Down buttons that
+  # post `move_channel` with the channel id, its current section, and the
+  # direction. We recompute the section's order from the live resolver,
+  # swap the channel with its neighbour, and persist the new order via the
+  # same `put_channel_order/3` path the drag uses.
+  def handle_event(
+        "move_channel",
+        %{"channel_id" => channel_id, "section_id" => section_id, "direction" => direction},
+        socket
+      )
+      when is_binary(channel_id) and is_binary(section_id) and direction in ["up", "down"] do
+    current_ids = section_channel_ids(socket.assigns.sidebar_sections, section_id)
+    new_ids = move_in_list(current_ids, channel_id, direction)
+
+    if new_ids == current_ids do
+      {:noreply, socket}
+    else
+      {:noreply, apply_channel_move(socket, section_id, new_ids)}
+    end
+  end
+
+  # Hide or show a whole section in the user's view. `hidden` arrives as the
+  # DESIRED next state ("true"/"false" or a boolean) so the toggle is
+  # idempotent regardless of client-side render races.
+  def handle_event("toggle_section_hidden", %{"section_id" => section_id} = params, socket)
+      when is_binary(section_id) do
+    hidden? = truthy?(params["hidden"])
+    _ = Sidebar.set_section_hidden(socket.assigns.user_id, section_id, hidden?)
+    ChatPubSub.broadcast_sidebar_changed_from(socket.assigns.user_id, self())
+    {:noreply, recompute_sidebar(socket)}
+  end
+
+  # Reset the user's entire personal arrangement (section order, channel
+  # placement, hidden sections) back to the org default. Resetting clears the
+  # explicit personal order, so the rail snaps back to the ADMIN DEFAULT order
+  # (`Section.position`) in the same patch — we pass `{:default, ...}` so the
+  # resolver's position ordering is honored rather than re-sorted. The next
+  # personal drag re-derives its baseline order from the rendered
+  # `@sidebar_sections` ids, so there's no cached order assign to reset.
+  def handle_event("reset_sidebar", _params, socket) do
+    _ = Sidebar.reset_to_default(socket.assigns.user_id)
+    ChatPubSub.broadcast_sidebar_changed_from(socket.assigns.user_id, self())
+
+    {:noreply,
+     assign(
+       socket,
+       :sidebar_sections,
+       resolve_sidebar_sections(
+         socket.assigns.user_id,
+         socket.assigns.channels,
+         socket.assigns.hidden_channel_ids
+       )
+     )}
+  end
+
+  # Shared body for drag + keyboard channel moves: persist the target
+  # section's order (best-effort — anonymous user ids fail-soft), broadcast
+  # the invalidation, and recompute the rail locally.
+  defp apply_channel_move(socket, section_id, ids) do
+    _ = Sidebar.put_channel_order(socket.assigns.user_id, section_id, ids)
+    ChatPubSub.broadcast_sidebar_changed_from(socket.assigns.user_id, self())
+    recompute_sidebar(socket)
+  end
+
+  # Recompute `@sidebar_sections` from the current channel list + saved
+  # prefs (section order + channel placement + hidden sections all live in
+  # `users.preferences`, read fresh by the resolver). The resolver owns the
+  # render order — id-keyed personal order over `Section.position` default — so
+  # an admin reorder stays visible to non-customized users.
+  defp recompute_sidebar(socket) do
+    assign(
+      socket,
+      :sidebar_sections,
+      resolve_sidebar_sections(
+        socket.assigns.user_id,
+        socket.assigns.channels,
+        socket.assigns.hidden_channel_ids
+      )
+    )
+  end
+
+  # Current ordered channel ids for a section, read from the already-resolved
+  # `@sidebar_sections` (the live render state). Used by the keyboard move
+  # handler to compute the new order without a DB round-trip.
+  defp section_channel_ids(sidebar_sections, section_id) do
+    case Enum.find(sidebar_sections, fn %{section: s} -> s.id == section_id end) do
+      %{channels: channels} -> Enum.map(channels, & &1.id)
+      _ -> []
+    end
+  end
+
+  # Swap `id` one slot toward the head ("up") or tail ("down") of `ids`.
+  # Returns the list unchanged when the move would fall off either end or
+  # the id isn't present (defensive against a stale render).
+  defp move_in_list(ids, id, direction) do
+    case Enum.find_index(ids, &(&1 == id)) do
+      nil ->
+        ids
+
+      idx ->
+        target = if direction == "up", do: idx - 1, else: idx + 1
+
+        if target < 0 or target >= length(ids) do
+          ids
+        else
+          neighbour = Enum.at(ids, target)
+
+          Enum.map(ids, fn
+            ^id -> neighbour
+            ^neighbour -> id
+            other -> other
+          end)
+        end
+    end
+  end
+
+  # Coerce a hide/show flag (boolean or "true"/"false" string from the
+  # client) into a boolean. Anything other than a truthy marker is false.
+  defp truthy?(true), do: true
+  defp truthy?("true"), do: true
+  defp truthy?(_), do: false
+
+  # Sectioned-rail drag-reorder (chat plan v2 Stage 3 + Stage 6). The JS hook
+  # (`section_reorder.js`) emits `{from: <section_id>, to: <section_id>}` after
+  # a drop onto another sub-org section. Reordering moves `from` into `to`'s
+  # slot in the list — the displaced section and everything after it shift one
+  # position toward `from`'s former slot (standard reorder semantics).
+  #
+  # Identity is the section `id`, NOT its `color` token. Stage 6 made `color`
+  # an admin-editable, non-unique cosmetic attribute (two sections can share a
+  # color after a recolor), so keying drag identity off `color` would make a
+  # drag onto a duplicate-color section ambiguous and resolve to the wrong (or
+  # no) section. Section `id` is stable and unique, so both the admin and the
+  # personal reorder paths resolve `from`/`to` by id against the currently
+  # rendered `@sidebar_sections`.
+  #
+  # Pinned + DMs are NOT reorderable — the JS hook drops their drag handle and
+  # the server-side guard rejects payloads whose ids aren't in the rendered
+  # sub-org sections, so both branches no-op on a bogus/stale id.
+  def handle_event("section_reordered", %{"from" => from_id, "to" => to_id}, socket)
+      when is_binary(from_id) and is_binary(to_id) do
+    # Stage 6: in admin-edit mode the same section-header drag persists to the
+    # GLOBAL org default (channel_sections.position) via Sidebar.reorder_sections
+    # instead of the per-user section_order. Branch here so the SectionReorder
+    # hook stays mode-agnostic — the server decides which layer to write.
+    if socket.assigns.sidebar_admin_edit do
+      reorder_sections_default(socket, from_id, to_id)
+    else
+      reorder_sections_personal(socket, from_id, to_id)
+    end
+  end
+
+  # Personal section-reorder (Stage 3). Persist the per-user `chat_section_order`
+  # as a list of section IDS (not names). IDs are stable across admin
+  # rename/recolor, so a personally-reordered user keeps their arrangement even
+  # after an admin renames a section — the previous name-keyed store silently
+  # dumped a renamed section to the rail's tail because the saved order still
+  # held the OLD name (HIGH audit finding #3). The baseline order is derived
+  # from the rendered `@sidebar_sections` (the same id-driven source the admin
+  # reorder path uses), so there's no separate name-keyed `@section_order`
+  # assign to keep in sync.
+  defp reorder_sections_personal(socket, from_id, to_id) do
+    current_ids = Enum.map(socket.assigns.sidebar_sections, fn %{section: s} -> s.id end)
+
+    cond do
+      from_id not in current_ids or to_id not in current_ids ->
+        # Unknown id (Pinned/DMs aren't reorderable, and any other bogus
+        # payload is a client/version mismatch). Ignore silently.
+        {:noreply, socket}
+
+      true ->
+        new_ids = compute_reorder(current_ids, from_id, to_id)
+
+        if new_ids == current_ids do
+          {:noreply, socket}
+        else
+          # Best-effort persistence — anonymous / deleted user rows return
+          # :not_found. We DON'T re-read prefs to render: a fail-soft write
+          # would otherwise snap the rail back to position order. Instead we
+          # apply `new_ids` to the already-resolved sections in-memory so the UI
+          # reflects the drag immediately whether or not the write landed.
+          _ = Sidebar.put_section_order(socket.assigns.user_id, new_ids)
+
+          # Stage 5: invalidate the user's other connected tabs so a section
+          # reorder converges everywhere, not just the tab that did the drag.
+          ChatPubSub.broadcast_sidebar_changed_from(socket.assigns.user_id, self())
+
+          reordered =
+            order_resolved_by_ids(
+              resolve_sidebar_sections(
+                socket.assigns.user_id,
+                socket.assigns.channels,
+                socket.assigns.hidden_channel_ids
+              ),
+              new_ids
+            )
+
+          {:noreply, assign(socket, :sidebar_sections, reordered)}
+        end
+    end
+  end
+
+  # Admin section-reorder (Stage 6): persist the GLOBAL default order to
+  # `channel_sections.position`. The SectionReorder hook's `from`/`to` are
+  # section ids (data-section-id); we resolve them against the currently
+  # rendered `@sidebar_sections` to confirm they're real, build the new
+  # ordered id list, and write it via `Sidebar.reorder_sections/2` (which
+  # gates on fabrikam_admin?). On success we broadcast `:sidebar_defaults_changed`
+  # so all other sessions converge, then recompute this admin's view.
+  defp reorder_sections_default(socket, from_id, to_id) do
+    current_ids = Enum.map(socket.assigns.sidebar_sections, fn %{section: s} -> s.id end)
+
+    cond do
+      from_id not in current_ids or to_id not in current_ids ->
+        {:noreply, socket}
+
+      true ->
+        new_ids = compute_reorder(current_ids, from_id, to_id)
+
+        if new_ids == current_ids do
+          {:noreply, socket}
+        else
+          case Sidebar.reorder_sections(%{id: socket.assigns.user_id}, new_ids) do
+            {:ok, _count} ->
+              {:noreply, recompute_sidebar_after_admin_write(socket)}
+
+            {:error, :unauthorized} ->
+              {:noreply, put_flash(socket, :error, "You don't have permission to do that.")}
+          end
+        end
+    end
+  end
+
+  # Resolve a section's owning `org_id` from the rendered sections — used by
+  # the admin channel-reassign handler to translate a TARGET section id into
+  # the org_id `Sidebar.reassign_channel/3` writes onto the channel.
+  defp section_org_id(sidebar_sections, section_id) do
+    case Enum.find(sidebar_sections, fn %{section: s} -> s.id == section_id end) do
+      %{section: %{org_id: org_id}} -> org_id
+      _ -> nil
+    end
+  end
+
+  # The 5 scope tokens are the recolor palette — whitelist-validate the
+  # inbound color so a forged payload can't write an arbitrary string onto a
+  # section's `color` (defense-in-depth on top of the admin gate).
+  defp valid_scope_token?(color),
+    do: color in ["paragon", "soylent", "fabrikam", "wayne-tech", "sxi"]
+
+  # Shared tail for every successful admin-default write: broadcast the
+  # shared-defaults invalidation to all OTHER sessions (so non-admin users and
+  # the admin's other tabs converge live), then recompute the acting admin's
+  # own `@sidebar_sections` from the now-updated default layer. Channels +
+  # hidden ids + the admin's personal section_order are unchanged — only the
+  # default sections moved — so we re-resolve with the same inputs.
+  defp recompute_sidebar_after_admin_write(socket) do
+    ChatPubSub.broadcast_sidebar_defaults_changed_from(self())
+    recompute_sidebar(socket)
   end
 
   # Per-message actions sheet (3-dot menu on chat messages — task 019e0f29
@@ -1116,6 +1581,14 @@ defmodule PlatformWeb.ChatLive do
          MapSet.new(),
          socket.assigns.hidden_channel_ids
        )
+     )
+     |> assign(
+       :sidebar_sections,
+       resolve_sidebar_sections(
+         socket.assigns.user_id,
+         channels,
+         socket.assigns.hidden_channel_ids
+       )
      )}
   end
 
@@ -1145,6 +1618,45 @@ defmodule PlatformWeb.ChatLive do
       %{space_id: ^space_id} -> {:noreply, assign(socket, :undo_toast, nil)}
       _ -> {:noreply, socket}
     end
+  end
+
+  # Sidebar-shape invalidation (chat sidebar v3 Stage 4). Fired on the
+  # per-user `chat:sidebar:<user_id>` topic when an admin curation write
+  # (Stage 6) or a personal arrangement change (Stage 5) alters the resolved
+  # sidebar. Recompute `@sidebar_sections` from the current channel list +
+  # the (possibly updated) saved section order. Nothing broadcasts this yet —
+  # the handler exists so the cache-invalidation path is ready for Stage 5/6.
+  def handle_info(:sidebar_changed, socket) do
+    {:noreply,
+     assign(
+       socket,
+       :sidebar_sections,
+       resolve_sidebar_sections(
+         socket.assigns.user_id,
+         socket.assigns.channels,
+         socket.assigns.hidden_channel_ids
+       )
+     )}
+  end
+
+  # Shared org-DEFAULT invalidation (chat sidebar Stage 6). Fired on the
+  # `chat:sidebar:defaults` topic when a Fabrikam admin curates the default layer
+  # (rename / recolor / reorder / reassign). EVERY connected session receives
+  # this (except the acting admin's own tab, which recomputed synchronously)
+  # and re-resolves its `@sidebar_sections` so the admin's default change is
+  # visible to all users without a refresh. Same recompute as `:sidebar_changed`
+  # — the resolver reads the now-updated default sections from the DB.
+  def handle_info(:sidebar_defaults_changed, socket) do
+    {:noreply,
+     assign(
+       socket,
+       :sidebar_sections,
+       resolve_sidebar_sections(
+         socket.assigns.user_id,
+         socket.assigns.channels,
+         socket.assigns.hidden_channel_ids
+       )
+     )}
   end
 
   def handle_info(_msg, socket), do: {:noreply, socket}
@@ -1438,6 +1950,92 @@ defmodule PlatformWeb.ChatLive do
     }
   end
 
+  # ── Resolver-driven sub-org rail (chat sidebar v3 Stage 4) ─────────────
+  #
+  # The sub-org rail now renders from `Sidebar.resolve_for_user/2` — the
+  # org-default sections (one per org, `channel_sections` table) merged with
+  # the user's personal arrangement prefs. Channels are distributed into
+  # sections by `chat_spaces.org_id` (the identity key), replacing the old
+  # name-pattern bucketing in `channel_sections/4` (kept only for the
+  # pure-function grouping tests + the Pinned/DMs derivation above).
+  #
+  # We feed the resolver the *visible* channels — non-hidden, non-pinned
+  # `kind: "channel"` spaces — so hidden/pinned handling stays consistent
+  # with the rest of the rail. Pinning isn't wired yet (empty pinned set
+  # today), so `channels` minus hidden is the visible set.
+  #
+  # Section ORDER is owned entirely by `Sidebar.resolve_for_user/2`, the single
+  # source of ordering truth: it reads the user's `chat_section_order` prefs (a
+  # list of section IDS) and applies its id-keyed `order_sections/2` —
+  # skip-unknown, append-unplaced-by-position. That means:
+  #
+  #   * No personal order (fresh user / cleared pref) → `Section.position`
+  #     order, so an admin reorder is visible to every non-customized user.
+  #   * A personal order → those sections first in the saved id order, any
+  #     others appended by position. IDs are stable across admin rename/recolor
+  #     (HIGH audit finding #3), so a personal arrangement survives both.
+  #
+  # The LiveView used to RE-order the resolver output by a name-keyed personal
+  # order (a holdover from when prefs stored names, which Sidebar's id-keyed
+  # resolver couldn't interpret). With prefs now id-keyed that second pass was
+  # redundant AND could disagree with the resolver for partial orders, so it's
+  # gone — there is now exactly ONE ordering pass.
+  @spec resolve_sidebar_sections(
+          binary() | nil,
+          [Platform.Chat.Space.t()],
+          MapSet.t()
+        ) ::
+          [Sidebar.resolved()]
+  defp resolve_sidebar_sections(user_id, channels, hidden_ids) do
+    {visible_channels, _hidden} = HiddenChannels.filter(channels, hidden_ids)
+
+    Sidebar.resolve_for_user(user_id, visible_channels)
+  end
+
+  # Apply an explicit section-id order to already-resolved sections IN-MEMORY,
+  # used only by the personal-reorder handler so the rail reflects a drag even
+  # when persistence fail-softs (anonymous / deleted user row). The persisted
+  # prefs remain the source of truth for every other recompute path; this is a
+  # one-shot overlay for the dragging tab. Sections absent from `ids` sort to
+  # the tail in their resolver order.
+  defp order_resolved_by_ids(resolved, ids) when is_list(ids) do
+    rank = ids |> Enum.with_index() |> Map.new()
+    fallback = length(ids)
+
+    Enum.sort_by(resolved, fn %{section: section} ->
+      Map.get(rank, section.id, fallback)
+    end)
+  end
+
+  # Map a section's `color` token (CSS form, e.g. "wayne-tech") to the scope
+  # atom the `scope_pill` component takes. Unknown tokens return `nil` so the
+  # template can fall back to a plain header without a pill rather than
+  # crashing on an unrecognized scope.
+  @doc false
+  @spec section_scope_atom(String.t() | nil) :: atom() | nil
+  def section_scope_atom("paragon"), do: :paragon
+  def section_scope_atom("soylent"), do: :soylent
+  def section_scope_atom("fabrikam"), do: :fabrikam
+  def section_scope_atom("wayne-tech"), do: :wayne_tech
+  def section_scope_atom("sxi"), do: :sxi
+  def section_scope_atom(_), do: nil
+
+  # Map a section's `color` token (CSS form, e.g. "wayne-tech") to its color-only
+  # dot utility class (`bg-<token>-dot`, defined in app.css). Used by the
+  # section header to render a decorative color swatch WITHOUT a text label —
+  # the section's identity text comes solely from `section.name`. Decoupling the
+  # swatch from the scope enum is the fix for "recolor renames the chip": the
+  # dot reflects color only, never a name. Unknown tokens return `nil` so the
+  # template omits the dot rather than rendering a class-less span.
+  @doc false
+  @spec section_dot_class(String.t() | nil) :: String.t() | nil
+  def section_dot_class("paragon"), do: "bg-paragon-dot"
+  def section_dot_class("soylent"), do: "bg-soylent-dot"
+  def section_dot_class("fabrikam"), do: "bg-fabrikam-dot"
+  def section_dot_class("wayne-tech"), do: "bg-wayne-tech-dot"
+  def section_dot_class("sxi"), do: "bg-sxi-dot"
+  def section_dot_class(_), do: nil
+
   # Today: exact (case-insensitive) match on channel slug against the
   # hardcoded sub-org list, falling back to "Fabrikam" (the default tenant).
   #
@@ -1475,55 +2073,25 @@ defmodule PlatformWeb.ChatLive do
 
   # ── Per-user section order (chat plan v2 Stage 3) ──────────────────────
   #
-  # `load_section_order/1` reads `users.preferences["chat_section_order"]`
-  # and returns the saved order if valid (must be a permutation of the
-  # full @sub_org_buckets set). Anything malformed — missing key, wrong
-  # arity, unknown slugs, duplicates — falls back to alphabetical so a
-  # poisoned preference can't break the rail.
-  @doc """
-  Hydrate the user's saved sub-org section order from preferences.
-
-  Returns the saved list when it's a complete permutation of
-  `sub_org_order/0`; falls back to alphabetical otherwise (including for
-  anonymous user_ids that don't match a real users row).
-  """
-  @spec load_section_order(binary() | nil) :: [String.t()]
-  def load_section_order(nil), do: sub_org_order()
-
-  def load_section_order(user_id) when is_binary(user_id) do
-    prefs = Platform.Accounts.get_user_preferences(user_id)
-    saved = Map.get(prefs, "chat_section_order")
-
-    if valid_section_order?(saved) do
-      saved
-    else
-      sub_org_order()
-    end
-  end
-
-  # Defensive validation — a saved order is only honored when it's an
-  # exact-permutation match of the current sub_org bucket list. This means
-  # adding a new bucket in the future invalidates everyone's saved order
-  # (they fall back to alphabetical until they reorder again). Acceptable
-  # cost vs. quietly hiding a new bucket from existing users.
-  defp valid_section_order?(saved) when is_list(saved) do
-    canonical = sub_org_order()
-
-    length(saved) == length(canonical) and
-      Enum.all?(saved, &is_binary/1) and
-      Enum.sort(saved) == canonical
-  end
-
-  defp valid_section_order?(_), do: false
+  # The per-user `chat_section_order` is a list of section IDS (HIGH audit
+  # finding #3 — IDs are stable across admin rename/recolor, names are not).
+  # ORDER RESOLUTION lives entirely in `Sidebar.resolve_for_user/2` +
+  # `Sidebar.order_sections/2` (id-keyed, skip-unknown, append-unplaced): no
+  # pref → `Section.position` (admin default); a saved order → those sections in
+  # the saved id order, the rest appended by position. Writes go through
+  # `Sidebar.put_section_order/2` (also id-keyed). There's no LiveView-side
+  # validation gate or re-ordering pass anymore — that was a holdover from the
+  # name-keyed era when Sidebar's id resolver couldn't interpret the prefs.
 
   @doc """
   Move `from` to `to`'s slot in `order`. The displaced item and everything
   between shifts one position toward `from`'s former slot — standard
   drag-reorder semantics.
 
-  Returns the input list unchanged when:
+  Generic over the element type — both the personal and admin reorder paths
+  pass section IDS. Returns the input list unchanged when:
     * `from == to` (drop on self)
-    * either slug is absent from `order` (defensive — JS shouldn't emit
+    * either id is absent from `order` (defensive — JS shouldn't emit
       this, but a stale render could)
   """
   @spec compute_reorder([String.t()], String.t(), String.t()) :: [String.t()]
@@ -1603,19 +2171,17 @@ defmodule PlatformWeb.ChatLive do
   def bucket_for_scope(:sxi), do: "SXI"
   def bucket_for_scope(_), do: nil
 
-  # Bucket display name → slug (lowercased; "Wayne-Tech" → "wayne-tech"). Used
-  # by the template to set `data-section-slug` on sub-org sections; the
-  # SectionReorder hook reads that attribute and sends slugs in its
-  # `section_reordered` payload. Slugs are the stable wire-format because
-  # they round-trip cleanly through HTML attributes and JSON keys.
-  defp section_slug("Wayne-Tech"), do: "wayne-tech"
-  defp section_slug(bucket) when is_binary(bucket), do: String.downcase(bucket)
+  # `section_slug/1` (bucket-name → slug) was retired in Stage 4: the
+  # resolver-driven rail sets `data-section-slug` directly from a section's
+  # `color` token (already in CSS slug form, e.g. "wayne-tech"), so the
+  # name→slug mapping is no longer needed. Its inverse `bucket_from_slug/1`
+  # is kept below — the Stage 3 `section_reordered` handler still translates
+  # the JS hook's slug payload back to the section name.
 
-  # Inverse of `section_slug/1`. Used at the `section_reordered` event
-  # boundary to translate the JS hook's slug payload back to the bucket
-  # display name used everywhere else in this module. Reuses the existing
-  # `@sub_org_slug_to_bucket` mapping that was already needed by
-  # `channel_scope/1` for the classification pass.
+  # `bucket_from_slug/1`: translates the SectionReorder hook's slug payload
+  # back to the bucket display name used by the `section_reordered` handler.
+  # Reuses the `@sub_org_slug_to_bucket` mapping that `channel_scope/1` needs
+  # for the (Pinned/DMs) classification pass.
   @doc false
   @spec bucket_from_slug(String.t()) :: String.t() | nil
   def bucket_from_slug(slug) when is_binary(slug) do

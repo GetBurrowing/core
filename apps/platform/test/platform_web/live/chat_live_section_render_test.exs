@@ -129,26 +129,32 @@ defmodule PlatformWeb.ChatLiveSectionRenderTest do
 
       assert sidebar =~ "Paragon"
 
-      assert sidebar =~ "No channels yet — channels named matching this sub-org appear here.",
+      assert sidebar =~ "No channels yet — channels in this org appear here.",
              "Empty sub-org section is missing its empty-state hint"
     end
   end
 
   describe "section header affordances" do
-    test "each sub-org section header carries a scope_pill reference", %{conn: conn} do
+    test "each sub-org section header carries a color-only dot", %{conn: conn} do
       conn = authenticated_conn(conn)
       create_channel("general")
       {:ok, _view, html} = live_following_redirect(conn)
       sidebar = desktop_sidebar(html)
 
-      # `<.scope_pill clickable={false}>` renders a `<span>` whose
-      # aria-label is "<Scope> scope" (see ScopePill.aria_label_static/1).
-      # That static-variant aria-label is the cheapest stable hook.
-      assert sidebar =~ ~s(aria-label="Paragon scope")
-      assert sidebar =~ ~s(aria-label="Soylent scope")
-      assert sidebar =~ ~s(aria-label="Fabrikam scope")
-      assert sidebar =~ ~s(aria-label="Wayne-Tech scope")
-      assert sidebar =~ ~s(aria-label="SXI scope")
+      # Task 019e467d replaced the section-header `<.scope_pill>` (whose visible
+      # text was derived from the color token, so a recolor read as a rename)
+      # with a COLOR-ONLY dot keyed off `section.color`. Each seeded sub-org
+      # section carries its `bg-<token>-dot` swatch; identity text comes only
+      # from `section.name`, never from the color.
+      assert sidebar =~ "channel-section-color-dot"
+      assert sidebar =~ "bg-paragon-dot"
+      assert sidebar =~ "bg-soylent-dot"
+      assert sidebar =~ "bg-fabrikam-dot"
+      assert sidebar =~ "bg-wayne-tech-dot"
+      assert sidebar =~ "bg-sxi-dot"
+
+      # The old text-bearing scope pill is gone from the section header.
+      refute sidebar =~ ~s(aria-label="Paragon scope")
     end
 
     test "drag-handle glyph is present in DOM (opacity-0 lives in CSS)", %{conn: conn} do

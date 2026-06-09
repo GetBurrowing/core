@@ -8,12 +8,18 @@
 //
 // Drop semantics: drop ON another sub-org section reorders the dragged
 // section to the dropped-on section's slot. The full new order is computed
-// server-side from the `{from, to}` slugs (see ChatLive
+// server-side from the `{from, to}` section IDs (see ChatLive
 // "section_reordered" handler) so the JS stays dumb — no client-side
 // optimistic mutation of order.
+//
+// Identity: drag source/target are keyed by `data-section-id`, NOT
+// `data-section-slug` (the section's `color` token). Color is now an
+// admin-editable, non-unique cosmetic attribute (Stage 6 recolor) — two
+// sections can share one color — so it can't safely identify a drag target.
+// `data-section-id` is the stable, unique section id.
 const SectionReorder = {
   mounted() {
-    this._draggedSlug = null;
+    this._draggedId = null;
     this._draggedEl = null;
 
     // ── Drag start ─────────────────────────────────────────────────────
@@ -25,12 +31,12 @@ const SectionReorder = {
       // Without this, accidental drags on a row link would also fire.
       if (!e.target.closest(".channel-section-drag-handle")) return;
 
-      this._draggedSlug = section.dataset.sectionSlug || null;
+      this._draggedId = section.dataset.sectionId || null;
       this._draggedEl = section;
-      if (!this._draggedSlug) return;
+      if (!this._draggedId) return;
 
       e.dataTransfer.effectAllowed = "move";
-      e.dataTransfer.setData("text/plain", this._draggedSlug);
+      e.dataTransfer.setData("text/plain", this._draggedId);
 
       // Apply dragging class on the next frame so the drag image captures
       // the section's original appearance, then fade the source row.
@@ -44,7 +50,7 @@ const SectionReorder = {
       const section = e.target.closest(".channel-section");
       if (!section) return;
       if (section.dataset.sectionReorderable !== "true") return;
-      if (!this._draggedSlug) return;
+      if (!this._draggedId) return;
       if (section === this._draggedEl) return;
 
       e.preventDefault();
@@ -68,15 +74,15 @@ const SectionReorder = {
       this._clearDropTargets();
 
       const section = e.target.closest(".channel-section");
-      if (!section || !this._draggedSlug) return;
+      if (!section || !this._draggedId) return;
       if (section.dataset.sectionReorderable !== "true") return;
 
-      const targetSlug = section.dataset.sectionSlug;
-      if (!targetSlug || targetSlug === this._draggedSlug) return;
+      const targetId = section.dataset.sectionId;
+      if (!targetId || targetId === this._draggedId) return;
 
       this.pushEvent("section_reordered", {
-        from: this._draggedSlug,
-        to: targetSlug,
+        from: this._draggedId,
+        to: targetId,
       });
     };
 
@@ -86,7 +92,7 @@ const SectionReorder = {
         this._draggedEl.classList.remove("channel-section--dragging");
       }
       this._clearDropTargets();
-      this._draggedSlug = null;
+      this._draggedId = null;
       this._draggedEl = null;
     };
 
