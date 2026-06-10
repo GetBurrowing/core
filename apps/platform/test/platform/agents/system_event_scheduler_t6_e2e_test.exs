@@ -64,7 +64,7 @@ defmodule Platform.Agents.SystemEventSchedulerT6E2ETest do
   alias Platform.Chat.Space
   alias Platform.Meetings
   alias Platform.Meetings.Meeting
-  alias Platform.Org.MemoryEntry
+  alias Platform.Org.WikiJournalEntry, as: MemoryEntry
   alias Platform.Repo
   alias Platform.Tasks
   alias Platform.Tasks.Projects
@@ -522,11 +522,17 @@ defmodule Platform.Agents.SystemEventSchedulerT6E2ETest do
     @chat_path "lib/platform/chat.ex"
     @agent_path "lib/platform/agents/agent.ex"
 
-    # Baseline tool count (frozen at T6 stage-1 design lock). T6 must not
-    # add or remove any MCP tools — T5 owns the memory_* family, T6 only
-    # wires schedules and triggers. The number is committed here so a
-    # future T6 follow-up can't sneak `tool_surface.ex` edits past review.
-    @t6_baseline_tool_count 67
+    # Baseline tool count. T6 must not add or remove any MCP tools — T5
+    # owns the memory_* family, T6 only wires schedules and triggers. The
+    # number is committed here so a future T6 follow-up can't sneak
+    # `tool_surface.ex` edits past review.
+    #
+    # Re-baselined on the stack rollup: T6's stage-1 design lock pinned 67
+    # against a tree WITHOUT the T1–T5 chain. T5's tool-surface rework
+    # (-5 V1 org_context_*/org_memory_* tools, +6 memory_* tools +
+    # memory_search) lands the merged tree at 69. The historian_* refutes
+    # below still enforce the actual T6 invariant (no T6-added tools).
+    @t6_baseline_tool_count 69
 
     defp t6_root, do: Mix.Project.project_file() |> Path.dirname()
 

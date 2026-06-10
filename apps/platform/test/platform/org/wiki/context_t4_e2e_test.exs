@@ -261,6 +261,13 @@ defmodule Platform.Org.Wiki.ContextT4E2ETest do
     # — the prompt-template force-update for the V2 memory copy
     # (20260520010000) and the agent-runtime allowed_bundles swap from
     # `org_context` → `memory` (20260520030000).
+    #
+    # NOTE (stack rollup): the rollup branch merged T6 plus origin/main,
+    # which together add four more legitimate migrations — T6's
+    # historian dispatch-template force-update (20260520050000) and
+    # three that landed on main after T5 branched (20260527160200,
+    # 20260604000000, 20260604000100). Allow-listed below so the count
+    # assertion keeps pinning the T4 boundary on the merged tree.
     @t3_head_migrations_count 95
 
     @t4_allowed_new_migrations [
@@ -270,7 +277,12 @@ defmodule Platform.Org.Wiki.ContextT4E2ETest do
       "20260520020000_add_search_vector_to_org_wiki.exs",
       # T5 stage 5 additions (V1 retirement + capability bundle swap).
       "20260520010000_force_update_prompt_templates_memory_v2.exs",
-      "20260520030000_agent_runtime_memory_bundle.exs"
+      "20260520030000_agent_runtime_memory_bundle.exs",
+      # Stack rollup additions — T6 historian templates + post-T5 main.
+      "20260520050000_force_update_historian_dispatch_templates.exs",
+      "20260527160200_backfill_meeting_chat_space_slugs.exs",
+      "20260604000000_add_org_id_to_chat_spaces.exs",
+      "20260604000100_create_channel_sections.exs"
     ]
 
     defp t4_root, do: Mix.Project.project_file() |> Path.dirname()

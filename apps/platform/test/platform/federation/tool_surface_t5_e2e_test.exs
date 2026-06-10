@@ -126,8 +126,8 @@ defmodule Platform.Federation.ToolSurfaceT5E2ETest do
 
   test "Case A — Historian memory_create + memory_view round-trip on org/page/identity.md" do
     # setup: workspace with no pre-existing pages, Historian agent
-    # carrying `system_events: [\"daily_summary\"]`.
-    historian = create_agent("historian-a", ["daily_summary"])
+    # carrying `system_events: [\"historian\"]` (T6's canonical event).
+    historian = create_agent("historian-a", ["historian"])
 
     text = "# Org Identity\n\nFabrikam — AI-native consultancy."
 

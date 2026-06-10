@@ -19,7 +19,7 @@ defmodule Platform.Agents.HistorianTest do
 
   alias Platform.Agents.Historian
   alias Platform.Agents.HistorianCursor
-  alias Platform.Org.MemoryEntry
+  alias Platform.Org.WikiJournalEntry, as: MemoryEntry
   alias Platform.Repo
 
   # Use a fresh workspace UUID per test so async cases don't collide.

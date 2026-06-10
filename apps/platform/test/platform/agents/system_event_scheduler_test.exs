@@ -597,7 +597,7 @@ defmodule Platform.Agents.SystemEventSchedulerTest do
     alias Platform.Chat
     alias Platform.Chat.Message
     alias Platform.Chat.Space
-    alias Platform.Org.MemoryEntry
+    alias Platform.Org.WikiJournalEntry, as: MemoryEntry
     alias Platform.Tasks.Projects
 
     # V1 fan-out uses the org-scope sentinel UUID — `Projects.list_active_workspaces/0`

@@ -23,7 +23,7 @@ defmodule Platform.Org.Wiki.RoutingTest do
   @today ~D[2026-05-20]
 
   defp historian_agent(id \\ @agent_id, extra_events \\ []),
-    do: %Agent{id: id, system_events: ["daily_summary" | extra_events]}
+    do: %Agent{id: id, system_events: ["historian" | extra_events]}
 
   defp plain_agent(id \\ @agent_id, events \\ []),
     do: %Agent{id: id, system_events: events}
@@ -163,20 +163,21 @@ defmodule Platform.Org.Wiki.RoutingTest do
   ## ─────────────────────────────────────────────────────────────────────
 
   describe "historian?/1" do
-    test "true when agent.system_events contains \"daily_summary\"" do
+    test "true when agent.system_events contains \"historian\"" do
       assert Routing.historian?(historian_agent())
     end
 
-    test "true when daily_summary is one of several events" do
-      assert Routing.historian?(historian_agent(@agent_id, ["dreaming"]))
+    test "true when historian is one of several events" do
+      assert Routing.historian?(historian_agent(@agent_id, ["some_future_event"]))
     end
 
     test "false when system_events is empty" do
       refute Routing.historian?(plain_agent())
     end
 
-    test "false when system_events has other events but not daily_summary" do
-      refute Routing.historian?(plain_agent(@agent_id, ["dreaming"]))
+    test "false when system_events has other events but not historian" do
+      # The legacy daily_summary/dreaming signals no longer confer the role.
+      refute Routing.historian?(plain_agent(@agent_id, ["daily_summary", "dreaming"]))
     end
 
     test "false for nil agent" do

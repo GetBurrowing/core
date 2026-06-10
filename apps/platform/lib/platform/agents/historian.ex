@@ -16,15 +16,16 @@ defmodule Platform.Agents.Historian do
 
   ## Corpus sources
 
-  | Corpus          | Table                  | Timestamp column | Byte source                          |
-  |-----------------|------------------------|------------------|--------------------------------------|
-  | `"pages"`       | `org_context_files`    | `updated_at`     | `byte_size(content)`                 |
-  | `"journal"`     | `org_memory_entries`   | `inserted_at`    | `byte_size(content)`                 |
-  | `"messages"`    | `chat_messages`        | `inserted_at`    | `byte_size(content)` (nil → 0)       |
-  | `"transcripts"` | `meeting_transcripts`  | `updated_at`     | `byte_size(summary) + segments JSON` |
+  | Corpus          | Table                      | Timestamp column | Byte source                          |
+  |-----------------|----------------------------|------------------|--------------------------------------|
+  | `"pages"`       | `org_wiki_pages`           | `updated_at`     | `byte_size(content)`                 |
+  | `"journal"`     | `org_wiki_journal_entries` | `inserted_at`    | `byte_size(content)`                 |
+  | `"messages"`    | `chat_messages`            | `inserted_at`    | `byte_size(content)` (nil → 0)       |
+  | `"transcripts"` | `meeting_transcripts`      | `updated_at`     | `byte_size(summary) + segments JSON` |
 
-  Table names match `origin/main` at branch-cut. The `org_wiki_*` rename
-  from T2 hasn't shipped on main yet; later stages migrate when it does.
+  T6 was developed against the pre-T1 table names (`org_context_files` /
+  `org_memory_entries`); the stack rollup reconciled these queries to the
+  V2 `org_wiki_*` names from the T1 rename migration (20260515224500).
   """
 
   import Ecto.Query
@@ -156,10 +157,10 @@ defmodule Platform.Agents.Historian do
     |> Repo.one()
   end
 
-  # Pages corpus → org_context_files. Updated_at because pages mutate.
+  # Pages corpus → org_wiki_pages. Updated_at because pages mutate.
   # nil workspace_id (V1 org-scope) → sum across rows with null workspace_id.
   defp sum_corpus_bytes("pages", nil, last_at) do
-    query = from(f in "org_context_files", where: is_nil(f.workspace_id))
+    query = from(f in "org_wiki_pages", where: is_nil(f.workspace_id))
     query = apply_cursor_filter(query, :updated_at, last_at)
 
     query
@@ -170,7 +171,7 @@ defmodule Platform.Agents.Historian do
 
   defp sum_corpus_bytes("pages", workspace_id, last_at) do
     query =
-      from(f in "org_context_files",
+      from(f in "org_wiki_pages",
         where: f.workspace_id == type(^workspace_id, :binary_id)
       )
 
@@ -182,11 +183,11 @@ defmodule Platform.Agents.Historian do
     |> to_non_neg()
   end
 
-  # Journal corpus → org_memory_entries. Inserted_at because journal is
-  # append-only (`updated_at: false` on the schema).
+  # Journal corpus → org_wiki_journal_entries. Inserted_at because journal
+  # is append-only (`updated_at: false` on the schema).
   # nil workspace_id (V1 org-scope) → sum across rows with null workspace_id.
   defp sum_corpus_bytes("journal", nil, last_at) do
-    query = from(e in "org_memory_entries", where: is_nil(e.workspace_id))
+    query = from(e in "org_wiki_journal_entries", where: is_nil(e.workspace_id))
     query = apply_cursor_filter(query, :inserted_at, last_at)
 
     query
@@ -197,7 +198,7 @@ defmodule Platform.Agents.Historian do
 
   defp sum_corpus_bytes("journal", workspace_id, last_at) do
     query =
-      from(e in "org_memory_entries",
+      from(e in "org_wiki_journal_entries",
         where: e.workspace_id == type(^workspace_id, :binary_id)
       )
 

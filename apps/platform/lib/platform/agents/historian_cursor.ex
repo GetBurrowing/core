@@ -5,8 +5,8 @@ defmodule Platform.Agents.HistorianCursor do
 
   The Historian (T6) walks four corpora and remembers where it left off:
 
-    * `"pages"`       — `org_context_files`
-    * `"journal"`     — `org_memory_entries`
+    * `"pages"`       — `org_wiki_pages`
+    * `"journal"`     — `org_wiki_journal_entries`
     * `"messages"`    — `chat_messages`
     * `"transcripts"` — `meeting_transcripts`
 

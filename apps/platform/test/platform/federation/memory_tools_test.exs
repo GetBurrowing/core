@@ -32,7 +32,7 @@ defmodule Platform.Federation.MemoryToolsTest do
     Repo.delete_all(WikiPage)
     Repo.delete_all(WikiJournalEntry)
 
-    historian = create_agent("historian", ["daily_summary"])
+    historian = create_agent("historian", ["historian"])
     plain = create_agent("plain", [])
 
     %{historian: historian, plain: plain}

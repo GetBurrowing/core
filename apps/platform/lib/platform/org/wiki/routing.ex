@@ -48,7 +48,7 @@ defmodule Platform.Org.Wiki.Routing do
           required(:recoverable) => boolean()
         }
 
-  @historian_event "daily_summary"
+  @historian_event "historian"
 
   # Page path: <ns>/page/<rest...>
   # ns ∈ {"org", "project/<uuid>", "space/<uuid>"}
@@ -168,10 +168,12 @@ defmodule Platform.Org.Wiki.Routing do
   @doc """
   Returns `true` iff the given agent carries the Historian-role signal.
 
-  Pre-T6 the signal is `"daily_summary" in agent.system_events`
-  (`Platform.Agents.Agent.@valid_system_events`). T6 may layer a richer
-  role model — when that lands, swap this implementation in place and
-  callers (`gate_write/3`, `gate_read/2`) keep working.
+  Post-T6 the signal is `"historian" in agent.system_events`
+  (`Platform.Agents.Agent.@valid_system_events` is exactly `["historian"]`
+  — the legacy `daily_summary`/`dreaming` bundle was collapsed by T6's
+  single canonical system event; reconciled here on the stack rollup).
+  If a richer role model lands later, swap this implementation in place
+  and callers (`gate_write/3`, `gate_read/2`) keep working.
   """
   @spec historian?(Agent.t() | nil) :: boolean()
   def historian?(%Agent{system_events: events}) when is_list(events),
