@@ -74,7 +74,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
               <span class="hero-globe-alt h-3.5 w-3.5" /> Federated
             </span>
             <span
-              :if={"daily_summary" in (@agent.system_events || [])}
+              :if={"historian" in (@agent.system_events || [])}
               class="inline-flex items-center gap-1 rounded-full bg-primary/15 px-2.5 py-1 text-primary"
             >
               <span class="hero-book-open h-3.5 w-3.5" /> Historian
@@ -415,8 +415,8 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
   #
   # Shared between federation_panels/1 and config_form/1 so both built-in
   # and federated agents can opt into the Historian role. A single checkbox
-  # backs both daily_summary and dreaming system events — the save_config
-  # handler translates this to the underlying system_events array.
+  # writes the single canonical `historian` system event (post-T6 — the
+  # legacy `daily_summary` + `dreaming` bundle is gone).
 
   attr :agent, :map, required: true
   attr :config_form, :map, required: true
@@ -427,7 +427,7 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
       assign(
         assigns,
         :currently_historian?,
-        "daily_summary" in (assigns.agent.system_events || [])
+        "historian" in (assigns.agent.system_events || [])
       )
 
     assigns =
