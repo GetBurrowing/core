@@ -1,9 +1,9 @@
-defmodule Platform.Org.MemoryEntry do
+defmodule Platform.Org.WikiJournalEntry do
   @moduledoc """
-  Schema for org-level memory entries — short-lived, append-only notes.
+  Schema for org-level wiki journal entries — short-lived, append-only notes.
 
   Entries surface in agent context as `ORG_NOTES-YYYY-MM-DD` (last 2 days).
-  For curated long-term knowledge, use `ORG_MEMORY.md` via `Platform.Org.Context.upsert_context_file/3`.
+  For curated long-term knowledge, use `org/memory.md` via `Platform.Org.Context.upsert_context_file/3`.
   """
 
   use Ecto.Schema
@@ -12,7 +12,7 @@ defmodule Platform.Org.MemoryEntry do
   @primary_key {:id, Platform.Types.UUIDv7, autogenerate: true}
   @foreign_key_type :binary_id
 
-  schema "org_memory_entries" do
+  schema "org_wiki_journal_entries" do
     field(:workspace_id, :binary_id)
     field(:date, :date)
     field(:content, :string)

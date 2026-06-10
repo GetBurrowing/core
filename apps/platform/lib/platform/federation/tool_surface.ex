@@ -11,14 +11,15 @@ defmodule Platform.Federation.ToolSurface do
   alias Platform.Chat
   alias Platform.Chat.{ActiveAgentStore, ContextPlane, Participant}
   alias Platform.Meetings
-  alias Platform.Org.Context, as: OrgContext
+  alias Platform.Org.Wiki
+  alias Platform.Org.Wiki.{Journal, Routing, Search}
   alias Platform.Tasks
   alias Platform.Tasks.{Plan, PlanEngine, Stack, Stacks, Stage, Task, Validation}
   alias Platform.Repo
 
   import Ecto.Query, only: [from: 2]
 
-  @bundles ~w(canvas messaging task plan review space context_read federation org_context skill attachment)
+  @bundles ~w(canvas messaging task plan review space context_read federation memory skill attachment)
 
   # Per-message content cap (graphemes) for space_get_messages /
   # space_search_messages. Anything longer is sliced and flagged via the
@@ -56,7 +57,7 @@ defmodule Platform.Federation.ToolSurface do
   defp tools_for_bundle("space"), do: tag(space_tools(), "space")
   defp tools_for_bundle("context_read"), do: tag(context_read_tools(), "context_read")
   defp tools_for_bundle("federation"), do: tag(federation_tools(), "federation")
-  defp tools_for_bundle("org_context"), do: tag(org_context_tools(), "org_context")
+  defp tools_for_bundle("memory"), do: tag(memory_tools(), "memory")
   defp tools_for_bundle("skill"), do: tag(skill_tools(), "skill")
   defp tools_for_bundle("attachment"), do: tag(attachment_tools(), "attachment")
   defp tools_for_bundle(_), do: []
@@ -232,158 +233,208 @@ defmodule Platform.Federation.ToolSurface do
     ]
   end
 
-  defp org_context_tools do
+  # ── Memory tools (ADR-0041 T5) ───────────────────────────────────────────
+  # Anthropic memory-tool-trained naming. Path determines routing through
+  # `Platform.Org.Wiki.Routing`; the per-tool descriptions document the
+  # path-policy table so agents can read the rules from the catalog.
+  defp memory_tools do
     [
       %{
-        name: "org_context_read",
+        name: "memory_view",
         description:
-          "Read an org context file by key. Returns the file content, current version, and metadata.",
+          "Read a memory page or a day's journal entries. Returns the full body for pages/private notes, or a virtual concatenation of all entries for a journal day. Path determines routing: `org/page/...` / `project/<uuid>/page/...` / `space/<uuid>/page/...` (curated wiki), `*/journal/<YYYY-MM-DD>.md` (append-only journal), `space/<uuid>/private/<agent_id>/...` (owner-only scratch).",
         parameters: %{
-          file_key: %{
+          path: %{
             type: "string",
             required: true,
-            description: "The key identifying the context file (e.g. 'ORG_IDENTITY.md')"
+            description:
+              "File-key path (e.g. `org/page/identity.md`, `org/journal/2026-05-20.md`, `space/<uuid>/private/<agent_id>/notes.md`)."
           },
-          workspace_id: %{
-            type: "string",
-            required: false,
-            description: "UUID of the workspace to scope to (default: org-level)"
-          }
-        },
-        returns: "The file object with file_key, content, version, updated_by, and timestamps",
-        limitations: "Returns nil if the file does not exist for the given key and workspace.",
-        when_to_use:
-          "When you need to read org-level context like identity, preferences, or guidelines"
-      },
-      %{
-        name: "org_context_write",
-        description:
-          "Write or update an org context file. Creates the file if it doesn't exist, or increments the version on update. Supports optimistic locking via expected_version.",
-        parameters: %{
-          file_key: %{
-            type: "string",
-            required: true,
-            description: "The key identifying the context file (e.g. 'ORG_IDENTITY.md')"
-          },
-          content: %{
-            type: "string",
-            required: true,
-            description: "The full content to write to the file"
-          },
-          updated_by: %{
-            type: "string",
-            required: false,
-            description: "UUID of the agent or user performing the update"
-          },
-          workspace_id: %{
-            type: "string",
-            required: false,
-            description: "UUID of the workspace to scope to (default: org-level)"
-          },
-          expected_version: %{
-            type: "integer",
+          view_range: %{
+            type: "array",
             required: false,
             description:
-              "Expected current version for optimistic locking. Write fails if the file has been modified since this version."
-          }
-        },
-        returns:
-          "The updated file object with file_key, content, version, updated_by, and timestamps",
-        limitations:
-          "If expected_version is supplied and doesn't match, returns a version conflict error.",
-        when_to_use:
-          "When you need to create or update org-level context files like identity, preferences, or guidelines"
-      },
-      %{
-        name: "org_context_list",
-        description: "List all available org context files with summary information.",
-        parameters: %{
+              "Two-element [start, end] (1-based, inclusive) line slice. Omit to return the full body."
+          },
           workspace_id: %{
             type: "string",
             required: false,
-            description: "UUID of the workspace to scope to (default: org-level)"
+            description: "UUID of the workspace (default: org-level)."
           }
         },
         returns:
-          "Array of file objects with file_key, content, version, updated_by, and timestamps",
-        limitations: "Returns an empty list if no context files exist.",
+          "%{path, content, kind, version?, lines_returned, ...} — page/private hits include `version`/`frontmatter`/`updated_by`; journal hits include `date`/`entry_ids`/`namespace`.",
+        limitations:
+          "Private paths are gated to the owning agent. Unknown namespaces return `:rejected_namespace`. Missing rows return `:not_found`.",
         when_to_use:
-          "When you need to discover what org context files are available before reading or writing"
+          "When you need to read curated org/project/space pages, today's or a past day's journal, or your own private scratch notes."
       },
       %{
-        name: "org_memory_append",
+        name: "memory_create",
         description:
-          "Append a short-lived memory entry — a note about today's activity. Entries are append-only, surface in agent context as `ORG_NOTES-YYYY-MM-DD` for the last 2 days. For curated long-term knowledge (decisions, patterns, lessons), update `ORG_MEMORY.md` via `org_context_write` instead.",
+          "Create a memory page or append a journal entry. Path determines routing: `org/page/...` / `project/<uuid>/page/...` / `space/<uuid>/page/...` (Historian-only writes), `*/journal/<YYYY-MM-DD>.md` (any agent appends), `space/<uuid>/private/<agent_id>/...` (owner only). Non-Historian writes to a page path return a `propose via journal` error with the suggested journal path.",
         parameters: %{
-          content: %{
+          path: %{
             type: "string",
             required: true,
-            description: "The content of the memory entry"
+            description: "File-key path. See description for the path-policy table."
           },
-          date: %{
+          file_text: %{
             type: "string",
-            required: false,
-            description: "ISO 8601 date (YYYY-MM-DD) for the entry (default: today)"
-          },
-          authored_by: %{
-            type: "string",
-            required: false,
-            description: "UUID of the agent or user authoring the entry"
+            required: true,
+            description:
+              "Content body. For journal entries this is the entry text appended for the path's date."
           },
           workspace_id: %{
             type: "string",
             required: false,
-            description: "UUID of the workspace to scope to (default: org-level)"
-          },
-          metadata: %{
-            type: "object",
-            required: false,
-            description: "Optional metadata map to attach to the entry"
+            description: "UUID of the workspace (default: org-level)."
           }
         },
-        returns: "The created memory entry with id, content, date, and timestamps",
-        limitations: "Memory entries are append-only and cannot be edited or deleted.",
+        returns:
+          "%{path, kind, ...} — page/private hits include `version`/`frontmatter`/`updated_at`; journal hits include `entry_id`/`date`/`namespace`.",
+        limitations:
+          "Page writes require Historian role (`\"daily_summary\" in agent.system_events`). Private writes require ownership. Unknown namespaces are rejected.",
         when_to_use:
-          "When you need to record short-lived observations or notes about today's activity. For long-term knowledge, use `org_context_write` on `ORG_MEMORY.md`."
+          "When you need to create a new page (Historian only), append a journal entry (any agent), or write to your own private scratch path."
       },
       %{
-        name: "org_memory_search",
+        name: "memory_str_replace",
         description:
-          "Search org memory entries. Uses semantic search when an external memory service is configured, otherwise falls back to case-insensitive substring matching.",
+          "Replace exactly one occurrence of `old_str` with `new_str` in a memory page. Page paths only — journal paths return `:journal_immutable` (the Wiki.Journal contract is append-only; propose a change via `memory_create` against the day's journal path instead).",
+        parameters: %{
+          path: %{type: "string", required: true, description: "Page or private path."},
+          old_str: %{
+            type: "string",
+            required: true,
+            description: "Substring to replace. Must appear exactly once in the page body."
+          },
+          new_str: %{
+            type: "string",
+            required: true,
+            description: "Replacement substring."
+          },
+          workspace_id: %{
+            type: "string",
+            required: false,
+            description: "UUID of the workspace (default: org-level)."
+          }
+        },
+        returns: "%{path, version, kind, updated_at, frontmatter}",
+        limitations:
+          "Zero matches → `:no_match`. Multiple matches → `:ambiguous_match` (provide more surrounding context). Journal paths → `:journal_immutable`. Optimistic-lock conflict → `:version_conflict`.",
+        when_to_use:
+          "When you (Historian) are editing a curated page and want a targeted substitution rather than a full body rewrite."
+      },
+      %{
+        name: "memory_insert",
+        description:
+          "Insert `insert_text` before line `insert_line` (1-based) of a memory page. `insert_line = 1` prepends; `insert_line = line_count + 1` appends. Page paths only — journal paths return `:journal_immutable`.",
+        parameters: %{
+          path: %{type: "string", required: true, description: "Page or private path."},
+          insert_line: %{
+            type: "integer",
+            required: true,
+            description: "1-based line number to insert BEFORE. Range: `1..length(lines)+1`."
+          },
+          insert_text: %{
+            type: "string",
+            required: true,
+            description: "Text block to insert. Newlines preserved."
+          },
+          workspace_id: %{
+            type: "string",
+            required: false,
+            description: "UUID of the workspace (default: org-level)."
+          }
+        },
+        returns: "%{path, version, kind, updated_at, frontmatter}",
+        limitations:
+          "Out-of-range line numbers → `:out_of_range`. Journal paths → `:journal_immutable`. Optimistic-lock conflict → `:version_conflict`.",
+        when_to_use:
+          "When you (Historian) want to splice a block into a curated page at a known line."
+      },
+      %{
+        name: "memory_delete",
+        description:
+          "Delete a memory page. Page paths only — journal paths return `:journal_immutable`. The T3 indexer picks up the delete event and removes the embedding automatically.",
+        parameters: %{
+          path: %{type: "string", required: true, description: "Page or private path."},
+          workspace_id: %{
+            type: "string",
+            required: false,
+            description: "UUID of the workspace (default: org-level)."
+          }
+        },
+        returns: "%{path, kind, deleted: true}",
+        limitations:
+          "Page writes require Historian role; private writes require ownership. Missing rows → `:not_found`. Journal paths → `:journal_immutable`.",
+        when_to_use:
+          "When you (Historian) need to retire a page, or you (owner) want to clear your private scratch path."
+      },
+      %{
+        name: "memory_rename",
+        description:
+          "Atomically rename a memory page from `old_path` to `new_path`. Same-kind only (page ↔ page, private ↔ private — no cross-kind moves). Page paths only — journal paths return `:journal_immutable`. Gated against BOTH paths: the calling agent must be allowed to write to both `old_path` and `new_path`.",
+        parameters: %{
+          old_path: %{type: "string", required: true, description: "Current path."},
+          new_path: %{type: "string", required: true, description: "Target path."},
+          workspace_id: %{
+            type: "string",
+            required: false,
+            description: "UUID of the workspace (default: org-level)."
+          }
+        },
+        returns: "%{path: new_path, version, kind, updated_at, frontmatter}",
+        limitations:
+          "Cross-kind moves (page ↔ private) → `:ambiguous_kind`. Either-side gate failure surfaces that gate's error. Missing source → `:not_found`.",
+        when_to_use:
+          "When you (Historian) want to move a curated page to a new path while preserving its content + embeddings."
+      },
+      %{
+        name: "memory_search",
+        description:
+          "Hybrid (semantic + lexical) search across memory pages, journal entries, and chat messages. Results are source-tagged and ranked via Reciprocal Rank Fusion (k=60) across corpora. Message hits are filtered to spaces the calling agent participates in.",
         parameters: %{
           query: %{
             type: "string",
+            required: true,
+            description: "Natural-language search query."
+          },
+          source: %{
+            type: "string",
             required: false,
             description:
-              "Search query — used for semantic similarity when the memory service is configured, or case-insensitive substring match as fallback"
+              "Restrict to one corpus: `\"page\"`, `\"journal\"`, or `\"message\"`. Omit for all three."
           },
-          date_from: %{
+          namespace: %{
             type: "string",
             required: false,
-            description: "ISO 8601 date (YYYY-MM-DD) — include entries on or after this date"
+            description:
+              "Restrict to a namespace prefix: `\"org\"`, `\"project/<uuid>\"`, or `\"space/<uuid>\"`."
           },
-          date_to: %{
+          since: %{
             type: "string",
             required: false,
-            description: "ISO 8601 date (YYYY-MM-DD) — include entries on or before this date"
-          },
-          workspace_id: %{
-            type: "string",
-            required: false,
-            description: "UUID of the workspace to scope to (default: org-level)"
+            description: "ISO date (YYYY-MM-DD). Only return hits at or after this date."
           },
           limit: %{
             type: "integer",
             required: false,
-            description: "Maximum number of results to return (default: 50)"
+            description: "Max results (default 20, max 100)."
+          },
+          workspace_id: %{
+            type: "string",
+            required: false,
+            description: "UUID of the workspace (default: org-level)."
           }
         },
         returns:
-          "Array of memory entry objects with id, content, date, timestamps, and score (when semantic search is active)",
+          "%{results: [%{source, id, path, space_id, content, score, semantic_rank, lexical_rank, authored_by, date_or_inserted_at}], fusion_constant_k: 60, truncated: boolean}",
         limitations:
-          "Falls back to substring matching when no external memory service is configured. Default limit is 50.",
+          "Message hits are filtered to spaces the calling agent participates in (anonymous callers get no message hits). Deleted or orphaned rows are silently dropped. `truncated: true` indicates a channel hit its `2*limit` cap and a higher `limit` may surface more hits.",
         when_to_use:
-          "When you need to recall past observations or notes from org memory entries. For long-term curated knowledge, read `ORG_MEMORY.md` via `org_context_read` instead."
+          "When you need to recall information beyond the org preamble — past decisions, journal entries, relevant chat threads, or any cross-corpus lookup."
       }
     ]
   end
@@ -4025,193 +4076,111 @@ defmodule Platform.Federation.ToolSurface do
     {:ok, %{runtimes: runtimes}}
   end
 
-  # ── Org Context tools ────────────────────────────────────────────────
+  # ── Memory tool dispatch (ADR-0041 T5) ──────────────────────────────────
+  # Thin adapter: every clause gates through `Wiki.Routing` then routes to
+  # `Wiki` (pages/private) or `Wiki.Journal` (journal). No direct `Repo`
+  # calls here — the routing+domain modules own DB access.
 
-  def execute("org_context_read", args, _context) do
-    file_key = Map.get(args, "file_key")
-
-    if is_nil(file_key) or file_key == "" do
-      {:error,
-       %{
-         error: "file_key is required",
-         recoverable: true,
-         suggestion: "Provide a file_key such as 'ORG_IDENTITY.md'"
-       }}
-    else
+  def execute("memory_view", args, context) do
+    with {:ok, path} <- require_string(args, "path", "memory_view"),
+         agent = load_agent(context),
+         :ok <- gate_to_envelope(Routing.gate_read(agent, path)) do
+      class = Routing.classify(path)
       workspace_id = Map.get(args, "workspace_id")
+      view_range = Map.get(args, "view_range")
 
-      case OrgContext.get_context_file(file_key, workspace_id) do
-        nil ->
-          {:error,
-           %{
-             error: "Context file not found: #{file_key}",
-             recoverable: true,
-             suggestion: "Use org_context_list to see available files"
-           }}
-
-        file ->
-          {:ok, serialize_context_file(file)}
+      case class.kind do
+        :page -> view_page(path, view_range, workspace_id, class)
+        :private -> view_page(path, view_range, workspace_id, class)
+        :journal -> view_journal(path, class, view_range, workspace_id)
       end
     end
   end
 
-  def execute("org_context_write", args, _context) do
-    file_key = Map.get(args, "file_key")
-    content = Map.get(args, "content")
-
-    cond do
-      is_nil(file_key) or file_key == "" ->
-        {:error,
-         %{
-           error: "file_key is required",
-           recoverable: true,
-           suggestion: "Provide a file_key such as 'ORG_IDENTITY.md'"
-         }}
-
-      is_nil(content) ->
-        {:error,
-         %{
-           error: "content is required",
-           recoverable: true,
-           suggestion: "Provide content for the context file"
-         }}
-
-      true ->
-        workspace_id = Map.get(args, "workspace_id")
-        updated_by = Map.get(args, "updated_by")
-        expected_version = Map.get(args, "expected_version")
-
-        attrs = %{content: content, updated_by: updated_by}
-
-        opts =
-          [workspace_id: workspace_id]
-          |> maybe_put_opt(:expected_version, expected_version)
-
-        case OrgContext.upsert_context_file(file_key, attrs, opts) do
-          {:ok, file} ->
-            {:ok, serialize_context_file(file)}
-
-          {:error, :stale} ->
-            {:error,
-             %{
-               error: "Version conflict: the file was modified since you last read it",
-               recoverable: true,
-               suggestion:
-                 "Re-read the file with org_context_read to get the latest version, then retry"
-             }}
-
-          {:error, changeset} ->
-            {:error,
-             %{
-               error: "Failed to write context file: #{inspect_errors_safe(changeset)}",
-               recoverable: false,
-               suggestion: "Check the provided attributes and try again"
-             }}
-        end
-    end
-  end
-
-  def execute("org_context_list", args, _context) do
-    workspace_id = Map.get(args, "workspace_id")
-
-    files =
-      OrgContext.list_context_files(workspace_id: workspace_id)
-      |> Enum.map(&serialize_context_file/1)
-
-    {:ok, files}
-  end
-
-  def execute("org_memory_append", args, context) do
-    content = Map.get(args, "content")
-
-    if is_nil(content) or content == "" do
-      {:error,
-       %{
-         error: "content is required",
-         recoverable: true,
-         suggestion: "Provide content for the memory entry"
-       }}
-    else
-      authored_by = Map.get(args, "authored_by") || Map.get(context, :agent_id)
+  def execute("memory_create", args, context) do
+    with {:ok, path} <- require_string(args, "path", "memory_create"),
+         {:ok, text} <- require_string(args, "file_text", "memory_create"),
+         agent = load_agent(context) do
+      class = Routing.classify(path)
       workspace_id = Map.get(args, "workspace_id")
-      metadata = Map.get(args, "metadata", %{})
 
-      date =
-        case Map.get(args, "date") do
-          nil -> Date.utc_today()
-          date_str -> parse_date(date_str)
-        end
+      existing =
+        if class.kind in [:page, :private],
+          do: Wiki.get_page(path, workspace_id: workspace_id),
+          else: nil
 
-      case date do
-        {:error, reason} ->
-          {:error,
-           %{
-             error: "Invalid date format: #{reason}",
-             recoverable: true,
-             suggestion: "Use ISO 8601 date format: YYYY-MM-DD"
-           }}
+      gate_opts = if existing, do: [existing_page: existing], else: []
 
-        date ->
-          attrs = %{
-            content: content,
-            date: date,
-            authored_by: authored_by,
-            metadata: metadata
-          }
+      case gate_to_envelope(Routing.gate_write(agent, path, gate_opts)) do
+        :ok ->
+          do_memory_create(class, path, text, agent, workspace_id)
 
-          case OrgContext.append_memory_entry(attrs, workspace_id: workspace_id) do
-            {:ok, entry} ->
-              {:ok, serialize_memory_entry(entry)}
-
-            {:error, changeset} ->
-              {:error,
-               %{
-                 error: "Failed to append memory entry: #{inspect_errors_safe(changeset)}",
-                 recoverable: false,
-                 suggestion: "Check the provided attributes and try again"
-               }}
-          end
+        {:error, _} = err ->
+          err
       end
     end
   end
 
-  def execute("org_memory_search", args, _context) do
-    workspace_id = Map.get(args, "workspace_id")
-    query = Map.get(args, "query")
-    limit = Map.get(args, "limit", 50)
+  def execute("memory_str_replace", args, context) do
+    with {:ok, path} <- require_string(args, "path", "memory_str_replace"),
+         {:ok, old_str} <- require_string(args, "old_str", "memory_str_replace"),
+         {:ok, new_str} <- require_string(args, "new_str", "memory_str_replace"),
+         agent = load_agent(context),
+         :ok <- ensure_page_kind(path, "memory_str_replace"),
+         existing = Wiki.get_page(path, workspace_id: Map.get(args, "workspace_id")),
+         :ok <- gate_to_envelope(Routing.gate_write(agent, path, existing_page: existing)) do
+      apply_str_replace(existing, path, old_str, new_str, agent, Map.get(args, "workspace_id"))
+    end
+  end
 
-    date_from = parse_optional_date(Map.get(args, "date_from"))
-    date_to = parse_optional_date(Map.get(args, "date_to"))
+  def execute("memory_insert", args, context) do
+    with {:ok, path} <- require_string(args, "path", "memory_insert"),
+         {:ok, insert_text} <- require_string(args, "insert_text", "memory_insert"),
+         {:ok, insert_line} <- require_integer(args, "insert_line", "memory_insert"),
+         agent = load_agent(context),
+         :ok <- ensure_page_kind(path, "memory_insert"),
+         existing = Wiki.get_page(path, workspace_id: Map.get(args, "workspace_id")),
+         :ok <- gate_to_envelope(Routing.gate_write(agent, path, existing_page: existing)) do
+      apply_insert(existing, path, insert_line, insert_text, agent, Map.get(args, "workspace_id"))
+    end
+  end
 
-    case {date_from, date_to} do
-      {{:error, reason}, _} ->
-        {:error,
-         %{
-           error: "Invalid date_from format: #{reason}",
-           recoverable: true,
-           suggestion: "Use ISO 8601 date format: YYYY-MM-DD"
-         }}
+  def execute("memory_delete", args, context) do
+    with {:ok, path} <- require_string(args, "path", "memory_delete"),
+         agent = load_agent(context),
+         :ok <- ensure_page_kind(path, "memory_delete"),
+         existing = Wiki.get_page(path, workspace_id: Map.get(args, "workspace_id")),
+         :ok <- gate_to_envelope(Routing.gate_write(agent, path, existing_page: existing)) do
+      do_memory_delete(path, Map.get(args, "workspace_id"))
+    end
+  end
 
-      {_, {:error, reason}} ->
-        {:error,
-         %{
-           error: "Invalid date_to format: #{reason}",
-           recoverable: true,
-           suggestion: "Use ISO 8601 date format: YYYY-MM-DD"
-         }}
+  def execute("memory_rename", args, context) do
+    with {:ok, old_path} <- require_string(args, "old_path", "memory_rename"),
+         {:ok, new_path} <- require_string(args, "new_path", "memory_rename"),
+         agent = load_agent(context),
+         workspace_id = Map.get(args, "workspace_id"),
+         :ok <- ensure_page_kind(old_path, "memory_rename"),
+         :ok <- ensure_page_kind(new_path, "memory_rename"),
+         :ok <- ensure_same_kind(old_path, new_path),
+         existing_old = Wiki.get_page(old_path, workspace_id: workspace_id),
+         existing_new = Wiki.get_page(new_path, workspace_id: workspace_id),
+         :ok <-
+           gate_to_envelope(Routing.gate_write(agent, old_path, existing_page: existing_old)),
+         :ok <-
+           gate_to_envelope(Routing.gate_write(agent, new_path, existing_page: existing_new)) do
+      do_memory_rename(old_path, new_path, agent, workspace_id)
+    end
+  end
 
-      {date_from, date_to} ->
-        opts =
-          [
-            workspace_id: workspace_id,
-            query: query,
-            date_from: date_from,
-            date_to: date_to,
-            limit: limit
-          ]
-          |> Enum.reject(fn {_k, v} -> is_nil(v) end)
+  def execute("memory_search", args, context) do
+    with {:ok, query} <- require_string(args, "query", "memory_search") do
+      agent = load_agent(context)
 
-        {:ok, search_with_memory_service(query, opts)}
+      case search_opts_from(args, agent) do
+        {:ok, opts} -> Search.search(query, opts)
+        {:error, _} = err -> err
+      end
     end
   end
 
@@ -4229,48 +4198,487 @@ defmodule Platform.Federation.ToolSurface do
      }}
   end
 
-  # ── Memory search helpers ────────────────────────────────────────────────
+  # ── Memory tool helpers (ADR-0041 T5) ───────────────────────────────────
 
-  defp search_with_memory_service(query, opts) do
-    if Platform.Memory.enabled?() and is_binary(query) and query != "" do
-      case Platform.Memory.search(query, opts) do
-        {:ok, [_ | _] = scored_results} ->
-          hydrate_scored_results(scored_results)
+  defp load_agent(context) when is_map(context) do
+    case Map.get(context, :agent) do
+      %Agent{} = a ->
+        a
 
-        {:ok, []} ->
-          db_fallback_search(opts)
-
-        {:error, reason} ->
-          Logger.warning("Memory provider search failed, falling back to DB: #{inspect(reason)}")
-          db_fallback_search(opts)
-      end
-    else
-      db_fallback_search(opts)
+      _ ->
+        case Map.get(context, :agent_id) do
+          id when is_binary(id) -> Repo.get(Agent, id)
+          _ -> nil
+        end
     end
   end
 
-  defp db_fallback_search(opts) do
-    OrgContext.search_memory_entries(opts)
-    |> Enum.map(&serialize_memory_entry/1)
+  defp load_agent(_), do: nil
+
+  defp require_string(args, key, tool) do
+    case Map.get(args, key) do
+      value when is_binary(value) and value != "" ->
+        {:ok, value}
+
+      _ ->
+        {:error,
+         %{
+           error: "#{tool}: `#{key}` is required",
+           recoverable: true,
+           suggestion: "Provide a non-empty `#{key}` argument."
+         }}
+    end
   end
 
-  defp hydrate_scored_results(scored_results) do
-    entry_ids = Enum.map(scored_results, & &1.entry_id)
-    score_map = Map.new(scored_results, &{&1.entry_id, &1.score})
+  defp require_integer(args, key, tool) do
+    case Map.get(args, key) do
+      value when is_integer(value) ->
+        {:ok, value}
 
-    entries_by_id =
-      OrgContext.get_memory_entries_by_ids(entry_ids)
-      |> Map.new(&{&1.id, &1})
+      value when is_binary(value) ->
+        case Integer.parse(value) do
+          {n, ""} -> {:ok, n}
+          _ -> integer_required_error(tool, key)
+        end
 
-    # Preserve provider ranking order, skip entries not found in DB
-    scored_results
-    |> Enum.flat_map(fn %{entry_id: id} ->
-      case Map.get(entries_by_id, id) do
-        nil -> []
-        entry -> [Map.put(serialize_memory_entry(entry), :score, score_map[id])]
-      end
-    end)
+      _ ->
+        integer_required_error(tool, key)
+    end
   end
+
+  defp integer_required_error(tool, key) do
+    {:error,
+     %{
+       error: "#{tool}: `#{key}` must be an integer",
+       recoverable: true,
+       suggestion: "Provide an integer value for `#{key}`."
+     }}
+  end
+
+  defp gate_to_envelope(:ok), do: :ok
+
+  defp gate_to_envelope({:error, %{code: code, message: msg, suggestion: sug, recoverable: rec}}) do
+    {:error,
+     %{
+       error: msg,
+       code: code,
+       recoverable: rec,
+       suggestion: sug
+     }}
+  end
+
+  defp ensure_page_kind(path, tool) do
+    case Routing.classify(path) do
+      %{kind: :page} ->
+        :ok
+
+      %{kind: :private} ->
+        :ok
+
+      %{kind: :journal, namespace: ns, journal_date: date} ->
+        suggestion =
+          "memory_create at #{ns}/journal/#{Date.to_iso8601(date || Date.utc_today())}.md"
+
+        {:error,
+         %{
+           error:
+             "#{tool}: journal entries are append-only. Use memory_create against the day's journal path.",
+           code: :journal_immutable,
+           recoverable: true,
+           suggestion: suggestion
+         }}
+
+      %{kind: :unknown} ->
+        gate_to_envelope(Routing.gate_read(nil, path))
+    end
+  end
+
+  defp ensure_same_kind(old_path, new_path) do
+    %{kind: old_kind, namespace: old_ns} = Routing.classify(old_path)
+    %{kind: new_kind, namespace: new_ns} = Routing.classify(new_path)
+
+    cond do
+      old_kind != new_kind ->
+        {:error,
+         %{
+           error:
+             "memory_rename: source and target must share the same kind (#{old_kind} != #{new_kind}). Use memory_create + memory_delete to move across kinds.",
+           code: :ambiguous_kind,
+           recoverable: false,
+           suggestion: "Pick a target path whose kind matches the source path."
+         }}
+
+      old_kind == :private and old_ns != new_ns ->
+        {:error,
+         %{
+           error:
+             "memory_rename: private paths cannot move between spaces. Source namespace=#{inspect(old_ns)} target namespace=#{inspect(new_ns)}.",
+           code: :ambiguous_kind,
+           recoverable: false,
+           suggestion: "Keep the namespace prefix identical when renaming a private path."
+         }}
+
+      true ->
+        :ok
+    end
+  end
+
+  # Build `Platform.Org.Wiki.Search.search_opts()` from the federation
+  # args + caller context. Validates the `since` arg via `parse_date/1`
+  # (reused from the V1 surface) and surfaces a clean envelope error
+  # for malformed dates rather than swallowing them.
+  defp search_opts_from(args, agent) do
+    case parse_optional_date(Map.get(args, "since")) do
+      {:error, reason} ->
+        {:error,
+         %{
+           error: "memory_search: invalid `since` (#{reason})",
+           code: :invalid_since,
+           recoverable: true,
+           suggestion: "Use ISO 8601 date format: YYYY-MM-DD"
+         }}
+
+      since ->
+        opts =
+          [
+            source: Map.get(args, "source"),
+            namespace: Map.get(args, "namespace"),
+            since: since,
+            limit: Map.get(args, "limit"),
+            workspace_id: Map.get(args, "workspace_id"),
+            agent: agent
+          ]
+          |> Enum.reject(fn {_k, v} -> is_nil(v) end)
+
+        {:ok, opts}
+    end
+  end
+
+  defp view_page(path, view_range, workspace_id, class) do
+    case Wiki.get_page(path, workspace_id: workspace_id) do
+      nil ->
+        not_found_error(path)
+
+      page ->
+        {sliced, lines_label} = slice_lines(page.content, view_range)
+
+        {:ok,
+         %{
+           path: path,
+           kind: Atom.to_string(class.kind),
+           content: sliced,
+           version: page.version,
+           frontmatter: page.frontmatter,
+           updated_by: page.updated_by,
+           updated_at: format_datetime(page.updated_at),
+           lines_returned: lines_label
+         }}
+    end
+  end
+
+  defp view_journal(path, class, view_range, workspace_id) do
+    namespace = class.namespace
+    date = class.journal_date
+
+    virtual =
+      Journal.virtual_page_for(date, workspace_id: workspace_id, namespace: namespace)
+
+    {sliced, lines_label} = slice_lines(virtual.content, view_range)
+
+    {:ok,
+     %{
+       path: path,
+       kind: "journal",
+       content: sliced,
+       date: Date.to_iso8601(date),
+       namespace: namespace,
+       entry_ids: virtual.entry_ids,
+       lines_returned: lines_label
+     }}
+  end
+
+  defp do_memory_create(%{kind: :journal} = class, path, text, agent, workspace_id) do
+    attrs =
+      %{
+        content: text,
+        date: class.journal_date,
+        workspace_id: workspace_id
+      }
+      |> maybe_put(:authored_by, agent && agent.id)
+
+    case Journal.append(attrs, namespace: class.namespace) do
+      {:ok, entry} ->
+        {:ok,
+         %{
+           path: path,
+           kind: "journal",
+           entry_id: entry.id,
+           date: Date.to_iso8601(entry.date),
+           namespace: class.namespace,
+           inserted_at: format_datetime(entry.inserted_at)
+         }}
+
+      {:error, %Ecto.Changeset{} = changeset} ->
+        changeset_error("memory_create", changeset)
+    end
+  end
+
+  defp do_memory_create(%{kind: kind} = _class, path, text, agent, workspace_id)
+       when kind in [:page, :private] do
+    attrs =
+      %{content: text}
+      |> maybe_put(:updated_by, agent && agent.id)
+
+    case Wiki.upsert_page(path, attrs, workspace_id: workspace_id) do
+      {:ok, page} ->
+        {:ok,
+         %{
+           path: page.file_key,
+           kind: Atom.to_string(kind),
+           version: page.version,
+           frontmatter: page.frontmatter,
+           updated_by: page.updated_by,
+           updated_at: format_datetime(page.updated_at)
+         }}
+
+      {:error, :stale} ->
+        version_conflict_error(path)
+
+      {:error, %Ecto.Changeset{} = changeset} ->
+        changeset_error("memory_create", changeset)
+    end
+  end
+
+  defp apply_str_replace(nil, path, _old, _new, _agent, _ws), do: not_found_error(path)
+
+  defp apply_str_replace(page, path, old_str, new_str, agent, workspace_id) do
+    occurrences = count_occurrences(page.content, old_str)
+
+    cond do
+      occurrences == 0 ->
+        {:error,
+         %{
+           error: "memory_str_replace: `old_str` not found in page body.",
+           code: :no_match,
+           recoverable: true,
+           suggestion:
+             "Read the page with memory_view, copy the exact substring (including whitespace), and retry."
+         }}
+
+      occurrences > 1 ->
+        {:error,
+         %{
+           error:
+             "memory_str_replace: `old_str` appears #{occurrences} times — provide more surrounding context so the match is unique.",
+           code: :ambiguous_match,
+           recoverable: true,
+           suggestion:
+             "Expand `old_str` to include unique surrounding text (a few lines before/after) so it matches exactly once."
+         }}
+
+      true ->
+        new_content = String.replace(page.content, old_str, new_str, global: false)
+
+        upsert_with_lock(path, new_content, page.version, agent, workspace_id, :page)
+    end
+  end
+
+  defp apply_insert(nil, path, _line, _text, _agent, _ws), do: not_found_error(path)
+
+  defp apply_insert(page, path, insert_line, insert_text, agent, workspace_id) do
+    lines = String.split(page.content, "\n", trim: false)
+    line_count = length(lines)
+    upper = line_count + 1
+
+    if insert_line < 1 or insert_line > upper do
+      {:error,
+       %{
+         error:
+           "memory_insert: `insert_line` #{insert_line} is out of range. Valid range: 1..#{upper}.",
+         code: :out_of_range,
+         recoverable: true,
+         suggestion:
+           "Pass an `insert_line` between 1 (prepend) and #{upper} (append after the last line)."
+       }}
+    else
+      {head, tail} = Enum.split(lines, insert_line - 1)
+      new_lines = head ++ [insert_text] ++ tail
+      new_content = Enum.join(new_lines, "\n")
+
+      upsert_with_lock(path, new_content, page.version, agent, workspace_id, :page)
+    end
+  end
+
+  defp upsert_with_lock(path, content, expected_version, agent, workspace_id, kind) do
+    attrs =
+      %{content: content}
+      |> maybe_put(:updated_by, agent && agent.id)
+
+    opts =
+      [workspace_id: workspace_id, expected_version: expected_version]
+      |> Enum.reject(fn {_, v} -> is_nil(v) end)
+
+    case Wiki.upsert_page(path, attrs, opts) do
+      {:ok, page} ->
+        {:ok,
+         %{
+           path: page.file_key,
+           kind: Atom.to_string(kind),
+           version: page.version,
+           frontmatter: page.frontmatter,
+           updated_by: page.updated_by,
+           updated_at: format_datetime(page.updated_at)
+         }}
+
+      {:error, :stale} ->
+        version_conflict_error(path)
+
+      {:error, %Ecto.Changeset{} = changeset} ->
+        changeset_error("memory_update", changeset)
+    end
+  end
+
+  defp do_memory_delete(path, workspace_id) do
+    case Wiki.delete_page(path, workspace_id: workspace_id) do
+      {:ok, page} ->
+        {:ok,
+         %{
+           path: page.file_key,
+           kind: classify_kind_string(path),
+           deleted: true
+         }}
+
+      {:error, :not_found} ->
+        not_found_error(path)
+
+      {:error, %Ecto.Changeset{} = changeset} ->
+        changeset_error("memory_delete", changeset)
+    end
+  end
+
+  defp do_memory_rename(old_path, new_path, agent, workspace_id) do
+    opts =
+      [workspace_id: workspace_id]
+      |> maybe_put(:updated_by, agent && agent.id)
+
+    case Wiki.rename_page(old_path, new_path, opts) do
+      {:ok, page} ->
+        {:ok,
+         %{
+           path: page.file_key,
+           kind: classify_kind_string(new_path),
+           version: page.version,
+           frontmatter: page.frontmatter,
+           updated_by: page.updated_by,
+           updated_at: format_datetime(page.updated_at)
+         }}
+
+      {:error, :not_found} ->
+        not_found_error(old_path)
+
+      {:error, :stale} ->
+        version_conflict_error(new_path)
+
+      {:error, :same_path} ->
+        {:error,
+         %{
+           error: "memory_rename: `old_path` and `new_path` are identical — nothing to rename.",
+           code: :same_path,
+           recoverable: true,
+           suggestion: "Pass a distinct `new_path`."
+         }}
+
+      {:error, %Ecto.Changeset{} = changeset} ->
+        changeset_error("memory_rename", changeset)
+
+      {:error, reason} ->
+        {:error,
+         %{
+           error: "memory_rename failed: #{inspect(reason)}",
+           code: :rename_failed,
+           recoverable: false,
+           suggestion: "Check both paths and the workspace_id, then retry."
+         }}
+    end
+  end
+
+  defp count_occurrences(string, substring) do
+    case String.split(string, substring) do
+      [_only] -> 0
+      parts -> length(parts) - 1
+    end
+  end
+
+  defp slice_lines(content, nil), do: {content, "all"}
+
+  defp slice_lines(content, [start, stop])
+       when is_integer(start) and is_integer(stop) and start >= 1 and stop >= start do
+    lines = String.split(content, "\n", trim: false)
+    actual_stop = min(stop, length(lines))
+
+    if start > length(lines) do
+      {"", "L#{start}-L#{stop} (empty: page has #{length(lines)} lines)"}
+    else
+      sliced =
+        lines
+        |> Enum.slice((start - 1)..(actual_stop - 1)//1)
+        |> Enum.join("\n")
+
+      {sliced, "L#{start}-L#{actual_stop}"}
+    end
+  end
+
+  defp slice_lines(content, _bad_range), do: {content, "all"}
+
+  defp not_found_error(path) do
+    {:error,
+     %{
+       error: "Page not found at path #{inspect(path)}.",
+       code: :not_found,
+       recoverable: true,
+       suggestion:
+         "Verify the path. For pages use `memory_view` to list candidates; for journal days check that the date has entries."
+     }}
+  end
+
+  defp version_conflict_error(path) do
+    {:error,
+     %{
+       error:
+         "Version conflict on #{inspect(path)} — the page was modified since your last read.",
+       code: :version_conflict,
+       recoverable: true,
+       suggestion:
+         "Re-read the page with memory_view, re-apply your change against the latest content, and retry."
+     }}
+  end
+
+  defp changeset_error(tool, %Ecto.Changeset{} = changeset) do
+    # Render Ecto errors as a string so the envelope is JSON-safe and no
+    # raw Changeset struct leaks across the federation boundary.
+    flat = inspect_errors_safe(changeset)
+
+    {:error,
+     %{
+       error: "#{tool} failed: #{flat}",
+       code: :changeset_invalid,
+       recoverable: false,
+       suggestion: "Check the provided arguments and retry."
+     }}
+  end
+
+  defp classify_kind_string(path) do
+    case Routing.classify(path) do
+      %{kind: kind} when kind in [:page, :private, :journal] -> Atom.to_string(kind)
+      _ -> "unknown"
+    end
+  end
+
+  defp maybe_put(map_or_kw, _key, nil), do: map_or_kw
+
+  defp maybe_put(%{} = map, key, value) when not is_struct(map), do: Map.put(map, key, value)
+
+  defp maybe_put(opts, key, value) when is_list(opts), do: Keyword.put(opts, key, value)
 
   # ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -4537,32 +4945,6 @@ defmodule Platform.Federation.ToolSurface do
     |> inspect()
   end
 
-  # ── Org Context helpers ─────────────────────────────────────────────────
-
-  defp serialize_context_file(file) do
-    %{
-      file_key: file.file_key,
-      content: file.content,
-      version: file.version,
-      updated_by: file.updated_by,
-      workspace_id: file.workspace_id,
-      inserted_at: format_datetime(file.inserted_at),
-      updated_at: format_datetime(file.updated_at)
-    }
-  end
-
-  defp serialize_memory_entry(entry) do
-    %{
-      id: entry.id,
-      content: entry.content,
-      date: Date.to_iso8601(entry.date),
-      authored_by: entry.authored_by,
-      workspace_id: entry.workspace_id,
-      metadata: entry.metadata,
-      inserted_at: format_datetime(entry.inserted_at)
-    }
-  end
-
   defp parse_date(date_str) when is_binary(date_str) do
     case Date.from_iso8601(date_str) do
       {:ok, date} -> date
@@ -4580,7 +4962,4 @@ defmodule Platform.Federation.ToolSurface do
       date -> date
     end
   end
-
-  defp maybe_put_opt(opts, _key, nil), do: opts
-  defp maybe_put_opt(opts, key, value), do: Keyword.put(opts, key, value)
 end

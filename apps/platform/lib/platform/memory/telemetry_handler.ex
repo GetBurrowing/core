@@ -28,7 +28,7 @@ defmodule Platform.Memory.TelemetryHandler do
   @doc false
   def handle_event([:platform, :org, :memory_entry_written], _measurements, metadata, _config) do
     if Platform.Memory.enabled?() do
-      entry = Platform.Repo.get(Platform.Org.MemoryEntry, metadata.memory_entry_id)
+      entry = Platform.Repo.get(Platform.Org.WikiJournalEntry, metadata.memory_entry_id)
 
       if entry do
         case Platform.Memory.ingest([entry]) do

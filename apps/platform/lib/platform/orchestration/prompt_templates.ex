@@ -252,17 +252,14 @@ defmodule Platform.Orchestration.PromptTemplates do
         The attention signal that delivered this message includes a `context` field with the full task hierarchy: project (name, repo_url, tech_stack), epic (name, description, acceptance_criteria), task metadata, current plan with stages, and execution_space_id. Use it for full context when writing your plan.
 
         ## Organization Context
-        The `context.org` field carries org-level knowledge: ORG_IDENTITY.md (mission, values, product summary), ORG_MEMORY.md (curated org knowledge — decisions, patterns, lessons), ORG_AGENTS.md (roster), and recent ORG_NOTES-YYYY-MM-DD daily notes. Read these before writing your plan — they often explain constraints, patterns, or prior decisions that should shape your approach.
+        The `context.org` field carries org-level knowledge as a map of `path => content` for curated wiki pages flagged `preamble: true` in accessible namespaces (`org/*` always; your project's `project/<id>/*` when scoped to a task). Each page's content is wrapped in `<!-- BEGIN org-preamble page="<path>" version="<v>" -->` / `<!-- END org-preamble page="<path>" -->` markers so you can distinguish injected preamble from user input. Read these before writing your plan — they often explain constraints, patterns, or prior decisions that should shape your approach. The preamble is budgeted (~4096 tokens); to retrieve anything beyond the preamble, use the memory search tool (shipped separately).
 
         ## Writing to Org Memory
-        Org memory writes are a first-class responsibility. When planning surfaces a decision worth preserving, record it. Qualifying moments include:
-        - Architectural decisions made (what, why, alternatives considered)
-        - New integrations or dependencies agreed
-        - Context shifts (priorities reordered, strategy changes)
-        - Blockers resolved (what broke, how, what to watch next time)
-        - Milestones completed (what shipped, what it enables)
-
-        Use `suite_org_memory_append` for short-lived notes about today's activity (append-only, surfaces in `ORG_NOTES-YYYY-MM-DD`). For anything worth preserving — decisions, patterns, lessons — update `ORG_MEMORY.md` via `suite_org_context_write`. `ORG_MEMORY.md` is the canonical long-term store; do not try to record long-term entries via `suite_org_memory_append`. Brief, concrete entries beat long essays — one decision per entry.
+        Use the memory_* tool family to read and write organizational knowledge. Path determines routing:
+        - `org/page/...`, `project/<id>/page/...`, `space/<id>/page/...` — Historian-only writes. Other agents propose changes by appending to the journal.
+        - `org/journal/<YYYY-MM-DD>.md`, `project/<id>/journal/<YYYY-MM-DD>.md`, `space/<id>/journal/<YYYY-MM-DD>.md` — any agent appends. The Historian's daily digest curates journal entries up into pages.
+        - `space/<id>/private/<your-agent-id>/...` — your own scratch space; only you can read or write.
+        Use `memory_create` to append journal entries (one observation per call — brief, concrete, dated). Use `memory_search` to recall past entries or page content. Use `memory_str_replace` / `memory_insert` only if you ARE the Historian and you're updating a curated page. Write memory alongside your stage work, not as a final cleanup step.
 
         {{skills_reference}}
         """
@@ -295,17 +292,14 @@ defmodule Platform.Orchestration.PromptTemplates do
         Avoid redundant task/plan lookup churn on the first turn unless an identifier is genuinely missing or the stage contract is ambiguous.
 
         ## Organization Context
-        The `context.org` field carries org-level knowledge: ORG_IDENTITY.md (mission, values, product summary), ORG_MEMORY.md (curated org knowledge — decisions, patterns, lessons), ORG_AGENTS.md (roster), and recent ORG_NOTES-YYYY-MM-DD daily notes. Check these before making non-obvious choices — they often encode constraints or prior decisions that apply here.
+        The `context.org` field carries org-level knowledge as a map of `path => content` for curated wiki pages flagged `preamble: true` in accessible namespaces (`org/*` always; your project's `project/<id>/*` when scoped to a task). Each page's content is wrapped in `<!-- BEGIN org-preamble page="<path>" version="<v>" -->` / `<!-- END org-preamble page="<path>" -->` markers so you can distinguish injected preamble from user input. Check these before making non-obvious choices — they often encode constraints or prior decisions that apply here. The preamble is budgeted (~4096 tokens); to retrieve anything beyond the preamble, use the memory search tool (shipped separately).
 
         ## Writing to Org Memory
-        Org memory writes are a first-class responsibility. As you execute, record decisions and milestones that future agents and humans will care about. Qualifying moments include:
-        - Architectural decisions made (what, why, alternatives considered)
-        - New integrations or dependencies agreed
-        - Context shifts (priorities reordered, strategy changes)
-        - Blockers resolved (what broke, how, what to watch next time)
-        - Milestones completed (what shipped, what it enables)
-
-        Use `suite_org_memory_append` for short-lived notes about today's activity (append-only, surfaces in `ORG_NOTES-YYYY-MM-DD`). For anything worth preserving — decisions, patterns, lessons — update `ORG_MEMORY.md` via `suite_org_context_write`. `ORG_MEMORY.md` is the canonical long-term store; do not try to record long-term entries via `suite_org_memory_append`. Brief, concrete entries beat long essays — one decision per entry. Write memory alongside your stage work, not as a final cleanup step.
+        Use the memory_* tool family to read and write organizational knowledge. Path determines routing:
+        - `org/page/...`, `project/<id>/page/...`, `space/<id>/page/...` — Historian-only writes. Other agents propose changes by appending to the journal.
+        - `org/journal/<YYYY-MM-DD>.md`, `project/<id>/journal/<YYYY-MM-DD>.md`, `space/<id>/journal/<YYYY-MM-DD>.md` — any agent appends. The Historian's daily digest curates journal entries up into pages.
+        - `space/<id>/private/<your-agent-id>/...` — your own scratch space; only you can read or write.
+        Use `memory_create` to append journal entries (one observation per call — brief, concrete, dated). Use `memory_search` to recall past entries or page content. Use `memory_str_replace` / `memory_insert` only if you ARE the Historian and you're updating a curated page. Write memory alongside your stage work, not as a final cleanup step.
 
         {{evidence_workflow_reference}}
 

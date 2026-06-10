@@ -4,7 +4,7 @@ defmodule Platform.Agents.SystemEventScheduler do
 
   Two events in v1:
   - `daily_summary` (23:00 UTC) — agent summarizes the day's activity
-  - `dreaming` (03:00 UTC) — agent consolidates short-term memory entries into ORG_MEMORY.md
+  - `dreaming` (03:00 UTC) — agent consolidates short-term memory entries into org/memory.md
 
   Each event can only be assigned to a single agent (one-agent-per-event).
   The scheduler posts a synthetic instruction message into a per-agent system
@@ -46,23 +46,28 @@ defmodule Platform.Agents.SystemEventScheduler do
 
     {activity_digest}
 
-    Write a concise daily summary for {date} capturing key decisions, \
-    completed work, milestones, blockers, and notable events. Use the \
-    `org_memory_append` tool with `date="{date}"` to record it. If the \
-    window was quiet, write a short note to that effect rather than \
-    skipping the entry.
+    Review recent journal entries via `memory_search` (source: "journal"). \
+    Look for patterns, recurring decisions, or insights worth promoting \
+    from short-term journal notes to long-term wiki pages. Update curated \
+    pages via `memory_str_replace` or `memory_insert` against \
+    `org/page/...` paths (Historian-only writes — only you can write \
+    there). Record a daily-summary observation for {date} via \
+    `memory_create` at `org/journal/{date}.md`. Be specific and concrete \
+    — one decision or pattern per entry. If the window was quiet, write a \
+    short note to that effect rather than skipping the entry.
     """,
     "dreaming" => """
-    You are in dreaming mode (the historian role). Review recent short-term \
-    memory entries via `org_memory_search`. Look for patterns, recurring \
-    themes, emerging risks, and strategic insights. Read the current \
-    ORG_MEMORY.md with `org_context_read` (capture its `version`), then \
-    update it via `org_context_write` (passing `expected_version` for \
-    optimistic locking) with any new patterns, decisions, or lessons \
-    learned. ORG_MEMORY.md is the sole long-term org knowledge store — \
-    never try to record long-term insights via `org_memory_append`. Be \
-    selective: only add genuinely new insights, and preserve existing \
-    content that is still relevant.
+    You are in dreaming mode (the Historian role). Review recent journal \
+    entries via `memory_search` (source: "journal"). Look for patterns, \
+    recurring themes, emerging risks, and strategic insights worth \
+    promoting from short-term journal notes to long-term wiki pages. \
+    Update curated pages via `memory_str_replace` or `memory_insert` \
+    against `org/page/...` paths (Historian-only writes — only you can \
+    write there); use `memory_view` first to read the current page body. \
+    Record short-term observations via `memory_create` at \
+    `org/journal/{date}.md`. Be selective: only add genuinely new \
+    insights, and preserve existing content that is still relevant. One \
+    decision or pattern per entry.
     """
   }
 

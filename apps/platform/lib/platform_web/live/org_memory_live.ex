@@ -659,12 +659,14 @@ defmodule PlatformWeb.OrgMemoryLive do
         </h2>
         <div class="flex items-end gap-3">
           <div class="flex-1">
-            <label class="text-xs text-base-content/50 mb-1 block">File name (UPPER_CASE.md)</label>
+            <label class="text-xs text-base-content/50 mb-1 block">
+              File name (path-style, e.g. <code>org/custom.md</code>)
+            </label>
             <input
               type="text"
               value={@new_file_key}
               phx-keyup="update_new_file_key"
-              placeholder="CUSTOM_CONTEXT.md"
+              placeholder="org/custom.md"
               class="input input-bordered input-sm w-full font-mono"
             />
           </div>
@@ -702,7 +704,7 @@ defmodule PlatformWeb.OrgMemoryLive do
             <span class="hero-light-bulb mb-3 size-12 text-base-content/20 block"></span>
             <h3 class="text-base font-medium text-base-content/50">No memory entries yet</h3>
             <p class="mt-1 text-sm text-base-content/40 max-w-sm text-center">
-              Memory entries are created by agents as they work. Short-term notes will appear here; long-term insights live in ORG_MEMORY.md.
+              Memory entries are created by agents as they work. Short-term notes will appear here; long-term insights live in org/memory.md.
             </p>
           </div>
         <% else %>
@@ -805,16 +807,23 @@ defmodule PlatformWeb.OrgMemoryLive do
     end
   end
 
+  # Path-style file_keys (T1+): org/identity.md, org/memory.md, org/agents.md
+  defp file_icon("org/identity" <> _), do: "hero-identification size-4"
+  defp file_icon("org/memory" <> _), do: "hero-light-bulb size-4"
+  defp file_icon("org/agents" <> _), do: "hero-cpu-chip size-4"
+  defp file_icon("org/directory" <> _), do: "hero-users size-4"
+  # Legacy V1 keys — still resolved via alias-compat in Platform.Org.Context;
+  # kept here so any pre-migration rows or alias rows render with the right icon.
   defp file_icon("ORG_IDENTITY" <> _), do: "hero-identification size-4"
   defp file_icon("ORG_MEMORY" <> _), do: "hero-light-bulb size-4"
   defp file_icon("ORG_AGENTS" <> _), do: "hero-cpu-chip size-4"
   defp file_icon("ORG_DIRECTORY" <> _), do: "hero-users size-4"
   defp file_icon(_), do: "hero-document-text size-4"
 
-  defp template_description("ORG_IDENTITY.md"), do: "Mission, values, product summary"
-  defp template_description("ORG_MEMORY.md"), do: "Long-term curated org knowledge"
-  defp template_description("ORG_AGENTS.md"), do: "Agent registry and roles"
-  defp template_description("ORG_DIRECTORY.md"), do: "Auto-generated user/agent roster"
+  defp template_description("org/identity.md"), do: "Mission, values, product summary"
+  defp template_description("org/memory.md"), do: "Long-term curated org knowledge"
+  defp template_description("org/agents.md"), do: "Agent registry and roles"
+  defp template_description("org/directory.md"), do: "Auto-generated user/agent roster"
   defp template_description(_), do: "Custom memory file"
 
   defp format_relative(datetime) do
