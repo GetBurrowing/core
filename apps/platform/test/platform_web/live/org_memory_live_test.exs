@@ -14,9 +14,13 @@ defmodule PlatformWeb.OrgMemoryLiveTest do
       class="wikilink">`, dangling `<span class="wikilink-dangling">`),
       the frontmatter editor's `preamble` checkbox round-trip, and the
       agent read-only gate on `"save_page"`.
+    * Stage 5: the right pane's backlinks list (entries from
+      `Wiki.backlinks/2` over the `org_wiki_links` rows materialized by
+      `Wiki.upsert_page/3`, clickable via `"select_page"`) and its
+      "No backlinks yet" empty state.
 
-  This file is the home for all subsequent T7 LiveView tests (right
-  pane, top-bar tabs).
+  This file is the home for all subsequent T7 LiveView tests (top-bar
+  tabs).
   """
 
   use PlatformWeb.ConnCase, async: false
@@ -277,6 +281,73 @@ defmodule PlatformWeb.OrgMemoryLiveTest do
       assert updated.version == page.version + 1
       assert content =~ "# Identity"
       assert content =~ "Body text."
+    end
+  end
+
+  describe "right pane backlinks (stage 5)" do
+    setup %{conn: conn} do
+      Repo.delete_all(WikiPage)
+
+      # `Wiki.upsert_page/3` parses wikilinks out of the content and
+      # materializes them into `org_wiki_links` (source_id +
+      # target_path), which is what `Wiki.backlinks/2` queries — so
+      # seeding the backlink is just upserting a page whose body
+      # carries a `[[...]]` link to the target's file_key.
+      {:ok, _} = Wiki.upsert_page("org/target.md", %{content: "# Target\n"})
+
+      {:ok, _} =
+        Wiki.upsert_page("org/source.md", %{
+          content: "# Source\n\nLinks to [[org/target.md]].\n"
+        })
+
+      {:ok, conn: authenticated_conn(conn, create_user!())}
+    end
+
+    test "page with an inbound wikilink lists the source as a clickable backlink",
+         %{conn: conn} do
+      {:ok, view, _html} = live(conn, "/org_memory/org/target.md")
+
+      # The backlink row is a select_page button carrying the source
+      # page's file_key (full key in the tooltip, namespace badge
+      # alongside).
+      assert has_element?(
+               view,
+               ~s([data-role="backlinks"] button[data-backlink="org/source.md"][phx-click="select_page"])
+             )
+
+      assert has_element?(
+               view,
+               ~s(button[data-backlink="org/source.md"][title="org/source.md"])
+             )
+
+      assert view
+             |> element(~s(button[data-backlink="org/source.md"]))
+             |> render() =~ "org"
+
+      refute render(view) =~ "No backlinks yet"
+    end
+
+    test "clicking a backlink push-patches to the source page and updates @selected_page",
+         %{conn: conn} do
+      {:ok, view, _html} = live(conn, "/org_memory/org/target.md")
+
+      view
+      |> element(~s(button[data-backlink="org/source.md"]))
+      |> render_click()
+
+      path = assert_patch(view)
+      assert URI.decode(path) == "/org_memory/org/source.md"
+
+      # @selected_page now drives the main pane with the source page.
+      assert has_element?(view, "h1", "org/source.md")
+      assert render(view) =~ "Links to"
+    end
+
+    test "page with no inbound links renders the empty state", %{conn: conn} do
+      {:ok, view, _html} = live(conn, "/org_memory/org/source.md")
+
+      assert has_element?(view, ~s([data-role="backlinks"]), "No backlinks yet")
+      refute has_element?(view, "button[data-backlink]")
     end
   end
 

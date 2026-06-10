@@ -10,10 +10,10 @@ defmodule PlatformWeb.OrgMemoryLive.PageViewer do
       `preamble` as a checkbox; non-scalar frontmatter falls back to a
       read-only `<pre>` with an "edit YAML directly in body" hint)
       above the markdown textarea + live preview split.
-    * **viewer with history meta** — when the page carries an
-      `updated_by`, the toolbar meta collapses to the single line
-      `vN · updated by <who> · NN ago` (no version-history list — see
-      design lock §5).
+  History meta (`vN · updated by <who> · NN ago`) moved to
+  `PlatformWeb.OrgMemoryLive.RightPane` in stage 5 — the right pane is
+  the canonical home for page metadata, so the toolbar here carries the
+  file_key only.
 
   Stateless — receives the selected `Platform.Org.WikiPage` (or `nil`)
   plus editor state from `PlatformWeb.OrgMemoryLive`. Emits
@@ -37,7 +37,6 @@ defmodule PlatformWeb.OrgMemoryLive.PageViewer do
   attr(:confirm_delete, :string, default: nil)
   attr(:fm_form, :any, default: nil, doc: "to_form/2 over flat frontmatter, or nil")
   attr(:fm_complex, :string, default: nil, doc: "raw YAML block when frontmatter is non-flat")
-  attr(:updated_by_display, :string, default: nil)
 
   def page_viewer(assigns) do
     ~H"""
@@ -52,12 +51,7 @@ defmodule PlatformWeb.OrgMemoryLive.PageViewer do
           fm_complex={@fm_complex}
         />
       <% @page -> %>
-        <.viewer
-          page={@page}
-          preview_html={@preview_html}
-          confirm_delete={@confirm_delete}
-          updated_by_display={@updated_by_display}
-        />
+        <.viewer page={@page} preview_html={@preview_html} confirm_delete={@confirm_delete} />
       <% true -> %>
         <.empty_state />
     <% end %>
@@ -69,7 +63,6 @@ defmodule PlatformWeb.OrgMemoryLive.PageViewer do
   attr(:page, :any, required: true)
   attr(:preview_html, :string, required: true)
   attr(:confirm_delete, :string, default: nil)
-  attr(:updated_by_display, :string, default: nil)
 
   defp viewer(assigns) do
     ~H"""
@@ -78,23 +71,9 @@ defmodule PlatformWeb.OrgMemoryLive.PageViewer do
       <div class="flex items-center justify-between border-b border-base-300 px-6 py-3">
         <div class="flex items-center gap-3">
           <span class={[file_icon(@page.file_key), "size-5 text-primary"]}></span>
-          <div>
-            <h1 class="text-lg font-bold">{@page.file_key}</h1>
-            <%= if @page.updated_by && @updated_by_display do %>
-              <%!-- History meta: a single line, NOT a version-history list. --%>
-              <p class="text-xs text-base-content/40" data-role="history-meta">
-                v{@page.version} · updated by {@updated_by_display}
-                <span :if={@page.updated_at}>· {format_relative(@page.updated_at)}</span>
-              </p>
-            <% else %>
-              <p class="text-xs text-base-content/40">
-                Version {@page.version}
-                <span :if={@page.updated_at}>
-                  · Updated {format_relative(@page.updated_at)}
-                </span>
-              </p>
-            <% end %>
-          </div>
+          <%!-- Version / updated-by / relative-time meta lives in the
+               right pane (canonical home as of stage 5). --%>
+          <h1 class="text-lg font-bold">{@page.file_key}</h1>
         </div>
         <div class="flex items-center gap-2">
           <button phx-click="start_edit" class="btn btn-primary btn-sm gap-1">
@@ -143,7 +122,7 @@ defmodule PlatformWeb.OrgMemoryLive.PageViewer do
         </article>
       </div>
 
-      <%!-- Page metadata footer --%>
+      <%!-- Content stats footer (version / dates live in the right pane) --%>
       <div class="flex items-center gap-4 border-t border-base-300 px-6 py-2 text-xs text-base-content/40">
         <span class="flex items-center gap-1">
           <span class="hero-document size-3.5"></span>
@@ -152,13 +131,6 @@ defmodule PlatformWeb.OrgMemoryLive.PageViewer do
         <span class="flex items-center gap-1">
           <span class="hero-hashtag size-3.5"></span>
           {line_count(@page.content)} lines
-        </span>
-        <span class="flex items-center gap-1">
-          <span class="hero-arrow-up-circle size-3.5"></span> v{@page.version}
-        </span>
-        <span :if={@page.inserted_at} class="flex items-center gap-1">
-          <span class="hero-clock size-3.5"></span>
-          Created {Calendar.strftime(@page.inserted_at, "%b %-d, %Y")}
         </span>
       </div>
     </div>
@@ -306,18 +278,6 @@ defmodule PlatformWeb.OrgMemoryLive.PageViewer do
     |> Map.keys()
     |> Enum.reject(&String.starts_with?(&1, "_"))
     |> Enum.sort()
-  end
-
-  defp format_relative(datetime) do
-    diff = DateTime.diff(DateTime.utc_now(), datetime, :second)
-
-    cond do
-      diff < 60 -> "just now"
-      diff < 3600 -> "#{div(diff, 60)}m ago"
-      diff < 86400 -> "#{div(diff, 3600)}h ago"
-      diff < 604_800 -> "#{div(diff, 86400)}d ago"
-      true -> Calendar.strftime(datetime, "%b %-d, %Y")
-    end
   end
 
   defp line_count(content) when is_binary(content) do

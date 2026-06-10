@@ -7,10 +7,12 @@ defmodule PlatformWeb.OrgMemoryLive do
     * left — `PlatformWeb.OrgMemoryLive.NamespaceTree` (collapsible
       namespace tree over `Wiki.list_pages/1`)
     * main — `PlatformWeb.OrgMemoryLive.PageViewer` (stage 4: viewer /
-      editor / history-meta sub-states with wikilink-aware rendering
+      editor sub-states with wikilink-aware rendering
       via `PlatformWeb.OrgMemoryLive.MarkdownRenderer`) plus the
       create panel
-    * right — `PlatformWeb.OrgMemoryLive.RightPane` (stage-5 stub)
+    * right — `PlatformWeb.OrgMemoryLive.RightPane` (stage 5: backlinks
+      via `Wiki.backlinks/2` + page metadata — the canonical home for
+      the version / updated-by / relative-time meta)
 
   State lives here; the pane modules are stateless function components.
   `@view_mode` is `:pages` only for now — the enum extends when the
@@ -47,6 +49,7 @@ defmodule PlatformWeb.OrgMemoryLive do
      |> assign(:namespace_tree, tree)
      |> assign(:expanded_prefixes, NamespaceTree.default_expanded(tree))
      |> assign(:selected_page, nil)
+     |> assign(:backlinks, [])
      |> assign(:view_mode, :pages)
      |> assign(:editing, false)
      |> assign(:editor_content, "")
@@ -77,6 +80,7 @@ defmodule PlatformWeb.OrgMemoryLive do
         {:noreply,
          socket
          |> assign(:selected_page, page)
+         |> assign(:backlinks, Wiki.backlinks(page.file_key))
          |> assign(:editor_content, page.content)
          |> assign(:preview_html, render_markdown(page.content, socket.assigns.pages))
          |> assign(:editing, false)
@@ -97,6 +101,7 @@ defmodule PlatformWeb.OrgMemoryLive do
     {:noreply,
      socket
      |> assign(:selected_page, nil)
+     |> assign(:backlinks, [])
      |> assign(:editing, false)
      |> assign(:creating, false)}
   end
@@ -336,12 +341,15 @@ defmodule PlatformWeb.OrgMemoryLive do
             confirm_delete={@confirm_delete}
             fm_form={@fm_form}
             fm_complex={@fm_complex}
-            updated_by_display={@updated_by_display}
           />
         <% end %>
       </div>
 
-      <RightPane.right_pane page={@selected_page} />
+      <RightPane.right_pane
+        page={@selected_page}
+        backlinks={@backlinks}
+        updated_by_display={@updated_by_display}
+      />
     </div>
     """
   end
