@@ -553,6 +553,110 @@ defmodule PlatformWeb.ChatLiveTest do
     assert html =~ "Canvas should render the latest stored state."
   end
 
+  # Regression: the canvas pane subscribes to per-canvas PubSub but had no
+  # `handle_info` clause for `{:canvas_patched, ...}`, so checklist toggles /
+  # form saves / etc. silently went to the catch-all and `@active_canvas`
+  # stayed on the loaded revision until manual reload.
+  test "active canvas pane live-updates on :canvas_patched broadcast", %{conn: conn} do
+    conn = authenticated_conn(conn)
+    {:ok, view, _html} = live(conn, ~p"/chat/general", on_error: :warn)
+
+    user = Repo.get_by!(User, email: "chat_test@example.com")
+    space = Repo.get_by!(Chat.Space, slug: "general")
+
+    participant =
+      Repo.get_by(Chat.Participant,
+        space_id: space.id,
+        participant_type: "user",
+        participant_id: user.id
+      ) ||
+        elem(
+          Chat.add_participant(space.id, %{participant_type: "user", participant_id: user.id}),
+          1
+        )
+
+    {:ok, canvas, _message} =
+      Chat.create_canvas_with_message(space.id, participant.id, %{title: "Patched canvas"})
+
+    # Open the canvas pane.
+    render_click(view, "canvas_open", %{"canvas-id" => canvas.id})
+
+    refute render(view) =~ "PATCHED_LIVE_TOKEN"
+
+    # Out-of-band patch via the server (this is what MCP / agent / other
+    # LiveView writers go through). The server broadcasts `:canvas_patched`
+    # synchronously before persistence; our hook clause re-syncs the pane from
+    # the in-memory server state.
+    {:ok, %{revision: rev}} = Platform.Chat.Canvas.Server.describe(canvas.id)
+
+    patch_ops = [
+      {:append_child, "root",
+       %{
+         "id" => "patched-node",
+         "type" => "markdown",
+         "props" => %{"content" => "PATCHED_LIVE_TOKEN body"},
+         "children" => []
+       }}
+    ]
+
+    {:ok, _new_rev} = Platform.Chat.Canvas.Server.apply_patches(canvas.id, patch_ops, rev)
+
+    assert render(view) =~ "PATCHED_LIVE_TOKEN",
+           "canvas pane should refresh on :canvas_patched without a manual reload"
+  end
+
+  test "canvas pane ignores :canvas_patched broadcasts for non-active canvases", %{conn: conn} do
+    conn = authenticated_conn(conn)
+    {:ok, view, _html} = live(conn, ~p"/chat/general", on_error: :warn)
+
+    user = Repo.get_by!(User, email: "chat_test@example.com")
+    space = Repo.get_by!(Chat.Space, slug: "general")
+
+    participant =
+      Repo.get_by(Chat.Participant,
+        space_id: space.id,
+        participant_type: "user",
+        participant_id: user.id
+      ) ||
+        elem(
+          Chat.add_participant(space.id, %{participant_type: "user", participant_id: user.id}),
+          1
+        )
+
+    {:ok, active_canvas, _} =
+      Chat.create_canvas_with_message(space.id, participant.id, %{title: "Active canvas"})
+
+    {:ok, other_canvas, _} =
+      Chat.create_canvas_with_message(space.id, participant.id, %{title: "Other canvas"})
+
+    render_click(view, "canvas_open", %{"canvas-id" => active_canvas.id})
+
+    refute render(view) =~ "OTHER_PATCHED_TOKEN"
+
+    {:ok, %{revision: rev}} = Platform.Chat.Canvas.Server.describe(other_canvas.id)
+
+    patch_ops = [
+      {:append_child, "root",
+       %{
+         "id" => "n",
+         "type" => "markdown",
+         "props" => %{"content" => "OTHER_PATCHED_TOKEN body"},
+         "children" => []
+       }}
+    ]
+
+    {:ok, _} = Platform.Chat.Canvas.Server.apply_patches(other_canvas.id, patch_ops, rev)
+
+    # Allow the PubSub send + handle_info to drain on the LiveView pid.
+    _ = :sys.get_state(view.pid)
+
+    assigns = :sys.get_state(view.pid).socket.assigns
+
+    # @active_canvas must remain the original active canvas — the patched one
+    # should refresh its in-list entry but never steal pane focus.
+    assert assigns.active_canvas.id == active_canvas.id
+  end
+
   test "shows the shell agent indicator without a duplicate chat header presence badge", %{
     conn: conn
   } do

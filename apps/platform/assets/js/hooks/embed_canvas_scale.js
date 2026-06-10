@@ -43,6 +43,12 @@ export default {
 
     this.applyScale()
 
+    // Track the srcdoc we've actually written to the iframe so updated()
+    // can detect real changes vs. no-op re-renders. The wrapper's initial
+    // server render already populated the iframe's srcdoc attribute, so
+    // seed from the dataset (kept in sync with the iframe by the server).
+    this._appliedSrcdoc = this.el.dataset.srcdoc || ""
+
     if (typeof ResizeObserver !== "undefined") {
       this.observer = new ResizeObserver(this.applyScale)
       this.observer.observe(this.el)
@@ -55,6 +61,43 @@ export default {
       expandBtn.addEventListener("click", this.openExpand)
       this.expandBtn = expandBtn
     }
+  },
+
+  // Live-update path: morphdom patches the wrapper's `data-srcdoc`
+  // attribute (and any declared-dim props) when the server re-renders
+  // after a `:canvas_patched` broadcast. Because the wrapper carries
+  // `phx-update="ignore"`, morphdom never touches the <iframe> child —
+  // so the iframe's own `srcdoc` attribute is left frozen at whatever
+  // the initial render produced. We must propagate the new srcdoc to
+  // the iframe element ourselves by assigning the `srcdoc` PROPERTY
+  // (forces the browser to reload the iframe with the new content).
+  //
+  // Gate duplicate writes: only assign when the dataset value actually
+  // differs from what we last wrote. Otherwise a non-srcdoc patch
+  // (e.g. dims changed, or some unrelated parent LV re-render) would
+  // needlessly reload the iframe and flash a blank frame.
+  updated() {
+    if (!this.iframe) return
+
+    // Refresh cached props in case dims/min-scale changed.
+    this.declaredWidth = parseInt(this.el.dataset.declaredWidth || "1080", 10)
+    this.declaredHeight = parseInt(
+      this.el.dataset.declaredHeight || "400",
+      10,
+    )
+    const rawMinScale = this.el.dataset.minScale
+    this.minScale =
+      rawMinScale !== undefined && rawMinScale !== ""
+        ? parseFloat(rawMinScale)
+        : null
+
+    const nextSrcdoc = this.el.dataset.srcdoc || ""
+    if (nextSrcdoc !== this._appliedSrcdoc) {
+      this.iframe.srcdoc = nextSrcdoc
+      this._appliedSrcdoc = nextSrcdoc
+    }
+
+    this.applyScale()
   },
 
   destroyed() {

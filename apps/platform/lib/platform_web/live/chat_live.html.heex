@@ -7,7 +7,20 @@
 
 <div :if={!@embedded} id="chat-state" phx-hook="ChatState" class="hidden"></div>
 
-<div :if={!@embedded} id="meeting-client" phx-hook="MeetingClient" class="hidden"></div>
+<%!-- data-camera-enabled / data-mic-enabled carry the server's committed
+     media intent. On a LiveKit reconnect (task 019e4b3e stage 3) the JS
+     hook reads these off the dataset to re-engage the camera/mic WITHOUT
+     waiting for a fresh LV push — reconnect-safe (Rowan's exact error was
+     "unable to push hook event. LiveView not connected"). --%>
+<div
+  :if={!@embedded}
+  id="meeting-client"
+  phx-hook="MeetingClient"
+  class="hidden"
+  data-camera-enabled={to_string(@camera_enabled)}
+  data-mic-enabled={to_string(@mic_enabled)}
+>
+</div>
 <div :if={!@embedded} id="meeting-room" phx-hook="MeetingRoom" class="hidden"></div>
 <div :if={!@embedded} id="meeting-soundboard" phx-hook="MeetingSoundboard" class="hidden"></div>
 
@@ -44,15 +57,131 @@
     phx-hook="ResizableSidebar"
     class="hidden lg:flex relative flex-shrink-0 flex-col border-r border-base-content/10 bg-base-200"
   >
+    <%!-- Sidebar header (chat sidebar Stage 5). Hosts the "Edit layout" /
+         "Done" toggle. In edit mode the rail shows per-channel grab handles,
+         per-section Hide/Show controls, keyboard move buttons, and a "Reset
+         to default layout" action; in normal mode the rail navigates as
+         before. Desktop only — the whole aside is `hidden lg:flex`. --%>
+    <%!-- Sidebar header. The ~260px rail can't fit two text toggles, so the
+         personal "Edit layout" and admin "Edit default" entry points collapse
+         into ONE overflow ("More") menu (ui-ux-pro overflow-menu pattern: when
+         actions exceed available space, use an overflow menu instead of
+         cramming).
+
+         Overflow contract — this row must NEVER push content past the ~260px
+         rail in ANY mode. Containment comes from the flex children, NOT from
+         clipping the row: the row is `min-w-0`, the text child truncates
+         (`flex-1 min-w-0 truncate`), and the action button is pinned
+         (`flex-shrink-0`). We deliberately do NOT put `overflow-hidden` on
+         this row — the normal-mode "More" popover is anchored inside it and
+         opens BELOW it (`top-full`), so an `overflow-hidden` row would clip
+         the menu off (it did: the dropdown rendered hidden behind the rail).
+           * in EITHER edit mode we do NOT also render the word "CHANNELS" —
+             the mode label IS the row's text and takes the remaining space
+             (`flex-1 min-w-0 truncate`), with only the "Done" button pinned
+             (`flex-shrink-0`). The mode label + accent already say which mode
+             is active, so "Done" needs no "(admin)" qualifier;
+           * in normal mode the "CHANNELS" label is the flex-1 truncating child
+             and the kebab "More" button is pinned (`flex-shrink-0`). --%>
+    <div class="flex-shrink-0 flex items-center gap-2 px-3 py-2 border-b border-base-content/10 min-w-0">
+      <%= cond do %>
+        <% @sidebar_edit -> %>
+          <%!-- In personal-edit mode: a single "Done" exit + a quiet mode
+               label that absorbs the row's free space and truncates. No other
+               control — and no "CHANNELS" word — occupies the row. --%>
+          <span class="channel-edit-mode-label flex-1">Editing my layout</span>
+          <button
+            type="button"
+            phx-click="toggle_sidebar_edit"
+            class="channel-edit-toggle flex-shrink-0"
+            aria-pressed="true"
+            aria-label="Done editing layout"
+          >
+            Done
+          </button>
+        <% @sidebar_admin_edit -> %>
+          <%!-- In admin-edit mode: a single "Done" exit + an admin-accented
+               mode label so the admin always knows they are editing what
+               everyone sees. The label absorbs free space and truncates; only
+               "Done" is pinned. No "CHANNELS" word in the row. --%>
+          <span class="channel-edit-mode-label channel-edit-mode-label--admin flex-1">
+            Editing company default
+          </span>
+          <button
+            type="button"
+            phx-click="toggle_sidebar_admin_edit"
+            class="channel-admin-edit-toggle flex-shrink-0"
+            aria-pressed="true"
+            aria-label="Done editing the company default"
+          >
+            Done
+          </button>
+        <% true -> %>
+          <%!-- Normal mode: the "CHANNELS" label (flex-1, truncates) + ONE
+               compact "More" (kebab) button (flex-shrink-0). Clicking the
+               button opens an absolutely-positioned popover CONTAINED within
+               the aside (the wrapper is position:relative so the menu anchors
+               to the header, never floats over the chat pane). The menu closes
+               on click-away and Escape; choosing an item enters the mode AND
+               closes the menu (handled server-side). --%>
+          <p class="min-w-0 flex-1 truncate text-xs font-semibold uppercase tracking-widest text-base-content/60">
+            Channels
+          </p>
+          <div class="channel-sidebar-menu relative flex-shrink-0">
+            <button
+              type="button"
+              phx-click="toggle_sidebar_menu"
+              class="channel-sidebar-menu-button"
+              aria-haspopup="menu"
+              aria-expanded={to_string(@sidebar_menu_open)}
+              aria-label="Sidebar layout options"
+            >
+              <span class="hero-ellipsis-vertical size-4"></span>
+            </button>
+            <div
+              :if={@sidebar_menu_open}
+              class="channel-sidebar-menu-popover"
+              role="menu"
+              aria-label="Sidebar layout options"
+              phx-click-away="close_sidebar_menu"
+              phx-window-keydown="close_sidebar_menu"
+              phx-key="escape"
+            >
+              <button
+                type="button"
+                role="menuitem"
+                phx-click="toggle_sidebar_edit"
+                class="channel-sidebar-menu-item"
+              >
+                Edit my layout
+              </button>
+              <%!-- Admin-only entry point. Rendered ONLY for Fabrikam admins; the
+                   handler re-checks @fabrikam_admin? as the real gate. Admin accent
+                   so it reads as a company-wide action, not a personal one. --%>
+              <button
+                :if={@fabrikam_admin?}
+                type="button"
+                role="menuitem"
+                phx-click="toggle_sidebar_admin_edit"
+                class="channel-sidebar-menu-item channel-sidebar-menu-item--admin"
+              >
+                Edit company default
+              </button>
+            </div>
+          </div>
+      <% end %>
+    </div>
     <nav
       id="chat-section-list"
       phx-hook="SectionReorder"
+      data-sidebar-edit={to_string(@sidebar_edit)}
       class="flex-1 overflow-y-auto py-2"
       aria-label="Channel sections"
     >
       <%!-- Pinned section — only renders when non-empty.
-           Section key for `@expanded_sections` toggle: "pinned".
-           NOT reorderable (Stage 3) — Pinned + DMs lock to the top. --%>
+           NOT hideable (per chat sidebar v3 Stage 2 — hide button is
+           rendered on sub-org rows only). NOT reorderable — Pinned + DMs
+           lock to the top of the rail. --%>
       <%= if @channel_sections.pinned != [] do %>
         <section
           class="channel-section group"
@@ -64,14 +193,8 @@
             <span class="hero-bookmark-solid size-3.5 text-base-content/60"></span>
             <p class="channel-section-label">Pinned</p>
           </div>
-          <% {visible, hidden} =
-            PlatformWeb.ChatLive.split_section(
-              @channel_sections.pinned,
-              @expanded_sections,
-              "pinned"
-            ) %>
           <.link
-            :for={space <- visible}
+            :for={space <- @channel_sections.pinned}
             navigate={~p"/chat/#{space.slug || space.id}"}
             class={[
               "channel-row",
@@ -80,38 +203,12 @@
           >
             <span class="text-base-content/40">#</span>
             <span class="truncate flex-1">{space.name}</span>
-            <%!-- Active-row scope-pill for pinned channels (Stage 4). Scope
-                 is derived from the pinned space's own slug since the
-                 pinned bucket is heterogeneous (channels from any sub-org
-                 can be pinned). --%>
-            <span
-              :if={
-                @active_space && @active_space.id == space.id &&
-                  PlatformWeb.ChatLive.space_scope_atom(space)
-              }
-              class="channel-row-scope-pill"
-            >
-              <.scope_pill
-                scope={PlatformWeb.ChatLive.space_scope_atom(space)}
-                clickable={false}
-              />
-            </span>
             <%= if unread_label(Map.get(@unread_counts, space.id, 0)) do %>
               <span class="channel-row-unread-pill">
                 {unread_label(Map.get(@unread_counts, space.id, 0))}
               </span>
             <% end %>
           </.link>
-          <%= if hidden != [] do %>
-            <button
-              type="button"
-              class="channel-section-show-more"
-              phx-click="toggle_section"
-              phx-value-section="pinned"
-            >
-              + {length(hidden)} more
-            </button>
-          <% end %>
         </section>
       <% end %>
 
@@ -141,10 +238,8 @@
             No conversations yet — direct messages will appear here once you start one.
           </p>
         <% else %>
-          <% {visible, hidden} =
-            PlatformWeb.ChatLive.split_section(@channel_sections.dms, @expanded_sections, "dms") %>
           <.link
-            :for={space <- visible}
+            :for={space <- @channel_sections.dms}
             navigate={~p"/chat/#{space.slug || space.id}"}
             class={[
               "channel-row",
@@ -158,124 +253,282 @@
               </span>
             <% end %>
           </.link>
-          <%= if hidden != [] do %>
-            <button
-              type="button"
-              class="channel-section-show-more"
-              phx-click="toggle_section"
-              phx-value-section="dms"
-            >
-              + {length(hidden)} more
-            </button>
-          <% end %>
         <% end %>
       </section>
 
-      <%!-- Sub-org sections — alphabetical order (Paragon / Soylent /
-           Fabrikam / Wayne-Tech / SXI). ALWAYS rendered, even when empty; empty
-           buckets show an empty-state hint instead of being suppressed.
-           The right-edge `<.scope_pill clickable={false}>` makes the
-           org-provenance unambiguous (and matches the future scope-filter
-           affordance pattern). --%>
-      <%!-- Sub-org sections are filtered by @scope_filter when set (Stage 4).
-           nil filter → render all sub-org sections. An atom filter → render
-           only the matching bucket. The filter is toggled by clicking the
-           chat-header scope-pill above the message stream. --%>
-      <% visible_buckets =
+      <%!-- Sub-org sections (chat sidebar v3 Stage 4). Rendered from
+           `@sidebar_sections` — the org-default sections (one per org,
+           `channel_sections` table) merged with the user's personal
+           arrangement by `Sidebar.resolve_for_user/2`. Each entry is a
+           `%{section, channels}`: `section.name` is the header label,
+           `section.color` is the scope token driving the org pill, and
+           `channels` are the spaces placed under it by `chat_spaces.org_id`.
+           ALWAYS rendered, even when empty — empty sections keep their
+           header + an empty-state hint so the rail's structure stays visible.
+
+           Filtered by @scope_filter when set (Stage 4): nil → all sections;
+           an atom filter → only the section whose color matches that scope.
+           The filter is toggled by clicking the chat-header scope-pill. --%>
+      <% visible_sections =
         if is_nil(@scope_filter) do
-          @section_order
+          @sidebar_sections
         else
-          filter_bucket = PlatformWeb.ChatLive.bucket_for_scope(@scope_filter)
-          Enum.filter(@section_order, fn b -> b == filter_bucket end)
+          Enum.filter(@sidebar_sections, fn %{section: section} ->
+            PlatformWeb.ChatLive.section_scope_atom(section.color) == @scope_filter
+          end)
         end %>
-      <section
-        :for={bucket <- visible_buckets}
-        class="channel-section group"
-        data-section-key={bucket}
-        data-section-slug={section_slug(bucket)}
-        data-section-reorderable="true"
-        draggable="true"
-        aria-label={"#{bucket} channels"}
+      <%!-- ChannelMembershipDrag wrapper (chat sidebar Stage 5). A SEPARATE
+           hook element from the <nav>'s SectionReorder hook: an element can
+           only carry one phx-hook, and the two drag behaviors target
+           different draggables (channel rows here vs. section headers there).
+           Both hooks are bubble-phase listeners; each ignores the other's
+           dragstart source, so they coexist on overlapping DOM. The hook is
+           inert unless `data-sidebar-edit="true"`. --%>
+      <div
+        id="channel-membership-drag"
+        phx-hook="ChannelMembershipDrag"
+        data-sidebar-edit={to_string(@sidebar_edit)}
+        data-admin-edit={to_string(@sidebar_admin_edit)}
       >
-        <div class="channel-section-header">
-          <p class="channel-section-label">{bucket}</p>
-          <.scope_pill
-            scope={sub_org_scope_atom(bucket)}
-            clickable={false}
-            active={@scope_filter == sub_org_scope_atom(bucket)}
-          />
-          <button
-            type="button"
-            class="channel-section-drag-handle"
-            aria-label={"Reorder #{bucket} section"}
-            tabindex="-1"
-            draggable="true"
-          >
-            ☰
-          </button>
-        </div>
-        <%= if Map.get(@channel_sections.sub_orgs, bucket, []) == [] do %>
-          <p class="channel-section-empty">
-            No channels yet — channels named matching this sub-org appear here.
-          </p>
-        <% else %>
-          <% bucket_spaces = Map.fetch!(@channel_sections.sub_orgs, bucket) %>
-          <% {visible, hidden} =
-            PlatformWeb.ChatLive.split_section(bucket_spaces, @expanded_sections, bucket) %>
-          <.link
-            :for={space <- visible}
-            navigate={~p"/chat/#{space.slug || space.id}"}
-            class={[
-              "channel-row",
-              @active_space && @active_space.id == space.id && "channel-row--active"
-            ]}
-          >
-            <span class="text-base-content/40">#</span>
-            <span class="truncate flex-1">{space.name}</span>
-            <%!-- Active-row scope-pill (chat plan v2 Stage 4) — right-aligned,
-                 non-clickable. The header pill above each section is the
-                 click-to-filter affordance; the active-row pill is purely
-                 a "you are here" provenance marker. --%>
-            <span
-              :if={@active_space && @active_space.id == space.id}
-              class="channel-row-scope-pill"
-            >
-              <.scope_pill scope={sub_org_scope_atom(bucket)} clickable={false} />
-            </span>
-            <%= if unread_label(Map.get(@unread_counts, space.id, 0)) do %>
-              <span class="channel-row-unread-pill">
-                {unread_label(Map.get(@unread_counts, space.id, 0))}
+        <section
+          :for={%{section: section, channels: section_channels} <- visible_sections}
+          id={"section-#{section.id}"}
+          class="channel-section group"
+          data-section-key={section.name}
+          data-section-slug={section.color}
+          data-section-id={section.id}
+          data-section-reorderable="true"
+          draggable="true"
+          aria-label={"#{section.name} channels"}
+        >
+          <div class="channel-section-header">
+            <%!-- Admin-edit (Stage 6): inline rename form per section header.
+                 Submitting (Enter / blur via phx-change is intentionally NOT
+                 used — we only persist on explicit submit so a mid-typing
+                 re-render can't fire a half-typed name). The hidden section_id
+                 rides along so the server knows which org-default row to
+                 rename. In personal-edit and normal modes the label is static
+                 text. --%>
+            <%= if @sidebar_admin_edit do %>
+              <form
+                phx-submit="rename_section_default"
+                class="channel-section-rename-form"
+              >
+                <input type="hidden" name="section_id" value={section.id} />
+                <input
+                  type="text"
+                  name="name"
+                  value={section.name}
+                  class="channel-section-rename-input"
+                  aria-label={"Rename #{section.name} section"}
+                  maxlength="60"
+                />
+              </form>
+            <% else %>
+              <p class="channel-section-label">{section.name}</p>
+            <% end %>
+            <%!-- Color-only swatch. The section's IDENTITY text is `section.name`
+                 (rendered above / in the rename input); this dot communicates
+                 the section's COLOR and nothing else. Previously this slot held
+                 a `<.scope_pill>` whose VISIBLE TEXT was derived from the color
+                 token via the scope enum, so recoloring a section (e.g. Fabrikam →
+                 yellow) silently relabeled the chip to "Paragon". Decoupling:
+                 a recolor now changes ONLY this dot, never any name/label. The
+                 dot is decorative (aria-hidden) — `section.name` beside it is
+                 the text identity. --%>
+            <%= if dot = PlatformWeb.ChatLive.section_dot_class(section.color) do %>
+              <span
+                class={["channel-section-color-dot", dot]}
+                aria-hidden="true"
+              >
               </span>
             <% end %>
-          </.link>
-          <%= if hidden != [] do %>
+            <%!-- Per-section Hide/Show control (Stage 5, edit mode only).
+                 Posts the DESIRED next hidden state so the toggle is
+                 idempotent. A hidden section drops out of @sidebar_sections
+                 entirely (resolver behavior), so the only way to bring it
+                 back is the "Reset to default layout" button below — which
+                 is why we never render a Show control inline here. --%>
+            <button
+              :if={@sidebar_edit}
+              type="button"
+              class="channel-section-hide-button"
+              phx-click="toggle_section_hidden"
+              phx-value-section_id={section.id}
+              phx-value-hidden="true"
+              aria-label={"Hide #{section.name} section"}
+              title="Hide section"
+            >
+              <span class="hero-eye-slash size-3.5"></span>
+            </button>
             <button
               type="button"
-              class="channel-section-show-more"
-              phx-click="toggle_section"
-              phx-value-section={bucket}
+              class="channel-section-drag-handle"
+              aria-label={"Reorder #{section.name} section"}
+              tabindex="-1"
+              draggable="true"
             >
-              + {length(hidden)} more
+              ☰
             </button>
+          </div>
+          <%!-- Admin-edit (Stage 6): compact recolor palette — the 5 scope
+               tokens ARE the palette (no free-form color picker). Each swatch
+               posts `recolor_section_default` with the section id + token; the
+               active token is marked so the admin sees the current color. The
+               server whitelist-validates the token and re-checks fabrikam_admin?
+               before writing `channel_sections.color`. --%>
+          <div
+            :if={@sidebar_admin_edit}
+            class="channel-section-palette"
+            role="group"
+            aria-label={"Set color for #{section.name} section"}
+          >
+            <button
+              :for={token <- ~w(fabrikam soylent wayne-tech sxi paragon)}
+              type="button"
+              phx-click="recolor_section_default"
+              phx-value-section_id={section.id}
+              phx-value-color={token}
+              class={[
+                "channel-section-swatch",
+                "channel-section-swatch--#{token}",
+                section.color == token && "channel-section-swatch--active"
+              ]}
+              aria-pressed={to_string(section.color == token)}
+              aria-label={"Color: #{token}"}
+              title={token}
+            >
+            </button>
+          </div>
+          <%= if section_channels == [] do %>
+            <p class="channel-section-empty">
+              No channels yet — channels in this org appear here.
+            </p>
+          <% else %>
+            <div
+              :for={{space, idx} <- Enum.with_index(section_channels)}
+              class={[
+                "channel-row-wrap",
+                (@sidebar_edit || @sidebar_admin_edit) && "channel-row-wrap--editing",
+                @active_space && @active_space.id == space.id && "channel-row-wrap--active"
+              ]}
+              data-channel-id={space.id}
+              data-section-id={section.id}
+            >
+              <%!-- Grab handle (Stage 5 personal-edit + Stage 6 admin-edit).
+                   This span — not the row-wrap — carries draggable so it is the
+                   HTML5 drag SOURCE node: dragstart's e.target is then this span,
+                   so the ChannelMembershipDrag hook's `.channel-row-grab` gate
+                   matches (mirroring SectionReorder, whose handle is the source
+                   too). A click on the row link still navigates because the link
+                   isn't draggable. tabindex=-1 because the keyboard alternative
+                   is the Up/Down buttons (personal-edit only). Rendered in EITHER
+                   edit mode — in personal-edit the drop pushes `channel_moved`
+                   (per-user), in admin-edit it pushes `channel_reassigned`
+                   (global org_id); the hook reads `data-admin-edit` to decide. --%>
+              <span
+                :if={@sidebar_edit || @sidebar_admin_edit}
+                class="channel-row-grab"
+                aria-hidden="true"
+                title={
+                  if @sidebar_admin_edit,
+                    do: "Drag to reassign for everyone",
+                    else: "Drag to move"
+                }
+                draggable="true"
+              >
+                ⠿
+              </span>
+              <.link
+                navigate={~p"/chat/#{space.slug || space.id}"}
+                class={[
+                  "channel-row",
+                  @active_space && @active_space.id == space.id && "channel-row--active"
+                ]}
+              >
+                <span class="text-base-content/40">#</span>
+                <span class="truncate flex-1">{space.name}</span>
+                <%= if unread_label(Map.get(@unread_counts, space.id, 0)) do %>
+                  <span class="channel-row-unread-pill">
+                    {unread_label(Map.get(@unread_counts, space.id, 0))}
+                  </span>
+                <% end %>
+              </.link>
+              <%!-- Keyboard move controls (Stage 5, edit mode only — WCAG
+                   2.1.1 keyboard alternative to drag). Each posts the same
+                   `move_channel` event the keyboard path shares with drag's
+                   `channel_moved` persistence. Up is disabled on the first
+                   row, Down on the last, so focus can't trigger a no-op
+                   that reads as broken. --%>
+              <span :if={@sidebar_edit} class="channel-row-move-controls">
+                <button
+                  type="button"
+                  class="channel-row-move-button"
+                  phx-click="move_channel"
+                  phx-value-channel_id={space.id}
+                  phx-value-section_id={section.id}
+                  phx-value-direction="up"
+                  disabled={idx == 0}
+                  aria-label={"Move ##{space.name} up"}
+                  title="Move up"
+                >
+                  <span class="hero-chevron-up size-3"></span>
+                </button>
+                <button
+                  type="button"
+                  class="channel-row-move-button"
+                  phx-click="move_channel"
+                  phx-value-channel_id={space.id}
+                  phx-value-section_id={section.id}
+                  phx-value-direction="down"
+                  disabled={idx == length(section_channels) - 1}
+                  aria-label={"Move ##{space.name} down"}
+                  title="Move down"
+                >
+                  <span class="hero-chevron-down size-3"></span>
+                </button>
+              </span>
+              <%!-- Per-channel hide affordance (chat sidebar v3 Stage 2). Sub-org
+                   rows ONLY (NOT Pinned, NOT DMs). Rendered as a SIBLING of the
+                   row link — never a child — so its click reaches LiveView's
+                   window-level `phx-click` listener. A <button> nested in the
+                   <a> is invalid HTML, and the old anti-navigation
+                   stopPropagation guard there also swallowed the hide event
+                   (LiveView binds click on `window` in the bubble phase, so
+                   stopPropagation killed it). Outside the anchor, clicking the
+                   button can't trigger navigation, so no propagation guard is
+                   needed. Revealed on wrapper :hover OR :focus-within for
+                   keyboard reach (WCAG 2.1.1). --%>
+              <button
+                type="button"
+                class="channel-row-hide-button"
+                phx-click="hide_channel"
+                phx-value-id={space.id}
+                aria-label={"Hide ##{space.name}"}
+                title="Hide channel"
+              >
+                <span class="hero-eye-slash size-3.5"></span>
+              </button>
+            </div>
           <% end %>
-        <% end %>
-      </section>
-
-      <%!-- Top-level new-channel affordance moved to the foot of the
-           sectioned rail. The Stage 1 design canvas put this near the
-           sub-org headers; Marlowe approved a single bottom-of-rail entry
-           point so it doesn't compete with the per-section drag handles. --%>
-      <div class="px-3 py-2 mt-2 border-t border-base-300">
-        <button
-          type="button"
-          phx-click="new_channel_open"
-          class="flex items-center gap-2 w-full px-2 py-1.5 text-sm text-base-content/70 hover:text-primary hover:bg-base-300 rounded transition-colors"
-          aria-label="New channel"
-        >
-          <span class="hero-plus size-4"></span>
-          <span>New channel</span>
-        </button>
+        </section>
       </div>
+
+      <%!-- Reset to default layout (chat sidebar Stage 5, edit mode only).
+           Clears all three per-user override keys (section order, channel
+           placement, hidden sections) so the rail returns to the org default
+           — the only way to un-hide a section hidden via the per-section
+           control above. --%>
+      <button
+        :if={@sidebar_edit}
+        type="button"
+        phx-click="reset_sidebar"
+        class="channel-reset-layout-button"
+        aria-label="Reset to default layout"
+      >
+        <span class="hero-arrow-path size-4"></span>
+        <span>Reset to default layout</span>
+      </button>
 
       <%!-- Brand-new-user empty state — surfaces when the user has no
            channels AND no DMs at all. The sub-org headers above still
@@ -293,6 +546,156 @@
       </.empty_state>
     </nav>
 
+    <%!-- Undo toast — ephemeral 4-second affordance shown after a hide
+         (Stage 3 v3 follow-up per Marlowe's 2026-05-29 review). Lives as
+         an IN-FLOW `flex-shrink-0` sibling between the scrolling `<nav>`
+         (`flex-1`) above and the pinned "+ New channel" button below.
+         When the toast appears, the `flex-1` scroll nav absorbs its
+         height by shrinking — so "+ New channel" stays exactly where it
+         is, the drawer stays exactly where it is, and the toast doesn't
+         overlap any content. Trades a soft scroll-area compression for
+         stable pinned chrome (the right exchange — overlap with content
+         is the actual user complaint; transient scroll compression is
+         the standard chat-rail behavior, same way Slack/Discord handle
+         compose-area system notes).
+
+         role=status + aria-live=polite (NOT assertive) — hiding a
+         channel is non-destructive (nothing deleted, only user-filtered)
+         so a polite announcement is the right WCAG choice. The Undo
+         button shares its handler with the drawer's Show buttons via
+         do_unhide/2 in the LiveView, so the round-trip is identical
+         regardless of which way the user reverses the hide. Auto-clears
+         via a Process.send_after → handle_info({:clear_undo_toast,
+         space_id}) pair scheduled by the hide_channel handler. --%>
+    <div
+      :if={@undo_toast}
+      role="status"
+      aria-live="polite"
+      class="channel-undo-toast"
+    >
+      <span class="channel-undo-toast-message">
+        Hidden <span class="font-medium">#{@undo_toast.name}</span>
+      </span>
+      <button
+        type="button"
+        class="channel-undo-toast-button"
+        phx-click="undo_hide"
+        phx-value-id={@undo_toast.space_id}
+      >
+        Undo
+      </button>
+    </div>
+
+    <%!-- "+ New channel" — pinned rail chrome (Stage 3 v3 follow-up per
+         Marlowe's review). Lives as an UNCONDITIONAL `flex-shrink-0` sibling
+         of `<nav>` and the conditional bottom-region wrapper, so its
+         visual position never drifts based on channel count OR on whether
+         the undo toast / hidden drawer happens to be showing. The wrapper
+         was deliberately NOT merged into the bottom-region's `:if` block —
+         doing so would yank the button out of view whenever both toast
+         and drawer are absent, reintroducing the "position depends on
+         state" bug. Visual divider above is a top border using the same
+         `border-base-content/10` token the aside itself uses, so the
+         rail's separator language stays consistent. Reuses the
+         channel-row hover/text vocabulary so the button rhymes visually
+         with the section rows above. --%>
+    <button
+      type="button"
+      phx-click="new_channel_open"
+      aria-label="New channel"
+      class="flex-shrink-0 flex items-center gap-2 w-full border-t border-base-content/10 px-3 py-2 text-sm text-base-content/70 hover:text-primary hover:bg-base-300 transition-colors"
+    >
+      <span class="hero-plus size-4"></span>
+      <span>New channel</span>
+    </button>
+
+    <%!-- Bottom region (Stage 3 v3): hosts the global "N hidden channels"
+         drawer ONLY. Silent at N=0 — the wrapper is :if-gated to
+         `hidden_count > 0` so it disappears entirely when the user has
+         no hidden channels, keeping the sidebar foot empty in the clean
+         state. The undo toast used to live here too but moved up to its
+         own in-flow position above "+ New channel" — keeps pinned chrome
+         (+ New channel, drawer trigger) stable when a hide fires, since
+         the scroll-nav (flex-1) absorbs the toast's height instead. --%>
+    <% hidden_count =
+      @channel_sections.hidden_sub_orgs
+      |> Map.values()
+      |> Enum.map(&length/1)
+      |> Enum.sum() %>
+    <div
+      :if={hidden_count > 0}
+      class="flex-shrink-0 border-t border-base-content/10 px-2 py-2"
+    >
+      <%!-- Global "N hidden channels" drawer (Option B per Marlowe's v3
+           review). One quiet row at the rail's foot — silent at N=0 —
+           expanding upward into a scrollable grouped list. The panel
+           ALWAYS renders so the max-height CSS transition animates in
+           and out smoothly; the `--open` modifier on the wrapper drives
+           the transition. Internal scroll caps the panel at min(50vh,
+           360px) so it can't claim more than half the sidebar at very
+           high hidden counts. Each Show button shares the unhide_channel
+           handler with the (now-removed) v2 inline list, so behavior is
+           identical to v2 — only the trigger surface changed. --%>
+      <div
+        :if={hidden_count > 0}
+        class={[
+          "channel-hidden-drawer",
+          @hidden_drawer_open && "channel-hidden-drawer--open"
+        ]}
+      >
+        <div
+          id="hidden-drawer-panel"
+          class="channel-hidden-drawer-panel"
+          aria-hidden={if @hidden_drawer_open, do: "false", else: "true"}
+        >
+          <%= for {bucket, hidden_channels} <- @channel_sections.hidden_sub_orgs,
+                  hidden_channels != [] do %>
+            <div class="channel-hidden-drawer-group">
+              <div class="channel-hidden-drawer-group-label">
+                <.scope_pill scope={sub_org_scope_atom(bucket)} clickable={false} />
+              </div>
+              <ul class="channel-hidden-drawer-group-list">
+                <li
+                  :for={space <- hidden_channels}
+                  class="channel-hidden-drawer-item"
+                >
+                  <span class="text-base-content/40">#</span>
+                  <span class="truncate flex-1">{space.name}</span>
+                  <button
+                    type="button"
+                    class="channel-hidden-drawer-show"
+                    phx-click="unhide_channel"
+                    phx-value-id={space.id}
+                    aria-label={"Show ##{space.name}"}
+                  >
+                    Show
+                  </button>
+                </li>
+              </ul>
+            </div>
+          <% end %>
+        </div>
+        <button
+          type="button"
+          class="channel-hidden-drawer-trigger"
+          phx-click="toggle_hidden_drawer"
+          aria-expanded={if @hidden_drawer_open, do: "true", else: "false"}
+          aria-controls="hidden-drawer-panel"
+          aria-label={
+            if @hidden_drawer_open,
+              do: "Collapse hidden channels",
+              else: "Show #{hidden_count} hidden channels"
+          }
+        >
+          <span class="flex-1 text-left">
+            {hidden_count} hidden {if hidden_count == 1, do: "channel", else: "channels"}
+          </span>
+          <span class="channel-hidden-drawer-caret">
+            {if @hidden_drawer_open, do: "▾", else: "▴"}
+          </span>
+        </button>
+      </div>
+    </div>
     <%!-- Drag handle for sidebar resize --%>
     <div
       class="absolute right-0 inset-y-0 w-1 cursor-col-resize hover:bg-primary/40 active:bg-primary/60 transition-colors z-10"
@@ -1188,6 +1591,7 @@
       mic_enabled={@mic_enabled}
       camera_enabled={@camera_enabled}
       screen_share_enabled={@screen_share_enabled}
+      meeting_participants={@meeting_participants}
     />
   </div>
 </div>

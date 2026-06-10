@@ -60,6 +60,31 @@ defmodule Platform.Chat.PubSub do
   @spec spaces_topic() :: String.t()
   def spaces_topic, do: "chat:spaces"
 
+  @doc """
+  Returns the per-user topic for sidebar-shape invalidation events.
+
+  Subscribers receive `:sidebar_changed` and recompute their resolved
+  sidebar sections. Used so an admin curation write (Stage 6) or a personal
+  arrangement change (Stage 5) can invalidate a connected session's cached
+  sidebar without a full refresh.
+  """
+  @spec sidebar_topic(binary()) :: String.t()
+  def sidebar_topic(user_id), do: "chat:sidebar:#{user_id}"
+
+  @doc """
+  Returns the shared topic for org-DEFAULT sidebar changes (Stage 6).
+
+  Subscribers receive `:sidebar_defaults_changed` and recompute their
+  resolved sidebar sections. Used so a Fabrikam-admin curation write (rename /
+  recolor / reorder / reassign of the org-default layer) propagates to ALL
+  connected sessions, not just the acting admin's tab. Distinct from the
+  per-user `sidebar_topic/1` (personal arrangement changes) because an admin
+  default change affects everyone, whereas a personal change affects only
+  the one user's other tabs.
+  """
+  @spec sidebar_defaults_topic() :: String.t()
+  def sidebar_defaults_topic, do: "chat:sidebar:defaults"
+
   # ── Subscribe ────────────────────────────────────────────────────────────────
 
   @doc """
@@ -108,6 +133,42 @@ defmodule Platform.Chat.PubSub do
     Phoenix.PubSub.unsubscribe(@pubsub, spaces_topic())
   end
 
+  @doc """
+  Subscribe the calling process to a user's sidebar-invalidation topic.
+
+  Used by ChatLive in `mount/3` so a `:sidebar_changed` broadcast (fired by
+  Stage 5/6 arrangement/curation writes) prompts a resolver recompute.
+  """
+  @spec subscribe_sidebar(binary()) :: :ok | {:error, term()}
+  def subscribe_sidebar(user_id) do
+    Phoenix.PubSub.subscribe(@pubsub, sidebar_topic(user_id))
+  end
+
+  @doc "Unsubscribe the calling process from a user's sidebar-invalidation topic."
+  @spec unsubscribe_sidebar(binary()) :: :ok
+  def unsubscribe_sidebar(user_id) do
+    Phoenix.PubSub.unsubscribe(@pubsub, sidebar_topic(user_id))
+  end
+
+  @doc """
+  Subscribe the calling process to the shared org-default sidebar topic.
+
+  Used by ChatLive in `mount/3` so a `:sidebar_defaults_changed` broadcast
+  (fired by Stage 6 Fabrikam-admin curation writes) prompts a resolver recompute
+  in every connected session — an admin default change is visible to all
+  users, not just the acting admin.
+  """
+  @spec subscribe_sidebar_defaults() :: :ok | {:error, term()}
+  def subscribe_sidebar_defaults do
+    Phoenix.PubSub.subscribe(@pubsub, sidebar_defaults_topic())
+  end
+
+  @doc "Unsubscribe the calling process from the shared org-default sidebar topic."
+  @spec unsubscribe_sidebar_defaults() :: :ok
+  def unsubscribe_sidebar_defaults do
+    Phoenix.PubSub.unsubscribe(@pubsub, sidebar_defaults_topic())
+  end
+
   # ── Broadcast ────────────────────────────────────────────────────────────────
 
   @doc """
@@ -141,5 +202,53 @@ defmodule Platform.Chat.PubSub do
   @spec broadcast_space_event(term()) :: :ok
   def broadcast_space_event(event) do
     Phoenix.PubSub.broadcast(@pubsub, spaces_topic(), event)
+  end
+
+  @doc """
+  Broadcast a `:sidebar_changed` invalidation to a user's connected sessions.
+
+  A no-op when nobody is subscribed (fire-and-forget); safe to call before
+  the Stage 4 subscriber wiring lands in any given environment.
+  """
+  @spec broadcast_sidebar_changed(binary()) :: :ok
+  def broadcast_sidebar_changed(user_id) do
+    Phoenix.PubSub.broadcast(@pubsub, sidebar_topic(user_id), :sidebar_changed)
+  end
+
+  @doc """
+  Broadcast a `:sidebar_changed` invalidation to a user's OTHER connected
+  sessions — `from_pid` will not receive its own echo.
+
+  Stage 5 arrangement writes (edit-layout mode) update the originating
+  LiveView's `@sidebar_sections` optimistically in the same handler, so the
+  acting tab must NOT also receive `:sidebar_changed`: that handler reloads
+  the saved order from the DB, which would clobber the just-applied
+  in-memory state for an anonymous / fail-soft user whose write didn't
+  persist. Other tabs of the same user still converge.
+  """
+  @spec broadcast_sidebar_changed_from(binary(), pid()) :: :ok
+  def broadcast_sidebar_changed_from(user_id, from_pid) do
+    Phoenix.PubSub.broadcast_from(@pubsub, from_pid, sidebar_topic(user_id), :sidebar_changed)
+  end
+
+  @doc """
+  Broadcast a `:sidebar_defaults_changed` invalidation to every connected
+  session (Stage 6 Fabrikam-admin curation write).
+
+  Fired by `broadcast_from/3` from the acting admin's pid: the admin handler
+  recomputes its own `@sidebar_sections` synchronously, so it must not also
+  receive the echo (which would trigger a redundant second recompute). Every
+  OTHER connected session — including other tabs of the same admin and every
+  non-admin user — receives it and recomputes, so an org-default change
+  propagates live. A no-op when nobody is subscribed (fire-and-forget).
+  """
+  @spec broadcast_sidebar_defaults_changed_from(pid()) :: :ok
+  def broadcast_sidebar_defaults_changed_from(from_pid) do
+    Phoenix.PubSub.broadcast_from(
+      @pubsub,
+      from_pid,
+      sidebar_defaults_topic(),
+      :sidebar_defaults_changed
+    )
   end
 end

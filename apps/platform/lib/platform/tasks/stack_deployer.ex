@@ -186,6 +186,42 @@ defmodule Platform.Tasks.StackDeployer do
   def handle_stack_transition(%Stack{} = _stack, _from, _to), do: :ok
 
   @doc """
+  Hook called by the MCP `stack_create` handler immediately after a stack
+  is created (while it is still `forming`).
+
+  Eagerly ensures the rollup branch exists on origin at `base_branch` HEAD
+  so the branch is visible the moment the stack is created, rather than
+  waiting for the `forming -> in_progress` transition (`stack_start`).
+
+  Fire-and-forget: like `handle_stack_transition/3`, runs
+  `create_rollup_branch/1` asynchronously under `Task.Supervisor` so the
+  `stack_create` MCP call returns immediately. Failures are logged but
+  never crash the caller, and a project with no `repo_url` is a logged
+  no-op (`create_rollup_branch/1` returns `{:error, :no_repo_url}`).
+
+  Idempotent against `handle_stack_transition/3`: both ultimately call the
+  runner's `ensure_rollup_branch/1`, which short-circuits with
+  `:already_exists` when the branch is already on origin. So running this
+  hook at create-time and the start-time hook later does not error.
+
+  Returns the spawned `Task` reference (for tests that want to await it),
+  or `:ok` when dispatch is disabled by config
+  (`:platform, :stack_deployer, async: false`) — in that case the create
+  runs synchronously and the result is logged.
+  """
+  @spec handle_stack_created(Stack.t()) :: :ok | TaskRecord.t()
+  def handle_stack_created(%Stack{} = stack) do
+    if async?() do
+      Task.Supervisor.async_nolink(task_supervisor(), fn ->
+        log_create_result(stack, create_rollup_branch(stack))
+      end)
+    else
+      log_create_result(stack, create_rollup_branch(stack))
+      :ok
+    end
+  end
+
+  @doc """
   Hook called by `Tasks.transition_task/2`'s finalizer when a task
   reaches `in_review`.
 

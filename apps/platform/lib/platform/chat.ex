@@ -171,6 +171,19 @@ defmodule Platform.Chat do
     |> Repo.update()
   end
 
+  @doc """
+  Assign a channel space to an org by setting `chat_spaces.org_id`.
+
+  This is the Stage-1 seam (chat sidebar v2) that replaces name-pattern
+  bucketing: a channel's sub-org membership becomes a real FK to `orgs.id`.
+  Pass `org_id = nil` to clear the assignment.
+  """
+  @spec assign_space_org(Space.t(), binary() | nil) ::
+          {:ok, Space.t()} | {:error, Ecto.Changeset.t()}
+  def assign_space_org(%Space{} = space, org_id) when is_binary(org_id) or is_nil(org_id) do
+    update_space(space, %{org_id: org_id})
+  end
+
   @doc "Soft-archive a space by setting `archived_at` to now."
   @spec archive_space(Space.t()) :: {:ok, Space.t()} | {:error, Ecto.Changeset.t()}
   def archive_space(%Space{} = space) do
@@ -374,12 +387,23 @@ defmodule Platform.Chat do
   Compute a display name for a space relative to the current user.
 
   - Channel: space.name
+  - Meeting: space.name (falls back to "Meeting")
   - DM: the other participant's display_name
   - Group: comma-separated names (excluding current user), truncated
   """
   @spec display_name_for_space(Space.t(), [Participant.t()], binary()) :: String.t()
   def display_name_for_space(%Space{kind: "channel"} = space, _participants, _current_user_id) do
     space.name || "Unnamed Channel"
+  end
+
+  # Meeting spaces surface in the ChatLive sidebar/header like any other
+  # space (`space_page_title/3`, `space_header_name/3`, `sidebar_display_name/2`
+  # route non-"channel" kinds through here). Without this clause a
+  # `kind: "meeting"` space raised `FunctionClauseError` and crashed the
+  # LiveView — the gap two reviewers worked around today by re-seeding
+  # meeting spaces as channels. Mirrors the "channel" clause: just the name.
+  def display_name_for_space(%Space{kind: "meeting"} = space, _participants, _current_user_id) do
+    space.name || "Meeting"
   end
 
   def display_name_for_space(%Space{kind: "dm"}, participants, current_user_id) do

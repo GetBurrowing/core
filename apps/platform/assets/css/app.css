@@ -2692,6 +2692,36 @@ body, .font-fabrikam, * {
   }
 }
 
+/* Local-video gallery dock: mirror the .meeting-video-tile sizing so the
+   reparented local <video> occupies the SAME 16:9 area as the remote tiles
+   under the same cell — fixes "self-video renders much wider than other
+   participants". The dock is absolute-positioned and centered over the
+   16:9 tile area so it overlays the tile underneath rather than the full
+   cell rect (which can be wider than 16:9 in landscape cells). */
+[data-gallery-cell] > [data-local-video-dock][data-dock-mode="gallery"] {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  aspect-ratio: 16 / 9;
+  max-width: 100%;
+  max-height: 100%;
+}
+
+@container gallery-cell (min-aspect-ratio: 16/9) {
+  [data-gallery-cell] > [data-local-video-dock][data-dock-mode="gallery"] {
+    height: 100%;
+    width: auto;
+  }
+}
+
+@container gallery-cell (max-aspect-ratio: 16/9) {
+  [data-gallery-cell] > [data-local-video-dock][data-dock-mode="gallery"] {
+    width: 100%;
+    height: auto;
+  }
+}
+
 /* ── Sectioned channel rail (chat plan v2 Stage 2) ─────────────────────
    Per-section container + header + row affordances. The rail is desktop
    only; mobile uses the existing flat browser overlay (see
@@ -2714,6 +2744,16 @@ body, .font-fabrikam, * {
 
   .channel-section-label {
     @apply text-xs font-semibold uppercase tracking-widest text-base-content/60;
+  }
+
+  /* Color-only section swatch in the section header. Communicates the section's
+     scope COLOR (via a `bg-<token>-dot` utility) and nothing else — the section
+     name is the text identity beside it. Replaces the old scope_pill whose
+     visible text was derived from the color token, which made a recolor look
+     like a rename. `flex-shrink-0` so it never collapses; `aria-hidden` in the
+     markup since it's decorative. */
+  .channel-section-color-dot {
+    @apply inline-block size-2 flex-shrink-0 rounded-full;
   }
 
   /* Drag handle — invisible until the parent .channel-section is hovered.
@@ -2745,11 +2785,6 @@ body, .font-fabrikam, * {
     @apply px-2 py-1 text-xs italic text-base-content/40 leading-snug;
   }
 
-  /* `+ N more` show-more toggle. Sits flush left under the visible rows. */
-  .channel-section-show-more {
-    @apply px-3 py-1 mx-1 text-xs font-medium text-base-content/60 hover:text-primary transition-colors;
-  }
-
   /* Single channel / DM row — shared across all sections so we don't
      introduce a parallel row style. Active state mirrors the previous
      flat-list treatment. */
@@ -2757,8 +2792,351 @@ body, .font-fabrikam, * {
     @apply flex items-center gap-2 px-3 py-1.5 mx-1 text-sm rounded transition-colors hover:bg-base-300;
   }
 
+  /* Sub-org rows pair a navigate-link with a hide button as SIBLINGS inside
+     this wrapper (see the heex comment). The wrapper owns the horizontal
+     margin, rounding, and hover/active background so the highlight spans the
+     whole row — including the button. The scoped overrides below only touch
+     rows INSIDE a wrapper, so bare Pinned/DM `.channel-row`s are unaffected. */
+  .channel-row-wrap {
+    @apply flex items-center mx-1 rounded transition-colors hover:bg-base-300;
+  }
+
+  .channel-row-wrap > .channel-row {
+    @apply mx-0 flex-1 min-w-0 rounded-none hover:bg-transparent;
+  }
+
+  .channel-row-wrap--active {
+    @apply bg-primary/10;
+  }
+
+  /* Active tint lives on the wrapper; the inner link keeps only its text +
+     left-border treatment so the background isn't painted twice. */
+  .channel-row-wrap > .channel-row--active {
+    @apply bg-transparent;
+  }
+
+  /* Per-channel hide button (chat sidebar v3 Stage 2). Sub-org rows only;
+     hidden by default and revealed on wrapper :hover OR :focus-within. The
+     :focus-within branch is the WCAG 2.1.1 fix — keyboard-tab users must be
+     able to reveal and activate the button without a mouse. */
+  .channel-row-hide-button {
+    @apply flex-shrink-0 inline-flex items-center justify-center w-6 h-6 mr-1 rounded text-base-content/50 hover:text-base-content hover:bg-base-200 opacity-0 transition-opacity duration-75;
+  }
+
+  .channel-row-wrap:hover .channel-row-hide-button,
+  .channel-row-wrap:focus-within .channel-row-hide-button,
+  .channel-row-hide-button:focus-visible {
+    @apply opacity-100;
+  }
+
   .channel-row--active {
     @apply bg-primary/10 text-primary font-semibold border-l-2 border-primary;
+  }
+
+  /* ── Edit-layout mode (chat sidebar Stage 5) ──────────────────────────
+     Desktop-only per-user arrangement affordances. None of these alter the
+     normal-mode rail — every control is gated behind @sidebar_edit in the
+     template, and the wrapper `--editing` modifier only reflows when the
+     user opts into editing. */
+
+  /* "Done" toggle shown in the sidebar header while in personal-edit mode.
+     (Normal mode no longer renders this — the entry point is the overflow
+     "More" menu below.) Reused for the admin "Done (admin)" via its own
+     accented rule. */
+  .channel-edit-toggle {
+    @apply flex-shrink-0 rounded px-2 py-1 text-xs font-medium text-base-content/70 hover:text-primary hover:bg-base-300 transition-colors;
+  }
+
+  .channel-edit-toggle[aria-pressed="true"] {
+    @apply text-primary bg-primary/10;
+  }
+
+  /* ── Sidebar layout overflow menu (chat sidebar header) ───────────────
+     The ~260px rail can't fit two text toggles, so both edit entry points
+     collapse into ONE kebab/"More" button + popover (ui-ux-pro overflow-menu
+     pattern). All of this is desktop-only — the whole aside is `hidden
+     lg:flex`. Dark-theme tokens match the rail (base-200 surface). */
+
+  /* The "More" (kebab) trigger in normal mode. Square, compact, quiet until
+     hover/open so it doesn't compete with the CHANNELS label. */
+  .channel-sidebar-menu-button {
+    @apply inline-flex items-center justify-center w-7 h-7 rounded text-base-content/60 hover:text-base-content hover:bg-base-300 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60;
+  }
+
+  .channel-sidebar-menu-button[aria-expanded="true"] {
+    @apply text-base-content bg-base-300;
+  }
+
+  /* The popover itself. Absolutely positioned and anchored to the header's
+     position:relative wrapper (`.channel-sidebar-menu`), pinned to the right
+     edge so it stays WITHIN / over the sidebar and never floats over the chat
+     pane. Containment comes from `right-0` + the rail being wider than the
+     fixed `w-48` (192px) menu. */
+  .channel-sidebar-menu-popover {
+    @apply absolute right-0 top-full z-30 mt-1 flex w-48 flex-col overflow-hidden rounded-lg border border-base-content/10 bg-base-100 py-1 shadow-lg;
+  }
+
+  /* One menu row. Left-aligned, full-width tap target, hover highlight. */
+  .channel-sidebar-menu-item {
+    @apply flex w-full items-center px-3 py-2 text-left text-sm text-base-content/80 hover:bg-base-200 hover:text-base-content transition-colors focus-visible:outline-none focus-visible:bg-base-200;
+  }
+
+  /* The admin entry point — warning accent so "Edit company default" reads as
+     a company-wide action, consistent with the admin-edit mode chrome. */
+  .channel-sidebar-menu-item--admin {
+    @apply text-warning/90 hover:text-warning;
+  }
+
+  /* Quiet mode label shown beside "Done" while in an edit mode, so the row
+     states which layout is being edited without a second control. Truncates
+     rather than overflowing at narrow widths. */
+  .channel-edit-mode-label {
+    @apply min-w-0 truncate text-xs font-medium text-base-content/60;
+  }
+
+  /* Admin variant of the mode label — admin accent to match admin-edit chrome. */
+  .channel-edit-mode-label--admin {
+    @apply text-warning/90;
+  }
+
+  /* Grab handle on each channel row (edit mode). Cursor signals draggable;
+     the actual drag is owned by the ChannelMembershipDrag hook, which only
+     starts on this element so a row-link click still navigates. */
+  .channel-row-grab {
+    @apply flex-shrink-0 inline-flex items-center justify-center w-5 ml-1 cursor-grab select-none text-base-content/40 leading-none;
+  }
+
+  .channel-row-grab:active {
+    cursor: grabbing;
+  }
+
+  /* Keyboard move-up / move-down controls (edit mode) — the WCAG 2.1.1
+     keyboard alternative to drag. Always visible in edit mode (not
+     hover-gated) so keyboard users can reach them by tabbing. */
+  .channel-row-move-controls {
+    @apply flex-shrink-0 inline-flex items-center;
+  }
+
+  .channel-row-move-button {
+    @apply inline-flex items-center justify-center w-5 h-5 rounded text-base-content/50 hover:text-base-content hover:bg-base-200 transition-colors;
+  }
+
+  .channel-row-move-button:disabled {
+    @apply opacity-30 cursor-not-allowed hover:bg-transparent hover:text-base-content/50;
+  }
+
+  /* Per-section Hide control in the section header (edit mode). Mirrors the
+     section drag handle's quiet treatment but stays visible in edit mode. */
+  .channel-section-hide-button {
+    @apply inline-flex items-center justify-center w-6 h-6 rounded text-base-content/50 hover:text-base-content hover:bg-base-200 transition-colors;
+  }
+
+  /* Dragged channel row — faded while a drag is in flight (mirrors the
+     section-drag treatment for visual consistency). */
+  .channel-row-wrap--dragging {
+    @apply opacity-50;
+  }
+
+  /* Drop-target highlight on a section receiving a channel drop. Distinct
+     class from the section-reorder drop-target so a channel drag and a
+     section drag never share highlight state. */
+  .channel-section--channel-drop-target {
+    @apply bg-primary/5 rounded;
+  }
+
+  /* "Reset to default layout" button at the rail foot (edit mode). Reuses
+     the "+ New channel" visual vocabulary so the rail's chrome stays
+     consistent. */
+  .channel-reset-layout-button {
+    @apply flex-shrink-0 flex items-center gap-2 w-full px-3 py-2 text-sm text-base-content/70 hover:text-primary hover:bg-base-300 transition-colors;
+  }
+
+  /* ── Fabrikam-admin "Edit default" mode (chat sidebar Stage 6) ────────────
+     Curate the company-wide default sidebar. Visually DISTINCT from the
+     personal "Edit layout" controls (warning accent) so an admin can always
+     tell they are editing what everyone sees, not just their own view. All
+     controls are gated behind @sidebar_admin_edit + @fabrikam_admin? in the
+     template; every write re-authorizes server-side via Sidebar.* . */
+
+  /* "Done (admin)" exit button shown in the sidebar header while in admin-edit
+     mode (the entry point is now the overflow "More" menu). Warning-tinted so
+     it never reads as the neutral personal "Done". */
+  .channel-admin-edit-toggle {
+    @apply flex-shrink-0 rounded px-2 py-1 text-xs font-medium text-warning/80 hover:text-warning hover:bg-warning/10 transition-colors;
+  }
+
+  .channel-admin-edit-toggle[aria-pressed="true"] {
+    @apply text-warning bg-warning/15;
+  }
+
+  /* Inline rename form + input in a section header (admin-edit). The input
+     stretches to fill the label slot; submit-on-Enter persists the rename. */
+  .channel-section-rename-form {
+    @apply flex-1 min-w-0;
+  }
+
+  .channel-section-rename-input {
+    @apply w-full rounded border border-warning/40 bg-base-100 px-1.5 py-0.5 text-sm font-medium text-base-content focus:border-warning focus:outline-none;
+  }
+
+  /* Compact recolor palette under a section header (admin-edit). The 5 scope
+     tokens are the only choices — no free-form picker. */
+  .channel-section-palette {
+    @apply flex items-center gap-1.5 px-3 pb-1;
+  }
+
+  /* One color swatch. Active token gets a ring so the current color reads.
+     Each swatch reuses the canonical `bg-<slug>-dot` scope color. */
+  .channel-section-swatch {
+    @apply inline-block size-4 rounded-full ring-1 ring-base-content/15 transition-transform hover:scale-110 focus:outline-none focus:ring-2 focus:ring-warning;
+  }
+
+  .channel-section-swatch--active {
+    @apply ring-2 ring-warning ring-offset-1 ring-offset-base-200;
+  }
+
+  .channel-section-swatch--fabrikam {
+    background-color: oklch(72% 0.16 50);
+  }
+
+  .channel-section-swatch--soylent {
+    background-color: oklch(65% 0.2 295);
+  }
+
+  .channel-section-swatch--wayne-tech {
+    background-color: oklch(68% 0.15 240);
+  }
+
+  .channel-section-swatch--sxi {
+    background-color: oklch(70% 0.15 162);
+  }
+
+  .channel-section-swatch--paragon {
+    background-color: oklch(80% 0.16 95);
+  }
+
+  /* ── Stage 3 v3 (chat sidebar Option B): global "N hidden channels"
+     drawer + supporting undo toast. The v2 per-section chip/footer rows
+     were removed in favour of one quiet entry at the rail's foot —
+     Marlowe's review judged per-section noise as the bigger problem than
+     per-section context loss. Pattern is closest to Notion's "N more"
+     row lifted from per-section to the sidebar level. */
+
+  /* Drawer wrapper sits as a regular flex child at the sidebar bottom
+     (no absolute positioning — so the toast above and the resize handle
+     to the right can't collide with it). */
+  .channel-hidden-drawer {
+    @apply flex flex-col rounded overflow-hidden;
+  }
+
+  /* The panel ALWAYS renders so the CSS height transition can animate
+     smoothly in BOTH directions. When closed, height: 0 + overflow hidden
+     hides the contents. When open, the height is FIXED at min(50vh,
+     360px) — not max-height — so the panel claims the same vertical
+     space regardless of how many channels are hidden (1 vs 20), and the
+     internal scroll engages whenever content exceeds the cap. This
+     trades a little empty space at low hidden counts for a consistent,
+     predictable footprint (per Marlowe's 2026-05-29 review: "fixed height
+     that gets adjusted appropriately to mobile"). Responsive by design
+     — caps at 360px on tall viewports, scales to 50vh on short ones. */
+  .channel-hidden-drawer-panel {
+    @apply overflow-y-auto transition-[height] duration-200 ease-out;
+    height: 0;
+  }
+
+  .channel-hidden-drawer--open .channel-hidden-drawer-panel {
+    height: min(50vh, 360px);
+    @apply mb-1;
+  }
+
+  .channel-hidden-drawer-group {
+    @apply px-1 py-1.5 space-y-1;
+  }
+
+  .channel-hidden-drawer-group-label {
+    @apply px-2 flex items-center;
+  }
+
+  .channel-hidden-drawer-group-list {
+    @apply space-y-0.5;
+  }
+
+  .channel-hidden-drawer-item {
+    @apply flex items-center gap-2 px-2 py-1 text-sm text-base-content/70 rounded hover:bg-base-300/60;
+  }
+
+  .channel-hidden-drawer-show {
+    @apply ml-auto flex-shrink-0 inline-flex items-center justify-center px-2 py-0.5 text-[0.7rem] font-medium rounded text-primary hover:bg-primary/10 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40;
+  }
+
+  /* Trigger row — silent at N=0 (the wrapper :if guards that). Visually
+     quiet by default so it reads as "rail chrome" not "actionable noise".
+     No leading eye icon — Marlowe's review explicitly removed it. */
+  .channel-hidden-drawer-trigger {
+    @apply flex items-center gap-2 px-3 py-2 min-h-[36px] rounded text-xs font-medium text-base-content/55 hover:text-base-content hover:bg-base-300/40 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/40;
+  }
+
+  .channel-hidden-drawer-caret {
+    @apply inline-block text-[0.65rem] leading-none flex-shrink-0 transition-transform duration-150;
+  }
+
+  .channel-hidden-drawer--open .channel-hidden-drawer-caret {
+    @apply rotate-180;
+  }
+
+  /* Undo toast — ephemeral 4-second affordance shown after a hide. Lives
+     IN-FLOW as a flex-shrink-0 child of <aside>, sitting between the
+     scrolling channel nav (flex-1, absorbs the toast's height by
+     shrinking when it appears) and the pinned "+ New channel" button
+     below. This is per Marlowe's 2026-05-29 review: an earlier absolute-
+     positioned float trial overlapped scroll-area content for 4s and
+     felt intrusive; the in-flow approach trades a soft scroll-area
+     compression for stable pinned chrome and zero content overlap
+     (same pattern Slack uses for compose-area system messages).
+
+     Horizontal margin (mx-2) inset keeps the toast off the sidebar's
+     right resize handle; the rounded corners + shadow give it the
+     transient-affordance read distinct from the channel rows above.
+
+     role=status + aria-live=polite preserved — hiding a channel is
+     non-destructive (nothing deleted, only user-filtered), so a polite
+     SR announcement is the right WCAG choice. */
+  .channel-undo-toast {
+    @apply flex-shrink-0 flex items-center gap-3 mx-2 mb-2 px-3 py-2 rounded-md bg-base-300 text-base-content text-sm shadow-md;
+    animation: channel-undo-toast-enter 200ms ease-out;
+  }
+
+  /* Soft fade-in entrance. No slide — the element is in-flow, so the
+     real visual change is the flex layout absorbing its height (which
+     is necessarily instant); fading the toast's own opacity from 0→1
+     softens that change without adding a misleading "from somewhere"
+     direction. Exit is instant (LiveView removes the element on
+     :if=false; a fast cut on a 4-second ephemeral is fine — matches
+     Material's fast-out exit principle). */
+  @keyframes channel-undo-toast-enter {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
+    }
+  }
+
+  /* WCAG 2.3.3 — disable the entrance animation entirely for users who
+     prefer reduced motion. The toast still announces via aria-live and
+     is visible immediately, just without any fade. */
+  @media (prefers-reduced-motion: reduce) {
+    .channel-undo-toast {
+      animation: none;
+    }
+  }
+
+  .channel-undo-toast-message {
+    @apply flex-1 min-w-0 truncate;
+  }
+
+  .channel-undo-toast-button {
+    @apply flex-shrink-0 inline-flex items-center justify-center px-2 py-0.5 text-xs font-semibold rounded text-primary hover:bg-primary/10 transition-colors;
   }
 
   /* Unread-count pill on a channel row. Identical sizing to the previous
@@ -2766,13 +3144,6 @@ body, .font-fabrikam, * {
      stack at every row. */
   .channel-row-unread-pill {
     @apply ml-1 flex-shrink-0 min-w-[1.125rem] h-[1.125rem] rounded-full bg-primary text-primary-content text-[0.6rem] font-bold flex items-center justify-center px-1 leading-none;
-  }
-
-  /* Active-row scope-pill wrapper (chat plan v2 Stage 4). Pinned to the
-     right side of the row, just before the unread-count pill. Inherits
-     `flex-shrink-0` so the channel-name truncates instead of the pill. */
-  .channel-row-scope-pill {
-    @apply ml-1 flex-shrink-0 inline-flex items-center;
   }
 
   /* Chat-header scope-pill — prominent size variant (chat plan v2 Stage 4).

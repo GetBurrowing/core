@@ -13,8 +13,11 @@ defmodule PlatformWeb.ChatLiveSectionRenderTest do
     * Empty sub-org section renders header + empty-state hint
     * Sub-org headers carry a `<.scope_pill>` reference
     * Drag-handle (`☰`) glyph is present in DOM
-    * 8-row visible cap + `+ N more` toggle behavior
-    * `toggle_section` event flips a key in @expanded_sections
+    * Uncap default — all rows visible, no `+ N more` toggle (chat
+      sidebar v3 Stage 2 replaced the legacy 8-row cap; this asserts
+      regression coverage for the removal)
+    * Per-channel hide affordance on sub-org rows only (NOT Pinned, NOT
+      DMs); `hide_channel` event removes a row from the rendered list
     * Mobile responsive gate: `hidden lg:flex` wrapper present
   """
 
@@ -126,26 +129,32 @@ defmodule PlatformWeb.ChatLiveSectionRenderTest do
 
       assert sidebar =~ "Paragon"
 
-      assert sidebar =~ "No channels yet — channels named matching this sub-org appear here.",
+      assert sidebar =~ "No channels yet — channels in this org appear here.",
              "Empty sub-org section is missing its empty-state hint"
     end
   end
 
   describe "section header affordances" do
-    test "each sub-org section header carries a scope_pill reference", %{conn: conn} do
+    test "each sub-org section header carries a color-only dot", %{conn: conn} do
       conn = authenticated_conn(conn)
       create_channel("general")
       {:ok, _view, html} = live_following_redirect(conn)
       sidebar = desktop_sidebar(html)
 
-      # `<.scope_pill clickable={false}>` renders a `<span>` whose
-      # aria-label is "<Scope> scope" (see ScopePill.aria_label_static/1).
-      # That static-variant aria-label is the cheapest stable hook.
-      assert sidebar =~ ~s(aria-label="Paragon scope")
-      assert sidebar =~ ~s(aria-label="Soylent scope")
-      assert sidebar =~ ~s(aria-label="Fabrikam scope")
-      assert sidebar =~ ~s(aria-label="Wayne-Tech scope")
-      assert sidebar =~ ~s(aria-label="SXI scope")
+      # Task 019e467d replaced the section-header `<.scope_pill>` (whose visible
+      # text was derived from the color token, so a recolor read as a rename)
+      # with a COLOR-ONLY dot keyed off `section.color`. Each seeded sub-org
+      # section carries its `bg-<token>-dot` swatch; identity text comes only
+      # from `section.name`, never from the color.
+      assert sidebar =~ "channel-section-color-dot"
+      assert sidebar =~ "bg-paragon-dot"
+      assert sidebar =~ "bg-soylent-dot"
+      assert sidebar =~ "bg-fabrikam-dot"
+      assert sidebar =~ "bg-wayne-tech-dot"
+      assert sidebar =~ "bg-sxi-dot"
+
+      # The old text-bearing scope pill is gone from the section header.
+      refute sidebar =~ ~s(aria-label="Paragon scope")
     end
 
     test "drag-handle glyph is present in DOM (opacity-0 lives in CSS)", %{conn: conn} do
@@ -163,71 +172,113 @@ defmodule PlatformWeb.ChatLiveSectionRenderTest do
     end
   end
 
-  describe "8-row visible cap + show-more toggle" do
-    test "section with 8 channels renders all rows; no show-more button", %{conn: conn} do
+  describe "uncap default — all rows visible (chat sidebar v3 Stage 2)" do
+    test "section with 20+ channels renders every row; no truncation toggle", %{conn: conn} do
       conn = authenticated_conn(conn)
 
-      # 8 channels in the Fabrikam bucket (catch-all). Slugs that don't match
-      # any sub-org bucket fall through to Fabrikam (see channel_scope/1).
-      for n <- 1..8, do: create_channel("fabrikam-test-#{n}")
+      # 20 channels in the Fabrikam bucket (catch-all). Pre-v3 this would have
+      # rendered 8 visible + `+ 12 more` toggle. v3 deletes the cap.
+      for n <- 1..20, do: create_channel("fabrikam-test-#{n}")
 
       {:ok, _view, html} = live_following_redirect(conn)
       sidebar = desktop_sidebar(html)
 
-      for n <- 1..8 do
+      for n <- 1..20 do
         assert sidebar =~ "Fabrikam-test-#{n}",
-               "Channel fabrikam-test-#{n} should render at the 8-row boundary"
+               "Channel fabrikam-test-#{n} should render after the cap removal"
       end
 
-      refute sidebar =~ "+ 1 more"
-      refute sidebar =~ "+ 0 more"
+      refute sidebar =~ "channel-section-show-more",
+             "Legacy `+ N more` toggle should be gone after Stage 2"
 
-      refute sidebar =~ ~s(phx-value-section="Fabrikam"),
-             "No show-more toggle expected when section has exactly 8 rows"
+      refute sidebar =~ ~s(phx-click="toggle_section"),
+             "Legacy `toggle_section` event should be gone after Stage 2"
     end
+  end
 
-    test "section with 9 channels hides the 9th behind a `+ 1 more` toggle", %{conn: conn} do
+  describe "per-channel hide affordance (chat sidebar v3 Stage 2)" do
+    test "sub-org rows render the eye-slash hide button; Pinned + DMs do not",
+         %{conn: conn} do
       conn = authenticated_conn(conn)
-
-      for n <- 1..9, do: create_channel("fabrikam-test-#{n}")
+      create_channel("general")
 
       {:ok, _view, html} = live_following_redirect(conn)
       sidebar = desktop_sidebar(html)
 
-      # First 8 visible, 9th hidden.
-      for n <- 1..8 do
-        assert sidebar =~ "Fabrikam-test-#{n}"
-      end
+      # General channel falls into the Fabrikam bucket; its row must carry
+      # phx-click="hide_channel" wired to the row's space id.
+      assert sidebar =~ ~s(phx-click="hide_channel"),
+             "Sub-org channel rows should expose a hide_channel event"
 
-      refute sidebar =~ "Fabrikam-test-9",
-             "9th channel should be hidden behind the `+ N more` toggle"
+      assert sidebar =~ ~s(aria-label="Hide #General"),
+             "Hide button should carry an aria-label naming the channel"
 
-      assert sidebar =~ "+ 1 more"
-      assert sidebar =~ ~s(phx-value-section="Fabrikam")
+      # The button-count on the Fabrikam bucket — one per visible channel.
+      hide_button_count =
+        Regex.scan(~r/phx-click="hide_channel"/, sidebar)
+        |> length()
+
+      assert hide_button_count == 1,
+             "Expected exactly one hide button (for #general); found #{hide_button_count}"
     end
 
-    test "toggle_section event flips the section key in @expanded_sections", %{conn: conn} do
+    test "clicking hide_channel removes the row from the rendered list", %{conn: conn} do
       conn = authenticated_conn(conn)
-
-      for n <- 1..9, do: create_channel("fabrikam-test-#{n}")
+      target = create_channel("hide-me")
+      _other = create_channel("keep-me")
 
       {:ok, view, html_before} = live_following_redirect(conn)
       sidebar_before = desktop_sidebar(html_before)
-      refute sidebar_before =~ "Fabrikam-test-9"
 
-      # Click the show-more toggle for the Fabrikam bucket.
+      assert sidebar_before =~ "Hide-me"
+      assert sidebar_before =~ "Keep-me"
+
       html_after =
         view
-        |> element(~s(button[phx-value-section="Fabrikam"]))
+        |> element(~s(button[phx-click="hide_channel"][phx-value-id="#{target.id}"]))
         |> render_click()
 
       sidebar_after = desktop_sidebar(html_after)
 
-      assert sidebar_after =~ "Fabrikam-test-9",
-             "After toggle_section, the 9th channel should be revealed"
+      # Stage 3 surfaces the hidden channel's name in an undo toast at the
+      # bottom of the sidebar (role=status), so a bare substring check for
+      # the name would falsely fail. Assert at the row level instead: the
+      # hide button only renders inside a visible sub-org row, so its
+      # absence confirms the row was removed. The undo toast's button uses
+      # `phx-click="undo_hide"`, not `hide_channel`, so it won't match.
+      refute sidebar_after =~
+               ~s(phx-click="hide_channel" phx-value-id="#{target.id}"),
+             "Hidden channel's row should be removed from the rendered sidebar"
 
-      refute sidebar_after =~ "+ 1 more",
-             "After toggle_section, the `+ N more` button collapses (everything is visible)"
+      assert sidebar_after =~ "Keep-me",
+             "Unrelated channel should still render after hiding the target"
+    end
+
+    test "hidden state survives a remount (preference is persisted)", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      target = create_channel("persist-me")
+
+      {:ok, view, _} = live_following_redirect(conn)
+
+      view
+      |> element(~s(button[phx-click="hide_channel"][phx-value-id="#{target.id}"]))
+      |> render_click()
+
+      # Fresh LV mount — the hidden id should be loaded from
+      # users.preferences['hidden_channel_ids'] and the row filtered out.
+      {:ok, _view2, html_remount} = live_following_redirect(conn)
+      sidebar_remount = desktop_sidebar(html_remount)
+
+      # Stage 3 v3 (Option B): the global Hidden drawer at the rail's
+      # foot now renders the hidden channel's name in its grouped list
+      # (the panel always renders for the CSS transition; visibility is
+      # CSS-driven). So a bare substring check would falsely fail. Assert
+      # at the row level instead: the channel's hide button only renders
+      # inside a visible sub-org row, so its absence after remount proves
+      # the preference was loaded and the row was filtered out.
+      refute sidebar_remount =~
+               ~s(phx-click="hide_channel" phx-value-id="#{target.id}"),
+             "Hidden channel's row should remain absent after remount (preference persisted)"
     end
   end
 

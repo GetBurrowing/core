@@ -318,6 +318,52 @@ defmodule PlatformWeb.ChatLive.CanvasHooks do
   defp handle_info({:canvas_deleted, canvas}, socket), do: {:halt, remove(socket, canvas)}
   defp handle_info({:canvas_restored, canvas}, socket), do: {:halt, put(socket, canvas)}
 
+  # Patch broadcast from `Canvas.Server.apply_patches/3,4` — fired on every
+  # successful patch (checklist toggle, form save, embed update, etc.). Without
+  # this clause the pane silently kept stale state until manual reload (the
+  # eventual post-persist `:canvas_updated` broadcast is async + best-effort,
+  # so the user can sit on stale content for an arbitrary delay).
+  #
+  # The in-memory `CanvasServer` state is always ahead of the DB during the
+  # async persist window, so we merge the fresh document+revision from
+  # `describe/1` onto the canvas row already in the socket — that way we never
+  # race the persist tx, and we don't have to apply `operations` ourselves.
+  #
+  # No-op if the patched canvas isn't in this socket's list (e.g. cross-space
+  # noise from a stale subscription, or the canvas was removed mid-flight).
+  #
+  # NOTE: viewer presence (`set_canvas_engagement(.., :viewing, ..)`) is
+  # currently only registered by `canvas_open_mobile`; the desktop
+  # `canvas_open` event in `ChatLive` calls `CanvasHooks.set_active/2` without
+  # touching Presence, which is why `presence: viewing: []` is observed. That
+  # is unrelated to patch live-update and belongs with the `canvas_open`
+  # handler, not in this PubSub clause — not fixed here.
+  defp handle_info({:canvas_patched, canvas_id, _new_revision, _operations}, socket) do
+    canvases_by_id = Map.get(socket.assigns, :canvases_by_id, %{})
+
+    socket =
+      case Map.get(canvases_by_id, canvas_id) do
+        nil ->
+          socket
+
+        %{} = existing ->
+          case CanvasServer.describe(canvas_id) do
+            {:ok, %{document: document}} ->
+              put(socket, %{existing | document: document, updated_at: DateTime.utc_now()})
+
+            _ ->
+              # GenServer gone — fall back to a DB read, accepting that this
+              # may briefly show the pre-patch document until persist lands.
+              case Chat.get_canvas(canvas_id) do
+                %{} = canvas -> put(socket, canvas)
+                _ -> socket
+              end
+          end
+      end
+
+    {:halt, socket}
+  end
+
   # Canvas kind emissions (action-row click, form submit, checklist toggle, …)
   # arrive here via `ChatPubSub.broadcast_canvas/2`. Events are signals — they
   # don't mutate the document. For user-visible feedback we flash a short

@@ -174,17 +174,27 @@ defmodule Platform.Meetings do
 
       result =
         Repo.transaction(fn ->
+          # Generate the meeting id up front so the backing chat space can be
+          # given a globally-unique slug. The meeting's own `slug` is only
+          # unique within its project, but `chat_spaces.slug` carries a global
+          # unique index (`chat_spaces_unique_slug`), so we derive the space
+          # slug from the freshly-minted UUIDv7 — matching the LiveKit room
+          # name convention (`"meeting-{uuid}"`). Without a slug the discussion
+          # panel (gated on `@meeting.chat_space.slug`) cannot mount the
+          # embedded chat and renders "No discussion bound to this meeting."
+          meeting_id = Platform.Types.UUIDv7.generate()
+          chat_space_slug = "meeting-#{meeting_id}"
+
           space =
             case Chat.create_space(%{
                    name: name,
+                   slug: chat_space_slug,
                    kind: "meeting",
                    metadata: %{"project_id" => project_id}
                  }) do
               {:ok, space} -> space
               {:error, changeset} -> Repo.rollback(changeset)
             end
-
-          meeting_id = Platform.Types.UUIDv7.generate()
 
           meeting_attrs = %{
             project_id: project_id,
@@ -237,6 +247,28 @@ defmodule Platform.Meetings do
   @doc "Get a meeting by ID. Returns `nil` if not found."
   @spec get_meeting(binary()) :: Meeting.t() | nil
   def get_meeting(id), do: Repo.get(Meeting, id)
+
+  @doc """
+  Return the most-recently-started `live` meeting bound to a chat space,
+  or `nil` when the space has no live meeting.
+
+  Meetings link to their backing chat space via `chat_space_id` (see
+  `create_meeting/1`). The LiveKit join path (`MeetingHooks.do_join/1`)
+  joins the `"space-<chat_space_id>"` room, so the `room_finished` webhook
+  resolves the empty room's space id and uses this to find the live meeting
+  to end. Returns the newest live meeting (by `started_at`) defensively in
+  case more than one is live for the space.
+  """
+  @spec get_live_meeting_for_space(binary() | nil) :: Meeting.t() | nil
+  def get_live_meeting_for_space(space_id) when is_binary(space_id) do
+    Meeting
+    |> where([m], m.chat_space_id == ^space_id and m.status == "live")
+    |> order_by([m], desc: m.started_at)
+    |> limit(1)
+    |> Repo.one()
+  end
+
+  def get_live_meeting_for_space(_space_id), do: nil
 
   @doc "Get a meeting by its per-project slug. Returns `nil` if not found."
   @spec get_meeting_by_slug(binary(), String.t()) :: Meeting.t() | nil
@@ -542,6 +574,147 @@ defmodule Platform.Meetings do
   end
 
   @doc """
+  Parse a LiveKit participant identity string into a typed FK tuple.
+
+  Suite mints identities as `"user:<uuid>"` (human joiners, see
+  `MeetingHooks.do_join/1`) and `"agent:<uuid>"` (agent runtime). Returns
+  `{:user, uuid}` / `{:agent, uuid}` for a well-formed identity, or
+  `:unknown` for anything else (no prefix, bad UUID, nil) — mirroring the
+  defensive validation style of `space_id_from_room_name/1` in the webhook
+  controller.
+  """
+  @spec parse_identity(String.t() | nil) :: {:user, binary()} | {:agent, binary()} | :unknown
+  def parse_identity("user:" <> uuid), do: cast_identity(:user, uuid)
+  def parse_identity("agent:" <> uuid), do: cast_identity(:agent, uuid)
+  def parse_identity(_), do: :unknown
+
+  defp cast_identity(kind, uuid) do
+    case Ecto.UUID.cast(uuid) do
+      {:ok, valid} -> {kind, valid}
+      :error -> :unknown
+    end
+  end
+
+  @doc """
+  Idempotently upsert a `meeting_participants` row for a live LiveKit
+  joiner identified by a webhook `participant_joined` event.
+
+  Parses the LiveKit `identity` into a resolvable `user_id`/`agent_id`
+  FK so the render path (`active_participants_for_space/1` →
+  `resolve_identity/1`) shows the participant's real name instead of the
+  literal "User". An identity that does not parse yields a nil-FK row
+  carrying just the `name`.
+
+  Find-or-reactivate: if an active (`left_at IS NULL`) row already exists
+  for this room + identity, returns it unchanged — LiveKit re-fires
+  `participant_joined` on reconnect, and we want one stable row, not a
+  duplicate. Otherwise inserts via `participant_joined/2`, reusing its
+  broadcast block.
+
+  Match key: `(room_id, user_id)` when a user FK is present, else
+  `(room_id, agent_id)`, else `(room_id, display_name)` so identityless
+  rows still dedupe by name.
+  """
+  @spec upsert_live_participant(Room.t(), %{
+          required(:identity) => String.t() | nil,
+          required(:name) => String.t() | nil
+        }) :: {:ok, Participant.t()} | {:error, Ecto.Changeset.t()}
+  def upsert_live_participant(%Room{} = room, %{identity: identity} = attrs) do
+    name = Map.get(attrs, :name)
+    parsed = parse_identity(identity)
+    fk = identity_fk(parsed)
+    display_name = name || display_name_from_identity(parsed) || "User"
+
+    case find_active_participant(room.id, fk, display_name) do
+      %Participant{} = existing ->
+        {:ok, existing}
+
+      nil ->
+        participant_joined(room, Map.merge(fk, %{display_name: display_name}))
+    end
+  end
+
+  @doc """
+  Mark a live participant as having left, resolving the same match key
+  `upsert_live_participant/2` uses (user_id/agent_id first, then
+  display_name). Generalizes `participant_left/2` (which matches only on
+  display_name) so an identity-bearing leave is resolved by FK even when
+  the LiveKit `name` differs from the stored `display_name`.
+
+  Returns `{:error, :not_found}` when no active row matches (e.g. a leave
+  for a participant we never recorded) — callers should tolerate this.
+  """
+  @spec mark_live_participant_left(Room.t(), %{
+          required(:identity) => String.t() | nil,
+          required(:name) => String.t() | nil
+        }) :: {:ok, Participant.t()} | {:error, :not_found}
+  def mark_live_participant_left(%Room{} = room, %{identity: identity} = attrs) do
+    name = Map.get(attrs, :name)
+    parsed = parse_identity(identity)
+    fk = identity_fk(parsed)
+    display_name = name || display_name_from_identity(parsed)
+
+    case find_active_participant(room.id, fk, display_name) do
+      %Participant{} = participant ->
+        {:ok, updated} =
+          participant
+          |> Participant.changeset(%{left_at: DateTime.utc_now()})
+          |> Repo.update()
+
+        MeetingsPubSub.broadcast_room(room.id, {:participant_left, updated})
+        broadcast_presence_change(room.id, room.space_id)
+        {:ok, updated}
+
+      nil ->
+        {:error, :not_found}
+    end
+  end
+
+  # FK attrs map for a parsed identity — drives both insert attrs and the
+  # match-key lookup.
+  defp identity_fk({:user, uuid}), do: %{user_id: uuid}
+  defp identity_fk({:agent, uuid}), do: %{agent_id: uuid}
+  defp identity_fk(:unknown), do: %{}
+
+  defp display_name_from_identity(_), do: nil
+
+  # Find an active (not-yet-left) participant by the strongest available
+  # key: user_id, then agent_id, then display_name.
+  defp find_active_participant(room_id, %{user_id: user_id}, _display_name)
+       when is_binary(user_id) do
+    Repo.one(
+      from(p in Participant,
+        where: p.room_id == ^room_id and p.user_id == ^user_id and is_nil(p.left_at),
+        order_by: [desc: p.joined_at],
+        limit: 1
+      )
+    )
+  end
+
+  defp find_active_participant(room_id, %{agent_id: agent_id}, _display_name)
+       when is_binary(agent_id) do
+    Repo.one(
+      from(p in Participant,
+        where: p.room_id == ^room_id and p.agent_id == ^agent_id and is_nil(p.left_at),
+        order_by: [desc: p.joined_at],
+        limit: 1
+      )
+    )
+  end
+
+  defp find_active_participant(_room_id, _fk, nil), do: nil
+
+  defp find_active_participant(room_id, _fk, display_name) when is_binary(display_name) do
+    Repo.one(
+      from(p in Participant,
+        where: p.room_id == ^room_id and p.display_name == ^display_name and is_nil(p.left_at),
+        order_by: [desc: p.joined_at],
+        limit: 1
+      )
+    )
+  end
+
+  @doc """
   List active (not yet left) participants in a room, preloading user and
   agent associations for display name and avatar resolution.
   """
@@ -568,6 +741,37 @@ defmodule Platform.Meetings do
       room -> active_participants(room.id)
     end
   end
+
+  @doc """
+  Return the active (`left_at IS NULL`) participant row for a given user in
+  a space's current meeting, or `nil`.
+
+  Used by the LiveView reconnect path (`MeetingHooks.attach/1`) to detect
+  that a user was already in the live meeting before a transient socket
+  drop, so the reconnect mount can restore `:in_meeting` and re-push
+  `join-meeting` instead of resetting state. Resolves the active room via
+  `get_active_room/1` and matches on `user_id` (the FK the live join path
+  records via `upsert_live_participant/2`).
+  """
+  @spec active_participant_for_user_in_space(binary(), binary()) :: Participant.t() | nil
+  def active_participant_for_user_in_space(space_id, user_id)
+      when is_binary(space_id) and is_binary(user_id) do
+    case get_active_room(space_id) do
+      nil ->
+        nil
+
+      room ->
+        Repo.one(
+          from(p in Participant,
+            where: p.room_id == ^room.id and p.user_id == ^user_id and is_nil(p.left_at),
+            order_by: [desc: p.joined_at],
+            limit: 1
+          )
+        )
+    end
+  end
+
+  def active_participant_for_user_in_space(_space_id, _user_id), do: nil
 
   @doc "Count active participants for a space's current meeting."
   @spec active_participant_count(binary()) :: non_neg_integer()

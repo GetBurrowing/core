@@ -281,4 +281,74 @@ defmodule Platform.Accounts do
         {:error, :not_found}
     end
   end
+
+  # ── Hidden channels (chat sidebar v3 Stage 1) ──────────────────────────
+  #
+  # Stored as `preferences["hidden_channel_ids"] = ["<uuid>", ...]`. The
+  # render path reads via `get_hidden_channel_ids/1` which wraps the list
+  # in a `MapSet` for O(1) row-level lookups in `chat_live`'s section
+  # render. Stale ids (channel deleted while still hidden by some user)
+  # are tolerated at read time — see `Platform.Chat.HiddenChannels.filter/2`.
+
+  @hidden_channels_key "hidden_channel_ids"
+
+  @doc """
+  Returns the user's hidden-channel ids as a `MapSet`. Empty MapSet for
+  unknown users or users with no hidden channels.
+
+  MapSet (not List) is intentional so the per-row filter in the sidebar
+  render path is O(1) instead of O(n) per section.
+  """
+  @spec get_hidden_channel_ids(binary() | nil) :: MapSet.t(String.t())
+  def get_hidden_channel_ids(user_id) when is_binary(user_id) do
+    user_id
+    |> get_user_preferences()
+    |> Map.get(@hidden_channels_key, [])
+    |> List.wrap()
+    |> MapSet.new()
+  end
+
+  def get_hidden_channel_ids(_), do: MapSet.new()
+
+  @doc """
+  Add a channel id to the user's hidden-channel set. Idempotent on
+  double-hide (set semantics dedupe).
+
+  Returns `{:ok, %User{}}`, or `{:error, :not_found}` when the user_id
+  doesn't match a real row — anonymous chat sessions use a generated UUID,
+  callers should treat the not-found case as a silent no-op.
+  """
+  @spec hide_channel(binary(), binary()) ::
+          {:ok, User.t()} | {:error, :not_found | Ecto.Changeset.t()}
+  def hide_channel(user_id, space_id) when is_binary(user_id) and is_binary(space_id) do
+    next =
+      user_id
+      |> get_hidden_channel_ids()
+      |> MapSet.put(space_id)
+      |> MapSet.to_list()
+
+    update_user_preference(user_id, @hidden_channels_key, next)
+  end
+
+  def hide_channel(_, _), do: {:error, :not_found}
+
+  @doc """
+  Remove a channel id from the user's hidden-channel set. Idempotent on
+  unhide of a never-hidden id (set semantics dedupe).
+
+  Same return shape as `hide_channel/2`.
+  """
+  @spec unhide_channel(binary(), binary()) ::
+          {:ok, User.t()} | {:error, :not_found | Ecto.Changeset.t()}
+  def unhide_channel(user_id, space_id) when is_binary(user_id) and is_binary(space_id) do
+    next =
+      user_id
+      |> get_hidden_channel_ids()
+      |> MapSet.delete(space_id)
+      |> MapSet.to_list()
+
+    update_user_preference(user_id, @hidden_channels_key, next)
+  end
+
+  def unhide_channel(_, _), do: {:error, :not_found}
 end

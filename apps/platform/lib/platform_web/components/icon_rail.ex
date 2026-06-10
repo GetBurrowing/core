@@ -34,8 +34,8 @@ defmodule PlatformWeb.Components.IconRail do
 
   Both desktop and mobile views consume the same `destinations/1` list.
   The list carries the hero icon name, label, path, cluster, and a
-  `fabrikam_only?` flag — the Admin entry is the only `fabrikam_only?: true`
-  destination today, and consumers filter on it via `is_fabrikam_user`.
+  `fabrikam_only?` flag. Admin and Prompts are `fabrikam_only?: true` today (as of
+  2026-05-20); consumers filter on the flag via `is_fabrikam_user`.
   Future destinations (e.g. Inbox, Context, Memory, Prompts) may not yet
   have routes; their `:path` values are noted in the entry but the actual
   link wiring is deferred to Stage 3.
@@ -68,11 +68,22 @@ defmodule PlatformWeb.Components.IconRail do
   and `aria-current="page"`.
   """
   def icon_rail(assigns) do
+    is_fabrikam_user = Map.get(assigns, :is_fabrikam_user, false)
+
     assigns =
       assigns
-      |> assign(:live_destinations, destinations_for(:live))
-      |> assign(:working_destinations, destinations_for(:working))
-      |> assign(:admin_destinations, destinations_for(:admin))
+      |> assign(
+        :live_destinations,
+        destinations_for(:live) |> filter_fabrikam_only(is_fabrikam_user)
+      )
+      |> assign(
+        :working_destinations,
+        destinations_for(:working) |> filter_fabrikam_only(is_fabrikam_user)
+      )
+      |> assign(
+        :admin_destinations,
+        destinations_for(:admin) |> filter_fabrikam_only(is_fabrikam_user)
+      )
 
     ~H"""
     <nav
@@ -214,10 +225,10 @@ defmodule PlatformWeb.Components.IconRail do
       navigation and will reconcile any missing routes.)
     * `:hero_icon` — heroicon class name (rendered in Stage 2)
     * `:cluster` — `:live | :working | :admin`
-    * `:fabrikam_only?` — boolean; today only `:admin` is `true`
+    * `:fabrikam_only?` — boolean; today `:admin` and `:prompts` are `true`
 
-  When `opts[:is_fabrikam_user]` is `false` (default), the `:admin` cluster
-  is omitted from the returned list.
+  When `opts[:is_fabrikam_user]` is `false` (default), all `fabrikam_only?: true`
+  entries are omitted from the returned list.
   """
   def destinations(opts \\ []) do
     is_fabrikam_user = Keyword.get(opts, :is_fabrikam_user, false)
@@ -233,6 +244,16 @@ defmodule PlatformWeb.Components.IconRail do
   defp destinations_for(cluster) do
     canonical_destinations()
     |> Enum.filter(&(&1.cluster == cluster))
+  end
+
+  # Apply the fabrikam_only? filter against a per-render is_fabrikam_user flag.
+  # Used at the icon_rail/1 render boundary so EVERY cluster (live /
+  # working / admin) honors fabrikam_only? consistently. Previously only the
+  # admin cluster had a `:if={@is_fabrikam_user}` template gate, which meant
+  # a fabrikam_only?:true tile in the working cluster (e.g. Prompts) still
+  # rendered for members. Fixed 2026-05-20.
+  defp filter_fabrikam_only(destinations, is_fabrikam_user) do
+    Enum.reject(destinations, fn dest -> dest.fabrikam_only? and not is_fabrikam_user end)
   end
 
   defp mobile_primary_destinations do
@@ -336,12 +357,16 @@ defmodule PlatformWeb.Components.IconRail do
       },
       %{
         key: :prompts,
-        # TODO: closest existing route is /admin/prompts; Stage 3 reconciles.
+        # Prompts is admin-only per the route gate (live_session :admin /
+        # ensure_admin). Rail entry was previously fabrikam_only?: false which
+        # rendered the tile for members but redirected on click — fixed
+        # 2026-05-20. Kept in working cluster (vs admin cluster) because
+        # Prompts is the most-frequently-used admin surface for admins.
         label: "Prompts",
         path: "/admin/prompts",
         hero_icon: "hero-command-line",
         cluster: :working,
-        fabrikam_only?: false
+        fabrikam_only?: true
       },
       %{
         key: :meetings,

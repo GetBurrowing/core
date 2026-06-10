@@ -1,4 +1,5 @@
 import ButtonLoading from "./button_loading"
+import ChannelMembershipDrag from "./channel_membership_drag"
 import ChatScrollToMessage from "./chat_scroll_to_message"
 import ChatState from "./chat_state"
 import CodeBlock from "./code_block"
@@ -42,6 +43,7 @@ import UploadButton from "./upload_button"
 
 export default {
   ButtonLoading,
+  ChannelMembershipDrag,
   ChatScrollToMessage,
   ChatState,
   CodeBlock,

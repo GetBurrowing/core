@@ -675,7 +675,10 @@ defmodule PlatformWeb.GithubWebhookControllerTest do
             "body" => "",
             "user" => %{"login" => "merge-bot"},
             "merged_by" => %{"login" => "human-merger"},
-            "head" => %{"ref" => rollup_branch}
+            "head" => %{"ref" => rollup_branch},
+            # Stage 3 (T6 hardening): the rollup PR's base must match the
+            # stack's base_branch (default "main") for the fan-out to fire.
+            "base" => %{"ref" => "main"}
           },
           overrides
         )
@@ -1033,6 +1036,68 @@ defmodule PlatformWeb.GithubWebhookControllerTest do
         assert reloaded.status == first_status
         assert reloaded.updated_at == first_updated_at
         assert reloaded.evidence == first_evidence
+      end
+    end
+
+    # ── Stage 3 (T6 hardening): base-branch guard ──────────────────────────
+
+    test "base mismatch: rollup branch merged into NON-base branch does NOT complete the stack",
+         %{conn: conn} do
+      %{stack: stack, rollup_branch: rollup_branch, members: members} =
+        build_stack_with_members!(2,
+          slug: "base-mismatch-#{System.unique_integer([:positive])}"
+        )
+
+      # stack.base_branch defaults to "main"; deliver a merge whose base is
+      # a DIFFERENT branch. The head matches the rollup branch but the base
+      # does not — the guard must treat this as a non-rollup merge.
+      payload =
+        rollup_merged_payload(rollup_branch, %{
+          "base" => %{"ref" => "integration-x"}
+        })
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          conn = post(conn, @github_webhook_path, payload)
+          assert json_response(conn, 201)
+        end)
+
+      assert log =~ "matches rollup branch of stack #{stack.id}"
+      assert log =~ "NOT auto-completing stack"
+
+      # Stack stays in its prior status (NOT done).
+      reloaded_stack = Platform.Repo.get!(Platform.Tasks.Stack, stack.id)
+      refute reloaded_stack.status == "done"
+      refute Map.has_key?(reloaded_stack.metadata || %{}, "rollup_merge")
+
+      # No member pr_merged validation was fanned out.
+      for %{pr_validation: v} <- members do
+        reloaded = Platform.Repo.get!(Platform.Tasks.Validation, v.id)
+        refute reloaded.status == "passed"
+        refute Map.get(reloaded.evidence || %{}, "fanned_out_from_stack_rollup_pr")
+      end
+    end
+
+    test "unmerged close on a rollup branch is a no-op (not merged)", %{conn: conn} do
+      %{stack: stack, rollup_branch: rollup_branch, members: members} =
+        build_stack_with_members!(2,
+          slug: "unmerged-rollup-#{System.unique_integer([:positive])}"
+        )
+
+      payload =
+        rollup_merged_payload(rollup_branch, %{"merged" => false})
+
+      conn = post(conn, @github_webhook_path, payload)
+      assert %{"status" => "ignored"} = json_response(conn, 200)
+
+      # Stack untouched, no fan-out.
+      reloaded_stack = Platform.Repo.get!(Platform.Tasks.Stack, stack.id)
+      refute reloaded_stack.status == "done"
+      refute Map.has_key?(reloaded_stack.metadata || %{}, "rollup_merge")
+
+      for %{pr_validation: v} <- members do
+        reloaded = Platform.Repo.get!(Platform.Tasks.Validation, v.id)
+        refute reloaded.status == "passed"
       end
     end
   end

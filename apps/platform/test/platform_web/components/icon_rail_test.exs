@@ -55,16 +55,21 @@ defmodule PlatformWeb.Components.IconRailTest do
   end
 
   describe "destinations/1" do
-    test "returns 8 destinations for a non-Fabrikam user (Admin filtered out)" do
+    test "returns 7 destinations for a non-Fabrikam user (Admin + Prompts filtered out)" do
       list = destinations(is_fabrikam_user: false)
-      assert length(list) == 8
+      assert length(list) == 7
       refute Enum.any?(list, &(&1.key == :admin))
+      # Prompts is also fabrikam_only?: true as of 2026-05-20 (admin-only access
+      # at the route level; previously rendered for members but redirected
+      # on click — bug fixed by filtering fabrikam_only? in all clusters).
+      refute Enum.any?(list, &(&1.key == :prompts))
     end
 
-    test "returns all 9 destinations for a Fabrikam user (Admin included)" do
+    test "returns all 9 destinations for a Fabrikam user (Admin + Prompts included)" do
       list = destinations(is_fabrikam_user: true)
       assert length(list) == 9
       assert Enum.any?(list, &(&1.key == :admin))
+      assert Enum.any?(list, &(&1.key == :prompts))
     end
 
     test "every entry has the required keys" do
@@ -79,9 +84,14 @@ defmodule PlatformWeb.Components.IconRailTest do
       end
     end
 
-    test "admin is the only fabrikam_only? entry" do
+    test "fabrikam_only? entries are Prompts and Admin, in canonical order" do
+      # Ordered assertion: if anyone adds another fabrikam_only? entry without
+      # updating this list, the test fails immediately. Canonical order is
+      # the position in canonical_destinations/0 (Prompts is in the working
+      # cluster between Context+Memory and Meetings; Admin is the last entry
+      # in the admin cluster).
       fabrikam_only = destinations(is_fabrikam_user: true) |> Enum.filter(& &1.fabrikam_only?)
-      assert Enum.map(fabrikam_only, & &1.key) == [:admin]
+      assert Enum.map(fabrikam_only, & &1.key) == [:prompts, :admin]
     end
 
     test "cluster assignment" do
@@ -156,9 +166,9 @@ defmodule PlatformWeb.Components.IconRailTest do
       assert count_data_destination_matches(html) == 9
     end
 
-    test "renders 8 destination tiles for a non-Fabrikam user (no Admin)" do
+    test "renders 7 destination tiles for a non-Fabrikam user (no Admin, no Prompts)" do
       html = render_icon_rail(%{is_fabrikam_user: false})
-      assert count_data_destination_matches(html) == 8
+      assert count_data_destination_matches(html) == 7
     end
 
     test "Admin slot uses mt-auto so it pins to the bottom of the rail" do

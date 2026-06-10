@@ -15,6 +15,7 @@ defmodule Platform.Chat.Space do
     field(:kind, :string, default: "channel")
     field(:topic, :string)
     field(:metadata, :map, default: %{})
+    field(:org_id, :binary_id)
     field(:primary_agent_id, :binary_id)
     field(:watch_enabled, :boolean, default: false)
     field(:is_direct, :boolean, default: false)
@@ -34,6 +35,7 @@ defmodule Platform.Chat.Space do
       :kind,
       :topic,
       :metadata,
+      :org_id,
       :primary_agent_id,
       :watch_enabled,
       :is_direct,
@@ -46,6 +48,7 @@ defmodule Platform.Chat.Space do
     |> validate_is_direct()
     |> unique_constraint(:slug, name: :chat_spaces_unique_slug)
     |> foreign_key_constraint(:primary_agent_id)
+    |> foreign_key_constraint(:org_id)
   end
 
   defp validate_channel_fields(changeset) do

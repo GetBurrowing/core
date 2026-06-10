@@ -246,5 +246,24 @@ defmodule Platform.Chat.ConversationTest do
       assert String.contains?(name, "Bob")
       assert String.contains?(name, "Charlie")
     end
+
+    test "shows space name for meeting spaces (no FunctionClauseError)" do
+      # Regression guard: a `kind: "meeting"` space appearing in the
+      # ChatLive sidebar/header used to crash the LiveView because
+      # display_name_for_space/3 had no meeting clause (two reviewers
+      # worked around it by re-seeding meetings as channels).
+      {:ok, space} =
+        Chat.create_space(%{name: "Standup", slug: unique_slug(), kind: "meeting"})
+
+      assert Chat.display_name_for_space(space, [], "any-id") == "Standup"
+    end
+
+    test "falls back to \"Meeting\" for an unnamed meeting space" do
+      {:ok, space} =
+        Chat.create_space(%{name: "x", slug: unique_slug(), kind: "meeting"})
+
+      # Simulate a meeting space whose name is nil at render time.
+      assert Chat.display_name_for_space(%{space | name: nil}, [], "any-id") == "Meeting"
+    end
   end
 end

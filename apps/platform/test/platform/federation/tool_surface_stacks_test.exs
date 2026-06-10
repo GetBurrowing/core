@@ -201,6 +201,30 @@ defmodule Platform.Federation.ToolSurfaceStacksTest do
 
       # No cross-stack edges in this scenario.
       assert result.cross_stack_deps == []
+
+      # `members_in_merge_order` is the topological (foundational-first)
+      # ordering of member ids: root (level 0) before child (level 1).
+      assert result.members_in_merge_order == [root.id, child.id]
+    end
+
+    test "members_in_merge_order falls back to creation order with no declared deps" do
+      project = create_project()
+      slug = unique_slug("e2e-get-nodep")
+      %{stack_id: stack_id} = create_stack_via_tool(project.id, slug, "No Deps")
+
+      {:ok, first} = Tasks.create_task(%{project_id: project.id, title: "First"})
+      {:ok, second} = Tasks.create_task(%{project_id: project.id, title: "Second"})
+
+      {:ok, _} =
+        ToolSurface.execute("stack_add", %{"stack_id" => stack_id, "task_id" => first.id}, %{})
+
+      {:ok, _} =
+        ToolSurface.execute("stack_add", %{"stack_id" => stack_id, "task_id" => second.id}, %{})
+
+      {:ok, result} = ToolSurface.execute("stack_get", %{"stack_id" => stack_id}, %{})
+
+      # No edges → single topological level → stack_position (creation) order.
+      assert result.members_in_merge_order == [first.id, second.id]
     end
   end
 

@@ -49,7 +49,7 @@ defmodule PlatformWeb.Components.Meeting.VideoTile do
   attr(:id_prefix, :string,
     default: "video-tile",
     doc:
-      "prefix for the tile's dom id (`#{:id_prefix}-#{:identity}`). The default `video-tile` keeps the gallery + bottom-strip tiles sharing one dom id per identity (so MeetingVideoTile reuses the node across mode swaps). The persistent local self-view anchor (task 019e42f6) passes `local-self-view` to mint a DISTINCT, never-unmounted tile for the local identity that survives mode switches."
+      "prefix for the tile's dom id (`#{:id_prefix}-#{:identity}`). MeetingLive deliberately passes DIFFERENT prefixes for the gallery (`gallery-tile`) and bottom strip (`strip-tile`) so the two surfaces don't share a dom id per participant — sharing the id used to encourage morphdom to move/reuse the node across stage_mode swaps, but in practice the injected remote `<video>` dropped on every gallery↔strip transition. Distinct ids give us clean destroy-and-mount so the hook's `_detach`/`_syncExistingTrack` lifecycle reliably re-binds the LiveKit track on the freshly mounted tile. The persistent local self-view anchor (task 019e42f6) passes `local-self-view` for the same reason — a DISTINCT, never-unmounted tile for the local identity that survives mode switches."
   )
 
   attr(:layout, :atom,
@@ -86,8 +86,21 @@ defmodule PlatformWeb.Components.Meeting.VideoTile do
       ]}
       {@rest}
     >
-      <%!-- Video slot: JS hook appends the LiveKit <video> element here. --%>
+      <%!-- Video slot: JS hook appends the LiveKit <video> element here.
+           `phx-update="ignore"` + stable id: morphdom must NOT touch the
+           injected <video>. Without this, any LV re-render that touches a
+           sibling (new joiner added to `:participants`, stage_mode change,
+           speaking-ring toggle) wipes the <video> because LV thinks the
+           slot has no children. The hook's `_attach`/`_detach` already
+           toggles the `hidden` class on the slot, so the visibility state
+           still tracks `data-has-video` correctly even though morphdom
+           skips this subtree on subsequent patches.
+
+           Avatar fallback below intentionally stays morphdom-driven so
+           per-render attribute changes (name, avatar_url) still flow. --%>
       <div
+        id={"video-slot-#{@id_prefix}-#{@identity}"}
+        phx-update="ignore"
         data-video-slot
         class={[
           "absolute inset-0 h-full w-full",

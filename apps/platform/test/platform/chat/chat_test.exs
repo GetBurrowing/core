@@ -507,4 +507,35 @@ defmodule Platform.ChatTest do
       assert length(pins) == 2
     end
   end
+
+  describe "assign_space_org/2 (chat sidebar v2, Stage 1)" do
+    alias Platform.Tenancy
+
+    test "assigns a channel to an org via the org_id FK" do
+      space = create_space()
+      fabrikam = Tenancy.get_org_by_slug!("fabrikam")
+
+      assert {:ok, updated} = Chat.assign_space_org(space, fabrikam.id)
+      assert updated.org_id == fabrikam.id
+      assert Chat.get_space(space.id).org_id == fabrikam.id
+    end
+
+    test "nil clears an existing org assignment" do
+      fabrikam = Tenancy.get_org_by_slug!("fabrikam")
+      space = create_space()
+      {:ok, space} = Chat.assign_space_org(space, fabrikam.id)
+
+      assert {:ok, cleared} = Chat.assign_space_org(space, nil)
+      assert is_nil(cleared.org_id)
+    end
+
+    test "rejects a non-existent org id via the FK constraint" do
+      space = create_space()
+
+      assert {:error, %Ecto.Changeset{} = cs} =
+               Chat.assign_space_org(space, Ecto.UUID.generate())
+
+      assert Keyword.has_key?(cs.errors, :org_id)
+    end
+  end
 end

@@ -300,6 +300,7 @@ defmodule PlatformWeb.GithubWebhookController do
     {cleaned_title, tags} = Changelog.parse_title(raw_title)
 
     branch = get_in(pr, ["head", "ref"])
+    base_ref = get_in(pr, ["base", "ref"])
     body = pr["body"]
 
     task_id =
@@ -355,10 +356,33 @@ defmodule PlatformWeb.GithubWebhookController do
     # for a rollup PR, all member validations are processed correctly;
     # it does NOT fix delivery itself (that investigation is GitHub-
     # side / nginx / gateway and pending separately).
+    #
+    # Stage 3 (T6 hardening): base-branch guard. `get_stack_by_rollup_branch/1`
+    # matches ONLY on the PR head ref. A PR whose head is `stack/<slug>` but
+    # whose base is some OTHER branch (e.g. a throwaway integration branch or
+    # a member feature branch) must NOT trip the fan-out + stack→done — the
+    # acceptance is explicitly a `rollup_branch -> base_branch` merge. We gate
+    # the stack path on `base_ref == stack.base_branch`; on mismatch we log a
+    # warning and fall through to the per-task path (a deliberate no-op for the
+    # stack, not an exception).
     try do
       case Stacks.get_stack_by_rollup_branch(branch) do
         %Stack{} = stack ->
-          process_stack_merged_pr(stack, pr, merged_at, task_id)
+          if base_ref == stack.base_branch do
+            process_stack_merged_pr(stack, pr, merged_at, task_id)
+          else
+            Logger.warning(
+              "[Webhook] PR head=#{branch} matches rollup branch of stack #{stack.id} " <>
+                "but base=#{inspect(base_ref)} != stack.base_branch=#{inspect(stack.base_branch)}; " <>
+                "NOT auto-completing stack"
+            )
+
+            if is_binary(task_id) do
+              maybe_evaluate_pr_merged_validation(task_id, pr, merged_at)
+            else
+              :ok
+            end
+          end
 
         nil ->
           if is_binary(task_id) do

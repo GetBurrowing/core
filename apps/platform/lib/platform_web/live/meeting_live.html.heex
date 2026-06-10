@@ -35,7 +35,18 @@
          hooks can attach published tracks by identity. Both are present
          in chat_live.html.heex:4-5 for the chat surface; mirror them
          here so MeetingHooks' push_events have a listener. --%>
-    <div id="meeting-client" phx-hook="MeetingClient" class="hidden"></div>
+    <%!-- data-camera-enabled / data-mic-enabled: committed media intent the
+         JS hook reads on a LiveKit reconnect to re-engage media without a
+         fresh LV push (task 019e4b3e stage 3). MeetingHooks.attach/1 owns
+         :camera_enabled / :mic_enabled here just as it does in ChatLive. --%>
+    <div
+      id="meeting-client"
+      phx-hook="MeetingClient"
+      class="hidden"
+      data-camera-enabled={to_string(@camera_enabled)}
+      data-mic-enabled={to_string(@mic_enabled)}
+    >
+    </div>
     <div id="meeting-room" phx-hook="MeetingRoom" class="hidden"></div>
     <%!-- Media sink (task 019e420f stage 1): MeetingClient.attachTrack
          routes incoming `<audio>` elements to `#meeting-media`. Without
@@ -300,7 +311,7 @@
           <span class="text-xs font-semibold uppercase tracking-widest text-base-content/50">
             Participants
           </span>
-          <span class="ml-auto text-xs text-base-content/40">
+          <span class="ml-auto text-xs text-base-content/40" data-role="participant-count">
             {length(assigns[:participants] || [])}
           </span>
           <button
@@ -348,7 +359,10 @@
           <span class="hero-chevron-double-right size-4"></span>
         </button>
         <span class="hero-user-group mt-2 size-4 text-base-content/40" aria-hidden="true"></span>
-        <span class="mt-1 text-[10px] font-semibold text-base-content/40">
+        <span
+          class="mt-1 text-[10px] font-semibold text-base-content/40"
+          data-role="participant-count"
+        >
           {length(assigns[:participants] || [])}
         </span>
       </aside>
@@ -437,9 +451,23 @@
             >
               <%!-- Hook target: the JS attaches the <video> element here
                    when a screen-share track is found. Hidden until a
-                   track lands so the empty-state shows through. --%>
+                   track lands so the empty-state shows through.
+
+                   `phx-update="ignore"` + a stable id: the LV doesn't render
+                   the <video> itself (the `MeetingScreenShare` hook injects
+                   it), so without these morphdom discards the JS-owned child
+                   on ANY re-render (closing the "Meeting started" flash via
+                   `lv:clear-flash`, a presence/roster update, toggling the
+                   chat panel). The hook's `updated()` re-sync only re-attaches
+                   when it has NO track reference — but its reference survives
+                   the patch, so a wiped <video> would never come back and the
+                   shared screen vanished. Mirrors the quick-meet slot
+                   (`#meeting-screen-share-slot-desktop`, partials.ex) and the
+                   local-video docks fixed in #421. --%>
               <div
                 data-screen-share-slot
+                id="meeting-screen-share-slot"
+                phx-update="ignore"
                 class="absolute inset-0 hidden h-full w-full"
               >
               </div>
@@ -528,11 +556,24 @@
                          Remote tiles attach their own track unchanged. --%>
                     <% local? =
                       gallery_identity(p) == gallery_identity(assigns[:current_participant]) %>
+                    <%!-- `id_prefix="gallery-tile"` (not the shared default
+                         `video-tile`) so the gallery tile and the bottom-strip
+                         tile for the SAME participant have DISTINCT DOM ids.
+                         The shared id used to encourage morphdom to move/reuse
+                         the node across stage_mode swaps, but in practice the
+                         move path dropped the injected remote `<video>` on
+                         every gallery↔strip transition while the local
+                         self-view (reparented separately by MeetingClient)
+                         survived. Distinct ids → clean destroy-and-mount:
+                         `_detach` runs cleanly on the old tile,
+                         `_syncExistingTrack` rebinds the live track on the
+                         freshly mounted tile in the new location. --%>
                     <.video_tile
+                      id_prefix="gallery-tile"
                       participant={
                         %{
                           identity: gallery_identity(p),
-                          name: p.display_name || "Participant"
+                          name: p.display_name || "Unknown participant"
                         }
                       }
                       video_track={false}
@@ -553,9 +594,29 @@
                          (the dock is empty). Only the local cell renders one.
                          See the `data-local-video-dock` contract note near
                          `#meeting-local-self-view`. --%>
+                    <%!-- Stable id + phx-update="ignore": the persistent
+                         local <video> is appendChild'd here by MeetingClient.
+                         This dock lives inside the server `:for` over gallery
+                         participants, so without `ignore` ANY LV re-render
+                         (closing the "Meeting started" flash, a presence
+                         update, a panel toggle) lets morphdom replace the
+                         node and discard the JS-injected <video>. There's
+                         exactly one local cell, so a single stable id is
+                         safe. Belt-and-suspenders with the hook's `updated()`
+                         re-dock (which only fires when the hook's own element
+                         is in the diff). --%>
+                    <%!-- Sizing: dropped `absolute inset-0` so the dock no
+                         longer overlays the WHOLE cell (which made the local
+                         video render extra-wide vs the 16:9-constrained remote
+                         tiles). CSS in app.css matches the dock to the same
+                         16:9 + container-query sizing as `.meeting-video-tile`
+                         under the same `[data-gallery-cell]` parent, so the
+                         dock + remote tiles are pixel-aligned. --%>
                     <div
                       :if={local?}
-                      class="pointer-events-none absolute inset-0 overflow-hidden rounded-lg"
+                      id="meeting-local-video-dock-gallery"
+                      phx-update="ignore"
+                      class="pointer-events-none overflow-hidden rounded-lg"
                       data-local-video-dock
                       data-dock-mode="gallery"
                     >
@@ -797,11 +858,15 @@
         >
           <% local? =
             gallery_identity(participant) == gallery_identity(assigns[:current_participant]) %>
+          <%!-- `id_prefix="strip-tile"` mirrors `gallery-tile` above; see the
+               rationale on the gallery `<.video_tile>` for why we deliberately
+               give the two surfaces DIFFERENT dom ids per participant. --%>
           <PlatformWeb.Components.Meeting.VideoTile.video_tile
+            id_prefix="strip-tile"
             participant={
               %{
                 identity: gallery_identity(participant),
-                name: participant.display_name || "Participant"
+                name: participant.display_name || "Unknown participant"
               }
             }
             video_track={false}
@@ -813,8 +878,14 @@
           <%!-- Strip local-video dock: the reparent target in
                canvas/screen/whiteboard modes. `absolute inset-0` over the
                aspect-video strip tile so the reparented video fills it. --%>
+          <%!-- Stable id + phx-update="ignore" so morphdom never discards
+               the JS-injected local <video> on an LV re-render. Exactly one
+               local strip cell, so a single stable id is safe. See the
+               gallery dock rationale above. --%>
           <div
             :if={local?}
+            id="meeting-local-video-dock-strip"
+            phx-update="ignore"
             class="pointer-events-none absolute inset-0 overflow-hidden rounded-lg"
             data-local-video-dock
             data-dock-mode="strip"
