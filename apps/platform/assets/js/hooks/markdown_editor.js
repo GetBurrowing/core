@@ -40,7 +40,7 @@ const MarkdownEditor = {
     })
 
     this._save = () => {
-      this.pushEvent("save_file", { content: this.el.value })
+      this.pushEvent("save_page", { content: this.el.value })
     }
   },
 

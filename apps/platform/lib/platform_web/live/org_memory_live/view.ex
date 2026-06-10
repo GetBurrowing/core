@@ -2,17 +2,23 @@ defmodule PlatformWeb.OrgMemoryLive do
   @moduledoc """
   Org Memory wiki LiveView (ADR-0041 T7).
 
-  Three-pane shell (stage 3):
+  Three-pane shell:
 
     * left — `PlatformWeb.OrgMemoryLive.NamespaceTree` (collapsible
       namespace tree over `Wiki.list_pages/1`)
-    * main — `PlatformWeb.OrgMemoryLive.PageViewer` (stage-4 stub) plus
-      the carried-over editor / create panels
+    * main — `PlatformWeb.OrgMemoryLive.PageViewer` (stage 4: viewer /
+      editor / history-meta sub-states with wikilink-aware rendering
+      via `PlatformWeb.OrgMemoryLive.MarkdownRenderer`) plus the
+      create panel
     * right — `PlatformWeb.OrgMemoryLive.RightPane` (stage-5 stub)
 
   State lives here; the pane modules are stateless function components.
   `@view_mode` is `:pages` only for now — the enum extends when the
   top-bar tabs land in stage 6.
+
+  Agent gate (design lock §6): the `"save_page"` handler fails closed
+  when `current_user` is shaped like a `Platform.Agents.Agent` — UI
+  editing is for humans; agents propose changes via `memory_create`.
 
   Routes: `/org_memory` (`:index`) and `/org_memory/:file_key` (`:show`).
   Legacy `/org-context*` paths 301-redirect in `PageController`.
@@ -20,8 +26,11 @@ defmodule PlatformWeb.OrgMemoryLive do
 
   use PlatformWeb, :live_view
 
+  alias Platform.Accounts
+  alias Platform.Agents.Agent
   alias Platform.Org.Context
   alias Platform.Org.Wiki
+  alias PlatformWeb.OrgMemoryLive.MarkdownRenderer
   alias PlatformWeb.OrgMemoryLive.NamespaceTree
   alias PlatformWeb.OrgMemoryLive.PageViewer
   alias PlatformWeb.OrgMemoryLive.RightPane
@@ -46,7 +55,10 @@ defmodule PlatformWeb.OrgMemoryLive do
      |> assign(:new_file_key, "")
      |> assign(:new_file_template, nil)
      |> assign(:save_error, nil)
-     |> assign(:confirm_delete, nil)}
+     |> assign(:confirm_delete, nil)
+     |> assign(:fm_form, nil)
+     |> assign(:fm_complex, nil)
+     |> assign(:updated_by_display, nil)}
   end
 
   @impl true
@@ -63,11 +75,14 @@ defmodule PlatformWeb.OrgMemoryLive do
          socket
          |> assign(:selected_page, page)
          |> assign(:editor_content, page.content)
-         |> assign(:preview_html, render_markdown(page.content))
+         |> assign(:preview_html, render_markdown(page.content, socket.assigns.pages))
          |> assign(:editing, false)
          |> assign(:creating, false)
          |> assign(:save_error, nil)
          |> assign(:confirm_delete, nil)
+         |> assign(:fm_form, nil)
+         |> assign(:fm_complex, nil)
+         |> assign(:updated_by_display, updated_by_display(page.updated_by))
          |> update(
            :expanded_prefixes,
            &MapSet.union(&1, NamespaceTree.ancestor_prefixes(page.file_key))
@@ -106,7 +121,43 @@ defmodule PlatformWeb.OrgMemoryLive do
 
   @impl true
   def handle_event("start_edit", _params, socket) do
-    {:noreply, assign(socket, :editing, true)}
+    page = socket.assigns.selected_page
+    {frontmatter, body} = Wiki.parse_frontmatter(page.content)
+
+    socket =
+      cond do
+        frontmatter == %{} ->
+          # No frontmatter — the textarea edits the full content.
+          socket
+          |> assign(:fm_form, nil)
+          |> assign(:fm_complex, nil)
+          |> assign(:editor_content, page.content)
+
+        flat_frontmatter?(frontmatter) ->
+          # Flat string-keyed scalars: one form row per key; the
+          # textarea edits the body only (frontmatter is rebuilt from
+          # the form on save).
+          socket
+          |> assign(:fm_form, to_form(frontmatter, as: :frontmatter))
+          |> assign(:fm_complex, nil)
+          |> assign(:editor_content, body)
+
+        true ->
+          # Nested / non-scalar frontmatter: read-only display, edit
+          # the YAML directly in the body textarea.
+          socket
+          |> assign(:fm_form, nil)
+          |> assign(:fm_complex, leading_frontmatter_block(page.content, body))
+          |> assign(:editor_content, page.content)
+      end
+
+    {:noreply,
+     socket
+     |> assign(:editing, true)
+     |> assign(
+       :preview_html,
+       render_markdown(socket.assigns.editor_content, socket.assigns.pages)
+     )}
   end
 
   @impl true
@@ -117,6 +168,9 @@ defmodule PlatformWeb.OrgMemoryLive do
      socket
      |> assign(:editing, false)
      |> assign(:editor_content, page.content)
+     |> assign(:preview_html, render_markdown(page.content, socket.assigns.pages))
+     |> assign(:fm_form, nil)
+     |> assign(:fm_complex, nil)
      |> assign(:save_error, nil)}
   end
 
@@ -125,35 +179,28 @@ defmodule PlatformWeb.OrgMemoryLive do
     {:noreply,
      socket
      |> assign(:editor_content, content)
-     |> assign(:preview_html, render_markdown(content))}
+     |> assign(:preview_html, render_markdown(content, socket.assigns.pages))}
   end
 
   @impl true
-  def handle_event("save_file", %{"content" => content}, socket) do
-    %{selected_page: page, current_user_id: current_user_id} = socket.assigns
+  def handle_event("update_frontmatter", %{"frontmatter" => params}, socket) do
+    {:noreply, assign(socket, :fm_form, to_form(params, as: :frontmatter))}
+  end
 
-    case Wiki.upsert_page(page.file_key, %{content: content, updated_by: current_user_id}) do
-      {:ok, updated_page} ->
-        {:noreply,
-         socket
-         |> refresh_pages()
-         |> assign(:selected_page, updated_page)
-         |> assign(:editor_content, updated_page.content)
-         |> assign(:preview_html, render_markdown(updated_page.content))
-         |> assign(:editing, false)
-         |> assign(:save_error, nil)
-         |> put_flash(:info, "#{updated_page.file_key} saved (v#{updated_page.version})")}
-
-      {:error, :stale} ->
-        {:noreply,
-         assign(
-           socket,
-           :save_error,
-           "Page was updated elsewhere — reload and re-apply your edit."
-         )}
-
-      {:error, %Ecto.Changeset{} = changeset} ->
-        {:noreply, assign(socket, :save_error, changeset_error_message(changeset))}
+  @impl true
+  def handle_event("save_page", params, socket) do
+    # Design lock §6: agents must propose changes via memory_create —
+    # the UI save path fails closed for Agent-shaped users without
+    # touching the domain layer.
+    if agent_actor?(socket.assigns) do
+      {:noreply,
+       put_flash(
+         socket,
+         :error,
+         "Agents must propose changes via memory_create. UI editing is for humans only."
+       )}
+    else
+      save_page(params, socket)
     end
   end
 
@@ -277,20 +324,17 @@ defmodule PlatformWeb.OrgMemoryLive do
             pages={@pages}
           />
         <% else %>
-          <%= if @editing && @selected_page do %>
-            <.editor_panel
-              page={@selected_page}
-              editor_content={@editor_content}
-              preview_html={@preview_html}
-              save_error={@save_error}
-            />
-          <% else %>
-            <PageViewer.page_viewer
-              page={@selected_page}
-              preview_html={@preview_html}
-              confirm_delete={@confirm_delete}
-            />
-          <% end %>
+          <PageViewer.page_viewer
+            page={@selected_page}
+            editing={@editing}
+            editor_content={@editor_content}
+            preview_html={@preview_html}
+            save_error={@save_error}
+            confirm_delete={@confirm_delete}
+            fm_form={@fm_form}
+            fm_complex={@fm_complex}
+            updated_by_display={@updated_by_display}
+          />
         <% end %>
       </div>
 
@@ -299,82 +343,7 @@ defmodule PlatformWeb.OrgMemoryLive do
     """
   end
 
-  # ── Local panels (editor flow stays here until a later stage) ───────────
-
-  attr(:page, :any, required: true)
-  attr(:editor_content, :string, required: true)
-  attr(:preview_html, :string, required: true)
-  attr(:save_error, :string, default: nil)
-
-  defp editor_panel(assigns) do
-    ~H"""
-    <div class="flex flex-1 flex-col overflow-hidden">
-      <%!-- Editor toolbar --%>
-      <div class="flex items-center justify-between border-b border-base-300 px-6 py-3">
-        <div class="flex items-center gap-3">
-          <span class={[NamespaceTree.file_icon(@page.file_key), "size-5 text-warning"]}></span>
-          <div>
-            <h1 class="text-lg font-bold">
-              Editing {@page.file_key}
-            </h1>
-            <p class="text-xs text-base-content/40">
-              Markdown supported · Changes are not saved until you click Save
-            </p>
-          </div>
-        </div>
-        <div class="flex items-center gap-2">
-          <button phx-click="cancel_edit" class="btn btn-ghost btn-sm">
-            Cancel
-          </button>
-          <button
-            id="org-memory-save-btn"
-            phx-click={JS.dispatch("org-memory:save", to: "#org-memory-editor")}
-            class="btn btn-primary btn-sm gap-1"
-          >
-            <span class="hero-check size-4"></span> Save
-          </button>
-        </div>
-      </div>
-
-      <%!-- Error banner --%>
-      <div
-        :if={@save_error}
-        class="mx-6 mt-3 rounded-lg bg-error/10 border border-error/20 px-4 py-2 text-sm text-error"
-      >
-        {@save_error}
-      </div>
-
-      <%!-- Split editor + preview --%>
-      <div class="flex flex-1 overflow-hidden">
-        <%!-- Editor pane --%>
-        <div class="flex flex-1 flex-col border-r border-base-300">
-          <div class="px-4 py-2 text-xs font-semibold uppercase tracking-wider text-base-content/40 border-b border-base-300">
-            Markdown
-          </div>
-          <textarea
-            id="org-memory-editor"
-            phx-hook="MarkdownEditor"
-            phx-debounce="300"
-            class="flex-1 resize-none bg-base-100 p-4 font-mono text-sm text-base-content focus:outline-none"
-            spellcheck="false"
-          >{@editor_content}</textarea>
-        </div>
-
-        <%!-- Preview pane --%>
-        <div class="flex flex-1 flex-col">
-          <div class="px-4 py-2 text-xs font-semibold uppercase tracking-wider text-base-content/40 border-b border-base-300">
-            Preview
-          </div>
-          <div class="flex-1 overflow-y-auto px-6 py-4">
-            <article class="prose prose-sm max-w-none text-base-content">
-              {raw(@preview_html)}
-            </article>
-          </div>
-        </div>
-      </div>
-    </div>
-    """
-  end
+  # ── Local panels (create flow stays here until a later stage) ───────────
 
   attr(:new_file_key, :string, required: true)
   attr(:new_file_template, :string, default: nil)
@@ -468,6 +437,46 @@ defmodule PlatformWeb.OrgMemoryLive do
 
   # ── Helpers ─────────────────────────────────────────────────────────────
 
+  # Body source: explicit `content` param (textarea save via the
+  # MarkdownEditor hook) or the tracked `@editor_content` (frontmatter
+  # form submit). When the frontmatter form is active the textarea
+  # holds the body only, so the serialized frontmatter block is
+  # prepended before the upsert.
+  defp save_page(params, socket) do
+    %{selected_page: page, current_user_id: current_user_id} = socket.assigns
+
+    body = Map.get(params, "content", socket.assigns.editor_content)
+    content = prepend_frontmatter(body, params, socket.assigns.fm_form)
+
+    case Wiki.upsert_page(page.file_key, %{content: content, updated_by: current_user_id}) do
+      {:ok, updated_page} ->
+        socket = refresh_pages(socket)
+
+        {:noreply,
+         socket
+         |> assign(:selected_page, updated_page)
+         |> assign(:editor_content, updated_page.content)
+         |> assign(:preview_html, render_markdown(updated_page.content, socket.assigns.pages))
+         |> assign(:editing, false)
+         |> assign(:save_error, nil)
+         |> assign(:fm_form, nil)
+         |> assign(:fm_complex, nil)
+         |> assign(:updated_by_display, updated_by_display(updated_page.updated_by))
+         |> put_flash(:info, "#{updated_page.file_key} saved (v#{updated_page.version})")}
+
+      {:error, :stale} ->
+        {:noreply,
+         assign(
+           socket,
+           :save_error,
+           "Page was updated elsewhere — reload and re-apply your edit."
+         )}
+
+      {:error, %Ecto.Changeset{} = changeset} ->
+        {:noreply, assign(socket, :save_error, changeset_error_message(changeset))}
+    end
+  end
+
   defp refresh_pages(socket) do
     pages = Wiki.list_pages()
     tree = NamespaceTree.build(pages)
@@ -483,22 +492,117 @@ defmodule PlatformWeb.OrgMemoryLive do
     |> Enum.map_join(", ", fn {field, msgs} -> "#{field}: #{Enum.join(msgs, ", ")}" end)
   end
 
-  defp render_markdown(nil), do: ""
-  defp render_markdown(""), do: ""
+  # Render markdown with wikilinks swapped. The lookup table is built
+  # once per render: direct hits against the already-loaded `@pages`
+  # list, `Wiki.resolve_alias/2` fallback for misses — so the renderer
+  # itself stays pure (no DB calls inside `MarkdownRenderer.render/2`).
+  defp render_markdown(content, pages) do
+    MarkdownRenderer.render(content, wikilink_lookup(content, pages))
+  end
 
-  defp render_markdown(content) do
-    options = %Earmark.Options{
-      code_class_prefix: "language-",
-      smartypants: false,
-      breaks: true
-    }
+  defp wikilink_lookup(content, pages) when is_binary(content) do
+    page_keys = MapSet.new(pages, & &1.file_key)
 
-    case Earmark.as_html(content, options) do
-      {:ok, html, _warnings} ->
-        html
+    content
+    |> Wiki.parse_wikilinks()
+    |> Enum.map(& &1.target_path)
+    |> Enum.uniq()
+    |> Map.new(fn target ->
+      cond do
+        MapSet.member?(page_keys, target) ->
+          {target, target}
 
-      {:error, _html, _errors} ->
-        Phoenix.HTML.html_escape(content) |> Phoenix.HTML.safe_to_string()
+        page = Wiki.resolve_alias(target) ->
+          {target, page.file_key}
+
+        true ->
+          {target, nil}
+      end
+    end)
+  end
+
+  defp wikilink_lookup(_content, _pages), do: %{}
+
+  # ── Agent gate (design lock §6) ─────────────────────────────────────────
+
+  # `ShellLive` puts the user struct in `:current_user_record` (with a
+  # display string in `:current_user`); check both shapes so an
+  # Agent-shaped principal fails closed regardless of which assign it
+  # arrived through.
+  defp agent_actor?(assigns) do
+    match?(%Agent{}, assigns[:current_user_record]) or match?(%Agent{}, assigns[:current_user])
+  end
+
+  # ── Frontmatter editor helpers ──────────────────────────────────────────
+
+  defp flat_frontmatter?(frontmatter) do
+    Enum.all?(frontmatter, fn {_key, value} ->
+      is_binary(value) or is_boolean(value) or is_number(value) or is_nil(value)
+    end)
+  end
+
+  # The frontmatter block is the leading slice of `content` that
+  # `Wiki.parse_frontmatter/1` stripped to produce `body`.
+  defp leading_frontmatter_block(content, body) do
+    prefix_len = byte_size(content) - byte_size(body)
+    binary_part(content, 0, max(prefix_len, 0))
+  end
+
+  # Rebuild the page content for the upsert. When the frontmatter form
+  # is active, serialize its current values (submit params win over the
+  # phx-change-tracked form state) into a YAML block and prepend it to
+  # the body. Otherwise the body already is the full content.
+  defp prepend_frontmatter(body, params, fm_form) do
+    fm_params =
+      case params do
+        %{"frontmatter" => fm} when is_map(fm) -> fm
+        _ -> fm_form && fm_form.params
+      end
+
+    if fm_params do
+      serialize_frontmatter(fm_params) <> body
+    else
+      body
+    end
+  end
+
+  # Hand-serialized YAML for flat string-keyed scalars (the only shape
+  # the form edits — `Wiki.parse_frontmatter/1` produces string keys,
+  # and non-scalar values route to the read-only fallback instead).
+  # LiveView's `_unused_*` change-tracking params are dropped.
+  defp serialize_frontmatter(params) do
+    lines =
+      params
+      |> Enum.reject(fn {key, _value} -> String.starts_with?(key, "_") end)
+      |> Enum.sort_by(fn {key, _value} -> key end)
+      |> Enum.map(fn {key, value} -> "#{key}: #{yaml_scalar(value)}" end)
+
+    "---\n" <> Enum.join(lines, "\n") <> "\n---\n"
+  end
+
+  defp yaml_scalar(value) when is_boolean(value) or is_number(value), do: to_string(value)
+  defp yaml_scalar(nil), do: ~s("")
+
+  defp yaml_scalar(value) when is_binary(value) do
+    cond do
+      value in ~w(true false) -> value
+      match?({_, ""}, Integer.parse(value)) -> value
+      match?({_, ""}, Float.parse(value)) -> value
+      true -> inspect(value)
+    end
+  end
+
+  defp yaml_scalar(value), do: inspect(to_string(value))
+
+  # ── History meta ────────────────────────────────────────────────────────
+
+  defp updated_by_display(nil), do: nil
+
+  defp updated_by_display(user_id) do
+    case Accounts.get_user(user_id) do
+      %{name: name} when is_binary(name) and name != "" -> name
+      %{email: email} when is_binary(email) -> email
+      _ -> String.slice(user_id, 0, 8)
     end
   end
 

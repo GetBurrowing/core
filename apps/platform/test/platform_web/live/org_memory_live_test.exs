@@ -1,6 +1,6 @@
 defmodule PlatformWeb.OrgMemoryLiveTest do
   @moduledoc """
-  T7 stages 2–3 (task 019e41da-3610-7972-8573-54121ea1f3f5) — verifies:
+  T7 stages 2–4 (task 019e41da-3610-7972-8573-54121ea1f3f5) — verifies:
 
     * `GET /org_memory` mounts `PlatformWeb.OrgMemoryLive`.
     * `GET /org-context` returns a 301 redirect to `/org_memory`.
@@ -10,9 +10,13 @@ defmodule PlatformWeb.OrgMemoryLiveTest do
       (`org/`, `project/<uuid>/`, `space/<uuid>/`) grouped from
       `Wiki.list_pages/1`, and clicking a leaf push-patches to
       `/org_memory/<file_key>` and loads the page into the main pane.
+    * Stage 4: wikilink rendering in the page viewer (resolved `<a
+      class="wikilink">`, dangling `<span class="wikilink-dangling">`),
+      the frontmatter editor's `preamble` checkbox round-trip, and the
+      agent read-only gate on `"save_page"`.
 
-  This file is the home for all subsequent T7 LiveView tests (page
-  viewer, right pane, top-bar tabs).
+  This file is the home for all subsequent T7 LiveView tests (right
+  pane, top-bar tabs).
   """
 
   use PlatformWeb.ConnCase, async: false
@@ -20,6 +24,7 @@ defmodule PlatformWeb.OrgMemoryLiveTest do
   import Phoenix.LiveViewTest
 
   alias Platform.Accounts.User
+  alias Platform.Agents.Agent
   alias Platform.Org.Wiki
   alias Platform.Org.WikiPage
   alias Platform.Repo
@@ -160,6 +165,137 @@ defmodule PlatformWeb.OrgMemoryLiveTest do
       path = assert_patch(view)
       assert URI.decode(path) == "/org_memory/#{file_key}"
       assert has_element?(view, "h1", file_key)
+    end
+  end
+
+  describe "page viewer wikilinks (stage 4)" do
+    setup %{conn: conn} do
+      Repo.delete_all(WikiPage)
+
+      {:ok, _} = Wiki.upsert_page("org/identity.md", %{content: "# Identity\n"})
+
+      {:ok, _} =
+        Wiki.upsert_page("org/linker.md", %{
+          content: "# Linker\n\nSee [[org/identity.md]] and [[ghost]].\n"
+        })
+
+      {:ok, conn: authenticated_conn(conn, create_user!())}
+    end
+
+    test "wikilink to an existing page renders an <a class=\"wikilink\">", %{conn: conn} do
+      {:ok, view, _html} = live(conn, "/org_memory/" <> URI.encode_www_form("org/linker.md"))
+
+      assert has_element?(view, ~s(a.wikilink[href="/org_memory/org/identity.md"]))
+      assert render(view) =~ ~s(class="wikilink">org/identity.md</a>)
+    end
+
+    test "wikilink with no matching page or alias renders a dangling span", %{conn: conn} do
+      {:ok, view, _html} = live(conn, "/org_memory/" <> URI.encode_www_form("org/linker.md"))
+
+      assert has_element?(view, "span.wikilink-dangling", "ghost")
+      refute has_element?(view, ~s(a.wikilink[href="/org_memory/ghost"]))
+    end
+  end
+
+  describe "frontmatter editor (stage 4)" do
+    setup %{conn: conn} do
+      Repo.delete_all(WikiPage)
+
+      content = """
+      ---
+      preamble: false
+      title: "Org identity"
+      ---
+      # Identity
+
+      Body text.
+      """
+
+      {:ok, page} = Wiki.upsert_page("org/identity.md", %{content: content})
+
+      {:ok, conn: authenticated_conn(conn, create_user!()), page: page}
+    end
+
+    test "preamble checkbox toggles and round-trips through save", %{conn: conn, page: page} do
+      {:ok, view, _html} = live(conn, "/org_memory/" <> URI.encode_www_form("org/identity.md"))
+
+      view
+      |> element(~s(button[phx-click="start_edit"]))
+      |> render_click()
+
+      # The flat frontmatter renders as a form with a preamble checkbox
+      # (unchecked — the page starts at `preamble: false`) and a text
+      # row for the other scalar key.
+      assert has_element?(
+               view,
+               ~s(#org-memory-frontmatter-form input[type="checkbox"][name="frontmatter[preamble]"])
+             )
+
+      refute has_element?(
+               view,
+               ~s(#org-memory-frontmatter-form input[type="checkbox"][name="frontmatter[preamble]"][checked])
+             )
+
+      assert has_element?(
+               view,
+               ~s(#org-memory-frontmatter-form input[name="frontmatter[title]"])
+             )
+
+      # Toggle the checkbox on and save via the form's phx-submit.
+      view
+      |> form("#org-memory-frontmatter-form", %{
+        "frontmatter" => %{"preamble" => "true", "title" => "Org identity"}
+      })
+      |> render_submit()
+
+      # Round trip: the rebuilt YAML block parsed back into a boolean
+      # frontmatter value, the body survived, and the version advanced.
+      assert %WikiPage{frontmatter: %{"preamble" => true} = frontmatter, content: content} =
+               updated = Wiki.get_page("org/identity.md")
+
+      assert frontmatter["title"] == "Org identity"
+      assert updated.version == page.version + 1
+      assert content =~ "# Identity"
+      assert content =~ "Body text."
+    end
+  end
+
+  describe "agent read-only gate (stage 4)" do
+    test "Agent-shaped current_user fails closed: error flash, no version bump" do
+      Repo.delete_all(WikiPage)
+
+      {:ok, page} = Wiki.upsert_page("org/identity.md", %{content: "# Identity\n"})
+
+      agent = %Agent{id: Ecto.UUID.generate(), slug: "historian", name: "Historian"}
+
+      # The gate fires on `current_user` shape before any domain call,
+      # so the handler is exercised directly with an Agent-shaped
+      # socket (the browser session path can only produce User-shaped
+      # principals, by construction — design lock §6).
+      socket = %Phoenix.LiveView.Socket{
+        assigns: %{
+          __changed__: %{},
+          flash: %{},
+          current_user_record: agent,
+          current_user_id: agent.id,
+          selected_page: page,
+          editor_content: page.content,
+          fm_form: nil
+        }
+      }
+
+      {:noreply, socket} =
+        PlatformWeb.OrgMemoryLive.handle_event(
+          "save_page",
+          %{"content" => "# Hijacked by agent\n"},
+          socket
+        )
+
+      assert Phoenix.Flash.get(socket.assigns.flash, :error) ==
+               "Agents must propose changes via memory_create. UI editing is for humans only."
+
+      # upsert_page was never called: version and content are untouched.
+      assert %WikiPage{version: 1, content: "# Identity\n"} = Wiki.get_page("org/identity.md")
     end
   end
 end

@@ -2789,3 +2789,18 @@ body, .font-fabrikam, * {
     @apply px-2.5 py-1 text-sm gap-2;
   }
 }
+
+/* Org Memory wiki (ADR-0041 T7 stage 4) — wikilink rendering.
+   Resolved wikilinks render as <a class="wikilink">; targets with no
+   matching page or alias render as <span class="wikilink-dangling">. */
+@layer components {
+  .wikilink {
+    color: var(--color-primary);
+    text-decoration: underline;
+  }
+
+  .wikilink-dangling {
+    color: var(--color-error);
+    text-decoration: underline dotted;
+  }
+}
