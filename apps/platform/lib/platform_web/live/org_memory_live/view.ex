@@ -15,8 +15,25 @@ defmodule PlatformWeb.OrgMemoryLive do
       the version / updated-by / relative-time meta)
 
   State lives here; the pane modules are stateless function components.
-  `@view_mode` is `:pages` only for now — the enum extends when the
-  top-bar tabs land in stage 6.
+
+  Stage 6 adds a tab strip across the top of the main pane —
+  `@view_mode :: :pages | :journal | :search` swaps the main-pane render
+  only. The left tree stays mounted on every tab; the right pane
+  renders only on `:pages` (the grid collapses to two columns on
+  `:journal` / `:search`, giving the feed / results the extra width).
+  Tab switches never touch `:namespace_tree`, `:expanded_prefixes`, or
+  `:selected_page` — `:pages → :search → :pages` returns to the same
+  selected page without a re-fetch.
+
+  Journal tab: `PlatformWeb.OrgMemoryLive.JournalPane` — append-only
+  form over `Wiki.Journal.append/2` + a date-grouped
+  `Wiki.Journal.list_recent/1` feed, scoped to the namespace derived
+  from the selected page (default `"org"`).
+
+  Search tab: `PlatformWeb.OrgMemoryLive.SearchPane` — dispatches
+  through `Platform.Federation.ToolSurface.execute("memory_search", ...)`
+  (the same gate path agents use; swappable in tests via the
+  `:org_memory_tool_surface` app env).
 
   Agent gate (design lock §6): the `"save_page"` handler fails closed
   when `current_user` is shaped like a `Platform.Agents.Agent` — UI
@@ -32,10 +49,17 @@ defmodule PlatformWeb.OrgMemoryLive do
   alias Platform.Agents.Agent
   alias Platform.Org.Context
   alias Platform.Org.Wiki
+  alias Platform.Org.Wiki.Journal
+  alias PlatformWeb.OrgMemoryLive.JournalPane
   alias PlatformWeb.OrgMemoryLive.MarkdownRenderer
   alias PlatformWeb.OrgMemoryLive.NamespaceTree
   alias PlatformWeb.OrgMemoryLive.PageViewer
   alias PlatformWeb.OrgMemoryLive.RightPane
+  alias PlatformWeb.OrgMemoryLive.SearchPane
+
+  @journal_days_back 14
+  @journal_limit 100
+  @tabs ~w(pages journal search)
 
   @impl true
   def mount(_params, _session, socket) do
@@ -61,7 +85,17 @@ defmodule PlatformWeb.OrgMemoryLive do
      |> assign(:confirm_delete, nil)
      |> assign(:fm_form, nil)
      |> assign(:fm_complex, nil)
-     |> assign(:updated_by_display, nil)}
+     |> assign(:updated_by_display, nil)
+     |> assign(:journal_groups, [])
+     |> assign(:journal_draft, "")
+     |> assign(:journal_focus_date, nil)
+     |> assign(:search_query, "")
+     |> assign(:search_corpus, "all")
+     |> assign(:search_namespace, "all")
+     |> assign(:search_results, [])
+     |> assign(:search_performed, false)
+     |> assign(:search_truncated, false)
+     |> assign(:search_error, nil)}
   end
 
   @impl true
@@ -123,6 +157,129 @@ defmodule PlatformWeb.OrgMemoryLive do
          MapSet.put(expanded, prefix)
        end
      end)}
+  end
+
+  # ── Events: tabs (stage 6) ──────────────────────────────────────────────
+
+  # Tab switches swap the main-pane render only. CRITICAL INVARIANT:
+  # never touch :namespace_tree, :expanded_prefixes, or :selected_page
+  # here — :pages → :search → :pages must return to the same selected
+  # page without a re-fetch.
+  @impl true
+  def handle_event("switch_tab", %{"tab" => tab}, socket) when tab in @tabs do
+    view_mode = view_mode_for(tab)
+    socket = assign(socket, :view_mode, view_mode)
+    socket = if view_mode == :journal, do: load_journal(socket), else: socket
+
+    {:noreply, socket}
+  end
+
+  # ── Events: journal (stage 6) ───────────────────────────────────────────
+
+  @impl true
+  def handle_event("update_journal_draft", %{"content" => content}, socket) do
+    {:noreply, assign(socket, :journal_draft, content)}
+  end
+
+  @impl true
+  def handle_event("append_journal", %{"content" => content}, socket) do
+    content = String.trim(content)
+
+    if content == "" do
+      {:noreply, socket}
+    else
+      attrs = %{
+        content: content,
+        date: Date.utc_today(),
+        authored_by: socket.assigns.current_user_id
+      }
+
+      case Journal.append(attrs, namespace: journal_namespace(socket.assigns.selected_page)) do
+        {:ok, _entry} ->
+          {:noreply,
+           socket
+           |> assign(:journal_draft, "")
+           |> load_journal()}
+
+        {:error, %Ecto.Changeset{} = changeset} ->
+          {:noreply, put_flash(socket, :error, changeset_error_message(changeset))}
+      end
+    end
+  end
+
+  # ── Events: search (stage 6) ────────────────────────────────────────────
+
+  @impl true
+  def handle_event("search_memory", %{"query" => query} = params, socket) do
+    corpus = Map.get(params, "corpus", "all")
+    namespace = Map.get(params, "namespace", "all")
+
+    socket =
+      socket
+      |> assign(:search_query, query)
+      |> assign(:search_corpus, corpus)
+      |> assign(:search_namespace, namespace)
+
+    if String.trim(query) == "" do
+      {:noreply,
+       socket
+       |> assign(:search_results, [])
+       |> assign(:search_performed, false)
+       |> assign(:search_truncated, false)
+       |> assign(:search_error, nil)}
+    else
+      # Dispatch through the federation tool surface — the same gate
+      # code path agents use (never Wiki.Search directly). Nil-ish
+      # filters are dropped from args rather than passed as nils.
+      args =
+        %{"query" => query}
+        |> put_filter("source", corpus)
+        |> put_filter("namespace", namespace)
+
+      case tool_surface().execute("memory_search", args, %{agent: nil}) do
+        {:ok, %{results: results} = envelope} ->
+          {:noreply,
+           socket
+           |> assign(:search_results, results)
+           |> assign(:search_performed, true)
+           |> assign(:search_truncated, Map.get(envelope, :truncated, false))
+           |> assign(:search_error, nil)}
+
+        {:error, %{error: message}} ->
+          {:noreply,
+           socket
+           |> assign(:search_results, [])
+           |> assign(:search_performed, true)
+           |> assign(:search_truncated, false)
+           |> assign(:search_error, message)}
+      end
+    end
+  end
+
+  # Page hit click-through: back to the :pages tab, patched to the hit.
+  @impl true
+  def handle_event("open_result_page", %{"file_key" => file_key}, socket) do
+    {:noreply,
+     socket
+     |> assign(:view_mode, :pages)
+     |> push_patch(to: ~p"/org_memory/#{String.split(file_key, "/")}")}
+  end
+
+  # Journal hit click-through: switch to :journal focused on the hit's
+  # date (journal hits carry the ISO date in :date_or_inserted_at).
+  @impl true
+  def handle_event("open_result_journal", %{"date" => date_str}, socket) do
+    focus_date =
+      case Date.from_iso8601(date_str) do
+        {:ok, date} -> date
+        _ -> nil
+      end
+
+    {:noreply,
+     socket
+     |> assign(:view_mode, :journal)
+     |> assign(:journal_focus_date, focus_date)
+     |> load_journal()}
   end
 
   # ── Events: editing ─────────────────────────────────────────────────────
@@ -317,7 +474,13 @@ defmodule PlatformWeb.OrgMemoryLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <div class="grid grid-cols-[16rem_minmax(0,1fr)_18rem] h-full overflow-hidden">
+    <div class={[
+      "grid h-full overflow-hidden",
+      if(@view_mode == :pages,
+        do: "grid-cols-[16rem_minmax(0,1fr)_18rem]",
+        else: "grid-cols-[16rem_minmax(0,1fr)]"
+      )
+    ]}>
       <NamespaceTree.namespace_tree
         tree={@namespace_tree}
         expanded_prefixes={@expanded_prefixes}
@@ -325,31 +488,92 @@ defmodule PlatformWeb.OrgMemoryLive do
       />
 
       <div class="flex min-h-0 flex-col overflow-hidden">
-        <%= if @creating do %>
-          <.create_panel
-            new_file_key={@new_file_key}
-            new_file_template={@new_file_template}
-            pages={@pages}
-          />
-        <% else %>
-          <PageViewer.page_viewer
-            page={@selected_page}
-            editing={@editing}
-            editor_content={@editor_content}
-            preview_html={@preview_html}
-            save_error={@save_error}
-            confirm_delete={@confirm_delete}
-            fm_form={@fm_form}
-            fm_complex={@fm_complex}
-          />
+        <.tab_strip view_mode={@view_mode} />
+
+        <%= case @view_mode do %>
+          <% :journal -> %>
+            <JournalPane.journal_pane
+              groups={@journal_groups}
+              draft={@journal_draft}
+              namespace={journal_namespace(@selected_page)}
+              focus_date={@journal_focus_date}
+            />
+          <% :search -> %>
+            <SearchPane.search_pane
+              query={@search_query}
+              corpus={@search_corpus}
+              namespace={@search_namespace}
+              namespaces={top_level_namespaces(@namespace_tree)}
+              results={@search_results}
+              performed={@search_performed}
+              truncated={@search_truncated}
+              error={@search_error}
+            />
+          <% :pages -> %>
+            <%= if @creating do %>
+              <.create_panel
+                new_file_key={@new_file_key}
+                new_file_template={@new_file_template}
+                pages={@pages}
+              />
+            <% else %>
+              <PageViewer.page_viewer
+                page={@selected_page}
+                editing={@editing}
+                editor_content={@editor_content}
+                preview_html={@preview_html}
+                save_error={@save_error}
+                confirm_delete={@confirm_delete}
+                fm_form={@fm_form}
+                fm_complex={@fm_complex}
+              />
+            <% end %>
         <% end %>
       </div>
 
+      <%!-- Backlinks/meta make sense only against a selected page —
+           the right pane renders on :pages only and the grid collapses
+           to two columns on the other tabs (judgment call: the feed /
+           results get the extra width instead of an empty aside). --%>
       <RightPane.right_pane
+        :if={@view_mode == :pages}
         page={@selected_page}
         backlinks={@backlinks}
         updated_by_display={@updated_by_display}
       />
+    </div>
+    """
+  end
+
+  # ── Tab strip (stage 6) ─────────────────────────────────────────────────
+
+  attr(:view_mode, :atom, required: true)
+
+  defp tab_strip(assigns) do
+    ~H"""
+    <div
+      class="flex items-center gap-1 border-b border-base-300 bg-base-200/40 px-4 pt-2"
+      data-role="tab-strip"
+      role="tablist"
+    >
+      <button
+        :for={{tab, label} <- [{"pages", "Pages"}, {"journal", "Journal"}, {"search", "Search"}]}
+        phx-click="switch_tab"
+        phx-value-tab={tab}
+        data-tab={tab}
+        role="tab"
+        aria-selected={to_string(Atom.to_string(@view_mode) == tab)}
+        class={[
+          "rounded-t-lg border-x border-t px-4 py-1.5 text-sm transition-colors",
+          if(Atom.to_string(@view_mode) == tab,
+            do: "border-base-300 bg-base-100 font-medium text-base-content",
+            else:
+              "border-transparent text-base-content/50 hover:bg-base-300/60 hover:text-base-content"
+          )
+        ]}
+      >
+        {label}
+      </button>
     </div>
     """
   end
@@ -486,6 +710,68 @@ defmodule PlatformWeb.OrgMemoryLive do
       {:error, %Ecto.Changeset{} = changeset} ->
         {:noreply, assign(socket, :save_error, changeset_error_message(changeset))}
     end
+  end
+
+  # ── Stage 6 helpers: tabs / journal / search ────────────────────────────
+
+  defp view_mode_for("pages"), do: :pages
+  defp view_mode_for("journal"), do: :journal
+  defp view_mode_for("search"), do: :search
+
+  # Reload the journal feed: recent entries for the active namespace,
+  # grouped by date (newest day first, entries within a day oldest
+  # first — the V1 memory-feed grouping).
+  defp load_journal(socket) do
+    groups =
+      [
+        days_back: @journal_days_back,
+        limit: @journal_limit,
+        namespace: journal_namespace(socket.assigns.selected_page)
+      ]
+      |> Journal.list_recent()
+      |> Enum.group_by(& &1.date)
+      |> Enum.sort_by(fn {date, _entries} -> date end, {:desc, Date})
+      |> Enum.map(fn {date, entries} ->
+        {date, Enum.sort_by(entries, & &1.inserted_at, DateTime)}
+      end)
+
+    assign(socket, :journal_groups, groups)
+  end
+
+  # Namespace dimension for journal reads/appends: derived from the
+  # selected page's file_key (`org/...` → `"org"`,
+  # `project/<uuid>/...` → `"project/<uuid>"`), falling back to the
+  # journal default (`"org"`) when nothing is selected or the key
+  # doesn't carry a recognizable namespace.
+  defp journal_namespace(nil), do: Journal.default_namespace()
+
+  defp journal_namespace(%{file_key: file_key}) do
+    case String.split(file_key, "/") do
+      ["org", _ | _] -> "org"
+      [kind, id, _ | _] when kind in ["project", "space"] -> "#{kind}/#{id}"
+      _ -> Journal.default_namespace()
+    end
+  end
+
+  # Drop nil-ish filter values ("all" / "") instead of passing nils —
+  # the tool surface validates arg types.
+  defp put_filter(args, _key, value) when value in [nil, "", "all"], do: args
+  defp put_filter(args, key, value), do: Map.put(args, key, value)
+
+  # Seam for tests: swap in a recorder via
+  # `Application.put_env(:platform, :org_memory_tool_surface, Stub)`.
+  # Same pattern as :chat_agent_module / :quick_agent_provider_module.
+  defp tool_surface do
+    Application.get_env(:platform, :org_memory_tool_surface, Platform.Federation.ToolSurface)
+  end
+
+  # Top-level namespace prefixes from the built tree ("org/" → "org"),
+  # feeding the search pane's namespace dropdown.
+  defp top_level_namespaces(%{folders: folders}) do
+    folders
+    |> Map.values()
+    |> Enum.map(&String.trim_trailing(&1.prefix, "/"))
+    |> Enum.sort()
   end
 
   defp refresh_pages(socket) do

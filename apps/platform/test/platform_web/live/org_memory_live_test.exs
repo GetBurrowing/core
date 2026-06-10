@@ -18,9 +18,13 @@ defmodule PlatformWeb.OrgMemoryLiveTest do
       `Wiki.backlinks/2` over the `org_wiki_links` rows materialized by
       `Wiki.upsert_page/3`, clickable via `"select_page"`) and its
       "No backlinks yet" empty state.
-
-  This file is the home for all subsequent T7 LiveView tests (top-bar
-  tabs).
+    * Stage 6: the top-bar tab strip (Pages / Journal / Search) — tab
+      switches preserve the tree + selection (the critical invariant),
+      the right pane hides off `:pages`, the journal pane's append-only
+      contract (form creates a `WikiJournalEntry`, no delete
+      affordances), and the search pane's dispatch through the
+      `:org_memory_tool_surface` seam (args / context shape + rendered
+      source tags + click-throughs).
   """
 
   use PlatformWeb.ConnCase, async: false
@@ -30,8 +34,69 @@ defmodule PlatformWeb.OrgMemoryLiveTest do
   alias Platform.Accounts.User
   alias Platform.Agents.Agent
   alias Platform.Org.Wiki
+  alias Platform.Org.Wiki.Journal
   alias Platform.Org.WikiPage
   alias Platform.Repo
+
+  @stub_space_id "0196b9a1-0000-7000-8000-000000000abc"
+
+  defmodule StubToolSurface do
+    @moduledoc false
+    # Recorder stub for the :org_memory_tool_surface seam — records the
+    # exact args/context the LiveView dispatched (sent to the test pid
+    # registered under :org_memory_tool_surface_test_pid) and returns a
+    # canned three-corpus envelope shaped like
+    # `Platform.Org.Wiki.Search.search/2`.
+    def execute("memory_search", args, context) do
+      if pid = Application.get_env(:platform, :org_memory_tool_surface_test_pid) do
+        send(pid, {:memory_search, args, context})
+      end
+
+      {:ok,
+       %{
+         results: [
+           %{
+             source: "page",
+             id: Ecto.UUID.generate(),
+             path: "org/identity.md",
+             space_id: nil,
+             content: "Deployment runbook lives in the identity page.",
+             score: 0.0328,
+             semantic_rank: 1,
+             lexical_rank: 2,
+             authored_by: nil,
+             date_or_inserted_at: "2026-06-01T12:00:00Z"
+           },
+           %{
+             source: "journal",
+             id: Ecto.UUID.generate(),
+             path: "org/journal/2026-06-08.md",
+             space_id: nil,
+             content: "Deployed v2 to staging.",
+             score: 0.0164,
+             semantic_rank: nil,
+             lexical_rank: 1,
+             authored_by: nil,
+             date_or_inserted_at: "2026-06-08"
+           },
+           %{
+             source: "message",
+             id: Ecto.UUID.generate(),
+             path: nil,
+             space_id: "0196b9a1-0000-7000-8000-000000000abc",
+             content: "deployment failed on node 2",
+             score: 0.0161,
+             semantic_rank: 2,
+             lexical_rank: nil,
+             authored_by: nil,
+             date_or_inserted_at: "2026-06-07T09:30:00Z"
+           }
+         ],
+         fusion_constant_k: 60,
+         truncated: false
+       }}
+    end
+  end
 
   defp create_user!(overrides \\ %{}) do
     n = System.unique_integer([:positive])
@@ -387,6 +452,312 @@ defmodule PlatformWeb.OrgMemoryLiveTest do
 
       # upsert_page was never called: version and content are untouched.
       assert %WikiPage{version: 1, content: "# Identity\n"} = Wiki.get_page("org/identity.md")
+    end
+  end
+
+  describe "tab strip (stage 6)" do
+    setup %{conn: conn} do
+      Repo.delete_all(WikiPage)
+
+      project_id = Ecto.UUID.generate()
+
+      {:ok, _} = Wiki.upsert_page("org/identity.md", %{content: "# Identity Alpha\n"})
+
+      {:ok, _} =
+        Wiki.upsert_page("project/#{project_id}/decisions.md", %{content: "# Decisions\n"})
+
+      {:ok, conn: authenticated_conn(conn, create_user!()), project_id: project_id}
+    end
+
+    test "renders the three tabs with Pages selected by default", %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/org_memory")
+
+      assert has_element?(view, ~s([data-role="tab-strip"] button[data-tab="pages"]), "Pages")
+      assert has_element?(view, ~s([data-role="tab-strip"] button[data-tab="journal"]), "Journal")
+      assert has_element?(view, ~s([data-role="tab-strip"] button[data-tab="search"]), "Search")
+      assert has_element?(view, ~s(button[data-tab="pages"][aria-selected="true"]))
+      assert has_element?(view, ~s(button[data-tab="search"][aria-selected="false"]))
+    end
+
+    test "tab switches preserve the namespace tree, expansion, and selected page (critical invariant)",
+         %{conn: conn, project_id: project_id} do
+      {:ok, view, _html} = live(conn, "/org_memory/org/identity.md")
+
+      # Expand a deeper folder so we can verify expansion survives.
+      view
+      |> element(~s(button[data-namespace-prefix="project/#{project_id}/"]))
+      |> render_click()
+
+      assert has_element?(view, ~s(button[data-file-key="project/#{project_id}/decisions.md"]))
+
+      # :pages → :search → :journal → :pages, no patch in between.
+      view |> element(~s(button[data-tab="search"])) |> render_click()
+
+      # Tree (and the expanded deep folder) stay mounted on every tab.
+      assert has_element?(view, ~s(button[data-namespace-prefix="org/"]))
+      assert has_element?(view, ~s(button[data-file-key="project/#{project_id}/decisions.md"]))
+
+      view |> element(~s(button[data-tab="journal"])) |> render_click()
+      assert has_element?(view, ~s(button[data-file-key="project/#{project_id}/decisions.md"]))
+
+      view |> element(~s(button[data-tab="pages"])) |> render_click()
+
+      # Same selected page, no re-fetch / no navigation: the viewer
+      # heading and the tree's selected styling are intact.
+      assert has_element?(view, "h1", "org/identity.md")
+      assert render(view) =~ "Identity Alpha"
+      assert has_element?(view, ~s(button[data-file-key="org/identity.md"].text-primary))
+    end
+
+    test "right pane renders on :pages only — hidden on :journal and :search", %{conn: conn} do
+      {:ok, view, _html} = live(conn, "/org_memory/org/identity.md")
+
+      assert has_element?(view, "h2", "Page Details")
+      assert has_element?(view, ~s([data-role="backlinks"]))
+
+      view |> element(~s(button[data-tab="journal"])) |> render_click()
+      refute has_element?(view, "h2", "Page Details")
+      refute has_element?(view, ~s([data-role="backlinks"]))
+
+      view |> element(~s(button[data-tab="search"])) |> render_click()
+      refute has_element?(view, "h2", "Page Details")
+      refute has_element?(view, ~s([data-role="backlinks"]))
+
+      view |> element(~s(button[data-tab="pages"])) |> render_click()
+      assert has_element?(view, ~s([data-role="backlinks"]))
+    end
+  end
+
+  describe "journal pane (stage 6)" do
+    setup %{conn: conn} do
+      Repo.delete_all(WikiPage)
+
+      {:ok, _} = Wiki.upsert_page("org/identity.md", %{content: "# Identity\n"})
+
+      user = create_user!()
+
+      {:ok, conn: authenticated_conn(conn, user), user: user}
+    end
+
+    test "journal is append-only: renders with no delete affordance", %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/org_memory")
+
+      view |> element(~s(button[data-tab="journal"])) |> render_click()
+      html = render(view)
+
+      assert html =~ "Journal"
+      assert has_element?(view, ~s([data-role="journal-pane"] form#org-memory-journal-form))
+
+      # The append-only contract: no journal-delete affordance anywhere.
+      refute html =~ ~s(data-action="delete-journal")
+      refute html =~ ~s(phx-click="delete_journal")
+    end
+
+    test "append form submission creates a WikiJournalEntry row and re-renders the feed",
+         %{conn: conn, user: user} do
+      {:ok, view, _html} = live(conn, ~p"/org_memory")
+
+      view |> element(~s(button[data-tab="journal"])) |> render_click()
+
+      view
+      |> form("#org-memory-journal-form", %{"content" => "Shipped the wiki tabs."})
+      |> render_submit()
+
+      # Row exists, attributed to the current user, namespace-tagged
+      # with the journal default (no page selected → "org").
+      assert [entry] =
+               Journal.list_recent(days_back: 1, limit: 10)
+               |> Enum.filter(&(&1.content == "Shipped the wiki tabs."))
+
+      assert entry.date == Date.utc_today()
+      assert entry.authored_by == user.id
+      assert entry.metadata["namespace"] == "org"
+
+      # The feed re-rendered with the new entry under today's group.
+      assert has_element?(view, ~s(#journal-day-#{Date.to_iso8601(Date.utc_today())}))
+      assert render(view) =~ "Shipped the wiki tabs."
+    end
+
+    test "blank submission appends nothing", %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/org_memory")
+
+      view |> element(~s(button[data-tab="journal"])) |> render_click()
+
+      view
+      |> form("#org-memory-journal-form", %{"content" => "   "})
+      |> render_submit()
+
+      assert Journal.list_recent(days_back: 1, limit: 10) == []
+    end
+
+    test "append namespace derives from the selected page", %{conn: conn} do
+      project_id = Ecto.UUID.generate()
+
+      {:ok, _} =
+        Wiki.upsert_page("project/#{project_id}/decisions.md", %{content: "# Decisions\n"})
+
+      {:ok, view, _html} = live(conn, "/org_memory/project/#{project_id}/decisions.md")
+
+      view |> element(~s(button[data-tab="journal"])) |> render_click()
+
+      view
+      |> form("#org-memory-journal-form", %{"content" => "Project-scoped note."})
+      |> render_submit()
+
+      assert [entry] =
+               Journal.list_recent(days_back: 1, limit: 10, namespace: "project/#{project_id}")
+
+      assert entry.content == "Project-scoped note."
+      assert entry.metadata["namespace"] == "project/#{project_id}"
+    end
+  end
+
+  describe "search pane (stage 6)" do
+    setup %{conn: conn} do
+      Repo.delete_all(WikiPage)
+
+      {:ok, _} = Wiki.upsert_page("org/identity.md", %{content: "# Identity Alpha\n"})
+
+      previous = Application.get_env(:platform, :org_memory_tool_surface)
+      Application.put_env(:platform, :org_memory_tool_surface, StubToolSurface)
+      Application.put_env(:platform, :org_memory_tool_surface_test_pid, self())
+
+      on_exit(fn ->
+        if previous do
+          Application.put_env(:platform, :org_memory_tool_surface, previous)
+        else
+          Application.delete_env(:platform, :org_memory_tool_surface)
+        end
+
+        Application.delete_env(:platform, :org_memory_tool_surface_test_pid)
+      end)
+
+      {:ok, conn: authenticated_conn(conn, create_user!())}
+    end
+
+    test "submit dispatches memory_search through the tool surface with the right args",
+         %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/org_memory")
+
+      view |> element(~s(button[data-tab="search"])) |> render_click()
+
+      view
+      |> form("#org-memory-search-form", %{
+        "query" => "deployment",
+        "corpus" => "all",
+        "namespace" => "all"
+      })
+      |> render_submit()
+
+      # "all" filters are dropped — only the query reaches the tool;
+      # the context is the anonymous human/UI caller shape.
+      assert_receive {:memory_search, args, context}
+      assert args == %{"query" => "deployment"}
+      assert context == %{agent: nil}
+    end
+
+    test "corpus + namespace filters pass through as source/namespace args", %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/org_memory")
+
+      view |> element(~s(button[data-tab="search"])) |> render_click()
+
+      view
+      |> form("#org-memory-search-form", %{
+        "query" => "deployment",
+        "corpus" => "journal",
+        "namespace" => "org"
+      })
+      |> render_submit()
+
+      assert_receive {:memory_search, args, _context}
+      assert args == %{"query" => "deployment", "source" => "journal", "namespace" => "org"}
+    end
+
+    test "results render with visible source tags, score, and rank info", %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/org_memory")
+
+      view |> element(~s(button[data-tab="search"])) |> render_click()
+
+      view
+      |> form("#org-memory-search-form", %{"query" => "deployment"})
+      |> render_submit()
+
+      assert has_element?(view, ~s([data-search-result][data-source-tag="page"]), "PAGE")
+      assert has_element?(view, ~s([data-search-result][data-source-tag="journal"]), "JOURNAL")
+      assert has_element?(view, ~s([data-search-result][data-source-tag="message"]), "MESSAGE")
+
+      html = render(view)
+      assert html =~ "0.0328"
+      assert html =~ "sem #1"
+      assert html =~ "lex #2"
+    end
+
+    test "page hit click-through patches back to :pages on the hit's path", %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/org_memory")
+
+      view |> element(~s(button[data-tab="search"])) |> render_click()
+
+      view
+      |> form("#org-memory-search-form", %{"query" => "deployment"})
+      |> render_submit()
+
+      view
+      |> element(~s([data-source-tag="page"] button[phx-click="open_result_page"]))
+      |> render_click()
+
+      path = assert_patch(view)
+      assert URI.decode(path) == "/org_memory/org/identity.md"
+
+      # Back on the Pages tab with the hit selected (right pane returns).
+      assert has_element?(view, ~s(button[data-tab="pages"][aria-selected="true"]))
+      assert has_element?(view, "h1", "org/identity.md")
+      assert has_element?(view, ~s([data-role="backlinks"]))
+    end
+
+    test "journal hit click-through switches to :journal focused on the hit's date",
+         %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/org_memory")
+
+      view |> element(~s(button[data-tab="search"])) |> render_click()
+
+      view
+      |> form("#org-memory-search-form", %{"query" => "deployment"})
+      |> render_submit()
+
+      view
+      |> element(~s([data-source-tag="journal"] button[phx-click="open_result_journal"]))
+      |> render_click()
+
+      assert has_element?(view, ~s(button[data-tab="journal"][aria-selected="true"]))
+      assert has_element?(view, ~s([data-role="journal-pane"]))
+    end
+
+    test "message hit links to the chat space", %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/org_memory")
+
+      view |> element(~s(button[data-tab="search"])) |> render_click()
+
+      view
+      |> form("#org-memory-search-form", %{"query" => "deployment"})
+      |> render_submit()
+
+      assert has_element?(
+               view,
+               ~s([data-source-tag="message"] a[href="/chat/#{@stub_space_id}"])
+             )
+    end
+
+    test "blank query clears results without dispatching", %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/org_memory")
+
+      view |> element(~s(button[data-tab="search"])) |> render_click()
+
+      view
+      |> form("#org-memory-search-form", %{"query" => "   "})
+      |> render_submit()
+
+      refute_receive {:memory_search, _args, _context}
+      refute has_element?(view, ~s([data-search-result]))
     end
   end
 end
