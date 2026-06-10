@@ -3,17 +3,11 @@ defmodule Platform.Agents.SystemEventScheduler do
   Periodic scheduler that fires the `historian` system event to a designated
   agent on an every-6h staggered cadence.
 
-<<<<<<< HEAD
-  Two events in v1:
-  - `daily_summary` (23:00 UTC) — agent summarizes the day's activity
-  - `dreaming` (03:00 UTC) — agent consolidates short-term memory entries into org/memory.md
-=======
   V2 (ADR-0041 / T6) collapses the legacy `daily_summary` (23:00 UTC) and
   `dreaming` (03:00 UTC) events into a single `historian` event that fires
   at four anchor hours `[0, 6, 12, 18]` UTC. Per-workspace stagger is applied
   via `offset_minutes = :erlang.phash2(workspace_id, 360)` so an org with N
   workspaces gets a uniform distribution across each 6h window.
->>>>>>> task/019e41da-1a48-7da4-adb4-9a63f8251c54
 
   Workspace fan-out is sourced from `Platform.Tasks.Projects.list_active_workspaces/0`
   which returns `[nil]` for V1 (org-scope only). Each `(workspace_id, anchor_hour)`
@@ -53,34 +47,6 @@ defmodule Platform.Agents.SystemEventScheduler do
   # event name.
   @historian_event "historian"
 
-<<<<<<< HEAD
-    Review recent journal entries via `memory_search` (source: "journal"). \
-    Look for patterns, recurring decisions, or insights worth promoting \
-    from short-term journal notes to long-term wiki pages. Update curated \
-    pages via `memory_str_replace` or `memory_insert` against \
-    `org/page/...` paths (Historian-only writes — only you can write \
-    there). Record a daily-summary observation for {date} via \
-    `memory_create` at `org/journal/{date}.md`. Be specific and concrete \
-    — one decision or pattern per entry. If the window was quiet, write a \
-    short note to that effect rather than skipping the entry.
-    """,
-    "dreaming" => """
-    You are in dreaming mode (the Historian role). Review recent journal \
-    entries via `memory_search` (source: "journal"). Look for patterns, \
-    recurring themes, emerging risks, and strategic insights worth \
-    promoting from short-term journal notes to long-term wiki pages. \
-    Update curated pages via `memory_str_replace` or `memory_insert` \
-    against `org/page/...` paths (Historian-only writes — only you can \
-    write there); use `memory_view` first to read the current page body. \
-    Record short-term observations via `memory_create` at \
-    `org/journal/{date}.md`. Be selective: only add genuinely new \
-    insights, and preserve existing content that is still relevant. One \
-    decision or pattern per entry.
-    """
-  }
-
-  @daily_window_hours 24
-=======
   # 100k-token auto-trigger defaults (overridable via app env).
   #
   # `:historian_threshold_tokens` — when `Historian.pending_tokens(workspace_id)`
@@ -89,7 +55,6 @@ defmodule Platform.Agents.SystemEventScheduler do
   # historian run before a threshold-triggered dispatch is eligible again.
   @default_threshold_tokens 100_000
   @default_debounce_ms 60 * 60 * 1_000
->>>>>>> task/019e41da-1a48-7da4-adb4-9a63f8251c54
 
   # ── Public API ───────────────────────────────────────────────────────────────
 

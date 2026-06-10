@@ -45,16 +45,15 @@ config :phoenix,
 
 config :platform, :start_attention_router, false
 config :platform, :start_system_event_scheduler, false
-<<<<<<< HEAD
 
 # T3 (ADR-0041): tests start their own Platform.Org.Wiki.Indexer per case
 # (so DataCase sandbox owns the Repo connection and tests don't fight a
 # real subscriber). Production defaults to true via Application.start/2.
 config :platform, :start_wiki_indexer, false
-=======
+
+# T6 (ADR-0041): MeetingHistorianHandler subscribes to meeting PubSub at
+# init; tests start their own per case for sandbox ownership.
 config :platform, :start_meeting_historian_handler, false
-config :platform, :memory_provider, Platform.Memory.Providers.Null
->>>>>>> task/019e41da-1a48-7da4-adb4-9a63f8251c54
 
 # StackDeployer (T5) — tests run synchronously and use a no-op git
 # runner by default so existing Stacks tests don't shell out. Tests that
