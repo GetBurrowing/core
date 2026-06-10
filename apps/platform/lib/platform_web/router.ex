@@ -70,7 +70,7 @@ defmodule PlatformWeb.Router do
     # `:browser` scope so old bookmarks redirect first, then the new
     # path applies its own auth gate.
     get("/org-context", PageController, :org_context_redirect)
-    get("/org-context/:file_key", PageController, :org_context_redirect)
+    get("/org-context/*file_key", PageController, :org_context_redirect)
 
     if Mix.env() == :dev do
       get("/dev/login", AuthController, :dev_login)
@@ -104,7 +104,9 @@ defmodule PlatformWeb.Router do
       live("/control/usage", UsageLive, :index)
       live("/control/:agent_slug", ControlCenterLive, :show)
       live("/org_memory", OrgMemoryLive, :index)
-      live("/org_memory/:file_key", OrgMemoryLive, :show)
+      # Glob route: path-style file_keys (`org/identity.md`) span multiple
+      # segments, so `:show` must match `/org_memory/*file_key`.
+      live("/org_memory/*file_key", OrgMemoryLive, :show)
     end
 
     # MT/RBAC stack 2 (task 019e3c4a) — `/admin/*` lives in its own

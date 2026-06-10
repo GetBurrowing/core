@@ -63,6 +63,9 @@ defmodule PlatformWeb.OrgMemoryLive do
 
   @impl true
   def handle_params(%{"file_key" => file_key}, _url, socket) do
+    # Glob route — `file_key` arrives as a list of path segments.
+    file_key = if is_list(file_key), do: Enum.join(file_key, "/"), else: file_key
+
     case Wiki.get_page(file_key) do
       nil ->
         {:noreply,
@@ -102,7 +105,7 @@ defmodule PlatformWeb.OrgMemoryLive do
 
   @impl true
   def handle_event("select_page", %{"file_key" => file_key}, socket) do
-    {:noreply, push_patch(socket, to: ~p"/org_memory/#{file_key}")}
+    {:noreply, push_patch(socket, to: ~p"/org_memory/#{String.split(file_key, "/")}")}
   end
 
   @impl true
@@ -253,7 +256,7 @@ defmodule PlatformWeb.OrgMemoryLive do
          socket
          |> refresh_pages()
          |> assign(:creating, false)
-         |> push_patch(to: ~p"/org_memory/#{file_key}")
+         |> push_patch(to: ~p"/org_memory/#{String.split(file_key, "/")}")
          |> put_flash(:info, "Created #{file_key}")}
 
       {:error, %Ecto.Changeset{} = changeset} ->

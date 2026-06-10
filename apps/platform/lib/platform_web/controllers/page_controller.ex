@@ -12,9 +12,12 @@ defmodule PlatformWeb.PageController do
   working.
   """
   def org_context_redirect(conn, %{"file_key" => file_key}) do
+    # Glob route — `file_key` arrives as a list of path segments.
+    file_key = if is_list(file_key), do: Enum.join(file_key, "/"), else: file_key
+
     conn
     |> put_status(:moved_permanently)
-    |> redirect(to: ~p"/org_memory/#{file_key}")
+    |> redirect(to: "/org_memory/#{file_key}")
   end
 
   def org_context_redirect(conn, _params) do

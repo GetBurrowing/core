@@ -80,6 +80,26 @@ defmodule PlatformWeb.OrgMemoryLiveTest do
       assert conn.status == 301
       assert get_resp_header(conn, "location") == ["/org_memory/ORG_IDENTITY.md"]
     end
+
+    test "/org-context deep link with a path-style (multi-segment) file_key is preserved",
+         %{conn: conn} do
+      conn = get(conn, "/org-context/org/identity.md")
+
+      assert conn.status == 301
+      assert get_resp_header(conn, "location") == ["/org_memory/org/identity.md"]
+    end
+  end
+
+  describe "glob route: path-style file_keys (multi-segment)" do
+    test "GET /org_memory/org/identity.md loads the page directly", %{conn: conn} do
+      Repo.delete_all(WikiPage)
+      {:ok, _} = Wiki.upsert_page("org/identity.md", %{content: "# Identity Direct\n"})
+
+      conn = authenticated_conn(conn, create_user!())
+      {:ok, _view, html} = live(conn, "/org_memory/org/identity.md")
+
+      assert html =~ "Identity Direct"
+    end
   end
 
   describe "namespace tree (stage 3)" do
