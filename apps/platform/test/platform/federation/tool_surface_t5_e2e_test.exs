@@ -343,14 +343,37 @@ defmodule Platform.Federation.ToolSurfaceT5E2ETest do
       "lib/platform_web/live/org_memory_live"
     ]
 
+    # T5 HEAD — the commit this guard pins against.
+    @t5_head "c0a3f9d"
+
     defp t5_root, do: Mix.Project.project_file() |> Path.dirname()
 
     test "T5 did not introduce T6/T7 modules" do
-      for path <- @t5_forbidden_paths do
-        full = Path.join(t5_root(), path)
+      # Pinned to T5 HEAD rather than the working tree: downstream tasks
+      # (T6 historian, T7 OrgMemoryLive) legitimately add these paths on
+      # the rollup branch, so a `File.exists?` check goes stale the
+      # moment they land (T7 stage 2 tripped it). Skips silently when
+      # git is unavailable (containers where `.git` is masked) —
+      # mirroring the diff-vs-T4 test below.
+      case System.cmd(
+             "git",
+             ["ls-tree", "-r", "--name-only", @t5_head, "--", "apps/platform"],
+             cd: Path.expand("../..", t5_root()),
+             stderr_to_stdout: true
+           ) do
+        {listing, 0} ->
+          tracked = listing |> String.split("\n", trim: true)
 
-        refute File.exists?(full),
-               "T5 should NOT add #{path} — that's downstream task territory."
+          for path <- @t5_forbidden_paths do
+            full = "apps/platform/" <> path
+
+            refute full in tracked or
+                     Enum.any?(tracked, &String.starts_with?(&1, full <> "/")),
+                   "T5 should NOT add #{path} — that's downstream task territory."
+          end
+
+        {_out, _nonzero} ->
+          :ok
       end
     end
 
