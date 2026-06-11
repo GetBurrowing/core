@@ -13,8 +13,14 @@ defmodule PlatformWeb.OrgMemoryLiveScopeTest do
   Because the T1–T5 stacked chain was merged in wholesale, a diff
   against `main` would attribute T2's wiki.ex changes to T7 — so the
   guards pin against `c0a3f9d`, the last commit before T7's own work.
-  "T7 didn't modify X" == "X at HEAD is byte-identical to X at
-  c0a3f9d".
+
+  wiki.ex is guarded by byte-identity (nothing outside the stack ever
+  touches it). tool_surface.ex is guarded by memory_* definition +
+  execute-clause counts instead: `origin/main` legitimately evolves
+  that file for non-memory reasons and the rollup merges main, so
+  byte-identity cannot hold there (amended 2026-06-11 alongside the
+  Sloane-approved doc-string fix that retired the `daily_summary`
+  mention).
 
   Git availability: mirrors the T5 guard idiom in
   `test/platform/federation/tool_surface_t5_e2e_test.exs` — repo root
@@ -29,10 +35,12 @@ defmodule PlatformWeb.OrgMemoryLiveScopeTest do
   # T5 HEAD — the baseline commit these guards pin against.
   @t5_head "c0a3f9d"
 
-  # `def execute("memory_` clause count in tool_surface.ex at @t5_head,
-  # measured via `git show #{@t5_head}:.../tool_surface.ex`. Used as the
-  # fallback baseline when git is unavailable.
+  # `def execute("memory_` clause count and `name: "memory_` definition
+  # count in tool_surface.ex at @t5_head, measured via
+  # `git show #{@t5_head}:.../tool_surface.ex`. Used as the fallback
+  # baselines when git is unavailable.
   @t5_memory_execute_clause_count 7
+  @t5_memory_tool_definition_count 7
 
   defp app_root, do: Mix.Project.project_file() |> Path.dirname()
 
@@ -60,6 +68,12 @@ defmodule PlatformWeb.OrgMemoryLiveScopeTest do
     |> length()
   end
 
+  defp count_memory_tool_definitions(src) do
+    ~r/name: "memory_/
+    |> Regex.scan(src)
+    |> length()
+  end
+
   test "T7 did not modify the T2 domain surface (lib/platform/org/wiki.ex)" do
     rel_path = "lib/platform/org/wiki.ex"
 
@@ -81,25 +95,31 @@ defmodule PlatformWeb.OrgMemoryLiveScopeTest do
     end
   end
 
-  test "T7 did not modify the federation tool surface (lib/platform/federation/tool_surface.ex)" do
+  # Rollup amendment (Sloane, 2026-06-11): the original guard byte-pinned
+  # tool_surface.ex against T5 HEAD. That cannot hold on the rollup
+  # branch — `origin/main` legitimately evolves this file for non-memory
+  # reasons (e.g. StackDeployer wiring) and the rollup merges main. The
+  # byte-pin is replaced by the two invariants it was protecting: the
+  # memory_* tool DEFINITIONS count (below) and the memory_* execute
+  # clause count (next test) both still match T5 HEAD. Growth of either
+  # means someone snuck a memory-surface change past a T5 follow-up.
+  test "no new memory_* tool definitions were added to tool_surface.ex" do
     rel_path = "lib/platform/federation/tool_surface.ex"
+    current_count = count_memory_tool_definitions(File.read!(Path.join(app_root(), rel_path)))
 
-    case baseline_content(rel_path) do
-      {:ok, baseline} ->
-        current = File.read!(Path.join(app_root(), rel_path))
+    baseline_count =
+      case baseline_content(rel_path) do
+        {:ok, baseline} -> count_memory_tool_definitions(baseline)
+        :unavailable -> @t5_memory_tool_definition_count
+      end
 
-        assert current == baseline,
-               """
-               Scope-creep detected: #{rel_path} at HEAD differs from T5 HEAD
-               (#{@t5_head}). T7 is UI-only — the OrgMemoryLive task must not
-               change the federation tool surface (tool definitions, bundles,
-               or execute clauses). Tool-surface changes belong in a T5
-               follow-up task, not in T7's branch.
-               """
-
-      :unavailable ->
-        :ok
-    end
+    assert current_count == baseline_count,
+           """
+           Scope-creep detected: tool_surface.ex defines #{current_count}
+           `name: "memory_..."` tools; T5 HEAD (#{@t5_head}) had
+           #{baseline_count}. Memory tool-surface changes belong in a T5
+           follow-up task, not in the OrgMemoryLive task or rollup.
+           """
   end
 
   test "no new memory_* execute clauses were added to tool_surface.ex" do
