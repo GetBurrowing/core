@@ -17,6 +17,8 @@ defmodule Platform.Org.Wiki do
     * `parse_frontmatter/1`  — pure: {map, body_without_frontmatter}
     * `parse_wikilinks/1`    — pure: list of link descriptors
     * `resolve_alias/2`      — alias-table lookup
+    * `resolve_basename/2`   — unique-basename fallback (added on the
+      stack rollup under Sloane's 2026-06-11 authorization)
 
   ## PubSub
 
@@ -316,6 +318,50 @@ defmodule Platform.Org.Wiki do
   end
 
   @doc """
+  Resolve a bare wikilink target by basename, when exactly ONE page in
+  scope matches.
+
+  Fallback ordered AFTER exact-key and alias lookup (callers — e.g.
+  the LiveView's wikilink lookup builder — try those first):
+  `[[identity]]` resolves to `org/page/identity.md` when that is the
+  only page whose basename matches. Zero matches or 2+ matches return
+  `nil`, so ambiguous links stay dangling.
+
+  Matching rule: directories are stripped (only the final path segment
+  of each `file_key` is compared), the `.md` extension is optional on
+  both sides (`[[identity]]` and `[[identity.md]]` both match
+  `org/page/identity.md`), comparison is case-sensitive. Targets that
+  contain a `/` never basename-match — path-shaped targets belong to
+  the exact-key/alias steps.
+
+  Link materialization is unaffected: `upsert_page/3` keeps recording
+  RAW wikilink targets in `org_wiki_links.target_path` and
+  `backlinks/2` matches those raw strings, so basename resolution is a
+  read-time (render) concern only.
+
+  ## Options
+    * `:workspace_id` (default `nil` — org-scoped)
+  """
+  @spec resolve_basename(String.t(), keyword()) :: WikiPage.t() | nil
+  def resolve_basename(target, opts \\ []) when is_binary(target) do
+    workspace_id = Keyword.get(opts, :workspace_id)
+    stem = String.replace_suffix(target, ".md", "")
+
+    if stem == "" or String.contains?(stem, "/") do
+      nil
+    else
+      WikiPage
+      |> filter_workspace(workspace_id)
+      |> Repo.all()
+      |> Enum.filter(fn page -> basename_stem(page.file_key) == stem end)
+      |> case do
+        [page] -> page
+        _zero_or_ambiguous -> nil
+      end
+    end
+  end
+
+  @doc """
   Rename a page from `old_file_key` to `new_file_key` within a single
   `Repo.transaction/1`.
 
@@ -502,6 +548,18 @@ defmodule Platform.Org.Wiki do
 
   defp filter_workspace(queryable, workspace_id) do
     where(queryable, [p], p.workspace_id == ^workspace_id)
+  end
+
+  # ── Basename resolution ───────────────────────────────────────────────
+
+  # Final path segment with the optional `.md` extension stripped —
+  # the comparison form for `resolve_basename/2`.
+  @spec basename_stem(String.t()) :: String.t()
+  defp basename_stem(file_key) do
+    file_key
+    |> String.split("/")
+    |> List.last()
+    |> String.replace_suffix(".md", "")
   end
 
   # ── Alias resolution ──────────────────────────────────────────────────

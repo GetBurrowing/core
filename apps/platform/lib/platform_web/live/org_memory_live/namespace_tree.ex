@@ -13,8 +13,19 @@ defmodule PlatformWeb.OrgMemoryLive.NamespaceTree do
 
   Also owns the pure grouping logic (`build/1`) that turns the flat
   `Wiki.list_pages/1` result into a nested folder tree keyed by the
-  `/`-separated segments of each `file_key` (`org/identity.md`,
-  `project/<uuid>/decisions.md`, `space/<uuid>/playbook.md`, ...).
+  `/`-separated segments of each `file_key` (`org/page/identity.md`,
+  `project/<uuid>/page/decisions.md`, `space/<uuid>/page/playbook.md`, ...).
+
+  Page-grammar display (Sloane-authorized, 2026-06-11): canonical page
+  keys carry a `page/` segment right after the namespace
+  (`<ns>/page/<rest>` — T5 routing grammar). The interposed `page`
+  folder is pure routing noise for humans, so rendering collapses it:
+  a folder literally named `page` sitting directly under a namespace
+  node (`org/`, `project/<x>/`, `space/<x>/`) is hoisted — its pages
+  and sub-folders render as the namespace's own children
+  (`identity.md` directly under `org/`). `data-file-key` attributes
+  keep the REAL full keys; `journal/` / `private/` folders (and any
+  deeper `page` segments) render as-is.
   """
 
   use Phoenix.Component
@@ -78,7 +89,14 @@ defmodule PlatformWeb.OrgMemoryLive.NamespaceTree do
   viewer toolbar, and the create panel's template cards.
   """
   @spec file_icon(String.t()) :: String.t()
-  # Path-style file_keys (T1+): org/identity.md, org/memory.md, org/agents.md
+  # Page-grammar file_keys (2026-06-11 key migration):
+  # org/page/identity.md, org/page/memory.md, org/page/agents.md
+  def file_icon("org/page/identity" <> _), do: "hero-identification size-4"
+  def file_icon("org/page/memory" <> _), do: "hero-light-bulb size-4"
+  def file_icon("org/page/agents" <> _), do: "hero-cpu-chip size-4"
+  def file_icon("org/page/directory" <> _), do: "hero-users size-4"
+  # Flat path-style file_keys (T1..rollup) — still resolvable via the
+  # 20260611120000 alias backfill; kept so legacy rows render right.
   def file_icon("org/identity" <> _), do: "hero-identification size-4"
   def file_icon("org/memory" <> _), do: "hero-light-bulb size-4"
   def file_icon("org/agents" <> _), do: "hero-cpu-chip size-4"
@@ -158,8 +176,9 @@ defmodule PlatformWeb.OrgMemoryLive.NamespaceTree do
 
   defp tree_folder(assigns) do
     assigns =
-      assign(
-        assigns,
+      assigns
+      |> assign(:node, hoist_page_folder(assigns.node))
+      |> assign(
         :expanded?,
         MapSet.member?(assigns.expanded_prefixes, assigns.node.prefix)
       )
@@ -227,6 +246,35 @@ defmodule PlatformWeb.OrgMemoryLive.NamespaceTree do
   end
 
   # ── Render helpers ─────────────────────────────────────────────────────
+
+  # Collapse the interposed `page` folder under a namespace node (see
+  # moduledoc): its pages and sub-folders become the namespace's own
+  # children for display. Render-only — the underlying tree (and every
+  # data-file-key / data-namespace-prefix attribute on the hoisted
+  # children's own sub-folders) keeps the real keys/prefixes.
+  defp hoist_page_folder(%{prefix: prefix, folders: folders} = node) do
+    case Map.pop(folders, "page") do
+      {%{} = page_node, rest} ->
+        if namespace_prefix?(prefix) do
+          %{
+            node
+            | folders: Map.merge(page_node.folders, rest),
+              pages: node.pages ++ page_node.pages
+          }
+        else
+          node
+        end
+
+      {nil, _} ->
+        node
+    end
+  end
+
+  # `org/`, `project/<x>/`, `space/<x>/` — the namespace roots of the
+  # T5 routing grammar (display-level check; no UUID validation here).
+  defp namespace_prefix?(prefix) do
+    Regex.match?(~r{\A(org|project/[^/]+|space/[^/]+)/\z}, prefix)
+  end
 
   defp sorted_folders(%{folders: folders}) do
     folders |> Map.values() |> Enum.sort_by(& &1.name)

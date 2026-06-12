@@ -78,6 +78,14 @@ config :platform, :canvas_persist_sync, true
 # (`org_memory_search` → `memory_search` on the
 # `search_memory_with_scores/2` doc-string). The module body otherwise
 # remains untouched; T7 retires the module.
+#
+# Rollup re-pin (Sloane-authorized, 2026-06-11): @default_templates keys
+# moved from the flat form (`org/identity.md`) to the T5 routing page
+# grammar (`org/page/identity.md`) alongside the 20260611120000 key
+# migration — flat keys classify :unknown and are dropped by
+# memory_search's read-gate hydration. Only the template keys (and the
+# comment introducing them) changed; the module body is otherwise
+# untouched.
 config :platform,
        :t2_context_sha256_t1_head,
-       "a4d5de2b4cc496ee4420b1a7531a5b88e66090350721143e353ab514c2fb78c2"
+       "b1ce6c7ca5c27061192612d8572c685466ad934f0083afa4b5ff801e9b996771"

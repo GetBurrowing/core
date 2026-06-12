@@ -282,7 +282,10 @@ defmodule Platform.Org.Wiki.ContextT4E2ETest do
       "20260520050000_force_update_historian_dispatch_templates.exs",
       "20260527160200_backfill_meeting_chat_space_slugs.exs",
       "20260604000000_add_org_id_to_chat_spaces.exs",
-      "20260604000100_create_channel_sections.exs"
+      "20260604000100_create_channel_sections.exs",
+      # Rollup, Sloane-authorized 2026-06-11: flat page keys → routing
+      # page grammar (`<ns>/page/<rest>`) + alias backfill.
+      "20260611120000_page_grammar_file_keys_and_alias_backfill.exs"
     ]
 
     defp t4_root, do: Mix.Project.project_file() |> Path.dirname()

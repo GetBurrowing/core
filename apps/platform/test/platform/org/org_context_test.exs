@@ -196,10 +196,12 @@ defmodule Platform.Org.ContextTest do
       files = Repo.all(WikiPage)
       file_keys = Enum.map(files, & &1.file_key) |> Enum.sort()
 
+      # Page-grammar keys (`<ns>/page/<rest>`) since the 2026-06-11
+      # key migration — flat keys are no longer seeded.
       assert file_keys == [
-               "org/agents.md",
-               "org/identity.md",
-               "org/memory.md"
+               "org/page/agents.md",
+               "org/page/identity.md",
+               "org/page/memory.md"
              ]
     end
 
@@ -216,7 +218,7 @@ defmodule Platform.Org.ContextTest do
       clear_seeded_files()
       :ok = Seeds.seed_defaults()
 
-      file = Repo.get_by!(WikiPage, file_key: "org/identity.md")
+      file = Repo.get_by!(WikiPage, file_key: "org/page/identity.md")
 
       file
       |> WikiPage.update_changeset(%{content: "Custom identity"})
@@ -224,7 +226,7 @@ defmodule Platform.Org.ContextTest do
 
       :ok = Seeds.seed_defaults()
 
-      updated = Repo.get_by!(WikiPage, file_key: "org/identity.md")
+      updated = Repo.get_by!(WikiPage, file_key: "org/page/identity.md")
       assert updated.content == "Custom identity"
     end
 

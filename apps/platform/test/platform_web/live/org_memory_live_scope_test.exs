@@ -14,13 +14,18 @@ defmodule PlatformWeb.OrgMemoryLiveScopeTest do
   against `main` would attribute T2's wiki.ex changes to T7 — so the
   guards pin against `c0a3f9d`, the last commit before T7's own work.
 
-  wiki.ex is guarded by byte-identity (nothing outside the stack ever
-  touches it). tool_surface.ex is guarded by memory_* definition +
-  execute-clause counts instead: `origin/main` legitimately evolves
-  that file for non-memory reasons and the rollup merges main, so
-  byte-identity cannot hold there (amended 2026-06-11 alongside the
-  Sloane-approved doc-string fix that retired the `daily_summary`
-  mention).
+  wiki.ex was originally guarded by byte-identity against T5 HEAD
+  (nothing outside the stack ever touched it). Amended 2026-06-11:
+  Sloane authorized the basename wikilink resolution change
+  (`Wiki.resolve_basename/2`), which legitimately modifies the T2
+  domain surface on the rollup branch — the byte-identity guard is
+  replaced by a sha256 pin of the NEW authorized content (pure
+  File.read! + :crypto, no git needed). tool_surface.ex is guarded by
+  memory_* definition + execute-clause counts instead: `origin/main`
+  legitimately evolves that file for non-memory reasons and the
+  rollup merges main, so byte-identity cannot hold there (amended
+  2026-06-11 alongside the Sloane-approved doc-string fix that retired
+  the `daily_summary` mention).
 
   Git availability: mirrors the T5 guard idiom in
   `test/platform/federation/tool_surface_t5_e2e_test.exs` — repo root
@@ -74,25 +79,31 @@ defmodule PlatformWeb.OrgMemoryLiveScopeTest do
     |> length()
   end
 
-  test "T7 did not modify the T2 domain surface (lib/platform/org/wiki.ex)" do
+  # Rollup amendment (Sloane, 2026-06-11): the original guard byte-pinned
+  # wiki.ex against T5 HEAD (#{@t5_head}). This commit's basename
+  # wikilink resolution (`Wiki.resolve_basename/2` + its private
+  # `basename_stem/1` helper and doc updates) legitimately modifies the
+  # T2 domain surface under Sloane's authorization, so the byte-identity
+  # check is replaced by a sha256 pin of the NEW wiki.ex content. Any
+  # further drift still fails here — regenerate the constant only in
+  # the same commit as another authorized domain change. Pure
+  # File.read! + :crypto, so this asserts even where git is unavailable.
+  @wiki_ex_sha256_2026_06_11 "cdfaef37e3695655cc52617598060a20773ab484449ea0ae6c79e1ea8de8f2e9"
+
+  test "wiki.ex matches the 2026-06-11 authorized domain surface (sha256 pin)" do
     rel_path = "lib/platform/org/wiki.ex"
+    contents = File.read!(Path.join(app_root(), rel_path))
+    hash = :crypto.hash(:sha256, contents) |> Base.encode16(case: :lower)
 
-    case baseline_content(rel_path) do
-      {:ok, baseline} ->
-        current = File.read!(Path.join(app_root(), rel_path))
-
-        assert current == baseline,
-               """
-               Scope-creep detected: #{rel_path} at HEAD differs from T5 HEAD
-               (#{@t5_head}). T7 is UI-only — the OrgMemoryLive task must not
-               modify the Platform.Org.Wiki domain surface. If a domain change
-               is genuinely needed, it belongs in a T2/T5 follow-up task, not
-               in T7's branch.
-               """
-
-      :unavailable ->
-        :ok
-    end
+    assert hash == @wiki_ex_sha256_2026_06_11,
+           """
+           Scope-creep detected: #{rel_path} drifted from the 2026-06-11
+           authorized content (basename wikilink resolution rollup commit).
+           Expected sha256: #{@wiki_ex_sha256_2026_06_11}
+           Got sha256:      #{hash}
+           Domain changes to Platform.Org.Wiki require explicit authorization
+           — re-pin this constant in the same commit as the authorized change.
+           """
   end
 
   # Rollup amendment (Sloane, 2026-06-11): the original guard byte-pinned

@@ -406,6 +406,11 @@ defmodule PlatformWeb.OrgMemoryLive do
     file_key =
       if String.ends_with?(file_key, ".md"), do: file_key, else: file_key <> ".md"
 
+    # Normalize to the page grammar (`<ns>/page/<rest>`) so UI-created
+    # pages are recognised by the memory_* gates. The flash + patch
+    # below use the normalized key, so the user sees where it landed.
+    file_key = normalize_page_key(file_key)
+
     template =
       Context.default_template(file_key) || "# #{String.replace(file_key, ".md", "")}\n\n"
 
@@ -672,6 +677,38 @@ defmodule PlatformWeb.OrgMemoryLive do
 
   # ── Helpers ─────────────────────────────────────────────────────────────
 
+  # Page-grammar normalization for the create path (Sloane-authorized,
+  # 2026-06-11). The T5 routing grammar only recognises pages at
+  # `<ns>/page/<rest>` (ns ∈ org | project/<uuid> | space/<uuid>) —
+  # flat keys (`org/custom.md`) classify :unknown and are dropped by
+  # memory_search's read-gate hydration. The DOMAIN stays free-form
+  # (`Wiki.upsert_page/3` accepts any key); only this LiveView create
+  # handler inserts the `page/` segment. Keys already under `page/`,
+  # `journal/`, or `private/` — and keys outside the namespace grammar
+  # (non-UUID project/space slots, no recognised namespace) — pass
+  # through untouched.
+  defp normalize_page_key(file_key) do
+    case String.split(file_key, "/") do
+      ["org" | [_ | _] = rest] ->
+        insert_page_segment("org", rest)
+
+      [kind, id | [_ | _] = rest] when kind in ["project", "space"] ->
+        case Ecto.UUID.cast(id) do
+          {:ok, _} -> insert_page_segment("#{kind}/#{id}", rest)
+          :error -> file_key
+        end
+
+      _ ->
+        file_key
+    end
+  end
+
+  defp insert_page_segment(ns, [first | _] = rest) when first in ~w(page journal private) do
+    ns <> "/" <> Enum.join(rest, "/")
+  end
+
+  defp insert_page_segment(ns, rest), do: ns <> "/page/" <> Enum.join(rest, "/")
+
   # Body source: explicit `content` param (textarea save via the
   # MarkdownEditor hook) or the tracked `@editor_content` (frontmatter
   # form submit). When the frontmatter form is active the textarea
@@ -791,8 +828,11 @@ defmodule PlatformWeb.OrgMemoryLive do
 
   # Render markdown with wikilinks swapped. The lookup table is built
   # once per render: direct hits against the already-loaded `@pages`
-  # list, `Wiki.resolve_alias/2` fallback for misses — so the renderer
-  # itself stays pure (no DB calls inside `MarkdownRenderer.render/2`).
+  # list, `Wiki.resolve_alias/2` fallback for misses, then
+  # `Wiki.resolve_basename/2` as the last resort (`[[identity]]` →
+  # `org/page/identity.md` when the basename is unique in scope;
+  # ambiguous/zero matches stay dangling) — so the renderer itself
+  # stays pure (no DB calls inside `MarkdownRenderer.render/2`).
   defp render_markdown(content, pages) do
     MarkdownRenderer.render(content, wikilink_lookup(content, pages))
   end
@@ -810,6 +850,9 @@ defmodule PlatformWeb.OrgMemoryLive do
           {target, target}
 
         page = Wiki.resolve_alias(target) ->
+          {target, page.file_key}
+
+        page = Wiki.resolve_basename(target) ->
           {target, page.file_key}
 
         true ->
@@ -903,9 +946,9 @@ defmodule PlatformWeb.OrgMemoryLive do
     end
   end
 
-  defp template_description("org/identity.md"), do: "Mission, values, product summary"
-  defp template_description("org/memory.md"), do: "Long-term curated org knowledge"
-  defp template_description("org/agents.md"), do: "Agent registry and roles"
-  defp template_description("org/directory.md"), do: "Auto-generated user/agent roster"
+  defp template_description("org/page/identity.md"), do: "Mission, values, product summary"
+  defp template_description("org/page/memory.md"), do: "Long-term curated org knowledge"
+  defp template_description("org/page/agents.md"), do: "Agent registry and roles"
+  defp template_description("org/page/directory.md"), do: "Auto-generated user/agent roster"
   defp template_description(_), do: "Custom memory page"
 end

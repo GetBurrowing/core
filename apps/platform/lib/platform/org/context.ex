@@ -37,8 +37,14 @@ defmodule Platform.Org.Context do
 
   # ── Default templates ─────────────────────────────────────────────────
 
+  # Template keys follow the T5 routing page grammar (`<ns>/page/<rest>`)
+  # so seeded defaults are recognised by the memory_* gates — flat keys
+  # (`org/identity.md`) classify :unknown and get dropped by
+  # memory_search's read-gate hydration. Keys migrated from the flat
+  # form by 20260611120000_page_grammar_file_keys_and_alias_backfill
+  # (Sloane-authorized change, 2026-06-11).
   @default_templates %{
-    "org/identity.md" => """
+    "org/page/identity.md" => """
     # Organization Identity
 
     ## Mission
@@ -53,7 +59,7 @@ defmodule Platform.Org.Context do
     ## Team
     _Who are the key people and what are their roles?_
     """,
-    "org/memory.md" => """
+    "org/page/memory.md" => """
     # Organization Memory
 
     Long-term curated knowledge for the organization. Agents reference this
@@ -68,7 +74,7 @@ defmodule Platform.Org.Context do
     ## Lessons Learned
     _Capture insights from past experiences._
     """,
-    "org/agents.md" => """
+    "org/page/agents.md" => """
     # Organization Agents
 
     Registry of agents and their roles within the organization.

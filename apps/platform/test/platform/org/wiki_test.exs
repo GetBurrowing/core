@@ -212,6 +212,63 @@ defmodule Platform.Org.WikiTest do
     end
   end
 
+  # ── Basename resolution (Sloane-authorized, 2026-06-11) ─────────────
+
+  describe "resolve_basename/2" do
+    test "unique basename resolves, with and without the .md extension" do
+      {:ok, page} = Wiki.upsert_page("org/page/identity.md", %{content: "# Identity"})
+
+      assert %WikiPage{id: id} = Wiki.resolve_basename("identity")
+      assert id == page.id
+
+      assert %WikiPage{id: ^id} = Wiki.resolve_basename("identity.md")
+    end
+
+    test "zero matches return nil" do
+      {:ok, _} = Wiki.upsert_page("org/page/identity.md", %{content: "# Identity"})
+
+      assert Wiki.resolve_basename("ghost") == nil
+    end
+
+    test "ambiguous basename (two pages in different namespaces) returns nil" do
+      space_id = Ecto.UUID.generate()
+
+      {:ok, _} = Wiki.upsert_page("org/page/identity.md", %{content: "# Org"})
+
+      {:ok, _} =
+        Wiki.upsert_page("space/#{space_id}/page/identity.md", %{content: "# Space"})
+
+      assert Wiki.resolve_basename("identity") == nil
+      assert Wiki.resolve_basename("identity.md") == nil
+    end
+
+    test "matching is case-sensitive" do
+      {:ok, _} = Wiki.upsert_page("org/page/identity.md", %{content: "# Identity"})
+
+      assert Wiki.resolve_basename("Identity") == nil
+      assert Wiki.resolve_basename("IDENTITY.md") == nil
+    end
+
+    test "path-shaped targets never basename-match" do
+      {:ok, _} = Wiki.upsert_page("org/page/identity.md", %{content: "# Identity"})
+
+      assert Wiki.resolve_basename("page/identity.md") == nil
+      assert Wiki.resolve_basename("org/page/identity.md") == nil
+    end
+
+    test "workspace-scoped: only pages in the caller's workspace count" do
+      ws = Ecto.UUID.generate()
+
+      {:ok, org_page} = Wiki.upsert_page("org/page/identity.md", %{content: "org"})
+
+      {:ok, ws_page} =
+        Wiki.upsert_page("org/page/identity.md", %{content: "ws"}, workspace_id: ws)
+
+      assert Wiki.resolve_basename("identity").id == org_page.id
+      assert Wiki.resolve_basename("identity", workspace_id: ws).id == ws_page.id
+    end
+  end
+
   # ── PubSub ──────────────────────────────────────────────────────────
 
   describe "PubSub :index events" do

@@ -58,7 +58,7 @@ defmodule PlatformWeb.OrgMemoryLiveTest do
            %{
              source: "page",
              id: Ecto.UUID.generate(),
-             path: "org/identity.md",
+             path: "org/page/identity.md",
              space_id: nil,
              content: "Deployment runbook lives in the identity page.",
              score: 0.0328,
@@ -160,14 +160,67 @@ defmodule PlatformWeb.OrgMemoryLiveTest do
   end
 
   describe "glob route: path-style file_keys (multi-segment)" do
-    test "GET /org_memory/org/identity.md loads the page directly", %{conn: conn} do
+    test "GET /org_memory/org/page/identity.md loads the page directly", %{conn: conn} do
       Repo.delete_all(WikiPage)
-      {:ok, _} = Wiki.upsert_page("org/identity.md", %{content: "# Identity Direct\n"})
+      {:ok, _} = Wiki.upsert_page("org/page/identity.md", %{content: "# Identity Direct\n"})
 
       conn = authenticated_conn(conn, create_user!())
-      {:ok, _view, html} = live(conn, "/org_memory/org/identity.md")
+      {:ok, _view, html} = live(conn, "/org_memory/org/page/identity.md")
 
       assert html =~ "Identity Direct"
+    end
+  end
+
+  describe "create panel page-grammar normalization (2026-06-11)" do
+    setup %{conn: conn} do
+      Repo.delete_all(WikiPage)
+      {:ok, conn: authenticated_conn(conn, create_user!())}
+    end
+
+    test "user-entered flat key gets the page/ segment inserted after the namespace",
+         %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/org_memory")
+
+      view |> element(~s(button[phx-click="show_create"])) |> render_click()
+      render_click(view, "create_file", %{"file_key" => "org/custom.md"})
+
+      # The page lands on the gate-recognised key; the flat key was
+      # never written. The patch + flash surface the normalized key.
+      assert %WikiPage{} = Wiki.get_page("org/page/custom.md")
+      assert Wiki.get_page("org/custom.md") == nil
+
+      path = assert_patch(view)
+      assert URI.decode(path) == "/org_memory/org/page/custom.md"
+      assert render(view) =~ "Created org/page/custom.md"
+      assert has_element?(view, "h1", "org/page/custom.md")
+    end
+
+    test "keys already under page/ or journal/ or private/ pass through unchanged",
+         %{conn: conn} do
+      space_id = Ecto.UUID.generate()
+      {:ok, view, _html} = live(conn, ~p"/org_memory")
+
+      view |> element(~s(button[phx-click="show_create"])) |> render_click()
+      render_click(view, "create_file", %{"file_key" => "org/page/already.md"})
+      assert %WikiPage{} = Wiki.get_page("org/page/already.md")
+      assert Wiki.get_page("org/page/page/already.md") == nil
+
+      render_click(view, "create_file", %{
+        "file_key" => "space/#{space_id}/private/#{Ecto.UUID.generate()}/scratch.md"
+      })
+
+      refute Wiki.list_pages() |> Enum.any?(&String.contains?(&1.file_key, "/page/private/"))
+    end
+
+    test "keys outside the namespace grammar are left as-is (domain stays free-form)",
+         %{conn: conn} do
+      {:ok, view, _html} = live(conn, ~p"/org_memory")
+
+      view |> element(~s(button[phx-click="show_create"])) |> render_click()
+      render_click(view, "create_file", %{"file_key" => "project/not-a-uuid/notes.md"})
+
+      assert %WikiPage{} = Wiki.get_page("project/not-a-uuid/notes.md")
+      assert Wiki.get_page("project/not-a-uuid/page/notes.md") == nil
     end
   end
 
@@ -180,12 +233,16 @@ defmodule PlatformWeb.OrgMemoryLiveTest do
       project_id = Ecto.UUID.generate()
       space_id = Ecto.UUID.generate()
 
-      {:ok, _} = Wiki.upsert_page("org/identity.md", %{content: "# Identity Alpha\n"})
+      # Page-grammar keys (`<ns>/page/<rest>`) — the canonical form
+      # since the 2026-06-11 key migration. The tree hides the `page`
+      # segment but data-file-key attributes keep the full keys.
+      {:ok, _} = Wiki.upsert_page("org/page/identity.md", %{content: "# Identity Alpha\n"})
 
       {:ok, _} =
-        Wiki.upsert_page("project/#{project_id}/decisions.md", %{content: "# Decisions\n"})
+        Wiki.upsert_page("project/#{project_id}/page/decisions.md", %{content: "# Decisions\n"})
 
-      {:ok, _} = Wiki.upsert_page("space/#{space_id}/playbook.md", %{content: "# Playbook\n"})
+      {:ok, _} =
+        Wiki.upsert_page("space/#{space_id}/page/playbook.md", %{content: "# Playbook\n"})
 
       conn = authenticated_conn(conn, create_user!())
 
@@ -203,16 +260,20 @@ defmodule PlatformWeb.OrgMemoryLiveTest do
       assert has_element?(view, ~s(button[data-namespace-prefix="project/"]))
       assert has_element?(view, ~s(button[data-namespace-prefix="space/"]))
 
-      # Top-level namespaces are expanded by default: the org/ leaf and
-      # the second-level folders are visible...
-      assert has_element?(view, ~s(button[data-file-key="org/identity.md"]))
+      # Top-level namespaces are expanded by default: the org/ leaf
+      # (hoisted out of its `page/` folder, full key preserved on the
+      # data attribute) and the second-level folders are visible...
+      assert has_element?(view, ~s(button[data-file-key="org/page/identity.md"]))
       assert has_element?(view, ~s(button[data-namespace-prefix="project/#{project_id}/"]))
       assert has_element?(view, ~s(button[data-namespace-prefix="space/#{space_id}/"]))
+
+      # The interposed `page` folder itself is never rendered.
+      refute has_element?(view, ~s(button[data-namespace-prefix="org/page/"]))
 
       # ...but deeper folders start collapsed, so their leaves are not.
       refute has_element?(
                view,
-               ~s(button[data-file-key="project/#{project_id}/decisions.md"])
+               ~s(button[data-file-key="project/#{project_id}/page/decisions.md"])
              )
     end
 
@@ -221,25 +282,25 @@ defmodule PlatformWeb.OrgMemoryLiveTest do
       {:ok, view, _html} = live(conn, ~p"/org_memory")
 
       view
-      |> element(~s(button[data-file-key="org/identity.md"]))
+      |> element(~s(button[data-file-key="org/page/identity.md"]))
       |> render_click()
 
       path = assert_patch(view)
-      assert URI.decode(path) == "/org_memory/org/identity.md"
+      assert URI.decode(path) == "/org_memory/org/page/identity.md"
 
       # @selected_page drives the main pane: toolbar heading shows the
       # file_key, rendered markdown body shows the page content, and the
       # tree leaf picks up the selected styling.
-      assert has_element?(view, "h1", "org/identity.md")
+      assert has_element?(view, "h1", "org/page/identity.md")
       assert render(view) =~ "Identity Alpha"
-      assert has_element?(view, ~s(button[data-file-key="org/identity.md"].text-primary))
+      assert has_element?(view, ~s(button[data-file-key="org/page/identity.md"].text-primary))
     end
 
     test "expanding a collapsed deeper folder reveals its leaf, which selects via patch",
          %{conn: conn, project_id: project_id} do
       {:ok, view, _html} = live(conn, ~p"/org_memory")
 
-      file_key = "project/#{project_id}/decisions.md"
+      file_key = "project/#{project_id}/page/decisions.md"
 
       view
       |> element(~s(button[data-namespace-prefix="project/#{project_id}/"]))
@@ -261,28 +322,125 @@ defmodule PlatformWeb.OrgMemoryLiveTest do
     setup %{conn: conn} do
       Repo.delete_all(WikiPage)
 
-      {:ok, _} = Wiki.upsert_page("org/identity.md", %{content: "# Identity\n"})
+      {:ok, _} = Wiki.upsert_page("org/page/identity.md", %{content: "# Identity\n"})
 
       {:ok, _} =
-        Wiki.upsert_page("org/linker.md", %{
-          content: "# Linker\n\nSee [[org/identity.md]] and [[ghost]].\n"
+        Wiki.upsert_page("org/page/linker.md", %{
+          content: "# Linker\n\nSee [[org/page/identity.md]] and [[ghost]].\n"
         })
 
       {:ok, conn: authenticated_conn(conn, create_user!())}
     end
 
     test "wikilink to an existing page renders an <a class=\"wikilink\">", %{conn: conn} do
-      {:ok, view, _html} = live(conn, "/org_memory/" <> URI.encode_www_form("org/linker.md"))
+      {:ok, view, _html} =
+        live(conn, "/org_memory/" <> URI.encode_www_form("org/page/linker.md"))
 
-      assert has_element?(view, ~s(a.wikilink[href="/org_memory/org/identity.md"]))
-      assert render(view) =~ ~s(class="wikilink">org/identity.md</a>)
+      assert has_element?(view, ~s(a.wikilink[href="/org_memory/org/page/identity.md"]))
+      assert render(view) =~ ~s(class="wikilink">org/page/identity.md</a>)
     end
 
     test "wikilink with no matching page or alias renders a dangling span", %{conn: conn} do
-      {:ok, view, _html} = live(conn, "/org_memory/" <> URI.encode_www_form("org/linker.md"))
+      {:ok, view, _html} =
+        live(conn, "/org_memory/" <> URI.encode_www_form("org/page/linker.md"))
 
       assert has_element?(view, "span.wikilink-dangling", "ghost")
       refute has_element?(view, ~s(a.wikilink[href="/org_memory/ghost"]))
+    end
+  end
+
+  describe "basename wikilink resolution (2026-06-11)" do
+    # `Wiki.resolve_basename/2` is the LAST fallback in the LiveView's
+    # wikilink lookup builder: exact key, then alias, then unique
+    # basename. Ambiguous or zero basename matches stay dangling.
+    setup %{conn: conn} do
+      Repo.delete_all(WikiPage)
+
+      {:ok, _} = Wiki.upsert_page("org/page/identity.md", %{content: "# Identity\n"})
+
+      {:ok, conn: authenticated_conn(conn, create_user!())}
+    end
+
+    test "[[identity]] (.md-less) resolves to the unique org/page/identity.md", %{conn: conn} do
+      {:ok, _} =
+        Wiki.upsert_page("org/page/linker.md", %{content: "See [[identity]].\n"})
+
+      {:ok, view, _html} =
+        live(conn, "/org_memory/" <> URI.encode_www_form("org/page/linker.md"))
+
+      assert has_element?(view, ~s(a.wikilink[href="/org_memory/org/page/identity.md"]))
+      assert render(view) =~ ~s(class="wikilink">identity</a>)
+      refute has_element?(view, "span.wikilink-dangling", "identity")
+    end
+
+    test "[[identity.md]] (.md-full) resolves to the unique basename match", %{conn: conn} do
+      {:ok, _} =
+        Wiki.upsert_page("org/page/linker.md", %{content: "See [[identity.md]].\n"})
+
+      {:ok, view, _html} =
+        live(conn, "/org_memory/" <> URI.encode_www_form("org/page/linker.md"))
+
+      assert has_element?(view, ~s(a.wikilink[href="/org_memory/org/page/identity.md"]))
+      assert render(view) =~ ~s(class="wikilink">identity.md</a>)
+    end
+
+    test "ambiguous basename (two namespaces share it) stays dangling", %{conn: conn} do
+      space_id = Ecto.UUID.generate()
+
+      {:ok, _} =
+        Wiki.upsert_page("space/#{space_id}/page/identity.md", %{content: "# Space Identity\n"})
+
+      {:ok, _} =
+        Wiki.upsert_page("org/page/linker.md", %{content: "See [[identity]].\n"})
+
+      {:ok, view, _html} =
+        live(conn, "/org_memory/" <> URI.encode_www_form("org/page/linker.md"))
+
+      assert has_element?(view, "span.wikilink-dangling", "identity")
+      refute has_element?(view, ~s(a.wikilink[href="/org_memory/org/page/identity.md"]))
+    end
+
+    test "exact key takes precedence over a basename collision", %{conn: conn} do
+      # A page whose FULL key happens to equal another page's basename
+      # form: exact-key resolution wins; basename never runs.
+      {:ok, _} = Wiki.upsert_page("identity.md", %{content: "# Root-level page\n"})
+
+      {:ok, _} =
+        Wiki.upsert_page("org/page/linker.md", %{content: "See [[identity.md]].\n"})
+
+      {:ok, view, _html} =
+        live(conn, "/org_memory/" <> URI.encode_www_form("org/page/linker.md"))
+
+      assert has_element?(view, ~s(a.wikilink[href="/org_memory/identity.md"]))
+      refute has_element?(view, ~s(a.wikilink[href="/org_memory/org/page/identity.md"]))
+    end
+
+    test "alias takes precedence over basename resolution", %{conn: conn} do
+      # Alias ORG_IDENTITY.md → org/page/identity.md, plus a DIFFERENT
+      # page whose basename is ORG_IDENTITY — the alias must win.
+      page = Wiki.get_page("org/page/identity.md")
+
+      Ecto.Adapters.SQL.query!(
+        Repo,
+        "INSERT INTO org_wiki_aliases (workspace_id, old_path, current_id, inserted_at) " <>
+          "VALUES ($1, $2, $3, now()) ON CONFLICT (workspace_id, old_path) DO NOTHING",
+        [
+          Ecto.UUID.dump!("00000000-0000-0000-0000-000000000000"),
+          "ORG_IDENTITY.md",
+          Ecto.UUID.dump!(page.id)
+        ]
+      )
+
+      {:ok, decoy} = Wiki.upsert_page("org/page/decoys/ORG_IDENTITY.md", %{content: "# Decoy\n"})
+
+      {:ok, _} =
+        Wiki.upsert_page("org/page/linker.md", %{content: "See [[ORG_IDENTITY.md]].\n"})
+
+      {:ok, view, _html} =
+        live(conn, "/org_memory/" <> URI.encode_www_form("org/page/linker.md"))
+
+      assert has_element?(view, ~s(a.wikilink[href="/org_memory/org/page/identity.md"]))
+      refute has_element?(view, ~s(a.wikilink[href="/org_memory/#{decoy.file_key}"]))
     end
   end
 
@@ -300,13 +458,14 @@ defmodule PlatformWeb.OrgMemoryLiveTest do
       Body text.
       """
 
-      {:ok, page} = Wiki.upsert_page("org/identity.md", %{content: content})
+      {:ok, page} = Wiki.upsert_page("org/page/identity.md", %{content: content})
 
       {:ok, conn: authenticated_conn(conn, create_user!()), page: page}
     end
 
     test "preamble checkbox toggles and round-trips through save", %{conn: conn, page: page} do
-      {:ok, view, _html} = live(conn, "/org_memory/" <> URI.encode_www_form("org/identity.md"))
+      {:ok, view, _html} =
+        live(conn, "/org_memory/" <> URI.encode_www_form("org/page/identity.md"))
 
       view
       |> element(~s(button[phx-click="start_edit"]))
@@ -340,7 +499,7 @@ defmodule PlatformWeb.OrgMemoryLiveTest do
       # Round trip: the rebuilt YAML block parsed back into a boolean
       # frontmatter value, the body survived, and the version advanced.
       assert %WikiPage{frontmatter: %{"preamble" => true} = frontmatter, content: content} =
-               updated = Wiki.get_page("org/identity.md")
+               updated = Wiki.get_page("org/page/identity.md")
 
       assert frontmatter["title"] == "Org identity"
       assert updated.version == page.version + 1
@@ -358,11 +517,11 @@ defmodule PlatformWeb.OrgMemoryLiveTest do
       # target_path), which is what `Wiki.backlinks/2` queries — so
       # seeding the backlink is just upserting a page whose body
       # carries a `[[...]]` link to the target's file_key.
-      {:ok, _} = Wiki.upsert_page("org/target.md", %{content: "# Target\n"})
+      {:ok, _} = Wiki.upsert_page("org/page/target.md", %{content: "# Target\n"})
 
       {:ok, _} =
-        Wiki.upsert_page("org/source.md", %{
-          content: "# Source\n\nLinks to [[org/target.md]].\n"
+        Wiki.upsert_page("org/page/source.md", %{
+          content: "# Source\n\nLinks to [[org/page/target.md]].\n"
         })
 
       {:ok, conn: authenticated_conn(conn, create_user!())}
@@ -370,23 +529,23 @@ defmodule PlatformWeb.OrgMemoryLiveTest do
 
     test "page with an inbound wikilink lists the source as a clickable backlink",
          %{conn: conn} do
-      {:ok, view, _html} = live(conn, "/org_memory/org/target.md")
+      {:ok, view, _html} = live(conn, "/org_memory/org/page/target.md")
 
       # The backlink row is a select_page button carrying the source
       # page's file_key (full key in the tooltip, namespace badge
       # alongside).
       assert has_element?(
                view,
-               ~s([data-role="backlinks"] button[data-backlink="org/source.md"][phx-click="select_page"])
+               ~s([data-role="backlinks"] button[data-backlink="org/page/source.md"][phx-click="select_page"])
              )
 
       assert has_element?(
                view,
-               ~s(button[data-backlink="org/source.md"][title="org/source.md"])
+               ~s(button[data-backlink="org/page/source.md"][title="org/page/source.md"])
              )
 
       assert view
-             |> element(~s(button[data-backlink="org/source.md"]))
+             |> element(~s(button[data-backlink="org/page/source.md"]))
              |> render() =~ "org"
 
       refute render(view) =~ "No backlinks yet"
@@ -394,22 +553,22 @@ defmodule PlatformWeb.OrgMemoryLiveTest do
 
     test "clicking a backlink push-patches to the source page and updates @selected_page",
          %{conn: conn} do
-      {:ok, view, _html} = live(conn, "/org_memory/org/target.md")
+      {:ok, view, _html} = live(conn, "/org_memory/org/page/target.md")
 
       view
-      |> element(~s(button[data-backlink="org/source.md"]))
+      |> element(~s(button[data-backlink="org/page/source.md"]))
       |> render_click()
 
       path = assert_patch(view)
-      assert URI.decode(path) == "/org_memory/org/source.md"
+      assert URI.decode(path) == "/org_memory/org/page/source.md"
 
       # @selected_page now drives the main pane with the source page.
-      assert has_element?(view, "h1", "org/source.md")
+      assert has_element?(view, "h1", "org/page/source.md")
       assert render(view) =~ "Links to"
     end
 
     test "page with no inbound links renders the empty state", %{conn: conn} do
-      {:ok, view, _html} = live(conn, "/org_memory/org/source.md")
+      {:ok, view, _html} = live(conn, "/org_memory/org/page/source.md")
 
       assert has_element?(view, ~s([data-role="backlinks"]), "No backlinks yet")
       refute has_element?(view, "button[data-backlink]")
@@ -420,7 +579,7 @@ defmodule PlatformWeb.OrgMemoryLiveTest do
     test "Agent-shaped current_user fails closed: error flash, no version bump" do
       Repo.delete_all(WikiPage)
 
-      {:ok, page} = Wiki.upsert_page("org/identity.md", %{content: "# Identity\n"})
+      {:ok, page} = Wiki.upsert_page("org/page/identity.md", %{content: "# Identity\n"})
 
       agent = %Agent{id: Ecto.UUID.generate(), slug: "historian", name: "Historian"}
 
@@ -451,7 +610,8 @@ defmodule PlatformWeb.OrgMemoryLiveTest do
                "Agents must propose changes via memory_create. UI editing is for humans only."
 
       # upsert_page was never called: version and content are untouched.
-      assert %WikiPage{version: 1, content: "# Identity\n"} = Wiki.get_page("org/identity.md")
+      assert %WikiPage{version: 1, content: "# Identity\n"} =
+               Wiki.get_page("org/page/identity.md")
     end
   end
 
@@ -461,10 +621,10 @@ defmodule PlatformWeb.OrgMemoryLiveTest do
 
       project_id = Ecto.UUID.generate()
 
-      {:ok, _} = Wiki.upsert_page("org/identity.md", %{content: "# Identity Alpha\n"})
+      {:ok, _} = Wiki.upsert_page("org/page/identity.md", %{content: "# Identity Alpha\n"})
 
       {:ok, _} =
-        Wiki.upsert_page("project/#{project_id}/decisions.md", %{content: "# Decisions\n"})
+        Wiki.upsert_page("project/#{project_id}/page/decisions.md", %{content: "# Decisions\n"})
 
       {:ok, conn: authenticated_conn(conn, create_user!()), project_id: project_id}
     end
@@ -481,36 +641,47 @@ defmodule PlatformWeb.OrgMemoryLiveTest do
 
     test "tab switches preserve the namespace tree, expansion, and selected page (critical invariant)",
          %{conn: conn, project_id: project_id} do
-      {:ok, view, _html} = live(conn, "/org_memory/org/identity.md")
+      {:ok, view, _html} = live(conn, "/org_memory/org/page/identity.md")
 
       # Expand a deeper folder so we can verify expansion survives.
       view
       |> element(~s(button[data-namespace-prefix="project/#{project_id}/"]))
       |> render_click()
 
-      assert has_element?(view, ~s(button[data-file-key="project/#{project_id}/decisions.md"]))
+      assert has_element?(
+               view,
+               ~s(button[data-file-key="project/#{project_id}/page/decisions.md"])
+             )
 
       # :pages → :search → :journal → :pages, no patch in between.
       view |> element(~s(button[data-tab="search"])) |> render_click()
 
       # Tree (and the expanded deep folder) stay mounted on every tab.
       assert has_element?(view, ~s(button[data-namespace-prefix="org/"]))
-      assert has_element?(view, ~s(button[data-file-key="project/#{project_id}/decisions.md"]))
+
+      assert has_element?(
+               view,
+               ~s(button[data-file-key="project/#{project_id}/page/decisions.md"])
+             )
 
       view |> element(~s(button[data-tab="journal"])) |> render_click()
-      assert has_element?(view, ~s(button[data-file-key="project/#{project_id}/decisions.md"]))
+
+      assert has_element?(
+               view,
+               ~s(button[data-file-key="project/#{project_id}/page/decisions.md"])
+             )
 
       view |> element(~s(button[data-tab="pages"])) |> render_click()
 
       # Same selected page, no re-fetch / no navigation: the viewer
       # heading and the tree's selected styling are intact.
-      assert has_element?(view, "h1", "org/identity.md")
+      assert has_element?(view, "h1", "org/page/identity.md")
       assert render(view) =~ "Identity Alpha"
-      assert has_element?(view, ~s(button[data-file-key="org/identity.md"].text-primary))
+      assert has_element?(view, ~s(button[data-file-key="org/page/identity.md"].text-primary))
     end
 
     test "right pane renders on :pages only — hidden on :journal and :search", %{conn: conn} do
-      {:ok, view, _html} = live(conn, "/org_memory/org/identity.md")
+      {:ok, view, _html} = live(conn, "/org_memory/org/page/identity.md")
 
       assert has_element?(view, "h2", "Page Details")
       assert has_element?(view, ~s([data-role="backlinks"]))
@@ -532,7 +703,7 @@ defmodule PlatformWeb.OrgMemoryLiveTest do
     setup %{conn: conn} do
       Repo.delete_all(WikiPage)
 
-      {:ok, _} = Wiki.upsert_page("org/identity.md", %{content: "# Identity\n"})
+      {:ok, _} = Wiki.upsert_page("org/page/identity.md", %{content: "# Identity\n"})
 
       user = create_user!()
 
@@ -594,9 +765,9 @@ defmodule PlatformWeb.OrgMemoryLiveTest do
       project_id = Ecto.UUID.generate()
 
       {:ok, _} =
-        Wiki.upsert_page("project/#{project_id}/decisions.md", %{content: "# Decisions\n"})
+        Wiki.upsert_page("project/#{project_id}/page/decisions.md", %{content: "# Decisions\n"})
 
-      {:ok, view, _html} = live(conn, "/org_memory/project/#{project_id}/decisions.md")
+      {:ok, view, _html} = live(conn, "/org_memory/project/#{project_id}/page/decisions.md")
 
       view |> element(~s(button[data-tab="journal"])) |> render_click()
 
@@ -616,7 +787,7 @@ defmodule PlatformWeb.OrgMemoryLiveTest do
     setup %{conn: conn} do
       Repo.delete_all(WikiPage)
 
-      {:ok, _} = Wiki.upsert_page("org/identity.md", %{content: "# Identity Alpha\n"})
+      {:ok, _} = Wiki.upsert_page("org/page/identity.md", %{content: "# Identity Alpha\n"})
 
       previous = Application.get_env(:platform, :org_memory_tool_surface)
       Application.put_env(:platform, :org_memory_tool_surface, StubToolSurface)
@@ -706,11 +877,11 @@ defmodule PlatformWeb.OrgMemoryLiveTest do
       |> render_click()
 
       path = assert_patch(view)
-      assert URI.decode(path) == "/org_memory/org/identity.md"
+      assert URI.decode(path) == "/org_memory/org/page/identity.md"
 
       # Back on the Pages tab with the hit selected (right pane returns).
       assert has_element?(view, ~s(button[data-tab="pages"][aria-selected="true"]))
-      assert has_element?(view, "h1", "org/identity.md")
+      assert has_element?(view, "h1", "org/page/identity.md")
       assert has_element?(view, ~s([data-role="backlinks"]))
     end
 

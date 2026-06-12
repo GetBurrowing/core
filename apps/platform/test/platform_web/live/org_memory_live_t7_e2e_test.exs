@@ -71,11 +71,13 @@ defmodule PlatformWeb.OrgMemoryLiveT7E2ETest do
        %{conn: conn} do
     Repo.delete_all(WikiPage)
 
-    {:ok, page} = Wiki.upsert_page("org/identity.md", %{content: "# Identity\n\nWe are Fabrikam.\n"})
+    {:ok, page} =
+      Wiki.upsert_page("org/page/identity.md", %{content: "# Identity\n\nWe are Fabrikam.\n"})
+
     assert page.version == 1
 
     # Script navigation steps, exercised with a real human User first:
-    # mount → /org_memory/org/identity.md → click Edit → modify the
+    # mount → /org_memory/org/page/identity.md → click Edit → modify the
     # textarea. DELTA from the literal script: a browser-session mount
     # can only mint User-shaped principals (by construction — design
     # lock §6), so the *agent-driven* part of the script is replayed
@@ -83,7 +85,7 @@ defmodule PlatformWeb.OrgMemoryLiveT7E2ETest do
     # socket, exactly like the stage-4 gate test. The human flow here
     # deliberately stops short of saving so the page stays at v1.
     conn = authenticated_conn(conn, create_user!())
-    {:ok, view, _html} = live(conn, "/org_memory/org/identity.md")
+    {:ok, view, _html} = live(conn, "/org_memory/org/page/identity.md")
 
     view
     |> element(~s(button[phx-click="start_edit"]))
@@ -95,7 +97,7 @@ defmodule PlatformWeb.OrgMemoryLiveT7E2ETest do
     |> element("#org-memory-editor")
     |> render_hook("update_preview", %{"content" => "# Identity (edited draft)\n"})
 
-    assert render(view) =~ "Editing org/identity.md"
+    assert render(view) =~ "Editing org/page/identity.md"
 
     # Agent-driven save: submit the save form (phx-submit="save_page")
     # as an %Platform.Agents.Agent{} principal via handle_event/3.
@@ -107,7 +109,7 @@ defmodule PlatformWeb.OrgMemoryLiveT7E2ETest do
         flash: %{},
         current_user_record: agent,
         current_user_id: agent.id,
-        selected_page: Wiki.get_page("org/identity.md"),
+        selected_page: Wiki.get_page("org/page/identity.md"),
         editor_content: "# Hijacked by agent\n",
         fm_form: nil
       }
@@ -127,7 +129,7 @@ defmodule PlatformWeb.OrgMemoryLiveT7E2ETest do
     # The UI failed closed BEFORE reaching the domain layer: version
     # still 1, content untouched.
     assert %WikiPage{version: 1, content: "# Identity\n\nWe are Fabrikam.\n"} =
-             Wiki.get_page("org/identity.md")
+             Wiki.get_page("org/page/identity.md")
   end
 
   # ── Script 2 ─────────────────────────────────────────────────────────────
@@ -205,28 +207,31 @@ defmodule PlatformWeb.OrgMemoryLiveT7E2ETest do
   test "e2e 3: wikilink rendering — resolved anchor vs dangling span", %{conn: conn} do
     Repo.delete_all(WikiPage)
 
-    {:ok, _} = Wiki.upsert_page("org/identity.md", %{content: "# Identity\n\nWe are Fabrikam."})
+    {:ok, _} = Wiki.upsert_page("org/page/identity.md", %{content: "# Identity\n\nWe are Fabrikam."})
 
-    # DELTA from the literal script: the original used [[identity]] for
-    # the resolved link, but basename resolution doesn't exist in the
-    # domain (`Wiki.resolve_alias/2` resolves frontmatter aliases, not
-    # basenames) — the full file_key form is used instead.
+    # 2026-06-11 amendment: the script's original [[identity]] form is
+    # now replayable LITERALLY — basename resolution landed in the
+    # domain (`Wiki.resolve_basename/2`, unique-basename fallback after
+    # exact key + alias), so the earlier delta (full file_key form) is
+    # retired along with the flat-key seeds (page grammar since the
+    # 20260611120000 key migration).
     {:ok, _} =
-      Wiki.upsert_page("org/notes.md", %{
-        content: "Read [[org/identity.md]] first; then check [[nonexistent-page]] for context."
+      Wiki.upsert_page("org/page/notes.md", %{
+        content: "Read [[identity]] first; then check [[nonexistent-page]] for context."
       })
 
-    # Nothing seeded at org/nonexistent-page.md.
-    assert Wiki.get_page("org/nonexistent-page.md") == nil
+    # Nothing seeded at org/page/nonexistent-page.md.
+    assert Wiki.get_page("org/page/nonexistent-page.md") == nil
 
     conn = authenticated_conn(conn, create_user!())
-    {:ok, view, _html} = live(conn, "/org_memory/org/notes.md")
+    {:ok, view, _html} = live(conn, "/org_memory/org/page/notes.md")
 
-    # Resolved token: <a class="wikilink" href="/org_memory/org/identity.md">.
+    # Resolved token: [[identity]] basename-resolves to the unique
+    # org/page/identity.md → <a class="wikilink">.
     assert has_element?(
              view,
-             ~s(a.wikilink[href="/org_memory/org/identity.md"]),
-             "org/identity.md"
+             ~s(a.wikilink[href="/org_memory/org/page/identity.md"]),
+             "identity"
            )
 
     # Unresolved token: dangling span with the title tooltip.
@@ -250,17 +255,17 @@ defmodule PlatformWeb.OrgMemoryLiveT7E2ETest do
     Repo.delete_all(WikiPage)
 
     {:ok, page} =
-      Wiki.upsert_page("org/playbook.md", %{
+      Wiki.upsert_page("org/page/playbook.md", %{
         content: "---\npreamble: false\n---\n# Playbook\n\nBody.\n"
       })
 
     assert page.version == 1
 
     # Before the toggle the page is not preamble-eligible.
-    refute Map.has_key?(Platform.Org.Wiki.Context.build_preamble([]), "org/playbook.md")
+    refute Map.has_key?(Platform.Org.Wiki.Context.build_preamble([]), "org/page/playbook.md")
 
     conn = authenticated_conn(conn, create_user!())
-    {:ok, view, _html} = live(conn, "/org_memory/org/playbook.md")
+    {:ok, view, _html} = live(conn, "/org_memory/org/page/playbook.md")
 
     view |> element(~s(button[phx-click="start_edit"])) |> render_click()
 
@@ -282,11 +287,11 @@ defmodule PlatformWeb.OrgMemoryLiveT7E2ETest do
 
     # Domain round-trip: frontmatter boolean true, version bumped to 2.
     assert %WikiPage{frontmatter: %{"preamble" => true}, version: 2} =
-             Wiki.get_page("org/playbook.md")
+             Wiki.get_page("org/page/playbook.md")
 
     # Reload (fresh re-mount of the same URL — the script's "reload"):
     # the frontmatter editor now shows preamble: true (checked box).
-    {:ok, view2, _html} = live(conn, "/org_memory/org/playbook.md")
+    {:ok, view2, _html} = live(conn, "/org_memory/org/page/playbook.md")
     view2 |> element(~s(button[phx-click="start_edit"])) |> render_click()
 
     assert has_element?(
@@ -295,10 +300,10 @@ defmodule PlatformWeb.OrgMemoryLiveT7E2ETest do
            )
 
     # Platform.Org.Wiki.Context.build_preamble/1 (arity 1, keyword opts;
-    # [] = org-only scope) now includes org/playbook.md.
+    # [] = org-only scope) now includes org/page/playbook.md.
     preamble = Platform.Org.Wiki.Context.build_preamble([])
-    assert Map.has_key?(preamble, "org/playbook.md")
-    assert preamble["org/playbook.md"] =~ "# Playbook"
+    assert Map.has_key?(preamble, "org/page/playbook.md")
+    assert preamble["org/page/playbook.md"] =~ "# Playbook"
   end
 
   # ── Script 5 ─────────────────────────────────────────────────────────────
@@ -318,6 +323,13 @@ defmodule PlatformWeb.OrgMemoryLiveT7E2ETest do
     # seeds the gate-recognised key org/page/deployment.md; the
     # script-literal key is also seeded and asserted ABSENT below to
     # pin this domain behavior down explicitly.
+    #
+    # 2026-06-11 note: the UI create path now NORMALIZES flat keys to
+    # the page grammar (`OrgMemoryLive.normalize_page_key/1`), so a
+    # human can no longer create this shape through the create panel —
+    # but the DOMAIN stays free-form, this seed goes through
+    # `Wiki.upsert_page/3` directly, and the gate still drops the flat
+    # key. The pin below remains valid and intentionally kept.
     {:ok, _} = Wiki.upsert_page("org/deployment.md", %{content: "Deploy via gh release.\n"})
 
     {:ok, _} =
