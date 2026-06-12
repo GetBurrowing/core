@@ -413,7 +413,8 @@ defmodule Platform.Chat.Canvas.Kinds do
   def behaviour_ok?(mod) do
     # function_exported?/3 does not load the module — under a fresh BEAM
     # (CI) the answer depends on test order unless we load it first.
-    Code.ensure_loaded?(mod) and
+    # (:code, not Elixir's Code — this module has a local Code alias.)
+    match?({:module, _}, :code.ensure_loaded(mod)) and
       Kind.behaviour_info(:callbacks)
       |> Enum.all?(fn {fun, arity} -> function_exported?(mod, fun, arity) end)
   end
