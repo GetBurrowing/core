@@ -12,7 +12,7 @@ defmodule Platform.Agents.Agent do
   @foreign_key_type :binary_id
 
   @valid_statuses ~w(active paused archived)
-  @valid_system_events ~w(daily_summary dreaming)
+  @valid_system_events ~w(historian)
 
   schema "agents" do
     field(:workspace_id, :binary_id)

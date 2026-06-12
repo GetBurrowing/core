@@ -124,10 +124,26 @@ defmodule Platform.Meetings do
   @spec project_meetings_topic(binary()) :: String.t()
   def project_meetings_topic(project_id), do: "projects:#{project_id}:meetings"
 
+  @doc """
+  Returns the meta-topic broadcast on whenever a new
+  `project_meetings_topic/1` topic gets a first meeting — the cue for
+  long-lived subscribers (e.g. `Platform.Agents.MeetingHistorianHandler`)
+  to dynamically subscribe to the new project's lifecycle stream so
+  meetings created after the subscriber booted don't get missed.
+  """
+  @spec project_meetings_meta_topic() :: String.t()
+  def project_meetings_meta_topic, do: "meetings:projects"
+
   @doc "Subscribe the calling process to a project's meeting lifecycle events."
   @spec subscribe_to_project_meetings(binary()) :: :ok | {:error, term()}
   def subscribe_to_project_meetings(project_id) do
     Phoenix.PubSub.subscribe(Platform.PubSub, project_meetings_topic(project_id))
+  end
+
+  @doc "Subscribe to the meta-topic for new project meetings topics."
+  @spec subscribe_to_project_meetings_meta() :: :ok | {:error, term()}
+  def subscribe_to_project_meetings_meta do
+    Phoenix.PubSub.subscribe(Platform.PubSub, project_meetings_meta_topic())
   end
 
   @doc """
@@ -207,6 +223,17 @@ defmodule Platform.Meetings do
             Platform.PubSub,
             project_meetings_topic(project_id),
             {:meeting_created, meeting}
+          )
+
+          # Announce on the meta-topic so long-lived subscribers can
+          # subscribe to the project's lifecycle stream dynamically (the
+          # MeetingHistorianHandler subscribes to existing-at-boot topics
+          # via `Platform.Tasks.list_projects/0` and uses this signal to
+          # cover projects whose first meeting is created post-boot).
+          Phoenix.PubSub.broadcast(
+            Platform.PubSub,
+            project_meetings_meta_topic(),
+            {:project_meetings_topic_added, project_id}
           )
 
           {:ok, meeting}

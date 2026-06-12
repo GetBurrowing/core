@@ -24,9 +24,9 @@ defmodule Platform.Orchestration.ProviderGuidance do
   @claude_subagent_guidance """
   ## For Claude Code agents (mandatory)
 
-  Handle this task in a subagent with fresh context, **spawned as a background process**. Spawn it via the Agent tool — `general-purpose` is fine — with `run_in_background: true` so the parent conversation stays responsive while the subagent executes. Brief it with the full dispatch payload above, including the Organization Context section. Do NOT do this work in the parent conversation. The goals: (1) fresh context per task so the org-context discipline below isn't competing with whatever's already loaded, (2) audit clarity so the task lives in its own conversation tree, (3) parent responsiveness — the parent can keep handling other inbound messages or tasks while the subagent runs.
+  Handle this task in a subagent with fresh context, **spawned as a background process**. Spawn it via the Agent tool — `general-purpose` is fine — with `run_in_background: true` so the parent conversation stays responsive while the subagent executes. Brief it with the full dispatch payload above, including the Organization Memory section. Do NOT do this work in the parent conversation. The goals: (1) fresh context per task so the org memory discipline below isn't competing with whatever's already loaded, (2) audit clarity so the task lives in its own conversation tree, (3) parent responsiveness — the parent can keep handling other inbound messages or tasks while the subagent runs.
 
-  The subagent should: read org context first, do the work, write to org memory on decisions, and report back a tight summary. The parent just spawns, then waits for the task-completion notification (do NOT poll, sleep, or proactively check progress — Claude Code notifies the parent automatically when the background agent finishes) and relays the result.\
+  The subagent should: read org memory first, do the work, write to org memory on decisions, and report back a tight summary. The parent just spawns, then waits for the task-completion notification (do NOT poll, sleep, or proactively check progress — Claude Code notifies the parent automatically when the background agent finishes) and relays the result.\
   """
 
   @doc """

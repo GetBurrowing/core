@@ -680,7 +680,7 @@ defmodule PlatformWeb.ControlCenterLiveTest do
     assert html =~ "Allowed capability bundles"
     assert html =~ ~s(name="bundles[]")
 
-    new_bundles = ~w(federation space task plan org_context)
+    new_bundles = ~w(federation space task plan memory)
 
     html =
       view
@@ -839,7 +839,7 @@ defmodule PlatformWeb.ControlCenterLiveTest do
   # ── Historian toggle ────────────────────────────────────────────
 
   describe "Historian role" do
-    test "toggling on persists both daily_summary and dreaming, shows badge",
+    test "toggling on persists the canonical historian event, shows badge",
          %{conn: conn} do
       agent = create_agent(%{name: "Archive"})
       conn = authenticated_conn(conn)
@@ -862,8 +862,9 @@ defmodule PlatformWeb.ControlCenterLiveTest do
         |> render_submit()
 
       updated = Repo.get!(Agent, agent.id)
-      assert "daily_summary" in updated.system_events
-      assert "dreaming" in updated.system_events
+      assert "historian" in updated.system_events
+      refute "daily_summary" in updated.system_events
+      refute "dreaming" in updated.system_events
       assert html =~ "Historian"
     end
 
@@ -871,7 +872,7 @@ defmodule PlatformWeb.ControlCenterLiveTest do
       agent =
         create_agent(%{
           name: "WasHistorian",
-          system_events: ["daily_summary", "dreaming"]
+          system_events: ["historian"]
         })
 
       conn = authenticated_conn(conn)
@@ -903,7 +904,7 @@ defmodule PlatformWeb.ControlCenterLiveTest do
       _other =
         create_agent(%{
           name: "CurrentHistorian",
-          system_events: ["daily_summary", "dreaming"]
+          system_events: ["historian"]
         })
 
       target = create_agent(%{name: "Candidate"})
@@ -954,8 +955,9 @@ defmodule PlatformWeb.ControlCenterLiveTest do
       |> render_submit()
 
       updated = Repo.get!(Agent, agent.id)
-      assert "daily_summary" in updated.system_events
-      assert "dreaming" in updated.system_events
+      assert "historian" in updated.system_events
+      refute "daily_summary" in updated.system_events
+      refute "dreaming" in updated.system_events
     end
   end
 end

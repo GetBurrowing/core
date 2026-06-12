@@ -3,11 +3,11 @@ defmodule Platform.Memory.TelemetryHandlerTest do
 
   alias Platform.Memory.TelemetryHandler
   alias Platform.Org.Context, as: OrgContext
-  alias Platform.Org.MemoryEntry
+  alias Platform.Org.WikiJournalEntry
   alias Platform.Repo
 
   setup do
-    Repo.delete_all(MemoryEntry)
+    Repo.delete_all(WikiJournalEntry)
     :ok
   end
 
@@ -22,7 +22,7 @@ defmodule Platform.Memory.TelemetryHandlerTest do
       # The telemetry event fires synchronously in append_memory_entry,
       # so if we get here without a crash the handler worked.
       assert entry.id
-      assert Repo.get(MemoryEntry, entry.id)
+      assert Repo.get(WikiJournalEntry, entry.id)
     end
   end
 

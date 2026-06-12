@@ -45,7 +45,15 @@ config :phoenix,
 
 config :platform, :start_attention_router, false
 config :platform, :start_system_event_scheduler, false
-config :platform, :memory_provider, Platform.Memory.Providers.Null
+
+# T3 (ADR-0041): tests start their own Platform.Org.Wiki.Indexer per case
+# (so DataCase sandbox owns the Repo connection and tests don't fight a
+# real subscriber). Production defaults to true via Application.start/2.
+config :platform, :start_wiki_indexer, false
+
+# T6 (ADR-0041): MeetingHistorianHandler subscribes to meeting PubSub at
+# init; tests start their own per case for sandbox ownership.
+config :platform, :start_meeting_historian_handler, false
 
 # StackDeployer (T5) — tests run synchronously and use a no-op git
 # runner by default so existing Stacks tests don't shell out. Tests that
@@ -58,3 +66,26 @@ config :platform, :stack_deployer,
 # Canvas server persists synchronously in tests so the SQL sandbox owns the
 # write and teardown doesn't race with background Task.Supervisor children.
 config :platform, :canvas_persist_sync, true
+
+# T2 (ADR-0041, task 019e41d9-8b50-7f11-bfd0-b667b453c8f2) ships a
+# scope-creep guard that asserts Platform.Org.Context has not changed
+# since T1 HEAD (commit 4d6d332). The constant below is the sha256 of
+# the file at that commit (`git show 4d6d332:apps/platform/lib/platform/org/context.ex`).
+# Regenerate this only when a future task (e.g. T5 retirement of
+# Org.Context) legitimately modifies the file — in the same commit.
+#
+# T5 stage 5 re-pinned this to absorb the one-line doc-comment fix
+# (`org_memory_search` → `memory_search` on the
+# `search_memory_with_scores/2` doc-string). The module body otherwise
+# remains untouched; T7 retires the module.
+#
+# Rollup re-pin (Sloane-authorized, 2026-06-11): @default_templates keys
+# moved from the flat form (`org/identity.md`) to the T5 routing page
+# grammar (`org/page/identity.md`) alongside the 20260611120000 key
+# migration — flat keys classify :unknown and are dropped by
+# memory_search's read-gate hydration. Only the template keys (and the
+# comment introducing them) changed; the module body is otherwise
+# untouched.
+config :platform,
+       :t2_context_sha256_t1_head,
+       "b1ce6c7ca5c27061192612d8572c685466ad934f0083afa4b5ff801e9b996771"

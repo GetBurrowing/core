@@ -2,9 +2,10 @@ defmodule Platform.Agents.ActivityDigest do
   @moduledoc """
   Builds a markdown digest of organisational activity within a time window.
 
-  Composed by the Historian's `daily_summary` system event so the agent
-  receives a pre-aggregated view of chat messages, completed meeting
-  transcripts, and task lifecycle changes rather than looping tool calls.
+  Composed by the Historian's `historian` system event (post-T6 — was the
+  legacy `daily_summary` event) so the agent receives a pre-aggregated view
+  of chat messages, completed meeting transcripts, and task lifecycle
+  changes rather than looping tool calls.
 
   DMs, archived spaces, deleted messages, and log-only messages are excluded
   by the underlying queries (`Chat.list_messages_since/2`,

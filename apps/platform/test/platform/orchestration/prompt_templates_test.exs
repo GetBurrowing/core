@@ -498,4 +498,234 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
       end
     end
   end
+
+  describe "historian.* dispatch templates (T6 — wiki-first writing)" do
+    # ADR-0041 T6 ships three new historian-scoped dispatch templates plus
+    # the journal-by-default rule on `dispatch.planning` /
+    # `dispatch.in_progress`. The slugs are:
+    #
+    #   * historian.scheduled       — every-6h staggered anchor fires
+    #   * historian.meeting_ended   — `:meeting_ended` PubSub fires
+    #   * historian.threshold       — 100k-token pending-content sweep
+    #
+    # SystemEventScheduler + MeetingHistorianHandler + HistorianDispatcher
+    # all call `PromptTemplates.render_template/2` for these slugs, with a
+    # literal fallback in `HistorianDispatcher.post_instruction/5` for
+    # empty-DB boot. Tests here lock in the DB-backed copy + the
+    # `default_templates/0` descriptors.
+
+    @historian_slugs ~w(historian.scheduled historian.meeting_ended historian.threshold)
+
+    test "every new historian.* slug appears in default_templates/0" do
+      defaults = PromptTemplates.default_templates()
+      slugs = Enum.map(defaults, & &1.slug)
+
+      for slug <- @historian_slugs do
+        assert slug in slugs,
+               "expected #{slug} to be a registered default template"
+      end
+    end
+
+    test "historian.scheduled declares wiki-first variables and renders them" do
+      descriptor =
+        PromptTemplates.default_templates()
+        |> Enum.find(&(&1.slug == "historian.scheduled"))
+
+      assert descriptor, "historian.scheduled should appear in default_templates/0"
+
+      for var <- ~w(workspace_id pending_tokens activity_digest date) do
+        assert var in descriptor.variables,
+               "historian.scheduled must declare #{var} as a variable"
+      end
+
+      :ok = PromptTemplates.seed_defaults()
+
+      assigns = %{
+        workspace_id: "ws-test-001",
+        pending_tokens: 12_345,
+        activity_digest: "[digest] 3 journal entries, 7 chat messages today.",
+        date: "2026-05-21"
+      }
+
+      assert {:ok, rendered} = PromptTemplates.render_template("historian.scheduled", assigns)
+
+      assert rendered =~ "ws-test-001"
+      assert rendered =~ "12345"
+      assert rendered =~ "[digest] 3 journal entries, 7 chat messages today."
+      assert rendered =~ "2026-05-21"
+      assert rendered =~ "You are the Historian"
+      assert rendered =~ "org/page/"
+      assert rendered =~ "project/<id>/page/"
+      assert rendered =~ "space/<id>/page/"
+    end
+
+    test "historian.meeting_ended declares scope variables and renders them" do
+      descriptor =
+        PromptTemplates.default_templates()
+        |> Enum.find(&(&1.slug == "historian.meeting_ended"))
+
+      assert descriptor, "historian.meeting_ended should appear in default_templates/0"
+
+      for var <- ~w(meeting_id project_id chat_space_id meeting_summary) do
+        assert var in descriptor.variables,
+               "historian.meeting_ended must declare #{var} as a variable"
+      end
+
+      :ok = PromptTemplates.seed_defaults()
+
+      assigns = %{
+        meeting_id: "00000000-0000-0000-0000-meetingaaaaaa",
+        project_id: "00000000-0000-0000-0000-projectaaaaaa",
+        chat_space_id: "00000000-0000-0000-0000-spaceaaaaaaa",
+        meeting_summary: "Decision: ship the historian on the every-6h cadence."
+      }
+
+      assert {:ok, rendered} = PromptTemplates.render_template("historian.meeting_ended", assigns)
+
+      assert rendered =~ "00000000-0000-0000-0000-meetingaaaaaa"
+      assert rendered =~ "00000000-0000-0000-0000-projectaaaaaa"
+      assert rendered =~ "00000000-0000-0000-0000-spaceaaaaaaa"
+      assert rendered =~ "Decision: ship the historian on the every-6h cadence."
+      # Wiki-first contract: explicit instruction to update page paths, not
+      # to write durable content to journal paths.
+      assert rendered =~ "memory_search"
+
+      assert rendered =~ "project/{{project_id}}/page/decisions.md" or
+               rendered =~ "/page/decisions.md"
+
+      assert rendered =~ "/page/notes.md"
+    end
+
+    test "historian.threshold declares workspace + token variables and renders them" do
+      descriptor =
+        PromptTemplates.default_templates()
+        |> Enum.find(&(&1.slug == "historian.threshold"))
+
+      assert descriptor, "historian.threshold should appear in default_templates/0"
+
+      for var <- ~w(workspace_id pending_tokens) do
+        assert var in descriptor.variables,
+               "historian.threshold must declare #{var} as a variable"
+      end
+
+      :ok = PromptTemplates.seed_defaults()
+
+      assigns = %{
+        workspace_id: "ws-test-002",
+        pending_tokens: 105_432
+      }
+
+      assert {:ok, rendered} = PromptTemplates.render_template("historian.threshold", assigns)
+
+      assert rendered =~ "ws-test-002"
+      assert rendered =~ "105432"
+      assert rendered =~ "threshold"
+      # The cursor-advance acknowledgement is part of the contract.
+      assert rendered =~ "memory_create"
+      assert rendered =~ "cursor"
+    end
+
+    test "every historian.* default forbids writing durable knowledge to journal paths" do
+      # Wiki-first contract: pages are the curated long-term store; journal
+      # is append-only and short-lived. Every historian dispatch slug must
+      # carry the prohibition so a future edit can't quietly invert it.
+      for slug <- @historian_slugs do
+        content = PromptTemplates.default_content_for_slug(slug)
+
+        assert is_binary(content), "#{slug} should have default content"
+
+        assert content =~ "Wiki-first writing contract",
+               "#{slug} must carry the 'Wiki-first writing contract' section header"
+
+        assert content =~ "append-only" or content =~ "Journal is append-only",
+               "#{slug} must call out that the journal is append-only"
+
+        # Markdown bold (`**NEVER**`) breaks naive substring matching, so we
+        # normalise asterisks before checking. The prohibition itself must
+        # be authoritative copy, not paraphrasable.
+        normalised = String.replace(content, "*", "")
+
+        assert normalised =~ "never write durable knowledge to journal paths" or
+                 normalised =~ "NEVER write durable knowledge to journal paths",
+               "#{slug} must forbid writing durable knowledge to journal paths"
+      end
+    end
+
+    test "every historian.* default names the wiki-page namespaces and memory_* edit tools" do
+      # historian.scheduled covers all three page namespaces; .meeting_ended
+      # and .threshold scope to project/space + workspace respectively. The
+      # common contract is that every historian dispatch slug names AT LEAST
+      # one page namespace and the memory_search read tool.
+      for slug <- @historian_slugs do
+        content = PromptTemplates.default_content_for_slug(slug)
+
+        assert content =~ "memory_search",
+               "expected #{slug} to mention memory_search"
+
+        assert content =~ "/page/",
+               "expected #{slug} to name at least one wiki-page namespace (e.g. project/<id>/page/)"
+      end
+    end
+
+    test "seed_defaults inserts historian.* rows when missing" do
+      :ok = PromptTemplates.seed_defaults()
+
+      for slug <- @historian_slugs do
+        template = PromptTemplates.get_template_by_slug(slug)
+
+        assert template, "seed_defaults must insert #{slug}"
+
+        expected = PromptTemplates.default_content_for_slug(slug)
+        assert template.content == expected
+      end
+    end
+  end
+
+  describe "journal-by-default rule on dispatch.planning + dispatch.in_progress (T6)" do
+    # T6 adds a "Journal-by-default for non-Historian agents" rule to the
+    # two dispatch slugs used by non-Historian agents, making the
+    # `<correction target="<page-path>" line="<N>">…</correction>`
+    # convention authoritative copy. The 5/15 force-update migration
+    # (20260520050000) refreshes these rows post-deploy so prod picks up
+    # the new rule even when seed_defaults short-circuits.
+
+    @non_historian_dispatch_slugs ~w(dispatch.planning dispatch.in_progress)
+
+    test "dispatch.planning + dispatch.in_progress carry the journal-by-default rule" do
+      for slug <- @non_historian_dispatch_slugs do
+        content = PromptTemplates.default_content_for_slug(slug)
+
+        assert is_binary(content), "#{slug} should have default content"
+
+        assert content =~ "Journal-by-default for non-Historian agents",
+               "#{slug} must carry the 'Journal-by-default' section header"
+
+        assert content =~ "<correction target=",
+               "#{slug} must document the <correction target=...> block convention"
+
+        assert content =~ ":historian_only",
+               "#{slug} must name the :historian_only error code agents will see"
+
+        # Direct page writes by non-Historian agents are explicitly
+        # forbidden — the prohibition must be present, not implied.
+        assert content =~ "never call `memory_str_replace`" or
+                 content =~ "never call memory_str_replace",
+               "#{slug} must explicitly forbid calling memory_str_replace against page paths"
+      end
+    end
+
+    test "dispatch.planning + dispatch.in_progress retain the existing memory_* path routing block" do
+      # Guard against an over-eager edit that removes the path-routing
+      # block (the cross-task contract with T5's tool surface) while
+      # adding the journal-by-default rule on top.
+      for slug <- @non_historian_dispatch_slugs do
+        content = PromptTemplates.default_content_for_slug(slug)
+
+        assert content =~ "memory_* tool family"
+        assert content =~ "Historian-only writes"
+        assert content =~ "org/journal/<YYYY-MM-DD>.md"
+        assert content =~ "private/<your-agent-id>"
+      end
+    end
+  end
 end

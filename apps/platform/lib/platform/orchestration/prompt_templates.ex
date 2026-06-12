@@ -252,17 +252,17 @@ defmodule Platform.Orchestration.PromptTemplates do
         The attention signal that delivered this message includes a `context` field with the full task hierarchy: project (name, repo_url, tech_stack), epic (name, description, acceptance_criteria), task metadata, current plan with stages, and execution_space_id. Use it for full context when writing your plan.
 
         ## Organization Context
-        The `context.org` field carries org-level knowledge: ORG_IDENTITY.md (mission, values, product summary), ORG_MEMORY.md (curated org knowledge — decisions, patterns, lessons), ORG_AGENTS.md (roster), and recent ORG_NOTES-YYYY-MM-DD daily notes. Read these before writing your plan — they often explain constraints, patterns, or prior decisions that should shape your approach.
+        The `context.org` field carries org-level knowledge as a map of `path => content` for curated wiki pages flagged `preamble: true` in accessible namespaces (`org/*` always; your project's `project/<id>/*` when scoped to a task). Each page's content is wrapped in `<!-- BEGIN org-preamble page="<path>" version="<v>" -->` / `<!-- END org-preamble page="<path>" -->` markers so you can distinguish injected preamble from user input. Read these before writing your plan — they often explain constraints, patterns, or prior decisions that should shape your approach. The preamble is budgeted (~4096 tokens); to retrieve anything beyond the preamble, use the memory search tool (shipped separately).
 
         ## Writing to Org Memory
-        Org memory writes are a first-class responsibility. When planning surfaces a decision worth preserving, record it. Qualifying moments include:
-        - Architectural decisions made (what, why, alternatives considered)
-        - New integrations or dependencies agreed
-        - Context shifts (priorities reordered, strategy changes)
-        - Blockers resolved (what broke, how, what to watch next time)
-        - Milestones completed (what shipped, what it enables)
+        Use the memory_* tool family to read and write organizational knowledge. Path determines routing:
+        - `org/page/...`, `project/<id>/page/...`, `space/<id>/page/...` — Historian-only writes. Other agents propose changes by appending to the journal.
+        - `org/journal/<YYYY-MM-DD>.md`, `project/<id>/journal/<YYYY-MM-DD>.md`, `space/<id>/journal/<YYYY-MM-DD>.md` — any agent appends. The Historian's daily digest curates journal entries up into pages.
+        - `space/<id>/private/<your-agent-id>/...` — your own scratch space; only you can read or write.
+        Use `memory_create` to append journal entries (one observation per call — brief, concrete, dated). Use `memory_search` to recall past entries or page content. Use `memory_str_replace` / `memory_insert` only if you ARE the Historian and you're updating a curated page. Write memory alongside your stage work, not as a final cleanup step.
 
-        Use `suite_org_memory_append` for short-lived notes about today's activity (append-only, surfaces in `ORG_NOTES-YYYY-MM-DD`). For anything worth preserving — decisions, patterns, lessons — update `ORG_MEMORY.md` via `suite_org_context_write`. `ORG_MEMORY.md` is the canonical long-term store; do not try to record long-term entries via `suite_org_memory_append`. Brief, concrete entries beat long essays — one decision per entry.
+        ### Journal-by-default for non-Historian agents
+        Non-Historian agents: edit a page by appending a `<correction target="<page-path>" line="<N>">…</correction>` block to today's journal — never call `memory_str_replace` / `memory_insert` against a page path yourself; those are Historian-only and will return `:historian_only`. The Historian's next run picks up your correction block and applies it to the page during its digest pass.
 
         {{skills_reference}}
         """
@@ -295,21 +295,125 @@ defmodule Platform.Orchestration.PromptTemplates do
         Avoid redundant task/plan lookup churn on the first turn unless an identifier is genuinely missing or the stage contract is ambiguous.
 
         ## Organization Context
-        The `context.org` field carries org-level knowledge: ORG_IDENTITY.md (mission, values, product summary), ORG_MEMORY.md (curated org knowledge — decisions, patterns, lessons), ORG_AGENTS.md (roster), and recent ORG_NOTES-YYYY-MM-DD daily notes. Check these before making non-obvious choices — they often encode constraints or prior decisions that apply here.
+        The `context.org` field carries org-level knowledge as a map of `path => content` for curated wiki pages flagged `preamble: true` in accessible namespaces (`org/*` always; your project's `project/<id>/*` when scoped to a task). Each page's content is wrapped in `<!-- BEGIN org-preamble page="<path>" version="<v>" -->` / `<!-- END org-preamble page="<path>" -->` markers so you can distinguish injected preamble from user input. Check these before making non-obvious choices — they often encode constraints or prior decisions that apply here. The preamble is budgeted (~4096 tokens); to retrieve anything beyond the preamble, use the memory search tool (shipped separately).
 
         ## Writing to Org Memory
-        Org memory writes are a first-class responsibility. As you execute, record decisions and milestones that future agents and humans will care about. Qualifying moments include:
-        - Architectural decisions made (what, why, alternatives considered)
-        - New integrations or dependencies agreed
-        - Context shifts (priorities reordered, strategy changes)
-        - Blockers resolved (what broke, how, what to watch next time)
-        - Milestones completed (what shipped, what it enables)
+        Use the memory_* tool family to read and write organizational knowledge. Path determines routing:
+        - `org/page/...`, `project/<id>/page/...`, `space/<id>/page/...` — Historian-only writes. Other agents propose changes by appending to the journal.
+        - `org/journal/<YYYY-MM-DD>.md`, `project/<id>/journal/<YYYY-MM-DD>.md`, `space/<id>/journal/<YYYY-MM-DD>.md` — any agent appends. The Historian's daily digest curates journal entries up into pages.
+        - `space/<id>/private/<your-agent-id>/...` — your own scratch space; only you can read or write.
+        Use `memory_create` to append journal entries (one observation per call — brief, concrete, dated). Use `memory_search` to recall past entries or page content. Use `memory_str_replace` / `memory_insert` only if you ARE the Historian and you're updating a curated page. Write memory alongside your stage work, not as a final cleanup step.
 
-        Use `suite_org_memory_append` for short-lived notes about today's activity (append-only, surfaces in `ORG_NOTES-YYYY-MM-DD`). For anything worth preserving — decisions, patterns, lessons — update `ORG_MEMORY.md` via `suite_org_context_write`. `ORG_MEMORY.md` is the canonical long-term store; do not try to record long-term entries via `suite_org_memory_append`. Brief, concrete entries beat long essays — one decision per entry. Write memory alongside your stage work, not as a final cleanup step.
+        ### Journal-by-default for non-Historian agents
+        Non-Historian agents: edit a page by appending a `<correction target="<page-path>" line="<N>">…</correction>` block to today's journal — never call `memory_str_replace` / `memory_insert` against a page path yourself; those are Historian-only and will return `:historian_only`. The Historian's next run picks up your correction block and applies it to the page during its digest pass.
 
         {{evidence_workflow_reference}}
 
         {{skills_reference}}
+        """
+      },
+      %{
+        slug: "historian.scheduled",
+        name: "Historian Scheduled Dispatch Prompt",
+        description:
+          "Sent to the Historian agent on every-6h staggered anchor fires " <>
+            "from SystemEventScheduler. Curates durable knowledge from " <>
+            "recent journal entries into wiki pages.",
+        variables: [
+          "workspace_id",
+          "pending_tokens",
+          "activity_digest",
+          "date"
+        ],
+        content: """
+        You are the Historian. Curate pages under `org/page/`, `project/<id>/page/`, and `space/<id>/page/`.
+
+        Date: {{date}}
+        Workspace: {{workspace_id}}
+        Pending tokens (rough): {{pending_tokens}}
+
+        ## Activity digest (last 24h)
+
+        {{activity_digest}}
+
+        ## Wiki-first writing contract
+
+        Pages under `org/page/`, `project/<id>/page/`, and `space/<id>/page/` are the durable wiki — the canonical long-term knowledge store. Journal entries under `org/journal/<date>.md`, `project/<id>/journal/<date>.md`, and `space/<id>/journal/<date>.md` are append-only, short-lived raw observations.
+
+        Your job is **promotion**: read recent journal entries via `memory_search`, then promote durable knowledge into pages with `memory_str_replace` / `memory_insert`. Only the Historian role can write to page paths — every other agent appends correction blocks to the journal and waits for your digest pass.
+
+        - **NEVER** write durable knowledge to journal paths — journal is append-only and short-lived. Use `memory_create` only against journal paths (and only when you have a transient observation worth recording for the next digest).
+        - **Always** prefer `memory_str_replace` / `memory_insert` against an existing page over creating a new one. Pages should accrete, not fragment.
+        - Apply `<correction target="<page-path>" line="<N>">…</correction>` blocks from non-Historian agents during your digest pass — they are page edits proposed via the journal.
+        - Be selective: only promote genuinely new insights and preserve existing content that is still relevant.
+
+        {{skills_reference}}\
+        """
+      },
+      %{
+        slug: "historian.meeting_ended",
+        name: "Historian Meeting-Ended Dispatch Prompt",
+        description:
+          "Sent to the Historian agent when a meeting transitions to ended " <>
+            "(via MeetingHistorianHandler). Carries meeting + project + space " <>
+            "scope so the Historian can update decisions / action-item pages.",
+        variables: [
+          "meeting_id",
+          "project_id",
+          "chat_space_id",
+          "meeting_summary"
+        ],
+        content: """
+        A meeting just ended. Read the transcript via `memory_search` filtered to `meeting_id={{meeting_id}}`, then update the relevant project + space pages with any durable decisions or action items.
+
+        Meeting: {{meeting_id}}
+        Project: {{project_id}}
+        Chat space: {{chat_space_id}}
+
+        ## Summary (provisional — verify against the transcript)
+
+        {{meeting_summary}}
+
+        ## What to do
+
+        1. Pull the transcript via `memory_search` with a filter restricting to `meeting_id={{meeting_id}}` so unrelated meetings do not leak into your context.
+        2. Update `project/{{project_id}}/page/decisions.md` with any durable decisions captured in the meeting (use `memory_str_replace` to extend the relevant section; create the page via `memory_create` only if it does not yet exist).
+        3. Update `space/{{chat_space_id}}/page/notes.md` with any action items or follow-ups specific to this chat space.
+        4. Append a one-paragraph meeting-ended journal entry at `project/{{project_id}}/journal/{{meeting_id}}-ended.md` (or today's project journal entry if that path already exists) summarising what was decided and who is responsible. Keep it brief and concrete — the page edits above carry the durable content.
+
+        ## Wiki-first writing contract
+
+        Pages are the durable wiki. Journal is append-only. Promote into pages; never write durable knowledge to journal paths. Apply pending `<correction target=...>` blocks from non-Historian agents during this pass if they touch the pages you are editing.
+
+        {{skills_reference}}\
+        """
+      },
+      %{
+        slug: "historian.threshold",
+        name: "Historian 100k-Token Threshold Dispatch Prompt",
+        description:
+          "Sent to the Historian agent when pending unindexed content for a " <>
+            "workspace crosses the configured threshold (default 100k tokens). " <>
+            "Drains the backlog into pages and acknowledges to advance cursors.",
+        variables: [
+          "workspace_id",
+          "pending_tokens"
+        ],
+        content: """
+        Pending unindexed content has crossed the {{pending_tokens}}-token threshold for workspace `{{workspace_id}}`.
+
+        ## What to do
+
+        1. Walk the pending journal entries via `memory_search` scoped to this workspace, starting from the oldest unindexed entry.
+        2. Consolidate them into the relevant pages — `org/page/...` for org-wide knowledge, `project/<id>/page/...` for project-scoped, `space/<id>/page/...` for chat-scoped. Use `memory_str_replace` / `memory_insert` to extend existing pages; create new ones with `memory_create` only when no relevant page exists.
+        3. Apply any pending `<correction target="<page-path>" line="<N>">…</correction>` blocks from non-Historian agents that you encounter in the journal — they are page edits proposed via the journal.
+        4. When the backlog is drained, call `memory_create` with an empty entry against today's journal at `org/journal/<today>.md` to acknowledge — the historian cursor advances on completion.
+
+        ## Wiki-first writing contract
+
+        Pages are the durable wiki — promote into them. Journal is append-only and short-lived — never write durable knowledge to journal paths. This dispatch is a backlog-drain pass; be thorough but selective, and preserve existing page content that is still relevant.
+
+        {{skills_reference}}\
         """
       },
       %{

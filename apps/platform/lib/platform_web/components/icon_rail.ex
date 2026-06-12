@@ -343,13 +343,14 @@ defmodule PlatformWeb.Components.IconRail do
         fabrikam_only?: false
       },
       %{
-        # Memory is a TAB within the Context surface (Marlowe 2026-05-18),
-        # not a standalone destination. The /org-context LiveView owns
-        # both the Context and Memory tabs. Label includes "+ Memory" so
-        # users know the page contains both tabs.
+        # T7 stage 2 (2026-05-20): renamed surface from "Context + Memory"
+        # to "Org Memory" and route from `/org-context` to `/org_memory`.
+        # The OrgMemoryLive LiveView owns both the Files and Memory tabs.
+        # Old `/org-context[/:file_key]` paths 301-redirect to the new
+        # canonical paths via PageController.
         key: :context,
-        label: "Context + Memory",
-        path: "/org-context",
+        label: "Org Memory",
+        path: "/org_memory",
         hero_icon: "hero-building-library",
         cluster: :working,
         fabrikam_only?: false

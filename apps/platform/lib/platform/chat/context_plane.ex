@@ -84,7 +84,10 @@ defmodule Platform.Chat.ContextPlane do
           %{name: agent[:name], state: agent[:state], capabilities: agent[:capabilities] || []}
         end),
       recent_activity_summary: summary,
-      org: Platform.Org.Context.build_context()
+      # Budgeted, scope-aware org preamble (ADR-0041 T4). Passes the
+      # space_id so `space/<id>/` wiki pages flagged `preamble: true`
+      # resolve in scope.
+      org: Platform.Org.Wiki.Context.build_preamble(space_id: space_id)
     }
   end
 
