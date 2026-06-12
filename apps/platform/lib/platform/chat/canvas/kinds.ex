@@ -411,7 +411,10 @@ defmodule Platform.Chat.Canvas.Kinds do
   """
   @spec behaviour_ok?(module()) :: boolean()
   def behaviour_ok?(mod) do
-    Kind.behaviour_info(:callbacks)
-    |> Enum.all?(fn {fun, arity} -> function_exported?(mod, fun, arity) end)
+    # function_exported?/3 does not load the module — under a fresh BEAM
+    # (CI) the answer depends on test order unless we load it first.
+    Code.ensure_loaded?(mod) and
+      Kind.behaviour_info(:callbacks)
+      |> Enum.all?(fn {fun, arity} -> function_exported?(mod, fun, arity) end)
   end
 end
