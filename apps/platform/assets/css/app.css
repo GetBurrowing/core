@@ -3159,6 +3159,21 @@ body, .font-fabrikam, * {
   .chat-header-scope-pill > span {
     @apply px-2.5 py-1 text-sm gap-2;
   }
+
+  /* Compact + clickable scope pill (scope_pill size={:compact} clickable={true}).
+     Keeps the visual ~16px-tall chip but expands the tap target past the WCAG
+     2.5.8 (24px) minimum via an invisible inset pseudo-element. Clicks on the
+     overflow register on the host <button>. Compact pills are non-clickable by
+     default, so this only applies when a caller explicitly opts in. */
+  .scope-pill-hit-expand {
+    position: relative;
+  }
+
+  .scope-pill-hit-expand::before {
+    content: "";
+    position: absolute;
+    inset: -6px;
+  }
 }
 
 /* Org Memory wiki (ADR-0041 T7 stage 4) — wikilink rendering.

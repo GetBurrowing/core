@@ -275,7 +275,64 @@ Heroicons via the `<.icon name="hero-...">` Phoenix component (per `apps/platfor
 
 ---
 
-## 8. What's NOT in foundations
+## 8. Mobile primitives
+
+> Added 2026-06-13 (mobile foundation primitives task). Records what shipped so
+> the sibling mobile-parity surfaces lift these without rediscovery. Descriptive
+> of current reality, not new policy.
+
+### 8.1 Navigation rail — responsive, two renders
+
+`PlatformWeb.Components.IconRail` exposes one canonical destination list with two
+renders (`apps/platform/lib/platform_web/components/icon_rail.ex`):
+
+- **Desktop** (`icon_rail/1`, `≥ lg`): vertical left rail, 56px collapsed / 224px
+  expanded.
+- **Mobile** (`bottom_rail/1`, `< lg`): a fixed-bottom **5-tile** bar —
+  Chat / Tasks / Inbox / Activity / **More**. The long tail (Skills, Org Memory,
+  Meetings, and Fabrikam-only Admin/Prompts) lives in the `MoreSheet` bottom sheet
+  behind the More tile.
+
+This settles the task's open "9 icons vs 5 + More at 375px" question: **5 + More**.
+At 375px, 5 tiles ≈ 75px each (thumb-comfortable); 9 would be ≈ 41px, below the
+44px touch-target floor.
+
+**Active state** uses segment-boundary longest-prefix matching against the
+request path, so a nested route (`/chat/:slug`, `/tasks/:id`) lights its parent
+tile and the longest match wins (`/admin/prompts` → Prompts, not Admin). A single
+`active_key` drives both the highlight class and `aria-current="page"`. On the
+mobile bar the winner is computed over the 4 primary tiles only, so a
+More-sheet-only surface lights nothing in the bar.
+
+### 8.2 Fixed-bottom clearance — `--bottom-nav-height`
+
+`app.css` exposes `--bottom-nav-height` (0px on desktop, 56px below `lg`, matching
+`.bottom-nav-tab` min-height). Any always-on bottom-anchored UI (floating panels,
+toasts, scroll-to-bottom buttons) must offset above the bar with
+`calc(… + var(--bottom-nav-height))` rather than hard-coding 56px. `.bottom-nav`
+already bakes in `padding-bottom: env(safe-area-inset-bottom)` so the bar extends
+into the iOS home-indicator gesture zone.
+
+### 8.3 Scope pill — `:size` density variant
+
+`PlatformWeb.Components.ScopePill` takes `size={:default | :compact}`. **Text
+stays `text-xs` (12px) at both sizes** — the caption token (§2.2) is the
+legibility floor; density comes from chrome, never from shrinking type.
+
+| | `:default` | `:compact` |
+|---|---|---|
+| Use | chat header, filter rails, kanban | message rows, card chrome (tight space) |
+| Chrome | bordered, `px-2 py-0.5`, `size-2` dot | **no border**, `px-1.5 py-px`, `size-1.5` dot, label `truncate max-w-20` |
+| Clickable | defaults to `true` | defaults to **`false`** (a ~16px tap target fails WCAG 2.5.8); opt in with `clickable={true}`, which adds `.scope-pill-hit-expand` (≥24px invisible tap area) |
+| Active | colored fill + check icon | colored fill + dot (a ~12px check is illegible) |
+| Propagated (`A → B`) | two chips + arrow | source chip only; full provenance in `title` + `aria-label` |
+
+Guidance: keep dense message-row pills non-clickable (read-only provenance);
+surfaces that need tap-to-filter use `:default`.
+
+---
+
+## 9. What's NOT in foundations
 
 - **Component-level tokens** (e.g. `--btn-padding-x` per-button-size). Adds complexity without payoff at this scale; the Tailwind utility classes mapping to scale tokens IS the component-level spec for Suite. If component-token scaffolding becomes a need later (e.g. a third-party theming layer), Phase 4 can promote.
 - **Animation timing tokens** (e.g. `--duration-fast`, `--duration-slow`). Deferred to `04-accessibility.md` as part of the motion rule, since the audit's only animation finding is `1B-A11Y-3` (`prefers-reduced-motion`), which gates *whether* animation runs more than how long it takes.

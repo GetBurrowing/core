@@ -235,6 +235,52 @@ defmodule PlatformWeb.Components.IconRailTest do
     end
   end
 
+  describe "icon_rail/1 active state — nested-route prefix matching" do
+    test "a nested chat route (/chat/:slug) lights the Chat parent tile" do
+      html = render_icon_rail(%{current_path: "/chat/some-space"})
+
+      assert html =~ ~r/icon-rail-tab--active[^"]*"[^>]*data-destination="chat"/
+
+      assert html =~ ~r/data-destination="chat"[^>]*aria-current="page"/s or
+               html =~ ~r/aria-current="page"[^>]*data-destination="chat"/s
+
+      # Only Chat — no sibling tile lights up.
+      refute html =~ ~r/icon-rail-tab--active[^"]*"[^>]*data-destination="tasks"/
+    end
+
+    test "a nested task route (/tasks/:id) lights the Tasks parent tile" do
+      html = render_icon_rail(%{current_path: "/tasks/019abc"})
+      assert html =~ ~r/icon-rail-tab--active[^"]*"[^>]*data-destination="tasks"/
+    end
+
+    test "a multi-segment glob route (/org_memory/*file_key) lights Org Memory" do
+      # The :context destination owns /org_memory; the catch-all file path is a
+      # descendant at a segment boundary, so prefix matching must catch it.
+      html = render_icon_rail(%{current_path: "/org_memory/org/identity.md"})
+      assert html =~ ~r/icon-rail-tab--active[^"]*"[^>]*data-destination="context"/
+    end
+
+    test "a path that merely shares a prefix (/tasksy) matches NOTHING" do
+      # Segment-boundary guard: /tasksy must not be treated as a child of /tasks.
+      html = render_icon_rail(%{current_path: "/tasksy"})
+      refute html =~ "icon-rail-tab--active"
+    end
+
+    test "longest prefix wins: /admin/prompts lights Prompts, not Admin" do
+      html = render_icon_rail(%{current_path: "/admin/prompts", is_fabrikam_user: true})
+
+      assert html =~ ~r/icon-rail-tab--active[^"]*"[^>]*data-destination="prompts"/
+      refute html =~ ~r/icon-rail-tab--active[^"]*"[^>]*data-destination="admin"/
+    end
+
+    test "exact /admin lights Admin (and not Prompts)" do
+      html = render_icon_rail(%{current_path: "/admin", is_fabrikam_user: true})
+
+      assert html =~ ~r/icon-rail-tab--active[^"]*"[^>]*data-destination="admin"/
+      refute html =~ ~r/icon-rail-tab--active[^"]*"[^>]*data-destination="prompts"/
+    end
+  end
+
   describe "bottom_rail/1 mobile wrapper" do
     test "renders the bottom-nav wrapper with lg:hidden" do
       html = render_bottom_rail(%{})
@@ -308,6 +354,24 @@ defmodule PlatformWeb.Components.IconRailTest do
         assert html =~ ~s(aria-label="#{label}"),
                "expected aria-label=#{inspect(label)} on mobile bottom-rail"
       end
+    end
+
+    test "a nested chat route (/chat/:slug) lights the Chat tab" do
+      # On mobile this is the user's only 'where am I' cue inside a conversation.
+      html = render_bottom_rail(%{current_path: "/chat/some-space"})
+      assert html =~ ~r/bottom-nav-tab--active[^"]*"[^>]*data-destination="chat"/
+    end
+
+    test "a More-sheet-only surface (/skills) lights NO bottom-rail tile" do
+      # Skills lives in the More sheet, not the bar, so nothing in the bar is
+      # active — the winner is computed over the 4 primary tiles only.
+      html = render_bottom_rail(%{current_path: "/skills"})
+      refute html =~ "bottom-nav-tab--active"
+    end
+
+    test "the More button never carries aria-current (it is a sheet trigger, not a route)" do
+      html = render_bottom_rail(%{current_path: "/chat"})
+      refute html =~ ~r/data-destination="more"[^>]*aria-current/s
     end
   end
 

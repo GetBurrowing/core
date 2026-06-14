@@ -19,8 +19,11 @@ defmodule PlatformWeb.Components.ScopePillTest do
         %{
           scope: :fabrikam,
           propagated_to: nil,
-          clickable: true,
-          active: false
+          # nil = let the component pick the size-appropriate default (true at
+          # :default size, false at :compact). Tests that care pass it explicitly.
+          clickable: nil,
+          active: false,
+          size: :default
         },
         assigns
       )
@@ -31,6 +34,7 @@ defmodule PlatformWeb.Components.ScopePillTest do
       propagated_to={@propagated_to}
       clickable={@clickable}
       active={@active}
+      size={@size}
     />
     """)
   end
@@ -219,6 +223,84 @@ defmodule PlatformWeb.Components.ScopePillTest do
       # bakes in the dark-text contrast token (oklch(15% 0 0)) over the
       # yellow fill. The rendered HTML only carries the class.
       assert html =~ "bg-paragon-active"
+    end
+  end
+
+  describe "compact size variant" do
+    test "applies the compact chrome (tighter padding, smaller dot, truncation)" do
+      html = render_pill(%{scope: :fabrikam, size: :compact})
+      assert html =~ "px-1.5"
+      assert html =~ "py-px"
+      assert html =~ "size-1.5"
+      assert html =~ "truncate max-w-20"
+    end
+
+    test "drops the border at compact size (a ring reads as noise in a list)" do
+      html = render_pill(%{scope: :fabrikam, size: :compact})
+      refute html =~ "border-fabrikam"
+      refute html =~ "rounded-full border"
+    end
+
+    test "keeps text-xs (12px) — density comes from chrome, not type size" do
+      html = render_pill(%{scope: :fabrikam, size: :compact})
+      assert html =~ "text-xs"
+    end
+
+    test "default size is unchanged (bordered, px-2, size-2 dot)" do
+      html = render_pill(%{scope: :fabrikam, size: :default})
+      assert html =~ "rounded-full border"
+      assert html =~ "px-2"
+      assert html =~ "size-2"
+      refute html =~ "px-1.5"
+    end
+
+    test "is non-clickable by default (a ~16px tap target fails WCAG 2.5.8)" do
+      html = render_pill(%{scope: :fabrikam, size: :compact})
+      refute html =~ "<button"
+      assert html =~ "<span"
+      refute html =~ "phx-click"
+    end
+
+    test "non-clickable compact floors opacity at 0.70 (not 0.55)" do
+      html = render_pill(%{scope: :fabrikam, size: :compact})
+      assert html =~ "opacity-70"
+      refute html =~ "opacity-55"
+    end
+
+    test "explicit clickable={true} opts back into a button with an expanded hit area" do
+      html = render_pill(%{scope: :fabrikam, size: :compact, clickable: true})
+      assert html =~ "<button"
+      assert html =~ ~s(phx-click="scope_filter")
+      assert html =~ "scope-pill-hit-expand"
+    end
+
+    test "active compact keeps the dot + full-saturation fill, no check icon" do
+      html = render_pill(%{scope: :fabrikam, size: :compact, active: true})
+      refute html =~ "hero-check"
+      assert html =~ "bg-fabrikam-active"
+      assert html =~ "size-1.5"
+    end
+
+    test "propagated collapses to the source chip only at compact size" do
+      html = render_pill(%{scope: :soylent, propagated_to: :fabrikam, size: :compact})
+      refute html =~ "hero-arrow-right"
+      refute html =~ "scope-pill-propagated"
+      assert html =~ ">Soylent</span>"
+      refute html =~ ">Fabrikam</span>"
+    end
+
+    test "compact propagated preserves full provenance in aria-label and title" do
+      html = render_pill(%{scope: :soylent, propagated_to: :fabrikam, size: :compact})
+      assert html =~ ~s(aria-label="Soylent scope, propagated to Fabrikam")
+      assert html =~ ~s(title="Soylent → Fabrikam")
+    end
+
+    test "propagated at default size still renders both chips + arrow (regression)" do
+      html = render_pill(%{scope: :soylent, propagated_to: :fabrikam, size: :default})
+      assert html =~ "hero-arrow-right"
+      assert html =~ "scope-pill-propagated"
+      assert html =~ ">Soylent</span>"
+      assert html =~ ">Fabrikam</span>"
     end
   end
 end

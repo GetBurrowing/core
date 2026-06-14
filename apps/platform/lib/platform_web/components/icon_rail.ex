@@ -22,7 +22,11 @@ defmodule PlatformWeb.Components.IconRail do
           mirroring the mobile TOP-bar accent on `.bottom-nav-tab--active`)
           plus the existing `bg-base-300 text-primary` pill treatment.
         * Mobile: reuses `.bottom-nav-tab--active` verbatim.
-    * `aria-current="page"` on the tile whose `path` matches `current_path`.
+    * `aria-current="page"` on the single active tile. Active state uses
+      segment-boundary longest-prefix matching against `current_path`, so a
+      nested route (`/chat/:slug`, `/tasks/:id`, `/org_memory/*file_key`) lights
+      its parent tile; among overlapping prefixes the longest path wins
+      (`/admin/prompts` → Prompts, not Admin). See `active_destination_key/2`.
     * `aria-label` on every tile.
 
   Stage 3 still owns:
@@ -64,26 +68,26 @@ defmodule PlatformWeb.Components.IconRail do
   Desktop vertical icon-rail. Hidden below the `lg` breakpoint.
 
   Each tile renders a hero icon glyph plus (when expanded) a text label.
-  The tile whose `:path` matches `current_path` gets `.icon-rail-tab--active`
-  and `aria-current="page"`.
+  The tile whose `:path` is the longest matching prefix of `current_path`
+  gets `.icon-rail-tab--active` and `aria-current="page"`.
   """
   def icon_rail(assigns) do
     is_fabrikam_user = Map.get(assigns, :is_fabrikam_user, false)
+    current_path = Map.get(assigns, :current_path, "/")
+
+    live = destinations_for(:live) |> filter_fabrikam_only(is_fabrikam_user)
+    working = destinations_for(:working) |> filter_fabrikam_only(is_fabrikam_user)
+    admin = destinations_for(:admin) |> filter_fabrikam_only(is_fabrikam_user)
 
     assigns =
       assigns
-      |> assign(
-        :live_destinations,
-        destinations_for(:live) |> filter_fabrikam_only(is_fabrikam_user)
-      )
-      |> assign(
-        :working_destinations,
-        destinations_for(:working) |> filter_fabrikam_only(is_fabrikam_user)
-      )
-      |> assign(
-        :admin_destinations,
-        destinations_for(:admin) |> filter_fabrikam_only(is_fabrikam_user)
-      )
+      |> assign(:live_destinations, live)
+      |> assign(:working_destinations, working)
+      |> assign(:admin_destinations, admin)
+      # Single winner computed across every VISIBLE desktop destination so the
+      # CSS active class and aria-current can never disagree, and so a
+      # fabrikam-filtered tile never lights up. See active_destination_key/2.
+      |> assign(:active_key, active_destination_key(live ++ working ++ admin, current_path))
 
     ~H"""
     <nav
@@ -103,10 +107,10 @@ defmodule PlatformWeb.Components.IconRail do
           navigate={dest.path}
           phx-hook={tile_hook(dest)}
           data-default-chat-path={if dest.key == :chat, do: "/chat"}
-          class={["icon-rail-tab", desktop_active_class(dest, @current_path)]}
+          class={["icon-rail-tab", desktop_active_class(dest, @active_key)]}
           data-destination={dest.key}
           aria-label={dest.label}
-          aria-current={aria_current_for(dest, @current_path)}
+          aria-current={aria_current_for(dest, @active_key)}
           title={dest.label}
         >
           <.icon name={dest.hero_icon} class="icon-rail-icon size-5 flex-shrink-0" />
@@ -120,10 +124,10 @@ defmodule PlatformWeb.Components.IconRail do
         <.link
           :for={dest <- @working_destinations}
           navigate={dest.path}
-          class={["icon-rail-tab", desktop_active_class(dest, @current_path)]}
+          class={["icon-rail-tab", desktop_active_class(dest, @active_key)]}
           data-destination={dest.key}
           aria-label={dest.label}
-          aria-current={aria_current_for(dest, @current_path)}
+          aria-current={aria_current_for(dest, @active_key)}
           title={dest.label}
         >
           <.icon name={dest.hero_icon} class="icon-rail-icon size-5 flex-shrink-0" />
@@ -136,10 +140,10 @@ defmodule PlatformWeb.Components.IconRail do
           :for={dest <- @admin_destinations}
           :if={@is_fabrikam_user}
           navigate={dest.path}
-          class={["icon-rail-tab", desktop_active_class(dest, @current_path)]}
+          class={["icon-rail-tab", desktop_active_class(dest, @active_key)]}
           data-destination={dest.key}
           aria-label={dest.label}
-          aria-current={aria_current_for(dest, @current_path)}
+          aria-current={aria_current_for(dest, @active_key)}
           title={dest.label}
         >
           <.icon name={dest.hero_icon} class="icon-rail-icon size-5 flex-shrink-0" />
@@ -178,7 +182,15 @@ defmodule PlatformWeb.Components.IconRail do
   attr(:is_fabrikam_user, :boolean, default: false)
 
   def bottom_rail(assigns) do
-    assigns = assign(assigns, :mobile_destinations, mobile_primary_destinations())
+    current_path = Map.get(assigns, :current_path, "/")
+    primary = mobile_primary_destinations()
+
+    assigns =
+      assigns
+      |> assign(:mobile_destinations, primary)
+      # Winner computed over the 4 primary tiles only — a More-sheet-only
+      # surface (Skills, Org Memory, Meetings, Admin) lights nothing in the bar.
+      |> assign(:active_key, active_destination_key(primary, current_path))
 
     ~H"""
     <nav
@@ -190,10 +202,10 @@ defmodule PlatformWeb.Components.IconRail do
       <.link
         :for={dest <- @mobile_destinations}
         navigate={dest.path}
-        class={["bottom-nav-tab", mobile_active_class(dest, @current_path)]}
+        class={["bottom-nav-tab", mobile_active_class(dest, @active_key)]}
         data-destination={dest.key}
         aria-label={dest.label}
-        aria-current={aria_current_for(dest, @current_path)}
+        aria-current={aria_current_for(dest, @active_key)}
       >
         <.icon name={dest.hero_icon} class="bottom-nav-icon size-5" />
         <span class="bottom-nav-label">{dest.label}</span>
@@ -263,23 +275,49 @@ defmodule PlatformWeb.Components.IconRail do
     |> Enum.filter(&(&1.key in [:chat, :tasks, :inbox, :activity]))
   end
 
+  # Resolve the single active destination for a path. A destination matches
+  # when current_path is the destination path itself OR a descendant of it at a
+  # segment boundary (current_path starts with `path <> "/"`). Among matches the
+  # longest path wins, so `/admin/prompts` activates Prompts rather than its
+  # `/admin` prefix. Returns the winning `:key`, or nil when nothing matches.
+  #
+  # Why segment-boundary (`path <> "/"`) rather than a bare String.starts_with?:
+  # a bare prefix would let `/tasksy` match `/tasks`. Why longest-wins rather
+  # than first-match: the canonical list order must not silently decide
+  # overlapping prefixes.
+  defp active_destination_key(destinations, current_path) do
+    destinations
+    |> Enum.filter(&path_matches?(&1.path, current_path))
+    |> Enum.sort_by(&String.length(&1.path), :desc)
+    |> case do
+      [winner | _] -> winner.key
+      [] -> nil
+    end
+  end
+
+  defp path_matches?(path, current_path) do
+    current_path == path or String.starts_with?(current_path, path <> "/")
+  end
+
   # Active-state classes — desktop uses the icon-rail variant, mobile reuses
   # the existing bottom-nav variant (Phase-4 chrome). Both attach a 3px bar
-  # accent via `::before` (left for desktop, top for mobile).
-  defp desktop_active_class(dest, current_path) do
-    if dest.path == current_path do
+  # accent via `::before` (left for desktop, top for mobile). The active tile is
+  # the precomputed `active_key` winner (see active_destination_key/2), so these
+  # only do a cheap key comparison and never re-derive the match per tile.
+  defp desktop_active_class(dest, active_key) do
+    if dest.key == active_key do
       "icon-rail-tab--active bg-base-300 text-primary"
     else
       nil
     end
   end
 
-  defp mobile_active_class(dest, current_path) do
-    if dest.path == current_path, do: "bottom-nav-tab--active", else: nil
+  defp mobile_active_class(dest, active_key) do
+    if dest.key == active_key, do: "bottom-nav-tab--active", else: nil
   end
 
-  defp aria_current_for(dest, current_path) do
-    if dest.path == current_path, do: "page", else: nil
+  defp aria_current_for(dest, active_key) do
+    if dest.key == active_key, do: "page", else: nil
   end
 
   # The Chat tile carries the LastChatLink JS hook so the link target gets

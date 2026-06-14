@@ -26,8 +26,41 @@ defmodule PlatformWeb.Components.ScopePill do
     (renders when `:propagated_to` is set).
   * Clickable (default) — renders as a `<button>` with `phx-click`.
   * Non-clickable — renders as a `<span>` at 0.55 opacity (Marlowe approved
-    2026-05-18) so context is still visible but no affordance.
-  * Active — full-saturation fill + check icon (filtered-to-this-scope).
+    2026-05-18) so context is still visible but no affordance. At `:compact`
+    size the floor is 0.70 — the smaller chip needs more signal, not less.
+  * Active — full-saturation fill + check icon (filtered-to-this-scope). At
+    `:compact` size the check icon is dropped (illegible at ~12px); the dot is
+    kept and the full-saturation fill alone signals "filtered".
+
+  ## Sizes
+
+  The `:size` attr selects chrome density; the **font stays `text-xs` (12px) at
+  every size** — that is the design system's smallest type token (foundations
+  doc `caption`, designated for taxonomy chips) and the mobile legibility floor.
+  Density comes from padding/border, never from shrinking text.
+
+  * `:default` — `px-2 py-0.5`, bordered, `size-2` dot. The original look; all
+    existing call sites render byte-identically.
+  * `:compact` — `px-1.5 py-px`, **no border**, `size-1.5` dot, label truncates
+    at `max-w-20`. For message rows and card chrome where space is tight. A 1px
+    border ring repeated down a list reads as noise, so compact drops it; the
+    background fill + dot carry the scope signal.
+
+  ### Compact + touch targets
+
+  A ~16px-tall tappable pill fails WCAG 2.5.8 (24px) and the 44px iOS guideline,
+  so at `:compact` the pill is **non-clickable unless the caller passes
+  `clickable={true}` explicitly**. When they do, `.scope-pill-hit-expand`
+  enlarges the tap target past 24px via an invisible inset pseudo-element
+  without changing the visual size. Guidance: keep dense message-row pills
+  non-clickable; surfaces that need tap-to-filter should use `:default`.
+
+  ### Compact + propagated
+
+  Two chips plus an arrow do not fit a 375px message row, so `:compact` +
+  `:propagated_to` renders the **source chip only**; the full provenance
+  (`X scope, propagated to Y`) moves into `aria-label` and the `title` tooltip
+  so nothing is lost to assistive tech or hover.
 
   ## Accessibility
 
@@ -55,6 +88,9 @@ defmodule PlatformWeb.Components.ScopePill do
       <.scope_pill scope={:soylent} propagated_to={:fabrikam} />
       <.scope_pill scope={:wayne_tech} clickable={false} />
       <.scope_pill scope={:sxi} active={true} />
+      <.scope_pill scope={:fabrikam} size={:compact} />
+      <.scope_pill scope={:soylent} propagated_to={:fabrikam} size={:compact} />
+      <.scope_pill scope={:sxi} size={:compact} clickable={true} />
   """
   use Phoenix.Component
   import PlatformWeb.CoreComponents, only: [icon: 1]
@@ -83,9 +119,16 @@ defmodule PlatformWeb.Components.ScopePill do
   )
 
   attr(:clickable, :boolean,
-    default: true,
+    default: nil,
     doc:
-      "When true (default), renders as a `<button>` with `phx-click=\"scope_filter\"`. When false, renders as a non-interactive `<span>` at 0.55 opacity."
+      "Renders as a `<button>` with `phx-click=\"scope_filter\"` when true, or a non-interactive `<span>` when false. Defaults to true at `:default` size and false at `:compact` size (touch-target safety); pass explicitly to override."
+  )
+
+  attr(:size, :atom,
+    default: :default,
+    values: [:default, :compact],
+    doc:
+      "`:default` for the standard bordered pill; `:compact` for a denser, borderless pill (message rows, card chrome). Font stays text-xs at both sizes."
   )
 
   attr(:active, :boolean,
@@ -95,40 +138,76 @@ defmodule PlatformWeb.Components.ScopePill do
   )
 
   def scope_pill(assigns) do
+    assigns = assign(assigns, :clickable, resolve_clickable(assigns))
+
     ~H"""
     <%= if @propagated_to do %>
-      <span class="scope-pill-propagated inline-flex items-center gap-1">
+      <%= if @size == :compact do %>
+        <%!-- Compact + propagated: source chip only (two chips + arrow don't fit
+             a phone-width row). Full provenance lives in aria-label + title. --%>
         {render_chip(%{
           scope: @scope,
           clickable: @clickable,
           active: @active,
           propagated_to: @propagated_to,
-          role: :source
+          role: :source,
+          size: @size,
+          aria_label: propagated_aria(@scope, @propagated_to),
+          title: propagated_title(@scope, @propagated_to)
         })}
-        <.icon name="hero-arrow-right" class="size-3 text-base-content/60" />
-        {render_chip(%{
-          scope: @propagated_to,
-          clickable: @clickable,
-          active: @active,
-          propagated_to: @propagated_to,
-          role: :target
-        })}
-      </span>
+      <% else %>
+        <span class="scope-pill-propagated inline-flex items-center gap-1">
+          {render_chip(%{
+            scope: @scope,
+            clickable: @clickable,
+            active: @active,
+            propagated_to: @propagated_to,
+            role: :source,
+            size: @size
+          })}
+          <.icon name="hero-arrow-right" class="size-3 text-base-content/60" />
+          {render_chip(%{
+            scope: @propagated_to,
+            clickable: @clickable,
+            active: @active,
+            propagated_to: @propagated_to,
+            role: :target,
+            size: @size
+          })}
+        </span>
+      <% end %>
     <% else %>
       {render_chip(%{
         scope: @scope,
         clickable: @clickable,
         active: @active,
         propagated_to: nil,
-        role: :single
+        role: :single,
+        size: @size
       })}
     <% end %>
     """
   end
 
+  # Compact pills default to non-clickable for touch-target safety; an explicit
+  # clickable={true/false} always wins. nil means "caller didn't say".
+  defp resolve_clickable(assigns) do
+    case assigns[:clickable] do
+      nil -> assigns[:size] != :compact
+      explicit -> explicit
+    end
+  end
+
   # ── Chip rendering ──────────────────────────────────────────────────
 
   defp render_chip(assigns) do
+    # render_chip is fed plain maps (not component assigns), so normalize the
+    # optional keys with Map.put_new — assign_new/3 rejects un-tracked maps.
+    assigns =
+      assigns
+      |> Map.put_new(:title, nil)
+      |> Map.put_new(:aria_label, nil)
+
     ~H"""
     <%= if @clickable do %>
       <button
@@ -136,25 +215,28 @@ defmodule PlatformWeb.Components.ScopePill do
         phx-click="scope_filter"
         phx-value-scope={@scope}
         phx-value-propagated-to={@propagated_to}
+        title={@title}
         class={[
-          chip_base_classes(),
-          chip_color_classes(@scope, @active),
+          chip_base_classes(@size),
+          chip_color_classes(@scope, @active, @size),
           "focus-visible-ring cursor-pointer",
-          not @active && chip_hover_classes(@scope)
+          not @active && chip_hover_classes(@scope),
+          @size == :compact && "scope-pill-hit-expand"
         ]}
-        aria-label={aria_label(@scope, @active)}
+        aria-label={@aria_label || aria_label(@scope, @active)}
         aria-pressed={if @active, do: "true", else: "false"}
       >
         {chip_inner(assigns)}
       </button>
     <% else %>
       <span
+        title={@title}
         class={[
-          chip_base_classes(),
-          chip_color_classes(@scope, @active),
-          "opacity-55"
+          chip_base_classes(@size),
+          chip_color_classes(@scope, @active, @size),
+          if(@size == :compact, do: "opacity-70", else: "opacity-55")
         ]}
-        aria-label={aria_label_static(@scope)}
+        aria-label={@aria_label || aria_label_static(@scope)}
       >
         {chip_inner(assigns)}
       </span>
@@ -164,21 +246,30 @@ defmodule PlatformWeb.Components.ScopePill do
 
   defp chip_inner(assigns) do
     ~H"""
-    <%= if @active do %>
+    <%= if @active and @size != :compact do %>
       <.icon name="hero-check" class="size-[13px]" />
     <% else %>
       <span
-        class={["inline-block size-2 rounded-full", scope_dot(@scope)]}
+        class={["inline-block rounded-full", dot_size(@size), scope_dot(@scope)]}
         aria-hidden="true"
       />
     <% end %>
-    <span class="scope-pill-label">{scope_label(@scope)}</span>
+    <span class={label_class(@size)}>{scope_label(@scope)}</span>
     """
   end
 
-  defp chip_base_classes do
-    "inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs font-medium leading-none transition-colors"
-  end
+  # Kept short so the HEEx formatter leaves the label span on one line — the
+  # rendered `>Label</span>` (no surrounding whitespace) is part of the contract.
+  defp label_class(:compact), do: "scope-pill-label truncate max-w-20"
+  defp label_class(_default), do: "scope-pill-label"
+
+  defp chip_base_classes(:compact),
+    do:
+      "inline-flex items-center gap-1 rounded-full px-1.5 py-px text-xs font-medium leading-none transition-colors"
+
+  defp chip_base_classes(_default),
+    do:
+      "inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs font-medium leading-none transition-colors"
 
   # ── Color mapping ───────────────────────────────────────────────────
   #
@@ -192,7 +283,15 @@ defmodule PlatformWeb.Components.ScopePill do
   # the full-saturation `bg-<slug>-active` (which also bakes in the
   # contrast-safe text and shadow ring).
 
-  defp chip_color_classes(scope, false) do
+  defp chip_color_classes(scope, false, :compact) do
+    # Compact drops the border — bg fill + dot carry the signal.
+    [
+      "bg-#{slug(scope)}",
+      Platform.Tenancy.scope_color(scope)
+    ]
+  end
+
+  defp chip_color_classes(scope, false, _default) do
     [
       "bg-#{slug(scope)}",
       Platform.Tenancy.scope_color(scope),
@@ -200,7 +299,7 @@ defmodule PlatformWeb.Components.ScopePill do
     ]
   end
 
-  defp chip_color_classes(scope, true) do
+  defp chip_color_classes(scope, true, _size) do
     "bg-#{slug(scope)}-active"
   end
 
@@ -209,6 +308,10 @@ defmodule PlatformWeb.Components.ScopePill do
 
   # Dot color — full saturation, redundant-signal-beyond-color cue.
   defp scope_dot(scope), do: "bg-#{slug(scope)}-dot"
+
+  # Dot diameter — compact uses a smaller dot to match the tighter chrome.
+  defp dot_size(:compact), do: "size-1.5"
+  defp dot_size(_default), do: "size-2"
 
   # Atom slug → kebab-case fragment used in the Tailwind utility class names
   # (e.g. :wayne_tech → "wayne-tech" so we get `bg-wayne-tech`).
@@ -230,4 +333,12 @@ defmodule PlatformWeb.Components.ScopePill do
   defp aria_label(scope, false), do: "Filter by #{scope_label(scope)} scope"
 
   defp aria_label_static(scope), do: "#{scope_label(scope)} scope"
+
+  # Compact propagated collapses to the source chip; provenance is preserved
+  # for assistive tech (aria-label) and hover (title).
+  defp propagated_aria(scope, to),
+    do: "#{scope_label(scope)} scope, propagated to #{scope_label(to)}"
+
+  defp propagated_title(scope, to),
+    do: "#{scope_label(scope)} → #{scope_label(to)}"
 end
