@@ -661,4 +661,462 @@ defmodule Platform.Chat.AttentionRouterTest do
       drain()
     end
   end
+
+  # ── Parser-level unit tests (Stage 1 of @here notifications) ───────────────
+  #
+  # These exercise `extract_mention_tokens/1` and the back-compat shape of
+  # `extract_bracketed_tokens/1`. No DB, no router pipeline — just the
+  # tokenizer that the later fan-out / push / UI stages build on.
+
+  describe "extract_mention_tokens/1 — @[here] broadcast sentinel" do
+    test "recognizes @[here] at the start of a message" do
+      assert AttentionRouter.extract_mention_tokens("@[here] heads up") ==
+               [%{kind: :broadcast, target: :here}]
+    end
+
+    test "recognizes @[here] in the middle of a message" do
+      assert AttentionRouter.extract_mention_tokens("hey folks @[here] check this") ==
+               [%{kind: :broadcast, target: :here}]
+    end
+
+    test "recognizes @[here] immediately after punctuation" do
+      assert AttentionRouter.extract_mention_tokens("status:@[here] update?") ==
+               [%{kind: :broadcast, target: :here}]
+    end
+
+    test "returns two tokens when @[here] appears twice (dedup is fan-out's job)" do
+      tokens = AttentionRouter.extract_mention_tokens("@[here] and again @[here]")
+
+      assert tokens == [
+               %{kind: :broadcast, target: :here},
+               %{kind: :broadcast, target: :here}
+             ]
+    end
+
+    test "distinguishes @[here] from an adjacent @[Name] mention" do
+      tokens =
+        AttentionRouter.extract_mention_tokens("ping @[Rowan Ellis] also @[here] please")
+
+      assert tokens == [
+               %{kind: :name, value: "Rowan Ellis"},
+               %{kind: :broadcast, target: :here}
+             ]
+    end
+
+    test "trailing space inside brackets is a name token, not a broadcast" do
+      # `@[here ]` keeps whitespace significant — treat as a name token so
+      # the broadcast classifier stays strict.
+      assert AttentionRouter.extract_mention_tokens("@[here ] hello") ==
+               [%{kind: :name, value: "here "}]
+    end
+
+    test "@[HERE] (uppercase) is a name token, not a broadcast" do
+      # Case-insensitivity is a deferred follow-up. For now only the literal
+      # lowercase form is special.
+      assert AttentionRouter.extract_mention_tokens("@[HERE] hello") ==
+               [%{kind: :name, value: "HERE"}]
+    end
+
+    test "@[Here] (title case) is a name token, not a broadcast" do
+      assert AttentionRouter.extract_mention_tokens("@[Here] hello") ==
+               [%{kind: :name, value: "Here"}]
+    end
+
+    test "@[hereish] (substring) is a name token, not a broadcast" do
+      assert AttentionRouter.extract_mention_tokens("@[hereish] hello") ==
+               [%{kind: :name, value: "hereish"}]
+    end
+
+    test "returns an empty list when no bracketed tokens are present" do
+      assert AttentionRouter.extract_mention_tokens("plain message with no mentions") == []
+    end
+
+    test "preserves source order across mixed token kinds" do
+      tokens =
+        AttentionRouter.extract_mention_tokens(
+          "@[here] first then @[Zip] then @[here] then @[Nova]"
+        )
+
+      assert tokens == [
+               %{kind: :broadcast, target: :here},
+               %{kind: :name, value: "Zip"},
+               %{kind: :broadcast, target: :here},
+               %{kind: :name, value: "Nova"}
+             ]
+    end
+
+    test "non-binary input returns an empty list" do
+      assert AttentionRouter.extract_mention_tokens(nil) == []
+      assert AttentionRouter.extract_mention_tokens(123) == []
+    end
+  end
+
+  # ── Fan-out tests (Stage 2 of @here notifications) ─────────────────────────
+  #
+  # These exercise the routing pipeline end-to-end: a message containing
+  # `@[here]` must produce one `:here` decision per human recipient,
+  # excluding the sender, regardless of per-participant attention_mode.
+  # Agent routing remains under the mutex pipeline and is unaffected.
+
+  describe "do_route/1 — @[here] fan-out" do
+    test "5-human-1-agent channel fans out :here to all humans except sender" do
+      space = create_space(%{kind: "channel"})
+
+      sender = create_participant(space.id, %{display_name: "Sender"})
+
+      _h2 =
+        create_participant(space.id, %{
+          display_name: "Alice",
+          participant_id: Ecto.UUID.generate(),
+          attention_mode: "mention"
+        })
+
+      _h3 =
+        create_participant(space.id, %{
+          display_name: "Bob",
+          participant_id: Ecto.UUID.generate(),
+          attention_mode: "all"
+        })
+
+      _h4 =
+        create_participant(space.id, %{
+          display_name: "Carol",
+          participant_id: Ecto.UUID.generate(),
+          attention_mode: "active"
+        })
+
+      _h5 =
+        create_participant(space.id, %{
+          display_name: "Dan",
+          participant_id: Ecto.UUID.generate(),
+          attention_mode: "heartbeat"
+        })
+
+      agent = create_agent(%{name: "Zip"})
+      {:ok, _agent_p} = Chat.add_agent_participant(space.id, agent, display_name: "Zip")
+
+      message = create_message(space.id, sender.id, %{content: "team check-in @[here]"})
+
+      {:ok, decisions} = AttentionRouter.route(message)
+
+      here_decisions = Enum.filter(decisions, &(&1.reason == :here))
+
+      assert length(here_decisions) == 4,
+             "expected 4 :here decisions for the 4 non-sender humans, got #{inspect(decisions)}"
+
+      here_pids = here_decisions |> Enum.map(& &1.participant_id) |> Enum.sort()
+
+      participants =
+        Platform.Repo.all(
+          from(p in Platform.Chat.Participant,
+            where: p.space_id == ^space.id and p.participant_type == "user"
+          )
+        )
+
+      expected_pids =
+        participants
+        |> Enum.reject(&(&1.id == sender.id))
+        |> Enum.map(& &1.id)
+        |> Enum.sort()
+
+      assert here_pids == expected_pids
+      refute Enum.any?(here_decisions, &(&1.participant_id == sender.id))
+
+      # Agent decisions are independent of @[here] — no :here for the agent.
+      agent_decisions = Enum.reject(decisions, &(&1.reason == :here))
+      refute Enum.any?(agent_decisions, &(&1.reason == :here))
+
+      drain()
+    end
+
+    test "agent-only channel (no humans) emits zero :here decisions" do
+      space = create_space(%{kind: "group"})
+
+      agent1 = create_agent(%{name: "Zip"})
+      agent2 = create_agent(%{name: "Nova"})
+      {:ok, sender} = Chat.add_agent_participant(space.id, agent1, display_name: "Zip")
+      {:ok, _other_agent} = Chat.add_agent_participant(space.id, agent2, display_name: "Nova")
+
+      message = create_message(space.id, sender.id, %{content: "broadcast @[here]"})
+
+      {:ok, decisions} = AttentionRouter.route(message)
+
+      assert Enum.filter(decisions, &(&1.reason == :here)) == [],
+             "expected no :here decisions when there are no human recipients"
+
+      drain()
+    end
+
+    test "heartbeat-mode human still gets a :here decision (override), not ETS-queued" do
+      space = create_space(%{kind: "channel"})
+      sender = create_participant(space.id, %{display_name: "Sender"})
+
+      heartbeat_user =
+        create_participant(space.id, %{
+          display_name: "Heartbeat User",
+          participant_id: Ecto.UUID.generate(),
+          attention_mode: "heartbeat"
+        })
+
+      message = create_message(space.id, sender.id, %{content: "ping @[here]"})
+
+      heartbeat_pid = heartbeat_user.id
+
+      {:ok, decisions} = AttentionRouter.route(message)
+
+      assert Enum.any?(decisions, fn d ->
+               d.participant_id == heartbeat_pid and d.reason == :here
+             end),
+             "heartbeat-mode user must receive :here decision, got #{inspect(decisions)}"
+
+      # ETS heartbeat queue should NOT have been populated for this signal —
+      # the dispatch loop only queues `:heartbeat`, never `:here`.
+      assert AttentionRouter.pending(heartbeat_pid) == []
+
+      drain()
+    end
+
+    test "mention-mode human gets :here decision without self-name match" do
+      space = create_space(%{kind: "channel"})
+      sender = create_participant(space.id, %{display_name: "Sender"})
+
+      # Their display name does NOT appear in the message — under the
+      # ordinary "mention" path they'd be silenced. @[here] overrides that.
+      mention_user =
+        create_participant(space.id, %{
+          display_name: "Quiet Person",
+          participant_id: Ecto.UUID.generate(),
+          attention_mode: "mention"
+        })
+
+      message =
+        create_message(space.id, sender.id, %{content: "no name here, just @[here] please"})
+
+      mention_pid = mention_user.id
+
+      {:ok, decisions} = AttentionRouter.route(message)
+
+      assert Enum.any?(decisions, fn d ->
+               d.participant_id == mention_pid and d.reason == :here
+             end),
+             "mention-mode user must receive :here override decision, got #{inspect(decisions)}"
+
+      drain()
+    end
+
+    test "duplicate @[here] @[here] still produces exactly one decision per human" do
+      space = create_space(%{kind: "channel"})
+      sender = create_participant(space.id, %{display_name: "Sender"})
+
+      _h2 =
+        create_participant(space.id, %{
+          display_name: "Alice",
+          participant_id: Ecto.UUID.generate(),
+          attention_mode: "mention"
+        })
+
+      _h3 =
+        create_participant(space.id, %{
+          display_name: "Bob",
+          participant_id: Ecto.UUID.generate(),
+          attention_mode: "all"
+        })
+
+      message =
+        create_message(space.id, sender.id, %{content: "@[here] and again @[here] please"})
+
+      {:ok, decisions} = AttentionRouter.route(message)
+
+      here_decisions = Enum.filter(decisions, &(&1.reason == :here))
+
+      here_pids = Enum.map(here_decisions, & &1.participant_id)
+
+      assert length(here_pids) == length(Enum.uniq(here_pids)),
+             "expected dedup per participant_id"
+
+      assert length(here_decisions) == 2, "expected one decision per non-sender human"
+
+      drain()
+    end
+
+    # V2 (e2e_behavior task 019edbbf, validation 019edbc2-991d-7a9c-8a7e-5a295744e32d):
+    # When `@[here]` and a named `@[Name]` co-occur in one message, the named
+    # recipient must receive BOTH a `:here` broadcast AND a `:mention`
+    # decision. Other non-sender humans receive only `:here`. Agents are
+    # untouched by the broadcast. Duplicate `@[here]` tokens dedupe to one
+    # `:here` per participant. Sender is never in any decision.
+    test "mixed @[here] + @[Name] produces :here per human plus a :mention for the named recipient" do
+      space = create_space(%{kind: "channel"})
+
+      rowan =
+        create_participant(space.id, %{
+          display_name: "Rowan",
+          attention_mode: "mention"
+        })
+
+      alex =
+        create_participant(space.id, %{
+          display_name: "Alex",
+          participant_id: Ecto.UUID.generate(),
+          attention_mode: "mention"
+        })
+
+      sam =
+        create_participant(space.id, %{
+          display_name: "Sam",
+          participant_id: Ecto.UUID.generate(),
+          attention_mode: "mention"
+        })
+
+      harper =
+        create_participant(space.id, %{
+          display_name: "Harper",
+          participant_id: Ecto.UUID.generate(),
+          attention_mode: "mention"
+        })
+
+      taylor =
+        create_participant(space.id, %{
+          display_name: "Taylor",
+          participant_id: Ecto.UUID.generate(),
+          attention_mode: "mention"
+        })
+
+      higgins_agent = create_agent(%{name: "Higgins"})
+      geordi_agent = create_agent(%{name: "Geordi"})
+
+      {:ok, _higgins_p} =
+        Chat.add_agent_participant(space.id, higgins_agent, display_name: "Higgins")
+
+      {:ok, _geordi_p} =
+        Chat.add_agent_participant(space.id, geordi_agent, display_name: "Geordi")
+
+      message =
+        create_message(space.id, rowan.id, %{
+          content:
+            "@[here] kickoff in 10! Reminder: @[here], grab coffee. Also @[Alex] sync after. @[here]"
+        })
+
+      {:ok, decisions} = AttentionRouter.route(message)
+
+      here_decisions = Enum.filter(decisions, &(&1.reason == :here))
+      mention_decisions = Enum.filter(decisions, &(&1.reason == :mention))
+
+      # 4 :here decisions — one per non-sender human (alex, sam, harper, taylor),
+      # despite the message containing three `@[here]` tokens.
+      assert length(here_decisions) == 4,
+             "expected 4 :here decisions (one per non-sender human), got #{inspect(decisions)}"
+
+      here_pids = here_decisions |> Enum.map(& &1.participant_id) |> Enum.sort()
+
+      expected_here_pids =
+        [alex.id, sam.id, harper.id, taylor.id] |> Enum.sort()
+
+      assert here_pids == expected_here_pids,
+             "here_pids should be alex/sam/harper/taylor, got #{inspect(here_pids)}"
+
+      # 1 :mention decision — for Alex only (the only named human).
+      assert length(mention_decisions) == 1,
+             "expected exactly one :mention decision (for Alex), got #{inspect(mention_decisions)}"
+
+      assert hd(mention_decisions).participant_id == alex.id,
+             ":mention must target Alex, got #{inspect(mention_decisions)}"
+
+      # Alex appears in BOTH lists — the planner expected duplication, not dedup.
+      alex_decisions = Enum.filter(decisions, &(&1.participant_id == alex.id))
+
+      assert length(alex_decisions) == 2,
+             "Alex must appear in both :here and :mention, got #{inspect(alex_decisions)}"
+
+      assert Enum.any?(alex_decisions, &(&1.reason == :here))
+      assert Enum.any?(alex_decisions, &(&1.reason == :mention))
+
+      # Sender (rowan) is never in any decision.
+      refute Enum.any?(decisions, &(&1.participant_id == rowan.id)),
+             "sender rowan must not appear in decisions"
+
+      # Agents receive zero :here (broadcast is humans-only).
+      higgins_participant = Chat.get_agent_participant(space.id, higgins_agent.id)
+      geordi_participant = Chat.get_agent_participant(space.id, geordi_agent.id)
+
+      refute Enum.any?(decisions, fn d ->
+               d.reason == :here and
+                 d.participant_id in [higgins_participant.id, geordi_participant.id]
+             end),
+             "agents must receive zero :here decisions"
+
+      # Total decision count = 4 :here + 1 :mention (+ agent routing, which
+      # may add up to 0–2 entries depending on watch/mutex state but never
+      # :here or :mention since the message has no agent @[Name] tokens
+      # and no roster is configured).
+      human_decision_count = length(here_decisions) + length(mention_decisions)
+
+      assert human_decision_count == 5,
+             "expected 5 human decisions (4 :here + 1 :mention), got #{human_decision_count}"
+
+      drain()
+    end
+  end
+
+  # ── Push title tests (Stage 3 of @here notifications) ─────────────────────
+  #
+  # Pure-helper coverage. The actual `Platform.Push.send_notification/2`
+  # call short-circuits under `:test` (see maybe_send_push/4) to avoid
+  # racing against Ecto sandbox teardown, so we test the title-builder
+  # in isolation. That's enough — `maybe_send_push/4` does nothing more
+  # than pass the helper output through.
+
+  describe "notification_title/2" do
+    test "for :here, surfaces the @here broadcast context in the title" do
+      assert AttentionRouter.notification_title("Rowan", :here) == "Rowan @here in Suite"
+    end
+
+    test "for :mention, uses the default sender-only title" do
+      assert AttentionRouter.notification_title("Rowan", :mention) == "Rowan in Suite"
+    end
+
+    test "for :all, uses the default sender-only title" do
+      assert AttentionRouter.notification_title("Rowan", :all) == "Rowan in Suite"
+    end
+
+    test "for any other reason atom, uses the default sender-only title" do
+      # Defensive: future reasons (e.g. :directed, :watch, :active_agent)
+      # should fall through to the default rather than crash.
+      for reason <- [:directed, :watch, :active_agent, :active, :multi_mention] do
+        assert AttentionRouter.notification_title("Rowan", reason) == "Rowan in Suite",
+               "expected default title for reason #{inspect(reason)}"
+      end
+    end
+  end
+
+  describe "extract_bracketed_tokens/1 back-compat with @[here]" do
+    test "filters out the @[here] sentinel from the name token list" do
+      # Existing callers (e.g. `Chat.reinvite_mentioned_agents`) consume the
+      # token list to look up agents by display name. If `here` leaked
+      # through, an agent literally named "here" could be mistakenly
+      # resurrected on every broadcast.
+      {tokens, _legacy_zone} =
+        AttentionRouter.extract_bracketed_tokens("@[here] please @[Rowan Ellis]")
+
+      assert tokens == ["Rowan Ellis"]
+    end
+
+    test "still strips the @[here] form from the legacy_zone" do
+      # The legacy zone is fed to the substring-match path; we don't want
+      # `@here` to fall through and accidentally match a legacy `@here`.
+      {_tokens, legacy_zone} =
+        AttentionRouter.extract_bracketed_tokens("hi @[here] then keep going")
+
+      refute String.contains?(legacy_zone, "@[")
+      refute String.contains?(legacy_zone, "@here")
+    end
+
+    test "name-only message round-trips unchanged" do
+      {tokens, legacy_zone} =
+        AttentionRouter.extract_bracketed_tokens("hey @[Zip] take a look")
+
+      assert tokens == ["Zip"]
+      refute String.contains?(legacy_zone, "@[")
+    end
+  end
 end

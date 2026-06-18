@@ -1453,30 +1453,42 @@
                   }
                   class="flex w-full items-center gap-2 px-3 py-2 text-sm hover:bg-base-200 text-left transition-colors"
                 >
-                  <%= if suggestion.participant_type == "agent" do %>
-                    <div class="w-6 h-6 rounded-full bg-primary text-primary-content flex items-center justify-center text-xs font-bold flex-shrink-0">
-                      {suggestion
-                      |> Map.get(:name)
-                      |> String.trim()
-                      |> String.first()
-                      |> String.upcase()}
-                    </div>
-                  <% else %>
-                    <.human_avatar
-                      name={suggestion.name}
-                      avatar_url={suggestion.avatar_url}
-                      seed={suggestion.avatar_seed}
-                      size="sm"
-                      class="flex-shrink-0"
-                    />
+                  <%= cond do %>
+                    <% suggestion.participant_type == "broadcast" -> %>
+                      <div class="w-6 h-6 rounded-full bg-warning/15 text-warning flex items-center justify-center flex-shrink-0">
+                        <span class="hero-megaphone size-4"></span>
+                      </div>
+                    <% suggestion.participant_type == "agent" -> %>
+                      <div class="w-6 h-6 rounded-full bg-primary text-primary-content flex items-center justify-center text-xs font-bold flex-shrink-0">
+                        {suggestion
+                        |> Map.get(:name)
+                        |> String.trim()
+                        |> String.first()
+                        |> String.upcase()}
+                      </div>
+                    <% true -> %>
+                      <.human_avatar
+                        name={suggestion.name}
+                        avatar_url={suggestion.avatar_url}
+                        seed={suggestion.avatar_seed}
+                        size="sm"
+                        class="flex-shrink-0"
+                      />
                   <% end %>
-                  <span class="flex-1 truncate font-medium">
-                    {suggestion.name}
+                  <span class="flex-1 min-w-0 truncate">
+                    <span class="font-medium">{suggestion.name}</span>
+                    <span
+                      :if={suggestion.participant_type == "broadcast"}
+                      class="block text-xs text-base-content/60 truncate"
+                    >
+                      Notify everyone in the channel
+                    </span>
                   </span>
                   <span class={[
                     "rounded-full px-1.5 py-0.5 text-[10px] uppercase tracking-wider",
+                    suggestion.participant_type == "broadcast" && "bg-warning/10 text-warning",
                     suggestion.participant_type == "agent" && "bg-primary/10 text-primary",
-                    suggestion.participant_type != "agent" && "bg-base-300 text-base-content/50"
+                    suggestion.participant_type == "user" && "bg-base-300 text-base-content/50"
                   ]}>
                     {suggestion.participant_type}
                   </span>

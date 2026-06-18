@@ -58,14 +58,8 @@ defmodule PlatformWeb.ChatLive.MentionsHooks do
 
   defp handle_event("mention_query", %{"query" => query} = params, socket) do
     source = Map.get(params, "source", @default_source)
-    query_lower = String.downcase(query || "")
-
-    suggestions =
-      socket.assigns[:participants_map]
-      |> Kernel.||(%{})
-      |> Map.values()
-      |> Enum.filter(&matches?(&1, query_lower))
-      |> Enum.take(@max_suggestions)
+    participants = socket.assigns[:participants_map] || %{}
+    suggestions = build_suggestions(query, participants)
 
     {:halt,
      socket
@@ -86,9 +80,54 @@ defmodule PlatformWeb.ChatLive.MentionsHooks do
 
   defp handle_event(_event, _params, socket), do: {:cont, socket}
 
+  @doc """
+  Pure suggestion builder used by `mention_query`. Exposed for tests so we
+  can exercise the `@here` sentinel ordering without spinning up a full
+  LiveView. The pipeline is: filter participants by case-insensitive
+  prefix → prepend the `here` broadcast sentinel when the query is a
+  prefix of "here" (empty query included) → truncate to `@max_suggestions`.
+  """
+  @spec build_suggestions(String.t() | nil, map()) :: [map()]
+  def build_suggestions(query, participants_map) when is_map(participants_map) do
+    query_lower = String.downcase(query || "")
+
+    participants =
+      participants_map
+      |> Map.values()
+      |> Enum.filter(&matches?(&1, query_lower))
+
+    query_lower
+    |> prepend_here_sentinel(participants)
+    |> Enum.take(@max_suggestions)
+  end
+
   defp matches?(%{display_name: name}, query) when is_binary(name) do
     name |> String.downcase() |> String.starts_with?(query)
   end
 
   defp matches?(_, _), do: false
+
+  # `@here` is a broadcast sentinel — not a real participant, but it sits at
+  # the top of the suggestion list whenever the user's query is a
+  # case-insensitive prefix of "here" (empty query included, so the
+  # affordance is discoverable). Insertion produces `@[here]`, which the
+  # mention parser recognises (ADR 0037; see
+  # `Platform.Chat.AttentionRouter.here_mention?/1`).
+  defp prepend_here_sentinel(query, participants) do
+    if String.starts_with?("here", query) do
+      [here_sentinel() | participants]
+    else
+      participants
+    end
+  end
+
+  defp here_sentinel do
+    %{
+      name: "here",
+      display_name: "here",
+      participant_type: "broadcast",
+      avatar_url: nil,
+      avatar_seed: nil
+    }
+  end
 end

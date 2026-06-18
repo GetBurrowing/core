@@ -21,9 +21,26 @@ defmodule Platform.Chat.AttentionRouter do
     * `"mention"` — notified only when @mentioned.
     * `"heartbeat"` — queued in ETS; drain with `flush/1`.
 
+  ## @[here] broadcast (ADR 0037 + Stage 2 of @here notifications)
+
+  When the message content contains the literal `@[here]` sentinel, the
+  router bypasses `decide_human/2` entirely and emits one decision per
+  human recipient (sender excluded) with reason `:here`. This overrides
+  per-participant `attention_mode`, so `"mention"` and `"heartbeat"`
+  recipients alike receive a live notification. Agent routing is
+  unchanged — `@[here]` does not wake the active-agent mutex.
+
   ## PubSub
 
   Broadcasts `{:attention_needed, signal}` for every non-heartbeat decision.
+
+  ## Decision reasons (free atoms — extend as new flows land)
+
+    * `:directed`, `:mention`, `:multi_mention`, `:active_agent`, `:watch`
+      — agent routing outcomes.
+    * `:all`, `:active`, `:mention`, `:heartbeat` — per-participant human
+      routing outcomes from `decide_human/2`.
+    * `:here` — channel-wide broadcast from `@[here]` fan-out.
 
   ## Heartbeat draining
 
@@ -215,15 +232,49 @@ defmodule Platform.Chat.AttentionRouter do
 
     agent_decisions = route_agents(space, message, agent_recipients)
 
-    # ── Human participant routing (unchanged) ────────────────────────────────
+    # ── Human participant routing ────────────────────────────────────────────
+    #
+    # `@[here]` overrides per-participant `attention_mode` so every human
+    # recipient (sender already excluded above) gets a `:here` decision,
+    # including heartbeat-mode recipients who normally never receive a live
+    # ping. The per-recipient `:here` list is naturally de-duplicated even
+    # if the message contains multiple `@[here]` tokens, because we iterate
+    # human_recipients exactly once.
+    #
+    # Named mentions in the SAME message must still produce their own
+    # `:mention` decisions — `@[here] @[Alex]` is one broadcast PLUS one
+    # named ping. We layer the `:mention` decisions on top of the `:here`
+    # broadcast (Alex intentionally appears twice — once `:here`, once
+    # `:mention`). We only layer the `:mention` reason — non-mention
+    # reasons (`:all`, `:active`, `:heartbeat`) stay suppressed under
+    # `@[here]` so the broadcast remains the single override behaviour
+    # for those modes (no double-ping, no ETS heartbeat queue entry).
 
     human_decisions =
-      Enum.flat_map(human_recipients, fn participant ->
-        case decide_human(participant, message) do
-          nil -> []
-          reason -> [%{participant_id: participant.id, reason: reason}]
-        end
-      end)
+      if here_mention?(message.content) do
+        here_decisions =
+          Enum.map(human_recipients, fn p ->
+            %{participant_id: p.id, reason: :here}
+          end)
+
+        named_mention_decisions =
+          Enum.flat_map(human_recipients, fn participant ->
+            if mentioned?(participant, message) do
+              [%{participant_id: participant.id, reason: :mention}]
+            else
+              []
+            end
+          end)
+
+        here_decisions ++ named_mention_decisions
+      else
+        Enum.flat_map(human_recipients, fn participant ->
+          case decide_human(participant, message) do
+            nil -> []
+            reason -> [%{participant_id: participant.id, reason: reason}]
+          end
+        end)
+      end
 
     decisions = human_decisions ++ agent_decisions
 
@@ -258,7 +309,7 @@ defmodule Platform.Chat.AttentionRouter do
           user_id = if participant, do: participant.participant_id, else: pid
 
           unless MapSet.member?(online_user_ids, user_id) do
-            maybe_send_push(pid, sender_name, message)
+            maybe_send_push(pid, sender_name, message, reason)
           end
       end
 
@@ -439,7 +490,7 @@ defmodule Platform.Chat.AttentionRouter do
 
   defp return_empty, do: []
 
-  defp maybe_send_push(participant_id, sender_name, %Message{content: content}) do
+  defp maybe_send_push(participant_id, sender_name, %Message{content: content}, reason) do
     # Skip in test env. The spawned Task races with Ecto sandbox teardown:
     # when a test finishes, its Repo connection owner exits, and an
     # in-flight `Repo.all(Subscription)` inside this Task raises a
@@ -452,7 +503,7 @@ defmodule Platform.Chat.AttentionRouter do
 
       Task.start(fn ->
         Platform.Push.send_notification(participant_id, %{
-          title: "#{sender_name} in Suite",
+          title: notification_title(sender_name, reason),
           body: body,
           url: "/chat"
         })
@@ -463,6 +514,23 @@ defmodule Platform.Chat.AttentionRouter do
   rescue
     _ -> :ok
   end
+
+  @doc """
+  Build the push-notification title for a given sender + routing reason.
+
+  For `:here` broadcasts, surface the `@here` context so the recipient knows
+  they were pinged as part of a channel-wide blast (not a direct mention or
+  ambient activity). All other reasons reuse the default
+  `"<sender> in Suite"` form — keeping push behaviour stable for the
+  existing `:mention`, `:all`, `:active`, `:directed`, `:watch`, etc. paths.
+
+  Pure helper, no side effects — exposed so tests can exercise the title
+  shape without spawning the push `Task` (which short-circuits under
+  `:test` env anyway).
+  """
+  @spec notification_title(String.t(), atom()) :: String.t()
+  def notification_title(sender_name, :here), do: "#{sender_name} @here in Suite"
+  def notification_title(sender_name, _reason), do: "#{sender_name} in Suite"
 
   # ── Human participant decision (unchanged) ─────────────────────────────────
 
@@ -525,25 +593,88 @@ defmodule Platform.Chat.AttentionRouter do
   Extract ADR 0037 `@[Display Name]` bracketed mention tokens from content.
 
   Returns `{tokens, legacy_zone}` where:
-    * `tokens` is the list of display-name strings captured between brackets
-    * `legacy_zone` is the original content with the bracketed forms stripped,
-      suitable for the legacy `@name` substring check.
+    * `tokens` is the list of display-name strings captured between brackets,
+      filtered to exclude broadcast sentinels (e.g. `here`) so they cannot
+      accidentally match a participant whose display name is the sentinel
+    * `legacy_zone` is the original content with all bracketed forms stripped
+      (including broadcast sentinels), suitable for the legacy `@name`
+      substring check.
 
   Public so `Chat.post_message` can use the same parser to resolve
   mention-based reinvites without duplicating the regex.
+
+  For typed access to broadcast tokens (`@[here]`), use
+  `extract_mention_tokens/1`.
   """
   @spec extract_bracketed_tokens(String.t()) :: {[String.t()], String.t()}
   def extract_bracketed_tokens(content) when is_binary(content) do
     tokens =
-      ~r/@\[([^\[\]]+)\]/
-      |> Regex.scan(content, capture: :all_but_first)
-      |> List.flatten()
+      content
+      |> extract_mention_tokens()
+      |> Enum.flat_map(fn
+        %{kind: :name, value: name} -> [name]
+        %{kind: :broadcast} -> []
+      end)
 
     legacy_zone = Regex.replace(~r/@\[([^\[\]]+)\]/, content, "")
     {tokens, legacy_zone}
   end
 
   def extract_bracketed_tokens(_), do: {[], ""}
+
+  @doc """
+  Extract typed `@[…]` mention tokens from content (ADR 0037 + @here).
+
+  Returns a list of typed maps preserving source order. Each token is one of:
+
+    * `%{kind: :name, value: "Rowan Ellis"}` — an individual user/agent
+      mention, captured as the raw bracketed string.
+    * `%{kind: :broadcast, target: :here}` — the `@[here]` channel-wide
+      sentinel.
+
+  Matching is case-sensitive: only the lowercase literal `@[here]` is
+  recognized as a broadcast. `@[Here]`, `@[HERE]`, and `@[hereish]` are
+  treated as individual name tokens — that policy keeps the parser
+  predictable and is intentionally deferred for later case-folding work.
+
+  Whitespace inside the brackets is significant. `@[here ]` (trailing
+  space) is a name token, not a broadcast, mirroring how display names
+  treat whitespace.
+
+  Multiple `@[here]` tokens in one message return multiple entries.
+  De-duplication is the fan-out caller's responsibility, not the parser's.
+  """
+  @spec extract_mention_tokens(String.t()) :: [
+          %{kind: :name, value: String.t()} | %{kind: :broadcast, target: :here}
+        ]
+  def extract_mention_tokens(content) when is_binary(content) do
+    ~r/@\[([^\[\]]+)\]/
+    |> Regex.scan(content, capture: :all_but_first)
+    |> List.flatten()
+    |> Enum.map(&classify_bracketed_token/1)
+  end
+
+  def extract_mention_tokens(_), do: []
+
+  @doc """
+  True iff `content` contains at least one `@[here]` broadcast sentinel.
+
+  Thin wrapper over `extract_mention_tokens/1` — the per-message check
+  the routing pipeline (and any future webhook/push surface) uses to
+  decide whether to fan out to all human recipients.
+
+  Case-sensitive and bracket-exact; see `extract_mention_tokens/1` for
+  the matching policy.
+  """
+  @spec here_mention?(String.t() | nil | any()) :: boolean()
+  def here_mention?(content) do
+    content
+    |> extract_mention_tokens()
+    |> Enum.any?(&match?(%{kind: :broadcast, target: :here}, &1))
+  end
+
+  defp classify_bracketed_token("here"), do: %{kind: :broadcast, target: :here}
+  defp classify_bracketed_token(name), do: %{kind: :name, value: name}
 
   defp name_mention?(name, bracketed_tokens, legacy_zone) do
     name in bracketed_tokens or String.contains?(legacy_zone, "@#{name}")

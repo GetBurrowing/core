@@ -234,6 +234,47 @@ defmodule Platform.Chat.ContentRendererTest do
       refute result =~ "<script>alert(1)</script>"
       assert result =~ "&lt;script&gt;"
     end
+
+    test "@[here] renders with the broadcast warning-tone span" do
+      result = render("hey @[here] team")
+
+      assert result =~
+               ~s(<span class="rounded bg-warning/30 text-warning px-1 font-semibold">@here</span>)
+
+      # Must NOT carry the regular primary-tone class.
+      refute result =~ ~s(bg-primary/20 text-primary px-1 font-medium">@here</span>)
+    end
+
+    test "regular @[Name] still renders with the primary-tone span" do
+      result = render("hey @[Rowan]")
+
+      assert result =~
+               ~s(<span class="rounded bg-primary/20 text-primary px-1 font-medium">@Rowan</span>)
+
+      refute result =~ ~s(bg-warning/30)
+    end
+
+    test "mixed @[Rowan] @[here] produces both spans with correct classes" do
+      result = render("@[Rowan] @[here]")
+
+      assert result =~
+               ~s(<span class="rounded bg-primary/20 text-primary px-1 font-medium">@Rowan</span>)
+
+      assert result =~
+               ~s(<span class="rounded bg-warning/30 text-warning px-1 font-semibold">@here</span>)
+
+      # No double-wrap.
+      refute result =~ ~r{<span[^>]*><span}
+    end
+
+    test "case-variant @[Here] does NOT get broadcast styling (parser is case-sensitive)" do
+      result = render("@[Here]")
+
+      assert result =~
+               ~s(<span class="rounded bg-primary/20 text-primary px-1 font-medium">@Here</span>)
+
+      refute result =~ ~s(bg-warning/30)
+    end
   end
 
   describe "highlight_code/2" do

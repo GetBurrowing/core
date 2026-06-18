@@ -106,6 +106,7 @@ defmodule Platform.Chat.ContentRenderer do
   # double-wrapped by the legacy pass.
 
   @mention_span ~s(<span class="rounded bg-primary/20 text-primary px-1 font-medium">)
+  @broadcast_mention_span ~s(<span class="rounded bg-warning/30 text-warning px-1 font-semibold">)
   @mention_span_close "</span>"
 
   defp decorate_mentions(html) do
@@ -134,7 +135,7 @@ defmodule Platform.Chat.ContentRenderer do
   # entities (e.g. `&lt;` → `&amp;lt;`).
   defp decorate_bracketed_mentions(text) do
     Regex.replace(~r/@\[([^\[\]]+)\]/, text, fn _full, name ->
-      @mention_span <> "@" <> name <> @mention_span_close
+      mention_span(name) <> "@" <> name <> @mention_span_close
     end)
   end
 
@@ -143,6 +144,14 @@ defmodule Platform.Chat.ContentRenderer do
       @mention_span <> mention <> @mention_span_close
     end)
   end
+
+  # Broadcast pings (`@[here]`) get a warning-tone wrapper so recipients can
+  # tell at a glance they were swept up in a channel-wide ping vs called
+  # out individually. Bracket-exact + case-sensitive to mirror the parser
+  # (see `Platform.Chat.AttentionRouter.here_mention?/1` — only `@[here]`
+  # actually fans out, so only `@[here]` should look like it does).
+  defp mention_span("here"), do: @broadcast_mention_span
+  defp mention_span(_name), do: @mention_span
 
   # ── Code Block Post-Processing ─────────────────────────────────────
 
