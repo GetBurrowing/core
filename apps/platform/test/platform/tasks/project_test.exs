@@ -1,6 +1,8 @@
 defmodule Platform.Tasks.ProjectTest do
   use Platform.DataCase, async: true
 
+  import Platform.TenancyFixtures
+
   alias Platform.Tasks
   alias Platform.Tasks.Project
 
@@ -34,6 +36,35 @@ defmodule Platform.Tasks.ProjectTest do
       assert {:ok, _} = Tasks.create_project(%{name: "First", slug: "unique-slug"})
       assert {:error, changeset} = Tasks.create_project(%{name: "Second", slug: "unique-slug"})
       assert %{slug: ["has already been taken"]} = errors_on(changeset)
+    end
+
+    # ── ADR 0042: org_id is required ───────────────────────────────────────
+
+    test "defaults org_id to root Fabrikam when omitted (legacy callers)" do
+      assert {:ok, project} = Tasks.create_project(%{name: "Defaulted"})
+      assert project.org_id == fabrikam_org_id()
+    end
+
+    test "honors an explicitly-passed tenant org_id" do
+      tenant_id = tenant_org_id("soylent")
+
+      assert {:ok, project} = Tasks.create_project(%{name: "Soylent Tool", org_id: tenant_id})
+      assert project.org_id == tenant_id
+    end
+
+    test "changeset rejects org_id: nil" do
+      changeset = Project.changeset(%Project{}, %{name: "NoOrg", org_id: nil})
+      refute changeset.valid?
+      assert %{org_id: ["can't be blank"]} = errors_on(changeset)
+    end
+
+    test "FK violation when org_id references a non-existent org" do
+      bogus = Ecto.UUID.generate()
+
+      assert {:error, changeset} =
+               Tasks.create_project(%{name: "Phantom", org_id: bogus})
+
+      assert %{org_id: ["does not exist"]} = errors_on(changeset)
     end
   end
 

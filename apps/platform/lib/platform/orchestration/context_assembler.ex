@@ -8,8 +8,9 @@ defmodule Platform.Orchestration.ContextAssembler do
   """
 
   alias Platform.Execution.CredentialLease
-  alias Platform.Org.Wiki.Context, as: WikiContext
+  alias Platform.Org.PreambleBuilder
   alias Platform.Orchestration.ExecutionSpace
+  alias Platform.Repo
   alias Platform.Skills
   alias Platform.Tasks
 
@@ -35,6 +36,12 @@ defmodule Platform.Orchestration.ContextAssembler do
         # with validations) rather than current_plan/1 which only preloads stages.
         plan = find_current_plan(task.plans)
 
+        # ADR 0042: PreambleBuilder needs `task.project.org` to resolve
+        # the operating org's parent chain. `get_task_detail/1` preloads
+        # `:project` but not the nested `:org`; add it here so the
+        # builder never falls back to a per-call Repo round-trip.
+        task = maybe_preload_project_org(task)
+
         execution_space_id =
           case ExecutionSpace.find_or_create(task_id) do
             {:ok, space} -> space.id
@@ -58,15 +65,29 @@ defmodule Platform.Orchestration.ContextAssembler do
           skills: skills,
           resolved_deploy_strategy: resolved_deploy_strategy,
           previous_rejection_reason: previous_rejection_reason,
-          # Budgeted, scope-aware org preamble (ADR-0041 T4). Passes the
-          # fully-loaded task struct so `project/<task.project_id>/`
-          # wiki pages flagged `preamble: true` resolve in scope.
-          org: WikiContext.build_preamble(task: task)
+          # Budgeted, namespace + super-context org preamble
+          # (ADR 0042 §3 — supersedes ADR-0041 T4's single-tenant
+          # surface). PreambleBuilder resolves the operating org from
+          # `task.project.org`, walks `parent_org_id` upward for
+          # super-context, and includes project-scoped pages when the
+          # task carries `:project_id`.
+          org: PreambleBuilder.build(task, nil)
         }
 
         maybe_add_deploy_credentials(base, deploy_lease)
     end
   end
+
+  # Ensure `task.project.org` is loaded so PreambleBuilder can walk the
+  # parent-org chain without a second round-trip. Idempotent — Repo.preload
+  # is a no-op when `:org` is already present.
+  defp maybe_preload_project_org(%{project: nil} = task), do: task
+
+  defp maybe_preload_project_org(%{project: %{} = _project} = task) do
+    Repo.preload(task, project: :org)
+  end
+
+  defp maybe_preload_project_org(task), do: task
 
   # Find the latest approved plan from the preloaded plans list
   defp find_current_plan(nil), do: nil

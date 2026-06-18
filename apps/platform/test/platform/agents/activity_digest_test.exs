@@ -302,9 +302,12 @@ defmodule Platform.Agents.ActivityDigestTest do
   end
 
   defp insert_project(attrs \\ %{}) do
+    # ADR 0042: projects require org_id. Default fixtures attach to the
+    # root Fabrikam org unless the test overrides.
     defaults = %{
       name: "Test Project",
-      description: "tests"
+      description: "tests",
+      org_id: Platform.TenancyFixtures.fabrikam_org_id()
     }
 
     %Project{}

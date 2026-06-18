@@ -88,4 +88,5 @@ config :platform, :canvas_persist_sync, true
 # untouched.
 config :platform,
        :t2_context_sha256_t1_head,
-       "b1ce6c7ca5c27061192612d8572c685466ad934f0083afa4b5ff801e9b996771"
+       # bumped by ADR 0042
+       "278db635b7de680685ea8254b4ae51f0edb365a55b9f50e1c604ca6d3c246428"

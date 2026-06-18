@@ -15,6 +15,15 @@
       </span>
       <div class="flex items-center gap-1">
         <button
+          phx-click="toggle_project_create_sheet"
+          class="btn btn-ghost btn-xs btn-square"
+          title="New project"
+          aria-label="New project"
+          data-role="project-create-trigger"
+        >
+          <span class="hero-plus size-4"></span>
+        </button>
+        <button
           phx-click="toggle_projects_section"
           class="btn btn-ghost btn-xs btn-square"
           title={if @projects_collapsed, do: "Expand projects", else: "Collapse projects"}
@@ -32,15 +41,34 @@
       </div>
     </div>
 
+    <%!-- Stage 5 of ADR-0042: project picker grouped by org via collapsible
+         <details> sections. Fabrikam first (root), then tenant orgs alphabetically.
+         Header carries the scope color dot (Tenancy.scope_color/1, pure +
+         DB-free) so users see at a glance which org a section belongs to. --%>
     <div :if={!@projects_collapsed} class="flex-1 overflow-y-auto">
-      <button
-        :for={project <- @projects}
-        phx-click="select_project"
-        phx-value-id={project.id}
-        class={"w-full text-left px-3 py-2 text-sm hover:bg-base-200 #{if @selected_project_id == project.id, do: "bg-base-200 font-medium"}"}
+      <details
+        :for={{org_slug, _org_name, org_projects} <- @projects_by_org}
+        open
+        class="group"
+        data-role="project-group"
+        data-org-slug={org_slug}
       >
-        {project.name}
-      </button>
+        <summary class="flex items-center gap-2 px-3 py-2 text-xs font-semibold uppercase tracking-widest text-base-content/60 hover:bg-base-200 cursor-pointer select-none">
+          <span class={"size-2 rounded-full bg-current #{Tenancy.scope_color(org_slug)}"}></span>
+          <span>{Tenancy.scope_label(org_slug)}</span>
+          <span class="ml-auto text-[10px] tracking-normal text-base-content/40">
+            {length(org_projects)}
+          </span>
+        </summary>
+        <button
+          :for={project <- org_projects}
+          phx-click="select_project"
+          phx-value-id={project.id}
+          class={"w-full text-left px-5 py-2 text-sm hover:bg-base-200 #{if @selected_project_id == project.id, do: "bg-base-200 font-medium"}"}
+        >
+          {project.name}
+        </button>
+      </details>
     </div>
 
     <div class="border-t border-base-300 p-2">
@@ -81,9 +109,25 @@
         </span>
       </div>
 
-      <%!-- Active filter breadcrumb --%>
+      <%!-- Active filter breadcrumb. Stage 5 of ADR-0042 prefixes the project
+           with `<org_label> / ` (org name carries the scope color token, e.g.
+           `text-soylent`) so users always know which tenant context they're
+           inside. --%>
       <div :if={@selected_project_id} class="flex items-center gap-1 text-xs text-base-content/60">
-        <span :for={p <- @projects} :if={p.id == @selected_project_id}>{p.name}</span>
+        <span
+          :for={p <- @projects}
+          :if={p.id == @selected_project_id}
+          class="flex items-center gap-1"
+        >
+          <span
+            :if={match?(%Tenancy.Org{}, p.org)}
+            class={"font-medium #{Tenancy.scope_color(p.org.slug)}"}
+          >
+            {Tenancy.scope_label(p.org.slug)}
+          </span>
+          <span :if={match?(%Tenancy.Org{}, p.org)} class="text-base-content/40">/</span>
+          <span>{p.name}</span>
+        </span>
         <span :if={@selected_epic_id}>
           / <span :for={e <- @epics} :if={e.id == @selected_epic_id}>{e.name}</span>
         </span>
@@ -2975,6 +3019,23 @@
     <span class="hero-rectangle-stack size-6"></span>
   </button>
 
+  <%!-- FAB: Create Project (ADR-0042 stage 5). Mobile-only — desktop users
+       reach this via the "+" button in the sidebar header. Stacks 8.5rem
+       above the Create-Task FAB so it doesn't collide with the New-Epic FAB
+       at 5rem. data-role="project-create-fab" keeps e2e selectors stable
+       and distinct from the task-create FAB. --%>
+  <button
+    phx-click="toggle_project_create_sheet"
+    class={[
+      "md:hidden btn btn-accent btn-circle fixed bottom-[calc(env(safe-area-inset-bottom)+8.5rem+var(--bottom-nav-height,0px))] right-6 z-30 shadow-lg",
+      @selected_task && "max-md:hidden"
+    ]}
+    aria-label="New project"
+    data-role="project-create-fab"
+  >
+    <span class="hero-folder-plus size-6"></span>
+  </button>
+
   <%!-- Mobile project filter sheet (task 019e0d4b stage 3 sub a). Slides
        in from the left on mobile, hidden entirely on md+ where the project
        filter lives in a different surface. --%>
@@ -2986,15 +3047,31 @@
     class="md:hidden"
   >
     <:title>Projects</:title>
+    <%!-- Stage 5 of ADR-0042: grouped by org with the same <details> shape
+         as the desktop sidebar so the mobile sheet stays visually consistent. --%>
     <div class="flex flex-col">
-      <button
-        :for={project <- @projects}
-        phx-click="select_project"
-        phx-value-id={project.id}
-        class={"w-full text-left px-3 py-2 text-sm hover:bg-base-200 #{if @selected_project_id == project.id, do: "bg-base-200 font-medium"}"}
+      <details
+        :for={{org_slug, _org_name, org_projects} <- @projects_by_org}
+        open
+        data-role="project-group"
+        data-org-slug={org_slug}
       >
-        {project.name}
-      </button>
+        <summary class="flex items-center gap-2 px-3 py-2 text-xs font-semibold uppercase tracking-widest text-base-content/60 cursor-pointer select-none">
+          <span class={"size-2 rounded-full bg-current #{Tenancy.scope_color(org_slug)}"}></span>
+          <span>{Tenancy.scope_label(org_slug)}</span>
+          <span class="ml-auto text-[10px] tracking-normal text-base-content/40">
+            {length(org_projects)}
+          </span>
+        </summary>
+        <button
+          :for={project <- org_projects}
+          phx-click="select_project"
+          phx-value-id={project.id}
+          class={"w-full text-left px-5 py-2 text-sm hover:bg-base-200 #{if @selected_project_id == project.id, do: "bg-base-200 font-medium"}"}
+        >
+          {project.name}
+        </button>
+      </details>
     </div>
     <:actions>
       <button phx-click="clear_filters" class="btn btn-xs btn-ghost w-full">
@@ -3328,18 +3405,24 @@
         />
       </div>
 
-      <%!-- Project --%>
+      <%!-- Project. Stage 5 of ADR-0042 groups options by their owning org
+           via <optgroup>, mirroring the sidebar's grouped layout. --%>
       <div>
         <label class="label label-text text-xs font-medium">Project *</label>
         <select name="task[project_id]" class="select select-bordered select-sm w-full" required>
           <option value="">Select project</option>
-          <option
-            :for={project <- @projects}
-            value={project.id}
-            selected={@task_form[:project_id].value == project.id}
+          <optgroup
+            :for={{org_slug, _org_name, org_projects} <- @projects_by_org}
+            label={Tenancy.scope_label(org_slug)}
           >
-            {project.name}
-          </option>
+            <option
+              :for={project <- org_projects}
+              value={project.id}
+              selected={@task_form[:project_id].value == project.id}
+            >
+              {project.name}
+            </option>
+          </optgroup>
         </select>
       </div>
 
@@ -3608,13 +3691,19 @@
             required
           >
             <option value="">Select project</option>
-            <option
-              :for={project <- @projects}
-              value={project.id}
-              selected={@epic_form[:project_id].value == project.id}
+            <%!-- Stage 5 of ADR-0042: group by owning org via <optgroup>. --%>
+            <optgroup
+              :for={{org_slug, _org_name, org_projects} <- @projects_by_org}
+              label={Tenancy.scope_label(org_slug)}
             >
-              {project.name}
-            </option>
+              <option
+                :for={project <- org_projects}
+                value={project.id}
+                selected={@epic_form[:project_id].value == project.id}
+              >
+                {project.name}
+              </option>
+            </optgroup>
           </select>
           <p
             :for={msg <- Enum.map(@epic_form[:project_id].errors, &translate_error/1)}
@@ -3685,6 +3774,111 @@
           class="btn btn-primary btn-sm flex-1"
         >
           Create Epic
+        </button>
+      </div>
+    </.form>
+  </.sheet>
+
+  <%!-- New-Project sheet (ADR-0042 stage 5). Mirrors the New-Epic sheet's
+       shape: bottom drawer on mobile, modal on desktop (the `.sheet`
+       component handles the responsive split). The form requires org_id;
+       defaults to the current user's primary membership's org, else Fabrikam. --%>
+  <.sheet
+    :if={@show_project_create_sheet}
+    id="project-create-sheet"
+    open={true}
+    placement={:bottom}
+    on_close="close_project_create_sheet"
+  >
+    <:title>New Project</:title>
+    <.form
+      for={@project_form}
+      id="create-project-form"
+      phx-change="validate_project"
+      phx-submit="create_project"
+      class="space-y-4"
+      data-role="project-create-form"
+    >
+      <%!-- Name --%>
+      <div>
+        <label class="label label-text text-xs font-medium">Name *</label>
+        <input
+          type="text"
+          name="project[name]"
+          value={@project_form[:name].value}
+          required
+          placeholder="Storefront"
+          class="input input-bordered input-sm w-full"
+        />
+        <p
+          :for={msg <- Enum.map(@project_form[:name].errors, &translate_error/1)}
+          class="mt-1 text-xs text-error"
+        >
+          {msg}
+        </p>
+      </div>
+
+      <%!-- Slug (optional — auto-derived from name when blank) --%>
+      <div>
+        <label class="label label-text text-xs font-medium">Slug</label>
+        <input
+          type="text"
+          name="project[slug]"
+          value={@project_form[:slug].value}
+          placeholder="storefront"
+          class="input input-bordered input-sm w-full"
+        />
+        <p
+          :for={msg <- Enum.map(@project_form[:slug].errors, &translate_error/1)}
+          class="mt-1 text-xs text-error"
+        >
+          {msg}
+        </p>
+        <p class="mt-1 text-xs text-base-content/40">
+          Leave blank to auto-derive from name.
+        </p>
+      </div>
+
+      <%!-- Org (required per ADR-0042). --%>
+      <div>
+        <label class="label label-text text-xs font-medium">Org *</label>
+        <select
+          name="project[org_id]"
+          class="select select-bordered select-sm w-full"
+          required
+          data-role="project-create-org-select"
+        >
+          <option value="">Select org</option>
+          <option
+            :for={org <- @orgs}
+            value={org.id}
+            selected={@project_form[:org_id].value == org.id}
+          >
+            {Tenancy.scope_label(org.slug)}
+          </option>
+        </select>
+        <p
+          :for={msg <- Enum.map(@project_form[:org_id].errors, &translate_error/1)}
+          class="mt-1 text-xs text-error"
+        >
+          {msg}
+        </p>
+      </div>
+
+      <%!-- Submit + Cancel --%>
+      <div class="flex gap-2 pt-2">
+        <button
+          type="button"
+          phx-click="close_project_create_sheet"
+          class="btn btn-ghost btn-sm flex-1"
+        >
+          Cancel
+        </button>
+        <button
+          type="submit"
+          class="btn btn-primary btn-sm flex-1"
+        >
+          Create Project
         </button>
       </div>
     </.form>

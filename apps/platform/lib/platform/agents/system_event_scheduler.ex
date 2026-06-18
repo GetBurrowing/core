@@ -29,6 +29,7 @@ defmodule Platform.Agents.SystemEventScheduler do
   require Logger
 
   alias Platform.Agents.{Historian, HistorianDispatcher}
+  alias Platform.Org.TenantsSummary
   alias Platform.Tasks.Projects
 
   # ── Defaults ─────────────────────────────────────────────────────────────────
@@ -56,6 +57,15 @@ defmodule Platform.Agents.SystemEventScheduler do
   @default_threshold_tokens 100_000
   @default_debounce_ms 60 * 60 * 1_000
 
+  # Weekly TENANTS_SUMMARY.md heartbeat (ADR 0042 Stage 3).
+  #
+  # Fires every Sunday at `@tenants_summary_anchor_hour`:00 UTC and is
+  # debounced by `@tenants_summary_debounce_ms` so re-fires within the same
+  # week are no-ops even across scheduler restarts in dev.
+  @tenants_summary_weekday 7
+  @tenants_summary_anchor_hour 4
+  @tenants_summary_debounce_ms 6 * 24 * 60 * 60 * 1_000
+
   # ── Public API ───────────────────────────────────────────────────────────────
 
   @spec start_link(keyword()) :: GenServer.on_start()
@@ -79,6 +89,62 @@ defmodule Platform.Agents.SystemEventScheduler do
   @spec run_threshold_check_now() :: [{binary() | nil, :fired | :debounced | :under_threshold}]
   def run_threshold_check_now do
     GenServer.call(__MODULE__, :run_threshold_check_now, :timer.minutes(2))
+  end
+
+  @doc """
+  Force a `TenantsSummary.recompute/1` run now. Bypasses the weekly anchor
+  and debounce — intended for operator-triggered refreshes and tests.
+
+  `opts` are passed straight through to `TenantsSummary.recompute/1`, so
+  callers can pass a stubbed `:llm_fun` from a test context.
+  """
+  @spec recompute_tenants_summary_now(keyword()) ::
+          {:ok, term()} | {:ok, :no_root} | {:error, term()}
+  def recompute_tenants_summary_now(opts \\ []) do
+    GenServer.call(__MODULE__, {:recompute_tenants_summary_now, opts}, :timer.minutes(2))
+  end
+
+  @doc """
+  Pure predicate: should the weekly TENANTS_SUMMARY heartbeat fire right
+  now? Returns `true` iff `now` is at or past the next-due anchor AND the
+  debounce window since `last_run_at` has elapsed (or no prior run).
+
+  Extracted so the cadence policy is unit-testable without a GenServer.
+  """
+  @spec should_fire_tenants_summary?(DateTime.t(), DateTime.t() | nil) :: boolean()
+  @spec should_fire_tenants_summary?(
+          DateTime.t(),
+          DateTime.t() | nil,
+          non_neg_integer(),
+          non_neg_integer(),
+          non_neg_integer()
+        ) :: boolean()
+  def should_fire_tenants_summary?(
+        now,
+        last_run_at,
+        weekday \\ @tenants_summary_weekday,
+        anchor_hour \\ @tenants_summary_anchor_hour,
+        debounce_ms \\ @tenants_summary_debounce_ms
+      )
+
+  def should_fire_tenants_summary?(%DateTime{} = now, nil, weekday, anchor_hour, _debounce_ms) do
+    anchor_due?(now, weekday, anchor_hour)
+  end
+
+  def should_fire_tenants_summary?(
+        %DateTime{} = now,
+        %DateTime{} = last_run_at,
+        weekday,
+        anchor_hour,
+        debounce_ms
+      ) do
+    elapsed_ms = DateTime.diff(now, last_run_at, :millisecond)
+    elapsed_ms >= debounce_ms and anchor_due?(now, weekday, anchor_hour)
+  end
+
+  defp anchor_due?(%DateTime{} = now, weekday, anchor_hour) do
+    date = DateTime.to_date(now)
+    Date.day_of_week(date) == weekday and now.hour >= anchor_hour
   end
 
   @doc """
@@ -139,7 +205,10 @@ defmodule Platform.Agents.SystemEventScheduler do
         ),
       anchors: Keyword.get(opts, :anchors, Keyword.get(config, :anchors, @anchors)),
       # Map of {workspace_id, anchor_hour} => %DateTime{} of last fire.
-      last_fired: %{}
+      last_fired: %{},
+      # %DateTime{} of last TENANTS_SUMMARY recompute; `nil` until the
+      # first weekly heartbeat fires.
+      tenants_summary_last_run_at: nil
     }
 
     schedule_check(state)
@@ -156,8 +225,11 @@ defmodule Platform.Agents.SystemEventScheduler do
     now = DateTime.utc_now()
     new_last_fired = check_and_fire(now, state)
     _ = run_threshold_sweep(now)
+    new_tenants_last = maybe_fire_tenants_summary(now, state.tenants_summary_last_run_at)
     schedule_check(state)
-    {:noreply, %{state | last_fired: new_last_fired}}
+
+    {:noreply,
+     %{state | last_fired: new_last_fired, tenants_summary_last_run_at: new_tenants_last}}
   end
 
   @impl GenServer
@@ -170,6 +242,19 @@ defmodule Platform.Agents.SystemEventScheduler do
   def handle_call(:run_threshold_check_now, _from, state) do
     results = run_threshold_sweep(DateTime.utc_now())
     {:reply, results, state}
+  end
+
+  @impl GenServer
+  def handle_call({:recompute_tenants_summary_now, opts}, _from, state) do
+    result = run_tenants_summary(opts)
+
+    new_state =
+      case result do
+        {:ok, _} -> %{state | tenants_summary_last_run_at: DateTime.utc_now()}
+        _ -> state
+      end
+
+    {:reply, result, new_state}
   end
 
   # ── Scheduling ───────────────────────────────────────────────────────────────
@@ -366,6 +451,33 @@ defmodule Platform.Agents.SystemEventScheduler do
       )
 
       :ok
+  end
+
+  # ── Weekly TENANTS_SUMMARY heartbeat (ADR 0042 Stage 3) ────────────────
+
+  defp maybe_fire_tenants_summary(now, last_run_at) do
+    if should_fire_tenants_summary?(now, last_run_at) do
+      Logger.info("[SystemEventScheduler] firing weekly TENANTS_SUMMARY recompute")
+
+      case run_tenants_summary([]) do
+        {:ok, _} -> now
+        _ -> last_run_at
+      end
+    else
+      last_run_at
+    end
+  end
+
+  defp run_tenants_summary(opts) do
+    TenantsSummary.recompute(opts)
+  rescue
+    error ->
+      Logger.error(
+        "[SystemEventScheduler] TenantsSummary.recompute/1 raised: " <>
+          Exception.message(error)
+      )
+
+      {:error, {:raised, Exception.message(error)}}
   end
 
   defp threshold_tokens do

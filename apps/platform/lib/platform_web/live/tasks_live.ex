@@ -13,7 +13,8 @@ defmodule PlatformWeb.TasksLive do
   alias Platform.Repo
   alias Platform.Skills
   alias Platform.Tasks
-  alias Platform.Tasks.{Epic, Plan, ReviewRequest, ReviewRequests, Stack, Stacks, Task}
+  alias Platform.Tasks.{Epic, Plan, Project, ReviewRequest, ReviewRequests, Stack, Stacks, Task}
+  alias Platform.Tenancy
 
   # Desktop kanban columns (Stage 2 of Tasks v2 plan, 2026-05-19). Seven
   # explicit buckets — planning + blocked are split out from Backlog so
@@ -85,7 +86,10 @@ defmodule PlatformWeb.TasksLive do
   def mount(_params, session, socket) do
     if connected?(socket), do: Tasks.subscribe_board()
 
-    projects = Tasks.list_projects()
+    # Stage 5 of ADR-0042: preload `:org` so the sidebar can group projects
+    # by `project.org.slug` + light up the org color tokens via
+    # `Tenancy.scope_label/1` + `scope_color/1` — both pure, DB-free.
+    projects = Tasks.list_projects(preload: :org)
     all_tasks = Tasks.list_all_tasks()
     # Stage-5 of task 019e2c25: subscribe to per-task ReviewRequests topics
     # so the badge live-updates within 2s when a manual_approval review_request
@@ -111,11 +115,33 @@ defmodule PlatformWeb.TasksLive do
      |> assign(:page_title, "Tasks")
      |> assign(:current_user_id, session["current_user_id"])
      |> assign(:projects, projects)
+     # Stage 5 of ADR-0042: pre-bucketed `[{org_slug, org_name, [project]}]`
+     # list used by the sidebar `<details>` sections. Computed once at mount
+     # and re-computed any time `:projects` changes (after create-project,
+     # the board PubSub doesn't fan that out yet — we recompute inline in
+     # the create handler).
+     |> assign(:projects_by_org, group_projects_by_org(projects))
+     # Org dropdown options for the New-Project form. Stable for the
+     # lifetime of the mount (no live org-edit surface exists yet).
+     # ADR-0042: surfaced in canonical tenant-priority order so the FAB's
+     # <select> agrees with the sidebar grouping (Fabrikam → Soylent →
+     # Wayne-Tech → SXI → Paragon).
+     |> assign(:orgs, Tenancy.list_orgs_in_priority_order())
      |> assign(:selected_project_id, nil)
      |> assign(:selected_epic_id, nil)
      |> assign(:sidebar_open, true)
      |> assign(:projects_collapsed, false)
      |> assign(:show_project_sheet, false)
+     # Stage 5 of ADR-0042: New-Project bottom sheet + form state. Mirrors
+     # the `:show_epic_sheet` / `:epic_form` lifecycle.
+     |> assign(:show_project_create_sheet, false)
+     |> assign(
+       :project_form,
+       to_form(
+         Project.changeset(%Project{}, default_project_form_attrs(session["current_user_id"])),
+         as: "project"
+       )
+     )
      |> assign(:all_tasks, all_tasks)
      |> assign(:stacks, stacks)
      |> assign(:stack_board_data, stack_board_data)
@@ -436,6 +462,82 @@ defmodule PlatformWeb.TasksLive do
 
   def handle_event("close_project_sheet", _params, socket) do
     {:noreply, assign(socket, :show_project_sheet, false)}
+  end
+
+  # ── New-Project bottom sheet (ADR-0042 stage 5) ───────────────────────
+  # Mirrors the new-epic sheet quartet (toggle/close/validate/create). The
+  # form lets the user pick which org owns the new project — required per
+  # ADR-0042. Defaults to the current user's primary membership's org via
+  # `default_project_form_attrs/1`, else Fabrikam root.
+
+  def handle_event("toggle_project_create_sheet", _params, socket) do
+    showing = !socket.assigns.show_project_create_sheet
+
+    socket =
+      if showing do
+        socket
+        |> assign(:show_project_create_sheet, true)
+        |> assign(
+          :project_form,
+          to_form(
+            Project.changeset(
+              %Project{},
+              default_project_form_attrs(socket.assigns[:current_user_id])
+            ),
+            as: "project"
+          )
+        )
+      else
+        assign(socket, :show_project_create_sheet, false)
+      end
+
+    {:noreply, socket}
+  end
+
+  def handle_event("close_project_create_sheet", _params, socket) do
+    {:noreply, assign(socket, :show_project_create_sheet, false)}
+  end
+
+  def handle_event("validate_project", %{"project" => params}, socket) do
+    changeset =
+      %Project{}
+      |> Project.changeset(params)
+      |> Map.put(:action, :validate)
+
+    {:noreply, assign(socket, :project_form, to_form(changeset, as: "project"))}
+  end
+
+  def handle_event("create_project", %{"project" => params}, socket) do
+    case Tasks.create_project(params) do
+      {:ok, _project} ->
+        # No board-level pubsub for projects yet — re-fetch the list with
+        # the `:org` preload and recompute the grouped buckets inline so
+        # the sidebar updates immediately.
+        projects = Tasks.list_projects(preload: :org)
+
+        {:noreply,
+         socket
+         |> assign(:projects, projects)
+         |> assign(:projects_by_org, group_projects_by_org(projects))
+         |> assign(:show_project_create_sheet, false)
+         |> assign(
+           :project_form,
+           to_form(
+             Project.changeset(
+               %Project{},
+               default_project_form_attrs(socket.assigns[:current_user_id])
+             ),
+             as: "project"
+           )
+         )
+         |> put_flash(:info, "Project created.")}
+
+      {:error, changeset} ->
+        {:noreply,
+         socket
+         |> assign(:project_form, to_form(changeset, as: "project"))
+         |> put_flash(:error, "Could not create project. Check the form for errors.")}
+    end
   end
 
   # Open the per-row task-actions sheet (Sheet-based replacement for the
@@ -3988,6 +4090,67 @@ defmodule PlatformWeb.TasksLive do
       nil -> %{}
       id -> %{"project_id" => id}
     end
+  end
+
+  # Stage 5 of ADR-0042: pre-populate the New-Project form's org select
+  # with the current user's primary membership's org (via
+  # `Tenancy.load_membership/1`). Falls back to the Fabrikam root org when no
+  # membership exists yet — matches `Tasks.create_project/1`'s server-side
+  # default and keeps the form usable for fresh accounts.
+  defp default_project_form_attrs(user_id) when is_binary(user_id) do
+    case Accounts.get_user(user_id) do
+      nil ->
+        fabrikam_default_attrs()
+
+      user ->
+        case Tenancy.load_membership(user) do
+          %{org: %Tenancy.Org{id: org_id}} -> %{"org_id" => org_id}
+          _ -> fabrikam_default_attrs()
+        end
+    end
+  end
+
+  defp default_project_form_attrs(_), do: fabrikam_default_attrs()
+
+  defp fabrikam_default_attrs do
+    case Tenancy.get_org_by_slug("fabrikam") do
+      %Tenancy.Org{id: id} -> %{"org_id" => id}
+      _ -> %{}
+    end
+  end
+
+  # Stage 5 of ADR-0042: bucket `[%Project{org: %Org{}}]` into
+  # `[{org_slug, org_name, [project]}]` tuples. Order matches the
+  # canonical `Tenancy.tenant_priority/0` (Fabrikam → Soylent → Wayne-Tech →
+  # SXI → Paragon → unknown tenants alphabetically); inside each bucket
+  # projects are already alphabetically sorted by `Tasks.list_projects/1`.
+  #
+  # The same ordering is reused by the project-create FAB's <select> so
+  # the two surfaces never disagree.
+  #
+  # Projects whose `:org` association didn't preload (legacy data or a
+  # bug) fold into a synthetic `:unassigned` bucket sorted last so the
+  # sidebar never silently drops a row.
+  defp group_projects_by_org(projects) do
+    {assigned, orphan} =
+      Enum.split_with(projects, fn p ->
+        match?(%Tenancy.Org{}, p.org)
+      end)
+
+    assigned
+    |> Enum.group_by(fn p -> {p.org.slug, p.org.name} end)
+    |> Enum.map(fn {{slug, name}, ps} -> {slug, name, ps} end)
+    |> Enum.sort_by(fn {slug, _name, _} ->
+      # Canonical tenant-priority ordering. Slug acts as the tiebreaker
+      # for unknown tenants so the sort is total + deterministic.
+      {Tenancy.tenant_priority_index(slug), slug}
+    end)
+    |> Kernel.++(
+      case orphan do
+        [] -> []
+        _ -> [{"_unassigned", "Unassigned", orphan}]
+      end
+    )
   end
 
   defp normalize_task_assignee(params, default_agent_id, requested_plan?) do

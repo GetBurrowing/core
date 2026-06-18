@@ -73,7 +73,9 @@ defmodule Platform.Org.Wiki.Search do
           since: Date.t() | String.t() | nil,
           limit: pos_integer(),
           agent: Agent.t() | nil,
-          workspace_id: String.t() | nil
+          workspace_id: String.t() | nil,
+          org_id: String.t() | nil,
+          project_id: String.t() | nil
         ]
 
   # Internal channel-hit shape. Stays inside this module — the public
@@ -108,7 +110,11 @@ defmodule Platform.Org.Wiki.Search do
     * `:limit` — max results (default `#{20}`, max `#{100}`).
     * `:agent` — caller agent; used for message ACL filtering. Omit /
       `nil` → no message hits.
-    * `:workspace_id` — scope page/journal lookups.
+    * `:workspace_id` — legacy workspace scope (back-compat).
+    * `:org_id` — ADR-0042 tenant filter (scopes page/journal lookups
+      to a single org). Ignored for the `:message` corpus.
+    * `:project_id` — ADR-0042 project filter (scopes page/journal
+      lookups to a single project). Ignored for the `:message` corpus.
   """
   @spec search(String.t(), search_opts()) ::
           {:ok, %{results: [hit()], fusion_constant_k: 60, truncated: boolean()}}
@@ -271,6 +277,8 @@ defmodule Platform.Org.Wiki.Search do
     tsvector_hits =
       WikiPage
       |> filter_workspace(opts.workspace_id)
+      |> filter_org(opts.org_id)
+      |> filter_project(opts.project_id)
       |> maybe_filter_namespace(opts.namespace)
       |> maybe_filter_since_inserted(opts.since)
       |> where(
@@ -303,6 +311,8 @@ defmodule Platform.Org.Wiki.Search do
     rows =
       WikiPage
       |> filter_workspace(opts.workspace_id)
+      |> filter_org(opts.org_id)
+      |> filter_project(opts.project_id)
       |> maybe_filter_namespace(opts.namespace)
       |> maybe_filter_since_inserted(opts.since)
       |> where([p], ilike(p.content, ^pattern))
@@ -317,6 +327,8 @@ defmodule Platform.Org.Wiki.Search do
     tsvector_hits =
       WikiJournalEntry
       |> filter_workspace(opts.workspace_id)
+      |> filter_org(opts.org_id)
+      |> filter_project(opts.project_id)
       |> maybe_filter_journal_namespace(opts.namespace)
       |> maybe_filter_since_date(opts.since)
       |> where(
@@ -349,6 +361,8 @@ defmodule Platform.Org.Wiki.Search do
     rows =
       WikiJournalEntry
       |> filter_workspace(opts.workspace_id)
+      |> filter_org(opts.org_id)
+      |> filter_project(opts.project_id)
       |> maybe_filter_journal_namespace(opts.namespace)
       |> maybe_filter_since_date(opts.since)
       |> where([e], ilike(e.content, ^pattern))
@@ -617,6 +631,8 @@ defmodule Platform.Org.Wiki.Search do
     else
       WikiPage
       |> filter_workspace(opts.workspace_id)
+      |> filter_org(opts.org_id)
+      |> filter_project(opts.project_id)
       |> where([p], p.id in ^ids)
       |> Repo.all()
       |> Map.new(fn p -> {p.id, p} end)
@@ -631,6 +647,8 @@ defmodule Platform.Org.Wiki.Search do
     else
       WikiJournalEntry
       |> filter_workspace(opts.workspace_id)
+      |> filter_org(opts.org_id)
+      |> filter_project(opts.project_id)
       |> where([e], e.id in ^ids)
       |> Repo.all()
       |> Map.new(fn e -> {e.id, e} end)
@@ -675,6 +693,33 @@ defmodule Platform.Org.Wiki.Search do
 
   defp filter_workspace(queryable, workspace_id) do
     where(queryable, [r], r.workspace_id == ^workspace_id)
+  end
+
+  # ADR-0042 additive filters. Both default to no-op (nil) so the legacy
+  # workspace-only call path is unchanged. A list value (added by the
+  # federation surface's tenant-default scoping) is treated as an `IN`
+  # clause so tenant agents see their own + inherited-root content
+  # without leaking sibling tenants.
+  defp filter_org(queryable, nil), do: queryable
+
+  defp filter_org(queryable, org_id) when is_binary(org_id) do
+    where(queryable, [r], r.org_id == ^org_id)
+  end
+
+  defp filter_org(queryable, org_ids) when is_list(org_ids) do
+    ids = Enum.filter(org_ids, &is_binary/1)
+
+    case ids do
+      [] -> queryable
+      [one] -> where(queryable, [r], r.org_id == ^one)
+      many -> where(queryable, [r], r.org_id in ^many)
+    end
+  end
+
+  defp filter_project(queryable, nil), do: queryable
+
+  defp filter_project(queryable, project_id) when is_binary(project_id) do
+    where(queryable, [r], r.project_id == ^project_id)
   end
 
   # Namespace filter for page queries: `file_key LIKE 'namespace/%'`.
@@ -739,7 +784,9 @@ defmodule Platform.Org.Wiki.Search do
       since: parse_since(Keyword.get(opts, :since)),
       limit: parse_limit(Keyword.get(opts, :limit, @default_limit)),
       agent: Keyword.get(opts, :agent),
-      workspace_id: Keyword.get(opts, :workspace_id)
+      workspace_id: Keyword.get(opts, :workspace_id),
+      org_id: Keyword.get(opts, :org_id),
+      project_id: Keyword.get(opts, :project_id)
     }
   end
 

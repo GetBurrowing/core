@@ -88,10 +88,34 @@ defmodule Platform.Tasks do
 
   # ── Projects ─────────────────────────────────────────────────────────────
 
+  @doc """
+  Creates a project.
+
+  Per ADR 0042, every project must belong to an org. When `attrs` does not
+  carry `:org_id` / `"org_id"`, the project is attached to the root Fabrikam org
+  so legacy callers (and tests pre-dating the topology change) continue to
+  work without an explicit assignment.
+  """
   def create_project(attrs) do
     %Project{}
-    |> Project.changeset(attrs)
+    |> Project.changeset(default_org_id(attrs))
     |> Repo.insert()
+  end
+
+  defp default_org_id(attrs) do
+    cond do
+      Map.has_key?(attrs, :org_id) or Map.has_key?(attrs, "org_id") ->
+        attrs
+
+      is_map(attrs) and not is_struct(attrs) ->
+        case Platform.Tenancy.get_org_by_slug("fabrikam") do
+          %Platform.Tenancy.Org{id: id} -> Map.put(attrs, :org_id, id)
+          nil -> attrs
+        end
+
+      true ->
+        attrs
+    end
   end
 
   def update_project(%Project{} = project, attrs) do
@@ -106,10 +130,32 @@ defmodule Platform.Tasks do
     Repo.get_by(Project, slug: slug)
   end
 
-  def list_projects do
+  @doc """
+  List projects, optionally filtered by org.
+
+  ## Options
+
+    * `:org_id` — only return projects belonging to this org (ADR-0042).
+      Omit / `nil` → returns every project.
+    * `:preload` — Ecto preload spec (atom or list) applied to the result.
+      Stage 5 of ADR-0042 uses `preload: :org` so the sidebar group-by-org
+      template can read `project.org.slug` without a per-row Repo hit.
+  """
+  def list_projects(opts \\ []) do
+    org_id = Keyword.get(opts, :org_id)
+    preload = Keyword.get(opts, :preload, [])
+
     Project
+    |> maybe_filter_projects_org(org_id)
     |> order_by([p], asc: p.name)
     |> Repo.all()
+    |> Repo.preload(preload)
+  end
+
+  defp maybe_filter_projects_org(query, nil), do: query
+
+  defp maybe_filter_projects_org(query, org_id) when is_binary(org_id) do
+    where(query, [p], p.org_id == ^org_id)
   end
 
   # ── Epics ────────────────────────────────────────────────────────────────

@@ -360,7 +360,9 @@ defmodule Platform.Org.Context do
       to case-insensitive substring match if memory-service is unavailable)
     * `:date_from` - include entries on/after this date
     * `:date_to` - include entries on/before this date
-    * `:workspace_id` - scope to a workspace
+    * `:workspace_id` - legacy workspace scope (kept for back-compat)
+    * `:org_id` - ADR-0042 tenant filter (scopes to a single org)
+    * `:project_id` - ADR-0042 project filter (scopes to a single project)
     * `:limit` - max results (default: 50)
   """
   @spec search_memory_entries(keyword()) :: [WikiJournalEntry.t()]
@@ -421,6 +423,8 @@ defmodule Platform.Org.Context do
 
     WikiJournalEntry
     |> filter_workspace(workspace_id)
+    |> filter_org(Keyword.get(opts, :org_id))
+    |> filter_project(Keyword.get(opts, :project_id))
     |> maybe_filter_date_from(Keyword.get(opts, :date_from))
     |> maybe_filter_date_to(Keyword.get(opts, :date_to))
     |> maybe_filter_query(Keyword.get(opts, :query))
@@ -569,6 +573,32 @@ defmodule Platform.Org.Context do
 
   defp filter_workspace(queryable, workspace_id) do
     where(queryable, [r], r.workspace_id == ^workspace_id)
+  end
+
+  # ADR-0042: additive org/project filters. Both default to no-op (nil) so
+  # legacy callers that only pass `:workspace_id` see unchanged behavior.
+  # A list value is treated as an `IN` clause so tenant agents can scope
+  # to their own + inherited-root content without leaking sibling tenants.
+  defp filter_org(queryable, nil), do: queryable
+
+  defp filter_org(queryable, org_id) when is_binary(org_id) do
+    where(queryable, [r], r.org_id == ^org_id)
+  end
+
+  defp filter_org(queryable, org_ids) when is_list(org_ids) do
+    ids = Enum.filter(org_ids, &is_binary/1)
+
+    case ids do
+      [] -> queryable
+      [one] -> where(queryable, [r], r.org_id == ^one)
+      many -> where(queryable, [r], r.org_id in ^many)
+    end
+  end
+
+  defp filter_project(queryable, nil), do: queryable
+
+  defp filter_project(queryable, project_id) when is_binary(project_id) do
+    where(queryable, [r], r.project_id == ^project_id)
   end
 
   defp maybe_filter_date_from(query, nil), do: query

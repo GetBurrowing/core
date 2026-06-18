@@ -154,6 +154,42 @@ defmodule Platform.TenancyTest do
     end
   end
 
+  # ── ADR-0042 canonical tenant-priority ordering ──────────────────────
+
+  describe "tenant_priority/0 + helpers" do
+    test "canonical order is fabrikam → seed tenant order" do
+      assert Tenancy.tenant_priority() ==
+               ["fabrikam", "soylent", "wayne_tech", "sxi", "paragon"]
+    end
+
+    test "tenant_priority_index/1 returns position, or sentinel for unknown" do
+      assert Tenancy.tenant_priority_index("fabrikam") == 0
+      assert Tenancy.tenant_priority_index("soylent") == 1
+      assert Tenancy.tenant_priority_index("paragon") == 4
+      assert Tenancy.tenant_priority_index("never-heard-of-it") >= 100
+    end
+
+    test "list_orgs_in_priority_order/0 surfaces fabrikam first, then seed order" do
+      slugs = Tenancy.list_orgs_in_priority_order() |> Enum.map(& &1.slug)
+      # The first five entries must match the canonical priority list,
+      # any unknown extras tail-sort by slug.
+      assert Enum.take(slugs, 5) == ["fabrikam", "soylent", "wayne_tech", "sxi", "paragon"]
+    end
+
+    test "sort_by_tenant_priority/2 with a slug accessor" do
+      items = [
+        %{slug: "paragon"},
+        %{slug: "fabrikam"},
+        %{slug: "soylent"},
+        %{slug: "sxi"},
+        %{slug: "wayne_tech"}
+      ]
+
+      sorted = Tenancy.sort_by_tenant_priority(items, & &1.slug)
+      assert Enum.map(sorted, & &1.slug) == ["fabrikam", "soylent", "wayne_tech", "sxi", "paragon"]
+    end
+  end
+
   # ── list_user_memberships/1 ──────────────────────────────────────────
 
   describe "list_user_memberships/1" do

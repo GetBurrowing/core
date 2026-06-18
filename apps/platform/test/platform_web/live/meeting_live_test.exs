@@ -48,11 +48,16 @@ defmodule PlatformWeb.MeetingLiveTest do
   end
 
   defp create_project do
+    # ADR 0042: projects require an org_id. Default to the root Fabrikam org so
+    # legacy fixtures (which never named an org) keep working untouched.
+    org_id = Platform.TenancyFixtures.fabrikam_org_id()
+
     {:ok, project} =
       %Project{}
       |> Project.changeset(%{
         name: "Meeting Project #{System.unique_integer([:positive])}",
-        slug: "meeting-project-#{System.unique_integer([:positive])}"
+        slug: "meeting-project-#{System.unique_integer([:positive])}",
+        org_id: org_id
       })
       |> Repo.insert()
 

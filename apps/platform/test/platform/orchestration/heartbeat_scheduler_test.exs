@@ -985,8 +985,9 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
         status: "approved",
         version: 1,
         stages: [
-          %{id: "stage-pending-1", name: "Implement Feature", status: "pending"},
-          %{id: "stage-pending-2", name: "Run Tests", status: "pending"}
+          # :position required by sort_by in nil_stage_heartbeat_prompt (added by #437)
+          %{id: "stage-pending-1", name: "Implement Feature", status: "pending", position: 1},
+          %{id: "stage-pending-2", name: "Run Tests", status: "pending", position: 2}
         ]
       }
 
@@ -1006,8 +1007,8 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
         status: "approved",
         version: 1,
         stages: [
-          %{id: "s1", name: "Stage A", status: "passed"},
-          %{id: "s2", name: "Stage B", status: "passed"}
+          %{id: "s1", name: "Stage A", status: "passed", position: 1},
+          %{id: "s2", name: "Stage B", status: "passed", position: 2}
         ]
       }
 
@@ -1034,8 +1035,8 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
         status: "approved",
         version: 1,
         stages: [
-          %{id: "s1", name: "Done Stage", status: "passed"},
-          %{id: "s2", name: "Next Stage", status: "pending"}
+          %{id: "s1", name: "Done Stage", status: "passed", position: 1},
+          %{id: "s2", name: "Next Stage", status: "pending", position: 2}
         ]
       }
 

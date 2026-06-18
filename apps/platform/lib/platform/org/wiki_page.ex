@@ -25,19 +25,42 @@ defmodule Platform.Org.WikiPage do
     field(:version, :integer, default: 1)
     field(:updated_by, :binary_id)
 
+    belongs_to(:org, Platform.Tenancy.Org)
+    belongs_to(:project, Platform.Tasks.Project)
+
     timestamps(type: :utc_datetime_usec)
   end
 
   @required ~w(file_key)a
-  @optional ~w(workspace_id content frontmatter version updated_by)a
+  @optional ~w(workspace_id content frontmatter version updated_by org_id project_id)a
 
   def changeset(wiki_page, attrs) do
     wiki_page
     |> cast(attrs, @required ++ @optional)
     |> validate_required(@required)
+    |> maybe_default_org_id()
+    |> validate_required([:org_id])
+    |> foreign_key_constraint(:org_id)
+    |> foreign_key_constraint(:project_id)
     |> unique_constraint([:workspace_id, :file_key],
       name: :org_wiki_pages_workspace_id_file_key_index
     )
+  end
+
+  # ADR 0042: org_id is required at the DB level. Legacy callers that don't
+  # yet pass org_id are silently attached to the root Fabrikam org so existing
+  # write paths keep working while we migrate them.
+  defp maybe_default_org_id(changeset) do
+    case Ecto.Changeset.get_field(changeset, :org_id) do
+      nil ->
+        case Platform.Tenancy.get_org_by_slug("fabrikam") do
+          %Platform.Tenancy.Org{id: id} -> Ecto.Changeset.put_change(changeset, :org_id, id)
+          nil -> changeset
+        end
+
+      _ ->
+        changeset
+    end
   end
 
   @doc """

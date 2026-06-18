@@ -15,21 +15,24 @@ defmodule Platform.Tasks.Project do
     field(:deploy_config, :map, default: %{})
     field(:config, :map, default: %{})
 
+    belongs_to(:org, Platform.Tenancy.Org)
+
     has_many(:epics, Platform.Tasks.Epic)
     has_many(:tasks, Platform.Tasks.Task)
 
     timestamps(type: :utc_datetime_usec)
   end
 
-  @cast_fields ~w(workspace_id name slug repo_url default_branch tech_stack deploy_config config)a
+  @cast_fields ~w(workspace_id name slug repo_url default_branch tech_stack deploy_config config org_id)a
 
   def changeset(project, attrs) do
     project
     |> cast(attrs, @cast_fields)
-    |> validate_required([:name])
+    |> validate_required([:name, :org_id])
     |> maybe_generate_slug()
     |> validate_required([:slug])
     |> unique_constraint(:slug)
+    |> foreign_key_constraint(:org_id)
     |> validate_deploy_strategy()
   end
 

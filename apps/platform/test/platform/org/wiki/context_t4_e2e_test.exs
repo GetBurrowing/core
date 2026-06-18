@@ -285,7 +285,9 @@ defmodule Platform.Org.Wiki.ContextT4E2ETest do
       "20260604000100_create_channel_sections.exs",
       # Rollup, Sloane-authorized 2026-06-11: flat page keys → routing
       # page grammar (`<ns>/page/<rest>`) + alias backfill.
-      "20260611120000_page_grammar_file_keys_and_alias_backfill.exs"
+      "20260611120000_page_grammar_file_keys_and_alias_backfill.exs",
+      # bumped by ADR 0042
+      "20260618181114_adr_0042_org_project_topology.exs"
     ]
 
     defp t4_root, do: Mix.Project.project_file() |> Path.dirname()

@@ -109,6 +109,53 @@ defmodule Platform.Tenancy do
     |> Repo.all()
   end
 
+  @doc """
+  Canonical tenant ordering for UI surfaces (ADR-0042).
+
+  Returns slugs in seed order — `fabrikam` first (root), then tenants in
+  their original seed insertion order: `soylent, wayne_tech, sxi,
+  paragon`. This is the "tenant-priority" ordering that both the
+  sidebar project picker and the project-create FAB should agree on,
+  rather than alphabetizing-by-name (which moves Paragon to the
+  front) or alphabetizing-by-slug (which moves paragon to the front).
+
+  Unknown slugs fall to the end in slug-alphabetical order so adding a
+  new tenant without updating this list still produces a stable sort.
+  """
+  @spec tenant_priority() :: [String.t()]
+  def tenant_priority, do: ["fabrikam", "soylent", "wayne_tech", "sxi", "paragon"]
+
+  @doc """
+  Index helper for `tenant_priority/0`. Returns the position of a slug in the
+  canonical list, or a large sentinel for unknown slugs so they sort after
+  every known tenant.
+  """
+  @spec tenant_priority_index(String.t()) :: integer()
+  def tenant_priority_index(slug) when is_binary(slug) do
+    Enum.find_index(tenant_priority(), &(&1 == slug)) || 9_999
+  end
+
+  @doc """
+  List every org in canonical tenant-priority order (ADR-0042). Use this
+  for any UI surface that should agree with the sidebar grouping.
+  """
+  @spec list_orgs_in_priority_order() :: [Org.t()]
+  def list_orgs_in_priority_order do
+    list_orgs() |> sort_by_tenant_priority(& &1.slug)
+  end
+
+  @doc """
+  Sort an enumerable by canonical tenant priority. The accessor should
+  return the org slug for an element.
+  """
+  @spec sort_by_tenant_priority(Enumerable.t(), (any() -> String.t())) :: list()
+  def sort_by_tenant_priority(enum, slug_fn) do
+    Enum.sort_by(enum, fn item ->
+      slug = slug_fn.(item)
+      {tenant_priority_index(slug), String.downcase(slug || "")}
+    end)
+  end
+
   # ── Membership finders ────────────────────────────────────────────────
 
   @doc """

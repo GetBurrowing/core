@@ -54,32 +54,44 @@ defmodule Platform.Org.Seeds do
     import Ecto.Query
 
     now = DateTime.utc_now() |> DateTime.truncate(:microsecond)
-
-    Enum.each(@default_files, fn {file_key, content} ->
-      query =
-        if workspace_id do
-          from(f in WikiPage,
-            where: f.workspace_id == ^workspace_id and f.file_key == ^file_key
-          )
-        else
-          from(f in WikiPage,
-            where: is_nil(f.workspace_id) and f.file_key == ^file_key
-          )
-        end
-
-      exists? = Repo.exists?(query)
-
-      unless exists? do
-        Repo.insert!(%WikiPage{
-          workspace_id: workspace_id,
-          file_key: file_key,
-          content: String.trim(content),
-          version: 1,
-          inserted_at: now,
-          updated_at: now
-        })
+    # ADR 0042: org_id is required on org_wiki_pages. Default seeds attach
+    # to the root Fabrikam org. If the seed migration hasn't run yet (e.g. a
+    # very early boot), skip silently rather than crash — `seed_defaults`
+    # is idempotent and will run again later.
+    org_id =
+      case Platform.Tenancy.get_org_by_slug("fabrikam") do
+        %Platform.Tenancy.Org{id: id} -> id
+        nil -> nil
       end
-    end)
+
+    if org_id do
+      Enum.each(@default_files, fn {file_key, content} ->
+        query =
+          if workspace_id do
+            from(f in WikiPage,
+              where: f.workspace_id == ^workspace_id and f.file_key == ^file_key
+            )
+          else
+            from(f in WikiPage,
+              where: is_nil(f.workspace_id) and f.file_key == ^file_key
+            )
+          end
+
+        exists? = Repo.exists?(query)
+
+        unless exists? do
+          Repo.insert!(%WikiPage{
+            workspace_id: workspace_id,
+            org_id: org_id,
+            file_key: file_key,
+            content: String.trim(content),
+            version: 1,
+            inserted_at: now,
+            updated_at: now
+          })
+        end
+      end)
+    end
 
     :ok
   end

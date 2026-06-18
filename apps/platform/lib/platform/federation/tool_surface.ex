@@ -15,6 +15,8 @@ defmodule Platform.Federation.ToolSurface do
   alias Platform.Org.Wiki.{Journal, Routing, Search}
   alias Platform.Tasks
   alias Platform.Tasks.{Plan, PlanEngine, Stack, StackDeployer, Stacks, Stage, Task, Validation}
+  alias Platform.Tenancy
+  alias Platform.Tenancy.Org
   alias Platform.Repo
 
   import Ecto.Query, only: [from: 2]
@@ -426,7 +428,19 @@ defmodule Platform.Federation.ToolSurface do
           workspace_id: %{
             type: "string",
             required: false,
-            description: "UUID of the workspace (default: org-level)."
+            description: "UUID of the workspace (legacy, default: org-level)."
+          },
+          org_id: %{
+            type: "string",
+            required: false,
+            description:
+              "ADR-0042 tenant filter — restrict page/journal hits to a single org. Subject to caller authorization (tenant agents cannot query a sibling-org id)."
+          },
+          project_id: %{
+            type: "string",
+            required: false,
+            description:
+              "ADR-0042 project filter — restrict page/journal hits to a single project."
           }
         },
         returns:
@@ -820,11 +834,40 @@ defmodule Platform.Federation.ToolSurface do
     [
       %{
         name: "project_list",
-        description: "List all projects.",
-        parameters: %{},
-        returns: "Array of project objects with id, name, description",
-        limitations: "Returns all projects; no filtering",
-        when_to_use: "When you need to find a project to create tasks or epics in"
+        description:
+          "List projects, optionally filtered by org (ADR-0042). Each project carries its parent org's id and slug.",
+        parameters: %{
+          org_id: %{
+            type: "string",
+            required: false,
+            description:
+              "ADR-0042 tenant filter — only return projects belonging to this org. Omit to return every project."
+          }
+        },
+        returns: "Array of project objects with id, name, slug, repo_url, org_id, org_slug",
+        limitations:
+          "No authorization check on the filter today — any caller can request any org's project list (read-only).",
+        when_to_use:
+          "When you need to find a project to create tasks or epics in, or to enumerate the projects belonging to a single tenant org."
+      },
+      %{
+        name: "org_list_descendants",
+        description:
+          "List the direct descendants of an org (ADR-0042 two-tier topology). Returns every tenant org under the root when called with the root id; returns an empty list for a tenant (the topology has no third tier today).",
+        parameters: %{
+          org_id: %{
+            type: "string",
+            required: true,
+            description:
+              "UUID of the parent org to enumerate descendants for. Use the Fabrikam root id to list every tenant."
+          }
+        },
+        returns:
+          "Array of %{id, slug, name, role} where `role` is `\"tenant\"` for child orgs (today's only descendant tier) or `\"root\"` for the root org itself when it has no descendants below it.",
+        limitations:
+          "Unknown `org_id` → `:not_found`. Returns an empty list for any leaf-tier org.",
+        when_to_use:
+          "When you need to enumerate the tenant orgs under the root, or check whether an org has any descendants below it."
       },
       %{
         name: "project_update",
@@ -2231,14 +2274,44 @@ defmodule Platform.Federation.ToolSurface do
 
   # ── Task tools ───────────────────────────────────────────────────────────
 
-  def execute("project_list", _args, _context) do
+  def execute("project_list", args, _context) do
+    opts =
+      case Map.get(args, "org_id") do
+        org_id when is_binary(org_id) and org_id != "" -> [org_id: org_id]
+        _ -> []
+      end
+
     projects =
-      Tasks.list_projects()
+      opts
+      |> Tasks.list_projects()
+      |> Repo.preload(:org)
       |> Enum.map(fn p ->
-        %{id: p.id, name: p.name, slug: p.slug, repo_url: p.repo_url}
+        %{
+          id: p.id,
+          name: p.name,
+          slug: p.slug,
+          repo_url: p.repo_url,
+          org_id: p.org_id,
+          org_slug: p.org && p.org.slug
+        }
       end)
 
     {:ok, projects}
+  end
+
+  def execute("org_list_descendants", args, _context) do
+    case Map.get(args, "org_id") do
+      org_id when is_binary(org_id) and org_id != "" ->
+        list_org_descendants(org_id)
+
+      _ ->
+        {:error,
+         %{
+           error: "org_list_descendants: `org_id` is required",
+           recoverable: true,
+           suggestion: "Provide a non-empty `org_id` argument."
+         }}
+    end
   end
 
   def execute("project_update", args, _context) do
@@ -4182,9 +4255,9 @@ defmodule Platform.Federation.ToolSurface do
     with {:ok, query} <- require_string(args, "query", "memory_search") do
       agent = load_agent(context)
 
-      case search_opts_from(args, agent) do
-        {:ok, opts} -> Search.search(query, opts)
-        {:error, _} = err -> err
+      with :ok <- authorize_org_filter(agent, Map.get(args, "org_id")),
+           {:ok, opts} <- search_opts_from(args, agent) do
+        Search.search(query, opts)
       end
     end
   end
@@ -4332,6 +4405,16 @@ defmodule Platform.Federation.ToolSurface do
   # args + caller context. Validates the `since` arg via `parse_date/1`
   # (reused from the V1 surface) and surfaces a clean envelope error
   # for malformed dates rather than swallowing them.
+  #
+  # ADR-0042 e2e fix: when the caller didn't pass an explicit `org_id`
+  # AND the agent is pinned to a tenant org via `metadata["org_id"]`,
+  # default the filter to a tenant-scoped allow-list `[home_org,
+  # root_org]`. Without this default, a tenant-pinned agent calling
+  # memory_search with no filter gets unscoped cross-tenant results —
+  # which is exactly what the V4 validation caught (a SXI-pinned agent
+  # seeing Wayne-Tech content). Root-equivalent callers (no metadata
+  # pin, or pinned to the root) keep the legacy "see everything"
+  # behavior.
   defp search_opts_from(args, agent) do
     case parse_optional_date(Map.get(args, "since")) do
       {:error, reason} ->
@@ -4344,6 +4427,8 @@ defmodule Platform.Federation.ToolSurface do
          }}
 
       since ->
+        org_filter = derive_org_filter(args, agent)
+
         opts =
           [
             source: Map.get(args, "source"),
@@ -4351,11 +4436,143 @@ defmodule Platform.Federation.ToolSurface do
             since: since,
             limit: Map.get(args, "limit"),
             workspace_id: Map.get(args, "workspace_id"),
+            org_id: org_filter,
+            project_id: Map.get(args, "project_id"),
             agent: agent
           ]
           |> Enum.reject(fn {_k, v} -> is_nil(v) end)
 
         {:ok, opts}
+    end
+  end
+
+  # Resolve the effective `org_id` filter passed to the underlying
+  # search. Precedence:
+  #
+  #   1. Explicit caller-supplied `org_id` (already authorized upstream
+  #      via `authorize_org_filter/2`) — passed through unchanged.
+  #   2. Tenant-pinned agent with no explicit filter — defaults to a
+  #      list of `[home_org_id, root_org_id]` so the agent sees its
+  #      own org + inherited root content but never sibling tenants.
+  #   3. Root-equivalent agent (no metadata pin, or pinned to the root)
+  #      — returns `nil` (no filter, see everything).
+  defp derive_org_filter(args, agent) do
+    case Map.get(args, "org_id") do
+      value when is_binary(value) and value != "" ->
+        value
+
+      _ ->
+        case tenant_scope_default(agent) do
+          nil -> nil
+          ids -> ids
+        end
+    end
+  end
+
+  defp tenant_scope_default(%Agent{} = agent) do
+    case agent_home_org(agent) do
+      {:tenant, tenant_id} ->
+        case root_org_id() do
+          nil -> [tenant_id]
+          root_id when root_id == tenant_id -> [tenant_id]
+          root_id -> [tenant_id, root_id]
+        end
+
+      _ ->
+        nil
+    end
+  end
+
+  defp tenant_scope_default(_), do: nil
+
+  defp root_org_id do
+    case Repo.one(from(o in Org, where: is_nil(o.parent_org_id), limit: 1, select: o.id)) do
+      nil -> nil
+      id -> id
+    end
+  end
+
+  # ── ADR-0042 authorization + org descendants helpers ──────────────────
+
+  # Tenant agents may only filter by their own org. Today the "home org"
+  # link lives on `agent.metadata["org_id"]` — agents without that key
+  # (the historical default) behave as root-equivalent system callers
+  # and can specify any org. Root agents (`metadata["org_id"]` set to
+  # the Fabrikam root id) can also specify any tenant.
+  #
+  # When the metadata key is present AND identifies a tenant, the
+  # requested `org_id` must match. Anything else is rejected with the
+  # envelope shape the plan calls out so federated callers get a clean
+  # `recoverable: false` failure.
+  defp authorize_org_filter(_agent, nil), do: :ok
+  defp authorize_org_filter(_agent, ""), do: :ok
+  defp authorize_org_filter(nil, _requested_org_id), do: :ok
+
+  defp authorize_org_filter(%Agent{} = agent, requested_org_id)
+       when is_binary(requested_org_id) do
+    case agent_home_org(agent) do
+      :root ->
+        :ok
+
+      {:tenant, ^requested_org_id} ->
+        :ok
+
+      {:tenant, _other_org_id} ->
+        {:error,
+         %{
+           error: "unauthorized: not a member of org #{requested_org_id}",
+           recoverable: false,
+           suggestion:
+             "Tenant agents may only filter memory_search by their own org_id. Drop the filter or supply your home org."
+         }}
+    end
+  end
+
+  # Returns `:root` when the agent has no metadata-pinned org, or is
+  # pinned to the Fabrikam root. Returns `{:tenant, org_id}` when pinned to
+  # a tenant.
+  defp agent_home_org(%Agent{metadata: metadata}) when is_map(metadata) do
+    case Map.get(metadata, "org_id") || Map.get(metadata, :org_id) do
+      org_id when is_binary(org_id) and org_id != "" ->
+        case Repo.get(Org, org_id) do
+          %Org{parent_org_id: nil} -> :root
+          %Org{} -> {:tenant, org_id}
+          nil -> :root
+        end
+
+      _ ->
+        :root
+    end
+  end
+
+  defp agent_home_org(_), do: :root
+
+  # ADR-0042 org_list_descendants implementation. Returns the tenants
+  # under the root for the root's id, an empty list for a tenant, and
+  # an envelope error for an unknown id.
+  defp list_org_descendants(org_id) do
+    case Repo.get(Org, org_id) do
+      nil ->
+        {:error,
+         %{
+           error: "org_list_descendants: org not found (#{org_id})",
+           code: :not_found,
+           recoverable: false,
+           suggestion: "Confirm the org_id — use Platform.Tenancy.list_orgs/0 to enumerate."
+         }}
+
+      %Org{parent_org_id: nil} ->
+        descendants =
+          Tenancy.list_tenants()
+          |> Enum.map(fn t ->
+            %{id: t.id, slug: t.slug, name: t.name, role: "tenant"}
+          end)
+
+        {:ok, descendants}
+
+      %Org{} ->
+        # Today's two-tier topology has no third tier; leaf tenant returns [].
+        {:ok, []}
     end
   end
 
