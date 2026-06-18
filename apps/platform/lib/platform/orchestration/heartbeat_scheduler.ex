@@ -475,7 +475,15 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
   # This replaces the confusing "stage: unknown — unknown" fallback.
   defp nil_stage_heartbeat_prompt(task, plan) do
     stages = if plan, do: plan.stages || [], else: []
-    pending_stages = Enum.filter(stages, &(&1.status == "pending"))
+    # Sort by position so the "next pending stage" prompt always points at
+    # the lowest-position pending stage, matching TaskRouter's dispatch
+    # order. Without this the heartbeat could nominate a higher-position
+    # stage while lower-position ones are still pending — same root cause
+    # as the dispatch ordering bug fixed in `task_router.first_pending_stage/1`.
+    pending_stages =
+      stages
+      |> Enum.sort_by(& &1.position)
+      |> Enum.filter(&(&1.status == "pending"))
 
     all_complete? =
       stages != [] && Enum.all?(stages, &(&1.status in ["passed", "failed", "skipped"]))

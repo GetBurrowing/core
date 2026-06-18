@@ -1337,8 +1337,19 @@ defmodule Platform.Orchestration.TaskRouter do
 
   defp first_pending_stage(nil), do: nil
 
+  # Returns the LOWEST-position pending stage, not whatever Ecto's preload
+  # happened to surface first. `Platform.Tasks.Plan` declares
+  # `has_many(:stages, …)` without a default preload order, so preloaded
+  # stages come back in incidental DB order — usually insertion order, but
+  # plan_create can insert out of position when stages are written
+  # individually. Without the sort here the engine would dispatch a higher-
+  # position stage while lower-position ones are still pending (observed on
+  # task 019edb16: engine dispatched stage 3, then 4, while 1 and 2 stayed
+  # `pending`). Sorting explicitly makes the dispatch order deterministic
+  # regardless of how the stages were preloaded.
   defp first_pending_stage(plan) do
     (plan.stages || [])
+    |> Enum.sort_by(& &1.position)
     |> Enum.find(&(&1.status == "pending"))
   end
 
