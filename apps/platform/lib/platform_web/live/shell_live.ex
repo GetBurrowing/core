@@ -116,10 +116,16 @@ defmodule PlatformWeb.ShellLive do
       |> attach_hook(:track_path, :handle_params, fn _params, url, socket ->
         uri = URI.parse(url)
 
+        # The link emitter (`PlatformWeb.ChatLive.space_nav_target/1`) uses
+        # `space.id` for org-scoped channels and `slug || id` otherwise.
+        # Compare against BOTH the slug and the id so the meeting-page flag
+        # is true regardless of which URL form the user actually navigated
+        # to (sidebar emits the id-form for org-scoped channels; legacy
+        # deep links and DMs use the slug-form).
         on_meeting_page =
-          case socket.assigns[:meeting_space_slug] do
-            nil -> false
-            slug -> uri.path == "/chat/#{slug}"
+          case {socket.assigns[:meeting_space_slug], socket.assigns[:meeting_space_id]} do
+            {nil, nil} -> false
+            {slug, id} -> uri.path == "/chat/#{slug}" or uri.path == "/chat/#{id}"
           end
 
         {:cont,
@@ -174,6 +180,12 @@ defmodule PlatformWeb.ShellLive do
           space = Chat.get_space(space_id)
           slug = if space, do: space.slug || space_id, else: space_id
 
+          # See the `:track_path` hook above for the both-shapes rationale.
+          # The link the user came from could be either `/chat/<slug>` or
+          # `/chat/<space_id>` depending on whether the channel is
+          # org-scoped (post-ADR-0042 emits id) or not (emits slug).
+          on_meeting_page = path == "/chat/#{slug}" or path == "/chat/#{space_id}"
+
           socket =
             socket
             |> assign(:meeting_active, true)
@@ -181,7 +193,7 @@ defmodule PlatformWeb.ShellLive do
             |> assign(:meeting_space_name, space_name)
             |> assign(:meeting_space_slug, slug)
             |> assign(:meeting_started_at, DateTime.utc_now())
-            |> assign(:on_meeting_page, path == "/chat/#{slug}")
+            |> assign(:on_meeting_page, on_meeting_page)
 
           {:halt, socket}
 

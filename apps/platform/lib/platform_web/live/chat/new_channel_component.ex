@@ -43,7 +43,8 @@ defmodule PlatformWeb.ChatLive.NewChannelComponent do
 
     case Chat.create_channel(%{name: name, slug: slug, description: desc}) do
       {:ok, space} ->
-        send(self(), {:new_channel_navigate, "/chat/#{space.slug}"})
+        nav_target = PlatformWeb.ChatLive.space_nav_target(space)
+        send(self(), {:new_channel_navigate, "/chat/#{nav_target}"})
         {:noreply, socket}
 
       {:error, changeset} ->

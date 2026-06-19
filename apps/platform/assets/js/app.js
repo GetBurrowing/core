@@ -107,7 +107,14 @@ if (webmcpEnabled && typeof navigator.modelContext !== "undefined") {
   // Not strict format validators — the goal is to reject any character that
   // could break out of an attribute-selector context (quotes, brackets,
   // whitespace, etc.) before it reaches the selector.
+  //
+  // `NAV_TARGET_RE` covers BOTH slug-form (`general`, `my-channel`) and
+  // UUID-form (`0190abcd-...`) nav targets. After ADR 0042 the sidebar
+  // emits UUIDs for org-scoped channels (see
+  // `PlatformWeb.ChatLive.space_nav_target/1`), so the navigate_space MCP
+  // tool needs to accept both shapes.
   const SLUG_RE = /^[a-z0-9_-]{1,64}$/;
+  const NAV_TARGET_RE = /^[a-z0-9_-]{1,64}$/i;
   const SAFE_ID_RE = /^[a-z0-9-]{1,36}$/i;
 
   const errorResult = (msg) => ({ content: [{ type: "text", text: msg }] });
@@ -141,16 +148,19 @@ if (webmcpEnabled && typeof navigator.modelContext !== "undefined") {
 
   navigator.modelContext.registerTool({
     name: "navigate_space",
-    description: "Navigate to a different chat space/channel by clicking its link in the sidebar",
-    input: { type: "object", properties: { slug: { type: "string", description: "The space slug to navigate to (e.g. 'general')" } }, required: ["slug"] },
+    description: "Navigate to a different chat space/channel by clicking its link in the sidebar. The `slug` parameter is treated as an opaque navigation target — pass through whatever `list_spaces` returns (may be a slug like 'general' OR a UUID for org-scoped channels after ADR 0042).",
+    input: { type: "object", properties: { slug: { type: "string", description: "The space nav target — pass through what `list_spaces` returns. Slug or UUID accepted." } }, required: ["slug"] },
     async execute({ slug }) {
-      if (typeof slug !== "string" || !SLUG_RE.test(slug)) {
-        return errorResult("Error: slug must match [a-z0-9_-]{1,64}");
+      if (typeof slug !== "string" || !NAV_TARGET_RE.test(slug)) {
+        return errorResult("Error: slug must match [a-z0-9_-]{1,64} (slug or UUID)");
       }
-      const link = document.querySelector(`a[href="/chat/${slug}"]`);
+      // Suffix-match (`$=`) so this works for both `/chat/<slug>` (org-less
+      // channels and DMs) and `/chat/<uuid>` (org-scoped channels after
+      // ADR 0042). Equality match would miss the latter.
+      const link = document.querySelector(`a[href$="/chat/${slug}"]`);
       if (!link) return errorResult(`Space "${slug}" not found in sidebar`);
       link.click();
-      return { content: [{ type: "text", text: `Navigated to #${slug}` }] };
+      return { content: [{ type: "text", text: `Navigated to ${slug}` }] };
     }
   });
 
@@ -205,11 +215,14 @@ if (webmcpEnabled && typeof navigator.modelContext !== "undefined") {
 
   navigator.modelContext.registerTool({
     name: "list_spaces",
-    description: "List all available chat spaces/channels visible in the sidebar",
+    description: "List all available chat spaces/channels visible in the sidebar. Each entry's `slug` is an opaque navigation target (may be a slug or UUID per ADR 0042) — pass it through to `navigate_space` as-is.",
     input: { type: "object", properties: {} },
     async execute() {
       const links = document.querySelectorAll(SEL.sidebarSpaceLinks);
       const spaces = Array.from(links).map(a => {
+        // Keyed as `slug` for parameter-name compat with `navigate_space`,
+        // but actually an opaque nav target (slug OR UUID). See
+        // `PlatformWeb.ChatLive.space_nav_target/1`.
         const slug = a.getAttribute("href").replace("/chat/", "");
         const name = a.textContent.trim().replace(/^#\s*/, "");
         return { slug, name };

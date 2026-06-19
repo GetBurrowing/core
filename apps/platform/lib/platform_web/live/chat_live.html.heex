@@ -195,7 +195,7 @@
           </div>
           <.link
             :for={space <- @channel_sections.pinned}
-            navigate={~p"/chat/#{space.slug || space.id}"}
+            navigate={~p"/chat/#{space_nav_target(space)}"}
             class={[
               "channel-row",
               @active_space && @active_space.id == space.id && "channel-row--active"
@@ -240,7 +240,7 @@
         <% else %>
           <.link
             :for={space <- @channel_sections.dms}
-            navigate={~p"/chat/#{space.slug || space.id}"}
+            navigate={~p"/chat/#{space_nav_target(space)}"}
             class={[
               "channel-row",
               @active_space && @active_space.id == space.id && "channel-row--active"
@@ -440,7 +440,7 @@
                 ⠿
               </span>
               <.link
-                navigate={~p"/chat/#{space.slug || space.id}"}
+                navigate={~p"/chat/#{space_nav_target(space)}"}
                 class={[
                   "channel-row",
                   @active_space && @active_space.id == space.id && "channel-row--active"
@@ -733,7 +733,7 @@
         </div>
         <.link
           :for={space <- @channels}
-          navigate={~p"/chat/#{space.slug}"}
+          navigate={~p"/chat/#{space_nav_target(space)}"}
           phx-click="close_mobile_browser"
           class={[
             "flex items-center gap-3 px-4 py-3 text-sm transition-colors",
@@ -766,7 +766,7 @@
         </div>
         <.link
           :for={space <- @dm_conversations}
-          navigate={~p"/chat/#{space.slug || space.id}"}
+          navigate={~p"/chat/#{space_nav_target(space)}"}
           phx-click="close_mobile_browser"
           class={[
             "flex items-center gap-3 px-4 py-3 text-sm transition-colors",
@@ -1053,7 +1053,7 @@
 
         <.link
           :for={space <- @channels}
-          navigate={~p"/chat/#{space.slug}"}
+          navigate={~p"/chat/#{space_nav_target(space)}"}
           class={[
             "flex items-center gap-1.5 px-3 py-1.5 rounded-full whitespace-nowrap text-[13px] font-medium shrink-0 transition-all",
             "active:scale-[0.97] ease-[cubic-bezier(0.16,1,0.3,1)]",
@@ -1078,7 +1078,7 @@
         <%!-- DM pills (after channels, no divider for now to keep mobile compact) --%>
         <.link
           :for={space <- @dm_conversations}
-          navigate={~p"/chat/#{space.slug || space.id}"}
+          navigate={~p"/chat/#{space_nav_target(space)}"}
           class={[
             "flex items-center gap-1.5 px-3 py-1.5 rounded-full whitespace-nowrap text-[13px] font-medium shrink-0 transition-all",
             "active:scale-[0.97] ease-[cubic-bezier(0.16,1,0.3,1)]",

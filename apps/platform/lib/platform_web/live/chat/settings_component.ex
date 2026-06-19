@@ -89,7 +89,7 @@ defmodule PlatformWeb.ChatLive.SettingsComponent do
 
     case Chat.update_space(space, attrs) do
       {:ok, updated} ->
-        nav_target = updated.slug || updated.id
+        nav_target = PlatformWeb.ChatLive.space_nav_target(updated)
         send(self(), {:settings_navigate, "/chat/#{nav_target}"})
         {:noreply, socket}
 
@@ -125,7 +125,8 @@ defmodule PlatformWeb.ChatLive.SettingsComponent do
 
     case Chat.promote_to_channel(space, %{name: name, slug: slug}) do
       {:ok, updated} ->
-        send(self(), {:settings_navigate, "/chat/#{updated.slug}"})
+        nav_target = PlatformWeb.ChatLive.space_nav_target(updated)
+        send(self(), {:settings_navigate, "/chat/#{nav_target}"})
         {:noreply, socket}
 
       {:error, :not_promotable} ->

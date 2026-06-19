@@ -473,7 +473,7 @@ defmodule PlatformWeb.ChatLive do
   def handle_params(_params, _url, socket) do
     case socket.assigns.channels do
       [first | _] ->
-        {:noreply, push_navigate(socket, to: ~p"/chat/#{first.slug}")}
+        {:noreply, push_navigate(socket, to: ~p"/chat/#{space_nav_target(first)}")}
 
       [] ->
         {:noreply, socket}
@@ -1516,7 +1516,7 @@ defmodule PlatformWeb.ChatLive do
 
     case Chat.promote_to_channel(space, %{name: name, slug: slug}) do
       {:ok, updated} ->
-        {:noreply, push_navigate(socket, to: ~p"/chat/#{updated.slug}")}
+        {:noreply, push_navigate(socket, to: ~p"/chat/#{space_nav_target(updated)}")}
 
       {:error, :not_promotable} ->
         {:noreply,
@@ -2164,6 +2164,24 @@ defmodule PlatformWeb.ChatLive do
   end
 
   def space_scope_atom(_), do: nil
+
+  # Resolve the URL nav target for a space link. For org-scoped channels
+  # (post-ADR-0042: any space with a non-nil `org_id`), return the space's
+  # UUID so the URL handler's UUID-fallback branch hits `Chat.get_space/1`
+  # exactly — bypassing the slug-then-org-resolve cascade that would
+  # otherwise route ambiguous slugs (e.g. "general") to the user's PRIMARY
+  # membership org, not the org of the section they actually clicked.
+  # For org-less spaces (DMs / pre-ADR-0042 legacy channels), keep the
+  # slug-when-present behavior so shareable-DM-link semantics are preserved
+  # (`|| id` covers DMs without a slug).
+  #
+  # Map-pattern signature so it works on both the loaded `%Space{}` struct
+  # and any plain map carrying `:org_id`, `:slug`, `:id` (e.g. test fixtures).
+  @doc false
+  @spec space_nav_target(map()) :: String.t()
+  def space_nav_target(%{org_id: org_id, id: id}) when not is_nil(org_id), do: id
+  def space_nav_target(%{slug: slug, id: id}), do: slug || id
+  def space_nav_target(%{id: id}), do: id
 
   # Parse the inbound `scope_filter` payload's string scope name back into
   # an atom. Returns nil for any value not in the canonical 5-scope set so
