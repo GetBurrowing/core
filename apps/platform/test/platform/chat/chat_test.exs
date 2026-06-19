@@ -159,6 +159,112 @@ defmodule Platform.ChatTest do
     end
   end
 
+  # ── Space lookup (org-scoped slug) ──────────────────────────────────────────
+
+  describe "get_space_by_slug/2 with :org_id" do
+    # The lookup contract: when `:org_id` is passed, the partial unique index
+    # `chat_spaces_unique_org_slug` guarantees a single deterministic match.
+    # When `:org_id` is absent the legacy oldest-row behavior is preserved so
+    # every pre-existing caller keeps working unchanged.
+    #
+    # All four assertions below are needed because each exercises a distinct
+    # code branch in the new arity-2 function — drop one and we lose the
+    # ability to catch a regression in that branch.
+
+    test "scopes the match to the supplied org_id" do
+      org_a = insert_org()
+      org_b = insert_org()
+
+      {:ok, space_a} =
+        Chat.create_space(%{name: "General", slug: "general", kind: "channel", org_id: org_a.id})
+
+      {:ok, space_b} =
+        Chat.create_space(%{name: "General", slug: "general", kind: "channel", org_id: org_b.id})
+
+      assert %Platform.Chat.Space{id: id_a} =
+               Chat.get_space_by_slug("general", org_id: org_a.id)
+
+      assert id_a == space_a.id
+
+      assert %Platform.Chat.Space{id: id_b} =
+               Chat.get_space_by_slug("general", org_id: org_b.id)
+
+      assert id_b == space_b.id
+    end
+
+    test "preserves the legacy oldest-row behavior when :org_id is absent" do
+      # Three rows sharing slug "general": two scoped to different orgs, one
+      # unowned (org_id NULL, the DM / legacy shape). The no-opt call should
+      # return the oldest row by inserted_at regardless of org_id — that's
+      # the back-compat contract every existing caller depends on.
+      org_a = insert_org()
+      org_b = insert_org()
+
+      {:ok, oldest} =
+        Chat.create_space(%{name: "General", slug: "general", kind: "channel", org_id: org_a.id})
+
+      # Force a later inserted_at to make ordering deterministic.
+      Process.sleep(5)
+
+      {:ok, _middle} =
+        Chat.create_space(%{name: "General", slug: "general", kind: "channel", org_id: org_b.id})
+
+      Process.sleep(5)
+
+      {:ok, _newest} =
+        Chat.create_space(%{name: "General", slug: "general", kind: "channel"})
+
+      assert %Platform.Chat.Space{id: id} = Chat.get_space_by_slug("general")
+      assert id == oldest.id
+    end
+
+    test "returns nil for an org_id that owns no row with that slug" do
+      org_a = insert_org()
+      org_b = insert_org()
+
+      {:ok, _space} =
+        Chat.create_space(%{name: "General", slug: "general", kind: "channel", org_id: org_a.id})
+
+      assert Chat.get_space_by_slug("general", org_id: org_b.id) == nil
+    end
+
+    test "the partial unique index rejects a second (org_id, slug) collision" do
+      org = insert_org()
+
+      {:ok, _first} =
+        Chat.create_space(%{name: "General", slug: "general", kind: "channel", org_id: org.id})
+
+      # Postgres raises a unique_violation rather than Ecto surfacing a
+      # changeset error because `Chat.Space.changeset/2` only declares
+      # `unique_constraint(:slug, name: :chat_spaces_unique_slug)` — the
+      # new index is enforced at the DB layer as a defensive backstop.
+      assert_raise Ecto.ConstraintError, ~r/chat_spaces_unique_org_slug/, fn ->
+        Chat.create_space(%{
+          name: "General Duplicate",
+          slug: "general",
+          kind: "channel",
+          org_id: org.id
+        })
+      end
+    end
+  end
+
+  # Inline org helper — the chat suite doesn't otherwise touch tenancy, and
+  # pulling in a fixtures module to seed two rows wouldn't earn its keep.
+  # Parents every test org under the seeded Fabrikam root to satisfy the
+  # `orgs_single_root` partial unique index (a second `parent_org_id IS NULL`
+  # would be rejected at the DB layer).
+  defp insert_org do
+    n = System.unique_integer([:positive])
+    fabrikam = Platform.Tenancy.get_org_by_slug!("fabrikam")
+
+    Platform.Repo.insert!(%Platform.Tenancy.Org{
+      name: "Org #{n}",
+      slug: "org-#{n}",
+      parent_org_id: fabrikam.id
+    })
+  end
+
   # ── Reactions ─────────────────────────────────────────────────────────────────
 
   describe "add_reaction/1 and remove_reaction/3" do

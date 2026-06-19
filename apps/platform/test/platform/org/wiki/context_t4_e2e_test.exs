@@ -289,7 +289,11 @@ defmodule Platform.Org.Wiki.ContextT4E2ETest do
       # bumped by ADR 0042
       "20260618181114_adr_0042_org_project_topology.exs",
       # Task 019edbc1 stage 3: meeting-notifier idempotency CAS column.
-      "20260619020818_add_notified_at_to_meetings.exs"
+      "20260619020818_add_notified_at_to_meetings.exs",
+      # Tenant General routing fix (task 019edd8e): partial unique
+      # index on chat_spaces(org_id, slug) so /chat/general resolves
+      # per-tenant, not the oldest cross-tenant match.
+      "20260618220754_add_chat_spaces_org_slug_unique_index.exs"
     ]
 
     defp t4_root, do: Mix.Project.project_file() |> Path.dirname()

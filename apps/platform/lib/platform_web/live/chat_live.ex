@@ -342,7 +342,7 @@ defmodule PlatformWeb.ChatLive do
   # canonical implicit-join trigger.
   defp bootstrap_embedded_space(socket, slug_or_id) do
     space =
-      Chat.get_space_by_slug(slug_or_id) ||
+      Chat.get_space_by_slug(slug_or_id, org_id: resolve_active_org_id(socket)) ||
         (valid_uuid?(slug_or_id) && Chat.get_space(slug_or_id))
 
     case space do
@@ -398,9 +398,13 @@ defmodule PlatformWeb.ChatLive do
         socket
       end
 
-    # Try slug first, then ID fallback (for DM/group spaces without slugs)
+    # Try slug first, then ID fallback (for DM/group spaces without slugs).
+    # The `:org_id` opt scopes ambiguous slugs (e.g. "general", which now
+    # exists per-tenant after ADR 0042) to *this user's* org. When the user
+    # has no resolvable org (anonymous / pre-membership), `resolve_active_org_id/1`
+    # returns nil and the lookup falls back to its legacy oldest-row behavior.
     space =
-      Chat.get_space_by_slug(slug_or_id) ||
+      Chat.get_space_by_slug(slug_or_id, org_id: resolve_active_org_id(socket)) ||
         (valid_uuid?(slug_or_id) && Chat.get_space(slug_or_id)) ||
         bootstrap_space(slug_or_id)
 
@@ -1701,6 +1705,22 @@ defmodule PlatformWeb.ChatLive do
   end
 
   defp valid_uuid?(_), do: false
+
+  # Pick the org_id we should scope ambiguous slug lookups to (e.g. "general").
+  # Reads from the LiveAuth-installed `:current_user_org_membership` assign
+  # (populated by `PlatformWeb.LiveAuth.on_mount(:default)` via
+  # `Tenancy.load_membership/1`), so no DB call on the hot mount path.
+  #
+  # Returns `nil` for anonymous mounts, multi-org users whose preloaded
+  # membership list was empty, or any non-LiveAuth surface — in which case
+  # `Chat.get_space_by_slug/2` falls through to its back-compat oldest-row
+  # behavior (the pre-fix shape).
+  defp resolve_active_org_id(socket) do
+    case socket.assigns[:current_user_org_membership] do
+      %{org: %Platform.Tenancy.Org{id: org_id}} -> org_id
+      _ -> nil
+    end
+  end
 
   defp space_page_title(%{kind: "channel", name: name}, _participants, _user_id) do
     "# #{name}"

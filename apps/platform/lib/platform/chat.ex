@@ -91,14 +91,45 @@ defmodule Platform.Chat do
   @spec get_space(binary()) :: Space.t() | nil
   def get_space(id), do: Repo.get(Space, id)
 
-  @doc "Fetch a space by slug. Returns `nil` if not found."
-  @spec get_space_by_slug(String.t()) :: Space.t() | nil
-  def get_space_by_slug(slug) do
-    Space
-    |> where([s], s.slug == ^slug)
-    |> order_by([s], asc: s.inserted_at)
-    |> limit(1)
-    |> Repo.one()
+  @doc """
+  Fetch a space by slug.
+
+  ## Options
+
+    * `:org_id` — when present, scope the lookup to a single org. The partial
+      unique index `chat_spaces_unique_org_slug` guarantees at most one match
+      per `(org_id, slug)` pair, so the result is deterministic without an
+      `order_by + limit`. Use this for any URL flow where the active org can
+      be derived from the user's session (e.g. `/chat/general` resolving to
+      *this user's* tenant General, not the oldest cross-tenant match).
+
+  When `:org_id` is absent (or nil), the legacy behavior is preserved: the
+  oldest matching row by `inserted_at` is returned. This back-compat path is
+  what every pre-existing caller relies on — system-channel lookups,
+  bootstrap_space retries, dev-login add-to-general — none of which carry an
+  org context.
+
+  Returns `nil` if no row matches.
+  """
+  @spec get_space_by_slug(String.t(), keyword()) :: Space.t() | nil
+  def get_space_by_slug(slug, opts \\ []) do
+    query = where(Space, [s], s.slug == ^slug)
+
+    query =
+      case Keyword.get(opts, :org_id) do
+        nil ->
+          # Back-compat path: oldest match wins, matching the pre-opts
+          # behavior so callers that never learned about org scoping keep
+          # working unchanged.
+          query |> order_by([s], asc: s.inserted_at) |> limit(1)
+
+        org_id when is_binary(org_id) ->
+          # Org-scoped path: the partial unique index makes this a single
+          # deterministic row, no `limit/1` needed.
+          where(query, [s], s.org_id == ^org_id)
+      end
+
+    Repo.one(query)
   end
 
   @doc """
