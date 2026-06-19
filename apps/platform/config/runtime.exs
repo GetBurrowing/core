@@ -245,3 +245,24 @@ if memory_service_url do
     api_key: System.get_env("MEMORY_SERVICE_API_KEY"),
     timeout: memory_service_timeout
 end
+
+# ── Files service ─────────────────────────────────────────────────────────────
+# Wires Platform.Files.ServiceClient to the external files-service for
+# binary-format text extraction (PDF / DOCX / image OCR). When
+# FILES_SERVICE_URL is not set, no :files_service config key is written and
+# ServiceClient.extract/2 short-circuits with {:error, :service_disabled}.
+# See Platform.Files.ServiceClient and the files-service repo.
+files_service_url = System.get_env("FILES_SERVICE_URL")
+
+files_service_timeout =
+  case System.get_env("FILES_SERVICE_TIMEOUT_MS") do
+    nil -> 30_000
+    value -> String.to_integer(value)
+  end
+
+if files_service_url do
+  config :platform, :files_service,
+    base_url: files_service_url,
+    token: System.get_env("FILES_SERVICE_TOKEN"),
+    timeout: files_service_timeout
+end

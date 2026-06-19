@@ -2,18 +2,18 @@ defmodule Platform.Files.Extractor do
   @moduledoc """
   Per-format text extractor dispatch for `Platform.Files.File` rows.
 
-  The Stage 3 ingester calls `extract/1` to get a string body suitable for
-  embedding + (optionally) a per-page split. The result is a pure function
-  of the file row + the bytes referenced by its `:storage_key` — no
-  GenServers, no caching, no concurrency. The caller fans out.
+  The Stage 3 ingester calls `extract/1` (FileRow) to get a string body
+  suitable for embedding + (optionally) a per-page split. Binary formats
+  (PDF, DOCX, image OCR) are delegated to the external `files-service`
+  via `Platform.Files.ServiceClient`; pure-text formats (text, csv) are
+  handled in-process.
 
   ## Result shape
 
       {:ok, %{text: String.t(), pages: [String.t()] | nil}}
 
   `:pages` is only populated for paginated formats (PDF, Google Docs).
-  Flow formats (CSV, plain text, OCR'd images) keep `:pages` nil and
-  return the full body under `:text`.
+  Flow formats (CSV, plain text, OCR'd images) keep `:pages` nil.
 
   ## Dispatch table
 
@@ -30,14 +30,14 @@ defmodule Platform.Files.Extractor do
     * `application/vnd.google-apps.document` →
       `Platform.Files.Extractor.GDoc`
 
-  ## Tool availability
+  ## Two entry points
 
-  PDF, DOCX, and Image extraction shell out to `pdftotext`, `pandoc`, and
-  `tesseract` respectively. When those binaries aren't on `$PATH` (e.g.
-  the hive CI box doesn't ship them) the extractor returns
-  `{:error, :tool_unavailable}` (or `{:error, :ocr_unavailable}` for
-  Image) so the caller can surface the gap without crashing. Production
-  images install the binaries.
+  - `extract/1` takes a `%Platform.Files.File{}` row, resolves its bytes
+    via `local_path/1`, and dispatches by MIME. This is what the
+    ingester calls.
+  - `extract/2` takes raw bytes + MIME directly. Useful for tests, for
+    the planner's e2e_behavior cases, and for any future caller that
+    already has bytes in hand (e.g. an in-memory upload).
   """
 
   alias Platform.Files.File, as: FileRow
@@ -49,8 +49,44 @@ defmodule Platform.Files.Extractor do
 
   def extract(%FileRow{content_type: ct} = file) do
     case dispatch(ct) do
-      {:ok, module} -> module.extract(file)
-      :error -> {:error, {:unsupported_content_type, ct}}
+      {:ok, module} ->
+        case fetch_bytes(file, module) do
+          {:ok, :no_bytes_needed} -> module.extract(file)
+          {:ok, bytes} -> module.extract(bytes)
+          {:error, _} = err -> err
+        end
+
+      :error ->
+        {:error, {:unsupported_content_type, ct}}
+    end
+  end
+
+  # Modules supporting the bytes overload — `extract(binary())`. GDoc accepts
+  # FileRow only, so it is intentionally excluded here. This is the authoritative
+  # whitelist for `extract/2`; do NOT add `function_exported?/3` as an extra
+  # guard — in a cold BEAM the per-format module isn't loaded until first call,
+  # so the introspection check returns false and the whole dispatcher falls
+  # through to `:unsupported_content_type` (e2e failure observed at task 019ee080
+  # stage 3 review). Membership in this list IS the contract.
+  @bytes_overload_modules [
+    __MODULE__.PDF,
+    __MODULE__.DOCX,
+    __MODULE__.Image,
+    __MODULE__.Text,
+    __MODULE__.CSV
+  ]
+
+  @spec extract(binary(), String.t()) :: {:ok, ok_result()} | {:error, term()}
+  def extract(bytes, content_type) when is_binary(bytes) and is_binary(content_type) do
+    case dispatch(content_type) do
+      {:ok, module} when module in @bytes_overload_modules ->
+        module.extract(bytes)
+
+      {:ok, _module} ->
+        {:error, {:unsupported_content_type, content_type}}
+
+      :error ->
+        {:error, {:unsupported_content_type, content_type}}
     end
   end
 
@@ -69,15 +105,25 @@ defmodule Platform.Files.Extractor do
   defp dispatch("application/vnd.google-apps.document"), do: {:ok, __MODULE__.GDoc}
   defp dispatch(_), do: :error
 
+  # GDoc never reads bytes off disk (it goes through Drive's export API
+  # — or in the current stage, returns :handled_externally). Skip the
+  # local_path step for it; the per-format module deals with the row.
+  defp fetch_bytes(_file, __MODULE__.GDoc), do: {:ok, :no_bytes_needed}
+
+  defp fetch_bytes(%FileRow{} = file, _module) do
+    with {:ok, path} <- local_path(file),
+         {:ok, bytes} <- File.read(path) do
+      {:ok, bytes}
+    end
+  end
+
   @doc """
   Returns the absolute filesystem path for a stored `Platform.Files.File`
-  on the local-disk adapter. Format extractors that must shell out to a
-  binary use this to feed the tool a path instead of streaming bytes
-  through stdin.
+  on the local-disk adapter.
 
   Returns `{:error, :unsupported_adapter}` for non-local-disk adapters —
-  the Stage 3 ingester is responsible for materializing remote bytes to a
-  temp path before calling the extractor in that case.
+  callers must materialize remote bytes to a temp path before calling
+  the extractor in that case.
   """
   @spec local_path(FileRow.t()) :: {:ok, Path.t()} | {:error, term()}
   def local_path(%FileRow{storage_key: nil}), do: {:error, :missing_storage_key}

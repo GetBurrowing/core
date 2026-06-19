@@ -1,60 +1,30 @@
 defmodule Platform.Files.Extractor.Image do
   @moduledoc """
-  Image OCR via `tesseract`.
+  Image OCR — delegates to the external `files-service` via
+  `Platform.Files.ServiceClient`.
 
-  When the binary isn't on `$PATH` we return `{:error, :ocr_unavailable}`
-  rather than raising — same shape as the other extractors but explicitly
-  named so callers can route around the gap (e.g. mark the file as
-  "OCR pending" instead of "extraction failed").
-
-  Tesseract writes output to a `<base>.txt` next to its input. We point
-  it at a temp basename inside `System.tmp_dir!/0`, read the .txt back,
-  and clean up.
+  The service runs `pytesseract` (English) against the supplied bytes
+  and returns the recognized text. The MIME type sent over the wire is
+  hard-coded as `image/png` here because the upload route in the parent
+  caller (Stage 5 / FilesLive) currently treats all OCR-eligible
+  formats through a single dispatch; if you need to forward a specific
+  MIME (`image/jpeg`, `image/webp`), call
+  `ServiceClient.extract(bytes, "image/jpeg")` directly — the service
+  accepts any `image/*` MIME and Pillow opens whatever it finds.
   """
 
   alias Platform.Files.Extractor
+  alias Platform.Files.ServiceClient
 
-  @binary "tesseract"
+  @default_content_type "image/png"
 
-  @spec extract(Platform.Files.File.t()) ::
-          {:ok, Extractor.ok_result()} | {:error, term()}
-  def extract(file) do
-    with {:ok, _path_to_binary} <- ensure_binary(),
-         {:ok, path} <- Extractor.local_path(file),
-         {:ok, text} <- run(path) do
-      {:ok, %{text: text, pages: nil}}
-    end
+  @spec extract(binary()) :: {:ok, Extractor.ok_result()} | {:error, term()}
+  def extract(bytes) when is_binary(bytes) do
+    ServiceClient.extract(bytes, @default_content_type)
   end
 
-  defp ensure_binary do
-    case System.find_executable(@binary) do
-      nil -> {:error, :ocr_unavailable}
-      path -> {:ok, path}
-    end
-  end
-
-  defp run(path) do
-    base =
-      Path.join(
-        System.tmp_dir!(),
-        "platform-files-ocr-#{System.unique_integer([:positive])}"
-      )
-
-    try do
-      case System.cmd(@binary, [path, base], stderr_to_stdout: true) do
-        {_output, 0} ->
-          case File.read(base <> ".txt") do
-            {:ok, body} -> {:ok, body}
-            {:error, reason} -> {:error, {:tesseract_output_missing, reason}}
-          end
-
-        {output, code} ->
-          {:error, {:tesseract_failed, code, String.trim(output)}}
-      end
-    rescue
-      e in ErlangError -> {:error, {:tesseract_crashed, Exception.message(e)}}
-    after
-      File.rm(base <> ".txt")
-    end
+  @spec extract(binary(), String.t()) :: {:ok, Extractor.ok_result()} | {:error, term()}
+  def extract(bytes, content_type) when is_binary(bytes) and is_binary(content_type) do
+    ServiceClient.extract(bytes, content_type)
   end
 end
