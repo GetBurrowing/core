@@ -66,6 +66,26 @@ defmodule Platform.Tasks.ProjectTest do
 
       assert %{org_id: ["does not exist"]} = errors_on(changeset)
     end
+
+    # task 019edbc1 stage 2: project lifecycle topic for long-lived
+    # subscribers (e.g. Platform.Meetings.MeetingNotifier) — proves the
+    # broadcast fires so subscribers can attach to per-project topics
+    # without waiting for the first meeting.
+    test "broadcasts {:project_created, project} on projects:lifecycle" do
+      :ok = Phoenix.PubSub.subscribe(Platform.PubSub, Tasks.projects_lifecycle_topic())
+
+      assert {:ok, project} = Tasks.create_project(%{name: "Broadcast Project"})
+
+      assert_receive {:project_created, ^project}, 1_000
+    end
+
+    test "does NOT broadcast on insert failure" do
+      :ok = Phoenix.PubSub.subscribe(Platform.PubSub, Tasks.projects_lifecycle_topic())
+
+      assert {:error, _changeset} = Tasks.create_project(%{slug: "no-name"})
+
+      refute_receive {:project_created, _}, 200
+    end
   end
 
   describe "update_project/2" do

@@ -287,7 +287,9 @@ defmodule Platform.Org.Wiki.ContextT4E2ETest do
       # page grammar (`<ns>/page/<rest>`) + alias backfill.
       "20260611120000_page_grammar_file_keys_and_alias_backfill.exs",
       # bumped by ADR 0042
-      "20260618181114_adr_0042_org_project_topology.exs"
+      "20260618181114_adr_0042_org_project_topology.exs",
+      # Task 019edbc1 stage 3: meeting-notifier idempotency CAS column.
+      "20260619020818_add_notified_at_to_meetings.exs"
     ]
 
     defp t4_root, do: Mix.Project.project_file() |> Path.dirname()

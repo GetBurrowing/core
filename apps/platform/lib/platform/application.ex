@@ -70,6 +70,7 @@ defmodule Platform.Application do
       |> maybe_add_system_event_scheduler()
       |> maybe_add_wiki_indexer()
       |> maybe_add_meeting_historian_handler()
+      |> maybe_add_meeting_notifier()
       |> ensure_task_router_watcher_after_endpoint()
 
     # See https://hexdocs.pm/elixir/Supervisor.html
@@ -145,6 +146,20 @@ defmodule Platform.Application do
     if Application.get_env(:platform, :start_meeting_historian_handler, true) do
       idx = Enum.find_index(children, &(&1 == PlatformWeb.Endpoint)) || length(children)
       List.insert_at(children, idx, Platform.Agents.MeetingHistorianHandler)
+    else
+      children
+    end
+  end
+
+  # MeetingNotifier subscribes to project meeting lifecycle topics at boot
+  # and fans out push notifications on `:meeting_started`. Must live in the
+  # supervisor (not a LiveView) because per-session subscribers drop the
+  # broadcast when no MeetingLive is open. Disabled in test env; tests
+  # start their own instance per case for sandbox ownership.
+  defp maybe_add_meeting_notifier(children) do
+    if Application.get_env(:platform, :start_meeting_notifier, true) do
+      idx = Enum.find_index(children, &(&1 == PlatformWeb.Endpoint)) || length(children)
+      List.insert_at(children, idx, Platform.Meetings.MeetingNotifier)
     else
       children
     end

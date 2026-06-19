@@ -6,10 +6,12 @@ defmodule Platform.Meetings.PresenceTest do
 
   use Platform.DataCase, async: false
 
-  alias Platform.Meetings
-  alias Platform.Meetings.PubSub, as: MeetingsPubSub
-  alias Platform.Meetings.{Recording, Room}
   alias Platform.Chat
+  alias Platform.Meetings
+  alias Platform.Meetings.{Meeting, Recording, Room}
+  alias Platform.Meetings.PubSub, as: MeetingsPubSub
+  alias Platform.Repo
+  alias Platform.Tasks
 
   # ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -299,6 +301,100 @@ defmodule Platform.Meetings.PresenceTest do
 
     test "no-ops for nil space_id" do
       assert :ok = Meetings.broadcast_presence_change("some-room-id", nil)
+    end
+  end
+
+  # ── mark_notified/1 (idempotency CAS) ───────────────────────────────────────
+  #
+  # Stage 3 of task 019edbc1 added the `meetings.notified_at` column + atomic
+  # compare-and-swap so the `MeetingNotifier` fan-out cannot double-fire when
+  # two concurrent callers race `start_meeting/1` for the same row (the
+  # `:auto_join` path is the realistic trigger).
+
+  describe "mark_notified/1" do
+    setup do
+      {:ok, project} = Tasks.create_project(%{name: "MarkNotified Project"})
+      {:ok, meeting} = Meetings.create_meeting(%{project_id: project.id, name: "CAS Meeting"})
+      {:ok, meeting: meeting}
+    end
+
+    test "stamps notified_at and returns :ok on first call", %{meeting: meeting} do
+      assert is_nil(meeting.notified_at)
+
+      assert {:ok, claimed} = Meetings.mark_notified(meeting)
+      assert %DateTime{} = claimed.notified_at
+
+      # Reload to confirm the column is actually persisted (not just on the
+      # returned struct).
+      reloaded = Repo.get!(Meeting, meeting.id)
+      assert reloaded.notified_at == claimed.notified_at
+    end
+
+    test "returns :already_notified on the second call and does NOT update timestamp",
+         %{meeting: meeting} do
+      {:ok, claimed} = Meetings.mark_notified(meeting)
+      first_stamp = claimed.notified_at
+
+      # The struct we pass in still has nil notified_at, so the function
+      # would naively try the CAS — but the WHERE is_nil guard rejects the
+      # update at the database level.
+      assert {:already_notified, _} = Meetings.mark_notified(meeting)
+
+      reloaded = Repo.get!(Meeting, meeting.id)
+      assert reloaded.notified_at == first_stamp
+    end
+
+    test "short-circuits without an UPDATE when the struct already carries notified_at",
+         %{meeting: meeting} do
+      {:ok, claimed} = Meetings.mark_notified(meeting)
+
+      # Passing the already-stamped struct hits the second function head,
+      # which returns :already_notified without going to the DB at all.
+      assert {:already_notified, ^claimed} = Meetings.mark_notified(claimed)
+    end
+
+    test "two concurrent callers race the CAS — exactly one wins", %{meeting: meeting} do
+      parent = self()
+
+      # Each spawned Task gets explicit access to the test's checked-out
+      # sandbox connection — preferred over `Sandbox.mode({:shared, _})`
+      # because the latter persists for the rest of the suite and leaks
+      # PubSub-routed broadcasts across async-test boundaries.
+      tasks =
+        for _ <- 1..2 do
+          Task.async(fn ->
+            Ecto.Adapters.SQL.Sandbox.allow(Repo, parent, self())
+            res = Meetings.mark_notified(meeting)
+            send(parent, {:cas, res})
+            res
+          end)
+        end
+
+      results = Task.await_many(tasks, 5_000)
+
+      oks =
+        Enum.count(results, fn
+          {:ok, _} -> true
+          _ -> false
+        end)
+
+      already =
+        Enum.count(results, fn
+          {:already_notified, _} -> true
+          _ -> false
+        end)
+
+      assert oks == 1,
+             "expected exactly one :ok across 2 concurrent CAS calls, got #{oks} " <>
+               "(results: #{inspect(results)})"
+
+      assert already == 1,
+             "expected exactly one :already_notified across 2 concurrent CAS calls, got " <>
+               "#{already} (results: #{inspect(results)})"
+
+      # And the column was stamped exactly once in the DB.
+      reloaded = Repo.get!(Meeting, meeting.id)
+      assert %DateTime{} = reloaded.notified_at
     end
   end
 end

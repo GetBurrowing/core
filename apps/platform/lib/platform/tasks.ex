@@ -89,17 +89,54 @@ defmodule Platform.Tasks do
   # ── Projects ─────────────────────────────────────────────────────────────
 
   @doc """
+  PubSub topic for project lifecycle signals (e.g. `{:project_created, project}`).
+
+  Long-lived subscribers (`Platform.Meetings.MeetingNotifier` and friends)
+  subscribe to this topic at boot so projects created post-boot trigger a
+  dynamic subscribe to the new project's downstream topics. The pre-existing
+  `Platform.Meetings.project_meetings_meta_topic/0` only fires on first
+  meeting creation, which is too late for subscribers that need to attach
+  before any meeting exists.
+  """
+  @spec projects_lifecycle_topic() :: String.t()
+  def projects_lifecycle_topic, do: "projects:lifecycle"
+
+  @doc """
+  Subscribe the calling process to the project lifecycle topic.
+  """
+  @spec subscribe_to_projects_lifecycle() :: :ok | {:error, term()}
+  def subscribe_to_projects_lifecycle do
+    Phoenix.PubSub.subscribe(Platform.PubSub, projects_lifecycle_topic())
+  end
+
+  @doc """
   Creates a project.
 
   Per ADR 0042, every project must belong to an org. When `attrs` does not
   carry `:org_id` / `"org_id"`, the project is attached to the root Fabrikam org
   so legacy callers (and tests pre-dating the topology change) continue to
   work without an explicit assignment.
+
+  On successful insert broadcasts `{:project_created, project}` on
+  `projects_lifecycle_topic/0` so long-lived subscribers can attach to the
+  new project's downstream topics dynamically.
   """
   def create_project(attrs) do
-    %Project{}
-    |> Project.changeset(default_org_id(attrs))
-    |> Repo.insert()
+    case %Project{}
+         |> Project.changeset(default_org_id(attrs))
+         |> Repo.insert() do
+      {:ok, project} = ok ->
+        Phoenix.PubSub.broadcast(
+          Platform.PubSub,
+          projects_lifecycle_topic(),
+          {:project_created, project}
+        )
+
+        ok
+
+      error ->
+        error
+    end
   end
 
   defp default_org_id(attrs) do

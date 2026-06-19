@@ -40,6 +40,11 @@ defmodule Platform.Meetings.Meeting do
     field(:livekit_room_name, :string)
     field(:started_at, :utc_datetime_usec)
     field(:ended_at, :utc_datetime_usec)
+    # Idempotency stamp for `:meeting_started` push fan-out (task 019edbc1
+    # stage 3). `Platform.Meetings.mark_notified/1` uses an atomic
+    # compare-and-swap on this column to guarantee exactly-one notification
+    # even when two callers race `start_meeting/1` for the same row.
+    field(:notified_at, :utc_datetime_usec)
 
     timestamps(type: :utc_datetime_usec)
   end

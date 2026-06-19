@@ -55,6 +55,12 @@ config :platform, :start_wiki_indexer, false
 # init; tests start their own per case for sandbox ownership.
 config :platform, :start_meeting_historian_handler, false
 
+# Meeting notifications (task 019edbc1): MeetingNotifier subscribes to
+# meeting PubSub at init and fans out push payloads on :meeting_started.
+# Tests start their own instance and inject a recorder via
+# `:notifications_module` (see meeting_notifier_test.exs).
+config :platform, :start_meeting_notifier, false
+
 # StackDeployer (T5) — tests run synchronously and use a no-op git
 # runner by default so existing Stacks tests don't shell out. Tests that
 # care about deployer behavior swap in their own runner via

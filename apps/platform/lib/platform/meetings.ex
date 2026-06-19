@@ -327,6 +327,49 @@ defmodule Platform.Meetings do
   end
 
   @doc """
+  Atomically claim the right to notify subscribers about this meeting.
+
+  Performs a compare-and-swap on `meetings.notified_at` via
+  `UPDATE ... WHERE id = ? AND notified_at IS NULL`. The database
+  guarantees at most one caller's update affects a row, so concurrent
+  callers race the SQL — exactly one sees `{1, _}` (the winner) and the
+  rest see `{0, _}` (already notified). No transaction or advisory lock
+  needed.
+
+  Returns:
+
+    * `{:ok, meeting}` — caller WON the race; `meeting.notified_at` is
+      stamped to `now`. The caller must fan out the notification.
+    * `{:already_notified, meeting}` — somebody else already won; the
+      caller must NOT fan out.
+
+  See `Platform.Meetings.MeetingNotifier.handle_info({:meeting_started, _}, _)`
+  for the production wire-in. Closes the `:auto_join` race where two
+  clients hit the auto-join path for the same scheduled meeting within
+  milliseconds and both broadcasts would otherwise pass
+  `Meeting.status_changeset/3`'s `scheduled → live` validation.
+  """
+  @spec mark_notified(Meeting.t()) ::
+          {:ok, Meeting.t()} | {:already_notified, Meeting.t()}
+  def mark_notified(%Meeting{notified_at: nil} = meeting) do
+    now = DateTime.utc_now()
+
+    {count, _} =
+      from(m in Meeting,
+        where: m.id == ^meeting.id and is_nil(m.notified_at),
+        update: [set: [notified_at: ^now]]
+      )
+      |> Repo.update_all([])
+
+    case count do
+      1 -> {:ok, %{meeting | notified_at: now}}
+      0 -> {:already_notified, meeting}
+    end
+  end
+
+  def mark_notified(%Meeting{} = meeting), do: {:already_notified, meeting}
+
+  @doc """
   Transition a meeting from `live` to `ended`, stamping `ended_at`.
 
   Returns `{:error, changeset}` on any illegal transition. On success
