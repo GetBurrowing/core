@@ -1,0 +1,2 @@
+This is the platform files extractor sample.
+hello world from the text fixture.

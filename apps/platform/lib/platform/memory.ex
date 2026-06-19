@@ -108,6 +108,12 @@ defmodule Platform.Memory do
   defp normalize(%_{} = struct), do: struct |> Map.from_struct() |> normalize()
 
   defp normalize(%{} = attrs) do
+    workspace_id = nil_or_string(Map.get(attrs, :workspace_id) || Map.get(attrs, "workspace_id"))
+    project_id = nil_or_string(Map.get(attrs, :project_id) || Map.get(attrs, "project_id"))
+    org_id = nil_or_string(Map.get(attrs, :org_id) || Map.get(attrs, "org_id"))
+
+    maybe_warn_workspace_id_only(workspace_id, project_id, attrs)
+
     %{
       id: to_string(Map.get(attrs, :id) || Map.get(attrs, "id")),
       content: Map.get(attrs, :content) || Map.get(attrs, "content"),
@@ -117,11 +123,31 @@ defmodule Platform.Memory do
         (Map.get(attrs, :memory_type) || Map.get(attrs, "memory_type") || "daily")
         |> to_string(),
       date: normalize_date(Map.get(attrs, :date) || Map.get(attrs, "date")),
-      workspace_id:
-        nil_or_string(Map.get(attrs, :workspace_id) || Map.get(attrs, "workspace_id")),
+      workspace_id: workspace_id,
+      project_id: project_id,
+      org_id: org_id,
       metadata: Map.get(attrs, :metadata) || Map.get(attrs, "metadata") || %{}
     }
   end
+
+  # ADR-0042 soft-deprecation: callers that still pass only the legacy
+  # `:workspace_id` (no `:project_id` accompanying it) get a one-cycle
+  # warning so we can find + fix the holdouts before the next breaking
+  # cut. Skips the warning for the empty `[workspace_id: nil]` shape so
+  # ingest-side callers that pass neither key (most of them today)
+  # don't spam the log.
+  defp maybe_warn_workspace_id_only(workspace_id, project_id, attrs)
+       when is_binary(workspace_id) and workspace_id != "" and is_nil(project_id) do
+    Logger.warning(fn ->
+      id = Map.get(attrs, :id) || Map.get(attrs, "id")
+
+      "Platform.Memory: entry id=#{inspect(id)} carries deprecated :workspace_id " <>
+        "without :project_id (ADR 0042). Update the caller to pass :project_id " <>
+        "(and optionally :org_id) before the next release."
+    end)
+  end
+
+  defp maybe_warn_workspace_id_only(_workspace_id, _project_id, _attrs), do: :ok
 
   defp normalize_date(%Date{} = d), do: Date.to_iso8601(d)
   defp normalize_date(date) when is_binary(date), do: date

@@ -86,6 +86,11 @@ defmodule PlatformWeb.Router do
     get("/artifacts/preview", ArtifactPreviewController, :show)
     get("/api/transcripts/:id/download", TranscriptController, :show)
 
+    # ADR-0042 stage 5: inline preview for FilesLive (images / PDFs / text).
+    # Same `:require_auth` browser pipeline as the /files LV routes — the
+    # controller does the per-file org-membership check.
+    get("/files/blob/:id", FileBlobController, :show)
+
     live_session :authenticated,
       on_mount: [PlatformWeb.ShellLive, {PlatformWeb.LiveAuth, :default}],
       layout: {PlatformWeb.Layouts, :shell} do
@@ -95,6 +100,9 @@ defmodule PlatformWeb.Router do
       live("/inbox", InboxLive, :index)
       live("/tasks", TasksLive, :index)
       live("/tasks/:task_id", TasksLive, :show)
+      # ADR-0042 stage 5: project-scoped document store
+      live("/files", FilesLive, :index)
+      live("/files/:project_id", FilesLive, :show)
       live("/meetings", MeetingLive, :index)
       live("/meetings/:slug", MeetingLive, :show)
       live("/skills", SkillsLive, :index)

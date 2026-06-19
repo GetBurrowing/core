@@ -381,6 +381,17 @@ defmodule PlatformWeb.Components.IconRail do
         fabrikam_only?: false
       },
       %{
+        # ADR-0042 stage 5: project-scoped document store (FilesLive).
+        # Lives next to Skills/Memory in the Working cluster; available
+        # to every authenticated user (not Fabrikam-gated).
+        key: :files,
+        label: "Files",
+        path: "/files",
+        hero_icon: "hero-document-text",
+        cluster: :working,
+        fabrikam_only?: false
+      },
+      %{
         # T7 stage 2 (2026-05-20): renamed surface from "Context + Memory"
         # to "Org Memory" and route from `/org-context` to `/org_memory`.
         # The OrgMemoryLive LiveView owns both the Files and Memory tabs.

@@ -1,0 +1,620 @@
+<div class="flex h-full min-h-0 w-full">
+  <%!-- LEFT: org-grouped project picker (desktop only).
+       Mirrors the Tasks sidebar — Fabrikam first, then tenant orgs in
+       canonical priority order. Hidden on mobile; the mobile sheet
+       trigger lives in the center header below. --%>
+  <aside class="hidden md:flex w-64 shrink-0 flex-col border-r border-base-300 bg-base-100">
+    <div class="flex items-center justify-between border-b border-base-300 px-3 py-3">
+      <h2 class="text-sm font-semibold uppercase tracking-widest text-base-content/60">
+        Files
+      </h2>
+      <button
+        :if={@selected_project_id}
+        phx-click="clear_selection"
+        class="btn btn-ghost btn-xs"
+        title="Clear project filter"
+        aria-label="Clear project filter"
+      >
+        <span class="hero-x-mark size-4"></span>
+      </button>
+    </div>
+
+    <div class="flex-1 overflow-y-auto" data-role="files-project-picker">
+      <details
+        :for={{org_slug, _org_name, org_projects} <- @projects_by_org}
+        open
+        class="group"
+        data-role="files-project-group"
+        data-org-slug={org_slug}
+      >
+        <summary class="flex items-center gap-2 px-3 py-2 text-xs font-semibold uppercase tracking-widest text-base-content/60 hover:bg-base-200 cursor-pointer select-none">
+          <span class={"size-2 rounded-full bg-current #{Tenancy.scope_color(org_slug)}"}></span>
+          <span>{Tenancy.scope_label(org_slug)}</span>
+          <span class="ml-auto text-[10px] tracking-normal text-base-content/40">
+            {length(org_projects)}
+          </span>
+        </summary>
+        <button
+          :for={project <- org_projects}
+          phx-click="select_project"
+          phx-value-id={project.id}
+          class={"w-full text-left px-5 py-2 text-sm hover:bg-base-200 #{if @selected_project_id == project.id, do: "bg-base-200 font-medium"}"}
+          data-role="files-project-button"
+          data-project-id={project.id}
+        >
+          {project.name}
+        </button>
+      </details>
+
+      <div
+        :if={@projects_by_org == []}
+        class="px-3 py-6 text-center text-sm text-base-content/50"
+      >
+        No projects yet. Create one from the Tasks surface to start uploading files here.
+      </div>
+    </div>
+  </aside>
+
+  <%!-- CENTER: file list + drag-drop. --%>
+  <div class="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+    <%!-- Header --%>
+    <div class="flex flex-wrap items-center justify-between gap-3 border-b border-base-300 px-4 py-3">
+      <div class="flex items-center gap-3">
+        <h1 class="text-sm font-semibold uppercase tracking-widest text-base-content/60">
+          Files
+        </h1>
+        <span :if={@selected_project} class="badge badge-ghost badge-sm">
+          {length(@files)}
+        </span>
+        <%!-- Breadcrumb: org · project --%>
+        <div
+          :if={@selected_project}
+          class="flex items-center gap-1 text-xs text-base-content/60"
+          data-role="files-breadcrumb"
+        >
+          <span class={"font-medium #{org_color_for(@selected_project)}"}>
+            {org_label_for(@selected_project)}
+          </span>
+          <span :if={@selected_project.org} class="text-base-content/40">/</span>
+          <span>{@selected_project.name}</span>
+        </div>
+      </div>
+
+      <div :if={@selected_project} class="flex flex-wrap items-center gap-2">
+        <input
+          type="text"
+          name="filter"
+          value={@filter}
+          phx-keyup="filter"
+          phx-debounce="150"
+          placeholder="Filter files…"
+          class="input input-bordered input-sm w-44"
+          data-role="files-filter-input"
+        />
+        <form phx-change="sort" class="flex items-center gap-1">
+          <label for="files-sort" class="sr-only">Sort by</label>
+          <select
+            id="files-sort"
+            name="sort"
+            class="select select-bordered select-sm"
+            data-role="files-sort-select"
+          >
+            <option value="date_desc" selected={@sort == "date_desc"}>Newest first</option>
+            <option value="date_asc" selected={@sort == "date_asc"}>Oldest first</option>
+            <option value="name_asc" selected={@sort == "name_asc"}>Name A→Z</option>
+            <option value="name_desc" selected={@sort == "name_desc"}>Name Z→A</option>
+            <option value="size_desc" selected={@sort == "size_desc"}>Largest first</option>
+            <option value="size_asc" selected={@sort == "size_asc"}>Smallest first</option>
+            <option value="type_asc" selected={@sort == "type_asc"}>Type</option>
+          </select>
+        </form>
+      </div>
+    </div>
+
+    <%!-- Semantic search row --%>
+    <div
+      :if={@selected_project}
+      class="border-b border-base-300 px-4 py-3 bg-base-200/50"
+    >
+      <form
+        phx-submit="semantic_search"
+        class="flex items-center gap-2"
+        data-role="files-semantic-search-form"
+      >
+        <label for="files-semantic-input" class="sr-only">Semantic search</label>
+        <span class="hero-magnifying-glass size-4 text-base-content/60"></span>
+        <input
+          id="files-semantic-input"
+          type="text"
+          name="query"
+          value={@semantic_query}
+          placeholder="Semantic search across this project's documents…"
+          class="input input-bordered input-sm flex-1"
+          data-role="files-semantic-search-input"
+        />
+        <button type="submit" class="btn btn-primary btn-sm">Search</button>
+        <button
+          :if={@semantic_query != ""}
+          type="button"
+          phx-click="clear_semantic"
+          class="btn btn-ghost btn-sm"
+        >
+          Clear
+        </button>
+      </form>
+
+      <div
+        :if={@semantic_search_state == :empty}
+        class="mt-2 text-xs text-base-content/60"
+        data-role="files-semantic-empty"
+      >
+        No semantic hits for "{@semantic_query}" in this project.
+      </div>
+
+      <ul
+        :if={@semantic_results != []}
+        class="mt-3 flex flex-col gap-2"
+        data-role="files-semantic-results"
+      >
+        <li
+          :for={result <- @semantic_results}
+          class="rounded-lg border border-base-300 bg-base-100 p-3"
+        >
+          <button
+            type="button"
+            phx-click="select_semantic_hit"
+            phx-value-id={result_file_id(result)}
+            class="flex w-full flex-col text-left hover:opacity-80"
+            data-role="files-semantic-hit"
+          >
+            <div class="flex items-center justify-between gap-2 text-xs text-base-content/60">
+              <span class="font-medium text-base-content">
+                {result_label(result)}
+              </span>
+              <span class="badge badge-ghost badge-sm">
+                score {format_score(result_score(result))}
+              </span>
+            </div>
+            <p class="mt-1 text-sm text-base-content/80 line-clamp-3">
+              {result_snippet(result)}
+            </p>
+          </button>
+        </li>
+      </ul>
+    </div>
+
+    <%!-- Drag-drop dropzone + file list --%>
+    <div
+      class="flex-1 overflow-y-auto"
+      phx-drop-target={@uploads.files.ref}
+      data-role="file-dropzone"
+    >
+      <%!-- Empty / placeholder states --%>
+      <div
+        :if={!@selected_project_id}
+        class="flex h-full min-h-[40vh] flex-col items-center justify-center px-6 text-center"
+      >
+        <span class="hero-document-text size-12 text-base-content/30"></span>
+        <h2 class="mt-4 text-lg font-semibold text-base-content">Pick a project</h2>
+        <p class="mt-2 max-w-md text-sm text-base-content/60">
+          Files are scoped per project (ADR 0042). Choose one from the sidebar
+          to view its documents or upload new ones.
+        </p>
+      </div>
+
+      <div
+        :if={@selected_project && @files == []}
+        class="flex h-full min-h-[40vh] flex-col items-center justify-center px-6 text-center"
+        data-role="files-empty-state"
+      >
+        <span class="hero-cloud-arrow-up size-12 text-base-content/30"></span>
+        <h2 class="mt-4 text-lg font-semibold text-base-content">No files yet</h2>
+        <p class="mt-2 max-w-md text-sm text-base-content/60">
+          Drag and drop files here, or use the upload button to add the first one.
+        </p>
+        <form
+          id="files-upload-form"
+          phx-change="validate_upload"
+          phx-submit="validate_upload"
+          class="mt-4"
+        >
+          <.live_file_input
+            upload={@uploads.files}
+            class="file-input file-input-bordered file-input-sm"
+          />
+        </form>
+      </div>
+
+      <%!-- File table --%>
+      <table
+        :if={@selected_project && @files != []}
+        class="table table-zebra w-full text-sm"
+        data-role="files-table"
+      >
+        <thead>
+          <tr>
+            <th class="text-left">Name</th>
+            <th class="text-left">Type</th>
+            <th class="text-right">Size</th>
+            <th class="text-left">Status</th>
+            <th class="text-left">Uploaded</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr
+            :for={file <- filtered_and_sorted(@files, @filter, @sort)}
+            phx-click="select_file"
+            phx-value-id={file.id}
+            class={"cursor-pointer hover:bg-base-200 #{if @selected_file && @selected_file.id == file.id, do: "bg-base-200"}"}
+            data-role="files-row"
+            data-file-id={file.id}
+            data-ingest-status={file.ingest_status}
+          >
+            <td class="font-medium">{file.name || file.original_filename}</td>
+            <td class="text-xs text-base-content/60">{file.content_type}</td>
+            <td class="text-right tabular-nums">{humanize_bytes(file.byte_size)}</td>
+            <td>
+              <span
+                class={status_badge_class(file.ingest_status)}
+                data-role="files-status-badge"
+              >
+                {status_label(file.ingest_status)}
+              </span>
+            </td>
+            <td class="text-xs text-base-content/60">
+              {Calendar.strftime(file.inserted_at, "%Y-%m-%d %H:%M")}
+            </td>
+          </tr>
+        </tbody>
+      </table>
+
+      <%!-- Active uploads (visible while files are flying up) --%>
+      <div
+        :if={@uploads.files.entries != []}
+        class="border-t border-base-300 bg-base-200/40 px-4 py-3"
+        data-role="files-upload-progress"
+      >
+        <h3 class="text-xs font-semibold uppercase tracking-widest text-base-content/60">
+          Uploading
+        </h3>
+        <ul class="mt-2 flex flex-col gap-1">
+          <li
+            :for={entry <- @uploads.files.entries}
+            class="flex items-center justify-between gap-3 text-sm"
+          >
+            <span class="truncate">{entry.client_name}</span>
+            <span class="text-xs text-base-content/60">{entry.progress}%</span>
+            <button
+              type="button"
+              phx-click="cancel_upload"
+              phx-value-ref={entry.ref}
+              class="btn btn-ghost btn-xs"
+              aria-label="Cancel upload"
+            >
+              <span class="hero-x-mark size-3"></span>
+            </button>
+          </li>
+        </ul>
+      </div>
+    </div>
+  </div>
+
+  <%!-- RIGHT: file detail (desktop) / full-screen drawer (mobile). --%>
+  <aside
+    :if={@selected_file}
+    class="hidden lg:flex w-96 shrink-0 flex-col border-l border-base-300 bg-base-100"
+    data-role="files-detail-panel"
+  >
+    <div class="flex items-center justify-between border-b border-base-300 px-4 py-3">
+      <h2 class="truncate text-sm font-semibold text-base-content">
+        {@selected_file.name || @selected_file.original_filename}
+      </h2>
+      <button
+        phx-click="close_detail"
+        class="btn btn-ghost btn-xs btn-square"
+        aria-label="Close file detail"
+      >
+        <span class="hero-x-mark size-4"></span>
+      </button>
+    </div>
+
+    <div class="flex-1 overflow-y-auto p-4">
+      <%!-- Always-available actions: download original + copy a
+           shareable URL. These sit ABOVE the metadata dl so the
+           primary verbs are reachable without scrolling past the
+           preview, even on a short viewport. --%>
+      <div class="mb-3 flex items-center gap-2" data-role="files-detail-actions">
+        <a
+          href={file_download_url(@selected_file)}
+          class="btn btn-primary btn-sm"
+          data-role="files-detail-download"
+          download={@selected_file.original_filename || @selected_file.name || "file"}
+        >
+          <span class="hero-arrow-down-tray size-4"></span> Download
+        </a>
+        <button
+          type="button"
+          id={"files-detail-copy-link-" <> @selected_file.id}
+          phx-hook="CopyToClipboard"
+          data-clipboard-text={file_attachment_url(@selected_file)}
+          class="btn btn-ghost btn-sm"
+          data-role="files-detail-copy-link"
+        >
+          <span class="hero-link size-4"></span> Copy link
+        </button>
+      </div>
+
+      <dl class="grid grid-cols-3 gap-2 text-xs text-base-content/60">
+        <dt>Type</dt>
+        <dd class="col-span-2 text-base-content">{@selected_file.content_type}</dd>
+        <dt>Size</dt>
+        <dd class="col-span-2 text-base-content">{humanize_bytes(@selected_file.byte_size)}</dd>
+        <dt>Status</dt>
+        <dd class="col-span-2">
+          <span class={status_badge_class(@selected_file.ingest_status)}>
+            {status_label(@selected_file.ingest_status)}
+          </span>
+        </dd>
+        <dt>Uploaded</dt>
+        <dd class="col-span-2 text-base-content">
+          {Calendar.strftime(@selected_file.inserted_at, "%Y-%m-%d %H:%M:%S UTC")}
+        </dd>
+      </dl>
+
+      <div class="mt-4" data-role="files-detail-preview">
+        <%= case preview_mode(@selected_file) do %>
+          <% :image -> %>
+            <img
+              src={file_attachment_url(@selected_file)}
+              alt={@selected_file.original_filename}
+              class="mx-auto max-h-[80vh] max-w-full rounded border border-base-300 object-contain"
+              data-role="files-detail-image"
+            />
+          <% :pdf -> %>
+            <iframe
+              src={file_attachment_url(@selected_file)}
+              class="h-[80vh] w-full rounded border-0"
+              title={"Preview of " <> (@selected_file.original_filename || "file")}
+              data-role="files-detail-pdf"
+            >
+            </iframe>
+          <% :markdown -> %>
+            <div
+              :if={@selected_file_text}
+              class="prose prose-sm max-w-none rounded border border-base-300 bg-base-100 p-3"
+              data-role="files-detail-markdown"
+            >
+              {render_markdown_text(@selected_file_text)}
+            </div>
+            <p
+              :if={!@selected_file_text}
+              class="text-sm text-base-content/60"
+              data-role="files-detail-no-text"
+            >
+              No extracted text yet. The file may still be ingesting.
+            </p>
+          <% :text -> %>
+            <pre
+              :if={@selected_file_text}
+              class="whitespace-pre-wrap break-words rounded border border-base-300 bg-base-200 p-3 text-xs"
+              data-role="files-detail-text"
+            >{@selected_file_text}</pre>
+            <p
+              :if={!@selected_file_text}
+              class="text-sm text-base-content/60"
+              data-role="files-detail-no-text"
+            >
+              No extracted text yet. The file may still be ingesting.
+            </p>
+          <% :document -> %>
+            <div
+              :if={@selected_file_text}
+              class="prose prose-sm max-w-none whitespace-pre-wrap break-words rounded border border-base-300 bg-base-100 p-3"
+              data-role="files-detail-document"
+            >
+              {@selected_file_text}
+            </div>
+            <p
+              :if={!@selected_file_text}
+              class="text-sm text-base-content/60"
+              data-role="files-detail-no-text"
+            >
+              No extracted text yet. The file may still be ingesting, or the
+              format isn't text-bearing.
+            </p>
+          <% :unknown -> %>
+            <div
+              class="rounded border border-base-300 bg-base-200 p-4 text-sm text-base-content/70"
+              data-role="files-detail-unknown"
+            >
+              <p>Cannot preview this file type ({@selected_file.content_type}) in the browser.</p>
+              <p class="mt-2">
+                <a
+                  href={file_download_url(@selected_file)}
+                  class="link link-primary"
+                  download={@selected_file.original_filename || @selected_file.name || "file"}
+                >
+                  Download the file
+                </a>
+                to open it in a native application.
+              </p>
+            </div>
+        <% end %>
+      </div>
+    </div>
+  </aside>
+
+  <%!-- Mobile detail drawer — full-screen overlay --%>
+  <div
+    :if={@selected_file}
+    class="fixed inset-0 z-40 bg-base-100 lg:hidden flex flex-col"
+    data-role="files-detail-mobile"
+  >
+    <div class="flex items-center justify-between border-b border-base-300 px-4 py-3">
+      <h2 class="truncate text-base font-semibold text-base-content">
+        {@selected_file.name || @selected_file.original_filename}
+      </h2>
+      <button
+        phx-click="close_detail"
+        class="btn btn-ghost btn-sm btn-square"
+        aria-label="Close file detail"
+      >
+        <span class="hero-x-mark size-5"></span>
+      </button>
+    </div>
+    <div class="flex-1 overflow-y-auto p-4">
+      <div class="mb-3 flex items-center gap-2">
+        <a
+          href={file_download_url(@selected_file)}
+          class="btn btn-primary btn-sm"
+          download={@selected_file.original_filename || @selected_file.name || "file"}
+        >
+          <span class="hero-arrow-down-tray size-4"></span> Download
+        </a>
+        <button
+          type="button"
+          id={"files-detail-copy-link-mobile-" <> @selected_file.id}
+          phx-hook="CopyToClipboard"
+          data-clipboard-text={file_attachment_url(@selected_file)}
+          class="btn btn-ghost btn-sm"
+        >
+          <span class="hero-link size-4"></span> Copy link
+        </button>
+      </div>
+
+      <%= case preview_mode(@selected_file) do %>
+        <% :image -> %>
+          <img
+            src={file_attachment_url(@selected_file)}
+            alt={@selected_file.original_filename}
+            class="mx-auto max-h-[80vh] max-w-full rounded border border-base-300 object-contain"
+          />
+        <% :pdf -> %>
+          <iframe
+            src={file_attachment_url(@selected_file)}
+            class="h-[80vh] w-full rounded border-0"
+            title={"Preview of " <> (@selected_file.original_filename || "file")}
+          >
+          </iframe>
+        <% :markdown -> %>
+          <div
+            :if={@selected_file_text}
+            class="prose prose-sm max-w-none rounded border border-base-300 bg-base-100 p-3"
+          >
+            {render_markdown_text(@selected_file_text)}
+          </div>
+          <p :if={!@selected_file_text} class="text-sm text-base-content/60">
+            No extracted text yet.
+          </p>
+        <% :text -> %>
+          <pre
+            :if={@selected_file_text}
+            class="whitespace-pre-wrap break-words rounded border border-base-300 bg-base-200 p-3 text-xs"
+          >{@selected_file_text}</pre>
+          <p :if={!@selected_file_text} class="text-sm text-base-content/60">
+            No extracted text yet.
+          </p>
+        <% :document -> %>
+          <div
+            :if={@selected_file_text}
+            class="prose prose-sm max-w-none whitespace-pre-wrap break-words rounded border border-base-300 bg-base-100 p-3"
+          >
+            {@selected_file_text}
+          </div>
+          <p :if={!@selected_file_text} class="text-sm text-base-content/60">
+            No extracted text yet.
+          </p>
+        <% :unknown -> %>
+          <div class="rounded border border-base-300 bg-base-200 p-4 text-sm text-base-content/70">
+            <p>Cannot preview this file type ({@selected_file.content_type}) in the browser.</p>
+            <p class="mt-2">
+              <a
+                href={file_download_url(@selected_file)}
+                class="link link-primary"
+                download={@selected_file.original_filename || @selected_file.name || "file"}
+              >
+                Download the file
+              </a>
+              to open it in a native application.
+            </p>
+          </div>
+      <% end %>
+    </div>
+  </div>
+
+  <%!-- Mobile FAB: open upload sheet.
+       Position mirrors the canonical Tasks "+" button so the FAB always
+       clears the safe-area inset + the bottom-nav height on every
+       device. data-role="file-upload-fab" keeps e2e selectors unique
+       from task-create-fab / epic-create-fab / project-create-fab. --%>
+  <button
+    phx-click="toggle_upload_sheet"
+    class="btn btn-primary btn-circle fixed bottom-[calc(env(safe-area-inset-bottom)+1.5rem+var(--bottom-nav-height,0px))] right-6 z-30 shadow-lg md:hidden"
+    aria-label="Upload file"
+    data-role="file-upload-fab"
+  >
+    <span class="hero-plus size-6"></span>
+  </button>
+
+  <%!-- Mobile bottom sheet: file picker + drag-drop. --%>
+  <div
+    :if={@show_upload_sheet}
+    class="fixed inset-0 z-40 flex items-end justify-center bg-black/40 md:hidden"
+    phx-click="close_upload_sheet"
+    data-role="files-upload-sheet-backdrop"
+  >
+    <div
+      class="w-full max-w-lg rounded-t-2xl bg-base-100 pb-[env(safe-area-inset-bottom)] max-h-[75vh] overflow-y-auto shadow-2xl"
+      phx-click-away="close_upload_sheet"
+      data-role="files-upload-sheet"
+    >
+      <div class="flex items-center justify-between border-b border-base-300 px-4 py-3">
+        <h2 class="text-sm font-semibold uppercase tracking-widest text-base-content/60">
+          Upload to {(@selected_project && @selected_project.name) || "—"}
+        </h2>
+        <button
+          phx-click="close_upload_sheet"
+          class="btn btn-ghost btn-xs btn-square"
+          aria-label="Close upload sheet"
+        >
+          <span class="hero-x-mark size-4"></span>
+        </button>
+      </div>
+
+      <div class="px-4 py-4">
+        <p
+          :if={!@selected_project_id}
+          class="rounded border border-warning/40 bg-warning/10 p-3 text-xs text-warning-content"
+        >
+          Pick a project from the sidebar (or rotate to a larger screen) before uploading.
+        </p>
+
+        <form
+          :if={@selected_project_id}
+          id="files-upload-sheet-form"
+          phx-change="validate_upload"
+          phx-submit="validate_upload"
+          class="flex flex-col gap-3"
+        >
+          <div
+            class="rounded-lg border-2 border-dashed border-base-300 bg-base-200 p-6 text-center"
+            phx-drop-target={@uploads.files.ref}
+            data-role="file-dropzone-sheet"
+          >
+            <span class="hero-cloud-arrow-up size-8 text-base-content/40"></span>
+            <p class="mt-2 text-sm text-base-content/70">
+              Drag files here, or pick from your device:
+            </p>
+            <.live_file_input
+              upload={@uploads.files}
+              class="file-input file-input-bordered file-input-sm mt-3 w-full"
+            />
+            <p class="mt-2 text-[10px] text-base-content/40">
+              Up to 50&nbsp;MB per file, {@uploads.files.max_entries} files per batch.
+            </p>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>

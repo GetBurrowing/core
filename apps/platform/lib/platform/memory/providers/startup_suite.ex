@@ -51,7 +51,10 @@ defmodule Platform.Memory.Providers.StartupSuite do
 
         emit(:searched, %{count: length(hits)}, %{
           query_bytes: byte_size(query),
-          workspace_id: Keyword.get(opts, :workspace_id)
+          workspace_id: Keyword.get(opts, :workspace_id),
+          project_id: Keyword.get(opts, :project_id),
+          org_id: Keyword.get(opts, :org_id),
+          memory_type: Keyword.get(opts, :memory_type)
         })
 
         {:ok, hits}
@@ -128,6 +131,8 @@ defmodule Platform.Memory.Providers.StartupSuite do
   defp build_search_body(query, opts) do
     %{query: query}
     |> maybe_put_opt(:workspace_id, Keyword.get(opts, :workspace_id))
+    |> maybe_put_opt(:project_id, Keyword.get(opts, :project_id))
+    |> maybe_put_opt(:org_id, Keyword.get(opts, :org_id))
     |> maybe_put_opt(:memory_type, Keyword.get(opts, :memory_type))
     |> maybe_put_opt(:date_from, normalize_date(Keyword.get(opts, :date_from)))
     |> maybe_put_opt(:date_to, normalize_date(Keyword.get(opts, :date_to)))

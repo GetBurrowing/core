@@ -55,21 +55,27 @@ defmodule PlatformWeb.Components.IconRailTest do
   end
 
   describe "destinations/1" do
-    test "returns 7 destinations for a non-Fabrikam user (Admin + Prompts filtered out)" do
+    test "returns 8 destinations for a non-Fabrikam user (Admin + Prompts filtered out)" do
+      # Count bumped from 7 → 8 when ADR-0042 stage 5 added the Files
+      # destination (working cluster, fabrikam_only?: false). Any future
+      # destination addition should bump the matching guard below.
       list = destinations(is_fabrikam_user: false)
-      assert length(list) == 7
+      assert length(list) == 8
       refute Enum.any?(list, &(&1.key == :admin))
       # Prompts is also fabrikam_only?: true as of 2026-05-20 (admin-only access
       # at the route level; previously rendered for members but redirected
       # on click — bug fixed by filtering fabrikam_only? in all clusters).
       refute Enum.any?(list, &(&1.key == :prompts))
+      # Files (ADR-0042 stage 5) is visible to every authenticated user.
+      assert Enum.any?(list, &(&1.key == :files))
     end
 
-    test "returns all 9 destinations for a Fabrikam user (Admin + Prompts included)" do
+    test "returns all 10 destinations for a Fabrikam user (Admin + Prompts included)" do
       list = destinations(is_fabrikam_user: true)
-      assert length(list) == 9
+      assert length(list) == 10
       assert Enum.any?(list, &(&1.key == :admin))
       assert Enum.any?(list, &(&1.key == :prompts))
+      assert Enum.any?(list, &(&1.key == :files))
     end
 
     test "every entry has the required keys" do
@@ -161,14 +167,16 @@ defmodule PlatformWeb.Components.IconRailTest do
       assert html =~ "w-56"
     end
 
-    test "renders 10 destination tiles for a Fabrikam user (Chat..Meetings + Admin)" do
+    test "renders 10 destination tiles for a Fabrikam user (Chat..Meetings + Files + Admin)" do
+      # Tile count bumped from 9 → 10 when ADR-0042 stage 5 added Files.
       html = render_icon_rail(%{is_fabrikam_user: true})
-      assert count_data_destination_matches(html) == 9
+      assert count_data_destination_matches(html) == 10
     end
 
-    test "renders 7 destination tiles for a non-Fabrikam user (no Admin, no Prompts)" do
+    test "renders 8 destination tiles for a non-Fabrikam user (no Admin, no Prompts)" do
+      # 7 → 8 when Files (visible to all authenticated users) shipped.
       html = render_icon_rail(%{is_fabrikam_user: false})
-      assert count_data_destination_matches(html) == 7
+      assert count_data_destination_matches(html) == 8
     end
 
     test "Admin slot uses mt-auto so it pins to the bottom of the rail" do

@@ -293,7 +293,24 @@ defmodule Platform.Org.Wiki.ContextT4E2ETest do
       # Tenant General routing fix (task 019edd8e): partial unique
       # index on chat_spaces(org_id, slug) so /chat/general resolves
       # per-tenant, not the oldest cross-tenant match.
-      "20260618220754_add_chat_spaces_org_slug_unique_index.exs"
+      "20260618220754_add_chat_spaces_org_slug_unique_index.exs",
+      # ADR 0042 — centralized document/file store (Stage 1).
+      "20260619025255_create_platform_files.exs",
+      # ADR 0042 — Stage 3: ingest status + chunk back-refs.
+      # (Renamed from 20260618224933 → 20260619030000 in Stage 4 to land
+      # after Stage 1's create_platform_files migration; fresh-DB rebuilds
+      # were failing because the original timestamp ran before the table
+      # existed.)
+      "20260619030000_add_ingest_status_and_chunks_to_platform_files.exs",
+      # ADR 0042 — Stage 4: cached extracted text for file_get_text MCP tool.
+      "20260619040000_create_platform_file_texts.exs",
+      # ADR 0042 — Stage 6: deliberate no-op tombstone. The original v3
+      # plan called for a chat_attachments → platform_files backfill,
+      # but Rowan rejected the project_id derivation as unsound for
+      # org-level chat spaces. Promotion to Files is a future
+      # user-driven surface; this migration exists so the plan engine
+      # can advance past Stage 6 cleanly.
+      "20260619050000_skip_backfill_chat_attachments_to_files.exs"
     ]
 
     defp t4_root, do: Mix.Project.project_file() |> Path.dirname()

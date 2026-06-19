@@ -533,7 +533,8 @@ defmodule Platform.Agents.SystemEventSchedulerT6E2ETest do
     # memory_search) lands the merged tree at 69. The historian_* refutes
     # below still enforce the actual T6 invariant (no T6-added tools).
     # bumped by ADR 0042 (+org_list_descendants → 70)
-    @t6_baseline_tool_count 70
+    # bumped by ADR 0042 Stage 4 (+file_list, +file_get_text → 72)
+    @t6_baseline_tool_count 72
 
     defp t6_root, do: Mix.Project.project_file() |> Path.dirname()
 

@@ -1,0 +1,98 @@
+defmodule Platform.Files.File do
+  @moduledoc """
+  Ecto schema for the `platform_files` table — the project-scoped document
+  store introduced for ADR 0042.
+
+  Mirrors the convention used by `Platform.Tasks.Task` (UUIDv7 PK,
+  binary_id FKs, validations in the changeset). The companion context
+  module is `Platform.Files`; the storage wrapper is
+  `Platform.Files.Storage`.
+
+  ## Required fields
+
+    * `:project_id` — every file lives under a project (ADR 0042).
+    * `:content_type`, `:byte_size`, `:storage_key`, `:content_hash` —
+      populated by `Platform.Files.Storage` after the bytes land in the
+      backing object store.
+
+  ## Optional fields
+
+    * `:org_id` — only set for files that span multiple projects within a
+      tenant. Default nil for the common per-project case.
+    * `:name` — display label (defaults to `original_filename` when the
+      caller doesn't supply one).
+    * `:uploaded_by_user_id` — historical only; nilifies on user delete.
+  """
+
+  use Ecto.Schema
+  import Ecto.Changeset
+
+  @primary_key {:id, Platform.Types.UUIDv7, autogenerate: true}
+  @foreign_key_type :binary_id
+
+  @type t :: %__MODULE__{}
+
+  @valid_ingest_statuses ~w(pending ingested failed)
+
+  schema "platform_files" do
+    belongs_to(:project, Platform.Tasks.Project)
+    belongs_to(:org, Platform.Tenancy.Org)
+    belongs_to(:uploaded_by_user, Platform.Accounts.User, foreign_key: :uploaded_by_user_id)
+    has_many(:chunks, Platform.Files.Chunk, foreign_key: :file_id)
+
+    field(:name, :string)
+    field(:original_filename, :string)
+    field(:content_type, :string)
+    field(:byte_size, :integer)
+    field(:storage_key, :string)
+    field(:content_hash, :string)
+    field(:ingest_status, :string, default: "pending")
+
+    timestamps(type: :utc_datetime_usec)
+  end
+
+  @cast_fields ~w(
+    project_id
+    org_id
+    uploaded_by_user_id
+    name
+    original_filename
+    content_type
+    byte_size
+    storage_key
+    content_hash
+    ingest_status
+  )a
+
+  @required_fields ~w(project_id content_type byte_size storage_key content_hash)a
+
+  @doc "Valid `ingest_status` values, kept in sync with the DB check constraint."
+  @spec valid_ingest_statuses() :: [String.t()]
+  def valid_ingest_statuses, do: @valid_ingest_statuses
+
+  @doc """
+  Changeset for inserting or updating a `Platform.Files.File`.
+
+  Required fields: `:project_id`, `:content_type`, `:byte_size`,
+  `:storage_key`, `:content_hash`. Foreign-key constraints surface as
+  friendly errors when project, org, or user references are missing.
+  Content-hash uniqueness is scoped per project — the same bytes uploaded
+  twice in the same project collide; the same bytes in two different
+  projects each get their own row.
+  """
+  def changeset(file, attrs) do
+    file
+    |> cast(attrs, @cast_fields)
+    |> validate_required(@required_fields)
+    |> validate_number(:byte_size, greater_than_or_equal_to: 0)
+    |> validate_inclusion(:ingest_status, @valid_ingest_statuses)
+    |> foreign_key_constraint(:project_id)
+    |> foreign_key_constraint(:org_id)
+    |> foreign_key_constraint(:uploaded_by_user_id)
+    |> unique_constraint([:content_hash, :project_id],
+      name: :platform_files_content_hash_project_id_index,
+      message: "already exists in this project"
+    )
+    |> unique_constraint(:storage_key, message: "must be unique")
+  end
+end

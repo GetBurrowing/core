@@ -75,7 +75,8 @@ defmodule Platform.Org.Wiki.Search do
           agent: Agent.t() | nil,
           workspace_id: String.t() | nil,
           org_id: String.t() | nil,
-          project_id: String.t() | nil
+          project_id: String.t() | nil,
+          memory_type: String.t() | nil
         ]
 
   # Internal channel-hit shape. Stays inside this module — the public
@@ -115,6 +116,9 @@ defmodule Platform.Org.Wiki.Search do
       to a single org). Ignored for the `:message` corpus.
     * `:project_id` — ADR-0042 project filter (scopes page/journal
       lookups to a single project). Ignored for the `:message` corpus.
+    * `:memory_type` — restrict the semantic channel to a single tag
+      (e.g. `"document"`, `"page"`, `"journal"`, `"daily"`). Ignored
+      by the lexical channels (they already partition by corpus).
   """
   @spec search(String.t(), search_opts()) ::
           {:ok, %{results: [hit()], fusion_constant_k: 60, truncated: boolean()}}
@@ -195,7 +199,13 @@ defmodule Platform.Org.Wiki.Search do
   defp run_channel(:semantic, query, opts, cap, corpora) do
     if Memory.enabled?() do
       semantic_opts =
-        [workspace_id: opts.workspace_id, limit: cap]
+        [
+          workspace_id: opts.workspace_id,
+          project_id: opts.project_id,
+          org_id: opts.org_id,
+          memory_type: opts.memory_type,
+          limit: cap
+        ]
         |> Enum.reject(fn {_, v} -> is_nil(v) end)
 
       case Memory.search(query, semantic_opts) do
@@ -786,7 +796,8 @@ defmodule Platform.Org.Wiki.Search do
       agent: Keyword.get(opts, :agent),
       workspace_id: Keyword.get(opts, :workspace_id),
       org_id: Keyword.get(opts, :org_id),
-      project_id: Keyword.get(opts, :project_id)
+      project_id: Keyword.get(opts, :project_id),
+      memory_type: Keyword.get(opts, :memory_type)
     }
   end
 

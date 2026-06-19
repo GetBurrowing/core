@@ -1,6 +1,8 @@
 defmodule Platform.MemoryTest do
   use ExUnit.Case, async: false
 
+  import ExUnit.CaptureLog
+
   alias Platform.Memory
   alias Platform.Memory.Providers.Noop
 
@@ -126,6 +128,97 @@ defmodule Platform.MemoryTest do
                          %{id: "p", memory_type: "page"},
                          %{id: "j", memory_type: "journal"}
                        ]}
+    end
+
+    test "forwards project_id and org_id from the entry into the provider payload" do
+      {:ok, 1} =
+        Memory.ingest([
+          %{
+            id: "f1",
+            content: "doc",
+            memory_type: "document",
+            date: "2026-06-18",
+            project_id: "proj-123",
+            org_id: "org-456"
+          }
+        ])
+
+      assert_received {:captured,
+                       [
+                         %{
+                           id: "f1",
+                           project_id: "proj-123",
+                           org_id: "org-456",
+                           memory_type: "document"
+                         }
+                       ]}
+    end
+  end
+
+  describe "ADR-0042 soft-deprecation of :workspace_id" do
+    defmodule QuietProvider do
+      @behaviour Platform.Memory.Provider
+      @impl true
+      def ingest(_entries, _config), do: {:ok, 1}
+      @impl true
+      def search(_q, _o, _c), do: {:ok, []}
+      @impl true
+      def delete(_ids, _c), do: {:ok, 0}
+      @impl true
+      def health(_c), do: :ok
+    end
+
+    setup do
+      Application.put_env(:platform, :memory_service, provider: QuietProvider)
+      :ok
+    end
+
+    test "warns when an entry carries workspace_id without project_id" do
+      log =
+        capture_log(fn ->
+          {:ok, 1} =
+            Memory.ingest([
+              %{
+                id: "legacy-1",
+                content: "body",
+                date: "2026-06-18",
+                workspace_id: "ws-abc"
+              }
+            ])
+        end)
+
+      assert log =~ "deprecated :workspace_id"
+      assert log =~ "legacy-1"
+    end
+
+    test "does NOT warn when project_id accompanies workspace_id" do
+      log =
+        capture_log(fn ->
+          {:ok, 1} =
+            Memory.ingest([
+              %{
+                id: "modern-1",
+                content: "body",
+                date: "2026-06-18",
+                workspace_id: "ws-abc",
+                project_id: "proj-xyz"
+              }
+            ])
+        end)
+
+      refute log =~ "deprecated :workspace_id"
+    end
+
+    test "does NOT warn when no scoping key is provided at all" do
+      log =
+        capture_log(fn ->
+          {:ok, 1} =
+            Memory.ingest([
+              %{id: "rootless", content: "body", date: "2026-06-18"}
+            ])
+        end)
+
+      refute log =~ "deprecated :workspace_id"
     end
   end
 end

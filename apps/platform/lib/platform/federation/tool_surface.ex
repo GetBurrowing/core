@@ -21,7 +21,7 @@ defmodule Platform.Federation.ToolSurface do
 
   import Ecto.Query, only: [from: 2]
 
-  @bundles ~w(canvas messaging task plan review space context_read federation memory skill attachment)
+  @bundles ~w(canvas messaging task plan review space context_read federation memory skill attachment files)
 
   # Per-message content cap (graphemes) for space_get_messages /
   # space_search_messages. Anything longer is sliced and flagged via the
@@ -62,6 +62,7 @@ defmodule Platform.Federation.ToolSurface do
   defp tools_for_bundle("memory"), do: tag(memory_tools(), "memory")
   defp tools_for_bundle("skill"), do: tag(skill_tools(), "skill")
   defp tools_for_bundle("attachment"), do: tag(attachment_tools(), "attachment")
+  defp tools_for_bundle("files"), do: tag(files_tools(), "files")
   defp tools_for_bundle(_), do: []
 
   defp tag(tools, bundle), do: Enum.map(tools, &Map.put(&1, :bundle, bundle))
@@ -160,6 +161,76 @@ defmodule Platform.Federation.ToolSurface do
           "Capped at :upload_max_bytes (default 500 MB). The reservation TTL is :pending_ttl_seconds (default 15 min); expired pending rows are reaped.",
         when_to_use:
           "Files over the inline cap, or any case where streaming bytes directly is preferable to base64-in-JSON."
+      }
+    ]
+  end
+
+  # ── Files (ADR 0042) ────────────────────────────────────────────────────
+  # Surfaces the project-scoped document store. Authorization mirrors
+  # `memory_search` at the dispatch layer — tenant-pinned agents may
+  # only read files in their own org; root-pinned agents see every
+  # tenant. The error envelope matches the `recoverable: false`
+  # `unauthorized: …` shape that memory_search returns so federated
+  # clients have one consistent handling path.
+  defp files_tools do
+    [
+      %{
+        name: "file_list",
+        description:
+          "List the most recent files for a project (ADR 0042 document store). Filterable by content_type. Authorization mirrors memory_search — tenant-pinned agents may only list files in projects under their own org.",
+        parameters: %{
+          project_id: %{
+            type: "string",
+            required: true,
+            description: "UUID of the project whose files you want to list."
+          },
+          org_id: %{
+            type: "string",
+            required: false,
+            description:
+              "ADR-0042 tenant pin. Optional — when omitted the org is derived from the project. When provided, must match the project's owning org or the call is rejected."
+          },
+          content_type: %{
+            type: "string",
+            required: false,
+            description:
+              "Exact MIME-type filter (e.g. `\"application/pdf\"`, `\"image/png\"`). Omit for all types."
+          },
+          limit: %{
+            type: "integer",
+            required: false,
+            description: "Max rows to return (default 50, max 200)."
+          }
+        },
+        returns:
+          "%{files: [%{id, name, original_filename, content_type, byte_size, inserted_at, ingest_status}], project_id, count}",
+        limitations:
+          "Tenant-pinned agents calling with a sibling-org project return an `unauthorized: …` envelope (NOT an empty list, so existence can't be probed). Unknown project_id returns `:not_found`. Files still ingesting carry `ingest_status: \"pending\"` — call file_get_text only on \"ingested\" rows.",
+        when_to_use:
+          "When you need to enumerate the documents in a project — e.g. before calling file_get_text to read one, or to surface the right file to the user."
+      },
+      %{
+        name: "file_get_text",
+        description:
+          "Fetch the extracted text body for a single file (ADR 0042). Returns the full body or — when `page` is supplied and the file has a per-page split (PDF, gdoc) — that page only. Reads from the `platform_file_texts` cache populated at ingest time; no re-extraction.",
+        parameters: %{
+          file_id: %{
+            type: "string",
+            required: true,
+            description: "UUID of the file row to read."
+          },
+          page: %{
+            type: "integer",
+            required: false,
+            description:
+              "1-based page index. Only honored for paginated formats (PDF, gdoc); flow formats (CSV, text, OCR'd image) return the full body regardless."
+          }
+        },
+        returns: "%{file_id, content_type, text, page?, total_pages?, original_filename}",
+        limitations:
+          "Authorization mirrors file_list. Unknown `file_id` → `:not_found`. File not yet ingested / extraction failed → `:no_text_available`. `page` out of range → `:page_out_of_range`. Tenant-pinned agents reading a sibling-org file → `unauthorized: …`.",
+        when_to_use:
+          "When you have a file_id (e.g. from file_list or a memory_search hit with `memory_type=document`) and want to read its extracted text — either the whole body or one specific page."
       }
     ]
   end
@@ -441,6 +512,12 @@ defmodule Platform.Federation.ToolSurface do
             required: false,
             description:
               "ADR-0042 project filter — restrict page/journal hits to a single project."
+          },
+          memory_type: %{
+            type: "string",
+            required: false,
+            description:
+              "Restrict semantic hits to a single memory_type tag (e.g. `\"document\"` for files, `\"daily\"` for journal entries, `\"page\"` for curated pages). Omit to span all types."
           }
         },
         returns:
@@ -4262,6 +4339,65 @@ defmodule Platform.Federation.ToolSurface do
     end
   end
 
+  # ── Files MCP dispatch (ADR-0042 Stage 4) ──────────────────────────────
+
+  def execute("file_list", args, context) do
+    with {:ok, project_id} <- require_string(args, "project_id", "file_list"),
+         {:ok, project} <- fetch_project_for_files(project_id, "file_list"),
+         :ok <- authorize_org_filter_for_explicit(args, context),
+         :ok <- authorize_file_access(context, project) do
+      limit = Map.get(args, "limit") |> normalize_limit(50, 200)
+      content_type = Map.get(args, "content_type")
+
+      files =
+        Platform.Files.list_files_for_project(project.id,
+          limit: limit,
+          content_type: content_type
+        )
+
+      {:ok,
+       %{
+         project_id: project.id,
+         count: length(files),
+         files: Enum.map(files, &file_summary/1)
+       }}
+    end
+  end
+
+  def execute("file_get_text", args, context) do
+    with {:ok, file_id} <- require_string(args, "file_id", "file_get_text"),
+         file when not is_nil(file) <- Platform.Files.get_file(file_id),
+         {:ok, project} <- fetch_project_for_files(file.project_id, "file_get_text"),
+         :ok <- authorize_file_access(context, project),
+         text_row when not is_nil(text_row) <- Platform.Files.fetch_extracted_text(file.id) do
+      page = Map.get(args, "page")
+      respond_with_text(file, text_row, page)
+    else
+      nil ->
+        # Either the file row or the text row is missing — disambiguate
+        # so callers can recover.
+        file_id = Map.get(args, "file_id")
+
+        case file_id && Platform.Files.get_file(file_id) do
+          nil ->
+            file_not_found_error(file_id)
+
+          _file ->
+            {:error,
+             %{
+               error: "file_get_text: no extracted text available for file_id=#{file_id}",
+               code: :no_text_available,
+               recoverable: true,
+               suggestion:
+                 "The file may still be ingesting (ingest_status=\"pending\") or extraction may have failed. Re-check ingest_status via file_list before retrying."
+             }}
+        end
+
+      {:error, _} = err ->
+        err
+    end
+  end
+
   def execute(unknown_tool, _args, _context) do
     tool_names =
       tool_definitions()
@@ -4438,6 +4574,7 @@ defmodule Platform.Federation.ToolSurface do
             workspace_id: Map.get(args, "workspace_id"),
             org_id: org_filter,
             project_id: Map.get(args, "project_id"),
+            memory_type: Map.get(args, "memory_type"),
             agent: agent
           ]
           |> Enum.reject(fn {_k, v} -> is_nil(v) end)
@@ -4575,6 +4712,199 @@ defmodule Platform.Federation.ToolSurface do
         {:ok, []}
     end
   end
+
+  # ── Files tool helpers (ADR-0042 Stage 4) ───────────────────────────────
+
+  # Loads a project for the file_list / file_get_text dispatch. Surfaces a
+  # not-found envelope keyed to the calling tool so the caller learns
+  # which arg was bad.
+  defp fetch_project_for_files(project_id, tool) when is_binary(project_id) do
+    case Platform.Tasks.get_project(project_id) do
+      nil ->
+        {:error,
+         %{
+           error: "#{tool}: project not found (#{project_id})",
+           code: :not_found,
+           recoverable: false,
+           suggestion: "Confirm the project_id — list available projects via the platform UI."
+         }}
+
+      project ->
+        {:ok, project}
+    end
+  end
+
+  # When the caller explicitly passes `org_id` to file_list, run the same
+  # authorize_org_filter guard memory_search uses so tenant-pinned agents
+  # can't probe sibling orgs by manually picking an org_id. The auth
+  # against the project's org_id happens in `authorize_file_access/2`
+  # regardless of whether the caller passed `org_id`.
+  defp authorize_org_filter_for_explicit(args, context) do
+    case Map.get(args, "org_id") do
+      org_id when is_binary(org_id) and org_id != "" ->
+        authorize_org_filter(load_agent(context), org_id)
+
+      _ ->
+        :ok
+    end
+  end
+
+  # Mirrors `memory_search` authorization: tenant-pinned agents may only
+  # touch projects under their own org, root-pinned agents touch every
+  # tenant. The error envelope is intentionally the same shape memory_search
+  # returns so federated clients have one consistent handling path.
+  #
+  # When no agent is present (anonymous caller / system-level invocation)
+  # we permit — same convention `authorize_org_filter/2` uses. The MCP
+  # endpoint always provides an agent_id; bare-call test paths exercise
+  # the agent-less branch.
+  defp authorize_file_access(context, %Platform.Tasks.Project{org_id: project_org_id}) do
+    agent = load_agent(context)
+
+    cond do
+      is_nil(agent) ->
+        :ok
+
+      is_nil(project_org_id) ->
+        # Project with no org_id is a pre-ADR-0042 row; root-equivalent.
+        :ok
+
+      true ->
+        authorize_org_filter(agent, project_org_id)
+        |> case do
+          :ok -> :ok
+          {:error, envelope} -> {:error, file_unauthorized_envelope(envelope)}
+        end
+    end
+  end
+
+  defp file_unauthorized_envelope(envelope) do
+    # Re-key the message so callers can tell file_list / file_get_text
+    # produced the rejection (vs memory_search). The shape is identical.
+    Map.put(envelope, :error, "unauthorized: file is in an org you are not a member of")
+  end
+
+  defp normalize_limit(nil, default, _max), do: default
+
+  defp normalize_limit(value, _default, max) when is_integer(value) and value > 0 do
+    min(value, max)
+  end
+
+  defp normalize_limit(value, default, max) when is_binary(value) do
+    case Integer.parse(value) do
+      {n, ""} when n > 0 -> min(n, max)
+      _ -> default
+    end
+  end
+
+  defp normalize_limit(_value, default, _max), do: default
+
+  defp file_summary(%Platform.Files.File{} = file) do
+    %{
+      id: file.id,
+      name: file.name || file.original_filename,
+      original_filename: file.original_filename,
+      content_type: file.content_type,
+      byte_size: file.byte_size,
+      ingest_status: file.ingest_status,
+      inserted_at: format_datetime(file.inserted_at)
+    }
+  end
+
+  defp file_not_found_error(file_id) do
+    {:error,
+     %{
+       error: "file_get_text: file not found (#{inspect(file_id)})",
+       code: :not_found,
+       recoverable: false,
+       suggestion: "Confirm the file_id — use file_list to enumerate the project's files."
+     }}
+  end
+
+  defp respond_with_text(file, %Platform.Files.Text{text: text, pages: pages}, page_arg) do
+    case parse_page_arg(page_arg) do
+      :no_page ->
+        {:ok,
+         %{
+           file_id: file.id,
+           content_type: file.content_type,
+           original_filename: file.original_filename,
+           total_pages: page_count(pages),
+           text: text
+         }}
+
+      {:page, n} ->
+        cond do
+          is_nil(pages) ->
+            # Flow format — return the whole body and flag that page was
+            # ignored so the caller knows.
+            {:ok,
+             %{
+               file_id: file.id,
+               content_type: file.content_type,
+               original_filename: file.original_filename,
+               total_pages: nil,
+               text: text,
+               page: nil
+             }}
+
+          n < 1 or n > length(pages) ->
+            {:error,
+             %{
+               error: "file_get_text: page #{n} out of range (file has #{length(pages)} pages)",
+               code: :page_out_of_range,
+               recoverable: true,
+               suggestion: "Pass `page` in 1..#{length(pages)} or omit it to get the full body."
+             }}
+
+          true ->
+            {:ok,
+             %{
+               file_id: file.id,
+               content_type: file.content_type,
+               original_filename: file.original_filename,
+               total_pages: length(pages),
+               page: n,
+               text: Enum.at(pages, n - 1)
+             }}
+        end
+
+      {:error, _} = err ->
+        err
+    end
+  end
+
+  defp parse_page_arg(nil), do: :no_page
+  defp parse_page_arg(n) when is_integer(n), do: {:page, n}
+
+  defp parse_page_arg(s) when is_binary(s) do
+    case Integer.parse(s) do
+      {n, ""} ->
+        {:page, n}
+
+      _ ->
+        {:error,
+         %{
+           error: "file_get_text: `page` must be an integer (got #{inspect(s)})",
+           code: :invalid_page,
+           recoverable: true,
+           suggestion: "Pass a 1-based integer page number, or omit `page` for the full body."
+         }}
+    end
+  end
+
+  defp parse_page_arg(other) do
+    {:error,
+     %{
+       error: "file_get_text: `page` must be an integer (got #{inspect(other)})",
+       code: :invalid_page,
+       recoverable: true,
+       suggestion: "Pass a 1-based integer page number, or omit `page` for the full body."
+     }}
+  end
+
+  defp page_count(nil), do: nil
+  defp page_count(pages) when is_list(pages), do: length(pages)
 
   defp view_page(path, view_range, workspace_id, class) do
     case Wiki.get_page(path, workspace_id: workspace_id) do

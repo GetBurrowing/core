@@ -4125,33 +4125,11 @@ defmodule PlatformWeb.TasksLive do
   # SXI → Paragon → unknown tenants alphabetically); inside each bucket
   # projects are already alphabetically sorted by `Tasks.list_projects/1`.
   #
-  # The same ordering is reused by the project-create FAB's <select> so
-  # the two surfaces never disagree.
-  #
-  # Projects whose `:org` association didn't preload (legacy data or a
-  # bug) fold into a synthetic `:unassigned` bucket sorted last so the
-  # sidebar never silently drops a row.
-  defp group_projects_by_org(projects) do
-    {assigned, orphan} =
-      Enum.split_with(projects, fn p ->
-        match?(%Tenancy.Org{}, p.org)
-      end)
-
-    assigned
-    |> Enum.group_by(fn p -> {p.org.slug, p.org.name} end)
-    |> Enum.map(fn {{slug, name}, ps} -> {slug, name, ps} end)
-    |> Enum.sort_by(fn {slug, _name, _} ->
-      # Canonical tenant-priority ordering. Slug acts as the tiebreaker
-      # for unknown tenants so the sort is total + deterministic.
-      {Tenancy.tenant_priority_index(slug), slug}
-    end)
-    |> Kernel.++(
-      case orphan do
-        [] -> []
-        _ -> [{"_unassigned", "Unassigned", orphan}]
-      end
-    )
-  end
+  # Implementation lives in `Platform.Projects.group_by_org/1` (extracted
+  # in the Files-surface stage so files + tasks share one grouper). Kept
+  # as a delegating wrapper here so call sites already reading
+  # `group_projects_by_org/1` don't churn.
+  defp group_projects_by_org(projects), do: Platform.Projects.group_by_org(projects)
 
   defp normalize_task_assignee(params, default_agent_id, requested_plan?) do
     selected_assignee_id =
