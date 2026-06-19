@@ -1532,6 +1532,27 @@ defmodule Platform.Meetings do
     encode_jwt(claims, config[:api_secret])
   end
 
+  @doc """
+  Build the JSON body sent to LiveKit's `RoomService/CreateRoom` Twirp endpoint.
+
+  Includes the `agents` field so LiveKit dispatches the `meeting-transcriber`
+  worker at room-creation time. The agent dispatch MUST live on the CreateRoom
+  call because `ensure_livekit_room/1` runs server-side before any participant
+  joins — the JWT `roomConfig.agents` path silently no-ops on an existing room.
+
+  Note: LiveKit's REST/Twirp CreateRoom uses snake_case `agent_name`; the JWT
+  `roomConfig.agents` path uses camelCase `agentName`. Two different LiveKit
+  serialization conventions — do not normalize.
+  """
+  @doc since: "fix: transcriber dispatch (task 019ee053)"
+  def build_create_room_body(room_name) when is_binary(room_name) do
+    Jason.encode!(%{
+      "name" => room_name,
+      "empty_timeout" => 300,
+      "agents" => [%{"agent_name" => "meeting-transcriber"}]
+    })
+  end
+
   defp ensure_livekit_room(room_name) do
     config = livekit_config()
     url = config[:url]
@@ -1544,7 +1565,7 @@ defmodule Platform.Meetings do
       token =
         service_token(api_key, api_secret)
 
-      body = Jason.encode!(%{"name" => room_name, "empty_timeout" => 300})
+      body = build_create_room_body(room_name)
 
       twirp_url =
         url
