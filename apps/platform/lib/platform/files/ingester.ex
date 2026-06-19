@@ -235,6 +235,13 @@ defmodule Platform.Files.Ingester do
       id: file.id,
       content: text,
       memory_type: "document",
+      # memory-service's MemoryEntry pydantic model requires `date`
+      # (see `memory-service/src/memory_service/models.py`). Missing it
+      # → 422 Unprocessable Entity and ingest_status="failed". Documents
+      # aren't date-keyed for retrieval the way journal entries are, so
+      # we stamp today's ISO date for accounting only — same convention
+      # as `Platform.Org.Wiki.Indexer.Payload` uses for wiki pages.
+      date: Date.utc_today() |> Date.to_iso8601(),
       project_id: file.project_id,
       org_id: file.org_id,
       metadata: %{

@@ -193,6 +193,17 @@ defmodule Platform.Files.IngesterTest do
       assert metadata["content_type"] == "text/plain"
       assert metadata["original_filename"] == "ingester-fixture.txt"
 
+      # Regression for the SXI-markdown ingest_status=failed observed
+      # 2026-06-19 — memory-service's MemoryEntry pydantic model rejects
+      # any payload missing `date` (422 Unprocessable Entity). The mock
+      # provider used here doesn't validate the shape, but locking the
+      # presence of `:date` at this layer keeps the contract honest.
+      assert is_binary(provider_entry.date),
+             "build_entry/3 must include :date — memory-service rejects payloads without it"
+
+      assert provider_entry.date =~ ~r/^\d{4}-\d{2}-\d{2}$/,
+             "expected ISO-8601 date string, got #{inspect(provider_entry.date)}"
+
       refreshed = Files.get_file(file.id)
       assert refreshed.ingest_status == "ingested"
 
