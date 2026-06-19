@@ -13,8 +13,13 @@ defmodule PlatformWeb.MeetingBarLive do
     * `:meeting_space_id` — the space ID of the active meeting
     * `:meeting_space_name` — display name of the meeting space
     * `:meeting_space_slug` — URL slug for the meeting space
+    * `:meeting_slug` — slug of the active `%Platform.Meetings.Meeting{}` row
+      (used by the Return-to-call deep link to `/meetings/<slug>`); may be nil
+      if the meeting row hasn't been persisted yet, in which case the bar
+      falls back to the chat surface via `space_slug`
     * `:meeting_started_at` — `DateTime` when the user joined
     * `:on_meeting_page` — boolean, true when viewing the meeting's chat page
+      OR the canonical MeetingLive surface
   """
 
   use PlatformWeb, :live_component
@@ -35,6 +40,7 @@ defmodule PlatformWeb.MeetingBarLive do
      |> assign(:space_id, assigns[:meeting_space_id])
      |> assign(:space_name, assigns[:meeting_space_name])
      |> assign(:space_slug, assigns[:meeting_space_slug])
+     |> assign(:meeting_slug, assigns[:meeting_slug])
      |> assign(:started_at, assigns[:meeting_started_at])
      |> assign(:on_meeting_page, assigns[:on_meeting_page] || false)
      |> assign(:sidebar_collapsed, assigns[:sidebar_collapsed] || false)
@@ -109,9 +115,11 @@ defmodule PlatformWeb.MeetingBarLive do
         ]} />
       </button>
 
-      <%!-- Return to call --%>
+      <%!-- Return to call — deep links to the canonical MeetingLive surface.
+           Falls back to the chat surface if `meeting_slug` is nil (race
+           where the join broadcast fires before the Meeting row exists). --%>
       <.link
-        navigate={"/chat/#{@space_slug || @space_id}"}
+        navigate={return_to_call_path(@meeting_slug, @space_slug, @space_id)}
         class="rounded-lg px-2.5 py-1 text-xs font-medium text-success hover:bg-success/10 transition-colors hidden sm:inline-flex"
       >
         Return to call
@@ -130,6 +138,22 @@ defmodule PlatformWeb.MeetingBarLive do
     </div>
     """
   end
+
+  # Build the Return-to-call href. Prefer the canonical MeetingLive surface
+  # (`/meetings/<meeting_slug>`); fall back to the chat surface (`/chat/<slug>`)
+  # if the meeting_slug isn't available yet. The final `space_id` fallback
+  # mirrors the pre-existing space-name link logic so a truly nil bar still
+  # renders without a broken `nil` interpolation.
+  defp return_to_call_path(meeting_slug, _space_slug, _space_id) when is_binary(meeting_slug),
+    do: "/meetings/#{meeting_slug}"
+
+  defp return_to_call_path(_, space_slug, _space_id) when is_binary(space_slug),
+    do: "/chat/#{space_slug}"
+
+  defp return_to_call_path(_, _, space_id) when is_binary(space_id),
+    do: "/chat/#{space_id}"
+
+  defp return_to_call_path(_, _, _), do: "/meetings"
 
   @impl true
   def handle_event("toggle_meeting_mic", _params, socket) do

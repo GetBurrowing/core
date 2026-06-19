@@ -111,22 +111,26 @@ defmodule PlatformWeb.ShellLive do
       |> assign(:meeting_space_id, nil)
       |> assign(:meeting_space_name, nil)
       |> assign(:meeting_space_slug, nil)
+      |> assign(:meeting_slug, nil)
       |> assign(:meeting_started_at, nil)
       |> assign(:on_meeting_page, false)
+      |> maybe_seed_meeting_state(raw_user_id)
       |> attach_hook(:track_path, :handle_params, fn _params, url, socket ->
         uri = URI.parse(url)
 
-        # The link emitter (`PlatformWeb.ChatLive.space_nav_target/1`) uses
-        # `space.id` for org-scoped channels and `slug || id` otherwise.
-        # Compare against BOTH the slug and the id so the meeting-page flag
-        # is true regardless of which URL form the user actually navigated
-        # to (sidebar emits the id-form for org-scoped channels; legacy
-        # deep links and DMs use the slug-form).
+        # Hide the bar on any surface that represents the active meeting:
+        # legacy chat surface (`/chat/<slug>` or `/chat/<space_id>` — the
+        # link emitter uses `space.id` for org-scoped channels per ADR 0042
+        # and `slug || id` otherwise) OR the canonical MeetingLive surface
+        # (`/meetings/<meeting_slug>`).
+        space_slug = socket.assigns[:meeting_space_slug]
+        space_id = socket.assigns[:meeting_space_id]
+        meeting_slug = socket.assigns[:meeting_slug]
+
         on_meeting_page =
-          case {socket.assigns[:meeting_space_slug], socket.assigns[:meeting_space_id]} do
-            {nil, nil} -> false
-            {slug, id} -> uri.path == "/chat/#{slug}" or uri.path == "/chat/#{id}"
-          end
+          (space_slug && uri.path == "/chat/#{space_slug}") ||
+            (space_id && uri.path == "/chat/#{space_id}") ||
+            (meeting_slug && uri.path == "/meetings/#{meeting_slug}") || false
 
         {:cont,
          socket
@@ -175,24 +179,31 @@ defmodule PlatformWeb.ShellLive do
 
           {:halt, assign(socket, :presence_list, async_ok(socket.assigns[:presence_list], list))}
 
-        {:meeting_joined, %{space_id: space_id, space_name: space_name}}, socket ->
+        {:meeting_joined, payload}, socket ->
           path = socket.assigns[:current_path] || "/"
-          space = Chat.get_space(space_id)
-          slug = if space, do: space.slug || space_id, else: space_id
+          space_id = payload[:space_id]
+          space_name = payload[:space_name]
+          space_slug = payload[:space_slug] || space_id
+          meeting_slug = payload[:meeting_slug]
+          started_at = payload[:started_at] || DateTime.utc_now()
 
-          # See the `:track_path` hook above for the both-shapes rationale.
-          # The link the user came from could be either `/chat/<slug>` or
-          # `/chat/<space_id>` depending on whether the channel is
-          # org-scoped (post-ADR-0042 emits id) or not (emits slug).
-          on_meeting_page = path == "/chat/#{slug}" or path == "/chat/#{space_id}"
+          # See the `:track_path` hook above for the three-shapes rationale.
+          # The link the user came from could be `/chat/<slug>`,
+          # `/chat/<space_id>` (post-ADR-0042 org-scoped channels), or the
+          # canonical MeetingLive surface (`/meetings/<meeting_slug>`).
+          on_meeting_page =
+            (space_slug && path == "/chat/#{space_slug}") ||
+              (space_id && path == "/chat/#{space_id}") ||
+              (meeting_slug && path == "/meetings/#{meeting_slug}") || false
 
           socket =
             socket
             |> assign(:meeting_active, true)
             |> assign(:meeting_space_id, space_id)
             |> assign(:meeting_space_name, space_name)
-            |> assign(:meeting_space_slug, slug)
-            |> assign(:meeting_started_at, DateTime.utc_now())
+            |> assign(:meeting_space_slug, space_slug)
+            |> assign(:meeting_slug, meeting_slug)
+            |> assign(:meeting_started_at, started_at)
             |> assign(:on_meeting_page, on_meeting_page)
 
           {:halt, socket}
@@ -204,6 +215,7 @@ defmodule PlatformWeb.ShellLive do
             |> assign(:meeting_space_id, nil)
             |> assign(:meeting_space_name, nil)
             |> assign(:meeting_space_slug, nil)
+            |> assign(:meeting_slug, nil)
             |> assign(:meeting_started_at, nil)
             |> assign(:on_meeting_page, false)
 
@@ -221,6 +233,7 @@ defmodule PlatformWeb.ShellLive do
             |> assign(:meeting_space_id, nil)
             |> assign(:meeting_space_name, nil)
             |> assign(:meeting_space_slug, nil)
+            |> assign(:meeting_slug, nil)
             |> assign(:meeting_started_at, nil)
             |> assign(:on_meeting_page, false)
 
@@ -449,6 +462,49 @@ defmodule PlatformWeb.ShellLive do
   end
 
   defp maybe_subscribe_meeting_state(socket, _), do: socket
+
+  # On a fresh shell mount (e.g. after a `live_navigate`), the one-shot
+  # `:meeting_joined` PubSub event from the original join is long gone — so
+  # the mini-bar would render hidden even though the user is still in a
+  # meeting. Synchronously hydrate from the ETS-backed `Platform.Meetings.State`
+  # cache (stage 1) so the bar paints correctly on first render.
+  #
+  # Only runs on the WS-connected mount (skipping the static/disconnected
+  # render) — matches the existing async-load pattern. ETS lookup is
+  # lock-free so it's cheap even at peak.
+  defp maybe_seed_meeting_state(socket, raw_user_id) when is_binary(raw_user_id) do
+    if connected?(socket) do
+      seed_meeting_state_from_storage(socket, raw_user_id)
+    else
+      socket
+    end
+  end
+
+  defp maybe_seed_meeting_state(socket, _), do: socket
+
+  defp seed_meeting_state_from_storage(socket, raw_user_id) when is_binary(raw_user_id) do
+    case MeetingState.get_for_user(raw_user_id) do
+      %{
+        space_id: space_id,
+        space_name: space_name,
+        space_slug: space_slug,
+        meeting_slug: meeting_slug,
+        started_at: started_at
+      } ->
+        socket
+        |> assign(:meeting_active, true)
+        |> assign(:meeting_space_id, space_id)
+        |> assign(:meeting_space_name, space_name)
+        |> assign(:meeting_space_slug, space_slug)
+        |> assign(:meeting_slug, meeting_slug)
+        |> assign(:meeting_started_at, started_at)
+
+      _ ->
+        socket
+    end
+  end
+
+  defp seed_meeting_state_from_storage(socket, _), do: socket
 
   defp build_presence_list(space_id) do
     online_ids =

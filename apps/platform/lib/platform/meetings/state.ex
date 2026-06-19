@@ -1,10 +1,22 @@
 defmodule Platform.Meetings.State do
   @moduledoc """
-  Thin PubSub broadcast helper for user-level meeting state.
+  Per-user meeting state — ETS-backed cache + PubSub broadcaster.
 
-  Publishes `:meeting_joined` and `:meeting_left` events to a per-user topic
-  so that the shell layout can show/hide the persistent meeting mini-bar
-  regardless of which page the user is viewing.
+  Tracks the user's currently-active meeting so that the shell layout can
+  (a) hydrate the persistent meeting mini-bar synchronously on a fresh mount
+  (a `live_navigate` re-mounts the shell and would otherwise miss the
+  one-shot `:meeting_joined` PubSub event that fired on the original join)
+  and (b) get live updates as the user joins/leaves meetings.
+
+  Reads are direct ETS lookups (lock-free, concurrent) — every shell mount
+  hits `get_for_user/1`, so a GenServer round-trip per mount would
+  serialize unnecessarily. Writes go through this module's helper API so
+  the ETS row and the PubSub broadcast are always issued together (row
+  first, so any handler that calls `get_for_user/1` in response sees the
+  new state).
+
+  The GenServer exists only to own the named table's lifecycle; it does
+  not serialize reads or writes.
 
   ## Topic
 
@@ -12,13 +24,48 @@ defmodule Platform.Meetings.State do
 
   ## Events
 
-  | Event                | Payload                                                        |
-  |----------------------|----------------------------------------------------------------|
-  | `:meeting_joined`    | `%{user_id: id, space_id: id, space_name: name}`              |
-  | `:meeting_left`      | `%{user_id: id}`                                              |
+  | Event             | Payload                                                                                              |
+  |-------------------|------------------------------------------------------------------------------------------------------|
+  | `:meeting_joined` | `%{user_id, space_id, space_name, space_slug, meeting_slug, started_at}`                             |
+  | `:meeting_left`   | `%{user_id}`                                                                                         |
   """
 
+  use GenServer
+
   @pubsub Platform.PubSub
+  @table :meeting_user_state
+
+  # ── Lifecycle ──────────────────────────────────────────────────────────────
+
+  @doc """
+  Start the state owner. Creates the named public ETS table on init so
+  reads from any process are lock-free. Booted from
+  `Platform.Application`'s child list.
+  """
+  @spec start_link(keyword()) :: GenServer.on_start()
+  def start_link(opts \\ []) do
+    GenServer.start_link(__MODULE__, opts, name: __MODULE__)
+  end
+
+  @impl true
+  def init(_opts) do
+    # `:public` lets any process write (broadcast_joined / broadcast_left
+    # run in the caller's process); `:named_table` lets readers reference
+    # `@table` directly without locating the owning pid.
+    case :ets.info(@table) do
+      :undefined ->
+        :ets.new(@table, [:named_table, :public, :set, read_concurrency: true])
+
+      _ ->
+        # A previous incarnation (e.g. crash + supervisor restart) left the
+        # table around — :public tables outlive their owner only when the
+        # heir is set; in our case the table dies with the owner, so this
+        # branch is defensive against tests that pre-create the table.
+        :ok
+    end
+
+    {:ok, %{}}
+  end
 
   # ── Topic ──────────────────────────────────────────────────────────────────
 
@@ -34,37 +81,118 @@ defmodule Platform.Meetings.State do
     Phoenix.PubSub.subscribe(@pubsub, topic(user_id))
   end
 
+  # ── Read ───────────────────────────────────────────────────────────────────
+
+  @doc """
+  Look up the currently-active meeting for `user_id`. Returns the stored
+  map (`%{space_id, space_name, space_slug, meeting_slug, started_at}`)
+  or `nil` when the user is not in a meeting.
+
+  Direct ETS lookup — no GenServer round-trip. Safe to call from any
+  process, including from `mount/3` on every shell connection.
+  """
+  @spec get_for_user(binary() | nil) :: map() | nil
+  def get_for_user(user_id) when is_binary(user_id) do
+    case ets_lookup(user_id) do
+      [{^user_id, state}] -> state
+      _ -> nil
+    end
+  end
+
+  def get_for_user(_), do: nil
+
   # ── Broadcast ──────────────────────────────────────────────────────────────
 
   @doc """
-  Broadcast that `user_id` has joined a meeting in `space_id`.
+  Record that `user_id` has joined a meeting in `space_id` and broadcast
+  the join. Writes the ETS row *first* so any handler that reads via
+  `get_for_user/1` in response sees the new state.
 
-  All subscribers to the user's meeting state topic will receive:
+  Subscribers receive:
 
-      {:meeting_joined, %{user_id: user_id, space_id: space_id, space_name: space_name}}
+      {:meeting_joined,
+       %{
+         user_id: user_id,
+         space_id: space_id,
+         space_name: space_name,
+         space_slug: space_slug,
+         meeting_slug: meeting_slug,
+         started_at: %DateTime{}
+       }}
+
+  `started_at` is stamped here (not by callers) so reads via
+  `get_for_user/1` and broadcast payloads agree on the same instant.
   """
-  @spec broadcast_joined(binary(), binary(), binary()) :: :ok
-  def broadcast_joined(user_id, space_id, space_name) do
+  @spec broadcast_joined(binary(), binary(), binary(), binary() | nil, binary() | nil) :: :ok
+  def broadcast_joined(user_id, space_id, space_name, space_slug, meeting_slug)
+      when is_binary(user_id) and is_binary(space_id) do
+    started_at = DateTime.utc_now()
+
+    state = %{
+      space_id: space_id,
+      space_name: space_name,
+      space_slug: space_slug,
+      meeting_slug: meeting_slug,
+      started_at: started_at
+    }
+
+    ets_insert(user_id, state)
+
     Phoenix.PubSub.broadcast(
       @pubsub,
       topic(user_id),
-      {:meeting_joined, %{user_id: user_id, space_id: space_id, space_name: space_name}}
+      {:meeting_joined, Map.put(state, :user_id, user_id)}
     )
   end
 
   @doc """
-  Broadcast that `user_id` has left their meeting.
+  Record that `user_id` has left their meeting and broadcast the leave.
+  Deletes the ETS row *first* so any handler that reads via
+  `get_for_user/1` in response sees `nil`.
 
-  All subscribers to the user's meeting state topic will receive:
+  Subscribers receive:
 
       {:meeting_left, %{user_id: user_id}}
   """
   @spec broadcast_left(binary()) :: :ok
-  def broadcast_left(user_id) do
+  def broadcast_left(user_id) when is_binary(user_id) do
+    ets_delete(user_id)
+
     Phoenix.PubSub.broadcast(
       @pubsub,
       topic(user_id),
       {:meeting_left, %{user_id: user_id}}
     )
+  end
+
+  # ── Internal: ETS helpers ──────────────────────────────────────────────────
+  #
+  # Wrapped so calls during early boot (before `init/1` has installed the
+  # table) or in test harnesses that haven't started the GenServer return
+  # benign defaults instead of crashing the caller.
+
+  defp ets_lookup(key) do
+    case :ets.info(@table) do
+      :undefined -> []
+      _ -> :ets.lookup(@table, key)
+    end
+  end
+
+  defp ets_insert(key, value) do
+    case :ets.info(@table) do
+      :undefined -> :ok
+      _ -> :ets.insert(@table, {key, value})
+    end
+
+    :ok
+  end
+
+  defp ets_delete(key) do
+    case :ets.info(@table) do
+      :undefined -> :ok
+      _ -> :ets.delete(@table, key)
+    end
+
+    :ok
   end
 end

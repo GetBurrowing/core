@@ -54,6 +54,10 @@ defmodule Platform.Application do
            Platform.Chat.ActiveAgentStore,
            # Chat presence — must start after PubSub
            Platform.Chat.Presence,
+           # Per-user meeting state — ETS-backed cache + PubSub broadcaster
+           # (task 019ee06b). Owns :meeting_user_state table; must start
+           # after PubSub so broadcast_* helpers always have a bus.
+           Platform.Meetings.State,
            # Vault OAuth token refresh worker — must start after Repo and Vault.Encryption
            Platform.Vault.RefreshWorker,
            # Reap expired pending attachments (ADR 0039) — needs Repo

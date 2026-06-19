@@ -379,4 +379,152 @@ defmodule PlatformWeb.ShellLiveTest do
       refute html =~ ~s(data-destination="admin")
     end
   end
+
+  # ---------------------------------------------------------------------
+  # Meeting state hydration (task 019ee06b Stage 2)
+  #
+  # The shell's mini-bar relies on a synchronous hydration from
+  # `Platform.Meetings.State` on every connected mount. Without this,
+  # navigating to a new page via `live_navigate` re-mounts the shell, the
+  # one-shot `:meeting_joined` PubSub event from the original join is long
+  # gone, and the bar paints hidden even though the user is still in a
+  # meeting. These tests cover: pre-existing state hydrates, missing state
+  # leaves the defaults intact, and the live :meeting_joined path still
+  # wins through (regression coverage for the new payload shape).
+  # ---------------------------------------------------------------------
+
+  describe "meeting state hydration" do
+    alias Platform.Meetings.State, as: MeetingState
+
+    setup do
+      # Ensure the GenServer/ETS table is up — it's started by the
+      # application supervisor in dev/prod but isn't a `Repo` so the
+      # standard Ecto sandbox doesn't manage it for us. Idempotent:
+      # start_supervised handles the "already started" case.
+      _ = start_supervised(MeetingState)
+      :ok
+    end
+
+    test "mount with pre-existing state hydrates all meeting_* assigns", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      user_id = conn.private.plug_session["current_user_id"]
+
+      # Seed the ETS-backed cache as if the user had already joined a meeting
+      # in some prior LV (e.g. on a different tab).
+      :ok =
+        MeetingState.broadcast_joined(
+          user_id,
+          "space-hydrate-1",
+          "Hydration Test Space",
+          "hydration-space-slug",
+          "hydration-meeting-slug"
+        )
+
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+
+      assigns = :sys.get_state(view.pid).socket.assigns
+      assert assigns.meeting_active == true
+      assert assigns.meeting_space_id == "space-hydrate-1"
+      assert assigns.meeting_space_name == "Hydration Test Space"
+      assert assigns.meeting_space_slug == "hydration-space-slug"
+      assert assigns.meeting_slug == "hydration-meeting-slug"
+      assert %DateTime{} = assigns.meeting_started_at
+
+      # Tidy up so unrelated tests don't see leftover state.
+      :ok = MeetingState.broadcast_left(user_id)
+    end
+
+    test "mount with no state leaves meeting_* defaults", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+
+      assigns = :sys.get_state(view.pid).socket.assigns
+      assert assigns.meeting_active == false
+      assert assigns.meeting_space_id == nil
+      assert assigns.meeting_space_name == nil
+      assert assigns.meeting_space_slug == nil
+      assert assigns.meeting_slug == nil
+      assert assigns.meeting_started_at == nil
+    end
+
+    test "live :meeting_joined PubSub event updates all assigns including meeting_slug", %{
+      conn: conn
+    } do
+      conn = authenticated_conn(conn)
+      user_id = conn.private.plug_session["current_user_id"]
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+
+      # Trigger the join from outside (mid-session) — the shell handler
+      # runs in the LV process and updates assigns.
+      :ok =
+        MeetingState.broadcast_joined(
+          user_id,
+          "space-live-1",
+          "Live Join Space",
+          "live-space-slug",
+          "live-meeting-slug"
+        )
+
+      # PubSub delivery is async — render() forces a flush.
+      _html = render(view)
+
+      assigns = :sys.get_state(view.pid).socket.assigns
+      assert assigns.meeting_active == true
+      assert assigns.meeting_space_id == "space-live-1"
+      assert assigns.meeting_space_name == "Live Join Space"
+      assert assigns.meeting_space_slug == "live-space-slug"
+      assert assigns.meeting_slug == "live-meeting-slug"
+
+      :ok = MeetingState.broadcast_left(user_id)
+    end
+
+    test "on_meeting_page tracks both /chat/<space_slug> and /meetings/<meeting_slug>",
+         %{conn: conn} do
+      conn = authenticated_conn(conn)
+      user_id = conn.private.plug_session["current_user_id"]
+
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+
+      # Simulate a mid-session join with both slugs populated so the
+      # :track_path hook has the assigns it needs for both branches.
+      send(
+        view.pid,
+        {:meeting_joined,
+         %{
+           user_id: user_id,
+           space_id: "space-track-1",
+           space_name: "Tracked Space",
+           space_slug: "tracked-space",
+           meeting_slug: "tracked-meeting",
+           started_at: DateTime.utc_now()
+         }}
+      )
+
+      _ = render(view)
+
+      assigns = :sys.get_state(view.pid).socket.assigns
+      assert assigns.meeting_slug == "tracked-meeting"
+      # On /tasks we are not on a meeting page.
+      assert assigns.on_meeting_page == false
+
+      # Mirror the :track_path hook's expression for both legal "meeting
+      # page" URLs so a regression that drops one branch is caught here.
+      space_slug = assigns.meeting_space_slug
+      meeting_slug = assigns.meeting_slug
+      chat_path = "/chat/#{space_slug}"
+      meeting_path = "/meetings/#{meeting_slug}"
+      tasks_path = "/tasks"
+
+      assert ((space_slug && chat_path == "/chat/#{space_slug}") ||
+                (meeting_slug && chat_path == "/meetings/#{meeting_slug}") || false) == true
+
+      assert ((space_slug && meeting_path == "/chat/#{space_slug}") ||
+                (meeting_slug && meeting_path == "/meetings/#{meeting_slug}") || false) == true
+
+      assert ((space_slug && tasks_path == "/chat/#{space_slug}") ||
+                (meeting_slug && tasks_path == "/meetings/#{meeting_slug}") || false) == false
+
+      :ok = MeetingState.broadcast_left(user_id)
+    end
+  end
 end

@@ -493,7 +493,16 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
           space_slug: space.slug
         })
 
-      MeetingState.broadcast_joined(user_id, space.id, space.name)
+      # Meeting slug for deep-linking the mini-bar's Return-to-call: prefer
+      # the live `meetings` row's slug; fall back to the space slug if no
+      # Meeting row exists yet (room came up via raw LiveKit, no DB row).
+      meeting_slug =
+        case Meetings.get_live_meeting_for_space(space.id) do
+          %{slug: slug} when is_binary(slug) -> slug
+          _ -> space.slug
+        end
+
+      MeetingState.broadcast_joined(user_id, space.id, space.name, space.slug, meeting_slug)
 
       socket
     else

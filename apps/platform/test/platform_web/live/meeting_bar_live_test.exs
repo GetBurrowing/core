@@ -15,6 +15,7 @@ defmodule PlatformWeb.MeetingBarLiveTest do
     meeting_space_id: "space-123",
     meeting_space_name: "Engineering",
     meeting_space_slug: "engineering",
+    meeting_slug: "engineering-standup-2026-06-19",
     meeting_started_at: ~U[2026-04-14 08:00:00Z],
     on_meeting_page: false,
     sidebar_collapsed: false,
@@ -46,10 +47,40 @@ defmodule PlatformWeb.MeetingBarLiveTest do
       assert html =~ "hidden"
     end
 
-    test "return-to-call link uses space slug" do
+    test "return-to-call link deep-links to /meetings/<meeting_slug>" do
       html = render_component(MeetingBarLive, @meeting_assigns)
 
+      # The Return-to-call action targets the canonical MeetingLive surface,
+      # not the chat surface — this is the whole point of the stage-2 wiring:
+      # navigating back to the call lands you on the meeting page where the
+      # actual video/audio UI lives.
+      assert html =~ ~s|href="/meetings/engineering-standup-2026-06-19"|
+      # The space-name link still points at the chat surface (intentional —
+      # only Return-to-call is the meeting deep link).
       assert html =~ ~s|href="/chat/engineering"|
+    end
+
+    test "return-to-call link falls back to /chat/<space_slug> when meeting_slug is nil" do
+      assigns = Map.put(@meeting_assigns, :meeting_slug, nil)
+      html = render_component(MeetingBarLive, assigns)
+
+      # Falls back to the chat surface when the join broadcast raced ahead
+      # of the Meeting row insert (stage-1 fallback path).
+      assert html =~ ~s|href="/chat/engineering"|
+      refute html =~ ~s|href="/meetings/|
+    end
+
+    test "return-to-call link falls back to /chat/<space_id> when both slugs are nil" do
+      assigns =
+        @meeting_assigns
+        |> Map.put(:meeting_slug, nil)
+        |> Map.put(:meeting_space_slug, nil)
+
+      html = render_component(MeetingBarLive, assigns)
+
+      # Final fallback so a wholly-degraded bar still has a valid href
+      # rather than `nil` interpolation in the DOM.
+      assert html =~ ~s|href="/chat/space-123"|
     end
 
     test "duration timer has correct data-started-at attribute" do
