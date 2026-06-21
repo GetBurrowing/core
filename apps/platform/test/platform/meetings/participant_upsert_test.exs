@@ -286,4 +286,64 @@ defmodule Platform.Meetings.ParticipantUpsertTest do
                })
     end
   end
+
+  # ── leave_for_user/2 (task 019ee06b stage 1) ─────────────────────────────
+
+  describe "leave_for_user/2" do
+    test "stamps left_at on the active row and returns :ok" do
+      room = create_room()
+      {:ok, room} = Meetings.activate_room(room)
+      user = create_user()
+
+      {:ok, joined} =
+        Meetings.upsert_live_participant(room, %{
+          identity: "user:#{user.id}",
+          name: "Ada Lovelace"
+        })
+
+      assert :ok = Meetings.leave_for_user(room.space_id, user.id)
+
+      reloaded = Repo.get!(Participant, joined.id)
+      refute is_nil(reloaded.left_at)
+      assert is_nil(Meetings.active_participant_for_user_in_space(room.space_id, user.id))
+    end
+
+    test "is idempotent — calling twice does not crash and returns :ok" do
+      room = create_room()
+      {:ok, room} = Meetings.activate_room(room)
+      user = create_user()
+
+      {:ok, _} =
+        Meetings.upsert_live_participant(room, %{
+          identity: "user:#{user.id}",
+          name: "Ada Lovelace"
+        })
+
+      assert :ok = Meetings.leave_for_user(room.space_id, user.id)
+      # Second call: row already stamped, helper resolves no active row.
+      assert :ok = Meetings.leave_for_user(room.space_id, user.id)
+    end
+
+    test "returns :ok when no active room exists for the space (idle)" do
+      # Room is idle (not activated) → get_active_room/1 returns nil.
+      room = create_room()
+      user = create_user()
+
+      assert :ok = Meetings.leave_for_user(room.space_id, user.id)
+    end
+
+    test "returns :ok when the active room has no participant row for the user" do
+      room = create_room()
+      {:ok, room} = Meetings.activate_room(room)
+      other_user = create_user("Grace Hopper")
+
+      # `other_user` never joined this room.
+      assert :ok = Meetings.leave_for_user(room.space_id, other_user.id)
+    end
+
+    test "returns :ok for non-binary args (defensive guard)" do
+      assert :ok = Meetings.leave_for_user(nil, nil)
+      assert :ok = Meetings.leave_for_user("not-a-uuid", nil)
+    end
+  end
 end

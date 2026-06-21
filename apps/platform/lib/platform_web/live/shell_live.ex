@@ -12,6 +12,7 @@ defmodule PlatformWeb.ShellLive do
   alias Platform.Chat.Presence, as: ChatPresence
   alias Platform.Chat.PubSub, as: ChatPubSub
   alias Platform.Chat.SpaceAgentPresence
+  alias Platform.Meetings
   alias Platform.Meetings.State, as: MeetingState
   alias Platform.Repo
   alias Platform.Tasks
@@ -222,8 +223,25 @@ defmodule PlatformWeb.ShellLive do
           {:halt, socket}
 
         :meeting_bar_leave, socket ->
-          # The mini-bar "Leave" button sends this — broadcast the leave event
-          if uid = socket.assigns[:current_user_id] do
+          # The mini-bar "Leave" button sends this. Two cleanup steps in
+          # order: (1) stamp the durable participant row server-side via
+          # `Meetings.leave_for_user/2` so a presence-driven roster refetch
+          # after the COUNT decrement does NOT still see this user as
+          # active, then (2) broadcast the leave event so the shell + any
+          # other LV tabs for this user flip out of meeting mode. The bar
+          # path used to skip (1) entirely — MeetingHooks' `stamp_local_left/1`
+          # was the only leave-stamp writer and it only fires when the
+          # in-chat LV (where MeetingHooks is attached) is still mounted.
+          # If the user clicked Leave from /tasks, the chat LV was already
+          # gone and the participant row stayed orphaned (task 019ee06b).
+          space_id = socket.assigns[:meeting_space_id]
+          uid = socket.assigns[:current_user_id]
+
+          if space_id && uid do
+            Meetings.leave_for_user(space_id, uid)
+          end
+
+          if uid do
             MeetingState.broadcast_left(uid)
           end
 

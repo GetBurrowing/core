@@ -527,4 +527,119 @@ defmodule PlatformWeb.ShellLiveTest do
       :ok = MeetingState.broadcast_left(user_id)
     end
   end
+
+  # ---------------------------------------------------------------------
+  # Mini-bar Leave durably stamps the participant row (task 019ee06b Stage 2)
+  #
+  # Regression net for the bug Rowan reported: clicking the persistent
+  # meeting mini-bar's "Leave" from a page where MeetingHooks is NOT
+  # attached (e.g. /tasks) used to broadcast the leave event but never
+  # stamp the server-side `meeting_participants` row's `left_at`. The
+  # orphaned active row then poisoned future presence-driven roster
+  # refetches. Stage 1 extracted `Meetings.leave_for_user/2`; stage 2
+  # wires the shell-level `:meeting_bar_leave` handler to call it before
+  # the broadcast so any subsequent COUNT-driven refetch sees the row as
+  # resolved.
+  # ---------------------------------------------------------------------
+
+  describe "mini-bar leave stamps participant row" do
+    alias Platform.Meetings
+    alias Platform.Meetings.Participant
+    alias Platform.Meetings.State, as: MeetingState
+
+    setup do
+      _ = start_supervised(MeetingState)
+      :ok
+    end
+
+    test ":meeting_bar_leave handler durably stamps left_at on the active participant row",
+         %{conn: conn} do
+      # Seed a real space + active meeting room + a joined participant row
+      # for the test user. This mirrors the post-Start-Meeting state the
+      # mini-bar appears in.
+      {:ok, space} =
+        Chat.create_space(%{
+          name: "Bar Leave Space",
+          slug: "bar-leave-#{System.unique_integer([:positive])}",
+          kind: "channel"
+        })
+
+      {:ok, room} = Meetings.ensure_room(space.id)
+      {:ok, room} = Meetings.activate_room(room)
+
+      conn = authenticated_conn(conn)
+      user_id = conn.private.plug_session["current_user_id"]
+
+      {:ok, participant} =
+        Meetings.upsert_live_participant(room, %{
+          identity: "user:#{user_id}",
+          name: "Bar Leaver"
+        })
+
+      assert is_nil(participant.left_at)
+
+      # Mount the shell on /tasks — this is the deliberate "MeetingHooks
+      # is NOT attached" surface that proves the bug: previously the bar
+      # had no in-process listener for stamping, and the row stayed
+      # orphaned.
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+
+      # Hydrate meeting_space_id via the normal mid-session join path so
+      # the `:meeting_bar_leave` handler can resolve which space's active
+      # room to stamp.
+      send(
+        view.pid,
+        {:meeting_joined,
+         %{
+           user_id: user_id,
+           space_id: space.id,
+           space_name: "Bar Leave Space",
+           space_slug: space.slug,
+           meeting_slug: nil,
+           started_at: DateTime.utc_now()
+         }}
+      )
+
+      _ = render(view)
+
+      # The bar's JS hook ultimately sends this message into the LV.
+      send(view.pid, :meeting_bar_leave)
+      _ = render(view)
+
+      reloaded = Repo.get!(Participant, participant.id)
+      refute is_nil(reloaded.left_at)
+
+      assert is_nil(Meetings.active_participant_for_user_in_space(space.id, user_id))
+
+      # Existing broadcast_left behaviour MUST still fire — the shell's
+      # meeting_* assigns should now reflect the user out of any meeting.
+      assigns = :sys.get_state(view.pid).socket.assigns
+      assert assigns.meeting_active == false
+      assert assigns.meeting_space_id == nil
+      assert assigns.meeting_slug == nil
+    end
+
+    test ":meeting_bar_leave is a safe no-op when meeting_space_id is missing",
+         %{conn: conn} do
+      # The bar could (in theory) fire before any join hydration ran. The
+      # handler must not crash — it should still broadcast left so the
+      # mini-bar flips hidden, but skip the durable stamp because there's
+      # no space to stamp against.
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+
+      # No `:meeting_joined` has been sent — meeting_space_id is nil.
+      assigns_before = :sys.get_state(view.pid).socket.assigns
+      assert assigns_before.meeting_space_id == nil
+
+      send(view.pid, :meeting_bar_leave)
+      _ = render(view)
+
+      # LV process is still alive (didn't crash on the guarded branch).
+      assert Process.alive?(view.pid)
+
+      assigns_after = :sys.get_state(view.pid).socket.assigns
+      assert assigns_after.meeting_active == false
+    end
+  end
 end

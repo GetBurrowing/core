@@ -713,6 +713,34 @@ defmodule Platform.Meetings do
     end
   end
 
+  @doc """
+  Fire-and-forget durable cleanup for an explicit user-initiated leave,
+  callable from any surface (in-chat MeetingHooks event handler OR the
+  persistent meeting mini-bar in `ShellLive`) without depending on the
+  caller's LiveView assigns shape.
+
+  Resolves the active room for `space_id`, then delegates to
+  `mark_live_participant_left/2` with the canonical `"user:<uuid>"`
+  identity that `upsert_live_participant/2` recorded on join. Returns
+  `:ok` in every case — every nil/error branch (no active room, no
+  participant row, etc.) is tolerated as a safe no-op so the helper can
+  be called speculatively (e.g. by the mini-bar Leave button even when
+  no meeting is active).
+
+  See `MeetingHooks.stamp_local_left/1` for the leave-path contract and
+  asymmetry-with-`on_terminate/1` rationale this helper preserves.
+  """
+  @spec leave_for_user(binary(), binary()) :: :ok
+  def leave_for_user(space_id, user_id) when is_binary(space_id) and is_binary(user_id) do
+    with %Room{} = room <- get_active_room(space_id) do
+      mark_live_participant_left(room, %{identity: "user:#{user_id}", name: nil})
+    end
+
+    :ok
+  end
+
+  def leave_for_user(_space_id, _user_id), do: :ok
+
   # FK attrs map for a parsed identity — drives both insert attrs and the
   # match-key lookup.
   defp identity_fk({:user, uuid}), do: %{user_id: uuid}

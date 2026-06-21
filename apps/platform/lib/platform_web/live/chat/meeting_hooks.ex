@@ -376,16 +376,20 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
   #
   # Public so the explicit-leave decrement contract can be unit-tested
   # directly (the `handle_event/3` leave callbacks are private hook plumbing).
+  #
+  # Task 019ee06b stage 1 (pure refactor): the cleanup body now lives on
+  # `Platform.Meetings.leave_for_user/2` so the same decrement is
+  # reachable from surfaces that aren't a chat LV (notably the persistent
+  # meeting mini-bar in `ShellLive` — stage 2 wires that). We keep this
+  # socket-facing shim so the existing `handle_event/3` plumbing and the
+  # `meeting_hooks_test.exs` v4-case-2 regressions stay byte-for-byte
+  # identical: pull `space_id` + `user_id` from assigns, hand off.
   @doc false
   @spec stamp_local_left(Phoenix.LiveView.Socket.t()) :: :ok
   def stamp_local_left(socket) do
     with space when not is_nil(space) <- socket.assigns[:active_space],
-         user_id when is_binary(user_id) <- socket.assigns[:user_id],
-         %Meetings.Room{} = room <- Meetings.get_active_room(space.id) do
-      Meetings.mark_live_participant_left(room, %{
-        identity: "user:#{user_id}",
-        name: nil
-      })
+         user_id when is_binary(user_id) <- socket.assigns[:user_id] do
+      Meetings.leave_for_user(space.id, user_id)
     end
 
     :ok
