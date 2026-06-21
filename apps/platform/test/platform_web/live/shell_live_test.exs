@@ -883,4 +883,63 @@ defmodule PlatformWeb.ShellLiveTest do
       assert assigns_after.meeting_active == false
     end
   end
+
+  # ---------------------------------------------------------------------
+  # MeetingWatchdog mount gate (task 019ee06b Stage 2)
+  #
+  # The shell layout renders a hidden `#meeting-watchdog` element bound to
+  # the `MeetingWatchdog` JS hook — but ONLY when `@meeting_active` is
+  # true. When no meeting is active the element must be absent from the
+  # DOM so the watchdog hook never mounts and no spurious LiveKit listener
+  # binding / WebSocket activity occurs on /tasks, /activity, etc. These
+  # tests pin both branches of the `:if={@meeting_active}` gate so an
+  # accidental delete or class-name drift is caught.
+  # ---------------------------------------------------------------------
+
+  describe "meeting watchdog mount gate" do
+    alias Platform.Meetings.State, as: MeetingState
+
+    setup do
+      _ = start_supervised(MeetingState)
+      :ok
+    end
+
+    test "no #meeting-watchdog element when no meeting is active", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      {:ok, _view, html} = live(conn, ~p"/tasks")
+
+      refute html =~ ~s(id="meeting-watchdog")
+      refute html =~ ~s(phx-hook="MeetingWatchdog")
+    end
+
+    test "shell renders #meeting-watchdog with MeetingWatchdog hook when meeting_active",
+         %{conn: conn} do
+      conn = authenticated_conn(conn)
+      user_id = conn.private.plug_session["current_user_id"]
+
+      :ok =
+        MeetingState.broadcast_joined(
+          user_id,
+          "space-watchdog-1",
+          "Watchdog Test Space",
+          "watchdog-space-slug",
+          "watchdog-meeting-slug"
+        )
+
+      {:ok, _view, html} = live(conn, ~p"/tasks")
+
+      assert html =~ ~s(id="meeting-watchdog")
+      assert html =~ ~s(phx-hook="MeetingWatchdog")
+      # Stable across shell repatches — must NOT be re-mounted on every
+      # repatch (the watchdog's singleton guard would back off, but a
+      # fresh mounted() cycle is wasted churn).
+      assert html =~ ~s(phx-update="ignore")
+      # Initial breadcrumb so [data-room-state] selectors exist immediately.
+      assert html =~ ~s(data-room-state="unknown")
+      # No visible UI surface.
+      assert html =~ ~r/id="meeting-watchdog"[^>]*class="[^"]*hidden/
+
+      :ok = MeetingState.broadcast_left(user_id)
+    end
+  end
 end

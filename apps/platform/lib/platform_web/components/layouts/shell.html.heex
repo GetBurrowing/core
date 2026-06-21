@@ -345,5 +345,25 @@
       on_meeting_page={@on_meeting_page}
       sidebar_collapsed={@sidebar_collapsed}
     />
+
+    <%!-- Shell-level LiveKit reconnect supervisor (task 019ee06b stage 2).
+         The watchdog is a slim sibling of MeetingClient that owns ONLY
+         network-survival (idempotent reconnect listener bind + breadcrumb)
+         so an ICE blip while the user is on /tasks, /activity, etc. does
+         not leave the surviving Room without a state observer. Gated by
+         `:if={@meeting_active}` — when no meeting is active the element is
+         absent from the DOM, guaranteeing zero spurious WebSocket activity.
+         `phx-update="ignore"` keeps the element stable across the shell's
+         frequent repatches (path changes, presence) so we don't burn
+         mount() cycles relying on the singleton guard to back off. --%>
+    <div
+      :if={@meeting_active}
+      id="meeting-watchdog"
+      phx-hook="MeetingWatchdog"
+      phx-update="ignore"
+      class="hidden"
+      data-room-state="unknown"
+    >
+    </div>
   </div>
 </div>

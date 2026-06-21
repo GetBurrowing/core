@@ -361,8 +361,9 @@ function fakeLocalParticipant({ camera = false, mic = false } = {}) {
   }
 }
 
-// Minimal fake LiveKit Room: .on registers handlers, .emit fires them,
-// .disconnect is a spy. state defaults to "connected".
+// Minimal fake LiveKit Room: .on registers handlers, .off removes a ref,
+// .emit fires them, .disconnect/.connect are spies. state defaults to
+// "connected".
 function fakeRoom({ state = "connected", camera = false, mic = false } = {}) {
   const handlers = new Map()
   return {
@@ -378,8 +379,17 @@ function fakeRoom({ state = "connected", camera = false, mic = false } = {}) {
       handlers.set(event, list)
       return this
     },
+    off(event, cb) {
+      const list = handlers.get(event) || []
+      const i = list.indexOf(cb)
+      if (i >= 0) list.splice(i, 1)
+      return this
+    },
     emit(event, ...args) {
       ;(handlers.get(event) || []).forEach((cb) => cb(...args))
+    },
+    listenerCount(event) {
+      return (handlers.get(event) || []).length
     },
     disconnect() {
       this.disconnectCalls += 1
@@ -431,6 +441,11 @@ function buildReconnectHook(el) {
   hook._tiles = new Map()
   hook._localVideoEl = null
   hook._localVideoTrack = null
+  // Per-instance listener bookkeeping (task 019ee06b stage 2 v2 — case-3
+  // cleanup). `mounted()` would init these too; tests that bypass mounted
+  // need them on the seed.
+  hook._boundRoom = null
+  hook._roomListeners = []
   hook.el = el
   // pushEvent is called by the Disconnected handler; stub it.
   hook.pushEvent = () => {}
@@ -502,6 +517,79 @@ describe("MeetingClient — reconnect survival + signal (stages 1-4)", () => {
     expect(globalThis.window.__livekit_room).toBe(room)
     // Re-binding wired handlers — emitting a known event must not throw.
     expect(() => room.emit("disconnected")).not.toThrow()
+  })
+
+  // 2b. Per-instance listener cleanup (task 019ee06b stage 2 v2 — case-3
+  //     reviewer fix). The window-pinned Room outlives a MeetingClient
+  //     destroy/re-mount cycle (LV navigation /chat → /meetings → back), so
+  //     each remount of this hook MUST detach the listeners the previous
+  //     instance installed. Without it, listenerCount('reconnected') grew
+  //     1 → 2 → 3 across navigation and duplicate `livekit:state` events
+  //     fired per real Reconnected. Replaces the v1 `__watchdogBound`
+  //     band-aid which was asymmetric (set but never checked) and produced
+  //     both the case-1 and case-3 e2e failures.
+  it("destroyed() detaches the RoomEvent listeners installed in _bindRoomEvents", () => {
+    const room = fakeRoom({ state: "connected" })
+    const el = fakeHookEl()
+    const hook = buildReconnectHook(el)
+    hook._viewportQuery = { removeEventListener() {} }
+    hook._onPageHide = () => {}
+
+    hook._adoptRoom(room)
+    expect(room.listenerCount("reconnected")).toBe(1)
+    expect(room.listenerCount("reconnecting")).toBe(1)
+    expect(room.listenerCount("disconnected")).toBe(1)
+    expect(room.listenerCount("participantConnected")).toBe(1)
+    expect(hook._boundRoom).toBe(room)
+
+    hook.destroyed()
+
+    // Every listener we installed has been removed from the surviving Room.
+    expect(room.listenerCount("reconnected")).toBe(0)
+    expect(room.listenerCount("reconnecting")).toBe(0)
+    expect(room.listenerCount("disconnected")).toBe(0)
+    expect(room.listenerCount("participantConnected")).toBe(0)
+    expect(hook._boundRoom).toBeNull()
+    expect(hook._roomListeners).toEqual([])
+    // The Room itself was NOT disconnected (reconnect-survival contract).
+    expect(room.disconnectCalls).toBe(0)
+  })
+
+  it("destroyed() + re-mount adopt installs exactly ONE listener set on the surviving Room", () => {
+    // Mirrors the case-3 scenario: navigate /chat → /tasks → /chat. The Room
+    // survives via window.__livekit_room; each MeetingClient destroy/mount
+    // cycle must keep the listener count stable at 1, not accumulate.
+    const room = fakeRoom({ state: "connected" })
+    const el1 = fakeHookEl()
+    const hook1 = buildReconnectHook(el1)
+    hook1._viewportQuery = { removeEventListener() {} }
+    hook1._onPageHide = () => {}
+    hook1._adoptRoom(room)
+    expect(room.listenerCount("reconnected")).toBe(1)
+    hook1.destroyed()
+    expect(room.listenerCount("reconnected")).toBe(0)
+
+    const el2 = fakeHookEl()
+    const hook2 = buildReconnectHook(el2)
+    hook2._adoptRoom(room)
+    expect(room.listenerCount("reconnected")).toBe(1)
+    expect(room.listenerCount("reconnecting")).toBe(1)
+    expect(room.listenerCount("disconnected")).toBe(1)
+  })
+
+  it("_bindRoomEvents on the SAME Room twice does not double-bind (per-instance idempotency)", () => {
+    const room = fakeRoom({ state: "connected" })
+    const el = fakeHookEl()
+    const hook = buildReconnectHook(el)
+
+    hook._adoptRoom(room)
+    expect(room.listenerCount("reconnected")).toBe(1)
+
+    // A redundant explicit call (e.g. defensive re-bind path) must NOT add
+    // a second handler.
+    hook._bindRoomEvents(room)
+    expect(room.listenerCount("reconnected")).toBe(1)
+    expect(room.listenerCount("participantConnected")).toBe(1)
   })
 
   // 3. _join adopts instead of disconnect-reconnect when already connected.

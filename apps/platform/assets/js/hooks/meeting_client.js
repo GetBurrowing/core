@@ -20,6 +20,13 @@ const MeetingClient = {
   mounted() {
     this._room = null
     this._tiles = new Map()
+    // Per-instance bookkeeping for the Room we've wired listeners onto,
+    // and the listener refs themselves. Cleared in destroyed() so a
+    // re-mount against the surviving window-pinned Room doesn't
+    // accumulate listener sets (task 019ee06b stage 2 v2 e2e fix — the
+    // case-3 unbounded growth lived here).
+    this._boundRoom = null
+    this._roomListeners = []
 
     // v2 (task 019e42f6): the single persistent local self-view <video>.
     // Born once in the [data-role="local-self-view"] parking slot, attached
@@ -79,6 +86,17 @@ const MeetingClient = {
     // the next mounted() can re-adopt it. True leaves go through the
     // server "leave-meeting" push + RoomEvent.Disconnected, and a real
     // page exit goes through the pagehide/beforeunload listener above.
+    //
+    // BUT we MUST detach the RoomEvent listeners we installed: the Room
+    // object survives via window.__livekit_room across the destroy/mount
+    // cycle, and without an off() walk every shell repatch (or every
+    // navigation between /chat, /meetings, and back) would leak a fresh
+    // listener set onto the same Room. That's exactly what the case-3
+    // e2e reviewer caught — listener count 1 → 2 → 3 → … and duplicate
+    // `livekit:state` events firing per RoomEvent. (task 019ee06b stage 2
+    // v2 fix.)
+    this._releaseRoomListeners()
+
     window.removeEventListener("pagehide", this._onPageHide)
     window.removeEventListener("beforeunload", this._onPageHide)
     this._viewportQuery?.removeEventListener("change", this._onViewportChange)
@@ -316,16 +334,52 @@ const MeetingClient = {
   // `_join` (task 019e4b3e stage 1) so the adopt path (mounted() finding a
   // surviving room after an LV reconnect) re-binds the identical handler
   // set without duplicating them.
+  //
+  // Idempotency (task 019ee06b stage 2 v2 — case-3 e2e fix):
+  // - PER-INSTANCE: `this._boundRoom === room` short-circuits a redundant
+  //   bind on the SAME hook instance (e.g. `_adoptRoom` called twice
+  //   against the same Room during a quick succession of LV repatches).
+  //   Without this, even with the destroyed() cleanup below, a re-adopt
+  //   inside one mount cycle would double-bind.
+  // - ACROSS INSTANCES: every set of refs we register is tracked in
+  //   `this._roomListeners` so `destroyed()` can `room.off()` them. The
+  //   Room object outlives our hook instance (window.__livekit_room is
+  //   pinned across LV navigation), so without explicit off() walks, each
+  //   navigation between /chat ↔ /meetings ↔ back would leak a fresh
+  //   listener set onto the same Room — exactly what the case-3 reviewer
+  //   probe surfaced (listenerCount('reconnected') growing 1 → 2 → 3).
+  //
+  // NOTE: this hook installs its own listeners independently of
+  // MeetingWatchdog. They both register handlers on the Room's
+  // Reconnecting/Reconnected/etc. — but each tags `source` on the emitted
+  // `livekit:state` CustomEvent so downstream consumers can dedupe by
+  // origin, and they stamp DIFFERENT dataset elements
+  // (`#meeting-client.dataset.roomState` vs
+  // `#meeting-watchdog.dataset.roomState`) so neither overwrites the
+  // other. The previous `room.__watchdogBound` band-aid was an
+  // asymmetric flag that produced both the case-1 (watchdog never
+  // installed listeners) and case-3 (MeetingClient never cleaned up)
+  // failures; this hook no longer sets or reads it.
   _bindRoomEvents(room) {
-    room.on(RoomEvent.ParticipantConnected, (p) => this._ensureTile(p))
-    room.on(RoomEvent.ParticipantDisconnected, (p) => this._removeTile(p.identity))
-    room.on(RoomEvent.TrackSubscribed, (track, pub, participant) =>
+    if (this._boundRoom === room) return
+    if (this._boundRoom) this._releaseRoomListeners()
+    this._boundRoom = room
+    this._roomListeners = []
+
+    const bind = (event, fn) => {
+      room.on(event, fn)
+      this._roomListeners.push([event, fn])
+    }
+
+    bind(RoomEvent.ParticipantConnected, (p) => this._ensureTile(p))
+    bind(RoomEvent.ParticipantDisconnected, (p) => this._removeTile(p.identity))
+    bind(RoomEvent.TrackSubscribed, (track, pub, participant) =>
       this._attachTrack(track, participant),
     )
-    room.on(RoomEvent.TrackUnsubscribed, (track, pub, participant) =>
+    bind(RoomEvent.TrackUnsubscribed, (track, pub, participant) =>
       this._detachTrack(track, participant),
     )
-    room.on(RoomEvent.LocalTrackPublished, (pub) => {
+    bind(RoomEvent.LocalTrackPublished, (pub) => {
       // v2 (task 019e42f6): the local CAMERA is owned by the persistent
       // self-view element + reparented per mode; do NOT route it through the
       // imperative tile path. Screen-share still flows to its dedicated slot
@@ -342,7 +396,7 @@ const MeetingClient = {
         this._attachTrack(pub.track, room.localParticipant)
       }
     })
-    room.on(RoomEvent.LocalTrackUnpublished, (pub) => {
+    bind(RoomEvent.LocalTrackUnpublished, (pub) => {
       if (
         pub.kind === Track.Kind.Video &&
         (!pub.track || !isScreenShareSource(pub.track.source))
@@ -354,7 +408,7 @@ const MeetingClient = {
       }
       if (pub.track) this._detachTrack(pub.track, room.localParticipant)
     })
-    room.on(RoomEvent.ActiveSpeakersChanged, (speakers) => {
+    bind(RoomEvent.ActiveSpeakersChanged, (speakers) => {
       const identities = speakers.map((p) => p.identity)
       this._markSpeakers(identities)
     })
@@ -365,19 +419,39 @@ const MeetingClient = {
     // :camera_enabled intent still reads true. On Reconnected we reconcile
     // local media against committed intent read from the DOM dataset
     // (reconnect-safe — no dependency on a fresh LV push).
-    room.on(RoomEvent.Reconnecting, () => {
+    bind(RoomEvent.Reconnecting, () => {
       this._emitState("reconnecting", room)
     })
-    room.on(RoomEvent.Reconnected, () => {
+    bind(RoomEvent.Reconnected, () => {
       this._emitState("reconnected", room)
       this._reconcileLocalMedia(room)
     })
 
-    room.on(RoomEvent.Disconnected, () => {
+    bind(RoomEvent.Disconnected, () => {
       this._emitState("disconnected", room)
       this._cleanupRoom()
       this.pushEvent("meeting_left", {})
     })
+  },
+
+  // Detach every RoomEvent listener we installed in `_bindRoomEvents` so
+  // a subsequent re-bind (or a destroyed() cycle) doesn't accumulate.
+  // Safe to call when nothing is bound. Called from `destroyed()`,
+  // `_cleanupRoom()`, and `_bindRoomEvents()` (when re-binding to a
+  // different Room object).
+  _releaseRoomListeners() {
+    const room = this._boundRoom
+    if (room && typeof room.off === "function") {
+      for (const [event, fn] of this._roomListeners) {
+        try {
+          room.off(event, fn)
+        } catch (_) {
+          /* listener may already be gone */
+        }
+      }
+    }
+    this._boundRoom = null
+    this._roomListeners = []
   },
 
   async _join({ token, url }) {
@@ -476,6 +550,9 @@ const MeetingClient = {
   },
 
   _cleanupRoom() {
+    // Detach any listeners we installed before nulling our ref so a
+    // future _join against a fresh Room starts from a clean slate.
+    this._releaseRoomListeners()
     this._room = null
     window.__livekit_room = null
     window.__livekitRoom = null

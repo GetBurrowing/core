@@ -77,6 +77,26 @@ defmodule PlatformWeb.Router do
     end
   end
 
+  # Dev-only evidence helpers: POST endpoints to drive `@meeting_active`
+  # on the shell for screenshot capture of `#meeting-watchdog` mount/
+  # unmount (task 019ee06b-d62d stage 2 v2). Separate scope so the
+  # session is fetched but CSRF protection (which would reject the
+  # bare CDP-issued POST) is bypassed. Unreachable in prod — the
+  # `Mix.env() == :dev` guard prevents route registration entirely.
+  if Mix.env() == :dev do
+    pipeline :dev_session_json do
+      plug(:accepts, ["json"])
+      plug(:fetch_session)
+    end
+
+    scope "/dev", PlatformWeb do
+      pipe_through(:dev_session_json)
+
+      post("/meeting_evidence/join", DevMeetingEvidenceController, :join)
+      post("/meeting_evidence/leave", DevMeetingEvidenceController, :leave)
+    end
+  end
+
   scope "/", PlatformWeb do
     pipe_through([:browser, :require_auth])
 
