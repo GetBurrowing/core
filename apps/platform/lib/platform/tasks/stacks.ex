@@ -365,6 +365,51 @@ defmodule Platform.Tasks.Stacks do
   defp abandon_description(%Stack{description: existing}, reason) when is_binary(reason),
     do: "#{existing}\n\nAbandoned: #{reason}"
 
+  @doc """
+  Terminal transition: mark a stack `done`.
+
+  Only allowed when every member task is already `done`. The natural close
+  for a stack whose work has fully shipped — including the manual-ship lane
+  where members merged via individual PRs rather than the rollup branch,
+  which `recompute_stack_status/1` doesn't recognize as completion.
+
+  Returns `{:error, :members_not_done, %{pending: [%{id, title, status}]}}`
+  when any member is still in flight. Returns `{:error, changeset}` on a
+  schema-level write failure. Returns `{:ok, stack}` on success.
+  """
+  @spec complete_stack(Stack.t(), String.t() | nil) ::
+          {:ok, Stack.t()}
+          | {:error, :members_not_done, %{pending: [map()]}}
+          | {:error, Ecto.Changeset.t()}
+  def complete_stack(%Stack{} = stack, note \\ nil) do
+    case pending_members(stack.id) do
+      [] ->
+        attrs = %{status: "done", description: complete_description(stack, note)}
+
+        stack
+        |> Stack.changeset(attrs)
+        |> Repo.update()
+
+      [_ | _] = pending ->
+        {:error, :members_not_done, %{pending: pending}}
+    end
+  end
+
+  defp pending_members(stack_id) do
+    Task
+    |> where([t], t.stack_id == ^stack_id and t.status != "done")
+    |> select([t], %{id: t.id, title: t.title, status: t.status})
+    |> Repo.all()
+  end
+
+  defp complete_description(%Stack{description: existing}, nil), do: existing
+
+  defp complete_description(%Stack{description: nil}, note) when is_binary(note),
+    do: "Completed: #{note}"
+
+  defp complete_description(%Stack{description: existing}, note) when is_binary(note),
+    do: "#{existing}\n\nCompleted: #{note}"
+
   # ── Membership ───────────────────────────────────────────────────────────
 
   @doc """

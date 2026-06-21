@@ -171,6 +171,73 @@ defmodule Platform.Tasks.StacksTest do
     end
   end
 
+  describe "complete_stack/2" do
+    test "transitions status to done when every member is done" do
+      project = project_fixture()
+      stack = stack_fixture(project_id: project.id)
+
+      m1 = stamp_unmerged_member!(project, stack, position: 1)
+      m2 = stamp_unmerged_member!(project, stack, position: 2)
+      set_member_status(stack, m1, "done")
+      set_member_status(stack, m2, "done")
+
+      assert {:ok, completed} = Stacks.complete_stack(stack, "shipped via individual PRs")
+      assert completed.status == "done"
+      assert completed.description =~ "Completed: shipped via individual PRs"
+    end
+
+    test "preserves prior description when note given" do
+      project = project_fixture()
+      stack = stack_fixture(project_id: project.id, description: "Original notes")
+
+      m = stamp_unmerged_member!(project, stack, position: 1)
+      set_member_status(stack, m, "done")
+
+      assert {:ok, completed} = Stacks.complete_stack(stack, "merged")
+      assert completed.description =~ "Original notes"
+      assert completed.description =~ "Completed: merged"
+    end
+
+    test "leaves description untouched when no note given" do
+      project = project_fixture()
+      stack = stack_fixture(project_id: project.id, description: "Keep me")
+
+      m = stamp_unmerged_member!(project, stack, position: 1)
+      set_member_status(stack, m, "done")
+
+      assert {:ok, completed} = Stacks.complete_stack(stack)
+      assert completed.status == "done"
+      assert completed.description == "Keep me"
+    end
+
+    test "refuses with members_not_done when any member isn't done" do
+      project = project_fixture()
+      stack = stack_fixture(project_id: project.id)
+
+      m_done = stamp_unmerged_member!(project, stack, position: 1)
+      m_open = stamp_unmerged_member!(project, stack, position: 2)
+      set_member_status(stack, m_done, "done")
+      set_member_status(stack, m_open, "in_progress")
+
+      assert {:error, :members_not_done, %{pending: pending}} =
+               Stacks.complete_stack(stack, "trying")
+
+      assert [%{id: pending_id, status: "in_progress"}] = pending
+      assert pending_id == m_open.id
+
+      # Stack stays untouched on refusal.
+      reloaded = Stacks.get_stack(stack.id)
+      assert reloaded.status == stack.status
+      assert reloaded.description == stack.description
+    end
+
+    test "succeeds on a stack with no members (degenerate but valid)" do
+      stack = stack_fixture()
+      assert {:ok, completed} = Stacks.complete_stack(stack, "empty close")
+      assert completed.status == "done"
+    end
+  end
+
   describe "rollup_branch_name/1" do
     test "prefixes the slug with stack/" do
       assert Stacks.rollup_branch_name("user-keyed-saves") == "stack/user-keyed-saves"

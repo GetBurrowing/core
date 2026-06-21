@@ -1393,6 +1393,25 @@ defmodule Platform.Federation.ToolSurface do
           "When a stack's scope is no longer wanted and you want to record that decision explicitly."
       },
       %{
+        name: "stack_complete",
+        description:
+          "Terminal: mark a stack `done`. Only allowed when every member task is already `done`. Use this when members have shipped through individual PRs (the manual-ship lane) rather than the rollup branch — `recompute_stack_status/1` doesn't recognize per-PR merges as completion, so the stack would otherwise sit at `deploying` forever.",
+        parameters: %{
+          stack_id: %{type: "string", required: true, description: "The stack to complete"},
+          note: %{
+            type: "string",
+            required: false,
+            description: "Free-text note appended to the stack's description (prefixed `Completed:`)"
+          }
+        },
+        returns:
+          "The updated stack record (status: `done`). Error envelopes: `members_not_done` (with `pending: [%{id, title, status}]`) when any member task isn't `done`.",
+        limitations:
+          "Terminal: completed stacks are not auto-recomputed back to another status. The all-members-done precondition is enforced — eject or finish stragglers first.",
+        when_to_use:
+          "When every member of a stack has merged (typically via individual PRs) and you want to close the stack out cleanly instead of abandoning it."
+      },
+      %{
         name: "stack_start",
         description:
           "Transition a stack from `forming` to `in_progress` and fan its members out per ADR 0041 §\"Status cascade — entering a stack\". Level-0 roots (members with no in-stack deps) move from `backlog` to `in_progress`; non-root members move from `backlog` to `stack_pending`. Members already past `backlog` are left alone — the cascade is additive.",
@@ -3233,6 +3252,45 @@ defmodule Platform.Federation.ToolSurface do
             {:error,
              %{
                error: "Failed to abandon stack: #{inspect_errors(changeset)}",
+               recoverable: true
+             }}
+        end
+    end
+  end
+
+  def execute("stack_complete", args, _context) do
+    stack_id = Map.get(args, "stack_id")
+    note = Map.get(args, "note")
+
+    case stack_id && Stacks.get_stack(stack_id) do
+      nil ->
+        {:error,
+         %{
+           error: "Stack not found: #{inspect(stack_id)}",
+           recoverable: false,
+           suggestion: "Use stack_list to find available stacks"
+         }}
+
+      %Stack{} = stack ->
+        case Stacks.complete_stack(stack, note) do
+          {:ok, %Stack{} = updated} ->
+            {:ok, serialize_stack(updated)}
+
+          {:error, :members_not_done, %{pending: pending}} ->
+            {:error,
+             %{
+               error: "Stack has members that are not done",
+               code: "members_not_done",
+               pending: pending,
+               recoverable: true,
+               suggestion:
+                 "Finish or eject the pending members, then retry. Use stack_eject to remove a task without completing it."
+             }}
+
+          {:error, changeset} ->
+            {:error,
+             %{
+               error: "Failed to complete stack: #{inspect_errors(changeset)}",
                recoverable: true
              }}
         end

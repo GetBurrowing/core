@@ -37,7 +37,7 @@ defmodule Platform.Federation.ToolSurfaceTest do
   describe "tool_definitions/0" do
     test "returns all 72 tools with required components" do
       tools = ToolSurface.tool_definitions()
-      assert length(tools) == 72
+      assert length(tools) == 73
 
       tool_names = Enum.map(tools, & &1.name)
       assert "send_media" in tool_names
@@ -74,6 +74,7 @@ defmodule Platform.Federation.ToolSurfaceTest do
       assert "stack_remove_dependency" in tool_names
       assert "stack_eject" in tool_names
       assert "stack_abandon" in tool_names
+      assert "stack_complete" in tool_names
       assert "stack_start" in tool_names
       assert "stack_start_planning" in tool_names
       assert "stack_assign_agents" in tool_names
@@ -2222,6 +2223,62 @@ defmodule Platform.Federation.ToolSurfaceTest do
 
       assert result.status == "abandoned"
       assert result.description =~ "scope change"
+    end
+
+    test "stack_complete refuses with members_not_done when a member isn't done" do
+      project = create_project()
+      slug = "shim-complete-refuse-#{System.unique_integer([:positive])}"
+
+      {:ok, %{stack_id: stack_id}} =
+        ToolSurface.execute(
+          "stack_create",
+          %{"project_id" => project.id, "slug" => slug, "name" => "Refuse Complete"},
+          %{}
+        )
+
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "still cooking"})
+      {:ok, _} = Tasks.update_task(task, %{stack_id: stack_id, stack_position: 1})
+
+      assert {:error, error} =
+               ToolSurface.execute(
+                 "stack_complete",
+                 %{"stack_id" => stack_id, "note" => "early"},
+                 %{}
+               )
+
+      assert error.code == "members_not_done"
+      assert [%{id: pending_id}] = error.pending
+      assert pending_id == task.id
+    end
+
+    test "stack_complete flips status to done when every member is done" do
+      project = create_project()
+      slug = "shim-complete-ok-#{System.unique_integer([:positive])}"
+
+      {:ok, %{stack_id: stack_id}} =
+        ToolSurface.execute(
+          "stack_create",
+          %{"project_id" => project.id, "slug" => slug, "name" => "Complete Me"},
+          %{}
+        )
+
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "shipped"})
+
+      {:ok, attached} = Tasks.update_task(task, %{stack_id: stack_id, stack_position: 1})
+
+      attached
+      |> Platform.Tasks.Task.changeset(%{status: "done"})
+      |> Platform.Repo.update!()
+
+      {:ok, result} =
+        ToolSurface.execute(
+          "stack_complete",
+          %{"stack_id" => stack_id, "note" => "manual ship lane"},
+          %{}
+        )
+
+      assert result.status == "done"
+      assert result.description =~ "manual ship lane"
     end
 
     test "stack_start transitions a forming stack to in_progress" do
