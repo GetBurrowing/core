@@ -115,6 +115,14 @@ defmodule PlatformWeb.ShellLive do
       |> assign(:meeting_slug, nil)
       |> assign(:meeting_started_at, nil)
       |> assign(:on_meeting_page, false)
+      # Stage 4 (task 019ee06b): the no-ChatLive bar-toggle fallback caches
+      # the post-toggle mic/camera state here so it can flip them on each
+      # click without round-tripping. Defaults mirror MeetingBarLive's
+      # `mount/1` assigns. Also updated when `:meeting_media_state` is
+      # received (from ANY source — MeetingHooks on another tab, or this
+      # shell's own broadcast) so the cache stays the authority.
+      |> assign(:shell_bar_mic_on, true)
+      |> assign(:shell_bar_camera_on, false)
       |> maybe_seed_meeting_state(raw_user_id)
       |> attach_hook(:track_path, :handle_params, fn _params, url, socket ->
         uri = URI.parse(url)
@@ -209,6 +217,29 @@ defmodule PlatformWeb.ShellLive do
 
           {:halt, socket}
 
+        {:meeting_media_state, %{mic_enabled: mic, camera_enabled: camera}}, socket ->
+          # Stage 3 (task 019ee06b): MeetingHooks broadcasts the authoritative
+          # post-toggle mic/camera state on `MeetingState.topic(user_id)`.
+          # The bar is a LiveComponent so it can't subscribe to PubSub itself —
+          # forward the new values via `send_update/2`, the canonical Phoenix
+          # pattern for pushing fresh assigns into a LiveComponent from its
+          # host LV's `handle_info`. `Map.has_key?/2`-style override on the
+          # component side keeps a `false` from the server from being lost.
+          #
+          # Stage 4 (task 019ee06b): also mirror into the shell's cached
+          # `:shell_bar_*` assigns so the no-ChatLive bar-toggle fallback
+          # (`shell_meeting_toggle/2`) always flips off the current truth.
+          send_update(PlatformWeb.MeetingBarLive,
+            id: "meeting-bar",
+            mic_on: mic,
+            camera_on: camera
+          )
+
+          {:halt,
+           socket
+           |> assign(:shell_bar_mic_on, mic)
+           |> assign(:shell_bar_camera_on, camera)}
+
         {:meeting_left, _payload}, socket ->
           socket =
             socket
@@ -219,6 +250,10 @@ defmodule PlatformWeb.ShellLive do
             |> assign(:meeting_slug, nil)
             |> assign(:meeting_started_at, nil)
             |> assign(:on_meeting_page, false)
+            # Stage 4 (task 019ee06b): reset cached bar state on leave so a
+            # fresh join starts from MeetingBarLive's mount defaults again.
+            |> assign(:shell_bar_mic_on, true)
+            |> assign(:shell_bar_camera_on, false)
 
           {:halt, socket}
 
@@ -254,6 +289,8 @@ defmodule PlatformWeb.ShellLive do
             |> assign(:meeting_slug, nil)
             |> assign(:meeting_started_at, nil)
             |> assign(:on_meeting_page, false)
+            |> assign(:shell_bar_mic_on, true)
+            |> assign(:shell_bar_camera_on, false)
 
           {:halt, socket}
 
@@ -279,6 +316,33 @@ defmodule PlatformWeb.ShellLive do
           {:cont, socket}
       end)
       |> attach_hook(:drawer_events, :handle_event, fn
+        # Stage 4 (task 019ee06b): meeting-bar JS hook pushes these to the
+        # active LiveView. On /chat the ChatLive's MeetingHooks owns the
+        # toggle (assigns :mic_enabled / :camera_enabled, drives the local
+        # LiveKit room, broadcasts via MeetingState) and `:halt`s the event
+        # — we yield to it by returning `:cont` here. On any other route
+        # (e.g. /tasks) MeetingHooks is NOT attached, so :mic_enabled is
+        # absent and ShellLive becomes the single producer: flip the cached
+        # bar-state, push the LiveKit toggle for the MeetingClient JS hook
+        # listening on the global socket (meeting_client.js:37-38), and
+        # broadcast the authoritative post-toggle pair via
+        # `MeetingState.broadcast_media_state/2`. The broadcast loops back
+        # into ShellLive's `:meeting_media_state` handler which `send_update`s
+        # the bar — same path MeetingHooks uses, so the surfaces converge.
+        "meeting_toggle_mic", _params, socket ->
+          if Map.has_key?(socket.assigns, :mic_enabled) do
+            {:cont, socket}
+          else
+            {:halt, shell_meeting_toggle(socket, :mic)}
+          end
+
+        "meeting_toggle_camera", _params, socket ->
+          if Map.has_key?(socket.assigns, :camera_enabled) do
+            {:cont, socket}
+          else
+            {:halt, shell_meeting_toggle(socket, :camera)}
+          end
+
         # Mobile bottom-nav More tab → opens the long-tail sheet (task 019e1322 Stage 2)
         "open_more_sheet", _params, socket ->
           {:halt, assign(socket, :more_sheet_open, true)}
@@ -593,6 +657,59 @@ defmodule PlatformWeb.ShellLive do
         |> String.replace("Live", "")
         |> String.replace("_", " ")
     end
+  end
+
+  # Stage 4 (task 019ee06b): no-ChatLive fallback for bar-initiated
+  # `meeting_toggle_mic` / `meeting_toggle_camera` events from the
+  # MeetingBar JS hook. Three side effects, in order:
+  #
+  #   1. Flip the corresponding cached `:shell_bar_*` assign so a rapid
+  #      double-click reads the post-toggle truth, not the stale default.
+  #   2. `push_event(socket, "toggle-mic"|"toggle-camera", %{})` — the
+  #      MeetingClient JS hook listens on the global LiveView socket
+  #      (`meeting_client.js:37-38`), so a push from ANY mounted LV
+  #      reaches LiveKit. This is what actually mutes/unmutes the local
+  #      track when MeetingHooks isn't mounted.
+  #   3. Broadcast the authoritative pair via
+  #      `MeetingState.broadcast_media_state/2`. The broadcast loops back
+  #      into this same shell's `:meeting_media_state` handler, which
+  #      `send_update`s the bar — same convergence path as MeetingHooks
+  #      so every consumer (other tabs on /chat, other shells) ends in
+  #      lockstep.
+  #
+  # Anonymous shells (no `current_user_id`) skip the broadcast — there's
+  # no per-user topic to fan out on. We still flip the local cache so a
+  # logged-in-soon-to-be flow doesn't drift.
+  defp shell_meeting_toggle(socket, :mic) do
+    new_mic = !socket.assigns.shell_bar_mic_on
+    camera = socket.assigns.shell_bar_camera_on
+
+    socket = assign(socket, :shell_bar_mic_on, new_mic)
+
+    if uid = socket.assigns[:current_user_id] do
+      MeetingState.broadcast_media_state(uid, %{
+        mic_enabled: new_mic,
+        camera_enabled: camera
+      })
+    end
+
+    push_event(socket, "toggle-mic", %{})
+  end
+
+  defp shell_meeting_toggle(socket, :camera) do
+    new_camera = !socket.assigns.shell_bar_camera_on
+    mic = socket.assigns.shell_bar_mic_on
+
+    socket = assign(socket, :shell_bar_camera_on, new_camera)
+
+    if uid = socket.assigns[:current_user_id] do
+      MeetingState.broadcast_media_state(uid, %{
+        mic_enabled: mic,
+        camera_enabled: new_camera
+      })
+    end
+
+    push_event(socket, "toggle-camera", %{})
   end
 
   # Initial badge count for the bottom-nav Tasks tab. Wraps Platform.Tasks

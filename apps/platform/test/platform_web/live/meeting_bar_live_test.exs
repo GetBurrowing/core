@@ -128,5 +128,79 @@ defmodule PlatformWeb.MeetingBarLiveTest do
       assert html =~ "data-bar-camera"
       assert html =~ "data-bar-leave"
     end
+
+    # Stage 4 (task 019ee06b): the mic/camera buttons must NOT carry
+    # `phx-click` so the MeetingBar JS hook is the sole click handler.
+    # A stray `phx-click` would re-introduce the LiveComponent-local
+    # toggle path that was the source of the bar/in-chat drift this
+    # stage fixes. The leave button still uses phx-click — only the
+    # media toggles route through the JS hook.
+    test "mic and camera buttons have no phx-click binding (JS-hook driven)" do
+      html = render_component(MeetingBarLive, @meeting_assigns)
+
+      # Scope the assertions to the button elements themselves so an
+      # unrelated phx-click elsewhere in the bar (the Leave button) does
+      # not produce a false positive. A regex over the button-opening tag
+      # is the tightest fit available without a HTML parser.
+      mic_button =
+        Regex.run(~r/<button[^>]*data-bar-mic[^>]*>/, html) |> List.first()
+
+      camera_button =
+        Regex.run(~r/<button[^>]*data-bar-camera[^>]*>/, html) |> List.first()
+
+      assert is_binary(mic_button), "mic button not found"
+      assert is_binary(camera_button), "camera button not found"
+      refute mic_button =~ "phx-click"
+      refute camera_button =~ "phx-click"
+
+      # Leave button keeps phx-click — sanity check that we're not just
+      # asserting absence of the attribute everywhere.
+      leave_button =
+        Regex.run(~r/<button[^>]*data-bar-leave[^>]*>/, html) |> List.first()
+
+      assert is_binary(leave_button)
+      assert leave_button =~ ~s|phx-click="leave_meeting"|
+    end
+  end
+
+  # ---------------------------------------------------------------------
+  # Stage 3 (task 019ee06b): the bar's mic/camera assigns must be
+  # overridable from the parent via the `send_update/2` bridge in
+  # ShellLive's `:meeting_media_state` handler. These tests verify the
+  # `update/2` contract: explicit `mic_on`/`camera_on` keys win, including
+  # an explicit `false` (which would have been swallowed by the prior
+  # `assigns[:mic_on] || socket.assigns.mic_on` shape).
+  # ---------------------------------------------------------------------
+  describe "media state override (stage 3)" do
+    test "explicit mic_on=false from parent renders muted icon + error color" do
+      assigns = Map.put(@meeting_assigns, :mic_on, false)
+      html = render_component(MeetingBarLive, assigns)
+
+      assert html =~ "hero-microphone-slash"
+      assert html =~ "text-error"
+      assert html =~ "bg-error/10"
+    end
+
+    test "explicit camera_on=true from parent renders camera-on icon" do
+      assigns = Map.put(@meeting_assigns, :camera_on, true)
+      html = render_component(MeetingBarLive, assigns)
+
+      # camera-on means the active hero-video-camera icon, NOT the
+      # -slash variant. Use a regex/negative-lookahead-style check by
+      # asserting the slashed icon is absent — render_component scopes
+      # to this component's HTML only.
+      assert html =~ "hero-video-camera"
+      refute html =~ "hero-video-camera-slash"
+    end
+
+    test "explicit mic_on=true and camera_on=false match the defaults" do
+      # Sanity case: passing the defaults explicitly should be a no-op.
+      assigns = @meeting_assigns |> Map.put(:mic_on, true) |> Map.put(:camera_on, false)
+      html = render_component(MeetingBarLive, assigns)
+
+      assert html =~ "hero-microphone"
+      refute html =~ "hero-microphone-slash"
+      assert html =~ "hero-video-camera-slash"
+    end
   end
 end

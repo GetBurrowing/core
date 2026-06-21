@@ -526,6 +526,247 @@ defmodule PlatformWeb.ShellLiveTest do
 
       :ok = MeetingState.broadcast_left(user_id)
     end
+
+    # ---------------------------------------------------------------------
+    # Stage 3 (task 019ee06b): ShellLive bridges `:meeting_media_state`
+    # PubSub events into the bar via `send_update/2`. Verify the rendered
+    # DOM reflects the muted icon + error-tinted button without a navigate.
+    # ---------------------------------------------------------------------
+    test "broadcast_media_state(mic_enabled: false) updates the bar's rendered mic button",
+         %{conn: conn} do
+      conn = authenticated_conn(conn)
+      user_id = conn.private.plug_session["current_user_id"]
+
+      # Bar must be visible for the assertion to be meaningful — seed an
+      # active meeting + navigate to a non-meeting route so `@on_meeting_page`
+      # is false and the bar renders without `hidden`.
+      :ok =
+        MeetingState.broadcast_joined(
+          user_id,
+          "space-mediastate-1",
+          "Media State Space",
+          "media-state-slug",
+          "media-state-meeting-slug"
+        )
+
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+
+      # Default bar state: mic-on (hero-microphone, no -slash).
+      pre_html = render(view)
+      assert pre_html =~ "hero-microphone"
+
+      # Broadcast the authoritative post-toggle state. ShellLive's
+      # `:roster_updates` hook intercepts via the new `:meeting_media_state`
+      # clause and calls `send_update/2` on the bar.
+      :ok =
+        MeetingState.broadcast_media_state(user_id, %{
+          mic_enabled: false,
+          camera_enabled: true
+        })
+
+      # Force a render flush so the LiveComponent's update/2 runs.
+      post_html = render(view)
+
+      assert post_html =~ "hero-microphone-slash"
+      assert post_html =~ "text-error"
+      # Camera flipped on too — verify the camera-on icon appears.
+      assert post_html =~ "hero-video-camera"
+
+      :ok = MeetingState.broadcast_left(user_id)
+    end
+
+    # ---------------------------------------------------------------------
+    # Stage 4 (task 019ee06b): bar-initiated toggles route through the
+    # active LiveView via `pushEvent` (NOT `pushEventTo`). On /tasks the
+    # ChatLive's MeetingHooks is NOT mounted, so ShellLive's fallback
+    # `meeting_toggle_mic` / `meeting_toggle_camera` handlers own the
+    # toggle: flip the cached state, broadcast via `broadcast_media_state/2`,
+    # and push the LiveKit toggle event for the MeetingClient JS hook.
+    # ---------------------------------------------------------------------
+    test "shell fallback handles meeting_toggle_mic when MeetingHooks is not mounted",
+         %{conn: conn} do
+      conn = authenticated_conn(conn)
+      user_id = conn.private.plug_session["current_user_id"]
+
+      # Subscribe in THIS test process so we can `assert_receive` the
+      # broadcast that the shell fans out on toggle.
+      :ok = MeetingState.subscribe(user_id)
+
+      :ok =
+        MeetingState.broadcast_joined(
+          user_id,
+          "space-shellfb-1",
+          "Shell Fallback Space",
+          "shell-fallback-slug",
+          "shell-fallback-meeting-slug"
+        )
+
+      # /tasks does NOT mount ChatLive (no MeetingHooks). The shell becomes
+      # the sole producer for the bar-initiated event.
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+
+      # Sanity: MeetingHooks-owned `:mic_enabled` is absent. If a future
+      # refactor accidentally attaches MeetingHooks to TasksLive, this
+      # assertion forces the test to be re-thought.
+      refute Map.has_key?(:sys.get_state(view.pid).socket.assigns, :mic_enabled)
+
+      # Drain the initial :meeting_joined broadcast so the next
+      # assert_receive matches only the toggle broadcast.
+      assert_receive {:meeting_joined, %{user_id: ^user_id}}
+
+      # Simulate the JS-hook `pushEvent("meeting_toggle_mic", {})` —
+      # `render_hook/3` dispatches the event into the shell LV's
+      # `:drawer_events` attach_hook.
+      render_hook(view, "meeting_toggle_mic", %{})
+
+      # Shell broadcasts the full pair, defaults flipped: mic_on was true,
+      # so post-toggle mic_enabled=false. camera_on was false (default),
+      # so camera_enabled=false (unchanged).
+      assert_receive {:meeting_media_state,
+                      %{user_id: ^user_id, mic_enabled: false, camera_enabled: false}}
+
+      # The shell's cached state must mirror the post-toggle truth — a
+      # second click should toggle BACK to true, not flip from the
+      # default again.
+      assigns = :sys.get_state(view.pid).socket.assigns
+      assert assigns.shell_bar_mic_on == false
+      # Drain the loopback that ShellLive's own :meeting_media_state
+      # subscription delivers (this is the path that updates the bar).
+      _ = render(view)
+
+      :ok = MeetingState.broadcast_left(user_id)
+    end
+
+    test "shell fallback handles meeting_toggle_camera when MeetingHooks is not mounted",
+         %{conn: conn} do
+      conn = authenticated_conn(conn)
+      user_id = conn.private.plug_session["current_user_id"]
+
+      :ok = MeetingState.subscribe(user_id)
+
+      :ok =
+        MeetingState.broadcast_joined(
+          user_id,
+          "space-shellfb-cam",
+          "Shell Fallback Camera",
+          "shell-fallback-camera-slug",
+          "shell-fallback-camera-meeting-slug"
+        )
+
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      refute Map.has_key?(:sys.get_state(view.pid).socket.assigns, :camera_enabled)
+
+      assert_receive {:meeting_joined, %{user_id: ^user_id}}
+
+      render_hook(view, "meeting_toggle_camera", %{})
+
+      # Camera default is FALSE, so post-toggle camera_enabled=true.
+      assert_receive {:meeting_media_state,
+                      %{user_id: ^user_id, mic_enabled: true, camera_enabled: true}}
+
+      assigns = :sys.get_state(view.pid).socket.assigns
+      assert assigns.shell_bar_camera_on == true
+
+      :ok = MeetingState.broadcast_left(user_id)
+    end
+
+    test "shell fallback pushes toggle-mic event for the MeetingClient JS hook",
+         %{conn: conn} do
+      # Regression guard: the MeetingClient JS hook listens for `toggle-mic`
+      # on the global LV socket (meeting_client.js:37-38). Without
+      # `push_event`, the LiveKit room never mutes when the bar is the
+      # entry point on a non-/chat route.
+      conn = authenticated_conn(conn)
+      user_id = conn.private.plug_session["current_user_id"]
+
+      :ok =
+        MeetingState.broadcast_joined(
+          user_id,
+          "space-shellfb-push",
+          "Shell Fallback Push",
+          "shell-fallback-push-slug",
+          "shell-fallback-push-meeting-slug"
+        )
+
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+      render_hook(view, "meeting_toggle_mic", %{})
+      assert_push_event(view, "toggle-mic", %{})
+
+      render_hook(view, "meeting_toggle_camera", %{})
+      assert_push_event(view, "toggle-camera", %{})
+
+      :ok = MeetingState.broadcast_left(user_id)
+    end
+
+    test "shell fallback consecutive toggles alternate (cached state, not default)",
+         %{conn: conn} do
+      # Without the cache update inside shell_meeting_toggle/2 the second
+      # click would re-read the stale `true` default and broadcast
+      # mic_enabled=false twice — a stuck state that this test would
+      # catch by asserting the alternation.
+      conn = authenticated_conn(conn)
+      user_id = conn.private.plug_session["current_user_id"]
+
+      :ok = MeetingState.subscribe(user_id)
+
+      :ok =
+        MeetingState.broadcast_joined(
+          user_id,
+          "space-shellfb-alt",
+          "Shell Fallback Alt",
+          "shell-fallback-alt-slug",
+          "shell-fallback-alt-meeting-slug"
+        )
+
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+
+      assert_receive {:meeting_joined, %{user_id: ^user_id}}
+
+      render_hook(view, "meeting_toggle_mic", %{})
+      assert_receive {:meeting_media_state, %{mic_enabled: false}}
+
+      # Force loopback flush so the cache update from :meeting_media_state
+      # has run before the second click.
+      _ = render(view)
+
+      render_hook(view, "meeting_toggle_mic", %{})
+      assert_receive {:meeting_media_state, %{mic_enabled: true}}
+
+      :ok = MeetingState.broadcast_left(user_id)
+    end
+
+    test "broadcast_media_state respects explicit false (not swallowed by ||-default)",
+         %{conn: conn} do
+      # Regression guard: the bar's update/2 must use Map.has_key?/2, not
+      # `assigns[:mic_on] || socket.assigns.mic_on`. If the latter pattern
+      # creeps back in, a `false` from the server silently becomes the
+      # current default (`true`) and the icon never changes.
+      conn = authenticated_conn(conn)
+      user_id = conn.private.plug_session["current_user_id"]
+
+      :ok =
+        MeetingState.broadcast_joined(
+          user_id,
+          "space-false-1",
+          "False Override Space",
+          "false-override-slug",
+          "false-override-meeting-slug"
+        )
+
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+
+      :ok =
+        MeetingState.broadcast_media_state(user_id, %{
+          mic_enabled: false,
+          camera_enabled: false
+        })
+
+      html = render(view)
+      assert html =~ "hero-microphone-slash"
+      assert html =~ "hero-video-camera-slash"
+
+      :ok = MeetingState.broadcast_left(user_id)
+    end
   end
 
   # ---------------------------------------------------------------------

@@ -48,22 +48,21 @@ const MeetingBar = {
   _bindControls() {
     this._unbindControls()
 
+    // Stage 4 (task 019ee06b): route bar-initiated toggles through the
+    // canonical server pathway so MeetingHooks (when mounted, e.g. on /chat)
+    // sees them and the authoritative post-toggle state fans out via
+    // `MeetingState.broadcast_media_state/2`. `pushEvent` (NOT
+    // `pushEventTo`) targets the active LiveView, which is ChatLive on
+    // /chat and the shell LV's catch-all elsewhere — see ShellLive's
+    // `:meeting_toggle_mic` / `:meeting_toggle_camera` clauses for the
+    // no-ChatLive fallback. Skipping the direct LiveKit call here means
+    // the bar no longer drifts from the in-chat controls.
     this._micHandler = () => {
-      const room = window.__livekitRoom
-      if (!room || !room.localParticipant) return
-      const current = room.localParticipant.isMicrophoneEnabled
-      room.localParticipant.setMicrophoneEnabled(!current).then(() => {
-        this.pushEventTo(this.el, "mic_toggled", { enabled: !current })
-      }).catch((err) => console.warn("[MeetingBar] mic toggle failed:", err))
+      this.pushEvent("meeting_toggle_mic", {})
     }
 
     this._cameraHandler = () => {
-      const room = window.__livekitRoom
-      if (!room || !room.localParticipant) return
-      const current = room.localParticipant.isCameraEnabled
-      room.localParticipant.setCameraEnabled(!current).then(() => {
-        this.pushEventTo(this.el, "camera_toggled", { enabled: !current })
-      }).catch((err) => console.warn("[MeetingBar] camera toggle failed:", err))
+      this.pushEvent("meeting_toggle_camera", {})
     }
 
     this._leaveHandler = () => {

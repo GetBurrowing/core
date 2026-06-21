@@ -34,17 +34,47 @@ defmodule PlatformWeb.MeetingBarLive do
 
   @impl true
   def update(assigns, socket) do
-    {:ok,
-     socket
-     |> assign(:meeting_active, assigns[:meeting_active] || false)
-     |> assign(:space_id, assigns[:meeting_space_id])
-     |> assign(:space_name, assigns[:meeting_space_name])
-     |> assign(:space_slug, assigns[:meeting_space_slug])
-     |> assign(:meeting_slug, assigns[:meeting_slug])
-     |> assign(:started_at, assigns[:meeting_started_at])
-     |> assign(:on_meeting_page, assigns[:on_meeting_page] || false)
-     |> assign(:sidebar_collapsed, assigns[:sidebar_collapsed] || false)
-     |> assign(:id, assigns[:id])}
+    # Stage 3 (task 019ee06b): `mic_on`/`camera_on` are pushed in via
+    # `send_update/2` from ShellLive's `:meeting_media_state` handler. They
+    # are NOT part of the regular shell-meeting assigns the parent passes on
+    # every render, so we use `Map.has_key?/2` (not `assigns[:mic_on] || ...`)
+    # to apply them only when the parent explicitly sends them — otherwise
+    # a normal parent re-render would silently clobber them with `nil`, and
+    # a `false` from the server would be lost to the `||` short-circuit.
+    #
+    # Stage 4 (task 019ee06b): the SAME `Map.has_key?/2` pattern applies to
+    # EVERY assign on a partial `send_update/2` — when ShellLive's
+    # `:meeting_media_state` handler calls `send_update(__MODULE__, id:, mic_on:,
+    # camera_on:)`, the other shell-meeting keys (`:meeting_active`,
+    # `:meeting_space_id`, etc.) are absent. The prior `assigns[:meeting_active]
+    # || false` shape silently flipped the bar to hidden on every toggle.
+    # Treat ANY shell-meeting key the same way: assign only if present.
+    socket =
+      Enum.reduce(
+        [
+          {:meeting_active, :meeting_active},
+          {:meeting_space_id, :space_id},
+          {:meeting_space_name, :space_name},
+          {:meeting_space_slug, :space_slug},
+          {:meeting_slug, :meeting_slug},
+          {:meeting_started_at, :started_at},
+          {:on_meeting_page, :on_meeting_page},
+          {:sidebar_collapsed, :sidebar_collapsed},
+          {:id, :id},
+          {:mic_on, :mic_on},
+          {:camera_on, :camera_on}
+        ],
+        socket,
+        fn {from_key, to_key}, acc ->
+          if Map.has_key?(assigns, from_key) do
+            assign(acc, to_key, assigns[from_key])
+          else
+            acc
+          end
+        end
+      )
+
+    {:ok, socket}
   end
 
   @impl true
@@ -78,10 +108,13 @@ defmodule PlatformWeb.MeetingBarLive do
 
       <div class="flex-1" />
 
-      <%!-- Mic toggle --%>
+      <%!-- Mic toggle. Stage 4 (task 019ee06b): click is bound by the
+           MeetingBar JS hook on `[data-bar-mic]` and dispatched as
+           `meeting_toggle_mic` to the active LiveView — ChatLive's
+           MeetingHooks on /chat, ShellLive's fallback elsewhere. No
+           `phx-click` so the LiveComponent doesn't intercept and create a
+           local-only state path. --%>
       <button
-        phx-click="toggle_meeting_mic"
-        phx-target={@myself}
         data-bar-mic
         class={[
           "rounded-lg p-1.5 transition-colors",
@@ -95,10 +128,8 @@ defmodule PlatformWeb.MeetingBarLive do
         <span class={["size-4", if(@mic_on, do: "hero-microphone", else: "hero-microphone-slash")]} />
       </button>
 
-      <%!-- Camera toggle --%>
+      <%!-- Camera toggle. Same JS-hook pathway as mic, see above. --%>
       <button
-        phx-click="toggle_meeting_camera"
-        phx-target={@myself}
         data-bar-camera
         class={[
           "rounded-lg p-1.5 transition-colors",
@@ -156,31 +187,25 @@ defmodule PlatformWeb.MeetingBarLive do
   defp return_to_call_path(_, _, _), do: "/meetings"
 
   @impl true
-  def handle_event("toggle_meeting_mic", _params, socket) do
-    new_mic = !socket.assigns.mic_on
-    {:noreply, assign(socket, :mic_on, new_mic)}
-  end
-
-  def handle_event("toggle_meeting_camera", _params, socket) do
-    new_camera = !socket.assigns.camera_on
-    {:noreply, assign(socket, :camera_on, new_camera)}
-  end
-
   def handle_event("meeting_bar_state", %{"mic" => mic, "camera" => camera} = _params, socket) do
-    # Sync state pushed from JS hook reading LiveKit room
+    # Sync state pushed from JS hook reading LiveKit room (initial _syncState
+    # + livekit:room-connected events). This is a passive mirror, not a
+    # user-initiated toggle — kept so a fresh bar mount learns the truth
+    # from the live LiveKit room rather than the assign default.
     {:noreply,
      socket
      |> assign(:mic_on, mic)
      |> assign(:camera_on, camera)}
   end
 
-  def handle_event("mic_toggled", %{"enabled" => enabled}, socket) do
-    {:noreply, assign(socket, :mic_on, enabled)}
-  end
-
-  def handle_event("camera_toggled", %{"enabled" => enabled}, socket) do
-    {:noreply, assign(socket, :camera_on, enabled)}
-  end
+  # Stage 4 (task 019ee06b): `toggle_meeting_mic` / `toggle_meeting_camera`
+  # phx-click bindings are gone — `data-bar-mic` / `data-bar-camera` are now
+  # driven by the MeetingBar JS hook, which pushes `meeting_toggle_mic` /
+  # `meeting_toggle_camera` at the active LiveView (ChatLive on /chat,
+  # ShellLive fallback elsewhere). The component-local toggles that used to
+  # live here were the source of the bar/in-chat drift this stage fixes.
+  # Likewise, `mic_toggled`/`camera_toggled` arrived from the JS hook's
+  # post-LiveKit `pushEventTo`, which is also gone.
 
   def handle_event("leave_meeting", _params, socket) do
     # Notify the parent LiveView to handle the actual leave logic

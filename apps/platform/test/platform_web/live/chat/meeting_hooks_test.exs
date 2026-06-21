@@ -812,6 +812,256 @@ defmodule PlatformWeb.ChatLive.MeetingHooksTest do
     end
   end
 
+  # ── Toggle helpers broadcast media_state (stage 2) ────────────────────────
+
+  describe "toggle_mic/1 broadcasts authoritative media state" do
+    test "flips :mic_enabled and broadcasts post-toggle pair to MeetingState.topic(user_id)" do
+      user_id = Ecto.UUID.generate()
+      Platform.Meetings.State.subscribe(user_id)
+
+      socket =
+        build_socket(%{
+          user_id: user_id,
+          in_meeting: true,
+          mic_enabled: true,
+          camera_enabled: true,
+          screen_share_enabled: false
+        })
+
+      updated = MeetingHooks.toggle_mic(socket)
+
+      # Assign flipped to post-toggle truth.
+      assert updated.assigns.mic_enabled == false
+      assert updated.assigns.camera_enabled == true
+
+      # Subscriber received the full pair — both booleans, no partial update.
+      assert_receive {:meeting_media_state,
+                      %{user_id: ^user_id, mic_enabled: false, camera_enabled: true}},
+                     200
+    end
+
+    test "preserves the current :camera_enabled when broadcasting (no stale stitching)" do
+      # Producer always carries the full pair so a camera-off + mic-toggle
+      # reports camera-off — never reads a default and overwrites with true.
+      user_id = Ecto.UUID.generate()
+      Platform.Meetings.State.subscribe(user_id)
+
+      socket =
+        build_socket(%{
+          user_id: user_id,
+          in_meeting: true,
+          mic_enabled: false,
+          camera_enabled: false,
+          screen_share_enabled: false
+        })
+
+      _ = MeetingHooks.toggle_mic(socket)
+
+      assert_receive {:meeting_media_state,
+                      %{user_id: ^user_id, mic_enabled: true, camera_enabled: false}},
+                     200
+    end
+
+    test "no user_id (anonymous mount) is a safe no-op — no broadcast, no crash" do
+      # Defensive: the bar/in-chat consumers key off user_id, so a missing
+      # user_id can't be broadcast meaningfully. Must not raise.
+      subscriber = Ecto.UUID.generate()
+      Platform.Meetings.State.subscribe(subscriber)
+
+      socket =
+        build_socket(%{
+          user_id: nil,
+          in_meeting: true,
+          mic_enabled: true,
+          camera_enabled: true,
+          screen_share_enabled: false
+        })
+
+      updated = MeetingHooks.toggle_mic(socket)
+      assert updated.assigns.mic_enabled == false
+
+      refute_receive {:meeting_media_state, _}, 100
+    end
+  end
+
+  describe "toggle_camera/1 broadcasts authoritative media state" do
+    test "flips :camera_enabled and broadcasts post-toggle pair to MeetingState.topic(user_id)" do
+      user_id = Ecto.UUID.generate()
+      Platform.Meetings.State.subscribe(user_id)
+
+      socket =
+        build_socket(%{
+          user_id: user_id,
+          in_meeting: true,
+          mic_enabled: true,
+          camera_enabled: true,
+          screen_share_enabled: false
+        })
+
+      updated = MeetingHooks.toggle_camera(socket)
+
+      assert updated.assigns.camera_enabled == false
+      assert updated.assigns.mic_enabled == true
+
+      assert_receive {:meeting_media_state,
+                      %{user_id: ^user_id, mic_enabled: true, camera_enabled: false}},
+                     200
+    end
+
+    test "preserves the current :mic_enabled when broadcasting (no stale stitching)" do
+      user_id = Ecto.UUID.generate()
+      Platform.Meetings.State.subscribe(user_id)
+
+      socket =
+        build_socket(%{
+          user_id: user_id,
+          in_meeting: true,
+          mic_enabled: false,
+          camera_enabled: true,
+          screen_share_enabled: false
+        })
+
+      _ = MeetingHooks.toggle_camera(socket)
+
+      # Camera flipped off, mic stays off — both reported faithfully.
+      assert_receive {:meeting_media_state,
+                      %{user_id: ^user_id, mic_enabled: false, camera_enabled: false}},
+                     200
+    end
+  end
+
+  # ── do_join/1 emits initial media_state so a fresh bar mount has truth ────
+
+  describe "do_join/1 broadcasts initial media state on success" do
+    setup [:put_livekit_env]
+
+    test "after a successful join the subscriber receives both :meeting_joined and :meeting_media_state with initial truth" do
+      space = create_space()
+      user = create_user("Ada Lovelace")
+      Platform.Meetings.State.subscribe(user.id)
+
+      socket =
+        build_socket(%{
+          user_id: user.id,
+          active_space: space,
+          current_participant: nil,
+          in_meeting: false,
+          mic_enabled: true,
+          camera_enabled: true,
+          screen_share_enabled: false
+        })
+
+      result = MeetingHooks.join(socket)
+      assert result.assigns.in_meeting == true
+
+      # The lifecycle emits join then the initial media truth — a fresh bar
+      # mount that adopted us on :meeting_joined now has a media-state
+      # snapshot to render against without a click.
+      user_id = user.id
+      assert_receive {:meeting_joined, %{user_id: ^user_id}}, 500
+
+      assert_receive {:meeting_media_state,
+                      %{user_id: ^user_id, mic_enabled: true, camera_enabled: true}},
+                     500
+    end
+  end
+
+  # ── Bar→chat media-state lockstep (V3 fix) ───────────────────────────────
+
+  describe "apply_media_state/2 keeps chat-side assigns in lockstep with bar (V3 fix)" do
+    # The reviewer's V3 diagnostic: MeetingHooks did NOT subscribe to
+    # `meeting:state:{user_id}` events — only ShellLive did. So bar-side
+    # broadcasts never updated ChatLive's `:mic_enabled` / `:camera_enabled`
+    # assigns, and chat-side toggles then flipped against stale state.
+    #
+    # The fix has two parts:
+    #   1. `attach/2` now calls `MeetingState.subscribe(user_id)` so this
+    #      LiveView's MeetingHooks receives its own user's broadcasts.
+    #   2. A new `handle_info({:meeting_media_state, ...}, socket)` clause
+    #      delegates to the public `apply_media_state/2` which assigns the
+    #      pair (guarded on uid match).
+    #
+    # We exercise (2) directly here — that's the load-bearing contract. The
+    # subscription side is covered by the test below using PubSub end-to-end.
+
+    test "applies the broadcast pair when uid matches socket.assigns.user_id" do
+      user_id = Ecto.UUID.generate()
+
+      socket =
+        build_socket(%{
+          user_id: user_id,
+          in_meeting: true,
+          mic_enabled: true,
+          camera_enabled: true,
+          screen_share_enabled: false
+        })
+
+      updated =
+        MeetingHooks.apply_media_state(socket, %{
+          user_id: user_id,
+          mic_enabled: false,
+          camera_enabled: true
+        })
+
+      # The bar-side toggle's authoritative truth now lives on the chat-side
+      # socket too — a follow-up in-chat click will flip OFF this value, not
+      # the stale `true`.
+      assert updated.assigns.mic_enabled == false
+      assert updated.assigns.camera_enabled == true
+    end
+
+    test "ignores broadcasts whose user_id does not match (defensive)" do
+      user_id = Ecto.UUID.generate()
+      other_user_id = Ecto.UUID.generate()
+
+      socket =
+        build_socket(%{
+          user_id: user_id,
+          in_meeting: true,
+          mic_enabled: true,
+          camera_enabled: true,
+          screen_share_enabled: false
+        })
+
+      updated =
+        MeetingHooks.apply_media_state(socket, %{
+          user_id: other_user_id,
+          mic_enabled: false,
+          camera_enabled: false
+        })
+
+      # Untouched — events for other users never trample our assigns.
+      assert updated.assigns.mic_enabled == true
+      assert updated.assigns.camera_enabled == true
+    end
+
+    test "carries the full pair so a camera-off + bar-mic-flip preserves camera-off" do
+      # Producer (MeetingState.broadcast_media_state/2) always carries the
+      # full pair, so the apply path must respect both booleans — never
+      # stitch a partial update that overrides camera back to its default.
+      user_id = Ecto.UUID.generate()
+
+      socket =
+        build_socket(%{
+          user_id: user_id,
+          in_meeting: true,
+          mic_enabled: true,
+          camera_enabled: false,
+          screen_share_enabled: false
+        })
+
+      updated =
+        MeetingHooks.apply_media_state(socket, %{
+          user_id: user_id,
+          mic_enabled: false,
+          camera_enabled: false
+        })
+
+      assert updated.assigns.mic_enabled == false
+      assert updated.assigns.camera_enabled == false
+    end
+  end
+
   # ── Module wiring sanity ──────────────────────────────────────────────────
 
   describe "module wiring" do

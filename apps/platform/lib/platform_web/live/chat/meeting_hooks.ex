@@ -89,6 +89,25 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
 
     socket = assign(socket, :meeting_reconnect?, reconnect_mount?(socket))
 
+    # V3 fix (task 019ee06b): subscribe ChatLive's MeetingHooks to its own
+    # user's `meeting:state:{user_id}` topic so bar-side toggles (which
+    # broadcast `:meeting_media_state` here) update the chat-side
+    # `:mic_enabled` / `:camera_enabled` assigns. Without this, only
+    # ShellLive subscribed — ChatLive kept its initial defaults and the
+    # next in-chat toggle click flipped against stale state (resulting in
+    # the bar going dark, then bouncing back on the next bar tap).
+    socket =
+      if connected?(socket) do
+        case socket.assigns[:user_id] do
+          uid when is_binary(uid) -> MeetingState.subscribe(uid)
+          _ -> :ok
+        end
+
+        socket
+      else
+        socket
+      end
+
     if connected?(socket) and space_ids != [] do
       Enum.each(space_ids, &MeetingsPubSub.subscribe_presence/1)
       MeetingsPubSub.subscribe_presence_summary()
@@ -196,6 +215,64 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
   @spec join(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
   def join(socket), do: do_join(socket)
 
+  @doc """
+  Flip the local `:mic_enabled` assign, push `toggle-mic` to the
+  MeetingClient JS hook, AND broadcast the authoritative post-toggle
+  media-state pair to all subscribers on `MeetingState.topic(user_id)`.
+
+  Public so the broadcast contract can be unit-tested directly; the
+  private `handle_event("meeting_toggle_mic", ...)` hook clause is a thin
+  delegate. The broadcast carries both `:mic_enabled` AND `:camera_enabled`
+  so consumers never have to stitch partial updates — every event keeps
+  the bar + in-chat controls in lockstep (see `MeetingState` moduledoc).
+  """
+  @spec toggle_mic(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
+  def toggle_mic(socket) do
+    new_mic = !socket.assigns.mic_enabled
+
+    socket
+    |> assign(:mic_enabled, new_mic)
+    |> push_event("toggle-mic", %{})
+    |> broadcast_media(new_mic, socket.assigns.camera_enabled)
+  end
+
+  @doc """
+  Flip the local `:camera_enabled` assign, push `toggle-camera` to the
+  MeetingClient JS hook, AND broadcast the authoritative post-toggle
+  media-state pair to all subscribers on `MeetingState.topic(user_id)`.
+
+  Symmetric companion to `toggle_mic/1` — same broadcast contract.
+  """
+  @spec toggle_camera(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
+  def toggle_camera(socket) do
+    new_camera = !socket.assigns.camera_enabled
+
+    socket
+    |> assign(:camera_enabled, new_camera)
+    |> push_event("toggle-camera", %{})
+    |> broadcast_media(socket.assigns.mic_enabled, new_camera)
+  end
+
+  # Fan out the authoritative media-state pair if we know whose state it
+  # is. No user_id → no broadcast (anonymous mount, defensive); the
+  # `:mic_enabled`/`:camera_enabled` booleans must already be the
+  # post-toggle truth, not nil/strings.
+  defp broadcast_media(socket, mic, camera)
+       when is_boolean(mic) and is_boolean(camera) do
+    case socket.assigns[:user_id] do
+      user_id when is_binary(user_id) ->
+        MeetingState.broadcast_media_state(user_id, %{
+          mic_enabled: mic,
+          camera_enabled: camera
+        })
+
+      _ ->
+        :ok
+    end
+
+    socket
+  end
+
   # ── Hook callbacks ────────────────────────────────────────────────────
 
   defp handle_event("meeting_join", _params, socket) do
@@ -221,17 +298,11 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
   end
 
   defp handle_event("meeting_toggle_mic", _params, socket) do
-    {:halt,
-     socket
-     |> assign(:mic_enabled, !socket.assigns.mic_enabled)
-     |> push_event("toggle-mic", %{})}
+    {:halt, toggle_mic(socket)}
   end
 
   defp handle_event("meeting_toggle_camera", _params, socket) do
-    {:halt,
-     socket
-     |> assign(:camera_enabled, !socket.assigns.camera_enabled)
-     |> push_event("toggle-camera", %{})}
+    {:halt, toggle_camera(socket)}
   end
 
   defp handle_event("meeting_toggle_screen_share", _params, socket) do
@@ -325,7 +396,53 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
     {:halt, assign(socket, :meeting_counts, counts)}
   end
 
+  # V3 fix (task 019ee06b): keep ChatLive's local `:mic_enabled` /
+  # `:camera_enabled` assigns in lockstep with the authoritative post-toggle
+  # truth broadcast on `MeetingState.topic(user_id)`. Before this clause,
+  # only ShellLive subscribed — so a bar-side mic tap broadcast on the topic
+  # updated the bar but ChatLive's stale assigns stayed put, and the next
+  # in-chat toggle flipped against stale state (apparent bug: the bar mic
+  # icon went dark then bounced back on the next bar tap).
+  #
+  # The actual assign-update is delegated to `apply_media_state/2` so the
+  # contract can be unit-tested directly (this private handle_info clause is
+  # hook plumbing — the public delegate is the contract).
+  defp handle_info(
+         {:meeting_media_state, %{user_id: uid, mic_enabled: mic, camera_enabled: camera}},
+         socket
+       ) do
+    {:cont, apply_media_state(socket, %{user_id: uid, mic_enabled: mic, camera_enabled: camera})}
+  end
+
   defp handle_info(_msg, socket), do: {:cont, socket}
+
+  @doc """
+  Apply a `:meeting_media_state` payload to the socket assigns.
+
+  Guarded on `user_id` matching `socket.assigns.user_id` so events meant
+  for a different user (defensive — the subscription is per-user, but the
+  guard makes the contract explicit) don't trample our state. The full
+  `{mic_enabled, camera_enabled}` pair is always assigned together,
+  matching the broadcast contract (`MeetingState.broadcast_media_state/2`)
+  so consumers never stitch partial updates.
+
+  Public so the bar→chat lockstep contract can be unit-tested directly.
+  """
+  @spec apply_media_state(Phoenix.LiveView.Socket.t(), %{
+          required(:user_id) => binary(),
+          required(:mic_enabled) => boolean(),
+          required(:camera_enabled) => boolean()
+        }) :: Phoenix.LiveView.Socket.t()
+  def apply_media_state(socket, %{user_id: uid, mic_enabled: mic, camera_enabled: camera})
+      when is_binary(uid) and is_boolean(mic) and is_boolean(camera) do
+    if uid == socket.assigns[:user_id] do
+      socket
+      |> assign(:mic_enabled, mic)
+      |> assign(:camera_enabled, camera)
+    else
+      socket
+    end
+  end
 
   # ── Internals ────────────────────────────────────────────────────────
 
@@ -507,6 +624,16 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
         end
 
       MeetingState.broadcast_joined(user_id, space.id, space.name, space.slug, meeting_slug)
+
+      # A fresh bar mount that just adopted us on `:meeting_joined` has no
+      # mic/camera signal yet — emit the initial truth (both enabled per
+      # `reset_meeting_state/1`) so consumers don't render a stale snapshot.
+      # `:meeting_left` on leave already drives consumers to reset, so we
+      # do NOT emit a media_state event from `reset_meeting_state/1`.
+      MeetingState.broadcast_media_state(user_id, %{
+        mic_enabled: socket.assigns.mic_enabled,
+        camera_enabled: socket.assigns.camera_enabled
+      })
 
       socket
     else

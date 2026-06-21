@@ -218,6 +218,84 @@ defmodule Platform.Meetings.StateTest do
     end
   end
 
+  describe "broadcast_media_state/2" do
+    test "subscribers receive the tagged event with the full media pair" do
+      :ok = MeetingState.subscribe("test-user-1")
+
+      assert :ok =
+               MeetingState.broadcast_media_state("test-user-1", %{
+                 mic_enabled: false,
+                 camera_enabled: true
+               })
+
+      assert_receive {:meeting_media_state,
+                      %{
+                        user_id: "test-user-1",
+                        mic_enabled: false,
+                        camera_enabled: true
+                      }},
+                     200
+    end
+
+    test "always carries both flags (no partial-update event shape)" do
+      :ok = MeetingState.subscribe("test-user-1")
+
+      :ok =
+        MeetingState.broadcast_media_state("test-user-1", %{
+          mic_enabled: true,
+          camera_enabled: false
+        })
+
+      assert_receive {:meeting_media_state, payload}, 200
+      assert Map.has_key?(payload, :mic_enabled)
+      assert Map.has_key?(payload, :camera_enabled)
+      assert Map.has_key?(payload, :user_id)
+    end
+
+    test "is per-user — subscribing to A does not receive B's event" do
+      :ok = MeetingState.subscribe("test-user-1")
+
+      :ok =
+        MeetingState.broadcast_media_state("test-user-2", %{
+          mic_enabled: false,
+          camera_enabled: false
+        })
+
+      refute_receive {:meeting_media_state, _}, 100
+    end
+
+    test "does NOT mutate the ETS-cached lifecycle state" do
+      # No prior join → no cached state.
+      assert MeetingState.get_for_user("test-user-1") == nil
+
+      :ok =
+        MeetingState.broadcast_media_state("test-user-1", %{
+          mic_enabled: false,
+          camera_enabled: true
+        })
+
+      # Media-state events are transient; they must not populate the cache
+      # used by fresh shell mounts to hydrate the persistent mini-bar.
+      assert MeetingState.get_for_user("test-user-1") == nil
+    end
+
+    test "rejects non-boolean media flags via guard" do
+      assert_raise FunctionClauseError, fn ->
+        MeetingState.broadcast_media_state("test-user-1", %{
+          mic_enabled: "yes",
+          camera_enabled: true
+        })
+      end
+
+      assert_raise FunctionClauseError, fn ->
+        MeetingState.broadcast_media_state("test-user-1", %{
+          mic_enabled: true,
+          camera_enabled: nil
+        })
+      end
+    end
+  end
+
   describe "concurrent access" do
     test "50 readers don't deadlock against a churning writer" do
       uid = "test-user-concurrent"

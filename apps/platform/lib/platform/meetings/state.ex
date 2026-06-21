@@ -24,10 +24,19 @@ defmodule Platform.Meetings.State do
 
   ## Events
 
-  | Event             | Payload                                                                                              |
-  |-------------------|------------------------------------------------------------------------------------------------------|
-  | `:meeting_joined` | `%{user_id, space_id, space_name, space_slug, meeting_slug, started_at}`                             |
-  | `:meeting_left`   | `%{user_id}`                                                                                         |
+  | Event                  | Payload                                                                                              |
+  |------------------------|------------------------------------------------------------------------------------------------------|
+  | `:meeting_joined`      | `%{user_id, space_id, space_name, space_slug, meeting_slug, started_at}`                             |
+  | `:meeting_left`        | `%{user_id}`                                                                                         |
+  | `:meeting_media_state` | `%{user_id, mic_enabled, camera_enabled}` — authoritative post-toggle media state                    |
+
+  ## Media state
+
+  `:meeting_media_state` is a *transient* event — it is NOT cached in ETS.
+  Consumers (the persistent meeting mini-bar, in-chat meeting controls)
+  reduce these events into their own assigns. We always carry the full
+  `{mic_enabled, camera_enabled}` pair so a single event keeps every
+  surface in lockstep without consumers stitching partial updates.
   """
 
   use GenServer
@@ -162,6 +171,36 @@ defmodule Platform.Meetings.State do
       @pubsub,
       topic(user_id),
       {:meeting_left, %{user_id: user_id}}
+    )
+  end
+
+  @doc """
+  Broadcast `user_id`'s authoritative post-toggle media state.
+
+  Subscribers receive:
+
+      {:meeting_media_state,
+       %{user_id: user_id, mic_enabled: boolean(), camera_enabled: boolean()}}
+
+  The full pair is always carried (not separate mic/camera events) so a
+  consumer that reduces these into assigns never has to stitch partial
+  updates and can't end up with a stale-camera-on-fresh-mic state.
+
+  Transient — not cached in ETS. Producers (MeetingHooks) call this
+  immediately after flipping their own `:mic_enabled` / `:camera_enabled`
+  assigns; the bar and in-chat controls consume off the existing
+  `topic(user_id)` subscription.
+  """
+  @spec broadcast_media_state(binary(), %{
+          required(:mic_enabled) => boolean(),
+          required(:camera_enabled) => boolean()
+        }) :: :ok
+  def broadcast_media_state(user_id, %{mic_enabled: mic, camera_enabled: camera})
+      when is_binary(user_id) and is_boolean(mic) and is_boolean(camera) do
+    Phoenix.PubSub.broadcast(
+      @pubsub,
+      topic(user_id),
+      {:meeting_media_state, %{user_id: user_id, mic_enabled: mic, camera_enabled: camera}}
     )
   end
 
