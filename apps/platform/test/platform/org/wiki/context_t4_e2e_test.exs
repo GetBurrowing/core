@@ -322,7 +322,11 @@ defmodule Platform.Org.Wiki.ContextT4E2ETest do
       # jsonb) columns onto `responsibilities`, plus the
       # `default_prompt_template` index the stage-1 spec called for.
       # No MCP surface, no engine wiring.
-      "20260623230546_add_enabled_and_metadata_to_responsibilities.exs"
+      "20260623230546_add_enabled_and_metadata_to_responsibilities.exs",
+      # Responsibilities & External Agents stack, M2 stage 1
+      # (task 019ef65b-4383): extend agents table with kind + external
+      # endpoint columns (kind, endpoint_kind, base_url, model, vault_key).
+      "20260624001634_add_external_kind_to_agents.exs"
     ]
 
     defp t4_root, do: Mix.Project.project_file() |> Path.dirname()

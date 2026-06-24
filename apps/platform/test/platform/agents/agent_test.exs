@@ -57,6 +57,121 @@ defmodule Platform.Agents.AgentTest do
       refute changeset.valid?
       assert %{name: ["can't be blank"]} = errors_on(changeset)
     end
+
+    test "all valid kinds are accepted with their required field complements" do
+      for kind <- Agent.valid_kinds() do
+        attrs =
+          case kind do
+            "native" ->
+              Map.put(@valid_agent_attrs, :kind, "native")
+
+            "external" ->
+              @valid_agent_attrs
+              |> Map.put(:kind, "external")
+              |> Map.put(:endpoint_kind, "openai_compat")
+              |> Map.put(:base_url, "https://api.openai.com/v1")
+              |> Map.put(:model, "gpt-4o-mini")
+          end
+
+        changeset = Agent.changeset(%Agent{}, attrs)
+        assert changeset.valid?, "expected kind=#{kind} to be valid with its required complements"
+      end
+    end
+  end
+
+  describe "Agent changeset/2 — external kind" do
+    @external_attrs %{
+      slug: "ext-agent",
+      name: "Ext Agent",
+      status: "active",
+      workspace_id: nil,
+      kind: "external",
+      endpoint_kind: "openai_compat",
+      base_url: "https://api.openai.com/v1",
+      model: "gpt-4o-mini"
+    }
+
+    test "valid external agent with all required fields" do
+      changeset = Agent.changeset(%Agent{}, @external_attrs)
+      assert changeset.valid?
+    end
+
+    test "kind=external missing endpoint_kind is invalid" do
+      attrs = Map.delete(@external_attrs, :endpoint_kind)
+      changeset = Agent.changeset(%Agent{}, attrs)
+      refute changeset.valid?
+      assert %{endpoint_kind: ["can't be blank"]} = errors_on(changeset)
+    end
+
+    test "kind=external missing base_url is invalid" do
+      attrs = Map.delete(@external_attrs, :base_url)
+      changeset = Agent.changeset(%Agent{}, attrs)
+      refute changeset.valid?
+      assert %{base_url: ["can't be blank"]} = errors_on(changeset)
+    end
+
+    test "kind=external missing model is invalid" do
+      attrs = Map.delete(@external_attrs, :model)
+      changeset = Agent.changeset(%Agent{}, attrs)
+      refute changeset.valid?
+      assert %{model: ["can't be blank"]} = errors_on(changeset)
+    end
+
+    test "kind=external with bogus endpoint_kind is invalid" do
+      attrs = Map.put(@external_attrs, :endpoint_kind, "bogus")
+      changeset = Agent.changeset(%Agent{}, attrs)
+      refute changeset.valid?
+      assert %{endpoint_kind: [msg]} = errors_on(changeset)
+      assert msg =~ "is invalid"
+    end
+
+    test "kind=external with non-URL base_url is invalid" do
+      attrs = Map.put(@external_attrs, :base_url, "not a url")
+      changeset = Agent.changeset(%Agent{}, attrs)
+      refute changeset.valid?
+      assert %{base_url: ["must be an http(s) URL"]} = errors_on(changeset)
+    end
+
+    test "kind=external with non-http scheme is invalid" do
+      attrs = Map.put(@external_attrs, :base_url, "ftp://x")
+      changeset = Agent.changeset(%Agent{}, attrs)
+      refute changeset.valid?
+      assert %{base_url: ["must be an http(s) URL"]} = errors_on(changeset)
+    end
+
+    test "kind=external with nil vault_key is valid (ephemeral path)" do
+      attrs =
+        @external_attrs
+        |> Map.put(:base_url, "https://example.com")
+        |> Map.put(:vault_key, nil)
+
+      changeset = Agent.changeset(%Agent{}, attrs)
+      assert changeset.valid?
+    end
+
+    test "kind=native with endpoint_kind set is invalid" do
+      attrs =
+        @valid_agent_attrs
+        |> Map.put(:kind, "native")
+        |> Map.put(:endpoint_kind, "openai_compat")
+
+      changeset = Agent.changeset(%Agent{}, attrs)
+      refute changeset.valid?
+      assert %{endpoint_kind: [msg]} = errors_on(changeset)
+      assert msg =~ "can only be set when kind is external"
+    end
+
+    test "kind=native with base_url set is invalid" do
+      attrs =
+        @valid_agent_attrs
+        |> Map.put(:kind, "native")
+        |> Map.put(:base_url, "https://x")
+
+      changeset = Agent.changeset(%Agent{}, attrs)
+      refute changeset.valid?
+      assert %{base_url: [msg]} = errors_on(changeset)
+      assert msg =~ "can only be set when kind is external"
+    end
   end
 
   describe "WorkspaceFile changeset/2" do
