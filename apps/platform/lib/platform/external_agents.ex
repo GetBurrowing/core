@@ -50,6 +50,27 @@ defmodule Platform.ExternalAgents do
 
   No PubSub broadcasts here. M7 wires UI subscriptions for the external
   agents admin surface; introducing topics now would be premature.
+
+  ## Liveness state machine
+
+  `liveness/2` resolves an external agent into one of three states
+  based purely on the row's observability columns — no DB writes, no
+  HTTP calls. The evaluation order is strict:
+
+    1. **`:live`** — `last_successful_fire_at` is set and within
+       `liveness_window_ms` of `now` (default 15 minutes). The agent
+       has actually completed a dispatched turn recently.
+    2. **`:stale`** — no fresh fire, but `last_probe_status == "ok"`
+       and `last_probe_at` is within `probe_ok_window_ms` of `now`
+       (default 1 hour). Reachable, not yet exercised.
+    3. **`:dead`** — everything else: never probed, last probe failed,
+       or last successful probe is older than `probe_ok_window_ms`.
+
+  Both windows are configurable via
+  `config :platform, :external_agents, liveness_window_ms: <ms>,
+  probe_ok_window_ms: <ms>`. The `now` argument is injectable so
+  callers can render deterministic snapshots and tests can pin a
+  reference time.
   """
 
   import Ecto.Query
@@ -206,6 +227,128 @@ defmodule Platform.ExternalAgents do
     )
   end
 
+  # ── Probe (M5 stage 2) ────────────────────────────────────────────────────
+
+  @probe_receive_timeout_ms 5_000
+
+  @doc """
+  Issue an HTTP probe against an external agent's endpoint and persist
+  the outcome onto the row (`last_probe_at`, `last_probe_status`,
+  `last_probe_latency_ms`).
+
+  Dispatches on `agent.endpoint_kind`:
+
+    * `"openai_compat"` — `GET base_url/models` with a Bearer token
+    * `"ollama_native"` — `GET base_url/api/tags` (no auth)
+
+  Returns `{:ok, %{latency_ms: integer, model_count: integer}}` on a
+  2xx response, or `{:error, reason}` for known failure classes
+  (`:unauthorized`, `:http_error`, `:timeout`, `:network_error`).
+
+  ## Credential resolution
+
+  Bearer tokens for `openai_compat` are resolved by
+  `resolve_credential/1` (now landed on main as part of M3). The
+  legacy `agent.metadata["_probe_token"]` path is kept as a fallback
+  for unit tests that don't want to set up an ETS or Vault row.
+
+  ## Persistence
+
+  Probe writes go through `Ecto.Changeset.change/2` (not
+  `Agent.changeset/2`) to bypass `validate_required([:slug, :name,
+  :status])` — these are observability-only updates and don't carry
+  the rest of the row's data. See `Platform.Agents.Agent` moduledoc.
+
+  ## Test seam
+
+  The `Req` client is injectable via the
+  `:external_agents_req_client` application env key. Mirrors the
+  pattern in `Platform.Agents.Providers.Codex` and
+  `Platform.Memory.Providers.StartupSuite`. The Req.Test stubs and
+  the full test suite land in M5 stage 4.
+  """
+  @spec probe(Agent.t()) ::
+          {:ok, %{latency_ms: non_neg_integer(), model_count: non_neg_integer()}}
+          | {:error, atom()}
+  def probe(%Agent{kind: @external_kind} = agent) do
+    url = probe_url(agent.endpoint_kind, agent.base_url)
+    headers = probe_headers(agent)
+
+    start_ms = System.monotonic_time(:millisecond)
+
+    result =
+      Req.get(req_client(),
+        url: url,
+        headers: headers,
+        receive_timeout: @probe_receive_timeout_ms,
+        retry: false
+      )
+
+    latency_ms = System.monotonic_time(:millisecond) - start_ms
+
+    outcome = classify(agent.endpoint_kind, result)
+    persist_probe(agent, outcome, latency_ms)
+
+    case outcome do
+      {:ok, model_count} -> {:ok, %{latency_ms: latency_ms, model_count: model_count}}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  # ── Liveness (M5 stage 3) ────────────────────────────────────────────────
+
+  @default_liveness_window_ms 15 * 60 * 1000
+  @default_probe_ok_window_ms 60 * 60 * 1000
+
+  @doc """
+  Resolve an external agent's liveness state — `:live | :stale | :dead`.
+
+  Pure function over the row's observability columns; no DB writes,
+  no HTTP. The evaluation order is documented in the module's
+  "Liveness state machine" section.
+
+  The `now` argument defaults to `DateTime.utc_now/0` and is exposed
+  for deterministic snapshots / tests.
+  """
+  @spec liveness(Agent.t(), DateTime.t()) :: :live | :stale | :dead
+  def liveness(agent, now \\ DateTime.utc_now())
+
+  def liveness(%Agent{} = agent, %DateTime{} = now) do
+    cond do
+      fired_within?(agent, now, liveness_window_ms()) -> :live
+      probe_ok_within?(agent, now, probe_ok_window_ms()) -> :stale
+      true -> :dead
+    end
+  end
+
+  defp fired_within?(%Agent{last_successful_fire_at: nil}, _now, _window), do: false
+
+  defp fired_within?(%Agent{last_successful_fire_at: t}, now, window) do
+    DateTime.diff(now, t, :millisecond) <= window
+  end
+
+  defp probe_ok_within?(%Agent{last_probe_at: nil}, _now, _window), do: false
+
+  defp probe_ok_within?(%Agent{last_probe_status: status}, _now, _window)
+       when status != "ok",
+       do: false
+
+  defp probe_ok_within?(%Agent{last_probe_at: t}, now, window) do
+    DateTime.diff(now, t, :millisecond) <= window
+  end
+
+  defp liveness_window_ms do
+    config()
+    |> Keyword.get(:liveness_window_ms, @default_liveness_window_ms)
+  end
+
+  defp probe_ok_window_ms do
+    config()
+    |> Keyword.get(:probe_ok_window_ms, @default_probe_ok_window_ms)
+  end
+
+  defp config, do: Application.get_env(:platform, :external_agents, [])
+
   # ── Internal helpers ─────────────────────────────────────────────────────
 
   defp force_external_kind(attrs) do
@@ -224,5 +367,75 @@ defmodule Platform.ExternalAgents do
 
   defp maybe_filter(query, field, value) do
     where(query, [a], field(a, ^field) == ^value)
+  end
+
+  # ── Probe helpers ─────────────────────────────────────────────────────────
+
+  defp probe_url("openai_compat", base_url), do: "#{base_url}/models"
+  defp probe_url("ollama_native", base_url), do: "#{base_url}/api/tags"
+
+  defp probe_headers(%Agent{endpoint_kind: "openai_compat"} = agent) do
+    [{"authorization", "Bearer #{resolve_token(agent)}"}]
+  end
+
+  defp probe_headers(%Agent{endpoint_kind: "ollama_native"}), do: []
+
+  # M3 integration seam: prefer the credential vault once resolve_credential/1
+  # exists; fall back to agent.metadata["_probe_token"] for tests today.
+  defp resolve_token(%Agent{} = agent) do
+    if function_exported?(__MODULE__, :resolve_credential, 1) do
+      case apply(__MODULE__, :resolve_credential, [agent]) do
+        {:ok, secret} when is_binary(secret) -> secret
+        _ -> metadata_probe_token(agent)
+      end
+    else
+      metadata_probe_token(agent)
+    end
+  end
+
+  defp metadata_probe_token(%Agent{metadata: metadata}) do
+    Map.get(metadata || %{}, "_probe_token", "")
+  end
+
+  defp classify(_kind, {:ok, %Req.Response{status: status, body: body}})
+       when status in 200..299 do
+    data =
+      case body do
+        %{"data" => list} when is_list(list) -> list
+        %{"models" => list} when is_list(list) -> list
+        _ -> []
+      end
+
+    {:ok, length(data)}
+  end
+
+  defp classify(_kind, {:ok, %Req.Response{status: status}}) when status in [401, 403],
+    do: {:error, :unauthorized}
+
+  defp classify(_kind, {:ok, %Req.Response{}}), do: {:error, :http_error}
+
+  defp classify(_kind, {:error, %Req.TransportError{reason: :timeout}}),
+    do: {:error, :timeout}
+
+  defp classify(_kind, {:error, _other}), do: {:error, :network_error}
+
+  defp persist_probe(%Agent{} = agent, outcome, latency_ms) do
+    status_str =
+      case outcome do
+        {:ok, _} -> "ok"
+        {:error, reason} -> Atom.to_string(reason)
+      end
+
+    agent
+    |> Ecto.Changeset.change(%{
+      last_probe_at: DateTime.utc_now(),
+      last_probe_status: status_str,
+      last_probe_latency_ms: latency_ms
+    })
+    |> Repo.update!()
+  end
+
+  defp req_client do
+    Application.get_env(:platform, :external_agents_req_client, Req.new())
   end
 end

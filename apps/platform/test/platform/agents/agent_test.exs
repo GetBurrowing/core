@@ -174,6 +174,35 @@ defmodule Platform.Agents.AgentTest do
     end
   end
 
+  describe "Agent changeset/2 — probe + liveness columns (M5)" do
+    test "casts all four probe + liveness fields" do
+      now = DateTime.utc_now()
+
+      attrs =
+        @valid_agent_attrs
+        |> Map.put(:last_probe_at, now)
+        |> Map.put(:last_probe_status, "ok")
+        |> Map.put(:last_probe_latency_ms, 42)
+        |> Map.put(:last_successful_fire_at, now)
+
+      changeset = Agent.changeset(%Agent{}, attrs)
+      assert changeset.valid?
+      assert Ecto.Changeset.get_field(changeset, :last_probe_at) == now
+      assert Ecto.Changeset.get_field(changeset, :last_probe_status) == "ok"
+      assert Ecto.Changeset.get_field(changeset, :last_probe_latency_ms) == 42
+      assert Ecto.Changeset.get_field(changeset, :last_successful_fire_at) == now
+    end
+
+    test "probe + liveness fields are optional (nil is valid)" do
+      changeset = Agent.changeset(%Agent{}, @valid_agent_attrs)
+      assert changeset.valid?
+      assert Ecto.Changeset.get_field(changeset, :last_probe_at) == nil
+      assert Ecto.Changeset.get_field(changeset, :last_probe_status) == nil
+      assert Ecto.Changeset.get_field(changeset, :last_probe_latency_ms) == nil
+      assert Ecto.Changeset.get_field(changeset, :last_successful_fire_at) == nil
+    end
+  end
+
   describe "WorkspaceFile changeset/2" do
     test "valid changeset with all required fields" do
       changeset =
@@ -331,6 +360,64 @@ defmodule Platform.Agents.AgentDBTest do
                Repo.insert(WorkspaceFile.changeset(%WorkspaceFile{}, file_attrs))
 
       assert %{file_key: [_]} = errors_on(changeset)
+    end
+  end
+
+  describe "Agent probe + liveness columns round-trip (M5)" do
+    test "all four probe + liveness columns round-trip through the DB" do
+      probe_at = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+      fire_at = DateTime.add(probe_at, -120, :second)
+
+      attrs =
+        @valid_agent_attrs
+        |> Map.put(:workspace_id, Ecto.UUID.generate())
+        |> Map.put(:last_probe_at, probe_at)
+        |> Map.put(:last_probe_status, "ok")
+        |> Map.put(:last_probe_latency_ms, 123)
+        |> Map.put(:last_successful_fire_at, fire_at)
+
+      {:ok, inserted} = Repo.insert(Agent.changeset(%Agent{}, attrs))
+
+      loaded = Repo.get!(Agent, inserted.id)
+      assert loaded.last_probe_at == probe_at
+      assert loaded.last_probe_status == "ok"
+      assert loaded.last_probe_latency_ms == 123
+      assert loaded.last_successful_fire_at == fire_at
+    end
+
+    test "probe + liveness columns default to nil on insert" do
+      attrs = Map.put(@valid_agent_attrs, :workspace_id, Ecto.UUID.generate())
+
+      {:ok, inserted} = Repo.insert(Agent.changeset(%Agent{}, attrs))
+
+      loaded = Repo.get!(Agent, inserted.id)
+      assert loaded.last_probe_at == nil
+      assert loaded.last_probe_status == nil
+      assert loaded.last_probe_latency_ms == nil
+      assert loaded.last_successful_fire_at == nil
+    end
+
+    test "lightweight Ecto.Changeset.change/2 update can write probe fields without slug/name" do
+      attrs = Map.put(@valid_agent_attrs, :workspace_id, Ecto.UUID.generate())
+      {:ok, agent} = Repo.insert(Agent.changeset(%Agent{}, attrs))
+
+      probe_at = DateTime.utc_now() |> DateTime.truncate(:microsecond)
+
+      {:ok, updated} =
+        agent
+        |> Ecto.Changeset.change(%{
+          last_probe_at: probe_at,
+          last_probe_status: "http_error",
+          last_probe_latency_ms: 999
+        })
+        |> Repo.update()
+
+      assert updated.last_probe_status == "http_error"
+      assert updated.last_probe_latency_ms == 999
+      assert updated.last_probe_at == probe_at
+      # original fields untouched
+      assert updated.slug == agent.slug
+      assert updated.name == agent.name
     end
   end
 

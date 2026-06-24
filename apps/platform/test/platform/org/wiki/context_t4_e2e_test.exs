@@ -349,7 +349,13 @@ defmodule Platform.Org.Wiki.ContextT4E2ETest do
       # the v2 design canvas `019e0fb8-d87d-72b2-aab4-205b84fe23aa`
       # rev 3 — M8 will register the same keys in the Responsibilities
       # registry.
-      "20260624013500_seed_default_roles.exs"
+      "20260624013500_seed_default_roles.exs",
+      # ADR 0041 M5 stage 1 (task 019ef65b-d04b): probe + liveness
+      # observability columns on agents (last_probe_at,
+      # last_probe_status, last_probe_latency_ms,
+      # last_successful_fire_at). Column-only — writers land in M5
+      # stage 2 (Platform.ExternalAgents.probe/1) and M6 (dispatcher).
+      "20260624020000_add_probe_columns_to_agents.exs"
     ]
 
     defp t4_root, do: Mix.Project.project_file() |> Path.dirname()

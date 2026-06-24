@@ -232,4 +232,278 @@ defmodule Platform.ExternalAgentsTest do
       assert ExternalAgents.get_external_agent(agent.id) == nil
     end
   end
+
+  describe "liveness/2" do
+    # Reference clock for all cases below. All durations are computed
+    # relative to this so the assertions are easy to reason about.
+    @now ~U[2026-06-01 12:00:00.000000Z]
+
+    # Defaults from the moduledoc: 15 minutes / 1 hour.
+    @liveness_window_ms 15 * 60 * 1000
+    @probe_ok_window_ms 60 * 60 * 1000
+
+    defp shift(now, offset_ms),
+      do: DateTime.add(now, offset_ms, :millisecond)
+
+    defp agent_with(overrides) do
+      base = %Agent{
+        kind: "external",
+        last_successful_fire_at: nil,
+        last_probe_at: nil,
+        last_probe_status: nil
+      }
+
+      Map.merge(base, overrides)
+    end
+
+    test "1: nil fire + nil probe → :dead" do
+      agent = agent_with(%{})
+      assert ExternalAgents.liveness(agent, @now) == :dead
+    end
+
+    test "2: fire-fresh (within liveness_window) → :live" do
+      # 1 minute ago — well inside the 15-minute window.
+      agent = agent_with(%{last_successful_fire_at: shift(@now, -60_000)})
+      assert ExternalAgents.liveness(agent, @now) == :live
+    end
+
+    test "3: fire-old + probe-ok-fresh (within probe_ok_window) → :stale" do
+      # Fire 30 min ago (outside 15m liveness_window), probe 5 min ago
+      # (well within 1h probe_ok_window) → :stale.
+      agent =
+        agent_with(%{
+          last_successful_fire_at: shift(@now, -(@liveness_window_ms + 60_000)),
+          last_probe_at: shift(@now, -5 * 60_000),
+          last_probe_status: "ok"
+        })
+
+      assert ExternalAgents.liveness(agent, @now) == :stale
+    end
+
+    test "4: fire-old + probe-ok-stale (older than probe_ok_window) → :dead" do
+      # Fire 30 min ago, probe 2 hours ago (outside 1h window).
+      agent =
+        agent_with(%{
+          last_successful_fire_at: shift(@now, -(@liveness_window_ms + 60_000)),
+          last_probe_at: shift(@now, -(@probe_ok_window_ms + 60_000)),
+          last_probe_status: "ok"
+        })
+
+      assert ExternalAgents.liveness(agent, @now) == :dead
+    end
+
+    test "5: fire-old + probe-failed → :dead" do
+      agent =
+        agent_with(%{
+          last_successful_fire_at: shift(@now, -(@liveness_window_ms + 60_000)),
+          last_probe_at: shift(@now, -5 * 60_000),
+          last_probe_status: "unauthorized"
+        })
+
+      assert ExternalAgents.liveness(agent, @now) == :dead
+    end
+
+    test "6: no-fire + probe-ok-fresh → :stale" do
+      agent =
+        agent_with(%{
+          last_probe_at: shift(@now, -10 * 60_000),
+          last_probe_status: "ok"
+        })
+
+      assert ExternalAgents.liveness(agent, @now) == :stale
+    end
+
+    test "7: no-fire + probe-failed → :dead" do
+      agent =
+        agent_with(%{
+          last_probe_at: shift(@now, -2 * 60_000),
+          last_probe_status: "timeout"
+        })
+
+      assert ExternalAgents.liveness(agent, @now) == :dead
+    end
+
+    test "8: no-fire + no-probe → :dead (duplicates case 1 explicitly)" do
+      agent =
+        agent_with(%{
+          last_successful_fire_at: nil,
+          last_probe_at: nil,
+          last_probe_status: nil
+        })
+
+      assert ExternalAgents.liveness(agent, @now) == :dead
+    end
+
+    test "default `now` arg works (smoke)" do
+      # Just verifies the default-arg head clauses match without
+      # exploding; correctness is exercised above with pinned `now`.
+      agent = agent_with(%{last_successful_fire_at: DateTime.utc_now()})
+      assert ExternalAgents.liveness(agent) == :live
+    end
+  end
+
+  describe "probe/1" do
+    # Mirrors the Req.Test stub pattern used in
+    # Platform.Memory.Providers.StartupSuiteTest and
+    # Platform.Agents.Providers.CodexTest: register a named stub keyed
+    # for this suite, point the injected Req client at it via
+    # `Application.put_env/3`, and clear the env on exit.
+    setup do
+      {:ok, _} = Application.ensure_all_started(:req)
+
+      Application.put_env(
+        :platform,
+        :external_agents_req_client,
+        Req.new(plug: {Req.Test, :external_agents_test})
+      )
+
+      on_exit(fn ->
+        Application.delete_env(:platform, :external_agents_req_client)
+      end)
+
+      :ok
+    end
+
+    defp probe_agent_fixture(endpoint_kind, overrides \\ %{}) do
+      suffix = System.unique_integer([:positive])
+
+      base = %{
+        slug: "probe-test-#{suffix}",
+        name: "Probe Test #{suffix}",
+        status: "active",
+        kind: "external",
+        endpoint_kind: endpoint_kind,
+        base_url: "https://example.test",
+        model: "test-model",
+        metadata: %{"_probe_token" => "sk-test"}
+      }
+
+      %Agent{}
+      |> Ecto.Changeset.change(Map.merge(base, overrides))
+      |> Repo.insert!()
+    end
+
+    test "openai_compat happy path returns model_count and persists ok" do
+      test_pid = self()
+
+      Req.Test.stub(:external_agents_test, fn conn ->
+        send(test_pid, {:probe_req, conn})
+
+        Req.Test.json(conn, %{
+          "data" => [
+            %{"id" => "model-a"},
+            %{"id" => "model-b"},
+            %{"id" => "model-c"}
+          ]
+        })
+      end)
+
+      agent = probe_agent_fixture("openai_compat")
+
+      assert {:ok, %{latency_ms: latency_ms, model_count: 3}} =
+               ExternalAgents.probe(agent)
+
+      assert is_integer(latency_ms) and latency_ms >= 0
+
+      assert_receive {:probe_req, conn}
+      assert conn.request_path == "/models"
+
+      auth =
+        conn.req_headers
+        |> Enum.find_value(fn
+          {"authorization", v} -> v
+          _ -> nil
+        end)
+
+      assert auth == "Bearer sk-test"
+
+      reloaded = Repo.get!(Agent, agent.id)
+      assert reloaded.last_probe_status == "ok"
+      assert reloaded.last_probe_latency_ms == latency_ms
+      assert %DateTime{} = reloaded.last_probe_at
+    end
+
+    test "ollama_native happy path returns model_count and persists ok (no auth header)" do
+      test_pid = self()
+
+      Req.Test.stub(:external_agents_test, fn conn ->
+        send(test_pid, {:probe_req, conn})
+
+        Req.Test.json(conn, %{
+          "models" => [
+            %{"name" => "llama3"},
+            %{"name" => "mistral"}
+          ]
+        })
+      end)
+
+      agent =
+        probe_agent_fixture("ollama_native", %{
+          base_url: "http://localhost:11434",
+          model: "llama3"
+        })
+
+      assert {:ok, %{latency_ms: latency_ms, model_count: 2}} =
+               ExternalAgents.probe(agent)
+
+      assert latency_ms >= 0
+
+      assert_receive {:probe_req, conn}
+      assert conn.request_path == "/api/tags"
+
+      refute Enum.any?(conn.req_headers, fn
+               {"authorization", _} -> true
+               _ -> false
+             end)
+
+      reloaded = Repo.get!(Agent, agent.id)
+      assert reloaded.last_probe_status == "ok"
+    end
+
+    test "401 maps to :unauthorized and persists last_probe_status=\"unauthorized\"" do
+      Req.Test.stub(:external_agents_test, fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(401, "{}")
+      end)
+
+      agent = probe_agent_fixture("openai_compat")
+
+      assert {:error, :unauthorized} = ExternalAgents.probe(agent)
+
+      reloaded = Repo.get!(Agent, agent.id)
+      assert reloaded.last_probe_status == "unauthorized"
+      assert %DateTime{} = reloaded.last_probe_at
+    end
+
+    test "500 maps to :http_error and persists last_probe_status=\"http_error\"" do
+      Req.Test.stub(:external_agents_test, fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(500, "{}")
+      end)
+
+      agent = probe_agent_fixture("openai_compat")
+
+      assert {:error, :http_error} = ExternalAgents.probe(agent)
+
+      reloaded = Repo.get!(Agent, agent.id)
+      assert reloaded.last_probe_status == "http_error"
+      assert %DateTime{} = reloaded.last_probe_at
+    end
+
+    test "transport :nxdomain maps to :network_error and persists last_probe_status=\"network_error\"" do
+      Req.Test.stub(:external_agents_test, fn conn ->
+        Req.Test.transport_error(conn, :nxdomain)
+      end)
+
+      agent = probe_agent_fixture("openai_compat")
+
+      assert {:error, :network_error} = ExternalAgents.probe(agent)
+
+      reloaded = Repo.get!(Agent, agent.id)
+      assert reloaded.last_probe_status == "network_error"
+      assert %DateTime{} = reloaded.last_probe_at
+    end
+  end
 end

@@ -19,6 +19,17 @@ defmodule Platform.Agents.Agent do
   Enforcement lives entirely in `changeset/2` — this module is the single
   source of truth for the kind/external-fields invariant. There is no DB
   CHECK constraint today; M3 may revisit that for the vault flow.
+
+  ## Observability columns (M5)
+
+  Four NULL-able fields capture probe + liveness state for external
+  agents: `last_probe_at`, `last_probe_status`, `last_probe_latency_ms`
+  (written by `Platform.ExternalAgents.probe/1` in stage 2), and
+  `last_successful_fire_at` (written by the M6 dispatcher). These are
+  cast through `changeset/2` for completeness, but writers in those
+  stages route through `Ecto.Changeset.change/2` to avoid the
+  `validate_required([:slug, :name, :status])` guard on minimal
+  per-row observability updates.
   """
   use Ecto.Schema
   import Ecto.Changeset
@@ -55,6 +66,10 @@ defmodule Platform.Agents.Agent do
     field(:base_url, :string)
     field(:model, :string)
     field(:vault_key, :string)
+    field(:last_probe_at, :utc_datetime_usec)
+    field(:last_probe_status, :string)
+    field(:last_probe_latency_ms, :integer)
+    field(:last_successful_fire_at, :utc_datetime_usec)
 
     timestamps(type: :utc_datetime_usec)
   end
@@ -85,7 +100,11 @@ defmodule Platform.Agents.Agent do
       :endpoint_kind,
       :base_url,
       :model,
-      :vault_key
+      :vault_key,
+      :last_probe_at,
+      :last_probe_status,
+      :last_probe_latency_ms,
+      :last_successful_fire_at
     ])
     |> validate_required([:slug, :name, :status])
     |> validate_inclusion(:status, @valid_statuses)
