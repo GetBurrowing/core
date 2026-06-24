@@ -71,6 +71,7 @@ defmodule Platform.Application do
          ])
       |> maybe_add_attention_router()
       |> maybe_add_node_client()
+      |> maybe_add_responsibilities_registry()
       |> maybe_add_system_event_scheduler()
       |> maybe_add_wiki_indexer()
       |> maybe_add_meeting_historian_handler()
@@ -122,6 +123,26 @@ defmodule Platform.Application do
     if Application.get_env(:platform, :start_system_event_scheduler, true) do
       idx = Enum.find_index(children, &(&1 == PlatformWeb.Endpoint)) || length(children)
       List.insert_at(children, idx, Platform.Agents.SystemEventScheduler)
+    else
+      children
+    end
+  end
+
+  # Responsibilities Registry (ADR-0041 M1 stage 4): boot-time upsert of
+  # every provider-declared responsibility row. Must come after
+  # `Platform.Repo` (it writes to the DB on init) and before
+  # `Platform.Agents.SystemEventScheduler` (M6 will eventually swap the
+  # scheduler over to read the table). Tests disable this via
+  # `:start_responsibilities_registry false` and spin up per-case
+  # instances with their own registered name for DataCase ownership.
+  defp maybe_add_responsibilities_registry(children) do
+    if Application.get_env(:platform, :start_responsibilities_registry, true) do
+      idx =
+        Enum.find_index(children, &(&1 == Platform.Agents.SystemEventScheduler)) ||
+          Enum.find_index(children, &(&1 == PlatformWeb.Endpoint)) ||
+          length(children)
+
+      List.insert_at(children, idx, Platform.Responsibilities.Registry)
     else
       children
     end

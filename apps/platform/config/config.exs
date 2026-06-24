@@ -16,6 +16,11 @@ config :platform, Platform.Repo,
   migration_primary_key: [name: :id, type: :binary_id],
   migration_foreign_key: [type: :binary_id]
 
+# Responsibilities Registry boot flag (ADR-0041 M1 stage 4) — default
+# on. Disabled in config/test.exs so DataCase-sandboxed tests own their
+# own per-case instance.
+config :platform, :start_responsibilities_registry, true
+
 # Configure the endpoint
 config :platform, PlatformWeb.Endpoint,
   url: [host: "localhost"],

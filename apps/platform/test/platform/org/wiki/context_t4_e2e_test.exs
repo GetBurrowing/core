@@ -310,7 +310,19 @@ defmodule Platform.Org.Wiki.ContextT4E2ETest do
       # org-level chat spaces. Promotion to Files is a future
       # user-driven surface; this migration exists so the plan engine
       # can advance past Stage 6 cleanly.
-      "20260619050000_skip_backfill_chat_attachments_to_files.exs"
+      "20260619050000_skip_backfill_chat_attachments_to_files.exs",
+      # ADR 0041 M1 stage 1 (task 019ef65b-2099): responsibilities
+      # registry table — declarative registry of feature
+      # responsibilities the platform fulfills automatically. Foundation
+      # for the M6 router + M8 cutover; no MCP surface, no engine wiring
+      # in this stage.
+      "20260623173008_create_responsibilities.exs",
+      # ADR 0041 M1 stage 2 (task 019ef65b-2099): backfills the
+      # `enabled` (operator kill-switch) and `metadata` (free-form
+      # jsonb) columns onto `responsibilities`, plus the
+      # `default_prompt_template` index the stage-1 spec called for.
+      # No MCP surface, no engine wiring.
+      "20260623230546_add_enabled_and_metadata_to_responsibilities.exs"
     ]
 
     defp t4_root, do: Mix.Project.project_file() |> Path.dirname()

@@ -1401,7 +1401,8 @@ defmodule Platform.Federation.ToolSurface do
           note: %{
             type: "string",
             required: false,
-            description: "Free-text note appended to the stack's description (prefixed `Completed:`)"
+            description:
+              "Free-text note appended to the stack's description (prefixed `Completed:`)"
           }
         },
         returns:
