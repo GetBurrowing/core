@@ -30,6 +30,9 @@ defmodule PlatformWeb.ControlCenter.AgentData do
   alias Platform.Federation
   alias Platform.Federation.{NodeContext, RuntimePresence}
   alias Platform.Repo
+  alias Platform.Roles
+  alias Platform.Roles.ResponsibilityOverride
+  alias Platform.Roles.RoleAssignment
 
   @session_limit 8
   @memory_limit 12
@@ -372,6 +375,41 @@ defmodule PlatformWeb.ControlCenter.AgentData do
     }
   end
 
+  @doc """
+  Default values seeded into the External Agent form on first open.
+
+  Vault + role fields are scaffolded here but only wired up in later
+  stages (vault in stage 3, role select in stage 6). The default
+  `endpoint_kind` is OpenAI-compatible to match the mock; `vault_mode`
+  defaults to `"paste"` so a fresh user can drop a key in immediately.
+  """
+  def default_external_agent_params do
+    %{
+      "name" => "",
+      "slug" => "",
+      "endpoint_kind" => "openai_compat",
+      "base_url" => "",
+      "model" => "",
+      "default_behavior" => "chat",
+      "vault_mode" => "paste",
+      "vault_key" => "",
+      "secret" => "",
+      "save_to_vault" => true,
+      "role_key" => ""
+    }
+  end
+
+  @doc """
+  Builds a Phoenix form scoped to `:external_agent` from the given
+  param map, merging over `default_external_agent_params/0` so callers
+  can pass partial overrides (e.g. when round-tripping a tab change).
+  """
+  def build_external_agent_form(overrides \\ %{}) do
+    to_form(Map.merge(default_external_agent_params(), normalize_map(overrides)),
+      as: :external_agent
+    )
+  end
+
   def default_memory_entry do
     %{
       "memory_type" => "long_term",
@@ -503,6 +541,114 @@ defmodule PlatformWeb.ControlCenter.AgentData do
 
   def normalize_memory_type(value),
     do: value |> to_string() |> String.trim() |> blank_fallback("long_term")
+
+  # ── Roles panel ───────────────────────────────────────────────────
+
+  @doc """
+  Returns the canonical role roster, ordered by `:key`. Thin wrapper
+  over `Platform.Roles.list_roles/0` so the LV stays free of the
+  Roles context alias.
+  """
+  def list_roles, do: Roles.list_roles()
+
+  @doc """
+  Returns a map of `role_key => [responsibility_key, ...]` for every
+  role in the platform-fixed roster. The Roles panel uses this to
+  render the bundle chip row under each role without making N
+  context-module roundtrips.
+  """
+  def role_bundles do
+    Map.new(Roles.list_roles(), fn role ->
+      {role.key, Roles.bundle_for(role.key)}
+    end)
+  end
+
+  @doc """
+  Returns a map of `role_key => %Platform.Agents.Agent{}` for roles
+  that currently have an assignment. Agents are preloaded so the
+  caller can render name + kind pill without a follow-up query.
+  Roles without an assignment are simply absent from the map.
+  """
+  def role_assignments_by_key do
+    from(ra in RoleAssignment, preload: [:agent])
+    |> Repo.all()
+    |> Map.new(fn ra -> {ra.role_key, ra.agent} end)
+  end
+
+  @doc """
+  Returns the three-letter "kind" pill for an agent — `"EXT"` for
+  external-kind agents, `"FED"` for federated runtimes (kind=native
+  + runtime_type=external), else `"LOC"` for local/built-in agents.
+  """
+  def agent_kind_pill(%Agent{kind: "external"}), do: "EXT"
+  def agent_kind_pill(%Agent{runtime_type: "external"}), do: "FED"
+  def agent_kind_pill(%Agent{}), do: "LOC"
+  def agent_kind_pill(_), do: "LOC"
+
+  @doc """
+  Returns a map of `responsibility_key => %Platform.Agents.Agent{}` for
+  every responsibility that currently has an override row. Agents are
+  preloaded so the caller can render name + kind pill in the advanced
+  view without N follow-up queries.
+  """
+  def responsibility_overrides_by_key do
+    from(o in ResponsibilityOverride, preload: [:agent])
+    |> Repo.all()
+    |> Map.new(fn o -> {o.responsibility_key, o.agent} end)
+  end
+
+  @doc """
+  Returns a flat, ordered list of rows describing every (role,
+  responsibility_key) pair from the platform-fixed bundles. Each row
+  carries the resolved assignee — either the override agent or the
+  role-assigned agent or `nil` — plus a boolean flag indicating
+  whether an override is currently in effect.
+
+  This is the data the Show-advanced surface renders.
+  """
+  def responsibility_rows do
+    overrides = responsibility_overrides_by_key()
+    role_assigned = role_assignments_by_key()
+
+    Roles.list_roles()
+    |> Enum.flat_map(fn role ->
+      Enum.map(Roles.bundle_for(role.key), fn responsibility_key ->
+        override_agent = Map.get(overrides, responsibility_key)
+        role_agent = Map.get(role_assigned, role.key)
+
+        %{
+          responsibility_key: responsibility_key,
+          role_key: role.key,
+          role_name: role.name,
+          assignee: override_agent || role_agent,
+          overridden?: not is_nil(override_agent)
+        }
+      end)
+    end)
+  end
+
+  @doc """
+  Returns the list of agents that are eligible to be selected as a
+  per-responsibility override target. Today this is every persisted
+  agent in `:active` status, ordered by name for stable display.
+  """
+  def list_selectable_agents do
+    from(a in Agent,
+      where: a.status == "active",
+      order_by: [asc: a.name, asc: a.slug]
+    )
+    |> Repo.all()
+  end
+
+  @doc """
+  Returns `%{role_key => %Platform.Agents.Agent{}}` for roles that are
+  already taken — used by the External Agent flow's role select to
+  render `disabled` options with the conflicting agent's name so the
+  user sees the clash before submit.
+  """
+  def taken_role_assignments do
+    role_assignments_by_key()
+  end
 
   # ── Agent deletion ────────────────────────────────────────────────
 

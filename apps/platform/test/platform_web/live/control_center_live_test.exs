@@ -332,7 +332,8 @@ defmodule PlatformWeb.ControlCenterLiveTest do
 
   # ── Onboarding flows ──────────────────────────────────────────────
 
-  test "opening the onboarding chooser shows 4 flow options", %{conn: conn} do
+  test "opening the onboarding chooser shows 5 flow options including External Agent",
+       %{conn: conn} do
     create_agent()
     conn = authenticated_conn(conn)
     {:ok, view, _html} = live(conn, ~p"/control")
@@ -344,6 +345,549 @@ defmodule PlatformWeb.ControlCenterLiveTest do
     assert html =~ "Federate"
     assert html =~ "Import"
     assert html =~ "Create Custom"
+    assert html =~ "External Agent"
+    # New flag pill present in the tile
+    assert html =~ "New"
+  end
+
+  test "choosing the external flow transitions to the External Agent heading", %{conn: conn} do
+    conn = authenticated_conn(conn)
+    {:ok, view, _html} = live(conn, ~p"/control")
+
+    render_click(view, "open_onboarding_chooser", %{})
+    html = render_click(view, "choose_onboarding", %{"flow" => "external"})
+
+    # Modal heading switches to External Agent (overlay heading + flow body)
+    assert html =~ "External Agent"
+    # The configure preamble card still renders above the form
+    assert html =~ "External Agent &middot; configure" or html =~ "External Agent · configure"
+    # Stage-2: the form itself is mounted
+    assert html =~ "external-agent-form"
+  end
+
+  test "external agent form renders all stage-2 fields", %{conn: conn} do
+    conn = authenticated_conn(conn)
+    {:ok, view, _html} = live(conn, ~p"/control")
+
+    render_click(view, "open_onboarding_chooser", %{})
+    html = render_click(view, "choose_onboarding", %{"flow" => "external"})
+
+    # Display Name + Slug inputs
+    assert html =~ ~s(name="external_agent[name]")
+    assert html =~ ~s(name="external_agent[slug]")
+    assert html =~ "Display Name"
+    assert html =~ "Slug"
+
+    # Endpoint Kind dropdown with both options
+    assert html =~ ~s(name="external_agent[endpoint_kind]")
+    assert html =~ "OpenAI-compatible (Chat Completions)"
+    assert html =~ "Ollama-native"
+    assert html =~ ~s(value="openai_compat")
+    assert html =~ ~s(value="ollama_native")
+
+    # Base URL + Model
+    assert html =~ ~s(name="external_agent[base_url]")
+    assert html =~ ~s(name="external_agent[model]")
+    assert html =~ "Base URL"
+    assert html =~ "Model"
+
+    # Default Behavior pill row — all three radio options
+    assert html =~ ~s(name="external_agent[default_behavior]")
+    assert html =~ "Chat"
+    assert html =~ "Dispatch"
+    assert html =~ "Dispatch + Chat"
+
+    # Default endpoint_kind is openai_compat — help text reflects it.
+    assert html =~ "vLLM, LM Studio"
+    refute html =~ "local Ollama installations"
+  end
+
+  test "switching endpoint_kind to ollama_native swaps help text and placeholders",
+       %{conn: conn} do
+    conn = authenticated_conn(conn)
+    {:ok, view, _html} = live(conn, ~p"/control")
+
+    render_click(view, "open_onboarding_chooser", %{})
+    render_click(view, "choose_onboarding", %{"flow" => "external"})
+
+    # Drive a phx-change with the new endpoint_kind selection.
+    html =
+      view
+      |> form("#external-agent-form",
+        external_agent: %{
+          name: "",
+          slug: "",
+          endpoint_kind: "ollama_native",
+          base_url: "",
+          model: "",
+          default_behavior: "chat"
+        }
+      )
+      |> render_change()
+
+    assert html =~ "local Ollama installations"
+    refute html =~ "vLLM, LM Studio"
+    # Placeholders also flip to the Ollama-native values.
+    assert html =~ "localhost:11434"
+    assert html =~ "llama3.2"
+  end
+
+  test "typing into the Display Name auto-derives a slug", %{conn: conn} do
+    conn = authenticated_conn(conn)
+    {:ok, view, _html} = live(conn, ~p"/control")
+
+    render_click(view, "open_onboarding_chooser", %{})
+    render_click(view, "choose_onboarding", %{"flow" => "external"})
+
+    html =
+      view
+      |> form("#external-agent-form",
+        external_agent: %{
+          name: "Local Llama",
+          slug: "",
+          endpoint_kind: "openai_compat",
+          base_url: "",
+          model: "",
+          default_behavior: "chat"
+        }
+      )
+      |> render_change()
+
+    assert html =~ ~s(value="local-llama")
+  end
+
+  # ── Stage 4: Connection Status panel + submit-flow wiring ──────────
+
+  defp stub_external_agents_req_client(response_fn) do
+    {:ok, _} = Application.ensure_all_started(:req)
+
+    Application.put_env(
+      :platform,
+      :external_agents_req_client,
+      Req.new(plug: {Req.Test, :external_agents_test})
+    )
+
+    Req.Test.stub(:external_agents_test, response_fn)
+
+    ExUnit.Callbacks.on_exit(fn ->
+      Application.delete_env(:platform, :external_agents_req_client)
+    end)
+
+    :ok
+  end
+
+  test "Connection Status panel renders idle placeholder before submit", %{conn: conn} do
+    conn = authenticated_conn(conn)
+    {:ok, view, _html} = live(conn, ~p"/control")
+
+    render_click(view, "open_onboarding_chooser", %{})
+    html = render_click(view, "choose_onboarding", %{"flow" => "external"})
+
+    assert html =~ "Connection Status"
+    assert html =~ "Run probe on save"
+    assert html =~ "Not connected yet"
+  end
+
+  test "submit with paste mode + save_to_vault=false stores secret in ETS and leaves vault_key nil",
+       %{conn: conn} do
+    stub_external_agents_req_client(fn conn ->
+      Req.Test.json(conn, %{"data" => [%{"id" => "gpt-4o-mini"}]})
+    end)
+
+    conn = authenticated_conn(conn)
+    {:ok, view, _html} = live(conn, ~p"/control")
+
+    render_click(view, "open_onboarding_chooser", %{})
+    render_click(view, "choose_onboarding", %{"flow" => "external"})
+
+    view
+    |> form("#external-agent-form",
+      external_agent: %{
+        name: "Ephemeral Llama",
+        slug: "",
+        endpoint_kind: "openai_compat",
+        base_url: "https://api.openai.com/v1",
+        model: "gpt-4o-mini",
+        default_behavior: "chat",
+        vault_mode: "paste",
+        vault_key: "ephem-key",
+        secret: "ephem-secret-xyz",
+        save_to_vault: "false"
+      }
+    )
+    |> render_submit()
+
+    created = Repo.get_by!(Agent, slug: "ephemeral-llama")
+    assert created.kind == "external"
+    assert is_nil(created.vault_key)
+    assert created.endpoint_kind == "openai_compat"
+    assert created.base_url == "https://api.openai.com/v1"
+    assert created.model == "gpt-4o-mini"
+
+    # Secret landed in ETS, not in vault
+    assert {:ok, "ephem-secret-xyz"} =
+             Platform.ExternalAgents.EphemeralCredentials.get(created.id)
+
+    refute Repo.get_by(Platform.Vault.Credential, slug: "ephem-key")
+  end
+
+  test "submit with paste mode + save_to_vault=true writes to Vault and references vault_key",
+       %{conn: conn} do
+    stub_external_agents_req_client(fn conn ->
+      Req.Test.json(conn, %{"data" => [%{"id" => "model-a"}]})
+    end)
+
+    conn = authenticated_conn(conn)
+    {:ok, view, _html} = live(conn, ~p"/control")
+
+    render_click(view, "open_onboarding_chooser", %{})
+    render_click(view, "choose_onboarding", %{"flow" => "external"})
+
+    vault_key = "vaulted-key-#{System.unique_integer([:positive])}"
+
+    view
+    |> form("#external-agent-form",
+      external_agent: %{
+        name: "Vaulted Llama",
+        slug: "",
+        endpoint_kind: "openai_compat",
+        base_url: "https://api.openai.com/v1",
+        model: "gpt-4o-mini",
+        default_behavior: "chat",
+        vault_mode: "paste",
+        vault_key: vault_key,
+        secret: "sk-vault-xyz",
+        save_to_vault: "true"
+      }
+    )
+    |> render_submit()
+
+    created = Repo.get_by!(Agent, slug: "vaulted-llama")
+    assert created.vault_key == vault_key
+
+    # Vault has the credential, ETS does NOT
+    assert {:ok, "sk-vault-xyz"} =
+             Platform.Vault.get(vault_key, accessor: {:agent, created.id})
+
+    assert {:error, :not_found} =
+             Platform.ExternalAgents.EphemeralCredentials.get(created.id)
+  end
+
+  test "probe failure does NOT block agent creation; warning flash + probe_result carries error",
+       %{conn: conn} do
+    stub_external_agents_req_client(fn conn ->
+      Req.Test.transport_error(conn, :nxdomain)
+    end)
+
+    conn = authenticated_conn(conn)
+    {:ok, view, _html} = live(conn, ~p"/control")
+
+    render_click(view, "open_onboarding_chooser", %{})
+    render_click(view, "choose_onboarding", %{"flow" => "external"})
+
+    html =
+      view
+      |> form("#external-agent-form",
+        external_agent: %{
+          name: "Unreachable",
+          slug: "",
+          endpoint_kind: "openai_compat",
+          base_url: "http://unreachable.invalid",
+          model: "gpt-4o-mini",
+          default_behavior: "chat",
+          vault_mode: "paste",
+          vault_key: "",
+          secret: "",
+          save_to_vault: "false"
+        }
+      )
+      |> render_submit()
+
+    created = Repo.get_by!(Agent, slug: "unreachable")
+    assert created.kind == "external"
+    # Probe persisted its outcome to the row
+    assert Repo.get!(Agent, created.id).last_probe_status == "network_error"
+
+    # Warning flash visible in the redirected page
+    assert html =~ "Probe failed"
+    assert html =~ "network_error"
+    assert html =~ "saved anyway"
+  end
+
+  test "submit with from_vault mode uses existing vault_key without writing a new credential",
+       %{conn: conn} do
+    stub_external_agents_req_client(fn conn ->
+      Req.Test.json(conn, %{"data" => []})
+    end)
+
+    existing_slug = "preexisting-key-#{System.unique_integer([:positive])}"
+
+    {:ok, _cred} =
+      Platform.Vault.put(existing_slug, :api_key, "sk-already-here",
+        name: "Preexisting",
+        provider: "external_agent"
+      )
+
+    initial_count =
+      Platform.Vault.list(scope: {:platform, nil})
+      |> Enum.count(&(&1.slug == existing_slug))
+
+    conn = authenticated_conn(conn)
+    {:ok, view, _html} = live(conn, ~p"/control")
+
+    render_click(view, "open_onboarding_chooser", %{})
+    render_click(view, "choose_onboarding", %{"flow" => "external"})
+    # Toggle the Credentials tab into From-vault mode so the hidden
+    # vault_mode input reflects "from_vault".
+    render_click(view, "set_vault_mode", %{"mode" => "from_vault"})
+
+    view
+    |> form("#external-agent-form",
+      external_agent: %{
+        name: "Reuser",
+        slug: "",
+        endpoint_kind: "openai_compat",
+        base_url: "https://api.openai.com/v1",
+        model: "gpt-4o-mini",
+        default_behavior: "chat",
+        vault_key: existing_slug
+      }
+    )
+    |> render_submit()
+
+    created = Repo.get_by!(Agent, slug: "reuser")
+    assert created.vault_key == existing_slug
+
+    # No duplicate credential row — count for that slug stays the same
+    final_count =
+      Platform.Vault.list(scope: {:platform, nil})
+      |> Enum.count(&(&1.slug == existing_slug))
+
+    assert final_count == initial_count
+  end
+
+  test "successful probe renders OK pill in Connection Status panel after submit",
+       %{conn: conn} do
+    stub_external_agents_req_client(fn conn ->
+      Req.Test.json(conn, %{
+        "data" => [%{"id" => "a"}, %{"id" => "b"}, %{"id" => "c"}]
+      })
+    end)
+
+    conn = authenticated_conn(conn)
+    {:ok, view, _html} = live(conn, ~p"/control")
+
+    render_click(view, "open_onboarding_chooser", %{})
+    render_click(view, "choose_onboarding", %{"flow" => "external"})
+
+    html =
+      view
+      |> form("#external-agent-form",
+        external_agent: %{
+          name: "Probe OK Test",
+          slug: "",
+          endpoint_kind: "openai_compat",
+          base_url: "https://api.openai.com/v1",
+          model: "gpt-4o-mini",
+          default_behavior: "chat",
+          vault_mode: "paste",
+          vault_key: "",
+          secret: "",
+          save_to_vault: "false"
+        }
+      )
+      |> render_submit()
+
+    # The Repo row got persisted, last_probe_status == "ok"
+    created = Repo.get_by!(Agent, slug: "probe-ok-test")
+    assert Repo.get!(Agent, created.id).last_probe_status == "ok"
+
+    # Success flash in the redirected page
+    assert html =~ "probe OK"
+  end
+
+  test "changeset error (missing base_url) re-renders form with flash", %{conn: conn} do
+    conn = authenticated_conn(conn)
+    {:ok, view, _html} = live(conn, ~p"/control")
+
+    render_click(view, "open_onboarding_chooser", %{})
+    render_click(view, "choose_onboarding", %{"flow" => "external"})
+
+    html =
+      view
+      |> form("#external-agent-form",
+        external_agent: %{
+          name: "Bad Submit",
+          slug: "",
+          endpoint_kind: "openai_compat",
+          base_url: "",
+          model: "",
+          default_behavior: "chat",
+          vault_mode: "paste",
+          vault_key: "",
+          secret: "",
+          save_to_vault: "false"
+        }
+      )
+      |> render_submit()
+
+    # Form stays open (still rendered)
+    assert html =~ "external-agent-form"
+    # No agent created
+    refute Repo.get_by(Agent, slug: "bad-submit")
+  end
+
+  # ── Stage 3: Vault sub-form ─────────────────────────────────────────
+
+  test "external agent form renders Vault sub-form with tab toggle", %{conn: conn} do
+    conn = authenticated_conn(conn)
+    {:ok, view, _html} = live(conn, ~p"/control")
+
+    render_click(view, "open_onboarding_chooser", %{})
+    html = render_click(view, "choose_onboarding", %{"flow" => "external"})
+
+    # Credentials section heading + both tabs render
+    assert html =~ "Credentials"
+    assert html =~ "From vault"
+    assert html =~ "+ Paste new"
+
+    # Default mode is "paste" — secret + vault_key inputs visible
+    assert html =~ ~s(name="external_agent[vault_key]")
+    assert html =~ ~s(name="external_agent[secret]")
+    assert html =~ ~s(name="external_agent[save_to_vault]")
+    assert html =~ "Save to vault on submit"
+    assert html =~ "Name in vault"
+
+    # Tab toggle buttons fire set_vault_mode
+    assert html =~ ~s(phx-click="set_vault_mode")
+    assert html =~ ~s(phx-value-mode="from_vault")
+    assert html =~ ~s(phx-value-mode="paste")
+  end
+
+  test "switching to From vault tab swaps to <select>; paste fields no longer rendered as labels",
+       %{conn: conn} do
+    conn = authenticated_conn(conn)
+    {:ok, view, _html} = live(conn, ~p"/control")
+
+    render_click(view, "open_onboarding_chooser", %{})
+    render_click(view, "choose_onboarding", %{"flow" => "external"})
+
+    html = render_click(view, "set_vault_mode", %{"mode" => "from_vault"})
+
+    # From-vault mode renders either the empty notice OR a select; either way
+    # the "Name in vault" + "Save to vault on submit" labels disappear.
+    refute html =~ "Name in vault"
+    refute html =~ "Save to vault on submit"
+    # Empty-state notice (no seeded vault rows in test DB)
+    assert html =~ "No vault credentials yet"
+    # The active-tab class lands on "From vault"
+    assert html =~ "tab-active"
+  end
+
+  test "tab round-trip preserves vault_key and secret values", %{conn: conn} do
+    conn = authenticated_conn(conn)
+    {:ok, view, _html} = live(conn, ~p"/control")
+
+    render_click(view, "open_onboarding_chooser", %{})
+    render_click(view, "choose_onboarding", %{"flow" => "external"})
+
+    # User fills in vault_key + secret while in paste mode
+    view
+    |> form("#external-agent-form",
+      external_agent: %{
+        name: "",
+        slug: "",
+        endpoint_kind: "openai_compat",
+        base_url: "",
+        model: "",
+        default_behavior: "chat",
+        vault_mode: "paste",
+        vault_key: "my-test-key",
+        secret: "secret-12345",
+        save_to_vault: "true"
+      }
+    )
+    |> render_change()
+
+    # Toggle to From vault, then back to Paste new
+    render_click(view, "set_vault_mode", %{"mode" => "from_vault"})
+    html = render_click(view, "set_vault_mode", %{"mode" => "paste"})
+
+    # Both values must survive the round-trip
+    assert html =~ ~s(value="my-test-key")
+    assert html =~ ~s(value="secret-12345")
+    # save_to_vault checkbox is still checked
+    assert html =~ ~s(checked)
+  end
+
+  test "From vault mode renders existing platform credentials in <select>", %{conn: conn} do
+    conn = authenticated_conn(conn)
+    {:ok, view, _html} = live(conn, ~p"/control")
+
+    # Seed two platform-scoped credentials matching the api_key/token filter
+    {:ok, _cred1} =
+      Platform.Vault.put(
+        "openrouter-key-#{System.unique_integer([:positive])}",
+        :api_key,
+        "sk-xyz",
+        name: "OpenRouter Key",
+        provider: "external_agent"
+      )
+
+    {:ok, _cred2} =
+      Platform.Vault.put(
+        "anthropic-key-#{System.unique_integer([:positive])}",
+        :token,
+        "sk-anth",
+        name: "Anthropic Key",
+        provider: "external_agent"
+      )
+
+    render_click(view, "open_onboarding_chooser", %{})
+    render_click(view, "choose_onboarding", %{"flow" => "external"})
+    html = render_click(view, "set_vault_mode", %{"mode" => "from_vault"})
+
+    # Both credentials should appear as <option> entries
+    assert html =~ "OpenRouter Key"
+    assert html =~ "Anthropic Key"
+    # Empty-state notice is no longer rendered
+    refute html =~ "No vault credentials yet"
+    # The select is bound to vault_key
+    assert html =~ ~s(name="external_agent[vault_key]")
+  end
+
+  test "unchecking Save to vault round-trips as false", %{conn: conn} do
+    conn = authenticated_conn(conn)
+    {:ok, view, _html} = live(conn, ~p"/control")
+
+    render_click(view, "open_onboarding_chooser", %{})
+    render_click(view, "choose_onboarding", %{"flow" => "external"})
+
+    # Submit a change with save_to_vault unchecked (phx-change uses the hidden
+    # predecessor "false" value when the box isn't checked)
+    html =
+      view
+      |> form("#external-agent-form",
+        external_agent: %{
+          name: "Ephemeral",
+          slug: "",
+          endpoint_kind: "openai_compat",
+          base_url: "",
+          model: "",
+          default_behavior: "chat",
+          vault_mode: "paste",
+          vault_key: "ephemeral-key",
+          secret: "ephem-xyz",
+          save_to_vault: "false"
+        }
+      )
+      |> render_change()
+
+    # vault_key and secret survive; checkbox is now unchecked
+    assert html =~ ~s(value="ephemeral-key")
+    assert html =~ ~s(value="ephem-xyz")
+    # The save_to_vault checkbox input is no longer rendered with `checked`.
+    refute html =~ ~r/name="external_agent\[save_to_vault\]"\s+value="true"\s+class=[^>]*checked/
   end
 
   test "selecting template flow shows 8 role template cards", %{conn: conn} do
@@ -958,6 +1502,275 @@ defmodule PlatformWeb.ControlCenterLiveTest do
       assert "historian" in updated.system_events
       refute "daily_summary" in updated.system_events
       refute "dreaming" in updated.system_events
+    end
+  end
+
+  describe "Roles panel (M7 stage 5)" do
+    test "GET /control with no agent selected renders 4 role rows + UNFILLED pills", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      {:ok, _view, html} = live(conn, ~p"/control")
+
+      # Tab strip + count
+      assert html =~ "Roles (4)"
+
+      # Each of the four seeded roles renders with name + icon class.
+      assert html =~ "Designer"
+      assert html =~ "Historian"
+      assert html =~ "Meeting Scribe"
+      assert html =~ "Triage Officer"
+      assert html =~ "hero-paint-brush"
+      assert html =~ "hero-book-open"
+      assert html =~ "hero-calendar-days"
+      assert html =~ "hero-clipboard-document-check"
+
+      # Bundle keys render as <code> chips for at least one role.
+      assert html =~ "design.critique"
+      assert html =~ "memory.daily_summary"
+      assert html =~ "meetings.summarize"
+      assert html =~ "tasks.triage"
+
+      # Every row starts UNFILLED with a Fill role button.
+      assert html =~ "UNFILLED"
+      assert html =~ "Fill role"
+
+      # Cost stats stub chips render literal em-dash placeholders.
+      assert html =~ "runs —"
+      assert html =~ "last —"
+      assert html =~ "avg —"
+      assert html =~ "$/run —"
+
+      # Show advanced footer present (stage 6 owns the toggle behaviour).
+      assert html =~ "Show advanced"
+    end
+
+    test "assigning a role swaps the row to show the agent name + kind pill", %{conn: conn} do
+      agent =
+        create_agent(%{
+          name: "Pixel Picasso",
+          kind: "external",
+          endpoint_kind: "openai_compat",
+          base_url: "http://localhost:1234/v1",
+          model: "gpt-4o-mini"
+        })
+
+      {:ok, _assignment} = Platform.Roles.assign_role("designer", agent.id)
+
+      conn = authenticated_conn(conn)
+      {:ok, _view, html} = live(conn, ~p"/control")
+
+      # Designer row now shows the agent's name + EXT pill (kind == external).
+      assert html =~ "Pixel Picasso"
+      assert html =~ "EXT"
+
+      # Other three roles still UNFILLED.
+      assert html =~ "UNFILLED"
+    end
+
+    test "toggle_role_advanced flips the advanced label", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      {:ok, view, html} = live(conn, ~p"/control")
+
+      assert html =~ "Show advanced"
+      refute html =~ "Hide advanced"
+
+      html = render_click(view, "toggle_role_advanced", %{})
+
+      assert html =~ "Hide advanced"
+    end
+
+    test "open_fill_role opens the External Agent onboarding flow", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/control")
+
+      html = render_click(view, "open_fill_role", %{"role_key" => "designer"})
+
+      # Modal opens to the External Agent flow (heading + form).
+      assert html =~ "External Agent"
+      assert html =~ "external-agent-form"
+    end
+  end
+
+  describe "Roles advanced surface + role select (M7 stage 6)" do
+    test "Show advanced toggle reveals a flat per-responsibility list", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/control")
+
+      html = render_click(view, "toggle_role_advanced", %{})
+
+      # The advanced surface is identified by its id and an explanatory blurb.
+      assert html =~ "roles-advanced-panel"
+      assert html =~ "Each responsibility routes"
+
+      # Sample one responsibility key from each seeded bundle.
+      assert html =~ "design.critique"
+      assert html =~ "memory.daily_summary"
+      assert html =~ "meetings.summarize"
+      assert html =~ "tasks.triage"
+
+      # Every row gets an override <select> via the change-event form,
+      # plus a "use role default" option for the no-override case.
+      assert html =~ "set_responsibility_override"
+      assert html =~ "use role default"
+    end
+
+    test "set_responsibility_override persists a ResponsibilityOverride row + assignee_for/1 resolves to it",
+         %{conn: conn} do
+      agent = create_agent(%{name: "Override Pal"})
+
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/control")
+      render_click(view, "toggle_role_advanced", %{})
+
+      _html =
+        render_change(view, "set_responsibility_override", %{
+          "responsibility_key" => "design.critique",
+          "agent_id" => agent.id
+        })
+
+      assert %Platform.Roles.ResponsibilityOverride{agent_id: aid} =
+               Repo.get_by(
+                 Platform.Roles.ResponsibilityOverride,
+                 responsibility_key: "design.critique"
+               )
+
+      assert aid == agent.id
+      assert %Platform.Agents.Agent{id: ^aid} = Platform.Roles.assignee_for("design.critique")
+    end
+
+    test "clear_responsibility_override removes the row and re-renders the row without OVERRIDE",
+         %{conn: conn} do
+      agent = create_agent(%{name: "Cleared Pal"})
+      {:ok, _override} = Platform.Roles.set_override("design.critique", agent.id)
+
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/control")
+      html = render_click(view, "toggle_role_advanced", %{})
+
+      # OVERRIDE pill visible before clear
+      assert html =~ "OVERRIDE"
+
+      html =
+        render_click(view, "clear_responsibility_override", %{"key" => "design.critique"})
+
+      refute Repo.get_by(
+               Platform.Roles.ResponsibilityOverride,
+               responsibility_key: "design.critique"
+             )
+
+      refute html =~ "OVERRIDE"
+    end
+
+    test "Fill role pre-binds the role_key into the External Agent form's role select",
+         %{conn: conn} do
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/control")
+
+      html = render_click(view, "open_fill_role", %{"role_key" => "designer"})
+
+      # The role <select> is present and the designer option is selected.
+      assert html =~ ~s(name="external_agent[role_key]")
+      # The selected designer <option> renders with selected attribute.
+      assert html =~ ~r/<option[^>]*value="designer"[^>]*selected/
+    end
+
+    test "External Agent form lists taken roles as disabled options with conflict text",
+         %{conn: conn} do
+      taken_agent = create_agent(%{name: "Already Pinned"})
+      {:ok, _assignment} = Platform.Roles.assign_role("designer", taken_agent.id)
+
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/control")
+
+      render_click(view, "open_onboarding_chooser", %{})
+      html = render_click(view, "choose_onboarding", %{"flow" => "external"})
+
+      # Designer option is disabled and shows the conflicting agent name.
+      assert html =~ ~r/<option[^>]*value="designer"[^>]*disabled/
+      assert html =~ "Already Pinned"
+    end
+
+    test "submit with role_key non-blank assigns the role to the new agent",
+         %{conn: conn} do
+      stub_external_agents_req_client(fn conn ->
+        Req.Test.json(conn, %{"data" => [%{"id" => "gpt-4o-mini"}]})
+      end)
+
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/control")
+
+      render_click(view, "open_onboarding_chooser", %{})
+      render_click(view, "choose_onboarding", %{"flow" => "external"})
+
+      view
+      |> form("#external-agent-form",
+        external_agent: %{
+          name: "Role Pinned",
+          slug: "",
+          endpoint_kind: "openai_compat",
+          base_url: "https://api.openai.com/v1",
+          model: "gpt-4o-mini",
+          default_behavior: "chat",
+          vault_mode: "paste",
+          vault_key: "rp-key",
+          secret: "rp-secret",
+          save_to_vault: "false",
+          role_key: "designer"
+        }
+      )
+      |> render_submit()
+
+      created = Repo.get_by!(Platform.Agents.Agent, slug: "role-pinned")
+      assert created.kind == "external"
+
+      # Assignment row exists and resolves back to this agent.
+      assignment = Repo.get_by(Platform.Roles.RoleAssignment, role_key: "designer")
+      assert assignment
+      assert assignment.agent_id == created.id
+    end
+
+    test "submit with a taken role_key surfaces an error flash without crashing",
+         %{conn: conn} do
+      stub_external_agents_req_client(fn conn ->
+        Req.Test.json(conn, %{"data" => []})
+      end)
+
+      taken_agent = create_agent(%{name: "Squatter"})
+      {:ok, _assignment} = Platform.Roles.assign_role("historian", taken_agent.id)
+
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/control")
+
+      render_click(view, "open_onboarding_chooser", %{})
+      render_click(view, "choose_onboarding", %{"flow" => "external"})
+
+      html =
+        view
+        |> form("#external-agent-form",
+          external_agent: %{
+            name: "Conflict Llama",
+            slug: "",
+            endpoint_kind: "openai_compat",
+            base_url: "https://api.openai.com/v1",
+            model: "gpt-4o-mini",
+            default_behavior: "chat",
+            vault_mode: "paste",
+            vault_key: "",
+            secret: "",
+            save_to_vault: "false",
+            role_key: "historian"
+          }
+        )
+        |> render_submit()
+
+      # Agent still created (role assignment failure is not a gate).
+      assert Repo.get_by!(Platform.Agents.Agent, slug: "conflict-llama")
+
+      # Original assignment unchanged.
+      assignment = Repo.get_by(Platform.Roles.RoleAssignment, role_key: "historian")
+      assert assignment.agent_id == taken_agent.id
+
+      # Flash visible.
+      assert html =~ "already filled"
     end
   end
 end

@@ -16,7 +16,11 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
   attr :import_agents, :list, default: []
   attr :import_selected, :any, required: true
   attr :create_agent_form, :map, required: true
+  attr :external_agent_form, :map, required: true
+  attr :probe_result, :map, default: nil
   attr :role_templates, :list, required: true
+  attr :roles, :list, default: []
+  attr :role_assignments_by_key, :map, default: %{}
 
   def overlay(assigns) do
     ~H"""
@@ -35,6 +39,7 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
                 @onboarding_flow == :federate -> "Federate an Agent"
                 @onboarding_flow == :import -> "Import from Workspace"
                 @onboarding_flow == :create -> "Create Custom Agent"
+                @onboarding_flow == :external -> "External Agent"
                 true -> "Add Agent"
               end}
             </h2>
@@ -71,6 +76,15 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
           <.create_flow
             :if={@onboarding_flow == :create}
             create_agent_form={@create_agent_form}
+          />
+
+          <.external_agent_flow
+            :if={@onboarding_flow == :external}
+            external_agent_form={@external_agent_form}
+            probe_result={@probe_result}
+            role_templates={@role_templates}
+            roles={@roles}
+            role_assignments_by_key={@role_assignments_by_key}
           />
         </div>
       </div>
@@ -127,6 +141,22 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
         <span class="hero-wrench-screwdriver h-8 w-8 text-primary" />
         <span class="text-sm font-semibold text-base-content">Create Custom</span>
         <span class="text-xs text-base-content/55">Full manual setup</span>
+      </button>
+
+      <button
+        type="button"
+        phx-click="choose_onboarding"
+        phx-value-flow="external"
+        class="group relative flex flex-col items-center gap-3 rounded-2xl border-2 border-dashed border-purple-500/60 bg-base-100 px-4 py-6 text-center transition hover:border-purple-500 hover:bg-purple-500/5 sm:col-span-2"
+      >
+        <span class="absolute -top-2 -right-2 rounded-full bg-purple-500 px-2 py-0.5 text-[10px] font-bold text-white">
+          New
+        </span>
+        <span class="hero-bolt h-8 w-8 text-purple-500" />
+        <span class="text-sm font-semibold text-base-content">External Agent</span>
+        <span class="text-xs text-base-content/55">
+          OpenAI-compatible (vLLM / llama.cpp / etc.) or Ollama-native — no Suite-managed runtime.
+        </span>
       </button>
     </div>
     """
@@ -513,6 +543,420 @@ defmodule PlatformWeb.ControlCenter.Onboarding do
     </div>
     """
   end
+
+  attr :external_agent_form, :map, required: true
+  attr :probe_result, :map, default: nil
+  attr :role_templates, :list, required: true
+  attr :roles, :list, default: []
+  attr :role_assignments_by_key, :map, default: %{}
+
+  defp external_agent_flow(assigns) do
+    endpoint_kind = assigns.external_agent_form[:endpoint_kind].value || "openai_compat"
+    default_behavior = assigns.external_agent_form[:default_behavior].value || "chat"
+    vault_mode = assigns.external_agent_form[:vault_mode].value || "paste"
+    save_to_vault? = checkbox_truthy?(assigns.external_agent_form[:save_to_vault].value)
+    selected_role_key = assigns.external_agent_form[:role_key].value || ""
+
+    vault_options =
+      try do
+        Platform.Vault.list(scope: {:platform, nil})
+      rescue
+        _ -> []
+      end
+      |> Enum.filter(fn cred ->
+        cred.credential_type in ["api_key", "token", "bearer"]
+      end)
+
+    assigns =
+      assigns
+      |> Phoenix.Component.assign(:endpoint_kind, endpoint_kind)
+      |> Phoenix.Component.assign(:default_behavior, default_behavior)
+      |> Phoenix.Component.assign(:vault_mode, vault_mode)
+      |> Phoenix.Component.assign(:save_to_vault, save_to_vault?)
+      |> Phoenix.Component.assign(:vault_options, vault_options)
+      |> Phoenix.Component.assign(:selected_role_key, selected_role_key)
+
+    ~H"""
+    <div class="mt-6">
+      <div class="mb-4 rounded-2xl border border-dashed border-purple-500/40 bg-purple-500/5 px-4 py-3">
+        <p class="text-sm font-semibold text-base-content">External Agent · configure</p>
+        <p class="mt-1 text-xs text-base-content/55">
+          Connect an OpenAI-compatible or Ollama-native endpoint. No Suite-managed runtime — Suite
+          calls the model directly. Credentials are stored in
+          <code class="rounded bg-base-200 px-1 py-0.5 font-mono text-[11px]">Platform.Vault</code>
+          on submit (vault sub-form lands in stage 3).
+        </p>
+      </div>
+
+      <.form
+        for={@external_agent_form}
+        id="external-agent-form"
+        phx-change="external_agent_change"
+        phx-submit="submit_external"
+        class="space-y-4"
+      >
+        <%!-- Identity row: name + slug --%>
+        <div class="grid gap-3 sm:grid-cols-2">
+          <label class="form-control">
+            <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
+              Display Name
+            </span>
+            <input
+              type="text"
+              name="external_agent[name]"
+              value={@external_agent_form[:name].value || ""}
+              class="input input-bordered w-full"
+              placeholder="e.g. Local Llama"
+              autofocus
+            />
+          </label>
+          <label class="form-control">
+            <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
+              Slug
+            </span>
+            <input
+              type="text"
+              name="external_agent[slug]"
+              value={@external_agent_form[:slug].value || ""}
+              class="input input-bordered w-full font-mono text-sm"
+              placeholder="auto-derived from name"
+            />
+          </label>
+        </div>
+
+        <%!-- Endpoint Kind dropdown + conditional help text --%>
+        <label class="form-control">
+          <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
+            Endpoint Kind
+          </span>
+          <select name="external_agent[endpoint_kind]" class="select select-bordered w-full">
+            <option value="openai_compat" selected={@endpoint_kind == "openai_compat"}>
+              OpenAI-compatible (Chat Completions)
+            </option>
+            <option value="ollama_native" selected={@endpoint_kind == "ollama_native"}>
+              Ollama-native
+            </option>
+          </select>
+          <span
+            :if={@endpoint_kind == "openai_compat"}
+            class="mt-1 text-xs text-base-content/55"
+          >
+            Use for OpenAI, OpenRouter, Together, vLLM, LM Studio, or any server speaking <code class="font-mono">/v1/chat/completions</code>.
+          </span>
+          <span
+            :if={@endpoint_kind == "ollama_native"}
+            class="mt-1 text-xs text-base-content/55"
+          >
+            Use for local Ollama installations speaking the native
+            <code class="font-mono">/api/chat</code>
+            endpoint.
+          </span>
+        </label>
+
+        <%!-- Base URL + Model --%>
+        <div class="grid gap-3 sm:grid-cols-2">
+          <label class="form-control">
+            <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
+              Base URL
+            </span>
+            <input
+              type="text"
+              name="external_agent[base_url]"
+              value={@external_agent_form[:base_url].value || ""}
+              class="input input-bordered w-full font-mono text-sm"
+              placeholder={base_url_placeholder(@endpoint_kind)}
+            />
+          </label>
+          <label class="form-control">
+            <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
+              Model
+            </span>
+            <input
+              type="text"
+              name="external_agent[model]"
+              value={@external_agent_form[:model].value || ""}
+              class="input input-bordered w-full font-mono text-sm"
+              placeholder={model_placeholder(@endpoint_kind)}
+            />
+          </label>
+        </div>
+
+        <%!-- Default Behavior pill row --%>
+        <div class="form-control">
+          <span class="mb-2 text-xs font-semibold uppercase tracking-widest text-base-content/50">
+            Default Behavior
+          </span>
+          <div class="flex flex-wrap gap-2">
+            <label
+              :for={behavior <- ~w(chat dispatch dispatch_and_chat)}
+              class="cursor-pointer"
+              title={behavior_label(behavior)}
+            >
+              <input
+                type="radio"
+                name="external_agent[default_behavior]"
+                value={behavior}
+                class="sr-only peer"
+                checked={@default_behavior == behavior}
+              />
+              <span class={[
+                "inline-flex items-center rounded-full border px-3 py-1 text-xs font-medium transition",
+                "border-base-300 bg-base-100 text-base-content/70 hover:border-primary/50",
+                "peer-checked:border-primary peer-checked:bg-primary/10 peer-checked:text-primary"
+              ]}>
+                {behavior_label(behavior)}
+              </span>
+            </label>
+          </div>
+          <span class="mt-1 text-xs text-base-content/50">
+            {behavior_description(@default_behavior)}
+          </span>
+        </div>
+
+        <%!-- Credentials sub-form (stage 3): From-vault / Paste-new tab toggle --%>
+        <div class="form-control" id="external-agent-vault">
+          <span class="mb-2 text-xs font-semibold uppercase tracking-widest text-base-content/50">
+            Credentials
+          </span>
+
+          <div role="tablist" class="tabs tabs-boxed mb-3 inline-flex">
+            <button
+              type="button"
+              role="tab"
+              phx-click="set_vault_mode"
+              phx-value-mode="from_vault"
+              class={["tab", @vault_mode == "from_vault" && "tab-active"]}
+              aria-selected={@vault_mode == "from_vault"}
+            >
+              From vault
+            </button>
+            <button
+              type="button"
+              role="tab"
+              phx-click="set_vault_mode"
+              phx-value-mode="paste"
+              class={["tab", @vault_mode == "paste" && "tab-active"]}
+              aria-selected={@vault_mode == "paste"}
+            >
+              + Paste new
+            </button>
+          </div>
+
+          <%!-- Hidden field tracks the active mode through form submits --%>
+          <input type="hidden" name="external_agent[vault_mode]" value={@vault_mode} />
+
+          <%!-- From-vault mode: <select> of existing platform-scoped credentials --%>
+          <div :if={@vault_mode == "from_vault"} class="space-y-2">
+            <div
+              :if={@vault_options == []}
+              class="rounded-lg border border-dashed border-base-300 bg-base-200/30 px-3 py-3 text-xs text-base-content/55"
+            >
+              No vault credentials yet — switch to Paste new.
+            </div>
+            <select
+              :if={@vault_options != []}
+              name="external_agent[vault_key]"
+              class="select select-bordered w-full font-mono text-sm"
+            >
+              <option
+                value=""
+                disabled
+                selected={(@external_agent_form[:vault_key].value || "") == ""}
+              >
+                — Select a vault credential —
+              </option>
+              <option
+                :for={opt <- @vault_options}
+                value={opt.slug}
+                selected={@external_agent_form[:vault_key].value == opt.slug}
+              >
+                {opt.name || opt.slug}
+              </option>
+            </select>
+            <%!-- Preserve the paste-mode secret so a round-trip doesn't blank it --%>
+            <input
+              type="hidden"
+              name="external_agent[secret]"
+              value={@external_agent_form[:secret].value || ""}
+            />
+            <%!-- Preserve save_to_vault checkbox state across tab toggle --%>
+            <input
+              type="hidden"
+              name="external_agent[save_to_vault]"
+              value={if @save_to_vault, do: "true", else: "false"}
+            />
+          </div>
+
+          <%!-- Paste-new mode: vault_key + secret + save-to-vault checkbox --%>
+          <div :if={@vault_mode == "paste"} class="space-y-3">
+            <label class="form-control">
+              <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
+                Name in vault
+              </span>
+              <input
+                type="text"
+                name="external_agent[vault_key]"
+                value={@external_agent_form[:vault_key].value || ""}
+                class="input input-bordered w-full font-mono text-sm"
+                placeholder="my-openrouter-key"
+                autocomplete="off"
+              />
+            </label>
+            <label class="form-control">
+              <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
+                Secret
+              </span>
+              <input
+                type="password"
+                name="external_agent[secret]"
+                value={@external_agent_form[:secret].value || ""}
+                class="input input-bordered w-full font-mono text-sm"
+                placeholder="••••••••"
+                autocomplete="off"
+              />
+            </label>
+            <label class="flex items-center gap-2 text-sm">
+              <%!-- Hidden predecessor so an unchecked box submits "false" --%>
+              <input type="hidden" name="external_agent[save_to_vault]" value="false" />
+              <input
+                type="checkbox"
+                name="external_agent[save_to_vault]"
+                value="true"
+                class="checkbox checkbox-primary checkbox-sm"
+                checked={@save_to_vault}
+              />
+              <span>Save to vault on submit</span>
+            </label>
+            <p class="text-xs text-base-content/50">
+              Unchecked = stored only in memory, lost on restart.
+            </p>
+          </div>
+        </div>
+
+        <%!-- Connection Status panel (stage 4) --%>
+        <.connection_status_panel probe_result={@probe_result} />
+
+        <%!-- Role assignment (stage 6) --%>
+        <div class="form-control" id="external-agent-role">
+          <span class="mb-1 text-xs font-semibold uppercase tracking-widest text-base-content/50">
+            Assign a role (optional)
+          </span>
+          <select
+            name="external_agent[role_key]"
+            class="select select-bordered w-full"
+            aria-label="Assign a role"
+          >
+            <option value="" selected={@selected_role_key in [nil, ""]}>
+              — Skip role assignment —
+            </option>
+            <%= for role <- @roles do %>
+              <% taken = Map.get(@role_assignments_by_key, role.key) %>
+              <option
+                value={role.key}
+                disabled={not is_nil(taken) and @selected_role_key != role.key}
+                selected={@selected_role_key == role.key}
+              >
+                <%= if taken && @selected_role_key != role.key do %>
+                  {role.name} (taken by {taken.name})
+                <% else %>
+                  {role.name}
+                <% end %>
+              </option>
+            <% end %>
+          </select>
+          <span class="mt-1 text-xs text-base-content/50">
+            Pinning to a role auto-routes its responsibilities to this agent.
+          </span>
+        </div>
+
+        <button type="submit" class="btn btn-primary w-full">
+          Save External Agent
+        </button>
+      </.form>
+    </div>
+    """
+  end
+
+  attr :probe_result, :map, default: nil
+
+  @doc false
+  def connection_status_panel(assigns) do
+    ~H"""
+    <div
+      id="external-agent-connection-status"
+      class="rounded-2xl border border-base-300 bg-base-200/40 p-4"
+    >
+      <p class="mb-3 text-xs font-semibold uppercase tracking-widest text-base-content/50">
+        Connection Status
+      </p>
+
+      <%!-- Row 1: probe result pill or muted placeholder --%>
+      <div class="mb-2 flex items-center gap-2">
+        <span
+          :if={is_nil(@probe_result)}
+          class="text-xs text-base-content/55"
+        >
+          Run probe on save
+        </span>
+        <span
+          :if={@probe_result && @probe_result[:status] == :ok}
+          class="badge badge-success badge-sm gap-1"
+        >
+          <span class="hero-check-circle h-3 w-3" />
+          Probe OK · {@probe_result[:model_count]} models · {@probe_result[:latency_ms]}ms
+        </span>
+        <span
+          :if={@probe_result && @probe_result[:status] == :error}
+          class="badge badge-error badge-sm gap-1"
+        >
+          <span class="hero-x-circle h-3 w-3" />
+          {probe_error_label(@probe_result[:reason])}
+        </span>
+      </div>
+
+      <%!-- Row 2: static liveness dot (no first save yet) --%>
+      <div class="flex items-center gap-2">
+        <span class="inline-block h-2.5 w-2.5 rounded-full bg-base-content/25" />
+        <span class="text-xs text-base-content/55">Not connected yet</span>
+      </div>
+    </div>
+    """
+  end
+
+  defp probe_error_label(:unauthorized), do: "Unauthorized (check API key)"
+  defp probe_error_label(:http_error), do: "HTTP error from endpoint"
+  defp probe_error_label(:timeout), do: "Probe timed out"
+  defp probe_error_label(:network_error), do: "Network error (unreachable)"
+  defp probe_error_label(other) when is_atom(other), do: "Probe failed: #{Atom.to_string(other)}"
+  defp probe_error_label(other), do: "Probe failed: #{inspect(other)}"
+
+  defp checkbox_truthy?(true), do: true
+  defp checkbox_truthy?("true"), do: true
+  defp checkbox_truthy?("on"), do: true
+  defp checkbox_truthy?(nil), do: true
+  defp checkbox_truthy?(_), do: false
+
+  defp base_url_placeholder("ollama_native"), do: "http://localhost:11434"
+  defp base_url_placeholder(_), do: "https://api.openai.com/v1"
+
+  defp model_placeholder("ollama_native"), do: "llama3.2:latest"
+  defp model_placeholder(_), do: "gpt-4o-mini"
+
+  defp behavior_label("chat"), do: "Chat"
+  defp behavior_label("dispatch"), do: "Dispatch"
+  defp behavior_label("dispatch_and_chat"), do: "Dispatch + Chat"
+  defp behavior_label(other), do: other
+
+  defp behavior_description("chat"),
+    do: "Responds inline in spaces it's invited to. No autonomous task execution."
+
+  defp behavior_description("dispatch"),
+    do: "Picks up dispatched tasks. Silent in chat unless explicitly mentioned."
+
+  defp behavior_description("dispatch_and_chat"),
+    do: "Both: chats in spaces and accepts dispatched tasks."
+
+  defp behavior_description(_), do: ""
 
   defp federation_config_snippet(ws_url, runtime_id) do
     Jason.encode!(

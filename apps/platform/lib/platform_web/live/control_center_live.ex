@@ -23,6 +23,7 @@ defmodule PlatformWeb.ControlCenterLive do
   alias PlatformWeb.ControlCenter.MemoryEvents
   alias PlatformWeb.ControlCenter.Onboarding
   alias PlatformWeb.ControlCenter.OnboardingEvents
+  alias PlatformWeb.ControlCenter.RolesPanel
   alias PlatformWeb.ControlCenter.RuntimeEvents
   alias PlatformWeb.ControlCenter.WorkspaceEvents
 
@@ -80,9 +81,15 @@ defmodule PlatformWeb.ControlCenterLive do
      |> assign(:federate_result, nil)
      |> assign(:import_agents, [])
      |> assign(:import_selected, MapSet.new())
+     |> assign(:external_agent_form, AgentData.build_external_agent_form())
+     |> assign(:probe_result, nil)
      |> assign(:regenerated_token, nil)
      |> assign(:show_add_space_modal, false)
-     |> assign(:available_spaces, [])}
+     |> assign(:available_spaces, [])
+     # Roles panel assigns (M7 stage 5)
+     |> assign(:active_tab, :roles)
+     |> assign(:show_role_advanced, false)
+     |> assign_roles_panel()}
   end
 
   @impl true
@@ -113,6 +120,75 @@ defmodule PlatformWeb.ControlCenterLive do
        assign_empty_panel(socket)
      end}
   end
+
+  # ── Roles panel events (M7 stage 5) ───────────────────────────────
+
+  @impl true
+  def handle_event("switch_control_tab", %{"tab" => tab}, socket) do
+    {:noreply, assign(socket, :active_tab, normalize_tab(tab))}
+  end
+
+  def handle_event("toggle_role_advanced", _params, socket) do
+    {:noreply, assign(socket, :show_role_advanced, !socket.assigns.show_role_advanced)}
+  end
+
+  def handle_event("open_fill_role", %{"role_key" => role_key}, socket) do
+    # Open the External Agent flow with the role_key pre-bound so the
+    # form's role <select> renders that role pre-selected and the
+    # submit handler picks it up (stage 6).
+    overrides = %{"role_key" => role_key}
+
+    {:noreply,
+     socket
+     |> assign(:show_onboarding_chooser, true)
+     |> assign(:onboarding_flow, :external)
+     |> assign(:external_agent_form, AgentData.build_external_agent_form(overrides))
+     |> assign(:probe_result, nil)}
+  end
+
+  def handle_event(
+        "set_responsibility_override",
+        %{"responsibility_key" => key, "agent_id" => ""},
+        socket
+      ) do
+    :ok = Platform.Roles.clear_override(key)
+    {:noreply, assign_roles_panel(socket)}
+  end
+
+  def handle_event(
+        "set_responsibility_override",
+        %{"responsibility_key" => key, "agent_id" => agent_id},
+        socket
+      )
+      when is_binary(agent_id) and agent_id != "" do
+    case Platform.Roles.set_override(key, agent_id) do
+      {:ok, _override} ->
+        {:noreply,
+         socket
+         |> assign_roles_panel()
+         |> put_flash(:info, "Override saved for #{key}.")}
+
+      {:error, changeset} ->
+        {:noreply,
+         put_flash(
+           socket,
+           :error,
+           "Could not set override: #{changeset_error_summary(changeset)}"
+         )}
+    end
+  end
+
+  def handle_event("clear_responsibility_override", %{"key" => key}, socket) do
+    :ok = Platform.Roles.clear_override(key)
+
+    {:noreply,
+     socket
+     |> assign_roles_panel()
+     |> put_flash(:info, "Cleared override for #{key}.")}
+  end
+
+  defp normalize_tab("roles"), do: :roles
+  defp normalize_tab(_), do: :roles
 
   # ── Runtime events (kept here — tightly coupled to socket) ────────
 
@@ -301,6 +377,15 @@ defmodule PlatformWeb.ControlCenterLive do
   def handle_event("submit_import", params, socket),
     do: OnboardingEvents.handle("submit_import", params, socket)
 
+  def handle_event("external_agent_change", params, socket),
+    do: OnboardingEvents.handle("external_agent_change", params, socket)
+
+  def handle_event("submit_external", params, socket),
+    do: OnboardingEvents.handle("submit_external", params, socket)
+
+  def handle_event("set_vault_mode", params, socket),
+    do: OnboardingEvents.handle("set_vault_mode", params, socket)
+
   # ── Runtime management events (delegated) ─────────────────────────
 
   def handle_event("suspend_federated_runtime", params, socket),
@@ -391,7 +476,11 @@ defmodule PlatformWeb.ControlCenterLive do
         import_agents={@import_agents}
         import_selected={@import_selected}
         create_agent_form={@create_agent_form}
+        external_agent_form={@external_agent_form}
+        probe_result={@probe_result}
         role_templates={@role_templates}
+        roles={@roles}
+        role_assignments_by_key={@role_assignments_by_key}
       />
 
       <%!-- ── Main content ───────────────────────────────────────────── --%>
@@ -572,26 +661,16 @@ defmodule PlatformWeb.ControlCenterLive do
             </div>
           </div>
 
-          <%!-- No agent selected (desktop placeholder) --%>
-          <div
-            :if={is_nil(@selected_agent)}
-            class="mx-auto flex h-full max-w-3xl items-center justify-center px-6 py-12"
-          >
-            <div class="flex flex-col items-center gap-4 text-center">
-              <span class="hero-rectangle-stack h-12 w-12 text-base-content/20" />
-              <p class="text-xl font-semibold text-base-content">Agent Resources</p>
-              <p class="text-sm text-base-content/60">
-                Select an agent from the sidebar, or add a new one to get started.
-              </p>
-              <button
-                type="button"
-                phx-click="open_onboarding_chooser"
-                class="btn btn-primary btn-sm gap-1"
-              >
-                <span class="hero-plus h-4 w-4" /> Add Agent
-              </button>
-            </div>
-          </div>
+          <%!-- No agent selected → Roles panel (M7 stage 5 + 6 advanced) --%>
+          <RolesPanel.panel
+            :if={is_nil(@selected_agent) and @active_tab == :roles}
+            roles={@roles}
+            role_bundles={@role_bundles}
+            role_assignments_by_key={@role_assignments_by_key}
+            show_role_advanced={@show_role_advanced}
+            responsibility_rows={@responsibility_rows}
+            selectable_agents={@selectable_agents}
+          />
         </main>
       </div>
 
@@ -609,6 +688,15 @@ defmodule PlatformWeb.ControlCenterLive do
   end
 
   # ── Private: panel assignment ─────────────────────────────────────
+
+  defp assign_roles_panel(socket) do
+    socket
+    |> assign(:roles, AgentData.list_roles())
+    |> assign(:role_bundles, AgentData.role_bundles())
+    |> assign(:role_assignments_by_key, AgentData.role_assignments_by_key())
+    |> assign(:responsibility_rows, AgentData.responsibility_rows())
+    |> assign(:selectable_agents, AgentData.list_selectable_agents())
+  end
 
   defp assign_empty_panel(socket) do
     socket
@@ -647,6 +735,7 @@ defmodule PlatformWeb.ControlCenterLive do
     |> assign(:federation_spaces, [])
     |> assign(:show_add_space_modal, false)
     |> assign(:available_spaces, [])
+    |> assign_roles_panel()
   end
 
   defp assign_agent_panel(socket, %Agent{} = agent, opts) do
