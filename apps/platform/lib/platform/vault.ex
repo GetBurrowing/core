@@ -59,6 +59,90 @@ defmodule Platform.Vault do
   end
 
   @doc """
+  Idempotent inline credential upsert keyed by `vault_key`.
+
+  Accepts a `{vault_key, secret}` pair from form submission and encrypts via
+  Cloak through `Platform.Vault.EncryptedBinary`. If a row already exists at
+  `slug=vault_key, scope_type="platform", scope_id=nil`, its encrypted value is
+  replaced and `rotated_at` is bumped — otherwise a new row is inserted.
+
+  This is the create-or-rotate path the inline-credential form needs:
+  re-submitting the same `vault_key` MUST NOT collide on the
+  `vault_credentials_unique_slug_per_scope` constraint that `put/4` would hit.
+
+  Defaults the row to `credential_type="api_key"`, `scope={:platform, nil}`,
+  `name=vault_key`, `provider="external_agent"` so vault-list UIs can filter
+  inline-created credentials apart from first-class ones.
+
+  Emits `[:platform, :vault, :credential_created]` on insert and
+  `[:platform, :vault, :credential_rotated]` on update — reuses the existing
+  telemetry surface.
+  """
+  @spec put_inline(String.t(), binary()) ::
+          {:ok, Credential.t()} | {:error, Ecto.Changeset.t()}
+  def put_inline(vault_key, secret) when is_binary(vault_key) and is_binary(secret) do
+    now = DateTime.utc_now()
+
+    lookup =
+      from(c in Credential,
+        where: c.slug == ^vault_key and c.scope_type == "platform" and is_nil(c.scope_id),
+        limit: 1
+      )
+
+    result =
+      Repo.transaction(fn ->
+        case Repo.one(lookup) do
+          nil ->
+            attrs = %{
+              slug: vault_key,
+              credential_type: "api_key",
+              encrypted_data: secret,
+              scope_type: "platform",
+              scope_id: nil,
+              name: vault_key,
+              provider: "external_agent"
+            }
+
+            case %Credential{} |> Credential.changeset(attrs) |> Repo.insert() do
+              {:ok, inserted} -> {:inserted, inserted}
+              {:error, changeset} -> Repo.rollback(changeset)
+            end
+
+          existing ->
+            case existing
+                 |> Credential.changeset(%{encrypted_data: secret, rotated_at: now})
+                 |> Repo.update() do
+              {:ok, updated} -> {:updated, updated}
+              {:error, changeset} -> Repo.rollback(changeset)
+            end
+        end
+      end)
+
+    case result do
+      {:ok, {:inserted, credential}} ->
+        :telemetry.execute(
+          [:platform, :vault, :credential_created],
+          %{system_time: System.system_time()},
+          %{credential_id: credential.id, slug: vault_key, scope_type: "platform"}
+        )
+
+        {:ok, strip_encrypted(credential)}
+
+      {:ok, {:updated, credential}} ->
+        :telemetry.execute(
+          [:platform, :vault, :credential_rotated],
+          %{system_time: System.system_time()},
+          %{credential_id: credential.id, slug: vault_key}
+        )
+
+        {:ok, strip_encrypted(credential)}
+
+      {:error, changeset} ->
+        {:error, changeset}
+    end
+  end
+
+  @doc """
   Retrieve and decrypt a credential by slug.
 
   Access is checked against the credential's scope and any explicit grants.

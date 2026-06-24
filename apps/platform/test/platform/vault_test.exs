@@ -69,6 +69,128 @@ defmodule Platform.VaultTest do
     end
   end
 
+  # ── put_inline/2 ─────────────────────────────────────────────────────────────
+
+  describe "put_inline/2" do
+    test "fresh insert round-trips via Vault.get/2 and strips encrypted_data" do
+      slug = unique_slug("inline")
+
+      assert {:ok, cred} = Vault.put_inline(slug, "inline-secret")
+      assert cred.slug == slug
+      assert cred.scope_type == "platform"
+      assert is_nil(cred.scope_id)
+      assert cred.credential_type == "api_key"
+      assert cred.provider == "external_agent"
+      assert cred.name == slug
+      assert is_nil(cred.encrypted_data), "encrypted_data must be stripped from put_inline result"
+
+      assert {:ok, "inline-secret"} = Vault.get(slug)
+    end
+
+    test "second call with same vault_key updates the secret and bumps rotated_at" do
+      slug = unique_slug("inline-rot")
+
+      assert {:ok, _} = Vault.put_inline(slug, "v1")
+      first_row = Repo.get_by!(Credential, slug: slug)
+      assert is_nil(first_row.rotated_at)
+      assert {:ok, "v1"} = Vault.get(slug)
+
+      # Force a measurable time gap so strict-greater comparison is meaningful.
+      Process.sleep(5)
+
+      assert {:ok, _} = Vault.put_inline(slug, "v2")
+      second_row = Repo.get_by!(Credential, slug: slug)
+
+      assert second_row.id == first_row.id, "upsert must update in-place, not insert a new row"
+      assert %DateTime{} = second_row.rotated_at
+      assert DateTime.compare(second_row.rotated_at, DateTime.utc_now()) in [:lt, :eq]
+
+      assert {:ok, "v2"} = Vault.get(slug)
+    end
+
+    test "idempotent on vault_key — repeated calls yield exactly one row" do
+      slug = unique_slug("inline-idem")
+
+      assert {:ok, _} = Vault.put_inline(slug, "a")
+      assert {:ok, _} = Vault.put_inline(slug, "b")
+      assert {:ok, _} = Vault.put_inline(slug, "c")
+
+      count = Repo.aggregate(from(c in Credential, where: c.slug == ^slug), :count)
+      assert count == 1
+      assert {:ok, "c"} = Vault.get(slug)
+    end
+
+    test "two successive upserts bump rotated_at strictly forward" do
+      slug = unique_slug("inline-ts")
+
+      assert {:ok, _} = Vault.put_inline(slug, "v1")
+      # Second call sets rotated_at for the first time.
+      Process.sleep(5)
+      assert {:ok, _} = Vault.put_inline(slug, "v2")
+      ts2 = Repo.get_by!(Credential, slug: slug).rotated_at
+      assert %DateTime{} = ts2
+
+      Process.sleep(5)
+      assert {:ok, _} = Vault.put_inline(slug, "v3")
+      ts3 = Repo.get_by!(Credential, slug: slug).rotated_at
+
+      assert DateTime.compare(ts3, ts2) == :gt,
+             "rotated_at must move strictly forward across successive upserts"
+    end
+
+    test "persists encrypted_data through Cloak (not plaintext at rest)" do
+      slug = unique_slug("inline-enc")
+
+      assert {:ok, _} = Vault.put_inline(slug, "plaintext-inline")
+
+      # Query the raw bytes via a select that bypasses the Cloak-decoded field type.
+      [raw] =
+        from(c in "vault_credentials",
+          where: c.slug == ^slug,
+          select: c.encrypted_data
+        )
+        |> Repo.all()
+
+      assert is_binary(raw)
+      refute raw == "plaintext-inline", "Cloak must encrypt the value at rest"
+
+      # And confirm the standard read path decrypts to the original.
+      assert {:ok, "plaintext-inline"} = Vault.get(slug)
+    end
+
+    test "emits credential_created telemetry on initial insert" do
+      slug = unique_slug("inline-tel-create")
+
+      ref =
+        :telemetry_test.attach_event_handlers(self(), [[:platform, :vault, :credential_created]])
+
+      {:ok, cred} = Vault.put_inline(slug, "secret")
+
+      assert_receive {[:platform, :vault, :credential_created], ^ref, _measurements, meta}
+      assert meta.credential_id == cred.id
+      assert meta.slug == slug
+      assert meta.scope_type == "platform"
+
+      :telemetry.detach(ref)
+    end
+
+    test "emits credential_rotated telemetry on upsert" do
+      slug = unique_slug("inline-tel-rotate")
+      assert {:ok, _} = Vault.put_inline(slug, "v1")
+
+      ref =
+        :telemetry_test.attach_event_handlers(self(), [[:platform, :vault, :credential_rotated]])
+
+      {:ok, cred} = Vault.put_inline(slug, "v2")
+
+      assert_receive {[:platform, :vault, :credential_rotated], ^ref, _measurements, meta}
+      assert meta.credential_id == cred.id
+      assert meta.slug == slug
+
+      :telemetry.detach(ref)
+    end
+  end
+
   # ── get/2 ────────────────────────────────────────────────────────────────────
 
   describe "get/2" do

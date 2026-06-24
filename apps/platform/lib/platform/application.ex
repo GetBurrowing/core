@@ -52,6 +52,10 @@ defmodule Platform.Application do
            Platform.Chat.ContextPlane,
            # Active agent mutex — ETS-backed per-space agent tracking (ADR 0027)
            Platform.Chat.ActiveAgentStore,
+           # External-agent ephemeral credentials — ETS-backed, lost on
+           # restart (M3 decision 6: no orphaned secrets). DB-backed
+           # vault path lives in Platform.Vault.
+           Platform.ExternalAgents.EphemeralCredentials,
            # Chat presence — must start after PubSub
            Platform.Chat.Presence,
            # Per-user meeting state — ETS-backed cache + PubSub broadcaster

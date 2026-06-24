@@ -55,6 +55,7 @@ defmodule Platform.ExternalAgents do
   import Ecto.Query
 
   alias Platform.Agents.Agent
+  alias Platform.ExternalAgents.EphemeralCredentials
   alias Platform.Repo
 
   @external_kind "external"
@@ -142,6 +143,67 @@ defmodule Platform.ExternalAgents do
   @spec delete_external_agent(Agent.t()) :: {:ok, Agent.t()} | {:error, Ecto.Changeset.t()}
   def delete_external_agent(%Agent{kind: @external_kind} = agent) do
     Repo.delete(agent)
+  end
+
+  @doc """
+  Resolve the credential for an external agent.
+
+  Dispatches on the agent's `vault_key` field (decision 6):
+
+    * `vault_key` is `nil` → ephemeral path: look up the secret in the
+      in-memory ETS store via `EphemeralCredentials.get/1`. Returns
+      `{:error, :not_found}` when no row exists.
+    * `vault_key` is a non-empty binary → vaulted path: read the
+      Cloak-encrypted credential via
+      `Platform.Vault.get/2` with `accessor: {:agent, agent.id}`. The
+      ETS store is **not** consulted when `vault_key` is set — vault
+      always wins so a stale ephemeral row can't shadow a freshly
+      provisioned vault credential.
+
+  Vault `{:error, :access_denied}` is normalized to
+  `{:error, :not_found}` so the credentials-missing UX message stays
+  uniform (M7 renders a single "credentials missing" error state and
+  doesn't distinguish missing-row from no-access).
+
+  Accepts a `Platform.Agents.Agent` struct or any bare map with `:id`
+  and `:vault_key` keys — the latter keeps unit tests independent of
+  the full schema struct.
+
+  ## Telemetry
+
+  Emits `[:platform, :external_agents, :credential_resolved]` on every
+  call (success *or* `:not_found`), with metadata `:source` set to
+  either `:vault` or `:ephemeral` to reflect the dispatch branch taken.
+  Per decision 6, the ephemeral path leaves no DB trail — telemetry is
+  the only observability signal on that branch.
+  """
+  @spec resolve_credential(map() | Agent.t()) :: {:ok, binary()} | {:error, :not_found}
+  def resolve_credential(%{id: id, vault_key: nil}) when is_binary(id) do
+    result = EphemeralCredentials.get(id)
+    emit_resolved(:ephemeral, id)
+    result
+  end
+
+  def resolve_credential(%{id: id, vault_key: vault_key})
+      when is_binary(id) and is_binary(vault_key) and vault_key != "" do
+    result =
+      case Platform.Vault.get(vault_key, accessor: {:agent, id}) do
+        {:ok, secret} -> {:ok, secret}
+        {:error, :access_denied} -> {:error, :not_found}
+        {:error, :not_found} -> {:error, :not_found}
+        other -> other
+      end
+
+    emit_resolved(:vault, id)
+    result
+  end
+
+  defp emit_resolved(source, agent_id) do
+    :telemetry.execute(
+      [:platform, :external_agents, :credential_resolved],
+      %{system_time: System.system_time()},
+      %{source: source, agent_id: agent_id}
+    )
   end
 
   # ── Internal helpers ─────────────────────────────────────────────────────
