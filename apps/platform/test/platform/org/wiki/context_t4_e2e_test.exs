@@ -326,7 +326,30 @@ defmodule Platform.Org.Wiki.ContextT4E2ETest do
       # Responsibilities & External Agents stack, M2 stage 1
       # (task 019ef65b-4383): extend agents table with kind + external
       # endpoint columns (kind, endpoint_kind, base_url, model, vault_key).
-      "20260624001634_add_external_kind_to_agents.exs"
+      "20260624001634_add_external_kind_to_agents.exs",
+      # ADR 0041 M4 stage 1 (task 019ef65b-a361): roles registry +
+      # role_responsibilities join table. Platform-fixed role roster
+      # (designer, historian, meeting_scribe, triage_officer) with the
+      # `key` text as natural PK. responsibility_key has no hard FK to
+      # M1's responsibilities table yet — deliberate per stage spec.
+      "20260624011500_create_roles_and_bundles.exs",
+      # ADR 0041 M4 stage 2 (task 019ef65b-a361): role_assignments +
+      # responsibility_overrides tables. Unique index on
+      # role_assignments(role_key) enforces one-agent-per-role
+      # (Decision 1); unique index on
+      # responsibility_overrides(responsibility_key) enforces
+      # at-most-one override per responsibility (Decision 3). Both
+      # cascade on agent + role deletion.
+      "20260624012842_create_role_assignments_and_overrides.exs",
+      # ADR 0041 M4 stage 4 (task 019ef65b-a361): seed the four
+      # platform-fixed roles (designer / historian / meeting_scribe /
+      # triage_officer) and their responsibility bundles. Defers to
+      # `Platform.Roles.Seeds.seed_defaults/0` (idempotent, on_conflict:
+      # :nothing) so re-runs are safe. Responsibility keys align with
+      # the v2 design canvas `019e0fb8-d87d-72b2-aab4-205b84fe23aa`
+      # rev 3 — M8 will register the same keys in the Responsibilities
+      # registry.
+      "20260624013500_seed_default_roles.exs"
     ]
 
     defp t4_root, do: Mix.Project.project_file() |> Path.dirname()
