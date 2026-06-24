@@ -13,6 +13,7 @@ defmodule Platform.Orchestration.ContextAssembler do
   alias Platform.Repo
   alias Platform.Skills
   alias Platform.Tasks
+  alias Platform.Tasks.CanvasAttachments
 
   @doc """
   Build a full context snapshot for the given task.
@@ -55,6 +56,7 @@ defmodule Platform.Orchestration.ContextAssembler do
 
         resolved_deploy_strategy = Tasks.resolve_deploy_strategy(task)
         previous_rejection_reason = find_latest_rejected_reason(task.plans)
+        canvases = serialize_attached_canvases(task_id)
 
         base = %{
           project: serialize_project(task.project),
@@ -63,6 +65,7 @@ defmodule Platform.Orchestration.ContextAssembler do
           plan: serialize_plan(plan),
           execution_space_id: execution_space_id,
           skills: skills,
+          canvases: canvases,
           resolved_deploy_strategy: resolved_deploy_strategy,
           previous_rejection_reason: previous_rejection_reason,
           # Budgeted, namespace + super-context org preamble
@@ -188,6 +191,25 @@ defmodule Platform.Orchestration.ContextAssembler do
       kind: validation.kind,
       status: validation.status
     }
+  end
+
+  # Flatten the `Platform.Tasks.CanvasAttachments.list_task_canvases/1` envelope
+  # into a dispatch-payload-friendly shape. Soft-deleted canvases stay in the
+  # list with `canvas_present: false` so the executing agent can self-correct
+  # by calling `task_detach_canvas` rather than ignoring the stale reference.
+  defp serialize_attached_canvases(task_id) do
+    task_id
+    |> CanvasAttachments.list_task_canvases()
+    |> Enum.map(fn %{attachment: attachment, canvas: canvas} ->
+      %{
+        id: attachment.canvas_id,
+        title: canvas && canvas.title,
+        kind: canvas && canvas.kind,
+        note: attachment.note,
+        attached_at: attachment.inserted_at,
+        canvas_present: not is_nil(canvas)
+      }
+    end)
   end
 
   defp maybe_add_deploy_credentials(context, nil), do: context

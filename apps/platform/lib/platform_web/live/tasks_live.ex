@@ -13,6 +13,7 @@ defmodule PlatformWeb.TasksLive do
   alias Platform.Repo
   alias Platform.Skills
   alias Platform.Tasks
+  alias Platform.Tasks.CanvasAttachments
   alias Platform.Tasks.{Epic, Plan, Project, ReviewRequest, ReviewRequests, Stack, Stacks, Task}
   alias Platform.Tenancy
 
@@ -185,6 +186,7 @@ defmodule PlatformWeb.TasksLive do
      |> assign(:review_counts, pending_review_counts(all_tasks))
      |> assign(:review_request_subscriptions, initial_task_ids)
      |> assign(:selected_task, nil)
+     |> assign(:selected_task_canvases, [])
      |> assign(:show_detail, false)
      # Stack detail panel state (T8 stage 1). `:selected_stack` is the
      # `%Platform.Tasks.Stack{}` whose detail panel is open, with
@@ -945,6 +947,7 @@ defmodule PlatformWeb.TasksLive do
     {:noreply,
      socket
      |> assign(:selected_task, nil)
+     |> assign(:selected_task_canvases, [])
      |> assign(:show_detail, false)
      |> assign(:execution_space_id, nil)
      |> assign(:execution_log, [])
@@ -960,6 +963,26 @@ defmodule PlatformWeb.TasksLive do
      |> assign(:confirm_delete, false)
      |> assign(:edit_mode, false)
      |> push_patch(to: ~p"/tasks")}
+  end
+
+  # Linked-canvases strip — × button on each chip (stage 5 of
+  # task_attach_canvas). Delegates to the CanvasAttachments context,
+  # refreshes the local strip, and broadcasts `:task_updated` on the
+  # board topic so any sibling LiveView session viewing the same task
+  # (multi-tab, multi-user) re-renders its strip within the 2s budget.
+  # Idempotent — `{:error, :not_found}` from a duplicate click is a
+  # no-op (the strip is already in the correct state).
+  def handle_event("detach_canvas", %{"canvas-id" => canvas_id}, socket) do
+    case socket.assigns[:selected_task] do
+      %Task{id: task_id} = task ->
+        _ = CanvasAttachments.detach_canvas(task_id, canvas_id)
+        Tasks.broadcast_board({:task_updated, task})
+
+        {:noreply, assign(socket, :selected_task_canvases, load_attached_canvases(task_id))}
+
+      _ ->
+        {:noreply, socket}
+    end
   end
 
   # ── Inline edit events (title / generic field / description) ────────────
@@ -4249,6 +4272,7 @@ defmodule PlatformWeb.TasksLive do
   defp assign_selected_task(socket, nil) do
     socket
     |> assign(:selected_task, nil)
+    |> assign(:selected_task_canvases, [])
     |> assign(:expanded_plans, MapSet.new())
     |> assign(:edit_mode, false)
   end
@@ -4256,9 +4280,29 @@ defmodule PlatformWeb.TasksLive do
   defp assign_selected_task(socket, %Task{} = task) do
     socket
     |> assign(:selected_task, task)
+    |> assign(:selected_task_canvases, load_attached_canvases(task.id))
     |> assign(:expanded_plans, MapSet.new(default_expanded_plan_ids(task)))
     |> assign(:edit_mode, false)
   end
+
+  # Flatten `CanvasAttachments.list_task_canvases/1` into a chip-render
+  # shape (`canvas_id`, `title`, `canvas_present`). Soft-deleted canvases
+  # stay in the list with `canvas_present: false` so the strip can render
+  # a "(deleted canvas)" affordance + detach button rather than silently
+  # dropping the stale row.
+  defp load_attached_canvases(task_id) when is_binary(task_id) do
+    task_id
+    |> CanvasAttachments.list_task_canvases()
+    |> Enum.map(fn %{attachment: attachment, canvas: canvas} ->
+      %{
+        canvas_id: attachment.canvas_id,
+        title: canvas && canvas.title,
+        canvas_present: not is_nil(canvas)
+      }
+    end)
+  end
+
+  defp load_attached_canvases(_), do: []
 
   # Returns `{rejected_plans, active_plans}` where `rejected_plans` are the
   # plans with `status == "rejected"` sorted oldest-first by `version`, and

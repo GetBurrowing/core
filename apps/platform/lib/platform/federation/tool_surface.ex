@@ -14,7 +14,19 @@ defmodule Platform.Federation.ToolSurface do
   alias Platform.Org.Wiki
   alias Platform.Org.Wiki.{Journal, Routing, Search}
   alias Platform.Tasks
-  alias Platform.Tasks.{Plan, PlanEngine, Stack, StackDeployer, Stacks, Stage, Task, Validation}
+
+  alias Platform.Tasks.{
+    CanvasAttachments,
+    Plan,
+    PlanEngine,
+    Stack,
+    StackDeployer,
+    Stacks,
+    Stage,
+    Task,
+    Validation
+  }
+
   alias Platform.Tenancy
   alias Platform.Tenancy.Org
   alias Platform.Repo
@@ -1205,6 +1217,62 @@ defmodule Platform.Federation.ToolSurface do
           "Read-only. Does not mutate dependency state or trigger unblock sweeps — finishing a dep through task_complete is what cascades the unblock.",
         when_to_use:
           "When deciding whether you can start a task, surfacing what's blocking you in a status update, or estimating the blast radius of completing a task."
+      },
+      %{
+        name: "task_attach_canvas",
+        description:
+          "Attach a canvas to a task so it rides along in subsequent dispatch payloads. Idempotent on `(task_id, canvas_id)` — re-attaching the same pair updates `note` + attribution and returns the same attachment id rather than duplicating the row.",
+        parameters: %{
+          task_id: %{type: "string", required: true, description: "The task to attach to"},
+          canvas_id: %{
+            type: "string",
+            required: true,
+            description:
+              "The canvas to attach. Validated at attach time against `chat_canvases` — soft-deleted or unknown canvas ids are rejected with `canvas_not_found`."
+          },
+          note: %{
+            type: "string",
+            required: false,
+            description: "Optional human-readable note describing why the canvas is attached."
+          }
+        },
+        returns: "%{attachment_id, task_id, canvas_id, note}",
+        limitations:
+          "Soft-reference contract: the canvas is checked at attach time but not FK-enforced. If the canvas is soft-deleted later, `task_list_canvases` will surface it with `canvas_present: false` so callers can detach. Idempotent re-attach updates the note + attribution but never produces a duplicate row.",
+        when_to_use:
+          "When you (or an upstream planner) want a canvas to ride along in the next dispatch payload for a task, without copy-pasting it into a chat message."
+      },
+      %{
+        name: "task_detach_canvas",
+        description:
+          "Detach a canvas from a task. Safe to call on attachments whose canvas was soft-deleted upstream — the attachment row is keyed independently of the live canvas.",
+        parameters: %{
+          task_id: %{type: "string", required: true, description: "The task to detach from"},
+          canvas_id: %{type: "string", required: true, description: "The canvas to detach"}
+        },
+        returns: "%{detached: true}",
+        limitations:
+          "Returns `not_found` if no matching `(task_id, canvas_id)` pair exists. Does not delete the canvas itself — only the attachment row.",
+        when_to_use:
+          "When a canvas should no longer ride along with a task's dispatch payload, or to clean up a stale attachment whose underlying canvas was soft-deleted."
+      },
+      %{
+        name: "task_list_canvases",
+        description:
+          "List the canvases attached to a task, in `inserted_at` ASC order. Each row carries the attachment metadata and a hydrated canvas envelope (title, present/soft-deleted state).",
+        parameters: %{
+          task_id: %{
+            type: "string",
+            required: true,
+            description: "The task to list attachments for"
+          }
+        },
+        returns:
+          "%{canvases: [%{attachment_id, canvas_id, title, note, attached_at, canvas_present: bool}]}. `canvas_present: false` means the underlying canvas was soft-deleted upstream — call `task_detach_canvas` to clean up the stale row.",
+        limitations:
+          "Returns an empty list (not an error) for tasks with no attachments. Does not return the full canvas document — call `canvas.describe` with the `canvas_id` to fetch it.",
+        when_to_use:
+          "When you need to see which canvases will ride along in the next dispatch for a task, or to find stale attachments whose underlying canvas was soft-deleted."
       },
       %{
         name: "stack_create",
@@ -2802,6 +2870,160 @@ defmodule Platform.Federation.ToolSurface do
         end
     end
   end
+
+  def execute("task_attach_canvas", args, context) do
+    task_id = Map.get(args, "task_id")
+    canvas_id = Map.get(args, "canvas_id")
+    note = Map.get(args, "note")
+
+    cond do
+      not is_binary(task_id) or task_id == "" ->
+        {:error,
+         %{
+           error: "task_attach_canvas requires task_id (string)",
+           recoverable: true,
+           suggestion: "Pass the UUID of the task as task_id"
+         }}
+
+      not is_binary(canvas_id) or canvas_id == "" ->
+        {:error,
+         %{
+           error: "task_attach_canvas requires canvas_id (string)",
+           recoverable: true,
+           suggestion: "Pass the UUID of the canvas as canvas_id"
+         }}
+
+      true ->
+        attached_by = resolve_attached_by(context)
+
+        case CanvasAttachments.attach_canvas(task_id, canvas_id,
+               note: note,
+               attached_by: attached_by
+             ) do
+          {:ok, attachment} ->
+            {:ok,
+             %{
+               attachment_id: attachment.id,
+               task_id: attachment.task_id,
+               canvas_id: attachment.canvas_id,
+               note: attachment.note
+             }}
+
+          {:error, :task_not_found} ->
+            {:error,
+             %{
+               error: "Task not found: #{task_id}",
+               recoverable: false,
+               suggestion: "Use task_list to find available tasks"
+             }}
+
+          {:error, :canvas_not_found} ->
+            {:error,
+             %{
+               error: "Canvas not found or soft-deleted: #{canvas_id}",
+               recoverable: false,
+               suggestion:
+                 "Verify the canvas_id is correct and the canvas has not been soft-deleted upstream"
+             }}
+
+          {:error, %Ecto.Changeset{} = changeset} ->
+            {:error,
+             %{
+               error: "Failed to attach canvas: #{inspect_errors(changeset)}",
+               recoverable: true,
+               suggestion:
+                 "task_attach_canvas requires the caller to be identifiable — pass `agent_id` (or `user_id`) in the tool context."
+             }}
+        end
+    end
+  end
+
+  def execute("task_detach_canvas", args, _context) do
+    task_id = Map.get(args, "task_id")
+    canvas_id = Map.get(args, "canvas_id")
+
+    cond do
+      not is_binary(task_id) or task_id == "" ->
+        {:error,
+         %{
+           error: "task_detach_canvas requires task_id (string)",
+           recoverable: true,
+           suggestion: "Pass the UUID of the task as task_id"
+         }}
+
+      not is_binary(canvas_id) or canvas_id == "" ->
+        {:error,
+         %{
+           error: "task_detach_canvas requires canvas_id (string)",
+           recoverable: true,
+           suggestion: "Pass the UUID of the canvas as canvas_id"
+         }}
+
+      true ->
+        case CanvasAttachments.detach_canvas(task_id, canvas_id) do
+          :ok ->
+            {:ok, %{detached: true}}
+
+          {:error, :not_found} ->
+            {:error,
+             %{
+               error: "No attachment found for task #{task_id} and canvas #{canvas_id}",
+               recoverable: false,
+               suggestion: "Use task_list_canvases to see what is currently attached to the task."
+             }}
+        end
+    end
+  end
+
+  def execute("task_list_canvases", args, _context) do
+    task_id = Map.get(args, "task_id")
+
+    cond do
+      not is_binary(task_id) or task_id == "" ->
+        {:error,
+         %{
+           error: "task_list_canvases requires task_id (string)",
+           recoverable: true,
+           suggestion: "Pass the UUID of the task as task_id"
+         }}
+
+      true ->
+        entries = CanvasAttachments.list_task_canvases(task_id)
+
+        canvases =
+          Enum.map(entries, fn %{attachment: attachment, canvas: canvas_env} ->
+            %{
+              attachment_id: attachment.id,
+              canvas_id: attachment.canvas_id,
+              title: canvas_env && canvas_env.title,
+              note: attachment.note,
+              attached_at: format_datetime(attachment.inserted_at),
+              canvas_present: not is_nil(canvas_env)
+            }
+          end)
+
+        {:ok, %{canvases: canvases}}
+    end
+  end
+
+  # Resolve the `attached_by` identity from the federated tool context.
+  # Prefers explicit kind+id pairs (agent/user); falls back to nil so the
+  # changeset surface returns a friendly `attached_by` validation error
+  # rather than silently mis-attributing the row.
+  defp resolve_attached_by(context) when is_map(context) do
+    cond do
+      is_binary(Map.get(context, :agent_id)) ->
+        %{kind: "agent", id: Map.get(context, :agent_id)}
+
+      is_binary(Map.get(context, :user_id)) ->
+        %{kind: "user", id: Map.get(context, :user_id)}
+
+      true ->
+        %{}
+    end
+  end
+
+  defp resolve_attached_by(_), do: %{}
 
   def execute("task_start", args, _context) do
     task_id = Map.get(args, "task_id")

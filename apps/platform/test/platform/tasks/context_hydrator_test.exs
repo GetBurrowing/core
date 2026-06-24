@@ -2,8 +2,10 @@ defmodule Platform.Tasks.ContextHydratorTest do
   @moduledoc "Tests for Platform.Tasks.ContextHydrator — context cascade hydration."
   use Platform.DataCase, async: false
 
+  alias Platform.Chat
   alias Platform.Context
   alias Platform.Tasks
+  alias Platform.Tasks.CanvasAttachments
   alias Platform.Tasks.ContextHydrator
 
   # ── Helpers ──────────────────────────────────────────────────────────────
@@ -193,6 +195,52 @@ defmodule Platform.Tasks.ContextHydratorTest do
     test "returns error for non-existent task" do
       assert {:error, :task_not_found} =
                ContextHydrator.hydrate_for_run(Ecto.UUID.generate(), Ecto.UUID.generate())
+    end
+  end
+
+  describe "hydrate_for_run/2 with attached canvases (task_attach_canvas stage 4)" do
+    test "pushes task.canvas.<n>.{title,id,note} into the task-scoped session" do
+      project = create_project()
+      task = create_task(project, nil)
+
+      {:ok, space} =
+        Chat.create_space(%{
+          name: "Hydrator Canvas Space",
+          slug: "hydrator-canvas-#{System.unique_integer([:positive])}",
+          kind: "channel"
+        })
+
+      {:ok, participant} =
+        Chat.add_participant(space.id, %{
+          participant_type: "user",
+          participant_id: Ecto.UUID.generate(),
+          display_name: "Author",
+          joined_at: DateTime.utc_now()
+        })
+
+      {:ok, canvas} =
+        Chat.create_canvas(%{
+          "space_id" => space.id,
+          "created_by" => participant.id,
+          "title" => "Hydrated sketch"
+        })
+
+      {:ok, _} =
+        CanvasAttachments.attach_canvas(task.id, canvas.id,
+          note: "render this",
+          attached_by: %{kind: "user", id: participant.id}
+        )
+
+      run_id = Ecto.UUID.generate()
+      assert {:ok, _version} = ContextHydrator.hydrate_for_run(task.id, run_id)
+
+      task_scope = %{project_id: project.id, task_id: task.id}
+      task_items = snapshot_items(task_scope) |> item_map()
+
+      assert task_items["task.canvas.0.title"].value == "Hydrated sketch"
+      assert task_items["task.canvas.0.id"].value == canvas.id
+      assert task_items["task.canvas.0.note"].value == "render this"
+      assert task_items["task.canvas.0.title"].kind == :task_metadata
     end
   end
 

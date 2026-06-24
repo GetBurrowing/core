@@ -1,10 +1,12 @@
 defmodule Platform.Orchestration.ContextAssemblerTest do
   use Platform.DataCase, async: false
 
+  alias Platform.Chat
   alias Platform.Orchestration.ContextAssembler
   alias Platform.Orchestration.HeartbeatScheduler
   alias Platform.Skills
   alias Platform.Tasks
+  alias Platform.Tasks.CanvasAttachments
 
   setup do
     {:ok, project} =
@@ -208,6 +210,95 @@ defmodule Platform.Orchestration.ContextAssemblerTest do
 
       context = ContextAssembler.build(task.id)
       assert context.previous_rejection_reason == nil
+    end
+
+    # task_attach_canvas stage 4 — :canvases surfaces attachments in the
+    # dispatch payload so the executing agent sees them automatically.
+
+    test "canvases is [] when no canvases are attached", %{task: task} do
+      context = ContextAssembler.build(task.id)
+      assert context.canvases == []
+    end
+
+    test "surfaces an attached canvas in :canvases with flat fields", %{task: task} do
+      {:ok, space} =
+        Chat.create_space(%{
+          name: "Canvas Surface Space",
+          slug: "canvas-surface-#{System.unique_integer([:positive])}",
+          kind: "channel"
+        })
+
+      {:ok, participant} =
+        Chat.add_participant(space.id, %{
+          participant_type: "user",
+          participant_id: Ecto.UUID.generate(),
+          display_name: "Author",
+          joined_at: DateTime.utc_now()
+        })
+
+      {:ok, canvas} =
+        Chat.create_canvas(%{
+          "space_id" => space.id,
+          "created_by" => participant.id,
+          "title" => "Design sketch"
+        })
+
+      {:ok, _} =
+        CanvasAttachments.attach_canvas(task.id, canvas.id,
+          note: "first draft",
+          attached_by: %{kind: "user", id: participant.id}
+        )
+
+      context = ContextAssembler.build(task.id)
+      assert [entry] = context.canvases
+      assert entry.id == canvas.id
+      assert entry.title == "Design sketch"
+      # Default canvas document root is a `stack` node.
+      assert entry.kind == "stack"
+      assert entry.note == "first draft"
+      assert entry.canvas_present == true
+      assert %DateTime{} = entry.attached_at
+    end
+
+    test "soft-deleted canvas survives in :canvases with canvas_present: false",
+         %{task: task} do
+      {:ok, space} =
+        Chat.create_space(%{
+          name: "Soft Delete Space",
+          slug: "canvas-soft-delete-#{System.unique_integer([:positive])}",
+          kind: "channel"
+        })
+
+      {:ok, participant} =
+        Chat.add_participant(space.id, %{
+          participant_type: "user",
+          participant_id: Ecto.UUID.generate(),
+          display_name: "Author",
+          joined_at: DateTime.utc_now()
+        })
+
+      {:ok, canvas} =
+        Chat.create_canvas(%{
+          "space_id" => space.id,
+          "created_by" => participant.id,
+          "title" => "Doomed canvas"
+        })
+
+      {:ok, _} =
+        CanvasAttachments.attach_canvas(task.id, canvas.id,
+          note: "will rot",
+          attached_by: %{kind: "user", id: participant.id}
+        )
+
+      {:ok, _} = Chat.delete_canvas(canvas)
+
+      context = ContextAssembler.build(task.id)
+      assert [entry] = context.canvases
+      assert entry.id == canvas.id
+      assert entry.canvas_present == false
+      # The note (from the attachment row) still surfaces so the agent can
+      # decide whether to detach it.
+      assert entry.note == "will rot"
     end
   end
 

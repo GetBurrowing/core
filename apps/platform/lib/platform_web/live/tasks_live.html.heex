@@ -1127,6 +1127,45 @@
         </span>
       </div>
 
+      <%!-- Linked-canvases strip (stage 5 of task_attach_canvas).
+           Renders chips for canvases attached via the task_attach_canvas
+           MCP tool (typically agent-uploaded evidence). Soft-deleted
+           canvases stay in the strip with `text-error` styling so the
+           user can detach the stale row rather than the chip silently
+           disappearing. No clickthrough — canvases live inside their
+           source space (/chat/<space_slug>), not at a /canvases/:id
+           route. The × button posts `detach_canvas` which calls the
+           context + broadcasts :task_updated for sibling sessions. --%>
+      <div
+        :if={@selected_task_canvases != []}
+        class="flex flex-wrap items-center gap-2"
+        data-role="linked-canvases-strip"
+      >
+        <span class="text-xs font-semibold uppercase tracking-wider text-base-content/50">
+          Canvases
+        </span>
+        <span
+          :for={entry <- @selected_task_canvases}
+          class="badge badge-outline gap-1"
+          data-role="linked-canvas-chip"
+          data-canvas-id={entry.canvas_id}
+        >
+          <span :if={entry.canvas_present}>{entry.title || "(untitled)"}</span>
+          <span :if={not entry.canvas_present} class="text-error">
+            {entry.title || "(deleted canvas)"}
+          </span>
+          <button
+            type="button"
+            phx-click="detach_canvas"
+            phx-value-canvas-id={entry.canvas_id}
+            class="btn btn-xs btn-ghost btn-circle"
+            aria-label="Detach canvas"
+          >
+            <span class="hero-x-mark size-3"></span>
+          </button>
+        </span>
+      </div>
+
       <%!-- Priority + deploy_target metadata.
            Off (read-only): plain badges/labels.
            On (edit_mode): <select>s wired to the generic `update_task_field`

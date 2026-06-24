@@ -341,6 +341,11 @@ defmodule Platform.Org.Wiki.ContextT4E2ETest do
       # at-most-one override per responsibility (Decision 3). Both
       # cascade on agent + role deletion.
       "20260624012842_create_role_assignments_and_overrides.exs",
+      # Task Canvas Attachments, stage 1 (task 019ef734): soft-reference
+      # join table linking tasks to canvases for the upcoming
+      # `task_attach_canvas` MCP tool. Schema + migration only; context
+      # module + MCP tools + dispatch bundler land in stages 2-5.
+      "20260624013019_create_task_canvas_attachments.exs",
       # ADR 0041 M4 stage 4 (task 019ef65b-a361): seed the four
       # platform-fixed roles (designer / historian / meeting_scribe /
       # triage_officer) and their responsibility bundles. Defers to

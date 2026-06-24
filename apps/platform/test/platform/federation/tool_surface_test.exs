@@ -35,9 +35,9 @@ defmodule Platform.Federation.ToolSurfaceTest do
   defp unique_slug, do: "test-#{System.unique_integer([:positive])}"
 
   describe "tool_definitions/0" do
-    test "returns all 72 tools with required components" do
+    test "returns all 76 tools with required components" do
       tools = ToolSurface.tool_definitions()
-      assert length(tools) == 73
+      assert length(tools) == 76
 
       tool_names = Enum.map(tools, & &1.name)
       assert "send_media" in tool_names
@@ -66,6 +66,9 @@ defmodule Platform.Federation.ToolSurfaceTest do
       assert "task_start" in tool_names
       assert "task_complete" in tool_names
       assert "task_dependencies" in tool_names
+      assert "task_attach_canvas" in tool_names
+      assert "task_detach_canvas" in tool_names
+      assert "task_list_canvases" in tool_names
       assert "stack_create" in tool_names
       assert "stack_get" in tool_names
       assert "stack_list" in tool_names
@@ -3021,6 +3024,212 @@ defmodule Platform.Federation.ToolSurfaceTest do
         )
 
       assert error.error =~ "not found"
+    end
+  end
+
+  # ── task_attach_canvas / task_detach_canvas / task_list_canvases ───────
+
+  describe "task_attach_canvas / task_detach_canvas / task_list_canvases" do
+    setup do
+      project = create_project()
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Attach me"})
+
+      space = create_space()
+      participant = create_participant(space.id)
+
+      {:ok, canvas} =
+        Chat.create_canvas(%{
+          "space_id" => space.id,
+          "created_by" => participant.id,
+          "title" => "Evidence canvas"
+        })
+
+      agent_id = Ecto.UUID.generate()
+      context = %{agent_id: agent_id, space_id: space.id, agent_participant_id: participant.id}
+
+      %{
+        project: project,
+        task: task,
+        space: space,
+        participant: participant,
+        canvas: canvas,
+        agent_id: agent_id,
+        context: context
+      }
+    end
+
+    test "task_attach_canvas happy round-trip via ToolSurface.execute/3", ctx do
+      {:ok, result} =
+        ToolSurface.execute(
+          "task_attach_canvas",
+          %{
+            "task_id" => ctx.task.id,
+            "canvas_id" => ctx.canvas.id,
+            "note" => "first attach"
+          },
+          ctx.context
+        )
+
+      assert is_binary(result.attachment_id)
+      assert result.task_id == ctx.task.id
+      assert result.canvas_id == ctx.canvas.id
+      assert result.note == "first attach"
+    end
+
+    test "task_attach_canvas idempotent re-attach returns same id with updated note", ctx do
+      {:ok, first} =
+        ToolSurface.execute(
+          "task_attach_canvas",
+          %{
+            "task_id" => ctx.task.id,
+            "canvas_id" => ctx.canvas.id,
+            "note" => "first"
+          },
+          ctx.context
+        )
+
+      {:ok, second} =
+        ToolSurface.execute(
+          "task_attach_canvas",
+          %{
+            "task_id" => ctx.task.id,
+            "canvas_id" => ctx.canvas.id,
+            "note" => "second"
+          },
+          ctx.context
+        )
+
+      assert second.attachment_id == first.attachment_id
+      assert second.note == "second"
+    end
+
+    test "task_attach_canvas with missing task_id returns recoverable error", ctx do
+      {:error, error} =
+        ToolSurface.execute(
+          "task_attach_canvas",
+          %{"canvas_id" => ctx.canvas.id},
+          ctx.context
+        )
+
+      assert error.error =~ "task_id"
+      assert error.recoverable == true
+    end
+
+    test "task_attach_canvas with unknown task surfaces task_not_found", ctx do
+      {:error, error} =
+        ToolSurface.execute(
+          "task_attach_canvas",
+          %{
+            "task_id" => Ecto.UUID.generate(),
+            "canvas_id" => ctx.canvas.id
+          },
+          ctx.context
+        )
+
+      assert error.error =~ "Task not found"
+      assert error.recoverable == false
+    end
+
+    test "task_attach_canvas with unknown canvas surfaces canvas_not_found", ctx do
+      {:error, error} =
+        ToolSurface.execute(
+          "task_attach_canvas",
+          %{
+            "task_id" => ctx.task.id,
+            "canvas_id" => Ecto.UUID.generate()
+          },
+          ctx.context
+        )
+
+      assert error.error =~ "Canvas not found"
+      assert error.recoverable == false
+    end
+
+    test "task_list_canvases returns hydrated rows after attach", ctx do
+      {:ok, _} =
+        ToolSurface.execute(
+          "task_attach_canvas",
+          %{
+            "task_id" => ctx.task.id,
+            "canvas_id" => ctx.canvas.id,
+            "note" => "listing test"
+          },
+          ctx.context
+        )
+
+      {:ok, %{canvases: canvases}} =
+        ToolSurface.execute(
+          "task_list_canvases",
+          %{"task_id" => ctx.task.id},
+          ctx.context
+        )
+
+      assert [row] = canvases
+      assert row.canvas_id == ctx.canvas.id
+      assert row.title == "Evidence canvas"
+      assert row.note == "listing test"
+      assert row.canvas_present == true
+      assert is_binary(row.attached_at)
+      assert is_binary(row.attachment_id)
+    end
+
+    test "task_list_canvases returns empty list for task with no attachments", ctx do
+      {:ok, %{canvases: canvases}} =
+        ToolSurface.execute(
+          "task_list_canvases",
+          %{"task_id" => ctx.task.id},
+          ctx.context
+        )
+
+      assert canvases == []
+    end
+
+    test "task_detach_canvas removes the attachment and list returns empty", ctx do
+      {:ok, _} =
+        ToolSurface.execute(
+          "task_attach_canvas",
+          %{
+            "task_id" => ctx.task.id,
+            "canvas_id" => ctx.canvas.id
+          },
+          ctx.context
+        )
+
+      {:ok, detach_result} =
+        ToolSurface.execute(
+          "task_detach_canvas",
+          %{
+            "task_id" => ctx.task.id,
+            "canvas_id" => ctx.canvas.id
+          },
+          ctx.context
+        )
+
+      assert detach_result == %{detached: true}
+
+      {:ok, %{canvases: canvases}} =
+        ToolSurface.execute(
+          "task_list_canvases",
+          %{"task_id" => ctx.task.id},
+          ctx.context
+        )
+
+      assert canvases == []
+    end
+
+    test "task_detach_canvas returns not_found for unattached pair", ctx do
+      {:error, error} =
+        ToolSurface.execute(
+          "task_detach_canvas",
+          %{
+            "task_id" => ctx.task.id,
+            "canvas_id" => ctx.canvas.id
+          },
+          ctx.context
+        )
+
+      assert error.error =~ "No attachment found"
+      assert error.recoverable == false
     end
   end
 

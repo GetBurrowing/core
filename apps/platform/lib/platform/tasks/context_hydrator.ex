@@ -21,7 +21,7 @@ defmodule Platform.Tasks.ContextHydrator do
   alias Platform.Context
   alias Platform.Repo
   alias Platform.Skills
-  alias Platform.Tasks.{DeployResolver, Plan, Task}
+  alias Platform.Tasks.{CanvasAttachments, DeployResolver, Plan, Task}
 
   import Ecto.Query
 
@@ -80,6 +80,15 @@ defmodule Platform.Tasks.ContextHydrator do
       # 5. Hydrate attached skills into task session
       version =
         case push_skill_items(task_scope, task_id) do
+          {:ok, v} when v > 0 -> v
+          _ -> version
+        end
+
+      # 6. Hydrate attached canvases into task session (task_attach_canvas stage 4).
+      # Mirrors the assembled ContextAssembler payload onto the ETS context plane
+      # so agent paths that read items rather than the build/2 map still see them.
+      version =
+        case push_canvas_items(task_scope, task_id) do
           {:ok, v} when v > 0 -> v
           _ -> version
         end
@@ -168,6 +177,34 @@ defmodule Platform.Tasks.ContextHydrator do
           {"plan.stage.#{pos}.title", stage.name || ""},
           {"plan.stage.#{pos}.description", stage.description || ""},
           {"plan.stage.#{pos}.validations", Jason.encode!(validations)}
+        ]
+      end)
+
+    push_items(scope, items, kind: :task_metadata)
+  end
+
+  # Push attached-canvas metadata into the task-scoped context session
+  # (task_attach_canvas stage 4). One item triplet per attachment, indexed by
+  # position in `list_task_canvases/1`'s `inserted_at ASC` order. Soft-deleted
+  # canvases still get a row — title defaults to "(deleted canvas)" so the
+  # executing agent sees the reference and can self-correct.
+  defp push_canvas_items(scope, task_id) do
+    entries = CanvasAttachments.list_task_canvases(task_id)
+
+    items =
+      entries
+      |> Enum.with_index()
+      |> Enum.flat_map(fn {%{attachment: attachment, canvas: canvas}, idx} ->
+        title =
+          case canvas do
+            nil -> "(deleted canvas)"
+            %{title: t} -> t || ""
+          end
+
+        [
+          {"task.canvas.#{idx}.title", title},
+          {"task.canvas.#{idx}.id", attachment.canvas_id},
+          {"task.canvas.#{idx}.note", attachment.note || ""}
         ]
       end)
 

@@ -534,10 +534,10 @@ defmodule Platform.Agents.SystemEventSchedulerT6E2ETest do
     # below still enforce the actual T6 invariant (no T6-added tools).
     # bumped by ADR 0042 (+org_list_descendants → 70)
     # bumped by ADR 0042 Stage 4 (+file_list, +file_get_text → 72)
-    # bumped by PR #452 stack_complete (terminal transition tool → 73);
-    # baseline drift was caught by the M5-stage-1 worktree (task
-    # 019ef65b-d04b) — that stage does not touch tool_surface itself.
-    @t6_baseline_tool_count 73
+    # bumped by PR #452 stack_complete (terminal transition tool → 73)
+    # bumped by task_attach_canvas stage 3 (+task_attach_canvas,
+    # +task_detach_canvas, +task_list_canvases → 76)
+    @t6_baseline_tool_count 76
 
     defp t6_root, do: Mix.Project.project_file() |> Path.dirname()
 
