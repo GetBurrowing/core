@@ -46,8 +46,12 @@ defmodule Platform.Responsibilities.Registry do
 
   use GenServer
 
+  import Ecto.Query, only: [from: 2]
+
   require Logger
 
+  alias Platform.Agents.Agent
+  alias Platform.Repo
   alias Platform.Responsibilities
 
   @typedoc "Aggregated result of the last `register_all/1` invocation."
@@ -109,6 +113,28 @@ defmodule Platform.Responsibilities.Registry do
   @doc "Return the last `register_all/1` result map."
   @spec status(GenServer.server()) :: results()
   def status(server \\ __MODULE__), do: GenServer.call(server, :status)
+
+  @doc """
+  Stamp `last_successful_fire_at` on an agent after a responsibility
+  fired through that agent (ADR-0041 M6 stage 2).
+
+  Direct `Repo.update_all` keyed on agent id so we bypass the
+  `Agent.changeset/2` `validate_required([:slug, :name, :status])`
+  guard for per-row observability updates (mirrors the pattern
+  documented in `Platform.Agents.Agent` moduledoc).
+
+  Returns the input agent (with its in-memory `last_successful_fire_at`
+  patched) so callers can pipe.
+  """
+  @spec stamp_last_successful_fire(Agent.t(), DateTime.t()) :: Agent.t()
+  def stamp_last_successful_fire(%Agent{id: id} = agent, %DateTime{} = fired_at)
+      when not is_nil(id) do
+    {1, _} =
+      from(a in Agent, where: a.id == ^id)
+      |> Repo.update_all(set: [last_successful_fire_at: fired_at, updated_at: DateTime.utc_now()])
+
+    %{agent | last_successful_fire_at: fired_at}
+  end
 
   # ── handle_call ───────────────────────────────────────────────────────────
 

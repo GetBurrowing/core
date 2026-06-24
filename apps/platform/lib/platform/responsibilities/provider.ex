@@ -105,4 +105,25 @@ defmodule Platform.Responsibilities.Provider do
               responsibility :: Platform.Responsibilities.Responsibility.t(),
               output :: map()
             ) :: :ok | {:error, term()}
+
+  @doc """
+  M6-stage-6 evolved callback — receives the trigger metadata alongside
+  the parsed LLM response. The Router invokes this arity when present
+  (via `function_exported?/3`); providers that only implement
+  `handle_output/2` keep working unchanged. New providers (e.g. the M8
+  `meetings.summarize` provider) should prefer arity 3 because trigger
+  metadata is often required to scope the side effect (`meeting_id`,
+  `space_id`, `match` captures, etc.).
+  """
+  @callback handle_output(
+              responsibility :: Platform.Responsibilities.Responsibility.t(),
+              parsed_response :: term(),
+              trigger_meta :: map()
+            ) :: :ok | {:error, term()}
+
+  # Arity-3 handle_output is optional so M1 providers that still use
+  # arity-2 keep compiling without forced churn. The Router probes for
+  # the 3-arity version first and falls back to logging "no output
+  # handler" if neither is present.
+  @optional_callbacks handle_output: 3
 end

@@ -52,6 +52,11 @@ config :platform, :start_system_event_scheduler, false
 # a unique :name so each test owns its own connection + scope.
 config :platform, :start_responsibilities_registry, false
 
+# M6 stage 1 (ADR-0041): Platform.Responsibilities.Router walks the
+# registry on init (DB read). Tests start per-case instances under the
+# DataCase sandbox; see `Platform.Responsibilities.RouterTest`.
+config :platform, :start_responsibility_router, false
+
 # T3 (ADR-0041): tests start their own Platform.Org.Wiki.Indexer per case
 # (so DataCase sandbox owns the Repo connection and tests don't fight a
 # real subscriber). Production defaults to true via Application.start/2.

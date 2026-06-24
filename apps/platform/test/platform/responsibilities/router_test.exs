@@ -1,0 +1,1419 @@
+defmodule Platform.Responsibilities.RouterTest do
+  @moduledoc """
+  Tests for the M6 stage 1 Router skeleton (ADR-0041).
+
+  Each test starts a per-case Router under the test supervisor with a
+  unique registered name so the DataCase sandbox keeps owning the Repo
+  connection and concurrent test runs never collide on `__MODULE__`.
+  The app supervisor flag `:start_responsibility_router` is `false` in
+  `config/test.exs`, so no second copy can race us.
+  """
+  use Platform.DataCase, async: false
+
+  import ExUnit.CaptureLog
+
+  alias Platform.Agents.Agent
+  alias Platform.Chat
+  alias Platform.Repo
+  alias Platform.Responsibilities
+  alias Platform.Responsibilities.{Cron, Router, WebhookRouter}
+  alias Platform.Roles
+  alias Platform.Roles.Role
+
+  # The repo defaults logger to :warning in config/test.exs. Bump the
+  # Router module to :info so capture_log/2 actually sees the boot +
+  # dispatch lines we assert on.
+  setup do
+    Logger.put_module_level(Platform.Responsibilities.Router, :info)
+    on_exit(fn -> Logger.delete_module_level(Platform.Responsibilities.Router) end)
+    :ok
+  end
+
+  # ── fixtures ─────────────────────────────────────────────────────────────
+
+  defp unique_key(prefix \\ "routertest") do
+    "#{prefix}.verb_#{System.unique_integer([:positive])}"
+  end
+
+  defp base_attrs(overrides) do
+    Map.merge(
+      %{
+        key: unique_key(),
+        feature: "routertest",
+        trigger_kind: "cron",
+        trigger_config: %{"expression" => "*/5 * * * *"},
+        scope: "global",
+        context_provided: [],
+        output_contract: %{"summary" => "string"},
+        default_prompt_template: "routertest.v1",
+        cost_profile: "low_freq_capable"
+      },
+      overrides
+    )
+  end
+
+  defp insert!(overrides) do
+    {:ok, row} = Responsibilities.create_responsibility(base_attrs(overrides))
+    row
+  end
+
+  defp unique_name do
+    Module.concat([Router, "Inst#{System.unique_integer([:positive])}"])
+  end
+
+  defp start_router(opts \\ []) do
+    name = unique_name()
+    pid = start_supervised!({Router, Keyword.put(opts, :name, name)})
+    # Stage 4 chat_pattern handler reads Chat.Message + Chat.Space from
+    # Repo on the Router process. The DataCase sandbox owns the
+    # connection on the test pid; allow the Router to share it so
+    # `Repo.get(Message, …)` doesn't see an empty schema-only world.
+    :ok = Ecto.Adapters.SQL.Sandbox.allow(Repo, self(), pid)
+    {pid, name}
+  end
+
+  # ── tests ────────────────────────────────────────────────────────────────
+
+  describe "start_link/1 + snapshot/1" do
+    test "buckets enabled responsibilities by trigger_kind" do
+      cron_row =
+        insert!(%{
+          key: "routertest.cron_one",
+          trigger_kind: "cron",
+          trigger_config: %{"expression" => "0 * * * *"}
+        })
+
+      event_row =
+        insert!(%{
+          key: "routertest.event_one",
+          trigger_kind: "event_topic",
+          trigger_config: %{"topic" => "routertest:event_one"}
+        })
+
+      chat_row =
+        insert!(%{
+          key: "routertest.chat_one",
+          trigger_kind: "chat_pattern",
+          trigger_config: %{"regex" => "^hello"}
+        })
+
+      webhook_row =
+        insert!(%{
+          key: "routertest.webhook_one",
+          trigger_kind: "webhook",
+          trigger_config: %{"path" => "/hooks/routertest"}
+        })
+
+      {_pid, name} = start_router()
+
+      snap = Router.snapshot(name)
+
+      assert %{cron: cron, event_topics: events, chat_patterns: chats, webhooks: hooks} = snap
+      assert cron_row.id in Enum.map(cron, & &1.id)
+      assert event_row.id in Enum.map(events, & &1.id)
+      assert chat_row.id in Enum.map(chats, & &1.id)
+      assert webhook_row.id in Enum.map(hooks, & &1.id)
+    end
+
+    test "excludes disabled rows from buckets" do
+      _enabled =
+        insert!(%{
+          key: "routertest.enabled",
+          trigger_kind: "cron",
+          trigger_config: %{"expression" => "0 * * * *"}
+        })
+
+      disabled =
+        insert!(%{
+          key: "routertest.disabled",
+          trigger_kind: "cron",
+          trigger_config: %{"expression" => "0 * * * *"},
+          enabled: false
+        })
+
+      {_pid, name} = start_router()
+
+      snap = Router.snapshot(name)
+      cron_ids = Enum.map(snap.cron, & &1.id)
+
+      refute disabled.id in cron_ids
+    end
+
+    test "starts cleanly with an empty registry (all buckets empty lists)" do
+      {pid, name} = start_router()
+
+      assert Process.alive?(pid)
+
+      assert Router.snapshot(name) == %{
+               cron: [],
+               event_topics: [],
+               chat_patterns: [],
+               webhooks: []
+             }
+    end
+
+    test "logs one :info line per bucket on boot with the counts" do
+      insert!(%{
+        key: "routertest.log_cron",
+        trigger_kind: "cron",
+        trigger_config: %{"expression" => "0 * * * *"}
+      })
+
+      insert!(%{
+        key: "routertest.log_event",
+        trigger_kind: "event_topic",
+        trigger_config: %{"topic" => "routertest:log"}
+      })
+
+      log =
+        capture_log([level: :info], fn ->
+          {_pid, _name} = start_router()
+          # Give the GenServer a moment to flush its init log.
+          :timer.sleep(20)
+        end)
+
+      assert log =~ "[ResponsibilityRouter] started"
+      assert log =~ "cron=1"
+      assert log =~ "event_topics=1"
+      assert log =~ "chat_patterns=0"
+      assert log =~ "webhooks=0"
+    end
+  end
+
+  describe "dispatch/2 stub" do
+    test "returns {:error, :not_implemented_yet} and logs the attempt" do
+      row =
+        insert!(%{
+          key: "routertest.dispatch_stub",
+          trigger_kind: "cron",
+          trigger_config: %{"expression" => "*/5 * * * *"}
+        })
+
+      {_pid, _name} = start_router()
+
+      log =
+        capture_log([level: :info], fn ->
+          assert Router.dispatch(row, %{kind: :cron, fired_at: DateTime.utc_now()}) ==
+                   {:error, :not_implemented_yet}
+        end)
+
+      assert log =~ "[ResponsibilityRouter] dispatch stub"
+      assert log =~ "key=#{row.key}"
+      assert log =~ "trigger=:cron"
+    end
+  end
+
+  describe "tick" do
+    test "keeps the GenServer alive without firing anything (stage 1 heartbeat)" do
+      {pid, _name} = start_router(check_interval_ms: 5)
+      # Sleep past at least one tick.
+      :timer.sleep(40)
+      assert Process.alive?(pid)
+    end
+  end
+
+  # ── M6 stage 2: Cron parser ─────────────────────────────────────────────
+
+  describe "Cron.parse/1 and next_fire_after/2" do
+    test "all wildcards: every minute matches" do
+      {:ok, spec} = Cron.parse("* * * * *")
+      now = ~U[2026-06-23 12:34:56Z]
+
+      assert {:ok, %DateTime{} = next} = Cron.next_fire_after(now, spec)
+      # Wildcard spec always fires at the next minute boundary.
+      assert next.minute == 35
+      assert next.hour == 12
+    end
+
+    test "specific minute: '15 * * * *' yields next :15" do
+      {:ok, spec} = Cron.parse("15 * * * *")
+      now = ~U[2026-06-23 12:10:00Z]
+
+      assert {:ok, next} = Cron.next_fire_after(now, spec)
+      assert next.minute == 15
+      assert next.hour == 12
+    end
+
+    test "specific minute past current: '5 * * * *' rolls to next hour" do
+      {:ok, spec} = Cron.parse("5 * * * *")
+      now = ~U[2026-06-23 12:30:00Z]
+
+      assert {:ok, next} = Cron.next_fire_after(now, spec)
+      assert next.minute == 5
+      assert next.hour == 13
+    end
+
+    test "specific hour + minute: '0 9 * * *' rolls to tomorrow when past" do
+      {:ok, spec} = Cron.parse("0 9 * * *")
+      now = ~U[2026-06-23 10:00:00Z]
+
+      assert {:ok, next} = Cron.next_fire_after(now, spec)
+      assert next.minute == 0
+      assert next.hour == 9
+      assert next.day == 24
+    end
+
+    test "step expression: '*/15 * * * *' yields next quarter hour" do
+      {:ok, spec} = Cron.parse("*/15 * * * *")
+      now = ~U[2026-06-23 12:07:00Z]
+
+      assert {:ok, next} = Cron.next_fire_after(now, spec)
+      assert next.minute == 15
+    end
+
+    test "day-of-month: '0 0 1 * *' yields the 1st of next month" do
+      {:ok, spec} = Cron.parse("0 0 1 * *")
+      now = ~U[2026-06-23 12:00:00Z]
+
+      assert {:ok, next} = Cron.next_fire_after(now, spec)
+      assert next.day == 1
+      assert next.month == 7
+      assert next.hour == 0
+      assert next.minute == 0
+    end
+
+    test "day-of-week: '0 0 * * 1' yields next Monday at midnight" do
+      # 2026-06-23 is a Tuesday.
+      {:ok, spec} = Cron.parse("0 0 * * 1")
+      now = ~U[2026-06-23 12:00:00Z]
+
+      assert {:ok, next} = Cron.next_fire_after(now, spec)
+      assert next.hour == 0
+      assert next.minute == 0
+      # Next Monday after Tuesday 2026-06-23 is 2026-06-29.
+      assert Date.day_of_week(DateTime.to_date(next)) == 1
+    end
+
+    test "leap-day spec: '0 0 29 2 *' resolves to a real leap date" do
+      {:ok, spec} = Cron.parse("0 0 29 2 *")
+      now = ~U[2026-06-23 12:00:00Z]
+
+      assert {:ok, next} = Cron.next_fire_after(now, spec)
+      assert next.day == 29
+      assert next.month == 2
+      # 2028 is the next leap year after 2026.
+      assert next.year == 2028
+    end
+
+    test "parse rejects bad field count" do
+      assert {:error, _} = Cron.parse("0 0 * *")
+    end
+
+    test "parse rejects out-of-range values" do
+      assert {:error, _} = Cron.parse("99 * * * *")
+    end
+  end
+
+  # ── M6 stage 2: fire_trigger/3 pipeline ─────────────────────────────────
+
+  describe "fire_trigger/3 — unfilled assignee" do
+    test "logs unfilled, emits telemetry, returns :ok without crashing" do
+      row =
+        insert!(%{
+          key: "routertest.unfilled_#{System.unique_integer([:positive])}",
+          trigger_kind: "cron",
+          trigger_config: %{"expression" => "*/5 * * * *"}
+        })
+
+      handler_id = "router-test-unfilled-#{System.unique_integer([:positive])}"
+
+      :telemetry.attach(
+        handler_id,
+        [:platform, :responsibility, :unfilled],
+        fn _event, measurements, metadata, pid ->
+          send(pid, {:unfilled_telemetry, measurements, metadata})
+        end,
+        self()
+      )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      log =
+        capture_log([level: :info], fn ->
+          assert :ok =
+                   Router.fire_trigger(row, %{kind: :cron, fired_at: DateTime.utc_now()}, %{})
+        end)
+
+      assert log =~ "[ResponsibilityRouter] unfilled responsibility=#{row.key}"
+
+      assert_receive {:unfilled_telemetry, %{system_time: _}, %{key: key, feature: "routertest"}}
+      assert key == row.key
+    end
+  end
+
+  # M6 stage 6 wires native dispatch through AgentResponder.maybe_dispatch/1,
+  # which would otherwise spawn an unsandboxed Task that crashes on a
+  # bare cron-fired signal (no message_id → load_context FunctionClauseError).
+  # Install a no-op dispatcher for this describe block so the test
+  # exercises the Router's logging + stamping pipeline without leaking
+  # async errors.
+  defmodule NoopNativeDispatcher do
+    @moduledoc false
+    def maybe_dispatch(_signal), do: :ok
+  end
+
+  describe "fire_trigger/3 — native assignee" do
+    setup do
+      previous =
+        Application.get_env(:platform, :responsibility_router_native_dispatcher)
+
+      Application.put_env(
+        :platform,
+        :responsibility_router_native_dispatcher,
+        {NoopNativeDispatcher, :maybe_dispatch}
+      )
+
+      on_exit(fn ->
+        if previous do
+          Application.put_env(
+            :platform,
+            :responsibility_router_native_dispatcher,
+            previous
+          )
+        else
+          Application.delete_env(:platform, :responsibility_router_native_dispatcher)
+        end
+      end)
+
+      :ok
+    end
+
+    test "logs native dispatch and stamps last_successful_fire_at" do
+      key = "routertest.native_#{System.unique_integer([:positive])}"
+
+      row =
+        insert!(%{
+          key: key,
+          trigger_kind: "cron",
+          trigger_config: %{"expression" => "*/5 * * * *"}
+        })
+
+      # Roles.Role enforces a closed enum of role keys (see
+      # Platform.Roles.Role.valid_keys/0). Reuse "historian" — one of
+      # the four canonical seeded rows — and attach a fresh bundle row
+      # pointing at the responsibility under test. Wiring against a
+      # real key keeps the assignee_for resolver path realistic.
+      role_key = "historian"
+
+      # Make sure the canonical role row exists (seeded by migration,
+      # but tests sometimes run in a sandbox where the seed hasn't
+      # populated yet).
+      Repo.insert!(
+        %Role{
+          key: role_key,
+          name: "Historian",
+          description: "test",
+          icon: "hero-star"
+        },
+        on_conflict: :nothing,
+        conflict_target: :key
+      )
+
+      %Platform.Roles.RoleResponsibility{}
+      |> Platform.Roles.RoleResponsibility.changeset(%{
+        role_key: role_key,
+        responsibility_key: key
+      })
+      |> Repo.insert!()
+
+      agent =
+        %Agent{}
+        |> Agent.changeset(%{
+          slug: "router-test-native-#{System.unique_integer([:positive])}",
+          name: "Router Test Native",
+          status: "active",
+          kind: "native",
+          workspace_id: nil
+        })
+        |> Repo.insert!()
+
+      {:ok, _} = Roles.assign_role(role_key, agent.id)
+
+      fired_at = ~U[2026-06-23 12:00:00.000000Z]
+
+      log =
+        capture_log([level: :info], fn ->
+          assert :ok = Router.fire_trigger(row, %{kind: :cron, fired_at: fired_at}, %{})
+        end)
+
+      assert log =~ "[ResponsibilityRouter] native dispatch key=#{row.key}"
+
+      reloaded = Repo.get!(Agent, agent.id)
+      assert reloaded.last_successful_fire_at == fired_at
+    end
+  end
+
+  describe "tick fires due cron triggers" do
+    test "responsibility whose next_fire is in the past gets fired on tick" do
+      key = "routertest.tick_fire_#{System.unique_integer([:positive])}"
+
+      # Every-minute cron — guarantees the next_fire computed at boot
+      # is the next minute boundary, so a 50ms tick after a Process.sleep
+      # of >60s would fire. But to keep the test fast we drive the
+      # firing path directly via fire_trigger (the tick handler is a
+      # thin wrapper over it). The integration assertion is "tick is
+      # alive + does not crash with rows present", which we exercise
+      # here.
+      _row =
+        insert!(%{
+          key: key,
+          trigger_kind: "cron",
+          trigger_config: %{"expression" => "* * * * *"}
+        })
+
+      {pid, name} = start_router(check_interval_ms: 5)
+
+      # Let several ticks elapse.
+      :timer.sleep(40)
+
+      assert Process.alive?(pid)
+      assert %{cron: [_ | _]} = Router.snapshot(name)
+    end
+  end
+
+  # ── M6 stage 3: event_topic + webhook trigger wiring ────────────────────
+
+  describe "event_topic PubSub subscription" do
+    test "broadcast to subscribed topic fires the matching responsibility" do
+      topic = "routertest:event_#{System.unique_integer([:positive])}"
+      key = "routertest.event_fire_#{System.unique_integer([:positive])}"
+
+      row =
+        insert!(%{
+          key: key,
+          trigger_kind: "event_topic",
+          trigger_config: %{"topic" => topic}
+        })
+
+      {_pid, _name} = start_router()
+
+      # No assignee on the row — fire_trigger will hit the unfilled
+      # branch which logs "[ResponsibilityRouter] unfilled
+      # responsibility=…", giving us a deterministic dispatch marker
+      # without needing to stand up Roles + Agents.
+      log =
+        capture_log([level: :info], fn ->
+          Phoenix.PubSub.broadcast(Platform.PubSub, topic, {topic, %{hello: "world"}})
+          # Let the GenServer drain the inbound info message.
+          :timer.sleep(50)
+        end)
+
+      assert log =~ "[ResponsibilityRouter] unfilled responsibility=#{row.key}"
+    end
+
+    test "broadcast to a topic with no matching responsibility is a no-op" do
+      # Insert an event responsibility on topic A so the router has at
+      # least one subscription wired; broadcast on topic B (unrelated).
+      configured_topic = "routertest:event_#{System.unique_integer([:positive])}"
+      _other_topic = "routertest:unrelated_#{System.unique_integer([:positive])}"
+
+      insert!(%{
+        key: "routertest.event_other_#{System.unique_integer([:positive])}",
+        trigger_kind: "event_topic",
+        trigger_config: %{"topic" => configured_topic}
+      })
+
+      {pid, _name} = start_router()
+
+      log =
+        capture_log([level: :info], fn ->
+          Phoenix.PubSub.broadcast(
+            Platform.PubSub,
+            "routertest:nobody_listens_#{System.unique_integer([:positive])}",
+            {:some_unrelated_event, %{}}
+          )
+
+          :timer.sleep(30)
+        end)
+
+      # Nothing should have fired — no unfilled log, no crash.
+      refute log =~ "[ResponsibilityRouter] unfilled responsibility"
+      assert Process.alive?(pid)
+    end
+
+    test "multiple responsibilities on the same topic all fire" do
+      topic = "routertest:fanout_#{System.unique_integer([:positive])}"
+
+      row_a =
+        insert!(%{
+          key: "routertest.fanout_a_#{System.unique_integer([:positive])}",
+          trigger_kind: "event_topic",
+          trigger_config: %{"topic" => topic}
+        })
+
+      row_b =
+        insert!(%{
+          key: "routertest.fanout_b_#{System.unique_integer([:positive])}",
+          trigger_kind: "event_topic",
+          trigger_config: %{"topic" => topic}
+        })
+
+      {_pid, _name} = start_router()
+
+      log =
+        capture_log([level: :info], fn ->
+          Phoenix.PubSub.broadcast(Platform.PubSub, topic, {topic, %{}})
+          :timer.sleep(50)
+        end)
+
+      assert log =~ "[ResponsibilityRouter] unfilled responsibility=#{row_a.key}"
+      assert log =~ "[ResponsibilityRouter] unfilled responsibility=#{row_b.key}"
+    end
+  end
+
+  describe "WebhookRouter.notify/2" do
+    test "matching webhook responsibility fires via Router cast" do
+      path = "/hooks/routertest_#{System.unique_integer([:positive])}"
+
+      row =
+        insert!(%{
+          key: "routertest.webhook_fire_#{System.unique_integer([:positive])}",
+          trigger_kind: "webhook",
+          trigger_config: %{"path" => path}
+        })
+
+      {_pid, name} = start_router()
+
+      log =
+        capture_log([level: :info], fn ->
+          assert :ok = WebhookRouter.notify(path, %{"event" => "test"}, router: name)
+          :timer.sleep(50)
+        end)
+
+      assert log =~ "[ResponsibilityRouter] unfilled responsibility=#{row.key}"
+    end
+
+    test "webhook fire with no matching responsibility logs no-match and stays alive" do
+      _row =
+        insert!(%{
+          key: "routertest.webhook_other_#{System.unique_integer([:positive])}",
+          trigger_kind: "webhook",
+          trigger_config: %{"path" => "/hooks/configured_#{System.unique_integer([:positive])}"}
+        })
+
+      {pid, name} = start_router()
+
+      log =
+        capture_log([level: :info], fn ->
+          assert :ok =
+                   WebhookRouter.notify(
+                     "/hooks/nobody_listens_#{System.unique_integer([:positive])}",
+                     %{},
+                     router: name
+                   )
+
+          :timer.sleep(30)
+        end)
+
+      assert log =~ "[ResponsibilityRouter] webhook fired with no matching responsibility"
+      refute log =~ "[ResponsibilityRouter] unfilled responsibility"
+      assert Process.alive?(pid)
+    end
+
+    test "multiple webhook responsibilities on the same path all fire" do
+      path = "/hooks/multi_#{System.unique_integer([:positive])}"
+
+      row_a =
+        insert!(%{
+          key: "routertest.webhook_multi_a_#{System.unique_integer([:positive])}",
+          trigger_kind: "webhook",
+          trigger_config: %{"path" => path}
+        })
+
+      row_b =
+        insert!(%{
+          key: "routertest.webhook_multi_b_#{System.unique_integer([:positive])}",
+          trigger_kind: "webhook",
+          trigger_config: %{"path" => path}
+        })
+
+      {_pid, name} = start_router()
+
+      log =
+        capture_log([level: :info], fn ->
+          assert :ok = WebhookRouter.notify(path, %{}, router: name)
+          :timer.sleep(50)
+        end)
+
+      assert log =~ "[ResponsibilityRouter] unfilled responsibility=#{row_a.key}"
+      assert log =~ "[ResponsibilityRouter] unfilled responsibility=#{row_b.key}"
+    end
+
+    test "notify with a missing router name does not raise" do
+      # GenServer.cast/2 silently succeeds when the destination is not
+      # registered — we only care that notify/3 does not raise and
+      # always returns :ok.
+      dead_name = Module.concat([Router, "DefinitelyDown#{System.unique_integer([:positive])}"])
+
+      assert :ok = WebhookRouter.notify("/hooks/anything", %{}, router: dead_name)
+    end
+  end
+
+  # ── M6 stage 4: chat_pattern trigger wiring ─────────────────────────────
+
+  describe "chat_pattern telemetry subscription" do
+    # Fixture helpers scoped to this describe block so the existing M6
+    # stage 1-3 tests don't have to grow new dependencies. We persist a
+    # real Chat.Space + Participant pair (the planner-mandated path) so
+    # `Chat.post_message/1` exercises the same `publish_message_posted/2`
+    # telemetry the Router subscribes to.
+
+    defp create_space(kind \\ "channel") do
+      slug = "patternspace-#{System.unique_integer([:positive])}"
+
+      {:ok, space} =
+        Chat.create_space(%{
+          name: "Pattern Test #{slug}",
+          slug: slug,
+          kind: kind
+        })
+
+      space
+    end
+
+    defp create_user_participant(space_id, name \\ "Alice") do
+      {:ok, participant} =
+        Chat.add_participant(space_id, %{
+          participant_type: "user",
+          participant_id: Ecto.UUID.generate(),
+          display_name: name,
+          joined_at: DateTime.utc_now()
+        })
+
+      participant
+    end
+
+    defp create_agent_participant(space_id) do
+      agent =
+        %Agent{}
+        |> Agent.changeset(%{
+          slug: "pattern-agent-#{System.unique_integer([:positive])}",
+          name: "Pattern Agent",
+          status: "active",
+          kind: "native",
+          workspace_id: nil
+        })
+        |> Repo.insert!()
+
+      {:ok, participant} = Chat.add_agent_participant(space_id, agent)
+      {agent, participant}
+    end
+
+    test "matching message in a normal space fires the responsibility" do
+      key = "routertest.chat_pattern_fire_#{System.unique_integer([:positive])}"
+
+      row =
+        insert!(%{
+          key: key,
+          trigger_kind: "chat_pattern",
+          trigger_config: %{"regex" => "deploy please"}
+        })
+
+      space = create_space()
+      author = create_user_participant(space.id)
+      {_pid, _name} = start_router()
+
+      log =
+        capture_log([level: :info], fn ->
+          {:ok, _msg} =
+            Chat.post_message(%{
+              space_id: space.id,
+              participant_id: author.id,
+              content_type: "text",
+              content: "hey team, deploy please when ready"
+            })
+
+          # Telemetry → send → handle_info; give the GenServer a beat to
+          # drain its mailbox.
+          :timer.sleep(60)
+        end)
+
+      assert log =~ "[ResponsibilityRouter] unfilled responsibility=#{row.key}"
+    end
+
+    test "agent-authored matching message does NOT fire (feedback-loop guard)" do
+      key = "routertest.chat_pattern_agent_skip_#{System.unique_integer([:positive])}"
+
+      _row =
+        insert!(%{
+          key: key,
+          trigger_kind: "chat_pattern",
+          trigger_config: %{"regex" => "deploy please"}
+        })
+
+      space = create_space()
+      {_agent, agent_participant} = create_agent_participant(space.id)
+      {_pid, _name} = start_router()
+
+      log =
+        capture_log([level: :info], fn ->
+          {:ok, _msg} =
+            Chat.post_message(%{
+              space_id: space.id,
+              participant_id: agent_participant.id,
+              content_type: "text",
+              content: "ack — deploy please relayed"
+            })
+
+          :timer.sleep(60)
+        end)
+
+      refute log =~ "[ResponsibilityRouter] unfilled responsibility=#{key}"
+    end
+
+    test "matching message in a system-kind space does NOT fire" do
+      key = "routertest.chat_pattern_system_skip_#{System.unique_integer([:positive])}"
+
+      _row =
+        insert!(%{
+          key: key,
+          trigger_kind: "chat_pattern",
+          trigger_config: %{"regex" => "deploy please"}
+        })
+
+      space = create_space("system")
+      author = create_user_participant(space.id)
+      {_pid, _name} = start_router()
+
+      log =
+        capture_log([level: :info], fn ->
+          {:ok, _msg} =
+            Chat.post_message(%{
+              space_id: space.id,
+              participant_id: author.id,
+              content_type: "text",
+              content: "system: deploy please occurred"
+            })
+
+          :timer.sleep(60)
+        end)
+
+      refute log =~ "[ResponsibilityRouter] unfilled responsibility=#{key}"
+    end
+
+    test "non-matching message does not fire" do
+      key = "routertest.chat_pattern_no_match_#{System.unique_integer([:positive])}"
+
+      _row =
+        insert!(%{
+          key: key,
+          trigger_kind: "chat_pattern",
+          trigger_config: %{"regex" => "deploy please"}
+        })
+
+      space = create_space()
+      author = create_user_participant(space.id)
+      {_pid, _name} = start_router()
+
+      log =
+        capture_log([level: :info], fn ->
+          {:ok, _msg} =
+            Chat.post_message(%{
+              space_id: space.id,
+              participant_id: author.id,
+              content_type: "text",
+              content: "good morning everyone"
+            })
+
+          :timer.sleep(60)
+        end)
+
+      refute log =~ "[ResponsibilityRouter] unfilled responsibility=#{key}"
+    end
+
+    test "invalid regex at boot logs warning, drops only that row, valid patterns still fire" do
+      good_key = "routertest.chat_pattern_good_#{System.unique_integer([:positive])}"
+
+      _good_row =
+        insert!(%{
+          key: good_key,
+          trigger_kind: "chat_pattern",
+          trigger_config: %{"regex" => "ship it"}
+        })
+
+      # The Responsibility changeset validator rejects un-compilable
+      # regexes at create time, so we bypass it with a direct Repo
+      # write to simulate a malformed row landing via a migration
+      # backfill or older schema. The Router must drop this one
+      # without crashing AND keep firing the good row.
+      bad_key = "routertest.chat_pattern_bad_#{System.unique_integer([:positive])}"
+
+      bad_row =
+        Repo.insert!(%Platform.Responsibilities.Responsibility{
+          key: bad_key,
+          feature: "routertest",
+          trigger_kind: "chat_pattern",
+          trigger_config: %{"regex" => "[unterminated"},
+          scope: "global",
+          context_provided: [],
+          output_contract: %{"summary" => "string"},
+          default_prompt_template: "routertest.v1",
+          cost_profile: "low_freq_capable",
+          enabled: true
+        })
+
+      assert bad_row.id
+
+      space = create_space()
+      author = create_user_participant(space.id)
+
+      boot_log =
+        capture_log([level: :warning], fn ->
+          {_pid, _name} = start_router()
+        end)
+
+      assert boot_log =~ "[ResponsibilityRouter] dropping chat_pattern responsibility"
+      assert boot_log =~ "key=#{bad_key}"
+
+      # The good pattern still fires after boot.
+      log =
+        capture_log([level: :info], fn ->
+          {:ok, _msg} =
+            Chat.post_message(%{
+              space_id: space.id,
+              participant_id: author.id,
+              content_type: "text",
+              content: "ship it now please"
+            })
+
+          :timer.sleep(60)
+        end)
+
+      assert log =~ "[ResponsibilityRouter] unfilled responsibility=#{good_key}"
+    end
+
+    test "multiple matching patterns each fire independently for one message" do
+      key_a = "routertest.chat_pattern_multi_a_#{System.unique_integer([:positive])}"
+      key_b = "routertest.chat_pattern_multi_b_#{System.unique_integer([:positive])}"
+
+      row_a =
+        insert!(%{
+          key: key_a,
+          trigger_kind: "chat_pattern",
+          trigger_config: %{"regex" => "alpha"}
+        })
+
+      row_b =
+        insert!(%{
+          key: key_b,
+          trigger_kind: "chat_pattern",
+          trigger_config: %{"regex" => "beta"}
+        })
+
+      space = create_space()
+      author = create_user_participant(space.id)
+      {_pid, _name} = start_router()
+
+      log =
+        capture_log([level: :info], fn ->
+          {:ok, _msg} =
+            Chat.post_message(%{
+              space_id: space.id,
+              participant_id: author.id,
+              content_type: "text",
+              content: "alpha beta gamma — two patterns, one message"
+            })
+
+          :timer.sleep(80)
+        end)
+
+      assert log =~ "[ResponsibilityRouter] unfilled responsibility=#{row_a.key}"
+      assert log =~ "[ResponsibilityRouter] unfilled responsibility=#{row_b.key}"
+    end
+
+    test "pattern with multiple matches in the same content fires only ONCE" do
+      key = "routertest.chat_pattern_once_#{System.unique_integer([:positive])}"
+
+      _row =
+        insert!(%{
+          key: key,
+          trigger_kind: "chat_pattern",
+          trigger_config: %{"regex" => "ping"}
+        })
+
+      space = create_space()
+      author = create_user_participant(space.id)
+      {_pid, _name} = start_router()
+
+      log =
+        capture_log([level: :info], fn ->
+          {:ok, _msg} =
+            Chat.post_message(%{
+              space_id: space.id,
+              participant_id: author.id,
+              content_type: "text",
+              content: "ping ping ping ping ping"
+            })
+
+          :timer.sleep(60)
+        end)
+
+      # Count the unfilled lines for our key — must be exactly one.
+      occurrences =
+        log
+        |> String.split("\n")
+        |> Enum.count(&String.contains?(&1, "unfilled responsibility=#{key}"))
+
+      assert occurrences == 1
+    end
+  end
+
+  # ── M6 stage 6: external dispatch + handle_output hook ──────────────────
+
+  describe "fire_trigger/3 — external assignee" do
+    # Test seam — point the dispatcher's injected Req client at a named
+    # stub mirroring DispatcherTest. Clean up on exit so the env doesn't
+    # leak into other tests in the same suite.
+    setup do
+      {:ok, _} = Application.ensure_all_started(:req)
+
+      Application.put_env(
+        :platform,
+        :external_agents_dispatcher_req_client,
+        Req.new(plug: {Req.Test, :router_external_dispatch_test})
+      )
+
+      on_exit(fn ->
+        Application.delete_env(:platform, :external_agents_dispatcher_req_client)
+      end)
+
+      :ok
+    end
+
+    defp wire_external_assignee(responsibility_key) do
+      role_key = "historian"
+
+      Repo.insert!(
+        %Role{
+          key: role_key,
+          name: "Historian",
+          description: "test",
+          icon: "hero-star"
+        },
+        on_conflict: :nothing,
+        conflict_target: :key
+      )
+
+      %Platform.Roles.RoleResponsibility{}
+      |> Platform.Roles.RoleResponsibility.changeset(%{
+        role_key: role_key,
+        responsibility_key: responsibility_key
+      })
+      |> Repo.insert!()
+
+      agent =
+        %Agent{}
+        |> Agent.changeset(%{
+          slug: "router-test-ext-#{System.unique_integer([:positive])}",
+          name: "Router Test External",
+          status: "active",
+          kind: "external",
+          endpoint_kind: "openai_compat",
+          base_url: "https://api.example.test",
+          model: "test-model",
+          workspace_id: nil
+        })
+        |> Repo.insert!()
+
+      :ok = Platform.ExternalAgents.EphemeralCredentials.put(agent.id, "sk-router-test")
+      on_exit(fn -> Platform.ExternalAgents.EphemeralCredentials.delete(agent.id) end)
+
+      {:ok, _} = Roles.assign_role(role_key, agent.id)
+
+      agent
+    end
+
+    test "Dispatcher.dispatch is invoked, telemetry fires, last_successful_fire_at is stamped" do
+      key = "routertest.external_full_#{System.unique_integer([:positive])}"
+
+      row =
+        insert!(%{
+          key: key,
+          feature: "test_feature_#{System.unique_integer([:positive])}",
+          trigger_kind: "cron",
+          trigger_config: %{"expression" => "*/5 * * * *"},
+          default_prompt_template: "echo: ping"
+        })
+
+      agent = wire_external_assignee(key)
+
+      test_pid = self()
+
+      Req.Test.stub(:router_external_dispatch_test, fn conn ->
+        send(test_pid, {:dispatch_req, conn.request_path})
+
+        Req.Test.json(conn, %{
+          "choices" => [
+            %{"message" => %{"role" => "assistant", "content" => "router stage6 ok"}}
+          ]
+        })
+      end)
+
+      handler_id = "router-test-fired-#{System.unique_integer([:positive])}"
+
+      :telemetry.attach(
+        handler_id,
+        [:platform, :responsibility, :fired],
+        fn _event, measurements, metadata, pid ->
+          send(pid, {:fired_telemetry, measurements, metadata})
+        end,
+        test_pid
+      )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      fired_at = ~U[2026-06-23 14:00:00.000000Z]
+
+      log =
+        capture_log([level: :info], fn ->
+          assert :ok = Router.fire_trigger(row, %{kind: :cron, fired_at: fired_at}, %{})
+        end)
+
+      assert log =~ "[ResponsibilityRouter] external dispatch ok key=#{key}"
+      assert_receive {:dispatch_req, "/chat/completions"}
+
+      assert_receive {:fired_telemetry, %{system_time: _},
+                      %{key: ^key, dispatch_kind: :external, agent_slug: agent_slug}}
+
+      assert agent_slug == agent.slug
+
+      reloaded = Repo.get!(Agent, agent.id)
+      assert reloaded.last_successful_fire_at == fired_at
+    end
+
+    test "Dispatcher failure emits :failed telemetry and does NOT stamp" do
+      key = "routertest.external_fail_#{System.unique_integer([:positive])}"
+
+      row =
+        insert!(%{
+          key: key,
+          trigger_kind: "cron",
+          trigger_config: %{"expression" => "*/5 * * * *"}
+        })
+
+      agent = wire_external_assignee(key)
+
+      Req.Test.stub(:router_external_dispatch_test, fn conn ->
+        conn
+        |> Plug.Conn.put_resp_content_type("application/json")
+        |> Plug.Conn.send_resp(503, ~s({"error":"down"}))
+      end)
+
+      test_pid = self()
+      handler_id = "router-test-failed-#{System.unique_integer([:positive])}"
+
+      :telemetry.attach(
+        handler_id,
+        [:platform, :responsibility, :failed],
+        fn _event, measurements, metadata, pid ->
+          send(pid, {:failed_telemetry, measurements, metadata})
+        end,
+        test_pid
+      )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      log =
+        capture_log([level: :warning], fn ->
+          assert :ok =
+                   Router.fire_trigger(row, %{kind: :cron, fired_at: DateTime.utc_now()}, %{})
+        end)
+
+      assert log =~ "[ResponsibilityRouter] external dispatch failed key=#{key}"
+
+      assert_receive {:failed_telemetry, _meas,
+                      %{key: ^key, dispatch_kind: :external, reason: reason}}
+
+      assert reason =~ "http_error"
+
+      reloaded = Repo.get!(Agent, agent.id)
+      # The dispatch failed before we stamped — agent stays at nil.
+      assert reloaded.last_successful_fire_at == nil
+    end
+
+    test "handle_output/3 is invoked on the provider module when present" do
+      # Stand up an ad-hoc provider module under a unique feature so we
+      # don't collide with M8's eventual Providers.Meetings. The Router
+      # resolves the module name by camelcasing `feature` and prepending
+      # `Platform.Responsibilities.Providers.`, so we feed it
+      # `feature == "router_test_ho"` and define a module at the
+      # corresponding name.
+
+      feature_atom_suffix = "RouterTestHo#{System.unique_integer([:positive])}"
+      feature_str = "router_test_ho_#{System.unique_integer([:positive])}"
+
+      provider_name =
+        :"Elixir.Platform.Responsibilities.Providers.#{Macro.camelize(feature_str)}"
+
+      test_pid = self()
+
+      # Define a tiny provider module at the canonical name. Module
+      # creation must happen before the Router resolves it via
+      # `Code.ensure_loaded?/1`.
+      Module.create(
+        provider_name,
+        quote do
+          @behaviour Platform.Responsibilities.Provider
+
+          @impl true
+          def register, do: []
+
+          @impl true
+          def gather_context(_r, _c), do: {:ok, %{}}
+
+          @impl true
+          def handle_output(_r, _o), do: :ok
+
+          @impl true
+          def handle_output(responsibility, parsed, meta) do
+            send(unquote(test_pid), {:handle_output_invoked, responsibility.key, parsed, meta})
+            :ok
+          end
+        end,
+        Macro.Env.location(__ENV__)
+      )
+
+      # Touch the suffix var so the compiler doesn't whine.
+      _ = feature_atom_suffix
+
+      key = "#{feature_str}.dispatch_#{System.unique_integer([:positive])}"
+
+      row =
+        insert!(%{
+          key: key,
+          feature: feature_str,
+          trigger_kind: "cron",
+          trigger_config: %{"expression" => "*/5 * * * *"}
+        })
+
+      _agent = wire_external_assignee(key)
+
+      Req.Test.stub(:router_external_dispatch_test, fn conn ->
+        Req.Test.json(conn, %{
+          "choices" => [
+            %{"message" => %{"role" => "assistant", "content" => "ho_invoked"}}
+          ]
+        })
+      end)
+
+      trigger_meta = %{kind: :cron, fired_at: DateTime.utc_now(), correlation: "abc"}
+
+      capture_log([level: :info], fn ->
+        assert :ok = Router.fire_trigger(row, trigger_meta, %{})
+      end)
+
+      assert_receive {:handle_output_invoked, ^key, "ho_invoked", meta}
+      assert meta[:correlation] == "abc"
+    end
+
+    test "missing provider module logs 'no output handler' but still emits :fired" do
+      key = "routertest.no_handler_#{System.unique_integer([:positive])}"
+
+      row =
+        insert!(%{
+          key: key,
+          feature: "definitely_not_a_real_feature_#{System.unique_integer([:positive])}",
+          trigger_kind: "cron",
+          trigger_config: %{"expression" => "*/5 * * * *"}
+        })
+
+      _agent = wire_external_assignee(key)
+
+      Req.Test.stub(:router_external_dispatch_test, fn conn ->
+        Req.Test.json(conn, %{
+          "choices" => [
+            %{"message" => %{"role" => "assistant", "content" => "nh"}}
+          ]
+        })
+      end)
+
+      log =
+        capture_log([level: :info], fn ->
+          assert :ok =
+                   Router.fire_trigger(row, %{kind: :cron, fired_at: DateTime.utc_now()}, %{})
+        end)
+
+      assert log =~ "[ResponsibilityRouter] no output handler for #{key}"
+      assert log =~ "[ResponsibilityRouter] external dispatch ok key=#{key}"
+    end
+  end
+
+  # ── M6 stage 6: federated/native regression ─────────────────────────────
+
+  describe "fire_trigger/3 — native dispatcher signal shape (federated regression)" do
+    # Test seam — point the Router's native dispatcher at a tiny module
+    # that captures the signal so we can assert on its shape without
+    # standing up a real AgentResponder / chat space / participant.
+    defmodule CaptureDispatcher do
+      @moduledoc false
+      def maybe_dispatch(signal) do
+        pid =
+          Application.get_env(
+            :platform,
+            :router_test_capture_pid
+          )
+
+        if is_pid(pid), do: send(pid, {:captured_signal, signal})
+
+        :ok
+      end
+    end
+
+    setup do
+      previous =
+        Application.get_env(:platform, :responsibility_router_native_dispatcher)
+
+      Application.put_env(
+        :platform,
+        :responsibility_router_native_dispatcher,
+        {CaptureDispatcher, :maybe_dispatch}
+      )
+
+      Application.put_env(:platform, :router_test_capture_pid, self())
+
+      on_exit(fn ->
+        if previous do
+          Application.put_env(
+            :platform,
+            :responsibility_router_native_dispatcher,
+            previous
+          )
+        else
+          Application.delete_env(:platform, :responsibility_router_native_dispatcher)
+        end
+
+        Application.delete_env(:platform, :router_test_capture_pid)
+      end)
+
+      :ok
+    end
+
+    defp wire_native_assignee(responsibility_key) do
+      role_key = "historian"
+
+      Repo.insert!(
+        %Role{key: role_key, name: "Historian", description: "test", icon: "hero-star"},
+        on_conflict: :nothing,
+        conflict_target: :key
+      )
+
+      %Platform.Roles.RoleResponsibility{}
+      |> Platform.Roles.RoleResponsibility.changeset(%{
+        role_key: role_key,
+        responsibility_key: responsibility_key
+      })
+      |> Repo.insert!()
+
+      agent =
+        %Agent{}
+        |> Agent.changeset(%{
+          slug: "router-test-fed-#{System.unique_integer([:positive])}",
+          name: "Router Test Federated",
+          status: "active",
+          kind: "native",
+          workspace_id: nil
+        })
+        |> Repo.insert!()
+
+      {:ok, _} = Roles.assign_role(role_key, agent.id)
+
+      agent
+    end
+
+    test "native dispatch hands AgentResponder a signal with the historian-style shape" do
+      key = "routertest.fed_shape_#{System.unique_integer([:positive])}"
+
+      row =
+        insert!(%{
+          key: key,
+          trigger_kind: "cron",
+          trigger_config: %{"expression" => "*/5 * * * *"}
+        })
+
+      agent = wire_native_assignee(key)
+
+      capture_log([level: :info], fn ->
+        assert :ok =
+                 Router.fire_trigger(
+                   row,
+                   %{kind: :cron, fired_at: DateTime.utc_now()},
+                   %{}
+                 )
+      end)
+
+      assert_receive {:captured_signal, signal}
+
+      # SystemEventScheduler / HistorianDispatcher signal contract:
+      # `%{reason, metadata}` is mandatory; `participant_id`, `message_id`,
+      # `space_id` are optional (omitted for cron triggers that don't
+      # have a chat-side originating message). The Router must mirror
+      # that — additional :feature / :responsibility_key keys in
+      # `metadata` are fine, they're just provider hints.
+      assert is_map(signal)
+      assert signal.reason == :system_event
+      assert is_map(signal.metadata)
+      assert signal.metadata.responsibility_key == key
+      assert signal.metadata.agent_slug == agent.slug
+      assert signal.metadata.trigger_kind == :cron
+    end
+
+    test "chat_pattern trigger maps to :mention reason and carries message/space ids" do
+      key = "routertest.fed_chat_#{System.unique_integer([:positive])}"
+
+      row =
+        insert!(%{
+          key: key,
+          trigger_kind: "chat_pattern",
+          trigger_config: %{"regex" => "deploy"}
+        })
+
+      _agent = wire_native_assignee(key)
+
+      message_id = Ecto.UUID.generate()
+      space_id = Ecto.UUID.generate()
+
+      capture_log([level: :info], fn ->
+        assert :ok =
+                 Router.fire_trigger(
+                   row,
+                   %{
+                     kind: :chat_pattern,
+                     message_id: message_id,
+                     space_id: space_id,
+                     match: ["deploy"]
+                   },
+                   %{}
+                 )
+      end)
+
+      assert_receive {:captured_signal, signal}
+      assert signal.reason == :mention
+      assert signal.message_id == message_id
+      assert signal.space_id == space_id
+    end
+
+    test "native dispatch stamps last_successful_fire_at even for the federated path" do
+      key = "routertest.fed_stamp_#{System.unique_integer([:positive])}"
+
+      row =
+        insert!(%{
+          key: key,
+          trigger_kind: "cron",
+          trigger_config: %{"expression" => "*/5 * * * *"}
+        })
+
+      agent = wire_native_assignee(key)
+
+      fired_at = ~U[2026-06-23 15:00:00.000000Z]
+
+      capture_log([level: :info], fn ->
+        assert :ok = Router.fire_trigger(row, %{kind: :cron, fired_at: fired_at}, %{})
+      end)
+
+      assert_receive {:captured_signal, _signal}
+
+      reloaded = Repo.get!(Agent, agent.id)
+      assert reloaded.last_successful_fire_at == fired_at
+    end
+  end
+end

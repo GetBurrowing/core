@@ -76,6 +76,7 @@ defmodule Platform.Application do
       |> maybe_add_attention_router()
       |> maybe_add_node_client()
       |> maybe_add_responsibilities_registry()
+      |> maybe_add_responsibility_router()
       |> maybe_add_system_event_scheduler()
       |> maybe_add_wiki_indexer()
       |> maybe_add_meeting_historian_handler()
@@ -147,6 +148,28 @@ defmodule Platform.Application do
           length(children)
 
       List.insert_at(children, idx, Platform.Responsibilities.Registry)
+    else
+      children
+    end
+  end
+
+  # Responsibilities Router (ADR-0041 M6 stage 1): runtime trigger
+  # router that walks the registry on boot and (in later stages)
+  # dispatches cron / event_topic / chat_pattern / webhook fires. Must
+  # start AFTER `Platform.Responsibilities.Registry` so the registry
+  # rows are upserted before the router walks them, and AFTER
+  # `Platform.Repo` for the same reason. Runs side-by-side with
+  # `Platform.Agents.SystemEventScheduler` until M8 cutover. Tests
+  # disable this via `:start_responsibility_router false` and start
+  # per-case instances with their own registered name.
+  defp maybe_add_responsibility_router(children) do
+    if Application.get_env(:platform, :start_responsibility_router, true) do
+      idx =
+        Enum.find_index(children, &(&1 == Platform.Agents.SystemEventScheduler)) ||
+          Enum.find_index(children, &(&1 == PlatformWeb.Endpoint)) ||
+          length(children)
+
+      List.insert_at(children, idx, Platform.Responsibilities.Router)
     else
       children
     end
