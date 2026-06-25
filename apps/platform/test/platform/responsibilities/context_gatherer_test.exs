@@ -12,6 +12,7 @@ defmodule Platform.Responsibilities.ContextGathererTest do
   import ExUnit.CaptureLog
 
   alias Platform.Chat
+  alias Platform.Meetings
   alias Platform.Responsibilities.ContextGatherer
 
   describe "gather/2 — happy paths" do
@@ -111,6 +112,63 @@ defmodule Platform.Responsibilities.ContextGathererTest do
       assert Map.has_key?(gathered, :recent_journal)
       # Same shape contract — recent_memory/2 returns [] for an empty
       # wiki, which we accept as the steady-state.
+    end
+  end
+
+  describe "gather/2 — :meeting_transcript paths" do
+    test ":meeting_transcript with no :transcript_id yields nil" do
+      assert %{meeting_transcript: nil} = ContextGatherer.gather([:meeting_transcript], %{})
+    end
+
+    test ":meeting_transcript with an unknown UUID yields nil" do
+      assert %{meeting_transcript: nil} =
+               ContextGatherer.gather([:meeting_transcript], %{
+                 transcript_id: Ecto.UUID.generate()
+               })
+    end
+
+    test ":meeting_transcript materialises formatted_text + counts when transcript exists" do
+      segments = [
+        %{
+          "participant_identity" => "user_1",
+          "speaker_name" => "Mira Chen",
+          "text" => "Helios kickoff.",
+          "start_time" => 0,
+          "end_time" => 2500
+        }
+      ]
+
+      {:ok, transcript} =
+        Meetings.create_transcript(%{
+          room_id: Ecto.UUID.generate(),
+          space_id: Ecto.UUID.generate(),
+          segments: segments
+        })
+
+      assert %{meeting_transcript: payload} =
+               ContextGatherer.gather([:meeting_transcript], %{transcript_id: transcript.id})
+
+      assert payload.transcript_id == transcript.id
+      assert payload.segment_count == 1
+      assert payload.duration_ms == 2500
+      assert payload.formatted_text =~ "Mira Chen"
+      assert payload.formatted_text =~ "Helios kickoff."
+    end
+
+    test ":meeting_transcript tolerates a string-keyed transcript_id in trigger_meta" do
+      {:ok, transcript} =
+        Meetings.create_transcript(%{
+          room_id: Ecto.UUID.generate(),
+          space_id: Ecto.UUID.generate(),
+          segments: []
+        })
+
+      assert %{meeting_transcript: payload} =
+               ContextGatherer.gather([:meeting_transcript], %{
+                 "transcript_id" => transcript.id
+               })
+
+      assert payload.transcript_id == transcript.id
     end
   end
 

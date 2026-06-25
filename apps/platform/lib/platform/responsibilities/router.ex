@@ -236,6 +236,83 @@ defmodule Platform.Responsibilities.Router do
     {:error, :not_implemented_yet}
   end
 
+  @doc """
+  Lookup-and-fire convenience used by M8's dual-write shim and any
+  call site that knows the responsibility key but doesn't already
+  hold the `%Responsibility{}` row.
+
+  Accepts the canonical string key (`"memory.daily_summary"`) or the
+  atom shorthand (`:memory_daily_summary`) — the atom form is
+  underscored and re-canonicalised to dotted-string by replacing the
+  first underscore (`memory_daily_summary` → `memory.daily_summary`).
+  Unknown keys log + return `{:error, :unknown_responsibility}` rather
+  than crashing; the dual-write shim treats this as "router path
+  no-op" so legacy dispatch isn't blocked.
+
+  The supplied `trigger_meta` is passed through to `fire_trigger/2`
+  verbatim; callers should set `:kind` (e.g. `:cron`, `:webhook`) and
+  any feature-specific keys (`:workspace_id`, `:date`, etc.).
+  """
+  @spec fire(atom() | binary(), map()) :: :ok | {:error, term()}
+  def fire(key, trigger_meta \\ %{}) when is_map(trigger_meta) do
+    canonical = canonical_key(key)
+
+    case lookup_by_key(canonical) do
+      %Responsibility{} = responsibility ->
+        fire_trigger(responsibility, trigger_meta)
+
+      nil ->
+        Logger.info(
+          "[ResponsibilityRouter] fire/2 no row for key=#{inspect(canonical)} — skipping"
+        )
+
+        {:error, :unknown_responsibility}
+    end
+  end
+
+  @doc """
+  Return `true` when the responsibility identified by `key` has a
+  resolvable assignee — either a `ResponsibilityOverride` row or a
+  `Role`-bundle assignment with an agent attached.
+
+  M8 stage 4's dual-write bridge inside
+  `Platform.Meetings.Summarizer.run_summary/1` gates on this: when
+  the Meeting Scribe role is held by an agent, the legacy LLM path
+  delegates to the router; otherwise it falls back to its existing
+  body.
+
+  Accepts the same atom / dotted-string shorthand as `fire/2`. Unknown
+  keys, missing `Platform.Roles`, and resolver raises all degrade to
+  `false` so the caller's "is anyone home?" check never crashes the
+  legacy path.
+  """
+  @spec responsibility_filled?(atom() | binary()) :: boolean()
+  def responsibility_filled?(key) when is_atom(key) or is_binary(key) do
+    canonical = canonical_key(key)
+    not is_nil(safe_assignee_for(canonical))
+  end
+
+  def responsibility_filled?(_), do: false
+
+  defp canonical_key(key) when is_binary(key), do: key
+
+  defp canonical_key(key) when is_atom(key) do
+    key
+    |> Atom.to_string()
+    |> String.replace("_", ".", global: false)
+  end
+
+  defp lookup_by_key(key) when is_binary(key) do
+    if Code.ensure_loaded?(Responsibilities) and
+         function_exported?(Responsibilities, :get_by_key, 1) do
+      Responsibilities.get_by_key(key)
+    else
+      nil
+    end
+  rescue
+    _ -> nil
+  end
+
   # ── GenServer callbacks ────────────────────────────────────────────────────
 
   @impl GenServer

@@ -13,17 +13,25 @@ defmodule Platform.Meetings.PubSub do
     * `"meetings:presence_summary"` — global summary topic for sidebar.
       Broadcasts when any space's meeting presence changes so the sidebar
       can refresh counts without subscribing to every space individually.
+    * `"meeting:finished"` — canonical broadcast surface for transcript-
+      finalisation, consumed by the M6 `Platform.Responsibilities.Router`
+      to fire the `meetings.summarize` responsibility. Phoenix.PubSub
+      doesn't support wildcards, so we publish on BOTH the canonical
+      topic AND `"meeting:finished:{room_id}"` (for per-room LiveView
+      subscribers). The Router subscribes to the canonical topic only.
 
   ## Events
 
-  | Topic                              | Event                                    | Payload                                |
-  |------------------------------------|------------------------------------------|----------------------------------------|
-  | `meetings:room:{room_id}`          | `{:participant_joined, p}`               | `%Meetings.Participant{}`              |
-  | `meetings:room:{room_id}`          | `{:participant_left, p}`                 | `%Meetings.Participant{}`              |
-  | `meetings:room:{room_id}`          | `{:room_activated, room}`                | `%Meetings.Room{}`                     |
-  | `meetings:room:{room_id}`          | `{:room_finished, room}`                 | `%Meetings.Room{}`                     |
-  | `meetings:presence:{space_id}`     | `{:meeting_presence_update, data}`       | `%{space_id, active, count}`           |
-  | `meetings:presence_summary`        | `{:meeting_presence_summary, data}`      | `%{space_id: id}`                      |
+  | Topic                              | Event                                    | Payload                                                          |
+  |------------------------------------|------------------------------------------|------------------------------------------------------------------|
+  | `meetings:room:{room_id}`          | `{:participant_joined, p}`               | `%Meetings.Participant{}`                                        |
+  | `meetings:room:{room_id}`          | `{:participant_left, p}`                 | `%Meetings.Participant{}`                                        |
+  | `meetings:room:{room_id}`          | `{:room_activated, room}`                | `%Meetings.Room{}`                                               |
+  | `meetings:room:{room_id}`          | `{:room_finished, room}`                 | `%Meetings.Room{}`                                               |
+  | `meetings:presence:{space_id}`     | `{:meeting_presence_update, data}`       | `%{space_id, active, count}`                                     |
+  | `meetings:presence_summary`        | `{:meeting_presence_summary, data}`      | `%{space_id: id}`                                                |
+  | `meeting:finished`                 | `{:meeting_finished, payload}`           | `%{transcript_id: id, room_id: id, space_id: id}`                |
+  | `meeting:finished:{room_id}`       | `{:meeting_finished, payload}`           | `%{transcript_id: id, room_id: id, space_id: id}`                |
   """
 
   @pubsub Platform.PubSub
@@ -45,6 +53,24 @@ defmodule Platform.Meetings.PubSub do
   @doc "Returns the global presence summary topic for sidebar updates."
   @spec presence_summary_topic() :: String.t()
   def presence_summary_topic, do: "meetings:presence_summary"
+
+  @doc """
+  Returns the canonical "any meeting finished" topic. Subscribed to by
+  the M6 `Platform.Responsibilities.Router` because Phoenix.PubSub has
+  no wildcard match — broadcasts to `meeting_finished_topic/1` are
+  mirrored to this topic so a single subscription suffices.
+  """
+  @spec meeting_finished_topic() :: String.t()
+  def meeting_finished_topic, do: "meeting:finished"
+
+  @doc """
+  Returns the per-room "meeting finished" topic. Used by LiveView
+  surfaces that already know the room they care about (so they
+  don't have to filter every cross-org broadcast).
+  """
+  @spec meeting_finished_topic(binary()) :: String.t()
+  def meeting_finished_topic(room_id) when is_binary(room_id),
+    do: "meeting:finished:#{room_id}"
 
   # ── Subscribe ────────────────────────────────────────────────────────────────
 
@@ -72,6 +98,22 @@ defmodule Platform.Meetings.PubSub do
     Phoenix.PubSub.subscribe(@pubsub, presence_summary_topic())
   end
 
+  @doc """
+  Subscribe to the canonical `meeting:finished` topic. The M6
+  responsibility router uses this to fire `meetings.summarize`
+  without needing one subscription per room.
+  """
+  @spec subscribe_meeting_finished() :: :ok | {:error, term()}
+  def subscribe_meeting_finished do
+    Phoenix.PubSub.subscribe(@pubsub, meeting_finished_topic())
+  end
+
+  @doc "Subscribe to a specific room's `meeting:finished` topic."
+  @spec subscribe_meeting_finished(binary()) :: :ok | {:error, term()}
+  def subscribe_meeting_finished(room_id) when is_binary(room_id) do
+    Phoenix.PubSub.subscribe(@pubsub, meeting_finished_topic(room_id))
+  end
+
   @doc "Unsubscribe from a user's meeting events."
   @spec unsubscribe_user(binary()) :: :ok
   def unsubscribe_user(user_id) do
@@ -94,6 +136,18 @@ defmodule Platform.Meetings.PubSub do
   @spec unsubscribe_presence_summary() :: :ok
   def unsubscribe_presence_summary do
     Phoenix.PubSub.unsubscribe(@pubsub, presence_summary_topic())
+  end
+
+  @doc "Unsubscribe from the canonical `meeting:finished` topic."
+  @spec unsubscribe_meeting_finished() :: :ok
+  def unsubscribe_meeting_finished do
+    Phoenix.PubSub.unsubscribe(@pubsub, meeting_finished_topic())
+  end
+
+  @doc "Unsubscribe from a specific room's `meeting:finished` topic."
+  @spec unsubscribe_meeting_finished(binary()) :: :ok
+  def unsubscribe_meeting_finished(room_id) when is_binary(room_id) do
+    Phoenix.PubSub.unsubscribe(@pubsub, meeting_finished_topic(room_id))
   end
 
   # ── Broadcast ────────────────────────────────────────────────────────────────
@@ -130,5 +184,29 @@ defmodule Platform.Meetings.PubSub do
       presence_summary_topic(),
       {:meeting_presence_summary, %{space_id: space_id}}
     )
+  end
+
+  @doc """
+  Broadcast a `:meeting_finished` event on BOTH the canonical
+  `meeting:finished` topic AND the per-room
+  `meeting:finished:{room_id}` topic.
+
+  Publishing on the canonical topic lets the M6 responsibility router
+  fire `meetings.summarize` with a single Phoenix.PubSub subscription
+  (PubSub has no wildcard match); publishing on the per-room topic
+  keeps room-scoped LiveView subscribers in sync.
+
+  `payload` should carry at least `:transcript_id`, `:room_id`, and
+  `:space_id` (matches the
+  `Platform.Responsibilities.ContextProviders` contract for the
+  `:meeting_transcript` slot).
+  """
+  @spec broadcast_meeting_finished(binary(), map()) :: :ok
+  def broadcast_meeting_finished(room_id, payload)
+      when is_binary(room_id) and is_map(payload) do
+    event = {:meeting_finished, payload}
+    Phoenix.PubSub.broadcast(@pubsub, meeting_finished_topic(), event)
+    Phoenix.PubSub.broadcast(@pubsub, meeting_finished_topic(room_id), event)
+    :ok
   end
 end

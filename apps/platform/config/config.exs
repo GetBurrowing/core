@@ -21,6 +21,28 @@ config :platform, Platform.Repo,
 # own per-case instance.
 config :platform, :start_responsibilities_registry, true
 
+# Responsibilities provider list (ADR-0041 M8 stage 2). Registry reads
+# this on init and upserts every declared row. Mirror this list with
+# `Platform.Responsibilities.BuiltIns.providers/0` — feature teams add
+# their modules to BOTH places (BuiltIns is the canonical list used in
+# tests; this key is what the boot-time Registry actually reads). Kept
+# as a literal here because module-function calls aren't allowed at
+# compile-config time.
+config :platform, Platform.Responsibilities,
+  providers: [
+    Platform.Responsibilities.Handlers.DailySummary,
+    Platform.Responsibilities.Handlers.Dreaming,
+    Platform.Responsibilities.Handlers.MeetingSummarize
+  ]
+
+# M8 stage 2: dual-write shim gate. When `false` (default), the legacy
+# `Platform.Agents.SystemEventScheduler` dispatch runs alone. When
+# `true`, the scheduler ALSO calls `Platform.Responsibilities.Router.fire/2`
+# for `:memory_daily_summary` + `:memory_dreaming` so a cutover monitor
+# can compare the two paths' outputs. Flip permanently in `config/prod.exs`
+# after `Platform.Responsibilities.CutoverMonitor` reports zero divergence.
+config :platform, :responsibility_router_enabled, false
+
 # Configure the endpoint
 config :platform, PlatformWeb.Endpoint,
   url: [host: "localhost"],

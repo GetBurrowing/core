@@ -57,6 +57,11 @@ config :platform, :start_responsibilities_registry, false
 # DataCase sandbox; see `Platform.Responsibilities.RouterTest`.
 config :platform, :start_responsibility_router, false
 
+# M8 stage 6 (ADR-0041): Platform.Responsibilities.CutoverMonitor
+# attaches telemetry handlers on init. Tests start per-case instances
+# with their own :name so the production singleton isn't claimed.
+config :platform, :start_cutover_monitor, false
+
 # T3 (ADR-0041): tests start their own Platform.Org.Wiki.Indexer per case
 # (so DataCase sandbox owns the Repo connection and tests don't fight a
 # real subscriber). Production defaults to true via Application.start/2.

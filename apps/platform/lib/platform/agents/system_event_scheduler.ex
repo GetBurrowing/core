@@ -511,8 +511,127 @@ defmodule Platform.Agents.SystemEventScheduler do
   defp dispatch_event(event_type, template_slug, extra_metadata)
        when is_binary(template_slug) and is_map(extra_metadata) do
     normalized_event = normalize_event(event_type)
-    HistorianDispatcher.dispatch(normalized_event, template_slug, extra_metadata)
+    legacy_result = HistorianDispatcher.dispatch(normalized_event, template_slug, extra_metadata)
+
+    maybe_dual_write(normalized_event, extra_metadata, legacy_result)
+
+    legacy_result
   end
+
+  # ── Dual-write shim (ADR-0041 M8 stage 2) ───────────────────────────
+  #
+  # When `:responsibility_router_enabled` is `true`, every legacy
+  # historian dispatch also fans out to the M6 responsibility router for
+  # `memory.daily_summary` + `memory.dreaming`. The router's `fire/2`
+  # looks each key up by canonical string, walks the assignee, and
+  # either dispatches to the assigned agent OR no-ops (unfilled
+  # responsibility). Logged with the `[dual_write]` tag so a cutover
+  # diff job can grep both paths' outcomes.
+  #
+  # When the flag is `false` (default in `config/config.exs`), this is
+  # a no-op — legacy is the only writer. We never block the legacy
+  # return value on router failure; the legacy path is the source of
+  # truth until the cutover follow-up deletes this scheduler.
+
+  defp maybe_dual_write(normalized_event, extra_metadata, legacy_result) do
+    if dual_write_enabled?() do
+      do_dual_write(normalized_event, extra_metadata, legacy_result)
+    else
+      :ok
+    end
+  rescue
+    error ->
+      Logger.warning(
+        "[SystemEventScheduler] [dual_write] shim raised: #{Exception.message(error)} — " <>
+          "legacy path unaffected"
+      )
+
+      :ok
+  end
+
+  defp dual_write_enabled? do
+    Application.get_env(:platform, :responsibility_router_enabled, false)
+  end
+
+  defp do_dual_write(@historian_event, extra_metadata, legacy_result) do
+    workspace_id =
+      Map.get(extra_metadata, :workspace_id) || Map.get(extra_metadata, "workspace_id")
+
+    trigger_meta = %{
+      kind: :cron,
+      workspace_id: workspace_id,
+      date: Date.utc_today(),
+      fired_at: DateTime.utc_now(),
+      source: :system_event_scheduler_dual_write
+    }
+
+    Enum.each(dual_write_keys(), fn key ->
+      router_result = safe_router_fire(key, trigger_meta)
+      legacy_summary = summarise_result(legacy_result)
+      router_summary = summarise_result(router_result)
+
+      Logger.info(
+        "[SystemEventScheduler] [dual_write] key=#{key} " <>
+          "legacy=#{inspect(legacy_summary)} " <>
+          "router=#{inspect(router_summary)} " <>
+          "workspace=#{inspect(workspace_id)}"
+      )
+
+      emit_dual_write_telemetry(key, legacy_summary, router_summary, workspace_id)
+    end)
+  end
+
+  # M8 stage 6 (ADR-0041): the CutoverMonitor subscribes to this event
+  # to maintain per-day per-key counters of router/legacy/divergence
+  # outcomes. Kept separate from the per-key info log so log scraping
+  # isn't the cutover signal — the monitor counts structured events.
+  defp emit_dual_write_telemetry(key, legacy_summary, router_summary, workspace_id) do
+    :telemetry.execute(
+      [:platform, :responsibilities, :dual_write],
+      %{system_time: System.system_time()},
+      %{
+        key: key,
+        legacy_result: legacy_summary,
+        router_result: router_summary,
+        legacy_ok?: result_ok?(legacy_summary),
+        router_ok?: result_ok?(router_summary),
+        workspace_id: workspace_id
+      }
+    )
+  rescue
+    _ -> :ok
+  end
+
+  defp result_ok?(:ok), do: true
+  defp result_ok?({:ok, _}), do: true
+  defp result_ok?(_), do: false
+
+  defp do_dual_write(_other_event, _extra_metadata, _legacy_result), do: :ok
+
+  defp dual_write_keys do
+    [
+      Platform.Responsibilities.Handlers.DailySummary.key(),
+      Platform.Responsibilities.Handlers.Dreaming.key()
+    ]
+  end
+
+  defp safe_router_fire(key, trigger_meta) do
+    if Code.ensure_loaded?(Platform.Responsibilities.Router) and
+         function_exported?(Platform.Responsibilities.Router, :fire, 2) do
+      Platform.Responsibilities.Router.fire(key, trigger_meta)
+    else
+      {:error, :router_not_loaded}
+    end
+  rescue
+    error -> {:error, {:fire_raised, Exception.message(error)}}
+  catch
+    :exit, reason -> {:error, {:fire_exited, reason}}
+  end
+
+  defp summarise_result(:ok), do: :ok
+  defp summarise_result({:ok, _}), do: :ok
+  defp summarise_result({:error, reason}), do: {:error, reason}
+  defp summarise_result(other), do: other
 
   # Defensive: legacy callers passing `"daily_summary"` or `"dreaming"` are
   # remapped to the canonical `"historian"` event. Logged so we can spot

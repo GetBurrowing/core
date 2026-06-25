@@ -104,3 +104,9 @@ config :phoenix_live_view,
   debug_attributes: true,
   # Enable helpful, but potentially expensive runtime checks
   enable_expensive_runtime_checks: true
+
+# M8 stage 2 (ADR-0041): flip the dual-write shim on in dev so every
+# `daily_summary` / `dreaming` historian tick exercises both the legacy
+# scheduler dispatch AND the M6 responsibility router path. Prod stays
+# `false` until the cutover monitor reports zero divergence for 7 days.
+config :platform, :responsibility_router_enabled, true

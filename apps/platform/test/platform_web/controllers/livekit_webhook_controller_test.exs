@@ -234,6 +234,44 @@ defmodule PlatformWeb.LivekitWebhookControllerTest do
       assert json_response(conn, 200)
     end
 
+    test "broadcasts {:meeting_finished, payload} on canonical + per-room topics",
+         %{conn: conn} do
+      # M8 stage 3 — the responsibility router subscribes to the
+      # canonical `meeting:finished` topic to fire `meetings.summarize`;
+      # per-room subscribers (LiveViews) get the same event on
+      # `meeting:finished:{room_id}`.
+      room_id = unique_room_id()
+      {:ok, transcript} = Meetings.create_transcript(%{room_id: room_id})
+
+      # Subscribe BEFORE the webhook so the broadcast can't outrun us.
+      assert :ok = Platform.Meetings.PubSub.subscribe_meeting_finished()
+      assert :ok = Platform.Meetings.PubSub.subscribe_meeting_finished(room_id)
+
+      payload = room_finished_payload(room_id)
+      conn = post(conn, @livekit_webhook_path, payload)
+      assert json_response(conn, 200)
+
+      transcript_id = transcript.id
+
+      # Canonical broadcast.
+      assert_receive {:meeting_finished,
+                      %{transcript_id: ^transcript_id, room_id: ^room_id} = canonical_payload},
+                     1_000
+
+      # Per-room broadcast.
+      assert_receive {:meeting_finished,
+                      %{transcript_id: ^transcript_id, room_id: ^room_id} = per_room_payload},
+                     1_000
+
+      # Both payloads carry the same keys (subscriber routing differs,
+      # the message body is identical).
+      assert Map.keys(canonical_payload) |> Enum.sort() ==
+               [:room_id, :space_id, :transcript_id]
+
+      assert Map.keys(per_room_payload) |> Enum.sort() ==
+               [:room_id, :space_id, :transcript_id]
+    end
+
     test "deactivates an active room back to idle (v4 stage 1 symmetry)", %{conn: conn} do
       {:ok, space} =
         Platform.Chat.create_space(%{

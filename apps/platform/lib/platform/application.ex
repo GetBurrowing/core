@@ -77,6 +77,7 @@ defmodule Platform.Application do
       |> maybe_add_node_client()
       |> maybe_add_responsibilities_registry()
       |> maybe_add_responsibility_router()
+      |> maybe_add_cutover_monitor()
       |> maybe_add_system_event_scheduler()
       |> maybe_add_wiki_indexer()
       |> maybe_add_meeting_historian_handler()
@@ -170,6 +171,28 @@ defmodule Platform.Application do
           length(children)
 
       List.insert_at(children, idx, Platform.Responsibilities.Router)
+    else
+      children
+    end
+  end
+
+  # Cutover monitor (ADR-0041 M8 stage 6): subscribes to
+  # `[:platform, :responsibility, :fired]` + `[:platform, :responsibilities, :dual_write]`
+  # telemetry events to maintain per-day counters of router vs legacy
+  # firings. The `mix responsibilities.cutover_report` task reads from
+  # this singleton. Must start after the Router (telemetry emitter) and
+  # before SystemEventScheduler (the other emitter) so neither one
+  # races the monitor at first fire — both are tolerant of an attached
+  # handler that hasn't seen its first message yet, so order is a
+  # belt-and-braces choice rather than strict.
+  defp maybe_add_cutover_monitor(children) do
+    if Application.get_env(:platform, :start_cutover_monitor, true) do
+      idx =
+        Enum.find_index(children, &(&1 == Platform.Agents.SystemEventScheduler)) ||
+          Enum.find_index(children, &(&1 == PlatformWeb.Endpoint)) ||
+          length(children)
+
+      List.insert_at(children, idx, Platform.Responsibilities.CutoverMonitor)
     else
       children
     end

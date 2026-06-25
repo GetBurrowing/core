@@ -428,6 +428,89 @@ defmodule Platform.Agents.SystemEventSchedulerTest do
         assert Chat.get_space_by_slug("system-#{newer.slug}") == nil
       end
     end
+
+    # M8 stage 2 (ADR-0041): dual-write shim. When the flag is true,
+    # every legacy historian dispatch also fans out to the M6 router
+    # for `memory.daily_summary` + `memory.dreaming`. When false, the
+    # legacy path runs alone — no router call, no `[dual_write]` log.
+    describe "dual-write shim" do
+      setup do
+        # Save and restore the flag around each test so we don't leak
+        # the `true` setting into siblings that assume legacy-only.
+        prev = Application.get_env(:platform, :responsibility_router_enabled, false)
+        on_exit(fn -> Application.put_env(:platform, :responsibility_router_enabled, prev) end)
+        :ok
+      end
+
+      test "flag=false: legacy fires, no [dual_write] log, router untouched" do
+        Application.put_env(:platform, :responsibility_router_enabled, false)
+        agent = create_agent(%{system_events: ["historian"]})
+
+        {:ok, _pid} =
+          start_supervised({SystemEventScheduler, check_interval_ms: :timer.hours(24)})
+
+        # Bump logger so any [dual_write] line would be capturable.
+        prev_level = Logger.level()
+        Logger.configure(level: :info)
+        on_exit(fn -> Logger.configure(level: prev_level) end)
+
+        log =
+          capture_log([level: :info], fn ->
+            SystemEventScheduler.fire_now("historian")
+          end)
+
+        # Legacy still ran — historian space exists for the agent.
+        assert Chat.get_space_by_slug("system-#{agent.slug}") != nil
+
+        # No dual-write tag in the log.
+        refute log =~ "[dual_write]"
+      end
+
+      test "flag=true: legacy fires AND [dual_write] log lines appear for both keys" do
+        Application.put_env(:platform, :responsibility_router_enabled, true)
+        agent = create_agent(%{system_events: ["historian"]})
+
+        {:ok, _pid} =
+          start_supervised({SystemEventScheduler, check_interval_ms: :timer.hours(24)})
+
+        prev_level = Logger.level()
+        Logger.configure(level: :info)
+        on_exit(fn -> Logger.configure(level: prev_level) end)
+
+        log =
+          capture_log([level: :info], fn ->
+            SystemEventScheduler.fire_now("historian")
+          end)
+
+        # Legacy still ran.
+        assert Chat.get_space_by_slug("system-#{agent.slug}") != nil
+
+        # Dual-write tag appears for BOTH responsibility keys. Router
+        # responds {:error, :unknown_responsibility} when the rows
+        # aren't registered (test env disables the registry), which is
+        # the contract the shim is allowed to swallow — the assertion
+        # below covers the LOG line specifically so it works regardless
+        # of router outcome.
+        assert log =~ "[dual_write] key=memory.daily_summary"
+        assert log =~ "[dual_write] key=memory.dreaming"
+      end
+
+      test "flag=true: router crash does not break legacy" do
+        # The shim wraps router.fire/2 in safe_router_fire/2; even if
+        # the call returns an unexpected shape the legacy result must
+        # be returned to the caller (the historian dispatch).
+        Application.put_env(:platform, :responsibility_router_enabled, true)
+        _agent = create_agent(%{system_events: ["historian"]})
+
+        {:ok, _pid} =
+          start_supervised({SystemEventScheduler, check_interval_ms: :timer.hours(24)})
+
+        # fire_now/1 should return the legacy result regardless of
+        # router state (the registry is disabled in tests so router
+        # will return {:error, :unknown_responsibility}).
+        assert :ok = SystemEventScheduler.fire_now("historian")
+      end
+    end
   end
 
   # ── Fan-out via list_active_workspaces (no DB) ─────────────────────────────

@@ -1416,4 +1416,46 @@ defmodule Platform.Responsibilities.RouterTest do
       assert reloaded.last_successful_fire_at == fired_at
     end
   end
+
+  # M8 stage 2 (ADR-0041): `fire/2` is the lookup-and-fire convenience
+  # the dual-write shim uses. It accepts either the canonical string
+  # key or the atom shorthand (memory_daily_summary →
+  # "memory.daily_summary"), looks the row up, and funnels through
+  # the same `fire_trigger` pipeline as the cron tick.
+  describe "fire/2 lookup-and-fire" do
+    test "returns {:error, :unknown_responsibility} when no row matches" do
+      log =
+        capture_log([level: :info], fn ->
+          assert {:error, :unknown_responsibility} =
+                   Router.fire("does.not.exist", %{kind: :cron})
+        end)
+
+      assert log =~ "fire/2 no row for key="
+    end
+
+    test "fires the matched row through fire_trigger when present" do
+      key = unique_key()
+      _row = insert!(%{key: key})
+
+      log =
+        capture_log([level: :info], fn ->
+          # No assignee → unfilled telemetry + :ok return.
+          assert :ok = Router.fire(key, %{kind: :cron})
+        end)
+
+      assert log =~ "unfilled responsibility=#{key}"
+    end
+
+    test "atom shorthand canonicalises first-underscore → dot" do
+      # Same atom shape the dual-write shim uses: :memory_daily_summary →
+      # "memory.daily_summary". The fixture row uses an analogous shape.
+      key = "atomshim.verb_#{System.unique_integer([:positive])}"
+      atom_shorthand = String.to_atom(String.replace(key, ".", "_"))
+      _row = insert!(%{key: key})
+
+      capture_log([level: :info], fn ->
+        assert :ok = Router.fire(atom_shorthand, %{kind: :cron})
+      end)
+    end
+  end
 end

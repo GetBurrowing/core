@@ -22,6 +22,14 @@ defmodule Platform.Meetings.Summarizer do
   alias Platform.Agents.Providers.Anthropic
   alias Platform.Agents.Providers.Ollama
   alias Platform.Agents.Providers.OpenAI
+  alias Platform.Responsibilities.Router, as: ResponsibilityRouter
+
+  # Canonical responsibility key for the M8 router-fired summary path.
+  # Mirrors `Platform.Responsibilities.Handlers.MeetingSummarize.key/0`
+  # as a literal so the legacy bridge doesn't take a compile-time
+  # dependency on the handler module (the handler depends on this
+  # module transitively for `complete_transcript/2`).
+  @meetings_summarize_key "meetings.summarize"
 
   @doc """
   Spawns an async task to summarize the given transcript.
@@ -66,8 +74,77 @@ defmodule Platform.Meetings.Summarizer do
   @doc """
   Synchronous summary generation — used by tests and when you want to
   wait for the result.
+
+  ## M8 stage 4 dual-write bridge
+
+  When `Platform.Responsibilities.Router.responsibility_filled?(:meetings_summarize)`
+  returns `true` (i.e. an agent holds the Meeting Scribe role or an
+  operator has set an explicit override), we delegate the dispatch to
+  the router's `meetings.summarize` responsibility and skip the legacy
+  body entirely. The router then runs the new external-dispatch +
+  `Handlers.MeetingSummarize.handle_output/3` path.
+
+  When the responsibility is **unfilled** we fall through to the
+  legacy LLM path below — the webhook controller continues to call
+  `summarize_async/1` (which calls into here) so this bridge is the
+  ONLY seam needed for the M8 cutover. Per the M8 task description we
+  keep the legacy body in place for one stable release window before
+  deletion.
   """
   def run_summary(%{id: id, space_id: space_id, segments: segments} = _transcript) do
+    if router_meetings_summarize_filled?() do
+      Logger.info(
+        "[Summarizer] Delegating transcript #{id} to ResponsibilityRouter " <>
+          "(meetings.summarize is filled)"
+      )
+
+      case ResponsibilityRouter.fire(:meetings_summarize, %{
+             kind: :event_topic,
+             topic: "meeting:finished",
+             payload: %{
+               transcript_id: id,
+               space_id: space_id
+             }
+           }) do
+        :ok ->
+          :ok
+
+        {:error, reason} ->
+          Logger.warning(
+            "[Summarizer] Router fire failed for transcript #{id} reason=#{inspect(reason)} " <>
+              "— falling back to legacy body"
+          )
+
+          run_summary_legacy(id, space_id, segments)
+      end
+    else
+      run_summary_legacy(id, space_id, segments)
+    end
+  end
+
+  # Guarded router lookup so a stripped build (no Responsibilities
+  # context loaded) or a tests/env that hasn't wired the router still
+  # exercises the legacy path. The router itself returns `false` for
+  # unknown keys; this guard short-circuits if the module isn't loaded
+  # at all.
+  defp router_meetings_summarize_filled? do
+    if Code.ensure_loaded?(ResponsibilityRouter) and
+         function_exported?(ResponsibilityRouter, :responsibility_filled?, 1) do
+      ResponsibilityRouter.responsibility_filled?(@meetings_summarize_key)
+    else
+      false
+    end
+  rescue
+    error ->
+      Logger.warning(
+        "[Summarizer] responsibility_filled? raised — falling back to legacy: " <>
+          Exception.message(error)
+      )
+
+      false
+  end
+
+  defp run_summary_legacy(id, space_id, segments) do
     Logger.info(
       "[Summarizer] Generating summary for transcript #{id} (#{length(segments)} segments)"
     )

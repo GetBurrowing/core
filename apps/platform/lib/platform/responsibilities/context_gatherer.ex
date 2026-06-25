@@ -6,11 +6,13 @@ defmodule Platform.Responsibilities.ContextGatherer do
 
   ## Built-in symbolic names
 
-    * `:org_identity`     → `Platform.Org.Context.get_file("ORG_IDENTITY.md")`
-    * `:recent_journal`   → `Platform.Org.Context.recent_memory(7, [])`
-    * `:current_message`  → `Platform.Chat.get_message(trigger_meta[:message_id])`
-    * `:current_meeting`  → `Platform.Meetings.get_meeting(trigger_meta[:meeting_id])`
-    * `:trigger_payload`  → `trigger_meta[:payload]`
+    * `:org_identity`       → `Platform.Org.Context.get_file("ORG_IDENTITY.md")`
+    * `:recent_journal`     → `Platform.Org.Context.recent_memory(7, [])`
+    * `:meeting_transcript` → `Platform.Meetings.get_transcript(trigger_meta[:transcript_id])`
+       formatted via `Platform.Meetings.SummaryPrompt.format_segments/1`
+    * `:current_message`    → `Platform.Chat.get_message(trigger_meta[:message_id])`
+    * `:current_meeting`    → `Platform.Meetings.get_meeting(trigger_meta[:meeting_id])`
+    * `:trigger_payload`    → `trigger_meta[:payload]`
 
   Names are deliberately atoms (not strings) so we can pattern-match on
   them without `String.to_atom/1` churn. The Router can pass the
@@ -110,6 +112,29 @@ defmodule Platform.Responsibilities.ContextGatherer do
     end)
   end
 
+  defp resolve(:meeting_transcript, trigger_meta) do
+    case Map.get(trigger_meta, :transcript_id) || Map.get(trigger_meta, "transcript_id") do
+      id when is_binary(id) ->
+        safe_call(fn ->
+          if Code.ensure_loaded?(Platform.Meetings) and
+               function_exported?(Platform.Meetings, :get_transcript, 1) do
+            case Platform.Meetings.get_transcript(id) do
+              nil ->
+                nil
+
+              %Platform.Meetings.Transcript{} = transcript ->
+                format_transcript_payload(transcript)
+            end
+          else
+            nil
+          end
+        end)
+
+      _ ->
+        nil
+    end
+  end
+
   defp resolve(:current_message, trigger_meta) do
     case Map.get(trigger_meta, :message_id) || Map.get(trigger_meta, "message_id") do
       id when is_binary(id) ->
@@ -151,6 +176,34 @@ defmodule Platform.Responsibilities.ContextGatherer do
   defp resolve(name, _trigger_meta) do
     Logger.warning("[ContextGatherer] unknown name=#{inspect(name)}, returning nil")
     nil
+  end
+
+  # Build the materialised `:meeting_transcript` payload from a Transcript
+  # row — formatted speaker-attributed text plus the segment count and
+  # cumulative duration. Handlers downstream (e.g. M8 MeetingSummarize)
+  # consume the `formatted_text` field directly when constructing the
+  # LLM prompt; the count/duration are surfaced for telemetry.
+  defp format_transcript_payload(%Platform.Meetings.Transcript{} = transcript) do
+    segments = transcript.segments || []
+
+    %{
+      transcript_id: transcript.id,
+      formatted_text: Platform.Meetings.SummaryPrompt.format_segments(segments),
+      segment_count: length(segments),
+      duration_ms: transcript_duration_ms(segments)
+    }
+  end
+
+  defp transcript_duration_ms([]), do: 0
+
+  defp transcript_duration_ms(segments) do
+    segments
+    |> Enum.map(fn segment ->
+      end_time = segment["end_time"] || segment[:end_time] || 0
+      if is_number(end_time), do: end_time, else: 0
+    end)
+    |> Enum.max(fn -> 0 end)
+    |> trunc()
   end
 
   # Wrap upstream lookups so a missing module / raised exception

@@ -302,7 +302,22 @@ defmodule PlatformWeb.LivekitWebhookController do
   end
 
   defp maybe_trigger_summary(transcript) do
-    Platform.Meetings.Summarizer.summarize_async(transcript)
+    _ = Platform.Meetings.Summarizer.summarize_async(transcript)
+
+    # M8 stage 3: broadcast the canonical `:meeting_finished` event so
+    # the responsibility router can fire `meetings.summarize`. The
+    # broadcast is UNCONDITIONAL — it's a notification, not a request,
+    # and downstream subscribers (router, LiveViews) decide whether to
+    # act. The legacy `Summarizer.summarize_async/1` call above stays
+    # as the fallback path until the cutover monitor proves the
+    # router-fired path is stable.
+    Platform.Meetings.PubSub.broadcast_meeting_finished(transcript.room_id, %{
+      transcript_id: transcript.id,
+      room_id: transcript.room_id,
+      space_id: Map.get(transcript, :space_id)
+    })
+
+    :ok
   end
 
   # LiveKit room names in Suite follow `space-<uuid>` — recover the space
