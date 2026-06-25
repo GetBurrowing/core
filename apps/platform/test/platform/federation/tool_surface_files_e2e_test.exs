@@ -454,7 +454,9 @@ defmodule Platform.Federation.ToolSurfaceFilesE2ETest do
       # snippet for each hit contains "cinnabar"
       for hit <- hits do
         assert is_binary(hit.snippet), "snippet for #{hit.file_id} must be a string"
-        assert hit.snippet =~ "cinnabar", "snippet must contain query term: #{inspect(hit.snippet)}"
+
+        assert hit.snippet =~ "cinnabar",
+               "snippet must contain query term: #{inspect(hit.snippet)}"
       end
 
       # Empty-result query returns count=0 + empty hits, NOT :not_found
