@@ -35,9 +35,9 @@ defmodule Platform.Federation.ToolSurfaceTest do
   defp unique_slug, do: "test-#{System.unique_integer([:positive])}"
 
   describe "tool_definitions/0" do
-    test "returns all 76 tools with required components" do
+    test "returns all 80 tools with required components" do
       tools = ToolSurface.tool_definitions()
-      assert length(tools) == 76
+      assert length(tools) == 80
 
       tool_names = Enum.map(tools, & &1.name)
       assert "send_media" in tool_names
@@ -105,6 +105,16 @@ defmodule Platform.Federation.ToolSurfaceTest do
       assert "attachment.upload_inline" in tool_names
       assert "attachment.upload_start" in tool_names
       assert "attachment.get_inline" in tool_names
+      # Files MCP bundle — six file_* tools (file_list + file_get_text predate this
+      # task; file_get_metadata, file_search, file_add, file_delete landed via
+      # task 019efba0 stages 1-4). Keep this set in sync with the registered
+      # bundle in tool_surface.ex.
+      assert "file_list" in tool_names
+      assert "file_get_text" in tool_names
+      assert "file_get_metadata" in tool_names
+      assert "file_search" in tool_names
+      assert "file_add" in tool_names
+      assert "file_delete" in tool_names
 
       for tool <- tools do
         assert Map.has_key?(tool, :name)

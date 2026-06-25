@@ -23,6 +23,43 @@ defmodule Platform.Federation.ToolSurfaceFilesTest do
   alias Platform.Tasks
   alias Platform.Tenancy
 
+  # Stub memory provider — returns whatever the test injects via app env so
+  # the file_search tests can assert behavior without standing up the real
+  # embedding service. Mirrors the StubProvider pattern in
+  # Platform.Org.Wiki.SearchTest.
+  defmodule MemoryStub do
+    @behaviour Platform.Memory.Provider
+
+    @impl true
+    def ingest(_entries, _config), do: {:ok, 0}
+
+    @impl true
+    def search(_query, _opts, config) do
+      case Keyword.get(config, :search_results, []) do
+        {:error, _reason} = err -> err
+        list when is_list(list) -> {:ok, list}
+      end
+    end
+
+    @impl true
+    def delete(_ids, _config), do: {:ok, 0}
+
+    @impl true
+    def health(_c), do: :ok
+  end
+
+  defp install_memory_stub(results) do
+    prev = Application.get_env(:platform, :memory_service, [])
+
+    Application.put_env(:platform, :memory_service,
+      provider: MemoryStub,
+      search_results: results
+    )
+
+    on_exit(fn -> Application.put_env(:platform, :memory_service, prev) end)
+    :ok
+  end
+
   # ── Setup ──────────────────────────────────────────────────────────────
 
   setup do
@@ -131,12 +168,16 @@ defmodule Platform.Federation.ToolSurfaceFilesTest do
   # ── tool_definitions/0 — bundle registration ──────────────────────────
 
   describe "tool_definitions/0 — files bundle" do
-    test "registers file_list + file_get_text under the files bundle" do
+    test "registers file_list + file_get_text + file_get_metadata + file_search + file_add + file_delete under the files bundle" do
       tools = ToolSurface.list_tools(["files"])
       names = MapSet.new(tools, & &1.name)
 
       assert "file_list" in names
       assert "file_get_text" in names
+      assert "file_get_metadata" in names
+      assert "file_search" in names
+      assert "file_add" in names
+      assert "file_delete" in names
       assert Enum.all?(tools, &(&1.bundle == "files"))
     end
 
@@ -324,6 +365,974 @@ defmodule Platform.Federation.ToolSurfaceFilesTest do
 
       assert {:ok, %{text: "root sees it"}} =
                ToolSurface.execute("file_get_text", %{"file_id" => file.id}, context_for(agent))
+    end
+
+    test ":no_text_available suggestion now mentions binary: true",
+         %{agent_sxi: agent, project_a: project} do
+      file = create_file(project, ingest_status: "pending")
+
+      assert {:error, %{code: :no_text_available, suggestion: suggestion}} =
+               ToolSurface.execute("file_get_text", %{"file_id" => file.id}, context_for(agent))
+
+      assert suggestion =~ "binary: true"
+    end
+  end
+
+  # ── file_get_text (binary: true) ──────────────────────────────────────
+
+  describe "execute/3 file_get_text — binary: true" do
+    setup :with_tmp_storage_root
+
+    test "returns base64 bytes for a small text file even when extracted text exists",
+         %{agent_sxi: agent, project_a: project} do
+      body = "alpha-binary-body"
+      file = create_file_with_bytes(project, body, filename: "alpha.txt")
+      # Also seed the text cache to prove binary: true skips it.
+      {:ok, _} = Files.upsert_extracted_text(file.id, "ignored extracted body", nil)
+
+      assert {:ok,
+              %{
+                file_id: id,
+                content_type: "text/plain",
+                byte_size: size,
+                data_base64: data_b64,
+                original_filename: "alpha.txt"
+              }} =
+               ToolSurface.execute(
+                 "file_get_text",
+                 %{"file_id" => file.id, "binary" => true},
+                 context_for(agent)
+               )
+
+      assert id == file.id
+      assert size == byte_size(body)
+      assert Base.decode64!(data_b64) == body
+    end
+
+    test "returns raw bytes when no platform_file_texts row exists",
+         %{agent_sxi: agent, project_a: project} do
+      # A binary blob the extractor wouldn't index — no text upsert.
+      body = <<0x50, 0x4B, 0x03, 0x04, "fake-zip-bytes">>
+
+      file =
+        create_file_with_bytes(project, body,
+          filename: "bundle.zip",
+          content_type: "application/zip"
+        )
+
+      refute Files.fetch_extracted_text(file.id)
+
+      assert {:ok,
+              %{
+                file_id: id,
+                content_type: "application/zip",
+                data_base64: data_b64
+              }} =
+               ToolSurface.execute(
+                 "file_get_text",
+                 %{"file_id" => file.id, "binary" => true},
+                 context_for(agent)
+               )
+
+      assert id == file.id
+      assert Base.decode64!(data_b64) == body
+    end
+
+    test "rejects oversize file with :too_large", %{agent_sxi: agent, project_a: project} do
+      # Synthesize a 26 MB row WITHOUT writing 26 MB of bytes — the size
+      # check runs against `file.byte_size` before the storage read, so
+      # we can lie about the on-disk size and still exercise the cap.
+      file =
+        create_file_with_bytes(project, "tiny-on-disk",
+          filename: "fake-big.bin",
+          content_type: "application/octet-stream",
+          byte_size_override: 26 * 1024 * 1024
+        )
+
+      assert {:error, %{code: :too_large, recoverable: false, limit: limit}} =
+               ToolSurface.execute(
+                 "file_get_text",
+                 %{"file_id" => file.id, "binary" => true},
+                 context_for(agent)
+               )
+
+      assert limit == 25 * 1024 * 1024
+    end
+
+    test "binary: true with sibling-tenant file returns unauthorized",
+         %{agent_sxi: agent, project_b: project} do
+      file = create_file_with_bytes(project, "tenant-isolated", filename: "isolated.bin")
+
+      assert {:error, %{error: msg, recoverable: false}} =
+               ToolSurface.execute(
+                 "file_get_text",
+                 %{"file_id" => file.id, "binary" => true},
+                 context_for(agent)
+               )
+
+      assert msg =~ "unauthorized"
+    end
+
+    test "binary: true with unknown file_id returns :not_found", %{agent_root: agent} do
+      bogus = Ecto.UUID.generate()
+
+      assert {:error, %{code: :not_found}} =
+               ToolSurface.execute(
+                 "file_get_text",
+                 %{"file_id" => bogus, "binary" => true},
+                 context_for(agent)
+               )
+    end
+  end
+
+  # Creates a file row AND persists real bytes through Storage.put so
+  # binary: true can stream them back. Distinct from `create_file/2`
+  # which fabricates a storage_key without touching the adapter — fine
+  # for text-cache tests but useless when we actually need bytes.
+  defp create_file_with_bytes(project, body, opts) do
+    filename = Keyword.fetch!(opts, :filename)
+    content_type = Keyword.get(opts, :content_type, "text/plain")
+
+    {:ok, %{storage_key: storage_key, content_hash: hash, byte_size: real_size}} =
+      Platform.Files.Storage.put({:binary, body}, project.id, filename: filename)
+
+    {:ok, file} =
+      Files.create_file(%{
+        project_id: project.id,
+        org_id: project.org_id,
+        name: filename,
+        original_filename: filename,
+        content_type: content_type,
+        byte_size: Keyword.get(opts, :byte_size_override, real_size),
+        storage_key: storage_key,
+        content_hash: hash,
+        ingest_status: Keyword.get(opts, :ingest_status, "ingested")
+      })
+
+    file
+  end
+
+  # ── file_get_metadata ─────────────────────────────────────────────────
+
+  describe "execute/3 file_get_metadata" do
+    test "returns the canonical metadata shape for a same-org agent",
+         %{agent_sxi: agent, project_a: project} do
+      file =
+        create_file(project,
+          filename: "metadata-doc.pdf",
+          content_type: "application/pdf",
+          body: "pdf-body"
+        )
+
+      assert {:ok, row} =
+               ToolSurface.execute(
+                 "file_get_metadata",
+                 %{"file_id" => file.id},
+                 context_for(agent)
+               )
+
+      # Required public fields are present.
+      for key <- [
+            :file_id,
+            :project_id,
+            :org_id,
+            :name,
+            :original_filename,
+            :content_type,
+            :byte_size,
+            :content_hash,
+            :ingest_status,
+            :uploaded_by_user_id,
+            :inserted_at,
+            :updated_at
+          ] do
+        assert Map.has_key?(row, key), "file_metadata missing key #{inspect(key)}"
+      end
+
+      # storage_key is an internal handle — must never leak.
+      refute Map.has_key?(row, :storage_key)
+
+      assert row.file_id == file.id
+      assert row.project_id == project.id
+      assert row.org_id == project.org_id
+      assert row.original_filename == "metadata-doc.pdf"
+      assert row.content_type == "application/pdf"
+      assert row.byte_size == byte_size("pdf-body")
+      assert row.ingest_status == "ingested"
+    end
+
+    test "unknown file_id returns :not_found", %{agent_root: agent} do
+      bogus = Ecto.UUID.generate()
+
+      assert {:error, %{code: :not_found, recoverable: false, error: msg}} =
+               ToolSurface.execute(
+                 "file_get_metadata",
+                 %{"file_id" => bogus},
+                 context_for(agent)
+               )
+
+      assert msg =~ "file_get_metadata"
+    end
+
+    test "missing file_id returns recoverable arg error", %{agent_root: agent} do
+      assert {:error, %{recoverable: true, error: msg}} =
+               ToolSurface.execute("file_get_metadata", %{}, context_for(agent))
+
+      assert msg =~ "file_id"
+    end
+
+    test "tenant-pinned agent reading a sibling-org file gets unauthorized envelope",
+         %{agent_sxi: agent, project_b: project} do
+      file = create_file(project, filename: "sibling-meta.txt")
+
+      assert {:error, %{error: msg, recoverable: false}} =
+               ToolSurface.execute(
+                 "file_get_metadata",
+                 %{"file_id" => file.id},
+                 context_for(agent)
+               )
+
+      assert msg =~ "unauthorized"
+    end
+
+    test "root-equivalent agent reads cross-tenant file metadata",
+         %{agent_root: agent, project_b: project} do
+      file = create_file(project, filename: "cross-tenant.txt")
+
+      assert {:ok, %{file_id: id, project_id: pid}} =
+               ToolSurface.execute(
+                 "file_get_metadata",
+                 %{"file_id" => file.id},
+                 context_for(agent)
+               )
+
+      assert id == file.id
+      assert pid == project.id
+    end
+
+    test "file_id of a non-string type returns recoverable arg error",
+         %{agent_root: agent} do
+      assert {:error, %{recoverable: true, error: msg}} =
+               ToolSurface.execute(
+                 "file_get_metadata",
+                 %{"file_id" => 12_345},
+                 context_for(agent)
+               )
+
+      assert msg =~ "file_id"
+    end
+  end
+
+  # ── file_search ───────────────────────────────────────────────────────
+
+  describe "execute/3 file_search" do
+    test "returns hits with snippets sourced from cached extracted text",
+         %{agent_sxi: agent, project_a: project} do
+      f1 = create_file(project, filename: "alpha.txt", text: "alpha rate-limit cap is 100 rps")
+      _f2 = create_file(project, filename: "beta.txt", text: "beta unrelated body")
+      f3 = create_file(project, filename: "gamma.txt", text: "gamma rate-limit cap doc")
+
+      # Memory provider returns 2 hits — f1 (highest score) and f3.
+      install_memory_stub([
+        %{entry_id: f1.id, score: 0.91},
+        %{entry_id: f3.id, score: 0.74}
+      ])
+
+      assert {:ok, %{project_id: pid, count: 2, hits: hits}} =
+               ToolSurface.execute(
+                 "file_search",
+                 %{"project_id" => project.id, "query" => "rate-limit cap"},
+                 context_for(agent)
+               )
+
+      assert pid == project.id
+      # f2 not in returned hits — only the two the memory stub returned.
+      assert Enum.map(hits, & &1.file_id) == [f1.id, f3.id]
+
+      [first, second] = hits
+
+      for key <- [:file_id, :name, :original_filename, :content_type, :snippet, :score] do
+        assert Map.has_key?(first, key), "file_search hit missing key #{inspect(key)}"
+      end
+
+      assert first.score == 0.91
+      assert first.snippet =~ "rate-limit cap"
+      assert second.snippet =~ "rate-limit cap"
+      assert first.original_filename == "alpha.txt"
+
+      # f2's body shouldn't be in any returned snippet.
+      refute Enum.any?(hits, fn h -> h.snippet =~ "unrelated" end)
+    end
+
+    test "returns empty hits list (NOT :not_found) when memory returns nothing",
+         %{agent_sxi: agent, project_a: project} do
+      _f = create_file(project, text: "anything")
+      install_memory_stub([])
+
+      assert {:ok, %{project_id: pid, count: 0, hits: []}} =
+               ToolSurface.execute(
+                 "file_search",
+                 %{"project_id" => project.id, "query" => "nothing matches"},
+                 context_for(agent)
+               )
+
+      assert pid == project.id
+    end
+
+    test "drops hits whose underlying file row has been deleted",
+         %{agent_sxi: agent, project_a: project} do
+      f1 = create_file(project, filename: "kept.txt", text: "kept body")
+      stale_id = Ecto.UUID.generate()
+
+      install_memory_stub([
+        %{entry_id: stale_id, score: 0.99},
+        %{entry_id: f1.id, score: 0.5}
+      ])
+
+      assert {:ok, %{count: 1, hits: [hit]}} =
+               ToolSurface.execute(
+                 "file_search",
+                 %{"project_id" => project.id, "query" => "kept"},
+                 context_for(agent)
+               )
+
+      assert hit.file_id == f1.id
+    end
+
+    test "drops hits whose file lives in a different project (defense-in-depth)",
+         %{agent_root: agent, project_a: a, project_b: b} do
+      _in_a = create_file(a, filename: "in-a.txt", text: "in-a body")
+      in_b = create_file(b, filename: "in-b.txt", text: "in-b body")
+
+      # Memory stub leaks a cross-project id — the dispatch must drop it.
+      install_memory_stub([%{entry_id: in_b.id, score: 0.8}])
+
+      assert {:ok, %{project_id: pid, count: 0, hits: []}} =
+               ToolSurface.execute(
+                 "file_search",
+                 %{"project_id" => a.id, "query" => "anything"},
+                 context_for(agent)
+               )
+
+      assert pid == a.id
+    end
+
+    test "returns auth error for SXI agent searching Wayne-tech project",
+         %{agent_sxi: agent, project_b: project} do
+      _ = create_file(project, text: "sibling-body")
+      install_memory_stub([])
+
+      assert {:error, %{error: msg, recoverable: false}} =
+               ToolSurface.execute(
+                 "file_search",
+                 %{"project_id" => project.id, "query" => "anything"},
+                 context_for(agent)
+               )
+
+      assert msg =~ "unauthorized"
+    end
+
+    test "rejects explicit org_id mismatch from tenant-pinned agent",
+         %{agent_sxi: agent, project_a: project, wayne_tech: pt} do
+      _ = create_file(project, text: "body")
+      install_memory_stub([])
+
+      assert {:error, %{error: msg, recoverable: false}} =
+               ToolSurface.execute(
+                 "file_search",
+                 %{"project_id" => project.id, "org_id" => pt.id, "query" => "x"},
+                 context_for(agent)
+               )
+
+      assert msg =~ "unauthorized"
+    end
+
+    test "unknown project_id returns :not_found", %{agent_root: agent} do
+      bogus = Ecto.UUID.generate()
+      install_memory_stub([])
+
+      assert {:error, %{code: :not_found, recoverable: false}} =
+               ToolSurface.execute(
+                 "file_search",
+                 %{"project_id" => bogus, "query" => "anything"},
+                 context_for(agent)
+               )
+    end
+
+    test "missing query returns recoverable arg error",
+         %{agent_sxi: agent, project_a: project} do
+      assert {:error, %{recoverable: true, error: msg}} =
+               ToolSurface.execute(
+                 "file_search",
+                 %{"project_id" => project.id},
+                 context_for(agent)
+               )
+
+      assert msg =~ "query"
+    end
+
+    test "missing project_id returns recoverable arg error", %{agent_root: agent} do
+      assert {:error, %{recoverable: true, error: msg}} =
+               ToolSurface.execute("file_search", %{"query" => "anything"}, context_for(agent))
+
+      assert msg =~ "project_id"
+    end
+
+    test "honors the limit argument when forwarding to Memory",
+         %{agent_sxi: agent, project_a: project} do
+      files =
+        for i <- 1..5 do
+          create_file(project, filename: "f#{i}.txt", text: "body #{i}")
+        end
+
+      # Stub returns 5 — caller asks for 3 — Memory provider would have
+      # capped to 3, but our stub ignores opts. Assert that at least the
+      # dispatch wires limit through without erroring and returns all 5
+      # when the stub doesn't honor the cap (the cap is enforced by the
+      # real provider; this test only proves the wiring doesn't blow up).
+      install_memory_stub(Enum.map(files, &%{entry_id: &1.id, score: 0.5}))
+
+      assert {:ok, %{count: 5}} =
+               ToolSurface.execute(
+                 "file_search",
+                 %{"project_id" => project.id, "query" => "body", "limit" => 3},
+                 context_for(agent)
+               )
+    end
+
+    test "surfaces a recoverable error envelope when Memory.search errors",
+         %{agent_sxi: agent, project_a: project} do
+      install_memory_stub({:error, :memory_service_down})
+
+      assert {:error, %{code: :memory_service_error, recoverable: true, error: msg}} =
+               ToolSurface.execute(
+                 "file_search",
+                 %{"project_id" => project.id, "query" => "anything"},
+                 context_for(agent)
+               )
+
+      assert msg =~ "memory service"
+    end
+
+    test "snippet is nil when the file has no cached extracted text",
+         %{agent_sxi: agent, project_a: project} do
+      file = create_file(project, ingest_status: "pending")
+      install_memory_stub([%{entry_id: file.id, score: 0.6}])
+
+      assert {:ok, %{count: 1, hits: [hit]}} =
+               ToolSurface.execute(
+                 "file_search",
+                 %{"project_id" => project.id, "query" => "anything"},
+                 context_for(agent)
+               )
+
+      assert hit.file_id == file.id
+      assert is_nil(hit.snippet)
+    end
+
+    test "snippet truncates to 240 graphemes when body is longer",
+         %{agent_sxi: agent, project_a: project} do
+      long_body = String.duplicate("x", 1_000)
+      file = create_file(project, text: long_body)
+      install_memory_stub([%{entry_id: file.id, score: 0.5}])
+
+      assert {:ok, %{hits: [hit]}} =
+               ToolSurface.execute(
+                 "file_search",
+                 %{"project_id" => project.id, "query" => "x"},
+                 context_for(agent)
+               )
+
+      assert String.length(hit.snippet) == 240
+    end
+  end
+
+  # ── file_add ──────────────────────────────────────────────────────────
+
+  # Redirects `Platform.Files.Storage` writes to a per-test tmp dir so the
+  # inline branch can actually persist bytes without needing the prod
+  # `/data/platform/chat_uploads` mount.
+  defp with_tmp_storage_root(_context) do
+    root =
+      Path.join(
+        System.tmp_dir!(),
+        "platform-file-add-test-#{System.unique_integer([:positive])}"
+      )
+
+    File.mkdir_p!(root)
+    previous = Application.get_env(:platform, :chat_attachments_root)
+    Application.put_env(:platform, :chat_attachments_root, root)
+
+    on_exit(fn ->
+      File.rm_rf!(root)
+
+      if previous,
+        do: Application.put_env(:platform, :chat_attachments_root, previous),
+        else: Application.delete_env(:platform, :chat_attachments_root)
+    end)
+
+    :ok
+  end
+
+  describe "execute/3 file_add (inline branch)" do
+    setup :with_tmp_storage_root
+
+    test "persists inline bytes, returns state: ready, fires async ingest",
+         %{agent_sxi: agent, project_a: project} do
+      install_memory_stub([])
+      body = "hello inline body #{u()}"
+      data_b64 = Base.encode64(body)
+
+      assert {:ok,
+              %{
+                id: file_id,
+                project_id: pid,
+                state: "ready",
+                deduplicated: false,
+                byte_size: size,
+                content_hash: hash,
+                content_type: "text/plain"
+              }} =
+               ToolSurface.execute(
+                 "file_add",
+                 %{
+                   "project_id" => project.id,
+                   "filename" => "inline-#{u()}.txt",
+                   "content_type" => "text/plain",
+                   "data_base64" => data_b64
+                 },
+                 context_for(agent)
+               )
+
+      assert pid == project.id
+      assert size == byte_size(body)
+      assert is_binary(hash) and hash != ""
+
+      file = Files.get_file(file_id)
+      assert file
+      assert file.project_id == project.id
+      assert file.org_id == project.org_id
+      # Status starts at "pending" right after insert; the synchronous
+      # Ingester.run/1 path (no TaskSupervisor in test env) may have
+      # flipped it to "ingested" by the time we read.
+      assert file.ingest_status in ["pending", "ingested"]
+    end
+
+    test "dedup branch returns the same id with deduplicated: true",
+         %{agent_sxi: agent, project_a: project} do
+      install_memory_stub([])
+      body = "dedup-body-#{u()}"
+      data_b64 = Base.encode64(body)
+      filename = "dedup-#{u()}.txt"
+
+      assert {:ok, %{id: first_id, deduplicated: false}} =
+               ToolSurface.execute(
+                 "file_add",
+                 %{
+                   "project_id" => project.id,
+                   "filename" => filename,
+                   "content_type" => "text/plain",
+                   "data_base64" => data_b64
+                 },
+                 context_for(agent)
+               )
+
+      # Synchronously flip the prior row to "ingested" so the dedup
+      # find_ingested_sibling helper sees it. The first call's async
+      # ingest path may not have completed in test env.
+      {:ok, _} =
+        first_id
+        |> Files.get_file()
+        |> Files.update_ingest_status("ingested")
+
+      assert {:ok, %{id: second_id, deduplicated: true}} =
+               ToolSurface.execute(
+                 "file_add",
+                 %{
+                   "project_id" => project.id,
+                   "filename" => "dedup-second-#{u()}.txt",
+                   "content_type" => "text/plain",
+                   "data_base64" => data_b64
+                 },
+                 context_for(agent)
+               )
+
+      assert second_id == first_id
+    end
+
+    test "rejects oversize inline payload with recoverable error",
+         %{agent_sxi: agent, project_a: project} do
+      prev = Application.get_env(:platform, :inline_upload_max_bytes, 25 * 1024 * 1024)
+      Application.put_env(:platform, :inline_upload_max_bytes, 16)
+      on_exit(fn -> Application.put_env(:platform, :inline_upload_max_bytes, prev) end)
+
+      data_b64 = Base.encode64(String.duplicate("x", 64))
+
+      assert {:error, %{recoverable: true, error: msg}} =
+               ToolSurface.execute(
+                 "file_add",
+                 %{
+                   "project_id" => project.id,
+                   "filename" => "big.txt",
+                   "content_type" => "text/plain",
+                   "data_base64" => data_b64
+                 },
+                 context_for(agent)
+               )
+
+      assert msg =~ "inline payload"
+    end
+
+    test "invalid base64 returns recoverable arg error",
+         %{agent_sxi: agent, project_a: project} do
+      assert {:error, %{recoverable: true, error: msg}} =
+               ToolSurface.execute(
+                 "file_add",
+                 %{
+                   "project_id" => project.id,
+                   "filename" => "bad.txt",
+                   "content_type" => "text/plain",
+                   "data_base64" => "this is not (((valid base64)))"
+                 },
+                 context_for(agent)
+               )
+
+      assert msg =~ "base64"
+    end
+  end
+
+  describe "execute/3 file_add (presigned branch)" do
+    setup :with_tmp_storage_root
+
+    test "reserves a pending row and returns an upload_url",
+         %{agent_sxi: agent, project_a: project} do
+      assert {:ok,
+              %{
+                id: file_id,
+                project_id: pid,
+                upload_url: url,
+                expires_at: %DateTime{} = expires_at,
+                max_bytes: max_bytes,
+                state: "pending"
+              }} =
+               ToolSurface.execute(
+                 "file_add",
+                 %{
+                   "project_id" => project.id,
+                   "filename" => "big-pdf-#{u()}.pdf",
+                   "content_type" => "application/pdf",
+                   "byte_size" => 5 * 1024 * 1024
+                 },
+                 context_for(agent)
+               )
+
+      assert pid == project.id
+      assert is_binary(url) and String.length(url) > 0
+      assert max_bytes > 0
+      assert DateTime.compare(expires_at, DateTime.utc_now()) == :gt
+
+      file = Files.get_file(file_id)
+      assert file
+      assert file.ingest_status == "pending"
+      assert is_nil(file.content_hash)
+      assert file.byte_size == 5 * 1024 * 1024
+      assert file.content_type == "application/pdf"
+    end
+
+    test "rejects oversize presigned byte_size",
+         %{agent_sxi: agent, project_a: project} do
+      prev = Application.get_env(:platform, :upload_max_bytes, 500 * 1024 * 1024)
+      Application.put_env(:platform, :upload_max_bytes, 1024)
+      on_exit(fn -> Application.put_env(:platform, :upload_max_bytes, prev) end)
+
+      assert {:error, %{recoverable: true, error: msg}} =
+               ToolSurface.execute(
+                 "file_add",
+                 %{
+                   "project_id" => project.id,
+                   "filename" => "huge.bin",
+                   "content_type" => "application/octet-stream",
+                   "byte_size" => 4096
+                 },
+                 context_for(agent)
+               )
+
+      assert msg =~ "byte_size"
+    end
+
+    test "neither data_base64 nor byte_size returns recoverable arg error",
+         %{agent_sxi: agent, project_a: project} do
+      assert {:error, %{recoverable: true, error: msg}} =
+               ToolSurface.execute(
+                 "file_add",
+                 %{
+                   "project_id" => project.id,
+                   "filename" => "x.txt",
+                   "content_type" => "text/plain"
+                 },
+                 context_for(agent)
+               )
+
+      assert msg =~ "data_base64"
+      assert msg =~ "byte_size"
+    end
+
+    test "data_base64 takes precedence when both are passed",
+         %{agent_sxi: agent, project_a: project} do
+      install_memory_stub([])
+      body = "precedence-body-#{u()}"
+      data_b64 = Base.encode64(body)
+
+      assert {:ok, %{state: "ready", byte_size: size}} =
+               ToolSurface.execute(
+                 "file_add",
+                 %{
+                   "project_id" => project.id,
+                   "filename" => "both.txt",
+                   "content_type" => "text/plain",
+                   "data_base64" => data_b64,
+                   "byte_size" => 99_999_999
+                 },
+                 context_for(agent)
+               )
+
+      # Actual decoded length wins, not the declared byte_size.
+      assert size == byte_size(body)
+    end
+  end
+
+  describe "execute/3 file_add — authorization & arg validation" do
+    setup :with_tmp_storage_root
+
+    test "rejects SXI agent writing into a Wayne-tech project",
+         %{agent_sxi: agent, project_b: project} do
+      assert {:error, %{error: msg, recoverable: false}} =
+               ToolSurface.execute(
+                 "file_add",
+                 %{
+                   "project_id" => project.id,
+                   "filename" => "x.txt",
+                   "content_type" => "text/plain",
+                   "data_base64" => Base.encode64("body")
+                 },
+                 context_for(agent)
+               )
+
+      assert msg =~ "unauthorized"
+    end
+
+    test "rejects explicit org_id mismatch from tenant-pinned agent",
+         %{agent_sxi: agent, project_a: project, wayne_tech: pt} do
+      assert {:error, %{error: msg, recoverable: false}} =
+               ToolSurface.execute(
+                 "file_add",
+                 %{
+                   "project_id" => project.id,
+                   "org_id" => pt.id,
+                   "filename" => "x.txt",
+                   "content_type" => "text/plain",
+                   "data_base64" => Base.encode64("body")
+                 },
+                 context_for(agent)
+               )
+
+      assert msg =~ "unauthorized"
+    end
+
+    test "unknown project_id returns :not_found", %{agent_root: agent} do
+      bogus = Ecto.UUID.generate()
+
+      assert {:error, %{code: :not_found, recoverable: false}} =
+               ToolSurface.execute(
+                 "file_add",
+                 %{
+                   "project_id" => bogus,
+                   "filename" => "x.txt",
+                   "content_type" => "text/plain",
+                   "data_base64" => Base.encode64("body")
+                 },
+                 context_for(agent)
+               )
+    end
+
+    test "missing project_id returns recoverable arg error",
+         %{agent_root: agent} do
+      assert {:error, %{recoverable: true, error: msg}} =
+               ToolSurface.execute(
+                 "file_add",
+                 %{
+                   "filename" => "x.txt",
+                   "content_type" => "text/plain",
+                   "data_base64" => Base.encode64("body")
+                 },
+                 context_for(agent)
+               )
+
+      assert msg =~ "project_id"
+    end
+
+    test "missing filename returns recoverable arg error",
+         %{agent_root: agent, project_a: project} do
+      assert {:error, %{recoverable: true, error: msg}} =
+               ToolSurface.execute(
+                 "file_add",
+                 %{
+                   "project_id" => project.id,
+                   "content_type" => "text/plain",
+                   "data_base64" => Base.encode64("body")
+                 },
+                 context_for(agent)
+               )
+
+      assert msg =~ "filename"
+    end
+
+    test "missing content_type returns recoverable arg error",
+         %{agent_root: agent, project_a: project} do
+      assert {:error, %{recoverable: true, error: msg}} =
+               ToolSurface.execute(
+                 "file_add",
+                 %{
+                   "project_id" => project.id,
+                   "filename" => "x.txt",
+                   "data_base64" => Base.encode64("body")
+                 },
+                 context_for(agent)
+               )
+
+      assert msg =~ "content_type"
+    end
+  end
+
+  # ── file_delete ───────────────────────────────────────────────────────
+
+  describe "execute/3 file_delete" do
+    test "deletes the row and returns deleted: true",
+         %{agent_sxi: agent, project_a: project} do
+      file = create_file(project, filename: "doomed.txt", body: "doomed body")
+      assert Files.get_file(file.id), "precondition: file row exists"
+
+      assert {:ok, %{file_id: id, deleted: true}} =
+               ToolSurface.execute(
+                 "file_delete",
+                 %{"file_id" => file.id},
+                 context_for(agent)
+               )
+
+      assert id == file.id
+      refute Files.get_file(file.id), "row should be gone after delete"
+    end
+
+    test "idempotent re-delete returns :not_found (no crash)",
+         %{agent_sxi: agent, project_a: project} do
+      file = create_file(project, filename: "twice.txt", body: "twice body")
+
+      assert {:ok, %{deleted: true}} =
+               ToolSurface.execute(
+                 "file_delete",
+                 %{"file_id" => file.id},
+                 context_for(agent)
+               )
+
+      # Wrap the second call in a try/rescue to prove it returns an
+      # envelope rather than crashing the caller process.
+      result =
+        try do
+          ToolSurface.execute(
+            "file_delete",
+            %{"file_id" => file.id},
+            context_for(agent)
+          )
+        rescue
+          e -> {:raised, e}
+        catch
+          kind, payload -> {:caught, kind, payload}
+        end
+
+      assert {:error, %{code: :not_found, recoverable: false, error: msg}} = result
+      assert msg =~ "file not found"
+    end
+
+    test "cross-org SXI agent deleting a Wayne-tech file is rejected; row still exists",
+         %{agent_sxi: agent, project_b: project} do
+      file = create_file(project, filename: "protect-only.txt", body: "off-limits")
+
+      assert {:error, %{error: msg, recoverable: false}} =
+               ToolSurface.execute(
+                 "file_delete",
+                 %{"file_id" => file.id},
+                 context_for(agent)
+               )
+
+      assert msg =~ "unauthorized"
+      assert Files.get_file(file.id), "row must NOT be deleted on auth failure"
+    end
+
+    test "rejects explicit org_id mismatch from tenant-pinned agent",
+         %{agent_sxi: agent, project_a: project, wayne_tech: pt} do
+      file = create_file(project, filename: "pinned.txt", body: "pinned")
+
+      assert {:error, %{error: msg, recoverable: false}} =
+               ToolSurface.execute(
+                 "file_delete",
+                 %{"file_id" => file.id, "org_id" => pt.id},
+                 context_for(agent)
+               )
+
+      assert msg =~ "unauthorized"
+      assert Files.get_file(file.id)
+    end
+
+    test "root-equivalent agent deletes a cross-tenant file",
+         %{agent_root: agent, project_b: project} do
+      file = create_file(project, filename: "root-reach.txt", body: "root-reach")
+
+      assert {:ok, %{deleted: true}} =
+               ToolSurface.execute(
+                 "file_delete",
+                 %{"file_id" => file.id},
+                 context_for(agent)
+               )
+
+      refute Files.get_file(file.id)
+    end
+
+    test "unknown file_id returns :not_found", %{agent_root: agent} do
+      bogus = Ecto.UUID.generate()
+
+      assert {:error, %{code: :not_found, recoverable: false}} =
+               ToolSurface.execute(
+                 "file_delete",
+                 %{"file_id" => bogus},
+                 context_for(agent)
+               )
+    end
+
+    test "missing file_id returns recoverable arg error", %{agent_root: agent} do
+      assert {:error, %{recoverable: true, error: msg}} =
+               ToolSurface.execute(
+                 "file_delete",
+                 %{},
+                 context_for(agent)
+               )
+
+      assert msg =~ "file_id"
+    end
+
+    test "broadcasts {:file_deleted, file_id} on the project topic",
+         %{agent_sxi: agent, project_a: project} do
+      file = create_file(project, filename: "broadcast.txt", body: "broadcast")
+      :ok = Files.subscribe_project(project.id)
+
+      assert {:ok, %{deleted: true}} =
+               ToolSurface.execute(
+                 "file_delete",
+                 %{"file_id" => file.id},
+                 context_for(agent)
+               )
+
+      assert_receive {:file_deleted, file_id}, 500
+      assert file_id == file.id
     end
   end
 end

@@ -36,7 +36,10 @@ defmodule PlatformWeb.FilesLive do
   selected project. `Platform.Files.Ingester` broadcasts
   `{:file_ingested, file_id}` (and `{:file_ingest_failed, …}`) when a
   run resolves; the LV re-fetches the row and updates the stream so
-  the "Ingesting…" pill flips to "Ready" without a refresh.
+  the "Ingesting…" pill flips to "Ready" without a refresh. The
+  `file_delete` MCP tool (ADR-0042 Stage 4) emits
+  `{:file_deleted, file_id}` on the same topic; the LV drops the row
+  from local state and clears the detail pane if it was selected.
 
   ## Out of scope
 
@@ -225,6 +228,28 @@ defmodule PlatformWeb.FilesLive do
 
   def handle_info({:file_ingest_failed, file_id, _reason}, socket) do
     {:noreply, refresh_file(socket, file_id)}
+  end
+
+  def handle_info({:file_deleted, file_id}, socket) do
+    files = Enum.reject(socket.assigns.files, &(&1.id == file_id))
+
+    selected_drop? =
+      case socket.assigns.selected_file do
+        %Files.File{id: ^file_id} -> true
+        _ -> false
+      end
+
+    socket =
+      if selected_drop? do
+        socket
+        |> assign(:selected_file, nil)
+        |> assign(:selected_file_text, nil)
+        |> assign(:highlight_snippet, nil)
+      else
+        socket
+      end
+
+    {:noreply, assign(socket, :files, files)}
   end
 
   def handle_info(_other, socket), do: {:noreply, socket}

@@ -152,6 +152,24 @@ defmodule PlatformWeb.FilesLiveTest do
       html_after = render(view)
       assert html_after =~ "Failed"
     end
+
+    test "file_deleted message drops the row from the LV", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      project = seed_project("fabrikam", "Delete Refresh Project")
+      file = seed_file(project, %{name: "going-away.txt"})
+
+      {:ok, view, html} = live(conn, ~p"/files/#{project.id}")
+
+      assert html =~ "going-away.txt"
+
+      # The file_delete MCP tool removes the row + broadcasts on the
+      # project topic. Simulate the post-row-delete + broadcast sequence.
+      {:ok, _} = Files.delete_file(file)
+      :ok = Files.broadcast_deleted(project.id, file.id)
+
+      html_after = render(view)
+      refute html_after =~ "going-away.txt"
+    end
   end
 
   describe "FAB + dropzone markers" do

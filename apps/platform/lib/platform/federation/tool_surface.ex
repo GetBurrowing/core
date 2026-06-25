@@ -224,7 +224,7 @@ defmodule Platform.Federation.ToolSurface do
       %{
         name: "file_get_text",
         description:
-          "Fetch the extracted text body for a single file (ADR 0042). Returns the full body or — when `page` is supplied and the file has a per-page split (PDF, gdoc) — that page only. Reads from the `platform_file_texts` cache populated at ingest time; no re-extraction.",
+          "Fetch the extracted text body for a single file (ADR 0042). Returns the full body or — when `page` is supplied and the file has a per-page split (PDF, gdoc) — that page only. Reads from the `platform_file_texts` cache populated at ingest time; no re-extraction. Set `binary: true` to skip the text cache and return the raw bytes base64-encoded — agents almost always want text, so reach for `binary: true` only when handing the file off to another tool that needs the actual bytes (zip, image, raw blob the extractor can't read).",
         parameters: %{
           file_id: %{
             type: "string",
@@ -235,14 +235,146 @@ defmodule Platform.Federation.ToolSurface do
             type: "integer",
             required: false,
             description:
-              "1-based page index. Only honored for paginated formats (PDF, gdoc); flow formats (CSV, text, OCR'd image) return the full body regardless."
+              "1-based page index. Only honored for paginated formats (PDF, gdoc); flow formats (CSV, text, OCR'd image) return the full body regardless. Ignored when `binary: true`."
+          },
+          binary: %{
+            type: "boolean",
+            required: false,
+            description:
+              "Default `false`. When `true`, skip the extracted-text lookup and return the raw bytes as base64 in `data_base64`. Capped at 25 MB — larger files return `:too_large`. Use sparingly: agents nearly always want text."
           }
         },
-        returns: "%{file_id, content_type, text, page?, total_pages?, original_filename}",
+        returns:
+          "Default: %{file_id, content_type, text, page?, total_pages?, original_filename}. With `binary: true`: %{file_id, content_type, byte_size, data_base64, original_filename}.",
         limitations:
-          "Authorization mirrors file_list. Unknown `file_id` → `:not_found`. File not yet ingested / extraction failed → `:no_text_available`. `page` out of range → `:page_out_of_range`. Tenant-pinned agents reading a sibling-org file → `unauthorized: …`.",
+          "Authorization mirrors file_list. Unknown `file_id` → `:not_found`. File not yet ingested / extraction failed → `:no_text_available` (consider retrying with `binary: true` if you just need the raw bytes). `page` out of range → `:page_out_of_range`. Tenant-pinned agents reading a sibling-org file → `unauthorized: …`. `binary: true` over 25 MB → `:too_large` (a presigned-download path is planned but not yet shipped).",
         when_to_use:
-          "When you have a file_id (e.g. from file_list or a memory_search hit with `memory_type=document`) and want to read its extracted text — either the whole body or one specific page."
+          "When you have a file_id (e.g. from file_list or a memory_search hit with `memory_type=document`) and want to read its extracted text — either the whole body or one specific page. Pass `binary: true` for the rare case of needing the raw bytes (e.g. handing a zip off to another tool) — agents nearly always want text."
+      },
+      %{
+        name: "file_get_metadata",
+        description:
+          "Fetch the metadata for a single file (ADR 0042) — richer than the `file_list` row: includes uploader, project/org pin, content hash, and timestamps. Does NOT include `storage_key` (internal) or the extracted text body (use `file_get_text` for that).",
+        parameters: %{
+          file_id: %{
+            type: "string",
+            required: true,
+            description: "UUID of the file row to inspect."
+          }
+        },
+        returns:
+          "%{file_id, project_id, org_id, name, original_filename, content_type, byte_size, content_hash, ingest_status, uploaded_by_user_id, inserted_at, updated_at}",
+        limitations:
+          "Authorization mirrors file_list / file_get_text. Unknown `file_id` → `:not_found`. Tenant-pinned agents reading a sibling-org file → `unauthorized: …`. `storage_key` is intentionally omitted — it's an internal handle into the object store, not a stable public identifier.",
+        when_to_use:
+          "When you have a file_id and want to know the row's properties (uploader, size, MIME-type, ingest status) without pulling the extracted text body."
+      },
+      %{
+        name: "file_search",
+        description:
+          "Semantic search across the extracted text of a project's files (ADR 0042). Delegates to the same embedded corpus the ingester populates (`Platform.Memory.ingest/1`) so results match the chunks indexed at upload time — a parallel SQL ILIKE would diverge. Scoped to a single project and the `document` memory_type so hits never bleed in from journal or page entries.",
+        parameters: %{
+          project_id: %{
+            type: "string",
+            required: true,
+            description:
+              "UUID of the project to search within. Files outside this project are never returned."
+          },
+          query: %{
+            type: "string",
+            required: true,
+            description:
+              "Natural-language search query — embedded server-side and matched against the file chunks."
+          },
+          limit: %{
+            type: "integer",
+            required: false,
+            description: "Max hits to return (default 20, max 100 — mirrors `memory_search`)."
+          },
+          org_id: %{
+            type: "string",
+            required: false,
+            description:
+              "ADR-0042 tenant pin. Optional — when omitted the org is derived from the project. When provided, must match the project's owning org or the call is rejected."
+          }
+        },
+        returns:
+          "%{project_id, count, hits: [%{file_id, name, original_filename, content_type, snippet, score}]}",
+        limitations:
+          "Authorization mirrors file_list / file_get_text. Tenant-pinned agents calling with a sibling-org project return an `unauthorized: …` envelope. Unknown `project_id` returns `:not_found`. Hits whose underlying file row has been deleted are silently dropped (no `:not_found` per-hit). Files not yet ingested are not in the index and therefore not searchable — call `file_list` to enumerate ingest_status. No matches returns an empty `hits` list (NOT `:not_found`).",
+        when_to_use:
+          "When you need to find files in a project by what they contain (semantic match), not by filename — e.g. \"which file mentions the rate-limit cap\". For metadata-only lookups use `file_list` (with `content_type` filter) instead."
+      },
+      %{
+        name: "file_add",
+        description:
+          "Upload a file into a project's document store (ADR 0042). One tool, two branches — pass `data_base64` for the inline path (small bytes, capped at 25 MB) or pass `byte_size` alone for the presigned-upload path (large files up to 500 MB). Inline branch persists bytes, dedups against prior `(project_id, content_hash)` siblings, fires extract + Memory ingest async, and returns the file id with `state: \"ready\"`. Presigned branch reserves a `platform_files` row in `ingest_status: \"pending\"`, returns an `upload_url` the caller POSTs raw bytes to within `expires_at`, and surfaces `state: \"pending\"` — finalization happens via the upload-controller boot reconciliation / LiveView upload path; the file is not searchable until then.",
+        parameters: %{
+          project_id: %{
+            type: "string",
+            required: true,
+            description:
+              "UUID of the project to add the file under. Authorization mirrors file_list — tenant-pinned agents may only write to projects in their own org."
+          },
+          filename: %{
+            type: "string",
+            required: true,
+            description: "Client-reported filename. Used for display + storage-key derivation."
+          },
+          content_type: %{
+            type: "string",
+            required: true,
+            description:
+              "MIME type (e.g. `\"text/plain\"`, `\"application/pdf\"`). Determines which extractor runs at ingest."
+          },
+          data_base64: %{
+            type: "string",
+            required: false,
+            description:
+              "Base64-encoded bytes for the INLINE branch. Capped at 25 MB. Mutually exclusive with `byte_size` — pass one or the other."
+          },
+          byte_size: %{
+            type: "integer",
+            required: false,
+            description:
+              "Declared upload size in bytes for the PRESIGNED branch. Capped at 500 MB. Required when `data_base64` is absent; ignored when `data_base64` is provided (the actual byte length wins)."
+          },
+          org_id: %{
+            type: "string",
+            required: false,
+            description:
+              "ADR-0042 tenant pin. Optional — when omitted the org is derived from the project. When provided, must match the project's owning org or the call is rejected."
+          }
+        },
+        returns:
+          "INLINE: %{id, project_id, state: \"ready\", deduplicated: boolean, byte_size, content_hash, content_type}. PRESIGNED: %{id, project_id, upload_url, expires_at, max_bytes, state: \"pending\"}.",
+        limitations:
+          "Caller MUST pass exactly one of `data_base64` (inline) or `byte_size` (presigned) — passing neither returns a recoverable arg error; passing both takes the inline branch and ignores `byte_size`. Inline cap is 25 MB; payloads over that should use the presigned branch. Presigned-branch rows are not searchable / readable via file_get_text until bytes finalize (status flips from `pending` → `ingested`). Agent uploads have no `uploaded_by_user_id` — historic uploader tracking only applies to user-driven LiveView uploads. Tenant-pinned agents writing to a sibling-org project → `unauthorized: …` envelope. Unknown `project_id` → `:not_found`.",
+        when_to_use:
+          "When you need to add a document to a project — either by handing bytes directly (small file, e.g. a generated report) or by reserving a slot for the caller to POST a large file separately. Prefer the inline branch unless the file is genuinely large."
+      },
+      %{
+        name: "file_delete",
+        description:
+          "Delete a file (ADR 0042). Removes the underlying R2/S3 object FIRST, then the `platform_files` row. Idempotent — re-deleting a non-existent file returns the standard `:not_found` envelope rather than crashing. Broadcasts `{:file_deleted, file_id}` on the project topic so live UIs (FilesLive) drop the row without a manual refresh.",
+        parameters: %{
+          file_id: %{
+            type: "string",
+            required: true,
+            description: "UUID of the file row to delete."
+          },
+          org_id: %{
+            type: "string",
+            required: false,
+            description:
+              "ADR-0042 tenant pin. Optional — when omitted the org is derived from the file's project. When provided, must match the project's owning org or the call is rejected."
+          }
+        },
+        returns: "%{file_id, deleted: true}",
+        limitations:
+          "Authorization mirrors file_list / file_get_text. Unknown `file_id` → `:not_found` (idempotent — second delete looks the same as a never-existed id). Tenant-pinned agents deleting a sibling-org file → `unauthorized: …` envelope. Storage object deletion is best-effort and `:ok`-on-missing; if the row delete fails after the object is gone the caller sees an error envelope but the bytes are not restored — re-issuing the call clears the row.",
+        when_to_use:
+          "When a file should be removed from a project entirely — either to retract content or to free storage. For just dropping the extracted-text cache without removing the row, use the appropriate Files context helper directly (no public tool for that today)."
       }
     ]
   end
@@ -4646,6 +4778,14 @@ defmodule Platform.Federation.ToolSurface do
   end
 
   def execute("file_get_text", args, context) do
+    if truthy?(Map.get(args, "binary")) do
+      file_get_text_binary(args, context)
+    else
+      file_get_text_text(args, context)
+    end
+  end
+
+  defp file_get_text_text(args, context) do
     with {:ok, file_id} <- require_string(args, "file_id", "file_get_text"),
          file when not is_nil(file) <- Platform.Files.get_file(file_id),
          {:ok, project} <- fetch_project_for_files(file.project_id, "file_get_text"),
@@ -4670,9 +4810,159 @@ defmodule Platform.Federation.ToolSurface do
                code: :no_text_available,
                recoverable: true,
                suggestion:
-                 "The file may still be ingesting (ingest_status=\"pending\") or extraction may have failed. Re-check ingest_status via file_list before retrying."
+                 "The file may still be ingesting (ingest_status=\"pending\") or extraction may have failed. Re-check ingest_status via file_list before retrying, or pass `binary: true` to fetch the raw bytes instead."
              }}
         end
+
+      {:error, _} = err ->
+        err
+    end
+  end
+
+  # `binary: true` branch — skip the extracted-text cache and stream the
+  # bytes back base64-encoded. Capped at 25 MB to mirror
+  # `attachment.get_inline`; bigger files will need a presigned download
+  # path (deferred follow-up).
+  defp file_get_text_binary(args, context) do
+    with {:ok, file_id} <- require_string(args, "file_id", "file_get_text"),
+         %Platform.Files.File{} = file <- Platform.Files.get_file(file_id),
+         {:ok, project} <- fetch_project_for_files(file.project_id, "file_get_text"),
+         :ok <- authorize_file_access(context, project),
+         :ok <- check_inline_file_read_size(file.byte_size),
+         {:ok, bytes} <- read_file_bytes(file) do
+      {:ok,
+       %{
+         file_id: file.id,
+         content_type: file.content_type,
+         original_filename: file.original_filename,
+         byte_size: byte_size(bytes),
+         data_base64: Base.encode64(bytes)
+       }}
+    else
+      nil ->
+        file_not_found_error(Map.get(args, "file_id"))
+
+      {:error, _} = err ->
+        err
+    end
+  end
+
+  def execute("file_get_metadata", args, context) do
+    with {:ok, file_id} <- require_string(args, "file_id", "file_get_metadata"),
+         %Platform.Files.File{} = file <- Platform.Files.get_file(file_id),
+         {:ok, project} <- fetch_project_for_files(file.project_id, "file_get_metadata"),
+         :ok <- authorize_file_access(context, project) do
+      {:ok, file_metadata(file)}
+    else
+      nil ->
+        file_metadata_not_found_error(Map.get(args, "file_id"))
+
+      {:error, _} = err ->
+        err
+    end
+  end
+
+  def execute("file_search", args, context) do
+    with {:ok, project_id} <- require_string(args, "project_id", "file_search"),
+         {:ok, query} <- require_string(args, "query", "file_search"),
+         {:ok, project} <- fetch_project_for_files(project_id, "file_search"),
+         :ok <- authorize_org_filter_for_explicit(args, context),
+         :ok <- authorize_file_access(context, project) do
+      limit = Map.get(args, "limit") |> normalize_limit(20, 100)
+
+      memory_opts =
+        [
+          project_id: project.id,
+          org_id: project.org_id,
+          memory_type: "document",
+          limit: limit
+        ]
+        |> Enum.reject(fn {_k, v} -> is_nil(v) end)
+
+      case Platform.Memory.search(query, memory_opts) do
+        {:ok, results} ->
+          hits =
+            results
+            |> Enum.map(&format_file_hit(&1, project.id))
+            |> Enum.reject(&is_nil/1)
+
+          {:ok,
+           %{
+             project_id: project.id,
+             count: length(hits),
+             hits: hits
+           }}
+
+        {:error, reason} ->
+          {:error,
+           %{
+             error: "file_search: memory service error (#{inspect(reason)})",
+             code: :memory_service_error,
+             recoverable: true,
+             suggestion:
+               "The embedding service is unavailable or returned an error. Retry shortly; fall back to file_list if it persists."
+           }}
+      end
+    end
+  end
+
+  def execute("file_add", args, context) do
+    with {:ok, project_id} <- require_string(args, "project_id", "file_add"),
+         {:ok, filename} <- require_string(args, "filename", "file_add"),
+         {:ok, content_type} <- require_string(args, "content_type", "file_add"),
+         {:ok, project} <- fetch_project_for_files(project_id, "file_add"),
+         :ok <- authorize_org_filter_for_explicit(args, context),
+         :ok <- authorize_file_access(context, project) do
+      cond do
+        is_binary(Map.get(args, "data_base64")) ->
+          file_add_inline(args, project, filename, content_type)
+
+        is_integer(Map.get(args, "byte_size")) and Map.get(args, "byte_size") > 0 ->
+          file_add_presigned(args, project, filename, content_type)
+
+        true ->
+          {:error,
+           %{
+             error:
+               "file_add: pass either `data_base64` (inline branch) or `byte_size` (presigned branch)",
+             recoverable: true,
+             suggestion:
+               "For small files pass base64-encoded bytes as `data_base64`; for files over 25 MB pass `byte_size` (positive integer) to reserve a presigned upload slot."
+           }}
+      end
+    end
+  end
+
+  def execute("file_delete", args, context) do
+    with {:ok, file_id} <- require_string(args, "file_id", "file_delete"),
+         %Platform.Files.File{} = file <- Platform.Files.get_file(file_id),
+         {:ok, project} <- fetch_project_for_files(file.project_id, "file_delete"),
+         :ok <- authorize_org_filter_for_explicit(args, context),
+         :ok <- authorize_file_access(context, project) do
+      # Object first, row second. If the row delete fails we'd rather not
+      # have orphaned a hard-to-find bytes-only object. Storage keys embed
+      # the project_id so this can't blow away a sibling row's bytes in
+      # another project.
+      _ = Platform.Files.Storage.delete(file.storage_key)
+
+      case Platform.Files.delete_file(file) do
+        {:ok, _deleted} ->
+          _ = Platform.Files.broadcast_deleted(project.id, file.id)
+          {:ok, %{file_id: file.id, deleted: true}}
+
+        {:error, changeset} ->
+          {:error,
+           %{
+             error: "file_delete: row delete failed (#{inspect(changeset.errors)})",
+             code: :delete_failed,
+             recoverable: true,
+             suggestion:
+               "Underlying object may have been removed; re-issuing the call clears the row when the conflict resolves."
+           }}
+      end
+    else
+      nil ->
+        file_delete_not_found_error(Map.get(args, "file_id"))
 
       {:error, _} = err ->
         err
@@ -5092,6 +5382,85 @@ defmodule Platform.Federation.ToolSurface do
     }
   end
 
+  # Richer single-row view returned by `file_get_metadata`. Intentionally
+  # omits `storage_key` (internal handle into the object-store adapter) and
+  # the extracted text body (use `file_get_text` for that).
+  defp file_metadata(%Platform.Files.File{} = file) do
+    %{
+      file_id: file.id,
+      project_id: file.project_id,
+      org_id: file.org_id,
+      name: file.name || file.original_filename,
+      original_filename: file.original_filename,
+      content_type: file.content_type,
+      byte_size: file.byte_size,
+      content_hash: file.content_hash,
+      ingest_status: file.ingest_status,
+      uploaded_by_user_id: file.uploaded_by_user_id,
+      inserted_at: format_datetime(file.inserted_at),
+      updated_at: format_datetime(file.updated_at)
+    }
+  end
+
+  # Maps a `Platform.Memory` search_result row to the public `file_search`
+  # hit shape. Returns `nil` when the underlying file row has been deleted
+  # under the search (skip-and-continue, not a 404) or when the file is in
+  # a different project than the one we searched (defense-in-depth — the
+  # Memory query already filters by project_id but a stale index entry
+  # could otherwise leak across projects). The snippet is sourced from the
+  # cached extracted text via `Platform.Files.fetch_extracted_text/1` —
+  # the same store `file_get_text` reads from, so callers see consistent
+  # bodies between the two surfaces.
+  defp format_file_hit(memory_result, project_id) do
+    entry_id =
+      Map.get(memory_result, :entry_id) || Map.get(memory_result, "entry_id")
+
+    score = Map.get(memory_result, :score) || Map.get(memory_result, "score")
+
+    case entry_id && Platform.Files.get_file(entry_id) do
+      %Platform.Files.File{project_id: ^project_id} = file ->
+        %{
+          file_id: file.id,
+          name: file.name || file.original_filename,
+          original_filename: file.original_filename,
+          content_type: file.content_type,
+          snippet: file_snippet(file, memory_result),
+          score: score
+        }
+
+      _ ->
+        nil
+    end
+  end
+
+  # Snippet preference order: explicit `:excerpt` on the memory result (if
+  # the provider starts returning per-hit highlights), then the first 240
+  # graphemes of the cached extracted text body. When no text is cached
+  # the snippet is `nil` — the file is in the index but the text cache
+  # row was lost (e.g. a backfill that skipped upsert_extracted_text).
+  defp file_snippet(%Platform.Files.File{id: file_id}, memory_result) do
+    case Map.get(memory_result, :excerpt) || Map.get(memory_result, "excerpt") do
+      excerpt when is_binary(excerpt) and excerpt != "" ->
+        excerpt
+
+      _ ->
+        case Platform.Files.fetch_extracted_text(file_id) do
+          %Platform.Files.Text{text: text} when is_binary(text) ->
+            truncate_snippet(text)
+
+          _ ->
+            nil
+        end
+    end
+  end
+
+  defp truncate_snippet(text) do
+    text
+    |> String.graphemes()
+    |> Enum.take(240)
+    |> Enum.join()
+  end
+
   defp file_not_found_error(file_id) do
     {:error,
      %{
@@ -5101,6 +5470,300 @@ defmodule Platform.Federation.ToolSurface do
        suggestion: "Confirm the file_id — use file_list to enumerate the project's files."
      }}
   end
+
+  defp file_metadata_not_found_error(file_id) do
+    {:error,
+     %{
+       error: "file_get_metadata: file not found (#{inspect(file_id)})",
+       code: :not_found,
+       recoverable: false,
+       suggestion: "Confirm the file_id — use file_list to enumerate the project's files."
+     }}
+  end
+
+  defp file_delete_not_found_error(file_id) do
+    {:error,
+     %{
+       error: "file_delete: file not found (#{inspect(file_id)})",
+       code: :not_found,
+       recoverable: false,
+       suggestion:
+         "Idempotent: a re-delete of an already-deleted file yields this envelope. Confirm the file_id via file_list if you expected the row to exist."
+     }}
+  end
+
+  # ── file_add helpers (ADR-0042 Files MCP Stage 3) ─────────────────────
+
+  # Inline branch: decode base64 → persist via Storage.put → dedup-or-insert
+  # the platform_files row → fire async ingest. Returns the ready row.
+  defp file_add_inline(args, project, filename, content_type) do
+    with {:ok, bytes} <- decode_file_base64(Map.get(args, "data_base64")),
+         :ok <- check_inline_file_size(byte_size(bytes)) do
+      case Platform.Files.Storage.put({:binary, bytes}, project.id, filename: filename) do
+        {:ok, %{storage_key: storage_key, content_hash: hash, byte_size: size}} ->
+          case Platform.Files.find_ingested_sibling(project.id, hash) do
+            %Platform.Files.File{} = sibling ->
+              # Dedup: drop the just-written bytes (Storage.put landed under
+              # a fresh storage_key — the canonical row points at its own
+              # key, so the new key is orphaned). Best-effort delete.
+              _ = Platform.Files.Storage.delete(storage_key)
+
+              {:ok, file_add_result_ready(sibling, true)}
+
+            nil ->
+              create_attrs = %{
+                project_id: project.id,
+                org_id: project.org_id,
+                uploaded_by_user_id: nil,
+                name: filename,
+                original_filename: filename,
+                content_type: content_type,
+                byte_size: size,
+                storage_key: storage_key,
+                content_hash: hash,
+                ingest_status: "pending"
+              }
+
+              case Platform.Files.create_file(create_attrs) do
+                {:ok, file} ->
+                  :ok = Platform.Files.Ingester.ingest_async(file)
+                  {:ok, file_add_result_ready(file, false)}
+
+                {:error, %Ecto.Changeset{} = cs} ->
+                  _ = Platform.Files.Storage.delete(storage_key)
+
+                  {:error,
+                   %{
+                     error: "file_add: insert failed (#{inspect(cs.errors)})",
+                     recoverable: true,
+                     suggestion:
+                       "Validation error inserting the platform_files row — inspect the errors map and retry with corrected input."
+                   }}
+              end
+          end
+
+        {:error, reason} ->
+          {:error,
+           %{
+             error: "file_add: persist failed (#{inspect(reason)})",
+             recoverable: true,
+             suggestion: "The storage adapter rejected the bytes. Retry shortly."
+           }}
+      end
+    end
+  end
+
+  # Presigned branch: build a deterministic storage_key, reserve a pending
+  # row (no content_hash yet — the Stage 3 migration allows NULL when
+  # ingest_status="pending"), and return a presigned upload URL.
+  defp file_add_presigned(args, project, filename, content_type) do
+    byte_size_arg = Map.get(args, "byte_size")
+
+    with :ok <- check_presigned_file_size(byte_size_arg) do
+      file_id = Ecto.UUID.generate()
+      storage_key = Platform.Files.Storage.build_key(project.id, file_id, filename)
+
+      create_attrs = %{
+        project_id: project.id,
+        org_id: project.org_id,
+        uploaded_by_user_id: nil,
+        name: filename,
+        original_filename: filename,
+        content_type: content_type,
+        byte_size: byte_size_arg,
+        storage_key: storage_key,
+        ingest_status: "pending"
+      }
+
+      case Platform.Files.create_file(create_attrs) do
+        {:ok, file} ->
+          case Platform.Files.Storage.presigned_url(storage_key,
+                 max_bytes: presigned_file_max_bytes(),
+                 ttl_s: presigned_file_ttl_seconds()
+               ) do
+            {:ok, %{url: url, expires_at: expires_at}} ->
+              {:ok,
+               %{
+                 id: file.id,
+                 project_id: project.id,
+                 upload_url: url,
+                 expires_at: expires_at,
+                 max_bytes: presigned_file_max_bytes(),
+                 state: "pending"
+               }}
+
+            {:error, reason} ->
+              _ = Platform.Repo.delete(file)
+
+              {:error,
+               %{
+                 error: "file_add: presign failed (#{inspect(reason)})",
+                 recoverable: true,
+                 suggestion: "Storage adapter rejected the presign request. Retry shortly."
+               }}
+          end
+
+        {:error, %Ecto.Changeset{} = cs} ->
+          {:error,
+           %{
+             error: "file_add: insert failed (#{inspect(cs.errors)})",
+             recoverable: true,
+             suggestion:
+               "Validation error inserting the platform_files row — inspect the errors map and retry with corrected input."
+           }}
+      end
+    end
+  end
+
+  defp file_add_result_ready(%Platform.Files.File{} = file, dedup?) do
+    %{
+      id: file.id,
+      project_id: file.project_id,
+      state: "ready",
+      deduplicated: dedup?,
+      byte_size: file.byte_size,
+      content_hash: file.content_hash,
+      content_type: file.content_type
+    }
+  end
+
+  defp decode_file_base64(s) when is_binary(s) do
+    case Base.decode64(s, padding: false) do
+      {:ok, bytes} ->
+        {:ok, bytes}
+
+      :error ->
+        case Base.decode64(s) do
+          {:ok, bytes} ->
+            {:ok, bytes}
+
+          :error ->
+            {:error,
+             %{
+               error: "file_add: `data_base64` is not valid base64",
+               recoverable: true,
+               suggestion: "Pass base64-encoded bytes for the inline branch."
+             }}
+        end
+    end
+  end
+
+  defp check_inline_file_size(size) do
+    limit = inline_file_max_bytes()
+
+    if size <= limit do
+      :ok
+    else
+      {:error,
+       %{
+         error:
+           "file_add: inline payload exceeds limit (#{size} > #{limit} bytes); use the `byte_size` (presigned) branch instead",
+         recoverable: true,
+         limit: limit
+       }}
+    end
+  end
+
+  defp check_presigned_file_size(size) when is_integer(size) and size > 0 do
+    limit = presigned_file_max_bytes()
+
+    if size <= limit do
+      :ok
+    else
+      {:error,
+       %{
+         error: "file_add: `byte_size` exceeds max (#{size} > #{limit} bytes)",
+         recoverable: true,
+         limit: limit
+       }}
+    end
+  end
+
+  defp check_presigned_file_size(_),
+    do:
+      {:error,
+       %{
+         error: "file_add: `byte_size` must be a positive integer",
+         recoverable: true,
+         suggestion: "Pass a positive integer for the declared upload size."
+       }}
+
+  defp inline_file_max_bytes,
+    do: Application.get_env(:platform, :inline_upload_max_bytes, 25 * 1024 * 1024)
+
+  # Read cap for `file_get_text` with `binary: true`. Mirrors
+  # `Platform.Chat.Attachments.ToolHandlers.@inline_read_max_bytes` so the
+  # two inline-read paths stay consistent — bumping one without the other
+  # would make the cap reachable through one tool but not the other.
+  @inline_file_read_max_bytes 25 * 1024 * 1024
+
+  defp check_inline_file_read_size(size) do
+    cond do
+      is_integer(size) and size <= @inline_file_read_max_bytes ->
+        :ok
+
+      is_integer(size) ->
+        {:error,
+         %{
+           error:
+             "file_get_text: file exceeds inline read cap (#{size} > #{@inline_file_read_max_bytes} bytes)",
+           code: :too_large,
+           recoverable: false,
+           limit: @inline_file_read_max_bytes,
+           suggestion:
+             "Files over #{@inline_file_read_max_bytes} bytes can't be returned inline. A presigned-download path is planned but not yet shipped."
+         }}
+
+      true ->
+        {:error,
+         %{
+           error: "file_get_text: file has no recorded byte_size; cannot enforce inline read cap",
+           code: :no_byte_size,
+           recoverable: false,
+           suggestion:
+             "The file row is missing `byte_size` — likely a not-yet-finalized presigned upload. Re-check ingest_status via file_list before retrying."
+         }}
+    end
+  end
+
+  defp read_file_bytes(%Platform.Files.File{storage_key: key}) do
+    case Platform.Files.Storage.get(key) do
+      {:ok, stream} ->
+        bytes =
+          stream
+          |> Enum.to_list()
+          |> IO.iodata_to_binary()
+
+        {:ok, bytes}
+
+      {:error, reason} ->
+        {:error,
+         %{
+           error: "file_get_text: storage read failed (#{inspect(reason)})",
+           code: :storage_read_failed,
+           recoverable: true,
+           suggestion: "The storage adapter rejected the read. Retry shortly."
+         }}
+    end
+  end
+
+  # Loose truthy parser for boolean-ish JSON args. Matches the agent-side
+  # ergonomics seen elsewhere (string "true"/"false" come from
+  # JSON-without-types runtimes).
+  defp truthy?(true), do: true
+  defp truthy?(false), do: false
+  defp truthy?(nil), do: false
+  defp truthy?("true"), do: true
+  defp truthy?("True"), do: true
+  defp truthy?("TRUE"), do: true
+  defp truthy?(1), do: true
+  defp truthy?(_), do: false
+
+  defp presigned_file_max_bytes,
+    do: Application.get_env(:platform, :upload_max_bytes, 500 * 1024 * 1024)
+
+  defp presigned_file_ttl_seconds,
+    do: Application.get_env(:platform, :pending_ttl_seconds, 15 * 60)
 
   defp respond_with_text(file, %Platform.Files.Text{text: text, pages: pages}, page_arg) do
     case parse_page_arg(page_arg) do

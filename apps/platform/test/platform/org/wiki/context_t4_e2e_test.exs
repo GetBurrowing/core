@@ -360,7 +360,14 @@ defmodule Platform.Org.Wiki.ContextT4E2ETest do
       # last_probe_status, last_probe_latency_ms,
       # last_successful_fire_at). Column-only — writers land in M5
       # stage 2 (Platform.ExternalAgents.probe/1) and M6 (dispatcher).
-      "20260624020000_add_probe_columns_to_agents.exs"
+      "20260624020000_add_probe_columns_to_agents.exs",
+      # ADR 0042 — Files MCP Stage 3 (task 019efba0): relax
+      # `platform_files.content_hash` to allow NULL on rows in
+      # `ingest_status = "pending"`. Required by the `file_add` MCP
+      # tool's presigned-upload branch which reserves a row BEFORE
+      # bytes hit storage. The matching check constraint preserves the
+      # post-upload invariant (non-pending rows MUST carry a hash).
+      "20260625120000_allow_null_content_hash_for_pending_files.exs"
     ]
 
     defp t4_root, do: Mix.Project.project_file() |> Path.dirname()

@@ -140,6 +140,18 @@ defmodule Platform.Files do
   end
 
   @doc """
+  Convenience: broadcasts `{:file_deleted, file_id}` on the project
+  topic. Used by the `file_delete` MCP tool (ADR-0042 Stage 4) so live
+  UIs drop the row without a manual refresh — mirrors the
+  `{:file_ingested, file_id}` shape `Platform.Files.Ingester` emits.
+  """
+  @spec broadcast_deleted(String.t(), String.t()) :: :ok | {:error, term()}
+  def broadcast_deleted(project_id, file_id)
+      when is_binary(project_id) and is_binary(file_id) do
+    broadcast_project(project_id, {:file_deleted, file_id})
+  end
+
+  @doc """
   Returns the most recent successfully-ingested file row in `project_id`
   whose `content_hash` matches `hash`, or nil. Used by the Stage 3
   ingester to short-circuit extract + embed when the same bytes have

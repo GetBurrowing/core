@@ -537,7 +537,11 @@ defmodule Platform.Agents.SystemEventSchedulerT6E2ETest do
     # bumped by PR #452 stack_complete (terminal transition tool → 73)
     # bumped by task_attach_canvas stage 3 (+task_attach_canvas,
     # +task_detach_canvas, +task_list_canvases → 76)
-    @t6_baseline_tool_count 76
+    # bumped by Files MCP stage 1 (+file_get_metadata → 77)
+    # bumped by Files MCP stage 2 (+file_search → 78)
+    # bumped by Files MCP stage 3 (+file_add → 79)
+    # bumped by Files MCP stage 4 (+file_delete → 80)
+    @t6_baseline_tool_count 80
 
     defp t6_root, do: Mix.Project.project_file() |> Path.dirname()
 

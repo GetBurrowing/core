@@ -64,7 +64,7 @@ defmodule Platform.Files.File do
     ingest_status
   )a
 
-  @required_fields ~w(project_id content_type byte_size storage_key content_hash)a
+  @required_fields ~w(project_id content_type byte_size storage_key)a
 
   @doc "Valid `ingest_status` values, kept in sync with the DB check constraint."
   @spec valid_ingest_statuses() :: [String.t()]
@@ -74,16 +74,25 @@ defmodule Platform.Files.File do
   Changeset for inserting or updating a `Platform.Files.File`.
 
   Required fields: `:project_id`, `:content_type`, `:byte_size`,
-  `:storage_key`, `:content_hash`. Foreign-key constraints surface as
-  friendly errors when project, org, or user references are missing.
-  Content-hash uniqueness is scoped per project — the same bytes uploaded
-  twice in the same project collide; the same bytes in two different
-  projects each get their own row.
+  `:storage_key`. `:content_hash` is required for any row whose
+  `ingest_status` is NOT `"pending"` — Stage 3 of the Files MCP adds
+  the presigned-upload branch which reserves a row before bytes hit
+  the object store, so the hash isn't known at insert time. Once the
+  row transitions to `"ingested"` / `"failed"` the hash must be set
+  (the DB-level check constraint
+  `platform_files_content_hash_required_when_finalized_check` enforces
+  the same invariant).
+
+  Foreign-key constraints surface as friendly errors when project, org,
+  or user references are missing. Content-hash uniqueness is scoped per
+  project — the same bytes uploaded twice in the same project collide;
+  the same bytes in two different projects each get their own row.
   """
   def changeset(file, attrs) do
     file
     |> cast(attrs, @cast_fields)
     |> validate_required(@required_fields)
+    |> validate_content_hash_when_finalized()
     |> validate_number(:byte_size, greater_than_or_equal_to: 0)
     |> validate_inclusion(:ingest_status, @valid_ingest_statuses)
     |> foreign_key_constraint(:project_id)
@@ -94,5 +103,30 @@ defmodule Platform.Files.File do
       message: "already exists in this project"
     )
     |> unique_constraint(:storage_key, message: "must be unique")
+    |> check_constraint(:content_hash,
+      name: :platform_files_content_hash_required_when_finalized_check,
+      message: "is required once ingest_status is not pending"
+    )
+  end
+
+  # Mirrors the DB-level check constraint added in the Stage 3 migration:
+  # rows in `ingest_status = "pending"` may have NULL `content_hash`; any
+  # other status requires a hash. This runs BEFORE the constraint hits the
+  # DB so changeset users see a friendly error.
+  defp validate_content_hash_when_finalized(changeset) do
+    status =
+      get_field(changeset, :ingest_status) || "pending"
+
+    hash = get_field(changeset, :content_hash)
+
+    if status == "pending" or (is_binary(hash) and hash != "") do
+      changeset
+    else
+      add_error(
+        changeset,
+        :content_hash,
+        "is required once ingest_status is not pending"
+      )
+    end
   end
 end
