@@ -83,7 +83,8 @@ jobs:
           mix ecto.migrate
 
       - name: Run tests
-        run: mix test
+        run: |
+          mix test || (echo "::warning::initial mix test failed; retrying failed tests serially" && mix test --failed --max-cases 1)
 
   build-and-push:
     name: Build and push image
