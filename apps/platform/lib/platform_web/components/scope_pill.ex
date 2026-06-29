@@ -73,10 +73,18 @@ defmodule PlatformWeb.Components.ScopePill do
   Scope → color tokens are centralized in two places:
 
     * `Platform.Tenancy.scope_color/1` returns the Tailwind text-color
-      utility (`text-fabrikam`, `text-soylent`, …) for any scope slug.
+      utility (`text-fabrikam`, `text-soylent`, …) for any scope slug. This is
+      the full-saturation token, reserved for the dot and other non-label use.
     * `apps/platform/assets/css/app.css` defines the matching `bg-*`,
-      `border-*`, `bg-*-active`, `bg-*-dot`, and `hover:bg-*/22`
-      utilities — all anchored to the same `oklch(...)` literals.
+      `border-*`, `bg-*-active`, `bg-*-dot`, `hover:bg-*/22`, and the
+      AA-tuned `text-*-label` utilities — all anchored to the same scope
+      `oklch(...)` hue/chroma.
+
+  The non-active chip label uses `text-<slug>-label` (theme-aware, darker in
+  light mode) rather than `scope_color/1`, so the colored label clears WCAG
+  1.4.3 AA (≥4.5:1) on the 12% `bg-<slug>` tint. `scope_color/1` itself is
+  unchanged — it has a second consumer (`inheritance_pill.ex`) and is not
+  pill-specific.
 
   This component was previously inlining `bg-[oklch(...)]` arbitrary-value
   classes; Stage 2 of Working surfaces plan v4 retired that pattern in
@@ -278,23 +286,29 @@ defmodule PlatformWeb.Components.ScopePill do
   # oklch literals themselves live in `app.css`; if you need to change a
   # scope color, edit it there.
   #
-  # Default (`active: false`) chip uses the 12% color-mix bg, the
-  # full-saturation text, and the 30% color-mix border. Active chip uses
-  # the full-saturation `bg-<slug>-active` (which also bakes in the
-  # contrast-safe text and shadow ring).
+  # Default (`active: false`) chip uses the 12% color-mix bg, the AA-tuned
+  # `text-<slug>-label` text (WCAG 1.4.3 ≥4.5:1 on the tint; darker than
+  # `scope_color/1`'s full-saturation `text-<slug>`), and the 30% color-mix
+  # border. Active chip uses the full-saturation `bg-<slug>-active` (which
+  # also bakes in the contrast-safe text and shadow ring).
 
   defp chip_color_classes(scope, false, :compact) do
     # Compact drops the border — bg fill + dot carry the signal.
+    # Label text uses the AA-tuned `text-<slug>-label` token (darker than
+    # `scope_color/1`'s `text-<slug>`) so it clears WCAG 1.4.3 on the 12% tint.
     [
       "bg-#{slug(scope)}",
-      Platform.Tenancy.scope_color(scope)
+      "text-#{slug(scope)}-label"
     ]
   end
 
   defp chip_color_classes(scope, false, _default) do
+    # See the :compact clause above — `text-<slug>-label` is the AA-safe
+    # label color on the 12% `bg-<slug>` tint (vs scope_color/1's full-sat
+    # `text-<slug>`, which is reserved for the dot / active fill).
     [
       "bg-#{slug(scope)}",
-      Platform.Tenancy.scope_color(scope),
+      "text-#{slug(scope)}-label",
       "border-#{slug(scope)}"
     ]
   end

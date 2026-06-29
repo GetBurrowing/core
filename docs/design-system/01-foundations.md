@@ -77,6 +77,44 @@ The existing inline use of `var(--agent-accent, oklch(82% 0.12 207))` (chat_live
 
 Phase 4 should add a runtime contrast guard: if a user-supplied `--agent-accent` lightness is outside `[35%, 80%]`, clamp it (or warn). Out of scope for Phase 2 spec.
 
+### 1.5 Scope-pill label text — `text-<scope>-label` — **New** (AA-tuned label token)
+
+**Anchored:** `1B-A11Y-5` (same label-on-tint contrast finding as §1.2).
+
+The scope pill (§8.3) renders its label in the scope's own hue on a soft 12 %
+`bg-<scope>` tint. The full-saturation `text-<scope>` token (returned by
+`Platform.Tenancy.scope_color/1`, tuned for the dot and active fill) sat
+**below WCAG 1.4.3 AA** as label text on that tint at `text-xs` — e.g. soylent
+~3.0 : 1 in light. A dedicated, darker **`text-<scope>-label`** token now colors
+the non-active chip label only: same hue + chroma, lower lightness, so the scope
+identity is preserved while the label clears AA (≥ 4.5 : 1).
+
+It is **theme-aware** — the base rule is the light (darker) value, and a
+`[data-theme=dark] .text-<scope>-label` override carries the dark value (only
+soylent is nudged, `0.65 → 0.67` L, to clear AA in dark; the rest reuse the
+existing dark lightness).
+
+| Scope | Light `oklch` | Dark `oklch` | Light ratio¹ | Dark ratio² |
+|---------|----------------|----------------|--------|--------|
+| fabrikam     | `55% 0.16 50`  | `72% 0.16 50`  | 4.61 ✓ | 5.51 ✓ |
+| soylent | `55% 0.20 295` | `67% 0.20 295` | 4.66 ✓ | 4.56 ✓ |
+| wayne_tech | `52% 0.15 240` | `68% 0.15 240` | 4.66 ✓ | 5.11 ✓ |
+| sxi      | `51% 0.15 162` | `70% 0.15 162` | 4.56 ✓ | 5.71 ✓ |
+| paragon | `54% 0.16 95`  | `80% 0.16 95`  | 4.65 ✓ | 7.31 ✓ |
+
+¹ label vs composited 12 % tint over light base-100 `#FFFFFF`.
+² label vs composited 12 % tint over dark base-100 `#171b25`.
+All ten pairings ≥ 4.5 : 1 (OKLCH → sRGB → WCAG 2.x, recomputed 2026-06-23).
+
+**Deliberately out of scope of this token:** the colored dot (`bg-<scope>-dot`)
+stays full-saturation as the WCAG 1.4.1 redundant-colour cue; the active pill
+(`bg-<scope>-active`) bakes its own contrast-safe text; and
+`Platform.Tenancy.scope_color/1` is **unchanged** — it has a second consumer
+(`inheritance_pill.ex`) and is not pill-specific, so a pill-only token is the
+correct seam rather than editing the shared one. Defined in `app.css`
+`@layer utilities`; consumed by `ScopePill.chip_color_classes/3` (`active: false`
+clause only).
+
 ---
 
 ## 2. Typography
@@ -317,7 +355,10 @@ into the iOS home-indicator gesture zone.
 
 `PlatformWeb.Components.ScopePill` takes `size={:default | :compact}`. **Text
 stays `text-xs` (12px) at both sizes** — the caption token (§2.2) is the
-legibility floor; density comes from chrome, never from shrinking type.
+legibility floor; density comes from chrome, never from shrinking type. At that
+size the non-active label uses the AA-tuned `text-<scope>-label` token (§1.5),
+not the full-saturation `text-<scope>`, so the colored label clears WCAG 1.4.3
+on the 12 % `bg-<scope>` tint.
 
 | | `:default` | `:compact` |
 |---|---|---|
@@ -343,6 +384,7 @@ surfaces that need tap-to-filter use `:default`.
 ## Cross-references
 
 - Color contrast computation: anchored to audit `1B-A11Y-5`.
+- Scope-pill label contrast (`text-<scope>-label`, §1.5): anchored to audit `1B-A11Y-5`.
 - Inline-style retrofit (composer textarea): anchored to audit `1A-TOK-INLINE-1`.
 - Component-level state visualization (focus ring, loading, etc.): see `04-accessibility.md` and `02-components.md`.
 - Voice / copy decisions that apply to Display / Empty-state typography: see `03-voice.md`.

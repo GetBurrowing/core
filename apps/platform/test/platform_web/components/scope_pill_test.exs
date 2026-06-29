@@ -46,10 +46,16 @@ defmodule PlatformWeb.Components.ScopePillTest do
   end
 
   describe "single-scope rendering — each scope renders the named utilities" do
+    # The non-active label uses the AA-tuned `text-<scope>-label` token, NOT
+    # the bare full-saturation `text-<scope>` (which is below WCAG 1.4.3 on
+    # the 12% tint). Assert the FULL label token and refute the bare token so
+    # the substring `text-<scope>` ⊂ `text-<scope>-label` can't false-pass.
+    # The refute mirrors the active-state pattern at `bg-fabrikam` below.
     test "fabrikam renders with the fabrikam named utility classes" do
       html = render_pill(%{scope: :fabrikam})
       assert html =~ "bg-fabrikam"
-      assert html =~ "text-fabrikam"
+      assert html =~ "text-fabrikam-label"
+      refute html =~ ~r{\btext-fabrikam(?![-a-z/])}
       assert html =~ "border-fabrikam"
       assert html =~ ">Fabrikam</span>"
     end
@@ -57,7 +63,8 @@ defmodule PlatformWeb.Components.ScopePillTest do
     test "soylent renders with the soylent named utility classes" do
       html = render_pill(%{scope: :soylent})
       assert html =~ "bg-soylent"
-      assert html =~ "text-soylent"
+      assert html =~ "text-soylent-label"
+      refute html =~ ~r{\btext-soylent(?![-a-z/])}
       assert html =~ "border-soylent"
       assert html =~ ">Soylent</span>"
     end
@@ -65,7 +72,8 @@ defmodule PlatformWeb.Components.ScopePillTest do
     test "wayne_tech renders with the wayne-tech named utility classes" do
       html = render_pill(%{scope: :wayne_tech})
       assert html =~ "bg-wayne-tech"
-      assert html =~ "text-wayne-tech"
+      assert html =~ "text-wayne-tech-label"
+      refute html =~ ~r{\btext-wayne-tech(?![-a-z/])}
       assert html =~ "border-wayne-tech"
       assert html =~ ">Wayne-Tech</span>"
     end
@@ -73,7 +81,8 @@ defmodule PlatformWeb.Components.ScopePillTest do
     test "sxi renders with the sxi named utility classes" do
       html = render_pill(%{scope: :sxi})
       assert html =~ "bg-sxi"
-      assert html =~ "text-sxi"
+      assert html =~ "text-sxi-label"
+      refute html =~ ~r{\btext-sxi(?![-a-z/])}
       assert html =~ "border-sxi"
       assert html =~ ">SXI</span>"
     end
@@ -81,7 +90,8 @@ defmodule PlatformWeb.Components.ScopePillTest do
     test "paragon renders with the paragon named utility classes" do
       html = render_pill(%{scope: :paragon})
       assert html =~ "bg-paragon"
-      assert html =~ "text-paragon"
+      assert html =~ "text-paragon-label"
+      refute html =~ ~r{\btext-paragon(?![-a-z/])}
       assert html =~ "border-paragon"
       assert html =~ ">Paragon</span>"
     end

@@ -213,6 +213,38 @@
   .border-paragon { border-color: oklch(80% 0.16 95 / 30%); }
   .bg-paragon-dot { background-color: oklch(80% 0.16 95); }
   .hover\:bg-paragon\/22:hover { background-color: oklch(80% 0.16 95 / 22%); }
+
+  /* ── Scope-pill LABEL text (WCAG 1.4.3 AA, ≥4.5:1) ────────────────────
+     The full-saturation `text-<slug>` token above is tuned for the
+     full-saturation dot / active fill, NOT for label text sitting on the
+     12% `bg-<slug>` tint. On that tint the colored label dipped below AA
+     (e.g. soylent ~3.0:1 light). These `text-<slug>-label` tokens darken
+     the LABEL only — same hue + chroma as `text-<slug>`, lower L — so the
+     pill label meets AA while preserving the scope hue. Used solely by the
+     non-active scope_pill chip (see scope_pill.ex `chip_color_classes/3`,
+     active:false). The dot (`bg-<slug>-dot`) stays full saturation as the
+     WCAG 1.4.1 redundant-color cue, and `bg-<slug>-active` keeps its own
+     baked contrast text. `Platform.Tenancy.scope_color/1` is unchanged.
+
+     LIGHT base = the BASE rule below (12% tint over base-100 #FFFFFF).
+     DARK base  = [data-theme=dark] override (12% tint over base-100 #171b25);
+     only soylent is nudged (0.65→0.67 L) to clear AA in dark.
+
+     Measured contrast (label text vs composited 12% tint over base-100):
+       LIGHT (over #FFFFFF):  fabrikam 4.61 · soylent 4.66 · wayne-tech 4.66 · sxi 4.56 · paragon 4.65
+       DARK  (over #171b25):  fabrikam 5.51 · soylent 4.56 · wayne-tech 5.11 · sxi 5.71 · paragon 7.31
+     All ten ≥ 4.5:1. (Recomputed via OKLCH→sRGB→WCAG, 2026-06-23.) */
+  .text-fabrikam-label     { color: oklch(55% 0.16 50); }
+  .text-soylent-label { color: oklch(55% 0.20 295); }
+  .text-wayne-tech-label { color: oklch(52% 0.15 240); }
+  .text-sxi-label      { color: oklch(51% 0.15 162); }
+  .text-paragon-label { color: oklch(54% 0.16 95); }
+
+  [data-theme=dark] .text-fabrikam-label     { color: oklch(72% 0.16 50); }
+  [data-theme=dark] .text-soylent-label { color: oklch(67% 0.20 295); }
+  [data-theme=dark] .text-wayne-tech-label { color: oklch(68% 0.15 240); }
+  [data-theme=dark] .text-sxi-label      { color: oklch(70% 0.15 162); }
+  [data-theme=dark] .text-paragon-label { color: oklch(80% 0.16 95); }
 }
 
 /* ──────────────────────────────────────────────────────
