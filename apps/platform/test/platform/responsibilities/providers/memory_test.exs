@@ -52,7 +52,8 @@ defmodule Platform.Responsibilities.Providers.MemoryTest do
 
   describe "handle_output/3" do
     test "routes memory.daily_summary to the DailySummary handler" do
-      attrs = %{kind: :cron, date: ~D[2026-06-24]}
+      today = Date.utc_today()
+      attrs = %{kind: :cron, date: today}
 
       assert :ok =
                MemoryProvider.handle_output(

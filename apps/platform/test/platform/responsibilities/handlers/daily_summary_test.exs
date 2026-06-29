@@ -39,7 +39,8 @@ defmodule Platform.Responsibilities.Handlers.DailySummaryTest do
 
   describe "handle_output/3" do
     test "accepts %{\"summary\" => string} and appends a memory entry" do
-      attrs = %{kind: :cron, date: ~D[2026-06-24]}
+      today = Date.utc_today()
+      attrs = %{kind: :cron, date: today}
 
       assert :ok =
                DailySummary.handle_output(
@@ -53,7 +54,7 @@ defmodule Platform.Responsibilities.Handlers.DailySummaryTest do
       [%{content: content, metadata: metadata, date: date}] = entries
 
       assert content =~ "Today we shipped X and decided Y."
-      assert date == ~D[2026-06-24]
+      assert date == today
       assert metadata["source"] == "responsibility:memory.daily_summary"
       assert metadata["responsibility_key"] == "memory.daily_summary"
       assert metadata["trigger_kind"] == "cron"
