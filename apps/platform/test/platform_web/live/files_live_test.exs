@@ -115,6 +115,38 @@ defmodule PlatformWeb.FilesLiveTest do
       assert html =~ "Pick a project"
       assert html =~ ~s(data-role="file-dropzone")
     end
+
+    # Regression: the upload control used to live ONLY inside the
+    # empty-state branch, so a project that already had files rendered the
+    # table with no way to add more. The control now lives in the header
+    # toolbar and must be present whenever a project is selected — for both
+    # empty and non-empty projects.
+    test "non-empty project still renders the persistent upload control", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      project = seed_project("fabrikam", "Project With Files")
+      _file = seed_file(project, %{name: "existing.txt"})
+
+      {:ok, _view, html} = live(conn, ~p"/files/#{project.id}")
+
+      # The file table is showing (non-empty branch)…
+      assert html =~ ~s(data-role="files-table")
+      # …and the upload control is STILL present (the bug being fixed).
+      assert html =~ ~s(data-role="files-upload-form")
+      assert html =~ ~s(id="files-upload-form")
+      # Drag-drop target still wraps the file area.
+      assert html =~ ~s(data-role="file-dropzone")
+    end
+
+    test "empty project renders the persistent upload control", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      project = seed_project("fabrikam", "Project No Files")
+
+      {:ok, _view, html} = live(conn, ~p"/files/#{project.id}")
+
+      assert html =~ "No files yet"
+      assert html =~ ~s(data-role="files-upload-form")
+      assert html =~ ~s(id="files-upload-form")
+    end
   end
 
   describe "PubSub: ingest_status flips on broadcast" do

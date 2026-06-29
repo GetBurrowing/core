@@ -108,6 +108,26 @@
             <option value="type_asc" selected={@sort == "type_asc"}>Type</option>
           </select>
         </form>
+        <%!-- Persistent desktop upload control. Renders whenever a project
+             is selected — for BOTH empty and non-empty projects — so you can
+             always add files (the table state previously had no upload
+             affordance). A SIBLING of the sort form, never nested (HTML
+             forbids nested <form>). Desktop-only: mobile uploads via the
+             FAB + bottom sheet below. NOTE: this input and the sheet input
+             share @uploads.files.ref — keep exactly one functionally-live
+             live_file_input per viewport; never add a third. --%>
+        <form
+          id="files-upload-form"
+          phx-change="validate_upload"
+          phx-submit="validate_upload"
+          class="hidden items-center md:flex"
+          data-role="files-upload-form"
+        >
+          <.live_file_input
+            upload={@uploads.files}
+            class="file-input file-input-bordered file-input-sm"
+          />
+        </form>
       </div>
     </div>
 
@@ -210,19 +230,8 @@
         <span class="hero-cloud-arrow-up size-12 text-base-content/30"></span>
         <h2 class="mt-4 text-lg font-semibold text-base-content">No files yet</h2>
         <p class="mt-2 max-w-md text-sm text-base-content/60">
-          Drag and drop files here, or use the upload button to add the first one.
+          Drag and drop files here, or use the upload button above to add the first one.
         </p>
-        <form
-          id="files-upload-form"
-          phx-change="validate_upload"
-          phx-submit="validate_upload"
-          class="mt-4"
-        >
-          <.live_file_input
-            upload={@uploads.files}
-            class="file-input file-input-bordered file-input-sm"
-          />
-        </form>
       </div>
 
       <%!-- File table --%>
