@@ -367,7 +367,16 @@ defmodule Platform.Org.Wiki.ContextT4E2ETest do
       # tool's presigned-upload branch which reserves a row BEFORE
       # bytes hit storage. The matching check constraint preserves the
       # post-upload invariant (non-pending rows MUST carry a hash).
-      "20260625120000_allow_null_content_hash_for_pending_files.exs"
+      "20260625120000_allow_null_content_hash_for_pending_files.exs",
+      # Chat-spaces NULL-scope slug duplication fix (2026-06-30):
+      # adds two partial unique indexes — `chat_spaces_meeting_slug` on
+      # `(slug) WHERE kind = 'meeting'` and
+      # `chat_spaces_null_scope_channel_slug` on `(slug) WHERE kind='channel'
+      # AND org_id IS NULL AND workspace_id IS NULL` — to close the
+      # loophole that let `ChatLive.bootstrap_space/1` mint duplicate
+      # channel rows on every visit to an unknown slug. Migration also
+      # backfills the one lingering prod NULL/NULL channel row (SXI).
+      "20260630000000_add_chat_spaces_meeting_and_null_scope_slug_indexes.exs"
     ]
 
     defp t4_root, do: Mix.Project.project_file() |> Path.dirname()

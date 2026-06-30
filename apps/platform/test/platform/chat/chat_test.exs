@@ -234,18 +234,22 @@ defmodule Platform.ChatTest do
       {:ok, _first} =
         Chat.create_space(%{name: "General", slug: "general", kind: "channel", org_id: org.id})
 
-      # Postgres raises a unique_violation rather than Ecto surfacing a
-      # changeset error because `Chat.Space.changeset/2` only declares
-      # `unique_constraint(:slug, name: :chat_spaces_unique_slug)` — the
-      # new index is enforced at the DB layer as a defensive backstop.
-      assert_raise Ecto.ConstraintError, ~r/chat_spaces_unique_org_slug/, fn ->
-        Chat.create_space(%{
-          name: "General Duplicate",
-          slug: "general",
-          kind: "channel",
-          org_id: org.id
-        })
-      end
+      # `Chat.Space.changeset/2` now declares
+      # `unique_constraint(:slug, name: :chat_spaces_unique_org_slug)`
+      # alongside the DB-layer partial unique index, so the second insert
+      # surfaces as a clean `{:error, %Changeset{}}` instead of a raw
+      # `Ecto.ConstraintError`. The constraint is doing its job either
+      # way; the changeset shape is the one callers can pattern-match
+      # against.
+      assert {:error, %Ecto.Changeset{} = changeset} =
+               Chat.create_space(%{
+                 name: "General Duplicate",
+                 slug: "general",
+                 kind: "channel",
+                 org_id: org.id
+               })
+
+      assert {"has already been taken", _} = changeset.errors[:slug]
     end
   end
 
