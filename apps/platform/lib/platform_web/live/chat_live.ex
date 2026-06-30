@@ -403,10 +403,12 @@ defmodule PlatformWeb.ChatLive do
     # exists per-tenant after ADR 0042) to *this user's* org. When the user
     # has no resolvable org (anonymous / pre-membership), `resolve_active_org_id/1`
     # returns nil and the lookup falls back to its legacy oldest-row behavior.
+    active_org_id = resolve_active_org_id(socket)
+
     space =
-      Chat.get_space_by_slug(slug_or_id, org_id: resolve_active_org_id(socket)) ||
+      Chat.get_space_by_slug(slug_or_id, org_id: active_org_id) ||
         (valid_uuid?(slug_or_id) && Chat.get_space(slug_or_id)) ||
-        bootstrap_space(slug_or_id)
+        bootstrap_space(slug_or_id, active_org_id)
 
     if is_nil(space) do
       {:noreply, push_navigate(socket, to: ~p"/chat")}
@@ -1670,10 +1672,27 @@ defmodule PlatformWeb.ChatLive do
   # or tool-artifact strings like "__from_file__" that should never create real spaces.
   @slug_pattern ~r/^[a-z0-9][a-z0-9\-]{0,62}[a-z0-9]$/
 
-  defp bootstrap_space(slug) when is_binary(slug) do
+  # Slug prefixes that belong to system-managed chat_spaces (meetings, task
+  # execution rooms, DMs, group spaces). bootstrap_space/2 MUST refuse to mint
+  # a `kind="channel"` row for any of these — they're owned by their respective
+  # creation paths (`Meetings.create_meeting/2`, `Orchestration.ExecutionSpace`,
+  # the DM/group flows). Visiting `/chat/meeting-<uuid>` for a meeting space the
+  # caller doesn't have org-scoped access to should fall through to the
+  # `/chat` redirect, NOT create a parallel duplicate channel with the same slug.
+  # Each duplicate would have been silently allowed by the pre-existing
+  # partial unique indexes (`chat_spaces_unique_org_slug WHERE org_id IS NOT NULL`
+  # and `chat_spaces_unique_slug ON (workspace_id, slug)`) because both
+  # workspace_id and org_id are NULL on bootstrap inserts.
+  @reserved_slug_prefixes ~w(meeting- task-exec- dm- group-)
+
+  defp bootstrap_space(slug, org_id) when is_binary(slug) do
     cond do
       # Never bootstrap for UUIDs — those are fetched directly
       valid_uuid?(slug) ->
+        nil
+
+      # Refuse system-managed slug prefixes regardless of pattern match
+      Enum.any?(@reserved_slug_prefixes, &String.starts_with?(slug, &1)) ->
         nil
 
       # Only bootstrap slugs that look like real channel slugs
@@ -1688,14 +1707,21 @@ defmodule PlatformWeb.ChatLive do
           |> Enum.map(&String.capitalize/1)
           |> Enum.join(" ")
 
-        case Chat.create_space(%{name: name, slug: slug, kind: "channel"}) do
+        attrs =
+          %{name: name, slug: slug, kind: "channel"}
+          |> maybe_put_org_id(org_id)
+
+        case Chat.create_space(attrs) do
           {:ok, space} -> space
-          {:error, _} -> Chat.get_space_by_slug(slug)
+          {:error, _} -> Chat.get_space_by_slug(slug, org_id: org_id)
         end
     end
   end
 
-  defp bootstrap_space(_), do: nil
+  defp bootstrap_space(_, _), do: nil
+
+  defp maybe_put_org_id(attrs, nil), do: attrs
+  defp maybe_put_org_id(attrs, org_id), do: Map.put(attrs, :org_id, org_id)
 
   defp valid_uuid?(string) when is_binary(string) do
     case Ecto.UUID.cast(string) do

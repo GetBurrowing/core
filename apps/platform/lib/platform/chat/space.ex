@@ -47,6 +47,9 @@ defmodule Platform.Chat.Space do
     |> validate_channel_fields()
     |> validate_is_direct()
     |> unique_constraint(:slug, name: :chat_spaces_unique_slug)
+    |> unique_constraint(:slug, name: :chat_spaces_unique_org_slug)
+    |> unique_constraint(:slug, name: :chat_spaces_meeting_slug)
+    |> unique_constraint(:slug, name: :chat_spaces_null_scope_channel_slug)
     |> foreign_key_constraint(:primary_agent_id)
     |> foreign_key_constraint(:org_id)
   end

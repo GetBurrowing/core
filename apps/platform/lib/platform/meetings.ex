@@ -175,13 +175,16 @@ defmodule Platform.Meetings do
       result =
         Repo.transaction(fn ->
           # Generate the meeting id up front so the backing chat space can be
-          # given a globally-unique slug. The meeting's own `slug` is only
-          # unique within its project, but `chat_spaces.slug` carries a global
-          # unique index (`chat_spaces_unique_slug`), so we derive the space
-          # slug from the freshly-minted UUIDv7 — matching the LiveKit room
-          # name convention (`"meeting-{uuid}"`). Without a slug the discussion
-          # panel (gated on `@meeting.chat_space.slug`) cannot mount the
-          # embedded chat and renders "No discussion bound to this meeting."
+          # given a unique slug. The meeting's own `slug` is only unique within
+          # its project; `chat_spaces.slug` is uniqueness-enforced for meeting
+          # rows ONLY via the partial unique index `chat_spaces_meeting_slug`
+          # (added 2026-06-29 — the older `chat_spaces_unique_slug` is on
+          # `(workspace_id, slug)` and does NOT protect NULL-workspace meeting
+          # rows). We derive the slug from the freshly-minted UUIDv7 — matching
+          # the LiveKit room name convention (`"meeting-{uuid}"`). Without a slug
+          # the discussion panel (gated on `@meeting.chat_space.slug`) cannot
+          # mount the embedded chat and renders "No discussion bound to this
+          # meeting."
           meeting_id = Platform.Types.UUIDv7.generate()
           chat_space_slug = "meeting-#{meeting_id}"
 
