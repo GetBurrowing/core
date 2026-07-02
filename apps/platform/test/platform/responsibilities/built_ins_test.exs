@@ -23,12 +23,13 @@ defmodule Platform.Responsibilities.BuiltInsTest do
   end
 
   describe "providers/0" do
-    test "lists DailySummary, Dreaming, and MeetingSummarize handlers" do
+    test "lists DailySummary, Dreaming, MeetingSummarize, and IntentClassify handlers" do
       providers = BuiltIns.providers()
 
       assert Handlers.DailySummary in providers
       assert Handlers.Dreaming in providers
       assert Handlers.MeetingSummarize in providers
+      assert Handlers.IntentClassify in providers
 
       # No duplicates — the registry's upsert is idempotent on collision
       # but a duplicate listing here would be a bug.
@@ -121,6 +122,35 @@ defmodule Platform.Responsibilities.BuiltInsTest do
       assert row.enabled == true
     end
 
+    test "upserts meetings.intent_classify with the expected placeholder spec" do
+      {_pid, name} = start_registry(BuiltIns.providers())
+
+      assert %{ok: rows, errors: []} = Registry.status(name)
+      keys = Enum.map(rows, & &1.key)
+      assert "meetings.intent_classify" in keys
+
+      row = Responsibilities.get_by_key("meetings.intent_classify")
+      assert row
+      assert row.feature == "meetings"
+      assert row.trigger_kind == "event_topic"
+      assert row.scope == "per_meeting"
+      assert row.context_provided == ["meeting_transcript_chunk"]
+      assert row.trigger_config["topic"] == "meeting:transcript_chunk"
+      assert row.trigger_config["event_match"] == "transcript_chunk"
+
+      # Placeholder marker + runtime-task pointer so an operator grep
+      # for `status: "placeholder"` catches this row.
+      assert row.metadata["status"] == "placeholder"
+      assert row.metadata["runtime_task"] == "019f2452-0210"
+      assert row.metadata["owner"] == "platform.meetings"
+
+      # Classifier is a high-frequency call (every transcript chunk),
+      # not once-per-meeting like summarize; `high_freq_low_cost` is
+      # the schema's cheap tier per `Responsibility.cost_profiles/0`.
+      assert row.cost_profile == "high_freq_low_cost"
+      assert row.enabled == true
+    end
+
     test "reload/0 is idempotent — keys + ids stable across boots" do
       {_pid, name} = start_registry(BuiltIns.providers())
 
@@ -147,6 +177,10 @@ defmodule Platform.Responsibilities.BuiltInsTest do
     test "Handlers.MeetingSummarize.key/0 + topic/0 match the registered values" do
       assert Handlers.MeetingSummarize.key() == "meetings.summarize"
       assert Handlers.MeetingSummarize.topic() == "meeting:finished"
+    end
+
+    test "Handlers.IntentClassify.key/0 matches the registered key" do
+      assert Handlers.IntentClassify.key() == "meetings.intent_classify"
     end
   end
 

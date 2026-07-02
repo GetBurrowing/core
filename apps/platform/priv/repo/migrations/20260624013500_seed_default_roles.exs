@@ -28,7 +28,16 @@ defmodule Platform.Repo.Migrations.SeedDefaultRoles do
   @seeded_keys ~w(designer historian meeting_scribe triage_officer)
 
   def up do
-    Platform.Roles.Seeds.seed_defaults()
+    # Restrict this historical seed to the four originally-permitted
+    # keys — the `roles_key_check` CHECK constraint at this migration's
+    # timestamp only permits these four. The `meeting_producer` row
+    # (task 019f2451 stage 2) is seeded by the paired
+    # `20260702200500_seed_meeting_producer_role.exs` migration, which
+    # runs AFTER `20260702000000_add_meeting_producer_to_roles_check.exs`
+    # extends the CHECK to admit it. Without the `only_keys` filter,
+    # `Seeds.seed_defaults/0`'s updated `@default_roles` blows up on a
+    # fresh DB while this migration runs.
+    Platform.Roles.Seeds.seed_defaults(only_keys: @seeded_keys)
   end
 
   def down do

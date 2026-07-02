@@ -66,18 +66,25 @@ defmodule Platform.Roles.CoverageTest do
     |> Repo.insert!()
   end
 
-  # The Postgres-level test sandbox + the stage-4 seed migration mean
-  # every test in this module starts with the canonical 4-role roster
-  # already in place. That's intentional — these tests assert against
-  # the real seeded shape, not a scrubbed fixture.
+  # The Postgres-level test sandbox + the stage-4 seed migration (plus
+  # task 019f2451 stage 2's re-seed for `meeting_producer`) mean every
+  # test in this module starts with the canonical 5-role roster already
+  # in place. That's intentional — these tests assert against the real
+  # seeded shape, not a scrubbed fixture.
 
   # ── Category 1: seed shape (canvas-aligned keys) ─────────────────────
 
   describe "stage-4 seeds — canonical bundle shape" do
-    test "Platform.Roles.list_roles/0 returns exactly the 4 canonical rows" do
+    test "Platform.Roles.list_roles/0 returns exactly the 5 canonical rows" do
       keys = Roles.list_roles() |> Enum.map(& &1.key)
 
-      assert keys == ["designer", "historian", "meeting_scribe", "triage_officer"]
+      assert keys == [
+               "designer",
+               "historian",
+               "meeting_producer",
+               "meeting_scribe",
+               "triage_officer"
+             ]
     end
 
     test "bundle_for(\"designer\") returns the v2-canvas design.* keys" do

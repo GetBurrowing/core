@@ -1,6 +1,7 @@
 defmodule Platform.Responsibilities.Providers.Meetings do
   @moduledoc """
-  Provider shim for the `meetings` feature (ADR-0041 M8 stage 6).
+  Provider shim for the `meetings` feature (ADR-0041 M8 stage 6; extended
+  by task 019f2451 stage 3 for `meetings.intent_classify`).
 
   The M6 Router resolves the per-feature provider module by camelcasing
   the responsibility's `feature` field and prepending
@@ -18,21 +19,37 @@ defmodule Platform.Responsibilities.Providers.Meetings do
   did the work alone. This shim closes that gap by delegating every
   Provider callback through to the real implementation.
 
+  ## Multi-responsibility routing (task 019f2451 stage 3)
+
+  As of the Meeting Producer role roll-out the `meetings` feature owns
+  more than one row (`meetings.summarize` +
+  `meetings.intent_classify`). The Router still resolves one module per
+  feature, so this shim now dispatches on `responsibility.key` via
+  `handler_for/1` and hands off to the concrete handler module. Any
+  unmapped key logs a warning and returns
+  `{:error, :unknown_meetings_responsibility}` — this is the smoke
+  signal for a drift between the built-ins list and this dispatch table.
+
   ## What this module owns
 
-    * `register/0` — returns the same single-spec list the underlying
-      handler does, so the boot Registry walks one canonical row even
-      if a future operator drops the handler from
+    * `register/0` — returns the fan-in of every meetings handler's
+      spec list, so the boot Registry walks a canonical row per
+      responsibility even if a future operator drops one from
       `Platform.Responsibilities.BuiltIns.providers/0` but keeps this
       shim wired.
-    * `gather_context/2` — normalises the trigger meta so the handler
-      sees the same `:payload` shape whether the trigger came from an
+    * `gather_context/2` — routes to the matching handler after
+      normalising the trigger meta so the summariser handler sees the
+      same `:payload` shape whether the trigger came from an
       event_topic broadcast (`%{kind: :event_topic, payload: %{...}}`)
       or a direct `fire/2` call where the caller flattened
       `transcript_id` to the top level.
-    * `handle_output/2` and `handle_output/3` — delegate to
-      `Handlers.MeetingSummarize` so the persistence pipeline stays in
-      exactly one place.
+    * `handle_output/2` and `handle_output/3` — route by key so the
+      persistence pipeline stays in exactly one place per
+      responsibility.
+    * `handler_for/1` — public accessor exposing the dispatch table
+      itself so integration tests (stage 4) can assert role → bundle →
+      responsibility → handler wiring end-to-end without going through
+      the Router.
 
   ## Trigger-meta normalisation
 
@@ -46,31 +63,82 @@ defmodule Platform.Responsibilities.Providers.Meetings do
   """
   @behaviour Platform.Responsibilities.Provider
 
+  require Logger
+
+  alias Platform.Responsibilities.Handlers
+  alias Platform.Responsibilities.Handlers.IntentClassify
   alias Platform.Responsibilities.Handlers.MeetingSummarize
   alias Platform.Responsibilities.Responsibility
 
   @impl true
-  def register, do: MeetingSummarize.register()
+  def register, do: MeetingSummarize.register() ++ IntentClassify.register()
+
+  @doc """
+  Return the concrete handler module for a given responsibility (or key).
+  Public so stage 4's integration test can assert the role → bundle →
+  responsibility → handler wiring lands on the expected module without
+  reaching through the M6 Router.
+
+  Returns `nil` for any key not owned by this feature so callers can
+  branch on the missing case explicitly.
+  """
+  @spec handler_for(Responsibility.t() | %{key: String.t()} | String.t() | any()) ::
+          module() | nil
+  def handler_for(%Responsibility{key: key}), do: handler_for(key)
+  def handler_for(%{key: key}), do: handler_for(key)
+  def handler_for("meetings.summarize"), do: Handlers.MeetingSummarize
+  def handler_for("meetings.intent_classify"), do: Handlers.IntentClassify
+  def handler_for(_), do: nil
 
   @impl true
   def gather_context(%Responsibility{} = responsibility, ctx) when is_map(ctx) do
-    MeetingSummarize.gather_context(responsibility, normalize_meta(ctx))
+    case handler_for(responsibility) do
+      nil ->
+        unknown_key(responsibility)
+
+      Handlers.MeetingSummarize ->
+        MeetingSummarize.gather_context(responsibility, normalize_meta(ctx))
+
+      handler ->
+        handler.gather_context(responsibility, ctx)
+    end
   end
 
   def gather_context(_responsibility, _ctx), do: {:ok, %{}}
 
   @impl true
   def handle_output(%Responsibility{} = responsibility, parsed) do
-    MeetingSummarize.handle_output(responsibility, parsed)
+    case handler_for(responsibility) do
+      nil -> unknown_key(responsibility)
+      handler -> handler.handle_output(responsibility, parsed)
+    end
   end
 
   @impl true
   def handle_output(%Responsibility{} = responsibility, parsed, trigger_meta)
       when is_map(trigger_meta) do
-    MeetingSummarize.handle_output(responsibility, parsed, normalize_meta(trigger_meta))
+    case handler_for(responsibility) do
+      nil ->
+        unknown_key(responsibility)
+
+      Handlers.MeetingSummarize ->
+        MeetingSummarize.handle_output(responsibility, parsed, normalize_meta(trigger_meta))
+
+      handler ->
+        handler.handle_output(responsibility, parsed, trigger_meta)
+    end
   end
 
   # ── internals ─────────────────────────────────────────────────────────────
+
+  defp unknown_key(%Responsibility{key: key}) do
+    Logger.warning(
+      "[meetings provider] unknown responsibility key=#{inspect(key)} — no handler mapped; " <>
+        "add a clause to Providers.Meetings.handler_for/1 or drop the row from BuiltIns.providers/0"
+    )
+
+    {:error, :unknown_meetings_responsibility}
+  end
 
   # When the trigger meta already carries a `:payload`/"payload" key we
   # leave it alone — that's the event_topic dispatch shape the Router

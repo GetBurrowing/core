@@ -1,11 +1,12 @@
 defmodule Platform.Roles.SeedsTest do
   @moduledoc """
   Tests for `Platform.Roles.Seeds` (M4 stage 4 of task
-  `019ef65b-a361-7873-871b-3375bf60ead7`).
+  `019ef65b-a361-7873-871b-3375bf60ead7`; `meeting_producer` added in
+  task `019f2451-6728` stage 2).
 
   Confirms:
 
-    * `seed_defaults/0` inserts the four canonical roles and their
+    * `seed_defaults/0` inserts the five canonical roles and their
       bundled responsibility keys on a fresh DB.
     * Re-running `seed_defaults/0` is idempotent — the second call
       neither errors nor duplicates rows.
@@ -27,7 +28,7 @@ defmodule Platform.Roles.SeedsTest do
   alias Platform.Roles.Seeds
 
   describe "default_roles/0" do
-    test "exposes the four canonical role keys aligned with the closed roster" do
+    test "seeded role keys equal the closed roster from Role.valid_keys/0" do
       seeded_keys =
         Seeds.default_roles()
         |> Enum.map(& &1.key)
@@ -35,40 +36,65 @@ defmodule Platform.Roles.SeedsTest do
 
       valid_keys = Enum.sort(Role.valid_keys())
 
+      # Task 019f2451 stage 2 restored strict equality after stage 1
+      # temporarily relaxed this invariant to `subset?` while the seed
+      # row for `meeting_producer` was pending. The closed roster
+      # (Decision 2 from the M4 stack) MUST match the schema enum
+      # exactly — drift here means a stage invented a key the schema
+      # doesn't allow, or vice versa.
       assert seeded_keys == valid_keys,
              """
-             Seeded role keys must match the closed roster from
+             Seeded role keys must equal the closed roster from
              `Platform.Roles.Role.valid_keys/0` (Decision 2 from the M4
-             stack). Drift here means either Stage 1 added a key the
-             seeds didn't follow, or Stage 4 invented a key the schema
-             doesn't allow.
+             stack).
              Seeded: #{inspect(seeded_keys)}
              Valid:  #{inspect(valid_keys)}
              """
     end
 
-    test "each role has 2+ bundled responsibility keys" do
+    test "meeting_producer is present with the expected bundle, icon, and description" do
+      # Pin the exact seed shape for the role added in task
+      # 019f2451-6728 stage 2. The bundle key `meetings.intent_classify`
+      # gets its cost_profile ("high_freq_capable") attached at the
+      # responsibility layer, not the role — see
+      # `Platform.Responsibilities.Handlers.IntentClassify.register/0`
+      # (lands in stage 3).
+      producer = Enum.find(Seeds.default_roles(), &(&1.key == "meeting_producer"))
+
+      assert producer,
+             "meeting_producer must be present in the canonical seed roster"
+
+      assert producer.name == "Meeting Producer"
+      assert producer.icon == "hero-signal"
+
+      assert producer.description ==
+               "Watches meeting transcript in real time; classifies intent and delegates to specialist agents"
+
+      assert producer.bundle == ["meetings.intent_classify"]
+    end
+
+    test "each role has 1+ bundled responsibility keys" do
       for role <- Seeds.default_roles() do
-        assert length(role.bundle) >= 2,
-               "role #{role.key} must bundle at least two responsibilities"
+        assert length(role.bundle) >= 1,
+               "role #{role.key} must bundle at least one responsibility"
       end
     end
   end
 
   describe "seed_defaults/0" do
-    test "inserts four roles and twelve bundle rows on a fresh DB" do
+    test "inserts five roles and thirteen bundle rows on a fresh DB" do
       assert :ok = Seeds.seed_defaults()
 
-      assert Repo.aggregate(Role, :count, :key) == 4
-      assert Repo.aggregate(RoleResponsibility, :count, :id) == 12
+      assert Repo.aggregate(Role, :count, :key) == 5
+      assert Repo.aggregate(RoleResponsibility, :count, :id) == 13
     end
 
     test "is idempotent — calling twice does not duplicate rows" do
       assert :ok = Seeds.seed_defaults()
       assert :ok = Seeds.seed_defaults()
 
-      assert Repo.aggregate(Role, :count, :key) == 4
-      assert Repo.aggregate(RoleResponsibility, :count, :id) == 12
+      assert Repo.aggregate(Role, :count, :key) == 5
+      assert Repo.aggregate(RoleResponsibility, :count, :id) == 13
     end
 
     test "each role's bundle round-trips via Platform.Roles.bundle_for/1" do

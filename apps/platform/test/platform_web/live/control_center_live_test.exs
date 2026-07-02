@@ -1506,26 +1506,30 @@ defmodule PlatformWeb.ControlCenterLiveTest do
   end
 
   describe "Roles panel (M7 stage 5)" do
-    test "GET /control with no agent selected renders 4 role rows + UNFILLED pills", %{conn: conn} do
+    test "GET /control with no agent selected renders 5 role rows + UNFILLED pills", %{conn: conn} do
       conn = authenticated_conn(conn)
       {:ok, _view, html} = live(conn, ~p"/control")
 
-      # Tab strip + count
-      assert html =~ "Roles (4)"
+      # Tab strip + count — task 019f2451-6728 stage 2 admitted
+      # `meeting_producer` to the closed roster.
+      assert html =~ "Roles (5)"
 
-      # Each of the four seeded roles renders with name + icon class.
+      # Each of the five seeded roles renders with name + icon class.
       assert html =~ "Designer"
       assert html =~ "Historian"
+      assert html =~ "Meeting Producer"
       assert html =~ "Meeting Scribe"
       assert html =~ "Triage Officer"
       assert html =~ "hero-paint-brush"
       assert html =~ "hero-book-open"
+      assert html =~ "hero-signal"
       assert html =~ "hero-calendar-days"
       assert html =~ "hero-clipboard-document-check"
 
       # Bundle keys render as <code> chips for at least one role.
       assert html =~ "design.critique"
       assert html =~ "memory.daily_summary"
+      assert html =~ "meetings.intent_classify"
       assert html =~ "meetings.summarize"
       assert html =~ "tasks.triage"
 

@@ -45,7 +45,8 @@ defmodule Platform.Responsibilities.BuiltIns do
     [
       Handlers.DailySummary,
       Handlers.Dreaming,
-      Handlers.MeetingSummarize
+      Handlers.MeetingSummarize,
+      Handlers.IntentClassify
     ]
   end
 end

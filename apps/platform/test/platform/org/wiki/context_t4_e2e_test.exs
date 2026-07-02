@@ -376,7 +376,17 @@ defmodule Platform.Org.Wiki.ContextT4E2ETest do
       # loophole that let `ChatLive.bootstrap_space/1` mint duplicate
       # channel rows on every visit to an unknown slug. Migration also
       # backfills the one lingering prod NULL/NULL channel row (SXI).
-      "20260630000000_add_chat_spaces_meeting_and_null_scope_slug_indexes.exs"
+      "20260630000000_add_chat_spaces_meeting_and_null_scope_slug_indexes.exs",
+      # Task 019f2451 stage 1: extend the closed-roster
+      # `roles_key_check` CHECK constraint to admit the new
+      # `meeting_producer` role. Schema-level `@valid_keys` bump lives
+      # in `Platform.Roles.Role`; seed row + responsibility bundle land
+      # in stages 2-3.
+      "20260702000000_add_meeting_producer_to_roles_check.exs",
+      # Meeting Producer role — task 019f2451-6728 stage 2. Idempotent
+      # re-seed so the row appears on existing envs where the stage-4
+      # seed migration already ran.
+      "20260702200500_seed_meeting_producer_role.exs"
     ]
 
     defp t4_root, do: Mix.Project.project_file() |> Path.dirname()

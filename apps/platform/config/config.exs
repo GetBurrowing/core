@@ -32,7 +32,8 @@ config :platform, Platform.Responsibilities,
   providers: [
     Platform.Responsibilities.Handlers.DailySummary,
     Platform.Responsibilities.Handlers.Dreaming,
-    Platform.Responsibilities.Handlers.MeetingSummarize
+    Platform.Responsibilities.Handlers.MeetingSummarize,
+    Platform.Responsibilities.Handlers.IntentClassify
   ]
 
 # M8 stage 2: dual-write shim gate. When `false` (default), the legacy

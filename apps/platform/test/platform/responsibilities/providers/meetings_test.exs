@@ -9,9 +9,13 @@ defmodule Platform.Responsibilities.Providers.MeetingsTest do
   """
   use Platform.DataCase, async: false
 
+  import ExUnit.CaptureLog
+
   alias Platform.Chat
   alias Platform.Meetings
   alias Platform.Orchestration.ExecutionSpace
+  alias Platform.Responsibilities.Handlers
+  alias Platform.Responsibilities.Handlers.IntentClassify
   alias Platform.Responsibilities.Handlers.MeetingSummarize
   alias Platform.Responsibilities.Providers.Meetings, as: MeetingsProvider
   alias Platform.Responsibilities.Responsibility
@@ -27,6 +31,19 @@ defmodule Platform.Responsibilities.Providers.MeetingsTest do
       trigger_config: %{"topic" => "meeting:finished"},
       scope: "per_meeting",
       context_provided: ["org_identity", "recent_journal", "meeting_transcript"],
+      enabled: true
+    }
+  end
+
+  defp intent_classify_responsibility do
+    %Responsibility{
+      id: Ecto.UUID.generate(),
+      key: IntentClassify.key(),
+      feature: "meetings",
+      trigger_kind: "event_topic",
+      trigger_config: %{"topic" => "meeting:transcript_chunk"},
+      scope: "per_meeting",
+      context_provided: ["meeting_transcript_chunk"],
       enabled: true
     }
   end
@@ -56,8 +73,41 @@ defmodule Platform.Responsibilities.Providers.MeetingsTest do
   end
 
   describe "register/0" do
-    test "delegates to the handler's register spec" do
-      assert MeetingsProvider.register() == MeetingSummarize.register()
+    test "fans in every meetings handler's specs (summarize + intent_classify)" do
+      specs = MeetingsProvider.register()
+
+      # Two responsibilities today; the summariser + the intent-classify
+      # placeholder registered in task 019f2451 stage 3.
+      assert length(specs) == 2
+
+      keys = Enum.map(specs, & &1.key) |> Enum.sort()
+      assert keys == ["meetings.intent_classify", "meetings.summarize"]
+
+      # Each concrete spec is passed through verbatim — the shim doesn't
+      # rewrite trigger config or output contract.
+      assert MeetingSummarize.register() -- specs == []
+      assert IntentClassify.register() -- specs == []
+    end
+  end
+
+  describe "handler_for/1" do
+    test "routes summarize responsibilities to MeetingSummarize" do
+      assert MeetingsProvider.handler_for(responsibility()) == Handlers.MeetingSummarize
+      assert MeetingsProvider.handler_for("meetings.summarize") == Handlers.MeetingSummarize
+    end
+
+    test "routes intent_classify responsibilities to IntentClassify" do
+      assert MeetingsProvider.handler_for(intent_classify_responsibility()) ==
+               Handlers.IntentClassify
+
+      assert MeetingsProvider.handler_for("meetings.intent_classify") ==
+               Handlers.IntentClassify
+    end
+
+    test "returns nil for unmapped keys" do
+      assert MeetingsProvider.handler_for("meetings.something_new") == nil
+      assert MeetingsProvider.handler_for("memory.daily_summary") == nil
+      assert MeetingsProvider.handler_for(nil) == nil
     end
   end
 
@@ -123,6 +173,45 @@ defmodule Platform.Responsibilities.Providers.MeetingsTest do
                  "no transcript id at all",
                  %{kind: :event_topic, payload: %{}}
                )
+    end
+
+    test "routes an intent_classify responsibility to the IntentClassify placeholder" do
+      log =
+        capture_log(fn ->
+          assert :ok =
+                   MeetingsProvider.handle_output(
+                     intent_classify_responsibility(),
+                     %{"intent" => "assign_task", "confidence" => 0.9},
+                     %{kind: :event_topic, topic: "meeting:transcript_chunk"}
+                   )
+        end)
+
+      # The placeholder log line is the smoke signal the runtime ticket
+      # hasn't landed yet — it must fire on every dispatch until then.
+      assert log =~ "[meetings.intent_classify]"
+      assert log =~ "placeholder handler"
+    end
+
+    test "returns :unknown_meetings_responsibility for an unmapped key" do
+      unknown = %Responsibility{
+        id: Ecto.UUID.generate(),
+        key: "meetings.foo",
+        feature: "meetings",
+        trigger_kind: "event_topic",
+        trigger_config: %{},
+        scope: "per_meeting",
+        context_provided: [],
+        enabled: true
+      }
+
+      log =
+        capture_log(fn ->
+          assert {:error, :unknown_meetings_responsibility} =
+                   MeetingsProvider.handle_output(unknown, %{}, %{kind: :event_topic})
+        end)
+
+      assert log =~ "unknown responsibility key"
+      assert log =~ "meetings.foo"
     end
   end
 

@@ -73,11 +73,19 @@ defmodule Platform.Roles.RoleTest do
       refute cs.valid?
       assert %{key: ["is invalid"]} = errors_on(cs)
     end
+
+    test "accepts the meeting_producer key (task 019f2451 stage 1)" do
+      cs =
+        Role.changeset(%Role{}, base_attrs(%{key: "meeting_producer", name: "Meeting Producer"}))
+
+      assert cs.valid?, inspect(errors_on(cs))
+    end
   end
 
   describe "valid_keys/0" do
-    test "exposes the four canonical roles in a stable order" do
-      assert Role.valid_keys() == ~w(designer historian meeting_scribe triage_officer)
+    test "exposes the five canonical roles in a stable order" do
+      assert Role.valid_keys() ==
+               ~w(designer historian meeting_scribe meeting_producer triage_officer)
     end
   end
 
@@ -135,6 +143,18 @@ defmodule Platform.Roles.RoleTest do
           []
         )
       end
+    end
+
+    test "DB-side CHECK constraint admits meeting_producer on raw SQL insert (task 019f2451)" do
+      assert %{num_rows: 1} =
+               SQL.query!(
+                 Repo,
+                 """
+                 INSERT INTO roles (key, name, description, icon, inserted_at, updated_at)
+                 VALUES ('meeting_producer', 'Meeting Producer', 'placeholder', 'hero-video-camera', now(), now())
+                 """,
+                 []
+               )
     end
   end
 end
