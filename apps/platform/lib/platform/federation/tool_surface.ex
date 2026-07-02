@@ -511,7 +511,7 @@ defmodule Platform.Federation.ToolSurface do
         returns:
           "%{path, kind, ...} — page/private hits include `version`/`frontmatter`/`updated_at`; journal hits include `entry_id`/`date`/`namespace`.",
         limitations:
-          "Page writes require Historian role (`\"historian\" in agent.system_events`). Private writes require ownership. Unknown namespaces are rejected.",
+          "Page writes require Historian role (pin the agent to `role_key: \"historian\"` via the Roles picker). Private writes require ownership. Unknown namespaces are rejected.",
         when_to_use:
           "When you need to create a new page (Historian only), append a journal entry (any agent), or write to your own private scratch path."
       },

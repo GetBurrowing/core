@@ -77,13 +77,29 @@ defmodule Platform.Agents.SystemEventSchedulerT6E2ETest do
     base = %{
       slug: "t6-historian-#{System.unique_integer([:positive])}",
       name: "T6 Historian",
-      status: "active",
-      system_events: ["historian"]
+      status: "active"
     }
 
-    %Agent{}
-    |> Agent.changeset(Map.merge(base, attrs))
-    |> Repo.insert!()
+    merged = Map.merge(base, attrs)
+
+    agent =
+      %Agent{}
+      |> Agent.changeset(merged)
+      |> Repo.insert!()
+
+    # Task 019f2444 stage 6: `agents.system_events` was dropped —
+    # HistorianDispatcher.agent_for_event/1 consults Platform.Roles
+    # exclusively. Pin the Historian role so dispatch resolves to this
+    # agent; if another test-local agent already claimed the role, the
+    # older assignment wins (unique index on `role_key`).
+    if agent.status == "active" do
+      case Platform.Roles.assign_role("historian", agent.id) do
+        {:ok, _} -> :ok
+        {:error, _changeset} -> :ok
+      end
+    end
+
+    agent
   end
 
   defp create_project(name) do
@@ -688,12 +704,19 @@ defmodule Platform.Agents.SystemEventSchedulerT6E2ETest do
       end
     end
 
-    test "agent.@valid_system_events is exactly `[\"historian\"]`" do
+    test "Historian is Roles-based post-retirement" do
+      # Task 019f2444 stage 6 dropped the legacy `agents.system_events`
+      # column + `@valid_system_events` module attribute. The Historian
+      # signal now lives exclusively in `role_assignments`; assert the
+      # canonical Roles lookup path is available at runtime.
+      assert Code.ensure_loaded?(Platform.Roles)
+      assert function_exported?(Platform.Roles, :agent_id_for_role, 1)
+
+      # And no daily_summary/dreaming legacy references remain in Agent.
       src = read_t6_file(@agent_path)
 
-      assert Regex.match?(~r/@valid_system_events\s+~w\(\s*historian\s*\)/, src),
-             "Agent.@valid_system_events must be exactly `~w(historian)` post-T6 — " <>
-               "the legacy `daily_summary` / `dreaming` strings are gone."
+      refute src =~ "@valid_system_events",
+             "Agent module must not retain @valid_system_events — dropped in stage 6"
 
       refute src =~ "daily_summary",
              "Agent module must not retain a `daily_summary` reference"

@@ -37,10 +37,11 @@ defmodule Mix.Tasks.Responsibilities.CutoverReport do
     1. `divergence_count: 0` for 7 consecutive days for every tracked key.
     2. Flip `:responsibility_router_enabled` default to `true` in
        `config/prod.exs`.
-    3. Open a follow-up task to delete
-       `apps/platform/lib/platform/agents/system_event_scheduler.ex`,
-       the `Platform.Agents.Agent.@valid_system_events` list, and the
-       `system_events` column.
+    3. The Historian-column retirement completed in task
+       `019f2444-08f0-763f-ada5-c5ba1d819f75` — `Agent.@valid_system_events`
+       and the `agents.system_events` column are already gone. The
+       divergence check above still applies to the remaining tracked
+       responsibility keys (`memory.daily_summary` / `memory.dreaming`).
   """
   use Mix.Task
 

@@ -1,8 +1,6 @@
 defmodule PlatformWeb.ControlCenterLive do
   use PlatformWeb, :live_view
 
-  import Ecto.Query
-
   alias Ecto.Adapters.SQL.Sandbox
 
   alias Platform.Agents.{
@@ -59,7 +57,6 @@ defmodule PlatformWeb.ControlCenterLive do
      |> assign(:agent_credentials, [])
      |> assign(:platform_credentials, [])
      |> assign(:config_form, to_form(%{}, as: :config))
-     |> assign(:other_historian_exists, false)
      |> assign(
        :create_agent_form,
        to_form(AgentData.default_create_agent_params(), as: :create_agent)
@@ -315,21 +312,6 @@ defmodule PlatformWeb.ControlCenterLive do
         %{assigns: %{selected_agent: %Agent{} = agent}} = socket
       ) do
     attrs = AgentData.config_attrs_from_params(agent, params)
-
-    # Enforce one-agent-per-event: unflag other agents for newly claimed events
-    newly_claimed = Map.get(attrs, :system_events, []) -- (agent.system_events || [])
-
-    for event <- newly_claimed do
-      from(a in Agent,
-        where: a.id != ^agent.id,
-        where: fragment("? @> ?", a.system_events, ^[event])
-      )
-      |> Repo.all()
-      |> Enum.each(fn other ->
-        cleaned = Enum.reject(other.system_events || [], &(&1 == event))
-        other |> Agent.changeset(%{system_events: cleaned}) |> Repo.update()
-      end)
-    end
 
     case agent |> Agent.changeset(attrs) |> Repo.update() do
       {:ok, updated_agent} ->
@@ -662,7 +644,6 @@ defmodule PlatformWeb.ControlCenterLive do
                 federation_spaces={@federation_spaces}
                 show_add_space_modal={@show_add_space_modal}
                 available_spaces={@available_spaces}
-                other_historian_exists={@other_historian_exists}
               />
             </div>
 
@@ -677,7 +658,6 @@ defmodule PlatformWeb.ControlCenterLive do
                   config_form={@config_form}
                   model_chain_result={@model_chain_result}
                   selected_agent_directory_entry={@selected_agent_directory_entry}
-                  other_historian_exists={@other_historian_exists}
                 />
 
                 <AgentDetail.workspace_editor
@@ -766,7 +746,6 @@ defmodule PlatformWeb.ControlCenterLive do
     |> assign(:agent_credentials, [])
     |> assign(:platform_credentials, [])
     |> assign(:config_form, to_form(%{}, as: :config))
-    |> assign(:other_historian_exists, false)
     |> assign(
       :create_agent_form,
       to_form(AgentData.default_create_agent_params(), as: :create_agent)
@@ -839,7 +818,6 @@ defmodule PlatformWeb.ControlCenterLive do
       :config_form,
       AgentData.build_config_form(agent, Keyword.get(opts, :config_params, %{}))
     )
-    |> assign(:other_historian_exists, AgentData.another_historian_exists?(agent.id))
     |> assign(
       :selected_agent_directory_entry,
       AgentData.find_agent_directory_entry(socket.assigns.agents, agent.slug)

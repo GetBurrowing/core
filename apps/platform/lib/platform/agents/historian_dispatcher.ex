@@ -33,8 +33,6 @@ defmodule Platform.Agents.HistorianDispatcher do
 
   require Logger
 
-  import Ecto.Query
-
   alias Platform.Agents.{ActivityDigest, Agent}
   alias Platform.Chat
   alias Platform.Chat.AgentResponder
@@ -42,6 +40,7 @@ defmodule Platform.Agents.HistorianDispatcher do
   alias Platform.Federation.RuntimePresence
   alias Platform.Orchestration.PromptTemplates
   alias Platform.Repo
+  alias Platform.Roles
 
   @daily_window_hours 24
 
@@ -92,43 +91,51 @@ defmodule Platform.Agents.HistorianDispatcher do
   end
 
   @doc """
-  Look up the single active agent flagged for the given system event.
+  Look up the single active agent pinned to the Historian role.
 
-  Returns the agent or `nil` (no eligible agent). When multiple agents
-  claim the same event a warning is logged and the oldest is picked —
-  the UI's one-agent-per-event invariant should keep this from happening
-  in practice.
+  Consults `Platform.Roles.agent_id_for_role("historian")` — the closed
+  role roster (M4/ADR-0041) is now the source of truth for who owns the
+  Historian responsibility. The `event_type` argument is preserved in the
+  signature so `SystemEventScheduler.fire_now/1` and
+  `MeetingHistorianHandler` keep compiling, but it is intentionally
+  ignored: all three T6 events (`"historian"`, legacy `"daily_summary"`,
+  legacy `"dreaming"`) resolve to the same Roles Historian. The
+  `SystemEventScheduler` normalises legacy names to `"historian"` before
+  we're called, so no legacy-key mapping lives here.
+
+  Returns the `%Agent{}` when a Historian is pinned AND that agent's
+  `status == "active"`; returns `nil` otherwise. The one-agent-per-role
+  invariant is enforced by the `role_assignments.role_key` unique index,
+  so the multi-agent-tiebreak branch of the old query is dead code and
+  has been removed.
   """
   @spec agent_for_event(String.t()) :: Agent.t() | nil
   def agent_for_event(event_type) when is_binary(event_type) do
-    # The post-T6 whitelist is just ["historian"], but we still resolve by
-    # event_type so legacy callers passing "daily_summary" / "dreaming"
-    # land on whichever agent is flagged for the matching event (after
-    # the SystemEventScheduler maps legacy → "historian", this is just
-    # "historian" in practice).
-    agents =
-      from(a in Agent,
-        where: a.status == "active",
-        where: fragment("? @> ?", a.system_events, ^[event_type]),
-        order_by: [asc: a.inserted_at],
-        limit: 2
-      )
-      |> Repo.all()
-
-    case agents do
-      [] ->
+    case Roles.agent_id_for_role("historian") do
+      nil ->
         nil
 
-      [agent] ->
-        agent
+      agent_id when is_binary(agent_id) ->
+        case Repo.get(Agent, agent_id) do
+          %Agent{status: "active"} = agent ->
+            agent
 
-      [agent | _rest] = multiple ->
-        Logger.warning(
-          "[HistorianDispatcher] multiple agents flagged for #{event_type}: " <>
-            "#{inspect(Enum.map(multiple, & &1.slug))} — using #{agent.slug}"
-        )
+          %Agent{} ->
+            # Role is pinned but the agent is paused/archived — treat as
+            # "nobody home". Callers already log the skip via `dispatch/3`.
+            nil
 
-        agent
+          nil ->
+            # Shouldn't happen — the FK on `role_assignments.agent_id`
+            # blocks this — but be defensive so a lost race doesn't crash
+            # the every-6h fire.
+            Logger.warning(
+              "[HistorianDispatcher] historian role pinned to agent_id=#{agent_id} " <>
+                "for event=#{event_type} but agent row not found; treating as unassigned"
+            )
+
+            nil
+        end
     end
   end
 

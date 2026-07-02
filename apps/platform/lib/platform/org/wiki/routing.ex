@@ -48,7 +48,7 @@ defmodule Platform.Org.Wiki.Routing do
           required(:recoverable) => boolean()
         }
 
-  @historian_event "historian"
+  @historian_role_key "historian"
 
   # Page path: <ns>/page/<rest...>
   # ns ∈ {"org", "project/<uuid>", "space/<uuid>"}
@@ -168,16 +168,22 @@ defmodule Platform.Org.Wiki.Routing do
   @doc """
   Returns `true` iff the given agent carries the Historian-role signal.
 
-  Post-T6 the signal is `"historian" in agent.system_events`
-  (`Platform.Agents.Agent.@valid_system_events` is exactly `["historian"]`
-  — the legacy `daily_summary`/`dreaming` bundle was collapsed by T6's
-  single canonical system event; reconciled here on the stack rollup).
-  If a richer role model lands later, swap this implementation in place
-  and callers (`gate_write/3`, `gate_read/2`) keep working.
+  Post-Responsibilities (task `019f2444`) the signal is a
+  `role_assignments` row pinning the agent to `role_key: "historian"`.
+  The legacy `"historian" in agent.system_events` signal is retired —
+  Roles is the canonical source-of-truth. The
+  `role_assignments.role_key` unique index enforces one-agent-per-role
+  DB-side, so at most one agent id can win this predicate at a time.
+
+  Implementation delegates to `Platform.Roles.agent_id_for_role/1`
+  which is a single `Repo.one/2` on the assignments table. Cheap and
+  cache-friendly. If a richer role model lands later, swap this
+  implementation in place and callers (`gate_write/3`, `gate_read/2`)
+  keep working unchanged.
   """
   @spec historian?(Agent.t() | nil) :: boolean()
-  def historian?(%Agent{system_events: events}) when is_list(events),
-    do: @historian_event in events
+  def historian?(%Agent{id: agent_id}) when is_binary(agent_id),
+    do: Platform.Roles.agent_id_for_role(@historian_role_key) == agent_id
 
   def historian?(_), do: false
 

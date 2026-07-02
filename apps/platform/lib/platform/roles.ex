@@ -313,6 +313,39 @@ defmodule Platform.Roles do
     end
   end
 
+  @doc """
+  Return the `agent_id` (binary UUID) currently pinned to `role_key`,
+  or `nil` if the role is unassigned.
+
+  Unlike `assignee_for/1`, this takes a **role_key** (`"historian"`,
+  `"designer"`, …) and consults `role_assignments` directly — it does
+  NOT walk responsibility bundles. Used by call sites that key off role
+  identity itself (e.g. the wiki write-gate's Historian predicate) rather
+  than off a single responsibility within the bundle.
+
+  Returns just the id — not a preloaded agent — so hot-path callers
+  (routing gates, dispatcher lookups) can pattern-match on the id
+  without paying for an unnecessary agent join. Callers that need the
+  full struct can `Repo.get(Agent, id)` themselves.
+
+  Decision 1 (one-agent-per-role) means at most one row matches; the
+  `role_assignments.role_key` unique index enforces this DB-side, so
+  the `Repo.one/2` here is safe.
+
+  ## Examples
+
+      iex> Platform.Roles.agent_id_for_role("definitely-not-a-real-role")
+      nil
+  """
+  @spec agent_id_for_role(String.t()) :: binary() | nil
+  def agent_id_for_role(role_key) when is_binary(role_key) do
+    from(ra in RoleAssignment,
+      where: ra.role_key == ^role_key,
+      select: ra.agent_id
+    )
+    |> Repo.one()
+  end
+
   # ── Internal helpers ──────────────────────────────────────────────────
 
   defp lookup_override_agent(responsibility_key) do

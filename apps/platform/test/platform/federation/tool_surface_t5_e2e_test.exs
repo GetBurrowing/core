@@ -71,16 +71,22 @@ defmodule Platform.Federation.ToolSurfaceT5E2ETest do
     :ok
   end
 
-  defp create_agent(slug_prefix, system_events) do
+  defp create_agent(slug_prefix, opts \\ []) do
     {:ok, agent} =
       %Agent{}
       |> Agent.changeset(%{
         slug: "#{slug_prefix}-#{System.unique_integer([:positive, :monotonic])}",
         name: String.capitalize(slug_prefix),
-        status: "active",
-        system_events: system_events
+        status: "active"
       })
       |> Repo.insert()
+
+    # Task 019f2444 stage 6: Historian pins are Roles-only now. The
+    # legacy `agents.system_events` column was dropped in stage 5, so
+    # test fixtures pin via `Platform.Roles.assign_role/2` directly.
+    if Keyword.get(opts, :assign_historian?, false) do
+      {:ok, _} = Platform.Roles.assign_role("historian", agent.id)
+    end
 
     agent
   end
@@ -126,8 +132,8 @@ defmodule Platform.Federation.ToolSurfaceT5E2ETest do
 
   test "Case A — Historian memory_create + memory_view round-trip on org/page/identity.md" do
     # setup: workspace with no pre-existing pages, Historian agent
-    # carrying `system_events: [\"historian\"]` (T6's canonical event).
-    historian = create_agent("historian-a", ["historian"])
+    # pinned via Roles (task 019f2444 stage 6 retired `system_events`).
+    historian = create_agent("historian-a", assign_historian?: true)
 
     text = "# Org Identity\n\nFabrikam — AI-native consultancy."
 
@@ -163,9 +169,9 @@ defmodule Platform.Federation.ToolSurfaceT5E2ETest do
   # ── Case B: non-Historian rejected with "propose via journal" ────────
 
   test "Case B — non-Historian memory_str_replace rejected with verbatim 'propose via journal'" do
-    # setup: non-Historian agent (system_events: []); seed an existing
+    # setup: non-Historian agent (no Historian pin); seed an existing
     # `org/page/decisions.md`.
-    plain = create_agent("plain-b", [])
+    plain = create_agent("plain-b")
     seed_page("org/page/decisions.md", "foo decision body\nfoo follow-up\n")
 
     # actions: As the non-Historian, attempt to str_replace the seeded
@@ -217,8 +223,8 @@ defmodule Platform.Federation.ToolSurfaceT5E2ETest do
     #   - messages in S1 (caller participates) and S2 (caller does
     #     not participate) mentioning \"deployment\" — only S1 hits
     #     survive ACL.
-    caller = create_agent("caller-c", [])
-    other = create_agent("other-c", [])
+    caller = create_agent("caller-c")
+    other = create_agent("other-c")
 
     s1 = seed_space("c-s1")
     s2 = seed_space("c-s2")

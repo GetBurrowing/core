@@ -88,8 +88,7 @@ defmodule Platform.Org.Wiki.SearchTest do
       |> Agent.changeset(%{
         slug: "#{slug_prefix}-#{System.unique_integer([:positive, :monotonic])}",
         name: String.capitalize(slug_prefix),
-        status: "active",
-        system_events: []
+        status: "active"
       })
       |> Repo.insert()
 

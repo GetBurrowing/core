@@ -7,14 +7,19 @@ defmodule Platform.Org.Wiki.RoutingTest do
   predicate (§3) and owner-of-private check (§4).
 
   Owner-check tests pass the participant list explicitly via the
-  `:agent_space_ids` opt so we don't need the `Repo` or sandbox here —
-  Routing stays unit-testable.
+  `:agent_space_ids` opt so they stay unit-testable — the only tests
+  that hit the DB are the `historian?/1` cases, which seed a real
+  `role_assignments` row via `Platform.Roles.assign_role/2` now that
+  the predicate reads from Roles rather than `agent.system_events`
+  (task 019f2444 retirement).
   """
 
-  use ExUnit.Case, async: true
+  use Platform.DataCase, async: false
 
   alias Platform.Agents.Agent
   alias Platform.Org.Wiki.Routing
+  alias Platform.Repo
+  alias Platform.Roles
 
   @space_id "019e0930-6a03-7900-84b0-225bbf054427"
   @project_id "019e41d9-f6e9-775c-b782-75e4d3c1e596"
@@ -22,11 +27,42 @@ defmodule Platform.Org.Wiki.RoutingTest do
   @other_agent_id "019e41db-84dc-7b32-97bb-a414bad22f79"
   @today ~D[2026-05-20]
 
-  defp historian_agent(id \\ @agent_id, extra_events \\ []),
-    do: %Agent{id: id, system_events: ["historian" | extra_events]}
+  # ── Test-local helpers ────────────────────────────────────────────────
+  #
+  # `historian_agent/1` and `plain_agent/1` remain in-memory struct
+  # constructors used everywhere EXCEPT the `historian?/1` describe
+  # block — classify/1, gate_write/3 (page/journal/private branches),
+  # gate_read/3, and owner_of?/3 don't need the DB, so they keep the
+  # cheap struct fixtures.
 
-  defp plain_agent(id \\ @agent_id, events \\ []),
-    do: %Agent{id: id, system_events: events}
+  defp plain_agent(id \\ @agent_id), do: %Agent{id: id}
+
+  # `insert_agent!/1` + `pin_historian!/1` build real DB rows so the
+  # Roles-based `historian?/1` predicate has something to query. These
+  # are used by the `historian?/1` describe block and the page-write
+  # tests in `gate_write/3` that exercise the Historian branch.
+  defp insert_agent!(overrides \\ %{}) do
+    suffix = System.unique_integer([:positive])
+
+    attrs =
+      %{
+        slug: "routing-test-#{suffix}",
+        name: "Routing Test #{suffix}",
+        status: "active",
+        kind: "native",
+        workspace_id: nil
+      }
+      |> Map.merge(overrides)
+
+    %Agent{}
+    |> Agent.changeset(attrs)
+    |> Repo.insert!()
+  end
+
+  defp pin_historian!(%Agent{id: id} = agent) do
+    {:ok, _} = Roles.assign_role("historian", id)
+    agent
+  end
 
   ## ─────────────────────────────────────────────────────────────────────
   ## classify/1 — every policy branch from §2
@@ -159,33 +195,45 @@ defmodule Platform.Org.Wiki.RoutingTest do
   end
 
   ## ─────────────────────────────────────────────────────────────────────
-  ## historian?/1 (§3)
+  ## historian?/1 (§3) — now Roles-backed (task 019f2444)
   ## ─────────────────────────────────────────────────────────────────────
 
   describe "historian?/1" do
-    test "true when agent.system_events contains \"historian\"" do
-      assert Routing.historian?(historian_agent())
+    test "true when the agent is pinned to role_key: \"historian\"" do
+      agent = insert_agent!() |> pin_historian!()
+      assert Routing.historian?(agent)
     end
 
-    test "true when historian is one of several events" do
-      assert Routing.historian?(historian_agent(@agent_id, ["some_future_event"]))
+    test "false when no role_assignment exists for the agent" do
+      agent = insert_agent!()
+      refute Routing.historian?(agent)
     end
 
-    test "false when system_events is empty" do
-      refute Routing.historian?(plain_agent())
+    test "false when the historian role_assignment points at a DIFFERENT agent" do
+      # The retirement's exclusivity contract: Roles is source-of-truth,
+      # only the pinned agent gets the role. This is the case the legacy
+      # `system_events`-array signal could not enforce.
+      historian = insert_agent!(%{slug: "actual-historian"}) |> pin_historian!()
+      impostor = insert_agent!(%{slug: "impostor"})
+
+      assert Routing.historian?(historian)
+      refute Routing.historian?(impostor)
     end
 
-    test "false when system_events has other events but not historian" do
-      # The legacy daily_summary/dreaming signals no longer confer the role.
-      refute Routing.historian?(plain_agent(@agent_id, ["daily_summary", "dreaming"]))
+    test "false when the historian role is unassigned entirely" do
+      # No role_assignments row exists → predicate must be false even
+      # for an agent whose id happens to match nothing in Roles.
+      agent = insert_agent!()
+      Roles.unassign_role("historian")
+      refute Routing.historian?(agent)
     end
 
     test "false for nil agent" do
       refute Routing.historian?(nil)
     end
 
-    test "false when system_events is not a list (defensive)" do
-      refute Routing.historian?(%Agent{id: @agent_id, system_events: nil})
+    test "false for an agent struct without a bound id (defensive)" do
+      refute Routing.historian?(%Agent{})
     end
   end
 
@@ -225,17 +273,20 @@ defmodule Platform.Org.Wiki.RoutingTest do
 
   describe "gate_write/3 — page paths" do
     test "Historian can write org/page/..." do
-      assert :ok = Routing.gate_write(historian_agent(), "org/page/charter.md")
+      historian = insert_agent!() |> pin_historian!()
+      assert :ok = Routing.gate_write(historian, "org/page/charter.md")
     end
 
     test "Historian can write project/<uuid>/page/..." do
+      historian = insert_agent!() |> pin_historian!()
       path = "project/#{@project_id}/page/decisions/0041.md"
-      assert :ok = Routing.gate_write(historian_agent(), path)
+      assert :ok = Routing.gate_write(historian, path)
     end
 
     test "Historian can write space/<uuid>/page/..." do
+      historian = insert_agent!() |> pin_historian!()
       path = "space/#{@space_id}/page/onboarding.md"
-      assert :ok = Routing.gate_write(historian_agent(), path)
+      assert :ok = Routing.gate_write(historian, path)
     end
 
     test "non-Historian gets :historian_required with verbatim message and suggestion" do
@@ -327,7 +378,8 @@ defmodule Platform.Org.Wiki.RoutingTest do
 
   describe "gate_write/3 — rejected namespace" do
     test "unknown path returns :rejected_namespace error (not recoverable)" do
-      assert {:error, err} = Routing.gate_write(historian_agent(), "random/garbage/path.md")
+      historian = insert_agent!() |> pin_historian!()
+      assert {:error, err} = Routing.gate_write(historian, "random/garbage/path.md")
       assert err.code == :rejected_namespace
       assert err.recoverable == false
     end

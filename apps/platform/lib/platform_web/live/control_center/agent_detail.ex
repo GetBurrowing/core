@@ -74,12 +74,6 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
               <span class="hero-globe-alt h-3.5 w-3.5" /> Federated
             </span>
             <span
-              :if={"historian" in (@agent.system_events || [])}
-              class="inline-flex items-center gap-1 rounded-full bg-primary/15 px-2.5 py-1 text-primary"
-            >
-              <span class="hero-book-open h-3.5 w-3.5" /> Historian
-            </span>
-            <span
               :if={@agent.runtime_type != "external"}
               class="rounded-full bg-base-200 px-2.5 py-1"
             >
@@ -245,7 +239,6 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
   attr :federation_spaces, :list, default: []
   attr :show_add_space_modal, :boolean, default: false
   attr :available_spaces, :list, default: []
-  attr :other_historian_exists, :boolean, default: false
 
   def federation_panels(assigns) do
     ~H"""
@@ -324,11 +317,6 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
             </label>
           </div>
         </div>
-        <.historian_toggle
-          agent={@agent}
-          config_form={@config_form}
-          other_historian_exists={@other_historian_exists}
-        />
         <div class="flex justify-stretch sm:justify-end">
           <button type="submit" class="btn btn-neutral w-full sm:w-auto">
             Update identity
@@ -411,80 +399,12 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
     """
   end
 
-  # ── Historian toggle ──────────────────────────────────────────────
-  #
-  # Shared between federation_panels/1 and config_form/1 so both built-in
-  # and federated agents can opt into the Historian role. A single checkbox
-  # writes the single canonical `historian` system event (post-T6 — the
-  # legacy `daily_summary` + `dreaming` bundle is gone).
-
-  attr :agent, :map, required: true
-  attr :config_form, :map, required: true
-  attr :other_historian_exists, :boolean, default: false
-
-  def historian_toggle(assigns) do
-    assigns =
-      assign(
-        assigns,
-        :currently_historian?,
-        "historian" in (assigns.agent.system_events || [])
-      )
-
-    assigns =
-      assign(
-        assigns,
-        :historian_disabled?,
-        assigns.other_historian_exists and not assigns.currently_historian?
-      )
-
-    ~H"""
-    <div class="form-control md:col-span-2">
-      <input type="hidden" name="config[historian]" value="off" />
-      <label class={[
-        "flex items-start justify-between gap-4 rounded-lg border border-base-300 bg-base-100 p-3 transition-colors",
-        if(@historian_disabled?,
-          do: "cursor-not-allowed opacity-60",
-          else: "cursor-pointer hover:bg-base-200"
-        )
-      ]}>
-        <span class="flex-1">
-          <span class="font-semibold">Historian</span>
-          <p class="mt-0.5 text-xs text-base-content/55">
-            This agent will read activity from all non-DM spaces nightly and write daily + long-term org memory. Only one agent can be Historian at a time.
-          </p>
-        </span>
-        <input
-          type="checkbox"
-          name="config[historian]"
-          value="on"
-          checked={@currently_historian?}
-          disabled={@historian_disabled?}
-          class="toggle toggle-primary mt-1 flex-none"
-        />
-      </label>
-      <p
-        :if={@historian_disabled?}
-        class="mt-1 text-xs text-warning"
-      >
-        Another agent is currently Historian — clear that first to reassign.
-      </p>
-      <p
-        :if={@agent.runtime_type == "external" and @currently_historian?}
-        class="mt-1 text-xs text-base-content/55"
-      >
-        Heads up: activity from all spaces will be sent to the remote runtime.
-      </p>
-    </div>
-    """
-  end
-
   # ── Config form ───────────────────────────────────────────────────
 
   attr :agent, :map, required: true
   attr :config_form, :map, required: true
   attr :model_chain_result, :any, required: true
   attr :selected_agent_directory_entry, :map, default: nil
-  attr :other_historian_exists, :boolean, default: false
 
   def config_form(assigns) do
     ~H"""
@@ -601,12 +521,6 @@ defmodule PlatformWeb.ControlCenter.AgentDetail do
               </option>
             </select>
           </label>
-
-          <.historian_toggle
-            agent={@agent}
-            config_form={@config_form}
-            other_historian_exists={@other_historian_exists}
-          />
         </div>
 
         <%!-- Color family picker --%>

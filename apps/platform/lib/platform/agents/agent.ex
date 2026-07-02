@@ -38,7 +38,6 @@ defmodule Platform.Agents.Agent do
   @foreign_key_type :binary_id
 
   @valid_statuses ~w(active paused archived)
-  @valid_system_events ~w(historian)
   @valid_kinds ~w(native external)
   @valid_endpoint_kinds ~w(openai_compat ollama_native)
 
@@ -60,7 +59,6 @@ defmodule Platform.Agents.Agent do
     field(:runtime_type, :string, default: "built_in")
     field(:runtime_id, :binary_id)
     field(:color, :string)
-    field(:system_events, {:array, :string}, default: [])
     field(:kind, :string, default: "native")
     field(:endpoint_kind, :string)
     field(:base_url, :string)
@@ -95,7 +93,6 @@ defmodule Platform.Agents.Agent do
       :runtime_type,
       :runtime_id,
       :color,
-      :system_events,
       :kind,
       :endpoint_kind,
       :base_url,
@@ -108,7 +105,6 @@ defmodule Platform.Agents.Agent do
     ])
     |> validate_required([:slug, :name, :status])
     |> validate_inclusion(:status, @valid_statuses)
-    |> validate_subset(:system_events, @valid_system_events)
     |> validate_inclusion(:kind, @valid_kinds)
     |> validate_external_fields()
     |> unique_constraint(:slug,

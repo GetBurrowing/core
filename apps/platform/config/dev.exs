@@ -106,7 +106,10 @@ config :phoenix_live_view,
   enable_expensive_runtime_checks: true
 
 # M8 stage 2 (ADR-0041): flip the dual-write shim on in dev so every
-# `daily_summary` / `dreaming` historian tick exercises both the legacy
-# scheduler dispatch AND the M6 responsibility router path. Prod stays
-# `false` until the cutover monitor reports zero divergence for 7 days.
+# historian tick exercises both the legacy scheduler dispatch AND the M6
+# responsibility router path for the tracked `memory.daily_summary` /
+# `memory.dreaming` keys. Prod stays `false` until the cutover monitor
+# reports zero divergence for 7 days. (Task 019f2444 collapsed the
+# legacy historian signal onto a single canonical event; the router keys
+# above are the last remaining consumers of the dual-write shim.)
 config :platform, :responsibility_router_enabled, true

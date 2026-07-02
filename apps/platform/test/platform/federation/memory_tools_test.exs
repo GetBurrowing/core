@@ -32,22 +32,28 @@ defmodule Platform.Federation.MemoryToolsTest do
     Repo.delete_all(WikiPage)
     Repo.delete_all(WikiJournalEntry)
 
-    historian = create_agent("historian", ["historian"])
-    plain = create_agent("plain", [])
+    historian = create_agent("historian", assign_historian?: true)
+    plain = create_agent("plain")
 
     %{historian: historian, plain: plain}
   end
 
-  defp create_agent(slug_prefix, system_events) do
+  defp create_agent(slug_prefix, opts \\ []) do
     {:ok, agent} =
       %Agent{}
       |> Agent.changeset(%{
         slug: "#{slug_prefix}-#{System.unique_integer([:positive, :monotonic])}",
         name: String.capitalize(slug_prefix),
-        status: "active",
-        system_events: system_events
+        status: "active"
       })
       |> Repo.insert()
+
+    # Task 019f2444 stage 6: Historian pins are Roles-only now. The
+    # legacy `agents.system_events` column was dropped in stage 5, so
+    # test fixtures pin via `Platform.Roles.assign_role/2` directly.
+    if Keyword.get(opts, :assign_historian?, false) do
+      {:ok, _} = Platform.Roles.assign_role("historian", agent.id)
+    end
 
     agent
   end

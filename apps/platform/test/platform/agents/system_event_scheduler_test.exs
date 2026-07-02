@@ -159,10 +159,31 @@ defmodule Platform.Agents.SystemEventSchedulerTest do
       status: "active"
     }
 
-    defp create_agent(attrs \\ %{}) do
-      %Agent{}
-      |> Agent.changeset(Map.merge(@valid_agent_attrs, attrs))
-      |> Repo.insert!()
+    # Task 019f2444 stage 6: fixtures no longer seed
+    # `system_events: ["historian"]` (column dropped in stage 5). Callers
+    # pass `assign_historian?: true` to pin the Historian role on the
+    # freshly-inserted agent. `Roles.assign_role/2` returns
+    # `{:error, changeset}` when the role is already pinned — swallow it
+    # so the older assignment wins (mirrors the legacy `order_by:
+    # inserted_at` behaviour for the multi-Historian tiebreak).
+    defp create_agent(attrs \\ %{}, opts \\ []) do
+      agent =
+        %Agent{}
+        |> Agent.changeset(Map.merge(@valid_agent_attrs, attrs))
+        |> Repo.insert!()
+
+      if Keyword.get(opts, :assign_historian?, false) and agent.status == "active" do
+        assign_historian_role(agent)
+      end
+
+      agent
+    end
+
+    defp assign_historian_role(%Agent{id: id}) do
+      case Platform.Roles.assign_role("historian", id) do
+        {:ok, _} -> :ok
+        {:error, _changeset} -> :ok
+      end
     end
 
     defp read_system_space_messages(agent) do
@@ -176,70 +197,9 @@ defmodule Platform.Agents.SystemEventSchedulerTest do
       )
     end
 
-    describe "system_events field (post-T6 whitelist)" do
-      test "agent changeset accepts the new historian event" do
-        changeset =
-          Agent.changeset(
-            %Agent{},
-            Map.put(@valid_agent_attrs, :system_events, ["historian"])
-          )
-
-        assert changeset.valid?
-      end
-
-      test "agent changeset rejects the legacy daily_summary event" do
-        changeset =
-          Agent.changeset(
-            %Agent{},
-            Map.put(@valid_agent_attrs, :system_events, ["daily_summary"])
-          )
-
-        refute changeset.valid?
-      end
-
-      test "agent changeset rejects the legacy dreaming event" do
-        changeset =
-          Agent.changeset(
-            %Agent{},
-            Map.put(@valid_agent_attrs, :system_events, ["dreaming"])
-          )
-
-        refute changeset.valid?
-      end
-
-      test "agent changeset rejects unknown system events" do
-        changeset =
-          Agent.changeset(
-            %Agent{},
-            Map.put(@valid_agent_attrs, :system_events, ["invalid_event"])
-          )
-
-        refute changeset.valid?
-      end
-
-      test "agent changeset accepts empty system events" do
-        changeset =
-          Agent.changeset(%Agent{}, Map.put(@valid_agent_attrs, :system_events, []))
-
-        assert changeset.valid?
-      end
-
-      test "system_events persists as JSONB array" do
-        agent = create_agent(%{system_events: ["historian"]})
-        reloaded = Repo.get!(Agent, agent.id)
-
-        assert reloaded.system_events == ["historian"]
-      end
-
-      test "system_events defaults to empty list" do
-        agent = create_agent()
-        assert agent.system_events == []
-      end
-    end
-
     describe "agent_for_event query" do
-      test "fire_now finds the historian-flagged active agent" do
-        agent = create_agent(%{system_events: ["historian"]})
+      test "fire_now finds the historian-pinned active agent" do
+        agent = create_agent(%{}, assign_historian?: true)
 
         {:ok, _pid} =
           start_supervised({SystemEventScheduler, check_interval_ms: :timer.hours(24)})
@@ -252,8 +212,8 @@ defmodule Platform.Agents.SystemEventSchedulerTest do
         assert space.kind == "system"
       end
 
-      test "fire_now skips when no agent is flagged" do
-        _agent = create_agent(%{system_events: []})
+      test "fire_now skips when no agent is pinned" do
+        _agent = create_agent()
 
         {:ok, _pid} =
           start_supervised({SystemEventScheduler, check_interval_ms: :timer.hours(24)})
@@ -262,7 +222,7 @@ defmodule Platform.Agents.SystemEventSchedulerTest do
       end
 
       test "fire_now skips inactive agents" do
-        _agent = create_agent(%{system_events: ["historian"], status: "paused"})
+        _agent = create_agent(%{status: "paused"}, assign_historian?: true)
 
         {:ok, _pid} =
           start_supervised({SystemEventScheduler, check_interval_ms: :timer.hours(24)})
@@ -271,7 +231,7 @@ defmodule Platform.Agents.SystemEventSchedulerTest do
       end
 
       test "legacy event names are routed to the historian agent with a warning" do
-        agent = create_agent(%{system_events: ["historian"]})
+        agent = create_agent(%{}, assign_historian?: true)
 
         {:ok, _pid} =
           start_supervised({SystemEventScheduler, check_interval_ms: :timer.hours(24)})
@@ -287,39 +247,9 @@ defmodule Platform.Agents.SystemEventSchedulerTest do
       end
     end
 
-    describe "one-agent-per-event enforcement" do
-      test "flagging agent B unflags agent A via config save logic" do
-        agent_a = create_agent(%{slug: "agent-a", system_events: ["historian"]})
-        agent_b = create_agent(%{slug: "agent-b", system_events: []})
-
-        # Mirror the unflag logic from control_center_live.ex.
-        newly_claimed = ["historian"]
-
-        for event <- newly_claimed do
-          from(a in Agent,
-            where: a.id != ^agent_b.id,
-            where: fragment("? @> ?", a.system_events, ^[event])
-          )
-          |> Repo.all()
-          |> Enum.each(fn other ->
-            cleaned = Enum.reject(other.system_events || [], &(&1 == event))
-            other |> Agent.changeset(%{system_events: cleaned}) |> Repo.update!()
-          end)
-        end
-
-        agent_b |> Agent.changeset(%{system_events: ["historian"]}) |> Repo.update!()
-
-        reloaded_a = Repo.get!(Agent, agent_a.id)
-        reloaded_b = Repo.get!(Agent, agent_b.id)
-
-        assert reloaded_a.system_events == []
-        assert reloaded_b.system_events == ["historian"]
-      end
-    end
-
     describe "historian instruction content" do
       test "posted instruction includes the activity digest and writes-to-pages guidance" do
-        agent = create_agent(%{system_events: ["historian"]})
+        agent = create_agent(%{}, assign_historian?: true)
 
         {:ok, _pid} =
           start_supervised({SystemEventScheduler, check_interval_ms: :timer.hours(24)})
@@ -336,7 +266,7 @@ defmodule Platform.Agents.SystemEventSchedulerTest do
       end
 
       test "instruction does not leave the digest placeholder uninterpolated" do
-        agent = create_agent(%{system_events: ["historian"]})
+        agent = create_agent(%{}, assign_historian?: true)
 
         {:ok, _pid} =
           start_supervised({SystemEventScheduler, check_interval_ms: :timer.hours(24)})
@@ -366,12 +296,14 @@ defmodule Platform.Agents.SystemEventSchedulerTest do
           Platform.Federation.register_runtime(user.id, %{runtime_id: runtime_id_string})
 
         agent =
-          create_agent(%{
-            slug: "external-historian",
-            runtime_type: "external",
-            runtime_id: runtime.id,
-            system_events: ["historian"]
-          })
+          create_agent(
+            %{
+              slug: "external-historian",
+              runtime_type: "external",
+              runtime_id: runtime.id
+            },
+            assign_historian?: true
+          )
 
         {:ok, agent: agent, runtime: runtime, runtime_id_string: runtime_id_string}
       end
@@ -410,10 +342,19 @@ defmodule Platform.Agents.SystemEventSchedulerTest do
       end
     end
 
-    describe "ambiguity when multiple agents claim same event" do
-      test "picks the oldest agent and logs a warning" do
-        older = create_agent(%{slug: "older-historian", system_events: ["historian"]})
-        newer = create_agent(%{slug: "newer-historian", system_events: ["historian"]})
+    describe "role_assignments unique-index enforces one Historian" do
+      test "second assign_role/2 loses; dispatch lands on the pinned one, no ambiguity warning" do
+        # M4/ADR-0041: `role_assignments.role_key` is UNIQUE, so the
+        # "two agents flagged historian" state the legacy column
+        # allowed is now impossible. Stage 6 (this task) dropped the
+        # column entirely — the fixture below tries to pin both agents
+        # to the Historian role; the second `assign_role/2` returns
+        # `{:error, changeset}` and the older assignment wins.
+        # Dispatch resolves to `older`, `newer` gets nothing, and no
+        # ambiguity warning is emitted (the multi-agent tiebreak branch
+        # in the legacy scheduler is dead code post-M4).
+        older = create_agent(%{slug: "older-historian"}, assign_historian?: true)
+        newer = create_agent(%{slug: "newer-historian"}, assign_historian?: true)
 
         {:ok, _pid} =
           start_supervised({SystemEventScheduler, check_interval_ms: :timer.hours(24)})
@@ -423,7 +364,7 @@ defmodule Platform.Agents.SystemEventSchedulerTest do
             SystemEventScheduler.fire_now("historian")
           end)
 
-        assert log =~ "multiple agents flagged for historian"
+        refute log =~ "multiple agents flagged for historian"
         assert Chat.get_space_by_slug("system-#{older.slug}") != nil
         assert Chat.get_space_by_slug("system-#{newer.slug}") == nil
       end
@@ -444,7 +385,7 @@ defmodule Platform.Agents.SystemEventSchedulerTest do
 
       test "flag=false: legacy fires, no [dual_write] log, router untouched" do
         Application.put_env(:platform, :responsibility_router_enabled, false)
-        agent = create_agent(%{system_events: ["historian"]})
+        agent = create_agent(%{}, assign_historian?: true)
 
         {:ok, _pid} =
           start_supervised({SystemEventScheduler, check_interval_ms: :timer.hours(24)})
@@ -468,7 +409,7 @@ defmodule Platform.Agents.SystemEventSchedulerTest do
 
       test "flag=true: legacy fires AND [dual_write] log lines appear for both keys" do
         Application.put_env(:platform, :responsibility_router_enabled, true)
-        agent = create_agent(%{system_events: ["historian"]})
+        agent = create_agent(%{}, assign_historian?: true)
 
         {:ok, _pid} =
           start_supervised({SystemEventScheduler, check_interval_ms: :timer.hours(24)})
@@ -500,7 +441,7 @@ defmodule Platform.Agents.SystemEventSchedulerTest do
         # the call returns an unexpected shape the legacy result must
         # be returned to the caller (the historian dispatch).
         Application.put_env(:platform, :responsibility_router_enabled, true)
-        _agent = create_agent(%{system_events: ["historian"]})
+        _agent = create_agent(%{}, assign_historian?: true)
 
         {:ok, _pid} =
           start_supervised({SystemEventScheduler, check_interval_ms: :timer.hours(24)})
@@ -689,14 +630,22 @@ defmodule Platform.Agents.SystemEventSchedulerTest do
     @historian_workspace_id Projects.org_scope_workspace_id()
 
     defp create_historian_agent do
-      %Agent{}
-      |> Agent.changeset(%{
-        slug: "threshold-historian",
-        name: "Threshold Historian",
-        status: "active",
-        system_events: ["historian"]
-      })
-      |> Repo.insert!()
+      agent =
+        %Agent{}
+        |> Agent.changeset(%{
+          slug: "threshold-historian",
+          name: "Threshold Historian",
+          status: "active"
+        })
+        |> Repo.insert!()
+
+      # Task 019f2444: HistorianDispatcher.agent_for_event/1 consults
+      # Platform.Roles as source-of-truth. Pin the Historian role so
+      # threshold-sweep dispatch resolves to this agent. The legacy
+      # `agents.system_events` column was dropped in stage 5.
+      {:ok, _} = Platform.Roles.assign_role("historian", agent.id)
+
+      agent
     end
 
     defp insert_journal_chars!(workspace_id, n) when is_integer(n) and n > 0 do

@@ -100,8 +100,7 @@ defmodule PlatformWeb.ControlCenter.AgentData do
       agent: agent,
       runtime_type: agent.runtime_type || "built_in",
       runtime_status: runtime_status(agent),
-      running?: runtime_running?(agent),
-      system_events: agent.system_events || []
+      running?: runtime_running?(agent)
     }
   end
 
@@ -122,8 +121,7 @@ defmodule PlatformWeb.ControlCenter.AgentData do
       agent: nil,
       runtime_type: "built_in",
       runtime_status: :unknown,
-      running?: false,
-      system_events: []
+      running?: false
     }
   end
 
@@ -293,38 +291,10 @@ defmodule PlatformWeb.ControlCenter.AgentData do
       "thinking_default" => agent.thinking_default || "",
       "max_concurrent" => agent.max_concurrent || 1,
       "sandbox_mode" => agent.sandbox_mode || "off",
-      "color" => agent.color || "",
-      "system_events" => agent.system_events || [],
-      "historian" => "historian" in (agent.system_events || [])
+      "color" => agent.color || ""
     }
 
     to_form(Map.merge(base, normalize_map(overrides)), as: :config)
-  end
-
-  @doc """
-  Returns true if any *other* agent already holds the Historian role.
-
-  Used to disable the Historian checkbox on the current agent's form when a
-  different agent is the Historian. The check is based on presence of the
-  single canonical `historian` system event (post-T6 — was previously a
-  bundle of `daily_summary` + `dreaming`).
-  """
-  @spec another_historian_exists?(binary() | nil) :: boolean()
-  def another_historian_exists?(current_agent_id) do
-    query =
-      from(a in Agent,
-        where: fragment("? @> ?", a.system_events, ^["historian"]),
-        select: a.id
-      )
-
-    query =
-      if current_agent_id do
-        from(a in query, where: a.id != ^current_agent_id)
-      else
-        query
-      end
-
-    Repo.exists?(query)
   end
 
   def build_create_agent_form(overrides) do
@@ -461,32 +431,8 @@ defmodule PlatformWeb.ControlCenter.AgentData do
         parse_positive_integer(Map.get(params, "max_concurrent")) || agent.max_concurrent || 1,
       sandbox_mode: blank_fallback(Map.get(params, "sandbox_mode"), agent.sandbox_mode || "off"),
       color: blank_to_nil(Map.get(params, "color")),
-      model_config: updated_model_config,
-      system_events: derive_system_events(params, agent)
+      model_config: updated_model_config
     }
-  end
-
-  # Post-T6: the Historian role is a single canonical `historian` system
-  # event (was previously a bundle of `daily_summary` + `dreaming`). If the
-  # param is missing entirely (e.g. a form that doesn't expose Historian),
-  # preserve the agent's current value rather than silently clearing it.
-  defp derive_system_events(params, %Agent{} = agent) do
-    cond do
-      Map.has_key?(params, "historian") ->
-        case Map.get(params, "historian") do
-          "on" -> ["historian"]
-          _ -> []
-        end
-
-      Map.has_key?(params, "system_events") ->
-        params
-        |> Map.get("system_events", [])
-        |> List.wrap()
-        |> Enum.reject(&(&1 == ""))
-
-      true ->
-        agent.system_events || []
-    end
   end
 
   def create_agent_attrs_from_params(params) do

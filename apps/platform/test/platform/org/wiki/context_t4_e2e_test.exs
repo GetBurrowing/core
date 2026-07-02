@@ -383,10 +383,27 @@ defmodule Platform.Org.Wiki.ContextT4E2ETest do
       # in `Platform.Roles.Role`; seed row + responsibility bundle land
       # in stages 2-3.
       "20260702000000_add_meeting_producer_to_roles_check.exs",
+      # Historian retirement (task 019f2444) stage 1: one-shot data
+      # backfill that reads legacy `agents.system_events @> '["historian"]'`
+      # and materializes matching `role_assignments` rows for
+      # `role_key = "historian"`, so the code cutover in later stages
+      # (Routing.historian?/1, HistorianDispatcher.agent_for_event/1)
+      # can trust Roles as source-of-truth. Idempotent via
+      # ON CONFLICT (role_key) DO NOTHING; disagreement branch logs a
+      # warning and leaves the existing Roles assignment untouched.
+      "20260702192606_backfill_historian_role_assignments.exs",
       # Meeting Producer role — task 019f2451-6728 stage 2. Idempotent
       # re-seed so the row appears on existing envs where the stage-4
       # seed migration already ran.
-      "20260702200500_seed_meeting_producer_role.exs"
+      "20260702200500_seed_meeting_producer_role.exs",
+      # Historian retirement (task 019f2444) stage 5: drop the legacy
+      # `agents.system_events` column now that Roles is source-of-truth
+      # (stages 1-4 backfilled + rewired + removed the UI). `down/0`
+      # restores an empty column but does not re-synthesize Historian
+      # flags — one-way door by design. Timestamp bumped from ...200500
+      # to ...200600 during rebase to avoid Ecto version collision with
+      # Meeting Producer's seed migration.
+      "20260702200600_drop_system_events_from_agents.exs"
     ]
 
     defp t4_root, do: Mix.Project.project_file() |> Path.dirname()

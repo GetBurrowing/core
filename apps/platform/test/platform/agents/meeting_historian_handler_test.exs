@@ -19,14 +19,29 @@ defmodule Platform.Agents.MeetingHistorianHandlerTest do
   @valid_agent_attrs %{
     slug: "historian-agent",
     name: "Historian",
-    status: "active",
-    system_events: ["historian"]
+    status: "active"
   }
 
   defp create_historian_agent(attrs \\ %{}) do
-    %Agent{}
-    |> Agent.changeset(Map.merge(@valid_agent_attrs, attrs))
-    |> Repo.insert!()
+    agent =
+      %Agent{}
+      |> Agent.changeset(Map.merge(@valid_agent_attrs, attrs))
+      |> Repo.insert!()
+
+    # Task 019f2444 stage 6: Roles is the sole Historian signal now
+    # (`agents.system_events` was dropped in stage 5). Pin the role so
+    # `:meeting_ended` dispatch resolves to this agent. If a prior
+    # fixture in the same test already pinned it, the unique index on
+    # `role_key` returns `{:error, changeset}` — swallow and let the
+    # older assignment win.
+    if agent.status == "active" do
+      case Platform.Roles.assign_role("historian", agent.id) do
+        {:ok, _} -> :ok
+        {:error, _changeset} -> :ok
+      end
+    end
+
+    agent
   end
 
   defp create_project(name) do
@@ -190,9 +205,9 @@ defmodule Platform.Agents.MeetingHistorianHandlerTest do
       assert message.metadata["project_id"] == project.id
     end
 
-    test "no crash when the project has no historian-flagged agent" do
-      # No agent created with system_events: ["historian"]. The dispatcher
-      # logs and returns :ok; the handler stays alive.
+    test "no crash when the project has no historian-pinned agent" do
+      # No agent pinned to the Historian role. The dispatcher logs and
+      # returns :ok; the handler stays alive.
       project = create_project("Orphan Project")
 
       pid = start_handler!()
