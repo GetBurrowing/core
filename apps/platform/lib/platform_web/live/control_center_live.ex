@@ -132,10 +132,15 @@ defmodule PlatformWeb.ControlCenterLive do
     {:noreply, assign(socket, :show_role_advanced, !socket.assigns.show_role_advanced)}
   end
 
-  def handle_event("open_fill_role", %{"role_key" => role_key}, socket) do
-    # Open the External Agent flow with the role_key pre-bound so the
-    # form's role <select> renders that role pre-selected and the
-    # submit handler picks it up (stage 6).
+  # Escape-hatch clause: the inline picker's sentinel value opens the
+  # External Agent onboarding flow with the role_key pre-bound so the
+  # form's role <select> renders that role pre-selected and the submit
+  # handler picks it up (stage 6 wiring, reused here).
+  def handle_event(
+        "assign_role",
+        %{"role_key" => role_key, "agent_id" => "__new_external__"},
+        socket
+      ) do
     overrides = %{"role_key" => role_key}
 
     {:noreply,
@@ -144,6 +149,48 @@ defmodule PlatformWeb.ControlCenterLive do
      |> assign(:onboarding_flow, :external)
      |> assign(:external_agent_form, AgentData.build_external_agent_form(overrides))
      |> assign(:probe_result, nil)}
+  end
+
+  # No-op: picker's "Choose an agent…" placeholder emits an empty
+  # agent_id when the row first renders / on re-select of the default.
+  def handle_event("assign_role", %{"role_key" => _key, "agent_id" => ""}, socket) do
+    {:noreply, socket}
+  end
+
+  # Normal clause: `agent_id` is a real UUID → pin the agent to the role.
+  # `assign_role/2` is documented as no-replace (see roles.ex:142) — a
+  # unique-constraint failure on `role_key` surfaces as a changeset
+  # error and we translate it to a "clear first" flash.
+  def handle_event(
+        "assign_role",
+        %{"role_key" => role_key, "agent_id" => agent_id},
+        socket
+      )
+      when is_binary(agent_id) and agent_id != "" do
+    case Platform.Roles.assign_role(role_key, agent_id) do
+      {:ok, _assignment} ->
+        {:noreply,
+         socket
+         |> assign_roles_panel()
+         |> put_flash(:info, "Filled #{role_key}.")}
+
+      {:error, %Ecto.Changeset{}} ->
+        {:noreply,
+         put_flash(
+           socket,
+           :error,
+           "Role already filled — clear it before reassigning."
+         )}
+    end
+  end
+
+  def handle_event("clear_role_assignment", %{"role_key" => role_key}, socket) do
+    :ok = Platform.Roles.unassign_role(role_key)
+
+    {:noreply,
+     socket
+     |> assign_roles_panel()
+     |> put_flash(:info, "Cleared assignment for #{role_key}.")}
   end
 
   def handle_event(

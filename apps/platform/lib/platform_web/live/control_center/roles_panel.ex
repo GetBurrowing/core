@@ -92,6 +92,7 @@ defmodule PlatformWeb.ControlCenter.RolesPanel do
             <.assignee_cell
               role_key={role.key}
               agent={Map.get(@role_assignments_by_key, role.key)}
+              selectable_agents={@selectable_agents}
             />
           </div>
         </li>
@@ -189,20 +190,28 @@ defmodule PlatformWeb.ControlCenter.RolesPanel do
 
   attr :role_key, :string, required: true
   attr :agent, :any, default: nil
+  attr :selectable_agents, :list, default: []
 
   defp assignee_cell(%{agent: nil} = assigns) do
     ~H"""
     <span class="badge badge-warning gap-1">
       <span class="hero-exclamation-triangle h-3 w-3" /> UNFILLED
     </span>
-    <button
-      type="button"
-      phx-click="open_fill_role"
-      phx-value-role_key={@role_key}
-      class="btn btn-primary btn-sm gap-1"
-    >
-      <span class="hero-plus h-4 w-4" /> Fill role
-    </button>
+    <form phx-change="assign_role" class="flex items-center gap-2">
+      <input type="hidden" name="role_key" value={@role_key} />
+      <select
+        name="agent_id"
+        class="select select-bordered select-sm text-xs"
+        aria-label={"Fill #{@role_key} with an agent"}
+        data-role="fill-role-picker"
+      >
+        <option value="" selected>Choose an agent…</option>
+        <option :for={agent <- @selectable_agents} value={agent.id}>
+          {agent.name} ({AgentData.agent_kind_pill(agent)})
+        </option>
+        <option value="__new_external__">+ Create new external agent…</option>
+      </select>
+    </form>
     """
   end
 
@@ -218,6 +227,16 @@ defmodule PlatformWeb.ControlCenter.RolesPanel do
           {AgentData.agent_kind_pill(@agent)}
         </span>
       </div>
+      <button
+        type="button"
+        phx-click="clear_role_assignment"
+        phx-value-role_key={@role_key}
+        class="btn btn-ghost btn-xs text-base-content/50"
+        aria-label={"Clear #{@role_key} assignment"}
+        data-role="clear-role-btn"
+      >
+        Clear
+      </button>
     </div>
     """
   end

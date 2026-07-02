@@ -1529,9 +1529,11 @@ defmodule PlatformWeb.ControlCenterLiveTest do
       assert html =~ "meetings.summarize"
       assert html =~ "tasks.triage"
 
-      # Every row starts UNFILLED with a Fill role button.
+      # Every row starts UNFILLED with an inline agent picker.
       assert html =~ "UNFILLED"
-      assert html =~ "Fill role"
+      assert html =~ ~s(data-role="fill-role-picker")
+      assert html =~ "Choose an agent…"
+      assert html =~ "+ Create new external agent…"
 
       # Cost stats stub chips render literal em-dash placeholders.
       assert html =~ "runs —"
@@ -1541,6 +1543,27 @@ defmodule PlatformWeb.ControlCenterLiveTest do
 
       # Show advanced footer present (stage 6 owns the toggle behaviour).
       assert html =~ "Show advanced"
+    end
+
+    test "unassigned row renders an inline agent picker with existing agents + create-new option",
+         %{conn: conn} do
+      # Seed a persisted, active agent — list_selectable_agents/0 pulls
+      # every :active agent, so this name should surface as an <option>.
+      _agent = create_agent(%{name: "Rosterable Ruth"})
+
+      conn = authenticated_conn(conn)
+      {:ok, _view, html} = live(conn, ~p"/control")
+
+      # The picker itself is present on every UNFILLED row.
+      assert html =~ ~s(data-role="fill-role-picker")
+
+      # A seeded active agent renders as an <option>.
+      assert html =~ "Rosterable Ruth"
+
+      # The escape-hatch sentinel option renders with both the magic
+      # value AND the "Create new external agent" label the operator sees.
+      assert html =~ ~s(value="__new_external__")
+      assert html =~ "Create new external agent"
     end
 
     test "assigning a role swaps the row to show the agent name + kind pill", %{conn: conn} do
@@ -1578,15 +1601,96 @@ defmodule PlatformWeb.ControlCenterLiveTest do
       assert html =~ "Hide advanced"
     end
 
-    test "open_fill_role opens the External Agent onboarding flow", %{conn: conn} do
+    test "assign_role via picker pins the agent to the role and flashes info",
+         %{conn: conn} do
+      agent = create_agent(%{name: "Historian Hank"})
+
       conn = authenticated_conn(conn)
       {:ok, view, _html} = live(conn, ~p"/control")
 
-      html = render_click(view, "open_fill_role", %{"role_key" => "designer"})
+      html =
+        render_change(view, "assign_role", %{
+          "role_key" => "designer",
+          "agent_id" => agent.id
+        })
 
-      # Modal opens to the External Agent flow (heading + form).
+      assignment = Repo.get_by(Platform.Roles.RoleAssignment, role_key: "designer")
+      assert assignment
+      assert assignment.agent_id == agent.id
+      # Flash confirms the fill and the panel refreshed with the new assignee.
+      assert html =~ "Filled designer"
+      assert html =~ "Historian Hank"
+    end
+
+    test "assign_role with the __new_external__ sentinel opens the External Agent flow",
+         %{conn: conn} do
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/control")
+
+      html =
+        render_change(view, "assign_role", %{
+          "role_key" => "designer",
+          "agent_id" => "__new_external__"
+        })
+
+      # Modal opens to the External Agent flow (heading + form) with the
+      # designer role pre-selected.
       assert html =~ "External Agent"
       assert html =~ "external-agent-form"
+      assert html =~ ~r/<option[^>]*value="designer"[^>]*selected/
+    end
+
+    test "assign_role surfaces a clear-first flash when the role is already filled",
+         %{conn: conn} do
+      taken = create_agent(%{name: "Squatter"})
+      other = create_agent(%{name: "Contender"})
+      {:ok, _} = Platform.Roles.assign_role("designer", taken.id)
+
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/control")
+
+      html =
+        render_change(view, "assign_role", %{
+          "role_key" => "designer",
+          "agent_id" => other.id
+        })
+
+      assert html =~ "clear it before reassigning"
+      # Assignment unchanged.
+      assignment = Repo.get_by(Platform.Roles.RoleAssignment, role_key: "designer")
+      assert assignment.agent_id == taken.id
+    end
+
+    test "assign_role with an empty agent_id (picker placeholder) is a no-op",
+         %{conn: conn} do
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/control")
+
+      _html =
+        render_change(view, "assign_role", %{
+          "role_key" => "designer",
+          "agent_id" => ""
+        })
+
+      refute Repo.get_by(Platform.Roles.RoleAssignment, role_key: "designer")
+    end
+
+    test "clear_role_assignment removes the pin and re-renders the row as UNFILLED",
+         %{conn: conn} do
+      agent = create_agent(%{name: "Cleared Pal"})
+      {:ok, _} = Platform.Roles.assign_role("designer", agent.id)
+
+      conn = authenticated_conn(conn)
+      {:ok, view, html} = live(conn, ~p"/control")
+
+      # Assigned before the clear.
+      assert html =~ "Cleared Pal"
+
+      html = render_click(view, "clear_role_assignment", %{"role_key" => "designer"})
+
+      refute Repo.get_by(Platform.Roles.RoleAssignment, role_key: "designer")
+      assert html =~ "UNFILLED"
+      assert html =~ "Cleared assignment for designer"
     end
   end
 
@@ -1658,19 +1762,6 @@ defmodule PlatformWeb.ControlCenterLiveTest do
              )
 
       refute html =~ "OVERRIDE"
-    end
-
-    test "Fill role pre-binds the role_key into the External Agent form's role select",
-         %{conn: conn} do
-      conn = authenticated_conn(conn)
-      {:ok, view, _html} = live(conn, ~p"/control")
-
-      html = render_click(view, "open_fill_role", %{"role_key" => "designer"})
-
-      # The role <select> is present and the designer option is selected.
-      assert html =~ ~s(name="external_agent[role_key]")
-      # The selected designer <option> renders with selected attribute.
-      assert html =~ ~r/<option[^>]*value="designer"[^>]*selected/
     end
 
     test "External Agent form lists taken roles as disabled options with conflict text",
