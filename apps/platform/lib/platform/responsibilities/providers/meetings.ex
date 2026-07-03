@@ -129,6 +129,35 @@ defmodule Platform.Responsibilities.Providers.Meetings do
     end
   end
 
+  @doc """
+  Provider-level `build_prompt/1` (task 019f2570 bug 1 fix).
+
+  The Router's `dispatch_external/3` calls this after
+  `gather_context/2` — when it returns `{:ok, %{system:, user:}}` the
+  Router hands the pre-built prompt to
+  `Platform.ExternalAgents.Dispatcher.dispatch/4` and skips the
+  un-seeded `default_prompt_template` render path.
+
+  The Router stuffs the fired `Responsibility` into the context under
+  `:__responsibility__` before calling us so we can dispatch by key.
+  We route summariser keys to `MeetingSummarize.build_prompt/1`;
+  everything else (e.g. `meetings.intent_classify`) short-circuits to
+  `{:error, :no_build_prompt}` so the Router's fallback catch drops us
+  back onto the legacy template render path — the pre-019f2570
+  behaviour, verbatim.
+  """
+  @impl true
+  @spec build_prompt(map()) ::
+          {:ok, %{system: String.t(), user: String.t()}} | {:error, term()}
+  def build_prompt(context) when is_map(context) do
+    case handler_for(Map.get(context, :__responsibility__)) do
+      Handlers.MeetingSummarize -> MeetingSummarize.build_prompt(context)
+      _ -> {:error, :no_build_prompt}
+    end
+  end
+
+  def build_prompt(_), do: {:error, :no_build_prompt}
+
   # ── internals ─────────────────────────────────────────────────────────────
 
   defp unknown_key(%Responsibility{key: key}) do

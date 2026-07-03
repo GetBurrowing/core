@@ -225,4 +225,38 @@ defmodule Platform.Responsibilities.Providers.MeetingsTest do
                MeetingsProvider.handle_output(responsibility(), %{"summary" => "x"})
     end
   end
+
+  # ── task 019f2570 stage 1 — build_prompt/1 delegation ───────────────────
+  describe "build_prompt/1" do
+    test "delegates to MeetingSummarize.build_prompt when the fired responsibility is summariser" do
+      context = %{
+        __responsibility__: responsibility(),
+        org_identity: %{content: "", missing?: true, version: nil},
+        recent_journal: %{entries_by_date: [], total: 0, days: 7},
+        meeting_transcript: %{formatted_text: "[00:00:00] Hal: Hi"}
+      }
+
+      assert {:ok, %{system: system, user: user}} = MeetingsProvider.build_prompt(context)
+      assert user =~ "[00:00:00] Hal: Hi"
+      assert system =~ "Overview"
+    end
+
+    test "returns {:error, :no_transcript_text} for summariser + empty transcript" do
+      context = %{
+        __responsibility__: responsibility(),
+        meeting_transcript: %{formatted_text: ""}
+      }
+
+      assert {:error, :no_transcript_text} = MeetingsProvider.build_prompt(context)
+    end
+
+    test "returns {:error, :no_build_prompt} for other keys (falls back to legacy template)" do
+      context = %{__responsibility__: intent_classify_responsibility()}
+      assert {:error, :no_build_prompt} = MeetingsProvider.build_prompt(context)
+    end
+
+    test "returns {:error, :no_build_prompt} when no responsibility hint present" do
+      assert {:error, :no_build_prompt} = MeetingsProvider.build_prompt(%{})
+    end
+  end
 end

@@ -383,4 +383,17 @@ defmodule Platform.Meetings.SummarizerTest do
       assert Meetings.get_transcript(transcript.id).status == "failed"
     end
   end
+
+  # ── task 019f2570 stage 2 — legacy path max_tokens regression (bug 2) ──
+  describe "Config.summary/0 max_tokens (legacy fallback)" do
+    test "Config.summary().max_tokens stays 2048 — external dispatch changes MUST NOT touch this" do
+      # Stage 2 plumbs `max_tokens` through the *external* dispatcher
+      # (Handlers.MeetingSummarize declares 2500 in metadata). The
+      # legacy path — `Summarizer.run_summary_legacy` via
+      # `Platform.Meetings.Config.summary().max_tokens` — is
+      # deliberately left at 2048 to keep the Anthropic / OpenAI
+      # legacy adapters bit-identical to their pre-019f2570 behaviour.
+      assert Platform.Meetings.Config.summary().max_tokens == 2048
+    end
+  end
 end

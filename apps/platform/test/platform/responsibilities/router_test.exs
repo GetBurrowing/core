@@ -1236,6 +1236,313 @@ defmodule Platform.Responsibilities.RouterTest do
       assert log =~ "[ResponsibilityRouter] no output handler for #{key}"
       assert log =~ "[ResponsibilityRouter] external dispatch ok key=#{key}"
     end
+
+    # ── task 019f2570 stage 1 — provider gather_context + build_prompt wiring ──
+
+    test "provider gather_context/2 is invoked before ContextGatherer fallback" do
+      # Ad-hoc provider under a unique feature. The `feature`
+      # camelcases into `Platform.Responsibilities.Providers.<Feature>`
+      # which the Router resolves at dispatch time.
+      feature_str = "router_gc_probe_#{System.unique_integer([:positive])}"
+
+      provider_name =
+        :"Elixir.Platform.Responsibilities.Providers.#{Macro.camelize(feature_str)}"
+
+      test_pid = self()
+
+      Module.create(
+        provider_name,
+        quote do
+          @behaviour Platform.Responsibilities.Provider
+
+          @impl true
+          def register, do: []
+
+          @impl true
+          def gather_context(responsibility, meta) do
+            send(unquote(test_pid), {:provider_gather_invoked, responsibility.key, meta})
+            {:ok, %{provider_supplied: "yes"}}
+          end
+
+          @impl true
+          def handle_output(_r, _o), do: :ok
+
+          @impl true
+          def handle_output(_r, _o, _m), do: :ok
+        end,
+        Macro.Env.location(__ENV__)
+      )
+
+      key = "#{feature_str}.trigger_#{System.unique_integer([:positive])}"
+
+      row =
+        insert!(%{
+          key: key,
+          feature: feature_str,
+          trigger_kind: "cron",
+          trigger_config: %{"expression" => "*/5 * * * *"}
+        })
+
+      _agent = wire_external_assignee(key)
+
+      Req.Test.stub(:router_external_dispatch_test, fn conn ->
+        Req.Test.json(conn, %{
+          "choices" => [
+            %{"message" => %{"role" => "assistant", "content" => "gc ok"}}
+          ]
+        })
+      end)
+
+      trigger_meta = %{
+        kind: :cron,
+        fired_at: DateTime.utc_now(),
+        payload: %{transcript_id: "t-abc"}
+      }
+
+      capture_log([level: :info], fn ->
+        assert :ok = Router.fire_trigger(row, trigger_meta, %{})
+      end)
+
+      # Provider callback must be invoked with the full trigger_meta
+      # (nested `:payload` reachable) — this is the fix for the router
+      # calling ContextGatherer with a flat meta lookup and missing
+      # `meta[:payload][:transcript_id]`.
+      assert_receive {:provider_gather_invoked, ^key, meta}
+      assert meta.payload.transcript_id == "t-abc"
+    end
+
+    test "provider build_prompt/1 messages land in the LLM request body verbatim" do
+      feature_str = "router_bp_verbatim_#{System.unique_integer([:positive])}"
+
+      provider_name =
+        :"Elixir.Platform.Responsibilities.Providers.#{Macro.camelize(feature_str)}"
+
+      Module.create(
+        provider_name,
+        quote do
+          @behaviour Platform.Responsibilities.Provider
+
+          @impl true
+          def register, do: []
+
+          @impl true
+          def gather_context(_r, _m),
+            do: {:ok, %{transcript_text: "Alice: yes\nBob: no", meeting_transcript: %{}}}
+
+          @impl true
+          def build_prompt(_ctx) do
+            {:ok,
+             %{
+               system: "You are a summariser.",
+               user: "Summarise:\nAlice: yes\nBob: no"
+             }}
+          end
+
+          @impl true
+          def handle_output(_r, _o), do: :ok
+
+          @impl true
+          def handle_output(_r, _o, _m), do: :ok
+        end,
+        Macro.Env.location(__ENV__)
+      )
+
+      key = "#{feature_str}.trigger_#{System.unique_integer([:positive])}"
+
+      row =
+        insert!(%{
+          key: key,
+          feature: feature_str,
+          trigger_kind: "cron",
+          trigger_config: %{"expression" => "*/5 * * * *"},
+          # THIS is the un-seeded template slug — the pre-019f2570
+          # dispatcher would have sent this literal string as the user
+          # turn. Assert it does NOT show up in the request body.
+          default_prompt_template: "meetings.summarize.v1"
+        })
+
+      _agent = wire_external_assignee(key)
+      test_pid = self()
+
+      Req.Test.stub(:router_external_dispatch_test, fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        send(test_pid, {:dispatch_body, body})
+
+        Req.Test.json(conn, %{
+          "choices" => [
+            %{"message" => %{"role" => "assistant", "content" => "ok"}}
+          ]
+        })
+      end)
+
+      capture_log([level: :info], fn ->
+        assert :ok =
+                 Router.fire_trigger(row, %{kind: :cron, fired_at: DateTime.utc_now()}, %{})
+      end)
+
+      assert_receive {:dispatch_body, raw_body}
+      decoded = Jason.decode!(raw_body)
+
+      # The provider's system + user prompts land verbatim, and the
+      # un-seeded default_prompt_template string does NOT.
+      contents = Enum.map(decoded["messages"], & &1["content"])
+      assert Enum.any?(contents, &(&1 =~ "You are a summariser."))
+      assert Enum.any?(contents, &(&1 =~ "Summarise:\nAlice: yes\nBob: no"))
+      refute Enum.any?(contents, &(&1 =~ "meetings.summarize.v1"))
+
+      # Roles are pre-split (no split_prompt regex round-trip).
+      roles = Enum.map(decoded["messages"], & &1["role"]) |> Enum.sort()
+      assert roles == ["system", "user"]
+    end
+
+    test "provider build_prompt/1 returning {:error, _} short-circuits — no LLM call, :failed telemetry" do
+      feature_str = "router_bp_refuse_#{System.unique_integer([:positive])}"
+
+      provider_name =
+        :"Elixir.Platform.Responsibilities.Providers.#{Macro.camelize(feature_str)}"
+
+      Module.create(
+        provider_name,
+        quote do
+          @behaviour Platform.Responsibilities.Provider
+
+          @impl true
+          def register, do: []
+
+          @impl true
+          def gather_context(_r, _m), do: {:ok, %{}}
+
+          @impl true
+          def build_prompt(_ctx), do: {:error, :no_transcript_text}
+
+          @impl true
+          def handle_output(_r, _o), do: :ok
+
+          @impl true
+          def handle_output(_r, _o, _m), do: :ok
+        end,
+        Macro.Env.location(__ENV__)
+      )
+
+      key = "#{feature_str}.trigger_#{System.unique_integer([:positive])}"
+
+      row =
+        insert!(%{
+          key: key,
+          feature: feature_str,
+          trigger_kind: "cron",
+          trigger_config: %{"expression" => "*/5 * * * *"}
+        })
+
+      _agent = wire_external_assignee(key)
+      test_pid = self()
+
+      # If the LLM stub gets called, this test fails.
+      Req.Test.stub(:router_external_dispatch_test, fn conn ->
+        send(test_pid, :dispatched_anyway)
+        Req.Test.json(conn, %{"choices" => []})
+      end)
+
+      handler_id = "router-test-refused-#{System.unique_integer([:positive])}"
+
+      :telemetry.attach(
+        handler_id,
+        [:platform, :responsibility, :failed],
+        fn _event, measurements, metadata, pid ->
+          send(pid, {:failed_telemetry, measurements, metadata})
+        end,
+        test_pid
+      )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      log =
+        capture_log([level: :warning], fn ->
+          assert :ok =
+                   Router.fire_trigger(row, %{kind: :cron, fired_at: DateTime.utc_now()}, %{})
+        end)
+
+      assert log =~ "provider build_prompt refused dispatch"
+      assert log =~ "no_transcript_text"
+
+      # LLM stub must not have been called.
+      refute_receive :dispatched_anyway, 100
+
+      assert_receive {:failed_telemetry, _meas,
+                      %{key: ^key, dispatch_kind: :external, reason: reason}}
+
+      assert reason =~ "build_prompt_refused"
+      assert reason =~ "no_transcript_text"
+    end
+
+    test "provider without build_prompt/1 continues to use the legacy template render path" do
+      feature_str = "router_bp_legacy_#{System.unique_integer([:positive])}"
+
+      provider_name =
+        :"Elixir.Platform.Responsibilities.Providers.#{Macro.camelize(feature_str)}"
+
+      Module.create(
+        provider_name,
+        quote do
+          @behaviour Platform.Responsibilities.Provider
+
+          @impl true
+          def register, do: []
+
+          # NB: no `build_prompt/1` — the Router must fall back to
+          # the legacy `default_prompt_template` render path.
+          @impl true
+          def gather_context(_r, _m), do: {:ok, %{topic: "quarterly"}}
+
+          @impl true
+          def handle_output(_r, _o), do: :ok
+
+          @impl true
+          def handle_output(_r, _o, _m), do: :ok
+        end,
+        Macro.Env.location(__ENV__)
+      )
+
+      key = "#{feature_str}.trigger_#{System.unique_integer([:positive])}"
+
+      row =
+        insert!(%{
+          key: key,
+          feature: feature_str,
+          trigger_kind: "cron",
+          trigger_config: %{"expression" => "*/5 * * * *"},
+          # Real template body — expect it to be rendered with the
+          # gathered context. This is the backward-compat contract.
+          default_prompt_template: "Please cover the {topic} update."
+        })
+
+      _agent = wire_external_assignee(key)
+      test_pid = self()
+
+      Req.Test.stub(:router_external_dispatch_test, fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        send(test_pid, {:legacy_body, body})
+
+        Req.Test.json(conn, %{
+          "choices" => [
+            %{"message" => %{"role" => "assistant", "content" => "ok"}}
+          ]
+        })
+      end)
+
+      capture_log([level: :info], fn ->
+        assert :ok =
+                 Router.fire_trigger(row, %{kind: :cron, fired_at: DateTime.utc_now()}, %{})
+      end)
+
+      assert_receive {:legacy_body, raw_body}
+      decoded = Jason.decode!(raw_body)
+
+      # Legacy template got rendered against gathered context, so
+      # `quarterly` (the topic) appears in the user turn.
+      user = Enum.find(decoded["messages"], &(&1["role"] == "user"))
+      assert user["content"] =~ "quarterly"
+    end
   end
 
   # ── M6 stage 6: federated/native regression ─────────────────────────────

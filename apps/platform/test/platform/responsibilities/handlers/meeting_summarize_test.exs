@@ -275,4 +275,84 @@ defmodule Platform.Responsibilities.Handlers.MeetingSummarizeTest do
                Platform.Meetings.SummaryPrompt.system_prompt()
     end
   end
+
+  # ── task 019f2570 stage 2 — max_tokens hint on register/0 (bug 2) ──────
+  describe "register/0" do
+    test "carries metadata['max_tokens'] = 2500 so Dispatcher sends it verbatim" do
+      [attrs] = MeetingSummarize.register()
+
+      assert Map.get(attrs.metadata, "max_tokens") == 2500,
+             "meetings.summarize must declare a max_tokens override so the OpenAI-" <>
+               "compat concierge doesn't apply its own ~800-token default and truncate " <>
+               "summaries mid-sentence (task 019f2570 bug 2)."
+    end
+  end
+
+  # ── task 019f2570 stage 1 — build_prompt/1 callback ─────────────────────
+  describe "build_prompt/1 (task 019f2570 bug 1 fix)" do
+    test "returns {:ok, %{system, user}} carrying the transcript verbatim" do
+      context = %{
+        org_identity: %{content: "", missing?: true, version: nil},
+        recent_journal: %{entries_by_date: [], total: 0, days: 7},
+        meeting_transcript: %{
+          formatted_text: "[00:00:00] Harper: We shipped X.\n[00:00:10] Alex: Great."
+        }
+      }
+
+      assert {:ok, %{system: system, user: user}} = MeetingSummarize.build_prompt(context)
+
+      # System prompt carries the canonical body (SummaryPrompt.system_prompt()).
+      assert system =~ "Overview"
+      assert system =~ "Action Items"
+
+      # User prompt carries the transcript verbatim — Hermione will
+      # actually see the segments, not the "meetings.summarize.v1"
+      # slug the pre-019f2570 dispatcher shipped as literal text.
+      assert user =~ "Please summarize the following meeting transcript:"
+      assert user =~ "[00:00:00] Harper: We shipped X."
+      assert user =~ "[00:00:10] Alex: Great."
+    end
+
+    test "returns {:error, :no_transcript_text} when transcript slot is empty" do
+      context = %{
+        org_identity: %{content: "", missing?: true, version: nil},
+        recent_journal: %{entries_by_date: [], total: 0, days: 7},
+        meeting_transcript: %{formatted_text: ""}
+      }
+
+      assert {:error, :no_transcript_text} = MeetingSummarize.build_prompt(context)
+    end
+
+    test "returns {:error, :no_transcript_text} when transcript slot is whitespace-only" do
+      context = %{meeting_transcript: %{formatted_text: "  \n\t  "}}
+      assert {:error, :no_transcript_text} = MeetingSummarize.build_prompt(context)
+    end
+
+    test "returns {:error, :no_transcript_text} when meeting_transcript key is absent" do
+      assert {:error, :no_transcript_text} = MeetingSummarize.build_prompt(%{})
+    end
+
+    test "system prompt still carries grounding when ORG_IDENTITY + journal present" do
+      identity_body = "# Org Identity\n\nAcme Robotics ships **autonomous fryers**."
+
+      {:ok, _file} =
+        OrgContext.upsert_file(%{
+          file_key: "ORG_IDENTITY.md",
+          content: identity_body
+        })
+
+      {:ok, %{org_identity: identity}} =
+        Platform.Responsibilities.ContextProviders.gather_context(:org_identity, [])
+
+      context = %{
+        org_identity: identity,
+        recent_journal: %{entries_by_date: [], total: 0, days: 7},
+        meeting_transcript: %{formatted_text: "[00:00:00] Harper: Hello"}
+      }
+
+      assert {:ok, %{system: system}} = MeetingSummarize.build_prompt(context)
+      assert system =~ "## Grounding context"
+      assert system =~ "Acme Robotics ships **autonomous fryers**"
+    end
+  end
 end

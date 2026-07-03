@@ -123,7 +123,16 @@ defmodule Platform.Responsibilities.Handlers.MeetingSummarize do
           # MFA pair at fire time without trusting unsafe deserialisation.
           # Shape: `"<Module>:<function>:<arity>"`.
           "fallback" => "Elixir.Platform.Meetings.Summarizer:run_summary:1",
-          "fallback_kind" => "legacy"
+          "fallback_kind" => "legacy",
+          # Task 019f2570 bug 2 fix — override the dispatcher's default
+          # (2500) with an explicit ceiling for meeting summaries. The
+          # OpenAI-compat concierge at dev-host:8084 defaults to ~800 tokens
+          # when the field is absent, which truncates summaries mid-
+          # sentence. `Dispatcher.request_body/3` reads this hint and
+          # forwards it as top-level `max_tokens`. Refreshed on next boot
+          # via `Responsibilities.@upsert_replace_fields` (metadata is
+          # in the replace set — no migration required).
+          "max_tokens" => 2500
         }
       }
     ]
@@ -211,6 +220,40 @@ defmodule Platform.Responsibilities.Handlers.MeetingSummarize do
   end
 
   # ── Prompt construction ───────────────────────────────────────────────────
+
+  @doc """
+  Build the (system + user) LLM prompt from the context map
+  `gather_context/2` returned (task 019f2570 bug 1 fix).
+
+  Returns `{:ok, %{system:, user:}}` on success. The Router passes the
+  result to `Platform.ExternalAgents.Dispatcher.dispatch/4` as
+  `messages: [...]`, sidestepping the un-seeded
+  `default_prompt_template: "meetings.summarize.v1"` render path — the
+  handler owns the full prompt end-to-end.
+
+  Returns `{:error, :no_transcript_text}` when the transcript slot is
+  empty so the Router refuses to burn a token round-trip on an answer
+  the model can't produce.
+  """
+  @impl true
+  @spec build_prompt(map()) ::
+          {:ok, %{system: String.t(), user: String.t()}} | {:error, term()}
+  def build_prompt(context) when is_map(context) do
+    transcript = Map.get(context, :meeting_transcript) || %{}
+    transcript_text = Map.get(transcript, :formatted_text) || ""
+
+    if is_binary(transcript_text) and String.trim(transcript_text) != "" do
+      {:ok,
+       %{
+         system: system_prompt_with_grounding(context),
+         user: "Please summarize the following meeting transcript:\n\n#{transcript_text}"
+       }}
+    else
+      {:error, :no_transcript_text}
+    end
+  end
+
+  def build_prompt(_), do: {:error, :no_transcript_text}
 
   @doc """
   Build the LLM message list for the meeting summary call.

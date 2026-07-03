@@ -62,7 +62,22 @@ defmodule Platform.ExternalAgents.Dispatcher do
   @receive_timeout_ms 60_000
   @connect_timeout_ms 10_000
 
+  # Task 019f2570 bug 2 fix — the OpenAI-compat concierge at dev-host:8084
+  # applies its own ~800-token default when `max_tokens` is absent from
+  # the request body, which truncates meeting summaries mid-sentence.
+  # We now ALWAYS send `max_tokens` on external dispatch. Per-
+  # responsibility overrides ride on `metadata["max_tokens"]` (see
+  # `Handlers.MeetingSummarize.register/0`); every other responsibility
+  # falls through to this constant. Code-side (not `Application.get_env`)
+  # so ops can grep it out of the release without an env-var round trip.
+  @default_external_max_tokens 2500
+
   @type dispatch_result :: {:ok, term()} | {:error, term()}
+
+  @type dispatch_opts :: [
+          messages: [map()],
+          prompt: %{system: String.t(), user: String.t()}
+        ]
 
   @doc """
   Dispatch a fired responsibility to an external agent.
@@ -81,14 +96,41 @@ defmodule Platform.ExternalAgents.Dispatcher do
     * `{:error, %Req.TransportError{}}` — connection / timeout
     * `{:error, {:contract_violation, reason}}` — response failed the
       output-contract check
+
+  Delegates to `dispatch/4` with empty opts — backward compatible.
   """
   @spec dispatch(Responsibility.t(), Agent.t() | map(), map()) :: dispatch_result()
   def dispatch(%Responsibility{} = responsibility, agent, context) when is_map(context) do
-    prompt = render_prompt(responsibility.default_prompt_template, context)
+    dispatch(responsibility, agent, context, [])
+  end
 
+  @doc """
+  Dispatch with an optional `opts` payload that lets the caller inject
+  a pre-built prompt (task 019f2570 bug 1 fix).
+
+  Recognised options:
+
+    * `messages: [%{role: "system"|"user", content: "..."}]` — pass the
+      raw OpenAI-shaped messages list directly to `request_body/2`.
+      Skips the `default_prompt_template` render entirely.
+
+    * `prompt: %{system: sys, user: user}` — sugar for the same. When
+      only `user` is meaningful, `system` may be an empty string; the
+      request body then omits the system turn.
+
+  When neither option is supplied the legacy path renders
+  `responsibility.default_prompt_template` against `context` (backward
+  compatible with every pre-019f2570 caller).
+  """
+  @spec dispatch(Responsibility.t(), Agent.t() | map(), map(), dispatch_opts()) ::
+          dispatch_result()
+  def dispatch(%Responsibility{} = responsibility, agent, context, opts)
+      when is_map(context) and is_list(opts) do
     started_at = System.monotonic_time()
 
-    with {:ok, body} <- post(agent, prompt),
+    messages = resolve_messages(responsibility, context, opts)
+
+    with {:ok, body} <- post(agent, messages, responsibility),
          {:ok, content} <- parse_response(agent, body),
          {:ok, validated} <- ContractValidator.validate(content, responsibility.output_contract) do
       emit_telemetry(
@@ -116,6 +158,45 @@ defmodule Platform.ExternalAgents.Dispatcher do
         )
 
         err
+    end
+  end
+
+  # Prefer explicit messages > explicit prompt map > legacy template render.
+  # Always returns a `[%{role:, content:}]` list ready to hand to `post/2`.
+  defp resolve_messages(responsibility, context, opts) when is_list(opts) do
+    cond do
+      is_list(opts[:messages]) and opts[:messages] != [] ->
+        opts[:messages]
+
+      is_map(opts[:prompt]) ->
+        prompt_to_messages_or_legacy(opts[:prompt], responsibility, context)
+
+      true ->
+        legacy_messages(responsibility, context)
+    end
+  end
+
+  defp prompt_to_messages_or_legacy(%{system: sys, user: user}, _r, _c)
+       when is_binary(sys) and is_binary(user) do
+    case sys do
+      "" -> [%{role: "user", content: user}]
+      _ -> [%{role: "system", content: sys}, %{role: "user", content: user}]
+    end
+  end
+
+  defp prompt_to_messages_or_legacy(%{user: user}, _r, _c) when is_binary(user),
+    do: [%{role: "user", content: user}]
+
+  defp prompt_to_messages_or_legacy(_bad, responsibility, context),
+    do: legacy_messages(responsibility, context)
+
+  defp legacy_messages(%Responsibility{default_prompt_template: template}, context) do
+    prompt = render_prompt(template, context)
+    {system_prompt, user_prompt} = split_prompt(prompt)
+
+    case system_prompt do
+      nil -> [%{role: "user", content: user_prompt}]
+      sys -> [%{role: "system", content: sys}, %{role: "user", content: user_prompt}]
     end
   end
 
@@ -198,10 +279,10 @@ defmodule Platform.ExternalAgents.Dispatcher do
 
   # ── HTTP ──────────────────────────────────────────────────────────────────
 
-  defp post(agent, prompt) do
+  defp post(agent, messages_or_legacy, responsibility \\ nil) do
     url = request_url(agent)
     headers = request_headers(agent)
-    body = request_body(agent, prompt)
+    body = request_body(agent, messages_or_legacy, responsibility)
 
     case Req.post(req_client(),
            url: url,
@@ -266,21 +347,44 @@ defmodule Platform.ExternalAgents.Dispatcher do
     end
   end
 
-  defp request_body(agent, prompt) do
-    {system_prompt, user_prompt} = split_prompt(prompt)
-
-    messages =
-      case system_prompt do
-        nil -> [%{role: "user", content: user_prompt}]
-        sys -> [%{role: "system", content: sys}, %{role: "user", content: user_prompt}]
-      end
-
+  # `messages` is already a pre-shaped list of `%{role:, content:}` maps
+  # (assembled by `resolve_messages/3` — either from opts, or by
+  # rendering the legacy `default_prompt_template`).
+  #
+  # `max_tokens` is ALWAYS included (task 019f2570 bug 2 fix). Per-
+  # responsibility hint takes precedence; otherwise falls back to
+  # `@default_external_max_tokens`. Keeps the OpenAI-compat concierge
+  # from applying its own ~800-token default and truncating outputs.
+  defp request_body(agent, messages, responsibility \\ nil) when is_list(messages) do
     %{
       model: model(agent),
       messages: messages,
-      stream: false
+      stream: false,
+      max_tokens: max_tokens_for(responsibility)
     }
   end
+
+  defp max_tokens_for(%Responsibility{metadata: metadata}) when is_map(metadata),
+    do: metadata_max_tokens(metadata) || @default_external_max_tokens
+
+  defp max_tokens_for(%{metadata: metadata}) when is_map(metadata),
+    do: metadata_max_tokens(metadata) || @default_external_max_tokens
+
+  defp max_tokens_for(metadata) when is_map(metadata),
+    do: metadata_max_tokens(metadata) || @default_external_max_tokens
+
+  defp max_tokens_for(_), do: @default_external_max_tokens
+
+  defp metadata_max_tokens(metadata) when is_map(metadata) do
+    raw = Map.get(metadata, "max_tokens") || Map.get(metadata, :max_tokens)
+
+    case raw do
+      n when is_integer(n) and n > 0 -> n
+      _ -> nil
+    end
+  end
+
+  defp metadata_max_tokens(_), do: nil
 
   # Convention: if the rendered prompt has a `<system>...</system>` block at the
   # head, that block becomes the system message and the rest is the user turn.

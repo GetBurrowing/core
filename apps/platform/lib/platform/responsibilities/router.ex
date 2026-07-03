@@ -862,9 +862,39 @@ defmodule Platform.Responsibilities.Router do
   # ── External dispatch ─────────────────────────────────────────────────────
 
   defp dispatch_external(%Responsibility{} = responsibility, agent, trigger_meta) do
-    context = gather_context(responsibility, trigger_meta)
+    provider_module = provider_module_for(responsibility.feature)
 
-    case safe_dispatch(responsibility, agent, context) do
+    context =
+      provider_module
+      |> gather_context_via_provider(responsibility, trigger_meta)
+      |> Map.put(:__responsibility__, responsibility)
+
+    case build_prompt_via_provider(provider_module, context) do
+      {:error, reason} ->
+        Logger.warning(
+          "[ResponsibilityRouter] provider build_prompt refused dispatch " <>
+            "key=#{responsibility.key} agent=#{agent_slug(agent)} reason=#{inspect(reason)}"
+        )
+
+        emit_failed_telemetry(responsibility, agent, :external, {:build_prompt_refused, reason})
+        :ok
+
+      {:messages, messages} ->
+        run_external_dispatch(responsibility, agent, trigger_meta, context, messages: messages)
+
+      :legacy ->
+        run_external_dispatch(responsibility, agent, trigger_meta, context, [])
+    end
+  end
+
+  defp run_external_dispatch(
+         %Responsibility{} = responsibility,
+         agent,
+         trigger_meta,
+         context,
+         opts
+       ) do
+    case safe_dispatch(responsibility, agent, context, opts) do
       {:ok, parsed} ->
         Logger.info(
           "[ResponsibilityRouter] external dispatch ok key=#{responsibility.key} " <>
@@ -889,8 +919,8 @@ defmodule Platform.Responsibilities.Router do
     end
   end
 
-  defp safe_dispatch(responsibility, agent, context) do
-    ExternalDispatcher.dispatch(responsibility, agent, context)
+  defp safe_dispatch(responsibility, agent, context, opts) do
+    ExternalDispatcher.dispatch(responsibility, agent, context, opts)
   rescue
     error ->
       {:error, {:dispatch_raised, Exception.message(error)}}
@@ -898,6 +928,94 @@ defmodule Platform.Responsibilities.Router do
     :exit, reason ->
       {:error, {:dispatch_exited, reason}}
   end
+
+  # Route via provider's `gather_context/2` when it's declared —
+  # provider-specific context slots (e.g. `meeting_transcript` in
+  # `Handlers.MeetingSummarize`) need the provider's own resolvers
+  # because `ContextGatherer.resolve(:meeting_transcript, ...)` reads a
+  # flat `meta[:transcript_id]` but the router publishes it nested
+  # under `meta[:payload][:transcript_id]`. Falls back to the
+  # cross-cutting `ContextGatherer` path when the provider is absent
+  # or returns an error.
+  defp gather_context_via_provider(provider_module, %Responsibility{} = responsibility, meta) do
+    with true <- is_atom(provider_module),
+         true <- Code.ensure_loaded?(provider_module),
+         true <- function_exported?(provider_module, :gather_context, 2),
+         {:ok, ctx} when is_map(ctx) <-
+           safe_provider_gather(provider_module, responsibility, meta) do
+      ctx
+    else
+      _ -> gather_context(responsibility, meta)
+    end
+  end
+
+  defp safe_provider_gather(provider_module, responsibility, meta) do
+    provider_module.gather_context(responsibility, meta)
+  rescue
+    error ->
+      Logger.warning(
+        "[ResponsibilityRouter] provider gather_context raised " <>
+          "module=#{inspect(provider_module)} error=#{Exception.message(error)}"
+      )
+
+      {:error, {:provider_gather_raised, Exception.message(error)}}
+  end
+
+  # Task 019f2570 bug 1 fix: probe for `build_prompt/1` on the provider.
+  # When present the returned `%{system:, user:}` map is turned into a
+  # pre-built messages list and passed to `Dispatcher.dispatch/4` as
+  # `messages: [...]`, sidestepping the un-seeded template-render path.
+  # `{:error, reason}` short-circuits the dispatch entirely.
+  defp build_prompt_via_provider(provider_module, context) do
+    cond do
+      is_atom(provider_module) and
+        Code.ensure_loaded?(provider_module) and
+          function_exported?(provider_module, :build_prompt, 1) ->
+        try do
+          case provider_module.build_prompt(context) do
+            {:ok, %{system: sys, user: user}}
+            when is_binary(sys) and is_binary(user) ->
+              {:messages, prompt_map_to_messages(sys, user)}
+
+            {:ok, %{user: user}} when is_binary(user) ->
+              {:messages, [%{role: "user", content: user}]}
+
+            # Provider explicitly asked for the legacy template render
+            # path (e.g. a multi-key provider shim whose current key
+            # doesn't own its own prompt yet). NOT a hard error.
+            {:error, :no_build_prompt} ->
+              :legacy
+
+            {:error, _} = err ->
+              err
+
+            other ->
+              Logger.warning(
+                "[ResponsibilityRouter] provider build_prompt returned unexpected shape " <>
+                  "module=#{inspect(provider_module)} result=#{inspect(other)}"
+              )
+
+              :legacy
+          end
+        rescue
+          error ->
+            Logger.warning(
+              "[ResponsibilityRouter] provider build_prompt raised " <>
+                "module=#{inspect(provider_module)} error=#{Exception.message(error)}"
+            )
+
+            :legacy
+        end
+
+      true ->
+        :legacy
+    end
+  end
+
+  defp prompt_map_to_messages("", user), do: [%{role: "user", content: user}]
+
+  defp prompt_map_to_messages(sys, user),
+    do: [%{role: "system", content: sys}, %{role: "user", content: user}]
 
   defp gather_context(%Responsibility{context_provided: names}, trigger_meta)
        when is_list(names) do

@@ -290,4 +290,227 @@ defmodule Platform.ExternalAgents.DispatcherTest do
                Dispatcher.dispatch(responsibility, agent, %{topic: "ship-it"})
     end
   end
+
+  # ── task 019f2570 stage 1 — pre-built messages / prompt overrides ──────
+  describe "dispatch/4 opts overrides (task 019f2570)" do
+    setup do
+      test_pid = self()
+
+      Req.Test.stub(:external_agents_dispatcher_test, fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        send(test_pid, {:dispatch_body, conn, body})
+
+        Req.Test.json(conn, %{
+          "choices" => [%{"message" => %{"role" => "assistant", "content" => "ok"}}]
+        })
+      end)
+
+      :ok
+    end
+
+    test "explicit messages: [...] bypasses default_prompt_template render" do
+      agent = build_agent("openai_compat")
+      :ok = EphemeralCredentials.put(agent.id, "sk-test")
+      on_exit(fn -> EphemeralCredentials.delete(agent.id) end)
+
+      # Bogus, un-seeded template string — must NOT reach the request body.
+      responsibility = build_responsibility(%{default_prompt_template: "meetings.summarize.v1"})
+
+      messages = [
+        %{role: "system", content: "grounded system"},
+        %{role: "user", content: "here is the transcript: hi"}
+      ]
+
+      assert {:ok, "ok"} =
+               Dispatcher.dispatch(responsibility, agent, %{}, messages: messages)
+
+      assert_receive {:dispatch_body, _conn, raw_body}
+      decoded = Jason.decode!(raw_body)
+
+      assert decoded["messages"] == [
+               %{"role" => "system", "content" => "grounded system"},
+               %{"role" => "user", "content" => "here is the transcript: hi"}
+             ]
+
+      refute Enum.any?(decoded["messages"], &(&1["content"] =~ "meetings.summarize.v1"))
+    end
+
+    test "prompt: %{system, user} is converted to a two-turn messages list" do
+      agent = build_agent("openai_compat")
+      :ok = EphemeralCredentials.put(agent.id, "sk-test")
+      on_exit(fn -> EphemeralCredentials.delete(agent.id) end)
+
+      responsibility = build_responsibility(%{default_prompt_template: "junk"})
+
+      assert {:ok, _} =
+               Dispatcher.dispatch(responsibility, agent, %{},
+                 prompt: %{system: "sys text", user: "user text"}
+               )
+
+      assert_receive {:dispatch_body, _conn, raw_body}
+      decoded = Jason.decode!(raw_body)
+
+      roles = Enum.map(decoded["messages"], & &1["role"])
+      assert roles == ["system", "user"]
+      assert Enum.at(decoded["messages"], 0)["content"] == "sys text"
+      assert Enum.at(decoded["messages"], 1)["content"] == "user text"
+    end
+
+    test "prompt: %{system: \"\", user: user} emits a single-turn user message" do
+      agent = build_agent("openai_compat")
+      :ok = EphemeralCredentials.put(agent.id, "sk-test")
+      on_exit(fn -> EphemeralCredentials.delete(agent.id) end)
+
+      responsibility = build_responsibility()
+
+      assert {:ok, _} =
+               Dispatcher.dispatch(responsibility, agent, %{},
+                 prompt: %{system: "", user: "just a user turn"}
+               )
+
+      assert_receive {:dispatch_body, _conn, raw_body}
+      decoded = Jason.decode!(raw_body)
+      assert decoded["messages"] == [%{"role" => "user", "content" => "just a user turn"}]
+    end
+
+    test "dispatch/3 remains backward-compatible with the legacy template render" do
+      agent = build_agent("openai_compat")
+      :ok = EphemeralCredentials.put(agent.id, "sk-test")
+      on_exit(fn -> EphemeralCredentials.delete(agent.id) end)
+
+      # Standard {key} substitution — pre-019f2570 contract.
+      responsibility = build_responsibility(%{default_prompt_template: "cover: {topic}"})
+
+      assert {:ok, _} = Dispatcher.dispatch(responsibility, agent, %{topic: "quarterly"})
+
+      assert_receive {:dispatch_body, _conn, raw_body}
+      decoded = Jason.decode!(raw_body)
+      user = Enum.find(decoded["messages"], &(&1["role"] == "user"))
+      assert user["content"] =~ "quarterly"
+    end
+  end
+
+  # ── task 019f2570 stage 2 — max_tokens plumbing (bug 2) ────────────────
+  describe "max_tokens plumbing (task 019f2570 bug 2)" do
+    setup do
+      test_pid = self()
+
+      Req.Test.stub(:external_agents_dispatcher_test, fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        send(test_pid, {:dispatch_body, conn, body})
+
+        Req.Test.json(conn, %{
+          "choices" => [%{"message" => %{"role" => "assistant", "content" => "ok"}}]
+        })
+      end)
+
+      :ok
+    end
+
+    test "responsibility metadata['max_tokens'] rides on the POST body" do
+      agent = build_agent("openai_compat")
+      :ok = EphemeralCredentials.put(agent.id, "sk-test")
+      on_exit(fn -> EphemeralCredentials.delete(agent.id) end)
+
+      responsibility =
+        build_responsibility(%{metadata: %{"max_tokens" => 2500, "owner" => "platform.meetings"}})
+
+      assert {:ok, _} = Dispatcher.dispatch(responsibility, agent, %{topic: "quarterly"})
+
+      assert_receive {:dispatch_body, _conn, raw_body}
+      decoded = Jason.decode!(raw_body)
+      assert decoded["max_tokens"] == 2500
+      assert decoded["stream"] == false
+      assert decoded["model"] == "test-model"
+    end
+
+    test "absent metadata max_tokens hint falls back to module default (2500)" do
+      agent = build_agent("openai_compat")
+      :ok = EphemeralCredentials.put(agent.id, "sk-test")
+      on_exit(fn -> EphemeralCredentials.delete(agent.id) end)
+
+      responsibility = build_responsibility(%{metadata: %{}})
+
+      assert {:ok, _} = Dispatcher.dispatch(responsibility, agent, %{topic: "quarterly"})
+
+      assert_receive {:dispatch_body, _conn, raw_body}
+      decoded = Jason.decode!(raw_body)
+      assert decoded["max_tokens"] == 2500
+    end
+
+    test "metadata hint wins over the module default (contrived 800 override)" do
+      agent = build_agent("openai_compat")
+      :ok = EphemeralCredentials.put(agent.id, "sk-test")
+      on_exit(fn -> EphemeralCredentials.delete(agent.id) end)
+
+      responsibility = build_responsibility(%{metadata: %{"max_tokens" => 800}})
+
+      assert {:ok, _} = Dispatcher.dispatch(responsibility, agent, %{topic: "quarterly"})
+
+      assert_receive {:dispatch_body, _conn, raw_body}
+      decoded = Jason.decode!(raw_body)
+      assert decoded["max_tokens"] == 800
+    end
+
+    test "non-integer / non-positive metadata hints fall through to the default" do
+      agent = build_agent("openai_compat")
+      :ok = EphemeralCredentials.put(agent.id, "sk-test")
+      on_exit(fn -> EphemeralCredentials.delete(agent.id) end)
+
+      for bogus <- ["nonsense", 0, -50, nil, 3.14] do
+        responsibility = build_responsibility(%{metadata: %{"max_tokens" => bogus}})
+
+        assert {:ok, _} = Dispatcher.dispatch(responsibility, agent, %{topic: "x"})
+
+        assert_receive {:dispatch_body, _conn, raw_body}
+        decoded = Jason.decode!(raw_body)
+        assert decoded["max_tokens"] == 2500, "bogus=#{inspect(bogus)} should fall through"
+      end
+    end
+
+    test "atom-keyed metadata hint is also honoured" do
+      agent = build_agent("openai_compat")
+      :ok = EphemeralCredentials.put(agent.id, "sk-test")
+      on_exit(fn -> EphemeralCredentials.delete(agent.id) end)
+
+      responsibility = build_responsibility(%{metadata: %{max_tokens: 1500}})
+
+      assert {:ok, _} = Dispatcher.dispatch(responsibility, agent, %{topic: "x"})
+
+      assert_receive {:dispatch_body, _conn, raw_body}
+      decoded = Jason.decode!(raw_body)
+      assert decoded["max_tokens"] == 1500
+    end
+
+    test "max_tokens is present on ollama_native dispatches too" do
+      test_pid = self()
+
+      # Override the describe-block stub — ollama_native's parse_response
+      # expects `%{"message" => %{"content" => ...}}`, not `"choices"`.
+      Req.Test.stub(:external_agents_dispatcher_test, fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        send(test_pid, {:dispatch_body, conn, body})
+
+        Req.Test.json(conn, %{
+          "model" => "llama3",
+          "message" => %{"role" => "assistant", "content" => "ok"},
+          "done" => true
+        })
+      end)
+
+      agent =
+        build_agent("ollama_native", %{
+          base_url: "http://localhost:11434",
+          model: "llama3"
+        })
+
+      responsibility = build_responsibility(%{metadata: %{"max_tokens" => 2500}})
+
+      assert {:ok, _} = Dispatcher.dispatch(responsibility, agent, %{topic: "x"})
+
+      assert_receive {:dispatch_body, _conn, raw_body}
+      decoded = Jason.decode!(raw_body)
+      assert decoded["max_tokens"] == 2500
+    end
+  end
 end

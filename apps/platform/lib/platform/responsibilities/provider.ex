@@ -121,9 +121,36 @@ defmodule Platform.Responsibilities.Provider do
               trigger_meta :: map()
             ) :: :ok | {:error, term()}
 
+  @doc """
+  Build the (system + user) LLM prompt from a gathered context map
+  (task 019f2570 bug 1 fix).
+
+  The Router probes for this callback in `dispatch_external/3` after
+  calling `gather_context/2`. When present, the returned messages are
+  passed to `Platform.ExternalAgents.Dispatcher.dispatch/4` verbatim —
+  bypassing the un-seeded `default_prompt_template` render path
+  entirely so providers own their full prompt end-to-end.
+
+  Returning `{:error, term}` short-circuits the dispatch — the Router
+  logs at `:warning` and does NOT fire the LLM call. Typical use case:
+  return `{:error, :no_transcript_text}` when the transcript slot the
+  provider needs is empty so we don't burn a token round-trip on an
+  answer the model can't produce.
+
+  Providers that don't implement this callback fall back to the legacy
+  `default_prompt_template` render path — full backward compatibility.
+  """
+  @callback build_prompt(context :: map()) ::
+              {:ok, %{system: String.t(), user: String.t()}} | {:error, term()}
+
   # Arity-3 handle_output is optional so M1 providers that still use
   # arity-2 keep compiling without forced churn. The Router probes for
   # the 3-arity version first and falls back to logging "no output
   # handler" if neither is present.
-  @optional_callbacks handle_output: 3
+  #
+  # `build_prompt/1` is optional so pre-019f2570 providers keep working
+  # via the legacy `default_prompt_template` render path in the
+  # ExternalDispatcher. New providers implement it to own the full
+  # (system + user) prompt end-to-end.
+  @optional_callbacks handle_output: 3, build_prompt: 1
 end
