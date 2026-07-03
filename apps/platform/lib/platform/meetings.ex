@@ -465,6 +465,36 @@ defmodule Platform.Meetings do
   @spec get_room_by_name(String.t()) :: Room.t() | nil
   def get_room_by_name(name), do: Repo.get_by(Room, livekit_room_name: name)
 
+  # App-controlled LiveKit room names are always `space-<uuidv4>` — see
+  # `room_name_for_space/1`. LiveKit's own auto-generated room names
+  # (produced when a room is materialised without the app calling
+  # `CreateRoom` first) look like `RM_<random>`. The guard below lets
+  # webhook + transcript-persistence code cheaply reject events for
+  # rooms this app never registered — including stray `room_started`
+  # deliveries for phantom LiveKit rooms.
+  @app_room_name_regex ~r/^space-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+
+  @doc """
+  Whether a LiveKit room name is one this app registered.
+
+  Returns `true` for names matching the canonical `space-<uuid>`
+  pattern produced by `room_name_for_space/1`. Returns `false` for
+  everything else — most notably LiveKit's auto-generated `RM_<random>`
+  identifiers, which show up when a room materialises without a prior
+  `CreateRoom` (e.g. a client with a stale/mis-scoped token, or a
+  webhook replay after room GC).
+
+  Pattern-only by design: the DB fallback lives in the second layer
+  of defence (post-hoc cleanup on `room_finished`) so the hot webhook
+  path stays cheap under bursty delivery.
+  """
+  @spec app_registered_room?(term()) :: boolean()
+  def app_registered_room?(name) when is_binary(name) do
+    Regex.match?(@app_room_name_regex, name)
+  end
+
+  def app_registered_room?(_), do: false
+
   @doc """
   Ensure a meeting room exists for a space.
 
@@ -1141,6 +1171,39 @@ defmodule Platform.Meetings do
   """
   @spec get_transcript_with_segments(String.t()) :: Transcript.t() | nil
   def get_transcript_with_segments(id), do: Repo.get(Transcript, id)
+
+  @doc """
+  Delete a transcript.
+
+  Accepts either a `%Transcript{}` struct or a transcript UUID string.
+  Returns `{:ok, transcript}` with the deleted struct on success and
+  `{:error, :not_found}` when no transcript matches — including on
+  malformed UUIDs and repeat deletes.
+
+  Used by the `room_finished` cleanup path to drop empty transcripts
+  that the webhook created optimistically but that never accumulated
+  segments (phantom `RM_<random>` rooms, meetings that ended before
+  any transcription arrived).
+  """
+  @spec delete_transcript(Transcript.t() | String.t()) ::
+          {:ok, Transcript.t()} | {:error, :not_found}
+  def delete_transcript(%Transcript{} = transcript) do
+    case Repo.delete(transcript) do
+      {:ok, deleted} -> {:ok, deleted}
+      {:error, _changeset} -> {:error, :not_found}
+    end
+  rescue
+    Ecto.StaleEntryError -> {:error, :not_found}
+  end
+
+  def delete_transcript(id) when is_binary(id) do
+    case get_transcript(id) do
+      nil -> {:error, :not_found}
+      %Transcript{} = transcript -> delete_transcript(transcript)
+    end
+  rescue
+    Ecto.Query.CastError -> {:error, :not_found}
+  end
 
   @doc """
   Returns completed transcripts whose `completed_at` falls within the window.

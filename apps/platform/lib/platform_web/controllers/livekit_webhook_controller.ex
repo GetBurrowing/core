@@ -22,39 +22,71 @@ defmodule PlatformWeb.LivekitWebhookController do
 
   @doc """
   Handle `room_started` events — auto-create a transcript record.
+
+  Guards on `Meetings.app_registered_room?/1` against `room["name"]` so
+  phantom LiveKit rooms (auto-generated `RM_<random>` names produced
+  without a prior `CreateRoom`) never spawn transcripts. The persisted
+  `room_id` still keys off `sid || name` so `room_finished` lookup
+  symmetry holds for legitimate rooms.
   """
   def handle(conn, %{"event" => "room_started", "room" => room} = _params) do
     room_id = room["sid"] || room["name"]
-    space_id = space_id_from_room_name(room["name"])
+    room_name = room["name"]
+    space_id = space_id_from_room_name(room_name)
 
-    if room_id do
-      case Meetings.ensure_transcript(%{room_id: room_id, space_id: space_id}) do
-        {:ok, transcript} ->
-          Logger.info("[LiveKit] Created transcript #{transcript.id} for room #{room_id}")
+    cond do
+      not Meetings.app_registered_room?(room_name) ->
+        # `:warning` (not `:info`) because a phantom-room delivery is a
+        # signal worth noticing in prod — either LiveKit materialised
+        # a room without our `CreateRoom` (mis-scoped token, webhook
+        # replay after GC) or a client bypassed the app-controlled
+        # naming contract.
+        Logger.warning(
+          "[LiveKit] Ignoring room_started for unregistered room #{inspect(room_name)} (sid=#{inspect(room["sid"])})"
+        )
 
-          conn
-          |> put_status(:created)
-          |> json(%{status: "created", transcript_id: transcript.id})
+        conn |> put_status(:ok) |> json(%{status: "ignored", reason: "unregistered room"})
 
-        {:error, reason} ->
-          Logger.warning(
-            "[LiveKit] Failed to create transcript for room #{room_id}: #{inspect(reason)}"
-          )
+      room_id ->
+        case Meetings.ensure_transcript(%{room_id: room_id, space_id: space_id}) do
+          {:ok, transcript} ->
+            Logger.info("[LiveKit] Created transcript #{transcript.id} for room #{room_id}")
 
-          conn
-          |> put_status(:unprocessable_entity)
-          |> json(%{status: "error", reason: inspect(reason)})
-      end
-    else
-      conn |> put_status(:ok) |> json(%{status: "ignored", reason: "no room identifier"})
+            conn
+            |> put_status(:created)
+            |> json(%{status: "created", transcript_id: transcript.id})
+
+          {:error, reason} ->
+            Logger.warning(
+              "[LiveKit] Failed to create transcript for room #{room_id}: #{inspect(reason)}"
+            )
+
+            conn
+            |> put_status(:unprocessable_entity)
+            |> json(%{status: "error", reason: inspect(reason)})
+        end
+
+      true ->
+        conn |> put_status(:ok) |> json(%{status: "ignored", reason: "no room identifier"})
     end
   end
 
   @doc """
   Handle `room_finished` events — finalize transcript and trigger summary.
+
+  Includes a defensive post-hoc sweep for phantom transcripts: if the room
+  is not app-registered AND the transcript has zero segments, delete the
+  row outright instead of finalizing. Stage 2's `room_started` +
+  `transcription` guards should prevent phantom transcripts from being
+  created in the first place, but this belt-and-suspenders sweep catches
+  historical rows (created before this task shipped) or any case where a
+  phantom room slipped past the source filter. A phantom room that
+  somehow accumulated segments still gets finalized — that's not the
+  common case, but it's the safer default than silently dropping data.
   """
   def handle(conn, %{"event" => "room_finished", "room" => room} = params) do
     room_id = room["sid"] || room["name"]
+    room_name = room["name"]
 
     # Deactivation symmetry for task 019e4b3e v4 stage 1: a real join flips
     # the room "active" (MeetingHooks.do_join → Meetings.activate_room).
@@ -88,29 +120,65 @@ defmodule PlatformWeb.LivekitWebhookController do
           |> json(%{status: "ignored", reason: "no active transcript"})
 
         transcript ->
-          case Meetings.finalize_transcript(transcript.id) do
-            {:ok, finalized} ->
-              Logger.info("[LiveKit] Finalized transcript #{finalized.id} for room #{room_id}")
-
-              # Trigger async LLM summary generation
-              maybe_trigger_summary(finalized)
-
-              conn
-              |> put_status(:ok)
-              |> json(%{
-                status: "finalized",
-                transcript_id: finalized.id,
-                segment_count: length(finalized.segments)
-              })
-
-            {:error, reason} ->
-              Logger.warning(
-                "[LiveKit] Failed to finalize transcript #{transcript.id}: #{inspect(reason)}"
+          cond do
+            not Meetings.app_registered_room?(room_name) and Enum.empty?(transcript.segments) ->
+              # Phantom room with no accumulated audio: drop the row entirely
+              # rather than finalize + dispatch a summary. This is the
+              # sweep half of stage 2's source-filter — anything that got
+              # in before stage 2's guards existed, or that races past
+              # them, gets cleaned up here.
+              Logger.info(
+                "[LiveKit] Deleting phantom transcript #{transcript.id} for unregistered room " <>
+                  "#{inspect(room_name)} (sid=#{inspect(room["sid"])}) with 0 segments"
               )
 
-              conn
-              |> put_status(:unprocessable_entity)
-              |> json(%{status: "error", reason: inspect(reason)})
+              case Meetings.delete_transcript(transcript) do
+                {:ok, deleted} ->
+                  conn
+                  |> put_status(:ok)
+                  |> json(%{
+                    status: "deleted",
+                    reason: "phantom_empty_transcript",
+                    transcript_id: deleted.id
+                  })
+
+                {:error, reason} ->
+                  Logger.warning(
+                    "[LiveKit] Failed to delete phantom transcript #{transcript.id}: #{inspect(reason)}"
+                  )
+
+                  conn
+                  |> put_status(:unprocessable_entity)
+                  |> json(%{status: "error", reason: inspect(reason)})
+              end
+
+            true ->
+              case Meetings.finalize_transcript(transcript.id) do
+                {:ok, finalized} ->
+                  Logger.info(
+                    "[LiveKit] Finalized transcript #{finalized.id} for room #{room_id}"
+                  )
+
+                  # Trigger async LLM summary generation
+                  maybe_trigger_summary(finalized)
+
+                  conn
+                  |> put_status(:ok)
+                  |> json(%{
+                    status: "finalized",
+                    transcript_id: finalized.id,
+                    segment_count: length(finalized.segments)
+                  })
+
+                {:error, reason} ->
+                  Logger.warning(
+                    "[LiveKit] Failed to finalize transcript #{transcript.id}: #{inspect(reason)}"
+                  )
+
+                  conn
+                  |> put_status(:unprocessable_entity)
+                  |> json(%{status: "error", reason: inspect(reason)})
+              end
           end
       end
     else
@@ -127,34 +195,46 @@ defmodule PlatformWeb.LivekitWebhookController do
   """
   def handle(conn, %{"event" => "transcription", "room" => room} = params) do
     room_id = room["sid"] || room["name"]
-    space_id = space_id_from_room_name(room["name"])
+    room_name = room["name"]
+    space_id = space_id_from_room_name(room_name)
     raw_segments = params["segments"] || []
 
-    if room_id && raw_segments != [] do
-      case Meetings.get_transcript_for_room(room_id) do
-        nil ->
-          # Auto-create transcript if one doesn't exist yet (race condition safety)
-          case Meetings.ensure_transcript(%{room_id: room_id, space_id: space_id}) do
-            {:ok, transcript} ->
-              append_segments(conn, transcript.id, raw_segments, room_id)
+    cond do
+      not Meetings.app_registered_room?(room_name) ->
+        # See `room_started` handler for the `:warning` (not `:info`)
+        # rationale — same phantom-room signal, same operational value.
+        Logger.warning(
+          "[LiveKit] Ignoring transcription for unregistered room #{inspect(room_name)} (sid=#{inspect(room["sid"])})"
+        )
 
-            {:error, reason} ->
-              Logger.warning(
-                "[LiveKit] Failed to ensure transcript for room #{room_id}: #{inspect(reason)}"
-              )
+        conn |> put_status(:ok) |> json(%{status: "ignored", reason: "unregistered room"})
 
-              conn
-              |> put_status(:unprocessable_entity)
-              |> json(%{status: "error", reason: inspect(reason)})
-          end
+      room_id && raw_segments != [] ->
+        case Meetings.get_transcript_for_room(room_id) do
+          nil ->
+            # Auto-create transcript if one doesn't exist yet (race condition safety)
+            case Meetings.ensure_transcript(%{room_id: room_id, space_id: space_id}) do
+              {:ok, transcript} ->
+                append_segments(conn, transcript.id, raw_segments, room_id)
 
-        transcript ->
-          append_segments(conn, transcript.id, raw_segments, room_id)
-      end
-    else
-      conn
-      |> put_status(:ok)
-      |> json(%{status: "ignored", reason: "no room identifier or empty segments"})
+              {:error, reason} ->
+                Logger.warning(
+                  "[LiveKit] Failed to ensure transcript for room #{room_id}: #{inspect(reason)}"
+                )
+
+                conn
+                |> put_status(:unprocessable_entity)
+                |> json(%{status: "error", reason: inspect(reason)})
+            end
+
+          transcript ->
+            append_segments(conn, transcript.id, raw_segments, room_id)
+        end
+
+      true ->
+        conn
+        |> put_status(:ok)
+        |> json(%{status: "ignored", reason: "no room identifier or empty segments"})
     end
   end
 
