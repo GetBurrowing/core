@@ -403,7 +403,12 @@ defmodule Platform.Org.Wiki.ContextT4E2ETest do
       # flags — one-way door by design. Timestamp bumped from ...200500
       # to ...200600 during rebase to avoid Ecto version collision with
       # Meeting Producer's seed migration.
-      "20260702200600_drop_system_events_from_agents.exs"
+      "20260702200600_drop_system_events_from_agents.exs",
+      # Task Sponsor (task 019f2482, ADR 0042): nullable
+      # `tasks.sponsor_user_id` FK → users(id) with `on_delete: :nilify_all`
+      # + partial index on non-NULL rows. Enables the human-shepherd field
+      # distinct from the current-phase technical assignee.
+      "20260702204229_add_sponsor_user_id_to_tasks.exs"
     ]
 
     defp t4_root, do: Mix.Project.project_file() |> Path.dirname()

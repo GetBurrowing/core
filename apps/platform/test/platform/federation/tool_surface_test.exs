@@ -34,6 +34,20 @@ defmodule Platform.Federation.ToolSurfaceTest do
 
   defp unique_slug, do: "test-#{System.unique_integer([:positive])}"
 
+  # Insert a bare user row for sponsor-round-trip tests (ADR 0042).
+  # Bypasses the `Platform.Accounts.User.changeset/2` name requirement
+  # so tests don't need to plumb an OIDC identity fixture. Mirrors the
+  # `insert_sponsor_user/1` helper in `task_test.exs`.
+  defp insert_user_for_sponsor(opts \\ []) do
+    n = System.unique_integer([:positive])
+
+    Repo.insert!(%Platform.Accounts.User{
+      name: Keyword.get(opts, :name, "Sponsor #{n}"),
+      email: Keyword.get(opts, :email, "sponsor-#{n}@example.com"),
+      oidc_sub: "sub-sponsor-#{n}"
+    })
+  end
+
   describe "tool_definitions/0" do
     test "returns all 80 tools with required components" do
       tools = ToolSurface.tool_definitions()
@@ -706,6 +720,262 @@ defmodule Platform.Federation.ToolSurfaceTest do
       # don't expand it here because the existing test above guards that
       # surface — only assert the new field round-trips through the DB.
       assert is_map(result)
+    end
+
+    # ── Sponsor (ADR 0042 — human shepherd) round-trip through MCP ────
+    #
+    # These tests pin the MCP wire contract for `sponsor_user_id` and,
+    # importantly, the explicit-null-unset semantic in `task_update`. If
+    # someone re-introduces a blanket `Map.reject(fn {_k, v} -> is_nil(v)
+    # end)` in the `task_update` execute, the "unset" case here will go
+    # red — that is the guard the stage-2 write-up calls out.
+
+    test "task_create with sponsor_user_id round-trips through task_get" do
+      project = create_project()
+      user = insert_user_for_sponsor(name: "Sally Sponsor", email: "sally@example.com")
+
+      {:ok, created} =
+        ToolSurface.execute(
+          "task_create",
+          %{
+            "project_id" => project.id,
+            "title" => "Sponsored via MCP",
+            "sponsor_user_id" => user.id
+          },
+          %{}
+        )
+
+      # Response envelope carries the sponsor shape immediately.
+      assert created.sponsor == %{id: user.id, name: "Sally Sponsor", email: "sally@example.com"}
+
+      # And a follow-up task_get sees the same shape.
+      {:ok, fetched} =
+        ToolSurface.execute("task_get", %{"task_id" => created.id}, %{})
+
+      assert fetched.sponsor == %{
+               id: user.id,
+               name: "Sally Sponsor",
+               email: "sally@example.com"
+             }
+    end
+
+    test "task_create without sponsor_user_id yields sponsor: nil in the envelope" do
+      project = create_project()
+
+      {:ok, result} =
+        ToolSurface.execute(
+          "task_create",
+          %{"project_id" => project.id, "title" => "Unsponsored"},
+          %{}
+        )
+
+      assert Map.has_key?(result, :sponsor)
+      assert result.sponsor == nil
+    end
+
+    test "task_get returns sponsor: nil for a task with no sponsor" do
+      project = create_project()
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Bare task"})
+
+      {:ok, result} = ToolSurface.execute("task_get", %{"task_id" => task.id}, %{})
+
+      assert result.sponsor == nil
+    end
+
+    test "task_list includes sponsor per row (preloaded, no N+1)" do
+      project = create_project()
+      user = insert_user_for_sponsor(name: "Listy", email: "listy@example.com")
+
+      {:ok, sponsored} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Has sponsor",
+          sponsor_user_id: user.id
+        })
+
+      {:ok, _unsponsored} =
+        Tasks.create_task(%{project_id: project.id, title: "No sponsor"})
+
+      {:ok, results} =
+        ToolSurface.execute("task_list", %{"project_id" => project.id}, %{})
+
+      # Every row exposes the sponsor key (present-and-nil is part of
+      # the contract, not just present-when-set).
+      assert Enum.all?(results, &Map.has_key?(&1, :sponsor))
+
+      by_id = Map.new(results, &{&1.id, &1})
+
+      assert by_id[sponsored.id].sponsor == %{
+               id: user.id,
+               name: "Listy",
+               email: "listy@example.com"
+             }
+
+      # The unsponsored task shows sponsor: nil, not a NotLoaded atom or
+      # a missing key.
+      other = Enum.find(results, &(&1.id != sponsored.id))
+      assert other.sponsor == nil
+    end
+
+    test "task_update sets sponsor_user_id on an unsponsored task" do
+      project = create_project()
+      user = insert_user_for_sponsor(name: "Late Arrival")
+
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Add sponsor later"})
+      assert task.sponsor_user_id == nil
+
+      {:ok, result} =
+        ToolSurface.execute(
+          "task_update",
+          %{"task_id" => task.id, "sponsor_user_id" => user.id},
+          %{}
+        )
+
+      assert result.sponsor.id == user.id
+      assert result.sponsor.name == "Late Arrival"
+      assert Tasks.get_task_record(task.id).sponsor_user_id == user.id
+    end
+
+    test "task_update with sponsor_user_id: nil CLEARS the sponsor — explicit-null-unset contract" do
+      # THIS is the landmine test. Pre-stage-2 the `task_update` execute
+      # ran `Map.reject(fn {_k, v} -> is_nil(v) end)` on the take'd
+      # attrs, which silently dropped an explicit `sponsor_user_id:
+      # nil`. That meant an agent had NO wire-level way to unset the
+      # sponsor — you'd have to psql-poke the row. The stage-2 fix keeps
+      # nil for keys in the explicitly-nilable allow-list. If a future
+      # PR re-adds the blanket reject, THIS test goes red.
+      project = create_project()
+      user = insert_user_for_sponsor()
+
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Sponsored, then cleared",
+          sponsor_user_id: user.id
+        })
+
+      assert task.sponsor_user_id == user.id
+
+      {:ok, result} =
+        ToolSurface.execute(
+          "task_update",
+          %{"task_id" => task.id, "sponsor_user_id" => nil},
+          %{}
+        )
+
+      # Response envelope shows the cleared state.
+      assert result.sponsor == nil
+
+      # DB reflects the clear too — not just the envelope.
+      assert Tasks.get_task_record(task.id).sponsor_user_id == nil
+    end
+
+    test "task_update without sponsor_user_id in args leaves sponsor untouched" do
+      # The other half of the explicit-null-unset contract: "key absent"
+      # is NOT the same as "key present with null". Omission means
+      # "don't touch", null means "clear". If someone naively read the
+      # value with `Map.get(args, \"sponsor_user_id\")` and treated the
+      # returned nil as an unset request, an unrelated field update
+      # would clobber an existing sponsor.
+      project = create_project()
+      user = insert_user_for_sponsor()
+
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Sponsored, untouched by title change",
+          sponsor_user_id: user.id
+        })
+
+      {:ok, result} =
+        ToolSurface.execute(
+          "task_update",
+          # Note: no sponsor_user_id key here — we're only bumping the title.
+          %{"task_id" => task.id, "title" => "New title"},
+          %{}
+        )
+
+      assert result.title == "New title"
+      assert result.sponsor.id == user.id
+      assert Tasks.get_task_record(task.id).sponsor_user_id == user.id
+    end
+
+    test "task_update rejects an unknown sponsor_user_id with a recoverable FK error" do
+      project = create_project()
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Bad sponsor pointer"})
+
+      bogus_user_id = Ecto.UUID.generate()
+
+      {:error, error} =
+        ToolSurface.execute(
+          "task_update",
+          %{"task_id" => task.id, "sponsor_user_id" => bogus_user_id},
+          %{}
+        )
+
+      assert error.recoverable == true
+      assert error.error =~ "sponsor_user_id" or error.error =~ "does not exist"
+      # DB state unchanged.
+      assert Tasks.get_task_record(task.id).sponsor_user_id == nil
+    end
+
+    test "task_create with an unknown sponsor_user_id returns a recoverable error" do
+      project = create_project()
+      bogus_user_id = Ecto.UUID.generate()
+
+      {:error, error} =
+        ToolSurface.execute(
+          "task_create",
+          %{
+            "project_id" => project.id,
+            "title" => "Bad sponsor at create time",
+            "sponsor_user_id" => bogus_user_id
+          },
+          %{}
+        )
+
+      assert error.recoverable == true
+      assert error.error =~ "sponsor_user_id" or error.error =~ "does not exist"
+    end
+
+    test "task_update swaps sponsor from one user to another" do
+      project = create_project()
+      first = insert_user_for_sponsor(name: "First")
+      second = insert_user_for_sponsor(name: "Second")
+
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Swap sponsor",
+          sponsor_user_id: first.id
+        })
+
+      {:ok, result} =
+        ToolSurface.execute(
+          "task_update",
+          %{"task_id" => task.id, "sponsor_user_id" => second.id},
+          %{}
+        )
+
+      assert result.sponsor.id == second.id
+      assert result.sponsor.name == "Second"
+      assert Tasks.get_task_record(task.id).sponsor_user_id == second.id
+    end
+
+    test "tool definitions expose sponsor_user_id on task_create and task_update" do
+      # Pin the wire contract so an accidental parameter-map refactor
+      # doesn't silently drop the sponsor field. The MCP surface is the
+      # only contract downstream tools inspect.
+      tools = ToolSurface.tool_definitions()
+
+      task_create = Enum.find(tools, &(&1.name == "task_create"))
+      task_update = Enum.find(tools, &(&1.name == "task_update"))
+
+      assert Map.has_key?(task_create.parameters, :sponsor_user_id)
+      assert task_create.parameters.sponsor_user_id.required == false
+
+      assert Map.has_key?(task_update.parameters, :sponsor_user_id)
+      assert task_update.parameters.sponsor_user_id.required == false
     end
 
     test "project_update sets deploy_config.default_strategy" do

@@ -1193,7 +1193,7 @@ defmodule Platform.Federation.ToolSurface do
       %{
         name: "task_create",
         description:
-          "Create a new task in a project. Tasks track work items on the kanban board.",
+          "Create a new task in a project. Tasks track work items on the kanban board. Optionally set a Sponsor (human shepherd, ADR 0042) distinct from the current-phase technical assignee.",
         parameters: %{
           project_id: %{
             type: "string",
@@ -1228,6 +1228,12 @@ defmodule Platform.Federation.ToolSurface do
             required: false,
             description: "ID of the user or agent to assign"
           },
+          sponsor_user_id: %{
+            type: "string",
+            required: false,
+            description:
+              "Sponsor — human shepherd who owns the task's outcome (ADR 0042). Nullable user id (UUID) distinct from the current-phase assignee, which is typically an agent. Omit or pass null to leave unsponsored."
+          },
           stack_id: %{
             type: "string",
             required: false,
@@ -1236,9 +1242,9 @@ defmodule Platform.Federation.ToolSurface do
           }
         },
         returns:
-          "The created task object with id, title, status, priority. When stack_id is supplied, the response also includes stack_id and stack_position.",
+          "The created task object with id, title, status, priority, and sponsor (nil unless sponsor_user_id was supplied, else %{id, name, email}). When stack_id is supplied, the response also includes stack_id and stack_position.",
         limitations:
-          "Requires a valid project_id. If stack_id is supplied, the stack must exist and the resulting in-stack DAG must remain acyclic with no cross-stack dependency edges.",
+          "Requires a valid project_id. If stack_id is supplied, the stack must exist and the resulting in-stack DAG must remain acyclic with no cross-stack dependency edges. If sponsor_user_id is supplied it must reference an existing user (FK enforced).",
         when_to_use: "When you need to track a work item, feature, bug, or action item"
       },
       %{
@@ -1247,7 +1253,8 @@ defmodule Platform.Federation.ToolSurface do
         parameters: %{
           task_id: %{type: "string", required: true, description: "The task ID"}
         },
-        returns: "Task object with id, title, description, status, priority, project_id, epic_id",
+        returns:
+          "Task object with id, title, description, status, priority, project_id, epic_id, and sponsor (nil or %{id, name, email} per ADR 0042).",
         limitations: "Returns nil if task not found",
         when_to_use: "When you need to check the current state of a specific task"
       },
@@ -1271,7 +1278,8 @@ defmodule Platform.Federation.ToolSurface do
             description: "Filter by status (backlog, in_progress, in_review, done, etc.)"
           }
         },
-        returns: "Array of task objects",
+        returns:
+          "Array of task objects. Each entry includes sponsor (nil or %{id, name, email}) per ADR 0042.",
         limitations: "Returns all matching tasks; no pagination yet",
         when_to_use:
           "When you need to see what tasks exist, check the backlog, or find tasks in a specific state"
@@ -1289,7 +1297,7 @@ defmodule Platform.Federation.ToolSurface do
       %{
         name: "task_update",
         description:
-          "Update a task's fields (title, description, status, priority, assignee, etc.).",
+          "Update a task's fields (title, description, status, priority, assignee, sponsor, etc.). Omitted fields are left untouched; sponsor_user_id explicitly accepts null to unset (clears the Sponsor per ADR 0042).",
         parameters: %{
           task_id: %{type: "string", required: true, description: "The task to update"},
           title: %{type: "string", required: false, description: "New title"},
@@ -1303,6 +1311,12 @@ defmodule Platform.Federation.ToolSurface do
           epic_id: %{type: "string", required: false, description: "Move to a different epic"},
           assignee_type: %{type: "string", required: false, description: "Assignee type"},
           assignee_id: %{type: "string", required: false, description: "Assignee ID"},
+          sponsor_user_id: %{
+            type: "string",
+            required: false,
+            description:
+              "Sponsor — human shepherd user id (UUID) per ADR 0042. Unlike the other fields, an explicit null value CLEARS the sponsor rather than being dropped. Omit the key entirely to leave sponsor unchanged."
+          },
           deploy_target: %{
             type: "string",
             required: false,
@@ -1310,8 +1324,9 @@ defmodule Platform.Federation.ToolSurface do
               "Name of the deploy target this task should ship to (must match an entry in project.deploy_config.deploy_targets, e.g. \"production\" or \"exp\"). Required to be set before the deploying-phase dispatch can pin a target."
           }
         },
-        returns: "The updated task object",
-        limitations: "Status transitions are validated; not all transitions are allowed",
+        returns: "The updated task object (includes sponsor: nil | %{id, name, email}).",
+        limitations:
+          "Status transitions are validated; not all transitions are allowed. sponsor_user_id must reference an existing user; passing an unknown UUID returns a recoverable FK error.",
         when_to_use: "When you need to update a task's details or move it between columns"
       },
       %{
@@ -2762,11 +2777,19 @@ defmodule Platform.Federation.ToolSurface do
       priority: Map.get(args, "priority", "medium"),
       assignee_type: Map.get(args, "assignee_type"),
       assignee_id: Map.get(args, "assignee_id"),
+      # Sponsor per ADR 0042 — nullable human shepherd distinct from
+      # the current-phase (typically agent) assignee. `Map.get/2` returns
+      # nil when absent, which the changeset treats as unsponsored.
+      sponsor_user_id: Map.get(args, "sponsor_user_id"),
       reported_by: Map.get(args, "reported_by")
     }
 
     case Tasks.create_task(attrs) do
       {:ok, task} ->
+        # Preload sponsor so the return envelope shows the shape a
+        # subsequent `task_get` would — the `create_task` result may not
+        # have :sponsor loaded even when sponsor_user_id is set.
+        task = Repo.preload(task, :sponsor)
         Tasks.broadcast_board({:task_created, task})
 
         case Map.get(args, "stack_id") do
@@ -2778,12 +2801,15 @@ defmodule Platform.Federation.ToolSurface do
                status: task.status,
                priority: task.priority,
                project_id: task.project_id,
-               epic_id: task.epic_id
+               epic_id: task.epic_id,
+               sponsor: serialize_sponsor(task.sponsor)
              }}
 
           stack_id ->
             case Stacks.add_task(stack_id, task) do
               {:ok, updated} ->
+                updated = Repo.preload(updated, :sponsor)
+
                 {:ok,
                  %{
                    id: updated.id,
@@ -2792,6 +2818,7 @@ defmodule Platform.Federation.ToolSurface do
                    priority: updated.priority,
                    project_id: updated.project_id,
                    epic_id: updated.epic_id,
+                   sponsor: serialize_sponsor(updated.sponsor),
                    stack_id: updated.stack_id,
                    stack_position: updated.stack_position
                  }}
@@ -2934,7 +2961,24 @@ defmodule Platform.Federation.ToolSurface do
          }}
 
       task ->
-        # Build update attrs from provided fields only
+        # Build update attrs from provided fields only.
+        #
+        # KEEP THIS SHAPE — do NOT re-introduce a blanket
+        # `Map.reject(fn {_k, v} -> is_nil(v) end)`. The `sponsor_user_id`
+        # field (ADR 0042) uses explicit-null-unsets-the-value semantics
+        # at the MCP boundary: an explicit `nil` MUST reach the changeset
+        # so it can clear the sponsor. Blanket-rejecting nils would
+        # silently drop the unset, forcing agents to psql-poke instead of
+        # calling the tool.
+        #
+        # For every other field, "key not present in args" is
+        # semantically equivalent to "leave untouched" — `Map.take/2`
+        # already handles that. We only need to filter nils for the keys
+        # where a caller *supplied* the key with a nil placeholder (JSON
+        # `null`), and even then only for fields that don't participate
+        # in the explicit-nil-unset contract.
+        explicitly_nilable = ~w(sponsor_user_id)
+
         update_attrs =
           args
           |> Map.take([
@@ -2945,10 +2989,26 @@ defmodule Platform.Federation.ToolSurface do
             "epic_id",
             "assignee_type",
             "assignee_id",
+            "sponsor_user_id",
             "deploy_target"
           ])
-          |> Map.reject(fn {_k, v} -> is_nil(v) end)
-          |> Enum.into(%{}, fn {k, v} -> {String.to_existing_atom(k), v} end)
+          |> Enum.reduce(%{}, fn {k, v}, acc ->
+            cond do
+              # Explicit-nilable keys always propagate, nil included —
+              # this is the contract that lets task_update clear the
+              # sponsor via `{"sponsor_user_id": null}`.
+              k in explicitly_nilable ->
+                Map.put(acc, String.to_existing_atom(k), v)
+
+              # For every other field, drop nils (agent passed key with
+              # null placeholder → treat as "don't change").
+              is_nil(v) ->
+                acc
+
+              true ->
+                Map.put(acc, String.to_existing_atom(k), v)
+            end
+          end)
 
         # Use transition_task_status for status changes, regular update for others
         status_change = Map.get(update_attrs, :status)
@@ -2977,6 +3037,13 @@ defmodule Platform.Federation.ToolSurface do
 
         case result do
           {:ok, updated} ->
+            # `Tasks.update_task/2` and `Tasks.transition_task_status/2`
+            # return the un-preloaded struct. Refresh sponsor so
+            # `serialize_task` can emit the current shape — otherwise a
+            # caller that just cleared the sponsor via `sponsor_user_id:
+            # nil` would still see the pre-update Sponsor%User in the
+            # response envelope.
+            updated = Repo.preload(updated, :sponsor, force: true)
             Tasks.broadcast_board({:task_updated, updated})
             {:ok, serialize_task(updated)}
 
@@ -6189,9 +6256,25 @@ defmodule Platform.Federation.ToolSurface do
       epic_id: task.epic_id,
       assignee_type: task.assignee_type,
       assignee_id: task.assignee_id,
+      # ADR 0042 — Sponsor. `nil` when unsponsored, `%{id, name, email}`
+      # when set. `Ecto.Association.NotLoaded` protects callers from an
+      # accidentally-unpreloaded read (defensive; every preload site now
+      # loads :sponsor per stage 1's sweep).
+      sponsor: serialize_sponsor(Map.get(task, :sponsor)),
       inserted_at: task.inserted_at,
       updated_at: task.updated_at
     }
+  end
+
+  # Shape a preloaded Task.sponsor for the MCP envelope. `nil` (unset)
+  # and `%Ecto.Association.NotLoaded{}` (preload was skipped) both
+  # collapse to `nil` — the wire contract is "nil or the user shape",
+  # never a raw struct or "NotLoaded" atom.
+  defp serialize_sponsor(nil), do: nil
+  defp serialize_sponsor(%Ecto.Association.NotLoaded{}), do: nil
+
+  defp serialize_sponsor(%Platform.Accounts.User{} = user) do
+    %{id: user.id, name: user.name, email: user.email}
   end
 
   defp serialize_plan(plan) do

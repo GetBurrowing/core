@@ -599,6 +599,131 @@ defmodule Platform.Tasks.TaskTest do
     end
   end
 
+  # ADR 0042 — Task Sponsor (human shepherd) field. Nullable belongs_to on
+  # `Platform.Accounts.User`, cleared on user delete via `on_delete:
+  # :nilify_all`. Distinct from the current-phase `assignee_id` (which is
+  # typically an agent).
+  describe "sponsor_user_id (ADR 0042 human shepherd)" do
+    test "changeset accepts nil sponsor_user_id (nullable)", %{project: project} do
+      changeset =
+        Task.changeset(%Task{}, %{
+          project_id: project.id,
+          title: "No sponsor",
+          sponsor_user_id: nil
+        })
+
+      assert changeset.valid?
+    end
+
+    test "changeset accepts sponsor_user_id when omitted entirely", %{project: project} do
+      changeset = Task.changeset(%Task{}, %{project_id: project.id, title: "Sponsor absent"})
+
+      assert changeset.valid?
+      assert get_field(changeset, :sponsor_user_id) == nil
+    end
+
+    test "changeset casts a valid UUID into sponsor_user_id", %{project: project} do
+      user = insert_sponsor_user()
+
+      changeset =
+        Task.changeset(%Task{}, %{
+          project_id: project.id,
+          title: "Has sponsor",
+          sponsor_user_id: user.id
+        })
+
+      assert changeset.valid?
+      assert get_change(changeset, :sponsor_user_id) == user.id
+    end
+
+    test "create_task/1 persists sponsor_user_id when set", %{project: project} do
+      user = insert_sponsor_user()
+
+      assert {:ok, task} =
+               Tasks.create_task(%{
+                 project_id: project.id,
+                 title: "Sponsored",
+                 sponsor_user_id: user.id
+               })
+
+      assert task.sponsor_user_id == user.id
+    end
+
+    test "insert with a bogus sponsor_user_id returns FK violation", %{project: project} do
+      # UUID that will never exist — FK constraint fires on Repo.insert.
+      fake_user_id = Ecto.UUID.generate()
+
+      assert {:error, changeset} =
+               Tasks.create_task(%{
+                 project_id: project.id,
+                 title: "Bad sponsor",
+                 sponsor_user_id: fake_user_id
+               })
+
+      assert %{sponsor_user_id: [_]} = errors_on(changeset)
+    end
+
+    test "get_task_record/1 preloads :sponsor", %{project: project} do
+      user = insert_sponsor_user()
+
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Preload sponsor",
+          sponsor_user_id: user.id
+        })
+
+      reloaded = Tasks.get_task_record(task.id)
+      assert %Platform.Accounts.User{id: sponsor_id} = reloaded.sponsor
+      assert sponsor_id == user.id
+    end
+
+    test "get_task_record/1 returns nil for unknown id", _ctx do
+      assert Tasks.get_task_record(Ecto.UUID.generate()) == nil
+    end
+
+    test "get_task_record/1 preloads :sponsor as nil when unset", %{project: project} do
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "No sponsor set"})
+
+      reloaded = Tasks.get_task_record(task.id)
+      assert reloaded.sponsor == nil
+    end
+
+    test "list_all_tasks/1 preloads :sponsor", %{project: project} do
+      user = insert_sponsor_user()
+
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Sponsored in list",
+          sponsor_user_id: user.id
+        })
+
+      found = Tasks.list_all_tasks() |> Enum.find(&(&1.id == task.id))
+      assert %Platform.Accounts.User{id: sponsor_id} = found.sponsor
+      assert sponsor_id == user.id
+    end
+
+    test "deleting the sponsoring user nilifies sponsor_user_id (on_delete: :nilify_all)",
+         %{project: project} do
+      user = insert_sponsor_user()
+
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Sponsor about to leave",
+          sponsor_user_id: user.id
+        })
+
+      # Bypass any Accounts context guardrails — go straight through the Repo
+      # so we're testing the FK's `ON DELETE SET NULL` behaviour.
+      Repo.delete!(user)
+
+      reloaded = Tasks.get_task_record(task.id)
+      assert reloaded.sponsor_user_id == nil
+    end
+  end
+
   describe "stack_pending status + stack assoc" do
     test "stack_pending is included in statuses/0" do
       assert "stack_pending" in Task.statuses()
@@ -643,5 +768,18 @@ defmodule Platform.Tasks.TaskTest do
         opts |> Keyword.get(String.to_existing_atom(key), key) |> to_string()
       end)
     end)
+  end
+
+  # Insert a bare user row for sponsor tests. Bypasses the
+  # `Platform.Accounts.User.changeset/2` name requirement so tests don't
+  # need to plumb an OIDC identity fixture.
+  defp insert_sponsor_user(opts \\ []) do
+    n = System.unique_integer([:positive])
+
+    Repo.insert!(%Platform.Accounts.User{
+      name: Keyword.get(opts, :name, "Sponsor #{n}"),
+      email: Keyword.get(opts, :email, "sponsor-#{n}@example.com"),
+      oidc_sub: "sub-sponsor-#{n}"
+    })
   end
 end

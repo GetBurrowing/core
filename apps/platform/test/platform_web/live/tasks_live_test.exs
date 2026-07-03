@@ -2091,6 +2091,101 @@ defmodule PlatformWeb.TasksLiveTest do
            )
   end
 
+  # ── Sponsor picker (ADR-0042 stage 3) ─────────────────────────────────
+
+  describe "New-Task sheet Sponsor picker" do
+    test "persists sponsor_user_id when a sponsor is selected", %{conn: conn} do
+      project = create_project()
+      _agent = create_agent("Sponsor Test Agent")
+
+      {conn, user} = authenticated_conn_with_user(conn)
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+
+      render_submit(view, "create_task", %{
+        "task" => %{
+          "title" => "Task with sponsor",
+          "project_id" => project.id,
+          "what" => "Ship the sponsor field",
+          "why" => "Because humans should own outcomes",
+          "action" => "create",
+          "assignee_id" => "",
+          "assignee_type" => "agent",
+          "sponsor_user_id" => user.id,
+          "deploy_target" => "",
+          "epic_id" => ""
+        }
+      })
+
+      created =
+        Tasks.list_tasks_by_project(project.id)
+        |> Enum.find(&(&1.title == "Task with sponsor"))
+
+      assert created
+      assert created.sponsor_user_id == user.id
+    end
+
+    test "defaults sponsor_user_id to nil when the field is omitted", %{conn: conn} do
+      project = create_project()
+      _agent = create_agent("Sponsor Test Agent")
+
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+
+      render_submit(view, "create_task", %{
+        "task" => %{
+          "title" => "Task without sponsor",
+          "project_id" => project.id,
+          "what" => "Skip the sponsor",
+          "why" => "Default should be No Sponsor",
+          "action" => "create",
+          "assignee_id" => "",
+          "assignee_type" => "agent",
+          "deploy_target" => "",
+          "epic_id" => ""
+        }
+      })
+
+      created =
+        Tasks.list_tasks_by_project(project.id)
+        |> Enum.find(&(&1.title == "Task without sponsor"))
+
+      assert created
+      assert is_nil(created.sponsor_user_id)
+    end
+
+    test "coerces empty-string sponsor_user_id to nil", %{conn: conn} do
+      # The "No Sponsor" <option value=""> posts an empty string. The changeset
+      # must never see "" for a nullable UUID FK — the LV should normalize it.
+      project = create_project()
+      _agent = create_agent("Sponsor Test Agent")
+
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+
+      render_submit(view, "create_task", %{
+        "task" => %{
+          "title" => "Task with empty sponsor",
+          "project_id" => project.id,
+          "what" => "Empty-string sponsor",
+          "why" => "Should be coerced to nil",
+          "action" => "create",
+          "assignee_id" => "",
+          "assignee_type" => "agent",
+          "sponsor_user_id" => "",
+          "deploy_target" => "",
+          "epic_id" => ""
+        }
+      })
+
+      created =
+        Tasks.list_tasks_by_project(project.id)
+        |> Enum.find(&(&1.title == "Task with empty sponsor"))
+
+      assert created
+      assert is_nil(created.sponsor_user_id)
+    end
+  end
+
   # ── Plan review tests ─────────────────────────────────────────────────
 
   test "approve_plan transitions plan to approved and refreshes detail", %{conn: conn} do
@@ -4064,6 +4159,256 @@ defmodule PlatformWeb.TasksLiveTest do
       updated = Tasks.get_task_record(task.id)
       assert is_nil(updated.assignee_id)
       assert is_nil(updated.assignee_type)
+    end
+  end
+
+  # ── Sponsor row on detail panel (ADR-0042 stage 4) ────────────────────
+  #
+  # The Sponsor row mirrors the assignee dropdown's edit-vs-readonly toggle.
+  # When a sponsor is set: readonly badge renders the user's display name.
+  # When unset: readonly hides the row entirely (no "No Sponsor" clutter).
+  # Edit mode always shows the picker, defaulting to "No Sponsor" when nil,
+  # so a nil sponsor can be filled in.
+  defp create_user_for_sponsor(name) do
+    Repo.insert!(%User{
+      email: "sponsor_#{System.unique_integer([:positive])}@example.com",
+      name: name,
+      oidc_sub: "oidc-sponsor-#{System.unique_integer([:positive])}"
+    })
+  end
+
+  describe "sponsor row on detail panel (stage 4)" do
+    test "readonly detail panel shows sponsor badge when sponsor_user_id is set", %{conn: conn} do
+      project = create_project()
+      sponsor = create_user_for_sponsor("Sponsor Shepherd")
+      task = create_task(project, %{title: "Sponsored Task", sponsor_user_id: sponsor.id})
+
+      conn = authenticated_conn(conn)
+      {:ok, _view, html} = live(conn, ~p"/tasks/#{task.id}")
+
+      assert html =~ ~s|data-role="sponsor-readonly"|
+      assert html =~ "Sponsor Shepherd"
+    end
+
+    test "readonly detail panel omits sponsor row entirely when sponsor_user_id is nil",
+         %{conn: conn} do
+      project = create_project()
+      task = create_task(project, %{title: "Unsponsored Task"})
+
+      conn = authenticated_conn(conn)
+      {:ok, _view, html} = live(conn, ~p"/tasks/#{task.id}")
+
+      # No sponsor row in the readonly view (contrast with edit mode below).
+      refute html =~ ~s|data-role="sponsor-readonly"|
+      refute html =~ ~s|data-role="sponsor-select"|
+    end
+
+    test "edit mode always renders the sponsor picker with a No Sponsor default", %{conn: conn} do
+      project = create_project()
+      _u = create_user_for_sponsor("Some Human")
+      task = create_task(project, %{title: "Editable Sponsor"})
+
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
+
+      html = render_click(view, "toggle_edit_mode")
+
+      assert html =~ ~s|data-role="sponsor-select"|
+      assert html =~ "No Sponsor"
+      # No sponsor set → the empty-value option is the selected default.
+      assert html =~ ~s|value="" selected|
+    end
+
+    test "edit mode marks the current sponsor as selected", %{conn: conn} do
+      project = create_project()
+      sponsor = create_user_for_sponsor("Chosen One")
+      task = create_task(project, %{title: "Task With Sponsor", sponsor_user_id: sponsor.id})
+
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
+
+      html = render_click(view, "toggle_edit_mode")
+
+      assert html =~ ~s|data-role="sponsor-select"|
+      assert html =~ "Chosen One"
+      assert html =~ ~s|value="#{sponsor.id}" selected|
+    end
+
+    test "changing sponsor via update_task_field persists the new sponsor_user_id",
+         %{conn: conn} do
+      project = create_project()
+      original = create_user_for_sponsor("Original Sponsor")
+      replacement = create_user_for_sponsor("Replacement Sponsor")
+      task = create_task(project, %{title: "Reshepherded", sponsor_user_id: original.id})
+
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
+
+      render_click(view, "toggle_edit_mode")
+
+      render_hook(view, "update_task_field", %{
+        "field" => "sponsor_user_id",
+        "value" => replacement.id,
+        "task-id" => task.id
+      })
+
+      updated = Tasks.get_task_record(task.id)
+      assert updated.sponsor_user_id == replacement.id
+    end
+
+    test "clearing sponsor via update_task_field (empty string → nil) nils the FK",
+         %{conn: conn} do
+      project = create_project()
+      sponsor = create_user_for_sponsor("Departing Sponsor")
+      task = create_task(project, %{title: "Sponsor Removed", sponsor_user_id: sponsor.id})
+
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
+
+      render_click(view, "toggle_edit_mode")
+
+      render_hook(view, "update_task_field", %{
+        "field" => "sponsor_user_id",
+        "value" => "",
+        "task-id" => task.id
+      })
+
+      updated = Tasks.get_task_record(task.id)
+      assert is_nil(updated.sponsor_user_id)
+    end
+
+    test "changing sponsor re-renders the readonly badge without a page reload",
+         %{conn: conn} do
+      # Verifies `reload_selected_task/1` picks up the new sponsor. This is the
+      # regression guard for stage 5's live-refresh contract: the detail panel
+      # must reflect an inline sponsor change without a full board refresh.
+      # `assign_selected_task/2` resets `edit_mode` to false as a side effect
+      # of the reload, so the readonly badge should render on the very next
+      # render pass without an explicit second `toggle_edit_mode` click.
+      project = create_project()
+      sponsor = create_user_for_sponsor("Late Arrival")
+      task = create_task(project, %{title: "Sponsor Later"})
+
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
+
+      render_click(view, "toggle_edit_mode")
+
+      html =
+        render_hook(view, "update_task_field", %{
+          "field" => "sponsor_user_id",
+          "value" => sponsor.id,
+          "task-id" => task.id
+        })
+
+      assert html =~ ~s|data-role="sponsor-readonly"|
+      assert html =~ "Late Arrival"
+    end
+
+    test "concurrent edit — second LV session sees the sponsor via board broadcast",
+         %{conn: conn} do
+      # ADR 0042 stage 5 live-refresh contract: Session A picks a sponsor via
+      # the inline detail-panel picker; Session B (same task open, different
+      # LV process) must see the sponsor badge appear on the next render
+      # WITHOUT reloading the page. The mechanism is:
+      #
+      #   1. Session A's `update_task_field` → `Tasks.update_task/2`
+      #   2. `update_task/2` preloads `[:project, :epic, :sponsor, plans: :stages]`
+      #      and broadcasts `{:task_updated, preloaded}` on the board topic
+      #      (see `tasks.ex:274-275`).
+      #   3. Every mounted `TasksLive` subscribes to the board on mount
+      #      (`tasks_live.ex:88`), so Session B's `handle_info({:task_updated, _})`
+      #      fires (`tasks_live.ex:2435`), which reloads via
+      #      `refresh_board → reload_selected_task → get_task_detail`
+      #      (all three paths preload `:sponsor` — verified stage 4).
+      #
+      # This test is the regression guard for the whole chain: if any
+      # downstream preload gets stripped (dropping `:sponsor` from a
+      # broadcast payload or from `get_task_detail`), the badge either
+      # renders as "Unknown user" (users_by_id lookup fails silently) or
+      # not at all, and this test catches it before it ships.
+      project = create_project()
+      sponsor = create_user_for_sponsor("Cross Session Sponsor")
+      task = create_task(project, %{title: "Two-Session Sponsor Task"})
+
+      {conn_a, _user_a} = authenticated_conn_with_user(conn)
+      {conn_b, _user_b} = authenticated_conn_with_user(conn)
+
+      {:ok, view_a, _html_a} = live(conn_a, ~p"/tasks/#{task.id}")
+      {:ok, view_b, html_b0} = live(conn_b, ~p"/tasks/#{task.id}")
+
+      # Baseline: neither session shows the readonly sponsor badge yet.
+      refute html_b0 =~ ~s|data-role="sponsor-readonly"|
+
+      # Session A: engage edit mode and set the sponsor via the inline
+      # picker — same event Session B would fire if Rowan clicked the
+      # dropdown himself.
+      render_click(view_a, "toggle_edit_mode")
+
+      render_hook(view_a, "update_task_field", %{
+        "field" => "sponsor_user_id",
+        "value" => sponsor.id,
+        "task-id" => task.id
+      })
+
+      # Session B: no explicit refresh. `render/1` flushes the LV mailbox
+      # first, so the `{:task_updated, _}` message queued by A's broadcast
+      # runs `handle_info` and re-renders before this call returns.
+      html_b = render(view_b)
+
+      assert html_b =~ ~s|data-role="sponsor-readonly"|,
+             "Session B should render the sponsor readonly badge after A's broadcast"
+
+      assert html_b =~ "Cross Session Sponsor",
+             "Session B should render the sponsor's display name, not a fallback"
+
+      # Belt-and-braces: also assert persistence, so a false-positive HTML
+      # match on stale assign state can't sneak by.
+      assert Tasks.get_task_record(task.id).sponsor_user_id == sponsor.id
+    end
+
+    test "clearing sponsor in Session A live-refreshes Session B's badge away",
+         %{conn: conn} do
+      # Inverse of the set-a-sponsor test: if a task starts with a sponsor
+      # and Session A clears it, Session B's readonly badge must disappear
+      # on the next render (the `:if={@selected_task.sponsor_user_id}`
+      # gate collapses). This guards against a stale `selected_task` assign
+      # holding onto the old sponsor after a cross-session clear.
+      project = create_project()
+      sponsor = create_user_for_sponsor("Departing Cross-Session Sponsor")
+
+      task =
+        create_task(project, %{
+          title: "Sponsor Clear Two-Session",
+          sponsor_user_id: sponsor.id
+        })
+
+      {conn_a, _user_a} = authenticated_conn_with_user(conn)
+      {conn_b, _user_b} = authenticated_conn_with_user(conn)
+
+      {:ok, view_a, _html_a} = live(conn_a, ~p"/tasks/#{task.id}")
+      {:ok, view_b, html_b0} = live(conn_b, ~p"/tasks/#{task.id}")
+
+      # Baseline: Session B sees the sponsor at mount.
+      assert html_b0 =~ ~s|data-role="sponsor-readonly"|
+      assert html_b0 =~ "Departing Cross-Session Sponsor"
+
+      render_click(view_a, "toggle_edit_mode")
+
+      render_hook(view_a, "update_task_field", %{
+        "field" => "sponsor_user_id",
+        "value" => "",
+        "task-id" => task.id
+      })
+
+      html_b = render(view_b)
+
+      refute html_b =~ ~s|data-role="sponsor-readonly"|,
+             "Session B's sponsor row should collapse after A clears the sponsor"
+
+      refute html_b =~ "Departing Cross-Session Sponsor"
+
+      assert is_nil(Tasks.get_task_record(task.id).sponsor_user_id)
     end
   end
 

@@ -1,4 +1,36 @@
 defmodule Platform.Tasks.Task do
+  @moduledoc """
+  A Task — the atomic unit of shepherded work.
+
+  ## Three distinct people fields, three distinct concepts
+
+  Tasks carry three separate references to humans/agents. They exist because
+  they answer three different questions and are NOT interchangeable.
+
+    * `sponsor_user_id` (added in ADR 0042) — the **sponsor**: a nullable human
+      user who is accountable for the task landing. The shepherd. The person
+      the task "belongs to" politically. Distinct from the technical assignee;
+      the sponsor may be a manager, product owner, or approver who never
+      touches the code. Cleared to `NULL` when the referenced user is deleted.
+
+    * `assignee_type` + `assignee_id` — the **current-phase assignee**: whoever
+      is doing the technical work *right now*. Derived by `Platform.Tasks`
+      from `phase_assignees` whenever the phase changes (planning → execution
+      → review). May be an agent (`assignee_type: "agent"`) or a human
+      (`assignee_type: "user"`). Rotates as the task moves through phases.
+
+    * `reported_by` — the **reporter**: a free-form string capturing who filed
+      the task originally. Historical only. Not a foreign key; the referenced
+      identity may not even be a Suite user. Never used for routing or
+      authority.
+
+  Interchanging these has caused confusion in the past — e.g. treating the
+  assignee as accountable when phases are rotating, or reading `reported_by`
+  as the sponsor when it's just an audit trail entry. When in doubt: sponsor
+  answers "who is on the hook?", assignee answers "who is working on it?",
+  reporter answers "who filed it?"
+  """
+
   use Ecto.Schema
   import Ecto.Changeset
 
@@ -26,6 +58,13 @@ defmodule Platform.Tasks.Task do
     belongs_to(:project, Platform.Tasks.Project)
     belongs_to(:epic, Platform.Tasks.Epic)
     belongs_to(:stack, Platform.Tasks.Stack)
+    # Sponsor — human shepherd distinct from the current-phase technical
+    # assignee. Nullable per ADR 0042. Cleared to NULL on user delete.
+    belongs_to(:sponsor, Platform.Accounts.User,
+      foreign_key: :sponsor_user_id,
+      type: :binary_id
+    )
+
     field(:title, :string)
     field(:description, :string)
     field(:status, :string, default: "backlog")
@@ -66,6 +105,7 @@ defmodule Platform.Tasks.Task do
       :project_id,
       :epic_id,
       :stack_id,
+      :sponsor_user_id,
       :title,
       :description,
       :status,
@@ -89,6 +129,7 @@ defmodule Platform.Tasks.Task do
     |> foreign_key_constraint(:project_id)
     |> foreign_key_constraint(:epic_id)
     |> foreign_key_constraint(:stack_id)
+    |> foreign_key_constraint(:sponsor_user_id)
   end
 
   # `phase_assignees` keys must be in `@phases`. Each value should be a map

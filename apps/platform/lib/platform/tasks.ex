@@ -271,7 +271,7 @@ defmodule Platform.Tasks do
     |> Repo.update()
     |> case do
       {:ok, updated} ->
-        preloaded = Repo.preload(updated, [:project, :epic, plans: :stages])
+        preloaded = Repo.preload(updated, [:project, :epic, :sponsor, plans: :stages])
         broadcast_board({:task_updated, preloaded})
         maybe_sweep_stack_after_update(task, updated)
         {:ok, updated}
@@ -343,8 +343,20 @@ defmodule Platform.Tasks do
     end
   end
 
-  @doc "Get a task record from Postgres (no ETS merge)."
-  def get_task_record(id), do: Repo.get(Task, id)
+  @doc """
+  Get a task record from Postgres (no ETS merge).
+
+  Preloads `:sponsor` so MCP callers (`task_get`, `task_update`,
+  `task_attach_canvas` per ADR 0042) see the sponsor without a follow-up
+  query. Extending here rather than at each caller keeps the sweep
+  centralized.
+  """
+  def get_task_record(id) do
+    case Repo.get(Task, id) do
+      nil -> nil
+      %Task{} = task -> Repo.preload(task, :sponsor)
+    end
+  end
 
   # ── Dependency helpers (canonical readers) ──────────────────────────────
   #
@@ -587,6 +599,10 @@ defmodule Platform.Tasks do
     |> maybe_filter_epic(epic_id)
     |> maybe_filter_status(status)
     |> order_by([t], desc: t.inserted_at)
+    # Preload :sponsor so the MCP `task_list` envelope carries the
+    # human-shepherd shape without an N+1 (ADR 0042). Matches the
+    # get_task_record/1 preload so both call paths see the same fields.
+    |> preload(:sponsor)
     |> Repo.all()
   end
 
@@ -818,7 +834,7 @@ defmodule Platform.Tasks do
 
         if finalized_task do
           finalized_task =
-            Repo.preload(finalized_task, [:project, :epic, plans: :stages])
+            Repo.preload(finalized_task, [:project, :epic, :sponsor, plans: :stages])
 
           broadcast_board({:task_updated, finalized_task})
           maybe_finalize_transition(previous_task, finalized_task, finalized_task.status)
@@ -966,7 +982,7 @@ defmodule Platform.Tasks do
         end)
         |> case do
           {:ok, {task, plan}} ->
-            preloaded = Repo.preload(task, [:project, :epic, plans: :stages])
+            preloaded = Repo.preload(task, [:project, :epic, :sponsor, plans: :stages])
             broadcast_board({:task_updated, preloaded})
             broadcast_board({:plan_updated, plan})
             {:ok, preloaded}
@@ -1198,7 +1214,7 @@ defmodule Platform.Tasks do
     |> maybe_filter_project(project_id)
     |> maybe_filter_epic(epic_id)
     |> order_by([t], desc: t.inserted_at)
-    |> preload([:project, :epic, plans: :stages])
+    |> preload([:project, :epic, :sponsor, plans: :stages])
     |> Repo.all()
   end
 
@@ -1307,7 +1323,9 @@ defmodule Platform.Tasks do
       # counts) and the plan-pending-review badge. `list_all_tasks/1`
       # carries the same preload set; keep them aligned so callers can
       # swap between the two without surprise N+1s in the LV render.
-      |> preload([:project, :epic, plans: :stages])
+      # `:sponsor` preloaded per ADR 0042 so the kanban card can render
+      # the sponsor avatar/name without a per-card follow-up query.
+      |> preload([:project, :epic, :sponsor, plans: :stages])
       |> Repo.all()
 
     empty = Map.new(@kanban_status_keys, &{&1, []})
@@ -1420,7 +1438,7 @@ defmodule Platform.Tasks do
     Task
     |> where([t], t.id == ^task_id)
     |> where([t], is_nil(t.deleted_at))
-    |> preload([:project, :epic, :stack, plans: [:superseded_by, stages: :validations]])
+    |> preload([:project, :epic, :stack, :sponsor, plans: [:superseded_by, stages: :validations]])
     |> Repo.one()
   end
 
@@ -1500,7 +1518,10 @@ defmodule Platform.Tasks do
     |> Repo.update()
     |> case do
       {:ok, updated} ->
-        broadcast_board({:task_updated, Repo.preload(updated, [:project, :epic, plans: :stages])})
+        broadcast_board(
+          {:task_updated, Repo.preload(updated, [:project, :epic, :sponsor, plans: :stages])}
+        )
+
         {:ok, updated}
 
       error ->
@@ -1573,7 +1594,7 @@ defmodule Platform.Tasks do
          :ok <- maybe_prepare_transition(task, new_status),
          {:ok, %{updated: updated, frozen: frozen}} <-
            transition_with_policy2_freeze(task, new_status) do
-      updated = Repo.preload(updated, [:project, :epic, plans: :stages])
+      updated = Repo.preload(updated, [:project, :epic, :sponsor, plans: :stages])
       broadcast_board({:task_updated, updated})
       maybe_finalize_transition(task, updated, new_status)
 
@@ -1673,7 +1694,7 @@ defmodule Platform.Tasks do
           true ->
             case task |> Task.changeset(%{status: target_status}) |> Repo.update() do
               {:ok, updated} ->
-                updated = Repo.preload(updated, [:project, :epic, plans: :stages])
+                updated = Repo.preload(updated, [:project, :epic, :sponsor, plans: :stages])
                 broadcast_board({:task_updated, updated})
                 {:ok, updated}
 
@@ -1880,7 +1901,7 @@ defmodule Platform.Tasks do
         |> case do
           {:ok, updated} ->
             broadcast_board(
-              {:task_updated, Repo.preload(updated, [:project, :epic, plans: :stages])}
+              {:task_updated, Repo.preload(updated, [:project, :epic, :sponsor, plans: :stages])}
             )
 
             :ok

@@ -1327,6 +1327,65 @@
         <% end %>
       </div>
 
+      <%!-- Sponsor (ADR 0042 stage 4). Nullable human shepherd distinct from
+           the technical assignee above. Edit mode: always show the picker so
+           a nil sponsor can be filled in. Readonly: hide the row entirely
+           when nil to avoid a permanent "No Sponsor" chip cluttering the
+           panel. Reuses the same `update_task_field` phx-change flow as
+           the assignee dropdown; `sponsor_user_id` is whitelisted in the
+           handler and the generic branch normalizes "" → nil for the
+           nullable FK. --%>
+      <div class="flex flex-col gap-1">
+        <%= if @edit_mode do %>
+          <form
+            phx-change="update_task_field"
+            class="flex flex-col gap-1 rounded border border-dashed border-base-300 hover:border-base-content/40 p-1"
+            data-role="sponsor-form"
+            data-editable="true"
+          >
+            <input type="hidden" name="field" value="sponsor_user_id" />
+            <input type="hidden" name="task-id" value={@selected_task.id} />
+            <label
+              for={"sponsor-select-#{@selected_task.id}"}
+              class="text-xs font-semibold uppercase tracking-wider text-base-content/50"
+            >
+              Sponsor
+            </label>
+            <select
+              id={"sponsor-select-#{@selected_task.id}"}
+              name="value"
+              data-role="sponsor-select"
+              class="select select-sm select-bordered cursor-pointer"
+            >
+              <option value="" selected={is_nil(@selected_task.sponsor_user_id)}>
+                No Sponsor
+              </option>
+              <option
+                :for={user <- @users}
+                value={user.id}
+                selected={@selected_task.sponsor_user_id == user.id}
+              >
+                {user.name || user.email}
+              </option>
+            </select>
+          </form>
+        <% else %>
+          <div
+            :if={@selected_task.sponsor_user_id}
+            data-role="sponsor-readonly"
+            data-editable="false"
+            class="flex flex-col gap-1"
+          >
+            <span class="text-xs font-semibold uppercase tracking-wider text-base-content/50">
+              Sponsor
+            </span>
+            <span class="badge badge-sm badge-outline">
+              {sponsor_name(@selected_task, @users_by_id)}
+            </span>
+          </div>
+        <% end %>
+      </div>
+
       <%!-- Reporter + Dates + Assignee name --%>
       <div class="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-base-content/50">
         <span :if={@selected_task.reported_by}>
@@ -3518,6 +3577,27 @@
           </option>
         </select>
         <input type="hidden" name="task[assignee_type]" value="agent" />
+      </div>
+
+      <%!-- Sponsor — nullable human user who shepherds this task (ADR-0042
+           stage 3). Distinct from Agent (technical assignee): a Sponsor is the
+           human owner of "does this ship?" not "does this compile?". Defaults
+           to No Sponsor for v1 to prevent thoughtless assignment; the acting
+           user can pick themselves explicitly. --%>
+      <div>
+        <label class="label label-text text-xs font-medium">Sponsor</label>
+        <select name="task[sponsor_user_id]" class="select select-bordered select-sm w-full">
+          <option value="" selected={is_nil(@task_form[:sponsor_user_id].value)}>
+            No Sponsor
+          </option>
+          <option
+            :for={user <- @users}
+            value={user.id}
+            selected={@task_form[:sponsor_user_id].value == user.id}
+          >
+            {user.name}
+          </option>
+        </select>
       </div>
 
       <%!-- Deploy Strategy --%>

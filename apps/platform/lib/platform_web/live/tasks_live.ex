@@ -309,6 +309,9 @@ defmodule PlatformWeb.TasksLive do
      |> assign(:epics_collapsed, false)
      |> assign(:agents, agents)
      |> assign(:agent_names, Map.new(agents, fn a -> {a.id, a.name} end))
+     # `:users` powers the Sponsor picker in the New-Task bottom sheet (stage 3
+     # of ADR-0042). `:users_by_id` remains for detail-panel + row lookups.
+     |> assign(:users, users)
      |> assign(:users_by_id, users_by_id)
      |> assign(:agents_by_id, agents_by_id)
      |> assign(:agent_names, Map.new(agents, fn a -> {a.id, a.name} end))
@@ -1074,7 +1077,7 @@ defmodule PlatformWeb.TasksLive do
   # option and by deploy_target's "(none)" option). Other unknown fields
   # flash a generic error.
 
-  @editable_task_fields ~w(priority deploy_target assignee_id)
+  @editable_task_fields ~w(priority deploy_target assignee_id sponsor_user_id)
 
   def handle_event("update_task_field", _params, %{assigns: %{edit_mode: false}} = socket),
     do: {:noreply, socket}
@@ -2546,6 +2549,8 @@ defmodule PlatformWeb.TasksLive do
     # Parse deploy_strategy from form
     deploy_strategy = parse_deploy_strategy(params)
 
+    # Sponsor picker submits "" for "No Sponsor" — coerce to nil so the
+    # nullable FK changeset doesn't see an empty string (ADR-0042 stage 3).
     task_attrs =
       params
       |> Map.put("description", description)
@@ -2555,6 +2560,7 @@ defmodule PlatformWeb.TasksLive do
       |> Map.put("deploy_strategy", deploy_strategy)
       |> Map.put("assignee_id", assignee_id)
       |> Map.put("assignee_type", assignee_type)
+      |> Map.update("sponsor_user_id", nil, fn v -> if v in [nil, ""], do: nil, else: v end)
       |> Map.put("reported_by", socket.assigns.current_user)
 
     case Tasks.create_task(task_attrs) do
@@ -4076,6 +4082,22 @@ defmodule PlatformWeb.TasksLive do
   defp assignee_name(%Task{assignee_type: "user"}, _agent_names), do: "User"
 
   defp assignee_name(_, _), do: nil
+
+  # Detail-panel Sponsor badge (ADR 0042 stage 4). Returns the display name
+  # for the sponsor if set, or `nil` so the template can `:if` the whole row
+  # away when there's no sponsor. Falls back to `email` when `name` is blank,
+  # and to a sentinel string when the FK points at a user that no longer
+  # exists in the local `users_by_id` map (deleted user + stale task row).
+  defp sponsor_name(%Task{sponsor_user_id: nil}, _users_by_id), do: nil
+
+  defp sponsor_name(%Task{sponsor_user_id: id}, users_by_id) when is_binary(id) do
+    case Map.get(users_by_id, id) do
+      nil -> "Unknown user"
+      user -> user.name || user.email
+    end
+  end
+
+  defp sponsor_name(_, _), do: nil
 
   defp relative_time(nil), do: ""
 
