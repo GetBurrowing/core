@@ -206,6 +206,50 @@ defmodule Platform.Tasks.PlanTest do
     end
   end
 
+  # Auto-approve plan (task 019f25f2) stage 1: schema-only foundation for
+  # the timestamp future stages will stamp when the opt-in flag fires.
+  # Distinct from :approved_at so downstream observers can tell auto- vs.
+  # manual-review approvals apart. Nullable — most plans never carry it.
+  describe "auto_approved_at (task 019f25f2 stage 1)" do
+    test "is part of the schema" do
+      assert :auto_approved_at in Plan.__schema__(:fields)
+      assert Plan.__schema__(:type, :auto_approved_at) == :utc_datetime_usec
+    end
+
+    test "is cast by changeset/2 when provided", %{task: task} do
+      ts = DateTime.utc_now()
+
+      changeset =
+        Plan.changeset(%Plan{}, %{
+          task_id: task.id,
+          version: 1,
+          auto_approved_at: ts
+        })
+
+      assert changeset.valid?
+      assert get_change(changeset, :auto_approved_at) == ts
+    end
+
+    test "is optional (nil is accepted, changeset valid without it)", %{task: task} do
+      changeset = Plan.changeset(%Plan{}, %{task_id: task.id, version: 1})
+      assert changeset.valid?
+      refute Map.has_key?(changeset.changes, :auto_approved_at)
+    end
+
+    test "round-trips through the database", %{task: task} do
+      ts = DateTime.utc_now()
+
+      {:ok, plan} =
+        %Plan{}
+        |> Plan.changeset(%{task_id: task.id, version: 1, auto_approved_at: ts})
+        |> Platform.Repo.insert()
+
+      reloaded = Platform.Repo.get!(Plan, plan.id)
+      assert reloaded.auto_approved_at != nil
+      assert DateTime.diff(reloaded.auto_approved_at, ts, :microsecond) == 0
+    end
+  end
+
   describe "list_plans/1" do
     test "returns plans ordered by version", %{task: task} do
       # Two legitimate revisions: first is rejected, then a new one is drafted.

@@ -1480,6 +1480,269 @@ defmodule Platform.Tasks.TasksContextTest do
     end
   end
 
+  describe "auto-approve on submit (task 019f25f2 stage 2)" do
+    import ExUnit.CaptureLog
+
+    setup do
+      {:ok, project} = Tasks.create_project(%{name: "Auto Approve Project"})
+      %{project: project}
+    end
+
+    test "flag on + execution + review assignees → plan lands approved, task in_progress",
+         %{project: project} do
+      exec_id = Ecto.UUID.generate()
+      review_id = Ecto.UUID.generate()
+
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Auto happy path",
+          status: "planning",
+          auto_approve_plan: true,
+          phase_assignees: %{
+            "execution" => %{"assignee_id" => exec_id, "assignee_type" => "agent"},
+            "review" => %{"assignee_id" => review_id, "assignee_type" => "agent"}
+          }
+        })
+
+      {:ok, plan} = Tasks.create_plan(%{task_id: task.id})
+      {:ok, _stage} = Tasks.create_stage(%{plan_id: plan.id, position: 1, name: "S1"})
+      {:ok, submitted} = Tasks.submit_plan_for_review(plan)
+
+      assert submitted.status == "approved"
+      assert submitted.auto_approved_at != nil
+      assert submitted.approved_by == "system:auto"
+      assert submitted.approved_at != nil
+
+      reloaded_task = Tasks.get_task_record(task.id)
+      assert reloaded_task.status == "in_progress"
+    end
+
+    test "flag off → plan stays pending_review, task stays planning",
+         %{project: project} do
+      exec_id = Ecto.UUID.generate()
+      review_id = Ecto.UUID.generate()
+
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Flag off",
+          status: "planning",
+          auto_approve_plan: false,
+          phase_assignees: %{
+            "execution" => %{"assignee_id" => exec_id, "assignee_type" => "agent"},
+            "review" => %{"assignee_id" => review_id, "assignee_type" => "agent"}
+          }
+        })
+
+      {:ok, plan} = Tasks.create_plan(%{task_id: task.id})
+      {:ok, _stage} = Tasks.create_stage(%{plan_id: plan.id, position: 1, name: "S1"})
+      {:ok, submitted} = Tasks.submit_plan_for_review(plan)
+
+      assert submitted.status == "pending_review"
+      assert submitted.auto_approved_at == nil
+
+      reloaded_task = Tasks.get_task_record(task.id)
+      assert reloaded_task.status == "planning"
+    end
+
+    test "flag on but no execution assignee → skip with :no_execution_assignee",
+         %{project: project} do
+      review_id = Ecto.UUID.generate()
+
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "No exec",
+          status: "planning",
+          auto_approve_plan: true,
+          phase_assignees: %{
+            "review" => %{"assignee_id" => review_id, "assignee_type" => "agent"}
+          }
+        })
+
+      {:ok, plan} = Tasks.create_plan(%{task_id: task.id})
+      {:ok, _stage} = Tasks.create_stage(%{plan_id: plan.id, position: 1, name: "S1"})
+
+      log =
+        capture_log(fn ->
+          {:ok, submitted} = Tasks.submit_plan_for_review(plan)
+          assert submitted.status == "pending_review"
+          assert submitted.auto_approved_at == nil
+        end)
+
+      assert log =~ "no_execution_assignee"
+
+      reloaded_task = Tasks.get_task_record(task.id)
+      assert reloaded_task.status == "planning"
+    end
+
+    test "flag on but no review assignee → skip with :no_review_assignee",
+         %{project: project} do
+      exec_id = Ecto.UUID.generate()
+
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "No review",
+          status: "planning",
+          auto_approve_plan: true,
+          phase_assignees: %{
+            "execution" => %{"assignee_id" => exec_id, "assignee_type" => "agent"}
+          }
+        })
+
+      {:ok, plan} = Tasks.create_plan(%{task_id: task.id})
+      {:ok, _stage} = Tasks.create_stage(%{plan_id: plan.id, position: 1, name: "S1"})
+
+      log =
+        capture_log(fn ->
+          {:ok, submitted} = Tasks.submit_plan_for_review(plan)
+          assert submitted.status == "pending_review"
+          assert submitted.auto_approved_at == nil
+        end)
+
+      assert log =~ "no_review_assignee"
+    end
+
+    test "flag on but empty plan (no stages) → skip with :empty_plan",
+         %{project: project} do
+      exec_id = Ecto.UUID.generate()
+      review_id = Ecto.UUID.generate()
+
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Empty plan",
+          status: "planning",
+          auto_approve_plan: true,
+          phase_assignees: %{
+            "execution" => %{"assignee_id" => exec_id, "assignee_type" => "agent"},
+            "review" => %{"assignee_id" => review_id, "assignee_type" => "agent"}
+          }
+        })
+
+      {:ok, plan} = Tasks.create_plan(%{task_id: task.id})
+
+      log =
+        capture_log(fn ->
+          {:ok, submitted} = Tasks.submit_plan_for_review(plan)
+          assert submitted.status == "pending_review"
+          assert submitted.auto_approved_at == nil
+        end)
+
+      assert log =~ "empty_plan"
+    end
+
+    test "backfill safety: create_task without auto_approve_plan → flag reads false, no auto-approve",
+         %{project: project} do
+      exec_id = Ecto.UUID.generate()
+      review_id = Ecto.UUID.generate()
+
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Default flag",
+          status: "planning",
+          phase_assignees: %{
+            "execution" => %{"assignee_id" => exec_id, "assignee_type" => "agent"},
+            "review" => %{"assignee_id" => review_id, "assignee_type" => "agent"}
+          }
+        })
+
+      assert task.auto_approve_plan == false
+
+      {:ok, plan} = Tasks.create_plan(%{task_id: task.id})
+      {:ok, _stage} = Tasks.create_stage(%{plan_id: plan.id, position: 1, name: "S1"})
+      {:ok, submitted} = Tasks.submit_plan_for_review(plan)
+
+      assert submitted.status == "pending_review"
+      assert submitted.auto_approved_at == nil
+    end
+  end
+
+  describe "assignee_for_phase/2 top-level fallback (task 019f25f2 corrective)" do
+    setup do
+      {:ok, project} = Tasks.create_project(%{name: "Fallback Project"})
+      %{project: project}
+    end
+
+    test "returns top-level assignee when phase_assignees is empty", %{project: project} do
+      owner_id = Ecto.UUID.generate()
+
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Coarse owner",
+          assignee_id: owner_id,
+          assignee_type: "agent"
+        })
+
+      assert Tasks.assignee_for_phase(task, "planning") == {owner_id, "agent"}
+      assert Tasks.assignee_for_phase(task, "execution") == {owner_id, "agent"}
+      assert Tasks.assignee_for_phase(task, "review") == {owner_id, "agent"}
+    end
+
+    test "per-phase override wins when both are set", %{project: project} do
+      owner_id = Ecto.UUID.generate()
+      review_override_id = Ecto.UUID.generate()
+
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Override wins",
+          assignee_id: owner_id,
+          assignee_type: "agent",
+          phase_assignees: %{
+            "review" => %{"assignee_id" => review_override_id, "assignee_type" => "user"}
+          }
+        })
+
+      # Phase without an override falls back to top-level.
+      assert Tasks.assignee_for_phase(task, "execution") == {owner_id, "agent"}
+      # Phase with an override picks that up.
+      assert Tasks.assignee_for_phase(task, "review") == {review_override_id, "user"}
+    end
+
+    test "returns {nil, nil} when neither top-level nor per-phase is set", %{project: project} do
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Unassigned"
+        })
+
+      assert Tasks.assignee_for_phase(task, "planning") == {nil, nil}
+      assert Tasks.assignee_for_phase(task, "execution") == {nil, nil}
+      assert Tasks.assignee_for_phase(task, "review") == {nil, nil}
+    end
+
+    test "top-level-only + auto_approve_plan: true → precondition passes, plan auto-approves",
+         %{project: project} do
+      owner_id = Ecto.UUID.generate()
+
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Top-level auto-approve",
+          status: "planning",
+          auto_approve_plan: true,
+          assignee_id: owner_id,
+          assignee_type: "agent"
+        })
+
+      {:ok, plan} = Tasks.create_plan(%{task_id: task.id})
+      {:ok, _stage} = Tasks.create_stage(%{plan_id: plan.id, position: 1, name: "S1"})
+      {:ok, submitted} = Tasks.submit_plan_for_review(plan)
+
+      assert submitted.status == "approved"
+      assert submitted.auto_approved_at != nil
+      assert submitted.approved_by == "system:auto"
+
+      reloaded_task = Tasks.get_task_record(task.id)
+      assert reloaded_task.status == "in_progress"
+    end
+  end
+
   defp step_through_to(task, "planning"), do: step_status(task, "planning")
 
   defp step_through_to(task, "in_progress") do

@@ -14,6 +14,12 @@ defmodule Platform.Tasks.Plan do
     # Generic actor identifier: may be a user UUID or a system/runtime label.
     field(:approved_by, :string)
     field(:approved_at, :utc_datetime_usec)
+    # Auto-approve plan (task 019f25f2): timestamp captured when the
+    # opt-in `tasks.auto_approve_plan` flag fires. Distinct from
+    # `approved_at` (still set by the shared approval codepath) so
+    # downstream observers can distinguish auto- vs. manual-review
+    # approvals. Nullable — most plans never carry this marker.
+    field(:auto_approved_at, :utc_datetime_usec)
     # Free-text reason captured when a plan is rejected. Reused by the
     # reopen-with-feedback flow (see task 019dfad1). Validation lives
     # in the UI/lifecycle layers, not here.
@@ -38,6 +44,7 @@ defmodule Platform.Tasks.Plan do
       :version,
       :approved_by,
       :approved_at,
+      :auto_approved_at,
       :rejection_reason,
       :superseded_by_plan_id
     ])

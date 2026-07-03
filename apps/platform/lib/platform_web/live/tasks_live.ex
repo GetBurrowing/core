@@ -321,6 +321,7 @@ defmodule PlatformWeb.TasksLive do
      |> assign(:manual_validation_text, "")
      |> assign(:deploy_strategy_type, "inherit")
      |> assign(:auto_merge_enabled, false)
+     |> assign(:auto_approve_plan_enabled, false)
      |> assign(:merge_method, "squash")
      |> assign(:pending_reviews, [])
      |> assign(:review_canvases, %{})
@@ -2095,6 +2096,7 @@ defmodule PlatformWeb.TasksLive do
         |> assign(:manual_validation_text, "")
         |> assign(:deploy_strategy_type, "inherit")
         |> assign(:auto_merge_enabled, false)
+        |> assign(:auto_approve_plan_enabled, false)
         |> assign(:merge_method, "squash")
       else
         assign(socket, :show_task_sheet, false)
@@ -2192,6 +2194,7 @@ defmodule PlatformWeb.TasksLive do
 
     strategy_type = Map.get(params, "deploy_strategy_type", socket.assigns.deploy_strategy_type)
     auto_merge = Map.get(params, "auto_merge") == "true"
+    auto_approve_plan = Map.get(params, "auto_approve_plan") == "true"
     merge_method = Map.get(params, "merge_method", socket.assigns.merge_method)
 
     {:noreply,
@@ -2202,6 +2205,7 @@ defmodule PlatformWeb.TasksLive do
      |> assign(:manual_validation_text, Map.get(params, "manual_validation_text", ""))
      |> assign(:deploy_strategy_type, strategy_type)
      |> assign(:auto_merge_enabled, auto_merge)
+     |> assign(:auto_approve_plan_enabled, auto_approve_plan)
      |> assign(:merge_method, merge_method)}
   end
 
@@ -2218,6 +2222,11 @@ defmodule PlatformWeb.TasksLive do
 
   def handle_event("toggle_auto_merge", _params, socket) do
     {:noreply, assign(socket, :auto_merge_enabled, !socket.assigns.auto_merge_enabled)}
+  end
+
+  def handle_event("toggle_auto_approve_plan", _params, socket) do
+    {:noreply,
+     assign(socket, :auto_approve_plan_enabled, !socket.assigns.auto_approve_plan_enabled)}
   end
 
   def handle_event("create_task", %{"task" => params}, socket) do
@@ -2560,6 +2569,7 @@ defmodule PlatformWeb.TasksLive do
       |> Map.put("deploy_strategy", deploy_strategy)
       |> Map.put("assignee_id", assignee_id)
       |> Map.put("assignee_type", assignee_type)
+      |> Map.put("auto_approve_plan", socket.assigns.auto_approve_plan_enabled)
       |> Map.update("sponsor_user_id", nil, fn v -> if v in [nil, ""], do: nil, else: v end)
       |> Map.put("reported_by", socket.assigns.current_user)
 

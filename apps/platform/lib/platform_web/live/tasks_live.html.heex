@@ -3600,6 +3600,31 @@
         </select>
       </div>
 
+      <%!-- Auto-approve plan (019f25f2 stage 4) — skips the human plan-review
+           step when the plan meets preconditions (every stage has an assignee).
+           Backend precondition lives in Platform.Tasks.submit_plan_for_review/1
+           (see stage 2). Copy stays in the "stages" mental model even though
+           the log path uses the more precise "execution/review assignee" term. --%>
+      <div class="space-y-2">
+        <label class="label cursor-pointer justify-start gap-2">
+          <input
+            type="checkbox"
+            name="task[auto_approve_plan]"
+            value="true"
+            checked={@auto_approve_plan_enabled}
+            class="toggle toggle-sm toggle-primary"
+            phx-click="toggle_auto_approve_plan"
+          />
+          <span class="label-text text-xs">Auto-approve plan</span>
+          <div
+            class="tooltip tooltip-right"
+            data-tip="Skip the human approval step when the plan is submitted. Requires every stage to have an assigned agent."
+          >
+            <span class="hero-information-circle size-3.5 opacity-50"></span>
+          </div>
+        </label>
+      </div>
+
       <%!-- Deploy Strategy --%>
       <div>
         <label class="label label-text text-xs font-medium">Deploy Strategy</label>

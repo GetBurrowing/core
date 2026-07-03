@@ -2186,6 +2186,94 @@ defmodule PlatformWeb.TasksLiveTest do
     end
   end
 
+  # ── Auto-approve plan checkbox (019f25f2 stage 4) ─────────────────────
+
+  describe "New-Task sheet Auto-approve plan toggle" do
+    test "persists auto_approve_plan=true when the checkbox is toggled on", %{conn: conn} do
+      project = create_project()
+      _agent = create_agent("Auto-approve Test Agent")
+
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+
+      # Open the sheet and flip the toggle via the phx-click handler.
+      render_click(view, "toggle_task_sheet")
+      render_click(view, "toggle_auto_approve_plan")
+
+      render_submit(view, "create_task", %{
+        "task" => %{
+          "title" => "Task with auto-approve on",
+          "project_id" => project.id,
+          "what" => "Ship auto-approve",
+          "why" => "Skip the plan-review click",
+          "action" => "create",
+          "assignee_id" => "",
+          "assignee_type" => "agent",
+          "deploy_target" => "",
+          "epic_id" => ""
+        }
+      })
+
+      created =
+        Tasks.list_tasks_by_project(project.id)
+        |> Enum.find(&(&1.title == "Task with auto-approve on"))
+
+      assert created
+      assert created.auto_approve_plan == true
+    end
+
+    test "defaults auto_approve_plan to false when the checkbox is untouched", %{conn: conn} do
+      project = create_project()
+      _agent = create_agent("Auto-approve Test Agent")
+
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+
+      render_submit(view, "create_task", %{
+        "task" => %{
+          "title" => "Task with auto-approve off",
+          "project_id" => project.id,
+          "what" => "Default behavior",
+          "why" => "No opt-in should mean no auto-approve",
+          "action" => "create",
+          "assignee_id" => "",
+          "assignee_type" => "agent",
+          "deploy_target" => "",
+          "epic_id" => ""
+        }
+      })
+
+      created =
+        Tasks.list_tasks_by_project(project.id)
+        |> Enum.find(&(&1.title == "Task with auto-approve off"))
+
+      assert created
+      assert created.auto_approve_plan == false
+    end
+
+    test "toggle_auto_approve_plan flips the assign both directions", %{conn: conn} do
+      _project = create_project()
+      _agent = create_agent("Auto-approve Test Agent")
+
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+
+      render_click(view, "toggle_task_sheet")
+
+      # Off by default — the checked attribute is absent when off.
+      html = render(view)
+      assert html =~ ~s(phx-click="toggle_auto_approve_plan")
+
+      # Toggle on — checkbox should render `checked`.
+      html = render_click(view, "toggle_auto_approve_plan")
+      assert html =~ ~r/name="task\[auto_approve_plan\]"[^>]*checked/s
+
+      # Toggle back off — `checked` attribute should be gone from the toggle.
+      html = render_click(view, "toggle_auto_approve_plan")
+      refute html =~ ~r/name="task\[auto_approve_plan\]"[^>]*checked/s
+    end
+  end
+
   # ── Plan review tests ─────────────────────────────────────────────────
 
   test "approve_plan transitions plan to approved and refreshes detail", %{conn: conn} do

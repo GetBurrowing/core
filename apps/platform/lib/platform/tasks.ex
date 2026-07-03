@@ -15,6 +15,8 @@ defmodule Platform.Tasks do
 
   import Ecto.Query
 
+  require Logger
+
   alias Platform.{Artifacts, Context, Execution}
   alias Platform.Context.Session
   alias Platform.Execution.Run
@@ -767,7 +769,7 @@ defmodule Platform.Tasks do
     case plan |> Plan.changeset(%{status: "pending_review"}) |> Repo.update() do
       {:ok, updated} ->
         broadcast_board({:plan_updated, updated})
-        {:ok, updated}
+        maybe_auto_approve(updated)
 
       error ->
         error
@@ -776,8 +778,114 @@ defmodule Platform.Tasks do
 
   def submit_plan_for_review(_plan), do: {:error, :invalid_transition}
 
-  def approve_plan(%Plan{status: "pending_review"} = plan, approved_by) do
+  # Auto-approve branch (task 019f25f2 stage 2): if the parent task has the
+  # opt-in `auto_approve_plan` flag set AND the precondition passes (plan has
+  # stages, task has execution + review assignees), immediately funnel the
+  # freshly-submitted plan through `approve_plan/3` with the `auto: true`
+  # opts flag so it lands `approved` and stamps `auto_approved_at`. On skip
+  # (precondition fails) we leave the plan in `pending_review` and log so
+  # operators can tell why a flag-on task didn't auto-approve.
+  defp maybe_auto_approve(%Plan{} = plan) do
+    task = Repo.get!(Task, plan.task_id)
+
+    if task.auto_approve_plan do
+      case auto_approve_precondition(task, plan) do
+        :ok ->
+          case approve_plan(plan, "system:auto", auto: true) do
+            {:ok, approved_plan} ->
+              :telemetry.execute(
+                [:platform, :plan, :auto_approved],
+                %{count: 1},
+                %{
+                  task_id: task.id,
+                  plan_id: approved_plan.id,
+                  resource_type: "plan",
+                  resource_id: approved_plan.id,
+                  action: "auto_approved",
+                  actor_type: "system"
+                }
+              )
+
+              {:ok, approved_plan}
+
+            {:error, reason} = err ->
+              Logger.warning(
+                "auto_approve_plan: approve_plan failed task_id=#{task.id} plan_id=#{plan.id} reason=#{inspect(reason)}"
+              )
+
+              err
+          end
+
+        {:skip, reason} ->
+          Logger.warning(
+            "auto_approve_plan skipped task_id=#{task.id} plan_id=#{plan.id} reason=#{reason}"
+          )
+
+          :telemetry.execute(
+            [:platform, :plan, :auto_approve_skipped],
+            %{count: 1},
+            %{
+              task_id: task.id,
+              plan_id: plan.id,
+              reason: reason,
+              resource_type: "plan",
+              resource_id: plan.id,
+              action: "auto_approve_skipped",
+              actor_type: "system"
+            }
+          )
+
+          {:ok, plan}
+      end
+    else
+      {:ok, plan}
+    end
+  end
+
+  # Preconditions for auto-approve. Because plans don't carry per-stage
+  # assignees (only the task carries per-phase assignees via
+  # `phase_assignees`), the "agent assigned for all stages" check reduces to:
+  # the plan has at least one stage, and the task has an assignee for both
+  # the execution and review phases.
+  @spec auto_approve_precondition(%Task{}, %Plan{}) :: :ok | {:skip, atom()}
+  defp auto_approve_precondition(%Task{} = task, %Plan{} = plan) do
+    stages = plan_stages(plan)
+
+    cond do
+      stages == [] ->
+        {:skip, :empty_plan}
+
+      match?({nil, _}, assignee_for_phase(task, "execution")) ->
+        {:skip, :no_execution_assignee}
+
+      match?({nil, _}, assignee_for_phase(task, "review")) ->
+        {:skip, :no_review_assignee}
+
+      true ->
+        :ok
+    end
+  end
+
+  # Return plan.stages, preloading from Repo if the association wasn't
+  # loaded on the passed-in struct. Avoids requiring callers to preload.
+  defp plan_stages(%Plan{stages: %Ecto.Association.NotLoaded{}} = plan) do
+    plan |> Repo.preload(:stages) |> Map.get(:stages)
+  end
+
+  defp plan_stages(%Plan{stages: stages}) when is_list(stages), do: stages
+  defp plan_stages(_), do: []
+
+  def approve_plan(plan, approved_by, opts \\ [])
+
+  def approve_plan(%Plan{status: "pending_review"} = plan, approved_by, opts) do
     now = DateTime.utc_now()
+    auto? = Keyword.get(opts, :auto, false)
+
+    approve_attrs =
+      %{status: "approved", approved_by: approved_by, approved_at: now}
+      |> then(fn attrs ->
+        if auto?, do: Map.put(attrs, :auto_approved_at, now), else: attrs
+      end)
 
     Repo.transaction(fn ->
       # Auto-supersede any older sibling plans that are still active
@@ -804,7 +912,7 @@ defmodule Platform.Tasks do
 
       {:ok, updated_plan} =
         plan
-        |> Plan.changeset(%{status: "approved", approved_by: approved_by, approved_at: now})
+        |> Plan.changeset(approve_attrs)
         |> Repo.update()
 
       task = Repo.get!(Task, updated_plan.task_id)
@@ -854,6 +962,8 @@ defmodule Platform.Tasks do
     end
   end
 
+  def approve_plan(_plan, _approved_by, _opts), do: {:error, :invalid_transition}
+
   # Decide whether the just-approved task can move into execution or has to
   # park in `blocked` until its dependencies finish. Returns `{task, frozen}`
   # where `task` is the post-write struct and `frozen` is the list of
@@ -884,8 +994,6 @@ defmodule Platform.Tasks do
         {with_metadata, []}
     end
   end
-
-  def approve_plan(_plan, _approved_by), do: {:error, :invalid_transition}
 
   @doc """
   Reject a plan, optionally persisting a free-text reason.
@@ -1473,18 +1581,50 @@ defmodule Platform.Tasks do
 
   @doc """
   Returns `{assignee_id, assignee_type}` for the given task in the given
-  phase, or `{nil, nil}` if no per-phase assignee is configured.
+  phase.
+
+  Resolution order (task 019f25f2 corrective patch):
+
+    1. `phase_assignees[phase]` — per-phase override (granular assignment)
+    2. Top-level `assignee_id` / `assignee_type` — the coarse "task owner"
+       who owns every phase by default
+    3. `{nil, nil}` — no assignee configured
+
+  This makes the field name honest: callers asking for the current owner
+  of a phase get the right answer regardless of whether the task uses
+  granular per-phase assignment or the simpler top-level assignment.
   """
   @spec assignee_for_phase(%Task{}, String.t()) :: {String.t() | nil, String.t() | nil}
-  def assignee_for_phase(%Task{phase_assignees: pa}, phase) when is_map(pa) do
-    case Map.get(pa, phase) do
-      %{"assignee_id" => id, "assignee_type" => type} -> {id, type}
-      %{"assignee_id" => id} -> {id, "agent"}
-      _ -> {nil, nil}
+  def assignee_for_phase(%Task{} = task, phase) when is_binary(phase) do
+    case per_phase_assignee(task.phase_assignees, phase) do
+      {nil, nil} -> top_level_assignee(task)
+      pair -> pair
     end
   end
 
   def assignee_for_phase(_, _), do: {nil, nil}
+
+  defp per_phase_assignee(pa, phase) when is_map(pa) do
+    case Map.get(pa, phase) do
+      %{"assignee_id" => id, "assignee_type" => type}
+      when is_binary(id) and is_binary(type) ->
+        {id, type}
+
+      %{"assignee_id" => id} when is_binary(id) ->
+        {id, "agent"}
+
+      _ ->
+        {nil, nil}
+    end
+  end
+
+  defp per_phase_assignee(_, _), do: {nil, nil}
+
+  defp top_level_assignee(%Task{assignee_id: id, assignee_type: type})
+       when is_binary(id) and is_binary(type),
+       do: {id, type}
+
+  defp top_level_assignee(_), do: {nil, nil}
 
   @doc """
   Set per-phase assignees on a task. `attrs_by_phase` is a map keyed by

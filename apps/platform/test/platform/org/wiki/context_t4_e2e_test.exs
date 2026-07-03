@@ -408,7 +408,13 @@ defmodule Platform.Org.Wiki.ContextT4E2ETest do
       # `tasks.sponsor_user_id` FK → users(id) with `on_delete: :nilify_all`
       # + partial index on non-NULL rows. Enables the human-shepherd field
       # distinct from the current-phase technical assignee.
-      "20260702204229_add_sponsor_user_id_to_tasks.exs"
+      "20260702204229_add_sponsor_user_id_to_tasks.exs",
+      # Auto-approve plan (task 019f25f2) stage 1: schema foundation for
+      # the opt-in auto-approval flow. Adds `tasks.auto_approve_plan`
+      # (bool, default false) and nullable `plans.auto_approved_at`
+      # timestamp. State-machine wiring, MCP surface, UI, and serializer
+      # expansion land in stages 2-5.
+      "20260702210000_add_auto_approve_to_tasks_and_plans.exs"
     ]
 
     defp t4_root, do: Mix.Project.project_file() |> Path.dirname()

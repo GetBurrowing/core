@@ -1193,7 +1193,7 @@ defmodule Platform.Federation.ToolSurface do
       %{
         name: "task_create",
         description:
-          "Create a new task in a project. Tasks track work items on the kanban board. Optionally set a Sponsor (human shepherd, ADR 0042) distinct from the current-phase technical assignee.",
+          "Create a new task in a project. Tasks track work items on the kanban board. Optionally set a Sponsor (human shepherd, ADR 0042) distinct from the current-phase technical assignee. Set auto_approve_plan: true to skip human review when the plan is submitted (requires an assigned agent).",
         parameters: %{
           project_id: %{
             type: "string",
@@ -1239,12 +1239,18 @@ defmodule Platform.Federation.ToolSurface do
             required: false,
             description:
               "Optional task-stack to attach this task to (ADR 0041). When set, the created task is added to the stack via Stacks.add_task — the in-stack DAG is re-validated, cross-stack dep edges are rejected, and the stack's rollup status is recomputed. Use to create-into-a-stack in one call."
+          },
+          auto_approve_plan: %{
+            type: "boolean",
+            required: false,
+            description:
+              "When true, auto-approve the plan the planner submits and skip the human review step. Precondition: both the execution-phase and review-phase assignees must resolve to an agent (via assignee_id + assignee_type OR phase_assignees). If either is missing, the auto-approve is silently skipped and the plan stays in pending_review for human review. Defaults to false."
           }
         },
         returns:
           "The created task object with id, title, status, priority, and sponsor (nil unless sponsor_user_id was supplied, else %{id, name, email}). When stack_id is supplied, the response also includes stack_id and stack_position.",
         limitations:
-          "Requires a valid project_id. If stack_id is supplied, the stack must exist and the resulting in-stack DAG must remain acyclic with no cross-stack dependency edges. If sponsor_user_id is supplied it must reference an existing user (FK enforced).",
+          "Requires a valid project_id. If stack_id is supplied, the stack must exist and the resulting in-stack DAG must remain acyclic with no cross-stack dependency edges. If sponsor_user_id is supplied it must reference an existing user (FK enforced). When auto_approve_plan is true, the plan won't auto-approve unless every phase assignee resolves to an agent.",
         when_to_use: "When you need to track a work item, feature, bug, or action item"
       },
       %{
@@ -2781,7 +2787,10 @@ defmodule Platform.Federation.ToolSurface do
       # the current-phase (typically agent) assignee. `Map.get/2` returns
       # nil when absent, which the changeset treats as unsponsored.
       sponsor_user_id: Map.get(args, "sponsor_user_id"),
-      reported_by: Map.get(args, "reported_by")
+      reported_by: Map.get(args, "reported_by"),
+      # Auto-approve-plan opt-in. Normalized to false on omission so the
+      # DB default (false) matches what a subsequent task_get returns.
+      auto_approve_plan: Map.get(args, "auto_approve_plan", false)
     }
 
     case Tasks.create_task(attrs) do
@@ -2802,7 +2811,8 @@ defmodule Platform.Federation.ToolSurface do
                priority: task.priority,
                project_id: task.project_id,
                epic_id: task.epic_id,
-               sponsor: serialize_sponsor(task.sponsor)
+               sponsor: serialize_sponsor(task.sponsor),
+               auto_approve_plan: task.auto_approve_plan
              }}
 
           stack_id ->
@@ -2820,7 +2830,8 @@ defmodule Platform.Federation.ToolSurface do
                    epic_id: updated.epic_id,
                    sponsor: serialize_sponsor(updated.sponsor),
                    stack_id: updated.stack_id,
-                   stack_position: updated.stack_position
+                   stack_position: updated.stack_position,
+                   auto_approve_plan: updated.auto_approve_plan
                  }}
 
               {:error, _} = err ->
@@ -6261,6 +6272,11 @@ defmodule Platform.Federation.ToolSurface do
       # accidentally-unpreloaded read (defensive; every preload site now
       # loads :sponsor per stage 1's sweep).
       sponsor: serialize_sponsor(Map.get(task, :sponsor)),
+      # Task 019f25f2 stage 5 — expose the opt-in auto-approve flag on the
+      # read path so `task_get`/`task_list` callers can tell which tasks
+      # will bypass the review gate. The create envelope (stage 3) already
+      # returns this flag inline; this pin is for downstream reads.
+      auto_approve_plan: task.auto_approve_plan,
       inserted_at: task.inserted_at,
       updated_at: task.updated_at
     }
@@ -6291,6 +6307,11 @@ defmodule Platform.Federation.ToolSurface do
       version: plan.version,
       approved_by: plan.approved_by,
       approved_at: format_datetime(plan.approved_at),
+      # Task 019f25f2 stage 5 — timestamp when the plan was auto-approved
+      # via the `tasks.auto_approve_plan` opt-in (nil for manually approved
+      # plans). Distinct from `approved_at` so operators can tell apart
+      # human vs system approvals in the wire response.
+      auto_approved_at: format_datetime(plan.auto_approved_at),
       stages: stages,
       inserted_at: format_datetime(plan.inserted_at),
       updated_at: format_datetime(plan.updated_at)

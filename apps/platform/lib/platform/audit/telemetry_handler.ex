@@ -34,7 +34,13 @@ defmodule Platform.Audit.TelemetryHandler do
     [:platform, :auth, :access_blocked],
     # Stage 3 of task 019e41a9 — emitted by
     # `Platform.Tenancy.promote_to_admin/2` and `revoke_admin/2`.
-    [:platform, :tenancy, :role_change]
+    [:platform, :tenancy, :role_change],
+    # Task 019f25f2 — auto-approve plan bridging (stage 2 emitters,
+    # this bridge added in a corrective patch on top of stage 4).
+    # `Platform.Tasks.maybe_auto_approve/1` emits these; metadata carries
+    # `resource_type: "plan"` + `resource_id: plan_id` for audit correlation.
+    [:platform, :plan, :auto_approved],
+    [:platform, :plan, :auto_approve_skipped]
   ]
 
   @doc "Attach the handler to all registered platform telemetry events."

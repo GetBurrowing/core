@@ -724,6 +724,58 @@ defmodule Platform.Tasks.TaskTest do
     end
   end
 
+  # Auto-approve plan (task 019f25f2) stage 1: schema foundation only —
+  # opt-in boolean on the parent task that later stages will read from the
+  # planner's submit_plan_for_review/1 short-circuit. Non-null default false
+  # keeps existing rows explicit.
+  describe "auto_approve_plan (task 019f25f2 stage 1)" do
+    test "changeset accepts auto_approve_plan: true", %{project: project} do
+      changeset =
+        Task.changeset(%Task{}, %{
+          project_id: project.id,
+          title: "Auto approver",
+          auto_approve_plan: true
+        })
+
+      assert changeset.valid?
+      assert get_change(changeset, :auto_approve_plan) == true
+    end
+
+    test "changeset accepts auto_approve_plan: false explicitly", %{project: project} do
+      changeset =
+        Task.changeset(%Task{}, %{
+          project_id: project.id,
+          title: "Explicit manual",
+          auto_approve_plan: false
+        })
+
+      assert changeset.valid?
+      # false is the default so cast may or may not surface it as a change
+      # depending on whether the empty %Task{} struct's default matches;
+      # the important behaviour is the changeset is valid.
+    end
+
+    test "create_task/1 defaults auto_approve_plan to false when unset", %{project: project} do
+      assert {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Default flag"})
+      assert task.auto_approve_plan == false
+    end
+
+    test "create_task/1 persists auto_approve_plan: true when set", %{project: project} do
+      assert {:ok, task} =
+               Tasks.create_task(%{
+                 project_id: project.id,
+                 title: "Opt in",
+                 auto_approve_plan: true
+               })
+
+      assert task.auto_approve_plan == true
+
+      # Round-trip through the DB to confirm persistence.
+      reloaded = Repo.get!(Task, task.id)
+      assert reloaded.auto_approve_plan == true
+    end
+  end
+
   describe "stack_pending status + stack assoc" do
     test "stack_pending is included in statuses/0" do
       assert "stack_pending" in Task.statuses()

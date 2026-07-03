@@ -978,6 +978,188 @@ defmodule Platform.Federation.ToolSurfaceTest do
       assert task_update.parameters.sponsor_user_id.required == false
     end
 
+    # ── auto_approve_plan (task 019f25f2) — MCP wire contract ──────────
+    #
+    # Pins the MCP-side plumbing for the auto-approve-plan opt-in flag:
+    # the parameter is exposed on task_create, the value round-trips
+    # through the returned envelope, and omission normalizes to false so
+    # the DB default matches. Stage-4 UI + stage-5 serializer both rely
+    # on the returned map exposing the field.
+
+    test "task_create with auto_approve_plan: true persists and returns the flag" do
+      project = create_project()
+
+      {:ok, result} =
+        ToolSurface.execute(
+          "task_create",
+          %{
+            "project_id" => project.id,
+            "title" => "Auto-approved",
+            "auto_approve_plan" => true
+          },
+          %{}
+        )
+
+      assert result.auto_approve_plan == true
+      assert Tasks.get_task_record(result.id).auto_approve_plan == true
+    end
+
+    test "task_create without auto_approve_plan defaults to false in the envelope" do
+      project = create_project()
+
+      {:ok, result} =
+        ToolSurface.execute(
+          "task_create",
+          %{"project_id" => project.id, "title" => "Default flag"},
+          %{}
+        )
+
+      assert Map.has_key?(result, :auto_approve_plan)
+      assert result.auto_approve_plan == false
+      assert Tasks.get_task_record(result.id).auto_approve_plan == false
+    end
+
+    test "task_create with auto_approve_plan: false explicit yields false" do
+      project = create_project()
+
+      {:ok, result} =
+        ToolSurface.execute(
+          "task_create",
+          %{
+            "project_id" => project.id,
+            "title" => "Explicit false",
+            "auto_approve_plan" => false
+          },
+          %{}
+        )
+
+      assert result.auto_approve_plan == false
+      assert Tasks.get_task_record(result.id).auto_approve_plan == false
+    end
+
+    test "tool definitions expose auto_approve_plan on task_create" do
+      # Pin the wire contract so an accidental parameter-map refactor
+      # doesn't silently drop the flag — parity with the sponsor pin
+      # above.
+      tools = ToolSurface.tool_definitions()
+      task_create = Enum.find(tools, &(&1.name == "task_create"))
+
+      assert Map.has_key?(task_create.parameters, :auto_approve_plan)
+      assert task_create.parameters.auto_approve_plan.type == "boolean"
+      assert task_create.parameters.auto_approve_plan.required == false
+    end
+
+    test "task_get exposes auto_approve_plan on the read envelope (task 019f25f2 stage 5)" do
+      # Stage 3 threaded the flag through the `task_create` response
+      # envelope; stage 5 threads it through the shared `serialize_task/1`
+      # helper so downstream reads (`task_get`, `task_list`) see the same
+      # flag. Pin both the flag-on and flag-off shapes so an accidental
+      # drop from the serializer surfaces here.
+      project = create_project()
+
+      {:ok, on_task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Auto-approve task",
+          auto_approve_plan: true
+        })
+
+      {:ok, off_task} =
+        Tasks.create_task(%{project_id: project.id, title: "Manual-approve task"})
+
+      {:ok, on_result} =
+        ToolSurface.execute("task_get", %{"task_id" => on_task.id}, %{})
+
+      {:ok, off_result} =
+        ToolSurface.execute("task_get", %{"task_id" => off_task.id}, %{})
+
+      assert Map.has_key?(on_result, :auto_approve_plan)
+      assert on_result.auto_approve_plan == true
+      assert off_result.auto_approve_plan == false
+    end
+
+    test "task_list carries auto_approve_plan per row (task 019f25f2 stage 5)" do
+      # `task_list` streams tasks through the same `serialize_task/1`
+      # helper as `task_get`, so any dashboard/inbox that renders the flag
+      # inline (rather than round-tripping to `task_get`) gets it for free.
+      project = create_project()
+
+      {:ok, _on} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Auto on",
+          auto_approve_plan: true
+        })
+
+      {:ok, _off} = Tasks.create_task(%{project_id: project.id, title: "Auto off"})
+
+      {:ok, results} =
+        ToolSurface.execute("task_list", %{"project_id" => project.id}, %{})
+
+      assert length(results) == 2
+      assert Enum.all?(results, &Map.has_key?(&1, :auto_approve_plan))
+      assert Enum.any?(results, &(&1.auto_approve_plan == true))
+      assert Enum.any?(results, &(&1.auto_approve_plan == false))
+    end
+
+    test "plan_get exposes auto_approved_at on the read envelope (task 019f25f2 stage 5)" do
+      # Manually-approved plans land `approved_at` but leave
+      # `auto_approved_at` nil — the timestamp is only stamped when the
+      # `auto_approve_plan` flag routes through `approve_plan(_, _,
+      # auto: true)`. Pin both shapes so operators can tell a system
+      # approval from a human one on the wire.
+      project = create_project()
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Manual-approve plan"})
+      {:ok, plan} = Tasks.create_plan(%{task_id: task.id})
+      {:ok, plan} = Tasks.submit_plan_for_review(plan)
+      {:ok, _plan} = Tasks.approve_plan(plan, "00000000-0000-0000-0000-000000000001")
+
+      {:ok, result} =
+        ToolSurface.execute("plan_get", %{"task_id" => task.id}, %{})
+
+      assert Map.has_key?(result, :auto_approved_at)
+      assert result.auto_approved_at == nil
+      refute is_nil(result.approved_at)
+    end
+
+    test "plan_get stamps auto_approved_at when the plan was auto-approved (task 019f25f2 stage 5)" do
+      # End-to-end: create an auto-approve task with the assignees the
+      # precondition requires, submit a plan with a stage, and confirm
+      # the `plan_get` envelope carries the auto-approval timestamp.
+      project = create_project()
+
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Auto-approve plan flow",
+          auto_approve_plan: true,
+          assignee_type: "agent",
+          assignee_id: "00000000-0000-0000-0000-000000000001"
+        })
+
+      {:ok, plan} = Tasks.create_plan(%{task_id: task.id})
+
+      {:ok, _stage} =
+        Tasks.create_stage(%{
+          plan_id: plan.id,
+          name: "Execute",
+          description: "Do the thing",
+          position: 1
+        })
+
+      {:ok, plan} = Tasks.submit_plan_for_review(plan)
+
+      assert plan.status == "approved",
+             "precondition should route submit → auto-approve; got #{plan.status}"
+
+      {:ok, result} =
+        ToolSurface.execute("plan_get", %{"task_id" => task.id}, %{})
+
+      assert result.status == "approved"
+      refute is_nil(result.auto_approved_at)
+      assert is_binary(result.auto_approved_at)
+    end
+
     test "project_update sets deploy_config.default_strategy" do
       project = create_project(%{name: "Default-strategy project"})
 

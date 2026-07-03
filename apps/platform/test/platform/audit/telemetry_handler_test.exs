@@ -220,4 +220,65 @@ defmodule Platform.Audit.TelemetryHandlerTest do
       assert event.actor_org_id == peer_org_id
     end
   end
+
+  describe "auto-approve plan bridging (task 019f25f2 corrective)" do
+    test "auto_approved event persists with resource pointing at the plan" do
+      task_id = Ecto.UUID.generate()
+      plan_id = Ecto.UUID.generate()
+
+      :telemetry.execute(
+        [:platform, :plan, :auto_approved],
+        %{count: 1},
+        %{
+          task_id: task_id,
+          plan_id: plan_id,
+          resource_type: "plan",
+          resource_id: plan_id,
+          action: "auto_approved",
+          actor_type: "system"
+        }
+      )
+
+      [event] = Audit.list(event_type: "platform.plan.auto_approved")
+      assert event.resource_type == "plan"
+      assert event.resource_id == plan_id
+      assert event.action == "auto_approved"
+      assert event.actor_type == "system"
+      # task_id + plan_id remain in the metadata blob for correlation.
+      assert event.metadata["task_id"] == task_id
+      assert event.metadata["plan_id"] == plan_id
+      # Top-level fields are deduplicated out of metadata.
+      refute Map.has_key?(event.metadata, "resource_type")
+      refute Map.has_key?(event.metadata, "resource_id")
+    end
+
+    test "auto_approve_skipped event persists with reason in metadata" do
+      task_id = Ecto.UUID.generate()
+      plan_id = Ecto.UUID.generate()
+
+      :telemetry.execute(
+        [:platform, :plan, :auto_approve_skipped],
+        %{count: 1},
+        %{
+          task_id: task_id,
+          plan_id: plan_id,
+          reason: :no_execution_assignee,
+          resource_type: "plan",
+          resource_id: plan_id,
+          action: "auto_approve_skipped",
+          actor_type: "system"
+        }
+      )
+
+      [event] = Audit.list(event_type: "platform.plan.auto_approve_skipped")
+      assert event.resource_type == "plan"
+      assert event.resource_id == plan_id
+      assert event.action == "auto_approve_skipped"
+      assert event.actor_type == "system"
+      # Atom reason is json-safed to a string by ensure_json_safe/1.
+      assert event.metadata["reason"] == "no_execution_assignee"
+      assert event.metadata["task_id"] == task_id
+      assert event.metadata["plan_id"] == plan_id
+    end
+  end
 end

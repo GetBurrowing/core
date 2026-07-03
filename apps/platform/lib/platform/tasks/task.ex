@@ -84,6 +84,11 @@ defmodule Platform.Tasks.Task do
     field(:stack_position, :integer)
     field(:reported_by, :string)
     field(:deleted_at, :utc_datetime_usec)
+    # Auto-approve plan (task 019f25f2): opt-in flag. When true, the plan
+    # submission path short-circuits pending_review and calls the shared
+    # approve_plan/2 codepath directly. Non-null default false preserves the
+    # manual-review default for existing rows and callers.
+    field(:auto_approve_plan, :boolean, default: false)
 
     has_many(:plans, Platform.Tasks.Plan)
 
@@ -119,7 +124,8 @@ defmodule Platform.Tasks.Task do
       :metadata,
       :stack_position,
       :reported_by,
-      :deleted_at
+      :deleted_at,
+      :auto_approve_plan
     ])
     |> validate_required([:project_id, :title])
     |> validate_inclusion(:status, @statuses)
