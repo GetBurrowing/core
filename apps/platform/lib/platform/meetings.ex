@@ -1270,6 +1270,27 @@ defmodule Platform.Meetings do
         transcript
         |> Ecto.Changeset.change(segments: updated_segments)
         |> Repo.update()
+        |> tap(fn
+          {:ok, updated} ->
+            # Fire-and-forget: publish the chunk on the canonical
+            # `meeting:transcript_chunk` topic (+ per-room mirror) so
+            # the Meeting Producer's classifier can react. `meeting_id`
+            # is nil here — a `Meeting` row may not exist yet at first
+            # chunk (segments key on LiveKit `room_id` string; Meeting
+            # rows are created out-of-band). The classifier enriches.
+            Platform.Meetings.PubSub.broadcast_transcript_chunk(
+              updated.room_id,
+              %{
+                room_id: updated.room_id,
+                transcript_id: updated.id,
+                segment: segment,
+                meeting_id: nil
+              }
+            )
+
+          _error ->
+            :ok
+        end)
     end
   end
 

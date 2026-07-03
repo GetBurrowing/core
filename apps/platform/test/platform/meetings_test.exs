@@ -15,6 +15,7 @@ defmodule Platform.MeetingsTest do
   use Platform.DataCase, async: true
 
   alias Platform.Meetings
+  alias Platform.Meetings.PubSub, as: MeetingsPubSub
   alias Platform.Meetings.Transcript
 
   describe "app_registered_room?/1" do
@@ -116,6 +117,126 @@ defmodule Platform.MeetingsTest do
     test "matches the declared return spec — {:ok, %Transcript{}} on success" do
       transcript = create_transcript()
       assert {:ok, %Transcript{}} = Meetings.delete_transcript(transcript)
+    end
+  end
+
+  describe "append_segment/2 — transcript_chunk broadcast (task 019f2452 stage 2)" do
+    defp make_segment(text \\ "hello world") do
+      %{
+        "participant_identity" => "user-1",
+        "text" => text,
+        "start_time" => 0,
+        "end_time" => 500
+      }
+    end
+
+    defp make_transcript_for_room(room_id \\ nil) do
+      room_id = room_id || "space-#{Ecto.UUID.generate()}"
+      {:ok, transcript} = Meetings.create_transcript(%{room_id: room_id, status: "recording"})
+      transcript
+    end
+
+    test "canonical subscriber receives a :transcript_chunk event after append" do
+      transcript = make_transcript_for_room()
+      segment = make_segment()
+      transcript_id = transcript.id
+      room_id = transcript.room_id
+
+      assert :ok = MeetingsPubSub.subscribe_transcript_chunk()
+
+      assert {:ok, %Transcript{}} = Meetings.append_segment(transcript.id, segment)
+
+      assert_receive {:transcript_chunk,
+                      %{
+                        room_id: ^room_id,
+                        transcript_id: ^transcript_id,
+                        segment: ^segment,
+                        meeting_id: nil
+                      }},
+                     200
+
+      MeetingsPubSub.unsubscribe_transcript_chunk()
+    end
+
+    test "per-room subscriber receives its own room's chunk" do
+      transcript = make_transcript_for_room()
+      segment = make_segment("per-room hello")
+      transcript_id = transcript.id
+      room_id = transcript.room_id
+
+      assert :ok = MeetingsPubSub.subscribe_transcript_chunk(room_id)
+
+      assert {:ok, %Transcript{}} = Meetings.append_segment(transcript.id, segment)
+
+      assert_receive {:transcript_chunk,
+                      %{
+                        room_id: ^room_id,
+                        transcript_id: ^transcript_id,
+                        segment: ^segment,
+                        meeting_id: nil
+                      }},
+                     200
+
+      MeetingsPubSub.unsubscribe_transcript_chunk(room_id)
+    end
+
+    test "per-room subscriber does NOT receive events from a different room" do
+      transcript_a = make_transcript_for_room()
+      transcript_b = make_transcript_for_room()
+
+      assert :ok = MeetingsPubSub.subscribe_transcript_chunk(transcript_a.room_id)
+
+      assert {:ok, %Transcript{}} =
+               Meetings.append_segment(transcript_b.id, make_segment("wrong room"))
+
+      refute_receive {:transcript_chunk, _}, 100
+
+      MeetingsPubSub.unsubscribe_transcript_chunk(transcript_a.room_id)
+    end
+
+    test "returns {:error, :not_found} for a missing transcript and does NOT broadcast" do
+      assert :ok = MeetingsPubSub.subscribe_transcript_chunk()
+
+      assert {:error, :not_found} =
+               Meetings.append_segment(Ecto.UUID.generate(), make_segment())
+
+      refute_receive {:transcript_chunk, _}, 100
+
+      MeetingsPubSub.unsubscribe_transcript_chunk()
+    end
+
+    test "canonical + per-room subscribers both receive the same event" do
+      transcript = make_transcript_for_room()
+      segment = make_segment("dual delivery")
+      transcript_id = transcript.id
+      room_id = transcript.room_id
+
+      assert :ok = MeetingsPubSub.subscribe_transcript_chunk()
+      assert :ok = MeetingsPubSub.subscribe_transcript_chunk(room_id)
+
+      assert {:ok, %Transcript{}} = Meetings.append_segment(transcript.id, segment)
+
+      # Two deliveries (one per subscription).
+      assert_receive {:transcript_chunk,
+                      %{
+                        room_id: ^room_id,
+                        transcript_id: ^transcript_id,
+                        segment: ^segment,
+                        meeting_id: nil
+                      }},
+                     200
+
+      assert_receive {:transcript_chunk,
+                      %{
+                        room_id: ^room_id,
+                        transcript_id: ^transcript_id,
+                        segment: ^segment,
+                        meeting_id: nil
+                      }},
+                     200
+
+      MeetingsPubSub.unsubscribe_transcript_chunk()
+      MeetingsPubSub.unsubscribe_transcript_chunk(room_id)
     end
   end
 end

@@ -62,6 +62,12 @@ defmodule Platform.Application do
            # (task 019ee06b). Owns :meeting_user_state table; must start
            # after PubSub so broadcast_* helpers always have a bus.
            Platform.Meetings.State,
+           # Per-room intent queue — ETS-backed staging area for
+           # classified transcript intents (task 019f2452). Owns
+           # :meeting_intent_queue table; subscribes to meeting:finished
+           # so must start after PubSub. Meeting-lifetime state, not
+           # durable — deliberately ETS not Ecto.
+           Platform.Meetings.IntentQueue,
            # Vault OAuth token refresh worker — must start after Repo and Vault.Encryption
            Platform.Vault.RefreshWorker,
            # Reap expired pending attachments (ADR 0039) — needs Repo
@@ -82,6 +88,7 @@ defmodule Platform.Application do
       |> maybe_add_wiki_indexer()
       |> maybe_add_meeting_historian_handler()
       |> maybe_add_meeting_notifier()
+      |> maybe_add_meeting_intent_classifier()
       |> ensure_task_router_watcher_after_endpoint()
 
     # See https://hexdocs.pm/elixir/Supervisor.html
@@ -235,6 +242,21 @@ defmodule Platform.Application do
     if Application.get_env(:platform, :start_meeting_notifier, true) do
       idx = Enum.find_index(children, &(&1 == PlatformWeb.Endpoint)) || length(children)
       List.insert_at(children, idx, Platform.Meetings.MeetingNotifier)
+    else
+      children
+    end
+  end
+
+  # IntentClassifier (task 019f2452 stage 3): GenServer that subscribes
+  # to `meeting:transcript_chunk` and (in later stages) fires the
+  # `meetings.intent_classify` responsibility per chunk. Boots after
+  # IntentQueue so the enqueue path (stage 4) has a live table to
+  # write into. Disabled in test env; tests start their own instance
+  # per case for DataCase sandbox ownership.
+  defp maybe_add_meeting_intent_classifier(children) do
+    if Application.get_env(:platform, :start_meeting_intent_classifier, true) do
+      idx = Enum.find_index(children, &(&1 == PlatformWeb.Endpoint)) || length(children)
+      List.insert_at(children, idx, Platform.Meetings.IntentClassifier)
     else
       children
     end

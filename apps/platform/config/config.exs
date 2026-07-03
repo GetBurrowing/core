@@ -44,6 +44,22 @@ config :platform, Platform.Responsibilities,
 # after `Platform.Responsibilities.CutoverMonitor` reports zero divergence.
 config :platform, :responsibility_router_enabled, false
 
+# Meeting Producer runtime (task 019f2452). Two flags with distinct roles:
+#
+#   * `:start_meeting_intent_classifier` — supervisor gate. When `true`,
+#     the boot sequence adds `Platform.Meetings.IntentClassifier` to the
+#     child list so it subscribes to `meeting:transcript_chunk` at
+#     startup. Disabled in `config/test.exs` — tests own per-case
+#     instances.
+#
+#   * `:meeting_producer_runtime_enabled` — runtime kill-switch. When
+#     `false` (v1 default) the classifier drops every chunk at guard 1
+#     WITHOUT touching the LLM or the IntentQueue. Flip to `true` in a
+#     follow-up config change once the seeds land and the pipeline is
+#     ready to fire on live traffic.
+config :platform, :start_meeting_intent_classifier, true
+config :platform, :meeting_producer_runtime_enabled, false
+
 # Configure the endpoint
 config :platform, PlatformWeb.Endpoint,
   url: [host: "localhost"],

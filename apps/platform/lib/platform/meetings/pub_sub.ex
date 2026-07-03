@@ -19,19 +19,27 @@ defmodule Platform.Meetings.PubSub do
       doesn't support wildcards, so we publish on BOTH the canonical
       topic AND `"meeting:finished:{room_id}"` (for per-room LiveView
       subscribers). The Router subscribes to the canonical topic only.
+    * `"meeting:transcript_chunk"` — canonical broadcast surface for
+      individual transcript segment appends, consumed by the Meeting
+      Producer's classifier (task 019f2452). Same dual-topic pattern
+      as `meeting:finished`: publish on BOTH the canonical topic AND
+      `"meeting:transcript_chunk:{room_id}"` so the classifier can
+      subscribe once while per-room consumers stay narrow.
 
   ## Events
 
-  | Topic                              | Event                                    | Payload                                                          |
-  |------------------------------------|------------------------------------------|------------------------------------------------------------------|
-  | `meetings:room:{room_id}`          | `{:participant_joined, p}`               | `%Meetings.Participant{}`                                        |
-  | `meetings:room:{room_id}`          | `{:participant_left, p}`                 | `%Meetings.Participant{}`                                        |
-  | `meetings:room:{room_id}`          | `{:room_activated, room}`                | `%Meetings.Room{}`                                               |
-  | `meetings:room:{room_id}`          | `{:room_finished, room}`                 | `%Meetings.Room{}`                                               |
-  | `meetings:presence:{space_id}`     | `{:meeting_presence_update, data}`       | `%{space_id, active, count}`                                     |
-  | `meetings:presence_summary`        | `{:meeting_presence_summary, data}`      | `%{space_id: id}`                                                |
-  | `meeting:finished`                 | `{:meeting_finished, payload}`           | `%{transcript_id: id, room_id: id, space_id: id}`                |
-  | `meeting:finished:{room_id}`       | `{:meeting_finished, payload}`           | `%{transcript_id: id, room_id: id, space_id: id}`                |
+  | Topic                                     | Event                                    | Payload                                                                     |
+  |-------------------------------------------|------------------------------------------|-----------------------------------------------------------------------------|
+  | `meetings:room:{room_id}`                 | `{:participant_joined, p}`               | `%Meetings.Participant{}`                                                   |
+  | `meetings:room:{room_id}`                 | `{:participant_left, p}`                 | `%Meetings.Participant{}`                                                   |
+  | `meetings:room:{room_id}`                 | `{:room_activated, room}`                | `%Meetings.Room{}`                                                          |
+  | `meetings:room:{room_id}`                 | `{:room_finished, room}`                 | `%Meetings.Room{}`                                                          |
+  | `meetings:presence:{space_id}`            | `{:meeting_presence_update, data}`       | `%{space_id, active, count}`                                                |
+  | `meetings:presence_summary`               | `{:meeting_presence_summary, data}`      | `%{space_id: id}`                                                           |
+  | `meeting:finished`                        | `{:meeting_finished, payload}`           | `%{transcript_id: id, room_id: id, space_id: id}`                           |
+  | `meeting:finished:{room_id}`              | `{:meeting_finished, payload}`           | `%{transcript_id: id, room_id: id, space_id: id}`                           |
+  | `meeting:transcript_chunk`                | `{:transcript_chunk, payload}`           | `%{room_id: id, transcript_id: id, segment: map(), meeting_id: id \\| nil}` |
+  | `meeting:transcript_chunk:{room_id}`      | `{:transcript_chunk, payload}`           | `%{room_id: id, transcript_id: id, segment: map(), meeting_id: id \\| nil}` |
   """
 
   @pubsub Platform.PubSub
@@ -71,6 +79,25 @@ defmodule Platform.Meetings.PubSub do
   @spec meeting_finished_topic(binary()) :: String.t()
   def meeting_finished_topic(room_id) when is_binary(room_id),
     do: "meeting:finished:#{room_id}"
+
+  @doc """
+  Returns the canonical "any transcript chunk" topic. Subscribed to by
+  the Meeting Producer's classifier so a single subscription catches
+  every appended segment across every active room (Phoenix.PubSub has
+  no wildcard match). Broadcasts to `transcript_chunk_topic/1` are
+  mirrored to this topic.
+  """
+  @spec transcript_chunk_topic() :: String.t()
+  def transcript_chunk_topic, do: "meeting:transcript_chunk"
+
+  @doc """
+  Returns the per-room transcript-chunk topic. Used by consumers that
+  already know the room they care about and don't want to filter every
+  cross-org broadcast.
+  """
+  @spec transcript_chunk_topic(binary()) :: String.t()
+  def transcript_chunk_topic(room_id) when is_binary(room_id),
+    do: "meeting:transcript_chunk:#{room_id}"
 
   # ── Subscribe ────────────────────────────────────────────────────────────────
 
@@ -114,6 +141,22 @@ defmodule Platform.Meetings.PubSub do
     Phoenix.PubSub.subscribe(@pubsub, meeting_finished_topic(room_id))
   end
 
+  @doc """
+  Subscribe to the canonical `meeting:transcript_chunk` topic. The
+  Meeting Producer's classifier uses this to react to every appended
+  transcript segment without needing one subscription per room.
+  """
+  @spec subscribe_transcript_chunk() :: :ok | {:error, term()}
+  def subscribe_transcript_chunk do
+    Phoenix.PubSub.subscribe(@pubsub, transcript_chunk_topic())
+  end
+
+  @doc "Subscribe to a specific room's `meeting:transcript_chunk` topic."
+  @spec subscribe_transcript_chunk(binary()) :: :ok | {:error, term()}
+  def subscribe_transcript_chunk(room_id) when is_binary(room_id) do
+    Phoenix.PubSub.subscribe(@pubsub, transcript_chunk_topic(room_id))
+  end
+
   @doc "Unsubscribe from a user's meeting events."
   @spec unsubscribe_user(binary()) :: :ok
   def unsubscribe_user(user_id) do
@@ -148,6 +191,18 @@ defmodule Platform.Meetings.PubSub do
   @spec unsubscribe_meeting_finished(binary()) :: :ok
   def unsubscribe_meeting_finished(room_id) when is_binary(room_id) do
     Phoenix.PubSub.unsubscribe(@pubsub, meeting_finished_topic(room_id))
+  end
+
+  @doc "Unsubscribe from the canonical `meeting:transcript_chunk` topic."
+  @spec unsubscribe_transcript_chunk() :: :ok
+  def unsubscribe_transcript_chunk do
+    Phoenix.PubSub.unsubscribe(@pubsub, transcript_chunk_topic())
+  end
+
+  @doc "Unsubscribe from a specific room's `meeting:transcript_chunk` topic."
+  @spec unsubscribe_transcript_chunk(binary()) :: :ok
+  def unsubscribe_transcript_chunk(room_id) when is_binary(room_id) do
+    Phoenix.PubSub.unsubscribe(@pubsub, transcript_chunk_topic(room_id))
   end
 
   # ── Broadcast ────────────────────────────────────────────────────────────────
@@ -207,6 +262,32 @@ defmodule Platform.Meetings.PubSub do
     event = {:meeting_finished, payload}
     Phoenix.PubSub.broadcast(@pubsub, meeting_finished_topic(), event)
     Phoenix.PubSub.broadcast(@pubsub, meeting_finished_topic(room_id), event)
+    :ok
+  end
+
+  @doc """
+  Broadcast a `:transcript_chunk` event on BOTH the canonical
+  `meeting:transcript_chunk` topic AND the per-room
+  `meeting:transcript_chunk:{room_id}` topic.
+
+  Publishing on the canonical topic lets the Meeting Producer's
+  classifier react to every appended segment with a single
+  Phoenix.PubSub subscription (PubSub has no wildcard match);
+  publishing on the per-room topic keeps room-scoped consumers
+  from having to filter cross-org traffic.
+
+  `payload` should carry at least `:room_id`, `:transcript_id`,
+  `:segment` (the segment map that was appended), and `:meeting_id`
+  (which may be `nil` — the room can produce chunks before a
+  `Meeting` row is linked, and the classifier is responsible for
+  enrichment).
+  """
+  @spec broadcast_transcript_chunk(binary(), map()) :: :ok
+  def broadcast_transcript_chunk(room_id, payload)
+      when is_binary(room_id) and is_map(payload) do
+    event = {:transcript_chunk, payload}
+    Phoenix.PubSub.broadcast(@pubsub, transcript_chunk_topic(), event)
+    Phoenix.PubSub.broadcast(@pubsub, transcript_chunk_topic(room_id), event)
     :ok
   end
 end

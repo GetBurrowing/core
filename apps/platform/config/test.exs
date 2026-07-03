@@ -77,6 +77,13 @@ config :platform, :start_meeting_historian_handler, false
 # `:notifications_module` (see meeting_notifier_test.exs).
 config :platform, :start_meeting_notifier, false
 
+# Meeting Producer runtime (task 019f2452 stage 3): tests start their own
+# IntentClassifier per case for DataCase sandbox ownership. Runtime
+# kill-switch stays off; tests flip it per-case via `Application.put_env`
+# in setup blocks + `on_exit` restore.
+config :platform, :start_meeting_intent_classifier, false
+config :platform, :meeting_producer_runtime_enabled, false
+
 # StackDeployer (T5) — tests run synchronously and use a no-op git
 # runner by default so existing Stacks tests don't shell out. Tests that
 # care about deployer behavior swap in their own runner via
