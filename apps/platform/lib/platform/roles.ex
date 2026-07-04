@@ -58,6 +58,8 @@ defmodule Platform.Roles do
 
   alias Platform.Agents.Agent
   alias Platform.Repo
+  alias Platform.Responsibilities
+  alias Platform.Responsibilities.RuntimeGate
   alias Platform.Roles.ResponsibilityOverride
   alias Platform.Roles.Role
   alias Platform.Roles.RoleAssignment
@@ -250,6 +252,8 @@ defmodule Platform.Roles do
           {:ok, ResponsibilityOverride.t()} | {:error, Ecto.Changeset.t()}
   def set_override(responsibility_key, agent_id)
       when is_binary(responsibility_key) and is_binary(agent_id) do
+    maybe_signal_runtime_mismatch(responsibility_key, agent_id)
+
     %ResponsibilityOverride{}
     |> ResponsibilityOverride.changeset(%{
       responsibility_key: responsibility_key,
@@ -259,6 +263,47 @@ defmodule Platform.Roles do
       on_conflict: {:replace, [:agent_id, :updated_at]},
       conflict_target: :responsibility_key
     )
+  end
+
+  # Soft-fail runtime-type gate (task 019f2566 stage 4). Looks up the
+  # responsibility + agent by their natural keys and asks
+  # `RuntimeGate.compatible?/2` whether the runtime shape plausibly
+  # fulfills the responsibility. On mismatch: warn + telemetry, then
+  # fall through to the write. `set_override/2`'s return contract is
+  # unchanged so no caller needs updating.
+  #
+  # Lookup misses (unknown responsibility_key, unknown agent_id) fall
+  # through to `:ok` — the gate is a signal, not a validation. The
+  # subsequent `Repo.insert/2` will surface the real FK error via the
+  # existing `{:error, changeset}` return.
+  defp maybe_signal_runtime_mismatch(responsibility_key, agent_id) do
+    responsibility = Responsibilities.get_by_key(responsibility_key)
+    agent = Repo.get(Agent, agent_id)
+
+    case RuntimeGate.compatible?(responsibility, agent) do
+      :ok ->
+        :ok
+
+      {:soft_fail, reason} ->
+        Logger.warning(
+          "[Roles] runtime mismatch responsibility=#{inspect(responsibility_key)} " <>
+            "agent=#{inspect(agent && agent.slug)} reason=#{inspect(reason)} — " <>
+            "proceeding (soft-fail)"
+        )
+
+        :telemetry.execute(
+          [:platform, :roles, :runtime_mismatch],
+          %{count: 1},
+          %{
+            responsibility_key: responsibility_key,
+            agent_id: agent_id,
+            agent_slug: agent && agent.slug,
+            reason: reason
+          }
+        )
+
+        :ok
+    end
   end
 
   @doc """

@@ -84,6 +84,17 @@ config :platform, :start_meeting_notifier, false
 config :platform, :start_meeting_intent_classifier, false
 config :platform, :meeting_producer_runtime_enabled, false
 
+# SummarizerSweeper (task 019f2566 stage 2): tests start their own
+# per-case instance with shortened intervals so the sweep runs inside
+# an ExUnit case's DataCase sandbox and doesn't share state across
+# tests.
+config :platform, :start_summarizer_sweeper, false
+
+# StallRegistry (task 019f2566 stage 6): tests start their own per-case
+# instance so registry state is isolated per test — otherwise a callback
+# registered by one test leaks into a sibling case's sweep tick.
+config :platform, :start_stall_registry, false
+
 # StackDeployer (T5) — tests run synchronously and use a no-op git
 # runner by default so existing Stacks tests don't shell out. Tests that
 # care about deployer behavior swap in their own runner via

@@ -25,12 +25,13 @@ defmodule Platform.Meetings.Transcript do
     field(:status, :string, default: "recording")
     field(:started_at, :utc_datetime_usec)
     field(:completed_at, :utc_datetime_usec)
+    field(:router_dispatched_at, :utc_datetime_usec)
 
     timestamps(type: :utc_datetime_usec)
   end
 
   @required_fields ~w(room_id)a
-  @optional_fields ~w(space_id segments summary status started_at completed_at)a
+  @optional_fields ~w(space_id segments summary status started_at completed_at router_dispatched_at)a
 
   @doc "Changeset for creating or updating a transcript."
   def changeset(transcript, attrs) do

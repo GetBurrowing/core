@@ -89,12 +89,25 @@ defmodule Platform.Application do
       |> maybe_add_meeting_historian_handler()
       |> maybe_add_meeting_notifier()
       |> maybe_add_meeting_intent_classifier()
+      |> maybe_add_stall_registry()
+      |> maybe_add_summarizer_sweeper()
       |> ensure_task_router_watcher_after_endpoint()
 
     # See https://hexdocs.pm/elixir/Supervisor.html
     # for other strategies and supported options
     opts = [strategy: :one_for_one, name: Platform.Supervisor]
-    Supervisor.start_link(children, opts)
+    result = Supervisor.start_link(children, opts)
+
+    # After the supervision tree comes up, wire the default sweep
+    # callback into StallRegistry so the sweeper's `:tick` handler
+    # picks it up alongside any callbacks registered by follow-up
+    # runtimes (task 019f2566 stage 6). Guarded on the sweeper boot
+    # flag so tests — which start their own per-case sweeper — don't
+    # end up with a global registration pointing at a name that isn't
+    # running.
+    maybe_register_default_sweep_callback()
+
+    result
   end
 
   # Fail-closed: run unless explicitly skipped (dev/test). Prevents the
@@ -260,6 +273,57 @@ defmodule Platform.Application do
     else
       children
     end
+  end
+
+  # SummarizerSweeper (task 019f2566 stage 2): periodic sweep over
+  # stalled router-owned summarize dispatches. Must start after Repo
+  # (queries meeting_transcripts) and after Platform.TaskSupervisor (it
+  # spawns fallback bodies under it). Disabled in test env; tests start
+  # their own per-case instance with a shortened `check_interval_ms` +
+  # `stall_window_ms` for DataCase sandbox ownership.
+  defp maybe_add_summarizer_sweeper(children) do
+    if Application.get_env(:platform, :start_summarizer_sweeper, true) do
+      idx = Enum.find_index(children, &(&1 == PlatformWeb.Endpoint)) || length(children)
+      List.insert_at(children, idx, Platform.Meetings.SummarizerSweeper)
+    else
+      children
+    end
+  end
+
+  # StallRegistry (task 019f2566 stage 6): pure in-memory MapSet of
+  # `{module, function/0}` sweep callbacks that the SummarizerSweeper's
+  # tick handler walks. Must start BEFORE the sweeper so the sweeper's
+  # first tick has a populated (or at least reachable) registry.
+  # Disabled in test env; tests start their own per-case instance.
+  defp maybe_add_stall_registry(children) do
+    if Application.get_env(:platform, :start_stall_registry, true) do
+      idx =
+        Enum.find_index(children, &(&1 == Platform.Meetings.SummarizerSweeper)) ||
+          Enum.find_index(children, &(&1 == PlatformWeb.Endpoint)) ||
+          length(children)
+
+      List.insert_at(children, idx, Platform.Responsibilities.StallRegistry)
+    else
+      children
+    end
+  end
+
+  # Wire the summarizer's own sweep body into StallRegistry after the
+  # supervision tree comes up. Idempotent (MapSet-backed) so accidental
+  # re-application on a hot reload is harmless. Guarded on both flags
+  # so it's a no-op in test env, where per-case sweepers drive
+  # `sweep_now/1` directly.
+  defp maybe_register_default_sweep_callback do
+    start_sweeper? = Application.get_env(:platform, :start_summarizer_sweeper, true)
+    start_registry? = Application.get_env(:platform, :start_stall_registry, true)
+
+    if start_sweeper? and start_registry? do
+      Platform.Responsibilities.StallRegistry.register(
+        {Platform.Meetings.SummarizerSweeper, :sweep_meetings_summarize}
+      )
+    end
+
+    :ok
   end
 
   defp ensure_task_router_watcher_after_endpoint(children) do

@@ -156,7 +156,16 @@ defmodule Platform.Responsibilities.Handlers.MeetingSummarize do
        %{
          org_identity: identity,
          recent_journal: journal,
-         meeting_transcript: transcript
+         meeting_transcript: transcript,
+         # Task 019f2566 stage 3 — pass through when the router-supplied
+         # trigger context already carries `:agent_kind` (populated by
+         # M6's dispatcher-adjacent classify). This slot is what
+         # `build_messages/1` / `system_prompt_with_grounding/1` key off
+         # to decide whether to prepend the "fire off to a subagent"
+         # preamble for federated Claude runtimes like Dalton.
+         # `nil` here is fine — the Dispatcher's belt+braces re-classify
+         # from the agent it holds fills it in before render.
+         agent_kind: Map.get(ctx, :agent_kind)
        }}
     end
   end
@@ -303,20 +312,43 @@ defmodule Platform.Responsibilities.Handlers.MeetingSummarize do
   that don't need the full message list (e.g. legacy Anthropic
   adapter call sites that pass system + messages separately) can grab
   just the grounded system text.
+
+  When `context[:agent_kind]` is `:fed_conversational` (Dalton — a
+  federated conversational Claude runtime) a short preamble is
+  prepended instructing the model to hand the summarization work off
+  to a Task-tool subagent. For `:ext_single_responsibility` (Hermione)
+  or missing kinds no preamble is added — those runtimes are single-
+  purpose and don't benefit from meta-instructions about their
+  execution shape (task 019f2566 stage 3).
   """
   @spec system_prompt_with_grounding(map()) :: String.t()
   def system_prompt_with_grounding(context) when is_map(context) do
+    preamble = kind_preamble(Map.get(context, :agent_kind))
     base = SummaryPrompt.system_prompt()
     grounding = render_grounding_block(context)
 
-    if grounding == "" do
-      base
-    else
-      base <> "\n" <> grounding
-    end
+    [preamble, base, grounding]
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.join("\n")
   end
 
   def system_prompt_with_grounding(_), do: SummaryPrompt.system_prompt()
+
+  # Task 019f2566 stage 3 — kind-specific preamble.
+  #
+  # Rowan's framing: "Claude conversational agent like Dalton should get
+  # extra information templated in recommending running the
+  # summarization in a subagent, while an external agent like Hermione
+  # is single responsibility and thus shouldn't need additional
+  # instructions besides the normal prompt".
+  defp kind_preamble(:fed_conversational) do
+    """
+    You are running inside a conversational Claude runtime. IMPORTANT: fire off the summarization work to a dedicated subagent (Task tool) so the main thread stays responsive to the user. Return the summary as plain text in the subagent's final message.
+    """
+    |> String.trim_trailing()
+  end
+
+  defp kind_preamble(_), do: ""
 
   # ── internals ─────────────────────────────────────────────────────────────
 

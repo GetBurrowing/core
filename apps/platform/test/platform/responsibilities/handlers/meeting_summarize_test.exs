@@ -355,4 +355,116 @@ defmodule Platform.Responsibilities.Handlers.MeetingSummarizeTest do
       assert system =~ "Acme Robotics ships **autonomous fryers**"
     end
   end
+
+  # ── task 019f2566 stage 3 — agent-kind preamble templating ──────────────
+  describe "system_prompt_with_grounding/1 — agent-kind preamble (task 019f2566)" do
+    test ":fed_conversational prepends the subagent-handoff preamble" do
+      system = MeetingSummarize.system_prompt_with_grounding(%{agent_kind: :fed_conversational})
+
+      assert system =~ "conversational Claude runtime"
+      assert system =~ "Task tool"
+      assert system =~ "subagent"
+
+      # Preamble sits ABOVE the canonical body — the base prompt
+      # follows once we get past the preamble.
+      preamble_idx = :binary.match(system, "conversational Claude runtime") |> elem(0)
+      base_idx = :binary.match(system, "Overview") |> elem(0)
+      assert preamble_idx < base_idx, "preamble must precede the canonical summary body"
+    end
+
+    test ":ext_single_responsibility gets NO preamble (Hermione shape)" do
+      system =
+        MeetingSummarize.system_prompt_with_grounding(%{agent_kind: :ext_single_responsibility})
+
+      refute system =~ "conversational Claude runtime"
+      refute system =~ "Task tool"
+      assert system =~ "Overview"
+    end
+
+    test ":loc_built_in gets NO preamble" do
+      system = MeetingSummarize.system_prompt_with_grounding(%{agent_kind: :loc_built_in})
+
+      refute system =~ "conversational Claude runtime"
+      assert system =~ "Overview"
+    end
+
+    test "missing agent_kind gets NO preamble (backward-compat with pre-stage-3 callers)" do
+      system = MeetingSummarize.system_prompt_with_grounding(%{})
+
+      refute system =~ "conversational Claude runtime"
+      assert system =~ "Overview"
+    end
+  end
+
+  describe "build_messages/1 — agent-kind preamble (task 019f2566)" do
+    test ":fed_conversational carries the preamble into the system message" do
+      [system_msg, _user_msg] =
+        MeetingSummarize.build_messages(%{
+          agent_kind: :fed_conversational,
+          meeting_transcript: %{formatted_text: "[00:00:00] Harper: Hi"}
+        })
+
+      assert system_msg.role == "system"
+      assert system_msg.content =~ "conversational Claude runtime"
+      assert system_msg.content =~ "subagent"
+    end
+
+    test ":ext_single_responsibility does NOT carry the preamble" do
+      [system_msg, _user_msg] =
+        MeetingSummarize.build_messages(%{
+          agent_kind: :ext_single_responsibility,
+          meeting_transcript: %{formatted_text: "[00:00:00] Harper: Hi"}
+        })
+
+      refute system_msg.content =~ "conversational Claude runtime"
+    end
+
+    test "preamble stacks CORRECTLY with grounding — order is preamble → base → grounding" do
+      identity_body = "# Org Identity\n\nAcme Robotics is the identity."
+
+      {:ok, _file} =
+        OrgContext.upsert_file(%{
+          file_key: "ORG_IDENTITY.md",
+          content: identity_body
+        })
+
+      {:ok, %{org_identity: identity}} =
+        Platform.Responsibilities.ContextProviders.gather_context(:org_identity, [])
+
+      context = %{
+        agent_kind: :fed_conversational,
+        org_identity: identity,
+        recent_journal: %{entries_by_date: [], total: 0, days: 7},
+        meeting_transcript: %{formatted_text: "[00:00:00] Harper: Hi"}
+      }
+
+      [system_msg, _] = MeetingSummarize.build_messages(context)
+
+      preamble_idx = :binary.match(system_msg.content, "conversational Claude runtime") |> elem(0)
+      base_idx = :binary.match(system_msg.content, "Overview") |> elem(0)
+      grounding_idx = :binary.match(system_msg.content, "## Grounding context") |> elem(0)
+
+      assert preamble_idx < base_idx
+      assert base_idx < grounding_idx
+    end
+  end
+
+  describe "gather_context/2 — passthrough of :agent_kind (task 019f2566)" do
+    test "propagates trigger :agent_kind into the returned context map" do
+      {:ok, ctx} =
+        MeetingSummarize.gather_context(responsibility(), %{
+          payload: %{transcript_id: nil},
+          agent_kind: :fed_conversational
+        })
+
+      assert ctx.agent_kind == :fed_conversational
+    end
+
+    test "returned :agent_kind is nil when trigger meta omits it (dispatcher will backfill)" do
+      {:ok, ctx} =
+        MeetingSummarize.gather_context(responsibility(), %{payload: %{transcript_id: nil}})
+
+      assert Map.get(ctx, :agent_kind) == nil
+    end
+  end
 end

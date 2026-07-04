@@ -513,4 +513,88 @@ defmodule Platform.ExternalAgents.DispatcherTest do
       assert decoded["max_tokens"] == 2500
     end
   end
+
+  # ── task 019f2566 stage 3 — agent-kind context merge ────────────────────
+  describe "agent-kind context merge (task 019f2566 stage 3)" do
+    setup do
+      test_pid = self()
+
+      Req.Test.stub(:external_agents_dispatcher_test, fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        send(test_pid, {:dispatch_body, conn, body})
+
+        Req.Test.json(conn, %{
+          "choices" => [%{"message" => %{"role" => "assistant", "content" => "ok"}}]
+        })
+      end)
+
+      :ok
+    end
+
+    test "external-kind agent → context.agent_kind := :ext_single_responsibility during legacy render" do
+      # Template that references {agent_kind} so we can observe the
+      # merged value landed on context BEFORE render_prompt/2 ran.
+      responsibility =
+        build_responsibility(%{default_prompt_template: "kind={agent_kind} topic={topic}"})
+
+      agent = build_agent("openai_compat")
+      :ok = EphemeralCredentials.put(agent.id, "sk-test")
+      on_exit(fn -> EphemeralCredentials.delete(agent.id) end)
+
+      assert {:ok, _} = Dispatcher.dispatch(responsibility, agent, %{topic: "x"})
+
+      assert_receive {:dispatch_body, _conn, raw_body}
+      decoded = Jason.decode!(raw_body)
+
+      user = Enum.find(decoded["messages"], &(&1["role"] == "user"))
+      assert user["content"] =~ "kind=ext_single_responsibility"
+      assert user["content"] =~ "topic=x"
+    end
+
+    test "caller-supplied :agent_kind on context is respected (no override)" do
+      # If the router's provider gather_context already stamped an
+      # agent_kind onto the map, the dispatcher must NOT clobber it.
+      responsibility = build_responsibility(%{default_prompt_template: "kind={agent_kind}"})
+
+      # Provide an ext agent, but a context claiming fed_conversational
+      # — the caller-supplied value wins.
+      agent = build_agent("openai_compat")
+      :ok = EphemeralCredentials.put(agent.id, "sk-test")
+      on_exit(fn -> EphemeralCredentials.delete(agent.id) end)
+
+      assert {:ok, _} =
+               Dispatcher.dispatch(responsibility, agent, %{agent_kind: :fed_conversational})
+
+      assert_receive {:dispatch_body, _conn, raw_body}
+      decoded = Jason.decode!(raw_body)
+
+      user = Enum.find(decoded["messages"], &(&1["role"] == "user"))
+      assert user["content"] =~ "kind=fed_conversational"
+    end
+
+    test "missing agent_kind on context → backfilled from agent shape (belt+braces)" do
+      # Federated-shape agent (native + runtime_type=external, but
+      # external-endpoint metadata for dispatch to actually go
+      # through — the test is about the classify result, not the
+      # network hop).
+      responsibility = build_responsibility(%{default_prompt_template: "kind={agent_kind}"})
+
+      agent =
+        build_agent("openai_compat", %{
+          kind: "native",
+          runtime_type: "external"
+        })
+
+      :ok = EphemeralCredentials.put(agent.id, "sk-test")
+      on_exit(fn -> EphemeralCredentials.delete(agent.id) end)
+
+      assert {:ok, _} = Dispatcher.dispatch(responsibility, agent, %{})
+
+      assert_receive {:dispatch_body, _conn, raw_body}
+      decoded = Jason.decode!(raw_body)
+
+      user = Enum.find(decoded["messages"], &(&1["role"] == "user"))
+      assert user["content"] =~ "kind=fed_conversational"
+    end
+  end
 end

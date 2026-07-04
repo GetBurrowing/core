@@ -144,7 +144,21 @@ defmodule Platform.Meetings.Summarizer do
       false
   end
 
-  defp run_summary_legacy(id, space_id, segments) do
+  @doc """
+  Legacy summary body — direct LLM call + transcript completion, no
+  router involvement.
+
+  Made public in task 019f2566 stage 2 so `Platform.Meetings.SummarizerSweeper`
+  can drive the fallback path directly for stalled `processing`
+  transcripts (i.e. the router fired but no agent ever produced the
+  summary). Intra-module callers (`run_summary/1`'s router-unfilled and
+  router-fire-failed branches) call in with the same arity.
+
+  Not part of the public API for external consumers — the sweeper and
+  `run_summary/1` are the only intended call sites.
+  """
+  @doc since: "task 019f2566 stage 2"
+  def run_summary_legacy(id, space_id, segments) do
     Logger.info(
       "[Summarizer] Generating summary for transcript #{id} (#{length(segments)} segments)"
     )

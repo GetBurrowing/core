@@ -42,6 +42,48 @@ defmodule Platform.Responsibilities.Handlers.IntentClassify do
   which follow-up ticket to check. Logged at `Logger.warning` (not
   `info`) so the message survives production log-level tuning and the
   test-suite's `:warning` default.
+
+  ## Stall-guard contract
+
+  Task 019f2566 stage 6 shipped
+  `Platform.Responsibilities.StallRegistry` as the seam for periodic
+  stall-guard sweeps. When the actual chunk-dispatcher lands (see task
+  `019f2452`), the follow-up runtime MUST:
+
+    1. Stamp a `router_dispatched_at`-equivalent timestamp on whatever
+       record represents the queue entry (mirror what stage 1 did for
+       `meeting_transcripts` — a durable "we handed off to the router
+       at this moment" marker).
+
+    2. Register its zero-arity sweep function with StallRegistry at
+       boot:
+
+           Platform.Responsibilities.StallRegistry.register(
+             {MyIntentClassifyRuntime, :sweep_meetings_intent_classify}
+           )
+
+       Registration is idempotent (MapSet-backed) and belongs in the
+       runtime's own boot path — not in this handler and not in
+       `Platform.Application`. `Platform.Meetings.SummarizerSweeper`
+       will invoke it inside a supervised task on each tick.
+
+    3. In `sweep_meetings_intent_classify/0`, walk the runtime's own
+       queue records past a stall window, fire a fallback path (drop,
+       requeue, or synchronous re-classify — whatever the runtime's
+       failure mode calls for), and post a completion notice via
+       `Platform.Meetings.post_fallback_notice/3` with
+       `dispatch_kind: "meetings.intent_classify"` in the metadata so
+       operators can distinguish it from the summarize fallback.
+
+    4. Emit a matching telemetry event
+       (`[:platform, :meetings, :intent_classify_fallback_fired]` or
+       similar) so `Platform.Responsibilities.CutoverMonitor` and
+       downstream dashboards can count fallback firings the same way
+       they already count summarize-fallback firings.
+
+  See `Platform.Meetings.SummarizerSweeper` (task 019f2566) for the
+  reference pattern — the runtime should mirror that shape, not
+  reinvent it.
   """
   @behaviour Platform.Responsibilities.Provider
 

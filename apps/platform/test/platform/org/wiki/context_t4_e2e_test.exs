@@ -414,7 +414,23 @@ defmodule Platform.Org.Wiki.ContextT4E2ETest do
       # (bool, default false) and nullable `plans.auto_approved_at`
       # timestamp. State-machine wiring, MCP surface, UI, and serializer
       # expansion land in stages 2-5.
-      "20260702210000_add_auto_approve_to_tasks_and_plans.exs"
+      "20260702210000_add_auto_approve_to_tasks_and_plans.exs",
+      # Prompt templates for closed-roster responsibilities (task
+      # 019f2455, PR #480). Four seed migrations that shipped without
+      # a matching allow-list bump — captured here so the T4 boundary
+      # guard keeps pinning the migration count on the merged tree.
+      "20260703120000_seed_designer_prompt_templates.exs",
+      "20260703120100_seed_prompt_template_propose_long_term.exs",
+      "20260703120200_seed_prompt_templates_meeting_scribe.exs",
+      "20260703120300_seed_prompt_templates_triage_officer.exs",
+      # Responsibility-router heartbeat (task 019f2566) stage 1: adds
+      # nullable `meeting_transcripts.router_dispatched_at` +
+      # partial index (WHERE status = 'processing') so the
+      # SummarizerSweeper GenServer (stage 2) can cheaply scan for
+      # dispatches that stalled without their agent claiming the work.
+      # Column-only + `Meetings.stamp_router_dispatched/1` helper; the
+      # Summarizer wire-in and sweeper land in later stages.
+      "20260704140000_add_router_dispatched_at_to_meeting_transcripts.exs"
     ]
 
     defp t4_root, do: Mix.Project.project_file() |> Path.dirname()

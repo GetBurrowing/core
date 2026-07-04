@@ -55,9 +55,18 @@ defmodule Platform.ExternalAgents.Dispatcher do
   require Logger
 
   alias Platform.Agents.Agent
+  alias Platform.Agents.Kind, as: AgentKind
   alias Platform.ExternalAgents
   alias Platform.ExternalAgents.ContractValidator
   alias Platform.Responsibilities.Responsibility
+
+  # Task 019f2566 stage 3 — reserved context key carrying the resolved
+  # `Platform.Agents.Kind.classify/1` atom. Providers' `build_prompt/1`
+  # and `build_messages/1` implementations key off this to template
+  # runtime-specific preambles (e.g. Dalton gets a "fire off to a
+  # subagent" note; Hermione gets nothing extra). Values:
+  # `:ext_single_responsibility | :fed_conversational | :loc_built_in`.
+  @agent_kind_key :agent_kind
 
   @receive_timeout_ms 60_000
   @connect_timeout_ms 10_000
@@ -128,6 +137,7 @@ defmodule Platform.ExternalAgents.Dispatcher do
       when is_map(context) and is_list(opts) do
     started_at = System.monotonic_time()
 
+    context = ensure_agent_kind(context, agent)
     messages = resolve_messages(responsibility, context, opts)
 
     with {:ok, body} <- post(agent, messages, responsibility),
@@ -424,6 +434,19 @@ defmodule Platform.ExternalAgents.Dispatcher do
   defp parse_ollama_native(_), do: {:error, :unparseable_response}
 
   # ── Helpers ───────────────────────────────────────────────────────────────
+
+  # Task 019f2566 stage 3 — reserved-key merge. If the router-provided
+  # context already carries `:agent_kind` (populated by
+  # `Handlers.MeetingSummarize.gather_context/2` and friends), we
+  # respect it. Otherwise we classify from the agent the dispatcher was
+  # handed. Belt+braces — every downstream template render sees a
+  # non-nil kind.
+  defp ensure_agent_kind(context, agent) when is_map(context) do
+    case Map.get(context, @agent_kind_key) do
+      nil -> Map.put(context, @agent_kind_key, AgentKind.classify(agent))
+      _ -> context
+    end
+  end
 
   defp endpoint_kind(%Agent{endpoint_kind: kind}), do: kind
   defp endpoint_kind(%{endpoint_kind: kind}), do: kind

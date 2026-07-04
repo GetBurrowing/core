@@ -1243,6 +1243,56 @@ defmodule Platform.Meetings do
     end
   end
 
+  @doc """
+  Stamp `router_dispatched_at` on a transcript row with the current UTC
+  time. Returns the result of `Repo.update_all/3` — `{updated_count,
+  nil}` on success, `{0, nil}` when no row matches the given id.
+
+  Task 019f2566 stage 1 — foundation for the responsibility-router
+  heartbeat + fallback path. `Summarizer.run_summary/1` (wired in
+  stage 2) calls this at the exact point it fires the router so the
+  SummarizerSweeper GenServer can identify dispatches that stalled
+  without their agent ever picking the job up.
+
+  Uses `update_all` (not `Repo.update`) so the caller doesn't need to
+  hold a fresh struct — the Summarizer only knows the transcript id
+  at the fire-and-forget dispatch site.
+  """
+  @spec stamp_router_dispatched(String.t()) :: {non_neg_integer(), nil}
+  def stamp_router_dispatched(transcript_id) when is_binary(transcript_id) do
+    from(t in Transcript, where: t.id == ^transcript_id)
+    |> Repo.update_all(set: [router_dispatched_at: DateTime.utc_now()])
+  end
+
+  @doc """
+  Return every `%Transcript{}` whose status is `"processing"` and whose
+  `router_dispatched_at` is older than `stall_window_ms` milliseconds
+  ago. Used by `Platform.Meetings.SummarizerSweeper` to identify router
+  dispatches whose downstream agent never produced a summary.
+
+  Task 019f2566 stage 2. Leans on the partial index shipped in stage 1
+  (`meeting_transcripts_processing_router_dispatched_at_idx`) so the
+  sweep is cheap even under a large historical transcripts table.
+
+  A dispatch with `router_dispatched_at IS NULL` is intentionally NOT
+  returned — the plan's stage-1 note says the belt-and-braces "router
+  never fired" path is a stage 2+ decision; for now we only cover the
+  "router fired but stalled" branch, matching the plan's stage 2 scope.
+  """
+  @spec list_stalled_router_dispatches(non_neg_integer()) :: [Transcript.t()]
+  def list_stalled_router_dispatches(stall_window_ms) when is_integer(stall_window_ms) do
+    cutoff = DateTime.add(DateTime.utc_now(), -stall_window_ms, :millisecond)
+
+    from(t in Transcript,
+      where:
+        t.status == "processing" and
+          not is_nil(t.router_dispatched_at) and
+          t.router_dispatched_at < ^cutoff,
+      order_by: [asc: t.router_dispatched_at]
+    )
+    |> Repo.all()
+  end
+
   # ── Segment Accumulation ───────────────────────────────────────────────────
 
   @doc """
@@ -1403,6 +1453,125 @@ defmodule Platform.Meetings do
       end
     end
   end
+
+  @doc """
+  Post a "summary fallback fired" notice as a system message to the space.
+
+  Called by `Platform.Meetings.SummarizerSweeper` after the legacy summary
+  path completes (successfully or otherwise) for a stalled router dispatch.
+  Names the previously-assigned summarizer agent (best-effort `@slug`
+  mention) so an operator can jump straight to Control Center → Roles and
+  reassign the responsibility away from the dead runtime.
+
+  The `mode` argument is either `:completed` (legacy finished the summary)
+  or `:also_failed` (legacy path also errored — human attention required).
+  Both shapes are backend-only system messages; no @broadcast, no email.
+
+  `previously_assigned_agent` may be `nil` — the notice degrades to
+  "The assigned summarizer" rather than crashing. Agent → user_id mention
+  resolution is skipped because `Platform.Agents.Agent` does not carry a
+  `user_id` foreign key (agents belong to a workspace, not a user). Any
+  legacy-format `@<slug>` still gets highlighted by
+  `Platform.Chat.ContentRenderer.decorate_legacy_mentions/1`.
+
+  ## Options
+
+    * `:previously_assigned_agent` — agent slug string or `nil`
+    * `:stalled_for_ms` — non-negative integer milliseconds; formatted to
+      human-readable ("47 seconds", "12 minutes", "1 hour", "2 hours")
+    * `:mode` — `:completed` (default) or `:also_failed`
+
+  Task 019f2566 stage 5.
+  """
+  @doc since: "task 019f2566 stage 5"
+  @spec post_fallback_notice(String.t(), String.t(), map()) :: :ok | {:error, term()}
+  def post_fallback_notice(space_id, transcript_id, opts)
+      when is_binary(space_id) and is_binary(transcript_id) and is_map(opts) do
+    previously_assigned_agent = Map.get(opts, :previously_assigned_agent)
+    stalled_for_ms = Map.get(opts, :stalled_for_ms, 0)
+    mode = Map.get(opts, :mode, :completed)
+
+    content = fallback_notice_content(mode, previously_assigned_agent, stalled_for_ms)
+
+    metadata = %{
+      "source" => "meeting_summarizer_fallback",
+      "transcript_id" => transcript_id,
+      "mode" => Atom.to_string(mode),
+      "previously_assigned_agent" => previously_assigned_agent,
+      "stalled_for_ms" => stalled_for_ms
+    }
+
+    with {:ok, participant} <-
+           Platform.Orchestration.ExecutionSpace.ensure_system_participant(space_id) do
+      attrs = %{
+        space_id: space_id,
+        participant_id: participant.id,
+        content_type: "system",
+        content: String.trim(content),
+        metadata: metadata
+      }
+
+      case Platform.Chat.post_message(attrs) do
+        {:ok, _message} -> :ok
+        {:error, reason} -> {:error, {:post_failed, reason}}
+      end
+    end
+  rescue
+    # `Chat.add_participant/2` raises `Ecto.ConstraintError` on a missing
+    # `spaces.id` FK rather than returning a changeset error. Coerce so
+    # SummarizerSweeper can pattern-match `{:error, _}` without a
+    # try/rescue of its own.
+    error in Ecto.ConstraintError ->
+      {:error, {:space_not_found, error.constraint}}
+  end
+
+  defp fallback_notice_content(:completed, previously_assigned_agent, stalled_for_ms) do
+    assignee_phrase = fallback_notice_assignee_phrase(previously_assigned_agent)
+    window = humanize_ms(stalled_for_ms)
+
+    """
+    ⚠️ **Summary fallback**
+
+    #{assignee_phrase} did not respond within #{window}. This summary was generated by the legacy LLM path instead. To reassign the `meetings.summarize` responsibility, visit [Control Center → Roles](/control-center/roles).
+    """
+  end
+
+  defp fallback_notice_content(:also_failed, previously_assigned_agent, stalled_for_ms) do
+    assignee_phrase = fallback_notice_assignee_phrase(previously_assigned_agent)
+    window = humanize_ms(stalled_for_ms)
+
+    """
+    ⚠️ **Summary fallback also failed**
+
+    #{assignee_phrase} did not respond within #{window}, and the legacy LLM path also errored. Manual attention needed — visit [Control Center → Roles](/control-center/roles) to reassign `meetings.summarize`.
+    """
+  end
+
+  defp fallback_notice_assignee_phrase(nil), do: "The assigned summarizer"
+
+  defp fallback_notice_assignee_phrase(slug) when is_binary(slug) and slug != "" do
+    "The assigned summarizer (`@#{slug}`)"
+  end
+
+  defp fallback_notice_assignee_phrase(_), do: "The assigned summarizer"
+
+  # Human-readable "how long did we wait" formatter for the fallback
+  # notice. Deliberately coarse — the reader only cares about the
+  # order of magnitude, and the exact millisecond count lives in
+  # message metadata for anyone who does.
+  defp humanize_ms(ms) when is_integer(ms) and ms >= 0 do
+    cond do
+      ms < 1_000 -> "#{ms} ms"
+      ms < 60_000 -> "#{div(ms, 1_000)} seconds"
+      ms < 3_600_000 -> pluralize(div(ms, 60_000), "minute")
+      true -> pluralize(div(ms, 3_600_000), "hour")
+    end
+  end
+
+  defp humanize_ms(_), do: "the expected window"
+
+  defp pluralize(1, unit), do: "1 #{unit}"
+  defp pluralize(n, unit), do: "#{n} #{unit}s"
 
   # ── Agent Token Generation ────────────────────────────────────────
 

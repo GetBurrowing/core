@@ -15,6 +15,7 @@ defmodule Platform.RolesTest do
 
   alias Platform.Agents.Agent
   alias Platform.Repo
+  alias Platform.Responsibilities
   alias Platform.Roles
   alias Platform.Roles.ResponsibilityOverride
   alias Platform.Roles.Role
@@ -243,6 +244,115 @@ defmodule Platform.RolesTest do
       assert :ok = Roles.clear_override("brand_review")
       assert :ok = Roles.clear_override("brand_review")
       refute Repo.exists?(ResponsibilityOverride)
+    end
+  end
+
+  # ── Soft-fail runtime-type gate (task 019f2566 stage 4) ─────────────
+  #
+  # `set_override/2` now emits telemetry when the operator pins a
+  # responsibility to an agent whose runtime shape probably can't
+  # fulfill it (the Dalton-shape trap). Ship signal, not rejection —
+  # the write MUST still succeed so callers observe the same
+  # `{:ok, %ResponsibilityOverride{}}` return.
+  describe "set_override/2 — runtime-type gate telemetry" do
+    setup do
+      # A gated responsibility that RuntimeGate knows about.
+      {:ok, resp} =
+        Responsibilities.create_responsibility(%{
+          key: "meetings.summarize",
+          feature: "meetings",
+          trigger_kind: "event_topic",
+          trigger_config: %{"topic" => "meeting_ended"},
+          scope: "per_meeting",
+          context_provided: [],
+          output_contract: %{"summary" => "string"},
+          default_prompt_template: "meetings.summarize.v1",
+          cost_profile: "low_freq_capable"
+        })
+
+      %{responsibility: resp}
+    end
+
+    test "soft-fails + emits telemetry when Dalton-shape agent gets pinned to meetings.summarize" do
+      ref =
+        :telemetry_test.attach_event_handlers(
+          self(),
+          [[:platform, :roles, :runtime_mismatch]]
+        )
+
+      dalton = insert_agent!(%{runtime_type: "external"})
+
+      assert {:ok, %ResponsibilityOverride{agent_id: aid}} =
+               Roles.set_override("meetings.summarize", dalton.id)
+
+      # Behaviour unchanged: row is inserted + resolver returns it.
+      assert aid == dalton.id
+      assert %Agent{id: ^aid} = Roles.assignee_for("meetings.summarize")
+
+      assert_receive {[:platform, :roles, :runtime_mismatch], ^ref, %{count: 1}, meta}
+      assert meta.responsibility_key == "meetings.summarize"
+      assert meta.agent_id == dalton.id
+      assert meta.agent_slug == dalton.slug
+      assert meta.reason == :conversational_agent_no_dispatch_handler
+
+      :telemetry.detach(ref)
+    end
+
+    test "does NOT emit runtime_mismatch telemetry for a compatible agent" do
+      ref =
+        :telemetry_test.attach_event_handlers(
+          self(),
+          [[:platform, :roles, :runtime_mismatch]]
+        )
+
+      # Built-in shape — compatible with meetings.summarize.
+      built_in = insert_agent!(%{runtime_type: "built_in"})
+
+      assert {:ok, %ResponsibilityOverride{}} =
+               Roles.set_override("meetings.summarize", built_in.id)
+
+      refute_receive {[:platform, :roles, :runtime_mismatch], ^ref, _, _}, 50
+
+      :telemetry.detach(ref)
+    end
+
+    test "federated conversational WITH responds_to_dispatch marker does NOT soft-fail" do
+      ref =
+        :telemetry_test.attach_event_handlers(
+          self(),
+          [[:platform, :roles, :runtime_mismatch]]
+        )
+
+      wired_dalton =
+        insert_agent!(%{
+          runtime_type: "external",
+          metadata: %{"responds_to_dispatch" => true}
+        })
+
+      assert {:ok, %ResponsibilityOverride{}} =
+               Roles.set_override("meetings.summarize", wired_dalton.id)
+
+      refute_receive {[:platform, :roles, :runtime_mismatch], ^ref, _, _}, 50
+
+      :telemetry.detach(ref)
+    end
+
+    test "unknown responsibility key does NOT emit runtime_mismatch telemetry" do
+      ref =
+        :telemetry_test.attach_event_handlers(
+          self(),
+          [[:platform, :roles, :runtime_mismatch]]
+        )
+
+      dalton = insert_agent!(%{runtime_type: "external"})
+
+      # `brand_review` is not on the dispatch-gated list — no signal.
+      assert {:ok, %ResponsibilityOverride{}} =
+               Roles.set_override("brand_review", dalton.id)
+
+      refute_receive {[:platform, :roles, :runtime_mismatch], ^ref, _, _}, 50
+
+      :telemetry.detach(ref)
     end
   end
 
