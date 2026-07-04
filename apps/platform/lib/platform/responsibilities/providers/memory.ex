@@ -10,10 +10,11 @@ defmodule Platform.Responsibilities.Providers.Memory do
   its `handle_output/3` callback.
 
   Unlike the `meetings` feature (which has exactly one responsibility:
-  `meetings.summarize`), the `memory` feature owns two:
+  `meetings.summarize`), the `memory` feature owns three:
 
     * `memory.daily_summary` → handled by `Handlers.DailySummary`
     * `memory.dreaming` → handled by `Handlers.Dreaming`
+    * `memory.propose_long_term` → handled by `Handlers.ProposeLongTerm`
 
   So this shim dispatches by `responsibility.key` to the right
   per-key handler. Adding a new `memory.*` responsibility means adding
@@ -34,16 +35,16 @@ defmodule Platform.Responsibilities.Providers.Memory do
 
   require Logger
 
-  alias Platform.Responsibilities.Handlers.{DailySummary, Dreaming}
+  alias Platform.Responsibilities.Handlers.{DailySummary, Dreaming, ProposeLongTerm}
   alias Platform.Responsibilities.Responsibility
 
   @impl true
   def register do
     # Aggregate the per-handler register specs so a Registry that
     # walks this module (rather than the individual handlers) still
-    # sees both rows. Both Handlers AND this shim being in the
+    # sees all rows. Both Handlers AND this shim being in the
     # provider list is harmless — `upsert_by_key/1` is idempotent.
-    DailySummary.register() ++ Dreaming.register()
+    DailySummary.register() ++ Dreaming.register() ++ ProposeLongTerm.register()
   end
 
   @impl true
@@ -97,5 +98,6 @@ defmodule Platform.Responsibilities.Providers.Memory do
 
   defp dispatch_module("memory.daily_summary"), do: {:ok, DailySummary}
   defp dispatch_module("memory.dreaming"), do: {:ok, Dreaming}
+  defp dispatch_module("memory.propose_long_term"), do: {:ok, ProposeLongTerm}
   defp dispatch_module(_), do: :error
 end

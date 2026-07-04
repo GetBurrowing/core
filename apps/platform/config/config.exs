@@ -32,8 +32,17 @@ config :platform, Platform.Responsibilities,
   providers: [
     Platform.Responsibilities.Handlers.DailySummary,
     Platform.Responsibilities.Handlers.Dreaming,
+    Platform.Responsibilities.Handlers.ProposeLongTerm,
     Platform.Responsibilities.Handlers.MeetingSummarize,
-    Platform.Responsibilities.Handlers.IntentClassify
+    Platform.Responsibilities.Handlers.IntentClassify,
+    Platform.Responsibilities.Handlers.MeetingActionItems,
+    Platform.Responsibilities.Handlers.MeetingAttendanceFollowup,
+    Platform.Responsibilities.Handlers.DesignCritique,
+    Platform.Responsibilities.Handlers.DesignSpecWriter,
+    Platform.Responsibilities.Handlers.DesignBrandCheck,
+    Platform.Responsibilities.Handlers.TaskTriage,
+    Platform.Responsibilities.Handlers.TaskUnblock,
+    Platform.Responsibilities.Handlers.TaskWeeklyReview
   ]
 
 # M8 stage 2: dual-write shim gate. When `false` (default), the legacy

@@ -16,6 +16,8 @@ defmodule Platform.Responsibilities.Providers.MeetingsTest do
   alias Platform.Orchestration.ExecutionSpace
   alias Platform.Responsibilities.Handlers
   alias Platform.Responsibilities.Handlers.IntentClassify
+  alias Platform.Responsibilities.Handlers.MeetingActionItems
+  alias Platform.Responsibilities.Handlers.MeetingAttendanceFollowup
   alias Platform.Responsibilities.Handlers.MeetingSummarize
   alias Platform.Responsibilities.Providers.Meetings, as: MeetingsProvider
   alias Platform.Responsibilities.Responsibility
@@ -73,20 +75,37 @@ defmodule Platform.Responsibilities.Providers.MeetingsTest do
   end
 
   describe "register/0" do
-    test "fans in every meetings handler's specs (summarize + intent_classify)" do
+    test "fans in every meetings handler's specs" do
       specs = MeetingsProvider.register()
 
-      # Two responsibilities today; the summariser + the intent-classify
-      # placeholder registered in task 019f2451 stage 3.
-      assert length(specs) == 2
+      # Four responsibilities: summariser + intent-classify placeholder
+      # (task 019f2451 stage 3) + action-items + attendance-followup
+      # (task 019f2455 stage 3).
+      assert length(specs) == 4
 
       keys = Enum.map(specs, & &1.key) |> Enum.sort()
-      assert keys == ["meetings.intent_classify", "meetings.summarize"]
+
+      assert keys == [
+               "meetings.action_items",
+               "meetings.attendance_followup",
+               "meetings.intent_classify",
+               "meetings.summarize"
+             ]
 
       # Each concrete spec is passed through verbatim — the shim doesn't
       # rewrite trigger config or output contract.
       assert MeetingSummarize.register() -- specs == []
       assert IntentClassify.register() -- specs == []
+      assert MeetingActionItems.register() -- specs == []
+      assert MeetingAttendanceFollowup.register() -- specs == []
+    end
+
+    test "still exposes meetings.summarize after per-key fan-out refactor (regression)" do
+      # Guard against future fan-out refactors dropping the summariser
+      # inadvertently. The Meeting Scribe MVP hinges on
+      # `meetings.summarize` being present.
+      specs = MeetingsProvider.register()
+      assert Enum.any?(specs, fn s -> s.key == "meetings.summarize" end)
     end
   end
 
@@ -102,6 +121,16 @@ defmodule Platform.Responsibilities.Providers.MeetingsTest do
 
       assert MeetingsProvider.handler_for("meetings.intent_classify") ==
                Handlers.IntentClassify
+    end
+
+    test "routes action_items to MeetingActionItems" do
+      assert MeetingsProvider.handler_for("meetings.action_items") ==
+               Handlers.MeetingActionItems
+    end
+
+    test "routes attendance_followup to MeetingAttendanceFollowup" do
+      assert MeetingsProvider.handler_for("meetings.attendance_followup") ==
+               Handlers.MeetingAttendanceFollowup
     end
 
     test "returns nil for unmapped keys" do

@@ -66,12 +66,23 @@ defmodule Platform.Responsibilities.Providers.Meetings do
   require Logger
 
   alias Platform.Responsibilities.Handlers
-  alias Platform.Responsibilities.Handlers.IntentClassify
-  alias Platform.Responsibilities.Handlers.MeetingSummarize
+
+  alias Platform.Responsibilities.Handlers.{
+    IntentClassify,
+    MeetingActionItems,
+    MeetingAttendanceFollowup,
+    MeetingSummarize
+  }
+
   alias Platform.Responsibilities.Responsibility
 
   @impl true
-  def register, do: MeetingSummarize.register() ++ IntentClassify.register()
+  def register do
+    MeetingSummarize.register() ++
+      IntentClassify.register() ++
+      MeetingActionItems.register() ++
+      MeetingAttendanceFollowup.register()
+  end
 
   @doc """
   Return the concrete handler module for a given responsibility (or key).
@@ -88,6 +99,11 @@ defmodule Platform.Responsibilities.Providers.Meetings do
   def handler_for(%{key: key}), do: handler_for(key)
   def handler_for("meetings.summarize"), do: Handlers.MeetingSummarize
   def handler_for("meetings.intent_classify"), do: Handlers.IntentClassify
+  def handler_for("meetings.action_items"), do: Handlers.MeetingActionItems
+
+  def handler_for("meetings.attendance_followup"),
+    do: Handlers.MeetingAttendanceFollowup
+
   def handler_for(_), do: nil
 
   @impl true

@@ -45,8 +45,17 @@ defmodule Platform.Responsibilities.BuiltIns do
     [
       Handlers.DailySummary,
       Handlers.Dreaming,
+      Handlers.ProposeLongTerm,
       Handlers.MeetingSummarize,
-      Handlers.IntentClassify
+      Handlers.IntentClassify,
+      Handlers.MeetingActionItems,
+      Handlers.MeetingAttendanceFollowup,
+      Handlers.DesignCritique,
+      Handlers.DesignSpecWriter,
+      Handlers.DesignBrandCheck,
+      Handlers.TaskTriage,
+      Handlers.TaskUnblock,
+      Handlers.TaskWeeklyReview
     ]
   end
 end
