@@ -14,6 +14,19 @@ defmodule PlatformWeb.Router do
     plug(:accepts, ["json"])
   end
 
+  # LiveKit webhook pipeline — task 019f3312 stage 2. Runs after the
+  # endpoint's global `Plug.Parsers`, so `conn.assigns[:raw_body]` is
+  # already populated by `CacheBodyReader` by the time this pipeline
+  # fires. The signature plug verifies the HMAC-JWT signature (HS256 +
+  # `sha256` body-hash claim) and halts with 401 on failure when the
+  # `:livekit_webhook_signature_required` flag is on (prod default).
+  # The flag is `false` in `config/test.exs` so existing controller
+  # tests keep exercising handlers without minting a JWT per payload.
+  pipeline :livekit_webhook do
+    plug(:accepts, ["json"])
+    plug(PlatformWeb.Plugs.VerifyLivekitSignature)
+  end
+
   pipeline :mcp do
     plug(:accepts, ["json"])
     plug(PlatformWeb.Plugs.RuntimeBearerAuth)
@@ -179,6 +192,10 @@ defmodule PlatformWeb.Router do
   scope "/api/webhooks", PlatformWeb do
     pipe_through(:api)
     post("/github", GithubWebhookController, :handle)
+  end
+
+  scope "/api/webhooks", PlatformWeb do
+    pipe_through(:livekit_webhook)
     post("/livekit", LivekitWebhookController, :handle)
   end
 

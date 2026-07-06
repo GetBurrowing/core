@@ -69,6 +69,17 @@ config :platform, :responsibility_router_enabled, false
 config :platform, :start_meeting_intent_classifier, true
 config :platform, :meeting_producer_runtime_enabled, false
 
+# LiveKit webhook HMAC-JWT signature enforcement (task 019f3312 stage 2 —
+# phantom-fix v4). When `true` (prod default), every request to
+# `/api/webhooks/livekit` MUST carry a valid `Authorization: <jwt>` header
+# whose HS256 signature verifies under `LIVEKIT_API_SECRET` AND whose
+# `sha256` claim matches the raw body's SHA256; failures return 401.
+# When `false`, verification failures are logged as warnings but the
+# request passes through — rollback safety valve for runtime config.
+# Overridden to `false` in `config/test.exs` so existing controller tests
+# keep exercising handlers without minting a JWT per payload.
+config :platform, :livekit_webhook_signature_required, true
+
 # Configure the endpoint
 config :platform, PlatformWeb.Endpoint,
   url: [host: "localhost"],

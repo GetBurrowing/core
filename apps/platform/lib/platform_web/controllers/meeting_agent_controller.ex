@@ -39,10 +39,12 @@ defmodule PlatformWeb.MeetingAgentController do
   """
   def segments(conn, %{"room_sid" => room_sid, "segments" => raw} = params)
       when is_binary(room_sid) and is_list(raw) do
-    with :ok <- verify_token(conn) do
+    with :ok <- verify_token(conn),
+         :ok <- verify_room(params) do
       space_id = space_id_from_room_name(params["room_name"])
+      room_id = params["room_name"] || room_sid
 
-      case Meetings.ensure_transcript(%{room_id: room_sid, space_id: space_id}) do
+      case Meetings.ensure_transcript(%{room_id: room_id, space_id: space_id}) do
         {:ok, transcript} ->
           results =
             Enum.map(raw, fn seg ->
@@ -75,6 +77,16 @@ defmodule PlatformWeb.MeetingAgentController do
     else
       {:error, :unauthorized} ->
         conn |> put_status(:unauthorized) |> json(%{status: "unauthorized"})
+
+      {:error, :unregistered_room} ->
+        Logger.warning(
+          "[MeetingAgent] Ignoring segments for unregistered room " <>
+            "name=#{inspect(params["room_name"])} sid=#{inspect(room_sid)}"
+        )
+
+        conn
+        |> put_status(:ok)
+        |> json(%{status: "ignored", reason: "unregistered room"})
     end
   end
 
@@ -83,6 +95,22 @@ defmodule PlatformWeb.MeetingAgentController do
   end
 
   # ── Private ──────────────────────────────────────────────────────────────
+
+  # Payload-level guard: reject segments for room names that don't
+  # resolve to a real Suite chat space (task 019f3312 stage 1). The
+  # bearer-token check upstream is necessary but not sufficient — an
+  # attacker with the shared token could still POST fabricated
+  # `space-<random-uuid>` names, so gate on `Meetings.legit_room?/1`
+  # before touching the DB.
+  defp verify_room(params) do
+    room_payload = %{"name" => params["room_name"], "sid" => params["room_sid"]}
+
+    if Meetings.legit_room?(room_payload) do
+      :ok
+    else
+      {:error, :unregistered_room}
+    end
+  end
 
   defp verify_token(conn) do
     expected = System.get_env("MEETING_AGENT_TOKEN")

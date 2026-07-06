@@ -61,6 +61,96 @@ defmodule Platform.MeetingsTest do
     end
   end
 
+  describe "legit_room?/1 (task 019f3312 stage 1)" do
+    # `legit_room?/1` is the tightened successor to `app_registered_room?/1`
+    # for the LiveKit webhook hot path. Regex + chat_spaces existence
+    # check closes the "well-formed `space-<uuid>` name pointing at a
+    # non-existent space" attack observed in the phantom-flood incident
+    # (curl-forged webhook deliveries with UUIDs that no Suite space had
+    # ever registered).
+
+    defp create_chat_space! do
+      {:ok, space} =
+        Chat.create_space(%{
+          name: "Legit Room Test Space",
+          slug: "legit-room-#{System.unique_integer([:positive])}",
+          kind: "channel"
+        })
+
+      space
+    end
+
+    test "returns true for a payload whose name matches a real chat_space" do
+      space = create_chat_space!()
+      name = Meetings.room_name_for_space(space.id)
+
+      assert Meetings.legit_room?(%{"name" => name, "sid" => "RM_anything"})
+    end
+
+    test "returns true even without sid when the name resolves" do
+      space = create_chat_space!()
+      name = Meetings.room_name_for_space(space.id)
+
+      assert Meetings.legit_room?(%{"name" => name})
+    end
+
+    test "returns false for a well-formed space-<uuid> with NO matching chat_space" do
+      # Bug 2 fix: the old regex-only guard accepted these. Attacker
+      # curl'd exactly this shape (well-formed random UUID) at prod and
+      # spawned phantom transcripts en masse.
+      fake_uuid = Ecto.UUID.generate()
+
+      refute Meetings.legit_room?(%{
+               "name" => "space-#{fake_uuid}",
+               "sid" => "RM_forged_by_attacker"
+             })
+    end
+
+    test "returns false for LiveKit auto-generated RM_<random> names" do
+      refute Meetings.legit_room?(%{"name" => "RM_26KcSg8ZBUGd", "sid" => "RM_26KcSg8ZBUGd"})
+    end
+
+    test "returns false for space- with a non-uuid suffix" do
+      refute Meetings.legit_room?(%{"name" => "space-not-a-uuid", "sid" => "RM_x"})
+      refute Meetings.legit_room?(%{"name" => "space-1234", "sid" => "RM_x"})
+    end
+
+    test "returns false for the predecessor meeting-<uuid> naming" do
+      # Even if a chat_space happens to exist with the same UUID, the
+      # `meeting-` prefix is not the app-controlled contract.
+      space = create_chat_space!()
+      refute Meetings.legit_room?(%{"name" => "meeting-#{space.id}", "sid" => "RM_x"})
+    end
+
+    test "returns false when name is missing entirely" do
+      refute Meetings.legit_room?(%{"sid" => "RM_only_sid"})
+    end
+
+    test "returns false when name is nil" do
+      refute Meetings.legit_room?(%{"name" => nil, "sid" => "RM_x"})
+    end
+
+    test "returns false for malformed / non-map payloads" do
+      refute Meetings.legit_room?(nil)
+      refute Meetings.legit_room?("space-abc")
+      refute Meetings.legit_room?(%{})
+      refute Meetings.legit_room?(42)
+    end
+
+    test "reproduces the investigator's curl payload — bogus name, no space" do
+      # Reproduction of the exact attacker payload shape from the
+      # investigator's report — a `space-<random-uuid>` that no Suite
+      # space had ever registered. The regex-only guard accepted this;
+      # the tightened guard rejects it.
+      curl_payload = %{
+        "name" => "space-00000000-0000-0000-0000-000000000000",
+        "sid" => "RM_curl_repro"
+      }
+
+      refute Meetings.legit_room?(curl_payload)
+    end
+  end
+
   describe "delete_transcript/1" do
     defp create_transcript(overrides \\ %{}) do
       attrs =
@@ -466,6 +556,100 @@ defmodule Platform.MeetingsTest do
       msg = find_fallback_notice(space.id, transcript_id)
       assert msg
       assert msg.content =~ "47 seconds"
+    end
+  end
+
+  describe "verify_livekit_jwt/2 (task 019f3312 stage 2)" do
+    alias Platform.LivekitTestHelpers
+
+    setup do
+      prev_livekit = Application.get_env(:platform, :livekit)
+
+      Application.put_env(:platform, :livekit,
+        api_key: "test-livekit-key",
+        api_secret: LivekitTestHelpers.default_secret()
+      )
+
+      on_exit(fn ->
+        case prev_livekit do
+          nil -> Application.delete_env(:platform, :livekit)
+          v -> Application.put_env(:platform, :livekit, v)
+        end
+      end)
+
+      :ok
+    end
+
+    test "returns :ok for a freshly-signed payload" do
+      body = Jason.encode!(%{"event" => "room_started"})
+      {body, jwt} = LivekitTestHelpers.sign_livekit_payload(body)
+
+      assert :ok = Meetings.verify_livekit_jwt(jwt, body)
+    end
+
+    test "returns {:error, :missing_secret} when LIVEKIT_API_SECRET is unset" do
+      Application.put_env(:platform, :livekit, api_key: "x", api_secret: nil)
+
+      body = Jason.encode!(%{"event" => "room_started"})
+      {body, jwt} = LivekitTestHelpers.sign_livekit_payload(body)
+
+      assert {:error, :missing_secret} = Meetings.verify_livekit_jwt(jwt, body)
+    end
+
+    test "returns {:error, :malformed} for nil / empty / non-triple tokens" do
+      assert {:error, :malformed} = Meetings.verify_livekit_jwt(nil, "")
+      assert {:error, :malformed} = Meetings.verify_livekit_jwt("", "")
+      assert {:error, :malformed} = Meetings.verify_livekit_jwt("abc.def", "")
+      assert {:error, :malformed} = Meetings.verify_livekit_jwt("not-a-jwt", "")
+    end
+
+    test "returns {:error, :bad_signature} when HS256 doesn't verify" do
+      body = Jason.encode!(%{"event" => "room_started"})
+      {body, jwt} = LivekitTestHelpers.sign_livekit_payload(body)
+
+      [h, p, s] = String.split(jwt, ".", parts: 3)
+
+      flipped =
+        String.slice(s, 0..-2//1) <>
+          if String.last(s) == "A", do: "B", else: "A"
+
+      tampered = Enum.join([h, p, flipped], ".")
+      assert {:error, :bad_signature} = Meetings.verify_livekit_jwt(tampered, body)
+    end
+
+    test "returns {:error, :body_hash_mismatch} when body doesn't match sha256 claim" do
+      original = Jason.encode!(%{"event" => "room_started", "room" => %{"name" => "a"}})
+      {_original, jwt} = LivekitTestHelpers.sign_livekit_payload(original)
+
+      tampered = Jason.encode!(%{"event" => "room_started", "room" => %{"name" => "b"}})
+      assert {:error, :body_hash_mismatch} = Meetings.verify_livekit_jwt(jwt, tampered)
+    end
+
+    test "returns {:error, :expired} when exp is in the past" do
+      body = Jason.encode!(%{"event" => "room_started"})
+      body_hash = :crypto.hash(:sha256, body) |> Base.encode64()
+
+      past = System.system_time(:second) - 60
+
+      claims = %{
+        "iss" => "test-livekit-key",
+        "nbf" => past - 60,
+        "exp" => past,
+        "sha256" => body_hash
+      }
+
+      jwt = Meetings.encode_jwt(claims, LivekitTestHelpers.default_secret())
+      assert {:error, :expired} = Meetings.verify_livekit_jwt(jwt, body)
+    end
+
+    test "returns {:error, :malformed} when exp is missing" do
+      body = Jason.encode!(%{"event" => "room_started"})
+      body_hash = :crypto.hash(:sha256, body) |> Base.encode64()
+
+      # No `exp` claim.
+      claims = %{"iss" => "test-livekit-key", "sha256" => body_hash}
+      jwt = Meetings.encode_jwt(claims, LivekitTestHelpers.default_secret())
+      assert {:error, :malformed} = Meetings.verify_livekit_jwt(jwt, body)
     end
   end
 end

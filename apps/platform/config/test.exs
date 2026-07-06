@@ -84,6 +84,12 @@ config :platform, :start_meeting_notifier, false
 config :platform, :start_meeting_intent_classifier, false
 config :platform, :meeting_producer_runtime_enabled, false
 
+# LiveKit webhook signature enforcement (task 019f3312 stage 2): tests
+# keep this off so the ~28 existing controller tests don't need to mint
+# a JWT per payload. The signature-verification plug's own test file
+# flips this per-test with `Application.put_env` + `on_exit` restore.
+config :platform, :livekit_webhook_signature_required, false
+
 # SummarizerSweeper (task 019f2566 stage 2): tests start their own
 # per-case instance with shortened intervals so the sweep runs inside
 # an ExUnit case's DataCase sandbox and doesn't share state across

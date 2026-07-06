@@ -5,42 +5,63 @@ defmodule PlatformWeb.LivekitWebhookControllerTest do
 
   @livekit_webhook_path "/api/webhooks/livekit"
 
-  defp unique_room_id, do: Platform.Types.UUIDv7.generate()
+  # Legit LiveKit room name — `space-<uuid>` of a real chat_space.
+  # Task 019f3312 stage 1 tightened `Meetings.legit_room?/1` from
+  # regex-only to regex + chat_spaces existence check, so this fixture
+  # materialises a real `chat_spaces` row and returns the matching
+  # room name. It also doubles as the persisted `room_id`: stage 1
+  # flipped `room_id` precedence to `name || sid`.
+  defp unique_room_id, do: app_room_name()
 
-  # LiveKit room names in Suite are `space-<uuid>` — the app-controlled
-  # value that `Meetings.app_registered_room?/1` gates on. Using
-  # `meeting-<sid>` here (as the original fixture did) would slip past
-  # the guard added in this stage and mask coverage. The `sid` stays
-  # opaque (LiveKit-side identifier) since `room_id` in the DB still
-  # keys off `sid || name`.
-  defp app_room_name, do: "space-#{Ecto.UUID.generate()}"
+  # Opaque LiveKit-side sid. Under the flipped precedence, `sid` is
+  # only used as a fallback for `room_id` when `name` is missing —
+  # legitimate payloads always carry `name`, so the sid mostly shows
+  # up in logs.
+  defp unique_sid, do: "RM_#{System.unique_integer([:positive])}"
 
-  defp room_started_payload(room_id, room_name \\ nil) do
+  # Materialise a real chat_space and return its LiveKit room name.
+  # Single source of truth for the guard-passing fixture.
+  defp app_room_name do
+    {:ok, space} =
+      Platform.Chat.create_space(%{
+        name: "Webhook Space #{System.unique_integer([:positive])}",
+        slug: "webhook-space-#{System.unique_integer([:positive])}",
+        kind: "channel"
+      })
+
+    "space-#{space.id}"
+  end
+
+  # Payload helpers now take `name` first (since it's both the room
+  # identifier AND the guard input) and default `sid` to a synthetic
+  # `RM_<n>`. The old `(room_id, room_name \\ nil)` shape assumed
+  # `sid || name` precedence — flipped now.
+  defp room_started_payload(name, sid \\ nil) do
     %{
       "event" => "room_started",
       "room" => %{
-        "sid" => room_id,
-        "name" => room_name || app_room_name()
+        "sid" => sid || unique_sid(),
+        "name" => name
       }
     }
   end
 
-  defp room_finished_payload(room_id, room_name \\ nil) do
+  defp room_finished_payload(name, sid \\ nil) do
     %{
       "event" => "room_finished",
       "room" => %{
-        "sid" => room_id,
-        "name" => room_name || app_room_name()
+        "sid" => sid || unique_sid(),
+        "name" => name
       }
     }
   end
 
-  defp transcription_payload(room_id, segments, room_name \\ nil) do
+  defp transcription_payload(name, segments, sid \\ nil) do
     %{
       "event" => "transcription",
       "room" => %{
-        "sid" => room_id,
-        "name" => room_name || app_room_name()
+        "sid" => sid || unique_sid(),
+        "name" => name
       },
       "segments" => segments
     }
@@ -132,6 +153,58 @@ defmodule PlatformWeb.LivekitWebhookControllerTest do
       # would-be app room_id.
       assert Meetings.get_transcript_for_room("RM_abc123") == nil
       assert Meetings.get_transcript_for_room(room_id) == nil
+    end
+
+    test "persists room_id off name (not sid) — task 019f3312 precedence flip",
+         %{conn: conn} do
+      # Locks in stage 1's `name || sid` precedence change. Prior to
+      # this stage the persisted `room_id` was `sid || name`, so
+      # transcripts keyed off the ephemeral LiveKit sid instead of the
+      # stable app-controlled name. The flip means `get_transcript_for_room/1`
+      # lookups work against the room name, matching the rest of the
+      # codebase (Meetings.get_room_by_name etc.).
+      name = unique_room_id()
+      sid = "RM_side_channel_#{System.unique_integer([:positive])}"
+
+      conn = post(conn, @livekit_webhook_path, room_started_payload(name, sid))
+
+      assert %{"status" => "created", "transcript_id" => transcript_id} =
+               json_response(conn, 201)
+
+      transcript = Meetings.get_transcript(transcript_id)
+      # room_id is the NAME, not the sid.
+      assert transcript.room_id == name
+      refute transcript.room_id == sid
+    end
+
+    test "rejects a well-formed name whose chat_space does not exist (bug 2 fix)",
+         %{conn: conn} do
+      # The regex-only guard accepted these — the attacker's phantom
+      # flood was hitting the webhook with well-formed `space-<uuid>`
+      # names that satisfied the regex but pointed at UUIDs no Suite
+      # space had ever registered. The tightened `legit_room?/1` guard
+      # requires the space to actually exist.
+      fake_uuid = Ecto.UUID.generate()
+      fake_name = "space-#{fake_uuid}"
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          payload = %{
+            "event" => "room_started",
+            "room" => %{"sid" => "RM_attacker", "name" => fake_name}
+          }
+
+          conn = post(conn, @livekit_webhook_path, payload)
+
+          assert %{"status" => "ignored", "reason" => "unregistered room"} =
+                   json_response(conn, 200)
+        end)
+
+      assert log =~ "Ignoring room_started for unregistered room"
+
+      # No transcript was created — the guard fired before any DB write.
+      assert Meetings.get_transcript_for_room(fake_name) == nil
+      assert Meetings.get_transcript_for_room("RM_attacker") == nil
     end
   end
 
@@ -346,14 +419,16 @@ defmodule PlatformWeb.LivekitWebhookControllerTest do
 
     test "deletes a phantom RM_<random> transcript with zero segments (sweep)",
          %{conn: conn} do
-      room_id = unique_room_id()
-      # Simulate a historical phantom transcript created before stage 2
-      # landed — the `room_started` guard blocks new ones now, but old
-      # rows keyed to unregistered names still exist in prod.
-      {:ok, transcript} = Meetings.create_transcript(%{room_id: room_id})
+      # Simulate a historical phantom transcript created before this
+      # task landed — a row keyed off the RM_<random> name because the
+      # old `sid || name` precedence stored the sid (which was itself
+      # RM_<random> for these phantoms). The tightened guard blocks
+      # new ones; the sweep here cleans up the historical row.
+      phantom_name = "RM_phantom_abc123"
+      {:ok, transcript} = Meetings.create_transcript(%{room_id: phantom_name})
       transcript_id = transcript.id
 
-      payload = room_finished_payload(room_id, "RM_phantom_abc123")
+      payload = room_finished_payload(phantom_name)
       conn = post(conn, @livekit_webhook_path, payload)
 
       assert %{
@@ -372,12 +447,13 @@ defmodule PlatformWeb.LivekitWebhookControllerTest do
       # the summarizer's handle_empty_transcript/1 path marks them
       # complete with an empty summary. Deleting them here would erase
       # real meetings that ended before audio streamed.
-      room_id = unique_room_id()
-      {:ok, transcript} = Meetings.create_transcript(%{room_id: room_id})
+      room_name = unique_room_id()
+      {:ok, transcript} = Meetings.create_transcript(%{room_id: room_name})
       transcript_id = transcript.id
 
-      # Default app_room_name() emits `space-<uuid>` which passes the guard.
-      payload = room_finished_payload(room_id)
+      # `unique_room_id/0` emits `space-<uuid>` backed by a real
+      # chat_space — passes the tightened `legit_room?/1` guard.
+      payload = room_finished_payload(room_name)
       conn = post(conn, @livekit_webhook_path, payload)
 
       assert %{
@@ -395,12 +471,12 @@ defmodule PlatformWeb.LivekitWebhookControllerTest do
     test "finalizes (does not delete) phantom room that somehow accumulated segments",
          %{conn: conn} do
       # Defensive fallback for the "shouldn't happen but might" case:
-      # stage 2's transcription guard drops segments for unregistered
-      # rooms, so this branch is only reachable if something bypassed
-      # the guard OR the sweep runs against a historical row. Finalize
+      # the transcription guard drops segments for unregistered rooms,
+      # so this branch is only reachable if something bypassed the
+      # guard OR the sweep runs against a historical row. Finalize
       # instead of delete — segments are user data.
-      room_id = unique_room_id()
-      {:ok, transcript} = Meetings.create_transcript(%{room_id: room_id})
+      phantom_name = "RM_leaked_xyz789"
+      {:ok, transcript} = Meetings.create_transcript(%{room_id: phantom_name})
 
       {:ok, _} =
         Meetings.append_segment(transcript.id, %{
@@ -410,7 +486,7 @@ defmodule PlatformWeb.LivekitWebhookControllerTest do
           "end_time" => 2000
         })
 
-      payload = room_finished_payload(room_id, "RM_leaked_xyz789")
+      payload = room_finished_payload(phantom_name)
       conn = post(conn, @livekit_webhook_path, payload)
 
       assert %{"status" => "finalized", "segment_count" => 1} = json_response(conn, 200)
@@ -438,10 +514,9 @@ defmodule PlatformWeb.LivekitWebhookControllerTest do
       # transition straight to "complete" via the summarizer's empty
       # path; multi-segment ones sit at "processing" until the async
       # summary lands).
-      room_id = unique_room_id()
-      room_name = app_room_name()
+      room_name = unique_room_id()
 
-      start_conn = post(conn, @livekit_webhook_path, room_started_payload(room_id, room_name))
+      start_conn = post(conn, @livekit_webhook_path, room_started_payload(room_name))
 
       assert %{"status" => "created", "transcript_id" => transcript_id} =
                json_response(start_conn, 201)
@@ -453,7 +528,7 @@ defmodule PlatformWeb.LivekitWebhookControllerTest do
       ]
 
       trans_conn =
-        post(conn, @livekit_webhook_path, transcription_payload(room_id, segments, room_name))
+        post(conn, @livekit_webhook_path, transcription_payload(room_name, segments))
 
       assert %{
                "status" => "appended",
@@ -466,7 +541,7 @@ defmodule PlatformWeb.LivekitWebhookControllerTest do
       assert length(mid.segments) == 3
       assert mid.status == "recording"
 
-      finish_conn = post(conn, @livekit_webhook_path, room_finished_payload(room_id, room_name))
+      finish_conn = post(conn, @livekit_webhook_path, room_finished_payload(room_name))
 
       assert %{
                "status" => "finalized",
@@ -563,22 +638,25 @@ defmodule PlatformWeb.LivekitWebhookControllerTest do
 
     test "replaying room_started is idempotent for an app room (single row)",
          %{conn: conn} do
-      room_id = unique_room_id()
-      room_name = app_room_name()
+      # `room_id` under the flipped `name || sid` precedence is the
+      # room `name`. `unique_room_id/0` returns a legit `space-<uuid>`
+      # backed by a real chat_space, so the guard passes.
+      room_name = unique_room_id()
+      sid = unique_sid()
 
-      first_conn = post(conn, @livekit_webhook_path, room_started_payload(room_id, room_name))
+      first_conn = post(conn, @livekit_webhook_path, room_started_payload(room_name, sid))
 
       assert %{"status" => "created", "transcript_id" => first_id} =
                json_response(first_conn, 201)
 
-      second_conn = post(conn, @livekit_webhook_path, room_started_payload(room_id, room_name))
+      second_conn = post(conn, @livekit_webhook_path, room_started_payload(room_name, sid))
 
       assert %{"status" => "created", "transcript_id" => second_id} =
                json_response(second_conn, 201)
 
       # ensure_transcript returns the existing row on the second call.
       assert first_id == second_id
-      assert count_transcripts_for_room(room_id) == 1
+      assert count_transcripts_for_room(room_name) == 1
     end
 
     test "replaying room_started is idempotent for a phantom room (zero rows)",
@@ -617,12 +695,11 @@ defmodule PlatformWeb.LivekitWebhookControllerTest do
       # — `get_transcript_for_room/1` filters by `status == "recording"`
       # — and returns the "no active transcript" ignore without touching
       # the completed row or crashing.
-      room_id = unique_room_id()
-      room_name = app_room_name()
-      {:ok, transcript} = Meetings.create_transcript(%{room_id: room_id})
+      room_name = unique_room_id()
+      {:ok, transcript} = Meetings.create_transcript(%{room_id: room_name})
       transcript_id = transcript.id
 
-      first_conn = post(conn, @livekit_webhook_path, room_finished_payload(room_id, room_name))
+      first_conn = post(conn, @livekit_webhook_path, room_finished_payload(room_name))
 
       assert %{
                "status" => "finalized",
@@ -633,7 +710,7 @@ defmodule PlatformWeb.LivekitWebhookControllerTest do
       after_first = Meetings.get_transcript(transcript_id)
       assert after_first.status == "complete"
 
-      second_conn = post(conn, @livekit_webhook_path, room_finished_payload(room_id, room_name))
+      second_conn = post(conn, @livekit_webhook_path, room_finished_payload(room_name))
 
       assert %{"status" => "ignored", "reason" => "no active transcript"} =
                json_response(second_conn, 200)

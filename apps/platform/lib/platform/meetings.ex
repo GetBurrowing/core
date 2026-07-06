@@ -496,6 +496,43 @@ defmodule Platform.Meetings do
   def app_registered_room?(_), do: false
 
   @doc """
+  Tightened room guard: name matches `space-<uuid>` AND the derived
+  `space_id` resolves to a real row in `chat_spaces`.
+
+  This is the second-generation guard added for task 019f3312 (phantom
+  meeting flood). The regex-only `app_registered_room?/1` accepts any
+  well-formed `space-<uuid>` name — including UUIDs that were never
+  materialised as a Suite chat space. That leaves the webhook path
+  open to attacker-crafted names of the form `space-<random-uuid>` that
+  match the regex but point at nothing. `legit_room?/1` closes that
+  hole by requiring the space actually exists.
+
+  Accepts the LiveKit webhook room-payload shape
+  `%{"name" => name, "sid" => sid}` (either key may be missing / nil).
+  Returns `true` only when:
+
+    * `name` is a binary matching the canonical `space-<uuid>` regex, AND
+    * the extracted UUID resolves to a `Chat.Space` row via
+      `Platform.Chat.get_space/1`.
+
+  Any deviation — malformed payload, `RM_<random>` name, well-formed
+  name for a non-existent space — returns `false`. Callers should
+  route to the "ignored / unregistered room" branch on `false`.
+  """
+  @spec legit_room?(term()) :: boolean()
+  def legit_room?(%{"name" => name}) when is_binary(name) do
+    with true <- Regex.match?(@app_room_name_regex, name),
+         "space-" <> uuid <- name,
+         %Platform.Chat.Space{} <- Platform.Chat.get_space(uuid) do
+      true
+    else
+      _ -> false
+    end
+  end
+
+  def legit_room?(_), do: false
+
+  @doc """
   Ensure a meeting room exists for a space.
 
   Uses `"space:{space_id}"` as the LiveKit room name. If a room already
@@ -1781,7 +1818,11 @@ defmodule Platform.Meetings do
     end
   end
 
-  defp encode_jwt(claims, secret) do
+  @doc false
+  # Public so test helpers (`Platform.LivekitTestHelpers`) can mint fixture
+  # JWTs without duplicating the HS256 machinery. Not part of the stable
+  # API — treat as test-support only.
+  def encode_jwt(claims, secret) do
     header = %{"alg" => "HS256", "typ" => "JWT"}
 
     header_b64 = header |> Jason.encode!() |> Base.url_encode64(padding: false)
@@ -1797,6 +1838,94 @@ defmodule Platform.Meetings do
   defp sign_jwt(claims, secret) do
     encode_jwt(claims, secret)
   end
+
+  @doc """
+  Verify a LiveKit webhook JWT against the raw request body.
+
+  LiveKit signs webhooks with HS256 under the configured API secret and
+  embeds a `sha256` claim that is the **base64-standard-encoded SHA256
+  hash of the raw request body**. Verification therefore requires three
+  things: signature validity, body-hash match, and unexpired `exp`.
+
+  ## Return values
+
+    * `:ok` — signature valid, hash matches, unexpired.
+    * `{:error, :missing_secret}` — `LIVEKIT_API_SECRET` unset.
+    * `{:error, :malformed}` — token missing, not three segments, or
+      claim payload undecodable.
+    * `{:error, :bad_signature}` — HS256 signature mismatch.
+    * `{:error, :body_hash_mismatch}` — `sha256` claim doesn't match the
+      body's SHA256.
+    * `{:error, :expired}` — `exp` claim in the past.
+
+  Timing-safe compares (`Plug.Crypto.secure_compare/2`) are used for
+  both signature and body-hash checks so remote callers can't distinguish
+  "bad sig" vs "bad hash" by response latency.
+  """
+  @doc since: "fix: LiveKit webhook signature verification (task 019f3312 stage 2)"
+  @spec verify_livekit_jwt(String.t() | nil, binary()) ::
+          :ok
+          | {:error,
+             :missing_secret | :malformed | :bad_signature | :body_hash_mismatch | :expired}
+  def verify_livekit_jwt(token, raw_body) when is_binary(raw_body) do
+    config = livekit_config()
+    secret = config[:api_secret]
+
+    cond do
+      is_nil(secret) or secret == "" ->
+        {:error, :missing_secret}
+
+      not is_binary(token) or token == "" ->
+        {:error, :malformed}
+
+      true ->
+        do_verify_livekit_jwt(token, raw_body, secret)
+    end
+  end
+
+  defp do_verify_livekit_jwt(token, raw_body, secret) do
+    with [header_b64, payload_b64, sig_b64] <- String.split(token, ".", parts: 3),
+         signing_input = "#{header_b64}.#{payload_b64}",
+         {:ok, sig} <- Base.url_decode64(sig_b64, padding: false),
+         expected = :crypto.mac(:hmac, :sha256, secret, signing_input),
+         true <- Plug.Crypto.secure_compare(expected, sig) || :bad_signature,
+         {:ok, payload_json} <- Base.url_decode64(payload_b64, padding: false),
+         {:ok, claims} <- Jason.decode(payload_json) do
+      check_claims(claims, raw_body)
+    else
+      :bad_signature -> {:error, :bad_signature}
+      _ -> {:error, :malformed}
+    end
+  end
+
+  defp check_claims(%{} = claims, raw_body) do
+    with :ok <- check_exp(claims["exp"]),
+         :ok <- check_body_hash(claims["sha256"], raw_body) do
+      :ok
+    end
+  end
+
+  defp check_claims(_, _), do: {:error, :malformed}
+
+  defp check_exp(exp) when is_integer(exp) do
+    if exp < System.system_time(:second), do: {:error, :expired}, else: :ok
+  end
+
+  # LiveKit historically always includes `exp`; be strict — a token
+  # without `exp` is malformed for our purposes.
+  defp check_exp(_), do: {:error, :malformed}
+
+  defp check_body_hash(claim_hash, raw_body) when is_binary(claim_hash) do
+    computed = :crypto.hash(:sha256, raw_body) |> Base.encode64()
+
+    if Plug.Crypto.secure_compare(computed, claim_hash) do
+      :ok
+    else
+      {:error, :body_hash_mismatch}
+    end
+  end
+
+  defp check_body_hash(_, _), do: {:error, :malformed}
 
   defp build_jwt(identity, name, grants) do
     config = livekit_config()

@@ -430,7 +430,14 @@ defmodule Platform.Org.Wiki.ContextT4E2ETest do
       # dispatches that stalled without their agent claiming the work.
       # Column-only + `Meetings.stamp_router_dispatched/1` helper; the
       # Summarizer wire-in and sweeper land in later stages.
-      "20260704140000_add_router_dispatched_at_to_meeting_transcripts.exs"
+      "20260704140000_add_router_dispatched_at_to_meeting_transcripts.exs",
+      # Phantom-fix v4 (task 019f3312) stage 4: one-shot cleanup of the
+      # 2026-07-04 01:15-01:30Z LiveKit phantom transcript flood. Stages
+      # 1 and 2 closed the source (room-guard + HMAC-JWT webhook
+      # signature); this migration removes the stranded orphan rows.
+      # Predicate is narrow: empty-segments + in-flight status + inside
+      # the exploit window.
+      "20260706120000_cleanup_livekit_phantom_flood_2026_07_04.exs"
     ]
 
     defp t4_root, do: Mix.Project.project_file() |> Path.dirname()

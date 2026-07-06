@@ -23,19 +23,26 @@ defmodule PlatformWeb.LivekitWebhookController do
   @doc """
   Handle `room_started` events — auto-create a transcript record.
 
-  Guards on `Meetings.app_registered_room?/1` against `room["name"]` so
-  phantom LiveKit rooms (auto-generated `RM_<random>` names produced
-  without a prior `CreateRoom`) never spawn transcripts. The persisted
-  `room_id` still keys off `sid || name` so `room_finished` lookup
-  symmetry holds for legitimate rooms.
+  Guards on `Meetings.legit_room?/1` against the room payload so phantom
+  LiveKit rooms (auto-generated `RM_<random>` names produced without a
+  prior `CreateRoom`, or well-formed `space-<uuid>` names pointing at
+  non-existent spaces) never spawn transcripts. Task 019f3312 tightened
+  the guard from regex-only to regex + `chat_spaces` existence check
+  because the attacker-observed phantom-flood was hitting the webhook
+  with well-formed `space-<uuid>` names that satisfied the old regex.
+
+  The persisted `room_id` prefers `name` over `sid` (flipped from the
+  previous `sid || name`) so legitimate rooms key transcript rows off
+  the stable app-controlled name; `sid` remains the fallback for
+  malformed / name-less payloads that somehow slip the guard.
   """
   def handle(conn, %{"event" => "room_started", "room" => room} = _params) do
-    room_id = room["sid"] || room["name"]
+    room_id = room["name"] || room["sid"]
     room_name = room["name"]
     space_id = space_id_from_room_name(room_name)
 
     cond do
-      not Meetings.app_registered_room?(room_name) ->
+      not Meetings.legit_room?(room) ->
         # `:warning` (not `:info`) because a phantom-room delivery is a
         # signal worth noticing in prod — either LiveKit materialised
         # a room without our `CreateRoom` (mis-scoped token, webhook
@@ -85,7 +92,7 @@ defmodule PlatformWeb.LivekitWebhookController do
   common case, but it's the safer default than silently dropping data.
   """
   def handle(conn, %{"event" => "room_finished", "room" => room} = params) do
-    room_id = room["sid"] || room["name"]
+    room_id = room["name"] || room["sid"]
     room_name = room["name"]
 
     # Deactivation symmetry for task 019e4b3e v4 stage 1: a real join flips
@@ -121,7 +128,7 @@ defmodule PlatformWeb.LivekitWebhookController do
 
         transcript ->
           cond do
-            not Meetings.app_registered_room?(room_name) and Enum.empty?(transcript.segments) ->
+            not Meetings.legit_room?(room) and Enum.empty?(transcript.segments) ->
               # Phantom room with no accumulated audio: drop the row entirely
               # rather than finalize + dispatch a summary. This is the
               # sweep half of stage 2's source-filter — anything that got
@@ -194,13 +201,13 @@ defmodule PlatformWeb.LivekitWebhookController do
   JSONB segments array.
   """
   def handle(conn, %{"event" => "transcription", "room" => room} = params) do
-    room_id = room["sid"] || room["name"]
+    room_id = room["name"] || room["sid"]
     room_name = room["name"]
     space_id = space_id_from_room_name(room_name)
     raw_segments = params["segments"] || []
 
     cond do
-      not Meetings.app_registered_room?(room_name) ->
+      not Meetings.legit_room?(room) ->
         # See `room_started` handler for the `:warning` (not `:info`)
         # rationale — same phantom-room signal, same operational value.
         Logger.warning(
