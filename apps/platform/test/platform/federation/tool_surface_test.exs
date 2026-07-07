@@ -49,9 +49,9 @@ defmodule Platform.Federation.ToolSurfaceTest do
   end
 
   describe "tool_definitions/0" do
-    test "returns all 80 tools with required components" do
+    test "returns all 81 tools with required components" do
       tools = ToolSurface.tool_definitions()
-      assert length(tools) == 80
+      assert length(tools) == 81
 
       tool_names = Enum.map(tools, & &1.name)
       assert "send_media" in tool_names
@@ -116,6 +116,7 @@ defmodule Platform.Federation.ToolSurfaceTest do
       assert "space_get_messages" in tool_names
       assert "canvas_list" in tool_names
       assert "canvas_get" in tool_names
+      assert "principal_search" in tool_names
       assert "attachment.upload_inline" in tool_names
       assert "attachment.upload_start" in tool_names
       assert "attachment.get_inline" in tool_names
@@ -3366,6 +3367,86 @@ defmodule Platform.Federation.ToolSurfaceTest do
         )
 
       assert error.error =~ "Access denied"
+    end
+
+    # ── principal_search ──────────────────────────────────────────
+
+    test "principal_search resolves an exact email to a user row with correct shape" do
+      user =
+        Repo.insert!(%Platform.Accounts.User{
+          name: "Grace Chen",
+          email: "grace-#{System.unique_integer([:positive])}@example.com",
+          oidc_sub: "sub-grace-#{System.unique_integer([:positive])}"
+        })
+
+      {:ok, %{results: results}} =
+        ToolSurface.execute("principal_search", %{"query" => user.email}, %{})
+
+      assert Enum.any?(results, fn row ->
+               row.type == "user" and row.id == user.id and row.display_name == "Grace Chen" and
+                 row.email == user.email
+             end)
+
+      user_row = Enum.find(results, &(&1.id == user.id))
+      assert Map.has_key?(user_row, :avatar_url)
+    end
+
+    test "principal_search finds an agent by slug substring and returns classification" do
+      slug = "hermione-#{System.unique_integer([:positive])}"
+      _agent = create_agent(%{slug: slug, name: "Hermione"})
+
+      {:ok, %{results: results}} =
+        ToolSurface.execute("principal_search", %{"query" => "hermione"}, %{})
+
+      agent_row = Enum.find(results, &(&1.type == "agent" and &1.slug == slug))
+      assert agent_row != nil
+      assert agent_row.display_name == "Hermione"
+      assert agent_row.kind == "native"
+
+      assert agent_row.classification in [
+               "ext_single_responsibility",
+               "fed_conversational",
+               "loc_built_in"
+             ]
+    end
+
+    test "principal_search returns empty results for queries under 2 characters" do
+      assert {:ok, %{results: []}} =
+               ToolSurface.execute("principal_search", %{"query" => "a"}, %{})
+    end
+
+    test "principal_search rejects an invalid type filter" do
+      {:error, err} =
+        ToolSurface.execute(
+          "principal_search",
+          %{"query" => "anything", "type" => "bogus"},
+          %{}
+        )
+
+      assert err.error =~ "type"
+      assert err.recoverable == true
+    end
+
+    test "principal_search with type=agent excludes user rows" do
+      slug = "geordi-#{System.unique_integer([:positive])}"
+      _agent = create_agent(%{slug: slug, name: "Geordi"})
+
+      _user =
+        Repo.insert!(%Platform.Accounts.User{
+          name: "Geordi La Forge",
+          email: "geordi-#{System.unique_integer([:positive])}@example.com",
+          oidc_sub: "sub-geordi-#{System.unique_integer([:positive])}"
+        })
+
+      {:ok, %{results: results}} =
+        ToolSurface.execute(
+          "principal_search",
+          %{"query" => "geordi", "type" => "agent"},
+          %{}
+        )
+
+      assert Enum.all?(results, &(&1.type == "agent"))
+      assert Enum.any?(results, &(&1.slug == slug))
     end
 
     # ── auth: missing agent_id ─────────────────────────────────────

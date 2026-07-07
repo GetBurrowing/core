@@ -557,7 +557,8 @@ defmodule Platform.Agents.SystemEventSchedulerT6E2ETest do
     # bumped by Files MCP stage 2 (+file_search → 78)
     # bumped by Files MCP stage 3 (+file_add → 79)
     # bumped by Files MCP stage 4 (+file_delete → 80)
-    @t6_baseline_tool_count 80
+    # bumped by principal_search hotfix (+principal_search → 81)
+    @t6_baseline_tool_count 81
 
     defp t6_root, do: Mix.Project.project_file() |> Path.dirname()
 

@@ -908,6 +908,36 @@ defmodule Platform.Federation.ToolSurface do
           "Only works for canvases in spaces the agent is a participant in. Full mode may return large payloads for complex canvases.",
         when_to_use:
           "When you need to inspect a canvas's content before updating it, or to present canvas data to a user"
+      },
+      %{
+        name: "principal_search",
+        description:
+          "Search for principals (users OR agents) by display_name / email / slug / partial-match. Returns up to 20 matches with UUIDs suitable for `sponsor_user_id` (users only), `assignee_id` (users + agents), or other principal-ID fields. Use this before calling tools that require a user or agent UUID when you only have a name / email / slug fragment.",
+        parameters: %{
+          query: %{
+            type: "string",
+            required: true,
+            description:
+              "Search term. Minimum 2 characters. Matches on user email (exact, case-insensitive) or name (substring) and agent slug / display_name (substring)."
+          },
+          type: %{
+            type: "string",
+            required: false,
+            description:
+              "Restrict results to principal kind: \"user\", \"agent\", or \"any\" (default)."
+          },
+          limit: %{
+            type: "integer",
+            required: false,
+            description: "Max results per kind (default 20, capped at 100)."
+          }
+        },
+        returns:
+          "Array of result rows. User rows: `{type: \"user\", id, display_name, email, avatar_url}`. Agent rows: `{type: \"agent\", id, display_name, slug, kind, classification}` where classification is one of `ext_single_responsibility`, `fed_conversational`, `loc_built_in` (see Platform.Agents.Kind).",
+        limitations:
+          "Substring matches on name/slug/display_name; exact case-insensitive match on user email. Queries under 2 characters return an empty list to avoid catalog-wide scans. Results are not permission-filtered — visibility filters land in a follow-up.",
+        when_to_use:
+          "Before calling `task_create`, `task_update`, or any tool that expects a `sponsor_user_id` / `assignee_id` when you only have a partial name, an email, or a slug."
       }
     ]
   end
@@ -2588,6 +2618,114 @@ defmodule Platform.Federation.ToolSurface do
           {:ok, result}
         end
     end
+  end
+
+  def execute("principal_search", args, _context) do
+    query_raw = Map.get(args, "query", "")
+    type_filter = Map.get(args, "type", "any")
+    limit = args |> Map.get("limit", 20) |> normalize_limit()
+
+    query_trimmed = if is_binary(query_raw), do: String.trim(query_raw), else: ""
+
+    cond do
+      not is_binary(query_raw) ->
+        {:error,
+         %{
+           error: "principal_search: `query` must be a string",
+           recoverable: true,
+           suggestion: "Pass a plain-text search fragment as `query`."
+         }}
+
+      type_filter not in ["user", "agent", "any"] ->
+        {:error,
+         %{
+           error: "principal_search: `type` must be one of \"user\", \"agent\", \"any\"",
+           recoverable: true,
+           suggestion: "Omit `type` to search both, or pass one of the allowed values."
+         }}
+
+      String.length(query_trimmed) < 2 ->
+        {:ok, %{results: []}}
+
+      true ->
+        query_norm = String.downcase(query_trimmed)
+        like_pattern = "%#{query_trimmed}%"
+        prefix_pattern = "#{query_trimmed}%"
+
+        users =
+          if type_filter in ["user", "any"] do
+            search_users(query_trimmed, query_norm, like_pattern, prefix_pattern, limit)
+          else
+            []
+          end
+
+        agents =
+          if type_filter in ["agent", "any"] do
+            search_agents(query_trimmed, like_pattern, prefix_pattern, limit)
+          else
+            []
+          end
+
+        {:ok, %{results: users ++ agents}}
+    end
+  end
+
+  defp normalize_limit(n) when is_integer(n) and n > 0, do: min(n, 100)
+  defp normalize_limit(_), do: 20
+
+  defp search_users(query_trimmed, query_norm, like_pattern, prefix_pattern, limit) do
+    from(u in Platform.Accounts.User,
+      where:
+        fragment("LOWER(?)", u.email) == ^query_norm or
+          ilike(u.name, ^like_pattern),
+      order_by: [
+        desc: fragment("LOWER(?) = ?", u.email, ^query_norm),
+        desc: fragment("LOWER(?) = LOWER(?)", u.name, ^query_trimmed),
+        desc: fragment("? ILIKE ?", u.name, ^prefix_pattern),
+        asc: u.name
+      ],
+      limit: ^limit
+    )
+    |> Repo.all()
+    |> Enum.map(&format_principal_user/1)
+  end
+
+  defp search_agents(query_trimmed, like_pattern, prefix_pattern, limit) do
+    from(a in Agent,
+      where:
+        ilike(a.name, ^like_pattern) or
+          ilike(a.slug, ^like_pattern),
+      order_by: [
+        desc: fragment("LOWER(?) = LOWER(?)", a.slug, ^query_trimmed),
+        desc: fragment("LOWER(?) = LOWER(?)", a.name, ^query_trimmed),
+        desc: fragment("? ILIKE ?", a.name, ^prefix_pattern),
+        asc: a.name
+      ],
+      limit: ^limit
+    )
+    |> Repo.all()
+    |> Enum.map(&format_principal_agent/1)
+  end
+
+  defp format_principal_user(%Platform.Accounts.User{} = u) do
+    %{
+      type: "user",
+      id: u.id,
+      display_name: u.name,
+      email: u.email,
+      avatar_url: u.avatar_url
+    }
+  end
+
+  defp format_principal_agent(%Agent{} = a) do
+    %{
+      type: "agent",
+      id: a.id,
+      display_name: a.name,
+      slug: a.slug,
+      kind: a.kind,
+      classification: Atom.to_string(Platform.Agents.Kind.classify(a))
+    }
   end
 
   # ── Task tools ───────────────────────────────────────────────────────────
