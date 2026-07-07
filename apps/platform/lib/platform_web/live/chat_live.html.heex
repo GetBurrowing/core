@@ -705,83 +705,276 @@
 
   <%!-- Mobile channel browser overlay — suppressed when embedded. --%>
   <%= if @mobile_browser_open and !@embedded do %>
-    <div class="fixed inset-0 z-40 flex flex-col bg-base-100 lg:hidden safe-area-x">
+    <div
+      id="mobile-channel-browser"
+      class="fixed inset-0 z-40 flex flex-col bg-base-100 lg:hidden safe-area-x"
+    >
       <header class="flex h-12 flex-shrink-0 items-center justify-between border-b border-base-300 px-4 safe-area-top">
         <p class="text-sm font-semibold">Conversations</p>
-        <button
-          phx-click="close_mobile_browser"
-          class="flex items-center justify-center size-10 rounded-lg text-base-content/60 hover:bg-base-300 hover:text-base-content"
-          aria-label="Close"
-        >
-          <span class="hero-x-mark size-5"></span>
-        </button>
+        <div class="flex items-center gap-1">
+          <%!-- Mobile entry into personal-edit mode (chat sidebar mobile
+               Stage 3). Stage 2's report flagged that `@sidebar_edit` — which
+               gates the lock affordances AND this stage's drag handles — was
+               only reachable via the desktop rail's kebab menu, hidden on
+               phones. This button closes that gap using the SAME
+               `toggle_sidebar_edit` event (one edit mode, two entry points).
+               Admin-edit stays desktop-only chrome. --%>
+          <button
+            type="button"
+            phx-click="toggle_sidebar_edit"
+            class="flex items-center justify-center min-h-11 min-w-11 px-3 rounded-lg text-sm font-medium text-base-content/70 hover:bg-base-300 hover:text-base-content"
+            aria-pressed={to_string(@sidebar_edit)}
+            aria-label={if @sidebar_edit, do: "Done editing layout", else: "Edit layout"}
+          >
+            {if @sidebar_edit, do: "Done", else: "Edit"}
+          </button>
+          <button
+            phx-click="close_mobile_browser"
+            class="flex items-center justify-center size-10 rounded-lg text-base-content/60 hover:bg-base-300 hover:text-base-content"
+            aria-label="Close"
+          >
+            <span class="hero-x-mark size-5"></span>
+          </button>
+        </div>
       </header>
 
-      <nav class="flex-1 overflow-y-auto py-2">
-        <div class="flex items-center justify-between px-4 py-1">
-          <p class="text-xs font-semibold uppercase tracking-widest text-base-content/50">
-            Channels
-          </p>
-          <button
-            phx-click={JS.push("new_channel_open") |> JS.push("close_mobile_browser")}
-            class="flex items-center justify-center size-11 rounded-lg text-base-content/60 hover:bg-base-300 hover:text-primary"
-            aria-label="New channel"
-            title="New channel"
-          >
-            <span class="hero-plus size-5"></span>
-          </button>
-        </div>
-        <.link
-          :for={space <- @channels}
-          navigate={~p"/chat/#{space_nav_target(space)}"}
-          phx-click="close_mobile_browser"
-          class={[
-            "flex items-center gap-3 px-4 py-3 text-sm transition-colors",
-            "hover:bg-base-200",
-            @active_space && @active_space.id == space.id &&
-              "bg-base-200 text-primary font-semibold"
-          ]}
-        >
-          <span class="text-base-content/40 text-lg">#</span>
-          <span class="truncate flex-1">{space.name}</span>
-          <%= if unread_label(Map.get(@unread_counts, space.id, 0)) do %>
-            <span class="ml-1 flex-shrink-0 min-w-[1.125rem] h-[1.125rem] rounded-full bg-primary text-primary-content text-[0.6rem] font-bold flex items-center justify-center px-1 leading-none">
-              {unread_label(Map.get(@unread_counts, space.id, 0))}
-            </span>
-          <% end %>
-        </.link>
+      <%!-- Sectioned mobile channel browser — parity with the desktop rail
+           (chat sidebar mobile Stage 1). Renders the SAME already-computed
+           data desktop consumes — `@channel_sections.pinned` / `.dms` and the
+           resolver-driven `@sidebar_sections` sub-org list — in the same
+           top-to-bottom order: Pinned (locked at top, only when non-empty),
+           Direct Messages (locked directly under Pinned), then the sub-org
+           sections alphabetically. No new server assign or query — the overlay
+           just re-renders the existing assigns with the overlay's touch-sized
+           rows. Sub-org sections carry `data-section-id` + reorderable markers
+           for the later touch-reorder stage; Pinned + DMs are locked
+           (`data-section-reorderable="false"`). We deliberately DON'T set an
+           HTML `id` on the sub-org sections: the desktop rail (present in the
+           same DOM, hidden via `lg:flex`) already owns `id="section-#{id}"`, so
+           a duplicate id here would break LiveView DOM patching. The drawer
+           still closes only via the explicit close control + backdrop tap —
+           no swipe-to-dismiss.
 
-        <div class="flex items-center justify-between px-4 py-1 mt-2">
-          <p class="text-xs font-semibold uppercase tracking-widest text-base-content/50">
-            Direct Messages
-          </p>
-          <button
-            phx-click={JS.push("new_conversation_open") |> JS.push("close_mobile_browser")}
-            class="flex items-center justify-center size-11 rounded-lg text-base-content/60 hover:bg-base-300 hover:text-primary"
-            aria-label="New conversation"
-            title="New conversation"
-          >
-            <span class="hero-plus size-5"></span>
-          </button>
-        </div>
-        <.link
-          :for={space <- @dm_conversations}
-          navigate={~p"/chat/#{space_nav_target(space)}"}
-          phx-click="close_mobile_browser"
-          class={[
-            "flex items-center gap-3 px-4 py-3 text-sm transition-colors",
-            "hover:bg-base-200",
-            @active_space && @active_space.id == space.id &&
-              "bg-base-200 text-primary font-semibold"
-          ]}
+           SectionReorderTouch (Stage 3) owns long-press + drag reorder for
+           the sub-org sections via Pointer Events — the desktop
+           SectionReorder hook is HTML5 DnD and never fires on touch. The id
+           is required for the hook and must differ from the desktop nav's
+           `chat-section-list` (both are in the DOM at once). --%>
+      <nav
+        id="mobile-section-list"
+        phx-hook="SectionReorderTouch"
+        class="flex-1 overflow-y-auto py-2"
+        aria-label="Channel sections"
+      >
+        <%!-- Pinned — locked at the top, rendered only when non-empty. --%>
+        <section
+          :if={@channel_sections.pinned != []}
+          data-section-reorderable="false"
+          aria-label="Pinned"
         >
-          <span class="truncate flex-1">{sidebar_display_name(space, @user_id)}</span>
-          <%= if unread_label(Map.get(@unread_counts, space.id, 0)) do %>
-            <span class="ml-1 flex-shrink-0 min-w-[1.125rem] h-[1.125rem] rounded-full bg-primary text-primary-content text-[0.6rem] font-bold flex items-center justify-center px-1 leading-none">
-              {unread_label(Map.get(@unread_counts, space.id, 0))}
+          <div class="flex items-center px-4 py-1">
+            <p class="text-xs font-semibold uppercase tracking-widest text-base-content/50">
+              Pinned
+            </p>
+            <%!-- Lock affordance (chat sidebar mobile Stage 2, Decision #5).
+                 Touch has no hover state to reveal that Pinned is locked to the
+                 top and can't be reordered, so we surface an explicit
+                 hero-lock-closed icon in edit mode (`@sidebar_edit`, the same
+                 personal-edit mode that gates desktop section reorder). The
+                 drag handle stays omitted — mirroring desktop's
+                 data-section-reorderable="false" branch, which renders no
+                 .channel-section-drag-handle on locked sections. --%>
+            <span
+              :if={@sidebar_edit}
+              class="channel-section-lock hero-lock-closed ml-auto size-3.5 text-base-content/40"
+              aria-hidden="true"
+              title="Pinned stays at the top and can't be reordered"
+            >
             </span>
+          </div>
+          <.link
+            :for={space <- @channel_sections.pinned}
+            navigate={~p"/chat/#{space_nav_target(space)}"}
+            phx-click="close_mobile_browser"
+            class={[
+              "flex items-center gap-3 px-4 py-3 text-sm transition-colors",
+              "hover:bg-base-200",
+              @active_space && @active_space.id == space.id &&
+                "bg-base-200 text-primary font-semibold"
+            ]}
+          >
+            <span class="text-base-content/40 text-lg">#</span>
+            <span class="truncate flex-1">{space.name}</span>
+            <%= if unread_label(Map.get(@unread_counts, space.id, 0)) do %>
+              <span class="ml-1 flex-shrink-0 min-w-[1.125rem] h-[1.125rem] rounded-full bg-primary text-primary-content text-[0.6rem] font-bold flex items-center justify-center px-1 leading-none">
+                {unread_label(Map.get(@unread_counts, space.id, 0))}
+              </span>
+            <% end %>
+          </.link>
+        </section>
+
+        <%!-- Direct Messages — locked directly under Pinned. --%>
+        <section data-section-reorderable="false" aria-label="Direct Messages">
+          <div class="flex items-center justify-between px-4 py-1 mt-2">
+            <div class="flex items-center gap-1.5">
+              <p class="text-xs font-semibold uppercase tracking-widest text-base-content/50">
+                Direct Messages
+              </p>
+              <%!-- Lock affordance (chat sidebar mobile Stage 2, Decision #5) —
+                   Direct Messages is locked directly under Pinned and can't be
+                   reordered; surfaced explicitly for touch (no hover) in edit
+                   mode. Drag handle stays omitted, mirroring desktop's
+                   data-section-reorderable="false" branch. --%>
+              <span
+                :if={@sidebar_edit}
+                class="channel-section-lock hero-lock-closed size-3.5 text-base-content/40"
+                aria-hidden="true"
+                title="Direct Messages is locked and can't be reordered"
+              >
+              </span>
+            </div>
+            <button
+              phx-click={JS.push("new_conversation_open") |> JS.push("close_mobile_browser")}
+              class="flex items-center justify-center size-11 rounded-lg text-base-content/60 hover:bg-base-300 hover:text-primary"
+              aria-label="New conversation"
+              title="New conversation"
+            >
+              <span class="hero-plus size-5"></span>
+            </button>
+          </div>
+          <%= if @channel_sections.dms == [] do %>
+            <p class="px-4 py-2 text-sm text-base-content/50">
+              No conversations yet — direct messages will appear here once you start one.
+            </p>
+          <% else %>
+            <.link
+              :for={space <- @channel_sections.dms}
+              navigate={~p"/chat/#{space_nav_target(space)}"}
+              phx-click="close_mobile_browser"
+              class={[
+                "flex items-center gap-3 px-4 py-3 text-sm transition-colors",
+                "hover:bg-base-200",
+                @active_space && @active_space.id == space.id &&
+                  "bg-base-200 text-primary font-semibold"
+              ]}
+            >
+              <span class="truncate flex-1">{sidebar_display_name(space, @user_id)}</span>
+              <%= if unread_label(Map.get(@unread_counts, space.id, 0)) do %>
+                <span class="ml-1 flex-shrink-0 min-w-[1.125rem] h-[1.125rem] rounded-full bg-primary text-primary-content text-[0.6rem] font-bold flex items-center justify-center px-1 leading-none">
+                  {unread_label(Map.get(@unread_counts, space.id, 0))}
+                </span>
+              <% end %>
+            </.link>
           <% end %>
-        </.link>
+        </section>
+
+        <%!-- Sub-org sections — the resolver output (`@sidebar_sections`, the
+             same list desktop iterates), rendered in the SAME resolver order as
+             desktop (the user's saved drag-order via chat_section_order, then
+             admin default). Deliberately NOT re-sorted alphabetically: a hard
+             alphabetical sort would override the per-user order that Stage 3's
+             touch drag-reorder persists, making that reorder look broken on
+             mobile. Keyed by `data-section-id` for the later touch-reorder stage. --%>
+        <section
+          :for={
+            {%{section: section, channels: section_channels}, section_index} <-
+              Enum.with_index(@sidebar_sections)
+          }
+          data-section-id={section.id}
+          data-section-reorderable="true"
+          aria-label={"#{section.name} channels"}
+        >
+          <div class="flex items-center px-4 py-1 mt-2">
+            <p class="text-xs font-semibold uppercase tracking-widest text-base-content/50">
+              {section.name}
+            </p>
+            <%!-- Up/down move buttons (Stage 4 — WCAG 2.5.7 Dragging
+                 Movements): the REQUIRED single-pointer alternative to the
+                 long-press drag, not an optional nicety. They fire the SAME
+                 `section_reordered {from, to}` event the drag sends — one
+                 server path, two triggers. The event's semantics are "insert
+                 `from` ABOVE `to`" (mirroring the drop indicator), which has
+                 no direct "move below" form — so Down on section A is
+                 expressed as "insert my NEXT sibling above me"
+                 (from=next.id, to=this.id), which is the same swap. Boundary
+                 buttons are disabled, not hidden, mirroring the desktop row
+                 controls: focus can't land on a no-op that reads as broken.
+                 Pinned/DMs render none of this (locked). --%>
+            <span :if={@sidebar_edit} class="channel-section-move-controls">
+              <button
+                type="button"
+                class="channel-section-move-button--touch"
+                phx-click="section_reordered"
+                phx-value-from={section.id}
+                phx-value-to={
+                  section_index > 0 &&
+                    Enum.at(@sidebar_sections, section_index - 1).section.id
+                }
+                disabled={section_index == 0}
+                aria-label={"Move #{section.name} section up"}
+                title="Move section up"
+              >
+                <span class="hero-chevron-up size-4"></span>
+              </button>
+              <button
+                type="button"
+                class="channel-section-move-button--touch"
+                phx-click="section_reordered"
+                phx-value-from={
+                  section_index < length(@sidebar_sections) - 1 &&
+                    Enum.at(@sidebar_sections, section_index + 1).section.id
+                }
+                phx-value-to={section.id}
+                disabled={section_index == length(@sidebar_sections) - 1}
+                aria-label={"Move #{section.name} section down"}
+                title="Move section down"
+              >
+                <span class="hero-chevron-down size-4"></span>
+              </button>
+            </span>
+            <%!-- Touch drag handle (Stage 3) — the ONLY drag origin: a touch
+                 starting outside it scrolls the rail, never drags (Stage 4
+                 checklist #6 verifies this). Edit-gated like the Stage 2 lock
+                 affordances; locked sections render no handle at all.
+                 `tabindex="-1"` because the keyboard/a11y reorder path is the
+                 Stage 4 up/down buttons beside it, not this gesture
+                 affordance. --%>
+            <button
+              :if={@sidebar_edit}
+              type="button"
+              class="channel-section-drag-handle channel-section-drag-handle--touch"
+              aria-label={"Reorder #{section.name} section — touch and hold, then drag"}
+              tabindex="-1"
+            >
+              ☰
+            </button>
+          </div>
+          <%= if section_channels == [] do %>
+            <p class="px-4 py-2 text-sm text-base-content/50">
+              No channels yet — channels in this org appear here.
+            </p>
+          <% else %>
+            <.link
+              :for={space <- section_channels}
+              navigate={~p"/chat/#{space_nav_target(space)}"}
+              phx-click="close_mobile_browser"
+              class={[
+                "flex items-center gap-3 px-4 py-3 text-sm transition-colors",
+                "hover:bg-base-200",
+                @active_space && @active_space.id == space.id &&
+                  "bg-base-200 text-primary font-semibold"
+              ]}
+            >
+              <span class="text-base-content/40 text-lg">#</span>
+              <span class="truncate flex-1">{space.name}</span>
+              <%= if unread_label(Map.get(@unread_counts, space.id, 0)) do %>
+                <span class="ml-1 flex-shrink-0 min-w-[1.125rem] h-[1.125rem] rounded-full bg-primary text-primary-content text-[0.6rem] font-bold flex items-center justify-center px-1 leading-none">
+                  {unread_label(Map.get(@unread_counts, space.id, 0))}
+                </span>
+              <% end %>
+            </.link>
+          <% end %>
+        </section>
 
         <%!-- Empty state per docs/design-system/03-voice.md §5.1 — mobile
              combined view (no channels AND no DMs). Chip event is a JS
@@ -801,6 +994,24 @@
           />
         </.empty_state>
       </nav>
+
+      <%!-- "+ New channel" — pinned overlay chrome, mirroring the desktop
+           rail's foot button. Preserves the new-channel entry point that the
+           old flat "Channels" header used to host; the JS chain closes the
+           overlay as the create flow opens. --%>
+      <%!-- pt-3 + .mobile-drawer-footer-safe (NOT py-3 + .safe-area-bottom):
+           the safe-area utility REPLACES padding-bottom with the device
+           inset, which is 0 on desktop — in a desktop PWA the window's
+           rounded corners then clip the label (Marlowe, 2026-07-05). The
+           footer class adds the inset ON TOP of the normal padding. --%>
+      <button
+        phx-click={JS.push("new_channel_open") |> JS.push("close_mobile_browser")}
+        aria-label="New channel"
+        class="flex-shrink-0 flex items-center gap-2 w-full border-t border-base-300 px-4 pt-3 text-sm text-base-content/70 hover:text-primary hover:bg-base-200 transition-colors mobile-drawer-footer-safe"
+      >
+        <span class="hero-plus size-5"></span>
+        <span>New channel</span>
+      </button>
     </div>
   <% end %>
 
@@ -829,6 +1040,28 @@
             <span :if={@active_space.kind == "channel"} class="text-base-content/50">#</span>
             <span class="truncate font-semibold">
               {space_header_name(@active_space, @space_participants, @user_id)}
+            </span>
+            <%!-- Compact scope-pill on the mobile chat header (chat sidebar
+                 mobile Stage 2, Decision #6). Mirrors the desktop header pill
+                 (the `hidden lg:flex` block just below) but uses the foundation
+                 task's `:compact` size variant for the tight mobile bar. Only
+                 rendered for channels — `space_scope_atom/1` returns nil for
+                 DMs/groups (no org-scope), so the pill is suppressed there. The
+                 `.chat-header-scope-pill-mobile` wrapper enlarges the compact
+                 pill's tap target to >=44x44px (app.css): the shared
+                 `.scope-pill-hit-expand` overlay only clears the 24px WCAG floor
+                 and would be clipped by this row's overflow-hidden. --%>
+            <% mobile_header_scope = PlatformWeb.ChatLive.space_scope_atom(@active_space) %>
+            <span
+              :if={mobile_header_scope}
+              class="chat-header-scope-pill-mobile flex-shrink-0"
+            >
+              <.scope_pill
+                scope={mobile_header_scope}
+                size={:compact}
+                clickable={true}
+                active={@scope_filter == mobile_header_scope}
+              />
             </span>
           </div>
           <%!-- Desktop: static title --%>

@@ -2798,6 +2798,68 @@ body, .font-fabrikam, * {
     cursor: grabbing;
   }
 
+  /* Touch variant of the drag handle — mobile channel-browser overlay only
+     (chat sidebar mobile Stage 3). Touch has no hover, so the handle is
+     always visible while rendered (it's edit-gated in the template instead),
+     and its hit box is >=44x44px (iOS guideline) even though the glyph
+     paints small.
+
+     Suppression rules — each fixes ONE native behavior that otherwise
+     steals the long-press gesture (rationale mirrored in
+     section_reorder_touch.js's header; keep the two in sync):
+       - touch-action: none — on the HANDLE ONLY, so the browser never
+         claims a handle-origin touch for scrolling (we'd get pointercancel
+         mid-hold). On the row/section it would kill scroll-into-drag.
+       - -webkit-touch-callout: none — suppresses the iOS long-press
+         copy/paste callout, which fires at ~the same threshold as our
+         400ms hold and swallows the gesture. */
+  .channel-section-drag-handle--touch {
+    /* ml-0 overrides the base class's ml-auto: in the mobile drawer the
+       handle always renders as the last child of the right-aligned control
+       cluster (after .channel-section-move-controls, which owns ml-auto) —
+       two auto margins would split the free space and float the cluster
+       mid-row. */
+    @apply flex items-center justify-center opacity-100 min-h-11 min-w-11 ml-0;
+    touch-action: none;
+    -webkit-touch-callout: none;
+  }
+
+  /* Active-drag state toggled by SectionReorderTouch on the mobile rail.
+     user-select is suppressed ONLY while a drag is live — statically it
+     would break legitimate text selection in the drawer; without it iOS
+     starts selecting the section label mid-drag. */
+  .section-touch-drag-active {
+    user-select: none;
+    -webkit-user-select: none;
+  }
+
+  /* Up/down section move controls in the mobile drawer (Stage 4 — the
+     WCAG 2.5.7 non-drag alternative to the long-press drag). ml-auto pulls
+     the control cluster (buttons + drag handle after it) to the right edge
+     of the section header. Buttons are full 44px touch targets; disabled
+     (boundary) buttons dim rather than disappear so the control cluster
+     doesn't shift as sections move. */
+  .channel-section-move-controls {
+    @apply ml-auto flex items-center;
+  }
+
+  .channel-section-move-button--touch {
+    @apply flex items-center justify-center min-h-11 min-w-11 rounded-lg text-base-content/60 hover:bg-base-300 hover:text-base-content;
+  }
+
+  .channel-section-move-button--touch:disabled {
+    @apply opacity-30 hover:bg-transparent hover:text-base-content/60;
+  }
+
+  /* Mobile drawer footer ("+ New channel"): normal spacing-3 bottom padding
+     PLUS the device safe-area inset. The shared .safe-area-bottom utility
+     REPLACES padding-bottom with the inset, which is 0 everywhere except
+     notched iOS — on desktop PWA the window's rounded corners then clipped
+     the label (found by Marlowe, 2026-07-05). */
+  .mobile-drawer-footer-safe {
+    padding-bottom: calc(0.75rem + env(safe-area-inset-bottom, 0px));
+  }
+
   /* Drag-in-progress state on the source section (chat plan v2 Stage 3).
      Fades the section while the user drags so the drop target reads as
      the active surface. */
@@ -3205,6 +3267,33 @@ body, .font-fabrikam, * {
     content: "";
     position: absolute;
     inset: -6px;
+  }
+
+  /* Mobile chat-header compact scope-pill (chat sidebar mobile Stage 2,
+     Decision #6). The shared `.scope-pill-hit-expand` overlay above only
+     clears the WCAG 2.5.8 24px floor (~26px on the 14px compact chip) and
+     would additionally be clipped by the header row's `overflow-hidden`
+     (name truncation). In the mobile header we (1) give the wrapper a 44px
+     min box so the flex ancestors reserve the height and nothing clips, and
+     (2) stretch the hit overlay to fill it — yielding a >=44x44px iOS-
+     compliant tap target while the painted chip stays compact. Scoped to
+     this wrapper so dense message-row compact pills keep the correct-for-
+     density 24px overlay. */
+  .chat-header-scope-pill-mobile {
+    @apply inline-flex items-center justify-center;
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  .chat-header-scope-pill-mobile .scope-pill-hit-expand::before {
+    top: 50%;
+    right: auto;
+    bottom: auto;
+    left: 50%;
+    width: 100%;
+    min-width: 44px;
+    height: 44px;
+    transform: translate(-50%, -50%);
   }
 }
 

@@ -175,6 +175,41 @@ defmodule PlatformWeb.ChatLiveScopePillsTest do
     end
   end
 
+  describe "mobile chat-header compact scope-pill (chat sidebar mobile Stage 2)" do
+    test "mobile header renders the compact clickable scope-pill for an active channel",
+         %{conn: conn} do
+      conn = authenticated_conn(conn)
+      create_channel("soylent")
+
+      {:ok, _view, html} = live_at(conn, ~p"/chat/soylent")
+
+      # The mobile header (lg:hidden) carries its OWN wrapper, distinct from the
+      # desktop `.chat-header-scope-pill` so it can size the pill compact and
+      # own the 44px tap-target CSS. Present in the DOM even though CSS hides it
+      # above the lg breakpoint.
+      assert html =~ "chat-header-scope-pill-mobile",
+             "Mobile chat header should render the compact scope-pill wrapper for an active channel"
+
+      # It's the compact + clickable variant — the component adds
+      # `.scope-pill-hit-expand` only for `size={:compact} clickable={true}`,
+      # and it pushes the same `scope_filter` event as the desktop pill.
+      assert html =~ "scope-pill-hit-expand"
+      assert html =~ ~s(phx-value-scope="soylent")
+    end
+
+    test "mobile header pill is suppressed on a DM/group surface (no org-scope)",
+         %{conn: conn} do
+      conn = authenticated_conn(conn)
+      # No channels — `/chat` lands with @active_space == nil, so the whole
+      # header (and thus the mobile pill) is suppressed. `space_scope_atom/1`
+      # also returns nil for DMs/groups, so the pill never renders there.
+      {:ok, _view, html} = live(conn, ~p"/chat")
+
+      refute html =~ "chat-header-scope-pill-mobile",
+             "Mobile chat-header scope-pill should NOT render without an active channel"
+    end
+  end
+
   describe "scope_filter event toggle semantics" do
     test "clicking the same scope twice clears the filter", %{conn: conn} do
       conn = authenticated_conn(conn)

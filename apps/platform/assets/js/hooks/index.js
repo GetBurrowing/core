@@ -36,6 +36,7 @@ import ReactorPopover from "./reactor_popover"
 import ResizableSidebar from "./resizable_sidebar"
 import ScrollToBottom from "./scroll_to_bottom"
 import SectionReorder from "./section_reorder"
+import SectionReorderTouch from "./section_reorder_touch"
 import Sheet from "./sheet"
 import SidebarCollapse from "./sidebar_collapse"
 import TasksStatusFilter from "./tasks_status_filter"
@@ -81,6 +82,7 @@ export default {
   ResizableSidebar,
   ScrollToBottom,
   SectionReorder,
+  SectionReorderTouch,
   Sheet,
   SidebarCollapse,
   TasksStatusFilter,
