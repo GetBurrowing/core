@@ -149,6 +149,28 @@
           </span>
         </button>
 
+        <%!-- Copy guest link (stage 4 of task 019f2483). Host-only: gated
+             on the current viewer's participant row matching the meeting's
+             `host_participant_id`. Clicking opens the guest-invite sheet
+             below; the sheet handles chat-space provisioning + token
+             signing. Hidden on very narrow viewports to keep the top-bar
+             from wrapping — the sheet itself is reachable from the
+             (planned) chat-side invite affordance on mobile. --%>
+        <button
+          :if={
+            @current_participant && PlatformWeb.MeetingLive.host?(@current_participant, @meeting)
+          }
+          type="button"
+          phx-click="open_guest_invite_sheet"
+          aria-label="Copy guest link"
+          title="Copy guest link"
+          data-role="meeting-copy-guest-link"
+          class="btn btn-sm btn-ghost min-h-11 gap-1.5 text-base-content/70 hidden sm:inline-flex"
+        >
+          <span class="hero-link size-4"></span>
+          <span class="hidden md:inline">Copy guest link</span>
+        </button>
+
         <%!-- task 019e420f stage 2: client-side hook keeps the click
              gesture alive across the call into getDisplayMedia(). --%>
         <button
@@ -929,6 +951,195 @@
         />
       </section>
     </footer>
+  </div>
+
+  <%!-- ── Guest-invite bottom-sheet (stage 4 of task 019f2483) ────────────
+       Host-only surface: the trigger button in the top-bar is gated on
+       `host?/2`, but the sheet itself is unconditionally scoped inside
+       the `:show` branch — a non-host with no trigger will never see
+       `:show_guest_invite_sheet` flip to true.
+
+       Two visual states:
+         1. Pre-generation: two form fields (Guest name, Expiry) + a
+            "Generate link" submit.
+         2. Post-generation (`@guest_invite_url` non-nil): a read-only
+            URL with an inline Copy button (CopyToClipboard hook) and a
+            helper line explaining the display_name mode.
+
+       Mirrors the start-meeting sheet's mobile-first geometry: slides
+       up from the bottom on narrow viewports (`items-end`), centered
+       card on `>=sm`. Backdrop click closes the sheet. --%>
+  <div
+    :if={@show_guest_invite_sheet}
+    class="fixed inset-0 z-50 flex items-end sm:items-center justify-center"
+    data-role="guest-invite-sheet"
+    role="dialog"
+    aria-modal="true"
+    aria-labelledby="guest-invite-sheet-title"
+  >
+    <%!-- Backdrop (click to dismiss) --%>
+    <div
+      class="absolute inset-0 bg-black/40"
+      phx-click="close_guest_invite_sheet"
+      aria-hidden="true"
+      data-role="guest-invite-sheet-backdrop"
+    >
+    </div>
+
+    <%!-- Sheet panel --%>
+    <div class="relative w-full max-w-lg mx-auto rounded-t-2xl sm:rounded-2xl bg-base-100 shadow-2xl pb-[env(safe-area-inset-bottom)] max-h-[75vh] overflow-y-auto">
+      <%!-- Header --%>
+      <div class="flex items-center justify-between border-b border-base-300 px-4 py-3">
+        <div class="flex items-center gap-2 min-w-0">
+          <span class="hero-link size-5 flex-shrink-0 text-primary"></span>
+          <h2 id="guest-invite-sheet-title" class="text-base font-semibold">
+            Copy guest link
+          </h2>
+        </div>
+        <button
+          type="button"
+          phx-click="close_guest_invite_sheet"
+          class="btn btn-sm btn-ghost btn-square"
+          aria-label="Close"
+          data-role="guest-invite-sheet-close"
+        >
+          <span class="hero-x-mark size-4"></span>
+        </button>
+      </div>
+
+      <%!-- Form --%>
+      <form
+        id="guest-invite-form"
+        phx-submit="generate_guest_invite"
+        phx-change="guest_invite_form_change"
+        class="flex flex-col gap-3 px-4 py-4"
+      >
+        <%!-- Guest name (optional) --%>
+        <div class="flex flex-col gap-1">
+          <label
+            for="guest-invite-display-name"
+            class="text-xs font-semibold uppercase tracking-wider text-base-content/60"
+          >
+            Guest name <span class="text-base-content/40 normal-case">(optional)</span>
+          </label>
+          <input
+            id="guest-invite-display-name"
+            type="text"
+            name="guest_invite[display_name]"
+            value={@guest_invite_form["display_name"]}
+            autocomplete="off"
+            placeholder="e.g. Juno Fairbanks"
+            class="input input-bordered w-full text-sm"
+            data-role="guest-invite-display-name"
+          />
+        </div>
+
+        <%!-- Expiry (required) --%>
+        <div class="flex flex-col gap-1">
+          <label
+            for="guest-invite-expires-in-hours"
+            class="text-xs font-semibold uppercase tracking-wider text-base-content/60"
+          >
+            Link expires in
+          </label>
+          <select
+            id="guest-invite-expires-in-hours"
+            name="guest_invite[expires_in_hours]"
+            class="select select-bordered w-full text-sm"
+            data-role="guest-invite-expires-in-hours"
+          >
+            <option value="1" selected={@guest_invite_form["expires_in_hours"] == "1"}>
+              1 hour
+            </option>
+            <option value="24" selected={@guest_invite_form["expires_in_hours"] == "24"}>
+              24 hours
+            </option>
+            <option value="72" selected={@guest_invite_form["expires_in_hours"] == "72"}>
+              72 hours
+            </option>
+          </select>
+        </div>
+
+        <%!-- Footer actions (pre-generation) --%>
+        <div :if={is_nil(@guest_invite_url)} class="flex items-center justify-end gap-2 pt-1">
+          <button
+            type="button"
+            phx-click="close_guest_invite_sheet"
+            class="btn btn-ghost btn-sm"
+            data-role="guest-invite-cancel"
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            class="btn btn-primary btn-sm gap-1.5"
+            data-role="guest-invite-submit"
+          >
+            <span class="hero-link size-4"></span>
+            <span>Generate link</span>
+          </button>
+        </div>
+      </form>
+
+      <%!-- Post-generation section: read-only URL + copy button + hint --%>
+      <div
+        :if={@guest_invite_url}
+        class="flex flex-col gap-2 border-t border-base-300 px-4 py-4"
+        data-role="guest-invite-generated"
+      >
+        <label
+          for="guest-invite-url"
+          class="text-xs font-semibold uppercase tracking-wider text-base-content/60"
+        >
+          Guest link
+        </label>
+        <div class="flex items-stretch gap-2">
+          <input
+            id="guest-invite-url"
+            type="text"
+            readonly
+            value={@guest_invite_url}
+            class="input input-bordered w-full text-xs font-mono"
+            data-role="guest-invite-url"
+          />
+          <button
+            id="guest-invite-copy-btn"
+            type="button"
+            phx-hook="CopyToClipboard"
+            phx-click="copy_guest_invite"
+            data-clipboard-text={@guest_invite_url}
+            data-role="guest-invite-copy"
+            class="btn btn-primary btn-sm gap-1.5 flex-shrink-0"
+          >
+            <span class="hero-clipboard size-4"></span>
+            <span>Copy</span>
+          </button>
+        </div>
+        <p class="text-xs text-base-content/60">
+          When they open this, they'll join as guest.
+        </p>
+        <p
+          :if={
+            @guest_invite_form["display_name"] &&
+              String.trim(@guest_invite_form["display_name"]) != ""
+          }
+          class="text-xs text-base-content/50"
+          data-role="guest-invite-display-name-mode"
+        >
+          {String.trim(@guest_invite_form["display_name"])} will land directly.
+        </p>
+        <p
+          :if={
+            is_nil(@guest_invite_form["display_name"]) ||
+              String.trim(@guest_invite_form["display_name"]) == ""
+          }
+          class="text-xs text-base-content/50"
+          data-role="guest-invite-display-name-mode"
+        >
+          They'll enter their name before joining.
+        </p>
+      </div>
+    </div>
   </div>
 <% else %>
   <%!-- `:index` action — grouped meetings list (live / upcoming / ended).

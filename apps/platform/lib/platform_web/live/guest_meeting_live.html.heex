@@ -1,0 +1,143 @@
+<%!--
+  GuestMeetingLive — stripped meeting shell for guest ingress on
+  `meet.example.com`. Three mutually-exclusive states:
+
+    * `:invalid` / `:expired` — apology card, sole exit is
+      example.com (guests usually don't have an account, so no
+      sign-in CTA).
+    * `:name_entry` — token verified but display_name is nil; render a
+      single-input form.
+    * `:in_meeting` — LiveKit token minted; mount MeetingClient and let
+      it join the room via the queued `join-meeting` push_event.
+
+  There is DELIBERATELY no `<.shell_layout />` / sidebar / icon-rail /
+  bottom-nav. The `:guest` layout in `layouts.ex` renders only a
+  `min-h-dvh bg-base-100` wrapper around this template.
+--%>
+<div class="flex min-h-dvh flex-col">
+  <%= cond do %>
+    <% @state == :expired -> %>
+      <div class="mx-auto flex w-full max-w-md flex-1 flex-col items-center justify-center gap-4 px-4">
+        <div class="card w-full bg-base-200 shadow-lg">
+          <div class="card-body items-center text-center">
+            <span class="hero-clock size-10 text-warning" aria-hidden="true"></span>
+            <h1 class="card-title text-lg">This invite has expired</h1>
+            <p class="text-sm text-base-content/70">
+              Guest invite links are only valid for a short window. Please ask the meeting host to send you a fresh link.
+            </p>
+            <div class="card-actions mt-2">
+              <a href="https://example.com" class="btn btn-primary btn-sm">
+                Go to example.com
+              </a>
+            </div>
+          </div>
+        </div>
+      </div>
+    <% @state == :invalid -> %>
+      <div class="mx-auto flex w-full max-w-md flex-1 flex-col items-center justify-center gap-4 px-4">
+        <div class="card w-full bg-base-200 shadow-lg">
+          <div class="card-body items-center text-center">
+            <span class="hero-exclamation-triangle size-10 text-error" aria-hidden="true"></span>
+            <h1 class="card-title text-lg">Invite link is not valid</h1>
+            <p class="text-sm text-base-content/70">
+              We couldn't verify this invite. It may have been mistyped, revoked, or refers to a meeting that no longer exists.
+            </p>
+            <div class="card-actions mt-2">
+              <a href="https://example.com" class="btn btn-primary btn-sm">
+                Go to example.com
+              </a>
+            </div>
+          </div>
+        </div>
+      </div>
+    <% @state == :name_entry -> %>
+      <div class="mx-auto flex w-full max-w-md flex-1 flex-col items-center justify-center gap-4 px-4">
+        <div class="card w-full bg-base-200 shadow-lg">
+          <div class="card-body">
+            <div class="flex items-center gap-2">
+              <span class="hero-video-camera size-6 text-primary" aria-hidden="true"></span>
+              <h1 class="card-title text-lg">Join {@meeting.name}</h1>
+            </div>
+            <p class="text-sm text-base-content/70">
+              Enter the name others in the meeting will see.
+            </p>
+            <form phx-submit="submit_name" class="mt-2 flex flex-col gap-3">
+              <label class="form-control w-full">
+                <span class="label-text mb-1 text-sm">Your name</span>
+                <input
+                  type="text"
+                  name="guest[name]"
+                  value={@name_value}
+                  autofocus
+                  required
+                  maxlength="80"
+                  placeholder="Juno Fairbanks"
+                  class={[
+                    "input input-bordered w-full",
+                    @name_error && "input-error"
+                  ]}
+                />
+                <span :if={@name_error} class="mt-1 text-xs text-error">
+                  {@name_error}
+                </span>
+              </label>
+              <button type="submit" class="btn btn-primary w-full">
+                Join meeting
+              </button>
+            </form>
+          </div>
+        </div>
+      </div>
+    <% @state == :in_meeting -> %>
+      <%!-- Minimal video stage. `MeetingClient` is the same hook the
+           authenticated `/meetings/:slug` surface uses (see
+           meeting_live.html.heex:42-49); it listens for the `join-meeting`
+           push_event this LV queued during mount and drives the LiveKit
+           room against `window.__livekit_room`.
+
+           `data-camera-enabled` / `data-mic-enabled` mirror the auth path
+           so a reconnect adopts the same media intent without needing a
+           fresh LV push. `#meeting-media` is the audio sink `attachTrack`
+           routes remote `<audio>` elements to. --%>
+      <div class="flex h-dvh flex-col bg-base-100 text-base-content">
+        <header class="flex h-12 flex-shrink-0 items-center gap-3 border-b border-base-300 bg-base-200/60 px-3">
+          <div class="flex min-w-0 items-center gap-2">
+            <span class="hero-video-camera size-5 flex-shrink-0 text-primary" aria-hidden="true">
+            </span>
+            <h1 class="truncate text-sm font-semibold">{@meeting.name}</h1>
+          </div>
+          <div class="flex-1"></div>
+          <span class="badge badge-ghost gap-1 text-xs">
+            <span class="hero-user size-3.5" aria-hidden="true"></span> {@display_name} (guest)
+          </span>
+        </header>
+
+        <div
+          id="guest-meeting-client"
+          phx-hook="MeetingClient"
+          class="hidden"
+          data-camera-enabled="true"
+          data-mic-enabled="true"
+          data-guest="true"
+        >
+        </div>
+        <div id="guest-meeting-media" class="hidden" phx-update="ignore"></div>
+
+        <main class="flex flex-1 flex-col items-center justify-center gap-4 px-4 py-8">
+          <div
+            id="guest-meeting-stage"
+            data-role="guest-meeting-stage"
+            data-room-name={@room_name}
+            data-identity={@identity}
+            class="flex w-full max-w-2xl flex-col items-center gap-3 rounded-lg bg-base-200/40 p-8 text-center"
+          >
+            <span class="hero-signal size-8 text-primary" aria-hidden="true"></span>
+            <h2 class="text-lg font-semibold">Connecting to {@meeting.name}</h2>
+            <p class="text-sm text-base-content/70">
+              You've joined as <strong>{@display_name}</strong>. Your audio and video will be published as soon as the room accepts the connection.
+            </p>
+          </div>
+        </main>
+      </div>
+  <% end %>
+</div>

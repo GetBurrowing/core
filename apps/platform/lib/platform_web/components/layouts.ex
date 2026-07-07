@@ -79,6 +79,74 @@ defmodule PlatformWeb.Layouts do
     """
   end
 
+  @doc """
+  Root layout for the guest meeting ingress (task 019f2483 stage 3).
+
+  Purpose-built stripped-down `<html>` document for the `meet.` host
+  scope. Compared with `root.html.heex` this omits the theme-debug
+  script, the PWA manifest hook, the `webmcp-enabled` meta, and the VAPID
+  key — none of which are meaningful to an unauthenticated guest.
+
+  We DO keep:
+
+    * the viewport meta with `viewport-fit=cover` + safe-area handling
+      (guests hit this from mobile share sheets constantly);
+    * the CSRF meta so the name-entry form's `phx-submit` works;
+    * the same `app.css` / `app.js` bundle so hero-icons and LiveView
+      hooks (notably `MeetingClient`) load unchanged.
+
+  There is intentionally no sidebar / icon-rail / bottom-nav / auth
+  affordance in this document — it is a single-purpose ingress page,
+  not the app shell.
+  """
+  def guest_root(assigns) do
+    ~H"""
+    <!DOCTYPE html>
+    <html lang="en">
+      <head>
+        <meta charset="utf-8" />
+        <meta
+          name="viewport"
+          content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover, interactive-widget=resizes-content"
+        />
+        <meta name="csrf-token" content={get_csrf_token()} />
+        <.live_title default="Guest meeting" suffix=" · Suite">
+          {assigns[:page_title]}
+        </.live_title>
+        <link rel="icon" type="image/x-icon" href="/favicon.ico" />
+        <link rel="icon" type="image/png" sizes="32x32" href="/images/favicon-32.png" />
+        <link rel="icon" type="image/png" sizes="16x16" href="/images/favicon-16.png" />
+        <link rel="apple-touch-icon" sizes="180x180" href="/images/apple-touch-icon.png" />
+        <meta name="theme-color" content="#000000" />
+        <link phx-track-static rel="stylesheet" href={~p"/assets/css/app.css"} />
+        <script defer phx-track-static type="text/javascript" src={~p"/assets/js/app.js"}>
+        </script>
+      </head>
+      <body>
+        {@inner_content}
+      </body>
+    </html>
+    """
+  end
+
+  @doc """
+  Application layout for the guest meeting ingress (task 019f2483 stage 3).
+
+  Null-ish outer wrapper — deliberately does NOT render `<.shell_layout>`,
+  `<.icon_rail>`, `<.bottom_rail>`, or any auth-side chrome. Just a
+  full-height `bg-base-100` shell so the LV owns the entire viewport
+  (safe-area handled by the root doc's viewport meta + `min-h-dvh`).
+  """
+  def guest(assigns) do
+    ~H"""
+    <main class="min-h-dvh bg-base-100 text-base-content">
+      {@inner_content}
+    </main>
+
+    <.flash_group flash={assigns[:flash] || %{}} />
+    """
+  end
+
   @doc "Returns a Tailwind color class for the agent status indicator."
   def agent_status_color(:online), do: "bg-success"
   def agent_status_color(:thinking), do: "bg-sky-400"

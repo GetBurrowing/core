@@ -73,12 +73,28 @@ defmodule PlatformWeb.Components.Meetings.ParticipantRail do
               size="sm"
               class="flex-shrink-0"
             />
-            <span
-              class="min-w-0 flex-1 truncate font-medium text-base-content/90"
-              data-role="participant-name"
-            >
-              {p.display_name || "Unknown participant"}
-            </span>
+            <div class="min-w-0 flex-1">
+              <div
+                class="truncate font-medium text-base-content/90"
+                data-role="participant-name"
+              >
+                {p.display_name || "Unknown participant"}
+              </div>
+              <%!-- Stage 4 of task 019f2483: participants joined via a
+                   guest invite carry a `" (guest)"` suffix on their
+                   display_name (see `Platform.Meetings.guest_livekit_token/2`
+                   → `meetings.ex:1269`). Surface that as a small
+                   sub-line so hosts can visually distinguish invited
+                   guests from account-holding humans without reading
+                   the suffix. --%>
+              <div
+                :if={MeetingLive.via_guest_link?(p)}
+                class="truncate text-[11px] text-base-content/50"
+                data-role="participant-via-guest-link"
+              >
+                via guest link
+              </div>
+            </div>
 
             <%!-- Host badge --%>
             <span

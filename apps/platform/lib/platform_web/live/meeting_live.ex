@@ -261,6 +261,15 @@ defmodule PlatformWeb.MeetingLive do
           |> assign(:current_stage_mode, :gallery)
           |> assign(:active_space, meeting.chat_space)
           |> assign(:current_participant, current_participant)
+          # ── Guest-invite sheet (stage 4 of task 019f2483) ─────────────
+          # `:show_guest_invite_sheet` — bottom-sheet visibility flag.
+          # `:guest_invite_form` — mirror of the sheet's fields so
+          #   phx-change re-renders don't wipe user input.
+          # `:guest_invite_url` — nil until the host clicks Generate,
+          #   then holds the signed guest URL for the copy affordance.
+          |> assign(:show_guest_invite_sheet, false)
+          |> assign(:guest_invite_form, blank_guest_invite_form())
+          |> assign(:guest_invite_url, nil)
           |> MeetingHooks.attach(List.wrap(meeting.chat_space_id))
 
         # Auto-join on connected mount unless ?no_autojoin=true is set
@@ -486,6 +495,97 @@ defmodule PlatformWeb.MeetingLive do
   def handle_event("meeting_screen_share_state", _params, socket) do
     # Defensive: a malformed payload is ignored without touching state.
     {:noreply, socket}
+  end
+
+  # ── Guest-invite sheet (stage 4 of task 019f2483) ───────────────────────
+  #
+  # The host clicks "Copy guest link", the sheet slides up, they type a name
+  # (optional) + pick an expiry, and the LV mints:
+  #   1. a dedicated guest chat_space (`Meetings.create_guest_chat_space/2`)
+  #      so guest-authored messages don't leak into the meeting's real
+  #      space; the space id is threaded through the signed token so the
+  #      guest-ingress path can bind writes.
+  #   2. a signed HMAC token (`Platform.Meetings.GuestInvite.sign/4`)
+  #      carrying `{meeting_slug, expires_at, display_name, guest_space_id}`.
+  #   3. a URL of the form
+  #      `https://<meeting_guest_host>/<meeting_slug>/<token>` that maps to
+  #      `GuestMeetingLive` under the `meet.` host scope (see
+  #      `PlatformWeb.Router`).
+  #
+  # Sheet visibility is host-gated in the template on `host?/2`; the events
+  # themselves stay safe if a non-host somehow triggers them (a `Meetings`
+  # write-side check would be the real guard, out of scope here).
+
+  def handle_event("open_guest_invite_sheet", _params, socket) do
+    {:noreply,
+     socket
+     |> assign(:show_guest_invite_sheet, true)
+     |> assign(:guest_invite_url, nil)
+     |> assign(:guest_invite_form, blank_guest_invite_form())}
+  end
+
+  def handle_event("close_guest_invite_sheet", _params, socket) do
+    {:noreply,
+     socket
+     |> assign(:show_guest_invite_sheet, false)
+     |> assign(:guest_invite_url, nil)}
+  end
+
+  def handle_event("guest_invite_form_change", %{"guest_invite" => attrs}, socket) do
+    {:noreply,
+     assign(socket, :guest_invite_form, %{
+       "display_name" => Map.get(attrs, "display_name", ""),
+       "expires_in_hours" => Map.get(attrs, "expires_in_hours", "24")
+     })}
+  end
+
+  def handle_event("generate_guest_invite", %{"guest_invite" => attrs}, socket) do
+    %{meeting: meeting, user_id: user_id} = socket.assigns
+
+    display_name = attrs |> Map.get("display_name", "") |> to_string() |> trim_or_nil()
+    hours = attrs |> Map.get("expires_in_hours", "24") |> parse_expires_hours()
+
+    # Persist the form values back into the assign so the sheet re-renders
+    # with what the host typed (and the newly-generated URL underneath).
+    form_state = %{
+      "display_name" => attrs |> Map.get("display_name", "") |> to_string(),
+      "expires_in_hours" => attrs |> Map.get("expires_in_hours", "24") |> to_string()
+    }
+
+    case Meetings.create_guest_chat_space(meeting, user_id) do
+      {:ok, guest_space} ->
+        expires_at = :os.system_time(:second) + hours * 3600
+
+        token =
+          Platform.Meetings.GuestInvite.sign(
+            meeting.slug,
+            expires_at,
+            display_name,
+            guest_space_id: guest_space.id
+          )
+
+        host = Application.get_env(:platform, :meeting_guest_host, "meet.example.com")
+        url = "https://#{host}/#{meeting.slug}/#{token}"
+
+        {:noreply,
+         socket
+         |> assign(:guest_invite_form, form_state)
+         |> assign(:guest_invite_url, url)}
+
+      {:error, _reason} ->
+        {:noreply,
+         socket
+         |> assign(:guest_invite_form, form_state)
+         |> put_flash(:error, "Could not generate a guest link.")}
+    end
+  end
+
+  def handle_event("copy_guest_invite", _params, socket) do
+    # The visible Copy button is wrapped by the `CopyToClipboard` JS hook
+    # (which reads `data-clipboard-text` and writes to the clipboard on
+    # click), but we also emit a browser event so a top-level toast hook
+    # can confirm the copy. Both paths coexist harmlessly.
+    {:noreply, push_event(socket, "guest_invite_copied", %{})}
   end
 
   # ── Start-meeting FAB + bottom-sheet (`:index` action only) ──────────────
@@ -810,6 +910,27 @@ defmodule PlatformWeb.MeetingLive do
     {name, Map.get(user, :avatar_url)}
   end
 
+  # Guest-shape presence row: no user_id, no agent_id, `display_name` was
+  # populated by the guest-join gate with a trailing " (guest)" suffix
+  # (e.g. "Ada (guest)"). The catch-all below would nil this out — which
+  # leaked "Unknown participant" onto the rail AND starved `via_guest_link?/1`
+  # (line ~1330) of the suffix it needs to render the "via guest link"
+  # sub-line. Requiring the suffix here keeps the "we don't trust stale join
+  # names for orphaned real users" invariant (see the ghost-user test in
+  # meeting_live_test.exs) — orphaned rows never carry the " (guest)" marker.
+  def resolve_identity(
+        %Meetings.Participant{user_id: nil, agent_id: nil, display_name: name} = _p
+      )
+      when is_binary(name) do
+    trimmed = String.trim(name)
+
+    cond do
+      trimmed == "" -> {nil, nil}
+      String.ends_with?(trimmed, " (guest)") -> {trimmed, nil}
+      true -> {nil, nil}
+    end
+  end
+
   # Orphaned presence row: neither user nor agent resolved. Honestly unknown.
   def resolve_identity(%Meetings.Participant{}) do
     {nil, nil}
@@ -953,6 +1074,38 @@ defmodule PlatformWeb.MeetingLive do
   end
 
   defp blank_start_meeting_form(_), do: %{"name" => "", "project_id" => "", "description" => ""}
+
+  # Default values for the guest-invite sheet form (stage 4 of task
+  # 019f2483). 24h expiry is the default because that matches the
+  # `sign_with_default_expiry/2` window; hosts can dial down (1h) or up
+  # (72h) via the select in the sheet.
+  defp blank_guest_invite_form,
+    do: %{"display_name" => "", "expires_in_hours" => "24"}
+
+  # `""` → `nil` (self-entry flow), any non-empty string → trimmed value.
+  # Keeps `GuestInvite.sign/4`'s payload contract clean (display_name is
+  # either a non-empty binary or `nil`, never a whitespace string).
+  defp trim_or_nil(value) when is_binary(value) do
+    case String.trim(value) do
+      "" -> nil
+      trimmed -> trimmed
+    end
+  end
+
+  defp trim_or_nil(_), do: nil
+
+  # Clamp the sheet's expiry select to the three sanctioned windows
+  # (1h/24h/72h). Anything else — including a hand-crafted phx-value —
+  # falls back to 24h so a malicious client can't mint a 10-year token.
+  defp parse_expires_hours(value) when is_binary(value) do
+    case Integer.parse(value) do
+      {hours, ""} when hours in [1, 24, 72] -> hours
+      _ -> 24
+    end
+  end
+
+  defp parse_expires_hours(value) when is_integer(value) and value in [1, 24, 72], do: value
+  defp parse_expires_hours(_), do: 24
 
   @doc "Human label for a meeting status section."
   def meeting_section_label(:live), do: "Live now"
@@ -1174,6 +1327,21 @@ defmodule PlatformWeb.MeetingLive do
   end
 
   def host?(_participant, _meeting), do: false
+
+  @doc """
+  True when this participant joined via a guest invite link.
+
+  `Platform.Meetings.guest_livekit_token/2` mints the LiveKit identity
+  with a `" (guest)"` suffix on the display_name (see `meetings.ex:1269`)
+  so downstream surfaces can distinguish invited guests from
+  account-holding humans without needing a separate flag on the
+  participant row. The rail's sub-line rendering reads this predicate.
+  """
+  @spec via_guest_link?(map()) :: boolean()
+  def via_guest_link?(%{display_name: display_name}) when is_binary(display_name),
+    do: String.ends_with?(display_name, " (guest)")
+
+  def via_guest_link?(_participant), do: false
 
   @doc """
   True when the participant's mic is on. Reads

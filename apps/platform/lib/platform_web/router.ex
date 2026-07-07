@@ -10,6 +10,21 @@ defmodule PlatformWeb.Router do
     plug(:put_secure_browser_headers)
   end
 
+  # Guest meeting ingress pipeline (task 019f2483 stage 3). Mirrors :browser
+  # but installs the stripped `guest_root` layout (no shell chrome, no
+  # sidebar, no sign-in CTA) and — critically — does NOT apply
+  # `:require_auth`. Mounted under the dedicated `meet.` host scope below
+  # so `/:slug/:token` on `meet.example.com` renders the guest
+  # LiveView while the primary hostname remains fully authenticated.
+  pipeline :guest_browser do
+    plug(:accepts, ["html"])
+    plug(:fetch_session)
+    plug(:fetch_live_flash)
+    plug(:put_root_layout, html: {PlatformWeb.Layouts, :guest_root})
+    plug(:protect_from_forgery)
+    plug(:put_secure_browser_headers)
+  end
+
   pipeline :api do
     plug(:accepts, ["json"])
   end
@@ -203,5 +218,20 @@ defmodule PlatformWeb.Router do
     pipe_through(:mcp)
     post("/", MCPController, :handle)
     get("/", MCPController, :stream)
+  end
+
+  # Guest meeting ingress (task 019f2483 stage 3). Bound to the dedicated
+  # `meet.` host prefix — Phoenix matches on `conn.host` starting with
+  # this string, so `meet.example.com` (prod), `meet.localhost`
+  # (dev with `/etc/hosts`), and `meet.<any>.<tld>` all route here while
+  # the primary `app.*` / `localhost` domain does not. Ships without a
+  # `Mix.env()` guard because the guest flow must work in prod, dev, and
+  # test alike (the test harness sets `conn.host` explicitly per case).
+  scope "/", PlatformWeb, host: "meet." do
+    pipe_through(:guest_browser)
+
+    live_session :guest, layout: {PlatformWeb.Layouts, :guest} do
+      live("/:slug/:token", GuestMeetingLive, :join)
+    end
   end
 end

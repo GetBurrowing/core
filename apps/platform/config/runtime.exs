@@ -122,6 +122,24 @@ if config_env() == :prod do
         raise("ATTACHMENT_SIGNING_KEY must be set (ADR 0039 phase 4+5)")
 end
 
+# :meeting_guest_signing_key is used by Platform.Meetings.GuestInvite to
+# sign guest ingress tokens. Dev/test set stable local values; prod must
+# read it from an env var and fail fast if unset.
+if config_env() == :prod do
+  config :platform,
+    meeting_guest_signing_key:
+      System.get_env("MEETING_GUEST_SIGNING_KEY") ||
+        raise("MEETING_GUEST_SIGNING_KEY must be set for guest meeting invites")
+end
+
+# :meeting_guest_host is the public hostname where guest meeting links
+# resolve — used by MeetingLive's Copy-guest-link sheet to build the
+# outbound URL. Defaults to prod; override with MEETING_GUEST_HOST for
+# staging / preview envs. Ingress wiring lives in
+# `docs/runbooks/meet-ellis-traefik.md`.
+config :platform,
+  meeting_guest_host: System.get_env("MEETING_GUEST_HOST") || "meet.example.com"
+
 config :platform, :execution,
   proof_repo_path: proof_repo_path,
   local_run_root: proof_run_root,

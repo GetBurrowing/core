@@ -5,7 +5,7 @@ defmodule Platform.Chat.Space do
   @primary_key {:id, Platform.Types.UUIDv7, autogenerate: true}
   @foreign_key_type :binary_id
 
-  @kinds ~w(channel dm group execution system meeting)
+  @kinds ~w(channel dm group execution system meeting guest_meeting)
 
   schema "chat_spaces" do
     field(:workspace_id, :binary_id)

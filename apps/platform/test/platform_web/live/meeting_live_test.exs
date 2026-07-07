@@ -2939,6 +2939,96 @@ defmodule PlatformWeb.MeetingLiveTest do
       assert {nil, nil} = MeetingLive.resolve_identity(p)
     end
 
+    # ── Guest-shape presence rows (task 019f2483 e2e cases 3 + 4) ──────────
+    #
+    # Guests join via the signed guest-invite URL: the LiveKit webhook upserts
+    # a Meetings.Participant with `user_id: nil AND agent_id: nil AND
+    # display_name: "<name> (guest)"`. The catch-all previously nilled the
+    # name out, which (a) rendered "Unknown participant" on the rail and
+    # (b) starved `via_guest_link?/1` of the " (guest)" suffix it needs to
+    # emit the "via guest link" sub-line. The guest-shape clause must fire
+    # BEFORE the catch-all and preserve the join name.
+    test "resolve_identity/1 preserves guest display_name for guest-shape rows" do
+      p = %MeetingParticipant{
+        user_id: nil,
+        agent_id: nil,
+        user: nil,
+        agent: nil,
+        display_name: "Ada (guest)"
+      }
+
+      assert {"Ada (guest)", nil} = MeetingLive.resolve_identity(p)
+    end
+
+    test "resolve_identity/1 trims whitespace-only guest display_name to nil" do
+      p = %MeetingParticipant{
+        user_id: nil,
+        agent_id: nil,
+        user: nil,
+        agent: nil,
+        display_name: "   "
+      }
+
+      assert {nil, nil} = MeetingLive.resolve_identity(p)
+    end
+
+    test "resolve_identity/1 returns nil for empty-string guest display_name" do
+      p = %MeetingParticipant{
+        user_id: nil,
+        agent_id: nil,
+        user: nil,
+        agent: nil,
+        display_name: ""
+      }
+
+      assert {nil, nil} = MeetingLive.resolve_identity(p)
+    end
+
+    test "resolve_identity/1 does not fire guest clause for user rows with nil display_name" do
+      # A row that has a real user preload but nil display_name must hit
+      # the user clause (which falls back to email), NOT the new guest
+      # clause. Regression guard: pattern-match specificity requires
+      # `user_id: nil` AND `agent_id: nil` to trigger the guest path.
+      p = %MeetingParticipant{
+        user_id: "u_1",
+        agent_id: nil,
+        user: %User{name: nil, email: "grace@example.com", avatar_url: nil},
+        display_name: nil
+      }
+
+      assert {"grace@example.com", nil} = MeetingLive.resolve_identity(p)
+    end
+
+    test "resolve_identity/1 does not fire guest clause for agent rows" do
+      # Agent row with a display_name still resolves via the agent-preload
+      # clause; the guest clause requires `agent_id: nil`.
+      p = %MeetingParticipant{
+        user_id: nil,
+        agent_id: "a_1",
+        user: nil,
+        agent: %Platform.Agents.Agent{name: "Helper Bot"},
+        display_name: "Some Stale Name"
+      }
+
+      assert {"Helper Bot", nil} = MeetingLive.resolve_identity(p)
+    end
+
+    test "via_guest_link?/1 fires on the resolved guest display_name" do
+      # End-to-end assertion: guest-shape row → resolve_identity keeps the
+      # " (guest)" suffix → via_guest_link? returns true → rail sub-line
+      # renders. This is the seam that cases 3 + 4 fail on when broken.
+      p = %MeetingParticipant{
+        user_id: nil,
+        agent_id: nil,
+        user: nil,
+        agent: nil,
+        display_name: "Grace (guest)"
+      }
+
+      {display_name, _avatar} = MeetingLive.resolve_identity(p)
+      assert MeetingLive.via_guest_link?(%{display_name: display_name})
+    end
+
     test "build_meeting_participants/1 returns [] for nil space" do
       assert MeetingLive.build_meeting_participants(nil) == []
     end

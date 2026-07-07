@@ -85,7 +85,9 @@ config :platform, dev_routes: true
 # The upload path falls back to a tmp dir via AttachmentStorage.storage_root/0.
 config :platform,
   skip_attachment_storage_check: true,
-  attachment_signing_key: "dev-attachment-signing-key-do-not-use-in-prod"
+  attachment_signing_key: "dev-attachment-signing-key-do-not-use-in-prod",
+  meeting_guest_signing_key: "dev-meeting-guest-signing-key-do-not-use-in-prod",
+  meeting_guest_host: "meet.localhost:4000"
 
 # Do not include metadata nor timestamps in development logs
 config :logger, :default_formatter, format: "[$level] $message\n"

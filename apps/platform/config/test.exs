@@ -27,7 +27,9 @@ config :platform, :oidc,
 config :platform,
   chat_attachments_root: Path.join(System.tmp_dir!(), "platform_test_chat_uploads"),
   skip_attachment_storage_check: true,
-  attachment_signing_key: "test-attachment-signing-key-0123456789abcdef"
+  attachment_signing_key: "test-attachment-signing-key-0123456789abcdef",
+  meeting_guest_signing_key: "test-meeting-guest-signing-key-0123456789abcdef",
+  meeting_guest_host: "meet.test.local"
 
 # Print only warnings and errors during test
 config :logger, level: :warning

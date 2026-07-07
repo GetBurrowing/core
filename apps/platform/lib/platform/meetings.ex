@@ -398,6 +398,76 @@ defmodule Platform.Meetings do
     end
   end
 
+  # ── Guest ingress (per-invite chat_space) ────────────────────────────────
+  #
+  # See `guest_livekit_token/2` (below) for the mint side. The per-invite
+  # `chat_space` is IDENTITY BOOKKEEPING for the guest, not the LiveKit
+  # routing space: the guest joins the SAME LiveKit room as the host
+  # (`space-<meeting.chat_space_id>`, via `room_name_for_space/1`).
+  # Rationale in ADR-style comment inline; short version: keeping guests
+  # out of the host's chat_space avoids leaking presence/messages across
+  # the audience boundary while still letting the phantom-fix guard
+  # (`legit_room?/1`, which walks `Chat.get_space/1` on the LiveKit
+  # room-derived space_id) admit the host's real chat_space.
+
+  @doc """
+  Create a per-invite guest chat space owned by the host.
+
+  This is the identity-bookkeeping row that stage 4 will embed in the
+  signed guest-invite payload (`guest_space_id`). It is NOT the space
+  used for LiveKit routing — that stays `meeting.chat_space_id`, so the
+  guest joins the host's LiveKit room, not a separate one.
+
+  Attributes:
+    * `name` — "Guest — <meeting.name>" so operators can eyeball the origin.
+    * `slug` — `"guest-<8-char-random>"` (URL-safe base64), unique enough
+      not to collide with the meeting's own `meeting-<uuid>` slugs.
+    * `kind` — `"guest_meeting"` (dedicated kind so a 24h reaper can
+      target it without accidentally sweeping real meeting spaces).
+    * `metadata` — `%{"meeting_id" => ..., "host_user_id" => ...}` for
+      forensics and for the eventual reaper's `meeting_id`-scoped
+      cleanup.
+    * `org_id` — inherited from the meeting's project so cross-tenant
+      slug uniqueness stays scoped correctly. Preloads the project when
+      it's not already loaded on the passed struct.
+
+  Returns `{:ok, %Chat.Space{}}` on success, `{:error, changeset}` on
+  changeset failure. Bubbles anything else raised by
+  `Platform.Chat.create_space/1` unchanged.
+  """
+  @spec create_guest_chat_space(Meeting.t(), binary() | nil) ::
+          {:ok, Platform.Chat.Space.t()} | {:error, Ecto.Changeset.t()}
+  def create_guest_chat_space(%Meeting{} = meeting, host_user_id) do
+    org_id = resolve_meeting_org_id(meeting)
+    slug_suffix = :crypto.strong_rand_bytes(6) |> Base.url_encode64(padding: false)
+
+    attrs =
+      %{
+        name: "Guest — #{meeting.name}",
+        slug: "guest-#{String.downcase(slug_suffix)}",
+        kind: "guest_meeting",
+        metadata: %{
+          "meeting_id" => meeting.id,
+          "host_user_id" => host_user_id
+        }
+      }
+      |> maybe_put_org_id(org_id)
+
+    Chat.create_space(attrs)
+  end
+
+  defp maybe_put_org_id(attrs, nil), do: attrs
+  defp maybe_put_org_id(attrs, org_id) when is_binary(org_id), do: Map.put(attrs, :org_id, org_id)
+
+  defp resolve_meeting_org_id(%Meeting{project_id: nil}), do: nil
+
+  defp resolve_meeting_org_id(%Meeting{project_id: project_id}) when is_binary(project_id) do
+    case Repo.get(Platform.Tasks.Project, project_id) do
+      %Platform.Tasks.Project{org_id: org_id} -> org_id
+      _ -> nil
+    end
+  end
+
   # ── Meeting helpers (private) ────────────────────────────────────────────
 
   defp normalize_attrs(attrs) do
@@ -690,15 +760,25 @@ defmodule Platform.Meetings do
   Parse a LiveKit participant identity string into a typed FK tuple.
 
   Suite mints identities as `"user:<uuid>"` (human joiners, see
-  `MeetingHooks.do_join/1`) and `"agent:<uuid>"` (agent runtime). Returns
-  `{:user, uuid}` / `{:agent, uuid}` for a well-formed identity, or
+  `MeetingHooks.do_join/1`), `"agent:<uuid>"` (agent runtime), and
+  `"guest:<random-uuid>"` (guest ingress via `meet.example.com`
+  — see `guest_livekit_token/2`). Returns `{:user, uuid}` /
+  `{:agent, uuid}` / `{:guest, uuid}` for a well-formed identity, or
   `:unknown` for anything else (no prefix, bad UUID, nil) — mirroring the
   defensive validation style of `space_id_from_room_name/1` in the webhook
   controller.
+
+  Guest identities carry a randomly-minted UUID (not a Suite user or
+  agent FK) — the `{:guest, _}` tuple downstream yields a nil-FK
+  participant row that dedupes by display_name, so the guest surfaces in
+  the participant rail with the name from the JWT `name` claim without
+  attempting to resolve a bogus foreign key.
   """
-  @spec parse_identity(String.t() | nil) :: {:user, binary()} | {:agent, binary()} | :unknown
+  @spec parse_identity(String.t() | nil) ::
+          {:user, binary()} | {:agent, binary()} | {:guest, binary()} | :unknown
   def parse_identity("user:" <> uuid), do: cast_identity(:user, uuid)
   def parse_identity("agent:" <> uuid), do: cast_identity(:agent, uuid)
+  def parse_identity("guest:" <> uuid), do: cast_identity(:guest, uuid)
   def parse_identity(_), do: :unknown
 
   defp cast_identity(kind, uuid) do
@@ -812,9 +892,12 @@ defmodule Platform.Meetings do
   def leave_for_user(_space_id, _user_id), do: :ok
 
   # FK attrs map for a parsed identity — drives both insert attrs and the
-  # match-key lookup.
+  # match-key lookup. Guest identities carry a randomly-minted UUID (not a
+  # Suite FK) so the map is empty — the resulting participant row dedupes
+  # by display_name, matching the phone/SIP `:unknown` path.
   defp identity_fk({:user, uuid}), do: %{user_id: uuid}
   defp identity_fk({:agent, uuid}), do: %{agent_id: uuid}
+  defp identity_fk({:guest, _uuid}), do: %{}
   defp identity_fk(:unknown), do: %{}
 
   defp display_name_from_identity(_), do: nil
@@ -1083,6 +1166,124 @@ defmodule Platform.Meetings do
       }
 
       {:ok, build_jwt(identity, name, grants)}
+    end
+  end
+
+  # ── Guest LiveKit token ──────────────────────────────────────────────────
+
+  # Guest tokens are short-TTL (30 min) — shorter than user tokens
+  # (6h) because a guest invite is a single-use "click and join" ticket.
+  # Rowan's note about the phantom-fix rotation of LIVEKIT_API_KEY /
+  # LIVEKIT_API_SECRET applies here: tokens are minted ON-DEMAND at
+  # click time (GuestMeetingLive, stage 3), never pre-generated at
+  # invite-generation time, so an API key rotation cannot invalidate an
+  # in-hand invite URL.
+  @guest_token_ttl_seconds 30 * 60
+
+  @doc """
+  Mint a LiveKit access token for a guest joining `meeting`'s room.
+
+  The guest joins the SAME LiveKit room as the host — the room name is
+  derived from `meeting.chat_space_id` via `room_name_for_space/1` so
+  the phantom-fix guard (`legit_room?/1`, which validates
+  `space-<uuid>` against `Chat.get_space/1`) admits the guest webhook
+  path just like the host's.
+
+  Token claims:
+
+    * `iss` — the LiveKit API key
+    * `sub` / `identity` — `"guest:<random-uuid>"` (random per mint;
+      never a Suite user or agent FK)
+    * `name` — `"<display_name> (guest)"` — the ` (guest)` suffix is an
+      impersonation-guard mitigation that surfaces to every other
+      participant's rail so an operator can eyeball guest vs member
+      instantly.
+    * `exp` — mint time + 30 minutes (short-TTL join ticket).
+    * `video` — full participant grants (`canPublish`, `canSubscribe`,
+      `canPublishData`) so the guest experience matches a regular
+      joiner.
+
+  The `roomConfig.agents` dispatch (via `maybe_put_room_config/2`) is
+  preserved so a guest-triggered room-create still dispatches the
+  `meeting-transcriber` — no-op on already-created rooms per the
+  existing comment in that helper.
+
+  Returns:
+
+    * `{:ok, %{token: token, identity: identity, room_name: room_name,
+      livekit_url: url}}` — every field the LiveView's `MeetingClient`
+      hook context needs, in one hop.
+    * `{:error, :livekit_not_configured}` — matches
+      `generate_token/2`'s missing-config surface.
+    * `{:error, :missing_display_name}` — the caller passed empty/nil
+      instead of a non-empty binary; the token grants surface a
+      display name to every other participant, so a nil name is a
+      programmer error, not a runtime one.
+  """
+  @spec guest_livekit_token(Meeting.t(), String.t()) ::
+          {:ok,
+           %{
+             token: String.t(),
+             identity: String.t(),
+             room_name: String.t(),
+             livekit_url: String.t() | nil
+           }}
+          | {:error, :livekit_not_configured | :missing_display_name}
+  def guest_livekit_token(%Meeting{chat_space_id: chat_space_id} = _meeting, display_name)
+      when is_binary(chat_space_id) and is_binary(display_name) do
+    trimmed = String.trim(display_name)
+
+    cond do
+      trimmed == "" ->
+        {:error, :missing_display_name}
+
+      true ->
+        do_guest_livekit_token(chat_space_id, trimmed)
+    end
+  end
+
+  def guest_livekit_token(%Meeting{}, _display_name), do: {:error, :missing_display_name}
+
+  defp do_guest_livekit_token(chat_space_id, display_name) do
+    config = livekit_config()
+    api_key = config[:api_key]
+    api_secret = config[:api_secret]
+
+    if is_nil(api_key) or api_key == "" or is_nil(api_secret) or api_secret == "" do
+      {:error, :livekit_not_configured}
+    else
+      identity =
+        "guest:" <>
+          (:crypto.strong_rand_bytes(16) |> Base.url_encode64(padding: false))
+
+      room_name = room_name_for_space(chat_space_id)
+      now = System.system_time(:second)
+
+      claims =
+        %{
+          "iss" => api_key,
+          "sub" => identity,
+          "nbf" => now,
+          "exp" => now + @guest_token_ttl_seconds,
+          "jti" => Ecto.UUID.generate(),
+          "name" => "#{display_name} (guest)",
+          "video" => %{
+            "room" => room_name,
+            "roomJoin" => true,
+            "canPublish" => true,
+            "canSubscribe" => true,
+            "canPublishData" => true
+          }
+        }
+        |> maybe_put_room_config(room_name)
+
+      {:ok,
+       %{
+         token: encode_jwt(claims, api_secret),
+         identity: identity,
+         room_name: room_name,
+         livekit_url: config[:url]
+       }}
     end
   end
 
