@@ -4162,6 +4162,51 @@ defmodule PlatformWeb.TasksLiveTest do
       assert Tasks.get_task_record(task.id).deploy_target == "exp"
     end
 
+    # Regression: deploy_targets in the DB is stored as a list of MAPS
+    # (%{"name" => "...", "type" => "docker_compose", "config" => %{...}}),
+    # NOT a list of bare strings. The dropdown was disabled with
+    # "(no targets configured)" because the extractor filtered maps out.
+    # See tasks_live.ex:project_deploy_targets/1.
+    test "deploy_target select enables with real map-shaped deploy_targets", %{conn: conn} do
+      project = create_project()
+
+      {:ok, project} =
+        Tasks.update_project(project, %{
+          deploy_config: %{
+            "deploy_targets" => [
+              %{"name" => "production", "type" => "docker_compose", "config" => %{}},
+              %{"name" => "exp", "type" => "docker_compose", "config" => %{}}
+            ]
+          }
+        })
+
+      task = create_task(project, %{title: "Map Shape Task"})
+
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
+
+      html = render_click(view, "toggle_edit_mode")
+
+      # Names are extracted from the maps and rendered as <option> values.
+      assert html =~ ~s|data-role="deploy-target-select"|
+      assert html =~ ~s|value="production"|
+      assert html =~ ~s|value="exp"|
+
+      # The <select> is NOT disabled — this is the load-bearing bit that
+      # blocked users from setting deploy_target on any task in prod.
+      refute html =~ ~s|data-role="deploy-target-select"\n              disabled|
+      refute html =~ "(no targets configured)"
+
+      # Setting the value still persists.
+      render_hook(view, "update_task_field", %{
+        "field" => "deploy_target",
+        "value" => "production",
+        "task-id" => task.id
+      })
+
+      assert Tasks.get_task_record(task.id).deploy_target == "production"
+    end
+
     test "non-whitelisted field name flashes an error and does not persist", %{conn: conn} do
       project = create_project()
       task = create_task(project, %{title: "Locked Down", priority: "low"})

@@ -3040,11 +3040,24 @@ defmodule PlatformWeb.TasksLive do
   end
 
   # Deploy targets configured on a project (`project.deploy_config["deploy_targets"]`).
-  # Always returns a list of strings; falls back to `[]` when unconfigured so
-  # the dropdown gracefully empties out instead of crashing.
+  # Always returns a list of target-name strings; falls back to `[]` when
+  # unconfigured so the dropdown gracefully empties out instead of crashing.
+  #
+  # `deploy_targets` in the DB is a list of MAPS shaped like
+  # `%{"name" => "production", "type" => "docker_compose", "config" => %{...}}`
+  # (see Project.deploy_config validation + DeployResolver.get_targets/1).
+  # Extract the "name" field for the UI dropdown; also accept bare strings for
+  # forward-compat with any future shape change.
   defp project_deploy_targets(%{deploy_config: %{"deploy_targets" => targets}})
-       when is_list(targets),
-       do: Enum.filter(targets, &is_binary/1)
+       when is_list(targets) do
+    targets
+    |> Enum.map(fn
+      %{"name" => n} when is_binary(n) -> n
+      n when is_binary(n) -> n
+      _ -> nil
+    end)
+    |> Enum.filter(& &1)
+  end
 
   defp project_deploy_targets(_), do: []
 
