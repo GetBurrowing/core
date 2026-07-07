@@ -347,4 +347,320 @@ defmodule Platform.Meetings.IntentQueueTest do
       assert [%{chunk_id: "fresh-chunk"}] = remaining
     end
   end
+
+  # ── Dispatcher-facing API (task 019f2452 stage 1) ──────────────────────────
+
+  describe "enqueue/3 default retry fields" do
+    test "stamps :status => :pending and :attempts => 0 by default" do
+      assert {:ok, :inserted} =
+               IntentQueue.enqueue("intentq-room-a", "d1", sample_item())
+
+      [item] = IntentQueue.list_for_room("intentq-room-a")
+      assert item.status == :pending
+      assert item.attempts == 0
+    end
+
+    test "preserves caller-provided :status / :attempts overrides" do
+      assert {:ok, :inserted} =
+               IntentQueue.enqueue(
+                 "intentq-room-a",
+                 "d1",
+                 sample_item(%{status: :dispatching, attempts: 2})
+               )
+
+      [item] = IntentQueue.list_for_room("intentq-room-a")
+      assert item.status == :dispatching
+      assert item.attempts == 2
+    end
+  end
+
+  describe "enqueue/3 intent_enqueued broadcast" do
+    test "publishes {:intent_enqueued, %{room_id, dedupe_key}} on the canonical topic" do
+      assert :ok = MeetingsPubSub.subscribe_intent_enqueued()
+
+      assert {:ok, :inserted} =
+               IntentQueue.enqueue("intentq-room-a", "dedupe-broadcast", sample_item())
+
+      assert_receive {:intent_enqueued,
+                      %{room_id: "intentq-room-a", dedupe_key: "dedupe-broadcast"}},
+                     500
+
+      MeetingsPubSub.unsubscribe_intent_enqueued()
+    end
+
+    test "duplicate enqueue does NOT re-broadcast" do
+      assert :ok = MeetingsPubSub.subscribe_intent_enqueued()
+
+      assert {:ok, :inserted} =
+               IntentQueue.enqueue("intentq-room-a", "dedupe-once", sample_item())
+
+      assert_receive {:intent_enqueued, %{dedupe_key: "dedupe-once"}}, 500
+
+      # Second enqueue with same key is a dedupe hit — the dispatcher
+      # already has (or already dispatched) the target row, so a
+      # re-notify would just spam it.
+      assert {:ok, :duplicate} =
+               IntentQueue.enqueue(
+                 "intentq-room-a",
+                 "dedupe-once",
+                 sample_item(%{chunk_id: "chunk-2"})
+               )
+
+      refute_receive {:intent_enqueued, _}, 100
+
+      MeetingsPubSub.unsubscribe_intent_enqueued()
+    end
+  end
+
+  describe "claim_pending/1" do
+    test "returns pending rows and transitions them to :dispatching" do
+      IntentQueue.enqueue("intentq-room-a", "d1", sample_item(%{chunk_id: "c1"}))
+      IntentQueue.enqueue("intentq-room-a", "d2", sample_item(%{chunk_id: "c2"}))
+
+      claims = IntentQueue.claim_pending(10)
+      assert length(claims) == 2
+
+      chunk_ids =
+        claims
+        |> Enum.map(fn {_, _, item} -> item.chunk_id end)
+        |> Enum.sort()
+
+      assert chunk_ids == ["c1", "c2"]
+
+      # Post-claim state: rows still exist, status is :dispatching,
+      # and claimed_at is stamped.
+      remaining = IntentQueue.list_for_room("intentq-room-a")
+      assert length(remaining) == 2
+      assert Enum.all?(remaining, &(&1.status == :dispatching))
+      assert Enum.all?(remaining, &is_integer(&1.claimed_at_monotonic))
+    end
+
+    test "does NOT return already-claimed rows on subsequent calls" do
+      IntentQueue.enqueue("intentq-room-a", "d1", sample_item())
+      IntentQueue.enqueue("intentq-room-a", "d2", sample_item())
+
+      first = IntentQueue.claim_pending(10)
+      assert length(first) == 2
+
+      second = IntentQueue.claim_pending(10)
+      assert second == []
+    end
+
+    test "respects the limit argument" do
+      for i <- 1..5 do
+        IntentQueue.enqueue("intentq-room-a", "d#{i}", sample_item(%{chunk_id: "c#{i}"}))
+      end
+
+      first_batch = IntentQueue.claim_pending(3)
+      assert length(first_batch) == 3
+
+      second_batch = IntentQueue.claim_pending(3)
+      assert length(second_batch) == 2
+    end
+
+    test "returns [] when there are no pending rows" do
+      assert IntentQueue.claim_pending(10) == []
+    end
+
+    test "scans across all rooms" do
+      IntentQueue.enqueue("intentq-room-a", "d1", sample_item(%{chunk_id: "a1"}))
+      IntentQueue.enqueue("intentq-room-b", "d1", sample_item(%{chunk_id: "b1"}))
+
+      claims = IntentQueue.claim_pending(10)
+      rooms = claims |> Enum.map(fn {r, _, _} -> r end) |> Enum.sort()
+      assert rooms == ["intentq-room-a", "intentq-room-b"]
+    end
+
+    test "treats a row missing :status as :pending (legacy backward compat)" do
+      # Simulate a row inserted before stage 1 shipped: no :status,
+      # no :attempts. Bypass enqueue/3 (which stamps defaults) and
+      # write directly to the ETS table so we can prove the read
+      # path handles the missing key.
+      :ets.insert(
+        :meeting_intent_queue,
+        {{"intentq-room-a", "legacy"},
+         %{
+           intent: :create_task,
+           target_role: :engineering,
+           confidence: 0.9,
+           chunk_id: "legacy-chunk",
+           inserted_at_monotonic: System.monotonic_time(:millisecond),
+           meeting_id: "meeting-legacy"
+         }}
+      )
+
+      claims = IntentQueue.claim_pending(10)
+
+      assert [{"intentq-room-a", "legacy", %{chunk_id: "legacy-chunk", status: :dispatching}}] =
+               claims
+    end
+
+    test "concurrent claims — three-item queue, five racing callers, exactly three succeed" do
+      for i <- 1..3 do
+        IntentQueue.enqueue("intentq-room-a", "d#{i}", sample_item(%{chunk_id: "c#{i}"}))
+      end
+
+      # Five racing tasks each try to claim two items. Because
+      # claim_pending is serialised through GenServer.call/2, exactly
+      # three rows total will be handed out across all tasks.
+      results =
+        1..5
+        |> Enum.map(fn _ ->
+          Task.async(fn -> IntentQueue.claim_pending(2) end)
+        end)
+        |> Enum.map(&Task.await/1)
+
+      claimed_keys =
+        results
+        |> List.flatten()
+        |> Enum.map(fn {_, dk, _} -> dk end)
+        |> Enum.sort()
+
+      assert claimed_keys == ["d1", "d2", "d3"]
+    end
+  end
+
+  describe "mark_dispatched/2" do
+    test "removes the row from the queue" do
+      IntentQueue.enqueue("intentq-room-a", "d1", sample_item())
+      [{room_id, dedupe_key, _}] = IntentQueue.claim_pending(10)
+
+      assert :ok = IntentQueue.mark_dispatched(room_id, dedupe_key)
+
+      assert IntentQueue.list_for_room("intentq-room-a") == []
+    end
+
+    test "is idempotent — a repeat call is :ok" do
+      IntentQueue.enqueue("intentq-room-a", "d1", sample_item())
+      assert :ok = IntentQueue.mark_dispatched("intentq-room-a", "d1")
+      assert :ok = IntentQueue.mark_dispatched("intentq-room-a", "d1")
+    end
+
+    test "no-op on a row that never existed" do
+      assert :ok = IntentQueue.mark_dispatched("intentq-room-a", "never-was")
+    end
+  end
+
+  describe "mark_retry/3" do
+    test "increments :attempts, resets :status to :pending, and stamps last_error" do
+      IntentQueue.enqueue("intentq-room-a", "d1", sample_item())
+      [{room_id, dedupe_key, _}] = IntentQueue.claim_pending(10)
+
+      assert {:ok, 1} = IntentQueue.mark_retry(room_id, dedupe_key, :simulated_transport)
+
+      [item] = IntentQueue.list_for_room("intentq-room-a")
+      assert item.attempts == 1
+      assert item.status == :pending
+      assert item.last_error == inspect(:simulated_transport)
+      # `list_stalled/1` guard: claimed_at is cleared on retry so the
+      # sweep doesn't flag a healthy pending row.
+      assert item.claimed_at_monotonic == nil
+    end
+
+    test "allows a retried row to be re-claimed" do
+      IntentQueue.enqueue("intentq-room-a", "d1", sample_item())
+      [{room_id, dedupe_key, _}] = IntentQueue.claim_pending(10)
+
+      assert {:ok, 1} = IntentQueue.mark_retry(room_id, dedupe_key, :retry)
+
+      # Same row shows up on the next claim because status is back to
+      # :pending.
+      assert [{^room_id, ^dedupe_key, %{attempts: 1, status: :dispatching}}] =
+               IntentQueue.claim_pending(10)
+    end
+
+    test "returns {:exhausted, attempts} on the 3rd attempt" do
+      IntentQueue.enqueue("intentq-room-a", "d1", sample_item())
+      [{room_id, dedupe_key, _}] = IntentQueue.claim_pending(10)
+
+      assert {:ok, 1} = IntentQueue.mark_retry(room_id, dedupe_key, :fail_1)
+
+      # Re-claim to simulate the dispatcher walking through attempts.
+      [{^room_id, ^dedupe_key, _}] = IntentQueue.claim_pending(10)
+      assert {:ok, 2} = IntentQueue.mark_retry(room_id, dedupe_key, :fail_2)
+
+      [{^room_id, ^dedupe_key, _}] = IntentQueue.claim_pending(10)
+      assert {:exhausted, 3} = IntentQueue.mark_retry(room_id, dedupe_key, :fail_3)
+    end
+
+    test "returns {:error, :not_found} for a missing row" do
+      assert {:error, :not_found} =
+               IntentQueue.mark_retry("intentq-room-a", "never-was", :anything)
+    end
+  end
+
+  describe "mark_dropped/3" do
+    test "removes the row" do
+      IntentQueue.enqueue("intentq-room-a", "d1", sample_item())
+      assert :ok = IntentQueue.mark_dropped("intentq-room-a", "d1", :no_assignee)
+      assert IntentQueue.list_for_room("intentq-room-a") == []
+    end
+
+    test "fires drop telemetry with the supplied reason" do
+      attach_telemetry!([:platform, :meetings, :intent_queue, :drop], :queue_drop)
+
+      IntentQueue.enqueue("intentq-room-a", "d1", sample_item())
+
+      assert :ok = IntentQueue.mark_dropped("intentq-room-a", "d1", :max_attempts_exceeded)
+
+      assert_receive {:queue_drop, %{count: 1},
+                      %{
+                        room_id: "intentq-room-a",
+                        dedupe_key: "d1",
+                        reason: :max_attempts_exceeded,
+                        removed_count: 1
+                      }},
+                     500
+    end
+
+    test "no-op on a missing row does NOT fire telemetry" do
+      attach_telemetry!([:platform, :meetings, :intent_queue, :drop], :queue_drop_noop)
+
+      assert :ok = IntentQueue.mark_dropped("intentq-room-a", "never-was", :no_assignee)
+      refute_receive {:queue_drop_noop, _, _}, 100
+    end
+  end
+
+  describe "list_stalled/1" do
+    test "returns rows whose claimed_at is older than the stall window" do
+      # Enqueue and claim so status is :dispatching. Manually rewind
+      # claimed_at_monotonic to before the stall cutoff so the sweep
+      # will flag it. We can't wait real time here.
+      IntentQueue.enqueue("intentq-room-a", "old", sample_item())
+      IntentQueue.enqueue("intentq-room-a", "fresh", sample_item())
+      _ = IntentQueue.claim_pending(10)
+
+      old_ts = System.monotonic_time(:millisecond) - :timer.seconds(10)
+
+      # Rewind the "old" row's claimed_at via a direct ETS update —
+      # the queue's public API doesn't expose a manual rewind because
+      # in production only the passage of time gets a row here.
+      [{key, item}] = :ets.lookup(:meeting_intent_queue, {"intentq-room-a", "old"})
+      :ets.insert(:meeting_intent_queue, {key, Map.put(item, :claimed_at_monotonic, old_ts)})
+
+      stalled = IntentQueue.list_stalled(:timer.seconds(5))
+
+      assert stalled == [{"intentq-room-a", "old"}]
+    end
+
+    test "returns [] when nothing is claimed" do
+      IntentQueue.enqueue("intentq-room-a", "d1", sample_item())
+      # Not claimed → :status is :pending → not stalled.
+      assert IntentQueue.list_stalled(:timer.seconds(5)) == []
+    end
+
+    test "returns [] when claimed rows are still inside the stall window" do
+      IntentQueue.enqueue("intentq-room-a", "d1", sample_item())
+      _ = IntentQueue.claim_pending(10)
+
+      # Big stall window — the claim was moments ago, well within.
+      assert IntentQueue.list_stalled(:timer.hours(1)) == []
+    end
+  end
+
+  describe "max_attempts/0" do
+    test "reflects the module attribute" do
+      assert IntentQueue.max_attempts() == 3
+    end
+  end
 end

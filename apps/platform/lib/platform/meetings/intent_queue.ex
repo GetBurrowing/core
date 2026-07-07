@@ -4,12 +4,13 @@ defmodule Platform.Meetings.IntentQueue do
   classified transcript intents awaiting downstream promotion (task
   creation, digest inclusion, etc.).
 
-  Sits between the classifier (stage 3+) and the promoter (later
-  stages): the classifier pushes intents in, the promoter drains them
-  in batches per room. Living in ETS (not Ecto) matches Rowan's
-  standing rule for meeting-lifetime ephemeral state: nothing here
-  needs to survive a node restart — if a meeting is still in progress
-  after a bounce the transcript will re-flow and re-classify.
+  Sits between the classifier (stage 3+) and the dispatcher (task
+  019f2452 stage 2 and later): the classifier pushes intents in, the
+  dispatcher claims and delegates them out. Living in ETS (not Ecto)
+  matches Rowan's standing rule for meeting-lifetime ephemeral state:
+  nothing here needs to survive a node restart — if a meeting is still
+  in progress after a bounce the transcript will re-flow and
+  re-classify.
 
   ## Data shape
 
@@ -21,17 +22,27 @@ defmodule Platform.Meetings.IntentQueue do
 
       %{
         intent: atom(),
-        target_role: atom() | nil,
+        target_role: atom() | binary() | nil,
         confidence: float(),
         chunk_id: binary() | nil,
         inserted_at_monotonic: integer(),  # milliseconds
-        meeting_id: binary() | nil
+        meeting_id: binary() | nil,
+        # Retry-aware fields added task 019f2452 stage 1:
+        status: :pending | :dispatching,
+        attempts: non_neg_integer(),
+        claimed_at_monotonic: integer() | nil,
+        last_error: binary() | nil
       }
 
   The composite `{room_id, dedupe_key}` key gives us natural
   per-`(room, dedupe_key)` idempotence via `:ets.insert_new/2`: two
   classifier passes over the same chunk that produce the same
   dedupe_key collapse to one entry without any coordinating lock.
+
+  Legacy rows (written before the retry fields shipped) MAY be missing
+  `:status` / `:attempts`. All state-transition helpers treat a missing
+  `:status` as `:pending` and a missing `:attempts` as `0` — purely
+  additive semantics so a hot upgrade doesn't strand rows.
 
   ## Cleanup
 
@@ -42,6 +53,16 @@ defmodule Platform.Meetings.IntentQueue do
       than 30 min (by `inserted_at_monotonic`) is deleted. Catches
       rooms whose finished event was missed (crash between
       `broadcast_meeting_finished` and this handler running).
+
+  ## Retry semantics
+
+  `mark_retry/3` bumps `:attempts` by one; once it reaches
+  `@max_attempts` the helper returns `{:exhausted, attempts}` and the
+  caller (typically the dispatcher) is expected to promote to
+  `mark_dropped/3` with reason `:max_attempts_exceeded`. Retry counts
+  are meeting-lifetime — a corrupt payload that fails three times in
+  seconds gets dropped, matching Rowan's ETS-ephemeral rule ("meetings
+  are short; the queue should not accumulate").
   """
 
   use GenServer
@@ -54,6 +75,15 @@ defmodule Platform.Meetings.IntentQueue do
   # `System.monotonic_time(:millisecond)`.
   @sweep_interval_ms :timer.minutes(30)
   @max_age_ms :timer.minutes(30)
+
+  # Retry cap for `mark_retry/3`. Three attempts matches Rowan's
+  # "meetings are short; corrupt payloads shouldn't linger" rule.
+  @max_attempts 3
+
+  # Position of the item_map inside the ETS tuple `{key, item_map}`.
+  # `:ets.update_element/3` positions are 1-based, and the key is
+  # position 1, so the item lives at position 2.
+  @item_pos 2
 
   # ── Lifecycle ──────────────────────────────────────────────────────────────
 
@@ -92,6 +122,14 @@ defmodule Platform.Meetings.IntentQueue do
     {:ok, %{}}
   end
 
+  @doc """
+  Retry cap exposed for tests and consumers that need to size their
+  own back-off windows (dispatcher, StallRegistry). Purely reflective —
+  don't override without shipping a new deploy.
+  """
+  @spec max_attempts() :: pos_integer()
+  def max_attempts, do: @max_attempts
+
   # ── Public API ─────────────────────────────────────────────────────────────
 
   @doc """
@@ -105,13 +143,26 @@ defmodule Platform.Meetings.IntentQueue do
   Emits `[:platform, :meetings, :intent_queue, :enqueue]` telemetry on
   BOTH the insert and duplicate paths so downstream observers can
   distinguish first-writes from dedupe hits.
+
+  On the `:inserted` path (only) also broadcasts
+  `{:intent_enqueued, %{room_id: room_id, dedupe_key: dedupe_key}}` on
+  the `Platform.Meetings.PubSub.intent_enqueued_topic/0` topic so the
+  dispatcher wakes up without polling. Dedupe hits deliberately do NOT
+  re-broadcast — the dispatcher already has (or has already dispatched)
+  the target row.
   """
   @spec enqueue(binary(), binary(), map()) :: {:ok, :inserted} | {:ok, :duplicate}
   def enqueue(room_id, dedupe_key, item_map)
       when is_binary(room_id) and is_binary(dedupe_key) and is_map(item_map) do
+    # Stamp default retry-aware fields. `Map.put_new/3` means the
+    # classifier can override any of these if it wants (tests do this
+    # for the sweep + retry cases) while normal writes get sensible
+    # defaults automatically.
     stamped =
       item_map
       |> Map.put_new(:inserted_at_monotonic, System.monotonic_time(:millisecond))
+      |> Map.put_new(:status, :pending)
+      |> Map.put_new(:attempts, 0)
 
     result =
       if ensure_table() do
@@ -130,6 +181,14 @@ defmodule Platform.Meetings.IntentQueue do
       %{count: 1},
       %{result: result, room_id: room_id, dedupe_key: dedupe_key}
     )
+
+    if result == :inserted do
+      # Fire-and-forget — the broadcast helper wraps
+      # `Phoenix.PubSub.broadcast/3` which is safe from any process.
+      # Dedupe hits do NOT re-broadcast (would spam the dispatcher for
+      # no-op writes).
+      MeetingsPubSub.broadcast_intent_enqueued(%{room_id: room_id, dedupe_key: dedupe_key})
+    end
 
     {:ok, result}
   end
@@ -188,7 +247,7 @@ defmodule Platform.Meetings.IntentQueue do
   @doc """
   Non-destructive read — return every item currently queued for
   `room_id`. Intended for tests + operational inspection; the
-  promoter should use `pop_batch/2` instead.
+  dispatcher should use `claim_pending/1` instead.
   """
   @spec list_for_room(binary()) :: [map()]
   def list_for_room(room_id) when is_binary(room_id) do
@@ -201,12 +260,176 @@ defmodule Platform.Meetings.IntentQueue do
     end
   end
 
+  # ── Dispatcher-facing API (task 019f2452 stage 1) ──────────────────────────
+
+  @doc """
+  Claim up to `limit` pending items across all rooms. Rows STAY in the
+  table (peek-and-stamp) so a crashed dispatcher can retry after the
+  sweep — the row's `:status` transitions from `:pending` to
+  `:dispatching` and `:claimed_at_monotonic` is stamped with `now`.
+
+  Serialised through the queue owner (`GenServer.call/2`) so that
+  `select` → `update_element` is atomic with respect to other claim
+  callers. Concurrent `enqueue/3` writes from any process still land
+  atomically in ETS; the serialisation only guards claim-vs-claim
+  races (two dispatcher processes competing for the same row).
+
+  Returns `[{room_id, dedupe_key, item_map}]` where `item_map` reflects
+  the post-transition state (status: `:dispatching`, claimed_at
+  populated). Terminates the batch when either `limit` rows have been
+  claimed OR no more pending rows exist.
+
+  Missing `:status` on a row is treated as `:pending` (backward
+  compatibility with legacy rows written before this stage).
+  """
+  @spec claim_pending(pos_integer()) :: [{binary(), binary(), map()}]
+  def claim_pending(limit) when is_integer(limit) and limit > 0 do
+    GenServer.call(__MODULE__, {:claim_pending, limit})
+  end
+
+  @doc """
+  Narrow-scope hot-path claim: transition exactly one row identified by
+  `{room_id, dedupe_key}` from `:pending` to `:dispatching`. Cheaper
+  than `claim_pending/1`, which walks every row — used by the
+  dispatcher's `{:intent_enqueued, ...}` PubSub handler where the exact
+  key was just published.
+
+  Returns:
+
+    * `{:ok, {room_id, dedupe_key, item_map}}` — row transitioned;
+      `item_map` reflects the post-transition state.
+    * `{:already_claimed, item_map}` — the row exists but is not
+      `:pending` (someone else beat us to it). Caller should silently
+      no-op; the owner will `mark_dispatched` / `mark_retry` when done.
+    * `{:error, :not_found}` — the row is gone (meeting finished,
+      dropped externally). Caller no-ops.
+
+  Serialised through the queue owner so the lookup + transition pair is
+  atomic against sibling claim callers (mirrors `claim_pending/1`).
+  """
+  @spec claim_one(binary(), binary()) ::
+          {:ok, {binary(), binary(), map()}}
+          | {:already_claimed, map()}
+          | {:error, :not_found}
+  def claim_one(room_id, dedupe_key)
+      when is_binary(room_id) and is_binary(dedupe_key) do
+    GenServer.call(__MODULE__, {:claim_one, room_id, dedupe_key})
+  end
+
+  @doc """
+  Mark a claimed row as successfully dispatched — delete it from the
+  queue. Idempotent: `:ok` on both "row deleted" and "row already
+  gone" paths so a doubled call from a crashed-and-restarted
+  dispatcher doesn't error.
+  """
+  @spec mark_dispatched(binary(), binary()) :: :ok
+  def mark_dispatched(room_id, dedupe_key)
+      when is_binary(room_id) and is_binary(dedupe_key) do
+    GenServer.call(__MODULE__, {:mark_dispatched, room_id, dedupe_key})
+  end
+
+  @doc """
+  Mark a claimed row as retryable — increment `:attempts`, reset
+  `:status` back to `:pending`, and record `last_error: inspect(reason)`.
+
+  Returns `{:ok, attempts}` while attempts is under `@max_attempts` so
+  the dispatcher can log / instrument, or `{:exhausted, attempts}` when
+  attempts has hit the cap. The caller (dispatcher stage 2) is expected
+  to promote `:exhausted` to `mark_dropped(:max_attempts_exceeded)`.
+
+  If the row has vanished between claim and retry (rare — meeting
+  finished, drop_for_room called externally), returns `{:error, :not_found}`.
+  """
+  @spec mark_retry(binary(), binary(), term()) ::
+          {:ok, pos_integer()} | {:exhausted, pos_integer()} | {:error, :not_found}
+  def mark_retry(room_id, dedupe_key, reason)
+      when is_binary(room_id) and is_binary(dedupe_key) do
+    GenServer.call(__MODULE__, {:mark_retry, room_id, dedupe_key, reason})
+  end
+
+  @doc """
+  Terminal drop for a claimed row. Deletes the row and emits
+  `[:platform, :meetings, :intent_queue, :drop]` telemetry with the
+  supplied `reason` for observability. Reasons in practice:
+  `:no_assignee`, `:unknown_role`, `:max_attempts_exceeded`,
+  `:target_role_nil`.
+
+  Idempotent — a doubled call is `:ok` even if the row was already
+  gone. Fires telemetry ONLY when the row was actually removed (so a
+  no-op call doesn't skew the drop count).
+  """
+  @spec mark_dropped(binary(), binary(), atom()) :: :ok
+  def mark_dropped(room_id, dedupe_key, reason)
+      when is_binary(room_id) and is_binary(dedupe_key) and is_atom(reason) do
+    GenServer.call(__MODULE__, {:mark_dropped, room_id, dedupe_key, reason})
+  end
+
+  @doc """
+  Return every claimed-but-stuck row: `:status == :dispatching` AND
+  `:claimed_at_monotonic` older than `stall_window_ms` before now.
+
+  Used by the StallRegistry callback (wired stage 4) to re-drive
+  items whose dispatcher crashed between claim and mark_dispatched.
+
+  Returns `[{room_id, dedupe_key}]` — the caller doesn't need the
+  full item_map because `mark_retry/3` operates by key.
+  """
+  @spec list_stalled(pos_integer()) :: [{binary(), binary()}]
+  def list_stalled(stall_window_ms)
+      when is_integer(stall_window_ms) and stall_window_ms > 0 do
+    if ensure_table() do
+      cutoff = System.monotonic_time(:millisecond) - stall_window_ms
+
+      # Match specs can't reach inside a map value, so pull every row
+      # and filter in Elixir. The queue is meeting-lifetime and
+      # small — a full scan for the stall check is a rounding-error
+      # cost compared to the dispatch itself.
+      @table
+      |> :ets.tab2list()
+      |> Enum.flat_map(fn {{room_id, dedupe_key}, item} ->
+        with :dispatching <- Map.get(item, :status),
+             ts when is_integer(ts) and ts < cutoff <-
+               Map.get(item, :claimed_at_monotonic) do
+          [{room_id, dedupe_key}]
+        else
+          _ -> []
+        end
+      end)
+    else
+      []
+    end
+  end
+
   # ── Handlers ───────────────────────────────────────────────────────────────
 
   @impl true
   def handle_call({:drop_for_room, room_id}, _from, state) when is_binary(room_id) do
     do_drop_for_room(room_id)
     {:reply, :ok, state}
+  end
+
+  def handle_call({:claim_pending, limit}, _from, state) do
+    {:reply, do_claim_pending(limit), state}
+  end
+
+  def handle_call({:claim_one, room_id, dedupe_key}, _from, state) do
+    {:reply, do_claim_one(room_id, dedupe_key), state}
+  end
+
+  def handle_call({:mark_dispatched, room_id, dedupe_key}, _from, state) do
+    if ensure_table() do
+      :ets.delete(@table, {room_id, dedupe_key})
+    end
+
+    {:reply, :ok, state}
+  end
+
+  def handle_call({:mark_retry, room_id, dedupe_key, reason}, _from, state) do
+    {:reply, do_mark_retry(room_id, dedupe_key, reason), state}
+  end
+
+  def handle_call({:mark_dropped, room_id, dedupe_key, reason}, _from, state) do
+    {:reply, do_mark_dropped(room_id, dedupe_key, reason), state}
   end
 
   @impl true
@@ -259,6 +482,155 @@ defmodule Platform.Meetings.IntentQueue do
       %{count: removed_count},
       %{room_id: room_id, removed_count: removed_count}
     )
+
+    :ok
+  end
+
+  # Runs inside the queue owner so the select-then-transition pair is
+  # atomic against sibling claim callers. Concurrent enqueue writers
+  # can still land new rows during the transition (their inserts are
+  # single-op atomic in ETS); we simply won't see them in this batch,
+  # which is fine — they'll be caught by the next claim or by the
+  # PubSub notify.
+  defp do_claim_pending(limit) do
+    if ensure_table() do
+      now = System.monotonic_time(:millisecond)
+
+      # Match spec: bind key, dedupe_key, item to variables; no guard
+      # (we filter by :status in Elixir because match-specs can't
+      # reach inside map values); return the full triple so we can
+      # transition + report in one pass.
+      match_spec = [
+        {{{:"$1", :"$2"}, :"$3"}, [], [{{:"$1", :"$2", :"$3"}}]}
+      ]
+
+      # Bounded scan — walk rows in ETS order, transition the first
+      # `limit` pending ones we find. This is O(table_size) worst
+      # case, but the queue is meeting-lifetime and small; the
+      # dispatcher's belt-and-braces tick is 30s so any pending row
+      # gets picked up quickly regardless.
+      @table
+      |> :ets.select(match_spec)
+      |> Enum.reduce_while([], fn {room_id, dedupe_key, item}, acc ->
+        cond do
+          length(acc) >= limit ->
+            {:halt, acc}
+
+          pending?(item) ->
+            transitioned =
+              item
+              |> Map.put(:status, :dispatching)
+              |> Map.put(:claimed_at_monotonic, now)
+
+            # `update_element` is a single ETS op — atomic w.r.t.
+            # concurrent readers.
+            :ets.update_element(@table, {room_id, dedupe_key}, {@item_pos, transitioned})
+            {:cont, [{room_id, dedupe_key, transitioned} | acc]}
+
+          true ->
+            {:cont, acc}
+        end
+      end)
+      |> Enum.reverse()
+    else
+      []
+    end
+  end
+
+  # Hot-path single-row claim. Kept parallel to `do_claim_pending/1`
+  # so the atomicity story is identical: run inside the queue owner,
+  # look up + transition + update in one call.
+  defp do_claim_one(room_id, dedupe_key) do
+    if ensure_table() do
+      case :ets.lookup(@table, {room_id, dedupe_key}) do
+        [{_key, item}] ->
+          if pending?(item) do
+            now = System.monotonic_time(:millisecond)
+
+            transitioned =
+              item
+              |> Map.put(:status, :dispatching)
+              |> Map.put(:claimed_at_monotonic, now)
+
+            :ets.update_element(@table, {room_id, dedupe_key}, {@item_pos, transitioned})
+            {:ok, {room_id, dedupe_key, transitioned}}
+          else
+            {:already_claimed, item}
+          end
+
+        [] ->
+          {:error, :not_found}
+      end
+    else
+      {:error, :not_found}
+    end
+  end
+
+  # A row is claimable when it's explicitly `:pending` OR when
+  # `:status` is missing (legacy rows written before stage 1). Any
+  # other value (`:dispatching`, future statuses) means someone else
+  # already owns it — leave alone.
+  defp pending?(item) do
+    case Map.get(item, :status) do
+      :pending -> true
+      nil -> true
+      _ -> false
+    end
+  end
+
+  defp do_mark_retry(room_id, dedupe_key, reason) do
+    if ensure_table() do
+      case :ets.lookup(@table, {room_id, dedupe_key}) do
+        [{_key, item}] ->
+          new_attempts = (Map.get(item, :attempts) || 0) + 1
+
+          updated =
+            item
+            |> Map.put(:attempts, new_attempts)
+            |> Map.put(:status, :pending)
+            |> Map.put(:last_error, inspect(reason))
+            # Clear the claim stamp so `list_stalled/1` doesn't
+            # falsely flag this row while it's back in the pending
+            # bucket.
+            |> Map.put(:claimed_at_monotonic, nil)
+
+          :ets.update_element(@table, {room_id, dedupe_key}, {@item_pos, updated})
+
+          if new_attempts >= @max_attempts do
+            {:exhausted, new_attempts}
+          else
+            {:ok, new_attempts}
+          end
+
+        [] ->
+          {:error, :not_found}
+      end
+    else
+      {:error, :not_found}
+    end
+  end
+
+  defp do_mark_dropped(room_id, dedupe_key, reason) do
+    removed? =
+      if ensure_table() do
+        # `:ets.take/2` returns the removed row(s) — empty list if the
+        # row was already gone, so we can distinguish a real drop
+        # (fire telemetry) from a no-op call (silent).
+        case :ets.take(@table, {room_id, dedupe_key}) do
+          [_] -> true
+          [] -> false
+        end
+      else
+        false
+      end
+
+    if removed? do
+      :telemetry.execute(
+        [:platform, :meetings, :intent_queue, :drop],
+        %{count: 1},
+        %{room_id: room_id, dedupe_key: dedupe_key, reason: reason, removed_count: 1}
+      )
+    end
 
     :ok
   end

@@ -109,6 +109,7 @@ defmodule Platform.Regression.SupervisedTaskRepoAuditTest do
     :start_meeting_historian_handler,
     :start_meeting_notifier,
     :start_meeting_intent_classifier,
+    :start_meeting_intent_dispatcher,
     :start_summarizer_sweeper,
     :start_stall_registry
   ]

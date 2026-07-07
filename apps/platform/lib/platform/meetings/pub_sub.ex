@@ -25,6 +25,12 @@ defmodule Platform.Meetings.PubSub do
       as `meeting:finished`: publish on BOTH the canonical topic AND
       `"meeting:transcript_chunk:{room_id}"` so the classifier can
       subscribe once while per-room consumers stay narrow.
+    * `"meeting:intent_enqueued"` — canonical broadcast surface for
+      newly-enqueued classifier intents. The Meeting Producer's
+      dispatcher (task 019f2452 stage 2) subscribes to this so it
+      doesn't have to poll — enqueue → notify → claim in one PubSub
+      hop. Only fires on the `:inserted` path (dedupe hits don't
+      re-notify — that would spam the dispatcher for no-op writes).
 
   ## Events
 
@@ -40,6 +46,7 @@ defmodule Platform.Meetings.PubSub do
   | `meeting:finished:{room_id}`              | `{:meeting_finished, payload}`           | `%{transcript_id: id, room_id: id, space_id: id}`                           |
   | `meeting:transcript_chunk`                | `{:transcript_chunk, payload}`           | `%{room_id: id, transcript_id: id, segment: map(), meeting_id: id \\| nil}` |
   | `meeting:transcript_chunk:{room_id}`      | `{:transcript_chunk, payload}`           | `%{room_id: id, transcript_id: id, segment: map(), meeting_id: id \\| nil}` |
+  | `meeting:intent_enqueued`                 | `{:intent_enqueued, payload}`            | `%{room_id: id, dedupe_key: binary()}`                                      |
   """
 
   @pubsub Platform.PubSub
@@ -99,6 +106,18 @@ defmodule Platform.Meetings.PubSub do
   def transcript_chunk_topic(room_id) when is_binary(room_id),
     do: "meeting:transcript_chunk:#{room_id}"
 
+  @doc """
+  Returns the canonical "any intent enqueued" topic. Subscribed to by
+  the Meeting Producer's IntentDispatcher (task 019f2452 stage 2) so a
+  single subscription catches every newly-inserted classifier intent
+  across every active room. Phoenix.PubSub has no wildcard match, so
+  we publish once on this global topic — there is deliberately NO
+  per-room mirror because the dispatcher is a global singleton with
+  no per-room subscribers.
+  """
+  @spec intent_enqueued_topic() :: String.t()
+  def intent_enqueued_topic, do: "meeting:intent_enqueued"
+
   # ── Subscribe ────────────────────────────────────────────────────────────────
 
   @doc "Subscribe the calling process to a user's meeting events."
@@ -157,6 +176,16 @@ defmodule Platform.Meetings.PubSub do
     Phoenix.PubSub.subscribe(@pubsub, transcript_chunk_topic(room_id))
   end
 
+  @doc """
+  Subscribe to the canonical `meeting:intent_enqueued` topic. The
+  Meeting Producer's IntentDispatcher uses this to react to every
+  newly-inserted classifier intent without polling.
+  """
+  @spec subscribe_intent_enqueued() :: :ok | {:error, term()}
+  def subscribe_intent_enqueued do
+    Phoenix.PubSub.subscribe(@pubsub, intent_enqueued_topic())
+  end
+
   @doc "Unsubscribe from a user's meeting events."
   @spec unsubscribe_user(binary()) :: :ok
   def unsubscribe_user(user_id) do
@@ -203,6 +232,12 @@ defmodule Platform.Meetings.PubSub do
   @spec unsubscribe_transcript_chunk(binary()) :: :ok
   def unsubscribe_transcript_chunk(room_id) when is_binary(room_id) do
     Phoenix.PubSub.unsubscribe(@pubsub, transcript_chunk_topic(room_id))
+  end
+
+  @doc "Unsubscribe from the canonical `meeting:intent_enqueued` topic."
+  @spec unsubscribe_intent_enqueued() :: :ok
+  def unsubscribe_intent_enqueued do
+    Phoenix.PubSub.unsubscribe(@pubsub, intent_enqueued_topic())
   end
 
   # ── Broadcast ────────────────────────────────────────────────────────────────
@@ -289,5 +324,23 @@ defmodule Platform.Meetings.PubSub do
     Phoenix.PubSub.broadcast(@pubsub, transcript_chunk_topic(), event)
     Phoenix.PubSub.broadcast(@pubsub, transcript_chunk_topic(room_id), event)
     :ok
+  end
+
+  @doc """
+  Broadcast an `:intent_enqueued` event on the canonical
+  `meeting:intent_enqueued` topic.
+
+  `payload` should carry at least `:room_id` and `:dedupe_key` so the
+  dispatcher can claim the exact new row via `IntentQueue.claim_one/2`
+  (added stage 2) without re-scanning the whole table.
+
+  Only fires on the `:inserted` result path from
+  `Platform.Meetings.IntentQueue.enqueue/3` — dedupe hits do NOT
+  re-broadcast, because re-notifying for a no-op write would spam the
+  dispatcher.
+  """
+  @spec broadcast_intent_enqueued(map()) :: :ok
+  def broadcast_intent_enqueued(payload) when is_map(payload) do
+    Phoenix.PubSub.broadcast(@pubsub, intent_enqueued_topic(), {:intent_enqueued, payload})
   end
 end

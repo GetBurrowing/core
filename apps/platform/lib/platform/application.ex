@@ -89,6 +89,7 @@ defmodule Platform.Application do
       |> maybe_add_meeting_historian_handler()
       |> maybe_add_meeting_notifier()
       |> maybe_add_meeting_intent_classifier()
+      |> maybe_add_meeting_intent_dispatcher()
       |> maybe_add_stall_registry()
       |> maybe_add_summarizer_sweeper()
       |> ensure_task_router_watcher_after_endpoint()
@@ -275,6 +276,22 @@ defmodule Platform.Application do
     end
   end
 
+  # IntentDispatcher (task 019f2452 stage 4): global GenServer that
+  # drains the IntentQueue and hands each classified intent off to the
+  # agent currently assigned to `target_role`. Inserted AFTER the
+  # classifier in the child pipeline so the conceptual boot order —
+  # `intent_queue -> classifier -> dispatcher` — matches the runtime
+  # flow. Disabled in test env; tests start per-case instances for
+  # DataCase sandbox ownership.
+  defp maybe_add_meeting_intent_dispatcher(children) do
+    if Application.get_env(:platform, :start_meeting_intent_dispatcher, true) do
+      idx = Enum.find_index(children, &(&1 == PlatformWeb.Endpoint)) || length(children)
+      List.insert_at(children, idx, Platform.Meetings.IntentDispatcher)
+    else
+      children
+    end
+  end
+
   # SummarizerSweeper (task 019f2566 stage 2): periodic sweep over
   # stalled router-owned summarize dispatches. Must start after Repo
   # (queries meeting_transcripts) and after Platform.TaskSupervisor (it
@@ -313,13 +330,27 @@ defmodule Platform.Application do
   # re-application on a hot reload is harmless. Guarded on both flags
   # so it's a no-op in test env, where per-case sweepers drive
   # `sweep_now/1` directly.
+  #
+  # The IntentDispatcher's own `sweep_stalled/0` callback (task 019f2452
+  # stage 4) is registered here too — same pattern, same idempotence
+  # guarantee. Gated on `:start_meeting_intent_dispatcher` so a test
+  # env with the dispatcher off doesn't leave a callback pointing at a
+  # process that isn't running. The registry itself must be up for the
+  # `register/1` call to land, so `:start_stall_registry` gates both.
   defp maybe_register_default_sweep_callback do
     start_sweeper? = Application.get_env(:platform, :start_summarizer_sweeper, true)
     start_registry? = Application.get_env(:platform, :start_stall_registry, true)
+    start_dispatcher? = Application.get_env(:platform, :start_meeting_intent_dispatcher, true)
 
     if start_sweeper? and start_registry? do
       Platform.Responsibilities.StallRegistry.register(
         {Platform.Meetings.SummarizerSweeper, :sweep_meetings_summarize}
+      )
+    end
+
+    if start_dispatcher? and start_registry? do
+      Platform.Responsibilities.StallRegistry.register(
+        {Platform.Meetings.IntentDispatcher, :sweep_stalled}
       )
     end
 

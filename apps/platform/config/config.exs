@@ -69,6 +69,23 @@ config :platform, :responsibility_router_enabled, false
 config :platform, :start_meeting_intent_classifier, true
 config :platform, :meeting_producer_runtime_enabled, false
 
+# IntentDispatcher (task 019f2452 stage 4): supervisor gate for the
+# global GenServer that drains the IntentQueue. Boots in the child
+# pipeline immediately after IntentClassifier so the conceptual
+# `intent_queue -> classifier -> dispatcher` order matches runtime
+# flow. Disabled in `config/test.exs` — tests own per-case instances
+# for DataCase sandbox ownership.
+config :platform, :start_meeting_intent_dispatcher, true
+
+# IntentDispatcher runtime config: read at `init/1` and by the
+# zero-arity `sweep_stalled/0` StallRegistry callback. `tick_interval_ms`
+# is the belt-and-braces periodic poll (the hot path is PubSub-notify);
+# `stall_window_ms` sets the threshold past which a `:dispatching` row
+# is considered wedged and gets re-driven through `mark_retry/3`.
+config :platform, Platform.Meetings.IntentDispatcher,
+  tick_interval_ms: :timer.seconds(30),
+  stall_window_ms: :timer.minutes(2)
+
 # LiveKit webhook HMAC-JWT signature enforcement (task 019f3312 stage 2 —
 # phantom-fix v4). When `true` (prod default), every request to
 # `/api/webhooks/livekit` MUST carry a valid `Authorization: <jwt>` header

@@ -86,6 +86,13 @@ config :platform, :start_meeting_notifier, false
 config :platform, :start_meeting_intent_classifier, false
 config :platform, :meeting_producer_runtime_enabled, false
 
+# IntentDispatcher (task 019f2452 stage 4): tests start their own
+# per-case instance for DataCase sandbox ownership. The
+# `sweep_stalled/0` callback is safe to call even without a running
+# dispatcher — it only touches ETS + PubSub — so tests exercising it
+# don't need to boot the GenServer.
+config :platform, :start_meeting_intent_dispatcher, false
+
 # LiveKit webhook signature enforcement (task 019f3312 stage 2): tests
 # keep this off so the ~28 existing controller tests don't need to mint
 # a JWT per payload. The signature-verification plug's own test file

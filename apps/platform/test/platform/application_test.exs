@@ -70,6 +70,38 @@ defmodule Platform.ApplicationTest do
         end
       end
     end
+
+    test "IntentDispatcher is declared as a child when :start_meeting_intent_dispatcher true" do
+      prev = Application.get_env(:platform, :start_meeting_intent_dispatcher)
+
+      try do
+        Application.put_env(:platform, :start_meeting_intent_dispatcher, true)
+        children = build_children()
+        assert Platform.Meetings.IntentDispatcher in children
+      after
+        if is_nil(prev) do
+          Application.delete_env(:platform, :start_meeting_intent_dispatcher)
+        else
+          Application.put_env(:platform, :start_meeting_intent_dispatcher, prev)
+        end
+      end
+    end
+
+    test "IntentDispatcher is absent when :start_meeting_intent_dispatcher false" do
+      prev = Application.get_env(:platform, :start_meeting_intent_dispatcher)
+
+      try do
+        Application.put_env(:platform, :start_meeting_intent_dispatcher, false)
+        children = build_children()
+        refute Platform.Meetings.IntentDispatcher in children
+      after
+        if is_nil(prev) do
+          Application.delete_env(:platform, :start_meeting_intent_dispatcher)
+        else
+          Application.put_env(:platform, :start_meeting_intent_dispatcher, prev)
+        end
+      end
+    end
   end
 
   # ── helpers ──────────────────────────────────────────────────────────────
@@ -104,6 +136,10 @@ defmodule Platform.ApplicationTest do
     |> maybe_append(
       :start_system_event_scheduler,
       Platform.Agents.SystemEventScheduler
+    )
+    |> maybe_append(
+      :start_meeting_intent_dispatcher,
+      Platform.Meetings.IntentDispatcher
     )
   end
 

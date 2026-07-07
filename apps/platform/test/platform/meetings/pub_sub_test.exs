@@ -123,4 +123,38 @@ defmodule Platform.Meetings.PubSubTest do
       refute_receive {:transcript_chunk, _}, 100
     end
   end
+
+  describe "intent_enqueued_topic/0" do
+    test "returns the canonical string" do
+      assert MeetingsPubSub.intent_enqueued_topic() == "meeting:intent_enqueued"
+    end
+  end
+
+  describe "broadcast_intent_enqueued/1" do
+    test "delivers to a subscriber on the canonical topic" do
+      assert :ok = MeetingsPubSub.subscribe_intent_enqueued()
+
+      payload = %{room_id: "room-canonical", dedupe_key: "dedupe-1"}
+
+      assert :ok = MeetingsPubSub.broadcast_intent_enqueued(payload)
+
+      assert_receive {:intent_enqueued, ^payload}, 200
+
+      MeetingsPubSub.unsubscribe_intent_enqueued()
+    end
+
+    test "unsubscribe stops future deliveries" do
+      assert :ok = MeetingsPubSub.subscribe_intent_enqueued()
+      assert :ok = MeetingsPubSub.unsubscribe_intent_enqueued()
+
+      payload = %{
+        room_id: "room-#{System.unique_integer([:positive])}",
+        dedupe_key: "dedupe-post-unsub"
+      }
+
+      assert :ok = MeetingsPubSub.broadcast_intent_enqueued(payload)
+
+      refute_receive {:intent_enqueued, _}, 100
+    end
+  end
 end
