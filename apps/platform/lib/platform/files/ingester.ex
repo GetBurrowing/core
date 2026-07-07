@@ -320,9 +320,31 @@ defmodule Platform.Files.Ingester do
 
   defp mark_failed(file) do
     # Reload to avoid stomping a concurrent update. Best-effort.
-    case Files.get_file(file.id) do
-      nil -> :ok
-      %Platform.Files.File{} = current -> Files.update_ingest_status(current, "failed")
+    #
+    # This runs inside the outer `try/catch` in `run/1` — but the
+    # `catch kind, reason ->` clause only wraps `do_run/3`. When
+    # `Files.get_file/1` (a `Repo.get`) is invoked from a
+    # `Task.Supervisor`-spawned child whose `$callers` chain is empty
+    # (production: Cowboy handler / PubSub broadcast; test: the
+    # cascade repro), the `Repo.get` raises `DBConnection.OwnershipError`
+    # and the raise escapes `mark_failed/1` entirely — reproducing the
+    # 2026-07-03 cascade shape from the *ingest* seam rather than the
+    # summarizer seam. Guard it explicitly so the sandbox-unowned Task
+    # exits `:normal` and the escape can no longer ride this path.
+    #
+    # See apps/platform/notes/2026-07-06-datacase-cascade-rootcause.md.
+    try do
+      case Files.get_file(file.id) do
+        nil -> :ok
+        %Platform.Files.File{} = current -> Files.update_ingest_status(current, "failed")
+      end
+    rescue
+      DBConnection.OwnershipError ->
+        Logger.debug(
+          "[Files.Ingester] sandbox-owned DB call from Task.Supervised — treating mark_failed as no-op"
+        )
+
+        :ok
     end
   end
 

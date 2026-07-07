@@ -33,7 +33,9 @@ defmodule Platform.DataCase do
     supervised_with_repo = [
       Platform.Chat.AttentionRouter,
       Platform.Agents.ContextBroker,
-      Platform.Chat.ContextPlane
+      Platform.Chat.ContextPlane,
+      Platform.Orchestration.TaskRouterWatcher,
+      Platform.Responsibilities.Router
     ]
 
     Enum.each(supervised_with_repo, fn name ->

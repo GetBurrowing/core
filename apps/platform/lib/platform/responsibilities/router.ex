@@ -826,33 +826,64 @@ defmodule Platform.Responsibilities.Router do
   @spec fire_trigger(Responsibility.t(), map(), map()) :: :ok
   def fire_trigger(%Responsibility{} = responsibility, trigger_meta, _state)
       when is_map(trigger_meta) do
-    assignee = safe_assignee_for(responsibility.key)
+    try do
+      assignee = safe_assignee_for(responsibility.key)
 
-    case assignee do
-      nil ->
-        Logger.info(
-          "[ResponsibilityRouter] unfilled responsibility=#{responsibility.key} " <>
-            "trigger=#{inspect(Map.get(trigger_meta, :kind))}"
-        )
+      case assignee do
+        nil ->
+          Logger.info(
+            "[ResponsibilityRouter] unfilled responsibility=#{responsibility.key} " <>
+              "trigger=#{inspect(Map.get(trigger_meta, :kind))}"
+          )
 
-        :telemetry.execute(
-          [:platform, :responsibility, :unfilled],
-          %{system_time: System.system_time()},
-          %{key: responsibility.key, feature: responsibility.feature}
+          :telemetry.execute(
+            [:platform, :responsibility, :unfilled],
+            %{system_time: System.system_time()},
+            %{key: responsibility.key, feature: responsibility.feature}
+          )
+
+          :ok
+
+        %{kind: "external"} = agent ->
+          dispatch_external(responsibility, agent, trigger_meta)
+
+        %{kind: kind} = agent when kind in ["native", "local", "federated"] ->
+          dispatch_native(responsibility, agent, trigger_meta, kind)
+
+        other ->
+          Logger.warning(
+            "[ResponsibilityRouter] unknown assignee shape key=#{responsibility.key} " <>
+              "assignee=#{inspect(other)}"
+          )
+
+          :ok
+      end
+    rescue
+      DBConnection.OwnershipError ->
+        # A downstream DB touch (dispatch_external → gather_context_via_provider →
+        # ContextGatherer.gather, dispatch_native → context resolution, etc.)
+        # raised from a Task.Supervised child whose $callers chain doesn't reach
+        # the DataCase sandbox owner. Contract: the Router never crashes the
+        # GenServer for a single fired trigger — swallow at :debug.
+        Logger.debug(
+          "[ResponsibilityRouter] fire_trigger swallowed sandbox-owned DB call " <>
+            "key=#{responsibility.key}"
         )
 
         :ok
 
-      %{kind: "external"} = agent ->
-        dispatch_external(responsibility, agent, trigger_meta)
-
-      %{kind: kind} = agent when kind in ["native", "local", "federated"] ->
-        dispatch_native(responsibility, agent, trigger_meta, kind)
-
-      other ->
+      error ->
         Logger.warning(
-          "[ResponsibilityRouter] unknown assignee shape key=#{responsibility.key} " <>
-            "assignee=#{inspect(other)}"
+          "[ResponsibilityRouter] fire_trigger raised for key=#{responsibility.key}: " <>
+            Exception.message(error)
+        )
+
+        :ok
+    catch
+      :exit, reason ->
+        Logger.warning(
+          "[ResponsibilityRouter] fire_trigger caught exit for key=#{responsibility.key}: " <>
+            inspect(reason)
         )
 
         :ok
@@ -1223,12 +1254,27 @@ defmodule Platform.Responsibilities.Router do
   # Tolerant lookup so the Router doesn't crash if `Platform.Roles` is
   # absent from a stripped build (mirrors the M4-absence guard the
   # M6 planner contracted for).
+  #
+  # `DBConnection.OwnershipError` is handled explicitly and logged at
+  # `:debug` rather than `:warning` because it is expected behaviour
+  # when a `Task.Supervisor`-spawned process (which is not part of the
+  # DataCase sandbox owner chain) reaches this seam during test runs.
+  # We treat it identically to "no assignee" so `responsibility_filled?/1`
+  # and `fire_trigger/3` both fall through to their nil-safe branches.
   defp safe_assignee_for(responsibility_key) do
     if Code.ensure_loaded?(Platform.Roles) and
          function_exported?(Platform.Roles, :assignee_for, 1) do
       try do
         Platform.Roles.assignee_for(responsibility_key)
       rescue
+        DBConnection.OwnershipError ->
+          Logger.debug(
+            "[ResponsibilityRouter] sandbox-owned DB call from Task.Supervised " <>
+              "— treating as unfilled key=#{responsibility_key}"
+          )
+
+          nil
+
         error ->
           Logger.warning(
             "[ResponsibilityRouter] Roles.assignee_for/1 raised " <>

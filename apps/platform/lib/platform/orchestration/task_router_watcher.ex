@@ -177,6 +177,15 @@ defmodule Platform.Orchestration.TaskRouterWatcher do
     else
       {:error, :agent_not_found}
     end
+  rescue
+    DBConnection.OwnershipError ->
+      # The watcher is a globally-supervised singleton receiving
+      # `{:task_created, ...}` / `{:task_updated, ...}` PubSub broadcasts.
+      # In DataCase-based tests those broadcasts arrive on the watcher's
+      # own process, which is NOT part of the sandbox owner chain — the
+      # `Repo.get` above raises. Reporting a distinct error tag lets
+      # `evaluate_task/1` short-circuit rather than crash the GenServer.
+      {:error, :sandbox_unowned}
   end
 
   # ── Private helpers ────────────────────────────────────────────────────
@@ -234,6 +243,16 @@ defmodule Platform.Orchestration.TaskRouterWatcher do
         case resolve_and_start(task) do
           :ok ->
             Logger.debug("[TaskRouterWatcher] started router for task #{task.id}")
+
+          {:error, :sandbox_unowned} ->
+            # Test-only race: a `{:task_created/updated, ...}` broadcast
+            # from a DataCase-owned test reached the singleton watcher
+            # before Sandbox.allow was extended to it. Short-circuit at
+            # :debug rather than warning so the reconcile tick still
+            # covers the row later.
+            Logger.debug(
+              "[TaskRouterWatcher] sandbox-unowned lookup for task #{task.id} — skipping"
+            )
 
           {:error, reason} ->
             Logger.warning(
