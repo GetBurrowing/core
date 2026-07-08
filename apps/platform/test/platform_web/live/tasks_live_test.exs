@@ -317,7 +317,14 @@ defmodule PlatformWeb.TasksLiveTest do
       conn = authenticated_conn(conn)
       project = create_project()
 
-      a = create_task(project, %{title: "Alpha dep", status: "in_progress"})
+      # `deploy_target` set so the stage-2 (019f42db) `:deploying` guard passes.
+      a =
+        create_task(project, %{
+          title: "Alpha dep",
+          status: "in_progress",
+          deploy_target: "production"
+        })
+
       {:ok, a} = Tasks.transition_task_status(a, "in_review")
       {:ok, a} = Tasks.transition_task_status(a, "deploying")
       {:ok, a} = Tasks.transition_task_status(a, "done")
@@ -1095,6 +1102,31 @@ defmodule PlatformWeb.TasksLiveTest do
     # Verify task is now planning in the DB
     updated = Tasks.get_task_detail(task.id)
     assert updated.status == "planning"
+  end
+
+  # Stage 2 of task 019f42db (deploy consolidation): the transition_task
+  # handler catches `{:error, :no_deploy_target_resolved}` and surfaces a
+  # human-readable flash instead of the generic `inspect(reason)` fallback.
+  test "transition to deploying without a resolved target flashes a clear error",
+       %{conn: conn} do
+    project = create_project()
+
+    # Task with an approved plan but no deploy target (task nil, project empty).
+    task = create_task(project, %{title: "No Target Deploy", status: "in_review"})
+    {:ok, _plan} = Tasks.create_plan(%{task_id: task.id, status: "approved"})
+
+    conn = authenticated_conn(conn)
+    {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
+
+    html =
+      view
+      |> render_hook("transition_task", %{"id" => task.id, "status" => "deploying"})
+
+    assert html =~ "no deploy target set"
+
+    # Task must not have transitioned.
+    reloaded = Tasks.get_task_detail(task.id)
+    assert reloaded.status == "in_review"
   end
 
   test "project filter narrows tasks", %{conn: conn} do
@@ -5109,7 +5141,14 @@ defmodule PlatformWeb.TasksLiveTest do
     # place so `Tasks.reopen_with_feedback/3` has something to reject.
     # Mirrors the setup used in plan_test.exs reopen_with_feedback specs.
     defp create_done_task_with_plan(project, title \\ "Reopen Target Task") do
-      task = create_task(project, %{title: title, status: "planning"})
+      # `deploy_target` set so the stage-2 (019f42db) `:deploying` guard passes.
+      task =
+        create_task(project, %{
+          title: title,
+          status: "planning",
+          deploy_target: "production"
+        })
+
       {:ok, plan} = Tasks.create_plan(%{task_id: task.id, version: 1, status: "draft"})
 
       {:ok, _stage} =
@@ -5476,6 +5515,100 @@ defmodule PlatformWeb.TasksLiveTest do
       assert html =~ "border-dashed"
       refute html =~ ~s|data-role="priority-readonly"|
       refute html =~ ~s|data-role="deploy-target-readonly"|
+    end
+
+    test "deploy_target readonly renders `explicit` state when the task has a target",
+         %{conn: conn} do
+      project = create_project()
+
+      {:ok, project} =
+        Tasks.update_project(project, %{
+          deploy_config: %{
+            "deploy_targets" => ["production", "staging"],
+            "default_deploy_target" => "staging"
+          }
+        })
+
+      task =
+        create_task(project, %{
+          title: "Explicit target",
+          deploy_target: "production"
+        })
+
+      conn = authenticated_conn(conn)
+      {:ok, _view, html} = live(conn, ~p"/tasks/#{task.id}")
+
+      assert html =~ ~s|data-role="deploy-target-value"|
+      assert html =~ ~s|data-state="explicit"|
+      assert html =~ "production"
+      refute html =~ "Inherited from project"
+      refute html =~ ~s|data-role="configure-deploy-target-button"|
+    end
+
+    test "deploy_target readonly renders `inherited` state from project default",
+         %{conn: conn} do
+      project = create_project()
+
+      {:ok, project} =
+        Tasks.update_project(project, %{
+          deploy_config: %{
+            "deploy_targets" => ["production", "staging"],
+            "default_deploy_target" => "staging"
+          }
+        })
+
+      task = create_task(project, %{title: "Inherited target"})
+
+      conn = authenticated_conn(conn)
+      {:ok, _view, html} = live(conn, ~p"/tasks/#{task.id}")
+
+      assert html =~ ~s|data-role="deploy-target-value"|
+      assert html =~ ~s|data-state="inherited"|
+      assert html =~ "staging"
+      assert html =~ "Inherited from project"
+      refute html =~ ~s|data-role="configure-deploy-target-button"|
+      refute html =~ "No target set"
+    end
+
+    test "deploy_target readonly renders `none` state with warning + configure button",
+         %{conn: conn} do
+      project = create_project()
+      task = create_task(project, %{title: "No target"})
+
+      conn = authenticated_conn(conn)
+      {:ok, view, html} = live(conn, ~p"/tasks/#{task.id}")
+
+      assert html =~ ~s|data-role="deploy-target-value"|
+      assert html =~ ~s|data-state="none"|
+      assert html =~ "No target set"
+      assert html =~ ~s|data-role="configure-deploy-target-button"|
+
+      # Clicking the button flips the pane into edit_mode so the existing
+      # deploy_target <select> becomes interactive.
+      html_after = render_click(view, "open_deploy_target_config")
+      assert html_after =~ ~s|data-role="deploy-target-select"|
+      assert html_after =~ ~s|data-role="edit-mode-indicator"|
+    end
+
+    test "consolidation removes the legacy `Deploy` strategy row from the detail pane",
+         %{conn: conn} do
+      project = create_project()
+
+      task =
+        create_task(project, %{
+          title: "No stale deploy row",
+          deploy_strategy: %{"type" => "pr_merge", "config" => %{}}
+        })
+
+      conn = authenticated_conn(conn)
+      {:ok, _view, html} = live(conn, ~p"/tasks/#{task.id}")
+
+      # The old row was `<span>Deploy</span>` followed by a badge whose text
+      # came from `deploy_strategy_label/1`. Consolidation deletes both the
+      # label wrapper and the strategy-label lookup from this surface.
+      refute html =~ "PR Merge"
+      # `Deploy target` label is still present (readonly Deploy target row).
+      assert html =~ "Deploy target"
     end
 
     test "update_task_field for priority is a no-op when edit_mode is off (server-side guard)",

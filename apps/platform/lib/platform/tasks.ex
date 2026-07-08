@@ -727,23 +727,25 @@ defmodule Platform.Tasks do
   Transition a task's status, enforcing valid transitions per ADR 0018 §7.
   """
   def transition_task_status(%Task{} = task, new_status) do
-    allowed = Map.get(@valid_task_transitions, task.status, [])
+    with :ok <- require_deploy_target_for(task, new_status) do
+      allowed = Map.get(@valid_task_transitions, task.status, [])
 
-    if new_status in allowed do
-      task
-      |> Task.changeset(%{status: new_status})
-      |> Repo.update()
-      |> case do
-        {:ok, updated} = ok ->
-          maybe_dispatch_teardown(updated, new_status)
-          maybe_append_timeline(updated, new_status)
-          ok
+      if new_status in allowed do
+        task
+        |> Task.changeset(%{status: new_status})
+        |> Repo.update()
+        |> case do
+          {:ok, updated} = ok ->
+            maybe_dispatch_teardown(updated, new_status)
+            maybe_append_timeline(updated, new_status)
+            ok
 
-        error ->
-          error
+          error ->
+            error
+        end
+      else
+        {:error, :invalid_transition}
       end
-    else
-      {:error, :invalid_transition}
     end
   end
 
@@ -801,6 +803,49 @@ defmodule Platform.Tasks do
       get_in(task.project && task.project.deploy_config, ["default_strategy"]) ||
       %{"type" => "manual"}
   end
+
+  @doc """
+  Resolve the effective deploy target for a task.
+
+  Resolution order:
+  1. `task.deploy_target` (task-level override) → `{:explicit, target}`
+  2. `project.deploy_config["default_deploy_target"]` (project default) → `{:inherited, target}`
+  3. Nothing set → `:none`
+
+  Empty strings are treated as unset. Mirrors `resolve_deploy_strategy/1` and
+  the existing `deploy_config["default_strategy"]` convention. No schema
+  change: `deploy_config` is already `field(:deploy_config, :map, default: %{})`.
+
+  The task must have `:project` preloaded, or be loaded with project.
+  """
+  @spec resolve_deploy_target(Task.t()) ::
+          {:explicit, String.t()} | {:inherited, String.t()} | :none
+  def resolve_deploy_target(%Task{} = task) do
+    task = ensure_project_loaded(task)
+
+    project_default =
+      get_in(task.project && task.project.deploy_config, ["default_deploy_target"])
+
+    cond do
+      is_binary(task.deploy_target) and task.deploy_target != "" ->
+        {:explicit, task.deploy_target}
+
+      is_binary(project_default) and project_default != "" ->
+        {:inherited, project_default}
+
+      true ->
+        :none
+    end
+  end
+
+  @doc """
+  True when the task has a resolvable deploy target (explicit or inherited).
+
+  Used by the `:deploying` transition guard to refuse deploys when neither the
+  task nor its project has a target configured.
+  """
+  @spec has_deploy_target?(Task.t()) :: boolean()
+  def has_deploy_target?(%Task{} = task), do: resolve_deploy_target(task) != :none
 
   @doc "Ensures the task has its project association loaded."
   def ensure_project_loaded(%Task{project: %Project{}} = task), do: task
@@ -1864,6 +1909,26 @@ defmodule Platform.Tasks do
   end
 
   @doc """
+  Returns `:ok` unless the task is transitioning into `:deploying` without a
+  resolvable deploy target, in which case `{:error, :no_deploy_target_resolved}`.
+
+  Mirrors `require_approved_plan_for/2`. Both entry paths (LiveView
+  `transition_task/2` and MCP-facing `transition_task_status/2`) call this
+  guard so the deploying gate holds regardless of caller — see the comment on
+  `transition_task_status/2` about MCP `task_update` bypassing the LiveView
+  path.
+
+  Non-`:deploying` transitions are always permitted (`:ok`).
+  """
+  @spec require_deploy_target_for(Task.t(), String.t()) ::
+          :ok | {:error, :no_deploy_target_resolved}
+  def require_deploy_target_for(%Task{} = task, "deploying") do
+    if has_deploy_target?(task), do: :ok, else: {:error, :no_deploy_target_resolved}
+  end
+
+  def require_deploy_target_for(_task, _new_status), do: :ok
+
+  @doc """
   Transition a task's status and broadcast the change to the board topic.
 
   When `new_status` is `"in_progress"`, the status flip and the Policy 2
@@ -1885,7 +1950,8 @@ defmodule Platform.Tasks do
   exactly as before.
   """
   def transition_task(%Task{} = task, new_status) do
-    with :ok <- require_approved_plan_for(task, new_status),
+    with :ok <- require_deploy_target_for(task, new_status),
+         :ok <- require_approved_plan_for(task, new_status),
          :ok <- maybe_prepare_transition(task, new_status),
          {:ok, %{updated: updated, frozen: frozen}} <-
            transition_with_policy2_freeze(task, new_status) do

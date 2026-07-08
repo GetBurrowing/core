@@ -66,7 +66,14 @@ defmodule Platform.Tasks.TasksContextTest do
   describe "task status transition chain" do
     test "backlog → planning → in_progress → in_review → deploying → done" do
       {:ok, project} = Tasks.create_project(%{name: "Status Project"})
-      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Full chain"})
+
+      # `deploy_target` set so the stage-2 (019f42db) `:deploying` guard passes.
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Full chain",
+          deploy_target: "production"
+        })
 
       # Per ADR 0029, plan approval transitions planning → in_progress
       # directly. The `ready` intermediate gate has been removed.
@@ -521,7 +528,15 @@ defmodule Platform.Tasks.TasksContextTest do
     end
 
     test "unmet_dependencies/1 returns only the not-done subset", %{project: project} do
-      {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "A", status: "in_progress"})
+      # `deploy_target` set so the stage-2 (019f42db) `:deploying` guard passes.
+      {:ok, a} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "A",
+          status: "in_progress",
+          deploy_target: "production"
+        })
+
       {:ok, a} = Tasks.transition_task_status(a, "in_review")
       {:ok, a} = Tasks.transition_task_status(a, "deploying")
       {:ok, a} = Tasks.transition_task_status(a, "done")
@@ -551,7 +566,15 @@ defmodule Platform.Tasks.TasksContextTest do
     end
 
     test "unmet_dependencies/1 returns [] when every dep is done", %{project: project} do
-      {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "A", status: "in_progress"})
+      # `deploy_target` set so the stage-2 (019f42db) `:deploying` guard passes.
+      {:ok, a} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "A",
+          status: "in_progress",
+          deploy_target: "production"
+        })
+
       {:ok, a} = Tasks.transition_task_status(a, "in_review")
       {:ok, a} = Tasks.transition_task_status(a, "deploying")
       {:ok, a} = Tasks.transition_task_status(a, "done")
@@ -1913,9 +1936,30 @@ defmodule Platform.Tasks.TasksContextTest do
   # and in_progress-origin tasks to done without duplicating chains.
   defp step_status(%{status: status} = task, status), do: task
 
+  # Ensure a deploy target is resolvable before transitioning into `:deploying`
+  # so the stage-2 (019f42db) guard passes. Backfill an explicit target on the
+  # task itself when neither the task nor project has one — the tests here are
+  # exercising status flow, not the deploy resolver.
+  defp step_status(task, "deploying" = target) do
+    task = ensure_deploy_target(task)
+    {:ok, t} = Tasks.transition_task_status(task, target)
+    t
+  end
+
   defp step_status(task, target) do
     {:ok, t} = Tasks.transition_task_status(task, target)
     t
+  end
+
+  defp ensure_deploy_target(task) do
+    task = Platform.Repo.preload(task, :project)
+
+    if Tasks.has_deploy_target?(task) do
+      task
+    else
+      {:ok, updated} = Tasks.update_task(task, %{deploy_target: "production"})
+      Platform.Repo.preload(updated, :project)
+    end
   end
 
   defp step_done(%{status: "done"} = task), do: task

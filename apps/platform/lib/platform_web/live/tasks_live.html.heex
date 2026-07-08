@@ -1331,7 +1331,9 @@
               class="select select-sm select-bordered cursor-pointer"
             >
               <option value="" selected={is_nil(@selected_task.deploy_target)}>
-                {if project_targets == [], do: "(no targets configured)", else: "(none)"}
+                {if project_targets == [],
+                  do: "Inherit from project (no targets configured)",
+                  else: "Inherit from project"}
               </option>
               <option
                 :for={t <- project_targets}
@@ -1368,13 +1370,7 @@
             <span class="text-xs font-semibold uppercase tracking-wider text-base-content/50">
               Deploy target
             </span>
-            <span class="badge badge-sm badge-outline">
-              {cond do
-                @selected_task.deploy_target -> deploy_target_label(@selected_task.deploy_target)
-                project_targets == [] -> "(no targets configured)"
-                true -> "(none)"
-              end}
-            </span>
+            <.deploy_target_display task={@selected_task} />
           </div>
         <% end %>
       </div>
@@ -1605,20 +1601,6 @@
         >
           <span class="hero-arrow-uturn-left size-4"></span> Reopen with feedback
         </button>
-      </div>
-
-      <%!-- Deploy strategy --%>
-      <div class="flex items-center gap-2">
-        <span class="text-xs font-semibold uppercase tracking-wider text-base-content/50">
-          Deploy
-        </span>
-        <span class="badge badge-outline badge-sm">
-          <%= if @selected_task.deploy_strategy do %>
-            {deploy_strategy_label(@selected_task.deploy_strategy)}
-          <% else %>
-            <span class="text-base-content/40">Inherited from project</span>
-          <% end %>
-        </span>
       </div>
 
       <%!-- Description — click "Edit" to swap the rendered markdown for a

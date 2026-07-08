@@ -17,7 +17,11 @@ defmodule Platform.Orchestration.TaskRouterTest do
       Tasks.create_task(%{
         project_id: project.id,
         title: "Router Test Task",
-        description: "Testing the task router"
+        description: "Testing the task router",
+        # `deploy_target` set so the stage-2 (019f42db) `:deploying` guard
+        # `require_deploy_target_for/2` passes for tests that walk the task
+        # through to `deploying`.
+        deploy_target: "production"
       })
 
     {:ok, plan} =

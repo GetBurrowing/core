@@ -227,7 +227,10 @@ defmodule Platform.Tasks.PlanEngineTest do
           project_id: project.id,
           title: "Deployable task",
           status: "in_progress",
-          deploy_strategy: strategy
+          deploy_strategy: strategy,
+          # Stage-2 deploy-target guard (task 019f42db) refuses `:deploying`
+          # transitions without a resolved target.
+          deploy_target: "production"
         })
 
       {:ok, plan} = Tasks.create_plan(%{task_id: task.id, status: "approved"})
@@ -287,7 +290,10 @@ defmodule Platform.Tasks.PlanEngineTest do
           project_id: project.id,
           title: "Deploy then done",
           status: "in_progress",
-          deploy_strategy: strategy
+          deploy_strategy: strategy,
+          # Stage-2 deploy-target guard (task 019f42db) refuses `:deploying`
+          # transitions without a resolved target.
+          deploy_target: "production"
         })
 
       {:ok, plan} = Tasks.create_plan(%{task_id: task.id, status: "approved"})
@@ -319,7 +325,10 @@ defmodule Platform.Tasks.PlanEngineTest do
       {:ok, project} =
         Tasks.update_project(project, %{
           deploy_config: %{
-            "default_strategy" => %{"type" => "docker_deploy", "config" => %{}}
+            "default_strategy" => %{"type" => "docker_deploy", "config" => %{}},
+            # Stage-2 deploy-target guard (task 019f42db) — inherit satisfies
+            # the guard so this test can still exercise the strategy path.
+            "default_deploy_target" => "production"
           }
         })
 
@@ -346,7 +355,10 @@ defmodule Platform.Tasks.PlanEngineTest do
         Tasks.create_task(%{
           project_id: project.id,
           title: "Fallback manual",
-          status: "in_progress"
+          status: "in_progress",
+          # Stage-2 deploy-target guard (task 019f42db) refuses `:deploying`
+          # transitions without a resolved target.
+          deploy_target: "production"
         })
 
       {:ok, plan} = Tasks.create_plan(%{task_id: task.id, status: "approved"})
@@ -374,7 +386,10 @@ defmodule Platform.Tasks.PlanEngineTest do
           project_id: project.id,
           title: "Planner omitted deploy stage",
           status: "in_progress",
-          deploy_strategy: strategy
+          deploy_strategy: strategy,
+          # Stage-2 deploy-target guard (task 019f42db) refuses `:deploying`
+          # transitions without a resolved target.
+          deploy_target: "production"
         })
 
       # Two implementation-only stages — NO "Deploy: …" stage authored by the planner.
@@ -419,7 +434,10 @@ defmodule Platform.Tasks.PlanEngineTest do
           project_id: project.id,
           title: "No double inject",
           status: "in_progress",
-          deploy_strategy: strategy
+          deploy_strategy: strategy,
+          # Stage-2 deploy-target guard (task 019f42db) refuses `:deploying`
+          # transitions without a resolved target.
+          deploy_target: "production"
         })
 
       {:ok, plan} = Tasks.create_plan(%{task_id: task.id, status: "approved"})

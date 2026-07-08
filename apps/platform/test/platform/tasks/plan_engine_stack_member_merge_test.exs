@@ -311,7 +311,11 @@ defmodule Platform.Tasks.PlanEngineStackMemberMergeTest do
           project_id: project.id,
           title: "Solo task gets deploy stage",
           status: "in_progress",
-          deploy_strategy: %{"type" => "pr_merge", "config" => %{}}
+          deploy_strategy: %{"type" => "pr_merge", "config" => %{}},
+          # Stage-2 guard `require_deploy_target_for/2` needs a resolvable
+          # target before the engine can inject a Deploy stage; without it
+          # the advance would refuse the :deploying transition.
+          deploy_target: "production"
         })
 
       {:ok, plan} = Tasks.create_plan(%{task_id: task.id, status: "approved"})

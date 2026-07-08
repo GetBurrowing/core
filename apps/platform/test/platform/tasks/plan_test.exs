@@ -459,7 +459,10 @@ defmodule Platform.Tasks.PlanTest do
   describe "reopen_with_feedback/3" do
     setup %{task: task} do
       # Drive the task through to done with an approved plan in place.
-      {:ok, task} = Tasks.update_task(task, %{status: "planning"})
+      # `deploy_target` set so the stage-2 (019f42db) `:deploying` guard passes.
+      {:ok, task} =
+        Tasks.update_task(task, %{status: "planning", deploy_target: "production"})
+
       {:ok, plan} = Tasks.create_plan(%{task_id: task.id})
       {:ok, plan} = Tasks.submit_plan_for_review(plan)
       {:ok, plan} = Tasks.approve_plan(plan, "system")

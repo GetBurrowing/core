@@ -43,7 +43,15 @@ defmodule Platform.Tasks.TaskTest do
 
   describe "transition_task_status/2" do
     test "allows valid transitions", %{project: project} do
-      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "T", status: "backlog"})
+      # `deploy_target` set so the `:deploying` transition guard added in
+      # stage 2 of task 019f42db passes.
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "T",
+          status: "backlog",
+          deploy_target: "production"
+        })
 
       assert {:ok, task} = Tasks.transition_task_status(task, "planning")
       assert task.status == "planning"
@@ -158,7 +166,13 @@ defmodule Platform.Tasks.TaskTest do
 
       for target <-
             ~w(backlog planning in_progress in_review deploying done blocked stack_pending) do
-        assert {:error, :invalid_transition} = Tasks.transition_task_status(task, target),
+        # Stage-2 (019f42db) deploy-target guard fires ahead of the invalid-
+        # transition check on `deploying` targets — accept either refusal so
+        # the terminal property still holds regardless of the ordering.
+        expected_error =
+          if target == "deploying", do: :no_deploy_target_resolved, else: :invalid_transition
+
+        assert {:error, ^expected_error} = Tasks.transition_task_status(task, target),
                "expected cancelled -> #{target} to be rejected, but it succeeded"
       end
     end
@@ -305,6 +319,135 @@ defmodule Platform.Tasks.TaskTest do
       {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Auto preload"})
       # Don't preload project — resolve_deploy_strategy should handle it
       assert Tasks.resolve_deploy_strategy(task) == %{"type" => "manual"}
+    end
+  end
+
+  describe "resolve_deploy_target/1" do
+    test "returns explicit task target when set", %{project: project} do
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Task override",
+          deploy_target: "production"
+        })
+
+      task = Repo.preload(task, :project)
+      assert Tasks.resolve_deploy_target(task) == {:explicit, "production"}
+    end
+
+    test "falls back to project default_deploy_target", %{project: project} do
+      {:ok, project} =
+        Tasks.update_project(project, %{
+          deploy_config: %{"default_deploy_target" => "staging"}
+        })
+
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Inherit"})
+      task = Repo.preload(task, :project)
+      assert Tasks.resolve_deploy_target(task) == {:inherited, "staging"}
+    end
+
+    test "task target takes precedence over project default", %{project: project} do
+      {:ok, project} =
+        Tasks.update_project(project, %{
+          deploy_config: %{"default_deploy_target" => "staging"}
+        })
+
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Override",
+          deploy_target: "production"
+        })
+
+      task = Repo.preload(task, :project)
+      assert Tasks.resolve_deploy_target(task) == {:explicit, "production"}
+    end
+
+    test "returns :none when project deploy_config has no default_deploy_target key",
+         %{project: project} do
+      {:ok, project} =
+        Tasks.update_project(project, %{
+          deploy_config: %{"deploy_targets" => ["production"]}
+        })
+
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "No default"})
+      task = Repo.preload(task, :project)
+      assert Tasks.resolve_deploy_target(task) == :none
+    end
+
+    test "returns :none when project deploy_config is empty map default", %{project: project} do
+      # `deploy_config` defaults to `%{}` on the schema
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Empty config"})
+      task = Repo.preload(task, :project)
+      assert Tasks.resolve_deploy_target(task) == :none
+    end
+
+    test "empty-string task deploy_target treated as unset, falls through to inherited",
+         %{project: project} do
+      {:ok, project} =
+        Tasks.update_project(project, %{
+          deploy_config: %{"default_deploy_target" => "staging"}
+        })
+
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Empty string",
+          deploy_target: ""
+        })
+
+      task = Repo.preload(task, :project)
+      assert Tasks.resolve_deploy_target(task) == {:inherited, "staging"}
+    end
+
+    test "empty-string task deploy_target with no project default returns :none",
+         %{project: project} do
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Empty string, no default",
+          deploy_target: ""
+        })
+
+      task = Repo.preload(task, :project)
+      assert Tasks.resolve_deploy_target(task) == :none
+    end
+
+    test "auto-preloads project when not preloaded", %{project: project} do
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Auto preload"})
+      # Don't preload project — resolve_deploy_target should handle it
+      assert Tasks.resolve_deploy_target(task) == :none
+    end
+  end
+
+  describe "has_deploy_target?/1" do
+    test "true for explicit task target", %{project: project} do
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Explicit",
+          deploy_target: "production"
+        })
+
+      task = Repo.preload(task, :project)
+      assert Tasks.has_deploy_target?(task) == true
+    end
+
+    test "true for inherited project default", %{project: project} do
+      {:ok, project} =
+        Tasks.update_project(project, %{
+          deploy_config: %{"default_deploy_target" => "staging"}
+        })
+
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Inherited"})
+      task = Repo.preload(task, :project)
+      assert Tasks.has_deploy_target?(task) == true
+    end
+
+    test "false when neither task nor project has a target", %{project: project} do
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "None"})
+      task = Repo.preload(task, :project)
+      assert Tasks.has_deploy_target?(task) == false
     end
   end
 
@@ -596,6 +739,105 @@ defmodule Platform.Tasks.TaskTest do
 
       assert {:ok, updated} = Tasks.transition_task(task, "in_review")
       assert updated.status == "in_review"
+    end
+  end
+
+  # Stage 2 of task 019f42db (deploy consolidation): refuse `:deploying`
+  # transitions unless the task or its project supplies a deploy target.
+  describe "require_deploy_target_for/2 (deploying gate)" do
+    setup %{project: project} do
+      # Approved plan attached so `require_approved_plan_for/2` does not
+      # fire first and mask the deploy-target guard we're testing.
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Gate task",
+          status: "in_review"
+        })
+
+      {:ok, _plan} = Tasks.create_plan(%{task_id: task.id, status: "approved"})
+      %{task: task}
+    end
+
+    test "returns :ok for non-deploying transitions regardless of target", %{task: task} do
+      assert Tasks.require_deploy_target_for(task, "in_progress") == :ok
+      assert Tasks.require_deploy_target_for(task, "done") == :ok
+      assert Tasks.require_deploy_target_for(task, "blocked") == :ok
+    end
+
+    test "returns :ok for deploying when task has explicit deploy_target",
+         %{project: project, task: task} do
+      {:ok, task} = Tasks.update_task(task, %{deploy_target: "production"})
+      task = Platform.Repo.preload(task, :project)
+      assert Tasks.require_deploy_target_for(task, "deploying") == :ok
+      _ = project
+    end
+
+    test "returns :ok for deploying when project has default_deploy_target",
+         %{project: project, task: task} do
+      {:ok, _project} =
+        Tasks.update_project(project, %{
+          deploy_config: %{"default_deploy_target" => "staging"}
+        })
+
+      task = Platform.Repo.preload(Tasks.get_task_record(task.id), :project, force: true)
+      assert Tasks.require_deploy_target_for(task, "deploying") == :ok
+    end
+
+    test "returns :error for deploying when neither task nor project has a target",
+         %{task: task} do
+      task = Platform.Repo.preload(task, :project)
+
+      assert Tasks.require_deploy_target_for(task, "deploying") ==
+               {:error, :no_deploy_target_resolved}
+    end
+
+    test "transition_task/2 refuses deploying without a resolved target", %{task: task} do
+      assert {:error, :no_deploy_target_resolved} = Tasks.transition_task(task, "deploying")
+
+      # Task remains in its original status
+      reloaded = Tasks.get_task_record(task.id)
+      assert reloaded.status == "in_review"
+    end
+
+    test "transition_task/2 allows deploying with an explicit task target",
+         %{task: task} do
+      {:ok, task} = Tasks.update_task(task, %{deploy_target: "production"})
+      assert {:ok, updated} = Tasks.transition_task(task, "deploying")
+      assert updated.status == "deploying"
+    end
+
+    test "transition_task/2 allows deploying with an inherited project default",
+         %{project: project, task: task} do
+      {:ok, _project} =
+        Tasks.update_project(project, %{
+          deploy_config: %{"default_deploy_target" => "staging"}
+        })
+
+      task = Tasks.get_task_record(task.id)
+      assert {:ok, updated} = Tasks.transition_task(task, "deploying")
+      assert updated.status == "deploying"
+    end
+
+    test "transition_task/2 allows non-deploying transitions with no target set",
+         %{task: task} do
+      # `in_review → in_progress` doesn't invoke the deploy guard at all,
+      # even without a target resolvable.
+      assert {:ok, updated} = Tasks.transition_task(task, "in_progress")
+      assert updated.status == "in_progress"
+    end
+
+    test "transition_task_status/2 (MCP path) refuses deploying without a resolved target",
+         %{task: task} do
+      assert {:error, :no_deploy_target_resolved} =
+               Tasks.transition_task_status(task, "deploying")
+    end
+
+    test "transition_task_status/2 (MCP path) allows deploying once a task target is set",
+         %{task: task} do
+      {:ok, task} = Tasks.update_task(task, %{deploy_target: "production"})
+      assert {:ok, updated} = Tasks.transition_task_status(task, "deploying")
+      assert updated.status == "deploying"
     end
   end
 

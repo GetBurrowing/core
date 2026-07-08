@@ -1072,6 +1072,15 @@ defmodule PlatformWeb.TasksLive do
     {:noreply, socket}
   end
 
+  # Configure-a-deploy-target affordance fires when the readonly value block
+  # is in `:none` state (see `deploy_target_display/1`). Flips the detail pane
+  # into `edit_mode` so the existing edit-mode dropdown at the deploy_target
+  # form becomes interactive. Landing in edit mode is enough — scrolling to
+  # the form is out of scope for the consolidation stage.
+  def handle_event("open_deploy_target_config", _params, socket) do
+    {:noreply, assign(socket, :edit_mode, true)}
+  end
+
   # Server-side defense-in-depth: when @edit_mode is false, the detail-panel
   # affordances that would emit these events aren't rendered (gated in
   # tasks_live.html.heex), but a stray invocation from elsewhere (kanban,
@@ -1330,6 +1339,13 @@ defmodule PlatformWeb.TasksLive do
               socket,
               :error,
               "Cannot start execution: this task has no approved plan. Create and approve a plan first."
+            )
+
+          {:error, :no_deploy_target_resolved} ->
+            put_flash(
+              socket,
+              :error,
+              "Cannot deploy: no deploy target set. Set one on this task or configure a project default."
             )
 
           {:error, reason} ->
@@ -3139,13 +3155,54 @@ defmodule PlatformWeb.TasksLive do
   defp deploy_target_label("google_drive"), do: "Google Drive"
   defp deploy_target_label(other), do: other
 
-  defp deploy_strategy_label(nil), do: "Inherit from project"
-  defp deploy_strategy_label(%{"type" => "pr_merge"}), do: "PR Merge"
-  defp deploy_strategy_label(%{"type" => "docker_deploy"}), do: "Docker Deploy"
-  defp deploy_strategy_label(%{"type" => "skill_driven"}), do: "Skill Driven"
-  defp deploy_strategy_label(%{"type" => "manual"}), do: "Manual"
-  defp deploy_strategy_label(%{"type" => "none"}), do: "None (skip deploy)"
-  defp deploy_strategy_label(_), do: "Unknown"
+  # Function component: renders the readonly Deploy target value block with
+  # three visual states derived from `Platform.Tasks.resolve_deploy_target/1`:
+  #
+  #   * `{:explicit, value}`  — badge with the label
+  #   * `{:inherited, value}` — badge + subtle "Inherited from project" text
+  #   * `:none`               — warning-styled badge + configure button
+  #
+  # Each render carries `data-state="explicit"|"inherited"|"none"` on the
+  # value block so tests and e2e scripts can pin behavior to the resolution
+  # outcome, not the string in the badge.
+  attr(:task, :any, required: true)
+
+  defp deploy_target_display(assigns) do
+    assigns =
+      assign(assigns, :resolution, Platform.Tasks.resolve_deploy_target(assigns.task))
+
+    ~H"""
+    <div
+      data-role="deploy-target-value"
+      data-state={deploy_target_state_name(@resolution)}
+      class="flex items-center gap-2 flex-wrap"
+    >
+      <%= case @resolution do %>
+        <% {:explicit, value} -> %>
+          <span class="badge badge-sm badge-outline">{deploy_target_label(value)}</span>
+        <% {:inherited, value} -> %>
+          <span class="badge badge-sm badge-outline">{deploy_target_label(value)}</span>
+          <span class="text-xs text-base-content/50">Inherited from project</span>
+        <% :none -> %>
+          <span class="badge badge-sm badge-warning gap-1">
+            <span class="hero-exclamation-triangle size-3"></span> No target set
+          </span>
+          <button
+            type="button"
+            phx-click="open_deploy_target_config"
+            data-role="configure-deploy-target-button"
+            class="btn btn-xs btn-ghost text-warning"
+          >
+            Configure a deploy target
+          </button>
+      <% end %>
+    </div>
+    """
+  end
+
+  defp deploy_target_state_name({:explicit, _}), do: "explicit"
+  defp deploy_target_state_name({:inherited, _}), do: "inherited"
+  defp deploy_target_state_name(:none), do: "none"
 
   defp parse_deploy_strategy(params) do
     case Map.get(params, "deploy_strategy_type", "") do
