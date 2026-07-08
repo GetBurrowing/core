@@ -497,4 +497,223 @@ defmodule Platform.Org.Wiki.SearchTest do
               }} = Search.search("blueberry muffin", limit: 5)
     end
   end
+
+  ## ─────────────────────────────────────────────────────────────────────
+  ## 11. Task corpus (stage 3 of task 019f3dbb)
+  ## ─────────────────────────────────────────────────────────────────────
+
+  describe "task corpus" do
+    test "source: \"task\" returns task hits and excludes pages / journal / messages" do
+      noop_provider()
+
+      agent = create_agent("t")
+      space = seed_space("task-source-#{System.unique_integer([:positive])}")
+      participant = seed_agent_participant(space, agent)
+
+      seed_page("org/page/orange.md", "orange fanta recipe canonical")
+      seed_journal(Date.utc_today(), "orange fanta harvest journal")
+      seed_message(space, participant, "any word on orange fanta rollout?")
+      {:ok, project} = Platform.Tasks.create_project(%{name: "OrangeCo"})
+
+      {:ok, task} =
+        Platform.Tasks.create_task(%{
+          project_id: project.id,
+          title: "Ship orange fanta migration",
+          description: "the rollout plan"
+        })
+
+      {:ok, %{results: results}} =
+        Search.search("orange fanta", agent: agent, source: "task", limit: 10)
+
+      assert Enum.all?(results, &(&1.source == "task"))
+      assert Enum.find(results, &(&1.id == task.id))
+    end
+
+    test "unset source returns fused hits across all four corpora" do
+      noop_provider()
+
+      agent = create_agent("f")
+      space = seed_space("fuse-#{System.unique_integer([:positive])}")
+      participant = seed_agent_participant(space, agent)
+
+      seed_page("org/page/apricot.md", "apricot syrup deluxe recipe")
+      seed_journal(Date.utc_today(), "apricot syrup harvest journal")
+      seed_message(space, participant, "have we tried apricot syrup?")
+      {:ok, project} = Platform.Tasks.create_project(%{name: "ApricotCo"})
+
+      {:ok, _task} =
+        Platform.Tasks.create_task(%{
+          project_id: project.id,
+          title: "Investigate apricot syrup vendor",
+          description: "supplier research"
+        })
+
+      {:ok, %{results: results}} =
+        Search.search("apricot syrup", agent: agent, limit: 20)
+
+      sources = results |> Enum.map(& &1.source) |> MapSet.new()
+      assert "page" in sources
+      assert "journal" in sources
+      assert "message" in sources
+      assert "task" in sources
+    end
+
+    test "task hit carries advisory status/priority/updated_at/merged_pr_url/follow_up_task_ids/cancellation_note" do
+      noop_provider()
+
+      {:ok, project} = Platform.Tasks.create_project(%{name: "AdvisoryCo"})
+
+      {:ok, task} =
+        Platform.Tasks.create_task(%{
+          project_id: project.id,
+          title: "Task with advisory fields",
+          description: "carries stage-3 payload",
+          priority: "high"
+        })
+
+      {:ok, %{results: [hit]}} =
+        Search.search("advisory fields", source: "task", limit: 5)
+
+      assert hit.source == "task"
+      assert hit.id == task.id
+      # All six advisory keys must be present (nil is fine for URL /
+      # cancellation_note when unstamped — but the keys must exist so
+      # agent code can Map.get without a defensive Map.has_key? guard).
+      assert Map.has_key?(hit, :status)
+      assert Map.has_key?(hit, :priority)
+      assert Map.has_key?(hit, :updated_at)
+      assert Map.has_key?(hit, :merged_pr_url)
+      assert Map.has_key?(hit, :follow_up_task_ids)
+      assert Map.has_key?(hit, :cancellation_note)
+      assert hit.status == "backlog"
+      assert hit.priority == "high"
+      assert hit.merged_pr_url == nil
+      assert hit.follow_up_task_ids == []
+      assert hit.cancellation_note == nil
+    end
+
+    test "cancellation_note is populated for cancelled tasks with metadata[\"cancellation_note\"]" do
+      noop_provider()
+
+      {:ok, project} = Platform.Tasks.create_project(%{name: "CancelledCo"})
+
+      {:ok, task} =
+        Platform.Tasks.create_task(%{
+          project_id: project.id,
+          title: "Task that got cancelled",
+          description: "was in flight",
+          metadata: %{"cancellation_note" => "rework as a stack member"}
+        })
+
+      {:ok, _} = Platform.Tasks.transition_task_status(task, "cancelled")
+
+      {:ok, %{results: results}} =
+        Search.search("got cancelled", source: "task", limit: 5)
+
+      hit = Enum.find(results, &(&1.id == task.id))
+      refute is_nil(hit)
+      assert hit.status == "cancelled"
+      assert hit.cancellation_note == "rework as a stack member"
+    end
+
+    test "project_id filter excludes tasks from other projects" do
+      noop_provider()
+
+      {:ok, project_a} = Platform.Tasks.create_project(%{name: "ProjA"})
+      {:ok, project_b} = Platform.Tasks.create_project(%{name: "ProjB"})
+
+      {:ok, task_a} =
+        Platform.Tasks.create_task(%{
+          project_id: project_a.id,
+          title: "Alpha bravo charlie fizzbuzz",
+          description: "in project A"
+        })
+
+      {:ok, task_b} =
+        Platform.Tasks.create_task(%{
+          project_id: project_b.id,
+          title: "Alpha bravo charlie fizzbuzz",
+          description: "in project B"
+        })
+
+      {:ok, %{results: results_a}} =
+        Search.search("alpha bravo charlie fizzbuzz",
+          source: "task",
+          project_id: project_a.id,
+          limit: 10
+        )
+
+      ids_a = Enum.map(results_a, & &1.id)
+      assert task_a.id in ids_a
+      refute task_b.id in ids_a
+
+      {:ok, %{results: results_b}} =
+        Search.search("alpha bravo charlie fizzbuzz",
+          source: "task",
+          project_id: project_b.id,
+          limit: 10
+        )
+
+      ids_b = Enum.map(results_b, & &1.id)
+      assert task_b.id in ids_b
+      refute task_a.id in ids_b
+    end
+
+    test "soft-deleted tasks are dropped from hits" do
+      noop_provider()
+
+      {:ok, project} = Platform.Tasks.create_project(%{name: "SoftDelCo"})
+
+      {:ok, live} =
+        Platform.Tasks.create_task(%{
+          project_id: project.id,
+          title: "Live task raspberry gizmo",
+          description: "still around"
+        })
+
+      {:ok, doomed} =
+        Platform.Tasks.create_task(%{
+          project_id: project.id,
+          title: "Doomed task raspberry gizmo",
+          description: "will be soft-deleted"
+        })
+
+      {:ok, _} = Platform.Tasks.soft_delete_task(doomed)
+
+      {:ok, %{results: results}} =
+        Search.search("raspberry gizmo", source: "task", limit: 10)
+
+      ids = Enum.map(results, & &1.id)
+      assert live.id in ids
+      refute doomed.id in ids
+    end
+
+    test "semantic-tagged task hits are routed to the task corpus" do
+      # Semantic channel returns a task-tagged hit — it must fuse under
+      # the :task corpus and hydrate through bulk_load_tasks, not fall
+      # back to the :page default.
+      {:ok, project} = Platform.Tasks.create_project(%{name: "SemCo"})
+
+      {:ok, task} =
+        Platform.Tasks.create_task(%{
+          project_id: project.id,
+          title: "Semantic-hit target durian shake",
+          description: "flavor investigation"
+        })
+
+      install_provider([
+        %{entry_id: task.id, score: 0.9, memory_type: "task"}
+      ])
+
+      {:ok, %{results: results}} =
+        Search.search("durian shake", source: "task", limit: 5)
+
+      hit = Enum.find(results, &(&1.id == task.id))
+      refute is_nil(hit)
+      assert hit.source == "task"
+      # Semantic + lexical → both ranks populated.
+      assert hit.semantic_rank == 1
+      assert is_integer(hit.lexical_rank)
+    end
+  end
 end

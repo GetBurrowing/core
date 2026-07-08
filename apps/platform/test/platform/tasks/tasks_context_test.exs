@@ -1743,6 +1743,138 @@ defmodule Platform.Tasks.TasksContextTest do
     end
   end
 
+  # ── Stage 2 (019f3dbb) write-path hooks ────────────────────────────────
+  #
+  # `create_task/1` + `update_task/2` synchronously refresh
+  # `task_references` from the description and fire-and-forget the
+  # semantic ingest. The scanner is exercised end-to-end here so a hook
+  # regression is caught at the Tasks-context level, not just in the
+  # scanner unit tests.
+  describe "write-path task_references hook (019f3dbb stage 2)" do
+    setup do
+      {:ok, project} = Tasks.create_project(%{name: "Refs Hook Project"})
+
+      # A pool of pre-existing tasks the source can reference.
+      {:ok, existing_a} =
+        Tasks.create_task(%{project_id: project.id, title: "target A"})
+
+      {:ok, existing_b} =
+        Tasks.create_task(%{project_id: project.id, title: "target B"})
+
+      %{project: project, existing_a: existing_a, existing_b: existing_b}
+    end
+
+    test "create_task inserts task_references rows for each existing UUID it mentions",
+         %{project: project, existing_a: a, existing_b: b} do
+      {:ok, source} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "source",
+          description: "cites #{a.id} and #{b.id}"
+        })
+
+      refs = list_outgoing_refs(source.id)
+      assert MapSet.new(refs) == MapSet.new([a.id, b.id])
+    end
+
+    test "create_task ignores UUIDs that don't correspond to existing tasks",
+         %{project: project, existing_a: a} do
+      ghost = "019f0000-1234-7000-8000-000000000001"
+
+      {:ok, source} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "source",
+          description: "real #{a.id} + ghost #{ghost}"
+        })
+
+      assert list_outgoing_refs(source.id) == [a.id]
+    end
+
+    test "create_task ignores self-references", %{project: project} do
+      # First create without a self-reference, then update the
+      # description to include the id in a subsequent write.
+      {:ok, source} =
+        Tasks.create_task(%{project_id: project.id, title: "self", description: "tbd"})
+
+      {:ok, source} = Tasks.update_task(source, %{description: "self: #{source.id}"})
+
+      assert list_outgoing_refs(source.id) == []
+    end
+
+    test "update_task refreshes task_references when description changes",
+         %{project: project, existing_a: a, existing_b: b} do
+      {:ok, source} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "source",
+          description: "cites #{a.id}"
+        })
+
+      assert list_outgoing_refs(source.id) == [a.id]
+
+      # Swap the referenced target — the row for `a` is deleted, the row
+      # for `b` is inserted.
+      {:ok, source} = Tasks.update_task(source, %{description: "now cites #{b.id}"})
+
+      assert list_outgoing_refs(source.id) == [b.id]
+    end
+
+    test "update_task does NOT touch task_references when description is unchanged",
+         %{project: project, existing_a: a} do
+      {:ok, source} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "source",
+          description: "cites #{a.id}"
+        })
+
+      %{rows: [[inserted_at_1]]} =
+        Repo.query!(
+          "SELECT inserted_at FROM task_references " <>
+            "WHERE source_task_id = $1 AND target_task_id = $2",
+          [Ecto.UUID.dump!(source.id), Ecto.UUID.dump!(a.id)]
+        )
+
+      # Update a field that doesn't affect description.
+      {:ok, _} = Tasks.update_task(source, %{priority: "high"})
+
+      %{rows: [[inserted_at_2]]} =
+        Repo.query!(
+          "SELECT inserted_at FROM task_references " <>
+            "WHERE source_task_id = $1 AND target_task_id = $2",
+          [Ecto.UUID.dump!(source.id), Ecto.UUID.dump!(a.id)]
+        )
+
+      # If the scanner had re-run and re-inserted, delete_stale + insert_fresh
+      # would produce a fresh `inserted_at`. Same timestamp = no touch.
+      assert inserted_at_1 == inserted_at_2
+    end
+
+    test "clearing the description drops every outgoing reference",
+         %{project: project, existing_a: a, existing_b: b} do
+      {:ok, source} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "source",
+          description: "cites #{a.id} and #{b.id}"
+        })
+
+      assert length(list_outgoing_refs(source.id)) == 2
+
+      {:ok, _source} = Tasks.update_task(source, %{description: ""})
+      assert list_outgoing_refs(source.id) == []
+    end
+  end
+
+  defp list_outgoing_refs(source_id) do
+    from(r in Platform.Tasks.TaskReference,
+      where: r.source_task_id == ^source_id,
+      select: r.target_task_id
+    )
+    |> Repo.all()
+  end
+
   defp step_through_to(task, "planning"), do: step_status(task, "planning")
 
   defp step_through_to(task, "in_progress") do

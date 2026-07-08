@@ -1,10 +1,12 @@
 defmodule Platform.Org.Wiki.Search do
   @moduledoc """
-  Cross-corpus search for the `memory_search` tool (ADR-0041, T5).
+  Cross-corpus search for the `memory_search` tool (ADR-0041, T5; task
+  corpus added stage 3 of task 019f3dbb).
 
-  Fuses three lexical channels (`org_wiki_pages`, `org_wiki_journal_entries`,
-  `chat_messages`) with a single semantic channel (`Platform.Memory.search/3`
-  fed by the T3 indexer) using Reciprocal Rank Fusion at k=60.
+  Fuses four lexical channels (`org_wiki_pages`, `org_wiki_journal_entries`,
+  `chat_messages`, `tasks`) with a single semantic channel
+  (`Platform.Memory.search/3` fed by the T3 indexer + the Tasks stage 2
+  write-path hook) using Reciprocal Rank Fusion at k=60.
 
   ## Algorithm (see `docs/stack/0041-org-memory-impl/t5-design-lock.md` §6)
 
@@ -13,9 +15,27 @@ defmodule Platform.Org.Wiki.Search do
 
   Each unique `(corpus, id)` accumulates a score across:
   - the global semantic channel (corpus-tagged via `memory_type`),
-  - the per-corpus lexical channel (`page`, `journal`, `message`).
+  - the per-corpus lexical channel (`page`, `journal`, `message`, `task`).
 
   Tie-break: `score desc → lexical_rank asc → date_or_inserted_at desc`.
+
+  ## Task hits (stage 3, 019f3dbb)
+
+  Task-corpus hits carry the standard hit shape plus four advisory fields
+  the agent uses to distinguish "in-flight / shipped-clean / was-supposed-
+  to-work" without a follow-up query:
+
+    * `status` — task lifecycle status
+    * `priority` — for advisory ranking / display
+    * `updated_at` — recency signal beyond `date_or_inserted_at`
+    * `merged_pr_url` — populated via `Platform.Tasks.merged_pr_url/1`
+      (walks the plan → stages → validations → `pr_merged` evidence, or
+      falls back to the stack rollup URL for stack members)
+    * `follow_up_task_ids` — populated via `Platform.Tasks.follow_up_task_ids/1`
+      (open, temporally-after tasks whose descriptions reference this
+      task's UUID — the "was supposed to work but didn't" signal)
+    * `cancellation_note` — surfaces `metadata["cancellation_note"]` for
+      cancelled tasks (the rework directive), `nil` otherwise
 
   ## ACL
 
@@ -45,6 +65,9 @@ defmodule Platform.Org.Wiki.Search do
   alias Platform.Org.Wiki.{Journal, Routing}
   alias Platform.Org.{WikiJournalEntry, WikiPage}
   alias Platform.Repo
+  alias Platform.Tasks
+  alias Platform.Tasks.Project
+  alias Platform.Tasks.Task, as: TaskRecord
 
   @fusion_constant_k 60
   @default_limit 20
@@ -52,7 +75,7 @@ defmodule Platform.Org.Wiki.Search do
   @channel_timeout_ms 2_000
   @lexical_fallback_meta_key :lexical_fallback
 
-  @type corpus :: :page | :journal | :message
+  @type corpus :: :page | :journal | :message | :task
 
   @type hit :: %{
           source: String.t(),
@@ -102,8 +125,8 @@ defmodule Platform.Org.Wiki.Search do
 
   ## Options
 
-    * `:source` — restrict to `"page"`, `"journal"`, or `"message"`.
-      Omit for all three.
+    * `:source` — restrict to `"page"`, `"journal"`, `"message"`, or
+      `"task"`. Omit for all four.
     * `:namespace` — prefix filter for page/journal `file_key`
       (e.g. `"org"`, `"project/<uuid>"`).
     * `:since` — `Date.t()` or ISO-8601 string. Lower bound for
@@ -241,6 +264,11 @@ defmodule Platform.Org.Wiki.Search do
     {{:lexical, :message}, hits}
   end
 
+  defp run_channel({:lexical, :task}, query, opts, cap, _corpora) do
+    hits = lexical_tasks(query, opts, cap)
+    {{:lexical, :task}, hits}
+  end
+
   defp semantic_hit_to_channel(hit, rank, corpora) do
     id = Map.get(hit, :entry_id) || Map.get(hit, "entry_id")
     score = Map.get(hit, :score) || Map.get(hit, "score")
@@ -277,6 +305,8 @@ defmodule Platform.Org.Wiki.Search do
   defp semantic_corpus(:journal), do: :journal
   defp semantic_corpus("page"), do: :page
   defp semantic_corpus(:page), do: :page
+  defp semantic_corpus("task"), do: :task
+  defp semantic_corpus(:task), do: :task
   defp semantic_corpus(_), do: :page
 
   ## ─────────────────────────────────────────────────────────────────────
@@ -419,6 +449,65 @@ defmodule Platform.Org.Wiki.Search do
     end
   end
 
+  # Task lexical channel (stage 3, 019f3dbb): mirrors the pages/journal
+  # tsvector-then-ilike pattern against `tasks.search_vector` (generated
+  # column added in stage 1). Filters:
+  #
+  #   * `project_id` — tenancy scope. Tasks don't have `workspace_id`;
+  #     skip that filter entirely.
+  #   * `org_id` — resolved by joining `projects` on `tasks.project_id`,
+  #     since `tasks` inherit tenancy through their project (ADR 0042).
+  #   * `since` — filter by `tasks.inserted_at`.
+  #
+  # Soft-deleted tasks (`deleted_at != nil`) are dropped in both channels.
+  defp lexical_tasks(query, opts, cap) do
+    tsvector_hits =
+      TaskRecord
+      |> filter_task_deleted()
+      |> filter_task_project(opts.project_id)
+      |> filter_task_org(opts.org_id)
+      |> maybe_filter_since_inserted(opts.since)
+      |> where(
+        [t],
+        fragment("? @@ websearch_to_tsquery('english', ?)", t.search_vector, ^query)
+      )
+      |> order_by(
+        [t],
+        desc:
+          fragment(
+            "ts_rank_cd(?, websearch_to_tsquery('english', ?))",
+            t.search_vector,
+            ^query
+          ),
+        desc: t.updated_at
+      )
+      |> limit(^cap)
+      |> Repo.all()
+
+    if tsvector_hits == [] do
+      ilike_tasks_fallback(query, opts, cap)
+    else
+      to_lexical_hits(:task, tsvector_hits, false)
+    end
+  end
+
+  defp ilike_tasks_fallback(query, opts, cap) do
+    pattern = "%" <> escape_like(query) <> "%"
+
+    rows =
+      TaskRecord
+      |> filter_task_deleted()
+      |> filter_task_project(opts.project_id)
+      |> filter_task_org(opts.org_id)
+      |> maybe_filter_since_inserted(opts.since)
+      |> where([t], ilike(t.title, ^pattern) or ilike(t.description, ^pattern))
+      |> order_by([t], desc: t.updated_at)
+      |> limit(^cap)
+      |> Repo.all()
+
+    to_lexical_hits(:task, rows, true)
+  end
+
   ## ─────────────────────────────────────────────────────────────────────
   ## Lexical hit normalisation
   ## ─────────────────────────────────────────────────────────────────────
@@ -514,13 +603,21 @@ defmodule Platform.Org.Wiki.Search do
     pages_by_id = bulk_load_pages(fused, opts)
     journal_by_id = bulk_load_journal(fused, opts)
     messages_by_id = bulk_load_messages(fused, opts)
+    tasks_by_id = bulk_load_tasks(fused, opts)
 
     agent_space_ids = agent_space_ids(opts.agent)
 
+    ctx = %{
+      pages: pages_by_id,
+      journal: journal_by_id,
+      messages: messages_by_id,
+      tasks: tasks_by_id,
+      spaces: agent_space_ids,
+      opts: opts
+    }
+
     fused
-    |> Enum.flat_map(fn fused_hit ->
-      hydrate_one(fused_hit, pages_by_id, journal_by_id, messages_by_id, agent_space_ids, opts)
-    end)
+    |> Enum.flat_map(fn fused_hit -> hydrate_one(fused_hit, ctx) end)
     # Stable post-hydration sort: score desc → lexical_rank asc →
     # date_or_inserted_at desc.
     |> Enum.sort_by(fn hit ->
@@ -528,7 +625,7 @@ defmodule Platform.Org.Wiki.Search do
     end)
   end
 
-  defp hydrate_one(%{corpus: :page} = h, pages, _journal, _msgs, _spaces, opts) do
+  defp hydrate_one(%{corpus: :page} = h, %{pages: pages, opts: opts}) do
     case Map.get(pages, h.id) do
       %WikiPage{} = page ->
         case Routing.gate_read(opts.agent, page.file_key) do
@@ -557,7 +654,7 @@ defmodule Platform.Org.Wiki.Search do
     end
   end
 
-  defp hydrate_one(%{corpus: :journal} = h, _pages, journal, _msgs, _spaces, opts) do
+  defp hydrate_one(%{corpus: :journal} = h, %{journal: journal, opts: opts}) do
     case Map.get(journal, h.id) do
       %WikiJournalEntry{} = entry ->
         file_key = Journal.virtual_file_key(journal_namespace(entry), entry.date)
@@ -588,7 +685,7 @@ defmodule Platform.Org.Wiki.Search do
     end
   end
 
-  defp hydrate_one(%{corpus: :message} = h, _pages, _journal, msgs, spaces, _opts) do
+  defp hydrate_one(%{corpus: :message} = h, %{messages: msgs, spaces: spaces}) do
     case Map.get(msgs, h.id) do
       nil ->
         []
@@ -601,6 +698,65 @@ defmodule Platform.Org.Wiki.Search do
         end
     end
   end
+
+  # Stage 3 (019f3dbb): task-corpus hits. Task ACL was already enforced by
+  # the `project_id` / `org_id` filter at query time; hydration just drops
+  # orphans (id not in the bulk-loaded map — e.g. deleted between embed
+  # and search) and soft-deleted rows (defense in depth against
+  # tombstoned rows the memory-service semantic channel might still
+  # remember). Task-specific advisory fields flow through
+  # `Platform.Tasks.merged_pr_url/1` + `Platform.Tasks.follow_up_task_ids/1`.
+  defp hydrate_one(%{corpus: :task} = h, %{tasks: tasks}) do
+    case Map.get(tasks, h.id) do
+      %TaskRecord{deleted_at: %DateTime{}} ->
+        []
+
+      %TaskRecord{} = task ->
+        [task_to_hit(task, h)]
+
+      _ ->
+        []
+    end
+  end
+
+  defp task_to_hit(%TaskRecord{} = task, h) do
+    updated_at_iso = DateTime.to_iso8601(task.updated_at)
+
+    %{
+      source: "task",
+      id: task.id,
+      path: nil,
+      space_id: nil,
+      content: task_content(task),
+      score: h.score,
+      semantic_rank: h.semantic_rank,
+      lexical_rank: h.lexical_rank,
+      authored_by: task.reported_by,
+      date_or_inserted_at: updated_at_iso,
+      # ── Task-specific advisory fields (flat on the hit) ────────────────
+      status: task.status,
+      priority: task.priority,
+      updated_at: updated_at_iso,
+      merged_pr_url: Tasks.merged_pr_url(task),
+      follow_up_task_ids: Tasks.follow_up_task_ids(task),
+      cancellation_note: task_cancellation_note(task)
+    }
+  end
+
+  defp task_content(%TaskRecord{title: title, description: nil}), do: title || ""
+
+  defp task_content(%TaskRecord{title: title, description: description}) do
+    (title || "") <> " — " <> description
+  end
+
+  defp task_cancellation_note(%TaskRecord{status: "cancelled", metadata: %{} = metadata}) do
+    case Map.get(metadata, "cancellation_note") do
+      note when is_binary(note) and note != "" -> note
+      _ -> nil
+    end
+  end
+
+  defp task_cancellation_note(_), do: nil
 
   defp message_to_hit(msg, h) do
     %{
@@ -678,6 +834,31 @@ defmodule Platform.Org.Wiki.Search do
     end
   end
 
+  # Stage 3 (019f3dbb): bulk-load task rows for hydration. Preloads
+  # `:project` (required by `Tasks.merged_pr_url/1`'s repo_url resolution)
+  # and `:stack` (rollup URL fallback). Plans → stages → validations are
+  # NOT preloaded here — `Tasks.merged_pr_url/1` handles the lazy preload
+  # itself on the small set of hits that survive the fusion + hydration
+  # cutoff, keeping the bulk query narrow. Project/org tenancy is
+  # re-applied here so soft-deleted rows and rows that slipped past the
+  # semantic filter get dropped defensively.
+  defp bulk_load_tasks(fused, opts) do
+    ids = corpus_ids(fused, :task)
+
+    if ids == [] do
+      %{}
+    else
+      TaskRecord
+      |> filter_task_deleted()
+      |> filter_task_project(opts.project_id)
+      |> filter_task_org(opts.org_id)
+      |> where([t], t.id in ^ids)
+      |> preload([:project, :stack])
+      |> Repo.all()
+      |> Map.new(fn t -> {t.id, t} end)
+    end
+  end
+
   defp corpus_ids(fused, corpus) do
     fused
     |> Enum.filter(fn h -> h.corpus == corpus end)
@@ -730,6 +911,52 @@ defmodule Platform.Org.Wiki.Search do
 
   defp filter_project(queryable, project_id) when is_binary(project_id) do
     where(queryable, [r], r.project_id == ^project_id)
+  end
+
+  ## Task-specific filter helpers (stage 3, 019f3dbb) —────────────────────
+  ##
+  ## Tasks don't share the `workspace_id` column that pages/journal use,
+  ## so they get their own project/org filters. `org_id` requires a join
+  ## against `projects` because tasks inherit tenancy through their
+  ## project (ADR 0042).
+
+  defp filter_task_deleted(queryable) do
+    where(queryable, [t], is_nil(t.deleted_at))
+  end
+
+  defp filter_task_project(queryable, nil), do: queryable
+
+  defp filter_task_project(queryable, project_id) when is_binary(project_id) do
+    where(queryable, [t], t.project_id == ^project_id)
+  end
+
+  defp filter_task_org(queryable, nil), do: queryable
+
+  defp filter_task_org(queryable, org_id) when is_binary(org_id) do
+    from(t in queryable,
+      join: p in Project,
+      on: p.id == t.project_id,
+      where: p.org_id == ^org_id
+    )
+  end
+
+  defp filter_task_org(queryable, org_ids) when is_list(org_ids) do
+    ids = Enum.filter(org_ids, &is_binary/1)
+
+    case ids do
+      [] ->
+        queryable
+
+      [one] ->
+        filter_task_org(queryable, one)
+
+      many ->
+        from(t in queryable,
+          join: p in Project,
+          on: p.id == t.project_id,
+          where: p.org_id in ^many
+        )
+    end
   end
 
   # Namespace filter for page queries: `file_key LIKE 'namespace/%'`.
@@ -802,8 +1029,11 @@ defmodule Platform.Org.Wiki.Search do
   end
 
   defp parse_source(nil), do: nil
-  defp parse_source(value) when value in [:page, :journal, :message], do: Atom.to_string(value)
-  defp parse_source(value) when value in ["page", "journal", "message"], do: value
+
+  defp parse_source(value) when value in [:page, :journal, :message, :task],
+    do: Atom.to_string(value)
+
+  defp parse_source(value) when value in ["page", "journal", "message", "task"], do: value
   defp parse_source(_), do: nil
 
   defp parse_since(nil), do: nil
@@ -823,9 +1053,10 @@ defmodule Platform.Org.Wiki.Search do
 
   defp parse_limit(_), do: @default_limit
 
-  defp enabled_corpora(nil), do: [:page, :journal, :message]
+  defp enabled_corpora(nil), do: [:page, :journal, :message, :task]
   defp enabled_corpora("page"), do: [:page]
   defp enabled_corpora("journal"), do: [:journal]
   defp enabled_corpora("message"), do: [:message]
-  defp enabled_corpora(_), do: [:page, :journal, :message]
+  defp enabled_corpora("task"), do: [:task]
+  defp enabled_corpora(_), do: [:page, :journal, :message, :task]
 end

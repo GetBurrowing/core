@@ -437,7 +437,13 @@ defmodule Platform.Org.Wiki.ContextT4E2ETest do
       # signature); this migration removes the stranded orphan rows.
       # Predicate is narrow: empty-segments + in-flight status + inside
       # the exploit window.
-      "20260706120000_cleanup_livekit_phantom_flood_2026_07_04.exs"
+      "20260706120000_cleanup_livekit_phantom_flood_2026_07_04.exs",
+      # vectorize-tasks (task 019f3dbb) stage 1: `tasks.search_vector`
+      # (Postgres generated tsvector) + GIN index + `task_references`
+      # derived table with the migration's own idempotent backfill for
+      # description → uuid references. Semantic embeddings ride the
+      # memory-service substrate in stage 2; nothing pgvector lands here.
+      "20260708120000_add_search_vector_and_task_references_to_tasks.exs"
     ]
 
     defp t4_root, do: Mix.Project.project_file() |> Path.dirname()

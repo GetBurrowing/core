@@ -17,13 +17,26 @@ defmodule Platform.Tasks do
 
   require Logger
 
-  alias Platform.{Artifacts, Context, Execution}
+  alias Platform.{Artifacts, Context, Execution, Memory}
   alias Platform.Context.Session
   alias Platform.Execution.Run
   alias Platform.Orchestration.{RuntimeSupervision, TaskRouterSupervisor, TaskRouterWatcher}
   alias Platform.Repo
 
-  alias Platform.Tasks.{Epic, Plan, PlanEngine, Project, ReviewRequest, Stage, Task, Validation}
+  alias Platform.Tasks.{
+    Epic,
+    Indexer,
+    Plan,
+    PlanEngine,
+    Project,
+    References,
+    ReviewRequest,
+    Stack,
+    Stage,
+    Task,
+    TaskReference,
+    Validation
+  }
 
   # ── Legacy summary/detail structs (backward compat) ──────────────────────
 
@@ -265,6 +278,20 @@ defmodule Platform.Tasks do
     %Task{}
     |> Task.changeset(attrs)
     |> Repo.insert()
+    |> case do
+      {:ok, task} = ok ->
+        # Stage 2 (019f3dbb): synchronously refresh task_references from
+        # the description (cheap — single INSERT ... ON CONFLICT per
+        # match), then fire-and-forget the semantic ingest. Both are
+        # advisory to the write path — see Platform.Tasks.References
+        # and Platform.Tasks.Indexer for the failure model.
+        _ = References.upsert_from_description(task)
+        _ = Memory.ingest_async([Indexer.build_entry(task)])
+        ok
+
+      error ->
+        error
+    end
   end
 
   def update_task(%Task{} = task, attrs) do
@@ -276,12 +303,48 @@ defmodule Platform.Tasks do
         preloaded = Repo.preload(updated, [:project, :epic, :sponsor, plans: :stages])
         broadcast_board({:task_updated, preloaded})
         maybe_sweep_stack_after_update(task, updated)
+        maybe_refresh_references(task, updated)
+        maybe_reingest_task(task, updated)
         {:ok, updated}
 
       error ->
         error
     end
   end
+
+  # Stage 2 (019f3dbb) reference-scan refresh. Only re-run the scanner
+  # when `description` actually changed — statuses/priorities/assignees
+  # don't affect the derived `task_references` set. Advisory failure:
+  # the scanner logs at :warning on its own; we don't propagate.
+  defp maybe_refresh_references(%Task{description: same}, %Task{description: same}), do: :ok
+
+  defp maybe_refresh_references(_before, %Task{} = after_task) do
+    _ = References.upsert_from_description(after_task)
+    :ok
+  end
+
+  # Stage 2 (019f3dbb) semantic re-ingest. Only re-embed when the corpus
+  # inputs (title, description, or metadata["feature_area"]) actually
+  # changed — status/priority updates are stored in the payload metadata
+  # but don't affect the embedding vector, so re-embedding on every
+  # status transition would burn quota for no recall gain.
+  defp maybe_reingest_task(%Task{} = before, %Task{} = after_task) do
+    title_changed = before.title != after_task.title
+    desc_changed = before.description != after_task.description
+
+    feature_changed =
+      feature_area_from(before.metadata) != feature_area_from(after_task.metadata)
+
+    if title_changed or desc_changed or feature_changed do
+      _ = Memory.ingest_async([Indexer.build_entry(after_task)])
+    end
+
+    :ok
+  end
+
+  defp feature_area_from(nil), do: nil
+  defp feature_area_from(%{} = metadata), do: Map.get(metadata, "feature_area")
+  defp feature_area_from(_), do: nil
 
   # ADR 0041 stack-internal dep sweep. When a stack member's
   # `metadata["merged_into_rollup_at"]` transitions from nil/absent to a
@@ -2096,6 +2159,232 @@ defmodule Platform.Tasks do
   @doc "Broadcast a board event."
   def broadcast_board(message) do
     Phoenix.PubSub.broadcast(Platform.PubSub, @board_topic, message)
+  end
+
+  # ── memory_search hit hydration helpers (stage 3, 019f3dbb) ─────────────
+  #
+  # The two helpers below (`merged_pr_url/1` + `follow_up_task_ids/1`) power
+  # the advisory task-hit fields on `Platform.Org.Wiki.Search`. Kept here
+  # rather than inside `Search` because they operate purely on the Tasks
+  # domain (plans, stages, validations, stack rollup metadata,
+  # task_references) and are useful to any caller that already has a
+  # `%Task{}` in hand — MCP `task_get`, the follow-up rollup on the
+  # kanban card, and future callers that want to know "did this task
+  # actually ship?"
+
+  # A follow-up in ANY non-cancelled, non-soft-deleted status signals
+  # "someone filed a task to fix/rework this one". `cancelled` is
+  # explicitly excluded because a cancelled follow-up is a retracted
+  # claim — the agent decided the fix wasn't needed after all.
+  @follow_up_source_statuses ~w(backlog planning blocked in_progress in_review deploying done stack_pending)
+
+  @doc """
+  Return the merged-PR URL for a task's shipped work, or `nil` when nothing
+  landed.
+
+  Resolution order:
+
+    1. **Per-task `pr_merged` validation.** Walks the task's latest plan
+       (approved > completed > any) and looks for a `pr_merged` validation
+       with `status = "passed"` and `evidence["merge_sha"]`. Combines with
+       `project.repo_url` to produce `<repo_url>/commit/<merge_sha>`. This
+       is the solo-task path that `Platform.Tasks.AutoMerger.record_merge_result/2`
+       populates at `apps/platform/lib/platform/tasks/auto_merger.ex:186`.
+
+    2. **Stack rollup URL fallback.** For stack members whose per-task
+       `pr_merged` validation is intentionally deferred (see
+       `AutoMerger.record_merge_result/2:180`, the `{:ok, :deferred}` head),
+       reach into `stack.metadata["rollup_pr"]["url"]` — populated by
+       `Platform.Tasks.StackDeployer` at `stack_deployer.ex:1182` /
+       `:1287`. This is the URL agents actually click through to see the
+       shipped code for the stack member.
+
+    3. **`nil`.** No pr_merged evidence and no stack rollup URL — the task
+       hasn't landed yet (still in-flight, cancelled, or done via a manual
+       path with no auto-merger stamp).
+
+  Accepts a `%Task{}` struct or a task id. When passed a struct, missing
+  preloads (`:project`, `:stack`, `plans: [stages: :validations]`) are
+  fetched lazily so callers don't have to remember the preload chain — the
+  cost is one round-trip per invocation, which is fine for the memory_search
+  hydration flow (bulk-loaded then hydrated one at a time).
+  """
+  @spec merged_pr_url(Task.t() | String.t()) :: String.t() | nil
+  def merged_pr_url(id) when is_binary(id) do
+    case Repo.get(Task, id) do
+      %Task{} = task -> merged_pr_url(task)
+      nil -> nil
+    end
+  end
+
+  def merged_pr_url(%Task{} = task) do
+    task = ensure_merged_pr_preloads(task)
+
+    case extract_pr_merged_sha(task) do
+      {:ok, sha, %Project{repo_url: repo_url}} when is_binary(repo_url) and repo_url != "" ->
+        String.trim_trailing(repo_url, "/") <> "/commit/" <> sha
+
+      _ ->
+        stack_rollup_url(task)
+    end
+  end
+
+  defp ensure_merged_pr_preloads(%Task{} = task) do
+    preloads =
+      []
+      |> maybe_add_preload(task, :project)
+      |> maybe_add_preload(task, :stack)
+      |> maybe_add_plans_preload(task)
+
+    case preloads do
+      [] -> task
+      list -> Repo.preload(task, list)
+    end
+  end
+
+  defp maybe_add_preload(preloads, task, key) do
+    case Map.get(task, key) do
+      %Ecto.Association.NotLoaded{} -> [key | preloads]
+      _ -> preloads
+    end
+  end
+
+  defp maybe_add_plans_preload(preloads, %Task{plans: %Ecto.Association.NotLoaded{}}) do
+    [{:plans, [stages: :validations]} | preloads]
+  end
+
+  defp maybe_add_plans_preload(preloads, %Task{plans: plans}) when is_list(plans) do
+    # Plans loaded — check whether stages/validations are loaded through them.
+    needs_stages? =
+      Enum.any?(plans, fn plan ->
+        case Map.get(plan, :stages) do
+          %Ecto.Association.NotLoaded{} -> true
+          stages when is_list(stages) -> stages_missing_validations?(stages)
+          _ -> true
+        end
+      end)
+
+    if needs_stages? do
+      [{:plans, [stages: :validations]} | preloads]
+    else
+      preloads
+    end
+  end
+
+  defp maybe_add_plans_preload(preloads, _), do: preloads
+
+  defp stages_missing_validations?(stages) do
+    Enum.any?(stages, fn stage ->
+      case Map.get(stage, :validations) do
+        %Ecto.Association.NotLoaded{} -> true
+        _ -> false
+      end
+    end)
+  end
+
+  # Prefer the newest approved plan, then the newest completed plan, then
+  # the newest anything. Mirrors `current_plan/1`'s preference order but
+  # doesn't crash when no approved plan exists.
+  defp extract_pr_merged_sha(%Task{plans: plans, project: %Project{} = project})
+       when is_list(plans) do
+    plans
+    |> pick_plan_for_pr_lookup()
+    |> find_pr_merged_sha()
+    |> case do
+      nil -> nil
+      sha -> {:ok, sha, project}
+    end
+  end
+
+  defp extract_pr_merged_sha(_), do: nil
+
+  defp pick_plan_for_pr_lookup(plans) do
+    approved = plans |> Enum.filter(&(&1.status == "approved")) |> newest_by_version()
+    completed = plans |> Enum.filter(&(&1.status == "completed")) |> newest_by_version()
+    any = plans |> newest_by_version()
+
+    approved || completed || any
+  end
+
+  defp newest_by_version([]), do: nil
+
+  defp newest_by_version(plans) do
+    Enum.max_by(plans, &(&1.version || 0), fn -> nil end)
+  end
+
+  defp find_pr_merged_sha(nil), do: nil
+
+  defp find_pr_merged_sha(%Plan{stages: stages}) when is_list(stages) do
+    stages
+    |> Enum.flat_map(fn stage ->
+      case Map.get(stage, :validations) do
+        list when is_list(list) -> list
+        _ -> []
+      end
+    end)
+    |> Enum.find_value(fn validation ->
+      if validation.kind == "pr_merged" and validation.status == "passed" do
+        Map.get(validation.evidence || %{}, "merge_sha")
+      end
+    end)
+  end
+
+  defp find_pr_merged_sha(_), do: nil
+
+  defp stack_rollup_url(%Task{stack: %Stack{metadata: %{"rollup_pr" => %{"url" => url}}}})
+       when is_binary(url) and url != "",
+       do: url
+
+  defp stack_rollup_url(_), do: nil
+
+  @doc """
+  Return the ids of "follow-up" tasks that reference this target task's
+  UUID in their description AND were filed AFTER the target (temporal
+  invariant) AND are not `cancelled` (a cancelled follow-up is a retracted
+  claim, not a "was supposed to work but didn't" signal).
+
+  The set is derived from the `task_references` table (populated by
+  `Platform.Tasks.References` on task write) joined against `tasks`:
+
+      SELECT source_task.id
+      FROM task_references r
+      JOIN tasks source_task ON source_task.id = r.source_task_id
+      WHERE r.target_task_id = <task.id>
+        AND source_task.inserted_at > <task.inserted_at>
+        AND source_task.status IN ("backlog", "planning", "in_progress",
+                                    "in_review", "deploying", "done",
+                                    "blocked", "stack_pending")
+
+  Callers use this to distinguish a task that shipped clean (no follow-ups)
+  from one that shipped but was later re-opened via a new task (had
+  follow-ups). The temporal cut ensures a task filed BEFORE the target
+  can't be counted as a follow-up — the reference-scanner picks up any
+  UUID mention, so a task that predates the target and coincidentally
+  contains the UUID (unlikely but possible during renames/copies) would
+  otherwise pollute the set.
+
+  Accepts a `%Task{}` struct or a task id.
+  """
+  @spec follow_up_task_ids(Task.t() | String.t()) :: [String.t()]
+  def follow_up_task_ids(id) when is_binary(id) do
+    case Repo.get(Task, id) do
+      %Task{} = task -> follow_up_task_ids(task)
+      nil -> []
+    end
+  end
+
+  def follow_up_task_ids(%Task{} = task) do
+    from(r in TaskReference,
+      join: source in Task,
+      on: source.id == r.source_task_id,
+      where:
+        r.target_task_id == ^task.id and
+          source.inserted_at > ^task.inserted_at and
+          source.status in ^@follow_up_source_statuses and
+          is_nil(source.deleted_at),
+      select: source.id
+    )
+    |> Repo.all()
   end
 
   # ── Legacy ETS-based read-side (backward compat) ─────────────────────────

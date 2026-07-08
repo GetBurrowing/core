@@ -3776,6 +3776,281 @@ defmodule Platform.Federation.ToolSurfaceTest do
     end
   end
 
+  # ── task_create similar_tasks (stage 4, task 019f3dbb) ────────────────
+  #
+  # Pins the advisory `similar_tasks` field the `task_create` MCP handler
+  # attaches after a successful create. Plan reference:
+  # https://suite/tasks/019f3dbb (stage 4 — `task_create` response body).
+  #
+  # The similarity search runs synchronously so the response envelope
+  # carries the near-duplicate signal without a follow-up `memory_search`
+  # round-trip. It never blocks the create — a Search failure surfaces
+  # as `similar_tasks: []`. Project scope + self-match exclusion +
+  # threshold (see `similar_tasks_for/1` in `tool_surface.ex` for the
+  # rank-based confidence rationale) are the load-bearing invariants.
+
+  describe "task_create similar_tasks (stage 4, task 019f3dbb)" do
+    setup do
+      # Force the Noop provider so tests don't touch an external memory
+      # service. Lexical channel alone is enough to prove the similarity
+      # plumbing — the semantic channel is exercised by the search_test
+      # StubProvider fixtures at stage 3.
+      prev = Application.get_env(:platform, :memory_service, [])
+
+      Application.put_env(:platform, :memory_service, provider: Platform.Memory.Providers.Noop)
+
+      on_exit(fn -> Application.put_env(:platform, :memory_service, prev) end)
+      :ok
+    end
+
+    defmodule TS4ErrorProvider do
+      @behaviour Platform.Memory.Provider
+
+      @impl true
+      def ingest(_entries, _config), do: {:ok, 0}
+
+      @impl true
+      def search(_query, _opts, _config), do: {:error, :simulated_outage}
+
+      @impl true
+      def delete(_ids, _config), do: {:ok, 0}
+
+      @impl true
+      def health(_c), do: {:error, :simulated_outage}
+    end
+
+    test "fresh create returns similar_tasks: [] when project has no other tasks" do
+      project = create_project()
+
+      {:ok, result} =
+        ToolSurface.execute(
+          "task_create",
+          %{"project_id" => project.id, "title" => "Fresh solo task"},
+          %{}
+        )
+
+      assert Map.has_key?(result, :similar_tasks)
+      assert result.similar_tasks == []
+    end
+
+    test "similar_tasks: [] for a title that is deliberately orthogonal to seeded tasks" do
+      project = create_project()
+
+      {:ok, _seeded} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Fix summarizer memory leak",
+          description: "Investigate the 20MB per meeting leak"
+        })
+
+      {:ok, result} =
+        ToolSurface.execute(
+          "task_create",
+          %{
+            "project_id" => project.id,
+            "title" => "Migrate PostgreSQL 14 to 16 with pg_upgrade",
+            "description" => "Detailed steps for the DB engine upgrade"
+          },
+          %{}
+        )
+
+      # Orthogonal content shares no lexical tokens with the seeded
+      # task's title/description → no channel returns a hit → empty
+      # array (not nil).
+      assert result.similar_tasks == []
+    end
+
+    test "creating a near-duplicate returns the seeded task in similar_tasks" do
+      project = create_project()
+
+      {:ok, seeded} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Fix summarizer memory leak",
+          description:
+            "Investigate and fix the memory leak in the meeting summarizer that leaks 20MB per meeting",
+          priority: "high"
+        })
+
+      # Move the seeded task to in_progress so the advisory `status` on
+      # the hit surfaces the "already in flight" signal.
+      {:ok, seeded} = Tasks.transition_task_status(seeded, "in_progress")
+
+      {:ok, result} =
+        ToolSurface.execute(
+          "task_create",
+          %{
+            "project_id" => project.id,
+            "title" => "summarizer memory leak fix",
+            "description" => "the summarizer leaks memory each meeting - fix it",
+            "priority" => "medium"
+          },
+          %{}
+        )
+
+      # Task B was created successfully with the expected defaults.
+      assert result.status == "backlog"
+      assert is_binary(result.id)
+
+      # Exactly the seeded task surfaces as a similar task, carrying
+      # the advisory fields the agent uses to decide "in-flight" vs
+      # "shipped-clean" vs "was-supposed-to-work".
+      assert [entry] = result.similar_tasks
+      assert entry.id == seeded.id
+      assert entry.status == "in_progress"
+      assert entry.priority == "high"
+      assert entry.similarity_score >= 0.5
+      assert entry.follow_up_task_ids == []
+      assert entry.merged_pr_url == nil
+      assert entry.cancellation_note == nil
+      assert is_binary(entry.title)
+      assert is_binary(entry.updated_at)
+    end
+
+    test "self-match is excluded from similar_tasks" do
+      # The just-created task's own title/description will tsvector-match
+      # itself at rank 1 — the handler must strip it from the results
+      # before returning. Otherwise every create would return a
+      # `similar_tasks` entry pointing at the newly-created task itself,
+      # which is meaningless noise.
+      project = create_project()
+
+      {:ok, result} =
+        ToolSurface.execute(
+          "task_create",
+          %{
+            "project_id" => project.id,
+            "title" => "Ship phantom flood dedupe fix",
+            "description" => "Dedupe LiveKit webhooks by event id"
+          },
+          %{}
+        )
+
+      assert Enum.all?(result.similar_tasks, fn entry -> entry.id != result.id end)
+    end
+
+    test "similar_tasks never contains tasks from a different project" do
+      project_a = create_project()
+      project_b = create_project()
+
+      {:ok, _in_b} =
+        Tasks.create_task(%{
+          project_id: project_b.id,
+          title: "unique investigation topic alpha bravo",
+          description: "body in project B"
+        })
+
+      {:ok, result} =
+        ToolSurface.execute(
+          "task_create",
+          %{
+            "project_id" => project_a.id,
+            "title" => "unique investigation topic alpha bravo",
+            "description" => "body in project A"
+          },
+          %{}
+        )
+
+      # Byte-identical titles across projects must not leak — project
+      # scope is enforced by the `project_id` filter passed to
+      # `Search.search`. The response array shows only tasks in
+      # project_a, and since project_a had no other tasks pre-create,
+      # after self-exclusion the array is empty.
+      assert result.similar_tasks == []
+    end
+
+    test "similar_tasks filters weak matches below the 0.5 confidence threshold" do
+      # The rank-based confidence is `1.0 / min(semantic_rank, lexical_rank)`,
+      # so rank-3 hits (confidence 0.33) fall below the 0.5 cutoff. Seed
+      # three tsvector-matching tasks; the top-2 pass the threshold, the
+      # third is filtered out.
+      project = create_project()
+
+      for i <- 1..3 do
+        {:ok, _} =
+          Tasks.create_task(%{
+            project_id: project.id,
+            title: "raspberry gizmo cluster candidate #{i}",
+            description: "one of several near-matches"
+          })
+      end
+
+      {:ok, result} =
+        ToolSurface.execute(
+          "task_create",
+          %{
+            "project_id" => project.id,
+            "title" => "raspberry gizmo cluster",
+            "description" => "the definitive one"
+          },
+          %{}
+        )
+
+      assert length(result.similar_tasks) <= 2
+
+      assert Enum.all?(result.similar_tasks, fn entry ->
+               entry.similarity_score >= 0.5
+             end)
+    end
+
+    test "similar_tasks: [] when the semantic provider is unavailable (advisory degrade)" do
+      # Swap the provider for one whose search/3 returns `{:error, _}`.
+      # `Search.search` degrades to lexical-only in that case, and with
+      # no other tasks in the project, the response array is empty. The
+      # important invariant: task_create still succeeds and the field is
+      # present-and-empty, not missing. Same shape a memory-service
+      # outage produces in prod.
+      Application.put_env(:platform, :memory_service, provider: TS4ErrorProvider)
+
+      on_exit(fn ->
+        Application.put_env(:platform, :memory_service, provider: Platform.Memory.Providers.Noop)
+      end)
+
+      project = create_project()
+
+      {:ok, result} =
+        ToolSurface.execute(
+          "task_create",
+          %{"project_id" => project.id, "title" => "Provider errored — still create"},
+          %{}
+        )
+
+      # Task was created successfully.
+      assert is_binary(result.id)
+
+      # The advisory field is present-and-empty, not missing.
+      assert Map.has_key?(result, :similar_tasks)
+      assert result.similar_tasks == []
+    end
+
+    test "similar_tasks: [] when the task has nil description (defensive query normalization)" do
+      # `normalize_similarity_query/1` strips punctuation before handing
+      # the query to `Search.search`. A task with only a title (no
+      # description) still produces a well-formed query and never raises.
+      project = create_project()
+
+      {:ok, result} =
+        ToolSurface.execute(
+          "task_create",
+          %{"project_id" => project.id, "title" => "Just a title, no body"},
+          %{}
+        )
+
+      assert Map.has_key?(result, :similar_tasks)
+      assert result.similar_tasks == []
+    end
+
+    test "tool_definitions/0 advertises similar_tasks in task_create's `returns`" do
+      # Pin the wire-contract prose so a future refactor doesn't silently
+      # drop the advisory field description from the tool catalog.
+      tools = ToolSurface.tool_definitions()
+      task_create = Enum.find(tools, &(&1.name == "task_create"))
+
+      assert task_create.returns =~ "similar_tasks"
+      assert task_create.returns =~ "similarity_score"
+    end
+  end
+
   # ── Helpers ──────────────────────────────────────────────────────────
 
   # `space_leave` calls ActiveAgentStore.clear_if_match/2 — start the GenServer

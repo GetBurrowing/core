@@ -90,7 +90,26 @@ defmodule Platform.Tasks.Task do
     # manual-review default for existing rows and callers.
     field(:auto_approve_plan, :boolean, default: false)
 
+    # `search_vector` (task 019f3dbb stage 1) is a Postgres `tsvector`
+    # column, `GENERATED ALWAYS AS (to_tsvector('english', coalesce(title,
+    # '') || ' ' || coalesce(description, ''))) STORED` — see migration
+    # `20260708120000_add_search_vector_and_task_references_to_tasks.exs`.
+    # Not declared as an Ecto field: we mirror `Platform.Org.WikiPage` /
+    # `Platform.Org.WikiJournalEntry`, which drive their tsvector via
+    # `fragment("... ?", p.search_vector, ...)` inside
+    # `Platform.Org.Wiki.Search` without a schema declaration. Stage 3 adds
+    # the task-corpus channel to `Search` and follows the same fragment
+    # pattern.
+
     has_many(:plans, Platform.Tasks.Plan)
+
+    has_many(:outgoing_task_references, Platform.Tasks.TaskReference,
+      foreign_key: :source_task_id
+    )
+
+    has_many(:incoming_task_references, Platform.Tasks.TaskReference,
+      foreign_key: :target_task_id
+    )
 
     timestamps(type: :utc_datetime_usec)
   end

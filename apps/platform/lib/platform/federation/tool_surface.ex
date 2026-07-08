@@ -611,7 +611,7 @@ defmodule Platform.Federation.ToolSurface do
       %{
         name: "memory_search",
         description:
-          "Hybrid (semantic + lexical) search across memory pages, journal entries, and chat messages. Results are source-tagged and ranked via Reciprocal Rank Fusion (k=60) across corpora. Message hits are filtered to spaces the calling agent participates in.",
+          "Hybrid (semantic + lexical) search across memory pages, journal entries, chat messages, and tasks. Results are source-tagged and ranked via Reciprocal Rank Fusion (k=60) across corpora. Message hits are filtered to spaces the calling agent participates in.",
         parameters: %{
           query: %{
             type: "string",
@@ -622,7 +622,7 @@ defmodule Platform.Federation.ToolSurface do
             type: "string",
             required: false,
             description:
-              "Restrict to one corpus: `\"page\"`, `\"journal\"`, or `\"message\"`. Omit for all three."
+              "Restrict to one corpus: `\"page\"`, `\"journal\"`, `\"message\"`, or `\"task\"`. Omit for all four."
           },
           namespace: %{
             type: "string",
@@ -665,11 +665,11 @@ defmodule Platform.Federation.ToolSurface do
           }
         },
         returns:
-          "%{results: [%{source, id, path, space_id, content, score, semantic_rank, lexical_rank, authored_by, date_or_inserted_at}], fusion_constant_k: 60, truncated: boolean}",
+          "%{results: [%{source, id, path, space_id, content, score, semantic_rank, lexical_rank, authored_by, date_or_inserted_at}], fusion_constant_k: 60, truncated: boolean}. Task hits (source: \"task\") carry additional advisory fields: `status`, `priority`, `updated_at`, `merged_pr_url` (or nil), `follow_up_task_ids` (list of open tasks that reference this one), and `cancellation_note` (rework directive for cancelled tasks).",
         limitations:
           "Message hits are filtered to spaces the calling agent participates in (anonymous callers get no message hits). Deleted or orphaned rows are silently dropped. `truncated: true` indicates a channel hit its `2*limit` cap and a higher `limit` may surface more hits.",
         when_to_use:
-          "When you need to recall information beyond the org preamble — past decisions, journal entries, relevant chat threads, or any cross-corpus lookup."
+          "When you need to recall information beyond the org preamble — past decisions, journal entries, relevant chat threads, prior tasks (shipped or in-flight), or any cross-corpus lookup."
       }
     ]
   end
@@ -1278,7 +1278,7 @@ defmodule Platform.Federation.ToolSurface do
           }
         },
         returns:
-          "The created task object with id, title, status, priority, and sponsor (nil unless sponsor_user_id was supplied, else %{id, name, email}). When stack_id is supplied, the response also includes stack_id and stack_position.",
+          "The created task object with id, title, status, priority, and sponsor (nil unless sponsor_user_id was supplied, else %{id, name, email}). When stack_id is supplied, the response also includes stack_id and stack_position. Response also includes advisory `similar_tasks: [%{id, title, status, priority, similarity_score, updated_at, merged_pr_url, follow_up_task_ids, cancellation_note}]` (0-5 near-duplicate hits with similarity_score >= 0.5, scoped to the same project) so the caller can detect near-duplicates and decide to fold, reference, or file fresh without a follow-up memory_search. Empty array (not nil) when no matches or when the similarity search fails.",
         limitations:
           "Requires a valid project_id. If stack_id is supplied, the stack must exist and the resulting in-stack DAG must remain acyclic with no cross-stack dependency edges. If sponsor_user_id is supplied it must reference an existing user (FK enforced). When auto_approve_plan is true, the plan won't auto-approve unless every phase assignee resolves to an agent.",
         when_to_use: "When you need to track a work item, feature, bug, or action item"
@@ -2939,6 +2939,11 @@ defmodule Platform.Federation.ToolSurface do
         task = Repo.preload(task, :sponsor)
         Tasks.broadcast_board({:task_created, task})
 
+        # Stage 4 (019f3dbb): advisory self-similarity search. Empty
+        # array on failure (never blocks the create). See
+        # `similar_tasks_for/1` below for the threshold + shape.
+        similar_tasks = similar_tasks_for(task)
+
         case Map.get(args, "stack_id") do
           nil ->
             {:ok,
@@ -2950,7 +2955,8 @@ defmodule Platform.Federation.ToolSurface do
                project_id: task.project_id,
                epic_id: task.epic_id,
                sponsor: serialize_sponsor(task.sponsor),
-               auto_approve_plan: task.auto_approve_plan
+               auto_approve_plan: task.auto_approve_plan,
+               similar_tasks: similar_tasks
              }}
 
           stack_id ->
@@ -2969,7 +2975,8 @@ defmodule Platform.Federation.ToolSurface do
                    sponsor: serialize_sponsor(updated.sponsor),
                    stack_id: updated.stack_id,
                    stack_position: updated.stack_position,
-                   auto_approve_plan: updated.auto_approve_plan
+                   auto_approve_plan: updated.auto_approve_plan,
+                   similar_tasks: similar_tasks
                  }}
 
               {:error, _} = err ->
@@ -2985,6 +2992,146 @@ defmodule Platform.Federation.ToolSurface do
            suggestion: "Check that project_id is valid and title is provided"
          }}
     end
+  end
+
+  # Stage 4 (019f3dbb) — advisory self-similarity search for
+  # `task_create`. Runs synchronously post-create because the caller
+  # needs the field in the same response envelope (a follow-up
+  # `memory_search` round-trip would double the create's latency).
+  #
+  # ## Threshold
+  #
+  # The plan (task 019f3dbb stage 4) expresses the "strong match" cutoff
+  # as `similarity_score >= 0.5`. `Platform.Org.Wiki.Search` produces
+  # RRF-fused scores bounded by roughly `2 * 1/(k + 1) ≈ 0.033` at k=60,
+  # so the fused `score` on the hit envelope never crosses 0.5 in
+  # practice. We derive `similarity_score` from the hit's channel ranks
+  # instead — `1.0 / min(semantic_rank, lexical_rank)` — which cleanly
+  # maps to the plan's mental model:
+  #
+  #   * rank 1 → 1.0 (near-identical content, both channels rank 1
+  #     usually means the title tokens overlap fully)
+  #   * rank 2 → 0.5 (still a plausible duplicate)
+  #   * rank 3 → 0.33 (weak — filtered out)
+  #
+  # So the effective filter is "top-2 in at least one channel," which
+  # is the "strong match" bar the plan describes.
+  #
+  # ## Advisory guarantees
+  #
+  # - Never blocks the create — a raise or `{:error, _}` from `Search`
+  #   surfaces as `similar_tasks: []` and a `:warning` log line.
+  # - Self-match is excluded (the just-created task will often lexical-
+  #   match its own title at rank 1).
+  # - Project scope is enforced through the `project_id` filter passed
+  #   to `Search.search`; cross-project leakage cannot occur because the
+  #   lexical `tasks` channel joins projects and the semantic channel
+  #   filters on the `project_id` provider option.
+  defp similar_tasks_for(task) do
+    try do
+      query_text =
+        [task.title, task.description]
+        |> Enum.reject(&(&1 in [nil, ""]))
+        |> Enum.join(" ")
+        |> normalize_similarity_query()
+
+      case Search.search(query_text,
+             source: "task",
+             project_id: task.project_id,
+             # Pull one extra so we still return up to 5 after dropping
+             # the self-match.
+             limit: 6,
+             # Task creation may run under a system context with no
+             # caller agent; tenancy is enforced via `project_id`.
+             agent: nil
+           ) do
+        {:ok, %{results: results}} ->
+          results
+          |> Enum.reject(fn hit -> hit.id == task.id end)
+          |> Enum.map(&similar_task_entry/1)
+          |> Enum.filter(fn entry -> entry.similarity_score >= 0.5 end)
+          |> Enum.take(5)
+
+        {:error, reason} ->
+          Logger.warning("task_create similarity search returned error: #{inspect(reason)}")
+
+          []
+      end
+    rescue
+      error ->
+        Logger.warning("task_create similarity search raised: #{Exception.message(error)}")
+
+        []
+    catch
+      # `Search.search` fans channels through `Task.async_stream` — a
+      # crash in a semantic-provider `search/3` implementation surfaces
+      # as an EXIT that leaks out of the stream. Treat it identically
+      # to the rescue path: advisory search, never blocks the create.
+      kind, reason when kind in [:exit, :throw] ->
+        Logger.warning("task_create similarity search exited: #{inspect({kind, reason})}")
+
+        []
+    end
+  end
+
+  # Project a `Platform.Org.Wiki.Search` task hit into the advisory
+  # `similar_tasks` entry the plan spec calls out. Fields flow through
+  # from stage 3's hydration — see `Search.task_to_hit/2`.
+  defp similar_task_entry(hit) do
+    %{
+      id: hit.id,
+      title: hit_title(hit),
+      status: hit.status,
+      priority: hit.priority,
+      similarity_score: hit_similarity_score(hit),
+      updated_at: hit.updated_at,
+      merged_pr_url: hit.merged_pr_url,
+      follow_up_task_ids: hit.follow_up_task_ids,
+      cancellation_note: hit.cancellation_note
+    }
+  end
+
+  # `Search` builds `content` as `title` or `title <> " — " <> description`.
+  # Recover the title cheaply without re-fetching the task row.
+  defp hit_title(%{content: content}) when is_binary(content) do
+    case String.split(content, " — ", parts: 2) do
+      [title | _] -> title
+      _ -> content
+    end
+  end
+
+  defp hit_title(_), do: ""
+
+  # See `similar_tasks_for/1` for the rationale — rank-based confidence
+  # in [0, 1]. `100` is the "not present in this channel" sentinel; both
+  # ranks missing would already have been filtered upstream (a hit with
+  # no channel rank cannot exist), so the max is a defensive floor.
+  defp hit_similarity_score(%{semantic_rank: semantic_rank, lexical_rank: lexical_rank}) do
+    ranks = Enum.reject([semantic_rank, lexical_rank], &is_nil/1)
+
+    min_rank =
+      case ranks do
+        [] -> 100
+        list -> Enum.min(list)
+      end
+
+    Float.round(1.0 / min_rank, 3)
+  end
+
+  defp hit_similarity_score(_), do: 0.0
+
+  # `Search.search` funnels the query into `websearch_to_tsquery('english', ?)`,
+  # which treats `-` as a NOT operator (`meeting -fix` → `meeting & !fix`),
+  # `"..."` as a phrase, and `OR` as alternation. A task's title +
+  # description is arbitrary prose — an em-dash inside "the summarizer
+  # leaks memory each meeting - fix it" would silently exclude every
+  # candidate that mentions "fix". Normalise punctuation to whitespace
+  # so the query is a plain token bag and the tsquery only carries the
+  # implicit-AND of stems.
+  defp normalize_similarity_query(text) do
+    text
+    |> String.replace(~r/[^\p{L}\p{N}]+/u, " ")
+    |> String.trim()
   end
 
   def execute("meeting_create", args, context) do
