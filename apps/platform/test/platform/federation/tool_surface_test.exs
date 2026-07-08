@@ -989,6 +989,7 @@ defmodule Platform.Federation.ToolSurfaceTest do
 
     test "task_create with auto_approve_plan: true persists and returns the flag" do
       project = create_project()
+      agent = create_agent()
 
       {:ok, result} =
         ToolSurface.execute(
@@ -996,13 +997,56 @@ defmodule Platform.Federation.ToolSurfaceTest do
           %{
             "project_id" => project.id,
             "title" => "Auto-approved",
-            "auto_approve_plan" => true
+            "auto_approve_plan" => true,
+            "assignee_id" => agent.id,
+            "assignee_type" => "agent"
           },
           %{}
         )
 
       assert result.auto_approve_plan == true
       assert Tasks.get_task_record(result.id).auto_approve_plan == true
+    end
+
+    # Guards the tool-surface contract added 2026-07-08: setting
+    # auto_approve_plan without an agent assignee silently stalled the
+    # plan-engine (plan flips to approved but no planner picks it up).
+    test "task_create with auto_approve_plan: true and no assignee is refused" do
+      project = create_project()
+
+      assert {:error, envelope} =
+               ToolSurface.execute(
+                 "task_create",
+                 %{
+                   "project_id" => project.id,
+                   "title" => "Auto-approved no assignee",
+                   "auto_approve_plan" => true
+                 },
+                 %{}
+               )
+
+      assert envelope.error =~ "auto_approve_plan requires an assignee"
+      assert envelope.recoverable == true
+    end
+
+    test "task_create with auto_approve_plan: true and a user (non-agent) assignee is refused" do
+      project = create_project()
+      user = insert_user_for_sponsor()
+
+      assert {:error, envelope} =
+               ToolSurface.execute(
+                 "task_create",
+                 %{
+                   "project_id" => project.id,
+                   "title" => "Auto-approved user assignee",
+                   "auto_approve_plan" => true,
+                   "assignee_id" => user.id,
+                   "assignee_type" => "user"
+                 },
+                 %{}
+               )
+
+      assert envelope.error =~ "auto_approve_plan requires an agent assignee"
     end
 
     test "task_create without auto_approve_plan defaults to false in the envelope" do

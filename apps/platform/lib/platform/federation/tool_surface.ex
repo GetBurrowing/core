@@ -2937,6 +2937,53 @@ defmodule Platform.Federation.ToolSurface do
       auto_approve_plan: Map.get(args, "auto_approve_plan", false)
     }
 
+    case validate_auto_approve_requires_assignee(attrs) do
+      {:error, _} = err ->
+        err
+
+      :ok ->
+        do_create_task(attrs, args)
+    end
+  end
+
+  # `auto_approve_plan: true` is meaningless without an agent-typed
+  # assignee — the plan-engine has no one to dispatch to, so the plan
+  # flips to approved but no planner picks it up (silent stall). Refuse
+  # at the tool boundary so the caller notices. Enforced on both
+  # `task_create` and `task_update`. On update we check the RESOLVED
+  # assignee (post-merge with the existing task row) because the caller
+  # might legitimately be flipping the flag without touching assignee.
+  defp validate_auto_approve_requires_assignee(%{auto_approve_plan: true} = attrs) do
+    assignee_id = Map.get(attrs, :assignee_id)
+    assignee_type = Map.get(attrs, :assignee_type)
+
+    cond do
+      is_nil(assignee_id) or assignee_id == "" ->
+        {:error,
+         %{
+           error: "auto_approve_plan requires an assignee",
+           recoverable: true,
+           suggestion:
+             "Set assignee_id + assignee_type in the same call, or omit auto_approve_plan (defaults to false) and set it later once an assignee is configured."
+         }}
+
+      assignee_type != "agent" ->
+        {:error,
+         %{
+           error: "auto_approve_plan requires an agent assignee",
+           recoverable: true,
+           suggestion:
+             "Auto-approve dispatches to the assigned agent's planner runtime. Set assignee_type to \"agent\" and pass an agent's id in assignee_id."
+         }}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp validate_auto_approve_requires_assignee(_attrs), do: :ok
+
+  defp do_create_task(attrs, args) do
     case Tasks.create_task(attrs) do
       {:ok, task} ->
         # Preload sponsor so the return envelope shows the shape a
@@ -3313,63 +3360,89 @@ defmodule Platform.Federation.ToolSurface do
             end
           end)
 
-        # Use transition_task_status for status changes, regular update for others
-        status_change = Map.get(update_attrs, :status)
-        other_attrs = Map.delete(update_attrs, :status)
+        # If auto_approve_plan is being flipped to true (in this call or
+        # already true and not being changed), resolve the effective
+        # assignee across THIS update's attrs merged over the existing
+        # task, and reject if the result is an unassigned or non-agent
+        # task. Silent auto-approve without an assignee is the bug this
+        # guards against — the plan flips to approved but no planner
+        # picks it up. See task 019f42fd session note 2026-07-08.
+        auto_check =
+          case Map.get(update_attrs, :auto_approve_plan, task.auto_approve_plan) do
+            true ->
+              validate_auto_approve_requires_assignee(%{
+                auto_approve_plan: true,
+                assignee_id: Map.get(update_attrs, :assignee_id, task.assignee_id),
+                assignee_type: Map.get(update_attrs, :assignee_type, task.assignee_type)
+              })
 
-        # Apply non-status updates first
-        result =
-          if map_size(other_attrs) > 0 do
-            Tasks.update_task(task, other_attrs)
-          else
-            {:ok, task}
+            _ ->
+              :ok
           end
 
-        # Then apply status transition if requested
-        result =
-          case {result, status_change} do
-            {{:ok, updated_task}, nil} ->
-              {:ok, updated_task}
-
-            {{:ok, updated_task}, new_status} ->
-              Tasks.transition_task_status(updated_task, new_status)
-
-            {{:error, _} = err, _} ->
-              err
-          end
-
-        case result do
-          {:ok, updated} ->
-            # `Tasks.update_task/2` and `Tasks.transition_task_status/2`
-            # return the un-preloaded struct. Refresh sponsor so
-            # `serialize_task` can emit the current shape — otherwise a
-            # caller that just cleared the sponsor via `sponsor_user_id:
-            # nil` would still see the pre-update Sponsor%User in the
-            # response envelope.
-            updated = Repo.preload(updated, :sponsor, force: true)
-            Tasks.broadcast_board({:task_updated, updated})
-            {:ok, serialize_task(updated)}
-
-          {:error, :invalid_transition} ->
-            {:error,
-             %{
-               error: "Invalid status transition from '#{task.status}' to '#{status_change}'",
-               recoverable: true,
-               suggestion:
-                 "Check allowed transitions for the current status. " <>
-                   "To retire a non-started task without walking it through in_progress, " <>
-                   "transition to 'cancelled' (terminal, allowed from backlog/planning/" <>
-                   "in_progress/blocked/stack_pending)."
-             }}
-
-          {:error, changeset} ->
-            {:error,
-             %{
-               error: "Failed to update task: #{inspect_errors(changeset)}",
-               recoverable: true,
-               suggestion: "Check that the provided values are valid"
-             }}
+        with :ok <- auto_check do
+          do_task_update(task, update_attrs, args)
         end
+    end
+  end
+
+  defp do_task_update(task, update_attrs, args) do
+    # Use transition_task_status for status changes, regular update for others
+    status_change = Map.get(update_attrs, :status)
+    other_attrs = Map.delete(update_attrs, :status)
+
+    # Apply non-status updates first
+    result =
+      if map_size(other_attrs) > 0 do
+        Tasks.update_task(task, other_attrs)
+      else
+        {:ok, task}
+      end
+
+    # Then apply status transition if requested
+    result =
+      case {result, status_change} do
+        {{:ok, updated_task}, nil} ->
+          {:ok, updated_task}
+
+        {{:ok, updated_task}, new_status} ->
+          Tasks.transition_task_status(updated_task, new_status)
+
+        {{:error, _} = err, _} ->
+          err
+      end
+
+    case result do
+      {:ok, updated} ->
+        # `Tasks.update_task/2` and `Tasks.transition_task_status/2`
+        # return the un-preloaded struct. Refresh sponsor so
+        # `serialize_task` can emit the current shape — otherwise a
+        # caller that just cleared the sponsor via `sponsor_user_id:
+        # nil` would still see the pre-update Sponsor%User in the
+        # response envelope.
+        updated = Repo.preload(updated, :sponsor, force: true)
+        Tasks.broadcast_board({:task_updated, updated})
+        {:ok, serialize_task(updated)}
+
+      {:error, :invalid_transition} ->
+        {:error,
+         %{
+           error: "Invalid status transition from '#{task.status}' to '#{status_change}'",
+           recoverable: true,
+           suggestion:
+             "Check allowed transitions for the current status. " <>
+               "To retire a non-started task without walking it through in_progress, " <>
+               "transition to 'cancelled' (terminal, allowed from backlog/planning/" <>
+               "in_progress/blocked/stack_pending)."
+         }}
+
+      {:error, changeset} ->
+        {:error,
+         %{
+           error: "Failed to update task: #{inspect_errors(changeset)}",
+           recoverable: true,
+           suggestion: "Check that the provided values are valid"
+         }}
     end
   end
 
