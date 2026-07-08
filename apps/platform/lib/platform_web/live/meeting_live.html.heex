@@ -149,17 +149,19 @@
           </span>
         </button>
 
-        <%!-- Copy guest link (stage 4 of task 019f2483). Host-only: gated
-             on the current viewer's participant row matching the meeting's
-             `host_participant_id`. Clicking opens the guest-invite sheet
-             below; the sheet handles chat-space provisioning + token
-             signing. Hidden on very narrow viewports to keep the top-bar
-             from wrapping — the sheet itself is reachable from the
-             (planned) chat-side invite affordance on mobile. --%>
+        <%!-- Copy guest link (stage 4 of task 019f2483). TEMPORARY:
+             host-participant gate removed because MeetingLive's
+             "Start a meeting" handler does not currently provision
+             `host_participant_id` (only the MCP `meeting_create` path
+             does, via `maybe_default_host_participant/3` at
+             `tool_surface.ex:6471`). Until that gap closes, expose the
+             button to any current participant so testing is unblocked.
+             Follow-up: extract `maybe_default_host_participant` into the
+             `Meetings` context + call from `start_meeting` handler, then
+             restore the host-only gate. Hidden on very narrow viewports
+             to keep the top-bar from wrapping. --%>
         <button
-          :if={
-            @current_participant && PlatformWeb.MeetingLive.host?(@current_participant, @meeting)
-          }
+          :if={@current_participant}
           type="button"
           phx-click="open_guest_invite_sheet"
           aria-label="Copy guest link"
