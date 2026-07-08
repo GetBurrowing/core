@@ -1316,11 +1316,13 @@ defmodule Platform.Tasks do
   def list_all_tasks(opts \\ []) do
     project_id = Keyword.get(opts, :project_id)
     epic_id = Keyword.get(opts, :epic_id)
+    sponsor_user_id = Keyword.get(opts, :sponsor_user_id)
 
     Task
     |> where([t], is_nil(t.deleted_at))
     |> maybe_filter_project(project_id)
     |> maybe_filter_epic(epic_id)
+    |> maybe_filter_sponsor(sponsor_user_id)
     |> order_by([t], desc: t.inserted_at)
     |> preload([:project, :epic, :sponsor, plans: :stages])
     |> Repo.all()
@@ -1334,6 +1336,15 @@ defmodule Platform.Tasks do
 
   defp maybe_filter_status(query, nil), do: query
   defp maybe_filter_status(query, status), do: where(query, [t], t.status == ^status)
+
+  # Stage 2 of task 019f3f22 (ADR-0042 sponsor visibility): opt-in filter
+  # to narrow the board to tasks the given user sponsors. `nil` is the
+  # unfiltered passthrough — mirrors `maybe_filter_project/2`'s pattern
+  # so `list_all_tasks/1` + `list_by_status/1` accept the opt uniformly.
+  defp maybe_filter_sponsor(query, nil), do: query
+
+  defp maybe_filter_sponsor(query, sponsor_user_id),
+    do: where(query, [t], t.sponsor_user_id == ^sponsor_user_id)
 
   # ── Kanban column data shape ─────────────────────────────────────────────
   #
@@ -1410,6 +1421,7 @@ defmodule Platform.Tasks do
   def list_by_status(opts \\ []) do
     project_id = Keyword.get(opts, :project_id)
     epic_id = Keyword.get(opts, :epic_id)
+    sponsor_user_id = Keyword.get(opts, :sponsor_user_id)
 
     # Statuses we actually pull from the DB: the 7 directly-bucketed ones
     # plus any whose tasks we fold into another bucket (e.g. cancelled →
@@ -1425,6 +1437,7 @@ defmodule Platform.Tasks do
       |> where([t], t.status in ^fetched_statuses)
       |> maybe_filter_project(project_id)
       |> maybe_filter_epic(epic_id)
+      |> maybe_filter_sponsor(sponsor_user_id)
       |> order_by([t], desc: t.updated_at)
       # `plans: :stages` is required by the desktop kanban template,
       # which renders per-card plan progress (`<passed>/<total>` stage

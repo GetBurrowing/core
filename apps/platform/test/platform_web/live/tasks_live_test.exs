@@ -832,6 +832,214 @@ defmodule PlatformWeb.TasksLiveTest do
     end
   end
 
+  describe "\"Sponsored by me\" filter (Stage 2 of task 019f3f22 — ADR-0042)" do
+    test "renders sponsored-by-me toggle in scope rail", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      {:ok, _view, html} = live(conn, ~p"/tasks")
+
+      # The toggle sits in the desktop scope rail. `data-role` is the
+      # deterministic hook for e2e / Playwright, matching the existing
+      # `data-scope-chip` pattern.
+      assert html =~ ~s(data-role="sponsor-filter-toggle")
+      assert html =~ "Sponsored by me"
+      # Default state: filter is `:all`, so aria-pressed is false.
+      assert html =~ ~s(aria-pressed="false")
+    end
+
+    test "default sponsor_filter is :all on mount", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+
+      assert :sys.get_state(view.pid).socket.assigns.sponsor_filter == :all
+    end
+
+    test "toggle_sponsor_filter narrows board to current-user-sponsored tasks", %{conn: conn} do
+      project = create_project()
+      {conn, user} = authenticated_conn_with_user(conn)
+      other_user = create_user()
+
+      # Own-sponsored tasks (should stay visible when filter is active).
+      mine1 =
+        create_task(project, %{
+          title: "Mine Alpha",
+          status: "in_progress",
+          sponsor_user_id: user.id
+        })
+
+      mine2 =
+        create_task(project, %{title: "Mine Beta", status: "backlog", sponsor_user_id: user.id})
+
+      # Non-own tasks (must disappear when filter is active).
+      other1 =
+        create_task(project, %{
+          title: "Other Alpha",
+          status: "in_progress",
+          sponsor_user_id: other_user.id
+        })
+
+      unsponsored = create_task(project, %{title: "Unsponsored", status: "backlog"})
+
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+
+      html = render_click(view, "toggle_sponsor_filter", %{})
+
+      # Filter is now :mine.
+      assert :sys.get_state(view.pid).socket.assigns.sponsor_filter == :mine
+
+      # Own tasks stay on the desktop board.
+      assert html =~ ~s(id="task-card-#{mine1.id}")
+      assert html =~ ~s(id="task-card-#{mine2.id}")
+
+      # Non-own tasks are gone from the desktop board.
+      refute html =~ ~s(id="task-card-#{other1.id}")
+      refute html =~ ~s(id="task-card-#{unsponsored.id}")
+
+      # Toggle is now marked pressed.
+      assert html =~ ~s(aria-pressed="true")
+    end
+
+    test "toggle push_patches URL to include ?sponsor=mine", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+
+      render_click(view, "toggle_sponsor_filter", %{})
+
+      # LiveView records the last patched path on the view.
+      assert_patched(view, ~p"/tasks?sponsor=mine")
+    end
+
+    test "toggle back to :all drops the sponsor param entirely", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/tasks?sponsor=mine")
+
+      # Confirm we started in :mine from the URL param.
+      assert :sys.get_state(view.pid).socket.assigns.sponsor_filter == :mine
+
+      render_click(view, "toggle_sponsor_filter", %{})
+
+      # Canonical URL: no ?sponsor param when back to :all.
+      assert_patched(view, ~p"/tasks")
+      assert :sys.get_state(view.pid).socket.assigns.sponsor_filter == :all
+    end
+
+    test "?sponsor=mine URL param activates filter on mount", %{conn: conn} do
+      project = create_project()
+      {conn, user} = authenticated_conn_with_user(conn)
+      other_user = create_user()
+
+      mine =
+        create_task(project, %{
+          title: "Mine On Mount",
+          status: "in_progress",
+          sponsor_user_id: user.id
+        })
+
+      other =
+        create_task(project, %{
+          title: "Other On Mount",
+          status: "in_progress",
+          sponsor_user_id: other_user.id
+        })
+
+      {:ok, view, html} = live(conn, ~p"/tasks?sponsor=mine")
+
+      # Filter is active on connected mount, purely from the URL.
+      assert :sys.get_state(view.pid).socket.assigns.sponsor_filter == :mine
+      assert html =~ ~s(aria-pressed="true")
+      # The board is narrowed accordingly.
+      assert html =~ ~s(id="task-card-#{mine.id}")
+      refute html =~ ~s(id="task-card-#{other.id}")
+    end
+
+    test "unknown sponsor param resolves to :all (defensive)", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/tasks?sponsor=totally-not-mine")
+
+      assert :sys.get_state(view.pid).socket.assigns.sponsor_filter == :all
+    end
+
+    test "custom empty state shows when filter active + zero results", %{conn: conn} do
+      project = create_project()
+      {conn, _user} = authenticated_conn_with_user(conn)
+      other_user = create_user()
+
+      # Seed only OTHER-sponsored tasks — none sponsored by the logged-in user.
+      _t1 =
+        create_task(project, %{
+          title: "Not Mine A",
+          status: "in_progress",
+          sponsor_user_id: other_user.id
+        })
+
+      _t2 =
+        create_task(project, %{
+          title: "Not Mine B",
+          status: "backlog",
+          sponsor_user_id: other_user.id
+        })
+
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+
+      html = render_click(view, "toggle_sponsor_filter", %{})
+
+      # Board-level custom empty state IS present. HEEX HTML-escapes the
+      # `'` in "You're" as `&#39;`, so match the two static halves of the
+      # copy separately rather than the raw phrase.
+      assert html =~ ~s(data-role="sponsor-filter-empty-state")
+      assert html =~ "not sponsoring any tasks currently"
+    end
+
+    test "custom empty state is NOT shown when filter is off", %{conn: conn} do
+      project = create_project()
+      _t1 = create_task(project, %{title: "Just There", status: "in_progress"})
+
+      conn = authenticated_conn(conn)
+      {:ok, _view, html} = live(conn, ~p"/tasks")
+
+      refute html =~ ~s(data-role="sponsor-filter-empty-state")
+      refute html =~ "You're not sponsoring any tasks currently"
+    end
+
+    test "list_by_status/1 filters by sponsor_user_id opt", %{conn: _conn} do
+      project = create_project()
+      user = create_user()
+      other = create_user()
+
+      mine =
+        create_task(project, %{
+          title: "My Sponsored List",
+          status: "in_progress",
+          sponsor_user_id: user.id
+        })
+
+      _other =
+        create_task(project, %{
+          title: "Other Sponsored List",
+          status: "in_progress",
+          sponsor_user_id: other.id
+        })
+
+      _unsponsored = create_task(project, %{title: "No Sponsor List", status: "in_progress"})
+
+      # Unfiltered: all three appear in :in_progress bucket.
+      unfiltered = Tasks.list_by_status()
+      unfiltered_titles = Enum.map(unfiltered.in_progress, & &1.title)
+      assert "My Sponsored List" in unfiltered_titles
+      assert "Other Sponsored List" in unfiltered_titles
+      assert "No Sponsor List" in unfiltered_titles
+
+      # Filtered by sponsor_user_id: only own-sponsored task in the bucket.
+      filtered = Tasks.list_by_status(sponsor_user_id: user.id)
+      filtered_titles = Enum.map(filtered.in_progress, & &1.title)
+      assert "My Sponsored List" in filtered_titles
+      refute "Other Sponsored List" in filtered_titles
+      refute "No Sponsor List" in filtered_titles
+
+      # Also confirm the specific task id is present.
+      assert Enum.any?(filtered.in_progress, &(&1.id == mine.id))
+    end
+  end
+
   test "clicking a task card opens the detail panel", %{conn: conn} do
     project = create_project()
     task = create_task(project, %{title: "Clickable Task", description: "A detailed description"})
@@ -4542,6 +4750,129 @@ defmodule PlatformWeb.TasksLiveTest do
       refute html_b =~ "Departing Cross-Session Sponsor"
 
       assert is_nil(Tasks.get_task_record(task.id).sponsor_user_id)
+    end
+  end
+
+  # ── Sponsor chip on task cards (ADR-0042 sponsor visibility stage 1) ───
+  #
+  # Task 019f3f22 renders the sponsor as a first-class card affordance on
+  # both desktop and mobile kanban cards. A sponsored task shows a small
+  # `<.human_avatar>` chip with `data-role="sponsor-avatar"` and a
+  # `Sponsored by <name>` title. When the current user is the sponsor, the
+  # chip gets a subtle `ring-primary/40` affordance. An unsponsored task
+  # renders no chip at all — the absence is the signal, not a placeholder.
+  describe "sponsor chip on task cards (visibility stage 1)" do
+    test "desktop card renders sponsor chip when sponsor_user_id is set", %{conn: conn} do
+      project = create_project()
+      sponsor = create_user_for_sponsor("Sponsor Sage")
+      _task = create_task(project, %{title: "Sponsored Desk Task", sponsor_user_id: sponsor.id})
+
+      conn = authenticated_conn(conn)
+      {:ok, _view, html} = live(conn, ~p"/tasks")
+
+      assert html =~ ~s|data-role="sponsor-avatar"|
+      assert html =~ "Sponsored by Sponsor Sage"
+    end
+
+    test "desktop card omits sponsor chip when sponsor_user_id is nil", %{conn: conn} do
+      project = create_project()
+      _task = create_task(project, %{title: "Unsponsored Desk Task"})
+
+      conn = authenticated_conn(conn)
+      {:ok, _view, html} = live(conn, ~p"/tasks")
+
+      refute html =~ ~s|data-role="sponsor-avatar"|
+    end
+
+    test "own-sponsored task gets ring-primary highlight; other-sponsor does not",
+         %{conn: conn} do
+      project = create_project()
+      other_sponsor = create_user_for_sponsor("Someone Else")
+
+      {conn, current_user} = authenticated_conn_with_user(conn)
+
+      # Task sponsored by the currently-logged-in user.
+      _mine =
+        create_task(project, %{
+          title: "My Sponsored Task",
+          sponsor_user_id: current_user.id
+        })
+
+      # Task sponsored by a different user.
+      _theirs =
+        create_task(project, %{
+          title: "Their Sponsored Task",
+          sponsor_user_id: other_sponsor.id
+        })
+
+      {:ok, _view, html} = live(conn, ~p"/tasks")
+
+      # Both chips render.
+      assert html =~ "Sponsored by Tasks Test User"
+      assert html =~ "Sponsored by Someone Else"
+
+      # The own-sponsored chip's title precedes a ring-primary class in the
+      # same avatar element. We locate the two chip fragments via title and
+      # assert the ring class appears in the own-sponsor fragment only.
+      mine_fragment = sponsor_chip_fragment(html, "Sponsored by Tasks Test User")
+      theirs_fragment = sponsor_chip_fragment(html, "Sponsored by Someone Else")
+
+      assert mine_fragment =~ "ring-primary/40",
+             "own-sponsored task chip should carry the ring-primary/40 affordance"
+
+      refute theirs_fragment =~ "ring-primary/40",
+             "other-user-sponsored task chip should not carry the ring-primary/40 affordance"
+    end
+
+    test "mobile viewport renders sponsor chip too (same data-role)", %{conn: conn} do
+      # The mobile card lives in the same LiveView render — this test asserts
+      # the mobile-card branch of the heex (nested under the mobile board
+      # container) emits its own sponsor chip so both viewports share the
+      # affordance without a separate render pass. The mobile card node is
+      # gated by `lg:hidden` in the wrapping div, but the HTML string still
+      # contains it — assertion is DOM-presence-based, not viewport-aware.
+      #
+      # Note: the mobile section only renders tasks matching the active
+      # pill filter (default `in_progress`), so the seeded task's status
+      # must land in that pill to force the mobile branch to render.
+      project = create_project()
+      sponsor = create_user_for_sponsor("Mobile Sponsor")
+
+      _task =
+        create_task(project, %{
+          title: "Mobile Sponsored Task",
+          sponsor_user_id: sponsor.id,
+          status: "in_progress"
+        })
+
+      conn = authenticated_conn(conn)
+      {:ok, _view, html} = live(conn, ~p"/tasks")
+
+      # There should be at least two `data-role="sponsor-avatar"` occurrences
+      # — one for the mobile card, one for the desktop card — since both
+      # branches of the heex render (client-side media queries hide one).
+      matches =
+        Regex.scan(~r|data-role="sponsor-avatar"|, html)
+        |> length()
+
+      assert matches >= 2,
+             "expected sponsor chip on both mobile + desktop card branches, got #{matches}"
+    end
+  end
+
+  # Extract a small window of HTML around the sponsor chip whose title
+  # matches `title_text`, so class assertions target a single chip element
+  # rather than the whole page. Falls back to the empty string if not found
+  # so a bogus title produces a `refute` false-positive-free failure.
+  defp sponsor_chip_fragment(html, title_text) do
+    case :binary.match(html, title_text) do
+      :nomatch ->
+        ""
+
+      {start, len} ->
+        before = max(start - 400, 0)
+        finish = min(start + len + 200, byte_size(html))
+        binary_part(html, before, finish - before)
     end
   end
 

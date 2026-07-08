@@ -182,6 +182,17 @@ defmodule PlatformWeb.TasksLive do
      # unaffected — the rail is `hidden lg:flex` only.
      |> assign(:scope_filter, :all)
      |> assign(:scope_counts, Tasks.count_by_scope())
+     # Stage-2 of task 019f3f22 (ADR-0042 sponsor visibility): `:sponsor_filter`
+     # is one of `:all` or `:mine`. Default `:all` keeps the board unchanged
+     # on first paint. `:mine` narrows both the desktop kanban (via
+     # `Platform.Tasks.list_by_status/1` `sponsor_user_id:` opt) and the
+     # mobile section list (via `list_all_tasks/1`) to tasks whose
+     # `sponsor_user_id` equals `@current_user_id`. The URL param
+     # `?sponsor=mine` is authoritative — `handle_params/3` decodes it on
+     # mount + toggle, matching the existing `?project=` shareability
+     # contract. LocalStorage / session persistence is intentionally out
+     # of scope per the ADR non-goals.
+     |> assign(:sponsor_filter, :all)
      |> assign(:pending_plan_count, count_pending_plans(all_tasks))
      |> assign(:review_counts, pending_review_counts(all_tasks))
      |> assign(:review_request_subscriptions, initial_task_ids)
@@ -448,7 +459,24 @@ defmodule PlatformWeb.TasksLive do
     end
   end
 
-  def handle_params(_params, _url, socket) do
+  def handle_params(params, _url, socket) do
+    # Stage-2 of task 019f3f22: `?sponsor=mine` is the authoritative
+    # source of truth for the "Sponsored by me" filter — decoded here so
+    # both push_patch toggles and direct URL loads (share-a-URL, refresh)
+    # land in the same state. Any other value (missing, "", "all", garbage)
+    # resolves to `:all` so we can't hang on malformed input.
+    new_sponsor_filter = decode_sponsor_param(params)
+    prev_sponsor_filter = socket.assigns[:sponsor_filter]
+
+    socket = assign(socket, :sponsor_filter, new_sponsor_filter)
+
+    socket =
+      if new_sponsor_filter != prev_sponsor_filter do
+        refresh_board(socket)
+      else
+        socket
+      end
+
     {:noreply,
      socket
      |> assign(:selected_task, nil)
@@ -637,6 +665,30 @@ defmodule PlatformWeb.TasksLive do
   # phx-value-scope so users can reset the filter from a single click.
   def handle_event("scope_filter", _params, socket) do
     {:noreply, assign(socket, :scope_filter, :all)}
+  end
+
+  # Stage-2 of task 019f3f22 (ADR-0042 sponsor visibility): flip the
+  # "Sponsored by me" filter between `:all` and `:mine`, then push_patch
+  # so the URL stays authoritative. Going back to `:all` DROPS the
+  # `?sponsor` param entirely to preserve the canonical URL (a
+  # `?sponsor=all` URL is never emitted). Query-string decoding lives in
+  # `handle_params/3` — that clause updates the assign + re-queries the
+  # board; this handler is a thin push_patch shim so a share-a-URL loader
+  # and a click loader end up in the same state.
+  def handle_event("toggle_sponsor_filter", _params, socket) do
+    next_filter =
+      case socket.assigns[:sponsor_filter] do
+        :mine -> :all
+        _ -> :mine
+      end
+
+    path =
+      case next_filter do
+        :mine -> ~p"/tasks?sponsor=mine"
+        _ -> ~p"/tasks"
+      end
+
+    {:noreply, push_patch(socket, to: path)}
   end
 
   def handle_event("clear_filters", _params, socket) do
@@ -2868,6 +2920,19 @@ defmodule PlatformWeb.TasksLive do
           id -> Keyword.put(o, :epic_id, id)
         end
       end)
+      |> then(fn o ->
+        # Stage-2 of task 019f3f22 (ADR-0042 sponsor visibility): thread
+        # the active sponsor filter through the query pipeline so both
+        # the desktop kanban (`list_by_status/1`) and mobile section list
+        # (`list_all_tasks/1`) narrow to `sponsor_user_id == current_user_id`
+        # when the "Sponsored by me" toggle is active. `nil` (i.e. no
+        # `:sponsor_user_id` opt) is the unfiltered passthrough that
+        # matches every prior refresh_board call site.
+        case sponsor_filter_user_id(socket) do
+          nil -> o
+          id -> Keyword.put(o, :sponsor_user_id, id)
+        end
+      end)
 
     tasks = Tasks.list_all_tasks(opts)
 
@@ -3962,6 +4027,37 @@ defmodule PlatformWeb.TasksLive do
 
   defp parse_scope(_), do: :error
 
+  # Stage-2 of task 019f3f22: decode the `?sponsor` URL param into the
+  # canonical filter atom. Only `"mine"` activates the filter — everything
+  # else (missing, empty, garbage) resolves to `:all` so malformed URLs
+  # can't hang the mount.
+  defp decode_sponsor_param(%{"sponsor" => "mine"}), do: :mine
+  defp decode_sponsor_param(_), do: :all
+
+  # Resolve the current filter state to the `sponsor_user_id:` opt value
+  # threaded into `list_by_status/1` / `list_all_tasks/1`. `:mine` maps
+  # to the logged-in user's id (or `nil` if the session lacks one, which
+  # is a defensive belt-and-suspenders since `/tasks` requires auth); any
+  # other filter state is unfiltered.
+  defp sponsor_filter_user_id(socket) do
+    case socket.assigns[:sponsor_filter] do
+      :mine -> socket.assigns[:current_user_id]
+      _ -> nil
+    end
+  end
+
+  # Stage-2 of task 019f3f22: quick precomputed check used by the desktop
+  # kanban's custom empty-state — true when the "Sponsored by me" filter
+  # is active AND every kanban column resolves to an empty item list
+  # (through the scope-filter lens too, so the empty-state doesn't lie
+  # when both filters are active). Called once per render inside the
+  # empty-state `:if`.
+  defp sponsor_filter_board_empty?(kanban_columns, columns, stacks_by_column, scope_filter) do
+    Enum.all?(kanban_columns, fn {col_key, _label} ->
+      desktop_column_items_for_scope(columns, stacks_by_column, col_key, scope_filter) == []
+    end)
+  end
+
   # Stage-3 scope rail (2026-05-19): the "All" chip's badge count is the
   # sum of every sub-org bucket. Reading from `@scope_counts` keeps the
   # rail's denominator and per-chip counts wired to the same source of
@@ -4121,6 +4217,27 @@ defmodule PlatformWeb.TasksLive do
   end
 
   defp sponsor_name(_, _), do: nil
+
+  # ADR 0042 stage 1 (task 019f3f22): sponsor chip on task cards. Mirrors
+  # `assignee_identity/3` — returns a `%{name, avatar_url, seed}` map for
+  # `<.human_avatar>` or `nil` when the task has no sponsor. Falls back to a
+  # sentinel entry (name "Unknown user", no avatar, seed=id) when the FK
+  # points at a user no longer in `users_by_id`, matching `sponsor_name/2`'s
+  # deleted-user behaviour so the chip still renders instead of blinking on
+  # ownership churn.
+  defp sponsor_identity(%Task{sponsor_user_id: nil}, _users_by_id), do: nil
+
+  defp sponsor_identity(%Task{sponsor_user_id: id}, users_by_id) when is_binary(id) do
+    user = Map.get(users_by_id, id)
+
+    %{
+      name: (user && (user.name || user.email)) || "Unknown user",
+      avatar_url: user && user.avatar_url,
+      seed: user_seed(user, id)
+    }
+  end
+
+  defp sponsor_identity(_, _), do: nil
 
   defp relative_time(nil), do: ""
 

@@ -484,6 +484,28 @@
                         <span class="truncate">{assignee.name}</span>
                         <span aria-hidden="true">·</span>
                       <% end %>
+                      <%!-- Sponsor chip (ADR 0042 stage 1). Only renders when
+                           `sponsor_user_id` is set — an absent sponsor is
+                           silent, not a noisy "Unsponsored" pill. Own-
+                           sponsorship gets a subtle `ring-primary/40`
+                           affordance to signal stewardship at a glance. --%>
+                      <% sponsor = sponsor_identity(task, @users_by_id) %>
+                      <%= if sponsor do %>
+                        <.human_avatar
+                          name={sponsor.name}
+                          avatar_url={sponsor.avatar_url}
+                          seed={sponsor.seed}
+                          size="xs"
+                          class={[
+                            "size-4 shrink-0",
+                            task.sponsor_user_id == @current_user_id && "ring-1 ring-primary/40"
+                          ]}
+                          title={"Sponsored by " <> sponsor.name}
+                          data-role="sponsor-avatar"
+                        />
+                        <span class="truncate">{sponsor.name}</span>
+                        <span aria-hidden="true">·</span>
+                      <% end %>
                       <span :if={task.inserted_at} class="whitespace-nowrap">
                         {relative_time(task.inserted_at)}
                       </span>
@@ -604,6 +626,34 @@
           {Map.get(@scope_counts, scope, 0)}
         </span>
       </span>
+
+      <%!-- "Sponsored by me" toggle (Stage 2 of task 019f3f22 —
+           ADR-0042 sponsor visibility). Sits right-anchored on the
+           scope rail so it's discoverable next to the scope pills
+           without stealing left-side reading order. Click flips
+           between `:all` ↔ `:mine` and push_patches the URL so
+           `?sponsor=mine` is authoritative (share-a-URL contract,
+           matches `?project=` / `?scope=` semantics — no localStorage
+           / session persistence per ADR non-goals). Mobile uses the
+           same URL param via `handle_params/3`; no mobile-specific
+           chip today (follow-up if Marlowe wants a mobile toggle). --%>
+      <button
+        type="button"
+        phx-click="toggle_sponsor_filter"
+        aria-pressed={if @sponsor_filter == :mine, do: "true", else: "false"}
+        data-role="sponsor-filter-toggle"
+        data-active={to_string(@sponsor_filter == :mine)}
+        class={[
+          "ml-auto inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-medium leading-none transition-colors focus-visible-ring",
+          if(@sponsor_filter == :mine,
+            do:
+              "bg-primary text-primary-content border-primary shadow-[0_0_0_2px_oklch(70%_0.15_260/30%)]",
+            else: "bg-base-200 text-base-content/70 border-base-content/15 hover:bg-base-300"
+          )
+        ]}
+      >
+        <span>Sponsored by me</span>
+      </button>
     </nav>
 
     <%!-- Kanban board (desktop, Stage 2 of Tasks v2 — 2026-05-19).
@@ -624,13 +674,49 @@
          wraps `desktop_column_items/3` with the active scope-rail
          selection — `:all` and `:fabrikam` are passthrough today; the
          other four scopes render empty until `tasks.org_id` lands. --%>
+    <%!-- Stage-2 of task 019f3f22 (ADR-0042 sponsor visibility):
+         board-level custom empty state — shown ONLY when the
+         "Sponsored by me" filter is active AND every kanban column
+         resolves to zero items. Replaces the per-column generic
+         "No tasks" empty states so the user sees a single, direct
+         message ("You're not sponsoring any tasks currently") instead
+         of seven small "No tasks" chips. The kanban board container
+         below (`#kanban-board`) remains in the DOM either way so the
+         `KanbanDragDrop` hook stays mounted — we render either the
+         empty state OR the column list inside it. --%>
     <div
       id="kanban-board"
       phx-hook="KanbanDragDrop"
       class="hidden lg:flex flex-1 gap-3 overflow-x-auto p-4"
     >
       <div
+        :if={
+          @sponsor_filter == :mine and
+            sponsor_filter_board_empty?(
+              @kanban_columns,
+              @columns,
+              @desktop_stacks_by_column,
+              @scope_filter
+            )
+        }
+        data-role="sponsor-filter-empty-state"
+        class="flex flex-1 items-center justify-center py-16"
+      >
+        <.empty_state variant={:minimal}>
+          <:body>You're not sponsoring any tasks currently.</:body>
+        </.empty_state>
+      </div>
+      <div
         :for={{col_key, col_label} <- @kanban_columns}
+        :if={
+          not (@sponsor_filter == :mine and
+                 sponsor_filter_board_empty?(
+                   @kanban_columns,
+                   @columns,
+                   @desktop_stacks_by_column,
+                   @scope_filter
+                 ))
+        }
         id={"column-#{col_key}"}
         data-column={col_key}
         class="flex w-56 min-w-[14rem] flex-shrink-0 flex-col rounded-box bg-base-200/50 transition-all duration-150"
@@ -867,6 +953,24 @@
                             </span>
                           <% end %>
                         <% end %>
+                        <%!-- Sponsor chip (ADR 0042 stage 1). Absent sponsor
+                             renders nothing; own-sponsorship gets a subtle
+                             `ring-primary/40` affordance. Mirrors the mobile
+                             chip shape from line ~487. --%>
+                        <% sponsor = sponsor_identity(task, @users_by_id) %>
+                        <.human_avatar
+                          :if={sponsor}
+                          name={sponsor.name}
+                          avatar_url={sponsor.avatar_url}
+                          seed={sponsor.seed}
+                          size="xs"
+                          class={[
+                            "shrink-0",
+                            task.sponsor_user_id == @current_user_id && "ring-1 ring-primary/40"
+                          ]}
+                          title={"Sponsored by " <> sponsor.name}
+                          data-role="sponsor-avatar"
+                        />
                         <%!-- Three-dot menu — opens a bottom sheet on mobile + a centered
                        sheet on desktop. Replaced the inert DaisyUI dropdown
                        (task 019e0d4b stage 2). The icon stays opacity-0 / hover-
