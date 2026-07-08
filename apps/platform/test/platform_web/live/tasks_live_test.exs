@@ -2514,6 +2514,331 @@ defmodule PlatformWeb.TasksLiveTest do
     end
   end
 
+  # ── Deploy target on New-Task sheet (ADR 0044 stage 4) ──────────────
+
+  describe "New-Task sheet Deploy Target picker" do
+    test "persists deploy_target when a target is selected on submit", %{conn: conn} do
+      project = create_project()
+
+      {:ok, project} =
+        Tasks.update_project(project, %{
+          deploy_config: %{"deploy_targets" => ["production", "exp"]}
+        })
+
+      _agent = create_agent("Deploy Target Test Agent")
+
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+
+      render_submit(view, "create_task", %{
+        "task" => %{
+          "title" => "Sheet deploy target task",
+          "project_id" => project.id,
+          "what" => "Ship deploy_target on the sheet",
+          "why" => "MCP↔UI parity per ADR 0044",
+          "action" => "create",
+          "assignee_id" => "",
+          "assignee_type" => "agent",
+          "deploy_target" => "exp",
+          "epic_id" => ""
+        }
+      })
+
+      created =
+        Tasks.list_tasks_by_project(project.id)
+        |> Enum.find(&(&1.title == "Sheet deploy target task"))
+
+      assert created
+      assert created.deploy_target == "exp"
+    end
+
+    test "leaves deploy_target nil when the field is omitted", %{conn: conn} do
+      project = create_project()
+      _agent = create_agent("Deploy Target Test Agent")
+
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+
+      render_submit(view, "create_task", %{
+        "task" => %{
+          "title" => "Sheet no deploy target",
+          "project_id" => project.id,
+          "what" => "No target",
+          "why" => "Nullable field regression",
+          "action" => "create",
+          "assignee_id" => "",
+          "assignee_type" => "agent",
+          "deploy_target" => "",
+          "epic_id" => ""
+        }
+      })
+
+      created =
+        Tasks.list_tasks_by_project(project.id)
+        |> Enum.find(&(&1.title == "Sheet no deploy target"))
+
+      assert created
+      assert is_nil(created.deploy_target)
+    end
+
+    test "deploy_target select is disabled when no project is selected", %{conn: conn} do
+      _project = create_project()
+      _agent = create_agent("Deploy Target Test Agent")
+
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+
+      # Open the sheet — no project has been picked in the sheet yet.
+      html = render_click(view, "toggle_task_sheet")
+
+      # The sheet's deploy_target select should be present, disabled, and
+      # placeholder-labelled "(no targets configured)".
+      assert html =~ ~s|data-role="sheet-deploy-target-select"|
+
+      [select_tag] =
+        Regex.run(
+          ~r/<select[^>]*data-role="sheet-deploy-target-select"[^>]*>/,
+          html
+        )
+
+      assert select_tag =~ "disabled"
+      assert html =~ "(no targets configured)"
+    end
+
+    test "deploy_target select enables and lists configured targets once project is picked", %{
+      conn: conn
+    } do
+      project = create_project()
+
+      {:ok, project} =
+        Tasks.update_project(project, %{
+          deploy_config: %{
+            "deploy_targets" => [
+              %{"name" => "production", "type" => "docker_compose", "config" => %{}},
+              %{"name" => "exp", "type" => "docker_compose", "config" => %{}}
+            ]
+          }
+        })
+
+      _agent = create_agent("Deploy Target Test Agent")
+
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+
+      # Open the sheet, then simulate validate_task firing after the user
+      # picks a project — that's what wires @task_form[:project_id].value
+      # and lets the sheet's dropdown light up.
+      render_click(view, "toggle_task_sheet")
+
+      html =
+        render_change(view, "validate_task", %{
+          "task" => %{
+            "title" => "Enable dt sheet",
+            "project_id" => project.id,
+            "what" => "x",
+            "why" => "y",
+            "assignee_id" => "",
+            "assignee_type" => "agent",
+            "deploy_target" => "",
+            "epic_id" => ""
+          }
+        })
+
+      assert html =~ ~s|data-role="sheet-deploy-target-select"|
+
+      [select_tag] =
+        Regex.run(
+          ~r/<select[^>]*data-role="sheet-deploy-target-select"[^>]*>/,
+          html
+        )
+
+      refute select_tag =~ "disabled"
+      assert html =~ ~s|value="production"|
+      assert html =~ ~s|value="exp"|
+    end
+
+    test "existing Create Task submit still functions without deploy_target field", %{conn: conn} do
+      project = create_project()
+      _agent = create_agent("Deploy Target Test Agent")
+
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+
+      # No deploy_target key at all — regression against the create path.
+      html =
+        render_submit(view, "create_task", %{
+          "task" => %{
+            "title" => "Legacy create submit",
+            "project_id" => project.id,
+            "what" => "Old-shape submit",
+            "why" => "Regression: no deploy_target key",
+            "action" => "create",
+            "assignee_id" => "",
+            "assignee_type" => "agent",
+            "epic_id" => ""
+          }
+        })
+
+      assert html =~ "Task created."
+
+      created =
+        Tasks.list_tasks_by_project(project.id)
+        |> Enum.find(&(&1.title == "Legacy create submit"))
+
+      assert created
+      assert is_nil(created.deploy_target)
+    end
+
+    test "Create & Request Plan submit still functions with deploy_target", %{conn: conn} do
+      project = create_project()
+
+      {:ok, project} =
+        Tasks.update_project(project, %{
+          deploy_config: %{"deploy_targets" => ["production", "exp"]}
+        })
+
+      agent = create_agent("Deploy Target Planner Agent")
+
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+
+      html =
+        render_submit(view, "create_task", %{
+          "task" => %{
+            "title" => "Plan with deploy_target",
+            "project_id" => project.id,
+            "what" => "Deploy target on planning path",
+            "why" => "Regression: create_and_plan + deploy_target",
+            "action" => "create_and_plan",
+            "assignee_id" => "",
+            "assignee_type" => "agent",
+            "deploy_target" => "production",
+            "epic_id" => ""
+          }
+        })
+
+      assert html =~ "Task created and planning requested."
+
+      created =
+        Tasks.list_tasks_by_project(project.id)
+        |> Enum.find(&(&1.title == "Plan with deploy_target"))
+
+      assert created
+      assert created.status == "planning"
+      assert created.deploy_target == "production"
+      assert created.assignee_id == agent.id
+    end
+  end
+
+  # ── New-Task sheet routes through Federation.TaskAttrs (bug 1 fix) ────
+  #
+  # Task 019f42fd bug 1: the UI new-task sheet used to call
+  # `Tasks.create_task/1` directly with flat `assignee_id + assignee_type`,
+  # bypassing the ADR 0044 canonical shape helper. Result: UI-created
+  # tasks landed with `phase_assignees = %{}` while MCP-created tasks
+  # correctly auto-routed the flat pointer into
+  # `phase_assignees["planning"]`. The bug hid until the first phase
+  # transition wiped the flat pointer, leaving no assignee anywhere.
+  #
+  # These tests pin the fix at the LV surface — a flat assignee submitted
+  # by the sheet MUST land in `phase_assignees["planning"]`, and MUST
+  # survive a planning→execution transition (matching the MCP path).
+
+  describe "New-Task sheet routes through Federation.TaskAttrs (bug 1)" do
+    test "flat assignee_id + assignee_type auto-route into phase_assignees[\"planning\"]",
+         %{conn: conn} do
+      project = create_project()
+      agent = create_agent("TaskAttrs Route Agent")
+
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+
+      render_submit(view, "create_task", %{
+        "task" => %{
+          "title" => "Route through TaskAttrs",
+          "project_id" => project.id,
+          "what" => "Flat assignee",
+          "why" => "Should land in phase_assignees[planning]",
+          "action" => "create",
+          "assignee_id" => agent.id,
+          "assignee_type" => "agent",
+          "deploy_target" => "",
+          "epic_id" => ""
+        }
+      })
+
+      created =
+        Tasks.list_tasks_by_project(project.id)
+        |> Enum.find(&(&1.title == "Route through TaskAttrs"))
+
+      assert created
+      assert created.assignee_id == agent.id
+      assert created.assignee_type == "agent"
+
+      # The core assertion: flat pair also lives in phase_assignees["planning"]
+      # (per ADR 0044 auto-route). Without the fix, this map is %{}.
+      assert created.phase_assignees["planning"] == %{
+               "assignee_id" => agent.id,
+               "assignee_type" => "agent"
+             }
+    end
+
+    test "auto-routed planning assignee survives a phase transition to execution",
+         %{conn: conn} do
+      # End-to-end: the case-5 failure was that phase_assignees is intact
+      # after a transition but the flat pointer is stuck on the previous
+      # phase's agent. Here we prove the whole round-trip: sheet-created
+      # task → planning → in_progress → assignee still resolves.
+      project = create_project()
+      agent = create_agent("Planning-then-Exec Agent")
+
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+
+      render_submit(view, "create_task", %{
+        "task" => %{
+          "title" => "Survives phase transition",
+          "project_id" => project.id,
+          "what" => "Flat assignee, one agent",
+          "why" => "Should survive planning→execution",
+          "action" => "create",
+          "assignee_id" => agent.id,
+          "assignee_type" => "agent",
+          "deploy_target" => "",
+          "epic_id" => ""
+        }
+      })
+
+      created =
+        Tasks.list_tasks_by_project(project.id)
+        |> Enum.find(&(&1.title == "Survives phase transition"))
+
+      assert created
+      assert created.phase_assignees["planning"]["assignee_id"] == agent.id
+
+      # Approve a plan and drive to in_progress. The assignee should come
+      # from phase_assignees (which the sheet populated correctly), not
+      # get lost.
+      {:ok, plan} =
+        Tasks.create_plan(%{task_id: created.id, status: "approved", version: 1})
+
+      {:ok, _stage} =
+        Tasks.create_stage(%{plan_id: plan.id, position: 1, name: "S1", status: "pending"})
+
+      {:ok, planning_task} = Tasks.transition_task_status(created, "planning")
+      {:ok, in_progress_task} = Tasks.transition_task_status(planning_task, "in_progress")
+
+      reloaded = Tasks.get_task_record(in_progress_task.id)
+      assert reloaded.status == "in_progress"
+
+      # Fallback semantics: when phase_assignees["execution"] is unset,
+      # `assignee_for_phase/2` falls back to top-level. The top-level
+      # pointer must still resolve to the sheet-supplied agent — either
+      # via the fallback (empty exec slot) or via a matching exec entry.
+      assert reloaded.assignee_id == agent.id
+    end
+  end
+
   # ── Plan review tests ─────────────────────────────────────────────────
 
   test "approve_plan transitions plan to approved and refreshes detail", %{conn: conn} do
@@ -4467,33 +4792,113 @@ defmodule PlatformWeb.TasksLiveTest do
     end
   end
 
-  describe "assignee dropdown (stage 3)" do
-    test "assignee select renders all agents and reflects current assignee", %{conn: conn} do
+  describe "assignee consolidation (stage 3 — ADR 0044)" do
+    # The flat "Assignee (task-level)" dropdown was removed in favor of a
+    # single writer: the per-phase "Assignees" Configure modal. Rowan's
+    # 2026-07-08 stage-3 rejection also removed the readonly "Current
+    # assignee" badge — the per-phase Assignees breakdown (with the
+    # current phase highlighted) is the single reader/writer surface in
+    # both read and edit modes.
+    test "detail pane renders NO top-level Current assignee badge in READ mode",
+         %{conn: conn} do
       project = create_project()
       a1 = create_agent("Higgins (Test)")
-      a2 = create_agent("Mycroft (Test)")
 
       task =
         create_task(project, %{title: "Pickable", assignee_id: a1.id, assignee_type: "agent"})
 
       conn = authenticated_conn(conn)
-      {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
+      {:ok, _view, html} = live(conn, ~p"/tasks/#{task.id}")
 
-      # v2: select only renders in edit mode.
-      html = render_click(view, "toggle_edit_mode")
-      assert html =~ ~s|data-role="assignee-select"|
+      refute html =~ ~s|data-role="assignee-readonly"|
+      refute html =~ "Current assignee"
+      refute html =~ ~s|data-role="assignee-form"|
+      refute html =~ ~s|data-role="assignee-select"|
+      # Per-phase Assignees section still shows the derived name.
       assert html =~ "Higgins (Test)"
-      assert html =~ "Mycroft (Test)"
-      assert html =~ ~s|value="#{a1.id}" selected|
+      assert html =~ ~s|phx-click="open_assignee_modal"|
     end
 
-    test "selecting a different agent persists the new assignee", %{conn: conn} do
+    test "detail pane renders NO top-level Current assignee badge in EDIT mode either",
+         %{conn: conn} do
       project = create_project()
-      a1 = create_agent("Geordi (Test)")
-      a2 = create_agent("Dalton (Test)")
+      a1 = create_agent("Mycroft (Test)")
 
       task =
-        create_task(project, %{title: "Reassign Me", assignee_id: a1.id, assignee_type: "agent"})
+        create_task(project, %{title: "Editable page", assignee_id: a1.id, assignee_type: "agent"})
+
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
+
+      html = render_click(view, "toggle_edit_mode")
+
+      refute html =~ ~s|data-role="assignee-readonly"|
+      refute html =~ "Current assignee"
+      # The former inline editor is also gone in edit mode.
+      refute html =~ ~s|data-role="assignee-form"|
+      refute html =~ ~s|data-role="assignee-select"|
+      # Per-phase Assignees Configure button remains reachable.
+      assert html =~ "Mycroft (Test)"
+      assert html =~ ~s|phx-click="open_assignee_modal"|
+    end
+
+    test "Configure button is present (and thus modal is reachable) in READ mode",
+         %{conn: conn} do
+      project = create_project()
+      _a1 = create_agent("Higgins (Test)")
+      task = create_task(project, %{title: "Configurable"})
+
+      conn = authenticated_conn(conn)
+      {:ok, _view, html} = live(conn, ~p"/tasks/#{task.id}")
+
+      assert html =~ ~s|phx-click="open_assignee_modal"|
+      assert html =~ "Configure"
+    end
+
+    test "Configure button is present in EDIT mode too", %{conn: conn} do
+      project = create_project()
+      _a1 = create_agent("Higgins (Test)")
+      task = create_task(project, %{title: "Configurable Edit"})
+
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
+
+      html = render_click(view, "toggle_edit_mode")
+
+      assert html =~ ~s|phx-click="open_assignee_modal"|
+      assert html =~ "Configure"
+    end
+
+    test "clicking Configure opens the assignee modal (canonical writer path)",
+         %{conn: conn} do
+      project = create_project()
+      _a1 = create_agent("Higgins (Test)")
+      task = create_task(project, %{title: "Configurable Modal"})
+
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
+
+      html = render_click(view, "open_assignee_modal")
+
+      # Modal exposes the Simple/Advanced mode toggle when open.
+      assert html =~ "set_assignee_modal_mode"
+    end
+
+    test "legacy update_task_field with field=assignee_id returns 'not editable' flash",
+         %{conn: conn} do
+      # Proves the whitelist enforcement is server-side, not merely
+      # template-hidden. A misbehaving client can no longer bypass the
+      # Configure modal by emitting the raw event.
+      project = create_project()
+      a1 = create_agent("Original (Test)")
+      a2 = create_agent("Sneaky (Test)")
+
+      task =
+        create_task(project, %{
+          title: "Locked Assignee",
+          assignee_id: a1.id,
+          assignee_type: "agent"
+        })
 
       conn = authenticated_conn(conn)
       {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
@@ -4506,17 +4911,39 @@ defmodule PlatformWeb.TasksLiveTest do
         "task-id" => task.id
       })
 
-      updated = Tasks.get_task_record(task.id)
-      assert updated.assignee_id == a2.id
-      assert updated.assignee_type == "agent"
+      assert render(view) =~ "is not editable"
+      # And the assignee did NOT change.
+      assert Tasks.get_task_record(task.id).assignee_id == a1.id
     end
 
-    test "clearing the assignee (empty string → nil) persists nil id and nil type", %{conn: conn} do
+    test "saving via the Configure modal (Simple mode) is the working writer path",
+         %{conn: conn} do
+      # Regression coverage: the canonical writer still works end-to-end.
       project = create_project()
-      a1 = create_agent("Departing (Test)")
+      a1 = create_agent("Chosen (Test)")
+      task = create_task(project, %{title: "Assign Me"})
 
-      task =
-        create_task(project, %{title: "Unassign Me", assignee_id: a1.id, assignee_type: "agent"})
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
+
+      render_click(view, "open_assignee_modal")
+
+      render_hook(view, "save_assignees", %{
+        "assignees" => %{"all" => a1.id}
+      })
+
+      reloaded = Tasks.get_task_record(task.id)
+      assert reloaded.assignee_id == a1.id
+      assert reloaded.assignee_type == "agent"
+      assert reloaded.phase_assignees["planning"]["assignee_id"] == a1.id
+      assert reloaded.phase_assignees["execution"]["assignee_id"] == a1.id
+      assert reloaded.phase_assignees["review"]["assignee_id"] == a1.id
+    end
+
+    test "regression: sponsor editor still works via update_task_field", %{conn: conn} do
+      project = create_project()
+      sponsor = create_user_for_sponsor("Regression Sponsor")
+      task = create_task(project, %{title: "Sponsor Regression"})
 
       conn = authenticated_conn(conn)
       {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
@@ -4524,14 +4951,37 @@ defmodule PlatformWeb.TasksLiveTest do
       render_click(view, "toggle_edit_mode")
 
       render_hook(view, "update_task_field", %{
-        "field" => "assignee_id",
-        "value" => "",
+        "field" => "sponsor_user_id",
+        "value" => sponsor.id,
         "task-id" => task.id
       })
 
-      updated = Tasks.get_task_record(task.id)
-      assert is_nil(updated.assignee_id)
-      assert is_nil(updated.assignee_type)
+      assert Tasks.get_task_record(task.id).sponsor_user_id == sponsor.id
+    end
+
+    test "regression: deploy_target editor still works via update_task_field",
+         %{conn: conn} do
+      project = create_project()
+
+      {:ok, project} =
+        Tasks.update_project(project, %{
+          deploy_config: %{"deploy_targets" => ["production", "exp"]}
+        })
+
+      task = create_task(project, %{title: "Deploy Target Regression"})
+
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
+
+      render_click(view, "toggle_edit_mode")
+
+      render_hook(view, "update_task_field", %{
+        "field" => "deploy_target",
+        "value" => "exp",
+        "task-id" => task.id
+      })
+
+      assert Tasks.get_task_record(task.id).deploy_target == "exp"
     end
   end
 
@@ -5829,7 +6279,7 @@ defmodule PlatformWeb.TasksLiveTest do
       assert is_nil(Tasks.get_task_record(task.id).deploy_target)
     end
 
-    test "assignee renders as read-only badge when edit_mode is off", %{conn: conn} do
+    test "no inline assignee editor renders when edit_mode is off", %{conn: conn} do
       project = create_project()
       a1 = create_agent("Holmes (Test)")
 
@@ -5843,8 +6293,13 @@ defmodule PlatformWeb.TasksLiveTest do
       conn = authenticated_conn(conn)
       {:ok, _view, html} = live(conn, ~p"/tasks/#{task.id}")
 
-      assert html =~ ~s|data-role="assignee-readonly"|
+      # Post-consolidation (ADR 0044 as amended stage 3): no top-level
+      # assignee badge OR inline editor exists. The per-phase Assignees
+      # section (with Configure modal writer) is the only affordance.
+      refute html =~ ~s|data-role="assignee-readonly"|
       refute html =~ ~s|data-role="assignee-select"|
+      refute html =~ ~s|data-role="assignee-form"|
+      assert html =~ ~s|phx-click="open_assignee_modal"|
     end
 
     test "update_task_field for assignee_id is a no-op when edit_mode is off",

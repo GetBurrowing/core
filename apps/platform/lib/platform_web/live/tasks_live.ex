@@ -9,6 +9,7 @@ defmodule PlatformWeb.TasksLive do
   alias Platform.Chat
   alias Platform.Chat.Canvas
   alias Platform.Chat.AttachmentStorage
+  alias Platform.Federation.TaskAttrs
   alias Platform.Orchestration.ExecutionSpace
   alias Platform.Repo
   alias Platform.Skills
@@ -1145,14 +1146,20 @@ defmodule PlatformWeb.TasksLive do
     {:noreply, socket}
   end
 
-  # ── Generic field update (priority / deploy_target / assignee_id) ───────
+  # ── Generic field update (priority / deploy_target / sponsor_user_id) ──
   #
   # Whitelisted to avoid arbitrary attribute writes from the wire. Empty
-  # strings normalize to `nil` (used by the assignee dropdown's "Unassigned"
-  # option and by deploy_target's "(none)" option). Other unknown fields
+  # strings normalize to `nil` (used by deploy_target's "(none)" option
+  # and by sponsor_user_id's "No Sponsor" option). Other unknown fields
   # flash a generic error.
+  #
+  # `assignee_id` is intentionally NOT in this list. Per ADR 0044, the
+  # canonical writer for assignee is `save_assignees` (Configure modal),
+  # which routes through `Tasks.set_phase_assignees/2` so the write
+  # survives the next phase transition. The detail pane's "Current
+  # assignee" badge is a read-only derived view.
 
-  @editable_task_fields ~w(priority deploy_target assignee_id sponsor_user_id)
+  @editable_task_fields ~w(priority deploy_target sponsor_user_id)
 
   def handle_event("update_task_field", _params, %{assigns: %{edit_mode: false}} = socket),
     do: {:noreply, socket}
@@ -1165,21 +1172,7 @@ defmodule PlatformWeb.TasksLive do
       when field in @editable_task_fields do
     normalized = if value == "", do: nil, else: value
 
-    attrs =
-      case field do
-        "assignee_id" ->
-          # When clearing/setting the top-level assignee from the inline
-          # dropdown we keep both keys in lockstep so legacy readers don't
-          # see an orphaned id without a type.
-          if is_nil(normalized) do
-            %{assignee_id: nil, assignee_type: nil}
-          else
-            %{assignee_id: normalized, assignee_type: "agent"}
-          end
-
-        _ ->
-          %{String.to_existing_atom(field) => normalized}
-      end
+    attrs = %{String.to_existing_atom(field) => normalized}
 
     socket =
       case Tasks.get_task_record(task_id) do
@@ -2733,7 +2726,15 @@ defmodule PlatformWeb.TasksLive do
 
     # Sponsor picker submits "" for "No Sponsor" — coerce to nil so the
     # nullable FK changeset doesn't see an empty string (ADR-0042 stage 3).
-    task_attrs =
+    #
+    # New tasks always start at the planning phase (per ADR 0044). Route
+    # the flat `assignee_id + assignee_type` pair through
+    # `TaskAttrs.build_task_attrs/3` with `auto_route_flat_assignee_current_phase: true`
+    # so it lands in `phase_assignees["planning"]` — matches the MCP
+    # `task_create` path (`tool_surface.ex`). Prior UI writes left
+    # `phase_assignees = %{}`, which caused the flat pointer to be lost
+    # on the first phase transition. Task 019f42fd bug 1 fix.
+    raw_attrs =
       params
       |> Map.put("description", description)
       |> Map.put("status", status)
@@ -2746,7 +2747,22 @@ defmodule PlatformWeb.TasksLive do
       |> Map.update("sponsor_user_id", nil, fn v -> if v in [nil, ""], do: nil, else: v end)
       |> Map.put("reported_by", socket.assigns.current_user)
 
-    case Tasks.create_task(task_attrs) do
+    create_result =
+      with {:ok, flat_attrs, phase_attrs} <-
+             TaskAttrs.build_task_attrs(raw_attrs, :create,
+               auto_route_flat_assignee_current_phase: true,
+               current_phase: "planning"
+             ),
+           # `TaskAttrs` drops `metadata` / `deploy_strategy` (not in its
+           # canonical field list) — carry them across explicitly so the
+           # UI-only form fields still land on the row.
+           flat_attrs = merge_ui_extras(flat_attrs, raw_attrs),
+           {:ok, task} <- Tasks.create_task(flat_attrs),
+           {:ok, task} <- maybe_apply_phase_assignees(task, phase_attrs) do
+        {:ok, task}
+      end
+
+    case create_result do
       {:ok, task} ->
         # Persist attachments
         persist_task_attachments(socket, task)
@@ -2764,13 +2780,40 @@ defmodule PlatformWeb.TasksLive do
          |> put_flash(:info, flash_message)
          |> refresh_board()}
 
-      {:error, changeset} ->
+      {:error, %Ecto.Changeset{} = changeset} ->
         {:noreply,
          socket
          |> assign(:task_form, to_form(changeset, as: "task"))
          |> put_flash(:error, "Could not create task. Check the form for errors.")}
+
+      {:error, reason} ->
+        # `TaskAttrs.build_task_attrs/3` can return non-changeset shape
+        # errors (invalid phase key, invalid current_phase, etc). The UI
+        # doesn't currently expose those inputs, so these are defensive
+        # — surface a generic error message rather than crashing the LV.
+        {:noreply, put_flash(socket, :error, "Could not create task: #{inspect(reason)}")}
     end
   end
+
+  # `TaskAttrs.build_task_attrs/3` restricts `flat_attrs` to the canonical
+  # field list (see `Platform.Federation.TaskAttrs.@canonical_field_keys`).
+  # The new-task form also carries `metadata`, `deploy_strategy`, and
+  # `dependencies` — UI-only concerns not part of the ADR 0044 canonical
+  # shape. Carry them across explicitly so the LV form still lands the
+  # full row.
+  defp merge_ui_extras(flat_attrs, raw_attrs) do
+    Enum.reduce(~w(metadata deploy_strategy dependencies), flat_attrs, fn key, acc ->
+      case Map.get(raw_attrs, key) do
+        nil -> acc
+        value -> Map.put(acc, String.to_existing_atom(key), value)
+      end
+    end)
+  end
+
+  defp maybe_apply_phase_assignees(task, nil), do: {:ok, task}
+
+  defp maybe_apply_phase_assignees(task, phase_attrs) when is_map(phase_attrs),
+    do: Tasks.set_phase_assignees(task, phase_attrs)
 
   defp persist_task_attachments(socket, _task) do
     consume_uploaded_entries(socket, :task_attachments, fn %{path: path}, entry ->
@@ -3246,6 +3289,36 @@ defmodule PlatformWeb.TasksLive do
   end
 
   defp project_deploy_targets(_), do: []
+
+  # Deploy targets for the New-Task bottom sheet's deploy_target dropdown.
+  # Reads the selected project id off the task form (nil when no project
+  # picked yet), finds the matching project in the pre-grouped
+  # `projects_by_org` structure, and delegates to `project_deploy_targets/1`
+  # for the same map/string extraction the detail pane uses. Returns `[]`
+  # when nothing is selectable — the caller uses that to disable the
+  # <select> and swap the placeholder label to "(no targets configured)".
+  # ADR 0044 stage 4 — parity with MCP `task_create`'s `deploy_target` field.
+  defp sheet_project_deploy_targets(task_form, projects_by_org)
+       when is_list(projects_by_org) do
+    case task_form[:project_id].value do
+      nil ->
+        []
+
+      "" ->
+        []
+
+      project_id ->
+        projects_by_org
+        |> Enum.flat_map(fn {_slug, _name, projects} -> projects end)
+        |> Enum.find(&(&1.id == project_id))
+        |> case do
+          nil -> []
+          project -> project_deploy_targets(project)
+        end
+    end
+  end
+
+  defp sheet_project_deploy_targets(_, _), do: []
 
   defp deploy_target_label("hive_production"), do: "Hive Production"
   defp deploy_target_label("github_pr"), do: "GitHub PR"

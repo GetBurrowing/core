@@ -1766,6 +1766,117 @@ defmodule Platform.Tasks.TasksContextTest do
     end
   end
 
+  # ── transition_task_status re-derives flat pointer (task 019f42fd bug 2) ───
+  #
+  # `transition_task_status/2` is the MCP path (called via
+  # `task_update({status: ...})`). Before the fix, it wrote status +
+  # broadcast but never re-derived the flat `assignee_id` from
+  # `phase_assignees[current_phase]`. Result: `phase_assignees` intact,
+  # `current_phase="execution"`, but flat pointer stuck on the planning
+  # agent — runtime router dispatched execution work to the wrong agent.
+  #
+  # The re-derive used to live only in `transition_task/2 →
+  # maybe_finalize_transition/3`. It now also fires from
+  # `transition_task_status/2` so both entry points agree.
+  describe "transition_task_status re-derives flat assignee (019f42fd bug 2)" do
+    setup do
+      {:ok, project} = Tasks.create_project(%{name: "Rederive Project"})
+      %{project: project}
+    end
+
+    test "planning → in_progress swaps flat pointer to execution-phase agent",
+         %{project: project} do
+      planner = Ecto.UUID.generate()
+      executor = Ecto.UUID.generate()
+      reviewer = Ecto.UUID.generate()
+
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "MCP transition re-derives",
+          status: "backlog",
+          assignee_id: planner,
+          assignee_type: "agent",
+          phase_assignees: %{
+            "planning" => %{"assignee_id" => planner, "assignee_type" => "agent"},
+            "execution" => %{"assignee_id" => executor, "assignee_type" => "agent"},
+            "review" => %{"assignee_id" => reviewer, "assignee_type" => "agent"}
+          }
+        })
+
+      # backlog → planning is a same-phase-classification move (planning
+      # is its own phase per Tasks.current_phase/1). The flat pointer
+      # should still land on the planning agent.
+      {:ok, planning_task} = Tasks.transition_task_status(task, "planning")
+      assert planning_task.status == "planning"
+      assert planning_task.assignee_id == planner
+
+      # The regression case: planning → in_progress crosses into the
+      # execution phase. The flat pointer MUST follow.
+      {:ok, in_progress_task} = Tasks.transition_task_status(planning_task, "in_progress")
+
+      assert in_progress_task.status == "in_progress"
+      assert in_progress_task.assignee_id == executor
+      assert in_progress_task.assignee_type == "agent"
+
+      # And the DB row reflects the derive (i.e. the returned struct
+      # isn't a stale in-memory copy).
+      reloaded = Tasks.get_task_record(in_progress_task.id)
+      assert reloaded.assignee_id == executor
+      # phase_assignees is preserved through the derive.
+      assert reloaded.phase_assignees["execution"]["assignee_id"] == executor
+      assert reloaded.phase_assignees["planning"]["assignee_id"] == planner
+    end
+
+    test "execution → review swaps flat pointer to review-phase agent",
+         %{project: project} do
+      executor = Ecto.UUID.generate()
+      reviewer = Ecto.UUID.generate()
+
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Exec → review",
+          status: "in_progress",
+          assignee_id: executor,
+          assignee_type: "agent",
+          phase_assignees: %{
+            "execution" => %{"assignee_id" => executor, "assignee_type" => "agent"},
+            "review" => %{"assignee_id" => reviewer, "assignee_type" => "agent"}
+          }
+        })
+
+      {:ok, in_review_task} = Tasks.transition_task_status(task, "in_review")
+
+      assert in_review_task.status == "in_review"
+      assert in_review_task.assignee_id == reviewer
+      assert in_review_task.assignee_type == "agent"
+
+      reloaded = Tasks.get_task_record(in_review_task.id)
+      assert reloaded.assignee_id == reviewer
+    end
+
+    test "no-op when phase_assignees is empty (top-level fallback)",
+         %{project: project} do
+      owner = Ecto.UUID.generate()
+
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Top-level fallback",
+          status: "backlog",
+          assignee_id: owner,
+          assignee_type: "agent"
+        })
+
+      # No phase_assignees. `assignee_for_phase/2` falls back to top-level,
+      # which matches the flat pointer, so the derive is a no-op.
+      {:ok, updated} = Tasks.transition_task_status(task, "planning")
+      assert updated.assignee_id == owner
+      assert updated.assignee_type == "agent"
+    end
+  end
+
   # ── Stage 2 (019f3dbb) write-path hooks ────────────────────────────────
   #
   # `create_task/1` + `update_task/2` synchronously refresh

@@ -742,10 +742,20 @@ defmodule Platform.Tasks do
         |> Task.changeset(%{status: new_status})
         |> Repo.update()
         |> case do
-          {:ok, updated} = ok ->
+          {:ok, updated} ->
             maybe_dispatch_teardown(updated, new_status)
+            # Re-derive the flat `assignee_id` / `assignee_type` pointer
+            # from `phase_assignees[current_phase(updated)]` so the MCP
+            # `task_update({status: ...})` path — which calls this
+            # directly, bypassing `transition_task/2` +
+            # `maybe_finalize_transition/3` — doesn't leave the flat
+            # pointer stuck on the previous phase's agent. See task
+            # 019f42fd (ADR-preventing regression: `phase_assignees`
+            # intact, `current_phase="execution"`, but flat pointer still
+            # at planning agent).
+            updated = maybe_apply_phase_assignee_and_reload(updated)
             maybe_append_timeline(updated, new_status)
-            ok
+            {:ok, updated}
 
           error ->
             error
@@ -775,6 +785,28 @@ defmodule Platform.Tasks do
   end
 
   defp maybe_append_timeline(_task, _new_status), do: :ok
+
+  # `maybe_apply_phase_assignee/1` returns `:ok` and swallows the updated
+  # struct — fine for the transition_task/2 side effects, but the raw
+  # `transition_task_status/2` caller wants the derived pointer visible
+  # on the returned Task. Reload from DB when a write occurred; return
+  # the input struct otherwise.
+  defp maybe_apply_phase_assignee_and_reload(%Task{} = task) do
+    new_phase = current_phase(task)
+    {phase_id, phase_type} = assignee_for_phase(task, new_phase)
+
+    cond do
+      is_nil(phase_id) ->
+        task
+
+      phase_id == task.assignee_id and phase_type == task.assignee_type ->
+        task
+
+      true ->
+        _ = maybe_apply_phase_assignee(task)
+        Repo.get(Task, task.id) || task
+    end
+  end
 
   # Stage 4: cancellation is terminal (see @valid_task_transitions —
   # `cancelled` has no outbound edges). Tear down the running router and

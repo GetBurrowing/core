@@ -31,6 +31,8 @@ defmodule Platform.Federation.ToolSurface do
   alias Platform.Tenancy.Org
   alias Platform.Repo
 
+  alias Platform.Federation.TaskAttrs
+
   import Ecto.Query, only: [from: 2]
 
   @bundles ~w(canvas messaging task plan review space context_read federation memory skill attachment files)
@@ -1223,7 +1225,7 @@ defmodule Platform.Federation.ToolSurface do
       %{
         name: "task_create",
         description:
-          "Create a new task in a project. Tasks track work items on the kanban board. Optionally set a Sponsor (human shepherd, ADR 0042) distinct from the current-phase technical assignee. Set auto_approve_plan: true to skip human review when the plan is submitted (requires an assigned agent).",
+          "Create a new task in a project. Tasks track work items on the kanban board. Optionally set a Sponsor (human shepherd, ADR 0042) distinct from the current-phase technical assignee. Set auto_approve_plan: true to skip human review when the plan is submitted (requires an assigned agent). Canonical shape is documented in ADR 0044 and shared with task_update via `Platform.Federation.TaskAttrs.build_task_attrs/3` — flat assignee_id + assignee_type writes auto-route into `phase_assignees[\"planning\"]` (new tasks start at planning phase), so the write survives future phase transitions.",
         parameters: %{
           project_id: %{
             type: "string",
@@ -1275,6 +1277,18 @@ defmodule Platform.Federation.ToolSurface do
             required: false,
             description:
               "When true, auto-approve the plan the planner submits and skip the human review step. Precondition: both the execution-phase and review-phase assignees must resolve to an agent (via assignee_id + assignee_type OR phase_assignees). If either is missing, the auto-approve is silently skipped and the plan stays in pending_review for human review. Defaults to false."
+          },
+          deploy_target: %{
+            type: "string",
+            required: false,
+            description:
+              "Name of the deploy target this task should ship to (must match an entry in project.deploy_config.deploy_targets, e.g. \"production\" or \"exp\"). Sibling to task_update's deploy_target — setting it at create time avoids a follow-up task_update round-trip once the task auto-advances into the deploying phase."
+          },
+          phase_assignees: %{
+            type: "object",
+            required: false,
+            description:
+              "Granular per-phase assignees keyed by phase (\"planning\" | \"execution\" | \"review\") with values %{\"assignee_id\" => uuid, \"assignee_type\" => \"agent\" | \"user\"}. When supplied, wins over flat assignee_id + assignee_type — canonical writer for the assignee family per ADR 0044. Use to assign different agents to different phases in one call (e.g. planner agent for planning, executor agent for execution)."
           }
         },
         returns:
@@ -1333,7 +1347,7 @@ defmodule Platform.Federation.ToolSurface do
       %{
         name: "task_update",
         description:
-          "Update a task's fields (title, description, status, priority, assignee, sponsor, etc.). Omitted fields are left untouched; sponsor_user_id explicitly accepts null to unset (clears the Sponsor per ADR 0042).",
+          "Update a task's fields (title, description, status, priority, assignee, sponsor, etc.). Omitted fields are left untouched; sponsor_user_id explicitly accepts null to unset (clears the Sponsor per ADR 0042). Flat assignee_id + assignee_type writes are auto-routed to the task's current-phase slot in phase_assignees (survives phase transitions per ADR 0044). Pass phase_assignees directly to set multiple phase slots in one call — when both are supplied, phase_assignees wins.",
         parameters: %{
           task_id: %{type: "string", required: true, description: "The task to update"},
           title: %{type: "string", required: false, description: "New title"},
@@ -1364,6 +1378,12 @@ defmodule Platform.Federation.ToolSurface do
             required: false,
             description:
               "When true, the engine auto-approves the task's submitted plan without waiting for a human approval — the task moves straight from plan_submit to in_progress. Useful for well-scoped low-risk tasks where plan review is procedural. Defaults to false on new tasks."
+          },
+          phase_assignees: %{
+            type: "object",
+            required: false,
+            description:
+              "Granular per-phase assignees keyed by phase (\"planning\" | \"execution\" | \"review\") with values %{\"assignee_id\" => uuid, \"assignee_type\" => \"agent\" | \"user\"}. Canonical writer per ADR 0044 — only the slots supplied are written; other slots stay untouched. Wins over flat assignee_id + assignee_type when both are supplied in the same call."
           }
         },
         returns: "The updated task object (includes sponsor: nil | %{id, name, email}).",
@@ -2917,135 +2937,131 @@ defmodule Platform.Federation.ToolSurface do
     end
   end
 
+  # `task_create` — canonical shape defined by
+  # `Platform.Federation.TaskAttrs.build_task_attrs/3` (ADR 0044). Accepts
+  # flat `assignee_id + assignee_type` OR structured `phase_assignees`;
+  # flat writes are auto-routed to `phase_assignees["planning"]` (new
+  # tasks start at the planning phase) so the write survives the next
+  # phase transition — this fixes the historical silent-clobber where a
+  # `task_create` flat assignee was overwritten when the task moved out
+  # of planning.
   def execute("task_create", args, _context) do
-    attrs = %{
-      project_id: Map.get(args, "project_id"),
-      title: Map.get(args, "title", "Untitled Task"),
-      description: Map.get(args, "description"),
-      epic_id: Map.get(args, "epic_id"),
-      status: Map.get(args, "status", "backlog"),
-      priority: Map.get(args, "priority", "medium"),
-      assignee_type: Map.get(args, "assignee_type"),
-      assignee_id: Map.get(args, "assignee_id"),
-      # Sponsor per ADR 0042 — nullable human shepherd distinct from
-      # the current-phase (typically agent) assignee. `Map.get/2` returns
-      # nil when absent, which the changeset treats as unsponsored.
-      sponsor_user_id: Map.get(args, "sponsor_user_id"),
-      reported_by: Map.get(args, "reported_by"),
-      # Auto-approve-plan opt-in. Normalized to false on omission so the
-      # DB default (false) matches what a subsequent task_get returns.
-      auto_approve_plan: Map.get(args, "auto_approve_plan", false)
-    }
+    # Legacy defaults preserved for wire compatibility: title, status,
+    # priority, and auto_approve_plan drop to their historical defaults
+    # only when the key is entirely absent (Map.put_new). Present-and-nil
+    # is left to `build_task_attrs/3`'s nil-drop rules.
+    args_with_defaults =
+      args
+      |> Map.put_new("title", "Untitled Task")
+      |> Map.put_new("status", "backlog")
+      |> Map.put_new("priority", "medium")
+      |> Map.put_new("auto_approve_plan", false)
 
-    case validate_auto_approve_requires_assignee(attrs) do
-      {:error, _} = err ->
-        err
+    with {:ok, flat_attrs, phase_attrs} <-
+           TaskAttrs.build_task_attrs(args_with_defaults, :create,
+             auto_route_flat_assignee_current_phase: true,
+             current_phase: "planning"
+           ),
+         :ok <- check_auto_approve_requires_assignee(flat_attrs, phase_attrs, "planning", nil),
+         {:ok, task} <- Tasks.create_task(flat_attrs),
+         {:ok, task} <- maybe_apply_phase_assignees(task, phase_attrs) do
+      # Preload sponsor so the return envelope shows the shape a
+      # subsequent `task_get` would — the `create_task` result may not
+      # have :sponsor loaded even when sponsor_user_id is set. When
+      # `set_phase_assignees/2` also ran, it returned an unpreloaded
+      # struct too, so this preload covers both branches.
+      task = Repo.preload(task, :sponsor)
+      Tasks.broadcast_board({:task_created, task})
 
-      :ok ->
-        do_create_task(attrs, args)
-    end
-  end
+      # Stage 4 (019f3dbb): advisory self-similarity search. Empty
+      # array on failure (never blocks the create). See
+      # `similar_tasks_for/1` below for the threshold + shape.
+      similar_tasks = similar_tasks_for(task)
 
-  # `auto_approve_plan: true` is meaningless without an agent-typed
-  # assignee — the plan-engine has no one to dispatch to, so the plan
-  # flips to approved but no planner picks it up (silent stall). Refuse
-  # at the tool boundary so the caller notices. Enforced on both
-  # `task_create` and `task_update`. On update we check the RESOLVED
-  # assignee (post-merge with the existing task row) because the caller
-  # might legitimately be flipping the flag without touching assignee.
-  defp validate_auto_approve_requires_assignee(%{auto_approve_plan: true} = attrs) do
-    assignee_id = Map.get(attrs, :assignee_id)
-    assignee_type = Map.get(attrs, :assignee_type)
+      case Map.get(args, "stack_id") do
+        nil ->
+          {:ok,
+           %{
+             id: task.id,
+             title: task.title,
+             status: task.status,
+             priority: task.priority,
+             project_id: task.project_id,
+             epic_id: task.epic_id,
+             sponsor: serialize_sponsor(task.sponsor),
+             auto_approve_plan: task.auto_approve_plan,
+             similar_tasks: similar_tasks
+           }}
 
-    cond do
-      is_nil(assignee_id) or assignee_id == "" ->
+        stack_id ->
+          case Stacks.add_task(stack_id, task) do
+            {:ok, updated} ->
+              updated = Repo.preload(updated, :sponsor)
+
+              {:ok,
+               %{
+                 id: updated.id,
+                 title: updated.title,
+                 status: updated.status,
+                 priority: updated.priority,
+                 project_id: updated.project_id,
+                 epic_id: updated.epic_id,
+                 sponsor: serialize_sponsor(updated.sponsor),
+                 stack_id: updated.stack_id,
+                 stack_position: updated.stack_position,
+                 auto_approve_plan: updated.auto_approve_plan,
+                 similar_tasks: similar_tasks
+               }}
+
+            {:error, _} = err ->
+              stack_add_error_envelope(err)
+          end
+      end
+    else
+      {:error, {:invalid_phase_keys, keys}} ->
         {:error,
          %{
-           error: "auto_approve_plan requires an assignee",
+           error: "Invalid phase_assignees keys: #{Enum.join(keys, ", ")}",
            recoverable: true,
-           suggestion:
-             "Set assignee_id + assignee_type in the same call, or omit auto_approve_plan (defaults to false) and set it later once an assignee is configured."
+           suggestion: "Use 'planning', 'execution', or 'review'"
          }}
 
-      assignee_type != "agent" ->
+      {:error, {:invalid_phase_assignees_shape, _}} ->
         {:error,
          %{
-           error: "auto_approve_plan requires an agent assignee",
+           error: "phase_assignees must be a map keyed by phase name",
            recoverable: true,
            suggestion:
-             "Auto-approve dispatches to the assigned agent's planner runtime. Set assignee_type to \"agent\" and pass an agent's id in assignee_id."
+             "Pass %{\"planning\" => %{\"assignee_id\" => uuid, \"assignee_type\" => \"agent\"}}"
          }}
 
-      true ->
-        :ok
-    end
-  end
-
-  defp validate_auto_approve_requires_assignee(_attrs), do: :ok
-
-  defp do_create_task(attrs, args) do
-    case Tasks.create_task(attrs) do
-      {:ok, task} ->
-        # Preload sponsor so the return envelope shows the shape a
-        # subsequent `task_get` would — the `create_task` result may not
-        # have :sponsor loaded even when sponsor_user_id is set.
-        task = Repo.preload(task, :sponsor)
-        Tasks.broadcast_board({:task_created, task})
-
-        # Stage 4 (019f3dbb): advisory self-similarity search. Empty
-        # array on failure (never blocks the create). See
-        # `similar_tasks_for/1` below for the threshold + shape.
-        similar_tasks = similar_tasks_for(task)
-
-        case Map.get(args, "stack_id") do
-          nil ->
-            {:ok,
-             %{
-               id: task.id,
-               title: task.title,
-               status: task.status,
-               priority: task.priority,
-               project_id: task.project_id,
-               epic_id: task.epic_id,
-               sponsor: serialize_sponsor(task.sponsor),
-               auto_approve_plan: task.auto_approve_plan,
-               similar_tasks: similar_tasks
-             }}
-
-          stack_id ->
-            case Stacks.add_task(stack_id, task) do
-              {:ok, updated} ->
-                updated = Repo.preload(updated, :sponsor)
-
-                {:ok,
-                 %{
-                   id: updated.id,
-                   title: updated.title,
-                   status: updated.status,
-                   priority: updated.priority,
-                   project_id: updated.project_id,
-                   epic_id: updated.epic_id,
-                   sponsor: serialize_sponsor(updated.sponsor),
-                   stack_id: updated.stack_id,
-                   stack_position: updated.stack_position,
-                   auto_approve_plan: updated.auto_approve_plan,
-                   similar_tasks: similar_tasks
-                 }}
-
-              {:error, _} = err ->
-                stack_add_error_envelope(err)
-            end
-        end
-
-      {:error, changeset} ->
+      {:error, %Ecto.Changeset{} = changeset} ->
         {:error,
          %{
            error: "Failed to create task: #{inspect_errors(changeset)}",
            recoverable: true,
            suggestion: "Check that project_id is valid and title is provided"
          }}
+
+      {:error, other} ->
+        {:error,
+         %{
+           error: "Failed to create task: #{inspect(other)}",
+           recoverable: true,
+           suggestion: "Check the request shape"
+         }}
     end
   end
+
+  # Applies a per-phase assignee map through the canonical writer
+  # (`Tasks.set_phase_assignees/2`), which re-derives the flat
+  # `assignee_id + assignee_type` pointer from the current phase. Called
+  # from both `task_create` and `task_update` after `build_task_attrs/3`
+  # emits a non-nil `phase_attrs`.
+  defp maybe_apply_phase_assignees(task, nil), do: {:ok, task}
+
+  defp maybe_apply_phase_assignees(task, phase_attrs) when is_map(phase_attrs),
+    do: Tasks.set_phase_assignees(task, phase_attrs)
 
   # Stage 4 (019f3dbb) — advisory self-similarity search for
   # `task_create`. Runs synchronously post-create because the caller
@@ -3297,6 +3313,19 @@ defmodule Platform.Federation.ToolSurface do
     {:ok, Enum.map(tasks, &serialize_task/1)}
   end
 
+  # `task_update` — canonical shape defined by
+  # `Platform.Federation.TaskAttrs.build_task_attrs/3` (ADR 0044). The
+  # helper owns the nilable-semantics contract: `sponsor_user_id` and
+  # `deploy_target` propagate explicit nil (clears the field);
+  # everything else is dropped when nil (unset ≠ clear). Flat assignee
+  # writes are auto-routed to the task's CURRENT-phase slot (from
+  # `Tasks.current_phase/1`) so a mid-task reassignment survives the
+  # next phase transition.
+  #
+  # If someone reintroduces a blanket `Map.reject(fn {_k, v} -> is_nil(v)
+  # end)` inline here, the sponsor + deploy_target clear-tests will go
+  # red — that's the guard. See ADR 0042 for the sponsor null-clears
+  # contract and ADR 0044 for the assignee auto-routing.
   def execute("task_update", args, _context) do
     task_id = Map.get(args, "task_id") || Map.get(args, "id")
 
@@ -3310,140 +3339,188 @@ defmodule Platform.Federation.ToolSurface do
          }}
 
       task ->
-        # Build update attrs from provided fields only.
-        #
-        # KEEP THIS SHAPE — do NOT re-introduce a blanket
-        # `Map.reject(fn {_k, v} -> is_nil(v) end)`. The `sponsor_user_id`
-        # field (ADR 0042) uses explicit-null-unsets-the-value semantics
-        # at the MCP boundary: an explicit `nil` MUST reach the changeset
-        # so it can clear the sponsor. Blanket-rejecting nils would
-        # silently drop the unset, forcing agents to psql-poke instead of
-        # calling the tool.
-        #
-        # For every other field, "key not present in args" is
-        # semantically equivalent to "leave untouched" — `Map.take/2`
-        # already handles that. We only need to filter nils for the keys
-        # where a caller *supplied* the key with a nil placeholder (JSON
-        # `null`), and even then only for fields that don't participate
-        # in the explicit-nil-unset contract.
-        explicitly_nilable = ~w(sponsor_user_id)
+        with {:ok, flat_attrs, phase_attrs} <-
+               TaskAttrs.build_task_attrs(args, :update,
+                 auto_route_flat_assignee_current_phase: true,
+                 current_phase: Tasks.current_phase(task)
+               ) do
+          # Status transitions still route through
+          # `Tasks.transition_task_status/2` (validates the edge), while
+          # everything else flows through `Tasks.update_task/2`. Split
+          # so the two writers don't step on each other.
+          status_change = Map.get(flat_attrs, :status)
+          non_status_flat = Map.delete(flat_attrs, :status)
 
-        update_attrs =
-          args
-          |> Map.take([
-            "title",
-            "description",
-            "status",
-            "priority",
-            "epic_id",
-            "assignee_type",
-            "assignee_id",
-            "sponsor_user_id",
-            "deploy_target",
-            "auto_approve_plan"
-          ])
-          |> Enum.reduce(%{}, fn {k, v}, acc ->
-            cond do
-              # Explicit-nilable keys always propagate, nil included —
-              # this is the contract that lets task_update clear the
-              # sponsor via `{"sponsor_user_id": null}`.
-              k in explicitly_nilable ->
-                Map.put(acc, String.to_existing_atom(k), v)
+          # If `auto_approve_plan` will be `true` after this update (in
+          # this call or already-true on the task and not being changed),
+          # resolve the effective assignee across THIS update's flat/phase
+          # attrs merged over the existing task row, and reject if the
+          # result is unassigned or non-agent. Silent auto-approve without
+          # an assignee is the bug this guards against — the plan flips
+          # to approved but no planner picks it up. See task 019f42fd
+          # session note 2026-07-08. Gate lives inside the helper.
+          current_phase = Tasks.current_phase(task)
 
-              # For every other field, drop nils (agent passed key with
-              # null placeholder → treat as "don't change").
-              is_nil(v) ->
-                acc
+          auto_check =
+            check_auto_approve_requires_assignee(flat_attrs, phase_attrs, current_phase, task)
 
-              true ->
-                Map.put(acc, String.to_existing_atom(k), v)
-            end
-          end)
+          # Order: flat_attrs → phase_attrs → status_change. Phase-attrs
+          # writer (`Tasks.set_phase_assignees/2`) uses the task's
+          # CURRENT status to derive the flat pointer, so we apply it
+          # before any status transition — otherwise a same-call
+          # phase-slot write for the target phase would still see the
+          # old phase's derivation.
+          with :ok <- auto_check,
+               {:ok, updated} <- maybe_update_task(task, non_status_flat),
+               {:ok, updated} <- maybe_apply_phase_assignees(updated, phase_attrs),
+               {:ok, updated} <- maybe_transition_status(updated, status_change) do
+            # `Tasks.update_task/2` and `Tasks.transition_task_status/2`
+            # return the un-preloaded struct. Refresh sponsor so
+            # `serialize_task` can emit the current shape — otherwise a
+            # caller that just cleared the sponsor via `sponsor_user_id:
+            # nil` would still see the pre-update Sponsor%User in the
+            # response envelope.
+            updated = Repo.preload(updated, :sponsor, force: true)
+            Tasks.broadcast_board({:task_updated, updated})
+            {:ok, serialize_task(updated)}
+          else
+            {:error, :invalid_transition} ->
+              {:error,
+               %{
+                 error: "Invalid status transition from '#{task.status}' to '#{status_change}'",
+                 recoverable: true,
+                 suggestion:
+                   "Check allowed transitions for the current status. " <>
+                     "To retire a non-started task without walking it through in_progress, " <>
+                     "transition to 'cancelled' (terminal, allowed from backlog/planning/" <>
+                     "in_progress/blocked/stack_pending)."
+               }}
 
-        # If auto_approve_plan is being flipped to true (in this call or
-        # already true and not being changed), resolve the effective
-        # assignee across THIS update's attrs merged over the existing
-        # task, and reject if the result is an unassigned or non-agent
-        # task. Silent auto-approve without an assignee is the bug this
-        # guards against — the plan flips to approved but no planner
-        # picks it up. See task 019f42fd session note 2026-07-08.
-        auto_check =
-          case Map.get(update_attrs, :auto_approve_plan, task.auto_approve_plan) do
-            true ->
-              validate_auto_approve_requires_assignee(%{
-                auto_approve_plan: true,
-                assignee_id: Map.get(update_attrs, :assignee_id, task.assignee_id),
-                assignee_type: Map.get(update_attrs, :assignee_type, task.assignee_type)
-              })
+            {:error, %Ecto.Changeset{} = changeset} ->
+              {:error,
+               %{
+                 error: "Failed to update task: #{inspect_errors(changeset)}",
+                 recoverable: true,
+                 suggestion: "Check that the provided values are valid"
+               }}
 
-            _ ->
-              :ok
+            {:error, %{error: _} = err} ->
+              # Passthrough for `validate_auto_approve_requires_assignee`
+              # error envelopes (already-shaped for the tool caller).
+              {:error, err}
           end
+        else
+          {:error, {:invalid_phase_keys, keys}} ->
+            {:error,
+             %{
+               error: "Invalid phase_assignees keys: #{Enum.join(keys, ", ")}",
+               recoverable: true,
+               suggestion: "Use 'planning', 'execution', or 'review'"
+             }}
 
-        with :ok <- auto_check do
-          do_task_update(task, update_attrs, args)
+          {:error, {:invalid_phase_assignees_shape, _}} ->
+            {:error,
+             %{
+               error: "phase_assignees must be a map keyed by phase name",
+               recoverable: true,
+               suggestion:
+                 "Pass %{\"planning\" => %{\"assignee_id\" => uuid, \"assignee_type\" => \"agent\"}}"
+             }}
         end
     end
   end
 
-  defp do_task_update(task, update_attrs, args) do
-    # Use transition_task_status for status changes, regular update for others
-    status_change = Map.get(update_attrs, :status)
-    other_attrs = Map.delete(update_attrs, :status)
+  defp maybe_update_task(task, attrs) when map_size(attrs) == 0, do: {:ok, task}
+  defp maybe_update_task(task, attrs), do: Tasks.update_task(task, attrs)
 
-    # Apply non-status updates first
-    result =
-      if map_size(other_attrs) > 0 do
-        Tasks.update_task(task, other_attrs)
-      else
-        {:ok, task}
+  defp maybe_transition_status(task, nil), do: {:ok, task}
+
+  defp maybe_transition_status(task, new_status),
+    do: Tasks.transition_task_status(task, new_status)
+
+  # `auto_approve_plan: true` is meaningless without an agent-typed
+  # assignee — the plan-engine has no one to dispatch to, so the plan
+  # flips to approved but no planner picks it up (silent stall). Refuse
+  # at the tool boundary so the caller notices. Enforced on both
+  # `task_create` and `task_update`.
+  #
+  # Gate first: if the caller isn't asking for auto-approve, skip the
+  # check entirely — this preserves the historical zero-friction path
+  # where `task_create` with no assignee is fine.
+  #
+  # When the gate fires, resolve the RESOLVED assignee (merged with
+  # `phase_assignees[current_phase]` and the existing task row on update)
+  # so we validate what the row will actually look like post-write.
+  defp check_auto_approve_requires_assignee(flat_attrs, phase_attrs, current_phase, task) do
+    flat_flag = Map.get(flat_attrs, :auto_approve_plan, :missing)
+
+    effective_flag =
+      cond do
+        flat_flag == true -> true
+        flat_flag == false -> false
+        # No flag in this update: fall through to the existing task row's
+        # setting (create path passes task=nil so the fallback is false).
+        task -> task.auto_approve_plan == true
+        true -> false
       end
 
-    # Then apply status transition if requested
-    result =
-      case {result, status_change} do
-        {{:ok, updated_task}, nil} ->
-          {:ok, updated_task}
+    if effective_flag do
+      {resolved_id, resolved_type} =
+        resolve_effective_assignee(flat_attrs, phase_attrs, current_phase, task)
 
-        {{:ok, updated_task}, new_status} ->
-          Tasks.transition_task_status(updated_task, new_status)
+      cond do
+        is_nil(resolved_id) or resolved_id == "" ->
+          {:error,
+           %{
+             error: "auto_approve_plan requires an assignee",
+             recoverable: true,
+             suggestion:
+               "Set assignee_id + assignee_type in the same call (or a phase_assignees entry for the current phase), or omit auto_approve_plan (defaults to false) and set it later once an assignee is configured."
+           }}
 
-        {{:error, _} = err, _} ->
-          err
+        resolved_type != "agent" ->
+          {:error,
+           %{
+             error: "auto_approve_plan requires an agent assignee",
+             recoverable: true,
+             suggestion:
+               "Auto-approve dispatches to the assigned agent's planner runtime. Set assignee_type to \"agent\" and pass an agent's id in assignee_id."
+           }}
+
+        true ->
+          :ok
       end
-
-    case result do
-      {:ok, updated} ->
-        # `Tasks.update_task/2` and `Tasks.transition_task_status/2`
-        # return the un-preloaded struct. Refresh sponsor so
-        # `serialize_task` can emit the current shape — otherwise a
-        # caller that just cleared the sponsor via `sponsor_user_id:
-        # nil` would still see the pre-update Sponsor%User in the
-        # response envelope.
-        updated = Repo.preload(updated, :sponsor, force: true)
-        Tasks.broadcast_board({:task_updated, updated})
-        {:ok, serialize_task(updated)}
-
-      {:error, :invalid_transition} ->
-        {:error,
-         %{
-           error: "Invalid status transition from '#{task.status}' to '#{status_change}'",
-           recoverable: true,
-           suggestion:
-             "Check allowed transitions for the current status. " <>
-               "To retire a non-started task without walking it through in_progress, " <>
-               "transition to 'cancelled' (terminal, allowed from backlog/planning/" <>
-               "in_progress/blocked/stack_pending)."
-         }}
-
-      {:error, changeset} ->
-        {:error,
-         %{
-           error: "Failed to update task: #{inspect_errors(changeset)}",
-           recoverable: true,
-           suggestion: "Check that the provided values are valid"
-         }}
+    else
+      :ok
     end
+  end
+
+  # Resolve the effective (post-write) flat assignee for auto-approve
+  # validation. Precedence: `phase_attrs[current_phase]` (canonical writer)
+  # over `flat_attrs` (auto-route path leaves flat empty here) over the
+  # existing task row (only meaningful for :update; pass `nil` on :create
+  # so a missing assignee resolves to `nil` and the check fires).
+  defp resolve_effective_assignee(flat_attrs, phase_attrs, current_phase, task) do
+    phase_entry =
+      case phase_attrs do
+        %{} = m when is_binary(current_phase) -> Map.get(m, current_phase)
+        _ -> nil
+      end
+
+    {phase_id, phase_type} =
+      case phase_entry do
+        %{"assignee_id" => id, "assignee_type" => type} -> {id, type}
+        %{"assignee_id" => id} -> {id, nil}
+        _ -> {nil, nil}
+      end
+
+    fallback_id = if task, do: task.assignee_id, else: nil
+    fallback_type = if task, do: task.assignee_type, else: nil
+
+    id = phase_id || Map.get(flat_attrs, :assignee_id, fallback_id)
+    type = phase_type || Map.get(flat_attrs, :assignee_type, fallback_type)
+
+    {id, type}
   end
 
   def execute("task_attach_canvas", args, context) do
@@ -6653,6 +6730,14 @@ defmodule Platform.Federation.ToolSurface do
       epic_id: task.epic_id,
       assignee_type: task.assignee_type,
       assignee_id: task.assignee_id,
+      # Task 019f42fd nice-to-have — surface the structured per-phase
+      # assignee map + declared deploy target so future e2e cases can
+      # observe assignee-consolidation state through MCP alone. Both
+      # canonical writers (`Tasks.set_phase_assignees/2` and
+      # `TaskAttrs.build_task_attrs/3`) drive these; making them
+      # readable closes the write→read loop.
+      phase_assignees: task.phase_assignees || %{},
+      deploy_target: task.deploy_target,
       # ADR 0042 — Sponsor. `nil` when unsponsored, `%{id, name, email}`
       # when set. `Ecto.Association.NotLoaded` protects callers from an
       # accidentally-unpreloaded read (defensive; every preload site now

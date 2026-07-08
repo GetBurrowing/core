@@ -1375,57 +1375,15 @@
         <% end %>
       </div>
 
-      <%!-- Task-level assignee. Off: plain badge. On: <select>.
-           Distinct from the per-phase assignee modal (which writes
-           `phase_assignees`); this sets the top-level `assignee_id` and
-           is the value the kanban thumbnail / TaskRouter dispatch reads.
-           Reuses `@agents` already fetched at mount for the per-phase
-           modal landed in 019df0d7. --%>
-      <div :if={@agents != []} class="flex flex-col gap-1">
-        <%= if @edit_mode do %>
-          <form
-            phx-change="update_task_field"
-            class="flex flex-col gap-1 rounded border border-dashed border-base-300 hover:border-base-content/40 p-1"
-            data-role="assignee-form"
-            data-editable="true"
-          >
-            <input type="hidden" name="field" value="assignee_id" />
-            <input type="hidden" name="task-id" value={@selected_task.id} />
-            <label
-              for={"assignee-select-#{@selected_task.id}"}
-              class="text-xs font-semibold uppercase tracking-wider text-base-content/50"
-            >
-              Assignee (task-level)
-            </label>
-            <select
-              id={"assignee-select-#{@selected_task.id}"}
-              name="value"
-              data-role="assignee-select"
-              class="select select-sm select-bordered cursor-pointer"
-            >
-              <option value="" selected={is_nil(@selected_task.assignee_id)}>
-                Unassigned
-              </option>
-              <option
-                :for={a <- @agents}
-                value={a.id}
-                selected={@selected_task.assignee_id == a.id}
-              >
-                {a.name}
-              </option>
-            </select>
-          </form>
-        <% else %>
-          <div data-role="assignee-readonly" data-editable="false" class="flex flex-col gap-1">
-            <span class="text-xs font-semibold uppercase tracking-wider text-base-content/50">
-              Assignee (task-level)
-            </span>
-            <span class="badge badge-sm badge-outline">
-              {assignee_name(@selected_task, @agent_names) || "Unassigned"}
-            </span>
-          </div>
-        <% end %>
-      </div>
+      <%!-- Assignee — no top-level display row. Per ADR 0044 (as amended
+           by Rowan on 2026-07-08 stage-3 rejection), the per-phase
+           "Assignees" section below is the SINGLE affordance for both
+           reading and writing the assignee: it shows the breakdown by
+           phase (contextually useful — the current phase is highlighted
+           in `text-primary`) and its Configure button opens the
+           canonical writer modal. The prior readonly "Current assignee"
+           badge duplicated the derived current-phase pointer and has
+           been removed. --%>
 
       <%!-- Sponsor (ADR 0042 stage 4). Nullable human shepherd distinct from
            the technical assignee above. Edit mode: always show the picker so
@@ -3819,6 +3777,35 @@
             <span class="hero-information-circle size-3.5 opacity-50"></span>
           </div>
         </label>
+      </div>
+
+      <%!-- Deploy target — nullable string; entries come from the selected
+           project's deploy_config.deploy_targets. Selector disabled when the
+           project has none configured or when no project is selected yet.
+           Mirrors the detail-pane deploy_target dropdown at
+           tasks_live.html.heex line ~1305. Distinct from Deploy Strategy
+           (below) which sets the strategy shape rather than the destination.
+           ADR 0044 stage 4 — sheet↔MCP parity. --%>
+      <div>
+        <label class="label label-text text-xs font-medium">Deploy Target</label>
+        <% sheet_project_targets = sheet_project_deploy_targets(@task_form, @projects_by_org) %>
+        <select
+          name="task[deploy_target]"
+          data-role="sheet-deploy-target-select"
+          disabled={sheet_project_targets == []}
+          class="select select-bordered select-sm w-full"
+        >
+          <option value="" selected={is_nil(@task_form[:deploy_target].value)}>
+            {if sheet_project_targets == [], do: "(no targets configured)", else: "(none)"}
+          </option>
+          <option
+            :for={t <- sheet_project_targets}
+            value={t}
+            selected={@task_form[:deploy_target].value == t}
+          >
+            {deploy_target_label(t)}
+          </option>
+        </select>
       </div>
 
       <%!-- Deploy Strategy --%>

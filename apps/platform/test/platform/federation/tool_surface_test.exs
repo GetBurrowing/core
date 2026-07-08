@@ -979,6 +979,358 @@ defmodule Platform.Federation.ToolSurfaceTest do
       assert task_update.parameters.sponsor_user_id.required == false
     end
 
+    # ── ADR 0044: deploy_target + phase_assignees canonical shape ────
+    #
+    # Stage 2 of task 019f42fd consolidates task_create + task_update
+    # through `Platform.Federation.TaskAttrs.build_task_attrs/3`. These
+    # tests pin the new MCP wire contract:
+    #
+    #   * `deploy_target` on task_create (parity with task_update).
+    #   * `phase_assignees` on both, as the granular per-phase writer.
+    #   * Flat `assignee_id + assignee_type` auto-routing into
+    #     `phase_assignees[current_phase(task)]` on both create and
+    #     update — the "silent-clobber-on-phase-transition" fix.
+    #
+    # If a future PR bypasses the shared helper on either handler, these
+    # tests will go red.
+
+    test "tool definitions expose deploy_target + phase_assignees on task_create" do
+      tools = ToolSurface.tool_definitions()
+      task_create = Enum.find(tools, &(&1.name == "task_create"))
+
+      assert Map.has_key?(task_create.parameters, :deploy_target)
+      assert task_create.parameters.deploy_target.type == "string"
+      assert task_create.parameters.deploy_target.required == false
+
+      assert Map.has_key?(task_create.parameters, :phase_assignees)
+      assert task_create.parameters.phase_assignees.type == "object"
+      assert task_create.parameters.phase_assignees.required == false
+    end
+
+    test "tool definitions expose phase_assignees on task_update" do
+      tools = ToolSurface.tool_definitions()
+      task_update = Enum.find(tools, &(&1.name == "task_update"))
+
+      assert Map.has_key?(task_update.parameters, :phase_assignees)
+      assert task_update.parameters.phase_assignees.type == "object"
+      assert task_update.parameters.phase_assignees.required == false
+    end
+
+    test "task_create with deploy_target persists the field" do
+      # Parity gap fix: previously deploy_target was only writable via
+      # task_update, forcing agents into a two-call dance to author a
+      # task destined for a specific target.
+      project = create_project()
+
+      {:ok, created} =
+        ToolSurface.execute(
+          "task_create",
+          %{
+            "project_id" => project.id,
+            "title" => "Ships to exp",
+            "deploy_target" => "exp"
+          },
+          %{}
+        )
+
+      # Response envelope doesn't currently expose deploy_target
+      # (serialize_task doesn't include it), but the DB record must.
+      assert Tasks.get_task_record(created.id).deploy_target == "exp"
+    end
+
+    test "task_create with empty deploy_target drops the value (empty-string clears)" do
+      # `TaskAttrs.emptystring_clears` normalizes "" → nil; in :create
+      # mode nil is dropped so the DB default (nil) applies.
+      project = create_project()
+
+      {:ok, created} =
+        ToolSurface.execute(
+          "task_create",
+          %{
+            "project_id" => project.id,
+            "title" => "No target",
+            "deploy_target" => ""
+          },
+          %{}
+        )
+
+      assert Tasks.get_task_record(created.id).deploy_target == nil
+    end
+
+    test "task_create with phase_assignees only writes into the phase_assignees jsonb" do
+      # Structured phase_assignees is the canonical writer. When no
+      # flat assignee is present, the derived flat pointer stays nil
+      # unless the current phase (planning for new tasks) has an entry.
+      project = create_project()
+      agent = create_agent()
+
+      {:ok, created} =
+        ToolSurface.execute(
+          "task_create",
+          %{
+            "project_id" => project.id,
+            "title" => "Granular phase assignment",
+            "phase_assignees" => %{
+              "execution" => %{
+                "assignee_id" => agent.id,
+                "assignee_type" => "agent"
+              }
+            }
+          },
+          %{}
+        )
+
+      reloaded = Tasks.get_task_record(created.id)
+
+      assert reloaded.phase_assignees == %{
+               "execution" => %{
+                 "assignee_id" => agent.id,
+                 "assignee_type" => "agent"
+               }
+             }
+
+      # Current phase for a fresh task is "planning" (status
+      # defaults to "backlog"), which has no phase_assignees entry —
+      # so the derived flat pointer is nil.
+      assert reloaded.assignee_id == nil
+      assert reloaded.assignee_type == nil
+    end
+
+    test "task_create with only flat assignee auto-routes into phase_assignees[\"planning\"]" do
+      # THIS is the silent-clobber fix. Pre-stage-2, a flat
+      # `assignee_id + assignee_type` on task_create wrote straight to
+      # the top-level columns — which then got clobbered on the first
+      # phase transition because `derive_assignee_from_phase_assignees`
+      # only saw an empty phase_assignees map. After stage 2, the flat
+      # pair is lifted into `phase_assignees["planning"]` so the
+      # derivation stays correct across transitions.
+      project = create_project()
+      agent = create_agent()
+
+      {:ok, created} =
+        ToolSurface.execute(
+          "task_create",
+          %{
+            "project_id" => project.id,
+            "title" => "Flat assignee auto-routes",
+            "assignee_id" => agent.id,
+            "assignee_type" => "agent"
+          },
+          %{}
+        )
+
+      reloaded = Tasks.get_task_record(created.id)
+
+      # phase_assignees now carries the planning slot ─ the fix.
+      assert reloaded.phase_assignees == %{
+               "planning" => %{
+                 "assignee_id" => agent.id,
+                 "assignee_type" => "agent"
+               }
+             }
+
+      # Flat pointer is re-derived by `set_phase_assignees/2` from the
+      # current phase (planning). Same value; source of truth is now
+      # the phase-map.
+      assert reloaded.assignee_id == agent.id
+      assert reloaded.assignee_type == "agent"
+    end
+
+    test "task_update with phase_assignees writes only the supplied slot" do
+      # Merge (not replace) semantics — set_phase_assignees does a
+      # Map.merge onto the existing map so callers can target one slot
+      # without disturbing others.
+      project = create_project()
+      planner = create_agent(%{slug: "planner-#{System.unique_integer([:positive])}"})
+      reviewer = create_agent(%{slug: "reviewer-#{System.unique_integer([:positive])}"})
+
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "phase merge"})
+
+      {:ok, task} =
+        Tasks.set_phase_assignees(task, %{
+          "planning" => %{"assignee_id" => planner.id, "assignee_type" => "agent"}
+        })
+
+      # Sanity: planning slot present before update.
+      assert task.phase_assignees["planning"]["assignee_id"] == planner.id
+
+      {:ok, _result} =
+        ToolSurface.execute(
+          "task_update",
+          %{
+            "task_id" => task.id,
+            "phase_assignees" => %{
+              "review" => %{"assignee_id" => reviewer.id, "assignee_type" => "agent"}
+            }
+          },
+          %{}
+        )
+
+      reloaded = Tasks.get_task_record(task.id)
+
+      # Both slots present; the planning slot survived the review write.
+      assert reloaded.phase_assignees["planning"]["assignee_id"] == planner.id
+      assert reloaded.phase_assignees["review"]["assignee_id"] == reviewer.id
+    end
+
+    test "task_update flat assignee on in_progress task auto-routes to execution slot" do
+      # Current-phase resolution: a task at status in_progress has
+      # current_phase "execution", so a flat assignee write on
+      # task_update lifts into phase_assignees["execution"].
+      project = create_project()
+      executor = create_agent()
+
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "In progress reassignment",
+          status: "in_progress"
+        })
+
+      assert task.status == "in_progress"
+
+      {:ok, _result} =
+        ToolSurface.execute(
+          "task_update",
+          %{
+            "task_id" => task.id,
+            "assignee_id" => executor.id,
+            "assignee_type" => "agent"
+          },
+          %{}
+        )
+
+      reloaded = Tasks.get_task_record(task.id)
+
+      # Executor lifted into the execution slot (matches current_phase).
+      assert reloaded.phase_assignees == %{
+               "execution" => %{
+                 "assignee_id" => executor.id,
+                 "assignee_type" => "agent"
+               }
+             }
+
+      # Derived flat pointer picks up the execution slot.
+      assert reloaded.assignee_id == executor.id
+      assert reloaded.assignee_type == "agent"
+    end
+
+    test "task_update with both flat and phase_assignees — phase_assignees wins" do
+      # ADR 0044 tie-breaker: structured wins, flat is silently dropped.
+      # Same contract as build_task_attrs (verified by TaskAttrsTest);
+      # this pins the same contract at the MCP boundary.
+      project = create_project()
+      flat_agent = create_agent()
+      granular_agent = create_agent()
+
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Tie-breaker"})
+
+      {:ok, _result} =
+        ToolSurface.execute(
+          "task_update",
+          %{
+            "task_id" => task.id,
+            "assignee_id" => flat_agent.id,
+            "assignee_type" => "agent",
+            "phase_assignees" => %{
+              "planning" => %{
+                "assignee_id" => granular_agent.id,
+                "assignee_type" => "agent"
+              }
+            }
+          },
+          %{}
+        )
+
+      reloaded = Tasks.get_task_record(task.id)
+
+      # Structured input wins; the flat pair was silently dropped.
+      assert reloaded.phase_assignees == %{
+               "planning" => %{
+                 "assignee_id" => granular_agent.id,
+                 "assignee_type" => "agent"
+               }
+             }
+
+      assert reloaded.assignee_id == granular_agent.id
+    end
+
+    test "task_update with unknown phase_assignees key returns a recoverable error" do
+      # The helper validates phase names; the handler surfaces the
+      # error as a recoverable envelope rather than an Ecto changeset.
+      project = create_project()
+      agent = create_agent()
+
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Bad phase"})
+
+      {:error, error} =
+        ToolSurface.execute(
+          "task_update",
+          %{
+            "task_id" => task.id,
+            "phase_assignees" => %{
+              "shipping" => %{"assignee_id" => agent.id, "assignee_type" => "agent"}
+            }
+          },
+          %{}
+        )
+
+      assert error.recoverable == true
+      assert error.error =~ "phase_assignees"
+      # DB unchanged.
+      assert Tasks.get_task_record(task.id).phase_assignees in [nil, %{}]
+    end
+
+    test "task_create with unknown phase_assignees key returns a recoverable error" do
+      project = create_project()
+      agent = create_agent()
+
+      {:error, error} =
+        ToolSurface.execute(
+          "task_create",
+          %{
+            "project_id" => project.id,
+            "title" => "Bad phase at create",
+            "phase_assignees" => %{
+              "shipping" => %{"assignee_id" => agent.id, "assignee_type" => "agent"}
+            }
+          },
+          %{}
+        )
+
+      assert error.recoverable == true
+      assert error.error =~ "phase_assignees"
+    end
+
+    test "task_update with only title untouched leaves phase_assignees alone" do
+      # Regression: title-only updates must not clobber phase_assignees.
+      # (`Map.take/2` at the helper strips unknown keys, and `phase_attrs`
+      # falls through as `nil` when the caller didn't supply either flat
+      # or structured assignee input.)
+      project = create_project()
+      agent = create_agent()
+
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Original"})
+
+      {:ok, task} =
+        Tasks.set_phase_assignees(task, %{
+          "execution" => %{"assignee_id" => agent.id, "assignee_type" => "agent"}
+        })
+
+      original_phase_assignees = task.phase_assignees
+
+      {:ok, result} =
+        ToolSurface.execute(
+          "task_update",
+          %{"task_id" => task.id, "title" => "Renamed"},
+          %{}
+        )
+
+      reloaded = Tasks.get_task_record(task.id)
+      assert result.title == "Renamed"
+      assert reloaded.phase_assignees == original_phase_assignees
+    end
+
     # ── auto_approve_plan (task 019f25f2) — MCP wire contract ──────────
     #
     # Pins the MCP-side plumbing for the auto-approve-plan opt-in flag:
