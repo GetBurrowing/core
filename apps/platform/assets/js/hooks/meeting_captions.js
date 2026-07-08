@@ -11,10 +11,21 @@
  * - Final segments scroll up and become permanent
  * - Auto-hides after 5 seconds of silence
  * - CSS classes handle positioning (bottom overlay, semi-transparent bg)
+ *
+ * Stage 2 (task 019f3f17): in addition to the central rolling buffer, the
+ * hook fans each incoming segment out to a matching per-speaker overlay
+ * slot on the gallery tile — `[data-participant='<identity>']
+ * [data-caption-slot]`. When gallery mode is active AND the speaker is
+ * a visible tile, the tile-slot displays the latest line beneath the
+ * speaker's face. When the speaker is off-page (paged out, or a non-
+ * gallery mode is active), no matching slot exists in the DOM and the
+ * per-tile render silently no-ops — the central bar still carries the
+ * transcript so the viewer never loses a line.
  */
 
 const MAX_LINES = 3
 const HIDE_AFTER_MS = 5000
+const SPEAKER_SLOT_HIDE_AFTER_MS = 5000
 
 const MeetingCaptions = {
   mounted() {
@@ -22,38 +33,74 @@ const MeetingCaptions = {
     this._lines = []
     this._hideTimer = null
     this._interimLine = null // Track the current interim segment by ID
+    /** @type {Map<string, { text: string, speaker: string, timerId: number|null }>} */
+    this._speakerSlots = new Map()
 
     this._boundOnCaption = this._onCaption.bind(this)
     document.addEventListener("meeting:caption", this._boundOnCaption)
 
     // Start hidden
     this.el.classList.add("opacity-0", "pointer-events-none")
+
+    // Persistence is owned by the always-mounted `MeetingCaptionsPersist`
+    // hook (below). Keeping it out of THIS hook is deliberate: the
+    // `#meeting-captions` element is `:if={@captions_visible}`-gated, so
+    // on a reload with server default `false` this hook never mounts and
+    // any localStorage restore that lived here would silently no-op — the
+    // exact chicken-and-egg bug the stage-1 reviewer flagged. The
+    // sibling persist hook lives on an always-mounted host div.
   },
 
   destroyed() {
     document.removeEventListener("meeting:caption", this._boundOnCaption)
     this._clearHideTimer()
+    // Clear every pending speaker-slot fade timer so a tile that
+    // remounts under a fresh identity doesn't inherit a stale scheduled
+    // clear from a previous session.
+    for (const slot of this._speakerSlots.values()) {
+      if (slot.timerId) clearTimeout(slot.timerId)
+    }
+    this._speakerSlots.clear()
   },
 
   // ── Private ──────────────────────────────────────────────────────────
 
   _onCaption(event) {
-    const { id, speaker, text, final } = event.detail
+    const { id, speaker, identity, text, final } = event.detail
     if (!text || !text.trim()) return
 
     // Show the container
     this.el.classList.remove("opacity-0", "pointer-events-none")
     this._resetHideTimer()
 
+    // Guest-suffix render: MeetingHooks stamps guest LiveKit identities
+    // with a `guest:` prefix (mirrors participant_rail.ex's
+    // `via_guest_link?` predicate). Threading identity through the
+    // custom event lets the central bar attribute the line as
+    // `Name (guest): text` without a server round-trip.
+    const displaySpeaker =
+      typeof identity === "string" && identity.startsWith("guest:")
+        ? `${speaker} (guest)`
+        : speaker
+
     if (!final) {
       // Interim: update in place if same ID, or replace the interim slot
-      this._updateInterim({ id, speaker, text })
+      this._updateInterim({ id, speaker: displaySpeaker, text })
     } else {
       // Final: commit the line
-      this._commitLine({ id, speaker, text })
+      this._commitLine({ id, speaker: displaySpeaker, text })
     }
 
     this._render()
+
+    // Stage 2 fan-out: mirror the SAME segment (interim OR final) into
+    // the speaker's per-tile overlay slot when one is mounted. The slot
+    // is only present in gallery layout AND when the speaker's tile is
+    // visible — the query silently returns null in every other case, so
+    // this is a no-op fallback path (central bar continues rendering).
+    if (typeof identity === "string" && identity !== "") {
+      this._renderSpeakerSlot({ identity, speaker: displaySpeaker, text })
+    }
   },
 
   _updateInterim({ id, speaker, text }) {
@@ -123,6 +170,105 @@ const MeetingCaptions = {
     div.textContent = str
     return div.innerHTML
   },
+
+  // ── Per-speaker slot fan-out (stage 2) ───────────────────────────────
+  //
+  // Look up the tile carrying `data-participant="<identity>"` and, if
+  // it has a `[data-caption-slot]` overlay child (opted in via the
+  // video_tile `caption_slot?={true}` attr), write the speaker's latest
+  // line into it and schedule a fade after SPEAKER_SLOT_HIDE_AFTER_MS
+  // of silence. Silently no-ops when either the tile or the slot is
+  // missing — that's the fallback path (off-page speaker, non-gallery
+  // layout) where the central bar carries the transcript on its own.
+  _renderSpeakerSlot({ identity, speaker, text }) {
+    // Escape the identity into a valid CSS attribute selector — LiveKit
+    // identities can contain characters like `:` (`user:<uuid>`,
+    // `guest:<slug>`) which are structural in selectors. `CSS.escape` is
+    // the browser-native way to quote them.
+    const safeIdentity = window.CSS && window.CSS.escape
+      ? window.CSS.escape(identity)
+      : identity.replace(/["\\]/g, "\\$&")
+
+    // Prefer a gallery-tile scope so the strip's identical
+    // `data-participant` attribute (see meeting_live.html.heex bottom
+    // strip) never picks up the slot query — the strip never carries a
+    // `[data-caption-slot]` today, but a `querySelector` traversing the
+    // page would still traverse that subtree unnecessarily.
+    const tile = document.querySelector(
+      `[data-participant="${safeIdentity}"] [data-caption-slot]`
+    )
+    if (!tile) return
+
+    tile.textContent = `${speaker}: ${text}`
+    tile.classList.remove("opacity-0")
+    tile.classList.add("opacity-100")
+
+    // Track + clear on a fade timer per identity so a burst of interim
+    // segments doesn't stack listeners; each new segment resets the
+    // timer to keep the slot visible while the speaker is still going.
+    const existing = this._speakerSlots.get(identity)
+    if (existing && existing.timerId) {
+      clearTimeout(existing.timerId)
+    }
+
+    const timerId = setTimeout(() => {
+      // The tile might have unmounted (mode swap, participant left) —
+      // re-resolve rather than caching a possibly-stale reference.
+      const slot = document.querySelector(
+        `[data-participant="${safeIdentity}"] [data-caption-slot]`
+      )
+      if (slot) {
+        slot.classList.remove("opacity-100")
+        slot.classList.add("opacity-0")
+        slot.textContent = ""
+      }
+      this._speakerSlots.delete(identity)
+    }, SPEAKER_SLOT_HIDE_AFTER_MS)
+
+    this._speakerSlots.set(identity, { text, speaker, timerId })
+  },
+}
+
+/**
+ * MeetingCaptionsPersist hook — localStorage-backed CC preference.
+ *
+ * Split out of MeetingCaptions (task 019f3f17 stage 2 review fix) so
+ * persistence survives page reload. `MeetingCaptions` mounts on
+ * `#meeting-captions`, which is `:if={@captions_visible}`-gated — on a
+ * fresh reload the server assign defaults to `false`, that div isn't in
+ * the DOM, and the persistence branch that used to live in
+ * `MeetingCaptions.mounted()` never ran. Users toggled captions on,
+ * navigated away, came back, and captions were off again.
+ *
+ * The fix: mount THIS hook on a small always-present host div in the
+ * meeting shell. It fires `meeting_captions_hydrate` on mount whenever
+ * localStorage carries a different value than the server's default, and
+ * mirrors subsequent server-pushed `meeting_captions_persist` events
+ * into localStorage. No visible UI — pure preference bridge.
+ */
+const MeetingCaptionsPersist = {
+  mounted() {
+    const persistKey = this.el.dataset.persistKey
+    if (!persistKey) return
+
+    try {
+      const stored = window.localStorage.getItem(persistKey)
+      if (stored === "true" || stored === "false") {
+        this.pushEvent("meeting_captions_hydrate", { visible: stored === "true" })
+      }
+    } catch (_) {
+      // localStorage can throw in privacy modes; silently fall through.
+    }
+
+    this.handleEvent("meeting_captions_persist", ({ visible }) => {
+      try {
+        window.localStorage.setItem(persistKey, String(!!visible))
+      } catch (_) {
+        // Best-effort persistence.
+      }
+    })
+  },
 }
 
 export default MeetingCaptions
+export { MeetingCaptionsPersist }

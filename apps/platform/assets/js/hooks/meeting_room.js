@@ -81,10 +81,19 @@ const MeetingRoom = {
 
     const speakerName = participant?.name || participant?.identity || "Unknown"
 
+    // `identity` is threaded through so downstream consumers
+    // (MeetingCaptions' guest-suffix render, per-tile overlay slots
+    // added in stage 2) can key on the same identity string the
+    // MeetingVideoTile hook uses (`data-participant`). Falls back to an
+    // empty string when the participant object is malformed so the
+    // rest of the payload still flows.
+    const speakerIdentity = participant?.identity || ""
+
     for (const seg of segments) {
       const detail = {
         id: seg.id || crypto.randomUUID(),
         speaker: speakerName,
+        identity: speakerIdentity,
         text: seg.text || "",
         final: seg.final !== false,
         timestamp: seg.startTime || Date.now(),

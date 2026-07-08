@@ -59,6 +59,12 @@ defmodule PlatformWeb.Components.Meeting.VideoTile do
       "sizing strategy. :strip keeps `aspect-video h-full` for the fixed-height bottom strip; :gallery uses `aspect-video max-w-full max-h-full w-auto h-auto` so the tile preserves 16:9 and grows to whichever cell dimension fits first, letterboxing the other axis. The grid caller pairs this with `place-items-center` to center the tile in its cell."
   )
 
+  attr(:caption_slot?, :boolean,
+    default: false,
+    doc:
+      "when true, renders a `[data-caption-slot]` overlay div at the bottom of the tile (task 019f3f17 stage 2 — per-speaker caption overlays). The MeetingCaptions JS hook queries `[data-participant='<identity>'] [data-caption-slot]` and writes the speaker's latest caption line into it, then clears it on a ~5s fade timer that mirrors the central bar. Server never populates the slot — it's a zero-render anchor JS finds by identity. Callers pass this only from the gallery layout; the bottom strip stays caption-less because the strip's 96/120px height leaves no legible caption room."
+  )
+
   attr(:rest, :global)
 
   def video_tile(assigns) do
@@ -134,6 +140,29 @@ defmodule PlatformWeb.Components.Meeting.VideoTile do
       <%!-- Name label. --%>
       <div class="absolute inset-x-0 bottom-0 truncate bg-gradient-to-t from-black/60 to-transparent px-1.5 pb-0.5 pt-2 text-[10px] font-medium text-white">
         {@name}
+      </div>
+
+      <%!-- Per-speaker caption overlay slot (task 019f3f17 stage 2).
+           JS-populated: the MeetingCaptions hook writes the speaker's
+           latest caption line into `[data-caption-slot]` when it sees a
+           `meeting:caption` event whose identity matches this tile's
+           `data-participant`. Zero server render (empty string content) —
+           the LiveView never touches inner text, so morphdom leaves it
+           alone across re-renders. `phx-update="ignore"` belts +
+           suspenders the same guarantee for any accidental structural
+           patch. Hidden by default (`opacity-0`); JS toggles the
+           `opacity-100` class when a segment lands and clears it on the
+           same ~5s timer as the central bar. Only rendered when the
+           caller opts in via `caption_slot?={true}` — the bottom strip
+           stays caption-less. --%>
+      <div
+        :if={@caption_slot?}
+        id={"caption-slot-#{@id_prefix}-#{@identity}"}
+        phx-update="ignore"
+        data-caption-slot
+        aria-live="polite"
+        class="pointer-events-none absolute inset-x-0 bottom-0 z-10 max-h-[45%] overflow-hidden truncate rounded-b-lg bg-black/70 px-2 py-1 text-xs font-medium text-white opacity-0 transition-opacity duration-200"
+      >
       </div>
     </div>
     """

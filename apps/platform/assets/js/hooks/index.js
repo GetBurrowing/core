@@ -20,7 +20,7 @@ import MarkdownEditor from "./markdown_editor"
 import LocalTime from "./local_time"
 import MeetingBar from "./meeting_bar"
 import MessageLift from "./message_lift"
-import MeetingCaptions from "./meeting_captions"
+import MeetingCaptions, { MeetingCaptionsPersist } from "./meeting_captions"
 import MeetingClient from "./meeting_client"
 import MeetingRoom from "./meeting_room"
 import MeetingScreenShare from "./meeting_screen_share"
@@ -66,6 +66,7 @@ export default {
   MarkdownEditor,
   MeetingBar,
   MeetingCaptions,
+  MeetingCaptionsPersist,
   MeetingClient,
   MeetingRoom,
   MeetingScreenShare,

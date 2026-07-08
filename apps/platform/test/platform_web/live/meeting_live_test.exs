@@ -3171,4 +3171,404 @@ defmodule PlatformWeb.MeetingLiveTest do
       refute html =~ "Stale Ghost Name"
     end
   end
+
+  # ── Closed captions (task 019f3f17 stage 1) ─────────────────────────
+  #
+  # Gating: the CC toggle button only renders while the viewer is joined
+  # (mirrors the Leave-button gate) because captions come from the
+  # LiveKit transcription stream, which only flows during an active
+  # session. In tests the connected mount auto-joins, so
+  # `:in_meeting=true` and the button is present. The overlay
+  # (`#meeting-captions` + `MeetingCaptions` hook) is `:if`-gated on
+  # `:captions_visible`, which defaults to false — so it's absent at
+  # mount and appears only after the toggle.
+  describe "closed captions (stage 1)" do
+    setup %{conn: conn} do
+      # The CC toggle button is `<%= if @in_meeting do %>` gated
+      # (captions come from the LiveKit stream, which only flows during
+      # an active session), so the same LiveKit-env stub the
+      # "LiveKit wiring" describe uses is needed here — otherwise
+      # auto-join hits `:livekit_not_configured` and `:in_meeting`
+      # stays false, and the toggle never renders.
+      original = Application.get_env(:platform, :livekit, [])
+
+      Application.put_env(:platform, :livekit,
+        api_key: "test-livekit-key",
+        api_secret: "test-livekit-secret-0123456789abcdef",
+        url: "wss://livekit.test"
+      )
+
+      on_exit(fn -> Application.put_env(:platform, :livekit, original) end)
+
+      {meeting, space} = create_meeting(%{slug: "cc-stage-1", name: "CC Stage 1"})
+      {conn, user} = authenticated_conn(conn)
+
+      # Seed the viewer as a chat-space participant so MeetingHooks.do_join
+      # can resolve `:current_participant` and reach the successful
+      # `{:ok, token}` branch that flips `:in_meeting=true`.
+      {:ok, _participant} =
+        Chat.add_participant(space.id, %{
+          participant_type: "user",
+          participant_id: user.id,
+          display_name: "CC Viewer",
+          joined_at: DateTime.utc_now()
+        })
+
+      {:ok, conn: conn, user: user, meeting: meeting, space: space}
+    end
+
+    test "captions overlay is absent at mount (default off)", %{conn: conn, meeting: meeting} do
+      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      # The `MeetingCaptions` hook is only mounted when the viewer has
+      # toggled captions on — at rest it's neither in the DOM nor
+      # binding document-level listeners.
+      refute html =~ ~s(data-role="meeting-captions")
+    end
+
+    test "CC toggle button renders with aria-pressed=false when joined", %{
+      conn: conn,
+      meeting: meeting
+    } do
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      # Wait for the auto-join push_event to land before asserting the
+      # in-meeting UI — `assert_push_event/3` blocks the test process
+      # until the LV mailbox drains the join-meeting broadcast, which
+      # is what flips `:in_meeting=true`. Same pattern as the
+      # LiveKit-wiring "auto-joins on connected mount" test.
+      assert_push_event(view, "join-meeting", %{token: _, url: _, room_name: _})
+      html = render(view)
+
+      # The CC toggle is present with the initial "off" state — attributes
+      # rendered separately since Phoenix templates emit them in the order
+      # the HEEX declares them (aria-pressed comes BEFORE data-role in the
+      # rendered `<button>`), so a single `[^>]*` regex spanning both would
+      # need the wildcard to cross the leading edge of the attribute.
+      assert html =~ ~s(data-role="meeting-captions-toggle")
+      assert html =~ ~s(data-active="false" class=)
+      assert html =~ ~s(aria-pressed="false" title="Show captions")
+      assert html =~ ~s(aria-label="Show captions")
+    end
+
+    test "clicking the CC toggle flips :captions_visible and mounts the overlay",
+         %{conn: conn, meeting: meeting} do
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      assert_push_event(view, "join-meeting", %{token: _, url: _, room_name: _})
+
+      html =
+        view
+        |> element(~s([data-role="meeting-captions-toggle"]))
+        |> render_click()
+
+      # Button flipped to pressed, overlay + hook now in the DOM.
+      assert html =~ ~s(data-role="meeting-captions-toggle")
+      assert html =~ ~s(data-active="true" class=)
+      assert html =~ ~s(aria-pressed="true" title="Hide captions")
+      assert html =~ ~s(id="meeting-captions")
+      assert html =~ ~s(phx-hook="MeetingCaptions")
+      assert html =~ ~s(data-role="meeting-captions")
+
+      # Server-push mirrored to localStorage by the hook: assert the
+      # meeting_captions_persist event landed.
+      assert_push_event(view, "meeting_captions_persist", %{visible: true})
+    end
+
+    test "clicking the CC toggle twice returns to hidden state", %{
+      conn: conn,
+      meeting: meeting
+    } do
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      assert_push_event(view, "join-meeting", %{token: _, url: _, room_name: _})
+
+      view
+      |> element(~s([data-role="meeting-captions-toggle"]))
+      |> render_click()
+
+      html =
+        view
+        |> element(~s([data-role="meeting-captions-toggle"]))
+        |> render_click()
+
+      # Overlay withdrawn, button back to unpressed.
+      refute html =~ ~s(data-role="meeting-captions")
+      assert html =~ ~s(aria-pressed="false" title="Show captions")
+      assert_push_event(view, "meeting_captions_persist", %{visible: false})
+    end
+
+    test "meeting_captions_hydrate restores state from a bool payload", %{
+      conn: conn,
+      meeting: meeting
+    } do
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      assert_push_event(view, "join-meeting", %{token: _, url: _, room_name: _})
+
+      # The JS hook fires this on mount when a stored value differs
+      # from the current assign. `true` should flip the assign +
+      # render the overlay.
+      html = render_hook(view, "meeting_captions_hydrate", %{"visible" => true})
+
+      assert html =~ ~s(id="meeting-captions")
+      assert html =~ ~s(aria-pressed="true" title="Hide captions")
+
+      # Idempotent: firing hydrate again with the same value is a no-op.
+      html = render_hook(view, "meeting_captions_hydrate", %{"visible" => true})
+      assert html =~ ~s(id="meeting-captions")
+
+      # And hydrating to false hides the overlay.
+      html = render_hook(view, "meeting_captions_hydrate", %{"visible" => false})
+      refute html =~ ~s(data-role="meeting-captions")
+    end
+
+    test "CC toggle button is hidden when the viewer isn't joined", %{
+      conn: conn,
+      meeting: meeting
+    } do
+      # `?no_autojoin=true` short-circuits the auto-join, so :in_meeting
+      # stays false and the CC toggle stays out of the top bar. Captions
+      # come from the LiveKit session; there's nothing to render before
+      # a join.
+      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}?no_autojoin=true")
+
+      refute html =~ ~s(data-role="meeting-captions-toggle")
+    end
+
+    test "CC glyph mirrors shell.html.heex CC svg (no emoji)", %{
+      conn: conn,
+      meeting: meeting
+    } do
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      assert_push_event(view, "join-meeting", %{token: _, url: _, room_name: _})
+      html = render(view)
+
+      # The SVG path from shell.html.heex:253 — mirroring the shell CC
+      # button so the visual language stays consistent (Rowan's hero
+      # icons-only rule). No emoji anywhere in the caption UI.
+      assert html =~ "M2 5a2 2 0 012-2h16a2 2 0 012 2v10a2 2 0 01-2 2H6l-4 4V5z"
+    end
+  end
+
+  # ── Closed captions (task 019f3f17 stage 2) ─────────────────────────
+  #
+  # Stage 2 extends the caption feed with per-speaker overlay slots on
+  # gallery tiles PLUS two fold-in review fixes from stage 1:
+  #
+  #   1. Persistence host div is mounted OUTSIDE the `:if @captions_visible`
+  #      gate so localStorage restore survives a reload with the server
+  #      default `false`. Verified by the presence of
+  #      `#meeting-captions-persist-host` on mount before any toggle.
+  #   2. Caption bar z-index bumped from `z-30` to `z-40` so it paints
+  #      above the sticky mobile bottom-nav (which sits at `z-30`).
+  #
+  # The per-tile overlay itself is server-rendered as an empty
+  # `[data-caption-slot]` div on each gallery `<.video_tile>` when the
+  # viewer has captions on. The JS hook populates content at runtime;
+  # these tests only pin the SERVER contract: the slot renders in
+  # gallery mode when CC is on, and NOT in the strip / non-gallery
+  # layouts / with CC off.
+  describe "closed captions (stage 2 — per-tile overlays)" do
+    setup %{conn: conn} do
+      # Reuse the stage-1 LiveKit env stub so `:in_meeting=true` after
+      # auto-join and the CC toggle button is reachable.
+      original = Application.get_env(:platform, :livekit, [])
+
+      Application.put_env(:platform, :livekit,
+        api_key: "test-livekit-key",
+        api_secret: "test-livekit-secret-0123456789abcdef",
+        url: "wss://livekit.test"
+      )
+
+      on_exit(fn -> Application.put_env(:platform, :livekit, original) end)
+
+      {meeting, space} = create_meeting(%{slug: "cc-stage-2", name: "CC Stage 2"})
+      {conn, user} = authenticated_conn(conn)
+
+      {:ok, _participant} =
+        Chat.add_participant(space.id, %{
+          participant_type: "user",
+          participant_id: user.id,
+          display_name: "CC Viewer",
+          joined_at: DateTime.utc_now()
+        })
+
+      {:ok, conn: conn, user: user, meeting: meeting, space: space}
+    end
+
+    test "persistence host mounts outside the `:if @captions_visible` gate", %{
+      conn: conn,
+      meeting: meeting
+    } do
+      # Stage 1 review finding: localStorage restore lived in the
+      # MeetingCaptions hook, which mounted on `#meeting-captions` — a
+      # div gated on `:if={@captions_visible}`. On reload with the server
+      # default `false`, that div wasn't in the DOM, so the restore
+      # branch never ran. Stage 2 splits persistence into a separate
+      # always-mounted host — assert it's present at rest.
+      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}?no_autojoin=true")
+
+      # Captions off by default, so the overlay itself is absent…
+      refute html =~ ~s(data-role="meeting-captions")
+      # …but the persistence host div renders regardless of the toggle
+      # so localStorage-restore can fire on mount and flip the assign
+      # before the toggle button is even reachable.
+      assert html =~ ~s(id="meeting-captions-persist-host")
+      assert html =~ ~s(phx-hook="MeetingCaptionsPersist")
+      assert html =~ ~s(data-persist-key="suite.meeting.captions_visible")
+    end
+
+    test "persistence host survives the CC toggle (still present when captions visible)", %{
+      conn: conn,
+      meeting: meeting
+    } do
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      assert_push_event(view, "join-meeting", %{token: _, url: _, room_name: _})
+
+      # Toggle CC on and re-render.
+      html =
+        view
+        |> element(~s([data-role="meeting-captions-toggle"]))
+        |> render_click()
+
+      # The overlay is now in the DOM AND the persistence host is still
+      # there — the two are independent, and morphdom mustn't wipe one
+      # when the other's gate flips.
+      assert html =~ ~s(id="meeting-captions-persist-host")
+      assert html =~ ~s(id="meeting-captions")
+    end
+
+    test "caption bar paints at z-40 (above the sticky mobile bottom-nav at z-30)", %{
+      conn: conn,
+      meeting: meeting
+    } do
+      # Stage 1 review finding: the 3-line caption bar was at `z-30`,
+      # colliding with the mobile bottom-nav rail (also `z-30`) on narrow
+      # viewports. Bump to `z-40` guarantees the caption bar wins the
+      # z-order.
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      assert_push_event(view, "join-meeting", %{token: _, url: _, room_name: _})
+
+      html =
+        view
+        |> element(~s([data-role="meeting-captions-toggle"]))
+        |> render_click()
+
+      # The caption bar carries `z-40` (was `z-30` in stage 1).
+      assert html =~ ~r/id="meeting-captions"[^>]*z-40/
+      # And no lingering `z-30` on the same element.
+      refute html =~ ~r/id="meeting-captions"[^>]*\bz-30\b/
+    end
+
+    test "gallery tiles carry a `[data-caption-slot]` overlay when CC is on", %{
+      conn: conn,
+      meeting: meeting,
+      space: space
+    } do
+      # Seed one visible human participant so the gallery tile exists.
+      {_ada, _} = seed_meeting_presence(space, "user", "Ada Lovelace")
+
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      assert_push_event(view, "join-meeting", %{token: _, url: _, room_name: _})
+
+      # Sanity: gallery is the default layout.
+      html = render(view)
+      assert html =~ ~s(data-stage-mode="gallery")
+
+      # CC off: no per-tile overlay slot on the gallery tiles.
+      refute html =~ ~s(data-caption-slot)
+
+      # Toggle CC on and re-render.
+      html =
+        view
+        |> element(~s([data-role="meeting-captions-toggle"]))
+        |> render_click()
+
+      # Now the gallery `<.video_tile>` renders a `[data-caption-slot]`
+      # child on the tile. The JS hook uses
+      # `[data-participant='<identity>'] [data-caption-slot]` to write
+      # per-speaker captions — the empty div is the anchor.
+      assert html =~ ~s(data-caption-slot)
+      # The overlay is `phx-update="ignore"` so morphdom leaves the
+      # JS-populated content alone on unrelated re-renders.
+      assert html =~ ~r/data-caption-slot[^>]*|phx-update="ignore"[^>]*data-caption-slot/
+    end
+
+    test "the bottom strip's video_tile does NOT carry a caption slot even with CC on", %{
+      conn: conn,
+      meeting: meeting,
+      space: space
+    } do
+      # Strip tiles are 96/120px tall — too short for a legible caption
+      # line, and the central bar already carries the transcript in
+      # non-gallery modes. The stage-2 opt-in (`caption_slot?={true}`)
+      # is thread through from the gallery layout only.
+      {_ada, _} = seed_meeting_presence(space, "user", "Ada Lovelace")
+
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      assert_push_event(view, "join-meeting", %{token: _, url: _, room_name: _})
+
+      # Enable captions first so the central overlay is up.
+      view
+      |> element(~s([data-role="meeting-captions-toggle"]))
+      |> render_click()
+
+      # Then flip to a non-gallery mode so the bottom strip renders.
+      html =
+        view
+        |> element(~s([data-stage-mode-button="canvas"]))
+        |> render_click()
+
+      assert html =~ ~s(data-pane="bottom-strip")
+
+      # Isolate the strip section and confirm no caption slot bleeds in
+      # from the strip tiles. The strip renders `id_prefix="strip-tile"`
+      # — a scoped scan is enough.
+      [_, strip_section] = String.split(html, ~s(data-pane="bottom-strip"), parts: 2)
+
+      refute strip_section =~ ~s(data-caption-slot),
+             "bottom strip tiles must NOT carry `[data-caption-slot]` (strip is too short for captions)"
+    end
+
+    test "no per-tile caption slot renders in gallery when CC is off", %{
+      conn: conn,
+      meeting: meeting,
+      space: space
+    } do
+      # The gallery `<.video_tile>` opt-in is `caption_slot?={@captions_visible}`,
+      # so the slot must be absent by default (server assign starts false).
+      {_ada, _} = seed_meeting_presence(space, "user", "Ada Lovelace")
+
+      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}?no_autojoin=true")
+
+      # No overlay and no per-tile slot when CC is off.
+      refute html =~ ~s(data-role="meeting-captions")
+      refute html =~ ~s(data-caption-slot)
+    end
+
+    test "toggling CC off removes the per-tile caption slots from gallery tiles", %{
+      conn: conn,
+      meeting: meeting,
+      space: space
+    } do
+      {_ada, _} = seed_meeting_presence(space, "user", "Ada Lovelace")
+
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      assert_push_event(view, "join-meeting", %{token: _, url: _, room_name: _})
+
+      # Toggle CC on → slot present.
+      html =
+        view
+        |> element(~s([data-role="meeting-captions-toggle"]))
+        |> render_click()
+
+      assert html =~ ~s(data-caption-slot)
+
+      # Toggle CC off → slot withdrawn.
+      html =
+        view
+        |> element(~s([data-role="meeting-captions-toggle"]))
+        |> render_click()
+
+      refute html =~ ~s(data-caption-slot)
+    end
+  end
 end

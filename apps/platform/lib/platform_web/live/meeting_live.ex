@@ -192,7 +192,15 @@ defmodule PlatformWeb.MeetingLive do
      # stage 3) hydrates from localStorage so the preference survives
      # navigation + reload.
      |> assign(:participant_rail_collapsed, false)
-     |> assign(:chat_panel_collapsed, false)}
+     |> assign(:chat_panel_collapsed, false)
+     # Closed-captions toggle for the meeting surface (task 019f3f17
+     # stage 1). Distinct from the shell's own `:captions_enabled`
+     # (shell_live.ex:110) — MeetingLive owns its own overlay + toggle
+     # so the shell's `toggle_captions` hook (shell_live.ex:382) doesn't
+     # swallow our clicks. Default OFF per the task spec; a viewer
+     # preference is mirrored to localStorage by the MeetingCaptions JS
+     # hook and restored via `meeting_captions_hydrate`.
+     |> assign(:captions_visible, false)}
   end
 
   @impl true
@@ -364,6 +372,34 @@ defmodule PlatformWeb.MeetingLive do
       {:noreply, socket}
     else
       {:noreply, assign(socket, :chat_panel_collapsed, collapsed)}
+    end
+  end
+
+  # Closed-captions toggle (task 019f3f17 stage 1). Named
+  # `toggle_captions_meeting` — NOT `toggle_captions` — to sidestep the
+  # shell's `attach_hook(:drawer_events, ...)` at `shell_live.ex:382`,
+  # which returns `{:halt, ...}` on `toggle_captions` and would swallow
+  # this event before MeetingLive sees it. The client-side hook
+  # (`MeetingCaptions`) mirrors the preference to localStorage on the
+  # push_event round-trip so the viewer's choice survives navigation.
+  def handle_event("toggle_captions_meeting", _params, socket) do
+    next = !socket.assigns.captions_visible
+
+    {:noreply,
+     socket
+     |> assign(:captions_visible, next)
+     |> push_event("meeting_captions_persist", %{visible: next})}
+  end
+
+  # Restore the persisted preference on hook-mount from localStorage.
+  # Idempotent: skips the re-render when the stored value matches the
+  # current assign so a hydrate on every reconnect doesn't churn state.
+  def handle_event("meeting_captions_hydrate", %{"visible" => visible}, socket)
+      when is_boolean(visible) do
+    if visible == socket.assigns.captions_visible do
+      {:noreply, socket}
+    else
+      {:noreply, assign(socket, :captions_visible, visible)}
     end
   end
 

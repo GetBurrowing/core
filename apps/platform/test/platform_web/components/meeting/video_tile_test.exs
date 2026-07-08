@@ -294,4 +294,91 @@ defmodule PlatformWeb.Components.Meeting.VideoTileTest do
       refute "shrink" in outer_tokens
     end
   end
+
+  # ── caption_slot? attr (task 019f3f17 stage 2) ─────────────────────────────
+  #
+  # Stage 2 adds a per-speaker caption overlay slot to gallery tiles. The
+  # MeetingCaptions JS hook queries `[data-participant='<identity>']
+  # [data-caption-slot]` and writes the speaker's latest line into it. The
+  # slot renders ONLY when the caller opts in via `caption_slot?={true}` —
+  # the bottom strip (default) never carries one because its 96/120px tile
+  # height leaves no legible caption room.
+  describe "video_tile/1 — caption_slot? attr" do
+    test "caption_slot?=false (default) omits the [data-caption-slot] overlay" do
+      assigns = %{p: participant()}
+
+      html =
+        rendered_to_string(~H"""
+        <.video_tile participant={@p} layout={:gallery} />
+        """)
+
+      refute html =~ ~s(data-caption-slot)
+    end
+
+    test "caption_slot?=true renders a [data-caption-slot] overlay inside the tile" do
+      assigns = %{p: participant()}
+
+      html =
+        rendered_to_string(~H"""
+        <.video_tile participant={@p} layout={:gallery} caption_slot?={true} />
+        """)
+
+      # The overlay is present and carries phx-update="ignore" so
+      # morphdom leaves the JS-populated caption content alone across
+      # unrelated re-renders.
+      assert html =~ ~s(data-caption-slot)
+      assert html =~ ~r/data-caption-slot[^>]*|phx-update="ignore"[^>]*data-caption-slot/
+      # Server render is empty — the JS hook writes the caption text.
+      # We assert the outer div is stable + empty by matching a
+      # self-open then a matching close with only whitespace between.
+      assert html =~ ~r/data-caption-slot[^>]*>\s*<\/div>/
+    end
+
+    test "the caption overlay carries aria-live=polite for screen readers" do
+      # `aria-live` on the overlay lets the operating system announce
+      # each incoming caption line as it's written by the hook.
+      assigns = %{p: participant()}
+
+      html =
+        rendered_to_string(~H"""
+        <.video_tile participant={@p} layout={:gallery} caption_slot?={true} />
+        """)
+
+      assert html =~
+               ~r/data-caption-slot[^>]*aria-live="polite"|aria-live="polite"[^>]*data-caption-slot/
+    end
+
+    test "the caption overlay id is namespaced by id_prefix + identity so multiple tiles don't collide" do
+      # Each tile's caption slot needs a unique DOM id so LiveView's
+      # morphdom + `phx-update="ignore"` correctly identify it across
+      # re-renders. `caption-slot-<id_prefix>-<identity>` mirrors the
+      # existing tile-id and video-slot-id schemes.
+      assigns = %{p: %{identity: "user:a", name: "Ada"}}
+
+      html_a =
+        rendered_to_string(~H"""
+        <.video_tile
+          participant={@p}
+          layout={:gallery}
+          id_prefix="gallery-tile"
+          caption_slot?={true}
+        />
+        """)
+
+      assigns = %{p: %{identity: "user:b", name: "Bea"}}
+
+      html_b =
+        rendered_to_string(~H"""
+        <.video_tile
+          participant={@p}
+          layout={:gallery}
+          id_prefix="gallery-tile"
+          caption_slot?={true}
+        />
+        """)
+
+      assert html_a =~ ~s(id="caption-slot-gallery-tile-user:a")
+      assert html_b =~ ~s(id="caption-slot-gallery-tile-user:b")
+    end
+  end
 end

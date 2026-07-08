@@ -85,6 +85,24 @@
     >
     </div>
 
+    <%!-- Closed-captions preference persistence host (task 019f3f17
+         stage 2). Split out of the `MeetingCaptions` hook because that
+         hook mounts on `#meeting-captions`, which is
+         `:if={@captions_visible}`-gated. On a page reload the server
+         assign defaults to `false`, that div isn't in the DOM, and the
+         localStorage-restore branch that used to live in MeetingCaptions
+         never ran — so a viewer preference of "on" never survived a
+         reload (stage 1 review finding). This always-mounted host
+         reads/writes localStorage on `meeting_captions_persist` /
+         `meeting_captions_hydrate` and has no visible UI. --%>
+    <div
+      id="meeting-captions-persist-host"
+      phx-hook="MeetingCaptionsPersist"
+      data-persist-key="suite.meeting.captions_visible"
+      class="hidden"
+    >
+    </div>
+
     <%!-- ── Top bar ──────────────────────────────────────────────────────── --%>
     <header class="flex h-12 flex-shrink-0 items-center gap-3 border-b border-base-300 bg-base-200/60 px-3">
       <%!-- Meeting name --%>
@@ -194,6 +212,42 @@
         >
           <span class="hero-computer-desktop size-4"></span>
         </button>
+
+        <%!-- Closed-captions toggle (task 019f3f17 stage 1). Only rendered
+             when the viewer is joined (mirrors the Leave-button gate
+             below) since captions come from the LiveKit transcription
+             stream, which only flows during an active session. Event name
+             `toggle_captions_meeting` disambiguates from the shell's own
+             `toggle_captions` (shell_live.ex:382) to avoid the shell hook
+             swallowing this click. Glyph mirrors shell.html.heex:247-254
+             so the visual language stays consistent. --%>
+        <%= if @in_meeting do %>
+          <button
+            type="button"
+            phx-click="toggle_captions_meeting"
+            aria-label={if @captions_visible, do: "Hide captions", else: "Show captions"}
+            aria-pressed={to_string(@captions_visible)}
+            title={if @captions_visible, do: "Hide captions", else: "Show captions"}
+            data-role="meeting-captions-toggle"
+            data-active={to_string(@captions_visible)}
+            class={[
+              "btn btn-sm btn-ghost btn-square min-h-11",
+              if(@captions_visible,
+                do: "text-primary",
+                else: "text-base-content/40"
+              )
+            ]}
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              viewBox="0 0 24 24"
+              fill="currentColor"
+              class="size-4"
+            >
+              <path d="M2 5a2 2 0 012-2h16a2 2 0 012 2v10a2 2 0 01-2 2H6l-4 4V5zm5 3a1 1 0 00-1 1v1a1 1 0 001 1h2a1 1 0 001-1V9a1 1 0 00-1-1H7zm7 0a1 1 0 00-1 1v1a1 1 0 001 1h2a1 1 0 001-1V9a1 1 0 00-1-1h-2z" />
+            </svg>
+          </button>
+        <% end %>
 
         <%= if @in_meeting do %>
           <button
@@ -592,6 +646,15 @@
                          `_detach` runs cleanly on the old tile,
                          `_syncExistingTrack` rebinds the live track on the
                          freshly mounted tile in the new location. --%>
+                    <%!-- Per-speaker caption overlay (task 019f3f17 stage 2).
+                         `caption_slot?={true}` renders a
+                         `[data-caption-slot]` div inside the tile that
+                         MeetingCaptions writes into when a matching
+                         `meeting:caption` event lands. Only gallery mode
+                         opts in — the bottom strip's 96/120px tiles are
+                         too short to fit a legible caption line, and the
+                         central bar already carries the transcript in
+                         canvas/screen/whiteboard modes. --%>
                     <.video_tile
                       id_prefix="gallery-tile"
                       participant={
@@ -605,6 +668,7 @@
                       speaking?={false}
                       avatar_url={Map.get(p, :avatar_url)}
                       layout={:gallery}
+                      caption_slot?={@captions_visible}
                       data-local-dock={local? && "true"}
                     />
                     <%!-- Gallery local-video dock: the persistent local
@@ -1142,6 +1206,38 @@
         </p>
       </div>
     </div>
+  </div>
+
+  <%!-- ── Closed-captions overlay (task 019f3f17 stage 1 + stage 2) ────
+       The MeetingCaptions JS hook binds here, listens for `meeting:caption`
+       CustomEvents dispatched by MeetingRoom, and renders up to
+       MAX_LINES=3 speaker+text lines with the interim-vs-final treatment.
+       `phx-update="ignore"` prevents LV morphdom from clearing the
+       hook-written innerHTML on unrelated re-renders. Positioned as a
+       fixed overlay centered above the mobile bottom-nav; the
+       `--bottom-nav-height` shell CSS var expands to 56px on phones and
+       0 on desktop so this bar clears the nav automatically. Rendered
+       ONLY when the viewer has toggled captions on, so it stays out of
+       the DOM (and out of JS event listeners) at rest.
+
+       Stage 2: `z-40` (was `z-30`) so the caption bar reliably paints
+       above the mobile bottom-nav rail (`z-30`) — the stage-1 reviewer
+       flagged a mobile z-index collision where the 3-line caption bar
+       overlapped the sticky nav on narrow viewports. Also, the persist-
+       key + persistence branch moved to the always-mounted
+       `#meeting-captions-persist-host` (see above) so a page reload with
+       the server default `:captions_visible = false` still restores the
+       viewer's stored preference. --%>
+  <div
+    :if={@captions_visible}
+    id="meeting-captions"
+    phx-hook="MeetingCaptions"
+    phx-update="ignore"
+    data-role="meeting-captions"
+    class="fixed bottom-[calc(1rem+env(safe-area-inset-bottom)+var(--bottom-nav-height,0px))] left-1/2 -translate-x-1/2 z-40 w-full max-w-2xl px-4 py-3 rounded-xl bg-black/75 backdrop-blur-sm text-sm text-white shadow-lg transition-opacity duration-300 pointer-events-none"
+    aria-live="polite"
+    aria-label="Meeting captions"
+  >
   </div>
 <% else %>
   <%!-- `:index` action — grouped meetings list (live / upcoming / ended).
