@@ -12,5 +12,6 @@ System and ADR-level architecture for Startup Suite Core.
 | [Execution Runners — ADR 0011](./06-execution-runners-adr-0011.md) | Tasks/Execution control plane, context plane, runner isolation, fast kill semantics |
 | [Control Center Modules — ADR 0016](./control-center-modules.md) | ControlCenterLive modularization: components, event handlers, data layer |
 | [Skill MCP Surface](./skill-mcp-surface.md) | Audit of the `skill.*` tool surface, bundle gating, and per-plugin access paths |
+| [Timeline](./timeline.md) | Append-only log of ADR-flagged tasks that shipped (auto-appended by `Platform.Responsibilities.TimelineAppender` — ADR-0044 stage 5) |
 
 Rendered PNGs are in [`renders/`](./renders/).

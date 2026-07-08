@@ -46,7 +46,10 @@ config :platform, Platform.Responsibilities,
     Platform.Responsibilities.Handlers.SecurityCveScan,
     Platform.Responsibilities.Handlers.SecurityCodeAudit,
     Platform.Responsibilities.Handlers.SecurityDeployAudit,
-    Platform.Responsibilities.Handlers.SecuritySecretLeak
+    Platform.Responsibilities.Handlers.SecuritySecretLeak,
+    Platform.Responsibilities.Handlers.ArchitectureReviewPlan,
+    Platform.Responsibilities.Handlers.ArchitectureAuditDiff,
+    Platform.Responsibilities.Handlers.ArchitectureCronSweep
   ]
 
 # M8 stage 2: dual-write shim gate. When `false` (default), the legacy
@@ -56,6 +59,15 @@ config :platform, Platform.Responsibilities,
 # can compare the two paths' outputs. Flip permanently in `config/prod.exs`
 # after `Platform.Responsibilities.CutoverMonitor` reports zero divergence.
 config :platform, :responsibility_router_enabled, false
+
+# ADR-0044 stage 5: content-level opt-in for the weekly Architect cron
+# sweep (`architecture.cron_sweep`). When `false` (default), the handler's
+# `build_prompt/1` returns `{:error, :feature_disabled}` and
+# `handle_output/3` is a no-op — the Router still fires the cron trigger
+# on Monday 04:00 UTC but the sweep does no LLM call and files no
+# follow-up tasks. Flip to `true` per-environment in `runtime.exs` after
+# an operator has reviewed a dry-run.
+config :platform, :enable_architect_cron_sweep, false
 
 # Meeting Producer runtime (task 019f2452). Two flags with distinct roles:
 #

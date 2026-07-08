@@ -53,11 +53,15 @@ defmodule Platform.Responsibilities.ClosedRosterTemplateCoverageTest do
   # under. Only one alias today.
   @known_seed_key_aliases %{"memory.dream_consolidation" => "memory.dreaming"}
 
-  # The 13 prompt-template slugs the closed roster depends on. Kept as
+  # The 16 prompt-template slugs the closed roster depends on. Kept as
   # a literal list here (rather than derived from the responsibility
   # rows) so a stale expected list forces an intentional edit alongside
-  # the code change that introduced a new template.
+  # the code change that introduced a new template. ADR-0044 stage 1
+  # (task 019f3da3) added the three `architecture.*` placeholders.
   @closed_roster_template_slugs [
+    "architecture.audit_diff.v1",
+    "architecture.cron_sweep.v1",
+    "architecture.review_plan.v1",
     "design.brand_check.v1",
     "design.critique.v1",
     "design.spec_writer.v1",

@@ -681,6 +681,195 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
     end
   end
 
+  describe "architecture.review_plan.v1 (ADR-0044 stage 3)" do
+    # The architect plan-review template is seeded by `do_default_templates/0`
+    # and rendered by `Handlers.ArchitectureReviewPlan.render_instruction/1`.
+    # These tests lock the variable list + core content anchors so a future
+    # edit can't silently drop the plan-summary / sibling / ADR blocks.
+
+    test "appears in default_templates/0 with the expected variables" do
+      descriptor =
+        PromptTemplates.default_templates()
+        |> Enum.find(&(&1.slug == "architecture.review_plan.v1"))
+
+      assert descriptor, "architecture.review_plan.v1 must appear in default_templates/0"
+
+      for var <- ~w(plan_summary sibling_tasks open_prs adr_index) do
+        assert var in descriptor.variables,
+               "architecture.review_plan.v1 must declare #{var} as a variable"
+      end
+    end
+
+    test "default content wires the four {{variable}} placeholders" do
+      content = PromptTemplates.default_content_for_slug("architecture.review_plan.v1")
+
+      assert is_binary(content)
+
+      for placeholder <- ~w({{plan_summary}} {{sibling_tasks}} {{open_prs}} {{adr_index}}) do
+        assert content =~ placeholder,
+               "architecture.review_plan.v1 must interpolate the #{placeholder} placeholder"
+      end
+    end
+
+    test "content carries the three concern-kind anchors + additive contract" do
+      content = PromptTemplates.default_content_for_slug("architecture.review_plan.v1")
+
+      # The three concern kinds the architect flags.
+      assert content =~ "collision"
+      assert content =~ "adr_drift"
+      assert content =~ "dup_abstraction"
+
+      # The additive-not-blocking contract.
+      assert content =~ "additive" or content =~ "not a blocker"
+      assert content =~ "do not block plan approval" or content =~ "does NOT block"
+    end
+
+    test "seed_defaults seeds architecture.review_plan.v1 into the DB" do
+      :ok = PromptTemplates.seed_defaults()
+
+      template = PromptTemplates.get_template_by_slug("architecture.review_plan.v1")
+
+      assert template
+
+      assert template.content ==
+               PromptTemplates.default_content_for_slug("architecture.review_plan.v1")
+    end
+  end
+
+  describe "architecture.audit_diff.v1 (ADR-0044 stage 4)" do
+    # The architect drift-audit template is seeded by `do_default_templates/0`
+    # and rendered by `Handlers.ArchitectureAuditDiff.render_instruction/1`.
+    # These tests lock the variable list + core content anchors so a future
+    # edit can't silently drop the planned-shape / stage-diff / ORG_MEMORY
+    # blocks.
+
+    test "appears in default_templates/0 with the expected variables" do
+      descriptor =
+        PromptTemplates.default_templates()
+        |> Enum.find(&(&1.slug == "architecture.audit_diff.v1"))
+
+      assert descriptor, "architecture.audit_diff.v1 must appear in default_templates/0"
+
+      for var <- ~w(stage_diff planned_shape org_memory_entries) do
+        assert var in descriptor.variables,
+               "architecture.audit_diff.v1 must declare #{var} as a variable"
+      end
+    end
+
+    test "default content wires the three {{variable}} placeholders" do
+      content = PromptTemplates.default_content_for_slug("architecture.audit_diff.v1")
+
+      assert is_binary(content)
+
+      for placeholder <- ~w({{stage_diff}} {{planned_shape}} {{org_memory_entries}}) do
+        assert content =~ placeholder,
+               "architecture.audit_diff.v1 must interpolate the #{placeholder} placeholder"
+      end
+    end
+
+    test "content carries the four concern-kind anchors + additive contract" do
+      content = PromptTemplates.default_content_for_slug("architecture.audit_diff.v1")
+
+      # The four concern kinds the drift audit flags.
+      assert content =~ "divergence"
+      assert content =~ "new_dep"
+      assert content =~ "migration"
+      assert content =~ "memory_violation"
+
+      # The additive-not-blocking contract.
+      assert content =~ "additive" or content =~ "not a blocker"
+
+      # Explicitly tell the agent the reviewer path fires regardless — the
+      # architect is an annotation-only surface, not a gate. Multiple
+      # phrasings accepted so incidental line-wrapping doesn't fail the
+      # assertion (the paragraph text may split "reviewer's" and
+      # "dispatch fires" across a newline).
+      assert content =~ "reviewer" and
+               (content =~ "dispatch fires" or content =~ "does NOT block")
+    end
+
+    test "seed_defaults seeds architecture.audit_diff.v1 into the DB" do
+      :ok = PromptTemplates.seed_defaults()
+
+      template = PromptTemplates.get_template_by_slug("architecture.audit_diff.v1")
+
+      assert template
+
+      assert template.content ==
+               PromptTemplates.default_content_for_slug("architecture.audit_diff.v1")
+    end
+  end
+
+  describe "architecture.cron_sweep.v1 (ADR-0044 stage 5)" do
+    # Locks the shape of the weekly Monday 04:00 UTC sweep template. The
+    # template is the copy the Architect sees when the sweep fires; the
+    # variables must round-trip through
+    # `Handlers.ArchitectureCronSweep.render_instruction/1` so a later
+    # rename of a placeholder here can't silently break the handler.
+
+    test "appears in default_templates/0 with the expected variables" do
+      descriptor =
+        PromptTemplates.default_templates()
+        |> Enum.find(&(&1.slug == "architecture.cron_sweep.v1"))
+
+      assert descriptor, "architecture.cron_sweep.v1 must appear in default_templates/0"
+
+      for var <- ~w(open_prs recent_closed_tasks adr_index) do
+        assert var in descriptor.variables,
+               "architecture.cron_sweep.v1 must declare #{var} as a variable"
+      end
+    end
+
+    test "default content wires the three {{variable}} placeholders" do
+      content = PromptTemplates.default_content_for_slug("architecture.cron_sweep.v1")
+
+      assert is_binary(content)
+
+      for placeholder <- ~w({{open_prs}} {{recent_closed_tasks}} {{adr_index}}) do
+        assert content =~ placeholder,
+               "architecture.cron_sweep.v1 must interpolate the #{placeholder} placeholder"
+      end
+    end
+
+    test "content carries the four concern-kind anchors + additive contract" do
+      content = PromptTemplates.default_content_for_slug("architecture.cron_sweep.v1")
+
+      # The four category buckets the sweep evaluates.
+      assert content =~ "ADR gap"
+      assert content =~ "Doc drift"
+      assert content =~ "tech debt" or content =~ "Latent tech debt"
+      assert content =~ "Open PR"
+
+      # The additive-not-blocking contract.
+      assert content =~ "additive" or content =~ "not a blocker"
+
+      # Follow-up cap so the model can't flood the backlog. The handler
+      # also enforces `@max_followups` at the code level; both surfaces
+      # must agree on 3.
+      assert content =~ "3 follow-up" or content =~ "3 items" or
+               content =~ "at most 3"
+
+      # The filed-by metadata marker every follow-up carries — used by
+      # the follow-up-count query in the handler's tests.
+      assert content =~ "architect_cron_sweep" or content =~ "filed_by"
+
+      # The output-shape anchor — the handler parses `followups` from
+      # the model's JSON reply.
+      assert content =~ "followups"
+    end
+
+    test "seed_defaults seeds architecture.cron_sweep.v1 into the DB" do
+      :ok = PromptTemplates.seed_defaults()
+
+      template = PromptTemplates.get_template_by_slug("architecture.cron_sweep.v1")
+
+      assert template
+
+      assert template.content ==
+               PromptTemplates.default_content_for_slug("architecture.cron_sweep.v1")
+    end
+  end
+
   describe "journal-by-default rule on dispatch.planning + dispatch.in_progress (T6)" do
     # T6 adds a "Journal-by-default for non-Historian agents" rule to the
     # two dispatch slugs used by non-Historian agents, making the

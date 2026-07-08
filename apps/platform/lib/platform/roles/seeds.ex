@@ -8,6 +8,8 @@ defmodule Platform.Roles.Seeds do
   Per Decision 2 from the M4 stack — the role roster is fixed by the
   platform, not user-extensible. The closed list:
 
+    * `architect` — cross-task architectural coherence checks (added
+      in ADR-0044 stage 1, task `019f3da3`)
     * `designer` — visual design, critique, brand alignment
     * `historian` — long-term memory accretion + recall
     * `meeting_producer` — watches meeting transcript in real time;
@@ -96,6 +98,17 @@ defmodule Platform.Roles.Seeds do
         "security.code_audit",
         "security.deploy_audit",
         "security.secret_leak"
+      ]
+    },
+    %{
+      key: "architect",
+      name: "Architect",
+      description: "Cross-task architectural coherence: plan review, drift audit, weekly sweep",
+      icon: "hero-cube-transparent",
+      bundle: [
+        "architecture.review_plan",
+        "architecture.audit_diff",
+        "architecture.cron_sweep"
       ]
     }
   ]

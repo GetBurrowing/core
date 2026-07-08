@@ -247,4 +247,63 @@ defmodule Platform.Responsibilities do
       {:error, %Ecto.Changeset{} = cs} -> {:error, {mod, {:invalid_attrs, cs}}}
     end
   end
+
+  # ── Runtime dispatch surface (ADR-0044 stage 2) ────────────────────────────
+  #
+  # `fire/2` is the one-shot dispatch API call sites use to hand an event
+  # off to whichever agent currently holds the responsibility. It is a
+  # thin delegate to `Platform.Responsibilities.Router.fire/2` — the
+  # canonical runtime dispatch surface stood up in ADR-0041 M6.
+  #
+  # The progressive-enhancement contract (ADR-0044): unfilled
+  # responsibilities are a valid steady state. When no agent is
+  # assigned to the resolved key we return `:ok` — never an error — so
+  # call sites can invoke `fire/2` from within lifecycle transitions
+  # (plan-submit hook, stage-complete hook) without adding branch
+  # handling for the "nobody home" path.
+  #
+  # `{:error, :unknown_responsibility}` from the Router (no row seeded
+  # for the key) is normalised to `:ok` for the same reason — a code
+  # site that hooks a responsibility key before its seed migration
+  # lands should not stall the caller. The Router already logs
+  # `[ResponsibilityRouter] fire/2 no row for key=` so the miss is
+  # visible in operator logs.
+
+  @doc """
+  Fire a responsibility trigger by canonical key.
+
+  Delegates to `Platform.Responsibilities.Router.fire/2`. Accepts either
+  the canonical dotted string key (`"architecture.review_plan"`) or an
+  atom shorthand (`:architecture_review_plan`) — the Router
+  canonicalises atom shorthands by replacing the first underscore with
+  a dot.
+
+  ## Return contract
+
+    * `:ok` when the responsibility fires (assignee found + dispatch
+      completed) OR when the responsibility is unfilled OR when no
+      row is seeded for the key. All three of these are "nothing
+      further to do" cases the caller can treat identically.
+    * `{:error, term}` when the Router reports a non-lookup failure
+      (e.g. a downstream contract violation the Router surfaces). Call
+      sites that hook `fire/2` from a lifecycle transition should wrap
+      the call in `try/rescue/catch :exit` regardless — Router's
+      internal guards catch dispatch crashes, but the belt-and-braces
+      wrap protects against future Router-shape changes.
+  """
+  @spec fire(atom() | binary(), map()) :: :ok | {:error, term()}
+  def fire(key, trigger_meta \\ %{}) when is_map(trigger_meta) do
+    case Platform.Responsibilities.Router.fire(key, trigger_meta) do
+      :ok ->
+        :ok
+
+      {:error, :unknown_responsibility} ->
+        # Progressive-enhancement: an unseeded key is functionally
+        # identical to an unfilled assignee. Both are "nothing to do".
+        :ok
+
+      other ->
+        other
+    end
+  end
 end

@@ -39,16 +39,21 @@ defmodule Platform.Repo.Migrations.SeedMeetingProducerRole do
 
   use Ecto.Migration
 
+  # Restrict this historical seed to the keys the `roles_key_check`
+  # CHECK constraint admits AT THIS MIGRATION'S TIMESTAMP. The
+  # meeting_producer CHECK-extension migration
+  # (`20260702000000_add_meeting_producer_to_roles_check.exs`) ran
+  # earlier in the same `mix ecto.migrate` pass, so `meeting_producer`
+  # is admitted here. The `architect` key (ADR-0044 stage 1, task
+  # `019f3da3`) was added to `Seeds.@default_roles` LATER and its own
+  # CHECK-extension migration (`20260708120150_add_architect_to_roles_check.exs`)
+  # runs AFTER this one — without the filter, an unqualified call to
+  # `seed_defaults/0` would try to insert `architect` here and blow up
+  # on `roles_key_check`.
+  @seeded_keys ~w(designer historian meeting_scribe meeting_producer triage_officer)
+
   def up do
-    Platform.Roles.Seeds.seed_defaults(
-      only_keys: [
-        "designer",
-        "historian",
-        "meeting_producer",
-        "meeting_scribe",
-        "triage_officer"
-      ]
-    )
+    Platform.Roles.Seeds.seed_defaults(only_keys: @seeded_keys)
   end
 
   def down do

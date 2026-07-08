@@ -736,6 +736,7 @@ defmodule Platform.Tasks do
       |> case do
         {:ok, updated} = ok ->
           maybe_dispatch_teardown(updated, new_status)
+          maybe_append_timeline(updated, new_status)
           ok
 
         error ->
@@ -745,6 +746,26 @@ defmodule Platform.Tasks do
       {:error, :invalid_transition}
     end
   end
+
+  # ADR-0044 stage 5: append a line to `docs/architecture/timeline.md` when
+  # a task with `metadata.adr_flag` transitions to `done`. Wrapped through
+  # `TimelineAppender.maybe_append/1` which itself is `try/rescue`-guarded
+  # so a filesystem hiccup never stalls the status change.
+  defp maybe_append_timeline(%Task{} = task, "done") do
+    Platform.Responsibilities.TimelineAppender.maybe_append(task)
+    :ok
+  rescue
+    error ->
+      Logger.warning("[TimelineAppender] transition-hook raised: #{Exception.message(error)}")
+
+      :ok
+  catch
+    :exit, reason ->
+      Logger.warning("[TimelineAppender] transition-hook exited: #{inspect(reason)}")
+      :ok
+  end
+
+  defp maybe_append_timeline(_task, _new_status), do: :ok
 
   # Stage 4: cancellation is terminal (see @valid_task_transitions —
   # `cancelled` has no outbound edges). Tear down the running router and
@@ -857,6 +878,15 @@ defmodule Platform.Tasks do
   def submit_plan_for_review(%Plan{status: "draft"} = plan) do
     case plan |> Plan.changeset(%{status: "pending_review"}) |> Repo.update() do
       {:ok, updated} ->
+        # ADR-0044 stage 2: architect plan-time review hook.
+        # Progressive enhancement — no-ops when no architect is
+        # assigned. Wrapped in try/rescue/catch :exit so a handler
+        # crash cannot stall the plan_submit → pending_review
+        # transition (memory ref: `[Suite engine quirks]` cascade-fix
+        # 019f3440). The Router internally swallows dispatch crashes
+        # too; this belt-and-braces wrap protects against future
+        # Router-shape changes.
+        _ = fire_architecture_review_plan(updated)
         broadcast_board({:plan_updated, updated})
         maybe_auto_approve(updated)
 
@@ -866,6 +896,29 @@ defmodule Platform.Tasks do
   end
 
   def submit_plan_for_review(_plan), do: {:error, :invalid_transition}
+
+  # ADR-0044 stage 2 helper. Kept private so `submit_plan_for_review/1`
+  # reads as a linear transition and the hook is the only public
+  # surface the plan-approval flow depends on.
+  defp fire_architecture_review_plan(%Plan{} = plan) do
+    Platform.Responsibilities.fire("architecture.review_plan", %{
+      plan_id: plan.id,
+      task_id: plan.task_id,
+      plan: plan
+    })
+  rescue
+    e ->
+      Logger.warning(
+        "[Responsibilities] architecture.review_plan crashed: #{Exception.message(e)}"
+      )
+
+      {:error, :architect_crashed}
+  catch
+    :exit, reason ->
+      Logger.warning("[Responsibilities] architecture.review_plan exited: #{inspect(reason)}")
+
+      {:error, :architect_crashed}
+  end
 
   # Auto-approve branch (task 019f25f2 stage 2): if the parent task has the
   # opt-in `auto_approve_plan` flag set AND the precondition passes (plan has

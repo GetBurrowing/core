@@ -80,17 +80,22 @@ defmodule Platform.Roles.RoleTest do
 
       assert cs.valid?, inspect(errors_on(cs))
     end
+
+    test "accepts the architect key (ADR-0044 stage 1, task 019f3da3)" do
+      cs = Role.changeset(%Role{}, base_attrs(%{key: "architect", name: "Architect"}))
+      assert cs.valid?, inspect(errors_on(cs))
+    end
   end
 
   describe "valid_keys/0" do
-    test "exposes the six canonical roles in a stable order" do
-      # `security_guard` added in task `019f3e8e-4406` stage 1 — see
-      # ADR-0043. Order is meaningful: the four legacy roles come
-      # first, then meeting_producer (task 019f2451), then
-      # security_guard (task 019f3e8e). Down-migrations rely on this
-      # append-only shape.
+    test "exposes the seven canonical roles in a stable order" do
+      # `security_guard` added in task `019f3e8e-4406` stage 1 (ADR-0043).
+      # `architect` added in task `019f3da3` stage 1 (ADR-0044). Order is
+      # meaningful: the four legacy roles come first, then meeting_producer
+      # (task 019f2451), then security_guard, then architect.
+      # Down-migrations rely on this append-only shape.
       assert Role.valid_keys() ==
-               ~w(designer historian meeting_scribe meeting_producer triage_officer security_guard)
+               ~w(designer historian meeting_scribe meeting_producer triage_officer security_guard architect)
     end
   end
 
@@ -157,6 +162,18 @@ defmodule Platform.Roles.RoleTest do
                  """
                  INSERT INTO roles (key, name, description, icon, inserted_at, updated_at)
                  VALUES ('meeting_producer', 'Meeting Producer', 'placeholder', 'hero-video-camera', now(), now())
+                 """,
+                 []
+               )
+    end
+
+    test "DB-side CHECK constraint admits architect on raw SQL insert (ADR-0044 stage 1, task 019f3da3)" do
+      assert %{num_rows: 1} =
+               SQL.query!(
+                 Repo,
+                 """
+                 INSERT INTO roles (key, name, description, icon, inserted_at, updated_at)
+                 VALUES ('architect', 'Architect', 'placeholder', 'hero-cube-transparent', now(), now())
                  """,
                  []
                )

@@ -75,13 +75,16 @@ defmodule Platform.Roles.CoverageTest do
   # ── Category 1: seed shape (canvas-aligned keys) ─────────────────────
 
   describe "stage-4 seeds — canonical bundle shape" do
-    test "Platform.Roles.list_roles/0 returns exactly the 6 canonical rows" do
-      # `security_guard` added in task `019f3e8e-4406` stage 1 — see
-      # ADR-0043. `list_roles/0` sorts alphabetically by key so the
-      # new row lands between `meeting_scribe` and `triage_officer`.
+    test "Platform.Roles.list_roles/0 returns exactly the 7 canonical rows" do
+      # `security_guard` added in task `019f3e8e-4406` stage 1 (ADR-0043).
+      # `architect` added in task `019f3da3` stage 1 (ADR-0044). Both slot
+      # into the alphabetical order returned by `list_roles/0`.
       keys = Roles.list_roles() |> Enum.map(& &1.key)
 
+      # ADR-0044 stage 1 (task 019f3da3) added the `architect` role,
+      # bumping the roster from 6→7.
       assert keys == [
+               "architect",
                "designer",
                "historian",
                "meeting_producer",

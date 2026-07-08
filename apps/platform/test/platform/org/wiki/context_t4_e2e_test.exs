@@ -457,7 +457,32 @@ defmodule Platform.Org.Wiki.ContextT4E2ETest do
       # `security_guard` key to the closed enum, then re-seeds the row
       # so existing environments pick it up (see ADR-0043).
       "20260708000000_add_security_guard_to_roles_check.exs",
-      "20260708000100_seed_security_guard_role.exs"
+      "20260708000100_seed_security_guard_role.exs",
+      # ADR-0044 stage 1 (task 019f3da3) — architect responsibility
+      # registration seam. Three migrations land together: seed three
+      # placeholder `architecture.*` prompt templates so the
+      # closed-roster template-coverage test resolves the new bundle
+      # keys, extend the roles CHECK constraint to admit the `architect`
+      # key, and re-seed the roles table so existing envs pick up the
+      # `architect` row.
+      "20260708120100_seed_prompt_templates_architect.exs",
+      "20260708120150_add_architect_to_roles_check.exs",
+      "20260708120200_seed_architect_role.exs",
+      # ADR-0044 stage 3 (task 019f3da3) — force-update the
+      # architecture.review_plan.v1 template body from the placeholder
+      # stage-1 seed to the real plan-time review prompt. Mirrors the
+      # `force_update_*` migration pattern at 20260520010000.
+      "20260708123000_force_update_architect_review_plan_template.exs",
+      # ADR-0044 stage 4 (task 019f3da3) — force-update the
+      # architecture.audit_diff.v1 template body from the placeholder
+      # stage-1 seed to the real post-executor drift-audit prompt.
+      # Mirrors the sibling stage-3 migration at 20260708123000.
+      "20260708124000_force_update_architect_audit_diff_template.exs",
+      # ADR-0044 stage 5 (task 019f3da3) — force-update the
+      # architecture.cron_sweep.v1 template body from the placeholder
+      # stage-1 seed to the real weekly cron-sweep prompt. Mirrors the
+      # sibling stage-3 / stage-4 migrations at 20260708123000 / 124000.
+      "20260708125000_force_update_architect_cron_sweep_template.exs"
     ]
 
     defp t4_root, do: Mix.Project.project_file() |> Path.dirname()

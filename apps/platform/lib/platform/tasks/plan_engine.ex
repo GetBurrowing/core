@@ -502,10 +502,57 @@ defmodule Platform.Tasks.PlanEngine do
         |> Repo.update()
 
       emit_stage_telemetry(updated, stage.status)
+
+      # ADR-0044 stage 4: post-executor drift hook. Fire the architect's
+      # `architecture.audit_diff` responsibility once per successful stage
+      # completion. Progressive-enhancement — no-ops when no architect is
+      # assigned. Wrapped in try/rescue/catch :exit inside the helper so a
+      # handler crash cannot stall the state machine or the board broadcast
+      # (memory ref: `[Suite engine quirks]` cascade-fix 019f3440).
+      if new_status == "passed" do
+        _ = after_stage_completed(updated)
+      end
+
       {:ok, updated}
     else
       {:error, :invalid_transition}
     end
+  end
+
+  # ADR-0044 stage 4 hook — kept private so `transition_stage/2` reads as
+  # a single linear branch. The hook fires the architect's
+  # `architecture.audit_diff` responsibility and is the only side effect
+  # this stage-complete transition owns beyond the telemetry emit.
+  #
+  # Load-bearing: this function MUST NOT raise. It's called inside
+  # `evaluate_validation/2`'s Ecto transaction (via `advance_stage/1`),
+  # and a raise here would roll back the validation update itself — the
+  # opposite of the additive-annotation contract. Every error mode logs
+  # + returns `:ok`.
+  defp after_stage_completed(%Stage{} = stage) do
+    plan = Repo.get(Plan, stage.plan_id)
+    task = plan && Repo.get(Task, plan.task_id)
+
+    Platform.Responsibilities.fire("architecture.audit_diff", %{
+      stage_id: stage.id,
+      plan_id: stage.plan_id,
+      task_id: plan && plan.task_id,
+      stage: stage,
+      plan: plan,
+      task: task
+    })
+  rescue
+    e ->
+      Logger.warning(
+        "[Responsibilities] architecture.audit_diff crashed: #{Exception.message(e)}"
+      )
+
+      :ok
+  catch
+    :exit, reason ->
+      Logger.warning("[Responsibilities] architecture.audit_diff exited: #{inspect(reason)}")
+
+      :ok
   end
 
   defp ordered_stages(plan_id) do

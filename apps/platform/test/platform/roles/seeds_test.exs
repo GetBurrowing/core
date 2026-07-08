@@ -109,24 +109,25 @@ defmodule Platform.Roles.SeedsTest do
   end
 
   describe "seed_defaults/0" do
-    test "inserts six roles and seventeen bundle rows on a fresh DB" do
+    test "inserts seven roles and twenty bundle rows on a fresh DB" do
       assert :ok = Seeds.seed_defaults()
 
-      # 6 roles: designer, historian, meeting_producer, meeting_scribe,
-      # triage_officer, security_guard.
-      assert Repo.aggregate(Role, :count, :key) == 6
+      # 7 roles: designer, historian, meeting_producer, meeting_scribe,
+      # triage_officer, security_guard, architect (ADR-0044 stage 1).
+      assert Repo.aggregate(Role, :count, :key) == 7
 
-      # 17 bundle rows = 3 (designer) + 3 (historian) + 1 (meeting_producer)
-      #                + 3 (meeting_scribe) + 3 (triage_officer) + 4 (security_guard).
-      assert Repo.aggregate(RoleResponsibility, :count, :id) == 17
+      # 20 bundle rows = 3 (designer) + 3 (historian) + 1 (meeting_producer)
+      #                + 3 (meeting_scribe) + 3 (triage_officer)
+      #                + 4 (security_guard) + 3 (architect).
+      assert Repo.aggregate(RoleResponsibility, :count, :id) == 20
     end
 
     test "is idempotent — calling twice does not duplicate rows" do
       assert :ok = Seeds.seed_defaults()
       assert :ok = Seeds.seed_defaults()
 
-      assert Repo.aggregate(Role, :count, :key) == 6
-      assert Repo.aggregate(RoleResponsibility, :count, :id) == 17
+      assert Repo.aggregate(Role, :count, :key) == 7
+      assert Repo.aggregate(RoleResponsibility, :count, :id) == 20
     end
 
     test "each role's bundle round-trips via Platform.Roles.bundle_for/1" do

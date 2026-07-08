@@ -59,7 +59,10 @@ defmodule Platform.Responsibilities.BuiltIns do
       Handlers.SecurityCveScan,
       Handlers.SecurityCodeAudit,
       Handlers.SecurityDeployAudit,
-      Handlers.SecuritySecretLeak
+      Handlers.SecuritySecretLeak,
+      Handlers.ArchitectureReviewPlan,
+      Handlers.ArchitectureAuditDiff,
+      Handlers.ArchitectureCronSweep
     ]
   end
 end

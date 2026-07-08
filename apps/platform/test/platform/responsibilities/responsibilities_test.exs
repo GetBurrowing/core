@@ -2,12 +2,19 @@ defmodule Platform.ResponsibilitiesTest do
   @moduledoc """
   Context-level tests for `Platform.Responsibilities` — CRUD plus the
   `upsert_by_key/1` idempotency / operator-state-preservation
-  contract (ADR-0041 M1 stage 2).
+  contract (ADR-0041 M1 stage 2) and the `fire/2` dispatch delegate
+  (ADR-0044 stage 2).
   """
-  use Platform.DataCase, async: true
+  use Platform.DataCase, async: false
 
+  import ExUnit.CaptureLog
+
+  alias Platform.Agents.Agent
+  alias Platform.Repo
   alias Platform.Responsibilities
   alias Platform.Responsibilities.Responsibility
+  alias Platform.Roles
+  alias Platform.Roles.Role
 
   defp unique_key(prefix \\ "feat") do
     "#{prefix}.verb_#{System.unique_integer([:positive])}"
@@ -314,5 +321,192 @@ defmodule Platform.ResponsibilitiesTest do
 
       assert Keyword.has_key?(cs.errors, :key)
     end
+  end
+
+  # ── fire/2 dispatch delegate (ADR-0044 stage 2) ────────────────────────
+  #
+  # `Platform.Responsibilities.fire/2` is a thin delegate to
+  # `Platform.Responsibilities.Router.fire/2`. Its job is (a) preserve
+  # the router's dispatch semantics for a known + filled key and (b)
+  # normalise the two "nothing further to do" cases (unknown key + no
+  # assignee) to `:ok` so lifecycle-transition callers can invoke
+  # `fire/2` without branching on the progressive-enhancement state.
+  describe "fire/2 dispatch delegate" do
+    setup do
+      Logger.put_module_level(Platform.Responsibilities.Router, :info)
+      on_exit(fn -> Logger.delete_module_level(Platform.Responsibilities.Router) end)
+      :ok
+    end
+
+    test "unknown responsibility key returns :ok (no row seeded)" do
+      # Router.fire/2 returns {:error, :unknown_responsibility} for this
+      # case — the delegate must normalise it to :ok so a call site can
+      # hook a key before its seed migration lands without stalling the
+      # caller.
+      log =
+        capture_log([level: :info], fn ->
+          assert :ok = Responsibilities.fire("architecture.does_not_exist_yet.v0", %{})
+        end)
+
+      assert log =~ "fire/2 no row for key="
+    end
+
+    test "known key with no assignee returns :ok and emits :unfilled telemetry" do
+      key = "architecture.review_plan_fire_unfilled_#{System.unique_integer([:positive])}"
+
+      {:ok, _row} =
+        Responsibilities.create_responsibility(%{
+          key: key,
+          feature: "architecture",
+          trigger_kind: "event_topic",
+          trigger_config: %{"topic" => "plan:submitted"},
+          scope: "per_project",
+          context_provided: [],
+          output_contract: %{"comments" => "list[map]"},
+          default_prompt_template: "architecture.review_plan.v1",
+          cost_profile: "low_freq_capable"
+        })
+
+      handler_id = "resp-fire-unfilled-#{System.unique_integer([:positive])}"
+      test_pid = self()
+
+      :telemetry.attach(
+        handler_id,
+        [:platform, :responsibility, :unfilled],
+        fn _event, measurements, metadata, pid ->
+          send(pid, {:unfilled_telemetry, measurements, metadata})
+        end,
+        test_pid
+      )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      capture_log([level: :info], fn ->
+        assert :ok = Responsibilities.fire(key, %{plan_id: Ecto.UUID.generate()})
+      end)
+
+      assert_receive {:unfilled_telemetry, %{system_time: _},
+                      %{key: ^key, feature: "architecture"}}
+    end
+
+    test "known key with a native assignee dispatches and emits :fired telemetry" do
+      key = "architecture.review_plan_fire_native_#{System.unique_integer([:positive])}"
+
+      {:ok, _row} =
+        Responsibilities.create_responsibility(%{
+          key: key,
+          feature: "architecture",
+          trigger_kind: "event_topic",
+          trigger_config: %{"topic" => "plan:submitted"},
+          scope: "per_project",
+          context_provided: [],
+          output_contract: %{"comments" => "list[map]"},
+          default_prompt_template: "architecture.review_plan.v1",
+          cost_profile: "low_freq_capable"
+        })
+
+      # Reuse `historian` — a canonical seeded role — plus a fresh
+      # bundle row pointing at the responsibility under test. The role
+      # bundle → assignee resolver path exercises the exact production
+      # code path that `submit_plan_for_review/1`'s hook depends on.
+      role_key = "historian"
+
+      Repo.insert!(
+        %Role{key: role_key, name: "Historian", description: "test", icon: "hero-star"},
+        on_conflict: :nothing,
+        conflict_target: :key
+      )
+
+      %Platform.Roles.RoleResponsibility{}
+      |> Platform.Roles.RoleResponsibility.changeset(%{
+        role_key: role_key,
+        responsibility_key: key
+      })
+      |> Repo.insert!()
+
+      {:ok, agent} =
+        %Agent{}
+        |> Agent.changeset(%{
+          slug: "resp-fire-native-#{System.unique_integer([:positive])}",
+          name: "Fire Native",
+          status: "active",
+          kind: "native",
+          workspace_id: nil
+        })
+        |> Repo.insert()
+
+      {:ok, _} = Roles.assign_role(role_key, agent.id)
+
+      # Neutralise the actual native dispatch — production would fan
+      # out through `Platform.Chat.AgentResponder.maybe_dispatch/1`
+      # which needs a message_id + space_id we don't have on the
+      # plan-submit hook. The Router already exposes an override for
+      # exactly this case.
+      previous = Application.get_env(:platform, :responsibility_router_native_dispatcher)
+
+      Application.put_env(
+        :platform,
+        :responsibility_router_native_dispatcher,
+        {__MODULE__.NoopDispatcher, :maybe_dispatch}
+      )
+
+      on_exit(fn ->
+        if previous do
+          Application.put_env(:platform, :responsibility_router_native_dispatcher, previous)
+        else
+          Application.delete_env(:platform, :responsibility_router_native_dispatcher)
+        end
+      end)
+
+      handler_id = "resp-fire-native-#{System.unique_integer([:positive])}"
+      test_pid = self()
+
+      :telemetry.attach(
+        handler_id,
+        [:platform, :responsibility, :fired],
+        fn _event, measurements, metadata, pid ->
+          send(pid, {:fired_telemetry, measurements, metadata})
+        end,
+        test_pid
+      )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      capture_log([level: :info], fn ->
+        assert :ok = Responsibilities.fire(key, %{plan_id: Ecto.UUID.generate()})
+      end)
+
+      assert_receive {:fired_telemetry, %{system_time: _}, %{key: ^key, dispatch_kind: :native}}
+    end
+
+    test "atom shorthand canonicalises to dotted key" do
+      # `:architecture_review_plan` → `"architecture.review_plan"` via
+      # Router.canonical_key/1 (replaces first underscore with dot).
+      # Delegate accepts either form.
+      key = "architecture.review_plan_#{System.unique_integer([:positive])}"
+      atom_shorthand = String.to_atom(String.replace(key, ".", "_"))
+
+      {:ok, _row} =
+        Responsibilities.create_responsibility(%{
+          key: key,
+          feature: "architecture",
+          trigger_kind: "event_topic",
+          trigger_config: %{"topic" => "plan:submitted"},
+          scope: "per_project",
+          context_provided: [],
+          output_contract: %{"comments" => "list[map]"},
+          default_prompt_template: "architecture.review_plan.v1",
+          cost_profile: "low_freq_capable"
+        })
+
+      capture_log([level: :info], fn ->
+        assert :ok = Responsibilities.fire(atom_shorthand, %{})
+      end)
+    end
+  end
+
+  defmodule NoopDispatcher do
+    @moduledoc false
+    def maybe_dispatch(_signal), do: :ok
   end
 end
