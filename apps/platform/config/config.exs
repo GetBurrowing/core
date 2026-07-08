@@ -42,7 +42,11 @@ config :platform, Platform.Responsibilities,
     Platform.Responsibilities.Handlers.DesignBrandCheck,
     Platform.Responsibilities.Handlers.TaskTriage,
     Platform.Responsibilities.Handlers.TaskUnblock,
-    Platform.Responsibilities.Handlers.TaskWeeklyReview
+    Platform.Responsibilities.Handlers.TaskWeeklyReview,
+    Platform.Responsibilities.Handlers.SecurityCveScan,
+    Platform.Responsibilities.Handlers.SecurityCodeAudit,
+    Platform.Responsibilities.Handlers.SecurityDeployAudit,
+    Platform.Responsibilities.Handlers.SecuritySecretLeak
   ]
 
 # M8 stage 2: dual-write shim gate. When `false` (default), the legacy
@@ -85,6 +89,59 @@ config :platform, :start_meeting_intent_dispatcher, true
 config :platform, Platform.Meetings.IntentDispatcher,
   tick_interval_ms: :timer.seconds(30),
   stall_window_ms: :timer.minutes(2)
+
+# Security Sweeper (task 019f3e8e-4406 stage 2, ADR-0043): default
+# tick cadence for the periodic scan sweep. One hour is a bounding
+# ceiling — each scanner row's own `metadata["cadence"]` cron
+# expression gates whether the tick actually invokes a scanner. The
+# progressive-enhancement gate (`Roles.assignee_for/1 == nil`) keeps
+# the tick a no-op until an agent is pinned to `security_guard`
+# anyway, so this cadence is quiet-by-default in prod today.
+config :platform, Platform.Security.Sweeper,
+  check_interval_ms: :timer.hours(1),
+  scanner_timeout_ms: :timer.seconds(60)
+
+# Security scanner runtime knobs (task 019f3e8e-4406 stages 3-4,
+# ADR-0043). `project_id` is the Suite project the scanners file
+# their findings under — leave `nil` in dev and set an explicit
+# project UUID at deploy time. `cve_scan_stale_days` gates the
+# medium/low-severity long-tail rule from the task description.
+# The `deploy_audit_*_root` keys let DeployAudit's four probes point
+# at tmp fixtures under test — the shipped defaults point at the
+# real prod-adjacent paths on `moon`.
+config :platform, Platform.Security,
+  project_id: nil,
+  cve_scan_stale_days: 30,
+  deploy_audit_traefik_root: "~/docker/traefik3/rules",
+  deploy_audit_containers_root: "~/.config/containers/systemd",
+  deploy_audit_core_ops_root: "/srv/dev/core-ops",
+  deploy_audit_tls_root: "/etc/letsencrypt/live",
+  deploy_audit_tls_expiry_warning_days: 30,
+  # SecretLeak (task 019f3e8e-4406 stage 5). Full git-history scans
+  # take minutes on real-sized repos; off by default. Enable per-env
+  # in `config/runtime.exs` once operators have a baseline for how
+  # long the current repo's history takes.
+  secret_leak_scan_git_history: false,
+  secret_leak_max_bytes_per_file: 1_048_576,
+  secret_leak_max_git_log_bytes: 20_971_520,
+  # FindingFiler batch consolidation threshold (task 019f3e8e-4406
+  # stage 5). When one scanner run emits more than this many findings,
+  # they collapse into a single weekly-digest task instead of N per-
+  # finding rows. Prevents a broad-brush scanner from burying the
+  # backlog.
+  finding_digest_threshold: 10
+
+# Repo-root the security scanners walk for lockfiles + source-tree
+# patterns. Defaults to the platform app's own cwd — override per-env
+# to point at whatever tree the security_guard bundle should scan.
+config :platform, :security_scanner_repo_root, nil
+
+# OSV.dev client module for the CVE scanner (task 019f3e8e-4406
+# stage 3). Tests inject a mock module here so
+# `Platform.Security.Scanners.CveScan` never hits the real API.
+config :platform,
+       :cve_scan_osv_client,
+       Platform.Security.Scanners.CveScan.OsvClient
 
 # LiveKit webhook HMAC-JWT signature enforcement (task 019f3312 stage 2 —
 # phantom-fix v4). When `true` (prod default), every request to

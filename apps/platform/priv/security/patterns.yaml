@@ -1,0 +1,71 @@
+# Code-audit rubric for `Platform.Security.Scanners.CodeAudit`
+# (task 019f3e8e-4406 stage 4, ADR-0043).
+#
+# Each entry is one pattern the audit scanner matches against every
+# `.ex` file under `Application.get_env(:platform,
+# :security_scanner_repo_root)`. The scanner supports two `kind`
+# values:
+#
+#   * `regex` — compile `match` as a Perl-style regex and scan the raw
+#     file contents. Every match becomes a finding; the file + line
+#     number are included in the fingerprint.
+#   * `ast_probe` — invoke
+#     `Platform.Security.Scanners.CodeAudit.AstProbes.<probe>/1` on
+#     the file's parsed AST. Each probe is responsible for its own
+#     traversal + finding-shape return.
+#
+# `severity` maps to `Platform.Security.FindingFiler`'s task priority
+# via the shared severity → priority table.
+#
+# `suggested_fix` renders into the task description under a
+# ``## Suggested fix`` header. Keep it terse; the operator reads it
+# in a task card.
+patterns:
+  - id: unparameterized_sql
+    severity: critical
+    kind: regex
+    match: 'Repo\.query!?\([^)]*#\{'
+    description: Elixir string interpolation inside a Repo.query call — trivially SQL-injectable.
+    suggested_fix: Use parameterized queries — pass `[user_id]` as the second arg to `Repo.query/2` (or refactor to `Ecto.Query.from/2`).
+
+  - id: hardcoded_openai_key
+    severity: critical
+    kind: regex
+    match: '"sk-[A-Za-z0-9]{40,}"'
+    description: A literal OpenAI-shaped secret checked into source.
+    suggested_fix: Move the value to `config/runtime.exs` via `System.get_env/2` and rotate the compromised key immediately.
+
+  - id: hardcoded_anthropic_key
+    severity: critical
+    kind: regex
+    match: '"sk-ant-[A-Za-z0-9_\-]{40,}"'
+    description: A literal Anthropic-shaped secret checked into source.
+    suggested_fix: Move to `config/runtime.exs` + `System.get_env/2` and rotate the key.
+
+  - id: command_injection_system_cmd
+    severity: high
+    kind: regex
+    match: 'System\.cmd\("[^"]+",\s*\[[^\]]*#\{'
+    description: Interpolated string inside `System.cmd/2` args — command injection surface if any interpolated value is caller-controlled.
+    suggested_fix: Pass user data as bare list elements — `System.cmd(bin, [user_input])` — never build the arg string via interpolation.
+
+  - id: command_injection_os_cmd
+    severity: high
+    kind: regex
+    match: ':os\.cmd\([^)]*#\{'
+    description: Interpolated string inside `:os.cmd/1` — same shell-injection surface as `System.cmd/2`, and worse because `:os.cmd` runs via a shell.
+    suggested_fix: Replace `:os.cmd/1` with `System.cmd/3` and pass args as a list; avoid string interpolation in the command entirely.
+
+  - id: ecto_atom_interpolation
+    severity: high
+    kind: regex
+    match: 'String\.to_atom\([^)]*#\{'
+    description: `String.to_atom/1` on interpolated caller input leaks atom-table entries (a slow OOM if the caller is external).
+    suggested_fix: Use `String.to_existing_atom/1` when the value must be an atom, or keep it as a string end-to-end.
+
+  - id: missing_webhook_hmac
+    severity: high
+    kind: ast_probe
+    match: controller_without_hmac_verify
+    description: A Phoenix controller with a `*_webhook/2` action that never invokes `Plug.Crypto.secure_compare/2` on the raw body.
+    suggested_fix: Verify the request's HMAC signature against the raw body before trusting the payload (see `Platform.Meetings.LiveKitWebhookController` for the canonical pattern).

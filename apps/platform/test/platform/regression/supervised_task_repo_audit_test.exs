@@ -88,7 +88,21 @@ defmodule Platform.Regression.SupervisedTaskRepoAuditTest do
     # explicitly `Sandbox.allow/3` the spawned children — the
     # sweeper-test suite is the only place the Task.Supervisor branch
     # runs, and it does so under sandbox ownership.
-    "lib/platform/meetings/summarizer_sweeper.ex"
+    "lib/platform/meetings/summarizer_sweeper.ex",
+
+    # `Platform.Security.Sweeper` (task 019f3e8e-4406 stage 2, ADR-0043)
+    # uses `Task.Supervisor.async_nolink/2` to isolate scanner-body
+    # crashes. The sweeper is gated on `:start_security_sweeper` (false
+    # in test env, verified by the start-flag audit below), so no ticks
+    # fire in the shared test BEAM. Sweeper tests start a per-case
+    # instance under DataCase's `supervised_with_repo` allow-list and
+    # use stub scanner modules that only send a message back to the
+    # test PID (no Repo calls in the spawned body). Stage 3+ real
+    # scanner bodies DO touch Repo (via `FindingFiler → Tasks`), so
+    # this exemption must be revisited when those land — either the
+    # scanner call sites wrap in `rescue DBConnection.OwnershipError`
+    # or the test-injection seam swaps in a stub.
+    "lib/platform/security/sweeper.ex"
   ]
 
   # Explicit list of `:start_*` flags the Platform.Application boot
@@ -111,7 +125,8 @@ defmodule Platform.Regression.SupervisedTaskRepoAuditTest do
     :start_meeting_intent_classifier,
     :start_meeting_intent_dispatcher,
     :start_summarizer_sweeper,
-    :start_stall_registry
+    :start_stall_registry,
+    :start_security_sweeper
   ]
 
   # ── Assertion 1: Task-Supervisor rescue audit ─────────────────────

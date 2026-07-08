@@ -1,0 +1,28 @@
+patterns:
+  - id: unparameterized_sql
+    severity: critical
+    kind: regex
+    match: 'Repo\.query!?\([^)]*#\{'
+    description: SQL injection via string interpolation.
+    suggested_fix: Use parameterized queries.
+
+  - id: hardcoded_openai_key
+    severity: critical
+    kind: regex
+    match: '"sk-[A-Za-z0-9]{40,}"'
+    description: OpenAI secret checked into source.
+    suggested_fix: Rotate + move to runtime.exs.
+
+  - id: command_injection_system_cmd
+    severity: high
+    kind: regex
+    match: 'System\.cmd\("[^"]+",\s*\[[^\]]*#\{'
+    description: Interpolated System.cmd arg.
+    suggested_fix: Pass user input as list elements.
+
+  - id: missing_webhook_hmac
+    severity: high
+    kind: ast_probe
+    match: controller_without_hmac_verify
+    description: Webhook controller without HMAC verify.
+    suggested_fix: Add secure_compare on raw body.

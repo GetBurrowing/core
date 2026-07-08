@@ -1,0 +1,107 @@
+#!/usr/bin/env bash
+#
+# security_guard pre-push hook (task 019f3e8e-4406 stage 5, ADR-0043).
+#
+# Scans the diff of every ref being pushed for secret patterns —
+# OpenAI/Anthropic API keys, GitHub tokens, AWS keys, LiveKit keys,
+# private keys (RSA/EC/OpenSSH). On any hit, blocks the push with a
+# non-zero exit and points the user at the finding.
+#
+# Install via `mix platform.security.install_hooks` (see the mix task
+# for setup + overwrite semantics). To bypass in emergencies:
+# `git push --no-verify`. Do NOT bypass unless you've already rotated
+# whatever the scanner is flagging.
+#
+# stdin protocol (git pre-push):
+#   <local_ref> <local_sha> <remote_ref> <remote_sha>
+# One line per ref. Zero-sha means "deletion" (skip).
+
+set -euo pipefail
+
+ZERO_SHA="0000000000000000000000000000000000000000"
+
+# Pattern library — MUST match the one in
+# apps/platform/lib/platform/security/scanners/secret_leak.ex@patterns.
+# We keep them in sync by hand because grep + Elixir regex flavours are
+# subtly different; anything more sophisticated would require shelling
+# out to `mix run` from the hook, which is a 3+ second startup penalty
+# on every push.
+declare -a PATTERNS=(
+  "sk-ant-[A-Za-z0-9_-]{40,}"
+  "sk-[A-Za-z0-9]{40,}"
+  "gh[pousr]_[A-Za-z0-9_]{20,}"
+  "github_pat_[A-Za-z0-9_]{20,}"
+  "AKIA[0-9A-Z]{16}"
+  "APIt[A-Za-z0-9]{20,}"
+  "-----BEGIN RSA PRIVATE KEY-----"
+  "-----BEGIN EC PRIVATE KEY-----"
+  "-----BEGIN OPENSSH PRIVATE KEY-----"
+)
+
+hits=0
+hit_summary=""
+
+while read -r local_ref local_sha remote_ref remote_sha; do
+  # Skip branch deletions (local_sha == zero).
+  if [ "$local_sha" = "$ZERO_SHA" ]; then
+    continue
+  fi
+
+  # For a brand-new remote branch, remote_sha is zero — diff from the
+  # merge-base with origin/HEAD instead of an all-of-history dump.
+  if [ "$remote_sha" = "$ZERO_SHA" ]; then
+    base=$(git merge-base "$local_sha" origin/HEAD 2>/dev/null || echo "")
+    if [ -z "$base" ]; then
+      # Fresh repo with no origin/HEAD — diff the tip alone (last commit).
+      diff=$(git show "$local_sha" --unified=0 --no-color 2>/dev/null || true)
+    else
+      diff=$(git diff --unified=0 --no-color "$base".."$local_sha" 2>/dev/null || true)
+    fi
+  else
+    diff=$(git diff --unified=0 --no-color "$remote_sha".."$local_sha" 2>/dev/null || true)
+  fi
+
+  # Only inspect added lines — deletions can't leak new secrets. `+`
+  # at column 0 (not `+++` which is the file header).
+  added=$(printf '%s\n' "$diff" | grep -E '^\+[^+]' || true)
+
+  if [ -z "$added" ]; then
+    continue
+  fi
+
+  for pattern in "${PATTERNS[@]}"; do
+    matches=$(printf '%s\n' "$added" | grep -EnH "$pattern" || true)
+    if [ -n "$matches" ]; then
+      hits=$((hits + 1))
+      hit_summary="${hit_summary}
+  - pattern: ${pattern}
+    ref:     ${local_ref}
+    matches: $(printf '%s\n' "$matches" | head -3 | sed 's/^/      /')"
+    fi
+  done
+done
+
+if [ "$hits" -gt 0 ]; then
+  cat <<EOF >&2
+[security.secret_leak] pushed content contains suspected secrets. Push BLOCKED.
+
+Findings:
+${hit_summary}
+
+Next steps:
+  1. Rotate the leaked credential at the upstream provider IMMEDIATELY.
+  2. Remove the value from the offending files, replace with a
+     runtime env-var lookup (System.get_env/2 in Elixir).
+  3. Amend / rebase the offending commits — the value is in git
+     history until purged with git-filter-repo.
+  4. Retry the push.
+
+Emergency bypass: git push --no-verify (only after you've rotated).
+
+See ADR-0043 (docs/decisions/0043-security-guard-responsibility.md)
+for the full rationale + rotation checklist.
+EOF
+  exit 1
+fi
+
+exit 0

@@ -452,7 +452,12 @@ defmodule Platform.Org.Wiki.ContextT4E2ETest do
       # rules, and 5 worked examples including a paraphrase-stability
       # pair. Idempotent upsert on slug; drift-guarded against the
       # handler's `template_slug/0` accessor (stage 2).
-      "20260707120000_seed_prompt_template_intent_classify.exs"
+      "20260707120000_seed_prompt_template_intent_classify.exs",
+      # Task 019f3e8e-4406 stage 1 — Security Guard role admits new
+      # `security_guard` key to the closed enum, then re-seeds the row
+      # so existing environments pick it up (see ADR-0043).
+      "20260708000000_add_security_guard_to_roles_check.exs",
+      "20260708000100_seed_security_guard_role.exs"
     ]
 
     defp t4_root, do: Mix.Project.project_file() |> Path.dirname()

@@ -55,7 +55,11 @@ defmodule Platform.Responsibilities.BuiltIns do
       Handlers.DesignBrandCheck,
       Handlers.TaskTriage,
       Handlers.TaskUnblock,
-      Handlers.TaskWeeklyReview
+      Handlers.TaskWeeklyReview,
+      Handlers.SecurityCveScan,
+      Handlers.SecurityCodeAudit,
+      Handlers.SecurityDeployAudit,
+      Handlers.SecuritySecretLeak
     ]
   end
 end

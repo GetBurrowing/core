@@ -9,9 +9,10 @@ defmodule Platform.Roles.Role do
 
     * `key` — the natural primary key. One of the closed enum
       `designer | historian | meeting_scribe | meeting_producer |
-      triage_officer` (stack decision #2: role roster is fixed by the
-      platform, not user-extensible). Enforced by both the changeset
-      and a DB CHECK constraint, mirroring `org_memberships.role`.
+      triage_officer | security_guard` (stack decision #2: role roster
+      is fixed by the platform, not user-extensible). Enforced by both
+      the changeset and a DB CHECK constraint, mirroring
+      `org_memberships.role`.
     * `name` — human-presentable label.
     * `description` — one-line explanation of what the role owns.
     * `icon` — hero-icon slug (e.g. `hero-paint-brush`).
@@ -33,7 +34,7 @@ defmodule Platform.Roles.Role do
   @derive {Phoenix.Param, key: :key}
   @foreign_key_type :string
 
-  @valid_keys ~w(designer historian meeting_scribe meeting_producer triage_officer)
+  @valid_keys ~w(designer historian meeting_scribe meeting_producer triage_officer security_guard)
 
   schema "roles" do
     field(:name, :string)

@@ -1,0 +1,5 @@
+%{
+  "plug": {:hex, :plug, "1.14.0", "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890", [:mix], [{:mime, "~> 1.0 or ~> 2.0", [hex: :mime, repo: "hexpm", optional: false]}, {:plug_crypto, "~> 1.1.1 or ~> 1.2 or ~> 2.0", [hex: :plug_crypto, repo: "hexpm", optional: false]}, {:telemetry, "~> 0.4.3 or ~> 1.0", [hex: :telemetry, repo: "hexpm", optional: false]}], "hexpm", "1111111111111111111111111111111111111111111111111111111111111111"},
+  "jason": {:hex, :jason, "1.4.4", "0000000000000000000000000000000000000000000000000000000000000000", [:mix], [], "hexpm", "2222222222222222222222222222222222222222222222222222222222222222"},
+  "some_git_dep": {:git, "https://example.test/some_git_dep.git", "abc123", []},
+}

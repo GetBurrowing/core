@@ -92,6 +92,7 @@ defmodule Platform.Application do
       |> maybe_add_meeting_intent_dispatcher()
       |> maybe_add_stall_registry()
       |> maybe_add_summarizer_sweeper()
+      |> maybe_add_security_sweeper()
       |> ensure_task_router_watcher_after_endpoint()
 
     # See https://hexdocs.pm/elixir/Supervisor.html
@@ -302,6 +303,25 @@ defmodule Platform.Application do
     if Application.get_env(:platform, :start_summarizer_sweeper, true) do
       idx = Enum.find_index(children, &(&1 == PlatformWeb.Endpoint)) || length(children)
       List.insert_at(children, idx, Platform.Meetings.SummarizerSweeper)
+    else
+      children
+    end
+  end
+
+  # Security Sweeper (task 019f3e8e-4406 stage 2, ADR-0043): periodic
+  # sweep over the four `security.*` responsibility keys. Must start
+  # after Repo (queries the responsibilities table for the row +
+  # cadence metadata) and after `Platform.TaskSupervisor` (it spawns
+  # scanner bodies under it as `async_nolink/2` tasks for crash
+  # isolation). Insert before `PlatformWeb.Endpoint` and after
+  # `Platform.Responsibilities.StallRegistry` so registry lookups
+  # work at boot. Disabled in test env; tests start per-case
+  # instances with their own `:name`, shortened intervals, and
+  # `respect_cadence: false`.
+  defp maybe_add_security_sweeper(children) do
+    if Application.get_env(:platform, :start_security_sweeper, true) do
+      idx = Enum.find_index(children, &(&1 == PlatformWeb.Endpoint)) || length(children)
+      List.insert_at(children, idx, Platform.Security.Sweeper)
     else
       children
     end

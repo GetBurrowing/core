@@ -1,8 +1,9 @@
 defmodule Platform.Roles.Seeds do
   @moduledoc """
-  Seeds the five platform-fixed roles + their responsibility bundles on
+  Seeds the six platform-fixed roles + their responsibility bundles on
   first boot (M4 stage 4 of task `019ef65b-a361-7873-871b-3375bf60ead7`;
-  `meeting_producer` added in task `019f2451-6728` stage 2).
+  `meeting_producer` added in task `019f2451-6728` stage 2;
+  `security_guard` added in task `019f3e8e-4406` stage 1).
 
   Per Decision 2 from the M4 stack — the role roster is fixed by the
   platform, not user-extensible. The closed list:
@@ -13,6 +14,11 @@ defmodule Platform.Roles.Seeds do
       classifies intent and delegates to specialist agents
     * `meeting_scribe` — capture, summarize, follow up after meetings
     * `triage_officer` — task hygiene: sort, unblock, weekly rollup
+    * `security_guard` — periodic scans for CVEs, code patterns,
+      deploy config drift, and leaked secrets (see ADR-0043 for the
+      runtime design; the four bundled keys register as placeholders
+      here and are driven by `Platform.Security.Sweeper`, not the
+      Router)
 
   Responsibility keys here are aligned with the **v2 design canvas
   `019e0fb8-d87d-72b2-aab4-205b84fe23aa` rev 3** that Rowan signed off on,
@@ -79,6 +85,18 @@ defmodule Platform.Roles.Seeds do
       description: "Task hygiene: sort, unblock, weekly rollup",
       icon: "hero-clipboard-document-check",
       bundle: ["tasks.triage", "tasks.unblock", "tasks.weekly_review"]
+    },
+    %{
+      key: "security_guard",
+      name: "Security Guard",
+      description: "Periodic scans for CVEs, code patterns, deploy config, and leaked secrets",
+      icon: "hero-shield-check",
+      bundle: [
+        "security.cve_scan",
+        "security.code_audit",
+        "security.deploy_audit",
+        "security.secret_leak"
+      ]
     }
   ]
 

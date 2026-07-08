@@ -22,6 +22,17 @@ defmodule Platform.Responsibilities.ClosedRosterTemplateCoverageTest do
 
     * `memory.dream_consolidation` (seed) → `memory.dreaming` (handler)
 
+  ## Sweeper-driven exemption
+
+  The Security Guard bundle (task `019f3e8e-4406` stage 1 — see
+  ADR-0043) registers four responsibility keys whose runtime is
+  `Platform.Security.Sweeper`, not the Router. They intentionally
+  have `default_prompt_template: nil` because deterministic filesystem
+  + OSV.dev scans don't route through an LLM. This test exempts any
+  responsibility row whose `metadata["executor"]` names a non-Router
+  runtime — the exemption is narrow enough that a future non-executor
+  key with `default_prompt_template: nil` still fails loudly.
+
   ## Setup pattern
 
   Mirrors `Platform.Responsibilities.BuiltInsTest`: uses the DataCase
@@ -120,14 +131,27 @@ defmodule Platform.Responsibilities.ClosedRosterTemplateCoverageTest do
                "responsibility \"#{effective_key}\" (from seed key \"#{seed_key}\") " <>
                  "not registered — no row in responsibilities table"
 
-        assert responsibility.default_prompt_template,
-               "responsibility \"#{effective_key}\" has no default_prompt_template slug"
+        # Sweeper-driven rows (ADR-0043) do not have prompt templates
+        # because they don't route through an LLM. Skip the template
+        # assertion for them; the responsibility row's presence is
+        # sufficient. Everything else must have a template + row.
+        executor = get_in(responsibility.metadata, ["executor"])
 
-        slug = responsibility.default_prompt_template
+        if executor in ["platform.security.sweeper"] do
+          assert responsibility.default_prompt_template == nil,
+                 "responsibility \"#{effective_key}\" is Sweeper-driven " <>
+                   "(executor=#{executor}) but declared a default_prompt_template — " <>
+                   "Sweeper rows must not route through the LLM path"
+        else
+          assert responsibility.default_prompt_template,
+                 "responsibility \"#{effective_key}\" has no default_prompt_template slug"
 
-        assert PromptTemplates.get_template_by_slug(slug),
-               "responsibility \"#{effective_key}\" → template slug \"#{slug}\" " <>
-                 "has no PromptTemplate row"
+          slug = responsibility.default_prompt_template
+
+          assert PromptTemplates.get_template_by_slug(slug),
+                 "responsibility \"#{effective_key}\" → template slug \"#{slug}\" " <>
+                   "has no PromptTemplate row"
+        end
       end)
     end
 

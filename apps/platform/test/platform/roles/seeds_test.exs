@@ -81,20 +81,52 @@ defmodule Platform.Roles.SeedsTest do
     end
   end
 
+  describe "security_guard entry" do
+    # Task `019f3e8e-4406` stage 1 — see ADR-0043. Pin the exact seed
+    # shape for the row that carries the four Security Guard bundle
+    # keys. Each of the four keys registers with a `cost_profile` +
+    # `metadata.cadence` at the responsibility layer, not the role —
+    # see `Platform.Responsibilities.Handlers.SecurityCveScan` etc.
+    test "security_guard is present with the expected bundle, icon, and description" do
+      guard = Enum.find(Seeds.default_roles(), &(&1.key == "security_guard"))
+
+      assert guard,
+             "security_guard must be present in the canonical seed roster"
+
+      assert guard.name == "Security Guard"
+      assert guard.icon == "hero-shield-check"
+
+      assert guard.description ==
+               "Periodic scans for CVEs, code patterns, deploy config, and leaked secrets"
+
+      assert guard.bundle == [
+               "security.cve_scan",
+               "security.code_audit",
+               "security.deploy_audit",
+               "security.secret_leak"
+             ]
+    end
+  end
+
   describe "seed_defaults/0" do
-    test "inserts five roles and thirteen bundle rows on a fresh DB" do
+    test "inserts six roles and seventeen bundle rows on a fresh DB" do
       assert :ok = Seeds.seed_defaults()
 
-      assert Repo.aggregate(Role, :count, :key) == 5
-      assert Repo.aggregate(RoleResponsibility, :count, :id) == 13
+      # 6 roles: designer, historian, meeting_producer, meeting_scribe,
+      # triage_officer, security_guard.
+      assert Repo.aggregate(Role, :count, :key) == 6
+
+      # 17 bundle rows = 3 (designer) + 3 (historian) + 1 (meeting_producer)
+      #                + 3 (meeting_scribe) + 3 (triage_officer) + 4 (security_guard).
+      assert Repo.aggregate(RoleResponsibility, :count, :id) == 17
     end
 
     test "is idempotent — calling twice does not duplicate rows" do
       assert :ok = Seeds.seed_defaults()
       assert :ok = Seeds.seed_defaults()
 
-      assert Repo.aggregate(Role, :count, :key) == 5
-      assert Repo.aggregate(RoleResponsibility, :count, :id) == 13
+      assert Repo.aggregate(Role, :count, :key) == 6
+      assert Repo.aggregate(RoleResponsibility, :count, :id) == 17
     end
 
     test "each role's bundle round-trips via Platform.Roles.bundle_for/1" do

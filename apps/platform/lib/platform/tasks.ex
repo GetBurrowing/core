@@ -674,6 +674,30 @@ defmodule Platform.Tasks do
   end
 
   @doc """
+  Return non-deleted tasks whose `metadata[key] == value`.
+
+  The comparison is a JSONB `->>` string-extract equality on the top-level
+  key — nested paths (`metadata.foo.bar`) are NOT supported here (add a
+  sibling helper if you need one). The `FindingFiler` dedup gate uses this
+  to look up existing tasks by `metadata["security_fingerprint"]` without
+  N+1-loading every task in the DB (task 019f3e8e-4406 stage 5).
+
+  Non-string values coerce to string via `to_string/1` at the caller — the
+  underlying `->>` operator always yields text so the query stays a single
+  index lookup.
+  """
+  @spec list_tasks_by_metadata_key(String.t(), String.t()) :: [Task.t()]
+  def list_tasks_by_metadata_key(key, value) when is_binary(key) and is_binary(value) do
+    from(t in Task,
+      where:
+        fragment("?->>? = ?", t.metadata, ^key, ^value) and
+          is_nil(t.deleted_at),
+      order_by: [desc: t.inserted_at]
+    )
+    |> Repo.all()
+  end
+
+  @doc """
   Returns tasks whose `updated_at` falls within the given window.
 
   Used by the Historian's activity digest to surface tasks that changed

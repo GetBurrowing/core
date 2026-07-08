@@ -36,6 +36,15 @@ defmodule Platform.Responsibilities.BuiltInsTest do
       assert providers == Enum.uniq(providers)
     end
 
+    test "lists the four Security Guard placeholder handlers (task 019f3e8e stage 1)" do
+      providers = BuiltIns.providers()
+
+      assert Handlers.SecurityCveScan in providers
+      assert Handlers.SecurityCodeAudit in providers
+      assert Handlers.SecurityDeployAudit in providers
+      assert Handlers.SecuritySecretLeak in providers
+    end
+
     test "every listed module implements the Provider behaviour and exports register/0" do
       Enum.each(BuiltIns.providers(), fn mod ->
         assert Code.ensure_loaded?(mod), "#{inspect(mod)} should be loadable"
@@ -149,6 +158,51 @@ defmodule Platform.Responsibilities.BuiltInsTest do
       # the schema's cheap tier per `Responsibility.cost_profiles/0`.
       assert row.cost_profile == "high_freq_low_cost"
       assert row.enabled == true
+    end
+
+    test "upserts security.cve_scan with the expected null-topic spec (task 019f3e8e)" do
+      {_pid, name} = start_registry(BuiltIns.providers())
+
+      assert %{ok: rows, errors: []} = Registry.status(name)
+      keys = Enum.map(rows, & &1.key)
+      assert "security.cve_scan" in keys
+      assert "security.code_audit" in keys
+      assert "security.deploy_audit" in keys
+      assert "security.secret_leak" in keys
+
+      row = Responsibilities.get_by_key("security.cve_scan")
+      assert row
+      assert row.feature == "security"
+      assert row.trigger_kind == "event_topic"
+      assert row.scope == "per_org"
+      assert row.context_provided == []
+
+      # The load-bearing design decision — see ADR-0043. The Router
+      # subscribes to this topic but no publisher ever broadcasts.
+      # Sweeper (stage 2+) is the actual runtime.
+      assert row.trigger_config["topic"] == "platform.security.sweeper_only"
+
+      # Metadata pins the placeholder marker + Sweeper hooks so the
+      # runtime (stage 2+) can look up cadence + executor without
+      # hard-coding module names against keys.
+      assert row.metadata["status"] == "placeholder"
+      assert row.metadata["executor"] == "platform.security.sweeper"
+      assert row.metadata["cadence"] == "0 3 * * 1"
+      assert row.metadata["role"] == "security_guard"
+
+      assert row.cost_profile == "low_freq_capable"
+      assert row.enabled == true
+    end
+
+    test "upserts security.secret_leak with the daily cadence" do
+      {_pid, _name} = start_registry(BuiltIns.providers())
+
+      row = Responsibilities.get_by_key("security.secret_leak")
+      assert row
+      # Secret-leak scans run daily, not weekly — every push is a
+      # potential leak. Pin this because a future edit conflating the
+      # scans' cadences would silently reduce coverage.
+      assert row.metadata["cadence"] == "0 4 * * *"
     end
 
     test "reload/0 is idempotent — keys + ids stable across boots" do

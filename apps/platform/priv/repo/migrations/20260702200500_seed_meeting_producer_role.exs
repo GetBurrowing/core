@@ -15,10 +15,22 @@ defmodule Platform.Repo.Migrations.SeedMeetingProducerRole do
 
   Idempotent in both directions:
 
-    * `up/0` calls `Platform.Roles.Seeds.seed_defaults/0`, which uses
-      `on_conflict: :nothing` on both `roles` and `role_responsibilities`
-      inserts — safe to run against a DB that already has the four
-      original rows.
+    * `up/0` calls `Platform.Roles.Seeds.seed_defaults/1` with
+      `only_keys:` pinned to the five roles that are admitted by the
+      `roles_key_check` CHECK constraint at THIS migration timestamp
+      (designer, historian, meeting_producer, meeting_scribe,
+      triage_officer). Uses `on_conflict: :nothing` on both `roles` and
+      `role_responsibilities` inserts — safe to run against a DB that
+      already has the four original rows.
+
+      The `only_keys:` gate is load-bearing: after task 019f3e8e-4406
+      added `security_guard` to `@default_roles`, an unqualified
+      `seed_defaults/0` call here would try to insert `security_guard`
+      before `20260708000000_add_security_guard_to_roles_check.exs`
+      admits the key, tripping the CHECK constraint on fresh DBs (CI).
+      The dedicated re-seed migration
+      `20260708000100_seed_security_guard_role.exs` picks up the new
+      row after its constraint update lands.
     * `down/0` deletes only the `meeting_producer` key via raw SQL
       (mirrors the pattern in
       `20260624013500_seed_default_roles.exs:34-40`); FK cascade clears
@@ -28,7 +40,15 @@ defmodule Platform.Repo.Migrations.SeedMeetingProducerRole do
   use Ecto.Migration
 
   def up do
-    Platform.Roles.Seeds.seed_defaults()
+    Platform.Roles.Seeds.seed_defaults(
+      only_keys: [
+        "designer",
+        "historian",
+        "meeting_producer",
+        "meeting_scribe",
+        "triage_officer"
+      ]
+    )
   end
 
   def down do

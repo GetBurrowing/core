@@ -110,6 +110,12 @@ config :platform, :start_summarizer_sweeper, false
 # registered by one test leaks into a sibling case's sweep tick.
 config :platform, :start_stall_registry, false
 
+# Security Sweeper (task 019f3e8e-4406 stage 2, ADR-0043): tests start
+# their own per-case instance with `respect_cadence: false` so
+# `sweep_now/1` always walks all four scanner keys inside the ExUnit
+# DataCase sandbox. Global singleton would race sandbox teardown.
+config :platform, :start_security_sweeper, false
+
 # StackDeployer (T5) — tests run synchronously and use a no-op git
 # runner by default so existing Stacks tests don't shell out. Tests that
 # care about deployer behavior swap in their own runner via

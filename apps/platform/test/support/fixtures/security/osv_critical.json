@@ -1,0 +1,23 @@
+{
+  "results": [
+    {
+      "vulns": [
+        {
+          "id": "GHSA-testcritical",
+          "aliases": ["CVE-2024-11111"],
+          "summary": "Critical remote-code-execution in plug < 1.14.1",
+          "modified": "2024-06-01T00:00:00Z",
+          "database_specific": {"severity": "CRITICAL"},
+          "affected": [
+            {
+              "package": {"name": "plug", "ecosystem": "Hex"},
+              "ranges": [
+                {"type": "SEMVER", "events": [{"introduced": "0"}, {"fixed": "1.14.1"}]}
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

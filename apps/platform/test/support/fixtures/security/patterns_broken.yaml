@@ -1,0 +1,5 @@
+patterns:
+  - id: bad_severity
+    severity: ULTRACRITICAL
+    kind: regex
+    match: 'foo'
