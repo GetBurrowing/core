@@ -1,4 +1,5 @@
 import { RoomEvent } from "livekit-client"
+import ClientState from "../client_state"
 
 // Key → soundId. Display label shown in the popover + toast.
 const SOUNDS = [
@@ -17,7 +18,12 @@ const SOUND_BY_ID  = new Map(SOUNDS.map((s) => [s.id, s]))
 const DATA_TOPIC   = "soundboard"
 const SCHEMA_VER   = 1
 const MESSAGE_TYPE = "soundboard:play"
-const MUTE_KEY     = "suite:soundboard:muted"
+
+// Task 019f3e9a stage 4 follow-up: mute preference now flows through
+// `Suite.ClientState` under the `soundboard` namespace (`muted` key). The
+// legacy raw key was `suite:soundboard:muted` — byte-identical to the
+// ClientState canonical key, so no read-once migration is required, and
+// the legacy string values "true"/"false" JSON-parse to booleans on read.
 
 const MAX_CONCURRENT_NODES = 32
 const PLAY_SAFETY_MS       = 10000
@@ -224,11 +230,11 @@ const MeetingSoundboard = {
   // ── Mute state ───────────────────────────────────────────────────────
 
   _isMuted() {
-    try { return localStorage.getItem(MUTE_KEY) === "true" } catch (_) { return false }
+    return ClientState.get("soundboard", "muted", false) === true
   },
 
   _setMuted(muted) {
-    try { localStorage.setItem(MUTE_KEY, muted ? "true" : "false") } catch (_) {}
+    ClientState.set("soundboard", "muted", !!muted)
   },
 
   _muteCheckboxes() {

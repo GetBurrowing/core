@@ -419,8 +419,13 @@ defmodule PlatformWeb.TasksLive do
            |> assign(:available_skills, Skills.list_skills())
            |> assign(:page_title, "Tasks · #{task.title}")}
         else
+          # Task ID valid-shape but the row is gone (deleted, cross-tenant
+          # 404). Client's saved `route_resume:tasks` still points at this
+          # URL; signal the hook to clear it so the next Tasks-tile click
+          # falls back to `/tasks` instead of re-loading the tombstone.
           {:noreply,
            socket
+           |> handle_route_stale("tasks")
            |> assign(:selected_task, nil)
            |> assign(:show_detail, false)
            |> assign(:execution_space_id, nil)
@@ -439,8 +444,11 @@ defmodule PlatformWeb.TasksLive do
         end
 
       :error ->
+        # Malformed UUID in the URL — same "stale saved URL" story: the
+        # saved value can't ever resolve, so clear it client-side.
         {:noreply,
          socket
+         |> handle_route_stale("tasks")
          |> assign(:selected_task, nil)
          |> assign(:show_detail, false)
          |> assign(:execution_space_id, nil)

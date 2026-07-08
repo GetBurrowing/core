@@ -1,0 +1,114 @@
+# platform / assets
+
+Front-end asset tree for the Suite Phoenix app. Vitest suites live under
+`test/`, node-native tests under `test/**/*_test.mjs`, hooks under `js/hooks/`,
+and CSS under `css/`. `esbuild` + Tailwind are wired via `mix assets.build`
+(see the parent Elixir project); this README covers the JS-side conventions
+that don't have a natural home in the Elixir tree.
+
+## Client state persistence
+
+Every hook that persists per-tab preferences goes through
+[`js/client_state.js`](js/client_state.js) — the single wrapper around
+`window.localStorage` that centralises quota / private-mode error handling
+and enforces a shared key scheme. Direct `localStorage.*` calls outside
+this module are gated by a repo-local lint check (see below).
+
+Keys are stored as `suite:<namespace>:<key>`. The `suite:` prefix mirrors
+the historical `suite:tasks-last-project-id` naming already baked into
+older hooks. Values JSON-serialize on write and JSON-parse on read; a
+legacy raw string that fails `JSON.parse` (e.g. `localStorage.setItem(k,
+"blocked")`) round-trips as its raw string, so migration from an older
+call site is byte-identical for the value.
+
+Public API:
+
+```js
+import ClientState from "./client_state";
+
+ClientState.get(namespace, key, defaultValue = null);   // → value | default
+ClientState.set(namespace, key, value, { ttlMs } = {}); // → void
+ClientState.remove(namespace, key);                     // → void
+ClientState.clear(namespace);                           // → void
+ClientState.clearAll();                                 // → void
+ClientState.available();                                // → boolean (in-mem fallback active?)
+```
+
+`ttlMs` writes an envelope `{v: value, e: expiryEpoch}`; reads treat
+expired entries as missing and clean them up transparently.
+
+On `QuotaExceededError` or `SecurityError` (private-mode Safari, aggressive
+tracking-prevention settings) the module flips an internal disabled flag
+and switches to an in-memory `Map` for the tab's lifetime. Callers do not
+need to catch — every method survives, values just don't persist across
+reloads. `ClientState.available()` reports the current mode.
+
+### Adding a new namespace
+
+Pick a short, lowercase, underscore-separated namespace unique to your
+subsystem (e.g. `chat_ui`, `meeting_prefs`, `soundboard`). Import and go —
+no registration step:
+
+```js
+import ClientState from "../client_state";
+
+const NAMESPACE = "my_feature";
+const value = ClientState.get(NAMESPACE, "collapsed", false);
+ClientState.set(NAMESPACE, "collapsed", true);
+```
+
+If you're migrating an existing hook off a raw `localStorage` key, use
+the one-shot read-then-delete pattern — see any of `resizable_sidebar.js`,
+`last_project.js`, `tasks_status_filter.js`, or `sidebar_collapse.js` for
+the template. Mark the legacy calls with a `// client-state:allow (legacy
+migration)` comment so the lint gate lets them through.
+
+### Carve-outs
+
+- **`phx:theme` (Phoenix theme toggle)** — Phoenix owns the theme cookie
+  and coordinates via an inline script in `root.html.heex`. The
+  `hooks/theme_toggle.js` hook mirrors that machinery for reactive tab
+  switches; it stays on direct `localStorage.*` for interop with the
+  Phoenix inline script and is explicitly allowlisted by the lint script.
+
+Any other subsystem that needs to bypass the wrapper — new interop with
+Phoenix core, third-party integrations that dictate a raw key — should
+either extend the ClientState API surface or add itself to the explicit
+allowlist in `scripts/check_no_direct_localstorage.mjs` with a comment
+explaining why.
+
+## Lint gate
+
+[`scripts/check_no_direct_localstorage.mjs`](scripts/check_no_direct_localstorage.mjs)
+walks `js/` recursively and rejects any `localStorage.*` call that isn't
+covered by one of these escape hatches:
+
+1. **Allowlisted file** — `js/client_state.js` (the API itself) and
+   `js/hooks/theme_toggle.js` (Phoenix `phx:theme` carve-out).
+2. **Same-line `"phx:theme"` marker** — belt-and-braces for any hook that
+   mirrors the Phoenix theme fallback logic.
+3. **Same-line `client-state:allow` comment marker** — the documented
+   escape hatch for one-shot legacy-key migration paths. Add a trailing
+   comment such as `// client-state:allow (legacy migration)` on the
+   exact line that touches raw `localStorage`.
+
+The check runs automatically as part of `npm test` (after `vitest run` and
+`node --test`). Run it in isolation with:
+
+```sh
+cd apps/platform/assets
+node scripts/check_no_direct_localstorage.mjs
+```
+
+Exit codes: `0` clean, `1` one or more offenders (path + line printed to
+stderr), `2` internal error. A self-test at
+[`test/no_direct_localstorage_test.mjs`](test/no_direct_localstorage_test.mjs)
+exercises the script against synthetic fixture trees so a broken
+gate can't silently green-light regressions.
+
+## Test suites
+
+- `test/*.test.js` and `test/hooks/*.test.js` — vitest, run via `vitest run`.
+- `test/**/*_test.mjs` — node native test runner, hand-rolled DOM shims
+  where possible so the toolchain stays zero-dependency.
+- Both suites plus the lint gate are wired into `npm test`.

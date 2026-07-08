@@ -1,20 +1,29 @@
 // TasksStatusFilter
 //
 // Persists the active mobile-Tasks status-filter pill across page loads via
-// localStorage. The LiveView keeps the source-of-truth assign (`@active_status_filter`,
-// default `"in_progress"` on mount) — this hook just:
+// Suite.ClientState. The LiveView keeps the source-of-truth assign
+// (`@active_status_filter`, default `"in_progress"` on mount) — this hook just:
 //
 //   - On mount: if there's a stored filter different from the default, push a
 //     `filter_by_status` event to LV so the rendered active pill matches what
 //     the user last had selected.
-//   - On click within the pill nav: write the clicked status to localStorage
+//   - On click within the pill nav: write the clicked status to ClientState
 //     so the next mount picks it up.
 //
 // The LV-side `filter_by_status` handler validates the incoming status against
-// `@mobile_columns`, so a corrupted/stale localStorage value gets silently
+// `@mobile_columns`, so a corrupted/stale ClientState value gets silently
 // ignored on the server. No client-side validation needed.
+//
+// Task 019f3e9a stage 3: migrated off ad-hoc direct-store calls onto
+// `Suite.ClientState`. The old un-namespaced key `"tasks-active-status-filter"`
+// is read once, mirrored into the new store, and deleted so returning users
+// keep their selection across the flag day.
 
-const STORAGE_KEY = "tasks-active-status-filter"
+import ClientState from "../client_state.js"
+
+const NAMESPACE = "tasks_ui"
+const KEY = "status_filter"
+const LEGACY_KEY = "tasks-active-status-filter"
 
 export default {
   mounted() {
@@ -37,19 +46,24 @@ export default {
   },
 
   readStored() {
+    const current = ClientState.get(NAMESPACE, KEY, null)
+    if (current != null) return current
+
+    // Legacy-key migration: read once, port to ClientState, delete the raw
+    // entry so future reads take the fast path above. Guarded try/catch so
+    // private-mode Safari doesn't take out the whole hook.
     try {
-      return localStorage.getItem(STORAGE_KEY)
+      const legacy = globalThis.localStorage?.getItem(LEGACY_KEY) // client-state:allow (legacy migration)
+      if (legacy == null) return null
+      ClientState.set(NAMESPACE, KEY, legacy)
+      globalThis.localStorage.removeItem(LEGACY_KEY) // client-state:allow (legacy migration)
+      return legacy
     } catch (_e) {
-      // Private-mode Safari etc. throws on localStorage access; fall back to default.
       return null
     }
   },
 
   writeStored(status) {
-    try {
-      localStorage.setItem(STORAGE_KEY, status)
-    } catch (_e) {
-      // Quota / private-mode failure — silently skip; LV state still updates.
-    }
+    ClientState.set(NAMESPACE, KEY, status)
   },
 }

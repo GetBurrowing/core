@@ -411,7 +411,15 @@ defmodule PlatformWeb.ChatLive do
         bootstrap_space(slug_or_id, active_org_id)
 
     if is_nil(space) do
-      {:noreply, push_navigate(socket, to: ~p"/chat")}
+      # The URL saved by the RouteResume hook (`route_resume:chat` in
+      # localStorage) points at a space this user can no longer resolve
+      # (deleted, unauthorized). Signal the client to clear the entry so the
+      # next Chat-tile click falls back to `/chat` rather than looping right
+      # back into this dead resolve. See PlatformWeb.RouteResume.
+      {:noreply,
+       socket
+       |> handle_route_stale("chat")
+       |> push_navigate(to: ~p"/chat")}
     else
       if connected?(socket) do
         # Mount's subscribe loop (see `mount/3`) already subscribed this LV

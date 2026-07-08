@@ -4,7 +4,7 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "vitest run && node --test \"test/**/*_test.mjs\""
+    "test": "vitest run && node --test \"test/**/*_test.mjs\" && node scripts/check_no_direct_localstorage.mjs"
   },
   "keywords": [],
   "author": "",

@@ -1,7 +1,6 @@
 import ButtonLoading from "./button_loading"
 import ChannelMembershipDrag from "./channel_membership_drag"
 import ChatScrollToMessage from "./chat_scroll_to_message"
-import ChatState from "./chat_state"
 import CodeBlock from "./code_block"
 import ComposeInput from "./compose_input"
 import CopyToClipboard from "./copy_to_clipboard"
@@ -13,7 +12,6 @@ import InlineEdit from "./inline_edit"
 import InlineFocus from "./inline_focus"
 import InlineThread from "./inline_thread"
 import KanbanDragDrop from "./kanban_drag_drop"
-import LastChatLink from "./last_chat_link"
 import LastProject from "./last_project"
 import LongpressMenu from "./longpress_menu"
 import MarkdownEditor from "./markdown_editor"
@@ -34,6 +32,7 @@ import MessageEditor from "./message_editor"
 import PushSubscribe from "./push_subscribe"
 import ReactorPopover from "./reactor_popover"
 import ResizableSidebar from "./resizable_sidebar"
+import RouteResume from "./route_resume"
 import ScrollToBottom from "./scroll_to_bottom"
 import SectionReorder from "./section_reorder"
 import SectionReorderTouch from "./section_reorder_touch"
@@ -47,7 +46,6 @@ export default {
   ButtonLoading,
   ChannelMembershipDrag,
   ChatScrollToMessage,
-  ChatState,
   CodeBlock,
   ComposeInput,
   CopyToClipboard,
@@ -59,7 +57,6 @@ export default {
   InlineFocus,
   InlineThread,
   KanbanDragDrop,
-  LastChatLink,
   LastProject,
   LocalTime,
   LongpressMenu,
@@ -81,6 +78,7 @@ export default {
   PushSubscribe,
   ReactorPopover,
   ResizableSidebar,
+  RouteResume,
   ScrollToBottom,
   SectionReorder,
   SectionReorderTouch,

@@ -51,6 +51,12 @@ defmodule PlatformWeb do
       use Phoenix.LiveView
 
       unquote(html_helpers())
+
+      # Route-resume signal helper (`handle_route_stale/2`). Imported here
+      # so every LiveView can clear a stale saved URL from the client
+      # store without an explicit alias/import at the call site
+      # (task 019f3e9a stage 2). See `PlatformWeb.RouteResume`.
+      import PlatformWeb.RouteResume
     end
   end
 

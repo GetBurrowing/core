@@ -1,5 +1,37 @@
 // ComposeInput hook — auto-expanding textarea, Enter to send (desktop),
-// Shift+Enter for newline, @mention autocomplete, and per-space draft persistence
+// Shift+Enter for newline, @mention autocomplete, and per-space draft
+// persistence via Suite.ClientState.
+//
+// Task 019f3e9a stage 3: draft-persistence calls migrated off ad-hoc
+// direct-store calls onto `Suite.ClientState` under the `compose` namespace.
+// The per-space `_draftKey` is used as the sub-key. If a `data-draft-key`
+// ever arrives already-prefixed with `"suite:"`, we strip it before passing
+// through so ClientState's own `suite:compose:` prefix isn't doubled.
+import ClientState from "../client_state.js";
+
+const NAMESPACE = "compose";
+
+// Strip a legacy `suite:` prefix from the draft key so ClientState doesn't
+// end up storing under `suite:compose:suite:...`. Today's callers emit
+// `chat-draft:<space_id>` (see chat_live.html.heex), so this is defensive
+// against any future call site that reflexively adds the app prefix.
+function normalizeDraftKey(key) {
+  if (typeof key !== "string" || key.length === 0) return key;
+  return key.startsWith("suite:") ? key.slice("suite:".length) : key;
+}
+
+function readDraft(key) {
+  return ClientState.get(NAMESPACE, normalizeDraftKey(key), "");
+}
+
+function writeDraft(key, value) {
+  ClientState.set(NAMESPACE, normalizeDraftKey(key), value);
+}
+
+function removeDraft(key) {
+  ClientState.remove(NAMESPACE, normalizeDraftKey(key));
+}
+
 const ComposeInput = {
   mounted() {
     this._lastMentionQuery = null;
@@ -31,16 +63,16 @@ const ComposeInput = {
         // previous space's typed content even though LiveView rendered
         // the new space's server-side draft into the textarea's
         // defaultValue. Re-sync explicitly — otherwise the stale value
-        // below would be written into the new key's localStorage and
+        // below would be written into the new key's draft store and
         // poison the next restore.
         this.el.value = this.el.defaultValue || "";
 
         const currentValue = this.el.value;
-        const storedValue = localStorage.getItem(this._draftKey) || "";
+        const storedValue = readDraft(this._draftKey) || "";
 
-        // If the server had no stored draft but localStorage does (e.g.
+        // If the server had no stored draft but ClientState does (e.g.
         // after a page refresh where the in-memory :drafts map was
-        // reinitialized), restore from localStorage.
+        // reinitialized), restore from ClientState.
         if (currentValue === "" && storedValue !== "") {
           this.el.value = storedValue;
           this.el.dispatchEvent(new Event("input", { bubbles: true }));
@@ -49,13 +81,13 @@ const ComposeInput = {
         return;
       }
 
-      // Same-key update: keep localStorage mirrored to textarea content.
+      // Same-key update: keep the persisted draft mirrored to textarea content.
       const currentValue = this.el.value || "";
-      const storedValue = localStorage.getItem(this._draftKey) || "";
+      const storedValue = readDraft(this._draftKey) || "";
       if (currentValue === "") {
-        localStorage.removeItem(this._draftKey);
+        removeDraft(this._draftKey);
       } else if (currentValue !== storedValue) {
-        localStorage.setItem(this._draftKey, currentValue);
+        writeDraft(this._draftKey, currentValue);
       }
     };
 
@@ -116,9 +148,9 @@ const ComposeInput = {
 
       if (this._draftKey) {
         if (this.el.value === "") {
-          localStorage.removeItem(this._draftKey);
+          removeDraft(this._draftKey);
         } else {
-          localStorage.setItem(this._draftKey, this.el.value);
+          writeDraft(this._draftKey, this.el.value);
         }
       }
 
@@ -130,7 +162,7 @@ const ComposeInput = {
       this.el.value = "";
 
       if (this._draftKey) {
-        localStorage.removeItem(this._draftKey);
+        removeDraft(this._draftKey);
       }
 
       if (!CSS.supports("field-sizing", "content")) {
@@ -161,7 +193,7 @@ const ComposeInput = {
       }
 
       if (this._draftKey) {
-        localStorage.setItem(this._draftKey, this.el.value);
+        writeDraft(this._draftKey, this.el.value);
       }
 
       this.pushEvent("mention_clear", {});

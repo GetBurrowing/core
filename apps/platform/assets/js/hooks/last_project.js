@@ -1,8 +1,9 @@
 // LastProject — persists and restores the user's last-selected project on the
-// /tasks board via localStorage. Stage 1 of task 019e031c.
+// /tasks board via Suite.ClientState. Stage 1 of task 019e031c.
 //
-// Storage contract (committed at planning time):
-//   key:       "suite:tasks-last-project-id"
+// Storage contract:
+//   namespace: "tasks_ui"
+//   key:       "last_project_id"
 //   sentinel:  "__all__" (server maps to selected_project_id: nil)
 //   project:   raw UUID string
 //
@@ -11,21 +12,44 @@
 // selection sites.
 //
 // Persistence flow:
-//   - On `mounted()`, read localStorage and push `select_project` /
+//   - On `mounted()`, read ClientState and push `select_project` /
 //     `clear_filters` to the server to restore the previous selection.
 //   - The server emits a `selected_project_changed` event from the
 //     `select_project` and `clear_filters` handlers (including the
 //     stale-UUID fallback path that maps a missing UUID → nil). The hook
 //     subscribes via `handleEvent` and writes the authoritative `id` to
-//     localStorage. This is event-driven (not DOM-diff-driven) so a
+//     ClientState. This is event-driven (not DOM-diff-driven) so a
 //     fallback that doesn't change the rendered wrapper still triggers
-//     the localStorage cleanup.
+//     the cleanup.
 //   - We also keep a wrapper-attribute persistence pass (`updated()` +
 //     mount-time `persistFromDom`) as a belt-and-braces fallback for any
 //     state-change path that doesn't go through the two handlers above.
+//
+// Task 019f3e9a stage 3: migrated off ad-hoc direct-store calls onto
+// `Suite.ClientState`. The legacy un-namespaced key
+// `"suite:tasks-last-project-id"` is read once, ported into the store,
+// and deleted so returning users don't lose their selection.
 
-const LAST_PROJECT_KEY = "suite:tasks-last-project-id";
+import ClientState from "../client_state.js";
+
+const NAMESPACE = "tasks_ui";
+const KEY = "last_project_id";
+const LEGACY_KEY = "suite:tasks-last-project-id";
 const ALL_PROJECTS_SENTINEL = "__all__";
+
+function readStored() {
+  let stored = ClientState.get(NAMESPACE, KEY, null);
+  if (stored !== null) return stored;
+  try {
+    const legacy = globalThis.localStorage?.getItem(LEGACY_KEY); // client-state:allow (legacy migration)
+    if (legacy == null) return null;
+    ClientState.set(NAMESPACE, KEY, legacy);
+    globalThis.localStorage.removeItem(LEGACY_KEY); // client-state:allow (legacy migration)
+    return legacy;
+  } catch (_e) {
+    return null;
+  }
+}
 
 const LastProject = {
   mounted() {
@@ -34,10 +58,10 @@ const LastProject = {
     // listener even if it arrives before the next mounted-callback tick.
     this.handleEvent("selected_project_changed", ({ id }) => {
       const value = id == null ? ALL_PROJECTS_SENTINEL : String(id);
-      localStorage.setItem(LAST_PROJECT_KEY, value);
+      ClientState.set(NAMESPACE, KEY, value);
     });
 
-    const stored = localStorage.getItem(LAST_PROJECT_KEY);
+    const stored = readStored();
     if (stored == null) {
       // First visit — record current state without pushing anything.
       this.persistFromDom();
@@ -63,9 +87,9 @@ const LastProject = {
 
   persistFromDom() {
     const value = this.el.dataset.selectedProjectId || ALL_PROJECTS_SENTINEL;
-    localStorage.setItem(LAST_PROJECT_KEY, value);
+    ClientState.set(NAMESPACE, KEY, value);
   },
 };
 
-export { LAST_PROJECT_KEY, ALL_PROJECTS_SENTINEL };
+export { ALL_PROJECTS_SENTINEL };
 export default LastProject;

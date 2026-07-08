@@ -103,12 +103,10 @@ defmodule PlatformWeb.Components.IconRail do
       <div class="icon-rail-cluster icon-rail-cluster--live" data-cluster="live">
         <.link
           :for={dest <- @live_destinations}
-          id={tile_id(dest)}
           navigate={dest.path}
-          phx-hook={tile_hook(dest)}
-          data-default-chat-path={if dest.key == :chat, do: "/chat"}
           class={["icon-rail-tab", desktop_active_class(dest, @active_key)]}
           data-destination={dest.key}
+          data-module-id={dest.key}
           aria-label={dest.label}
           aria-current={aria_current_for(dest, @active_key)}
           title={dest.label}
@@ -126,6 +124,7 @@ defmodule PlatformWeb.Components.IconRail do
           navigate={dest.path}
           class={["icon-rail-tab", desktop_active_class(dest, @active_key)]}
           data-destination={dest.key}
+          data-module-id={dest.key}
           aria-label={dest.label}
           aria-current={aria_current_for(dest, @active_key)}
           title={dest.label}
@@ -142,6 +141,7 @@ defmodule PlatformWeb.Components.IconRail do
           navigate={dest.path}
           class={["icon-rail-tab", desktop_active_class(dest, @active_key)]}
           data-destination={dest.key}
+          data-module-id={dest.key}
           aria-label={dest.label}
           aria-current={aria_current_for(dest, @active_key)}
           title={dest.label}
@@ -204,6 +204,7 @@ defmodule PlatformWeb.Components.IconRail do
         navigate={dest.path}
         class={["bottom-nav-tab", mobile_active_class(dest, @active_key)]}
         data-destination={dest.key}
+        data-module-id={dest.key}
         aria-label={dest.label}
         aria-current={aria_current_for(dest, @active_key)}
       >
@@ -319,15 +320,6 @@ defmodule PlatformWeb.Components.IconRail do
   defp aria_current_for(dest, active_key) do
     if dest.key == active_key, do: "page", else: nil
   end
-
-  # The Chat tile carries the LastChatLink JS hook so the link target gets
-  # rewritten to the user's most recently visited chat space on the client.
-  # Other tiles don't need an id at all.
-  defp tile_id(%{key: :chat}), do: "shell-chat-link"
-  defp tile_id(_), do: nil
-
-  defp tile_hook(%{key: :chat}), do: "LastChatLink"
-  defp tile_hook(_), do: nil
 
   # Canonical 10-entry destination list. Order within a cluster determines
   # render order in the rail. Paths marked `# TODO` don't have routes yet

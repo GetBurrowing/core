@@ -1,3 +1,5 @@
+import ClientState from "../client_state"
+
 /**
  * MeetingCaptions hook — renders a rolling caption overlay during meetings.
  *
@@ -230,7 +232,7 @@ const MeetingCaptions = {
 }
 
 /**
- * MeetingCaptionsPersist hook — localStorage-backed CC preference.
+ * MeetingCaptionsPersist hook — ClientState-backed CC preference.
  *
  * Split out of MeetingCaptions (task 019f3f17 stage 2 review fix) so
  * persistence survives page reload. `MeetingCaptions` mounts on
@@ -242,30 +244,44 @@ const MeetingCaptions = {
  *
  * The fix: mount THIS hook on a small always-present host div in the
  * meeting shell. It fires `meeting_captions_hydrate` on mount whenever
- * localStorage carries a different value than the server's default, and
+ * ClientState carries a different value than the server's default, and
  * mirrors subsequent server-pushed `meeting_captions_persist` events
- * into localStorage. No visible UI — pure preference bridge.
+ * into ClientState. No visible UI — pure preference bridge.
+ *
+ * Task 019f3e9a stage 4 follow-up: migrated off ad-hoc direct-store
+ * calls onto `Suite.ClientState` under the `meeting` namespace. The old raw
+ * key was `suite.meeting.captions_visible` (dots) — the ClientState
+ * canonical key is `suite:meeting:captions_visible` (colons), so we
+ * read-once from the legacy key on first hydrate, rewrite, and delete.
  */
 const MeetingCaptionsPersist = {
   mounted() {
     const persistKey = this.el.dataset.persistKey
     if (!persistKey) return
+    const stateKey = persistKey.replace(/^suite\./, "").replace(/\./g, ":")
+    const [namespace, ...rest] = stateKey.split(":")
+    const key = rest.join(":") || "value"
 
-    try {
-      const stored = window.localStorage.getItem(persistKey)
-      if (stored === "true" || stored === "false") {
-        this.pushEvent("meeting_captions_hydrate", { visible: stored === "true" })
+    let stored = ClientState.get(namespace, key, null)
+    if (stored === null) {
+      // Read-once migration path for the legacy raw key.
+      try {
+        const legacy = window.localStorage.getItem(persistKey) // client-state:allow (legacy migration)
+        if (legacy === "true" || legacy === "false") {
+          stored = legacy === "true"
+          ClientState.set(namespace, key, stored)
+          window.localStorage.removeItem(persistKey) // client-state:allow (legacy migration)
+        }
+      } catch (_) {
+        // Private mode / no localStorage; fall through.
       }
-    } catch (_) {
-      // localStorage can throw in privacy modes; silently fall through.
+    }
+    if (typeof stored === "boolean") {
+      this.pushEvent("meeting_captions_hydrate", { visible: stored })
     }
 
     this.handleEvent("meeting_captions_persist", ({ visible }) => {
-      try {
-        window.localStorage.setItem(persistKey, String(!!visible))
-      } catch (_) {
-        // Best-effort persistence.
-      }
+      ClientState.set(namespace, key, !!visible)
     })
   },
 }

@@ -38,6 +38,12 @@
     class="hidden"
   >
   </div>
+  <%!-- Per-module route resume: persists window.location.pathname on every
+       LV nav under `route_resume:<module>` in localStorage, and intercepts
+       clicks on any `<a data-module-id=…>` (top-nav tiles) to route to the
+       saved URL rather than the module root. Singleton hook — one instance
+       covers the whole shell. See `apps/platform/assets/js/hooks/route_resume.js`. --%>
+  <div id="route-resume" phx-hook="RouteResume" class="hidden"></div>
   <%!-- Desktop icon-rail (lg+ width). Single-source-of-truth destination
        list lives in PlatformWeb.Components.IconRail.destinations/1; the
        template here just hands off current_path / is_fabrikam_user /

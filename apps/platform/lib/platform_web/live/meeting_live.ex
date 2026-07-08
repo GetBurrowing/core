@@ -208,9 +208,12 @@ defmodule PlatformWeb.MeetingLive do
     case Meetings.get_meeting_by_slug(slug) do
       nil ->
         # Clean not-found path — no MatchError / Ecto.NoResultsError
-        # bubbles.
+        # bubbles. Also clear the client's saved `route_resume:meetings`
+        # entry so the Meetings tile falls back to `/meetings` on the next
+        # click rather than looping right back into this nil resolve.
         {:noreply,
          socket
+         |> handle_route_stale("meetings")
          |> put_flash(:error, "Meeting not found.")
          |> push_navigate(to: ~p"/meetings")}
 

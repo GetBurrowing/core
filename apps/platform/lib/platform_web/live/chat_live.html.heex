@@ -5,8 +5,6 @@
      mode and let the parent own the singletons. --%>
 <div :if={!@embedded} id="push-subscribe" phx-hook="PushSubscribe" class="hidden"></div>
 
-<div :if={!@embedded} id="chat-state" phx-hook="ChatState" class="hidden"></div>
-
 <%!-- data-camera-enabled / data-mic-enabled carry the server's committed
      media intent. On a LiveKit reconnect (task 019e4b3e stage 3) the JS
      hook reads these off the dataset to re-engage the camera/mic WITHOUT

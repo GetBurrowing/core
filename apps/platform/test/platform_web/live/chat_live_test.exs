@@ -149,13 +149,18 @@ defmodule PlatformWeb.ChatLiveTest do
     assert html =~ "/control"
   end
 
-  test "chat page renders client hooks for last-space and per-space draft persistence", %{
+  test "chat page renders per-space draft persistence + no bespoke last-space hook", %{
     conn: conn
   } do
+    # Task 019f3e9a stage 3: ChatState hook was retired (subsumed by
+    # RouteResume, which writes the last-visited chat path under
+    # `route_resume:chat` via ClientState on every phx:page-loading-stop).
+    # The per-space compose-draft `data-draft-key` remains; it powers
+    # ComposeInput's ClientState-backed draft persistence.
     conn = authenticated_conn(conn)
     {:ok, _view, html} = live(conn, ~p"/chat/general")
 
-    assert html =~ "phx-hook=\"ChatState\""
+    refute html =~ "phx-hook=\"ChatState\""
     assert html =~ "data-draft-key=\"chat-draft:"
   end
 

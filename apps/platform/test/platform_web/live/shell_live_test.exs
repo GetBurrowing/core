@@ -192,13 +192,20 @@ defmodule PlatformWeb.ShellLiveTest do
     assert assigns.roster_space_id == space.id
   end
 
-  test "shell chat nav link is prepared to restore the last selected chat space", %{conn: conn} do
+  test "shell chat nav link relies on RouteResume — no dedicated last-chat hook", %{conn: conn} do
+    # Task 019f3e9a stage 3: LastChatLink hook was subsumed by RouteResume
+    # (which persists per-module last-URL under the `route_resume` namespace
+    # via ClientState). The Chat tile no longer needs a bespoke hook / id /
+    # data-default-chat-path — the delegated click intercept on RouteResume
+    # handles resume.
     conn = authenticated_conn(conn)
     {:ok, _view, html} = live(conn, ~p"/tasks")
 
-    assert html =~ ~s(id="shell-chat-link")
-    assert html =~ ~s(phx-hook="LastChatLink")
-    assert html =~ ~s(data-default-chat-path="/chat")
+    refute html =~ ~s(id="shell-chat-link")
+    refute html =~ ~s(phx-hook="LastChatLink")
+    refute html =~ ~s(data-default-chat-path)
+    # RouteResume is expected on the shell body — sanity-check it's present.
+    assert html =~ ~s(phx-hook="RouteResume")
   end
 
   test "sidebar collapse hook element advertises current collapsed state", %{conn: conn} do
@@ -323,15 +330,18 @@ defmodule PlatformWeb.ShellLiveTest do
       refute html =~ ~s(data-destination="admin")
     end
 
-    test "Chat tile carries the LastChatLink hook so the link target gets rewritten", %{
+    test "Chat tile relies on RouteResume rather than a bespoke last-chat hook", %{
       conn: conn
     } do
+      # Task 019f3e9a stage 3: LastChatLink retired; RouteResume owns per-module
+      # last-URL restore. Assert the legacy markers are gone so the tests fail
+      # loudly if a stray re-introduction lands.
       conn = authenticated_conn(conn)
       {:ok, _view, html} = live(conn, ~p"/tasks")
 
-      assert html =~ ~s(id="shell-chat-link")
-      assert html =~ ~s(phx-hook="LastChatLink")
-      assert html =~ ~s(data-default-chat-path="/chat")
+      refute html =~ ~s(id="shell-chat-link")
+      refute html =~ ~s(phx-hook="LastChatLink")
+      refute html =~ ~s(data-default-chat-path)
     end
 
     test "sidebar collapse flips the rail to lg:w-14", %{conn: conn} do

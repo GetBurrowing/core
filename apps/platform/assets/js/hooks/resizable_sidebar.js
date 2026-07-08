@@ -1,14 +1,44 @@
+// ResizableSidebar — persists the shell sidebar's user-picked width via
+// Suite.ClientState so it survives navigations and reloads.
+//
 // Default width matches the expanded icon-rail (w-56 = 224px) so the channel
 // rail visually aligns with the primary nav on first paint.
 //
-// Key is :v2 so any saved value from the previous (208px) default is ignored
-// once — the next drag-resize re-pins under the new key.
-const STORAGE_KEY = "suite:sidebar_width:v2";
+// Task 019f3e9a stage 3: migrated off ad-hoc direct-store calls onto
+// `Suite.ClientState`. The legacy raw key `"suite:sidebar_width:v2"` is
+// read once, migrated to the store, and deleted. The `:v2` suffix baked
+// into the legacy key already discarded pre-224px values; the migrated
+// entry preserves the user's latest drag-resized width.
+
+import ClientState from "../client_state.js";
+
+const NAMESPACE = "sidebar";
+const KEY = "width";
+const LEGACY_KEY = "suite:sidebar_width:v2";
 const DEFAULT_WIDTH = 224;
 
 function currentWidth() {
-  const saved = localStorage.getItem(STORAGE_KEY);
-  return saved ? parseInt(saved, 10) : DEFAULT_WIDTH;
+  let stored = ClientState.get(NAMESPACE, KEY, null);
+  if (stored === null) {
+    // Legacy key migration — one-shot read-then-delete so we don't keep
+    // paying the extra raw-store lookup on every LV update.
+    try {
+      const legacy = globalThis.localStorage?.getItem(LEGACY_KEY); // client-state:allow (legacy migration)
+      if (legacy != null) {
+        const parsed = parseInt(legacy, 10);
+        if (!Number.isNaN(parsed)) {
+          stored = parsed;
+          ClientState.set(NAMESPACE, KEY, parsed);
+        }
+        globalThis.localStorage.removeItem(LEGACY_KEY); // client-state:allow (legacy migration)
+      }
+    } catch (_e) {
+      // private mode / no localStorage; fall through to default.
+    }
+  }
+  if (stored == null) return DEFAULT_WIDTH;
+  const width = typeof stored === "number" ? stored : parseInt(stored, 10);
+  return Number.isNaN(width) ? DEFAULT_WIDTH : width;
 }
 
 const ResizableSidebar = {
@@ -37,7 +67,7 @@ const ResizableSidebar = {
       document.body.classList.remove("sidebar-resizing");
       document.removeEventListener("mousemove", this._onMouseMove);
       document.removeEventListener("mouseup", this._onMouseUp);
-      localStorage.setItem(STORAGE_KEY, parseInt(this.el.style.width, 10));
+      ClientState.set(NAMESPACE, KEY, parseInt(this.el.style.width, 10));
     };
 
     this._handle.addEventListener("mousedown", this._onMouseDown);
