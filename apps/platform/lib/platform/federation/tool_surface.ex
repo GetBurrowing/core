@@ -3025,7 +3025,7 @@ defmodule Platform.Federation.ToolSurface do
   end
 
   def execute("task_get", args, _context) do
-    task_id = Map.get(args, "task_id")
+    task_id = Map.get(args, "task_id") || Map.get(args, "id")
 
     case Tasks.get_task_record(task_id) do
       nil ->
@@ -3098,7 +3098,7 @@ defmodule Platform.Federation.ToolSurface do
   end
 
   def execute("task_update", args, _context) do
-    task_id = Map.get(args, "task_id")
+    task_id = Map.get(args, "task_id") || Map.get(args, "id")
 
     case Tasks.get_task_record(task_id) do
       nil ->
@@ -4458,7 +4458,7 @@ defmodule Platform.Federation.ToolSurface do
   end
 
   def execute("plan_get", args, _context) do
-    task_id = Map.get(args, "task_id")
+    task_id = Map.get(args, "task_id") || Map.get(args, "id")
 
     case Tasks.current_plan(task_id) do
       nil ->
@@ -4632,10 +4632,10 @@ defmodule Platform.Federation.ToolSurface do
   end
 
   def execute("stage_complete", args, _context) do
-    stage_id = Map.get(args, "stage_id")
+    stage_id = Map.get(args, "stage_id") || Map.get(args, "id")
 
     with %Stage{} = stage <- Repo.get(Stage, stage_id),
-         true <- stage.status == "running" || {:error, :not_running},
+         true <- stage.status in ["running", "passed"] || {:error, :not_running},
          validations <- Tasks.list_validations(stage.id),
          true <-
            Enum.all?(validations, &(&1.status == "passed")) || validations == [] ||

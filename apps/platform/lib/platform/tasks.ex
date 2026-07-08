@@ -353,6 +353,8 @@ defmodule Platform.Tasks do
   query. Extending here rather than at each caller keeps the sweep
   centralized.
   """
+  def get_task_record(nil), do: nil
+
   def get_task_record(id) do
     case Repo.get(Task, id) do
       nil -> nil
