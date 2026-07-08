@@ -1358,6 +1358,12 @@ defmodule Platform.Federation.ToolSurface do
             required: false,
             description:
               "Name of the deploy target this task should ship to (must match an entry in project.deploy_config.deploy_targets, e.g. \"production\" or \"exp\"). Required to be set before the deploying-phase dispatch can pin a target."
+          },
+          auto_approve_plan: %{
+            type: "boolean",
+            required: false,
+            description:
+              "When true, the engine auto-approves the task's submitted plan without waiting for a human approval — the task moves straight from plan_submit to in_progress. Useful for well-scoped low-risk tasks where plan review is procedural. Defaults to false on new tasks."
           }
         },
         returns: "The updated task object (includes sponsor: nil | %{id, name, email}).",
@@ -3286,7 +3292,8 @@ defmodule Platform.Federation.ToolSurface do
             "assignee_type",
             "assignee_id",
             "sponsor_user_id",
-            "deploy_target"
+            "deploy_target",
+            "auto_approve_plan"
           ])
           |> Enum.reduce(%{}, fn {k, v}, acc ->
             cond do
