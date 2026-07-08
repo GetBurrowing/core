@@ -4788,21 +4788,30 @@ defmodule Platform.Federation.ToolSurface do
   def execute("stage_complete", args, _context) do
     stage_id = Map.get(args, "stage_id") || Map.get(args, "id")
 
+    # NOTE: superseded-plan guard runs BEFORE :not_running / :pending_validations
+    # so an executor whose task was returned-to-planning mid-flight gets a
+    # decisive stop signal (recoverable: false) rather than a retry-friendly
+    # "pending validations" hint. `&&` (not `||`) is the correct operator for
+    # the negative-guard pattern here: a `false` helper result short-circuits
+    # to `false`, which matches `false <-` and continues the chain; a `true`
+    # result yields `{:error, :plan_superseded}` for the else branch.
     with %Stage{} = stage <- Repo.get(Stage, stage_id),
+         %Plan{} = current_plan <- Repo.get(Plan, stage.plan_id),
+         false <- plan_superseded?(current_plan) && {:error, :plan_superseded},
          true <- stage.status in ["running", "passed"] || {:error, :not_running},
          validations <- Tasks.list_validations(stage.id),
          true <-
            Enum.all?(validations, &(&1.status == "passed")) || validations == [] ||
              {:error, :pending_validations},
-         {:ok, plan} <- PlanEngine.advance(stage.plan_id) do
-      fresh_stage = Enum.find(plan.stages || [], &(&1.id == stage.id))
+         {:ok, advanced_plan} <- PlanEngine.advance(stage.plan_id) do
+      fresh_stage = Enum.find(advanced_plan.stages || [], &(&1.id == stage.id))
 
       {:ok,
        %{
          stage_id: stage.id,
          stage_status: fresh_stage && fresh_stage.status,
-         plan_id: plan.id,
-         plan_status: plan.status
+         plan_id: advanced_plan.id,
+         plan_status: advanced_plan.status
        }}
     else
       nil ->
@@ -4811,6 +4820,15 @@ defmodule Platform.Federation.ToolSurface do
            error: "Stage not found: #{inspect(stage_id)}",
            recoverable: true,
            suggestion: "Verify the stage_id is valid"
+         }}
+
+      {:error, :plan_superseded} ->
+        {:error,
+         %{
+           error: "plan_superseded",
+           recoverable: false,
+           suggestion:
+             "This task has been returned to planning; the current plan is superseded. Stop this executor — a new plan will dispatch a fresh execution when approved."
          }}
 
       {:error, :not_running} ->
@@ -4838,6 +4856,9 @@ defmodule Platform.Federation.ToolSurface do
          }}
     end
   end
+
+  defp plan_superseded?(%Plan{status: "superseded"}), do: true
+  defp plan_superseded?(_), do: false
 
   def execute("report_blocker", args, context) do
     task_id = Map.get(args, "task_id")

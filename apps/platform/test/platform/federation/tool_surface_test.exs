@@ -1432,6 +1432,50 @@ defmodule Platform.Federation.ToolSurfaceTest do
       assert result.plan_status in ["completed", "draft"]
     end
 
+    test "stage_complete refuses when the parent plan is superseded (019f42dc stage 2)" do
+      # Return-to-planning kills in-flight execution. If the executor tries to
+      # advance a stage after the plan has been superseded, the guard must
+      # short-circuit with a non-recoverable stop signal so retry loops bail.
+      project = create_project()
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Supersede task"})
+      {:ok, plan} = Tasks.create_plan(%{task_id: task.id})
+      {:ok, stage} = Tasks.create_stage(%{plan_id: plan.id, name: "Build", position: 1})
+      {:ok, _} = Platform.Tasks.PlanEngine.start_stage(stage.id)
+
+      plan
+      |> Platform.Tasks.Plan.changeset(%{status: "superseded"})
+      |> Repo.update!()
+
+      {:error, error} = ToolSurface.execute("stage_complete", %{"stage_id" => stage.id}, %{})
+
+      assert error.error == "plan_superseded"
+      assert error.recoverable == false
+      assert error.suggestion =~ "superseded"
+    end
+
+    test "stage_complete superseded guard short-circuits before :pending_validations (019f42dc stage 2)" do
+      # Precedence lock: even if validations are still pending, the superseded
+      # check must fire first — otherwise executors would spin retrying
+      # validation_pass on a dead plan.
+      project = create_project()
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Precedence task"})
+      {:ok, plan} = Tasks.create_plan(%{task_id: task.id})
+      {:ok, stage} = Tasks.create_stage(%{plan_id: plan.id, name: "Build", position: 1})
+      {:ok, _} = Platform.Tasks.PlanEngine.start_stage(stage.id)
+      # Pending validation attached — under normal precedence this would
+      # produce :pending_validations. With the superseded plan, it must not.
+      {:ok, _val} = Tasks.create_validation(%{stage_id: stage.id, kind: "ci_check"})
+
+      plan
+      |> Platform.Tasks.Plan.changeset(%{status: "superseded"})
+      |> Repo.update!()
+
+      {:error, error} = ToolSurface.execute("stage_complete", %{"stage_id" => stage.id}, %{})
+
+      assert error.error == "plan_superseded"
+      assert error.recoverable == false
+    end
+
     test "report_blocker records a structured runtime blocker" do
       project = create_project()
       {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Blocked task"})

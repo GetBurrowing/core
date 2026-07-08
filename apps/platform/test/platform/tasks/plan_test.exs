@@ -530,4 +530,189 @@ defmodule Platform.Tasks.PlanTest do
       assert Tasks.get_task_record(t.id).status == "done"
     end
   end
+
+  describe "supersede_current_plan/3" do
+    # Seed helper: drive a fresh task from planning → approved-plan → the
+    # target in-flight status. Returns %{task: task, plan: plan}.
+    defp seed_in_flight(project, target_status) do
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Supersede Task #{target_status}",
+          status: "planning"
+        })
+
+      {:ok, plan} = Tasks.create_plan(%{task_id: task.id})
+      {:ok, plan} = Tasks.submit_plan_for_review(plan)
+      {:ok, plan} = Tasks.approve_plan(plan, "system")
+
+      # approve_plan's dispatch gate flips task → in_progress. Walk it
+      # forward to whichever in-flight status the test needs.
+      task = Tasks.get_task_record(task.id)
+
+      task =
+        case target_status do
+          "in_progress" ->
+            task
+
+          "in_review" ->
+            {:ok, t} = Tasks.transition_task_status(task, "in_review")
+            t
+
+          "deploying" ->
+            # Deploying gate requires a resolvable deploy target (added by
+            # 019f42db deploy-consolidation). Set an explicit target directly
+            # via the changeset so we don't have to plumb a project default.
+            {:ok, task} =
+              task
+              |> Platform.Tasks.Task.changeset(%{deploy_target: "pr_merge"})
+              |> Platform.Repo.update()
+
+            {:ok, t} = Tasks.transition_task_status(task, "in_review")
+            {:ok, t} = Tasks.transition_task_status(t, "deploying")
+            t
+        end
+
+      %{task: task, plan: plan}
+    end
+
+    for target_status <- ~w(in_progress in_review deploying) do
+      test "happy path: task in #{target_status} → planning, plan superseded with reason, broadcasts fire",
+           %{project: project} do
+        %{task: task, plan: plan} = seed_in_flight(project, unquote(target_status))
+
+        :ok = Tasks.subscribe_board()
+
+        assert {:ok, superseded} =
+                 Tasks.supersede_current_plan(task.id, "wrong scope", "reviewer-1")
+
+        assert superseded.status == "planning"
+        assert superseded.id == task.id
+
+        latest = Tasks.latest_plan(task.id)
+        assert latest.id == plan.id
+        assert latest.status == "superseded"
+        assert latest.rejection_reason == "wrong scope"
+
+        assert_receive {:task_updated, %{id: tid, status: "planning"}}
+        assert tid == task.id
+        assert_receive {:plan_updated, %{status: "superseded", rejection_reason: "wrong scope"}}
+      end
+    end
+
+    for bad_status <- ~w(backlog planning blocked done cancelled stack_pending) do
+      test "refuses :not_in_flight when task is in #{bad_status}", %{project: project} do
+        {:ok, task} =
+          Tasks.create_task(%{
+            project_id: project.id,
+            title: "Refusal #{unquote(bad_status)}",
+            status: "planning"
+          })
+
+        {:ok, task} =
+          task
+          |> Platform.Tasks.Task.changeset(%{status: unquote(bad_status)})
+          |> Platform.Repo.update()
+
+        assert {:error, :not_in_flight} =
+                 Tasks.supersede_current_plan(task.id, "reason", "actor-1")
+
+        # Task remains in its prior status — atomic abort before any writes.
+        assert Tasks.get_task_record(task.id).status == unquote(bad_status)
+      end
+    end
+
+    test "refuses :reason_required for nil / blank / whitespace-only reasons",
+         %{project: project} do
+      %{task: task} = seed_in_flight(project, "in_progress")
+
+      assert {:error, :reason_required} = Tasks.supersede_current_plan(task.id, nil, "a1")
+      assert {:error, :reason_required} = Tasks.supersede_current_plan(task.id, "", "a1")
+      assert {:error, :reason_required} = Tasks.supersede_current_plan(task.id, "   ", "a1")
+      assert {:error, :reason_required} = Tasks.supersede_current_plan(task.id, "\t\n  ", "a1")
+
+      # Task untouched.
+      assert Tasks.get_task_record(task.id).status == "in_progress"
+    end
+
+    test "refuses :no_active_plan when task is in_progress but has no approved/executing plan",
+         %{project: project} do
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "In-progress, no plan",
+          status: "planning"
+        })
+
+      {:ok, plan} = Tasks.create_plan(%{task_id: task.id})
+      {:ok, plan} = Tasks.submit_plan_for_review(plan)
+      {:ok, _rejected} = Tasks.reject_plan(plan, "system")
+
+      # Force task to in_progress even though its only plan is rejected.
+      {:ok, task} =
+        task
+        |> Platform.Tasks.Task.changeset(%{status: "in_progress"})
+        |> Platform.Repo.update()
+
+      assert {:error, :no_active_plan} =
+               Tasks.supersede_current_plan(task.id, "reason", "actor-1")
+
+      # Neither task nor plan mutated.
+      assert Tasks.get_task_record(task.id).status == "in_progress"
+      assert Tasks.latest_plan(task.id).status == "rejected"
+    end
+
+    test "posts a log-only system message to the execution space", %{project: project} do
+      %{task: task, plan: plan} = seed_in_flight(project, "in_progress")
+
+      # Materialize the execution space so post_log has a target.
+      {:ok, space} = Platform.Orchestration.ExecutionSpace.find_or_create(task.id)
+
+      assert {:ok, _} =
+               Tasks.supersede_current_plan(task.id, "scope shifted", "reviewer-x")
+
+      messages = Platform.Chat.list_messages(space.id, limit: 10)
+
+      assert Enum.any?(messages, fn m ->
+               m.content_type == "system" and
+                 m.log_only == true and
+                 String.contains?(m.content, "Plan v#{plan.version} superseded") and
+                 String.contains?(m.content, "scope shifted")
+             end),
+             "expected superseded system log; got: #{inspect(Enum.map(messages, & &1.content))}"
+    end
+
+    test "returns :not_found for unknown task ids" do
+      assert {:error, :not_found} =
+               Tasks.supersede_current_plan(Ecto.UUID.generate(), "reason", "a1")
+    end
+
+    test "picks the highest-version approved plan when multiple exist", %{project: project} do
+      # v1 rejected, v2 approved (in-flight) — supersede must target v2.
+      %{task: task, plan: v_current} = seed_in_flight(project, "in_progress")
+
+      assert v_current.version == 1
+
+      # Sanity: v_current is the plan latest_executing_plan returns.
+      assert Tasks.latest_plan(task.id).id == v_current.id
+
+      assert {:ok, _} =
+               Tasks.supersede_current_plan(task.id, "bad scope", "actor-1")
+
+      superseded = Tasks.latest_plan(task.id)
+      assert superseded.id == v_current.id
+      assert superseded.status == "superseded"
+    end
+
+    test "reason is trimmed-aware but preserves inner whitespace", %{project: project} do
+      %{task: task} = seed_in_flight(project, "in_progress")
+
+      assert {:ok, _} =
+               Tasks.supersede_current_plan(task.id, "  outer spaces  fine  ", "a1")
+
+      # Whatever the caller passed is what we persist — no automatic trim
+      # applied. Only nil/all-whitespace triggers :reason_required.
+      assert Tasks.latest_plan(task.id).rejection_reason == "  outer spaces  fine  "
+    end
+  end
 end

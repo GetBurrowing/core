@@ -20,7 +20,14 @@ defmodule Platform.Tasks do
   alias Platform.{Artifacts, Context, Execution, Memory}
   alias Platform.Context.Session
   alias Platform.Execution.Run
-  alias Platform.Orchestration.{RuntimeSupervision, TaskRouterSupervisor, TaskRouterWatcher}
+
+  alias Platform.Orchestration.{
+    ExecutionSpace,
+    RuntimeSupervision,
+    TaskRouterSupervisor,
+    TaskRouterWatcher
+  }
+
   alias Platform.Repo
 
   alias Platform.Tasks.{
@@ -1293,6 +1300,154 @@ defmodule Platform.Tasks do
   defp latest_active_plan(task_id) do
     Plan
     |> where([p], p.task_id == ^task_id and p.status in ["approved", "completed"])
+    |> order_by([p], desc: p.version)
+    |> limit(1)
+    |> Repo.one()
+  end
+
+  # In-flight statuses eligible for return-to-planning. A task in one of
+  # these statuses has (or had) an active plan the executor is running
+  # against — supersede_current_plan/3 kills that plan and drops the task
+  # back to `planning` so the planner can produce a fresh one.
+  @in_flight_supersede_statuses ~w(in_progress in_review deploying)
+
+  @doc """
+  Return an in-flight task to `planning` by superseding its current
+  approved/executing plan. Companion to `reopen_with_feedback/3`, but
+  targets `in_progress` / `in_review` / `deploying` instead of `done`.
+
+  Atomic: marks the currently-active plan (`approved` or `executing`) as
+  `superseded` with `reason` persisted to its `rejection_reason` column,
+  then transitions the task to `planning` via a direct changeset (which
+  bypasses `@valid_task_transitions` — reverse edges from in-flight
+  statuses to `planning` are intentionally absent from the automated
+  pipeline; supersession is the operator-driven exception, mirroring the
+  same bypass `reopen_with_feedback/3` uses out of `done`). Both updates
+  ride a single `Repo.transaction/1`; if either fails the whole call
+  aborts and the task/plan retain their prior state.
+
+  Post-commit side effects (best-effort, do not roll back the transaction):
+
+    * `broadcast_board({:task_updated, task})` — planning column update
+    * `broadcast_board({:plan_updated, plan})` — plan row update
+    * `ExecutionSpace.post_log/2` — system log message in the task's
+      execution space noting the supersession + reason (log-only, so the
+      attention router does not re-engage a stopped executor). Skipped
+      gracefully if no execution space exists for the task.
+
+  Refusal cases:
+    * `{:error, :reason_required}` — `reason` is nil or blank/whitespace
+    * `{:error, :not_in_flight}` — task status is not one of
+      `in_progress` / `in_review` / `deploying`
+    * `{:error, :no_active_plan}` — task has no plan currently in
+      `approved` or `executing` status (defensive: an in-flight task
+      should always have one, but if the plan history is somehow lost
+      we abort rather than transition the task with nothing to supersede)
+
+  The `by_actor_id` argument is reserved for audit provenance. It is not
+  written into the plan or task rows today — the transition is captured
+  via `plan.rejection_reason` (the reason string) and the system log
+  message. Callers should still pass it so future audit-log integrations
+  have the actor available without an API change.
+  """
+  @spec supersede_current_plan(String.t(), String.t() | nil, String.t() | nil) ::
+          {:ok, Task.t()}
+          | {:error, :not_in_flight | :reason_required | :no_active_plan | term()}
+  def supersede_current_plan(task_id, reason, by_actor_id) when is_binary(task_id) do
+    cond do
+      is_nil(reason) or String.trim(reason) == "" ->
+        {:error, :reason_required}
+
+      true ->
+        Repo.transaction(fn ->
+          case Repo.get(Task, task_id) do
+            nil ->
+              Repo.rollback(:not_found)
+
+            %Task{status: status} when status not in @in_flight_supersede_statuses ->
+              Repo.rollback(:not_in_flight)
+
+            %Task{} = task ->
+              case latest_executing_plan(task.id) do
+                nil ->
+                  Repo.rollback(:no_active_plan)
+
+                %Plan{} = plan ->
+                  with {:ok, superseded_plan} <-
+                         plan
+                         |> Plan.changeset(%{
+                           status: "superseded",
+                           rejection_reason: reason
+                         })
+                         |> Repo.update(),
+                       {:ok, updated_task} <-
+                         task
+                         |> Task.changeset(%{status: "planning"})
+                         |> Repo.update() do
+                    {updated_task, superseded_plan}
+                  else
+                    {:error, changeset} -> Repo.rollback(changeset)
+                  end
+              end
+          end
+        end)
+        |> case do
+          {:ok, {task, plan}} ->
+            preloaded = Repo.preload(task, [:project, :epic, :sponsor, plans: :stages])
+            broadcast_board({:task_updated, preloaded})
+            broadcast_board({:plan_updated, plan})
+            post_supersede_log(task.id, plan, reason, by_actor_id)
+            {:ok, preloaded}
+
+          {:error, reason} ->
+            {:error, reason}
+        end
+    end
+  end
+
+  # Post a log-only system message noting the supersession. Best-effort:
+  # if the execution space does not exist yet, skip; if the post fails,
+  # warn but do not surface — the task/plan transitions have already
+  # committed and re-planning does not depend on the log entry.
+  defp post_supersede_log(task_id, %Plan{} = plan, reason, by_actor_id) do
+    case ExecutionSpace.find_by_task_id(task_id) do
+      nil ->
+        :ok
+
+      %{id: space_id} ->
+        actor_suffix =
+          case by_actor_id do
+            id when is_binary(id) and id != "" -> " (by #{id})"
+            _ -> ""
+          end
+
+        content =
+          "Plan v#{plan.version} superseded#{actor_suffix}. Task returned to planning. Reason: #{reason}"
+
+        case ExecutionSpace.post_log(space_id, content) do
+          {:ok, _msg} ->
+            :ok
+
+          {:error, err} ->
+            Logger.warning(
+              "supersede_current_plan: post_log failed task_id=#{task_id} plan_id=#{plan.id} error=#{inspect(err)}"
+            )
+
+            :ok
+        end
+    end
+  end
+
+  # Most-recent plan the executor is running (or was queued to run)
+  # against — `approved` (planner just approved, executor may not have
+  # picked it up yet) or `executing` (executor has picked it up and is
+  # in the middle of a stage). Used by supersede_current_plan/3 to find
+  # the plan we need to mark superseded. Note: this DOES NOT match
+  # `completed` — a completed plan corresponds to a task in `done`,
+  # which is handled by `reopen_with_feedback/3` instead.
+  defp latest_executing_plan(task_id) do
+    Plan
+    |> where([p], p.task_id == ^task_id and p.status in ["approved", "executing"])
     |> order_by([p], desc: p.version)
     |> limit(1)
     |> Repo.one()

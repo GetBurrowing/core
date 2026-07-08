@@ -299,6 +299,11 @@ defmodule PlatformWeb.TasksLive do
      # authored, so this state lives only as long as the modal is open.
      |> assign(:show_reopen_modal, false)
      |> assign(:reopen_reason, "")
+     # Return-to-planning modal (in-flight tasks). Mirrors the reopen
+     # pair above but targets `in_progress` / `in_review` / `deploying`
+     # and calls Tasks.supersede_current_plan/3.
+     |> assign(:show_supersede_modal, false)
+     |> assign(:supersede_reason, "")
      |> assign(:default_task_agent_id, default_task_agent_id)
      |> assign(
        :task_form,
@@ -1528,6 +1533,98 @@ defmodule PlatformWeb.TasksLive do
 
           {:error, reason} ->
             {:noreply, put_flash(socket, :error, "Reopen failed: #{inspect(reason)}")}
+        end
+    end
+  end
+
+  # ── Return-to-planning modal (supersede current plan) ───────────────────
+
+  def handle_event("open_supersede_modal", _params, socket) do
+    {:noreply,
+     socket
+     |> assign(:show_supersede_modal, true)
+     |> assign(:supersede_reason, "")}
+  end
+
+  def handle_event("close_supersede_modal", _params, socket) do
+    {:noreply,
+     socket
+     |> assign(:show_supersede_modal, false)
+     |> assign(:supersede_reason, "")}
+  end
+
+  def handle_event("supersede_reason_changed", params, socket) do
+    # Mirror `reopen_reason_changed`: accept either a top-level `reason`
+    # string or a `value` fallback so a wrapping-form shape change doesn't
+    # silently drop keystrokes.
+    reason =
+      cond do
+        is_binary(Map.get(params, "reason")) -> Map.get(params, "reason")
+        is_binary(Map.get(params, "value")) -> Map.get(params, "value")
+        true -> ""
+      end
+
+    {:noreply, assign(socket, :supersede_reason, reason)}
+  end
+
+  def handle_event("submit_supersede", params, socket) do
+    task = socket.assigns.selected_task
+
+    reason =
+      case Map.get(params, "reason") do
+        v when is_binary(v) -> v
+        _ -> socket.assigns.supersede_reason
+      end
+
+    cond do
+      is_nil(task) ->
+        {:noreply,
+         socket
+         |> assign(:show_supersede_modal, false)
+         |> assign(:supersede_reason, "")
+         |> put_flash(:error, "No task selected.")}
+
+      String.trim(reason || "") == "" ->
+        # Client-side submit is disabled while blank; keep the modal open
+        # and surface the validation error if the event still lands.
+        {:noreply,
+         put_flash(socket, :error, "A reason is required to return the task to planning.")}
+
+      true ->
+        by_actor_id = socket.assigns[:current_user_id]
+
+        case Tasks.supersede_current_plan(task.id, reason, by_actor_id) do
+          {:ok, _task} ->
+            {:noreply,
+             socket
+             |> assign(:show_supersede_modal, false)
+             |> assign(:supersede_reason, "")
+             |> put_flash(:info, "Task returned to planning.")
+             |> refresh_board()
+             |> reload_selected_task()}
+
+          {:error, :reason_required} ->
+            {:noreply,
+             put_flash(socket, :error, "A reason is required to return the task to planning.")}
+
+          {:error, :not_in_flight} ->
+            {:noreply,
+             socket
+             |> assign(:show_supersede_modal, false)
+             |> assign(:supersede_reason, "")
+             |> put_flash(:error, "Only in-flight tasks can be returned to planning.")
+             |> refresh_board()
+             |> reload_selected_task()}
+
+          {:error, :no_active_plan} ->
+            {:noreply,
+             socket
+             |> assign(:show_supersede_modal, false)
+             |> assign(:supersede_reason, "")
+             |> put_flash(:error, "Cannot return to planning: no active plan to supersede.")}
+
+          {:error, reason} ->
+            {:noreply, put_flash(socket, :error, "Return to planning failed: #{inspect(reason)}")}
         end
     end
   end

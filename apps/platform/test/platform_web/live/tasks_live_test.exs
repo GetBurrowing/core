@@ -5290,6 +5290,184 @@ defmodule PlatformWeb.TasksLiveTest do
     end
   end
 
+  describe "return-to-planning button + modal" do
+    # Drives a fresh task to a specific in-flight status with an approved
+    # plan in place so `Tasks.supersede_current_plan/3` has something to
+    # supersede. Mirrors `create_done_task_with_plan/2` but stops earlier
+    # in the transition chain.
+    defp create_task_with_plan_at_status(project, status, title \\ "Supersede Target Task")
+         when status in ~w(in_progress in_review deploying) do
+      task = create_task(project, %{title: title, status: "planning"})
+      {:ok, plan} = Tasks.create_plan(%{task_id: task.id, version: 1, status: "draft"})
+
+      {:ok, _stage} =
+        Tasks.create_stage(%{plan_id: plan.id, position: 1, name: "Stage 1", status: "pending"})
+
+      {:ok, plan} = Tasks.submit_plan_for_review(plan)
+      {:ok, _plan} = Tasks.approve_plan(plan, "system")
+
+      # approve_plan auto-transitions the task to `in_progress` via the
+      # dispatch gate; walk the rest of the way as needed.
+      t = Tasks.get_task_record(task.id)
+
+      case status do
+        "in_progress" ->
+          t
+
+        "in_review" ->
+          {:ok, t} = Tasks.transition_task_status(t, "in_review")
+          t
+
+        "deploying" ->
+          # Deploying gate requires a resolvable deploy target (added by
+          # 019f42db deploy-consolidation). Set an explicit target directly
+          # via the changeset so we don't have to plumb a project default.
+          {:ok, t} =
+            t
+            |> Task.changeset(%{deploy_target: "pr_merge"})
+            |> Repo.update()
+
+          {:ok, t} = Tasks.transition_task_status(t, "in_review")
+          {:ok, t} = Tasks.transition_task_status(t, "deploying")
+          t
+      end
+    end
+
+    for status <- ~w(in_progress in_review deploying) do
+      @tag status: status
+      test "Return-to-planning button is rendered for #{status} tasks", %{
+        conn: conn,
+        status: status
+      } do
+        project = create_project()
+        task = create_task_with_plan_at_status(project, status, "In-flight #{status}")
+
+        conn = authenticated_conn(conn)
+        {:ok, _view, html} = live(conn, ~p"/tasks/#{task.id}")
+
+        assert html =~ ~s|data-role="supersede-plan-button"|
+        assert html =~ "Return to planning"
+      end
+    end
+
+    for status <- ~w(backlog planning blocked done cancelled stack_pending) do
+      @tag status: status
+      test "Return-to-planning button is hidden for #{status} tasks", %{
+        conn: conn,
+        status: status
+      } do
+        project = create_project()
+        task = create_task(project, %{title: "Non-in-flight #{status}", status: status})
+
+        conn = authenticated_conn(conn)
+        {:ok, _view, html} = live(conn, ~p"/tasks/#{task.id}")
+
+        refute html =~ ~s|data-role="supersede-plan-button"|
+      end
+    end
+
+    test "clicking the Return-to-planning button opens the modal with an empty textarea",
+         %{conn: conn} do
+      project = create_project()
+      task = create_task_with_plan_at_status(project, "in_progress", "Open-supersede-modal task")
+
+      conn = authenticated_conn(conn)
+      {:ok, view, html} = live(conn, ~p"/tasks/#{task.id}")
+
+      # Modal not present until the button is clicked.
+      refute html =~ ~s|id="supersede-modal"|
+
+      html =
+        view
+        |> element(~s|button[data-role="supersede-plan-button"]|)
+        |> render_click()
+
+      assert html =~ ~s|id="supersede-modal"|
+      assert html =~ ~s|data-role="supersede-reason-textarea"|
+      # Submit is disabled while reason is blank.
+      assert html =~
+               ~r/<button[^>]*data-role="supersede-submit-button"[^>]*disabled/
+
+      # Hint visible on empty.
+      assert html =~ ~s|data-role="supersede-reason-hint"|
+    end
+
+    test "submitting a non-empty reason supersedes the plan and closes the modal", %{conn: conn} do
+      project = create_project()
+
+      task =
+        create_task_with_plan_at_status(project, "in_progress", "Submit-valid supersede task")
+
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
+
+      view
+      |> element(~s|button[data-role="supersede-plan-button"]|)
+      |> render_click()
+
+      html =
+        view
+        |> form(~s|#supersede-modal form|, %{
+          "reason" => "Scope changed — API contract flipped from v2 to v3"
+        })
+        |> render_submit()
+
+      assert html =~ "Task returned to planning."
+      # Modal closed.
+      refute html =~ ~s|id="supersede-modal"|
+
+      # Task back in planning, plan superseded with reason persisted.
+      reloaded = Tasks.get_task_detail(task.id)
+      assert reloaded.status == "planning"
+
+      latest = Tasks.latest_plan(task.id)
+      assert latest.status == "superseded"
+      assert latest.rejection_reason == "Scope changed — API contract flipped from v2 to v3"
+    end
+
+    test "submitting a blank reason keeps the modal open with an error flash", %{conn: conn} do
+      project = create_project()
+      task = create_task_with_plan_at_status(project, "in_progress", "Blank-supersede task")
+
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
+
+      view
+      |> element(~s|button[data-role="supersede-plan-button"]|)
+      |> render_click()
+
+      # Whitespace-only reason — server-side check rejects.
+      html =
+        view
+        |> form(~s|#supersede-modal form|, %{"reason" => "   \n\t  "})
+        |> render_submit()
+
+      assert html =~ "A reason is required to return the task to planning."
+      # Modal stays open.
+      assert html =~ ~s|id="supersede-modal"|
+
+      # Task remains in `in_progress`.
+      assert Tasks.get_task_record(task.id).status == "in_progress"
+    end
+
+    test "Cancel closes the modal without persisting", %{conn: conn} do
+      project = create_project()
+      task = create_task_with_plan_at_status(project, "in_progress", "Cancel-supersede task")
+
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
+
+      view
+      |> element(~s|button[data-role="supersede-plan-button"]|)
+      |> render_click()
+
+      html = render_click(view, "close_supersede_modal")
+
+      refute html =~ ~s|id="supersede-modal"|
+      assert Tasks.get_task_record(task.id).status == "in_progress"
+    end
+  end
+
   describe "detail panel edit-mode toggle (v2 stage 1)" do
     test "default state: detail panel renders with edit_mode=false and pencil button present",
          %{conn: conn} do
