@@ -187,6 +187,15 @@ if config_env() == :prod do
 
   host = System.get_env("PHX_HOST") || "example.com"
 
+  # MEET_HOST is a sibling domain (e.g. "meet.example.com") that serves the
+  # guest-meeting entry surface. It's a distinct hostname from PHX_HOST so
+  # guests never see the primary Suite chrome, but LiveView WebSocket upgrades
+  # still terminate against the same Phoenix endpoint. Add it to check_origin
+  # so the socket handshake accepts requests originating from that hostname.
+  # Unset → no guest-meeting origin allowlisted; guest LiveView sockets from
+  # meet.<host> get rejected by Phoenix.Socket.Transport.check_origin/2.
+  meet_host = System.get_env("MEET_HOST")
+
   config :platform, :dns_cluster_query, System.get_env("DNS_CLUSTER_QUERY")
 
   config :platform, PlatformWeb.Endpoint,
@@ -194,11 +203,12 @@ if config_env() == :prod do
     http: [
       ip: {0, 0, 0, 0, 0, 0, 0, 0}
     ],
-    check_origin: [
-      "https://#{host}",
-      "https://www.#{host}",
-      "//*.#{host}"
-    ],
+    check_origin:
+      [
+        "https://#{host}",
+        "https://www.#{host}",
+        "//*.#{host}"
+      ] ++ if(meet_host, do: ["https://#{meet_host}"], else: []),
     secret_key_base: secret_key_base
 end
 

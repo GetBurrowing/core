@@ -80,6 +80,7 @@ The app will be available at [http://localhost:4000](http://localhost:4000).
 | `SECRET_KEY_BASE` | Phoenix secret key (generate with `mix phx.gen.secret`) | Dev default provided |
 | `AGENT_WORKSPACE_PATH` | Path to the agent workspace directory | — |
 | `PHX_HOST` | Production hostname | `localhost` |
+| `MEET_HOST` | Optional sibling hostname for the guest-meeting entry surface (e.g. `meet.example.com`). Added to `check_origin` so LiveView WebSocket upgrades from this hostname succeed. Unset → guest-meeting sockets from a sibling host are rejected. | — |
 | `PORT` | HTTP port | `4000` |
 
 ### Dev Login
