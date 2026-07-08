@@ -133,4 +133,19 @@ defmodule Platform.Responsibilities.Handlers.IntentClassifyTest do
       assert IntentClassify.key() == "meetings.intent_classify"
     end
   end
+
+  describe "template_slug/0" do
+    test "returns the canonical prompt template slug" do
+      assert IntentClassify.template_slug() == "meetings.intent_classify.v1"
+    end
+
+    test "matches the registered spec's default_prompt_template — drift guard" do
+      # Load-bearing invariant: the handler's declared template slug MUST
+      # match the value it advertises via register/0.default_prompt_template.
+      # If someone renames one without the other, the router would 404 at
+      # render time. Same protection pattern as Designer handlers.
+      [spec] = IntentClassify.register()
+      assert spec.default_prompt_template == IntentClassify.template_slug()
+    end
+  end
 end

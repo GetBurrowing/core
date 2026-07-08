@@ -91,11 +91,16 @@ defmodule Platform.Responsibilities.Handlers.IntentClassify do
 
   @key "meetings.intent_classify"
   @feature "meetings"
+  @template_slug "meetings.intent_classify.v1"
   @runtime_task "019f2452-0210"
 
   @doc "Canonical key for this responsibility."
   @spec key() :: String.t()
   def key, do: @key
+
+  @doc "Canonical prompt template slug backing this responsibility."
+  @spec template_slug() :: String.t()
+  def template_slug, do: @template_slug
 
   @impl true
   def register do
@@ -116,7 +121,7 @@ defmodule Platform.Responsibilities.Handlers.IntentClassify do
           "confidence" => "float",
           "dedupe_key" => "string"
         },
-        default_prompt_template: "meetings.intent_classify.v1",
+        default_prompt_template: @template_slug,
         cost_profile: "high_freq_low_cost",
         metadata: %{
           "owner" => "platform.meetings",

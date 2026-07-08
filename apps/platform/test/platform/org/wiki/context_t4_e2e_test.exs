@@ -443,7 +443,16 @@ defmodule Platform.Org.Wiki.ContextT4E2ETest do
       # derived table with the migration's own idempotent backfill for
       # description → uuid references. Semantic embeddings ride the
       # memory-service substrate in stage 2; nothing pgvector lands here.
-      "20260708120000_add_search_vector_and_task_references_to_tasks.exs"
+      "20260708120000_add_search_vector_and_task_references_to_tasks.exs",
+      # Meeting Producer's `meetings.intent_classify.v1` prompt template
+      # (task 019f2451-b627) stage 1: seeds the classifier prompt row
+      # that `Handlers.IntentClassify.register/0` already references via
+      # `default_prompt_template:`. Small local classifier with closed
+      # intent enum, closed target_role enum, dedupe_key normalization
+      # rules, and 5 worked examples including a paraphrase-stability
+      # pair. Idempotent upsert on slug; drift-guarded against the
+      # handler's `template_slug/0` accessor (stage 2).
+      "20260707120000_seed_prompt_template_intent_classify.exs"
     ]
 
     defp t4_root, do: Mix.Project.project_file() |> Path.dirname()
