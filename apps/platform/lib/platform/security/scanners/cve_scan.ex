@@ -50,6 +50,7 @@ defmodule Platform.Security.Scanners.CveScan do
   require Logger
 
   alias Platform.Security.FindingFiler
+  alias Platform.Security.LlmEnrichment
   alias Platform.Security.Scanners.CveScan.LockfileParser
 
   @stale_days_default 30
@@ -179,12 +180,26 @@ defmodule Platform.Security.Scanners.CveScan do
           |> Enum.zip(results)
           |> Enum.flat_map(fn {entry, result} -> extract_findings(entry, result) end)
           |> Enum.map(&Map.put(&1, :project_id, project_id))
+          |> Enum.map(&enrich/1)
 
         # Stage 5: batch path applies the > threshold digest rule so a
         # 20-CVE scan collapses into one weekly rollup task instead of
         # burying the board. Below threshold falls through to per-finding
-        # `file_finding/1` with its dedup gate.
+        # `file_finding/1` with its dedup gate. v2 stage 3 (LLM
+        # enrichment) sits between finding-build and file above.
         {:ok, FindingFiler.file_findings(findings)}
+    end
+  end
+
+  # v2 stage 3 (ADR-0043): LLM enrichment seam. `enrich_finding/2`
+  # returns `{:enriched, finding}` when a `runtime_type: "external"`
+  # agent is pinned to `security.cve_scan` AND the model returned
+  # closed-shape JSON, otherwise `{:noop, finding}`. Both branches
+  # yield the finding — the case here just unwraps the tag.
+  defp enrich(finding) do
+    case LlmEnrichment.enrich_finding(finding, "security.cve_scan") do
+      {:enriched, f} -> f
+      {:noop, f} -> f
     end
   end
 

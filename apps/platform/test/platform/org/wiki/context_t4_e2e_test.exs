@@ -482,7 +482,14 @@ defmodule Platform.Org.Wiki.ContextT4E2ETest do
       # architecture.cron_sweep.v1 template body from the placeholder
       # stage-1 seed to the real weekly cron-sweep prompt. Mirrors the
       # sibling stage-3 / stage-4 migrations at 20260708123000 / 124000.
-      "20260708125000_force_update_architect_cron_sweep_template.exs"
+      "20260708125000_force_update_architect_cron_sweep_template.exs",
+      # Task 019f3e8e-4406 v2 stage 1 — Security Guard prompt templates
+      # (`security.cve_scan.v1`, `security.code_audit.v1`,
+      # `security.deploy_audit.v1`, `security.secret_leak.v1`). The
+      # responsibility rows are flipped to point at these slugs in v2
+      # stage 2; the seed migration lands here so the templates are
+      # editable via `/admin/prompts` as soon as v2 stage 1 deploys.
+      "20260708130000_seed_prompt_templates_security_guard.exs"
     ]
 
     defp t4_root, do: Mix.Project.project_file() |> Path.dirname()

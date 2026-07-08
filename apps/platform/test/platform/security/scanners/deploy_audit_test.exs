@@ -422,4 +422,50 @@ defmodule Platform.Security.Scanners.DeployAuditTest do
   end
 
   defp u, do: System.unique_integer([:positive])
+
+  # ── LLM enrichment seam (v2 stage 3) ───────────────────────────────────
+
+  describe "run_scan/2 — LLM enrichment seam" do
+    alias Platform.Test.SecurityEnrichmentHelper
+
+    test "external agent pinned to security.deploy_audit enriches the finding", %{roots: r} do
+      # Emit a container-missing-autoupdate finding.
+      write!(r.containers, "core-platform.container", """
+      [Unit]
+      Description=Core Platform
+
+      [Container]
+      Image=ghcr.io/example/core:latest
+      PublishPort=127.0.0.1:4000:4000
+      """)
+
+      _agent = SecurityEnrichmentHelper.install_llm_stub!("security.deploy_audit")
+
+      SecurityEnrichmentHelper.plant_canned!(
+        "Container drifts on security patches without AutoUpdate=registry",
+        "high",
+        [
+          "Add AutoUpdate=registry to core-platform.container",
+          "Enable podman-auto-update.timer"
+        ]
+      )
+
+      capture_log(fn ->
+        assert {:ok, filed} = DeployAudit.run_scan(%{}, %{})
+        assert filed >= 1
+      end)
+
+      # At least one call — a fixture might produce > 1 finding, so
+      # ≥ 1 not == 1 (env probe also runs).
+      assert SecurityEnrichmentHelper.call_count() >= 1
+
+      tasks = list_deploy_tasks()
+
+      enriched =
+        Enum.find(tasks, fn t -> t.metadata["security_enriched"] == true end)
+
+      assert enriched
+      assert enriched.description =~ "podman-auto-update.timer"
+    end
+  end
 end

@@ -325,6 +325,46 @@ defmodule Platform.Security.Scanners.CodeAuditTest do
     end
   end
 
+  # ── LLM enrichment seam (v2 stage 3) ───────────────────────────────────
+
+  describe "run_scan/2 — LLM enrichment seam" do
+    alias Platform.Test.SecurityEnrichmentHelper
+
+    test "external agent pinned to security.code_audit enriches the finding" do
+      install_repo_root!(%{
+        "lib/vulnerable.ex" => """
+        defmodule Vulnerable do
+          def find(user) do
+            Repo.query("SELECT * FROM users WHERE id = '\#{user.id}'")
+          end
+        end
+        """
+      })
+
+      _agent = SecurityEnrichmentHelper.install_llm_stub!("security.code_audit")
+
+      SecurityEnrichmentHelper.plant_canned!(
+        "SQL injection risk in lib/vulnerable.ex",
+        "critical",
+        ["Parameterize with $1", "Add regression test"]
+      )
+
+      capture_log(fn ->
+        assert {:ok, 1} = CodeAudit.run_scan(%{}, %{})
+      end)
+
+      assert SecurityEnrichmentHelper.call_count() == 1
+
+      [task] = list_audit_tasks()
+      assert task.metadata["security_enriched"] == true
+
+      assert task.metadata["security_enrichment_summary"] ==
+               "SQL injection risk in lib/vulnerable.ex"
+
+      assert task.description =~ "Parameterize with $1"
+    end
+  end
+
   # ── ignore prefixes ─────────────────────────────────────────────────
 
   describe "run_scan/2 — ignore prefixes" do

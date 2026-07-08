@@ -21,6 +21,10 @@ defmodule Platform.Responsibilities.Handlers.SecurityCveScan do
     * `context_provided` — `[]` (scanner runtime gathers its own
       lockfile / manifest context)
     * `cost_profile` — `low_freq_capable`
+    * `default_prompt_template` — `"security.cve_scan.v1"` (LLM-facing
+      enrichment layer; deterministic scanner still produces the raw
+      finding, template refines summary + priority + remediation. See
+      `Platform.Security.LlmEnrichment` in stage 3.)
 
   ## Metadata
 
@@ -50,6 +54,7 @@ defmodule Platform.Responsibilities.Handlers.SecurityCveScan do
   @key "security.cve_scan"
   @feature "security"
   @topic "platform.security.sweeper_only"
+  @template_slug "security.cve_scan.v1"
   @runtime_task "019f3e8e-4406"
 
   @doc "Canonical key for this responsibility."
@@ -59,6 +64,10 @@ defmodule Platform.Responsibilities.Handlers.SecurityCveScan do
   @doc "Canonical Sweeper-only topic — no publisher ever broadcasts to it."
   @spec topic() :: String.t()
   def topic, do: @topic
+
+  @doc "Canonical prompt template slug backing this responsibility."
+  @spec template_slug() :: String.t()
+  def template_slug, do: @template_slug
 
   @impl true
   def register do
@@ -73,7 +82,7 @@ defmodule Platform.Responsibilities.Handlers.SecurityCveScan do
         output_contract: %{
           "findings" => "list[map]"
         },
-        default_prompt_template: nil,
+        default_prompt_template: @template_slug,
         cost_profile: "low_freq_capable",
         metadata: %{
           "owner" => "platform.security",

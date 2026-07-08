@@ -46,6 +46,7 @@ defmodule Platform.Security.Scanners.DeployAudit do
   require Logger
 
   alias Platform.Security.FindingFiler
+  alias Platform.Security.LlmEnrichment
 
   @default_traefik_root "~/docker/traefik3/rules"
   @default_containers_root "~/.config/containers/systemd"
@@ -727,11 +728,22 @@ defmodule Platform.Security.Scanners.DeployAudit do
 
   # Stage 5: batch path applies the > threshold digest rule so a
   # sprawling scan (many missing env vars across many targets) rolls up
-  # into one weekly digest task.
+  # into one weekly digest task. v2 stage 3: LLM enrichment sits between
+  # add-project-id and file — noop when no external-runtime agent is
+  # pinned.
   defp file_all(findings, project_id) do
     findings
     |> Enum.map(&Map.put(&1, :project_id, project_id))
+    |> Enum.map(&enrich/1)
     |> FindingFiler.file_findings()
+  end
+
+  # v2 stage 3 (ADR-0043): LLM enrichment seam.
+  defp enrich(finding) do
+    case LlmEnrichment.enrich_finding(finding, "security.deploy_audit") do
+      {:enriched, f} -> f
+      {:noop, f} -> f
+    end
   end
 
   defp deploy_config(key, default) do

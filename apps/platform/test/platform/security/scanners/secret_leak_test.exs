@@ -298,4 +298,44 @@ defmodule Platform.Security.Scanners.SecretLeakTest do
       assert Regex.match?(oai_regex, @openai_key)
     end
   end
+
+  # ── LLM enrichment seam (v2 stage 3) ───────────────────────────────────
+
+  describe "run_scan/2 — LLM enrichment seam" do
+    alias Platform.Test.SecurityEnrichmentHelper
+
+    @tag :tmp_dir
+    test "external agent pinned to security.secret_leak enriches the finding",
+         %{tmp_dir: tmp_dir} do
+      project = create_security_project!()
+      put_security_config(project.id)
+      put_repo_root(tmp_dir)
+
+      write_file!(tmp_dir, "config/leaked.exs", ~s|api_key = "#{@openai_key}"|)
+
+      _agent = SecurityEnrichmentHelper.install_llm_stub!("security.secret_leak")
+
+      SecurityEnrichmentHelper.plant_canned!(
+        "OpenAI API key leaked at config/leaked.exs (working tree only)",
+        "critical",
+        [
+          "Revoke the key at OpenAI dashboard",
+          "Rotate OPENAI_API_KEY",
+          "Add config/leaked.exs to .gitignore"
+        ]
+      )
+
+      assert {:ok, 1} = SecretLeak.run_scan(%{}, %{})
+
+      assert SecurityEnrichmentHelper.call_count() == 1
+
+      [task] = Tasks.list_tasks_by_project(project.id)
+      assert task.metadata["security_enriched"] == true
+
+      assert task.metadata["security_enrichment_summary"] ==
+               "OpenAI API key leaked at config/leaked.exs (working tree only)"
+
+      assert task.description =~ "Rotate OPENAI_API_KEY"
+    end
+  end
 end

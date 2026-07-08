@@ -570,6 +570,101 @@ defmodule Platform.Security.Scanners.CveScanTest do
     end
   end
 
+  # ── LLM enrichment seam (v2 stage 3) ───────────────────────────────────
+
+  describe "run_scan/2 — LLM enrichment seam" do
+    alias Platform.Test.SecurityEnrichmentHelper
+
+    test "when an external agent is pinned to security.cve_scan, the finding is enriched" do
+      install_repo_root!(%{"mix.lock" => fixture!("mix.lock.critical")})
+
+      # Pin an external-runtime agent + plant a canned LLM response.
+      _agent = SecurityEnrichmentHelper.install_llm_stub!("security.cve_scan")
+
+      SecurityEnrichmentHelper.plant_canned!(
+        "Enriched: RCE in plug 1.14.0 exposed at HTTP layer",
+        "critical",
+        ["mix deps.update plug", "mix test", "redeploy"]
+      )
+
+      Process.put(
+        :mock_osv_response,
+        {:ok,
+         osv_results(%{
+           "plug" => [
+             %{
+               "id" => "GHSA-enrich",
+               "aliases" => ["CVE-2024-77778"],
+               "database_specific" => %{"severity" => "HIGH"},
+               "affected" => [
+                 %{
+                   "package" => %{"name" => "plug", "ecosystem" => "Hex"},
+                   "ranges" => [%{"events" => [%{"fixed" => "1.14.1"}]}]
+                 }
+               ]
+             }
+           ]
+         })}
+      )
+
+      capture_log(fn ->
+        assert {:ok, 1} = CveScan.run_scan(%{}, %{})
+      end)
+
+      # LLM was called exactly once (one finding → one enrichment).
+      assert SecurityEnrichmentHelper.call_count() == 1
+
+      [task] = list_cve_tasks()
+      # Enrichment metadata is present.
+      assert task.metadata["security_enriched"] == true
+
+      assert task.metadata["security_enrichment_summary"] ==
+               "Enriched: RCE in plug 1.14.0 exposed at HTTP layer"
+
+      assert task.metadata["security_enrichment_priority"] == "critical"
+
+      # Priority was upgraded high → critical via the LLM's judgment.
+      assert task.priority == "critical"
+
+      # Enriched description carries the summary + remediation.
+      assert task.description =~ "Security Guard summary"
+      assert task.description =~ "mix deps.update plug"
+    end
+
+    test "when no agent is pinned, the finding files with the raw scanner shape" do
+      install_repo_root!(%{"mix.lock" => fixture!("mix.lock.critical")})
+
+      Process.put(
+        :mock_osv_response,
+        {:ok,
+         osv_results(%{
+           "plug" => [
+             %{
+               "id" => "GHSA-noenrich",
+               "aliases" => ["CVE-2024-88889"],
+               "database_specific" => %{"severity" => "CRITICAL"},
+               "affected" => [
+                 %{
+                   "package" => %{"name" => "plug", "ecosystem" => "Hex"},
+                   "ranges" => [%{"events" => [%{"fixed" => "1.14.1"}]}]
+                 }
+               ]
+             }
+           ]
+         })}
+      )
+
+      capture_log(fn ->
+        assert {:ok, 1} = CveScan.run_scan(%{}, %{})
+      end)
+
+      [task] = list_cve_tasks()
+      # No enrichment metadata — the noop path preserved the v1 shape.
+      refute Map.has_key?(task.metadata, "security_enriched")
+      refute Map.has_key?(task.metadata, "security_enrichment_summary")
+    end
+  end
+
   # ── helper ────────────────────────────────────────────────────────────
 
   defp list_cve_tasks do

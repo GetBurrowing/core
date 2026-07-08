@@ -44,7 +44,7 @@ defmodule Platform.Responsibilities.Handlers.SecurityCveScanTest do
 
       assert spec.scope == "per_org"
       assert spec.context_provided == []
-      assert spec.default_prompt_template == nil
+      assert spec.default_prompt_template == "security.cve_scan.v1"
       assert spec.cost_profile == "low_freq_capable"
     end
 
@@ -120,6 +120,21 @@ defmodule Platform.Responsibilities.Handlers.SecurityCveScanTest do
       [spec] = SecurityCveScan.register()
       assert SecurityCveScan.topic() == spec.trigger_config["topic"]
       assert SecurityCveScan.topic() == "platform.security.sweeper_only"
+    end
+  end
+
+  describe "template_slug/0" do
+    test "returns the canonical prompt template slug" do
+      assert SecurityCveScan.template_slug() == "security.cve_scan.v1"
+    end
+
+    test "matches the registered spec's default_prompt_template — drift guard" do
+      # Load-bearing invariant: the handler's declared template slug MUST
+      # match the value it advertises via register/0.default_prompt_template.
+      # If someone renames one without the other, LlmEnrichment would 404 at
+      # render time. Same protection pattern as IntentClassify + Designer.
+      [spec] = SecurityCveScan.register()
+      assert spec.default_prompt_template == SecurityCveScan.template_slug()
     end
   end
 end

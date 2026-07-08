@@ -42,6 +42,7 @@ defmodule Platform.Security.Scanners.CodeAudit do
   require Logger
 
   alias Platform.Security.FindingFiler
+  alias Platform.Security.LlmEnrichment
   alias Platform.Security.Scanners.CodeAudit.AstProbes
   alias Platform.Security.Scanners.CodeAudit.PatternLoader
 
@@ -272,11 +273,23 @@ defmodule Platform.Security.Scanners.CodeAudit do
   # Stage 5: use the batch path so a big pattern rubric collapses into a
   # weekly digest task when the count exceeds `finding_digest_threshold`.
   # Below the threshold falls through to per-finding `file_finding/1` with
-  # its dedup gate.
+  # its dedup gate. v2 stage 3: LLM enrichment sits between add-project-id
+  # and file — noop when no external-runtime agent is pinned.
   defp file_all(findings, project_id) do
     findings
     |> Enum.map(&Map.put(&1, :project_id, project_id))
+    |> Enum.map(&enrich/1)
     |> FindingFiler.file_findings()
+  end
+
+  # v2 stage 3 (ADR-0043): LLM enrichment seam. Mirrors the CVE
+  # scanner's `enrich/1` — the responsibility key is the only thing
+  # that varies per scanner.
+  defp enrich(finding) do
+    case LlmEnrichment.enrich_finding(finding, "security.code_audit") do
+      {:enriched, f} -> f
+      {:noop, f} -> f
+    end
   end
 
   defp configured_project_id do

@@ -38,7 +38,7 @@ defmodule Platform.Responsibilities.Handlers.SecurityDeployAuditTest do
       assert spec.trigger_config == %{"topic" => "platform.security.sweeper_only"}
       assert spec.scope == "per_org"
       assert spec.context_provided == []
-      assert spec.default_prompt_template == nil
+      assert spec.default_prompt_template == "security.deploy_audit.v1"
       assert spec.cost_profile == "low_freq_capable"
     end
 
@@ -103,6 +103,21 @@ defmodule Platform.Responsibilities.Handlers.SecurityDeployAuditTest do
 
     test "topic/0 matches the registered null topic" do
       assert SecurityDeployAudit.topic() == "platform.security.sweeper_only"
+    end
+  end
+
+  describe "template_slug/0" do
+    test "returns the canonical prompt template slug" do
+      assert SecurityDeployAudit.template_slug() == "security.deploy_audit.v1"
+    end
+
+    test "matches the registered spec's default_prompt_template — drift guard" do
+      # Load-bearing invariant: the handler's declared template slug MUST
+      # match the value it advertises via register/0.default_prompt_template.
+      # If someone renames one without the other, LlmEnrichment would 404 at
+      # render time. Same protection pattern as IntentClassify + Designer.
+      [spec] = SecurityDeployAudit.register()
+      assert spec.default_prompt_template == SecurityDeployAudit.template_slug()
     end
   end
 end

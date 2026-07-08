@@ -40,6 +40,7 @@ defmodule Platform.Security.Scanners.SecretLeak do
   require Logger
 
   alias Platform.Security.FindingFiler
+  alias Platform.Security.LlmEnrichment
 
   @default_max_bytes_per_file 1_048_576
   @default_max_git_log_bytes 20_971_520
@@ -100,6 +101,7 @@ defmodule Platform.Security.Scanners.SecretLeak do
         (working_findings ++ history_findings)
         |> Enum.uniq_by(& &1.fingerprint)
         |> Enum.map(&Map.put(&1, :project_id, project_id))
+        |> Enum.map(&enrich/1)
 
       Logger.info(
         "[Security.Scanners.SecretLeak] scanned root=#{repo_root} findings=#{length(all)}"
@@ -120,6 +122,15 @@ defmodule Platform.Security.Scanners.SecretLeak do
       Logger.error("[Security.Scanners.SecretLeak] scanner raised — #{Exception.message(error)}")
 
       {:ok, 0}
+  end
+
+  # v2 stage 3 (ADR-0043): LLM enrichment seam. Noop when no
+  # external-runtime agent is pinned to `security.secret_leak`.
+  defp enrich(finding) do
+    case LlmEnrichment.enrich_finding(finding, "security.secret_leak") do
+      {:enriched, f} -> f
+      {:noop, f} -> f
+    end
   end
 
   # ── working-tree scan ─────────────────────────────────────────────────

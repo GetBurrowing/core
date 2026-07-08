@@ -22,6 +22,10 @@ defmodule Platform.Responsibilities.Handlers.SecurityDeployAudit do
     * `context_provided` — `[]`
     * `cost_profile` — `low_freq_capable`
     * `cadence` (metadata) — `"0 3 * * 1"` (weekly Monday 03:00 UTC)
+    * `default_prompt_template` — `"security.deploy_audit.v1"` (LLM-facing
+      enrichment layer; deterministic scanner still produces the raw
+      finding, template refines summary + priority + remediation. See
+      `Platform.Security.LlmEnrichment` in stage 3.)
   """
   @behaviour Platform.Responsibilities.Provider
 
@@ -30,6 +34,7 @@ defmodule Platform.Responsibilities.Handlers.SecurityDeployAudit do
   @key "security.deploy_audit"
   @feature "security"
   @topic "platform.security.sweeper_only"
+  @template_slug "security.deploy_audit.v1"
   @runtime_task "019f3e8e-4406"
 
   @doc "Canonical key for this responsibility."
@@ -39,6 +44,10 @@ defmodule Platform.Responsibilities.Handlers.SecurityDeployAudit do
   @doc "Canonical Sweeper-only topic — no publisher ever broadcasts to it."
   @spec topic() :: String.t()
   def topic, do: @topic
+
+  @doc "Canonical prompt template slug backing this responsibility."
+  @spec template_slug() :: String.t()
+  def template_slug, do: @template_slug
 
   @impl true
   def register do
@@ -53,7 +62,7 @@ defmodule Platform.Responsibilities.Handlers.SecurityDeployAudit do
         output_contract: %{
           "findings" => "list[map]"
         },
-        default_prompt_template: nil,
+        default_prompt_template: @template_slug,
         cost_profile: "low_freq_capable",
         metadata: %{
           "owner" => "platform.security",

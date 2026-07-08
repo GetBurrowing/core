@@ -22,6 +22,10 @@ defmodule Platform.Responsibilities.Handlers.SecuritySecretLeak do
     * `cadence` (metadata) — `"0 4 * * *"` (daily 04:00 UTC — this is
       the only Security Guard scan that runs daily; the other three
       are weekly because their signal changes on a slower timescale)
+    * `default_prompt_template` — `"security.secret_leak.v1"` (LLM-facing
+      enrichment layer; deterministic scanner still produces the raw
+      finding, template refines summary + priority + remediation. See
+      `Platform.Security.LlmEnrichment` in stage 3.)
   """
   @behaviour Platform.Responsibilities.Provider
 
@@ -30,6 +34,7 @@ defmodule Platform.Responsibilities.Handlers.SecuritySecretLeak do
   @key "security.secret_leak"
   @feature "security"
   @topic "platform.security.sweeper_only"
+  @template_slug "security.secret_leak.v1"
   @runtime_task "019f3e8e-4406"
 
   @doc "Canonical key for this responsibility."
@@ -39,6 +44,10 @@ defmodule Platform.Responsibilities.Handlers.SecuritySecretLeak do
   @doc "Canonical Sweeper-only topic — no publisher ever broadcasts to it."
   @spec topic() :: String.t()
   def topic, do: @topic
+
+  @doc "Canonical prompt template slug backing this responsibility."
+  @spec template_slug() :: String.t()
+  def template_slug, do: @template_slug
 
   @impl true
   def register do
@@ -53,7 +62,7 @@ defmodule Platform.Responsibilities.Handlers.SecuritySecretLeak do
         output_contract: %{
           "findings" => "list[map]"
         },
-        default_prompt_template: nil,
+        default_prompt_template: @template_slug,
         cost_profile: "low_freq_capable",
         metadata: %{
           "owner" => "platform.security",
