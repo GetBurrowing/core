@@ -39,6 +39,7 @@ defmodule PlatformWeb.GuestMeetingLive do
 
   alias Platform.Meetings
   alias Platform.Meetings.GuestInvite
+  alias Platform.Meetings.PubSub, as: MeetingsPubSub
 
   @impl true
   def mount(%{"slug" => slug, "token" => token}, _session, socket) do
@@ -112,6 +113,8 @@ defmodule PlatformWeb.GuestMeetingLive do
          |> assign(:room_name, bundle.room_name)
          |> assign(:livekit_url, bundle.livekit_url)
          |> assign(:display_name, display_name)
+         |> assign(:remote_count, initial_remote_count(meeting))
+         |> subscribe_meeting_presence(meeting)
          |> push_join_event(bundle, meeting)}
 
       {:error, reason} ->
@@ -165,6 +168,8 @@ defmodule PlatformWeb.GuestMeetingLive do
              |> assign(:room_name, bundle.room_name)
              |> assign(:livekit_url, bundle.livekit_url)
              |> assign(:display_name, trimmed)
+             |> assign(:remote_count, initial_remote_count(meeting))
+             |> subscribe_meeting_presence(meeting)
              |> push_join_event(bundle, meeting)}
 
           {:error, :livekit_not_configured} ->
@@ -196,5 +201,90 @@ defmodule PlatformWeb.GuestMeetingLive do
       room_name: bundle.room_name,
       space_slug: meeting.chat_space && meeting.chat_space.slug
     })
+  end
+
+  # ── Live meeting presence ─────────────────────────────────────────────────
+  #
+  # Guests subscribe to the same presence surface `MeetingLive` uses (see
+  # `meeting_live.ex:230`). The per-space presence topic carries
+  # `{:meeting_presence_update, _}` for every LiveKit join/leave — even
+  # before/after a room row exists — so the guest's `:remote_count` stays
+  # live without a page reload. When a room is active at mount, we also
+  # subscribe to the per-room topic so the granular
+  # `{:participant_joined,_}` / `{:participant_left,_}` /
+  # `{:participant_updated,_}` events flow.
+  #
+  # The guest's own LiveKit webhook lands a Meetings.Participant row (guest
+  # identity `"guest:<random>"` — no `user_id`/`agent_id`), so
+  # `active_participant_count/1` counts the guest too. `:remote_count` =
+  # count minus 1 (self), clamped to 0.
+  defp subscribe_meeting_presence(socket, %{chat_space_id: nil}), do: socket
+
+  defp subscribe_meeting_presence(socket, meeting) do
+    if connected?(socket) do
+      MeetingsPubSub.subscribe_presence(meeting.chat_space_id)
+
+      case Meetings.get_active_room(meeting.chat_space_id) do
+        %{id: room_id} -> MeetingsPubSub.subscribe_room(room_id)
+        _ -> :ok
+      end
+    end
+
+    socket
+  end
+
+  # Initial count on transition into `:in_meeting`. Before the LiveKit
+  # webhook lands the guest's own participant row, `active_participant_count/1`
+  # already reflects everyone else in the room; if it's been landed, we
+  # subtract 1 for self. `max(_, 0)` keeps the assign at 0 for solo/empty
+  # rooms — see `refresh_remote_count/1` for the update path.
+  defp initial_remote_count(%{chat_space_id: nil}), do: 0
+
+  defp initial_remote_count(meeting) do
+    max(Meetings.active_participant_count(meeting.chat_space_id) - 1, 0)
+  end
+
+  # Presence deltas on the per-room topic. Same fan-out as
+  # `MeetingLive.handle_info/2` at `meeting_live.ex:760-770`.
+  @impl true
+  def handle_info({:participant_joined, _p}, socket) do
+    {:noreply, refresh_remote_count(socket)}
+  end
+
+  def handle_info({:participant_left, _p}, socket) do
+    {:noreply, refresh_remote_count(socket)}
+  end
+
+  def handle_info({:participant_updated, _p}, socket) do
+    {:noreply, refresh_remote_count(socket)}
+  end
+
+  # Per-space presence update. Mirrors `meeting_live.ex:778-791`: if a room
+  # has since become active, subscribe to its per-room topic so the granular
+  # events keep flowing. Then refresh the count.
+  def handle_info({:meeting_presence_update, _payload}, socket) do
+    case socket.assigns[:meeting] do
+      %{chat_space_id: space_id} when is_binary(space_id) ->
+        case Meetings.get_active_room(space_id) do
+          %{id: room_id} -> MeetingsPubSub.subscribe_room(room_id)
+          _ -> :ok
+        end
+
+      _ ->
+        :ok
+    end
+
+    {:noreply, refresh_remote_count(socket)}
+  end
+
+  defp refresh_remote_count(socket) do
+    case socket.assigns[:meeting] do
+      %{chat_space_id: space_id} when is_binary(space_id) ->
+        count = max(Meetings.active_participant_count(space_id) - 1, 0)
+        assign(socket, :remote_count, count)
+
+      _ ->
+        socket
+    end
   end
 end

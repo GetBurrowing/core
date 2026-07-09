@@ -89,16 +89,23 @@
         </div>
       </div>
     <% @state == :in_meeting -> %>
-      <%!-- Minimal video stage. `MeetingClient` is the same hook the
-           authenticated `/meetings/:slug` surface uses (see
-           meeting_live.html.heex:42-49); it listens for the `join-meeting`
-           push_event this LV queued during mount and drives the LiveKit
-           room against `window.__livekit_room`.
+      <%!-- Guest video surface (task 019f43da stage 2). Replaces the
+           earlier "Connecting to X" placeholder card with a real
+           MeetingClient-driven layout: self-tile dock + JS-populated
+           remote gallery + waiting hint gated on `@remote_count`.
+
+           `MeetingClient` is the same hook the authenticated
+           `/meetings/:slug` surface uses (see meeting_live.html.heex:42-49);
+           it listens for the `join-meeting` push_event this LV queued
+           during mount and drives the LiveKit room against
+           `window.__livekit_room`.
 
            `data-camera-enabled` / `data-mic-enabled` mirror the auth path
            so a reconnect adopts the same media intent without needing a
-           fresh LV push. `#meeting-media` is the audio sink `attachTrack`
-           routes remote `<audio>` elements to. --%>
+           fresh LV push. `#meeting-media` (renamed from
+           `#guest-meeting-media` — see media_container() lookup in
+           meeting_client.js:684) is the audio sink `attachTrack` routes
+           remote `<audio>` elements to. --%>
       <div class="flex h-dvh flex-col bg-base-100 text-base-content">
         <header class="flex h-12 flex-shrink-0 items-center gap-3 border-b border-base-300 bg-base-200/60 px-3">
           <div class="flex min-w-0 items-center gap-2">
@@ -119,24 +126,77 @@
           data-camera-enabled="true"
           data-mic-enabled="true"
           data-guest="true"
+          data-room-name={@room_name}
+          data-identity={@identity}
         >
         </div>
-        <div id="guest-meeting-media" class="hidden" phx-update="ignore"></div>
+        <%!-- Media sink. Renamed from `guest-meeting-media` so
+             `MeetingClient._mediaContainer()` (meeting_client.js:684) finds
+             it via `document.getElementById("meeting-media")` instead of
+             falling back to `document.body`. --%>
+        <div id="meeting-media" class="hidden" phx-update="ignore"></div>
 
-        <main class="flex flex-1 flex-col items-center justify-center gap-4 px-4 py-8">
-          <div
-            id="guest-meeting-stage"
-            data-role="guest-meeting-stage"
-            data-room-name={@room_name}
-            data-identity={@identity}
-            class="flex w-full max-w-2xl flex-col items-center gap-3 rounded-lg bg-base-200/40 p-8 text-center"
-          >
-            <span class="hero-signal size-8 text-primary" aria-hidden="true"></span>
-            <h2 class="text-lg font-semibold">Connecting to {@meeting.name}</h2>
-            <p class="text-sm text-base-content/70">
-              You've joined as <strong>{@display_name}</strong>. Your audio and video will be published as soon as the room accepts the connection.
-            </p>
+        <%!-- Persistent local self-view PARKING slot. Mirrors
+             `meeting_live.html.heex:360-367`: `MeetingClient._localParkingSlot()`
+             (meeting_client.js:212) queries `[data-role="local-self-view"]`
+             (unscoped, single-instance) and parks the persistent local
+             `<video>` here between dock reparents. `phx-update="ignore"`
+             so morphdom never wipes the injected `<video>` on a stray
+             re-render. --%>
+        <div
+          id="guest-meeting-local-self-view"
+          phx-update="ignore"
+          class="hidden"
+          data-role="local-self-view"
+        >
+        </div>
+
+        <main class="flex min-h-0 flex-1 flex-col gap-3 p-3">
+          <%!-- Self-tile. The persistent local `<video>` (owned by
+               MeetingClient) reparents into the inner
+               `[data-local-video-dock][data-dock-mode="gallery"]` node
+               on LocalTrackPublished. Sized as a 16:9 max-w-md tile
+               centered horizontally so it stays legible on narrow
+               viewports. `phx-update="ignore"` on the dock so morphdom
+               never discards the JS-injected `<video>`. --%>
+          <div class="relative aspect-video w-full max-w-md self-center overflow-hidden rounded-lg bg-base-300">
+            <div
+              id="guest-meeting-local-video-dock"
+              phx-update="ignore"
+              data-local-video-dock
+              data-dock-mode="gallery"
+              class="absolute inset-0"
+            >
+            </div>
+            <div class="absolute bottom-1 left-1 rounded bg-black/50 px-1 py-0.5 text-xs text-white">
+              You (guest)
+            </div>
           </div>
+
+          <%!-- Remote-tile grid. MeetingClient's `_grid()`
+               (meeting_client.js:679) looks up `#meeting-participants`
+               and calls `_ensureTile(p)` on
+               `RoomEvent.ParticipantConnected` +
+               `_attachTrack(track, participant)` on `TrackSubscribed`.
+               `phx-update="ignore"` so LV re-renders don't wipe the
+               JS-populated tile children. --%>
+          <div
+            id="meeting-participants"
+            phx-update="ignore"
+            class="grid min-h-0 flex-1 grid-cols-1 gap-2 sm:grid-cols-2"
+          >
+          </div>
+
+          <%!-- Waiting hint. Gated on the presence-driven `:remote_count`
+               assign (stage 1). Hides automatically once the first
+               remote participant broadcast lands. --%>
+          <p
+            :if={@remote_count == 0}
+            data-role="guest-waiting-hint"
+            class="pb-2 text-center text-sm text-base-content/60"
+          >
+            Waiting for other participants…
+          </p>
         </main>
       </div>
   <% end %>
