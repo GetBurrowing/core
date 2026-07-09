@@ -1277,6 +1277,7 @@
            edit". Hidden `field`/`task-id` inputs travel with the change
            because `phx-change` only carries form params. --%>
       <% project_targets = project_deploy_targets(@selected_task.project) %>
+      <% dropdown_value = deploy_target_dropdown_value(@selected_task) %>
       <div class="grid grid-cols-2 gap-3">
         <%= if @edit_mode do %>
           <form
@@ -1327,18 +1328,21 @@
               id={"deploy-target-select-#{@selected_task.id}"}
               name="value"
               data-role="deploy-target-select"
+              data-selected-value={dropdown_value}
               disabled={project_targets == []}
               class="select select-sm select-bordered cursor-pointer"
             >
-              <option value="" selected={is_nil(@selected_task.deploy_target)}>
-                {if project_targets == [],
-                  do: "Inherit from project (no targets configured)",
-                  else: "Inherit from project"}
+              <option
+                value=""
+                selected={dropdown_value == ""}
+                data-role="deploy-target-dropdown-inherit-option"
+              >
+                {edit_mode_inherit_option_label(@selected_task, project_targets)}
               </option>
               <option
                 :for={t <- project_targets}
                 value={t}
-                selected={@selected_task.deploy_target == t}
+                selected={dropdown_value == t}
               >
                 {deploy_target_label(t)}
               </option>

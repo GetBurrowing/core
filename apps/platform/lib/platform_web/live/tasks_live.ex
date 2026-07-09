@@ -3374,6 +3374,40 @@ defmodule PlatformWeb.TasksLive do
   defp deploy_target_state_name({:inherited, _}), do: "inherited"
   defp deploy_target_state_name(:none), do: "none"
 
+  # Edit-mode dropdown pre-selection value (ADR 0044 v3 stage 2).
+  #
+  # The edit-mode <select> must reflect the SAME resolved value the readonly
+  # view shows — otherwise the user sees "production · Inherited from project"
+  # in read mode, clicks edit, and finds "(inherit from project)" pre-selected.
+  # That mismatch was the v1 bug: users had to re-pick the value they were
+  # already implicitly inheriting.
+  #
+  # Precedence mirrors `Platform.Tasks.resolve_deploy_target/1`:
+  #   * explicit task.deploy_target wins
+  #   * inherited value (project default / sole-entry list) is pre-selected
+  #   * `:none` falls through to the empty-string placeholder
+  #
+  # Returns the string that should match the <option value=...> attribute; the
+  # empty-string placeholder round-trips to nil via the existing coercion in
+  # `update_task_field` handler.
+  defp deploy_target_dropdown_value(task) do
+    case Platform.Tasks.resolve_deploy_target(task) do
+      {:explicit, value} -> value
+      {:inherited, value} -> value
+      :none -> ""
+    end
+  end
+
+  # Label for the empty-value option in the edit-mode dropdown.
+  # When the project has NO deploy targets configured, the placeholder can't
+  # promise inheritance — it explicitly names the empty state so the user
+  # knows why the dropdown is disabled.
+  defp edit_mode_inherit_option_label(_task, project_targets) do
+    if Enum.any?(project_targets),
+      do: "(inherit from project)",
+      else: "(none — no targets configured)"
+  end
+
   defp parse_deploy_strategy(params) do
     case Map.get(params, "deploy_strategy_type", "") do
       "" -> nil

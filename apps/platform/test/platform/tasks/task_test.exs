@@ -363,16 +363,68 @@ defmodule Platform.Tasks.TaskTest do
       assert Tasks.resolve_deploy_target(task) == {:explicit, "production"}
     end
 
-    test "returns :none when project deploy_config has no default_deploy_target key",
+    test "infers inheritance from sole-entry deploy_targets list with no explicit default",
          %{project: project} do
+      # v2 semantics: `deploy_targets: ["production"]` (list of one) with no
+      # `default_deploy_target` set is unambiguous — the resolver infers
+      # inheritance rather than falling to `:none`. This is the shape real
+      # projects use.
       {:ok, project} =
         Tasks.update_project(project, %{
           deploy_config: %{"deploy_targets" => ["production"]}
         })
 
-      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "No default"})
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Sole-entry infer"})
+      task = Repo.preload(task, :project)
+      assert Tasks.resolve_deploy_target(task) == {:inherited, "production"}
+    end
+
+    test "sole-entry deploy_targets list also infers inheritance for arbitrary entry name",
+         %{project: project} do
+      # Locks the contract on the entry value: whatever the sole entry is,
+      # it gets returned verbatim as the inherited value.
+      {:ok, project} =
+        Tasks.update_project(project, %{
+          deploy_config: %{"deploy_targets" => ["exp"]}
+        })
+
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Sole-entry exp"})
+      task = Repo.preload(task, :project)
+      assert Tasks.resolve_deploy_target(task) == {:inherited, "exp"}
+    end
+
+    test "multi-entry deploy_targets list without default_deploy_target returns :none",
+         %{project: project} do
+      # Ambiguous input — the user must pick explicitly (either via
+      # task.deploy_target or by setting default_deploy_target on the
+      # project). Implicit inference here would silently ship to the
+      # wrong target.
+      {:ok, project} =
+        Tasks.update_project(project, %{
+          deploy_config: %{"deploy_targets" => ["exp", "production"]}
+        })
+
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Multi ambiguous"})
       task = Repo.preload(task, :project)
       assert Tasks.resolve_deploy_target(task) == :none
+    end
+
+    test "default_deploy_target wins over first-of-list when both are set",
+         %{project: project} do
+      # Preserves the explicit-default ordering: the resolver's second
+      # branch (default_deploy_target) fires before the sole-entry
+      # inference. Even a multi-entry list resolves via default.
+      {:ok, project} =
+        Tasks.update_project(project, %{
+          deploy_config: %{
+            "deploy_targets" => ["exp", "production"],
+            "default_deploy_target" => "exp"
+          }
+        })
+
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Default wins"})
+      task = Repo.preload(task, :project)
+      assert Tasks.resolve_deploy_target(task) == {:inherited, "exp"}
     end
 
     test "returns :none when project deploy_config is empty map default", %{project: project} do
@@ -812,6 +864,22 @@ defmodule Platform.Tasks.TaskTest do
       {:ok, _project} =
         Tasks.update_project(project, %{
           deploy_config: %{"default_deploy_target" => "staging"}
+        })
+
+      task = Tasks.get_task_record(task.id)
+      assert {:ok, updated} = Tasks.transition_task(task, "deploying")
+      assert updated.status == "deploying"
+    end
+
+    test "transition_task/2 allows deploying via sole-entry deploy_targets inference",
+         %{project: project, task: task} do
+      # Locks the round-trip through require_deploy_target_for/2 →
+      # has_deploy_target?/1 → resolve_deploy_target/1 under the v2
+      # sole-entry-list semantics. Task.deploy_target stays nil; project
+      # has no explicit default; but the sole-entry list is unambiguous.
+      {:ok, _project} =
+        Tasks.update_project(project, %{
+          deploy_config: %{"deploy_targets" => ["production"]}
         })
 
       task = Tasks.get_task_record(task.id)

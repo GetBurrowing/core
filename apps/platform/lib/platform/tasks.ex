@@ -849,11 +849,21 @@ defmodule Platform.Tasks do
   Resolution order:
   1. `task.deploy_target` (task-level override) → `{:explicit, target}`
   2. `project.deploy_config["default_deploy_target"]` (project default) → `{:inherited, target}`
-  3. Nothing set → `:none`
+  3. `project.deploy_config["deploy_targets"]` is a SOLE-entry list of one
+     binary → `{:inherited, sole_entry}` (implicit-default inference)
+  4. Nothing set (or multi-entry list without an explicit default) → `:none`
 
   Empty strings are treated as unset. Mirrors `resolve_deploy_strategy/1` and
   the existing `deploy_config["default_strategy"]` convention. No schema
   change: `deploy_config` is already `field(:deploy_config, :map, default: %{})`.
+
+  The sole-entry inference addresses the v1 gap: real-world projects
+  (including the Suite dogfood project) configure the enumerated
+  `deploy_targets` list rather than the explicit `default_deploy_target`
+  key. When the list has exactly one entry there is no ambiguity to
+  resolve, so inheritance is safe. Multi-entry lists still fall through to
+  `:none` unless the user picks a specific default — implicit inference on
+  ambiguous input would silently ship to the wrong target.
 
   The task must have `:project` preloaded, or be loaded with project.
   """
@@ -862,8 +872,9 @@ defmodule Platform.Tasks do
   def resolve_deploy_target(%Task{} = task) do
     task = ensure_project_loaded(task)
 
-    project_default =
-      get_in(task.project && task.project.deploy_config, ["default_deploy_target"])
+    deploy_config = (task.project && task.project.deploy_config) || %{}
+    project_default = Map.get(deploy_config, "default_deploy_target")
+    deploy_targets = Map.get(deploy_config, "deploy_targets")
 
     cond do
       is_binary(task.deploy_target) and task.deploy_target != "" ->
@@ -871,6 +882,10 @@ defmodule Platform.Tasks do
 
       is_binary(project_default) and project_default != "" ->
         {:inherited, project_default}
+
+      match?([entry] when is_binary(entry) and entry != "", deploy_targets) ->
+        [sole_entry] = deploy_targets
+        {:inherited, sole_entry}
 
       true ->
         :none

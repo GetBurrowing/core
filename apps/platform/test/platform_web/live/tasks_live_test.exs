@@ -4772,6 +4772,98 @@ defmodule PlatformWeb.TasksLiveTest do
       assert Tasks.get_task_record(task.id).deploy_target == "production"
     end
 
+    # ── Edit-mode dropdown pre-selection (v3 stage 2) ────────────────────
+    #
+    # v1 bug: the edit-mode dropdown only respected task.deploy_target and
+    # ignored the resolved inheritance. A task inheriting "production" from
+    # its project's sole-entry deploy_targets showed
+    # "production · Inherited from project" in read mode but pre-selected
+    # "(inherit from project)" (the empty option) in edit mode. Users had
+    # to re-pick the value they were already implicitly inheriting.
+    #
+    # These tests lock the fix: `data-selected-value` on the <select>
+    # reflects `Platform.Tasks.resolve_deploy_target/1`, and the matching
+    # <option> carries `selected`.
+
+    test "edit-mode dropdown pre-selects the explicit task deploy_target",
+         %{conn: conn} do
+      project = create_project()
+
+      {:ok, project} =
+        Tasks.update_project(project, %{
+          deploy_config: %{
+            "deploy_targets" => ["exp", "production"],
+            "default_deploy_target" => "exp"
+          }
+        })
+
+      task = create_task(project, %{title: "Explicit Prod", deploy_target: "production"})
+
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
+      html = render_click(view, "toggle_edit_mode")
+
+      assert html =~ ~s|data-role="deploy-target-select"|
+      assert html =~ ~s|data-selected-value="production"|
+
+      assert Regex.match?(
+               ~r/<option[^>]*value="production"[^>]*selected[^>]*>\s*production\s*<\/option>|<option[^>]*selected[^>]*value="production"[^>]*>\s*production\s*<\/option>/,
+               html
+             )
+    end
+
+    test "edit-mode dropdown pre-selects the sole-entry inherited value",
+         %{conn: conn} do
+      # v3 sole-entry inference: project has ONE deploy_target and no
+      # explicit default_deploy_target. The inherited value must pre-select
+      # in the dropdown.
+      project = create_project()
+
+      {:ok, project} =
+        Tasks.update_project(project, %{
+          deploy_config: %{"deploy_targets" => ["production"]}
+        })
+
+      task = create_task(project, %{title: "Inheriting Task", deploy_target: nil})
+
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
+      html = render_click(view, "toggle_edit_mode")
+
+      assert html =~ ~s|data-selected-value="production"|
+
+      assert Regex.match?(
+               ~r/<option[^>]*value="production"[^>]*selected[^>]*>\s*production\s*<\/option>|<option[^>]*selected[^>]*value="production"[^>]*>\s*production\s*<\/option>/,
+               html
+             )
+
+      # The empty-value option is still present as "(inherit from project)"
+      # so the user can drop back to inherited-nil if they want.
+      assert html =~ ~s|data-role="deploy-target-dropdown-inherit-option"|
+      assert html =~ "(inherit from project)"
+    end
+
+    test "edit-mode dropdown pre-selects empty when no target resolves",
+         %{conn: conn} do
+      # No default, no deploy_targets list, no task-level value → resolution
+      # is `:none`. The dropdown should pre-select the empty placeholder and
+      # label it "(none — no targets configured)" (NOT the "inherit" copy —
+      # inheritance is impossible).
+      project = create_project()
+
+      {:ok, project} = Tasks.update_project(project, %{deploy_config: %{}})
+
+      task = create_task(project, %{title: "Nothing Configured", deploy_target: nil})
+
+      conn = authenticated_conn(conn)
+      {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
+      html = render_click(view, "toggle_edit_mode")
+
+      assert html =~ ~s|data-selected-value=""|
+      assert html =~ "(none — no targets configured)"
+      refute html =~ "(inherit from project)"
+    end
+
     test "non-whitelisted field name flashes an error and does not persist", %{conn: conn} do
       project = create_project()
       task = create_task(project, %{title: "Locked Down", priority: "low"})

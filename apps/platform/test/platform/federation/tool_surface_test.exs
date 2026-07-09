@@ -603,6 +603,42 @@ defmodule Platform.Federation.ToolSurfaceTest do
       assert error.error =~ "Invalid status transition from 'cancelled' to 'in_progress'"
     end
 
+    test "task_update transitioning to deploying without a resolved target returns friendly envelope" do
+      # v2 regression guard: pre-fix the `:no_deploy_target_resolved` atom
+      # fell through to the changeset catch-all, whose inspect_errors/1
+      # called Ecto.Changeset.traverse_errors/2 on an atom → runtime
+      # crash. The dedicated branch turns that into a structured
+      # error envelope callers can act on.
+      # `deploy_config` defaults to %{} on the schema — no explicit set needed.
+      project = create_project()
+
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "No target anywhere",
+          status: "in_review"
+        })
+
+      # `require_approved_plan_for/2` must not fire first and mask the
+      # deploy-target guard we're testing.
+      {:ok, _plan} = Tasks.create_plan(%{task_id: task.id, status: "approved"})
+
+      {:error, error} =
+        ToolSurface.execute(
+          "task_update",
+          %{"task_id" => task.id, "status" => "deploying"},
+          %{}
+        )
+
+      assert error.error == "unresolved_deploy_target"
+      assert error.recoverable == true
+      assert is_binary(error.suggestion)
+      assert error.suggestion =~ ~r/project_update|task_update/
+
+      # Task did NOT transition.
+      assert Tasks.get_task_record(task.id).status == "in_review"
+    end
+
     test "task_list with status: 'cancelled' surfaces only cancelled tasks (stage 6 round-trip)" do
       # Stage 3 made `cancelled` an agent-reachable terminal status; this
       # asserts the tool-surface reverse direction — once a task is in

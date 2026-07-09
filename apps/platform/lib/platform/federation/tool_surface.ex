@@ -3396,6 +3396,24 @@ defmodule Platform.Federation.ToolSurface do
                      "in_progress/blocked/stack_pending)."
                }}
 
+            {:error, :no_deploy_target_resolved} ->
+              # `Tasks.transition_task_status/2` refuses `:deploying` when
+              # neither the task nor the project supplies a target. The
+              # atom would otherwise fall through to the changeset
+              # catch-all below, where `inspect_errors/1` calls
+              # `Ecto.Changeset.traverse_errors/2` on an atom and crashes.
+              # Mirror the `:invalid_transition` friendly envelope shape.
+              {:error,
+               %{
+                 error: "unresolved_deploy_target",
+                 recoverable: true,
+                 suggestion:
+                   "Set task.deploy_target explicitly (e.g. task_update(deploy_target: \"production\")) " <>
+                     "or configure a project-level default via " <>
+                     "project_update(deploy_config: %{\"default_deploy_target\" => ...}) " <>
+                     "before transitioning to deploying."
+               }}
+
             {:error, %Ecto.Changeset{} = changeset} ->
               {:error,
                %{
