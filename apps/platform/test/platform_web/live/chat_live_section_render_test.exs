@@ -624,6 +624,74 @@ defmodule PlatformWeb.ChatLiveSectionRenderTest do
     end
   end
 
+  describe "pills follow the drawer order (mobile channel search Stage 3)" do
+    # The pills strip renders Sidebar.flatten_sections(@sidebar_sections) —
+    # the user's curated (hidden-filtered) drawer arrangement — instead of
+    # the raw @channels list. Marlowe's decision 2026-07-05.
+
+    test "pill order tracks a section reorder made in the drawer", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      {s1, s2, _ch1, _ch2} = seed_two_sectioned_channels()
+
+      view = open_mobile_browser(conn)
+
+      pills = pills_strip(render(view))
+      one = :binary.match(pills, "Pillone") |> elem(0)
+      two = :binary.match(pills, "Pilltwo") |> elem(0)
+      assert one < two, "Baseline: section 1's channel should pill before section 2's"
+
+      # Drag section 2 above section 1 (insert-above semantics) via the SAME
+      # mobile hook event the touch drag sends.
+      view
+      |> element("#mobile-section-list")
+      |> render_hook("section_reordered", %{"from" => s2.id, "to" => s1.id})
+
+      pills = pills_strip(render(view))
+      one = :binary.match(pills, "Pillone") |> elem(0)
+      two = :binary.match(pills, "Pilltwo") |> elem(0)
+      assert two < one, "Pills should re-order to match the dragged section order"
+    end
+
+    test "hidden channels stop rendering as pills (hidden means hidden everywhere)",
+         %{conn: conn} do
+      conn = authenticated_conn(conn)
+      {_s1, _s2, ch1, _ch2} = seed_two_sectioned_channels()
+
+      {:ok, view, html} = live_following_redirect(conn)
+      assert pills_strip(html) =~ "Pillone"
+
+      render_click(view, "hide_channel", %{"id" => ch1.id})
+
+      pills = pills_strip(render(view))
+      refute pills =~ "Pillone", "A hidden channel must not render as a pill"
+      assert pills =~ "Pilltwo", "Non-hidden channels keep their pills"
+    end
+  end
+
+  # Two channels seeded into the two lowest-position org sections via
+  # org_id, so section-level operations provably change PILL order.
+  defp seed_two_sectioned_channels do
+    [s1, s2 | _] =
+      Platform.Chat.Section |> Repo.all() |> Enum.sort_by(& &1.position)
+
+    {:ok, ch1} =
+      Chat.create_space(%{name: "Pillone", slug: "pillone", kind: "channel", org_id: s1.org_id})
+
+    {:ok, ch2} =
+      Chat.create_space(%{name: "Pilltwo", slug: "pilltwo", kind: "channel", org_id: s2.org_id})
+
+    {s1, s2, ch1, ch2}
+  end
+
+  # The pills strip's markup, isolated so pill assertions can't accidentally
+  # match drawer/desktop-rail rows for the same channels.
+  defp pills_strip(html) do
+    case Regex.run(~r/<nav[^>]*aria-label="Channel switcher".*?<\/nav>/s, html) do
+      [match] -> match
+      _ -> ""
+    end
+  end
+
   # Ordered, de-duplicated sub-org section ids from a rendered HTML blob.
   # Desktop rail + mobile overlay render the SAME resolver order, so the
   # de-duplicated first-occurrence order reflects both surfaces.

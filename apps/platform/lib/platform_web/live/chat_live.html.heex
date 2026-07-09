@@ -736,6 +736,62 @@
         </div>
       </header>
 
+      <%!-- Drawer search (mobile channel search Stage 1). Pinned row BETWEEN
+           the header and the scrolling list — the h-12 header is already full
+           (title + Edit/Done + X) and touch targets need breathing room.
+           Filters the rendered list as you type via the drawer_filter_*
+           helpers; find-verbs ("Find a channel or DM") to stay verbally
+           distinct from the DM "+" people-picker, which STARTS conversations.
+           text-base is load-bearing: anything under 16px makes iOS auto-zoom
+           the viewport on focus. Stable id so LiveView patches preserve
+           focus/cursor while the list under it re-renders. --%>
+      <div class="flex-shrink-0 px-4 py-2 border-b border-base-300" role="search">
+        <%!-- phx-change (NOT phx-keyup): change fires for every way text can
+             enter the field — typing, paste, iOS dictation, the native
+             type=search clear — where keyup only sees physical keys.
+             phx-submit reuses the same handler so the iOS "go" key doesn't
+             fall through to a full-page form POST. --%>
+        <form class="relative" phx-change="drawer_search" phx-submit="drawer_search">
+          <span
+            class="hero-magnifying-glass absolute left-3 top-1/2 -translate-y-1/2 size-4 text-base-content/40"
+            aria-hidden="true"
+          >
+          </span>
+          <%!-- DrawerSearchFocus (Stage 2): focuses this field on mount when
+               the open carried search intent (data attr below), and blurs it
+               when the user starts scrolling the list so one swipe drops the
+               keyboard. Focus is hook-driven, NOT the HTML autofocus attr —
+               autofocus no-ops on iOS when the render lands after a LiveView
+               round-trip, outside the tap's gesture chain. --%>
+          <input
+            id="drawer-search-input"
+            type="search"
+            name="value"
+            value={@drawer_query}
+            phx-hook="DrawerSearchFocus"
+            data-search-intent={to_string(@drawer_search_intent)}
+            phx-debounce="150"
+            placeholder="Find a channel or DM"
+            autocomplete="off"
+            autocorrect="off"
+            autocapitalize="none"
+            spellcheck="false"
+            enterkeyhint="go"
+            aria-label="Find a channel or direct message"
+            class="w-full h-11 rounded-lg bg-base-200 border border-base-content/10 pl-9 pr-11 text-base placeholder:text-base-content/40 focus:border-primary focus:outline-none"
+          />
+          <button
+            :if={@drawer_query != ""}
+            type="button"
+            phx-click="drawer_search_clear"
+            class="absolute right-0 top-1/2 -translate-y-1/2 flex items-center justify-center min-h-11 min-w-11 text-base-content/50 hover:text-base-content"
+            aria-label="Clear search"
+          >
+            <span class="hero-x-mark size-4"></span>
+          </button>
+        </form>
+      </div>
+
       <%!-- Sectioned mobile channel browser — parity with the desktop rail
            (chat sidebar mobile Stage 1). Renders the SAME already-computed
            data desktop consumes — `@channel_sections.pinned` / `.dms` and the
@@ -761,12 +817,14 @@
       <nav
         id="mobile-section-list"
         phx-hook="SectionReorderTouch"
+        data-search-active={to_string(@drawer_query != "")}
         class="flex-1 overflow-y-auto py-2"
         aria-label="Channel sections"
       >
-        <%!-- Pinned — locked at the top, rendered only when non-empty. --%>
+        <%!-- Pinned — locked at the top, rendered only when non-empty
+             (and, while searching, only when it has a match). --%>
         <section
-          :if={@channel_sections.pinned != []}
+          :if={drawer_filter_spaces(@channel_sections.pinned, @drawer_query) != []}
           data-section-reorderable="false"
           aria-label="Pinned"
         >
@@ -791,7 +849,7 @@
             </span>
           </div>
           <.link
-            :for={space <- @channel_sections.pinned}
+            :for={space <- drawer_filter_spaces(@channel_sections.pinned, @drawer_query)}
             navigate={~p"/chat/#{space_nav_target(space)}"}
             phx-click="close_mobile_browser"
             class={[
@@ -811,8 +869,18 @@
           </.link>
         </section>
 
-        <%!-- Direct Messages — locked directly under Pinned. --%>
-        <section data-section-reorderable="false" aria-label="Direct Messages">
+        <%!-- Direct Messages — locked directly under Pinned. While a search
+             is active the whole section hides when no DM display-name
+             matches; the "No conversations yet" copy below is ONLY for a
+             genuinely DM-less account, never for a no-match search. --%>
+        <section
+          :if={
+            @drawer_query == "" or
+              drawer_filter_dms(@channel_sections.dms, @drawer_query, @user_id) != []
+          }
+          data-section-reorderable="false"
+          aria-label="Direct Messages"
+        >
           <div class="flex items-center justify-between px-4 py-1 mt-2">
             <div class="flex items-center gap-1.5">
               <p class="text-xs font-semibold uppercase tracking-widest text-base-content/50">
@@ -846,7 +914,7 @@
             </p>
           <% else %>
             <.link
-              :for={space <- @channel_sections.dms}
+              :for={space <- drawer_filter_dms(@channel_sections.dms, @drawer_query, @user_id)}
               navigate={~p"/chat/#{space_nav_target(space)}"}
               phx-click="close_mobile_browser"
               class={[
@@ -873,10 +941,16 @@
              alphabetical sort would override the per-user order that Stage 3's
              touch drag-reorder persists, making that reorder look broken on
              mobile. Keyed by `data-section-id` for the later touch-reorder stage. --%>
+        <%!-- While searching, sections render their MATCHING channels only and
+             zero-match sections drop out entirely (drawer_filter_sections).
+             The neighbor-index math for the move buttons stays valid because
+             the edit controls are hidden whenever a search is active — the
+             filtered list and @sidebar_sections are identical when the
+             controls can actually render. --%>
         <section
           :for={
             {%{section: section, channels: section_channels}, section_index} <-
-              Enum.with_index(@sidebar_sections)
+              Enum.with_index(drawer_filter_sections(@sidebar_sections, @drawer_query))
           }
           data-section-id={section.id}
           data-section-reorderable="true"
@@ -897,8 +971,16 @@
                  (from=next.id, to=this.id), which is the same swap. Boundary
                  buttons are disabled, not hidden, mirroring the desktop row
                  controls: focus can't land on a no-op that reads as broken.
-                 Pinned/DMs render none of this (locked). --%>
-            <span :if={@sidebar_edit} class="channel-section-move-controls">
+                 Pinned/DMs render none of this (locked).
+
+                 Stage 1 search guard rail: ALL reorder affordances vanish
+                 while a search filter is active — a reorder computed against
+                 a filtered subset would persist a wrong order. This gate is
+                 also what keeps the neighbor-index math above safe. --%>
+            <span
+              :if={@sidebar_edit && @drawer_query == ""}
+              class="channel-section-move-controls"
+            >
               <button
                 type="button"
                 class="channel-section-move-button--touch"
@@ -938,7 +1020,7 @@
                  Stage 4 up/down buttons beside it, not this gesture
                  affordance. --%>
             <button
-              :if={@sidebar_edit}
+              :if={@sidebar_edit && @drawer_query == ""}
               type="button"
               class="channel-section-drag-handle channel-section-drag-handle--touch"
               aria-label={"Reorder #{section.name} section — touch and hold, then drag"}
@@ -974,12 +1056,50 @@
           <% end %>
         </section>
 
+        <%!-- No-matches state (Stage 1) — ONLY for an active search that
+             matched nothing; the account-empty state below stays reserved
+             for a genuinely conversation-less account. The likeliest miss is
+             searching a PERSON's name (that's the other search), so the dead
+             end hands off to the new-conversation people picker rather than
+             apologizing. --%>
+        <div
+          :if={
+            @drawer_query != "" and
+              drawer_no_matches?(@channel_sections, @sidebar_sections, @drawer_query, @user_id)
+          }
+          class="flex flex-col items-center gap-3 px-6 py-10 text-center"
+        >
+          <span class="hero-magnifying-glass size-8 text-base-content/30" aria-hidden="true">
+          </span>
+          <p class="text-sm font-medium">No matches for “{@drawer_query}”</p>
+          <p class="text-sm text-base-content/50">
+            Check the spelling, or start a new conversation.
+          </p>
+          <div class="flex items-center gap-2 mt-1">
+            <button
+              type="button"
+              phx-click={JS.push("new_conversation_open") |> JS.push("close_mobile_browser")}
+              class="flex items-center justify-center min-h-11 px-4 rounded-lg bg-base-200 border border-base-content/10 text-sm font-medium hover:bg-base-300"
+            >
+              New conversation
+            </button>
+            <button
+              type="button"
+              phx-click="drawer_search_clear"
+              class="flex items-center justify-center min-h-11 px-4 rounded-lg text-sm font-medium text-base-content/60 hover:text-base-content hover:bg-base-200"
+            >
+              Clear search
+            </button>
+          </div>
+        </div>
+
         <%!-- Empty state per docs/design-system/03-voice.md §5.1 — mobile
              combined view (no channels AND no DMs). Chip event is a JS
              chain so opening the new-conversation flow also closes the
-             mobile browser overlay. --%>
+             mobile browser overlay. Suppressed while a search is active —
+             the no-matches state above owns that case. --%>
         <.empty_state
-          :if={@channels == [] and @dm_conversations == []}
+          :if={@channels == [] and @dm_conversations == [] and @drawer_query == ""}
           variant={:conversational}
         >
           <:system_message>— no conversations yet —</:system_message>
@@ -1253,16 +1373,24 @@
       </header>
 
       <%!-- Mobile-only channel pills strip — Refined Option A nav (Marlowe approval 2026-05-10).
-           Replaces the previous tap-channel-name-to-open-browser flow. Renders @channels
-           as horizontally-scrollable pills with the active channel highlighted. The
-           overflow magnifying-glass icon at the end opens the existing
-           @mobile_browser_open overlay (which has the full channel + DM list and is
-           the long-tail jump-to-channel surface). 1-tap channel switching for the
-           pills shown; 2-tap (overflow → search/select) for the long tail.
+           Replaces the previous tap-channel-name-to-open-browser flow. Horizontally
+           scrollable pills with the active channel highlighted; the magnifying-glass
+           icon at the LEFT opens the @mobile_browser_open drawer (search + full
+           channel/DM list). 1-tap switching for the pills shown; 2-tap
+           (magnifying glass → search) for the long tail.
 
-           Pinning is NOT in this Stage 1A — channels appear in the existing order
-           (alphabetical via Chat.list_spaces). A follow-up Stage 1B will add
-           localStorage-backed pinning + long-press to pin/unpin. --%>
+           ORDERING CONTRACT (Marlowe decision 2026-07-05, this task's Stage 3):
+           pills render `Sidebar.flatten_sections(@sidebar_sections)` — the user's
+           curated drawer arrangement flattened left-to-right — NOT the raw
+           @channels list. Consequences, both deliberate: (1) dragging sections
+           in the drawer reorders the pills identically (one mental model,
+           stable muscle memory — the unread badge signals activity without
+           moving pills); (2) hidden channels/sections are absent here too —
+           hidden means hidden everywhere. Historical note: the raw @channels
+           order this replaced was channel CREATION order (Chat.list_spaces
+           sorts by inserted_at), not "alphabetical" as previously claimed
+           here. The old Stage 1B localStorage-pinning idea is superseded by
+           the server-side section order. --%>
       <nav
         :if={@active_space && !@embedded}
         class="lg:hidden flex items-center gap-2 overflow-x-auto px-4 py-2 border-b border-base-content/10"
@@ -1272,9 +1400,12 @@
         <%!-- Search/jump button anchored at the LEFT of the pills strip
              (Rowan request, Marlowe approval 2026-05-11). Sticks to the left
              edge so it stays in reach even as the channel pills overflow
-             horizontally and scroll. --%>
+             horizontally and scroll. phx-value-intent="search" (Stage 2):
+             this entry declares search intent, so the drawer opens with the
+             search field focused — other openers get a browse-first drawer. --%>
         <button
           phx-click="toggle_mobile_browser"
+          phx-value-intent="search"
           class="flex items-center justify-center w-9 h-9 rounded-full shrink-0 bg-base-200 border border-base-content/10 text-base-content/50 hover:text-primary hover:bg-base-300 transition-colors sticky left-0 z-10"
           aria-label="Search channels and direct messages"
           title="Search channels and DMs"
@@ -1283,7 +1414,7 @@
         </button>
 
         <.link
-          :for={space <- @channels}
+          :for={space <- Sidebar.flatten_sections(@sidebar_sections)}
           navigate={~p"/chat/#{space_nav_target(space)}"}
           class={[
             "flex items-center gap-1.5 px-3 py-1.5 rounded-full whitespace-nowrap text-[13px] font-medium shrink-0 transition-all",

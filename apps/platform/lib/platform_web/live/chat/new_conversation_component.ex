@@ -143,7 +143,7 @@ defmodule PlatformWeb.ChatLive.NewConversationComponent do
             <input
               type="text"
               class="input input-bordered w-full input-sm"
-              placeholder="Search users or agents…"
+              placeholder="Search people…"
               phx-keyup="new_conversation_search"
               phx-target={@myself}
               phx-key=""

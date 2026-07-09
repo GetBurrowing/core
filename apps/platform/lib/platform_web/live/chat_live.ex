@@ -213,6 +213,16 @@ defmodule PlatformWeb.ChatLive do
       |> assign(:active_space, nil)
       |> assign(:current_participant, nil)
       |> assign(:mobile_browser_open, false)
+      # Drawer search query (mobile channel search Stage 1). Filters the
+      # drawer's rendered sections/DMs in-memory at RENDER time via the
+      # drawer_filter_* helpers — the underlying assigns stay unfiltered
+      # because the desktop rail renders from the same data and must never
+      # be filtered by the mobile drawer's search.
+      |> assign(:drawer_query, "")
+      # Stage 2: whether the CURRENT drawer open was declared as a search
+      # (magnifying-glass entry) — drives client-side focus via the
+      # DrawerSearchFocus hook. Recomputed on every toggle.
+      |> assign(:drawer_search_intent, false)
       |> assign(:show_new_channel_modal, false)
       |> assign(:show_new_conversation_modal, false)
       # Per-message actions sheet (3-dot menu): nil when closed, msg.id when open.
@@ -491,12 +501,48 @@ defmodule PlatformWeb.ChatLive do
   end
 
   @impl true
-  def handle_event("toggle_mobile_browser", _params, socket) do
-    {:noreply, assign(socket, :mobile_browser_open, !socket.assigns.mobile_browser_open)}
+  # Stage 2 (search-forward entry): the opener can declare a search intent
+  # (phx-value-intent="search" on the pills-strip magnifying glass — whose
+  # aria-label has always promised "Search channels and DMs"). The intent
+  # rides to the drawer's input as a data attribute; the DrawerSearchFocus
+  # hook focuses the field client-side on mount. Openers WITHOUT the intent
+  # get a plain browse drawer — no focus, no keyboard.
+  def handle_event("toggle_mobile_browser", params, socket) do
+    opening = !socket.assigns.mobile_browser_open
+
+    {:noreply,
+     socket
+     |> assign(:mobile_browser_open, opening)
+     |> assign(:drawer_search_intent, opening and params["intent"] == "search")
+     # Toggling closed discards the search, same as close_mobile_browser.
+     |> then(&if(opening, do: &1, else: assign(&1, :drawer_query, "")))}
   end
 
   def handle_event("close_mobile_browser", _params, socket) do
-    {:noreply, assign(socket, :mobile_browser_open, false)}
+    # Closing the drawer discards any in-progress search — reopening always
+    # starts from the full browse list, never a stale filter.
+    {:noreply,
+     socket
+     |> assign(:mobile_browser_open, false)
+     |> assign(:drawer_query, "")}
+  end
+
+  # ── Drawer search (mobile channel search Stage 1) ─────────────────────
+  #
+  # Filter-as-you-type over the drawer's already-loaded sections + DMs.
+  # Pure assign write — the filtering itself happens at render via the
+  # drawer_filter_* helpers, so there is no query cost and the desktop
+  # rail (same underlying assigns) is untouched. The input is debounced
+  # client-side (phx-debounce) and the value is length-capped here because
+  # it is external input, even though it only ever feeds String.contains?.
+  def handle_event("drawer_search", %{"value" => value}, socket) when is_binary(value) do
+    {:noreply, assign(socket, :drawer_query, String.slice(value, 0, 100))}
+  end
+
+  def handle_event("drawer_search", _params, socket), do: {:noreply, socket}
+
+  def handle_event("drawer_search_clear", _params, socket) do
+    {:noreply, assign(socket, :drawer_query, "")}
   end
 
   # Per-channel hide affordance (chat sidebar v3 Stage 2). The sub-org
@@ -678,7 +724,11 @@ defmodule PlatformWeb.ChatLive do
      # Clear any active scope filter so editing always sees the full rail —
      # otherwise a filtered-out section is unreachable (and a recolor could
      # make the section being edited vanish from the filtered view).
-     |> assign(:scope_filter, nil)}
+     |> assign(:scope_filter, nil)
+     # Same principle for the mobile drawer's search (Stage 1 guard rail):
+     # edit mode and search are mutually exclusive — reordering a FILTERED
+     # list would persist an order computed against a partial view.
+     |> assign(:drawer_query, "")}
   end
 
   # Open/close the sidebar layout overflow menu (chat sidebar header). The
@@ -1773,6 +1823,59 @@ defmodule PlatformWeb.ChatLive do
   defp sidebar_display_name(space, current_user_id) do
     participants = Chat.list_participants(space.id)
     Chat.display_name_for_space(space, participants, current_user_id)
+  end
+
+  # ── Drawer search filters (mobile channel search Stage 1) ─────────────
+  #
+  # Render-time, in-memory filters over the drawer's already-computed
+  # assigns. An empty query passes everything through unchanged, so the
+  # non-searching drawer renders exactly what it did before this stage.
+  # Case-insensitive substring — no fuzzy matching at this scale
+  # (~5 sections / <30 channels), where "just filtering" is enough.
+
+  defp drawer_match?(nil, _query), do: false
+
+  defp drawer_match?(name, query) when is_binary(name) do
+    String.contains?(String.downcase(name), String.downcase(query))
+  end
+
+  # Plain space lists (Pinned) — filter on the space name.
+  defp drawer_filter_spaces(spaces, ""), do: spaces
+
+  defp drawer_filter_spaces(spaces, query),
+    do: Enum.filter(spaces, &drawer_match?(&1.name, query))
+
+  # DM rows are labeled by their computed display name (the other
+  # participant / group title), so that is what the filter must match —
+  # a DM's underlying space.name is not what the user sees.
+  defp drawer_filter_dms(dms, "", _user_id), do: dms
+
+  defp drawer_filter_dms(dms, query, user_id) do
+    Enum.filter(dms, &drawer_match?(sidebar_display_name(&1, user_id), query))
+  end
+
+  # Sub-org sections: filter each section's channels; drop sections with no
+  # matches entirely (their headers would be noise), but keep headers on
+  # sections that DO match — two orgs can hold same-named channels and the
+  # section label is the only disambiguator.
+  defp drawer_filter_sections(sections, ""), do: sections
+
+  defp drawer_filter_sections(sections, query) do
+    sections
+    |> Enum.map(fn %{channels: channels} = entry ->
+      %{entry | channels: Enum.filter(channels, &drawer_match?(&1.name, query))}
+    end)
+    |> Enum.filter(fn %{channels: channels} -> channels != [] end)
+  end
+
+  # True when an active search matched nothing anywhere — drives the
+  # dedicated "No matches" state (NOT the genuinely-empty-account copy).
+  defp drawer_no_matches?(_channel_sections, _sidebar_sections, "", _user_id), do: false
+
+  defp drawer_no_matches?(channel_sections, sidebar_sections, query, user_id) do
+    drawer_filter_spaces(channel_sections.pinned, query) == [] and
+      drawer_filter_dms(channel_sections.dms, query, user_id) == [] and
+      drawer_filter_sections(sidebar_sections, query) == []
   end
 
   defp clear_unread(socket, space_id) do

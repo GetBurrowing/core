@@ -107,6 +107,19 @@ defmodule Platform.Chat.Sidebar do
   @type resolved :: %{section: Section.t(), channels: [Chat.Space.t()]}
 
   @doc """
+  Flatten resolved sections into one ordered channel list — the user's
+  curated arrangement, left-to-right / top-to-bottom.
+
+  This is THE bridge between the sectioned surfaces (drawer, desktop rail)
+  and flat ones (the mobile pills strip): both consume the same resolver
+  output, so they cannot drift. Because the input is the resolver's
+  hidden-filtered result, hidden channels/sections are absent here too —
+  hidden means hidden everywhere (Marlowe's decision, 2026-07-05).
+  """
+  @spec flatten_sections([resolved()]) :: [Chat.Space.t()]
+  def flatten_sections(sections), do: Enum.flat_map(sections, & &1.channels)
+
+  @doc """
   Resolve the sidebar for a user: org default sections + their personal
   overrides. Loads sections and the user's prefs, then delegates to the pure
   `resolve/3`. Anonymous / unknown user ids resolve to the plain default.

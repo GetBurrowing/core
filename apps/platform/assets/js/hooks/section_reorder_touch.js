@@ -75,6 +75,12 @@ const SectionReorderTouch = {
 
     this._onPointerDown = (e) => {
       if (!e.isPrimary || this._pointerId !== null) return;
+      // Search guard rail (mobile channel search Stage 1): while the drawer
+      // list is filtered (data-search-active on the rail), reorder is
+      // disabled outright — a drag over a filtered SUBSET would persist an
+      // order computed against a partial view. The template also omits the
+      // handles while filtering; this is defense-in-depth for a stale DOM.
+      if (this.el.dataset.searchActive === "true") return;
 
       const handle = e.target.closest(".channel-section-drag-handle");
       if (!handle || !this.el.contains(handle)) return;

@@ -5,6 +5,7 @@ import CodeBlock from "./code_block"
 import ComposeInput from "./compose_input"
 import CopyToClipboard from "./copy_to_clipboard"
 import DragDropUpload from "./drag_drop_upload"
+import DrawerSearchFocus from "./drawer_search_focus"
 import EmbedCanvasScale from "./embed_canvas_scale"
 import ExecutionLogScroll from "./execution_log_scroll"
 import InfiniteScroll from "./infinite_scroll"
@@ -50,6 +51,7 @@ export default {
   ComposeInput,
   CopyToClipboard,
   DragDropUpload,
+  DrawerSearchFocus,
   EmbedCanvasScale,
   ExecutionLogScroll,
   InfiniteScroll,
