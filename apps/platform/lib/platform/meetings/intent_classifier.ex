@@ -11,20 +11,16 @@ defmodule Platform.Meetings.IntentClassifier do
 
   ## Guard chain
 
-  `handle_info({:transcript_chunk, payload}, state)` walks three
+  `handle_info({:transcript_chunk, payload}, state)` walks two
   guards in order:
 
-    1. **Feature flag off** — `:meeting_producer_runtime_enabled`
-       defaults to `false` for the v1 rollout. When off, we drop the
-       chunk with a `:debug` log + telemetry
-       `[:platform, :meetings, :intent_classifier, :skipped]` +
-       `%{reason: :flag_off}`.
-    2. **No assignee** — `Platform.Roles.assignee_for("meetings.intent_classify")`
+    1. **No assignee** — `Platform.Roles.assignee_for("meetings.intent_classify")`
        returns `nil`. Log at `:info` the FIRST time we see a room
        without an assignee (subsequent chunks for that room stay
        silent — the `state.seen_rooms` MapSet is the spam-suppressor).
-       Emit telemetry with `%{reason: :no_assignee}`.
-    3. **Assignee found** — hand off to `classify_and_enqueue/3`.
+       Emit telemetry with `%{reason: :no_assignee}`. Assignment IS
+       the enable signal — no env-var double-gate.
+    2. **Assignee found** — hand off to `classify_and_enqueue/3`.
 
   ## Stage 4 pipeline (`classify_and_enqueue/3`)
 
@@ -65,16 +61,12 @@ defmodule Platform.Meetings.IntentClassifier do
     * `Req` default receive timeout (~15s) is fine; a dropped chunk
       is fine, another arrives seconds later.
 
-  Two supervision-level toggles that DO NOT overlap:
+  Supervisor-level toggle:
 
     * `:start_meeting_intent_classifier` — supervisor gate. When
       `false` (default in `config/test.exs`) the classifier isn't
       booted at all. Tests start their own instance per-case for
       DataCase sandbox ownership.
-    * `:meeting_producer_runtime_enabled` — runtime kill-switch.
-      When `false` (default in `config/config.exs`) the subscriber
-      still runs but drops every chunk at guard 1. Flip in a
-      follow-up once the seeds land.
   """
 
   use GenServer
@@ -134,13 +126,9 @@ defmodule Platform.Meetings.IntentClassifier do
   def handle_info({:transcript_chunk, payload}, state) when is_map(payload) do
     room_id = Map.get(payload, :room_id)
 
-    if runtime_enabled?() do
-      case Roles.assignee_for(@responsibility_key) do
-        nil -> handle_no_assignee(room_id, state)
-        agent -> handle_chunk(payload, agent, state)
-      end
-    else
-      handle_flag_off(room_id, state)
+    case Roles.assignee_for(@responsibility_key) do
+      nil -> handle_no_assignee(room_id, state)
+      agent -> handle_chunk(payload, agent, state)
     end
   end
 
@@ -162,18 +150,6 @@ defmodule Platform.Meetings.IntentClassifier do
   def handle_info(_other, state), do: {:noreply, state}
 
   # ── Guard branches ────────────────────────────────────────────────────────
-
-  defp handle_flag_off(room_id, state) do
-    Logger.debug("[IntentClassifier] runtime disabled, dropping chunk for room=#{room_id}")
-
-    :telemetry.execute(
-      [:platform, :meetings, :intent_classifier, :skipped],
-      %{count: 1},
-      %{reason: :flag_off, room_id: room_id}
-    )
-
-    {:noreply, state}
-  end
 
   defp handle_no_assignee(room_id, state) do
     {log?, updated_state} =
@@ -447,10 +423,4 @@ defmodule Platform.Meetings.IntentClassifier do
   end
 
   defp segment_speaker(_, _), do: ""
-
-  # ── Internal ───────────────────────────────────────────────────────────────
-
-  defp runtime_enabled? do
-    Application.get_env(:platform, :meeting_producer_runtime_enabled, false) == true
-  end
 end

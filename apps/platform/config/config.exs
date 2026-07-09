@@ -52,38 +52,14 @@ config :platform, Platform.Responsibilities,
     Platform.Responsibilities.Handlers.ArchitectureCronSweep
   ]
 
-# M8 stage 2: dual-write shim gate. When `false` (default), the legacy
-# `Platform.Agents.SystemEventScheduler` dispatch runs alone. When
-# `true`, the scheduler ALSO calls `Platform.Responsibilities.Router.fire/2`
-# for `:memory_daily_summary` + `:memory_dreaming` so a cutover monitor
-# can compare the two paths' outputs. Flip permanently in `config/prod.exs`
-# after `Platform.Responsibilities.CutoverMonitor` reports zero divergence.
-config :platform, :responsibility_router_enabled, false
-
-# ADR-0044 stage 5: content-level opt-in for the weekly Architect cron
-# sweep (`architecture.cron_sweep`). When `false` (default), the handler's
-# `build_prompt/1` returns `{:error, :feature_disabled}` and
-# `handle_output/3` is a no-op — the Router still fires the cron trigger
-# on Monday 04:00 UTC but the sweep does no LLM call and files no
-# follow-up tasks. Flip to `true` per-environment in `runtime.exs` after
-# an operator has reviewed a dry-run.
-config :platform, :enable_architect_cron_sweep, false
-
-# Meeting Producer runtime (task 019f2452). Two flags with distinct roles:
-#
-#   * `:start_meeting_intent_classifier` — supervisor gate. When `true`,
-#     the boot sequence adds `Platform.Meetings.IntentClassifier` to the
-#     child list so it subscribes to `meeting:transcript_chunk` at
-#     startup. Disabled in `config/test.exs` — tests own per-case
-#     instances.
-#
-#   * `:meeting_producer_runtime_enabled` — runtime kill-switch. When
-#     `false` (v1 default) the classifier drops every chunk at guard 1
-#     WITHOUT touching the LLM or the IntentQueue. Flip to `true` in a
-#     follow-up config change once the seeds land and the pipeline is
-#     ready to fire on live traffic.
+# Meeting Producer runtime (task 019f2452). Supervisor gate: when
+# `true`, the boot sequence adds `Platform.Meetings.IntentClassifier`
+# to the child list so it subscribes to `meeting:transcript_chunk` at
+# startup. Disabled in `config/test.exs` — tests own per-case
+# instances. Per-chunk firing is gated on
+# `Platform.Roles.assignee_for("meetings.intent_classify")` returning
+# a non-nil agent — assignment IS the enable signal.
 config :platform, :start_meeting_intent_classifier, true
-config :platform, :meeting_producer_runtime_enabled, false
 
 # IntentDispatcher (task 019f2452 stage 4): supervisor gate for the
 # global GenServer that drains the IntentQueue. Boots in the child

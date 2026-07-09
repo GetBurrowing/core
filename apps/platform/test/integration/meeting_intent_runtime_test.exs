@@ -27,7 +27,6 @@ defmodule Platform.Integration.MeetingIntentRuntimeTest do
   For reviewer sanity-check:
 
       iex -S mix
-      Application.put_env(:platform, :meeting_producer_runtime_enabled, true)
       # ...seed a role assignee, start a classifier with a real Ollama...
       {:ok, t} = Platform.Meetings.ensure_transcript(%{room_id: "room-x"})
       Platform.Meetings.append_segment(t.id, %{
@@ -79,24 +78,16 @@ defmodule Platform.Integration.MeetingIntentRuntimeTest do
   @rooms [
     "room-e2e-happy",
     "room-cleanup-target",
-    "room-untouched",
-    "room-flag-off-e2e"
+    "room-untouched"
   ]
 
   setup do
-    # Flag ON is the whole point of this suite — we want the runtime
-    # to actually fire. Individual tests can override this locally
-    # (test 3 flips it OFF mid-flight to prove the guard).
-    prior_flag = Application.get_env(:platform, :meeting_producer_runtime_enabled, false)
-    Application.put_env(:platform, :meeting_producer_runtime_enabled, true)
-
     # Sweep ETS on both edges. IntentQueue is a `:public` `:named_table`
     # started in `Platform.Application`'s child list, so tests share
     # the same table — hence the belt-and-braces cleanup.
     Enum.each(@rooms, &IntentQueue.drop_for_room/1)
 
     on_exit(fn ->
-      Application.put_env(:platform, :meeting_producer_runtime_enabled, prior_flag)
       Enum.each(@rooms, &IntentQueue.drop_for_room/1)
     end)
 
@@ -171,22 +162,6 @@ defmodule Platform.Integration.MeetingIntentRuntimeTest do
     :telemetry.attach(
       handler_id,
       [:platform, :meetings, :intent_classified],
-      fn _event, measurements, metadata, pid ->
-        send(pid, {tag, measurements, metadata})
-      end,
-      self()
-    )
-
-    on_exit(fn -> :telemetry.detach(handler_id) end)
-    :ok
-  end
-
-  defp attach_skipped_recorder!(tag) do
-    handler_id = "intent-classifier-skipped-e2e-#{tag}-#{System.unique_integer([:positive])}"
-
-    :telemetry.attach(
-      handler_id,
-      [:platform, :meetings, :intent_classifier, :skipped],
       fn _event, measurements, metadata, pid ->
         send(pid, {tag, measurements, metadata})
       end,
@@ -314,57 +289,6 @@ defmodule Platform.Integration.MeetingIntentRuntimeTest do
       assert IntentQueue.list_for_room("room-cleanup-target") == []
       # Braces invariant: the other room is untouched.
       assert length(IntentQueue.list_for_room("room-untouched")) == 1
-    end
-  end
-
-  # ── Test 3: flag-off end-to-end (kill-switch) ─────────────────────────────
-
-  describe "runtime flag off — end-to-end short-circuit" do
-    setup do
-      # Local override: this describe block runs with the runtime
-      # kill-switch flipped OFF. The outer `setup` restores it on exit.
-      Application.put_env(:platform, :meeting_producer_runtime_enabled, false)
-      :ok
-    end
-
-    test "chunk fires PubSub but classifier drops it — no queue row, no terminal telemetry",
-         %{classifier_pid: classifier_pid} do
-      attach_skipped_recorder!(:skipped)
-      attach_intent_classified_recorder!(:classified)
-
-      # Even if the provider were called it would classify successfully;
-      # the assertion is that guard 1 short-circuits before we ever
-      # reach the provider.
-      plant_stub_fun(classifier_pid, fn _c, _m, _o ->
-        {:ok,
-         %{
-           content:
-             Jason.encode!(%{
-               "intent" => "should_not_land",
-               "target_role" => "scheduler",
-               "confidence" => 0.99
-             })
-         }}
-      end)
-
-      {:ok, transcript} = Meetings.ensure_transcript(%{room_id: "room-flag-off-e2e"})
-
-      {:ok, _} =
-        Meetings.append_segment(transcript.id, %{
-          participant_identity: "user-1",
-          text: "we should absolutely schedule something",
-          start_time: 0,
-          end_time: 1000
-        })
-
-      # `:skipped` with `reason: :flag_off` is the proof the guard
-      # fired instead of the pipeline. Terminal telemetry MUST NOT
-      # arrive (we assert its absence below).
-      assert_receive {:skipped, %{count: 1}, %{reason: :flag_off, room_id: "room-flag-off-e2e"}},
-                     500
-
-      refute_receive {:classified, _, _}, 200
-      assert IntentQueue.list_for_room("room-flag-off-e2e") == []
     end
   end
 

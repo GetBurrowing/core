@@ -4,10 +4,9 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureCronSweepTest do
   the Architect role bundle's weekly cron sweep handler (ADR-0044
   stage 5, task `019f3da3`).
 
-  Stage 1 shipped the registration placeholder. Stage 5 (this test
-  file's target) fills in the real `gather_context/2`,
-  `build_prompt/1`, and `handle_output/3`, gated behind the
-  `:enable_architect_cron_sweep` config flag.
+  Firing is gated on the `architect` role assignee at the Router;
+  `build_prompt/1` and `handle_output/3` always run to completion once
+  the Router has resolved an assignee.
   """
   use Platform.DataCase, async: false
 
@@ -25,15 +24,6 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureCronSweepTest do
       context_provided: ["open_prs", "recent_closed_tasks", "adr_index"],
       enabled: true
     }
-  end
-
-  # Save & restore the opt-in flag around each test so a `put_env(true)`
-  # in one test doesn't bleed into another. `async: false` at the module
-  # level guards against parallel bleed as well.
-  setup do
-    prev = Application.get_env(:platform, :enable_architect_cron_sweep, false)
-    on_exit(fn -> Application.put_env(:platform, :enable_architect_cron_sweep, prev) end)
-    :ok
   end
 
   describe "register/0" do
@@ -65,7 +55,7 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureCronSweepTest do
       end)
     end
 
-    test "metadata flags the owner, active status, role, ADR, and opt-in gate" do
+    test "metadata flags the owner, active status, role, and ADR" do
       [spec] = ArchitectureCronSweep.register()
 
       assert spec.metadata["owner"] == "platform.architecture"
@@ -73,24 +63,9 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureCronSweepTest do
       assert spec.metadata["status"] == "active"
       assert spec.metadata["role"] == "architect"
       assert spec.metadata["adr"] == "0044"
-      assert spec.metadata["opt_in_flag"] == "enable_architect_cron_sweep"
-    end
-  end
-
-  describe "flag_enabled?/0" do
-    test "returns false when the config key is unset (default)" do
-      Application.delete_env(:platform, :enable_architect_cron_sweep)
-      refute ArchitectureCronSweep.flag_enabled?()
-    end
-
-    test "returns false when the config key is explicitly false" do
-      Application.put_env(:platform, :enable_architect_cron_sweep, false)
-      refute ArchitectureCronSweep.flag_enabled?()
-    end
-
-    test "returns true when the config key is true" do
-      Application.put_env(:platform, :enable_architect_cron_sweep, true)
-      assert ArchitectureCronSweep.flag_enabled?()
+      # No `opt_in_flag` key — firing is gated at the Router by the
+      # assignee, not by a runtime env-var flag.
+      refute Map.has_key?(spec.metadata, "opt_in_flag")
     end
   end
 
@@ -122,16 +97,8 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureCronSweepTest do
     end
   end
 
-  describe "build_prompt/1 — flag gate" do
-    test "returns {:error, :feature_disabled} when flag is off" do
-      Application.put_env(:platform, :enable_architect_cron_sweep, false)
-      {:ok, ctx} = ArchitectureCronSweep.gather_context(responsibility(), %{})
-
-      assert {:error, :feature_disabled} = ArchitectureCronSweep.build_prompt(ctx)
-    end
-
-    test "returns {:ok, %{system:, user:}} when flag is on" do
-      Application.put_env(:platform, :enable_architect_cron_sweep, true)
+  describe "build_prompt/1" do
+    test "returns {:ok, %{system:, user:}} with the architect system prompt" do
       {:ok, ctx} = ArchitectureCronSweep.gather_context(responsibility(), %{})
 
       assert {:ok, %{system: system, user: user}} = ArchitectureCronSweep.build_prompt(ctx)
@@ -143,31 +110,8 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureCronSweepTest do
     end
   end
 
-  describe "handle_output/3 — flag off" do
-    test "flag off: returns :ok, files no tasks" do
-      Application.put_env(:platform, :enable_architect_cron_sweep, false)
-
-      before_count = count_backlog_tasks()
-
-      assert :ok =
-               ArchitectureCronSweep.handle_output(
-                 responsibility(),
-                 %{"followups" => [%{"title" => "Should not be filed"}]},
-                 %{kind: :cron}
-               )
-
-      # No new tasks — the filing loop is short-circuited. This
-      # behavioural assertion is stronger than a log-content check
-      # (`config/test.exs` pins Logger to `:warning`, so a lower-
-      # severity log emitted by the handler never reaches capture_log).
-      assert count_backlog_tasks() == before_count
-    end
-  end
-
-  describe "handle_output/3 — flag on files follow-ups" do
+  describe "handle_output/3 — files follow-ups" do
     setup do
-      Application.put_env(:platform, :enable_architect_cron_sweep, true)
-
       # Per-project scope: seed a project the handler files follow-ups
       # against. `trigger_meta.project_id` is what the Router hands the
       # handler at fire time.
@@ -289,16 +233,13 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureCronSweepTest do
   end
 
   describe "handle_output/2 delegates to arity-3" do
-    test "arity-2 no-ops when flag off" do
-      Application.put_env(:platform, :enable_architect_cron_sweep, false)
-
+    test "arity-2 no-ops when the followups list is empty" do
       before_count = count_backlog_tasks()
 
       assert :ok = ArchitectureCronSweep.handle_output(responsibility(), %{"followups" => []})
 
-      # Same behavioural assertion as the arity-3 flag-off test: no tasks
-      # filed, regardless of the log emission (test-env Logger level is
-      # `:warning`, so `:info` never surfaces via capture_log).
+      # No follow-ups → no filed tasks. Exercises the arity-2 →
+      # arity-3 delegation path without needing a project seed.
       assert count_backlog_tasks() == before_count
     end
   end

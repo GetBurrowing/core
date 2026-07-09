@@ -746,8 +746,8 @@ defmodule Platform.Orchestration.PromptTemplates do
         description:
           "Sent to the architect agent every Monday 04:00 UTC (ADR-0044 stage 5). " <>
             "Walks open PRs, recently-closed tasks, and the ADR index to file at most " <>
-            "3 backlog follow-ups per sweep. Gated behind the " <>
-            "`:enable_architect_cron_sweep` config flag — the sweep no-ops when off.",
+            "3 backlog follow-ups per sweep. Firing is gated on the `architect` role " <>
+            "assignee — the sweep no-ops when the role has no assignee.",
         variables: [
           "open_prs",
           "recent_closed_tasks",

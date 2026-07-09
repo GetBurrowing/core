@@ -66,41 +66,6 @@ defmodule Platform.Agents.SystemEventScheduler do
   @tenants_summary_anchor_hour 4
   @tenants_summary_debounce_ms 6 * 24 * 60 * 60 * 1_000
 
-  # ── Weekly events (ADR-0044 stage 5) ──────────────────────────────────
-  #
-  # Map keyed by event name → `{day_of_week, hour_of_day}` in UTC. Day
-  # of week uses ISO 8601 numbering: 1 = Monday, 7 = Sunday (matches
-  # `Date.day_of_week/1`). Kept SEPARATE from the historian anchor map
-  # because the daily historian path is load-bearing for org memory —
-  # weekly events are per-key opt-in behind a runtime flag and must not
-  # share state with the anchor cache.
-  #
-  # Each weekly event carries an associated opt-in flag key. When the
-  # flag is `false` (default), the scheduler's `check_and_fire_weekly/2`
-  # skips the event even if its day/hour is due. Dispatch is delegated
-  # to `Platform.Responsibilities.fire/2` — the Router-level cron
-  # trigger for the same key ALSO fires it (belt-and-braces); the
-  # handler is idempotent at the flag-gate.
-  @default_weekly_events %{
-    "architecture_cron_sweep" => {1, 4}
-  }
-
-  # Per-event opt-in flag key. Extracted so tests can stub without
-  # reaching into `Application.get_env`.
-  @weekly_event_flag_keys %{
-    "architecture_cron_sweep" => :enable_architect_cron_sweep
-  }
-
-  # Responsibility key each weekly event dispatches to.
-  @weekly_event_responsibility_keys %{
-    "architecture_cron_sweep" => "architecture.cron_sweep"
-  }
-
-  # Weekly debounce window — one week minus a safety margin. Prevents
-  # a scheduler restart on Monday 04:15 from re-firing Monday 04:00's
-  # event.
-  @weekly_debounce_ms 6 * 24 * 60 * 60 * 1_000
-
   # ── Public API ───────────────────────────────────────────────────────────────
 
   @spec start_link(keyword()) :: GenServer.on_start()
@@ -225,89 +190,6 @@ defmodule Platform.Agents.SystemEventScheduler do
     elapsed_ms >= debounce_ms
   end
 
-  @doc """
-  Default weekly-events map. Public so tests can lock the shipped set
-  without spinning up the GenServer.
-
-  Keys are event names (strings); values are `{day_of_week, hour}` in
-  UTC where day_of_week matches `Date.day_of_week/1` (1 = Mon, 7 = Sun).
-  """
-  @spec default_weekly_events() :: %{String.t() => {1..7, 0..23}}
-  def default_weekly_events, do: @default_weekly_events
-
-  @doc """
-  Opt-in flag key for the given weekly event. Returns `nil` for unknown
-  events. Public so tests can toggle the flag by key rather than magic
-  constant.
-  """
-  @spec weekly_event_flag_key(String.t()) :: atom() | nil
-  def weekly_event_flag_key(event_name) when is_binary(event_name),
-    do: Map.get(@weekly_event_flag_keys, event_name)
-
-  @doc """
-  True when the weekly event's opt-in flag is set. Unknown events
-  return `false` — the safe default is "do not fire".
-  """
-  @spec weekly_event_enabled?(String.t()) :: boolean()
-  def weekly_event_enabled?(event_name) when is_binary(event_name) do
-    case Map.get(@weekly_event_flag_keys, event_name) do
-      nil -> false
-      key -> Application.get_env(:platform, key, false) == true
-    end
-  end
-
-  @doc """
-  Next weekly fire time strictly in the future for `(weekday, hour)`.
-  Handles the wrap case where today is the target weekday but the hour
-  has already passed (returns the following week's slot).
-
-  Weekday follows `Date.day_of_week/1`: 1 = Monday, 7 = Sunday.
-  """
-  @spec next_weekly_fire_time(DateTime.t(), 1..7, 0..23) :: DateTime.t()
-  def next_weekly_fire_time(%DateTime{} = now, weekday, hour)
-      when weekday in 1..7 and hour in 0..23 do
-    today_weekday = now |> DateTime.to_date() |> Date.day_of_week()
-
-    days_ahead =
-      cond do
-        # Same weekday, target hour still ahead → today.
-        today_weekday == weekday and now.hour < hour -> 0
-        # Same weekday but hour already passed → next week.
-        today_weekday == weekday -> 7
-        # Future weekday this ISO week.
-        weekday > today_weekday -> weekday - today_weekday
-        # Weekday already passed this week → next week.
-        true -> 7 - today_weekday + weekday
-      end
-
-    now
-    |> DateTime.add(days_ahead * 86_400, :second)
-    |> Map.merge(%{hour: hour, minute: 0, second: 0, microsecond: {0, 6}})
-  end
-
-  @doc """
-  True if the weekly event's `(weekday, hour)` is due right now AND we
-  haven't already fired within the debounce window.
-
-  `last_fired` is `nil` for events that never fired.
-  """
-  @spec weekly_event_due?(DateTime.t(), {1..7, 0..23}, DateTime.t() | nil) :: boolean()
-  def weekly_event_due?(now, day_hour, last_fired, debounce_ms \\ @weekly_debounce_ms)
-
-  def weekly_event_due?(%DateTime{} = now, {weekday, hour}, nil, _debounce_ms) do
-    weekly_anchor_due?(now, weekday, hour)
-  end
-
-  def weekly_event_due?(%DateTime{} = now, {weekday, hour}, %DateTime{} = last, debounce_ms) do
-    elapsed_ms = DateTime.diff(now, last, :millisecond)
-    elapsed_ms >= debounce_ms and weekly_anchor_due?(now, weekday, hour)
-  end
-
-  defp weekly_anchor_due?(%DateTime{} = now, weekday, hour) do
-    date = DateTime.to_date(now)
-    Date.day_of_week(date) == weekday and now.hour >= hour
-  end
-
   # ── GenServer callbacks ──────────────────────────────────────────────────────
 
   @impl GenServer
@@ -326,11 +208,7 @@ defmodule Platform.Agents.SystemEventScheduler do
       last_fired: %{},
       # %DateTime{} of last TENANTS_SUMMARY recompute; `nil` until the
       # first weekly heartbeat fires.
-      tenants_summary_last_run_at: nil,
-      # Map of event_name => %DateTime{} of last weekly fire. Only
-      # populated when a weekly event actually fires — an event whose
-      # flag is off never enters this map.
-      weekly_last_fired: %{}
+      tenants_summary_last_run_at: nil
     }
 
     schedule_check(state)
@@ -348,15 +226,13 @@ defmodule Platform.Agents.SystemEventScheduler do
     new_last_fired = check_and_fire(now, state)
     _ = run_threshold_sweep(now)
     new_tenants_last = maybe_fire_tenants_summary(now, state.tenants_summary_last_run_at)
-    new_weekly_last = check_and_fire_weekly(now, state.weekly_last_fired)
     schedule_check(state)
 
     {:noreply,
      %{
        state
        | last_fired: new_last_fired,
-         tenants_summary_last_run_at: new_tenants_last,
-         weekly_last_fired: new_weekly_last
+         tenants_summary_last_run_at: new_tenants_last
      }}
   end
 
@@ -581,81 +457,6 @@ defmodule Platform.Agents.SystemEventScheduler do
       :ok
   end
 
-  # ── Weekly events (ADR-0044 stage 5) ─────────────────────────────────
-  #
-  # Walk `@default_weekly_events`, skipping any whose opt-in flag is
-  # off. For each remaining event, check `weekly_event_due?/4` against
-  # `last_fired[event_name]`; when due, delegate dispatch to
-  # `Platform.Responsibilities.fire/2` for the mapped key. Failures are
-  # swallowed with a warning — the router itself is `try/rescue`-wrapped,
-  # but the belt-and-braces guard here keeps a router-shape change from
-  # crashing the scheduler tick.
-
-  defp check_and_fire_weekly(%DateTime{} = now, weekly_last_fired) do
-    Enum.reduce(@default_weekly_events, weekly_last_fired, fn {event_name, day_hour}, acc ->
-      cond do
-        not weekly_event_enabled?(event_name) ->
-          acc
-
-        weekly_event_due?(now, day_hour, Map.get(acc, event_name)) ->
-          fire_weekly(event_name, day_hour, now)
-          Map.put(acc, event_name, now)
-
-        true ->
-          acc
-      end
-    end)
-  end
-
-  defp fire_weekly(event_name, {weekday, hour}, %DateTime{} = now) do
-    responsibility_key = Map.get(@weekly_event_responsibility_keys, event_name)
-
-    Logger.info(
-      "[SystemEventScheduler] firing weekly event=#{event_name} " <>
-        "responsibility=#{inspect(responsibility_key)} weekday=#{weekday} hour=#{hour}"
-    )
-
-    if is_binary(responsibility_key) do
-      dispatch_weekly_responsibility(responsibility_key, event_name, now)
-    end
-
-    :ok
-  end
-
-  defp dispatch_weekly_responsibility(responsibility_key, event_name, now) do
-    if Code.ensure_loaded?(Platform.Responsibilities) and
-         function_exported?(Platform.Responsibilities, :fire, 2) do
-      Platform.Responsibilities.fire(responsibility_key, %{
-        kind: :cron,
-        source: :system_event_scheduler_weekly,
-        event_name: event_name,
-        fired_at: now
-      })
-    else
-      Logger.debug(
-        "[SystemEventScheduler] Responsibilities.fire/2 unavailable — skipping weekly " <>
-          "event=#{event_name}"
-      )
-
-      :ok
-    end
-  rescue
-    error ->
-      Logger.warning(
-        "[SystemEventScheduler] weekly dispatch raised event=#{event_name} " <>
-          "error=#{Exception.message(error)}"
-      )
-
-      :ok
-  catch
-    :exit, reason ->
-      Logger.warning(
-        "[SystemEventScheduler] weekly dispatch exited event=#{event_name} reason=#{inspect(reason)}"
-      )
-
-      :ok
-  end
-
   # ── Weekly TENANTS_SUMMARY heartbeat (ADR 0042 Stage 3) ────────────────
 
   defp maybe_fire_tenants_summary(now, last_run_at) do
@@ -714,127 +515,8 @@ defmodule Platform.Agents.SystemEventScheduler do
   defp dispatch_event(event_type, template_slug, extra_metadata)
        when is_binary(template_slug) and is_map(extra_metadata) do
     normalized_event = normalize_event(event_type)
-    legacy_result = HistorianDispatcher.dispatch(normalized_event, template_slug, extra_metadata)
-
-    maybe_dual_write(normalized_event, extra_metadata, legacy_result)
-
-    legacy_result
+    HistorianDispatcher.dispatch(normalized_event, template_slug, extra_metadata)
   end
-
-  # ── Dual-write shim (ADR-0041 M8 stage 2) ───────────────────────────
-  #
-  # When `:responsibility_router_enabled` is `true`, every legacy
-  # historian dispatch also fans out to the M6 responsibility router for
-  # `memory.daily_summary` + `memory.dreaming`. The router's `fire/2`
-  # looks each key up by canonical string, walks the assignee, and
-  # either dispatches to the assigned agent OR no-ops (unfilled
-  # responsibility). Logged with the `[dual_write]` tag so a cutover
-  # diff job can grep both paths' outcomes.
-  #
-  # When the flag is `false` (default in `config/config.exs`), this is
-  # a no-op — legacy is the only writer. We never block the legacy
-  # return value on router failure; the legacy path is the source of
-  # truth until the cutover follow-up deletes this scheduler.
-
-  defp maybe_dual_write(normalized_event, extra_metadata, legacy_result) do
-    if dual_write_enabled?() do
-      do_dual_write(normalized_event, extra_metadata, legacy_result)
-    else
-      :ok
-    end
-  rescue
-    error ->
-      Logger.warning(
-        "[SystemEventScheduler] [dual_write] shim raised: #{Exception.message(error)} — " <>
-          "legacy path unaffected"
-      )
-
-      :ok
-  end
-
-  defp dual_write_enabled? do
-    Application.get_env(:platform, :responsibility_router_enabled, false)
-  end
-
-  defp do_dual_write(@historian_event, extra_metadata, legacy_result) do
-    workspace_id =
-      Map.get(extra_metadata, :workspace_id) || Map.get(extra_metadata, "workspace_id")
-
-    trigger_meta = %{
-      kind: :cron,
-      workspace_id: workspace_id,
-      date: Date.utc_today(),
-      fired_at: DateTime.utc_now(),
-      source: :system_event_scheduler_dual_write
-    }
-
-    Enum.each(dual_write_keys(), fn key ->
-      router_result = safe_router_fire(key, trigger_meta)
-      legacy_summary = summarise_result(legacy_result)
-      router_summary = summarise_result(router_result)
-
-      Logger.info(
-        "[SystemEventScheduler] [dual_write] key=#{key} " <>
-          "legacy=#{inspect(legacy_summary)} " <>
-          "router=#{inspect(router_summary)} " <>
-          "workspace=#{inspect(workspace_id)}"
-      )
-
-      emit_dual_write_telemetry(key, legacy_summary, router_summary, workspace_id)
-    end)
-  end
-
-  # M8 stage 6 (ADR-0041): the CutoverMonitor subscribes to this event
-  # to maintain per-day per-key counters of router/legacy/divergence
-  # outcomes. Kept separate from the per-key info log so log scraping
-  # isn't the cutover signal — the monitor counts structured events.
-  defp emit_dual_write_telemetry(key, legacy_summary, router_summary, workspace_id) do
-    :telemetry.execute(
-      [:platform, :responsibilities, :dual_write],
-      %{system_time: System.system_time()},
-      %{
-        key: key,
-        legacy_result: legacy_summary,
-        router_result: router_summary,
-        legacy_ok?: result_ok?(legacy_summary),
-        router_ok?: result_ok?(router_summary),
-        workspace_id: workspace_id
-      }
-    )
-  rescue
-    _ -> :ok
-  end
-
-  defp result_ok?(:ok), do: true
-  defp result_ok?({:ok, _}), do: true
-  defp result_ok?(_), do: false
-
-  defp do_dual_write(_other_event, _extra_metadata, _legacy_result), do: :ok
-
-  defp dual_write_keys do
-    [
-      Platform.Responsibilities.Handlers.DailySummary.key(),
-      Platform.Responsibilities.Handlers.Dreaming.key()
-    ]
-  end
-
-  defp safe_router_fire(key, trigger_meta) do
-    if Code.ensure_loaded?(Platform.Responsibilities.Router) and
-         function_exported?(Platform.Responsibilities.Router, :fire, 2) do
-      Platform.Responsibilities.Router.fire(key, trigger_meta)
-    else
-      {:error, :router_not_loaded}
-    end
-  rescue
-    error -> {:error, {:fire_raised, Exception.message(error)}}
-  catch
-    :exit, reason -> {:error, {:fire_exited, reason}}
-  end
-
-  defp summarise_result(:ok), do: :ok
-  defp summarise_result({:ok, _}), do: :ok
-  defp summarise_result({:error, reason}), do: {:error, reason}
-  defp summarise_result(other), do: other
 
   # Defensive: legacy callers passing `"daily_summary"` or `"dreaming"` are
   # remapped to the canonical `"historian"` event. Logged so we can spot

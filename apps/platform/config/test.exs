@@ -80,11 +80,8 @@ config :platform, :start_meeting_historian_handler, false
 config :platform, :start_meeting_notifier, false
 
 # Meeting Producer runtime (task 019f2452 stage 3): tests start their own
-# IntentClassifier per case for DataCase sandbox ownership. Runtime
-# kill-switch stays off; tests flip it per-case via `Application.put_env`
-# in setup blocks + `on_exit` restore.
+# IntentClassifier per case for DataCase sandbox ownership.
 config :platform, :start_meeting_intent_classifier, false
-config :platform, :meeting_producer_runtime_enabled, false
 
 # IntentDispatcher (task 019f2452 stage 4): tests start their own
 # per-case instance for DataCase sandbox ownership. The

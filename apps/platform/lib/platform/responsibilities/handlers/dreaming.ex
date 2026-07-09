@@ -41,7 +41,7 @@ defmodule Platform.Responsibilities.Handlers.Dreaming do
   @memory_file_key "org/page/memory.md"
   @max_retries 1
 
-  @doc "Canonical key for this responsibility — exposed for dual-write callers."
+  @doc "Canonical key for this responsibility."
   @spec key() :: String.t()
   def key, do: @key
 

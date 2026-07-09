@@ -58,13 +58,9 @@ defmodule Platform.Review.MeetingIntentE2EReviewTest do
     Logger.put_module_level(Platform.Meetings.IntentClassifier, :info)
     on_exit(fn -> Logger.delete_module_level(Platform.Meetings.IntentClassifier) end)
 
-    prior_flag = Application.get_env(:platform, :meeting_producer_runtime_enabled, false)
-    Application.put_env(:platform, :meeting_producer_runtime_enabled, true)
-
     Enum.each(@rooms, &IntentQueue.drop_for_room/1)
 
     on_exit(fn ->
-      Application.put_env(:platform, :meeting_producer_runtime_enabled, prior_flag)
       Enum.each(@rooms, &IntentQueue.drop_for_room/1)
     end)
 

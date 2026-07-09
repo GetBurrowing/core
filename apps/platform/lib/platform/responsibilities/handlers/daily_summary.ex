@@ -34,38 +34,15 @@ defmodule Platform.Responsibilities.Handlers.DailySummary do
   so a cutover monitor can diff router-fired vs legacy entries on
   `metadata.source` alone.
 
-  ## Cutover-deletion checklist (M8 follow-up)
+  ## Cutover status
 
-  Per the M8 task description, `SystemEventScheduler` deletion happens
-  AFTER cutover proven against a real run. The checklist (also surfaced
-  by `mix responsibilities.cutover_report`) is:
-
-    1. `Platform.Responsibilities.CutoverMonitor.report/0` shows
-       `divergence_count: 0` for BOTH `memory.daily_summary` AND
-       `memory.dreaming` for 7 consecutive days. Operators run
-       `mix responsibilities.cutover_report` once a day and watch the
-       output; the task exits non-zero on any divergence so a cron
-       wrapper can alert without parsing.
-    2. Flip `:responsibility_router_enabled` default to `true` in
-       `config/prod.exs` (currently `false` in `config/config.exs`).
-       Until this lands the router path is dual-write-only and the
-       legacy scheduler remains the source of truth.
-    3. Open a follow-up task to delete:
-        * `apps/platform/lib/platform/agents/system_event_scheduler.ex`
-          (the whole module)
-        * `Platform.Agents.Agent.@valid_system_events` (the enum that
-          legacy code paths key on)
-        * the `system_events` column on the `agents` table (Ecto
-          migration)
-        * the dual-write shim itself
-          (`maybe_dual_write/3` + `do_dual_write/3` +
-          `emit_dual_write_telemetry/4`) once nothing emits to the
-          `[:platform, :responsibilities, :dual_write]` event anymore.
-
-  The cutover monitor + report task ship alongside this handler (M8
-  stage 6); the moduledoc here is the single source of truth for the
-  follow-up sequence so anyone grepping for "SystemEventScheduler
-  delete" finds the actual gating signal.
+  Router-owned dispatch is the sole fire path for this responsibility
+  (task 019f4447). The `SystemEventScheduler` dual-write shim +
+  `:responsibility_router_enabled` gate have been removed;
+  `Handlers.DailySummary.register/0` owns the `"0 23 * * *"` cron
+  anchor directly. The `Platform.Responsibilities.CutoverMonitor` +
+  `mix responsibilities.cutover_report` are retained as a historical
+  divergence report.
   """
   @behaviour Platform.Responsibilities.Provider
 
@@ -77,7 +54,7 @@ defmodule Platform.Responsibilities.Handlers.DailySummary do
 
   @key "memory.daily_summary"
 
-  @doc "Canonical key for this responsibility — exposed so dual-write callers don't hard-code the string."
+  @doc "Canonical key for this responsibility."
   @spec key() :: String.t()
   def key, do: @key
 

@@ -8,24 +8,19 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureCronSweep do
   template so the weekly Monday 04:00 UTC sweep can walk open PRs,
   recently-closed tasks, and ADR gaps to file tech-debt follow-ups.
 
-  ## Opt-in gate
+  ## Assignment-gated firing
 
-  The whole sweep is gated behind
-  `Application.get_env(:platform, :enable_architect_cron_sweep, false)` —
-  default off. When the flag is `false`:
+  Firing is gated entirely on the `architect` role's assignee. The
+  Router's own cron tick fires this responsibility every Monday 04:00
+  UTC via the registered `trigger_config`; before invoking the handler
+  it resolves the role assignee via `Platform.Roles.assignee_for/1`.
+  When no agent is assigned to the `architect` role (or the role's
+  responsibility bundle does not include `architecture.cron_sweep`),
+  the Router's assignee lookup returns `nil` and skips dispatch — no
+  LLM call, no side effects.
 
-    * `build_prompt/1` returns `{:error, :feature_disabled}` — the
-      Router logs and skips external dispatch without incurring an LLM
-      call.
-    * `handle_output/3` is a no-op that logs "flag off" and returns
-      `:ok` — belt-and-braces against a downstream caller that already
-      obtained an LLM output (e.g. via `Platform.Responsibilities.fire/2`
-      with a stubbed dispatcher in tests).
-
-  The row registered by `register/0` still lands with `enabled: true`
-  so operators can flip the flag without a DB touch. The Router-level
-  cron tick fires on the row's `enabled` value; the flag is the
-  content-level "should we actually work?" switch.
+  `handle_output/3` is only reached when an assignee has run the LLM,
+  so no in-handler gate is required. Assignment IS the enable signal.
 
   ## Spec (unchanged from stage 1)
 
@@ -70,11 +65,6 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureCronSweep do
   @feature "architecture"
   @template_slug "architecture.cron_sweep.v1"
 
-  # Config keys — public because the SystemEventScheduler weekly-events
-  # extension checks the same flag when computing whether to enter the
-  # weekly fire path.
-  @flag_key :enable_architect_cron_sweep
-
   # Cap the number of follow-up tasks a single sweep can file. Guards
   # against a mis-prompt run-away. The prompt template also bakes this
   # in, so both sides agree.
@@ -97,21 +87,6 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureCronSweep do
   @spec template_slug() :: String.t()
   def template_slug, do: @template_slug
 
-  @doc "Config-flag key gating the sweep. Public so tests can toggle it."
-  @spec flag_key() :: atom()
-  def flag_key, do: @flag_key
-
-  @doc """
-  True when the `:enable_architect_cron_sweep` config flag is on.
-
-  Public so the scheduler's weekly-events extension can gate its own
-  fire path against the same flag without duplicating the read.
-  """
-  @spec flag_enabled?() :: boolean()
-  def flag_enabled? do
-    Application.get_env(:platform, @flag_key, false) == true
-  end
-
   @impl true
   def register do
     [
@@ -120,8 +95,8 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureCronSweep do
         feature: @feature,
         trigger_kind: "cron",
         # 04:00 UTC Mondays — quiet slot ahead of the working week.
-        # The Router fires the cron trigger; content is gated at
-        # `build_prompt/1` + `handle_output/3` via `:enable_architect_cron_sweep`.
+        # The Router fires the cron trigger; dispatch is gated by the
+        # `architect` role assignee via `Roles.assignee_for/1`.
         trigger_config: %{"expression" => "0 4 * * 1"},
         scope: "per_project",
         context_provided: ["open_prs", "recent_closed_tasks", "adr_index"],
@@ -134,8 +109,7 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureCronSweep do
           "owner" => "platform.architecture",
           "status" => "active",
           "role" => "architect",
-          "adr" => "0044",
-          "opt_in_flag" => "enable_architect_cron_sweep"
+          "adr" => "0044"
         }
       }
     ]
@@ -186,27 +160,20 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureCronSweep do
   @impl true
   @doc """
   Build the (system + user) messages the Router hands to the external
-  dispatcher.
-
-  When `:enable_architect_cron_sweep` is `false`, refuses dispatch with
-  `{:error, :feature_disabled}` — the Router logs and no-ops without
-  calling the LLM.
+  dispatcher. Always returns `{:ok, _}` — firing is gated upstream at
+  the Router by the `architect` role assignee.
   """
-  @spec build_prompt(map()) :: {:ok, %{system: String.t(), user: String.t()}} | {:error, atom()}
+  @spec build_prompt(map()) :: {:ok, %{system: String.t(), user: String.t()}}
   def build_prompt(context) when is_map(context) do
-    if flag_enabled?() do
-      user = render_instruction(context)
+    user = render_instruction(context)
 
-      system =
-        "You are the Architect on the Suite weekly tech-debt sweep path (ADR-0044). " <>
-          "You file at most #{@max_followups} follow-up tasks per sweep. Each follow-up must " <>
-          "cite a specific PR number, task id, or ADR number — never a vague concern. " <>
-          "Outputs land as backlog tasks with `metadata.filed_by = \"architect_cron_sweep\"`."
+    system =
+      "You are the Architect on the Suite weekly tech-debt sweep path (ADR-0044). " <>
+        "You file at most #{@max_followups} follow-up tasks per sweep. Each follow-up must " <>
+        "cite a specific PR number, task id, or ADR number — never a vague concern. " <>
+        "Outputs land as backlog tasks with `metadata.filed_by = \"architect_cron_sweep\"`."
 
-      {:ok, %{system: system, user: user}}
-    else
-      {:error, :feature_disabled}
-    end
+    {:ok, %{system: system, user: user}}
   end
 
   @impl true
@@ -216,25 +183,14 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureCronSweep do
 
   @impl true
   def handle_output(%Responsibility{} = _responsibility, output, trigger_meta) do
-    cond do
-      not flag_enabled?() ->
-        Logger.info(
-          "[architecture.cron_sweep] flag off — dropping sweep output " <>
-            "(#{count_followups(output)} follow-ups)"
-        )
+    followups = extract_followups(output)
+    project_id = resolve_project_id(trigger_meta)
 
-        :ok
+    Enum.each(Enum.take(followups, @max_followups), fn followup ->
+      file_followup(followup, project_id)
+    end)
 
-      true ->
-        followups = extract_followups(output)
-        project_id = resolve_project_id(trigger_meta)
-
-        Enum.each(Enum.take(followups, @max_followups), fn followup ->
-          file_followup(followup, project_id)
-        end)
-
-        :ok
-    end
+    :ok
   end
 
   # Per-project scope: the Router iterates each project and fires once
@@ -447,10 +403,6 @@ defmodule Platform.Responsibilities.Handlers.ArchitectureCronSweep do
       to_string(value)
     end)
   end
-
-  defp count_followups(%{"followups" => list}) when is_list(list), do: length(list)
-  defp count_followups(%{followups: list}) when is_list(list), do: length(list)
-  defp count_followups(_), do: 0
 
   defp extract_followups(%{"followups" => list}) when is_list(list), do: list
   defp extract_followups(%{followups: list}) when is_list(list), do: list

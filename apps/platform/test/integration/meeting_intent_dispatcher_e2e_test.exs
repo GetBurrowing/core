@@ -108,10 +108,6 @@ defmodule Platform.Integration.MeetingIntentDispatcherE2ETest do
   # ── Setup ──────────────────────────────────────────────────────────────────
 
   setup do
-    # Runtime flag ON — this is the whole point of the pipeline suite.
-    prior_flag = Application.get_env(:platform, :meeting_producer_runtime_enabled, false)
-    Application.put_env(:platform, :meeting_producer_runtime_enabled, true)
-
     # Bump this module's log level to :info so the dispatcher's
     # `unknown target_role` log doesn't get swallowed on a debug-off
     # CI (belt-and-braces; none of these cases exercise it, but sibling
@@ -157,7 +153,6 @@ defmodule Platform.Integration.MeetingIntentDispatcherE2ETest do
     end
 
     on_exit(fn ->
-      Application.put_env(:platform, :meeting_producer_runtime_enabled, prior_flag)
       Logger.delete_module_level(Platform.Meetings.IntentDispatcher)
       Application.delete_env(:platform, :meetings_intent_dispatcher_native_dispatcher)
       Application.delete_env(:platform, :meetings_intent_dispatcher_external_dispatcher)

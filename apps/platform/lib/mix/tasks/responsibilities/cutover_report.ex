@@ -3,12 +3,12 @@ defmodule Mix.Tasks.Responsibilities.CutoverReport do
   Print the current `Platform.Responsibilities.CutoverMonitor` report
   (ADR-0041 M8 stage 6).
 
-  Operators run this once a day during the cutover-watch window to
-  decide when to flip `:responsibility_router_enabled` permanently and
-  queue the `Platform.Agents.SystemEventScheduler` deletion follow-up.
-  The exit code is non-zero when the monitor's `divergence_count` for
-  any tracked key is greater than zero — that way CI/cron wrappers can
-  surface the regression without parsing output.
+  Cutover of `memory.daily_summary` + `memory.dreaming` to Router-owned
+  dispatch is complete; this task now reports the CutoverMonitor
+  divergence counts historically. The exit code is non-zero when the
+  monitor's `divergence_count` for any tracked key is greater than zero
+  — that way CI/cron wrappers can surface the regression without
+  parsing output.
 
   ## Usage
 
@@ -32,16 +32,11 @@ defmodule Mix.Tasks.Responsibilities.CutoverReport do
 
       OK — no divergence detected for any tracked key.
 
-  ## Cutover checklist (see `Handlers.DailySummary` moduledoc)
+  ## Cutover status
 
-    1. `divergence_count: 0` for 7 consecutive days for every tracked key.
-    2. Flip `:responsibility_router_enabled` default to `true` in
-       `config/prod.exs`.
-    3. The Historian-column retirement completed in task
-       `019f2444-08f0-763f-ada5-c5ba1d819f75` — `Agent.@valid_system_events`
-       and the `agents.system_events` column are already gone. The
-       divergence check above still applies to the remaining tracked
-       responsibility keys (`memory.daily_summary` / `memory.dreaming`).
+  Cutover of `memory.daily_summary` + `memory.dreaming` to Router-owned
+  dispatch is complete. This task remains for historical reporting of
+  the CutoverMonitor divergence counts.
   """
   use Mix.Task
 

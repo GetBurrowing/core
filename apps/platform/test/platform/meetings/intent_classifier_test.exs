@@ -177,13 +177,6 @@ defmodule Platform.Meetings.IntentClassifierTest do
     payload
   end
 
-  defp set_runtime_flag(value) do
-    prior = Application.get_env(:platform, :meeting_producer_runtime_enabled, false)
-    Application.put_env(:platform, :meeting_producer_runtime_enabled, value)
-    on_exit(fn -> Application.put_env(:platform, :meeting_producer_runtime_enabled, prior) end)
-    :ok
-  end
-
   # ── Tests ──────────────────────────────────────────────────────────────────
 
   describe "init/1" do
@@ -200,29 +193,7 @@ defmodule Platform.Meetings.IntentClassifierTest do
     end
   end
 
-  describe "handle_info/2 — flag off" do
-    test "drops the chunk without calling Roles.assignee_for and emits :flag_off telemetry" do
-      set_runtime_flag(false)
-      _ = attach_recorder!(:skipped, :skipped)
-      {_pid, _name} = start_classifier!()
-
-      # Even with an assignee present, flag_off short-circuits before
-      # the Roles lookup runs.
-      agent = create_agent!()
-      assign_intent_role!(agent)
-
-      _payload = broadcast_chunk("room-flag-off")
-
-      assert_receive {:skipped, %{count: 1}, %{reason: :flag_off, room_id: "room-flag-off"}}, 500
-    end
-  end
-
   describe "handle_info/2 — no assignee" do
-    setup do
-      set_runtime_flag(true)
-      :ok
-    end
-
     test "logs at :info the first time a room appears with no assignee" do
       _ = attach_recorder!(:skipped, :skipped)
       {_pid, _name} = start_classifier!()
@@ -277,7 +248,6 @@ defmodule Platform.Meetings.IntentClassifierTest do
 
   describe "classify_and_enqueue — happy path" do
     setup do
-      set_runtime_flag(true)
       agent = create_agent!(%{slug: "intent-agent-happy"})
       assign_intent_role!(agent)
       IntentQueue.drop_for_room("room-happy")
@@ -330,7 +300,6 @@ defmodule Platform.Meetings.IntentClassifierTest do
 
   describe "classify_and_enqueue — idempotent replay" do
     setup do
-      set_runtime_flag(true)
       agent = create_agent!(%{slug: "intent-agent-idempotent"})
       assign_intent_role!(agent)
       IntentQueue.drop_for_room("room-idempotent")
@@ -375,7 +344,6 @@ defmodule Platform.Meetings.IntentClassifierTest do
 
   describe "classify_and_enqueue — template fallback" do
     setup do
-      set_runtime_flag(true)
       agent = create_agent!(%{slug: "intent-agent-fallback"})
       assign_intent_role!(agent)
       IntentQueue.drop_for_room("room-fallback")
@@ -425,7 +393,6 @@ defmodule Platform.Meetings.IntentClassifierTest do
 
   describe "classify_and_enqueue — model error" do
     setup do
-      set_runtime_flag(true)
       agent = create_agent!(%{slug: "intent-agent-model-error"})
       assign_intent_role!(agent)
       IntentQueue.drop_for_room("room-model-error")
@@ -494,7 +461,6 @@ defmodule Platform.Meetings.IntentClassifierTest do
 
   describe "classify_and_enqueue — parse error" do
     setup do
-      set_runtime_flag(true)
       agent = create_agent!(%{slug: "intent-agent-parse-error"})
       assign_intent_role!(agent)
       IntentQueue.drop_for_room("room-parse-error")
@@ -537,7 +503,6 @@ defmodule Platform.Meetings.IntentClassifierTest do
 
   describe "malformed events" do
     test "ignores unknown messages without crashing" do
-      set_runtime_flag(false)
       {pid, _name} = start_classifier!()
 
       send(pid, :garbage)
