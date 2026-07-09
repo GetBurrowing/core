@@ -512,4 +512,462 @@ defmodule Platform.Meetings.IntentClassifierTest do
       assert Process.alive?(pid)
     end
   end
+
+  describe "chunk buffer — sliding window" do
+    test "prepends the current chunk into state.recent_chunks (head-first)" do
+      {pid, _name} = start_classifier!(context_window_size: 3)
+
+      _ =
+        broadcast_chunk("room-buffer-1",
+          segment: %{id: "seg-1", text: "first chunk", speaker_name: "alice"}
+        )
+
+      # Give the classifier's handle_info a beat to process.
+      Process.sleep(30)
+
+      state = :sys.get_state(pid)
+      assert Map.has_key?(state.recent_chunks, "room-buffer-1")
+      [head] = state.recent_chunks["room-buffer-1"]
+      assert head.text == "first chunk"
+      assert head.speaker == "alice"
+    end
+
+    test "keeps at most context_window_size + 1 entries per room (head = current)" do
+      {pid, _name} = start_classifier!(context_window_size: 3)
+
+      for i <- 1..5 do
+        _ =
+          broadcast_chunk("room-buffer-window",
+            segment: %{id: "seg-#{i}", text: "chunk #{i}", speaker_name: "alice"}
+          )
+      end
+
+      Process.sleep(50)
+
+      state = :sys.get_state(pid)
+      window = state.recent_chunks["room-buffer-window"]
+
+      # window size 3 => head + prior 3 => 4 stored entries max.
+      assert length(window) == 4
+
+      # Most-recent-first: head is chunk 5, oldest kept is chunk 2.
+      assert Enum.map(window, & &1.text) ==
+               ["chunk 5", "chunk 4", "chunk 3", "chunk 2"]
+    end
+
+    test "buffers are per-room isolated — interleaved chunks stay separate" do
+      {pid, _name} = start_classifier!(context_window_size: 3)
+
+      _ =
+        broadcast_chunk("room-A", segment: %{id: "a1", text: "A1", speaker_name: "alice"})
+
+      _ =
+        broadcast_chunk("room-B", segment: %{id: "b1", text: "B1", speaker_name: "bob"})
+
+      _ =
+        broadcast_chunk("room-A", segment: %{id: "a2", text: "A2", speaker_name: "alice"})
+
+      Process.sleep(50)
+
+      state = :sys.get_state(pid)
+      assert Enum.map(state.recent_chunks["room-A"], & &1.text) == ["A2", "A1"]
+      assert Enum.map(state.recent_chunks["room-B"], & &1.text) == ["B1"]
+    end
+
+    test "buffer stays populated even when there is no assignee (warms the window)" do
+      _ = attach_recorder!(:skipped, :skipped)
+      {pid, _name} = start_classifier!(context_window_size: 3)
+
+      # No assign_intent_role! call — assignee lookup returns nil.
+      _ =
+        capture_log(fn ->
+          _ =
+            broadcast_chunk("room-no-assignee-warm",
+              segment: %{id: "warm-1", text: "warm chunk", speaker_name: "carol"}
+            )
+
+          assert_receive {:skipped, %{count: 1}, %{reason: :no_assignee}}, 500
+        end)
+
+      state = :sys.get_state(pid)
+      assert [entry] = state.recent_chunks["room-no-assignee-warm"]
+      assert entry.text == "warm chunk"
+      assert entry.speaker == "carol"
+    end
+  end
+
+  describe "chunk buffer — cleanup on meeting_finished" do
+    test "clears the per-room buffer when meeting_finished fires for that room" do
+      {pid, _name} = start_classifier!(context_window_size: 3)
+
+      _ = broadcast_chunk("room-cleanup", segment: %{id: "c1", text: "c1"})
+      _ = broadcast_chunk("room-cleanup", segment: %{id: "c2", text: "c2"})
+      Process.sleep(30)
+
+      assert Map.has_key?(:sys.get_state(pid).recent_chunks, "room-cleanup")
+
+      :ok =
+        MeetingsPubSub.broadcast_meeting_finished("room-cleanup", %{
+          room_id: "room-cleanup",
+          transcript_id: "t-cleanup",
+          space_id: "s-cleanup"
+        })
+
+      Process.sleep(30)
+
+      refute Map.has_key?(:sys.get_state(pid).recent_chunks, "room-cleanup")
+      assert Process.alive?(pid)
+    end
+
+    test "cleanup is scoped — a different room's buffer is untouched" do
+      {pid, _name} = start_classifier!(context_window_size: 3)
+
+      _ = broadcast_chunk("room-keep", segment: %{id: "k1", text: "k1"})
+      _ = broadcast_chunk("room-drop", segment: %{id: "d1", text: "d1"})
+      Process.sleep(30)
+
+      :ok =
+        MeetingsPubSub.broadcast_meeting_finished("room-drop", %{
+          room_id: "room-drop",
+          transcript_id: "t-drop",
+          space_id: "s-drop"
+        })
+
+      Process.sleep(30)
+
+      state = :sys.get_state(pid)
+      refute Map.has_key?(state.recent_chunks, "room-drop")
+      assert Enum.map(state.recent_chunks["room-keep"], & &1.text) == ["k1"]
+    end
+  end
+
+  # ── Stage 2 (task 019f474d) — prompt context injection ────────────────────
+  #
+  # These tests capture the messages the classifier hands to the
+  # provider so we can assert on the rendered prompt string. The
+  # stub returns a fixed happy-path JSON so the pipeline still runs
+  # to completion (queue write + terminal telemetry) and we can
+  # correlate rendered prompt to enqueue result.
+
+  # Delete the DB template so `resolve_prompt/5` walks the inline
+  # fallback branch. That's the only prompt content we can assert
+  # exact strings on from within the test — the DB template body is
+  # rewritten by a migration whose exact wording lives elsewhere.
+  defp force_fallback_prompt! do
+    case PromptTemplates.get_template_by_slug(@prompt_slug) do
+      nil -> :ok
+      template -> PromptTemplates.delete_template(template)
+    end
+  end
+
+  # Stub that captures every messages list it is called with into the
+  # test's mailbox and returns a fixed valid intent JSON — so the
+  # classifier makes it all the way to enqueue + terminal telemetry.
+  defp capture_prompt_stub(test_pid) do
+    fn _creds, messages, _opts ->
+      send(test_pid, {:captured_prompt, messages})
+
+      {:ok,
+       %{
+         content:
+           Jason.encode!(%{
+             "intent" => "brief_worthy",
+             "target_role" => "meeting_scribe",
+             "confidence" => 0.8
+           })
+       }}
+    end
+  end
+
+  describe "classify_and_enqueue — context injection" do
+    setup do
+      agent = create_agent!(%{slug: "intent-agent-context"})
+      assign_intent_role!(agent)
+      IntentQueue.drop_for_room("room-context")
+      force_fallback_prompt!()
+      %{agent: agent}
+    end
+
+    test "3rd chunk's prompt lists chunks 1-2 as prior context with do-not-classify framing and excludes the current chunk" do
+      {pid, _name} = start_classifier!(context_window_size: 3)
+      plant_stub_fun(pid, capture_prompt_stub(self()))
+
+      capture_log(fn ->
+        _ =
+          broadcast_chunk("room-context",
+            segment: %{
+              id: "seg-c1",
+              text: "first chunk about billing",
+              speaker_name: "alice",
+              timestamp_ms: 5_000
+            }
+          )
+
+        _ = assert_receive {:captured_prompt, _}, 500
+
+        _ =
+          broadcast_chunk("room-context",
+            segment: %{
+              id: "seg-c2",
+              text: "second chunk about the bug",
+              speaker_name: "bob",
+              timestamp_ms: 12_000
+            }
+          )
+
+        _ = assert_receive {:captured_prompt, _}, 500
+
+        _ =
+          broadcast_chunk("room-context",
+            segment: %{
+              id: "seg-c3",
+              text: "third chunk should be classified",
+              speaker_name: "carol",
+              timestamp_ms: 20_000
+            }
+          )
+
+        assert_receive {:captured_prompt, messages}, 500
+
+        prompt =
+          messages
+          |> Enum.find(fn %{role: role} -> role == "system" end)
+          |> Map.fetch!(:content)
+
+        # do-not-classify framing must be present
+        assert prompt =~ "DO NOT classify these lines"
+
+        # chunks 1 and 2 appear in chronological order (oldest first)
+        idx_1 = :binary.match(prompt, "first chunk about billing") |> elem(0)
+        idx_2 = :binary.match(prompt, "second chunk about the bug") |> elem(0)
+        assert idx_1 < idx_2, "prior context must be rendered oldest-first"
+
+        # timestamps + speakers render as `- [MM:SS] speaker: text`
+        assert prompt =~ "- [00:05] alice: first chunk about billing"
+        assert prompt =~ "- [00:12] bob: second chunk about the bug"
+
+        # current chunk MUST NOT appear inside the prior-context block —
+        # it's rendered as the Transcript chunk line in the fallback
+        # template. We assert absence by pattern: the third chunk's
+        # text must not appear preceded by the `- [` list marker.
+        refute prompt =~ "- [00:20] carol: third chunk should be classified"
+
+        # It DOES appear as the current utterance in the fallback
+        # template.
+        assert prompt =~ "third chunk should be classified"
+      end)
+    end
+  end
+
+  describe "classify_and_enqueue — sliding window in prompt" do
+    setup do
+      agent = create_agent!(%{slug: "intent-agent-window"})
+      assign_intent_role!(agent)
+      IntentQueue.drop_for_room("room-window")
+      force_fallback_prompt!()
+      %{agent: agent}
+    end
+
+    test "with window size 3 and 5 chunks, the 5th sees chunks 2..4 as prior context — chunk 1 evicted" do
+      {pid, _name} = start_classifier!(context_window_size: 3)
+      plant_stub_fun(pid, capture_prompt_stub(self()))
+
+      capture_log(fn ->
+        # Broadcast 5 chunks; capture each rendered prompt in order.
+        prompts =
+          for i <- 1..5 do
+            _ =
+              broadcast_chunk("room-window",
+                segment: %{
+                  id: "seg-w#{i}",
+                  text: "window chunk #{i}",
+                  speaker_name: "spk-#{i}",
+                  timestamp_ms: i * 1_000
+                }
+              )
+
+            assert_receive {:captured_prompt, messages}, 500
+
+            messages
+            |> Enum.find(fn %{role: role} -> role == "system" end)
+            |> Map.fetch!(:content)
+          end
+
+        fifth_prompt = List.last(prompts)
+
+        # Chunks 2, 3, 4 land in the prior-context block for chunk 5.
+        assert fifth_prompt =~ "- [00:02] spk-2: window chunk 2"
+        assert fifth_prompt =~ "- [00:03] spk-3: window chunk 3"
+        assert fifth_prompt =~ "- [00:04] spk-4: window chunk 4"
+
+        # Chunk 1 must have been evicted from the 3-wide window when
+        # chunk 5 renders — its formatted line must not appear.
+        refute fifth_prompt =~ "- [00:01] spk-1: window chunk 1",
+               "chunk 1 must be evicted from a 3-wide window when chunk 5 renders"
+
+        # Chunk 5 is the CURRENT utterance, not in the prior list.
+        refute fifth_prompt =~ "- [00:05] spk-5: window chunk 5"
+        assert fifth_prompt =~ "window chunk 5"
+      end)
+    end
+  end
+
+  describe "classify_and_enqueue — dedupe key unchanged by context" do
+    setup do
+      agent = create_agent!(%{slug: "intent-agent-dedupe"})
+      assign_intent_role!(agent)
+      IntentQueue.drop_for_room("room-dedupe")
+      %{agent: agent}
+    end
+
+    test "A -> B -> C -> A: the second A collides with the first even though the surrounding context differs" do
+      _ = attach_terminal_recorder!(:classified)
+      {pid, _name} = start_classifier!(context_window_size: 3)
+
+      # Fixed happy-path stub — same intent+role for every chunk, so
+      # the dedupe key depends solely on `chunk_text`.
+      plant_stub_fun(pid, fn _c, _m, _o ->
+        {:ok,
+         %{
+           content:
+             Jason.encode!(%{
+               "intent" => "brief_worthy",
+               "target_role" => "meeting_scribe",
+               "confidence" => 0.75
+             })
+         }}
+      end)
+
+      utter_a = "please summarise last quarter's revenue"
+      utter_b = "we need to update the billing docs"
+      utter_c = "who is on the release call"
+
+      # First A
+      :ok =
+        MeetingsPubSub.broadcast_transcript_chunk("room-dedupe", %{
+          room_id: "room-dedupe",
+          transcript_id: "t-dedupe-a1",
+          segment: %{id: "seg-a1", text: utter_a, speaker_name: "alice"}
+        })
+
+      assert_receive {:classified, _m,
+                      %{dedupe_key_hit_or_new: :inserted, dedupe_key: dedupe_key_first}},
+                     500
+
+      # B
+      :ok =
+        MeetingsPubSub.broadcast_transcript_chunk("room-dedupe", %{
+          room_id: "room-dedupe",
+          transcript_id: "t-dedupe-b",
+          segment: %{id: "seg-b", text: utter_b, speaker_name: "bob"}
+        })
+
+      assert_receive {:classified, _m, _md}, 500
+
+      # C
+      :ok =
+        MeetingsPubSub.broadcast_transcript_chunk("room-dedupe", %{
+          room_id: "room-dedupe",
+          transcript_id: "t-dedupe-c",
+          segment: %{id: "seg-c", text: utter_c, speaker_name: "carol"}
+        })
+
+      assert_receive {:classified, _m, _md}, 500
+
+      # Second A — same utterance text, different surrounding context
+      # (window now holds C+B before it, not empty).
+      :ok =
+        MeetingsPubSub.broadcast_transcript_chunk("room-dedupe", %{
+          room_id: "room-dedupe",
+          transcript_id: "t-dedupe-a2",
+          segment: %{id: "seg-a2", text: utter_a, speaker_name: "alice"}
+        })
+
+      assert_receive {:classified, _m,
+                      %{dedupe_key_hit_or_new: :duplicate, dedupe_key: dedupe_key_second}},
+                     500
+
+      # The dedupe key MUST NOT depend on prior context — it is a
+      # function of `intent <> target_role <> chunk_text` only.
+      assert dedupe_key_first == dedupe_key_second,
+             "dedupe key must be identical for the same utterance regardless of context window"
+    end
+  end
+
+  describe "chunk buffer — cleanup on meeting_finished clears prompt context" do
+    setup do
+      agent = create_agent!(%{slug: "intent-agent-cleanup-context"})
+      assign_intent_role!(agent)
+      IntentQueue.drop_for_room("room-cleanup-context")
+      force_fallback_prompt!()
+      %{agent: agent}
+    end
+
+    test "after meeting_finished, the next chunk renders (no prior context) instead of the pre-cleanup window" do
+      {pid, _name} = start_classifier!(context_window_size: 3)
+      plant_stub_fun(pid, capture_prompt_stub(self()))
+
+      capture_log(fn ->
+        # Warm the window with two chunks — third will see them as prior.
+        _ =
+          broadcast_chunk("room-cleanup-context",
+            segment: %{
+              id: "seg-x1",
+              text: "warmup 1",
+              speaker_name: "alice",
+              timestamp_ms: 1_000
+            }
+          )
+
+        assert_receive {:captured_prompt, _}, 500
+
+        _ =
+          broadcast_chunk("room-cleanup-context",
+            segment: %{
+              id: "seg-x2",
+              text: "warmup 2",
+              speaker_name: "bob",
+              timestamp_ms: 2_000
+            }
+          )
+
+        assert_receive {:captured_prompt, _}, 500
+
+        # Fire the cleanup — this drops the room's buffer entry.
+        :ok =
+          MeetingsPubSub.broadcast_meeting_finished("room-cleanup-context", %{
+            room_id: "room-cleanup-context",
+            transcript_id: "t-cleanup-ctx",
+            space_id: "s-cleanup-ctx"
+          })
+
+        # Wait for the cleanup to land in classifier state.
+        Process.sleep(30)
+        refute Map.has_key?(:sys.get_state(pid).recent_chunks, "room-cleanup-context")
+
+        # Now broadcast a fresh chunk. Its prompt must render the
+        # `(no prior context)` sentinel — NOT the warmup lines.
+        _ =
+          broadcast_chunk("room-cleanup-context",
+            segment: %{
+              id: "seg-x3",
+              text: "post-cleanup utterance",
+              speaker_name: "carol",
+              timestamp_ms: 10_000
+            }
+          )
+
+        assert_receive {:captured_prompt, messages}, 500
+
+        prompt =
+          messages
+          |> Enum.find(fn %{role: role} -> role == "system" end)
+          |> Map.fetch!(:content)
+
+        assert prompt =~ "(no prior context)"
+        refute prompt =~ "warmup 1"
+        refute prompt =~ "warmup 2"
+      end)
+    end
+  end
 end

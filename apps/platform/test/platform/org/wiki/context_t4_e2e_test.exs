@@ -489,7 +489,20 @@ defmodule Platform.Org.Wiki.ContextT4E2ETest do
       # responsibility rows are flipped to point at these slugs in v2
       # stage 2; the seed migration lands here so the templates are
       # editable via `/admin/prompts` as soon as v2 stage 1 deploys.
-      "20260708130000_seed_prompt_templates_security_guard.exs"
+      "20260708130000_seed_prompt_templates_security_guard.exs",
+      # Task 019f474d stage 2 — IntentClassifier prior-N context buffer.
+      # Force-updates the `meetings.intent_classify.v1` template body to
+      # add an explicit "Prior conversation context — DO NOT classify
+      # these lines" section separator so the LLM cannot conflate the
+      # buffered prior chunks (framed as read-only context, industry
+      # standard Zoom AI Companion / Fireflies / Otter pattern) with the
+      # current utterance under classification. Also fixes a latent
+      # variable-name drift bug — pre-existing template body referenced
+      # `{{meeting_transcript_chunk}}` while the classifier passed
+      # `assigns.transcript_chunk`; stage 2 passes both keys. Dedupe key
+      # UNCHANGED — still `sha256(intent + target_role + chunk_text)` on
+      # the current chunk only, so idempotency is preserved.
+      "20260709120000_update_intent_classify_prompt_with_context.exs"
     ]
 
     defp t4_root, do: Mix.Project.project_file() |> Path.dirname()

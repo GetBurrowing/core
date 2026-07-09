@@ -66,6 +66,40 @@ defmodule Platform.Repo.Migrations.SeedPromptTemplateIntentClassifyTest do
       assert "meeting_transcript_chunk" in variables
     end
 
+    test "stage-2 refresh: declares context/speaker/room variables and includes the do-not-classify framing" do
+      # Task 019f474d stage 2 — the row is re-written in place by
+      # `20260709120000_update_intent_classify_prompt_with_context`.
+      # Assert the shape the classifier now depends on: extra
+      # variables + the "Prior conversation context" framing block
+      # with the `{{context_lines}}` marker + the `{{speaker}}` and
+      # current-utterance markers around `{{meeting_transcript_chunk}}`.
+      assert %{content: content, variables: variables} =
+               PromptTemplates.get_template_by_slug(@slug)
+
+      for var <- [
+            "meeting_transcript_chunk",
+            "context_lines",
+            "context_present",
+            "speaker",
+            "room_id"
+          ] do
+        assert var in variables,
+               "stage-2 template must declare #{inspect(var)} in variables"
+      end
+
+      assert content =~ "{{context_lines}}",
+             "stage-2 template must include the {{context_lines}} marker"
+
+      assert content =~ "{{meeting_transcript_chunk}}",
+             "stage-2 template must include the {{meeting_transcript_chunk}} marker"
+
+      assert content =~ "{{speaker}}",
+             "stage-2 template must include the {{speaker}} marker"
+
+      assert content =~ "DO NOT classify these lines",
+             "stage-2 template must explicitly instruct the model NOT to classify prior context"
+    end
+
     test "seeded slug matches IntentClassify.template_slug/0" do
       # Drift guard (mirrors seed_designer_prompt_templates_test.exs:53-63):
       # if the handler renames its template slug without a matching

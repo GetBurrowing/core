@@ -61,6 +61,15 @@ config :platform, Platform.Responsibilities,
 # a non-nil agent — assignment IS the enable signal.
 config :platform, :start_meeting_intent_classifier, true
 
+# IntentClassifier prior-context window size (task 019f474d): how many
+# prior transcript chunks the classifier keeps buffered per room to
+# thread into the LLM prompt as understand-only context. Tunes HOW the
+# classifier builds prompt context; does NOT gate responsibility
+# firing (integer default keeps it clear of the boolean-env-flag sweep
+# in `no_env_flag_gates_test.exs`). Cleared on `meeting_finished` so
+# per-room state doesn't leak on long-running nodes.
+config :platform, :intent_classifier_context_window_size, 3
+
 # IntentDispatcher (task 019f2452 stage 4): supervisor gate for the
 # global GenServer that drains the IntentQueue. Boots in the child
 # pipeline immediately after IntentClassifier so the conceptual
