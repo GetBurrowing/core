@@ -1228,16 +1228,45 @@
        `#meeting-captions-persist-host` (see above) so a page reload with
        the server default `:captions_visible = false` still restores the
        viewer's stored preference. --%>
+  <%!-- Gallery-mode caption fan-out: when the stage is in gallery mode we
+       hide the combined caption bar via `hidden` (display:none) rather
+       than dropping it from the DOM with `:if`. The `MeetingCaptions`
+       hook does DOUBLE duty — it renders the central rolling buffer AND
+       fans each `meeting:caption` segment out to per-tile
+       `[data-participant] [data-caption-slot]` overlays. Removing the
+       host element unmounts the hook and would silence the per-tile
+       overlays too, regressing the gallery-view UX this task exists to
+       preserve.
+
+       Two-div structure — the OUTER `#meeting-captions-shell` carries the
+       positioning classes AND the conditional `hidden` toggle. The INNER
+       `#meeting-captions` div is the stable hook host (`phx-update="ignore"`
+       + `phx-hook="MeetingCaptions"`). Splitting them matters: with
+       `phx-update="ignore"` on the hook host, Phoenix's morphdom (and the
+       LV test client, see `Phoenix.LiveViewTest.TreeDOM.apply_phx_update/4`)
+       preserves NON-`data-*` attributes across renders, so the `hidden`
+       class flip has to live on an element the LV freely re-renders. The
+       wrapper's `data-stage-mode` attribute mirrors the assign so CDP e2e
+       and tests can query it. --%>
   <div
     :if={@captions_visible}
-    id="meeting-captions"
-    phx-hook="MeetingCaptions"
-    phx-update="ignore"
-    data-role="meeting-captions"
-    class="fixed bottom-[calc(1rem+env(safe-area-inset-bottom)+var(--bottom-nav-height,0px))] left-1/2 -translate-x-1/2 z-40 w-full max-w-2xl px-4 py-3 rounded-xl bg-black/75 backdrop-blur-sm text-sm text-white shadow-lg transition-opacity duration-300 pointer-events-none"
-    aria-live="polite"
-    aria-label="Meeting captions"
+    data-role="meeting-captions-shell"
+    data-stage-mode={@current_stage_mode}
+    class={[
+      "fixed bottom-[calc(1rem+env(safe-area-inset-bottom)+var(--bottom-nav-height,0px))] left-1/2 -translate-x-1/2 z-40 w-full max-w-2xl px-4 pointer-events-none",
+      @current_stage_mode == :gallery && "hidden"
+    ]}
   >
+    <div
+      id="meeting-captions"
+      phx-hook="MeetingCaptions"
+      phx-update="ignore"
+      data-role="meeting-captions"
+      class="w-full py-3 rounded-xl bg-black/75 backdrop-blur-sm text-sm text-white shadow-lg transition-opacity duration-300"
+      aria-live="polite"
+      aria-label="Meeting captions"
+    >
+    </div>
   </div>
 <% else %>
   <%!-- `:index` action — grouped meetings list (live / upcoming / ended).

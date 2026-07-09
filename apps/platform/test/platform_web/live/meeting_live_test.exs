@@ -143,6 +143,20 @@ defmodule PlatformWeb.MeetingLiveTest do
     {participant, message}
   end
 
+  # Isolate the caption-bar OUTER shell's opening tag from the rest of
+  # the rendered HTML so class/attribute assertions in the caption-bar
+  # describe block don't false-match the center stage's `data-stage-mode`
+  # attribute (emitted at ~line 455 of meeting_live.html.heex on the
+  # main video pane wrapper) or the inner `#meeting-captions` hook host
+  # (which has `phx-update="ignore"` and stable attributes). The shell
+  # is where the dynamic `hidden` class + `data-stage-mode` mirror live.
+  defp caption_bar_shell_open_tag(html) do
+    case Regex.run(~r/<div[^>]*data-role="meeting-captions-shell"[^>]*>/, html) do
+      [tag] -> tag
+      nil -> nil
+    end
+  end
+
   describe "route resolution" do
     test "/meetings/:slug resolves and mounts the meeting shell", %{conn: conn} do
       {meeting, _space} = create_meeting(%{slug: "kickoff-route", name: "Kickoff"})
@@ -3452,10 +3466,15 @@ defmodule PlatformWeb.MeetingLiveTest do
         |> element(~s([data-role="meeting-captions-toggle"]))
         |> render_click()
 
-      # The caption bar carries `z-40` (was `z-30` in stage 1).
-      assert html =~ ~r/id="meeting-captions"[^>]*z-40/
-      # And no lingering `z-30` on the same element.
-      refute html =~ ~r/id="meeting-captions"[^>]*\bz-30\b/
+      # The caption bar's OUTER positioning shell carries `z-40` (was
+      # `z-30` in stage 1). Task 019f43e4 stage 1 split the caption bar
+      # into an outer positioning shell (`data-role="meeting-captions-shell"`)
+      # and an inner stable hook host (`#meeting-captions`) so the outer
+      # can carry a dynamic `hidden` class through `phx-update="ignore"`.
+      # The z-index has to live on the positioning shell for the CSS to
+      # take effect (z-index only applies to positioned elements).
+      assert html =~ ~r/data-role="meeting-captions-shell"[^>]*z-40/
+      refute html =~ ~r/data-role="meeting-captions-shell"[^>]*\bz-30\b/
     end
 
     test "gallery tiles carry a `[data-caption-slot]` overlay when CC is on", %{
@@ -3569,6 +3588,166 @@ defmodule PlatformWeb.MeetingLiveTest do
         |> render_click()
 
       refute html =~ ~s(data-caption-slot)
+    end
+  end
+
+  # ── Caption bar / gallery interaction (task 019f43e4 stage 1) ─────────
+  #
+  # In gallery mode, the per-tile `[data-caption-slot]` overlays are the
+  # primary surface for spoken captions — the combined lower bar becomes
+  # visually redundant (and, on mobile, competes with the sticky nav for
+  # safe-area space). We hide the bar via a `hidden` class rather than
+  # unmounting it with `:if`, because the `MeetingCaptions` JS hook
+  # mounts on `#meeting-captions` and fans caption segments out to BOTH
+  # the bar AND every per-tile `[data-caption-slot]`. Dropping the host
+  # element from the DOM would silence the per-tile fan-out too.
+  #
+  # These tests pin the server contract: the bar's class list flips
+  # `hidden` on/off in lock-step with `:current_stage_mode`, and the
+  # `data-stage-mode` attribute mirrors the assign so CDP e2e can query
+  # it. Morphdom must re-apply the class change even though
+  # `phx-update="ignore"` is on the element (ignore preserves CHILDREN,
+  # not attributes).
+  describe "caption bar / gallery interaction (stage 1 — gallery dedup)" do
+    setup %{conn: conn} do
+      # Same LiveKit env stub the other caption describe blocks use —
+      # captions come from the LiveKit stream, so `:in_meeting=true` must
+      # be reachable for the CC toggle to render.
+      original = Application.get_env(:platform, :livekit, [])
+
+      Application.put_env(:platform, :livekit,
+        api_key: "test-livekit-key",
+        api_secret: "test-livekit-secret-0123456789abcdef",
+        url: "wss://livekit.test"
+      )
+
+      on_exit(fn -> Application.put_env(:platform, :livekit, original) end)
+
+      {meeting, space} = create_meeting(%{slug: "cc-gallery-dedup", name: "CC Gallery Dedup"})
+      {conn, user} = authenticated_conn(conn)
+
+      {:ok, _participant} =
+        Chat.add_participant(space.id, %{
+          participant_type: "user",
+          participant_id: user.id,
+          display_name: "CC Viewer",
+          joined_at: DateTime.utc_now()
+        })
+
+      {:ok, conn: conn, user: user, meeting: meeting, space: space}
+    end
+
+    test "caption bar renders with `hidden` class in gallery mode when captions on",
+         %{conn: conn, meeting: meeting} do
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      assert_push_event(view, "join-meeting", %{token: _, url: _, room_name: _})
+
+      html =
+        view
+        |> element(~s([data-role="meeting-captions-toggle"]))
+        |> render_click()
+
+      # Gallery is the default mount mode.
+      assert :sys.get_state(view.pid).socket.assigns.current_stage_mode == :gallery
+
+      tag = caption_bar_shell_open_tag(html)
+
+      assert tag,
+             ~s(expected `[data-role="meeting-captions-shell"]` element to render when captions are on)
+
+      # Bar carries the mode attribute AND the `hidden` class.
+      assert tag =~ ~s(data-stage-mode="gallery")
+      assert tag =~ ~r/\bhidden\b/
+
+      # The host div is still in the DOM — hook stays mounted so per-tile
+      # fan-out keeps working.
+      assert html =~ ~s(id="meeting-captions")
+      assert html =~ ~s(phx-hook="MeetingCaptions")
+    end
+
+    test "caption bar renders WITHOUT `hidden` class in canvas mode",
+         %{conn: conn, meeting: meeting} do
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      assert_push_event(view, "join-meeting", %{token: _, url: _, room_name: _})
+
+      view
+      |> element(~s([data-role="meeting-captions-toggle"]))
+      |> render_click()
+
+      html = render_click(view, "set_stage_mode", %{"mode" => "canvas"})
+
+      tag = caption_bar_shell_open_tag(html)
+      assert tag, ~s(expected `[data-role="meeting-captions-shell"]` element in canvas mode)
+      assert tag =~ ~s(data-stage-mode="canvas")
+
+      refute tag =~ ~r/\bhidden\b/,
+             "caption bar must NOT carry `hidden` outside gallery mode; got: #{tag}"
+    end
+
+    test "caption bar renders WITHOUT `hidden` class in screen and whiteboard modes",
+         %{conn: conn, meeting: meeting} do
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      assert_push_event(view, "join-meeting", %{token: _, url: _, room_name: _})
+
+      view
+      |> element(~s([data-role="meeting-captions-toggle"]))
+      |> render_click()
+
+      for mode <- ["screen", "whiteboard"] do
+        html = render_click(view, "set_stage_mode", %{"mode" => mode})
+        tag = caption_bar_shell_open_tag(html)
+
+        assert tag, ~s(expected `[data-role="meeting-captions-shell"]` element in #{mode} mode)
+        assert tag =~ ~s(data-stage-mode="#{mode}")
+
+        refute tag =~ ~r/\bhidden\b/,
+               "caption bar must NOT carry `hidden` in #{mode} mode; got: #{tag}"
+      end
+    end
+
+    test "toggling stage mode gallery -> canvas -> gallery flips the hidden class in-place",
+         %{conn: conn, meeting: meeting} do
+      # Regression: with `phx-update=\"ignore\"` on the element, we need
+      # morphdom to re-apply attribute + class changes on stage-mode
+      # transitions — `ignore` preserves children, not attributes. If the
+      # class doesn't flip we've regressed the whole reason for using
+      # `hidden` over `:if` (per-tile fan-out preservation).
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      assert_push_event(view, "join-meeting", %{token: _, url: _, room_name: _})
+
+      view
+      |> element(~s([data-role="meeting-captions-toggle"]))
+      |> render_click()
+
+      html_gallery = render(view)
+      tag_g1 = caption_bar_shell_open_tag(html_gallery)
+      assert tag_g1 =~ ~r/\bhidden\b/
+      assert tag_g1 =~ ~s(data-stage-mode="gallery")
+
+      html_canvas = render_click(view, "set_stage_mode", %{"mode" => "canvas"})
+      tag_c = caption_bar_shell_open_tag(html_canvas)
+      refute tag_c =~ ~r/\bhidden\b/
+      assert tag_c =~ ~s(data-stage-mode="canvas")
+
+      html_back = render_click(view, "set_stage_mode", %{"mode" => "gallery"})
+      tag_g2 = caption_bar_shell_open_tag(html_back)
+      assert tag_g2 =~ ~r/\bhidden\b/
+      assert tag_g2 =~ ~s(data-stage-mode="gallery")
+    end
+
+    test "caption bar absent from DOM when captions_visible=false regardless of stage mode",
+         %{conn: conn, meeting: meeting} do
+      # The `:if={@captions_visible}` gate still short-circuits mount, so
+      # the class flip only takes effect once captions are actually on.
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+      assert_push_event(view, "join-meeting", %{token: _, url: _, room_name: _})
+
+      for mode <- ["gallery", "canvas", "screen", "whiteboard"] do
+        html = render_click(view, "set_stage_mode", %{"mode" => mode})
+
+        refute html =~ ~s(data-role="meeting-captions"),
+               "caption bar must be absent when captions_visible=false in #{mode} mode"
+      end
     end
   end
 end
