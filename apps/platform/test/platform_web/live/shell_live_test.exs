@@ -952,4 +952,56 @@ defmodule PlatformWeb.ShellLiveTest do
       :ok = MeetingState.broadcast_left(user_id)
     end
   end
+
+  # Task 019f43da stage 1: consolidate captions control to ONE writer —
+  # the in-window MeetingLive toggle. Prior to this task, `shell.html.heex`
+  # rendered a global CC button on EVERY route (its `:if={@captions_enabled
+  # != nil}` guard was always truthy because shell_live.ex assigned the
+  # value at mount) and a matching `#meeting-captions` overlay. The overlay
+  # collided by id with MeetingLive's own overlay on `/meetings/:id`, and
+  # the button's state (`@captions_enabled`) drifted from MeetingLive's
+  # (`@captions_visible`). Both are now gone; the regression guards ensure
+  # they stay gone.
+  describe "shell chrome no longer renders a global captions toggle" do
+    test "non-meeting shell route has no toggle_captions button", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      {:ok, _view, html} = live(conn, ~p"/tasks")
+
+      # The exact-match `phx-click="toggle_captions"` handler that shell_live
+      # used to bind is gone. The `_meeting` suffix on MeetingLive's own
+      # event (`toggle_captions_meeting`) is not present outside the meeting
+      # route, so any hit here is the deleted shell duplicate.
+      refute html =~ ~s(phx-click="toggle_captions")
+    end
+
+    test "non-meeting shell route has no shell-level meeting-captions overlay",
+         %{conn: conn} do
+      conn = authenticated_conn(conn)
+      {:ok, _view, html} = live(conn, ~p"/tasks")
+
+      # The MeetingLive overlay only mounts inside meeting_live.html.heex
+      # and cannot appear on `/tasks`. The shell overlay (deleted this
+      # task) used the SAME `id="meeting-captions"` — asserting its
+      # absence on a non-meeting route guards against a shell-level
+      # reintroduction that would collide with MeetingLive on the
+      # `/meetings/:id` surface.
+      refute html =~ ~s(id="meeting-captions")
+    end
+
+    test "shell assigns no longer track :captions_enabled state", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      {:ok, _view, html} = live(conn, ~p"/tasks")
+
+      # The `@captions_enabled` assign backed the deleted button + overlay
+      # and was previously wired through the shell's `hero-*` CC glyph.
+      # No template surface in the shell should reference it anymore —
+      # asserting the aria-labels + title strings from the deleted button
+      # are gone catches a partial revert (e.g. someone re-adding the
+      # button but forgetting to re-add the assign).
+      refute html =~ ~s(aria-label="Show captions")
+      refute html =~ ~s(aria-label="Hide captions")
+      refute html =~ ~s(title="Show captions")
+      refute html =~ ~s(title="Hide captions")
+    end
+  end
 end

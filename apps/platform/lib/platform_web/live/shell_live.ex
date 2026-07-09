@@ -107,7 +107,6 @@ defmodule PlatformWeb.ShellLive do
       |> assign(:tasks_count, compute_tasks_count(raw_user_id))
       |> assign(:roster_open, false)
       |> assign(:show_presence_panel, false)
-      |> assign(:captions_enabled, false)
       |> assign(:meeting_active, false)
       |> assign(:meeting_space_id, nil)
       |> assign(:meeting_space_name, nil)
@@ -378,9 +377,6 @@ defmodule PlatformWeb.ShellLive do
 
         "close_roster", _params, socket ->
           {:halt, assign(socket, :roster_open, false)}
-
-        "toggle_captions", _params, socket ->
-          {:halt, assign(socket, :captions_enabled, !socket.assigns.captions_enabled)}
 
         "dismiss_agent", %{"agent-id" => agent_id, "space-id" => space_id}, socket ->
           # ADR 0027: dismissed role removed — just remove the agent from roster

@@ -217,10 +217,12 @@
              when the viewer is joined (mirrors the Leave-button gate
              below) since captions come from the LiveKit transcription
              stream, which only flows during an active session. Event name
-             `toggle_captions_meeting` disambiguates from the shell's own
-             `toggle_captions` (shell_live.ex:382) to avoid the shell hook
-             swallowing this click. Glyph mirrors shell.html.heex:247-254
-             so the visual language stays consistent. --%>
+             `toggle_captions_meeting` retains the `_meeting` suffix from
+             its original role sidestepping a since-removed shell
+             `toggle_captions` handler (deleted by task 019f43da). The
+             MeetingCaptions JS hook + `meeting_live_test.exs` still
+             reference this name, so renaming would compound the blast
+             radius without changing behaviour. --%>
         <%= if @in_meeting do %>
           <button
             type="button"

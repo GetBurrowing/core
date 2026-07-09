@@ -194,12 +194,15 @@ defmodule PlatformWeb.MeetingLive do
      |> assign(:participant_rail_collapsed, false)
      |> assign(:chat_panel_collapsed, false)
      # Closed-captions toggle for the meeting surface (task 019f3f17
-     # stage 1). Distinct from the shell's own `:captions_enabled`
-     # (shell_live.ex:110) — MeetingLive owns its own overlay + toggle
-     # so the shell's `toggle_captions` hook (shell_live.ex:382) doesn't
-     # swallow our clicks. Default OFF per the task spec; a viewer
-     # preference is mirrored to localStorage by the MeetingCaptions JS
-     # hook and restored via `meeting_captions_hydrate`.
+     # stage 1). Originally distinct-named from a shell `toggle_captions`
+     # handler (removed by task 019f43da) — the shell had swallowed clicks
+     # via `attach_hook(:handle_event, ...)` before MeetingLive saw them.
+     # The shell captions button + overlay + `:captions_enabled` assign
+     # are gone; MeetingLive is now the sole writer of caption state.
+     # Kept the `_meeting` suffix on the event name to avoid rebase churn
+     # in tests + the MeetingCaptions JS hook. Default OFF per the task
+     # spec; a viewer preference is mirrored to localStorage by the
+     # MeetingCaptions JS hook and restored via `meeting_captions_hydrate`.
      |> assign(:captions_visible, false)}
   end
 
@@ -378,13 +381,15 @@ defmodule PlatformWeb.MeetingLive do
     end
   end
 
-  # Closed-captions toggle (task 019f3f17 stage 1). Named
-  # `toggle_captions_meeting` — NOT `toggle_captions` — to sidestep the
-  # shell's `attach_hook(:drawer_events, ...)` at `shell_live.ex:382`,
-  # which returns `{:halt, ...}` on `toggle_captions` and would swallow
-  # this event before MeetingLive sees it. The client-side hook
-  # (`MeetingCaptions`) mirrors the preference to localStorage on the
-  # push_event round-trip so the viewer's choice survives navigation.
+  # Closed-captions toggle (task 019f3f17 stage 1). Originally distinct-
+  # named from a shell `toggle_captions` handler to sidestep the shell
+  # hook that would swallow the event. Task 019f43da deleted the shell
+  # duplicate (button + overlay + assign + handler) — MeetingLive is now
+  # the sole writer of caption state. Kept the `_meeting` suffix on the
+  # event name to avoid rebase churn in `meeting_live_test.exs` and the
+  # `MeetingCaptions` JS hook. The client-side hook mirrors the preference
+  # to localStorage on the push_event round-trip so the viewer's choice
+  # survives navigation.
   def handle_event("toggle_captions_meeting", _params, socket) do
     next = !socket.assigns.captions_visible
 
