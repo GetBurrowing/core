@@ -34,6 +34,7 @@ import PushSubscribe from "./push_subscribe"
 import ReactorPopover from "./reactor_popover"
 import ResizableSidebar from "./resizable_sidebar"
 import RouteResume from "./route_resume"
+import RowReorderTouch from "./row_reorder_touch"
 import ScrollToBottom from "./scroll_to_bottom"
 import SectionReorder from "./section_reorder"
 import SectionReorderTouch from "./section_reorder_touch"
@@ -81,6 +82,7 @@ export default {
   ReactorPopover,
   ResizableSidebar,
   RouteResume,
+  RowReorderTouch,
   ScrollToBottom,
   SectionReorder,
   SectionReorderTouch,

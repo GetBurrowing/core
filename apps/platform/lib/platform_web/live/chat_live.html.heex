@@ -821,18 +821,47 @@
         class="flex-1 overflow-y-auto py-2"
         aria-label="Channel sections"
       >
-        <%!-- Pinned — locked at the top, rendered only when non-empty
-             (and, while searching, only when it has a match). --%>
-        <section
-          :if={drawer_filter_spaces(@channel_sections.pinned, @drawer_query) != []}
-          data-section-reorderable="false"
-          aria-label="Pinned"
+        <%!-- RowReorderTouch (channel-row reorder Stage 2) needs its own
+             hook element — one element = one phx-hook, and the nav above is
+             owned by SectionReorderTouch. This wrapper is that element; it
+             deliberately spans the same subtree so both hooks see every
+             pointerdown, each arming only on its own handle class
+             (.channel-section-drag-handle vs .channel-row-drag-handle).
+             data-search-active mirrors the nav's — same guard rail, read by
+             the shared engine on its own root. --%>
+        <div
+          id="mobile-row-reorder-scope"
+          phx-hook="RowReorderTouch"
+          data-search-active={to_string(@drawer_query != "")}
         >
-          <div class="flex items-center px-4 py-1">
-            <p class="text-xs font-semibold uppercase tracking-widest text-base-content/50">
-              Pinned
-            </p>
-            <%!-- Lock affordance (chat sidebar mobile Stage 2, Decision #5).
+          <%!-- Edit-mode explainer (2026-07-09): the ▲▼ buttons are visible
+             and self-explanatory, but the hold-to-drag gesture has no visual
+             affordance beyond the ☰ glyph — one muted line teaches it. --%>
+          <p
+            :if={@sidebar_edit && @drawer_query == ""}
+            class="px-4 pb-2 text-xs text-base-content/40"
+          >
+            Reorder with the arrows, or press and hold ☰ to drag.
+          </p>
+          <%!-- Reorder announcements for screen readers (Stage 3). The
+             region renders (empty) as soon as edit mode opens — aria-live
+             only announces CHANGES to an existing region, so it must be in
+             the DOM before the first move updates it. --%>
+          <div :if={@sidebar_edit} class="sr-only" aria-live="polite">
+            {@drawer_reorder_announcement}
+          </div>
+          <%!-- Pinned — locked at the top, rendered only when non-empty
+             (and, while searching, only when it has a match). --%>
+          <section
+            :if={drawer_filter_spaces(@channel_sections.pinned, @drawer_query) != []}
+            data-section-reorderable="false"
+            aria-label="Pinned"
+          >
+            <div class="flex items-center px-4 py-1">
+              <p class="text-xs font-semibold uppercase tracking-widest text-base-content/50">
+                Pinned
+              </p>
+              <%!-- Lock affordance (chat sidebar mobile Stage 2, Decision #5).
                  Touch has no hover state to reveal that Pinned is locked to the
                  top and can't be reordered, so we surface an explicit
                  hero-lock-closed icon in edit mode (`@sidebar_edit`, the same
@@ -840,202 +869,16 @@
                  drag handle stays omitted — mirroring desktop's
                  data-section-reorderable="false" branch, which renders no
                  .channel-section-drag-handle on locked sections. --%>
-            <span
-              :if={@sidebar_edit}
-              class="channel-section-lock hero-lock-closed ml-auto size-3.5 text-base-content/40"
-              aria-hidden="true"
-              title="Pinned stays at the top and can't be reordered"
-            >
-            </span>
-          </div>
-          <.link
-            :for={space <- drawer_filter_spaces(@channel_sections.pinned, @drawer_query)}
-            navigate={~p"/chat/#{space_nav_target(space)}"}
-            phx-click="close_mobile_browser"
-            class={[
-              "flex items-center gap-3 px-4 py-3 text-sm transition-colors",
-              "hover:bg-base-200",
-              @active_space && @active_space.id == space.id &&
-                "bg-base-200 text-primary font-semibold"
-            ]}
-          >
-            <span class="text-base-content/40 text-lg">#</span>
-            <span class="truncate flex-1">{space.name}</span>
-            <%= if unread_label(Map.get(@unread_counts, space.id, 0)) do %>
-              <span class="ml-1 flex-shrink-0 min-w-[1.125rem] h-[1.125rem] rounded-full bg-primary text-primary-content text-[0.6rem] font-bold flex items-center justify-center px-1 leading-none">
-                {unread_label(Map.get(@unread_counts, space.id, 0))}
-              </span>
-            <% end %>
-          </.link>
-        </section>
-
-        <%!-- Direct Messages — locked directly under Pinned. While a search
-             is active the whole section hides when no DM display-name
-             matches; the "No conversations yet" copy below is ONLY for a
-             genuinely DM-less account, never for a no-match search. --%>
-        <section
-          :if={
-            @drawer_query == "" or
-              drawer_filter_dms(@channel_sections.dms, @drawer_query, @user_id) != []
-          }
-          data-section-reorderable="false"
-          aria-label="Direct Messages"
-        >
-          <div class="flex items-center justify-between px-4 py-1 mt-2">
-            <div class="flex items-center gap-1.5">
-              <p class="text-xs font-semibold uppercase tracking-widest text-base-content/50">
-                Direct Messages
-              </p>
-              <%!-- Lock affordance (chat sidebar mobile Stage 2, Decision #5) —
-                   Direct Messages is locked directly under Pinned and can't be
-                   reordered; surfaced explicitly for touch (no hover) in edit
-                   mode. Drag handle stays omitted, mirroring desktop's
-                   data-section-reorderable="false" branch. --%>
               <span
                 :if={@sidebar_edit}
-                class="channel-section-lock hero-lock-closed size-3.5 text-base-content/40"
+                class="channel-section-lock hero-lock-closed ml-auto size-3.5 text-base-content/40"
                 aria-hidden="true"
-                title="Direct Messages is locked and can't be reordered"
+                title="Pinned stays at the top and can't be reordered"
               >
               </span>
             </div>
-            <button
-              phx-click={JS.push("new_conversation_open") |> JS.push("close_mobile_browser")}
-              class="flex items-center justify-center size-11 rounded-lg text-base-content/60 hover:bg-base-300 hover:text-primary"
-              aria-label="New conversation"
-              title="New conversation"
-            >
-              <span class="hero-plus size-5"></span>
-            </button>
-          </div>
-          <%= if @channel_sections.dms == [] do %>
-            <p class="px-4 py-2 text-sm text-base-content/50">
-              No conversations yet — direct messages will appear here once you start one.
-            </p>
-          <% else %>
             <.link
-              :for={space <- drawer_filter_dms(@channel_sections.dms, @drawer_query, @user_id)}
-              navigate={~p"/chat/#{space_nav_target(space)}"}
-              phx-click="close_mobile_browser"
-              class={[
-                "flex items-center gap-3 px-4 py-3 text-sm transition-colors",
-                "hover:bg-base-200",
-                @active_space && @active_space.id == space.id &&
-                  "bg-base-200 text-primary font-semibold"
-              ]}
-            >
-              <span class="truncate flex-1">{sidebar_display_name(space, @user_id)}</span>
-              <%= if unread_label(Map.get(@unread_counts, space.id, 0)) do %>
-                <span class="ml-1 flex-shrink-0 min-w-[1.125rem] h-[1.125rem] rounded-full bg-primary text-primary-content text-[0.6rem] font-bold flex items-center justify-center px-1 leading-none">
-                  {unread_label(Map.get(@unread_counts, space.id, 0))}
-                </span>
-              <% end %>
-            </.link>
-          <% end %>
-        </section>
-
-        <%!-- Sub-org sections — the resolver output (`@sidebar_sections`, the
-             same list desktop iterates), rendered in the SAME resolver order as
-             desktop (the user's saved drag-order via chat_section_order, then
-             admin default). Deliberately NOT re-sorted alphabetically: a hard
-             alphabetical sort would override the per-user order that Stage 3's
-             touch drag-reorder persists, making that reorder look broken on
-             mobile. Keyed by `data-section-id` for the later touch-reorder stage. --%>
-        <%!-- While searching, sections render their MATCHING channels only and
-             zero-match sections drop out entirely (drawer_filter_sections).
-             The neighbor-index math for the move buttons stays valid because
-             the edit controls are hidden whenever a search is active — the
-             filtered list and @sidebar_sections are identical when the
-             controls can actually render. --%>
-        <section
-          :for={
-            {%{section: section, channels: section_channels}, section_index} <-
-              Enum.with_index(drawer_filter_sections(@sidebar_sections, @drawer_query))
-          }
-          data-section-id={section.id}
-          data-section-reorderable="true"
-          aria-label={"#{section.name} channels"}
-        >
-          <div class="flex items-center px-4 py-1 mt-2">
-            <p class="text-xs font-semibold uppercase tracking-widest text-base-content/50">
-              {section.name}
-            </p>
-            <%!-- Up/down move buttons (Stage 4 — WCAG 2.5.7 Dragging
-                 Movements): the REQUIRED single-pointer alternative to the
-                 long-press drag, not an optional nicety. They fire the SAME
-                 `section_reordered {from, to}` event the drag sends — one
-                 server path, two triggers. The event's semantics are "insert
-                 `from` ABOVE `to`" (mirroring the drop indicator), which has
-                 no direct "move below" form — so Down on section A is
-                 expressed as "insert my NEXT sibling above me"
-                 (from=next.id, to=this.id), which is the same swap. Boundary
-                 buttons are disabled, not hidden, mirroring the desktop row
-                 controls: focus can't land on a no-op that reads as broken.
-                 Pinned/DMs render none of this (locked).
-
-                 Stage 1 search guard rail: ALL reorder affordances vanish
-                 while a search filter is active — a reorder computed against
-                 a filtered subset would persist a wrong order. This gate is
-                 also what keeps the neighbor-index math above safe. --%>
-            <span
-              :if={@sidebar_edit && @drawer_query == ""}
-              class="channel-section-move-controls"
-            >
-              <button
-                type="button"
-                class="channel-section-move-button--touch"
-                phx-click="section_reordered"
-                phx-value-from={section.id}
-                phx-value-to={
-                  section_index > 0 &&
-                    Enum.at(@sidebar_sections, section_index - 1).section.id
-                }
-                disabled={section_index == 0}
-                aria-label={"Move #{section.name} section up"}
-                title="Move section up"
-              >
-                <span class="hero-chevron-up size-4"></span>
-              </button>
-              <button
-                type="button"
-                class="channel-section-move-button--touch"
-                phx-click="section_reordered"
-                phx-value-from={
-                  section_index < length(@sidebar_sections) - 1 &&
-                    Enum.at(@sidebar_sections, section_index + 1).section.id
-                }
-                phx-value-to={section.id}
-                disabled={section_index == length(@sidebar_sections) - 1}
-                aria-label={"Move #{section.name} section down"}
-                title="Move section down"
-              >
-                <span class="hero-chevron-down size-4"></span>
-              </button>
-            </span>
-            <%!-- Touch drag handle (Stage 3) — the ONLY drag origin: a touch
-                 starting outside it scrolls the rail, never drags (Stage 4
-                 checklist #6 verifies this). Edit-gated like the Stage 2 lock
-                 affordances; locked sections render no handle at all.
-                 `tabindex="-1"` because the keyboard/a11y reorder path is the
-                 Stage 4 up/down buttons beside it, not this gesture
-                 affordance. --%>
-            <button
-              :if={@sidebar_edit && @drawer_query == ""}
-              type="button"
-              class="channel-section-drag-handle channel-section-drag-handle--touch"
-              aria-label={"Reorder #{section.name} section — touch and hold, then drag"}
-              tabindex="-1"
-            >
-              ☰
-            </button>
-          </div>
-          <%= if section_channels == [] do %>
-            <p class="px-4 py-2 text-sm text-base-content/50">
-              No channels yet — channels in this org appear here.
-            </p>
-          <% else %>
-            <.link
-              :for={space <- section_channels}
+              :for={space <- drawer_filter_spaces(@channel_sections.pinned, @drawer_query)}
               navigate={~p"/chat/#{space_nav_target(space)}"}
               phx-click="close_mobile_browser"
               class={[
@@ -1053,64 +896,329 @@
                 </span>
               <% end %>
             </.link>
-          <% end %>
-        </section>
+          </section>
 
-        <%!-- No-matches state (Stage 1) — ONLY for an active search that
+          <%!-- Direct Messages — locked directly under Pinned. While a search
+             is active the whole section hides when no DM display-name
+             matches; the "No conversations yet" copy below is ONLY for a
+             genuinely DM-less account, never for a no-match search. --%>
+          <section
+            :if={
+              @drawer_query == "" or
+                drawer_filter_dms(@channel_sections.dms, @drawer_query, @user_id) != []
+            }
+            data-section-reorderable="false"
+            aria-label="Direct Messages"
+          >
+            <div class="flex items-center justify-between px-4 py-1 mt-2">
+              <div class="flex items-center gap-1.5">
+                <p class="text-xs font-semibold uppercase tracking-widest text-base-content/50">
+                  Direct Messages
+                </p>
+                <%!-- Lock affordance (chat sidebar mobile Stage 2, Decision #5) —
+                   Direct Messages is locked directly under Pinned and can't be
+                   reordered; surfaced explicitly for touch (no hover) in edit
+                   mode. Drag handle stays omitted, mirroring desktop's
+                   data-section-reorderable="false" branch. --%>
+                <span
+                  :if={@sidebar_edit}
+                  class="channel-section-lock hero-lock-closed size-3.5 text-base-content/40"
+                  aria-hidden="true"
+                  title="Direct Messages is locked and can't be reordered"
+                >
+                </span>
+              </div>
+              <button
+                phx-click={JS.push("new_conversation_open") |> JS.push("close_mobile_browser")}
+                class="flex items-center justify-center size-11 rounded-lg text-base-content/60 hover:bg-base-300 hover:text-primary"
+                aria-label="New conversation"
+                title="New conversation"
+              >
+                <span class="hero-plus size-5"></span>
+              </button>
+            </div>
+            <%!-- Edit-mode caption (channel-row reorder Stage 1): DM rows are
+               deliberately NOT reorderable — recency ordering is automatic
+               and self-healing, and a manual order would be silently wiped
+               by the next incoming message. One line of copy explains the
+               absent affordance instead of per-row lock icons. --%>
+            <p :if={@sidebar_edit} class="px-4 pb-1 text-xs text-base-content/40">
+              Sorted by recent activity
+            </p>
+            <%= if @channel_sections.dms == [] do %>
+              <p class="px-4 py-2 text-sm text-base-content/50">
+                No conversations yet — direct messages will appear here once you start one.
+              </p>
+            <% else %>
+              <.link
+                :for={space <- drawer_filter_dms(@channel_sections.dms, @drawer_query, @user_id)}
+                navigate={~p"/chat/#{space_nav_target(space)}"}
+                phx-click="close_mobile_browser"
+                class={[
+                  "flex items-center gap-3 px-4 py-3 text-sm transition-colors",
+                  "hover:bg-base-200",
+                  @active_space && @active_space.id == space.id &&
+                    "bg-base-200 text-primary font-semibold"
+                ]}
+              >
+                <span class="truncate flex-1">{sidebar_display_name(space, @user_id)}</span>
+                <%= if unread_label(Map.get(@unread_counts, space.id, 0)) do %>
+                  <span class="ml-1 flex-shrink-0 min-w-[1.125rem] h-[1.125rem] rounded-full bg-primary text-primary-content text-[0.6rem] font-bold flex items-center justify-center px-1 leading-none">
+                    {unread_label(Map.get(@unread_counts, space.id, 0))}
+                  </span>
+                <% end %>
+              </.link>
+            <% end %>
+          </section>
+
+          <%!-- Sub-org sections — the resolver output (`@sidebar_sections`, the
+             same list desktop iterates), rendered in the SAME resolver order as
+             desktop (the user's saved drag-order via chat_section_order, then
+             admin default). Deliberately NOT re-sorted alphabetically: a hard
+             alphabetical sort would override the per-user order that Stage 3's
+             touch drag-reorder persists, making that reorder look broken on
+             mobile. Keyed by `data-section-id` for the later touch-reorder stage. --%>
+          <%!-- While searching, sections render their MATCHING channels only and
+             zero-match sections drop out entirely (drawer_filter_sections).
+             The neighbor-index math for the move buttons stays valid because
+             the edit controls are hidden whenever a search is active — the
+             filtered list and @sidebar_sections are identical when the
+             controls can actually render. --%>
+          <section
+            :for={
+              {%{section: section, channels: section_channels}, section_index} <-
+                Enum.with_index(drawer_filter_sections(@sidebar_sections, @drawer_query))
+            }
+            data-section-id={section.id}
+            data-section-reorderable="true"
+            aria-label={"#{section.name} channels"}
+          >
+            <div class="flex items-center px-4 py-1 mt-2">
+              <p class="text-xs font-semibold uppercase tracking-widest text-base-content/50">
+                {section.name}
+              </p>
+              <%!-- Up/down move buttons (Stage 4 — WCAG 2.5.7 Dragging
+                 Movements): the REQUIRED single-pointer alternative to the
+                 long-press drag, not an optional nicety. They fire the SAME
+                 `section_reordered {from, to}` event the drag sends — one
+                 server path, two triggers. The event's semantics are "insert
+                 `from` ABOVE `to`" (mirroring the drop indicator), which has
+                 no direct "move below" form — so Down on section A is
+                 expressed as "insert my NEXT sibling above me"
+                 (from=next.id, to=this.id), which is the same swap. Boundary
+                 buttons are disabled, not hidden, mirroring the desktop row
+                 controls: focus can't land on a no-op that reads as broken.
+                 Pinned/DMs render none of this (locked).
+
+                 Stage 1 search guard rail: ALL reorder affordances vanish
+                 while a search filter is active — a reorder computed against
+                 a filtered subset would persist a wrong order. This gate is
+                 also what keeps the neighbor-index math above safe. --%>
+              <span
+                :if={@sidebar_edit && @drawer_query == ""}
+                class="channel-section-move-controls"
+              >
+                <button
+                  type="button"
+                  class="channel-section-move-button--touch"
+                  phx-click="section_reordered"
+                  phx-value-from={section.id}
+                  phx-value-to={
+                    section_index > 0 &&
+                      Enum.at(@sidebar_sections, section_index - 1).section.id
+                  }
+                  disabled={section_index == 0}
+                  aria-label={"Move #{section.name} section up"}
+                  title="Move section up"
+                >
+                  <span class="hero-chevron-up size-4"></span>
+                </button>
+                <button
+                  type="button"
+                  class="channel-section-move-button--touch"
+                  phx-click="section_reordered"
+                  phx-value-from={
+                    section_index < length(@sidebar_sections) - 1 &&
+                      Enum.at(@sidebar_sections, section_index + 1).section.id
+                  }
+                  phx-value-to={section.id}
+                  disabled={section_index == length(@sidebar_sections) - 1}
+                  aria-label={"Move #{section.name} section down"}
+                  title="Move section down"
+                >
+                  <span class="hero-chevron-down size-4"></span>
+                </button>
+              </span>
+              <%!-- Touch drag handle (Stage 3) — the ONLY drag origin: a touch
+                 starting outside it scrolls the rail, never drags (Stage 4
+                 checklist #6 verifies this). Edit-gated like the Stage 2 lock
+                 affordances; locked sections render no handle at all.
+                 `tabindex="-1"` because the keyboard/a11y reorder path is the
+                 Stage 4 up/down buttons beside it, not this gesture
+                 affordance. --%>
+              <button
+                :if={@sidebar_edit && @drawer_query == ""}
+                type="button"
+                class="channel-section-drag-handle channel-section-drag-handle--touch"
+                aria-label={"Reorder #{section.name} section — touch and hold, then drag"}
+                tabindex="-1"
+              >
+                ☰
+              </button>
+            </div>
+            <%= cond do %>
+              <% section_channels == [] -> %>
+                <p class="px-4 py-2 text-sm text-base-content/50">
+                  No channels yet — channels in this org appear here.
+                </p>
+              <% @sidebar_edit && @drawer_query == "" -> %>
+                <%!-- EDIT-MODE rows (channel-row reorder Stage 1; revised in
+                   Stage 2). Rows stop being navigation links — a mis-tap
+                   would navigate + close the drawer, ejecting the user from
+                   the mode. Every row shows its ▲▼ pair persistently, the
+                   same convention as the section headers directly above them
+                   (Marlowe a11y request 2026-07-09, reversing the July 6
+                   select-to-reveal decision: controls that hide until touched
+                   read as broken, and were reported as a bug twice in one
+                   review). The unread badge yields its right-edge slot to the
+                   reorder chrome (edit mode is a mode; counts are browse
+                   chrome). Boundary ▲▼ are disabled, not hidden, matching
+                   the section buttons. Reorder reuses the EXISTING
+                   move_channel pipeline (per-user chat_channel_order pref) —
+                   the same one desktop's row controls persist through. --%>
+                <div
+                  :for={{space, row_index} <- Enum.with_index(section_channels)}
+                  data-channel-id={space.id}
+                  data-section-id={section.id}
+                  class="flex items-center gap-3 px-4 py-3 text-sm"
+                >
+                  <span class="text-base-content/40 text-lg">#</span>
+                  <span class="truncate flex-1">{space.name}</span>
+                  <span class="channel-row-move-controls--touch">
+                    <button
+                      type="button"
+                      class="channel-row-move-button--touch"
+                      phx-click="move_channel"
+                      phx-value-channel_id={space.id}
+                      phx-value-section_id={section.id}
+                      phx-value-direction="up"
+                      disabled={row_index == 0}
+                      aria-label={"Move ##{space.name} up"}
+                      title="Move up"
+                    >
+                      <span class="hero-chevron-up size-4"></span>
+                    </button>
+                    <button
+                      type="button"
+                      class="channel-row-move-button--touch"
+                      phx-click="move_channel"
+                      phx-value-channel_id={space.id}
+                      phx-value-section_id={section.id}
+                      phx-value-direction="down"
+                      disabled={row_index == length(section_channels) - 1}
+                      aria-label={"Move ##{space.name} down"}
+                      title="Move down"
+                    >
+                      <span class="hero-chevron-down size-4"></span>
+                    </button>
+                    <%!-- Touch drag handle (Stage 2) — the ONLY row-drag
+                       origin; activates the slot Stage 1 held with an inert
+                       placeholder. Lives INSIDE the controls cluster so the
+                       row's gap-3 can't wedge 12px between ▼ and ☰ — that
+                       offset broke column alignment with the section header
+                       (design QA, 2026-07-09). `tabindex="-1"` because the
+                       keyboard/a11y reorder path is the always-visible ▲▼
+                       buttons beside it, not this gesture affordance
+                       (WCAG 2.5.7 coupling, same as sections). --%>
+                    <button
+                      type="button"
+                      class="channel-row-drag-handle"
+                      aria-label={"Reorder ##{space.name} — touch and hold, then drag"}
+                      tabindex="-1"
+                    >
+                      ☰
+                    </button>
+                  </span>
+                </div>
+              <% true -> %>
+                <.link
+                  :for={space <- section_channels}
+                  navigate={~p"/chat/#{space_nav_target(space)}"}
+                  phx-click="close_mobile_browser"
+                  class={[
+                    "flex items-center gap-3 px-4 py-3 text-sm transition-colors",
+                    "hover:bg-base-200",
+                    @active_space && @active_space.id == space.id &&
+                      "bg-base-200 text-primary font-semibold"
+                  ]}
+                >
+                  <span class="text-base-content/40 text-lg">#</span>
+                  <span class="truncate flex-1">{space.name}</span>
+                  <%= if unread_label(Map.get(@unread_counts, space.id, 0)) do %>
+                    <span class="ml-1 flex-shrink-0 min-w-[1.125rem] h-[1.125rem] rounded-full bg-primary text-primary-content text-[0.6rem] font-bold flex items-center justify-center px-1 leading-none">
+                      {unread_label(Map.get(@unread_counts, space.id, 0))}
+                    </span>
+                  <% end %>
+                </.link>
+            <% end %>
+          </section>
+
+          <%!-- No-matches state (Stage 1) — ONLY for an active search that
              matched nothing; the account-empty state below stays reserved
              for a genuinely conversation-less account. The likeliest miss is
              searching a PERSON's name (that's the other search), so the dead
              end hands off to the new-conversation people picker rather than
              apologizing. --%>
-        <div
-          :if={
-            @drawer_query != "" and
-              drawer_no_matches?(@channel_sections, @sidebar_sections, @drawer_query, @user_id)
-          }
-          class="flex flex-col items-center gap-3 px-6 py-10 text-center"
-        >
-          <span class="hero-magnifying-glass size-8 text-base-content/30" aria-hidden="true">
-          </span>
-          <p class="text-sm font-medium">No matches for “{@drawer_query}”</p>
-          <p class="text-sm text-base-content/50">
-            Check the spelling, or start a new conversation.
-          </p>
-          <div class="flex items-center gap-2 mt-1">
-            <button
-              type="button"
-              phx-click={JS.push("new_conversation_open") |> JS.push("close_mobile_browser")}
-              class="flex items-center justify-center min-h-11 px-4 rounded-lg bg-base-200 border border-base-content/10 text-sm font-medium hover:bg-base-300"
-            >
-              New conversation
-            </button>
-            <button
-              type="button"
-              phx-click="drawer_search_clear"
-              class="flex items-center justify-center min-h-11 px-4 rounded-lg text-sm font-medium text-base-content/60 hover:text-base-content hover:bg-base-200"
-            >
-              Clear search
-            </button>
+          <div
+            :if={
+              @drawer_query != "" and
+                drawer_no_matches?(@channel_sections, @sidebar_sections, @drawer_query, @user_id)
+            }
+            class="flex flex-col items-center gap-3 px-6 py-10 text-center"
+          >
+            <span class="hero-magnifying-glass size-8 text-base-content/30" aria-hidden="true">
+            </span>
+            <p class="text-sm font-medium">No matches for “{@drawer_query}”</p>
+            <p class="text-sm text-base-content/50">
+              Check the spelling, or start a new conversation.
+            </p>
+            <div class="flex items-center gap-2 mt-1">
+              <button
+                type="button"
+                phx-click={JS.push("new_conversation_open") |> JS.push("close_mobile_browser")}
+                class="flex items-center justify-center min-h-11 px-4 rounded-lg bg-base-200 border border-base-content/10 text-sm font-medium hover:bg-base-300"
+              >
+                New conversation
+              </button>
+              <button
+                type="button"
+                phx-click="drawer_search_clear"
+                class="flex items-center justify-center min-h-11 px-4 rounded-lg text-sm font-medium text-base-content/60 hover:text-base-content hover:bg-base-200"
+              >
+                Clear search
+              </button>
+            </div>
           </div>
-        </div>
 
-        <%!-- Empty state per docs/design-system/03-voice.md §5.1 — mobile
+          <%!-- Empty state per docs/design-system/03-voice.md §5.1 — mobile
              combined view (no channels AND no DMs). Chip event is a JS
              chain so opening the new-conversation flow also closes the
              mobile browser overlay. Suppressed while a search is active —
              the no-matches state above owns that case. --%>
-        <.empty_state
-          :if={@channels == [] and @dm_conversations == [] and @drawer_query == ""}
-          variant={:conversational}
-        >
-          <:system_message>— no conversations yet —</:system_message>
-          <:body>
-            Start your first conversation. Pick a channel or DM someone in your space.
-          </:body>
-          <:chips
-            label="+ Start your first conversation"
-            event={JS.push("new_conversation_open") |> JS.push("close_mobile_browser")}
-          />
-        </.empty_state>
+          <.empty_state
+            :if={@channels == [] and @dm_conversations == [] and @drawer_query == ""}
+            variant={:conversational}
+          >
+            <:system_message>— no conversations yet —</:system_message>
+            <:body>
+              Start your first conversation. Pick a channel or DM someone in your space.
+            </:body>
+            <:chips
+              label="+ Start your first conversation"
+              event={JS.push("new_conversation_open") |> JS.push("close_mobile_browser")}
+            />
+          </.empty_state>
+        </div>
       </nav>
 
       <%!-- "+ New channel" — pinned overlay chrome, mirroring the desktop

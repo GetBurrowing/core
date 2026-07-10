@@ -223,6 +223,10 @@ defmodule PlatformWeb.ChatLive do
       # (magnifying-glass entry) — drives client-side focus via the
       # DrawerSearchFocus hook. Recomputed on every toggle.
       |> assign(:drawer_search_intent, false)
+      # Channel-row reorder Stage 3 (a11y): text for the drawer's polite
+      # aria-live region, set after every row move so screen-reader users
+      # get confirmation the reorder happened. nil renders an empty region.
+      |> assign(:drawer_reorder_announcement, nil)
       |> assign(:show_new_channel_modal, false)
       |> assign(:show_new_conversation_modal, false)
       # Per-message actions sheet (3-dot menu): nil when closed, msg.id when open.
@@ -520,7 +524,7 @@ defmodule PlatformWeb.ChatLive do
 
   def handle_event("close_mobile_browser", _params, socket) do
     # Closing the drawer discards any in-progress search — reopening always
-    # starts from the full browse list, never a stale filter.
+    # starts from the full browse list, never stale state.
     {:noreply,
      socket
      |> assign(:mobile_browser_open, false)
@@ -870,7 +874,10 @@ defmodule PlatformWeb.ChatLive do
         socket
       )
       when is_binary(channel_id) and is_binary(section_id) and is_list(ids) do
-    {:noreply, apply_channel_move(socket, section_id, ids)}
+    {:noreply,
+     socket
+     |> apply_channel_move(section_id, ids)
+     |> announce_channel_move(channel_id, nil)}
   end
 
   # Keyboard alternative to the drag (WCAG 2.1.1 — no drag-only affordance).
@@ -891,7 +898,10 @@ defmodule PlatformWeb.ChatLive do
     if new_ids == current_ids do
       {:noreply, socket}
     else
-      {:noreply, apply_channel_move(socket, section_id, new_ids)}
+      {:noreply,
+       socket
+       |> apply_channel_move(section_id, new_ids)
+       |> announce_channel_move(channel_id, direction)}
     end
   end
 
@@ -932,6 +942,28 @@ defmodule PlatformWeb.ChatLive do
   # Shared body for drag + keyboard channel moves: persist the target
   # section's order (best-effort — anonymous user ids fail-soft), broadcast
   # the invalidation, and recompute the rail locally.
+  # Screen-reader confirmation for a row move (channel-row reorder
+  # Stage 3). Both the ▲▼ buttons (direction known) and the touch drag
+  # (position change only) funnel here; the drawer renders the text into a
+  # polite aria-live region. Sighted users never see it (sr-only).
+  defp announce_channel_move(socket, channel_id, direction) do
+    name =
+      case Enum.find(socket.assigns.channels, fn ch -> ch.id == channel_id end) do
+        %{name: name} -> name
+        _ -> nil
+      end
+
+    text =
+      case {name, direction} do
+        {nil, _} -> nil
+        {name, "up"} -> "Moved ##{name} up"
+        {name, "down"} -> "Moved ##{name} down"
+        {name, nil} -> "Moved ##{name}"
+      end
+
+    assign(socket, :drawer_reorder_announcement, text)
+  end
+
   defp apply_channel_move(socket, section_id, ids) do
     _ = Sidebar.put_channel_order(socket.assigns.user_id, section_id, ids)
     ChatPubSub.broadcast_sidebar_changed_from(socket.assigns.user_id, self())

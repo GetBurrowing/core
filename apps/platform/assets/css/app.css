@@ -2845,10 +2845,106 @@ body, .font-fabrikam, * {
 
   .channel-section-move-button--touch {
     @apply flex items-center justify-center min-h-11 min-w-11 rounded-lg text-base-content/60 hover:bg-base-300 hover:text-base-content;
+    @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60;
+    touch-action: manipulation;
   }
 
+  /* Disabled (boundary) buttons: solid /40 token, NOT an opacity multiplier.
+     opacity-30 stacked on the /60 base color rendered ≈18% white (≈1.8:1 on
+     the drawer bg) — invisible on a real phone (Marlowe, 2026-07-09). /40 is
+     ≈3.5:1: clearly dimmer than enabled (≈6:1) but unmistakably present.
+     WCAG 1.4.11 exempts disabled controls; we hold its 3:1 floor anyway
+     because "present but disabled" is this drawer's whole convention. */
   .channel-section-move-button--touch:disabled {
-    @apply opacity-30 hover:bg-transparent hover:text-base-content/60;
+    @apply opacity-100 text-base-content/40 hover:bg-transparent hover:text-base-content/40;
+  }
+
+  /* Channel-ROW reorder chrome in the mobile drawer (row reorder Stage 1;
+     always-visible since the 2026-07-09 a11y revision). Every edit-mode row
+     renders its ▲▼ pair + ☰ handle in this single flush cluster — no
+     internal gap, so the row's arrow columns align exactly with the section
+     header's (the row container's gap-3 otherwise offset them 12px). Same
+     44px targets and disabled treatment as the section buttons. */
+  .channel-row-move-controls--touch {
+    @apply flex items-center flex-shrink-0;
+  }
+
+  .channel-row-move-button--touch {
+    @apply flex items-center justify-center min-h-11 min-w-11 rounded-lg text-base-content/60 hover:bg-base-300 hover:text-base-content;
+    @apply focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60;
+    touch-action: manipulation;
+  }
+
+  .channel-row-move-button--touch:disabled {
+    @apply opacity-100 text-base-content/40 hover:bg-transparent hover:text-base-content/40;
+  }
+
+  /* Row touch-drag handle (channel-row reorder Stage 2 — activates the slot
+     Stage 1 held with an inert placeholder). Deliberately smaller and dimmer
+     than the section handle (text-sm glyph vs the section's full-size ☰) so
+     the two drag scopes read differently at a glance. touch-action +
+     -webkit-touch-callout mirror the section handle's suppression CSS — see
+     the rationale block above .channel-section-drag-handle--touch; each rule
+     fixes one specific gesture failure. */
+  .channel-row-drag-handle {
+    /* /45 not /30: this is an ENABLED control, so WCAG 1.4.11's 3:1 floor
+       genuinely applies (/30 ≈ 2.6:1 on the drawer bg). Still visibly
+       quieter than the section handle's /60. */
+    @apply flex items-center justify-center min-h-11 min-w-11 flex-shrink-0 text-sm text-base-content/45;
+    touch-action: none;
+    -webkit-touch-callout: none;
+  }
+
+  /* Active-drag state toggled by RowReorderTouch on its wrapper — same
+     drag-scoped user-select suppression as .section-touch-drag-active
+     (statically it would break text selection; without it iOS starts
+     selecting the row label mid-drag). */
+  .row-touch-drag-active {
+    user-select: none;
+    -webkit-user-select: none;
+  }
+
+  /* Row being touch-dragged (Stage 3): the row goes fully invisible — its
+     vacated space IS the open slot the siblings shift around, and the
+     fixed-position ghost is what the user sees under their finger. (The
+     Stage 2 interim dimmed it to 50%; two half-visible copies read as a
+     rendering glitch once the ghost exists.) */
+  .channel-row-wrap--touch-dragging {
+    @apply opacity-0;
+  }
+
+  /* Finger-tracked ghost (Stage 3 lift): fixed clone of the dragged row,
+     scaled 1.02 with an elevation shadow, solid drawer-surface background
+     so it stays readable while passing over other rows. pointer-events
+     none — elementFromPoint/slot math must see through it. */
+  .channel-row-ghost {
+    @apply fixed z-50 pointer-events-none flex items-center gap-3 px-4 py-3 text-sm rounded-lg bg-base-200 shadow-lg;
+    transform: scale(1.02);
+  }
+
+  /* Slot-opening motion (Stage 3): sibling rows glide between their two
+     possible positions while a row drag is live. transform-only — no
+     height/layout animation. Scoped to the drag-active class so rows cost
+     nothing at rest. */
+  .row-touch-drag-active [data-channel-id] {
+    transition: transform 180ms ease;
+  }
+
+  /* prefers-reduced-motion: siblings jump instantly between positions
+     instead of gliding; the ghost still tracks the finger (direct
+     manipulation, not decorative motion). */
+  @media (prefers-reduced-motion: reduce) {
+    .row-touch-drag-active [data-channel-id] {
+      transition: none;
+    }
+  }
+
+  /* During a row drag, every section EXCEPT the drag's source dims —
+     communicates the within-section clamp mid-gesture (designer rec 17):
+     the dimmed areas visibly aren't drop targets. */
+  .row-touch-drag-active section:not(.channel-section--row-drag-source) {
+    @apply opacity-50;
+    transition: opacity 150ms ease;
   }
 
   /* Mobile drawer footer ("+ New channel"): normal spacing-3 bottom padding
