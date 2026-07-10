@@ -220,18 +220,31 @@ defmodule PlatformWeb.Router do
     get("/", MCPController, :stream)
   end
 
-  # Guest meeting ingress (task 019f2483 stage 3). Bound to the dedicated
+  # Guest meeting ingress (task 019f2483 stage 3, consolidated onto
+  # MeetingLive in task 019f498d stage 5). Bound to the dedicated
   # `meet.` host prefix — Phoenix matches on `conn.host` starting with
   # this string, so `meet.example.com` (prod), `meet.localhost`
   # (dev with `/etc/hosts`), and `meet.<any>.<tld>` all route here while
   # the primary `app.*` / `localhost` domain does not. Ships without a
   # `Mix.env()` guard because the guest flow must work in prod, dev, and
   # test alike (the test harness sets `conn.host` explicitly per case).
+  #
+  # The `:guest_meeting` live_session pairs the stripped `:guest` layout
+  # with the `chrome_mode: "none"` session key — LiveView layouts are
+  # locked at the `live_session` boundary and cannot be re-chosen at
+  # mount time, so this seam is what lets MeetingLive serve both the
+  # authenticated `/meetings/:slug` shell surface AND the shellless
+  # `meet.` guest surface without a router topology surprise. The mount
+  # branch inside `MeetingLive.mount/3` selects on the injected session
+  # key; the `:show` action lines up with the existing
+  # `MeetingLive.handle_params/3` contract.
   scope "/", PlatformWeb, host: "meet." do
     pipe_through(:guest_browser)
 
-    live_session :guest, layout: {PlatformWeb.Layouts, :guest} do
-      live("/:slug/:token", GuestMeetingLive, :join)
+    live_session :guest_meeting,
+      layout: {PlatformWeb.Layouts, :guest},
+      session: %{"chrome_mode" => "none"} do
+      live("/:slug/:token", MeetingLive, :show)
     end
   end
 end

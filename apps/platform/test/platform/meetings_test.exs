@@ -652,4 +652,231 @@ defmodule Platform.MeetingsTest do
       assert {:error, :malformed} = Meetings.verify_livekit_jwt(jwt, body)
     end
   end
+
+  # ── Shared guest-invite resolver (task 019f498d stage 2) ─────────────────
+  #
+  # `resolve_guest_invite/2` is the single place `PlatformWeb.MeetingLive`
+  # (with `chrome_mode: :none` on the `meet.` host) branches the invite
+  # token into `{name_entry, in_meeting, expired, invalid}`. Pinning each
+  # branch here keeps the guest ingress from drifting from what the
+  # context returns.
+  describe "resolve_guest_invite/2 (task 019f498d stage 2)" do
+    alias Platform.Meetings.GuestInvite
+    alias Platform.Meetings.Meeting
+    alias Platform.Tasks
+
+    # The resolver never mints a LiveKit token — it only verifies the
+    # HMAC + does a slug lookup — so it does not depend on the
+    # `Application.put_env(:platform, :livekit, ...)` global. That means
+    # this describe can stay in the `async: true` module without
+    # racing other tests that mutate the livekit config.
+
+    defp create_project! do
+      org_id = Platform.TenancyFixtures.fabrikam_org_id()
+
+      {:ok, project} =
+        Tasks.create_project(%{
+          name: "Guest Invite Resolver Project #{System.unique_integer([:positive])}",
+          org_id: org_id
+        })
+
+      project
+    end
+
+    defp create_meeting!(attrs \\ %{}) do
+      project = Map.get_lazy(attrs, :project, fn -> create_project!() end)
+      name = Map.get(attrs, :name, "Guest Kickoff #{System.unique_integer([:positive])}")
+
+      {:ok, meeting} = Meetings.create_meeting(%{project_id: project.id, name: name})
+      Platform.Repo.preload(meeting, :chat_space)
+    end
+
+    test "returns :in_meeting with preloaded chat_space when token carries a display_name" do
+      meeting = create_meeting!()
+      expires_at = DateTime.utc_now() |> DateTime.to_unix() |> Kernel.+(3600)
+      token = GuestInvite.sign(meeting.slug, expires_at, "Juno Fairbanks")
+
+      assert {:ok, %{state: :in_meeting, meeting: resolved, display_name: "Juno Fairbanks"}} =
+               Meetings.resolve_guest_invite(meeting.slug, token)
+
+      assert %Meeting{} = resolved
+      assert resolved.id == meeting.id
+      # `:chat_space` must be preloaded — downstream `guest_join_event_payload/2`
+      # reads `meeting.chat_space.slug` and would blow up on a NotLoaded assoc.
+      assert %Chat.Space{} = resolved.chat_space
+    end
+
+    test "returns :name_entry when token payload carries nil display_name" do
+      meeting = create_meeting!()
+      expires_at = DateTime.utc_now() |> DateTime.to_unix() |> Kernel.+(3600)
+      token = GuestInvite.sign(meeting.slug, expires_at, nil)
+
+      assert {:ok, %{state: :name_entry, meeting: resolved}} =
+               Meetings.resolve_guest_invite(meeting.slug, token)
+
+      assert resolved.id == meeting.id
+      assert %Chat.Space{} = resolved.chat_space
+    end
+
+    test "returns {:error, :expired} for a past-expiry token" do
+      meeting = create_meeting!()
+      # 60s in the past → GuestInvite.verify returns {:error, :expired}.
+      expires_at = DateTime.utc_now() |> DateTime.to_unix() |> Kernel.-(60)
+      token = GuestInvite.sign(meeting.slug, expires_at, "Juno Fairbanks")
+
+      assert {:error, :expired} = Meetings.resolve_guest_invite(meeting.slug, token)
+    end
+
+    test "returns {:error, :invalid} when the HMAC signature is tampered" do
+      meeting = create_meeting!()
+      expires_at = DateTime.utc_now() |> DateTime.to_unix() |> Kernel.+(3600)
+      token = GuestInvite.sign(meeting.slug, expires_at, "Juno Fairbanks")
+      # Flip a byte early in the token so the signature check fails.
+      tampered = String.replace(token, ~r/./, "X", global: false)
+
+      assert {:error, :invalid} = Meetings.resolve_guest_invite(meeting.slug, tampered)
+    end
+
+    test "returns {:error, :invalid} when URL slug differs from payload slug" do
+      meeting_a = create_meeting!()
+      meeting_b = create_meeting!()
+      expires_at = DateTime.utc_now() |> DateTime.to_unix() |> Kernel.+(3600)
+      # Token signed against meeting_a, then hit at meeting_b's URL.
+      token = GuestInvite.sign(meeting_a.slug, expires_at, "Juno Fairbanks")
+
+      assert {:error, :invalid} = Meetings.resolve_guest_invite(meeting_b.slug, token)
+    end
+
+    test "returns {:error, :invalid} when the payload slug no longer resolves to a meeting" do
+      # Sign for a slug that has no Meeting row (deleted-after-issue).
+      expires_at = DateTime.utc_now() |> DateTime.to_unix() |> Kernel.+(3600)
+      slug = "ghost-meeting-#{System.unique_integer([:positive])}"
+      token = GuestInvite.sign(slug, expires_at, "Juno Fairbanks")
+
+      assert {:error, :invalid} = Meetings.resolve_guest_invite(slug, token)
+    end
+
+    test "returns {:error, :invalid} for a completely malformed token string" do
+      # Not a Plug.Crypto-signed token at all.
+      assert {:error, :invalid} =
+               Meetings.resolve_guest_invite("some-meeting", "definitely-not-a-token")
+    end
+  end
+
+  # ── mint_guest_join_bundle/2 (task 019f498d stage 2) ─────────────────────
+  #
+  # Thin alias over `guest_livekit_token/2` so downstream callers can
+  # standardise on the "mint bundle" verb. The full success-shape
+  # (`{:ok, bundle}`) contract is covered by `guest_token_test.exs`
+  # (an `async: false` module that mutates `Application.put_env(:platform,
+  # :livekit, ...)` safely) — the same code path is exercised end-to-end
+  # via `PlatformWeb.MeetingLive.mount/3`'s guest branch (chrome_mode:
+  # :none), which calls `mint_guest_join_bundle/2` under the hood.
+  #
+  # We pin only the failure branches here — those don't require
+  # LiveKit env, so they're safe under `async: true`.
+  describe "mint_guest_join_bundle/2 (task 019f498d stage 2)" do
+    alias Platform.Meetings.Meeting
+    alias Platform.Tasks
+
+    defp create_bundle_meeting! do
+      org_id = Platform.TenancyFixtures.fabrikam_org_id()
+
+      {:ok, project} =
+        Tasks.create_project(%{
+          name: "Bundle Alias Project #{System.unique_integer([:positive])}",
+          org_id: org_id
+        })
+
+      {:ok, meeting} =
+        Meetings.create_meeting(%{project_id: project.id, name: "Bundle Kickoff"})
+
+      Platform.Repo.preload(meeting, :chat_space)
+    end
+
+    test "propagates {:error, :missing_display_name} for an empty display name" do
+      meeting = create_bundle_meeting!()
+
+      assert {:error, :missing_display_name} =
+               Meetings.mint_guest_join_bundle(meeting, "")
+    end
+
+    test "propagates {:error, :missing_display_name} for a whitespace-only display name" do
+      meeting = create_bundle_meeting!()
+
+      assert {:error, :missing_display_name} =
+               Meetings.mint_guest_join_bundle(meeting, "   ")
+    end
+
+    test "propagates {:error, :missing_display_name} for a nil display name" do
+      meeting = create_bundle_meeting!()
+
+      # `guest_livekit_token/2`'s catch-all clause returns this for any
+      # non-binary — the alias must forward it unchanged.
+      assert {:error, :missing_display_name} =
+               Meetings.mint_guest_join_bundle(meeting, nil)
+    end
+  end
+
+  # ── guest_join_event_payload/2 (task 019f498d stage 2) ───────────────────
+  #
+  # Payload shape MeetingClient's phx-hook consumes. Load-bearing keys
+  # are `:token` + `:url`; the rest are surfaced for parity + debug.
+  describe "guest_join_event_payload/2 (task 019f498d stage 2)" do
+    alias Platform.Meetings.Meeting
+    alias Platform.Tasks
+
+    defp create_payload_meeting! do
+      org_id = Platform.TenancyFixtures.fabrikam_org_id()
+
+      {:ok, project} =
+        Tasks.create_project(%{
+          name: "Payload Shape Project #{System.unique_integer([:positive])}",
+          org_id: org_id
+        })
+
+      {:ok, meeting} =
+        Meetings.create_meeting(%{project_id: project.id, name: "Payload Kickoff"})
+
+      Platform.Repo.preload(meeting, :chat_space)
+    end
+
+    test "maps bundle -> push_event map with token/url/room_name/space_slug" do
+      meeting = create_payload_meeting!()
+
+      bundle = %{
+        token: "jwt.payload.signature",
+        identity: "guest:abc",
+        room_name: "space-#{meeting.chat_space_id}",
+        livekit_url: "wss://livekit.test"
+      }
+
+      payload = Meetings.guest_join_event_payload(bundle, meeting)
+
+      assert payload.token == bundle.token
+      assert payload.url == bundle.livekit_url
+      assert payload.room_name == bundle.room_name
+      assert payload.space_slug == meeting.chat_space.slug
+    end
+
+    test "space_slug is nil when the meeting's chat_space is nil" do
+      meeting = %Meeting{
+        id: Ecto.UUID.generate(),
+        name: "No-space Meeting",
+        chat_space_id: nil,
+        chat_space: nil
+      }
+
+      bundle = %{
+        token: "t",
+        identity: "guest:x",
+        room_name: "space-none",
+        livekit_url: nil
+      }
+
+      payload = Meetings.guest_join_event_payload(bundle, meeting)
+      assert payload.space_slug == nil
+      assert payload.url == nil
+    end
+  end
 end

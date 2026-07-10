@@ -19,6 +19,7 @@ defmodule Platform.Meetings do
   alias Platform.Agents.Agent
   alias Platform.Chat
   alias Platform.Meetings.{Meeting, Participant, Recording, Room, Transcript}
+  alias Platform.Meetings.GuestInvite
   alias Platform.Meetings.PubSub, as: MeetingsPubSub
   alias Platform.Repo
 
@@ -456,6 +457,127 @@ defmodule Platform.Meetings do
     Chat.create_space(attrs)
   end
 
+  @doc """
+  Resolve a guest-invite URL (URL `slug` + signed `token`) into the
+  state a guest ingress LiveView needs to render.
+
+  Encapsulates the branching the guest ingress LiveView needs:
+
+    * `GuestInvite.verify/1` — signature + expiry check.
+    * URL-vs-payload `meeting_slug` tampering guard — payload slug must
+      equal the URL slug (else `{:error, :invalid}`).
+    * `get_meeting_by_slug/1` — meeting existence + `:chat_space` preload
+      (a deleted meeting whose token was signed pre-deletion resolves to
+      `{:error, :invalid}`).
+    * Display-name branching — `nil` in the payload signals the
+      self-entry flow (`:name_entry`), a non-empty binary lands the guest
+      straight `:in_meeting`.
+
+  `PlatformWeb.MeetingLive` (with `chrome_mode: :none` on the `meet.`
+  host scope) mounts against this resolver so guest-surface behavior
+  can't drift from what `Meetings` intends to return.
+
+  Return shape:
+
+    * `{:ok, %{state: :name_entry, meeting: %Meeting{}}}` — token
+      verified, payload carried `display_name: nil`. The returned
+      meeting has `:chat_space` preloaded (later `mint_guest_join_bundle`
+      + `guest_join_event_payload` read `meeting.chat_space.slug`).
+    * `{:ok, %{state: :in_meeting, meeting: %Meeting{},
+      display_name: binary()}}` — token verified, payload carried a
+      pre-provisioned display name. Caller should call
+      `mint_guest_join_bundle/2` next.
+    * `{:error, :expired}` — token past its `expires_at`.
+    * `{:error, :invalid}` — signature/shape check failed, slug mismatch,
+      or the meeting slug no longer resolves.
+  """
+  @spec resolve_guest_invite(String.t(), String.t()) ::
+          {:ok, %{state: :name_entry, meeting: Meeting.t()}}
+          | {:ok, %{state: :in_meeting, meeting: Meeting.t(), display_name: String.t()}}
+          | {:error, :invalid | :expired}
+  def resolve_guest_invite(slug, token) when is_binary(slug) and is_binary(token) do
+    case GuestInvite.verify(token) do
+      {:error, :expired} ->
+        {:error, :expired}
+
+      {:error, :invalid} ->
+        {:error, :invalid}
+
+      {:ok, %{meeting_slug: payload_slug}} when payload_slug != slug ->
+        # Slug tampering: URL says one meeting, payload says another.
+        # Treat as invalid rather than trusting the payload — the URL is
+        # what the host shared with the guest.
+        {:error, :invalid}
+
+      {:ok, %{meeting_slug: ^slug, display_name: display_name}} ->
+        case get_meeting_by_slug(slug) do
+          nil ->
+            # Signature checked out but the target meeting has been
+            # deleted or the slug never existed. Treat as invalid.
+            {:error, :invalid}
+
+          meeting when is_binary(display_name) ->
+            {:ok, %{state: :in_meeting, meeting: meeting, display_name: display_name}}
+
+          meeting ->
+            {:ok, %{state: :name_entry, meeting: meeting}}
+        end
+    end
+  end
+
+  @doc """
+  Mint a LiveKit join bundle for a guest in the given meeting.
+
+  Thin, name-stable alias over `guest_livekit_token/2` — introduced
+  during the shellless-meeting consolidation so the guest ingress in
+  `MeetingLive` (under `chrome_mode: :none`) has a "mint bundle" call
+  name that names its intent. Returns
+  `{:ok, %{token, identity, room_name, livekit_url}}`.
+  """
+  @spec mint_guest_join_bundle(Meeting.t(), String.t()) ::
+          {:ok,
+           %{
+             token: String.t(),
+             identity: String.t(),
+             room_name: String.t(),
+             livekit_url: String.t() | nil
+           }}
+          | {:error, :livekit_not_configured | :missing_display_name}
+  def mint_guest_join_bundle(%Meeting{} = meeting, display_name),
+    do: guest_livekit_token(meeting, display_name)
+
+  @doc """
+  Build the `join-meeting` push_event payload for a guest.
+
+  Returns the exact map `MeetingClient` (see meeting_client.js) consumes
+  today: `token` + `url` are load-bearing; `room_name` + `space_slug` are
+  surfaced for parity with the authenticated path and to aid debug
+  logs. Kept public so `MeetingLive`'s guest branch can push the same
+  shape without duplicating the map literal at the call site.
+  """
+  @spec guest_join_event_payload(
+          %{
+            required(:token) => String.t(),
+            required(:livekit_url) => String.t() | nil,
+            required(:room_name) => String.t(),
+            optional(any()) => any()
+          },
+          Meeting.t()
+        ) :: %{
+          token: String.t(),
+          url: String.t() | nil,
+          room_name: String.t(),
+          space_slug: String.t() | nil
+        }
+  def guest_join_event_payload(bundle, %Meeting{} = meeting) do
+    %{
+      token: bundle.token,
+      url: bundle.livekit_url,
+      room_name: bundle.room_name,
+      space_slug: meeting.chat_space && meeting.chat_space.slug
+    }
+  end
+
   defp maybe_put_org_id(attrs, nil), do: attrs
   defp maybe_put_org_id(attrs, org_id) when is_binary(org_id), do: Map.put(attrs, :org_id, org_id)
 
@@ -818,12 +940,42 @@ defmodule Platform.Meetings do
     fk = identity_fk(parsed)
     display_name = name || display_name_from_identity(parsed) || "User"
 
+    # 019f498d re-dispatch: store the LiveKit `identity` in the row's
+    # metadata so the render layer can produce a `data-participant`
+    # attribute that matches the LiveKit identity the JS hook sees. This
+    # matters most for guest rows (nil user/agent FK, random `guest:<id>`
+    # identity that isn't derivable from the DB row otherwise), and is
+    # a safe no-op for auth rows (metadata identity == "user:<uuid>" ==
+    # what `gallery_identity/1` already produces from `:participant_id`).
+    metadata =
+      if is_binary(identity),
+        do: %{"identity" => identity},
+        else: %{}
+
     case find_active_participant(room.id, fk, display_name) do
       %Participant{} = existing ->
-        {:ok, existing}
+        maybe_backfill_identity(existing, metadata)
 
       nil ->
-        participant_joined(room, Map.merge(fk, %{display_name: display_name}))
+        participant_joined(
+          room,
+          Map.merge(fk, %{display_name: display_name, metadata: metadata})
+        )
+    end
+  end
+
+  # Idempotently backfill `metadata["identity"]` on an existing active row
+  # so a reconnect (or a guest-side upsert after the webhook already ran)
+  # doesn't drop the identity we need to match tiles to LiveKit tracks.
+  defp maybe_backfill_identity(%Participant{} = existing, metadata) do
+    current = existing.metadata || %{}
+
+    if map_size(metadata) > 0 and Map.get(current, "identity") != Map.get(metadata, "identity") do
+      existing
+      |> Participant.changeset(%{metadata: Map.merge(current, metadata)})
+      |> Repo.update()
+    else
+      {:ok, existing}
     end
   end
 
@@ -1175,7 +1327,7 @@ defmodule Platform.Meetings do
   # (6h) because a guest invite is a single-use "click and join" ticket.
   # Rowan's note about the phantom-fix rotation of LIVEKIT_API_KEY /
   # LIVEKIT_API_SECRET applies here: tokens are minted ON-DEMAND at
-  # click time (GuestMeetingLive, stage 3), never pre-generated at
+  # click time (MeetingLive guest-mount branch), never pre-generated at
   # invite-generation time, so an API key rotation cannot invalidate an
   # in-hand invite URL.
   @guest_token_ttl_seconds 30 * 60

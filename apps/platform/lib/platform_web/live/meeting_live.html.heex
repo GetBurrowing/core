@@ -25,9 +25,95 @@
     * left rail        → 019e2475-4395 (sectioned participant list)
     * bottom strip     → 019e2475-0037 (video tiles)
 --%>
-<%= if @meeting do %>
-  <div class="flex h-full flex-col bg-base-100 text-base-content">
-    <%!-- LiveKit JS hooks. MeetingClient listens for `join-meeting` /
+<%!--
+  Top-level `cond` (task 019f498d stage 4):
+    * `@chrome_mode == :none and @state == :expired` — guest expired-invite card.
+    * `@chrome_mode == :none and @state == :invalid` — guest invalid-invite card.
+    * `@chrome_mode == :none and @state == :name_entry` — guest name-entry card.
+    * `@meeting != nil` — full meeting shell (both `chrome_mode == :shell` and
+      guest `:in_meeting`; shell-only regions gated with `@shell?` below).
+    * Fallthrough — `:index` action (grouped meetings list + Start-meeting FAB).
+  Guest sub-cards are rendered inline (with the outer `min-h-dvh` wrapper
+  supplied by the `:guest` layout in `layouts.ex`). Stage 5 consolidated
+  the guest surface onto MeetingLive; there is no longer a separate
+  guest LV to keep in sync.
+--%>
+<%= cond do %>
+  <% @chrome_mode == :none and @state == :expired -> %>
+    <div class="mx-auto flex w-full max-w-md flex-1 flex-col items-center justify-center gap-4 px-4">
+      <div class="card w-full bg-base-200 shadow-lg">
+        <div class="card-body items-center text-center">
+          <span class="hero-clock size-10 text-warning" aria-hidden="true"></span>
+          <h1 class="card-title text-lg">This invite has expired</h1>
+          <p class="text-sm text-base-content/70">
+            Guest invite links are only valid for a short window. Please ask the meeting host to send you a fresh link.
+          </p>
+          <div class="card-actions mt-2">
+            <a href="https://example.com" class="btn btn-primary btn-sm">
+              Go to example.com
+            </a>
+          </div>
+        </div>
+      </div>
+    </div>
+  <% @chrome_mode == :none and @state == :invalid -> %>
+    <div class="mx-auto flex w-full max-w-md flex-1 flex-col items-center justify-center gap-4 px-4">
+      <div class="card w-full bg-base-200 shadow-lg">
+        <div class="card-body items-center text-center">
+          <span class="hero-exclamation-triangle size-10 text-error" aria-hidden="true"></span>
+          <h1 class="card-title text-lg">Invite link is not valid</h1>
+          <p class="text-sm text-base-content/70">
+            We couldn't verify this invite. It may have been mistyped, revoked, or refers to a meeting that no longer exists.
+          </p>
+          <div class="card-actions mt-2">
+            <a href="https://example.com" class="btn btn-primary btn-sm">
+              Go to example.com
+            </a>
+          </div>
+        </div>
+      </div>
+    </div>
+  <% @chrome_mode == :none and @state == :name_entry -> %>
+    <div class="mx-auto flex w-full max-w-md flex-1 flex-col items-center justify-center gap-4 px-4">
+      <div class="card w-full bg-base-200 shadow-lg">
+        <div class="card-body">
+          <div class="flex items-center gap-2">
+            <span class="hero-video-camera size-6 text-primary" aria-hidden="true"></span>
+            <h1 class="card-title text-lg">Join {@meeting.name}</h1>
+          </div>
+          <p class="text-sm text-base-content/70">
+            Enter the name others in the meeting will see.
+          </p>
+          <form phx-submit="submit_name" class="mt-2 flex flex-col gap-3">
+            <label class="form-control w-full">
+              <span class="label-text mb-1 text-sm">Your name</span>
+              <input
+                type="text"
+                name="guest[name]"
+                value={@name_value}
+                autofocus
+                required
+                maxlength="80"
+                placeholder="Juno Fairbanks"
+                class={[
+                  "input input-bordered w-full",
+                  @name_error && "input-error"
+                ]}
+              />
+              <span :if={@name_error} class="mt-1 text-xs text-error">
+                {@name_error}
+              </span>
+            </label>
+            <button type="submit" class="btn btn-primary w-full">
+              Join meeting
+            </button>
+          </form>
+        </div>
+      </div>
+    </div>
+  <% @meeting != nil -> %>
+    <div class="flex h-full flex-col bg-base-100 text-base-content">
+      <%!-- LiveKit JS hooks. MeetingClient listens for `join-meeting` /
          `leave-meeting` / `toggle-{mic,camera,screen-share}` push_events
          from MeetingHooks (server-side) and drives the local WebRTC
          session against `window.__livekit_room`. MeetingRoom subscribes
@@ -35,27 +121,27 @@
          hooks can attach published tracks by identity. Both are present
          in chat_live.html.heex:4-5 for the chat surface; mirror them
          here so MeetingHooks' push_events have a listener. --%>
-    <%!-- data-camera-enabled / data-mic-enabled: committed media intent the
+      <%!-- data-camera-enabled / data-mic-enabled: committed media intent the
          JS hook reads on a LiveKit reconnect to re-engage media without a
          fresh LV push (task 019e4b3e stage 3). MeetingHooks.attach/1 owns
          :camera_enabled / :mic_enabled here just as it does in ChatLive. --%>
-    <div
-      id="meeting-client"
-      phx-hook="MeetingClient"
-      class="hidden"
-      data-camera-enabled={to_string(@camera_enabled)}
-      data-mic-enabled={to_string(@mic_enabled)}
-    >
-    </div>
-    <div id="meeting-room" phx-hook="MeetingRoom" class="hidden"></div>
-    <%!-- Media sink (task 019e420f stage 1): MeetingClient.attachTrack
+      <div
+        id="meeting-client"
+        phx-hook="MeetingClient"
+        class="hidden"
+        data-camera-enabled={to_string(@camera_enabled)}
+        data-mic-enabled={to_string(@mic_enabled)}
+      >
+      </div>
+      <div id="meeting-room" phx-hook="MeetingRoom" class="hidden"></div>
+      <%!-- Media sink (task 019e420f stage 1): MeetingClient.attachTrack
          routes incoming `<audio>` elements to `#meeting-media`. Without
          this anchor it falls back to `document.body` — works but
          pollutes the top-level DOM. `phx-update="ignore"` keeps the LV
          from blowing away the children on re-render. --%>
-    <div id="meeting-media" class="hidden" phx-update="ignore"></div>
+      <div id="meeting-media" class="hidden" phx-update="ignore"></div>
 
-    <%!-- Desktop pane-collapse persistence (task 019e40f2). Two
+      <%!-- Desktop pane-collapse persistence (task 019e40f2). Two
          instances of the SidebarCollapse hook, parameterized via
          `data-*` attrs so each instance owns its own localStorage key.
          Storage keys are namespaced under `suite.meeting.*` so they
@@ -64,28 +150,32 @@
          `data-collapsed` so the hook can compare against the LV's
          current assign and only push a hydrate event when stored
          value differs. --%>
-    <div
-      id="meeting-participant-rail-collapse-hook"
-      phx-hook="SidebarCollapse"
-      data-collapsed={if @participant_rail_collapsed, do: "true", else: "false"}
-      data-storage-key="suite.meeting.participant_rail.collapsed"
-      data-hydrate-event="meeting_participant_rail_hydrate"
-      data-change-event="meeting_participant_rail_collapsed_changed"
-      class="hidden"
-    >
-    </div>
-    <div
-      id="meeting-chat-pane-collapse-hook"
-      phx-hook="SidebarCollapse"
-      data-collapsed={if @chat_panel_collapsed, do: "true", else: "false"}
-      data-storage-key="suite.meeting.chat_pane.collapsed"
-      data-hydrate-event="meeting_chat_pane_hydrate"
-      data-change-event="meeting_chat_pane_collapsed_changed"
-      class="hidden"
-    >
-    </div>
+      <%!-- Stage 4 (task 019f498d): shell-only. Guests never persist pane
+         collapse — no shell chrome to collapse against. --%>
+      <div
+        :if={@shell?}
+        id="meeting-participant-rail-collapse-hook"
+        phx-hook="SidebarCollapse"
+        data-collapsed={if @participant_rail_collapsed, do: "true", else: "false"}
+        data-storage-key="suite.meeting.participant_rail.collapsed"
+        data-hydrate-event="meeting_participant_rail_hydrate"
+        data-change-event="meeting_participant_rail_collapsed_changed"
+        class="hidden"
+      >
+      </div>
+      <div
+        :if={@shell?}
+        id="meeting-chat-pane-collapse-hook"
+        phx-hook="SidebarCollapse"
+        data-collapsed={if @chat_panel_collapsed, do: "true", else: "false"}
+        data-storage-key="suite.meeting.chat_pane.collapsed"
+        data-hydrate-event="meeting_chat_pane_hydrate"
+        data-change-event="meeting_chat_pane_collapsed_changed"
+        class="hidden"
+      >
+      </div>
 
-    <%!-- Closed-captions preference persistence host (task 019f3f17
+      <%!-- Closed-captions preference persistence host (task 019f3f17
          stage 2). Split out of the `MeetingCaptions` hook because that
          hook mounts on `#meeting-captions`, which is
          `:if={@captions_visible}`-gated. On a page reload the server
@@ -95,79 +185,93 @@
          reload (stage 1 review finding). This always-mounted host
          reads/writes localStorage on `meeting_captions_persist` /
          `meeting_captions_hydrate` and has no visible UI. --%>
-    <div
-      id="meeting-captions-persist-host"
-      phx-hook="MeetingCaptionsPersist"
-      data-persist-key="suite.meeting.captions_visible"
-      class="hidden"
-    >
-    </div>
-
-    <%!-- ── Top bar ──────────────────────────────────────────────────────── --%>
-    <header class="flex h-12 flex-shrink-0 items-center gap-3 border-b border-base-300 bg-base-200/60 px-3">
-      <%!-- Meeting name --%>
-      <div class="flex min-w-0 items-center gap-2">
-        <span class="hero-video-camera size-5 flex-shrink-0 text-primary"></span>
-        <h1 class="truncate text-sm font-semibold">{@meeting.name}</h1>
+      <div
+        id="meeting-captions-persist-host"
+        phx-hook="MeetingCaptionsPersist"
+        data-persist-key="suite.meeting.captions_visible"
+        class="hidden"
+      >
       </div>
 
-      <div class="flex-1"></div>
+      <%!-- ── Top bar ──────────────────────────────────────────────────────── --%>
+      <header class="flex h-12 flex-shrink-0 items-center gap-3 border-b border-base-300 bg-base-200/60 px-3">
+        <%!-- Meeting name --%>
+        <div class="flex min-w-0 items-center gap-2">
+          <span class="hero-video-camera size-5 flex-shrink-0 text-primary"></span>
+          <h1 class="truncate text-sm font-semibold">{@meeting.name}</h1>
+        </div>
 
-      <%!-- Local-media controls + Join/Leave CTA. Visual treatment
+        <div class="flex-1"></div>
+
+        <%!-- Guest identity badge (task 019f498d stage 4). Only rendered on
+           the guest surface (`chrome_mode == :none`) so the guest can see
+           which name others in the meeting see. Mirrors the badge in
+           guest_meeting_live.html.heex:117-119 verbatim so stage 5's
+           router flip is a byte-identical visual delta. --%>
+        <span
+          :if={@chrome_mode == :none}
+          class="badge badge-ghost gap-1 text-xs"
+          data-role="guest-identity-badge"
+        >
+          <span class="hero-user size-3.5" aria-hidden="true"></span>
+          {@display_name} (guest)
+        </span>
+
+        <%!-- Local-media controls + Join/Leave CTA. Visual treatment
            mirrors meeting_bar_live.ex's mini-bar: hero-microphone /
            hero-video-camera glyphs, base-content/70 when active, error-
            toned when muted/off, base-content/40 when off. Each button
            pushes the matching MeetingHooks event — the LiveKit lifecycle
            lives there (see meeting_hooks.ex), no client-side state
            here. --%>
-      <div class="flex flex-shrink-0 items-center gap-1" data-role="meeting-controls">
-        <button
-          type="button"
-          phx-click="meeting_toggle_mic"
-          aria-label={if @mic_enabled, do: "Mute mic", else: "Unmute mic"}
-          aria-pressed={to_string(@mic_enabled)}
-          title={if @mic_enabled, do: "Mute mic", else: "Unmute mic"}
-          data-role="meeting-mic"
-          data-active={to_string(@mic_enabled)}
-          class={[
-            "btn btn-sm btn-ghost btn-square min-h-11",
-            if(@mic_enabled,
-              do: "text-base-content/70",
-              else: "text-error bg-error/10 hover:bg-error/20"
-            )
-          ]}
-        >
-          <span class={[
-            "size-4",
-            if(@mic_enabled, do: "hero-microphone", else: "hero-microphone-slash")
-          ]}>
-          </span>
-        </button>
+        <div class="flex flex-shrink-0 items-center gap-1" data-role="meeting-controls">
+          <button
+            type="button"
+            phx-click="meeting_toggle_mic"
+            aria-label={if @mic_enabled, do: "Mute mic", else: "Unmute mic"}
+            aria-pressed={to_string(@mic_enabled)}
+            title={if @mic_enabled, do: "Mute mic", else: "Unmute mic"}
+            data-role="meeting-mic"
+            data-active={to_string(@mic_enabled)}
+            class={[
+              "btn btn-sm btn-ghost btn-square min-h-11",
+              if(@mic_enabled,
+                do: "text-base-content/70",
+                else: "text-error bg-error/10 hover:bg-error/20"
+              )
+            ]}
+          >
+            <span class={[
+              "size-4",
+              if(@mic_enabled, do: "hero-microphone", else: "hero-microphone-slash")
+            ]}>
+            </span>
+          </button>
 
-        <button
-          type="button"
-          phx-click="meeting_toggle_camera"
-          aria-label={if @camera_enabled, do: "Turn off camera", else: "Turn on camera"}
-          aria-pressed={to_string(@camera_enabled)}
-          title={if @camera_enabled, do: "Turn off camera", else: "Turn on camera"}
-          data-role="meeting-camera"
-          data-active={to_string(@camera_enabled)}
-          class={[
-            "btn btn-sm btn-ghost btn-square min-h-11",
-            if(@camera_enabled,
-              do: "text-base-content/70",
-              else: "text-base-content/40"
-            )
-          ]}
-        >
-          <span class={[
-            "size-4",
-            if(@camera_enabled, do: "hero-video-camera", else: "hero-video-camera-slash")
-          ]}>
-          </span>
-        </button>
+          <button
+            type="button"
+            phx-click="meeting_toggle_camera"
+            aria-label={if @camera_enabled, do: "Turn off camera", else: "Turn on camera"}
+            aria-pressed={to_string(@camera_enabled)}
+            title={if @camera_enabled, do: "Turn off camera", else: "Turn on camera"}
+            data-role="meeting-camera"
+            data-active={to_string(@camera_enabled)}
+            class={[
+              "btn btn-sm btn-ghost btn-square min-h-11",
+              if(@camera_enabled,
+                do: "text-base-content/70",
+                else: "text-base-content/40"
+              )
+            ]}
+          >
+            <span class={[
+              "size-4",
+              if(@camera_enabled, do: "hero-video-camera", else: "hero-video-camera-slash")
+            ]}>
+            </span>
+          </button>
 
-        <%!-- Copy guest link (stage 4 of task 019f2483). TEMPORARY:
+          <%!-- Copy guest link (stage 4 of task 019f2483). TEMPORARY:
              host-participant gate removed because MeetingLive's
              "Start a meeting" handler does not currently provision
              `host_participant_id` (only the MCP `meeting_create` path
@@ -178,42 +282,42 @@
              `Meetings` context + call from `start_meeting` handler, then
              restore the host-only gate. Hidden on very narrow viewports
              to keep the top-bar from wrapping. --%>
-        <button
-          :if={@current_participant}
-          type="button"
-          phx-click="open_guest_invite_sheet"
-          aria-label="Copy guest link"
-          title="Copy guest link"
-          data-role="meeting-copy-guest-link"
-          class="btn btn-sm btn-ghost min-h-11 gap-1.5 text-base-content/70 hidden sm:inline-flex"
-        >
-          <span class="hero-link size-4"></span>
-          <span class="hidden md:inline">Copy guest link</span>
-        </button>
+          <button
+            :if={@shell? and @current_participant}
+            type="button"
+            phx-click="open_guest_invite_sheet"
+            aria-label="Copy guest link"
+            title="Copy guest link"
+            data-role="meeting-copy-guest-link"
+            class="btn btn-sm btn-ghost min-h-11 gap-1.5 text-base-content/70 hidden sm:inline-flex"
+          >
+            <span class="hero-link size-4"></span>
+            <span class="hidden md:inline">Copy guest link</span>
+          </button>
 
-        <%!-- task 019e420f stage 2: client-side hook keeps the click
+          <%!-- task 019e420f stage 2: client-side hook keeps the click
              gesture alive across the call into getDisplayMedia(). --%>
-        <button
-          id="meeting-share-btn-topbar"
-          phx-hook="MeetingShareButton"
-          type="button"
-          aria-label={if @screen_share_enabled, do: "Stop sharing screen", else: "Share screen"}
-          aria-pressed={to_string(@screen_share_enabled)}
-          title={if @screen_share_enabled, do: "Stop sharing screen", else: "Share screen"}
-          data-role="meeting-screen-share"
-          data-active={to_string(@screen_share_enabled)}
-          class={[
-            "btn btn-sm btn-ghost btn-square min-h-11 hidden sm:inline-flex",
-            if(@screen_share_enabled,
-              do: "text-primary",
-              else: "text-base-content/40"
-            )
-          ]}
-        >
-          <span class="hero-computer-desktop size-4"></span>
-        </button>
+          <button
+            id="meeting-share-btn-topbar"
+            phx-hook="MeetingShareButton"
+            type="button"
+            aria-label={if @screen_share_enabled, do: "Stop sharing screen", else: "Share screen"}
+            aria-pressed={to_string(@screen_share_enabled)}
+            title={if @screen_share_enabled, do: "Stop sharing screen", else: "Share screen"}
+            data-role="meeting-screen-share"
+            data-active={to_string(@screen_share_enabled)}
+            class={[
+              "btn btn-sm btn-ghost btn-square min-h-11 hidden sm:inline-flex",
+              if(@screen_share_enabled,
+                do: "text-primary",
+                else: "text-base-content/40"
+              )
+            ]}
+          >
+            <span class="hero-computer-desktop size-4"></span>
+          </button>
 
-        <%!-- Closed-captions toggle (task 019f3f17 stage 1). Only rendered
+          <%!-- Closed-captions toggle (task 019f3f17 stage 1). Only rendered
              when the viewer is joined (mirrors the Leave-button gate
              below) since captions come from the LiveKit transcription
              stream, which only flows during an active session. Event name
@@ -223,118 +327,119 @@
              MeetingCaptions JS hook + `meeting_live_test.exs` still
              reference this name, so renaming would compound the blast
              radius without changing behaviour. --%>
-        <%= if @in_meeting do %>
-          <button
-            type="button"
-            phx-click="toggle_captions_meeting"
-            aria-label={if @captions_visible, do: "Hide captions", else: "Show captions"}
-            aria-pressed={to_string(@captions_visible)}
-            title={if @captions_visible, do: "Hide captions", else: "Show captions"}
-            data-role="meeting-captions-toggle"
-            data-active={to_string(@captions_visible)}
-            class={[
-              "btn btn-sm btn-ghost btn-square min-h-11",
-              if(@captions_visible,
-                do: "text-primary",
-                else: "text-base-content/40"
-              )
-            ]}
-          >
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              viewBox="0 0 24 24"
-              fill="currentColor"
-              class="size-4"
+          <%= if @in_meeting do %>
+            <button
+              type="button"
+              phx-click="toggle_captions_meeting"
+              aria-label={if @captions_visible, do: "Hide captions", else: "Show captions"}
+              aria-pressed={to_string(@captions_visible)}
+              title={if @captions_visible, do: "Hide captions", else: "Show captions"}
+              data-role="meeting-captions-toggle"
+              data-active={to_string(@captions_visible)}
+              class={[
+                "btn btn-sm btn-ghost btn-square min-h-11",
+                if(@captions_visible,
+                  do: "text-primary",
+                  else: "text-base-content/40"
+                )
+              ]}
             >
-              <path d="M2 5a2 2 0 012-2h16a2 2 0 012 2v10a2 2 0 01-2 2H6l-4 4V5zm5 3a1 1 0 00-1 1v1a1 1 0 001 1h2a1 1 0 001-1V9a1 1 0 00-1-1H7zm7 0a1 1 0 00-1 1v1a1 1 0 001 1h2a1 1 0 001-1V9a1 1 0 00-1-1h-2z" />
-            </svg>
-          </button>
-        <% end %>
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                viewBox="0 0 24 24"
+                fill="currentColor"
+                class="size-4"
+              >
+                <path d="M2 5a2 2 0 012-2h16a2 2 0 012 2v10a2 2 0 01-2 2H6l-4 4V5zm5 3a1 1 0 00-1 1v1a1 1 0 001 1h2a1 1 0 001-1V9a1 1 0 00-1-1H7zm7 0a1 1 0 00-1 1v1a1 1 0 001 1h2a1 1 0 001-1V9a1 1 0 00-1-1h-2z" />
+              </svg>
+            </button>
+          <% end %>
 
-        <%= if @in_meeting do %>
-          <button
-            type="button"
-            phx-click="meeting_leave"
-            data-role="meeting-leave"
-            class="btn btn-sm btn-ghost min-h-11 gap-1.5 text-error hover:bg-error/10"
-            title="Leave meeting"
-          >
-            <span class="hero-phone-x-mark size-4"></span>
-            <span class="hidden sm:inline">Leave</span>
-          </button>
-        <% else %>
-          <button
-            type="button"
-            phx-click="meeting_join"
-            data-role="meeting-join"
-            class="btn btn-sm btn-primary min-h-11 gap-1.5"
-            title="Join meeting"
-          >
-            <span class="hero-video-camera size-4"></span>
-            <span class="hidden sm:inline">Join meeting</span>
-          </button>
-        <% end %>
-      </div>
+          <%= if @in_meeting do %>
+            <button
+              type="button"
+              phx-click="meeting_leave"
+              data-role="meeting-leave"
+              class="btn btn-sm btn-ghost min-h-11 gap-1.5 text-error hover:bg-error/10"
+              title="Leave meeting"
+            >
+              <span class="hero-phone-x-mark size-4"></span>
+              <span class="hidden sm:inline">Leave</span>
+            </button>
+          <% else %>
+            <button
+              type="button"
+              phx-click="meeting_join"
+              data-role="meeting-join"
+              class="btn btn-sm btn-primary min-h-11 gap-1.5"
+              title="Join meeting"
+            >
+              <span class="hero-video-camera size-4"></span>
+              <span class="hidden sm:inline">Join meeting</span>
+            </button>
+          <% end %>
+        </div>
 
-      <%!-- Stage-mode segmented control (ADR 0042). Four hero-icon buttons;
+        <%!-- Stage-mode segmented control (ADR 0042). Four hero-icon buttons;
            clicking one pushes `set_stage_mode` with the target mode and
            the LV swaps `@current_stage_mode`. The active button gets the
            daisyui segmented-active treatment (`bg-base-200 text-primary`);
            switching is pure presentation — the other modes' underlying
            state is untouched. The control wraps/scrolls on narrow
            viewports so it never overflows the top bar. --%>
-      <div
-        class="join flex-shrink-0 overflow-x-auto"
-        role="group"
-        aria-label="Stage mode"
-        data-stage-mode-control="active"
-      >
-        <button
-          :for={mode <- @stage_modes}
-          type="button"
-          phx-click="set_stage_mode"
-          phx-value-mode={mode}
-          aria-label={stage_mode_label(mode)}
-          aria-pressed={to_string(@current_stage_mode == mode)}
-          title={stage_mode_label(mode)}
-          data-stage-mode-button={mode}
-          data-active={to_string(@current_stage_mode == mode)}
-          class={[
-            "join-item btn btn-sm min-h-11 gap-1.5 border-base-300",
-            if(@current_stage_mode == mode,
-              do: "bg-base-200 text-primary",
-              else: "btn-ghost text-base-content/60"
-            )
-          ]}
+        <div
+          class="join flex-shrink-0 overflow-x-auto"
+          role="group"
+          aria-label="Stage mode"
+          data-stage-mode-control="active"
         >
-          <span class={[stage_mode_icon(mode), "size-4"]}></span>
-          <span class="hidden sm:inline">{stage_mode_label(mode)}</span>
-        </button>
-      </div>
+          <button
+            :for={mode <- @stage_modes}
+            type="button"
+            phx-click="set_stage_mode"
+            phx-value-mode={mode}
+            aria-label={stage_mode_label(mode)}
+            aria-pressed={to_string(@current_stage_mode == mode)}
+            title={stage_mode_label(mode)}
+            data-stage-mode-button={mode}
+            data-active={to_string(@current_stage_mode == mode)}
+            class={[
+              "join-item btn btn-sm min-h-11 gap-1.5 border-base-300",
+              if(@current_stage_mode == mode,
+                do: "bg-base-200 text-primary",
+                else: "btn-ghost text-base-content/60"
+              )
+            ]}
+          >
+            <span class={[stage_mode_icon(mode), "size-4"]}></span>
+            <span class="hidden sm:inline">{stage_mode_label(mode)}</span>
+          </button>
+        </div>
 
-      <%!-- Chat-panel toggle (sibling stage 3). Mobile-only — `lg:hidden`.
+        <%!-- Chat-panel toggle (sibling stage 3). Mobile-only — `lg:hidden`.
            On desktop the right column is always visible (`hidden
            lg:flex` on the aside) so the toggle would be a no-op there.
            Hero-icon only (no emoji) per the intent-panel-host
            greppability + the e2e_behavior validation refusing emoji
            codepoints. --%>
-      <button
-        type="button"
-        phx-click="toggle_chat_panel"
-        aria-label="Toggle chat panel"
-        aria-expanded={to_string(@chat_panel_open)}
-        aria-controls="meeting-chat-drawer"
-        title="Toggle chat panel"
-        class="btn btn-sm btn-ghost btn-square text-base-content/60 lg:hidden"
-        data-role="chat-panel-toggle"
-      >
-        <span class="hero-chat-bubble-left-right size-5"></span>
-      </button>
-    </header>
+        <button
+          :if={@shell?}
+          type="button"
+          phx-click="toggle_chat_panel"
+          aria-label="Toggle chat panel"
+          aria-expanded={to_string(@chat_panel_open)}
+          aria-controls="meeting-chat-drawer"
+          title="Toggle chat panel"
+          class="btn btn-sm btn-ghost btn-square text-base-content/60 lg:hidden"
+          data-role="chat-panel-toggle"
+        >
+          <span class="hero-chat-bubble-left-right size-5"></span>
+        </button>
+      </header>
 
-    <%!-- ── Body: left rail + center stage + chat panel ─────────────────── --%>
-    <div class="relative flex min-h-0 flex-1">
-      <%!-- Persistent local self-view PARKING SLOT (task 019e42f6 v2).
+      <%!-- ── Body: left rail + center stage + chat panel ─────────────────── --%>
+      <div class="relative flex min-h-0 flex-1">
+        <%!-- Persistent local self-view PARKING SLOT (task 019e42f6 v2).
            v1 rendered this as a visible bottom-right picture-in-picture
            tile, which Rowan rejected: the self-video free-floated over the
            gallery and broke the grid layout. v2 keeps the SAME stable,
@@ -358,17 +463,23 @@
            (shared-screen target) and from the new `data-local-video-dock`
            reparent targets. All three can be present simultaneously.
            Hidden entirely when the viewer has no participant row. --%>
-      <% self_view = local_self_view_participant(assigns[:current_participant]) %>
-      <div
-        :if={self_view}
-        id="meeting-local-self-view"
-        phx-update="ignore"
-        class="hidden"
-        data-role="local-self-view"
-      >
-      </div>
+        <% self_view =
+          local_self_view_participant(
+            assigns[:current_participant],
+            assigns[:chrome_mode] == :none and assigns[:state] == :in_meeting,
+            assigns[:display_name],
+            assigns[:identity]
+          ) %>
+        <div
+          :if={self_view}
+          id="meeting-local-self-view"
+          phx-update="ignore"
+          class="hidden"
+          data-role="local-self-view"
+        >
+        </div>
 
-      <%!-- Left rail (task 019e2475-4395): sectioned participant list.
+        <%!-- Left rail (task 019e2475-4395): sectioned participant list.
            Hosts/humans on top with mic + speaking + host-badge cues;
            agents below a divider with role chip + status dot.
 
@@ -381,138 +492,139 @@
                chevron-double-right + user-group icon + participant
                count. Two-state render avoids participant-row reflow
                and speaking-ring paint artifacts vs a width transition. --%>
-      <aside
-        :if={!@participant_rail_collapsed}
-        class="hidden w-60 flex-shrink-0 flex-col border-r border-base-300 bg-base-200/40 lg:flex"
-        data-pane="left-rail"
-      >
-        <div class="flex items-center gap-2 border-b border-base-300 px-3 py-2">
-          <span class="hero-user-group size-4 text-base-content/60"></span>
-          <span class="text-xs font-semibold uppercase tracking-widest text-base-content/50">
-            Participants
-          </span>
-          <span class="ml-auto text-xs text-base-content/40" data-role="participant-count">
-            {length(assigns[:participants] || [])}
-          </span>
-          <button
-            type="button"
-            phx-click="toggle_participant_rail"
-            aria-label="Collapse participants pane"
-            aria-expanded="true"
-            title="Collapse"
-            class="btn btn-ghost btn-xs btn-square text-base-content/40 hover:text-base-content hidden lg:inline-flex"
-            data-role="participant-rail-toggle"
-          >
-            <span class="hero-chevron-double-left size-4"></span>
-          </button>
-        </div>
-        <div class="min-h-0 flex-1 overflow-y-auto">
-          <.participant_rail
-            participants={assigns[:participants] || []}
-            agents_by_id={assigns[:agents_by_id] || %{}}
-            meeting={@meeting}
-            speaking_participant_ids={assigns[:speaking_participant_ids] || MapSet.new()}
-          />
-        </div>
-      </aside>
+        <aside
+          :if={!@participant_rail_collapsed}
+          class="hidden w-60 flex-shrink-0 flex-col border-r border-base-300 bg-base-200/40 lg:flex"
+          data-pane="left-rail"
+        >
+          <div class="flex items-center gap-2 border-b border-base-300 px-3 py-2">
+            <span class="hero-user-group size-4 text-base-content/60"></span>
+            <span class="text-xs font-semibold uppercase tracking-widest text-base-content/50">
+              Participants
+            </span>
+            <span class="ml-auto text-xs text-base-content/40" data-role="participant-count">
+              {length(assigns[:participants] || [])}
+            </span>
+            <button
+              type="button"
+              phx-click="toggle_participant_rail"
+              aria-label="Collapse participants pane"
+              aria-expanded="true"
+              title="Collapse"
+              class="btn btn-ghost btn-xs btn-square text-base-content/40 hover:text-base-content hidden lg:inline-flex"
+              data-role="participant-rail-toggle"
+            >
+              <span class="hero-chevron-double-left size-4"></span>
+            </button>
+          </div>
+          <div class="min-h-0 flex-1 overflow-y-auto">
+            <.participant_rail
+              participants={assigns[:participants] || []}
+              agents_by_id={assigns[:agents_by_id] || %{}}
+              meeting={@meeting}
+              speaking_participant_ids={assigns[:speaking_participant_ids] || MapSet.new()}
+            />
+          </div>
+        </aside>
 
-      <%!-- Collapsed slim rail (task 019e40f2). Only renders on `>=lg`
+        <%!-- Collapsed slim rail (task 019e40f2). Only renders on `>=lg`
            AND when `@participant_rail_collapsed` is true. Carries the
            same `data-pane="left-rail"` selector so consumers can find
            "the left rail in either state", plus `data-pane-collapsed`
            so tests + e2e can disambiguate. --%>
-      <aside
-        :if={@participant_rail_collapsed}
-        class="hidden w-12 flex-shrink-0 flex-col items-center border-r border-base-300 bg-base-200/40 py-2 lg:flex"
-        data-pane="left-rail"
-        data-pane-collapsed="true"
-      >
-        <button
-          type="button"
-          phx-click="toggle_participant_rail"
-          aria-label="Expand participants pane"
-          aria-expanded="false"
-          title="Expand participants"
-          class="btn btn-ghost btn-sm btn-square text-base-content/60 hover:text-base-content"
-          data-role="participant-rail-toggle"
+        <aside
+          :if={@participant_rail_collapsed}
+          class="hidden w-12 flex-shrink-0 flex-col items-center border-r border-base-300 bg-base-200/40 py-2 lg:flex"
+          data-pane="left-rail"
+          data-pane-collapsed="true"
         >
-          <span class="hero-chevron-double-right size-4"></span>
-        </button>
-        <span class="hero-user-group mt-2 size-4 text-base-content/40" aria-hidden="true"></span>
-        <span
-          class="mt-1 text-[10px] font-semibold text-base-content/40"
-          data-role="participant-count"
-        >
-          {length(assigns[:participants] || [])}
-        </span>
-      </aside>
+          <button
+            type="button"
+            phx-click="toggle_participant_rail"
+            aria-label="Expand participants pane"
+            aria-expanded="false"
+            title="Expand participants"
+            class="btn btn-ghost btn-sm btn-square text-base-content/60 hover:text-base-content"
+            data-role="participant-rail-toggle"
+          >
+            <span class="hero-chevron-double-right size-4"></span>
+          </button>
+          <span class="hero-user-group mt-2 size-4 text-base-content/40" aria-hidden="true">
+          </span>
+          <span
+            class="mt-1 text-[10px] font-semibold text-base-content/40"
+            data-role="participant-count"
+          >
+            {length(assigns[:participants] || [])}
+          </span>
+        </aside>
 
-      <%!-- Center stage. Renders one of four stage-mode components keyed
+        <%!-- Center stage. Renders one of four stage-mode components keyed
            off @current_stage_mode. The `data-stage-mode` attribute drives
            renderer selection and is the e2e/test contract — keep it
            stable. --%>
-      <main
-        class="flex min-w-0 flex-1 items-center justify-center bg-base-100 p-4"
-        data-pane="center-stage"
-        data-stage-mode={@current_stage_mode}
-      >
-        <%= cond do %>
-          <% @current_stage_mode == :canvas and assigns[:meeting_canvas] -> %>
-            <%!-- Canvas mode (active canvas). Reuse the chat canvas
+        <main
+          class="flex min-w-0 flex-1 items-center justify-center bg-base-100 p-4"
+          data-pane="center-stage"
+          data-stage-mode={@current_stage_mode}
+        >
+          <%= cond do %>
+            <% @current_stage_mode == :canvas and assigns[:meeting_canvas] -> %>
+              <%!-- Canvas mode (active canvas). Reuse the chat canvas
                  renderer so the meeting's surface stays visually
                  consistent with how a canvas appears in chat. --%>
-            <div
-              class="flex h-full w-full justify-center overflow-y-auto"
-              data-placeholder="center-stage"
-              data-canvas-id={@meeting_canvas.id}
-            >
-              <div class="w-full max-w-3xl">
-                <.canvas_document
-                  canvas={@meeting_canvas}
-                  dom_id_base="meeting-stage"
-                />
+              <div
+                class="flex h-full w-full justify-center overflow-y-auto"
+                data-placeholder="center-stage"
+                data-canvas-id={@meeting_canvas.id}
+              >
+                <div class="w-full max-w-3xl">
+                  <.canvas_document
+                    canvas={@meeting_canvas}
+                    dom_id_base="meeting-stage"
+                  />
+                </div>
               </div>
-            </div>
-          <% @current_stage_mode == :canvas -> %>
-            <%!-- Canvas mode (empty state). Meeting has no canvas yet —
+            <% @current_stage_mode == :canvas -> %>
+              <%!-- Canvas mode (empty state). Meeting has no canvas yet —
                  surface a single CTA that mints one in the bound chat
                  space and assigns it as the active meeting canvas. --%>
-            <div
-              class="flex h-full w-full flex-col items-center justify-center rounded-xl border border-dashed border-base-300 text-base-content/50"
-              data-placeholder="center-stage"
-              data-empty-state="canvas"
-            >
-              <span class="hero-rectangle-stack size-10 text-base-content/40"></span>
-              <p class="mt-2 text-sm font-medium text-base-content/70">No canvas yet</p>
-              <p class="mt-0.5 max-w-xs text-center text-xs">
-                Meetings work best when there's something to point at. Spin one up to start sketching.
-              </p>
-              <button
-                type="button"
-                phx-click="create_meeting_canvas"
-                class="btn btn-primary btn-sm mt-4 min-h-11 gap-1.5"
-                data-action="create-meeting-canvas"
+              <div
+                class="flex h-full w-full flex-col items-center justify-center rounded-xl border border-dashed border-base-300 text-base-content/50"
+                data-placeholder="center-stage"
+                data-empty-state="canvas"
               >
-                <span class="hero-plus size-4"></span>
-                <span>Create canvas</span>
-              </button>
-            </div>
-          <% @current_stage_mode == :whiteboard -> %>
-            <%!-- Whiteboard mode (placeholder). The drawing surface is
+                <span class="hero-rectangle-stack size-10 text-base-content/40"></span>
+                <p class="mt-2 text-sm font-medium text-base-content/70">No canvas yet</p>
+                <p class="mt-0.5 max-w-xs text-center text-xs">
+                  Meetings work best when there's something to point at. Spin one up to start sketching.
+                </p>
+                <button
+                  type="button"
+                  phx-click="create_meeting_canvas"
+                  class="btn btn-primary btn-sm mt-4 min-h-11 gap-1.5"
+                  data-action="create-meeting-canvas"
+                >
+                  <span class="hero-plus size-4"></span>
+                  <span>Create canvas</span>
+                </button>
+              </div>
+            <% @current_stage_mode == :whiteboard -> %>
+              <%!-- Whiteboard mode (placeholder). The drawing surface is
                  a separate stack and lands later; for now we render a
                  centered "coming soon" card so the mode is visually
                  distinguishable and the click target is real. --%>
-            <div
-              class="flex h-full w-full flex-col items-center justify-center rounded-xl border border-dashed border-base-300 text-base-content/40"
-              data-placeholder="center-stage"
-              data-coming-soon="whiteboard"
-            >
-              <span class="hero-pencil-square size-10"></span>
-              <p class="mt-2 text-sm font-medium text-base-content/70">Whiteboard</p>
-              <p class="mt-0.5 text-xs">Coming soon</p>
-            </div>
-          <% @current_stage_mode == :screen -> %>
-            <%!-- Screen mode. The active LiveKit screen-share track (any
+              <div
+                class="flex h-full w-full flex-col items-center justify-center rounded-xl border border-dashed border-base-300 text-base-content/40"
+                data-placeholder="center-stage"
+                data-coming-soon="whiteboard"
+              >
+                <span class="hero-pencil-square size-10"></span>
+                <p class="mt-2 text-sm font-medium text-base-content/70">Whiteboard</p>
+                <p class="mt-0.5 text-xs">Coming soon</p>
+              </div>
+            <% @current_stage_mode == :screen -> %>
+              <%!-- Screen mode. The active LiveKit screen-share track (any
                  participant) is attached client-side by the
                  `MeetingScreenShare` JS hook into `[data-screen-share-slot]`.
                  When nobody is sharing, the empty-state `[data-screen-share-empty]`
@@ -522,14 +634,14 @@
                  Room lives on `window.__livekit_room`, so flipping to
                  Gallery and back re-mounts this hook against the same
                  room and synchronously reattaches the existing track. --%>
-            <div
-              id="meeting-screen-stage"
-              phx-hook="MeetingScreenShare"
-              class="relative flex h-full w-full items-center justify-center overflow-hidden rounded-xl bg-base-200"
-              data-placeholder="center-stage"
-              data-screen-share-active="false"
-            >
-              <%!-- Hook target: the JS attaches the <video> element here
+              <div
+                id="meeting-screen-stage"
+                phx-hook="MeetingScreenShare"
+                class="relative flex h-full w-full items-center justify-center overflow-hidden rounded-xl bg-base-200"
+                data-placeholder="center-stage"
+                data-screen-share-active="false"
+              >
+                <%!-- Hook target: the JS attaches the <video> element here
                    when a screen-share track is found. Hidden until a
                    track lands so the empty-state shows through.
 
@@ -544,75 +656,83 @@
                    shared screen vanished. Mirrors the quick-meet slot
                    (`#meeting-screen-share-slot-desktop`, partials.ex) and the
                    local-video docks fixed in #421. --%>
-              <div
-                data-screen-share-slot
-                id="meeting-screen-share-slot"
-                phx-update="ignore"
-                class="absolute inset-0 hidden h-full w-full"
-              >
-              </div>
+                <div
+                  data-screen-share-slot
+                  id="meeting-screen-share-slot"
+                  phx-update="ignore"
+                  class="absolute inset-0 hidden h-full w-full"
+                >
+                </div>
 
-              <%!-- Empty state: visible when no screen-share is live. The
+                <%!-- Empty state: visible when no screen-share is live. The
                    hook toggles `hidden` on this node when it (de)attaches. --%>
-              <div
-                data-screen-share-empty
-                class="flex h-full w-full flex-col items-center justify-center text-base-content/50"
-              >
-                <span class="hero-computer-desktop size-10 text-base-content/40"></span>
-                <p class="mt-2 text-sm font-medium text-base-content/70">
-                  No active screen-share
-                </p>
-                <p class="mt-0.5 max-w-xs text-center text-xs">
-                  Anyone in the meeting can share their screen. Drop a window in to walk the team through it.
-                </p>
-                <%!-- task 019e420f stage 2: hook owns the click so
+                <div
+                  data-screen-share-empty
+                  class="flex h-full w-full flex-col items-center justify-center text-base-content/50"
+                >
+                  <span class="hero-computer-desktop size-10 text-base-content/40"></span>
+                  <p class="mt-2 text-sm font-medium text-base-content/70">
+                    No active screen-share
+                  </p>
+                  <p class="mt-0.5 max-w-xs text-center text-xs">
+                    Anyone in the meeting can share their screen. Drop a window in to walk the team through it.
+                  </p>
+                  <%!-- task 019e420f stage 2: hook owns the click so
                      `getDisplayMedia()` runs inside the user gesture.
                      Falls back to pushing `meeting_toggle_screen_share`
                      when no LiveKit room is attached. --%>
-                <button
-                  id="meeting-share-btn-screen-cta"
-                  phx-hook="MeetingShareButton"
-                  type="button"
-                  class="btn btn-primary btn-sm mt-4 min-h-11 gap-1.5"
-                  data-action="start-screen-share"
-                  data-role="meeting-share-button"
-                >
-                  <span class="hero-arrow-up-tray size-4"></span>
-                  <span>Start sharing</span>
-                </button>
+                  <button
+                    id="meeting-share-btn-screen-cta"
+                    phx-hook="MeetingShareButton"
+                    type="button"
+                    class="btn btn-primary btn-sm mt-4 min-h-11 gap-1.5"
+                    data-action="start-screen-share"
+                    data-role="meeting-share-button"
+                  >
+                    <span class="hero-arrow-up-tray size-4"></span>
+                    <span>Start sharing</span>
+                  </button>
+                </div>
               </div>
-            </div>
-          <% @current_stage_mode == :gallery -> %>
-            <%!-- Gallery mode. Lay out one `<.video_tile>` per human
+            <% @current_stage_mode == :gallery -> %>
+              <%!-- Gallery mode. Lay out one `<.video_tile>` per human
                  participant in a responsive grid. Agents are excluded —
                  Gallery is a face-grid and agents surface in the bottom
                  strip's right-hand section via `<.agent_tile>` (sibling
                  task 019e2475-0037). The same `MeetingVideoTile` hook
                  powers the bottom-strip tiles, so identity strings are
                  kept in sync via `gallery_identity/1`. --%>
-            <div
-              class="flex h-full w-full flex-col"
-              data-placeholder="center-stage"
-              data-gallery-tile-count={length(gallery_participants(assigns[:participants] || []))}
-            >
-              <%= if gallery_participants(assigns[:participants] || []) == [] do %>
-                <div class="flex h-full w-full flex-col items-center justify-center rounded-xl border border-dashed border-base-300 text-base-content/40">
-                  <span class="hero-squares-2x2 size-10"></span>
-                  <p class="mt-2 text-sm font-medium text-base-content/70">No participants yet</p>
-                  <p class="mt-0.5 text-xs">Tiles appear as people join the meeting.</p>
-                </div>
-              <% else %>
-                <div
-                  class={[
-                    "grid h-full w-full auto-rows-fr gap-2 overflow-y-auto p-1 place-items-center",
-                    gallery_grid_class(length(gallery_participants(assigns[:participants] || [])))
-                  ]}
-                  data-gallery-grid
-                  data-gallery-grid-shape={
-                    gallery_grid_class(length(gallery_participants(assigns[:participants] || [])))
-                  }
-                >
-                  <%!-- Each cell is a `[data-gallery-cell]` size container
+              <div
+                class="flex h-full w-full flex-col"
+                data-placeholder="center-stage"
+                data-gallery-tile-count={
+                  length(gallery_participants(assigns[:participants] || []))
+                }
+              >
+                <%= if gallery_participants(assigns[:participants] || []) == [] do %>
+                  <div class="flex h-full w-full flex-col items-center justify-center rounded-xl border border-dashed border-base-300 text-base-content/40">
+                    <span class="hero-squares-2x2 size-10"></span>
+                    <p class="mt-2 text-sm font-medium text-base-content/70">
+                      No participants yet
+                    </p>
+                    <p class="mt-0.5 text-xs">Tiles appear as people join the meeting.</p>
+                  </div>
+                <% else %>
+                  <div
+                    class={[
+                      "grid h-full w-full auto-rows-fr gap-2 overflow-y-auto p-1 place-items-center",
+                      gallery_grid_class(
+                        length(gallery_participants(assigns[:participants] || []))
+                      )
+                    ]}
+                    data-gallery-grid
+                    data-gallery-grid-shape={
+                      gallery_grid_class(
+                        length(gallery_participants(assigns[:participants] || []))
+                      )
+                    }
+                  >
+                    <%!-- Each cell is a `[data-gallery-cell]` size container
                        (container-type: size). The tile inside uses a
                        container query to pick its binding axis based
                        on cell aspect ratio — see the
@@ -620,12 +740,12 @@
                        block in `apps/platform/assets/css/app.css`. The
                        wrapper fills its grid cell so the container
                        query has dimensions to work with. --%>
-                  <div
-                    :for={p <- gallery_participants(assigns[:participants] || [])}
-                    class="relative grid h-full w-full place-items-center"
-                    data-gallery-cell
-                  >
-                    <%!-- v2 (task 019e42f6): for the LOCAL participant the
+                    <div
+                      :for={p <- gallery_participants(assigns[:participants] || [])}
+                      class="relative grid h-full w-full place-items-center"
+                      data-gallery-cell
+                    >
+                      <%!-- v2 (task 019e42f6): for the LOCAL participant the
                          tile carries `data-local-dock` so the MeetingVideoTile
                          hook skips its own camera-attach (the single
                          persistent local <video> is owned + reparented by the
@@ -634,9 +754,8 @@
                          appendChilds the live <video> into it so the feed
                          re-occupies the slot allocated to this user.
                          Remote tiles attach their own track unchanged. --%>
-                    <% local? =
-                      gallery_identity(p) == gallery_identity(assigns[:current_participant]) %>
-                    <%!-- `id_prefix="gallery-tile"` (not the shared default
+                      <% local? = gallery_identity(p) == viewer_gallery_identity(assigns) %>
+                      <%!-- `id_prefix="gallery-tile"` (not the shared default
                          `video-tile`) so the gallery tile and the bottom-strip
                          tile for the SAME participant have DISTINCT DOM ids.
                          The shared id used to encourage morphdom to move/reuse
@@ -648,7 +767,7 @@
                          `_detach` runs cleanly on the old tile,
                          `_syncExistingTrack` rebinds the live track on the
                          freshly mounted tile in the new location. --%>
-                    <%!-- Per-speaker caption overlay (task 019f3f17 stage 2).
+                      <%!-- Per-speaker caption overlay (task 019f3f17 stage 2).
                          `caption_slot?={true}` renders a
                          `[data-caption-slot]` div inside the tile that
                          MeetingCaptions writes into when a matching
@@ -657,23 +776,23 @@
                          too short to fit a legible caption line, and the
                          central bar already carries the transcript in
                          canvas/screen/whiteboard modes. --%>
-                    <.video_tile
-                      id_prefix="gallery-tile"
-                      participant={
-                        %{
-                          identity: gallery_identity(p),
-                          name: p.display_name || "Unknown participant"
+                      <.video_tile
+                        id_prefix="gallery-tile"
+                        participant={
+                          %{
+                            identity: gallery_identity(p),
+                            name: p.display_name || "Unknown participant"
+                          }
                         }
-                      }
-                      video_track={false}
-                      audio_muted?={false}
-                      speaking?={false}
-                      avatar_url={Map.get(p, :avatar_url)}
-                      layout={:gallery}
-                      caption_slot?={@captions_visible}
-                      data-local-dock={local? && "true"}
-                    />
-                    <%!-- Gallery local-video dock: the persistent local
+                        video_track={false}
+                        audio_muted?={false}
+                        speaking?={false}
+                        avatar_url={Map.get(p, :avatar_url)}
+                        layout={:gallery}
+                        caption_slot?={@captions_visible}
+                        data-local-dock={local? && "true"}
+                      />
+                      <%!-- Gallery local-video dock: the persistent local
                          <video> is reparented here on gallery mode. Absolutely
                          positioned to cover the local participant's gallery
                          cell so the reparented `object-cover` video re-occupies
@@ -684,7 +803,7 @@
                          (the dock is empty). Only the local cell renders one.
                          See the `data-local-video-dock` contract note near
                          `#meeting-local-self-view`. --%>
-                    <%!-- Stable id + phx-update="ignore": the persistent
+                      <%!-- Stable id + phx-update="ignore": the persistent
                          local <video> is appendChild'd here by MeetingClient.
                          This dock lives inside the server `:for` over gallery
                          participants, so without `ignore` ANY LV re-render
@@ -695,30 +814,30 @@
                          safe. Belt-and-suspenders with the hook's `updated()`
                          re-dock (which only fires when the hook's own element
                          is in the diff). --%>
-                    <%!-- Sizing: dropped `absolute inset-0` so the dock no
+                      <%!-- Sizing: dropped `absolute inset-0` so the dock no
                          longer overlays the WHOLE cell (which made the local
                          video render extra-wide vs the 16:9-constrained remote
                          tiles). CSS in app.css matches the dock to the same
                          16:9 + container-query sizing as `.meeting-video-tile`
                          under the same `[data-gallery-cell]` parent, so the
                          dock + remote tiles are pixel-aligned. --%>
-                    <div
-                      :if={local?}
-                      id="meeting-local-video-dock-gallery"
-                      phx-update="ignore"
-                      class="pointer-events-none overflow-hidden rounded-lg"
-                      data-local-video-dock
-                      data-dock-mode="gallery"
-                    >
+                      <div
+                        :if={local?}
+                        id="meeting-local-video-dock-gallery"
+                        phx-update="ignore"
+                        class="pointer-events-none overflow-hidden rounded-lg"
+                        data-local-video-dock
+                        data-dock-mode="gallery"
+                      >
+                      </div>
                     </div>
                   </div>
-                </div>
-              <% end %>
-            </div>
-        <% end %>
-      </main>
+                <% end %>
+              </div>
+          <% end %>
+        </main>
 
-      <%!-- Right pane: embedded chat panel (sibling 019e2475-87a8).
+        <%!-- Right pane: embedded chat panel (sibling 019e2475-87a8).
            Shipped fully via #364: the embed itself, the framing
            (HEADER + ~320px desktop width), and the mobile drawer +
            top-bar toggle.
@@ -744,91 +863,94 @@
            header caption text "placeholder for intent panel (ADR 0042)"
            is also intentionally greppable for the same migration. --%>
 
-      <%!-- Mobile drawer backdrop. Only on `<lg` AND only when the
+        <%!-- Mobile drawer backdrop. Only on `<lg` AND only when the
            drawer is open. phx-click closes the drawer. Sits below the
-           drawer (z-30) but above the meeting body. --%>
-      <div
-        :if={@chat_panel_open}
-        phx-click="toggle_chat_panel"
-        aria-hidden="true"
-        class="fixed inset-0 z-30 bg-black/30 backdrop-blur-sm lg:hidden"
-        data-role="chat-panel-backdrop"
-      >
-      </div>
+           drawer (z-30) but above the meeting body. Shell-only (stage 4
+           of task 019f498d) — the guest surface has no chat panel and
+           therefore no drawer to backdrop. --%>
+        <div
+          :if={@shell? and @chat_panel_open}
+          phx-click="toggle_chat_panel"
+          aria-hidden="true"
+          class="fixed inset-0 z-30 bg-black/30 backdrop-blur-sm lg:hidden"
+          data-role="chat-panel-backdrop"
+        >
+        </div>
 
-      <aside
-        id="meeting-chat-drawer"
-        class={
-          [
-            # Shared
-            "flex flex-col border-l border-base-300 bg-base-100",
-            # Mobile drawer (default <lg). Fixed slide-in from right with
-            # safe-area-aware bottom edge (mirrors PR #335 / tasks_live
-            # pattern). z-40 above the backdrop (z-30). max-w caps so a
-            # phone landscape doesn't get a 100% drawer.
-            "fixed top-12 right-0 z-40 w-80 max-w-[85vw] shadow-xl transition-transform duration-200 ease-out",
-            "bottom-[calc(env(safe-area-inset-bottom)+var(--bottom-nav-height,0px))]",
-            if(@chat_panel_open, do: "translate-x-0", else: "translate-x-full"),
-            # Desktop (>=lg): in-flow right column. The mobile drawer
-            # path stays byte-identical; only the `lg:*` classes consult
-            # `@chat_panel_collapsed`. When collapsed: `lg:!hidden`
-            # overrides the shared `flex` so the wide pane disappears at
-            # the desktop breakpoint while the embedded `live_render`
-            # stays in the DOM (preserves chat scroll + message stream).
-            "lg:static lg:top-auto lg:bottom-auto lg:right-auto lg:z-auto lg:max-w-none lg:flex-shrink-0 lg:translate-x-0 lg:shadow-none lg:transition-none",
-            if(@chat_panel_collapsed, do: "lg:!hidden", else: "lg:w-80")
-          ]
-        }
-        data-pane="chat-panel"
-        data-chat-panel-open={to_string(@chat_panel_open)}
-      >
-        <%!-- Pane header: meeting name + chat icon. The verbose
+        <aside
+          :if={@shell?}
+          id="meeting-chat-drawer"
+          class={
+            [
+              # Shared
+              "flex flex-col border-l border-base-300 bg-base-100",
+              # Mobile drawer (default <lg). Fixed slide-in from right with
+              # safe-area-aware bottom edge (mirrors PR #335 / tasks_live
+              # pattern). z-40 above the backdrop (z-30). max-w caps so a
+              # phone landscape doesn't get a 100% drawer.
+              "fixed top-12 right-0 z-40 w-80 max-w-[85vw] shadow-xl transition-transform duration-200 ease-out",
+              "bottom-[calc(env(safe-area-inset-bottom)+var(--bottom-nav-height,0px))]",
+              if(@chat_panel_open, do: "translate-x-0", else: "translate-x-full"),
+              # Desktop (>=lg): in-flow right column. The mobile drawer
+              # path stays byte-identical; only the `lg:*` classes consult
+              # `@chat_panel_collapsed`. When collapsed: `lg:!hidden`
+              # overrides the shared `flex` so the wide pane disappears at
+              # the desktop breakpoint while the embedded `live_render`
+              # stays in the DOM (preserves chat scroll + message stream).
+              "lg:static lg:top-auto lg:bottom-auto lg:right-auto lg:z-auto lg:max-w-none lg:flex-shrink-0 lg:translate-x-0 lg:shadow-none lg:transition-none",
+              if(@chat_panel_collapsed, do: "lg:!hidden", else: "lg:w-80")
+            ]
+          }
+          data-pane="chat-panel"
+          data-chat-panel-open={to_string(@chat_panel_open)}
+        >
+          <%!-- Pane header: meeting name + chat icon. The verbose
              "placeholder for intent panel" caption is gone now that the
              pane hosts the real chat surface (stage 5 of 019e2d1a). The
              greppable migration marker `data-intent-panel-host="true"`
              is preserved on the body wrapper below so a future intent-
              panel swap-out can still find this surface with `rg`. --%>
-        <header
-          class="flex flex-shrink-0 items-center gap-2 border-b border-base-300 bg-base-200/40 px-3 py-2"
-          data-pane-section="header"
-        >
-          <span class="hero-chat-bubble-left-right size-4 flex-shrink-0 text-base-content/60">
-          </span>
-          <h2 class="min-w-0 flex-1 truncate text-sm font-semibold text-base-content">
-            {@meeting.name}
-          </h2>
-          <%!-- Desktop-only collapse chevron (task 019e40f2). Hidden on
+          <header
+            class="flex flex-shrink-0 items-center gap-2 border-b border-base-300 bg-base-200/40 px-3 py-2"
+            data-pane-section="header"
+          >
+            <span class="hero-chat-bubble-left-right size-4 flex-shrink-0 text-base-content/60">
+            </span>
+            <h2 class="min-w-0 flex-1 truncate text-sm font-semibold text-base-content">
+              {@meeting.name}
+            </h2>
+            <%!-- Desktop-only collapse chevron (task 019e40f2). Hidden on
                `<lg` so the mobile drawer header is byte-identical;
                flips the wide chat pane to a slim 48px collapsed rail
                at the right edge. --%>
-          <button
-            type="button"
-            phx-click="toggle_meeting_chat_pane"
-            aria-label="Collapse chat pane"
-            aria-expanded="true"
-            title="Collapse"
-            class="btn btn-ghost btn-xs btn-square text-base-content/60 hidden lg:inline-flex"
-            data-role="chat-pane-toggle"
-          >
-            <span class="hero-chevron-double-right size-4"></span>
-          </button>
-          <%!-- Mobile-only close button inside the drawer header. The
+            <button
+              type="button"
+              phx-click="toggle_meeting_chat_pane"
+              aria-label="Collapse chat pane"
+              aria-expanded="true"
+              title="Collapse"
+              class="btn btn-ghost btn-xs btn-square text-base-content/60 hidden lg:inline-flex"
+              data-role="chat-pane-toggle"
+            >
+              <span class="hero-chevron-double-right size-4"></span>
+            </button>
+            <%!-- Mobile-only close button inside the drawer header. The
                top-bar toggle handles open; this gives a one-tap close
                that doesn't require backdrop-tap (e.g. for a wide
                drawer that covers the whole viewport). --%>
-          <button
-            type="button"
-            phx-click="toggle_chat_panel"
-            aria-label="Close chat panel"
-            title="Close"
-            class="btn btn-ghost btn-xs btn-square text-base-content/60 lg:hidden"
-            data-role="chat-panel-close"
-          >
-            <span class="hero-x-mark size-4"></span>
-          </button>
-        </header>
+            <button
+              type="button"
+              phx-click="toggle_chat_panel"
+              aria-label="Close chat panel"
+              title="Close"
+              class="btn btn-ghost btn-xs btn-square text-base-content/60 lg:hidden"
+              data-role="chat-panel-close"
+            >
+              <span class="hero-x-mark size-4"></span>
+            </button>
+          </header>
 
-        <%!-- Body wrapper: flex-1/min-h-0 lets the embedded LV consume
+          <%!-- Body wrapper: flex-1/min-h-0 lets the embedded LV consume
              the remaining vertical space *below* the header, while its
              own internal scroll region (overflow-y-auto on the messages
              list) stays clamped to that space. Without min-h-0 the
@@ -844,63 +966,63 @@
              (`data-intent-panel-host="true"`) is preserved on this
              wrapper so future-Rowan can still grep for the swap-out
              site when the real intent panel ships. --%>
-        <div
-          class="flex min-h-0 flex-1 flex-col"
-          data-pane-section="body"
-          data-intent-panel-host="true"
-          data-pane="meeting-chat-panel"
-        >
-          <%= if @meeting.chat_space && @meeting.chat_space.slug do %>
-            {live_render(@socket, PlatformWeb.ChatLive.Embedded,
-              id: "meeting-chat-panel-#{@meeting.id}",
-              session: %{
-                "chat_space_slug" => @meeting.chat_space.slug,
-                "current_user_id" => @user_id
-              }
-            )}
-          <% else %>
-            <div
-              class="flex h-full items-center justify-center text-xs text-base-content/40"
-              data-placeholder="chat-panel-empty"
-            >
-              <span class="hero-chat-bubble-left-right size-5"></span>
-              <span class="ml-2">No discussion bound to this meeting.</span>
-            </div>
-          <% end %>
-        </div>
-      </aside>
+          <div
+            class="flex min-h-0 flex-1 flex-col"
+            data-pane-section="body"
+            data-intent-panel-host="true"
+            data-pane="meeting-chat-panel"
+          >
+            <%= if @meeting.chat_space && @meeting.chat_space.slug do %>
+              {live_render(@socket, PlatformWeb.ChatLive.Embedded,
+                id: "meeting-chat-panel-#{@meeting.id}",
+                session: %{
+                  "chat_space_slug" => @meeting.chat_space.slug,
+                  "current_user_id" => @user_id
+                }
+              )}
+            <% else %>
+              <div
+                class="flex h-full items-center justify-center text-xs text-base-content/40"
+                data-placeholder="chat-panel-empty"
+              >
+                <span class="hero-chat-bubble-left-right size-5"></span>
+                <span class="ml-2">No discussion bound to this meeting.</span>
+              </div>
+            <% end %>
+          </div>
+        </aside>
 
-      <%!-- Collapsed slim chat rail (task 019e40f2). Mirror image of
+        <%!-- Collapsed slim chat rail (task 019e40f2). Mirror image of
            the participant collapsed rail: only on `>=lg` AND when
            `@chat_panel_collapsed`. Carries `data-pane="chat-panel"`
            + `data-pane-collapsed="true"` so consumers can find "the
            chat pane in either state". --%>
-      <aside
-        :if={@chat_panel_collapsed}
-        class="hidden w-12 flex-shrink-0 flex-col items-center border-l border-base-300 bg-base-200/40 py-2 lg:flex"
-        data-pane="chat-panel"
-        data-pane-collapsed="true"
-      >
-        <button
-          type="button"
-          phx-click="toggle_meeting_chat_pane"
-          aria-label="Expand chat pane"
-          aria-expanded="false"
-          title="Expand chat"
-          class="btn btn-ghost btn-sm btn-square text-base-content/60 hover:text-base-content"
-          data-role="chat-pane-toggle"
+        <aside
+          :if={@shell? and @chat_panel_collapsed}
+          class="hidden w-12 flex-shrink-0 flex-col items-center border-l border-base-300 bg-base-200/40 py-2 lg:flex"
+          data-pane="chat-panel"
+          data-pane-collapsed="true"
         >
-          <span class="hero-chevron-double-left size-4"></span>
-        </button>
-        <span
-          class="hero-chat-bubble-left-right mt-2 size-4 text-base-content/40"
-          aria-hidden="true"
-        >
-        </span>
-      </aside>
-    </div>
+          <button
+            type="button"
+            phx-click="toggle_meeting_chat_pane"
+            aria-label="Expand chat pane"
+            aria-expanded="false"
+            title="Expand chat"
+            class="btn btn-ghost btn-sm btn-square text-base-content/60 hover:text-base-content"
+            data-role="chat-pane-toggle"
+          >
+            <span class="hero-chevron-double-left size-4"></span>
+          </button>
+          <span
+            class="hero-chat-bubble-left-right mt-2 size-4 text-base-content/40"
+            aria-hidden="true"
+          >
+          </span>
+        </aside>
+      </div>
 
-    <%!-- Bottom strip (task 019e2475-0037): horizontal flex row composing
+      <%!-- Bottom strip (task 019e2475-0037): horizontal flex row composing
          one `<.video_tile>` per human (left) and one `<.agent_tile>` per
          agent (right), with a thin vertical divider between sections.
          Strip height: 96px on `<lg`, 120px on `lg`+. Bottom edge respects
@@ -915,113 +1037,112 @@
          `"strip:user:" <> pid`) so the MeetingVideoTile hook reuses the
          same DOM node across mode swaps and the LiveKit track stays
          attached during the layout flip. --%>
-    <footer
-      :if={@current_stage_mode != :gallery}
-      id="meeting-bottom-strip"
-      class={[
-        "flex flex-shrink-0 items-stretch gap-2 overflow-x-auto overscroll-contain",
-        "border-t border-base-300 bg-base-200/40 px-2 py-2",
-        "h-[96px] lg:h-[120px]",
-        "pb-[calc(0.5rem+env(safe-area-inset-bottom))]"
-      ]}
-      data-pane="bottom-strip"
-      data-tile-count-humans={length(strip_humans(assigns[:participants]))}
-      data-tile-count-agents={length(strip_agents(assigns[:participants]))}
-    >
-      <%!-- Human section: one `<.video_tile>` per human participant.
+      <footer
+        :if={@current_stage_mode != :gallery}
+        id="meeting-bottom-strip"
+        class={[
+          "flex flex-shrink-0 items-stretch gap-2 overflow-x-auto overscroll-contain",
+          "border-t border-base-300 bg-base-200/40 px-2 py-2",
+          "h-[96px] lg:h-[120px]",
+          "pb-[calc(0.5rem+env(safe-area-inset-bottom))]"
+        ]}
+        data-pane="bottom-strip"
+        data-tile-count-humans={length(strip_humans(assigns[:participants]))}
+        data-tile-count-agents={length(strip_agents(assigns[:participants]))}
+      >
+        <%!-- Human section: one `<.video_tile>` per human participant.
            Empty-state stays silent so the strip doesn't churn when humans
            join/leave. --%>
-      <section
-        class="flex h-full items-stretch gap-2"
-        data-section="humans"
-        aria-label="Participants"
-      >
-        <%!-- v2 (task 019e42f6): each human gets a strip tile. The LOCAL
+        <section
+          class="flex h-full items-stretch gap-2"
+          data-section="humans"
+          aria-label="Participants"
+        >
+          <%!-- v2 (task 019e42f6): each human gets a strip tile. The LOCAL
              human's tile is wrapped so the strip local-video dock can overlay
              it; the tile carries `data-local-dock` so MeetingVideoTile skips
              its own camera-attach (the persistent local <video> is reparented
              here by MeetingClient in canvas/screen/whiteboard modes). Remote
              humans render an unwrapped tile that attaches its own track. --%>
-        <div
-          :for={participant <- strip_humans(assigns[:participants])}
-          class="relative h-full shrink-0"
-        >
-          <% local? =
-            gallery_identity(participant) == gallery_identity(assigns[:current_participant]) %>
-          <%!-- `id_prefix="strip-tile"` mirrors `gallery-tile` above; see the
+          <div
+            :for={participant <- strip_humans(assigns[:participants])}
+            class="relative h-full shrink-0"
+          >
+            <% local? = gallery_identity(participant) == viewer_gallery_identity(assigns) %>
+            <%!-- `id_prefix="strip-tile"` mirrors `gallery-tile` above; see the
                rationale on the gallery `<.video_tile>` for why we deliberately
                give the two surfaces DIFFERENT dom ids per participant. --%>
-          <PlatformWeb.Components.Meeting.VideoTile.video_tile
-            id_prefix="strip-tile"
-            participant={
-              %{
-                identity: gallery_identity(participant),
-                name: participant.display_name || "Unknown participant"
+            <PlatformWeb.Components.Meeting.VideoTile.video_tile
+              id_prefix="strip-tile"
+              participant={
+                %{
+                  identity: gallery_identity(participant),
+                  name: participant.display_name || "Unknown participant"
+                }
               }
-            }
-            video_track={false}
-            audio_muted?={!Map.get(participant.attention_config || %{}, "mic_on", false)}
-            speaking?={false}
-            avatar_url={participant.avatar_url}
-            data-local-dock={local? && "true"}
-          />
-          <%!-- Strip local-video dock: the reparent target in
+              video_track={false}
+              audio_muted?={!Map.get(participant.attention_config || %{}, "mic_on", false)}
+              speaking?={false}
+              avatar_url={participant.avatar_url}
+              data-local-dock={local? && "true"}
+            />
+            <%!-- Strip local-video dock: the reparent target in
                canvas/screen/whiteboard modes. `absolute inset-0` over the
                aspect-video strip tile so the reparented video fills it. --%>
-          <%!-- Stable id + phx-update="ignore" so morphdom never discards
+            <%!-- Stable id + phx-update="ignore" so morphdom never discards
                the JS-injected local <video> on an LV re-render. Exactly one
                local strip cell, so a single stable id is safe. See the
                gallery dock rationale above. --%>
-          <div
-            :if={local?}
-            id="meeting-local-video-dock-strip"
-            phx-update="ignore"
-            class="pointer-events-none absolute inset-0 overflow-hidden rounded-lg"
-            data-local-video-dock
-            data-dock-mode="strip"
-          >
+            <div
+              :if={local?}
+              id="meeting-local-video-dock-strip"
+              phx-update="ignore"
+              class="pointer-events-none absolute inset-0 overflow-hidden rounded-lg"
+              data-local-video-dock
+              data-dock-mode="strip"
+            >
+            </div>
           </div>
-        </div>
-      </section>
+        </section>
 
-      <%!-- Vertical divider: only when BOTH sections have at least one
+        <%!-- Vertical divider: only when BOTH sections have at least one
            tile. --%>
-      <div
-        :if={
-          strip_humans(assigns[:participants]) != [] and
-            strip_agents(assigns[:participants]) != []
-        }
-        class="h-full w-px flex-shrink-0 self-stretch border-l border-base-300"
-        data-role="strip-divider"
-        aria-hidden="true"
-      >
-      </div>
-
-      <%!-- Agent section: one `<.agent_tile>` per agent participant. --%>
-      <section
-        class="flex h-full items-stretch gap-2"
-        data-section="agents"
-        aria-label="Agent presence"
-      >
-        <PlatformWeb.Components.Meeting.AgentTile.agent_tile
-          :for={participant <- strip_agents(assigns[:participants])}
-          agent_participant={
-            %{
-              identity: "agent:" <> (participant.participant_id || ""),
-              id: participant.id,
-              name: participant.display_name || "Agent"
-            }
+        <div
+          :if={
+            strip_humans(assigns[:participants]) != [] and
+              strip_agents(assigns[:participants]) != []
           }
-          role={agent_role(participant)}
-          activity_state={:idle}
-          accent_color={nil}
-          avatar_url={participant.avatar_url}
-        />
-      </section>
-    </footer>
-  </div>
+          class="h-full w-px flex-shrink-0 self-stretch border-l border-base-300"
+          data-role="strip-divider"
+          aria-hidden="true"
+        >
+        </div>
 
-  <%!-- ── Guest-invite bottom-sheet (stage 4 of task 019f2483) ────────────
+        <%!-- Agent section: one `<.agent_tile>` per agent participant. --%>
+        <section
+          class="flex h-full items-stretch gap-2"
+          data-section="agents"
+          aria-label="Agent presence"
+        >
+          <PlatformWeb.Components.Meeting.AgentTile.agent_tile
+            :for={participant <- strip_agents(assigns[:participants])}
+            agent_participant={
+              %{
+                identity: "agent:" <> (participant.participant_id || ""),
+                id: participant.id,
+                name: participant.display_name || "Agent"
+              }
+            }
+            role={agent_role(participant)}
+            activity_state={:idle}
+            accent_color={nil}
+            avatar_url={participant.avatar_url}
+          />
+        </section>
+      </footer>
+    </div>
+
+    <%!-- ── Guest-invite bottom-sheet (stage 4 of task 019f2483) ────────────
        Host-only surface: the trigger button in the top-bar is gated on
        `host?/2`, but the sheet itself is unconditionally scoped inside
        the `:show` branch — a non-host with no trigger will never see
@@ -1037,180 +1158,180 @@
        Mirrors the start-meeting sheet's mobile-first geometry: slides
        up from the bottom on narrow viewports (`items-end`), centered
        card on `>=sm`. Backdrop click closes the sheet. --%>
-  <div
-    :if={@show_guest_invite_sheet}
-    class="fixed inset-0 z-50 flex items-end sm:items-center justify-center"
-    data-role="guest-invite-sheet"
-    role="dialog"
-    aria-modal="true"
-    aria-labelledby="guest-invite-sheet-title"
-  >
-    <%!-- Backdrop (click to dismiss) --%>
     <div
-      class="absolute inset-0 bg-black/40"
-      phx-click="close_guest_invite_sheet"
-      aria-hidden="true"
-      data-role="guest-invite-sheet-backdrop"
+      :if={@shell? and @show_guest_invite_sheet}
+      class="fixed inset-0 z-50 flex items-end sm:items-center justify-center"
+      data-role="guest-invite-sheet"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="guest-invite-sheet-title"
     >
-    </div>
-
-    <%!-- Sheet panel --%>
-    <div class="relative w-full max-w-lg mx-auto rounded-t-2xl sm:rounded-2xl bg-base-100 shadow-2xl pb-[env(safe-area-inset-bottom)] max-h-[75vh] overflow-y-auto">
-      <%!-- Header --%>
-      <div class="flex items-center justify-between border-b border-base-300 px-4 py-3">
-        <div class="flex items-center gap-2 min-w-0">
-          <span class="hero-link size-5 flex-shrink-0 text-primary"></span>
-          <h2 id="guest-invite-sheet-title" class="text-base font-semibold">
-            Copy guest link
-          </h2>
-        </div>
-        <button
-          type="button"
-          phx-click="close_guest_invite_sheet"
-          class="btn btn-sm btn-ghost btn-square"
-          aria-label="Close"
-          data-role="guest-invite-sheet-close"
-        >
-          <span class="hero-x-mark size-4"></span>
-        </button>
+      <%!-- Backdrop (click to dismiss) --%>
+      <div
+        class="absolute inset-0 bg-black/40"
+        phx-click="close_guest_invite_sheet"
+        aria-hidden="true"
+        data-role="guest-invite-sheet-backdrop"
+      >
       </div>
 
-      <%!-- Form --%>
-      <form
-        id="guest-invite-form"
-        phx-submit="generate_guest_invite"
-        phx-change="guest_invite_form_change"
-        class="flex flex-col gap-3 px-4 py-4"
-      >
-        <%!-- Guest name (optional) --%>
-        <div class="flex flex-col gap-1">
-          <label
-            for="guest-invite-display-name"
-            class="text-xs font-semibold uppercase tracking-wider text-base-content/60"
-          >
-            Guest name <span class="text-base-content/40 normal-case">(optional)</span>
-          </label>
-          <input
-            id="guest-invite-display-name"
-            type="text"
-            name="guest_invite[display_name]"
-            value={@guest_invite_form["display_name"]}
-            autocomplete="off"
-            placeholder="e.g. Juno Fairbanks"
-            class="input input-bordered w-full text-sm"
-            data-role="guest-invite-display-name"
-          />
-        </div>
-
-        <%!-- Expiry (required) --%>
-        <div class="flex flex-col gap-1">
-          <label
-            for="guest-invite-expires-in-hours"
-            class="text-xs font-semibold uppercase tracking-wider text-base-content/60"
-          >
-            Link expires in
-          </label>
-          <select
-            id="guest-invite-expires-in-hours"
-            name="guest_invite[expires_in_hours]"
-            class="select select-bordered w-full text-sm"
-            data-role="guest-invite-expires-in-hours"
-          >
-            <option value="1" selected={@guest_invite_form["expires_in_hours"] == "1"}>
-              1 hour
-            </option>
-            <option value="24" selected={@guest_invite_form["expires_in_hours"] == "24"}>
-              24 hours
-            </option>
-            <option value="72" selected={@guest_invite_form["expires_in_hours"] == "72"}>
-              72 hours
-            </option>
-          </select>
-        </div>
-
-        <%!-- Footer actions (pre-generation) --%>
-        <div :if={is_nil(@guest_invite_url)} class="flex items-center justify-end gap-2 pt-1">
+      <%!-- Sheet panel --%>
+      <div class="relative w-full max-w-lg mx-auto rounded-t-2xl sm:rounded-2xl bg-base-100 shadow-2xl pb-[env(safe-area-inset-bottom)] max-h-[75vh] overflow-y-auto">
+        <%!-- Header --%>
+        <div class="flex items-center justify-between border-b border-base-300 px-4 py-3">
+          <div class="flex items-center gap-2 min-w-0">
+            <span class="hero-link size-5 flex-shrink-0 text-primary"></span>
+            <h2 id="guest-invite-sheet-title" class="text-base font-semibold">
+              Copy guest link
+            </h2>
+          </div>
           <button
             type="button"
             phx-click="close_guest_invite_sheet"
-            class="btn btn-ghost btn-sm"
-            data-role="guest-invite-cancel"
+            class="btn btn-sm btn-ghost btn-square"
+            aria-label="Close"
+            data-role="guest-invite-sheet-close"
           >
-            Cancel
-          </button>
-          <button
-            type="submit"
-            class="btn btn-primary btn-sm gap-1.5"
-            data-role="guest-invite-submit"
-          >
-            <span class="hero-link size-4"></span>
-            <span>Generate link</span>
+            <span class="hero-x-mark size-4"></span>
           </button>
         </div>
-      </form>
 
-      <%!-- Post-generation section: read-only URL + copy button + hint --%>
-      <div
-        :if={@guest_invite_url}
-        class="flex flex-col gap-2 border-t border-base-300 px-4 py-4"
-        data-role="guest-invite-generated"
-      >
-        <label
-          for="guest-invite-url"
-          class="text-xs font-semibold uppercase tracking-wider text-base-content/60"
+        <%!-- Form --%>
+        <form
+          id="guest-invite-form"
+          phx-submit="generate_guest_invite"
+          phx-change="guest_invite_form_change"
+          class="flex flex-col gap-3 px-4 py-4"
         >
-          Guest link
-        </label>
-        <div class="flex items-stretch gap-2">
-          <input
-            id="guest-invite-url"
-            type="text"
-            readonly
-            value={@guest_invite_url}
-            class="input input-bordered w-full text-xs font-mono"
-            data-role="guest-invite-url"
-          />
-          <button
-            id="guest-invite-copy-btn"
-            type="button"
-            phx-hook="CopyToClipboard"
-            phx-click="copy_guest_invite"
-            data-clipboard-text={@guest_invite_url}
-            data-role="guest-invite-copy"
-            class="btn btn-primary btn-sm gap-1.5 flex-shrink-0"
+          <%!-- Guest name (optional) --%>
+          <div class="flex flex-col gap-1">
+            <label
+              for="guest-invite-display-name"
+              class="text-xs font-semibold uppercase tracking-wider text-base-content/60"
+            >
+              Guest name <span class="text-base-content/40 normal-case">(optional)</span>
+            </label>
+            <input
+              id="guest-invite-display-name"
+              type="text"
+              name="guest_invite[display_name]"
+              value={@guest_invite_form["display_name"]}
+              autocomplete="off"
+              placeholder="e.g. Juno Fairbanks"
+              class="input input-bordered w-full text-sm"
+              data-role="guest-invite-display-name"
+            />
+          </div>
+
+          <%!-- Expiry (required) --%>
+          <div class="flex flex-col gap-1">
+            <label
+              for="guest-invite-expires-in-hours"
+              class="text-xs font-semibold uppercase tracking-wider text-base-content/60"
+            >
+              Link expires in
+            </label>
+            <select
+              id="guest-invite-expires-in-hours"
+              name="guest_invite[expires_in_hours]"
+              class="select select-bordered w-full text-sm"
+              data-role="guest-invite-expires-in-hours"
+            >
+              <option value="1" selected={@guest_invite_form["expires_in_hours"] == "1"}>
+                1 hour
+              </option>
+              <option value="24" selected={@guest_invite_form["expires_in_hours"] == "24"}>
+                24 hours
+              </option>
+              <option value="72" selected={@guest_invite_form["expires_in_hours"] == "72"}>
+                72 hours
+              </option>
+            </select>
+          </div>
+
+          <%!-- Footer actions (pre-generation) --%>
+          <div :if={is_nil(@guest_invite_url)} class="flex items-center justify-end gap-2 pt-1">
+            <button
+              type="button"
+              phx-click="close_guest_invite_sheet"
+              class="btn btn-ghost btn-sm"
+              data-role="guest-invite-cancel"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              class="btn btn-primary btn-sm gap-1.5"
+              data-role="guest-invite-submit"
+            >
+              <span class="hero-link size-4"></span>
+              <span>Generate link</span>
+            </button>
+          </div>
+        </form>
+
+        <%!-- Post-generation section: read-only URL + copy button + hint --%>
+        <div
+          :if={@guest_invite_url}
+          class="flex flex-col gap-2 border-t border-base-300 px-4 py-4"
+          data-role="guest-invite-generated"
+        >
+          <label
+            for="guest-invite-url"
+            class="text-xs font-semibold uppercase tracking-wider text-base-content/60"
           >
-            <span class="hero-clipboard size-4"></span>
-            <span>Copy</span>
-          </button>
+            Guest link
+          </label>
+          <div class="flex items-stretch gap-2">
+            <input
+              id="guest-invite-url"
+              type="text"
+              readonly
+              value={@guest_invite_url}
+              class="input input-bordered w-full text-xs font-mono"
+              data-role="guest-invite-url"
+            />
+            <button
+              id="guest-invite-copy-btn"
+              type="button"
+              phx-hook="CopyToClipboard"
+              phx-click="copy_guest_invite"
+              data-clipboard-text={@guest_invite_url}
+              data-role="guest-invite-copy"
+              class="btn btn-primary btn-sm gap-1.5 flex-shrink-0"
+            >
+              <span class="hero-clipboard size-4"></span>
+              <span>Copy</span>
+            </button>
+          </div>
+          <p class="text-xs text-base-content/60">
+            When they open this, they'll join as guest.
+          </p>
+          <p
+            :if={
+              @guest_invite_form["display_name"] &&
+                String.trim(@guest_invite_form["display_name"]) != ""
+            }
+            class="text-xs text-base-content/50"
+            data-role="guest-invite-display-name-mode"
+          >
+            {String.trim(@guest_invite_form["display_name"])} will land directly.
+          </p>
+          <p
+            :if={
+              is_nil(@guest_invite_form["display_name"]) ||
+                String.trim(@guest_invite_form["display_name"]) == ""
+            }
+            class="text-xs text-base-content/50"
+            data-role="guest-invite-display-name-mode"
+          >
+            They'll enter their name before joining.
+          </p>
         </div>
-        <p class="text-xs text-base-content/60">
-          When they open this, they'll join as guest.
-        </p>
-        <p
-          :if={
-            @guest_invite_form["display_name"] &&
-              String.trim(@guest_invite_form["display_name"]) != ""
-          }
-          class="text-xs text-base-content/50"
-          data-role="guest-invite-display-name-mode"
-        >
-          {String.trim(@guest_invite_form["display_name"])} will land directly.
-        </p>
-        <p
-          :if={
-            is_nil(@guest_invite_form["display_name"]) ||
-              String.trim(@guest_invite_form["display_name"]) == ""
-          }
-          class="text-xs text-base-content/50"
-          data-role="guest-invite-display-name-mode"
-        >
-          They'll enter their name before joining.
-        </p>
       </div>
     </div>
-  </div>
 
-  <%!-- ── Closed-captions overlay (task 019f3f17 stage 1 + stage 2) ────
+    <%!-- ── Closed-captions overlay (task 019f3f17 stage 1 + stage 2) ────
        The MeetingCaptions JS hook binds here, listens for `meeting:caption`
        CustomEvents dispatched by MeetingRoom, and renders up to
        MAX_LINES=3 speaker+text lines with the interim-vs-final treatment.
@@ -1230,7 +1351,7 @@
        `#meeting-captions-persist-host` (see above) so a page reload with
        the server default `:captions_visible = false` still restores the
        viewer's stored preference. --%>
-  <%!-- Gallery-mode caption fan-out: when the stage is in gallery mode we
+    <%!-- Gallery-mode caption fan-out: when the stage is in gallery mode we
        hide the combined caption bar via `hidden` (display:none) rather
        than dropping it from the DOM with `:if`. The `MeetingCaptions`
        hook does DOUBLE duty — it renders the central rolling buffer AND
@@ -1250,127 +1371,127 @@
        class flip has to live on an element the LV freely re-renders. The
        wrapper's `data-stage-mode` attribute mirrors the assign so CDP e2e
        and tests can query it. --%>
-  <div
-    :if={@captions_visible}
-    data-role="meeting-captions-shell"
-    data-stage-mode={@current_stage_mode}
-    class={[
-      "fixed bottom-[calc(1rem+env(safe-area-inset-bottom)+var(--bottom-nav-height,0px))] left-1/2 -translate-x-1/2 z-40 w-full max-w-2xl px-4 pointer-events-none",
-      @current_stage_mode == :gallery && "hidden"
-    ]}
-  >
     <div
-      id="meeting-captions"
-      phx-hook="MeetingCaptions"
-      phx-update="ignore"
-      data-role="meeting-captions"
-      class="w-full py-3 rounded-xl bg-black/75 backdrop-blur-sm text-sm text-white shadow-lg transition-opacity duration-300"
-      aria-live="polite"
-      aria-label="Meeting captions"
+      :if={@captions_visible}
+      data-role="meeting-captions-shell"
+      data-stage-mode={@current_stage_mode}
+      class={[
+        "fixed bottom-[calc(1rem+env(safe-area-inset-bottom)+var(--bottom-nav-height,0px))] left-1/2 -translate-x-1/2 z-40 w-full max-w-2xl px-4 pointer-events-none",
+        @current_stage_mode == :gallery && "hidden"
+      ]}
     >
+      <div
+        id="meeting-captions"
+        phx-hook="MeetingCaptions"
+        phx-update="ignore"
+        data-role="meeting-captions"
+        class="w-full py-3 rounded-xl bg-black/75 backdrop-blur-sm text-sm text-white shadow-lg transition-opacity duration-300"
+        aria-live="polite"
+        aria-label="Meeting captions"
+      >
+      </div>
     </div>
-  </div>
-<% else %>
-  <%!-- `:index` action — grouped meetings list (live / upcoming / ended).
+  <% true -> %>
+    <%!-- `:index` action — grouped meetings list (live / upcoming / ended).
        Empty state when zero meetings exist; otherwise a vertical stack
        of sections, each with an icon + label header and one row per
        meeting linking to `/meetings/<slug>`. The "Start meeting" FAB
        is owned by stage 2 and lands later — the empty-state CTA below
        is the only action surface in this stage. --%>
-  <div
-    class="flex h-full min-h-0 flex-col bg-base-100 text-base-content"
-    data-page="meetings-index"
-  >
-    <header class="flex h-12 flex-shrink-0 items-center gap-3 border-b border-base-300 bg-base-200/60 px-3">
-      <div class="flex min-w-0 items-center gap-2">
-        <span class="hero-video-camera size-5 flex-shrink-0 text-primary"></span>
-        <h1 class="truncate text-sm font-semibold">Meetings</h1>
-      </div>
+    <div
+      class="flex h-full min-h-0 flex-col bg-base-100 text-base-content"
+      data-page="meetings-index"
+    >
+      <header class="flex h-12 flex-shrink-0 items-center gap-3 border-b border-base-300 bg-base-200/60 px-3">
+        <div class="flex min-w-0 items-center gap-2">
+          <span class="hero-video-camera size-5 flex-shrink-0 text-primary"></span>
+          <h1 class="truncate text-sm font-semibold">Meetings</h1>
+        </div>
 
-      <div class="flex-1"></div>
+        <div class="flex-1"></div>
 
-      <span class="text-xs text-base-content/50" data-role="meetings-count">
-        {length(assigns[:meetings] || [])} total
-      </span>
-    </header>
+        <span class="text-xs text-base-content/50" data-role="meetings-count">
+          {length(assigns[:meetings] || [])} total
+        </span>
+      </header>
 
-    <%= if assigns[:meetings] in [nil, []] do %>
-      <%!-- Empty state. Mirrors the FAB icon + label so the visual
+      <%= if assigns[:meetings] in [nil, []] do %>
+        <%!-- Empty state. Mirrors the FAB icon + label so the visual
            vocabulary stays consistent: a video camera glyph plus
            "Start a meeting" wording. The FAB itself sits at the
            bottom-right of the page. --%>
-      <div
-        class="flex flex-1 flex-col items-center justify-center px-6 text-center"
-        data-empty-state="meetings-index"
-      >
-        <span class="hero-video-camera size-12 text-base-content/30"></span>
-        <h2 class="mt-3 text-lg font-semibold">No meetings yet</h2>
-        <p class="mt-1 max-w-sm text-sm text-base-content/50">
-          Meetings live here once they're scheduled or started. Spin one up to gather your collaborators around shared canvases, screen-shares, and threads.
-        </p>
-        <button
-          type="button"
-          phx-click="open_start_meeting_sheet"
-          class="btn btn-primary btn-sm mt-4 min-h-11 gap-1.5"
-          data-action="open-start-meeting-sheet"
+        <div
+          class="flex flex-1 flex-col items-center justify-center px-6 text-center"
+          data-empty-state="meetings-index"
         >
-          <span class="hero-video-camera size-4"></span>
-          <span>Start a meeting</span>
-        </button>
-      </div>
-    <% else %>
-      <div
-        class="flex-1 overflow-y-auto px-3 py-3 sm:px-6 sm:py-5"
-        data-region="meetings-list"
-      >
-        <div class="mx-auto flex max-w-3xl flex-col gap-6">
-          <%= for section <- meeting_status_sections(),
+          <span class="hero-video-camera size-12 text-base-content/30"></span>
+          <h2 class="mt-3 text-lg font-semibold">No meetings yet</h2>
+          <p class="mt-1 max-w-sm text-sm text-base-content/50">
+            Meetings live here once they're scheduled or started. Spin one up to gather your collaborators around shared canvases, screen-shares, and threads.
+          </p>
+          <button
+            type="button"
+            phx-click="open_start_meeting_sheet"
+            class="btn btn-primary btn-sm mt-4 min-h-11 gap-1.5"
+            data-action="open-start-meeting-sheet"
+          >
+            <span class="hero-video-camera size-4"></span>
+            <span>Start a meeting</span>
+          </button>
+        </div>
+      <% else %>
+        <div
+          class="flex-1 overflow-y-auto px-3 py-3 sm:px-6 sm:py-5"
+          data-region="meetings-list"
+        >
+          <div class="mx-auto flex max-w-3xl flex-col gap-6">
+            <%= for section <- meeting_status_sections(),
                   rows = Map.get(@grouped_meetings, section, []),
                   rows != [] do %>
-            <section data-section={section}>
-              <header class="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-widest text-base-content/50">
-                <span class={[meeting_section_icon(section), "size-4 text-base-content/60"]}>
-                </span>
-                <span>{meeting_section_label(section)}</span>
-                <span class="text-base-content/30">·</span>
-                <span class="text-base-content/40">{length(rows)}</span>
-              </header>
+              <section data-section={section}>
+                <header class="mb-2 flex items-center gap-2 text-xs font-semibold uppercase tracking-widest text-base-content/50">
+                  <span class={[meeting_section_icon(section), "size-4 text-base-content/60"]}>
+                  </span>
+                  <span>{meeting_section_label(section)}</span>
+                  <span class="text-base-content/30">·</span>
+                  <span class="text-base-content/40">{length(rows)}</span>
+                </header>
 
-              <ul class="flex flex-col gap-1.5" data-section-rows={section}>
-                <%= for meeting <- rows do %>
-                  <li>
-                    <.link
-                      navigate={~p"/meetings/#{meeting.slug}"}
-                      class="group flex items-center gap-3 rounded-lg border border-base-300 bg-base-100 px-3 py-2.5 transition hover:border-primary/50 hover:bg-base-200/40"
-                      data-role="meeting-row"
-                      data-meeting-id={meeting.id}
-                      data-meeting-status={meeting.status}
-                    >
-                      <span class="hero-video-camera size-5 flex-shrink-0 text-base-content/40 group-hover:text-primary">
-                      </span>
-                      <div class="flex min-w-0 flex-1 flex-col">
-                        <span class="truncate text-sm font-medium text-base-content">
-                          {meeting.name}
+                <ul class="flex flex-col gap-1.5" data-section-rows={section}>
+                  <%= for meeting <- rows do %>
+                    <li>
+                      <.link
+                        navigate={~p"/meetings/#{meeting.slug}"}
+                        class="group flex items-center gap-3 rounded-lg border border-base-300 bg-base-100 px-3 py-2.5 transition hover:border-primary/50 hover:bg-base-200/40"
+                        data-role="meeting-row"
+                        data-meeting-id={meeting.id}
+                        data-meeting-status={meeting.status}
+                      >
+                        <span class="hero-video-camera size-5 flex-shrink-0 text-base-content/40 group-hover:text-primary">
                         </span>
-                        <span class="truncate text-xs text-base-content/50">
-                          {meeting.slug}
+                        <div class="flex min-w-0 flex-1 flex-col">
+                          <span class="truncate text-sm font-medium text-base-content">
+                            {meeting.name}
+                          </span>
+                          <span class="truncate text-xs text-base-content/50">
+                            {meeting.slug}
+                          </span>
+                        </div>
+                        <span class={meeting_status_pill(section)} data-role="meeting-status-pill">
+                          <span class={[meeting_section_icon(section), "size-3"]}></span>
+                          <span>{meeting_section_label(section)}</span>
                         </span>
-                      </div>
-                      <span class={meeting_status_pill(section)} data-role="meeting-status-pill">
-                        <span class={[meeting_section_icon(section), "size-3"]}></span>
-                        <span>{meeting_section_label(section)}</span>
-                      </span>
-                    </.link>
-                  </li>
-                <% end %>
-              </ul>
-            </section>
-          <% end %>
+                      </.link>
+                    </li>
+                  <% end %>
+                </ul>
+              </section>
+            <% end %>
+          </div>
         </div>
-      </div>
-    <% end %>
+      <% end %>
 
-    <%!-- ── Start-meeting FAB ───────────────────────────────────────────
+      <%!-- ── Start-meeting FAB ───────────────────────────────────────────
          Mobile-first reachability fix: anchored bottom-right with a
          safe-area-aware bottom offset that ALSO clears the mobile
          bottom-nav (`--bottom-nav-height`, 56px on phones, 0 on
@@ -1379,163 +1500,163 @@
          live/tasks_live.html.heex:2391). Only renders on `:index`
          (this branch is inside the `<%= if @meeting do … else …%>`
          else arm). --%>
-    <button
-      type="button"
-      phx-click="open_start_meeting_sheet"
-      aria-label="Start a meeting"
-      title="Start a meeting"
-      data-role="start-meeting-fab"
-      class="btn btn-primary btn-circle fixed bottom-[calc(env(safe-area-inset-bottom)+1.5rem+var(--bottom-nav-height,0px))] right-6 z-30 shadow-lg"
-    >
-      <span class="hero-video-camera size-6"></span>
-    </button>
+      <button
+        type="button"
+        phx-click="open_start_meeting_sheet"
+        aria-label="Start a meeting"
+        title="Start a meeting"
+        data-role="start-meeting-fab"
+        class="btn btn-primary btn-circle fixed bottom-[calc(env(safe-area-inset-bottom)+1.5rem+var(--bottom-nav-height,0px))] right-6 z-30 shadow-lg"
+      >
+        <span class="hero-video-camera size-6"></span>
+      </button>
 
-    <%!-- ── Start-meeting bottom-sheet ──────────────────────────────────
+      <%!-- ── Start-meeting bottom-sheet ──────────────────────────────────
          Mobile-first wrapper: full-bleed slide-up from the bottom on
          small viewports, centered card on >=sm. Backdrop is
          `bg-black/40` and click-dismisses. Pairs with the FAB above. --%>
-    <div
-      :if={@show_start_meeting_sheet}
-      class="fixed inset-0 z-50 flex items-end sm:items-center justify-center"
-      data-role="start-meeting-sheet"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="start-meeting-sheet-title"
-    >
-      <%!-- Backdrop (click to dismiss) --%>
       <div
-        class="absolute inset-0 bg-black/40"
-        phx-click="close_start_meeting_sheet"
-        aria-hidden="true"
-        data-role="start-meeting-sheet-backdrop"
+        :if={@show_start_meeting_sheet}
+        class="fixed inset-0 z-50 flex items-end sm:items-center justify-center"
+        data-role="start-meeting-sheet"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="start-meeting-sheet-title"
       >
-      </div>
-
-      <%!-- Sheet panel --%>
-      <div class="relative w-full max-w-lg rounded-t-2xl sm:rounded-2xl bg-base-100 shadow-2xl pb-[env(safe-area-inset-bottom)] max-h-[75vh] overflow-y-auto">
-        <%!-- Header --%>
-        <div class="flex items-center justify-between border-b border-base-300 px-4 py-3">
-          <div class="flex items-center gap-2 min-w-0">
-            <span class="hero-video-camera size-5 flex-shrink-0 text-primary"></span>
-            <h2 id="start-meeting-sheet-title" class="text-base font-semibold">
-              Start a meeting
-            </h2>
-          </div>
-          <button
-            type="button"
-            phx-click="close_start_meeting_sheet"
-            class="btn btn-sm btn-ghost btn-square"
-            aria-label="Close"
-            data-role="start-meeting-sheet-close"
-          >
-            <span class="hero-x-mark size-4"></span>
-          </button>
+        <%!-- Backdrop (click to dismiss) --%>
+        <div
+          class="absolute inset-0 bg-black/40"
+          phx-click="close_start_meeting_sheet"
+          aria-hidden="true"
+          data-role="start-meeting-sheet-backdrop"
+        >
         </div>
 
-        <%!-- Form --%>
-        <form
-          id="start-meeting-form"
-          phx-submit="start_meeting"
-          phx-change="start_meeting_form_change"
-          class="flex flex-col gap-3 px-4 py-4"
-        >
-          <%!-- Inline error (server-side validation feedback) --%>
-          <div
-            :if={@start_meeting_error}
-            class="rounded-md border border-error/40 bg-error/10 px-3 py-2 text-xs text-error"
-            data-role="start-meeting-error"
-          >
-            {@start_meeting_error}
-          </div>
-
-          <%!-- Name (required) --%>
-          <div class="flex flex-col gap-1">
-            <label
-              for="start-meeting-name"
-              class="text-xs font-semibold uppercase tracking-wider text-base-content/60"
-            >
-              Name <span class="text-error">*</span>
-            </label>
-            <input
-              id="start-meeting-name"
-              type="text"
-              name="start_meeting[name]"
-              value={@start_meeting_form["name"]}
-              required
-              autocomplete="off"
-              placeholder="What's the meeting about?"
-              class="input input-bordered w-full text-sm"
-              data-role="start-meeting-name"
-            />
-          </div>
-
-          <%!-- Project (required) --%>
-          <div class="flex flex-col gap-1">
-            <label
-              for="start-meeting-project"
-              class="text-xs font-semibold uppercase tracking-wider text-base-content/60"
-            >
-              Project <span class="text-error">*</span>
-            </label>
-            <select
-              id="start-meeting-project"
-              name="start_meeting[project_id]"
-              required
-              class="select select-bordered w-full text-sm"
-              data-role="start-meeting-project"
-            >
-              <option value="" disabled selected={@start_meeting_form["project_id"] == ""}>
-                Select a project…
-              </option>
-              <option
-                :for={project <- assigns[:projects] || []}
-                value={project.id}
-                selected={@start_meeting_form["project_id"] == project.id}
-              >
-                {project.name}
-              </option>
-            </select>
-          </div>
-
-          <%!-- Description (optional) --%>
-          <div class="flex flex-col gap-1">
-            <label
-              for="start-meeting-description"
-              class="text-xs font-semibold uppercase tracking-wider text-base-content/60"
-            >
-              Description <span class="text-base-content/40 normal-case">(optional)</span>
-            </label>
-            <textarea
-              id="start-meeting-description"
-              name="start_meeting[description]"
-              rows="3"
-              placeholder="Optional context for who's joining."
-              class="textarea textarea-bordered w-full text-sm"
-              data-role="start-meeting-description"
-            >{@start_meeting_form["description"]}</textarea>
-          </div>
-
-          <%!-- Footer actions --%>
-          <div class="flex items-center justify-end gap-2 pt-1">
+        <%!-- Sheet panel --%>
+        <div class="relative w-full max-w-lg rounded-t-2xl sm:rounded-2xl bg-base-100 shadow-2xl pb-[env(safe-area-inset-bottom)] max-h-[75vh] overflow-y-auto">
+          <%!-- Header --%>
+          <div class="flex items-center justify-between border-b border-base-300 px-4 py-3">
+            <div class="flex items-center gap-2 min-w-0">
+              <span class="hero-video-camera size-5 flex-shrink-0 text-primary"></span>
+              <h2 id="start-meeting-sheet-title" class="text-base font-semibold">
+                Start a meeting
+              </h2>
+            </div>
             <button
               type="button"
               phx-click="close_start_meeting_sheet"
-              class="btn btn-ghost btn-sm"
-              data-role="start-meeting-cancel"
+              class="btn btn-sm btn-ghost btn-square"
+              aria-label="Close"
+              data-role="start-meeting-sheet-close"
             >
-              Cancel
-            </button>
-            <button
-              type="submit"
-              class="btn btn-primary btn-sm gap-1.5"
-              data-role="start-meeting-submit"
-            >
-              <span class="hero-video-camera size-4"></span>
-              <span>Start meeting</span>
+              <span class="hero-x-mark size-4"></span>
             </button>
           </div>
-        </form>
+
+          <%!-- Form --%>
+          <form
+            id="start-meeting-form"
+            phx-submit="start_meeting"
+            phx-change="start_meeting_form_change"
+            class="flex flex-col gap-3 px-4 py-4"
+          >
+            <%!-- Inline error (server-side validation feedback) --%>
+            <div
+              :if={@start_meeting_error}
+              class="rounded-md border border-error/40 bg-error/10 px-3 py-2 text-xs text-error"
+              data-role="start-meeting-error"
+            >
+              {@start_meeting_error}
+            </div>
+
+            <%!-- Name (required) --%>
+            <div class="flex flex-col gap-1">
+              <label
+                for="start-meeting-name"
+                class="text-xs font-semibold uppercase tracking-wider text-base-content/60"
+              >
+                Name <span class="text-error">*</span>
+              </label>
+              <input
+                id="start-meeting-name"
+                type="text"
+                name="start_meeting[name]"
+                value={@start_meeting_form["name"]}
+                required
+                autocomplete="off"
+                placeholder="What's the meeting about?"
+                class="input input-bordered w-full text-sm"
+                data-role="start-meeting-name"
+              />
+            </div>
+
+            <%!-- Project (required) --%>
+            <div class="flex flex-col gap-1">
+              <label
+                for="start-meeting-project"
+                class="text-xs font-semibold uppercase tracking-wider text-base-content/60"
+              >
+                Project <span class="text-error">*</span>
+              </label>
+              <select
+                id="start-meeting-project"
+                name="start_meeting[project_id]"
+                required
+                class="select select-bordered w-full text-sm"
+                data-role="start-meeting-project"
+              >
+                <option value="" disabled selected={@start_meeting_form["project_id"] == ""}>
+                  Select a project…
+                </option>
+                <option
+                  :for={project <- assigns[:projects] || []}
+                  value={project.id}
+                  selected={@start_meeting_form["project_id"] == project.id}
+                >
+                  {project.name}
+                </option>
+              </select>
+            </div>
+
+            <%!-- Description (optional) --%>
+            <div class="flex flex-col gap-1">
+              <label
+                for="start-meeting-description"
+                class="text-xs font-semibold uppercase tracking-wider text-base-content/60"
+              >
+                Description <span class="text-base-content/40 normal-case">(optional)</span>
+              </label>
+              <textarea
+                id="start-meeting-description"
+                name="start_meeting[description]"
+                rows="3"
+                placeholder="Optional context for who's joining."
+                class="textarea textarea-bordered w-full text-sm"
+                data-role="start-meeting-description"
+              >{@start_meeting_form["description"]}</textarea>
+            </div>
+
+            <%!-- Footer actions --%>
+            <div class="flex items-center justify-end gap-2 pt-1">
+              <button
+                type="button"
+                phx-click="close_start_meeting_sheet"
+                class="btn btn-ghost btn-sm"
+                data-role="start-meeting-cancel"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                class="btn btn-primary btn-sm gap-1.5"
+                data-role="start-meeting-submit"
+              >
+                <span class="hero-video-camera size-4"></span>
+                <span>Start meeting</span>
+              </button>
+            </div>
+          </form>
+        </div>
       </div>
     </div>
-  </div>
 <% end %>

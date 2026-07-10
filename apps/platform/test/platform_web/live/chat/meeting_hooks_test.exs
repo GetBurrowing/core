@@ -1071,5 +1071,35 @@ defmodule PlatformWeb.ChatLive.MeetingHooksTest do
       # join lifecycle.
       assert function_exported?(Membership, :ensure_chat_space_participant, 3)
     end
+
+    test "attach_guest/1 is exported (task 019f498d stage 3)" do
+      # Public entry point for the guest ingress in `PlatformWeb.MeetingLive`.
+      assert function_exported?(MeetingHooks, :attach_guest, 1)
+    end
+  end
+
+  # ── attach_guest/1 — media-state seeding (task 019f498d stage 3) ──────────
+
+  describe "attach_guest/1" do
+    test "seeds the same media-state assigns attach/2 seeds" do
+      # Build a socket with the `:lifecycle` slot the `attach_hook/4` call
+      # inside `attach_guest/1` reads. Mirroring the real LV socket shape
+      # here beats coupling this contract test to a running LV pid.
+      socket = %Phoenix.LiveView.Socket{
+        assigns: Map.put(%{user_id: nil}, :__changed__, %{}),
+        private: %{lifecycle: %Phoenix.LiveView.Lifecycle{}}
+      }
+
+      seeded = MeetingHooks.attach_guest(socket)
+
+      assert seeded.assigns.in_meeting == false
+      assert seeded.assigns.mic_enabled == true
+      assert seeded.assigns.camera_enabled == true
+      assert seeded.assigns.screen_share_enabled == false
+      assert seeded.assigns.meeting_counts == %{}
+      assert seeded.assigns.meeting_participants == []
+      # And confirm the hook actually landed on the `:meeting_events` slot.
+      assert [_hook] = seeded.private.lifecycle.handle_event
+    end
   end
 end

@@ -128,6 +128,22 @@ defmodule PlatformWeb.MeetingLive do
       Canvas-mode "Create canvas" CTA fires.
     * `:chat_panel_open` — mobile drawer open-state for the sibling's
       embedded chat panel.
+    * `:chrome_mode` — one of `:shell` (default, used by the authenticated
+      `/meetings/:slug` surface) or `:none` (used by the guest ingress on
+      the `meet.` host). Driven by `session["chrome_mode"]`, which the
+      `:guest_meeting` `live_session` block in the router injects as the
+      string `"none"`. Stage 1 of task 019f498d landed the plumbing;
+      stage 3 wires the guest-invite mount branch (see the `mount/3` head
+      clause matching `chrome_mode: "none"`); stage 4 gates chrome regions
+      in the heex; stage 5 retired the legacy standalone guest LV so
+      MeetingLive is the single source of truth for both surfaces.
+    * `:shell?` — convenience boolean, `true` when `:chrome_mode == :shell`.
+      Same task/stage semantics as `:chrome_mode`.
+    * `:state` — guest ingress state (task 019f498d stage 3), ONLY assigned
+      when `chrome_mode == :none`. One of `:expired`, `:invalid`,
+      `:name_entry`, `:in_meeting`. Absent in the shell path; the heex
+      cond in stage 4 branches on `chrome_mode == :none and state == …`
+      to render the guest sub-surfaces.
 
   ## PubSub (`:show`)
 
@@ -164,6 +180,124 @@ defmodule PlatformWeb.MeetingLive do
   def stage_modes, do: @stage_modes
 
   @impl true
+  # Guest ingress mount (task 019f498d stage 3, wired to the real route
+  # in stage 5). The `:guest_meeting` live_session on the `meet.` host
+  # scope injects `chrome_mode: "none"` into the session; the guest URL
+  # carries `slug` + `token` in the path. This clause resolves the invite
+  # through `Meetings.resolve_guest_invite/2` (extracted in stage 2) and
+  # lands one of four states: `:expired`, `:invalid`, `:name_entry`, or
+  # `:in_meeting`.
+  #
+  # In `:in_meeting` we mint the LiveKit bundle, seed the media-state
+  # assigns via `MeetingHooks.attach_guest/1` (a guest-safe variant that
+  # skips the user_id-dependent writes since `:user_id = nil` here), and
+  # push `join-meeting` with the same payload shape the authenticated
+  # `MeetingClient` consumes (built by
+  # `Meetings.guest_join_event_payload/2`).
+  #
+  # `handle_params/3` no-ops when `chrome_mode == :none` (see the head
+  # guard on the shell clause below) so this mount is the only place
+  # meeting-specific state is seeded for the guest surface.
+  def mount(
+        %{"slug" => slug, "token" => token} = _params,
+        %{"chrome_mode" => "none"} = _session,
+        socket
+      ) do
+    socket =
+      socket
+      |> assign(:user_id, nil)
+      |> assign(:chrome_mode, :none)
+      |> assign(:shell?, false)
+      |> assign(:stage_modes, @stage_modes)
+      |> assign(:chat_panel_open, false)
+      |> assign(:participant_rail_collapsed, false)
+      |> assign(:chat_panel_collapsed, false)
+      |> assign(:captions_visible, false)
+      |> assign(:meeting_slug, slug)
+      |> assign(:token, token)
+
+    case Meetings.resolve_guest_invite(slug, token) do
+      {:error, :expired} ->
+        {:ok,
+         socket
+         |> assign(:page_title, "This invite has expired")
+         |> assign(:state, :expired)
+         |> assign(:meeting, nil)
+         |> seed_guest_index_fallback_assigns()}
+
+      {:error, :invalid} ->
+        {:ok,
+         socket
+         |> assign(:page_title, "Invite link is not valid")
+         |> assign(:state, :invalid)
+         |> assign(:meeting, nil)
+         |> seed_guest_index_fallback_assigns()}
+
+      {:ok, %{state: :name_entry, meeting: meeting}} ->
+        # `:name_entry` seeds the same shell-tree assigns the `:in_meeting`
+        # path uses so the top-level `:state`-branch cond (stage 4) can
+        # short-circuit before touching any keys the meeting shell reads.
+        # No LiveKit bundle is minted here — the guest hasn't confirmed
+        # their name yet. `:display_name` is nil until `submit_name` lands.
+        {:ok,
+         socket
+         |> assign(:page_title, "Join #{meeting.name}")
+         |> assign(:state, :name_entry)
+         |> assign(:name_error, nil)
+         |> assign(:name_value, "")
+         |> assign(:display_name, nil)
+         |> seed_guest_shell_tree_assigns(meeting)}
+
+      {:ok, %{state: :in_meeting, meeting: meeting, display_name: display_name}} ->
+        {:ok, enter_meeting_as_guest(socket, meeting, display_name)}
+    end
+  end
+
+  # Seed the index-mode defaults so the current heex (which falls through
+  # to the `:else` index branch when `@meeting == nil`) doesn't crash
+  # on a bare guest failure state. Stage 4 will add a `:state`-branch cond
+  # so `:expired` / `:invalid` render their own cards and this fallback
+  # becomes dead code — but keeping it lets stage 3 land as a compilable,
+  # renderable-without-crash unit even before stage 4 lands. Values are
+  # empty defaults; no data leaks into the guest surface's DOM.
+  defp seed_guest_index_fallback_assigns(socket) do
+    socket
+    |> assign(:meetings, [])
+    |> assign(:grouped_meetings, %{live: [], upcoming: [], ended: []})
+    |> assign(:projects, [])
+    |> assign(:meeting_subscribed_project_ids, [])
+    |> assign(:show_start_meeting_sheet, false)
+    |> assign(:start_meeting_form, blank_start_meeting_form([]))
+    |> assign(:start_meeting_error, nil)
+  end
+
+  # Seed the meeting-shell-tree assigns the current (stage-3) heex reads
+  # unconditionally under `<%= if @meeting do %>`. Used by the `:name_entry`
+  # guest state so the shell renders without crashing before stage 4 adds
+  # the `:state`-branch cond. `:in_meeting` calls this indirectly via
+  # `enter_meeting_as_guest/3` which then overrides some values. All
+  # side-effect-free (no PubSub subscribes, no LiveKit calls).
+  defp seed_guest_shell_tree_assigns(socket, meeting) do
+    participants =
+      if is_binary(meeting.chat_space_id),
+        do: build_meeting_participants(meeting.chat_space_id),
+        else: []
+
+    socket
+    |> assign(:meeting, meeting)
+    |> assign(:participants, participants)
+    |> assign(:agents_by_id, %{})
+    |> assign(:speaking_participant_ids, MapSet.new())
+    |> assign(:meeting_canvas, latest_canvas(meeting.chat_space_id))
+    |> assign(:current_stage_mode, :gallery)
+    |> assign(:active_space, meeting.chat_space)
+    |> assign(:current_participant, nil)
+    |> assign(:show_guest_invite_sheet, false)
+    |> assign(:guest_invite_form, blank_guest_invite_form())
+    |> assign(:guest_invite_url, nil)
+    |> MeetingHooks.attach_guest()
+  end
+
   def mount(_params, session, socket) do
     # Pull the authenticated user_id off the session (same pattern as
     # ChatLive). Used to resolve a `current_participant` in the meeting's
@@ -173,10 +307,28 @@ defmodule PlatformWeb.MeetingLive do
     # canvas creation set `current_user_id` explicitly.
     user_id = session["current_user_id"] || Ecto.UUID.generate()
 
+    # Chrome-mode wiring (task 019f498d stage 1). The `:guest_meeting`
+    # live_session on the `meet.` host scope injects `"chrome_mode" =>
+    # "none"` into the session; the default authenticated `/meetings`
+    # surface leaves it absent, which normalizes to `:shell`. Stage 1 is
+    # additive-only — no render or lifecycle code branches on these
+    # assigns yet. Stage 3 wires guest-invite mount branching, stage 4
+    # gates chrome regions, stage 5 flips the `meet.` route to this LV.
+    chrome_mode = normalize_chrome_mode(session["chrome_mode"])
+
     {:ok,
      socket
      |> assign(:user_id, user_id)
+     |> assign(:chrome_mode, chrome_mode)
+     |> assign(:shell?, chrome_mode == :shell)
      |> assign(:stage_modes, @stage_modes)
+     # Stage 4 seed. The top-level heex cond branches on `@state` and
+     # `{@display_name}` interpolates the guest badge in `chrome_mode: :none`.
+     # The shell path never sets these — assign nil defaults here so the
+     # template compiles under both modes without KeyErrors when the render
+     # scans the cond's guard tuples.
+     |> assign(:state, nil)
+     |> assign(:display_name, nil)
      # Mobile drawer state — defaults CLOSED. Desktop ignores this
      # assign (column is `hidden lg:flex`). See @moduledoc for the
      # reconciliation against the stack-spec's "defaults to true" line.
@@ -207,6 +359,21 @@ defmodule PlatformWeb.MeetingLive do
   end
 
   @impl true
+  # Guest ingress (task 019f498d stage 3): the guest mount clause above
+  # already resolved the invite + seeded every assign the guest states
+  # need (`:state` in `[:expired, :invalid, :name_entry, :in_meeting]`).
+  # handle_params is a no-op here to avoid the shell-path
+  # `Meetings.get_meeting_by_slug/1` re-lookup and MeetingHooks.attach/2
+  # (which requires a binary user_id and would double-subscribe the guest
+  # to per-space PubSub). Guarded on `:state` presence rather than
+  # `:chrome_mode == :none` alone so the stage-1 `/_probe/:slug` smoke
+  # route (chrome_mode :none, no token, no `:state`) still falls through
+  # to the shell path and its `:meeting` assign lands.
+  def handle_params(_params, _url, %{assigns: %{state: state}} = socket)
+      when state in [:expired, :invalid, :name_entry, :in_meeting] do
+    {:noreply, socket}
+  end
+
   def handle_params(%{"slug" => slug} = params, _url, socket) do
     case Meetings.get_meeting_by_slug(slug) do
       nil ->
@@ -552,9 +719,9 @@ defmodule PlatformWeb.MeetingLive do
   #   2. a signed HMAC token (`Platform.Meetings.GuestInvite.sign/4`)
   #      carrying `{meeting_slug, expires_at, display_name, guest_space_id}`.
   #   3. a URL of the form
-  #      `https://<meeting_guest_host>/<meeting_slug>/<token>` that maps to
-  #      `GuestMeetingLive` under the `meet.` host scope (see
-  #      `PlatformWeb.Router`).
+  #      `https://<meeting_guest_host>/<meeting_slug>/<token>` that maps
+  #      back into `MeetingLive` under the `meet.` host scope (with
+  #      `chrome_mode: :none`; see `PlatformWeb.Router`).
   #
   # Sheet visibility is host-gated in the template on `host?/2`; the events
   # themselves stay safe if a non-host somehow triggers them (a `Meetings`
@@ -630,6 +797,59 @@ defmodule PlatformWeb.MeetingLive do
     # click), but we also emit a browser event so a top-level toast hook
     # can confirm the copy. Both paths coexist harmlessly.
     {:noreply, push_event(socket, "guest_invite_copied", %{})}
+  end
+
+  # ── Guest name-entry form submit (task 019f498d stage 3) ────────────────
+  #
+  # Trim + length gates the submitted name, then calls
+  # `Meetings.mint_guest_join_bundle/2`. On success we hand off to
+  # `enter_meeting_as_guest/3` which flips `:state` from `:name_entry` to
+  # `:in_meeting`, subscribes to per-space presence, and pushes
+  # `join-meeting`. The heex render branches on `:state` in stage 4 so a
+  # fresh guest sees the form → video-stage transition on this one
+  # client-side round-trip.
+  def handle_event("submit_name", %{"guest" => %{"name" => name}}, socket) do
+    trimmed = name |> to_string() |> String.trim()
+
+    cond do
+      trimmed == "" ->
+        {:noreply,
+         socket
+         |> assign(:name_error, "Please enter your name.")
+         |> assign(:name_value, name)}
+
+      String.length(trimmed) > 80 ->
+        {:noreply,
+         socket
+         |> assign(:name_error, "Name is too long.")
+         |> assign(:name_value, name)}
+
+      true ->
+        %{meeting: meeting} = socket.assigns
+
+        case Meetings.mint_guest_join_bundle(meeting, trimmed) do
+          {:ok, _bundle} ->
+            {:noreply,
+             socket
+             |> assign(:name_error, nil)
+             |> enter_meeting_as_guest(meeting, trimmed)}
+
+          {:error, :livekit_not_configured} ->
+            {:noreply,
+             assign(
+               socket,
+               :name_error,
+               "Meetings are not available right now. Please try again later."
+             )}
+
+          {:error, _other} ->
+            {:noreply, assign(socket, :name_error, "Something went wrong. Please try again.")}
+        end
+    end
+  end
+
+  def handle_event("submit_name", _params, socket) do
+    {:noreply, assign(socket, :name_error, "Please enter your name.")}
   end
 
   # ── Start-meeting FAB + bottom-sheet (`:index` action only) ──────────────
@@ -733,17 +953,26 @@ defmodule PlatformWeb.MeetingLive do
   # source of truth — same code path as the manual "Join meeting" CTA.
   @impl true
   def handle_info(:auto_join, socket) do
-    if socket.assigns[:in_meeting] do
-      {:noreply, socket}
-    else
-      # Transition a still-`scheduled` meeting to `live` BEFORE joining.
-      # `Meetings.start_meeting/1` had ZERO callers — the /meetings FAB only
-      # created (status="scheduled") then navigated here — so every meeting
-      # stayed "scheduled" forever and the index showed it under "Upcoming".
-      # Auto-join is the single chokepoint every join (FAB or direct link)
-      # flows through, so starting the meeting here covers all paths.
-      socket = socket |> maybe_start_meeting() |> MeetingHooks.join()
-      {:noreply, socket}
+    cond do
+      socket.assigns[:in_meeting] ->
+        {:noreply, socket}
+
+      socket.assigns[:chrome_mode] == :none ->
+        # Guest ingress (task 019f498d stage 3): mount already minted the
+        # bundle and pushed `join-meeting`. MeetingHooks.join/1 assumes a
+        # binary `:user_id` (see `do_join/1`), which the guest surface
+        # doesn't have — so auto-join is a no-op on the guest path.
+        {:noreply, socket}
+
+      true ->
+        # Transition a still-`scheduled` meeting to `live` BEFORE joining.
+        # `Meetings.start_meeting/1` had ZERO callers — the /meetings FAB only
+        # created (status="scheduled") then navigated here — so every meeting
+        # stayed "scheduled" forever and the index showed it under "Upcoming".
+        # Auto-join is the single chokepoint every join (FAB or direct link)
+        # flows through, so starting the meeting here covers all paths.
+        socket = socket |> maybe_start_meeting() |> MeetingHooks.join()
+        {:noreply, socket}
     end
   end
 
@@ -851,10 +1080,123 @@ defmodule PlatformWeb.MeetingLive do
   @impl true
   def terminate(_reason, socket) do
     MeetingHooks.on_terminate(socket)
+    maybe_broadcast_guest_leave(socket)
     :ok
   end
 
+  # 019f498d re-dispatch: guest surface leave-broadcast. The auth surface
+  # is subscribed to the room + presence topics, so marking the guest row
+  # as `left_at` here retires the guest tile on the host without waiting
+  # for LiveKit's `participant_left` webhook (which isn't reachable in
+  # dev / test — see meeting_hooks.ex v4 comment). Best-effort:
+  # tolerated as a safe no-op when the guest never fully entered the
+  # meeting (name-entry state, invalid token, etc.).
+  defp maybe_broadcast_guest_leave(%{
+         assigns: %{chrome_mode: :none, state: :in_meeting, identity: identity, meeting: meeting}
+       })
+       when is_binary(identity) do
+    with %{chat_space_id: space_id} when is_binary(space_id) <- meeting,
+         %{} = room <- Meetings.get_active_room(space_id) do
+      Meetings.mark_live_participant_left(room, %{identity: identity, name: nil})
+    end
+
+    :ok
+  end
+
+  defp maybe_broadcast_guest_leave(_socket), do: :ok
+
   # ── Helpers ──────────────────────────────────────────────────────────────
+
+  # Guest ingress transition (task 019f498d stage 3): mint the LiveKit
+  # bundle for `display_name`, seed the same assigns MeetingLive normally
+  # sets in `handle_params/3` for the meeting shell (participants,
+  # agents_by_id, canvas, active_space, stage mode, guest-invite sheet
+  # defaults so the render doesn't crash on missing keys), install the
+  # guest-safe meeting-event hook via `MeetingHooks.attach_guest/1`, and
+  # push `join-meeting` with the exact payload shape MeetingClient
+  # consumes. On mint failure land on `:state = :invalid` — same failure
+  # surface as an unverifiable token, since a downstream mint issue is
+  # indistinguishable from an invalid invite from the guest's POV.
+  #
+  # Called from both the mount clause (invite payload carried a
+  # display_name) and the `"submit_name"` event handler (guest typed
+  # their own name). Keeping the code in ONE helper means the two
+  # entry points cannot drift.
+  defp enter_meeting_as_guest(socket, meeting, display_name)
+       when is_binary(display_name) do
+    case Meetings.mint_guest_join_bundle(meeting, display_name) do
+      {:ok, bundle} ->
+        if connected?(socket) and is_binary(meeting.chat_space_id) do
+          MeetingsPubSub.subscribe_presence(meeting.chat_space_id)
+
+          case Meetings.get_active_room(meeting.chat_space_id) do
+            %{id: room_id} -> MeetingsPubSub.subscribe_room(room_id)
+            _ -> :ok
+          end
+        end
+
+        # 019f498d re-dispatch: land the guest in the shared live-presence
+        # table so the auth-side MeetingLive session (subscribed to the
+        # same presence + room topics) refreshes `@participants` and
+        # renders a `.video_tile` with `data-participant="guest:<random>"`
+        # matching the identity the guest publishes on LiveKit. Without
+        # this the LiveKit RTP flow arrives on the auth surface but has
+        # no DOM element to mount onto — the failing V1/V5 e2e symptom.
+        maybe_upsert_guest_presence(socket, meeting, bundle, display_name)
+
+        socket
+        |> seed_guest_shell_tree_assigns(meeting)
+        |> assign(:state, :in_meeting)
+        |> assign(:page_title, meeting.name)
+        |> assign(:display_name, display_name)
+        |> assign(:token, bundle.token)
+        |> assign(:identity, bundle.identity)
+        |> assign(:room_name, bundle.room_name)
+        |> assign(:livekit_url, bundle.livekit_url)
+        # attach_guest (from seed_guest_shell_tree_assigns) seeds
+        # :in_meeting = false to mirror attach/2; flip to true because we
+        # push the join event immediately below.
+        |> assign(:in_meeting, true)
+        |> push_event("join-meeting", Meetings.guest_join_event_payload(bundle, meeting))
+
+      {:error, _reason} ->
+        socket
+        |> assign(:state, :invalid)
+        |> assign(:page_title, "Invite link is not valid")
+        |> assign(:meeting, nil)
+        |> seed_guest_index_fallback_assigns()
+    end
+  end
+
+  # Ensure a live meeting room + guest participant row exist so both the
+  # guest's OWN LV (which subscribed above) and any authenticated
+  # MeetingLive subscribed to the same space refresh `@participants` and
+  # render a tile for this guest. Idempotent by construction: `ensure_room`
+  # returns the existing row; `upsert_live_participant` find-or-inserts
+  # by (room_id, display_name) when the identity is nil-FK (guests).
+  #
+  # Only runs on connected? mounts — the initial dead render doesn't need
+  # to broadcast, and we don't want a stale row from a mount that never
+  # fully connects. Best-effort: a failure here (LiveKit misconfig,
+  # meetings disabled, etc.) is logged and swallowed. The guest surface
+  # still renders and joins LiveKit; the auth surface just won't get the
+  # server-broadcast presence signal (LiveKit's webhook is the prod
+  # fallback that still fires).
+  defp maybe_upsert_guest_presence(socket, meeting, bundle, display_name) do
+    with true <- connected?(socket),
+         space_id when is_binary(space_id) <- meeting.chat_space_id,
+         {:ok, room} <- Meetings.ensure_room(space_id),
+         {:ok, room} <- Meetings.activate_room(room),
+         {:ok, _participant} <-
+           Meetings.upsert_live_participant(room, %{
+             identity: bundle.identity,
+             name: "#{display_name} (guest)"
+           }) do
+      :ok
+    else
+      _ -> :ok
+    end
+  end
 
   defp refresh_participants(%{assigns: %{meeting: %{chat_space_id: space_id}}} = socket)
        when is_binary(space_id) do
@@ -907,12 +1249,22 @@ defmodule PlatformWeb.MeetingLive do
 
     {display_name, avatar_url} = resolve_identity(p)
 
+    # 019f498d re-dispatch: surface the LiveKit identity stored on the
+    # participant row (populated by `Meetings.upsert_live_participant/2`)
+    # so `gallery_identity/1` can produce a `data-participant` attribute
+    # matching the LiveKit-published identity. Auth-user rows will be
+    # `"user:<uuid>"` (same string the previous `"user:" <> participant_id`
+    # fallback yielded); guest rows will be `"guest:<random>"` which the
+    # previous fallback would have mangled into `"user:<row-id>"`.
+    identity = Map.get(p.metadata || %{}, "identity")
+
     %{
       id: p.id,
       participant_id: participant_id,
       participant_type: participant_type,
       display_name: display_name,
       avatar_url: avatar_url,
+      identity: identity,
       # Live presence rows don't carry mic state yet; keep the key so the
       # rail's `mic_on?/1` and the strip's `attention_config` reads stay
       # total without special-casing nil.
@@ -1050,6 +1402,19 @@ defmodule PlatformWeb.MeetingLive do
   end
 
   defp parse_stage_mode(_), do: :error
+
+  # Normalize the `session["chrome_mode"]` value into one of `:shell` or
+  # `:none`. Session-injected values from the `:guest_meeting` router
+  # `live_session` block arrive as the string `"none"`; direct-mount
+  # tests (bypassing the live_session boundary) may pass the atom
+  # `:none` directly. Anything else — including an absent key from the
+  # default authenticated `/meetings` mount — falls back to `:shell`.
+  # Explicit allow-list rather than String.to_atom/1 for the same reason
+  # `parse_stage_mode/1` uses one: no untrusted atom coinage into the VM.
+  # Task 019f498d stage 1.
+  defp normalize_chrome_mode("none"), do: :none
+  defp normalize_chrome_mode(:none), do: :none
+  defp normalize_chrome_mode(_), do: :shell
 
   # ── Index helpers (`:index` action) ──────────────────────────────────────
   #
@@ -1247,6 +1612,17 @@ defmodule PlatformWeb.MeetingLive do
   (`MeetingVideoTile`) will find a single track per identity regardless of
   whether the bottom-strip tile or the gallery-mode tile mounts first.
   """
+  # Explicit LiveKit identity wins when present. Written into view-model
+  # maps by `meeting_participant_view_model/1` from
+  # `p.metadata["identity"]`. Guests carry `"guest:<random>"` here; auth
+  # rows carry `"user:<uuid>"` (byte-identical to the historical
+  # `"user:" <> participant_id` fallback). See task 019f498d re-dispatch
+  # notes on why guest tiles must render with the LiveKit-side identity
+  # so MeetingVideoTile's `data-participant` attribute matches the
+  # remote participant's `identity` field.
+  def gallery_identity(%{identity: identity}) when is_binary(identity) and identity != "",
+    do: identity
+
   def gallery_identity(%{participant_id: pid}) when is_binary(pid) and pid != "",
     do: "user:" <> pid
 
@@ -1439,6 +1815,72 @@ defmodule PlatformWeb.MeetingLive do
       do: participant
 
   def local_self_view_participant(_), do: nil
+
+  @doc """
+  Guest-aware self-view resolver (task 019f498d re-dispatch).
+
+  Auth surface: identical to `local_self_view_participant/1` — falls back
+  to the `@current_participant`-driven behavior.
+
+  Guest surface (`@chrome_mode == :none and @state == :in_meeting`): the
+  guest has no `Chat.Participant` row (they are not a Suite user), but
+  they DO carry a LiveKit identity + display name from
+  `mint_guest_join_bundle/2`. Return a synthetic participant map keyed
+  on the LiveKit identity so the persistent `#meeting-local-self-view`
+  parking slot renders and MeetingClient has somewhere to dock the local
+  <video> element. Fields mirror the shape the participant-tile heex
+  reads (see `gallery_identity/1` and `meeting_participant_view_model/1`).
+  """
+  def local_self_view_participant(current_participant, guest_mode?, display_name, identity)
+
+  def local_self_view_participant(%{participant_id: pid} = participant, _, _, _)
+      when is_binary(pid) and pid != "",
+      do: participant
+
+  def local_self_view_participant(_, true, display_name, identity)
+      when is_binary(display_name) and is_binary(identity) and identity != "" do
+    %{
+      id: identity,
+      participant_id: nil,
+      participant_type: "user",
+      display_name: display_name,
+      avatar_url: nil,
+      identity: identity,
+      attention_config: %{}
+    }
+  end
+
+  def local_self_view_participant(_, _, _, _), do: nil
+
+  @doc """
+  Return the LiveKit-shape identity string for the LOCAL viewer of a
+  MeetingLive session — the identity `data-participant` on a rendered
+  tile must match for the JS hooks to treat that tile as the local
+  participant (task 019f498d re-dispatch).
+
+  * Auth mount: `gallery_identity(@current_participant)` — same string
+    the old inline expression in `meeting_live.html.heex` computed.
+  * Guest mount (`@chrome_mode == :none and @state == :in_meeting`):
+    `@identity` from the minted bundle (e.g. `"guest:<random>"`).
+  * Everything else: sentinel `"user:unknown"` (matches the historic
+    `gallery_identity(nil)` fallback so no per-iteration tile matches).
+  """
+  def viewer_gallery_identity(assigns) when is_map(assigns) do
+    case assigns[:current_participant] do
+      %{participant_id: pid} = p when is_binary(pid) and pid != "" ->
+        gallery_identity(p)
+
+      _ ->
+        cond do
+          assigns[:chrome_mode] == :none and assigns[:state] == :in_meeting and
+              is_binary(assigns[:identity]) ->
+            assigns[:identity]
+
+          true ->
+            "user:unknown"
+        end
+    end
+  end
 
   @doc "Filter participants to the agent subset for the bottom strip."
   def strip_agents(participants) when is_list(participants) do

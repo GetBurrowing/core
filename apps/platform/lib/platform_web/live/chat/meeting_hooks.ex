@@ -59,7 +59,7 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
   import Phoenix.Component, only: [assign: 3]
 
   import Phoenix.LiveView,
-    only: [attach_hook: 4, push_event: 3, connected?: 1, get_connect_params: 1]
+    only: [attach_hook: 4, detach_hook: 3, push_event: 3, connected?: 1, get_connect_params: 1]
 
   alias Platform.Accounts
   alias Platform.Meetings
@@ -130,6 +130,49 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
         %{"_mounts" => mounts} when is_integer(mounts) -> mounts > 0
         _ -> false
       end
+  end
+
+  @doc """
+  Attach a guest-flavored variant of the meeting event hook for the
+  guest ingress path in `PlatformWeb.MeetingLive` (task 019f498d
+  stage 3).
+
+  The guest surface has `:user_id = nil` (no authenticated account).
+  Calling the standard `attach/2` would install `handle_event/3`
+  clauses whose leave paths call `MeetingState.broadcast_left/1` and
+  `stamp_local_left/1` — both of which crash on a nil user_id
+  (`broadcast_left/1` is `is_binary`-guarded; `stamp_local_left/1`
+  requires a durable participant row to stamp). This variant installs
+  the same media-toggle + screen-share + leave surface but skips the
+  user_id-dependent side effects when `:user_id` is nil.
+
+  Seeds the same media-state assigns `attach/2` seeds so the top-bar
+  controls render with sane defaults — with `:in_meeting` deliberately
+  `false` here; MeetingLive's guest mount flips it to `true` after the
+  `join-meeting` push_event lands. Does NOT subscribe to
+  `MeetingState.topic(user_id)` (there is no user_id), does NOT prime
+  `:meeting_counts` from durable membership (the guest surface has no
+  sidebar count map to feed), and does NOT install the `:meeting_info`
+  handler (guest LV owns its own presence/canvas handlers via
+  MeetingLive's `handle_info/2`).
+  """
+  @spec attach_guest(Phoenix.LiveView.Socket.t()) :: Phoenix.LiveView.Socket.t()
+  def attach_guest(socket) do
+    socket
+    |> assign(:in_meeting, false)
+    |> assign(:meetings_enabled, Meetings.enabled?())
+    |> assign(:mic_enabled, true)
+    |> assign(:camera_enabled, true)
+    |> assign(:screen_share_enabled, false)
+    |> assign(:meeting_counts, %{})
+    |> assign(:meeting_participants, [])
+    # Idempotent hook install: the guest surface calls attach_guest/1
+    # once at mount (`:name_entry` state seeds the shell tree) and again
+    # on the `:name_entry → :in_meeting` transition (submit_name event).
+    # `attach_hook/4` raises on duplicate id; detach first so both
+    # entry points are safe to call.
+    |> detach_hook(:meeting_events, :handle_event)
+    |> attach_hook(:meeting_events, :handle_event, &handle_guest_event/3)
   end
 
   @doc """
@@ -323,6 +366,63 @@ defmodule PlatformWeb.ChatLive.MeetingHooks do
   end
 
   defp handle_event(_event, _params, socket), do: {:cont, socket}
+
+  # ── Guest-flavored event surface (task 019f498d stage 3) ────────────────
+  #
+  # Same event names as the authenticated handlers above but with the
+  # user_id-dependent side effects (`broadcast_media` / `broadcast_left` /
+  # `stamp_local_left`) elided. Called from `attach_guest/1` for the
+  # guest ingress path in `PlatformWeb.MeetingLive` (chrome_mode: :none),
+  # which has `:user_id = nil`.
+
+  defp handle_guest_event("meeting_toggle_mic", _params, socket) do
+    new_mic = !socket.assigns.mic_enabled
+
+    {:halt,
+     socket
+     |> assign(:mic_enabled, new_mic)
+     |> push_event("toggle-mic", %{})}
+  end
+
+  defp handle_guest_event("meeting_toggle_camera", _params, socket) do
+    new_camera = !socket.assigns.camera_enabled
+
+    {:halt,
+     socket
+     |> assign(:camera_enabled, new_camera)
+     |> push_event("toggle-camera", %{})}
+  end
+
+  defp handle_guest_event("meeting_toggle_screen_share", _params, socket) do
+    {:halt,
+     socket
+     |> assign(:screen_share_enabled, !socket.assigns.screen_share_enabled)
+     |> push_event("toggle-screen-share", %{})}
+  end
+
+  defp handle_guest_event("meeting_screen_share_state", %{"enabled" => enabled}, socket)
+       when is_boolean(enabled) do
+    {:halt, socket |> assign(:screen_share_enabled, enabled) |> maybe_switch_to_screen(enabled)}
+  end
+
+  # Explicit leave from the top-bar Leave button. No durable participant row
+  # to stamp (`stamp_local_left/1` requires `:user_id` binary), no
+  # `MeetingState.broadcast_left/1` (also `is_binary`-guarded). Just reset
+  # local media state and tell the JS hook to disconnect.
+  defp handle_guest_event("meeting_leave", _params, socket) do
+    {:halt,
+     socket
+     |> reset_meeting_state()
+     |> push_event("leave-meeting", %{})}
+  end
+
+  # Fired from meeting_client.js on RoomEvent.Disconnected. Symmetric to the
+  # authenticated `meeting_left` path minus the user_id-dependent writes.
+  defp handle_guest_event("meeting_left", _params, socket) do
+    {:halt, reset_meeting_state(socket)}
+  end
+
+  defp handle_guest_event(_event, _params, socket), do: {:cont, socket}
 
   # Screen-share-not-displaying fix: when a share STARTS on `/meetings`, flip
   # the center stage to Screen mode so `[data-screen-share-slot]` + the

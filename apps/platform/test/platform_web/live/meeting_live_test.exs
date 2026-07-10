@@ -18,10 +18,12 @@ defmodule PlatformWeb.MeetingLiveTest do
 
   import Phoenix.LiveViewTest
 
-  alias Platform.{Chat, Repo}
+  alias Platform.{Chat, Meetings, Repo}
   alias Platform.Accounts.User
   alias Platform.Chat.PubSub, as: ChatPubSub
+  alias Platform.Meetings.GuestInvite
   alias Platform.Meetings.Meeting
+  alias Platform.Meetings.PubSub, as: MeetingsPubSub
   alias Platform.Tasks.Project
 
   defp authenticated_conn(conn, user \\ nil) do
@@ -3748,6 +3750,289 @@ defmodule PlatformWeb.MeetingLiveTest do
         refute html =~ ~s(data-role="meeting-captions"),
                "caption bar must be absent when captions_visible=false in #{mode} mode"
       end
+    end
+  end
+
+  describe "chrome_mode session param (task 019f498d stage 1)" do
+    # Stage 1 is passive plumbing: mount reads `session["chrome_mode"]`
+    # and assigns `:chrome_mode` / `:shell?`. The default
+    # `/meetings/:slug` mount injects no `chrome_mode` session key →
+    # falls back to `:shell` / `shell? = true`. The `meet.` host guest
+    # route (real chrome_mode :none path) is covered end-to-end in
+    # `meeting_live_guest_mount_test.exs` (async: false because it stubs
+    # LiveKit env) — stage 6 also lands host-routing regression coverage
+    # here in `meeting_live_test.exs`.
+
+    test "authenticated /meetings/:slug mount defaults chrome_mode to :shell + shell? true",
+         %{conn: conn} do
+      {meeting, _space} = create_meeting(%{slug: "chrome-default", name: "Chrome Default"})
+      {conn, _user} = authenticated_conn(conn)
+
+      {:ok, view, _html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      assigns = :sys.get_state(view.pid).socket.assigns
+      assert assigns.chrome_mode == :shell
+      assert assigns.shell? == true
+    end
+  end
+
+  # ── task 019f498d stage 6: chrome-escape + host-scope ports ────────────────
+  #
+  # These describe blocks port the invariant + router coverage that lived in
+  # the now-deleted `guest_meeting_live_test.exs`. They pin behaviors that
+  # the stage-3 mount + stage-4 heex branch land, but that
+  # `meeting_live_guest_mount_test.exs` doesn't cover from the perspective of
+  # the ported originals — specifically the `www.example.com` router regression
+  # and the shell-side chrome-visible regression check.
+  #
+  # `Application.put_env(:platform, :livekit, …)` mutates process-global config;
+  # the file is `async: true` so this is technically racy, but the existing
+  # `describe` blocks earlier in this file use the same pattern with `on_exit`
+  # cleanup. Follow suit — refactoring the file to :async false is out of scope.
+
+  defp put_guest_livekit_env do
+    original = Application.get_env(:platform, :livekit, [])
+
+    Application.put_env(:platform, :livekit,
+      api_key: "test-livekit-key",
+      api_secret: "test-livekit-secret-0123456789abcdef",
+      url: "wss://livekit.test"
+    )
+
+    on_exit(fn -> Application.put_env(:platform, :livekit, original) end)
+    :ok
+  end
+
+  # Prefix the conn's host with `meet.` so the router's guest scope matches.
+  defp with_meet_host(conn, host \\ "meet.localhost"), do: %{conn | host: host}
+
+  # Decode the JWT payload segment to inspect the `name` + `sub` claims
+  # without pulling in JOSE.
+  defp decode_jwt_claims(jwt) when is_binary(jwt) do
+    with [_h, payload, _sig] <- String.split(jwt, ".", parts: 3),
+         {:ok, json} <- Base.url_decode64(payload, padding: false),
+         {:ok, claims} <- Jason.decode(json) do
+      {:ok, claims}
+    else
+      _ -> :error
+    end
+  end
+
+  # Meeting + chat_space + minted-token bundle, ready for a guest mount.
+  # `create_meeting/1` in this file returns `{meeting, space}` but doesn't
+  # preload `:chat_space` — the guest-mount path reads `meeting.chat_space.slug`
+  # through `mint_guest_join_bundle/2`, so preload here.
+  defp create_guest_meeting(display_name \\ "Juno Fairbanks") do
+    {meeting, _space} =
+      create_meeting(%{slug: "guest-stage6-#{System.unique_integer([:positive])}"})
+
+    meeting = Repo.preload(meeting, :chat_space)
+    expires_at = DateTime.utc_now() |> DateTime.to_unix() |> Kernel.+(3600)
+    token = GuestInvite.sign(meeting.slug, expires_at, display_name)
+    {meeting, token}
+  end
+
+  describe "host: routing for guest surface (task 019f498d stage 6)" do
+    setup do
+      put_guest_livekit_env()
+      :ok
+    end
+
+    test "requests on host `meet.<any>.<tld>` resolve MeetingLive via the :show action",
+         %{conn: conn} do
+      {meeting, token} = create_guest_meeting()
+
+      {:ok, view, html} =
+        conn
+        |> with_meet_host("meet.example.com")
+        |> live("/#{meeting.slug}/#{token}")
+
+      assigns = :sys.get_state(view.pid).socket.assigns
+      # Router injected `chrome_mode: "none"` through the `:guest_meeting`
+      # live_session; MeetingLive.mount normalized to `:none`.
+      assert assigns.chrome_mode == :none
+      assert assigns.shell? == false
+      # Guest surface still renders the meeting controls…
+      assert html =~ ~s(data-role="meeting-mic")
+      # …but not the chat panel (gated on `@shell?`).
+      refute html =~ ~s(data-pane="chat-panel")
+    end
+
+    test "requests on default `www.example.com` host do NOT resolve /:slug/:token to MeetingLive",
+         %{conn: conn} do
+      {meeting, token} = create_guest_meeting()
+
+      # ConnTest's default conn carries host `www.example.com`, which does
+      # NOT match the `meet.` scope. The route `/:slug/:token` has no
+      # sibling under the default scope, so the dispatch bails out 404
+      # before any LiveView runs. Use plain `get/2` so the response
+      # status is inspectable directly (LiveViewTest.live/2 wraps the
+      # miss in a WebSocket-connect FunctionClauseError).
+      response_conn = get(conn, "/#{meeting.slug}/#{token}")
+      assert response_conn.status == 404
+    end
+  end
+
+  describe "layout chrome-escape (guest surface) (task 019f498d stage 6)" do
+    setup do
+      put_guest_livekit_env()
+      :ok
+    end
+
+    test "rendered document contains no shell chrome markers", %{conn: conn} do
+      {meeting, token} = create_guest_meeting()
+
+      # Fetch the static-render body directly so root layout HTML (which
+      # would carry shell chrome if the layout were `:app`) is included.
+      conn = with_meet_host(conn)
+      %{resp_body: body} = get(conn, "/#{meeting.slug}/#{token}")
+
+      refute body =~ "shell-sidebar"
+      refute body =~ "icon-rail"
+      refute body =~ "bottom-nav"
+      refute body =~ "chat-sidebar"
+    end
+
+    test "guest surface omits the Copy guest link + chat panel + chat drawer",
+         %{conn: conn} do
+      {meeting, token} = create_guest_meeting()
+
+      {:ok, _view, html} =
+        conn
+        |> with_meet_host()
+        |> live("/#{meeting.slug}/#{token}")
+
+      refute html =~ "meeting-copy-guest-link"
+      refute html =~ ~s(data-pane="chat-panel")
+      refute html =~ "chat-panel-toggle"
+      refute html =~ "chat-pane-toggle"
+    end
+
+    test "authenticated /meetings/:slug still renders full shell chrome (regression check)",
+         %{conn: conn} do
+      # Sanity: if a future edit widens a `@shell?` guard from the auth
+      # surface, the chat panel / chat-panel toggle should still show.
+      {meeting, _space} =
+        create_meeting(%{slug: "shell-regression-#{System.unique_integer([:positive])}"})
+
+      {conn, _user} = authenticated_conn(conn)
+
+      {:ok, _view, html} = live(conn, ~p"/meetings/#{meeting.slug}")
+
+      assert html =~ ~s(data-pane="chat-panel")
+      assert html =~ "chat-panel-toggle"
+    end
+  end
+
+  describe "guest LiveKit token bundle (task 019f498d stage 6)" do
+    setup do
+      put_guest_livekit_env()
+      :ok
+    end
+
+    test "minted JWT `name` claim carries the ` (guest)` suffix", %{conn: conn} do
+      {meeting, token} = create_guest_meeting("Juno Fairbanks")
+
+      {:ok, view, _html} =
+        conn
+        |> with_meet_host()
+        |> live("/#{meeting.slug}/#{token}")
+
+      assert_push_event(view, "join-meeting", %{token: pushed_token})
+      assert {:ok, claims} = decode_jwt_claims(pushed_token)
+      assert String.ends_with?(claims["name"], " (guest)")
+      assert claims["name"] == "Juno Fairbanks (guest)"
+    end
+
+    test "identity carries the `guest:` prefix on the JWT sub claim", %{conn: conn} do
+      # The `join-meeting` push_event payload is `%{token, url, room_name,
+      # space_slug}` — `identity` isn't in the payload directly, so assert
+      # against the decoded JWT's `sub` claim (the LiveKit identity).
+      {meeting, token} = create_guest_meeting("Juno Fairbanks")
+
+      {:ok, view, _html} =
+        conn
+        |> with_meet_host()
+        |> live("/#{meeting.slug}/#{token}")
+
+      assert_push_event(view, "join-meeting", %{token: pushed_token})
+      assert {:ok, claims} = decode_jwt_claims(pushed_token)
+      assert String.starts_with?(claims["sub"], "guest:")
+    end
+  end
+
+  describe "chat_space preload (task 019f498d stage 6)" do
+    setup do
+      put_guest_livekit_env()
+      :ok
+    end
+
+    test "chat_space is preloaded on the meeting assign for :in_meeting guests",
+         %{conn: conn} do
+      # If `resolve_guest_invite/2` failed to preload `:chat_space`, the
+      # `push_join_event` code path would crash on
+      # `%Ecto.Association.NotLoaded{}` when reading `meeting.chat_space.slug`.
+      # This test locks the preload contract.
+      {meeting, token} = create_guest_meeting()
+
+      {:ok, view, _html} =
+        conn
+        |> with_meet_host()
+        |> live("/#{meeting.slug}/#{token}")
+
+      assigns = :sys.get_state(view.pid).socket.assigns
+      assert %Meeting{} = assigns.meeting
+      assert %Chat.Space{} = assigns.meeting.chat_space
+      assert assigns.meeting.chat_space.id == meeting.chat_space_id
+    end
+  end
+
+  describe "guest meeting presence subscription (task 019f498d stage 6)" do
+    setup do
+      put_guest_livekit_env()
+      :ok
+    end
+
+    test "guest mount subscribes to per-space presence topic; a broadcast on it refreshes :participants",
+         %{conn: conn} do
+      {meeting, token} = create_guest_meeting()
+      space_id = meeting.chat_space_id
+
+      {:ok, view, _html} =
+        conn
+        |> with_meet_host()
+        |> live("/#{meeting.slug}/#{token}")
+
+      # Baseline: the guest's OWN mount (task 019f498d re-dispatch) now
+      # calls `Meetings.upsert_live_participant/2` so a `.video_tile`
+      # renders for the guest on both their own surface AND on any
+      # subscribed authenticated MeetingLive. So the initial participant
+      # list contains exactly one row — the guest themselves.
+      initial = :sys.get_state(view.pid).socket.assigns
+      assert initial.state == :in_meeting
+      assert length(initial.participants) == 1
+      assert Enum.any?(initial.participants, &String.contains?(&1.display_name, "(guest)"))
+
+      # Seed an ADDITIONAL live participant, then broadcast on the space
+      # presence topic. The guest mount subscribed to `presence_topic(space_id)`
+      # via `MeetingsPubSub.subscribe_presence/1`; the LV's
+      # `{:meeting_presence_update, _}` handler calls `refresh_participants`,
+      # which re-reads from `active_participants_for_space/1` and now sees
+      # both our seeded participant and the guest.
+      {:ok, room} = Meetings.ensure_room(space_id)
+      {:ok, room} = Meetings.activate_room(room)
+      {:ok, _alice} = Meetings.participant_joined(room, %{display_name: "Alice"})
+
+      MeetingsPubSub.broadcast_presence(
+        space_id,
+        {:meeting_presence_update, %{space_id: space_id, active: true, count: 2}}
+      )
+
+      _ = render(view)
+      Process.sleep(50)
+
+      after_broadcast = :sys.get_state(view.pid).socket.assigns
+      assert length(after_broadcast.participants) == 2
     end
   end
 end

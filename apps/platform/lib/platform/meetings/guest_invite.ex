@@ -52,8 +52,8 @@ defmodule Platform.Meetings.GuestInvite do
   * `guest_space_id` (optional, keyword) — id of the dedicated guest
     chat space the host provisioned for this invite. Threaded through
     for the guest-ingress path so ingress can pin writes to the guest
-    space. Omit for legacy call sites (stage 3 GuestMeetingLive tests
-    exercise the no-space path).
+    space. Omit for legacy call sites that never bound a guest space
+    (older tests exercise the no-space path).
   """
   @spec sign(String.t(), integer(), String.t() | nil, keyword()) :: String.t()
   def sign(meeting_slug, expires_at, display_name \\ nil, opts \\ [])
