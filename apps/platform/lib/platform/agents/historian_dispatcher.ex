@@ -266,7 +266,19 @@ defmodule Platform.Agents.HistorianDispatcher do
       content: content,
       metadata:
         Map.merge(
-          %{"source" => "system_event", "event_type" => event_type},
+          # `skip_mention_scan: true` prevents AttentionRouter from tokenising
+          # `@[Name]` occurrences in the embedded 24h activity digest as real
+          # mentions — those are historical references, not live pings. Without
+          # this, every named participant in the last 24h of chat activity
+          # received a `:multi_mention` notification into Higgins's system
+          # space on every Historian pass (surfaced 2026-07-10 by Rowan noticing
+          # Dalton was receiving Historian dispatches meant for Higgins).
+          # See `Platform.Chat.AttentionRouter.mention_scan_enabled?/1`.
+          %{
+            "source" => "system_event",
+            "event_type" => event_type,
+            "skip_mention_scan" => true
+          },
           stringify_keys(extra_metadata)
         )
     })

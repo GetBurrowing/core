@@ -251,7 +251,7 @@ defmodule Platform.Chat.AttentionRouter do
     # for those modes (no double-ping, no ETS heartbeat queue entry).
 
     human_decisions =
-      if here_mention?(message.content) do
+      if mention_scan_enabled?(message) and here_mention?(message.content) do
         here_decisions =
           Enum.map(human_recipients, fn p ->
             %{participant_id: p.id, reason: :here}
@@ -565,29 +565,69 @@ defmodule Platform.Chat.AttentionRouter do
   notification scoping for the editable-messages contract).
   """
   @spec mentioned?(Participant.t(), Message.t()) :: boolean()
-  def mentioned?(%Participant{} = p, %Message{content: content}) when is_binary(content) do
-    downcased = String.downcase(content)
-    {bracketed_tokens, legacy_zone} = extract_bracketed_tokens(downcased)
+  def mentioned?(%Participant{} = p, %Message{content: content} = message)
+      when is_binary(content) do
+    if mention_scan_enabled?(message) do
+      downcased = String.downcase(content)
+      {bracketed_tokens, legacy_zone} = extract_bracketed_tokens(downcased)
 
-    name_match =
-      is_binary(p.display_name) and p.display_name != "" and
-        name_mention?(String.downcase(p.display_name), bracketed_tokens, legacy_zone)
+      name_match =
+        is_binary(p.display_name) and p.display_name != "" and
+          name_mention?(String.downcase(p.display_name), bracketed_tokens, legacy_zone)
 
-    id_match = id_mention?(String.downcase(p.id), bracketed_tokens, legacy_zone)
+      id_match = id_mention?(String.downcase(p.id), bracketed_tokens, legacy_zone)
 
-    # Support user-configured keywords in attention_config["keywords"]
-    keywords = get_in(p.attention_config, ["keywords"]) || []
+      # Support user-configured keywords in attention_config["keywords"]
+      keywords = get_in(p.attention_config, ["keywords"]) || []
 
-    keyword_match =
-      Enum.any?(keywords, fn keyword ->
-        is_binary(keyword) and keyword != "" and
-          String.contains?(downcased, String.downcase(keyword))
-      end)
+      keyword_match =
+        Enum.any?(keywords, fn keyword ->
+          is_binary(keyword) and keyword != "" and
+            String.contains?(downcased, String.downcase(keyword))
+        end)
 
-    name_match or id_match or keyword_match
+      name_match or id_match or keyword_match
+    else
+      false
+    end
   end
 
   def mentioned?(_participant, _message), do: false
+
+  @doc """
+  True unless the message opts out of mention scanning via
+  `metadata["skip_mention_scan"]`.
+
+  System-event pipelines that post messages embedding raw chat activity
+  (Historian digest posts, meeting-summary rebroadcasts, RBAC-scoped
+  external-chat excerpt shares) can stamp `"skip_mention_scan" => true`
+  on the message metadata so quoted `@[Name]` tokens in the embedded
+  content don't fire real mention notifications for every named
+  participant.
+
+  Applies to both `@[here]` broadcast fanout and per-participant named
+  mention routing — anything derived from parsing message content for
+  `@[Name]` structure. Non-mention routing paths (`:directed`, `:watch`,
+  `:active_agent`, per-participant `attention_mode`) are unaffected: the
+  intended recipient of the system-event message still gets their
+  regular routing decision from being an actual participant in the
+  target space.
+
+  Root cause this defends against: `AttentionRouter.extract_mention_tokens/1`
+  scans raw message content with a simple regex — it has no code-fence
+  awareness, no way to know a `@[Name]` inside a quoted digest chunk is
+  a historical reference rather than a live mention. Historian posts
+  routinely embed 20+ real `@[Name]` tokens from the last 24h of chat;
+  every one of those turned into a `:multi_mention` notification for
+  the named agent (surfaced 2026-07-10 when Rowan noticed Dalton was
+  receiving Historian dispatches meant for Higgins).
+  """
+  @spec mention_scan_enabled?(Message.t()) :: boolean()
+  def mention_scan_enabled?(%Message{metadata: metadata}) do
+    Map.get(metadata || %{}, "skip_mention_scan") != true
+  end
+
+  def mention_scan_enabled?(_), do: true
 
   @doc """
   Extract ADR 0037 `@[Display Name]` bracketed mention tokens from content.

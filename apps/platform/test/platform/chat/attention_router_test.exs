@@ -308,6 +308,87 @@ defmodule Platform.Chat.AttentionRouterTest do
     end
   end
 
+  describe "skip_mention_scan metadata flag" do
+    test "silences named-agent mention decisions on messages that opt out" do
+      # System-event pipelines that embed raw chat activity (Historian digest
+      # posts, meeting-summary rebroadcasts) can stamp
+      # `metadata["skip_mention_scan"] = true` on the outgoing message so the
+      # `@[Name]` tokens quoted inside the embedded activity don't get
+      # tokenised as live mentions and fan out to every quoted agent.
+      #
+      # Repro of the 2026-07-10 bug that prompted the flag: Rowan noticed
+      # Dalton was receiving Historian dispatches meant for Higgins. Cause
+      # was the Historian post embedding a 24h digest full of real Rowan→
+      # Dalton `@[Dalton]` mentions from other spaces; AttentionRouter's
+      # regex tokenised each one and produced a `:multi_mention` decision.
+      space = create_space(%{kind: "group"})
+      user = create_participant(space.id)
+
+      agent1 = create_agent(%{name: "Zip"})
+      agent2 = create_agent(%{name: "Nova"})
+      {:ok, _p1} = Chat.add_agent_participant(space.id, agent1, display_name: "Zip")
+      {:ok, _p2} = Chat.add_agent_participant(space.id, agent2, display_name: "Nova")
+      Chat.add_space_agent(space.id, agent1.id, role: "principal")
+      Chat.add_space_agent(space.id, agent2.id, role: "member")
+
+      message =
+        create_message(space.id, user.id, %{
+          content: "digest quotes @[Zip] and @[Nova]",
+          metadata: %{"skip_mention_scan" => true}
+        })
+
+      {:ok, decisions} = AttentionRouter.route(message)
+
+      refute Enum.any?(decisions, fn d -> d.reason in [:mention, :multi_mention] end)
+
+      drain()
+    end
+
+    test "silences @[here] broadcast fan-out on messages that opt out" do
+      # Even if the embedded digest contains a literal `@[here]` string
+      # somewhere (e.g. quoting a real broadcast someone else sent), the
+      # opt-out message must not broadcast to every human recipient of
+      # the system space.
+      space = create_space(%{kind: "channel"})
+      sender = create_participant(space.id)
+      _recipient = create_participant(space.id)
+
+      message =
+        create_message(space.id, sender.id, %{
+          content: "digest: @[here] please read",
+          metadata: %{"skip_mention_scan" => true}
+        })
+
+      {:ok, decisions} = AttentionRouter.route(message)
+
+      refute Enum.any?(decisions, fn d -> d.reason == :here end)
+
+      drain()
+    end
+
+    test "leaves messages WITHOUT the flag fully mention-routed (regression guard)" do
+      # Sanity: the flag must not change routing for the vast majority of
+      # messages that don't set it.
+      space = create_space(%{kind: "group"})
+      user = create_participant(space.id)
+
+      agent1 = create_agent(%{name: "Zip"})
+      {:ok, p1} = Chat.add_agent_participant(space.id, agent1, display_name: "Zip")
+      Chat.add_space_agent(space.id, agent1.id, role: "principal")
+
+      # Same content, no metadata flag.
+      message = create_message(space.id, user.id, %{content: "hey @[Zip]"})
+
+      {:ok, decisions} = AttentionRouter.route(message)
+
+      assert Enum.any?(decisions, fn d ->
+               d.participant_id == p1.id and d.reason == :mention
+             end)
+
+      drain()
+    end
+  end
+
   describe "no mention + active agent" do
     test "routes to active agent and refreshes timeout" do
       space = create_space(%{kind: "channel"})
