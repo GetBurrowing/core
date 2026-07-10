@@ -448,7 +448,7 @@ defmodule Platform.Meetings.IntentClassifier do
         base_url: Map.get(agent, :base_url),
         model: Map.get(agent, :model),
         temperature: 0.0,
-        max_tokens: 256
+        max_tokens: 1024
       ]
       |> Enum.reject(fn {_k, v} -> is_nil(v) end)
 
