@@ -424,6 +424,32 @@ defmodule PlatformWeb.MeetingLiveGuestMountTest do
       assert html =~ "Juno Fairbanks (guest)"
     end
 
+    test "guest layout wrapper uses definite `h-dvh` (not `min-h-dvh`) so `h-full` propagates to the gallery",
+         %{conn: conn} do
+      # Regression: `min-h-dvh` on the guest layout main is a MIN
+      # height, not a definite one. MeetingLive's outer wrapper is
+      # `flex h-full flex-col`, and `h-full` on a min-height-only
+      # ancestor resolves to `auto`, cascading indeterminate height
+      # down the chain. That collapsed the gallery cell's size query
+      # context (`container-type: size` needs a definite size) so the
+      # `@container gallery-cell (aspect-ratio: ...)` rules that size
+      # tiles NEVER MATCHED — tiles fell back to intrinsic ~300×150
+      # px thumbnails floating in a sea of empty stage. Match the
+      # auth shell (`h-[100dvh]`) with a definite viewport height.
+      # Prod incident 2026-07-10 after the guest-consolidation deploy.
+      meeting = create_meeting()
+      expires_at = DateTime.utc_now() |> DateTime.to_unix() |> Kernel.+(3600)
+      token = GuestInvite.sign(meeting.slug, expires_at, "Juno Fairbanks")
+
+      {:ok, _view, html} =
+        conn
+        |> with_meet_host()
+        |> live("/#{meeting.slug}/#{token}")
+
+      assert html =~ ~s(class="h-dvh bg-base-100)
+      refute html =~ ~s(class="min-h-dvh)
+    end
+
     test "omits shell-only chrome (chat panel, copy-guest-link, chat-pane toggles)",
          %{conn: conn} do
       meeting = create_meeting()

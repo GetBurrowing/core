@@ -133,13 +133,41 @@ defmodule PlatformWeb.Layouts do
   Application layout for the guest meeting ingress (task 019f2483 stage 3).
 
   Null-ish outer wrapper — deliberately does NOT render `<.shell_layout>`,
-  `<.icon_rail>`, `<.bottom_rail>`, or any auth-side chrome. Just a
-  full-height `bg-base-100` shell so the LV owns the entire viewport
-  (safe-area handled by the root doc's viewport meta + `min-h-dvh`).
+  `<.icon_rail>`, `<.bottom_rail>`, or any auth-side chrome.
+
+  ## Definite viewport height
+
+  Uses `h-dvh` (definite `height: 100dvh`), NOT `min-h-dvh`. The previous
+  `min-h-dvh` looked equivalent for the name-entry / expired card states
+  (which just center their content in whatever space they get), but broke
+  the in-meeting Gallery layout hard: MeetingLive's outer wrapper is
+  `flex h-full flex-col` and the gallery cell CSS uses
+  `container-type: size` with an `@container gallery-cell` query to size
+  each 16:9 video tile against its cell's aspect ratio.
+
+  `h-full` on a `min-height`-only ancestor is indeterminate — the CSS
+  spec resolves it to `auto`, which cascades down the flex chain so
+  `[data-gallery-cell]` has no definite size. `container-type: size`
+  needs a definite size to establish a size query context; without one,
+  none of the `@container` rules match, and the tile falls back to just
+  `aspect-ratio: 16/9; max-width: 100%; max-height: 100%` — with no
+  explicit width/height, the browser renders it at its intrinsic
+  ~300×150 size, floating as a thumbnail regardless of how large the
+  cell tracks are. That's the "shockingly small camera views" bug Rowan
+  hit on prod on 2026-07-10 after the guest-consolidation deploy.
+
+  The auth shell (`shell.html.heex`) uses `h-[100dvh]` for the same
+  reason — definite viewport height so percentages propagate cleanly to
+  every leaf that cares (gallery cells, canvas surfaces, screen-share
+  fits). Guest surface needs to match.
+
+  The name-entry / expired / invalid card states already center their
+  content in a `flex items-center justify-center` block, so they were
+  unaffected by the wrong height and are still unaffected by the fix.
   """
   def guest(assigns) do
     ~H"""
-    <main class="min-h-dvh bg-base-100 text-base-content">
+    <main class="h-dvh bg-base-100 text-base-content">
       {@inner_content}
     </main>
 
