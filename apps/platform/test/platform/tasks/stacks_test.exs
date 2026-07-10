@@ -1436,6 +1436,420 @@ defmodule Platform.Tasks.StacksTest do
     end
   end
 
+  describe "start_planning/1 with dep inference" do
+    alias Platform.Tasks.Stacks.DepInference.StubAdapter
+
+    setup do
+      StubAdapter.reset_calls()
+      :ok
+    end
+
+    test "commits inferred edges via add_dependency_edge and reports edges_authored" do
+      {:ok, project} = Tasks.create_project(%{name: "DepInf happy"})
+      stack = stack_fixture(project_id: project.id)
+
+      {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "A creates types"})
+      {:ok, b} = Tasks.create_task(%{project_id: project.id, title: "B consumes types"})
+      {:ok, c} = Tasks.create_task(%{project_id: project.id, title: "C unrelated"})
+
+      {:ok, _} = Stacks.add_task(stack, a)
+      {:ok, _} = Stacks.add_task(stack, b)
+      {:ok, _} = Stacks.add_task(stack, c)
+
+      Process.put(
+        {:dep_inference_stub, :response},
+        {:ok,
+         Jason.encode!(%{
+           "edges" => [
+             %{
+               "from_task_id" => b.id,
+               "to_task_id" => a.id,
+               "reason" => "B consumes types created by A"
+             }
+           ]
+         })}
+      )
+
+      assert {:ok,
+              %{
+                planning: planning,
+                edges_authored: 1,
+                edges_skipped_reason: nil
+              }} = Stacks.start_planning(stack)
+
+      # Cascade still moves all backlog members to planning.
+      assert length(planning) == 3
+
+      # The inferred edge landed in the JSONB dependencies column via
+      # the standard add_dependency_edge/4 path.
+      updated_b = Tasks.get_task_record(b.id)
+      assert [%{"task_id" => to_id, "kind" => "blocks"}] = updated_b.dependencies
+      assert to_id == a.id
+
+      # A and C stay dep-free.
+      assert Tasks.get_task_record(a.id).dependencies in [nil, []]
+      assert Tasks.get_task_record(c.id).dependencies in [nil, []]
+
+      assert Process.get({:dep_inference_stub, :calls}) == 1
+    end
+
+    test "stub returning zero edges writes nothing but still cascades" do
+      {:ok, project} = Tasks.create_project(%{name: "DepInf empty"})
+      stack = stack_fixture(project_id: project.id)
+
+      {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "A"})
+      {:ok, b} = Tasks.create_task(%{project_id: project.id, title: "B"})
+
+      {:ok, _} = Stacks.add_task(stack, a)
+      {:ok, _} = Stacks.add_task(stack, b)
+
+      Process.put({:dep_inference_stub, :response}, {:ok, ~s({"edges": []})})
+
+      assert {:ok,
+              %{
+                planning: planning,
+                edges_authored: 0,
+                edges_skipped_reason: nil
+              }} = Stacks.start_planning(stack)
+
+      assert length(planning) == 2
+      assert Tasks.get_task_record(a.id).dependencies in [nil, []]
+      assert Tasks.get_task_record(b.id).dependencies in [nil, []]
+      assert Process.get({:dep_inference_stub, :calls}) == 1
+    end
+
+    test "cyclic edges twice: zero writes, cascade still runs, warning logged" do
+      {:ok, project} = Tasks.create_project(%{name: "DepInf cycle"})
+      stack = stack_fixture(project_id: project.id)
+
+      {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "A"})
+      {:ok, b} = Tasks.create_task(%{project_id: project.id, title: "B"})
+      {:ok, c} = Tasks.create_task(%{project_id: project.id, title: "C"})
+
+      {:ok, _} = Stacks.add_task(stack, a)
+      {:ok, _} = Stacks.add_task(stack, b)
+      {:ok, _} = Stacks.add_task(stack, c)
+
+      cyclic =
+        Jason.encode!(%{
+          "edges" => [
+            %{"from_task_id" => a.id, "to_task_id" => b.id, "reason" => "a->b"},
+            %{"from_task_id" => b.id, "to_task_id" => c.id, "reason" => "b->c"},
+            %{"from_task_id" => c.id, "to_task_id" => a.id, "reason" => "c->a"}
+          ]
+        })
+
+      # Two successive cyclic responses — first commit hits :cycle,
+      # revert path fires, retry hits :cycle again, terminal fallback.
+      Process.put(
+        {:dep_inference_stub, :response},
+        [{:ok, cyclic}, {:ok, cyclic}]
+      )
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert {:ok,
+                  %{
+                    planning: planning,
+                    edges_authored: 0,
+                    edges_skipped_reason: :cycle
+                  }} = Stacks.start_planning(stack)
+
+          assert length(planning) == 3
+        end)
+
+      assert log =~ "cycle detected"
+
+      # No inference edges landed after the double-cycle rollback.
+      Enum.each([a, b, c], fn t ->
+        assert Tasks.get_task_record(t.id).dependencies in [nil, []]
+      end)
+
+      # Adapter called exactly twice (initial + one cycle retry).
+      assert Process.get({:dep_inference_stub, :calls}) == 2
+    end
+
+    test "pre-authored in-stack edge short-circuits inference (adapter never called)" do
+      {:ok, project} = Tasks.create_project(%{name: "DepInf override"})
+      stack = stack_fixture(project_id: project.id)
+
+      {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "A"})
+      {:ok, b} = Tasks.create_task(%{project_id: project.id, title: "B"})
+      {:ok, c} = Tasks.create_task(%{project_id: project.id, title: "C"})
+
+      {:ok, _} = Stacks.add_task(stack, a)
+      {:ok, _} = Stacks.add_task(stack, b)
+      {:ok, _} = Stacks.add_task(stack, c)
+
+      # Pre-author a user edge B -> A on the same stack.
+      {:ok, _} = Stacks.add_dependency_edge(stack, b.id, a.id)
+
+      # Prime the stub with a plausible extra edge. If inference DID
+      # run, this would be written. It must not.
+      Process.put(
+        {:dep_inference_stub, :response},
+        {:ok,
+         Jason.encode!(%{
+           "edges" => [
+             %{"from_task_id" => c.id, "to_task_id" => b.id, "reason" => "should not land"}
+           ]
+         })}
+      )
+
+      assert {:ok,
+              %{
+                planning: planning,
+                edges_authored: 0,
+                edges_skipped_reason: :user_override_present
+              }} = Stacks.start_planning(stack)
+
+      assert length(planning) == 3
+
+      # Pre-existing B->A survives; C is untouched.
+      assert [%{"task_id" => to_id}] = Tasks.get_task_record(b.id).dependencies
+      assert to_id == a.id
+      assert Tasks.get_task_record(c.id).dependencies in [nil, []]
+
+      # Idempotency short-circuit: adapter was NEVER called.
+      assert Process.get({:dep_inference_stub, :calls}) == 0
+    end
+
+    test "adapter erroring twice: zero writes, cascade still runs" do
+      {:ok, project} = Tasks.create_project(%{name: "DepInf adapter fail"})
+      stack = stack_fixture(project_id: project.id)
+
+      {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "A"})
+      {:ok, b} = Tasks.create_task(%{project_id: project.id, title: "B"})
+
+      {:ok, _} = Stacks.add_task(stack, a)
+      {:ok, _} = Stacks.add_task(stack, b)
+
+      Process.put(
+        {:dep_inference_stub, :response},
+        [{:error, :timeout}, {:error, :timeout}]
+      )
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert {:ok,
+                  %{
+                    planning: planning,
+                    edges_authored: 0,
+                    edges_skipped_reason: :adapter_failed
+                  }} = Stacks.start_planning(stack)
+
+          assert length(planning) == 2
+        end)
+
+      assert log =~ "terminal failure"
+
+      assert Tasks.get_task_record(a.id).dependencies in [nil, []]
+      assert Tasks.get_task_record(b.id).dependencies in [nil, []]
+
+      # try_infer_with_retry: first call fails, retries once => 2 calls total.
+      assert Process.get({:dep_inference_stub, :calls}) == 2
+    end
+  end
+
+  describe "start_planning/1 dep-inference telemetry" do
+    alias Platform.Tasks.Stacks.DepInference.StubAdapter
+
+    setup do
+      StubAdapter.reset_calls()
+      :ok
+    end
+
+    test "emits :computed with source=:agent and edges_count on happy path" do
+      {:ok, project} = Tasks.create_project(%{name: "Telemetry happy"})
+      stack = stack_fixture(project_id: project.id)
+
+      {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "A"})
+      {:ok, b} = Tasks.create_task(%{project_id: project.id, title: "B"})
+
+      {:ok, _} = Stacks.add_task(stack, a)
+      {:ok, _} = Stacks.add_task(stack, b)
+
+      Process.put(
+        {:dep_inference_stub, :response},
+        {:ok,
+         Jason.encode!(%{
+           "edges" => [
+             %{"from_task_id" => b.id, "to_task_id" => a.id, "reason" => "B consumes A"}
+           ]
+         })}
+      )
+
+      ref =
+        :telemetry_test.attach_event_handlers(self(), [
+          [:platform, :stacks, :dep_inference, :computed],
+          [:platform, :stacks, :dep_inference, :failed]
+        ])
+
+      assert {:ok, %{edges_authored: 1, edges_skipped_reason: nil}} =
+               Stacks.start_planning(stack)
+
+      assert_receive {[:platform, :stacks, :dep_inference, :computed], ^ref, measurements,
+                      metadata}
+
+      assert measurements.edges_count == 1
+      assert is_integer(measurements.duration_ms)
+      assert measurements.duration_ms >= 0
+      assert metadata.stack_id == stack.id
+      assert metadata.source == :agent
+      assert metadata.retry_count == 0
+
+      # Failed event must NOT fire on the happy path.
+      refute_received {[:platform, :stacks, :dep_inference, :failed], ^ref, _, _}
+
+      :telemetry.detach(ref)
+    end
+
+    test "emits :computed with source=:user_override_skip when idempotency short-circuits" do
+      {:ok, project} = Tasks.create_project(%{name: "Telemetry override"})
+      stack = stack_fixture(project_id: project.id)
+
+      {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "A"})
+      {:ok, b} = Tasks.create_task(%{project_id: project.id, title: "B"})
+
+      {:ok, _} = Stacks.add_task(stack, a)
+      {:ok, _} = Stacks.add_task(stack, b)
+
+      # Pre-author an in-stack edge so inference is skipped.
+      {:ok, _} = Stacks.add_dependency_edge(stack, b.id, a.id)
+
+      ref =
+        :telemetry_test.attach_event_handlers(self(), [
+          [:platform, :stacks, :dep_inference, :computed]
+        ])
+
+      assert {:ok, %{edges_authored: 0, edges_skipped_reason: :user_override_present}} =
+               Stacks.start_planning(stack)
+
+      assert_receive {[:platform, :stacks, :dep_inference, :computed], ^ref, measurements,
+                      metadata}
+
+      assert measurements.edges_count == 0
+      assert metadata.stack_id == stack.id
+      assert metadata.source == :user_override_skip
+      assert metadata.retry_count == 0
+
+      :telemetry.detach(ref)
+    end
+
+    test "emits :failed with reason=:cycle after cyclic-twice adapter response" do
+      {:ok, project} = Tasks.create_project(%{name: "Telemetry cycle"})
+      stack = stack_fixture(project_id: project.id)
+
+      {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "A"})
+      {:ok, b} = Tasks.create_task(%{project_id: project.id, title: "B"})
+      {:ok, c} = Tasks.create_task(%{project_id: project.id, title: "C"})
+
+      {:ok, _} = Stacks.add_task(stack, a)
+      {:ok, _} = Stacks.add_task(stack, b)
+      {:ok, _} = Stacks.add_task(stack, c)
+
+      cyclic =
+        Jason.encode!(%{
+          "edges" => [
+            %{"from_task_id" => a.id, "to_task_id" => b.id, "reason" => "a->b"},
+            %{"from_task_id" => b.id, "to_task_id" => c.id, "reason" => "b->c"},
+            %{"from_task_id" => c.id, "to_task_id" => a.id, "reason" => "c->a"}
+          ]
+        })
+
+      Process.put({:dep_inference_stub, :response}, [{:ok, cyclic}, {:ok, cyclic}])
+
+      ref =
+        :telemetry_test.attach_event_handlers(self(), [
+          [:platform, :stacks, :dep_inference, :failed]
+        ])
+
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert {:ok, %{edges_authored: 0, edges_skipped_reason: :cycle}} =
+                 Stacks.start_planning(stack)
+      end)
+
+      assert_receive {[:platform, :stacks, :dep_inference, :failed], ^ref, measurements, metadata}
+
+      assert is_integer(measurements.duration_ms)
+      assert metadata.stack_id == stack.id
+      assert metadata.reason == :cycle
+      assert metadata.retry_count == 1
+
+      :telemetry.detach(ref)
+    end
+
+    test "emits :failed with reason=:adapter_failed after two adapter errors" do
+      {:ok, project} = Tasks.create_project(%{name: "Telemetry adapter fail"})
+      stack = stack_fixture(project_id: project.id)
+
+      {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "A"})
+      {:ok, b} = Tasks.create_task(%{project_id: project.id, title: "B"})
+
+      {:ok, _} = Stacks.add_task(stack, a)
+      {:ok, _} = Stacks.add_task(stack, b)
+
+      Process.put(
+        {:dep_inference_stub, :response},
+        [{:error, :timeout}, {:error, :timeout}]
+      )
+
+      ref =
+        :telemetry_test.attach_event_handlers(self(), [
+          [:platform, :stacks, :dep_inference, :failed]
+        ])
+
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert {:ok, %{edges_authored: 0, edges_skipped_reason: :adapter_failed}} =
+                 Stacks.start_planning(stack)
+      end)
+
+      assert_receive {[:platform, :stacks, :dep_inference, :failed], ^ref, _measurements,
+                      metadata}
+
+      assert metadata.stack_id == stack.id
+      assert metadata.reason == :adapter_failed
+      assert metadata.retry_count == 1
+
+      :telemetry.detach(ref)
+    end
+
+    test "emits :failed with reason=:parse_failed on non-JSON adapter response" do
+      {:ok, project} = Tasks.create_project(%{name: "Telemetry parse fail"})
+      stack = stack_fixture(project_id: project.id)
+
+      {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "A"})
+      {:ok, b} = Tasks.create_task(%{project_id: project.id, title: "B"})
+
+      {:ok, _} = Stacks.add_task(stack, a)
+      {:ok, _} = Stacks.add_task(stack, b)
+
+      Process.put(
+        {:dep_inference_stub, :response},
+        [{:ok, "not-json { garbage"}, {:ok, "still not json"}]
+      )
+
+      ref =
+        :telemetry_test.attach_event_handlers(self(), [
+          [:platform, :stacks, :dep_inference, :failed]
+        ])
+
+      ExUnit.CaptureLog.capture_log(fn ->
+        assert {:ok, %{edges_authored: 0, edges_skipped_reason: :parse_failed}} =
+                 Stacks.start_planning(stack)
+      end)
+
+      assert_receive {[:platform, :stacks, :dep_inference, :failed], ^ref, _measurements,
+                      metadata}
+
+      assert metadata.stack_id == stack.id
+      assert metadata.reason == :parse_failed
+      assert metadata.retry_count == 1
+
+      :telemetry.detach(ref)
+    end
+  end
+
   describe "regression?/2" do
     test "returns true for backward lifecycle steps" do
       assert Stacks.regression?("in_review", "in_progress")

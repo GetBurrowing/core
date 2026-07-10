@@ -909,6 +909,46 @@ defmodule Platform.Orchestration.PromptTemplates do
         dispatch fires regardless of what you flag — your annotations exist so Rowan sees
         drift before it compounds.\
         """
+      },
+      %{
+        slug: "stacks.dep_inference.v1",
+        name: "Task Stack Dependency Inference (v1)",
+        description:
+          "Rendered by Platform.Tasks.Stacks.DepInference before the LLM round-trip. " <>
+            "Given a task stack and its members (id / title / description), instruct the " <>
+            "model to return a JSON list of within-stack dependency edges the planner " <>
+            "cascade can persist via Stacks.add_dependency_edge/4.",
+        variables: [
+          "stack_name",
+          "stack_description",
+          "members_json"
+        ],
+        content: """
+        You infer within-stack task dependency edges for a task stack. You output STRICT JSON ONLY — no prose commentary, no markdown fences, no leading or trailing text.
+
+        ## Stack
+        Name: {{stack_name}}
+        Description: {{stack_description}}
+
+        ## Members (JSON array of {id, title, description})
+        {{members_json}}
+
+        ## Your job
+        Read each member and infer which members MUST wait on which other members before they can start (a "blocks" dependency). Typical signals: member B's description references a type, module, endpoint, migration, or artifact that member A creates; member C consumes a table/column/schema/route defined by member B; member D's tests exercise behavior that member A implements.
+
+        ## Output contract (strict)
+        Return a JSON object of exactly this shape:
+
+        {"edges": [{"from_task_id": "<uuid>", "to_task_id": "<uuid>", "reason": "<short natural-language rationale>"}]}
+
+        Rules — a violation is a wrong answer:
+        - The `from_task_id` is the member that WAITS on `to_task_id`. Read literally: "from_task_id is blocked by to_task_id."
+        - Both `from_task_id` and `to_task_id` MUST be values that appear in the `id` field of the members list above. Do not invent uuids. Do not reference tasks outside this stack.
+        - Never emit a self-edge (`from_task_id == to_task_id`).
+        - When no dependencies are inferable, return exactly `{"edges": []}`. Do NOT invent speculative edges to fill the array.
+        - `reason` is a single short sentence (under 200 chars) — enough for a human reviewer to sanity-check the edge.
+        - Output the JSON object as the entire response body. No prose commentary. No markdown fences. No leading or trailing text.
+        """
       }
     ]
   end

@@ -336,6 +336,98 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
     end
   end
 
+  describe "default_content_for_slug/1 — stacks.dep_inference.v1" do
+    test "registers the slug with the planner-spec'd variables list" do
+      descriptor =
+        PromptTemplates.default_templates()
+        |> Enum.find(&(&1.slug == "stacks.dep_inference.v1"))
+
+      assert descriptor,
+             "stacks.dep_inference.v1 must appear in default_templates/0"
+
+      for var <- ~w(stack_name stack_description members_json) do
+        assert var in descriptor.variables,
+               "stacks.dep_inference.v1 variables list must include #{var}"
+      end
+    end
+
+    test "content carries the three interpolation placeholders and JSON-only contract" do
+      content = PromptTemplates.default_content_for_slug("stacks.dep_inference.v1")
+      assert is_binary(content)
+
+      # Mustache placeholders the DepInference module will fill in.
+      for placeholder <- ["{{stack_name}}", "{{stack_description}}", "{{members_json}}"] do
+        assert content =~ placeholder,
+               "expected stacks.dep_inference.v1 to carry #{placeholder}"
+      end
+
+      # Output-shape contract — the module's parser will Jason.decode this
+      # and reach for the "edges" key. If the prompt stops naming that key,
+      # the parser silently drops every edge and inference degrades to 0.
+      assert content =~ ~s("edges")
+      assert content =~ "from_task_id"
+      assert content =~ "to_task_id"
+      assert content =~ "reason"
+
+      # The rules the parser depends on — the module strips self-edges and
+      # orphan ids on its side, but the LLM shouldn't be emitting them in
+      # the first place, so the prompt must forbid them explicitly.
+      assert content =~ "self-edge" or content =~ "self_edge"
+
+      assert content =~ "from_task_id is the member that WAITS" or
+               content =~ "blocked by to_task_id"
+
+      # Empty-edges convention — the parser treats `{"edges": []}` as a
+      # legitimate "no dependencies inferable" response, not a failure.
+      assert content =~ ~s({"edges": []})
+
+      # JSON-only response contract — the adapter passes the raw body to
+      # Jason.decode without stripping prose or fences.
+      assert content =~ "JSON" or content =~ "json"
+      assert content =~ "no prose" or content =~ "No prose"
+    end
+
+    test "render_template interpolates a fixture assigns map into all three placeholders" do
+      :ok = PromptTemplates.seed_defaults()
+
+      members_json =
+        Jason.encode!([
+          %{
+            id: "00000000-0000-0000-0000-000000000001",
+            title: "Add users table",
+            description: "Create the users schema + migration."
+          },
+          %{
+            id: "00000000-0000-0000-0000-000000000002",
+            title: "Add auth context",
+            description: "Register/login built on the users schema."
+          }
+        ])
+
+      assigns = %{
+        stack_name: "Auth foundation",
+        stack_description: "Ship user accounts and session-based login.",
+        members_json: members_json
+      }
+
+      assert {:ok, rendered} =
+               PromptTemplates.render_template("stacks.dep_inference.v1", assigns)
+
+      # Every placeholder is fully consumed.
+      refute rendered =~ "{{stack_name}}"
+      refute rendered =~ "{{stack_description}}"
+      refute rendered =~ "{{members_json}}"
+
+      # Interpolated values arrive intact.
+      assert rendered =~ "Auth foundation"
+      assert rendered =~ "Ship user accounts and session-based login."
+      assert rendered =~ "00000000-0000-0000-0000-000000000001"
+      assert rendered =~ "00000000-0000-0000-0000-000000000002"
+      assert rendered =~ "Add users table"
+      assert rendered =~ "Add auth context"
+    end
+  end
+
   describe "seed_defaults/0 + migration parity" do
     test "seed_defaults seeds dispatch.planning with current default content" do
       :ok = PromptTemplates.seed_defaults()

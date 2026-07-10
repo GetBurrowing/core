@@ -19,6 +19,7 @@ defmodule Platform.Tasks.Stacks do
   alias Platform.Repo
   alias Platform.Tasks
   alias Platform.Tasks.{ReviewRequests, Stack, StackDeployer, Task}
+  alias Platform.Tasks.Stacks.DepInference
 
   @slug_regex ~r/^[a-z0-9][a-z0-9-]*$/
   @max_slug_length 60
@@ -288,38 +289,103 @@ defmodule Platform.Tasks.Stacks do
   Mirrors `start_stack/1`'s cascade machinery, but as a backlog-only
   fan-out into `planning`:
 
-    * Loads `members/1` and, for every member currently at `backlog`,
-      transitions it `backlog -> planning` via `Tasks.transition_task/2`
-      using the same `cascade_member/4` reducer. Members already past
-      `backlog` (`planning`, `stack_pending`, `in_progress`, …) are left
-      untouched — never illegally re-transitioned.
+    * Loads `members/1` and, before the cascade, invokes
+      `Platform.Tasks.Stacks.DepInference.infer_edges/2` on the member
+      set. Returned edges are persisted via `add_dependency_edge/4` so
+      they inherit the existing DAG validation, cross-stack guard, and
+      rollback semantics (ADR 0045). Idempotent: if any member already
+      carries an in-stack `dependencies` entry — a signal that a user or
+      prior invocation authored edges — inference is skipped entirely to
+      respect the override and avoid duplicate LLM spend.
+    * For every member currently at `backlog`, transitions it
+      `backlog -> planning` via `Tasks.transition_task/2` using the same
+      `cascade_member/4` reducer. Members already past `backlog`
+      (`planning`, `stack_pending`, `in_progress`, …) are left untouched
+      — never illegally re-transitioned.
     * Does NOT itself write the stack status: `Tasks.transition_task/2`
       already runs `maybe_recompute_stack/1`, and a stack of all-`planning`
       members correctly rolls up to `forming` per `rollup_status_for/1`.
 
-  Returns `{:ok, %{stack: stack, planning: [Task.t()]}}` on full success
-  (an empty stack returns `planning: []`), `{:partial, %{stack: stack,
-  planning: [...], errors: [...]}}` when some members fail to transition,
-  and `{:error, :stack_not_found}` for an unknown id.
+  ## Dep-inference behaviour
+
+    * `try_infer_with_retry/2` calls `DepInference.infer_edges/2` and
+      retries once on `{:error, :parse_failed}` or `{:error,
+      :adapter_failed}`; up to 2 adapter calls per attempt.
+    * Returned edges are written sequentially through
+      `add_dependency_edge/4`. If any write returns `{:error, :cycle, _}`
+      the already-committed inference edges are reverted via
+      `remove_dependency_edge/4` and inference is retried ONCE. A second
+      cycle logs a `[Stacks.start_planning]` warning and falls through to
+      the cascade with `edges_authored: 0, edges_skipped_reason: :cycle`.
+    * Terminal `:parse_failed` / `:adapter_failed` after retry logs a
+      warning, sets `edges_authored: 0`, `edges_skipped_reason: reason`,
+      and lets the cascade run.
+
+  ## Persistence deviation from ADR
+
+  The ADR describes a conceptual `stack_dependencies` shape; the actual
+  storage is the JSONB `tasks.dependencies` column already used by the
+  broader edge-mutation surface. This module reuses that path and does
+  NOT introduce a new table — a future refactor can migrate if needed.
+
+  ## Return shape
+
+  `{:ok, %{stack, planning, edges_authored, edges_skipped_reason}}` on
+  success (an empty stack returns `planning: []`, `edges_authored: 0`,
+  and `edges_skipped_reason: nil` when inference ran cleanly). `{:partial,
+  ...}` when some members fail to transition — inference-authored edges
+  are NOT rolled back for a partial cascade, matching the existing partial
+  surface. `{:error, :stack_not_found}` for an unknown id.
   """
   @spec start_planning(Stack.t() | binary()) ::
-          {:ok, %{stack: Stack.t(), planning: [Task.t()]}}
+          {:ok,
+           %{
+             stack: Stack.t(),
+             planning: [Task.t()],
+             edges_authored: non_neg_integer(),
+             edges_skipped_reason: atom() | nil
+           }}
           | {:partial,
              %{
                stack: Stack.t(),
                planning: [Task.t()],
+               edges_authored: non_neg_integer(),
+               edges_skipped_reason: atom() | nil,
                errors: [%{task_id: String.t(), target_status: String.t(), reason: term()}]
              }}
           | {:error, :stack_not_found | term()}
   def start_planning(%Stack{} = stack) do
     members = members(stack)
 
+    start_time = System.monotonic_time(:millisecond)
+    {edges_authored, edges_skipped_reason, retry_count} = infer_and_persist_edges(stack, members)
+    duration_ms = System.monotonic_time(:millisecond) - start_time
+
+    emit_dep_inference_telemetry(
+      stack,
+      edges_authored,
+      edges_skipped_reason,
+      retry_count,
+      duration_ms
+    )
+
+    # Re-read members so downstream cascade sees any freshly-written
+    # dep edges. Not strictly required for the cascade math (it only
+    # inspects `status`), but keeps the returned struct consistent
+    # with the post-inference DB state.
+    members_for_cascade = if edges_authored > 0, do: members(stack), else: members
+
     {planning, errors} =
-      Enum.reduce(members, {[], []}, fn member, {ok, errs} ->
+      Enum.reduce(members_for_cascade, {[], []}, fn member, {ok, errs} ->
         cascade_member(member, "planning", ok, errs)
       end)
 
-    result = %{stack: stack, planning: Enum.reverse(planning)}
+    result = %{
+      stack: stack,
+      planning: Enum.reverse(planning),
+      edges_authored: edges_authored,
+      edges_skipped_reason: edges_skipped_reason
+    }
 
     case errors do
       [] -> {:ok, result}
@@ -332,6 +398,181 @@ defmodule Platform.Tasks.Stacks do
       %Stack{} = stack -> start_planning(stack)
       nil -> {:error, :stack_not_found}
     end
+  end
+
+  # ── Dep inference helpers ─────────────────────────────────────────────
+
+  # Returns `{edges_authored, edges_skipped_reason, retry_count}`.
+  #   * `{n, nil, r}` — inference ran, n edges committed, r retries used
+  #   * `{0, :user_override_present, 0}` — pre-existing in-stack edge, skipped
+  #   * `{0, :cycle | :parse_failed | :adapter_failed | :empty_response, r}`
+  #     — inference (and retry) failed terminally; cascade still proceeds.
+  defp infer_and_persist_edges(_stack, []), do: {0, nil, 0}
+
+  defp infer_and_persist_edges(%Stack{} = stack, members) do
+    if any_in_stack_edge_present?(members, stack.id) do
+      {0, :user_override_present, 0}
+    else
+      attempt_inference(stack, members, 0)
+    end
+  end
+
+  # `attempt` counter guards the single-shot cycle retry. `0` = first
+  # attempt, `1` = retry after cycle. Returns
+  # `{edges_authored, reason_or_nil, cumulative_retry_count}`.
+  defp attempt_inference(stack, members, attempt) do
+    case try_infer_with_retry(stack, members) do
+      {:ok, edges, adapter_retries} ->
+        case commit_edges(stack, edges) do
+          {:ok, count} ->
+            {count, nil, adapter_retries + attempt}
+
+          {:error, :cycle} when attempt == 0 ->
+            Logger.warning(
+              "[Stacks.start_planning] cycle detected in inferred edges (stack #{stack.id}); retrying once"
+            )
+
+            attempt_inference(stack, members, 1)
+
+          {:error, :cycle} ->
+            Logger.warning(
+              "[Stacks.start_planning] cycle detected on retry (stack #{stack.id}); dropping inferred edges"
+            )
+
+            {0, :cycle, adapter_retries + attempt}
+        end
+
+      {:error, reason, adapter_retries} ->
+        Logger.warning(
+          "[Stacks.start_planning] dep inference terminal failure (stack #{stack.id}, reason=#{reason})"
+        )
+
+        {0, reason, adapter_retries + attempt}
+    end
+  end
+
+  # `DepInference.infer_edges/2` plus a single retry on parse/adapter
+  # failure. Empty-response and terminal errors bubble up as-is.
+  # Returns `{:ok, edges, retries}` / `{:error, reason, retries}` where
+  # `retries` is 0 when the first call succeeded / bubbled, 1 when a
+  # single retry fired.
+  defp try_infer_with_retry(stack, members) do
+    case DepInference.infer_edges(stack, members) do
+      {:ok, edges} ->
+        {:ok, edges, 0}
+
+      {:error, reason} when reason in [:parse_failed, :adapter_failed] ->
+        case DepInference.infer_edges(stack, members) do
+          {:ok, edges} -> {:ok, edges, 1}
+          {:error, reason2} -> {:error, reason2, 1}
+        end
+
+      {:error, reason} ->
+        {:error, reason, 0}
+    end
+  end
+
+  # Sequentially write edges via `add_dependency_edge/4`. On the first
+  # `{:error, :cycle, _}`, revert already-committed inference edges via
+  # `remove_dependency_edge/4` and return `{:error, :cycle}` so the
+  # caller can retry inference. Non-cycle write errors (duplicate edge,
+  # cross-stack dep, etc.) are logged and skipped — the caller's edge
+  # count reflects only what actually landed.
+  defp commit_edges(stack, edges) do
+    Enum.reduce_while(edges, {:ok, 0, []}, fn edge, {:ok, count, committed} ->
+      case add_dependency_edge(stack, edge.from_task_id, edge.to_task_id) do
+        {:ok, _} ->
+          {:cont, {:ok, count + 1, [edge | committed]}}
+
+        {:error, :cycle, _path} ->
+          revert_edges(stack, committed)
+          {:halt, {:error, :cycle}}
+
+        {:error, other} ->
+          Logger.warning(
+            "[Stacks.start_planning] skipping inferred edge #{edge.from_task_id}->#{edge.to_task_id}: #{inspect(other)}"
+          )
+
+          {:cont, {:ok, count, committed}}
+
+        {:error, other, _payload} ->
+          Logger.warning(
+            "[Stacks.start_planning] skipping inferred edge #{edge.from_task_id}->#{edge.to_task_id}: #{inspect(other)}"
+          )
+
+          {:cont, {:ok, count, committed}}
+      end
+    end)
+    |> case do
+      {:ok, count, _committed} -> {:ok, count}
+      {:error, :cycle} -> {:error, :cycle}
+    end
+  end
+
+  defp revert_edges(stack, edges) do
+    Enum.each(edges, fn edge ->
+      _ = remove_dependency_edge(stack, edge.from_task_id, edge.to_task_id)
+    end)
+  end
+
+  # Fire dep-inference telemetry after the inference/persist stage
+  # finishes. Downstream aggregation (Prometheus, LiveDashboard) can
+  # subscribe to `[:platform, :stacks, *]` globs; we deliberately do NOT
+  # attach a handler here — telemetry is fire-and-forget at emit time.
+  #
+  # Two events:
+  #   * `:computed` — inference ran (successfully OR was skipped due to
+  #     a pre-existing user override). Measurements include `edges_count`
+  #     and `duration_ms`; metadata carries `source` = `:agent` for a
+  #     real inference call, `:user_override_skip` for the idempotency
+  #     short-circuit.
+  #   * `:failed` — terminal failure after any retry: :cycle,
+  #     :parse_failed, :adapter_failed, :empty_response. Measurements
+  #     carry `duration_ms`; metadata carries the terminal `reason`.
+  defp emit_dep_inference_telemetry(stack, edges_authored, reason, retry_count, duration_ms) do
+    case reason do
+      nil ->
+        :telemetry.execute(
+          [:platform, :stacks, :dep_inference, :computed],
+          %{edges_count: edges_authored, duration_ms: duration_ms},
+          %{stack_id: stack.id, retry_count: retry_count, source: :agent}
+        )
+
+      :user_override_present ->
+        :telemetry.execute(
+          [:platform, :stacks, :dep_inference, :computed],
+          %{edges_count: 0, duration_ms: duration_ms},
+          %{stack_id: stack.id, retry_count: 0, source: :user_override_skip}
+        )
+
+      terminal ->
+        :telemetry.execute(
+          [:platform, :stacks, :dep_inference, :failed],
+          %{duration_ms: duration_ms},
+          %{stack_id: stack.id, reason: terminal, retry_count: retry_count}
+        )
+    end
+  end
+
+  # Returns true if any member already has a `dependencies` entry whose
+  # `task_id` is another same-stack member's id — the signal that
+  # something (user, prior invocation) has already authored an in-stack
+  # edge and inference should be skipped for idempotency.
+  @spec any_in_stack_edge_present?([Task.t()], binary()) :: boolean()
+  defp any_in_stack_edge_present?(members, _stack_id) do
+    member_ids = MapSet.new(members, & &1.id)
+
+    Enum.any?(members, fn %Task{id: id, dependencies: deps} ->
+      deps
+      |> List.wrap()
+      |> Enum.any?(fn
+        %{"task_id" => task_id} when is_binary(task_id) ->
+          task_id != id and MapSet.member?(member_ids, task_id)
+
+        _ ->
+          false
+      end)
+    end)
   end
 
   @doc """

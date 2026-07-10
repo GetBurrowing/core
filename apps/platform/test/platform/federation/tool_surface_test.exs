@@ -3358,6 +3358,125 @@ defmodule Platform.Federation.ToolSurfaceTest do
       assert failed_id == bad_member.id
     end
 
+    test "stack_start_planning payload includes edges_authored:1 when inference writes an edge" do
+      # Stage 4 (ADR 0045): confirm the MCP response envelope surfaces
+      # `edges_authored` for the happy stub path. Uses the DepInference
+      # StubAdapter to inject a single-edge canned response.
+      alias Platform.Tasks.Stacks.DepInference.StubAdapter
+      StubAdapter.reset_calls()
+
+      project = create_project()
+      slug = "shim-sp-edges-authored-#{System.unique_integer([:positive])}"
+
+      {:ok, %{stack_id: stack_id}} =
+        ToolSurface.execute(
+          "stack_create",
+          %{"project_id" => project.id, "slug" => slug, "name" => "Infer Edges"},
+          %{}
+        )
+
+      {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "A creates types"})
+      {:ok, b} = Tasks.create_task(%{project_id: project.id, title: "B consumes types"})
+
+      {:ok, _} =
+        ToolSurface.execute("stack_add", %{"stack_id" => stack_id, "task_id" => a.id}, %{})
+
+      {:ok, _} =
+        ToolSurface.execute("stack_add", %{"stack_id" => stack_id, "task_id" => b.id}, %{})
+
+      Process.put(
+        {:dep_inference_stub, :response},
+        {:ok,
+         Jason.encode!(%{
+           "edges" => [
+             %{"from_task_id" => b.id, "to_task_id" => a.id, "reason" => "B consumes A"}
+           ]
+         })}
+      )
+
+      {:ok, result} =
+        ToolSurface.execute("stack_start_planning", %{"stack_id" => stack_id}, %{})
+
+      assert result.id == stack_id
+      assert result.edges_authored == 1
+      # Happy path OMITS the reason key so the payload stays tight.
+      refute Map.has_key?(result, :edges_skipped_reason)
+    end
+
+    test "stack_start_planning payload includes edges_authored:0 without reason when stub returns empty edges" do
+      # Empty-edges is the "successful inference wrote zero edges" case
+      # — it's still a successful inference, so no `edges_skipped_reason`
+      # key on the payload.
+      alias Platform.Tasks.Stacks.DepInference.StubAdapter
+      StubAdapter.reset_calls()
+
+      project = create_project()
+      slug = "shim-sp-edges-empty-#{System.unique_integer([:positive])}"
+
+      {:ok, %{stack_id: stack_id}} =
+        ToolSurface.execute(
+          "stack_create",
+          %{"project_id" => project.id, "slug" => slug, "name" => "Empty Edges"},
+          %{}
+        )
+
+      {:ok, m1} = Tasks.create_task(%{project_id: project.id, title: "Independent 1"})
+      {:ok, m2} = Tasks.create_task(%{project_id: project.id, title: "Independent 2"})
+
+      {:ok, _} =
+        ToolSurface.execute("stack_add", %{"stack_id" => stack_id, "task_id" => m1.id}, %{})
+
+      {:ok, _} =
+        ToolSurface.execute("stack_add", %{"stack_id" => stack_id, "task_id" => m2.id}, %{})
+
+      Process.put({:dep_inference_stub, :response}, {:ok, ~s({"edges": []})})
+
+      {:ok, result} =
+        ToolSurface.execute("stack_start_planning", %{"stack_id" => stack_id}, %{})
+
+      assert result.edges_authored == 0
+      refute Map.has_key?(result, :edges_skipped_reason)
+    end
+
+    test "stack_start_planning payload includes edges_skipped_reason when inference is skipped" do
+      # When a user has already authored an in-stack edge, inference is
+      # short-circuited and the reason is surfaced on the payload so the
+      # caller can distinguish "we skipped intentionally" from "we ran
+      # cleanly with zero output".
+      alias Platform.Tasks.Stacks.DepInference.StubAdapter
+      alias Platform.Tasks.Stacks
+      StubAdapter.reset_calls()
+
+      project = create_project()
+      slug = "shim-sp-edges-override-#{System.unique_integer([:positive])}"
+
+      {:ok, %{stack_id: stack_id}} =
+        ToolSurface.execute(
+          "stack_create",
+          %{"project_id" => project.id, "slug" => slug, "name" => "Override"},
+          %{}
+        )
+
+      {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "A"})
+      {:ok, b} = Tasks.create_task(%{project_id: project.id, title: "B"})
+
+      {:ok, _} =
+        ToolSurface.execute("stack_add", %{"stack_id" => stack_id, "task_id" => a.id}, %{})
+
+      {:ok, _} =
+        ToolSurface.execute("stack_add", %{"stack_id" => stack_id, "task_id" => b.id}, %{})
+
+      # Pre-author the in-stack edge B->A so idempotency kicks in.
+      stack = Stacks.get_stack!(stack_id)
+      {:ok, _} = Stacks.add_dependency_edge(stack, b.id, a.id)
+
+      {:ok, result} =
+        ToolSurface.execute("stack_start_planning", %{"stack_id" => stack_id}, %{})
+
+      assert result.edges_authored == 0
+      assert result.edges_skipped_reason == :user_override_present
+    end
+
     test "task_create with stack_id attaches the new task to the stack" do
       project = create_project()
       slug = "shim-tc-stack-#{System.unique_integer([:positive])}"

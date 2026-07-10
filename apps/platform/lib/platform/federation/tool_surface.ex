@@ -4250,11 +4250,38 @@ defmodule Platform.Federation.ToolSurface do
 
       %Stack{} = stack ->
         case Stacks.start_planning(stack) do
-          {:ok, %{stack: updated, planning: planning}} ->
-            {:ok, stack_start_planning_payload(updated, planning, [])}
+          {:ok,
+           %{
+             stack: updated,
+             planning: planning,
+             edges_authored: edges_authored,
+             edges_skipped_reason: edges_skipped_reason
+           }} ->
+            {:ok,
+             stack_start_planning_payload(
+               updated,
+               planning,
+               [],
+               edges_authored,
+               edges_skipped_reason
+             )}
 
-          {:partial, %{stack: updated, planning: planning, errors: errors}} ->
-            {:ok, stack_start_planning_payload(updated, planning, errors)}
+          {:partial,
+           %{
+             stack: updated,
+             planning: planning,
+             errors: errors,
+             edges_authored: edges_authored,
+             edges_skipped_reason: edges_skipped_reason
+           }} ->
+            {:ok,
+             stack_start_planning_payload(
+               updated,
+               planning,
+               errors,
+               edges_authored,
+               edges_skipped_reason
+             )}
 
           {:error, :stack_not_found} ->
             {:error,
@@ -4366,17 +4393,34 @@ defmodule Platform.Federation.ToolSurface do
     end
   end
 
-  defp stack_start_planning_payload(%Stack{} = stack, planning, errors) do
+  defp stack_start_planning_payload(
+         %Stack{} = stack,
+         planning,
+         errors,
+         edges_authored,
+         edges_skipped_reason
+       ) do
     payload =
       stack
       |> serialize_stack()
       |> Map.put(:planning, Enum.map(planning, &serialize_stack_member/1))
+      |> Map.put(:edges_authored, edges_authored)
+      |> maybe_put_edges_skipped_reason(edges_skipped_reason)
 
     case errors do
       [] -> payload
       _ -> Map.put(payload, :cascade_errors, errors)
     end
   end
+
+  # Include `edges_skipped_reason` only when inference was skipped or
+  # terminally failed — the happy path (inference ran and wrote edges)
+  # doesn't need a nil key cluttering the payload. Dep-inference stage 4
+  # (ADR 0045).
+  defp maybe_put_edges_skipped_reason(payload, nil), do: payload
+
+  defp maybe_put_edges_skipped_reason(payload, reason) when is_atom(reason),
+    do: Map.put(payload, :edges_skipped_reason, reason)
 
   # ── Stack helpers ────────────────────────────────────────────────────────
 

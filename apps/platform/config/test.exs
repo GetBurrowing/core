@@ -148,3 +148,9 @@ config :platform,
        :t2_context_sha256_t1_head,
        # bumped by ADR 0042
        "278db635b7de680685ea8254b4ae51f0edb365a55b9f50e1c604ca6d3c246428"
+
+# Stack v2 (task 019f487d, ADR 0045) — Platform.Tasks.Stacks.DepInference
+# resolves its LLM adapter from application env at call time. Tests
+# swap in a process-dictionary-driven stub so no HTTP round trip is
+# made and each case controls the "LLM" response deterministically.
+config :platform, :dep_inference_adapter, Platform.Tasks.Stacks.DepInference.StubAdapter

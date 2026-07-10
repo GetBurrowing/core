@@ -502,7 +502,13 @@ defmodule Platform.Org.Wiki.ContextT4E2ETest do
       # `assigns.transcript_chunk`; stage 2 passes both keys. Dedupe key
       # UNCHANGED — still `sha256(intent + target_role + chunk_text)` on
       # the current chunk only, so idempotency is preserved.
-      "20260709120000_update_intent_classify_prompt_with_context.exs"
+      "20260709120000_update_intent_classify_prompt_with_context.exs",
+      # Task 019f487d stage 1 (ADR-0045 task stacks v2) — seed the
+      # `stacks.dep_inference.v1` prompt template so
+      # Platform.Tasks.Stacks.DepInference (member 2) has a DB-backed,
+      # operator-editable prompt to render before its LLM round-trip.
+      # Idempotent seed_defaults/0 call; no schema changes.
+      "20260710120000_seed_stacks_dep_inference_template.exs"
     ]
 
     defp t4_root, do: Mix.Project.project_file() |> Path.dirname()
