@@ -1771,6 +1771,36 @@ defmodule PlatformWeb.MeetingLiveTest do
       assert MeetingLive.gallery_grid_class(3) == "grid-cols-1 grid-rows-3"
     end
 
+    test "arity-2 :shell mode preserves the vertical-stack layout at count 2 and 3" do
+      # The default guest-carve-out only kicks in for chrome_mode == :none.
+      # Shell (the auth surface) keeps the layout Rowan validated after
+      # f1e16f1: 1x2 / 1x3 for 2 or 3 participants respectively.
+      assert MeetingLive.gallery_grid_class(2, :shell) == "grid-cols-1 grid-rows-2"
+      assert MeetingLive.gallery_grid_class(3, :shell) == "grid-cols-1 grid-rows-3"
+    end
+
+    test "arity-2 :none mode goes side-by-side on sm+ for count 2 and 3" do
+      # Guest surface has no chat panel — the stage owns the full
+      # viewport. Stacking 2/3 tiles vertically there wastes horizontal
+      # width; each tile becomes a narrow letterbox. On sm+ we switch
+      # to side-by-side (2x1 for 2 participants, 3x1 for 3) so each
+      # tile fills ~½ or ⅓ of the wide guest viewport instead. Mobile
+      # (< sm) keeps the readable vertical stack.
+      assert MeetingLive.gallery_grid_class(2, :none) ==
+               "grid-cols-1 grid-rows-2 sm:grid-cols-2 sm:grid-rows-1"
+
+      assert MeetingLive.gallery_grid_class(3, :none) ==
+               "grid-cols-1 grid-rows-3 sm:grid-cols-3 sm:grid-rows-1"
+    end
+
+    test "arity-2 delegates to arity-1 for every other count regardless of chrome" do
+      # Only 2 and 3 differ across surfaces; 0, 1, and >=4 already have
+      # sensible layouts that work in both. Sanity-check a couple.
+      assert MeetingLive.gallery_grid_class(1, :none) == MeetingLive.gallery_grid_class(1)
+      assert MeetingLive.gallery_grid_class(4, :none) == MeetingLive.gallery_grid_class(4)
+      assert MeetingLive.gallery_grid_class(9, :shell) == MeetingLive.gallery_grid_class(9)
+    end
+
     test "4 participants stack on mobile (1x4) and form a 2x2 square at sm+" do
       assert MeetingLive.gallery_grid_class(4) ==
                "grid-cols-1 grid-rows-4 sm:grid-cols-2 sm:grid-rows-2"

@@ -722,13 +722,15 @@
                     class={[
                       "grid h-full w-full auto-rows-fr gap-2 overflow-y-auto p-1 place-items-center",
                       gallery_grid_class(
-                        length(gallery_participants(assigns[:participants] || []))
+                        length(gallery_participants(assigns[:participants] || [])),
+                        assigns[:chrome_mode] || :shell
                       )
                     ]}
                     data-gallery-grid
                     data-gallery-grid-shape={
                       gallery_grid_class(
-                        length(gallery_participants(assigns[:participants] || []))
+                        length(gallery_participants(assigns[:participants] || [])),
+                        assigns[:chrome_mode] || :shell
                       )
                     }
                   >

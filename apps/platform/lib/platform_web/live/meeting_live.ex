@@ -1688,6 +1688,30 @@ defmodule PlatformWeb.MeetingLive do
   def gallery_grid_class(16), do: "grid-cols-2 grid-rows-8 sm:grid-cols-4 sm:grid-rows-4"
   def gallery_grid_class(_n), do: "grid-cols-2 grid-rows-8 sm:grid-cols-5 sm:grid-rows-4"
 
+  @doc """
+  Chrome-aware variant of `gallery_grid_class/1`. The default (shell)
+  path routes to `gallery_grid_class/1` unchanged, so the auth surface's
+  vertical-stack layout Rowan explicitly chose (see the 1x2 / 1x3
+  comments above) is preserved.
+
+  When `chrome_mode == :none` the guest surface has no chat panel, no
+  icon rail — the meeting stage owns the full viewport width. In that
+  world stacking 2 or 3 tiles vertically leaves huge horizontal
+  letterbox: each 16:9 tile becomes height-bound at ~½ or ⅓ of the
+  vertical space and cannot expand horizontally. Side-by-side on `sm+`
+  reclaims that width — each tile fills ~½ or ⅓ of the viewport
+  horizontally, which is bigger than the auth-surface stacked variant
+  because the guest viewport is bigger to begin with.
+
+  Below `sm` (mobile portrait) both surfaces stack vertically. The
+  responsive `sm:` prefixes only kick in once viewport width is >= 640px
+  so mobile guests keep the readable stacked layout.
+  """
+  @spec gallery_grid_class(non_neg_integer(), :shell | :none) :: String.t()
+  def gallery_grid_class(2, :none), do: "grid-cols-1 grid-rows-2 sm:grid-cols-2 sm:grid-rows-1"
+  def gallery_grid_class(3, :none), do: "grid-cols-1 grid-rows-3 sm:grid-cols-3 sm:grid-rows-1"
+  def gallery_grid_class(count, _chrome_mode), do: gallery_grid_class(count)
+
   # ── Participant rail helpers (task 019e2475-4395) ────────────────────────
   #
   # Used by `PlatformWeb.Components.Meetings.ParticipantRail` to drive the
