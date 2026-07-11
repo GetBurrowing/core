@@ -38,6 +38,11 @@ defmodule PlatformWeb.Components.ChatMessage do
   attr(:mention_suggestions, :list, default: [])
   attr(:mention_source, :any, default: nil)
   attr(:editing_message_id, :any, default: nil)
+  # Task 019e95ea stage 2: true when the parent space is an archived
+  # read-only snapshot. Gates every interaction affordance (quick-emoji
+  # bar, hover toolbar, longpress sheet, reaction add, thread reply) in
+  # one place — the context layer independently rejects the writes.
+  attr(:read_only, :boolean, default: false)
 
   def chat_message(assigns) do
     ~H"""
@@ -71,7 +76,7 @@ defmodule PlatformWeb.Components.ChatMessage do
           else: "false"
         )
       }
-      phx-hook="LongpressMenu"
+      phx-hook={if @read_only, do: nil, else: "LongpressMenu"}
     >
       <%!-- Day-bucket separator (task 019e21c7 Stage 5). Rendered inside
            the stream item so morphdom reconciles it via the parent's
@@ -145,7 +150,7 @@ defmodule PlatformWeb.Components.ChatMessage do
               (edited)
             </button>
 
-            <div class="ml-auto hidden group-hover:flex items-center gap-1">
+            <div :if={!@read_only} class="ml-auto hidden group-hover:flex items-center gap-1">
               <button
                 :for={emoji <- @quick_emojis}
                 phx-click="react"
@@ -352,11 +357,13 @@ defmodule PlatformWeb.Components.ChatMessage do
             aria-label="Message actions"
             class="reaction-row flex flex-wrap gap-1 mt-0.5"
           >
+            <%!-- Reaction pills stay visible on read-only snapshots (they
+                 are part of the frozen history) but stop toggling. --%>
             <button
               :for={r <- @msg.reactions}
               id={"reaction-#{@msg.id}-#{r.emoji}"}
               phx-hook="ReactorPopover"
-              phx-click="react"
+              phx-click={if @read_only, do: nil, else: "react"}
               phx-value-message-id={@msg.id}
               phx-value-emoji={r.emoji}
               data-emoji={r.emoji}
@@ -375,6 +382,7 @@ defmodule PlatformWeb.Components.ChatMessage do
             </button>
 
             <button
+              :if={!@read_only}
               class="reaction-add-btn flex items-center gap-1 rounded-full border border-dashed border-base-300 px-2 py-0.5 text-xs text-base-content/40 hover:bg-base-300 hover:text-base-content"
               aria-label="Add reaction"
               phx-click="open_reaction_picker"
@@ -472,8 +480,12 @@ defmodule PlatformWeb.Components.ChatMessage do
                 </div>
               </div>
 
-              <%!-- Thread composer --%>
-              <div class="thread-composer" style="flex-direction: column; align-items: stretch;">
+              <%!-- Thread composer — absent on read-only snapshots. --%>
+              <div
+                :if={!@read_only}
+                class="thread-composer"
+                style="flex-direction: column; align-items: stretch;"
+              >
                 <.form
                   for={%{}}
                   id={"inline-thread-compose-form-#{@msg.id}"}
@@ -565,6 +577,7 @@ defmodule PlatformWeb.Components.ChatMessage do
 
         <%!-- Left-gutter reply button (desktop, hidden until hover via CSS) --%>
         <button
+          :if={!@read_only}
           phx-click="toggle_inline_thread"
           phx-value-message-id={@msg.id}
           class="msg-reply-gutter"

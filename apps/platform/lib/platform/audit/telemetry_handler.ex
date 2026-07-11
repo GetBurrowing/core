@@ -40,7 +40,19 @@ defmodule Platform.Audit.TelemetryHandler do
     # `Platform.Tasks.maybe_auto_approve/1` emits these; metadata carries
     # `resource_type: "plan"` + `resource_id: plan_id` for audit correlation.
     [:platform, :plan, :auto_approved],
-    [:platform, :plan, :auto_approve_skipped]
+    [:platform, :plan, :auto_approve_skipped],
+    # Task 019e95ea — channel lifecycle. Emitted by `Platform.Chat.archive_space/1,2`
+    # and `unarchive_space/2`; metadata carries actor_id (nil for system
+    # callers), resource_type: "chat_space", space kind + name.
+    [:platform, :chat, :space_archived],
+    [:platform, :chat, :space_unarchived],
+    # Task 019e95ea stage 3 — scheduled channel deletion. Scheduled/cancelled
+    # are emitted by `Platform.Chat.schedule_space_deletion/2` and
+    # `cancel_space_deletion/2`; purged by `Platform.Chat.SpacePurger` with
+    # actor_type "system" once the retention window elapses.
+    [:platform, :chat, :space_deletion_scheduled],
+    [:platform, :chat, :space_deletion_cancelled],
+    [:platform, :chat, :space_purged]
   ]
 
   @doc "Attach the handler to all registered platform telemetry events."

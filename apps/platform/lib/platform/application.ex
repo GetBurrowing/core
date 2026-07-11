@@ -93,6 +93,7 @@ defmodule Platform.Application do
       |> maybe_add_stall_registry()
       |> maybe_add_summarizer_sweeper()
       |> maybe_add_security_sweeper()
+      |> maybe_add_space_purger()
       |> ensure_task_router_watcher_after_endpoint()
 
     # See https://hexdocs.pm/elixir/Supervisor.html
@@ -142,6 +143,19 @@ defmodule Platform.Application do
   defp maybe_add_node_client(children) do
     if System.get_env("OPENCLAW_NODE_ENABLED") == "true" do
       children ++ [Platform.Federation.NodeClient]
+    else
+      children
+    end
+  end
+
+  # SpacePurger (task 019e95ea stage 3): daily hard-delete of channels
+  # whose scheduled deletion passed the retention window. Needs Repo.
+  # Disabled in config/test.exs — tests call `sweep/0` directly inside
+  # the DataCase sandbox.
+  defp maybe_add_space_purger(children) do
+    if Application.get_env(:platform, :start_space_purger, true) do
+      idx = Enum.find_index(children, &(&1 == PlatformWeb.Endpoint)) || length(children)
+      List.insert_at(children, idx, Platform.Chat.SpacePurger)
     else
       children
     end

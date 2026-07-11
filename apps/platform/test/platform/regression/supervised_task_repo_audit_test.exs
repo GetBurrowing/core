@@ -126,7 +126,8 @@ defmodule Platform.Regression.SupervisedTaskRepoAuditTest do
     :start_meeting_intent_dispatcher,
     :start_summarizer_sweeper,
     :start_stall_registry,
-    :start_security_sweeper
+    :start_security_sweeper,
+    :start_space_purger
   ]
 
   # ── Assertion 1: Task-Supervisor rescue audit ─────────────────────

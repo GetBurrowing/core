@@ -542,6 +542,49 @@
         <:chips label="+ Create a space" event="new_channel_open" />
         <:chips label="+ Connect an agent" event={JS.navigate(~p"/control")} />
       </.empty_state>
+
+      <%!-- Archived channels (task 019e95ea stage 2). Renders only when at
+           least one archived channel exists; collapsed by default with a
+           phx-click toggle (same idea as the hidden-channels drawer below —
+           quiet until asked for). Rows stay OUT of @channel_sections /
+           @sidebar_sections: archived channels never mix into the active
+           buckets, they only live here. Muted treatment mirrors the
+           hidden-channels rows; the row still navigates so the read-only
+           snapshot stays reachable. --%>
+      <section
+        :if={@archived_channels != []}
+        class="channel-section"
+        data-section-key="archived"
+        data-section-reorderable="false"
+        aria-label="Archived channels"
+      >
+        <button
+          type="button"
+          class="channel-section-header w-full text-left"
+          phx-click="toggle_archived_section"
+          aria-expanded={if @archived_open, do: "true", else: "false"}
+          aria-controls="archived-channel-list"
+        >
+          <span class="hero-archive-box size-3.5 text-base-content/40"></span>
+          <p class="channel-section-label">Archived</p>
+          <span class="ml-auto text-base-content/40 text-xs">
+            {if @archived_open, do: "▾", else: "▸"}
+          </span>
+        </button>
+        <div :if={@archived_open} id="archived-channel-list">
+          <.link
+            :for={space <- @archived_channels}
+            navigate={~p"/chat/#{space_nav_target(space)}"}
+            class={[
+              "channel-row text-base-content/50",
+              @active_space && @active_space.id == space.id && "channel-row--active"
+            ]}
+          >
+            <span class="hero-archive-box size-3.5 text-base-content/30"></span>
+            <span class="truncate flex-1">{space.name}</span>
+          </.link>
+        </div>
+      </section>
     </nav>
 
     <%!-- Undo toast — ephemeral 4-second affordance shown after a hide
@@ -1163,6 +1206,49 @@
             <% end %>
           </section>
 
+          <%!-- Archived channels (task 019e95ea stage 2) — same collapsed
+             group as the desktop rail, driven by the same @archived_channels
+             / @archived_open assigns. Hidden while a search is active: the
+             drawer_filter_* helpers only know the active sections, and
+             archived rows shouldn't surface as phantom search results. --%>
+          <section
+            :if={@archived_channels != [] and @drawer_query == ""}
+            data-section-reorderable="false"
+            aria-label="Archived channels"
+          >
+            <button
+              type="button"
+              class="flex w-full items-center gap-1.5 px-4 py-1 mt-2 text-left"
+              phx-click="toggle_archived_section"
+              aria-expanded={if @archived_open, do: "true", else: "false"}
+              aria-controls="archived-channel-list-mobile"
+            >
+              <span class="hero-archive-box size-3.5 text-base-content/40"></span>
+              <p class="text-xs font-semibold uppercase tracking-widest text-base-content/50">
+                Archived
+              </p>
+              <span class="ml-auto text-base-content/40 text-xs">
+                {if @archived_open, do: "▾", else: "▸"}
+              </span>
+            </button>
+            <div :if={@archived_open} id="archived-channel-list-mobile">
+              <.link
+                :for={space <- @archived_channels}
+                navigate={~p"/chat/#{space_nav_target(space)}"}
+                phx-click="close_mobile_browser"
+                class={[
+                  "flex items-center gap-3 px-4 py-3 text-sm transition-colors",
+                  "text-base-content/50 hover:bg-base-200",
+                  @active_space && @active_space.id == space.id &&
+                    "bg-base-200 font-semibold"
+                ]}
+              >
+                <span class="hero-archive-box size-4 text-base-content/30"></span>
+                <span class="truncate flex-1">{space.name}</span>
+              </.link>
+            </div>
+          </section>
+
           <%!-- No-matches state (Stage 1) — ONLY for an active search that
              matched nothing; the account-empty state below stays reserved
              for a genuinely conversation-less account. The likeliest miss is
@@ -1662,6 +1748,7 @@
               </span>
             </span>
             <button
+              :if={@active_space && is_nil(@active_space.archived_at)}
               phx-click="pin_toggle"
               phx-value-message-id={pin.message_id}
               phx-value-space-id={pin.space_id}
@@ -1772,6 +1859,63 @@
            user scrolls them into view. #message-list itself becomes a
            non-scrolling flex column inside the wrapper. Overflow +
            overscroll moved from #message-list to here. --%>
+      <%!-- Archived read-only banner (task 019e95ea stage 2). Sits as a
+           flex-shrink-0 sibling above the message scroller. The Unarchive
+           button is gated on @can_unarchive? (computed server-side when
+           :active_space is assigned) — affordance only, the context layer
+           re-authorizes.
+
+           Stage 4: when a deletion is scheduled the banner shows the purge
+           date instead, with a Cancel button for Fabrikam admins only
+           (@can_cancel_deletion?). Unarchive is hidden while deletion is
+           pending — cancel first, then unarchive. Deletion-flagged channels
+           are excluded from the sidebar's Archived section, so this banner
+           is reached via direct URL; that's expected. --%>
+      <div
+        :if={@active_space && @active_space.archived_at}
+        id="archived-banner"
+        role="status"
+        class="flex-shrink-0 flex items-center gap-3 border-b border-base-300 bg-base-200/60 px-5 py-2.5"
+      >
+        <%= if @active_space.deletion_scheduled_at do %>
+          <span class="hero-trash size-4 flex-shrink-0 text-error"></span>
+          <p class="flex-1 text-sm text-base-content/70">
+            This channel is scheduled for permanent deletion on {Calendar.strftime(
+              DateTime.add(
+                @active_space.deletion_scheduled_at,
+                Chat.space_retention_days(),
+                :day
+              ),
+              "%B %-d, %Y"
+            )} — it's read-only until then.
+          </p>
+          <button
+            :if={@can_cancel_deletion?}
+            type="button"
+            phx-click="cancel_space_deletion"
+            class="btn btn-outline btn-xs"
+          >
+            Cancel deletion
+          </button>
+        <% else %>
+          <span class="hero-archive-box size-4 flex-shrink-0 text-base-content/60"></span>
+          <p class="flex-1 text-sm text-base-content/70">
+            This channel was archived on {Calendar.strftime(
+              @active_space.archived_at,
+              "%B %-d, %Y"
+            )} — it's a read-only snapshot.
+          </p>
+          <button
+            :if={@can_unarchive?}
+            type="button"
+            phx-click="unarchive_space"
+            class="btn btn-outline btn-xs"
+          >
+            Unarchive
+          </button>
+        <% end %>
+      </div>
+
       <div
         id="chat-message-scroller"
         data-scroll-container
@@ -1817,6 +1961,7 @@
             mention_suggestions={@mention_suggestions}
             mention_source={@mention_source}
             editing_message_id={@editing_message_id}
+            read_only={@active_space != nil && @active_space.archived_at != nil}
           />
         </div>
 
@@ -1895,8 +2040,11 @@
       </div>
 
       <div class="flex-shrink-0 compose-input-area safe-area-bottom">
+        <%!-- Composer is structurally absent on archived spaces (task
+             019e95ea stage 2) — hiding is affordance; the context layer
+             rejects the writes regardless. --%>
         <.form
-          :if={@active_space}
+          :if={@active_space && is_nil(@active_space.archived_at)}
           for={@compose_form}
           id="compose-form"
           phx-hook="ButtonLoading"
@@ -2032,7 +2180,7 @@
              direct child; visible UI for caption + Send lives inside the
              modal panel and links back to this form via `form=...`. --%>
         <form
-          :if={@active_space}
+          :if={@active_space && is_nil(@active_space.archived_at)}
           id="upload-send-form"
           phx-hook="ButtonLoading"
           phx-submit="upload_send"
@@ -2088,6 +2236,7 @@
   id="chat-settings"
   open={@show_settings}
   space={@active_space}
+  current_user_id={@user_id}
 />
 
 <.live_component

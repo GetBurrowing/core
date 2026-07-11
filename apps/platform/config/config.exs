@@ -21,6 +21,12 @@ config :platform, Platform.Repo,
 # own per-case instance.
 config :platform, :start_responsibilities_registry, true
 
+# Scheduled channel deletion (task 019e95ea stage 3): days a
+# deletion-flagged channel is retained (still cancellable) before
+# Platform.Chat.SpacePurger hard-deletes it. Read at sweep time via
+# `Platform.Chat.space_retention_days/0`.
+config :platform, :space_retention_days, 30
+
 # Responsibilities provider list (ADR-0041 M8 stage 2). Registry reads
 # this on init and upserts every declared row. Mirror this list with
 # `Platform.Responsibilities.BuiltIns.providers/0` — feature teams add

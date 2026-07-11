@@ -7,6 +7,8 @@ defmodule PlatformWeb.ChatLiveTest do
   alias Platform.Chat
   alias Platform.Chat.Canvas
   alias Platform.Repo
+  alias Platform.Tenancy
+  alias Platform.Tenancy.OrgMembership
 
   setup do
     previous_root = Application.get_env(:platform, :chat_attachments_root)
@@ -2251,7 +2253,12 @@ defmodule PlatformWeb.ChatLiveTest do
       assert html =~ ~s(name="topic")
       # ADR 0027: Agent Attention Mode removed
       refute html =~ "Agent Attention Mode"
-      assert html =~ "Archive Channel"
+      # Task 019e95ea stage 4: the Danger Zone is permission-gated — this
+      # user is neither a Fabrikam admin nor the channel's creator, so no
+      # Archive button renders. Visibility cases live in the "channel
+      # deletion" describe block below.
+      refute html =~ "Archive Channel"
+      refute html =~ "Danger Zone"
     end
 
     test "settings modal for DMs shows minimal fields", %{conn: conn} do
@@ -2285,11 +2292,19 @@ defmodule PlatformWeb.ChatLiveTest do
     # ADR 0027: "changing attention mode updates the space" test removed.
     # agent_attention field no longer exists on Space.
 
-    test "archiving a channel redirects to /chat", %{conn: conn} do
-      conn = authenticated_conn(conn)
+    test "archiving a channel redirects to /chat when the actor is the creator", %{conn: conn} do
+      user = insert_chat_user()
+      conn = init_test_session(conn, current_user_id: user.id)
 
+      # Task 019e95ea: archive is authorized in the context layer for Fabrikam
+      # admins and the channel creator — make the mounted user the creator.
       {:ok, _space} =
-        Chat.create_channel(%{name: "to-archive", slug: "to-archive", description: ""})
+        Chat.create_channel(%{
+          name: "to-archive",
+          slug: "to-archive",
+          description: "",
+          created_by: user.id
+        })
 
       {:ok, view, _html} = live(conn, ~p"/chat/to-archive")
 
@@ -2303,6 +2318,36 @@ defmodule PlatformWeb.ChatLiveTest do
 
       archived = Chat.get_space_by_slug("to-archive")
       assert archived.archived_at != nil
+    end
+
+    test "archiving is refused for a non-creator without admin rights", %{conn: conn} do
+      conn = authenticated_conn(conn)
+
+      creator = insert_chat_user(%{email: "creator@example.com", oidc_sub: "oidc-creator"})
+
+      {:ok, _space} =
+        Chat.create_channel(%{
+          name: "not-yours",
+          slug: "not-yours",
+          description: "",
+          created_by: creator.id
+        })
+
+      {:ok, view, _html} = live(conn, ~p"/chat/not-yours")
+
+      render_click(view, "settings_open", %{})
+
+      # Task 019e95ea stage 4: the Archive button no longer renders for a
+      # non-creator/non-admin, so push the event straight at the component
+      # (simulating a forged client) — the context layer must still refuse.
+      refute has_element?(view, "button[phx-click=settings_archive]")
+
+      view
+      |> with_target("#chat-settings")
+      |> render_click("settings_archive", %{})
+
+      space = Chat.get_space_by_slug("not-yours")
+      assert space.archived_at == nil
     end
   end
 
@@ -2464,6 +2509,332 @@ defmodule PlatformWeb.ChatLiveTest do
 
       assert after_size == initial_size + 1,
              "stream_insert_with_day_label should add new message id to the MapSet"
+    end
+  end
+
+  # ── Archived channels (task 019e95ea stage 2) ─────────────────────────────
+
+  defp insert_channel(attrs \\ %{}) do
+    n = System.unique_integer([:positive, :monotonic])
+
+    default = %{
+      name: Map.get(attrs, :name, "Lifecycle #{n}"),
+      slug: "lifecycle-#{n}",
+      kind: "channel"
+    }
+
+    {:ok, space} = Chat.create_space(Map.merge(default, attrs))
+    space
+  end
+
+  defp insert_archived_channel(attrs \\ %{}) do
+    space = insert_channel(attrs)
+    {:ok, archived} = Chat.archive_space(space)
+    archived
+  end
+
+  # Fabrikam-admin fixture (task 019e95ea stage 4) — same OrgMembership-on-the-
+  # fabrikam-org pattern as test/platform/chat/space_deletion_test.exs.
+  defp insert_fabrikam_admin! do
+    n = System.unique_integer([:positive])
+
+    user =
+      insert_chat_user(%{
+        email: "fabrikam-admin-#{n}@example.com",
+        oidc_sub: "oidc-fabrikam-admin-#{n}",
+        name: "Fabrikam Admin #{n}"
+      })
+
+    %OrgMembership{}
+    |> OrgMembership.changeset(%{
+      user_id: user.id,
+      org_id: Tenancy.get_org_by_slug!("fabrikam").id,
+      role: "admin"
+    })
+    |> Repo.insert!()
+
+    user
+  end
+
+  # Flash lives in the LiveView's assigns — asserting there sidesteps
+  # HTML-entity escaping (e.g. the apostrophe in "doesn't match").
+  defp flash(view), do: :sys.get_state(view.pid).socket.assigns.flash
+
+  describe "archived channels" do
+    test "archived channel renders the read-only banner and no composer", %{conn: conn} do
+      space = insert_archived_channel()
+      conn = authenticated_conn(conn)
+
+      {:ok, view, html} = live(conn, ~p"/chat/#{space.slug}")
+
+      assert html =~ "read-only snapshot"
+      assert has_element?(view, "#archived-banner")
+      refute has_element?(view, "#compose-form")
+      refute has_element?(view, "#upload-send-form")
+    end
+
+    test "active channel still renders the composer (regression)", %{conn: conn} do
+      space = insert_channel()
+      conn = authenticated_conn(conn)
+
+      {:ok, view, _html} = live(conn, ~p"/chat/#{space.slug}")
+
+      refute has_element?(view, "#archived-banner")
+      assert has_element?(view, "#compose-form")
+    end
+
+    test "creator sees Unarchive; clicking it unarchives and restores the composer", %{
+      conn: conn
+    } do
+      creator =
+        insert_chat_user(%{
+          email: "archive-creator@example.com",
+          oidc_sub: "oidc-archive-creator"
+        })
+
+      space = insert_archived_channel(%{created_by: creator.id})
+      conn = init_test_session(conn, current_user_id: creator.id)
+
+      {:ok, view, _html} = live(conn, ~p"/chat/#{space.slug}")
+
+      assert has_element?(view, "#archived-banner button", "Unarchive")
+
+      view
+      |> element("#archived-banner button", "Unarchive")
+      |> render_click()
+
+      refute has_element?(view, "#archived-banner")
+      assert has_element?(view, "#compose-form")
+      assert is_nil(Chat.get_space(space.id).archived_at)
+    end
+
+    test "non-creator/non-admin does not see the Unarchive button", %{conn: conn} do
+      creator =
+        insert_chat_user(%{
+          email: "archive-owner@example.com",
+          oidc_sub: "oidc-archive-owner"
+        })
+
+      space = insert_archived_channel(%{created_by: creator.id})
+      # authenticated_conn inserts a DIFFERENT user with no org membership.
+      conn = authenticated_conn(conn)
+
+      {:ok, view, _html} = live(conn, ~p"/chat/#{space.slug}")
+
+      assert has_element?(view, "#archived-banner")
+      refute has_element?(view, "#archived-banner button", "Unarchive")
+    end
+
+    test "sidebar shows the Archived section when an archived channel exists", %{conn: conn} do
+      active = insert_channel()
+      _archived = insert_archived_channel(%{name: "Old Reports"})
+      conn = authenticated_conn(conn)
+
+      {:ok, view, _html} = live(conn, ~p"/chat/#{active.slug}")
+
+      assert has_element?(view, "[data-section-key='archived']")
+      # Collapsed by default — the rows only render after the toggle.
+      refute render(view) =~ "Old Reports"
+
+      view
+      |> element("button[phx-click='toggle_archived_section']")
+      |> render_click()
+
+      assert render(view) =~ "Old Reports"
+    end
+
+    test "sidebar hides the Archived section when no archived channels exist", %{conn: conn} do
+      active = insert_channel()
+      conn = authenticated_conn(conn)
+
+      {:ok, view, _html} = live(conn, ~p"/chat/#{active.slug}")
+
+      refute has_element?(view, "[data-section-key='archived']")
+    end
+  end
+
+  # ── Channel deletion (task 019e95ea stage 4) ───────────────────────────────
+  #
+  # NOTE on navigation: these tests mount via `/chat/#{space.id}` (UUID),
+  # not the slug. Fabrikam-admin fixtures carry an org membership, so LiveAuth
+  # resolves an active org and `get_space_by_slug/2` becomes org-scoped —
+  # the org-less fixture channels would miss and `bootstrap_space/2` would
+  # silently create a fresh duplicate. The UUID path (`Chat.get_space/1`)
+  # is org-agnostic.
+
+  describe "channel deletion (task 019e95ea stage 4)" do
+    test "admin sees both Archive and Delete sections in settings", %{conn: conn} do
+      admin = insert_fabrikam_admin!()
+      space = insert_channel()
+      conn = init_test_session(conn, current_user_id: admin.id)
+
+      {:ok, view, _html} = live(conn, ~p"/chat/#{space.id}")
+      html = render_click(view, "settings_open", %{})
+
+      assert html =~ "Danger Zone"
+      assert html =~ "Archive Channel"
+      assert html =~ "Delete Channel"
+      assert has_element?(view, "#delete-channel-form")
+    end
+
+    test "creator without admin rights sees Archive but not Delete", %{conn: conn} do
+      creator =
+        insert_chat_user(%{
+          email: "delete-creator@example.com",
+          oidc_sub: "oidc-delete-creator"
+        })
+
+      space = insert_channel(%{created_by: creator.id})
+      conn = init_test_session(conn, current_user_id: creator.id)
+
+      {:ok, view, _html} = live(conn, ~p"/chat/#{space.id}")
+      html = render_click(view, "settings_open", %{})
+
+      assert html =~ "Danger Zone"
+      assert html =~ "Archive Channel"
+      refute html =~ "Delete Channel"
+      refute has_element?(view, "#delete-channel-form")
+    end
+
+    test "plain member sees no Danger Zone at all", %{conn: conn} do
+      space = insert_channel()
+      conn = authenticated_conn(conn)
+
+      {:ok, view, _html} = live(conn, ~p"/chat/#{space.id}")
+      html = render_click(view, "settings_open", %{})
+
+      refute html =~ "Danger Zone"
+      refute html =~ "Archive Channel"
+      refute html =~ "Delete Channel"
+    end
+
+    test "delete with a mismatched name flashes an error and does not flag the space",
+         %{conn: conn} do
+      admin = insert_fabrikam_admin!()
+      space = insert_channel()
+      conn = init_test_session(conn, current_user_id: admin.id)
+
+      {:ok, view, _html} = live(conn, ~p"/chat/#{space.id}")
+      render_click(view, "settings_open", %{})
+
+      view
+      |> form("#delete-channel-form", %{"delete_confirm_name" => "totally-wrong"})
+      |> render_submit()
+
+      assert flash(view)["error"] =~ "Channel name doesn't match."
+
+      reloaded = Chat.get_space(space.id)
+      assert reloaded.deletion_scheduled_at == nil
+      assert reloaded.archived_at == nil
+    end
+
+    test "delete with the exact name as admin flags the space and navigates to /chat",
+         %{conn: conn} do
+      admin = insert_fabrikam_admin!()
+      space = insert_channel()
+      conn = init_test_session(conn, current_user_id: admin.id)
+
+      {:ok, view, _html} = live(conn, ~p"/chat/#{space.id}")
+      render_click(view, "settings_open", %{})
+
+      view
+      |> form("#delete-channel-form", %{"delete_confirm_name" => space.name})
+      |> render_submit()
+
+      assert_redirect(view, "/chat")
+
+      reloaded = Chat.get_space(space.id)
+      assert %DateTime{} = reloaded.deletion_scheduled_at
+      assert %DateTime{} = reloaded.archived_at
+    end
+
+    test "delete injected by a non-admin is refused server-side", %{conn: conn} do
+      creator =
+        insert_chat_user(%{
+          email: "delete-forger@example.com",
+          oidc_sub: "oidc-delete-forger"
+        })
+
+      space = insert_channel(%{created_by: creator.id})
+      conn = init_test_session(conn, current_user_id: creator.id)
+
+      {:ok, view, _html} = live(conn, ~p"/chat/#{space.id}")
+      render_click(view, "settings_open", %{})
+
+      # The Delete form is not rendered for non-admins — push the event
+      # straight at the component, simulating a forged client. The context
+      # layer (Chat.schedule_space_deletion/2) must refuse regardless.
+      view
+      |> with_target("#chat-settings")
+      |> render_click("settings_delete", %{"delete_confirm_name" => space.name})
+
+      assert flash(view)["error"] =~ "permission"
+
+      reloaded = Chat.get_space(space.id)
+      assert reloaded.deletion_scheduled_at == nil
+      assert reloaded.archived_at == nil
+    end
+
+    test "deletion-scheduled channel shows the deletion banner with purge date; admin sees Cancel",
+         %{conn: conn} do
+      admin = insert_fabrikam_admin!()
+      space = insert_channel()
+      {:ok, scheduled} = Chat.schedule_space_deletion(admin, space)
+      conn = init_test_session(conn, current_user_id: admin.id)
+
+      {:ok, view, html} = live(conn, ~p"/chat/#{space.id}")
+
+      expected_date =
+        scheduled.deletion_scheduled_at
+        |> DateTime.add(Chat.space_retention_days(), :day)
+        |> Calendar.strftime("%B %-d, %Y")
+
+      assert has_element?(view, "#archived-banner")
+      assert html =~ "scheduled for permanent deletion on #{expected_date}"
+      assert has_element?(view, "#archived-banner button", "Cancel deletion")
+      # Unarchive is hidden while a deletion is pending — cancel first.
+      refute has_element?(view, "#archived-banner button", "Unarchive")
+    end
+
+    test "non-admin sees the deletion banner without the Cancel button", %{conn: conn} do
+      admin = insert_fabrikam_admin!()
+      space = insert_channel()
+      {:ok, _scheduled} = Chat.schedule_space_deletion(admin, space)
+      conn = authenticated_conn(conn)
+
+      {:ok, view, html} = live(conn, ~p"/chat/#{space.id}")
+
+      assert has_element?(view, "#archived-banner")
+      assert html =~ "scheduled for permanent deletion"
+      refute has_element?(view, "#archived-banner button", "Cancel deletion")
+      refute has_element?(view, "#archived-banner button", "Unarchive")
+    end
+
+    test "cancelling the deletion clears the flag and the archive banner returns",
+         %{conn: conn} do
+      admin = insert_fabrikam_admin!()
+      space = insert_channel()
+      {:ok, _scheduled} = Chat.schedule_space_deletion(admin, space)
+      conn = init_test_session(conn, current_user_id: admin.id)
+
+      {:ok, view, _html} = live(conn, ~p"/chat/#{space.id}")
+
+      view
+      |> element("#archived-banner button", "Cancel deletion")
+      |> render_click()
+
+      reloaded = Chat.get_space(space.id)
+      assert reloaded.deletion_scheduled_at == nil
+      assert %DateTime{} = reloaded.archived_at
+
+      assert flash(view)["info"] =~ "Deletion cancelled"
+
+      # Banner reverts to the archive copy — deletion text gone, Unarchive
+      # back (the admin qualifies for unarchive too).
+      html = render(view)
+      refute html =~ "scheduled for permanent deletion"
+      assert html =~ "read-only snapshot"
+      assert has_element?(view, "#archived-banner button", "Unarchive")
     end
   end
 end

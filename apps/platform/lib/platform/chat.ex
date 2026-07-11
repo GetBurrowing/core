@@ -140,6 +140,12 @@ defmodule Platform.Chat do
     * `:workspace_id` — filter by workspace
     * `:kind`         — filter by kind ("channel", "dm", "group")
     * `:archived`     — `true` for archived only, `false` (default) for active only
+
+  Spaces flagged for deletion (`deletion_scheduled_at` set, task 019e95ea
+  stage 3) are excluded from BOTH branches: the default branch already
+  excludes them because scheduling sets `archived_at`, and the archived
+  branch filters them explicitly so the sidebar's Archived section never
+  shows a channel pending deletion.
   """
   @spec list_spaces(keyword()) :: [Space.t()]
   def list_spaces(opts \\ []) do
@@ -148,7 +154,10 @@ defmodule Platform.Chat do
 
     base =
       if archived do
-        from(s in Space, where: not is_nil(s.archived_at), order_by: [asc: s.inserted_at])
+        from(s in Space,
+          where: not is_nil(s.archived_at) and is_nil(s.deletion_scheduled_at),
+          order_by: [asc: s.inserted_at]
+        )
       else
         from(s in Space, where: is_nil(s.archived_at), order_by: [asc: s.inserted_at])
       end
@@ -215,12 +224,172 @@ defmodule Platform.Chat do
     update_space(space, %{org_id: org_id})
   end
 
-  @doc "Soft-archive a space by setting `archived_at` to now."
+  @doc """
+  Soft-archive a space by setting `archived_at` to now.
+
+  System-level variant — performs NO authorization. Reserved for internal
+  lifecycle callers (e.g. `Platform.Orchestration.ExecutionSpace` archiving
+  an execution space at task completion). User-initiated archives must go
+  through `archive_space/2`, which authorizes the actor.
+  """
   @spec archive_space(Space.t()) :: {:ok, Space.t()} | {:error, Ecto.Changeset.t()}
   def archive_space(%Space{} = space) do
     space
     |> Space.changeset(%{archived_at: DateTime.utc_now()})
     |> Repo.update()
+    |> tap_space_lifecycle_telemetry(:space_archived, nil)
+  end
+
+  @doc """
+  User-initiated archive. Allowed for Fabrikam admins and the space's creator
+  (`created_by`); returns `{:error, :unauthorized}` for anyone else. The
+  check lives here in the context layer — LiveView assigns are UI affordance
+  only, never the gate.
+  """
+  @spec archive_space(map(), Space.t()) ::
+          {:ok, Space.t()} | {:error, :unauthorized | Ecto.Changeset.t()}
+  def archive_space(actor, %Space{} = space) do
+    with_space_lifecycle_authz(actor, space, fn ->
+      space
+      |> Space.changeset(%{archived_at: DateTime.utc_now()})
+      |> Repo.update()
+      |> tap_space_lifecycle_telemetry(:space_archived, actor)
+    end)
+  end
+
+  @doc """
+  Reverse an archive by clearing `archived_at`. Same authorization as
+  `archive_space/2`: Fabrikam admin or space creator.
+  """
+  @spec unarchive_space(map(), Space.t()) ::
+          {:ok, Space.t()} | {:error, :unauthorized | Ecto.Changeset.t()}
+  def unarchive_space(actor, %Space{} = space) do
+    with_space_lifecycle_authz(actor, space, fn ->
+      space
+      |> Space.changeset(%{archived_at: nil})
+      |> Repo.update()
+      |> tap_space_lifecycle_telemetry(:space_unarchived, actor)
+    end)
+  end
+
+  defp with_space_lifecycle_authz(actor, %Space{} = space, fun) do
+    if Platform.Tenancy.fabrikam_admin?(actor) or space_creator?(actor, space) do
+      fun.()
+    else
+      {:error, :unauthorized}
+    end
+  end
+
+  defp space_creator?(%{id: user_id}, %Space{created_by: created_by})
+       when is_binary(user_id) and is_binary(created_by),
+       do: user_id == created_by
+
+  defp space_creator?(_actor, _space), do: false
+
+  @doc """
+  Flag a channel for permanent deletion (task 019e95ea stage 3).
+
+  Fabrikam-admin only — deletion is destructive, so unlike `archive_space/2`
+  the space's creator does NOT qualify. Only `kind: "channel"` spaces are
+  deletable: execution spaces are task audit logs (deleting them corrupts
+  task history), and dm/group conversations are out of scope — all return
+  `{:error, :not_deletable}`.
+
+  Sets `archived_at` (when not already archived) and `deletion_scheduled_at`
+  in one update, so the stage-1 write freeze applies immediately. The
+  channel disappears from every listing/search surface at once, and
+  `Platform.Chat.SpacePurger` hard-deletes it after `space_retention_days/0`
+  days unless `cancel_space_deletion/2` intervenes first.
+  """
+  @spec schedule_space_deletion(map(), Space.t()) ::
+          {:ok, Space.t()} | {:error, :unauthorized | :not_deletable | Ecto.Changeset.t()}
+  def schedule_space_deletion(actor, %Space{} = space) do
+    cond do
+      not Platform.Tenancy.fabrikam_admin?(actor) ->
+        {:error, :unauthorized}
+
+      space.kind != "channel" ->
+        {:error, :not_deletable}
+
+      true ->
+        now = DateTime.utc_now()
+        deadline = DateTime.add(now, space_retention_days(), :day)
+
+        attrs =
+          if space.archived_at,
+            do: %{deletion_scheduled_at: now},
+            else: %{deletion_scheduled_at: now, archived_at: now}
+
+        space
+        |> Space.changeset(attrs)
+        |> Repo.update()
+        |> tap_space_lifecycle_telemetry(:space_deletion_scheduled, actor, %{
+          retention_deadline: DateTime.to_iso8601(deadline)
+        })
+    end
+  end
+
+  @doc """
+  Cancel a scheduled deletion (Fabrikam-admin only, task 019e95ea stage 3).
+
+  Clears `deletion_scheduled_at` but leaves `archived_at` — the channel
+  returns to the plain archived state; `unarchive_space/2` is the separate
+  existing path back to active. Returns `{:error, :not_scheduled}` when no
+  deletion is pending.
+  """
+  @spec cancel_space_deletion(map(), Space.t()) ::
+          {:ok, Space.t()} | {:error, :unauthorized | :not_scheduled | Ecto.Changeset.t()}
+  def cancel_space_deletion(actor, %Space{} = space) do
+    cond do
+      not Platform.Tenancy.fabrikam_admin?(actor) ->
+        {:error, :unauthorized}
+
+      is_nil(space.deletion_scheduled_at) ->
+        {:error, :not_scheduled}
+
+      true ->
+        space
+        |> Space.changeset(%{deletion_scheduled_at: nil})
+        |> Repo.update()
+        |> tap_space_lifecycle_telemetry(:space_deletion_cancelled, actor)
+    end
+  end
+
+  @doc """
+  Days a deletion-flagged channel is retained (still cancellable) before
+  `Platform.Chat.SpacePurger` hard-deletes it. Configurable via
+  `config :platform, :space_retention_days`; defaults to 30.
+  """
+  @spec space_retention_days() :: pos_integer()
+  def space_retention_days do
+    Application.get_env(:platform, :space_retention_days, 30)
+  end
+
+  # Bridged into the append-only audit log by `Platform.Audit.TelemetryHandler`.
+  # `extra` is merged into the metadata map for event-specific keys (e.g.
+  # `retention_deadline` on :space_deletion_scheduled) — values must be
+  # JSON-safe scalars (stringify DateTimes) so the audit bridge persists them.
+  defp tap_space_lifecycle_telemetry(result, event, actor, extra \\ %{}) do
+    with {:ok, %Space{} = space} <- result do
+      :telemetry.execute(
+        [:platform, :chat, event],
+        %{system_time: System.system_time()},
+        Map.merge(
+          %{
+            actor_id: actor && Map.get(actor, :id),
+            actor_type: if(actor, do: "user", else: "system"),
+            resource_type: "chat_space",
+            resource_id: space.id,
+            action: Atom.to_string(event),
+            space_kind: space.kind,
+            space_name: space.name
+          },
+          extra
+        )
+      )
+    end
+
+    result
   end
 
   # ── Conversations (DM / Group / Channel creation) ─────────────────────────
@@ -490,8 +659,14 @@ defmodule Platform.Chat do
   Optional: `:role`, `:display_name`, `:avatar_url`, `:attention_mode`.
   """
   @spec add_participant(binary(), map()) ::
-          {:ok, Participant.t()} | {:error, Ecto.Changeset.t()}
+          {:ok, Participant.t()} | {:error, :space_archived | Ecto.Changeset.t()}
   def add_participant(space_id, attrs) do
+    with :ok <- ensure_space_writable(space_id) do
+      do_add_participant(space_id, attrs)
+    end
+  end
+
+  defp do_add_participant(space_id, attrs) do
     attrs = Map.put(attrs, :space_id, space_id)
 
     result =
@@ -680,8 +855,15 @@ defmodule Platform.Chat do
   Required attrs: `:space_id`, `:participant_id`, `:content_type`.
   Optional: `:thread_id`, `:content`, `:structured_content`, `:metadata`.
   """
-  @spec post_message(map(), keyword()) :: {:ok, Message.t()} | {:error, Ecto.Changeset.t()}
+  @spec post_message(map(), keyword()) ::
+          {:ok, Message.t()} | {:error, :space_archived | Ecto.Changeset.t()}
   def post_message(attrs, opts \\ []) do
+    with :ok <- ensure_space_writable(attrs[:space_id] || attrs["space_id"]) do
+      do_post_message(attrs, opts)
+    end
+  end
+
+  defp do_post_message(attrs, opts) do
     attrs = put_author_snapshot(attrs, :participant_id, :author)
 
     # Wrap the insert + v1 history record in a single transaction. The
@@ -722,6 +904,12 @@ defmodule Platform.Chat do
           {:ok, Message.t(), [Attachment.t()]} | {:error, term()}
   def post_message_with_attachments(attrs, attachment_attrs_list, opts \\ [])
       when is_list(attachment_attrs_list) do
+    with :ok <- ensure_space_writable(attrs[:space_id] || attrs["space_id"]) do
+      do_post_message_with_attachments(attrs, attachment_attrs_list, opts)
+    end
+  end
+
+  defp do_post_message_with_attachments(attrs, attachment_attrs_list, opts) do
     attrs = put_author_snapshot(attrs, :participant_id, :author)
 
     multi =
@@ -912,9 +1100,14 @@ defmodule Platform.Chat do
 
   ## Options
 
-    * `:window_end`      — upper bound (exclusive); default `DateTime.utc_now/0`
-    * `:include_kinds`   — list of space kinds to include; default `~w(channel group)`
-    * `:content_types`   — list of content_types to include; default `~w(text agent_action)`
+    * `:window_end`       — upper bound (exclusive); default `DateTime.utc_now/0`
+    * `:include_kinds`    — list of space kinds to include; default `~w(channel group)`
+    * `:content_types`    — list of content_types to include; default `~w(text agent_action)`
+    * `:include_archived` — when `true`, messages in archived spaces are
+      included (task 019e95ea: archived channels are read-only snapshots
+      whose history stays searchable); default `false`. Spaces flagged for
+      deletion (`deletion_scheduled_at` set, stage 3) are always excluded,
+      even with `include_archived: true`.
 
   Messages are ordered by `inserted_at` ASC to make grouping-by-space
   and chronological formatting straightforward downstream.
@@ -924,21 +1117,32 @@ defmodule Platform.Chat do
     window_end = Keyword.get(opts, :window_end, DateTime.utc_now())
     include_kinds = Keyword.get(opts, :include_kinds, ~w(channel group))
     content_types = Keyword.get(opts, :content_types, ~w(text agent_action))
+    include_archived = Keyword.get(opts, :include_archived, false)
 
-    from(m in Message,
-      join: s in Space,
-      on: s.id == m.space_id,
-      where:
-        m.inserted_at >= ^window_start and
-          m.inserted_at < ^window_end and
-          is_nil(m.deleted_at) and
-          m.log_only == false and
-          m.content_type in ^content_types and
-          s.kind in ^include_kinds and
-          is_nil(s.archived_at),
-      order_by: [asc: m.inserted_at]
-    )
-    |> Repo.all()
+    query =
+      from(m in Message,
+        join: s in Space,
+        on: s.id == m.space_id,
+        where:
+          m.inserted_at >= ^window_start and
+            m.inserted_at < ^window_end and
+            is_nil(m.deleted_at) and
+            m.log_only == false and
+            m.content_type in ^content_types and
+            s.kind in ^include_kinds,
+        order_by: [asc: m.inserted_at]
+      )
+
+    query =
+      if include_archived do
+        # Deletion-flagged spaces must vanish from search immediately even
+        # though their history would otherwise qualify as "archived".
+        where(query, [m, s], is_nil(s.deletion_scheduled_at))
+      else
+        where(query, [m, s], is_nil(s.archived_at))
+      end
+
+    Repo.all(query)
   end
 
   @doc """
@@ -1079,6 +1283,12 @@ defmodule Platform.Chat do
   @spec edit_message(Message.t(), String.t()) ::
           {:ok, Message.t()} | {:error, Ecto.Changeset.t()}
   def edit_message(%Message{} = message, content) do
+    with :ok <- ensure_message_space_writable(message) do
+      do_edit_message(message, content)
+    end
+  end
+
+  defp do_edit_message(%Message{} = message, content) do
     result =
       message
       |> Message.changeset(%{content: content, edited_at: DateTime.utc_now()})
@@ -1104,6 +1314,12 @@ defmodule Platform.Chat do
   @doc "Soft-delete a message by setting `deleted_at` to now."
   @spec delete_message(Message.t()) :: {:ok, Message.t()} | {:error, Ecto.Changeset.t()}
   def delete_message(%Message{} = message) do
+    with :ok <- ensure_message_space_writable(message) do
+      do_delete_message(message)
+    end
+  end
+
+  defp do_delete_message(%Message{} = message) do
     result =
       message
       |> Message.changeset(%{deleted_at: DateTime.utc_now()})
@@ -1134,6 +1350,12 @@ defmodule Platform.Chat do
   """
   @spec restore_message(Message.t()) :: {:ok, Message.t()} | {:error, Ecto.Changeset.t()}
   def restore_message(%Message{} = message) do
+    with :ok <- ensure_message_space_writable(message) do
+      do_restore_message(message)
+    end
+  end
+
+  defp do_restore_message(%Message{} = message) do
     result =
       message
       |> Message.changeset(%{deleted_at: nil})
@@ -1445,8 +1667,15 @@ defmodule Platform.Chat do
   Callers MAY override the snapshot fields via `attrs` (e.g. tests
   asserting specific snapshot state); when absent, we look them up.
   """
-  @spec add_reaction(map()) :: {:ok, Reaction.t()} | {:error, Ecto.Changeset.t()}
+  @spec add_reaction(map()) ::
+          {:ok, Reaction.t()} | {:error, :space_archived | Ecto.Changeset.t()}
   def add_reaction(attrs) do
+    with :ok <- ensure_message_space_writable(attrs[:message_id] || attrs["message_id"]) do
+      do_add_reaction(attrs)
+    end
+  end
+
+  defp do_add_reaction(attrs) do
     attrs_with_snapshot = maybe_put_reactor_snapshot(attrs)
 
     msg_id = Map.get(attrs_with_snapshot, :message_id)
@@ -1559,6 +1788,12 @@ defmodule Platform.Chat do
   @spec remove_reaction(binary(), binary(), String.t()) ::
           {:ok, Reaction.t()} | {:error, :not_found | any()}
   def remove_reaction(message_id, participant_id, emoji) do
+    with :ok <- ensure_message_space_writable(message_id) do
+      do_remove_reaction(message_id, participant_id, emoji)
+    end
+  end
+
+  defp do_remove_reaction(message_id, participant_id, emoji) do
     query =
       from(r in Reaction,
         where:
@@ -1702,8 +1937,15 @@ defmodule Platform.Chat do
 
   Required attrs: `:space_id`, `:message_id` (integer), `:pinned_by`.
   """
-  @spec pin_message(map()) :: {:ok, Pin.t()} | {:error, Ecto.Changeset.t()}
+  @spec pin_message(map()) ::
+          {:ok, Pin.t()} | {:error, :space_archived | Ecto.Changeset.t()}
   def pin_message(attrs) do
+    with :ok <- ensure_space_writable(attrs[:space_id] || attrs["space_id"]) do
+      do_pin_message(attrs)
+    end
+  end
+
+  defp do_pin_message(attrs) do
     attrs = put_author_snapshot(attrs, :pinned_by, :pinned_by)
 
     result =
@@ -1732,6 +1974,12 @@ defmodule Platform.Chat do
   @spec unpin_message(binary(), integer()) ::
           {:ok, Pin.t()} | {:error, :not_found | any()}
   def unpin_message(space_id, message_id) do
+    with :ok <- ensure_space_writable(space_id) do
+      do_unpin_message(space_id, message_id)
+    end
+  end
+
+  defp do_unpin_message(space_id, message_id) do
     case Repo.get_by(Pin, space_id: space_id, message_id: message_id) do
       nil ->
         {:error, :not_found}
@@ -1777,8 +2025,15 @@ defmodule Platform.Chat do
   `:metadata`, `:cloned_from`. If `:document` is omitted, a blank canonical
   document is seeded via `CanvasDocument.new/0`.
   """
-  @spec create_canvas(map()) :: {:ok, Canvas.t()} | {:error, Ecto.Changeset.t()}
+  @spec create_canvas(map()) ::
+          {:ok, Canvas.t()} | {:error, :space_archived | Ecto.Changeset.t()}
   def create_canvas(attrs) do
+    with :ok <- ensure_space_writable(attrs[:space_id] || attrs["space_id"]) do
+      do_create_canvas(attrs)
+    end
+  end
+
+  defp do_create_canvas(attrs) do
     attrs =
       attrs
       |> stringify_canvas_payload()
@@ -1823,6 +2078,12 @@ defmodule Platform.Chat do
   @spec create_canvas_with_message(binary(), binary(), map()) ::
           {:ok, Canvas.t(), Message.t()} | {:error, term()}
   def create_canvas_with_message(space_id, participant_id, attrs \\ %{}) do
+    with :ok <- ensure_space_writable(space_id) do
+      do_create_canvas_with_message(space_id, participant_id, attrs)
+    end
+  end
+
+  defp do_create_canvas_with_message(space_id, participant_id, attrs) do
     attrs = stringify_canvas_payload(attrs)
     snapshot = author_snapshot_for(participant_id)
 
@@ -1913,6 +2174,12 @@ defmodule Platform.Chat do
   @spec update_canvas(Canvas.t(), map()) ::
           {:ok, Canvas.t()} | {:error, Ecto.Changeset.t()}
   def update_canvas(%Canvas{} = canvas, attrs) do
+    with :ok <- ensure_space_writable(canvas.space_id) do
+      do_update_canvas(canvas, attrs)
+    end
+  end
+
+  defp do_update_canvas(%Canvas{} = canvas, attrs) do
     attrs = stringify_canvas_payload(attrs)
 
     result =
@@ -1964,6 +2231,12 @@ defmodule Platform.Chat do
   @spec patch_canvas(Canvas.t(), [Platform.Chat.CanvasPatch.operation()]) ::
           {:ok, Canvas.t()} | {:conflict, map()} | {:error, term()}
   def patch_canvas(%Canvas{} = canvas, operations) when is_list(operations) do
+    with :ok <- ensure_space_writable(canvas.space_id) do
+      do_patch_canvas(canvas, operations)
+    end
+  end
+
+  defp do_patch_canvas(%Canvas{} = canvas, operations) do
     alias Platform.Chat.Canvas.Server, as: CanvasServer
 
     case CanvasServer.describe(canvas.id) do
@@ -2096,11 +2369,22 @@ defmodule Platform.Chat do
   `:storage_key`. Provide `:space_id` and/or `:message_id` to anchor ownership
   (ADR 0039 allows space- or canvas-scoped attachments without a parent message).
   """
-  @spec create_attachment(map()) :: {:ok, Attachment.t()} | {:error, Ecto.Changeset.t()}
+  @spec create_attachment(map()) ::
+          {:ok, Attachment.t()} | {:error, :space_archived | Ecto.Changeset.t()}
   def create_attachment(attrs) do
-    %Attachment{}
-    |> Attachment.changeset(attrs)
-    |> Repo.insert()
+    # Attachments may be space-anchored, message-anchored, or both (ADR 0039);
+    # guard on whichever anchor is present.
+    space_check = ensure_space_writable(attrs[:space_id] || attrs["space_id"])
+
+    message_check =
+      ensure_message_space_writable(attrs[:message_id] || attrs["message_id"])
+
+    with :ok <- space_check,
+         :ok <- message_check do
+      %Attachment{}
+      |> Attachment.changeset(attrs)
+      |> Repo.insert()
+    end
   end
 
   @doc "Fetch an attachment by primary key. Returns `nil` if not found."
@@ -2846,6 +3130,52 @@ defmodule Platform.Chat do
 
     Repo.one(query) != nil
   end
+
+  @doc """
+  Returns `true` if the space accepts new writes (messages, edits, reactions,
+  pins, canvases, attachments, participants).
+
+  Archived spaces are frozen for ALL interaction — human and agent alike
+  (task 019e95ea: an archived channel is a read-only snapshot). Execution
+  spaces are exempt: orchestration archives them at task completion and
+  system surfaces may still append to their log afterwards; their lifecycle
+  is owned by `Platform.Orchestration.ExecutionSpace`, not user actions.
+
+  Unknown space ids return `true` so the write path surfaces its natural
+  not-found / FK error instead of a misleading archived error.
+  """
+  @spec space_writable?(binary()) :: boolean()
+  def space_writable?(space_id) when is_binary(space_id) do
+    from(s in Space, where: s.id == ^space_id, select: {s.archived_at, s.kind})
+    |> Repo.one()
+    |> case do
+      nil -> true
+      {nil, _kind} -> true
+      {_archived_at, "execution"} -> true
+      _archived -> false
+    end
+  end
+
+  # Guard used by every public write path. Non-binary / missing space ids
+  # fall through as :ok so changeset validation reports the real problem.
+  defp ensure_space_writable(space_id) when is_binary(space_id) do
+    if space_writable?(space_id), do: :ok, else: {:error, :space_archived}
+  end
+
+  defp ensure_space_writable(_), do: :ok
+
+  # Variant for write paths addressed by message rather than space.
+  defp ensure_message_space_writable(%Message{space_id: space_id}),
+    do: ensure_space_writable(space_id)
+
+  defp ensure_message_space_writable(message_id) when is_binary(message_id) do
+    case Repo.one(from(m in Message, where: m.id == ^message_id, select: m.space_id)) do
+      nil -> :ok
+      space_id -> ensure_space_writable(space_id)
+    end
+  end
+
+  defp ensure_message_space_writable(_), do: :ok
 
   @doc """
   Returns `true` if the given `user_id` is a participant in the given (non-archived)

@@ -508,7 +508,11 @@ defmodule Platform.Org.Wiki.ContextT4E2ETest do
       # Platform.Tasks.Stacks.DepInference (member 2) has a DB-backed,
       # operator-editable prompt to render before its LLM round-trip.
       # Idempotent seed_defaults/0 call; no schema changes.
-      "20260710120000_seed_stacks_dep_inference_template.exs"
+      "20260710120000_seed_stacks_dep_inference_template.exs",
+      # Task 019e95ea stage 3 (channel delete pipeline) — adds nullable
+      # chat_spaces.deletion_scheduled_at + partial index for the purge
+      # sweep. No data migration.
+      "20260711000000_add_deletion_scheduled_at_to_chat_spaces.exs"
     ]
 
     defp t4_root, do: Mix.Project.project_file() |> Path.dirname()

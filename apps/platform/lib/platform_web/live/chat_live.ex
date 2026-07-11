@@ -109,6 +109,12 @@ defmodule PlatformWeb.ChatLive do
     channels =
       if embedded?, do: [], else: Chat.list_spaces(kind: "channel")
 
+    # Archived channels (task 019e95ea stage 2) feed ONLY the sidebar's
+    # collapsed "Archived" group — they are deliberately kept out of
+    # `channels` / `channel_sections/4` so no active bucket renders them.
+    archived_channels =
+      if embedded?, do: [], else: Chat.list_spaces(kind: "channel", archived: true)
+
     dm_conversations =
       if embedded? do
         []
@@ -124,6 +130,19 @@ defmodule PlatformWeb.ChatLive do
       |> assign(:embedded, embedded?)
       |> assign(:spaces, channels ++ dm_conversations)
       |> assign(:channels, channels)
+      |> assign(:archived_channels, archived_channels)
+      # Collapse state for the sidebar's "Archived" group (task 019e95ea
+      # stage 2) — collapsed by default, toggled by `toggle_archived_section`.
+      |> assign(:archived_open, false)
+      # Whether the CURRENT user may unarchive the active space (Fabrikam admin
+      # or creator). UI affordance only — `Chat.unarchive_space/2` is the
+      # gate. Recomputed wherever :active_space is (re)assigned.
+      |> assign(:can_unarchive?, false)
+      # Whether the CURRENT user may cancel a scheduled deletion on the
+      # active space (task 019e95ea stage 4). Fabrikam admin ONLY — creators
+      # don't qualify, mirroring `Chat.cancel_space_deletion/2`. Affordance
+      # only; recomputed wherever :active_space is (re)assigned.
+      |> assign(:can_cancel_deletion?, false)
       |> assign(:dm_conversations, dm_conversations)
       |> assign(:hidden_channel_ids, Accounts.get_hidden_channel_ids(user_id))
       |> assign(
@@ -376,6 +395,8 @@ defmodule PlatformWeb.ChatLive do
         socket
         |> assign(:page_title, page_title)
         |> assign(:active_space, space)
+        |> assign(:can_unarchive?, can_unarchive?(space, socket.assigns.user_id))
+        |> assign(:can_cancel_deletion?, socket.assigns.fabrikam_admin?)
         |> assign(:current_participant, participant)
         |> PresenceHooks.enter_space(space, participant, participants)
         |> MessagesHooks.enter_space(space, participant)
@@ -453,6 +474,7 @@ defmodule PlatformWeb.ChatLive do
 
       # Refresh sidebar lists
       channels = Chat.list_spaces(kind: "channel")
+      archived_channels = Chat.list_spaces(kind: "channel", archived: true)
       user_convos = Chat.list_user_conversations(socket.assigns.user_id)
       dm_convos = Enum.filter(user_convos, fn s -> s.kind in ["dm", "group"] end)
 
@@ -460,6 +482,8 @@ defmodule PlatformWeb.ChatLive do
        socket
        |> assign(:page_title, page_title)
        |> assign(:active_space, space)
+       |> assign(:can_unarchive?, can_unarchive?(space, socket.assigns.user_id))
+       |> assign(:can_cancel_deletion?, socket.assigns.fabrikam_admin?)
        |> assign(:current_participant, participant)
        # Reconnect-aware meeting restore (task 019e4b3e stage 2): after a
        # transient LV socket drop, if the user still has an active live
@@ -476,6 +500,7 @@ defmodule PlatformWeb.ChatLive do
        |> ActiveAgentHooks.resolve_for_space(space.id, participants)
        |> assign(:mobile_browser_open, false)
        |> assign(:channels, channels)
+       |> assign(:archived_channels, archived_channels)
        |> assign(:dm_conversations, dm_convos)
        |> assign(:spaces, channels ++ dm_convos)
        |> assign(
@@ -1586,6 +1611,105 @@ defmodule PlatformWeb.ChatLive do
     end
   end
 
+  # ── Archived-channel events (task 019e95ea stage 2) ────────────────────────
+
+  def handle_event("toggle_archived_section", _params, socket) do
+    {:noreply, assign(socket, :archived_open, !socket.assigns.archived_open)}
+  end
+
+  # Unarchive from the read-only banner. Authorization lives in
+  # `Chat.unarchive_space/2` (Fabrikam admin or creator) — the banner button is
+  # UI affordance only. On success we re-ensure the user's participant row
+  # (implicit join is frozen on archived spaces, so `ensure_participant/2`
+  # returned nil when the user entered the archived view) and refresh the
+  # sidebar lists the space moves between.
+  def handle_event("unarchive_space", _params, socket) do
+    case socket.assigns.active_space do
+      nil ->
+        {:noreply, socket}
+
+      space ->
+        case Chat.unarchive_space(%{id: socket.assigns.user_id}, space) do
+          {:ok, updated} ->
+            participant =
+              socket.assigns.current_participant ||
+                ensure_participant(updated.id, socket.assigns.user_id)
+
+            channels = Chat.list_spaces(kind: "channel")
+            archived_channels = Chat.list_spaces(kind: "channel", archived: true)
+            dm_convos = socket.assigns.dm_conversations
+
+            {:noreply,
+             socket
+             |> assign(:active_space, updated)
+             |> assign(:can_unarchive?, can_unarchive?(updated, socket.assigns.user_id))
+             |> assign(:current_participant, participant)
+             |> assign(:channels, channels)
+             |> assign(:archived_channels, archived_channels)
+             |> assign(:spaces, channels ++ dm_convos)
+             |> assign(
+               :channel_sections,
+               channel_sections(
+                 channels,
+                 dm_convos,
+                 MapSet.new(),
+                 socket.assigns.hidden_channel_ids
+               )
+             )
+             |> assign(
+               :sidebar_sections,
+               resolve_sidebar_sections(
+                 socket.assigns.user_id,
+                 channels,
+                 socket.assigns.hidden_channel_ids
+               )
+             )
+             |> put_flash(:info, "##{updated.name} was unarchived.")}
+
+          {:error, :unauthorized} ->
+            {:noreply,
+             put_flash(socket, :error, "You don't have permission to unarchive this channel.")}
+
+          {:error, _changeset} ->
+            {:noreply, put_flash(socket, :error, "Could not unarchive this channel.")}
+        end
+    end
+  end
+
+  # Cancel a scheduled deletion from the read-only banner (task 019e95ea
+  # stage 4). Fabrikam-admin only — `Chat.cancel_space_deletion/2` is the gate,
+  # the banner button is UI affordance. The space stays archived (the banner
+  # reverts to the archive copy with its Unarchive button) and reappears in
+  # the sidebar's Archived section, which excludes deletion-flagged channels.
+  def handle_event("cancel_space_deletion", _params, socket) do
+    case socket.assigns.active_space do
+      nil ->
+        {:noreply, socket}
+
+      space ->
+        case Chat.cancel_space_deletion(%{id: socket.assigns.user_id}, space) do
+          {:ok, updated} ->
+            {:noreply,
+             socket
+             |> assign(:active_space, updated)
+             |> assign(:can_unarchive?, can_unarchive?(updated, socket.assigns.user_id))
+             |> assign(:can_cancel_deletion?, socket.assigns.fabrikam_admin?)
+             |> assign(:archived_channels, Chat.list_spaces(kind: "channel", archived: true))
+             |> put_flash(:info, "Deletion cancelled — the channel remains archived.")}
+
+          {:error, :unauthorized} ->
+            {:noreply,
+             put_flash(socket, :error, "You don't have permission to cancel this deletion.")}
+
+          {:error, :not_scheduled} ->
+            {:noreply, put_flash(socket, :error, "No deletion is scheduled for this channel.")}
+
+          {:error, _changeset} ->
+            {:noreply, put_flash(socket, :error, "Could not cancel the deletion.")}
+        end
+    end
+  end
+
   # ── Channel / Conversation creation events ─────────────────────────────────
 
   def handle_event("new_channel_open", _params, socket) do
@@ -1634,6 +1758,18 @@ defmodule PlatformWeb.ChatLive do
     {:noreply,
      socket
      |> assign(:show_settings, false)
+     |> push_navigate(to: path)}
+  end
+
+  # Flash + navigate MUST happen in one pipeline: a flash sent as its own
+  # message renders (and is consumed) on the old view for a few ms before
+  # the navigate remounts, so the user never sees it (task 019e95ea —
+  # Marlowe's stage-4 review caught the missing delete confirmation toast).
+  def handle_info({:settings_navigate, path, {kind, msg}}, socket) do
+    {:noreply,
+     socket
+     |> assign(:show_settings, false)
+     |> put_flash(kind, msg)
      |> push_navigate(to: path)}
   end
 
@@ -1924,6 +2060,13 @@ defmodule PlatformWeb.ChatLive do
   # ADR 0038: participant rows represent current membership only — no
   # soft-delete to reconcile. If the user is in the space they get their
   # existing row; otherwise a fresh row is inserted.
+  # Task 019e95ea stage 2: UI mirror of the context-layer archive/unarchive
+  # authorization (Fabrikam admin or space creator). Affordance only — the real
+  # gate is `with_space_lifecycle_authz/3` inside `Chat.unarchive_space/2`.
+  defp can_unarchive?(space, user_id) do
+    Platform.Tenancy.fabrikam_admin?(%{id: user_id}) or space.created_by == user_id
+  end
+
   defp ensure_participant(space_id, user_id) do
     existing =
       space_id
