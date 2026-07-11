@@ -69,9 +69,9 @@
   --color-warning-content: oklch(0% 0 0);
   --color-error: oklch(63% 0.22 25);          /* #EF4444 */
   --color-error-content: oklch(100% 0 0);
-  --radius-selector: 0.25rem;
-  --radius-field: 0.25rem;
-  --radius-box: 0.75rem;
+  --radius-selector: 1rem;      /* pill-at-height for badges/toggles — re-skin Phase 1 (task 019f4f76) */
+  --radius-field: 0.625rem;     /* 10px buttons/inputs per Fabrikam spec — re-skin Phase 1 */
+  --radius-box: 0.875rem;       /* 14px cards/modals per Fabrikam spec — re-skin Phase 1 */
   --size-selector: 0.21875rem;
   --size-field: 0.21875rem;
   --border: 1px;
@@ -108,9 +108,9 @@
   --color-warning-content: oklch(0% 0 0);
   --color-error: oklch(63% 0.22 25);
   --color-error-content: oklch(100% 0 0);
-  --radius-selector: 0.25rem;
-  --radius-field: 0.25rem;
-  --radius-box: 0.75rem;
+  --radius-selector: 1rem;      /* pill-at-height for badges/toggles — re-skin Phase 1 (task 019f4f76) */
+  --radius-field: 0.625rem;     /* 10px buttons/inputs per Fabrikam spec — re-skin Phase 1 */
+  --radius-box: 0.875rem;       /* 14px cards/modals per Fabrikam spec — re-skin Phase 1 */
   --size-selector: 0.21875rem;
   --size-field: 0.21875rem;
   --border: 1px;
@@ -658,27 +658,108 @@ pre .makeup .sa { color: #79c0ff; }        /* string affix */
 }
 /* ── Fabrikam Design System — Custom utilities ──────────────────────── */
 
-/* Typography */
-body, .font-fabrikam, * {
-  font-family: "Public Sans", system-ui, sans-serif !important;
+/* Typography — re-skin Phase 1 (task 019f4f76).
+   The previous `* { … !important }` rule force-locked Public Sans onto every
+   element, which silently defeated `font-mono` utilities and any @font-face.
+   Body inherits the sans face; mono opts in via Tailwind's font-mono, whose
+   --font-mono we override below. */
+body, .font-fabrikam {
+  font-family: "Public Sans", system-ui, sans-serif;
+}
+
+/* JetBrains Mono (variable, latin subset) — self-hosted, served from
+   priv/static/fonts (already in PlatformWeb.static_paths). Used for code,
+   timestamps, task IDs, and live-updating numbers. */
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("/fonts/jetbrains-mono-latin-400.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("/fonts/jetbrains-mono-latin-500.woff2") format("woff2");
+}
+
+/* ── Re-skin Phase 1 tokens: mono stack, elevation, motion ─────────
+   Shadows follow the border-first depth model: 1px hairlines separate,
+   shadows only reinforce (04-accessibility motion rules gate animation).
+   Names map to the Fabrikam spec's card / cardHover / dropdown / modal. */
+:root {
+  /* The daisyui-theme plugin splits comma-separated font stacks in its options
+     block into multiple --font-sans declarations (last fragment wins → generic
+     sans-serif). That plugin bug is why the old `* !important` font lock
+     existed. Declaring the stacks here, un-layered and after the theme
+     emissions, restores a correct var for font-sans/font-mono utilities. */
+  --font-sans: "Public Sans", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --shadow-card: 0 1px 2px rgb(9 12 16 / 0.05), 0 1px 3px rgb(9 12 16 / 0.06);
+  --shadow-card-hover: 0 2px 4px rgb(9 12 16 / 0.06), 0 6px 16px rgb(9 12 16 / 0.08);
+  --shadow-dropdown: 0 4px 6px -2px rgb(9 12 16 / 0.08), 0 10px 24px -4px rgb(9 12 16 / 0.12);
+  --shadow-modal: 0 8px 12px -4px rgb(9 12 16 / 0.10), 0 24px 48px -12px rgb(9 12 16 / 0.22);
+  --duration-fast: 100ms;      /* micro-interactions: hover, press */
+  --duration-base: 200ms;      /* standard transitions: reveals, tint fades */
+  --duration-slow: 300ms;      /* layout shifts: panels, sheets */
+  --duration-emphasis: 400ms;  /* modals, page-level moments */
+  --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Dark shadows: light-theme shadows vanish on #171b25 — darker and wider,
+   while hairline borders stay the primary depth cue. Same dual-selector
+   pattern as .msg-agent below (explicit data-theme wins over OS preference). */
+[data-theme="dark"] {
+  --shadow-card: 0 1px 2px rgb(0 0 0 / 0.40);
+  --shadow-card-hover: 0 2px 4px rgb(0 0 0 / 0.50), 0 8px 20px rgb(0 0 0 / 0.45);
+  --shadow-dropdown: 0 4px 8px rgb(0 0 0 / 0.50), 0 12px 28px rgb(0 0 0 / 0.55);
+  --shadow-modal: 0 12px 24px rgb(0 0 0 / 0.60), 0 32px 64px rgb(0 0 0 / 0.55);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --shadow-card: 0 1px 2px rgb(0 0 0 / 0.40);
+    --shadow-card-hover: 0 2px 4px rgb(0 0 0 / 0.50), 0 8px 20px rgb(0 0 0 / 0.45);
+    --shadow-dropdown: 0 4px 8px rgb(0 0 0 / 0.50), 0 12px 28px rgb(0 0 0 / 0.55);
+    --shadow-modal: 0 12px 24px rgb(0 0 0 / 0.60), 0 32px 64px rgb(0 0 0 / 0.55);
+  }
 }
 
 /* ── Agent message differentiation ──────────────────────────────── */
 /* Applied to messages from AI agents in chat.
    --agent-accent is set per-message via inline style from the agent's stored color.
    Falls back to the original blue when not set. */
+
+/* --agent-accent clamp (design-system 01-foundations §1.4, re-skin Phase 1):
+   runtime agent colors are clamped to L ∈ [0.35, 0.80] so near-white or
+   near-black accents stay visible as borders, rings, and name text on both
+   themes. Browsers without relative-color syntax get the unclamped
+   passthrough — identical to previous behavior. */
+.msg-agent, .msg-agent-avatar, .msg-agent-name, .msg-agent-badge {
+  --agent-accent-safe: var(--agent-accent, var(--agent-accent-fallback, oklch(82% 0.12 207)));
+}
+
+@supports (color: oklch(from red clamp(0.35, l, 0.8) c h)) {
+  .msg-agent, .msg-agent-avatar, .msg-agent-name, .msg-agent-badge {
+    --agent-accent-safe: oklch(from var(--agent-accent, var(--agent-accent-fallback, oklch(82% 0.12 207))) clamp(0.35, l, 0.80) c h);
+  }
+}
+
 .msg-agent {
   --agent-accent-fallback: oklch(82% 0.12 207); /* blue default */
-  border-left: 3px solid var(--agent-accent, var(--agent-accent-fallback));
-  background: color-mix(in oklch, var(--agent-accent, var(--agent-accent-fallback)) 6%, transparent);
+  border-left: 3px solid var(--agent-accent-safe);
+  background: color-mix(in oklch, var(--agent-accent-safe) 6%, transparent);
   border-radius: 0 0.5rem 0.5rem 0;
-  box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--agent-accent, var(--agent-accent-fallback)) 8%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--agent-accent-safe) 8%, transparent);
   margin: 2px 0;
   padding-left: calc(0.75rem + 3px);
 }
 
 .msg-agent:hover {
-  background: color-mix(in oklch, var(--agent-accent, var(--agent-accent-fallback)) 10%, transparent);
+  background: color-mix(in oklch, var(--agent-accent-safe) 10%, transparent);
 }
 
 /* In dark mode, use neutral stepped surfaces for agent messages to match the
@@ -688,7 +769,7 @@ body, .font-fabrikam, * {
   --agent-accent-fallback: oklch(82% 0.12 207);
   background: #1c2531;
   box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.04);
-  border-left-color: var(--agent-accent, var(--agent-accent-fallback));
+  border-left-color: var(--agent-accent-safe);
 }
 
 [data-theme="dark"] .msg-agent:hover {
@@ -700,7 +781,7 @@ body, .font-fabrikam, * {
     --agent-accent-fallback: oklch(82% 0.12 207);
     background: #1c2531;
     box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.04);
-    border-left-color: var(--agent-accent, var(--agent-accent-fallback));
+    border-left-color: var(--agent-accent-safe);
   }
 
   :root:not([data-theme="light"]) .msg-agent:hover {
@@ -711,13 +792,13 @@ body, .font-fabrikam, * {
 .msg-agent-avatar {
   /* Uses --agent-accent from closest ancestor with the property set */
   --agent-accent-fallback: oklch(82% 0.12 207);
-  box-shadow: 0 0 0 2px var(--agent-accent, var(--agent-accent-fallback)),
-              0 0 10px color-mix(in oklch, var(--agent-accent, var(--agent-accent-fallback)) 20%, transparent);
+  box-shadow: 0 0 0 2px var(--agent-accent-safe),
+              0 0 10px color-mix(in oklch, var(--agent-accent-safe) 20%, transparent);
 }
 
 .msg-agent-name {
   --agent-accent-fallback: oklch(82% 0.12 207);
-  color: var(--agent-accent, var(--agent-accent-fallback));
+  color: var(--agent-accent-safe);
   font-weight: 700;
   letter-spacing: 0.03em;
 }
@@ -729,8 +810,8 @@ body, .font-fabrikam, * {
   letter-spacing: 0.06em;
   padding: 1px 5px;
   border-radius: 9999px;
-  border: 1px solid var(--agent-accent, var(--agent-accent-fallback));
-  color: var(--agent-accent, var(--agent-accent-fallback));
+  border: 1px solid var(--agent-accent-safe);
+  color: var(--agent-accent-safe);
   vertical-align: middle;
   margin-left: 4px;
 }
