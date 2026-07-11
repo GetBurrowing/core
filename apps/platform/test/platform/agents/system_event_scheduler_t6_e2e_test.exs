@@ -71,6 +71,28 @@ defmodule Platform.Agents.SystemEventSchedulerT6E2ETest do
 
   @org_workspace Projects.org_scope_workspace_id()
 
+  # Task 019f4f55 stage 3 rewired `fire_threshold/2` to dispatch one
+  # message per bounded window (up to `historian_max_windows_per_pass`)
+  # rather than one message per sweep. The T6 e2e cases below assert on
+  # the fire/debounce contract at the sweep level ("exactly 2 dispatches
+  # after T0 + T0+61min"). Pin the per-pass cap to 1 here so those
+  # assertions remain literal — the windowed fan-out is exercised in
+  # `SystemEventSchedulerTest.WindowedThresholdSweepTest` and
+  # `HistorianDispatcherTest`.
+  setup do
+    previous_cap = Application.get_env(:platform, :historian_max_windows_per_pass)
+    Application.put_env(:platform, :historian_max_windows_per_pass, 1)
+
+    on_exit(fn ->
+      case previous_cap do
+        nil -> Application.delete_env(:platform, :historian_max_windows_per_pass)
+        v -> Application.put_env(:platform, :historian_max_windows_per_pass, v)
+      end
+    end)
+
+    :ok
+  end
+
   # ── Fixtures ──────────────────────────────────────────────────────────
 
   defp create_historian_agent(attrs \\ %{}) do

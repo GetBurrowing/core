@@ -88,18 +88,27 @@ defmodule PlatformWeb.OrgMemoryLiveScopeTest do
   # further drift still fails here — regenerate the constant only in
   # the same commit as another authorized domain change. Pure
   # File.read! + :crypto, so this asserts even where git is unavailable.
-  @wiki_ex_sha256_2026_06_11 "cdfaef37e3695655cc52617598060a20773ab484449ea0ae6c79e1ea8de8f2e9"
+  #
+  # Re-pinned 2026-07-11 (task 019f4f55 stage 2): the Historian chunked
+  # threshold-pass plan authorizes two additive accessors on
+  # `Platform.Org.Wiki` — `list_pages_updated_since/2` and
+  # `list_journal_entries_since/2` — so the windowed dispatcher can
+  # scope each pages/journal digest to a single `[window_start,
+  # window_end)` range. Pure list-Ecto helpers, no behavioural
+  # changes to any existing surface.
+  @wiki_ex_sha256_2026_07_11 "06e9ac5d8c4ac7f86fbde0b21c83dfba333a7570cc02f2a23b3e7d1b102d5e72"
 
-  test "wiki.ex matches the 2026-06-11 authorized domain surface (sha256 pin)" do
+  test "wiki.ex matches the 2026-07-11 authorized domain surface (sha256 pin)" do
     rel_path = "lib/platform/org/wiki.ex"
     contents = File.read!(Path.join(app_root(), rel_path))
     hash = :crypto.hash(:sha256, contents) |> Base.encode16(case: :lower)
 
-    assert hash == @wiki_ex_sha256_2026_06_11,
+    assert hash == @wiki_ex_sha256_2026_07_11,
            """
-           Scope-creep detected: #{rel_path} drifted from the 2026-06-11
-           authorized content (basename wikilink resolution rollup commit).
-           Expected sha256: #{@wiki_ex_sha256_2026_06_11}
+           Scope-creep detected: #{rel_path} drifted from the 2026-07-11
+           authorized content (task 019f4f55 stage 2 — Historian windowed
+           dispatch accessors).
+           Expected sha256: #{@wiki_ex_sha256_2026_07_11}
            Got sha256:      #{hash}
            Domain changes to Platform.Org.Wiki require explicit authorization
            — re-pin this constant in the same commit as the authorized change.

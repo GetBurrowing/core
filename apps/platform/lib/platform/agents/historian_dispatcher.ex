@@ -33,7 +33,7 @@ defmodule Platform.Agents.HistorianDispatcher do
 
   require Logger
 
-  alias Platform.Agents.{ActivityDigest, Agent}
+  alias Platform.Agents.{ActivityDigest, Agent, Historian}
   alias Platform.Chat
   alias Platform.Chat.AgentResponder
   alias Platform.Federation
@@ -43,6 +43,36 @@ defmodule Platform.Agents.HistorianDispatcher do
   alias Platform.Roles
 
   @daily_window_hours 24
+
+  # ── Windowed dispatch (task 019f4f55) ──────────────────────────────────
+
+  # Ordering the slicer emits within a single day. Deterministic so
+  # per-corpus cursor advance stays monotonic across ticks even when
+  # multiple corpora fire on the same day.
+  @corpus_order [:pages, :journal, :messages, :transcripts]
+
+  # Corpus tiebreaker for sort — mirrors `@corpus_order` positionally.
+  @corpus_index %{pages: 0, journal: 1, messages: 2, transcripts: 3}
+
+  # Default lookback bound when a corpus's cursor is unset. Prevents
+  # the slicer from paying enumerate-a-decade-of-calendar-days cost on
+  # a fresh workspace. Deeper backfill is a bootstrap concern, not a
+  # sweep-tick concern.
+  @default_lookback_seconds 30 * 86_400
+
+  # Smallest sub-window the halving loop is willing to emit. Below
+  # this, if the estimated tokens still exceed budget, the window is
+  # flagged `oversize: true` and stage 2's digest-build path will apply
+  # the truncation marker downstream.
+  @min_sub_window_seconds 3_600
+
+  @type window :: %{
+          corpus: :pages | :journal | :messages | :transcripts,
+          window_start: DateTime.t(),
+          window_end: DateTime.t(),
+          token_estimate: non_neg_integer(),
+          oversize: boolean()
+        }
 
   # Literal default used as a fallback for empty DB (when prompt_templates
   # has no `historian.*` row yet). DB-backed templates take precedence via
@@ -59,6 +89,19 @@ defmodule Platform.Agents.HistorianDispatcher do
   `org/journal/{date}.md`. Be selective: only promote genuinely new \
   insights and preserve existing content that is still relevant.
   """
+
+  # Truncation marker prepended to the digest body when a window's
+  # `oversize: true` flag forces byte-cap trimming. Signals to the
+  # Historian that this pass should skim rather than deep-dive.
+  @truncation_marker "_(truncated — deep-summary rather than deep-curate)_"
+
+  # Post-render body oversize headroom. `budget_tokens` is a per-corpus
+  # digest ceiling; the rendered message body carries additional template
+  # chrome (prompt scaffold, instructions, cursor metadata paragraph)
+  # that shouldn't count against the digest ceiling itself. 10k tokens is
+  # comfortably larger than any static prompt template the Historian
+  # ships with.
+  @body_headroom_tokens 10_000
 
   @system_participant_sentinel "00000000-0000-0000-0000-000000000001"
 
@@ -87,6 +130,68 @@ defmodule Platform.Agents.HistorianDispatcher do
         Logger.info("[HistorianDispatcher] no active agent flagged for #{event_type}, skipping")
 
         :ok
+    end
+  end
+
+  @doc """
+  Windowed threshold dispatch — one digest message per bounded window
+  with per-window cursor advance.
+
+  Consumed by `SystemEventScheduler.fire_threshold/2` (stage 3) after
+  the every-6h and per-meeting fire paths already run through `dispatch/3`.
+  The pipeline:
+
+    1. Look up the historian agent (skip cleanly with `{:ok, %{dispatched:
+       0, remaining: 0}}` when nobody is pinned — mirrors `dispatch/3`).
+    2. Ensure the agent's system space + system participant + agent
+       participant (idempotent — same helpers as `dispatch_to_agent/4`).
+    3. `slice_windows(workspace_id)` and take up to
+       `max_windows_per_pass/0` chronological windows.
+    4. For each window in order:
+         a. `ActivityDigest.build_windowed(window)` → corpus-scoped body.
+         b. When `oversize: true`, truncate the body at
+            `budget_tokens * 4` bytes and prepend the
+            `_(truncated — deep-summary rather than deep-curate)_` marker
+            so the Historian knows to skim rather than deep-curate.
+         c. `post_instruction/5` with per-window `extra_metadata` carrying
+            `cursor: %{namespace, window_start, window_end}`,
+            `window_index`, `window_of`, `token_estimate`, `oversize`.
+            The pre-built digest is passed through the `:activity_digest`
+            opt so the 24h fallback path in `post_instruction/5` doesn't
+            fire.
+         d. Dispatch `AgentResponder.maybe_dispatch/1` so the agent
+            processes each windowed message independently.
+         e. `Historian.advance_cursor(workspace_id, corpus, nil,
+            window_end)` — BEFORE returning to the loop so a crash
+            mid-pass resumes at the next unread window rather than
+            replaying already-dispatched work.
+
+  Returns `{:ok, %{dispatched: n, remaining: total_windows - n}}` so
+  `SystemEventScheduler` can log/telemeter the cap-hit for the next tick.
+  Any per-window post_instruction failure short-circuits the loop with
+  `{:error, reason}`; already-dispatched windows keep their cursor
+  advance, so the next tick picks up cleanly at the next window.
+  """
+  @spec dispatch_windowed(String.t(), String.t(), map(), binary() | nil) ::
+          {:ok, %{dispatched: non_neg_integer(), remaining: non_neg_integer()}}
+          | {:error, term()}
+  def dispatch_windowed(event_type, template_slug, extra_metadata, workspace_id)
+      when is_binary(event_type) and is_binary(template_slug) and is_map(extra_metadata) do
+    case agent_for_event(event_type) do
+      %Agent{} = agent ->
+        Logger.info(
+          "[HistorianDispatcher] windowed dispatch #{event_type} → agent=#{agent.slug} " <>
+            "workspace=#{inspect(workspace_id)}"
+        )
+
+        do_dispatch_windowed(agent, event_type, template_slug, extra_metadata, workspace_id)
+
+      nil ->
+        Logger.info(
+          "[HistorianDispatcher] no active agent flagged for windowed #{event_type}, skipping"
+        )
+
+        {:ok, %{dispatched: 0, remaining: 0}}
     end
   end
 
@@ -139,7 +244,405 @@ defmodule Platform.Agents.HistorianDispatcher do
     end
   end
 
+  # ── Windowed slicing (stage 1 of 4) ───────────────────────────────────────
+
+  @doc """
+  Config-aware `slice_windows/2`. Reads `budget_tokens` from
+  `:historian_window_token_budget` and uses `DateTime.utc_now/0` as the
+  sweep window end. Equivalent to `slice_windows(workspace_id, [])`.
+  """
+  @spec slice_windows(binary() | nil) :: [window()]
+  def slice_windows(workspace_id), do: slice_windows(workspace_id, [])
+
+  @doc """
+  Slice the workspace's pending backlog into a chronological list of
+  token-budgeted windows the sweep loop dispatches one-at-a-time.
+
+  A pure helper — the runtime dispatch path stays untouched. Stage 2
+  wires this into the threshold sweep; stages 3–4 wire the per-window
+  cursor advance and telemetry. This stage only tests the slicing
+  primitive.
+
+  ## Options
+
+    * `:budget_tokens` — max estimated tokens per emitted window.
+      Defaults to `Application.get_env(:platform,
+      :historian_window_token_budget, 30_000)`.
+    * `:now` — sweep window end, defaults to `DateTime.utc_now/0`. Injected
+      by tests so the day-boundary enumeration stays deterministic.
+    * `:input_fn` — 1-arity function taking `workspace_id` and returning
+      the same shape as `Historian.pending_windows_input/1`. Defaults to
+      `&Historian.pending_windows_input/1`. Test-only injection point
+      so the slicer can be exercised without hitting the DB.
+
+  ## Behaviour
+
+    * Corpora with `pending_bytes == 0` are skipped entirely.
+    * A corpus whose whole pending range fits under `budget_tokens` in one
+      window emits ONE window `[last_at, now)` — small backlogs don't
+      pay per-day fanout cost.
+    * A corpus that overflows the budget is sliced into UTC calendar days
+      first (uniform-distribution byte estimate — the char/4 heuristic
+      Historian already uses; per-day exact byte sums are a stage-2
+      concern once the DB extension is worthwhile).
+    * If a single calendar day still overflows, that day is halved
+      recursively until either the sub-window fits or the span drops to
+      `@min_sub_window_seconds`. A sub-window that STILL overflows at
+      the minimum span is emitted with `oversize: true` and its
+      `token_estimate` clamped to `budget_tokens` — the truncation
+      marker is applied downstream at message-body render time.
+    * Emitted windows are sorted `(window_start ASC, corpus_order ASC)`
+      so multi-corpus + multi-day traffic dispatches oldest-first with
+      a stable per-day corpus order (`pages`, `journal`, `messages`,
+      `transcripts`).
+    * When a corpus's `last_processed_at` is nil, the slicer bounds the
+      lookback at `@default_lookback_seconds` (30 days). Deeper backfill
+      is a fresh-workspace bootstrap concern — a separate cursor-seeder
+      should stamp `last_processed_at` before the sweep runs.
+  """
+  @spec slice_windows(binary() | nil, keyword()) :: [window()]
+  def slice_windows(workspace_id, opts) when is_list(opts) do
+    budget_tokens = Keyword.get(opts, :budget_tokens, window_budget_tokens())
+    now = Keyword.get(opts, :now, DateTime.utc_now())
+    input_fn = Keyword.get(opts, :input_fn, &Historian.pending_windows_input/1)
+
+    input = input_fn.(workspace_id)
+
+    @corpus_order
+    |> Enum.flat_map(&slice_corpus_from_input(input, &1, now, budget_tokens))
+    |> Enum.sort_by(fn w ->
+      {DateTime.to_unix(w.window_start, :microsecond), Map.get(@corpus_index, w.corpus, 99)}
+    end)
+  end
+
+  @doc """
+  The window token budget the slicer / dispatcher read from application
+  config. Public so callers (tests, telemetry sites) can log the effective
+  budget without re-reading the raw `Application.get_env/3` call.
+  """
+  @spec window_budget_tokens() :: pos_integer()
+  def window_budget_tokens do
+    Application.get_env(:platform, :historian_window_token_budget, 30_000)
+  end
+
+  @doc """
+  The per-sweep cap on windows the stage-3 loop will dispatch before
+  yielding to the next scheduler tick. Public for the same reason as
+  `window_budget_tokens/0`.
+  """
+  @spec max_windows_per_pass() :: pos_integer()
+  def max_windows_per_pass do
+    Application.get_env(:platform, :historian_max_windows_per_pass, 20)
+  end
+
+  defp slice_corpus_from_input(input, corpus, now, budget_tokens) do
+    case Map.get(input, corpus) do
+      nil ->
+        []
+
+      {_last_at, bytes} when not is_integer(bytes) or bytes <= 0 ->
+        []
+
+      {last_at, bytes} ->
+        start_at = corpus_start_at(last_at, now)
+
+        if DateTime.compare(start_at, now) != :lt do
+          []
+        else
+          slice_corpus_range(corpus, start_at, now, bytes, budget_tokens)
+        end
+    end
+  end
+
+  defp corpus_start_at(nil, now) do
+    DateTime.add(now, -@default_lookback_seconds, :second)
+  end
+
+  defp corpus_start_at(%DateTime{} = last_at, now) do
+    # Guard against a cursor written into the future by a clock skew —
+    # never emit a window with a negative span.
+    if DateTime.compare(last_at, now) == :lt, do: last_at, else: now
+  end
+
+  defp slice_corpus_range(corpus, start_at, end_at, total_bytes, budget_tokens) do
+    total_tokens = div(total_bytes, 4)
+
+    cond do
+      total_tokens <= budget_tokens ->
+        [
+          %{
+            corpus: corpus,
+            window_start: start_at,
+            window_end: end_at,
+            token_estimate: total_tokens,
+            oversize: false
+          }
+        ]
+
+      true ->
+        slice_by_calendar_day(corpus, start_at, end_at, total_bytes, budget_tokens)
+    end
+  end
+
+  defp slice_by_calendar_day(corpus, start_at, end_at, total_bytes, budget_tokens) do
+    day_ranges = enumerate_day_ranges(start_at, end_at)
+    total_span = DateTime.diff(end_at, start_at, :second) |> max(1)
+
+    Enum.flat_map(day_ranges, fn {day_start, day_end} ->
+      day_span = DateTime.diff(day_end, day_start, :second) |> max(1)
+      day_bytes = div(total_bytes * day_span, total_span)
+      day_tokens = div(day_bytes, 4)
+
+      cond do
+        day_bytes == 0 ->
+          []
+
+        day_tokens <= budget_tokens ->
+          [
+            %{
+              corpus: corpus,
+              window_start: day_start,
+              window_end: day_end,
+              token_estimate: day_tokens,
+              oversize: false
+            }
+          ]
+
+        true ->
+          halve_until_fits(corpus, day_start, day_end, day_bytes, budget_tokens)
+      end
+    end)
+  end
+
+  defp enumerate_day_ranges(start_at, end_at) do
+    start_day = DateTime.to_date(start_at)
+    end_day = DateTime.to_date(end_at)
+
+    Date.range(start_day, end_day)
+    |> Enum.map(fn date ->
+      day_open = utc_midnight(date)
+      day_close = date |> Date.add(1) |> utc_midnight()
+
+      s = if DateTime.compare(day_open, start_at) == :lt, do: start_at, else: day_open
+      e = if DateTime.compare(day_close, end_at) == :gt, do: end_at, else: day_close
+      {s, e}
+    end)
+    |> Enum.reject(fn {s, e} -> DateTime.compare(s, e) != :lt end)
+  end
+
+  defp utc_midnight(%Date{} = date) do
+    DateTime.new!(date, ~T[00:00:00], "Etc/UTC")
+  end
+
+  defp halve_until_fits(corpus, start_at, end_at, total_bytes, budget_tokens) do
+    span_seconds = DateTime.diff(end_at, start_at, :second)
+    total_tokens = div(total_bytes, 4)
+
+    cond do
+      total_tokens <= budget_tokens ->
+        [
+          %{
+            corpus: corpus,
+            window_start: start_at,
+            window_end: end_at,
+            token_estimate: total_tokens,
+            oversize: false
+          }
+        ]
+
+      span_seconds <= @min_sub_window_seconds ->
+        # Cannot slice smaller; downstream digest-build applies the
+        # truncation marker. `token_estimate` is clamped to the budget
+        # because the emitted digest will be trimmed to that ceiling.
+        [
+          %{
+            corpus: corpus,
+            window_start: start_at,
+            window_end: end_at,
+            token_estimate: budget_tokens,
+            oversize: true
+          }
+        ]
+
+      true ->
+        mid_seconds = div(span_seconds, 2)
+        mid = DateTime.add(start_at, mid_seconds, :second)
+
+        left_bytes = div(total_bytes, 2)
+        right_bytes = total_bytes - left_bytes
+
+        halve_until_fits(corpus, start_at, mid, left_bytes, budget_tokens) ++
+          halve_until_fits(corpus, mid, end_at, right_bytes, budget_tokens)
+    end
+  end
+
   # ── Implementation ────────────────────────────────────────────────────────
+
+  defp do_dispatch_windowed(
+         %Agent{} = agent,
+         event_type,
+         template_slug,
+         extra_metadata,
+         workspace_id
+       ) do
+    with :ok <- ensure_runtime_reachable(agent, event_type),
+         {:ok, space} <- ensure_system_space(agent),
+         {:ok, system_participant} <- ensure_system_participant(space),
+         {:ok, agent_participant} <-
+           Chat.add_agent_participant(space.id, agent, display_name: agent.name) do
+      all_windows = slice_windows(workspace_id)
+      cap = max_windows_per_pass()
+      taken = Enum.take(all_windows, cap)
+      total_taken = length(taken)
+      total_windows = length(all_windows)
+      budget = window_budget_tokens()
+
+      Enum.reduce_while(Enum.with_index(taken, 1), {:ok, 0}, fn {window, idx}, {:ok, count} ->
+        case dispatch_one_window(
+               space,
+               system_participant,
+               agent_participant,
+               agent,
+               event_type,
+               template_slug,
+               extra_metadata,
+               window,
+               idx,
+               total_taken,
+               budget,
+               workspace_id
+             ) do
+          :ok ->
+            {:cont, {:ok, count + 1}}
+
+          {:error, reason} ->
+            Logger.error(
+              "[HistorianDispatcher] windowed dispatch failed at window #{idx}/#{total_taken}: " <>
+                inspect(reason)
+            )
+
+            {:halt, {:error, reason}}
+        end
+      end)
+      |> case do
+        {:ok, dispatched} ->
+          {:ok, %{dispatched: dispatched, remaining: max(total_windows - dispatched, 0)}}
+
+        {:error, _} = err ->
+          err
+      end
+    else
+      {:error, reason} = err ->
+        Logger.error(
+          "[HistorianDispatcher] windowed dispatch setup failed for #{event_type}: " <>
+            inspect(reason)
+        )
+
+        err
+    end
+  end
+
+  defp dispatch_one_window(
+         space,
+         system_participant,
+         agent_participant,
+         _agent,
+         event_type,
+         template_slug,
+         extra_metadata,
+         window,
+         idx,
+         total_taken,
+         budget_tokens,
+         workspace_id
+       ) do
+    digest_body = ActivityDigest.build_windowed(window)
+    body = maybe_truncate_digest(digest_body, window.oversize, budget_tokens)
+
+    corpus_string = Atom.to_string(window.corpus)
+
+    per_window_meta =
+      extra_metadata
+      |> Map.merge(%{
+        cursor: %{
+          namespace: corpus_string,
+          window_start: DateTime.to_iso8601(window.window_start),
+          window_end: DateTime.to_iso8601(window.window_end)
+        },
+        window_index: idx,
+        window_of: total_taken,
+        token_estimate: window.token_estimate,
+        oversize: window.oversize
+      })
+
+    case post_instruction(
+           space,
+           system_participant,
+           event_type,
+           template_slug,
+           per_window_meta,
+           activity_digest: body
+         ) do
+      {:ok, message} ->
+        # Emit per-window telemetry BEFORE the cursor advance so an
+        # advance failure still surfaces the intent to dispatch. Split
+        # numeric measurements from identifier metadata per Suite
+        # convention (see `SystemEventScheduler.emit_telemetry/3`).
+        :telemetry.execute(
+          [:platform, :historian, :window_dispatched],
+          %{token_count: window.token_estimate, window_index: idx},
+          %{
+            day_span:
+              DateTime.to_iso8601(window.window_start) <>
+                "/" <> DateTime.to_iso8601(window.window_end),
+            corpus: window.corpus,
+            workspace_id: workspace_id,
+            oversize: window.oversize
+          }
+        )
+
+        # Advance cursor BEFORE agent dispatch so a crash inside
+        # AgentResponder still leaves the cursor stamped — the next tick
+        # picks up at the next window instead of replaying this one.
+        case Historian.advance_cursor(workspace_id, corpus_string, nil, window.window_end) do
+          {:ok, _cursor} ->
+            signal = %{
+              participant_id: agent_participant.id,
+              message_id: message.id,
+              space_id: space.id,
+              reason: :system_event,
+              metadata: Map.merge(%{event_type: event_type}, stringify_keys(per_window_meta))
+            }
+
+            AgentResponder.maybe_dispatch(signal)
+            :ok
+
+          {:error, reason} ->
+            Logger.error(
+              "[HistorianDispatcher] failed to advance cursor for #{corpus_string} " <>
+                "at window_end=#{inspect(window.window_end)}: #{inspect(reason)}"
+            )
+
+            {:error, {:cursor_advance_failed, reason}}
+        end
+
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  # Byte-cap the corpus digest body and prepend the truncation marker.
+  # The slicer's `token_estimate` for an oversize window is already
+  # clamped to `budget_tokens` — the marker here signals the same
+  # ceiling at the message-body level so the Historian's prompt
+  # instructions can react.
+  defp maybe_truncate_digest(body, true, budget_tokens) do
+    cap_bytes = budget_tokens * 4
+    trimmed = binary_part(body, 0, min(byte_size(body), cap_bytes))
+    @truncation_marker <> "\n\n" <> trimmed
+  end
+
+  defp maybe_truncate_digest(body, _oversize, _budget_tokens), do: body
 
   defp dispatch_to_agent(%Agent{} = agent, event_type, template_slug, extra_metadata) do
     with :ok <- ensure_runtime_reachable(agent, event_type),
@@ -238,9 +741,16 @@ defmodule Platform.Agents.HistorianDispatcher do
     end
   end
 
-  defp post_instruction(space, system_participant, event_type, template_slug, extra_metadata) do
+  defp post_instruction(
+         space,
+         system_participant,
+         event_type,
+         template_slug,
+         extra_metadata,
+         opts \\ []
+       ) do
     date = Date.to_iso8601(Date.utc_today())
-    digest = activity_digest()
+    digest = Keyword.get(opts, :activity_digest) || activity_digest()
 
     template_vars =
       Map.merge(
@@ -259,29 +769,62 @@ defmodule Platform.Agents.HistorianDispatcher do
           |> String.replace("{activity_digest}", digest)
       end
 
-    Chat.post_message(%{
-      space_id: space.id,
-      participant_id: system_participant.id,
-      content_type: "text",
-      content: content,
-      metadata:
-        Map.merge(
-          # `skip_mention_scan: true` prevents AttentionRouter from tokenising
-          # `@[Name]` occurrences in the embedded 24h activity digest as real
-          # mentions — those are historical references, not live pings. Without
-          # this, every named participant in the last 24h of chat activity
-          # received a `:multi_mention` notification into Higgins's system
-          # space on every Historian pass (surfaced 2026-07-10 by Rowan noticing
-          # Dalton was receiving Historian dispatches meant for Higgins).
-          # See `Platform.Chat.AttentionRouter.mention_scan_enabled?/1`.
-          %{
-            "source" => "system_event",
-            "event_type" => event_type,
-            "skip_mention_scan" => true
-          },
-          stringify_keys(extra_metadata)
-        )
-    })
+    case guard_body_size(content, event_type, template_slug) do
+      :ok ->
+        Chat.post_message(%{
+          space_id: space.id,
+          participant_id: system_participant.id,
+          content_type: "text",
+          content: content,
+          metadata:
+            Map.merge(
+              # `skip_mention_scan: true` prevents AttentionRouter from
+              # tokenising `@[Name]` occurrences in the embedded 24h activity
+              # digest as real mentions — those are historical references, not
+              # live pings. Without this, every named participant in the last
+              # 24h of chat activity received a `:multi_mention` notification
+              # into Higgins's system space on every Historian pass (surfaced
+              # 2026-07-10 by Rowan noticing Dalton was receiving Historian
+              # dispatches meant for Higgins).
+              # See `Platform.Chat.AttentionRouter.mention_scan_enabled?/1`.
+              %{
+                "source" => "system_event",
+                "event_type" => event_type,
+                "skip_mention_scan" => true
+              },
+              stringify_keys(extra_metadata)
+            )
+        })
+
+      {:error, _reason} = err ->
+        err
+    end
+  end
+
+  # Body-size sanity check applied to every rendered instruction (both the
+  # 24h-anchor and per-window paths). Rejects at `budget_tokens +
+  # @body_headroom_tokens` — the corpus digest is separately budgeted, so
+  # this guard exists to catch runaway template renders / math errors
+  # BEFORE we persist a message we know downstream small-model runtimes
+  # can't process. Rejecting here also skips `Chat.post_message/1` so we
+  # never write an orphan `chat_messages` row that the AgentResponder
+  # would then dead-letter on.
+  @spec guard_body_size(String.t(), String.t(), String.t()) ::
+          :ok | {:error, {:oversize_body, non_neg_integer()}}
+  defp guard_body_size(content, event_type, template_slug) when is_binary(content) do
+    body_size_tokens = div(byte_size(content), 4)
+    hard_cap = window_budget_tokens() + @body_headroom_tokens
+
+    if body_size_tokens > hard_cap do
+      Logger.error(
+        "[HistorianDispatcher] rejecting oversize body: event=#{event_type} " <>
+          "template=#{template_slug} tokens=#{body_size_tokens} cap=#{hard_cap}"
+      )
+
+      {:error, {:oversize_body, body_size_tokens}}
+    else
+      :ok
+    end
   end
 
   # Coerce atom/integer/etc metadata values into the shape AgentResponder /

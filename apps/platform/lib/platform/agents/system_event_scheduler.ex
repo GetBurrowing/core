@@ -400,6 +400,13 @@ defmodule Platform.Agents.SystemEventScheduler do
 
   # Stamp `last_run_at` BEFORE dispatch so a slow LLM reply can't permit a
   # second tick to re-fire while the first run is in flight.
+  #
+  # Task 019f4f55 stage 3: the terminal `dispatch_event/3` call became a
+  # `HistorianDispatcher.dispatch_windowed/4` call so the sweep emits one
+  # digest per bounded window (up to `historian_max_windows_per_pass`)
+  # and per-window telemetry surfaces the cap-hit + remaining backlog
+  # for the next tick. `mark_run_started_safe/1` still runs BEFORE the
+  # dispatch — the debounce contract is intact.
   defp fire_threshold(workspace_id, pending_tokens) do
     :ok = mark_run_started_safe(workspace_id)
 
@@ -418,7 +425,42 @@ defmodule Platform.Agents.SystemEventScheduler do
       workspace_id: workspace_id
     }
 
-    dispatch_event(@historian_event, "historian.threshold", metadata)
+    case HistorianDispatcher.dispatch_windowed(
+           @historian_event,
+           "historian.threshold",
+           metadata,
+           workspace_id
+         ) do
+      {:ok, %{dispatched: dispatched, remaining: remaining}} ->
+        emit_telemetry(
+          :threshold_windows_dispatched,
+          %{dispatched: dispatched, remaining: remaining},
+          %{workspace_id: workspace_id}
+        )
+
+        if remaining > 0 do
+          emit_telemetry(
+            :threshold_sweep_capped,
+            %{remaining: remaining},
+            %{workspace_id: workspace_id}
+          )
+
+          Logger.info(
+            "[SystemEventScheduler] threshold sweep capped " <>
+              "workspace=#{inspect(workspace_id)} dispatched=#{dispatched} remaining=#{remaining}"
+          )
+        end
+
+        :ok
+
+      {:error, reason} ->
+        Logger.error(
+          "[SystemEventScheduler] windowed threshold dispatch failed " <>
+            "workspace=#{inspect(workspace_id)}: #{inspect(reason)}"
+        )
+
+        {:error, reason}
+    end
   end
 
   defp safe_pending_tokens(workspace_id) do

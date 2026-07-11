@@ -780,4 +780,375 @@ defmodule Platform.Agents.SystemEventSchedulerTest do
       end
     end
   end
+
+  # ── Windowed sweep (task 019f4f55 stage 3) ─────────────────────────────
+
+  defmodule WindowedThresholdSweepTest do
+    @moduledoc """
+    Task 019f4f55 stage 3 rewired `fire_threshold/2` to call
+    `HistorianDispatcher.dispatch_windowed/4`. These tests seed a
+    chat-message backlog large enough for the slicer to fan out well
+    past `historian_max_windows_per_pass`, then assert:
+
+      * the sweep dispatches exactly `cap` windows per tick,
+      * the messages cursor advances forward with each window,
+      * telemetry (`threshold_windows_dispatched`,
+        `threshold_sweep_capped`, `historian.window_dispatched`)
+        surfaces the cap-hit + remaining backlog,
+      * a subsequent tick past the debounce picks up the next batch.
+
+    Setup mirrors `historian_dispatcher_test.exs` — a `NoopAgentChat`
+    stub keeps the tail `AgentResponder.maybe_dispatch/1` synchronous
+    and side-effect-free so the test doesn't need to fake an LLM.
+    """
+    use Platform.DataCase, async: false
+
+    alias Platform.Agents.Agent
+    alias Platform.Agents.Historian
+    alias Platform.Agents.HistorianCursor
+    alias Platform.Agents.HistorianDispatcher
+    alias Platform.Agents.SystemEventScheduler
+    alias Platform.Chat
+    alias Platform.Chat.Message
+    alias Platform.Chat.Space
+    alias Platform.Tasks.Projects
+
+    @historian_workspace_id Projects.org_scope_workspace_id()
+
+    # No-op chat module so `AgentResponder.maybe_dispatch/1` at the end
+    # of each windowed post_instruction doesn't try to reach an LLM.
+    defmodule NoopAgentChat do
+      def chat(_message, _opts), do: {:ok, %{content: "", model: "test", usage: %{}}}
+    end
+
+    setup do
+      previous_module = Application.get_env(:platform, :chat_agent_module)
+      previous_mode = Application.get_env(:platform, :chat_agent_dispatch_mode)
+      previous_budget = Application.get_env(:platform, :historian_window_token_budget)
+      previous_cap = Application.get_env(:platform, :historian_max_windows_per_pass)
+
+      Application.put_env(:platform, :chat_agent_module, NoopAgentChat)
+      Application.put_env(:platform, :chat_agent_dispatch_mode, :sync)
+
+      # Tight budget so a modest backlog fans out into many sub-windows.
+      # Cap at 20 mirrors the production default the plan pins.
+      Application.put_env(:platform, :historian_window_token_budget, 200)
+      Application.put_env(:platform, :historian_max_windows_per_pass, 20)
+
+      on_exit(fn ->
+        restore_env(:chat_agent_module, previous_module)
+        restore_env(:chat_agent_dispatch_mode, previous_mode)
+        restore_env(:historian_window_token_budget, previous_budget)
+        restore_env(:historian_max_windows_per_pass, previous_cap)
+      end)
+
+      agent = create_historian_agent()
+
+      {:ok, agent: agent}
+    end
+
+    defp restore_env(_key, nil), do: :ok
+    defp restore_env(key, value), do: Application.put_env(:platform, key, value)
+
+    defp create_historian_agent do
+      agent =
+        %Agent{}
+        |> Agent.changeset(%{
+          slug: "windowed-historian-#{System.unique_integer([:positive])}",
+          name: "Windowed Historian",
+          status: "active"
+        })
+        |> Repo.insert!()
+
+      case Platform.Roles.assign_role("historian", agent.id) do
+        {:ok, _} ->
+          :ok
+
+        {:error, _} ->
+          Platform.Roles.unassign_role("historian") &&
+            Platform.Roles.assign_role("historian", agent.id)
+      end
+
+      agent
+    end
+
+    defp insert_channel_space(name_suffix) do
+      {:ok, space} =
+        Chat.create_space(%{
+          name: "Backlog #{name_suffix}",
+          slug: "backlog-#{System.unique_integer([:positive])}",
+          kind: "channel"
+        })
+
+      space
+    end
+
+    defp insert_user_participant(space_id, display_name) do
+      {:ok, participant} =
+        Chat.add_participant(space_id, %{
+          participant_type: "user",
+          participant_id: Ecto.UUID.generate(),
+          display_name: display_name,
+          joined_at: DateTime.utc_now()
+        })
+
+      participant
+    end
+
+    defp insert_message!(space_id, participant_id, content, inserted_at) do
+      participant = Repo.get!(Chat.Participant, participant_id)
+
+      changeset =
+        Message.changeset(%Message{}, %{
+          space_id: space_id,
+          participant_id: participant_id,
+          content_type: "text",
+          content: content,
+          author_display_name: participant.display_name || "Backlog"
+        })
+
+      changeset = Ecto.Changeset.put_change(changeset, :inserted_at, inserted_at)
+
+      Repo.insert!(changeset)
+    end
+
+    defp seed_message_backlog!(row_count, bytes_per_row, day_span) do
+      space = insert_channel_space("backlog")
+      participant = insert_user_participant(space.id, "Old Voice")
+
+      now = DateTime.utc_now()
+
+      # Spread rows uniformly across `day_span` days. Each row's content
+      # is a fixed byte size so total = row_count * bytes_per_row.
+      body = String.duplicate("x", bytes_per_row)
+
+      Enum.each(1..row_count, fn i ->
+        # Push oldest rows to the far edge of the span so cursor
+        # advance walks forward chronologically.
+        day_offset = day_span * (row_count - i) / row_count
+        ts = DateTime.add(now, -round(day_offset * 86_400), :second)
+        insert_message!(space.id, participant.id, body, ts)
+      end)
+
+      :ok
+    end
+
+    defp historian_messages(agent) do
+      case Chat.get_space_by_slug("system-#{agent.slug}") do
+        %Space{id: space_id} ->
+          Repo.all(
+            from(m in Message,
+              where: m.space_id == ^space_id and m.content_type == "text",
+              order_by: [asc: m.inserted_at]
+            )
+          )
+
+        nil ->
+          []
+      end
+    end
+
+    defp messages_cursor(workspace_id) do
+      Repo.one(
+        from(c in HistorianCursor,
+          where: c.workspace_id == ^workspace_id and c.corpus == "messages"
+        )
+      )
+    end
+
+    defp backdate_last_run!(workspace_id, delta_ms) do
+      past = DateTime.add(DateTime.utc_now(), -delta_ms, :millisecond)
+
+      {_, _} =
+        Repo.update_all(
+          from(c in HistorianCursor, where: c.workspace_id == ^workspace_id),
+          set: [last_run_at: past]
+        )
+
+      :ok
+    end
+
+    defp attach_forwarder(handler_id, event, tag) do
+      test_pid = self()
+
+      :telemetry.attach(
+        handler_id,
+        event,
+        fn _event, measurements, metadata, _config ->
+          send(test_pid, {tag, measurements, metadata})
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+    end
+
+    describe "windowed threshold sweep — cap enforcement" do
+      test "800-message backlog dispatches at cap and advances cursor", %{agent: agent} do
+        # 800 rows × 800 bytes ≈ 640 KB spread across 30 days. At
+        # budget=200 tokens the per-day byte estimate forces multiple
+        # halves per calendar day, giving well over 100 windows total —
+        # far past the cap. The cap should stop the sweep at 20.
+        seed_message_backlog!(800, 800, 30)
+
+        assert Historian.pending_tokens(@historian_workspace_id) >= 100_000
+
+        # Forward per-window telemetry so we can assert one event per
+        # dispatched window.
+        window_handler = "window-dispatched-#{System.unique_integer([:positive])}"
+        attach_forwarder(window_handler, [:platform, :historian, :window_dispatched], :window)
+
+        cap_handler = "sweep-capped-#{System.unique_integer([:positive])}"
+
+        attach_forwarder(
+          cap_handler,
+          [:platform, :agents, :historian_scheduler, :threshold_sweep_capped],
+          :capped
+        )
+
+        dispatched_handler = "windows-dispatched-#{System.unique_integer([:positive])}"
+
+        attach_forwarder(
+          dispatched_handler,
+          [:platform, :agents, :historian_scheduler, :threshold_windows_dispatched],
+          :dispatched
+        )
+
+        {:ok, _pid} =
+          start_supervised({SystemEventScheduler, check_interval_ms: :timer.hours(24)})
+
+        assert {@historian_workspace_id, :fired} in SystemEventScheduler.run_threshold_check_now()
+
+        # 20 windows dispatched → 20 chat_messages in the system space.
+        messages = historian_messages(agent)
+        cap = HistorianDispatcher.max_windows_per_pass()
+        assert length(messages) == cap
+
+        # Every dispatched message carries a "messages"-namespace cursor
+        # (the other three corpora are empty in this seed) and its
+        # window_index runs from 1..cap monotonically.
+        indices =
+          Enum.map(messages, & &1.metadata["window_index"])
+          |> Enum.sort()
+
+        assert indices == Enum.to_list(1..cap)
+
+        # The messages cursor was created and its `last_processed_at`
+        # matches the newest dispatched window's `window_end`.
+        cursor = messages_cursor(@historian_workspace_id)
+        assert %HistorianCursor{last_processed_at: %DateTime{}} = cursor
+
+        # Aggregate telemetry: dispatched=cap, remaining>0, capped fired.
+        assert_receive {:dispatched, %{dispatched: ^cap, remaining: remaining}, %{}}, 1_000
+        assert remaining > 0
+
+        assert_receive {:capped, %{remaining: ^remaining}, %{}}, 1_000
+
+        # Per-window telemetry fires `cap` times, each with a `messages`
+        # corpus tag and a token_count clamped at or under the budget.
+        budget = HistorianDispatcher.window_budget_tokens()
+        window_events = drain_window_events(cap)
+        assert length(window_events) == cap
+
+        Enum.each(window_events, fn {measurements, metadata} ->
+          assert metadata.corpus == :messages
+          assert metadata.workspace_id == @historian_workspace_id
+          assert is_binary(metadata.day_span)
+          assert String.contains?(metadata.day_span, "/")
+          assert measurements.token_count <= budget
+          assert measurements.window_index in 1..cap
+        end)
+      end
+    end
+
+    describe "windowed threshold sweep — small backlog" do
+      test "single-window backlog dispatches once and reports remaining=0", %{agent: agent} do
+        # Small enough that the slicer emits ONE window that fits budget.
+        # 400 bytes = 100 tokens, well under the 200-token budget.
+        space = insert_channel_space("small")
+        participant = insert_user_participant(space.id, "Ada")
+
+        # One recent message keeps the window range small; the cursor
+        # starts at nil so lookback bounds the range at 30 days but the
+        # single row keeps byte_size small enough for one window.
+        insert_message!(
+          space.id,
+          participant.id,
+          String.duplicate("a", 400),
+          DateTime.add(DateTime.utc_now(), -3_600, :second)
+        )
+
+        # Not enough tokens for the threshold sweep to fire on its own,
+        # so drive `dispatch_windowed/4` directly to exercise the
+        # single-window path in isolation.
+        {:ok, %{dispatched: dispatched, remaining: remaining}} =
+          HistorianDispatcher.dispatch_windowed(
+            "historian",
+            "historian.threshold",
+            %{trigger: "threshold"},
+            @historian_workspace_id
+          )
+
+        assert dispatched == 1
+        assert remaining == 0
+
+        cursor = messages_cursor(@historian_workspace_id)
+        assert %HistorianCursor{last_processed_at: %DateTime{}} = cursor
+
+        # Exactly one chat_message landed in the historian's system space.
+        assert length(historian_messages(agent)) == 1
+      end
+    end
+
+    describe "windowed threshold sweep — resumes after cap-hit" do
+      test "second tick past debounce dispatches the next batch", %{agent: agent} do
+        # 800 rows over 30 days → cap-hit on first sweep, backlog remains.
+        seed_message_backlog!(800, 800, 30)
+
+        {:ok, _pid} =
+          start_supervised({SystemEventScheduler, check_interval_ms: :timer.hours(24)})
+
+        cap = HistorianDispatcher.max_windows_per_pass()
+
+        # First sweep: 20 dispatched, cursor at the 20th window_end.
+        SystemEventScheduler.run_threshold_check_now()
+
+        before_second = messages_cursor(@historian_workspace_id)
+        assert %DateTime{} = before_second.last_processed_at
+
+        assert length(historian_messages(agent)) == cap
+
+        # Backdate `last_run_at` past the debounce so the second sweep
+        # is eligible. `last_processed_at` is untouched — the resume
+        # cursor stays at the 20th window's end.
+        backdate_last_run!(@historian_workspace_id, 61 * 60 * 1_000)
+
+        assert {@historian_workspace_id, :fired} in SystemEventScheduler.run_threshold_check_now()
+
+        after_second = messages_cursor(@historian_workspace_id)
+
+        assert DateTime.compare(after_second.last_processed_at, before_second.last_processed_at) ==
+                 :gt,
+               "cursor must advance forward on the second sweep"
+
+        # Second batch of 20 rides on top of the first, so the system
+        # space now has 40 messages total.
+        assert length(historian_messages(agent)) == 2 * cap
+      end
+    end
+
+    # Drain up to `n` window_dispatched events from the mailbox, in order.
+    defp drain_window_events(n), do: drain_window_events(n, [])
+
+    defp drain_window_events(0, acc), do: Enum.reverse(acc)
+
+    defp drain_window_events(n, acc) do
+      receive do
+        {:window, measurements, metadata} ->
+          drain_window_events(n - 1, [{measurements, metadata} | acc])
+      after
+        1_000 -> Enum.reverse(acc)
+      end
+    end
+  end
 end

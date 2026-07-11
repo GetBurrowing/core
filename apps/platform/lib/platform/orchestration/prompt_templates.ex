@@ -424,13 +424,18 @@ defmodule Platform.Orchestration.PromptTemplates do
         description:
           "Sent to the Historian agent when pending unindexed content for a " <>
             "workspace crosses the configured threshold (default 100k tokens). " <>
-            "Drains the backlog into pages and acknowledges to advance cursors.",
+            "Drains the backlog into pages via per-window chunked dispatch " <>
+            "(task 019f4f55) — one dispatch per corpus window with the " <>
+            "windowed activity digest inlined below.",
         variables: [
           "workspace_id",
-          "pending_tokens"
+          "pending_tokens",
+          "activity_digest"
         ],
         content: """
-        Pending unindexed content has crossed the {{pending_tokens}}-token threshold for workspace `{{workspace_id}}`.
+        Pending unindexed content has crossed the {{pending_tokens}}-token threshold for workspace `{{workspace_id}}`. This is one dispatch of a chunked pass — the digest below covers a bounded window; subsequent dispatches will cover adjacent windows so the local-model context stays digestible.
+
+        {{activity_digest}}
 
         ## What to do
 

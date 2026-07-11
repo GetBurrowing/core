@@ -27,6 +27,17 @@ config :platform, :start_responsibilities_registry, true
 # `Platform.Chat.space_retention_days/0`.
 config :platform, :space_retention_days, 30
 
+# Historian windowed dispatch (task 019f4f55, ADR-0041 T6 follow-up):
+# per-window token budget the slicer uses to bound each dispatched
+# digest, and the hard cap on windows per threshold sweep tick so the
+# local-model Higgins doesn't get a 24M-token queue all at once.
+# `Platform.Agents.HistorianDispatcher.slice_windows/1` reads
+# `:historian_window_token_budget`; stage-3 sweep loop caps at
+# `:historian_max_windows_per_pass` and lets subsequent ticks drain the
+# tail. Overrides at runtime via `Application.put_env/3`.
+config :platform, :historian_window_token_budget, 30_000
+config :platform, :historian_max_windows_per_pass, 20
+
 # Responsibilities provider list (ADR-0041 M8 stage 2). Registry reads
 # this on init and upserts every declared row. Mirror this list with
 # `Platform.Responsibilities.BuiltIns.providers/0` — feature teams add

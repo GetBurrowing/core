@@ -62,6 +62,34 @@ defmodule Platform.Agents.Historian do
   end
 
   @doc """
+  Returns the per-corpus `{last_processed_at, pending_bytes}` pair the
+  slicer needs to plan windows without re-querying the same cursor +
+  byte-sum state four separate times.
+
+  Consumed by `Platform.Agents.HistorianDispatcher.slice_windows/2` at
+  planning time. Keeping this as the sole DB-hitting surface for
+  windowed dispatch means the slicer stays a pure function you can
+  test against a stubbed input.
+
+  Corpus keys are atoms (`:pages`, `:journal`, `:messages`,
+  `:transcripts`) rather than strings — the slicer atoms are the
+  public contract for downstream telemetry / message metadata.
+  """
+  @spec pending_windows_input(binary() | nil) :: %{
+          pages: {DateTime.t() | nil, non_neg_integer()},
+          journal: {DateTime.t() | nil, non_neg_integer()},
+          messages: {DateTime.t() | nil, non_neg_integer()},
+          transcripts: {DateTime.t() | nil, non_neg_integer()}
+        }
+  def pending_windows_input(workspace_id) do
+    Enum.reduce(@corpora, %{}, fn corpus, acc ->
+      last_at = cursor_last_processed_at(workspace_id, corpus)
+      bytes = sum_corpus_bytes(corpus, workspace_id, last_at)
+      Map.put(acc, String.to_atom(corpus), {last_at, bytes})
+    end)
+  end
+
+  @doc """
   Returns the max `last_run_at` across the four corpus cursor rows for
   `workspace_id`, or `nil` if no cursor has ever been stamped.
 

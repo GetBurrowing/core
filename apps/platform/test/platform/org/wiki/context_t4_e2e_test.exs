@@ -517,7 +517,14 @@ defmodule Platform.Org.Wiki.ContextT4E2ETest do
       # and dispatch.in_review to the code defaults, upstreaming the
       # Designer-gate sections first applied live via prompt_template_update.
       # Content-only sync; no schema changes.
-      "20260711010000_sync_design_involvement_dispatch_templates.exs"
+      "20260711010000_sync_design_involvement_dispatch_templates.exs",
+      # Task 019f4f55 stage 2 (Historian chunked threshold-pass) —
+      # force-update the `historian.threshold` template to inline the
+      # per-window `activity_digest` produced by
+      # `HistorianDispatcher.dispatch_windowed/4`. Content-only sync;
+      # variables list picks up `activity_digest` so the render doesn't
+      # leave the placeholder unbound.
+      "20260711100000_force_update_historian_threshold_windowed.exs"
     ]
 
     defp t4_root, do: Mix.Project.project_file() |> Path.dirname()

@@ -42,6 +42,7 @@ defmodule Platform.Org.Wiki do
   require Logger
 
   alias Ecto.Adapters.SQL
+  alias Platform.Org.WikiJournalEntry
   alias Platform.Org.WikiPage
   alias Platform.Repo
 
@@ -115,6 +116,65 @@ defmodule Platform.Org.Wiki do
     WikiPage
     |> filter_workspace(workspace_id)
     |> order_by([p], asc: p.file_key)
+    |> Repo.all()
+  end
+
+  @doc """
+  List wiki pages updated in `[window_start, window_end)`, ordered by
+  `updated_at asc`.
+
+  Used by the Historian's `ActivityDigest.build_windowed/1` (task 019f4f55
+  stage 2) so the pages corpus can be sliced into the same per-window
+  digests the messages / transcripts corpora already support via
+  `Platform.Chat.list_messages_since/2` /
+  `Platform.Meetings.list_transcripts_since/2`.
+
+  ## Options
+    * `:workspace_id` (default `nil` — org-scoped; matches rows with
+      `is_nil(workspace_id)`)
+    * `:window_end`   (default `DateTime.utc_now/0`)
+  """
+  @spec list_pages_updated_since(DateTime.t(), keyword()) :: [WikiPage.t()]
+  def list_pages_updated_since(%DateTime{} = window_start, opts \\ []) do
+    workspace_id = Keyword.get(opts, :workspace_id)
+    window_end = Keyword.get(opts, :window_end, DateTime.utc_now())
+
+    WikiPage
+    |> where(
+      [p],
+      p.updated_at >= ^window_start and p.updated_at < ^window_end
+    )
+    |> filter_workspace(workspace_id)
+    |> order_by([p], asc: p.updated_at)
+    |> Repo.all()
+  end
+
+  @doc """
+  List wiki journal entries authored in `[window_start, window_end)`,
+  ordered by `inserted_at asc`.
+
+  Journal entries are append-only (their schema disables `updated_at`)
+  so `inserted_at` is the right corpus timestamp — matches the byte
+  accounting `Platform.Agents.Historian.sum_corpus_bytes("journal", ...)`
+  uses for its cursor filter.
+
+  ## Options
+    * `:workspace_id` (default `nil` — org-scoped)
+    * `:window_end`   (default `DateTime.utc_now/0`)
+  """
+  @spec list_journal_entries_since(DateTime.t(), keyword()) ::
+          [WikiJournalEntry.t()]
+  def list_journal_entries_since(%DateTime{} = window_start, opts \\ []) do
+    workspace_id = Keyword.get(opts, :workspace_id)
+    window_end = Keyword.get(opts, :window_end, DateTime.utc_now())
+
+    WikiJournalEntry
+    |> where(
+      [e],
+      e.inserted_at >= ^window_start and e.inserted_at < ^window_end
+    )
+    |> filter_workspace(workspace_id)
+    |> order_by([e], asc: e.inserted_at)
     |> Repo.all()
   end
 

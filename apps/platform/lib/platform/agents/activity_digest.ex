@@ -17,6 +17,7 @@ defmodule Platform.Agents.ActivityDigest do
   alias Platform.Chat
   alias Platform.Chat.Space
   alias Platform.Meetings
+  alias Platform.Org.Wiki
   alias Platform.Repo
   alias Platform.Tasks
 
@@ -56,6 +57,93 @@ defmodule Platform.Agents.ActivityDigest do
     header = "## Activity since #{format_datetime(window_start)} (UTC)"
     header <> "\n\n" <> body
   end
+
+  @doc """
+  Corpus-scoped windowed digest, sized to a single window emitted by
+  `Platform.Agents.HistorianDispatcher.slice_windows/2` (task 019f4f55).
+
+  Unlike `build/2` — which fans out to every corpus over a 24-hour anchor
+  window — `build_windowed/1` scopes queries to a single corpus in the
+  half-open range `[window_start, window_end)`. Callers dispatch one
+  message per window; the slicer keeps each range's estimated tokens
+  under `historian_window_token_budget` so the resulting body fits the
+  small-model context Higgins runs against.
+
+  Recognised corpus keys mirror the atoms `slice_windows/2` returns and
+  the atoms `Historian.pending_windows_input/1` uses: `:messages`,
+  `:transcripts`, `:pages`, `:journal`. Unknown corpus keys fall back to
+  a `_(unknown corpus)_` marker rather than raising — the plan-caller is
+  the sole producer so garbage keys can only come from a code bug we'd
+  rather surface as a visible digest artefact than a scheduler crash.
+
+  Empty corpus queries render the same italicised `_No activity in this
+  window._` fallback `build/2` uses so the agent's downstream handling
+  stays uniform across the two paths.
+  """
+  @spec build_windowed(map()) :: String.t()
+  def build_windowed(%{
+        corpus: corpus,
+        window_start: %DateTime{} = ws,
+        window_end: %DateTime{} = we
+      }) do
+    body = corpus_body(corpus, ws, we)
+
+    header =
+      "## #{corpus_heading(corpus)} since #{format_datetime(ws)} (UTC)" <>
+        " — window ends #{format_datetime(we)}"
+
+    header <> "\n\n" <> body
+  end
+
+  defp corpus_body(:messages, ws, we) do
+    messages = Chat.list_messages_since(ws, window_end: we)
+    space_names = fetch_space_names(messages, [])
+
+    case digest_messages(messages, space_names) do
+      nil -> "_No activity in this window._"
+      section -> section
+    end
+  end
+
+  defp corpus_body(:transcripts, ws, we) do
+    transcripts = Meetings.list_transcripts_since(ws, window_end: we)
+    space_names = fetch_space_names([], transcripts)
+
+    case digest_transcripts(transcripts, space_names) do
+      nil -> "_No activity in this window._"
+      section -> section
+    end
+  end
+
+  defp corpus_body(:pages, ws, we) do
+    # V1 org-scope only for the Historian sweep (workspace_id is nil in
+    # the caller). The Wiki accessor filters by workspace as an option;
+    # matching Historian's byte-sum which walks `is_nil(workspace_id)`.
+    pages = Wiki.list_pages_updated_since(ws, window_end: we, workspace_id: nil)
+
+    case digest_pages(pages) do
+      nil -> "_No activity in this window._"
+      section -> section
+    end
+  end
+
+  defp corpus_body(:journal, ws, we) do
+    entries =
+      Wiki.list_journal_entries_since(ws, window_end: we, workspace_id: nil)
+
+    case digest_journal(entries) do
+      nil -> "_No activity in this window._"
+      section -> section
+    end
+  end
+
+  defp corpus_body(_other, _ws, _we), do: "_(unknown corpus)_"
+
+  defp corpus_heading(:messages), do: "Chat"
+  defp corpus_heading(:transcripts), do: "Meetings"
+  defp corpus_heading(:pages), do: "Wiki pages"
+  defp corpus_heading(:journal), do: "Journal"
+  defp corpus_heading(other), do: "#{other}"
 
   # ── Messages ─────────────────────────────────────────────────────────────
 
@@ -146,6 +234,49 @@ defmodule Platform.Agents.ActivityDigest do
       end
 
     "### Tasks\n\n" <> lines <> overflow_note
+  end
+
+  # ── Wiki pages (windowed only) ───────────────────────────────────────────
+
+  defp digest_pages([]), do: nil
+
+  defp digest_pages(pages) do
+    body =
+      pages
+      |> Enum.map(fn p ->
+        time = format_datetime(p.updated_at)
+        preview = page_preview(p.content)
+        "- #{time} [page] `#{p.file_key}` (v#{p.version}): #{preview}"
+      end)
+      |> Enum.join("\n")
+
+    "### Wiki\n\n" <> body
+  end
+
+  defp page_preview(nil), do: ""
+
+  defp page_preview(content) do
+    content
+    |> String.replace(~r/\s+/, " ")
+    |> String.trim()
+    |> truncate(@message_content_preview)
+  end
+
+  # ── Journal (windowed only) ──────────────────────────────────────────────
+
+  defp digest_journal([]), do: nil
+
+  defp digest_journal(entries) do
+    body =
+      entries
+      |> Enum.map(fn e ->
+        time = format_datetime(e.inserted_at)
+        preview = page_preview(e.content)
+        "- #{time} [journal] #{Date.to_iso8601(e.date)}: #{preview}"
+      end)
+      |> Enum.join("\n")
+
+    "### Journal\n\n" <> body
   end
 
   # ── Helpers ──────────────────────────────────────────────────────────────
