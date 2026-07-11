@@ -1379,6 +1379,9 @@ defmodule Platform.Federation.ToolSurfaceTest do
       project = create_project()
       agent = create_agent()
 
+      # Task 019f5145 hardened the precondition: auto_approve_plan: true
+      # requires agent-typed assignees on BOTH execution + review phases
+      # (flat assignee_id only auto-routes to planning per ADR 0044).
       {:ok, result} =
         ToolSurface.execute(
           "task_create",
@@ -1386,8 +1389,11 @@ defmodule Platform.Federation.ToolSurfaceTest do
             "project_id" => project.id,
             "title" => "Auto-approved",
             "auto_approve_plan" => true,
-            "assignee_id" => agent.id,
-            "assignee_type" => "agent"
+            "phase_assignees" => %{
+              "planning" => %{"assignee_id" => agent.id, "assignee_type" => "agent"},
+              "execution" => %{"assignee_id" => agent.id, "assignee_type" => "agent"},
+              "review" => %{"assignee_id" => agent.id, "assignee_type" => "agent"}
+            }
           },
           %{}
         )
@@ -1396,9 +1402,11 @@ defmodule Platform.Federation.ToolSurfaceTest do
       assert Tasks.get_task_record(result.id).auto_approve_plan == true
     end
 
-    # Guards the tool-surface contract added 2026-07-08: setting
-    # auto_approve_plan without an agent assignee silently stalled the
-    # plan-engine (plan flips to approved but no planner picks it up).
+    # Guards the tool-surface contract added 2026-07-08 and hardened
+    # 2026-07-11 (task 019f5145): setting auto_approve_plan without an
+    # agent assignee on BOTH execution + review silently stalled the
+    # plan-engine downstream of planning (plan flips to approved but no
+    # planner picks it up for the next phase).
     test "task_create with auto_approve_plan: true and no assignee is refused" do
       project = create_project()
 
@@ -1413,8 +1421,11 @@ defmodule Platform.Federation.ToolSurfaceTest do
                  %{}
                )
 
-      assert envelope.error =~ "auto_approve_plan requires an assignee"
+      assert envelope.code == :auto_approve_precondition_missing
+      assert envelope.missing_phases == ["execution", "review"]
       assert envelope.recoverable == true
+      assert envelope.error =~ "execution"
+      assert envelope.error =~ "review"
     end
 
     test "task_create with auto_approve_plan: true and a user (non-agent) assignee is refused" do
@@ -1434,7 +1445,12 @@ defmodule Platform.Federation.ToolSurfaceTest do
                  %{}
                )
 
-      assert envelope.error =~ "auto_approve_plan requires an agent assignee"
+      # Flat assignee_id + assignee_type auto-routes into planning only
+      # (per ADR 0044), so execution + review remain absent regardless of
+      # whether the flat pair was user- or agent-typed.
+      assert envelope.code == :auto_approve_precondition_missing
+      assert envelope.missing_phases == ["execution", "review"]
+      assert envelope.recoverable == true
     end
 
     test "task_create without auto_approve_plan defaults to false in the envelope" do
@@ -1553,6 +1569,221 @@ defmodule Platform.Federation.ToolSurfaceTest do
       assert Map.has_key?(result, :auto_approved_at)
       assert result.auto_approved_at == nil
       refute is_nil(result.approved_at)
+    end
+
+    # ── auto_approve_plan hardened precondition (task 019f5145) ────────
+    #
+    # Task 019f5145 stage 1 lifted the check into
+    # `Platform.Federation.TaskAttrs.check_auto_approve_preconditions/4`
+    # and now hard-rejects any auto_approve_plan=true write when either
+    # the execution OR review phase slot does not resolve to a live
+    # agent. Pin the tool-surface envelope + persistence behavior on both
+    # `task_create` and `task_update`.
+
+    test "task_create with phase_assignees for all three phases persists successfully" do
+      project = create_project()
+      planner = create_agent(%{slug: "planner-#{System.unique_integer([:positive])}"})
+      executor = create_agent(%{slug: "executor-#{System.unique_integer([:positive])}"})
+      reviewer = create_agent(%{slug: "reviewer-#{System.unique_integer([:positive])}"})
+
+      {:ok, result} =
+        ToolSurface.execute(
+          "task_create",
+          %{
+            "project_id" => project.id,
+            "title" => "Fully-staffed auto-approve",
+            "auto_approve_plan" => true,
+            "phase_assignees" => %{
+              "planning" => %{"assignee_id" => planner.id, "assignee_type" => "agent"},
+              "execution" => %{"assignee_id" => executor.id, "assignee_type" => "agent"},
+              "review" => %{"assignee_id" => reviewer.id, "assignee_type" => "agent"}
+            }
+          },
+          %{}
+        )
+
+      assert result.auto_approve_plan == true
+
+      reloaded = Tasks.get_task_record(result.id)
+      assert reloaded.auto_approve_plan == true
+      assert reloaded.phase_assignees["planning"]["assignee_id"] == planner.id
+      assert reloaded.phase_assignees["execution"]["assignee_id"] == executor.id
+      assert reloaded.phase_assignees["review"]["assignee_id"] == reviewer.id
+    end
+
+    test "task_create with flat assignee_id only + auto_approve_plan: true rejects" do
+      # Flat pair auto-routes into planning (per ADR 0044) — execution
+      # and review stay absent, so the precondition fires and nothing
+      # is written to the DB.
+      project = create_project()
+      agent = create_agent()
+
+      assert {:error, envelope} =
+               ToolSurface.execute(
+                 "task_create",
+                 %{
+                   "project_id" => project.id,
+                   "title" => "Flat-only auto-approve",
+                   "auto_approve_plan" => true,
+                   "assignee_id" => agent.id,
+                   "assignee_type" => "agent"
+                 },
+                 %{}
+               )
+
+      assert envelope.code == :auto_approve_precondition_missing
+      assert envelope.missing_phases == ["execution", "review"]
+      assert envelope.recoverable == true
+
+      # DB unchanged — precondition fires before `Tasks.create_task/1`.
+      assert Tasks.list_tasks(project_id: project.id) == []
+    end
+
+    test "task_create with planning+execution but missing review rejects with review-only" do
+      project = create_project()
+      planner = create_agent(%{slug: "planner-#{System.unique_integer([:positive])}"})
+      executor = create_agent(%{slug: "executor-#{System.unique_integer([:positive])}"})
+
+      assert {:error, envelope} =
+               ToolSurface.execute(
+                 "task_create",
+                 %{
+                   "project_id" => project.id,
+                   "title" => "Missing reviewer",
+                   "auto_approve_plan" => true,
+                   "phase_assignees" => %{
+                     "planning" => %{"assignee_id" => planner.id, "assignee_type" => "agent"},
+                     "execution" => %{"assignee_id" => executor.id, "assignee_type" => "agent"}
+                   }
+                 },
+                 %{}
+               )
+
+      assert envelope.code == :auto_approve_precondition_missing
+      assert envelope.missing_phases == ["review"]
+      assert Tasks.list_tasks(project_id: project.id) == []
+    end
+
+    test "task_create with user-typed execution slot rejects execution missing" do
+      # Users NEVER satisfy the precondition — even a valid user id in
+      # the execution slot resolves to :non_agent_type.
+      project = create_project()
+      user = insert_user_for_sponsor()
+      planner = create_agent(%{slug: "planner-#{System.unique_integer([:positive])}"})
+      reviewer = create_agent(%{slug: "reviewer-#{System.unique_integer([:positive])}"})
+
+      assert {:error, envelope} =
+               ToolSurface.execute(
+                 "task_create",
+                 %{
+                   "project_id" => project.id,
+                   "title" => "User executor",
+                   "auto_approve_plan" => true,
+                   "phase_assignees" => %{
+                     "planning" => %{"assignee_id" => planner.id, "assignee_type" => "agent"},
+                     "execution" => %{"assignee_id" => user.id, "assignee_type" => "user"},
+                     "review" => %{"assignee_id" => reviewer.id, "assignee_type" => "agent"}
+                   }
+                 },
+                 %{}
+               )
+
+      assert envelope.code == :auto_approve_precondition_missing
+      assert envelope.missing_phases == ["execution"]
+      assert Tasks.list_tasks(project_id: project.id) == []
+    end
+
+    test "task_update flipping auto_approve_plan on with no phase_assignees rejects" do
+      project = create_project()
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Flip on"})
+      assert task.auto_approve_plan == false
+
+      assert {:error, envelope} =
+               ToolSurface.execute(
+                 "task_update",
+                 %{"task_id" => task.id, "auto_approve_plan" => true},
+                 %{}
+               )
+
+      assert envelope.code == :auto_approve_precondition_missing
+      assert envelope.missing_phases == ["execution", "review"]
+      assert envelope.recoverable == true
+
+      # Task unchanged — the changeset writer never ran.
+      reloaded = Tasks.get_task_record(task.id)
+      assert reloaded.auto_approve_plan == false
+    end
+
+    test "task_update title-only on a fully-staffed auto-approve task succeeds" do
+      # Regression: no toggle, no phase_attrs → gate stays closed.
+      # `task_update(title: "Renamed")` on a task already satisfying the
+      # invariant must NOT re-run the check.
+      project = create_project()
+      planner = create_agent(%{slug: "planner-#{System.unique_integer([:positive])}"})
+      executor = create_agent(%{slug: "executor-#{System.unique_integer([:positive])}"})
+      reviewer = create_agent(%{slug: "reviewer-#{System.unique_integer([:positive])}"})
+
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Original",
+          auto_approve_plan: true
+        })
+
+      {:ok, task} =
+        Tasks.set_phase_assignees(task, %{
+          "planning" => %{"assignee_id" => planner.id, "assignee_type" => "agent"},
+          "execution" => %{"assignee_id" => executor.id, "assignee_type" => "agent"},
+          "review" => %{"assignee_id" => reviewer.id, "assignee_type" => "agent"}
+        })
+
+      original_phase_assignees = task.phase_assignees
+
+      {:ok, result} =
+        ToolSurface.execute(
+          "task_update",
+          %{"task_id" => task.id, "title" => "Renamed"},
+          %{}
+        )
+
+      assert result.title == "Renamed"
+
+      reloaded = Tasks.get_task_record(task.id)
+      assert reloaded.auto_approve_plan == true
+      assert reloaded.phase_assignees == original_phase_assignees
+    end
+
+    test "task_update explicit auto_approve_plan: false on a partial-phase task succeeds" do
+      # Explicit-false always skips the precondition — this is the
+      # unwind path for a task previously configured for auto-approve.
+      project = create_project()
+      planner = create_agent(%{slug: "planner-#{System.unique_integer([:positive])}"})
+
+      # Seed a task with auto_approve_plan already true (bypassing the
+      # tool surface via the direct writer) so we can flip it OFF.
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Turn it off",
+          auto_approve_plan: true
+        })
+
+      {:ok, _task} =
+        Tasks.set_phase_assignees(task, %{
+          "planning" => %{"assignee_id" => planner.id, "assignee_type" => "agent"}
+        })
+
+      {:ok, _result} =
+        ToolSurface.execute(
+          "task_update",
+          %{"task_id" => task.id, "auto_approve_plan" => false},
+          %{}
+        )
+
+      reloaded = Tasks.get_task_record(task.id)
+      assert reloaded.auto_approve_plan == false
+      # Phase_assignees preserved through the toggle.
+      assert reloaded.phase_assignees["planning"]["assignee_id"] == planner.id
     end
 
     test "plan_get stamps auto_approved_at when the plan was auto-approved (task 019f25f2 stage 5)" do

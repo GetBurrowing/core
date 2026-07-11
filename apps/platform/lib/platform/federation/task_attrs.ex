@@ -277,6 +277,153 @@ defmodule Platform.Federation.TaskAttrs do
     struct
   end
 
+  # ── Auto-approve precondition ───────────────────────────────────────────
+
+  @auto_approve_required_phases ~w(execution review)
+
+  @typedoc """
+  Structured reject envelope emitted when the auto-approve precondition
+  fails. `missing_phases` keeps stable `[\"execution\", \"review\"]`
+  ordering; `reasons` is a per-phase atom
+  (`:absent | :non_agent_type | :agent_not_found`).
+  """
+  @type auto_approve_precondition_error ::
+          {:auto_approve_precondition_missing,
+           %{missing_phases: [String.t()], reasons: %{String.t() => atom()}}}
+
+  @doc """
+  Hard-reject the write when `auto_approve_plan` is (or will be) `true`
+  but the execution and/or review phases don't resolve to a live agent.
+
+  Called by `Platform.Federation.ToolSurface` from both `task_create`
+  and `task_update` after `build_task_attrs/3` has auto-routed the flat
+  `assignee_id + assignee_type` pair into `phase_attrs[\"planning\"]`
+  per ADR 0044. The precondition inspects the execution + review slots
+  (never planning) because auto-approve exists to save Rowan the click on
+  the plan-review gate that runs immediately AFTER planning, and the
+  execution + review agents are the ones actually dispatched.
+
+  ## Gate
+
+    * `flat_attrs[:auto_approve_plan] == false` → `:ok` (explicit-false
+      always skips; regression trap for tasks toggling auto-approve off).
+    * `flat_attrs[:auto_approve_plan] == true` → gate opens (create path
+      or update flipping to true).
+    * Key absent AND `existing_task.auto_approve_plan == true` AND
+      `phase_attrs != nil` → gate opens (an update that rewrites a
+      phase slot under a still-true flag still has to satisfy the
+      invariant).
+    * Otherwise → `:ok`.
+
+  ## Check
+
+  For each phase in `[\"execution\", \"review\"]`, read the merged slot
+  (`(existing_task && existing_task.phase_assignees) || %{}` merged over
+  `phase_attrs || %{}`). Reject when any of:
+
+    * slot is `nil` / absent / not a map → reason `:absent`
+    * `slot[\"assignee_type\"] != \"agent\"` → reason `:non_agent_type`
+      (users NEVER satisfy the precondition even if the id resolves)
+    * resolver returns `nil` for `slot[\"assignee_id\"]` → reason
+      `:agent_not_found`
+
+  ## Opts
+
+    * `:agent_resolver` — 1-arity function called with a binary agent
+      id, returning the agent struct or `nil`. Defaults to
+      `&Platform.Repo.get(Platform.Agents.Agent, &1)`. Tests inject a
+      stub to stay Repo-free.
+
+  Returns `:ok` or `{:error, {:auto_approve_precondition_missing, %{...}}}`.
+  """
+  @spec check_auto_approve_preconditions(
+          map(),
+          map() | nil,
+          Platform.Tasks.Task.t() | nil,
+          keyword()
+        ) ::
+          :ok | {:error, auto_approve_precondition_error()}
+  def check_auto_approve_preconditions(flat_attrs, phase_attrs, existing_task, opts \\ [])
+      when is_map(flat_attrs) do
+    if auto_approve_gate_open?(flat_attrs, phase_attrs, existing_task) do
+      resolver = Keyword.get(opts, :agent_resolver, &default_agent_resolver/1)
+      merged = merged_phase_assignees(existing_task, phase_attrs)
+
+      {missing_phases, reasons} =
+        Enum.reduce(@auto_approve_required_phases, {[], %{}}, fn phase, {missing, reasons} ->
+          case classify_phase_slot(Map.get(merged, phase), resolver) do
+            :ok ->
+              {missing, reasons}
+
+            {:missing, reason} ->
+              {missing ++ [phase], Map.put(reasons, phase, reason)}
+          end
+        end)
+
+      case missing_phases do
+        [] ->
+          :ok
+
+        phases ->
+          {:error,
+           {:auto_approve_precondition_missing, %{missing_phases: phases, reasons: reasons}}}
+      end
+    else
+      :ok
+    end
+  end
+
+  defp auto_approve_gate_open?(flat_attrs, phase_attrs, existing_task) do
+    case Map.get(flat_attrs, :auto_approve_plan, :missing) do
+      false ->
+        false
+
+      true ->
+        true
+
+      :missing ->
+        # Update that leaves auto_approve_plan alone. Only open the gate
+        # if the existing task already has auto_approve_plan=true AND the
+        # caller is modifying phase_assignees in this call (otherwise the
+        # invariant is already satisfied by whatever created the row).
+        case existing_task do
+          %{auto_approve_plan: true} -> not is_nil(phase_attrs)
+          _ -> false
+        end
+    end
+  end
+
+  defp merged_phase_assignees(existing_task, phase_attrs) do
+    existing =
+      case existing_task do
+        %{phase_assignees: %{} = m} -> m
+        _ -> %{}
+      end
+
+    Map.merge(existing, phase_attrs || %{})
+  end
+
+  defp classify_phase_slot(nil, _resolver), do: {:missing, :absent}
+  defp classify_phase_slot(slot, _resolver) when not is_map(slot), do: {:missing, :absent}
+
+  defp classify_phase_slot(slot, resolver) do
+    cond do
+      Map.get(slot, "assignee_type") != "agent" ->
+        {:missing, :non_agent_type}
+
+      not is_binary(Map.get(slot, "assignee_id")) ->
+        {:missing, :agent_not_found}
+
+      is_nil(resolver.(Map.get(slot, "assignee_id"))) ->
+        {:missing, :agent_not_found}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp default_agent_resolver(id), do: Platform.Repo.get(Platform.Agents.Agent, id)
+
   # ── Utilities ───────────────────────────────────────────────────────────
 
   defp stringify_keys(args) do

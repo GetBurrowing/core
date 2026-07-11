@@ -346,4 +346,218 @@ defmodule Platform.Federation.TaskAttrsTest do
       assert MapSet.new(Map.keys(create_flat)) == MapSet.new(Map.keys(update_flat))
     end
   end
+
+  # ── check_auto_approve_preconditions/4 (task 019f5145) ─────────────────
+  #
+  # Pure-function precondition on the auto_approve_plan flag: when the
+  # flag is (or will be) `true`, BOTH the execution and review phase slots
+  # must resolve to a live agent. Stubs the resolver so these stay
+  # Repo-free.
+  describe "check_auto_approve_preconditions/4" do
+    @exec_agent "01900000-0000-7000-8000-000000000e01"
+    @review_agent "01900000-0000-7000-8000-000000000e02"
+    @unknown_agent "01900000-0000-7000-8000-0000000000ff"
+
+    # Stub resolver: only the two seeded ids resolve; everything else
+    # returns nil. Mirrors the shape of `Platform.Repo.get(Agent, id)`.
+    defp stub_resolver do
+      known = MapSet.new([@exec_agent, @review_agent])
+
+      fn id ->
+        if MapSet.member?(known, id), do: %Platform.Agents.Agent{id: id}, else: nil
+      end
+    end
+
+    defp full_phase_attrs do
+      %{
+        "execution" => %{"assignee_id" => @exec_agent, "assignee_type" => "agent"},
+        "review" => %{"assignee_id" => @review_agent, "assignee_type" => "agent"}
+      }
+    end
+
+    test "flag false + no phase_attrs + no existing task → :ok (gate closed)" do
+      assert :ok =
+               TaskAttrs.check_auto_approve_preconditions(
+                 %{auto_approve_plan: false},
+                 nil,
+                 nil,
+                 agent_resolver: stub_resolver()
+               )
+    end
+
+    test "flag off + existing task with auto_approve_plan=true and no phase_attrs → :ok" do
+      # Regression: nothing being touched, do NOT re-run the check on an
+      # update that leaves auto_approve_plan alone. Only rewrites to
+      # phase_assignees under a still-true flag open the gate.
+      existing = %Platform.Tasks.Task{auto_approve_plan: true, phase_assignees: %{}}
+
+      assert :ok =
+               TaskAttrs.check_auto_approve_preconditions(
+                 %{},
+                 nil,
+                 existing,
+                 agent_resolver: stub_resolver()
+               )
+    end
+
+    test "flag on + phase_attrs supplies both exec+review agents → :ok" do
+      assert :ok =
+               TaskAttrs.check_auto_approve_preconditions(
+                 %{auto_approve_plan: true},
+                 full_phase_attrs(),
+                 nil,
+                 agent_resolver: stub_resolver()
+               )
+    end
+
+    test "flag on + only review slot → rejects with execution missing (absent)" do
+      phase_attrs = %{
+        "review" => %{"assignee_id" => @review_agent, "assignee_type" => "agent"}
+      }
+
+      assert {:error,
+              {:auto_approve_precondition_missing,
+               %{missing_phases: ["execution"], reasons: %{"execution" => :absent}}}} =
+               TaskAttrs.check_auto_approve_preconditions(
+                 %{auto_approve_plan: true},
+                 phase_attrs,
+                 nil,
+                 agent_resolver: stub_resolver()
+               )
+    end
+
+    test "flag on + only execution slot → rejects with review missing (absent)" do
+      phase_attrs = %{
+        "execution" => %{"assignee_id" => @exec_agent, "assignee_type" => "agent"}
+      }
+
+      assert {:error,
+              {:auto_approve_precondition_missing,
+               %{missing_phases: ["review"], reasons: %{"review" => :absent}}}} =
+               TaskAttrs.check_auto_approve_preconditions(
+                 %{auto_approve_plan: true},
+                 phase_attrs,
+                 nil,
+                 agent_resolver: stub_resolver()
+               )
+    end
+
+    test "flag on + both slots absent → rejects with stable [execution, review] order" do
+      assert {:error, {:auto_approve_precondition_missing, %{missing_phases: phases}}} =
+               TaskAttrs.check_auto_approve_preconditions(
+                 %{auto_approve_plan: true},
+                 nil,
+                 nil,
+                 agent_resolver: stub_resolver()
+               )
+
+      # `missing_phases` is documented as stable [execution, review]
+      # order — the reduce walks @auto_approve_required_phases in
+      # declaration order and appends.
+      assert phases == ["execution", "review"]
+    end
+
+    test "flag on + execution slot present but user-typed → rejects :non_agent_type" do
+      phase_attrs = %{
+        "execution" => %{"assignee_id" => @exec_agent, "assignee_type" => "user"},
+        "review" => %{"assignee_id" => @review_agent, "assignee_type" => "agent"}
+      }
+
+      assert {:error,
+              {:auto_approve_precondition_missing,
+               %{missing_phases: ["execution"], reasons: %{"execution" => :non_agent_type}}}} =
+               TaskAttrs.check_auto_approve_preconditions(
+                 %{auto_approve_plan: true},
+                 phase_attrs,
+                 nil,
+                 agent_resolver: stub_resolver()
+               )
+    end
+
+    test "flag on + execution slot with agent type but resolver returns nil → :agent_not_found" do
+      phase_attrs = %{
+        "execution" => %{"assignee_id" => @unknown_agent, "assignee_type" => "agent"},
+        "review" => %{"assignee_id" => @review_agent, "assignee_type" => "agent"}
+      }
+
+      assert {:error,
+              {:auto_approve_precondition_missing,
+               %{missing_phases: ["execution"], reasons: %{"execution" => :agent_not_found}}}} =
+               TaskAttrs.check_auto_approve_preconditions(
+                 %{auto_approve_plan: true},
+                 phase_attrs,
+                 nil,
+                 agent_resolver: stub_resolver()
+               )
+    end
+
+    test ":update regression — existing full auto_approve task + title-only update → :ok" do
+      # No flag toggle, no phase_attrs → gate stays closed even though
+      # the existing task carries auto_approve_plan=true. This is the
+      # regression trap for `task_update(title: ...)` on a task already
+      # satisfying the invariant.
+      existing = %Platform.Tasks.Task{
+        auto_approve_plan: true,
+        phase_assignees: full_phase_attrs()
+      }
+
+      assert :ok =
+               TaskAttrs.check_auto_approve_preconditions(
+                 %{title: "Renamed"},
+                 nil,
+                 existing,
+                 agent_resolver: stub_resolver()
+               )
+    end
+
+    test ":update — full-auto task with phase_attrs rewriting exec to a user → rejects" do
+      # Auto-approve stays on (flag absent from flat_attrs), but the
+      # caller is rewriting the execution slot. Gate opens; the new
+      # user-typed slot fails :non_agent_type.
+      existing = %Platform.Tasks.Task{
+        auto_approve_plan: true,
+        phase_assignees: full_phase_attrs()
+      }
+
+      phase_attrs = %{
+        "execution" => %{"assignee_id" => "some-user-id", "assignee_type" => "user"}
+      }
+
+      assert {:error, {:auto_approve_precondition_missing, %{missing_phases: ["execution"]}}} =
+               TaskAttrs.check_auto_approve_preconditions(
+                 %{},
+                 phase_attrs,
+                 existing,
+                 agent_resolver: stub_resolver()
+               )
+    end
+
+    test ":update — flipping auto_approve_plan false → true on a slotless task rejects both" do
+      existing = %Platform.Tasks.Task{auto_approve_plan: false, phase_assignees: %{}}
+
+      assert {:error,
+              {:auto_approve_precondition_missing, %{missing_phases: ["execution", "review"]}}} =
+               TaskAttrs.check_auto_approve_preconditions(
+                 %{auto_approve_plan: true},
+                 nil,
+                 existing,
+                 agent_resolver: stub_resolver()
+               )
+    end
+
+    test "agent_resolver opt is not called when the gate is closed" do
+      # Confirms the short-circuit: an update-mode call with the flag
+      # absent and no matching existing-task state must not touch the
+      # resolver. A raising resolver would blow up if the gate opened.
+      raising_resolver = fn _id -> raise "should not be called" end
+
+      assert :ok =
+               TaskAttrs.check_auto_approve_preconditions(
+                 %{title: "Untouched"},
+                 nil,
+                 nil,
+                 agent_resolver: raising_resolver
+               )
+    end
+  end
 end

@@ -2962,7 +2962,7 @@ defmodule Platform.Federation.ToolSurface do
              auto_route_flat_assignee_current_phase: true,
              current_phase: "planning"
            ),
-         :ok <- check_auto_approve_requires_assignee(flat_attrs, phase_attrs, "planning", nil),
+         :ok <- TaskAttrs.check_auto_approve_preconditions(flat_attrs, phase_attrs, nil),
          {:ok, task} <- Tasks.create_task(flat_attrs),
          {:ok, task} <- maybe_apply_phase_assignees(task, phase_attrs) do
       # Preload sponsor so the return envelope shows the shape a
@@ -3034,6 +3034,9 @@ defmodule Platform.Federation.ToolSurface do
            suggestion:
              "Pass %{\"planning\" => %{\"assignee_id\" => uuid, \"assignee_type\" => \"agent\"}}"
          }}
+
+      {:error, {:auto_approve_precondition_missing, %{missing_phases: phases}}} ->
+        {:error, auto_approve_precondition_envelope(phases)}
 
       {:error, %Ecto.Changeset{} = changeset} ->
         {:error,
@@ -3352,17 +3355,16 @@ defmodule Platform.Federation.ToolSurface do
           non_status_flat = Map.delete(flat_attrs, :status)
 
           # If `auto_approve_plan` will be `true` after this update (in
-          # this call or already-true on the task and not being changed),
-          # resolve the effective assignee across THIS update's flat/phase
-          # attrs merged over the existing task row, and reject if the
-          # result is unassigned or non-agent. Silent auto-approve without
-          # an assignee is the bug this guards against — the plan flips
-          # to approved but no planner picks it up. See task 019f42fd
-          # session note 2026-07-08. Gate lives inside the helper.
-          current_phase = Tasks.current_phase(task)
-
+          # this call or already-true on the task with phase_assignees
+          # being rewritten), hard-reject when the execution and/or
+          # review phases don't resolve to a live agent. Silent
+          # auto-approve without a valid downstream agent is the bug
+          # this guards against — the plan flips to approved but no
+          # planner picks it up. See task 019f42fd session note
+          # 2026-07-08 (initial guard) and 019f5145 (hardened per ADR
+          # 0044). Gate lives inside `TaskAttrs.check_auto_approve_preconditions/4`.
           auto_check =
-            check_auto_approve_requires_assignee(flat_attrs, phase_attrs, current_phase, task)
+            TaskAttrs.check_auto_approve_preconditions(flat_attrs, phase_attrs, task)
 
           # Order: flat_attrs → phase_attrs → status_change. Phase-attrs
           # writer (`Tasks.set_phase_assignees/2`) uses the task's
@@ -3422,10 +3424,8 @@ defmodule Platform.Federation.ToolSurface do
                  suggestion: "Check that the provided values are valid"
                }}
 
-            {:error, %{error: _} = err} ->
-              # Passthrough for `validate_auto_approve_requires_assignee`
-              # error envelopes (already-shaped for the tool caller).
-              {:error, err}
+            {:error, {:auto_approve_precondition_missing, %{missing_phases: phases}}} ->
+              {:error, auto_approve_precondition_envelope(phases)}
           end
         else
           {:error, {:invalid_phase_keys, keys}} ->
@@ -3456,89 +3456,21 @@ defmodule Platform.Federation.ToolSurface do
   defp maybe_transition_status(task, new_status),
     do: Tasks.transition_task_status(task, new_status)
 
-  # `auto_approve_plan: true` is meaningless without an agent-typed
-  # assignee — the plan-engine has no one to dispatch to, so the plan
-  # flips to approved but no planner picks it up (silent stall). Refuse
-  # at the tool boundary so the caller notices. Enforced on both
-  # `task_create` and `task_update`.
-  #
-  # Gate first: if the caller isn't asking for auto-approve, skip the
-  # check entirely — this preserves the historical zero-friction path
-  # where `task_create` with no assignee is fine.
-  #
-  # When the gate fires, resolve the RESOLVED assignee (merged with
-  # `phase_assignees[current_phase]` and the existing task row on update)
-  # so we validate what the row will actually look like post-write.
-  defp check_auto_approve_requires_assignee(flat_attrs, phase_attrs, current_phase, task) do
-    flat_flag = Map.get(flat_attrs, :auto_approve_plan, :missing)
-
-    effective_flag =
-      cond do
-        flat_flag == true -> true
-        flat_flag == false -> false
-        # No flag in this update: fall through to the existing task row's
-        # setting (create path passes task=nil so the fallback is false).
-        task -> task.auto_approve_plan == true
-        true -> false
-      end
-
-    if effective_flag do
-      {resolved_id, resolved_type} =
-        resolve_effective_assignee(flat_attrs, phase_attrs, current_phase, task)
-
-      cond do
-        is_nil(resolved_id) or resolved_id == "" ->
-          {:error,
-           %{
-             error: "auto_approve_plan requires an assignee",
-             recoverable: true,
-             suggestion:
-               "Set assignee_id + assignee_type in the same call (or a phase_assignees entry for the current phase), or omit auto_approve_plan (defaults to false) and set it later once an assignee is configured."
-           }}
-
-        resolved_type != "agent" ->
-          {:error,
-           %{
-             error: "auto_approve_plan requires an agent assignee",
-             recoverable: true,
-             suggestion:
-               "Auto-approve dispatches to the assigned agent's planner runtime. Set assignee_type to \"agent\" and pass an agent's id in assignee_id."
-           }}
-
-        true ->
-          :ok
-      end
-    else
-      :ok
-    end
-  end
-
-  # Resolve the effective (post-write) flat assignee for auto-approve
-  # validation. Precedence: `phase_attrs[current_phase]` (canonical writer)
-  # over `flat_attrs` (auto-route path leaves flat empty here) over the
-  # existing task row (only meaningful for :update; pass `nil` on :create
-  # so a missing assignee resolves to `nil` and the check fires).
-  defp resolve_effective_assignee(flat_attrs, phase_attrs, current_phase, task) do
-    phase_entry =
-      case phase_attrs do
-        %{} = m when is_binary(current_phase) -> Map.get(m, current_phase)
-        _ -> nil
-      end
-
-    {phase_id, phase_type} =
-      case phase_entry do
-        %{"assignee_id" => id, "assignee_type" => type} -> {id, type}
-        %{"assignee_id" => id} -> {id, nil}
-        _ -> {nil, nil}
-      end
-
-    fallback_id = if task, do: task.assignee_id, else: nil
-    fallback_type = if task, do: task.assignee_type, else: nil
-
-    id = phase_id || Map.get(flat_attrs, :assignee_id, fallback_id)
-    type = phase_type || Map.get(flat_attrs, :assignee_type, fallback_type)
-
-    {id, type}
+  # Shared envelope for `TaskAttrs.check_auto_approve_preconditions/4`
+  # rejections — both `task_create` and `task_update` surface the identical
+  # shape so callers can dispatch on `envelope.code` without checking which
+  # tool produced the error. `missing_phases` retains stable
+  # `[\"execution\", \"review\"]` ordering from TaskAttrs.
+  defp auto_approve_precondition_envelope(phases) do
+    %{
+      error:
+        "auto_approve_plan requires an agent assignee on both the execution and review phases.",
+      code: :auto_approve_precondition_missing,
+      missing_phases: phases,
+      suggestion:
+        "Pass phase_assignees with agent-typed assignee_id + assignee_type for each of: planning, execution, review. Flat assignee_id only sets planning per ADR 0044.",
+      recoverable: true
+    }
   end
 
   def execute("task_attach_canvas", args, context) do
