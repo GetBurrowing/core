@@ -120,6 +120,30 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
       assert content =~
                ~r/Do NOT include a stage like.*Deploy via PR merge.*Open PR.*Watch CI.*Merge/s
     end
+
+    test "carries the Design involvement section — detection, brand cascade, advisory Saru stage (task 019f4f1d)" do
+      # First applied live via prompt_template_update on 2026-07-11 and
+      # upstreamed here so force-update migrations preserve it. The section
+      # must (a) detect UI/UX tasks beyond file tokens, (b) resolve brand
+      # context project → org with a once-per-project three-way human ask,
+      # and (c) add an advisory (never blocking) Saru design stage.
+      content = PromptTemplates.default_content_for_slug("dispatch.planning")
+
+      assert content =~ "Design involvement (UI/UX tasks)"
+      assert content =~ "looks, feels, moves, or is interacted with"
+
+      # Brand cascade + the three-way escalation, recorded once per project.
+      assert content =~ "Resolve brand context"
+      assert content =~ ~r/project-level overrides and extends org-level/i
+      assert content =~ "ONCE per project"
+      assert content =~ "exploring — no identity yet"
+      assert content =~ "never blocks development"
+
+      # Advisory design stage: explicitly advise-only, no manual_approval gate.
+      assert content =~ "Design direction (Saru)"
+      assert content =~ "advise-only"
+      assert content =~ "Do NOT attach manual_approval to it"
+    end
   end
 
   describe "default_content_for_slug/1 — dispatch.in_review" do
@@ -149,6 +173,19 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
 
       assert content =~ "{{evidence_workflow_reference}}",
              "dispatch.in_review must keep the evidence_workflow_reference placeholder"
+    end
+
+    test "routes UI tasks through Saru's advisory design review before the human gate (task 019f4f1d)" do
+      # First applied live via prompt_template_update on 2026-07-11 and
+      # upstreamed here so force-update migrations preserve it. Saru's review
+      # is advisory evidence bundled into the human review request — it must
+      # never replace human approval nor block the review request.
+      content = PromptTemplates.default_content_for_slug("dispatch.in_review")
+
+      assert content =~ "Design review (Saru)"
+      assert content =~ "BEFORE creating the human review request"
+      assert content =~ "never replaces human approval"
+      assert content =~ "create the review request anyway"
     end
   end
 

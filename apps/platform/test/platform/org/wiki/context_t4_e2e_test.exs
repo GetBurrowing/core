@@ -512,7 +512,12 @@ defmodule Platform.Org.Wiki.ContextT4E2ETest do
       # Task 019e95ea stage 3 (channel delete pipeline) — adds nullable
       # chat_spaces.deletion_scheduled_at + partial index for the purge
       # sweep. No data migration.
-      "20260711000000_add_deletion_scheduled_at_to_chat_spaces.exs"
+      "20260711000000_add_deletion_scheduled_at_to_chat_spaces.exs",
+      # Task 019f4f1d (Saru design gates) — force-update dispatch.planning
+      # and dispatch.in_review to the code defaults, upstreaming the
+      # Designer-gate sections first applied live via prompt_template_update.
+      # Content-only sync; no schema changes.
+      "20260711010000_sync_design_involvement_dispatch_templates.exs"
     ]
 
     defp t4_root, do: Mix.Project.project_file() |> Path.dirname()

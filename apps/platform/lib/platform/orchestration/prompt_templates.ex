@@ -247,6 +247,36 @@ defmodule Platform.Orchestration.PromptTemplates do
         - Pre-writing `failure_feedback` in the evaluation_payload — the review agent observes failures and posts them at review time.
         - `manual_approval` on stages with no UI work (ingestion logs a warning when this happens).
 
+        ## Design involvement (UI/UX tasks) — decide at plan time
+
+        First decide: does this task touch UI/UX? It does if ANY of:
+        - a planned stage would modify UI files (the same token list as the `manual_approval` rule above), OR
+        - the task title/description concerns screens, layout, styling, navigation, user-visible copy, or user flows, OR
+        - the task would change how any feature **looks, feels, moves, or is interacted with** (catch-all — catches motion, copy, and interaction changes that touch no styling file).
+
+        If it does NOT touch UI/UX: skip this section entirely.
+
+        If it DOES:
+
+        1. **Resolve brand context** before planning design-dependent stages, in this order:
+           a. Project-level brand settings (project-specific logos, brand voice, additional colors).
+           b. Org-level brand identity (base colors, fonts, logo).
+           Merge rule: project-level overrides and extends org-level. Project-only is valid.
+           c. If NEITHER exists, check whether the project already has a recorded brand decision (including "exploring"). If a decision is recorded, honor it — do NOT re-ask. If none: escalate to a human ONCE per project with exactly three options — (a) apply the org default identity, (b) create an identity now, (c) "exploring — no identity yet". Record the answer at project level.
+           Option (c) means: design work proceeds with neutral/low-fi direction and brand checks run advisory-only. **This escalation never blocks development** — it only determines how strictly brand is enforced.
+
+        2. **Add an early advisory design stage** — "Design direction (Saru)": a low-fi or directional mock of the surfaces this task changes. The stage description must ask for a structured deliverable:
+           - Opening line pins the subject: what this surface is, who uses it, and the one job it does.
+           - Palette: 4–6 named color values (from brand tokens if they exist; provisional if exploring).
+           - Type: 2–3 roles (display used with restraint, body, optional utility).
+           - Layout: one sentence of intent + a rough wireframe; name ONE signature element — spend boldness in one place.
+           - Self-critique before handoff: revise anything that reads like the generic default for this kind of page, and say what changed.
+           This stage is advise-only: it does NOT block development and the mock is expected to be iterated. Do NOT attach manual_approval to it.
+
+        3. **Reference the resolved brand identity in implementation stage descriptions** — name the semantic token slots the coder must use (primary/on-primary, accent, surface, muted, border, destructive), not raw hex and not "match the brand". If the project is in exploring mode, say so in the stage description instead.
+
+        4. Keep the existing manual_approval screenshot rule for UI-rendering stages — that remains the human gate; the design stage is additive, not a replacement.
+
         Submit the plan with plan_submit when complete. Do not begin implementation until the plan is approved.
 
         The attention signal that delivered this message includes a `context` field with the full task hierarchy: project (name, repo_url, tech_stack), epic (name, description, acceptance_criteria), task metadata, current plan with stages, and execution_space_id. Use it for full context when writing your plan.
@@ -448,6 +478,9 @@ defmodule Platform.Orchestration.PromptTemplates do
         - Start a local dev server for the worktree (reference the dev server skill via attached skills if available)
         - Navigate to the relevant pages, take screenshots, verify visual correctness and interaction behavior
         - Post screenshots, canvas snapshots, or other concrete evidence into the execution space
+
+        ## Design review (Saru) — before the human gate
+        If the task changed UI files (the same token list as the planner's manual_approval rule: `.heex`, `assets/js/`, `assets/css/`, `app.css`, `compose_input`, `chat_live`, `tasks_live.ex`, `_web/live/`, `_web/components/`), obtain Saru's design review (the Designer role's design.critique responsibility) on your captured screenshots BEFORE creating the human review request, and include Saru's verdict and issue list as labelled checklist items in the review request. Saru's review is advisory evidence for the human gate — it never replaces human approval, and if the design review cannot be obtained promptly, create the review request anyway and note that design review is missing.
 
         ## First-turn rule (CRITICAL)
         - Do NOT spend your first substantive turn re-discovering broad task/plan state if the dispatch already provides `Current task_id`, `Current stage_id`, `validation_id`, and `execution_space_id`.
