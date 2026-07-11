@@ -1300,7 +1300,8 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
       assert HeartbeatScheduler.stack_membership(task) == %{
                stack_id: "019e2782-09d6-7e2c-9502-c106290e5add",
                stack_slug: "meeting-module",
-               rollup_branch: "stack/meeting-module"
+               rollup_branch: "stack/meeting-module",
+               stack_metadata: %{}
              }
     end
 
@@ -1318,8 +1319,34 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
       assert HeartbeatScheduler.stack_membership(task) == %{
                stack_id: "019e3000-0000-7000-8000-000000000001",
                stack_slug: "solo-stack",
-               rollup_branch: "stack/solo-stack"
+               rollup_branch: "stack/solo-stack",
+               stack_metadata: %{}
              }
+    end
+
+    test "surfaces stack.metadata (including rollup_branch_ready stamp) on the membership map" do
+      # ADR-0042 Decision 2: the git_workflow_section reads
+      # `stack.metadata["rollup_branch_ready"]` to decide whether to cut member
+      # branches from `origin/<rollup_branch>` or fall back to
+      # `origin/<default_branch>`. `stack_membership/1` is the pass-through.
+      task = %{
+        id: "019e2474-11c1-7000-8000-000000000001",
+        stack_id: "019e2782-09d6-7e2c-9502-c106290e5add",
+        stack: %{
+          id: "019e2782-09d6-7e2c-9502-c106290e5add",
+          slug: "meeting-module",
+          rollup_branch: "stack/meeting-module",
+          metadata: %{
+            "rollup_branch_ready" => %{
+              "at" => "2026-07-10T21:00:00Z",
+              "base_sha" => "abc1234"
+            }
+          }
+        }
+      }
+
+      assert %{stack_metadata: %{"rollup_branch_ready" => %{"base_sha" => "abc1234"}}} =
+               HeartbeatScheduler.stack_membership(task)
     end
 
     test "still flags a stack member when the :stack association is not loaded" do
@@ -1338,7 +1365,8 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
       assert HeartbeatScheduler.stack_membership(task) == %{
                stack_id: "019e2782-09d6-7e2c-9502-c106290e5add",
                stack_slug: nil,
-               rollup_branch: nil
+               rollup_branch: nil,
+               stack_metadata: %{}
              }
     end
   end
@@ -1378,11 +1406,31 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
     end
 
     # A `task_stacks` row as the orchestrator preloads it onto `task.stack`.
+    # No `rollup_branch_ready` metadata stamp — mimics the pre-ADR-0042 default
+    # where a member dispatches before StackDeployer's async ensure lands. The
+    # dispatch prompt falls back to `origin/<default_branch>` in that state.
     defp meeting_module_stack do
       %{
         id: "019e2782-09d6-7e2c-9502-c106290e5add",
         slug: "meeting-module",
-        rollup_branch: "stack/meeting-module"
+        rollup_branch: "stack/meeting-module",
+        metadata: %{}
+      }
+    end
+
+    # Same stack but with the `rollup_branch_ready` stamp set — meaning
+    # `StackDeployer.do_create_rollup_branch/2` completed and the member is safe
+    # to branch from `origin/#{rollup_branch}`. This is the ADR-0042 Decision 2
+    # default state.
+    defp meeting_module_stack_ready do
+      %{
+        meeting_module_stack()
+        | metadata: %{
+            "rollup_branch_ready" => %{
+              "at" => "2026-07-10T21:00:00Z",
+              "base_sha" => "abc1234"
+            }
+          }
       }
     end
 
@@ -1542,6 +1590,110 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
       refute prompt =~ "Git Workflow (CRITICAL)"
       refute prompt =~ "Task Stack Membership"
       refute prompt =~ "example.invalid"
+    end
+
+    # ─── ADR-0042 Decision 2: rollup-HEAD retargeting ─────────────────────
+    #
+    # These three tests cover the branch-parent decision surface introduced by
+    # `stack.metadata["rollup_branch_ready"]`. With the stamp present, member
+    # branches cut FROM the rollup HEAD so a member sees prior siblings' merged
+    # work. Without the stamp (rollup push not yet landed on origin), we fall
+    # back to `origin/<default_branch>` and log a warning so the race is
+    # auditable — never dispatch a `git worktree add ... origin/stack/foo`
+    # against a non-existent remote ref.
+
+    test "stack member WITH rollup_branch_ready stamp branches from origin/<rollup_branch>", %{
+      plan: plan,
+      stage: stage
+    } do
+      task = %{
+        id: "019e2474-11c1-7000-8000-000000000001",
+        title: "Stack member — ready",
+        status: "in_progress",
+        priority: "high",
+        project: %{repo_url: "https://github.com/test/router", default_branch: "main"},
+        stack_id: "019e2782-09d6-7e2c-9502-c106290e5add",
+        stack: meeting_module_stack_ready()
+      }
+
+      prompt = HeartbeatScheduler.dispatch_prompt(task, plan, stage)
+
+      # The critical retargeting: member sees rollup HEAD, not raw main.
+      assert prompt =~
+               "git worktree add ../worktrees/019e2474-11c1-7000-8000-000000000001 -b task/019e2474-11c1-7000-8000-000000000001 origin/stack/meeting-module"
+
+      assert prompt =~ "cd ../worktrees/019e2474-11c1-7000-8000-000000000001"
+      # Prose confirms the flip: member is cut FROM the rollup, sees siblings.
+      assert prompt =~ "cut from `origin/stack/meeting-module`"
+      assert prompt =~ "you see previously-merged sibling members"
+      # Fast-forward, not per-member PR.
+      assert prompt =~ "fast-forward on validation pass"
+      # The old ADR-0041 "INDEPENDENTLY" wording MUST NOT leak into the ready
+      # path — that would contradict the retargeting.
+      refute prompt =~ "INDEPENDENTLY"
+
+      # `Base branch:` (an audit hint) still lists the project default so a
+      # human reader can spot the retargeting.
+      assert prompt =~ "Base branch: main"
+    end
+
+    test "stack member WITHOUT rollup_branch_ready stamp falls back to origin/<default_branch>",
+         %{plan: plan, stage: stage} do
+      task = %{
+        id: "019e2474-11c1-7000-8000-000000000001",
+        title: "Stack member — fallback",
+        status: "in_progress",
+        priority: "high",
+        project: %{repo_url: "https://github.com/test/router", default_branch: "main"},
+        stack_id: "019e2782-09d6-7e2c-9502-c106290e5add",
+        # No metadata stamp → rollup push hasn't landed yet.
+        stack: meeting_module_stack()
+      }
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          prompt = HeartbeatScheduler.dispatch_prompt(task, plan, stage)
+
+          # Legacy branch shape — no risk of `origin/stack/…` no-such-ref.
+          assert prompt =~
+                   "git worktree add ../worktrees/019e2474-11c1-7000-8000-000000000001 -b task/019e2474-11c1-7000-8000-000000000001 origin/main"
+
+          assert prompt =~ "cut from `origin/main`"
+          assert prompt =~ "INDEPENDENTLY"
+          # The Task Stack Membership block still names the rollup branch — the
+          # rollup exists at the schema level even if not yet pushed.
+          assert prompt =~ "Rollup branch: `stack/meeting-module`"
+          refute prompt =~ "origin/stack/meeting-module"
+        end)
+
+      # The race is auditable — the fallback fires a warning naming the stack
+      # and member so ops can spot repeat offenders.
+      assert log =~ "rollup not yet ready"
+      assert log =~ "019e2782-09d6-7e2c-9502-c106290e5add"
+      assert log =~ "019e2474-11c1-7000-8000-000000000001"
+    end
+
+    test "non-stack task dispatch is unchanged by the rollup-HEAD retargeting", %{
+      plan: plan,
+      stage: stage
+    } do
+      # Regression guard: only stack members participate in the retargeting.
+      task = %{
+        id: "019e2474-11c1-7000-8000-000000000009",
+        title: "Ordinary task",
+        status: "in_progress",
+        priority: "medium",
+        project: %{repo_url: "https://github.com/test/router", default_branch: "main"},
+        stack_id: nil
+      }
+
+      prompt = HeartbeatScheduler.dispatch_prompt(task, plan, stage)
+
+      # 8-char slug, main-branched, no stack block, no rollup ref anywhere.
+      assert prompt =~ "git worktree add ../worktrees/019e2474 -b task/019e2474 origin/main"
+      refute prompt =~ "Task Stack Membership"
+      refute prompt =~ "origin/stack/"
+      refute prompt =~ "rollup_branch_ready"
     end
   end
 

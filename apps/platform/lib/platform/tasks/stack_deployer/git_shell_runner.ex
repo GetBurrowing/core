@@ -81,13 +81,12 @@ defmodule Platform.Tasks.StackDeployer.GitShellRunner do
         repo_url: repo_url,
         rollup_branch: rollup_branch,
         member_branch: member_branch,
-        member_slug: member_slug,
+        member_slug: _member_slug,
         project_id: project_id
       })
       when is_binary(repo_url) and is_binary(rollup_branch) and is_binary(member_branch) and
-             is_binary(member_slug) and is_binary(project_id) do
+             is_binary(project_id) do
     clone_path = clone_path_for(project_id)
-    commit_msg = "Merge #{member_slug} into #{rollup_branch}"
 
     with {:ok, _} <- ensure_clone(clone_path, repo_url),
          {:ok, _} <-
@@ -100,7 +99,7 @@ defmodule Platform.Tasks.StackDeployer.GitShellRunner do
            git(["rev-parse", "origin/#{member_branch}"], cd: clone_path),
          member_sha = String.trim(member_sha_out),
          :merge_attempt <-
-           attempt_merge(clone_path, member_sha, commit_msg, member_branch),
+           attempt_merge(clone_path, member_sha),
          {:ok, merge_sha_out} <-
            git(["rev-parse", "HEAD"], cd: clone_path),
          {:ok, _} <-
@@ -109,6 +108,11 @@ defmodule Platform.Tasks.StackDeployer.GitShellRunner do
            ) do
       {:ok, %{status: :merged, merge_sha: String.trim(merge_sha_out)}}
     else
+      {:not_fast_forwardable, detail} ->
+        # `git merge --ff-only` fails cleanly — no in-progress merge to
+        # abort — so we do not need to reset the working tree here.
+        {:error, :not_fast_forwardable, detail}
+
       {:conflict, output} ->
         files = collect_conflict_files(clone_path)
         _ = git(["merge", "--abort"], cd: clone_path)
@@ -271,6 +275,69 @@ defmodule Platform.Tasks.StackDeployer.GitShellRunner do
   @impl true
   def close_stack_pr(_args), do: {:error, {:invalid_args, "missing required keys"}}
 
+  # ── delete_rollup_branch (stage 3) ──────────────────────────────────────
+
+  @impl true
+  def delete_rollup_branch(%{
+        repo_url: repo_url,
+        rollup_branch: rollup_branch,
+        project_id: project_id
+      })
+      when is_binary(repo_url) and is_binary(rollup_branch) and is_binary(project_id) do
+    clone_path = clone_path_for(project_id)
+
+    with {:ok, _} <- ensure_clone(clone_path, repo_url),
+         {:ok, ls_out} <-
+           git(["ls-remote", "--heads", "origin", "refs/heads/#{rollup_branch}"], cd: clone_path) do
+      case parse_ls_remote_sha(ls_out) do
+        :empty ->
+          Logger.info(
+            "[StackDeployer] rollup branch #{rollup_branch} already absent on #{repo_url}"
+          )
+
+          {:ok, :already_absent}
+
+        {:ok, _sha} ->
+          push_delete(clone_path, rollup_branch)
+      end
+    end
+  end
+
+  @impl true
+  def delete_rollup_branch(_args),
+    do: {:error, {:invalid_args, "missing required keys"}}
+
+  defp push_delete(clone_path, rollup_branch) do
+    args = ["push", "origin", "--delete", rollup_branch]
+
+    Logger.info("[StackDeployer] deleting rollup branch #{rollup_branch} on origin")
+
+    case System.cmd("git", args,
+           cd: clone_path,
+           stderr_to_stdout: true,
+           env: [{"GIT_TERMINAL_PROMPT", "0"}]
+         ) do
+      {_out, 0} ->
+        {:ok, :deleted}
+
+      {output, code} ->
+        trimmed = String.trim(output)
+
+        if branch_protected?(output) do
+          {:error, {:branch_protected, trimmed}}
+        else
+          {:error, {:git_failed, args, code, trimmed}}
+        end
+    end
+  end
+
+  defp branch_protected?(output) do
+    out = String.downcase(output)
+
+    String.contains?(out, "protected branch") or
+      String.contains?(out, "refusing to delete the current branch")
+  end
+
   # Returns `:revert_attempt` on a clean revert, `{:revert_failed, output}`
   # otherwise (typically a conflict — revert merges can hit the same
   # class of conflicts merges can).
@@ -308,13 +375,32 @@ defmodule Platform.Tasks.StackDeployer.GitShellRunner do
 
   # ── Internals (stage 2) ─────────────────────────────────────────────────
 
-  # Returns `:merge_attempt` on a clean merge so the caller can continue
-  # the pipeline, or `{:conflict, output}` so the caller can collect
-  # conflict files and abort.
-  defp attempt_merge(clone_path, member_sha, commit_msg, _member_branch) do
+  # ADR-0042 Decision 2: rollup merges are fast-forward-only. Every
+  # `task/<uuid>` member branch is cut from rollup HEAD (see stage 1),
+  # so a validated pass fast-forwards trivially. If the member branch
+  # somehow diverged (someone rebased manually, a sibling landed while
+  # this member was in review and wasn't picked up by the "cut from
+  # rollup HEAD" retarget, etc.) we halt with `:not_fast_forwardable`
+  # so the task can be paused for human rebase — we do NOT auto-rebase
+  # because that would silently rewrite an agent's commits.
+  #
+  # Returns:
+  #   * `:merge_attempt` — clean fast-forward. Caller continues to push.
+  #   * `{:not_fast_forwardable, %{member_sha, rollup_sha, output}}` —
+  #     git rejected the FF. Caller returns `{:error, :not_fast_forwardable, detail}`.
+  #   * `{:conflict, output}` — technically unreachable with `--ff-only`
+  #     (git would report non-FF first), left as defence-in-depth.
+  #   * `{:error, {:git_failed, ...}}` — any other failure.
+  defp attempt_merge(clone_path, member_sha) do
+    rollup_sha =
+      case git(["rev-parse", "HEAD"], cd: clone_path) do
+        {:ok, out} -> String.trim(out)
+        _ -> ""
+      end
+
     case System.cmd(
            "git",
-           ["merge", "--no-ff", member_sha, "-m", commit_msg],
+           ["merge", "--ff-only", member_sha],
            cd: clone_path,
            stderr_to_stdout: true,
            env: [{"GIT_TERMINAL_PROMPT", "0"}]
@@ -323,12 +409,28 @@ defmodule Platform.Tasks.StackDeployer.GitShellRunner do
         :merge_attempt
 
       {output, _code} ->
-        if conflict?(output) do
-          {:conflict, String.trim(output)}
-        else
-          {:error, {:git_failed, ["merge", "--no-ff", member_sha], 1, String.trim(output)}}
+        trimmed = String.trim(output)
+
+        cond do
+          not_fast_forwardable?(output) ->
+            {:not_fast_forwardable,
+             %{member_sha: member_sha, rollup_sha: rollup_sha, output: trimmed}}
+
+          conflict?(output) ->
+            {:conflict, trimmed}
+
+          true ->
+            {:error, {:git_failed, ["merge", "--ff-only", member_sha], 1, trimmed}}
         end
     end
+  end
+
+  defp not_fast_forwardable?(output) do
+    out = String.downcase(output)
+
+    String.contains?(out, "not possible to fast-forward") or
+      String.contains?(out, "non-fast-forward") or
+      String.contains?(out, "not a fast-forward")
   end
 
   defp conflict?(output) do

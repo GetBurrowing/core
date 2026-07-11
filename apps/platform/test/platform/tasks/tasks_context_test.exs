@@ -2001,6 +2001,170 @@ defmodule Platform.Tasks.TasksContextTest do
     end
   end
 
+  # ── Stack-v2 commencement gate (ADR 0042 Decision 4) ────────────────────
+  #
+  # These integration tests exercise the wiring of
+  # `Platform.Tasks.Stacks.CommencementGate.open?/1` into every path that
+  # could push a stack member from `pending`/`backlog`/`planning` into
+  # `in_progress` before every sibling has an approved plan. The pure
+  # predicate is covered in `commencement_gate_test.exs`; here we exercise
+  # the composed `transition_task/2`, `transition_task_status/2` (MCP),
+  # `drop_task_to_column/2`, and `apply_dispatch_gate/1` surfaces.
+  describe "stack commencement gate wiring (ADR 0042 Decision 4)" do
+    alias Platform.Tasks.{Plan, Stacks}
+    alias Platform.Tasks.Stacks.CommencementGate
+
+    setup do
+      {:ok, project} =
+        Tasks.create_project(%{name: "Commencement Gate Project #{gate_short_id()}"})
+
+      slug = "gate-wire-#{gate_short_id()}"
+
+      {:ok, stack} =
+        Stacks.create_stack(%{
+          project_id: project.id,
+          slug: slug,
+          name: "Gate Wire Fixture",
+          rollup_branch: Stacks.rollup_branch_name(slug)
+        })
+
+      {:ok, m1} = Tasks.create_task(%{project_id: project.id, title: "Member 1"})
+      {:ok, m2} = Tasks.create_task(%{project_id: project.id, title: "Member 2"})
+      {:ok, attached_m1} = Stacks.add_task(stack, m1)
+      {:ok, attached_m2} = Stacks.add_task(stack, m2)
+
+      {:ok, project: project, stack: stack, m1: attached_m1, m2: attached_m2}
+    end
+
+    test "transition_task/2 refuses in_progress for a stack member while a sibling plan is pending",
+         %{stack: stack, m1: m1, m2: m2} do
+      # Only m1 has an approved plan.
+      gate_set_plan_status(m1, "approved")
+      # Stack is still `forming`. LiveView path (transition_task/2)
+      # should refuse m1 → in_progress.
+      assert {:error, :stack_plans_pending, %{stack_id: stack_id, waiting_on: waiting_on}} =
+               Tasks.transition_task(m1, "in_progress")
+
+      assert stack_id == stack.id
+      assert waiting_on == [m2.id]
+    end
+
+    test "transition_task_status/2 (MCP path) refuses in_progress under a closed gate",
+         %{stack: stack, m1: m1, m2: m2} do
+      # MCP `task_update({status: "in_progress"})` funnels through
+      # transition_task_status/2 directly, bypassing transition_task/2.
+      # The gate must hold there too.
+      gate_set_plan_status(m1, "approved")
+
+      assert {:error, :stack_plans_pending, %{stack_id: stack_id, waiting_on: waiting_on}} =
+               Tasks.transition_task_status(m1, "in_progress")
+
+      assert stack_id == stack.id
+      assert waiting_on == [m2.id]
+    end
+
+    test "drop_task_to_column refuses in_progress column under a closed gate",
+         %{stack: stack, m1: m1, m2: m2} do
+      # drop_task_to_column writes the Task changeset directly (bypassing
+      # transition_task_status), so the D4 gate is wired inline in that
+      # function. Verify a manual drop of a stack member into the
+      # in_progress column refuses with :stack_plans_pending when a
+      # sibling plan hasn't landed.
+      gate_set_plan_status(m1, "approved")
+
+      assert {:error, :stack_plans_pending, %{stack_id: stack_id, waiting_on: waiting_on}} =
+               Tasks.drop_task_to_column(m1, "in_progress")
+
+      assert stack_id == stack.id
+      assert waiting_on == [m2.id]
+
+      # Member was not actually written.
+      assert Tasks.get_task_record(m1.id).status == "backlog"
+    end
+
+    test "apply_dispatch_gate routes stack member to stack_pending when gate is closed",
+         %{stack: stack, m1: m1, m2: m2} do
+      # Drive m1 into `planning` and hand it a submitted plan awaiting
+      # review. Approving that plan fires `apply_dispatch_gate/1`.
+      # Because m2 has no plan, the gate is still closed — the member
+      # should be parked in `stack_pending` rather than jumping to
+      # `in_progress` (or worse, rolling back the plan approval).
+      {:ok, m1} = Tasks.transition_task_status(m1, "planning")
+      {:ok, plan} = Tasks.create_plan(%{task_id: m1.id})
+      {:ok, plan} = Tasks.submit_plan_for_review(plan)
+
+      {:ok, _approved} = Tasks.approve_plan(plan, "system")
+
+      reloaded_m1 = Tasks.get_task_record(m1.id)
+      assert reloaded_m1.status == "stack_pending"
+
+      # m2 was left alone; the stack itself was not flipped.
+      assert Tasks.get_task_record(m2.id).status == "backlog"
+      assert Stacks.get_stack!(stack.id).status == "forming"
+
+      # And the gate correctly identifies m2 as the outstanding blocker.
+      assert CommencementGate.waiting_on(stack) == [m2.id]
+    end
+
+    test "apply_dispatch_gate falls through to normal in_progress transition when gate is already open",
+         %{stack: stack, m1: m1, m2: m2} do
+      # Pre-approve m2's plan so the gate opens as soon as m1's plan
+      # is approved. Then drive m1 through planning → approve. The
+      # dispatch gate should send m1 to in_progress (gate open, no
+      # unmet deps) rather than to stack_pending.
+      gate_set_plan_status(m2, "approved")
+
+      # Flip the stack to `in_progress` so CommencementGate.open?/1
+      # returns true for m1 once its own plan is approved.
+      {:ok, _} =
+        stack
+        |> Ecto.Changeset.change(status: "in_progress")
+        |> Repo.update()
+
+      {:ok, m1} = Tasks.transition_task_status(m1, "planning")
+      {:ok, plan} = Tasks.create_plan(%{task_id: m1.id})
+      {:ok, plan} = Tasks.submit_plan_for_review(plan)
+
+      {:ok, _approved} = Tasks.approve_plan(plan, "system")
+
+      assert Tasks.get_task_record(m1.id).status == "in_progress"
+    end
+  end
+
+  # Helpers for the commencement-gate describe block above. Kept
+  # module-scoped (defp) rather than nested so the compiler doesn't
+  # emit any warnings about defs inside describe.
+  defp gate_set_plan_status(%Task{id: task_id}, status) do
+    alias Platform.Tasks.Plan
+
+    # Bypass `create_plan/1`'s reject-when-pending policy; we're
+    # exercising the gate wiring, not the plan-creation guardrails.
+    case gate_latest_plan_row(task_id) do
+      nil ->
+        %Plan{}
+        |> Plan.changeset(%{task_id: task_id, version: 1, status: status})
+        |> Repo.insert!()
+
+      %Plan{} = plan ->
+        plan
+        |> Plan.changeset(%{status: status})
+        |> Repo.update!()
+    end
+  end
+
+  defp gate_latest_plan_row(task_id) do
+    alias Platform.Tasks.Plan
+
+    from(p in Plan,
+      where: p.task_id == ^task_id,
+      order_by: [desc: p.version],
+      limit: 1
+    )
+    |> Repo.one()
+  end
+
+  defp gate_short_id, do: Ecto.UUID.generate() |> String.slice(0, 8)
+
   defp list_outgoing_refs(source_id) do
     from(r in Platform.Tasks.TaskReference,
       where: r.source_task_id == ^source_id,

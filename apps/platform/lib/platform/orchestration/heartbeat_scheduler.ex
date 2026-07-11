@@ -22,6 +22,8 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
   alias Platform.Tasks.ReviewRequest
   alias Platform.Tasks.Stage
 
+  require Logger
+
   @type stage_type :: String.t()
 
   # Cadence config: {interval_ms, stall_threshold_ms, max_escalations}
@@ -1304,16 +1306,49 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
     task_slug = member_slug(task)
     rollup_branch = membership.rollup_branch || "stack/#{membership.stack_slug}"
 
+    # ADR-0042 Decision 2: retarget member branches to rollup HEAD (so a member
+    # sees its already-merged siblings). Gate on the async `rollup_branch_ready`
+    # stamp from `StackDeployer.do_create_rollup_branch/2` — if the stamp is
+    # absent (the rollup push has not landed yet), fall back to
+    # `origin/#{default_branch}` and log a warning. That keeps the executor from
+    # dispatching `git worktree add ... origin/stack/foo` before the ref exists.
+    parent_branch =
+      case rollup_branch_ready(membership) do
+        true ->
+          rollup_branch
+
+        false ->
+          Logger.warning(
+            "[HeartbeatScheduler] stack #{membership.stack_id} rollup not yet ready; " <>
+              "member #{full_task_id(task)} branching from #{default_branch}"
+          )
+
+          default_branch
+      end
+
+    membership_note =
+      if parent_branch == rollup_branch do
+        "- Your member branch `task/#{task_slug}` is cut from `origin/#{rollup_branch}` " <>
+          "so you see previously-merged sibling members.\n" <>
+          "    - The ROLLUP branch `#{rollup_branch}` is what reconciles sibling members. " <>
+          "Merge back into it via fast-forward on validation pass — do NOT open a per-member PR."
+      else
+        "- Your member branch `task/#{task_slug}` is cut from `origin/#{default_branch}` " <>
+          "INDEPENDENTLY — the rollup branch was not ready at dispatch time.\n" <>
+          "    - The ROLLUP branch `#{rollup_branch}` is what reconciles sibling members. " <>
+          "Do NOT depend on a sibling member's unpushed work; treat each member branch as isolated."
+      end
+
     """
 
     ## Git Workflow (CRITICAL)
     Repository: #{repo_url}
     Base branch: #{default_branch}
 
-    1. Create a worktree from the latest #{default_branch} branch:
+    1. Create a worktree from the latest #{parent_branch} branch:
        ```
        git fetch origin
-       git worktree add ../worktrees/#{task_slug} -b task/#{task_slug} origin/#{default_branch}
+       git worktree add ../worktrees/#{task_slug} -b task/#{task_slug} origin/#{parent_branch}
        cd ../worktrees/#{task_slug}
        ```
     2. Do ALL work in the worktree directory.
@@ -1322,18 +1357,22 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
        - Commit all changes with a descriptive message referencing task #{full_task_id(task)}
        - Push the branch: `git push -u origin task/#{task_slug}`
        - Do NOT open a PR yet — PR opening happens in the deploy phase
-    4. NEVER work on an existing branch. ALWAYS branch from latest origin/#{default_branch}.
+    4. NEVER work on an existing branch. ALWAYS branch from latest origin/#{parent_branch}.
 
     ## Task Stack Membership
     This task is a stack member (part of task stack `#{membership.stack_id}`).
     - stack_id: `#{membership.stack_id}`
     - Rollup branch: `#{rollup_branch}`
-    - Your member branch `task/#{task_slug}` is cut from `origin/#{default_branch}` \
-    INDEPENDENTLY — it does not branch off a sibling's work.
-    - The ROLLUP branch `#{rollup_branch}` is what reconciles sibling members. \
-    Do NOT depend on a sibling member's unpushed work; treat each member branch as isolated.
+    #{membership_note}
     """
   end
+
+  # The rollup branch is created async by StackDeployer. Members branching from
+  # `origin/#{rollup_branch}` before that push lands would hit `fatal: origin/…:
+  # no such ref` in the executor. Gate on the `rollup_branch_ready` metadata
+  # stamp so the flip is deterministic.
+  defp rollup_branch_ready(%{stack_metadata: %{"rollup_branch_ready" => %{}}}), do: true
+  defp rollup_branch_ready(_), do: false
 
   defp insert_before_context(prompt, ""), do: prompt
 
@@ -1441,7 +1480,18 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
           _ -> nil
         end
 
-      %{stack_id: stack_id, stack_slug: stack_slug, rollup_branch: rollup_branch}
+      stack_metadata =
+        case stack && (Map.get(stack, :metadata) || Map.get(stack, "metadata")) do
+          %{} = m -> m
+          _ -> %{}
+        end
+
+      %{
+        stack_id: stack_id,
+        stack_slug: stack_slug,
+        rollup_branch: rollup_branch,
+        stack_metadata: stack_metadata
+      }
     else
       nil
     end

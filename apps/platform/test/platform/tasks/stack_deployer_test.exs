@@ -41,12 +41,15 @@ defmodule Platform.Tasks.StackDeployerTest do
           ),
         close_responses: Keyword.get(opts, :close_responses, []),
         close_default: Keyword.get(opts, :close_default, {:ok, :closed}),
+        delete_responses: Keyword.get(opts, :delete_responses, []),
+        delete_default: Keyword.get(opts, :delete_default, {:ok, :deleted}),
         calls: [],
         merge_calls: [],
         pr_calls: [],
         diff_stat_calls: [],
         revert_calls: [],
-        close_calls: []
+        close_calls: [],
+        delete_calls: []
       }
 
       Agent.start_link(fn -> initial end, name: __MODULE__)
@@ -60,6 +63,7 @@ defmodule Platform.Tasks.StackDeployerTest do
     def diff_stat_calls, do: Agent.get(__MODULE__, & &1.diff_stat_calls) |> Enum.reverse()
     def revert_calls, do: Agent.get(__MODULE__, & &1.revert_calls) |> Enum.reverse()
     def close_calls, do: Agent.get(__MODULE__, & &1.close_calls) |> Enum.reverse()
+    def delete_calls, do: Agent.get(__MODULE__, & &1.delete_calls) |> Enum.reverse()
 
     @impl true
     def ensure_rollup_branch(args) do
@@ -72,7 +76,18 @@ defmodule Platform.Tasks.StackDeployerTest do
 
         {response, %{state | calls: [args | state.calls], responses: remaining}}
       end)
+      |> maybe_sleep()
     end
+
+    # Stage 4: response tuples may be wrapped in `{:sleep, ms, actual}`
+    # so a test can hold a caller inside the runner for `ms`
+    # milliseconds — used by the advisory-lock concurrent-start tests.
+    defp maybe_sleep({:sleep, ms, actual}) when is_integer(ms) and ms >= 0 do
+      Process.sleep(ms)
+      actual
+    end
+
+    defp maybe_sleep(other), do: other
 
     @impl true
     def merge_member_into_rollup(args) do
@@ -150,6 +165,24 @@ defmodule Platform.Tasks.StackDeployerTest do
            state
            | close_calls: [args | state.close_calls],
              close_responses: remaining
+         }}
+      end)
+    end
+
+    @impl true
+    def delete_rollup_branch(args) do
+      Agent.get_and_update(__MODULE__, fn state ->
+        {response, remaining} =
+          case state.delete_responses do
+            [head | rest] -> {head, rest}
+            [] -> {state.delete_default, []}
+          end
+
+        {response,
+         %{
+           state
+           | delete_calls: [args | state.delete_calls],
+             delete_responses: remaining
          }}
       end)
     end
@@ -304,6 +337,77 @@ defmodule Platform.Tasks.StackDeployerTest do
 
       assert {:error, :project_not_found} = StackDeployer.create_rollup_branch(stack)
       assert FakeRunner.calls() == []
+    end
+
+    # ─── ADR-0042 Decision 2: rollup_branch_ready stamp ───────────────────
+    #
+    # After a successful ensure_rollup_branch (either :created or
+    # :already_exists), the deployer writes `stack.metadata["rollup_branch_ready"]`
+    # so the HeartbeatScheduler's dispatch prompt can safely retarget member
+    # branches from `origin/#{rollup_branch}` instead of the default branch.
+    # A runner failure MUST NOT write the stamp — otherwise members would
+    # dispatch against a non-existent rollup ref.
+
+    test "stamps stack.metadata[rollup_branch_ready] with base_sha + timestamp on :created" do
+      {:ok, _} =
+        FakeRunner.start_link(responses: [{:ok, %{status: :created, base_sha: "abc1234"}}])
+
+      project = project_with_repo!()
+      stack = stack_for!(project, slug: "ready-created")
+
+      assert {:ok, _} = StackDeployer.create_rollup_branch(stack)
+
+      reloaded = Stacks.get_stack!(stack.id)
+      ready = reloaded.metadata["rollup_branch_ready"]
+
+      assert %{"at" => at, "base_sha" => "abc1234"} = ready
+      assert {:ok, _, 0} = DateTime.from_iso8601(at)
+    end
+
+    test "stamps rollup_branch_ready even when runner reports :already_exists" do
+      {:ok, _} =
+        FakeRunner.start_link(
+          responses: [{:ok, %{status: :already_exists, base_sha: "oldbase0"}}]
+        )
+
+      project = project_with_repo!()
+      stack = stack_for!(project, slug: "ready-idempotent")
+
+      assert {:ok, _} = StackDeployer.create_rollup_branch(stack)
+
+      reloaded = Stacks.get_stack!(stack.id)
+      assert %{"base_sha" => "oldbase0"} = reloaded.metadata["rollup_branch_ready"]
+    end
+
+    test "does NOT stamp rollup_branch_ready when the runner fails" do
+      {:ok, _} =
+        FakeRunner.start_link(responses: [{:error, {:git_failed, ["push"], 128, "boom"}}])
+
+      project = project_with_repo!()
+      stack = stack_for!(project, slug: "no-stamp-on-fail")
+
+      assert {:error, _} = StackDeployer.create_rollup_branch(stack)
+
+      reloaded = Stacks.get_stack!(stack.id)
+      refute Map.has_key?(reloaded.metadata || %{}, "rollup_branch_ready")
+    end
+
+    test "preserves prior stack.metadata keys when stamping" do
+      {:ok, _} =
+        FakeRunner.start_link(responses: [{:ok, %{status: :created, base_sha: "deadbee1"}}])
+
+      project = project_with_repo!()
+      stack = stack_for!(project, slug: "preserve-meta")
+
+      # Pre-seed an unrelated metadata key that must survive.
+      {:ok, stack} =
+        Stacks.update_stack(stack, %{metadata: %{"phase_assignees" => %{"coding" => "agent-1"}}})
+
+      assert {:ok, _} = StackDeployer.create_rollup_branch(stack)
+
+      reloaded = Stacks.get_stack!(stack.id)
+      assert reloaded.metadata["phase_assignees"] == %{"coding" => "agent-1"}
+      assert %{"base_sha" => "deadbee1"} = reloaded.metadata["rollup_branch_ready"]
     end
   end
 
@@ -573,6 +677,119 @@ defmodule Platform.Tasks.StackDeployerTest do
       assert FakeRunner.merge_calls() == []
     end
 
+    # ── ADR-0042 Decision 2: fast-forward-only merge + pause-on-diverge ──
+    #
+    # Stage 1 makes every `task/<uuid>` branch cut FROM rollup HEAD so a
+    # validated pass fast-forwards trivially. If the branch diverges
+    # (someone rebased manually, a race left the cut against a stale
+    # rollup, etc.) the runner reports `:not_fast_forwardable` and the
+    # deployer PAUSES the task with `metadata["paused_reason"]` — it
+    # does NOT flip the stack to `blocked` (that's reserved for genuine
+    # conflicts). No auto-rebase — the human is expected to rebase the
+    # task branch onto rollup HEAD to unstick.
+
+    test "fast-forward merge stamps merged_at; stack NOT flipped to blocked; no paused_reason" do
+      # Two members so the stack-PR gate stays :not_ready after the
+      # first merge — that keeps this test focused on the merge path
+      # and prevents the maybe_open_stack_pr hook from flipping the
+      # stack to `deploying` as a benign side effect.
+      {:ok, _} =
+        FakeRunner.start_link(merge_responses: [{:ok, %{status: :merged, merge_sha: "ffabc123"}}])
+
+      project = project_with_repo!()
+      stack = stack_for!(project, slug: "ff-happy")
+      _unmerged = unmerged_member!(project, stack, position: 2)
+      task = review_ready_member!(project, stack)
+
+      assert {:ok, %{status: :merged, merge_sha: "ffabc123"}} =
+               StackDeployer.merge_member_into_rollup(task)
+
+      # Member metadata stamped.
+      reloaded = Tasks.get_task_record(task.id)
+      assert reloaded.metadata["merged_into_rollup_at"]["sha"] == "ffabc123"
+      assert is_binary(reloaded.metadata["merged_into_rollup_at"]["at"])
+      # No pause stamp on the happy path.
+      refute Map.has_key?(reloaded.metadata || %{}, "paused_reason")
+
+      # Stack is NOT flipped to blocked (that's reserved for genuine
+      # conflicts). No conflict metadata written. The maybe_open_stack_pr
+      # hook stays :not_ready because a sibling remains unmerged, so the
+      # stack status is untouched by this merge.
+      reloaded_stack = Stacks.get_stack(stack.id)
+      refute reloaded_stack.status == "blocked"
+      refute Map.has_key?(reloaded_stack.metadata || %{}, "conflict")
+      assert is_nil(get_in(reloaded_stack.metadata || %{}, ["rollup_pr"]))
+    end
+
+    test "non-fast-forwardable halts task with paused_reason; stack status UNCHANGED" do
+      diverge_detail = %{
+        member_sha: "memberdead",
+        rollup_sha: "rollupbeef",
+        output: "fatal: Not possible to fast-forward, aborting."
+      }
+
+      {:ok, _} =
+        FakeRunner.start_link(merge_responses: [{:error, :not_fast_forwardable, diverge_detail}])
+
+      # Subscribe to the new telemetry event so we can prove it fires.
+      handler_id = "test-not-ff-#{uniq()}"
+      test_pid = self()
+
+      :ok =
+        :telemetry.attach(
+          handler_id,
+          [:platform, :stack_deployer, :not_fast_forwardable],
+          fn event, measurements, metadata, _config ->
+            send(test_pid, {:telemetry, event, measurements, metadata})
+          end,
+          nil
+        )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      project = project_with_repo!()
+      stack = stack_for!(project, slug: "diverged")
+      task = review_ready_member!(project, stack)
+
+      original_status = Stacks.get_stack(stack.id).status
+
+      assert {:error, :not_fast_forwardable,
+              %{member_sha: "memberdead", rollup_sha: "rollupbeef"}} =
+               StackDeployer.merge_member_into_rollup(task)
+
+      # Task metadata stamped with rollup_diverged paused_reason.
+      reloaded_task = Tasks.get_task_record(task.id)
+      paused = reloaded_task.metadata["paused_reason"]
+      assert paused["kind"] == "rollup_diverged"
+      assert paused["member_sha"] == "memberdead"
+      assert paused["rollup_sha"] == "rollupbeef"
+      assert paused["output"] =~ "Not possible to fast-forward"
+      assert is_binary(paused["at"])
+      assert {:ok, _, _} = DateTime.from_iso8601(paused["at"])
+
+      # Merged-into-rollup NOT stamped (task didn't actually merge).
+      assert is_nil(get_in(reloaded_task.metadata, ["merged_into_rollup_at"]))
+
+      # Stack status UNCHANGED — divergence is task-scoped, not stack-scoped.
+      reloaded_stack = Stacks.get_stack(stack.id)
+      assert reloaded_stack.status == original_status
+      refute reloaded_stack.status == "blocked"
+      refute Map.has_key?(reloaded_stack.metadata || %{}, "conflict")
+
+      # Telemetry fired with expected metadata.
+      assert_received {:telemetry, [:platform, :stack_deployer, :not_fast_forwardable],
+                       %{count: 1},
+                       %{
+                         task_id: t_id,
+                         stack_id: s_id,
+                         member_sha: "memberdead",
+                         rollup_sha: "rollupbeef"
+                       }}
+
+      assert t_id == task.id
+      assert s_id == stack.id
+    end
+
     test "non-conflict runner failure surfaces as {:error, reason}; stack not blocked" do
       {:ok, _} =
         FakeRunner.start_link(
@@ -765,6 +982,14 @@ defmodule Platform.Tasks.StackDeployerTest do
     {:ok, task} = Tasks.update_task(task, %{stack_id: stack.id, stack_position: 1})
     # Approved plan required to allow transition into in_review later.
     {:ok, _} = Tasks.create_plan(%{task_id: task.id, status: "approved"})
+    # ADR 0042 Decision 4: the commencement gate requires stack.status
+    # == "in_progress" before a member can enter in_progress. Flip the
+    # stack directly (bypassing start_stack cascade side effects) so
+    # this helper only exercises the deployer hook it's meant to test.
+    stack
+    |> Ecto.Changeset.change(status: "in_progress")
+    |> Platform.Repo.update!()
+
     {:ok, task} = Tasks.transition_task(task, "in_progress")
     Tasks.get_task_record(task.id)
   end
@@ -1100,6 +1325,208 @@ defmodule Platform.Tasks.StackDeployerTest do
 
       assert {:error, :stack_not_found} =
                StackDeployer.handle_rollup_pr_merged(Ecto.UUID.generate())
+    end
+  end
+
+  # ── handle_rollup_pr_merged/1 → rollup branch delete (stage 3) ───────────
+
+  describe "handle_rollup_pr_merged/1 — deletes rollup branch on success" do
+    test "invokes runner.delete_rollup_branch with repo_url/rollup_branch/project_id/stack_id" do
+      {:ok, _} = FakeRunner.start_link([])
+
+      project = project_with_repo!()
+      stack = stack_for!(project, slug: "delete-ok")
+
+      {:ok, deployed} =
+        Stacks.update_stack(stack, %{
+          status: "deploying",
+          metadata: %{"rollup_pr" => %{"number" => 42}}
+        })
+
+      assert {:ok, %{status: "done"}} = StackDeployer.handle_rollup_pr_merged(deployed)
+
+      assert [call] = FakeRunner.delete_calls()
+      assert call.repo_url == project.repo_url
+      assert call.rollup_branch == stack.rollup_branch
+      assert call.project_id == project.id
+      assert call.stack_id == stack.id
+    end
+
+    test "status flip to done is preserved even when delete returns error (best-effort)" do
+      {:ok, _} =
+        FakeRunner.start_link(
+          delete_responses: [{:error, {:branch_protected, "remote: error: protected branch"}}]
+        )
+
+      project = project_with_repo!()
+      stack = stack_for!(project, slug: "delete-protected")
+
+      {:ok, deployed} =
+        Stacks.update_stack(stack, %{
+          status: "deploying",
+          metadata: %{"rollup_pr" => %{"number" => 77}}
+        })
+
+      assert {:ok, done_stack} = StackDeployer.handle_rollup_pr_merged(deployed)
+      assert done_stack.status == "done"
+
+      # Runner was invoked; delete failed but stack stayed done.
+      assert [_call] = FakeRunner.delete_calls()
+
+      reloaded = Stacks.get_stack(stack.id)
+      assert reloaded.status == "done"
+    end
+
+    test "idempotent — already-done stack does NOT invoke delete (no double-push)" do
+      {:ok, _} = FakeRunner.start_link([])
+
+      project = project_with_repo!()
+      stack = stack_for!(project, slug: "delete-idempotent")
+      {:ok, done_stack} = Stacks.update_stack(stack, %{status: "done"})
+
+      assert {:ok, returned} = StackDeployer.handle_rollup_pr_merged(done_stack)
+      assert returned.id == stack.id
+      assert returned.status == "done"
+
+      assert FakeRunner.delete_calls() == []
+    end
+
+    test "already_absent from runner is not treated as error" do
+      {:ok, _} =
+        FakeRunner.start_link(delete_responses: [{:ok, :already_absent}])
+
+      project = project_with_repo!()
+      stack = stack_for!(project, slug: "delete-absent")
+
+      {:ok, deployed} =
+        Stacks.update_stack(stack, %{
+          status: "deploying",
+          metadata: %{"rollup_pr" => %{"number" => 88}}
+        })
+
+      assert {:ok, %{status: "done"}} = StackDeployer.handle_rollup_pr_merged(deployed)
+      assert [_call] = FakeRunner.delete_calls()
+    end
+
+    test "telemetry [:rollup_branch_deleted] fires on success" do
+      {:ok, _} = FakeRunner.start_link(delete_responses: [{:ok, :deleted}])
+
+      handler_id = "test-rollup-deleted-#{uniq()}"
+      test_pid = self()
+
+      :ok =
+        :telemetry.attach(
+          handler_id,
+          [:platform, :stack_deployer, :rollup_branch_deleted],
+          fn event, measurements, metadata, _config ->
+            send(test_pid, {:telemetry, event, measurements, metadata})
+          end,
+          nil
+        )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      project = project_with_repo!()
+      stack = stack_for!(project, slug: "delete-telemetry-ok")
+
+      {:ok, deployed} =
+        Stacks.update_stack(stack, %{
+          status: "deploying",
+          metadata: %{"rollup_pr" => %{"number" => 100}}
+        })
+
+      assert {:ok, %{status: "done"}} = StackDeployer.handle_rollup_pr_merged(deployed)
+
+      assert_received {:telemetry, [:platform, :stack_deployer, :rollup_branch_deleted],
+                       %{count: 1}, metadata}
+
+      assert metadata.stack_id == stack.id
+      assert metadata.rollup_branch == stack.rollup_branch
+    end
+
+    test "telemetry [:rollup_branch_delete_failed] fires with reason on error" do
+      failure = {:git_failed, ["push", "origin", "--delete", "stack/x"], 128, "boom"}
+      {:ok, _} = FakeRunner.start_link(delete_responses: [{:error, failure}])
+
+      handler_id = "test-rollup-delete-failed-#{uniq()}"
+      test_pid = self()
+
+      :ok =
+        :telemetry.attach(
+          handler_id,
+          [:platform, :stack_deployer, :rollup_branch_delete_failed],
+          fn event, measurements, metadata, _config ->
+            send(test_pid, {:telemetry, event, measurements, metadata})
+          end,
+          nil
+        )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      project = project_with_repo!()
+      stack = stack_for!(project, slug: "delete-telemetry-fail")
+
+      {:ok, deployed} =
+        Stacks.update_stack(stack, %{
+          status: "deploying",
+          metadata: %{"rollup_pr" => %{"number" => 200}}
+        })
+
+      assert {:ok, %{status: "done"}} = StackDeployer.handle_rollup_pr_merged(deployed)
+
+      assert_received {:telemetry, [:platform, :stack_deployer, :rollup_branch_delete_failed],
+                       %{count: 1}, metadata}
+
+      assert metadata.stack_id == stack.id
+      assert metadata.rollup_branch == stack.rollup_branch
+      assert metadata.reason == failure
+    end
+
+    test "project without repo_url skips runner (no delete_calls, no crash)" do
+      {:ok, _} = FakeRunner.start_link([])
+
+      project = project_without_repo!()
+
+      {:ok, stack} =
+        Stacks.create_stack(%{
+          project_id: project.id,
+          slug: "no-repo-delete",
+          name: "Stack no-repo-delete",
+          base_branch: "main",
+          rollup_branch: Stacks.rollup_branch_name("no-repo-delete")
+        })
+
+      {:ok, deployed} =
+        Stacks.update_stack(stack, %{
+          status: "deploying",
+          metadata: %{"rollup_pr" => %{"number" => 300}}
+        })
+
+      # Status still flips even though we can't delete without a repo_url.
+      assert {:ok, %{status: "done"}} = StackDeployer.handle_rollup_pr_merged(deployed)
+
+      # Runner was NOT invoked (no project.repo_url to hand it).
+      assert FakeRunner.delete_calls() == []
+    end
+  end
+
+  # ── Stacks.abandon_stack/2 never invokes delete_rollup_branch ────────────
+
+  describe "Stacks.abandon_stack/2 — rollup branch left in place" do
+    test "abandon does NOT invoke runner.delete_rollup_branch" do
+      {:ok, _} = FakeRunner.start_link([])
+
+      project = project_with_repo!()
+      stack = stack_for!(project, slug: "abandon-leaves-branch")
+
+      # Move through a couple of statuses so it's a realistic abandon.
+      {:ok, deploying} = Stacks.update_stack(stack, %{status: "deploying"})
+
+      assert {:ok, abandoned} = Stacks.abandon_stack(deploying, "manual abandon")
+      assert abandoned.status == "abandoned"
+
+      # Human-driven cleanup per ADR-0042: no runner invocation.
+      assert FakeRunner.delete_calls() == []
     end
   end
 
@@ -1587,5 +2014,398 @@ defmodule Platform.Tasks.StackDeployerTest do
       })
 
     task
+  end
+
+  # ── Stage 4: advisory lock + ADR-0042 telemetry ─────────────────────────
+
+  describe "advisory lock on create_rollup_branch/1 (ADR-0042 stage 4)" do
+    test "concurrent handle_stack_created/1 on the SAME stack: one :created, one :already_exists" do
+      # Two parallel Task.async'd callers race the same stack. Under
+      # production (distinct DB connections per web worker), the
+      # per-stack pg_advisory_xact_lock serialises them so the second
+      # arrival sees `:already_exists`. Under the shared test sandbox
+      # the connection is re-entrant, but the FakeRunner Agent queue is
+      # FIFO so we still verify the observable contract: no error and
+      # each caller sees the runner exactly once.
+
+      {:ok, _} =
+        FakeRunner.start_link(
+          responses: [
+            {:sleep, 50, {:ok, %{status: :created, base_sha: "shafirst"}}},
+            {:ok, %{status: :already_exists, base_sha: "shafirst"}}
+          ]
+        )
+
+      handler_id = "test-branch-created-concurrent-#{uniq()}"
+      test_pid = self()
+
+      :ok =
+        :telemetry.attach(
+          handler_id,
+          [:platform, :stacks, :rollup, :branch_created],
+          fn event, measurements, metadata, _config ->
+            send(test_pid, {:telemetry, event, measurements, metadata})
+          end,
+          nil
+        )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      project = project_with_repo!()
+      stack = stack_for!(project, slug: "concurrent-start")
+
+      parent = self()
+
+      tasks =
+        for _ <- 1..2 do
+          Task.async(fn ->
+            Ecto.Adapters.SQL.Sandbox.allow(Platform.Repo, parent, self())
+            StackDeployer.handle_stack_created(stack)
+          end)
+        end
+
+      results = Task.await_many(tasks, 5_000)
+
+      # handle_stack_created/1 returns :ok under async: false — the
+      # important thing is neither Task crashed or awaited into an exit.
+      assert Enum.all?(results, &(&1 == :ok))
+
+      # Both callers invoked the runner exactly once each.
+      assert length(FakeRunner.calls()) == 2
+
+      # Two telemetry emissions — one per caller, one :created and one
+      # :already_exists (order across processes is non-deterministic).
+      assert_received {:telemetry, [:platform, :stacks, :rollup, :branch_created],
+                       %{duration_us: d1}, %{status: s1, stack_id: sid1}}
+
+      assert_received {:telemetry, [:platform, :stacks, :rollup, :branch_created],
+                       %{duration_us: d2}, %{status: s2, stack_id: sid2}}
+
+      assert is_integer(d1) and d1 >= 0
+      assert is_integer(d2) and d2 >= 0
+      assert sid1 == stack.id
+      assert sid2 == stack.id
+
+      assert Enum.sort([s1, s2]) == [:already_exists, :created]
+    end
+
+    test "advisory lock is per-stack: two DIFFERENT stacks each complete without cross-blocking" do
+      # Different stack ids hash to different advisory-lock keys
+      # (`:erlang.phash2/2`) so they don't serialise under production.
+      # Under the shared test sandbox both invocations still travel
+      # through the single connection so we can't measure true
+      # parallelism — we simply prove both stacks succeed and are each
+      # invoked once against the runner.
+
+      {:ok, _} =
+        FakeRunner.start_link(
+          responses: [
+            {:ok, %{status: :created, base_sha: "shaAAA"}},
+            {:ok, %{status: :created, base_sha: "shaBBB"}}
+          ]
+        )
+
+      project = project_with_repo!()
+      s1 = stack_for!(project, slug: "per-stack-a")
+      s2 = stack_for!(project, slug: "per-stack-b")
+
+      # Hash keys differ so production serialisation would be a
+      # separate mutex per stack.
+      key1 = :erlang.phash2(s1.id, 2_147_483_647)
+      key2 = :erlang.phash2(s2.id, 2_147_483_647)
+      assert key1 != key2
+
+      parent = self()
+
+      tasks =
+        for stack <- [s1, s2] do
+          Task.async(fn ->
+            Ecto.Adapters.SQL.Sandbox.allow(Platform.Repo, parent, self())
+            StackDeployer.create_rollup_branch(stack)
+          end)
+        end
+
+      results = Task.await_many(tasks, 5_000)
+
+      for res <- results do
+        assert {:ok, %{status: :created}} = res
+      end
+
+      assert length(FakeRunner.calls()) == 2
+
+      stack_ids_in_calls = FakeRunner.calls() |> Enum.map(& &1.stack_id) |> Enum.sort()
+      assert stack_ids_in_calls == Enum.sort([s1.id, s2.id])
+    end
+  end
+
+  describe "ADR-0042 telemetry: [:platform, :stacks, :rollup, ...]" do
+    test "[:branch_created] fires on :created with duration_us + expected metadata keys" do
+      {:ok, _} =
+        FakeRunner.start_link(responses: [{:ok, %{status: :created, base_sha: "shaaaaa"}}])
+
+      handler_id = "test-adr42-branch-created-#{uniq()}"
+      test_pid = self()
+
+      :ok =
+        :telemetry.attach(
+          handler_id,
+          [:platform, :stacks, :rollup, :branch_created],
+          fn event, measurements, metadata, _config ->
+            send(test_pid, {:telemetry, event, measurements, metadata})
+          end,
+          nil
+        )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      project = project_with_repo!()
+      stack = stack_for!(project, slug: "adr42-create", base_branch: "develop")
+
+      assert {:ok, _} = StackDeployer.create_rollup_branch(stack)
+
+      assert_received {:telemetry, [:platform, :stacks, :rollup, :branch_created],
+                       %{duration_us: duration_us}, metadata}
+
+      assert is_integer(duration_us) and duration_us >= 0
+      assert metadata.stack_id == stack.id
+      assert metadata.rollup_branch == stack.rollup_branch
+      assert metadata.base_branch == "develop"
+      assert metadata.base_sha == "shaaaaa"
+      assert metadata.status == :created
+    end
+
+    test "[:branch_created] fires on :already_exists too — status distinguishes" do
+      {:ok, _} =
+        FakeRunner.start_link(responses: [{:ok, %{status: :already_exists, base_sha: "oldSha0"}}])
+
+      handler_id = "test-adr42-branch-existed-#{uniq()}"
+      test_pid = self()
+
+      :ok =
+        :telemetry.attach(
+          handler_id,
+          [:platform, :stacks, :rollup, :branch_created],
+          fn event, measurements, metadata, _config ->
+            send(test_pid, {:telemetry, event, measurements, metadata})
+          end,
+          nil
+        )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      project = project_with_repo!()
+      stack = stack_for!(project, slug: "adr42-existed")
+
+      assert {:ok, %{status: :already_exists}} = StackDeployer.create_rollup_branch(stack)
+
+      assert_received {:telemetry, [:platform, :stacks, :rollup, :branch_created],
+                       %{duration_us: _}, %{status: :already_exists}}
+    end
+
+    test "[:branch_created] does NOT fire on runner error" do
+      {:ok, _} =
+        FakeRunner.start_link(responses: [{:error, {:git_failed, ["push"], 128, "boom"}}])
+
+      handler_id = "test-adr42-branch-error-#{uniq()}"
+      test_pid = self()
+
+      :ok =
+        :telemetry.attach(
+          handler_id,
+          [:platform, :stacks, :rollup, :branch_created],
+          fn event, measurements, metadata, _config ->
+            send(test_pid, {:telemetry, event, measurements, metadata})
+          end,
+          nil
+        )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      project = project_with_repo!()
+      stack = stack_for!(project, slug: "adr42-error")
+
+      assert {:error, _} = StackDeployer.create_rollup_branch(stack)
+
+      refute_received {:telemetry, [:platform, :stacks, :rollup, :branch_created], _m, _md}
+    end
+
+    test "[:branch_deleted] fires on :deleted with duration_us + status metadata" do
+      {:ok, _} = FakeRunner.start_link(delete_responses: [{:ok, :deleted}])
+
+      handler_id = "test-adr42-branch-deleted-#{uniq()}"
+      test_pid = self()
+
+      :ok =
+        :telemetry.attach(
+          handler_id,
+          [:platform, :stacks, :rollup, :branch_deleted],
+          fn event, measurements, metadata, _config ->
+            send(test_pid, {:telemetry, event, measurements, metadata})
+          end,
+          nil
+        )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      project = project_with_repo!()
+      stack = stack_for!(project, slug: "adr42-delete")
+
+      {:ok, deployed} =
+        Stacks.update_stack(stack, %{
+          status: "deploying",
+          metadata: %{"rollup_pr" => %{"number" => 501}}
+        })
+
+      assert {:ok, %{status: "done"}} = StackDeployer.handle_rollup_pr_merged(deployed)
+
+      assert_received {:telemetry, [:platform, :stacks, :rollup, :branch_deleted],
+                       %{duration_us: duration_us}, metadata}
+
+      assert is_integer(duration_us) and duration_us >= 0
+      assert metadata.stack_id == stack.id
+      assert metadata.rollup_branch == stack.rollup_branch
+      assert metadata.status == :deleted
+    end
+
+    test "[:branch_deleted] fires with :already_absent status when runner reports absent" do
+      {:ok, _} = FakeRunner.start_link(delete_responses: [{:ok, :already_absent}])
+
+      handler_id = "test-adr42-branch-absent-#{uniq()}"
+      test_pid = self()
+
+      :ok =
+        :telemetry.attach(
+          handler_id,
+          [:platform, :stacks, :rollup, :branch_deleted],
+          fn event, measurements, metadata, _config ->
+            send(test_pid, {:telemetry, event, measurements, metadata})
+          end,
+          nil
+        )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      project = project_with_repo!()
+      stack = stack_for!(project, slug: "adr42-absent")
+
+      {:ok, deployed} =
+        Stacks.update_stack(stack, %{
+          status: "deploying",
+          metadata: %{"rollup_pr" => %{"number" => 502}}
+        })
+
+      assert {:ok, %{status: "done"}} = StackDeployer.handle_rollup_pr_merged(deployed)
+
+      assert_received {:telemetry, [:platform, :stacks, :rollup, :branch_deleted],
+                       %{duration_us: _}, %{status: :already_absent}}
+    end
+
+    test "[:branch_deleted] does NOT fire on runner delete error" do
+      {:ok, _} =
+        FakeRunner.start_link(
+          delete_responses: [{:error, {:git_failed, ["push", "--delete"], 128, "boom"}}]
+        )
+
+      handler_id = "test-adr42-branch-delete-err-#{uniq()}"
+      test_pid = self()
+
+      :ok =
+        :telemetry.attach(
+          handler_id,
+          [:platform, :stacks, :rollup, :branch_deleted],
+          fn event, measurements, metadata, _config ->
+            send(test_pid, {:telemetry, event, measurements, metadata})
+          end,
+          nil
+        )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      project = project_with_repo!()
+      stack = stack_for!(project, slug: "adr42-delete-err")
+
+      {:ok, deployed} =
+        Stacks.update_stack(stack, %{
+          status: "deploying",
+          metadata: %{"rollup_pr" => %{"number" => 503}}
+        })
+
+      assert {:ok, %{status: "done"}} = StackDeployer.handle_rollup_pr_merged(deployed)
+
+      refute_received {:telemetry, [:platform, :stacks, :rollup, :branch_deleted], _m, _md}
+    end
+
+    test "[:member_merged] fires on successful per-member merge with duration_us + metadata" do
+      {:ok, _} =
+        FakeRunner.start_link(merge_responses: [{:ok, %{status: :merged, merge_sha: "mergeSha"}}])
+
+      handler_id = "test-adr42-member-merged-#{uniq()}"
+      test_pid = self()
+
+      :ok =
+        :telemetry.attach(
+          handler_id,
+          [:platform, :stacks, :rollup, :member_merged],
+          fn event, measurements, metadata, _config ->
+            send(test_pid, {:telemetry, event, measurements, metadata})
+          end,
+          nil
+        )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      project = project_with_repo!()
+      stack = stack_for!(project, slug: "adr42-merged")
+      # Include a second unmerged member so the maybe_open_stack_pr
+      # hook stays :not_ready and doesn't perturb the assertion window.
+      _ = unmerged_member!(project, stack, position: 2)
+      task = review_ready_member!(project, stack)
+
+      assert {:ok, %{status: :merged, merge_sha: "mergeSha"}} =
+               StackDeployer.merge_member_into_rollup(task)
+
+      assert_received {:telemetry, [:platform, :stacks, :rollup, :member_merged],
+                       %{duration_us: duration_us}, metadata}
+
+      assert is_integer(duration_us) and duration_us >= 0
+      assert metadata.stack_id == stack.id
+      assert metadata.task_id == task.id
+      assert metadata.merge_sha == "mergeSha"
+      assert is_binary(metadata.member_branch)
+      assert String.starts_with?(metadata.member_branch, "task/")
+    end
+
+    test "[:member_merged] does NOT fire on :not_fast_forwardable" do
+      {:ok, _} =
+        FakeRunner.start_link(
+          merge_responses: [
+            {:error, :not_fast_forwardable,
+             %{member_sha: "m1", rollup_sha: "r1", output: "fatal: Not fast-forward"}}
+          ]
+        )
+
+      handler_id = "test-adr42-member-notff-#{uniq()}"
+      test_pid = self()
+
+      :ok =
+        :telemetry.attach(
+          handler_id,
+          [:platform, :stacks, :rollup, :member_merged],
+          fn event, measurements, metadata, _config ->
+            send(test_pid, {:telemetry, event, measurements, metadata})
+          end,
+          nil
+        )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      project = project_with_repo!()
+      stack = stack_for!(project, slug: "adr42-notff")
+      task = review_ready_member!(project, stack)
+
+      assert {:error, :not_fast_forwardable, _} = StackDeployer.merge_member_into_rollup(task)
+
+      refute_received {:telemetry, [:platform, :stacks, :rollup, :member_merged], _m, _md}
+    end
   end
 end

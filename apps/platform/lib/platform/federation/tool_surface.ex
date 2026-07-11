@@ -4218,6 +4218,20 @@ defmodule Platform.Federation.ToolSurface do
                suggestion: "Check the stack's current status via stack_get."
              }}
 
+          {:error, :stack_plans_pending, %{waiting_on: waiting_on}} ->
+            # ADR 0042 Decision 4: refuse to start when any member is still
+            # missing an approved plan. Surface the blocking member ids so
+            # the caller can chase them down.
+            {:error,
+             %{
+               error:
+                 "Stack cannot start yet — the following members are missing an approved plan: " <>
+                   Enum.join(waiting_on, ", "),
+               recoverable: true,
+               suggestion:
+                 "Approve the missing plans (via plan_approve) before calling stack_start again."
+             }}
+
           {:error, %Ecto.Changeset{} = changeset} ->
             {:error,
              %{

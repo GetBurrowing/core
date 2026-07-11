@@ -2635,6 +2635,16 @@ defmodule PlatformWeb.TasksLive do
     {:noreply, socket |> refresh_board() |> reload_selected_task() |> reload_selected_stack()}
   end
 
+  # ADR 0042 Decision 4: stack-v2 commencement gate signal. UI reaction
+  # (e.g. flashing "ready to run" chips on freshly-unblocked members)
+  # is deliberately out of scope for the gate stage — the plan carrier
+  # is `{:task_updated, ...}` events as members transition, which we
+  # already handle above. This permissive clause exists so the LiveView
+  # doesn't crash on the new message shape.
+  def handle_info({:stack_gate_opened, _stack_id, _executable_ids}, socket) do
+    {:noreply, socket}
+  end
+
   # Stage-5 of task 019e2c25: per-task ReviewRequests broadcasts. Refresh the
   # board (kanban + mobile section list both consume `:review_counts`) and
   # reload the open stack-detail panel so the per-member badge re-evaluates

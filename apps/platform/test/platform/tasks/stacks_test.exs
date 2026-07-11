@@ -1108,11 +1108,18 @@ defmodule Platform.Tasks.StacksTest do
       {:ok, attached_parent} = Stacks.add_task(stack, parent)
       {:ok, attached_child} = Stacks.add_task(stack, child)
 
-      # Approved plan is the existing prerequisite for any execution-phase
-      # transition (`require_approved_plan_for/2` in Tasks). In production
-      # the child's plan would have been approved during the stack's
-      # planning sweep before it parked at stack_pending.
-      {:ok, _plan} = Tasks.create_plan(%{task_id: attached_child.id, status: "approved"})
+      # ADR 0042 Decision 4: the commencement gate requires BOTH plans on
+      # every member AND the stack itself at `in_progress`. This test
+      # exercises try_promote inside an already-started stack, so we
+      # simulate that by (a) approving both members' plans and (b)
+      # flipping stack.status directly via changeset — the same shape
+      # `start_stack/1` would leave behind post-cascade.
+      {:ok, _plan_p} = Tasks.create_plan(%{task_id: attached_parent.id, status: "approved"})
+      {:ok, _plan_c} = Tasks.create_plan(%{task_id: attached_child.id, status: "approved"})
+
+      stack
+      |> Ecto.Changeset.change(status: "in_progress")
+      |> Repo.update!()
 
       # Park child at stack_pending.
       pending_child =
@@ -1157,6 +1164,13 @@ defmodule Platform.Tasks.StacksTest do
       {:ok, attached} = Stacks.add_task(stack, root)
 
       {:ok, _plan} = Tasks.create_plan(%{task_id: attached.id, status: "approved"})
+
+      # ADR 0042 Decision 4: commencement gate requires stack.status ==
+      # in_progress. Simulate the post-cascade state directly (see
+      # "promotes stack_pending → in_progress when deps clear" comment).
+      stack
+      |> Ecto.Changeset.change(status: "in_progress")
+      |> Repo.update!()
 
       attached
       |> Task.changeset(%{status: "stack_pending"})
@@ -1262,10 +1276,12 @@ defmodule Platform.Tasks.StacksTest do
       {:ok, _attached_root_b} = Stacks.add_task(stack, root_b)
       {:ok, attached_child} = Stacks.add_task(stack, child)
 
-      # Roots need approved plans so the in_progress transition gate
-      # passes. Non-root doesn't need a plan to go to stack_pending.
+      # ADR 0042 Decision 4: every member (including the parked child)
+      # needs an approved plan before the commencement gate opens; the
+      # cascade refuses upfront otherwise.
       {:ok, _} = Tasks.create_plan(%{task_id: root_a.id, status: "approved"})
       {:ok, _} = Tasks.create_plan(%{task_id: root_b.id, status: "approved"})
+      {:ok, _} = Tasks.create_plan(%{task_id: child.id, status: "approved"})
 
       assert {:ok, %{stack: updated, started: started, parked: parked}} =
                Stacks.start_stack(stack)
@@ -1300,8 +1316,12 @@ defmodule Platform.Tasks.StacksTest do
       assert Tasks.get_task_record(attached.id).status == "in_progress"
     end
 
-    test "returns :partial when a root transition fails" do
-      {:ok, project} = Tasks.create_project(%{name: "Cascade partial"})
+    test "refuses upfront with :stack_plans_pending when any member is missing an approved plan" do
+      # ADR 0042 Decision 4: the commencement gate short-circuits the
+      # cascade entirely rather than partial-cascading. This test replaces
+      # the pre-D4 `:partial` behavior (which used to advance the ok
+      # roots and surface the missing-plan root as a per-member error).
+      {:ok, project} = Tasks.create_project(%{name: "Cascade refuse"})
       stack = stack_fixture(project_id: project.id)
       {:ok, ok_root} = Tasks.create_task(%{project_id: project.id, title: "OK root"})
       {:ok, bad_root} = Tasks.create_task(%{project_id: project.id, title: "No-plan root"})
@@ -1309,20 +1329,43 @@ defmodule Platform.Tasks.StacksTest do
       {:ok, _attached_ok} = Stacks.add_task(stack, ok_root)
       {:ok, _attached_bad} = Stacks.add_task(stack, bad_root)
 
-      # Only ok_root has a plan; bad_root will fail :no_approved_plan.
+      # Only ok_root has a plan; bad_root has none.
       {:ok, _} = Tasks.create_plan(%{task_id: ok_root.id, status: "approved"})
 
-      assert {:partial, %{stack: updated, started: started, errors: errors}} =
+      assert {:error, :stack_plans_pending, %{stack_id: stack_id, waiting_on: waiting_on}} =
                Stacks.start_stack(stack)
 
-      assert updated.status == "in_progress"
-      assert [ok_started] = started
-      assert ok_started.id == ok_root.id
+      assert stack_id == stack.id
+      assert waiting_on == [bad_root.id]
 
-      assert [%{task_id: failed_id, target_status: "in_progress", reason: :no_approved_plan}] =
-               errors
+      # Stack was NOT flipped — no partial state leaks through.
+      reloaded = Stacks.get_stack!(stack.id)
+      assert reloaded.status == "forming"
 
-      assert failed_id == bad_root.id
+      # Neither member was touched — both remain in `backlog`.
+      assert Tasks.get_task_record(ok_root.id).status == "backlog"
+      assert Tasks.get_task_record(bad_root.id).status == "backlog"
+    end
+
+    test "refuses with :stack_plans_pending when a member's latest plan is pending_review" do
+      # A member with a plan awaiting review is still not "approved" per
+      # CommencementGate. The gate holds until every member reaches
+      # `approved`/`completed`.
+      {:ok, project} = Tasks.create_project(%{name: "Cascade pending plan"})
+      stack = stack_fixture(project_id: project.id)
+      {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "A"})
+      {:ok, b} = Tasks.create_task(%{project_id: project.id, title: "B"})
+      {:ok, _} = Stacks.add_task(stack, a)
+      {:ok, _} = Stacks.add_task(stack, b)
+
+      {:ok, _} = Tasks.create_plan(%{task_id: a.id, status: "approved"})
+      {:ok, _} = Tasks.create_plan(%{task_id: b.id, status: "pending_review"})
+
+      assert {:error, :stack_plans_pending, %{stack_id: id, waiting_on: [waiting]}} =
+               Stacks.start_stack(stack)
+
+      assert id == stack.id
+      assert waiting == b.id
     end
   end
 
@@ -2136,16 +2179,31 @@ defmodule Platform.Tasks.StacksTest do
       {:ok, t} = Tasks.create_task(%{project_id: project.id, title: "Member"})
       {:ok, attached} = Stacks.add_task(stack, t)
 
-      # Set up so we can drive the member from backlog → in_progress.
+      # ADR 0042 Decision 4: the commencement gate requires stack.status
+      # == "in_progress" before a member can transition to `in_progress`.
+      # This test previously drove a member `backlog → in_progress` while
+      # the stack was still `forming`; under D4 that path is legitimately
+      # blocked (the operator is supposed to invoke `start_stack/1`). We
+      # simulate the post-start state by flipping the stack directly, then
+      # exercise the intra-execution transition that IS the point of this
+      # test: `in_progress → in_review` should re-run recompute and land
+      # the stack at `in_review` too (single member = single-member rollup).
       {:ok, _} = Tasks.create_plan(%{task_id: attached.id, status: "approved"})
 
-      # Pre-condition: empty/unstarted rollup.
-      assert Stacks.get_stack(stack.id).status == "forming"
+      stack
+      |> Ecto.Changeset.change(status: "in_progress")
+      |> Repo.update!()
 
-      assert {:ok, _} = Tasks.transition_task(attached, "in_progress")
+      # Drive member forward through the primitive we're actually testing.
+      attached
+      |> Task.changeset(%{status: "in_progress"})
+      |> Repo.update!()
+
+      reloaded = Tasks.get_task_record(attached.id)
+      assert {:ok, _} = Tasks.transition_task(reloaded, "in_review")
 
       # recompute_stack_status hook ran in maybe_finalize_transition's tail.
-      assert Stacks.get_stack(stack.id).status == "in_progress"
+      assert Stacks.get_stack(stack.id).status == "in_review"
     end
 
     test "no-op for tasks outside any stack" do
@@ -2197,10 +2255,15 @@ defmodule Platform.Tasks.StacksTest do
       {:ok, attached_a} = Stacks.add_task(stack, child_a)
       {:ok, attached_b} = Stacks.add_task(stack, child_b)
 
-      # Both children need approved plans for the in_progress transition
-      # to succeed.
+      # ADR 0042 Decision 4: commencement gate requires every member plan
+      # approved AND stack.status == "in_progress".
+      {:ok, _} = Tasks.create_plan(%{task_id: attached_parent.id, status: "approved"})
       {:ok, _} = Tasks.create_plan(%{task_id: attached_a.id, status: "approved"})
       {:ok, _} = Tasks.create_plan(%{task_id: attached_b.id, status: "approved"})
+
+      stack
+      |> Ecto.Changeset.change(status: "in_progress")
+      |> Repo.update!()
 
       # Park both dependents at stack_pending.
       attached_a
@@ -2279,7 +2342,14 @@ defmodule Platform.Tasks.StacksTest do
       {:ok, attached_parent} = Stacks.add_task(stack, parent)
       {:ok, attached_child} = Stacks.add_task(stack, child)
 
+      # ADR 0042 Decision 4: gate needs every plan approved AND stack
+      # itself at `in_progress` for the sweep's in_progress promotion.
+      {:ok, _} = Tasks.create_plan(%{task_id: attached_parent.id, status: "approved"})
       {:ok, _} = Tasks.create_plan(%{task_id: attached_child.id, status: "approved"})
+
+      stack
+      |> Ecto.Changeset.change(status: "in_progress")
+      |> Repo.update!()
 
       attached_child
       |> Task.changeset(%{status: "stack_pending"})
@@ -2851,6 +2921,134 @@ defmodule Platform.Tasks.StacksTest do
       refute Stacks.member_overridden?(%{"assignee_override" => "true"})
       refute Stacks.member_overridden?(%{})
       refute Stacks.member_overridden?(nil)
+    end
+  end
+
+  describe "stack_gate_opened broadcast (ADR 0042 Decision 4, stage 3)" do
+    # The gate-open transition fires when the LAST pending plan in a stack
+    # is approved. The broadcast is a signal only — no member is
+    # auto-transitioned. Members stay at `stack_pending` until an
+    # explicit `Tasks.transition_task/2` (or MCP `task_start`).
+
+    test "approving the last pending plan fires {:stack_gate_opened, stack_id, executable_ids}" do
+      {:ok, project} = Tasks.create_project(%{name: "Gate broadcast happy"})
+      stack = stack_fixture(project_id: project.id)
+
+      {:ok, root_a} = Tasks.create_task(%{project_id: project.id, title: "Root A"})
+      {:ok, root_b} = Tasks.create_task(%{project_id: project.id, title: "Root B"})
+
+      {:ok, child} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Child of A",
+          dependencies: [%{"task_id" => root_a.id, "kind" => "blocks"}]
+        })
+
+      {:ok, _} = Stacks.add_task(stack, root_a)
+      {:ok, _} = Stacks.add_task(stack, root_b)
+      {:ok, _} = Stacks.add_task(stack, child)
+
+      # A + B already approved; C is the last-pending plan.
+      {:ok, _} = Tasks.create_plan(%{task_id: root_a.id, status: "approved"})
+      {:ok, _} = Tasks.create_plan(%{task_id: root_b.id, status: "approved"})
+      {:ok, c_draft} = Tasks.create_plan(%{task_id: child.id})
+      {:ok, c_pending} = Tasks.submit_plan_for_review(c_draft)
+
+      :ok = Tasks.subscribe_board()
+
+      assert {:ok, _approved} = Tasks.approve_plan(c_pending, "system")
+
+      assert_receive {:stack_gate_opened, stack_id, executable_ids}
+      assert stack_id == stack.id
+
+      # Roots are the two members with no in-stack deps. Child depends
+      # on root_a (via tasks.dependencies -> resolved in-stack), so it's
+      # NOT a root. Order is non-deterministic; sort before compare.
+      assert Enum.sort(executable_ids) == Enum.sort([root_a.id, root_b.id])
+    end
+
+    test "approving an intermediate plan does NOT fire :stack_gate_opened" do
+      {:ok, project} = Tasks.create_project(%{name: "Gate broadcast intermediate"})
+      stack = stack_fixture(project_id: project.id)
+
+      {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "A"})
+      {:ok, b} = Tasks.create_task(%{project_id: project.id, title: "B"})
+      {:ok, c} = Tasks.create_task(%{project_id: project.id, title: "C"})
+
+      {:ok, _} = Stacks.add_task(stack, a)
+      {:ok, _} = Stacks.add_task(stack, b)
+      {:ok, _} = Stacks.add_task(stack, c)
+
+      # A already approved. B is what we're approving. C is still pending
+      # (has no plan at all), so plans_ready? stays false after this call.
+      {:ok, _} = Tasks.create_plan(%{task_id: a.id, status: "approved"})
+      {:ok, b_draft} = Tasks.create_plan(%{task_id: b.id})
+      {:ok, b_pending} = Tasks.submit_plan_for_review(b_draft)
+
+      :ok = Tasks.subscribe_board()
+
+      assert {:ok, _} = Tasks.approve_plan(b_pending, "system")
+
+      # We should get the plan_updated broadcast but NOT the gate signal.
+      assert_receive {:plan_updated, _}
+      refute_receive {:stack_gate_opened, _, _}, 100
+    end
+
+    test "approving a plan on a NON-stack task does not fire :stack_gate_opened" do
+      {:ok, project} = Tasks.create_project(%{name: "Gate broadcast non-stack"})
+
+      {:ok, standalone} =
+        Tasks.create_task(%{project_id: project.id, title: "Standalone", status: "planning"})
+
+      {:ok, draft} = Tasks.create_plan(%{task_id: standalone.id})
+      {:ok, pending} = Tasks.submit_plan_for_review(draft)
+
+      :ok = Tasks.subscribe_board()
+
+      assert {:ok, _} = Tasks.approve_plan(pending, "system")
+
+      # plan_updated + task_updated fire — but no gate signal for a task
+      # with `stack_id: nil`.
+      assert_receive {:plan_updated, _}
+      refute_receive {:stack_gate_opened, _, _}, 100
+    end
+
+    test "gate open does NOT auto-transition any member (all stay at stack_pending / backlog)" do
+      # Belt-and-braces: verify the broadcast is a SIGNAL and does not
+      # cascade any member's status. The caller must explicitly kick
+      # each root via `Tasks.transition_task/2` (or MCP `task_start`).
+      {:ok, project} = Tasks.create_project(%{name: "Gate no auto-transition"})
+      stack = stack_fixture(project_id: project.id)
+
+      {:ok, root_a} = Tasks.create_task(%{project_id: project.id, title: "Root A"})
+      {:ok, root_b} = Tasks.create_task(%{project_id: project.id, title: "Root B"})
+
+      {:ok, _} = Stacks.add_task(stack, root_a)
+      {:ok, _} = Stacks.add_task(stack, root_b)
+
+      # After stack_start, roots would go to in_progress. To exercise
+      # the pure last-approval path without the stack cascade, we
+      # instead park BOTH members at `stack_pending` up-front and only
+      # then approve the last plan. This mirrors the mid-flight state
+      # where stack_start already ran + parked non-root members, and a
+      # later plan approval flips the gate for a still-parked member.
+      set_member_status(stack, root_a, "stack_pending")
+      set_member_status(stack, root_b, "stack_pending")
+
+      {:ok, _} = Tasks.create_plan(%{task_id: root_a.id, status: "approved"})
+      {:ok, b_draft} = Tasks.create_plan(%{task_id: root_b.id})
+      {:ok, b_pending} = Tasks.submit_plan_for_review(b_draft)
+
+      :ok = Tasks.subscribe_board()
+
+      assert {:ok, _} = Tasks.approve_plan(b_pending, "system")
+
+      assert_receive {:stack_gate_opened, _, _}
+
+      # Neither member was flipped out of `stack_pending` by the gate
+      # broadcast — that's the caller's job.
+      assert Tasks.get_task_record(root_a.id).status == "stack_pending"
+      assert Tasks.get_task_record(root_b.id).status == "stack_pending"
     end
   end
 

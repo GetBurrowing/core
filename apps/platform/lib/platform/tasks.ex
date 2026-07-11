@@ -83,7 +83,13 @@ defmodule Platform.Tasks do
 
   @valid_task_transitions %{
     "backlog" => ~w(planning blocked in_progress stack_pending cancelled),
-    "planning" => ~w(in_progress blocked backlog cancelled),
+    # ADR 0042 Decision 4: `planning → stack_pending` lands when
+    # `apply_dispatch_gate/1` fires on a stack member whose commencement
+    # gate is still closed. Rather than surface `:stack_plans_pending` (which
+    # would roll back the plan-approval transaction), the member is parked
+    # in `stack_pending` and the in-stack sweep promotes it once every
+    # sibling plan is approved.
+    "planning" => ~w(in_progress blocked backlog stack_pending cancelled),
     "in_progress" => ~w(in_review deploying blocked done stack_pending cancelled),
     # ADR 0041 (task 019e2be4): `done` is reachable from `in_review` for stack
     # members whose terminal transition is the rollup-PR merge fan-out — they
@@ -734,7 +740,8 @@ defmodule Platform.Tasks do
   Transition a task's status, enforcing valid transitions per ADR 0018 §7.
   """
   def transition_task_status(%Task{} = task, new_status) do
-    with :ok <- require_deploy_target_for(task, new_status) do
+    with :ok <- require_deploy_target_for(task, new_status),
+         :ok <- require_stack_commencement_for(task, new_status) do
       allowed = Map.get(@valid_task_transitions, task.status, [])
 
       if new_status in allowed do
@@ -1169,10 +1176,21 @@ defmodule Platform.Tasks do
             {nil, []}
         end
 
-      {updated_plan, previous_task, finalized_task, frozen_messages, superseded_siblings}
+      # ADR 0042 Decision 4: if this approval was the last-plan approval
+      # for a stack, detect the closed→open gate transition here so we can
+      # fire `stack_gate_opened` post-commit. `plan` is the pre-write plan
+      # (status: "pending_review" per this clause head), which the helper
+      # needs to know whether this task was already counted as approved
+      # before the write.
+      gate_transition = Platform.Tasks.Stacks.detect_gate_open_transition(task, plan)
+
+      {updated_plan, previous_task, finalized_task, frozen_messages, superseded_siblings,
+       gate_transition}
     end)
     |> case do
-      {:ok, {updated, previous_task, finalized_task, frozen_messages, superseded_siblings}} ->
+      {:ok,
+       {updated, previous_task, finalized_task, frozen_messages, superseded_siblings,
+        gate_transition}} ->
         # Broadcast supersedee transitions FIRST so observers fold v1 before
         # expanding v2 — preserves the "newer plan replaces older" UX order.
         Enum.each(superseded_siblings, fn sibling ->
@@ -1180,6 +1198,22 @@ defmodule Platform.Tasks do
         end)
 
         broadcast_board({:plan_updated, updated})
+
+        # Stack-v2 gate broadcast. Signal only — no member is
+        # auto-transitioned here. Subscribers (LiveViews, TaskRouter)
+        # can react by re-checking `Stacks.executable_members/1` and
+        # calling `Tasks.transition_task/2` per-member in dep order.
+        case gate_transition do
+          {:opened, stack, executable_ids} ->
+            broadcast_board({:stack_gate_opened, stack.id, executable_ids})
+
+            Logger.info(
+              "[Stacks] gate opened for stack=#{stack.id} executable=#{inspect(executable_ids)}"
+            )
+
+          :noop ->
+            :ok
+        end
 
         if finalized_task do
           finalized_task =
@@ -1212,27 +1246,41 @@ defmodule Platform.Tasks do
   # `:in_progress`). Broadcasting `frozen` is the caller's responsibility
   # — it should fire post-commit to avoid stale events on rollback.
   defp apply_dispatch_gate(%Task{} = task) do
-    case unmet_dependencies(task) do
-      [] ->
-        {:ok, updated} = transition_task_status(task, "in_progress")
+    # ADR 0042 Decision 4: for stack members whose commencement gate is
+    # still closed (some sibling plan hasn't landed yet), park in
+    # `stack_pending` rather than surfacing `{:error, :stack_plans_pending}`
+    # from `transition_task_status/2` — that error would roll back the
+    # enclosing `approve_plan` transaction. Non-stack tasks are vacuously
+    # open per `CommencementGate.open?/1` and fall through to the existing
+    # unmet-dependencies branch.
+    case Platform.Tasks.Stacks.CommencementGate.open?(task) do
+      false ->
+        {:ok, pending} = transition_task_status(task, "stack_pending")
+        {pending, []}
 
-        case Platform.Chat.FreezePolicy.freeze_messages_for_task(updated) do
-          {:ok, frozen} ->
-            {updated, frozen}
+      true ->
+        case unmet_dependencies(task) do
+          [] ->
+            {:ok, updated} = transition_task_status(task, "in_progress")
 
-          {:error, reason} ->
-            Repo.rollback(reason)
+            case Platform.Chat.FreezePolicy.freeze_messages_for_task(updated) do
+              {:ok, frozen} ->
+                {updated, frozen}
+
+              {:error, reason} ->
+                Repo.rollback(reason)
+            end
+
+          unmet ->
+            {:ok, blocked} = transition_task_status(task, "blocked")
+            existing_metadata = blocked.metadata || %{}
+
+            merged_metadata =
+              Map.put(existing_metadata, "unmet_dependencies", Enum.map(unmet, & &1.id))
+
+            {:ok, with_metadata} = update_task(blocked, %{metadata: merged_metadata})
+            {with_metadata, []}
         end
-
-      unmet ->
-        {:ok, blocked} = transition_task_status(task, "blocked")
-        existing_metadata = blocked.metadata || %{}
-
-        merged_metadata =
-          Map.put(existing_metadata, "unmet_dependencies", Enum.map(unmet, & &1.id))
-
-        {:ok, with_metadata} = update_task(blocked, %{metadata: merged_metadata})
-        {with_metadata, []}
     end
   end
 
@@ -2131,6 +2179,55 @@ defmodule Platform.Tasks do
   def require_deploy_target_for(_task, _new_status), do: :ok
 
   @doc """
+  Returns `:ok` unless a stack member is transitioning into `in_progress`
+  before every sibling has an approved plan (ADR 0042 Decision 4).
+
+  Non-stack tasks (`stack_id: nil`) always return `:ok` — this guard is a
+  no-op for plain tasks. Transitions to statuses other than `"in_progress"`
+  also return `:ok`; the gate exists specifically to hold members in
+  `pending`/`backlog`/`planning`/`stack_pending` until the whole stack's
+  plans have landed.
+
+  When the gate is closed for a stack member, returns
+  `{:error, :stack_plans_pending, %{stack_id, waiting_on}}` where
+  `waiting_on` is the ordered list of sibling task ids that are still
+  missing an approved plan (see `Stacks.CommencementGate.waiting_on/1`).
+
+  Mirrors the surface of `require_deploy_target_for/2` and
+  `require_approved_plan_for/2`. Wired into `transition_task_status/2` so
+  every entry path — LiveView, MCP `task_update`, `drop_task_to_column/2`,
+  `apply_dispatch_gate/1` — is covered by the single base primitive.
+  """
+  @spec require_stack_commencement_for(Task.t(), String.t()) ::
+          :ok
+          | {:error, :stack_plans_pending, %{stack_id: String.t(), waiting_on: [String.t()]}}
+  def require_stack_commencement_for(%Task{stack_id: nil}, _new_status), do: :ok
+
+  def require_stack_commencement_for(%Task{} = task, "in_progress") do
+    cond do
+      # Already in an execution phase — the gate was checked at entry.
+      # Re-checking on intra-execution transitions (e.g. a regression
+      # `in_review → in_progress` or a demote `deploying → in_progress`)
+      # would spuriously refuse work the operator is intentionally
+      # rewinding. Mirrors `require_approved_plan_for/2`.
+      task.status in @execution_phase_statuses ->
+        :ok
+
+      Platform.Tasks.Stacks.CommencementGate.open?(task) ->
+        :ok
+
+      true ->
+        {:error, :stack_plans_pending,
+         %{
+           stack_id: task.stack_id,
+           waiting_on: Platform.Tasks.Stacks.CommencementGate.waiting_on(task.stack_id)
+         }}
+    end
+  end
+
+  def require_stack_commencement_for(_task, _new_status), do: :ok
+
+  @doc """
   Transition a task's status and broadcast the change to the board topic.
 
   When `new_status` is `"in_progress"`, the status flip and the Policy 2
@@ -2178,22 +2275,40 @@ defmodule Platform.Tasks do
   # domain doesn't reach into Chat schemas directly. Both writes share one
   # `Repo.transaction` so a freeze failure rolls back the status update —
   # no silent partial freeze, no half-flipped state.
+  #
+  # ADR 0042 Decision 4: `transition_task_status/2` may now return a
+  # 3-tuple `{:error, :stack_plans_pending, %{stack_id, waiting_on}}` when
+  # the commencement gate is closed. We stash the whole tuple in the
+  # transaction rollback value so the LiveView / MCP caller sees the
+  # structured payload, not just the reason atom.
   defp transition_with_policy2_freeze(%Task{} = task, "in_progress") do
-    Repo.transaction(fn ->
-      case transition_task_status(task, "in_progress") do
-        {:ok, updated} ->
-          case Platform.Chat.FreezePolicy.freeze_messages_for_task(updated) do
-            {:ok, frozen_messages} ->
-              %{updated: updated, frozen: frozen_messages}
+    result =
+      Repo.transaction(fn ->
+        case transition_task_status(task, "in_progress") do
+          {:ok, updated} ->
+            case Platform.Chat.FreezePolicy.freeze_messages_for_task(updated) do
+              {:ok, frozen_messages} ->
+                %{updated: updated, frozen: frozen_messages}
 
-            {:error, reason} ->
-              Repo.rollback(reason)
-          end
+              {:error, reason} ->
+                Repo.rollback({:error, reason})
+            end
 
-        {:error, reason} ->
-          Repo.rollback(reason)
-      end
-    end)
+          {:error, _reason} = error ->
+            Repo.rollback(error)
+
+          {:error, _reason, _details} = error ->
+            Repo.rollback(error)
+        end
+      end)
+
+    case result do
+      {:ok, payload} -> {:ok, payload}
+      {:error, %{} = _stashed} = err -> err
+      {:error, {:error, reason}} -> {:error, reason}
+      {:error, {:error, reason, details}} -> {:error, reason, details}
+      {:error, other} -> {:error, other}
+    end
   end
 
   defp transition_with_policy2_freeze(%Task{} = task, new_status) do
@@ -2253,6 +2368,16 @@ defmodule Platform.Tasks do
 
           require_approved_plan_for(task, target_status) == {:error, :no_approved_plan} ->
             {:error, :no_approved_plan}
+
+          # ADR 0042 Decision 4: manual drops also honour the stack
+          # commencement gate. `drop_task_to_column` writes the changeset
+          # directly rather than funnelling through `transition_task_status/2`,
+          # so we check the guard inline here.
+          match?(
+            {:error, :stack_plans_pending, _},
+            require_stack_commencement_for(task, target_status)
+          ) ->
+            require_stack_commencement_for(task, target_status)
 
           true ->
             case task |> Task.changeset(%{status: target_status}) |> Repo.update() do

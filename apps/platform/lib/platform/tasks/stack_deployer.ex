@@ -28,10 +28,24 @@ defmodule Platform.Tasks.StackDeployer do
   `Tasks.transition_task/2` finalizer when a stack member reaches
   `in_review` AND every validation in its review-stage(s) is `passed`.
 
-  On conflict the runner reports `{:error, :conflict, %{files}}` and
-  the deployer halts the stack: stack `status -> "blocked"` and
-  `metadata.conflict` records the offending member, file list, and
-  timestamp. No auto-resolve is attempted.
+  Since ADR-0042 Decision 2 (branch side), the merge is
+  fast-forward-only. Every `task/<uuid>` member branch is cut from
+  the rollup HEAD, so a validated pass fast-forwards trivially.
+
+  Failure modes:
+
+    * On `:not_fast_forwardable` the deployer stamps
+      `task.metadata["paused_reason"] = %{kind: "rollup_diverged", …}`
+      but does NOT flip the stack to `blocked` — divergence is a
+      task-scoped anomaly (someone rebased manually, a race left
+      the branch cut from stale HEAD, etc.) that a human can
+      unstick by rebasing the task branch onto rollup HEAD. Other
+      stack members can keep merging.
+    * On `:conflict` (practically unreachable under `--ff-only`, kept
+      as defence-in-depth) the deployer halts the stack: stack
+      `status -> "blocked"` and `metadata.conflict` records the
+      offending member, file list, and timestamp. No auto-resolve is
+      attempted.
 
   ## Stage 4 (this module's added surface)
 
@@ -290,7 +304,18 @@ defmodule Platform.Tasks.StackDeployer do
       `Tasks.maybe_sweep_stack_after_update/2` (the same hook T4 wired).
     * Returns `{:ok, %{status: :merged, merge_sha: sha, merged_at: dt}}`.
 
-  On conflict:
+  On non-fast-forward divergence (ADR-0042 Decision 2):
+
+    * The runner emits `{:error, :not_fast_forwardable, %{member_sha,
+      rollup_sha, output}}`. The deployer stamps
+      `task.metadata["paused_reason"] = %{kind: "rollup_diverged", …}`,
+      logs `Logger.error(...)`, emits a
+      `[:platform, :stack_deployer, :not_fast_forwardable]` telemetry
+      event, and returns `{:error, :not_fast_forwardable, %{member_sha,
+      rollup_sha}}`. The stack status is UNCHANGED — other members
+      can keep merging while this one waits for a human rebase.
+
+  On conflict (practically unreachable under `--ff-only`):
 
     * The runner emits `{:error, :conflict, %{files: [...]}}`. The
       deployer flips the stack to `status: "blocked"` and writes
@@ -310,6 +335,7 @@ defmodule Platform.Tasks.StackDeployer do
           {:ok, merge_result()}
           | {:ok, :already_merged}
           | {:ok, :not_ready}
+          | {:error, :not_fast_forwardable, %{member_sha: String.t(), rollup_sha: String.t()}}
           | {:error, :conflict, [String.t()]}
           | {:error,
              :not_in_stack
@@ -362,8 +388,56 @@ defmodule Platform.Tasks.StackDeployer do
         "#{stack.base_branch} for stack #{stack.id} (#{repo_url})"
     )
 
-    case runner.ensure_rollup_branch(args) do
-      {:ok, %{status: status, base_sha: base_sha}} when status in [:created, :already_exists] ->
+    start_time = System.monotonic_time()
+
+    # ADR-0042 Decision 2: serialize concurrent invocations for the SAME
+    # stack via a per-stack `pg_advisory_xact_lock`. The collision
+    # surface is parallel MCP `stack_create` + `stack_start`
+    # fire-and-forget hooks both racing to `runner.ensure_rollup_branch/1`.
+    # Different stacks hash to different keys (see :erlang.phash2 below)
+    # so unrelated stacks do NOT block each other. Transaction-level
+    # locks release on commit/rollback — no leak risk. Under the test
+    # sandbox all callers share one connection so the lock is
+    # re-entrant, but the runner Agent queue serializes responses
+    # FIFO-style which preserves the observable contract.
+    txn_result =
+      Repo.transaction(fn ->
+        lock_key = :erlang.phash2(stack.id, 2_147_483_647)
+        Repo.query!("SELECT pg_advisory_xact_lock($1)", [lock_key])
+
+        case runner.ensure_rollup_branch(args) do
+          {:ok, %{status: status, base_sha: base_sha}}
+          when status in [:created, :already_exists] ->
+            case status do
+              :created ->
+                Logger.info(
+                  "[StackDeployer] created #{stack.rollup_branch} on #{repo_url}" <>
+                    if(base_sha, do: " at #{base_sha}", else: "")
+                )
+
+              :already_exists ->
+                Logger.info(
+                  "[StackDeployer] rollup branch #{stack.rollup_branch} already exists on " <>
+                    "#{repo_url} — treating as success"
+                )
+            end
+
+            stamp_rollup_branch_ready(stack, base_sha)
+
+            {status, base_sha}
+
+          {:error, reason} ->
+            Logger.warning(
+              "[StackDeployer] failed to create rollup branch #{stack.rollup_branch} on " <>
+                "#{repo_url}: #{inspect(reason)}"
+            )
+
+            Repo.rollback(reason)
+        end
+      end)
+
+    case txn_result do
+      {:ok, {status, base_sha}} ->
         result = %{
           branch: stack.rollup_branch,
           base_sha: base_sha,
@@ -371,29 +445,69 @@ defmodule Platform.Tasks.StackDeployer do
           created_at: DateTime.utc_now()
         }
 
-        case status do
-          :created ->
-            Logger.info(
-              "[StackDeployer] created #{stack.rollup_branch} on #{repo_url}" <>
-                if(base_sha, do: " at #{base_sha}", else: "")
-            )
-
-          :already_exists ->
-            Logger.info(
-              "[StackDeployer] rollup branch #{stack.rollup_branch} already exists on " <>
-                "#{repo_url} — treating as success"
-            )
-        end
+        emit_branch_created_telemetry(stack, base_sha, status, start_time)
 
         {:ok, result}
 
-      {:error, reason} = err ->
+      {:error, reason} ->
+        {:error, reason}
+    end
+  end
+
+  # ADR-0042 rollup-lifecycle telemetry. Fires on both `:created` and
+  # `:already_exists` — the `status` metadata field distinguishes them.
+  # Sits next to the existing `[:platform, :stack_deployer, ...]` events
+  # so downstream consumers can subscribe to either taxonomy.
+  defp emit_branch_created_telemetry(%Stack{} = stack, base_sha, status, start_time) do
+    duration_us =
+      System.convert_time_unit(System.monotonic_time() - start_time, :native, :microsecond)
+
+    :telemetry.execute(
+      [:platform, :stacks, :rollup, :branch_created],
+      %{duration_us: duration_us},
+      %{
+        stack_id: stack.id,
+        rollup_branch: stack.rollup_branch,
+        base_branch: stack.base_branch,
+        base_sha: base_sha,
+        status: status
+      }
+    )
+
+    :ok
+  end
+
+  # ADR-0042 Decision 2: after the rollup branch is confirmed live on origin
+  # (either freshly created or already present), stamp
+  # `stack.metadata["rollup_branch_ready"]` so the HeartbeatScheduler's
+  # git-workflow prompt can safely retarget member branches from
+  # `origin/#{rollup_branch}` instead of `origin/#{default_branch}`.
+  #
+  # The stamp is best-effort: if the metadata write fails we log a warning
+  # and let the caller succeed anyway. The absence of the stamp simply keeps
+  # members branching from `default_branch` (the existing ADR-0041 behaviour)
+  # so members never dispatch against a non-existent rollup ref.
+  defp stamp_rollup_branch_ready(%Stack{} = stack, base_sha) do
+    base_meta = if is_map(stack.metadata), do: stack.metadata, else: %{}
+
+    ready = %{
+      "at" => DateTime.utc_now() |> DateTime.to_iso8601(),
+      "base_sha" => base_sha
+    }
+
+    new_meta = Map.put(base_meta, "rollup_branch_ready", ready)
+
+    case Stacks.update_stack(stack, %{metadata: new_meta}) do
+      {:ok, _updated} ->
+        :ok
+
+      {:error, reason} ->
         Logger.warning(
-          "[StackDeployer] failed to create rollup branch #{stack.rollup_branch} on " <>
-            "#{repo_url}: #{inspect(reason)}"
+          "[StackDeployer] failed to stamp rollup_branch_ready on stack #{stack.id}: " <>
+            inspect(reason)
         )
 
-        err
+        :ok
     end
   end
 
@@ -510,9 +624,21 @@ defmodule Platform.Tasks.StackDeployer do
         "#{stack.rollup_branch} for stack #{stack.id} (#{repo_url})"
     )
 
+    start_time = System.monotonic_time()
+
     case runner.merge_member_into_rollup(args) do
       {:ok, %{status: :merged, merge_sha: merge_sha}} ->
+        emit_member_merged_telemetry(stack, task, member_branch, merge_sha, start_time)
         stamp_merged(task, merge_sha)
+
+      {:error, :not_fast_forwardable, %{} = detail} ->
+        record_divergence(stack, task, detail)
+
+        {:error, :not_fast_forwardable,
+         %{
+           member_sha: Map.get(detail, :member_sha),
+           rollup_sha: Map.get(detail, :rollup_sha)
+         }}
 
       {:error, :conflict, %{files: files} = detail} ->
         record_conflict(stack, task, files, detail)
@@ -526,6 +652,35 @@ defmodule Platform.Tasks.StackDeployer do
 
         err
     end
+  end
+
+  # ADR-0042 rollup-lifecycle telemetry. Fires exactly once per
+  # successful per-member fast-forward merge into the rollup branch.
+  # Sits next to `[:platform, :stack_deployer, :not_fast_forwardable]`
+  # and `:conflict` — those cover the failure modes; this covers the
+  # happy path.
+  defp emit_member_merged_telemetry(
+         %Stack{} = stack,
+         %TaskRecord{} = task,
+         member_branch,
+         merge_sha,
+         start_time
+       ) do
+    duration_us =
+      System.convert_time_unit(System.monotonic_time() - start_time, :native, :microsecond)
+
+    :telemetry.execute(
+      [:platform, :stacks, :rollup, :member_merged],
+      %{duration_us: duration_us},
+      %{
+        stack_id: stack.id,
+        task_id: task.id,
+        member_branch: member_branch,
+        merge_sha: merge_sha
+      }
+    )
+
+    :ok
   end
 
   # Member branch convention: `task/<short_id>` where `<short_id>` is
@@ -634,6 +789,61 @@ defmodule Platform.Tasks.StackDeployer do
     :ok
   end
 
+  # ADR-0042 Decision 2 pause path. When `git merge --ff-only` refuses
+  # because the member branch isn't a descendant of rollup HEAD, we do
+  # NOT auto-rebase (that would silently rewrite an agent's commits —
+  # see ADR-0042's atomic, human-legible-history requirement). Instead
+  # we stamp the task with a `paused_reason` so ops can see WHY the
+  # task is stuck and what SHAs to eyeball, and we leave the stack
+  # status alone — other members can keep merging past this one.
+  defp record_divergence(%Stack{} = stack, %TaskRecord{} = task, %{} = detail) do
+    member_sha = Map.get(detail, :member_sha)
+    rollup_sha = Map.get(detail, :rollup_sha)
+    output = Map.get(detail, :output)
+    at_iso = DateTime.utc_now() |> DateTime.to_iso8601()
+
+    base_meta = if is_map(task.metadata), do: task.metadata, else: %{}
+
+    paused_reason =
+      %{
+        "kind" => "rollup_diverged",
+        "member_sha" => member_sha,
+        "rollup_sha" => rollup_sha,
+        "output" => output,
+        "at" => at_iso
+      }
+
+    new_meta = Map.put(base_meta, "paused_reason", paused_reason)
+
+    case Tasks.update_task(task, %{metadata: new_meta}) do
+      {:ok, _updated} ->
+        Logger.error(
+          "[StackDeployer] task #{task.id} branch diverged from rollup " <>
+            "#{stack.rollup_branch}; pausing task. Rebase task branch onto " <>
+            "rollup HEAD to unstick."
+        )
+
+      {:error, reason} ->
+        Logger.warning(
+          "[StackDeployer] task #{task.id} branch diverged from rollup " <>
+            "#{stack.rollup_branch} but paused_reason stamp failed: #{inspect(reason)}"
+        )
+    end
+
+    :telemetry.execute(
+      [:platform, :stack_deployer, :not_fast_forwardable],
+      %{count: 1},
+      %{
+        task_id: task.id,
+        stack_id: stack.id,
+        member_sha: member_sha,
+        rollup_sha: rollup_sha
+      }
+    )
+
+    :ok
+  end
+
   defp log_merge_result(%TaskRecord{id: id}, {:ok, :already_merged}) do
     Logger.debug("[StackDeployer] task #{id} already merged into rollup; no-op")
     :ok
@@ -653,6 +863,15 @@ defmodule Platform.Tasks.StackDeployer do
   defp log_merge_result(%TaskRecord{id: id}, {:error, :conflict, files}) do
     Logger.warning(
       "[StackDeployer] task #{id} rollup merge halted by conflict; files=#{inspect(files)}"
+    )
+
+    :ok
+  end
+
+  defp log_merge_result(%TaskRecord{id: id}, {:error, :not_fast_forwardable, %{} = shas}) do
+    Logger.warning(
+      "[StackDeployer] task #{id} rollup merge paused: branch diverged " <>
+        "(member_sha=#{Map.get(shas, :member_sha)}, rollup_sha=#{Map.get(shas, :rollup_sha)})"
     )
 
     :ok
@@ -790,6 +1009,12 @@ defmodule Platform.Tasks.StackDeployer do
           %{stack_id: stack.id, rollup_branch: stack.rollup_branch}
         )
 
+        # ADR-0042 rollup branch lifecycle: delete the rollup branch on
+        # merge. Best-effort — a failure here does NOT undo the `status
+        # → done` transition. On async: false (tests) we run
+        # synchronously so callers can observe the runner interaction.
+        _ = kick_off_rollup_branch_delete(updated)
+
         {:ok, updated}
 
       {:error, _changeset} = err ->
@@ -799,6 +1024,116 @@ defmodule Platform.Tasks.StackDeployer do
 
         err
     end
+  end
+
+  # Fire-and-forget rollup-branch cleanup after the stack has flipped
+  # to `done`. Loads the project inside the async task so the caller
+  # of `handle_rollup_pr_merged/1` isn't blocked by a repo lookup.
+  #
+  # ADR-0042: `stack.abandon` deliberately leaves the rollup branch in
+  # place for human-driven cleanup, so this helper is only invoked from
+  # the merged-success path.
+  defp kick_off_rollup_branch_delete(%Stack{} = stack) do
+    if async?() do
+      Task.Supervisor.async_nolink(task_supervisor(), fn ->
+        do_delete_rollup_branch(stack)
+      end)
+    else
+      do_delete_rollup_branch(stack)
+      :ok
+    end
+  end
+
+  defp do_delete_rollup_branch(%Stack{} = stack) do
+    with {:ok, project} <- load_project(stack.project_id),
+         :ok <- ensure_repo_url(project) do
+      runner = git_runner()
+
+      args = %{
+        repo_url: project.repo_url,
+        rollup_branch: stack.rollup_branch,
+        project_id: stack.project_id,
+        stack_id: stack.id
+      }
+
+      start_time = System.monotonic_time()
+
+      case runner.delete_rollup_branch(args) do
+        {:ok, :deleted} ->
+          Logger.info(
+            "[StackDeployer] deleted rollup branch #{stack.rollup_branch} for " <>
+              "stack #{stack.id} on #{project.repo_url}"
+          )
+
+          :telemetry.execute(
+            [:platform, :stack_deployer, :rollup_branch_deleted],
+            %{count: 1},
+            %{stack_id: stack.id, rollup_branch: stack.rollup_branch}
+          )
+
+          emit_branch_deleted_telemetry(stack, :deleted, start_time)
+
+          :ok
+
+        {:ok, :already_absent} ->
+          Logger.info(
+            "[StackDeployer] rollup branch #{stack.rollup_branch} for stack " <>
+              "#{stack.id} already absent on #{project.repo_url}"
+          )
+
+          emit_branch_deleted_telemetry(stack, :already_absent, start_time)
+
+          :ok
+
+        {:error, reason} ->
+          Logger.warning(
+            "[StackDeployer] failed to delete rollup branch #{stack.rollup_branch} " <>
+              "for stack #{stack.id}: #{inspect(reason)} — stack remains done; " <>
+              "ops cleanup required"
+          )
+
+          :telemetry.execute(
+            [:platform, :stack_deployer, :rollup_branch_delete_failed],
+            %{count: 1},
+            %{
+              stack_id: stack.id,
+              rollup_branch: stack.rollup_branch,
+              reason: reason
+            }
+          )
+
+          :ok
+      end
+    else
+      {:error, reason} ->
+        Logger.warning(
+          "[StackDeployer] skipping rollup-branch delete for stack #{stack.id}: " <>
+            inspect(reason)
+        )
+
+        :ok
+    end
+  end
+
+  # ADR-0042 rollup-lifecycle telemetry. Fires on both `:deleted` and
+  # `:already_absent` — the `status` metadata field distinguishes them.
+  # Does NOT fire on runner errors (those already emit
+  # `[:platform, :stack_deployer, :rollup_branch_delete_failed]`).
+  defp emit_branch_deleted_telemetry(%Stack{} = stack, status, start_time) do
+    duration_us =
+      System.convert_time_unit(System.monotonic_time() - start_time, :native, :microsecond)
+
+    :telemetry.execute(
+      [:platform, :stacks, :rollup, :branch_deleted],
+      %{duration_us: duration_us},
+      %{
+        stack_id: stack.id,
+        rollup_branch: stack.rollup_branch,
+        status: status
+      }
+    )
+
+    :ok
   end
 
   # ── handle_rollup_ci_failure (stage 5) ──────────────────────────────────

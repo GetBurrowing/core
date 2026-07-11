@@ -18,8 +18,8 @@ defmodule Platform.Tasks.Stacks do
 
   alias Platform.Repo
   alias Platform.Tasks
-  alias Platform.Tasks.{ReviewRequests, Stack, StackDeployer, Task}
-  alias Platform.Tasks.Stacks.DepInference
+  alias Platform.Tasks.{Plan, ReviewRequests, Stack, StackDeployer, Task}
+  alias Platform.Tasks.Stacks.{CommencementGate, DepInference}
 
   @slug_regex ~r/^[a-z0-9][a-z0-9-]*$/
   @max_slug_length 60
@@ -202,6 +202,13 @@ defmodule Platform.Tasks.Stacks do
   `{:partial, %{stack: stack, started: ok_roots, parked: ok_pending,
   errors: errors}}` so the caller can choose to halt-and-fix or
   proceed.
+
+  ADR 0042 Decision 4: refuses upfront with
+  `{:error, :stack_plans_pending, %{stack_id, waiting_on}}` when any
+  member is still missing an approved plan. The stack status is NOT
+  flipped and NO members are cascaded — partial cascades while plans
+  are still landing would leave the stack in an inconsistent half-open
+  state.
   """
   @spec start_stack(Stack.t() | binary()) ::
           {:ok, %{stack: Stack.t(), started: [Task.t()], parked: [Task.t()]}}
@@ -213,26 +220,33 @@ defmodule Platform.Tasks.Stacks do
                errors: [%{task_id: String.t(), target_status: String.t(), reason: term()}]
              }}
           | {:error, :invalid_stack_status | :stack_not_found | term()}
+          | {:error, :stack_plans_pending, %{stack_id: String.t(), waiting_on: [String.t()]}}
   def start_stack(%Stack{status: status}) when status != "forming",
     do: {:error, :invalid_stack_status}
 
   def start_stack(%Stack{} = stack) do
-    members = members(stack)
-    roots = executable_members(stack)
-    root_ids = MapSet.new(roots, & &1.id)
+    # ADR 0042 Decision 4: the commencement gate short-circuits the cascade
+    # entirely when any member is still missing an approved plan. We check
+    # BEFORE mutating anything so the stack is left untouched — a partial
+    # cascade over a mostly-ready stack would leak `stack_pending` /
+    # `in_progress` members from a stack that never actually opened.
+    if CommencementGate.plans_ready?(stack) do
+      do_start_stack(stack)
+    else
+      {:error, :stack_plans_pending,
+       %{stack_id: stack.id, waiting_on: CommencementGate.waiting_on(stack.id)}}
+    end
+  end
 
-    {started, root_errors} =
-      Enum.reduce(roots, {[], []}, fn member, {ok, errors} ->
-        cascade_member(member, "in_progress", ok, errors)
-      end)
-
-    non_roots = Enum.reject(members, &MapSet.member?(root_ids, &1.id))
-
-    {parked, pending_errors} =
-      Enum.reduce(non_roots, {[], []}, fn member, {ok, errors} ->
-        cascade_member(member, "stack_pending", ok, errors)
-      end)
-
+  defp do_start_stack(%Stack{} = stack) do
+    # ADR 0042 Decision 4: flip the stack to `in_progress` BEFORE cascading
+    # members. The commencement gate (`CommencementGate.open?/1`) enforced
+    # inside `transition_task_status/2` reads `stack.status` and refuses
+    # unless it's `in_progress`, so the stack must be opened first for the
+    # cascade's `member → in_progress` transitions to pass the guard.
+    # Previously the stack was flipped after the cascade, but the existing
+    # `:partial` semantics already flip the stack even when cascade errors
+    # surface, so the observable invariant is unchanged.
     case Stack.changeset(stack, %{status: "in_progress"}) |> Repo.update() do
       {:ok, updated} ->
         # Stage 1 of T5: kick off rollup-branch creation as soon as the
@@ -243,6 +257,22 @@ defmodule Platform.Tasks.Stacks do
         # public seam and is itself a no-op when `from`/`to` don't
         # match.
         _ = StackDeployer.handle_stack_transition(updated, :forming, :in_progress)
+
+        members = members(updated)
+        roots = executable_members(updated)
+        root_ids = MapSet.new(roots, & &1.id)
+
+        {started, root_errors} =
+          Enum.reduce(roots, {[], []}, fn member, {ok, errors} ->
+            cascade_member(member, "in_progress", ok, errors)
+          end)
+
+        non_roots = Enum.reject(members, &MapSet.member?(root_ids, &1.id))
+
+        {parked, pending_errors} =
+          Enum.reduce(non_roots, {[], []}, fn member, {ok, errors} ->
+            cascade_member(member, "stack_pending", ok, errors)
+          end)
 
         result = %{
           stack: updated,
@@ -1248,6 +1278,94 @@ defmodule Platform.Tasks.Stacks do
       {:error, _reason, _detail} -> []
     end
   end
+
+  @doc """
+  Detect whether a just-completed plan approval was the transition point
+  that opened the stack-v2 commencement gate (ADR 0042 Decision 4).
+
+  Called from inside `Platform.Tasks.approve_plan/3`'s transaction,
+  AFTER the plan write. The `task` is the member whose plan was just
+  approved; `pre_update_plan` is that plan as it looked immediately
+  before the write (i.e. `status: "pending_review"` in the normal call
+  path).
+
+  Returns:
+
+    * `{:opened, stack, executable_ids}` — the gate flipped closed →
+      open on this approval. `executable_ids` is the list of member ids
+      that are level-0 roots of the in-stack DAG (the members that are
+      now callable via `task_start` / `transition_task_status/2`).
+      Non-root members remain at `stack_pending` until an explicit
+      transition — the gate broadcast is a signal, not an auto-advance.
+
+    * `:noop` — the task doesn't belong to a stack, the stack is
+      missing, `plans_ready?/1` is still false, or the pre-approval plan
+      was already counted as approved (so this call was a re-approval
+      that didn't change the gate).
+
+  ## The "was closed before" check
+
+  `plans_ready?/1` collapses to "every member's latest plan is in
+  `["approved", "completed"]`". The only member whose latest-plan
+  status changed inside this txn is the one owning `pre_update_plan`
+  (older siblings that get auto-superseded only slide from `approved`
+  → `rejected`, so the LATEST plan for those tasks — which is still
+  this newly-approved plan — is unaffected). So the pre-write gate
+  state is equivalent to the post-write state, minus this task's
+  contribution, plus this task's pre-approval contribution:
+
+    * If `pre_update_plan.status in ["approved", "completed"]`, this
+      task was already counted as approved before → post-write ready
+      status equals pre-write ready status → no transition happened
+      here even if the gate is currently open.
+
+    * Otherwise, this task went from "not counted" to "counted", so
+      a post-write `plans_ready? = true` means the gate JUST opened.
+  """
+  @spec detect_gate_open_transition(Task.t(), Plan.t()) ::
+          {:opened, Stack.t(), [String.t()]} | :noop
+  def detect_gate_open_transition(task, pre_update_plan)
+
+  def detect_gate_open_transition(%Task{stack_id: nil}, _pre_update_plan), do: :noop
+
+  def detect_gate_open_transition(%Task{stack_id: stack_id}, %Plan{} = pre_update_plan)
+      when is_binary(stack_id) do
+    case Repo.get(Stack, stack_id) do
+      nil ->
+        :noop
+
+      %Stack{} = stack ->
+        if CommencementGate.plans_ready?(stack) and
+             not pre_update_plan_already_counted?(pre_update_plan) do
+          executable_ids = stack |> executable_members() |> Enum.map(& &1.id)
+          emit_gate_opened_telemetry(stack.id, executable_ids)
+          {:opened, stack, executable_ids}
+        else
+          :noop
+        end
+    end
+  end
+
+  # Telemetry emission for the closed→open transition. Fires exactly
+  # once per stack per opening because `detect_gate_open_transition/2`
+  # is gated by `pre_update_plan_already_counted?/1` — a re-approval that
+  # lands after the gate is already open returns `:noop` without touching
+  # this helper. Mirrors `:telemetry.execute/3` shape from
+  # `PlanEngine` / `StackDeployer`.
+  defp emit_gate_opened_telemetry(stack_id, executable_ids) do
+    :telemetry.execute(
+      [:platform, :stacks, :commencement, :gate_opened],
+      %{executable_count: length(executable_ids)},
+      %{stack_id: stack_id, executable_task_ids: executable_ids}
+    )
+  end
+
+  # A plan whose pre-write status was already in the "approved" set means
+  # `plans_ready?/1`'s DISTINCT-ON-latest query counted this task as ready
+  # BEFORE this approval too — so today's write did not change the gate
+  # boolean even if it's currently `true`.
+  defp pre_update_plan_already_counted?(%Plan{status: status}),
+    do: status in ~w(approved completed)
 
   @doc """
   Return the stack members flattened into the order they should be merged

@@ -295,10 +295,11 @@ defmodule Platform.Federation.ToolSurfaceStacksTest do
           dependencies: [%{"task_id" => root_task.id, "kind" => "blocks"}]
         })
 
-      # Root needs an approved plan to clear the
-      # `require_approved_plan_for` gate when transitioning to
-      # `in_progress`. Child does not — it's going to `stack_pending`.
+      # ADR 0042 Decision 4: EVERY member (root AND parked child) needs
+      # an approved plan before the commencement gate opens; without it
+      # the cascade refuses upfront with `:stack_plans_pending`.
       {:ok, _} = Tasks.create_plan(%{task_id: root_task.id, status: "approved"})
+      {:ok, _} = Tasks.create_plan(%{task_id: child_task.id, status: "approved"})
 
       {:ok, _} =
         ToolSurface.execute(
