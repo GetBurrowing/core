@@ -5566,16 +5566,22 @@ defmodule PlatformWeb.TasksLiveTest do
     # FAB opens a bottom sheet for creating epics. Mirrors the new-task
     # flow pattern.
 
-    test "renders the New Epic FAB", %{conn: conn} do
+    # Re-skin Phase 2 stage 2 (task 019f51ca): the standalone New-Epic FAB
+    # became a menu item inside the single create-FAB menu (mobile) plus an
+    # entry in the header ▾ create menu (desktop), so the epic trigger only
+    # renders after one of those menus is opened.
+    test "create-FAB menu exposes the New Epic item", %{conn: conn} do
       _project = create_project()
       conn = authenticated_conn(conn)
-      {:ok, _view, html} = live(conn, ~p"/tasks")
+      {:ok, view, html} = live(conn, ~p"/tasks")
 
-      # The new-epic FAB is the one wired to toggle_epic_sheet.
-      assert html =~ ~s|phx-click="toggle_epic_sheet"|
-      [fab_attrs] = Regex.run(~r/<button[^>]*phx-click="toggle_epic_sheet"[^>]*>/, html)
-      assert fab_attrs =~ "btn-secondary"
-      assert fab_attrs =~ "btn-circle"
+      # Both menus closed: no epic trigger anywhere in the initial render.
+      refute html =~ ~s|phx-click="toggle_epic_sheet"|
+
+      html = render_click(view, "toggle_fab_menu")
+      [item_attrs] = Regex.run(~r/<button[^>]*data-role="fab-new-epic"[^>]*>/, html)
+      assert item_attrs =~ ~s|phx-click="toggle_epic_sheet"|
+      assert item_attrs =~ ~s|role="menuitem"|
     end
 
     test "opens the New Epic sheet on FAB click", %{conn: conn} do
@@ -5648,6 +5654,10 @@ defmodule PlatformWeb.TasksLiveTest do
   end
 
   describe "create-task FAB visibility" do
+    # Re-skin Phase 2 stage 2 (task 019f51ca): the create FAB now toggles a
+    # menu (toggle_fab_menu) instead of the task sheet directly, and the
+    # `@selected_task && "max-md:hidden"` guard lives on the FAB cluster
+    # wrapper (#tasks-create-fab), not on the button itself.
     test "FAB renders without max-md:hidden when no task is selected", %{conn: conn} do
       project = create_project()
       _task = create_task(project, %{title: "FAB Visibility Task"})
@@ -5655,12 +5665,12 @@ defmodule PlatformWeb.TasksLiveTest do
       conn = authenticated_conn(conn)
       {:ok, _view, html} = live(conn, ~p"/tasks")
 
-      # The FAB button is the one wired to toggle_task_sheet.
-      [fab_attrs] = Regex.run(~r/<button[^>]*phx-click="toggle_task_sheet"[^>]*>/, html)
-
+      [fab_attrs] = Regex.run(~r/<button[^>]*phx-click="toggle_fab_menu"[^>]*>/, html)
       assert fab_attrs =~ "btn-primary"
       assert fab_attrs =~ "btn-circle"
-      refute fab_attrs =~ "max-md:hidden"
+
+      [_, wrapper_classes] = Regex.run(~r/id="tasks-create-fab"[^>]*class="([^"]+)"/s, html)
+      refute wrapper_classes =~ "max-md:hidden"
     end
 
     test "FAB renders with max-md:hidden when a task is selected", %{conn: conn} do
@@ -5670,11 +5680,12 @@ defmodule PlatformWeb.TasksLiveTest do
       conn = authenticated_conn(conn)
       {:ok, _view, html} = live(conn, ~p"/tasks/#{task.id}")
 
-      [fab_attrs] = Regex.run(~r/<button[^>]*phx-click="toggle_task_sheet"[^>]*>/, html)
-
+      [fab_attrs] = Regex.run(~r/<button[^>]*phx-click="toggle_fab_menu"[^>]*>/, html)
       assert fab_attrs =~ "btn-primary"
       assert fab_attrs =~ "btn-circle"
-      assert fab_attrs =~ "max-md:hidden"
+
+      [_, wrapper_classes] = Regex.run(~r/id="tasks-create-fab"[^>]*class="([^"]+)"/s, html)
+      assert wrapper_classes =~ "max-md:hidden"
     end
   end
 

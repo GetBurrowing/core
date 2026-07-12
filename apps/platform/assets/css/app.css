@@ -61,8 +61,8 @@
   --color-accent-content: oklch(0% 0 0);
   --color-neutral: oklch(45% 0.01 0);         /* ~#737373 — bumped from 55% to fix WCAG 1.4.3 AA contrast vs --color-neutral-content (3.54:1 → 4.7:1) per audit 1B-A11Y-5 */
   --color-neutral-content: oklch(100% 0 0);
-  --color-info: oklch(82% 0.12 207);         /* cyan */
-  --color-info-content: oklch(0% 0 0);
+  --color-info: oklch(54% 0.16 255);         /* info-blue — approved palette 2026-07-11; L54 clears AA both as text-on-white AND as fill under white content (≈4.9:1) */
+  --color-info-content: oklch(100% 0 0);
   --color-success: oklch(70% 0.15 162);       /* #10B981 */
   --color-success-content: oklch(100% 0 0);
   --color-warning: oklch(76% 0.17 70);        /* #F59E0B */
@@ -100,8 +100,8 @@
   --color-accent-content: oklch(0% 0 0);
   --color-neutral: oklch(40% 0.01 0);         /* #6A6A6A */
   --color-neutral-content: oklch(90% 0 0);
-  --color-info: oklch(82% 0.12 207);
-  --color-info-content: oklch(0% 0 0);
+  --color-info: oklch(72% 0.12 255);          /* info-blue dark label value — text-info on #171b25 ≈7:1 (design review caught L58 failing AA as dark text) */
+  --color-info-content: oklch(0% 0 0);        /* dark fills pair with black content (≈9:1) */
   --color-success: oklch(70% 0.15 162);
   --color-success-content: oklch(100% 0 0);
   --color-warning: oklch(76% 0.17 70);
@@ -707,6 +707,13 @@ body, .font-fabrikam {
   --duration-slow: 300ms;      /* layout shifts: panels, sheets */
   --duration-emphasis: 400ms;  /* modals, page-level moments */
   --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
+  /* Re-skin Phase 2 (task 019f51ca): action-cyan for interactive text — pure
+     #06D5ED fails contrast as text on white (~1.6:1), so links/active labels
+     use this AA-safe darkened cyan. Fill-cyan stays #06D5ED with black on it. */
+  --color-interactive: #087f93;
+  --glow-btn: 0 0 0 1px color-mix(in srgb, #06d5ed 55%, transparent),
+    0 2px 8px color-mix(in srgb, #06d5ed 30%, transparent),
+    0 0 16px color-mix(in srgb, #06d5ed 18%, transparent);
 }
 
 /* Dark shadows: light-theme shadows vanish on #171b25 — darker and wider,
@@ -717,6 +724,9 @@ body, .font-fabrikam {
   --shadow-card-hover: 0 2px 4px rgb(0 0 0 / 0.50), 0 8px 20px rgb(0 0 0 / 0.45);
   --shadow-dropdown: 0 4px 8px rgb(0 0 0 / 0.50), 0 12px 28px rgb(0 0 0 / 0.55);
   --shadow-modal: 0 12px 24px rgb(0 0 0 / 0.60), 0 32px 64px rgb(0 0 0 / 0.55);
+  --color-interactive: #4dd7e8;
+  --glow-btn: 0 0 0 1px color-mix(in srgb, #00bcd4 45%, transparent),
+    0 0 12px color-mix(in srgb, #00bcd4 16%, transparent);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -725,6 +735,9 @@ body, .font-fabrikam {
     --shadow-card-hover: 0 2px 4px rgb(0 0 0 / 0.50), 0 8px 20px rgb(0 0 0 / 0.45);
     --shadow-dropdown: 0 4px 8px rgb(0 0 0 / 0.50), 0 12px 28px rgb(0 0 0 / 0.55);
     --shadow-modal: 0 12px 24px rgb(0 0 0 / 0.60), 0 32px 64px rgb(0 0 0 / 0.55);
+    --color-interactive: #4dd7e8;
+    --glow-btn: 0 0 0 1px color-mix(in srgb, #00bcd4 45%, transparent),
+      0 0 12px color-mix(in srgb, #00bcd4 16%, transparent);
   }
 }
 
@@ -743,7 +756,7 @@ body, .font-fabrikam {
 }
 
 @supports (color: oklch(from red clamp(0.35, l, 0.8) c h)) {
-  .msg-agent, .msg-agent-avatar, .msg-agent-name, .msg-agent-badge {
+  .msg-agent, .msg-agent-avatar, .msg-agent-name, .msg-agent-badge, .agent-owned {
     --agent-accent-safe: oklch(from var(--agent-accent, var(--agent-accent-fallback, oklch(82% 0.12 207))) clamp(0.35, l, 0.80) c h);
   }
 }
@@ -2615,17 +2628,28 @@ body, .font-fabrikam {
     border-top: 1px solid var(--color-base-300);
   }
 
-  /* Desktop (>= 768px): bottom sheet floats as a centered card. */
+  /* Desktop (>= 768px): bottom sheet floats as a TRUE-centered card —
+     anchored to the viewport center regardless of content height, so a
+     short form (Create Project) opens in the same place as a tall one
+     (New Task). Marlowe 2026-07-12: dialogs must open aligned to the same
+     spot. Entrance slides up 1rem into center; reduced-motion rule below
+     already disables it. Width upgrade (form_modal standard) lands with
+     the Phase 3 Skills PR. */
   @media (min-width: 768px) {
     .sheet-bottom .sheet-panel {
       max-width: 480px;
       left: 50%;
-      transform: translate(-50%, 100%);
+      top: 50%;
+      right: auto;
+      bottom: auto;
+      width: 100%;
+      max-height: 85vh;
+      transform: translate(-50%, calc(-50% + 1rem));
       border-radius: 1rem;
-      bottom: 1.5rem;
+      box-shadow: var(--shadow-modal);
     }
     .sheet-bottom.sheet-open .sheet-panel {
-      transform: translate(-50%, 0);
+      transform: translate(-50%, -50%);
     }
   }
 }
@@ -3487,4 +3511,151 @@ body, .font-fabrikam {
     color: var(--color-error);
     text-decoration: underline dotted;
   }
+}
+
+/* ══════════════════════════════════════════════════════════════════
+   Re-skin Phase 2 — component layer (task 019f51ca).
+   Primitives consume the Phase 1 tokens. Spec: 02-components.md;
+   chip formula + action-cyan per the approved palette (2026-07-11).
+   The universal prefers-reduced-motion rule above disables these
+   transitions for users who request reduced motion.
+   ══════════════════════════════════════════════════════════════════ */
+@layer components {
+  /* Buttons: glow is the ONLY cyan glow in the system (btn-primary hover). */
+  .btn {
+    transition:
+      box-shadow var(--duration-base) var(--ease-standard),
+      background-color var(--duration-fast) var(--ease-standard),
+      transform var(--duration-fast) var(--ease-standard);
+  }
+
+  .btn-primary:hover {
+    box-shadow: var(--glow-btn);
+  }
+
+  /* Cards: border-first depth — hairline separates, shadow reinforces.
+     Cards that declare their own border/shadow utilities keep them: Tailwind's
+     utilities layer outranks this components layer by design — do not move
+     this rule out of @layer components or that guarantee inverts. */
+  .card {
+    border: 1px solid color-mix(in oklab, var(--color-base-content) 10%, transparent);
+    box-shadow: var(--shadow-card);
+  }
+
+  .card-body {
+    padding: 1.5rem; /* 24px — roomier density, Marlowe's decision 2026-07-11 */
+  }
+
+  /* Opt-in hover lift for interactive cards (kanban etc.) — never blanket. */
+  .card-hover {
+    transition:
+      box-shadow var(--duration-base) var(--ease-standard),
+      transform var(--duration-base) var(--ease-standard);
+  }
+
+  .card-hover:hover {
+    box-shadow: var(--shadow-card-hover);
+    transform: translateY(-1px);
+  }
+
+  /* Overlay surfaces read from the elevation tokens. */
+  .dropdown-content {
+    box-shadow: var(--shadow-dropdown);
+  }
+
+  .modal-box {
+    box-shadow: var(--shadow-modal);
+  }
+
+  /* Inputs: cyan focus border (ring comes from .focus-visible-ring). */
+  .input:focus,
+  .input:focus-within,
+  .textarea:focus,
+  .select:focus {
+    border-color: var(--color-primary);
+  }
+
+  /* Soft-tint chip — the one formula, any hue (approved palette).
+     bg: tint @ 12% (dark 16%) · border: tint @ 25% · label: AA-tuned. */
+  .chip-soft {
+    /* Fallbacks: an unrecognized tone renders neutral, never transparent. */
+    --chip-tint: oklch(55% 0.01 0);
+    --chip-label: var(--color-base-content);
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
+    padding: 0.25rem 0.625rem;
+    border-radius: var(--radius-selector);
+    font-size: 0.75rem;
+    font-weight: 500;
+    line-height: 1;
+    background: color-mix(in oklab, var(--chip-tint) 12%, var(--color-base-100));
+    border: 1px solid color-mix(in oklab, var(--chip-tint) 25%, transparent);
+    color: var(--chip-label);
+  }
+
+  .chip-neutral { --chip-tint: oklch(55% 0.01 0); --chip-label: oklch(45% 0.01 0); }
+  .chip-info    { --chip-tint: var(--color-info); --chip-label: oklch(50% 0.16 255); }
+  .chip-success { --chip-tint: oklch(62% 0.17 162); --chip-label: oklch(51% 0.15 162); }
+  .chip-warning { --chip-tint: oklch(76% 0.17 70); --chip-label: oklch(53% 0.14 70); }
+  .chip-error   { --chip-tint: oklch(63% 0.22 25); --chip-label: oklch(52% 0.19 25); }
+  .chip-primary { --chip-tint: #06d5ed; --chip-label: var(--color-interactive); }
+
+  /* Agent-owned marker: the chat .msg-agent accent edge, reusable on any
+     container (agent-assigned task cards adopt it in the Tasks pilot).
+     --agent-accent-safe comes from the shared clamp block above. */
+  .agent-owned {
+    border-left: 3px solid var(--agent-accent-safe);
+  }
+
+  /* Form-control height consistency (Marlowe 2026-07-12): inside a
+     .form-fields form every single-line control shares one 2.5rem height —
+     selects may not render shorter than inputs, and single-row textareas
+     match. Type stays DaisyUI's default-size (uniform across controls);
+     size modifiers (-sm/-xs) don't belong inside these forms. Scoped so
+     the chat composer's audited 33px retrofit is untouched. */
+  .form-fields .input,
+  .form-fields .select {
+    height: 2.5rem;
+    min-height: 2.5rem;
+  }
+
+  .form-fields .textarea {
+    min-height: 2.5rem;
+    padding-block: 0.5rem;
+  }
+
+  /* Interactive text — action-cyan, never raw #06D5ED on light surfaces. */
+  .text-interactive {
+    color: var(--color-interactive);
+  }
+}
+
+/* Dark: tints raise 12% → 16% so they don't go muddy on #171b25; labels
+   lift to the L≈70 values; dropdowns get a surface step-up because shadow
+   alone won't separate them on dark. Dual-selector per file convention. */
+[data-theme="dark"] .chip-soft {
+  background: color-mix(in oklab, var(--chip-tint) 16%, var(--color-base-100));
+}
+
+[data-theme="dark"] .chip-neutral { --chip-tint: oklch(65% 0.01 0); --chip-label: oklch(75% 0.01 0); }
+[data-theme="dark"] .chip-info    { --chip-label: oklch(72% 0.12 255); }
+[data-theme="dark"] .chip-success { --chip-label: oklch(70% 0.15 162); }
+[data-theme="dark"] .chip-warning { --chip-label: oklch(80% 0.15 75); }
+[data-theme="dark"] .chip-error   { --chip-label: oklch(72% 0.17 25); }
+[data-theme="dark"] .chip-primary { --chip-tint: #00bcd4; }
+[data-theme="dark"] .dropdown-content { background: var(--color-base-300); }
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .chip-soft {
+    background: color-mix(in oklab, var(--chip-tint) 16%, var(--color-base-100));
+  }
+
+  :root:not([data-theme="light"]) .chip-neutral { --chip-tint: oklch(65% 0.01 0); --chip-label: oklch(75% 0.01 0); }
+  :root:not([data-theme="light"]) .chip-info    { --chip-label: oklch(72% 0.12 255); }
+  :root:not([data-theme="light"]) .chip-success { --chip-label: oklch(70% 0.15 162); }
+  :root:not([data-theme="light"]) .chip-warning { --chip-label: oklch(80% 0.15 75); }
+  :root:not([data-theme="light"]) .chip-error   { --chip-label: oklch(72% 0.17 25); }
+  :root:not([data-theme="light"]) .chip-primary { --chip-tint: #00bcd4; }
+  :root:not([data-theme="light"]) .dropdown-content { background: var(--color-base-300); }
 }

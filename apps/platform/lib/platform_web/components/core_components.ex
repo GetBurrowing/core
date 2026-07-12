@@ -87,32 +87,82 @@ defmodule PlatformWeb.CoreComponents do
       <.button phx-click="go" variant="primary">Send!</.button>
       <.button navigate={~p"/"}>Home</.button>
   """
-  attr(:rest, :global, include: ~w(href navigate patch method download name value disabled))
+  attr(:rest, :global, include: ~w(href navigate patch method download name value form))
   attr(:class, :any)
-  attr(:variant, :string, values: ~w(primary))
+
+  attr(:variant, :string,
+    values: ~w(primary secondary ghost destructive),
+    doc:
+      "omit for the legacy soft-primary default; per-surface migration to explicit variants happens in re-skin Phase 3"
+  )
+
+  attr(:loading, :boolean,
+    default: false,
+    doc:
+      "sets aria-busy — the spinner/dim visuals come from the .btn[aria-busy] CSS (02-components §2.1)"
+  )
+
+  attr(:disabled, :boolean, default: false)
   slot(:inner_block, required: true)
 
   def button(%{rest: rest} = assigns) do
-    variants = %{"primary" => "btn-primary", nil => "btn-primary btn-soft"}
+    variants = %{
+      "primary" => "btn-primary",
+      "secondary" => "btn",
+      "ghost" => "btn-ghost",
+      "destructive" => "btn-error",
+      nil => "btn-primary btn-soft"
+    }
 
     assigns =
       assign_new(assigns, :class, fn ->
-        ["btn", Map.fetch!(variants, assigns[:variant])]
+        [
+          "btn",
+          Map.fetch!(variants, assigns[:variant]),
+          "focus-visible-ring",
+          assigns[:disabled] && "pointer-events-none opacity-50"
+        ]
       end)
 
     if rest[:href] || rest[:navigate] || rest[:patch] do
       ~H"""
-      <.link class={@class} {@rest}>
+      <.link class={@class} aria-busy={@loading && "true"} aria-disabled={@disabled && "true"} {@rest}>
         {render_slot(@inner_block)}
       </.link>
       """
     else
       ~H"""
-      <button class={@class} {@rest}>
+      <button class={@class} aria-busy={@loading && "true"} disabled={@disabled} {@rest}>
         {render_slot(@inner_block)}
       </button>
       """
     end
+  end
+
+  @doc """
+  Renders a soft-tint chip/badge implementing the approved re-skin formula:
+  tone hue at 12% tint (16% in dark), 25% border, AA-tuned label.
+
+  ## Examples
+
+      <.chip tone="info">deploying</.chip>
+      <.chip tone="success">done</.chip>
+  """
+  attr(:tone, :string,
+    default: "neutral",
+    values: ~w(neutral info success warning error primary)
+  )
+
+  attr(:class, :any, default: nil)
+  attr(:rest, :global)
+  slot(:inner_block, required: true)
+
+  def chip(assigns) do
+    ~H"""
+    <span class={["chip-soft", "chip-#{@tone}", @class]} {@rest}>
+      {render_slot(@inner_block)}
+    </span>
+    """
   end
 
   @doc """

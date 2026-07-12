@@ -183,6 +183,16 @@ defmodule PlatformWeb.TasksLive do
      # unaffected — the rail is `hidden lg:flex` only.
      |> assign(:scope_filter, :all)
      |> assign(:scope_counts, Tasks.count_by_scope())
+     # DB-computed copy survives search narrowing so clearing a query can
+     # restore the rail badges without another round-trip (Marlowe 2026-07-12:
+     # all on-screen counts must match the filtered board during search).
+     |> assign(:scope_counts_db, Tasks.count_by_scope())
+     # nil = "no narrowed count yet" — the template falls back to
+     # length(@all_tasks). First paint skips refresh_board (handle_params
+     # only refreshes when the sponsor filter CHANGED), so a static default
+     # here would render a wrong badge; nil keeps the fallback authoritative
+     # until a search or board refresh computes the real visible count.
+     |> assign(:visible_task_count, nil)
      # Stage-2 of task 019f3f22 (ADR-0042 sponsor visibility): `:sponsor_filter`
      # is one of `:all` or `:mine`. Default `:all` keeps the board unchanged
      # on first paint. `:mine` narrows both the desktop kanban (via
@@ -194,6 +204,17 @@ defmodule PlatformWeb.TasksLive do
      # contract. LocalStorage / session persistence is intentionally out
      # of scope per the ADR non-goals.
      |> assign(:sponsor_filter, :all)
+     # Re-skin Phase 2 stage 2 (task 019f51ca): `:task_search_query` backs
+     # the page-header search input. Non-blank queries narrow `:columns`,
+     # `:board_items` and `:desktop_stacks_by_column` IN-MEMORY (no DB
+     # round-trip per keystroke) via `rebuild_board_shapes/1`; the
+     # unfiltered sources stay in `:all_tasks` / `:stacks` /
+     # `:stack_board_data`. `:create_menu_open` / `:fab_menu_open` drive
+     # the desktop header ▾ menu and the mobile create-FAB menu — plain
+     # styled divs whose open state is server-owned.
+     |> assign(:task_search_query, "")
+     |> assign(:create_menu_open, false)
+     |> assign(:fab_menu_open, false)
      |> assign(:pending_plan_count, count_pending_plans(all_tasks))
      |> assign(:review_counts, pending_review_counts(all_tasks))
      |> assign(:review_request_subscriptions, initial_task_ids)
@@ -508,6 +529,49 @@ defmodule PlatformWeb.TasksLive do
     {:noreply, assign(socket, :show_project_sheet, !socket.assigns.show_project_sheet)}
   end
 
+  # ── Board search (re-skin Phase 2 stage 2, task 019f51ca) ─────────────
+  # Fired by the page-header `<.search_input>`: live phx-change (debounced
+  # 200ms, params carry "q"), Enter submit (same params) and Escape
+  # keydown (params carry "key" — treated as clear). Filtering is fully
+  # in-memory over the already-loaded board sources.
+
+  def handle_event("search_tasks", params, socket) do
+    query =
+      case params do
+        # Defensive: only Escape clears — phx-key filters client-side today,
+        # but a future binding change must not turn every keydown into a clear.
+        %{"key" => key} when is_binary(key) ->
+          if String.downcase(key) == "escape", do: "", else: socket.assigns.task_search_query
+
+        %{"q" => q} when is_binary(q) ->
+          q
+
+        %{"value" => q} when is_binary(q) ->
+          q
+
+        _ ->
+          ""
+      end
+
+    {:noreply,
+     socket
+     |> assign(:task_search_query, query)
+     |> rebuild_board_shapes()}
+  end
+
+  # ── Create menus (re-skin Phase 2 stage 2, task 019f51ca) ─────────────
+  # Desktop header ▾ split-button menu and the mobile create-FAB menu.
+  # The three create-sheet toggles below also reset both flags so picking
+  # a menu item closes its menu server-side.
+
+  def handle_event("toggle_create_menu", _params, socket) do
+    {:noreply, assign(socket, :create_menu_open, !socket.assigns.create_menu_open)}
+  end
+
+  def handle_event("toggle_fab_menu", _params, socket) do
+    {:noreply, assign(socket, :fab_menu_open, !socket.assigns.fab_menu_open)}
+  end
+
   def handle_event("close_project_sheet", _params, socket) do
     {:noreply, assign(socket, :show_project_sheet, false)}
   end
@@ -520,6 +584,7 @@ defmodule PlatformWeb.TasksLive do
 
   def handle_event("toggle_project_create_sheet", _params, socket) do
     showing = !socket.assigns.show_project_create_sheet
+    socket = close_create_menus(socket)
 
     socket =
       if showing do
@@ -2241,6 +2306,7 @@ defmodule PlatformWeb.TasksLive do
 
   def handle_event("toggle_task_sheet", _params, socket) do
     showing = !socket.assigns.show_task_sheet
+    socket = close_create_menus(socket)
 
     socket =
       if showing do
@@ -2283,6 +2349,7 @@ defmodule PlatformWeb.TasksLive do
 
   def handle_event("toggle_epic_sheet", _params, socket) do
     showing = !socket.assigns.show_epic_sheet
+    socket = close_create_menus(socket)
 
     socket =
       if showing do
@@ -3138,7 +3205,130 @@ defmodule PlatformWeb.TasksLive do
     # board events. Cheap (single COUNT(*) today; will be one indexed
     # GROUP BY org_id once MT/RBAC lands).
     |> assign(:scope_counts, Tasks.count_by_scope())
+    |> assign(:scope_counts_db, Tasks.count_by_scope())
+    |> assign(:visible_task_count, length(tasks))
     |> sync_review_request_subscriptions(tasks)
+    # An active search must survive PubSub-driven refreshes — the assigns
+    # above are the unfiltered sources; re-narrow the derived shapes.
+    |> maybe_reapply_search()
+  end
+
+  # ── Board search (re-skin Phase 2 stage 2, task 019f51ca) ─────────────
+  #
+  # Search narrows the three derived board shapes (`:columns`,
+  # `:desktop_stacks_by_column`, `:board_items`) in-memory from the
+  # unfiltered sources that every mount/refresh already assigns
+  # (`:all_tasks`, `:stacks`, `:stack_board_data`). No DB round-trip per
+  # keystroke; clearing the query rebuilds the unfiltered shapes from the
+  # same sources. Pill/column counts read from the derived shapes, so
+  # they recompute automatically while a search is active, and since
+  # Marlowe's 2026-07-12 ruling the scope-rail badges and header total
+  # narrow with the query too (restored from :scope_counts_db on clear).
+
+  defp close_create_menus(socket) do
+    socket
+    |> assign(:create_menu_open, false)
+    |> assign(:fab_menu_open, false)
+  end
+
+  defp normalize_search(nil), do: ""
+  defp normalize_search(q) when is_binary(q), do: q |> String.trim() |> String.downcase()
+
+  defp search_active?(query), do: normalize_search(query) != ""
+
+  # No-op passthrough when there is no active query, so the DB-computed
+  # shapes from `refresh_board/1` stay authoritative in the common case.
+  defp maybe_reapply_search(socket) do
+    if search_active?(socket.assigns[:task_search_query]) do
+      rebuild_board_shapes(socket)
+    else
+      socket
+    end
+  end
+
+  defp rebuild_board_shapes(socket) do
+    q = normalize_search(socket.assigns.task_search_query)
+    agent_names = socket.assigns.agent_names
+
+    tasks =
+      case q do
+        "" -> socket.assigns.all_tasks
+        _ -> Enum.filter(socket.assigns.all_tasks, &task_matches_search?(&1, q, agent_names))
+      end
+
+    stack_entries =
+      socket.assigns.stacks
+      |> Enum.filter(&stack_matches_search?(&1, q))
+      |> Enum.map(&{&1, Map.get(socket.assigns.stack_board_data, &1.id, %{})})
+
+    # Marlowe 2026-07-12 ("narrow everything"): while a query is active every
+    # on-screen count — columns, scope-rail chips, header total — describes
+    # the filtered board. Chips mirror Tasks.count_by_scope/0's current stub
+    # semantics (everything under :fabrikam); when that becomes a real per-org
+    # GROUP BY this branch needs the matching in-memory group-by over `tasks`.
+    scope_counts =
+      if q == "" do
+        socket.assigns.scope_counts_db
+      else
+        socket.assigns.scope_counts_db
+        |> Map.new(fn {key, _} -> {key, 0} end)
+        |> Map.put(:fabrikam, length(tasks))
+      end
+
+    socket
+    |> assign(:columns, bucket_tasks_by_desktop_column(tasks))
+    |> assign(:desktop_stacks_by_column, group_desktop_stacks(stack_entries))
+    |> assign(:board_items, group_board_items(tasks, stack_entries))
+    |> assign(:scope_counts, scope_counts)
+    |> assign(:visible_task_count, length(tasks))
+  end
+
+  # A task matches when the (downcased) query is a substring of its id,
+  # title, sponsor display name, assignee/agent display name, or epic
+  # name. Sponsor/epic come from the preloads both board queries carry;
+  # the guards below also tolerate `Ecto.Association.NotLoaded`.
+  defp task_matches_search?(%Task{} = task, q, agent_names) do
+    [
+      task.id,
+      task.title,
+      sponsor_search_name(task),
+      assignee_name(task, agent_names),
+      epic_search_name(task)
+    ]
+    |> Enum.any?(fn value ->
+      is_binary(value) and String.contains?(String.downcase(value), q)
+    end)
+  end
+
+  defp sponsor_search_name(%Task{sponsor: %{name: name, email: email}}), do: name || email
+  defp sponsor_search_name(_task), do: nil
+
+  defp epic_search_name(%Task{epic: %Epic{name: name}}), do: name
+  defp epic_search_name(_task), do: nil
+
+  defp stack_matches_search?(_stack, ""), do: true
+
+  defp stack_matches_search?(%Stack{} = stack, q) do
+    [stack.id, stack.name]
+    |> Enum.any?(fn value ->
+      is_binary(value) and String.contains?(String.downcase(value), q)
+    end)
+  end
+
+  # In-memory equivalent of `Platform.Tasks.list_by_status/1`'s bucket
+  # shape (atom keys, `updated_at` desc within each bucket) so a filtered
+  # `:columns` map is indistinguishable downstream. `@desktop_column_statuses`
+  # already encodes the same routing (forming→planning, cancelled→done,
+  # stack_pending excluded).
+  defp bucket_tasks_by_desktop_column(tasks) do
+    Map.new(@desktop_column_statuses, fn {col_key, statuses} ->
+      bucket =
+        tasks
+        |> Enum.filter(&(&1.status in statuses))
+        |> Enum.sort_by(& &1.updated_at, {:desc, DateTime})
+
+      {String.to_existing_atom(col_key), bucket}
+    end)
   end
 
   # Stage-5 of task 019e2c25: keep our review_requests:<task_id> subscription
@@ -4325,13 +4515,13 @@ defmodule PlatformWeb.TasksLive do
     end
   end
 
-  # Stage-2 of task 019f3f22: quick precomputed check used by the desktop
-  # kanban's custom empty-state — true when the "Sponsored by me" filter
-  # is active AND every kanban column resolves to an empty item list
-  # (through the scope-filter lens too, so the empty-state doesn't lie
-  # when both filters are active). Called once per render inside the
-  # empty-state `:if`.
-  defp sponsor_filter_board_empty?(kanban_columns, columns, stacks_by_column, scope_filter) do
+  # Stage-2 of task 019f3f22 (renamed from `sponsor_filter_board_empty?/4`
+  # in re-skin Phase 2 stage 2): true when every kanban column resolves to
+  # an empty item list through the scope-filter lens. Shared by the
+  # sponsor-filter empty state AND the search "no matching tasks" banner,
+  # so neither empty-state lies when multiple filters are active. Called
+  # once per render inside each empty-state `:if`.
+  defp board_columns_empty?(kanban_columns, columns, stacks_by_column, scope_filter) do
     Enum.all?(kanban_columns, fn {col_key, _label} ->
       desktop_column_items_for_scope(columns, stacks_by_column, col_key, scope_filter) == []
     end)

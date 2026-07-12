@@ -14,15 +14,11 @@
         Projects
       </span>
       <div class="flex items-center gap-1">
-        <button
+        <.section_add_button
           phx-click="toggle_project_create_sheet"
-          class="btn btn-ghost btn-xs btn-square"
-          title="New project"
-          aria-label="New project"
+          aria_label="New project"
           data-role="project-create-trigger"
-        >
-          <span class="hero-plus size-4"></span>
-        </button>
+        />
         <button
           phx-click="toggle_projects_section"
           class="btn btn-ghost btn-xs btn-square"
@@ -88,9 +84,18 @@
 
   <%!-- Main content area --%>
   <div class="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-    <%!-- Board header --%>
-    <div class="flex flex-wrap items-center justify-between gap-3 border-b border-base-300 px-4 py-3">
-      <div class="flex items-center gap-3">
+    <%!-- Board header (re-skin Phase 2 stage 2, task 019f51ca): page_header
+         replaces the ad-hoc header row. The count badge stays the
+         UNFILTERED total (search narrows the board, not the headline).
+         The scope rail + breadcrumb live in the :filters slot — they keep
+         their ids/data-roles; the rail drops its own border-b because the
+         header supplies the bottom hairline. --%>
+    <.page_header
+      id="tasks-page-header"
+      title="Tasks"
+      count={@visible_task_count || length(@all_tasks)}
+    >
+      <:leading>
         <%!-- Mobile: project sheet trigger --%>
         <button
           phx-click="toggle_project_sheet"
@@ -100,46 +105,221 @@
         >
           <span class="hero-bars-3 size-4"></span>
         </button>
-        <h1 class="text-sm font-semibold uppercase tracking-widest text-base-content/60">
-          Tasks
-        </h1>
-        <span class="badge badge-ghost badge-sm">{length(@all_tasks)}</span>
+      </:leading>
+      <:badges>
         <span :if={@pending_plan_count > 0} class="badge badge-warning badge-sm gap-1">
           {@pending_plan_count} awaiting review
         </span>
-      </div>
-
-      <%!-- Active filter breadcrumb. Stage 5 of ADR-0042 prefixes the project
-           with `<org_label> / ` (org name carries the scope color token, e.g.
-           `text-soylent`) so users always know which tenant context they're
-           inside. --%>
-      <div :if={@selected_project_id} class="flex items-center gap-1 text-xs text-base-content/60">
-        <span
-          :for={p <- @projects}
-          :if={p.id == @selected_project_id}
-          class="flex items-center gap-1"
+      </:badges>
+      <:search>
+        <.search_input
+          id="task-search"
+          event="search_tasks"
+          value={@task_search_query}
+          placeholder="Search tasks — id, title, sponsor, agent…"
+          aria_label="Search tasks"
+          class="w-full md:w-80"
+        />
+      </:search>
+      <:primary_action>
+        <%!-- hidden below md: mobile creates via the single FAB menu. --%>
+        <div class="relative hidden md:block">
+          <div class="join">
+            <button
+              type="button"
+              phx-click="toggle_task_sheet"
+              class="btn btn-primary btn-sm join-item focus-visible-ring"
+              data-role="header-new-task"
+            >
+              <span class="hero-plus size-4"></span> New Task
+            </button>
+            <button
+              type="button"
+              phx-click="toggle_create_menu"
+              class="btn btn-primary btn-sm join-item px-2 focus-visible-ring"
+              aria-label="More create options"
+              aria-haspopup="menu"
+              aria-controls="header-create-menu"
+              aria-expanded={to_string(@create_menu_open)}
+              data-role="header-create-menu-trigger"
+            >
+              <span class="hero-chevron-down size-4"></span>
+            </button>
+          </div>
+          <%!-- Styled-div dropdown (not a browser popover): scrim closes on
+               tap-out/Escape; card reads elevation from --shadow-dropdown. --%>
+          <div
+            :if={@create_menu_open}
+            class="fixed inset-0 z-30"
+            phx-click="toggle_create_menu"
+            phx-window-keydown="toggle_create_menu"
+            phx-key="escape"
+            aria-hidden="true"
+          >
+          </div>
+          <div
+            :if={@create_menu_open}
+            id="header-create-menu"
+            role="menu"
+            aria-label="Create"
+            class="absolute right-0 top-full z-40 mt-2 flex min-w-44 flex-col gap-2 rounded-box border border-base-content/10 bg-base-100 p-2"
+            style="box-shadow: var(--shadow-dropdown);"
+          >
+            <button
+              type="button"
+              role="menuitem"
+              phx-click="toggle_epic_sheet"
+              class="flex items-center gap-2 rounded-lg px-3 py-2 text-left text-sm hover:bg-base-200 focus-visible-ring"
+            >
+              <span class="hero-rectangle-stack size-4"></span> New Epic
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              phx-click="toggle_project_create_sheet"
+              class="flex items-center gap-2 rounded-lg px-3 py-2 text-left text-sm hover:bg-base-200 focus-visible-ring"
+              data-role="header-new-project"
+            >
+              <span class="hero-folder-plus size-4"></span> New Project
+            </button>
+          </div>
+        </div>
+      </:primary_action>
+      <:filters>
+        <%!-- Active filter breadcrumb. Stage 5 of ADR-0042 prefixes the project
+             with `<org_label> / ` (org name carries the scope color token, e.g.
+             `text-soylent`) so users always know which tenant context they're
+             inside. --%>
+        <div
+          :if={@selected_project_id}
+          class="flex items-center gap-1 px-4 pb-2 text-xs text-base-content/60"
         >
           <span
-            :if={match?(%Tenancy.Org{}, p.org)}
-            class={"font-medium #{Tenancy.scope_color(p.org.slug)}"}
+            :for={p <- @projects}
+            :if={p.id == @selected_project_id}
+            class="flex items-center gap-1"
           >
-            {Tenancy.scope_label(p.org.slug)}
+            <span
+              :if={match?(%Tenancy.Org{}, p.org)}
+              class={"font-medium #{Tenancy.scope_color(p.org.slug)}"}
+            >
+              {Tenancy.scope_label(p.org.slug)}
+            </span>
+            <span :if={match?(%Tenancy.Org{}, p.org)} class="text-base-content/40">/</span>
+            <span>{p.name}</span>
           </span>
-          <span :if={match?(%Tenancy.Org{}, p.org)} class="text-base-content/40">/</span>
-          <span>{p.name}</span>
-        </span>
-        <span :if={@selected_epic_id}>
-          / <span :for={e <- @epics} :if={e.id == @selected_epic_id}>{e.name}</span>
-        </span>
-        <button
-          phx-click="clear_filters"
-          class="btn btn-ghost btn-xs btn-square ml-1"
-          aria-label="Clear filters"
+          <span :if={@selected_epic_id}>
+            / <span :for={e <- @epics} :if={e.id == @selected_epic_id}>{e.name}</span>
+          </span>
+          <button
+            phx-click="clear_filters"
+            class="btn btn-ghost btn-xs btn-square ml-1"
+            aria-label="Clear filters"
+          >
+            <span class="hero-x-mark size-3"></span>
+          </button>
+        </div>
+
+        <%!-- Scope-filter rail (desktop, Stage 3 of Tasks v2 — 2026-05-19).
+             Five sub-org chips + an "All" reset. Moved into the page_header
+             :filters slot by re-skin Phase 2 stage 2 — ids, data-scope-chip
+             hooks and click semantics are unchanged; only its own border-b
+             was dropped (the header hairline replaces it). Mobile keeps the
+             5-pill status nav — the rail is `hidden lg:flex` only, per the
+             responsive-scope contract.
+
+             Each sub-org chip uses the foundation `<.scope_pill />`
+             primitive (futureproof seam for the MT/RBAC stack
+             019e3c49). Counts come from `@scope_counts` populated by
+             `Platform.Tasks.count_by_scope/0` — today-state every task
+             folds under :fabrikam, so the other four show 0 until
+             `tasks.org_id` lands.
+
+             Click semantics: the "All" chip dispatches `scope_filter`
+             with `phx-value-scope="all"`; sub-org chips dispatch it with
+             their scope atom serialized to a string (`"fabrikam"`,
+             `"soylent"`, etc.). The server narrows the kanban render via
+             `desktop_column_items_for_scope/4`. --%>
+        <nav
+          id="tasks-scope-rail"
+          aria-label="Filter tasks by sub-org scope"
+          class="hidden min-w-0 lg:flex items-center gap-2 overflow-x-auto"
         >
-          <span class="hero-x-mark size-3"></span>
-        </button>
-      </div>
-    </div>
+          <button
+            type="button"
+            phx-click="scope_filter"
+            phx-value-scope="all"
+            aria-pressed={@scope_filter == :all}
+            data-scope-chip="all"
+            data-active={to_string(@scope_filter == :all)}
+            class={[
+              "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-medium leading-none transition-colors focus-visible-ring",
+              if(@scope_filter == :all,
+                do:
+                  "bg-base-content text-base-100 border-base-content shadow-[0_0_0_2px_oklch(70%_0_0/30%)]",
+                else: "bg-base-200 text-base-content/70 border-base-content/15 hover:bg-base-300"
+              )
+            ]}
+          >
+            <span class="scope-pill-label">All</span>
+            <span class={[
+              "inline-flex items-center justify-center min-w-[18px] h-[18px] rounded-full text-[10px] font-bold tabular-nums",
+              if(@scope_filter == :all,
+                do: "bg-base-100/20 text-base-100",
+                else: "bg-base-300 text-base-content/70"
+              )
+            ]}>
+              {scope_count_total(@scope_counts)}
+            </span>
+          </button>
+          <span
+            :for={scope <- Platform.Tasks.scope_keys()}
+            data-scope-chip={Atom.to_string(scope)}
+            data-active={to_string(@scope_filter == scope)}
+            class="inline-flex items-center gap-1"
+          >
+            <.scope_pill scope={scope} active={@scope_filter == scope} />
+            <span class={[
+              "inline-flex items-center justify-center min-w-[18px] h-[18px] -ml-0.5 rounded-full text-[10px] font-bold tabular-nums",
+              if(@scope_filter == scope,
+                do: "bg-base-content/15 text-base-content",
+                else: "bg-base-200 text-base-content/60"
+              )
+            ]}>
+              {Map.get(@scope_counts, scope, 0)}
+            </span>
+          </span>
+
+          <%!-- "Sponsored by me" toggle (Stage 2 of task 019f3f22 —
+               ADR-0042 sponsor visibility). Sits right-anchored on the
+               scope rail so it's discoverable next to the scope pills
+               without stealing left-side reading order. Click flips
+               between `:all` ↔ `:mine` and push_patches the URL so
+               `?sponsor=mine` is authoritative (share-a-URL contract,
+               matches `?project=` / `?scope=` semantics — no localStorage
+               / session persistence per ADR non-goals). Mobile uses the
+               same URL param via `handle_params/3`; no mobile-specific
+               chip today (follow-up if Marlowe wants a mobile toggle). --%>
+          <button
+            type="button"
+            phx-click="toggle_sponsor_filter"
+            aria-pressed={if @sponsor_filter == :mine, do: "true", else: "false"}
+            data-role="sponsor-filter-toggle"
+            data-active={to_string(@sponsor_filter == :mine)}
+            class={[
+              "ml-auto inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-medium leading-none transition-colors focus-visible-ring",
+              if(@sponsor_filter == :mine,
+                do:
+                  "bg-primary text-primary-content border-primary shadow-[0_0_0_2px_oklch(70%_0.15_260/30%)]",
+                else: "bg-base-200 text-base-content/70 border-base-content/15 hover:bg-base-300"
+              )
+            ]}
+          >
+            <span>Sponsored by me</span>
+          </button>
+        </nav>
+      </:filters>
+    </.page_header>
 
     <%!-- Epics above board --%>
     <div :if={@selected_project_id && @epics != []} class="px-4 pt-3" id="epics-section">
@@ -541,7 +721,19 @@
           </div>
         </div>
 
-        <.empty_state :if={empty_board?(@board_items)} variant={:minimal}>
+        <%!-- With a search active, "no matching tasks" is the accurate
+             message — "tap + to create one" would mislead. --%>
+        <.empty_state
+          :if={search_active?(@task_search_query) && empty_board?(@board_items)}
+          variant={:minimal}
+        >
+          <:body>No matching tasks for "{@task_search_query}".</:body>
+        </.empty_state>
+
+        <.empty_state
+          :if={!search_active?(@task_search_query) && empty_board?(@board_items)}
+          variant={:minimal}
+        >
           <:body>No tasks yet — tap the + button to create one.</:body>
         </.empty_state>
 
@@ -558,103 +750,6 @@
         </.empty_state>
       </div>
     </div>
-
-    <%!-- Scope-filter rail (desktop, Stage 3 of Tasks v2 — 2026-05-19).
-         Five sub-org chips + an "All" reset, sitting above the kanban
-         board on lg+ viewports. Mobile keeps the 5-pill status nav
-         above — the rail is `hidden lg:flex` only, per the
-         responsive-scope contract.
-
-         Each sub-org chip uses the foundation `<.scope_pill />`
-         primitive (futureproof seam for the MT/RBAC stack
-         019e3c49). Counts come from `@scope_counts` populated by
-         `Platform.Tasks.count_by_scope/0` — today-state every task
-         folds under :fabrikam, so the other four show 0 until
-         `tasks.org_id` lands.
-
-         Click semantics: the "All" chip dispatches `scope_filter`
-         with `phx-value-scope="all"`; sub-org chips dispatch it with
-         their scope atom serialized to a string (`"fabrikam"`,
-         `"soylent"`, etc.). The server narrows the kanban render via
-         `desktop_column_items_for_scope/4`. --%>
-    <nav
-      id="tasks-scope-rail"
-      aria-label="Filter tasks by sub-org scope"
-      class="hidden lg:flex items-center gap-2 overflow-x-auto border-b border-base-content/10 px-4 py-2"
-    >
-      <button
-        type="button"
-        phx-click="scope_filter"
-        phx-value-scope="all"
-        aria-pressed={@scope_filter == :all}
-        data-scope-chip="all"
-        data-active={to_string(@scope_filter == :all)}
-        class={[
-          "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-medium leading-none transition-colors focus-visible-ring",
-          if(@scope_filter == :all,
-            do:
-              "bg-base-content text-base-100 border-base-content shadow-[0_0_0_2px_oklch(70%_0_0/30%)]",
-            else: "bg-base-200 text-base-content/70 border-base-content/15 hover:bg-base-300"
-          )
-        ]}
-      >
-        <span class="scope-pill-label">All</span>
-        <span class={[
-          "inline-flex items-center justify-center min-w-[18px] h-[18px] rounded-full text-[10px] font-bold tabular-nums",
-          if(@scope_filter == :all,
-            do: "bg-base-100/20 text-base-100",
-            else: "bg-base-300 text-base-content/70"
-          )
-        ]}>
-          {scope_count_total(@scope_counts)}
-        </span>
-      </button>
-      <span
-        :for={scope <- Platform.Tasks.scope_keys()}
-        data-scope-chip={Atom.to_string(scope)}
-        data-active={to_string(@scope_filter == scope)}
-        class="inline-flex items-center gap-1"
-      >
-        <.scope_pill scope={scope} active={@scope_filter == scope} />
-        <span class={[
-          "inline-flex items-center justify-center min-w-[18px] h-[18px] -ml-0.5 rounded-full text-[10px] font-bold tabular-nums",
-          if(@scope_filter == scope,
-            do: "bg-base-content/15 text-base-content",
-            else: "bg-base-200 text-base-content/60"
-          )
-        ]}>
-          {Map.get(@scope_counts, scope, 0)}
-        </span>
-      </span>
-
-      <%!-- "Sponsored by me" toggle (Stage 2 of task 019f3f22 —
-           ADR-0042 sponsor visibility). Sits right-anchored on the
-           scope rail so it's discoverable next to the scope pills
-           without stealing left-side reading order. Click flips
-           between `:all` ↔ `:mine` and push_patches the URL so
-           `?sponsor=mine` is authoritative (share-a-URL contract,
-           matches `?project=` / `?scope=` semantics — no localStorage
-           / session persistence per ADR non-goals). Mobile uses the
-           same URL param via `handle_params/3`; no mobile-specific
-           chip today (follow-up if Marlowe wants a mobile toggle). --%>
-      <button
-        type="button"
-        phx-click="toggle_sponsor_filter"
-        aria-pressed={if @sponsor_filter == :mine, do: "true", else: "false"}
-        data-role="sponsor-filter-toggle"
-        data-active={to_string(@sponsor_filter == :mine)}
-        class={[
-          "ml-auto inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-medium leading-none transition-colors focus-visible-ring",
-          if(@sponsor_filter == :mine,
-            do:
-              "bg-primary text-primary-content border-primary shadow-[0_0_0_2px_oklch(70%_0.15_260/30%)]",
-            else: "bg-base-200 text-base-content/70 border-base-content/15 hover:bg-base-300"
-          )
-        ]}
-      >
-        <span>Sponsored by me</span>
-      </button>
-    </nav>
 
     <%!-- Kanban board (desktop, Stage 2 of Tasks v2 — 2026-05-19).
          7 columns: Backlog / Planning / In Progress / Blocked /
@@ -689,10 +784,30 @@
       phx-hook="KanbanDragDrop"
       class="hidden lg:flex flex-1 gap-3 overflow-x-auto p-4"
     >
+      <%!-- Search banner outranks the sponsor one: with a query active,
+           "no matching tasks" is the accurate explanation for the empty
+           board even if the sponsor filter is also on. --%>
       <div
         :if={
-          @sponsor_filter == :mine and
-            sponsor_filter_board_empty?(
+          search_active?(@task_search_query) and
+            board_columns_empty?(
+              @kanban_columns,
+              @columns,
+              @desktop_stacks_by_column,
+              @scope_filter
+            )
+        }
+        data-role="search-empty-state"
+        class="flex flex-1 items-center justify-center py-16"
+      >
+        <.empty_state variant={:minimal}>
+          <:body>No matching tasks for "{@task_search_query}".</:body>
+        </.empty_state>
+      </div>
+      <div
+        :if={
+          @sponsor_filter == :mine and not search_active?(@task_search_query) and
+            board_columns_empty?(
               @kanban_columns,
               @columns,
               @desktop_stacks_by_column,
@@ -709,8 +824,8 @@
       <div
         :for={{col_key, col_label} <- @kanban_columns}
         :if={
-          not (@sponsor_filter == :mine and
-                 sponsor_filter_board_empty?(
+          not ((@sponsor_filter == :mine or search_active?(@task_search_query)) and
+                 board_columns_empty?(
                    @kanban_columns,
                    @columns,
                    @desktop_stacks_by_column,
@@ -3250,47 +3365,51 @@
     </div>
   </div>
 
-  <%!-- FAB: Create Task --%>
-  <button
-    phx-click="toggle_task_sheet"
-    class={[
-      "btn btn-primary btn-circle fixed bottom-[calc(env(safe-area-inset-bottom)+1.5rem+var(--bottom-nav-height,0px))] right-6 z-30 shadow-lg",
-      @selected_task && "max-md:hidden"
-    ]}
+  <%!-- Single create FAB + anchored menu (re-skin Phase 2 stage 2, task
+       019f51ca) replaces the pre-reskin triple FAB stack. Mobile-only
+       (md:hidden) — desktop creates via the page-header split button.
+       The `@selected_task && "max-md:hidden"` guard keeps the FAB out of
+       the way while the task detail panel is open on mobile. Menu items
+       fire the SAME sheet-toggle events the old FABs did; those handlers
+       also reset :fab_menu_open so picking an item closes the menu.
+       data-role="project-create-fab" stays on the New-Project menu item
+       for e2e selector stability. --%>
+  <.fab_create
+    id="tasks-create-fab"
+    open={@fab_menu_open}
+    toggle_event="toggle_fab_menu"
+    label="Create"
+    class={["md:hidden", @selected_task && "max-md:hidden"]}
+    data-role="fab-create"
   >
-    <span class="hero-plus size-6"></span>
-  </button>
-
-  <%!-- FAB: Create Epic (task 019d60ca stage 3, option A — stacked).
-       Sits 5rem above the Create-Task FAB so both are reachable on mobile
-       without overlap. Same mobile-hide guard when a task is open. --%>
-  <button
-    phx-click="toggle_epic_sheet"
-    class={[
-      "btn btn-secondary btn-circle fixed bottom-[calc(env(safe-area-inset-bottom)+5rem+var(--bottom-nav-height,0px))] right-6 z-30 shadow-lg",
-      @selected_task && "max-md:hidden"
-    ]}
-    aria-label="New epic"
-  >
-    <span class="hero-rectangle-stack size-6"></span>
-  </button>
-
-  <%!-- FAB: Create Project (ADR-0042 stage 5). Mobile-only — desktop users
-       reach this via the "+" button in the sidebar header. Stacks 8.5rem
-       above the Create-Task FAB so it doesn't collide with the New-Epic FAB
-       at 5rem. data-role="project-create-fab" keeps e2e selectors stable
-       and distinct from the task-create FAB. --%>
-  <button
-    phx-click="toggle_project_create_sheet"
-    class={[
-      "md:hidden btn btn-accent btn-circle fixed bottom-[calc(env(safe-area-inset-bottom)+8.5rem+var(--bottom-nav-height,0px))] right-6 z-30 shadow-lg",
-      @selected_task && "max-md:hidden"
-    ]}
-    aria-label="New project"
-    data-role="project-create-fab"
-  >
-    <span class="hero-folder-plus size-6"></span>
-  </button>
+    <button
+      type="button"
+      role="menuitem"
+      phx-click="toggle_task_sheet"
+      class="flex min-h-11 items-center gap-2 rounded-lg px-3 py-2 text-left text-sm font-medium text-primary hover:bg-base-200 focus-visible-ring"
+      data-role="fab-new-task"
+    >
+      <span class="hero-plus size-4"></span> New Task
+    </button>
+    <button
+      type="button"
+      role="menuitem"
+      phx-click="toggle_epic_sheet"
+      class="flex min-h-11 items-center gap-2 rounded-lg px-3 py-2 text-left text-sm hover:bg-base-200 focus-visible-ring"
+      data-role="fab-new-epic"
+    >
+      <span class="hero-rectangle-stack size-4"></span> New Epic
+    </button>
+    <button
+      type="button"
+      role="menuitem"
+      phx-click="toggle_project_create_sheet"
+      class="flex min-h-11 items-center gap-2 rounded-lg px-3 py-2 text-left text-sm hover:bg-base-200 focus-visible-ring"
+      data-role="project-create-fab"
+    >
+      <span class="hero-folder-plus size-4"></span> New Project
+    </button>
+  </.fab_create>
 
   <%!-- Mobile project filter sheet (task 019e0d4b stage 3 sub a). Slides
        in from the left on mobile, hidden entirely on md+ where the project
@@ -3646,7 +3765,7 @@
       phx-hook="ButtonLoading"
       phx-change="validate_task"
       phx-submit="create_task"
-      class="space-y-4"
+      class="form-fields space-y-4"
     >
       <%!-- Title --%>
       <div>
@@ -3657,7 +3776,7 @@
           value={@task_form[:title].value}
           required
           placeholder="Add unread badges"
-          class="input input-bordered input-sm w-full"
+          class="input input-bordered w-full"
         />
       </div>
 
@@ -3665,7 +3784,7 @@
            via <optgroup>, mirroring the sidebar's grouped layout. --%>
       <div>
         <label class="label label-text text-xs font-medium">Project *</label>
-        <select name="task[project_id]" class="select select-bordered select-sm w-full" required>
+        <select name="task[project_id]" class="select select-bordered w-full" required>
           <option value="">Select project</option>
           <optgroup
             :for={{org_slug, _org_name, org_projects} <- @projects_by_org}
@@ -3689,8 +3808,8 @@
           name="task[what]"
           required
           placeholder="What is being changed or added?"
-          style="line-height:1.5;padding:6px 12px;min-height:33px;max-height:200px;overflow-y:auto;field-sizing:content"
-          class="textarea textarea-bordered w-full text-sm"
+          style="field-sizing:content"
+          class="textarea textarea-bordered w-full min-h-10 max-h-50 leading-normal"
         >{@sheet_what}</textarea>
       </div>
 
@@ -3701,15 +3820,15 @@
           name="task[why]"
           required
           placeholder="Why is this change needed?"
-          style="line-height:1.5;padding:6px 12px;min-height:33px;max-height:200px;overflow-y:auto;field-sizing:content"
-          class="textarea textarea-bordered w-full text-sm"
+          style="field-sizing:content"
+          class="textarea textarea-bordered w-full min-h-10 max-h-50 leading-normal"
         >{@sheet_why}</textarea>
       </div>
 
       <%!-- Epic --%>
       <div>
         <label class="label label-text text-xs font-medium">Epic</label>
-        <select name="task[epic_id]" class="select select-bordered select-sm w-full">
+        <select name="task[epic_id]" class="select select-bordered w-full">
           <option value="">None</option>
           <option
             :for={epic <- @epics}
@@ -3724,7 +3843,7 @@
       <%!-- Agent --%>
       <div>
         <label class="label label-text text-xs font-medium">Agent</label>
-        <select name="task[assignee_id]" class="select select-bordered select-sm w-full">
+        <select name="task[assignee_id]" class="select select-bordered w-full">
           <option value="">None</option>
           <option
             :for={agent <- @agents}
@@ -3744,7 +3863,7 @@
            user can pick themselves explicitly. --%>
       <div>
         <label class="label label-text text-xs font-medium">Sponsor</label>
-        <select name="task[sponsor_user_id]" class="select select-bordered select-sm w-full">
+        <select name="task[sponsor_user_id]" class="select select-bordered w-full">
           <option value="" selected={is_nil(@task_form[:sponsor_user_id].value)}>
             No Sponsor
           </option>
@@ -3797,7 +3916,7 @@
           name="task[deploy_target]"
           data-role="sheet-deploy-target-select"
           disabled={sheet_project_targets == []}
-          class="select select-bordered select-sm w-full"
+          class="select select-bordered w-full"
         >
           <option value="" selected={is_nil(@task_form[:deploy_target].value)}>
             {if sheet_project_targets == [], do: "(no targets configured)", else: "(none)"}
@@ -3818,7 +3937,7 @@
         <select
           name="task[deploy_strategy_type]"
           id="deploy-strategy-type"
-          class="select select-bordered select-sm w-full"
+          class="select select-bordered w-full"
           phx-change="validate_task"
         >
           <option value="inherit">Inherit from project</option>
@@ -3987,7 +4106,7 @@
       id="create-epic-form"
       phx-change="validate_epic"
       phx-submit="create_epic"
-      class="space-y-4"
+      class="form-fields space-y-4"
     >
       <%!-- Name --%>
       <div>
@@ -3998,7 +4117,7 @@
           value={@epic_form[:name].value}
           required
           placeholder="Mobile redesign"
-          class="input input-bordered input-sm w-full"
+          class="input input-bordered w-full"
         />
         <p
           :for={msg <- Enum.map(@epic_form[:name].errors, &translate_error/1)}
@@ -4018,7 +4137,7 @@
           <label class="label label-text text-xs font-medium">Project *</label>
           <select
             name="epic[project_id]"
-            class="select select-bordered select-sm w-full"
+            class="select select-bordered w-full"
             required
           >
             <option value="">Select project</option>
@@ -4075,7 +4194,7 @@
           name="epic[target_branch]"
           value={@epic_form[:target_branch].value}
           placeholder="main"
-          class="input input-bordered input-sm w-full"
+          class="input input-bordered w-full"
         />
       </div>
 
@@ -4087,7 +4206,7 @@
           name="epic[deploy_target]"
           value={@epic_form[:deploy_target].value}
           placeholder="staging"
-          class="input input-bordered input-sm w-full"
+          class="input input-bordered w-full"
         />
       </div>
 
@@ -4127,7 +4246,7 @@
       id="create-project-form"
       phx-change="validate_project"
       phx-submit="create_project"
-      class="space-y-4"
+      class="form-fields space-y-4"
       data-role="project-create-form"
     >
       <%!-- Name --%>
@@ -4139,7 +4258,7 @@
           value={@project_form[:name].value}
           required
           placeholder="Storefront"
-          class="input input-bordered input-sm w-full"
+          class="input input-bordered w-full"
         />
         <p
           :for={msg <- Enum.map(@project_form[:name].errors, &translate_error/1)}
@@ -4157,7 +4276,7 @@
           name="project[slug]"
           value={@project_form[:slug].value}
           placeholder="storefront"
-          class="input input-bordered input-sm w-full"
+          class="input input-bordered w-full"
         />
         <p
           :for={msg <- Enum.map(@project_form[:slug].errors, &translate_error/1)}
@@ -4175,7 +4294,7 @@
         <label class="label label-text text-xs font-medium">Org *</label>
         <select
           name="project[org_id]"
-          class="select select-bordered select-sm w-full"
+          class="select select-bordered w-full"
           required
           data-role="project-create-org-select"
         >

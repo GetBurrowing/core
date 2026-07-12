@@ -117,25 +117,41 @@ defmodule PlatformWeb.TasksLiveProjectCreateTest do
       assert Tasks.list_projects() |> Enum.all?(fn p -> p.slug != "no-org" end)
     end
 
-    test "mobile create-project FAB is present on the page and md:hidden", %{conn: conn} do
+    # Re-skin Phase 2 stage 2 (task 019f51ca): the standalone project FAB
+    # became a menu item inside the single create-FAB menu. The
+    # data-role="project-create-fab" e2e hook moved onto that MENU ITEM;
+    # md:hidden now lives on the FAB cluster wrapper (#tasks-create-fab)
+    # because desktop creates via the page-header split button instead.
+    test "create-FAB menu exposes the New-Project item and the cluster is md:hidden", %{
+      conn: conn
+    } do
       conn = authenticated_conn(conn)
 
-      {:ok, _view, html} = live(conn, ~p"/tasks")
+      {:ok, view, html} = live(conn, ~p"/tasks")
 
-      # The FAB has a stable data-role so e2e selectors don't collide with
-      # the task-create FAB. It's `md:hidden` so desktop hides it (the
-      # desktop sidebar "+" button covers that case).
+      # Menu closed by default — the item only renders once the FAB is tapped.
+      refute html =~ ~s(data-role="project-create-fab")
+
+      html = render_click(view, "toggle_fab_menu")
       assert html =~ ~s(data-role="project-create-fab")
 
-      # Extract the FAB's class list and assert md:hidden is present.
+      # The wrapper hides the whole FAB cluster on md+.
       [_, classes] =
-        Regex.run(
-          ~r/data-role="project-create-fab"[^>]*class="([^"]+)"/s,
-          html
-        ) || Regex.run(~r/class="([^"]+)"[^>]*data-role="project-create-fab"/s, html)
+        Regex.run(~r/id="tasks-create-fab"[^>]*class="([^"]+)"/s, html) ||
+          Regex.run(~r/class="([^"]+)"[^>]*id="tasks-create-fab"/s, html)
 
       assert classes =~ "md:hidden",
-             "expected mobile FAB to carry md:hidden, got: #{classes}"
+             "expected FAB cluster wrapper to carry md:hidden, got: #{classes}"
+
+      # The menu item fires the same event the old FAB did and opens the
+      # sheet (the toggle handler also closes the menu server-side).
+      view
+      |> element(~s(button[data-role="project-create-fab"]))
+      |> render_click()
+
+      html = render(view)
+      assert html =~ ~s(data-role="project-create-form")
+      refute html =~ ~s(data-role="fab-new-epic")
     end
   end
 end
