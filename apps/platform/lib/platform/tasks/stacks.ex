@@ -2087,57 +2087,124 @@ defmodule Platform.Tasks.Stacks do
   Returns `%{cascaded: [], skipped: [%{reason: :stack_not_found}]}` for
   an unknown stack id — the helper never raises.
   """
-  @spec cascade_members_to_done(Stack.t() | binary()) :: %{
+  @spec cascade_members_to_done(Stack.t() | binary(), :webhook | :backfill) :: %{
           cascaded: [Task.t()],
           skipped: [%{task_id: String.t(), status: String.t(), reason: term()}]
         }
-  def cascade_members_to_done(%Stack{} = stack) do
-    stack
-    |> members()
-    |> Enum.reject(&(&1.status == "done"))
-    |> Enum.reduce(%{cascaded: [], skipped: []}, fn member, acc ->
-      case Tasks.transition_task(member, "done") do
-        {:ok, updated} ->
+  def cascade_members_to_done(stack_or_id, trigger \\ :webhook)
+
+  def cascade_members_to_done(%Stack{} = stack, trigger)
+      when trigger in [:webhook, :backfill] do
+    all_members = members(stack)
+    to_transition = Enum.reject(all_members, &(&1.status == "done"))
+
+    # Stage 3 (019f5bc4-3521): wrap the per-member reduce in a
+    # `Repo.transaction/1` so a single illegal transition rolls back
+    # every sibling flip. Prevents the half-done stack we saw when a
+    # rollup PR merged but one member had drifted into a status that
+    # can't legally reach `done`. On rollback we still return the
+    # cascaded/skipped shape (with `cascaded: []`) and still fire the
+    # `:cascade_completed` telemetry so dashboards count the failure —
+    # per stage 2's idempotency contract, every entry into the cascade
+    # helper emits exactly one event.
+    transaction_result =
+      Repo.transaction(fn ->
+        Enum.reduce(to_transition, %{cascaded: [], skipped: []}, fn member, acc ->
+          case Tasks.transition_task(member, "done") do
+            {:ok, updated} ->
+              Logger.warning(
+                "[Stacks.cascade_members_to_done] member #{member.id} (status=#{member.status}) " <>
+                  "was not flipped to done by the rollup-merge fan-out; transitioned directly. " <>
+                  "This usually means the member had no pr_merged validation — expected for " <>
+                  "stack members but worth confirming ops didn't lose a webhook."
+              )
+
+              %{acc | cascaded: [updated | acc.cascaded]}
+
+            {:error, reason} ->
+              Repo.rollback(
+                {:member_transition_failed, member.id, %{status: member.status, reason: reason}}
+              )
+
+            {:error, reason, _details} ->
+              Repo.rollback(
+                {:member_transition_failed, member.id, %{status: member.status, reason: reason}}
+              )
+          end
+        end)
+      end)
+
+    result =
+      case transaction_result do
+        {:ok, acc} ->
+          %{
+            cascaded: Enum.reverse(acc.cascaded),
+            skipped: Enum.reverse(acc.skipped)
+          }
+
+        {:error, {:member_transition_failed, task_id, %{status: status, reason: reason}}} ->
           Logger.warning(
-            "[Stacks.cascade_members_to_done] member #{member.id} (status=#{member.status}) " <>
-              "was not flipped to done by the rollup-merge fan-out; transitioned directly. " <>
-              "This usually means the member had no pr_merged validation — expected for " <>
-              "stack members but worth confirming ops didn't lose a webhook."
+            "[Stacks.cascade_members_to_done] transaction rolled back for stack #{stack.id}: " <>
+              "member #{task_id} (status=#{status}) failed to transition to done " <>
+              "(reason=#{inspect(reason)}); all sibling transitions reverted"
           )
 
-          %{acc | cascaded: [updated | acc.cascaded]}
-
-        {:error, reason} ->
           %{
-            acc
-            | skipped: [
-                %{task_id: member.id, status: member.status, reason: reason}
-                | acc.skipped
-              ]
-          }
-
-        {:error, reason, _details} ->
-          %{
-            acc
-            | skipped: [
-                %{task_id: member.id, status: member.status, reason: reason}
-                | acc.skipped
-              ]
+            cascaded: [],
+            skipped: [%{task_id: task_id, status: status, reason: reason}]
           }
       end
-    end)
-    |> Map.update!(:cascaded, &Enum.reverse/1)
-    |> Map.update!(:skipped, &Enum.reverse/1)
+
+    emit_cascade_completed_telemetry(stack, all_members, result, trigger)
+
+    result
   end
 
-  def cascade_members_to_done(stack_id) when is_binary(stack_id) do
+  def cascade_members_to_done(stack_id, trigger)
+      when is_binary(stack_id) and trigger in [:webhook, :backfill] do
     case Repo.get(Stack, stack_id) do
       %Stack{} = stack ->
-        cascade_members_to_done(stack)
+        cascade_members_to_done(stack, trigger)
 
       nil ->
+        # Deliberately no telemetry emission for the unknown-stack branch:
+        # there's no stack_id to key dashboards on and the caller learns
+        # about it via the returned `:stack_not_found` skip entry.
         %{cascaded: [], skipped: [%{task_id: nil, status: nil, reason: :stack_not_found}]}
     end
+  end
+
+  # Fire `[:platform, :stacks, :deploy, :cascade_completed]` after every
+  # invocation of `cascade_members_to_done/2` on a real stack. Emits even
+  # in the no-op case (nothing to cascade) so dashboards can count how
+  # often the cascade helper is entered — the metric shape mirrors
+  # `StackDeployer.emit_pr_merged_telemetry/4` (measurements carry
+  # `count: 1` + the total member roll; metadata carries the stack
+  # identity + cascade-specific counters + the trigger tag).
+  #
+  # Trigger `:webhook` is the canonical happy path (from
+  # `StackDeployer.handle_rollup_pr_merged/1` after the rollup PR closes
+  # merged); `:backfill` is the Mix-task recovery path landing in a
+  # later stage of task 019f5bc4-3521.
+  defp emit_cascade_completed_telemetry(
+         %Stack{id: stack_id, rollup_branch: rollup_branch},
+         all_members,
+         %{cascaded: cascaded, skipped: skipped},
+         trigger
+       ) do
+    :telemetry.execute(
+      [:platform, :stacks, :deploy, :cascade_completed],
+      %{count: 1, member_count: length(all_members)},
+      %{
+        stack_id: stack_id,
+        rollup_branch: rollup_branch,
+        cascaded_count: length(cascaded),
+        skipped_count: length(skipped),
+        trigger: trigger
+      }
+    )
+
+    :ok
   end
 
   @doc """

@@ -1327,4 +1327,367 @@ defmodule PlatformWeb.GithubWebhookControllerTest do
       assert is_nil(Platform.Repo.get!(Platform.Tasks.Task, task.id).stack_id)
     end
   end
+
+  # ── Task 019f5bc4-3521 (stage 5): rollup deploy cascade end-to-end ──────
+  #
+  # Reproduces PR #531's production shape end-to-end: the rollup PR merges,
+  # `pull_request.closed` hits this controller, and the deployer cascades
+  # every stranded member from `deploying → done` in one atomic pass —
+  # emitting exactly ONE `[:platform, :stacks, :deploy, :cascade_completed]`
+  # event with `trigger: :webhook`.
+  #
+  # Complements the tighter regression in
+  # `github_webhook_rollup_cascade_test.exs` by covering the three scenarios
+  # the router explicitly discriminates: happy-path cascade, idempotent
+  # replay of the same rollup webhook, and the negative guard that a plain
+  # (non-rollup) task PR never trips the stack cascade emit.
+  describe "stack rollup deploy cascade end-to-end" do
+    alias Platform.Tasks.Stacks
+
+    # Belt-and-suspenders: test config already sets async: false + the
+    # `Platform.Tasks.StackDeployer.NoopRunner`, but pin it in setup so a
+    # future config drift doesn't silently regress these assertions. Also
+    # attach a `:cascade_completed` telemetry handler that only delivers
+    # events emitted FROM the test process — this file is `async: true`, so
+    # a global handler would otherwise catch events fired by parallel
+    # tests. Because the deployer runs inline under `async: false`, the
+    # cascade emit fires in the same process that called `post/2` (the
+    # test), so a `self() == test_pid` guard cleanly isolates our events.
+    setup do
+      prev = Application.get_env(:platform, :stack_deployer, [])
+
+      Application.put_env(:platform, :stack_deployer,
+        git_runner: Platform.Tasks.StackDeployer.NoopRunner,
+        async: false
+      )
+
+      handler_id = "e2e-cascade-#{System.unique_integer([:positive])}"
+      test_pid = self()
+
+      :ok =
+        :telemetry.attach(
+          handler_id,
+          [:platform, :stacks, :deploy, :cascade_completed],
+          fn event, measurements, metadata, _config ->
+            if self() == test_pid do
+              send(test_pid, {:telemetry, event, measurements, metadata})
+            end
+          end,
+          nil
+        )
+
+      on_exit(fn ->
+        :telemetry.detach(handler_id)
+        Application.put_env(:platform, :stack_deployer, prev)
+      end)
+
+      :ok
+    end
+
+    # PR #531 shape (see https://github.com/Startup-Suite/core/pull/531):
+    # stack at `deploying` with `metadata["rollup_pr"]["opened_at"]` stamped
+    # (that's what the deployer writes when it opens the rollup PR), N
+    # member tasks at `deploying` with `stack_id` set. Members carry NO
+    # per-task `pr_merged` validation — the rollup PR ships them
+    # atomically (see `Tasks.dispatch_deploy_for_task/1` returning
+    # `{:error, :stack_ships_atomically}` for stacked tasks).
+    #
+    # 3-phase build (per task guidance): create the stack at deploying,
+    # attach members (each `update_task` skips the transition-status
+    # validator so we can pin them at `deploying` directly), then leave
+    # the stack row at the deploying status we wrote at creation. We do
+    # NOT call `Stacks.add_task/2` — that helper fires
+    # `recompute_stack_status/1` and would roll the stack away from
+    # `deploying` to whatever the member-status rollup demands.
+    defp e2e_build_stranded_stack!(member_count, opts) when member_count > 0 do
+      slug =
+        Keyword.get(opts, :slug, "e2e-cascade-#{System.unique_integer([:positive])}")
+
+      rollup_branch = "stack/#{slug}"
+
+      now_iso = DateTime.utc_now() |> DateTime.to_iso8601()
+
+      {:ok, project} =
+        Tasks.create_project(%{
+          name: "E2E Cascade #{System.unique_integer([:positive])}",
+          repo_url: "https://github.com/Startup-Suite/core"
+        })
+
+      {:ok, stack} =
+        Stacks.create_stack(%{
+          project_id: project.id,
+          slug: slug,
+          name: "E2E Cascade Stack",
+          base_branch: "main",
+          rollup_branch: rollup_branch,
+          status: "deploying",
+          metadata: %{
+            "rollup_pr" => %{
+              "number" => 999,
+              "url" => "https://github.com/x/y/pull/999",
+              "opened_at" => now_iso
+            }
+          }
+        })
+
+      members =
+        for position <- 1..member_count do
+          {:ok, task} =
+            Tasks.create_task(%{
+              project_id: project.id,
+              title: "Stranded member #{position}"
+            })
+
+          {:ok, _plan} =
+            Tasks.create_plan(%{task_id: task.id, version: 1, status: "approved"})
+
+          {:ok, task} =
+            Tasks.update_task(task, %{
+              stack_id: stack.id,
+              stack_position: position,
+              status: "deploying"
+            })
+
+          %{task: task}
+        end
+
+      %{project: project, stack: stack, rollup_branch: rollup_branch, members: members}
+    end
+
+    # Inline `pull_request.closed` payload for a rollup-branch merge.
+    # Kept inline (no external JSON fixture) so the reader sees the exact
+    # controller inputs alongside the assertions — the shape mirrors the
+    # production PR #531 body, minus fields the controller ignores.
+    defp e2e_rollup_webhook_body(rollup_branch, pr_number) do
+      %{
+        "action" => "closed",
+        "pull_request" => %{
+          "merged" => true,
+          "number" => pr_number,
+          "title" => "Stack rollup: e2e cascade",
+          "html_url" => "https://github.com/Startup-Suite/core/pull/#{pr_number}",
+          "merge_commit_sha" => "e2e-rollup-sha-#{pr_number}",
+          "merged_at" => "2026-07-13T06:18:00Z",
+          "body" => "",
+          "user" => %{"login" => "merge-bot"},
+          "merged_by" => %{"login" => "ryanm"},
+          "head" => %{"ref" => rollup_branch},
+          "base" => %{"ref" => "main"}
+        }
+      }
+    end
+
+    # Inline `pull_request.closed` payload for a plain non-rollup task PR
+    # (branch `task/<uuid>`), used to prove the stack cascade code path is
+    # NOT tripped by ordinary per-task merges.
+    defp e2e_plain_task_webhook_body(head_ref, pr_number) do
+      %{
+        "action" => "closed",
+        "pull_request" => %{
+          "merged" => true,
+          "number" => pr_number,
+          "title" => "Plain task PR",
+          "html_url" => "https://github.com/test/plain-repo/pull/#{pr_number}",
+          "merge_commit_sha" => "plain-sha-#{pr_number}",
+          "merged_at" => "2026-07-13T06:18:00Z",
+          "body" => "",
+          "user" => %{"login" => "agent-bot"},
+          "head" => %{"ref" => head_ref}
+        }
+      }
+    end
+
+    test "happy path: 3 stranded members all reach done in one atomic pass", %{conn: conn} do
+      %{stack: stack, rollup_branch: rollup_branch, members: members} =
+        e2e_build_stranded_stack!(3, slug: "happy-#{System.unique_integer([:positive])}")
+
+      pr_number = System.unique_integer([:positive])
+
+      conn = post(conn, @github_webhook_path, e2e_rollup_webhook_body(rollup_branch, pr_number))
+      assert %{"status" => "created"} = json_response(conn, 201)
+
+      # Stack advanced through both transitions: fan-out flipped it to
+      # `done` via `Stacks.complete_rollup_merge/2` and then
+      # `StackDeployer.handle_rollup_pr_merged/2` stamped
+      # `metadata["rollup_pr"]["merged_at"]` and cascaded the stranded
+      # members.
+      reloaded_stack = Platform.Repo.get!(Platform.Tasks.Stack, stack.id)
+      assert reloaded_stack.status == "done"
+
+      rollup_pr_meta = get_in(reloaded_stack.metadata, ["rollup_pr"]) || %{}
+
+      assert is_binary(Map.get(rollup_pr_meta, "merged_at")),
+             "expected rollup_pr.merged_at to be stamped after cascade"
+
+      # All 3 stranded members atomically advanced to done.
+      member_statuses =
+        for %{task: task} <- members do
+          Platform.Repo.get!(Platform.Tasks.Task, task.id).status
+        end
+
+      assert Enum.uniq(member_statuses) == ["done"],
+             "expected all 3 members done in one pass; got #{inspect(member_statuses)}"
+
+      # Exactly ONE :cascade_completed telemetry event, tagged
+      # `trigger: :webhook`, with the expected cascaded_count. The
+      # `^stack_id` binding in both patterns keeps us safe from parallel
+      # async tests' events (also filtered by the setup handler's
+      # `self() == test_pid` guard, but belt-and-suspenders here).
+      stack_id = stack.id
+
+      assert_receive {:telemetry, [:platform, :stacks, :deploy, :cascade_completed],
+                      %{count: 1, member_count: 3},
+                      %{
+                        stack_id: ^stack_id,
+                        cascaded_count: 3,
+                        skipped_count: 0,
+                        trigger: :webhook
+                      }},
+                     500
+
+      refute_received {:telemetry, [:platform, :stacks, :deploy, :cascade_completed], _,
+                       %{stack_id: ^stack_id}}
+    end
+
+    test "replay fires idempotent no-op :cascade_completed telemetry event",
+         %{conn: conn} do
+      # Task 019f5bc4-3521 Case B contract (strict per-webhook telemetry
+      # parity): every real webhook delivery for a rollup PR fires
+      # exactly one `:cascade_completed` telemetry event, INCLUDING
+      # replays. On a replay `cascaded_count` is 0 (no members to
+      # advance) but the event still emits so dashboards can count
+      # deliveries. Stack + member rows remain untouched — the replay
+      # is side-effect-free on state, its only observable effect is the
+      # second telemetry event + a log line.
+      %{stack: stack, rollup_branch: rollup_branch, members: members} =
+        e2e_build_stranded_stack!(3, slug: "idem-#{System.unique_integer([:positive])}")
+
+      # First POST — full cascade path runs (fan-out anomalies for members
+      # without pr_merged validation, `Stacks.complete_rollup_merge/2`
+      # flips stack to done, then `handle_rollup_pr_merged/2` stamps
+      # `rollup_pr.merged_at` and cascades the stranded members).
+      first_pr_number = System.unique_integer([:positive])
+
+      conn1 =
+        post(conn, @github_webhook_path, e2e_rollup_webhook_body(rollup_branch, first_pr_number))
+
+      assert %{"status" => "created"} = json_response(conn1, 201)
+
+      first_stack = Platform.Repo.get!(Platform.Tasks.Stack, stack.id)
+      assert first_stack.status == "done"
+      first_rollup_pr = get_in(first_stack.metadata, ["rollup_pr"]) || %{}
+
+      assert is_binary(Map.get(first_rollup_pr, "merged_at")),
+             "expected rollup_pr.merged_at to be stamped after first POST"
+
+      stack_id = stack.id
+
+      # First delivery: cascaded_count = 3 (three stranded members
+      # transitioned to done in the same webhook call).
+      assert_receive {:telemetry, [:platform, :stacks, :deploy, :cascade_completed],
+                      %{count: 1, member_count: 3},
+                      %{
+                        stack_id: ^stack_id,
+                        cascaded_count: 3,
+                        skipped_count: 0,
+                        trigger: :webhook
+                      }},
+                     500
+
+      # Snapshot member `updated_at` timestamps so we can prove the
+      # replay is truly a no-op on state (no writes). The ONLY visible
+      # side-effect of the replay should be the second telemetry event.
+      first_member_updated_ats =
+        for %{task: task} <- members do
+          reloaded = Platform.Repo.get!(Platform.Tasks.Task, task.id)
+          {reloaded.id, reloaded.updated_at}
+        end
+
+      # Second POST — under the new Case B fix, `process_stack_merged_pr/4`
+      # no longer pre-checks for done+rollup_merge. It routes replays
+      # through the full chain: `fan_out_rollup_merge` (all members already
+      # done → all anomalies, zero passed, zero writes) → `Stacks
+      # .complete_rollup_merge/2` (idempotent no-op) → `StackDeployer
+      # .handle_rollup_pr_merged/2` replay branch (cascade emit +
+      # {:ok, stack}). The `:cascade_completed` event STILL fires with
+      # `cascaded_count: 0` for per-webhook telemetry parity.
+      replay_pr_number = System.unique_integer([:positive])
+
+      conn2 =
+        post(conn, @github_webhook_path, e2e_rollup_webhook_body(rollup_branch, replay_pr_number))
+
+      assert %{"status" => "created"} = json_response(conn2, 201)
+
+      # Second delivery emits a second :cascade_completed event —
+      # cascaded_count: 0 (nothing to advance), same trigger. This is
+      # the load-bearing Case B assertion.
+      assert_receive {:telemetry, [:platform, :stacks, :deploy, :cascade_completed],
+                      %{count: 1, member_count: 3},
+                      %{
+                        stack_id: ^stack_id,
+                        cascaded_count: 0,
+                        skipped_count: 0,
+                        trigger: :webhook
+                      }},
+                     1000
+
+      # Members still done, untouched updated_at — the cascade helper's
+      # `reject(&(&1.status == "done"))` filter drops every member from
+      # the transition set, so the inner Repo.transaction is empty and
+      # nothing gets written. Idempotent on state.
+      for {id, first_updated_at} <- first_member_updated_ats do
+        reloaded = Platform.Repo.get!(Platform.Tasks.Task, id)
+        assert reloaded.status == "done"
+        assert reloaded.updated_at == first_updated_at
+      end
+
+      # Stack's `rollup_pr.merged_at` is the ORIGINAL stamp — the replay
+      # branch in `handle_rollup_pr_merged/2` deliberately does NOT
+      # re-stamp merged_at (that would clobber the first-merge timestamp
+      # + deploy-duration histogram on dashboards).
+      second_stack = Platform.Repo.get!(Platform.Tasks.Stack, stack.id)
+      second_rollup_pr = get_in(second_stack.metadata, ["rollup_pr"]) || %{}
+      assert Map.get(second_rollup_pr, "merged_at") == Map.get(first_rollup_pr, "merged_at")
+
+      # No THIRD :cascade_completed telemetry event — two POSTs, two
+      # events, exact per-webhook parity.
+      refute_receive {:telemetry, [:platform, :stacks, :deploy, :cascade_completed], _,
+                      %{stack_id: ^stack_id}},
+                     200
+    end
+
+    test "non-rollup PR does not trigger the stack cascade code path", %{conn: conn} do
+      # Solo (non-stack) task with a running deploy stage carrying a
+      # pending pr_merged validation. Its branch (`task/<uuid>`) does not
+      # match any stack's rollup_branch, so the controller takes the
+      # per-task path — flipping pr_merged to passed via PlanEngine — and
+      # NEVER enters `process_stack_merged_pr`.
+      %{task: task, pr_validation: pr_validation} = create_task_with_ci_validation!()
+
+      pr_number = System.unique_integer([:positive])
+
+      conn =
+        post(
+          conn,
+          @github_webhook_path,
+          e2e_plain_task_webhook_body("task/#{task.id}", pr_number)
+        )
+
+      assert %{"status" => "created"} = json_response(conn, 201)
+
+      # Per-task pr_merged flipped to passed, WITHOUT the fan-out marker
+      # in evidence (proving we went through the per-task branch, not the
+      # stack rollup branch).
+      reloaded = Platform.Repo.get!(Platform.Tasks.Validation, pr_validation.id)
+      assert reloaded.status == "passed"
+      assert reloaded.evaluated_by == "github_webhook"
+      refute Map.get(reloaded.evidence || %{}, "fanned_out_from_stack_rollup_pr")
+
+      # No stack cascade telemetry — the whole point of the negative
+      # guard. Any :cascade_completed event that lands in our mailbox
+      # would have had to come from THIS test process (setup handler's
+      # `self() == test_pid` filter), and Case 3 creates no stack.
+      refute_receive {:telemetry, [:platform, :stacks, :deploy, :cascade_completed], _, _}, 200
+    end
+  end
 end

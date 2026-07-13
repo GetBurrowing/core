@@ -1045,18 +1045,43 @@ defmodule Platform.Tasks.StackDeployer do
 
     cond do
       is_map(rollup_pr) and is_binary(Map.get(rollup_pr, "merged_at")) ->
+        # Webhook replay: this stack already completed its rollup-merge
+        # transition on a prior delivery (`metadata.rollup_pr.merged_at`
+        # stamped). Task 019f5bc4-3521 (Case B fix) — every real webhook
+        # delivery must still route through `cascade_members_to_done/2`
+        # so the `[:platform, :stacks, :deploy, :cascade_completed]`
+        # telemetry event fires with one-per-delivery parity. The
+        # cascade helper's own idempotency (`reject(&(&1.status == "done"))`)
+        # means member rows stay untouched and the event carries
+        # `cascaded_count: 0`.
+        #
+        # We deliberately do NOT re-stamp `metadata.rollup_pr.merged_at`,
+        # re-emit the legacy `:rollup_pr_merged` / uniform `:pr_merged`
+        # telemetry, or re-kick the rollup-branch delete. Those all
+        # represent "the stack just entered done" side-effects; the
+        # cascade telemetry represents "the webhook was delivered".
         Logger.info(
-          "[StackDeployer] stack #{stack.id} already done with rollup_pr.merged_at stamped; " <>
-            "rollup-merge handler is no-op"
+          "[StackDeployer] stack #{stack.id} rollup-merge webhook replay " <>
+            "(rollup_pr.merged_at already stamped); emitting :cascade_completed " <>
+            "telemetry no-op, skipping merged_at re-stamp, :pr_merged re-emit, " <>
+            "and branch-delete re-kick"
         )
 
+        _ = Stacks.cascade_members_to_done(stack, :webhook)
         {:ok, stack}
 
       is_nil(rollup_pr) ->
-        # Pre-stage-5 semantic: a stack manually flipped to `done` with no
-        # rollup_pr metadata is treated as "already done" and short-circuits.
-        # This preserves existing test seams that set `status: "done"` without
-        # any rollup metadata.
+        # Pre-stage-5 semantic (test seam): a stack manually flipped to
+        # `done` with NO rollup_pr metadata is treated as "already done"
+        # and short-circuits — this isn't a real webhook delivery for a
+        # rollup PR (there's no rollup PR to speak of), so the per-webhook
+        # cascade telemetry contract doesn't apply. Existing tests in
+        # `stack_deployer_test.exs` rely on this shape (see
+        # "idempotent on already-done stack" and "already-done stack does
+        # NOT invoke delete") — a full route through
+        # `cascade_members_to_done/2` here would either fire spurious
+        # telemetry or, for status="done" test seams with lingering
+        # non-done members, over-cascade.
         Logger.info(
           "[StackDeployer] stack #{stack.id} already done (no rollup_pr metadata); " <>
             "rollup-merge handler is no-op"
@@ -1069,6 +1094,10 @@ defmodule Platform.Tasks.StackDeployer do
         # (e.g. the webhook's `complete_rollup_merge/2`) flipped status to
         # done without running this handler. Stamp merged_at + emit
         # telemetry + cascade + branch delete for this "half-done" case.
+        # This is the first-time happy-path branch on the webhook route
+        # (`fan_out_rollup_merge` → `complete_rollup_merge` flips to done
+        # without touching `rollup_pr.merged_at`, so we always land here
+        # on real first-time deliveries).
         do_handle_rollup_pr_merged(stack, merge_commit_sha)
     end
   end
@@ -1108,7 +1137,7 @@ defmodule Platform.Tasks.StackDeployer do
         # duration_ms_in_deploying, merge_commit_sha} — matches the
         # :dispatched (stage 3) and :pr_rejected (stage 4) event shapes
         # so dashboards can build one uniform deploy-lifecycle panel.
-        cascade = Stacks.cascade_members_to_done(updated)
+        cascade = Stacks.cascade_members_to_done(updated, :webhook)
         member_count = length(Stacks.members(updated))
         duration_ms = deploy_duration_ms_in_deploying(base_meta, now)
 

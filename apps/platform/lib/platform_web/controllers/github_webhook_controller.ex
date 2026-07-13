@@ -513,11 +513,30 @@ defmodule PlatformWeb.GithubWebhookController do
   #      `Stacks.complete_rollup_merge/2`, recording the per-member
   #      outcome in `stack.metadata["rollup_merge"]` (stage 2).
   #
-  # Idempotency: if the stack is already at `done` with a populated
-  # `metadata["rollup_merge"]` (a replay of the same webhook),
-  # `complete_rollup_merge/2` returns the existing stack unchanged and
-  # we short-circuit the fan-out so member validations are NOT
-  # re-evaluated. The replay is silent (logged at info) and returns 2xx.
+  # Idempotency (task 019f5bc4-3521 Case B — strict per-webhook telemetry
+  # parity): NO pre-check short-circuit here. Every real webhook delivery
+  # for a rollup PR routes through the full chain — `fan_out_rollup_merge/3`,
+  # `Stacks.complete_rollup_merge/2`, and `StackDeployer.handle_rollup_pr_merged/2`
+  # — so the terminal `Stacks.cascade_members_to_done/2` emits exactly one
+  # `[:platform, :stacks, :deploy, :cascade_completed]` event per delivery,
+  # including replays (with `cascaded_count: 0` when everyone is already
+  # done). Downstream helpers are individually idempotent:
+  #
+  #   * `fan_out_rollup_merge/3` — members already `done` fall into the
+  #     `unexpected_status` anomaly bucket and skip the per-member
+  #     evaluate/promote work. No writes.
+  #   * `Stacks.complete_rollup_merge/2` — returns `{:ok, stack}` unchanged
+  #     when the stack is already `done` with `metadata["rollup_merge"]`
+  #     populated. No writes, no clobbered history.
+  #   * `StackDeployer.handle_rollup_pr_merged/2` — replay-aware: when
+  #     `metadata.rollup_pr.merged_at` is already stamped, calls
+  #     `cascade_members_to_done/2` for the telemetry emit but does NOT
+  #     re-stamp `merged_at`, re-emit `:pr_merged`, or re-kick the
+  #     rollup-branch delete. Those are "the stack just entered done"
+  #     side-effects, not "the webhook was delivered" side-effects.
+  #
+  # Design intent: dashboards can count webhook deliveries by counting
+  # `:cascade_completed` events, not just first-time completions.
   defp process_stack_merged_pr(%Stack{} = stack, pr, merged_at, _task_id) do
     # Stage 2 test seam: when running in `:test` env tests can set
     # `Application.put_env(:platform, :webhook_stack_fault, fun_or_atom)`
@@ -527,60 +546,66 @@ defmodule PlatformWeb.GithubWebhookController do
     maybe_inject_test_fault()
 
     base_meta = if is_map(stack.metadata), do: stack.metadata, else: %{}
+    was_already_done = stack.status == "done" and Map.has_key?(base_meta, "rollup_merge")
 
-    if stack.status == "done" and Map.has_key?(base_meta, "rollup_merge") do
+    if was_already_done do
       Logger.info(
-        "[Webhook] Stack #{stack.id} already completed (status=done, rollup_merge set); " <>
-          "skipping fan-out and stack transition for replayed PR #{pr["html_url"]}"
+        "[Webhook] Stack #{stack.id} rollup-PR replay (status=done, rollup_merge set); " <>
+          "routing through fan-out/cascade chain for telemetry parity — no state changes expected " <>
+          "(PR=#{pr["html_url"]})"
       )
+    end
 
-      :ok
-    else
-      {passed, anomalies} = fan_out_rollup_merge(stack, pr, merged_at)
-      passed_member_ids = Enum.map(passed, & &1.task_id) |> Enum.reject(&is_nil/1)
+    {passed, anomalies} = fan_out_rollup_merge(stack, pr, merged_at)
+    passed_member_ids = Enum.map(passed, & &1.task_id) |> Enum.reject(&is_nil/1)
 
-      if passed_member_ids == [] do
-        Logger.error(
-          "[Webhook] Stack #{stack.id} rollup fan-out completed with ZERO passed members " <>
-            "(every member anomalous). PR=#{pr["html_url"]} anomalies=#{inspect(anomalies)}. " <>
-            "Marking stack done with degraded=true; operator triage required."
-        )
-      end
+    # ERROR log guards the "real degradation" case only. On webhook
+    # replays every member is already `done` and appears in `anomalies`
+    # as `unexpected_status` — that's the design intent, not a degradation.
+    # `complete_rollup_merge/2` is idempotent on already-done stacks so
+    # the `degraded=true` flag would not be written anyway.
+    if passed_member_ids == [] and not was_already_done do
+      Logger.error(
+        "[Webhook] Stack #{stack.id} rollup fan-out completed with ZERO passed members " <>
+          "(every member anomalous). PR=#{pr["html_url"]} anomalies=#{inspect(anomalies)}. " <>
+          "Marking stack done with degraded=true; operator triage required."
+      )
+    end
 
-      attrs = %{
-        passed_member_ids: passed_member_ids,
-        anomalies: anomalies,
-        merge_commit_sha: pr["merge_commit_sha"],
-        merged_at: merged_at
-      }
+    attrs = %{
+      passed_member_ids: passed_member_ids,
+      anomalies: anomalies,
+      merge_commit_sha: pr["merge_commit_sha"],
+      merged_at: merged_at
+    }
 
-      case Stacks.complete_rollup_merge(stack, attrs) do
-        {:ok, updated} ->
+    case Stacks.complete_rollup_merge(stack, attrs) do
+      {:ok, updated} ->
+        unless was_already_done do
           Logger.info(
             "[Webhook] Stack #{stack.id} transitioned to done via rollup-merge fan-out " <>
               "(#{length(passed_member_ids)} member(s) passed, #{length(anomalies)} anomaly/anomalies)"
           )
+        end
 
-          # Stack v2 stage 5: complete_rollup_merge/2 stamps the
-          # `rollup_merge` metadata subtree + flips status to done,
-          # but does NOT trigger rollup-branch cleanup, member-status
-          # cascade fallback, or the uniform :stacks, :deploy, :pr_merged
-          # telemetry event that stages 3 + 4 established. Route through
-          # `handle_rollup_pr_merged/2` to satisfy those invariants.
-          # The handler is idempotent (short-circuits when
-          # `metadata["rollup_pr"]["merged_at"]` is stamped) so a
-          # replayed webhook is safe.
-          _ = StackDeployer.handle_rollup_pr_merged(updated, pr["merge_commit_sha"])
+        # Stack v2 stage 5: complete_rollup_merge/2 stamps the
+        # `rollup_merge` metadata subtree + flips status to done,
+        # but does NOT trigger rollup-branch cleanup, member-status
+        # cascade fallback, or the uniform :stacks, :deploy, :pr_merged
+        # telemetry event that stages 3 + 4 established. Route through
+        # `handle_rollup_pr_merged/2` to satisfy those invariants —
+        # its replay branch invokes `cascade_members_to_done/2` so the
+        # `:cascade_completed` telemetry event fires once per delivery.
+        _ = StackDeployer.handle_rollup_pr_merged(updated, pr["merge_commit_sha"])
 
-          :ok
+        :ok
 
-        {:error, reason} ->
-          Logger.warning(
-            "[Webhook] Stack #{stack.id} complete_rollup_merge failed: #{inspect(reason)}"
-          )
+      {:error, reason} ->
+        Logger.warning(
+          "[Webhook] Stack #{stack.id} complete_rollup_merge failed: #{inspect(reason)}"
+        )
 
-          :error
-      end
+        :error
     end
   end
 

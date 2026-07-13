@@ -4721,6 +4721,78 @@ defmodule Platform.Tasks.StacksTest do
       assert %{cascaded: [], skipped: [%{reason: :stack_not_found}]} =
                Stacks.cascade_members_to_done(Ecto.UUID.generate())
     end
+
+    # Stage 3 (019f5bc4-3521): atomic-cascade contract. When ANY member's
+    # transition to `done` fails, the whole reduce rolls back — the earlier
+    # successful transitions are reverted so we never leave a half-done
+    # stack. Verified by seeding the last-position member at `backlog`
+    # (illegal → done) while earlier members sit at `in_review` (legal
+    # path); after the cascade the earlier members' statuses must still
+    # read `in_review`, not `done`.
+    test "rolls back all member transitions when one fails" do
+      {:ok, project} = Tasks.create_project(%{name: "Cascade rollback"})
+      stack = stack_fixture(project_id: project.id)
+
+      {:ok, t1} = Tasks.create_task(%{project_id: project.id, title: "M1"})
+      {:ok, t2} = Tasks.create_task(%{project_id: project.id, title: "M2"})
+      {:ok, t3} = Tasks.create_task(%{project_id: project.id, title: "M3"})
+      {:ok, _} = Stacks.add_task(stack, t1)
+      {:ok, _} = Stacks.add_task(stack, t2)
+      {:ok, _} = Stacks.add_task(stack, t3)
+
+      # t1 + t2 CAN transition in_review → done. t3 sits at backlog,
+      # which is NOT in @valid_task_transitions for → done, so the
+      # third pass through the reduce raises Repo.rollback.
+      set_member_status(stack, t1, "in_review")
+      set_member_status(stack, t2, "in_review")
+      set_member_status(stack, t3, "backlog")
+
+      assert %{cascaded: [], skipped: [entry]} = Stacks.cascade_members_to_done(stack)
+      assert entry.task_id == t3.id
+      assert entry.status == "backlog"
+      assert entry.reason != nil
+
+      # Sibling transitions were rolled back — DB state matches the
+      # pre-cascade snapshot.
+      assert Tasks.get_task_record(t1.id).status == "in_review"
+      assert Tasks.get_task_record(t2.id).status == "in_review"
+      assert Tasks.get_task_record(t3.id).status == "backlog"
+    end
+
+    test "emits :cascade_completed telemetry with cascaded_count=0 after rollback" do
+      {:ok, project} = Tasks.create_project(%{name: "Cascade rollback telemetry"})
+      stack = stack_fixture(project_id: project.id)
+
+      {:ok, t1} = Tasks.create_task(%{project_id: project.id, title: "M1"})
+      {:ok, t2} = Tasks.create_task(%{project_id: project.id, title: "M2"})
+      {:ok, _} = Stacks.add_task(stack, t1)
+      {:ok, _} = Stacks.add_task(stack, t2)
+
+      set_member_status(stack, t1, "in_review")
+      # t2 at backlog → illegal → forces rollback.
+      set_member_status(stack, t2, "backlog")
+
+      ref =
+        :telemetry_test.attach_event_handlers(self(), [
+          [:platform, :stacks, :deploy, :cascade_completed]
+        ])
+
+      Stacks.cascade_members_to_done(stack, :webhook)
+
+      assert_receive {[:platform, :stacks, :deploy, :cascade_completed], ^ref, measurements,
+                      metadata}
+
+      # Idempotency contract from stage 2: one event per invocation,
+      # even when the transaction rolled back.
+      assert measurements.count == 1
+      assert measurements.member_count == 2
+      assert metadata.cascaded_count == 0
+      assert metadata.skipped_count == 1
+      assert metadata.trigger == :webhook
+      assert metadata.stack_id == stack.id
+
+      :telemetry.detach(ref)
+    end
   end
 
   # ── Helpers ──────────────────────────────────────────────────────────────
