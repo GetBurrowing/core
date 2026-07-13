@@ -648,4 +648,153 @@ defmodule Platform.ChatTest do
       assert Keyword.has_key?(cs.errors, :org_id)
     end
   end
+
+  describe "create_space/1 historian auto-join" do
+    alias Platform.Agents.Agent
+    alias Platform.Repo
+    alias Platform.Roles
+
+    import ExUnit.CaptureLog
+
+    # Seed a historian-role agent and pin it via the role_assignments
+    # table so `Platform.Roles.agent_id_for_role("historian")` resolves
+    # to this agent's id. Matches stage-1's resolver contract.
+    #
+    # `system_events: ["daily_summary"]` is set for parity with the
+    # legacy SystemEventScheduler query even though the resolver now
+    # keys off role_assignments — belt-and-suspenders in case any
+    # sibling code path still consults the agents table directly.
+    defp create_historian_agent(overrides \\ %{}) do
+      suffix = System.unique_integer([:positive])
+
+      attrs =
+        Map.merge(
+          %{
+            slug: "historian-#{suffix}",
+            name: "Historian #{suffix}",
+            status: "active",
+            kind: "native",
+            metadata: %{"system_events" => ["daily_summary"]}
+          },
+          overrides
+        )
+
+      agent =
+        %Agent{}
+        |> Agent.changeset(attrs)
+        |> Repo.insert!()
+
+      {:ok, _} = Roles.assign_role("historian", agent.id)
+      agent
+    end
+
+    test "channel with active historian → historian joined as heartbeat participant" do
+      historian = create_historian_agent()
+      space = create_space()
+
+      participants = Chat.list_participants(space.id, participant_type: "agent")
+
+      assert [p] = participants
+      assert p.participant_id == historian.id
+      assert p.participant_type == "agent"
+      assert p.attention_mode == "heartbeat"
+    end
+
+    test "DM does not auto-join historian" do
+      _historian = create_historian_agent()
+
+      # `created_by` is FK-enforced against users; omit it and let the
+      # kind: "dm" clause of the changeset accept a slug-less space.
+      {:ok, dm} = Chat.create_space(%{kind: "dm", is_direct: true})
+
+      assert Chat.list_participants(dm.id, participant_type: "agent") == []
+    end
+
+    test "space with slug beginning system- does not auto-join historian" do
+      _historian = create_historian_agent()
+
+      {:ok, space} =
+        Chat.create_space(%{
+          name: "System Higgins",
+          slug: "system-higgins-#{System.unique_integer([:positive])}",
+          kind: "channel"
+        })
+
+      assert Chat.list_participants(space.id, participant_type: "agent") == []
+    end
+
+    test "no historian pinned → create_space succeeds with no agent participant" do
+      # No historian seeded — resolver returns nil, hook silently skips.
+      space = create_space()
+
+      assert Chat.list_participants(space.id, participant_type: "agent") == []
+    end
+
+    test "idempotent when historian already a participant" do
+      historian = create_historian_agent()
+      space = create_space()
+
+      # First create_space already attached the historian via the hook.
+      # Simulate a second attach attempt (as maybe_add_historian would
+      # via its dedupe path) — should return {:ok, existing} without
+      # creating a duplicate row.
+      assert {:ok, _existing} =
+               Chat.add_agent_participant(space.id, historian.id, attention_mode: "heartbeat")
+
+      participants = Chat.list_participants(space.id, participant_type: "agent")
+      assert length(participants) == 1
+      assert hd(participants).participant_id == historian.id
+    end
+
+    test "add_agent_participant failure does not crash create_space" do
+      # Reproduce the failure branch by pointing role_assignments at a
+      # non-existent agent id. `add_agent_participant(space.id, id)`
+      # will call `Repo.get(Agent, id)`, get nil, and return
+      # {:error, :not_found} — exactly the failure the hook must
+      # swallow without breaking space creation.
+      #
+      # The role_assignments FK to agents is DB-enforced, so we
+      # temporarily disable session replication to insert a row that
+      # references a bogus id. This is contained within the sandbox
+      # transaction — no leak between tests.
+      bogus_id = Ecto.UUID.generate()
+
+      # `SET LOCAL` is transaction-scoped, so it evaporates when the
+      # sandbox rolls back — no leak to sibling tests reusing the
+      # connection. Requires the test DB user to be superuser (which
+      # `PGUSER=postgres` in config/test.exs satisfies).
+      Repo.query!("SET LOCAL session_replication_role = 'replica'")
+
+      Repo.query!(
+        "INSERT INTO role_assignments (id, role_key, agent_id, inserted_at, updated_at) " <>
+          "VALUES ($1, 'historian', $2, NOW(), NOW())",
+        [
+          Ecto.UUID.dump!(Ecto.UUID.generate()),
+          Ecto.UUID.dump!(bogus_id)
+        ]
+      )
+
+      Repo.query!("SET LOCAL session_replication_role = 'origin'")
+
+      # Sanity: resolver returns the bogus id.
+      assert Roles.agent_id_for_role("historian") == bogus_id
+
+      log =
+        capture_log(fn ->
+          assert {:ok, %Platform.Chat.Space{} = space} =
+                   Chat.create_space(%{
+                     name: "Resilient",
+                     slug: unique_slug(),
+                     kind: "channel"
+                   })
+
+          # No participant was inserted because add_agent_participant
+          # returned {:error, :not_found} before touching participants.
+          assert Chat.list_participants(space.id, participant_type: "agent") == []
+        end)
+
+      assert log =~ "[Chat.create_space] historian attach failed"
+      assert log =~ "not_found"
+    end
+  end
 end

@@ -34,6 +34,8 @@ defmodule Platform.Chat do
 
   import Ecto.Query
 
+  require Logger
+
   alias Ecto.Multi
   alias Platform.Agents.{Agent, AgentRuntime}
 
@@ -76,6 +78,12 @@ defmodule Platform.Chat do
           %{space_id: space.id, slug: space.slug, kind: space.kind}
         )
 
+        # Attach the role-pinned historian agent BEFORE broadcasting the
+        # space so subscribers that render the roster on :space_created
+        # see the historian already present — no "channel appeared →
+        # historian joined a beat later" UI flicker.
+        maybe_add_historian(space)
+
         # Broadcast on the global space-lifecycle topic so connected chat
         # sessions can surface the new channel without requiring a refresh.
         ChatPubSub.broadcast_space_event({:space_created, space})
@@ -85,6 +93,57 @@ defmodule Platform.Chat do
     end
 
     result
+  end
+
+  # DMs are private-to-participants by contract — no observer agents.
+  defp maybe_add_historian(%Space{kind: "dm"}), do: :ok
+  # `system-*` slugs are Historian's own dispatch spaces; self-join is a no-op.
+  defp maybe_add_historian(%Space{slug: "system-" <> _}), do: :ok
+  # Any space without a slug (e.g. execution spaces) is out of scope; the
+  # historian roster surface keys off slug-visible spaces today.
+  defp maybe_add_historian(%Space{slug: nil}), do: :ok
+
+  defp maybe_add_historian(%Space{slug: slug} = space) when is_binary(slug) do
+    case Platform.Roles.agent_id_for_role("historian") do
+      nil ->
+        :ok
+
+      historian_id ->
+        # Defense-in-depth: `add_agent_participant/3` is already idempotent
+        # (returns `{:ok, existing}` on duplicate) but skipping explicitly
+        # keeps the log clean and makes intent obvious to future readers.
+        case get_agent_participant(space.id, historian_id) do
+          %Participant{} -> :ok
+          nil -> attach_historian(space, historian_id, slug)
+        end
+    end
+  rescue
+    err ->
+      Logger.warning(
+        "[Chat.create_space] historian attach raised for slug=#{inspect(space.slug)}: " <>
+          Exception.message(err)
+      )
+
+      :ok
+  end
+
+  defp attach_historian(space, historian_id, slug) do
+    case add_agent_participant(space.id, historian_id, attention_mode: "heartbeat") do
+      {:ok, _participant} ->
+        Logger.info(
+          "[Chat.create_space] auto-joined historian to space slug=#{slug} " <>
+            "historian_id=#{historian_id}"
+        )
+
+        :ok
+
+      {:error, reason} ->
+        Logger.warning(
+          "[Chat.create_space] historian attach failed for slug=#{slug}: #{inspect(reason)}"
+        )
+
+        :ok
+    end
   end
 
   @doc "Fetch a space by primary key. Returns `nil` if not found."

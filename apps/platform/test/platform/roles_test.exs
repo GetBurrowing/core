@@ -358,6 +358,54 @@ defmodule Platform.RolesTest do
 
   # ── Resolver ────────────────────────────────────────────────────────
 
+  describe "agent_id_for_role/1" do
+    test "returns nil when the role is unassigned" do
+      seed_role!("historian")
+      # no assign_role/2 call — role exists, nobody holds it
+      assert Roles.agent_id_for_role("historian") == nil
+    end
+
+    test "returns the pinned agent id when a role is assigned" do
+      seed_role!("historian")
+      agent = insert_agent!()
+      {:ok, _} = Roles.assign_role("historian", agent.id)
+
+      assert Roles.agent_id_for_role("historian") == agent.id
+    end
+
+    test "returns nil for an unknown role key without raising" do
+      # Never seeded, never assigned. Chat.create_space's caller relies on
+      # this returning nil (silent skip) rather than raising, so a bogus
+      # role_key in a hot path degrades to a no-op instead of a 500.
+      assert Roles.agent_id_for_role("librarian") == nil
+    end
+
+    test "returns the id (binary), not a preloaded agent struct" do
+      seed_role!("historian")
+      agent = insert_agent!()
+      {:ok, _} = Roles.assign_role("historian", agent.id)
+
+      result = Roles.agent_id_for_role("historian")
+      assert is_binary(result)
+      refute match?(%Agent{}, result)
+    end
+
+    test "reflects the swap after unassign + re-assign" do
+      seed_role!("historian")
+      first = insert_agent!()
+      second = insert_agent!()
+
+      {:ok, _} = Roles.assign_role("historian", first.id)
+      assert Roles.agent_id_for_role("historian") == first.id
+
+      :ok = Roles.unassign_role("historian")
+      assert Roles.agent_id_for_role("historian") == nil
+
+      {:ok, _} = Roles.assign_role("historian", second.id)
+      assert Roles.agent_id_for_role("historian") == second.id
+    end
+  end
+
   describe "assignee_for/1" do
     test "returns nil when nothing matches" do
       assert Roles.assignee_for("nope") == nil
