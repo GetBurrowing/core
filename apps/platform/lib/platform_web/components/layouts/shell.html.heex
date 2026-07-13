@@ -72,13 +72,11 @@
       <div class="flex items-center gap-2">
         <%!-- Mobile primary nav is the bottom-nav from #13; the original
              hamburger + drawer pattern was deleted in task 019e0d4b Stage 2. --%>
-        <%!-- Active module name (mobile only) --%>
-        <span class="text-sm font-semibold lg:hidden">
+        <%!-- Active module name — desktop too since task 019f575e stage 3:
+             the brand moved into the rail header, so the bar carries the
+             current-module context instead of a second brand mark. --%>
+        <span class="text-sm font-semibold">
           {@active_module}
-        </span>
-        <%!-- Suite name (desktop only) --%>
-        <span class="hidden text-xs font-semibold uppercase tracking-widest text-base-content/50 lg:inline">
-          Startup Suite
         </span>
       </div>
       <div class="flex items-center gap-2">

@@ -46,6 +46,7 @@ defmodule PlatformWeb.Components.IconRail do
   """
 
   use Phoenix.Component
+  use PlatformWeb, :verified_routes
 
   import PlatformWeb.CoreComponents, only: [icon: 1]
 
@@ -64,6 +65,14 @@ defmodule PlatformWeb.Components.IconRail do
     doc: "when true, rail collapses to icon-only (56px); when false, expands to 224px with labels"
   )
 
+  attr(:destinations, :list,
+    default: nil,
+    doc:
+      "test/preview seam — overrides the canonical destination list. Entries may carry " <>
+        ":children (indent-only rows, task 019f575e stage 4); production always uses the " <>
+        "canonical list (nil)."
+  )
+
   @doc """
   Desktop vertical icon-rail. Hidden below the `lg` breakpoint.
 
@@ -74,100 +83,181 @@ defmodule PlatformWeb.Components.IconRail do
   def icon_rail(assigns) do
     is_fabrikam_user = Map.get(assigns, :is_fabrikam_user, false)
     current_path = Map.get(assigns, :current_path, "/")
+    collapsed = Map.get(assigns, :sidebar_collapsed, false)
+    all = assigns[:destinations] || canonical_destinations()
 
-    live = destinations_for(:live) |> filter_fabrikam_only(is_fabrikam_user)
-    working = destinations_for(:working) |> filter_fabrikam_only(is_fabrikam_user)
-    admin = destinations_for(:admin) |> filter_fabrikam_only(is_fabrikam_user)
+    live = cluster_destinations(all, :live, is_fabrikam_user)
+    working = cluster_destinations(all, :working, is_fabrikam_user)
+    admin = cluster_destinations(all, :admin, is_fabrikam_user)
+
+    visible = live ++ working ++ admin
+
+    # Single winner computed across every VISIBLE desktop destination so the
+    # CSS active class and aria-current can never disagree, and so a
+    # fabrikam-filtered tile never lights up. Children join the pool only when
+    # expanded: collapsed mode doesn't render child rows, and the parent's
+    # shorter prefix then wins the match so the iconed parent lights up.
+    # See active_destination_key/2.
+    pool =
+      if collapsed do
+        visible
+      else
+        visible ++ Enum.flat_map(visible, &Map.get(&1, :children, []))
+      end
 
     assigns =
       assigns
       |> assign(:live_destinations, live)
       |> assign(:working_destinations, working)
       |> assign(:admin_destinations, admin)
-      # Single winner computed across every VISIBLE desktop destination so the
-      # CSS active class and aria-current can never disagree, and so a
-      # fabrikam-filtered tile never lights up. See active_destination_key/2.
-      |> assign(:active_key, active_destination_key(live ++ working ++ admin, current_path))
+      |> assign(:active_key, active_destination_key(pool, current_path))
 
     ~H"""
     <nav
       id="shell-sidebar"
       class={[
-        "icon-rail hidden lg:flex flex-col gap-2 border-r border-base-300 bg-base-200 py-4 px-2 transition-[width] duration-200 ease-in-out",
+        "icon-rail hidden lg:flex flex-col gap-2 border-r border-base-300 bg-base-200 pb-4 px-2 transition-[width] duration-[var(--duration-base)] ease-[var(--ease-standard)]",
         if(@sidebar_collapsed, do: "lg:w-14", else: "w-56")
       ]}
       role="navigation"
       aria-label="Main navigation"
       data-icon-rail
     >
-      <div class="icon-rail-cluster icon-rail-cluster--live" data-cluster="live">
-        <.link
-          :for={dest <- @live_destinations}
-          navigate={dest.path}
-          class={["icon-rail-tab", desktop_active_class(dest, @active_key)]}
-          data-destination={dest.key}
-          data-module-id={dest.key}
-          aria-label={dest.label}
-          aria-current={aria_current_for(dest, @active_key)}
-          title={dest.label}
+      <%!-- Brand header (task 019f575e stage 3): Console-style logo + wordmark +
+           collapse toggle at the top of the rail. The 40px logo tile shares the
+           tab-icon geometry (20px glyph on the same left inset), so the icon
+           spine keeps a constant x-position through collapse. -mx-2/px-2 lets
+           the hairline span the full rail width despite the nav's px-2 inset. --%>
+      <div class="icon-rail-header -mx-2 flex h-12 flex-shrink-0 items-center border-b border-base-300 px-2">
+        <div class="flex size-10 flex-shrink-0 items-center justify-center">
+          <img src={~p"/images/logo.svg"} alt="Startup Suite" class="size-5" />
+        </div>
+        <span :if={!@sidebar_collapsed} class="icon-rail-label text-sm font-semibold">
+          Startup Suite
+        </span>
+        <button
+          :if={!@sidebar_collapsed}
+          type="button"
+          class="ml-auto flex size-8 flex-shrink-0 items-center justify-center rounded-lg text-base-content/40 transition-colors hover:bg-base-300 hover:text-base-content"
+          phx-click="toggle_sidebar"
+          title="Collapse sidebar"
+          aria-label="Collapse sidebar"
         >
-          <.icon name={dest.hero_icon} class="icon-rail-icon size-5 flex-shrink-0" />
-          <span :if={!@sidebar_collapsed} class="icon-rail-label">{dest.label}</span>
-        </.link>
+          <.icon name="hero-chevron-double-left" class="size-4" />
+        </button>
       </div>
 
-      <hr class="icon-rail-divider border-base-300 my-2" />
-
-      <div class="icon-rail-cluster icon-rail-cluster--working" data-cluster="working">
-        <.link
-          :for={dest <- @working_destinations}
-          navigate={dest.path}
-          class={["icon-rail-tab", desktop_active_class(dest, @active_key)]}
-          data-destination={dest.key}
-          data-module-id={dest.key}
-          aria-label={dest.label}
-          aria-current={aria_current_for(dest, @active_key)}
-          title={dest.label}
-        >
-          <.icon name={dest.hero_icon} class="icon-rail-icon size-5 flex-shrink-0" />
-          <span :if={!@sidebar_collapsed} class="icon-rail-label">{dest.label}</span>
-        </.link>
-      </div>
-
-      <div class="mt-auto icon-rail-cluster icon-rail-cluster--admin" data-cluster="admin">
-        <.link
-          :for={dest <- @admin_destinations}
-          :if={@is_fabrikam_user}
-          navigate={dest.path}
-          class={["icon-rail-tab", desktop_active_class(dest, @active_key)]}
-          data-destination={dest.key}
-          data-module-id={dest.key}
-          aria-label={dest.label}
-          aria-current={aria_current_for(dest, @active_key)}
-          title={dest.label}
-        >
-          <.icon name={dest.hero_icon} class="icon-rail-icon size-5 flex-shrink-0" />
-          <span :if={!@sidebar_collapsed} class="icon-rail-label">{dest.label}</span>
-        </.link>
-      </div>
-
-      <%!-- Collapse toggle (desktop only). Lives at the bottom of the rail
-           via the Admin cluster's mt-auto pushing the divider below it.
-           Wrapped in its own flex slot so it sits flush at the bottom even
-           when Admin is hidden for non-Fabrikam users. --%>
+      <%!-- Collapsed: the wordmark and inline toggle hide; the toggle gets its
+           own row directly under the header hairline so the 56px rail keeps a
+           32px hit target without crowding the logo tile. --%>
       <button
+        :if={@sidebar_collapsed}
         type="button"
-        class="hidden lg:flex items-center justify-center rounded-lg p-1 text-base-content/40 hover:bg-base-300 hover:text-base-content transition-colors"
+        class="mx-auto flex size-8 flex-shrink-0 items-center justify-center rounded-lg text-base-content/40 transition-colors hover:bg-base-300 hover:text-base-content"
         phx-click="toggle_sidebar"
-        title={if @sidebar_collapsed, do: "Expand sidebar", else: "Collapse sidebar"}
-        aria-label={if @sidebar_collapsed, do: "Expand sidebar", else: "Collapse sidebar"}
+        title="Expand sidebar"
+        aria-label="Expand sidebar"
       >
-        <.icon
-          name={if @sidebar_collapsed, do: "hero-chevron-right", else: "hero-chevron-left"}
-          class="size-5"
-        />
+        <.icon name="hero-chevron-double-right" class="size-4" />
       </button>
+
+      <%!-- Group eyebrows (task 019f575e stage 4): the cluster names carry
+           real meaning — Live = real-time surfaces, Working = reference —
+           so expanded mode labels them instead of a bare divider. Collapsed
+           mode degrades each eyebrow to a hairline (except Live, whose
+           upper boundary is the header hairline). --%>
+      <.rail_eyebrow
+        label="Live"
+        sidebar_collapsed={@sidebar_collapsed}
+        collapsed_divider={false}
+      />
+      <.rail_cluster
+        destinations={@live_destinations}
+        cluster="live"
+        active_key={@active_key}
+        sidebar_collapsed={@sidebar_collapsed}
+      />
+
+      <.rail_eyebrow label="Working" sidebar_collapsed={@sidebar_collapsed} />
+      <.rail_cluster
+        destinations={@working_destinations}
+        cluster="working"
+        active_key={@active_key}
+        sidebar_collapsed={@sidebar_collapsed}
+      />
+
+      <div class="mt-auto" aria-hidden="true"></div>
+      <%= if @is_fabrikam_user do %>
+        <.rail_eyebrow label="Admin" sidebar_collapsed={@sidebar_collapsed} />
+        <.rail_cluster
+          destinations={@admin_destinations}
+          cluster="admin"
+          active_key={@active_key}
+          sidebar_collapsed={@sidebar_collapsed}
+        />
+      <% end %>
     </nav>
+    """
+  end
+
+  # Group eyebrow (expanded) with hairline fallback (collapsed). The Live
+  # cluster opts out of the fallback — its upper boundary when collapsed is
+  # the brand header's hairline, and stacking two rules reads as a glitch.
+  attr(:label, :string, required: true)
+  attr(:sidebar_collapsed, :boolean, default: false)
+  attr(:collapsed_divider, :boolean, default: true)
+
+  defp rail_eyebrow(assigns) do
+    ~H"""
+    <div :if={!@sidebar_collapsed} class="icon-rail-eyebrow">{@label}</div>
+    <hr
+      :if={@sidebar_collapsed and @collapsed_divider}
+      class="icon-rail-divider border-base-300 my-2"
+    />
+    """
+  end
+
+  # One cluster of destinations. Child entries (dest.children) render as
+  # indent-only rows — no icon, text aligned with the parent label, same
+  # hover pill and active grammar as parents (Console "Managed Agents"
+  # pattern, task 019f575e stage 4). Children never render collapsed; the
+  # active pool in icon_rail/1 lets the parent light up instead.
+  attr(:destinations, :list, required: true)
+  attr(:cluster, :string, required: true)
+  attr(:active_key, :atom, default: nil)
+  attr(:sidebar_collapsed, :boolean, default: false)
+
+  defp rail_cluster(assigns) do
+    ~H"""
+    <div class={"icon-rail-cluster icon-rail-cluster--#{@cluster}"} data-cluster={@cluster}>
+      <%= for dest <- @destinations do %>
+        <.link
+          navigate={dest.path}
+          class={["icon-rail-tab", desktop_active_class(dest, @active_key)]}
+          data-destination={dest.key}
+          data-module-id={dest.key}
+          aria-label={dest.label}
+          aria-current={aria_current_for(dest, @active_key)}
+          title={dest.label}
+        >
+          <.icon name={dest.hero_icon} class="icon-rail-icon size-5 flex-shrink-0" />
+          <span :if={!@sidebar_collapsed} class="icon-rail-label">{dest.label}</span>
+        </.link>
+        <.link
+          :for={child <- Map.get(dest, :children, [])}
+          :if={!@sidebar_collapsed}
+          navigate={child.path}
+          class={["icon-rail-tab icon-rail-tab--child", desktop_active_class(child, @active_key)]}
+          data-destination={child.key}
+          data-module-id={child.key}
+          aria-label={child.label}
+          aria-current={aria_current_for(child, @active_key)}
+          title={child.label}
+        >
+          <span class="icon-rail-label">{child.label}</span>
+        </.link>
+      <% end %>
+    </div>
     """
   end
 
@@ -254,9 +344,10 @@ defmodule PlatformWeb.Components.IconRail do
   # Internals
   # ------------------------------------------------------------------
 
-  defp destinations_for(cluster) do
-    canonical_destinations()
+  defp cluster_destinations(all, cluster, is_fabrikam_user) do
+    all
     |> Enum.filter(&(&1.cluster == cluster))
+    |> filter_fabrikam_only(is_fabrikam_user)
   end
 
   # Apply the fabrikam_only? filter against a per-render is_fabrikam_user flag.

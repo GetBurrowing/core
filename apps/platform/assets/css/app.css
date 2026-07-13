@@ -2321,8 +2321,9 @@ body, .font-fabrikam {
   position: relative;
   display: flex;
   align-items: center;
-  gap: 0.625rem;
-  padding: 0.5rem 0.625rem;
+  /* 8px grid (re-skin Phase 3a stage 5) — was 0.625rem gap/inline pad */
+  gap: 0.5rem;
+  padding: 0.5rem;
   border-radius: 0.5rem;
   color: var(--color-base-content);
   text-decoration: none;
@@ -2349,6 +2350,41 @@ body, .font-fabrikam {
   height: 28px;
   background: var(--color-primary);
   border-radius: 0 3px 3px 0;
+}
+
+/* Group eyebrows + indent-only child rows — re-skin Phase 3a stage 4
+   (task 019f575e). The eyebrow's left padding matches the tab's text
+   inset so the label column reads as one edge. The child row's left
+   padding equals tab padding-left + icon width + gap, so child text
+   aligns exactly with parent labels; parents get weight 500 so depth
+   reads through weight, not just indent. All three insets move to the
+   8px grid together with the tab padding in stage 5. */
+.icon-rail-eyebrow {
+  padding: 1rem 0.5rem 0.25rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: color-mix(in oklab, var(--color-base-content) 50%, transparent);
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.icon-rail-tab:not(.icon-rail-tab--child) .icon-rail-label {
+  font-weight: 500;
+}
+
+.icon-rail-tab--child {
+  padding-left: 2.25rem; /* 0.5rem pad + 1.25rem icon + 0.5rem gap = 36px */
+}
+
+.icon-rail-tab--child .icon-rail-label {
+  font-weight: 400;
+  color: color-mix(in oklab, var(--color-base-content) 70%, transparent);
+}
+
+.icon-rail-tab--child.icon-rail-tab--active .icon-rail-label {
+  color: inherit;
 }
 
 .bottom-nav-icon {

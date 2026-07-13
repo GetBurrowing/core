@@ -138,10 +138,21 @@ defmodule PlatformWeb.Components.IconRailTest do
       assert html =~ ~s(aria-label="Main navigation")
     end
 
-    test "renders Live and Working clusters with a divider" do
+    test "renders Live and Working clusters with group eyebrows (expanded)" do
       html = render_icon_rail(%{})
       assert html =~ ~s(data-cluster="live")
       assert html =~ ~s(data-cluster="working")
+      # Stage 4 (task 019f575e): expanded mode labels the groups instead of
+      # rendering a bare divider; the hairline only appears collapsed.
+      assert html =~ "icon-rail-eyebrow"
+      assert html =~ ">Live<"
+      assert html =~ ">Working<"
+      refute html =~ "icon-rail-divider"
+    end
+
+    test "collapsed mode degrades eyebrows to a hairline divider" do
+      html = render_icon_rail(%{sidebar_collapsed: true})
+      refute html =~ "icon-rail-eyebrow"
       assert html =~ "icon-rail-divider"
     end
 
@@ -179,12 +190,84 @@ defmodule PlatformWeb.Components.IconRailTest do
       assert count_data_destination_matches(html) == 8
     end
 
-    test "Admin slot uses mt-auto so it pins to the bottom of the rail" do
+    test "Admin slot pins to the bottom of the rail via the mt-auto spacer" do
       html = render_icon_rail(%{is_fabrikam_user: true})
-      # The Admin cluster wrapper carries the mt-auto class, which pushes it
-      # to the bottom of the flex column above the collapse toggle.
-      assert html =~ ~r/class="mt-auto[^"]*icon-rail-cluster--admin/ or
-               html =~ ~r/mt-auto[^"]*data-cluster="admin"/s
+      # Stage 4 restructure: a dedicated mt-auto spacer precedes the Admin
+      # eyebrow + cluster, pushing them to the bottom of the flex column.
+      assert html =~ ~r/mt-auto.*data-cluster="admin"/s
+    end
+  end
+
+  describe "icon_rail/1 — group eyebrows + indent-only child rows (stage 4)" do
+    # No canonical destination carries children today (re-parenting is
+    # Marlowe's call); the rendering contract is locked in via the
+    # `destinations` test seam.
+    @stage4_destinations [
+      %{
+        key: :alpha,
+        label: "Alpha",
+        path: "/alpha",
+        hero_icon: "hero-book-open",
+        cluster: :live,
+        fabrikam_only?: false,
+        children: [%{key: :alpha_child, label: "Alpha Child", path: "/alpha/child"}]
+      },
+      %{
+        key: :beta,
+        label: "Beta",
+        path: "/beta",
+        hero_icon: "hero-inbox",
+        cluster: :working,
+        fabrikam_only?: false
+      }
+    ]
+
+    defp render_with_children(assigns) do
+      assigns =
+        Map.merge(
+          %{
+            current_path: "/",
+            is_fabrikam_user: false,
+            sidebar_collapsed: false,
+            destinations: @stage4_destinations
+          },
+          assigns
+        )
+
+      rendered_to_string(~H"""
+      <.icon_rail
+        current_path={@current_path}
+        is_fabrikam_user={@is_fabrikam_user}
+        sidebar_collapsed={@sidebar_collapsed}
+        destinations={@destinations}
+      />
+      """)
+    end
+
+    test "child rows render indent-only (no icon) in expanded mode" do
+      html = render_with_children(%{})
+      [child_link] = Regex.run(~r/<a[^>]*data-destination="alpha_child".*?<\/a>/s, html)
+      assert child_link =~ "icon-rail-tab--child"
+      refute child_link =~ "hero-"
+      assert child_link =~ "Alpha Child"
+    end
+
+    test "child route lights the child with the shared active grammar, not the parent" do
+      html = render_with_children(%{current_path: "/alpha/child"})
+      assert html =~ ~r/icon-rail-tab--child[^"]*icon-rail-tab--active/
+      # Attribute ORDER within a tag is non-deterministic across runs —
+      # extract each element, then assert attributes independently.
+      [child_link] = Regex.run(~r/<a[^>]*data-destination="alpha_child"[^>]*>/, html)
+      assert child_link =~ ~s(aria-current="page")
+      [parent_link] = Regex.run(~r/<a[^>]*data-destination="alpha"[^>]*>/, html)
+      refute parent_link =~ "aria-current"
+    end
+
+    test "collapsed mode drops child rows and lights the parent for a child route" do
+      html = render_with_children(%{current_path: "/alpha/child", sidebar_collapsed: true})
+      refute html =~ "alpha_child"
+      [parent_link] = Regex.run(~r/<a[^>]*data-destination="alpha"[^>]*>/, html)
+      assert parent_link =~ "icon-rail-tab--active"
     end
   end
 
