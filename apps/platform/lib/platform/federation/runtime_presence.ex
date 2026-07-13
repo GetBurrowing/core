@@ -34,12 +34,22 @@ defmodule Platform.Federation.RuntimePresence do
     Agent.get(__MODULE__, &Map.has_key?(&1, runtime_id))
   end
 
-  @doc "Update the last_seen_at timestamp for a runtime (call on any incoming message)."
+  @doc """
+  Update the last_seen_at timestamp for a runtime (call on any incoming message).
+
+  Self-heals when the entry is missing: any inbound frame from a live channel
+  process upserts the presence entry. This recovers the map after this Agent
+  process crashes/restarts while the RuntimeChannel Cowboy WS processes stay
+  running — otherwise the presence map would be permanently empty even though
+  every runtime is still connected, since `track/1` only runs at join time.
+  """
   def touch(runtime_id) do
     Agent.update(__MODULE__, fn state ->
+      now = DateTime.utc_now()
+
       case Map.get(state, runtime_id) do
-        nil -> state
-        entry -> Map.put(state, runtime_id, %{entry | last_seen_at: DateTime.utc_now()})
+        nil -> Map.put(state, runtime_id, %{connected_at: now, last_seen_at: now})
+        entry -> Map.put(state, runtime_id, %{entry | last_seen_at: now})
       end
     end)
   end

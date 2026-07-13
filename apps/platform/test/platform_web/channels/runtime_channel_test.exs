@@ -115,6 +115,34 @@ defmodule PlatformWeb.RuntimeChannelTest do
       assert {:error, %{reason: "unauthorized"}} =
                subscribe_and_join(socket, "runtime:wrong-id", %{})
     end
+
+    test "channel process re-tracks presence when the RuntimePresence Agent state resets", ctx do
+      {:ok, socket} =
+        connect(PlatformWeb.RuntimeSocket, %{
+          "runtime_id" => ctx.runtime.runtime_id,
+          "token" => ctx.raw_token
+        })
+
+      {:ok, _reply, joined_socket} =
+        subscribe_and_join(socket, "runtime:#{ctx.runtime.runtime_id}", %{})
+
+      assert Platform.Federation.RuntimePresence.online?(ctx.runtime.runtime_id)
+
+      # Simulate the RuntimePresence Agent process crashing / hot-reloading
+      # while the live RuntimeChannel process keeps running.
+      # Fully-qualified because this file aliases `Platform.Agents.Agent`.
+      Elixir.Agent.update(Platform.Federation.RuntimePresence, fn _ -> %{} end)
+      refute Platform.Federation.RuntimePresence.online?(ctx.runtime.runtime_id)
+
+      # Fire the retrack message directly — bypasses the 30s timer to keep
+      # the test fast. The scheduled cycle uses the same handler.
+      send(joined_socket.channel_pid, :presence_retrack)
+
+      # Give the channel process a scheduling tick.
+      _ = :sys.get_state(joined_socket.channel_pid)
+
+      assert Platform.Federation.RuntimePresence.online?(ctx.runtime.runtime_id)
+    end
   end
 
   describe "client_info handshake on join" do

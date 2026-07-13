@@ -16,6 +16,13 @@ defmodule PlatformWeb.RuntimeChannel do
 
   @valid_client_products ~w(openclaw claude_channel)
 
+  # How often to re-affirm this runtime's presence from the live channel
+  # process. Belt-and-suspenders against RuntimePresence Agent crashes /
+  # hot-reloads that would otherwise leave the map permanently empty.
+  # 30s matches the Phoenix Socket transport heartbeat cadence — same
+  # order of magnitude, no meaningful load.
+  @presence_retrack_interval_ms 30_000
+
   @impl true
   def join("runtime:" <> runtime_id, params, socket) do
     if runtime_id == socket.assigns.runtime_id do
@@ -64,6 +71,16 @@ defmodule PlatformWeb.RuntimeChannel do
       # Push capabilities after join completes (push/3 not allowed during join/3)
       send(self(), :send_capabilities)
 
+      # Periodically re-affirm presence from this live channel process.
+      # `track/1` only runs at join time; if the RuntimePresence Agent crashes
+      # or is hot-reloaded, the map resets to %{} but every live channel process
+      # keeps running (transport heartbeats keep the socket alive, so no
+      # rejoin fires). Without this retrack, receive-only runtimes (which
+      # never emit an inbound frame that would touch/1) stay presence-empty
+      # forever, and AgentResponder.dispatch_to_external dead-letters DMs
+      # and @mentions to them.
+      schedule_presence_retrack()
+
       {:ok, socket}
     else
       {:error, %{reason: "unauthorized"}}
@@ -94,6 +111,12 @@ defmodule PlatformWeb.RuntimeChannel do
       push(socket, "spaces_manifest", %{spaces: payload})
     end
 
+    {:noreply, socket}
+  end
+
+  def handle_info(:presence_retrack, socket) do
+    RuntimePresence.track(socket.assigns.runtime_id)
+    schedule_presence_retrack()
     {:noreply, socket}
   end
 
@@ -437,6 +460,10 @@ defmodule PlatformWeb.RuntimeChannel do
   end
 
   # ── Helpers ─────────────────────────────────────────────────────────
+
+  defp schedule_presence_retrack do
+    Process.send_after(self(), :presence_retrack, @presence_retrack_interval_ms)
+  end
 
   @max_attachment_size 10 * 1024 * 1024
   @max_total_size 25 * 1024 * 1024
