@@ -25,6 +25,9 @@ defmodule Platform.Agents.HistorianTest do
   alias Platform.Org.WikiJournalEntry, as: MemoryEntry
   alias Platform.Org.WikiPage
   alias Platform.Repo
+  alias Platform.Tasks.Projects
+
+  @org_scope_workspace_id Projects.org_scope_workspace_id()
 
   # Use a fresh workspace UUID per test so async cases don't collide.
   setup do
@@ -388,6 +391,113 @@ defmodule Platform.Agents.HistorianTest do
       # JSON. Empty-array `[]::text` serializes to 2 bytes. Assert
       # >= 40 as the lower bound.
       assert Map.fetch!(result, ~D[2001-09-03]) >= 40
+    end
+  end
+
+  # ── pending_bytes/1 — org-scope sentinel routes to nil-workspace rows ───
+
+  describe "pending_bytes/1 — org-scope sentinel routes to nil-workspace rows" do
+    test "pages+journal per-day byte-sum for the sentinel matches nil-workspace rows" do
+      day = ~D[2001-10-15]
+
+      # 40-byte journal entry and 40-byte page at the null workspace.
+      insert_journal_at!(nil, String.duplicate("j", 40), day)
+      insert_page_at!(nil, "org-page-a.md", String.duplicate("p", 40), day)
+
+      start_at = ~U[2001-10-15 00:00:00Z]
+      end_at = ~U[2001-10-16 00:00:00Z]
+
+      # Before the fix these both returned %{} for the sentinel — the
+      # `workspace_id == type(sentinel, :binary_id)` filter never matched
+      # actual nil-workspace rows.
+      assert Historian.pending_bytes_per_day(
+               "pages",
+               start_at,
+               end_at,
+               @org_scope_workspace_id
+             ) == %{day => 40}
+
+      assert Historian.pending_bytes_per_day(
+               "journal",
+               start_at,
+               end_at,
+               @org_scope_workspace_id
+             ) == %{day => 40}
+    end
+
+    test "sentinel and explicit nil produce identical pending_bytes_per_day for pages" do
+      day = ~D[2001-10-01]
+
+      insert_page_at!(nil, "org-page-a.md", String.duplicate("a", 60), day)
+      insert_page_at!(nil, "org-page-b.md", String.duplicate("b", 40), day)
+
+      start_at = ~U[2001-10-01 00:00:00Z]
+      end_at = ~U[2001-10-02 00:00:00Z]
+
+      sentinel_result =
+        Historian.pending_bytes_per_day("pages", start_at, end_at, @org_scope_workspace_id)
+
+      nil_result = Historian.pending_bytes_per_day("pages", start_at, end_at)
+
+      assert sentinel_result == %{day => 100}
+      assert sentinel_result == nil_result
+    end
+
+    test "mixed nil + workspace-scoped rows: sentinel sees only nil rows" do
+      day = ~D[2001-11-01]
+      workspace_id = Ecto.UUID.generate()
+
+      # 3 nil-workspace pages @ 30 bytes each = 90 bytes org-scope.
+      for i <- 1..3 do
+        insert_page_at!(nil, "nil-page-#{i}.md", String.duplicate("n", 30), day)
+      end
+
+      # 2 workspace-scoped pages @ 100 bytes each = 200 bytes for that workspace.
+      for i <- 1..2 do
+        insert_page_at!(workspace_id, "ws-page-#{i}.md", String.duplicate("w", 100), day)
+      end
+
+      start_at = ~U[2001-11-01 00:00:00Z]
+      end_at = ~U[2001-11-02 00:00:00Z]
+
+      assert Historian.pending_bytes_per_day(
+               "pages",
+               start_at,
+               end_at,
+               @org_scope_workspace_id
+             ) == %{day => 90}
+
+      assert Historian.pending_bytes_per_day("pages", start_at, end_at, workspace_id) ==
+               %{day => 200}
+    end
+
+    test "messages regression guard: sentinel/random/nil counts all identical" do
+      # chat_messages has no workspace_id column; the sentinel guard must
+      # NOT coerce those clauses. All three calls should observe the same
+      # messages bytes (the fix must not regress this).
+      space = insert_channel_space("hist-sentinel-msgs")
+      participant = insert_user_participant(space.id, "Voice")
+
+      day = ~D[2001-12-01]
+      # 5 messages × 20 bytes = 100 bytes.
+      for _i <- 1..5 do
+        insert_message_at!(space.id, participant.id, String.duplicate("m", 20), day)
+      end
+
+      start_at = ~U[2001-12-01 00:00:00Z]
+      end_at = ~U[2001-12-02 00:00:00Z]
+
+      baseline_sentinel =
+        Historian.pending_bytes_per_day("messages", start_at, end_at, @org_scope_workspace_id)
+
+      baseline_random =
+        Historian.pending_bytes_per_day("messages", start_at, end_at, Ecto.UUID.generate())
+
+      baseline_nil = Historian.pending_bytes_per_day("messages", start_at, end_at)
+
+      assert baseline_sentinel == %{day => 100}
+      assert baseline_sentinel == baseline_random
+      assert baseline_sentinel == baseline_nil
     end
   end
 

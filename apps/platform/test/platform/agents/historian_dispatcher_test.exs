@@ -21,6 +21,8 @@ defmodule Platform.Agents.HistorianDispatcherTest do
   alias Platform.Chat.Message
   alias Platform.Meetings.Transcript
   alias Platform.Orchestration.PromptTemplates
+  alias Platform.Org.WikiJournalEntry, as: MemoryEntry
+  alias Platform.Org.WikiPage
   alias Platform.Repo
   alias Platform.Roles
   alias Platform.Tasks.Projects
@@ -633,6 +635,232 @@ defmodule Platform.Agents.HistorianDispatcherTest do
     end
   end
 
+  # ── HOTFIX: org-scope sentinel advances pages+journal cursors ───────────
+
+  describe "dispatch_windowed/4 — org-scope sentinel advances pages+journal cursors" do
+    # Integration coverage for the sum_corpus_bytes bug (task 019f5cf4).
+    # Before the stage-1 fix, sentinel dispatches for pages+journal returned
+    # 0 bytes → 0 windows → the pages/journal cursors on the sentinel
+    # workspace never advanced. These tests seed nil-workspace rows and
+    # verify the sentinel-scoped sweep actually walks them.
+    #
+    # `Platform.Org.Seeds` inserts three default nil-workspace pages
+    # (`org/page/identity.md` + friends) at test-env boot totalling ~600
+    # bytes. We prune them per-test so the day-bytes telemetry assertions
+    # can pin exact per-day counts. The sandbox rolls back the delete so
+    # other test files see the original seed set.
+    setup do
+      Repo.delete_all(from(p in WikiPage, where: is_nil(p.workspace_id)))
+      Repo.delete_all(from(j in MemoryEntry, where: is_nil(j.workspace_id)))
+      :ok
+    end
+
+    test "happy path: nil-workspace pages+journal rows dispatch and cursors advance" do
+      # Budget = 30_000 tokens. Each row = 100KB (25_000 tokens < budget so a
+      # single day fits in one window); total per corpus = 300KB (75_000
+      # tokens > budget) so the slicer fans out to per-day windows rather
+      # than emitting a single collapsed range. That per-day fanout is the
+      # only path that populates the `day_bytes` telemetry field and is
+      # what the sentinel bug (task 019f5cf4) prevented from ever firing.
+      Application.put_env(:platform, :historian_window_token_budget, 30_000)
+      Application.put_env(:platform, :historian_max_windows_per_pass, 20)
+
+      now = DateTime.utc_now()
+      day1 = DateTime.to_date(DateTime.add(now, -3 * 86_400, :second))
+      day2 = DateTime.to_date(DateTime.add(now, -2 * 86_400, :second))
+      day3 = DateTime.to_date(DateTime.add(now, -1 * 86_400, :second))
+
+      # 3 pages × 100KB + 3 journal entries × 100KB = ~600KB spanning 3
+      # days, all on the org-scope workspace (workspace_id: nil).
+      insert_page_at!(nil, "org-page-1.md", String.duplicate("p", 100_000), day1)
+      insert_page_at!(nil, "org-page-2.md", String.duplicate("p", 100_000), day2)
+      insert_page_at!(nil, "org-page-3.md", String.duplicate("p", 100_000), day3)
+
+      insert_journal_at!(nil, String.duplicate("j", 100_000), day1)
+      insert_journal_at!(nil, String.duplicate("j", 100_000), day2)
+      insert_journal_at!(nil, String.duplicate("j", 100_000), day3)
+
+      # Precondition: no cursor rows for pages/journal at the sentinel yet.
+      for corpus <- ~w(pages journal) do
+        refute Repo.one(
+                 from(c in HistorianCursor,
+                   where: c.workspace_id == ^@org_workspace and c.corpus == ^corpus
+                 )
+               )
+      end
+
+      assert {:ok, %{dispatched: dispatched, remaining: _}} =
+               HistorianDispatcher.dispatch_windowed(
+                 "historian",
+                 "historian.threshold",
+                 %{trigger: "threshold"},
+                 @org_workspace
+               )
+
+      # 3 days × 2 corpora = 6 pages+journal windows (each fits in budget).
+      # Pre-fix, this branch dispatched 0 windows — the bug's observable
+      # symptom on prod. Assert >= 6 to allow for messages/transcripts
+      # windows on unrelated corpus data (shouldn't happen with a clean
+      # sandbox, but the invariant we care about is the pages+journal
+      # dispatch happening at all).
+      assert dispatched >= 6,
+             "expected >= 6 windows (3 days × pages + journal), got #{dispatched}"
+
+      # Cursor rows for pages+journal at the sentinel workspace now exist
+      # with last_processed_at populated and past the newest seeded day.
+      # `advance_cursor` stamps `window.window_end`, which is the end of
+      # the calendar day (start-of-next-day at UTC midnight).
+      newest_day_end = DateTime.new!(Date.add(day3, 1), ~T[00:00:00], "Etc/UTC")
+
+      for corpus <- ~w(pages journal) do
+        cursor =
+          Repo.one!(
+            from(c in HistorianCursor,
+              where: c.workspace_id == ^@org_workspace and c.corpus == ^corpus
+            )
+          )
+
+        assert %DateTime{} = cursor.last_processed_at
+
+        assert DateTime.compare(cursor.last_processed_at, newest_day_end) != :lt,
+               "expected #{corpus} cursor to reach or pass day3 end (#{newest_day_end}), " <>
+                 "got #{cursor.last_processed_at}"
+      end
+    end
+
+    test "mixed rows: sentinel dispatch's day_bytes reflects only nil-workspace rows" do
+      Application.put_env(:platform, :historian_window_token_budget, 30_000)
+      Application.put_env(:platform, :historian_max_windows_per_pass, 20)
+
+      now = DateTime.utc_now()
+      day1 = DateTime.to_date(DateTime.add(now, -3 * 86_400, :second))
+      day2 = DateTime.to_date(DateTime.add(now, -2 * 86_400, :second))
+      day3 = DateTime.to_date(DateTime.add(now, -1 * 86_400, :second))
+
+      other_ws = Ecto.UUID.generate()
+
+      # Nil-workspace rows — 100KB per row across 3 days (300KB/corpus, above
+      # the 30_000-token budget so the per-day fanout branch fires and
+      # populates day_bytes on each emitted window).
+      insert_page_at!(nil, "nil-page-1.md", String.duplicate("p", 100_000), day1)
+      insert_page_at!(nil, "nil-page-2.md", String.duplicate("p", 100_000), day2)
+      insert_page_at!(nil, "nil-page-3.md", String.duplicate("p", 100_000), day3)
+
+      insert_journal_at!(nil, String.duplicate("j", 100_000), day1)
+      insert_journal_at!(nil, String.duplicate("j", 100_000), day2)
+      insert_journal_at!(nil, String.duplicate("j", 100_000), day3)
+
+      # Distinct-workspace rows on the SAME days — 200KB per row so a broken
+      # filter that folded these into the sentinel bucket would produce
+      # day_bytes = 300_000 (100k nil + 200k other_ws) instead of the
+      # correct 100_000.
+      insert_page_at!(other_ws, "ws-page-1.md", String.duplicate("w", 200_000), day1)
+      insert_page_at!(other_ws, "ws-page-2.md", String.duplicate("w", 200_000), day2)
+      insert_journal_at!(other_ws, String.duplicate("v", 200_000), day1)
+      insert_journal_at!(other_ws, String.duplicate("v", 200_000), day2)
+
+      test_pid = self()
+      handler_id = "historian-sentinel-mixed-#{System.unique_integer([:positive])}"
+
+      :telemetry.attach(
+        handler_id,
+        [:platform, :historian, :window_dispatched],
+        fn _event, measurements, metadata, _config ->
+          send(test_pid, {:window_dispatched, measurements, metadata})
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      assert {:ok, %{dispatched: _}} =
+               HistorianDispatcher.dispatch_windowed(
+                 "historian",
+                 "historian.threshold",
+                 %{trigger: "threshold"},
+                 @org_workspace
+               )
+
+      events = drain_window_dispatched_events()
+
+      # Every pages/journal window emitted for the sentinel workspace must
+      # carry day_bytes == 30_000 (the nil rows) — never 80_000, which is
+      # what a broken sentinel filter would produce by folding other_ws
+      # rows into the sentinel sweep.
+      sentinel_wiki_events =
+        Enum.filter(events, fn {_measurements, meta} ->
+          meta[:corpus] in [:pages, :journal] and meta[:workspace_id] == @org_workspace
+        end)
+
+      assert length(sentinel_wiki_events) >= 6,
+             "expected >= 6 pages/journal windows for the sentinel (3 days × 2 corpora), " <>
+               "got #{length(sentinel_wiki_events)}: " <> inspect(sentinel_wiki_events)
+
+      Enum.each(sentinel_wiki_events, fn {measurements, meta} ->
+        assert measurements.day_bytes == 100_000,
+               "expected #{meta[:corpus]} window on #{meta[:day_span]} to carry day_bytes=100_000 " <>
+                 "(nil-workspace only), got #{measurements.day_bytes}"
+      end)
+    end
+
+    test "messages+transcripts regression guard: byte sums identical across sentinel/nil/random" do
+      # Defence-in-depth against a future refactor that widens the sentinel
+      # coercion beyond pages+journal. Stage 1's historian_test covers the
+      # underlying byte-sum path; here we re-assert it from the dispatcher
+      # test context on top of a live nil-workspace pages+journal seed.
+
+      now = DateTime.utc_now()
+      day1 = DateTime.to_date(DateTime.add(now, -3 * 86_400, :second))
+      day2 = DateTime.to_date(DateTime.add(now, -2 * 86_400, :second))
+      day3 = DateTime.to_date(DateTime.add(now, -1 * 86_400, :second))
+
+      # Nil-workspace pages+journal so the DB state matches what a real
+      # sentinel sweep would encounter alongside messages/transcripts.
+      insert_page_at!(nil, "org-page-1.md", String.duplicate("p", 30_000), day1)
+      insert_journal_at!(nil, String.duplicate("j", 30_000), day1)
+
+      # Messages: 5 × 200 bytes on day2 = 1_000 bytes total.
+      chat_space = insert_channel_space("regression-msg")
+      chat_participant = insert_user_participant(chat_space.id, "Voice")
+
+      for _ <- 1..5 do
+        insert_message_at!(chat_space.id, chat_participant.id, String.duplicate("m", 200), day2)
+      end
+
+      # Transcripts: 1 × 300-byte summary on day3.
+      transcript_space = insert_channel_space("regression-tx")
+
+      insert_transcript_at!(
+        %{
+          space_id: transcript_space.id,
+          summary: String.duplicate("s", 300),
+          segments: []
+        },
+        day3
+      )
+
+      start_at = DateTime.new!(day1, ~T[00:00:00], "Etc/UTC")
+      end_at = DateTime.new!(Date.add(day3, 1), ~T[00:00:00], "Etc/UTC")
+
+      random_ws = Ecto.UUID.generate()
+
+      for corpus <- ~w(messages transcripts) do
+        sentinel = Historian.pending_bytes_per_day(corpus, start_at, end_at, @org_workspace)
+        nil_result = Historian.pending_bytes_per_day(corpus, start_at, end_at, nil)
+        random = Historian.pending_bytes_per_day(corpus, start_at, end_at, random_ws)
+
+        assert sentinel == nil_result,
+               "#{corpus}: sentinel #{inspect(sentinel)} != nil #{inspect(nil_result)}"
+
+        assert sentinel == random,
+               "#{corpus}: sentinel #{inspect(sentinel)} != random #{inspect(random)}"
+
+        refute sentinel == %{},
+               "#{corpus}: expected non-empty per-day sums after seeding"
+      end
+    end
+  end
+
   # ── Helpers ─────────────────────────────────────────────────────────────
 
   defp insert_historian_agent do
@@ -772,4 +1000,101 @@ defmodule Platform.Agents.HistorianDispatcherTest do
   # future test scaffolding.
   @doc false
   def _touch_historian, do: Historian.pending_bytes(nil)
+
+  # ── Day-forcing fixture helpers ─────────────────────────────────────────
+  #
+  # Copied verbatim from `historian_test.exs` (helpers section) so the
+  # sentinel-dispatch integration tests can seed rows with a specific
+  # calendar-day `inserted_at`/`updated_at`. Kept in this file (rather
+  # than extracted to a Support module) per the task 019f5cf4 plan —
+  # copy is fine for a hotfix; extraction is a follow-up.
+
+  defp insert_page_at!(workspace_id, file_key, content, %Date{} = day) do
+    {:ok, page} =
+      %WikiPage{}
+      |> WikiPage.changeset(%{
+        workspace_id: workspace_id,
+        file_key: "#{file_key}-#{System.unique_integer([:positive])}",
+        content: content
+      })
+      |> Repo.insert()
+
+    ts = DateTime.new!(day, ~T[12:00:00], "Etc/UTC")
+
+    {1, _} =
+      Repo.update_all(
+        from(p in WikiPage, where: p.id == ^page.id),
+        set: [updated_at: ts, inserted_at: ts]
+      )
+
+    page
+  end
+
+  defp insert_journal!(workspace_id, content) do
+    %MemoryEntry{}
+    |> MemoryEntry.changeset(%{
+      workspace_id: workspace_id,
+      content: content,
+      date: Date.utc_today()
+    })
+    |> Repo.insert!()
+  end
+
+  defp insert_journal_at!(workspace_id, content, %Date{} = day) do
+    row = insert_journal!(workspace_id, content)
+    ts = DateTime.new!(day, ~T[12:00:00], "Etc/UTC")
+
+    {1, _} =
+      Repo.update_all(
+        from(e in MemoryEntry, where: e.id == ^row.id),
+        set: [inserted_at: ts]
+      )
+
+    row
+  end
+
+  defp insert_message_at!(space_id, participant_id, content, %Date{} = day) do
+    {:ok, message} =
+      %Message{}
+      |> Message.changeset(%{
+        space_id: space_id,
+        participant_id: participant_id,
+        content_type: "text",
+        content: content,
+        author_display_name: "Test"
+      })
+      |> Repo.insert()
+
+    ts = DateTime.new!(day, ~T[12:00:00], "Etc/UTC")
+
+    {1, _} =
+      Repo.update_all(
+        from(m in Message, where: m.id == ^message.id),
+        set: [inserted_at: ts]
+      )
+
+    message
+  end
+
+  defp insert_transcript_at!(attrs, %Date{} = day) do
+    defaults = %{
+      room_id: "room-#{System.unique_integer([:positive])}",
+      status: "complete"
+    }
+
+    {:ok, transcript} =
+      %Transcript{}
+      |> Transcript.changeset(Map.merge(defaults, attrs))
+      |> Repo.insert()
+
+    ts = DateTime.new!(day, ~T[12:00:00], "Etc/UTC")
+
+    {1, _} =
+      Repo.update_all(
+        from(t in Transcript, where: t.id == ^transcript.id),
+        set: [updated_at: ts, inserted_at: ts]
+      )
+
+    transcript
+  end
 end

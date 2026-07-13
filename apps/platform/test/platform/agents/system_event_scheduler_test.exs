@@ -566,9 +566,16 @@ defmodule Platform.Agents.SystemEventSchedulerTest do
     end
 
     defp insert_journal_chars!(workspace_id, n) when is_integer(n) and n > 0 do
+      # Prod stores actual org-scope journal rows with `workspace_id IS NULL`;
+      # the sentinel string is a fan-out identifier from `Tasks.Projects`,
+      # never a value written to `org_wiki_journal_entries.workspace_id`.
+      # Coerce here so the test seed mirrors on-disk shape (see
+      # `Historian.sum_corpus_bytes/3` pass-through clauses).
+      seed_ws = if workspace_id == Projects.org_scope_workspace_id(), do: nil, else: workspace_id
+
       %MemoryEntry{}
       |> MemoryEntry.changeset(%{
-        workspace_id: workspace_id,
+        workspace_id: seed_ws,
         content: String.duplicate("x", n),
         date: Date.utc_today()
       })
@@ -869,6 +876,14 @@ defmodule Platform.Agents.SystemEventSchedulerTest do
       # Cap at 20 mirrors the production default the plan pins.
       Application.put_env(:platform, :historian_window_token_budget, 200)
       Application.put_env(:platform, :historian_max_windows_per_pass, 20)
+
+      # Clear baseline nil-workspace pages so the assertions about "all
+      # dispatched windows carry corpus=:messages" aren't broken by the
+      # test DB's seeded org pages (identity.md, memory.md, agents.md).
+      # Post-hotfix the sentinel query correctly includes those rows in
+      # the sweep; without this cleanup a stray page window would leak
+      # into a messages-focused test.
+      Repo.delete_all(from(f in "org_wiki_pages", where: is_nil(f.workspace_id)))
 
       on_exit(fn ->
         restore_env(:chat_agent_module, previous_module)

@@ -142,9 +142,16 @@ defmodule Platform.Agents.SystemEventSchedulerT6E2ETest do
   end
 
   defp insert_journal_chars!(workspace_id, n) when is_integer(n) and n > 0 do
+    # Prod stores actual org-scope journal rows with `workspace_id IS NULL`;
+    # the sentinel string is a fan-out identifier from `Tasks.Projects`,
+    # never a value written to `org_wiki_journal_entries.workspace_id`.
+    # Coerce here so the test seed mirrors on-disk shape (see
+    # `Historian.sum_corpus_bytes/3` pass-through clauses).
+    seed_ws = if workspace_id == Projects.org_scope_workspace_id(), do: nil, else: workspace_id
+
     %MemoryEntry{}
     |> MemoryEntry.changeset(%{
-      workspace_id: workspace_id,
+      workspace_id: seed_ws,
       content: String.duplicate("x", n),
       date: Date.utc_today()
     })
@@ -470,9 +477,16 @@ defmodule Platform.Agents.SystemEventSchedulerT6E2ETest do
 
   describe "Adversarial — bad inputs and edge cases" do
     test "Historian context survives an empty workspace with no cursor rows" do
-      # No journal/messages/transcripts/pages. pending_tokens must be 0
-      # and last_run_at nil — i.e. the threshold sweep is a no-op.
-      assert Historian.pending_tokens(@org_workspace) == 0
+      # No journal/messages/transcripts seeded by this test; a few small
+      # baseline org-scope pages (identity.md / memory.md / agents.md) may
+      # exist from the test DB seed — they contribute <1KB total, well
+      # under the 100k-token threshold, so the sweep still resolves to
+      # `:under_threshold`. Pre-hotfix the sentinel query missed the
+      # nil-workspace pages entirely and this returned 0; post-fix we
+      # assert the token count stays under threshold.
+      assert Historian.pending_tokens(@org_workspace) <
+               Application.get_env(:platform, :historian_threshold_tokens, 100_000)
+
       assert Historian.last_run_at(@org_workspace) == nil
 
       _agent = create_historian_agent()

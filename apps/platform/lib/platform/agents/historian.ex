@@ -35,6 +35,15 @@ defmodule Platform.Agents.Historian do
 
   @corpora ~w(pages journal messages transcripts)
 
+  # Sentinel workspace_id string used by `Platform.Tasks.Projects` to represent
+  # "the whole org" during V1 fan-out (see `Projects.list_active_workspaces/0`).
+  # The pages+journal tables store actual org-scope rows with
+  # `workspace_id IS NULL`, so we translate the sentinel to `nil` at the
+  # query boundary rather than aliasing `Tasks.Projects` (compile-time dep
+  # this context module avoids). If the sentinel ever changes, update both
+  # sites together.
+  @org_scope_workspace_id "00000000-0000-0000-0000-000000000000"
+
   @doc "List of corpus keys the Historian walks."
   def corpora, do: @corpora
 
@@ -227,6 +236,15 @@ defmodule Platform.Agents.Historian do
     |> Repo.one()
   end
 
+  # Org-scope sentinel (from `Tasks.Projects.list_active_workspaces/0` fan-out)
+  # → coerce to nil so we hit the `is_nil(workspace_id)` clauses below.
+  # Guarded to `pages`/`journal` — messages/transcripts ignore workspace_id
+  # entirely and the guard prevents a future refactor from silently
+  # widening the coercion.
+  defp sum_corpus_bytes(corpus, @org_scope_workspace_id, last_at)
+       when corpus in ["pages", "journal"],
+       do: sum_corpus_bytes(corpus, nil, last_at)
+
   # Pages corpus → org_wiki_pages. Updated_at because pages mutate.
   # nil workspace_id (V1 org-scope) → sum across rows with null workspace_id.
   defp sum_corpus_bytes("pages", nil, last_at) do
@@ -323,6 +341,12 @@ defmodule Platform.Agents.Historian do
   # workspace_id since those tables have no such column). Each query
   # groups by `date_trunc('day', <ts>)` and sums octet_length of the
   # content column(s). Half-open `[start_at, end_at)` range.
+
+  # Org-scope sentinel → coerce to nil (matches the `sum_corpus_bytes/3`
+  # pass-through above). Guarded to `pages`/`journal` for the same reason.
+  defp per_day_bytes_query(corpus, @org_scope_workspace_id, start_at, end_at)
+       when corpus in ["pages", "journal"],
+       do: per_day_bytes_query(corpus, nil, start_at, end_at)
 
   # Pages corpus → org_wiki_pages. Updated_at because pages mutate.
   defp per_day_bytes_query("pages", nil, start_at, end_at) do
