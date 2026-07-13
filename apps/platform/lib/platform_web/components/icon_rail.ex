@@ -93,7 +93,7 @@ defmodule PlatformWeb.Components.IconRail do
     <nav
       id="shell-sidebar"
       class={[
-        "icon-rail hidden lg:flex flex-col gap-2 border-r border-base-300 bg-base-200 py-4 px-2 transition-all duration-200 ease-in-out",
+        "icon-rail hidden lg:flex flex-col gap-2 border-r border-base-300 bg-base-200 py-4 px-2 transition-[width] duration-200 ease-in-out",
         if(@sidebar_collapsed, do: "lg:w-14", else: "w-56")
       ]}
       role="navigation"

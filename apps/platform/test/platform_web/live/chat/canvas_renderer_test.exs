@@ -76,6 +76,31 @@ defmodule PlatformWeb.Chat.CanvasRendererTest do
       html = render_canvas(canvas)
       assert html =~ "invalid document"
     end
+
+    test "embed wrapper ids are unique across canvases (morphdom stability)" do
+      embed_node = %{
+        "id" => "embed",
+        "type" => "embed",
+        "props" => %{"srcdoc" => "<!doctype html><body>hi</body>"},
+        "children" => []
+      }
+
+      doc = CanvasDocument.new() |> put_in(["root", "children"], [embed_node])
+
+      html_a = build_canvas(doc, %{id: "canvas-a"}) |> render_canvas(%{inline: true})
+      html_b = build_canvas(doc, %{id: "canvas-b"}) |> render_canvas(%{inline: true})
+
+      [id_a] = Regex.run(~r/id="(embed-canvas-[^"]+)"/, html_a, capture: :all_but_first)
+      [id_b] = Regex.run(~r/id="(embed-canvas-[^"]+)"/, html_b, capture: :all_but_first)
+
+      # Two chat messages each carrying a canvas with the same node id must
+      # not mint the same wrapper DOM id — colliding ids break morphdom's
+      # id-keyed matching on stream re-diffs and remount the iframe
+      # (task 019f51d1).
+      assert id_a != id_b
+      assert id_a =~ "canvas-a"
+      assert id_b =~ "canvas-b"
+    end
   end
 
   describe "Renderer.render_node/1 — kind dispatch" do

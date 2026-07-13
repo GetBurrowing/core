@@ -28,6 +28,14 @@ defmodule PlatformWeb.Chat.CanvasRenderer do
     # expanded copies (e.g. desktop panel + mobile overlay render both under
     # lg:hidden / hidden lg:flex; without a unique id, LiveView warns about
     # duplicate ids even though only one is visible at a time).
+    #
+    # The scope handed to Renderer.render_node MUST also carry canvas.id:
+    # call sites pass constant dom_id_base values ("chat-message-inline"),
+    # so without it two canvases in different messages mint identical ids
+    # for JS-hooked nodes (embed iframes). Colliding ids break morphdom's
+    # id-keyed matching on stream re-diffs, which destroys+recreates the
+    # node — phx-update="ignore" does not survive a remount, so the iframe
+    # reloads and visibly jumps (task 019f51d1).
     mode_suffix = if assigns.inline, do: "inline", else: "expanded"
 
     base = assigns[:dom_id_base]
@@ -52,7 +60,7 @@ defmodule PlatformWeb.Chat.CanvasRenderer do
           phx-click={if(@inline, do: "canvas_open")}
           phx-value-canvas-id={if(@inline, do: @canvas.id)}
         >
-          <Renderer.render_node node={@root_node} dom_id_scope={@id_suffix} />
+          <Renderer.render_node node={@root_node} dom_id_scope={"#{@canvas.id}-#{@id_suffix}"} />
         </div>
         """
 

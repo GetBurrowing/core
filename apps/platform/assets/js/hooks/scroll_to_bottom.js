@@ -10,6 +10,30 @@
 // any JS-side incremental separator logic. The fix is structural:
 // render the separator inside the row template so it inherits the
 // row's stable phx-id.
+//
+// Scroll preservation (task 019f51d1) — two protections against silently
+// discarding the user's reading position:
+//
+// 1. Snaps are gated. The initial-load phase hard-snaps to bottom and ends
+//    the first time the container actually overflows; from then on a snap
+//    only fires when the user is already within NEAR_BOTTOM_PX of the
+//    bottom. (Previously the initial phase persisted until the user
+//    scrolled >300px up, which made every later update an unconditional
+//    yank-to-bottom for anyone who hadn't.)
+//
+// 2. Rail collapse is reflow-anchored. Toggling the sidebar animates a
+//    168px width change; chat text rewraps, scrollHeight changes, and the
+//    browser clamps/re-anchors scrollTop — observed in prod as the pane
+//    snapping to bottom. On `sidebar_collapsed_changed` this hook holds the
+//    user's distance-from-bottom constant on every animation frame for the
+//    duration of the width transition. The scroller also carries
+//    `[overflow-anchor:none]` (chat_live.html.heex) so native anchoring
+//    doesn't fight this hook or InfiniteScroll's manual prepend anchoring.
+
+const NEAR_BOTTOM_PX = 150;
+// The rail width transition is 200ms (icon_rail.ex). Hold a little past it
+// to cover post-transition layout settle; also covers reduced-motion (0ms).
+const REFLOW_HOLD_MS = 400;
 
 const ScrollToBottom = {
   mounted() {
@@ -25,15 +49,12 @@ const ScrollToBottom = {
       this.el.closest("main") ||
       this.el;
     this._initialScroll = true;
-    this._onUserScroll = () => {
-      const distFromBottom =
-        this.scrollEl.scrollHeight -
-        this.scrollEl.scrollTop -
-        this.scrollEl.clientHeight;
-      if (distFromBottom > 300) {
-        this._initialScroll = false;
-      }
-    };
+    this._holdFrame = null;
+
+    this.handleEvent("sidebar_collapsed_changed", () =>
+      this.holdAnchorThroughReflow(),
+    );
+
     // MutationObserver fires when stream inserts new message rows
     this._observer = new MutationObserver(() => {
       this._safeUpdate();
@@ -56,38 +77,49 @@ const ScrollToBottom = {
   },
   destroyed() {
     if (this._observer) this._observer.disconnect();
-    if (this._scrollListenerAdded && this.scrollEl && this._onUserScroll) {
-      this.scrollEl.removeEventListener("scroll", this._onUserScroll);
-      this._scrollListenerAdded = false;
-    }
+    if (this._holdFrame) cancelAnimationFrame(this._holdFrame);
+  },
+  distanceFromBottom() {
+    return (
+      this.scrollEl.scrollHeight -
+      this.scrollEl.scrollTop -
+      this.scrollEl.clientHeight
+    );
   },
   scrollToBottom() {
-    // During initial load, always scroll to bottom. We keep _initialScroll true
-    // until the user explicitly scrolls up, ensuring that late-arriving stream
-    // content (messages rendered after mount) still triggers a snap to bottom.
     if (this._initialScroll) {
       this.scrollEl.scrollTop = this.scrollEl.scrollHeight;
-      // Start listening for user scroll after first meaningful content
-      if (
-        this.scrollEl.scrollHeight > this.scrollEl.clientHeight &&
-        !this._scrollListenerAdded
-      ) {
-        this._scrollListenerAdded = true;
-        this.scrollEl.addEventListener("scroll", this._onUserScroll, {
-          passive: true,
-        });
+      // The initial phase ends once the container actually overflows —
+      // stream batches land async after mount, and each gets the hard
+      // snap until there is real scrollable content to anchor against.
+      if (this.scrollEl.scrollHeight > this.scrollEl.clientHeight) {
+        this._initialScroll = false;
       }
       return;
     }
-    // After initial load, only auto-scroll if user is near the bottom
-    const threshold = 150;
-    const distanceFromBottom =
-      this.scrollEl.scrollHeight -
-      this.scrollEl.scrollTop -
-      this.scrollEl.clientHeight;
-    if (distanceFromBottom <= threshold) {
+    // After initial load, only auto-scroll if the user is near the bottom
+    if (this.distanceFromBottom() <= NEAR_BOTTOM_PX) {
       this.scrollEl.scrollTop = this.scrollEl.scrollHeight;
     }
+  },
+  // Pin the user's distance-from-bottom through the rail width transition.
+  // At the bottom the pin degenerates to bottom-stick (dist 0), which is
+  // what a bottom-anchored reader expects during a reflow.
+  holdAnchorThroughReflow() {
+    const dist = this.distanceFromBottom();
+    const deadline = performance.now() + REFLOW_HOLD_MS;
+    if (this._holdFrame) cancelAnimationFrame(this._holdFrame);
+
+    const hold = () => {
+      this.scrollEl.scrollTop =
+        this.scrollEl.scrollHeight - this.scrollEl.clientHeight - dist;
+      if (performance.now() < deadline) {
+        this._holdFrame = requestAnimationFrame(hold);
+      } else {
+        this._holdFrame = null;
+      }
+    };
+    hold();
   },
   // Walk visible message rows; if the participant matches the previous row,
   // collapse the avatar + header for a compact grouped look.
