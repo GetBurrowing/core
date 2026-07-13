@@ -33,6 +33,11 @@ defmodule Platform.Agents.HistorianDispatcherSliceWindowsTest do
 
   defp input_for(map), do: fn _workspace_id -> map end
 
+  # Stub for `opts[:per_day_fn]` — returns a fixed `%{Date.t() => bytes}`
+  # map regardless of the (corpus, start_at, end_at) arguments. Mirrors
+  # the injection shape callers see for `input_fn`.
+  defp per_day_for(map), do: fn _corpus, _start_at, _end_at -> map end
+
   # ── (a) Empty input → [] ────────────────────────────────────────────────
 
   describe "slice_windows/2 — empty input" do
@@ -101,34 +106,38 @@ defmodule Platform.Agents.HistorianDispatcherSliceWindowsTest do
         messages: {last_at, tokens_to_bytes(90_000)}
       }
 
+      # Even distribution across the three days that own the density.
+      # 07-11 partial (00:00–12:00) has zero rows in this scenario, so
+      # the per-day map omits it and the slicer skips that day-range.
+      per_day = %{
+        ~D[2026-07-08] => tokens_to_bytes(30_000),
+        ~D[2026-07-09] => tokens_to_bytes(30_000),
+        ~D[2026-07-10] => tokens_to_bytes(30_000)
+      }
+
       windows =
         HistorianDispatcher.slice_windows(nil,
           input_fn: input_for(input),
+          per_day_fn: per_day_for(per_day),
           now: now(),
           budget_tokens: 30_000
         )
 
-      # Enumerate_day_ranges walks 07-08, 07-09, 07-10, 07-11 — the 07-08
-      # slice is [12:00, 24:00) (12h), the 07-09/10 slices are full days,
-      # 07-11 is [00:00, 12:00). 4 sub-ranges total; uniform byte
-      # distribution keeps every sub-range under the 30k budget, so we
-      # get 4 windows here rather than exactly 3.
-      #
-      # The stage 1 contract says "one per day" — the enumeration IS
-      # per-day, and the wall-clock day boundaries are what makes stage 2
-      # cursor advance safe. Assert count matches enumerated day count.
-      assert length(windows) == 4
+      # With real per-day byte sums, the 4th enumerated day-range
+      # (07-11 partial) contributes 0 bytes → skipped. 3 windows total,
+      # one per populated day.
+      assert length(windows) == 3
 
       # Oldest-first chronological order.
       starts = Enum.map(windows, & &1.window_start)
       assert starts == Enum.sort(starts, DateTime)
 
-      # Sum of token estimates should equal (with rounding slop) the
-      # original 90k input.
+      # Sum of token estimates should equal the input 90k exactly (no
+      # rounding slop when the per_day map matches the input total).
       total_tokens = Enum.sum(Enum.map(windows, & &1.token_estimate))
-      assert_in_delta(total_tokens, 90_000, 20)
+      assert total_tokens == 90_000
 
-      # Every window in this case fits under budget → none oversized.
+      # Every window in this case fits at budget → none oversized.
       assert Enum.all?(windows, &(&1.oversize == false))
       assert Enum.all?(windows, &(&1.corpus == :messages))
     end
@@ -139,9 +148,16 @@ defmodule Platform.Agents.HistorianDispatcherSliceWindowsTest do
       end_at = ~U[2026-07-11 00:00:00Z]
       input = %{messages: {last_at, tokens_to_bytes(90_000)}}
 
+      per_day = %{
+        ~D[2026-07-08] => tokens_to_bytes(30_000),
+        ~D[2026-07-09] => tokens_to_bytes(30_000),
+        ~D[2026-07-10] => tokens_to_bytes(30_000)
+      }
+
       windows =
         HistorianDispatcher.slice_windows(nil,
           input_fn: input_for(input),
+          per_day_fn: per_day_for(per_day),
           now: end_at,
           budget_tokens: 30_000
         )
@@ -162,10 +178,12 @@ defmodule Platform.Agents.HistorianDispatcherSliceWindowsTest do
       end_at = ~U[2026-07-11 12:00:00Z]
       # 60_000 tokens → 240_000 bytes in a 12h window; > 30k budget → halve
       input = %{messages: {last_at, tokens_to_bytes(60_000)}}
+      per_day = %{~D[2026-07-11] => tokens_to_bytes(60_000)}
 
       windows =
         HistorianDispatcher.slice_windows(nil,
           input_fn: input_for(input),
+          per_day_fn: per_day_for(per_day),
           now: end_at,
           budget_tokens: 30_000
         )
@@ -197,10 +215,13 @@ defmodule Platform.Agents.HistorianDispatcherSliceWindowsTest do
       # 1h min_sub_window, so we hit the oversize branch.
       last_at = DateTime.add(now(), -3_600, :second)
       input = %{transcripts: {last_at, tokens_to_bytes(60_000)}}
+      # `now()` is 2026-07-11 12:00Z; last_at is 11:00Z same day.
+      per_day = %{~D[2026-07-11] => tokens_to_bytes(60_000)}
 
       windows =
         HistorianDispatcher.slice_windows(nil,
           input_fn: input_for(input),
+          per_day_fn: per_day_for(per_day),
           now: now(),
           budget_tokens: 30_000
         )
@@ -239,8 +260,10 @@ defmodule Platform.Agents.HistorianDispatcherSliceWindowsTest do
       # 20k tokens in 12h. Under 30k default → 1 window. Under 5k
       # override → must subdivide.
       input = %{messages: {last_at, tokens_to_bytes(20_000)}}
+      per_day = %{~D[2026-07-11] => tokens_to_bytes(20_000)}
 
-      # Sanity: default budget yields 1 window.
+      # Sanity: default budget yields 1 window (fits-in-one-window path
+      # doesn't call per_day_fn — omit it here).
       default_windows =
         HistorianDispatcher.slice_windows(nil,
           input_fn: input_for(input),
@@ -255,6 +278,7 @@ defmodule Platform.Agents.HistorianDispatcherSliceWindowsTest do
       tightened =
         HistorianDispatcher.slice_windows(nil,
           input_fn: input_for(input),
+          per_day_fn: per_day_for(per_day),
           now: end_at
         )
 
@@ -266,17 +290,161 @@ defmodule Platform.Agents.HistorianDispatcherSliceWindowsTest do
       last_at = ~U[2026-07-11 00:00:00Z]
       end_at = ~U[2026-07-11 12:00:00Z]
       input = %{messages: {last_at, tokens_to_bytes(20_000)}}
+      per_day = %{~D[2026-07-11] => tokens_to_bytes(20_000)}
 
       # Override even though config is default.
       windows =
         HistorianDispatcher.slice_windows(nil,
           input_fn: input_for(input),
+          per_day_fn: per_day_for(per_day),
           now: end_at,
           budget_tokens: 5_000
         )
 
       assert length(windows) >= 4
       assert Enum.all?(windows, &(&1.token_estimate <= 5_000))
+    end
+  end
+
+  # ── (concentrated) Real per-day byte sums attribute density correctly ─
+
+  describe "slice_windows/2 — concentrated-density (per-day byte sums)" do
+    # `now/0` = 2026-07-11 12:00Z. Nil cursor → default 30d lookback bound
+    # at 2026-06-11 12:00Z. `enumerate_day_ranges/2` walks 31 day-ranges:
+    #   06-11 partial [12:00, 24:00)  (12h)
+    #   06-12 .. 07-10 whole days     (24h × 29)
+    #   07-11 partial [00:00, 12:00)  (12h)
+
+    test "single concentrated day on today; other 30 days emit nothing" do
+      # input.total_bytes must exceed budget*4 (=120_000) so the slicer
+      # skips the fits-in-one-window path and fans out per-day. per_day_fn
+      # then attributes ALL density to today's date; the 30 other enumerated
+      # days lookup as 0 and are skipped.
+      input = %{messages: {nil, 480_000}}
+      per_day = %{~D[2026-07-11] => 120_000}
+
+      windows =
+        HistorianDispatcher.slice_windows(nil,
+          input_fn: input_for(input),
+          per_day_fn: per_day_for(per_day),
+          now: now(),
+          budget_tokens: 30_000
+        )
+
+      # 120_000 bytes = 30_000 tokens exactly at budget → single-day window
+      # for today (partial [00:00, 12:00)), non-oversize.
+      assert [window] = windows
+      assert window.corpus == :messages
+      assert DateTime.to_date(window.window_start) == ~D[2026-07-11]
+      assert window.window_start == ~U[2026-07-11 00:00:00Z]
+      assert window.window_end == now()
+      assert window.token_estimate == 30_000
+      assert window.oversize == false
+    end
+
+    test "very-large concentrated day forces oversize path via halving floor" do
+      # 4M bytes = 1M tokens all on today. The 12h day span halves
+      # 12h → 6h → 3h → 1.5h → 0.75h; the 0.75h leaf sits below
+      # @min_sub_window_seconds (1h), so if tokens still exceed budget
+      # there the slicer emits `oversize: true` clamped to budget.
+      # At 0.75h leaf: bytes = 4_000_000 / 16 = 250_000 → 62_500 tokens > 30k.
+      input = %{transcripts: {nil, 4_000_000}}
+      per_day = %{~D[2026-07-11] => 4_000_000}
+
+      windows =
+        HistorianDispatcher.slice_windows(nil,
+          input_fn: input_for(input),
+          per_day_fn: per_day_for(per_day),
+          now: now(),
+          budget_tokens: 30_000
+        )
+
+      # All windows land on today's date (nothing smeared to prior days).
+      assert Enum.all?(windows, &(DateTime.to_date(&1.window_start) == ~D[2026-07-11]))
+      # At least one oversize window emitted from the halving-floor branch.
+      assert Enum.any?(windows, &(&1.oversize == true))
+      # Every oversize window has its token_estimate clamped to budget.
+      Enum.each(windows, fn w ->
+        if w.oversize, do: assert(w.token_estimate == 30_000)
+      end)
+    end
+
+    test "60KB day 0 + 60KB day 5, 30-day range → 2 non-oversize windows, 28 middle days empty" do
+      day0 = ~D[2026-06-11]
+      day5 = ~D[2026-06-16]
+      # Force the calendar-day slicer with total > budget*4.
+      input = %{transcripts: {nil, 480_000}}
+      per_day = %{day0 => 60_000, day5 => 60_000}
+
+      windows =
+        HistorianDispatcher.slice_windows(nil,
+          input_fn: input_for(input),
+          per_day_fn: per_day_for(per_day),
+          now: now(),
+          budget_tokens: 30_000
+        )
+
+      # Exactly two windows — one per populated day; middle 28 days empty.
+      assert length(windows) == 2
+      dates = Enum.map(windows, &DateTime.to_date(&1.window_start))
+      assert dates == [day0, day5]
+
+      # 60KB = 15k tokens, well under 30k budget → single-day windows, non-oversize.
+      assert Enum.all?(windows, &(&1.oversize == false))
+      assert Enum.all?(windows, &(&1.token_estimate == 15_000))
+    end
+
+    test "interstitial empty days — 30-day range with only day 0 + day 29 populated" do
+      day0 = ~D[2026-06-11]
+      day29 = ~D[2026-07-10]
+      input = %{transcripts: {nil, 480_000}}
+      per_day = %{day0 => 60_000, day29 => 60_000}
+
+      windows =
+        HistorianDispatcher.slice_windows(nil,
+          input_fn: input_for(input),
+          per_day_fn: per_day_for(per_day),
+          now: now(),
+          budget_tokens: 30_000
+        )
+
+      assert length(windows) == 2
+      dates = Enum.map(windows, &DateTime.to_date(&1.window_start))
+      assert dates == [day0, day29]
+      assert Enum.all?(windows, &(&1.oversize == false))
+    end
+
+    test "regression guard — even 800KB/day across 30 days emits one window per day, all under budget" do
+      # 30-day even-spread from a full-day-anchored range. 800_000 bytes/day
+      # = 200_000 tokens/day → exceeds 30k budget → halves down to sub-day
+      # windows, none oversize. This is the parent task's Case 1 regression:
+      # the previous uniform-distribute path already produced this shape;
+      # the new per_day_fn path with matching even distribution must too.
+      start_at = ~U[2026-06-11 00:00:00Z]
+      end_at = ~U[2026-07-11 00:00:00Z]
+      total_bytes = 30 * 800_000
+      input = %{messages: {start_at, total_bytes}}
+
+      per_day =
+        Date.range(~D[2026-06-11], ~D[2026-07-10])
+        |> Enum.into(%{}, fn d -> {d, 800_000} end)
+
+      windows =
+        HistorianDispatcher.slice_windows(nil,
+          input_fn: input_for(input),
+          per_day_fn: per_day_for(per_day),
+          now: end_at,
+          budget_tokens: 30_000
+        )
+
+      # Every day contributed a window; every window fits budget.
+      dates = windows |> Enum.map(&DateTime.to_date(&1.window_start)) |> Enum.uniq()
+      assert length(dates) == 30
+      assert Enum.all?(windows, &(&1.token_estimate <= 30_000))
+      assert Enum.all?(windows, &(&1.oversize == false))
+      # Chronological ordering preserved.
+      starts = Enum.map(windows, & &1.window_start)
+      assert starts == Enum.sort(starts, DateTime)
     end
   end
 

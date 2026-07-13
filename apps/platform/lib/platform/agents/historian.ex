@@ -90,6 +90,48 @@ defmodule Platform.Agents.Historian do
   end
 
   @doc """
+  Returns the per-day sum of pending bytes for `corpus` inside the
+  half-open range `[start_at, end_at)`. Keys are UTC calendar days
+  (`Date.t()`), values are `non_neg_integer()` byte counts. Days with
+  zero rows are absent from the map (callers treat missing keys as 0).
+
+  Half-open semantic: `timestamp >= start_at AND timestamp < end_at`.
+  Mirrors the slicer's `enumerate_day_ranges/2` shape in
+  `HistorianDispatcher`, so the map keys line up 1:1 with the per-day
+  windows the slicer enumerates.
+
+  V1 org-fanout: pass `workspace_id: nil` (default) to sweep across the
+  whole table (`pages`/`journal` restrict to rows with null
+  `workspace_id`; `messages`/`transcripts` do not filter on workspace
+  because those tables have no such column — see `sum_corpus_bytes/3`
+  for the same shape).
+
+  Consumed by `HistorianDispatcher.slice_by_calendar_day/5` (Stage 2 of
+  this task) to feed real per-day density into the window planner
+  instead of the uniform-distribute heuristic.
+  """
+  @spec pending_bytes_per_day(String.t(), DateTime.t(), DateTime.t()) ::
+          %{Date.t() => non_neg_integer()}
+  def pending_bytes_per_day(corpus, start_at, end_at) do
+    pending_bytes_per_day(corpus, start_at, end_at, nil)
+  end
+
+  @spec pending_bytes_per_day(
+          String.t(),
+          DateTime.t(),
+          DateTime.t(),
+          binary() | nil
+        ) :: %{Date.t() => non_neg_integer()}
+  def pending_bytes_per_day(corpus, start_at, end_at, workspace_id) do
+    corpus
+    |> per_day_bytes_query(workspace_id, start_at, end_at)
+    |> Repo.all()
+    |> Enum.reduce(%{}, fn %{day: day, bytes: bytes}, acc ->
+      Map.put(acc, truncate_to_date(day), to_non_neg(bytes))
+    end)
+  end
+
+  @doc """
   Returns the max `last_run_at` across the four corpus cursor rows for
   `workspace_id`, or `nil` if no cursor has ever been stamped.
 
@@ -273,6 +315,114 @@ defmodule Platform.Agents.Historian do
     |> Repo.one()
     |> to_non_neg()
   end
+
+  # ── Per-day grouped byte-sum queries (pending_bytes_per_day/3-4) ────────
+  #
+  # Same per-corpus dispatch as `sum_corpus_bytes/3` (nil-workspace vs
+  # scoped variants for pages/journal; messages/transcripts ignore
+  # workspace_id since those tables have no such column). Each query
+  # groups by `date_trunc('day', <ts>)` and sums octet_length of the
+  # content column(s). Half-open `[start_at, end_at)` range.
+
+  # Pages corpus → org_wiki_pages. Updated_at because pages mutate.
+  defp per_day_bytes_query("pages", nil, start_at, end_at) do
+    from(f in "org_wiki_pages",
+      where:
+        is_nil(f.workspace_id) and f.updated_at >= ^start_at and
+          f.updated_at < ^end_at,
+      group_by: fragment("date_trunc('day', ?)", f.updated_at),
+      select: %{
+        day: fragment("date_trunc('day', ?)", f.updated_at),
+        bytes: sum(fragment("coalesce(octet_length(?), 0)", f.content))
+      }
+    )
+  end
+
+  defp per_day_bytes_query("pages", workspace_id, start_at, end_at) do
+    from(f in "org_wiki_pages",
+      where:
+        f.workspace_id == type(^workspace_id, :binary_id) and
+          f.updated_at >= ^start_at and f.updated_at < ^end_at,
+      group_by: fragment("date_trunc('day', ?)", f.updated_at),
+      select: %{
+        day: fragment("date_trunc('day', ?)", f.updated_at),
+        bytes: sum(fragment("coalesce(octet_length(?), 0)", f.content))
+      }
+    )
+  end
+
+  # Journal corpus → org_wiki_journal_entries. Inserted_at because
+  # journal is append-only (`updated_at: false` on the schema).
+  defp per_day_bytes_query("journal", nil, start_at, end_at) do
+    from(e in "org_wiki_journal_entries",
+      where:
+        is_nil(e.workspace_id) and e.inserted_at >= ^start_at and
+          e.inserted_at < ^end_at,
+      group_by: fragment("date_trunc('day', ?)", e.inserted_at),
+      select: %{
+        day: fragment("date_trunc('day', ?)", e.inserted_at),
+        bytes: sum(fragment("coalesce(octet_length(?), 0)", e.content))
+      }
+    )
+  end
+
+  defp per_day_bytes_query("journal", workspace_id, start_at, end_at) do
+    from(e in "org_wiki_journal_entries",
+      where:
+        e.workspace_id == type(^workspace_id, :binary_id) and
+          e.inserted_at >= ^start_at and e.inserted_at < ^end_at,
+      group_by: fragment("date_trunc('day', ?)", e.inserted_at),
+      select: %{
+        day: fragment("date_trunc('day', ?)", e.inserted_at),
+        bytes: sum(fragment("coalesce(octet_length(?), 0)", e.content))
+      }
+    )
+  end
+
+  # Messages corpus → chat_messages. Inserted_at; no workspace filter
+  # (chat_messages has no workspace_id column — mirrors the sum
+  # variant at `sum_corpus_bytes("messages", ...)`).
+  defp per_day_bytes_query("messages", _workspace_id, start_at, end_at) do
+    from(m in "chat_messages",
+      where: m.inserted_at >= ^start_at and m.inserted_at < ^end_at,
+      group_by: fragment("date_trunc('day', ?)", m.inserted_at),
+      select: %{
+        day: fragment("date_trunc('day', ?)", m.inserted_at),
+        bytes: sum(fragment("coalesce(octet_length(?), 0)", m.content))
+      }
+    )
+  end
+
+  # Transcripts corpus → meeting_transcripts. Updated_at because
+  # segments accumulate during a recording. Byte size = summary +
+  # JSON-encoded segments (matches `sum_corpus_bytes("transcripts",
+  # ...)`). No workspace filter — meeting_transcripts has no
+  # workspace_id column in V1.
+  defp per_day_bytes_query("transcripts", _workspace_id, start_at, end_at) do
+    from(t in "meeting_transcripts",
+      where: t.updated_at >= ^start_at and t.updated_at < ^end_at,
+      group_by: fragment("date_trunc('day', ?)", t.updated_at),
+      select: %{
+        day: fragment("date_trunc('day', ?)", t.updated_at),
+        bytes:
+          sum(
+            fragment(
+              "coalesce(octet_length(?), 0) + coalesce(octet_length(?::text), 0)",
+              t.summary,
+              t.segments
+            )
+          )
+      }
+    )
+  end
+
+  # `date_trunc('day', timestamptz)` returns a `timestamp with time
+  # zone`, which postgrex hands back as `DateTime`. Ecto occasionally
+  # decodes it as `NaiveDateTime` when the underlying column is
+  # `timestamp` without zone — accept both defensively.
+  defp truncate_to_date(%DateTime{} = dt), do: DateTime.to_date(dt)
+  defp truncate_to_date(%NaiveDateTime{} = ndt), do: NaiveDateTime.to_date(ndt)
+  defp truncate_to_date(%Date{} = d), do: d
 
   defp apply_cursor_filter(query, _field, nil), do: query
 

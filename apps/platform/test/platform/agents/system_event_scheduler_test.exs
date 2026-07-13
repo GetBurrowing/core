@@ -575,6 +575,37 @@ defmodule Platform.Agents.SystemEventSchedulerTest do
       |> Repo.insert!()
     end
 
+    # Seed `days` rows of `bytes_per_day` bytes each, one per calendar day
+    # working backward from today. Backdates `inserted_at` via raw update
+    # so the per-day slicer walks distinct day-ranges (mirrors the
+    # `force_inserted_at!` pattern in `historian_test.exs`).
+    #
+    # Used by the debounce tests: they need enough real content spread
+    # across enough days that a single capped dispatch cannot drain the
+    # pending backlog past the 100k-token threshold. Under the pre-stage-2
+    # uniform-distribute heuristic, a single-day 410KB row happened to
+    # survive because cursor advance smeared to old empty days; the real
+    # per-day slicer correctly drains a single-day row in one sweep, so
+    # these tests now seed multi-day content explicitly.
+    defp insert_multi_day_journal!(workspace_id, days, bytes_per_day)
+         when is_integer(days) and days > 0 and is_integer(bytes_per_day) and bytes_per_day > 0 do
+      today = Date.utc_today()
+
+      Enum.each(0..(days - 1), fn offset ->
+        day = Date.add(today, -offset)
+        row = insert_journal_chars!(workspace_id, bytes_per_day)
+        inserted_at = DateTime.new!(day, ~T[12:00:00], "Etc/UTC")
+
+        {1, _} =
+          Repo.update_all(
+            from(e in MemoryEntry, where: e.id == ^row.id),
+            set: [inserted_at: inserted_at]
+          )
+      end)
+
+      :ok
+    end
+
     # Backdate every cursor row's `last_run_at` for `workspace_id` to `delta_ms`
     # in the past, relative to now. Simulates "clock advance" without needing
     # a mock clock — the debounce policy reads cursor `last_run_at` directly.
@@ -642,7 +673,11 @@ defmodule Platform.Agents.SystemEventSchedulerTest do
     describe "threshold sweep — debounce path" do
       test "fire once, sweep within debounce window → no second dispatch" do
         _agent = create_historian_agent()
-        insert_journal_chars!(@historian_workspace_id, 410_000)
+        # Seed 30 days of multi-day content so a single capped sweep can't
+        # drain pending below the threshold — see comment on
+        # `insert_multi_day_journal!/3` for why the previous single-day
+        # seeding no longer keeps pending above threshold post-sweep.
+        insert_multi_day_journal!(@historian_workspace_id, 30, 100_000)
 
         {:ok, _pid} =
           start_supervised({SystemEventScheduler, check_interval_ms: :timer.hours(24)})
@@ -670,7 +705,7 @@ defmodule Platform.Agents.SystemEventSchedulerTest do
 
       test "after debounce elapses, sweep dispatches again" do
         _agent = create_historian_agent()
-        insert_journal_chars!(@historian_workspace_id, 410_000)
+        insert_multi_day_journal!(@historian_workspace_id, 30, 100_000)
 
         {:ok, _pid} =
           start_supervised({SystemEventScheduler, check_interval_ms: :timer.hours(24)})
@@ -747,7 +782,7 @@ defmodule Platform.Agents.SystemEventSchedulerTest do
 
       test "debounced sweep emits [:platform, :agents, :historian_scheduler, :threshold_debounced]" do
         _agent = create_historian_agent()
-        insert_journal_chars!(@historian_workspace_id, 410_000)
+        insert_multi_day_journal!(@historian_workspace_id, 30, 100_000)
 
         {:ok, _pid} =
           start_supervised({SystemEventScheduler, check_interval_ms: :timer.hours(24)})

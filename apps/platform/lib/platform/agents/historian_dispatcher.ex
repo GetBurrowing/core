@@ -71,7 +71,8 @@ defmodule Platform.Agents.HistorianDispatcher do
           window_start: DateTime.t(),
           window_end: DateTime.t(),
           token_estimate: non_neg_integer(),
-          oversize: boolean()
+          oversize: boolean(),
+          day_bytes: non_neg_integer()
         }
 
   # Literal default used as a fallback for empty DB (when prompt_templates
@@ -274,6 +275,14 @@ defmodule Platform.Agents.HistorianDispatcher do
       the same shape as `Historian.pending_windows_input/1`. Defaults to
       `&Historian.pending_windows_input/1`. Test-only injection point
       so the slicer can be exercised without hitting the DB.
+    * `:per_day_fn` — 3-arity function taking `(corpus_string, start_at,
+      end_at)` and returning `%{Date.t() => non_neg_integer()}` — the
+      per-calendar-day byte sums used by `slice_by_calendar_day/5` to
+      attribute density to the days that actually own it. Defaults to a
+      closure over the caller's `workspace_id` that delegates to
+      `Historian.pending_bytes_per_day/4` — so workspace-scoped corpora
+      (pages / journal) query with the right filter. Tests inject an
+      arity-3 stub that ignores `workspace_id` for DB-free coverage.
 
   ## Behaviour
 
@@ -282,9 +291,9 @@ defmodule Platform.Agents.HistorianDispatcher do
       window emits ONE window `[last_at, now)` — small backlogs don't
       pay per-day fanout cost.
     * A corpus that overflows the budget is sliced into UTC calendar days
-      first (uniform-distribution byte estimate — the char/4 heuristic
-      Historian already uses; per-day exact byte sums are a stage-2
-      concern once the DB extension is worthwhile).
+      first, asking `per_day_fn` for the actual per-day byte sum. Days
+      the aggregator omits (no rows) contribute nothing; a single busy
+      day carries its own real density rather than a smeared average.
     * If a single calendar day still overflows, that day is halved
       recursively until either the sub-window fits or the span drops to
       `@min_sub_window_seconds`. A sub-window that STILL overflows at
@@ -306,10 +315,15 @@ defmodule Platform.Agents.HistorianDispatcher do
     now = Keyword.get(opts, :now, DateTime.utc_now())
     input_fn = Keyword.get(opts, :input_fn, &Historian.pending_windows_input/1)
 
+    per_day_fn =
+      Keyword.get(opts, :per_day_fn, fn corpus, start_at, end_at ->
+        Historian.pending_bytes_per_day(corpus, start_at, end_at, workspace_id)
+      end)
+
     input = input_fn.(workspace_id)
 
     @corpus_order
-    |> Enum.flat_map(&slice_corpus_from_input(input, &1, now, budget_tokens))
+    |> Enum.flat_map(&slice_corpus_from_input(input, &1, now, budget_tokens, per_day_fn))
     |> Enum.sort_by(fn w ->
       {DateTime.to_unix(w.window_start, :microsecond), Map.get(@corpus_index, w.corpus, 99)}
     end)
@@ -335,7 +349,7 @@ defmodule Platform.Agents.HistorianDispatcher do
     Application.get_env(:platform, :historian_max_windows_per_pass, 20)
   end
 
-  defp slice_corpus_from_input(input, corpus, now, budget_tokens) do
+  defp slice_corpus_from_input(input, corpus, now, budget_tokens, per_day_fn) do
     case Map.get(input, corpus) do
       nil ->
         []
@@ -349,7 +363,7 @@ defmodule Platform.Agents.HistorianDispatcher do
         if DateTime.compare(start_at, now) != :lt do
           []
         else
-          slice_corpus_range(corpus, start_at, now, bytes, budget_tokens)
+          slice_corpus_range(corpus, start_at, now, bytes, budget_tokens, per_day_fn)
         end
     end
   end
@@ -364,7 +378,7 @@ defmodule Platform.Agents.HistorianDispatcher do
     if DateTime.compare(last_at, now) == :lt, do: last_at, else: now
   end
 
-  defp slice_corpus_range(corpus, start_at, end_at, total_bytes, budget_tokens) do
+  defp slice_corpus_range(corpus, start_at, end_at, total_bytes, budget_tokens, per_day_fn) do
     total_tokens = div(total_bytes, 4)
 
     cond do
@@ -375,22 +389,34 @@ defmodule Platform.Agents.HistorianDispatcher do
             window_start: start_at,
             window_end: end_at,
             token_estimate: total_tokens,
-            oversize: false
+            oversize: false,
+            # `day_bytes: 0` for a fits-in-one-window emission because this
+            # branch may span multiple UTC days — the density is not yet
+            # attributed per-day. The per-day fanout branch (below) is the
+            # only path that has a real day-bucketed byte count.
+            day_bytes: 0
           }
         ]
 
       true ->
-        slice_by_calendar_day(corpus, start_at, end_at, total_bytes, budget_tokens)
+        slice_by_calendar_day(corpus, start_at, end_at, budget_tokens, per_day_fn)
     end
   end
 
-  defp slice_by_calendar_day(corpus, start_at, end_at, total_bytes, budget_tokens) do
+  # Per-day fanout using REAL byte sums from `per_day_fn` (defaults to
+  # `Historian.pending_bytes_per_day/3`). Empty-map days contribute
+  # nothing — a 30-day lookback with one concentrated day attributes all
+  # the density to that day rather than smearing 1/30 to each. The
+  # partial-day clip in `enumerate_day_ranges/2` still uses
+  # `DateTime.to_date(day_start)` as the map key, which lines up 1:1
+  # with the aggregator's `date_trunc('day', ...)` UTC keying — no
+  # boundary math needed.
+  defp slice_by_calendar_day(corpus, start_at, end_at, budget_tokens, per_day_fn) do
     day_ranges = enumerate_day_ranges(start_at, end_at)
-    total_span = DateTime.diff(end_at, start_at, :second) |> max(1)
+    per_day_bytes = per_day_fn.(Atom.to_string(corpus), start_at, end_at)
 
     Enum.flat_map(day_ranges, fn {day_start, day_end} ->
-      day_span = DateTime.diff(day_end, day_start, :second) |> max(1)
-      day_bytes = div(total_bytes * day_span, total_span)
+      day_bytes = Map.get(per_day_bytes, DateTime.to_date(day_start), 0)
       day_tokens = div(day_bytes, 4)
 
       cond do
@@ -404,12 +430,17 @@ defmodule Platform.Agents.HistorianDispatcher do
               window_start: day_start,
               window_end: day_end,
               token_estimate: day_tokens,
-              oversize: false
+              oversize: false,
+              day_bytes: day_bytes
             }
           ]
 
         true ->
-          halve_until_fits(corpus, day_start, day_end, day_bytes, budget_tokens)
+          # `day_bytes` at the top of the halving recursion is the real
+          # per-day byte sum. Sub-windows emitted by `halve_until_fits`
+          # stamp the SAME `day_bytes` value on every emitted map so a
+          # single day's telemetry can be reconstructed downstream.
+          halve_until_fits(corpus, day_start, day_end, day_bytes, budget_tokens, day_bytes)
       end
     end)
   end
@@ -434,7 +465,7 @@ defmodule Platform.Agents.HistorianDispatcher do
     DateTime.new!(date, ~T[00:00:00], "Etc/UTC")
   end
 
-  defp halve_until_fits(corpus, start_at, end_at, total_bytes, budget_tokens) do
+  defp halve_until_fits(corpus, start_at, end_at, total_bytes, budget_tokens, day_bytes) do
     span_seconds = DateTime.diff(end_at, start_at, :second)
     total_tokens = div(total_bytes, 4)
 
@@ -446,7 +477,8 @@ defmodule Platform.Agents.HistorianDispatcher do
             window_start: start_at,
             window_end: end_at,
             token_estimate: total_tokens,
-            oversize: false
+            oversize: false,
+            day_bytes: day_bytes
           }
         ]
 
@@ -460,7 +492,8 @@ defmodule Platform.Agents.HistorianDispatcher do
             window_start: start_at,
             window_end: end_at,
             token_estimate: budget_tokens,
-            oversize: true
+            oversize: true,
+            day_bytes: day_bytes
           }
         ]
 
@@ -471,8 +504,8 @@ defmodule Platform.Agents.HistorianDispatcher do
         left_bytes = div(total_bytes, 2)
         right_bytes = total_bytes - left_bytes
 
-        halve_until_fits(corpus, start_at, mid, left_bytes, budget_tokens) ++
-          halve_until_fits(corpus, mid, end_at, right_bytes, budget_tokens)
+        halve_until_fits(corpus, start_at, mid, left_bytes, budget_tokens, day_bytes) ++
+          halve_until_fits(corpus, mid, end_at, right_bytes, budget_tokens, day_bytes)
     end
   end
 
@@ -590,7 +623,11 @@ defmodule Platform.Agents.HistorianDispatcher do
         # convention (see `SystemEventScheduler.emit_telemetry/3`).
         :telemetry.execute(
           [:platform, :historian, :window_dispatched],
-          %{token_count: window.token_estimate, window_index: idx},
+          %{
+            token_count: window.token_estimate,
+            window_index: idx,
+            day_bytes: Map.get(window, :day_bytes, 0)
+          },
           %{
             day_span:
               DateTime.to_iso8601(window.window_start) <>

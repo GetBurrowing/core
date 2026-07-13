@@ -19,7 +19,11 @@ defmodule Platform.Agents.HistorianTest do
 
   alias Platform.Agents.Historian
   alias Platform.Agents.HistorianCursor
+  alias Platform.Chat
+  alias Platform.Chat.Message
+  alias Platform.Meetings.Transcript
   alias Platform.Org.WikiJournalEntry, as: MemoryEntry
+  alias Platform.Org.WikiPage
   alias Platform.Repo
 
   # Use a fresh workspace UUID per test so async cases don't collide.
@@ -195,6 +199,198 @@ defmodule Platform.Agents.HistorianTest do
     end
   end
 
+  # ── pending_bytes_per_day/3-4 — grouped byte sums ───────────────────────
+
+  describe "pending_bytes_per_day/3-4 — grouped byte sums" do
+    test "empty range returns %{}", %{workspace_id: workspace_id} do
+      # Point the query at a range we know contains no rows.
+      start_at = ~U[2001-01-01 00:00:00Z]
+      end_at = ~U[2001-01-08 00:00:00Z]
+
+      for corpus <- ~w(pages journal messages transcripts) do
+        assert Historian.pending_bytes_per_day(corpus, start_at, end_at, workspace_id) == %{}
+        assert Historian.pending_bytes_per_day(corpus, start_at, end_at) == %{}
+      end
+    end
+
+    test "journal: three rows on three different days each get their own bucket",
+         %{workspace_id: workspace_id} do
+      # 40 bytes per row → each row contributes 40 to its day bucket.
+      day1 = ~D[2001-02-01]
+      day2 = ~D[2001-02-05]
+      day3 = ~D[2001-02-09]
+
+      insert_journal_at!(workspace_id, String.duplicate("a", 40), day1)
+      insert_journal_at!(workspace_id, String.duplicate("b", 40), day2)
+      insert_journal_at!(workspace_id, String.duplicate("c", 40), day3)
+
+      start_at = ~U[2001-02-01 00:00:00Z]
+      end_at = ~U[2001-02-10 00:00:00Z]
+
+      assert Historian.pending_bytes_per_day("journal", start_at, end_at, workspace_id) ==
+               %{day1 => 40, day2 => 40, day3 => 40}
+    end
+
+    test "journal: two rows on the SAME day sum into one bucket",
+         %{workspace_id: workspace_id} do
+      day = ~D[2001-03-01]
+
+      insert_journal_at!(workspace_id, String.duplicate("a", 30), day)
+      insert_journal_at!(workspace_id, String.duplicate("b", 70), day)
+
+      start_at = ~U[2001-03-01 00:00:00Z]
+      end_at = ~U[2001-03-02 00:00:00Z]
+
+      assert Historian.pending_bytes_per_day("journal", start_at, end_at, workspace_id) ==
+               %{day => 100}
+    end
+
+    test "journal: boundary rows — inserted_at == start_at included, == end_at excluded",
+         %{workspace_id: workspace_id} do
+      start_day = ~D[2001-04-01]
+      end_day = ~D[2001-04-03]
+
+      start_at = ~U[2001-04-01 00:00:00Z]
+      end_at = ~U[2001-04-03 00:00:00Z]
+
+      # Row exactly at start_at — included.
+      row_a = insert_journal!(workspace_id, String.duplicate("a", 25))
+      force_inserted_at!(row_a, start_at)
+
+      # Row exactly at end_at — excluded.
+      row_b = insert_journal!(workspace_id, String.duplicate("b", 999))
+      force_inserted_at!(row_b, end_at)
+
+      # Row inside the range.
+      row_c = insert_journal!(workspace_id, String.duplicate("c", 10))
+      force_inserted_at!(row_c, DateTime.new!(~D[2001-04-02], ~T[12:00:00], "Etc/UTC"))
+
+      result = Historian.pending_bytes_per_day("journal", start_at, end_at, workspace_id)
+
+      assert Map.get(result, start_day) == 25
+      assert Map.get(result, ~D[2001-04-02]) == 10
+      refute Map.has_key?(result, end_day)
+    end
+
+    test "journal: rows outside [start_at, end_at) are omitted",
+         %{workspace_id: workspace_id} do
+      # Row before the range.
+      before_row = insert_journal!(workspace_id, String.duplicate("b", 500))
+      force_inserted_at!(before_row, ~U[2001-05-01 00:00:00Z])
+
+      # Row inside the range.
+      insert_journal_at!(workspace_id, String.duplicate("i", 60), ~D[2001-05-10])
+
+      # Row after the range.
+      after_row = insert_journal!(workspace_id, String.duplicate("a", 500))
+      force_inserted_at!(after_row, ~U[2001-06-01 00:00:00Z])
+
+      result =
+        Historian.pending_bytes_per_day(
+          "journal",
+          ~U[2001-05-05 00:00:00Z],
+          ~U[2001-05-15 00:00:00Z],
+          workspace_id
+        )
+
+      assert result == %{~D[2001-05-10] => 60}
+    end
+
+    test "pages: grouped per updated_at day, workspace_id-scoped",
+         %{workspace_id: workspace_id} do
+      day = ~D[2001-07-04]
+      other_day = ~D[2001-07-05]
+
+      insert_page_at!(workspace_id, "page-a.md", String.duplicate("p", 100), day)
+      insert_page_at!(workspace_id, "page-b.md", String.duplicate("q", 250), day)
+      insert_page_at!(workspace_id, "page-c.md", String.duplicate("r", 40), other_day)
+
+      # A different workspace's row on the same day must not commingle.
+      other_workspace = Ecto.UUID.generate()
+      insert_page_at!(other_workspace, "page-x.md", String.duplicate("z", 9_999), day)
+
+      result =
+        Historian.pending_bytes_per_day(
+          "pages",
+          ~U[2001-07-04 00:00:00Z],
+          ~U[2001-07-06 00:00:00Z],
+          workspace_id
+        )
+
+      assert result == %{day => 350, other_day => 40}
+    end
+
+    test "messages: grouped per inserted_at day (no workspace filter)",
+         %{workspace_id: workspace_id} do
+      # `messages` corpus does not filter on workspace_id — mirror
+      # the sum_corpus_bytes("messages", ...) shape. Use a range so
+      # far in the past that no other test's chat_messages inserts
+      # land in it (sandbox rollback still isolates us, but we belt
+      # + brace with a distant baseline).
+      day = ~D[2001-08-10]
+
+      space = insert_channel_space("hist-per-day")
+      participant = insert_user_participant(space.id, "Old Voice")
+
+      insert_message_at!(space.id, participant.id, String.duplicate("m", 200), day)
+      insert_message_at!(space.id, participant.id, String.duplicate("n", 55), day)
+
+      result =
+        Historian.pending_bytes_per_day(
+          "messages",
+          ~U[2001-08-01 00:00:00Z],
+          ~U[2001-08-31 00:00:00Z],
+          workspace_id
+        )
+
+      assert result == %{day => 255}
+    end
+
+    test "transcripts: sums octet_length(summary) + octet_length(segments::text) per day",
+         %{workspace_id: workspace_id} do
+      day = ~D[2001-09-01]
+
+      # Two transcripts on the same day, each with distinct summary +
+      # segments. octet_length(segments::text) counts the JSON
+      # serialization bytes; the assertion is on the shape (>= sum of
+      # summary bytes, day-grouped) rather than an exact byte total
+      # because JSONB serialization exact bytes vary with formatting.
+      insert_transcript_at!(
+        %{summary: String.duplicate("s", 100), segments: [%{text: "hi"}]},
+        day
+      )
+
+      insert_transcript_at!(
+        %{summary: String.duplicate("t", 150), segments: [%{text: "there"}]},
+        day
+      )
+
+      # Row on a different day.
+      insert_transcript_at!(
+        %{summary: String.duplicate("u", 40), segments: []},
+        ~D[2001-09-03]
+      )
+
+      result =
+        Historian.pending_bytes_per_day(
+          "transcripts",
+          ~U[2001-09-01 00:00:00Z],
+          ~U[2001-09-05 00:00:00Z],
+          workspace_id
+        )
+
+      # Two buckets — day and 2001-09-03.
+      assert map_size(result) == 2
+      # Summary octets alone are 250 on `day`; segments JSON adds a
+      # small overhead per row. Assert >= 250 (summary lower bound).
+      assert Map.fetch!(result, day) >= 250
+      # `2001-09-03` has one row with 40 summary octets + segments
+      # JSON. Empty-array `[]::text` serializes to 2 bytes. Assert
+      # >= 40 as the lower bound.
+      assert Map.fetch!(result, ~D[2001-09-03]) >= 40
+    end
+  end
+
   # ── Helpers ─────────────────────────────────────────────────────────────
 
   defp insert_journal!(workspace_id, content) do
@@ -219,5 +415,103 @@ defmodule Platform.Agents.HistorianTest do
       )
 
     :ok
+  end
+
+  # Insert a journal entry and stamp its `inserted_at` to midday UTC
+  # on the given calendar day. Midday avoids TZ-boundary confusion.
+  defp insert_journal_at!(workspace_id, content, %Date{} = day) do
+    row = insert_journal!(workspace_id, content)
+    ts = DateTime.new!(day, ~T[12:00:00], "Etc/UTC")
+    force_inserted_at!(row, ts)
+    row
+  end
+
+  defp insert_page_at!(workspace_id, file_key, content, %Date{} = day) do
+    {:ok, page} =
+      %WikiPage{}
+      |> WikiPage.changeset(%{
+        workspace_id: workspace_id,
+        file_key: "#{file_key}-#{System.unique_integer([:positive])}",
+        content: content
+      })
+      |> Repo.insert()
+
+    ts = DateTime.new!(day, ~T[12:00:00], "Etc/UTC")
+
+    {1, _} =
+      Repo.update_all(
+        from(p in WikiPage, where: p.id == ^page.id),
+        set: [updated_at: ts, inserted_at: ts]
+      )
+
+    page
+  end
+
+  defp insert_channel_space(name_suffix) do
+    {:ok, space} =
+      Chat.create_space(%{
+        name: "Space #{name_suffix}",
+        slug: "channel-#{System.unique_integer([:positive])}",
+        kind: "channel"
+      })
+
+    space
+  end
+
+  defp insert_user_participant(space_id, display_name) do
+    {:ok, participant} =
+      Chat.add_participant(space_id, %{
+        participant_type: "user",
+        participant_id: Ecto.UUID.generate(),
+        display_name: display_name,
+        joined_at: DateTime.utc_now()
+      })
+
+    participant
+  end
+
+  defp insert_message_at!(space_id, participant_id, content, %Date{} = day) do
+    {:ok, message} =
+      %Message{}
+      |> Message.changeset(%{
+        space_id: space_id,
+        participant_id: participant_id,
+        content_type: "text",
+        content: content,
+        author_display_name: "Test"
+      })
+      |> Repo.insert()
+
+    ts = DateTime.new!(day, ~T[12:00:00], "Etc/UTC")
+
+    {1, _} =
+      Repo.update_all(
+        from(m in Message, where: m.id == ^message.id),
+        set: [inserted_at: ts]
+      )
+
+    message
+  end
+
+  defp insert_transcript_at!(attrs, %Date{} = day) do
+    defaults = %{
+      room_id: "room-#{System.unique_integer([:positive])}",
+      status: "complete"
+    }
+
+    {:ok, transcript} =
+      %Transcript{}
+      |> Transcript.changeset(Map.merge(defaults, attrs))
+      |> Repo.insert()
+
+    ts = DateTime.new!(day, ~T[12:00:00], "Etc/UTC")
+
+    {1, _} =
+      Repo.update_all(
+        from(t in Transcript, where: t.id == ^transcript.id),
+        set: [updated_at: ts, inserted_at: ts]
+      )
+
+    transcript
   end
 end
