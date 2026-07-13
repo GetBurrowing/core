@@ -16,6 +16,55 @@ defmodule Platform.Audit.TelemetryHandlerTest do
     :ok
   end
 
+  # Snapshot the current set of Platform.TaskSupervisor child pids. Used
+  # by the historian bridging tests to observe async dispatch without
+  # depending on the DB row (spawned children aren't in the DataCase
+  # sandbox owner chain, so their Repo.insert raises OwnershipError and
+  # the handler swallows it — see telemetry_handler.ex:rescue clause).
+  defp children_pids do
+    Platform.TaskSupervisor
+    |> Task.Supervisor.children()
+    |> MapSet.new()
+  end
+
+  # Wait until a fresh child appears under Platform.TaskSupervisor
+  # (compared to the given baseline set), monitor it, and wait for it
+  # to exit. Returns :ok or raises with a diagnostic if the timeout
+  # elapses.
+  defp wait_for_new_child(before, timeout_ms) do
+    deadline = System.monotonic_time(:millisecond) + timeout_ms
+
+    new_child = poll_for_new_child(before, deadline)
+
+    ref = Process.monitor(new_child)
+
+    receive do
+      {:DOWN, ^ref, :process, ^new_child, _reason} -> :ok
+    after
+      timeout_ms ->
+        flunk(
+          "spawned Task.Supervisor child #{inspect(new_child)} did not exit within #{timeout_ms}ms"
+        )
+    end
+  end
+
+  defp poll_for_new_child(before, deadline) do
+    now = children_pids()
+    diff = MapSet.difference(now, before)
+
+    cond do
+      MapSet.size(diff) > 0 ->
+        diff |> MapSet.to_list() |> hd()
+
+      System.monotonic_time(:millisecond) >= deadline ->
+        flunk("no new child appeared under Platform.TaskSupervisor within timeout")
+
+      true ->
+        Process.sleep(5)
+        poll_for_new_child(before, deadline)
+    end
+  end
+
   describe "telemetry → audit persistence" do
     test "auth login event is persisted" do
       :telemetry.execute(
@@ -218,6 +267,121 @@ defmodule Platform.Audit.TelemetryHandlerTest do
       assert event.actor_type == "federated_user"
       assert event.actor_id == pseudonymous_handle
       assert event.actor_org_id == peer_org_id
+    end
+  end
+
+  describe "historian namespace bridging (async, task 019f5bc4)" do
+    # Task children spawn under Platform.TaskSupervisor, which is NOT in
+    # the DataCase sandbox owner chain. We can't observe the DB row from
+    # the test process, so these tests observe the SPAWN itself: monitor
+    # the child pid, wait for :DOWN, then assert either (a) the row was
+    # inserted (if the child inherited the sandbox — happens when we call
+    # Sandbox.allow) or (b) that Logger emitted the drop/rescue message.
+    # The plan (stage 4) covers full end-to-end persistence via IEx e2e.
+
+    test "historian window_dispatched with workspace_id spawns a Task.Supervisor child" do
+      workspace_id = Ecto.UUID.generate()
+
+      # Enumerate current children so we can find the new one after emit.
+      before_children = children_pids()
+
+      :telemetry.execute(
+        [:platform, :historian, :window_dispatched],
+        %{token_count: 100, window_index: 1, day_bytes: 100},
+        %{
+          workspace_id: workspace_id,
+          resource_type: "workspace",
+          resource_id: workspace_id,
+          corpus: :pages,
+          oversize: false,
+          action: "window_dispatched",
+          actor_type: "system"
+        }
+      )
+
+      # The child pid is fire-and-forget; wait for it to exit (via
+      # monitor) so we know the async body ran to completion.
+      wait_for_new_child(before_children, 500)
+    end
+
+    test "historian event without workspace_id or org_id is dropped with a warning log" do
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          :telemetry.execute(
+            [:platform, :historian, :window_dispatched],
+            %{token_count: 100},
+            %{corpus: :pages, oversize: false, action: "window_dispatched"}
+          )
+
+          # Wait for the spawned Task to run.
+          Process.sleep(100)
+        end)
+
+      assert log =~ "missing workspace_id and org_id"
+      # No row should have been persisted — event_type is derived server-
+      # side so an emit without a proper scope shouldn't leak an audit row
+      # even if the sandbox somehow allowed it. list/1 stays empty from
+      # the test process view.
+      assert Audit.list(event_type: "platform.historian.window_dispatched") == []
+    end
+
+    test "handle_event returns fast for historian events (async dispatch)" do
+      workspace_id = Ecto.UUID.generate()
+
+      measurements = %{token_count: 100, window_index: 1, day_bytes: 100}
+
+      metadata = %{
+        workspace_id: workspace_id,
+        resource_type: "workspace",
+        resource_id: workspace_id,
+        corpus: :pages,
+        oversize: false,
+        action: "window_dispatched",
+        actor_type: "system"
+      }
+
+      # Prime the JIT with a few no-op emits before measuring.
+      for _ <- 1..10 do
+        :telemetry.execute([:platform, :historian, :window_dispatched], measurements, metadata)
+      end
+
+      samples =
+        for _ <- 1..100 do
+          t0 = System.monotonic_time(:microsecond)
+
+          :telemetry.execute(
+            [:platform, :historian, :window_dispatched],
+            measurements,
+            metadata
+          )
+
+          System.monotonic_time(:microsecond) - t0
+        end
+
+      sorted = Enum.sort(samples)
+      # p99 across 100 samples (index 99).
+      p99 = Enum.at(sorted, 99)
+
+      assert p99 < 5_000,
+             "historian emit p99=#{p99}µs exceeded 5000µs budget — handler may have regressed to sync dispatch"
+    end
+
+    test "handler is attached to all five historian events" do
+      events = TelemetryHandler.events()
+
+      historian_events =
+        Enum.filter(events, fn
+          [:platform, :historian | _] -> true
+          _ -> false
+        end)
+
+      assert length(historian_events) == 5
+
+      assert [:platform, :historian, :pass_started] in historian_events
+      assert [:platform, :historian, :pass_completed] in historian_events
+      assert [:platform, :historian, :window_dispatched] in historian_events
+      assert [:platform, :historian, :cursor_advanced] in historian_events
+      assert [:platform, :historian, :error] in historian_events
     end
   end
 

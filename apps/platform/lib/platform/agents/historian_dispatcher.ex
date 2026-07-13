@@ -529,6 +529,17 @@ defmodule Platform.Agents.HistorianDispatcher do
       total_taken = length(taken)
       total_windows = length(all_windows)
       budget = window_budget_tokens()
+      t0 = System.monotonic_time(:millisecond)
+
+      # Pass-scoped telemetry — bracketed by :pass_completed / :error below.
+      # Stage 2's audit bridge (task 019f5bc4) uses these to record a
+      # per-workspace historian dispatch trail in `audit_events`.
+      emit_telemetry(
+        :pass_started,
+        %{total_windows: total_windows, taken: total_taken, budget_tokens: budget},
+        %{event_type: event_type, agent_id: agent.id},
+        workspace_id
+      )
 
       Enum.reduce_while(Enum.with_index(taken, 1), {:ok, 0}, fn {window, idx}, {:ok, count} ->
         case dispatch_one_window(
@@ -559,6 +570,19 @@ defmodule Platform.Agents.HistorianDispatcher do
       end)
       |> case do
         {:ok, dispatched} ->
+          elapsed_ms = System.monotonic_time(:millisecond) - t0
+
+          emit_telemetry(
+            :pass_completed,
+            %{
+              dispatched: dispatched,
+              remaining: max(total_windows - dispatched, 0),
+              elapsed_ms: elapsed_ms
+            },
+            %{event_type: event_type, agent_id: agent.id},
+            workspace_id
+          )
+
           {:ok, %{dispatched: dispatched, remaining: max(total_windows - dispatched, 0)}}
 
         {:error, _} = err ->
@@ -569,6 +593,13 @@ defmodule Platform.Agents.HistorianDispatcher do
         Logger.error(
           "[HistorianDispatcher] windowed dispatch setup failed for #{event_type}: " <>
             inspect(reason)
+        )
+
+        emit_telemetry(
+          :error,
+          %{},
+          %{stage: "setup", reason: inspect(reason), event_type: event_type},
+          workspace_id
         )
 
         err
@@ -621,8 +652,10 @@ defmodule Platform.Agents.HistorianDispatcher do
         # advance failure still surfaces the intent to dispatch. Split
         # numeric measurements from identifier metadata per Suite
         # convention (see `SystemEventScheduler.emit_telemetry/3`).
-        :telemetry.execute(
-          [:platform, :historian, :window_dispatched],
+        # `resource_type`/`resource_id`/`action` come from `emit_telemetry`
+        # — stage 2's audit bridge (task 019f5bc4) keys off them.
+        emit_telemetry(
+          :window_dispatched,
           %{
             token_count: window.token_estimate,
             window_index: idx,
@@ -633,9 +666,9 @@ defmodule Platform.Agents.HistorianDispatcher do
               DateTime.to_iso8601(window.window_start) <>
                 "/" <> DateTime.to_iso8601(window.window_end),
             corpus: window.corpus,
-            workspace_id: workspace_id,
             oversize: window.oversize
-          }
+          },
+          workspace_id
         )
 
         # Advance cursor BEFORE agent dispatch so a crash inside
@@ -643,6 +676,16 @@ defmodule Platform.Agents.HistorianDispatcher do
         # picks up at the next window instead of replaying this one.
         case Historian.advance_cursor(workspace_id, corpus_string, nil, window.window_end) do
           {:ok, _cursor} ->
+            emit_telemetry(
+              :cursor_advanced,
+              %{window_index: idx, total_windows: total_taken},
+              %{
+                corpus: corpus_string,
+                window_end: DateTime.to_iso8601(window.window_end)
+              },
+              workspace_id
+            )
+
             signal = %{
               participant_id: agent_participant.id,
               message_id: message.id,
@@ -660,10 +703,34 @@ defmodule Platform.Agents.HistorianDispatcher do
                 "at window_end=#{inspect(window.window_end)}: #{inspect(reason)}"
             )
 
+            emit_telemetry(
+              :error,
+              %{},
+              %{
+                stage: "cursor_advance",
+                reason: inspect(reason),
+                corpus: corpus_string,
+                window_end: DateTime.to_iso8601(window.window_end)
+              },
+              workspace_id
+            )
+
             {:error, {:cursor_advance_failed, reason}}
         end
 
       {:error, reason} ->
+        emit_telemetry(
+          :error,
+          %{},
+          %{
+            stage: "post_instruction",
+            reason: inspect(reason),
+            corpus: corpus_string,
+            event_type: event_type
+          },
+          workspace_id
+        )
+
         {:error, reason}
     end
   end
@@ -874,5 +941,39 @@ defmodule Platform.Agents.HistorianDispatcher do
     window_end = DateTime.utc_now()
     window_start = DateTime.add(window_end, -@daily_window_hours * 3_600, :second)
     ActivityDigest.build(window_start, window_end)
+  end
+
+  # ── Telemetry helper (task 019f5bc4 stage 1) ──────────────────────────────
+  #
+  # Shared emitter so every historian dispatch event carries the same
+  # scoping envelope (`workspace_id`, `resource_type: "workspace"`,
+  # `resource_id`, `action`). Stage 2's audit bridge
+  # (`Platform.Audit.TelemetryHandler`) matches on this shape to persist
+  # rows into `audit_events` — mirrors the plan-auto-approve convention
+  # in `apps/platform/lib/platform/tasks.ex`.
+  #
+  # `event` is the terminal atom (e.g. `:pass_started`), lifted onto the
+  # full `[:platform, :historian, event]` path here so callers stay
+  # readable. `action` metadata is derived from the same atom so callers
+  # cannot forget to keep the two in sync.
+  @spec emit_telemetry(atom(), map(), map(), binary() | nil) :: :ok
+  defp emit_telemetry(event, measurements, extra_metadata, workspace_id)
+       when is_atom(event) and is_map(measurements) and is_map(extra_metadata) do
+    metadata =
+      Map.merge(
+        %{
+          workspace_id: workspace_id,
+          resource_type: "workspace",
+          resource_id: workspace_id,
+          action: Atom.to_string(event)
+        },
+        extra_metadata
+      )
+
+    :telemetry.execute(
+      [:platform, :historian, event],
+      measurements,
+      metadata
+    )
   end
 end

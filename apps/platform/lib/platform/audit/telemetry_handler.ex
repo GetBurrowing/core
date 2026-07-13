@@ -52,7 +52,17 @@ defmodule Platform.Audit.TelemetryHandler do
     # actor_type "system" once the retention window elapses.
     [:platform, :chat, :space_deletion_scheduled],
     [:platform, :chat, :space_deletion_cancelled],
-    [:platform, :chat, :space_purged]
+    [:platform, :chat, :space_purged],
+    # Task 019f5bc4 — historian dispatch pipeline audit trail. Emitters at
+    # HistorianDispatcher.do_dispatch_windowed/5 + dispatch_one_window/12
+    # (landed stage 1). These are the ONLY events routed async (via
+    # Platform.TaskSupervisor); all other events above stay inline for
+    # backward compat with existing sync test assertions.
+    [:platform, :historian, :pass_started],
+    [:platform, :historian, :pass_completed],
+    [:platform, :historian, :window_dispatched],
+    [:platform, :historian, :cursor_advanced],
+    [:platform, :historian, :error]
   ]
 
   @doc "Attach the handler to all registered platform telemetry events."
@@ -69,20 +79,60 @@ defmodule Platform.Audit.TelemetryHandler do
   def events, do: @events
 
   @doc false
-  def handle_event(event_name, measurements, metadata, _config) do
-    attrs = build_attrs(event_name, measurements, metadata)
+  def handle_event([:platform, :historian | _] = event_name, measurements, metadata, config) do
+    # Historian dispatch fires at chat-message cadence — a synchronous
+    # Repo.insert per event would regress emit latency by ~1-5ms per
+    # window. Spawn under Platform.TaskSupervisor (already started in
+    # application.ex:50) so :telemetry.execute returns in <100µs.
+    Task.Supervisor.start_child(Platform.TaskSupervisor, fn ->
+      persist_or_skip(event_name, measurements, metadata, config)
+    end)
 
-    case Platform.Audit.record(attrs) do
-      {:ok, _event} ->
-        :ok
+    :ok
+  end
 
-      {:error, changeset} ->
+  def handle_event(event_name, measurements, metadata, config) do
+    # Existing sync path — auth, tenancy, plan, chat. Kept synchronous
+    # because existing tests call `Audit.list/1` immediately after
+    # `:telemetry.execute/3` and expect the row to already exist.
+    persist_or_skip(event_name, measurements, metadata, config)
+  end
+
+  defp persist_or_skip(event_name, measurements, metadata, _config) do
+    case scope_check(event_name, metadata) do
+      :ok ->
+        attrs = build_attrs(event_name, measurements, metadata)
+
+        case Platform.Audit.record(attrs) do
+          {:ok, _event} ->
+            :ok
+
+          {:error, changeset} ->
+            Logger.warning(
+              "Audit persist failed: #{inspect(changeset.errors)}",
+              event: inspect(event_name)
+            )
+        end
+
+      {:skip, reason} ->
         Logger.warning(
-          "Audit persist failed: #{inspect(changeset.errors)}",
-          event: inspect(event_name)
+          "[TelemetryHandler] dropped #{Enum.map_join(event_name, ".", &to_string/1)}: #{reason}"
         )
     end
+
+    # Task.Supervisor.start_child callers under Platform.TaskSupervisor must
+    # rescue DBConnection.OwnershipError — the spawned Task is not in the
+    # DataCase sandbox owner chain in test env. See
+    # apps/platform/notes/2026-07-06-datacase-cascade-rootcause.md and the
+    # regression audit at
+    # apps/platform/test/platform/regression/supervised_task_repo_audit_test.exs.
   rescue
+    DBConnection.OwnershipError ->
+      Logger.debug(
+        "Audit persist skipped: sandbox owner not shared with spawned Task",
+        event: inspect(event_name)
+      )
+
     error ->
       # Telemetry detaches handlers that raise — never let that happen.
       Logger.error(
@@ -90,6 +140,19 @@ defmodule Platform.Audit.TelemetryHandler do
         event: inspect(event_name)
       )
   end
+
+  # Historian events with neither workspace_id nor org_id are dropped —
+  # they cannot be attributed to a scope for HistorianAudit.recent_for_scope/2
+  # lookup (stage 3). Everything else is unconditionally persisted.
+  defp scope_check([:platform, :historian | _], metadata) do
+    cond do
+      is_binary(Map.get(metadata, :workspace_id)) -> :ok
+      is_binary(Map.get(metadata, :org_id)) -> :ok
+      true -> {:skip, "historian event missing workspace_id and org_id"}
+    end
+  end
+
+  defp scope_check(_event_name, _metadata), do: :ok
 
   # -- Internals --
 
