@@ -87,13 +87,20 @@ defmodule PlatformWeb.TasksLiveTest do
     attrs = Map.new(attrs)
     slug = Map.get(attrs, :slug, "fixture-#{System.unique_integer([:positive])}")
 
-    {:ok, stack} =
-      Stacks.create_stack(%{
-        project_id: Map.fetch!(attrs, :project_id),
-        slug: slug,
-        name: Map.get(attrs, :name, "Fixture Stack"),
-        rollup_branch: Stacks.rollup_branch_name(slug)
-      })
+    create_attrs = %{
+      project_id: Map.fetch!(attrs, :project_id),
+      slug: slug,
+      name: Map.get(attrs, :name, "Fixture Stack"),
+      rollup_branch: Stacks.rollup_branch_name(slug)
+    }
+
+    create_attrs =
+      case Map.get(attrs, :sponsor_user_id) do
+        nil -> create_attrs
+        id -> Map.put(create_attrs, :sponsor_user_id, id)
+      end
+
+    {:ok, stack} = Stacks.create_stack(create_attrs)
 
     stack
   end
@@ -846,9 +853,12 @@ defmodule PlatformWeb.TasksLiveTest do
 
       # The toggle sits in the desktop scope rail. `data-role` is the
       # deterministic hook for e2e / Playwright, matching the existing
-      # `data-scope-chip` pattern.
+      # `data-scope-chip` pattern. Stage 4 of task 019f487e (ADR-0042
+      # Decision 8) renamed the visible label from "Sponsored by me" to
+      # "My work" now that the pill filters BOTH tasks and stacks.
       assert html =~ ~s(data-role="sponsor-filter-toggle")
-      assert html =~ "Sponsored by me"
+      assert html =~ "My work"
+      assert html =~ ~s(aria-label="Filter tasks and stacks to those I sponsor")
       # Default state: filter is `:all`, so aria-pressed is false.
       assert html =~ ~s(aria-pressed="false")
     end
@@ -991,9 +1001,11 @@ defmodule PlatformWeb.TasksLiveTest do
 
       # Board-level custom empty state IS present. HEEX HTML-escapes the
       # `'` in "You're" as `&#39;`, so match the two static halves of the
-      # copy separately rather than the raw phrase.
+      # copy separately rather than the raw phrase. Stage 4 of task 019f487e
+      # widened the copy to "tasks or stacks" now that the filter narrows
+      # both surfaces.
       assert html =~ ~s(data-role="sponsor-filter-empty-state")
-      assert html =~ "not sponsoring any tasks currently"
+      assert html =~ "not sponsoring any tasks or stacks currently"
     end
 
     test "custom empty state is NOT shown when filter is off", %{conn: conn} do
@@ -1004,7 +1016,156 @@ defmodule PlatformWeb.TasksLiveTest do
       {:ok, _view, html} = live(conn, ~p"/tasks")
 
       refute html =~ ~s(data-role="sponsor-filter-empty-state")
-      refute html =~ "You're not sponsoring any tasks currently"
+      refute html =~ "not sponsoring any tasks or stacks currently"
+    end
+
+    # ── Stage 3 of task 019f487e (ADR-0042 Decision 8) ─────────────────
+    # The sponsor pill now filters BOTH tasks and stacks with one toggle.
+    # These tests exercise the stacks half specifically — the tasks half
+    # is covered by the tests immediately above.
+    test "toggle sponsor filter narrows desktop board to current-user-sponsored stacks",
+         %{conn: conn} do
+      project = create_project()
+      {conn, user} = authenticated_conn_with_user(conn)
+      other_user = create_user()
+
+      mine = stack_fixture(project_id: project.id, name: "Mine Stack", sponsor_user_id: user.id)
+
+      other =
+        stack_fixture(
+          project_id: project.id,
+          name: "Other Stack",
+          sponsor_user_id: other_user.id
+        )
+
+      unsponsored = stack_fixture(project_id: project.id, name: "Unsponsored Stack")
+
+      {:ok, view, html} = live(conn, ~p"/tasks")
+
+      # Baseline (no filter): all three stacks are rendered on the board.
+      assert html =~ ~s(id="stack-card-#{mine.id}")
+      assert html =~ ~s(id="stack-card-#{other.id}")
+      assert html =~ ~s(id="stack-card-#{unsponsored.id}")
+
+      html = render_click(view, "toggle_sponsor_filter", %{})
+
+      # Filter is now :mine.
+      assert :sys.get_state(view.pid).socket.assigns.sponsor_filter == :mine
+
+      # Own-sponsored stack stays; others (including unsponsored) drop from
+      # the DOM entirely — nil sponsor never equals current user id, so the
+      # WHERE clause excludes it.
+      assert html =~ ~s(id="stack-card-#{mine.id}")
+      refute html =~ ~s(id="stack-card-#{other.id}")
+      refute html =~ ~s(id="stack-card-#{unsponsored.id}")
+
+      # Toggle back off — all three visible again.
+      html = render_click(view, "toggle_sponsor_filter", %{})
+      assert :sys.get_state(view.pid).socket.assigns.sponsor_filter == :all
+      assert html =~ ~s(id="stack-card-#{mine.id}")
+      assert html =~ ~s(id="stack-card-#{other.id}")
+      assert html =~ ~s(id="stack-card-#{unsponsored.id}")
+    end
+
+    test "?sponsor=mine URL param on mount narrows the stacks board", %{conn: conn} do
+      project = create_project()
+      {conn, user} = authenticated_conn_with_user(conn)
+      other_user = create_user()
+
+      mine =
+        stack_fixture(project_id: project.id, name: "Mine On Mount", sponsor_user_id: user.id)
+
+      other =
+        stack_fixture(
+          project_id: project.id,
+          name: "Other On Mount",
+          sponsor_user_id: other_user.id
+        )
+
+      {:ok, _view, html} = live(conn, ~p"/tasks?sponsor=mine")
+
+      assert html =~ ~s(id="stack-card-#{mine.id}")
+      refute html =~ ~s(id="stack-card-#{other.id}")
+    end
+
+    test "sponsor filter composes with project scope on stacks", %{conn: conn} do
+      project_a = create_project()
+      project_b = create_project()
+      {conn, user} = authenticated_conn_with_user(conn)
+      other_user = create_user()
+
+      # In project A: one mine-sponsored stack + one other-sponsored stack.
+      mine_a =
+        stack_fixture(project_id: project_a.id, name: "Mine A", sponsor_user_id: user.id)
+
+      other_a =
+        stack_fixture(project_id: project_a.id, name: "Other A", sponsor_user_id: other_user.id)
+
+      # In project B: one mine-sponsored stack. Should be excluded when the
+      # UI is scoped to project A even though it matches the sponsor filter.
+      mine_b =
+        stack_fixture(project_id: project_b.id, name: "Mine B", sponsor_user_id: user.id)
+
+      # Start with sponsor filter via URL and then dispatch select_project.
+      # `refresh_board/1` merges `{project_id: A} + {sponsor_user_id: user}`
+      # into the stacks-query filter map — this test locks in the compose
+      # behavior end-to-end.
+      {:ok, view, _html} = live(conn, ~p"/tasks?sponsor=mine")
+
+      html = render_click(view, "select_project", %{"id" => project_a.id})
+
+      # Only the intersection is rendered.
+      assert html =~ ~s(id="stack-card-#{mine_a.id}")
+      refute html =~ ~s(id="stack-card-#{other_a.id}")
+      refute html =~ ~s(id="stack-card-#{mine_b.id}")
+    end
+
+    # ── Stage 4 of task 019f487e (ADR-0042 Decision 8) ─────────────────
+    # Stack cards now surface a sponsor avatar (parity with task cards).
+    # Absent sponsor renders nothing. Stage-4 rework: no own-sponsorship
+    # ring affordance — Rowan rejected the aquamarine ring as always wrong.
+    test "stack card renders sponsor avatar when sponsor is set", %{conn: conn} do
+      project = create_project()
+      {conn, user} = authenticated_conn_with_user(conn)
+
+      sponsored =
+        stack_fixture(
+          project_id: project.id,
+          name: "Sponsored Stack",
+          sponsor_user_id: user.id
+        )
+
+      unsponsored = stack_fixture(project_id: project.id, name: "No Sponsor Stack")
+
+      {:ok, _view, html} = live(conn, ~p"/tasks")
+
+      # Both stacks render on the unfiltered board.
+      assert html =~ ~s(id="stack-card-#{sponsored.id}")
+      assert html =~ ~s(id="stack-card-#{unsponsored.id}")
+
+      # The sponsor avatar hook is present at least once for the
+      # sponsored stack.
+      assert html =~ ~s(data-role="stack-sponsor-avatar")
+
+      # Stage-4 rework: no ring-primary affordance even when the viewer
+      # is the sponsor. Guard against regression of the removed ring.
+      refute html =~ "ring-primary/40",
+             "stack sponsor avatar must not carry the aquamarine ring (stage-4 rework)"
+    end
+
+    test "stack card omits sponsor avatar when sponsor is nil", %{conn: conn} do
+      project = create_project()
+      {conn, _user} = authenticated_conn_with_user(conn)
+
+      unsponsored = stack_fixture(project_id: project.id, name: "Nil Sponsor Stack")
+
+      {:ok, _view, html} = live(conn, ~p"/tasks")
+
+      assert html =~ ~s(id="stack-card-#{unsponsored.id}")
+      # Nil sponsor: no avatar rendered for this stack. Since it's the
+      # only stack + no tasks, the whole page should not contain the
+      # stack-sponsor-avatar data-role attribute at all.
+      refute html =~ ~s(data-role="stack-sponsor-avatar")
     end
 
     test "list_by_status/1 filters by sponsor_user_id opt", %{conn: _conn} do
@@ -5332,9 +5493,12 @@ defmodule PlatformWeb.TasksLiveTest do
   # Task 019f3f22 renders the sponsor as a first-class card affordance on
   # both desktop and mobile kanban cards. A sponsored task shows a small
   # `<.human_avatar>` chip with `data-role="sponsor-avatar"` and a
-  # `Sponsored by <name>` title. When the current user is the sponsor, the
-  # chip gets a subtle `ring-primary/40` affordance. An unsponsored task
-  # renders no chip at all — the absence is the signal, not a placeholder.
+  # `Sponsored by <name>` title. An unsponsored task renders no chip at
+  # all — the absence is the signal, not a placeholder.
+  #
+  # Stage 4 rework of task 019f487e: the own-sponsorship `ring-primary/40`
+  # affordance is gone everywhere — Rowan rejected it as always wrong. Sponsor
+  # avatar is a plain circular avatar with no ring, regardless of viewer.
   describe "sponsor chip on task cards (visibility stage 1)" do
     test "desktop card renders sponsor chip when sponsor_user_id is set", %{conn: conn} do
       project = create_project()
@@ -5358,21 +5522,23 @@ defmodule PlatformWeb.TasksLiveTest do
       refute html =~ ~s|data-role="sponsor-avatar"|
     end
 
-    test "own-sponsored task gets ring-primary highlight; other-sponsor does not",
+    test "sponsor chip never carries the ring-primary affordance (stage-4 rework)",
          %{conn: conn} do
+      # Stage 4 of task 019f487e rework: Rowan rejected the aquamarine
+      # `ring-primary/40` ring around own-sponsored avatars as always wrong.
+      # Sponsor avatars are now plain circular avatars with no ring, regardless
+      # of whether the viewer is the sponsor.
       project = create_project()
       other_sponsor = create_user_for_sponsor("Someone Else")
 
       {conn, current_user} = authenticated_conn_with_user(conn)
 
-      # Task sponsored by the currently-logged-in user.
       _mine =
         create_task(project, %{
           title: "My Sponsored Task",
           sponsor_user_id: current_user.id
         })
 
-      # Task sponsored by a different user.
       _theirs =
         create_task(project, %{
           title: "Their Sponsored Task",
@@ -5385,17 +5551,14 @@ defmodule PlatformWeb.TasksLiveTest do
       assert html =~ "Sponsored by Tasks Test User"
       assert html =~ "Sponsored by Someone Else"
 
-      # The own-sponsored chip's title precedes a ring-primary class in the
-      # same avatar element. We locate the two chip fragments via title and
-      # assert the ring class appears in the own-sponsor fragment only.
       mine_fragment = sponsor_chip_fragment(html, "Sponsored by Tasks Test User")
       theirs_fragment = sponsor_chip_fragment(html, "Sponsored by Someone Else")
 
-      assert mine_fragment =~ "ring-primary/40",
-             "own-sponsored task chip should carry the ring-primary/40 affordance"
+      refute mine_fragment =~ "ring-primary",
+             "own-sponsored task chip must not carry any ring-primary affordance"
 
-      refute theirs_fragment =~ "ring-primary/40",
-             "other-user-sponsored task chip should not carry the ring-primary/40 affordance"
+      refute theirs_fragment =~ "ring-primary",
+             "other-user-sponsored task chip must not carry any ring-primary affordance"
     end
 
     test "mobile viewport renders sponsor chip too (same data-role)", %{conn: conn} do
@@ -6798,7 +6961,7 @@ defmodule PlatformWeb.TasksLiveTest do
       assert Phoenix.Flash.get(post.flash, :info) =~ "Started planning for 3 members"
     end
 
-    test "start_stack_planning only advances backlog members and leaves the rest untouched",
+    test "start_stack_planning is a noop when the stack already has members past backlog (Stack v2)",
          %{conn: conn, project: project} do
       {stack, [backlog_member, planning_member, parked_member]} =
         seed_stack_with_member_statuses(project, ["backlog", "planning", "stack_pending"])
@@ -6807,12 +6970,15 @@ defmodule PlatformWeb.TasksLiveTest do
       _html = render_click(view, "open_stack_detail", %{"id" => stack.id})
       _html = render_click(view, "start_stack_planning", %{})
 
-      assert Repo.get!(Task, backlog_member.id).status == "planning"
+      # Stack v2 wave-gated dispatch (ADR 0045 / task 019f487e): any
+      # member past backlog signals "planning already in flight" and the
+      # tool no-ops. No status transitions, no partial cascade.
+      assert Repo.get!(Task, backlog_member.id).status == "backlog"
       assert Repo.get!(Task, planning_member.id).status == "planning"
       assert Repo.get!(Task, parked_member.id).status == "stack_pending"
 
       assigns = :sys.get_state(view.pid).socket.assigns
-      assert Phoenix.Flash.get(assigns.flash, :info) =~ "Started planning for 1 member"
+      assert Phoenix.Flash.get(assigns.flash, :info) =~ "already in flight"
     end
 
     test "start_stack_planning is a no-op when no stack is selected",
@@ -7208,6 +7374,142 @@ defmodule PlatformWeb.TasksLiveTest do
       assert html =~ ~s(data-role="stack-detail-dag-svg")
       # Wrapped in the .dag chrome (rounded base-300 backdrop) per mock.
       assert html =~ "dag rounded bg-base-300 p-2"
+    end
+
+    # Stack v2 stage 1: the container is now a resizable box hosting a
+    # StackGraphResize hook (wired in stage 2). Assert the chrome the hook
+    # depends on — class, id, hook name, and `phx-update="ignore"` (the
+    # invariant that lets the hook's inline width/height survive LV diffs
+    # of `@selected_stack_members`). Assertions target the opening tag so
+    # we don't accidentally match an attribute that appears elsewhere in
+    # the panel (e.g. a coincidental `stack-detail-dag-container` string).
+    test "dep-DAG container carries the resizable chrome (class + id + hook + phx-update ignore)",
+         %{conn: conn, stack: stack} do
+      html = open_panel(conn, stack)
+      tag = open_tag_for(html, "stack-detail-dag")
+
+      assert tag =~ ~s(id="stack-detail-dag-container"),
+             "expected id=stack-detail-dag-container on the DAG container: #{tag}"
+
+      assert tag =~ "stack-graph-resize-container",
+             "expected class to include stack-graph-resize-container: #{tag}"
+
+      assert tag =~ ~s(phx-hook="StackGraphResize"),
+             "expected phx-hook=StackGraphResize on the container: #{tag}"
+
+      # phx-update=ignore is load-bearing: without it LV would clobber
+      # the inline style.width/height the hook writes on drag.
+      assert tag =~ ~s(phx-update="ignore"),
+             "expected phx-update=ignore on the container: #{tag}"
+    end
+
+    test "dep-DAG container renders the touch drag-handle button child",
+         %{conn: conn, stack: stack} do
+      html = open_panel(conn, stack)
+
+      # Drag-handle button lives inside the container. The
+      # `data-role=stack-detail-dag-resize-handle` marker is what the
+      # stage-3 JS hook queries; `touch-none` is what stops the browser
+      # from swallowing touchmove for scroll during a mobile drag.
+      assert html =~ ~s(data-role="stack-detail-dag-resize-handle"),
+             "expected drag-handle button with data-role=stack-detail-dag-resize-handle"
+
+      # Match the actual opening tag so we can spot-check both attrs on
+      # the same element (not two unrelated hits scattered across the
+      # panel).
+      [[button_tag]] =
+        Regex.scan(
+          ~r/<button[^>]*data-role="stack-detail-dag-resize-handle"[^>]*>/,
+          html
+        )
+
+      assert button_tag =~ "touch-none",
+             "expected touch-none class on the drag-handle: #{button_tag}"
+
+      assert button_tag =~ ~s(aria-label="Resize dep graph"),
+             "expected aria-label on the drag-handle: #{button_tag}"
+    end
+
+    # Stack v2 stage 4: dataset defaults are the hook's source-of-truth for
+    # initial sizing (see `stack_graph_resize.js#defaultsForViewport`). If
+    # any of these three attributes drifts or disappears the hook falls
+    # back to hardcoded literals — silently on desktop, visibly on mobile.
+    # Lock them at the markup layer so a template refactor can't quietly
+    # break the contract.
+    test "dep-DAG container declares dataset defaults for the hook",
+         %{conn: conn, stack: stack} do
+      html = open_panel(conn, stack)
+      tag = open_tag_for(html, "stack-detail-dag")
+
+      assert tag =~ ~s(data-desktop-default-w="800"),
+             "expected data-desktop-default-w=800 on the DAG container: #{tag}"
+
+      assert tag =~ ~s(data-desktop-default-h="600"),
+             "expected data-desktop-default-h=600 on the DAG container: #{tag}"
+
+      assert tag =~ ~s(data-mobile-default-h="420"),
+             "expected data-mobile-default-h=420 on the DAG container: #{tag}"
+    end
+
+    # Stack v2 stage 4: id, class, hook, and phx-update="ignore" must land
+    # on exactly ONE element. A duplicate would give LV two hook instances
+    # racing the same inline style writes — the kind of bug that only
+    # surfaces once persistence starts colliding across surfaces. The
+    # opening-tag regex is anchored to `data-role="stack-detail-dag"` so
+    # future template additions can't shadow the id (a coincidental
+    # `id="…-container"` substring elsewhere wouldn't count as a match).
+    test "dep-DAG container renders exactly one instance with all hook chrome",
+         %{conn: conn, stack: stack} do
+      html = open_panel(conn, stack)
+
+      containers =
+        Regex.scan(
+          ~r/<div[^>]*data-role="stack-detail-dag"[^>]*>/,
+          html
+        )
+
+      assert length(containers) == 1,
+             "expected exactly one dep-DAG container element, got #{length(containers)}"
+
+      [[tag]] = containers
+
+      assert tag =~ ~s(id="stack-detail-dag-container"), "id missing on #{tag}"
+      assert tag =~ "stack-graph-resize-container", "class missing on #{tag}"
+      assert tag =~ ~s(phx-hook="StackGraphResize"), "hook missing on #{tag}"
+      assert tag =~ ~s(phx-update="ignore"), "phx-update=ignore missing on #{tag}"
+    end
+
+    # Stack v2 stage 4: exactly ONE drag-handle button child. Two handles
+    # would double-wire the stage-3 touchstart listener and produce two
+    # `document.addEventListener('touchmove', ...)` calls per drag — a
+    # silent leak that only surfaces under coarse-pointer.
+    test "dep-DAG container renders exactly one resize-handle button",
+         %{conn: conn, stack: stack} do
+      html = open_panel(conn, stack)
+
+      handles =
+        Regex.scan(
+          ~r/<button[^>]*data-role="stack-detail-dag-resize-handle"[^>]*>/,
+          html
+        )
+
+      assert length(handles) == 1,
+             "expected exactly one resize-handle button, got #{length(handles)}"
+    end
+
+    test "DAG SVG carries preserveAspectRatio=xMidYMid meet",
+         %{conn: conn, stack: stack} do
+      html = open_panel(conn, stack)
+      svg = panel_svg_block(html)
+
+      # preserveAspectRatio keeps the topological layout legible as the
+      # container aspect changes under user resize — no squish/stretch.
+      assert svg =~ ~s(preserveAspectRatio="xMidYMid meet"),
+             "expected preserveAspectRatio=xMidYMid meet on the DAG SVG"
+
+      # SVG must fill its (now resizable) container, not size intrinsically.
+      assert svg =~ "h-full",
+             "expected h-full class on the DAG SVG so it fills the resized container"
     end
 
     test "DAG edges render as dashed purple lines with no arrowhead marker",

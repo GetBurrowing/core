@@ -1486,7 +1486,7 @@ defmodule Platform.Federation.ToolSurface do
       %{
         name: "stack_create",
         description:
-          "Create a new task stack (ADR 0041). Task stacks group co-related tasks that ship together as a single rollup PR. The rollup branch is auto-derived from the slug as `stack/<slug>`.",
+          "Create a new task stack (ADR 0041). Task stacks group co-related tasks that ship together as a single rollup PR. The rollup branch is auto-derived from the slug as `stack/<slug>`. Optionally set a Sponsor (human shepherd, ADR 0042 Decision 8) distinct from any member's technical assignee.",
         parameters: %{
           project_id: %{
             type: "string",
@@ -1510,13 +1510,54 @@ defmodule Platform.Federation.ToolSurface do
             type: "string",
             required: false,
             description: "Branch the rollup is cut from (defaults to `main`)"
+          },
+          auto_plan: %{
+            type: "boolean",
+            required: false,
+            description:
+              "Stack v2 lifecycle flag. When true, `stack_start_planning` dispatches every member to `planning` in one concurrent pass. When false (default), planning walks in dependency-wave order — only the root wave dispatches; downstream waves advance as upstream plans approve."
+          },
+          auto_accept_plan: %{
+            type: "boolean",
+            required: false,
+            description:
+              "Stack v2 lifecycle flag. When true, submitted member plans auto-approve without human review (resolved via `Tasks.maybe_auto_approve/1` reading the member's stack). When false (default), plans land at `pending_review` and require the normal approval path."
+          },
+          sponsor_user_id: %{
+            type: "string",
+            required: false,
+            description:
+              "Optional Sponsor user id (ADR 0042 Decision 8). The human shepherd accountable for the stack landing, distinct from any member's technical assignee. Nullable — omit for an unsponsored stack."
           }
         },
-        returns: "%{stack_id, rollup_branch} — the new stack id and its derived rollup branch.",
+        returns:
+          "%{stack_id, rollup_branch, sponsor} — the new stack id, its derived rollup branch, and the preloaded sponsor envelope (nil when unsponsored, `%{id, name, email}` when set).",
         limitations:
-          "Slug must be unique within the project and pass valid_slug?/1. Stack starts in `forming` status with no members.",
+          "Slug must be unique within the project and pass valid_slug?/1. Stack starts in `forming` status with no members. sponsor_user_id must reference an existing user; passing an unknown UUID returns a recoverable FK error envelope.",
         when_to_use:
           "When you need to group multiple co-related tasks into a single ship-unit with one rollup PR."
+      },
+      %{
+        name: "stack_update",
+        description:
+          "Update a task stack's mutable fields (name, description, sponsor). Omitted keys are left untouched; `sponsor_user_id` explicitly accepts `null` to clear the slot (matches `task_update` nilable semantics per ADR 0042). Mirrors `task_update` for the stack surface.",
+        parameters: %{
+          stack_id: %{type: "string", required: true, description: "The stack to update"},
+          name: %{type: "string", required: false, description: "New human-friendly stack name"},
+          description: %{type: "string", required: false, description: "New description"},
+          sponsor_user_id: %{
+            type: "string",
+            required: false,
+            description:
+              "Sponsor — human shepherd user id (UUID) per ADR 0042 Decision 8. Unlike the other fields, an explicit `null` value CLEARS the sponsor rather than being dropped. Omit the key entirely to leave the sponsor unchanged."
+          }
+        },
+        returns:
+          "The updated stack object (same shape as `stack_get`'s `stack` field, including `sponsor_user_id` and nested `sponsor: nil | %{id, name, email}`).",
+        limitations:
+          "Returns `stack_not_found` if the stack does not exist. `sponsor_user_id` must reference an existing user; passing an unknown UUID returns a recoverable `sponsor_fk` error envelope.",
+        when_to_use:
+          "When you need to rename a stack, edit its description, or set/clear its Sponsor after creation."
       },
       %{
         name: "stack_get",
@@ -1526,7 +1567,7 @@ defmodule Platform.Federation.ToolSurface do
           stack_id: %{type: "string", required: true, description: "The stack to fetch"}
         },
         returns:
-          "%{stack: %{id, slug, name, status, rollup_branch, base_branch, description}, members: [%{id, title, status, stack_position, dependencies}], edges: [%{from_task_id, to_task_id, kind}], executable_now: [task_id], cross_stack_deps: [%{from_task_id, to_task_id, kind}]}. `edges` are in-stack dep edges only; cross-stack dep edges (deps to tasks in OTHER stacks) surface separately under `cross_stack_deps`. Deps pointing at non-stack tasks are silently dropped per ADR 0041.",
+          "%{stack: %{id, slug, name, status, rollup_branch, base_branch, description, auto_plan, auto_accept_plan}, members: [%{id, title, status, stack_position, dependencies}], edges: [%{from_task_id, to_task_id, kind}], executable_now: [task_id], cross_stack_deps: [%{from_task_id, to_task_id, kind}]}. `stack.auto_plan` and `stack.auto_accept_plan` are Stack v2 lifecycle flags (see `stack_create` for semantics). `edges` are in-stack dep edges only; cross-stack dep edges (deps to tasks in OTHER stacks) surface separately under `cross_stack_deps`. Deps pointing at non-stack tasks are silently dropped per ADR 0041.",
         limitations:
           "Returns an error envelope if the stack does not exist. `executable_now` is empty when the in-stack DAG fails validation (cycle or cross-stack-dep) — inspect `edges` / `cross_stack_deps` to diagnose.",
         when_to_use:
@@ -1706,7 +1747,7 @@ defmodule Platform.Federation.ToolSurface do
       %{
         name: "stack_start_planning",
         description:
-          "Stack-level \"Start Planning\" lifecycle action. Fans the `backlog -> planning` transition out to every constituent member currently at `backlog`; members already past `backlog` (`planning`, `stack_pending`, `in_progress`, …) are left untouched — the cascade is additive. Does not write the stack status itself: an all-`planning` stack rolls up to `forming` per the ADR 0041 status mapping.",
+          "Stack-level \"Start Planning\" lifecycle action. Behaviour depends on the stack's `auto_plan` flag (a top-level field settable via `stack_create` or `stack_update`):\n\n• `auto_plan: false` (default, MANUAL mode) — walks the in-stack DAG in wave order (topologically bucketed levels). Only the root wave (members with no in-stack deps) transitions `backlog → planning`; downstream waves stay at `backlog` and advance one wave at a time as each upstream member's plan lands `approved` (post-commit hook in `Tasks.approve_plan/3`).\n\n• `auto_plan: true` (AUTO mode) — every wave fans out to `planning` in a single concurrent pass. Wave discipline still emits one `:wave_dispatched` telemetry event per wave for observability, but no gating occurs.\n\nA sibling flag `auto_accept_plan` controls the plan-approval hop: when true, plans submitted by member planners auto-approve without human review (resolved via `Tasks.maybe_auto_approve/1` reading the parent stack). The two flags compose — auto-plan + auto-accept = fully-headless stack; auto-plan alone = concurrent dispatch but human-gated approvals; neither set = classic wave-gated manual mode.\n\nIdempotent: if ANY member is already past `backlog` (planning/in_progress/…), the tool returns a noop envelope (`noop: true, noop_reason: :already_in_flight`) without re-dispatching. Cyclic DAGs and cross-stack deps also short-circuit — the tool returns an error envelope and no member transitions. Does not write the stack-level status itself: an all-`planning` stack rolls up to `forming` per the ADR 0041 status mapping.",
         parameters: %{
           stack_id: %{
             type: "string",
@@ -1715,11 +1756,11 @@ defmodule Platform.Federation.ToolSurface do
           }
         },
         returns:
-          "The stack record plus `planning` (the members moved from `backlog` to `planning`). Per-member transition failures surface in a `cascade_errors` array. An empty stack — or one with no `backlog` members — returns an empty `planning` list.",
+          "The stack record (including `auto_plan` and `auto_accept_plan`) plus:\n• `planning` — the members moved from `backlog` to `planning`.\n• `mode` — `:manual` or `:auto`, derived from `stack.auto_plan`.\n• `waves_total` — total number of DAG waves (informational; drives progress UI).\n• `edges_authored` — number of dep-inference edges committed on this call (0 when a user override was already present).\n• `edges_skipped_reason` — when inference was skipped or terminally failed (`:user_override_present | :cycle | :parse_failed | :adapter_failed | :empty_response`). Omitted on the happy path.\n\nPer-member transition failures surface in a `cascade_errors` array. An empty stack — or one where a wave 0 dispatch found no `backlog` members — returns an empty `planning` list.\n\nIdempotency short-circuits return `%{stack_id, planning: [], errors: [], noop: true, noop_reason: :already_in_flight}` without the stack record shape. Cyclic DAGs return an error envelope with `cycle_path`; cross-stack deps return an error envelope with `from_task_id`/`to_task_id`.",
         limitations:
-          "Members that fail the `planning` transition appear in `cascade_errors`; the stack-level status still recomputes from its members. Safe to re-invoke: a stack with no `backlog` members is a no-op returning an empty `planning` list.",
+          "Wave gating is the default. Callers relying on the pre-Stack-v2 all-at-once cascade must set `auto_plan: true` on the stack. Members that fail the `planning` transition appear in `cascade_errors`; the stack-level status still recomputes from its members.",
         when_to_use:
-          "When you want every backlog member of a stack to enter the planning phase at once — the headless mirror of the per-task \"Start Planning\" button."
+          "When you want to drive a stack's members into the planning phase — either wave-gated (default) or all-at-once (auto_plan). The MCP mirror of the per-task \"Start Planning\" action, applied stack-wide."
       },
       %{
         name: "stack_assign_agents",
@@ -3790,35 +3831,140 @@ defmodule Platform.Federation.ToolSurface do
         name: Map.get(args, "name"),
         description: Map.get(args, "description"),
         epic_id: Map.get(args, "epic_id"),
+        sponsor_user_id: Map.get(args, "sponsor_user_id"),
         rollup_branch: slug && Stacks.rollup_branch_name(slug)
       }
       |> maybe_put_base_branch(Map.get(args, "base_branch"))
+      |> maybe_put_boolean(:auto_plan, Map.get(args, "auto_plan"))
+      |> maybe_put_boolean(:auto_accept_plan, Map.get(args, "auto_accept_plan"))
 
     case Stacks.create_stack(attrs) do
       {:ok, %Stack{} = stack} ->
         # Eagerly ensure the rollup branch exists on origin at create-time
         # (fire-and-forget, idempotent against the stack_start trigger).
         StackDeployer.handle_stack_created(stack)
-        {:ok, %{stack_id: stack.id, rollup_branch: stack.rollup_branch}}
+        # Preload sponsor so the return envelope shows the shape a
+        # subsequent `stack_get` would — the `create_stack` result does
+        # not auto-preload :sponsor even when sponsor_user_id is set.
+        # Mirrors the task_create envelope sponsor preload (ADR 0042).
+        stack = Repo.preload(stack, :sponsor)
+
+        {:ok,
+         %{
+           stack_id: stack.id,
+           rollup_branch: stack.rollup_branch,
+           sponsor: serialize_sponsor(stack.sponsor)
+         }}
 
       {:error, %Ecto.Changeset{} = changeset} ->
-        if slug_taken?(changeset) do
-          {:error,
-           %{
-             code: "slug_taken",
-             error: "Slug '#{slug}' is already in use in this project",
-             recoverable: true,
-             suggestion: "Pick a different slug or reuse the existing stack"
-           }}
-        else
-          {:error,
-           %{
-             error: "Failed to create stack: #{inspect_errors(changeset)}",
-             recoverable: true,
-             suggestion:
-               "Check that project_id, slug, and name are provided and that slug is valid"
-           }}
+        cond do
+          slug_taken?(changeset) ->
+            {:error,
+             %{
+               code: "slug_taken",
+               error: "Slug '#{slug}' is already in use in this project",
+               recoverable: true,
+               suggestion: "Pick a different slug or reuse the existing stack"
+             }}
+
+          sponsor_fk_violation?(changeset) ->
+            {:error,
+             %{
+               code: "sponsor_fk",
+               error: "sponsor_user_id references an unknown user",
+               recoverable: true,
+               suggestion:
+                 "Pass a valid user UUID for sponsor_user_id, or omit the key to leave the stack unsponsored"
+             }}
+
+          true ->
+            {:error,
+             %{
+               error: "Failed to create stack: #{inspect_errors(changeset)}",
+               recoverable: true,
+               suggestion:
+                 "Check that project_id, slug, and name are provided and that slug is valid"
+             }}
         end
+    end
+  end
+
+  # `stack_update` — mirrors `task_update`'s canonical nilable-semantics
+  # contract for the stack surface (ADR 0042 Decision 8). Only supplied
+  # keys are written; `sponsor_user_id` explicitly propagates `nil` to
+  # clear the slot, everything else is dropped when nil (unset ≠ clear).
+  def execute("stack_update", args, _context) do
+    stack_id = Map.get(args, "stack_id")
+
+    case stack_id && Stacks.get_stack(stack_id) do
+      nil ->
+        {:error,
+         %{
+           code: "stack_not_found",
+           error: "Stack not found: #{inspect(stack_id)}",
+           recoverable: false,
+           suggestion: "Use stack_list to find available stacks"
+         }}
+
+      %Stack{} = stack ->
+        attrs = build_stack_update_attrs(args)
+
+        case Stacks.update_stack(stack, attrs) do
+          {:ok, %Stack{} = updated} ->
+            # Refresh :sponsor so the envelope reflects the current shape —
+            # otherwise a caller that just cleared the sponsor via
+            # `sponsor_user_id: nil` would still see the pre-update user
+            # struct on the response.
+            updated = Repo.preload(updated, :sponsor, force: true)
+            Tasks.broadcast_board({:stack_updated, updated})
+            {:ok, serialize_stack(updated)}
+
+          {:error, %Ecto.Changeset{} = changeset} ->
+            if sponsor_fk_violation?(changeset) do
+              {:error,
+               %{
+                 code: "sponsor_fk",
+                 error: "sponsor_user_id references an unknown user",
+                 recoverable: true,
+                 suggestion:
+                   "Pass a valid user UUID for sponsor_user_id, or set it to null to clear the sponsor"
+               }}
+            else
+              {:error,
+               %{
+                 error: "Failed to update stack: #{inspect_errors(changeset)}",
+                 recoverable: true,
+                 suggestion: "Check that the provided values are valid"
+               }}
+            end
+        end
+    end
+  end
+
+  # Nilable-semantics writer: only `sponsor_user_id` propagates explicit
+  # nil (clears the slot); `name` and `description` are dropped when
+  # omitted OR when nil (unset ≠ clear for those). Mirrors the
+  # `TaskAttrs.build_task_attrs/3` contract for the stack surface.
+  defp build_stack_update_attrs(args) do
+    base = %{}
+
+    base =
+      case Map.fetch(args, "name") do
+        {:ok, nil} -> base
+        {:ok, value} -> Map.put(base, :name, value)
+        :error -> base
+      end
+
+    base =
+      case Map.fetch(args, "description") do
+        {:ok, nil} -> base
+        {:ok, value} -> Map.put(base, :description, value)
+        :error -> base
+      end
+
+    case Map.fetch(args, "sponsor_user_id") do
+      {:ok, value} -> Map.put(base, :sponsor_user_id, value)
+      :error -> base
     end
   end
 
@@ -4201,7 +4347,9 @@ defmodule Platform.Federation.ToolSurface do
              stack: updated,
              planning: planning,
              edges_authored: edges_authored,
-             edges_skipped_reason: edges_skipped_reason
+             edges_skipped_reason: edges_skipped_reason,
+             mode: mode,
+             waves_total: waves_total
            }} ->
             {:ok,
              stack_start_planning_payload(
@@ -4209,7 +4357,9 @@ defmodule Platform.Federation.ToolSurface do
                planning,
                [],
                edges_authored,
-               edges_skipped_reason
+               edges_skipped_reason,
+               mode: mode,
+               waves_total: waves_total
              )}
 
           {:partial,
@@ -4218,7 +4368,9 @@ defmodule Platform.Federation.ToolSurface do
              planning: planning,
              errors: errors,
              edges_authored: edges_authored,
-             edges_skipped_reason: edges_skipped_reason
+             edges_skipped_reason: edges_skipped_reason,
+             mode: mode,
+             waves_total: waves_total
            }} ->
             {:ok,
              stack_start_planning_payload(
@@ -4226,8 +4378,43 @@ defmodule Platform.Federation.ToolSurface do
                planning,
                errors,
                edges_authored,
-               edges_skipped_reason
+               edges_skipped_reason,
+               mode: mode,
+               waves_total: waves_total
              )}
+
+          {:noop, reason} ->
+            # Stack v2 (task 019f487e stage 3): manual-mode idempotency
+            # short-circuit. Surface as a soft-success payload so the
+            # caller can re-render UI state without treating it as an
+            # error, but include the reason for LiveView telemetry.
+            {:ok,
+             %{
+               stack_id: stack.id,
+               planning: [],
+               errors: [],
+               noop: true,
+               noop_reason: reason
+             }}
+
+          {:error, :cycle, path} ->
+            {:error,
+             %{
+               error: "Cycle detected in stack DAG",
+               recoverable: false,
+               cycle_path: Enum.map(path, & &1.id),
+               suggestion: "Remove one edge to break the cycle before re-invoking"
+             }}
+
+          {:error, :cross_stack_dep, %{from: from, to_task_id: to_id}} ->
+            {:error,
+             %{
+               error: "Cross-stack dependency detected",
+               recoverable: false,
+               from_task_id: from.id,
+               to_task_id: to_id,
+               suggestion: "Eject one endpoint or add both tasks to the same stack"
+             }}
 
           {:error, :stack_not_found} ->
             {:error,
@@ -4344,7 +4531,8 @@ defmodule Platform.Federation.ToolSurface do
          planning,
          errors,
          edges_authored,
-         edges_skipped_reason
+         edges_skipped_reason,
+         opts \\ []
        ) do
     payload =
       stack
@@ -4352,12 +4540,27 @@ defmodule Platform.Federation.ToolSurface do
       |> Map.put(:planning, Enum.map(planning, &serialize_stack_member/1))
       |> Map.put(:edges_authored, edges_authored)
       |> maybe_put_edges_skipped_reason(edges_skipped_reason)
+      |> maybe_put_mode(Keyword.get(opts, :mode))
+      |> maybe_put_waves_total(Keyword.get(opts, :waves_total))
 
     case errors do
       [] -> payload
       _ -> Map.put(payload, :cascade_errors, errors)
     end
   end
+
+  # `mode` and `waves_total` are Stack v2 stage 6 fields on the
+  # `start_planning/1` return shape. Emit them on the payload when the
+  # caller passes them through so the MCP contract matches the tool
+  # `returns` doc without breaking legacy callers that still use the
+  # 5-arity form.
+  defp maybe_put_mode(payload, nil), do: payload
+  defp maybe_put_mode(payload, mode) when is_atom(mode), do: Map.put(payload, :mode, mode)
+
+  defp maybe_put_waves_total(payload, nil), do: payload
+
+  defp maybe_put_waves_total(payload, waves_total) when is_integer(waves_total),
+    do: Map.put(payload, :waves_total, waves_total)
 
   # Include `edges_skipped_reason` only when inference was skipped or
   # terminally failed — the happy path (inference ran and wrote edges)
@@ -4381,8 +4584,23 @@ defmodule Platform.Federation.ToolSurface do
       description: stack.description,
       project_id: stack.project_id,
       epic_id: stack.epic_id,
+      # Stack v2 lifecycle flags (task 019f487e stage 6). `auto_plan`
+      # governs how many waves `stack_start_planning` fans out per call
+      # (default false: only wave 0). `auto_accept_plan` governs whether
+      # submitted member plans skip human review. Both surface here so
+      # `stack_get` callers can see current mode without a follow-up
+      # query. Documented on the `stack_create` and `stack_get` tool
+      # entries.
+      auto_plan: stack.auto_plan,
+      auto_accept_plan: stack.auto_accept_plan,
       # Stack-level agent assignment default (ADR 0041). `%{}` when unset.
       phase_assignees: Stacks.stack_phase_assignees(stack),
+      # ADR 0042 Decision 8 — Sponsor slot. `sponsor_user_id` is the raw
+      # FK (nil when unsponsored); `sponsor` is the hydrated envelope
+      # (`nil` when unsponsored or when :sponsor preload was skipped).
+      # Mirrors the task serializer's shape.
+      sponsor_user_id: Map.get(stack, :sponsor_user_id),
+      sponsor: serialize_sponsor(Map.get(stack, :sponsor)),
       inserted_at: format_datetime(stack.inserted_at),
       updated_at: format_datetime(stack.updated_at)
     }
@@ -4669,11 +4887,34 @@ defmodule Platform.Federation.ToolSurface do
     end)
   end
 
+  # Detect the `foreign_key_constraint(:sponsor_user_id)` violation
+  # surfaced by `Stack.changeset/2` when the supplied UUID references no
+  # existing user. Lets `stack_create` / `stack_update` return a
+  # structured `sponsor_fk` envelope instead of the generic
+  # changeset-inspect fallback.
+  defp sponsor_fk_violation?(%Ecto.Changeset{errors: errors}) do
+    Enum.any?(errors, fn
+      {:sponsor_user_id, {_msg, opts}} ->
+        Keyword.get(opts, :constraint) == :foreign
+
+      _ ->
+        false
+    end)
+  end
+
   defp maybe_put_filter(filters, _key, nil), do: filters
   defp maybe_put_filter(filters, key, value), do: Map.put(filters, key, value)
 
   defp maybe_put_base_branch(attrs, nil), do: attrs
   defp maybe_put_base_branch(attrs, value), do: Map.put(attrs, :base_branch, value)
+
+  # Accept an optional boolean arg from the MCP call. Any non-boolean
+  # value (including nil / missing) is skipped so the Ecto default from
+  # `Stack.changeset/2` wins. This keeps callers from having to send an
+  # explicit `false` to preserve the default.
+  defp maybe_put_boolean(attrs, _key, nil), do: attrs
+  defp maybe_put_boolean(attrs, key, value) when is_boolean(value), do: Map.put(attrs, key, value)
+  defp maybe_put_boolean(attrs, _key, _value), do: attrs
 
   # ── Plan / Stage / Validation tools ──────────────────────────────────────
 

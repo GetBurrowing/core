@@ -167,6 +167,7 @@ defmodule Platform.Orchestration.PromptTemplates do
           "task_priority",
           "provider_specific_guidance",
           "previous_rejection_reason",
+          "upstream_plans_section",
           "skills_reference"
         ],
         content: """
@@ -179,6 +180,7 @@ defmodule Platform.Orchestration.PromptTemplates do
         {{provider_specific_guidance}}
 
         {{previous_rejection_reason}}
+        {{upstream_plans_section}}
         Create a plan using the plan_create tool. The plan will be reviewed by a human before work starts — make it specific enough that they can meaningfully approve or reject it.
 
         ## Stage scope (planner's responsibility)

@@ -304,6 +304,7 @@
             type="button"
             phx-click="toggle_sponsor_filter"
             aria-pressed={if @sponsor_filter == :mine, do: "true", else: "false"}
+            aria-label="Filter tasks and stacks to those I sponsor"
             data-role="sponsor-filter-toggle"
             data-active={to_string(@sponsor_filter == :mine)}
             class={[
@@ -315,7 +316,7 @@
               )
             ]}
           >
-            <span>Sponsored by me</span>
+            <span>My work</span>
           </button>
         </nav>
       </:filters>
@@ -501,6 +502,7 @@
                         <h3 class="text-sm font-medium leading-snug truncate min-w-0">
                           {item.name}
                         </h3>
+                        <% mobile_stack_sponsor = sponsor_identity(item, @users_by_id) %>
                         <div class="flex min-w-0 items-center gap-1.5 text-[10px] text-base-content/60">
                           <span class="bg-base-200 px-1.5 py-0.5 rounded whitespace-nowrap shrink-0">
                             {board_data.member_count} tasks
@@ -508,6 +510,20 @@
                           <span class="bg-base-200 px-1.5 py-0.5 rounded whitespace-nowrap shrink-0">
                             {board_data.dep_edge_count} dep edges
                           </span>
+                          <%!-- Stage 4 of task 019f487e (ADR-0042 Decision 8):
+                               sponsor avatar mirrors desktop stack card. Absent
+                               sponsor renders nothing. No own-sponsorship ring
+                               affordance — Rowan rejected it as always wrong. --%>
+                          <.human_avatar
+                            :if={mobile_stack_sponsor}
+                            name={mobile_stack_sponsor.name}
+                            avatar_url={mobile_stack_sponsor.avatar_url}
+                            seed={mobile_stack_sponsor.seed}
+                            size="xs"
+                            class="ml-auto size-4 shrink-0"
+                            title={"Sponsored by " <> mobile_stack_sponsor.name}
+                            data-role="stack-sponsor-avatar"
+                          />
                         </div>
                       </button>
                       <button
@@ -666,9 +682,9 @@
                       <% end %>
                       <%!-- Sponsor chip (ADR 0042 stage 1). Only renders when
                            `sponsor_user_id` is set — an absent sponsor is
-                           silent, not a noisy "Unsponsored" pill. Own-
-                           sponsorship gets a subtle `ring-primary/40`
-                           affordance to signal stewardship at a glance. --%>
+                           silent, not a noisy "Unsponsored" pill. No own-
+                           sponsorship ring affordance — Rowan rejected it as
+                           always wrong (stage 4 rework). --%>
                       <% sponsor = sponsor_identity(task, @users_by_id) %>
                       <%= if sponsor do %>
                         <.human_avatar
@@ -676,10 +692,7 @@
                           avatar_url={sponsor.avatar_url}
                           seed={sponsor.seed}
                           size="xs"
-                          class={[
-                            "size-4 shrink-0",
-                            task.sponsor_user_id == @current_user_id && "ring-1 ring-primary/40"
-                          ]}
+                          class="size-4 shrink-0"
                           title={"Sponsored by " <> sponsor.name}
                           data-role="sponsor-avatar"
                         />
@@ -818,7 +831,7 @@
         class="flex flex-1 items-center justify-center py-16"
       >
         <.empty_state variant={:minimal}>
-          <:body>You're not sponsoring any tasks currently.</:body>
+          <:body>You're not sponsoring any tasks or stacks currently.</:body>
         </.empty_state>
       </div>
       <div
@@ -922,7 +935,13 @@
                         {item.name}
                       </h3>
 
-                      <%!-- Pills row: member count + dep edge count. --%>
+                      <%!-- Pills row: member count + dep edge count + optional
+                           sponsor avatar (Stage 4 of task 019f487e —
+                           ADR-0042 Decision 8). Mirrors the task-card
+                           sponsor chip: absent sponsor renders nothing.
+                           No own-sponsorship ring affordance — Rowan
+                           rejected it as always wrong (stage 4 rework). --%>
+                      <% stack_sponsor = sponsor_identity(item, @users_by_id) %>
                       <div class="flex min-w-0 items-center gap-1.5 text-[10px] text-base-content/60">
                         <span class="bg-base-200 px-1.5 py-0.5 rounded font-medium whitespace-nowrap shrink-0">
                           {board_data.member_count} tasks
@@ -930,6 +949,16 @@
                         <span class="bg-base-200 px-1.5 py-0.5 rounded font-medium whitespace-nowrap shrink-0">
                           {board_data.dep_edge_count} dep edges
                         </span>
+                        <.human_avatar
+                          :if={stack_sponsor}
+                          name={stack_sponsor.name}
+                          avatar_url={stack_sponsor.avatar_url}
+                          seed={stack_sponsor.seed}
+                          size="xs"
+                          class="ml-auto size-4 shrink-0"
+                          title={"Sponsored by " <> stack_sponsor.name}
+                          data-role="stack-sponsor-avatar"
+                        />
                       </div>
                     </div>
                     <button
@@ -1069,9 +1098,9 @@
                           <% end %>
                         <% end %>
                         <%!-- Sponsor chip (ADR 0042 stage 1). Absent sponsor
-                             renders nothing; own-sponsorship gets a subtle
-                             `ring-primary/40` affordance. Mirrors the mobile
-                             chip shape from line ~487. --%>
+                             renders nothing. No own-sponsorship ring
+                             affordance — Rowan rejected it as always wrong
+                             (stage 4 rework). Mirrors the mobile chip shape. --%>
                         <% sponsor = sponsor_identity(task, @users_by_id) %>
                         <.human_avatar
                           :if={sponsor}
@@ -1079,10 +1108,7 @@
                           avatar_url={sponsor.avatar_url}
                           seed={sponsor.seed}
                           size="xs"
-                          class={[
-                            "shrink-0",
-                            task.sponsor_user_id == @current_user_id && "ring-1 ring-primary/40"
-                          ]}
+                          class="shrink-0"
                           title={"Sponsored by " <> sponsor.name}
                           data-role="sponsor-avatar"
                         />
@@ -2614,15 +2640,35 @@
       data-role="stack-detail-body"
     >
       <%!-- Left column: dep DAG. `.dag` matches the mock chrome
-           (rounded base-300 backdrop, modest padding). The SVG scales
-           fluidly via `w-full h-auto`; viewBox keeps the aspect lock
-           and the topological positions so node ② and ③ visibly share
-           a row when they're parallel siblings. --%>
-      <div class="dag rounded bg-base-300 p-2" data-role="stack-detail-dag">
+           (rounded base-300 backdrop, modest padding). The container is a
+           user-resizable box (`.stack-graph-resize-container`) — desktop
+           uses the native CSS `resize: both` corner handle; coarse-pointer
+           (mobile) hides the native handle and uses the custom
+           `[data-role=stack-detail-dag-resize-handle]` touch button as its
+           sibling. `phx-update="ignore"` is load-bearing: the JS hook
+           (`StackGraphResize`, wired in stage 2) writes inline width/height
+           on this element, and LV would otherwise clobber those styles on
+           every diff of `@selected_stack_members`. Same footgun that the
+           resizable sidebar avoids via `updated()` — ignoring is cleaner
+           here because the container has no server-driven markup other than
+           the SVG child, whose viewBox is stable across diffs. The SVG
+           fills the container (`w-full h-full`); `preserveAspectRatio`
+           keeps the graph legible as the aspect changes. --%>
+      <div
+        id="stack-detail-dag-container"
+        class="stack-graph-resize-container dag rounded bg-base-300 p-2 relative overflow-auto"
+        data-role="stack-detail-dag"
+        data-desktop-default-w="800"
+        data-desktop-default-h="600"
+        data-mobile-default-h="420"
+        phx-hook="StackGraphResize"
+        phx-update="ignore"
+      >
         <svg
           viewBox={"0 0 #{dag_w} #{dag_h}"}
+          preserveAspectRatio="xMidYMid meet"
           xmlns="http://www.w3.org/2000/svg"
-          class="w-full h-auto block"
+          class="w-full h-full block"
           data-role="stack-detail-dag-svg"
         >
           <%!-- Edges render as dashed lines with no arrowhead per Rowan's
@@ -2682,6 +2728,33 @@
             </g>
           <% end %>
         </svg>
+        <%!-- Custom touch resize handle. Desktop uses the native `resize: both`
+             CSS handle (also bottom-right); this button overlays the same
+             corner so the two visual affordances land in the same spot. CSS
+             hides this button on fine-pointer viewports so it doesn't
+             clash with the native corner. `touch-none` stops the browser
+             from swallowing touchmove for page scroll during the drag.
+             The stage-3 hook wires the actual touchstart/move/end. --%>
+        <button
+          type="button"
+          aria-label="Resize dep graph"
+          data-role="stack-detail-dag-resize-handle"
+          class="stack-graph-resize-handle absolute bottom-1 right-1 h-6 w-6 rounded-sm bg-base-content/10 hover:bg-base-content/20 items-center justify-center cursor-nwse-resize touch-none"
+        >
+          <svg
+            viewBox="0 0 12 12"
+            xmlns="http://www.w3.org/2000/svg"
+            class="h-3 w-3 opacity-70"
+            aria-hidden="true"
+          >
+            <path
+              d="M11 1 L1 11 M11 5 L5 11 M11 9 L9 11"
+              stroke="currentColor"
+              stroke-width="1.2"
+              fill="none"
+            />
+          </svg>
+        </button>
       </div>
       <%!-- Right column: linear members list (T8 stage 4). One row per
            in-stack member ordered by `stack_position`. Each row carries

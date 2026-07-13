@@ -833,6 +833,62 @@ defmodule Platform.Tasks do
   defp maybe_dispatch_teardown(_task, _new_status), do: :ok
 
   @doc """
+  Central guard: may this task's per-task deploy path (auto-merge shell-out,
+  PR-open dispatch, `Deploy: PR merge` stage injection) fire?
+
+  Returns:
+
+    * `:ok` — the task is NOT a stack member; the caller may proceed.
+    * `{:error, :stack_ships_atomically}` — the task carries `stack_id`
+      and the caller MUST NOT dispatch a per-member deploy. The stack
+      rollup PR (T6 / ADR 0041) carries the deploy for every member
+      atomically. Emits telemetry
+      `[:platform, :tasks, :deploy_dispatch, :rejected_stack_member]`
+      with `%{task_id, stack_id}` metadata each time the guard fires,
+      making the recurring per-member ship regression cheap to alert on.
+
+  This is the single seam every deploy-dispatch call site must consult so
+  the "stacks ship as ONE rollup PR" invariant survives future refactors.
+  Callers previously each inlined `is_binary(task.stack_id)` in
+  `PlanEngine.maybe_inject_deploy_or_complete/2`,
+  `AutoMerger.execute_merge/4`, and `GithubWebhookController`; any new
+  path that skips the check silently ships a stack member alone — the
+  exact recurring bug ORG_MEMORY `feedback_stack_rollup_ship` warns about.
+
+  Accepts a `%Task{}`, a task id (binary), or `nil`. A `nil` task or a
+  task id that doesn't resolve returns `:ok` because there's no stack
+  context to violate — the eventual downstream call will fail on its own
+  merits.
+  """
+  @spec dispatch_deploy_for_task(Task.t() | binary() | nil) ::
+          :ok | {:error, :stack_ships_atomically}
+  def dispatch_deploy_for_task(%Task{stack_id: stack_id} = task) when is_binary(stack_id) do
+    Logger.info(
+      "[Tasks] dispatch_deploy_for_task rejecting task #{task.id} — stack #{stack_id} " <>
+        "ships atomically via rollup PR (stacks ship as ONE rollup PR)"
+    )
+
+    :telemetry.execute(
+      [:platform, :tasks, :deploy_dispatch, :rejected_stack_member],
+      %{count: 1},
+      %{task_id: task.id, stack_id: stack_id}
+    )
+
+    {:error, :stack_ships_atomically}
+  end
+
+  def dispatch_deploy_for_task(%Task{}), do: :ok
+
+  def dispatch_deploy_for_task(task_id) when is_binary(task_id) do
+    case get_task_record(task_id) do
+      %Task{} = task -> dispatch_deploy_for_task(task)
+      nil -> :ok
+    end
+  end
+
+  def dispatch_deploy_for_task(nil), do: :ok
+
+  @doc """
   Resolve the effective deploy strategy for a task.
 
   Resolution order:
@@ -1026,17 +1082,32 @@ defmodule Platform.Tasks do
       {:error, :architect_crashed}
   end
 
-  # Auto-approve branch (task 019f25f2 stage 2): if the parent task has the
-  # opt-in `auto_approve_plan` flag set AND the precondition passes (plan has
-  # stages, task has execution + review assignees), immediately funnel the
-  # freshly-submitted plan through `approve_plan/3` with the `auto: true`
-  # opts flag so it lands `approved` and stamps `auto_approved_at`. On skip
-  # (precondition fails) we leave the plan in `pending_review` and log so
-  # operators can tell why a flag-on task didn't auto-approve.
+  # Auto-approve branch (task 019f25f2 stage 2 + Stack v2 stage 4): fire when
+  # EITHER the parent task carries the opt-in `auto_approve_plan` flag OR
+  # the parent task's stack carries `auto_accept_plan: true`. Both signals
+  # short-circuit the freshly-submitted plan through `approve_plan/3` with
+  # `auto: true` so it lands `approved` with `auto_approved_at` stamped —
+  # provided the precondition passes (plan has stages, task has execution +
+  # review assignees). On skip we leave the plan in `pending_review` and
+  # log which precondition failed so operators can diagnose flag-on tasks
+  # that didn't auto-approve.
+  #
+  # Reading the stack flag at submit-time (rather than mutating each
+  # member's `auto_approve_plan` at `Stacks.start_planning/1`) keeps the
+  # boolean authoritative on the stack itself: toggling `auto_accept_plan`
+  # mid-flight instantly changes behavior for the next plan submission
+  # without a mutation storm across member tasks.
   defp maybe_auto_approve(%Plan{} = plan) do
-    task = Repo.get!(Task, plan.task_id)
+    task = plan.task_id |> then(&Repo.get!(Task, &1)) |> Repo.preload(:stack)
 
-    if task.auto_approve_plan do
+    via =
+      cond do
+        task.auto_approve_plan -> :task
+        task.stack && task.stack.auto_accept_plan -> :stack
+        true -> nil
+      end
+
+    if via do
       case auto_approve_precondition(task, plan) do
         :ok ->
           case approve_plan(plan, "system:auto", auto: true) do
@@ -1047,6 +1118,7 @@ defmodule Platform.Tasks do
                 %{
                   task_id: task.id,
                   plan_id: approved_plan.id,
+                  via: via,
                   resource_type: "plan",
                   resource_id: approved_plan.id,
                   action: "auto_approved",
@@ -1058,7 +1130,7 @@ defmodule Platform.Tasks do
 
             {:error, reason} = err ->
               Logger.warning(
-                "auto_approve_plan: approve_plan failed task_id=#{task.id} plan_id=#{plan.id} reason=#{inspect(reason)}"
+                "auto_approve_plan: approve_plan failed task_id=#{task.id} plan_id=#{plan.id} via=#{via} reason=#{inspect(reason)}"
               )
 
               err
@@ -1066,7 +1138,7 @@ defmodule Platform.Tasks do
 
         {:skip, reason} ->
           Logger.warning(
-            "auto_approve_plan skipped task_id=#{task.id} plan_id=#{plan.id} reason=#{reason}"
+            "auto_approve_plan skipped task_id=#{task.id} plan_id=#{plan.id} via=#{via} reason=#{reason}"
           )
 
           :telemetry.execute(
@@ -1075,6 +1147,7 @@ defmodule Platform.Tasks do
             %{
               task_id: task.id,
               plan_id: plan.id,
+              via: via,
               reason: reason,
               resource_type: "plan",
               resource_id: plan.id,
@@ -1230,6 +1303,14 @@ defmodule Platform.Tasks do
           task_id: finalized_task && finalized_task.id
         })
 
+        # Stack v2 (task 019f487e stage 3): if this task belongs to a
+        # manual-mode stack (`stack.auto_plan == false`), the wave-gated
+        # planning cascade may need to advance now that another
+        # member's plan has been approved. Never let a cascade failure
+        # roll back the approval itself — the operator already committed
+        # to this plan, and we log-and-swallow any downstream error.
+        _ = maybe_advance_stack_planning(updated)
+
         {:ok, updated}
 
       {:error, reason} ->
@@ -1238,6 +1319,57 @@ defmodule Platform.Tasks do
   end
 
   def approve_plan(_plan, _approved_by, _opts), do: {:error, :invalid_transition}
+
+  # Stack v2 (task 019f487e stage 3) — manual-mode planning cascade hook.
+  #
+  # Called from `approve_plan/3` after the transaction commits. Loads
+  # the task by the just-approved plan's `task_id`, preloads its parent
+  # stack, and forwards to `Platform.Tasks.Stacks.advance_planning_waves/1`
+  # only if the stack has `auto_plan == false` (the manual-mode default —
+  # auto mode dispatches every wave up front in `start_planning/1`, so no
+  # per-approval advance is required).
+  #
+  # Wrapped in try/rescue/catch so a cascade failure NEVER bubbles into
+  # the approval flow — a stale DAG, a raced concurrent transition, or
+  # any other downstream error is logged and swallowed.
+  defp maybe_advance_stack_planning(%Plan{task_id: task_id}) when is_binary(task_id) do
+    try do
+      case Repo.get(Task, task_id) do
+        nil ->
+          :ok
+
+        %Task{stack_id: nil} ->
+          :ok
+
+        %Task{} = task ->
+          task = Repo.preload(task, :stack)
+
+          case task.stack do
+            %Platform.Tasks.Stack{auto_plan: false} = stack ->
+              Platform.Tasks.Stacks.advance_planning_waves(stack)
+
+            _ ->
+              :ok
+          end
+      end
+    rescue
+      e ->
+        Logger.warning(
+          "[Tasks.approve_plan] maybe_advance_stack_planning raised for task_id=#{task_id}: #{Exception.message(e)}"
+        )
+
+        :ok
+    catch
+      :exit, reason ->
+        Logger.warning(
+          "[Tasks.approve_plan] maybe_advance_stack_planning exited for task_id=#{task_id}: #{inspect(reason)}"
+        )
+
+        :ok
+    end
+  end
+
+  defp maybe_advance_stack_planning(_), do: :ok
 
   # Decide whether the just-approved task can move into execution or has to
   # park in `blocked` until its dependencies finish. Returns `{task, frozen}`

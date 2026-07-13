@@ -524,7 +524,23 @@ defmodule Platform.Org.Wiki.ContextT4E2ETest do
       # `HistorianDispatcher.dispatch_windowed/4`. Content-only sync;
       # variables list picks up `activity_digest` so the render doesn't
       # leave the placeholder unbound.
-      "20260711100000_force_update_historian_threshold_windowed.exs"
+      "20260711100000_force_update_historian_threshold_windowed.exs",
+      # Task 019f487e-03d9 stage 1 (Stack v2 stack-level sponsor) — adds
+      # `sponsor_user_id` FK → users(id) with `on_delete: :nilify_all` on
+      # `task_stacks`, mirroring the tasks.sponsor_user_id column. Backend
+      # schema only; sponsor UI + filter thread land in later stages.
+      "20260711180755_add_sponsor_user_id_to_task_stacks.exs",
+      # Task 019f487e-25e6 stage 1 (Stack v2 auto-plan cascade) — adds
+      # `auto_plan` and `auto_accept_plan` boolean flags to `task_stacks`
+      # for the stage-3/4 wave-gated planning cascade. Backend-only; no
+      # data migration.
+      "20260711200000_add_auto_plan_flags_to_task_stacks.exs",
+      # Task 019f487e-25e6 stage 5 (Stack v2 parent_plans injection) —
+      # force-updates the `dispatch.planning` template to render the
+      # `{{upstream_plans_section}}` variable so in-stack dep parents'
+      # approved plans reach the planner subagent. Content-only sync; no
+      # schema changes.
+      "20260711202135_add_parent_plans_section_to_dispatch_planning.exs"
     ]
 
     defp t4_root, do: Mix.Project.project_file() |> Path.dirname()

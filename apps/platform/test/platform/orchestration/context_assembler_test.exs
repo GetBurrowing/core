@@ -7,6 +7,7 @@ defmodule Platform.Orchestration.ContextAssemblerTest do
   alias Platform.Skills
   alias Platform.Tasks
   alias Platform.Tasks.CanvasAttachments
+  alias Platform.Tasks.Stacks
 
   setup do
     {:ok, project} =
@@ -300,6 +301,317 @@ defmodule Platform.Orchestration.ContextAssemblerTest do
       # decide whether to detach it.
       assert entry.note == "will rot"
     end
+  end
+
+  describe "parent_plans (stack v2 stage 5)" do
+    # Task 019f487e-25e6 stage 5 — planner subagents on stack members need
+    # their in-stack `blocks`-kind dep parents' approved plans in the
+    # dispatch context, so downstream planning aligns with what already
+    # got approved upstream.
+
+    test "solo (non-stack) task omits :parent_plans entirely", %{task: task} do
+      # Setup task in describe has stack_id == nil by default.
+      context = ContextAssembler.build(task.id)
+
+      refute Map.has_key?(context, :parent_plans),
+             """
+             Solo tasks must NOT carry a :parent_plans key so the planning
+             template can key on presence and skip the "Upstream plans"
+             section entirely. Present, empty list is also a wrong shape here.
+             """
+    end
+
+    test "stack member with no deps has parent_plans == []",
+         %{project: project} do
+      stack = create_stack_fixture(project)
+
+      {:ok, member} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Sole member",
+          description: "no upstreams"
+        })
+
+      {:ok, _} = Stacks.add_task(stack, member)
+
+      context = ContextAssembler.build(member.id)
+      assert Map.has_key?(context, :parent_plans)
+      assert context.parent_plans == []
+    end
+
+    test "stack member with 2 in-stack approved-plan deps returns both",
+         %{project: project} do
+      stack = create_stack_fixture(project)
+
+      {:ok, parent_a} =
+        Tasks.create_task(%{project_id: project.id, title: "Parent A"})
+
+      {:ok, parent_b} =
+        Tasks.create_task(%{project_id: project.id, title: "Parent B"})
+
+      {:ok, _} = Stacks.add_task(stack, parent_a)
+      {:ok, _} = Stacks.add_task(stack, parent_b)
+
+      {:ok, _plan_a} =
+        create_approved_plan_with_stages(parent_a.id, [
+          {1, "A stage 1", "Add A schema field"},
+          {2, "A stage 2", "Wire routing"}
+        ])
+
+      {:ok, _plan_b} =
+        create_approved_plan_with_stages(parent_b.id, [
+          {1, "B stage 1", "Bump migration"}
+        ])
+
+      {:ok, child} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Child",
+          dependencies: [
+            %{"task_id" => parent_a.id, "kind" => "blocks"},
+            %{"task_id" => parent_b.id, "kind" => "blocks"}
+          ]
+        })
+
+      {:ok, _} = Stacks.add_task(stack, child)
+
+      context = ContextAssembler.build(child.id)
+
+      assert Map.has_key?(context, :parent_plans)
+      assert length(context.parent_plans) == 2
+
+      by_task = Map.new(context.parent_plans, &{&1.task_id, &1})
+
+      assert entry_a = Map.get(by_task, parent_a.id)
+      assert entry_a.task_title == "Parent A"
+      assert entry_a.plan.version == 1
+      assert entry_a.plan.status == "approved"
+      assert length(entry_a.plan.stages) == 2
+
+      stage_names_a = Enum.map(entry_a.plan.stages, & &1.name)
+      assert stage_names_a == ["A stage 1", "A stage 2"]
+
+      assert entry_b = Map.get(by_task, parent_b.id)
+      assert entry_b.task_title == "Parent B"
+      assert length(entry_b.plan.stages) == 1
+      assert hd(entry_b.plan.stages).description == "Bump migration"
+
+      # Per-stage validations must NOT be serialized in the parent_plans
+      # payload — planner cares about what upstream decided, not the gates
+      # that policed it.
+      first_stage = hd(entry_a.plan.stages)
+      refute Map.has_key?(first_stage, :validations)
+    end
+
+    test "parent with no approved plan is filtered out",
+         %{project: project} do
+      stack = create_stack_fixture(project)
+
+      {:ok, parent} = Tasks.create_task(%{project_id: project.id, title: "Parent (pending)"})
+      {:ok, _} = Stacks.add_task(stack, parent)
+
+      # Only a pending_review plan — should not appear in parent_plans.
+      {:ok, _} =
+        Tasks.create_plan(%{
+          task_id: parent.id,
+          status: "pending_review",
+          version: 1
+        })
+
+      {:ok, child} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Child",
+          dependencies: [
+            %{"task_id" => parent.id, "kind" => "blocks"}
+          ]
+        })
+
+      {:ok, _} = Stacks.add_task(stack, child)
+
+      context = ContextAssembler.build(child.id)
+      assert context.parent_plans == []
+    end
+
+    test "cross-stack dep is filtered out",
+         %{project: project} do
+      # `Stacks.add_task/2` refuses to attach a task whose declared deps
+      # cross stack boundaries. To land a cross-stack dep on disk (as
+      # would happen from legacy data or a future soft-reference kind),
+      # bypass the changeset by rewriting `dependencies` on the row
+      # directly AFTER attaching to the stack.
+
+      stack_a = create_stack_fixture(project, slug: "stack-alpha")
+      stack_b = create_stack_fixture(project, slug: "stack-beta")
+
+      {:ok, other_stack_parent} =
+        Tasks.create_task(%{project_id: project.id, title: "Cross-stack parent"})
+
+      {:ok, _} = Stacks.add_task(stack_a, other_stack_parent)
+
+      {:ok, _} =
+        create_approved_plan_with_stages(other_stack_parent.id, [
+          {1, "Cross plan", "should not surface"}
+        ])
+
+      # Attach a bare child to stack_b, then rewrite its dependencies
+      # to point at a stack_a member (defense-in-depth path).
+      {:ok, child} = Tasks.create_task(%{project_id: project.id, title: "Child in beta"})
+      {:ok, _} = Stacks.add_task(stack_b, child)
+
+      child_row = Platform.Repo.get!(Platform.Tasks.Task, child.id)
+
+      {:ok, _} =
+        child_row
+        |> Ecto.Changeset.change(
+          dependencies: [%{"task_id" => other_stack_parent.id, "kind" => "blocks"}]
+        )
+        |> Platform.Repo.update()
+
+      context = ContextAssembler.build(child.id)
+      assert context.parent_plans == []
+    end
+
+    test "non-`blocks` dep kinds are filtered out",
+         %{project: project} do
+      # Task schema currently only allows `kind: "blocks"` via the
+      # changeset — non-blocks entries can only exist in the JSONB column
+      # if some future kind is added or if legacy data lingers. Bypass the
+      # changeset (`Ecto.Changeset.change/2`) to install a bogus-kind
+      # entry directly and prove the kind filter is defensive, not
+      # incidental.
+
+      stack = create_stack_fixture(project)
+
+      {:ok, informative_parent} =
+        Tasks.create_task(%{project_id: project.id, title: "Informative parent"})
+
+      {:ok, _} = Stacks.add_task(stack, informative_parent)
+
+      {:ok, _} =
+        create_approved_plan_with_stages(informative_parent.id, [
+          {1, "Informative stage", "should not surface"}
+        ])
+
+      {:ok, child} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Child with soft ref"
+        })
+
+      {:ok, _} = Stacks.add_task(stack, child)
+
+      # Bypass validate_dependencies to install a non-blocks kind directly.
+      child_row = Platform.Repo.get!(Platform.Tasks.Task, child.id)
+
+      {:ok, _} =
+        child_row
+        |> Ecto.Changeset.change(
+          dependencies: [
+            %{"task_id" => informative_parent.id, "kind" => "related_to"}
+          ]
+        )
+        |> Platform.Repo.update()
+
+      context = ContextAssembler.build(child.id)
+      assert context.parent_plans == []
+    end
+
+    test "dispatch prompt renders Upstream plans section verbatim from parent_plans",
+         %{project: project} do
+      stack = create_stack_fixture(project)
+
+      {:ok, parent} = Tasks.create_task(%{project_id: project.id, title: "Add A schema field"})
+      {:ok, _} = Stacks.add_task(stack, parent)
+
+      {:ok, _} =
+        create_approved_plan_with_stages(parent.id, [
+          {1, "Add A schema field", "Extend schema with new column"},
+          {2, "Backfill data", "Rewrite existing rows"}
+        ])
+
+      {:ok, child} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Wire A into UI",
+          status: "planning",
+          dependencies: [
+            %{"task_id" => parent.id, "kind" => "blocks"}
+          ]
+        })
+
+      {:ok, _} = Stacks.add_task(stack, child)
+
+      context = ContextAssembler.build(child.id)
+      assert length(context.parent_plans) == 1
+
+      # Rebuild the task with `status: "planning"` so the planning clause
+      # of `dispatch_prompt/4` fires. get_task_detail returns whatever
+      # status the row carries, so refresh it here.
+      planning_task = Tasks.get_task_detail(child.id)
+
+      prompt =
+        HeartbeatScheduler.dispatch_prompt(planning_task, nil, nil,
+          parent_plans: context.parent_plans
+        )
+
+      assert prompt =~ "## Upstream plans (approved by dep parents)"
+      assert prompt =~ "### Parent — Add A schema field (#{parent.id})"
+      assert prompt =~ "Plan v1:"
+      assert prompt =~ "- Stage 1: Add A schema field — Extend schema with new column"
+      assert prompt =~ "- Stage 2: Backfill data — Rewrite existing rows"
+    end
+
+    test "dispatch prompt with empty parent_plans renders no Upstream plans section",
+         %{task: task} do
+      # Solo task, no parent_plans opt at all.
+      planning_task = %{task | status: "planning"}
+      prompt = HeartbeatScheduler.dispatch_prompt(planning_task, nil, nil, [])
+      refute prompt =~ "## Upstream plans"
+
+      # Explicit empty list is also a no-op.
+      prompt2 =
+        HeartbeatScheduler.dispatch_prompt(planning_task, nil, nil, parent_plans: [])
+
+      refute prompt2 =~ "## Upstream plans"
+    end
+  end
+
+  # ── Parent-plans helpers ─────────────────────────────────────────────
+
+  defp create_stack_fixture(project, opts \\ []) do
+    slug = Keyword.get(opts, :slug, "cx-#{System.unique_integer([:positive])}")
+
+    {:ok, stack} =
+      Stacks.create_stack(%{
+        project_id: project.id,
+        slug: slug,
+        name: "Ctx assembler stack",
+        rollup_branch: Stacks.rollup_branch_name(slug)
+      })
+
+    stack
+  end
+
+  defp create_approved_plan_with_stages(task_id, stages) do
+    {:ok, plan} =
+      Tasks.create_plan(%{
+        task_id: task_id,
+        status: "approved",
+        version: 1
+      })
+
+    Enum.each(stages, fn {pos, name, desc} ->
+      {:ok, _stage} =
+        Tasks.create_stage(%{
+          plan_id: plan.id,
+          position: pos,
+          name: name,
+          description: desc
+        })
+    end)
+
+    {:ok, plan}
   end
 
   describe "rejection feedback chain (Tasks.reject_plan → ContextAssembler → dispatch_prompt)" do

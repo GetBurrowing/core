@@ -7,6 +7,8 @@ defmodule Platform.Orchestration.ContextAssembler do
   pure Repo queries via `Platform.Tasks`.
   """
 
+  import Ecto.Query
+
   alias Platform.Execution.CredentialLease
   alias Platform.Org.PreambleBuilder
   alias Platform.Orchestration.ExecutionSpace
@@ -14,6 +16,8 @@ defmodule Platform.Orchestration.ContextAssembler do
   alias Platform.Skills
   alias Platform.Tasks
   alias Platform.Tasks.CanvasAttachments
+  alias Platform.Tasks.Plan
+  alias Platform.Tasks.Task, as: TaskSchema
 
   @doc """
   Build a full context snapshot for the given task.
@@ -21,6 +25,14 @@ defmodule Platform.Orchestration.ContextAssembler do
   Returns a map with `:project`, `:epic`, `:task`, `:plan`,
   `:execution_space_id`, `:previous_rejection_reason`, and optionally
   `:deploy_credentials` keys.
+
+  Stack-member tasks additionally carry a `:parent_plans` key: the list of
+  approved plans belonging to the task's in-stack `blocks`-kind dep parents.
+  Solo (non-stack) tasks omit the key entirely so the planner prompt
+  template can key on presence (avoids confusing "Upstream plans" sections
+  for tasks with no upstreams). See stage 5 of task
+  `019f487e-25e6-7e53-8968-802a2b76302f` — ADR 0042's "immediate deps —
+  not transitive" rule scopes each entry to a single one-hop parent.
 
   The optional `deploy_lease` argument, when provided, causes the lease's
   env vars to be included under `:deploy_credentials` so the executing agent
@@ -77,7 +89,9 @@ defmodule Platform.Orchestration.ContextAssembler do
           org: PreambleBuilder.build(task, nil)
         }
 
-        maybe_add_deploy_credentials(base, deploy_lease)
+        base
+        |> maybe_put_parent_plans(task)
+        |> maybe_add_deploy_credentials(deploy_lease)
     end
   end
 
@@ -220,5 +234,112 @@ defmodule Platform.Orchestration.ContextAssembler do
     else
       context
     end
+  end
+
+  # ── Parent plans (stack members only) ────────────────────────────────
+
+  # Only inject `:parent_plans` when the task is a stack member. Solo tasks
+  # get the key omitted entirely so the planner template can key on presence
+  # rather than always rendering an "Upstream plans" section for tasks that
+  # have no upstreams.
+  defp maybe_put_parent_plans(context, %{stack_id: nil}), do: context
+
+  defp maybe_put_parent_plans(context, %{stack_id: stack_id} = task)
+       when is_binary(stack_id) do
+    Map.put(context, :parent_plans, resolve_parent_plans(task))
+  end
+
+  defp maybe_put_parent_plans(context, _task), do: context
+
+  # Resolve the approved plans belonging to the task's in-stack `blocks`-kind
+  # dep parents. ADR 0042 scopes each entry to a single one-hop parent —
+  # transitive walks are the planner's job, not this helper's.
+  #
+  # Behavior:
+  #   - Skip dep entries whose kind is not "blocks" (only true dependency
+  #     relationships propagate upstream context).
+  #   - Skip parents that belong to a different stack (or are not in any
+  #     stack) — cross-stack context is out of scope for the wave cascade.
+  #   - Skip parents with no approved plan (manual-mode wave gate before
+  #     approval — the normal case).
+  #   - Emit `[]` for a member with in-stack deps whose parents haven't
+  #     approved anything yet; emit `[]` for a member with no deps at all.
+  defp resolve_parent_plans(%{dependencies: deps, stack_id: stack_id}) when is_list(deps) do
+    parent_task_ids =
+      deps
+      |> Enum.filter(&blocks_dep?/1)
+      |> Enum.map(&Map.get(&1, "task_id"))
+      |> Enum.filter(&is_binary/1)
+      |> Enum.uniq()
+
+    case parent_task_ids do
+      [] ->
+        []
+
+      ids ->
+        ids
+        |> Enum.map(fn parent_id -> load_parent_plan_entry(parent_id, stack_id) end)
+        |> Enum.reject(&is_nil/1)
+    end
+  end
+
+  defp resolve_parent_plans(_task), do: []
+
+  defp blocks_dep?(%{"kind" => "blocks"}), do: true
+  defp blocks_dep?(_), do: false
+
+  # Load a same-stack parent and its most-recent approved plan. Returns
+  # `nil` when the parent belongs to a different stack (or none), or when
+  # the parent has no approved plan yet.
+  defp load_parent_plan_entry(parent_id, stack_id) do
+    case Repo.get(TaskSchema, parent_id) do
+      %TaskSchema{stack_id: ^stack_id, title: title} ->
+        case fetch_latest_approved_plan(parent_id) do
+          nil ->
+            nil
+
+          plan ->
+            %{
+              task_id: parent_id,
+              task_title: title,
+              plan: serialize_parent_plan(plan)
+            }
+        end
+
+      _ ->
+        nil
+    end
+  end
+
+  defp fetch_latest_approved_plan(task_id) do
+    Plan
+    |> where([p], p.task_id == ^task_id and p.status == "approved")
+    |> order_by([p], desc: p.version)
+    |> limit(1)
+    |> preload(:stages)
+    |> Repo.one()
+  end
+
+  # Serialize a parent plan into a small map. Omit per-stage validations —
+  # the planner needs to see WHAT the parent decided to do, not the
+  # validation gates that policed it.
+  defp serialize_parent_plan(%Plan{} = plan) do
+    stages =
+      (plan.stages || [])
+      |> Enum.sort_by(& &1.position)
+      |> Enum.map(fn stage ->
+        %{
+          position: stage.position,
+          name: stage.name,
+          description: stage.description
+        }
+      end)
+
+    %{
+      id: plan.id,
+      version: plan.version,
+      status: plan.status,
+      stages: stages
+    }
   end
 end

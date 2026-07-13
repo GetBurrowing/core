@@ -24,6 +24,20 @@ defmodule Platform.Federation.ToolSurfaceStacksTest do
   alias Platform.Tasks
   alias Platform.Tasks.Task
 
+  # ADR 0042 sponsor tests: insert a bare user row bypassing the
+  # `Platform.Accounts.User.changeset/2` name requirement so tests don't
+  # need to plumb an OIDC identity fixture. Mirror of the same helper in
+  # `apps/platform/test/platform/tasks/stacks_test.exs`.
+  defp insert_sponsor_user(opts \\ []) do
+    n = System.unique_integer([:positive])
+
+    Repo.insert!(%Platform.Accounts.User{
+      name: Keyword.get(opts, :name, "Sponsor #{n}"),
+      email: Keyword.get(opts, :email, "tool-stack-sponsor-#{n}@example.com"),
+      oidc_sub: "sub-tool-stack-sponsor-#{n}"
+    })
+  end
+
   # ── Fixtures ───────────────────────────────────────────────────────
 
   defp create_project(attrs \\ %{}) do
@@ -66,6 +80,194 @@ defmodule Platform.Federation.ToolSurfaceStacksTest do
       # this tool (ADR 0041 §branching) — exercised through the MCP
       # response, not by querying the Stacks context directly.
       assert result.rollup_branch == "stack/#{slug}"
+      # No sponsor supplied → envelope carries an explicit nil so the
+      # caller can render without a follow-up stack_get.
+      assert result.sponsor == nil
+    end
+
+    # ADR 0042 Decision 8 — sponsor_user_id is threaded into attrs and
+    # the return envelope carries a preloaded sponsor map so callers
+    # can render immediately without another round-trip.
+    test "accepts sponsor_user_id and returns the preloaded sponsor envelope" do
+      project = create_project()
+      user = insert_sponsor_user(name: "Rowan")
+      slug = unique_slug("e2e-create-sponsored")
+
+      {:ok, result} =
+        ToolSurface.execute(
+          "stack_create",
+          %{
+            "project_id" => project.id,
+            "slug" => slug,
+            "name" => "Sponsored",
+            "sponsor_user_id" => user.id
+          },
+          %{}
+        )
+
+      assert is_binary(result.stack_id)
+      assert result.sponsor == %{id: user.id, name: "Rowan", email: user.email}
+    end
+
+    test "returns a sponsor_fk envelope when sponsor_user_id references no user" do
+      project = create_project()
+      slug = unique_slug("e2e-create-bad-sponsor")
+
+      {:error, error} =
+        ToolSurface.execute(
+          "stack_create",
+          %{
+            "project_id" => project.id,
+            "slug" => slug,
+            "name" => "Bad Sponsor",
+            "sponsor_user_id" => Ecto.UUID.generate()
+          },
+          %{}
+        )
+
+      assert error.code == "sponsor_fk"
+      assert error.recoverable == true
+    end
+  end
+
+  # `stack_update` mirrors `task_update` for the stack surface (ADR 0042
+  # Decision 8). Sponsor semantics: omit key → leave untouched, pass
+  # UUID → set, pass explicit nil → clear.
+  describe "stack_update end-to-end" do
+    test "sets the sponsor on an unsponsored stack" do
+      project = create_project()
+      user = insert_sponsor_user(name: "Rowan")
+
+      %{stack_id: stack_id, sponsor: initial_sponsor} =
+        create_stack_via_tool(project.id, unique_slug("e2e-upd-set"), "Unsponsored")
+
+      assert initial_sponsor == nil
+
+      {:ok, updated} =
+        ToolSurface.execute(
+          "stack_update",
+          %{"stack_id" => stack_id, "sponsor_user_id" => user.id},
+          %{}
+        )
+
+      assert updated.id == stack_id
+      assert updated.sponsor_user_id == user.id
+      assert updated.sponsor == %{id: user.id, name: "Rowan", email: user.email}
+    end
+
+    test "clears the sponsor when sponsor_user_id is explicitly null" do
+      project = create_project()
+      user = insert_sponsor_user()
+
+      {:ok, %{stack_id: stack_id}} =
+        ToolSurface.execute(
+          "stack_create",
+          %{
+            "project_id" => project.id,
+            "slug" => unique_slug("e2e-upd-clear"),
+            "name" => "Has Sponsor",
+            "sponsor_user_id" => user.id
+          },
+          %{}
+        )
+
+      {:ok, cleared} =
+        ToolSurface.execute(
+          "stack_update",
+          %{"stack_id" => stack_id, "sponsor_user_id" => nil},
+          %{}
+        )
+
+      assert cleared.sponsor_user_id == nil
+      assert cleared.sponsor == nil
+    end
+
+    test "updates name and description without touching sponsor" do
+      project = create_project()
+      user = insert_sponsor_user(name: "Rowan")
+
+      {:ok, %{stack_id: stack_id}} =
+        ToolSurface.execute(
+          "stack_create",
+          %{
+            "project_id" => project.id,
+            "slug" => unique_slug("e2e-upd-name"),
+            "name" => "Original",
+            "sponsor_user_id" => user.id
+          },
+          %{}
+        )
+
+      {:ok, updated} =
+        ToolSurface.execute(
+          "stack_update",
+          %{
+            "stack_id" => stack_id,
+            "name" => "Renamed",
+            "description" => "Now with prose"
+          },
+          %{}
+        )
+
+      assert updated.name == "Renamed"
+      assert updated.description == "Now with prose"
+      # Sponsor stays put — the key was omitted from args, not passed
+      # as nil.
+      assert updated.sponsor_user_id == user.id
+      assert updated.sponsor.id == user.id
+    end
+
+    test "returns sponsor_fk envelope for an unknown sponsor UUID" do
+      project = create_project()
+      %{stack_id: stack_id} = create_stack_via_tool(project.id, unique_slug("e2e-upd-badfk"))
+
+      {:error, error} =
+        ToolSurface.execute(
+          "stack_update",
+          %{"stack_id" => stack_id, "sponsor_user_id" => Ecto.UUID.generate()},
+          %{}
+        )
+
+      assert error.code == "sponsor_fk"
+      assert error.recoverable == true
+    end
+
+    test "returns stack_not_found for a missing stack_id" do
+      {:error, error} =
+        ToolSurface.execute(
+          "stack_update",
+          %{"stack_id" => Ecto.UUID.generate(), "name" => "Nope"},
+          %{}
+        )
+
+      assert error.code == "stack_not_found"
+      assert error.recoverable == false
+    end
+
+    test "accepts auto_plan and auto_accept_plan and persists them on the stack" do
+      project = create_project()
+      slug = unique_slug("e2e-auto-flags")
+
+      {:ok, result} =
+        ToolSurface.execute(
+          "stack_create",
+          %{
+            "project_id" => project.id,
+            "slug" => slug,
+            "name" => "Auto Flags",
+            "auto_plan" => true,
+            "auto_accept_plan" => true
+          },
+          %{}
+        )
+
+      # The MCP tool contract for stack_create returns {stack_id,
+      # rollup_branch} only; the two new flags are verified by loading
+      # the persisted stack (still through the Stacks context, because
+      # stack_get's serialize_stack extension is deferred to stage 6).
+      stack = Platform.Tasks.Stacks.get_stack(result.stack_id)
+      assert stack.auto_plan == true
+      assert stack.auto_accept_plan == true
     end
   end
 
@@ -205,6 +407,44 @@ defmodule Platform.Federation.ToolSurfaceStacksTest do
       # `members_in_merge_order` is the topological (foundational-first)
       # ordering of member ids: root (level 0) before child (level 1).
       assert result.members_in_merge_order == [root.id, child.id]
+    end
+
+    test "surfaces auto_plan and auto_accept_plan on the stack record (stack v2 stage 6)" do
+      project = create_project()
+      slug = unique_slug("e2e-get-auto-flags")
+
+      # Create with both flags set so we can round-trip through stack_get.
+      {:ok, %{stack_id: stack_id}} =
+        ToolSurface.execute(
+          "stack_create",
+          %{
+            "project_id" => project.id,
+            "slug" => slug,
+            "name" => "Get Flags",
+            "auto_plan" => true,
+            "auto_accept_plan" => true
+          },
+          %{}
+        )
+
+      {:ok, result} = ToolSurface.execute("stack_get", %{"stack_id" => stack_id}, %{})
+
+      assert result.stack.auto_plan == true
+      assert result.stack.auto_accept_plan == true
+
+      # Regression: a stack with defaults (both false) also surfaces both
+      # keys — clients relying on `Map.has_key?/2` to detect Stack v2
+      # support don't need special-casing.
+      default_slug = unique_slug("e2e-get-auto-flags-default")
+
+      %{stack_id: default_stack_id} =
+        create_stack_via_tool(project.id, default_slug, "Get Defaults")
+
+      {:ok, default_result} =
+        ToolSurface.execute("stack_get", %{"stack_id" => default_stack_id}, %{})
+
+      assert default_result.stack.auto_plan == false
+      assert default_result.stack.auto_accept_plan == false
     end
 
     test "members_in_merge_order falls back to creation order with no declared deps" do
@@ -369,7 +609,7 @@ defmodule Platform.Federation.ToolSurfaceStacksTest do
       assert Enum.all?(after_plan.members, &(&1.status == "planning"))
     end
 
-    test "only advances backlog members and is a safe no-op on re-invocation" do
+    test "re-invocation on an in-flight stack returns a noop envelope (Stack v2)" do
       project = create_project()
 
       %{stack_id: stack_id} =
@@ -392,7 +632,10 @@ defmodule Platform.Federation.ToolSurfaceStacksTest do
           %{}
         )
 
-      # Pre-advance one member past backlog before the cascade.
+      # Pre-advance one member past backlog. Under Stack v2's wave-
+      # gated dispatch (ADR 0045), any non-backlog member is treated as
+      # "planning already kicked off" and the tool returns a noop
+      # envelope instead of picking up the remaining backlog member.
       Repo.get!(Task, ahead_member.id)
       |> Task.changeset(%{status: "planning"})
       |> Repo.update!()
@@ -400,16 +643,22 @@ defmodule Platform.Federation.ToolSurfaceStacksTest do
       {:ok, result} =
         ToolSurface.execute("stack_start_planning", %{"stack_id" => stack_id}, %{})
 
-      # Only the backlog member is reported under `planning`; the
-      # already-`planning` member is left untouched, no error leaked.
-      assert [planned] = result.planning
-      assert planned.id == backlog_member.id
+      assert result.noop == true
+      assert result.noop_reason == :already_in_flight
+      assert result.planning == []
 
-      # Re-invoking finds nothing at backlog — empty `planning`, no error.
+      # The pre-advanced member is left at its existing status.
+      assert Tasks.get_task_record(ahead_member.id).status == "planning"
+      # The backlog member is NOT dragged forward — wave gating owns
+      # that transition once ahead_member's plan approves.
+      assert Tasks.get_task_record(backlog_member.id).status == "backlog"
+
+      # Second invocation is likewise a noop.
       {:ok, second} =
         ToolSurface.execute("stack_start_planning", %{"stack_id" => stack_id}, %{})
 
-      assert second.planning == []
+      assert second.noop == true
+      assert second.noop_reason == :already_in_flight
     end
 
     test "returns a not-found error envelope for a missing stack" do
@@ -422,6 +671,107 @@ defmodule Platform.Federation.ToolSurfaceStacksTest do
 
       assert error.error =~ "Stack not found"
       assert error.recoverable == false
+    end
+
+    test "auto_plan stack surfaces mode: :auto and waves_total on the response (stack v2 stage 6)" do
+      project = create_project()
+
+      %{stack_id: stack_id} =
+        ToolSurface.execute(
+          "stack_create",
+          %{
+            "project_id" => project.id,
+            "slug" => unique_slug("e2e-auto-plan-response"),
+            "name" => "Auto Response",
+            "auto_plan" => true,
+            "auto_accept_plan" => true
+          },
+          %{}
+        )
+        |> then(fn {:ok, r} -> r end)
+
+      {:ok, m1} = Tasks.create_task(%{project_id: project.id, title: "Auto M1"})
+      {:ok, m2} = Tasks.create_task(%{project_id: project.id, title: "Auto M2"})
+      {:ok, m3} = Tasks.create_task(%{project_id: project.id, title: "Auto M3"})
+
+      for task <- [m1, m2, m3] do
+        {:ok, _} =
+          ToolSurface.execute(
+            "stack_add",
+            %{"stack_id" => stack_id, "task_id" => task.id},
+            %{}
+          )
+      end
+
+      # Chain m3 → m2 → m1 → 3 waves.
+      {:ok, _} =
+        ToolSurface.execute(
+          "stack_add_dependency",
+          %{"stack_id" => stack_id, "from_task_id" => m2.id, "to_task_id" => m1.id},
+          %{}
+        )
+
+      {:ok, _} =
+        ToolSurface.execute(
+          "stack_add_dependency",
+          %{"stack_id" => stack_id, "from_task_id" => m3.id, "to_task_id" => m2.id},
+          %{}
+        )
+
+      {:ok, result} =
+        ToolSurface.execute("stack_start_planning", %{"stack_id" => stack_id}, %{})
+
+      # Stack v2 stage 6 fields on the response envelope.
+      assert result.mode == :auto
+      assert result.waves_total == 3
+      # Auto mode dispatches every wave — all three members hit planning.
+      planning_ids = result.planning |> Enum.map(& &1.id) |> Enum.sort()
+      assert planning_ids == Enum.sort([m1.id, m2.id, m3.id])
+
+      # Serialized stack record still carries both flags for callers
+      # inspecting the envelope in isolation.
+      assert result.auto_plan == true
+      assert result.auto_accept_plan == true
+    end
+
+    test "manual stack surfaces mode: :manual and waves_total on the response" do
+      project = create_project()
+
+      %{stack_id: stack_id} =
+        create_stack_via_tool(
+          project.id,
+          unique_slug("e2e-manual-response"),
+          "Manual Response"
+        )
+
+      {:ok, m1} = Tasks.create_task(%{project_id: project.id, title: "Manual M1"})
+      {:ok, m2} = Tasks.create_task(%{project_id: project.id, title: "Manual M2"})
+
+      for task <- [m1, m2] do
+        {:ok, _} =
+          ToolSurface.execute(
+            "stack_add",
+            %{"stack_id" => stack_id, "task_id" => task.id},
+            %{}
+          )
+      end
+
+      {:ok, _} =
+        ToolSurface.execute(
+          "stack_add_dependency",
+          %{"stack_id" => stack_id, "from_task_id" => m2.id, "to_task_id" => m1.id},
+          %{}
+        )
+
+      {:ok, result} =
+        ToolSurface.execute("stack_start_planning", %{"stack_id" => stack_id}, %{})
+
+      assert result.mode == :manual
+      assert result.waves_total == 2
+      # Manual mode dispatches only wave 0 → m1 alone.
+      assert result.planning |> Enum.map(& &1.id) == [m1.id]
+      assert result.auto_plan == false
+      assert result.auto_accept_plan == false
     end
   end
 

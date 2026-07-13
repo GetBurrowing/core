@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest"
 import RouteResume, {
   moduleFromPath,
   sameModulePrefix,
+  stripQueryAndFragment,
   PATH_MODULE_MAP,
 } from "../../js/hooks/route_resume.js"
 import ClientState, { __resetForTests } from "../../js/client_state.js"
@@ -61,7 +62,10 @@ function makeFakeStorage() {
 function makeFakeWindow() {
   const listeners = new Map() // event name → Set<fn>
   return {
-    location: { pathname: "/" },
+    // `search` mirrors browser `window.location.search` — either "" or a
+    // leading-`?` string. Tests that care about query-string round-tripping
+    // (task 019f487e Case 5) mutate this alongside `pathname`.
+    location: { pathname: "/", search: "" },
     liveSocket: null,
     addEventListener(name, fn) {
       if (!listeners.has(name)) listeners.set(name, new Set())
@@ -102,15 +106,21 @@ function makeFakeDocument() {
   }
 }
 
-// Fake anchor: the hook reads `dataset.moduleId`, `pathname`,
+// Fake anchor: the hook reads `dataset.moduleId`, `pathname`, `search`,
 // `getAttribute("href")`, and uses `event.target.closest(...)` to hop from
 // a click target up to the anchor. We just make the anchor its own closest
-// match for the selector `a[data-module-id]`.
+// match for the selector `a[data-module-id]`. `href` is split into path
+// and query so the hook's path+search compare works the same way it does
+// against a real HTMLAnchorElement.
 function makeAnchor({ moduleId, href }) {
+  const qIdx = href.indexOf("?")
+  const path = qIdx >= 0 ? href.slice(0, qIdx) : href
+  const search = qIdx >= 0 ? href.slice(qIdx) : ""
   const anchor = {
     tagName: "A",
     dataset: { moduleId },
-    pathname: href,
+    pathname: path,
+    search,
     getAttribute(name) {
       return name === "href" ? href : null
     },
@@ -247,6 +257,48 @@ describe("sameModulePrefix", () => {
   it("rejects unknown module ids", () => {
     expect(sameModulePrefix("nope", "/nope")).toBe(false)
   })
+
+  it("accepts a saved URL that carries a query string (Case 5 fix)", () => {
+    // Regression guard: the sponsor pill saves `/tasks?sponsor=mine` into
+    // the tasks slot. Prefix match MUST see the pathname component only —
+    // otherwise the intercept refuses to restore the saved URL and the
+    // query state is silently dropped on the top-nav round-trip.
+    expect(sameModulePrefix("tasks", "/tasks?sponsor=mine")).toBe(true)
+    expect(sameModulePrefix("tasks", "/tasks?a=b&c=d")).toBe(true)
+    expect(sameModulePrefix("chat", "/chat/abc?scroll=42")).toBe(true)
+  })
+
+  it("still rejects cross-module saved value with a query string", () => {
+    expect(sameModulePrefix("chat", "/tasks?sponsor=mine")).toBe(false)
+  })
+})
+
+describe("stripQueryAndFragment", () => {
+  it("returns input unchanged when no `?` or `#` present", () => {
+    expect(stripQueryAndFragment("/tasks")).toBe("/tasks")
+    expect(stripQueryAndFragment("/chat/abc")).toBe("/chat/abc")
+    expect(stripQueryAndFragment("")).toBe("")
+  })
+
+  it("strips query string starting at `?`", () => {
+    expect(stripQueryAndFragment("/tasks?sponsor=mine")).toBe("/tasks")
+    expect(stripQueryAndFragment("/chat/abc?x=1&y=2")).toBe("/chat/abc")
+  })
+
+  it("strips fragment starting at `#`", () => {
+    expect(stripQueryAndFragment("/tasks#top")).toBe("/tasks")
+  })
+
+  it("cuts at whichever of `?` or `#` comes first", () => {
+    expect(stripQueryAndFragment("/tasks?x=1#top")).toBe("/tasks")
+    expect(stripQueryAndFragment("/tasks#top?x=1")).toBe("/tasks")
+  })
+
+  it("returns empty string for non-string input", () => {
+    expect(stripQueryAndFragment(null)).toBe("")
+    expect(stripQueryAndFragment(undefined)).toBe("")
+    expect(stripQueryAndFragment(42)).toBe("")
+  })
 })
 
 describe("PATH_MODULE_MAP ordering invariant", () => {
@@ -286,6 +338,28 @@ describe("RouteResume hook", () => {
     shims.win.dispatchEvent({ type: "phx:page-loading-stop" })
 
     expect(ClientState.get("route_resume", "chat")).toBe("/chat/def")
+  })
+
+  it("persists pathname + search so `?sponsor=mine` round-trips (Case 5 fix)", () => {
+    // Regression: previously the hook stored `pathname` only, so a
+    // top-nav Tasks click after `/tasks?sponsor=mine` matched the anchor
+    // href exactly and the intercept no-op'd — dropping the query.
+    // Now the saved value includes the query so the intercept fires and
+    // restores the deep-link URL.
+    shims.win.location.pathname = "/tasks"
+    shims.win.location.search = "?sponsor=mine"
+    const hook = buildHook()
+    hook.mounted()
+
+    expect(ClientState.get("route_resume", "tasks")).toBe("/tasks?sponsor=mine")
+
+    // A subsequent nav within the tasks module drops the query — the
+    // saved value follows.
+    shims.win.location.pathname = "/tasks/abc-uuid"
+    shims.win.location.search = ""
+    shims.win.dispatchEvent({ type: "phx:page-loading-stop" })
+
+    expect(ClientState.get("route_resume", "tasks")).toBe("/tasks/abc-uuid")
   })
 
   it("skips persistence for paths outside the module allowlist", () => {
@@ -417,6 +491,47 @@ describe("RouteResume click intercept", () => {
     hook.mounted()
 
     const anchor = makeAnchor({ moduleId: "chat", href: "/chat" })
+    const evt = makeClickEvent(anchor)
+    shims.doc.dispatchClick(evt)
+
+    expect(evt.defaultPrevented).toBe(false)
+    expect(historyRedirect).not.toHaveBeenCalled()
+  })
+
+  it("routes to saved URL preserving `?sponsor=mine` on bare top-nav click (Case 5)", () => {
+    // Load `/tasks?sponsor=mine`, navigate elsewhere, then click the bare
+    // `/tasks` top-nav tile. Previously the pathname-only comparison
+    // matched and the query was lost. Now the whole-URL comparison sees a
+    // mismatch and redirects to the saved deep-link.
+    ClientState.set("route_resume", "tasks", "/tasks?sponsor=mine")
+    const hook = buildHook()
+    hook.mounted()
+
+    const anchor = makeAnchor({ moduleId: "tasks", href: "/tasks" })
+    const evt = makeClickEvent(anchor)
+    shims.doc.dispatchClick(evt)
+
+    expect(evt.defaultPrevented).toBe(true)
+    expect(evt.propagationStopped).toBe(true)
+    expect(historyRedirect).toHaveBeenCalledTimes(1)
+    expect(historyRedirect).toHaveBeenCalledWith(
+      evt,
+      "/tasks?sponsor=mine",
+      "push",
+      null,
+      anchor,
+    )
+  })
+
+  it("no-ops when the saved URL equals anchor path + search (query on both)", () => {
+    // The anchor already carries the same query — nothing to restore.
+    // Guards against a redundant historyRedirect fire that would push a
+    // duplicate history entry for the same URL.
+    ClientState.set("route_resume", "tasks", "/tasks?sponsor=mine")
+    const hook = buildHook()
+    hook.mounted()
+
+    const anchor = makeAnchor({ moduleId: "tasks", href: "/tasks?sponsor=mine" })
     const evt = makeClickEvent(anchor)
     shims.doc.dispatchClick(evt)
 

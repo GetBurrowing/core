@@ -7,19 +7,24 @@ import ClientState from "../client_state.js";
  *
  * Contract:
  *   - On every LiveView navigation completion (`phx:page-loading-stop` on
- *     window), extract `window.location.pathname`, derive a `moduleId` from
- *     its first segment (allowlist below), and persist via
- *     `ClientState.set("route_resume", moduleId, path)`. Paths outside the
- *     allowlist are ignored.
+ *     window), extract `window.location.pathname + window.location.search`,
+ *     derive a `moduleId` from the pathname's first segment (allowlist
+ *     below), and persist the path-plus-query string via
+ *     `ClientState.set("route_resume", moduleId, pathAndSearch)`. Paths
+ *     outside the allowlist are ignored. Query strings are preserved so
+ *     deep-link state (e.g. `/tasks?sponsor=mine`) survives a top-nav
+ *     roundtrip through a different module (task 019f487e Case 5 fix).
  *   - A delegated `click` listener on `document` intercepts clicks on any
  *     `<a data-module-id=…>` element. If a saved URL exists for that module,
- *     differs from the anchor's `href`, and lives under the same module
- *     prefix, we `preventDefault()` and use `liveSocket.historyRedirect/5`
- *     to route to the saved URL. This is Phoenix LiveView's public
- *     imperative-navigation API and correctly handles cross-LV
- *     transitions (patch is a no-op when the target LV differs) — using
- *     the canonical LV path rather than `history.pushState` keeps SPA
- *     behavior intact and avoids a hard reload.
+ *     differs from the anchor's `href` (path + search compared together, not
+ *     path alone — otherwise a bare `/tasks` anchor would silently match a
+ *     saved `/tasks?sponsor=mine` and drop the query), and lives under the
+ *     same module prefix (search-stripped), we `preventDefault()` and use
+ *     `liveSocket.historyRedirect/5` to route to the saved URL. This is
+ *     Phoenix LiveView's public imperative-navigation API and correctly
+ *     handles cross-LV transitions (patch is a no-op when the target LV
+ *     differs) — using the canonical LV path rather than `history.pushState`
+ *     keeps SPA behavior intact and avoids a hard reload.
  *   - When a LiveView discovers its resumed URL is stale (deleted task,
  *     unreachable space) it pushes a `route_resume_stale` event; the
  *     window-level listener here calls `ClientState.remove("route_resume",
@@ -62,10 +67,14 @@ const MODULE_TO_PATH = Object.fromEntries(
 
 // Extract a moduleId from a URL pathname. Returns null when nothing in the
 // allowlist matches — those routes silently skip both save and resume.
+// Callers may pass a full path+search (e.g. `/tasks?sponsor=mine`); the
+// query and fragment are stripped before matching so a `?sponsor=mine` on
+// `/tasks` still resolves to the `tasks` module.
 function moduleFromPath(pathname) {
   if (typeof pathname !== "string" || !pathname.startsWith("/")) return null;
+  const pathOnly = stripQueryAndFragment(pathname);
   for (const [prefix, mod] of PATH_MODULE_MAP) {
-    if (pathname === prefix || pathname.startsWith(prefix + "/")) return mod;
+    if (pathOnly === prefix || pathOnly.startsWith(prefix + "/")) return mod;
   }
   return null;
 }
@@ -73,11 +82,27 @@ function moduleFromPath(pathname) {
 // The saved URL is a valid resume target for `moduleId` iff it still lives
 // under the module's canonical prefix. Guards against a namespace pollution
 // where a `route_resume:chat` entry accidentally holds `/tasks/…` — clicking
-// Chat wouldn't route to Tasks.
+// Chat wouldn't route to Tasks. Saved values may include a query string
+// (task 019f487e Case 5) so we compare against the pathname component only.
 function sameModulePrefix(moduleId, saved) {
   const prefix = MODULE_TO_PATH[moduleId];
   if (!prefix || typeof saved !== "string") return false;
-  return saved === prefix || saved.startsWith(prefix + "/");
+  const pathOnly = stripQueryAndFragment(saved);
+  return pathOnly === prefix || pathOnly.startsWith(prefix + "/");
+}
+
+// Strip anything after the first `?` or `#`. We only need this for prefix
+// matching — the actual saved value keeps the query so we can restore it on
+// intercept. Returns the input unchanged when neither char is present.
+function stripQueryAndFragment(pathAndSearch) {
+  if (typeof pathAndSearch !== "string") return "";
+  const qIdx = pathAndSearch.indexOf("?");
+  const hIdx = pathAndSearch.indexOf("#");
+  let cut = -1;
+  if (qIdx >= 0 && hIdx >= 0) cut = Math.min(qIdx, hIdx);
+  else if (qIdx >= 0) cut = qIdx;
+  else if (hIdx >= 0) cut = hIdx;
+  return cut >= 0 ? pathAndSearch.slice(0, cut) : pathAndSearch;
 }
 
 const RouteResume = {
@@ -120,9 +145,15 @@ const RouteResume = {
 
   _persistCurrentPath() {
     const path = window.location.pathname || "";
+    const search = window.location.search || "";
     const mod = moduleFromPath(path);
     if (!mod) return;
-    ClientState.set("route_resume", mod, path);
+    // Persist path + query so deep-link filter state (e.g. `?sponsor=mine`
+    // on Tasks) round-trips through a top-nav click that leaves and returns
+    // to the module. Fragment intentionally excluded — LV navigations don't
+    // preserve hashes and re-emitting them would confuse the browser scroll
+    // anchor. See task 019f487e Case 5.
+    ClientState.set("route_resume", mod, path + search);
   },
 
   _maybeInterceptClick(event) {
@@ -150,11 +181,16 @@ const RouteResume = {
     if (typeof saved !== "string" || saved.length === 0) return;
 
     // The anchor's `href` includes the scheme+host in `getAttribute("href")`
-    // if authored as absolute; the DOM `.pathname` normalizes back to just
-    // the path. Use `.pathname` so `href="/chat"` vs saved `"/chat"` compare
-    // equal (no-op) and don't fall into the intercept path.
-    const currentHrefPath = anchor.pathname || anchor.getAttribute("href") || "";
-    if (saved === currentHrefPath) return;
+    // if authored as absolute; the DOM `.pathname` / `.search` normalize
+    // back to just the path and query. We compare the whole path+search
+    // (not path alone) so a bare `/tasks` anchor does NOT no-op when the
+    // saved value is `/tasks?sponsor=mine` — that mismatch is exactly the
+    // signal that we need to redirect to preserve the query state. See
+    // task 019f487e Case 5.
+    const anchorPath = anchor.pathname || anchor.getAttribute("href") || "";
+    const anchorSearch = anchor.search || "";
+    const currentHrefFull = anchorPath + anchorSearch;
+    if (saved === currentHrefFull) return;
 
     if (!sameModulePrefix(moduleId, saved)) return;
 
@@ -200,7 +236,12 @@ const RouteResume = {
 };
 
 // Named exports for the vitest suite. `moduleFromPath` + `sameModulePrefix`
-// are pure and cheap to test in isolation; the object export is the hook
-// itself.
-export { moduleFromPath, sameModulePrefix, PATH_MODULE_MAP };
+// + `stripQueryAndFragment` are pure and cheap to test in isolation; the
+// object export is the hook itself.
+export {
+  moduleFromPath,
+  sameModulePrefix,
+  stripQueryAndFragment,
+  PATH_MODULE_MAP,
+};
 export default RouteResume;

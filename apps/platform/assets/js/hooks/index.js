@@ -40,6 +40,7 @@ import SectionReorder from "./section_reorder"
 import SectionReorderTouch from "./section_reorder_touch"
 import Sheet from "./sheet"
 import SidebarCollapse from "./sidebar_collapse"
+import StackGraphResize from "./stack_graph_resize"
 import TasksStatusFilter from "./tasks_status_filter"
 import ThemeToggle from "./theme_toggle"
 import UploadButton from "./upload_button"
@@ -88,6 +89,7 @@ export default {
   SectionReorderTouch,
   Sheet,
   SidebarCollapse,
+  StackGraphResize,
   TasksStatusFilter,
   ThemeToggle,
   UploadButton,

@@ -338,6 +338,101 @@ defmodule Platform.Tasks.PlanEngineStackMemberMergeTest do
       # untouched by stage 1's new wiring.
       assert FakeRunner.merge_calls() == []
     end
+
+    test "solo task plan completion does NOT fire stack-deploy dispatch telemetry",
+         %{project: project} do
+      # Task 019f487d stage 3 regression guard: the new
+      # `Stacks.dispatch_stack_deploy/1` call site inside
+      # `PlanEngine.maybe_inject_deploy_or_complete/2` is scoped to the
+      # `is_binary(task.stack_id)` branch. A solo task's plan completion
+      # must NOT emit `[:platform, :stacks, :deploy, :dispatched]` — if
+      # it did, we'd be triggering the stack-level deploy code path for
+      # a task that has no stack, which would either raise or silently
+      # noop AND still spend a telemetry event. Both are wrong.
+      {:ok, _} = FakeRunner.start_link([])
+
+      test_pid = self()
+
+      handler_id = "solo-no-dispatch-#{System.unique_integer([:positive])}"
+
+      :ok =
+        :telemetry.attach(
+          handler_id,
+          [:platform, :stacks, :deploy, :dispatched],
+          fn _event, measurements, metadata, _config ->
+            send(test_pid, {:stack_deploy_dispatched, Map.merge(measurements, metadata)})
+          end,
+          nil
+        )
+
+      try do
+        {:ok, task} =
+          Tasks.create_task(%{
+            project_id: project.id,
+            title: "Solo no-stack-dispatch",
+            status: "in_progress",
+            deploy_strategy: %{"type" => "pr_merge", "config" => %{}},
+            deploy_target: "production"
+          })
+
+        {:ok, plan} = Tasks.create_plan(%{task_id: task.id, status: "approved"})
+        {:ok, build} = Tasks.create_stage(%{plan_id: plan.id, position: 1, name: "Build"})
+        {:ok, _} = PlanEngine.start_stage(build.id)
+
+        {:ok, _plan_after_advance} = PlanEngine.advance(plan.id)
+
+        # No stack-level dispatch event should have fired.
+        refute_receive {:stack_deploy_dispatched, _}, 100
+      after
+        :telemetry.detach(handler_id)
+      end
+    end
+
+    test "stacked member last-completion fires stack-deploy dispatch telemetry",
+         %{project: project, stack: stack} do
+      # Positive regression: for a stacked task whose plan completion is
+      # the LAST readiness flip, the plan_engine call site emits the
+      # dispatch telemetry event exactly once. Complements the
+      # solo-task no-fire test above.
+      {:ok, _} = FakeRunner.start_link([])
+
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Stacked last-flip",
+          status: "in_review",
+          deploy_strategy: %{"type" => "pr_merge", "config" => %{}}
+        })
+
+      {:ok, task} = Tasks.update_task(task, %{stack_id: stack.id, stack_position: 1})
+
+      {:ok, plan} = Tasks.create_plan(%{task_id: task.id, status: "approved"})
+      {:ok, review_stage} = Tasks.create_stage(%{plan_id: plan.id, position: 1, name: "Review"})
+      {:ok, _} = PlanEngine.start_stage(review_stage.id)
+
+      test_pid = self()
+
+      handler_id = "stacked-last-flip-#{System.unique_integer([:positive])}"
+
+      :ok =
+        :telemetry.attach(
+          handler_id,
+          [:platform, :stacks, :deploy, :dispatched],
+          fn _event, measurements, metadata, _config ->
+            send(test_pid, {:stack_deploy_dispatched, Map.merge(measurements, metadata)})
+          end,
+          nil
+        )
+
+      try do
+        {:ok, _completed} = PlanEngine.advance(plan.id)
+
+        assert_receive {:stack_deploy_dispatched, %{stack_id: dispatched_stack_id}}, 500
+        assert dispatched_stack_id == stack.id
+      after
+        :telemetry.detach(handler_id)
+      end
+    end
   end
 
   # Sanity: the public hook has the shape we wire to.

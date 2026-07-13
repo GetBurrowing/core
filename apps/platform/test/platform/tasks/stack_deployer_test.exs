@@ -1510,6 +1510,198 @@ defmodule Platform.Tasks.StackDeployerTest do
     end
   end
 
+  # ── handle_rollup_pr_merged/2 → :stacks, :deploy, :pr_merged telemetry ───
+
+  describe "handle_rollup_pr_merged/2 — new namespaced deploy telemetry (stage 5)" do
+    test "emits [:platform, :stacks, :deploy, :pr_merged] with member_count + duration_ms" do
+      {:ok, _} = FakeRunner.start_link([])
+
+      handler_id = "test-stacks-deploy-pr-merged-#{uniq()}"
+      test_pid = self()
+
+      :ok =
+        :telemetry.attach(
+          handler_id,
+          [:platform, :stacks, :deploy, :pr_merged],
+          fn event, measurements, metadata, _config ->
+            send(test_pid, {:telemetry, event, measurements, metadata})
+          end,
+          nil
+        )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      project = project_with_repo!()
+      stack = stack_for!(project, slug: "pr-merged-tele")
+
+      _ = merged_member!(project, stack, sha: "aaaa1111", position: 1)
+      _ = merged_member!(project, stack, sha: "bbbb2222", position: 2)
+
+      opened_at = DateTime.utc_now() |> DateTime.add(-45, :second) |> DateTime.to_iso8601()
+
+      {:ok, deployed} =
+        Stacks.update_stack(stack, %{
+          status: "deploying",
+          metadata: %{
+            "rollup_pr" => %{
+              "number" => 501,
+              "url" => "https://github.com/test/repo/pull/501",
+              "opened_at" => opened_at
+            }
+          }
+        })
+
+      assert {:ok, %{status: "done"}} =
+               StackDeployer.handle_rollup_pr_merged(deployed, "deadbeef1234")
+
+      assert_received {:telemetry, [:platform, :stacks, :deploy, :pr_merged],
+                       %{count: 1, duration_ms_in_deploying: duration_ms}, metadata}
+
+      assert metadata.stack_id == stack.id
+      assert metadata.member_count == 2
+      assert metadata.merge_commit_sha == "deadbeef1234"
+      assert metadata.rollup_branch == stack.rollup_branch
+      assert is_integer(duration_ms) and duration_ms >= 40_000
+    end
+
+    test "duration_ms_in_deploying is nil when rollup_pr.opened_at absent" do
+      {:ok, _} = FakeRunner.start_link([])
+
+      handler_id = "test-stacks-deploy-pr-merged-nodur-#{uniq()}"
+      test_pid = self()
+
+      :ok =
+        :telemetry.attach(
+          handler_id,
+          [:platform, :stacks, :deploy, :pr_merged],
+          fn event, measurements, metadata, _config ->
+            send(test_pid, {:telemetry, event, measurements, metadata})
+          end,
+          nil
+        )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      project = project_with_repo!()
+      stack = stack_for!(project, slug: "pr-merged-nodur")
+
+      {:ok, deployed} =
+        Stacks.update_stack(stack, %{
+          status: "deploying",
+          metadata: %{"rollup_pr" => %{"number" => 601}}
+        })
+
+      assert {:ok, %{status: "done"}} = StackDeployer.handle_rollup_pr_merged(deployed)
+
+      assert_received {:telemetry, [:platform, :stacks, :deploy, :pr_merged],
+                       %{duration_ms_in_deploying: nil}, _metadata}
+    end
+
+    test "legacy [:platform, :stack_deployer, :rollup_pr_merged] still fires (back-compat)" do
+      {:ok, _} = FakeRunner.start_link([])
+
+      handler_id = "test-legacy-rollup-pr-merged-#{uniq()}"
+      test_pid = self()
+
+      :ok =
+        :telemetry.attach(
+          handler_id,
+          [:platform, :stack_deployer, :rollup_pr_merged],
+          fn event, measurements, metadata, _config ->
+            send(test_pid, {:telemetry, event, measurements, metadata})
+          end,
+          nil
+        )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      project = project_with_repo!()
+      stack = stack_for!(project, slug: "legacy-pr-merged")
+
+      {:ok, deployed} =
+        Stacks.update_stack(stack, %{
+          status: "deploying",
+          metadata: %{"rollup_pr" => %{"number" => 700}}
+        })
+
+      assert {:ok, %{status: "done"}} = StackDeployer.handle_rollup_pr_merged(deployed)
+
+      assert_received {:telemetry, [:platform, :stack_deployer, :rollup_pr_merged], %{count: 1},
+                       metadata}
+
+      assert metadata.stack_id == stack.id
+      assert metadata.rollup_branch == stack.rollup_branch
+    end
+
+    test "cascade fires: members not yet done are transitioned via Stacks.cascade_members_to_done/1" do
+      {:ok, _} = FakeRunner.start_link([])
+
+      project = project_with_repo!()
+      stack = stack_for!(project, slug: "pr-merged-cascade")
+
+      # `merged_member!` seeds each member at `in_review` — the fan-out
+      # fallback the stage-5 cascade helper exists for (a member with
+      # no `pr_merged` validation the T6 webhook could auto-pass).
+      m1 = merged_member!(project, stack, sha: "cc111", position: 1)
+      m2 = merged_member!(project, stack, sha: "cc222", position: 2)
+
+      assert Platform.Tasks.get_task_record(m1.id).status == "in_review"
+      assert Platform.Tasks.get_task_record(m2.id).status == "in_review"
+
+      {:ok, deployed} =
+        Stacks.update_stack(stack, %{
+          status: "deploying",
+          metadata: %{"rollup_pr" => %{"number" => 800}}
+        })
+
+      assert {:ok, %{status: "done"}} = StackDeployer.handle_rollup_pr_merged(deployed)
+
+      assert Platform.Tasks.get_task_record(m1.id).status == "done"
+      assert Platform.Tasks.get_task_record(m2.id).status == "done"
+    end
+
+    test "replay: second invocation short-circuits (idempotent on rollup_pr.merged_at)" do
+      {:ok, _} = FakeRunner.start_link([])
+
+      handler_id = "test-pr-merged-replay-#{uniq()}"
+      test_pid = self()
+
+      :ok =
+        :telemetry.attach(
+          handler_id,
+          [:platform, :stacks, :deploy, :pr_merged],
+          fn event, measurements, metadata, _config ->
+            send(test_pid, {:telemetry, event, measurements, metadata})
+          end,
+          nil
+        )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      project = project_with_repo!()
+      stack = stack_for!(project, slug: "pr-merged-replay")
+
+      {:ok, deployed} =
+        Stacks.update_stack(stack, %{
+          status: "deploying",
+          metadata: %{"rollup_pr" => %{"number" => 900}}
+        })
+
+      # First call — telemetry fires + delete kicks off.
+      assert {:ok, %{status: "done"}} = StackDeployer.handle_rollup_pr_merged(deployed)
+      assert_received {:telemetry, [:platform, :stacks, :deploy, :pr_merged], _, _}
+
+      # Reload — now has merged_at stamped, status = done.
+      replayed = Platform.Tasks.Stacks.get_stack(stack.id)
+
+      # Second call — short-circuit; no additional telemetry, no additional delete.
+      before_delete_calls = FakeRunner.delete_calls()
+      assert {:ok, ^replayed} = StackDeployer.handle_rollup_pr_merged(replayed)
+      refute_received {:telemetry, [:platform, :stacks, :deploy, :pr_merged], _, _}
+      assert FakeRunner.delete_calls() == before_delete_calls
+    end
+  end
+
   # ── Stacks.abandon_stack/2 never invokes delete_rollup_branch ────────────
 
   describe "Stacks.abandon_stack/2 — rollup branch left in place" do
@@ -1635,8 +1827,8 @@ defmodule Platform.Tasks.StackDeployerTest do
 
   # ── handle_rollup_ci_failure/2 (stage 5) ─────────────────────────────────
 
-  describe "handle_rollup_ci_failure/2 — happy path" do
-    test "bounces the most-recently-merged member; reverts merge; closes PR; flips stack" do
+  describe "handle_rollup_ci_failure/2 — atomic all-members bounce (stage 4)" do
+    test "3-member stack: ALL members bounced back to in_progress; stack -> in_progress" do
       pr_url = "https://github.com/test/repo/pull/777"
       ci_run_url = "#{pr_url}/checks?check_run_id=42"
       head_sha = "headshaaa"
@@ -1647,15 +1839,31 @@ defmodule Platform.Tasks.StackDeployerTest do
           close_responses: [{:ok, :closed}]
         )
 
-      project = project_with_repo!()
-      stack = stack_for!(project, slug: "bounce-happy")
+      # Telemetry probe for the new :pr_rejected event.
+      test_pid = self()
+      handler_id = "pr-rejected-#{System.unique_integer([:positive])}"
 
-      # 4 stack members merged in chronological order; the 4th (most
-      # recent) is the heuristic offender.
-      m1 = merged_member_with_time!(project, stack, sha: "sha1aaaa", position: 1, minutes_ago: 40)
-      m2 = merged_member_with_time!(project, stack, sha: "sha2bbbb", position: 2, minutes_ago: 30)
-      m3 = merged_member_with_time!(project, stack, sha: "sha3cccc", position: 3, minutes_ago: 20)
-      m4 = merged_member_with_time!(project, stack, sha: "sha4dddd", position: 4, minutes_ago: 10)
+      :ok =
+        :telemetry.attach(
+          handler_id,
+          [:platform, :stacks, :deploy, :pr_rejected],
+          fn event, measurements, metadata, _cfg ->
+            send(test_pid, {:pr_rejected, event, measurements, metadata})
+          end,
+          nil
+        )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+
+      project = project_with_repo!()
+      stack = stack_for!(project, slug: "bounce-atomic")
+
+      # 3 stack members merged in chronological order; the 3rd (most
+      # recent) is the heuristic offender whose merge commit is reverted.
+      # But all 3 members must bounce.
+      m1 = merged_member_with_time!(project, stack, sha: "sha1aaaa", position: 1, minutes_ago: 30)
+      m2 = merged_member_with_time!(project, stack, sha: "sha2bbbb", position: 2, minutes_ago: 20)
+      m3 = merged_member_with_time!(project, stack, sha: "sha3cccc", position: 3, minutes_ago: 10)
 
       {:ok, deployed} =
         Stacks.update_stack(stack, %{
@@ -1669,50 +1877,48 @@ defmodule Platform.Tasks.StackDeployerTest do
           }
         })
 
-      assert {:ok, %{status: :bounced, bounced_task_id: bounced_id, revert_sha: "revertz1"}} =
+      assert {:ok, %{status: :bounced, bounced_task_ids: bounced_ids, revert_sha: "revertz1"}} =
                StackDeployer.handle_rollup_ci_failure(deployed, %{
                  ci_run_url: ci_run_url,
                  head_sha: head_sha
                })
 
-      assert bounced_id == m4.id
+      # All 3 members reported as bounced.
+      assert Enum.sort(bounced_ids) == Enum.sort([m1.id, m2.id, m3.id])
 
-      # Bounced member: merged_into_rollup_at cleared, bounced_from_rollup
-      # stamped, status flipped to in_progress.
-      reloaded_m4 = Tasks.get_task_record(m4.id)
-      assert reloaded_m4.status == "in_progress"
-      assert is_nil(get_in(reloaded_m4.metadata, ["merged_into_rollup_at"]))
-      stamp = reloaded_m4.metadata["bounced_from_rollup"]
-      assert stamp["ci_run_url"] == ci_run_url
-      assert stamp["head_sha"] == head_sha
-      assert stamp["sha"] == "sha4dddd"
-      assert is_binary(stamp["at"])
-      assert {:ok, _, _} = DateTime.from_iso8601(stamp["at"])
-
-      # Other members: untouched, still in_review with merged stamps.
+      # EVERY member: merged_into_rollup_at cleared, bounced_from_rollup
+      # stamped with matching ci_run_url, status flipped to in_progress.
       for m <- [m1, m2, m3] do
         reloaded = Tasks.get_task_record(m.id)
-        assert reloaded.status == "in_review"
 
-        assert reloaded.metadata["merged_into_rollup_at"]["sha"] ==
-                 m.metadata["merged_into_rollup_at"]["sha"]
+        assert reloaded.status == "in_progress",
+               "expected #{m.id} at in_progress, got #{reloaded.status}"
 
-        assert is_nil(get_in(reloaded.metadata, ["bounced_from_rollup"]))
+        assert is_nil(get_in(reloaded.metadata, ["merged_into_rollup_at"])),
+               "expected #{m.id} to have merged_into_rollup_at cleared"
+
+        stamp = reloaded.metadata["bounced_from_rollup"]
+        assert stamp["ci_run_url"] == ci_run_url
+        assert stamp["head_sha"] == head_sha
+        assert stamp["sha"] == m.metadata["merged_into_rollup_at"]["sha"]
+        assert is_binary(stamp["at"])
+        assert {:ok, _, _} = DateTime.from_iso8601(stamp["at"])
       end
 
-      # Stack: flipped to in_review, rollup_pr cleared.
+      # Stack: flipped to in_progress (NOT in_review), rollup_pr cleared.
       reloaded_stack = Stacks.get_stack(deployed.id)
-      assert reloaded_stack.status == "in_review"
+      assert reloaded_stack.status == "in_progress"
       assert is_nil(get_in(reloaded_stack.metadata || %{}, ["rollup_pr"]))
 
-      # Runner: exactly one revert + one PR close, on the right inputs.
+      # Runner: exactly ONE revert (scoped to the most-recently-merged
+      # member's merge commit) + one PR close, on the right inputs.
       assert [revert_call] = FakeRunner.revert_calls()
       assert revert_call.repo_url == project.repo_url
       assert revert_call.rollup_branch == stack.rollup_branch
-      assert revert_call.merge_sha == "sha4dddd"
+      assert revert_call.merge_sha == "sha3cccc"
       assert revert_call.project_id == project.id
       assert revert_call.stack_id == stack.id
-      assert revert_call.member_task_id == m4.id
+      assert revert_call.member_task_id == m3.id
 
       assert [close_call] = FakeRunner.close_calls()
       assert close_call.repo_url == project.repo_url
@@ -1720,12 +1926,59 @@ defmodule Platform.Tasks.StackDeployerTest do
       assert close_call.stack_id == stack.id
       assert is_binary(close_call.comment)
       assert close_call.comment =~ ci_run_url
-      assert close_call.comment =~ m4.id
+
+      # Telemetry: :pr_rejected fired exactly once with member_count: 3.
+      assert_received {:pr_rejected, [:platform, :stacks, :deploy, :pr_rejected],
+                       %{member_count: 3},
+                       %{stack_id: sid, member_count: 3, revert_sha: "revertz1"}}
+
+      assert sid == deployed.id
+      refute_received {:pr_rejected, _, _, _}
+    end
+
+    test "mixed merged + unmerged members: unmerged members are also stamped and no-op transitioned" do
+      {:ok, _} =
+        FakeRunner.start_link(
+          revert_responses: [{:ok, %{status: :reverted, revert_sha: "revmix01"}}],
+          close_responses: [{:ok, :closed}]
+        )
+
+      project = project_with_repo!()
+      stack = stack_for!(project, slug: "bounce-mixed")
+
+      # One merged member (offender), one unmerged member already at in_progress.
+      m1 = merged_member_with_time!(project, stack, sha: "mix1aaaa", position: 1, minutes_ago: 5)
+      m2 = unmerged_member!(project, stack, position: 2)
+
+      {:ok, deployed} =
+        Stacks.update_stack(stack, %{
+          status: "deploying",
+          metadata: %{"rollup_pr" => %{"number" => 314}}
+        })
+
+      assert {:ok, %{status: :bounced, bounced_task_ids: bounced_ids}} =
+               StackDeployer.handle_rollup_ci_failure(deployed, %{
+                 ci_run_url: "https://example/run/mix",
+                 head_sha: "mixhead"
+               })
+
+      assert Enum.sort(bounced_ids) == Enum.sort([m1.id, m2.id])
+
+      # Both members stamped with the bounce metadata.
+      for m <- [m1, m2] do
+        reloaded = Tasks.get_task_record(m.id)
+        assert reloaded.status == "in_progress"
+        assert reloaded.metadata["bounced_from_rollup"]["ci_run_url"] == "https://example/run/mix"
+      end
+
+      # The unmerged member's stamp has sha=nil since it never merged.
+      reloaded_m2 = Tasks.get_task_record(m2.id)
+      assert is_nil(reloaded_m2.metadata["bounced_from_rollup"]["sha"])
     end
   end
 
   describe "handle_rollup_ci_failure/2 — idempotency" do
-    test "second invocation with the same ci_run_url no-ops" do
+    test "second invocation with the same ci_run_url no-ops after atomic bounce" do
       ci_run_url = "https://github.com/test/repo/pull/8/checks/99"
 
       {:ok, _} =
@@ -1736,7 +1989,7 @@ defmodule Platform.Tasks.StackDeployerTest do
       project = project_with_repo!()
       stack = stack_for!(project, slug: "idem")
 
-      _m1 = merged_member_with_time!(project, stack, sha: "old1aaa", position: 1, minutes_ago: 20)
+      m1 = merged_member_with_time!(project, stack, sha: "old1aaa", position: 1, minutes_ago: 20)
       m2 = merged_member_with_time!(project, stack, sha: "old2bbb", position: 2, minutes_ago: 10)
 
       {:ok, deployed} =
@@ -1745,36 +1998,16 @@ defmodule Platform.Tasks.StackDeployerTest do
           metadata: %{"rollup_pr" => %{"number" => 8}}
         })
 
-      assert {:ok, %{status: :bounced, bounced_task_id: bounced_id}} =
+      # First invocation: atomic bounce of both members.
+      assert {:ok, %{status: :bounced, bounced_task_ids: bounced_ids}} =
                StackDeployer.handle_rollup_ci_failure(deployed, %{
                  ci_run_url: ci_run_url,
                  head_sha: "head1"
                })
 
-      assert bounced_id == m2.id
+      assert Enum.sort(bounced_ids) == Enum.sort([m1.id, m2.id])
 
-      # Second invocation: the offender is now in_progress (lost its
-      # merged_into_rollup_at stamp) so the heuristic picks the next
-      # candidate (m1). To exercise the idempotency guard we re-stamp
-      # m2 as if a partial-retry left it merged-but-bounced, then
-      # re-invoke — the bounced_from_rollup.ci_run_url match must
-      # short-circuit.
-      {:ok, _} =
-        Tasks.update_task(Tasks.get_task_record(m2.id), %{
-          metadata: %{
-            "merged_into_rollup_at" => %{
-              "sha" => "old2bbb",
-              "at" => DateTime.utc_now() |> DateTime.to_iso8601()
-            },
-            "bounced_from_rollup" => %{
-              "ci_run_url" => ci_run_url,
-              "at" => DateTime.utc_now() |> DateTime.to_iso8601(),
-              "head_sha" => "head1",
-              "sha" => "old2bbb"
-            }
-          }
-        })
-
+      # Both members carry the bounce stamp; the guard fires on replay.
       reloaded_stack = Stacks.get_stack(deployed.id)
 
       assert {:ok, :already_bounced} =
@@ -1783,8 +2016,73 @@ defmodule Platform.Tasks.StackDeployerTest do
                  head_sha: "head1"
                })
 
-      # Only the first invocation called the runner.
+      # Only the first invocation called the runner (no second revert).
       assert [_] = FakeRunner.revert_calls()
+    end
+
+    test "different ci_run_url on the same stack does NOT idempotent-skip" do
+      # If a stack has been reused (bounced, re-merged, re-failed for a
+      # new CI run), the fresh ci_run_url must trigger a new bounce.
+      {:ok, _} =
+        FakeRunner.start_link(
+          revert_responses: [
+            {:ok, %{status: :reverted, revert_sha: "rev-first"}},
+            {:ok, %{status: :reverted, revert_sha: "rev-second"}}
+          ]
+        )
+
+      project = project_with_repo!()
+      stack = stack_for!(project, slug: "idem-diff-run")
+
+      m1 = merged_member_with_time!(project, stack, sha: "diff111a", position: 1, minutes_ago: 5)
+
+      {:ok, deployed} =
+        Stacks.update_stack(stack, %{
+          status: "deploying",
+          metadata: %{"rollup_pr" => %{"number" => 88}}
+        })
+
+      # First run bounces successfully.
+      assert {:ok, %{status: :bounced}} =
+               StackDeployer.handle_rollup_ci_failure(deployed, %{
+                 ci_run_url: "https://example/run/A",
+                 head_sha: "hA"
+               })
+
+      # Simulate a partial re-merge on m1 (rollup PR reopened,
+      # re-merged, then CI failed AGAIN with a different run URL).
+      {:ok, _} =
+        Tasks.update_task(Tasks.get_task_record(m1.id), %{
+          status: "in_review",
+          metadata:
+            m1.id
+            |> Tasks.get_task_record()
+            |> Map.get(:metadata)
+            |> Map.put("merged_into_rollup_at", %{
+              "sha" => "remergea",
+              "at" => DateTime.utc_now() |> DateTime.to_iso8601()
+            })
+        })
+
+      {:ok, redeployed} =
+        Stacks.update_stack(Stacks.get_stack(deployed.id), %{
+          status: "deploying",
+          metadata: %{"rollup_pr" => %{"number" => 89}}
+        })
+
+      # Second run (fresh ci_run_url) DOES bounce.
+      assert {:ok, %{status: :bounced}} =
+               StackDeployer.handle_rollup_ci_failure(redeployed, %{
+                 ci_run_url: "https://example/run/B",
+                 head_sha: "hB"
+               })
+
+      # Two revert calls total.
+      assert [_, _] = FakeRunner.revert_calls()
+
+      # Bounce stamp updated to the newer ci_run_url.
+      assert Tasks.get_task_record(m1.id).metadata["bounced_from_rollup"]["ci_run_url"] ==
+               "https://example/run/B"
     end
   end
 
@@ -1820,7 +2118,7 @@ defmodule Platform.Tasks.StackDeployerTest do
   end
 
   describe "handle_rollup_ci_failure/2 — revert failure" do
-    test "runner revert error returns {:error, reason} and does not stamp bounce" do
+    test "runner revert error returns {:error, reason}; NO member is stamped or transitioned" do
       {:ok, _} =
         FakeRunner.start_link(
           revert_responses: [{:error, {:revert_failed, "conflict on revert"}}]
@@ -1829,7 +2127,10 @@ defmodule Platform.Tasks.StackDeployerTest do
       project = project_with_repo!()
       stack = stack_for!(project, slug: "revert-boom")
 
-      m1 = merged_member_with_time!(project, stack, sha: "rv1aaaa", position: 1, minutes_ago: 10)
+      # Two members: the revert failure must abort the whole atomic bounce
+      # before either member is touched.
+      m1 = merged_member_with_time!(project, stack, sha: "rv1aaaa", position: 1, minutes_ago: 20)
+      m2 = merged_member_with_time!(project, stack, sha: "rv2bbbb", position: 2, minutes_ago: 10)
 
       {:ok, deployed} =
         Stacks.update_stack(stack, %{
@@ -1843,12 +2144,17 @@ defmodule Platform.Tasks.StackDeployerTest do
                  head_sha: "h1"
                })
 
-      # Offender: still in its original state — no bounce stamp, still
-      # has merged_into_rollup_at, not transitioned to in_progress.
-      reloaded = Tasks.get_task_record(m1.id)
-      assert reloaded.metadata["merged_into_rollup_at"]["sha"] == "rv1aaaa"
-      assert is_nil(get_in(reloaded.metadata, ["bounced_from_rollup"]))
-      assert reloaded.status == "in_review"
+      # Both members untouched — no bounce stamp, merged stamp intact,
+      # status still in_review.
+      for m <- [m1, m2] do
+        reloaded = Tasks.get_task_record(m.id)
+
+        assert reloaded.metadata["merged_into_rollup_at"]["sha"] ==
+                 m.metadata["merged_into_rollup_at"]["sha"]
+
+        assert is_nil(get_in(reloaded.metadata, ["bounced_from_rollup"]))
+        assert reloaded.status == "in_review"
+      end
 
       # Stack: still deploying — bounce aborted before the flip.
       reloaded_stack = Stacks.get_stack(deployed.id)
@@ -1861,7 +2167,7 @@ defmodule Platform.Tasks.StackDeployerTest do
   end
 
   describe "handle_rollup_ci_failure/2 — PR close failure" do
-    test "gh pr close failure does not crash; bounce still proceeds" do
+    test "gh pr close failure does not crash; atomic bounce still proceeds" do
       {:ok, _} =
         FakeRunner.start_link(
           revert_responses: [{:ok, %{status: :reverted, revert_sha: "rev999"}}],
@@ -1879,7 +2185,7 @@ defmodule Platform.Tasks.StackDeployerTest do
           metadata: %{"rollup_pr" => %{"number" => 12}}
         })
 
-      assert {:ok, %{status: :bounced, bounced_task_id: bounced_id}} =
+      assert {:ok, %{status: :bounced, bounced_task_ids: [bounced_id]}} =
                StackDeployer.handle_rollup_ci_failure(deployed, %{
                  ci_run_url: "https://example/run/y",
                  head_sha: "h1"
@@ -1893,7 +2199,7 @@ defmodule Platform.Tasks.StackDeployerTest do
       assert reloaded.metadata["bounced_from_rollup"]["sha"] == "cls1aaa"
 
       reloaded_stack = Stacks.get_stack(deployed.id)
-      assert reloaded_stack.status == "in_review"
+      assert reloaded_stack.status == "in_progress"
       assert is_nil(get_in(reloaded_stack.metadata || %{}, ["rollup_pr"]))
 
       assert [_] = FakeRunner.close_calls()
@@ -1933,7 +2239,7 @@ defmodule Platform.Tasks.StackDeployerTest do
 
       project = project_with_repo!()
       stack = stack_for!(project, slug: "byid")
-      _m1 = merged_member_with_time!(project, stack, sha: "byid111", position: 1, minutes_ago: 5)
+      m1 = merged_member_with_time!(project, stack, sha: "byid111", position: 1, minutes_ago: 5)
 
       {:ok, _} =
         Stacks.update_stack(stack, %{
@@ -1941,11 +2247,13 @@ defmodule Platform.Tasks.StackDeployerTest do
           metadata: %{"rollup_pr" => %{"number" => 1}}
         })
 
-      assert {:ok, %{status: :bounced}} =
+      assert {:ok, %{status: :bounced, bounced_task_ids: [id]}} =
                StackDeployer.handle_rollup_ci_failure(stack.id, %{
                  ci_run_url: "https://example/run/byid",
                  head_sha: "h1"
                })
+
+      assert id == m1.id
     end
 
     test "missing stack returns {:error, :stack_not_found}" do
@@ -1973,7 +2281,7 @@ defmodule Platform.Tasks.StackDeployerTest do
 
       {:ok, deployed} = Stacks.update_stack(stack, %{status: "deploying", metadata: %{}})
 
-      assert {:ok, %{status: :bounced, bounced_task_id: bounced_id}} =
+      assert {:ok, %{status: :bounced, bounced_task_ids: [bounced_id]}} =
                StackDeployer.handle_rollup_ci_failure(deployed, %{
                  ci_run_url: "https://example/run/nopr",
                  head_sha: "h1"

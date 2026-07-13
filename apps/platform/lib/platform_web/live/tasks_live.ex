@@ -1032,11 +1032,13 @@ defmodule PlatformWeb.TasksLive do
   end
 
   # Stack-level "Start Planning" cascade (T8 stage 3). Mirrors the per-task
-  # "Start Planning" button at the stack level: calls Stacks.start_planning/1,
-  # which transitions every `backlog` member to `planning` (members already
-  # past `backlog` are left untouched). On success/partial, reloads
-  # `:selected_stack` + `:selected_stack_members` so the panel reflects the
-  # new member statuses, and flashes a result summary.
+  # "Start Planning" button at the stack level: calls Stacks.start_planning/1.
+  # Under Stack v2 wave-gated dispatch (ADR 0045 / task 019f487e), manual
+  # mode dispatches wave 0 only; downstream waves advance when each
+  # member's plan approves. On success/partial, reloads `:selected_stack` +
+  # `:selected_stack_members` so the panel reflects new member statuses.
+  # `:noop` short-circuits are surfaced as an :info flash without touching
+  # any member.
   def handle_event("start_stack_planning", _params, %{assigns: %{selected_stack: nil}} = socket),
     do: {:noreply, socket}
 
@@ -1069,6 +1071,25 @@ defmodule PlatformWeb.TasksLive do
            :error,
            "Started planning for #{length(planning)} #{member_word(length(planning))}; " <>
              "#{length(errors)} failed to transition."
+         )}
+
+      {:noop, :already_in_flight} ->
+        {:noreply, put_flash(socket, :info, "Planning is already in flight for this stack.")}
+
+      {:error, :cycle, _path} ->
+        {:noreply,
+         put_flash(
+           socket,
+           :error,
+           "Cannot start planning: this stack has a dependency cycle."
+         )}
+
+      {:error, :cross_stack_dep, _payload} ->
+        {:noreply,
+         put_flash(
+           socket,
+           :error,
+           "Cannot start planning: a member depends on a task outside this stack."
          )}
 
       {:error, _reason} ->
@@ -3183,6 +3204,22 @@ defmodule PlatformWeb.TasksLive do
         id -> %{project_id: id}
       end
 
+    # Stage 3 of task 019f487e (ADR-0042 Decision 8 stack-level sponsor):
+    # thread the same active sponsor filter through the stacks query so
+    # the client-state v3 "Sponsored by me" pill filters BOTH surfaces
+    # (tasks + stacks) with one toggle. `Stacks.list_stacks_with_members/1`
+    # was taught the `:sponsor_user_id` key in stage 1; the guard mirrors
+    # the task-side merge above — `nil` is the unfiltered passthrough,
+    # matching every prior refresh_board call site.
+    stack_filters =
+      stack_filters
+      |> then(fn f ->
+        case sponsor_filter_user_id(socket) do
+          nil -> f
+          id -> Map.put(f, :sponsor_user_id, id)
+        end
+      end)
+
     stack_entries = Stacks.list_stacks_with_members(stack_filters)
     {stack_board_data, stacks} = split_stack_entries(stack_entries)
 
@@ -4521,6 +4558,16 @@ defmodule PlatformWeb.TasksLive do
   # sponsor-filter empty state AND the search "no matching tasks" banner,
   # so neither empty-state lies when multiple filters are active. Called
   # once per render inside each empty-state `:if`.
+  #
+  # Stage-3 of task 019f487e invariant note (do NOT re-derive this):
+  # `desktop_column_items_for_scope/4` merges tasks with stacks from
+  # `desktop_stacks_by_column` (grouped from `stack_entries` in
+  # `refresh_board/1`). Since stage 3 now applies `:sponsor_user_id` to
+  # the `Stacks.list_stacks_with_members/1` call that produces
+  # `stack_entries`, the stack half of the merge is naturally narrowed
+  # too — there's nothing to do here. The empty-state signal correctly
+  # reflects tasks-AND-stacks visibility because both halves flow
+  # through the same filtered pipeline.
   defp board_columns_empty?(kanban_columns, columns, stacks_by_column, scope_filter) do
     Enum.all?(kanban_columns, fn {col_key, _label} ->
       desktop_column_items_for_scope(columns, stacks_by_column, col_key, scope_filter) == []
@@ -4697,6 +4744,23 @@ defmodule PlatformWeb.TasksLive do
   defp sponsor_identity(%Task{sponsor_user_id: nil}, _users_by_id), do: nil
 
   defp sponsor_identity(%Task{sponsor_user_id: id}, users_by_id) when is_binary(id) do
+    user = Map.get(users_by_id, id)
+
+    %{
+      name: (user && (user.name || user.email)) || "Unknown user",
+      avatar_url: user && user.avatar_url,
+      seed: user_seed(user, id)
+    }
+  end
+
+  # Stage 4 of task 019f487e (ADR-0042 Decision 8): stack cards now surface
+  # the sponsor avatar too. Same shape as the task-sponsor path above — a
+  # nil `sponsor_user_id` returns `nil` so the template `:if`s the avatar
+  # away, and a missing user id falls back to the "Unknown user" sentinel
+  # rather than blinking off on ownership churn.
+  defp sponsor_identity(%Stack{sponsor_user_id: nil}, _users_by_id), do: nil
+
+  defp sponsor_identity(%Stack{sponsor_user_id: id}, users_by_id) when is_binary(id) do
     user = Map.get(users_by_id, id)
 
     %{

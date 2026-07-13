@@ -564,12 +564,17 @@ defmodule Platform.Orchestration.TaskRouter do
     context = ContextAssembler.build(state.task_id, state.deploy_lease)
     {agent, runtime} = Federation.lookup_assignment(state.assignee.id)
     previous_rejection_reason = context && Map.get(context, :previous_rejection_reason)
+    # Only stack members receive `:parent_plans` in the assembled context; for
+    # solo tasks the key is absent and this defaults to `[]` so the planning
+    # dispatch template renders no upstream-plans section.
+    parent_plans = (context && Map.get(context, :parent_plans, [])) || []
 
     prompt =
       HeartbeatScheduler.dispatch_prompt(task, plan, stage,
         agent: agent,
         runtime: runtime,
-        previous_rejection_reason: previous_rejection_reason
+        previous_rejection_reason: previous_rejection_reason,
+        parent_plans: parent_plans
       )
 
     case dispatch_attention(state.assignee, state.task_id, "task_assigned", context, prompt) do

@@ -580,7 +580,8 @@ defmodule Platform.Agents.SystemEventSchedulerT6E2ETest do
     # bumped by Files MCP stage 3 (+file_add → 79)
     # bumped by Files MCP stage 4 (+file_delete → 80)
     # bumped by principal_search hotfix (+principal_search → 81)
-    @t6_baseline_tool_count 81
+    # bumped by Stack v2 stack-level sponsor stage 2 (+stack_update → 82)
+    @t6_baseline_tool_count 82
 
     defp t6_root, do: Mix.Project.project_file() |> Path.dirname()
 

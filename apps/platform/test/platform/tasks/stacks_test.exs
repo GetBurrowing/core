@@ -72,6 +72,44 @@ defmodule Platform.Tasks.StacksTest do
       assert errors[:project_id] == ["has already been taken"] or
                errors[:slug] == ["has already been taken"]
     end
+
+    test "defaults auto_plan and auto_accept_plan to false when unspecified" do
+      {:ok, project} = Tasks.create_project(%{name: "Auto Defaults"})
+
+      assert {:ok, %Stack{} = stack} =
+               Stacks.create_stack(%{
+                 project_id: project.id,
+                 slug: "auto-defaults",
+                 name: "Auto Defaults",
+                 rollup_branch: Stacks.rollup_branch_name("auto-defaults")
+               })
+
+      assert stack.auto_plan == false
+      assert stack.auto_accept_plan == false
+
+      # Round-trip through get_stack/1 to confirm the DB defaults hit.
+      fetched = Stacks.get_stack(stack.id)
+      assert fetched.auto_plan == false
+      assert fetched.auto_accept_plan == false
+    end
+
+    test "accepts auto_plan and auto_accept_plan on create and roundtrips" do
+      {:ok, project} = Tasks.create_project(%{name: "Auto Both"})
+
+      assert {:ok, %Stack{} = stack} =
+               Stacks.create_stack(%{
+                 project_id: project.id,
+                 slug: "auto-both",
+                 name: "Auto Both",
+                 rollup_branch: Stacks.rollup_branch_name("auto-both"),
+                 auto_plan: true,
+                 auto_accept_plan: true
+               })
+
+      fetched = Stacks.get_stack(stack.id)
+      assert fetched.auto_plan == true
+      assert fetched.auto_accept_plan == true
+    end
   end
 
   describe "get_stack/1 and get_stack!/1" do
@@ -132,6 +170,224 @@ defmodule Platform.Tasks.StacksTest do
       second_idx = Enum.find_index(ids, &(&1 == second.id))
       assert second_idx < first_idx
     end
+
+    # ADR 0042 Decision 8 — stack-level sponsor filter parity with tasks.
+    test "returns stacks scoped by :sponsor_user_id" do
+      {:ok, project} = Tasks.create_project(%{name: "Sponsor Filter"})
+      user_a = insert_sponsor_user()
+      user_b = insert_sponsor_user()
+
+      stack_a1 =
+        stack_fixture(
+          project_id: project.id,
+          slug: "a-one",
+          name: "A One",
+          sponsor_user_id: user_a.id
+        )
+
+      stack_a2 =
+        stack_fixture(
+          project_id: project.id,
+          slug: "a-two",
+          name: "A Two",
+          sponsor_user_id: user_a.id
+        )
+
+      _stack_b =
+        stack_fixture(
+          project_id: project.id,
+          slug: "b-one",
+          name: "B One",
+          sponsor_user_id: user_b.id
+        )
+
+      _unsponsored =
+        stack_fixture(project_id: project.id, slug: "unsponsored", name: "Unsponsored")
+
+      results = Stacks.list_stacks(%{sponsor_user_id: user_a.id})
+      ids = Enum.map(results, & &1.id) |> Enum.sort()
+      assert ids == Enum.sort([stack_a1.id, stack_a2.id])
+    end
+
+    test "nil :sponsor_user_id filter is passthrough (all stacks)" do
+      {:ok, project} = Tasks.create_project(%{name: "Sponsor Nil"})
+      user = insert_sponsor_user()
+
+      sponsored =
+        stack_fixture(
+          project_id: project.id,
+          slug: "sponsored",
+          name: "Sponsored",
+          sponsor_user_id: user.id
+        )
+
+      unsponsored =
+        stack_fixture(project_id: project.id, slug: "un-sponsored", name: "Unsponsored")
+
+      # Passing the key with a nil value should not narrow the result.
+      ids = Stacks.list_stacks(%{sponsor_user_id: nil}) |> Enum.map(& &1.id)
+      assert sponsored.id in ids
+      assert unsponsored.id in ids
+    end
+
+    test "preloads :sponsor on returned stacks" do
+      {:ok, project} = Tasks.create_project(%{name: "Sponsor Preload"})
+      user = insert_sponsor_user(name: "Sponsor Name")
+
+      stack =
+        stack_fixture(
+          project_id: project.id,
+          slug: "with-sponsor",
+          name: "With Sponsor",
+          sponsor_user_id: user.id
+        )
+
+      [found] =
+        Stacks.list_stacks(%{project_id: project.id})
+        |> Enum.filter(&(&1.id == stack.id))
+
+      assert %Platform.Accounts.User{id: sponsor_id, name: "Sponsor Name"} = found.sponsor
+      assert sponsor_id == user.id
+    end
+  end
+
+  describe "list_stacks_with_members/1 — sponsor filter" do
+    test "returns stacks scoped by :sponsor_user_id along with their members" do
+      {:ok, project} = Tasks.create_project(%{name: "SPWM Sponsor"})
+      user_a = insert_sponsor_user()
+      user_b = insert_sponsor_user()
+
+      stack_a =
+        stack_fixture(
+          project_id: project.id,
+          slug: "swm-a",
+          name: "SWM A",
+          sponsor_user_id: user_a.id
+        )
+
+      _stack_b =
+        stack_fixture(
+          project_id: project.id,
+          slug: "swm-b",
+          name: "SWM B",
+          sponsor_user_id: user_b.id
+        )
+
+      # Attach a member to stack_a so we can also verify the members payload
+      # is scoped by the filter (the second-query fetch reads stack_ids from
+      # the already-filtered stacks list).
+      {:ok, task} =
+        Tasks.create_task(%{project_id: project.id, title: "Member of A"})
+
+      {:ok, _} = Stacks.add_task(stack_a, task)
+
+      results = Stacks.list_stacks_with_members(%{sponsor_user_id: user_a.id})
+      assert [{returned_stack, board_data}] = results
+      assert returned_stack.id == stack_a.id
+      assert board_data.member_count == 1
+      assert %Platform.Accounts.User{id: sponsor_id} = returned_stack.sponsor
+      assert sponsor_id == user_a.id
+    end
+
+    test "preloads :sponsor on stacks with unsponsored members" do
+      {:ok, project} = Tasks.create_project(%{name: "SWM Preload"})
+
+      _unsponsored =
+        stack_fixture(project_id: project.id, slug: "swm-nil", name: "SWM Nil")
+
+      [{stack, _}] = Stacks.list_stacks_with_members(%{project_id: project.id})
+      # Preload should resolve unsponsored slot to nil (not
+      # `%Ecto.Association.NotLoaded{}`) so downstream renderers can
+      # pattern-match nil safely.
+      assert stack.sponsor == nil
+    end
+  end
+
+  describe "sponsor_user_id (ADR 0042 Decision 8, stack sponsor)" do
+    test "changeset accepts nil sponsor_user_id (nullable)" do
+      {:ok, project} = Tasks.create_project(%{name: "Nil Sponsor"})
+
+      changeset =
+        Stack.changeset(%Stack{}, %{
+          project_id: project.id,
+          slug: "nil-sponsor",
+          name: "Nil Sponsor",
+          rollup_branch: "stack/nil-sponsor",
+          sponsor_user_id: nil
+        })
+
+      assert changeset.valid?
+    end
+
+    test "changeset casts a valid UUID into sponsor_user_id" do
+      {:ok, project} = Tasks.create_project(%{name: "Valid Sponsor"})
+      user = insert_sponsor_user()
+
+      changeset =
+        Stack.changeset(%Stack{}, %{
+          project_id: project.id,
+          slug: "valid-sponsor",
+          name: "Valid Sponsor",
+          rollup_branch: "stack/valid-sponsor",
+          sponsor_user_id: user.id
+        })
+
+      assert changeset.valid?
+      assert Ecto.Changeset.get_change(changeset, :sponsor_user_id) == user.id
+    end
+
+    test "create_stack/1 persists sponsor_user_id when set" do
+      {:ok, project} = Tasks.create_project(%{name: "Persist Sponsor"})
+      user = insert_sponsor_user()
+
+      assert {:ok, %Stack{} = stack} =
+               Stacks.create_stack(%{
+                 project_id: project.id,
+                 slug: "persist",
+                 name: "Persist",
+                 rollup_branch: "stack/persist",
+                 sponsor_user_id: user.id
+               })
+
+      assert stack.sponsor_user_id == user.id
+    end
+
+    test "insert with a bogus sponsor_user_id surfaces a FK error on the changeset" do
+      {:ok, project} = Tasks.create_project(%{name: "Bogus Sponsor"})
+      fake_user_id = Ecto.UUID.generate()
+
+      assert {:error, changeset} =
+               Stacks.create_stack(%{
+                 project_id: project.id,
+                 slug: "bogus",
+                 name: "Bogus",
+                 rollup_branch: "stack/bogus",
+                 sponsor_user_id: fake_user_id
+               })
+
+      assert %{sponsor_user_id: [_]} = errors_on(changeset)
+    end
+
+    test "deleting the sponsoring user nilifies sponsor_user_id (on_delete: :nilify_all)" do
+      {:ok, project} = Tasks.create_project(%{name: "Departing Sponsor"})
+      user = insert_sponsor_user()
+
+      {:ok, stack} =
+        Stacks.create_stack(%{
+          project_id: project.id,
+          slug: "departing",
+          name: "Departing",
+          rollup_branch: "stack/departing",
+          sponsor_user_id: user.id
+        })
+
+      # Go straight through Repo.delete! to exercise the FK's SET NULL
+      # behaviour without any Accounts-context guardrails.
+      Repo.delete!(user)
+
+      reloaded = Stacks.get_stack(stack.id)
+      assert reloaded.sponsor_user_id == nil
+    end
   end
 
   describe "update_stack/2" do
@@ -145,6 +401,26 @@ defmodule Platform.Tasks.StacksTest do
       stack = stack_fixture()
       assert {:error, changeset} = Stacks.update_stack(stack, %{slug: "Not Valid"})
       assert %{slug: [_]} = errors_on(changeset)
+    end
+
+    test "toggles auto_plan and auto_accept_plan flags" do
+      stack = stack_fixture()
+      assert stack.auto_plan == false
+      assert stack.auto_accept_plan == false
+
+      assert {:ok, updated} =
+               Stacks.update_stack(stack, %{auto_plan: true, auto_accept_plan: true})
+
+      assert updated.auto_plan == true
+      assert updated.auto_accept_plan == true
+
+      # And back again — verifies both directions of the toggle so a
+      # future accidental one-way changeset filter would fail this.
+      assert {:ok, reverted} =
+               Stacks.update_stack(updated, %{auto_plan: false, auto_accept_plan: false})
+
+      assert reverted.auto_plan == false
+      assert reverted.auto_accept_plan == false
     end
   end
 
@@ -870,6 +1146,442 @@ defmodule Platform.Tasks.StacksTest do
     end
   end
 
+  describe "deploy_ready?/1 and pending_members_for_deploy/1" do
+    test "empty stack returns false and empty pending list" do
+      stack = stack_fixture()
+      refute Stacks.deploy_ready?(stack)
+      assert Stacks.pending_members_for_deploy(stack) == []
+    end
+
+    test "unknown stack id: deploy_ready? false, pending list []" do
+      unknown = Ecto.UUID.generate()
+      refute Stacks.deploy_ready?(unknown)
+      assert Stacks.pending_members_for_deploy(unknown) == []
+    end
+
+    test "all members in_review with every non-deploy validation passed → true" do
+      {:ok, project} = Tasks.create_project(%{name: "Deploy-ready happy"})
+      stack = stack_fixture(project_id: project.id)
+
+      {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "A"})
+      {:ok, b} = Tasks.create_task(%{project_id: project.id, title: "B"})
+      {:ok, _} = Stacks.add_task(stack, a)
+      {:ok, _} = Stacks.add_task(stack, b)
+
+      seed_completed_plan!(a)
+      seed_completed_plan!(b)
+
+      set_member_status(stack, a, "in_review")
+      set_member_status(stack, b, "in_review")
+
+      assert Stacks.deploy_ready?(stack)
+      assert Stacks.pending_members_for_deploy(stack) == []
+    end
+
+    test "one member has a pending validation → deploy_ready? false and surfaces in pending list" do
+      {:ok, project} = Tasks.create_project(%{name: "Deploy-ready pending"})
+      stack = stack_fixture(project_id: project.id)
+
+      {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "A"})
+      {:ok, b} = Tasks.create_task(%{project_id: project.id, title: "B"})
+      {:ok, _} = Stacks.add_task(stack, a)
+      {:ok, _} = Stacks.add_task(stack, b)
+
+      seed_completed_plan!(a)
+      # b has a still-pending validation on a non-deploy stage.
+      seed_plan_with_pending_validation!(b)
+
+      set_member_status(stack, a, "in_review")
+      set_member_status(stack, b, "in_review")
+
+      refute Stacks.deploy_ready?(stack)
+
+      pending_ids =
+        stack
+        |> Stacks.pending_members_for_deploy()
+        |> Enum.map(& &1.id)
+
+      assert pending_ids == [b.id]
+    end
+
+    test "member still at in_progress → deploy_ready? false and member is pending" do
+      {:ok, project} = Tasks.create_project(%{name: "Deploy-ready in-progress"})
+      stack = stack_fixture(project_id: project.id)
+
+      {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "A"})
+      {:ok, b} = Tasks.create_task(%{project_id: project.id, title: "B"})
+      {:ok, _} = Stacks.add_task(stack, a)
+      {:ok, _} = Stacks.add_task(stack, b)
+
+      seed_completed_plan!(a)
+      seed_completed_plan!(b)
+
+      set_member_status(stack, a, "in_review")
+      # b lags behind: task hasn't reached review yet, so even with
+      # passed validations it should NOT be considered deploy-ready.
+      set_member_status(stack, b, "in_progress")
+
+      refute Stacks.deploy_ready?(stack)
+
+      pending_ids =
+        stack
+        |> Stacks.pending_members_for_deploy()
+        |> Enum.map(& &1.id)
+
+      assert pending_ids == [b.id]
+    end
+
+    test "stack already at deploying → false even when member set is ready" do
+      {:ok, project} = Tasks.create_project(%{name: "Deploy-ready deploying"})
+      stack = stack_fixture(project_id: project.id)
+
+      {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "A"})
+      {:ok, _} = Stacks.add_task(stack, a)
+
+      seed_completed_plan!(a)
+      set_member_status(stack, a, "in_review")
+
+      # Sanity: member side alone is ready.
+      assert Stacks.deploy_ready?(stack)
+
+      {:ok, deploying} = Stacks.update_stack(stack, %{status: "deploying"})
+      refute Stacks.deploy_ready?(deploying)
+    end
+
+    test "stack at done → false (terminal state guards against double-fire)" do
+      {:ok, project} = Tasks.create_project(%{name: "Deploy-ready done"})
+      stack = stack_fixture(project_id: project.id)
+
+      {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "A"})
+      {:ok, _} = Stacks.add_task(stack, a)
+
+      seed_completed_plan!(a)
+      set_member_status(stack, a, "in_review")
+
+      {:ok, finished} = Stacks.update_stack(stack, %{status: "done"})
+      refute Stacks.deploy_ready?(finished)
+    end
+
+    test "stack at abandoned → false" do
+      {:ok, project} = Tasks.create_project(%{name: "Deploy-ready abandoned"})
+      stack = stack_fixture(project_id: project.id)
+
+      {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "A"})
+      {:ok, _} = Stacks.add_task(stack, a)
+
+      seed_completed_plan!(a)
+      set_member_status(stack, a, "in_review")
+
+      {:ok, abandoned} = Stacks.abandon_stack(stack, "scope cut")
+      refute Stacks.deploy_ready?(abandoned)
+    end
+
+    test "deploy-stage validations are excluded (regression guard)" do
+      # A stack member should never carry a deploy stage — the atomic-ship
+      # guard blocks the injection — but the predicate must still ignore
+      # any deploy-stage validation that a future engine change might
+      # add, otherwise the gate would jam permanently closed.
+      {:ok, project} = Tasks.create_project(%{name: "Deploy-ready exclusion"})
+      stack = stack_fixture(project_id: project.id)
+
+      {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "A"})
+      {:ok, _} = Stacks.add_task(stack, a)
+
+      seed_completed_plan_with_pending_deploy_stage!(a)
+      set_member_status(stack, a, "in_review")
+
+      assert Stacks.deploy_ready?(stack)
+      assert Stacks.pending_members_for_deploy(stack) == []
+    end
+
+    test "validations on superseded plans are ignored" do
+      # A stale superseded plan with pending validations should not gate
+      # the currently-active completed plan.
+      {:ok, project} = Tasks.create_project(%{name: "Deploy-ready superseded"})
+      stack = stack_fixture(project_id: project.id)
+
+      {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "A"})
+      {:ok, _} = Stacks.add_task(stack, a)
+
+      # v=1 superseded with a leftover pending validation.
+      seed_superseded_plan_with_pending_validation!(a, version: 1)
+      # v=2 is the live one — completed with everything passed.
+      seed_completed_plan!(a, version: 2)
+
+      set_member_status(stack, a, "in_review")
+
+      assert Stacks.deploy_ready?(stack)
+    end
+
+    test "accepts a stack id (not just a struct)" do
+      {:ok, project} = Tasks.create_project(%{name: "Deploy-ready by id"})
+      stack = stack_fixture(project_id: project.id)
+
+      {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "A"})
+      {:ok, _} = Stacks.add_task(stack, a)
+
+      seed_completed_plan!(a)
+      set_member_status(stack, a, "in_review")
+
+      assert Stacks.deploy_ready?(stack.id)
+
+      assert stack.id
+             |> Stacks.pending_members_for_deploy()
+             |> Enum.empty?()
+    end
+  end
+
+  describe "dispatch_stack_deploy/1" do
+    alias Platform.Tasks.StacksTest.DispatchNoopRunner
+
+    setup :install_dispatch_noop_runner
+
+    test "dispatches exactly once when the last member's validation flips ready", %{
+      project: project
+    } do
+      stack = stack_fixture(project_id: project.id)
+
+      {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "A"})
+      {:ok, b} = Tasks.create_task(%{project_id: project.id, title: "B"})
+      {:ok, _} = Stacks.add_task(stack, a)
+      {:ok, _} = Stacks.add_task(stack, b)
+
+      seed_completed_plan!(a)
+      seed_completed_plan!(b)
+      set_member_status(stack, a, "in_review")
+      set_member_status(stack, b, "in_review")
+
+      {:ok, events} = attach_dispatch_telemetry_handler()
+
+      try do
+        assert {:ok, :dispatched} = Stacks.dispatch_stack_deploy(stack)
+
+        assert_receive {:stack_deploy_dispatched,
+                        %{stack_id: dispatched_stack_id, member_count: 2}},
+                       200
+
+        assert dispatched_stack_id == stack.id
+      after
+        :telemetry.detach(events)
+      end
+
+      reloaded = Stacks.get_stack(stack.id)
+      assert reloaded.status == "deploying"
+      assert is_binary(reloaded.metadata["first_deploy_ready_at"])
+
+      # The dispatch's async trigger fired `maybe_open_stack_pr/1`
+      # synchronously (async: false). The gate returned `:not_ready`
+      # because neither member has been merged into the rollup branch
+      # yet (`all_members_ready?/1` requires
+      # `metadata["merged_into_rollup_at"]`, a downstream signal owned
+      # by `handle_member_transition/3` — a separate seam). So no
+      # runner call; the dispatch's semantic contract here is the
+      # transition + telemetry, not the shell-out. See the "both gates"
+      # test below for the belt-and-suspenders case.
+      assert DispatchNoopRunner.pr_calls() == []
+    end
+
+    test "dispatch + stamped members → maybe_open_stack_pr shells out through both gates",
+         %{project: project} do
+      # Belt-and-suspenders: with members ALSO stamped as merged into
+      # rollup, `dispatch_stack_deploy/1`'s async trigger runs
+      # `maybe_open_stack_pr/1` and BOTH gates pass — the runner is
+      # actually invoked. Guards against a future refactor that lets
+      # the deploy-validations gate stay closed after dispatch flipped
+      # status to `"deploying"`.
+      stack = stack_fixture(project_id: project.id)
+
+      {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "A"})
+      {:ok, b} = Tasks.create_task(%{project_id: project.id, title: "B"})
+      {:ok, _} = Stacks.add_task(stack, a)
+      {:ok, _} = Stacks.add_task(stack, b)
+
+      seed_completed_plan!(a)
+      seed_completed_plan!(b)
+      set_member_status(stack, a, "in_review")
+      set_member_status(stack, b, "in_review")
+      stamp_member_merged_into_rollup!(a, "aaaaaaa1")
+      stamp_member_merged_into_rollup!(b, "bbbbbbb2")
+
+      assert {:ok, :dispatched} = Stacks.dispatch_stack_deploy(stack)
+
+      assert [pr_call] = DispatchNoopRunner.pr_calls()
+      assert pr_call.stack_id == stack.id
+      assert pr_call.base_branch == stack.base_branch
+      assert pr_call.rollup_branch == stack.rollup_branch
+    end
+
+    test "no-op when only some members are ready", %{project: project} do
+      stack = stack_fixture(project_id: project.id)
+
+      {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "A"})
+      {:ok, b} = Tasks.create_task(%{project_id: project.id, title: "B"})
+      {:ok, _} = Stacks.add_task(stack, a)
+      {:ok, _} = Stacks.add_task(stack, b)
+
+      seed_completed_plan!(a)
+      # b still has a pending validation → deploy_ready? = false.
+      seed_plan_with_pending_validation!(b)
+
+      set_member_status(stack, a, "in_review")
+      set_member_status(stack, b, "in_review")
+
+      {:ok, events} = attach_dispatch_telemetry_handler()
+
+      try do
+        assert {:ok, :noop} = Stacks.dispatch_stack_deploy(stack)
+        refute_receive {:stack_deploy_dispatched, _}, 100
+      after
+        :telemetry.detach(events)
+      end
+
+      reloaded = Stacks.get_stack(stack.id)
+      # No transition happened.
+      refute reloaded.status == "deploying"
+      # No first_deploy_ready_at stamp on a no-op path.
+      assert is_nil(get_in(reloaded.metadata || %{}, ["first_deploy_ready_at"]))
+      assert DispatchNoopRunner.pr_calls() == []
+    end
+
+    test "concurrent double-fire fires the :dispatched telemetry exactly once", %{
+      project: project
+    } do
+      stack = stack_fixture(project_id: project.id)
+
+      {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "A"})
+      {:ok, b} = Tasks.create_task(%{project_id: project.id, title: "B"})
+      {:ok, _} = Stacks.add_task(stack, a)
+      {:ok, _} = Stacks.add_task(stack, b)
+
+      seed_completed_plan!(a)
+      seed_completed_plan!(b)
+      set_member_status(stack, a, "in_review")
+      set_member_status(stack, b, "in_review")
+
+      {:ok, events} = attach_dispatch_telemetry_handler()
+
+      try do
+        # Fire two dispatches back-to-back on the same test process.
+        # The compare-and-swap on `stacks.status` in `try_dispatch/1`
+        # means the FIRST call transitions the row and the SECOND
+        # call re-reads the fresh `"deploying"` status → `deploy_ready?`
+        # returns false → `:noop`. Exactly one `:dispatched` event.
+        results = [
+          Stacks.dispatch_stack_deploy(stack),
+          Stacks.dispatch_stack_deploy(stack)
+        ]
+
+        assert Enum.count(results, &match?({:ok, :dispatched}, &1)) == 1
+        assert Enum.count(results, &match?({:ok, :noop}, &1)) == 1
+
+        # Drain telemetry: exactly one event expected.
+        assert_receive {:stack_deploy_dispatched, %{stack_id: dispatched_stack_id}}, 200
+        assert dispatched_stack_id == stack.id
+        refute_receive {:stack_deploy_dispatched, _}, 100
+      after
+        :telemetry.detach(events)
+      end
+
+      reloaded = Stacks.get_stack(stack.id)
+      assert reloaded.status == "deploying"
+    end
+
+    test "unknown stack id returns {:error, :stack_not_found}", %{project: _project} do
+      unknown = Ecto.UUID.generate()
+
+      {:ok, events} = attach_dispatch_telemetry_handler()
+
+      try do
+        assert {:error, :stack_not_found} = Stacks.dispatch_stack_deploy(unknown)
+        refute_receive {:stack_deploy_dispatched, _}, 100
+      after
+        :telemetry.detach(events)
+      end
+    end
+
+    test "second dispatch after successful first is a no-op (idempotency)", %{project: project} do
+      stack = stack_fixture(project_id: project.id)
+
+      {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "A"})
+      {:ok, _} = Stacks.add_task(stack, a)
+
+      seed_completed_plan!(a)
+      set_member_status(stack, a, "in_review")
+
+      assert {:ok, :dispatched} = Stacks.dispatch_stack_deploy(stack)
+
+      # Second call: stack already at "deploying", deploy_ready? = false.
+      assert {:ok, :noop} = Stacks.dispatch_stack_deploy(stack)
+    end
+
+    test "accepts a stack id (not just a struct)", %{project: project} do
+      stack = stack_fixture(project_id: project.id)
+
+      {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "A"})
+      {:ok, _} = Stacks.add_task(stack, a)
+
+      seed_completed_plan!(a)
+      set_member_status(stack, a, "in_review")
+
+      assert {:ok, :dispatched} = Stacks.dispatch_stack_deploy(stack.id)
+
+      assert Stacks.get_stack(stack.id).status == "deploying"
+    end
+
+    test "preserves an already-stamped first_deploy_ready_at across retries", %{
+      project: project
+    } do
+      # Simulate a recovery scenario: a previous partial run stamped
+      # `first_deploy_ready_at` but crashed before flipping status to
+      # "deploying" (e.g. the update_all race lost the row lock and
+      # rolled back the metadata write). The set-once-if-nil rule means
+      # subsequent dispatches KEEP the original stamp, so the emitted
+      # `duration_ms_from_first_member_ready` metric reflects the true
+      # wall-clock delay from readiness → dispatch.
+      stack = stack_fixture(project_id: project.id)
+
+      {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "A"})
+      {:ok, _} = Stacks.add_task(stack, a)
+
+      seed_completed_plan!(a)
+      set_member_status(stack, a, "in_review")
+
+      previously_stamped =
+        DateTime.utc_now()
+        |> DateTime.add(-42, :second)
+        |> DateTime.to_iso8601()
+
+      {:ok, stack} =
+        Stacks.update_stack(stack, %{
+          metadata: %{"first_deploy_ready_at" => previously_stamped}
+        })
+
+      {:ok, events} = attach_dispatch_telemetry_handler()
+
+      try do
+        assert {:ok, :dispatched} = Stacks.dispatch_stack_deploy(stack)
+
+        assert_receive {:stack_deploy_dispatched,
+                        %{
+                          stack_id: _,
+                          duration_ms_from_first_member_ready: duration_ms
+                        }},
+                       200
+
+        # Should be near 42 seconds (~42_000 ms). Give a wide window
+        # so a slow CI box doesn't flake — anything > 30_000 ms is
+        # unambiguously "not zero", which is what we're actually
+        # asserting: the previously-stamped value was USED.
+        assert duration_ms > 30_000
+      after
+        :telemetry.detach(events)
+      end
+
+      reloaded = Stacks.get_stack(stack.id)
+      assert reloaded.metadata["first_deploy_ready_at"] == previously_stamped
+    end
+  end
+
   describe "members_in_merge_order/1" do
     test "linear chain a→b→c returns foundational-first [a, b, c]" do
       {:ok, project} = Tasks.create_project(%{name: "Merge order chain"})
@@ -936,6 +1648,124 @@ defmodule Platform.Tasks.StacksTest do
       assert {:error, :cycle, _} = Stacks.validate_dag(stack)
       assert ids = Stacks.members_in_merge_order(stack) |> Enum.map(& &1.id)
       assert ids == [a.id, b.id]
+    end
+  end
+
+  describe "planning_waves/1" do
+    test "empty stack returns {:ok, []}" do
+      stack = stack_fixture()
+      assert {:ok, []} = Stacks.planning_waves(stack)
+    end
+
+    test "single member with no deps returns one wave of one" do
+      {:ok, project} = Tasks.create_project(%{name: "Waves single"})
+      stack = stack_fixture(project_id: project.id)
+      {:ok, t} = Tasks.create_task(%{project_id: project.id, title: "Solo"})
+      {:ok, _} = Stacks.add_task(stack, t)
+
+      assert {:ok, [[member]]} = Stacks.planning_waves(stack)
+      assert member.id == t.id
+    end
+
+    test "3-member chain c→b→a produces 3 single-member waves, roots-first" do
+      {:ok, project} = Tasks.create_project(%{name: "Waves chain"})
+      stack = stack_fixture(project_id: project.id)
+      {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "A"})
+
+      {:ok, b} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "B",
+          dependencies: [%{"task_id" => a.id, "kind" => "blocks"}]
+        })
+
+      {:ok, c} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "C",
+          dependencies: [%{"task_id" => b.id, "kind" => "blocks"}]
+        })
+
+      {:ok, _} = Stacks.add_task(stack, a)
+      {:ok, _} = Stacks.add_task(stack, b)
+      {:ok, _} = Stacks.add_task(stack, c)
+
+      assert {:ok, [[w0], [w1], [w2]]} = Stacks.planning_waves(stack)
+      assert w0.id == a.id
+      assert w1.id == b.id
+      assert w2.id == c.id
+    end
+
+    test "diamond a→{b,c}→d collapses to [[a], [b, c], [d]]" do
+      {:ok, project} = Tasks.create_project(%{name: "Waves diamond"})
+      stack = stack_fixture(project_id: project.id)
+      {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "A"})
+
+      {:ok, b} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "B",
+          dependencies: [%{"task_id" => a.id, "kind" => "blocks"}]
+        })
+
+      {:ok, c} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "C",
+          dependencies: [%{"task_id" => a.id, "kind" => "blocks"}]
+        })
+
+      {:ok, d} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "D",
+          dependencies: [
+            %{"task_id" => b.id, "kind" => "blocks"},
+            %{"task_id" => c.id, "kind" => "blocks"}
+          ]
+        })
+
+      {:ok, _} = Stacks.add_task(stack, a)
+      {:ok, _} = Stacks.add_task(stack, b)
+      {:ok, _} = Stacks.add_task(stack, c)
+      {:ok, _} = Stacks.add_task(stack, d)
+
+      assert {:ok, [[wave0], wave1, [wave2]]} = Stacks.planning_waves(stack)
+      assert wave0.id == a.id
+      assert MapSet.new(Enum.map(wave1, & &1.id)) == MapSet.new([b.id, c.id])
+      assert length(wave1) == 2
+      assert wave2.id == d.id
+    end
+
+    test "cyclic stack surfaces {:error, :cycle, path} (NOT {:ok, ...})" do
+      {:ok, project} = Tasks.create_project(%{name: "Waves cycle"})
+      stack = stack_fixture(project_id: project.id)
+      {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "A"})
+      {:ok, b} = Tasks.create_task(%{project_id: project.id, title: "B"})
+
+      # Attach both first (no deps so validate_dag passes), then patch in
+      # the back-edge to create a→b→a.
+      {:ok, attached_a} = Stacks.add_task(stack, a)
+      {:ok, attached_b} = Stacks.add_task(stack, b)
+
+      attached_a
+      |> Task.changeset(%{dependencies: [%{"task_id" => attached_b.id, "kind" => "blocks"}]})
+      |> Repo.update!()
+
+      attached_b
+      |> Task.changeset(%{dependencies: [%{"task_id" => attached_a.id, "kind" => "blocks"}]})
+      |> Repo.update!()
+
+      assert {:error, :cycle, path} = Stacks.planning_waves(stack)
+      ids = path |> Enum.map(& &1.id) |> MapSet.new()
+      assert MapSet.member?(ids, a.id)
+      assert MapSet.member?(ids, b.id)
+    end
+
+    test "unknown stack id returns {:error, :stack_not_found}" do
+      # Well-formed UUID that doesn't exist in the DB.
+      bogus_id = Ecto.UUID.generate()
+      assert {:error, :stack_not_found} = Stacks.planning_waves(bogus_id)
     end
   end
 
@@ -1370,7 +2200,28 @@ defmodule Platform.Tasks.StacksTest do
   end
 
   describe "start_planning/1" do
-    test "fans every backlog member backlog -> planning" do
+    test "manual mode single-member stack transitions the member to planning" do
+      {:ok, project} = Tasks.create_project(%{name: "Start planning single"})
+      stack = stack_fixture(project_id: project.id)
+
+      {:ok, t} = Tasks.create_task(%{project_id: project.id, title: "Solo"})
+      {:ok, _} = Stacks.add_task(stack, t)
+
+      assert {:ok,
+              %{
+                stack: updated,
+                planning: [planned],
+                mode: :manual,
+                waves_total: 1
+              }} = Stacks.start_planning(stack)
+
+      assert planned.id == t.id
+      assert planned.status == "planning"
+      assert Tasks.get_task_record(t.id).status == "planning"
+      assert updated.id == stack.id
+    end
+
+    test "manual mode dep-free stack dispatches every root in one wave" do
       {:ok, project} = Tasks.create_project(%{name: "Start planning happy"})
       stack = stack_fixture(project_id: project.id)
 
@@ -1382,7 +2233,13 @@ defmodule Platform.Tasks.StacksTest do
       {:ok, _} = Stacks.add_task(stack, b)
       {:ok, _} = Stacks.add_task(stack, c)
 
-      assert {:ok, %{stack: updated, planning: planning}} = Stacks.start_planning(stack)
+      assert {:ok,
+              %{
+                stack: updated,
+                planning: planning,
+                mode: :manual,
+                waves_total: 1
+              }} = Stacks.start_planning(stack)
 
       planning_ids = planning |> Enum.map(& &1.id) |> Enum.sort()
       assert planning_ids == Enum.sort([a.id, b.id, c.id])
@@ -1398,57 +2255,88 @@ defmodule Platform.Tasks.StacksTest do
       assert recomputed.status == "forming"
     end
 
-    test "only advances backlog members, leaving the rest untouched" do
-      {:ok, project} = Tasks.create_project(%{name: "Start planning mixed"})
+    test "manual mode 3-chain only dispatches wave 0 (the root)" do
+      {:ok, project} = Tasks.create_project(%{name: "Start planning chain"})
       stack = stack_fixture(project_id: project.id)
 
-      {:ok, bl_a} = Tasks.create_task(%{project_id: project.id, title: "Backlog A"})
-      {:ok, bl_b} = Tasks.create_task(%{project_id: project.id, title: "Backlog B"})
-      {:ok, planning_already} = Tasks.create_task(%{project_id: project.id, title: "Planning"})
-      {:ok, parked} = Tasks.create_task(%{project_id: project.id, title: "Parked"})
+      {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "A root"})
+      {:ok, b} = Tasks.create_task(%{project_id: project.id, title: "B middle"})
+      {:ok, c} = Tasks.create_task(%{project_id: project.id, title: "C leaf"})
 
-      {:ok, _} = Stacks.add_task(stack, bl_a)
-      {:ok, _} = Stacks.add_task(stack, bl_b)
-      {:ok, attached_planning} = Stacks.add_task(stack, planning_already)
-      {:ok, attached_parked} = Stacks.add_task(stack, parked)
+      {:ok, _} = Stacks.add_task(stack, a)
+      {:ok, _} = Stacks.add_task(stack, b)
+      {:ok, _} = Stacks.add_task(stack, c)
 
-      # Pre-advance two members past `backlog` before the cascade.
-      set_member_status(stack, attached_planning, "planning")
-      set_member_status(stack, attached_parked, "stack_pending")
+      # C ← B ← A (C depends on B, B depends on A) → waves [[A], [B], [C]].
+      {:ok, _} = Stacks.add_dependency_edge(stack, b.id, a.id)
+      {:ok, _} = Stacks.add_dependency_edge(stack, c.id, b.id)
 
-      assert {:ok, %{planning: planning}} = Stacks.start_planning(stack)
+      assert {:ok,
+              %{
+                planning: [planned],
+                mode: :manual,
+                waves_total: 3
+              }} = Stacks.start_planning(stack)
 
-      # Exactly the two backlog members advanced — no :invalid_transition
-      # error leaked for the already-advanced members.
-      planning_ids = planning |> Enum.map(& &1.id) |> Enum.sort()
-      assert planning_ids == Enum.sort([bl_a.id, bl_b.id])
-
-      # The pre-advanced members are left at their existing status.
-      assert Tasks.get_task_record(attached_planning.id).status == "planning"
-      assert Tasks.get_task_record(attached_parked.id).status == "stack_pending"
+      assert planned.id == a.id
+      assert Tasks.get_task_record(a.id).status == "planning"
+      assert Tasks.get_task_record(b.id).status == "backlog"
+      assert Tasks.get_task_record(c.id).status == "backlog"
     end
 
-    test "an empty stack returns {:ok, planning: []}" do
-      stack = stack_fixture()
-
-      assert {:ok, %{stack: returned, planning: []}} = Stacks.start_planning(stack)
-      assert returned.id == stack.id
-      assert returned.status == "forming"
-    end
-
-    test "a stack with no backlog members is a safe no-op" do
-      {:ok, project} = Tasks.create_project(%{name: "Start planning no-op"})
+    test "manual mode emits :wave_dispatched telemetry with wave_index 0" do
+      {:ok, project} = Tasks.create_project(%{name: "Start planning telemetry"})
       stack = stack_fixture(project_id: project.id)
 
-      {:ok, t} = Tasks.create_task(%{project_id: project.id, title: "Already planning"})
-      {:ok, attached} = Stacks.add_task(stack, t)
-      set_member_status(stack, attached, "planning")
+      {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "A"})
+      {:ok, b} = Tasks.create_task(%{project_id: project.id, title: "B"})
+      {:ok, _} = Stacks.add_task(stack, a)
+      {:ok, _} = Stacks.add_task(stack, b)
+      {:ok, _} = Stacks.add_dependency_edge(stack, b.id, a.id)
 
-      assert {:ok, %{planning: []}} = Stacks.start_planning(stack)
-      assert Tasks.get_task_record(attached.id).status == "planning"
+      ref =
+        :telemetry_test.attach_event_handlers(self(), [
+          [:platform, :stacks, :planning, :wave_dispatched]
+        ])
+
+      assert {:ok, %{mode: :manual, waves_total: 2}} = Stacks.start_planning(stack)
+
+      assert_receive {[:platform, :stacks, :planning, :wave_dispatched], ^ref, measurements,
+                      metadata}
+
+      assert measurements.member_count == 1
+      assert metadata.wave_index == 0
+      assert metadata.stack_id == stack.id
+
+      :telemetry.detach(ref)
     end
 
-    test "re-invoking after a full cascade is idempotent" do
+    test "cyclic stack returns {:error, :cycle, _} and no members transition" do
+      {:ok, project} = Tasks.create_project(%{name: "Start planning cyclic"})
+      stack = stack_fixture(project_id: project.id)
+
+      {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "A"})
+      {:ok, b} = Tasks.create_task(%{project_id: project.id, title: "B"})
+      {:ok, _} = Stacks.add_task(stack, a)
+      {:ok, _} = Stacks.add_task(stack, b)
+
+      # Deliberately construct a cycle by writing edges directly on the
+      # task record so we bypass `add_dependency_edge/4`'s cycle guard.
+      Tasks.get_task_record(a.id)
+      |> Task.changeset(%{dependencies: [%{"task_id" => b.id, "kind" => "blocks"}]})
+      |> Repo.update!()
+
+      Tasks.get_task_record(b.id)
+      |> Task.changeset(%{dependencies: [%{"task_id" => a.id, "kind" => "blocks"}]})
+      |> Repo.update!()
+
+      assert {:error, :cycle, _path} = Stacks.start_planning(stack)
+
+      assert Tasks.get_task_record(a.id).status == "backlog"
+      assert Tasks.get_task_record(b.id).status == "backlog"
+    end
+
+    test "idempotency: second invocation returns {:noop, :already_in_flight}" do
       {:ok, project} = Tasks.create_project(%{name: "Start planning idempotent"})
       stack = stack_fixture(project_id: project.id)
 
@@ -1457,13 +2345,35 @@ defmodule Platform.Tasks.StacksTest do
       {:ok, _} = Stacks.add_task(stack, a)
       {:ok, _} = Stacks.add_task(stack, b)
 
-      assert {:ok, %{planning: first}} = Stacks.start_planning(stack)
+      assert {:ok, %{planning: first, mode: :manual}} = Stacks.start_planning(stack)
       assert length(first) == 2
 
-      # Second invocation finds nothing at `backlog` — no re-transition,
-      # no error.
-      assert {:ok, %{planning: []}} = Stacks.start_planning(stack)
+      # Wave 0 == [A, B] (no in-stack deps). Both members are now at
+      # `planning`. Second call short-circuits without touching anything.
+      assert {:noop, :already_in_flight} = Stacks.start_planning(stack)
       assert Enum.all?(Stacks.members(stack), &(&1.status == "planning"))
+    end
+
+    test "idempotency: a member pre-advanced past backlog blocks a fresh dispatch" do
+      {:ok, project} = Tasks.create_project(%{name: "Start planning pre-advanced"})
+      stack = stack_fixture(project_id: project.id)
+
+      {:ok, t} = Tasks.create_task(%{project_id: project.id, title: "Already planning"})
+      {:ok, attached} = Stacks.add_task(stack, t)
+      set_member_status(stack, attached, "planning")
+
+      assert {:noop, :already_in_flight} = Stacks.start_planning(stack)
+      assert Tasks.get_task_record(attached.id).status == "planning"
+    end
+
+    test "an empty stack returns {:ok, planning: []}" do
+      stack = stack_fixture()
+
+      assert {:ok, %{stack: returned, planning: [], waves_total: 0, mode: :manual}} =
+               Stacks.start_planning(stack)
+
+      assert returned.id == stack.id
+      assert returned.status == "forming"
     end
 
     test "accepts a stack id and returns {:error, :stack_not_found} for an unknown id" do
@@ -1476,6 +2386,67 @@ defmodule Platform.Tasks.StacksTest do
       assert planned.id == t.id
 
       assert {:error, :stack_not_found} = Stacks.start_planning(Ecto.UUID.generate())
+    end
+
+    test "auto_plan == true cascades every wave in one call and reports mode: :auto" do
+      {:ok, project} = Tasks.create_project(%{name: "Start planning auto 3-chain"})
+      stack = stack_fixture(project_id: project.id)
+      {:ok, stack} = Stacks.update_stack(stack, %{auto_plan: true})
+
+      {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "A"})
+      {:ok, b} = Tasks.create_task(%{project_id: project.id, title: "B"})
+      {:ok, c} = Tasks.create_task(%{project_id: project.id, title: "C"})
+      {:ok, _} = Stacks.add_task(stack, a)
+      {:ok, _} = Stacks.add_task(stack, b)
+      {:ok, _} = Stacks.add_task(stack, c)
+
+      # C ← B ← A dep chain: 3 waves under manual, still 3 waves under
+      # auto — the difference is that auto fans out all three at once.
+      {:ok, _} = Stacks.add_dependency_edge(stack, b.id, a.id)
+      {:ok, _} = Stacks.add_dependency_edge(stack, c.id, b.id)
+
+      assert {:ok, %{planning: planning, mode: :auto, waves_total: 3}} =
+               Stacks.start_planning(stack)
+
+      assert length(planning) == 3
+      planning_ids = planning |> Enum.map(& &1.id) |> Enum.sort()
+      assert planning_ids == Enum.sort([a.id, b.id, c.id])
+      assert Enum.all?(Stacks.members(stack), &(&1.status == "planning"))
+    end
+
+    test "auto_plan == true emits one :wave_dispatched event per wave, in order" do
+      {:ok, project} = Tasks.create_project(%{name: "Start planning auto telemetry"})
+      stack = stack_fixture(project_id: project.id)
+      {:ok, stack} = Stacks.update_stack(stack, %{auto_plan: true})
+
+      {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "A"})
+      {:ok, b} = Tasks.create_task(%{project_id: project.id, title: "B"})
+      {:ok, c} = Tasks.create_task(%{project_id: project.id, title: "C"})
+      {:ok, _} = Stacks.add_task(stack, a)
+      {:ok, _} = Stacks.add_task(stack, b)
+      {:ok, _} = Stacks.add_task(stack, c)
+      {:ok, _} = Stacks.add_dependency_edge(stack, b.id, a.id)
+      {:ok, _} = Stacks.add_dependency_edge(stack, c.id, b.id)
+
+      ref =
+        :telemetry_test.attach_event_handlers(self(), [
+          [:platform, :stacks, :planning, :wave_dispatched]
+        ])
+
+      assert {:ok, %{mode: :auto, waves_total: 3}} = Stacks.start_planning(stack)
+
+      # Three events, wave_index 0, 1, 2, in order — one per wave with
+      # member_count: 1 each because the chain has one member per wave.
+      assert_receive {[:platform, :stacks, :planning, :wave_dispatched], ^ref, meas0, meta0}
+      assert_receive {[:platform, :stacks, :planning, :wave_dispatched], ^ref, meas1, meta1}
+      assert_receive {[:platform, :stacks, :planning, :wave_dispatched], ^ref, meas2, meta2}
+      refute_receive {[:platform, :stacks, :planning, :wave_dispatched], ^ref, _, _}, 50
+
+      assert [meta0.wave_index, meta1.wave_index, meta2.wave_index] == [0, 1, 2]
+      assert Enum.all?([meta0, meta1, meta2], &(&1.stack_id == stack.id))
+      assert Enum.all?([meas0, meas1, meas2], &(&1.member_count == 1))
+
+      :telemetry.detach(ref)
     end
   end
 
@@ -1517,11 +2488,16 @@ defmodule Platform.Tasks.StacksTest do
               %{
                 planning: planning,
                 edges_authored: 1,
-                edges_skipped_reason: nil
+                edges_skipped_reason: nil,
+                mode: :manual,
+                waves_total: 2
               }} = Stacks.start_planning(stack)
 
-      # Cascade still moves all backlog members to planning.
-      assert length(planning) == 3
+      # Manual-mode wave 0 dispatch: only the two dep-free members (A, C)
+      # advance. B waits for A's plan to approve.
+      planning_ids = planning |> Enum.map(& &1.id) |> Enum.sort()
+      assert planning_ids == Enum.sort([a.id, c.id])
+      assert Tasks.get_task_record(b.id).status == "backlog"
 
       # The inferred edge landed in the JSONB dependencies column via
       # the standard add_dependency_edge/4 path.
@@ -1643,10 +2619,16 @@ defmodule Platform.Tasks.StacksTest do
               %{
                 planning: planning,
                 edges_authored: 0,
-                edges_skipped_reason: :user_override_present
+                edges_skipped_reason: :user_override_present,
+                mode: :manual,
+                waves_total: 2
               }} = Stacks.start_planning(stack)
 
-      assert length(planning) == 3
+      # Manual-mode wave 0 dispatch: A (root) and C (dep-free) advance;
+      # B is gated behind A's plan.
+      planning_ids = planning |> Enum.map(& &1.id) |> Enum.sort()
+      assert planning_ids == Enum.sort([a.id, c.id])
+      assert Tasks.get_task_record(b.id).status == "backlog"
 
       # Pre-existing B->A survives; C is untouched.
       assert [%{"task_id" => to_id}] = Tasks.get_task_record(b.id).dependencies
@@ -1890,6 +2872,600 @@ defmodule Platform.Tasks.StacksTest do
       assert metadata.retry_count == 1
 
       :telemetry.detach(ref)
+    end
+  end
+
+  describe "advance_planning_waves/1" do
+    test "before wave 0's plan is approved, advance is a no-op" do
+      {:ok, project} = Tasks.create_project(%{name: "Advance upstream incomplete"})
+      stack = stack_fixture(project_id: project.id)
+
+      {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "A"})
+      {:ok, b} = Tasks.create_task(%{project_id: project.id, title: "B"})
+      {:ok, _} = Stacks.add_task(stack, a)
+      {:ok, _} = Stacks.add_task(stack, b)
+      {:ok, _} = Stacks.add_dependency_edge(stack, b.id, a.id)
+
+      # Dispatch wave 0 → A goes planning; B stays backlog.
+      assert {:ok, %{planning: [_a]}} = Stacks.start_planning(stack)
+
+      # A's plan has NOT been approved yet — advance is a no-op.
+      assert {:ok, :noop, :upstream_incomplete} = Stacks.advance_planning_waves(stack)
+      assert Tasks.get_task_record(b.id).status == "backlog"
+    end
+
+    test "3-chain: approving each wave's plan advances the next wave" do
+      {:ok, project} = Tasks.create_project(%{name: "Advance chain"})
+      stack = stack_fixture(project_id: project.id)
+
+      {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "A"})
+      {:ok, b} = Tasks.create_task(%{project_id: project.id, title: "B"})
+      {:ok, c} = Tasks.create_task(%{project_id: project.id, title: "C"})
+      {:ok, _} = Stacks.add_task(stack, a)
+      {:ok, _} = Stacks.add_task(stack, b)
+      {:ok, _} = Stacks.add_task(stack, c)
+      {:ok, _} = Stacks.add_dependency_edge(stack, b.id, a.id)
+      {:ok, _} = Stacks.add_dependency_edge(stack, c.id, b.id)
+
+      assert {:ok, %{planning: [_a]}} = Stacks.start_planning(stack)
+
+      # Stamp A's plan as approved directly (bypass approve_plan/3 to
+      # exercise advance in isolation).
+      {:ok, _} = Tasks.create_plan(%{task_id: a.id, status: "approved"})
+
+      assert {:ok, %{dispatched: [b_dispatched], wave_index: 1}} =
+               Stacks.advance_planning_waves(stack)
+
+      assert b_dispatched.id == b.id
+      assert b_dispatched.status == "planning"
+      assert Tasks.get_task_record(c.id).status == "backlog"
+
+      # Approve B's plan → advance dispatches wave 2 (C).
+      {:ok, _} = Tasks.create_plan(%{task_id: b.id, status: "approved"})
+
+      assert {:ok, %{dispatched: [c_dispatched], wave_index: 2}} =
+               Stacks.advance_planning_waves(stack)
+
+      assert c_dispatched.id == c.id
+      assert c_dispatched.status == "planning"
+    end
+
+    test "when the next wave is already dispatched, advance is a no-op" do
+      {:ok, project} = Tasks.create_project(%{name: "Advance already-dispatched"})
+      stack = stack_fixture(project_id: project.id)
+
+      {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "A"})
+      {:ok, b} = Tasks.create_task(%{project_id: project.id, title: "B"})
+      {:ok, _} = Stacks.add_task(stack, a)
+      {:ok, _} = Stacks.add_task(stack, b)
+      {:ok, _} = Stacks.add_dependency_edge(stack, b.id, a.id)
+
+      assert {:ok, _} = Stacks.start_planning(stack)
+      {:ok, _} = Tasks.create_plan(%{task_id: a.id, status: "approved"})
+
+      assert {:ok, %{wave_index: 1}} = Stacks.advance_planning_waves(stack)
+
+      # Second call: wave 1 (B) is now at planning — no new dispatch.
+      assert {:ok, :noop, :next_wave_already_dispatched} =
+               Stacks.advance_planning_waves(stack)
+    end
+
+    test "when all waves are dispatched, advance returns :no_next_wave" do
+      {:ok, project} = Tasks.create_project(%{name: "Advance end of chain"})
+      stack = stack_fixture(project_id: project.id)
+
+      {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "A"})
+      {:ok, _} = Stacks.add_task(stack, a)
+
+      assert {:ok, _} = Stacks.start_planning(stack)
+      {:ok, _} = Tasks.create_plan(%{task_id: a.id, status: "approved"})
+
+      # Single-wave stack: wave 0 fully approved, no wave 1.
+      assert {:ok, :noop, :no_next_wave} = Stacks.advance_planning_waves(stack)
+    end
+
+    test "an empty stack returns :no_next_wave" do
+      stack = stack_fixture()
+      assert {:ok, :noop, :no_next_wave} = Stacks.advance_planning_waves(stack)
+    end
+
+    test "cyclic stack passes through {:error, :cycle, _}" do
+      {:ok, project} = Tasks.create_project(%{name: "Advance cyclic"})
+      stack = stack_fixture(project_id: project.id)
+
+      {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "A"})
+      {:ok, b} = Tasks.create_task(%{project_id: project.id, title: "B"})
+      {:ok, _} = Stacks.add_task(stack, a)
+      {:ok, _} = Stacks.add_task(stack, b)
+
+      Tasks.get_task_record(a.id)
+      |> Task.changeset(%{dependencies: [%{"task_id" => b.id, "kind" => "blocks"}]})
+      |> Repo.update!()
+
+      Tasks.get_task_record(b.id)
+      |> Task.changeset(%{dependencies: [%{"task_id" => a.id, "kind" => "blocks"}]})
+      |> Repo.update!()
+
+      assert {:error, :cycle, _} = Stacks.advance_planning_waves(stack)
+    end
+
+    test "emits :wave_dispatched telemetry with the advanced wave_index" do
+      {:ok, project} = Tasks.create_project(%{name: "Advance telemetry"})
+      stack = stack_fixture(project_id: project.id)
+
+      {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "A"})
+      {:ok, b} = Tasks.create_task(%{project_id: project.id, title: "B"})
+      {:ok, _} = Stacks.add_task(stack, a)
+      {:ok, _} = Stacks.add_task(stack, b)
+      {:ok, _} = Stacks.add_dependency_edge(stack, b.id, a.id)
+
+      assert {:ok, _} = Stacks.start_planning(stack)
+      {:ok, _} = Tasks.create_plan(%{task_id: a.id, status: "approved"})
+
+      ref =
+        :telemetry_test.attach_event_handlers(self(), [
+          [:platform, :stacks, :planning, :wave_dispatched]
+        ])
+
+      assert {:ok, %{wave_index: 1}} = Stacks.advance_planning_waves(stack)
+
+      assert_receive {[:platform, :stacks, :planning, :wave_dispatched], ^ref, measurements,
+                      metadata}
+
+      assert measurements.member_count == 1
+      assert metadata.wave_index == 1
+      assert metadata.stack_id == stack.id
+
+      :telemetry.detach(ref)
+    end
+
+    test "accepts a stack id and returns {:error, :stack_not_found} for an unknown id" do
+      assert {:error, :stack_not_found} = Stacks.advance_planning_waves(Ecto.UUID.generate())
+    end
+  end
+
+  describe "planning telemetry (stack v2 stage 6)" do
+    # `:started`, `:noop` (multi-reason), and `:advanced` events. The
+    # existing `:wave_dispatched` event is covered above; these blocks
+    # exercise the sibling events landed in stage 6 alongside
+    # backwards-compatibility with `:wave_dispatched`.
+
+    test "manual mode emits :started with member_count, mode: :manual, and waves_total" do
+      {:ok, project} = Tasks.create_project(%{name: "Started telemetry manual"})
+      stack = stack_fixture(project_id: project.id)
+
+      {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "A"})
+      {:ok, b} = Tasks.create_task(%{project_id: project.id, title: "B"})
+      {:ok, _} = Stacks.add_task(stack, a)
+      {:ok, _} = Stacks.add_task(stack, b)
+      # Chain B → A so waves = [[A], [B]].
+      {:ok, _} = Stacks.add_dependency_edge(stack, b.id, a.id)
+
+      ref =
+        :telemetry_test.attach_event_handlers(self(), [
+          [:platform, :stacks, :planning, :started]
+        ])
+
+      assert {:ok, %{mode: :manual, waves_total: 2}} = Stacks.start_planning(stack)
+
+      assert_receive {[:platform, :stacks, :planning, :started], ^ref, measurements, metadata}
+
+      assert measurements.member_count == 2
+      assert metadata.stack_id == stack.id
+      assert metadata.mode == :manual
+      assert metadata.waves_total == 2
+
+      :telemetry.detach(ref)
+    end
+
+    test "auto mode emits :started with mode: :auto" do
+      {:ok, project} = Tasks.create_project(%{name: "Started telemetry auto"})
+      stack = stack_fixture(project_id: project.id)
+      {:ok, stack} = Stacks.update_stack(stack, %{auto_plan: true})
+
+      {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "A"})
+      {:ok, b} = Tasks.create_task(%{project_id: project.id, title: "B"})
+      {:ok, c} = Tasks.create_task(%{project_id: project.id, title: "C"})
+      {:ok, _} = Stacks.add_task(stack, a)
+      {:ok, _} = Stacks.add_task(stack, b)
+      {:ok, _} = Stacks.add_task(stack, c)
+      {:ok, _} = Stacks.add_dependency_edge(stack, b.id, a.id)
+      {:ok, _} = Stacks.add_dependency_edge(stack, c.id, b.id)
+
+      ref =
+        :telemetry_test.attach_event_handlers(self(), [
+          [:platform, :stacks, :planning, :started]
+        ])
+
+      assert {:ok, %{mode: :auto, waves_total: 3}} = Stacks.start_planning(stack)
+
+      assert_receive {[:platform, :stacks, :planning, :started], ^ref, measurements, metadata}
+
+      # `member_count` in :started is the TOTAL member count, not the
+      # per-wave count. Per-wave counts continue to live on
+      # :wave_dispatched (one event per wave in auto mode).
+      assert measurements.member_count == 3
+      assert metadata.mode == :auto
+      assert metadata.waves_total == 3
+
+      :telemetry.detach(ref)
+    end
+
+    test "idempotency short-circuit emits :noop with reason :already_in_flight and no extra :wave_dispatched" do
+      {:ok, project} = Tasks.create_project(%{name: "Noop already in flight"})
+      stack = stack_fixture(project_id: project.id)
+
+      {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "A"})
+      {:ok, b} = Tasks.create_task(%{project_id: project.id, title: "B"})
+      {:ok, _} = Stacks.add_task(stack, a)
+      {:ok, _} = Stacks.add_task(stack, b)
+      {:ok, _} = Stacks.add_dependency_edge(stack, b.id, a.id)
+
+      # First call dispatches wave 0 (A). Attach handlers AFTER so we
+      # only see events from the second (noop) call.
+      assert {:ok, %{mode: :manual}} = Stacks.start_planning(stack)
+
+      ref =
+        :telemetry_test.attach_event_handlers(self(), [
+          [:platform, :stacks, :planning, :noop],
+          [:platform, :stacks, :planning, :wave_dispatched],
+          [:platform, :stacks, :planning, :started]
+        ])
+
+      # `Logger.info` line documents the short-circuit for operator logs.
+      # Temporarily lower the module log level so `capture_log/2` can
+      # observe the info-level line — test env's default level is
+      # `:warning`, and stage 7's live e2e scenario verifies the same
+      # line against dev's default level (:info).
+      previous_level = Logger.level()
+      Logger.configure(level: :info)
+
+      try do
+        logs =
+          ExUnit.CaptureLog.capture_log(fn ->
+            assert {:noop, :already_in_flight} = Stacks.start_planning(stack)
+          end)
+
+        # `:noop` fires; no extra `:wave_dispatched` and no `:started`
+        # fire on the short-circuit path.
+        assert_receive {[:platform, :stacks, :planning, :noop], ^ref, measurements, metadata}
+        assert measurements == %{}
+        assert metadata.stack_id == stack.id
+        assert metadata.reason == :already_in_flight
+
+        refute_received {[:platform, :stacks, :planning, :wave_dispatched], ^ref, _, _}
+        refute_received {[:platform, :stacks, :planning, :started], ^ref, _, _}
+
+        assert logs =~ "start_planning"
+        assert logs =~ "noop"
+        assert logs =~ "already_in_flight"
+      after
+        Logger.configure(level: previous_level)
+        :telemetry.detach(ref)
+      end
+    end
+
+    test "cyclic DAG short-circuit emits :noop with reason :cycle and does not fire :started" do
+      {:ok, project} = Tasks.create_project(%{name: "Noop cycle"})
+      stack = stack_fixture(project_id: project.id)
+
+      {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "A"})
+      {:ok, b} = Tasks.create_task(%{project_id: project.id, title: "B"})
+      {:ok, _} = Stacks.add_task(stack, a)
+      {:ok, _} = Stacks.add_task(stack, b)
+
+      # Bypass `add_dependency_edge/4`'s cycle guard to install a cyclic
+      # DAG directly on the underlying `Task.dependencies` column.
+      Tasks.get_task_record(a.id)
+      |> Task.changeset(%{dependencies: [%{"task_id" => b.id, "kind" => "blocks"}]})
+      |> Repo.update!()
+
+      Tasks.get_task_record(b.id)
+      |> Task.changeset(%{dependencies: [%{"task_id" => a.id, "kind" => "blocks"}]})
+      |> Repo.update!()
+
+      ref =
+        :telemetry_test.attach_event_handlers(self(), [
+          [:platform, :stacks, :planning, :noop],
+          [:platform, :stacks, :planning, :started],
+          [:platform, :stacks, :planning, :wave_dispatched]
+        ])
+
+      assert {:error, :cycle, _path} = Stacks.start_planning(stack)
+
+      assert_receive {[:platform, :stacks, :planning, :noop], ^ref, _measurements, metadata}
+      assert metadata.stack_id == stack.id
+      assert metadata.reason == :cycle
+
+      refute_received {[:platform, :stacks, :planning, :started], ^ref, _, _}
+      refute_received {[:platform, :stacks, :planning, :wave_dispatched], ^ref, _, _}
+
+      :telemetry.detach(ref)
+    end
+
+    test "advance_planning_waves emits :advanced alongside :wave_dispatched" do
+      {:ok, project} = Tasks.create_project(%{name: "Advanced telemetry"})
+      stack = stack_fixture(project_id: project.id)
+
+      {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "A"})
+      {:ok, b} = Tasks.create_task(%{project_id: project.id, title: "B"})
+      {:ok, _} = Stacks.add_task(stack, a)
+      {:ok, _} = Stacks.add_task(stack, b)
+      {:ok, _} = Stacks.add_dependency_edge(stack, b.id, a.id)
+
+      assert {:ok, _} = Stacks.start_planning(stack)
+      {:ok, _} = Tasks.create_plan(%{task_id: a.id, status: "approved"})
+
+      ref =
+        :telemetry_test.attach_event_handlers(self(), [
+          [:platform, :stacks, :planning, :advanced],
+          [:platform, :stacks, :planning, :wave_dispatched]
+        ])
+
+      assert {:ok, %{wave_index: 1}} = Stacks.advance_planning_waves(stack)
+
+      # `:advanced` fires with the same wave_index as `:wave_dispatched`.
+      # Observers that care about "advance-driven promotion" attach to
+      # `:advanced`; observers that just want every wave-fire (both start
+      # and advance) attach to `:wave_dispatched`.
+      assert_receive {[:platform, :stacks, :planning, :advanced], ^ref, adv_measurements,
+                      adv_metadata}
+
+      assert_receive {[:platform, :stacks, :planning, :wave_dispatched], ^ref, wd_measurements,
+                      wd_metadata}
+
+      assert adv_measurements.member_count == 1
+      assert wd_measurements.member_count == 1
+      assert adv_metadata.wave_index == 1
+      assert wd_metadata.wave_index == 1
+      assert adv_metadata.stack_id == stack.id
+
+      :telemetry.detach(ref)
+    end
+
+    test ":advanced does NOT fire on advance no-op (upstream incomplete)" do
+      {:ok, project} = Tasks.create_project(%{name: "Advanced noop"})
+      stack = stack_fixture(project_id: project.id)
+
+      {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "A"})
+      {:ok, b} = Tasks.create_task(%{project_id: project.id, title: "B"})
+      {:ok, _} = Stacks.add_task(stack, a)
+      {:ok, _} = Stacks.add_task(stack, b)
+      {:ok, _} = Stacks.add_dependency_edge(stack, b.id, a.id)
+
+      assert {:ok, _} = Stacks.start_planning(stack)
+
+      ref =
+        :telemetry_test.attach_event_handlers(self(), [
+          [:platform, :stacks, :planning, :advanced]
+        ])
+
+      # A's plan is NOT approved — advance is a no-op.
+      assert {:ok, :noop, :upstream_incomplete} = Stacks.advance_planning_waves(stack)
+      refute_received {[:platform, :stacks, :planning, :advanced], ^ref, _, _}
+
+      :telemetry.detach(ref)
+    end
+  end
+
+  describe "start_planning + Tasks.approve_plan integration" do
+    test "approving wave 0's plan auto-advances wave 1 via approve_plan hook" do
+      {:ok, project} = Tasks.create_project(%{name: "Approve hook chain"})
+      stack = stack_fixture(project_id: project.id)
+
+      {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "A"})
+      {:ok, b} = Tasks.create_task(%{project_id: project.id, title: "B"})
+      {:ok, _} = Stacks.add_task(stack, a)
+      {:ok, _} = Stacks.add_task(stack, b)
+      {:ok, _} = Stacks.add_dependency_edge(stack, b.id, a.id)
+
+      # Manual mode (default) → wave 0 = [A].
+      assert {:ok, %{planning: [_a], mode: :manual}} = Stacks.start_planning(stack)
+      assert Tasks.get_task_record(b.id).status == "backlog"
+
+      # Create A's plan in `pending_review` then approve via
+      # Tasks.approve_plan/3 — this is the path a human clicking
+      # Approve exercises.
+      {:ok, plan_a} = Tasks.create_plan(%{task_id: a.id, status: "pending_review"})
+
+      assert {:ok, _approved} = Tasks.approve_plan(plan_a, "system:test")
+
+      # The approve hook should have kicked B out of backlog into
+      # planning without any explicit advance_planning_waves call.
+      assert Tasks.get_task_record(b.id).status == "planning"
+    end
+  end
+
+  describe "auto_accept_plan propagation via Tasks.maybe_auto_approve" do
+    # `Tasks.maybe_auto_approve/1` resolves the auto-approve flag by
+    # checking BOTH the task-level `auto_approve_plan` and the parent
+    # stack's `auto_accept_plan`. These tests exercise the propagation
+    # end-to-end via `submit_plan_for_review/1`, which is the real
+    # code path that a live planner subagent hits.
+
+    test "stack auto_accept_plan = true + task auto_approve_plan = false → plan auto-approves via :stack" do
+      {:ok, project} = Tasks.create_project(%{name: "Stack auto-accept"})
+      stack = stack_fixture(project_id: project.id)
+      {:ok, stack} = Stacks.update_stack(stack, %{auto_accept_plan: true})
+
+      exec_id = Ecto.UUID.generate()
+      review_id = Ecto.UUID.generate()
+
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Stack-driven auto",
+          status: "planning",
+          # Task-level flag OFF — the stack flag alone should carry the
+          # auto-approve.
+          auto_approve_plan: false,
+          phase_assignees: %{
+            "execution" => %{"assignee_id" => exec_id, "assignee_type" => "agent"},
+            "review" => %{"assignee_id" => review_id, "assignee_type" => "agent"}
+          }
+        })
+
+      {:ok, _} = Stacks.add_task(stack, task)
+
+      ref =
+        :telemetry_test.attach_event_handlers(self(), [
+          [:platform, :plan, :auto_approved]
+        ])
+
+      {:ok, plan} = Tasks.create_plan(%{task_id: task.id})
+      {:ok, _stage} = Tasks.create_stage(%{plan_id: plan.id, position: 1, name: "S1"})
+      {:ok, submitted} = Tasks.submit_plan_for_review(plan)
+
+      assert submitted.status == "approved"
+      assert submitted.auto_approved_at != nil
+      assert submitted.approved_by == "system:auto"
+
+      assert_receive {[:platform, :plan, :auto_approved], ^ref, _meas, meta}
+      assert meta.via == :stack
+      assert meta.task_id == task.id
+
+      :telemetry.detach(ref)
+    end
+
+    test "stack auto_accept_plan = false + task auto_approve_plan = false → plan stays pending_review" do
+      {:ok, project} = Tasks.create_project(%{name: "Both off"})
+      stack = stack_fixture(project_id: project.id)
+      # Both flags default to false — no toggle.
+      exec_id = Ecto.UUID.generate()
+      review_id = Ecto.UUID.generate()
+
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Neither auto",
+          status: "planning",
+          auto_approve_plan: false,
+          phase_assignees: %{
+            "execution" => %{"assignee_id" => exec_id, "assignee_type" => "agent"},
+            "review" => %{"assignee_id" => review_id, "assignee_type" => "agent"}
+          }
+        })
+
+      {:ok, _} = Stacks.add_task(stack, task)
+
+      {:ok, plan} = Tasks.create_plan(%{task_id: task.id})
+      {:ok, _stage} = Tasks.create_stage(%{plan_id: plan.id, position: 1, name: "S1"})
+      {:ok, submitted} = Tasks.submit_plan_for_review(plan)
+
+      assert submitted.status == "pending_review"
+      assert submitted.auto_approved_at == nil
+    end
+
+    test "task auto_approve_plan = true + stack auto_accept_plan = false → still auto-approves via :task" do
+      {:ok, project} = Tasks.create_project(%{name: "Task auto only"})
+      stack = stack_fixture(project_id: project.id)
+
+      exec_id = Ecto.UUID.generate()
+      review_id = Ecto.UUID.generate()
+
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Task-driven auto",
+          status: "planning",
+          auto_approve_plan: true,
+          phase_assignees: %{
+            "execution" => %{"assignee_id" => exec_id, "assignee_type" => "agent"},
+            "review" => %{"assignee_id" => review_id, "assignee_type" => "agent"}
+          }
+        })
+
+      {:ok, _} = Stacks.add_task(stack, task)
+
+      ref =
+        :telemetry_test.attach_event_handlers(self(), [
+          [:platform, :plan, :auto_approved]
+        ])
+
+      {:ok, plan} = Tasks.create_plan(%{task_id: task.id})
+      {:ok, _stage} = Tasks.create_stage(%{plan_id: plan.id, position: 1, name: "S1"})
+      {:ok, submitted} = Tasks.submit_plan_for_review(plan)
+
+      assert submitted.status == "approved"
+      assert submitted.auto_approved_at != nil
+
+      assert_receive {[:platform, :plan, :auto_approved], ^ref, _meas, meta}
+      # Task flag wins precedence when both signals could fire; here the
+      # stack flag is off so only :task can fire.
+      assert meta.via == :task
+
+      :telemetry.detach(ref)
+    end
+
+    test "both flags true → auto-approves with via: :task (task-level takes precedence)" do
+      {:ok, project} = Tasks.create_project(%{name: "Both flags"})
+      stack = stack_fixture(project_id: project.id)
+      {:ok, stack} = Stacks.update_stack(stack, %{auto_accept_plan: true})
+
+      exec_id = Ecto.UUID.generate()
+      review_id = Ecto.UUID.generate()
+
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Both on",
+          status: "planning",
+          auto_approve_plan: true,
+          phase_assignees: %{
+            "execution" => %{"assignee_id" => exec_id, "assignee_type" => "agent"},
+            "review" => %{"assignee_id" => review_id, "assignee_type" => "agent"}
+          }
+        })
+
+      {:ok, _} = Stacks.add_task(stack, task)
+
+      ref =
+        :telemetry_test.attach_event_handlers(self(), [
+          [:platform, :plan, :auto_approved]
+        ])
+
+      {:ok, plan} = Tasks.create_plan(%{task_id: task.id})
+      {:ok, _stage} = Tasks.create_stage(%{plan_id: plan.id, position: 1, name: "S1"})
+      {:ok, submitted} = Tasks.submit_plan_for_review(plan)
+
+      assert submitted.status == "approved"
+      assert submitted.auto_approved_at != nil
+
+      assert_receive {[:platform, :plan, :auto_approved], ^ref, _meas, meta}
+      assert meta.via == :task
+
+      :telemetry.detach(ref)
+    end
+
+    test "solo task (no stack) with auto_approve_plan = true still auto-approves via :task" do
+      # Regression guard: preloading `:stack` on a task without a
+      # `stack_id` must not crash and must not clobber the task-level
+      # auto-approve path.
+      {:ok, project} = Tasks.create_project(%{name: "Solo task"})
+
+      exec_id = Ecto.UUID.generate()
+      review_id = Ecto.UUID.generate()
+
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Solo auto",
+          status: "planning",
+          auto_approve_plan: true,
+          phase_assignees: %{
+            "execution" => %{"assignee_id" => exec_id, "assignee_type" => "agent"},
+            "review" => %{"assignee_id" => review_id, "assignee_type" => "agent"}
+          }
+        })
+
+      refute task.stack_id
+
+      {:ok, plan} = Tasks.create_plan(%{task_id: task.id})
+      {:ok, _stage} = Tasks.create_stage(%{plan_id: plan.id, position: 1, name: "S1"})
+      {:ok, submitted} = Tasks.submit_plan_for_review(plan)
+
+      assert submitted.status == "approved"
+      assert submitted.auto_approved_at != nil
     end
   end
 
@@ -3052,6 +4628,101 @@ defmodule Platform.Tasks.StacksTest do
     end
   end
 
+  # ── cascade_members_to_done/1 (Stack v2 stage 5) ───────────────────────
+
+  describe "cascade_members_to_done/1" do
+    test "no-ops when every member is already done" do
+      {:ok, project} = Tasks.create_project(%{name: "Cascade all-done"})
+      stack = stack_fixture(project_id: project.id)
+
+      {:ok, t1} = Tasks.create_task(%{project_id: project.id, title: "M1"})
+      {:ok, t2} = Tasks.create_task(%{project_id: project.id, title: "M2"})
+      {:ok, _} = Stacks.add_task(stack, t1)
+      {:ok, _} = Stacks.add_task(stack, t2)
+
+      set_member_status(stack, t1, "done")
+      set_member_status(stack, t2, "done")
+
+      assert %{cascaded: [], skipped: []} = Stacks.cascade_members_to_done(stack)
+    end
+
+    test "transitions in_review members to done directly (fan-out fallback)" do
+      {:ok, project} = Tasks.create_project(%{name: "Cascade fallback"})
+      stack = stack_fixture(project_id: project.id)
+
+      {:ok, t1} = Tasks.create_task(%{project_id: project.id, title: "M1"})
+      {:ok, t2} = Tasks.create_task(%{project_id: project.id, title: "M2"})
+      {:ok, _} = Stacks.add_task(stack, t1)
+      {:ok, _} = Stacks.add_task(stack, t2)
+
+      # Simulate the "webhook fan-out missed this member" case: member is
+      # at `in_review` with no `pr_merged` validation to auto-pass.
+      set_member_status(stack, t1, "in_review")
+      set_member_status(stack, t2, "in_review")
+
+      assert %{cascaded: cascaded, skipped: []} = Stacks.cascade_members_to_done(stack)
+      assert length(cascaded) == 2
+      assert Enum.all?(cascaded, &(&1.status == "done"))
+      assert Tasks.get_task_record(t1.id).status == "done"
+      assert Tasks.get_task_record(t2.id).status == "done"
+    end
+
+    test "mixed cascade: some members already done, others need transition" do
+      {:ok, project} = Tasks.create_project(%{name: "Cascade mixed"})
+      stack = stack_fixture(project_id: project.id)
+
+      {:ok, t1} = Tasks.create_task(%{project_id: project.id, title: "M1"})
+      {:ok, t2} = Tasks.create_task(%{project_id: project.id, title: "M2"})
+      {:ok, t3} = Tasks.create_task(%{project_id: project.id, title: "M3"})
+      {:ok, _} = Stacks.add_task(stack, t1)
+      {:ok, _} = Stacks.add_task(stack, t2)
+      {:ok, _} = Stacks.add_task(stack, t3)
+
+      set_member_status(stack, t1, "done")
+      set_member_status(stack, t2, "in_review")
+      set_member_status(stack, t3, "in_review")
+
+      assert %{cascaded: cascaded, skipped: []} = Stacks.cascade_members_to_done(stack)
+      # Only t2 and t3 flipped; t1 was already done and silently skipped.
+      assert length(cascaded) == 2
+      cascaded_ids = Enum.map(cascaded, & &1.id) |> Enum.sort()
+      assert cascaded_ids == Enum.sort([t2.id, t3.id])
+    end
+
+    test "surfaces skipped members when a transition is illegal" do
+      {:ok, project} = Tasks.create_project(%{name: "Cascade skip"})
+      stack = stack_fixture(project_id: project.id)
+
+      {:ok, t1} = Tasks.create_task(%{project_id: project.id, title: "M1"})
+      {:ok, _} = Stacks.add_task(stack, t1)
+
+      # `backlog` → `done` is NOT in @valid_task_transitions, so cascade
+      # should surface this member in `skipped` rather than raise.
+      set_member_status(stack, t1, "backlog")
+
+      assert %{cascaded: [], skipped: [entry]} = Stacks.cascade_members_to_done(stack)
+      assert entry.task_id == t1.id
+      assert entry.status == "backlog"
+      assert entry.reason != nil
+    end
+
+    test "id-vs-struct polymorphism" do
+      {:ok, project} = Tasks.create_project(%{name: "Cascade id"})
+      stack = stack_fixture(project_id: project.id)
+
+      {:ok, t1} = Tasks.create_task(%{project_id: project.id, title: "M1"})
+      {:ok, _} = Stacks.add_task(stack, t1)
+      set_member_status(stack, t1, "in_review")
+
+      assert %{cascaded: [_]} = Stacks.cascade_members_to_done(stack.id)
+    end
+
+    test "unknown stack id returns skipped :stack_not_found without raising" do
+      assert %{cascaded: [], skipped: [%{reason: :stack_not_found}]} =
+               Stacks.cascade_members_to_done(Ecto.UUID.generate())
+    end
+  end
+
   # ── Helpers ──────────────────────────────────────────────────────────────
 
   # Spin up the plan/stage/validation scaffolding a task needs before a
@@ -3106,6 +4777,7 @@ defmodule Platform.Tasks.StacksTest do
     slug = Map.get(attrs, :slug, "fixture-" <> short_id())
     name = Map.get(attrs, :name, "Fixture Stack")
     description = Map.get(attrs, :description)
+    sponsor_user_id = Map.get(attrs, :sponsor_user_id)
 
     {:ok, stack} =
       Stacks.create_stack(%{
@@ -3113,14 +4785,129 @@ defmodule Platform.Tasks.StacksTest do
         slug: slug,
         name: name,
         description: description,
-        rollup_branch: Stacks.rollup_branch_name(slug)
+        rollup_branch: Stacks.rollup_branch_name(slug),
+        sponsor_user_id: sponsor_user_id
       })
 
     stack
   end
 
+  # ADR 0042 sponsor tests: insert a bare user row bypassing the
+  # `Platform.Accounts.User.changeset/2` name requirement so tests don't
+  # need to plumb an OIDC identity fixture. Mirror of the same helper in
+  # `apps/platform/test/platform/tasks/task_test.exs`.
+  defp insert_sponsor_user(opts \\ []) do
+    n = System.unique_integer([:positive])
+
+    Repo.insert!(%Platform.Accounts.User{
+      name: Keyword.get(opts, :name, "Sponsor #{n}"),
+      email: Keyword.get(opts, :email, "stack-sponsor-#{n}@example.com"),
+      oidc_sub: "sub-stack-sponsor-#{n}"
+    })
+  end
+
   defp short_id do
     Ecto.UUID.generate() |> String.slice(0, 8)
+  end
+
+  # ── deploy_ready?/1 fixtures ───────────────────────────────────────────
+
+  # Seed a completed plan with one non-deploy stage whose single validation
+  # is `passed`. Represents the normal "member finished its work" shape.
+  defp seed_completed_plan!(task, opts \\ []) do
+    version = Keyword.get(opts, :version, 1)
+
+    {:ok, plan} =
+      Tasks.create_plan(%{task_id: task.id, version: version, status: "completed"})
+
+    {:ok, stage} =
+      Tasks.create_stage(%{plan_id: plan.id, position: 1, name: "Build", status: "passed"})
+
+    {:ok, _v} =
+      Tasks.create_validation(%{stage_id: stage.id, kind: "test_pass", status: "passed"})
+
+    plan
+  end
+
+  # Seed an executing plan whose non-deploy validation is still pending.
+  # Represents a member that isn't actually done despite whatever status
+  # the caller stamps on the task row.
+  defp seed_plan_with_pending_validation!(task) do
+    {:ok, plan} =
+      Tasks.create_plan(%{task_id: task.id, version: 1, status: "executing"})
+
+    {:ok, stage} =
+      Tasks.create_stage(%{plan_id: plan.id, position: 1, name: "Build", status: "running"})
+
+    # Pending on purpose — status defaults to "pending" via Validation.changeset.
+    {:ok, _v} = Tasks.create_validation(%{stage_id: stage.id, kind: "test_pass"})
+
+    plan
+  end
+
+  # Seed a completed plan whose non-deploy stage is fully passed AND a
+  # trailing deploy stage that carries a still-pending `pr_merged`
+  # validation. `PlanEngine.deploy_stage?/1` matches on either the "Deploy:"
+  # name prefix or the presence of a ci_passed/pr_merged validation, so
+  # the pending validation on the deploy stage must be excluded from the
+  # readiness check.
+  defp seed_completed_plan_with_pending_deploy_stage!(task) do
+    {:ok, plan} =
+      Tasks.create_plan(%{task_id: task.id, version: 1, status: "completed"})
+
+    {:ok, build_stage} =
+      Tasks.create_stage(%{plan_id: plan.id, position: 1, name: "Build", status: "passed"})
+
+    {:ok, _} =
+      Tasks.create_validation(%{stage_id: build_stage.id, kind: "test_pass", status: "passed"})
+
+    {:ok, deploy_stage} =
+      Tasks.create_stage(%{
+        plan_id: plan.id,
+        position: 2,
+        name: "Deploy: PR merge",
+        status: "pending"
+      })
+
+    {:ok, _} = Tasks.create_validation(%{stage_id: deploy_stage.id, kind: "pr_merged"})
+
+    plan
+  end
+
+  # Stamp `metadata["merged_into_rollup_at"]` on a member task — the
+  # downstream signal that `StackDeployer.all_members_ready?/1` requires
+  # to permit `maybe_open_stack_pr/1` to shell out to the runner.
+  # `handle_member_transition/3` sets this on real merges; tests use
+  # this helper to short-circuit the merge machinery when they only
+  # care about the PR-open gate.
+  defp stamp_member_merged_into_rollup!(%Task{} = task, sha) do
+    base = task.metadata || %{}
+
+    new_meta =
+      Map.put(base, "merged_into_rollup_at", %{
+        "sha" => sha,
+        "at" => DateTime.utc_now() |> DateTime.to_iso8601()
+      })
+
+    {:ok, updated} = Tasks.update_task(task, %{metadata: new_meta})
+    updated
+  end
+
+  # Seed a superseded plan with a leftover pending validation — the
+  # equivalent of an older plan revision whose stages were mid-run when
+  # the plan was replaced. Should NOT gate the deploy check.
+  defp seed_superseded_plan_with_pending_validation!(task, opts) do
+    version = Keyword.fetch!(opts, :version)
+
+    {:ok, plan} =
+      Tasks.create_plan(%{task_id: task.id, version: version, status: "superseded"})
+
+    {:ok, stage} =
+      Tasks.create_stage(%{plan_id: plan.id, position: 1, name: "Build", status: "running"})
+
+    {:ok, _v} = Tasks.create_validation(%{stage_id: stage.id, kind: "test_pass"})
+
+    plan
   end
 
   defp project_fixture do
@@ -3323,5 +5110,110 @@ defmodule Platform.Tasks.StacksTest do
       Tasks.update_task(task, %{stack_id: stack.id, stack_position: position})
 
     task
+  end
+
+  # ── dispatch_stack_deploy/1 fixtures ───────────────────────────────────
+
+  # In-memory GitRunner used by dispatch_stack_deploy/1 tests. We install
+  # it via Application.put_env(:platform, :stack_deployer, ...) with
+  # `async: false` so the deployer's `maybe_open_stack_pr/1` call from
+  # `Stacks.trigger_stack_deploy_pr_open/1` runs synchronously and the
+  # test can observe the runner call after the dispatch returns.
+  defmodule DispatchNoopRunner do
+    @moduledoc false
+    @behaviour Platform.Tasks.StackDeployer.GitRunner
+
+    use Agent
+
+    def start_link(_opts \\ []) do
+      Agent.start_link(
+        fn ->
+          %{
+            pr_response: {:ok, %{number: 42, url: "https://github.com/test/repo/pull/42"}},
+            pr_calls: []
+          }
+        end,
+        name: __MODULE__
+      )
+    end
+
+    def stop, do: Agent.stop(__MODULE__)
+
+    def pr_calls, do: Agent.get(__MODULE__, & &1.pr_calls) |> Enum.reverse()
+
+    @impl true
+    def ensure_rollup_branch(_args), do: {:ok, %{status: :already_exists, base_sha: nil}}
+
+    @impl true
+    def merge_member_into_rollup(_args),
+      do: {:ok, %{status: :merged, merge_sha: "0000000000000000000000000000000000000000"}}
+
+    @impl true
+    def open_stack_pr(args) do
+      Agent.get_and_update(__MODULE__, fn state ->
+        {state.pr_response, %{state | pr_calls: [args | state.pr_calls]}}
+      end)
+    end
+
+    @impl true
+    def diff_stat(_args), do: {:ok, ""}
+
+    @impl true
+    def revert_member_merge(_args),
+      do: {:ok, %{status: :reverted, revert_sha: "0000000000000000000000000000000000000000"}}
+
+    @impl true
+    def close_stack_pr(_args), do: {:ok, :closed}
+  end
+
+  defp install_dispatch_noop_runner(_ctx) do
+    prev = Application.get_env(:platform, :stack_deployer, [])
+
+    {:ok, _} = DispatchNoopRunner.start_link()
+
+    Application.put_env(:platform, :stack_deployer,
+      git_runner: DispatchNoopRunner,
+      async: false
+    )
+
+    on_exit(fn ->
+      Application.put_env(:platform, :stack_deployer, prev)
+
+      try do
+        DispatchNoopRunner.stop()
+      catch
+        :exit, _ -> :ok
+      end
+    end)
+
+    {:ok, project} =
+      Tasks.create_project(%{
+        name: "Dispatch Noop " <> Ecto.UUID.generate(),
+        repo_url: "https://github.com/test/dispatch-noop-" <> short_id()
+      })
+
+    %{project: project}
+  end
+
+  # Attach a telemetry handler that forwards
+  # `[:platform, :stacks, :deploy, :dispatched]` events to the test
+  # process for `assert_receive`. Returns `{:ok, handler_id}` — the
+  # caller MUST `:telemetry.detach/1` in an `after` clause to avoid
+  # cross-test leakage.
+  defp attach_dispatch_telemetry_handler do
+    handler_id = "dispatch-deploy-#{System.unique_integer([:positive])}"
+    test_pid = self()
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:platform, :stacks, :deploy, :dispatched],
+        fn _event, measurements, metadata, _config ->
+          send(test_pid, {:stack_deploy_dispatched, Map.merge(measurements, metadata)})
+        end,
+        nil
+      )
+
+    {:ok, handler_id}
   end
 end

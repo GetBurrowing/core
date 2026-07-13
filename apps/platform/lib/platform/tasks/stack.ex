@@ -34,6 +34,15 @@ defmodule Platform.Tasks.Stack do
   schema "task_stacks" do
     belongs_to(:project, Platform.Tasks.Project)
     belongs_to(:epic, Platform.Tasks.Epic)
+    # Sponsor — human shepherd accountable for the stack landing (ADR 0042
+    # Decision 8), distinct from any member's technical assignee. Nullable.
+    # Cleared to NULL on user delete via the migration's :nilify_all FK so
+    # a departing sponsor never orphans or hard-deletes a stack.
+    belongs_to(:sponsor, Platform.Accounts.User,
+      foreign_key: :sponsor_user_id,
+      type: :binary_id
+    )
+
     field(:slug, :string)
     field(:name, :string)
     field(:description, :string)
@@ -41,6 +50,16 @@ defmodule Platform.Tasks.Stack do
     field(:rollup_branch, :string)
     field(:base_branch, :string, default: "main")
     field(:metadata, :map, default: %{})
+    # Stack v2 lifecycle flags (Stack v2 stage 1):
+    #   * `auto_plan` — when true, `Stacks.start_planning/1` dispatches
+    #     every member to `planning` in one pass (auto mode). Default
+    #     false = manual mode: only the root wave dispatches; downstream
+    #     waves advance as their upstream plans approve.
+    #   * `auto_accept_plan` — when true, member plans auto-approve on
+    #     submit without human review. Read at plan-submit time via
+    #     `Tasks.maybe_auto_approve/1`, not propagated per-member.
+    field(:auto_plan, :boolean, default: false)
+    field(:auto_accept_plan, :boolean, default: false)
 
     has_many(:tasks, Platform.Tasks.Task, foreign_key: :stack_id)
 
@@ -60,7 +79,10 @@ defmodule Platform.Tasks.Stack do
       :status,
       :rollup_branch,
       :base_branch,
-      :metadata
+      :sponsor_user_id,
+      :metadata,
+      :auto_plan,
+      :auto_accept_plan
     ])
     |> validate_required([:project_id, :slug, :name, :rollup_branch])
     |> validate_inclusion(:status, @statuses)
@@ -70,5 +92,6 @@ defmodule Platform.Tasks.Stack do
     |> unique_constraint([:project_id, :slug], name: :task_stacks_slug_project_uniq)
     |> foreign_key_constraint(:project_id)
     |> foreign_key_constraint(:epic_id)
+    |> foreign_key_constraint(:sponsor_user_id)
   end
 end

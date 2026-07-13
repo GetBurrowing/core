@@ -18,7 +18,8 @@ defmodule Platform.Tasks.Stacks do
 
   alias Platform.Repo
   alias Platform.Tasks
-  alias Platform.Tasks.{Plan, ReviewRequests, Stack, StackDeployer, Task}
+  alias Platform.Tasks.{Plan, PlanEngine, ReviewRequests, Stack, StackDeployer, Task}
+  alias Platform.Tasks.{Stage, Validation}
   alias Platform.Tasks.Stacks.{CommencementGate, DepInference}
 
   @slug_regex ~r/^[a-z0-9][a-z0-9-]*$/
@@ -72,17 +73,21 @@ defmodule Platform.Tasks.Stacks do
   def get_stack_by_rollup_branch(_), do: nil
 
   @doc """
-  List stacks, optionally filtered by `:project_id` and/or `:status`.
+  List stacks, optionally filtered by `:project_id`, `:status`, and/or
+  `:sponsor_user_id`.
 
   Results are ordered by `inserted_at` descending so the most recent stacks
-  come first.
+  come first. The `:sponsor` association is preloaded so LiveView / MCP
+  callers don't lazy-load per card (ADR 0042 Decision 8).
   """
   @spec list_stacks(map()) :: [Stack.t()]
   def list_stacks(filters \\ %{}) when is_map(filters) do
     Stack
     |> filter_by_project(Map.get(filters, :project_id))
     |> filter_by_status(Map.get(filters, :status))
+    |> filter_by_sponsor(Map.get(filters, :sponsor_user_id))
     |> order_by([s], desc: s.inserted_at)
+    |> preload(:sponsor)
     |> Repo.all()
   end
 
@@ -96,6 +101,17 @@ defmodule Platform.Tasks.Stacks do
 
   defp filter_by_status(query, status) when is_binary(status) do
     where(query, [s], s.status == ^status)
+  end
+
+  # `:sponsor_user_id` filter mirrors the tasks-side sponsor pill (ADR 0042):
+  # nil is passthrough (unfiltered), a binary UUID narrows to only stacks
+  # whose sponsor_user_id equals the given id. NULL rows (unsponsored
+  # stacks) are excluded by the equality — nil never equals a user id, so
+  # the "sponsored by me" toggle correctly hides unsponsored work.
+  defp filter_by_sponsor(query, nil), do: query
+
+  defp filter_by_sponsor(query, sponsor_user_id) when is_binary(sponsor_user_id) do
+    where(query, [s], s.sponsor_user_id == ^sponsor_user_id)
   end
 
   @doc "Update a stack via `Stack.changeset/2`."
@@ -313,28 +329,59 @@ defmodule Platform.Tasks.Stacks do
   defp cascade_member(_member, _target, ok, errors), do: {ok, errors}
 
   @doc """
-  Stack-level "Start Planning": fan the planning lifecycle action out to
-  every constituent member.
+  Stack-level "Start Planning": drive members into the `planning`
+  lifecycle using wave-gated dispatch (ADR 0045 / stack v2).
 
-  Mirrors `start_stack/1`'s cascade machinery, but as a backlog-only
-  fan-out into `planning`:
+  Wave-gated dispatch replaces the previous all-at-once cascade. The
+  topological DAG built from `tasks.dependencies` (agent-inferred and/or
+  user-authored) is split into "waves" — level 0 is the roots (no
+  in-stack deps), level N contains members whose in-stack deps all land
+  in waves 0..N-1. See `planning_waves/1` for the level structure.
 
-    * Loads `members/1` and, before the cascade, invokes
-      `Platform.Tasks.Stacks.DepInference.infer_edges/2` on the member
-      set. Returned edges are persisted via `add_dependency_edge/4` so
-      they inherit the existing DAG validation, cross-stack guard, and
-      rollback semantics (ADR 0045). Idempotent: if any member already
-      carries an in-stack `dependencies` entry — a signal that a user or
-      prior invocation authored edges — inference is skipped entirely to
-      respect the override and avoid duplicate LLM spend.
-    * For every member currently at `backlog`, transitions it
-      `backlog -> planning` via `Tasks.transition_task/2` using the same
-      `cascade_member/4` reducer. Members already past `backlog`
-      (`planning`, `stack_pending`, `in_progress`, …) are left untouched
-      — never illegally re-transitioned.
-    * Does NOT itself write the stack status: `Tasks.transition_task/2`
-      already runs `maybe_recompute_stack/1`, and a stack of all-`planning`
-      members correctly rolls up to `forming` per `rollup_status_for/1`.
+  The mode key on the parent stack governs how many waves fan out per
+  call:
+
+    * `stack.auto_plan == false` (default): dispatch **wave 0 only**.
+      Downstream waves advance when their upstream members' plans clear
+      review — either the operator approves via `Tasks.approve_plan/3`,
+      which fires `maybe_advance_stack_planning/1` and re-enters this
+      module through `advance_planning_waves/1`, or an integrator calls
+      `advance_planning_waves/1` directly.
+    * `stack.auto_plan == true`: **every** wave fans out in a single
+      pass. Each wave still emits its own `:wave_dispatched` telemetry
+      event (`wave_index: 0..N-1`, in order), so downstream observers
+      see the same event contract as manual mode — just N events in one
+      call instead of one now plus N-1 later. Plans still submit
+      individually; `auto_accept_plan` (below, resolved by
+      `Tasks.maybe_auto_approve/1`) is the flag that also auto-approves
+      each plan on submit.
+
+  ## Composition with the dep-inference planner
+
+  Before wave computation, `start_planning/1` calls the same
+  `DepInference.infer_edges/2` + persist path that member 1 landed
+  (see below). Inferred edges land through `add_dependency_edge/4`, so
+  they inherit the DAG validation, cross-stack guard, and rollback
+  semantics of any hand-authored edge. Idempotent: if any member
+  already carries an in-stack `dependencies` entry, inference is skipped
+  entirely to respect the override and avoid duplicate LLM spend.
+
+  ## Idempotency guard
+
+  If **any** member is past `backlog` (planning, stack_pending,
+  in_progress, in_review, deploying, done, or blocked), planning has
+  already been kicked off for this stack. The function returns
+  `{:noop, :already_in_flight}` **without** re-running dep inference or
+  telemetry so a double-click on the UI action doesn't produce a
+  duplicate `dep_inference` event. A `Logger.info` line records the
+  short-circuit.
+
+  ## Cycle / cross-stack guard
+
+  If `planning_waves/1` returns `{:error, :cycle, path}` or
+  `{:error, :cross_stack_dep, payload}`, the error is passed through
+  unchanged and NO members transition. Wave-gated dispatch is
+  meaningless on an invalid DAG; the caller decides how to surface it.
 
   ## Dep-inference behaviour
 
@@ -351,6 +398,35 @@ defmodule Platform.Tasks.Stacks do
       warning, sets `edges_authored: 0`, `edges_skipped_reason: reason`,
       and lets the cascade run.
 
+  ## Telemetry
+
+    * `[:platform, :stacks, :dep_inference, :computed | :failed]` —
+      emitted after the dep-inference stage (unchanged from member 1).
+    * `[:platform, :stacks, :planning, :started]` — emitted exactly
+      **once** per dispatching invocation, immediately after the DAG is
+      validated and before any wave fans out.
+      Measurements: `%{member_count}` (total stack members).
+      Metadata: `%{stack_id, mode: :manual | :auto, waves_total}`.
+      Skipped on the `:already_in_flight`, `:cycle`, and
+      `:cross_stack_dep` short-circuits — those fire `:noop` instead.
+    * `[:platform, :stacks, :planning, :wave_dispatched]` — emitted
+      once per wave that this call dispatches.
+      Measurements: `%{member_count}` (members promoted in this wave).
+      Metadata: `%{stack_id, wave_index}`.
+      Manual mode fires it exactly once (wave 0); auto mode fires it N
+      times (wave_index 0..N-1) in order.
+    * `[:platform, :stacks, :planning, :noop]` — emitted when the entry
+      short-circuits without dispatching. Measurements: `%{}`. Metadata:
+      `%{stack_id, reason: :already_in_flight | :cycle | :cross_stack_dep}`.
+    * `[:platform, :stacks, :planning, :advanced]` — emitted by
+      `advance_planning_waves/1` when a wave is promoted from `backlog`
+      into `planning`. Measurements: `%{member_count}`. Metadata:
+      `%{stack_id, wave_index}`. Sibling of `:wave_dispatched` — the
+      latter continues to fire from advance for backwards compatibility;
+      `:advanced` lets observers distinguish the initial start from a
+      later approval-hook promotion without regex-matching the wave
+      index.
+
   ## Persistence deviation from ADR
 
   The ADR describes a conceptual `stack_dependencies` shape; the actual
@@ -360,12 +436,19 @@ defmodule Platform.Tasks.Stacks do
 
   ## Return shape
 
-  `{:ok, %{stack, planning, edges_authored, edges_skipped_reason}}` on
-  success (an empty stack returns `planning: []`, `edges_authored: 0`,
-  and `edges_skipped_reason: nil` when inference ran cleanly). `{:partial,
-  ...}` when some members fail to transition — inference-authored edges
-  are NOT rolled back for a partial cascade, matching the existing partial
-  surface. `{:error, :stack_not_found}` for an unknown id.
+    * `{:ok, %{stack, planning, edges_authored, edges_skipped_reason,
+       waves_total, mode}}` — success. `planning` is the list of members
+      this call transitioned to `planning`. `waves_total` is the total
+      number of waves in the stack's DAG (informational; drives the
+      progress UI). `mode` is `:manual | :auto`.
+    * `{:partial, %{..., errors}}` — cascade partial success; the
+      inferred edges are NOT rolled back to match the pre-existing
+      partial semantics of the wider cascade family.
+    * `{:noop, :already_in_flight}` — idempotency short-circuit.
+    * `{:error, :cycle, [Task.t()]}` /
+      `{:error, :cross_stack_dep, %{...}}` — invalid DAG; no
+      side effects.
+    * `{:error, :stack_not_found}` — unknown id.
   """
   @spec start_planning(Stack.t() | binary()) ::
           {:ok,
@@ -373,7 +456,9 @@ defmodule Platform.Tasks.Stacks do
              stack: Stack.t(),
              planning: [Task.t()],
              edges_authored: non_neg_integer(),
-             edges_skipped_reason: atom() | nil
+             edges_skipped_reason: atom() | nil,
+             waves_total: non_neg_integer(),
+             mode: :manual | :auto
            }}
           | {:partial,
              %{
@@ -381,13 +466,47 @@ defmodule Platform.Tasks.Stacks do
                planning: [Task.t()],
                edges_authored: non_neg_integer(),
                edges_skipped_reason: atom() | nil,
+               waves_total: non_neg_integer(),
+               mode: :manual | :auto,
                errors: [%{task_id: String.t(), target_status: String.t(), reason: term()}]
              }}
+          | {:noop, :already_in_flight}
+          | {:error, :cycle, [Task.t()]}
+          | {:error, :cross_stack_dep, %{from: Task.t(), to_task_id: String.t()}}
           | {:error, :stack_not_found | term()}
   def start_planning(%Stack{} = stack) do
     members = members(stack)
 
+    if any_member_past_backlog?(members) do
+      Logger.info("[Stacks.start_planning] noop for stack=#{stack.id}: already_in_flight")
+      emit_planning_noop_telemetry(stack.id, :already_in_flight)
+
+      {:noop, :already_in_flight}
+    else
+      do_start_planning(stack, members)
+    end
+  end
+
+  def start_planning(stack_id) when is_binary(stack_id) do
+    case Repo.get(Stack, stack_id) do
+      %Stack{} = stack -> start_planning(stack)
+      nil -> {:error, :stack_not_found}
+    end
+  end
+
+  # ── start_planning inner path ──────────────────────────────────────────
+  #
+  # Split out of the public head so the idempotency short-circuit avoids
+  # (a) firing a duplicate `dep_inference` telemetry event, and (b) a
+  # duplicate LLM adapter call.
+  defp do_start_planning(%Stack{} = stack, members) do
     start_time = System.monotonic_time(:millisecond)
+
+    # Compose with member 1: the dep-inference planner. `infer_and_persist_edges/2`
+    # invokes `DepInference.infer_edges/2` (or no-ops when a user override is
+    # already present). The `function_exported?/3` guard is a belt-and-braces
+    # against future refactors that might extract this into a peer module —
+    # today it's inline, so the call is direct.
     {edges_authored, edges_skipped_reason, retry_count} = infer_and_persist_edges(stack, members)
     duration_ms = System.monotonic_time(:millisecond) - start_time
 
@@ -399,22 +518,127 @@ defmodule Platform.Tasks.Stacks do
       duration_ms
     )
 
-    # Re-read members so downstream cascade sees any freshly-written
+    # Re-read members so downstream wave computation sees any freshly-written
     # dep edges. Not strictly required for the cascade math (it only
     # inspects `status`), but keeps the returned struct consistent
     # with the post-inference DB state.
     members_for_cascade = if edges_authored > 0, do: members(stack), else: members
 
-    {planning, errors} =
-      Enum.reduce(members_for_cascade, {[], []}, fn member, {ok, errs} ->
+    case planning_waves(stack) do
+      {:error, :cycle, _path} = err ->
+        Logger.info("[Stacks.start_planning] noop for stack=#{stack.id}: cycle")
+        emit_planning_noop_telemetry(stack.id, :cycle)
+        err
+
+      {:error, :cross_stack_dep, _payload} = err ->
+        Logger.info("[Stacks.start_planning] noop for stack=#{stack.id}: cross_stack_dep")
+        emit_planning_noop_telemetry(stack.id, :cross_stack_dep)
+        err
+
+      {:ok, waves} ->
+        mode = if stack.auto_plan, do: :auto, else: :manual
+
+        emit_planning_started_telemetry(
+          stack.id,
+          mode,
+          length(waves),
+          length(members_for_cascade)
+        )
+
+        dispatch_waves(stack, members_for_cascade, waves, edges_authored, edges_skipped_reason)
+    end
+  end
+
+  # `any_member_past_backlog?/1` — idempotency check. Members at
+  # `backlog` are still eligible for wave dispatch; members at
+  # `cancelled` are terminal skips and do not block a fresh dispatch.
+  # Everything else (planning, stack_pending, in_progress, in_review,
+  # deploying, done, blocked) is treated as "planning already kicked off"
+  # for this stack.
+  defp any_member_past_backlog?(members) do
+    Enum.any?(members, fn %Task{status: status} ->
+      status not in ["backlog", "cancelled"]
+    end)
+  end
+
+  # Manual vs auto branch. Wave 0 dispatch in manual; all-at-once in
+  # auto (stage 4 stub — this stage preserves the legacy shape so the
+  # plan-approval hook can be exercised end-to-end while stage 4 is
+  # still pending).
+  defp dispatch_waves(%Stack{auto_plan: true} = stack, members, waves, edges_authored, reason) do
+    # Auto mode: fan out EVERY wave in a single pass — no gating on plan
+    # approval. Downstream planners still receive `parent_plans` context
+    # (empty on the first invocation because no upstream plan is approved
+    # yet; a subsequent `advance_planning_waves/1` no-ops because every
+    # member has already left `backlog`). Emit one
+    # `[:platform, :stacks, :planning, :wave_dispatched]` event per wave
+    # with `wave_index: 0..N-1` so telemetry consumers see the same
+    # contract as manual mode — just N events fired in one call instead
+    # of a single wave-0 event followed by later N-1 advance events.
+    member_by_id = Map.new(members, &{&1.id, &1})
+
+    {reversed_dispatched, errors} =
+      waves
+      |> Enum.with_index()
+      |> Enum.reduce({[], []}, fn {wave_members, wave_index}, {ok_acc, err_acc} ->
+        {wave_dispatched, wave_errors} =
+          Enum.reduce(wave_members, {[], []}, fn wave_member, {ok, errs} ->
+            member = Map.get(member_by_id, wave_member.id, wave_member)
+            cascade_member(member, "planning", ok, errs)
+          end)
+
+        wave_dispatched = Enum.reverse(wave_dispatched)
+
+        :telemetry.execute(
+          [:platform, :stacks, :planning, :wave_dispatched],
+          %{member_count: length(wave_dispatched)},
+          %{stack_id: stack.id, wave_index: wave_index}
+        )
+
+        {Enum.reverse(wave_dispatched, ok_acc), wave_errors ++ err_acc}
+      end)
+
+    dispatched = Enum.reverse(reversed_dispatched)
+
+    finalize_dispatch(stack, dispatched, errors, waves, edges_authored, reason, :auto)
+  end
+
+  defp dispatch_waves(%Stack{} = stack, members, waves, edges_authored, reason) do
+    # Manual mode: dispatch ONLY wave 0. Downstream waves advance via
+    # `advance_planning_waves/1` when each upstream member's plan lands
+    # `approved` (see `Tasks.approve_plan/3` → `maybe_advance_stack_planning/1`).
+    member_by_id = Map.new(members, &{&1.id, &1})
+    wave0 = List.first(waves) || []
+
+    {dispatched, errors} =
+      Enum.reduce(wave0, {[], []}, fn wave_member, {ok, errs} ->
+        # `waves` was built against the freshly-read DAG, but member
+        # structs it holds carry statuses as of the DAG query. Prefer the
+        # `members` list we just read for cascade decisions so the
+        # `backlog` guard reflects the current DB state.
+        member = Map.get(member_by_id, wave_member.id, wave_member)
         cascade_member(member, "planning", ok, errs)
       end)
 
+    dispatched = Enum.reverse(dispatched)
+
+    :telemetry.execute(
+      [:platform, :stacks, :planning, :wave_dispatched],
+      %{member_count: length(dispatched)},
+      %{stack_id: stack.id, wave_index: 0}
+    )
+
+    finalize_dispatch(stack, dispatched, errors, waves, edges_authored, reason, :manual)
+  end
+
+  defp finalize_dispatch(stack, dispatched, errors, waves, edges_authored, reason, mode) do
     result = %{
       stack: stack,
-      planning: Enum.reverse(planning),
+      planning: dispatched,
       edges_authored: edges_authored,
-      edges_skipped_reason: edges_skipped_reason
+      edges_skipped_reason: reason,
+      waves_total: length(waves),
+      mode: mode
     }
 
     case errors do
@@ -423,11 +647,142 @@ defmodule Platform.Tasks.Stacks do
     end
   end
 
-  def start_planning(stack_id) when is_binary(stack_id) do
+  @doc """
+  Advance a manual-mode stack's planning cascade one wave at a time.
+
+  Called from `Tasks.approve_plan/3` post-commit (see
+  `maybe_advance_stack_planning/1`) so approving the last member of the
+  highest currently-approved wave immediately dispatches the next
+  wave's members into `planning`. Safe to call from operator tools,
+  cron sweeps, or manual iex sessions — the function is fully idempotent.
+
+  ## Algorithm
+
+    1. Compute `planning_waves/1`. Pass through cycle / cross-stack-dep
+       errors unchanged; on `:stack_not_found` return the tuple.
+    2. Find the highest wave N where **every** member has an
+       `approved`/`completed` plan (via `Tasks.current_plan/1`).
+    3. If wave N+1 exists AND any of its members is still at `backlog`,
+       transition those members `backlog → planning` via `cascade_member/4`
+       and emit `[:platform, :stacks, :planning, :wave_dispatched]` with
+       `wave_index: N+1`.
+    4. Return `{:ok, %{stack, dispatched, wave_index}}` when a wave
+       advanced or `{:ok, :noop, reason}` when nothing changed.
+
+  ## No-op reasons
+
+    * `:no_next_wave` — the highest fully-approved wave IS the last
+      wave (or the stack is empty).
+    * `:next_wave_already_dispatched` — wave N+1 exists but every
+      member is already past `backlog`.
+    * `:upstream_incomplete` — wave 0 (or wave N) is not yet fully
+      approved; the caller re-enters when the next approval lands.
+  """
+  @spec advance_planning_waves(Stack.t() | binary()) ::
+          {:ok,
+           %{
+             stack: Stack.t(),
+             dispatched: [Task.t()],
+             wave_index: non_neg_integer()
+           }}
+          | {:ok, :noop, :no_next_wave | :next_wave_already_dispatched | :upstream_incomplete}
+          | {:error, :cycle, [Task.t()]}
+          | {:error, :cross_stack_dep, %{from: Task.t(), to_task_id: String.t()}}
+          | {:error, :stack_not_found}
+  def advance_planning_waves(%Stack{} = stack) do
+    case planning_waves(stack) do
+      {:error, _reason, _detail} = err ->
+        err
+
+      {:ok, []} ->
+        {:ok, :noop, :no_next_wave}
+
+      {:ok, waves} ->
+        approved_wave_indices =
+          waves
+          |> Enum.with_index()
+          |> Enum.filter(fn {wave, _idx} -> wave_fully_approved?(wave) end)
+          |> Enum.map(fn {_wave, idx} -> idx end)
+
+        highest_approved = List.last(approved_wave_indices)
+
+        next_index =
+          case highest_approved do
+            nil -> if wave_fully_approved?(List.first(waves)), do: 1, else: 0
+            n -> n + 1
+          end
+
+        cond do
+          highest_approved == nil and next_index == 0 ->
+            # Wave 0 not yet fully approved — nothing to advance.
+            {:ok, :noop, :upstream_incomplete}
+
+          next_index >= length(waves) ->
+            {:ok, :noop, :no_next_wave}
+
+          true ->
+            advance_specific_wave(stack, Enum.at(waves, next_index), next_index)
+        end
+    end
+  end
+
+  def advance_planning_waves(stack_id) when is_binary(stack_id) do
     case Repo.get(Stack, stack_id) do
-      %Stack{} = stack -> start_planning(stack)
+      %Stack{} = stack -> advance_planning_waves(stack)
       nil -> {:error, :stack_not_found}
     end
+  end
+
+  defp advance_specific_wave(stack, wave_members, wave_index) do
+    # Re-read the wave members so `cascade_member/4`'s `backlog` guard
+    # sees the current DB state — the `planning_waves/1` result may be
+    # a few tens of ms stale by the time this fires from a post-commit
+    # hook.
+    fresh_members =
+      Enum.map(wave_members, fn %Task{id: id} ->
+        Repo.get(Task, id) || %Task{id: id, status: "unknown"}
+      end)
+
+    if Enum.all?(fresh_members, &(&1.status != "backlog")) do
+      {:ok, :noop, :next_wave_already_dispatched}
+    else
+      {dispatched, _errs} =
+        Enum.reduce(fresh_members, {[], []}, fn member, {ok, errs} ->
+          cascade_member(member, "planning", ok, errs)
+        end)
+
+      dispatched = Enum.reverse(dispatched)
+
+      :telemetry.execute(
+        [:platform, :stacks, :planning, :wave_dispatched],
+        %{member_count: length(dispatched)},
+        %{stack_id: stack.id, wave_index: wave_index}
+      )
+
+      # Stack v2 stage 6: distinguish advance-driven promotions from the
+      # initial start_planning dispatch. Both fire :wave_dispatched
+      # (backwards-compatible); only advance_planning_waves fires
+      # :advanced. Downstream observers that need to count "how many
+      # promotions happened after the initial start" attach to
+      # :advanced without regex-parsing wave indices.
+      :telemetry.execute(
+        [:platform, :stacks, :planning, :advanced],
+        %{member_count: length(dispatched)},
+        %{stack_id: stack.id, wave_index: wave_index}
+      )
+
+      {:ok, %{stack: stack, dispatched: dispatched, wave_index: wave_index}}
+    end
+  end
+
+  # A wave is "fully approved" when every member's `current_plan/1`
+  # returns an approved/completed plan.
+  defp wave_fully_approved?([]), do: true
+
+  defp wave_fully_approved?(members) do
+    Enum.all?(members, fn %Task{id: id} ->
+      not is_nil(Tasks.current_plan(id))
+    end)
   end
 
   # ── Dep inference helpers ─────────────────────────────────────────────
@@ -582,6 +937,31 @@ defmodule Platform.Tasks.Stacks do
           %{stack_id: stack.id, reason: terminal, retry_count: retry_count}
         )
     end
+  end
+
+  # Stack v2 stage 6 — planning-lifecycle telemetry helpers.
+  #
+  # `:started` fires exactly once per dispatching `start_planning/1`
+  # call, immediately after DAG validation and before the first wave
+  # fans out. `member_count` is the total member count (all-mode); a
+  # per-wave count still lives on `:wave_dispatched`.
+  defp emit_planning_started_telemetry(stack_id, mode, waves_total, member_count) do
+    :telemetry.execute(
+      [:platform, :stacks, :planning, :started],
+      %{member_count: member_count},
+      %{stack_id: stack_id, mode: mode, waves_total: waves_total}
+    )
+  end
+
+  # `:noop` fires when `start_planning/1` short-circuits without
+  # dispatching a wave — the idempotency guard (`:already_in_flight`),
+  # or the cycle / cross-stack DAG guards.
+  defp emit_planning_noop_telemetry(stack_id, reason) do
+    :telemetry.execute(
+      [:platform, :stacks, :planning, :noop],
+      %{},
+      %{stack_id: stack_id, reason: reason}
+    )
   end
 
   # Returns true if any member already has a `dependencies` entry whose
@@ -1023,11 +1403,17 @@ defmodule Platform.Tasks.Stacks do
       deploying done)`, matching ADR 0041's "ready" threshold for the
       `3/4 ready` rollup-progress text.
 
-  Filters mirror `list_stacks/1` (`:project_id`, `:status`). Excluded
-  statuses (`abandoned`) are NOT filtered here — callers may want to
-  show abandoned stacks for audit; the tasks-live board passes through
-  the same project filter the task list uses and accepts whatever
-  statuses the backing data carries.
+  Filters mirror `list_stacks/1` (`:project_id`, `:status`,
+  `:sponsor_user_id`). Excluded statuses (`abandoned`) are NOT filtered
+  here — callers may want to show abandoned stacks for audit; the
+  tasks-live board passes through the same project filter the task list
+  uses and accepts whatever statuses the backing data carries.
+
+  The `:sponsor` association is preloaded on the stacks query so the
+  board can render the sponsor avatar without a follow-up query per
+  card. Applying the sponsor filter BEFORE the member fetch means the
+  per-stack member fetch is naturally scoped — narrowing to a single
+  sponsor also narrows the second-query cost.
 
   Implementation note: two-query fetch (stacks, then all member tasks
   for those stacks) followed by an in-memory group_by. The kanban
@@ -1047,7 +1433,9 @@ defmodule Platform.Tasks.Stacks do
       Stack
       |> filter_by_project(Map.get(filters, :project_id))
       |> filter_by_status(Map.get(filters, :status))
+      |> filter_by_sponsor(Map.get(filters, :sponsor_user_id))
       |> order_by([s], desc: s.updated_at)
+      |> preload(:sponsor)
       |> Repo.all()
 
     case stacks do
@@ -1279,6 +1667,307 @@ defmodule Platform.Tasks.Stacks do
     end
   end
 
+  # ── Deploy readiness (Stack v2 stage 2) ────────────────────────────────
+
+  @doc """
+  Pure predicate: is the stack ready to deploy as a single rollup PR?
+
+  Distinct from `Platform.Tasks.StackDeployer`'s private
+  `all_members_ready?/1`, which additionally requires each member's
+  `metadata["merged_into_rollup_at"]` stamp — a downstream signal that
+  the member's branch has been merged into the rollup branch. This
+  predicate answers the upstream question deploy-side callers actually
+  need: has every member finished its validation-set so the stack CAN
+  deploy? Keyed on validation-pass counts, not rollup-merge stamps.
+
+  Returns `true` iff ALL of:
+
+    * the stack's own status is not `"deploying"`, `"done"`, or
+      `"abandoned"` (short-circuit against double-fire and terminal
+      states);
+    * `members/1` is non-empty;
+    * every member's status is in `["in_review", "deploying"]`;
+    * every non-deploy validation on every non-superseded, non-rejected
+      plan across every member has `status == "passed"`.
+
+  Deploy-stage validations are excluded via
+  `Platform.Tasks.PlanEngine.deploy_stage?/1`. Stack members shouldn't
+  ever carry a deploy stage — `Tasks.dispatch_deploy_for_task/1`'s
+  atomic-ship guard (stage 1 of this task) blocks the injection — but
+  the exclusion is a defensive regression guard against future engine
+  changes.
+
+  No writes, no side effects, safe to call from any hot path.
+  """
+  @spec deploy_ready?(Stack.t() | binary()) :: boolean()
+  def deploy_ready?(%Stack{status: status})
+      when status in ["deploying", "done", "abandoned"],
+      do: false
+
+  def deploy_ready?(%Stack{} = stack) do
+    case members(stack) do
+      [] -> false
+      members -> Enum.all?(members, &member_deploy_ready?/1)
+    end
+  end
+
+  def deploy_ready?(stack_id) when is_binary(stack_id) do
+    case Repo.get(Stack, stack_id) do
+      %Stack{} = stack -> deploy_ready?(stack)
+      nil -> false
+    end
+  end
+
+  @doc """
+  Return the members that are NOT ready for deploy — the complement of
+  the `deploy_ready?/1` gate (modulo the stack-status guard).
+
+  Used for logging + telemetry attribution when the gate remains closed.
+  A member appears in the returned list if its status is outside
+  `["in_review", "deploying"]` OR if any of its non-deploy validations
+  is still not `"passed"`.
+
+  Relationship: `deploy_ready?/1 == true` implies
+  `pending_members_for_deploy/1 |> Enum.empty?()`. The reverse implication
+  holds only when the stack's own status is not `"deploying"`, `"done"`,
+  or `"abandoned"` — the stack-status guard on `deploy_ready?/1` is not
+  reflected here because the "who's pending" surface is orthogonal to
+  the stack-level short-circuit.
+
+  Returns `[]` for an unknown stack id (mirrors `deploy_ready?/1`'s
+  fail-safe behavior).
+  """
+  @spec pending_members_for_deploy(Stack.t() | binary()) :: [Task.t()]
+  def pending_members_for_deploy(%Stack{} = stack) do
+    stack
+    |> members()
+    |> Enum.reject(&member_deploy_ready?/1)
+  end
+
+  def pending_members_for_deploy(stack_id) when is_binary(stack_id) do
+    case Repo.get(Stack, stack_id) do
+      %Stack{} = stack -> pending_members_for_deploy(stack)
+      nil -> []
+    end
+  end
+
+  # A member is deploy-ready when both:
+  #   * its status signals a completed validation set — `in_review` (the
+  #     usual case) or `deploying` (mid-rollup-merge, stamped by the
+  #     deployer as it walks members through), AND
+  #   * every non-deploy validation on every non-superseded plan across
+  #     the member has `status == "passed"`.
+  defp member_deploy_ready?(%Task{status: status} = task)
+       when status in ["in_review", "deploying"] do
+    all_non_deploy_validations_passed?(task)
+  end
+
+  defp member_deploy_ready?(_task), do: false
+
+  # Load every stage on every non-superseded, non-rejected plan for the
+  # task, drop the deploy stages via `PlanEngine.deploy_stage?/1`, and
+  # confirm every remaining validation is `passed`. Superseded/rejected
+  # plans are excluded because their stale validations should not gate
+  # the current deploy — the "live" plan is what matters.
+  #
+  # Empty-set case is vacuously `true` (a member with no validations at
+  # all can never block deploy — matches `Enum.all?/2` on `[]`).
+  defp all_non_deploy_validations_passed?(%Task{id: task_id}) do
+    from(s in Stage,
+      join: p in Plan,
+      on: s.plan_id == p.id,
+      where: p.task_id == ^task_id and p.status not in ["superseded", "rejected"],
+      preload: [:validations]
+    )
+    |> Repo.all()
+    |> Enum.reject(&PlanEngine.deploy_stage?/1)
+    |> Enum.flat_map(& &1.validations)
+    |> Enum.all?(&(&1.status == "passed"))
+  end
+
+  # ── Deploy dispatch (Stack v2 stage 3) ─────────────────────────────────
+
+  @doc """
+  Transition a fully-ready stack to `"deploying"` and fire the rollup-PR
+  open trigger asynchronously.
+
+  Called from `PlanEngine.maybe_inject_deploy_or_complete/2`'s stacked-task
+  branch every time a stack member's plan completes; the atomicity guard
+  in this function turns concurrent double-fires (two members completing
+  in the same tick) into exactly one `[:platform, :stacks, :deploy,
+  :dispatched]` telemetry event and one state transition. Calls from
+  members 1..N-1 short-circuit as `:noop` because `deploy_ready?/1`
+  returns `false` while any member remains pending.
+
+  Behavior:
+
+    1. Reloads the stack and checks `deploy_ready?/1`. If `false`,
+       returns `{:ok, :noop}` — no side effects.
+    2. Stamps `metadata["first_deploy_ready_at"]` set-once-if-nil (a
+       previously-stamped value survives across recovery retries).
+    3. Performs a **compare-and-swap** on `stacks.status` via
+       `Repo.update_all` guarded by `status IN
+       ("forming", "in_progress", "in_review")`. Postgres serializes
+       concurrent writes on the row and the second query re-reads the
+       committed `"deploying"` value → 0 rows updated → loser returns
+       `:noop`. Exactly one winner per race.
+    4. Emits telemetry `[:platform, :stacks, :deploy, :dispatched]`
+       with `%{count: 1}` measurements and metadata
+       `%{stack_id, member_count, duration_ms_from_first_member_ready}`.
+    5. Async-calls `StackDeployer.maybe_open_stack_pr/1` under the same
+       `Task.Supervisor` used by the deployer's other async triggers,
+       mirroring `StackDeployer.trigger_maybe_open_stack_pr/1`.
+
+  Returns:
+
+    * `{:ok, :dispatched}` — the stack was transitioned to `"deploying"`
+      on this call and the PR-open trigger fired.
+    * `{:ok, :noop}` — the stack was not ready OR another concurrent
+      caller won the transition race.
+    * `{:error, :stack_not_found}` — the stack id doesn't resolve.
+  """
+  @spec dispatch_stack_deploy(Stack.t() | binary()) ::
+          {:ok, :dispatched | :noop} | {:error, :stack_not_found}
+  def dispatch_stack_deploy(%Stack{id: id}) when is_binary(id) do
+    dispatch_stack_deploy(id)
+  end
+
+  def dispatch_stack_deploy(stack_id) when is_binary(stack_id) do
+    case Repo.get(Stack, stack_id) do
+      nil ->
+        {:error, :stack_not_found}
+
+      %Stack{} = stack ->
+        if deploy_ready?(stack) do
+          try_dispatch(stack)
+        else
+          {:ok, :noop}
+        end
+    end
+  end
+
+  def dispatch_stack_deploy(_), do: {:error, :stack_not_found}
+
+  # Atomic transition to "deploying" via compare-and-swap on stacks.status.
+  # The guarded WHERE ensures exactly one concurrent caller wins the race.
+  defp try_dispatch(%Stack{} = stack) do
+    now = DateTime.utc_now()
+    now_iso = DateTime.to_iso8601(now)
+    base_meta = if is_map(stack.metadata), do: stack.metadata, else: %{}
+
+    first_ready_iso =
+      case Map.get(base_meta, "first_deploy_ready_at") do
+        iso when is_binary(iso) -> iso
+        _ -> now_iso
+      end
+
+    new_meta = Map.put(base_meta, "first_deploy_ready_at", first_ready_iso)
+
+    {count, _} =
+      from(s in Stack,
+        where:
+          s.id == ^stack.id and
+            s.status in ["forming", "in_progress", "in_review"],
+        update: [
+          set: [
+            status: "deploying",
+            metadata: ^new_meta,
+            updated_at: ^now
+          ]
+        ]
+      )
+      |> Repo.update_all([])
+
+    case count do
+      1 ->
+        updated_stack = Repo.get!(Stack, stack.id)
+        member_count = length(members(updated_stack))
+        duration_ms = deploy_ready_duration_ms(first_ready_iso, now)
+
+        emit_deploy_dispatched_telemetry(updated_stack, member_count, duration_ms)
+        trigger_stack_deploy_pr_open(updated_stack.id)
+
+        Logger.info(
+          "[Stacks] dispatch_stack_deploy stack #{updated_stack.id}: transitioned to " <>
+            "deploying (member_count=#{member_count}, duration_ms=#{duration_ms})"
+        )
+
+        {:ok, :dispatched}
+
+      0 ->
+        {:ok, :noop}
+    end
+  end
+
+  defp deploy_ready_duration_ms(first_ready_iso, %DateTime{} = now) do
+    case DateTime.from_iso8601(first_ready_iso) do
+      {:ok, %DateTime{} = ready_at, _} -> DateTime.diff(now, ready_at, :millisecond)
+      _ -> 0
+    end
+  end
+
+  defp emit_deploy_dispatched_telemetry(%Stack{id: stack_id}, member_count, duration_ms) do
+    :telemetry.execute(
+      [:platform, :stacks, :deploy, :dispatched],
+      %{
+        count: 1,
+        duration_ms_from_first_member_ready: duration_ms
+      },
+      %{
+        stack_id: stack_id,
+        member_count: member_count,
+        duration_ms_from_first_member_ready: duration_ms
+      }
+    )
+
+    :ok
+  end
+
+  # Mirrors `StackDeployer.trigger_maybe_open_stack_pr/1` — same
+  # `Task.Supervisor` + `async: true|false` config knobs so tests can
+  # observe the runner call synchronously via
+  # `Application.put_env(:platform, :stack_deployer, async: false)`.
+  defp trigger_stack_deploy_pr_open(stack_id) when is_binary(stack_id) do
+    if stack_deployer_async?() do
+      Task.Supervisor.async_nolink(stack_deployer_task_supervisor(), fn ->
+        log_deploy_pr_open(stack_id, StackDeployer.maybe_open_stack_pr(stack_id))
+      end)
+
+      :ok
+    else
+      log_deploy_pr_open(stack_id, StackDeployer.maybe_open_stack_pr(stack_id))
+      :ok
+    end
+  end
+
+  defp log_deploy_pr_open(stack_id, {:ok, outcome}) do
+    Logger.info(
+      "[Stacks] dispatch_stack_deploy stack #{stack_id} PR-open outcome: #{inspect(outcome)}"
+    )
+
+    :ok
+  end
+
+  defp log_deploy_pr_open(stack_id, {:error, reason}) do
+    Logger.warning(
+      "[Stacks] dispatch_stack_deploy stack #{stack_id} PR-open failed: #{inspect(reason)}"
+    )
+
+    :ok
+  end
+
+  defp stack_deployer_config do
+    Application.get_env(:platform, :stack_deployer, [])
+  end
+
+  defp stack_deployer_async? do
+    Keyword.get(stack_deployer_config(), :async, true)
+  end
+
+  defp stack_deployer_task_supervisor do
+    Keyword.get(stack_deployer_config(), :task_supervisor, Platform.TaskSupervisor)
+  end
+
   @doc """
   Detect whether a just-completed plan approval was the transition point
   that opened the stack-v2 commencement gate (ADR 0042 Decision 4).
@@ -1367,6 +2056,90 @@ defmodule Platform.Tasks.Stacks do
   defp pre_update_plan_already_counted?(%Plan{status: status}),
     do: status in ~w(approved completed)
 
+  # ── Terminal cascade (Stack v2 stage 5) ────────────────────────────────
+
+  @doc """
+  Cascade every stack member that hasn't landed at `"done"` to `"done"`.
+
+  Called from `StackDeployer.handle_rollup_pr_merged/1` as a safety net
+  after the rollup PR has merged. On the canonical happy path the T6
+  webhook fan-out (`GithubWebhookController.process_stack_merged_pr/4`
+  at `github_webhook_controller.ex:505`) has already flipped each
+  member to `done` via its per-task `pr_merged` validation — this
+  helper is then a no-op (every member is already `done`).
+
+  The fallback path fires when a member is at `in_review` with no
+  `pr_merged` validation (e.g. it never got a per-task deploy stage —
+  the exact case for stack members, which ship via the rollup PR).
+  Those members are transitioned to `done` directly via
+  `Tasks.transition_task/2`. Failed transitions surface in `skipped`
+  so callers can log-and-continue rather than crash the whole
+  rollup-merge handler.
+
+  Returns `%{cascaded: [Task.t()], skipped: [%{task_id, status,
+  reason}]}`. `cascaded` lists members transitioned by THIS call
+  (members already at `"done"` are silently omitted from both keys —
+  the point of the helper is "make sure everyone is done", not "report
+  who was already done"). `skipped` lists members whose transition
+  attempt failed for any reason (invalid transition, changeset error,
+  etc.).
+
+  Returns `%{cascaded: [], skipped: [%{reason: :stack_not_found}]}` for
+  an unknown stack id — the helper never raises.
+  """
+  @spec cascade_members_to_done(Stack.t() | binary()) :: %{
+          cascaded: [Task.t()],
+          skipped: [%{task_id: String.t(), status: String.t(), reason: term()}]
+        }
+  def cascade_members_to_done(%Stack{} = stack) do
+    stack
+    |> members()
+    |> Enum.reject(&(&1.status == "done"))
+    |> Enum.reduce(%{cascaded: [], skipped: []}, fn member, acc ->
+      case Tasks.transition_task(member, "done") do
+        {:ok, updated} ->
+          Logger.warning(
+            "[Stacks.cascade_members_to_done] member #{member.id} (status=#{member.status}) " <>
+              "was not flipped to done by the rollup-merge fan-out; transitioned directly. " <>
+              "This usually means the member had no pr_merged validation — expected for " <>
+              "stack members but worth confirming ops didn't lose a webhook."
+          )
+
+          %{acc | cascaded: [updated | acc.cascaded]}
+
+        {:error, reason} ->
+          %{
+            acc
+            | skipped: [
+                %{task_id: member.id, status: member.status, reason: reason}
+                | acc.skipped
+              ]
+          }
+
+        {:error, reason, _details} ->
+          %{
+            acc
+            | skipped: [
+                %{task_id: member.id, status: member.status, reason: reason}
+                | acc.skipped
+              ]
+          }
+      end
+    end)
+    |> Map.update!(:cascaded, &Enum.reverse/1)
+    |> Map.update!(:skipped, &Enum.reverse/1)
+  end
+
+  def cascade_members_to_done(stack_id) when is_binary(stack_id) do
+    case Repo.get(Stack, stack_id) do
+      %Stack{} = stack ->
+        cascade_members_to_done(stack)
+
+      nil ->
+        %{cascaded: [], skipped: [%{task_id: nil, status: nil, reason: :stack_not_found}]}
+    end
+  end
+
   @doc """
   Return the stack members flattened into the order they should be merged
   into the rollup branch — foundational members first.
@@ -1393,6 +2166,60 @@ defmodule Platform.Tasks.Stacks do
 
       {:error, _reason, _detail} ->
         members(stack_or_id)
+    end
+  end
+
+  @doc """
+  Return the stack's planning execution waves — the topological levels of
+  its in-stack DAG, roots-first.
+
+  Thin wrapper over `validate_dag/1` that exposes the same level structure
+  as a first-class public helper so downstream callers (the wave-gated
+  planning cascade in `start_planning/1` and `advance_planning_waves/1`)
+  can iterate waves without repeating Kahn's algorithm inline.
+
+  Each inner list is a "wave" — members whose in-stack predecessors are
+  satisfied by the union of prior waves. Wave 0 contains the members
+  with no in-stack deps (the roots); wave N depends only on members in
+  waves 0..N-1. Waves are ordered from foundational to dependent and
+  each inner list is already stack-position-sorted by `validate_dag/1`.
+
+  ## Return shape
+
+    * `{:ok, levels}` — `levels` is `[[Task.t()]]`. Empty stack collapses
+      to `{:ok, []}` — distinguishable from `{:error, :cycle, ...}` so
+      the idempotency guard in `start_planning/1` can safely no-op on
+      empty stacks without swallowing cycle errors.
+    * `{:error, :cycle, path}` — passed through unchanged from
+      `validate_dag/1`; `path` is a best-effort list of `%Task{}` along
+      one offending cycle.
+    * `{:error, :cross_stack_dep, %{from: from, to_task_id: to_id}}` —
+      passed through unchanged from `validate_dag/1`.
+    * `{:error, :stack_not_found}` — the string-id branch got an id
+      that has no row. Distinct from `{:ok, []}` (empty-but-real
+      stack) so callers can surface a proper error envelope.
+
+  ## Naming intent — why a separate function, not just `validate_dag/1`
+
+  Callers use this named entry-point rather than reaching for
+  `validate_dag/1` directly so that if the DAG source is later swapped
+  — e.g. once the dep-inference planner persists inferred edges into
+  `tasks.dependencies` — the swap is a one-liner here and nothing at
+  the cascade layer changes. Today `validate_dag/1` already reads
+  `tasks.dependencies` via `build_in_stack_subgraph/2`, so inferred
+  edges flow through automatically with no code change here.
+  """
+  @spec planning_waves(Stack.t() | binary()) ::
+          {:ok, [[Task.t()]]}
+          | {:error, :cycle, [Task.t()]}
+          | {:error, :cross_stack_dep, %{from: Task.t(), to_task_id: String.t()}}
+          | {:error, :stack_not_found}
+  def planning_waves(%Stack{} = stack), do: validate_dag(stack)
+
+  def planning_waves(stack_id) when is_binary(stack_id) do
+    case Repo.get(Stack, stack_id) do
+      %Stack{} = stack -> validate_dag(stack)
+      nil -> {:error, :stack_not_found}
     end
   end
 

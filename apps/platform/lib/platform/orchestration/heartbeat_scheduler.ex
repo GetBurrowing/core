@@ -193,6 +193,10 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
   def dispatch_prompt(%{status: "planning"} = task, nil, nil, opts) do
     provider_guidance = resolve_provider_guidance(opts)
     previous_rejection_reason = resolve_previous_rejection_reason(opts)
+    # Stack v2 stage 5: in-stack `blocks`-kind dep parents contribute their
+    # approved plans to the planner's context via `ContextAssembler`. Solo
+    # tasks send `[]` and the section renders as empty string.
+    parent_plans = Keyword.get(opts, :parent_plans, [])
 
     assigns = %{
       task_title: task.title,
@@ -200,6 +204,7 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
       task_priority: task.priority,
       provider_specific_guidance: provider_guidance,
       previous_rejection_reason: render_previous_rejection_section(previous_rejection_reason),
+      upstream_plans_section: render_upstream_plans_section(parent_plans),
       skills_reference: @skills_reference
     }
 
@@ -208,7 +213,12 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
         rendered
 
       {:error, :not_found} ->
-        hardcoded_dispatch_planning(task, provider_guidance, previous_rejection_reason)
+        hardcoded_dispatch_planning(
+          task,
+          provider_guidance,
+          previous_rejection_reason,
+          parent_plans
+        )
     end
   end
 
@@ -374,6 +384,60 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
     """
   end
 
+  # Render the "## Upstream plans (approved by dep parents)" section for the
+  # planning template. Same pre-render-to-string pattern as
+  # `render_previous_rejection_section/1` — the DB template layer only does
+  # `{{variable}}` substitution, so conditional loops live here, not in
+  # the mustache body.
+  #
+  # `parent_plans` comes from `ContextAssembler` and only appears for
+  # stack members; for solo tasks TaskRouter passes `[]` (default in the
+  # planning dispatch clause) which renders as an empty string — the
+  # template stays backwards-compatible when the section is absent.
+  defp render_upstream_plans_section([]), do: ""
+  defp render_upstream_plans_section(nil), do: ""
+
+  defp render_upstream_plans_section(parent_plans) when is_list(parent_plans) do
+    body =
+      parent_plans
+      |> Enum.map(&render_parent_plan_block/1)
+      |> Enum.join("\n")
+
+    """
+    ## Upstream plans (approved by dep parents)
+
+    Each in-stack `blocks`-kind parent's approved plan is included below. Align your design with the upstream approach — extend it, don't reinvent it.
+
+    #{body}
+    """
+  end
+
+  defp render_upstream_plans_section(_), do: ""
+
+  defp render_parent_plan_block(%{task_id: task_id, task_title: task_title, plan: plan}) do
+    stages = Map.get(plan, :stages, []) || []
+    version = Map.get(plan, :version, "?")
+
+    stages_body =
+      stages
+      |> Enum.map(fn stage ->
+        pos = Map.get(stage, :position, "?")
+        name = Map.get(stage, :name) || ""
+        desc = Map.get(stage, :description) || ""
+        "- Stage #{pos}: #{name} — #{desc}"
+      end)
+      |> Enum.join("\n")
+
+    """
+
+    ### Parent — #{task_title} (#{task_id})
+    Plan v#{version}:
+    #{stages_body}
+    """
+  end
+
+  defp render_parent_plan_block(_), do: ""
+
   @doc """
   Generate a stateful heartbeat interrogation prompt.
 
@@ -534,12 +598,19 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
 
   # ── Hardcoded fallback prompts ─────────────────────────────────────────
 
+  # Kept in parity with the DB `dispatch.planning` template so environments
+  # without the seeded row (fresh dev DBs before migrations run, or tests
+  # that operate on an empty templates table) get the same guidance. The
+  # `parent_plans` upstream-plans section is rendered here too — same
+  # renderer as the template path — so both routes emit identical output.
   defp hardcoded_dispatch_planning(
          task,
          provider_guidance \\ "",
-         previous_rejection_reason \\ nil
+         previous_rejection_reason \\ nil,
+         parent_plans \\ []
        ) do
     previous_rejection_section = render_previous_rejection_section(previous_rejection_reason)
+    upstream_plans_section = render_upstream_plans_section(parent_plans)
 
     """
     You have been assigned a task that requires a plan before any implementation begins.
@@ -551,6 +622,7 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
     #{provider_guidance}
 
     #{previous_rejection_section}
+    #{upstream_plans_section}
     Create a plan using the plan_create tool. The plan will be reviewed by a human before work starts — make it specific enough that they can meaningfully approve or reject it.
 
     ## Stage scope (planner's responsibility)

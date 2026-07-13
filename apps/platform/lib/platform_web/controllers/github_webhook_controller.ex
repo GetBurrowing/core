@@ -19,7 +19,18 @@ defmodule PlatformWeb.GithubWebhookController do
   alias Platform.Changelog
   alias Platform.Repo
   alias Platform.Tasks
-  alias Platform.Tasks.{AutoMerger, PlanEngine, Plan, Stack, Stacks, Stage, Task, Validation}
+
+  alias Platform.Tasks.{
+    AutoMerger,
+    Plan,
+    PlanEngine,
+    Stack,
+    StackDeployer,
+    Stacks,
+    Stage,
+    Task,
+    Validation
+  }
 
   require Logger
 
@@ -178,10 +189,14 @@ defmodule PlatformWeb.GithubWebhookController do
       is_nil(task) ->
         :ok
 
-      AutoMerger.defer_for_stack?(task) ->
+      Tasks.dispatch_deploy_for_task(task) == {:error, :stack_ships_atomically} ->
         # ADR 0041 (T5 stage 3) — stack members never open their own
         # PRs. The stack rollup PR (T6) carries the deploy. Skip the
-        # per-task auto-merge entirely.
+        # per-task auto-merge entirely. The
+        # `Tasks.dispatch_deploy_for_task/1` guard owns the
+        # `[:platform, :tasks, :deploy_dispatch, :rejected_stack_member]`
+        # telemetry emission, so operators see per-task branch attempts
+        # in metrics without every call site duplicating it.
         Logger.info(
           "[StackDeployer] task #{task.id} is in stack #{task.stack_id}; deferring to " <>
             "stack deployer (skipping per-task auto-merge for branch #{branch})"
@@ -427,15 +442,16 @@ defmodule PlatformWeb.GithubWebhookController do
   defp maybe_evaluate_pr_merged_validation(task_id, pr, merged_at) do
     task = Tasks.get_task_record(task_id)
 
-    cond do
-      AutoMerger.defer_for_stack?(task) ->
+    case Tasks.dispatch_deploy_for_task(task) do
+      {:error, :stack_ships_atomically} ->
         # ADR 0041 (T5 stage 3) — stack members' per-task `pr_merged`
         # validations are auto-passed by the stack rollup PR's merge
         # webhook fan-out (T6 owns that). DO NOT auto-pass from the
         # per-task webhook; the per-task branch shouldn't be opening
         # PRs in the first place (the auto-merge guard prevents that),
         # but if a webhook fires for a member's individual branch
-        # somehow, the per-task path must NOT pre-empt T6.
+        # somehow, the per-task path must NOT pre-empt T6. Guard +
+        # telemetry live in `Tasks.dispatch_deploy_for_task/1`.
         Logger.info(
           "[StackDeployer] task #{task_id} is in stack #{task.stack_id}; deferring to " <>
             "stack deployer (skipping per-task pr_merged auto-pass for PR " <>
@@ -444,7 +460,7 @@ defmodule PlatformWeb.GithubWebhookController do
 
         :ok
 
-      true ->
+      :ok ->
         do_evaluate_pr_merged_validation(task_id, pr, merged_at)
     end
   end
@@ -539,11 +555,22 @@ defmodule PlatformWeb.GithubWebhookController do
       }
 
       case Stacks.complete_rollup_merge(stack, attrs) do
-        {:ok, _updated} ->
+        {:ok, updated} ->
           Logger.info(
             "[Webhook] Stack #{stack.id} transitioned to done via rollup-merge fan-out " <>
               "(#{length(passed_member_ids)} member(s) passed, #{length(anomalies)} anomaly/anomalies)"
           )
+
+          # Stack v2 stage 5: complete_rollup_merge/2 stamps the
+          # `rollup_merge` metadata subtree + flips status to done,
+          # but does NOT trigger rollup-branch cleanup, member-status
+          # cascade fallback, or the uniform :stacks, :deploy, :pr_merged
+          # telemetry event that stages 3 + 4 established. Route through
+          # `handle_rollup_pr_merged/2` to satisfy those invariants.
+          # The handler is idempotent (short-circuits when
+          # `metadata["rollup_pr"]["merged_at"]` is stamped) so a
+          # replayed webhook is safe.
+          _ = StackDeployer.handle_rollup_pr_merged(updated, pr["merge_commit_sha"])
 
           :ok
 

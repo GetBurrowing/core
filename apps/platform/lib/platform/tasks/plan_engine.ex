@@ -25,7 +25,7 @@ defmodule Platform.Tasks.PlanEngine do
   require Logger
 
   alias Platform.Tasks
-  alias Platform.Tasks.{DeployStageBuilder, Plan, Stage, StackDeployer, Task, Validation}
+  alias Platform.Tasks.{DeployStageBuilder, Plan, Stacks, Stage, StackDeployer, Task, Validation}
 
   @valid_stage_transitions %{
     "pending" => ~w(running skipped),
@@ -732,12 +732,18 @@ defmodule Platform.Tasks.PlanEngine do
         |> Repo.preload(:project)
 
       cond do
-        is_binary(task.stack_id) ->
+        Tasks.dispatch_deploy_for_task(task) == {:error, :stack_ships_atomically} ->
           # ADR 0041 (T5 stage 3) — stack members never get a per-task
           # deploy stage. The stack rollup PR (T6) carries the deploy
           # for all members. The per-task plan completes when its
           # review stages pass; the stack-level deployer takes over
           # from there.
+          #
+          # The single-seam guard `Tasks.dispatch_deploy_for_task/1`
+          # owns the "is this a stack member?" decision plus the
+          # `[:platform, :tasks, :deploy_dispatch, :rejected_stack_member]`
+          # telemetry emission. Any new call site that forgets the
+          # check would silently ship a member alone.
           #
           # Task 019e2be4 stage 1: fire the rollup-merge trigger here.
           # `handle_member_transition/3` is async-aware (config
@@ -750,12 +756,27 @@ defmodule Platform.Tasks.PlanEngine do
           # branch is therefore safe and is the missing seam this task
           # closes — without it, members that complete via plan-engine
           # advance never get assembled onto the stack rollup.
-          Logger.info(
-            "[StackDeployer] task #{task.id} is in stack #{task.stack_id}; deferring to " <>
-              "stack deployer (skipping per-task deploy stage injection)"
-          )
-
+          #
+          # Task 019f487d stage 3: fire the stack-level deploy dispatch
+          # BEFORE the per-member rollup merge trigger. This is the
+          # canonical "last member's stage_complete → open the rollup
+          # PR" gate. `Stacks.dispatch_stack_deploy/1` is a no-op when
+          # any member is still pending validations (that's the whole
+          # `deploy_ready?/1` predicate) and uses a compare-and-swap on
+          # `stacks.status` so concurrent double-fires collapse to
+          # exactly one telemetry event. Members 1..N-1 exit as `:noop`;
+          # only the last member's completion trips the transition.
+          #
+          # Ordering rationale: `dispatch_stack_deploy` must run BEFORE
+          # `handle_member_transition` because the merge stamp fires
+          # its own `maybe_open_stack_pr` trigger, which would then race
+          # this stage's telemetry emission. Running dispatch first
+          # deterministically flips the stack to `"deploying"` and emits
+          # the `:dispatched` event; the downstream merge trigger then
+          # opens the PR via `deploy_validations_ready?/1`'s
+          # `%Stack{status: "deploying"}` pass-through.
           {:ok, completed} = complete_plan(plan)
+          _ = Stacks.dispatch_stack_deploy(task.stack_id)
           _ = StackDeployer.handle_member_transition(task, :plan_completed, :in_review)
           Repo.preload(completed, stages_query())
 

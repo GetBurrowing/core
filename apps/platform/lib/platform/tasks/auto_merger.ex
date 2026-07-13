@@ -30,6 +30,7 @@ defmodule Platform.Tasks.AutoMerger do
   task-aware `execute_merge/4` short-circuits the shell-out.
   """
 
+  alias Platform.Tasks
   alias Platform.Tasks.PlanEngine
   alias Platform.Tasks.Task, as: TaskRecord
 
@@ -63,21 +64,20 @@ defmodule Platform.Tasks.AutoMerger do
   Returns true when the given task is a stack member and the per-task
   auto-merger MUST defer to the stack-level rollup deploy.
 
+  Delegates to the canonical `Platform.Tasks.dispatch_deploy_for_task/1`
+  seam so every caller that asks "is this task allowed to deploy on its
+  own?" goes through one guard. Preserved as a boolean predicate for
+  backward compatibility with `GithubWebhookController.maybe_trigger_auto_merge/2`
+  and existing tests; the underlying decision (and telemetry) lives in
+  `Tasks.dispatch_deploy_for_task/1`.
+
   Accepts a `%Task{}` struct, a task id (binary), or `nil` (returns
   `false` — no task context, can't be a stack member).
   """
   @spec defer_for_stack?(TaskRecord.t() | binary() | nil) :: boolean()
-  def defer_for_stack?(%TaskRecord{stack_id: stack_id}) when is_binary(stack_id), do: true
-  def defer_for_stack?(%TaskRecord{}), do: false
-
-  def defer_for_stack?(task_id) when is_binary(task_id) do
-    case Platform.Tasks.get_task_record(task_id) do
-      %TaskRecord{} = task -> defer_for_stack?(task)
-      nil -> false
-    end
+  def defer_for_stack?(task) do
+    Tasks.dispatch_deploy_for_task(task) == {:error, :stack_ships_atomically}
   end
-
-  def defer_for_stack?(nil), do: false
 
   @doc """
   Task-aware overload of `execute_merge/3` that short-circuits for
@@ -85,28 +85,33 @@ defmodule Platform.Tasks.AutoMerger do
 
   Behavior:
 
-    * Stack member (`task.stack_id != nil`) — logs and returns
+    * Stack member (`Tasks.dispatch_deploy_for_task/1` returns
+      `{:error, :stack_ships_atomically}`) — returns
       `{:ok, :deferred}` WITHOUT shelling out. The stack rollup PR
       owns the deploy; per-task PR-merge is forbidden.
     * Non-stack task — delegates to `execute_merge/3`.
 
   This is the entry point used by `GithubWebhookController` so the
-  guard runs uniformly across the auto-merge code path.
+  guard runs uniformly across the auto-merge code path. The guard
+  emits `[:platform, :tasks, :deploy_dispatch, :rejected_stack_member]`
+  telemetry on the blocked path, so operators can detect any caller
+  that repeatedly tries to deploy a stack member individually.
   """
   @spec execute_merge(TaskRecord.t() | nil, String.t(), pos_integer(), String.t()) ::
           {:ok, String.t() | :deferred} | {:error, atom(), String.t()}
-  def execute_merge(%TaskRecord{stack_id: stack_id} = task, _repo_url, pr_number, _method)
-      when is_binary(stack_id) do
-    Logger.info(
-      "[StackDeployer] task #{task.id} is in stack #{stack_id}; deferring to stack deployer " <>
-        "(skipping per-task auto-merge of PR ##{pr_number})"
-    )
+  def execute_merge(%TaskRecord{} = task, repo_url, pr_number, method) do
+    case Tasks.dispatch_deploy_for_task(task) do
+      :ok ->
+        execute_merge(repo_url, pr_number, method)
 
-    {:ok, :deferred}
-  end
+      {:error, :stack_ships_atomically} ->
+        Logger.info(
+          "[StackDeployer] task #{task.id} is a stack member; deferring to stack deployer " <>
+            "(skipping per-task auto-merge of PR ##{pr_number})"
+        )
 
-  def execute_merge(%TaskRecord{} = _task, repo_url, pr_number, method) do
-    execute_merge(repo_url, pr_number, method)
+        {:ok, :deferred}
+    end
   end
 
   def execute_merge(nil, repo_url, pr_number, method) do

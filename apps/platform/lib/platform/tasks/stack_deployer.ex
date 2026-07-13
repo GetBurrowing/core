@@ -71,34 +71,35 @@ defmodule Platform.Tasks.StackDeployer do
   validation evaluation pipeline) reports a failing CI run for a PR
   whose head is the stack's `rollup_branch`.
 
-  The heuristic attribution + bounce protocol:
+  The atomic all-members bounce protocol (stage 4 rewrite):
 
-    1. **Identify offender** — load all stack members ordered by
-       `metadata["merged_into_rollup_at"]["at"]` descending. The
-       offender is the most-recently-merged member whose merge SHA
-       was already on the rollup branch when the failing CI run
-       fired (we approximate "reachable from head_sha" by including
-       any merge whose timestamp is at-or-before the run). If
-       multiple merges fit the window the most-recent is picked and
-       an `[StackDeployer] CI attribution heuristic: ...` warning is
-       logged.
-    2. **Bounce** — clear the offender's
-       `metadata["merged_into_rollup_at"]`; revert the offender's
-       merge commit on `rollup_branch` via the runner; transition
-       the offender back to `in_progress`; stamp
-       `metadata["bounced_from_rollup"] = %{at, ci_run_url, sha}`.
-    3. **Close the rollup PR** so the next
-       `maybe_open_stack_pr/1` cycle opens a fresh PR after the
-       bounced member re-merges.
-    4. **Flip the stack** back to `in_review`.
+    1. **Identify offender for the git revert** — load all stack
+       members ordered by `metadata["merged_into_rollup_at"]["at"]`
+       descending. The offender is the most-recently-merged member;
+       its merge commit is the ONE we revert on the rollup branch
+       (reverting earlier merges would conflict against base). If
+       multiple merges fit the window an `[StackDeployer] CI
+       attribution heuristic: ...` warning is logged. This is the
+       only piece of the flow that is scoped to a single member —
+       everything else is atomic across the stack.
+    2. **Atomic bounce of every member** — for EVERY stack member
+       (merged or not): clear `metadata["merged_into_rollup_at"]`;
+       stamp `metadata["bounced_from_rollup"] = %{at, ci_run_url,
+       head_sha, sha: merge_sha_if_known}`; transition to
+       `"in_progress"` (the ship-or-no-ship guarantee: if the stack
+       PR failed, nobody rides forward alone).
+    3. **Revert the offender's merge commit** on the rollup branch
+       via the runner (best-effort; failure is fatal to the bounce
+       so operators see the divergence).
+    4. **Close the rollup PR** so the next `maybe_open_stack_pr/1`
+       cycle opens a fresh PR after fixes land.
+    5. **Flip the stack** back to `"in_progress"` (not
+       `"in_review"`) and clear `metadata["rollup_pr"]`.
 
-  Other members KEEP their `merged_into_rollup_at` stamps and remain
-  `in_review`. There is no retry loop — the bounced member is picked
-  up by the normal dispatcher.
-
-  Idempotent: if the offender already carries
-  `metadata["bounced_from_rollup"]["ci_run_url"]` matching the
-  invocation's `ci_run_url`, the function no-ops.
+  Idempotent: if every member with a merge stamp already carries
+  `metadata["bounced_from_rollup"]["ci_run_url"]` matching this
+  invocation's `ci_run_url`, the function no-ops with
+  `{:ok, :already_bounced}`.
 
   ## Test injection
 
@@ -951,13 +952,40 @@ defmodule Platform.Tasks.StackDeployer do
       true ->
         members = Stacks.members(stack)
 
-        if all_members_ready?(members) do
-          do_open_stack_pr(stack, members)
-        else
-          {:ok, :not_ready}
+        cond do
+          not all_members_ready?(members) ->
+            {:ok, :not_ready}
+
+          not deploy_validations_ready?(stack) ->
+            # Task 019f487d stage 3: opening the rollup PR requires
+            # BOTH gates — every member branch merged into rollup
+            # (`all_members_ready?/1`, the rollup-merge downstream
+            # signal) AND every member's non-deploy validations
+            # `passed` (`Stacks.deploy_ready?/1`, the upstream
+            # validation-pass signal). This guards against opening a
+            # PR before the validation set is complete even if the
+            # rollup merges somehow raced ahead. Once the stack has
+            # been transitioned to `"deploying"` via
+            # `Stacks.dispatch_stack_deploy/1`, the validation gate
+            # was, by construction, satisfied at dispatch time — so
+            # the `"deploying"` status is itself a valid pass-through.
+            {:ok, :not_ready}
+
+          true ->
+            do_open_stack_pr(stack, members)
         end
     end
   end
+
+  # Validation-side readiness for opening the rollup PR.
+  #
+  # Either the stack has already been dispatched (status = `"deploying"`,
+  # which encodes "validations were all passed at dispatch time"), OR the
+  # pure `Stacks.deploy_ready?/1` predicate still reports `true`
+  # (pre-dispatch happy path). Both branches guarantee the underlying
+  # invariant: no validation on any live member's plan is still pending.
+  defp deploy_validations_ready?(%Stack{status: "deploying"}), do: true
+  defp deploy_validations_ready?(%Stack{} = stack), do: Stacks.deploy_ready?(stack)
 
   @doc """
   Success-path handler for the stack-level rollup PR being merged.
@@ -965,34 +993,99 @@ defmodule Platform.Tasks.StackDeployer do
   Called by T6's webhook routing when GitHub fires
   `pull_request.closed` with `merged: true` for the stack's
   `rollup_branch`. Transitions the stack to `done` via
-  `Stacks.update_stack/2`. Member-status fan-out is owned by T6
-  (each member's per-task `pr_merged` validation auto-passes off the
-  same webhook), not by this function.
+  `Stacks.update_stack/2`, cascades any not-yet-done members to
+  `done` via `Stacks.cascade_members_to_done/1` (the T6 webhook
+  fan-out normally handles this, but stack members without a
+  `pr_merged` validation need the direct cascade), kicks off rollup
+  branch cleanup, and emits deploy telemetry.
+
+  Stage 5 (Stack v2) hardening:
+
+    * Optional `merge_commit_sha` is threaded through to the
+      `[:platform, :stacks, :deploy, :pr_merged]` telemetry event so
+      dashboards can correlate the merged SHA back to the git-side
+      artifact. `nil` is legal (the caller has none to hand in).
+    * Duration is computed from `metadata["rollup_pr"]["opened_at"]`
+      when present; `nil` when the stack skipped the `dispatch` path
+      (e.g. a directly-invoked test seam).
+    * Idempotency: keyed on `metadata["rollup_pr"]["merged_at"]`. Once
+      this handler has stamped `merged_at`, replays short-circuit —
+      no double telemetry, no double branch delete. A stack manually
+      flipped to `done` via `Stacks.update_stack/2` (no rollup_pr
+      metadata at all) is treated as "already done" and short-circuits
+      too, preserving pre-stage-5 semantics for that seam.
 
   Returns `{:ok, stack}` on success or `{:error, reason}` on failure.
-  Idempotent: if the stack is already `done`, returns `{:ok, stack}`.
   """
   @spec handle_rollup_pr_merged(Stack.t() | binary()) ::
           {:ok, Stack.t()} | {:error, :stack_not_found | term()}
-  def handle_rollup_pr_merged(stack_id) when is_binary(stack_id) do
+  def handle_rollup_pr_merged(stack_or_id) do
+    handle_rollup_pr_merged(stack_or_id, nil)
+  end
+
+  @doc """
+  Two-arity variant of `handle_rollup_pr_merged/1` that threads the
+  rollup PR's `merge_commit_sha` into the deploy telemetry event.
+
+  See `handle_rollup_pr_merged/1` for behavior. Preferred call site for
+  the webhook path, which has the SHA in hand from the GitHub payload.
+  """
+  @spec handle_rollup_pr_merged(Stack.t() | binary(), String.t() | nil) ::
+          {:ok, Stack.t()} | {:error, :stack_not_found | term()}
+  def handle_rollup_pr_merged(stack_id, merge_commit_sha) when is_binary(stack_id) do
     case load_stack(stack_id) do
-      {:ok, stack} -> handle_rollup_pr_merged(stack)
+      {:ok, stack} -> handle_rollup_pr_merged(stack, merge_commit_sha)
       err -> err
     end
   end
 
-  def handle_rollup_pr_merged(%Stack{status: "done"} = stack) do
-    Logger.info("[StackDeployer] stack #{stack.id} already done; rollup-merge handler is no-op")
-    {:ok, stack}
+  def handle_rollup_pr_merged(%Stack{status: "done"} = stack, merge_commit_sha) do
+    base_meta = if is_map(stack.metadata), do: stack.metadata, else: %{}
+    rollup_pr = Map.get(base_meta, "rollup_pr")
+
+    cond do
+      is_map(rollup_pr) and is_binary(Map.get(rollup_pr, "merged_at")) ->
+        Logger.info(
+          "[StackDeployer] stack #{stack.id} already done with rollup_pr.merged_at stamped; " <>
+            "rollup-merge handler is no-op"
+        )
+
+        {:ok, stack}
+
+      is_nil(rollup_pr) ->
+        # Pre-stage-5 semantic: a stack manually flipped to `done` with no
+        # rollup_pr metadata is treated as "already done" and short-circuits.
+        # This preserves existing test seams that set `status: "done"` without
+        # any rollup metadata.
+        Logger.info(
+          "[StackDeployer] stack #{stack.id} already done (no rollup_pr metadata); " <>
+            "rollup-merge handler is no-op"
+        )
+
+        {:ok, stack}
+
+      true ->
+        # Status is done but rollup_pr.merged_at is not stamped — a caller
+        # (e.g. the webhook's `complete_rollup_merge/2`) flipped status to
+        # done without running this handler. Stamp merged_at + emit
+        # telemetry + cascade + branch delete for this "half-done" case.
+        do_handle_rollup_pr_merged(stack, merge_commit_sha)
+    end
   end
 
-  def handle_rollup_pr_merged(%Stack{} = stack) do
+  def handle_rollup_pr_merged(%Stack{} = stack, merge_commit_sha) do
+    do_handle_rollup_pr_merged(stack, merge_commit_sha)
+  end
+
+  defp do_handle_rollup_pr_merged(%Stack{} = stack, merge_commit_sha) do
     base_meta = if is_map(stack.metadata), do: stack.metadata, else: %{}
+    now = DateTime.utc_now()
+    now_iso = DateTime.to_iso8601(now)
 
     rollup_pr_meta =
       case Map.get(base_meta, "rollup_pr") do
-        %{} = m -> Map.put(m, "merged_at", DateTime.utc_now() |> DateTime.to_iso8601())
-        _ -> %{"merged_at" => DateTime.utc_now() |> DateTime.to_iso8601()}
+        %{} = m -> Map.put(m, "merged_at", now_iso)
+        _ -> %{"merged_at" => now_iso}
       end
 
     new_meta = Map.put(base_meta, "rollup_pr", rollup_pr_meta)
@@ -1003,11 +1096,31 @@ defmodule Platform.Tasks.StackDeployer do
           "[StackDeployer] stack #{stack.id} rollup PR merged; stack transitioned to done"
         )
 
+        # Preserve the legacy telemetry event for existing dashboards.
         :telemetry.execute(
           [:platform, :stack_deployer, :rollup_pr_merged],
           %{count: 1},
           %{stack_id: stack.id, rollup_branch: stack.rollup_branch}
         )
+
+        # Stage 5 (Stack v2): new namespaced `:stacks, :deploy, :pr_merged`
+        # event with uniform metric shape %{stack_id, member_count,
+        # duration_ms_in_deploying, merge_commit_sha} — matches the
+        # :dispatched (stage 3) and :pr_rejected (stage 4) event shapes
+        # so dashboards can build one uniform deploy-lifecycle panel.
+        cascade = Stacks.cascade_members_to_done(updated)
+        member_count = length(Stacks.members(updated))
+        duration_ms = deploy_duration_ms_in_deploying(base_meta, now)
+
+        emit_pr_merged_telemetry(updated, member_count, duration_ms, merge_commit_sha)
+
+        if cascade.skipped != [] do
+          Logger.warning(
+            "[StackDeployer] stack #{updated.id} rollup PR merged but " <>
+              "#{length(cascade.skipped)} member(s) could not be cascaded to done: " <>
+              inspect(cascade.skipped)
+          )
+        end
 
         # ADR-0042 rollup branch lifecycle: delete the rollup branch on
         # merge. Best-effort — a failure here does NOT undo the `status
@@ -1024,6 +1137,43 @@ defmodule Platform.Tasks.StackDeployer do
 
         err
     end
+  end
+
+  # Compute `duration_ms_in_deploying` from the stack's pre-merge
+  # `metadata["rollup_pr"]["opened_at"]` stamp. That timestamp is
+  # written by `finalize_pr_opened/3` when the rollup PR opens, so it
+  # is the canonical "stack entered deploy" marker. `nil` when the
+  # stack never went through the dispatch path (e.g. tests that seed
+  # `status: "deploying"` directly without an `opened_at` timestamp).
+  defp deploy_duration_ms_in_deploying(base_meta, %DateTime{} = now) do
+    with %{} = rollup_pr <- Map.get(base_meta, "rollup_pr"),
+         opened_at when is_binary(opened_at) <- Map.get(rollup_pr, "opened_at"),
+         {:ok, %DateTime{} = opened_dt, _} <- DateTime.from_iso8601(opened_at) do
+      DateTime.diff(now, opened_dt, :millisecond)
+    else
+      _ -> nil
+    end
+  end
+
+  defp emit_pr_merged_telemetry(
+         %Stack{id: stack_id, rollup_branch: rollup_branch},
+         member_count,
+         duration_ms,
+         merge_commit_sha
+       ) do
+    :telemetry.execute(
+      [:platform, :stacks, :deploy, :pr_merged],
+      %{count: 1, duration_ms_in_deploying: duration_ms},
+      %{
+        stack_id: stack_id,
+        rollup_branch: rollup_branch,
+        member_count: member_count,
+        duration_ms_in_deploying: duration_ms,
+        merge_commit_sha: merge_commit_sha
+      }
+    )
+
+    :ok
   end
 
   # Fire-and-forget rollup-branch cleanup after the stack has flipped
@@ -1153,22 +1303,26 @@ defmodule Platform.Tasks.StackDeployer do
   @typedoc "Successful CI-failure bounce result."
   @type bounce_result :: %{
           required(:status) => :bounced,
-          required(:bounced_task_id) => String.t(),
+          required(:bounced_task_ids) => [String.t()],
           required(:revert_sha) => String.t() | nil
         }
 
   @doc """
-  Bounce the offending member back to `in_progress` after the
-  stack-level rollup PR's CI failed.
+  Bounce EVERY stack member back to `in_progress` after the
+  stack-level rollup PR's CI failed. This is the ship-or-no-ship
+  guarantee: if the rollup PR fails, no member rides forward alone.
 
-  See module-level docs for the heuristic and ordering. Returns:
+  See module-level docs for the ordering. Returns:
 
-    * `{:ok, %{status: :bounced, bounced_task_id, revert_sha}}` on a
-      clean bounce.
-    * `{:ok, :already_bounced}` if the most-recently-merged member is
-      already stamped with this `ci_run_url`.
+    * `{:ok, %{status: :bounced, bounced_task_ids, revert_sha}}` on a
+      clean bounce. `bounced_task_ids` lists every member that was
+      transitioned back to `in_progress`.
+    * `{:ok, :already_bounced}` if every member with a merge stamp
+      already carries `bounced_from_rollup[ci_run_url]` matching
+      this run (replay-safe webhook handling).
     * `{:ok, :no_candidate}` if no member has a
-      `merged_into_rollup_at` stamp (nothing to bounce).
+      `merged_into_rollup_at` stamp (nothing was on the rollup —
+      atomic bounce is a no-op).
     * `{:error, reason}` on any unrecoverable failure (project load,
       revert, transition).
   """
@@ -1191,30 +1345,37 @@ defmodule Platform.Tasks.StackDeployer do
   def handle_rollup_ci_failure(%Stack{} = stack, %{ci_run_url: ci_run_url, head_sha: head_sha})
       when is_binary(ci_run_url) and is_binary(head_sha) do
     with {:ok, project} <- load_project(stack.project_id),
-         :ok <- ensure_repo_url(project),
-         members = Stacks.members(stack),
-         {:ok, offender} <- pick_offender(members, head_sha) do
-      if already_bounced?(offender, ci_run_url) do
-        Logger.info(
-          "[StackDeployer] stack #{stack.id} member #{offender.id} already bounced for " <>
-            "ci_run_url=#{ci_run_url}; no-op"
-        )
+         :ok <- ensure_repo_url(project) do
+      members = Stacks.members(stack)
 
-        {:ok, :already_bounced}
-      else
-        do_bounce_offender(stack, offender, project.repo_url, ci_run_url, head_sha)
+      cond do
+        # Idempotency guard runs FIRST so a replayed webhook after a
+        # completed bounce (where every member has already lost its
+        # `merged_into_rollup_at` stamp) still short-circuits to
+        # `:already_bounced` rather than falling through to
+        # `:no_candidate`.
+        all_members_already_bounced?(members, ci_run_url) ->
+          Logger.info(
+            "[StackDeployer] stack #{stack.id} already fully bounced for " <>
+              "ci_run_url=#{ci_run_url}; no-op"
+          )
+
+          {:ok, :already_bounced}
+
+        true ->
+          case pick_offender(members, head_sha) do
+            {:ok, offender} ->
+              do_atomic_bounce(stack, members, offender, project.repo_url, ci_run_url, head_sha)
+
+            {:error, :no_candidate} ->
+              Logger.warning(
+                "[StackDeployer] stack #{stack.id} CI failure (#{ci_run_url}) but no merged " <>
+                  "member found; no-op"
+              )
+
+              {:ok, :no_candidate}
+          end
       end
-    else
-      {:error, :no_candidate} ->
-        Logger.warning(
-          "[StackDeployer] stack #{stack.id} CI failure (#{ci_run_url}) but no merged " <>
-            "member found to bounce; no-op"
-        )
-
-        {:ok, :no_candidate}
-
-      {:error, _reason} = err ->
-        err
     end
   end
 
@@ -1274,35 +1435,58 @@ defmodule Platform.Tasks.StackDeployer do
 
   defp already_bounced?(_task, _ci_run_url), do: false
 
-  defp do_bounce_offender(
+  # Idempotency guard: the atomic bounce is considered "already done"
+  # when every member of the stack carries the matching `ci_run_url`
+  # bounce stamp. Since the atomic bounce stamps EVERY member (merged
+  # or not), replaying the same webhook finds every member stamped
+  # and short-circuits.
+  defp all_members_already_bounced?([], _ci_run_url), do: false
+
+  defp all_members_already_bounced?(members, ci_run_url) do
+    Enum.all?(members, &already_bounced?(&1, ci_run_url))
+  end
+
+  defp do_atomic_bounce(
          %Stack{} = stack,
+         members,
          %TaskRecord{} = offender,
          repo_url,
          ci_run_url,
          head_sha
        ) do
-    merge_sha = offender.metadata["merged_into_rollup_at"]["sha"]
+    offender_merge_sha = offender.metadata["merged_into_rollup_at"]["sha"]
 
     Logger.info(
-      "[StackDeployer] bouncing member #{offender.id} from stack #{stack.id} rollup " <>
-        "(merge_sha=#{merge_sha}, ci_run_url=#{ci_run_url})"
+      "[StackDeployer] atomic-bouncing stack #{stack.id} (#{length(members)} member(s)) after " <>
+        "rollup CI failure (offender=#{offender.id} merge_sha=#{offender_merge_sha}, " <>
+        "ci_run_url=#{ci_run_url}); reverting only the most-recently-merged commit — earlier " <>
+        "merges are cleared via stack-level PR close + rollup rebuild on the next cycle."
     )
 
-    with {:ok, revert_sha} <- revert_offender_merge(stack, offender, repo_url, merge_sha),
-         {:ok, bounced_task} <-
-           stamp_bounce_and_clear_merge(offender, ci_run_url, head_sha, merge_sha),
-         {:ok, _transitioned} <-
-           bounce_member_to_in_progress(bounced_task),
+    with {:ok, revert_sha} <- revert_offender_merge(stack, offender, repo_url, offender_merge_sha),
+         {:ok, bounced_ids} <- bounce_all_members(members, ci_run_url, head_sha),
          _ = close_rollup_pr(stack, repo_url, offender, ci_run_url),
-         {:ok, _updated_stack} <- flip_stack_to_in_review_for_bounce(stack) do
+         {:ok, _updated_stack} <- flip_stack_to_in_progress_for_bounce(stack) do
+      :telemetry.execute(
+        [:platform, :stacks, :deploy, :pr_rejected],
+        %{count: 1, member_count: length(members)},
+        %{
+          stack_id: stack.id,
+          member_count: length(members),
+          ci_run_url: ci_run_url,
+          revert_sha: revert_sha
+        }
+      )
+
+      # Preserve the legacy telemetry name for existing dashboards.
       :telemetry.execute(
         [:platform, :stack_deployer, :ci_failure_bounce],
         %{count: 1},
         %{
           stack_id: stack.id,
-          bounced_task_id: offender.id,
+          bounced_task_ids: bounced_ids,
           ci_run_url: ci_run_url,
-          merge_sha: merge_sha,
+          merge_sha: offender_merge_sha,
           revert_sha: revert_sha
         }
       )
@@ -1310,9 +1494,32 @@ defmodule Platform.Tasks.StackDeployer do
       {:ok,
        %{
          status: :bounced,
-         bounced_task_id: offender.id,
+         bounced_task_ids: bounced_ids,
          revert_sha: revert_sha
        }}
+    end
+  end
+
+  # Stamp `bounced_from_rollup` on every member, clear
+  # `merged_into_rollup_at`, and transition each back to
+  # `"in_progress"`. Returns the list of task ids that were touched.
+  # Failure to stamp or transition any single member is fatal to the
+  # bounce so we surface the error to the caller.
+  defp bounce_all_members(members, ci_run_url, head_sha) do
+    Enum.reduce_while(members, {:ok, []}, fn member, {:ok, acc} ->
+      merge_sha = get_in(member.metadata || %{}, ["merged_into_rollup_at", "sha"])
+
+      with {:ok, stamped} <-
+             stamp_bounce_and_clear_merge(member, ci_run_url, head_sha, merge_sha),
+           {:ok, _transitioned} <- bounce_member_to_in_progress(stamped) do
+        {:cont, {:ok, [member.id | acc]}}
+      else
+        {:error, _reason} = err -> {:halt, err}
+      end
+    end)
+    |> case do
+      {:ok, ids} -> {:ok, Enum.reverse(ids)}
+      err -> err
     end
   end
 
@@ -1389,8 +1596,7 @@ defmodule Platform.Tasks.StackDeployer do
   end
 
   defp bounce_member_to_in_progress(%TaskRecord{status: "in_progress"} = task) do
-    # Already there (manual transition raced us, or the dispatcher
-    # already grabbed it). Treat as success.
+    # Already there (unmerged member OR a prior partial bounce). No-op.
     {:ok, task}
   end
 
@@ -1400,13 +1606,15 @@ defmodule Platform.Tasks.StackDeployer do
         {:ok, transitioned}
 
       {:error, :invalid_transition} ->
-        # `in_review -> in_progress` IS allowed (see @valid_task_transitions),
-        # so this branch is reached only if the task has already been
-        # transitioned elsewhere (e.g., to deploying / done). Log and
-        # treat as a soft success — the task isn't where we expected
-        # but we don't want to crash the bounce.
+        # `in_review -> in_progress` and `deploying -> in_progress`
+        # are both allowed (see @valid_task_transitions). This
+        # branch is reached only if the task has been transitioned
+        # to a terminal state (done / cancelled). Log and treat as a
+        # soft success — the task isn't where we expected but we
+        # don't want to crash the atomic bounce over one member's
+        # concurrent transition.
         Logger.warning(
-          "[StackDeployer] bounce: task #{task.id} not at a status allowing return to " <>
+          "[StackDeployer] atomic-bounce: task #{task.id} not at a status allowing return to " <>
             "in_progress (current=#{task.status}); leaving as-is"
         )
 
@@ -1414,7 +1622,7 @@ defmodule Platform.Tasks.StackDeployer do
 
       {:error, reason} = err ->
         Logger.warning(
-          "[StackDeployer] bounce: failed to transition task #{task.id} to in_progress: " <>
+          "[StackDeployer] atomic-bounce: failed to transition task #{task.id} to in_progress: " <>
             "#{inspect(reason)}"
         )
 
@@ -1475,27 +1683,28 @@ defmodule Platform.Tasks.StackDeployer do
     end
   end
 
-  # Flip the stack from `deploying` back to `in_review` AND clear
-  # the `rollup_pr` metadata so the next `maybe_open_stack_pr/1`
-  # cycle opens a fresh PR after the bounced member re-merges. We
-  # preserve the rest of the metadata (any conflict record from
-  # earlier, etc.).
-  defp flip_stack_to_in_review_for_bounce(%Stack{} = stack) do
+  # Flip the stack from `deploying` back to `in_progress` (NOT
+  # `in_review`) AND clear the `rollup_pr` metadata. The atomic
+  # bounce puts every member back to `in_progress`, so the stack
+  # regresses in lockstep — the next `maybe_open_stack_pr/1` cycle
+  # opens a fresh PR after fixes land. Preserves the rest of the
+  # metadata (any conflict record from earlier, etc.).
+  defp flip_stack_to_in_progress_for_bounce(%Stack{} = stack) do
     base_meta = if is_map(stack.metadata), do: stack.metadata, else: %{}
     cleared = Map.delete(base_meta, "rollup_pr")
 
-    case Stacks.update_stack(stack, %{status: "in_review", metadata: cleared}) do
+    case Stacks.update_stack(stack, %{status: "in_progress", metadata: cleared}) do
       {:ok, updated} ->
         Logger.info(
-          "[StackDeployer] stack #{stack.id} flipped #{stack.status} -> in_review " <>
-            "(post-CI-failure bounce)"
+          "[StackDeployer] stack #{stack.id} flipped #{stack.status} -> in_progress " <>
+            "(post-CI-failure atomic bounce)"
         )
 
         {:ok, updated}
 
       {:error, reason} = err ->
         Logger.warning(
-          "[StackDeployer] failed to flip stack #{stack.id} to in_review post-bounce: " <>
+          "[StackDeployer] failed to flip stack #{stack.id} to in_progress post-bounce: " <>
             "#{inspect(reason)}"
         )
 
