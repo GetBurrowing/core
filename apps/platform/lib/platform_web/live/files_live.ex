@@ -86,6 +86,7 @@ defmodule PlatformWeb.FilesLive do
      |> assign(:semantic_search_state, :idle)
      |> assign(:show_upload_sheet, false)
      |> assign(:subscribed_project_id, nil)
+     |> assign(:upload_batch, empty_upload_batch())
      |> allow_upload(:files,
        accept: :any,
        auto_upload: true,
@@ -213,7 +214,13 @@ defmodule PlatformWeb.FilesLive do
     end
   end
 
-  def handle_event("validate_upload", _params, socket), do: {:noreply, socket}
+  # A fresh file selection (phx-change fires when the user picks or drops
+  # files) begins a new upload session — reset the running batch counter so
+  # the success flash reflects THIS selection, not the cumulative tally
+  # across sessions in the same mounted LV.
+  def handle_event("validate_upload", _params, socket) do
+    {:noreply, assign(socket, :upload_batch, empty_upload_batch())}
+  end
 
   def handle_event("cancel_upload", %{"ref" => ref}, socket) do
     {:noreply, cancel_upload(socket, :files, ref)}
@@ -265,13 +272,22 @@ defmodule PlatformWeb.FilesLive do
   # it anyway; resolving here gives a friendlier UX).
   defp handle_file_upload_progress(:files, entry, socket) do
     if entry.done? do
-      socket = consume_one_upload(socket, entry)
-      {:noreply, socket}
+      {:noreply, consume_one_upload(socket, entry)}
     else
       {:noreply, socket}
     end
   end
 
+  # The progress callback fires per-entry as each upload flips
+  # `done?`, so we drain that specific entry with
+  # `consume_uploaded_entry/3` (singular). The plural
+  # `consume_uploaded_entries/3` raises if ANY entry in the batch is
+  # still in progress, which breaks per-entry drain — see
+  # Phoenix.LiveView.Upload.consume_uploaded_entries/3 upstream. The
+  # singular form takes the specific entry explicitly, so closing over
+  # `entry` here is the correct per-file scope (not the metadata-bleed
+  # bug Stage 1 called out — that bug only exists if you use the
+  # plural form + ignore the callback's inner entry arg).
   defp consume_one_upload(socket, entry) do
     project_id = socket.assigns.selected_project_id
 
@@ -286,29 +302,39 @@ defmodule PlatformWeb.FilesLive do
 
       uploaded_by = socket.assigns[:current_user_id]
 
+      # `consume_uploaded_entry/3` unwraps the callback's `{:ok, term}`
+      # and returns just `term`. We keep the outer `{:ok, _}` wrapper
+      # so the callback conforms to the LV contract, then pattern-
+      # match on the inner tuple shape below.
       result =
-        consume_uploaded_entries(socket, :files, fn %{path: path}, _entry ->
-          handle_one_consumed(path, entry, project_id, org_id, uploaded_by)
+        consume_uploaded_entry(socket, entry, fn %{path: path} ->
+          {:ok, handle_one_consumed(path, entry, project_id, org_id, uploaded_by)}
         end)
 
-      case result do
-        [] ->
-          socket
+      # Successful results are `{:created, file}` (freshly written) or
+      # `{:dedup, file}` (identical bytes already ingested in this
+      # project). Only `{:error, _}` counts as a failure. Anything else
+      # is treated as an error too, defensively. We accumulate results
+      # across the callbacks that fire for this batch so the flash + list
+      # refresh reflect the CUMULATIVE outcome ("3 files uploaded" after
+      # the third callback in a bulk selection) instead of a per-file
+      # ping-pong. The batch resets whenever `validate_upload` fires
+      # (new selection).
+      socket = accumulate_upload_result(socket, result)
+      batch = socket.assigns.upload_batch
+      successes = batch.created ++ batch.dedup
 
-        results ->
-          # consume_uploaded_entries returns the list of {:ok, value}
-          # accumulators. Any :error tuples surface as flash; on at
-          # least one success we refresh + show the upload sheet
-          # closed (mobile).
-          {oks, errors} = Enum.split_with(results, &match?({:ok, _}, &1))
-
-          socket
-          |> maybe_flash_errors(errors)
-          |> maybe_refresh_after_upload(oks, project_id)
-      end
+      socket
+      |> maybe_flash_success(batch)
+      |> maybe_flash_errors_from_batch(batch)
+      |> maybe_refresh_after_upload(successes, project_id)
     end
   end
 
+  # Returns a bare tuple — `{:created, file}` / `{:dedup, file}` /
+  # `{:error, reason}` — that the caller wraps in the LV-mandated
+  # `{:ok, term}` envelope. See `consume_one_upload/1` for the wrap +
+  # subsequent split_with contract.
   defp handle_one_consumed(path, entry, project_id, org_id, uploaded_by) do
     filename = entry.client_name || "upload"
     content_type = entry.client_type || "application/octet-stream"
@@ -327,21 +353,21 @@ defmodule PlatformWeb.FilesLive do
       case attrs do
         {:dedup, file} ->
           # Already ingested in this project — return the existing row.
-          {:ok, {:dedup, file}}
+          {:dedup, file}
 
         {:new, create_attrs} ->
           case Files.create_file(create_attrs) do
             {:ok, file} ->
               Files.Ingester.ingest_async(file)
-              {:ok, {:created, file}}
+              {:created, file}
 
             {:error, changeset} ->
-              {:ok, {:error, changeset}}
+              {:error, changeset}
           end
       end
     else
       {:error, reason} ->
-        {:ok, {:error, reason}}
+        {:error, reason}
     end
   end
 
@@ -399,11 +425,60 @@ defmodule PlatformWeb.FilesLive do
     end
   end
 
-  defp maybe_flash_errors(socket, []), do: socket
+  # Per-callback accumulator. Because the LV upload pipeline drives one
+  # progress callback per completed entry, we stash results in a running
+  # bucket on the socket so downstream flash + list-refresh code can see
+  # the WHOLE batch's outcome, not just this file. `validate_upload`
+  # clears the bucket at the start of every new selection.
+  defp accumulate_upload_result(socket, result) do
+    batch = socket.assigns[:upload_batch] || empty_upload_batch()
 
-  defp maybe_flash_errors(socket, errors) do
+    updated =
+      case result do
+        {:created, file} -> %{batch | created: [file | batch.created]}
+        {:dedup, file} -> %{batch | dedup: [file | batch.dedup]}
+        {:error, reason} -> %{batch | errors: [reason | batch.errors]}
+        other -> %{batch | errors: [other | batch.errors]}
+      end
+
+    assign(socket, :upload_batch, updated)
+  end
+
+  defp maybe_flash_success(socket, %{created: [], dedup: []}), do: socket
+
+  defp maybe_flash_success(socket, batch) do
+    put_flash(socket, :info, success_message(batch))
+  end
+
+  defp maybe_flash_errors_from_batch(socket, %{errors: []}), do: socket
+
+  defp maybe_flash_errors_from_batch(socket, %{errors: errors}) do
     msg = "#{length(errors)} file(s) failed to upload. See logs for details."
     put_flash(socket, :error, msg)
+  end
+
+  # Positive-feedback copy: says "N files uploaded" plainly when everything
+  # is a fresh write, and calls out dedups parenthetically when identical
+  # bytes already existed in the project (Stage 1 pinned dedup as a
+  # first-class success outcome). All-dedup batches get their own phrasing
+  # so users understand nothing new landed but nothing failed either.
+  defp success_message(%{created: created, dedup: dedup}) do
+    new_count = length(created)
+    dup_count = length(dedup)
+    total = new_count + dup_count
+
+    base =
+      case total do
+        1 -> "1 file uploaded"
+        n -> "#{n} files uploaded"
+      end
+
+    cond do
+      new_count == 0 and dup_count == 1 -> "1 file already ingested"
+      new_count == 0 and dup_count > 1 -> "#{dup_count} files already ingested"
+      dup_count > 0 -> "#{base} (#{dup_count} already ingested)"
+      true -> base
+    end
   end
 
   defp maybe_refresh_after_upload(socket, [], _project_id), do: socket
@@ -413,6 +488,8 @@ defmodule PlatformWeb.FilesLive do
     |> assign(:files, list_files(project_id))
     |> assign(:show_upload_sheet, false)
   end
+
+  defp empty_upload_batch, do: %{created: [], dedup: [], errors: []}
 
   # ── Internals ───────────────────────────────────────────────────────────
 

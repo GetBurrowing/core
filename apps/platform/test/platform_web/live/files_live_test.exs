@@ -374,6 +374,282 @@ defmodule PlatformWeb.FilesLiveTest do
     end
   end
 
+  describe "upload pipeline" do
+    # These cases lock in the fix for task 019f5e1f: the LV's upload
+    # progress callback used `consume_uploaded_entries/3` (plural),
+    # which raises whenever any entry in the batch is still in
+    # progress, and its `split_with` matched `{:ok, _}` instead of the
+    # actual `{:created, _}` / `{:dedup, _}` shapes the callback
+    # returns. Regression here would surface as Marlowe's original bug:
+    # a false "N file(s) failed to upload" toast on happy paths (Bug
+    # B), and — on bulk — a crash before any row lands (Bug A). The
+    # fix drains per-entry via `consume_uploaded_entry/3` (singular)
+    # and pattern-matches the inner tuple shape.
+
+    setup do
+      # Point the local-disk storage adapter at a writable temp root
+      # for the duration of the describe. The default runtime.exs
+      # value is `/data/platform/chat_uploads` (prod path) which is
+      # not writable in CI.
+      root =
+        Path.join(
+          System.tmp_dir!(),
+          "files-live-upload-test-#{System.unique_integer([:positive])}"
+        )
+
+      File.mkdir_p!(root)
+      previous = Application.get_env(:platform, :chat_attachments_root)
+      Application.put_env(:platform, :chat_attachments_root, root)
+
+      on_exit(fn ->
+        File.rm_rf!(root)
+
+        if previous do
+          Application.put_env(:platform, :chat_attachments_root, previous)
+        else
+          Application.delete_env(:platform, :chat_attachments_root)
+        end
+      end)
+
+      :ok
+    end
+
+    test "single-entry upload does not flash an error on success", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      project = seed_project("fabrikam", "Upload Happy Single")
+
+      {:ok, view, _html} = live(conn, ~p"/files/#{project.id}")
+
+      upload =
+        file_input(view, "#files-upload-form", :files, [
+          %{
+            name: "alpha.pdf",
+            content: "%PDF-alpha-body-#{System.unique_integer([:positive])}",
+            type: "application/pdf"
+          }
+        ])
+
+      # `auto_upload: true` triggers `handle_file_upload_progress` at
+      # `done? == true`; the progress callback drains + inserts the
+      # row inside the LV process (same sandbox as this test).
+      render_upload(upload, "alpha.pdf")
+
+      html = render(view)
+
+      refute html =~ "failed to upload"
+      refute html =~ ~s(id="flash-error")
+
+      [file] = Files.list_files_for_project(project.id)
+      assert file.original_filename == "alpha.pdf"
+      assert file.content_type == "application/pdf"
+    end
+
+    test "bulk-entry upload stores each entry's own filename + content_type", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      project = seed_project("fabrikam", "Upload Happy Bulk")
+
+      {:ok, view, _html} = live(conn, ~p"/files/#{project.id}")
+
+      unique = System.unique_integer([:positive])
+
+      # Distinct bytes so the content_hash unique index doesn't dedup
+      # them into a single row (which would mask the metadata bug).
+      # We sequence three uploads through the SAME view, each via its
+      # own `file_input` so LiveViewTest's per-upload client survives
+      # `consume_uploaded_entry/3`'s post-consume channel shutdown —
+      # `render_upload/2` for a second entry against a stopped
+      # channel exits with `no process`, so we spin up a fresh input
+      # per file. In real UI usage the browser opens three concurrent
+      # UploadChannels and each fires its own progress callback, so
+      # this preserves the per-entry drain semantics we care about.
+      entries = [
+        %{name: "alpha.pdf", content: "%PDF-alpha-#{unique}", type: "application/pdf"},
+        %{name: "bravo.pdf", content: "%PDF-bravo-#{unique}", type: "application/pdf"},
+        %{name: "charlie.pdf", content: "%PDF-charlie-#{unique}", type: "application/pdf"}
+      ]
+
+      Enum.each(entries, fn entry ->
+        upload = file_input(view, "#files-upload-form", :files, [entry])
+        render_upload(upload, entry.name)
+      end)
+
+      html = render(view)
+
+      refute html =~ "failed to upload"
+
+      files = Files.list_files_for_project(project.id)
+      assert length(files) == 3
+
+      names = files |> Enum.map(& &1.original_filename) |> Enum.sort()
+      assert names == ["alpha.pdf", "bravo.pdf", "charlie.pdf"]
+
+      # Each row carries its OWN client_type — regression check:
+      # closing over the outer trigger entry (or ignoring the inner
+      # entry arg on the plural drain) would tag every row with
+      # entry-1's mime, which the `content_type` filter in
+      # `Files.list_files_for_project/2` would silently drop.
+      assert Enum.all?(files, &(&1.content_type == "application/pdf"))
+
+      # Distinct bytes → distinct content_hashes → no dedup collapse.
+      hashes = files |> Enum.map(& &1.content_hash) |> Enum.uniq()
+      assert length(hashes) == 3
+    end
+
+    test "successful single upload puts an info flash", %{conn: conn} do
+      # Positive-feedback path added in Stage 3: after Stage 2's
+      # result-classification fix, we surface a `put_flash(:info, …)` so
+      # users see confirmation instead of silent success (the old code
+      # only ever surfaced errors). Rendered flash markup carries
+      # `role="alert"` from CoreComponents' `<.flash>`; the info variant
+      # is keyed with `id="flash-info"` in the shell layout.
+      conn = authenticated_conn(conn)
+      project = seed_project("fabrikam", "Upload Info Flash Single")
+
+      {:ok, view, _html} = live(conn, ~p"/files/#{project.id}")
+
+      upload =
+        file_input(view, "#files-upload-form", :files, [
+          %{
+            name: "hello.pdf",
+            content: "%PDF-hello-#{System.unique_integer([:positive])}",
+            type: "application/pdf"
+          }
+        ])
+
+      render_upload(upload, "hello.pdf")
+
+      html = render(view)
+
+      assert html =~ "1 file uploaded"
+      assert html =~ ~s(id="flash-info")
+      refute html =~ "failed to upload"
+      refute html =~ ~s(id="flash-error")
+    end
+
+    test "successful bulk upload puts a pluralized info flash", %{conn: conn} do
+      # Three fresh uploads should tally into a single "3 files uploaded"
+      # flash. We sequence via separate `file_input` calls (same reason as
+      # the bulk-metadata regression test above — `render_upload/2` for a
+      # second entry against a stopped channel exits with `no process`).
+      # In real UI, each concurrent UploadChannel fires its own progress
+      # callback; the batch counter accumulates the same way. `validate_upload`
+      # (which resets the batch) is NOT triggered by `file_input` in tests,
+      # so the running count survives across the three inputs.
+      conn = authenticated_conn(conn)
+      project = seed_project("fabrikam", "Upload Info Flash Bulk")
+
+      {:ok, view, _html} = live(conn, ~p"/files/#{project.id}")
+
+      unique = System.unique_integer([:positive])
+
+      entries = [
+        %{name: "alpha.pdf", content: "%PDF-alpha-flash-#{unique}", type: "application/pdf"},
+        %{name: "bravo.pdf", content: "%PDF-bravo-flash-#{unique}", type: "application/pdf"},
+        %{name: "charlie.pdf", content: "%PDF-charlie-flash-#{unique}", type: "application/pdf"}
+      ]
+
+      Enum.each(entries, fn entry ->
+        upload = file_input(view, "#files-upload-form", :files, [entry])
+        render_upload(upload, entry.name)
+      end)
+
+      html = render(view)
+
+      assert html =~ "3 files uploaded"
+      assert html =~ ~s(id="flash-info")
+      refute html =~ "failed to upload"
+    end
+
+    test "mixed created + dedup flashes a hybrid message", %{conn: conn} do
+      # Seed an already-ingested row with a specific hash, then upload
+      # two files: one with FRESH bytes (→ `{:created, _}`) and one with
+      # the SAME bytes as the seed (→ `{:dedup, _}` via
+      # `find_ingested_sibling/2`). The batch counter should report
+      # "2 files uploaded (1 already ingested)" — dedup called out
+      # parenthetically so users understand nothing new landed for that
+      # one, but nothing failed either.
+      conn = authenticated_conn(conn)
+      project = seed_project("fabrikam", "Upload Info Flash Mixed")
+
+      unique = System.unique_integer([:positive])
+      dup_body = "%PDF-dup-body-#{unique}"
+      new_body = "%PDF-fresh-body-#{unique}"
+
+      dup_hash =
+        :crypto.hash(:sha256, dup_body) |> Base.encode16(case: :lower)
+
+      _sibling =
+        seed_file(project, %{
+          name: "seeded-dup.pdf",
+          original_filename: "seeded-dup.pdf",
+          content_type: "application/pdf",
+          content_hash: dup_hash,
+          ingest_status: "ingested"
+        })
+
+      {:ok, view, _html} = live(conn, ~p"/files/#{project.id}")
+
+      dup_upload =
+        file_input(view, "#files-upload-form", :files, [
+          %{name: "dup.pdf", content: dup_body, type: "application/pdf"}
+        ])
+
+      render_upload(dup_upload, "dup.pdf")
+
+      new_upload =
+        file_input(view, "#files-upload-form", :files, [
+          %{name: "fresh.pdf", content: new_body, type: "application/pdf"}
+        ])
+
+      render_upload(new_upload, "fresh.pdf")
+
+      html = render(view)
+
+      assert html =~ "2 files uploaded (1 already ingested)"
+      assert html =~ ~s(id="flash-info")
+      refute html =~ "failed to upload"
+    end
+
+    test "storage-adapter error surfaces the error flash", %{conn: conn} do
+      # Swap the attachment_storage_adapter for a stub that fails
+      # persist/2. Files.Storage.put dispatches through the same
+      # adapter as the chat side; forcing an error there lets us
+      # verify the surviving error-flash path.
+      previous = Application.get_env(:platform, :attachment_storage_adapter)
+
+      Application.put_env(
+        :platform,
+        :attachment_storage_adapter,
+        PlatformWeb.FilesLiveTest.FailingAdapter
+      )
+
+      on_exit(fn ->
+        if previous do
+          Application.put_env(:platform, :attachment_storage_adapter, previous)
+        else
+          Application.delete_env(:platform, :attachment_storage_adapter)
+        end
+      end)
+
+      conn = authenticated_conn(conn)
+      project = seed_project("fabrikam", "Upload Error Path")
+
+      {:ok, view, _html} = live(conn, ~p"/files/#{project.id}")
+
+      upload =
+        file_input(view, "#files-upload-form", :files, [
+          %{name: "boom.pdf", content: "%PDF-boom", type: "application/pdf"}
+        ])
+
+      render_upload(upload, "boom.pdf")
+
+      html = render(view)
+
+      assert html =~ "1 file(s) failed to upload"
+      assert Files.list_files_for_project(project.id) == []
+    end
+  end
+
   describe "preview_mode/1" do
     test "classifies content types into render modes" do
       assert PlatformWeb.FilesLive.preview_mode(%Files.File{content_type: "image/png"}) == :image
@@ -443,4 +719,25 @@ defmodule PlatformWeb.FilesLiveTest do
         flunk("no row matched data-file-id=#{file_id}")
     end
   end
+end
+
+defmodule PlatformWeb.FilesLiveTest.FailingAdapter do
+  @moduledoc false
+  # Stub attachment-storage adapter used by the upload-error test.
+  # Fails `persist/2` so `Files.Storage.put` returns `{:error, _}` and
+  # the LV can prove the error-flash path still fires.
+
+  @behaviour Platform.Chat.AttachmentStorage.Adapter
+
+  @impl true
+  def persist(_key, _source), do: {:error, :storage_failed}
+
+  @impl true
+  def read_stream(_key), do: {:error, :enoent}
+
+  @impl true
+  def delete(_key), do: :ok
+
+  @impl true
+  def presign_upload(_key, _max_bytes, _ttl_s), do: {:error, :not_supported}
 end
