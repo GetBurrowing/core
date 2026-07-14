@@ -484,4 +484,35 @@ defmodule Platform.Audit.TelemetryHandlerTest do
       refute Map.has_key?(event.metadata, "actor_type")
     end
   end
+
+  describe "meeting scribe dispatch fallback bridging (task 019f5e0b)" do
+    test "assignee_unresolvable event persists with resource pointing at the agent" do
+      agent_id = Ecto.UUID.generate()
+
+      :telemetry.execute(
+        [:platform, :meetings, :scribe_dispatch, :assignee_unresolvable],
+        %{count: 1},
+        %{
+          agent_id: agent_id,
+          reason: :agent_not_found,
+          actor_type: "system",
+          resource_type: "agent",
+          resource_id: agent_id
+        }
+      )
+
+      [event] = Audit.list(event_type: "platform.meetings.scribe_dispatch.assignee_unresolvable")
+      assert event.resource_type == "agent"
+      assert event.resource_id == agent_id
+      assert event.actor_type == "system"
+      # Correlation IDs remain in the metadata blob.
+      assert event.metadata["agent_id"] == agent_id
+      # Atom reason is json-safed to a string by ensure_json_safe/1.
+      assert event.metadata["reason"] == "agent_not_found"
+      # Top-level fields are deduplicated out of metadata.
+      refute Map.has_key?(event.metadata, "resource_type")
+      refute Map.has_key?(event.metadata, "resource_id")
+      refute Map.has_key?(event.metadata, "actor_type")
+    end
+  end
 end

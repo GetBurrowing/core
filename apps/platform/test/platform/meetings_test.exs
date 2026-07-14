@@ -14,10 +14,14 @@ defmodule Platform.MeetingsTest do
   """
   use Platform.DataCase, async: true
 
+  alias Platform.Agents.Agent
   alias Platform.Chat
+  alias Platform.Federation
   alias Platform.Meetings
   alias Platform.Meetings.PubSub, as: MeetingsPubSub
   alias Platform.Meetings.Transcript
+  alias Platform.Repo
+  alias Platform.Roles
 
   describe "app_registered_room?/1" do
     test "returns true for the canonical space-<uuid> pattern" do
@@ -877,6 +881,153 @@ defmodule Platform.MeetingsTest do
       payload = Meetings.guest_join_event_payload(bundle, meeting)
       assert payload.space_slug == nil
       assert payload.url == nil
+    end
+  end
+
+  # ── complete_transcript/2 → scribe attention dispatch (task 019f5e0b stage 2) ─
+  #
+  # Progressive-enhancement hook: after `Repo.update` succeeds, opportunistically
+  # broadcast a `meeting_scribe_completion` attention signal to the runtime linked
+  # to whichever agent currently holds the `meeting_scribe` role. Every failure
+  # branch is swallowed via telemetry so the existing Summarizer path (which
+  # calls `complete_transcript/2` at the tail of `run_summary/1`) stays intact.
+  describe "complete_transcript/2 → scribe attention dispatch (task 019f5e0b stage 2)" do
+    @scribe_event [:platform, :meetings, :scribe_dispatch, :assignee_unresolvable]
+
+    defp create_agent!(attrs \\ %{}) do
+      defaults = %{
+        slug: "scribe-agent-#{System.unique_integer([:positive])}",
+        name: "Test Scribe Agent",
+        status: "active"
+      }
+
+      {:ok, agent} =
+        %Agent{}
+        |> Agent.changeset(Map.merge(defaults, attrs))
+        |> Repo.insert()
+
+      agent
+    end
+
+    defp create_user! do
+      Repo.insert!(%Platform.Accounts.User{
+        email: "scribe_hook_#{System.unique_integer([:positive])}@example.com",
+        name: "Scribe Hook Test User",
+        oidc_sub: "oidc-scribe-hook-#{System.unique_integer([:positive])}"
+      })
+    end
+
+    defp create_processing_transcript_with_space do
+      space_id = Ecto.UUID.generate()
+
+      {:ok, transcript} =
+        Meetings.create_transcript(%{
+          room_id: "space-#{space_id}",
+          space_id: space_id,
+          status: "processing"
+        })
+
+      transcript
+    end
+
+    defp attach_scribe_telemetry! do
+      handler_id = "meetings-test-scribe-#{System.unique_integer([:positive])}"
+      parent = self()
+
+      :telemetry.attach(
+        handler_id,
+        @scribe_event,
+        fn event, measurements, metadata, _ ->
+          send(parent, {:telemetry, event, measurements, metadata})
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+      :ok
+    end
+
+    test "happy path: broadcasts attention signal on runtime topic when scribe role + runtime are wired" do
+      user = create_user!()
+      agent = create_agent!()
+
+      runtime_id = "scribe-runtime-#{System.unique_integer([:positive])}"
+      {:ok, runtime} = Federation.register_runtime(user.id, %{runtime_id: runtime_id})
+      {:ok, _linked} = Federation.link_agent(runtime, agent)
+
+      :ok = Roles.unassign_role("meeting_scribe")
+      {:ok, _} = Roles.assign_role("meeting_scribe", agent.id)
+
+      PlatformWeb.Endpoint.subscribe("runtime:#{runtime_id}")
+
+      transcript = create_processing_transcript_with_space()
+      transcript_id = transcript.id
+      space_id = transcript.space_id
+      room_id = transcript.room_id
+
+      assert {:ok, %Transcript{status: "complete"}} =
+               Meetings.complete_transcript(transcript.id, "the summary text")
+
+      assert_receive %Phoenix.Socket.Broadcast{
+                       topic: broadcast_topic,
+                       event: "attention",
+                       payload: %{
+                         signal: %{
+                           reason: "meeting_scribe_completion",
+                           space_id: ^space_id,
+                           room_id: ^room_id,
+                           transcript_id: ^transcript_id
+                         }
+                       }
+                     },
+                     500
+
+      assert broadcast_topic == "runtime:#{runtime_id}"
+    end
+
+    test "no-scribe fallback: no broadcast, no telemetry, Summarizer path unchanged" do
+      attach_scribe_telemetry!()
+      :ok = Roles.unassign_role("meeting_scribe")
+
+      # Subscribe to any runtime topic just to prove we don't get spurious deliveries.
+      PlatformWeb.Endpoint.subscribe("runtime:no-scribe-#{System.unique_integer([:positive])}")
+
+      transcript = create_processing_transcript_with_space()
+
+      assert {:ok, %Transcript{status: "complete", summary: "no scribe present"}} =
+               Meetings.complete_transcript(transcript.id, "no scribe present")
+
+      # No broadcast landed (progressive-enhancement invariant).
+      refute_receive %Phoenix.Socket.Broadcast{event: "attention"}, 100
+      # No `assignee_unresolvable` telemetry either — the nil-role branch is a
+      # pure silent no-op, not a fallback surface.
+      refute_receive {:telemetry, @scribe_event, _, _}, 100
+    end
+
+    test "runtime-offline fallback: role assigned but no linked runtime → :runtime_unresolvable telemetry" do
+      attach_scribe_telemetry!()
+
+      agent = create_agent!()
+      :ok = Roles.unassign_role("meeting_scribe")
+      {:ok, _} = Roles.assign_role("meeting_scribe", agent.id)
+
+      transcript = create_processing_transcript_with_space()
+
+      # Existing complete_transcript contract still returns {:ok, transcript}.
+      assert {:ok, %Transcript{status: "complete"}} =
+               Meetings.complete_transcript(transcript.id, "runtime offline path")
+
+      agent_id = agent.id
+
+      assert_receive {:telemetry, @scribe_event, %{count: 1},
+                      %{
+                        agent_id: ^agent_id,
+                        reason: :runtime_unresolvable,
+                        actor_type: "system",
+                        resource_type: "agent",
+                        resource_id: ^agent_id
+                      }},
+                     500
     end
   end
 end

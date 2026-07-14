@@ -342,4 +342,109 @@ defmodule Platform.FederationTest do
       assert revoked.auth_token_hash == nil
     end
   end
+
+  describe "dispatch_scribe_attention/2" do
+    @scribe_event [:platform, :meetings, :scribe_dispatch, :assignee_unresolvable]
+
+    setup do
+      # Detach any historian telemetry handler so tests observing the fallback
+      # event do not race with the audit-trail writer.
+      handler_id = "test-scribe-dispatch-#{System.unique_integer([:positive])}"
+      test_pid = self()
+
+      :telemetry.attach(
+        handler_id,
+        @scribe_event,
+        fn event, measurements, metadata, _ ->
+          send(test_pid, {:telemetry, event, measurements, metadata})
+        end,
+        nil
+      )
+
+      on_exit(fn -> :telemetry.detach(handler_id) end)
+      :ok
+    end
+
+    test "broadcasts an attention signal to the linked runtime and returns :ok" do
+      user = create_user()
+      agent = create_agent()
+
+      runtime_id = "scribe-runtime-#{System.unique_integer([:positive])}"
+
+      {:ok, runtime} =
+        Federation.register_runtime(user.id, %{runtime_id: runtime_id})
+
+      {:ok, _linked_agent} = Federation.link_agent(runtime, agent)
+
+      PlatformWeb.Endpoint.subscribe("runtime:#{runtime_id}")
+
+      transcript_id = Ecto.UUID.generate()
+      space_id = Ecto.UUID.generate()
+
+      payload = %{
+        reason: "meeting_scribe_completion",
+        space_id: space_id,
+        room_id: "space-scribe",
+        transcript_id: transcript_id
+      }
+
+      assert :ok = Federation.dispatch_scribe_attention(agent.id, payload)
+
+      assert_receive %Phoenix.Socket.Broadcast{
+                       event: "attention",
+                       payload: %{
+                         signal: %{
+                           reason: "meeting_scribe_completion",
+                           space_id: ^space_id,
+                           room_id: "space-scribe",
+                           transcript_id: ^transcript_id
+                         }
+                       }
+                     },
+                     500
+
+      refute_received {:telemetry, @scribe_event, _, _}
+    end
+
+    test "emits :agent_not_found telemetry and returns :ok when the agent id is unknown" do
+      missing_id = Ecto.UUID.generate()
+
+      assert :ok =
+               Federation.dispatch_scribe_attention(missing_id, %{
+                 reason: "meeting_scribe_completion"
+               })
+
+      assert_receive {:telemetry, @scribe_event, %{count: 1},
+                      %{
+                        agent_id: ^missing_id,
+                        reason: :agent_not_found,
+                        actor_type: "system",
+                        resource_type: "agent",
+                        resource_id: ^missing_id
+                      }},
+                     500
+    end
+
+    test "emits :runtime_unresolvable telemetry when the agent has no linked runtime" do
+      agent = create_agent()
+
+      assert :ok =
+               Federation.dispatch_scribe_attention(agent.id, %{
+                 reason: "meeting_scribe_completion"
+               })
+
+      assert_receive {:telemetry, @scribe_event, %{count: 1},
+                      %{
+                        agent_id: agent_id,
+                        reason: :runtime_unresolvable,
+                        actor_type: "system",
+                        resource_type: "agent",
+                        resource_id: resource_id
+                      }},
+                     500
+
+      assert agent_id == agent.id
+      assert resource_id == agent.id
+    end
+  end
 end

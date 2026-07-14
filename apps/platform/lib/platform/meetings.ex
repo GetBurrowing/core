@@ -1756,6 +1756,15 @@ defmodule Platform.Meetings do
 
   @doc """
   Mark a transcript as complete with the generated summary text.
+
+  On successful update, opportunistically dispatches a `meeting_scribe_completion`
+  attention signal to whichever agent currently holds the `meeting_scribe` role
+  (via `Platform.Federation.dispatch_scribe_attention/2`). Progressive-enhancement
+  contract: the dispatch is best-effort — a nil role assignment is a silent
+  no-op, and every failure path inside the Federation call is swallowed there
+  via telemetry (`[:platform, :meetings, :scribe_dispatch, :assignee_unresolvable]`),
+  so this function's `{:ok, transcript} | {:error, term()}` contract to the
+  Summarizer stays unchanged.
   """
   @spec complete_transcript(String.t(), String.t()) ::
           {:ok, Transcript.t()} | {:error, term()}
@@ -1765,13 +1774,43 @@ defmodule Platform.Meetings do
         {:error, :not_found}
 
       transcript ->
-        transcript
-        |> Transcript.changeset(%{
-          status: "complete",
-          summary: summary,
-          completed_at: DateTime.utc_now()
+        result =
+          transcript
+          |> Transcript.changeset(%{
+            status: "complete",
+            summary: summary,
+            completed_at: DateTime.utc_now()
+          })
+          |> Repo.update()
+
+        case result do
+          {:ok, updated} ->
+            maybe_dispatch_scribe_attention(updated)
+            {:ok, updated}
+
+          error ->
+            error
+        end
+    end
+  end
+
+  # Opportunistic dispatch to the `meeting_scribe` role-assigned agent's linked
+  # runtime. Contract is best-effort: no role assignment = silent no-op; all
+  # dispatch failures are swallowed inside `Federation.dispatch_scribe_attention/2`
+  # via telemetry so `complete_transcript/2`'s callers (Summarizer, backfills,
+  # tests) never see a spurious error.
+  defp maybe_dispatch_scribe_attention(%Transcript{} = transcript) do
+    case Platform.Roles.agent_id_for_role("meeting_scribe") do
+      nil ->
+        :ok
+
+      agent_id when is_binary(agent_id) ->
+        Platform.Federation.dispatch_scribe_attention(agent_id, %{
+          space_id: transcript.space_id,
+          room_id: transcript.room_id,
+          transcript_id: transcript.id,
+          reason: "meeting_scribe_completion"
         })
-        |> Repo.update()
     end
   end
 

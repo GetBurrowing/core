@@ -67,7 +67,14 @@ defmodule Platform.Audit.TelemetryHandler do
     # Emitted by Platform.Orchestration.TaskRouter.resolve_stage_dispatch_assignee/3
     # when a stage's responsibility can't be resolved to a live runtime.
     # Metadata carries stage_id, task_id, responsibility, fallback_runtime_id, reason.
-    [:platform, :plans, :stage_dispatch, :assignee_unresolvable]
+    [:platform, :plans, :stage_dispatch, :assignee_unresolvable],
+    # Task 019f5e0b — meeting-scribe dispatch fallback. Emitted by
+    # Platform.Federation.dispatch_scribe_attention/2 (via
+    # emit_scribe_dispatch_fallback/3) when the scribe agent can't be
+    # resolved to a live runtime or the broadcast fails. Metadata carries
+    # agent_id, reason (:agent_not_found | :runtime_unresolvable |
+    # :broadcast_failed | :endpoint_not_ready), and optional broadcast_error.
+    [:platform, :meetings, :scribe_dispatch, :assignee_unresolvable]
   ]
 
   @doc "Attach the handler to all registered platform telemetry events."
