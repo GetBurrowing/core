@@ -266,8 +266,20 @@ defmodule PlatformWeb.ChatLive.Partials do
     ~H"""
     <div
       :if={@canvas}
+      id="canvas-sidebar"
+      phx-hook="CanvasSidebarResize"
       class="hidden lg:flex w-96 flex-shrink-0 flex-col border-l border-base-300 bg-base-100 relative"
     >
+      <div
+        class="absolute left-0 inset-y-0 w-1 cursor-col-resize hover:bg-primary/40 active:bg-primary/60 transition-colors z-10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary focus-visible:outline-offset-2"
+        data-drag-handle
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize canvas sidebar"
+        aria-valuemin="360"
+        aria-valuenow="384"
+        tabindex="0"
+      />
       <div class="flex h-12 flex-shrink-0 items-center justify-between border-b border-base-300 px-4">
         <div class="min-w-0 flex items-center gap-2">
           <div class="min-w-0">
