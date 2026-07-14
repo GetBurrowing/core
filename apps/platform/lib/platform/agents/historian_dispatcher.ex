@@ -41,6 +41,7 @@ defmodule Platform.Agents.HistorianDispatcher do
   alias Platform.Orchestration.PromptTemplates
   alias Platform.Repo
   alias Platform.Roles
+  alias Platform.Tasks.Projects
 
   @daily_window_hours 24
 
@@ -105,6 +106,15 @@ defmodule Platform.Agents.HistorianDispatcher do
   @body_headroom_tokens 10_000
 
   @system_participant_sentinel "00000000-0000-0000-0000-000000000001"
+
+  # Task 019f5e7d stage 5 — no-op pass event. Fires whenever a windowed
+  # dispatch resolves to zero work (no historian agent pinned OR slicer
+  # returned zero windows). This is the deterministic audit signal
+  # replacing the pre-fix template-driven "backlog drained" journal
+  # write. Registered under the `[:platform, :agents, :historian | _]`
+  # namespace in `Platform.Audit.TelemetryHandler.@events` — see stage 5
+  # rationale there for why the 4-element path over 3.
+  @no_op_pass_event [:platform, :agents, :historian, :no_op_pass]
 
   @doc """
   Dispatch the historian event end-to-end.
@@ -178,6 +188,8 @@ defmodule Platform.Agents.HistorianDispatcher do
           | {:error, term()}
   def dispatch_windowed(event_type, template_slug, extra_metadata, workspace_id)
       when is_binary(event_type) and is_binary(template_slug) and is_map(extra_metadata) do
+    t0 = System.monotonic_time(:millisecond)
+
     case agent_for_event(event_type) do
       %Agent{} = agent ->
         Logger.info(
@@ -185,11 +197,19 @@ defmodule Platform.Agents.HistorianDispatcher do
             "workspace=#{inspect(workspace_id)}"
         )
 
-        do_dispatch_windowed(agent, event_type, template_slug, extra_metadata, workspace_id)
+        do_dispatch_windowed(agent, event_type, template_slug, extra_metadata, workspace_id, t0)
 
       nil ->
         Logger.info(
           "[HistorianDispatcher] no active agent flagged for windowed #{event_type}, skipping"
+        )
+
+        emit_no_op_pass(
+          workspace_id,
+          event_type,
+          template_slug,
+          System.monotonic_time(:millisecond) - t0,
+          %{reason: "no_agent"}
         )
 
         {:ok, %{dispatched: 0, remaining: 0}}
@@ -516,7 +536,8 @@ defmodule Platform.Agents.HistorianDispatcher do
          event_type,
          template_slug,
          extra_metadata,
-         workspace_id
+         workspace_id,
+         t0
        ) do
     with :ok <- ensure_runtime_reachable(agent, event_type),
          {:ok, space} <- ensure_system_space(agent),
@@ -529,7 +550,6 @@ defmodule Platform.Agents.HistorianDispatcher do
       total_taken = length(taken)
       total_windows = length(all_windows)
       budget = window_budget_tokens()
-      t0 = System.monotonic_time(:millisecond)
 
       # Pass-scoped telemetry — bracketed by :pass_completed / :error below.
       # Stage 2's audit bridge (task 019f5bc4) uses these to record a
@@ -571,6 +591,20 @@ defmodule Platform.Agents.HistorianDispatcher do
       |> case do
         {:ok, dispatched} ->
           elapsed_ms = System.monotonic_time(:millisecond) - t0
+
+          # A dispatched-zero pass with zero windows to slice is the
+          # deterministic "backlog drained" signal — emit no_op_pass so
+          # the audit trail records a suppressed pass alongside the
+          # ordinary pass_completed envelope.
+          if total_windows == 0 do
+            emit_no_op_pass(
+              workspace_id,
+              event_type,
+              template_slug,
+              elapsed_ms,
+              %{agent_id: agent.id, reason: "no_windows"}
+            )
+          end
 
           emit_telemetry(
             :pass_completed,
@@ -975,5 +1009,33 @@ defmodule Platform.Agents.HistorianDispatcher do
       measurements,
       metadata
     )
+  end
+
+  # Emit the `[:platform, :agents, :historian, :no_op_pass]` event with a
+  # scope-compliant envelope so `Platform.Audit.TelemetryHandler` persists
+  # an audit row. `nil` workspace_id (the org-scope case) is coerced to
+  # the org-scope sentinel so `scope_check/2` in the audit handler passes
+  # — dropping a legitimately-scoped no-op pass would defeat the whole
+  # observability point of this event.
+  @spec emit_no_op_pass(binary() | nil, String.t(), String.t(), non_neg_integer(), map()) :: :ok
+  defp emit_no_op_pass(workspace_id, event_type, template_slug, elapsed_ms, extra_metadata)
+       when is_binary(event_type) and is_binary(template_slug) and is_integer(elapsed_ms) and
+              is_map(extra_metadata) do
+    ws = workspace_id || Projects.org_scope_workspace_id()
+
+    metadata =
+      Map.merge(
+        %{
+          workspace_id: ws,
+          resource_type: "workspace",
+          resource_id: ws,
+          action: "no_op_pass",
+          trigger: template_slug,
+          event_type: event_type
+        },
+        extra_metadata
+      )
+
+    :telemetry.execute(@no_op_pass_event, %{elapsed_ms: elapsed_ms}, metadata)
   end
 end

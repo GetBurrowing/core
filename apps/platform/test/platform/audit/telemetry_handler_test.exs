@@ -385,6 +385,138 @@ defmodule Platform.Audit.TelemetryHandlerTest do
     end
   end
 
+  describe "agents.historian namespace bridging (task 019f5e7d stage 5)" do
+    # Two new events under the `[:platform, :agents, :historian | _]`
+    # namespace — emitted by Higgins's runtime (no_op_pass) and
+    # MeetingHistorianHandler (dispatch_debounced). Same async persist
+    # path as the sibling 3-element historian events. These tests emit
+    # `:telemetry.execute` directly and assert the audit_events row lands
+    # via the child spawn under Platform.TaskSupervisor.
+
+    test "handler is attached to both agents.historian events" do
+      events = TelemetryHandler.events()
+
+      agents_historian_events =
+        Enum.filter(events, fn
+          [:platform, :agents, :historian | _] -> true
+          _ -> false
+        end)
+
+      assert length(agents_historian_events) == 2
+      assert [:platform, :agents, :historian, :no_op_pass] in agents_historian_events
+      assert [:platform, :agents, :historian, :dispatch_debounced] in agents_historian_events
+    end
+
+    test "no_op_pass with workspace_id spawns a Task.Supervisor child" do
+      workspace_id = Ecto.UUID.generate()
+
+      before_children = children_pids()
+
+      :telemetry.execute(
+        [:platform, :agents, :historian, :no_op_pass],
+        %{elapsed_ms: 12},
+        %{
+          workspace_id: workspace_id,
+          trigger: "historian.threshold",
+          resource_type: "workspace",
+          resource_id: workspace_id,
+          action: "no_op_pass",
+          actor_type: "system"
+        }
+      )
+
+      wait_for_new_child(before_children, 500)
+    end
+
+    test "dispatch_debounced with workspace_id spawns a Task.Supervisor child" do
+      workspace_id = Ecto.UUID.generate()
+
+      before_children = children_pids()
+
+      :telemetry.execute(
+        [:platform, :agents, :historian, :dispatch_debounced],
+        %{elapsed_ms: 240, debounce_ms: 900_000},
+        %{
+          workspace_id: workspace_id,
+          trigger: "meeting_ended",
+          meeting_id: Ecto.UUID.generate(),
+          project_id: Ecto.UUID.generate(),
+          resource_type: "workspace",
+          resource_id: workspace_id,
+          action: "dispatch_debounced",
+          actor_type: "system"
+        }
+      )
+
+      wait_for_new_child(before_children, 500)
+    end
+
+    test "agents.historian event without workspace_id or org_id is dropped with a warning log" do
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          :telemetry.execute(
+            [:platform, :agents, :historian, :dispatch_debounced],
+            %{elapsed_ms: 42},
+            %{
+              # Deliberately no workspace_id / org_id — mirrors stage 4's
+              # current emit shape from MeetingHistorianHandler which only
+              # populates meeting_id + project_id. scope_check should drop
+              # it exactly like the 3-element sibling would.
+              meeting_id: Ecto.UUID.generate(),
+              project_id: Ecto.UUID.generate(),
+              action: "dispatch_debounced",
+              actor_type: "system"
+            }
+          )
+
+          Process.sleep(100)
+        end)
+
+      assert log =~ "missing workspace_id and org_id"
+      assert Audit.list(event_type: "platform.agents.historian.dispatch_debounced") == []
+    end
+
+    test "handle_event returns fast for agents.historian events (async dispatch)" do
+      workspace_id = Ecto.UUID.generate()
+
+      measurements = %{elapsed_ms: 12}
+
+      metadata = %{
+        workspace_id: workspace_id,
+        trigger: "historian.threshold",
+        resource_type: "workspace",
+        resource_id: workspace_id,
+        action: "no_op_pass",
+        actor_type: "system"
+      }
+
+      # Prime the JIT with a few no-op emits before measuring.
+      for _ <- 1..10 do
+        :telemetry.execute([:platform, :agents, :historian, :no_op_pass], measurements, metadata)
+      end
+
+      samples =
+        for _ <- 1..100 do
+          t0 = System.monotonic_time(:microsecond)
+
+          :telemetry.execute(
+            [:platform, :agents, :historian, :no_op_pass],
+            measurements,
+            metadata
+          )
+
+          System.monotonic_time(:microsecond) - t0
+        end
+
+      sorted = Enum.sort(samples)
+      # p99 across 100 samples (index 99).
+      p99 = Enum.at(sorted, 99)
+
+      assert p99 < 5_000,
+             "agents.historian emit p99=#{p99}µs exceeded 5000µs budget — handler may have regressed to sync dispatch"
+    end
+  end
+
   describe "auto-approve plan bridging (task 019f25f2 corrective)" do
     test "auto_approved event persists with resource pointing at the plan" do
       task_id = Ecto.UUID.generate()

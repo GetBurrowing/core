@@ -147,10 +147,12 @@ defmodule Platform.Agents.HistorianDispatcherTest do
         })
       end)
 
-      # Precondition: no cursor row for {org_workspace, "messages"} yet.
+      # Precondition: no cursor row for org-scope "messages" yet.
+      # Task 019f5e7d: advance_cursor coerces the sentinel to nil, so the
+      # canonical row shape lives at `workspace_id IS NULL`.
       refute Repo.one(
                from(c in HistorianCursor,
-                 where: c.workspace_id == ^@org_workspace and c.corpus == "messages"
+                 where: is_nil(c.workspace_id) and c.corpus == "messages"
                )
              )
 
@@ -169,7 +171,7 @@ defmodule Platform.Agents.HistorianDispatcherTest do
       cursor =
         Repo.one!(
           from(c in HistorianCursor,
-            where: c.workspace_id == ^@org_workspace and c.corpus == "messages"
+            where: is_nil(c.workspace_id) and c.corpus == "messages"
           )
         )
 
@@ -563,9 +565,11 @@ defmodule Platform.Agents.HistorianDispatcherTest do
         end)
 
       # Nil cursor precondition: no transcripts cursor row yet.
+      # Task 019f5e7d: advance_cursor coerces sentinel → nil, so the org-scope
+      # cursor lives at `workspace_id IS NULL`.
       refute Repo.one(
                from(c in HistorianCursor,
-                 where: c.workspace_id == ^@org_workspace and c.corpus == "transcripts"
+                 where: is_nil(c.workspace_id) and c.corpus == "transcripts"
                )
              )
 
@@ -584,7 +588,7 @@ defmodule Platform.Agents.HistorianDispatcherTest do
       cursor_after_1 =
         Repo.one!(
           from(c in HistorianCursor,
-            where: c.workspace_id == ^@org_workspace and c.corpus == "transcripts"
+            where: is_nil(c.workspace_id) and c.corpus == "transcripts"
           )
         )
 
@@ -680,11 +684,13 @@ defmodule Platform.Agents.HistorianDispatcherTest do
       insert_journal_at!(nil, String.duplicate("j", 100_000), day2)
       insert_journal_at!(nil, String.duplicate("j", 100_000), day3)
 
-      # Precondition: no cursor rows for pages/journal at the sentinel yet.
+      # Precondition: no cursor rows for pages/journal at org-scope yet.
+      # Task 019f5e7d: advance_cursor coerces sentinel → nil, so the org-scope
+      # cursor lives at `workspace_id IS NULL`.
       for corpus <- ~w(pages journal) do
         refute Repo.one(
                  from(c in HistorianCursor,
-                   where: c.workspace_id == ^@org_workspace and c.corpus == ^corpus
+                   where: is_nil(c.workspace_id) and c.corpus == ^corpus
                  )
                )
       end
@@ -706,17 +712,17 @@ defmodule Platform.Agents.HistorianDispatcherTest do
       assert dispatched >= 6,
              "expected >= 6 windows (3 days × pages + journal), got #{dispatched}"
 
-      # Cursor rows for pages+journal at the sentinel workspace now exist
-      # with last_processed_at populated and past the newest seeded day.
-      # `advance_cursor` stamps `window.window_end`, which is the end of
-      # the calendar day (start-of-next-day at UTC midnight).
+      # Cursor rows for pages+journal at the org-scope workspace now exist
+      # (workspace_id IS NULL post-019f5e7d) with last_processed_at populated
+      # past the newest seeded day. `advance_cursor` stamps `window.window_end`,
+      # which is the end of the calendar day (start-of-next-day at UTC midnight).
       newest_day_end = DateTime.new!(Date.add(day3, 1), ~T[00:00:00], "Etc/UTC")
 
       for corpus <- ~w(pages journal) do
         cursor =
           Repo.one!(
             from(c in HistorianCursor,
-              where: c.workspace_id == ^@org_workspace and c.corpus == ^corpus
+              where: is_nil(c.workspace_id) and c.corpus == ^corpus
             )
           )
 

@@ -252,6 +252,127 @@ defmodule Platform.Agents.HistorianDispatcherTelemetryTest do
     end
   end
 
+  # ── no_op_pass event (task 019f5e7d stage 5) ────────────────────────────
+  #
+  # Reviewer diagnosis: stage 5 wired the audit handler side but left the
+  # emit sites in HistorianDispatcher unimplemented. These tests lock the
+  # contract: dispatch_windowed/4 emits `[:platform, :agents, :historian,
+  # :no_op_pass]` exactly once for BOTH deterministic no-op branches (no
+  # agent pinned, or slicer returned zero windows) with a scope-compliant
+  # metadata envelope so Platform.Audit.TelemetryHandler persists it.
+
+  describe "dispatch_windowed/4 — no_op_pass emission" do
+    test "no-agent branch emits no_op_pass with workspace_id + reason=no_agent", %{agent: agent} do
+      # Force the no-agent path — unpin the historian role so
+      # agent_for_event/1 returns nil regardless of the seeded agent.
+      :ok = Roles.unassign_role("historian")
+
+      handler_id = attach_no_op_handler!()
+
+      assert {:ok, %{dispatched: 0, remaining: 0}} =
+               HistorianDispatcher.dispatch_windowed(
+                 "historian",
+                 "historian.threshold",
+                 %{trigger: "no-agent-test"},
+                 @org_workspace
+               )
+
+      events = drain_no_op_events()
+
+      assert length(events) == 1,
+             "expected exactly 1 no_op_pass event, got #{length(events)}: #{inspect(events)}"
+
+      [{measurements, metadata}] = events
+
+      assert is_integer(measurements.elapsed_ms)
+      assert measurements.elapsed_ms >= 0
+      assert metadata.workspace_id == @org_workspace
+      assert metadata.resource_type == "workspace"
+      assert metadata.resource_id == @org_workspace
+      assert metadata.action == "no_op_pass"
+      assert metadata.trigger == "historian.threshold"
+      assert metadata.event_type == "historian"
+      assert metadata.reason == "no_agent"
+
+      # `agent` (from setup) is kept in scope so we know the agent row
+      # existed but wasn't pinned — the no-agent path is a role-lookup
+      # miss, not a "no agent row exists" miss.
+      refute is_nil(agent.id)
+
+      :telemetry.detach(handler_id)
+    end
+
+    test "zero-windows branch emits no_op_pass with reason=no_windows", %{agent: agent} do
+      # Agent is pinned (setup) but every corpus cursor has been advanced
+      # to `now`, so `slice_windows/1` returns []. The reduce_while runs
+      # zero times and the completion branch must emit no_op_pass.
+      # (The fresh sandbox carries a small seeded page baseline; without
+      # the cursor seed here that baseline would produce one window and
+      # this test would exercise the ordinary happy-path instead.)
+      now = DateTime.utc_now()
+
+      Enum.each(Historian.corpora(), fn corpus ->
+        {:ok, _} = Historian.advance_cursor(@org_workspace, corpus, nil, now)
+      end)
+
+      handler_id = attach_no_op_handler!()
+
+      assert {:ok, %{dispatched: 0, remaining: 0}} =
+               HistorianDispatcher.dispatch_windowed(
+                 "historian",
+                 "historian.threshold",
+                 %{trigger: "empty-workspace-test"},
+                 @org_workspace
+               )
+
+      events = drain_no_op_events()
+
+      assert length(events) == 1,
+             "expected exactly 1 no_op_pass event, got #{length(events)}: #{inspect(events)}"
+
+      [{measurements, metadata}] = events
+
+      assert is_integer(measurements.elapsed_ms)
+      assert measurements.elapsed_ms >= 0
+      assert metadata.workspace_id == @org_workspace
+      assert metadata.resource_type == "workspace"
+      assert metadata.resource_id == @org_workspace
+      assert metadata.action == "no_op_pass"
+      assert metadata.trigger == "historian.threshold"
+      assert metadata.event_type == "historian"
+      assert metadata.reason == "no_windows"
+      assert metadata.agent_id == agent.id
+
+      :telemetry.detach(handler_id)
+    end
+
+    test "nil workspace_id is coerced to the org-scope sentinel so audit persists", %{
+      agent: _agent
+    } do
+      # Passing nil for the workspace_id argument must not drop the
+      # audit row — scope_check/2 requires a binary workspace_id or
+      # org_id. The emitter substitutes the org-scope sentinel.
+      :ok = Roles.unassign_role("historian")
+
+      handler_id = attach_no_op_handler!()
+
+      assert {:ok, %{dispatched: 0, remaining: 0}} =
+               HistorianDispatcher.dispatch_windowed(
+                 "historian",
+                 "historian.threshold",
+                 %{trigger: "nil-workspace-test"},
+                 nil
+               )
+
+      [{_measurements, metadata}] = drain_no_op_events()
+
+      assert metadata.workspace_id == Projects.org_scope_workspace_id()
+      assert metadata.resource_id == Projects.org_scope_workspace_id()
+
+      :telemetry.detach(handler_id)
+    end
+  end
+
   # ── Attach helper ───────────────────────────────────────────────────────
 
   defp attach_handler! do
@@ -280,6 +401,36 @@ defmodule Platform.Agents.HistorianDispatcherTelemetryTest do
     receive do
       {:hist_evt, name, measurements, metadata} ->
         drain_events([{name, measurements, metadata} | acc])
+    after
+      100 -> Enum.reverse(acc)
+    end
+  end
+
+  # Task 019f5e7d stage 5 — dedicated attach for the 4-element
+  # `[:platform, :agents, :historian, :no_op_pass]` event path.
+  defp attach_no_op_handler! do
+    test_pid = self()
+    handler_id = "historian-no-op-#{System.unique_integer([:positive])}"
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:platform, :agents, :historian, :no_op_pass],
+        fn _event, measurements, metadata, _config ->
+          send(test_pid, {:hist_no_op_evt, measurements, metadata})
+        end,
+        nil
+      )
+
+    on_exit(fn -> :telemetry.detach(handler_id) end)
+
+    handler_id
+  end
+
+  defp drain_no_op_events(acc \\ []) do
+    receive do
+      {:hist_no_op_evt, measurements, metadata} ->
+        drain_no_op_events([{measurements, metadata} | acc])
     after
       100 -> Enum.reverse(acc)
     end

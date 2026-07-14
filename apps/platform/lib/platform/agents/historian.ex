@@ -145,9 +145,14 @@ defmodule Platform.Agents.Historian do
   `workspace_id`, or `nil` if no cursor has ever been stamped.
 
   V1 fan-out passes `nil` for org-scope; the `is_nil/1` guard keeps Ecto from
-  rejecting the `column == nil` literal comparison.
+  rejecting the `column == nil` literal comparison. The org-scope sentinel
+  from `Tasks.Projects.list_active_workspaces/0` coerces to `nil` at the
+  boundary (mirrors `sum_corpus_bytes/3`) so the debounce read finds the
+  same nil-workspace cursor rows the write path stamps.
   """
   @spec last_run_at(binary() | nil) :: DateTime.t() | nil
+  def last_run_at(@org_scope_workspace_id), do: last_run_at(nil)
+
   def last_run_at(nil) do
     from(c in HistorianCursor,
       where: is_nil(c.workspace_id),
@@ -171,9 +176,17 @@ defmodule Platform.Agents.Historian do
   on each call without raising a UNIQUE violation. Wrapped in a
   transaction so partial writes can't strand the workspace.
 
+  The org-scope sentinel coerces to `nil` so the persisted rows land on
+  the canonical `workspace_id IS NULL` shape that `last_run_at/1` reads
+  under the same coercion (mirrors `sum_corpus_bytes/3`). Migration
+  `20260714000000_relax_org_historian_cursors_null_workspace` relaxes
+  the cursor table's NOT NULL constraint so this write is legal.
+
   Returns `:ok`.
   """
-  @spec mark_run_started(binary()) :: :ok
+  @spec mark_run_started(binary() | nil) :: :ok
+  def mark_run_started(@org_scope_workspace_id), do: mark_run_started(nil)
+
   def mark_run_started(workspace_id) do
     now = DateTime.utc_now()
 
@@ -191,10 +204,19 @@ defmodule Platform.Agents.Historian do
   `(workspace_id, corpus)` cursor is absent; updates `last_processed_id`
   and `last_processed_at` if present. Other corpora's rows are untouched.
 
+  The org-scope sentinel coerces to `nil` so the persisted cursor lands
+  on the canonical `workspace_id IS NULL` row that `cursor_last_processed_at/2`
+  reads under the same coercion. Without this, sweep-time advance and next-tick
+  read would live on separate rows and the slicer would re-dispatch the same
+  windows forever.
+
   Returns `{:ok, %HistorianCursor{}}` or `{:error, changeset}`.
   """
-  @spec advance_cursor(binary(), String.t(), String.t() | nil, DateTime.t() | nil) ::
+  @spec advance_cursor(binary() | nil, String.t(), String.t() | nil, DateTime.t() | nil) ::
           {:ok, HistorianCursor.t()} | {:error, Ecto.Changeset.t()}
+  def advance_cursor(@org_scope_workspace_id, corpus, last_id, last_at),
+    do: advance_cursor(nil, corpus, last_id, last_at)
+
   def advance_cursor(workspace_id, corpus, last_id, last_at) do
     attrs = %{
       workspace_id: workspace_id,
@@ -220,6 +242,12 @@ defmodule Platform.Agents.Historian do
   end
 
   @spec cursor_last_processed_at(binary() | nil, String.t()) :: DateTime.t() | nil
+  # Org-scope sentinel → coerce to nil so the cursor read hits the same
+  # `workspace_id IS NULL` shape the coerced write path stamps. Mirrors
+  # `sum_corpus_bytes/3` at L244.
+  defp cursor_last_processed_at(@org_scope_workspace_id, corpus),
+    do: cursor_last_processed_at(nil, corpus)
+
   defp cursor_last_processed_at(nil, corpus) do
     from(c in HistorianCursor,
       where: is_nil(c.workspace_id) and c.corpus == ^corpus,
@@ -462,6 +490,14 @@ defmodule Platform.Agents.Historian do
   defp to_non_neg(n) when is_integer(n) and n >= 0, do: n
   defp to_non_neg(n) when is_integer(n), do: 0
   defp to_non_neg(%Decimal{} = d), do: d |> Decimal.to_integer() |> max(0)
+
+  # Defensive belt-and-suspenders sentinel coerce: `mark_run_started/1`
+  # already normalises the entry point, but future callers that reach this
+  # private helper directly (or a refactor that reintroduces the sentinel)
+  # would otherwise write a `workspace_id = sentinel` row that the coerced
+  # reads no longer see.
+  defp upsert_run_marker(@org_scope_workspace_id, corpus, now),
+    do: upsert_run_marker(nil, corpus, now)
 
   defp upsert_run_marker(workspace_id, corpus, now) do
     attrs = %{

@@ -501,6 +501,177 @@ defmodule Platform.Agents.HistorianTest do
     end
   end
 
+  # ── Org-scope sentinel coercion — cursor read/write functions ───────────
+  #
+  # PR #537 (task 019f5cf4) added sentinel-to-nil coercion for
+  # `sum_corpus_bytes/3` + `per_day_bytes_query/4` on the corpus tables.
+  # Task 019f5e7d stage 1 extends the same pattern to the cursor read/write
+  # functions so the sentinel resolves to `workspace_id IS NULL` rows on
+  # both sides of the read/write cycle (debounce reads the same rows
+  # `mark_run_started/1` stamps).
+  #
+  # Migration `20260714000000_relax_org_historian_cursors_null_workspace`
+  # relaxes the cursor table's NOT NULL + PK on `workspace_id` so nil-workspace
+  # cursor rows are legal to persist.
+
+  describe "org-scope sentinel coercion — read side" do
+    test "last_run_at(sentinel) returns the nil-workspace cursor's last_run_at" do
+      nil_at = ~U[2001-01-01 12:00:00.000000Z]
+      sentinel_at = ~U[2020-01-01 12:00:00.000000Z]
+
+      # Canonical on-disk shape: workspace_id IS NULL for org-scope.
+      Repo.insert!(%HistorianCursor{
+        workspace_id: nil,
+        corpus: "journal",
+        last_run_at: nil_at
+      })
+
+      # Legacy accidental shape: sentinel string in workspace_id (pre-fix
+      # write path stamped this). Coerced reads must NOT return this row.
+      Repo.insert!(%HistorianCursor{
+        workspace_id: @org_scope_workspace_id,
+        corpus: "journal",
+        last_run_at: sentinel_at
+      })
+
+      result = Historian.last_run_at(@org_scope_workspace_id)
+      assert %DateTime{} = result
+      assert DateTime.compare(result, nil_at) == :eq
+    end
+
+    test "pending_windows_input(sentinel).journal uses the nil-workspace cursor timestamp" do
+      # Nil-workspace cursor is older than every journal row we insert, so
+      # sum_corpus_bytes will count every seeded row. If cursor_last_processed_at
+      # were routed to the SENTINEL row (with a much newer timestamp), the sum
+      # would come back 0 and the assertion would fail.
+      old_at = ~U[2001-01-01 12:00:00.000000Z]
+      new_sentinel_at = ~U[2099-01-01 12:00:00.000000Z]
+
+      Repo.insert!(%HistorianCursor{
+        workspace_id: nil,
+        corpus: "journal",
+        last_processed_at: old_at,
+        last_run_at: old_at
+      })
+
+      Repo.insert!(%HistorianCursor{
+        workspace_id: @org_scope_workspace_id,
+        corpus: "journal",
+        last_processed_at: new_sentinel_at,
+        last_run_at: new_sentinel_at
+      })
+
+      # Seed a nil-workspace journal row AFTER old_at but well before
+      # new_sentinel_at → visible under nil-cursor, invisible under
+      # sentinel-cursor.
+      insert_journal_at!(nil, String.duplicate("j", 80), ~D[2050-05-01])
+
+      %{journal: {last_at, bytes}} =
+        Historian.pending_windows_input(@org_scope_workspace_id)
+
+      assert %DateTime{} = last_at
+      assert DateTime.compare(last_at, old_at) == :eq
+
+      assert bytes == 80,
+             "expected 80 bytes visible past the nil-workspace cursor, got #{bytes}"
+    end
+  end
+
+  describe "org-scope sentinel coercion — write side (mark_run_started)" do
+    test "mark_run_started(sentinel) writes cursor rows with workspace_id IS NULL" do
+      :ok = Historian.mark_run_started(@org_scope_workspace_id)
+
+      nil_rows =
+        Repo.all(from(c in HistorianCursor, where: is_nil(c.workspace_id)))
+
+      assert length(nil_rows) == 4,
+             "expected one nil-workspace cursor row per corpus, got #{length(nil_rows)}"
+
+      assert Enum.map(nil_rows, & &1.corpus) |> Enum.sort() ==
+               Enum.sort(Historian.corpora())
+
+      sentinel_count =
+        Repo.aggregate(
+          from(c in HistorianCursor,
+            where: c.workspace_id == ^@org_scope_workspace_id
+          ),
+          :count
+        )
+
+      assert sentinel_count == 0,
+             "expected zero sentinel-workspace rows written, got #{sentinel_count}"
+    end
+
+    test "mark_run_started(sentinel) advances existing nil-workspace last_run_at" do
+      old_at = ~U[2001-01-01 12:00:00.000000Z]
+
+      # Pre-seed nil-workspace rows for every corpus at an old timestamp.
+      for corpus <- Historian.corpora() do
+        Repo.insert!(%HistorianCursor{
+          workspace_id: nil,
+          corpus: corpus,
+          last_run_at: old_at
+        })
+      end
+
+      before_count =
+        Repo.aggregate(from(c in HistorianCursor, where: is_nil(c.workspace_id)), :count)
+
+      assert before_count == 4
+
+      :ok = Historian.mark_run_started(@org_scope_workspace_id)
+
+      # Same 4 rows, no dupes.
+      after_count =
+        Repo.aggregate(from(c in HistorianCursor, where: is_nil(c.workspace_id)), :count)
+
+      assert after_count == 4
+
+      # last_run_at advanced past old_at.
+      new_at = Historian.last_run_at(nil)
+      assert %DateTime{} = new_at
+      assert DateTime.compare(new_at, old_at) == :gt
+
+      # And the coerced read sees the same value.
+      via_sentinel = Historian.last_run_at(@org_scope_workspace_id)
+      assert DateTime.compare(via_sentinel, new_at) == :eq
+    end
+
+    test "mark_run_started(sentinel) does NOT touch a legacy sentinel cursor row" do
+      sentinel_at = ~U[2020-01-01 12:00:00.000000Z]
+
+      # Legacy accidental shape (pre-fix write path).
+      Repo.insert!(%HistorianCursor{
+        workspace_id: @org_scope_workspace_id,
+        corpus: "journal",
+        last_run_at: sentinel_at
+      })
+
+      :ok = Historian.mark_run_started(@org_scope_workspace_id)
+
+      # Sentinel row unchanged.
+      sentinel_row =
+        Repo.one!(
+          from(c in HistorianCursor,
+            where: c.workspace_id == ^@org_scope_workspace_id and c.corpus == "journal"
+          )
+        )
+
+      assert DateTime.compare(sentinel_row.last_run_at, sentinel_at) == :eq
+
+      # And a new nil-workspace journal row was created.
+      nil_journal =
+        Repo.one!(
+          from(c in HistorianCursor,
+            where: is_nil(c.workspace_id) and c.corpus == "journal"
+          )
+        )
+
+      assert %DateTime{} = nil_journal.last_run_at
+      assert DateTime.compare(nil_journal.last_run_at, sentinel_at) == :gt
+    end
+  end
+
   # ── Helpers ─────────────────────────────────────────────────────────────
 
   defp insert_journal!(workspace_id, content) do

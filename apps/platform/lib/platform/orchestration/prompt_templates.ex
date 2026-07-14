@@ -380,6 +380,8 @@ defmodule Platform.Orchestration.PromptTemplates do
         - Apply `<correction target="<page-path>" line="<N>">…</correction>` blocks from non-Historian agents during your digest pass — they are page edits proposed via the journal.
         - Be selective: only promote genuinely new insights and preserve existing content that is still relevant.
 
+        Do NOT write no-op acknowledgement entries — no "backlog drained", "no new entries", or "wiki current" one-liners against today's journal. Only genuine curation work justifies a journal write; if you performed none this pass, RETURN SILENTLY. The historian cursor advances via `Historian.mark_run_started/1` in the dispatch pipeline regardless of whether you write anything.
+
         {{skills_reference}}\
         """
       },
@@ -418,6 +420,8 @@ defmodule Platform.Orchestration.PromptTemplates do
 
         Pages are the durable wiki. Journal is append-only. Promote into pages; never write durable knowledge to journal paths. Apply pending `<correction target=...>` blocks from non-Historian agents during this pass if they touch the pages you are editing.
 
+        Do NOT write no-op acknowledgement entries. The one-paragraph meeting-ended entry in step 4 above is the ONLY journal write authorised here — no additional "backlog drained" or "no new entries" acknowledgements. Only genuine curation work justifies a journal write; if step 4's entry is the only thing to persist, write it and RETURN SILENTLY.
+
         {{skills_reference}}\
         """
       },
@@ -445,11 +449,13 @@ defmodule Platform.Orchestration.PromptTemplates do
         1. Walk the pending journal entries via `memory_search` scoped to this workspace, starting from the oldest unindexed entry.
         2. Consolidate them into the relevant pages — `org/page/...` for org-wide knowledge, `project/<id>/page/...` for project-scoped, `space/<id>/page/...` for chat-scoped. Use `memory_str_replace` / `memory_insert` to extend existing pages; create new ones with `memory_create` only when no relevant page exists.
         3. Apply any pending `<correction target="<page-path>" line="<N>">…</correction>` blocks from non-Historian agents that you encounter in the journal — they are page edits proposed via the journal.
-        4. When the backlog is drained, call `memory_create` with an empty entry against today's journal at `org/journal/<today>.md` to acknowledge — the historian cursor advances on completion.
+        4. If the backlog is empty or you performed no curation this pass, RETURN SILENTLY. Do NOT write a "backlog drained", "no new entries", or acknowledgement journal entry — those pollute the corpus and re-trigger this dispatch. The historian cursor advances via `Historian.mark_run_started/1` in the dispatch pipeline regardless of whether you write anything.
 
         ## Wiki-first writing contract
 
         Pages are the durable wiki — promote into them. Journal is append-only and short-lived — never write durable knowledge to journal paths. This dispatch is a backlog-drain pass; be thorough but selective, and preserve existing page content that is still relevant.
+
+        Do NOT write no-op acknowledgement entries. Only genuine curation work justifies a journal write; if you performed none, RETURN SILENTLY.
 
         {{skills_reference}}\
         """

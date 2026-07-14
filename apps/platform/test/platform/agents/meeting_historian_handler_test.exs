@@ -80,6 +80,29 @@ defmodule Platform.Agents.MeetingHistorianHandlerTest do
     )
   end
 
+  defp message_count_for(%Space{id: space_id}) do
+    Repo.aggregate(from(m in Message, where: m.space_id == ^space_id), :count)
+  end
+
+  defp attach_debounce_telemetry! do
+    test = self()
+    handler_id = "meeting-historian-debounce-#{System.unique_integer([:positive])}"
+
+    :ok =
+      :telemetry.attach(
+        handler_id,
+        [:platform, :agents, :historian, :dispatch_debounced],
+        fn _event, measurements, metadata, _ ->
+          send(test, {:dispatch_debounced, measurements, metadata})
+        end,
+        nil
+      )
+
+    ExUnit.Callbacks.on_exit(fn -> :telemetry.detach(handler_id) end)
+
+    handler_id
+  end
+
   # Wait until the predicate returns truthy or the timeout elapses. Polling
   # avoids hard-coded sleeps for PubSub fan-out + the dispatcher's chained
   # writes (space + participant + message inserts).
@@ -223,6 +246,98 @@ defmodule Platform.Agents.MeetingHistorianHandlerTest do
                MeetingHistorianHandler.subscribed_projects(),
                project.id
              )
+    end
+  end
+
+  describe "per-meeting debounce" do
+    setup do
+      # Pick a debounce window that outruns the whole test — every subsequent
+      # fire in the test window should hit the "already dispatched" branch.
+      original = Application.get_env(:platform, :meeting_historian_debounce_ms)
+      Application.put_env(:platform, :meeting_historian_debounce_ms, 60_000)
+
+      on_exit(fn ->
+        if is_nil(original) do
+          Application.delete_env(:platform, :meeting_historian_debounce_ms)
+        else
+          Application.put_env(:platform, :meeting_historian_debounce_ms, original)
+        end
+      end)
+
+      :ok
+    end
+
+    test "5x :meeting_ended for the same meeting → 1 dispatch, 4 debounced" do
+      agent = create_historian_agent()
+      project = create_project("Debounce Project")
+
+      pid = start_handler!()
+      attach_debounce_telemetry!()
+
+      meeting = create_meeting(project)
+
+      # First send fires the dispatch; the remaining four should be debounced
+      # because our test-scoped window (60s) far outruns the test.
+      for _ <- 1..5 do
+        send(pid, {:meeting_ended, meeting})
+      end
+
+      # Flush the mailbox via a synchronous handle_call so we know all five
+      # handle_info branches have run.
+      _ = MeetingHistorianHandler.subscribed_projects()
+
+      # Exactly one system-space message should have landed — the dispatch
+      # from the first fire. Poll for the space to appear, then assert.
+      wait_until(fn ->
+        case system_space_for(agent) do
+          nil -> false
+          space -> last_message_for(space)
+        end
+      end)
+
+      # Drain: give any queued messages a beat and then re-check the count.
+      _ = MeetingHistorianHandler.subscribed_projects()
+      space = system_space_for(agent)
+
+      assert message_count_for(space) == 1,
+             "expected exactly one Historian dispatch message, got " <>
+               "#{message_count_for(space)}"
+
+      # And we should have received four debounce telemetry beacons — one for
+      # each of the skipped fires. Order-preserving assert_receive drains them.
+      for _ <- 1..4 do
+        assert_receive {:dispatch_debounced, %{elapsed_ms: _}, %{meeting_id: mid}}, 500
+        assert mid == meeting.id
+      end
+
+      refute_receive {:dispatch_debounced, _, _}, 100
+    end
+
+    test "different meetings dispatch independently — no cross-meeting debounce" do
+      agent = create_historian_agent()
+      project = create_project("Multi-Meeting Debounce Project")
+
+      pid = start_handler!()
+      attach_debounce_telemetry!()
+
+      meeting_a = create_meeting(project)
+      meeting_b = create_meeting(project)
+
+      send(pid, {:meeting_ended, meeting_a})
+      send(pid, {:meeting_ended, meeting_b})
+
+      # Both meetings should have produced one dispatch each — no debounce
+      # skips because the map is keyed by meeting_id.
+      _ = MeetingHistorianHandler.subscribed_projects()
+
+      wait_until(fn ->
+        case system_space_for(agent) do
+          nil -> false
+          space -> message_count_for(space) == 2
+        end
+      end)
+
+      refute_receive {:dispatch_debounced, _, _}, 100
     end
   end
 

@@ -825,6 +825,61 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
         assert template.content == expected
       end
     end
+
+    test "no historian.* default still instructs an empty acknowledgement journal write (task 019f5e7d)" do
+      # Task 019f5e7d root cause: the pre-fix `historian.threshold` step 4
+      # told the agent to `memory_create` an empty entry against today's
+      # journal when the backlog drained — every such write became fresh
+      # unindexed content that re-crossed the threshold on the next tick,
+      # producing ~80 no-op entries in `org/journal/2026-07-13.md`. The
+      # code default has been rewritten to REMOVE that instruction; this
+      # guard pins the regression shut across all three historian slugs.
+      for slug <- @historian_slugs do
+        content = PromptTemplates.default_content_for_slug(slug)
+
+        assert is_binary(content), "#{slug} should have default content"
+
+        # Every historian dispatch slug must now explicitly forbid
+        # writing a no-op / acknowledgement entry.
+        assert content =~ "Do NOT write",
+               "#{slug} must carry an explicit 'Do NOT write' no-op suppression directive"
+
+        # The specific pre-fix instruction must NOT survive anywhere in
+        # the template body.
+        refute content =~ "call `memory_create` with an empty entry",
+               "#{slug} must NOT instruct the agent to call memory_create with an empty entry"
+
+        refute content =~ "call memory_create with an empty entry",
+               "#{slug} must NOT instruct the agent to call memory_create with an empty entry (unbacktick form)"
+
+        # And the specific per-pass "when the backlog is drained ...
+        # acknowledge" recipe must not be present in any form.
+        refute content =~ "backlog is drained, call",
+               "#{slug} must NOT tell the agent to call memory_create when the backlog is drained"
+      end
+    end
+
+    test "historian.threshold explicitly instructs silent return on empty backlog (task 019f5e7d)" do
+      # The replacement for the old step 4 must be authoritative copy —
+      # naming the loop symptom ('backlog drained' / 'no new entries')
+      # and instructing the agent to RETURN SILENTLY rather than write
+      # an acknowledgement.
+      content = PromptTemplates.default_content_for_slug("historian.threshold")
+
+      assert content =~ "RETURN SILENTLY",
+             "historian.threshold must instruct RETURN SILENTLY when there's nothing to curate"
+
+      assert content =~ "backlog drained",
+             "historian.threshold must name the 'backlog drained' anti-pattern so an edit can't paraphrase it away"
+
+      assert content =~ "no new entries",
+             "historian.threshold must name the 'no new entries' anti-pattern"
+
+      # The agent needs to be told that the cursor still advances so
+      # 'silent return' doesn't feel like a broken contract.
+      assert content =~ "Historian.mark_run_started/1",
+             "historian.threshold must reassure the agent that the cursor advances via Historian.mark_run_started/1"
+    end
   end
 
   describe "architecture.review_plan.v1 (ADR-0044 stage 3)" do

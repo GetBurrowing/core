@@ -553,7 +553,30 @@ defmodule Platform.Org.Wiki.ContextT4E2ETest do
       # teaching planners to set `responsibility: "designer"` on the
       # advisory Design-direction stage. Content-only sync; no schema
       # changes.
-      "20260713000010_sync_dispatch_planning_responsibility_hint.exs"
+      "20260713000010_sync_dispatch_planning_responsibility_hint.exs",
+      # Task 019f5e7d stage 1 — relax the NOT NULL + composite PK on
+      # `org_historian_cursors.workspace_id` so the sentinel-to-nil
+      # coercion (extended from PR #537 to the cursor read/write
+      # functions) can persist org-scope rows in the canonical
+      # `workspace_id IS NULL` shape.
+      "20260714000000_relax_org_historian_cursors_null_workspace.exs",
+      # Task 019f5e7d stage 2 — force-update the three historian
+      # dispatch templates (`historian.scheduled`,
+      # `historian.meeting_ended`, `historian.threshold`) to remove the
+      # "write an empty acknowledgement entry" instruction that was
+      # self-triggering the dispatch loop. Content-only sync; no schema
+      # changes. Mirrors the `force_update_*` pattern at 20260520050000.
+      "20260714000050_suppress_historian_no_op_journal_writes.exs",
+      # Task 019f5e7d stage 3 — one-shot cleanup of the ~80 self-generated
+      # no-op ("backlog drained" / "no new entries" / "Wiki current")
+      # historian journal entries in `org/journal/2026-07-13.md`. Stage 2
+      # closed the source template loop; this migration purges the
+      # stranded rows and drops one `platform.historian.cleanup` audit
+      # row per pass. Preserves entries containing `Applied:` (the load-
+      # bearing "Historn: backlog-drain pass. Applied: kickoff-followup-
+      # meeting.md ..." entry documenting three real fixes). Mirrors the
+      # phantom-flood cleanup pattern at 20260706120000.
+      "20260714000100_cleanup_historian_no_op_journal_entries_20260713.exs"
     ]
 
     defp t4_root, do: Mix.Project.project_file() |> Path.dirname()

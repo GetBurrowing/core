@@ -616,14 +616,23 @@ defmodule Platform.Agents.SystemEventSchedulerTest do
     # Backdate every cursor row's `last_run_at` for `workspace_id` to `delta_ms`
     # in the past, relative to now. Simulates "clock advance" without needing
     # a mock clock — the debounce policy reads cursor `last_run_at` directly.
+    #
+    # Task 019f5e7d: `mark_run_started(sentinel)` now coerces to `nil` and
+    # persists rows with `workspace_id IS NULL` (the canonical org-scope
+    # on-disk shape). This helper mirrors the same coercion so the backdate
+    # updates the same rows the debounce read (also coerced) queries.
     defp backdate_last_run!(workspace_id, delta_ms) when is_binary(workspace_id) do
       past = DateTime.add(DateTime.utc_now(), -delta_ms, :millisecond)
+      sentinel = Projects.org_scope_workspace_id()
 
-      {_, _} =
-        Repo.update_all(
-          from(c in HistorianCursor, where: c.workspace_id == ^workspace_id),
-          set: [last_run_at: past]
-        )
+      target_query =
+        if workspace_id == sentinel do
+          from(c in HistorianCursor, where: is_nil(c.workspace_id))
+        else
+          from(c in HistorianCursor, where: c.workspace_id == ^workspace_id)
+        end
+
+      {_, _} = Repo.update_all(target_query, set: [last_run_at: past])
 
       :ok
     end
@@ -998,22 +1007,41 @@ defmodule Platform.Agents.SystemEventSchedulerTest do
       end
     end
 
+    # Task 019f5e7d: `Historian.advance_cursor(sentinel, ...)` coerces to `nil`
+    # and stamps the org-scope canonical `workspace_id IS NULL` row; look there
+    # when the caller passes the sentinel.
     defp messages_cursor(workspace_id) do
-      Repo.one(
-        from(c in HistorianCursor,
-          where: c.workspace_id == ^workspace_id and c.corpus == "messages"
-        )
-      )
+      sentinel = Projects.org_scope_workspace_id()
+
+      target_query =
+        if workspace_id == sentinel do
+          from(c in HistorianCursor,
+            where: is_nil(c.workspace_id) and c.corpus == "messages"
+          )
+        else
+          from(c in HistorianCursor,
+            where: c.workspace_id == ^workspace_id and c.corpus == "messages"
+          )
+        end
+
+      Repo.one(target_query)
     end
 
+    # Task 019f5e7d: `mark_run_started(sentinel)` coerces to `nil` and stamps
+    # the canonical `workspace_id IS NULL` rows; mirror the coercion here so
+    # the debounce backdate hits the same rows the debounce read queries.
     defp backdate_last_run!(workspace_id, delta_ms) do
       past = DateTime.add(DateTime.utc_now(), -delta_ms, :millisecond)
+      sentinel = Projects.org_scope_workspace_id()
 
-      {_, _} =
-        Repo.update_all(
-          from(c in HistorianCursor, where: c.workspace_id == ^workspace_id),
-          set: [last_run_at: past]
-        )
+      target_query =
+        if workspace_id == sentinel do
+          from(c in HistorianCursor, where: is_nil(c.workspace_id))
+        else
+          from(c in HistorianCursor, where: c.workspace_id == ^workspace_id)
+        end
+
+      {_, _} = Repo.update_all(target_query, set: [last_run_at: past])
 
       :ok
     end

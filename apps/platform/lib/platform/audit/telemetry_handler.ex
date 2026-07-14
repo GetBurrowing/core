@@ -63,6 +63,21 @@ defmodule Platform.Audit.TelemetryHandler do
     [:platform, :historian, :window_dispatched],
     [:platform, :historian, :cursor_advanced],
     [:platform, :historian, :error],
+    # Task 019f5e7d — Historian dispatch-loop diagnostics.
+    # `no_op_pass` fires from Higgins's runtime when a dispatch completes
+    # with zero curation writes (proxy for the pre-fix "backlog drained"
+    # spam). `dispatch_debounced` fires from
+    # `Platform.Agents.MeetingHistorianHandler` when a duplicate
+    # `{:meeting_ended, _}` broadcast is rejected inside the per-meeting
+    # debounce window (see stage 4). Both events sit under the
+    # `:agents` namespace because their emit sites live in Agents
+    # runtime/handler code rather than the HistorianDispatcher pipeline
+    # — the `[:platform, :agents, :historian | _]` handler clause below
+    # routes them through the same async persist path.
+    # Scope contract: metadata MUST include `workspace_id` or `org_id`
+    # (audit rows without a scope are dropped — see scope_check/2).
+    [:platform, :agents, :historian, :no_op_pass],
+    [:platform, :agents, :historian, :dispatch_debounced],
     # Task 019f5d47-8090 — stage-level responsibility routing fallback.
     # Emitted by Platform.Orchestration.TaskRouter.resolve_stage_dispatch_assignee/3
     # when a stage's responsibility can't be resolved to a live runtime.
@@ -96,6 +111,23 @@ defmodule Platform.Audit.TelemetryHandler do
     # Repo.insert per event would regress emit latency by ~1-5ms per
     # window. Spawn under Platform.TaskSupervisor (already started in
     # application.ex:50) so :telemetry.execute returns in <100µs.
+    Task.Supervisor.start_child(Platform.TaskSupervisor, fn ->
+      persist_or_skip(event_name, measurements, metadata, config)
+    end)
+
+    :ok
+  end
+
+  # Task 019f5e7d stage 5 — `[:platform, :agents, :historian, _]` events
+  # (no_op_pass, dispatch_debounced) route through the same async persist
+  # path as their 3-element cousins. Same emit-latency budget; same
+  # scope_check contract.
+  def handle_event(
+        [:platform, :agents, :historian | _] = event_name,
+        measurements,
+        metadata,
+        config
+      ) do
     Task.Supervisor.start_child(Platform.TaskSupervisor, fn ->
       persist_or_skip(event_name, measurements, metadata, config)
     end)
@@ -156,15 +188,26 @@ defmodule Platform.Audit.TelemetryHandler do
   # Historian events with neither workspace_id nor org_id are dropped —
   # they cannot be attributed to a scope for HistorianAudit.recent_for_scope/2
   # lookup (stage 3). Everything else is unconditionally persisted.
-  defp scope_check([:platform, :historian | _], metadata) do
+  defp scope_check([:platform, :historian | _], metadata),
+    do: historian_scope_check(metadata)
+
+  # Same scope contract for the `[:platform, :agents, :historian | _]`
+  # namespace introduced in task 019f5e7d stage 5. The emitters
+  # (Higgins runtime, MeetingHistorianHandler) MUST populate
+  # workspace_id or org_id — for meeting-scope events derive from
+  # `project.org_id` before emitting.
+  defp scope_check([:platform, :agents, :historian | _], metadata),
+    do: historian_scope_check(metadata)
+
+  defp scope_check(_event_name, _metadata), do: :ok
+
+  defp historian_scope_check(metadata) do
     cond do
       is_binary(Map.get(metadata, :workspace_id)) -> :ok
       is_binary(Map.get(metadata, :org_id)) -> :ok
       true -> {:skip, "historian event missing workspace_id and org_id"}
     end
   end
-
-  defp scope_check(_event_name, _metadata), do: :ok
 
   # -- Internals --
 
