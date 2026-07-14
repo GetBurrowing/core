@@ -62,7 +62,12 @@ defmodule Platform.Audit.TelemetryHandler do
     [:platform, :historian, :pass_completed],
     [:platform, :historian, :window_dispatched],
     [:platform, :historian, :cursor_advanced],
-    [:platform, :historian, :error]
+    [:platform, :historian, :error],
+    # Task 019f5d47-8090 — stage-level responsibility routing fallback.
+    # Emitted by Platform.Orchestration.TaskRouter.resolve_stage_dispatch_assignee/3
+    # when a stage's responsibility can't be resolved to a live runtime.
+    # Metadata carries stage_id, task_id, responsibility, fallback_runtime_id, reason.
+    [:platform, :plans, :stage_dispatch, :assignee_unresolvable]
   ]
 
   @doc "Attach the handler to all registered platform telemetry events."

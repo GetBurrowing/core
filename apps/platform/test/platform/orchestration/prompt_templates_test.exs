@@ -144,6 +144,23 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
       assert content =~ "advise-only"
       assert content =~ "Do NOT attach manual_approval to it"
     end
+
+    test "teaches planners to route the Design-direction stage via responsibility (task 019f5d47)" do
+      # Stage-level responsibility routing (stage 5): the code default
+      # for dispatch.planning must instruct planners to set
+      # responsibility: "designer" on the advisory Design-direction
+      # stage so TaskRouter.do_dispatch/2 can resolve the current
+      # designer via Platform.Roles.agent_id_for_role/1 and route that
+      # single stage's prompt to Saru's runtime — with a soft fallback
+      # to the phase assignee when the role is unassigned or the
+      # runtime is offline.
+      content = PromptTemplates.default_content_for_slug("dispatch.planning")
+
+      assert content =~ "responsibility: \"designer\""
+      assert content =~ "Platform.Roles.agent_id_for_role/1"
+      assert content =~ "Route this stage to Saru automatically"
+      assert content =~ "Do NOT hardcode an agent_id"
+    end
   end
 
   describe "default_content_for_slug/1 — dispatch.in_review" do

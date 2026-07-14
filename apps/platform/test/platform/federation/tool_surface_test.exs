@@ -1923,6 +1923,92 @@ defmodule Platform.Federation.ToolSurfaceTest do
       assert error.recoverable == true
     end
 
+    # Task 019f5d47 stage 2 — per-stage responsibility field round-trips through
+    # plan_create → serialize_plan and remains optional at every layer.
+    test "plan_create round-trips per-stage responsibility slug" do
+      project = create_project()
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Responsibility task"})
+
+      {:ok, result} =
+        ToolSurface.execute(
+          "plan_create",
+          %{
+            "task_id" => task.id,
+            "stages" => [
+              %{
+                "name" => "Design direction",
+                "position" => 1,
+                "responsibility" => "designer",
+                "validations" => [%{"kind" => "manual_approval"}]
+              }
+            ]
+          },
+          %{}
+        )
+
+      assert [stage] = result.stages
+      assert stage.responsibility == "designer"
+    end
+
+    test "plan_create defaults responsibility to nil when omitted" do
+      project = create_project()
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "No responsibility"})
+
+      {:ok, result} =
+        ToolSurface.execute(
+          "plan_create",
+          %{
+            "task_id" => task.id,
+            "stages" => [
+              %{
+                "name" => "Build",
+                "position" => 1,
+                "validations" => [%{"kind" => "test_pass"}]
+              }
+            ]
+          },
+          %{}
+        )
+
+      assert [stage] = result.stages
+      assert stage.responsibility == nil
+    end
+
+    test "plan_create accepts explicit nil responsibility" do
+      project = create_project()
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Nil responsibility"})
+
+      {:ok, result} =
+        ToolSurface.execute(
+          "plan_create",
+          %{
+            "task_id" => task.id,
+            "stages" => [
+              %{
+                "name" => "Build",
+                "position" => 1,
+                "responsibility" => nil,
+                "validations" => [%{"kind" => "test_pass"}]
+              }
+            ]
+          },
+          %{}
+        )
+
+      assert [stage] = result.stages
+      assert stage.responsibility == nil
+    end
+
+    test "plan_create tool schema declares optional responsibility field" do
+      tools = ToolSurface.tool_definitions()
+      plan_create = Enum.find(tools, &(&1.name == "plan_create"))
+      assert plan_create, "plan_create tool must be registered"
+
+      description = plan_create.parameters.stages.description
+      assert description =~ "responsibility"
+      assert description =~ "designer"
+    end
+
     test "plan_get returns current approved plan" do
       project = create_project()
       {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Plan task"})

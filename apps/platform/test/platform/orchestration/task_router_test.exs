@@ -1303,6 +1303,186 @@ defmodule Platform.Orchestration.TaskRouterTest do
     end
   end
 
+  describe "stage-level responsibility routing" do
+    # Task 019f5d47 — a stage carrying `responsibility: "designer"` dispatches
+    # to the designer role owner's runtime; when the role has no owner (or the
+    # owner has no runtime), dispatch falls back to `state.assignee` and emits
+    # telemetry. `state.assignee` itself never changes — only the per-dispatch
+    # broadcast target does.
+
+    defp create_test_user do
+      Platform.Repo.insert!(%Platform.Accounts.User{
+        email: "resp_route_#{System.unique_integer([:positive])}@example.com",
+        name: "Responsibility Route Test User",
+        oidc_sub: "oidc-resp-route-#{System.unique_integer([:positive])}"
+      })
+    end
+
+    defp create_test_agent do
+      defaults = %{
+        slug: "resp-agent-#{System.unique_integer([:positive])}",
+        name: "Responsibility Test Agent",
+        status: "active"
+      }
+
+      {:ok, agent} =
+        %Platform.Agents.Agent{}
+        |> Platform.Agents.Agent.changeset(defaults)
+        |> Platform.Repo.insert()
+
+      agent
+    end
+
+    defp create_linked_runtime(runtime_id_suffix) do
+      user = create_test_user()
+      agent = create_test_agent()
+
+      {:ok, runtime} =
+        Platform.Federation.register_runtime(user.id, %{
+          runtime_id: "resp-runtime-#{runtime_id_suffix}-#{System.unique_integer([:positive])}"
+        })
+
+      {:ok, activated, _raw_token} = Platform.Federation.activate_runtime(runtime)
+      {:ok, _linked_agent} = Platform.Federation.link_agent(activated, agent)
+
+      {agent, activated}
+    end
+
+    test "happy path: stage responsibility routes broadcast to the role owner's runtime", %{
+      task: task,
+      assignee: assignee,
+      stage: stage
+    } do
+      # Seed the designer role owner + their runtime, then pin the role.
+      {designer_agent, designer_runtime} = create_linked_runtime("designer")
+      {:ok, _assignment} = Platform.Roles.assign_role("designer", designer_agent.id)
+
+      # Attach responsibility to the stage AND mark it running so
+      # `current_running_stage/1` returns it inside do_dispatch/2.
+      stage
+      |> Ecto.Changeset.change(%{
+        responsibility: "designer",
+        status: "running",
+        started_at: DateTime.utc_now()
+      })
+      |> Platform.Repo.update!()
+
+      # Subscribe to BOTH topics so we can assert routing lands on the designer
+      # side and NOT on the phase-assignee side.
+      Phoenix.PubSub.subscribe(Platform.PubSub, "runtime:#{designer_runtime.runtime_id}")
+      Phoenix.PubSub.subscribe(Platform.PubSub, "runtime:#{assignee.id}")
+
+      {:ok, _pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
+
+      designer_topic = "runtime:#{designer_runtime.runtime_id}"
+
+      assert_receive %Phoenix.Socket.Broadcast{
+                       topic: ^designer_topic,
+                       event: "attention",
+                       payload: payload
+                     },
+                     1_000
+
+      assert payload.signal.reason == "task_assigned"
+      assert payload.signal.task_id == task.id
+
+      refute_receive %Phoenix.Socket.Broadcast{
+                       topic: "runtime:" <> _,
+                       event: "attention",
+                       payload: %{signal: %{reason: "task_assigned"}}
+                     },
+                     150
+
+      # `state.assignee` is untouched — the routing lens leaves the phase
+      # identity in place for heartbeat/escalation bookkeeping.
+      status = TaskRouter.current_status(task.id)
+      assert status.assignee == assignee
+    end
+
+    test "fallback path: role has no assignee → telemetry fires and phase-assignee runtime still receives the broadcast",
+         %{task: task, assignee: assignee, stage: stage} do
+      # NB: no `assign_role/2` call — `agent_id_for_role("designer")` returns nil.
+      assert Platform.Roles.agent_id_for_role("designer") == nil
+
+      updated_stage =
+        stage
+        |> Ecto.Changeset.change(%{
+          responsibility: "designer",
+          status: "running",
+          started_at: DateTime.utc_now()
+        })
+        |> Platform.Repo.update!()
+
+      Phoenix.PubSub.subscribe(Platform.PubSub, "runtime:#{assignee.id}")
+
+      handler_ref =
+        :telemetry_test.attach_event_handlers(self(), [
+          [:platform, :plans, :stage_dispatch, :assignee_unresolvable]
+        ])
+
+      on_exit(fn -> :telemetry.detach(handler_ref) end)
+
+      {:ok, _pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
+
+      # Progressive enhancement: dispatch is not blocked; broadcast still lands
+      # on the phase-assignee runtime topic.
+      assert_receive %Phoenix.Socket.Broadcast{
+                       topic: topic,
+                       event: "attention",
+                       payload: payload
+                     },
+                     1_000
+
+      assert topic == "runtime:#{assignee.id}"
+      assert payload.signal.reason == "task_assigned"
+
+      assert_receive {[:platform, :plans, :stage_dispatch, :assignee_unresolvable], ^handler_ref,
+                      %{count: 1}, metadata},
+                     500
+
+      assert metadata.reason == :role_unresolvable
+      assert metadata.responsibility == "designer"
+      assert metadata.stage_id == updated_stage.id
+      assert metadata.task_id == task.id
+      assert metadata.fallback_runtime_id == assignee.id
+      assert metadata.actor_type == "system"
+      assert metadata.resource_type == "stage"
+      assert metadata.resource_id == updated_stage.id
+    end
+
+    test "backward compat: stage with responsibility=nil emits no telemetry and dispatches to state.assignee",
+         %{task: task, assignee: assignee, stage: stage} do
+      # The seed stage has responsibility == nil already — assert that
+      # explicitly so a future fixture drift doesn't hide behind default.
+      stage = Platform.Repo.reload!(stage)
+      assert stage.responsibility == nil
+
+      Phoenix.PubSub.subscribe(Platform.PubSub, "runtime:#{assignee.id}")
+
+      handler_ref =
+        :telemetry_test.attach_event_handlers(self(), [
+          [:platform, :plans, :stage_dispatch, :assignee_unresolvable]
+        ])
+
+      on_exit(fn -> :telemetry.detach(handler_ref) end)
+
+      {:ok, _pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
+
+      assert_receive %Phoenix.Socket.Broadcast{
+                       topic: topic,
+                       event: "attention",
+                       payload: payload
+                     },
+                     1_000
+
+      assert topic == "runtime:#{assignee.id}"
+      assert payload.signal.reason == "task_assigned"
+
+      refute_receive {[:platform, :plans, :stage_dispatch, :assignee_unresolvable], _, _, _},
+                     150
+    end
+  end
+
   describe "deploy stage failure recovery" do
     test "handle_deploy_stage_failure returns state and router stays alive", %{
       task: task,

@@ -27,6 +27,38 @@ defmodule Platform.Tasks.StageTest do
       assert errors[:position]
       assert errors[:name]
     end
+
+    test "persists a responsibility role slug when supplied", %{plan: plan} do
+      assert {:ok, stage} =
+               Tasks.create_stage(%{
+                 plan_id: plan.id,
+                 position: 1,
+                 name: "Design direction",
+                 responsibility: "designer"
+               })
+
+      assert stage.responsibility == "designer"
+    end
+
+    test "accepts arbitrary role slugs — resolver handles unknown values", %{plan: plan} do
+      assert {:ok, stage} =
+               Tasks.create_stage(%{
+                 plan_id: plan.id,
+                 position: 1,
+                 name: "Security review",
+                 responsibility: "security_reviewer"
+               })
+
+      assert stage.responsibility == "security_reviewer"
+    end
+
+    test "defaults responsibility to nil when the key is omitted (backward compat)",
+         %{plan: plan} do
+      assert {:ok, stage} =
+               Tasks.create_stage(%{plan_id: plan.id, position: 1, name: "Build"})
+
+      assert stage.responsibility == nil
+    end
   end
 
   describe "list_stages/1" do

@@ -540,7 +540,20 @@ defmodule Platform.Org.Wiki.ContextT4E2ETest do
       # `{{upstream_plans_section}}` variable so in-stack dep parents'
       # approved plans reach the planner subagent. Content-only sync; no
       # schema changes.
-      "20260711202135_add_parent_plans_section_to_dispatch_planning.exs"
+      "20260711202135_add_parent_plans_section_to_dispatch_planning.exs",
+      # Task 019f5d47 stage 1 (stage-level responsibility routing) —
+      # adds nullable `responsibility :text` column to `stages`. Later
+      # stages resolve the value at dispatch time via
+      # `Platform.Roles.agent_id_for_role/1` and route the stage's
+      # prompt to the corresponding runtime. Progressive enhancement:
+      # nullable column, no default, no CHECK constraint.
+      "20260713000000_add_responsibility_to_stages.exs",
+      # Task 019f5d47 stage 5 (stage-level responsibility routing) —
+      # force-update `dispatch.planning` to include the new bullet
+      # teaching planners to set `responsibility: "designer"` on the
+      # advisory Design-direction stage. Content-only sync; no schema
+      # changes.
+      "20260713000010_sync_dispatch_planning_responsibility_hint.exs"
     ]
 
     defp t4_root, do: Mix.Project.project_file() |> Path.dirname()

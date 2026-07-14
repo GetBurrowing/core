@@ -273,6 +273,7 @@ defmodule Platform.Orchestration.PromptTemplates do
            - Type: 2–3 roles (display used with restraint, body, optional utility).
            - Layout: one sentence of intent + a rough wireframe; name ONE signature element — spend boldness in one place.
            - Self-critique before handoff: revise anything that reads like the generic default for this kind of page, and say what changed.
+           - **Route this stage to Saru automatically**: set `responsibility: "designer"` on the stage payload. The engine resolves the current designer via `Platform.Roles.agent_id_for_role/1` and dispatches this stage's prompt to that agent's runtime. If no designer is assigned or their runtime is offline, dispatch falls back to the task's phase assignee — a soft signal, not a gate. Do NOT hardcode an agent_id.
            This stage is advise-only: it does NOT block development and the mock is expected to be iterated. Do NOT attach manual_approval to it.
 
         3. **Reference the resolved brand identity in implementation stage descriptions** — name the semantic token slots the coder must use (primary/on-primary, accent, surface, muted, border, destructive), not raw hex and not "match the brand". If the project is in exploring mode, say so in the stage description instead.

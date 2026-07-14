@@ -14,6 +14,7 @@ defmodule Platform.Tasks.Stage do
     field(:description, :string)
     field(:status, :string, default: "pending")
     field(:expected_artifacts, {:array, :map}, default: [])
+    field(:responsibility, :string)
     field(:started_at, :utc_datetime_usec)
     field(:completed_at, :utc_datetime_usec)
 
@@ -33,6 +34,7 @@ defmodule Platform.Tasks.Stage do
       :description,
       :status,
       :expected_artifacts,
+      :responsibility,
       :started_at,
       :completed_at
     ])

@@ -23,6 +23,7 @@ defmodule Platform.Orchestration.TaskRouter do
     RuntimeSupervision
   }
 
+  alias Platform.Repo
   alias Platform.Tasks
   alias Platform.Tasks.{DeployResolver, ReviewRequests}
 
@@ -558,11 +559,19 @@ defmodule Platform.Orchestration.TaskRouter do
     plan = Tasks.current_plan(state.task_id)
     stage = current_running_stage(plan)
 
+    # Stage-level responsibility routing (task 019f5d47 — progressive enhancement).
+    # `state.assignee` stays fixed on the phase assignee so heartbeat/escalation
+    # bookkeeping keys off task-level identity; only the runtime broadcast target
+    # changes per-dispatch when a stage carries a `responsibility` role key. If
+    # the role is unassigned or the target runtime is offline, we fall back to
+    # `state.assignee` and emit telemetry — never blocks dispatch.
+    dispatch_assignee = resolve_stage_dispatch_assignee(stage, task, state) || state.assignee
+
     # Lease deploy credentials if this is a deploy stage
     state = maybe_lease_deploy_credentials(state, task, stage)
 
     context = ContextAssembler.build(state.task_id, state.deploy_lease)
-    {agent, runtime} = Federation.lookup_assignment(state.assignee.id)
+    {agent, runtime} = Federation.lookup_assignment(dispatch_assignee.id)
     previous_rejection_reason = context && Map.get(context, :previous_rejection_reason)
     # Only stack members receive `:parent_plans` in the assembled context; for
     # solo tasks the key is absent and this defaults to `[]` so the planning
@@ -577,7 +586,7 @@ defmodule Platform.Orchestration.TaskRouter do
         parent_plans: parent_plans
       )
 
-    case dispatch_attention(state.assignee, state.task_id, "task_assigned", context, prompt) do
+    case dispatch_attention(dispatch_assignee, state.task_id, "task_assigned", context, prompt) do
       :ok ->
         # Post log message to execution space after successful runtime dispatch so
         # boot retries do not duplicate task-assigned chatter.
@@ -585,8 +594,15 @@ defmodule Platform.Orchestration.TaskRouter do
           stage_count = if plan, do: length(plan.stages || []), else: 0
           stage_pos = if stage, do: stage.position, else: 1
 
+          assignee_log =
+            if dispatch_assignee.id == state.assignee.id do
+              "Assignee: #{state.assignee.id}"
+            else
+              "Assignee: #{state.assignee.id} (stage-routed to #{dispatch_assignee.id})"
+            end
+
           log_content =
-            "Task assigned: #{task.title} | Stage: #{stage_pos}/#{stage_count} | Assignee: #{state.assignee.id} | Heartbeat: #{heartbeat_interval_min(stage)}min"
+            "Task assigned: #{task.title} | Stage: #{stage_pos}/#{stage_count} | #{assignee_log} | Heartbeat: #{heartbeat_interval_min(stage)}min"
 
           ExecutionSpace.post_log(state.execution_space_id, log_content)
 
@@ -638,6 +654,61 @@ defmodule Platform.Orchestration.TaskRouter do
 
         {:noreply, state}
     end
+  end
+
+  # Resolve a stage-level responsibility (e.g. `"designer"`) to a `%{type: :federated, id: runtime_id}`
+  # tuple pointing at the current role owner's runtime. Returns `nil` when the
+  # stage carries no responsibility, when the role has no assignee, when the
+  # assigned agent doesn't exist, or when that agent isn't linked to a live
+  # runtime. Fallback paths emit `[:platform, :plans, :stage_dispatch,
+  # :assignee_unresolvable]` telemetry so observability captures degraded
+  # dispatches (Stage 4 bridges this into the audit trail).
+  defp resolve_stage_dispatch_assignee(nil, _task, _state), do: nil
+  defp resolve_stage_dispatch_assignee(%{responsibility: nil}, _task, _state), do: nil
+
+  defp resolve_stage_dispatch_assignee(%{responsibility: role_key} = stage, task, state)
+       when is_binary(role_key) do
+    case Platform.Roles.agent_id_for_role(role_key) do
+      nil ->
+        emit_stage_dispatch_fallback(stage, task, state, :role_unresolvable)
+        nil
+
+      agent_id ->
+        case Repo.get(Platform.Agents.Agent, agent_id) do
+          nil ->
+            emit_stage_dispatch_fallback(stage, task, state, :agent_not_found)
+            nil
+
+          agent ->
+            case Federation.get_runtime_for_agent(agent) do
+              nil ->
+                emit_stage_dispatch_fallback(stage, task, state, :runtime_unresolvable)
+                nil
+
+              runtime ->
+                %{type: :federated, id: runtime.runtime_id}
+            end
+        end
+    end
+  end
+
+  defp resolve_stage_dispatch_assignee(_stage, _task, _state), do: nil
+
+  defp emit_stage_dispatch_fallback(stage, task, state, reason) do
+    :telemetry.execute(
+      [:platform, :plans, :stage_dispatch, :assignee_unresolvable],
+      %{count: 1},
+      %{
+        stage_id: stage.id,
+        task_id: task.id,
+        responsibility: stage.responsibility,
+        fallback_runtime_id: state.assignee.id,
+        reason: reason,
+        actor_type: "system",
+        resource_type: "stage",
+        resource_id: stage.id
+      }
+    )
   end
 
   defp dispatch_attention(%{type: :federated, id: runtime_id}, task_id, reason, context, prompt) do

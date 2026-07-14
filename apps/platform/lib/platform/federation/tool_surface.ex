@@ -1844,7 +1844,7 @@ defmodule Platform.Federation.ToolSurface do
             type: "array",
             required: true,
             description:
-              "Array of IMPLEMENTATION stage objects: {name, description, position, validations: [{kind, evaluation_payload?}]}. Valid validation kinds for planner-authored stages: lint_pass, type_check, test_pass, manual_approval, e2e_behavior. Do NOT include a deploy stage — the system auto-injects one (with ci_passed / pr_merged / etc. validations) at deploying time from the project's resolved deploy strategy. The e2e_behavior kind requires an evaluation_payload map with keys setup/actions/expected (the planner authors an adversarial test plan the review agent will execute — include 2-5 e2e_behavior validations covering happy path, edges, and regression-prone scenarios; do NOT pre-write failure_feedback, the review agent observes failures at review time)."
+              "Array of IMPLEMENTATION stage objects: {name, description, position, responsibility?, validations: [{kind, evaluation_payload?}]}. Valid validation kinds for planner-authored stages: lint_pass, type_check, test_pass, manual_approval, e2e_behavior. Do NOT include a deploy stage — the system auto-injects one (with ci_passed / pr_merged / etc. validations) at deploying time from the project's resolved deploy strategy. The e2e_behavior kind requires an evaluation_payload map with keys setup/actions/expected (the planner authors an adversarial test plan the review agent will execute — include 2-5 e2e_behavior validations covering happy path, edges, and regression-prone scenarios; do NOT pre-write failure_feedback, the review agent observes failures at review time). Optional per-stage `responsibility` string (e.g. `\"designer\"`) routes that single stage to the role owner via Platform.Roles.agent_id_for_role/1; if the role is unassigned or the target runtime is offline, dispatch falls back to the task's phase assignee (progressive enhancement — never blocks). Omit or set to null to use the task-level phase assignee."
           }
         },
         returns: "The created plan with stages and validations preloaded",
@@ -4948,7 +4948,11 @@ defmodule Platform.Federation.ToolSurface do
                   name: Map.get(stage_input, "name"),
                   description: Map.get(stage_input, "description"),
                   position: Map.get(stage_input, "position"),
-                  expected_artifacts: Map.get(stage_input, "expected_artifacts", [])
+                  expected_artifacts: Map.get(stage_input, "expected_artifacts", []),
+                  # Task 019f5d47 stage 2 — optional per-stage role slug that routes
+                  # this stage's dispatch to Platform.Roles.agent_id_for_role/1's target.
+                  # `nil` (omitted) preserves task-level phase-assignee routing.
+                  responsibility: Map.get(stage_input, "responsibility")
                 }
 
                 case Tasks.create_stage(stage_attrs) do
@@ -7047,6 +7051,9 @@ defmodule Platform.Federation.ToolSurface do
       position: stage.position,
       status: stage.status,
       expected_artifacts: stage.expected_artifacts,
+      # Task 019f5d47 stage 2 — round-trip the optional per-stage role slug so
+      # plan_get returns the same shape plan_create accepted.
+      responsibility: Map.get(stage, :responsibility),
       started_at: format_datetime(stage.started_at),
       completed_at: format_datetime(stage.completed_at),
       inserted_at: format_datetime(stage.inserted_at),
