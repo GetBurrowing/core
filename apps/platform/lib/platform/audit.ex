@@ -143,12 +143,20 @@ defmodule Platform.Audit do
   end
 
   defp broadcast(%Event{} = event) do
-    Phoenix.PubSub.broadcast(@pubsub, "audit:all", {:audit_event, event})
-    Phoenix.PubSub.broadcast(@pubsub, "audit:#{event.event_type}", {:audit_event, event})
+    # PubSub is a runtime process — not started during `mix ecto.migrate` or
+    # any other pre-supervisor context. Skip the broadcast if the registry
+    # isn't up; the audit row is still persisted, subscribers just don't get
+    # the live message. See prod outage 2026-07-14 (task 019f5e7d stage 3).
+    if Process.whereis(@pubsub) do
+      Phoenix.PubSub.broadcast(@pubsub, "audit:all", {:audit_event, event})
+      Phoenix.PubSub.broadcast(@pubsub, "audit:#{event.event_type}", {:audit_event, event})
 
-    if event.resource_type && event.resource_id do
-      topic = "audit:#{event.resource_type}:#{event.resource_id}"
-      Phoenix.PubSub.broadcast(@pubsub, topic, {:audit_event, event})
+      if event.resource_type && event.resource_id do
+        topic = "audit:#{event.resource_type}:#{event.resource_id}"
+        Phoenix.PubSub.broadcast(@pubsub, topic, {:audit_event, event})
+      end
     end
+
+    :ok
   end
 end

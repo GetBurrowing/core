@@ -50,6 +50,17 @@ defmodule Platform.AuditTest do
       {:ok, event} = Audit.record(@valid_attrs)
       assert %DateTime{} = event.inserted_at
     end
+
+    test "persists event even when PubSub registry is absent (migration boot)" do
+      pid = Process.whereis(Platform.PubSub)
+      Process.unregister(Platform.PubSub)
+
+      try do
+        assert {:ok, %Event{}} = Audit.record(@valid_attrs)
+      after
+        Process.register(pid, Platform.PubSub)
+      end
+    end
   end
 
   describe "list/1" do
