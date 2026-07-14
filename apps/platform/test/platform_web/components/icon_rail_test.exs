@@ -192,9 +192,72 @@ defmodule PlatformWeb.Components.IconRailTest do
 
     test "Admin slot pins to the bottom of the rail via the mt-auto spacer" do
       html = render_icon_rail(%{is_fabrikam_user: true})
-      # Stage 4 restructure: a dedicated mt-auto spacer precedes the Admin
-      # eyebrow + cluster, pushing them to the bottom of the flex column.
+      # A dedicated mt-auto spacer precedes the Admin hairline + cluster,
+      # pushing them to the bottom of the flex column. v2 (task 019f575e)
+      # dropped the "Admin" eyebrow but kept this mt-auto pinning.
       assert html =~ ~r/mt-auto.*data-cluster="admin"/s
+    end
+  end
+
+  # v2 (task 019f575e, 2026-07-14): collapsed rail hides the platform logo and
+  # renders the expand toggle in the header slot (no standalone toggle row);
+  # the Admin group drops its "Admin" eyebrow but keeps a hairline separator.
+  # Assert via element extraction (LazyHTML), never attribute-order regex —
+  # Phoenix does not guarantee attribute order (see project memory).
+  describe "icon_rail/1 — collapsed header toggle + admin label (v2)" do
+    test "collapsed mode renders exactly one toggle, inside the header, labelled Expand" do
+      doc = render_icon_rail(%{sidebar_collapsed: true}) |> LazyHTML.from_fragment()
+
+      header_buttons = LazyHTML.query(doc, ".icon-rail-header button")
+      assert Enum.count(header_buttons) == 1
+      assert LazyHTML.attribute(header_buttons, "aria-label") == ["Expand sidebar"]
+      assert LazyHTML.attribute(header_buttons, "phx-click") == ["toggle_sidebar"]
+
+      # The v1 standalone toggle row is gone — no toggle lives outside the header.
+      all_toggles = LazyHTML.query(doc, ~s(button[phx-click="toggle_sidebar"]))
+      assert Enum.count(all_toggles) == 1
+    end
+
+    test "collapsed mode hides the platform logo (the toggle takes the header slot)" do
+      doc = render_icon_rail(%{sidebar_collapsed: true}) |> LazyHTML.from_fragment()
+      assert doc |> LazyHTML.query(~s(img[alt="Startup Suite"])) |> Enum.count() == 0
+    end
+
+    test "expanded mode keeps logo + wordmark + a single collapse toggle in the header" do
+      doc = render_icon_rail(%{sidebar_collapsed: false}) |> LazyHTML.from_fragment()
+
+      assert doc
+             |> LazyHTML.query(~s(.icon-rail-header img[alt="Startup Suite"]))
+             |> Enum.count() == 1
+
+      header_buttons = LazyHTML.query(doc, ".icon-rail-header button")
+      assert Enum.count(header_buttons) == 1
+      assert LazyHTML.attribute(header_buttons, "aria-label") == ["Collapse sidebar"]
+
+      all_toggles = LazyHTML.query(doc, ~s(button[phx-click="toggle_sidebar"]))
+      assert Enum.count(all_toggles) == 1
+    end
+
+    test "no Admin group eyebrow renders for Fabrikam users, in either rail state" do
+      for collapsed <- [true, false] do
+        doc =
+          render_icon_rail(%{is_fabrikam_user: true, sidebar_collapsed: collapsed})
+          |> LazyHTML.from_fragment()
+
+        eyebrow_labels =
+          doc |> LazyHTML.query(".icon-rail-eyebrow") |> Enum.map(&LazyHTML.text/1)
+
+        refute "Admin" in eyebrow_labels
+      end
+    end
+
+    test "Admin cluster keeps its tile and a hairline separator (Fabrikam, expanded)" do
+      doc =
+        render_icon_rail(%{is_fabrikam_user: true, sidebar_collapsed: false})
+        |> LazyHTML.from_fragment()
+
+      assert doc |> LazyHTML.query(~s([data-destination="admin"])) |> Enum.count() == 1
+      assert doc |> LazyHTML.query("hr.icon-rail-divider") |> Enum.count() >= 1
     end
   end
 

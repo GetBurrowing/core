@@ -123,13 +123,18 @@ defmodule PlatformWeb.Components.IconRail do
       aria-label="Main navigation"
       data-icon-rail
     >
-      <%!-- Brand header (task 019f575e stage 3): Console-style logo + wordmark +
-           collapse toggle at the top of the rail. The 40px logo tile shares the
-           tab-icon geometry (20px glyph on the same left inset), so the icon
-           spine keeps a constant x-position through collapse. -mx-2/px-2 lets
-           the hairline span the full rail width despite the nav's px-2 inset. --%>
+      <%!-- Brand header (task 019f575e). Expanded: logo mark + wordmark +
+           right-aligned collapse toggle. Collapsed (v2, 2026-07-14): the logo
+           is hidden and the expand toggle takes the 40px header slot — always
+           visible, no separate row below — so the control stays at header level
+           and never drops into the icon column to read as a nav destination.
+           -mx-2/px-2 lets the hairline span the full rail width despite the
+           nav's px-2 inset. --%>
       <div class="icon-rail-header -mx-2 flex h-12 flex-shrink-0 items-center border-b border-base-300 px-2">
-        <div class="flex size-10 flex-shrink-0 items-center justify-center">
+        <div
+          :if={!@sidebar_collapsed}
+          class="flex size-10 flex-shrink-0 items-center justify-center"
+        >
           <img src={~p"/images/logo.svg"} alt="Startup Suite" class="size-5" />
         </div>
         <span :if={!@sidebar_collapsed} class="icon-rail-label text-sm font-semibold">
@@ -145,21 +150,17 @@ defmodule PlatformWeb.Components.IconRail do
         >
           <.icon name="hero-chevron-double-left" class="size-4" />
         </button>
+        <button
+          :if={@sidebar_collapsed}
+          type="button"
+          class="mx-auto flex size-10 flex-shrink-0 items-center justify-center rounded-lg text-base-content/40 transition-colors hover:bg-base-300 hover:text-base-content"
+          phx-click="toggle_sidebar"
+          title="Expand sidebar"
+          aria-label="Expand sidebar"
+        >
+          <.icon name="hero-chevron-double-right" class="size-5" />
+        </button>
       </div>
-
-      <%!-- Collapsed: the wordmark and inline toggle hide; the toggle gets its
-           own row directly under the header hairline so the 56px rail keeps a
-           32px hit target without crowding the logo tile. --%>
-      <button
-        :if={@sidebar_collapsed}
-        type="button"
-        class="mx-auto flex size-8 flex-shrink-0 items-center justify-center rounded-lg text-base-content/40 transition-colors hover:bg-base-300 hover:text-base-content"
-        phx-click="toggle_sidebar"
-        title="Expand sidebar"
-        aria-label="Expand sidebar"
-      >
-        <.icon name="hero-chevron-double-right" class="size-4" />
-      </button>
 
       <%!-- Group eyebrows (task 019f575e stage 4): the cluster names carry
            real meaning — Live = real-time surfaces, Working = reference —
@@ -188,7 +189,10 @@ defmodule PlatformWeb.Components.IconRail do
 
       <div class="mt-auto" aria-hidden="true"></div>
       <%= if @is_fabrikam_user do %>
-        <.rail_eyebrow label="Admin" sidebar_collapsed={@sidebar_collapsed} />
+        <%!-- Admin cluster keeps its pinned-bottom position and a hairline
+             separator in both rail states, but no "Admin" eyebrow label
+             (task 019f575e v2, 2026-07-14). --%>
+        <hr class="icon-rail-divider border-base-300 my-2" aria-hidden="true" />
         <.rail_cluster
           destinations={@admin_destinations}
           cluster="admin"
