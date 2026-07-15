@@ -34,6 +34,7 @@ const MeetingVideoTile = {
     this._boundLocalUnpublished = this._onLocalUnpublished.bind(this)
 
     this._tryBind()
+    this._installResizeKick()
   },
 
   updated() {
@@ -48,6 +49,7 @@ const MeetingVideoTile = {
   destroyed() {
     this._detach()
     this._unbind()
+    this._teardownResizeKick()
   },
 
   // ── Private ────────────────────────────────────────────────────────────
@@ -211,6 +213,87 @@ const MeetingVideoTile = {
     const fallback = this.el.querySelector("[data-avatar-fallback]")
     if (fallback) fallback.classList.add("hidden")
     this.el.dataset.hasVideo = "true"
+  },
+
+  // ── Adaptive-stream resize kick ────────────────────────────────────────
+  //
+  // LiveKit's Room is constructed with `adaptiveStream: true` in
+  // `meeting_client.js` — the SDK auto-pauses subscribed video tracks whose
+  // <video> elements are hidden or below a minimum visible size, and resumes
+  // them when the element grows back. That saves bandwidth on off-screen
+  // tiles, but has a rough edge on layout jumps:
+  //
+  // When a new remote participant joins, the gallery grid shape changes
+  // (e.g. 2-tile 1x2 → 3-tile 1x3), and EVERY existing tile briefly resizes
+  // — sometimes through a very-small intermediate frame or a
+  // display:none-adjacent state during morphdom's patch. Adaptive stream
+  // pauses the affected subscription, and doesn't always cleanly resume
+  // when the tile settles at its new size — the SDK's ResizeObserver
+  // firing order + our own DOM patch order don't line up perfectly, so
+  // the subscription stays paused. The user sees the pre-join tile go
+  // black; switching stage_mode remounts the tile which triggers
+  // `_syncExistingTrack`, which re-attaches fresh, and the video returns.
+  //
+  // Fix: watch this tile's OUTER element for size changes, and after the
+  // change settles (250ms debounce so we fire once per burst, not once per
+  // resize frame), toggle the remote publication's subscription off/on to
+  // force adaptive stream to re-evaluate. `setSubscribed(true)` alone is
+  // idempotent when the SDK thinks it's already subscribed, so the toggle
+  // pair is what actually kicks it back into "actively sending frames".
+  //
+  // Local tiles bail — MeetingClient owns the local <video> and this hook
+  // never attaches its own track for a local-dock tile (see `_attach`).
+  _installResizeKick() {
+    if (typeof ResizeObserver === "undefined") return
+    this._resizeObserver = new ResizeObserver(() => this._scheduleResizeKick())
+    this._resizeObserver.observe(this.el)
+  },
+
+  _teardownResizeKick() {
+    if (this._resizeObserver) {
+      try { this._resizeObserver.disconnect() } catch (_) {}
+      this._resizeObserver = null
+    }
+    if (this._resizeKickTimer) {
+      clearTimeout(this._resizeKickTimer)
+      this._resizeKickTimer = null
+    }
+  },
+
+  _scheduleResizeKick() {
+    if (this._resizeKickTimer) clearTimeout(this._resizeKickTimer)
+    this._resizeKickTimer = setTimeout(() => this._resizeKick(), 250)
+  },
+
+  _resizeKick() {
+    this._resizeKickTimer = null
+    if (this._localDock || !this._room) return
+    // Only nudge if we have an attached track that adaptive stream might
+    // have paused. If nothing is attached the normal track-subscribed path
+    // will run when the track arrives — no work to do here.
+    if (!this._attachedTrack) return
+
+    // Find the RemoteTrackPublication for our currently-attached track and
+    // toggle its subscription. Walking remoteParticipants is O(participants
+    // × publications-per-participant) — cheap even in a big meeting.
+    const remotes = this._room.remoteParticipants
+    if (!remotes) return
+    for (const participant of remotes.values()) {
+      if (participant.identity !== this._identity) continue
+      const pubs = participant.trackPublications || participant.tracks
+      if (!pubs) continue
+      for (const pub of pubs.values()) {
+        if (pub.track !== this._attachedTrack) continue
+        if (typeof pub.setSubscribed !== "function") continue
+        try {
+          pub.setSubscribed(false)
+          pub.setSubscribed(true)
+        } catch (_) {
+          /* participant may have disconnected between iterations */
+        }
+        return
+      }
+    }
   },
 
   _detach() {

@@ -282,4 +282,113 @@ describe("MeetingVideoTile attach/detach lifecycle", () => {
     expect(tile._slotRef.children.length).toBe(0)
     expect(track._attachedEls.length).toBe(0)
   })
+
+  // ── Resize-kick: adaptive-stream re-engagement on layout jump ─────────
+  //
+  // The Room is constructed with `adaptiveStream: true`, which pauses
+  // subscriptions whose <video> element shrinks below an SDK threshold
+  // and doesn't always cleanly resume when the element grows back. On
+  // gallery layout changes (2p → 3p adds a row and shrinks every existing
+  // tile), that manifests as "when a new user joins, the first non-local
+  // user's video disappears until you switch stage mode". These tests
+  // exercise `_resizeKick` — the manual publication.setSubscribed(false→true)
+  // toggle that kicks a stuck subscription back into "actively sending
+  // frames".
+
+  it("resize-kick toggles setSubscribed(false)→setSubscribed(true) on the matching remote publication", () => {
+    const tile = buildTile("user:1")
+    const track = fakeTrack()
+    tile._attach(track, { isLocal: false })
+
+    const setCalls = []
+    const pub = {
+      track,
+      setSubscribed(v) {
+        setCalls.push(v)
+      },
+    }
+    // Non-matching participant to prove the walk filters by identity.
+    const otherPub = {
+      track: fakeTrack(),
+      setSubscribed() {
+        throw new Error("must not be called on a different-identity pub")
+      },
+    }
+    tile._room = {
+      remoteParticipants: new Map([
+        [
+          "user:2",
+          { identity: "user:2", trackPublications: new Map([["other", otherPub]]) },
+        ],
+        [
+          "user:1",
+          { identity: "user:1", trackPublications: new Map([["pub", pub]]) },
+        ],
+      ]),
+    }
+
+    tile._resizeKick()
+
+    expect(setCalls).toEqual([false, true])
+  })
+
+  it("resize-kick is a no-op when no track is attached (initial mount resize)", () => {
+    const tile = buildTile("user:1")
+    const pub = {
+      track: fakeTrack(),
+      setSubscribed() {
+        throw new Error("must not be called when no track is attached")
+      },
+    }
+    tile._room = {
+      remoteParticipants: new Map([
+        ["user:1", { identity: "user:1", trackPublications: new Map([["pub", pub]]) }],
+      ]),
+    }
+
+    // No _attach() call → _attachedTrack stays null.
+    tile._resizeKick()
+    // No throw + no assertion failure = pass.
+  })
+
+  it("resize-kick bails on a local-dock tile — MeetingClient owns the local video, we don't poke it", () => {
+    const tile = buildTile("user:1")
+    tile._localDock = true
+    // Pretend we have an attached track even though local-dock tiles don't
+    // actually attach — the guard should catch _localDock BEFORE the track
+    // check, so the pub.setSubscribed must never fire.
+    tile._attachedTrack = fakeTrack()
+
+    const pub = {
+      track: tile._attachedTrack,
+      setSubscribed() {
+        throw new Error("must not toggle subscription on a local-dock tile")
+      },
+    }
+    tile._room = {
+      remoteParticipants: new Map([
+        ["user:1", { identity: "user:1", trackPublications: new Map([["pub", pub]]) }],
+      ]),
+    }
+
+    tile._resizeKick()
+    // No throw = pass.
+  })
+
+  it("resize-kick tolerates a publication with no setSubscribed method (older SDK / test fake)", () => {
+    const tile = buildTile("user:1")
+    const track = fakeTrack()
+    tile._attach(track, { isLocal: false })
+
+    // No setSubscribed on the pub — the walk must skip it, not throw.
+    const pub = { track }
+    tile._room = {
+      remoteParticipants: new Map([
+        ["user:1", { identity: "user:1", trackPublications: new Map([["pub", pub]]) }],
+      ]),
+    }
+
+    tile._resizeKick()
+    // No throw = pass.
+  })
 })
