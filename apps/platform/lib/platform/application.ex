@@ -36,6 +36,13 @@ defmodule Platform.Application do
            Platform.Artifacts.Store,
            # Execution plane — run supervisor (registry started above)
            Platform.Execution.RunSupervisor,
+           # Orchestration — ephemeral in-memory lease store (task
+           # 019f640d stage 2). Owns the `:orchestration_lease_manager`
+           # ETS table backing the event-driven router's ack/safety-net
+           # state. Must start BEFORE TaskRouterSupervisor so any
+           # router boot can call `record_dispatch/4` without racing
+           # the table.
+           Platform.Orchestration.LeaseManager,
            # Orchestration — task router supervisor (registry started above)
            Platform.Orchestration.TaskRouterSupervisor,
            # Orchestration — declarative watcher: starts/stops routers based on task state

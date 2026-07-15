@@ -1414,6 +1414,30 @@ defmodule Platform.Federation.ToolSurface do
         when_to_use: "When task is fully specced and ready to begin"
       },
       %{
+        name: "task_ack",
+        description:
+          "Ack that you (the executor/reviewer/deployer) received the dispatch and are actively working on the stage. Call this as your FIRST tool call after spawning for a task (task 019f640d stage 5). Emits an `execution.acked` runtime_event which the TaskRouter consumes to extend the safety-net timer and suppress the 5-minute no-ack alert. Returns `{ack_at, next_safety_net_at}` for reference — `next_safety_net_at` may be nil when no lease is armed (e.g. planning phase before a plan exists, or manual_approval stages where no safety-net timer runs).",
+        parameters: %{
+          task_id: %{
+            type: "string",
+            required: true,
+            description: "UUID of the task you were dispatched to work on."
+          },
+          stage_id: %{
+            type: "string",
+            required: false,
+            description:
+              "Optional — the running stage_id from your dispatch context. When omitted the tool resolves it via `current_running_stage(current_plan(task_id))`, so callers who lack a stage_id (e.g. planning-phase agents before the plan exists) can still ack the task-level dispatch."
+          }
+        },
+        returns:
+          "%{task_id, stage_id, event_id, acked_at, next_safety_net_at}. `next_safety_net_at` is nil when the LeaseManager has no active lease for the task (planning-phase dispatch, manual_approval stages, or a boot-race before the router recorded the dispatch).",
+        limitations:
+          "Idempotent — re-calling on the same stage is a soft ack refresh; each call emits a fresh execution.acked event and extends the safety-net deadline. Unknown `task_id` returns `{:error, :not_found}`. When no stage_id is supplied and the task has no running stage, returns `{:error, :no_running_stage}` so the caller can decide whether to task_start first or ignore.",
+        when_to_use:
+          "As your FIRST tool call after being dispatched for a task, before you start reading code or planning steps. Without an ack the router fires an escalation alert in 5 minutes on `coding`/`review`/`deploying` stages (planning: same 5m ack window, longer safety-net)."
+      },
+      %{
         name: "task_dependencies",
         description:
           "Inspect what a task is waiting on (its declared dependencies + which are still unmet) and what would be unblocked by completing it (its inverse dependents).",
@@ -3731,6 +3755,130 @@ defmodule Platform.Federation.ToolSurface do
           {:error, reason} ->
             {:error, %{error: "Failed to start task: #{inspect(reason)}", recoverable: true}}
         end
+    end
+  end
+
+  # ── task_ack (task 019f640d stage 5) ──────────────────────────────────
+  # Emits an `execution.acked` runtime_event so the TaskRouter can extend
+  # its safety-net timer and suppress the no-ack alert. Also writes to
+  # LeaseManager directly as a belt-and-braces path — the router might
+  # not be alive during a boot race, and LeaseManager is a global
+  # singleton owned by Platform.Application.
+  def execute("task_ack", args, context) do
+    task_id = Map.get(args, "task_id")
+    supplied_stage_id = Map.get(args, "stage_id")
+
+    cond do
+      is_nil(task_id) or task_id == "" ->
+        {:error,
+         %{
+           error: "task_id is required",
+           recoverable: true,
+           suggestion:
+             "Pass the current task_id from your dispatch payload — task_ack has no way to guess it."
+         }}
+
+      true ->
+        case Tasks.get_task_record(task_id) do
+          nil ->
+            {:error,
+             %{
+               error: "Task not found: #{task_id}",
+               recoverable: false,
+               suggestion:
+                 "Verify the task_id matches your dispatch payload; use task_list to enumerate live tasks."
+             }}
+
+          _task ->
+            case resolve_ack_stage_id(task_id, supplied_stage_id) do
+              {:error, :no_running_stage} ->
+                {:error,
+                 %{
+                   error:
+                     "task_id=#{task_id} has no running stage — cannot ack without a stage_id.",
+                   recoverable: true,
+                   suggestion:
+                     "Supply the stage_id from your dispatch payload, or call task_start first if the task hasn't been transitioned into in_progress yet."
+                 }}
+
+              {:ok, stage_id} ->
+                emit_task_ack(task_id, stage_id, context)
+            end
+        end
+    end
+  end
+
+  # Prefer the explicit stage_id from args; otherwise resolve from the
+  # task's current plan. Both branches return {:ok, stage_id} or the
+  # `:no_running_stage` error the caller reports back to the runtime.
+  defp resolve_ack_stage_id(_task_id, stage_id) when is_binary(stage_id) and stage_id != "",
+    do: {:ok, stage_id}
+
+  defp resolve_ack_stage_id(task_id, _) do
+    case Tasks.current_plan(task_id) do
+      nil ->
+        {:error, :no_running_stage}
+
+      plan ->
+        case Enum.find(plan.stages || [], &(&1.status == "running")) do
+          nil -> {:error, :no_running_stage}
+          stage -> {:ok, stage.id}
+        end
+    end
+  end
+
+  # Persist + broadcast the execution.acked runtime_event and refresh the
+  # LeaseManager row belt-and-braces. Returns the tool envelope with
+  # `next_safety_net_at` reflecting whatever the lease now holds (nil
+  # when no lease is armed — planning phase or manual_approval stages).
+  defp emit_task_ack(task_id, stage_id, context) do
+    acked_at = DateTime.utc_now()
+
+    attrs = %{
+      "task_id" => task_id,
+      "phase" => current_phase_for_blocker(task_id),
+      "runtime_id" => Map.get(context, :runtime_id) || "tool-surface",
+      "event_type" => "execution.acked",
+      "execution_space_id" => execution_space_id_for_task(task_id),
+      "occurred_at" => acked_at,
+      "payload" => %{
+        "stage_id" => stage_id,
+        "acked_at" => DateTime.to_iso8601(acked_at),
+        "runtime_id" => Map.get(context, :runtime_id) || "tool-surface"
+      }
+    }
+
+    # LeaseManager write is best-effort — a `:not_found` here is expected
+    # when the router hasn't recorded the dispatch yet (boot race, or the
+    # ack raced ahead of the arm-liveness path). The runtime_event still
+    # persists and the router's own `apply_runtime_event/2` clause will
+    # call `record_ack/1` again when the PubSub broadcast arrives.
+    _ = Platform.Orchestration.LeaseManager.record_ack(task_id)
+
+    case Platform.Orchestration.record_runtime_event(attrs) do
+      {:ok, event} ->
+        next_safety_net_at =
+          case Platform.Orchestration.LeaseManager.get(task_id) do
+            %{safety_net_at: %DateTime{} = ts} -> ts
+            _ -> nil
+          end
+
+        {:ok,
+         %{
+           task_id: task_id,
+           stage_id: stage_id,
+           event_id: event.id,
+           acked_at: acked_at,
+           next_safety_net_at: next_safety_net_at
+         }}
+
+      {:error, reason} ->
+        {:error,
+         %{
+           error: "Failed to record ack: #{inspect(reason)}",
+           recoverable: true,
+           suggestion: "Retry task_ack or push validation_pass evidence to prove liveness."
+         }}
     end
   end
 

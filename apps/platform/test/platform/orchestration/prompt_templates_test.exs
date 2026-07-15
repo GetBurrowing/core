@@ -494,6 +494,58 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
     end
   end
 
+  describe "nudge slug (task 019f640d stage 4)" do
+    test "nudge is registered in default_templates with the four expected variables" do
+      descriptor =
+        PromptTemplates.default_templates()
+        |> Enum.find(&(&1.slug == "nudge"))
+
+      assert descriptor,
+             "expected `nudge` slug to appear in default_templates/0 " <>
+               "(task 019f640d stage 4 — short-form safety-net / no-ack payload)"
+
+      for var <- ~w(task_id stage_id elapsed_minutes pending_validation_ids) do
+        assert var in descriptor.variables, "nudge must declare `#{var}` as a variable"
+      end
+    end
+
+    test "nudge content is short and does NOT carry full-context markers" do
+      content = PromptTemplates.default_content_for_slug("nudge")
+      assert is_binary(content)
+
+      # The seeded body is very small — the render-time interpolation only
+      # substitutes 4 short strings, so this bounds real output too.
+      assert String.length(content) < 800,
+             "nudge slug body was #{String.length(content)} chars — payload discipline requires <800 (target <500 tokens rendered)"
+
+      # Fat markers stay OUT.
+      refute content =~ "{{skills_reference}}"
+      refute content =~ "{{evidence_workflow_reference}}"
+      refute content =~ "{{git_workflow_block}}"
+      refute content =~ "## Skill discovery"
+      refute content =~ "## Submitting evidence"
+      refute content =~ "## Git Workflow"
+
+      # Skeleton bits must be there.
+      assert content =~ "## Completion Reminder"
+      assert content =~ "{{task_id}}"
+      assert content =~ "{{stage_id}}"
+      assert content =~ "{{pending_validation_ids}}"
+      assert content =~ "ack, push validation"
+    end
+
+    test "heartbeat slug is retained but description flags it as DEPRECATED" do
+      descriptor =
+        PromptTemplates.default_templates()
+        |> Enum.find(&(&1.slug == "heartbeat"))
+
+      assert descriptor, "heartbeat slug must still be registered (removed in stage 6 cleanup)"
+
+      assert descriptor.description =~ "DEPRECATED",
+             "heartbeat slug description must flag it as DEPRECATED so admin-UI readers see the notice"
+    end
+  end
+
   describe "skill-discovery step in dispatch templates" do
     # Two groups of dispatch templates carry the skill guidance differently:
     #
@@ -1068,6 +1120,101 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
 
       assert template.content ==
                PromptTemplates.default_content_for_slug("architecture.cron_sweep.v1")
+    end
+  end
+
+  describe "task_ack preamble on every dispatch template (task 019f640d stage 5)" do
+    # The ack-first preamble tells the runtime that its FIRST tool call
+    # must be `task_ack(task_id, stage_id)` — which the TaskRouter
+    # consumes via `execution.acked` to extend the safety-net timer and
+    # suppress the 5-minute no-ack alert (stage 3 wiring). Every
+    # dispatch template MUST carry the preamble; every template's
+    # variables list MUST declare `task_id` + `stage_id` so mustache
+    # actually interpolates them at render time.
+
+    @dispatch_slugs ~w(dispatch.planning dispatch.in_progress dispatch.in_review dispatch.deploying)
+
+    test "every dispatch template body starts with the ack-first preamble" do
+      for slug <- @dispatch_slugs do
+        content = PromptTemplates.default_content_for_slug(slug)
+        assert is_binary(content), "#{slug} should have default content"
+
+        assert content =~ "Your first tool call must be `task_ack",
+               "#{slug} must carry the task_ack preamble"
+
+        assert content =~ "no-ack alert in 5 minutes",
+               "#{slug} must explain the consequence of skipping the ack"
+
+        assert content =~ "task_ack(task_id=\"{{task_id}}\", stage_id=\"{{stage_id}}\")",
+               "#{slug} must interpolate task_id + stage_id into the copy-pasteable ack call"
+      end
+    end
+
+    test "every dispatch template registers task_id + stage_id as variables" do
+      for slug <- @dispatch_slugs do
+        descriptor =
+          PromptTemplates.default_templates()
+          |> Enum.find(&(&1.slug == slug))
+
+        assert descriptor, "#{slug} should appear in default_templates/0"
+
+        assert "task_id" in descriptor.variables,
+               "#{slug} must declare task_id so the ack preamble can interpolate it"
+
+        assert "stage_id" in descriptor.variables,
+               "#{slug} must declare stage_id so the ack preamble can interpolate it"
+      end
+    end
+
+    test "render_template fully interpolates the preamble task_id + stage_id placeholders" do
+      :ok = PromptTemplates.seed_defaults()
+
+      task_id = "task-abcd1234-0000-0000-0000-000000000001"
+      stage_id = "stage-fedc2345-0000-0000-0000-000000000002"
+
+      base_assigns = %{
+        task_id: task_id,
+        stage_id: stage_id,
+        task_title: "Ack preamble render test",
+        task_description: "Bodyless",
+        task_priority: "medium",
+        stage_info: "Plan: v1 (stage 1/1 — coding)",
+        git_workflow_block: "",
+        provider_specific_guidance: "",
+        previous_rejection_reason: "",
+        upstream_plans_section: "",
+        skills_reference: "",
+        evidence_workflow_reference: "",
+        repo_url: "",
+        default_branch: "main",
+        task_slug: "ack",
+        deploy_strategy_type: "manual",
+        deploy_strategy_config: "%{}"
+      }
+
+      for slug <- @dispatch_slugs do
+        assert {:ok, rendered} = PromptTemplates.render_template(slug, base_assigns)
+
+        assert rendered =~
+                 ~s|task_ack(task_id="#{task_id}", stage_id="#{stage_id}")|,
+               "#{slug} must interpolate both task_id and stage_id into the preamble at render time"
+
+        refute rendered =~ "{{task_id}}",
+               "#{slug} must fully consume the {{task_id}} placeholder"
+
+        refute rendered =~ "{{stage_id}}",
+               "#{slug} must fully consume the {{stage_id}} placeholder"
+      end
+    end
+
+    test "task_ack_preamble/0 exposes the shared preamble body for other renderers" do
+      preamble = PromptTemplates.task_ack_preamble()
+
+      assert is_binary(preamble)
+      assert preamble =~ "Your first tool call must be `task_ack"
+      assert preamble =~ "{{task_id}}"
+      assert preamble =~ "{{stage_id}}"
+      assert preamble =~ "no-ack alert in 5 minutes"
     end
   end
 

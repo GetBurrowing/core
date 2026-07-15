@@ -877,194 +877,234 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
     end
   end
 
-  describe "heartbeat_prompt/4" do
-    test "generates heartbeat prompt with elapsed time and pending validations" do
-      task = %{title: "Fix auth"}
-      stage = %{name: "coding", status: "running"}
-      validations = [%{kind: "test_pass"}, %{kind: "lint_pass"}]
+  describe "nudge_prompt/2 (task 019f640d stage 4 — short-form nudge)" do
+    # Payload discipline: the nudge is the router's SAFETY-NET / NO-ACK re-poke
+    # and must NOT carry the fat first-dispatch context (skills_reference,
+    # evidence_workflow_reference, task description, git workflow, etc). The
+    # tests below encode that as regression guards — the fat markers must stay
+    # OUT of nudge output.
 
-      prompt = HeartbeatScheduler.heartbeat_prompt(task, stage, 2520, validations)
-
-      assert prompt =~ "Fix auth"
-      assert prompt =~ "coding"
-      assert prompt =~ "42 minutes"
-      assert prompt =~ "test_pass, lint_pass"
-      assert prompt =~ "validation evidence"
+    defp big_task do
+      %{
+        id: "019f640d-2ff7-7215-a495-2c958716ce50",
+        title: "Redesign TaskRouter",
+        description:
+          String.duplicate(
+            "This is a large task description with lots of prose the nudge must strip out. ",
+            40
+          ),
+        status: "in_progress",
+        priority: "high"
+      }
     end
 
-    test "handles zero pending validations" do
-      task = %{id: "task-1", title: "Task"}
-      stage = %{id: "stage-1", name: "review", status: "running"}
+    defp five_stage_stage(id, position) do
+      %{
+        id: id,
+        name: "stage-#{position}",
+        status: if(position == 3, do: "running", else: "pending"),
+        position: position,
+        started_at: DateTime.utc_now() |> DateTime.add(-7 * 60, :second),
+        validations: [
+          %{
+            id: "val-#{position}-a",
+            kind: "test_pass",
+            status: "pending"
+          },
+          %{
+            id: "val-#{position}-b",
+            kind: "lint_pass",
+            status: "pending"
+          }
+        ]
+      }
+    end
 
-      prompt = HeartbeatScheduler.heartbeat_prompt(task, stage, 60, [])
+    test "output stays under 2000 chars for a 5-stage task with a full-body description" do
+      # Regression guard on the <500 tokens (~<2000 chars) promise — the nudge
+      # must NOT balloon back to full-context payload even when the task carries
+      # heavy prose.
+      task = big_task()
+      # Pass the currently-running stage; the nudge does not enumerate siblings.
+      stage = five_stage_stage("019f640d-stage-3", 3)
 
-      assert prompt =~ "none"
-      assert prompt =~ "Current stage_id: `stage-1`"
+      prompt = HeartbeatScheduler.nudge_prompt(task, stage)
+
+      len = String.length(prompt)
+
+      assert len < 2000,
+             "nudge_prompt/2 was #{len} chars — must stay <2000 (<500 tokens) to preserve the payload-split contract"
+    end
+
+    test "output does NOT contain full-context markers (skills, evidence, git workflow, description)" do
+      task = big_task()
+      stage = five_stage_stage("019f640d-stage-3", 3)
+
+      prompt = HeartbeatScheduler.nudge_prompt(task, stage)
+
+      refute prompt =~ "## Skill discovery",
+             "nudge_prompt must strip the skills_reference block"
+
+      refute prompt =~ "## Submitting evidence",
+             "nudge_prompt must strip the evidence_workflow_reference block"
+
+      refute prompt =~ "## Git Workflow",
+             "nudge_prompt must strip the git workflow section"
+
+      refute prompt =~ task.description,
+             "nudge_prompt must strip the task description verbatim"
+    end
+
+    test "output includes task_id, stage_id, and pending validation IDs compactly" do
+      task = big_task()
+      stage = five_stage_stage("019f640d-stage-3", 3)
+
+      prompt = HeartbeatScheduler.nudge_prompt(task, stage)
+
+      assert prompt =~ task.id
+      assert prompt =~ stage.id
+      assert prompt =~ "val-3-a"
+      assert prompt =~ "val-3-b"
+      assert prompt =~ "## Completion Reminder"
+      assert prompt =~ "ack, push validation_pass, or report_blocker"
+    end
+
+    test "handles a stage with no pending validations (all passed) — points at stage_complete" do
+      task = big_task()
+
+      stage = %{
+        id: "019f640d-stage-final",
+        name: "wrap-up",
+        status: "running",
+        started_at: DateTime.utc_now(),
+        validations: [
+          %{id: "val-final-a", kind: "test_pass", status: "passed"}
+        ]
+      }
+
+      prompt = HeartbeatScheduler.nudge_prompt(task, stage)
+
+      assert prompt =~ "No pending validation IDs"
       assert prompt =~ "stage_complete"
+      # Fat-context guards still hold.
+      refute prompt =~ "## Skill discovery"
     end
 
-    test "formats hours correctly" do
-      task = %{title: "Task"}
-      stage = %{name: "coding", status: "running"}
+    test "renders cleanly when stage is nil" do
+      # Router only nudges when a stage is armed, but be defensive — a nil
+      # stage must not crash the composer.
+      task = big_task()
 
-      prompt = HeartbeatScheduler.heartbeat_prompt(task, stage, 3660, [])
+      prompt = HeartbeatScheduler.nudge_prompt(task, nil)
 
-      assert prompt =~ "1h 1m"
+      assert prompt =~ task.id
+      # With no stage there's no completion-reminder body — just the preamble.
+      assert prompt =~ "Please ack, push validation, or report_blocker"
+    end
+
+    test ":elapsed_ms opt from the router takes precedence over stage.started_at" do
+      # The router keeps the authoritative elapsed value in LeaseManager. When
+      # it hands it in, the nudge must use that, not the (possibly stale)
+      # stage.started_at.
+      task = big_task()
+
+      stage = %{
+        id: "019f640d-stage-3",
+        name: "stage-3",
+        status: "running",
+        # stage.started_at says 100 minutes ago...
+        started_at: DateTime.utc_now() |> DateTime.add(-100 * 60, :second),
+        validations: []
+      }
+
+      # ...but the router's LeaseManager says 12 minutes.
+      prompt = HeartbeatScheduler.nudge_prompt(task, stage, elapsed_ms: 12 * 60_000)
+
+      assert prompt =~ "no ack in 12m"
+      refute prompt =~ "no ack in 100m"
     end
   end
 
-  describe "heartbeat_prompt/5 plan-aware behavior" do
-    test "returns plan-aware prompt when task is in planning with pending_review plan" do
-      task = %{title: "Plan Task", status: "planning"}
-      plan = %{status: "pending_review", version: 1}
+  describe "pending_validation_ids/1" do
+    test "returns comma-separated pending UUIDs and skips non-pending validations" do
+      stage = %{
+        id: "s1",
+        validations: [
+          %{id: "v1", status: "pending"},
+          %{id: "v2", status: "passed"},
+          %{id: "v3", status: "pending"},
+          %{id: "v4", status: "failed"}
+        ]
+      }
 
-      prompt = HeartbeatScheduler.heartbeat_prompt(task, nil, 60, [], plan)
-
-      assert prompt =~ "submitted"
-      assert prompt =~ "awaiting human review"
-      assert prompt =~ "do not create another plan"
-      refute prompt =~ "validation evidence"
+      assert HeartbeatScheduler.pending_validation_ids(stage) == "v1, v3"
     end
 
-    test "returns plan-aware prompt when task is in planning with draft plan" do
-      task = %{title: "Draft Task", status: "planning"}
-      plan = %{status: "draft", version: 1}
+    test "returns empty string on nil stage or no pending" do
+      assert HeartbeatScheduler.pending_validation_ids(nil) == ""
 
-      prompt = HeartbeatScheduler.heartbeat_prompt(task, nil, 60, [], plan)
+      empty = %{id: "s1", validations: []}
+      assert HeartbeatScheduler.pending_validation_ids(empty) == ""
 
-      assert prompt =~ "draft"
-      assert prompt =~ "Continue working"
-      assert prompt =~ "plan_submit"
-      refute prompt =~ "do not create another plan"
-    end
-
-    test "returns plan-aware prompt when task is in planning with rejected plan" do
-      task = %{title: "Rejected Task", status: "planning"}
-      plan = %{status: "rejected", version: 1}
-
-      prompt = HeartbeatScheduler.heartbeat_prompt(task, nil, 60, [], plan)
-
-      assert prompt =~ "rejected"
-      assert prompt =~ "revised plan"
-      assert prompt =~ "plan_create"
-    end
-
-    test "returns standard heartbeat prompt when plan is nil" do
-      task = %{title: "Standard Task"}
-      stage = %{name: "coding", status: "running"}
-
-      prompt = HeartbeatScheduler.heartbeat_prompt(task, stage, 120, [], nil)
-
-      assert prompt =~ "Standard Task"
-      assert prompt =~ "coding"
-      assert prompt =~ "2 minutes"
-      assert prompt =~ "validation evidence"
-    end
-
-    test "returns standard heartbeat prompt when task is not in planning even with plan" do
-      task = %{title: "In Progress Task", status: "in_progress"}
-      stage = %{name: "coding", status: "running"}
-      plan = %{status: "approved", version: 1}
-
-      prompt = HeartbeatScheduler.heartbeat_prompt(task, stage, 300, [], plan)
-
-      assert prompt =~ "In Progress Task"
-      assert prompt =~ "coding"
-      assert prompt =~ "5 minutes"
-      # Should be the standard prompt, not plan-aware
-      assert prompt =~ "validation evidence"
-      refute prompt =~ "do not create another plan"
+      all_passed = %{id: "s1", validations: [%{id: "v1", status: "passed"}]}
+      assert HeartbeatScheduler.pending_validation_ids(all_passed) == ""
     end
   end
 
-  describe "heartbeat_prompt/5 nil-stage handling" do
-    test "directs agent to start first pending stage when no stage is running" do
-      task = %{title: "My Task", status: "in_progress"}
+  describe "dispatch_prompt/4 vs nudge_prompt/2 regression guard" do
+    # This encodes the payload-split invariant: dispatch stays FAT (initial
+    # dispatch must load skills + evidence + task context on turn one), nudge
+    # stays THIN (safety-net re-poke, <2000 chars). If either drifts, the
+    # split is degrading and the operator-sanity win regresses.
 
-      plan = %{
-        status: "approved",
-        version: 1,
-        stages: [
-          # :position required by sort_by in nil_stage_heartbeat_prompt (added by #437)
-          %{id: "stage-pending-1", name: "Implement Feature", status: "pending", position: 1},
-          %{id: "stage-pending-2", name: "Run Tests", status: "pending", position: 2}
+    test "dispatch_prompt/4 stays fat (>3000 chars) while nudge_prompt/2 stays thin (<2000 chars)" do
+      task = %{
+        id: "019f640d-task",
+        title: "Fat vs thin split",
+        description: "Anything.",
+        status: "in_progress",
+        priority: "medium",
+        project: %{repo_url: "https://github.com/test/router", default_branch: "main"}
+      }
+
+      stage = %{
+        id: "019f640d-stage",
+        name: "coding",
+        status: "running",
+        position: 1,
+        started_at: DateTime.utc_now(),
+        validations: [
+          %{id: "v1", kind: "test_pass", status: "pending"},
+          %{id: "v2", kind: "lint_pass", status: "pending"}
         ]
       }
 
-      prompt = HeartbeatScheduler.heartbeat_prompt(task, nil, 0, [], plan)
+      plan = %{version: 1, stages: [stage]}
 
-      assert prompt =~ "suite_stage_start"
-      assert prompt =~ "stage-pending-1"
-      assert prompt =~ "Implement Feature"
-      assert prompt =~ "stage-pending-2"
-      refute prompt =~ "unknown"
-    end
+      dispatch = HeartbeatScheduler.dispatch_prompt(task, plan, stage)
+      nudge = HeartbeatScheduler.nudge_prompt(task, stage)
 
-    test "tells agent all stages complete when every stage is done" do
-      task = %{title: "Done Task", status: "in_progress"}
+      dispatch_len = String.length(dispatch)
+      nudge_len = String.length(nudge)
 
-      plan = %{
-        status: "approved",
-        version: 1,
-        stages: [
-          %{id: "s1", name: "Stage A", status: "passed", position: 1},
-          %{id: "s2", name: "Stage B", status: "passed", position: 2}
-        ]
-      }
+      assert dispatch_len > 3000,
+             "dispatch_prompt/4 dropped to #{dispatch_len} chars — full-context payload is degrading (should be >3000)"
 
-      prompt = HeartbeatScheduler.heartbeat_prompt(task, nil, 0, [], plan)
+      assert nudge_len < 2000,
+             "nudge_prompt/2 grew to #{nudge_len} chars — short-form payload is degrading (should be <2000)"
 
-      assert prompt =~ "all plan stages are complete"
-      assert prompt =~ "Done Task"
-      refute prompt =~ "unknown"
-    end
+      # Dispatch carries the fat markers.
+      assert dispatch =~ "## Skill discovery"
+      # Nudge does NOT.
+      refute nudge =~ "## Skill discovery"
+      refute nudge =~ "## Submitting evidence"
 
-    test "tells agent to create a plan when plan is nil and task is not in planning" do
-      task = %{title: "No Plan Task", status: "in_progress"}
-
-      prompt = HeartbeatScheduler.heartbeat_prompt(task, nil, 0, [], nil)
-
-      assert prompt =~ "plan_create"
-      refute prompt =~ "unknown"
-    end
-
-    test "handles mixed stage statuses — only counts truly pending stages" do
-      task = %{title: "Mixed Task", status: "in_progress"}
-
-      plan = %{
-        status: "approved",
-        version: 1,
-        stages: [
-          %{id: "s1", name: "Done Stage", status: "passed", position: 1},
-          %{id: "s2", name: "Next Stage", status: "pending", position: 2}
-        ]
-      }
-
-      prompt = HeartbeatScheduler.heartbeat_prompt(task, nil, 0, [], plan)
-
-      assert prompt =~ "s2"
-      assert prompt =~ "Next Stage"
-      assert prompt =~ "suite_stage_start"
-    end
-
-    test "running stage found by task_router still produces normal heartbeat" do
-      task = %{title: "Running Task", status: "in_progress"}
-      # When task_router falls back via current_running_stage, it passes the stage in.
-      # Heartbeat scheduler should emit the normal prompt — not the nil-stage one.
-      stage = %{id: "s1", name: "Implement Fix", status: "running"}
-
-      plan = %{
-        status: "approved",
-        version: 1,
-        stages: [%{id: "s1", name: "Implement Fix", status: "running"}]
-      }
-
-      prompt = HeartbeatScheduler.heartbeat_prompt(task, stage, 120, [], plan)
-
-      assert prompt =~ "Implement Fix"
-      assert prompt =~ "2 minutes"
-      refute prompt =~ "suite_stage_start"
-      refute prompt =~ "unknown"
+      # Log the sizes so the evidence in this stage's validation captures a
+      # concrete number the next tuner can compare against.
+      # credo:disable-for-next-line Credo.Check.Warning.IoInspect
+      IO.puts(
+        "\n[stage 4 payload split] dispatch=#{dispatch_len} chars, nudge=#{nudge_len} chars, ratio=#{Float.round(dispatch_len / nudge_len, 2)}x"
+      )
     end
   end
 

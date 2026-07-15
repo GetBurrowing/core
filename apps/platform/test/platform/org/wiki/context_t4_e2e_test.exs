@@ -584,6 +584,16 @@ defmodule Platform.Org.Wiki.ContextT4E2ETest do
       # meeting.md ..." entry documenting three real fixes). Mirrors the
       # phantom-flood cleanup pattern at 20260706120000.
       "20260714000100_cleanup_historian_no_op_journal_entries_20260713.exs",
+      # Task 019f640d stage 5 (TaskRouter redesign) — force-update the
+      # four dispatch templates (`dispatch.planning`,
+      # `dispatch.in_progress`, `dispatch.in_review`,
+      # `dispatch.deploying`) with the ack-first preamble so runtimes
+      # know their FIRST tool call must be `task_ack(task_id,
+      # stage_id)`. Also refreshes the `variables` list on each row to
+      # include `task_id` + `stage_id` so mustache actually interpolates
+      # them. Content-only sync; no schema changes. Mirrors the force-
+      # update pattern at 20260711202135.
+      "20260715000000_add_task_ack_preamble_to_dispatch_templates.exs",
       # Task 019f62a1 stage 2 — Pin-to-Chat: `task_chat_pins` table
       # backing `Platform.Tasks.ChatPins`. Per-participant subscription
       # rows to a task's execution chat space. Materialised lazily on

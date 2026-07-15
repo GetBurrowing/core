@@ -3,7 +3,7 @@ defmodule Platform.Orchestration.TaskRouterTest do
 
   import Ecto.Query
 
-  alias Platform.Orchestration.{ExecutionLease, ExecutionSpace, TaskRouter}
+  alias Platform.Orchestration.{ExecutionSpace, LeaseManager, TaskRouter}
   alias Platform.Tasks
 
   setup do
@@ -56,6 +56,13 @@ defmodule Platform.Orchestration.TaskRouterTest do
         [] ->
           :ok
       end
+
+      # LeaseManager is a global singleton — purge this task's row so it
+      # doesn't leak into the next test.
+      case :ets.info(:orchestration_lease_manager) do
+        :undefined -> :ok
+        _ -> LeaseManager.clear(task.id)
+      end
     end)
 
     %{project: project, task: task, plan: plan, stage: stage, assignee: assignee}
@@ -95,7 +102,6 @@ defmodule Platform.Orchestration.TaskRouterTest do
       assert status.task_id == task.id
       assert status.assignee == assignee
       assert status.status == :running
-      assert status.escalation_count == 0
     end
 
     test "includes execution_space_id in status", %{task: task, assignee: assignee} do
@@ -114,7 +120,7 @@ defmodule Platform.Orchestration.TaskRouterTest do
   end
 
   describe "PubSub event handling" do
-    test "resets heartbeat on task_updated", %{task: task, assignee: assignee} do
+    test "tracks task_updated last_evidence_at for our task", %{task: task, assignee: assignee} do
       {:ok, _pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
       Process.sleep(50)
 
@@ -146,11 +152,10 @@ defmodule Platform.Orchestration.TaskRouterTest do
     # Regression: prior to the fix, `handle_info({:stage_transitioned, stage}, ...)`
     # unconditionally set `current_stage_id = stage.id`. On a running→passed
     # transition the payload is the just-completed stage, so the router pinned
-    # itself to a `passed` stage; `send_heartbeat/2` then resolved that stage,
-    # filtered validations to ["pending", "running"] (empty), and echoed the
-    # "No validations are pending. If the work is complete, call
-    # `stage_complete`…" heartbeat on a loop until the next broadcast. The fix
-    # resolves `current_stage_id` via `current_running_stage/1` when the
+    # itself to a `passed` stage; the next dispatch then filtered validations to
+    # ["pending", "running"] (empty) and echoed "No validations are pending. If
+    # the work is complete, call `stage_complete`…" until the next broadcast.
+    # The fix resolves `current_stage_id` via `current_running_stage/1` when the
     # broadcast payload is `passed`.
     test "stage_transitioned with passed stage advances current_stage_id to the next running stage",
          %{task: task, assignee: assignee, plan: plan, stage: stage_a} do
@@ -208,7 +213,7 @@ defmodule Platform.Orchestration.TaskRouterTest do
     # Sibling regression: if the passed broadcast lands before the next
     # running stage is written (or when the plan is fully completed), the
     # router must clear `current_stage_id` to nil rather than pin the passed
-    # stage — otherwise heartbeats continue echoing the completed stage's
+    # stage — otherwise dispatches continue echoing the completed stage's
     # (empty) validation list.
     test "stage_transitioned with passed stage and no next running stage clears current_stage_id",
          %{task: task, assignee: assignee, stage: stage_a} do
@@ -334,7 +339,7 @@ defmodule Platform.Orchestration.TaskRouterTest do
       # Task 019e00cb stage 2 wired `HeartbeatScheduler.heartbeat_suppressible?/2`
       # into `maybe_log_heartbeat_suppressed/3`. This scenario satisfies the
       # predicate (running manual_approval stage, every pending validation linked
-      # to the open review_request) so the per-tick "Heartbeat suppressed" log
+      # to the open review_request) so the per-dispatch "Dispatch suppressed" log
       # is intentionally elided — the review_request itself is the visible
       # signal. The assertions above (`status == :waiting_human`,
       # `current_stage_id`, task status `in_review`) cover the state-machine
@@ -546,282 +551,311 @@ defmodule Platform.Orchestration.TaskRouterTest do
       assert is_binary(payload.message.content)
       assert payload.message.author == "TaskRouter"
     end
-
-    test "watchdog abandons a silent active lease and redispatches", %{
-      task: task,
-      assignee: assignee
-    } do
-      Phoenix.PubSub.subscribe(Platform.PubSub, "runtime:#{assignee.id}")
-
-      {:ok, pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
-
-      assert_receive %Phoenix.Socket.Broadcast{event: "attention"}, 1_000
-
-      assert {:ok, _event} =
-               Platform.Orchestration.record_runtime_event(%{
-                 "task_id" => task.id,
-                 "phase" => "execution",
-                 "runtime_id" => assignee.id,
-                 "event_type" => "execution.progress",
-                 "payload" => %{"summary" => "started but went quiet"}
-               })
-
-      Process.sleep(50)
-
-      stale_at = DateTime.add(DateTime.utc_now(), -(31 * 60), :second)
-
-      :sys.replace_state(pid, fn state ->
-        %{
-          state
-          | last_runtime_event_at: stale_at,
-            last_dispatch_at: stale_at,
-            current_stage_id: state.current_stage_id,
-            escalation_count: 1,
-            lease_status: "active",
-            status: :running
-        }
-      end)
-
-      send(pid, :heartbeat)
-
-      assert_receive %Phoenix.Socket.Broadcast{
-                       event: "attention",
-                       payload: payload
-                     },
-                     1_000
-
-      assert payload.signal.reason == "task_assigned"
-      assert payload.signal.task_id == task.id
-
-      Process.sleep(50)
-
-      refute Platform.Orchestration.RuntimeSupervision.current_lease_for_task(task.id)
-
-      lease_statuses =
-        Repo.all(
-          from(l in ExecutionLease,
-            where: l.task_id == ^task.id,
-            order_by: [desc: l.inserted_at],
-            select: l.status
-          )
-        )
-
-      assert "abandoned" in lease_statuses
-
-      status = TaskRouter.current_status(task.id)
-      assert status.status in [:dispatching, :running]
-      assert status.escalation_count == 0
-
-      space = ExecutionSpace.find_by_task_id(task.id)
-      messages = ExecutionSpace.list_messages_with_participants(space.id)
-
-      assert Enum.any?(messages, &String.contains?(&1.content, "Watchdog: runtime went silent"))
-
-      assert Enum.any?(
-               messages,
-               &String.contains?(&1.content, "pending_validations=test_pass:pending")
-             )
-
-      assert Enum.any?(messages, &String.contains?(&1.content, "lease=active"))
-    end
   end
 
-  describe "heartbeat suppression" do
-    test "heartbeat is suppressed when dispatch was sent within the heartbeat interval", %{
-      task: task,
-      assignee: assignee
-    } do
+  describe "event-driven liveness (task 019f640d stage 3)" do
+    # These tests exercise the new event-driven state machine: on each dispatch,
+    # the router calls `LeaseManager.record_dispatch/4` and arms two one-shot
+    # timers (`:check_no_ack`, `:check_safety_net`). The runtime replies with
+    # `execution.acked` (via the future `task_ack` MCP tool from stage 5) to
+    # extend the lease; progress events do the same. Silent drops fire ONE
+    # `execution.no_ack_timeout` / `execution.safety_net_fired` runtime_event
+    # each and post `execution.blocked needs_human=true` to the execution space.
+    #
+    # Because the real timers wait 5min / 90min, tests trigger the check
+    # handlers directly via `send(pid, :check_no_ack)` after establishing the
+    # LeaseManager row shape manually. The router's real code path exercises
+    # the check handler, not the arm; the arm is exercised implicitly by
+    # asserting `LeaseManager.get/1` returns the expected row after dispatch.
+
+    test "happy path: dispatch → record_dispatch → ack via runtime_event → :check_no_ack silent",
+         %{task: task, assignee: assignee, stage: stage} do
       Phoenix.PubSub.subscribe(Platform.PubSub, "runtime:#{assignee.id}")
+
+      # Mark the seeded stage running so `current_running_stage/1` resolves
+      # inside `do_dispatch/2`.
+      stage
+      |> Ecto.Changeset.change(%{status: "running", started_at: DateTime.utc_now()})
+      |> Platform.Repo.update!()
 
       {:ok, pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
 
-      # Consume the initial dispatch attention
       assert_receive %Phoenix.Socket.Broadcast{
                        event: "attention",
                        payload: %{signal: %{reason: "task_assigned"}}
                      },
                      1_000
 
-      # Immediately trigger heartbeat — dispatch was just sent, so it should be suppressed
-      send(pid, :heartbeat)
+      Process.sleep(50)
 
-      # Should NOT receive a heartbeat attention (dispatch cooldown)
-      refute_receive %Phoenix.Socket.Broadcast{
-                       event: "attention",
-                       payload: %{signal: %{reason: "task_heartbeat"}}
-                     },
-                     500
+      # LeaseManager must have a row for this task after successful dispatch.
+      assert %{
+               stage_id: dispatched_stage_id,
+               stage_kind: "coding",
+               ack_at: nil,
+               no_ack_fired?: false
+             } = LeaseManager.get(task.id)
+
+      assert dispatched_stage_id == stage.id
+
+      # Simulate `execution.acked` runtime_event (which stage 5's `task_ack`
+      # MCP tool will emit). The router's `apply_runtime_event/2` clause
+      # calls `LeaseManager.record_ack/1` — clears no-ack, extends
+      # safety-net.
+      acked_event = %{
+        id: nil,
+        task_id: task.id,
+        stage_id: stage.id,
+        event_type: "execution.acked",
+        payload: %{},
+        occurred_at: DateTime.utc_now(),
+        runtime_id: assignee.id,
+        phase: "execution",
+        lease: nil
+      }
+
+      Tasks.broadcast_board({:runtime_event, acked_event})
+      Process.sleep(50)
+
+      assert %{ack_at: %DateTime{}} = LeaseManager.get(task.id)
+
+      # Force `:check_no_ack` to fire NOW (real timer waits 5min). Router
+      # sees `ack_at != nil` and is silent — no blocker post, no state flip.
+      space = ExecutionSpace.find_by_task_id(task.id)
+      before_msgs = length(ExecutionSpace.list_messages_with_participants(space.id))
+
+      send(pid, :check_no_ack)
+      Process.sleep(75)
 
       status = TaskRouter.current_status(task.id)
       assert status.status == :running
-      assert status.last_dispatch_at != nil
+
+      lease_after = LeaseManager.get(task.id)
+      refute lease_after.no_ack_fired?
+
+      after_msgs = ExecutionSpace.list_messages_with_participants(space.id)
+      new_msgs = Enum.drop(after_msgs, before_msgs) |> Enum.map(& &1.content)
+
+      # No `execution.no_ack_timeout` blocker post should have landed.
+      refute Enum.any?(new_msgs, &String.contains?(&1, "Executor never acked"))
     end
 
-    test "heartbeat is suppressed when last_runtime_event_at is within cooldown", %{
-      task: task,
-      assignee: assignee
-    } do
+    test "no-ack path: :check_no_ack fires blocker + broadcasts no_ack_timeout ONCE, no re-arm",
+         %{task: task, assignee: assignee, stage: stage} do
+      # Subscribe to `tasks:board` so we can assert the exact
+      # `execution.no_ack_timeout` broadcast reaches PubSub.
+      Phoenix.PubSub.subscribe(Platform.PubSub, "tasks:board")
       Phoenix.PubSub.subscribe(Platform.PubSub, "runtime:#{assignee.id}")
+
+      stage
+      |> Ecto.Changeset.change(%{status: "running", started_at: DateTime.utc_now()})
+      |> Platform.Repo.update!()
 
       {:ok, pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
 
-      # Consume the initial dispatch attention
       assert_receive %Phoenix.Socket.Broadcast{event: "attention"}, 1_000
+      Process.sleep(50)
 
-      # Record a runtime event (marks last_runtime_event_at as now)
-      {:ok, _event} =
-        Platform.Orchestration.record_runtime_event(%{
-          "task_id" => task.id,
-          "phase" => "execution",
-          "runtime_id" => assignee.id,
-          "event_type" => "execution.progress",
-          "payload" => %{"summary" => "actively streaming"}
+      # No ack ever arrives — force `:check_no_ack` to fire NOW.
+      space = ExecutionSpace.find_by_task_id(task.id)
+      before_msgs = length(ExecutionSpace.list_messages_with_participants(space.id))
+
+      send(pid, :check_no_ack)
+      Process.sleep(100)
+
+      # PubSub must have carried ONE `execution.no_ack_timeout` on
+      # `tasks:board` (in `{:runtime_event, event}` shape).
+      assert_received {:runtime_event, %{event_type: "execution.no_ack_timeout"} = event}
+      assert event.task_id == task.id
+      assert event.stage_id == stage.id
+      assert is_integer(event.payload.elapsed_ms_since_dispatch)
+
+      # Blocker message posted to execution space, ONE only.
+      after_msgs = ExecutionSpace.list_messages_with_participants(space.id)
+      new_contents = Enum.drop(after_msgs, before_msgs) |> Enum.map(& &1.content)
+      no_ack_posts = Enum.filter(new_contents, &String.contains?(&1, "Executor never acked"))
+      assert length(no_ack_posts) == 1
+
+      # LeaseManager row shows `no_ack_fired?: true` — idempotency guard set.
+      assert %{no_ack_fired?: true} = LeaseManager.get(task.id)
+
+      # Router state = :stalled.
+      status = TaskRouter.current_status(task.id)
+      assert status.status == :stalled
+
+      # A second `:check_no_ack` must NOT fire another blocker (idempotent).
+      before_msgs2 = length(ExecutionSpace.list_messages_with_participants(space.id))
+
+      send(pid, :check_no_ack)
+      Process.sleep(75)
+
+      # Refute a second no_ack_timeout event on PubSub.
+      refute_received {:runtime_event, %{event_type: "execution.no_ack_timeout"}}
+
+      after_msgs2 = ExecutionSpace.list_messages_with_participants(space.id)
+      new_contents2 = Enum.drop(after_msgs2, before_msgs2) |> Enum.map(& &1.content)
+      refute Enum.any?(new_contents2, &String.contains?(&1, "Executor never acked"))
+    end
+
+    test "safety-net extend: :check_safety_net reschedules when record_progress extends deadline",
+         %{task: task, assignee: assignee, stage: stage} do
+      stage
+      |> Ecto.Changeset.change(%{status: "running", started_at: DateTime.utc_now()})
+      |> Platform.Repo.update!()
+
+      {:ok, pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
+      Process.sleep(75)
+
+      # A progress event lands mid-flight → safety_net_at moved forward.
+      progress_event = %{
+        id: nil,
+        task_id: task.id,
+        stage_id: stage.id,
+        event_type: "execution.progress",
+        payload: %{"summary" => "still going"},
+        occurred_at: DateTime.utc_now(),
+        runtime_id: assignee.id,
+        phase: "execution",
+        lease: nil
+      }
+
+      Tasks.broadcast_board({:runtime_event, progress_event})
+      Process.sleep(50)
+
+      lease_after_progress = LeaseManager.get(task.id)
+      assert %DateTime{} = lease_after_progress.safety_net_at
+
+      remaining_ms =
+        DateTime.diff(lease_after_progress.safety_net_at, DateTime.utc_now(), :millisecond)
+
+      # 90min safety-net for `coding`; progress pushes deadline back to
+      # `now + 90m`, so remaining is close to 5_400_000ms.
+      assert remaining_ms > 1_000_000
+
+      # Force `:check_safety_net` to fire NOW. Router sees remaining > 0,
+      # reschedules — must NOT fire the alert.
+      Phoenix.PubSub.subscribe(Platform.PubSub, "tasks:board")
+
+      send(pid, :check_safety_net)
+      Process.sleep(75)
+
+      refute_received {:runtime_event, %{event_type: "execution.safety_net_fired"}}
+
+      assert %{safety_net_fired?: false} = LeaseManager.get(task.id)
+    end
+
+    test "safety-net fire: deadline in the past → single loud broadcast + blocker post",
+         %{task: task, assignee: assignee, stage: stage} do
+      Phoenix.PubSub.subscribe(Platform.PubSub, "tasks:board")
+
+      stage
+      |> Ecto.Changeset.change(%{status: "running", started_at: DateTime.utc_now()})
+      |> Platform.Repo.update!()
+
+      {:ok, pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
+      Process.sleep(75)
+
+      # Force safety_net_at into the past by re-writing the LeaseManager row.
+      # (Real-world equivalent: 90 minutes elapsed with no progress.)
+      lease = LeaseManager.get(task.id)
+      past_deadline = DateTime.add(DateTime.utc_now(), -1_000, :millisecond)
+
+      :ets.insert(
+        :orchestration_lease_manager,
+        {task.id, %{lease | safety_net_at: past_deadline}}
+      )
+
+      space = ExecutionSpace.find_by_task_id(task.id)
+      before_msgs = length(ExecutionSpace.list_messages_with_participants(space.id))
+
+      send(pid, :check_safety_net)
+      Process.sleep(100)
+
+      assert_received {:runtime_event, %{event_type: "execution.safety_net_fired"} = event}
+      assert event.task_id == task.id
+      assert event.stage_id == stage.id
+      assert event.payload.stage_kind == "coding"
+
+      assert %{safety_net_fired?: true} = LeaseManager.get(task.id)
+
+      after_msgs = ExecutionSpace.list_messages_with_participants(space.id)
+      new_contents = Enum.drop(after_msgs, before_msgs) |> Enum.map(& &1.content)
+      assert Enum.any?(new_contents, &String.contains?(&1, "safety-net exceeded"))
+
+      # Second call is idempotent.
+      send(pid, :check_safety_net)
+      Process.sleep(75)
+      refute_received {:runtime_event, %{event_type: "execution.safety_net_fired"}}
+    end
+
+    test "manual_approval stage: no :check_no_ack or :check_safety_net timers armed",
+         %{
+           task: task,
+           assignee: assignee,
+           plan: plan
+         } do
+      Phoenix.PubSub.subscribe(Platform.PubSub, "runtime:#{assignee.id}")
+
+      # Replace the seeded coding stage with a manual_approval stage.
+      Platform.Repo.delete_all(from(s in Platform.Tasks.Stage, where: s.plan_id == ^plan.id))
+
+      {:ok, ma_stage} =
+        Tasks.create_stage(%{
+          plan_id: plan.id,
+          position: 1,
+          name: "Manual approval gate",
+          description: "Human review only",
+          status: "running",
+          started_at: DateTime.utc_now()
         })
 
-      Process.sleep(50)
-
-      # Set last_dispatch_at far in the past so dispatch cooldown doesn't interfere
-      stale_dispatch = DateTime.add(DateTime.utc_now(), -20 * 60, :second)
-
-      :sys.replace_state(pid, fn state ->
-        %{state | last_dispatch_at: stale_dispatch}
-      end)
-
-      # Trigger heartbeat — runtime activity is fresh, should be suppressed
-      send(pid, :heartbeat)
-
-      refute_receive %Phoenix.Socket.Broadcast{
-                       event: "attention",
-                       payload: %{signal: %{reason: "task_heartbeat"}}
-                     },
-                     500
-
-      status = TaskRouter.current_status(task.id)
-      assert status.last_runtime_event_at != nil
-    end
-
-    test "heartbeat fires normally after cooldown period", %{
-      task: task,
-      assignee: assignee
-    } do
-      Phoenix.PubSub.subscribe(Platform.PubSub, "runtime:#{assignee.id}")
+      {:ok, _validation} =
+        Tasks.create_validation(%{stage_id: ma_stage.id, kind: "manual_approval"})
 
       {:ok, pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
+      Process.sleep(100)
 
-      # Consume the initial dispatch attention
-      assert_receive %Phoenix.Socket.Broadcast{event: "attention"}, 1_000
+      # The pending_review_request suppression path would fire waiting_human
+      # here IF a review request existed. Since none does, this is the
+      # `waiting_for_human_review?/1` gate — but with no linked review_request,
+      # the stage still counts as manual_approval (all pending validations
+      # are manual_approval kind) so `waiting_for_human_review?/1` returns
+      # true via `manual_approval_gate_pending?/1`.
+      #
+      # But wait — that path only returns true when there IS a pending
+      # review_request. With no request, the router still dispatches. The
+      # dispatch path resolves stage_kind = "manual_approval" and
+      # `arm_liveness_timers/3` no-ops (ack_ms and safety_net_ms both nil).
+      #
+      # Regardless of the exact code path, the key invariant: after dispatch,
+      # `LeaseManager.get/1` shows nil `no_ack_at` and nil `safety_net_at`
+      # OR no lease at all — meaning no timer arming happened.
 
-      # Set both timestamps far in the past (beyond all cooldowns)
-      stale_at = DateTime.add(DateTime.utc_now(), -20 * 60, :second)
+      case LeaseManager.get(task.id) do
+        nil ->
+          # No lease means arm_liveness_timers took the manual_approval
+          # no-op path (or dispatch never reached the arm step because
+          # `waiting_for_human_review?` short-circuited to :waiting_human).
+          :ok
 
-      :sys.replace_state(pid, fn state ->
-        %{
-          state
-          | last_dispatch_at: stale_at,
-            last_runtime_event_at: stale_at,
-            stage_started_at: stale_at
-        }
-      end)
+        lease ->
+          assert lease.no_ack_at == nil,
+                 "manual_approval stage must not arm no-ack timer; got no_ack_at=#{inspect(lease.no_ack_at)}"
 
-      # Trigger heartbeat — all cooldowns expired, should fire
-      send(pid, :heartbeat)
+          assert lease.safety_net_at == nil,
+                 "manual_approval stage must not arm safety-net timer; got safety_net_at=#{inspect(lease.safety_net_at)}"
+      end
 
-      assert_receive %Phoenix.Socket.Broadcast{
-                       event: "attention",
-                       payload: %{signal: %{reason: "task_heartbeat"}}
-                     },
-                     1_000
-    end
-
-    test "heartbeat is suppressed when plan is in pending_review during planning", %{
-      task: task,
-      assignee: assignee
-    } do
-      # Transition task to planning
-      {:ok, task} = Tasks.transition_task(task, "planning")
-
-      Phoenix.PubSub.subscribe(Platform.PubSub, "runtime:#{assignee.id}")
-
-      {:ok, pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
-
-      # Consume the initial dispatch attention
-      assert_receive %Phoenix.Socket.Broadcast{event: "attention"}, 1_000
-
-      # Create a plan in pending_review
-      {:ok, _plan} =
-        Tasks.create_plan(%{task_id: task.id, status: "pending_review", version: 2})
-
-      # Set timestamps far in the past so other cooldowns don't interfere
-      stale_at = DateTime.add(DateTime.utc_now(), -20 * 60, :second)
-
-      :sys.replace_state(pid, fn state ->
-        %{
-          state
-          | last_dispatch_at: stale_at,
-            last_runtime_event_at: stale_at,
-            task_status: "planning"
-        }
-      end)
-
-      # Trigger heartbeat
-      send(pid, :heartbeat)
-
-      # Should NOT receive a heartbeat (plan is pending_review)
-      refute_receive %Phoenix.Socket.Broadcast{
-                       event: "attention",
-                       payload: %{signal: %{reason: "task_heartbeat"}}
-                     },
-                     500
-
-      Process.sleep(50)
-      status = TaskRouter.current_status(task.id)
-      assert status.status == :waiting_human
-    end
-
-    test "heartbeat is suppressed when plan is in draft during planning", %{
-      task: task,
-      assignee: assignee
-    } do
-      # Transition task to planning
-      {:ok, task} = Tasks.transition_task(task, "planning")
-
-      Phoenix.PubSub.subscribe(Platform.PubSub, "runtime:#{assignee.id}")
-
-      {:ok, pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
-
-      # Consume the initial dispatch attention
-      assert_receive %Phoenix.Socket.Broadcast{event: "attention"}, 1_000
-
-      # Create a plan in draft status
-      {:ok, _plan} =
-        Tasks.create_plan(%{task_id: task.id, status: "draft", version: 2})
-
-      # Set timestamps far in the past so other cooldowns don't interfere
-      stale_at = DateTime.add(DateTime.utc_now(), -20 * 60, :second)
-
-      :sys.replace_state(pid, fn state ->
-        %{
-          state
-          | last_dispatch_at: stale_at,
-            last_runtime_event_at: stale_at,
-            task_status: "planning"
-        }
-      end)
-
-      # Trigger heartbeat
-      send(pid, :heartbeat)
-
-      # Should NOT receive a heartbeat (plan is in draft — agent is actively working)
-      refute_receive %Phoenix.Socket.Broadcast{
-                       event: "attention",
-                       payload: %{signal: %{reason: "task_heartbeat"}}
-                     },
-                     500
-
-      Process.sleep(50)
-      status = TaskRouter.current_status(task.id)
-      # Should still be running (not waiting_human — draft is agent work, not human gate)
-      assert status.status == :running
+      # Doubly-defensive check: no `:check_no_ack` or `:check_safety_net`
+      # messages should be sitting in the process mailbox waiting to fire
+      # (Process.send_after enqueues them for later delivery — a pending
+      # timer message will appear in :messages when we peek).
+      #
+      # NOTE: `Process.send_after/3` messages don't appear in the mailbox
+      # until they fire. Instead, we probe process state directly: the arm
+      # helper returns `:ok` without side effects, so the assertions above
+      # (no lease OR nil timeouts) are the load-bearing check.
+      _messages = Process.info(pid, :messages)
     end
   end
 
@@ -838,6 +872,27 @@ defmodule Platform.Orchestration.TaskRouterTest do
       # Stop via TaskRouter.stop/1
       :ok = TaskRouter.stop(task.id)
       refute Process.alive?(pid)
+    end
+
+    test "terminate/2 clears the LeaseManager row for the task", %{
+      task: task,
+      assignee: assignee,
+      stage: stage
+    } do
+      stage
+      |> Ecto.Changeset.change(%{status: "running", started_at: DateTime.utc_now()})
+      |> Platform.Repo.update!()
+
+      {:ok, _pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
+      Process.sleep(75)
+
+      # Post-dispatch there should be a lease row for this task.
+      assert %{} = LeaseManager.get(task.id)
+
+      :ok = TaskRouter.stop(task.id)
+      Process.sleep(50)
+
+      assert LeaseManager.get(task.id) == nil
     end
   end
 
@@ -946,7 +1001,7 @@ defmodule Platform.Orchestration.TaskRouterTest do
       assert length(awaiting_logs) >= 1
     end
 
-    test "approving all items wakes the router and schedules a heartbeat", %{
+    test "approving all items wakes the router and clears :waiting_human", %{
       task: task,
       assignee: assignee,
       stage: stage
@@ -956,7 +1011,7 @@ defmodule Platform.Orchestration.TaskRouterTest do
       {:ok, task} = Tasks.transition_task(task, "planning")
       {:ok, _task} = Tasks.transition_task(task, "in_progress")
 
-      {:ok, pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
+      {:ok, _pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
 
       assert_receive %Phoenix.Socket.Broadcast{event: "attention"}, 1_000
 
@@ -981,10 +1036,6 @@ defmodule Platform.Orchestration.TaskRouterTest do
 
       status = TaskRouter.current_status(task.id)
       assert status.status == :running
-
-      # Heartbeat must have been (re-)scheduled
-      internal_state = :sys.get_state(pid)
-      assert internal_state.heartbeat_ref != nil
     end
 
     test "rejecting an item wakes the router AND re-dispatches with the in_progress prompt",
@@ -1031,78 +1082,15 @@ defmodule Platform.Orchestration.TaskRouterTest do
       status = TaskRouter.current_status(task.id)
       assert status.status == :running
     end
-
-    test "handle_possible_stall is a no-op while suppressed", %{
-      task: task,
-      assignee: assignee,
-      stage: stage
-    } do
-      Phoenix.PubSub.subscribe(Platform.PubSub, "runtime:#{assignee.id}")
-
-      {:ok, task} = Tasks.transition_task(task, "planning")
-      {:ok, _task} = Tasks.transition_task(task, "in_progress")
-
-      {:ok, pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
-      assert_receive %Phoenix.Socket.Broadcast{event: "attention"}, 1_000
-
-      space = ExecutionSpace.find_by_task_id(task.id)
-
-      {:ok, manual_validation} =
-        Tasks.create_validation(%{stage_id: stage.id, kind: "manual_approval"})
-
-      {:ok, _request} =
-        Platform.Tasks.ReviewRequests.create_review_request(%{
-          validation_id: manual_validation.id,
-          task_id: task.id,
-          execution_space_id: space.id,
-          items: [%{label: "UI"}]
-        })
-
-      Process.sleep(100)
-      assert TaskRouter.current_status(task.id).status == :waiting_human
-
-      # Force a stall scenario and tick a heartbeat — :waiting_human guard
-      # at the top of handle_info(:heartbeat, ...) must short-circuit.
-      stale_at = DateTime.add(DateTime.utc_now(), -60 * 60, :second)
-
-      :sys.replace_state(pid, fn s ->
-        %{
-          s
-          | last_dispatch_at: stale_at,
-            last_runtime_event_at: stale_at,
-            stage_started_at: stale_at,
-            escalation_count: 5
-        }
-      end)
-
-      send(pid, :heartbeat)
-
-      refute_receive %Phoenix.Socket.Broadcast{
-                       event: "attention",
-                       payload: %{signal: %{reason: "task_heartbeat"}}
-                     },
-                     400
-
-      Process.sleep(50)
-      status = TaskRouter.current_status(task.id)
-      assert status.status == :waiting_human
-      # Escalation count should NOT have advanced (no stall path)
-      assert status.escalation_count == 5
-    end
   end
 
-  describe "heartbeat_suppressible?/2 predicate wiring (task 019e00cb stage 2)" do
-    # Each test exercises one of the three call sites that the predicate gates:
-    #   1. send_heartbeat short-circuit at the top of handle_info(:heartbeat, …)
-    #   2. maybe_log_heartbeat_suppressed/3 — the per-tick "Dispatch suppressed"
-    #      execution-space message that piles up
-    #   3. handle_possible_stall/2 — the "Stall detected | Escalation N/M" log
-    #      and escalation count bump
-    #
-    # The shared setup below builds a stage whose ONLY pending validation is a
-    # manual_approval already linked to an open review request — i.e. the
-    # predicate's "true" path. Variant tests then mutate that shape to exercise
-    # the false branches (mixed kinds, missing linkage, no pending validations).
+  describe "dispatch suppression predicate (task 019e00cb stage 2)" do
+    # Predicate `HeartbeatScheduler.heartbeat_suppressible?/2` gates the
+    # `maybe_log_heartbeat_suppressed/3` call — when the running stage is
+    # a manual_approval whose only pending validation is linked to an open
+    # review_request, the per-dispatch "Dispatch suppressed" log is elided.
+    # (The old escalation-ladder tests are gone with the polling scheduler;
+    # only the dispatch-time log suppression remains relevant.)
 
     defp seed_linked_manual_approval(task, stage, space) do
       {:ok, manual_validation} =
@@ -1120,52 +1108,9 @@ defmodule Platform.Orchestration.TaskRouterTest do
     end
 
     defp drop_seed_validations(stage) do
-      # The shared setup creates a default test_pass validation on the stage.
-      # Several predicate tests need the stage's pending set to be exactly the
-      # manual_approval(s) we add — so wipe the seeded test_pass first.
       Platform.Repo.delete_all(
         from(v in Platform.Tasks.Validation, where: v.stage_id == ^stage.id)
       )
-    end
-
-    test "all-linked manual_approval pending → handle_info(:heartbeat) takes the suppress branch (no attention dispatch)",
-         %{
-           task: task,
-           assignee: assignee,
-           stage: stage
-         } do
-      Phoenix.PubSub.subscribe(Platform.PubSub, "runtime:#{assignee.id}")
-
-      {:ok, task} = Tasks.transition_task(task, "planning")
-      {:ok, _task} = Tasks.transition_task(task, "in_progress")
-
-      stage
-      |> Ecto.Changeset.change(%{status: "running", started_at: DateTime.utc_now()})
-      |> Platform.Repo.update!()
-
-      {:ok, pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
-      assert_receive %Phoenix.Socket.Broadcast{event: "attention"}, 1_000
-
-      space = ExecutionSpace.find_by_task_id(task.id)
-      drop_seed_validations(stage)
-      seed_linked_manual_approval(task, stage, space)
-
-      # The :review_request_pending PubSub flips status → :waiting_human, so
-      # to exercise the line-253 short-circuit specifically we re-arm the router
-      # to :running and force-tick :heartbeat.
-      Process.sleep(100)
-
-      :sys.replace_state(pid, fn s ->
-        %{s | status: :running, current_stage_id: stage.id, heartbeat_ref: nil}
-      end)
-
-      send(pid, :heartbeat)
-
-      refute_receive %Phoenix.Socket.Broadcast{
-                       event: "attention",
-                       payload: %{signal: %{reason: "task_heartbeat"}}
-                     },
-                     400
     end
 
     test "all-linked manual_approval pending → maybe_log_heartbeat_suppressed posts no execution-space log",
@@ -1196,8 +1141,8 @@ defmodule Platform.Orchestration.TaskRouterTest do
       baseline = ExecutionSpace.list_messages_with_participants(space.id)
       baseline_count = length(baseline)
 
-      # The :dispatch handler hits the pre-dispatch guard at line 214 which
-      # calls maybe_log_heartbeat_suppressed/3. With the predicate gate, that
+      # The :dispatch handler hits the pre-dispatch guard which calls
+      # maybe_log_heartbeat_suppressed/3. With the predicate gate, that
       # call must NOT post a "Dispatch suppressed" line.
       send(pid, :dispatch)
       Process.sleep(150)
@@ -1213,185 +1158,6 @@ defmodule Platform.Orchestration.TaskRouterTest do
 
       assert suppression_logs == [],
              "expected predicate gate to swallow suppression log, got: #{inspect(suppression_logs)}"
-    end
-
-    test "all-linked manual_approval pending → handle_possible_stall does NOT escalate even when forced past :waiting_human guard",
-         %{
-           task: task,
-           assignee: assignee,
-           stage: stage
-         } do
-      Phoenix.PubSub.subscribe(Platform.PubSub, "runtime:#{assignee.id}")
-
-      {:ok, task} = Tasks.transition_task(task, "planning")
-      {:ok, _task} = Tasks.transition_task(task, "in_progress")
-
-      stage
-      |> Ecto.Changeset.change(%{status: "running", started_at: DateTime.utc_now()})
-      |> Platform.Repo.update!()
-
-      {:ok, pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
-      assert_receive %Phoenix.Socket.Broadcast{event: "attention"}, 1_000
-
-      space = ExecutionSpace.find_by_task_id(task.id)
-      drop_seed_validations(stage)
-      seed_linked_manual_approval(task, stage, space)
-
-      Process.sleep(100)
-
-      # Force-arm :running with a stale activity timestamp so the heartbeat
-      # path WOULD reach handle_possible_stall absent the new predicate gate.
-      stale_at = DateTime.add(DateTime.utc_now(), -60 * 60, :second)
-
-      :sys.replace_state(pid, fn s ->
-        %{
-          s
-          | status: :running,
-            current_stage_id: stage.id,
-            heartbeat_ref: nil,
-            last_dispatch_at: stale_at,
-            last_runtime_event_at: stale_at,
-            last_evidence_at: stale_at,
-            stage_started_at: stale_at,
-            escalation_count: 0
-        }
-      end)
-
-      baseline = ExecutionSpace.list_messages_with_participants(space.id)
-      baseline_count = length(baseline)
-
-      send(pid, :heartbeat)
-      Process.sleep(150)
-
-      status = TaskRouter.current_status(task.id)
-
-      assert status.escalation_count == 0,
-             "predicate gate must short-circuit handle_possible_stall — escalation count must not bump"
-
-      after_msgs = ExecutionSpace.list_messages_with_participants(space.id)
-      new_msgs = Enum.drop(after_msgs, baseline_count) |> Enum.map(& &1.content)
-
-      stall_logs = Enum.filter(new_msgs, &String.contains?(&1, "Stall detected"))
-
-      assert stall_logs == [],
-             "expected no Stall detected log, got: #{inspect(stall_logs)}"
-    end
-
-    test "manual_approval pending but review_request linkage missing → guardrail b keeps Stall detected log alive",
-         %{
-           task: task,
-           assignee: assignee,
-           stage: stage
-         } do
-      Phoenix.PubSub.subscribe(Platform.PubSub, "runtime:#{assignee.id}")
-
-      {:ok, task} = Tasks.transition_task(task, "planning")
-      {:ok, _task} = Tasks.transition_task(task, "in_progress")
-
-      stage
-      |> Ecto.Changeset.change(%{status: "running", started_at: DateTime.utc_now()})
-      |> Platform.Repo.update!()
-
-      {:ok, pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
-      assert_receive %Phoenix.Socket.Broadcast{event: "attention"}, 1_000
-
-      space = ExecutionSpace.find_by_task_id(task.id)
-      drop_seed_validations(stage)
-
-      # Add a manual_approval validation but DO NOT create a linked review_request.
-      # Predicate must return false (broken linkage) → escalation path runs.
-      {:ok, _manual_validation} =
-        Tasks.create_validation(%{stage_id: stage.id, kind: "manual_approval"})
-
-      Process.sleep(50)
-
-      stale_at = DateTime.add(DateTime.utc_now(), -60 * 60, :second)
-
-      :sys.replace_state(pid, fn s ->
-        %{
-          s
-          | status: :running,
-            current_stage_id: stage.id,
-            heartbeat_ref: nil,
-            last_dispatch_at: stale_at,
-            last_runtime_event_at: stale_at,
-            last_evidence_at: stale_at,
-            stage_started_at: stale_at,
-            escalation_count: 0
-        }
-      end)
-
-      baseline = ExecutionSpace.list_messages_with_participants(space.id)
-      baseline_count = length(baseline)
-
-      send(pid, :heartbeat)
-      Process.sleep(200)
-
-      after_msgs = ExecutionSpace.list_messages_with_participants(space.id)
-      new_msgs = Enum.drop(after_msgs, baseline_count) |> Enum.map(& &1.content)
-
-      stall_logs = Enum.filter(new_msgs, &String.contains?(&1, "Stall detected"))
-
-      assert length(stall_logs) >= 1,
-             "guardrail b: missing review_request linkage must NOT suppress stall log; got messages=#{inspect(new_msgs)}"
-    end
-
-    test "mixed pending validations (test_pass + manual_approval) → predicate returns false; suppression NOT applied",
-         %{
-           task: task,
-           assignee: assignee,
-           stage: stage
-         } do
-      Phoenix.PubSub.subscribe(Platform.PubSub, "runtime:#{assignee.id}")
-
-      {:ok, task} = Tasks.transition_task(task, "planning")
-      {:ok, _task} = Tasks.transition_task(task, "in_progress")
-
-      # Mark the seeded stage as running so the heartbeat path resolves it.
-      stage
-      |> Ecto.Changeset.change(%{status: "running", started_at: DateTime.utc_now()})
-      |> Platform.Repo.update!()
-
-      {:ok, pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
-      assert_receive %Phoenix.Socket.Broadcast{event: "attention"}, 1_000
-
-      # Keep the seeded test_pass validation (mixed kinds) AND add a linked
-      # manual_approval. Predicate must return false because not every pending
-      # validation is a manual_approval.
-      space = ExecutionSpace.find_by_task_id(task.id)
-      seed_linked_manual_approval(task, stage, space)
-
-      Process.sleep(100)
-
-      stale_at = DateTime.add(DateTime.utc_now(), -60 * 60, :second)
-
-      :sys.replace_state(pid, fn s ->
-        %{
-          s
-          | status: :running,
-            current_stage_id: stage.id,
-            heartbeat_ref: nil,
-            last_dispatch_at: stale_at,
-            last_runtime_event_at: stale_at,
-            last_evidence_at: stale_at,
-            stage_started_at: stale_at,
-            escalation_count: 0
-        }
-      end)
-
-      baseline = ExecutionSpace.list_messages_with_participants(space.id)
-      baseline_count = length(baseline)
-
-      send(pid, :heartbeat)
-      Process.sleep(200)
-
-      after_msgs = ExecutionSpace.list_messages_with_participants(space.id)
-      new_msgs = Enum.drop(after_msgs, baseline_count) |> Enum.map(& &1.content)
-
-      stall_logs = Enum.filter(new_msgs, &String.contains?(&1, "Stall detected"))
-
-      assert length(stall_logs) >= 1,
-             "mixed pending kinds (test_pass + manual_approval) must NOT suppress stall log; got=#{inspect(new_msgs)}"
     end
   end
 
@@ -1486,7 +1252,7 @@ defmodule Platform.Orchestration.TaskRouterTest do
                      150
 
       # `state.assignee` is untouched — the routing lens leaves the phase
-      # identity in place for heartbeat/escalation bookkeeping.
+      # identity in place for downstream bookkeeping.
       status = TaskRouter.current_status(task.id)
       assert status.assignee == assignee
     end
@@ -1576,14 +1342,20 @@ defmodule Platform.Orchestration.TaskRouterTest do
   end
 
   describe "deploy stage failure recovery" do
-    test "handle_deploy_stage_failure returns state and router stays alive", %{
-      task: task,
-      assignee: assignee,
-      plan: plan,
-      stage: _stage
-    } do
+    test "failed deploy stage returns state, router stays alive, task bounces to in_progress AND re-dispatches",
+         %{
+           task: task,
+           assignee: assignee,
+           plan: plan,
+           stage: _stage
+         } do
+      Phoenix.PubSub.subscribe(Platform.PubSub, "runtime:#{assignee.id}")
+
       {:ok, pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
-      Process.sleep(50)
+
+      # Consume the initial dispatch attention so we can watch for the
+      # re-dispatch caused by the deploy failure.
+      assert_receive %Phoenix.Socket.Broadcast{event: "attention"}, 1_000
 
       # Transition task through to deploying
       {:ok, task} = Tasks.transition_task(task, "planning")
@@ -1615,6 +1387,15 @@ defmodule Platform.Orchestration.TaskRouterTest do
       # Task should have bounced back to in_progress
       updated_task = Tasks.get_task_detail(task.id)
       assert updated_task.status == "in_progress"
+
+      # Regression: a fresh `task_assigned` dispatch fires after the bounce
+      # so the agent picks up the in_progress prompt (this is the branch
+      # the stage 3 redesign explicitly preserves byte-for-byte per spec).
+      assert_receive %Phoenix.Socket.Broadcast{
+                       event: "attention",
+                       payload: %{signal: %{reason: "task_assigned"}}
+                     },
+                     1_000
     end
   end
 end

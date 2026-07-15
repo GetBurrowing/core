@@ -1,12 +1,42 @@
 defmodule Platform.Orchestration.HeartbeatScheduler do
   @moduledoc """
-  Stage-aware heartbeat cadence configuration and prompt generation.
+  Stage-aware prompt generation for `TaskRouter`.
 
-  Provides pure functions for determining heartbeat intervals, stall thresholds,
-  and generating dispatch/heartbeat prompt messages. No GenServer — this module
-  is called by `TaskRouter` to decide timing and message content.
+  Provides pure functions for composing the two dispatch payload shapes the
+  router sends into a runtime, plus legacy cadence/threshold config the
+  polling scheduler used to consume (retained for the deploy_failure
+  regression tests; slated for removal in the stage 6 ADR cleanup pass).
 
-  Cadence table (from ADR 0025):
+  ## Two payload shapes (task 019f640d stage 4)
+
+  * `dispatch_prompt/4` — **FULL context** on state transitions. Emitted when
+    the task moves to `in_progress`, `in_review`, or `deploying`, when a new
+    stage transitions to `running`, or when a failed branch bounces back.
+    Composes the task-status-specific dispatch body plus skills_reference,
+    evidence_workflow_reference, git workflow, and a per-stage execution /
+    review / deploy contract. This stays fat by design — the initial dispatch
+    is the runtime's one shot to load org conventions, evidence workflow, and
+    the exact validation ids to push.
+
+  * `nudge_prompt/2` — **SHORT form** on safety-net / no-ack events only.
+    Emitted by the router's `fire_no_ack_alert/2` and `fire_safety_net_alert/2`
+    paths (stage 3 wiring in `arm_liveness_timers/3` — see `task_router.ex`).
+    Target output <500 tokens (~<2000 chars): a two-line preamble plus the
+    "## Completion Reminder" contract listing pending validation IDs and the
+    action fork (ack / validation_pass / report_blocker). No skills_reference,
+    no evidence_workflow_reference, no task description, no org preamble.
+
+  The old `heartbeat_prompt/5` composed the fat payload on every tick of the
+  polling scheduler; that scheduler is gone (stage 3), and so is the function.
+  The `"heartbeat"` DB template slug is retained as DEPRECATED for one more
+  release so any migration reader isn't surprised — stage 6's ADR cleanup
+  pass removes it.
+
+  ## Legacy cadence table (ADR 0025 — retired)
+
+  Retained only so `deploy_failure` cadence-config tests keep passing until
+  the stage 6 sweep drops the accessors entirely. No production caller reads
+  these values — the event-driven `LeaseManager` timeouts govern liveness.
 
   | Stage type        | Heartbeat interval | Stall threshold | Escalation after    |
   |-------------------|--------------------|-----------------|---------------------|
@@ -59,6 +89,16 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
   before trying to rediscover skills from disk. \
   Read and follow any relevant bundled skills — they describe conventions, repo layout, deploy targets, and how to delegate work. \
   Only fall back to filesystem skill lookup if the payload clearly references a path without including the needed content.\
+  """
+
+  # Ack-first preamble prepended to every hardcoded dispatch fallback
+  # (task 019f640d stage 5). Mirrors `PromptTemplates.task_ack_preamble/0`
+  # in shape — the DB template does the mustache substitution; the
+  # hardcoded fallback interpolates via Elixir `#{...}` so both routes
+  # ship the same guidance regardless of whether the DB template row
+  # exists yet.
+  @task_ack_preamble_template """
+  **Your first tool call must be `task_ack(task_id="__TASK_ID__", stage_id="__STAGE_ID__")`.** This tells the orchestrator you received the dispatch and are working; without it the router will fire a no-ack alert in 5 minutes.
   """
 
   @evidence_workflow_reference """
@@ -176,16 +216,31 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
   end
 
   @doc """
-  Generate the initial dispatch prompt sent when a task is first assigned.
+  Generate the **full-context** initial dispatch prompt for a state transition.
 
-  Tries to load the prompt from the DB (via PromptTemplates), falls back to the
-  hardcoded prompt if the template is not found.
+  This is the FAT payload — it carries skills_reference, evidence_workflow_reference,
+  git workflow instructions, and a per-stage execution / review / deploy contract
+  so the runtime's fresh subagent lands with everything it needs on turn one.
+  Emitted on:
 
-  Pattern-matched on task status and plan/stage presence:
-  - planning (no plan) — instruct agent to create and submit a plan
-  - in_progress — execute current stage with evidence
-  - in_review — run validations, do not self-approve gates
-  - fallback — generic assignment prompt
+  * approved plan → `in_progress` transition (first dispatch after plan approval)
+  * `stage_transitioned running → passed` (next-stage dispatch)
+  * failure-branch bounce (`stage.status == "failed"` re-dispatch — deploy fail
+    or review fail routing the task back to `in_progress`)
+
+  For the SHORT payload emitted on safety-net / no-ack events, see
+  `nudge_prompt/2`. The router routes accordingly (task 019f640d stage 3
+  wiring in `arm_liveness_timers/3`).
+
+  Tries the DB prompt template first via `PromptTemplates.render_template/2`
+  and falls back to the hardcoded module-local prompt if the template isn't
+  seeded. Pattern-matched on task status and plan/stage presence:
+
+  * planning (no plan) — instruct agent to create and submit a plan
+  * in_progress — execute current stage with evidence
+  * in_review — run validations, do not self-approve gates
+  * deploying — execute the resolved deploy strategy
+  * fallback — generic assignment prompt
   """
   @spec dispatch_prompt(map(), map() | nil, map() | nil, keyword()) :: String.t()
   def dispatch_prompt(task, plan, stage, opts \\ [])
@@ -199,6 +254,12 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
     parent_plans = Keyword.get(opts, :parent_plans, [])
 
     assigns = %{
+      # task_ack preamble assigns (task 019f640d stage 5). Planning
+      # dispatches have no plan yet, so stage_id is deliberately empty —
+      # the `task_ack` MCP tool tolerates a missing stage_id and resolves
+      # via `current_running_stage/1` when it can.
+      task_id: contract_id(task, :id) || "",
+      stage_id: "",
       task_title: task.title,
       task_description: task.description || "No description provided.",
       task_priority: task.priority,
@@ -227,6 +288,9 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
     provider_guidance = resolve_provider_guidance(opts)
 
     assigns = %{
+      # task_ack preamble assigns (task 019f640d stage 5).
+      task_id: contract_id(task, :id) || "",
+      stage_id: contract_id(stage || %{}, :id) || "",
       task_title: task.title,
       stage_info: stage_info,
       # Pre-rendered Git Workflow block — single source of truth shared with
@@ -260,6 +324,9 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
 
     assigns =
       %{
+        # task_ack preamble assigns (task 019f640d stage 5).
+        task_id: contract_id(task, :id) || "",
+        stage_id: contract_id(stage || %{}, :id) || "",
         task_title: task.title,
         stage_info: stage_info,
         provider_specific_guidance: provider_guidance,
@@ -304,6 +371,9 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
     strategy_config = Map.get(resolved_strategy, "config", %{}) |> inspect()
 
     assigns = %{
+      # task_ack preamble assigns (task 019f640d stage 5).
+      task_id: contract_id(task, :id) || "",
+      stage_id: contract_id(stage || %{}, :id) || "",
       task_title: task.title,
       stage_info: stage_info,
       repo_url: repo_url,
@@ -439,164 +509,107 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
   defp render_parent_plan_block(_), do: ""
 
   @doc """
-  Generate a stateful heartbeat interrogation prompt.
+  Generate the **short-form** nudge prompt sent on safety-net / no-ack events.
 
-  Tries to load the prompt from the DB (via PromptTemplates), falls back to the
-  hardcoded prompt if the template is not found.
+  Payload discipline: <500 tokens (~<2000 chars). No skills_reference, no
+  evidence_workflow_reference, no task description, no org preamble. Just a
+  two-line preamble telling the runtime it has fallen silent, plus the
+  "## Completion Reminder" contract that names the current `task_id`,
+  `stage_id`, pending validation IDs, and the ack / validation_pass /
+  report_blocker fork.
 
-  This is not a keepalive — it carries elapsed time, stage position, and
-  pending validations to force the agent to account for itself.
+  Callers: `TaskRouter.fire_no_ack_alert/2` and
+  `TaskRouter.fire_safety_net_alert/2` (event-driven liveness path arm in
+  `arm_liveness_timers/3`). Contrast with `dispatch_prompt/4` which composes
+  the FULL context on state transitions.
+
+  Tries the DB template `"nudge"` via `PromptTemplates.render_template/2` and
+  falls back to a hardcoded local composition if the template isn't seeded.
+
+  Optional keyword: `:elapsed_ms` — router-supplied elapsed since dispatch
+  (from `LeaseManager.get/1`). If absent, derives elapsed from
+  `stage.started_at` when set; otherwise omits the elapsed marker.
   """
-  @spec heartbeat_prompt(map(), map() | nil, non_neg_integer(), list(), map() | nil) :: String.t()
-  def heartbeat_prompt(task, stage, elapsed_seconds, pending_validations, plan \\ nil) do
-    # Plan-aware prompt override for planning phase
-    task_status = Map.get(task, :status) || Map.get(task, "status")
+  @spec nudge_prompt(map(), map() | nil) :: String.t()
+  @spec nudge_prompt(map(), map() | nil, keyword()) :: String.t()
+  def nudge_prompt(task, stage, opts \\ []) do
+    task_id = contract_id(task, :id) || "unknown"
+    stage_id = contract_id(stage || %{}, :id) || "unknown"
+    elapsed_str = nudge_elapsed_str(stage, opts)
+    pending_ids = pending_validation_ids(stage)
 
-    if task_status == "planning" && plan do
-      planning_heartbeat_prompt(task, plan)
-    else
-      # When stage is nil, emit an actionable prompt rather than "unknown — unknown".
-      # This happens when current_stage_id is stale/nil and no running stage was found.
-      if is_nil(stage) do
-        nil_stage_heartbeat_prompt(task, plan)
-      else
-        elapsed_str = format_elapsed(elapsed_seconds)
-        stage_name = stage.name
-        stage_status = stage.status
+    assigns = %{
+      task_id: task_id,
+      stage_id: stage_id,
+      elapsed_minutes: elapsed_str,
+      pending_validation_ids:
+        if(pending_ids == "",
+          do: "(none — call stage_complete if work is done)",
+          else: pending_ids
+        )
+    }
 
-        pending_str =
-          case pending_validations do
-            [] -> "none"
-            validations -> Enum.map_join(validations, ", ", & &1.kind)
-          end
-
-        plan_status = if plan, do: plan.status, else: "none"
-        plan_exists = if plan, do: "true", else: "false"
-
-        assigns = %{
-          task_title: task.title,
-          stage_name: stage_name,
-          stage_status: stage_status,
-          elapsed: elapsed_str,
-          pending_validations: pending_str,
-          plan_status: plan_status,
-          plan_exists: plan_exists
-        }
-
-        prompt =
-          case PromptTemplates.render_template("heartbeat", assigns) do
-            {:ok, rendered} ->
-              rendered
-
-            {:error, :not_found} ->
-              hardcoded_heartbeat(task, stage_name, stage_status, elapsed_str, pending_str)
-          end
-
-        enrich_heartbeat_prompt(prompt, task, stage, pending_validations)
-      end
+    case PromptTemplates.render_template("nudge", assigns) do
+      {:ok, rendered} -> rendered
+      {:error, :not_found} -> hardcoded_nudge(task, stage, elapsed_str)
     end
   end
 
-  # ── Plan-aware heartbeat prompts ─────────────────────────────────────────
+  @doc """
+  Comma-separated list of pending validation UUIDs on `stage`. Empty string
+  when the stage has no pending validations (or is nil). Used by
+  `nudge_prompt/2` — the nudge template does not enumerate per-validation
+  instructions, it just lists IDs.
+  """
+  @spec pending_validation_ids(map() | nil) :: String.t()
+  def pending_validation_ids(nil), do: ""
 
-  defp planning_heartbeat_prompt(task, plan) do
-    case plan.status do
-      "pending_review" ->
-        """
-        Your plan for "#{task.title}" has been submitted and is awaiting human review.
+  def pending_validation_ids(stage) do
+    stage
+    |> pending_validations_for_stage()
+    |> Enum.map(fn v -> Map.get(v, :id) || Map.get(v, "id") end)
+    |> Enum.reject(&(is_nil(&1) or &1 == ""))
+    |> Enum.join(", ")
+  end
 
-        No action needed — do not create another plan. The current plan (v#{plan.version}) is in pending_review status. Wait for the human reviewer to approve or reject it.
+  # Derive the elapsed-minutes string for the nudge preamble. Prefer an
+  # explicit `:elapsed_ms` opt (LeaseManager-authoritative when the router
+  # passes it), fall back to `stage.started_at`, return `"?"` when neither
+  # is available so the preamble still renders cleanly.
+  defp nudge_elapsed_str(stage, opts) when is_list(opts) do
+    case Keyword.get(opts, :elapsed_ms) do
+      ms when is_integer(ms) and ms >= 0 ->
+        Integer.to_string(div(ms, 60_000))
 
-        If you have other context to share about the plan, post it to the execution space as commentary.
-        """
+      _ ->
+        case stage_started_at(stage) do
+          %DateTime{} = ts ->
+            Integer.to_string(div(DateTime.diff(DateTime.utc_now(), ts, :second), 60))
 
-      "draft" ->
-        """
-        A plan draft for "#{task.title}" is in progress (v#{plan.version}, status: draft).
-
-        Continue working on the plan or submit it when ready using plan_submit. Do not create a new plan — finish and submit the existing draft.
-        """
-
-      "rejected" ->
-        """
-        Your plan for "#{task.title}" was rejected (v#{plan.version}).
-
-        Review any feedback in the execution space, then create a revised plan using plan_create. Address the reviewer's concerns in the new version.
-        """
-
-      _other ->
-        """
-        Task: #{task.title} [planning phase]
-        Plan status: #{plan.status} (v#{plan.version})
-
-        Review the plan status and take appropriate action. If the plan needs work, continue with it. If it's ready, submit it for review.
-        """
+          _ ->
+            "?"
+        end
     end
   end
 
-  # ── Nil-stage heartbeat prompt (no running stage found) ──────────────
+  defp stage_started_at(nil), do: nil
 
-  # Emits an actionable prompt when stage is nil — either because all stages
-  # are complete, or because the plan has pending stages that haven't started yet.
-  # This replaces the confusing "stage: unknown — unknown" fallback.
-  defp nil_stage_heartbeat_prompt(task, plan) do
-    stages = if plan, do: plan.stages || [], else: []
-    # Sort by position so the "next pending stage" prompt always points at
-    # the lowest-position pending stage, matching TaskRouter's dispatch
-    # order. Without this the heartbeat could nominate a higher-position
-    # stage while lower-position ones are still pending — same root cause
-    # as the dispatch ordering bug fixed in `task_router.first_pending_stage/1`.
-    pending_stages =
-      stages
-      |> Enum.sort_by(& &1.position)
-      |> Enum.filter(&(&1.status == "pending"))
-
-    all_complete? =
-      stages != [] && Enum.all?(stages, &(&1.status in ["passed", "failed", "skipped"]))
-
-    cond do
-      all_complete? ->
-        """
-        Task "#{task.title}" — all plan stages are complete.
-
-        If the task is not yet marked done, review the completed stages and confirm the work is finished. Use suite_task_complete if everything is in order, or post a summary to the execution space.
-        """
-
-      pending_stages != [] ->
-        first = hd(pending_stages)
-
-        stage_list =
-          pending_stages
-          |> Enum.map_join("\n", fn s -> "  - #{s.name} (#{s.id})" end)
-
-        """
-        Task "#{task.title}" — no stage is currently running.
-
-        The next pending stage is: #{first.name} (#{first.id})
-
-        Start this stage now using suite_stage_start with stage_id=#{first.id}, then proceed with the implementation described in the stage.
-
-        All pending stages:
-        #{stage_list}
-        """
-
-      plan == nil ->
-        """
-        Task "#{task.title}" — no approved plan found.
-
-        Create a plan using plan_create before beginning work.
-        """
-
-      true ->
-        """
-        Task "#{task.title}" — no active stage found.
-
-        Review the plan stages and resume work. If a stage is stuck, use suite_stage_start on the appropriate stage.
-        """
-    end
+  defp stage_started_at(stage) when is_map(stage) do
+    Map.get(stage, :started_at) || Map.get(stage, "started_at")
   end
 
   # ── Hardcoded fallback prompts ─────────────────────────────────────────
+
+  # Render the ack-first preamble for the hardcoded fallback path with
+  # the runtime's actual task_id / stage_id substituted in place of the
+  # __TASK_ID__ / __STAGE_ID__ placeholders. Callers pass empty strings
+  # when a stage isn't available yet (planning dispatch) — the tool
+  # tolerates a missing stage_id and resolves via current_running_stage.
+  defp render_task_ack_preamble(task_id, stage_id) do
+    @task_ack_preamble_template
+    |> String.replace("__TASK_ID__", task_id || "")
+    |> String.replace("__STAGE_ID__", stage_id || "")
+  end
 
   # Kept in parity with the DB `dispatch.planning` template so environments
   # without the seeded row (fresh dev DBs before migrations run, or tests
@@ -611,8 +624,10 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
        ) do
     previous_rejection_section = render_previous_rejection_section(previous_rejection_reason)
     upstream_plans_section = render_upstream_plans_section(parent_plans)
+    ack_preamble = render_task_ack_preamble(contract_id(task, :id), "")
 
     """
+    #{ack_preamble}
     You have been assigned a task that requires a plan before any implementation begins.
 
     Task: #{task.title}
@@ -729,7 +744,11 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
   defp hardcoded_dispatch_in_progress(task, plan, stage, provider_guidance \\ "") do
     stage_info = format_stage_info(plan, stage)
 
+    ack_preamble =
+      render_task_ack_preamble(contract_id(task, :id), contract_id(stage || %{}, :id))
+
     """
+    #{ack_preamble}
     Plan approved — execute the current stage.
 
     Task: #{task.title}
@@ -754,7 +773,11 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
   defp hardcoded_dispatch_in_review(task, plan, stage, provider_guidance \\ "") do
     stage_info = format_stage_info(plan, stage)
 
+    ack_preamble =
+      render_task_ack_preamble(contract_id(task, :id), contract_id(stage || %{}, :id))
+
     """
+    #{ack_preamble}
     Task is in review — exercise and validate the implementation.
 
     Task: #{task.title}
@@ -956,6 +979,9 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
     # the per-member branch a stack member was given at in_progress.
     task_slug = member_slug(task)
 
+    ack_preamble =
+      render_task_ack_preamble(contract_id(task, :id), contract_id(stage || %{}, :id))
+
     strategy_instructions =
       deploy_strategy_instructions(
         strategy_type,
@@ -966,6 +992,7 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
       )
 
     """
+    #{ack_preamble}
     Task is deploying — execute the deploy stage based on the resolved strategy.
 
     Task: #{task.title}
@@ -1082,16 +1109,20 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
     """
   end
 
-  defp hardcoded_heartbeat(task, stage_name, stage_status, elapsed_str, pending_str) do
-    """
-    Task: #{task.title} [stage: #{stage_name} — #{stage_status}]
-    Stage running for: #{elapsed_str}
-    Pending validations: #{pending_str}
+  # Hardcoded fallback for `nudge_prompt/2` — mirrors the seeded `"nudge"`
+  # template body so environments without the seeded row still emit the
+  # short-form payload. Deliberately minimal: two-line preamble + the
+  # `nudge_contract/2` completion reminder. No skills, no evidence workflow,
+  # no task description.
+  defp hardcoded_nudge(task, stage, elapsed_str) do
+    task_id = contract_id(task, :id) || "unknown"
+    stage_id = contract_id(stage || %{}, :id) || "unknown"
 
-    Either push validation evidence or report a blocker.
+    preamble =
+      "Task #{task_id} stage #{stage_id} — no ack in #{elapsed_str}m. " <>
+        "Please ack, push validation, or report_blocker.\n"
 
-    The attention signal that delivered this message includes a `context` field with the full task hierarchy: project, epic, task metadata, approved plan with stages, and execution_space_id.\
-    """
+    preamble <> nudge_contract(task, stage)
   end
 
   # ── Enrichment pipeline ─────────────────────────────────────────────────
@@ -1104,7 +1135,7 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
   # in_progress → execution_contract → code, tests, commit, push (no PR)
   # in_review   → review_contract   → exercise feature, screenshots, evidence
   # deploying   → deploy_contract   → PR, CI, merge (no code changes)
-  # heartbeat   → heartbeat_contract → pending validations reminder
+  # nudge       → nudge_contract    → pending validation IDs + ack fork
 
   defp enrich_in_progress_prompt(prompt, task, stage) do
     prompt
@@ -1148,11 +1179,6 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
           _ -> %{"type" => "manual"}
         end
     end
-  end
-
-  defp enrich_heartbeat_prompt(prompt, task, stage, pending_validations) do
-    prompt
-    |> append_unless_present(heartbeat_contract(task, stage, pending_validations))
   end
 
   defp maybe_strip_git_workflow(prompt, task) do
@@ -1284,31 +1310,32 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
     """
   end
 
-  defp heartbeat_contract(_task, nil, _pending_validations), do: ""
+  # `nudge_contract/2` — the "## Completion Reminder" block appended after the
+  # `nudge_prompt/2` preamble. Deliberately terse: task_id, stage_id, and a
+  # single action line listing pending validation IDs compactly rather than
+  # enumerating per-validation instructions (that's the dispatch contract's
+  # job — the nudge is a re-poke, not the first dispatch).
+  defp nudge_contract(_task, nil), do: ""
 
-  defp heartbeat_contract(task, stage, pending_validations) do
+  defp nudge_contract(task, stage) do
     stage_id = contract_id(stage, :id)
     task_id = contract_id(task, :id)
+    ids = pending_validation_ids(stage)
 
-    pending_lines =
-      case pending_validations do
-        [] ->
-          "- No validations are pending. If the work is complete, call `stage_complete` with `stage_id=#{stage_id}`."
+    action_line =
+      case ids do
+        "" ->
+          "- No pending validation IDs — if the work is complete, call `stage_complete` with `stage_id=#{stage_id}`."
 
-        items ->
-          Enum.map_join(items, "\n", fn validation ->
-            kind = Map.get(validation, :kind) || Map.get(validation, "kind") || "validation"
-            id = Map.get(validation, :id) || Map.get(validation, "id") || "<missing-id>"
-            "- Pending `#{kind}` → validation_id=`#{id}`"
-          end)
+        list ->
+          "- Pending validation IDs: #{list} — ack, push validation_pass, or report_blocker with task_id=#{task_id} stage_id=#{stage_id}"
       end
 
     """
 
     ## Completion Reminder
     #{contract_target_lines(task_id, stage_id)}
-    #{pending_lines}
-    #{report_blocker_instruction(task_id, stage_id, "Use `report_blocker`")}
+    #{action_line}
     """
   end
 
@@ -1480,16 +1507,6 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
     end
   end
 
-  defp append_unless_present(prompt, ""), do: prompt
-
-  defp append_unless_present(prompt, addition) do
-    if String.contains?(prompt, String.trim(addition)) do
-      prompt
-    else
-      prompt <> addition
-    end
-  end
-
   defp real_repo_url?(repo_url) when is_binary(repo_url) do
     repo_url != "" and not String.contains?(repo_url, "example.invalid")
   end
@@ -1610,19 +1627,5 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
   # non-stack task (keeps existing dispatch output byte-for-byte unchanged).
   def member_slug(task) do
     if stack_membership(task), do: full_task_id(task), else: short_task_id(task)
-  end
-
-  defp format_elapsed(seconds) when seconds < 60, do: "#{seconds} seconds"
-
-  defp format_elapsed(seconds) do
-    minutes = div(seconds, 60)
-
-    if minutes < 60 do
-      "#{minutes} minutes"
-    else
-      hours = div(minutes, 60)
-      remaining_minutes = rem(minutes, 60)
-      "#{hours}h #{remaining_minutes}m"
-    end
   end
 end

@@ -19,6 +19,7 @@ defmodule Platform.Orchestration.RuntimeSupervision do
   @event_statuses %{
     "assignment.accepted" => nil,
     "assignment.rejected" => "abandoned",
+    "execution.acked" => nil,
     "execution.started" => "active",
     "execution.heartbeat" => "active",
     "execution.progress" => "active",
@@ -386,6 +387,9 @@ defmodule Platform.Orchestration.RuntimeSupervision do
 
       "assignment.rejected" ->
         "Runtime #{runtime} rejected assignment for #{event.phase}"
+
+      "execution.acked" ->
+        "Runtime #{runtime} acked dispatch for #{event.phase}"
 
       "execution.started" ->
         "Runtime #{runtime} started execution (worker=#{(lease && lease.runtime_worker_ref) || "unknown"})"

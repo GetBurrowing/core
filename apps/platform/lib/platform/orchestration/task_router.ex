@@ -1,12 +1,50 @@
 defmodule Platform.Orchestration.TaskRouter do
   @moduledoc """
-  Per-task orchestration process: dispatch, heartbeat, escalation.
+  Per-task orchestration process: event-driven dispatch, ack, and safety-net.
 
   One `TaskRouter` process runs per active task assignment. It subscribes to
-  `tasks:board` PubSub events to track stage transitions and resets its
-  heartbeat timer whenever progress is observed.
+  `tasks:board` PubSub events, dispatches on state transitions (plan approved,
+  stage transitioned, plan completed), and arms per-dispatch liveness timers.
 
-  All decisions are deterministic — no LLM in the router.
+  ## Event-driven liveness (ADR 0025 amendment — task 019f640d)
+
+  The historical fixed-cadence heartbeat + escalation ladder is gone. In its
+  place:
+
+  1. **Trigger**: `plan_updated approved`, `stage_transitioned running`,
+     `plan_updated completed`, or a failed-stage bounce triggers
+     `send(self(), :dispatch)`.
+  2. **Dispatch**: `do_dispatch/2` composes context + prompt via
+     `HeartbeatScheduler.dispatch_prompt/4` + `ContextAssembler.build/2` and
+     broadcasts an `attention` event to the assignee runtime.
+  3. **Arm timers**: on successful broadcast, the router calls
+     `LeaseManager.record_dispatch/4` and arms one `:check_no_ack` timer
+     (short — 5 min) and one `:check_safety_net` timer (stage-kind specific)
+     via `Process.send_after/3`.
+  4. **Ack extends**: an `execution.acked` runtime_event (emitted by the
+     `task_ack` MCP tool in stage 5) is consumed by `apply_runtime_event/2`,
+     which calls `LeaseManager.record_ack/1` to clear the no-ack countdown
+     and extend the safety-net deadline.
+  5. **Progress extends**: any `execution.heartbeat` / `execution.progress` /
+     validation activity event calls `LeaseManager.record_progress/1`,
+     pushing the safety-net deadline forward without touching the no-ack
+     idempotency.
+  6. **Silent drops**: on `:check_no_ack` firing with no ack, the router
+     broadcasts a single `execution.no_ack_timeout` runtime_event, posts an
+     `execution.blocked needs_human=true` message to the execution space,
+     transitions to `:stalled`, and does NOT re-arm. On `:check_safety_net`
+     firing past the safety-net deadline (no progress in the interval), the
+     router broadcasts a single `execution.safety_net_fired` runtime_event
+     and posts the same `execution.blocked needs_human=true` message. Both
+     events are gated by `LeaseManager.mark_*_fired/1` so a spurious re-wake
+     never re-fires.
+
+  manual_approval stages get NO liveness timers (both `ack_ms` and
+  `safety_net_ms` are `nil` in `LeaseManager.stage_kind_timeouts/0`); a daily
+  digest surfaces long-pending review requests separately (out of scope for
+  this task).
+
+  All decisions remain deterministic — no LLM in the router.
   """
 
   use GenServer
@@ -20,17 +58,13 @@ defmodule Platform.Orchestration.TaskRouter do
     ContextAssembler,
     ExecutionSpace,
     HeartbeatScheduler,
+    LeaseManager,
     RuntimeSupervision
   }
 
   alias Platform.Repo
   alias Platform.Tasks
   alias Platform.Tasks.{DeployResolver, ReviewRequests, Stage}
-
-  # Cooldown window for runtime activity: if the runtime sent a progress/heartbeat
-  # event within this window, suppress the next heartbeat to avoid interrupting
-  # an actively-streaming agent. Half the shortest non-planning interval (coding: 10 min).
-  @runtime_activity_cooldown_ms 2 * 60_000
 
   # ── State ──────────────────────────────────────────────────────────────
 
@@ -48,10 +82,8 @@ defmodule Platform.Orchestration.TaskRouter do
             last_dispatch_at: DateTime.t() | nil,
             task_status: String.t() | nil,
             lease_status: String.t() | nil,
-            heartbeat_ref: reference() | nil,
             deploy_lease: CredentialLease.t() | nil,
-            escalation_count: non_neg_integer(),
-            status: :dispatching | :running | :stalled | :complete | :escalated | :waiting_human
+            status: :dispatching | :running | :stalled | :complete | :waiting_human
           }
 
     defstruct [
@@ -65,9 +97,7 @@ defmodule Platform.Orchestration.TaskRouter do
       :last_dispatch_at,
       :task_status,
       :lease_status,
-      :heartbeat_ref,
       :deploy_lease,
-      escalation_count: 0,
       status: :dispatching
     ]
   end
@@ -119,8 +149,8 @@ defmodule Platform.Orchestration.TaskRouter do
           nil
       end
 
-    # Hydrate task_status from DB so heartbeat guards can check the phase
-    # without a DB query on every heartbeat tick.
+    # Hydrate task_status from DB so the dispatch path can check the phase
+    # without a DB query on every event.
     initial_task_status =
       case Tasks.get_task_detail(task_id) do
         %{status: s} -> s
@@ -160,7 +190,7 @@ defmodule Platform.Orchestration.TaskRouter do
             {:ok, %{state | status: :waiting_human}}
 
           true ->
-            {:ok, schedule_heartbeat(%{state | status: :running})}
+            {:ok, %{state | status: :running}}
         end
 
       "blocked" ->
@@ -191,7 +221,6 @@ defmodule Platform.Orchestration.TaskRouter do
       execution_space_id: state.execution_space_id,
       status: state.status,
       current_stage_id: state.current_stage_id,
-      escalation_count: state.escalation_count,
       stage_started_at: state.stage_started_at,
       last_evidence_at: state.last_evidence_at,
       last_runtime_event_at: state.last_runtime_event_at,
@@ -232,7 +261,7 @@ defmodule Platform.Orchestration.TaskRouter do
         state =
           state
           |> Map.put(:task_status, task.status)
-          |> cancel_heartbeat()
+          |> clear_liveness()
           |> Map.put(:status, :waiting_human)
 
         {:noreply, state}
@@ -242,69 +271,75 @@ defmodule Platform.Orchestration.TaskRouter do
     end
   end
 
-  def handle_info(:heartbeat, %State{status: :waiting_human} = state) do
-    {:noreply, state}
+  # New event-driven liveness handlers (task 019f640d stage 3).
+  #
+  # `:check_no_ack` — armed on each successful dispatch. If the executor / reviewer
+  # never called `task_ack`, LeaseManager.get returns a lease with `ack_at: nil`;
+  # we fire one loud `execution.no_ack_timeout` runtime_event + post
+  # `execution.blocked needs_human=true` and transition to `:stalled`. No re-arm.
+  # The idempotency guard `mark_no_ack_fired/1` prevents a spurious re-wake
+  # (e.g. a stale timer sneaking through) from double-firing.
+  def handle_info(:check_no_ack, %State{task_id: task_id} = state) do
+    case LeaseManager.get(task_id) do
+      nil ->
+        # Lease was cleared (stage transition, human gate, termination) —
+        # nothing to alert on.
+        {:noreply, state}
+
+      %{ack_at: %DateTime{}} ->
+        # Ack landed before the check fired — silent.
+        {:noreply, state}
+
+      %{no_ack_fired?: true} ->
+        # Already fired for this dispatch — idempotent noop.
+        {:noreply, state}
+
+      lease ->
+        case LeaseManager.mark_no_ack_fired(task_id) do
+          {:ok, :fired} ->
+            fire_no_ack_alert(state, lease)
+            {:noreply, %{state | status: :stalled}}
+
+          _ ->
+            {:noreply, state}
+        end
+    end
   end
 
-  def handle_info(:heartbeat, state) do
-    state = %{state | heartbeat_ref: nil}
+  # `:check_safety_net` — armed on each successful dispatch at the stage-kind's
+  # safety-net interval. If progress extended the deadline (`record_progress/1`
+  # or `record_ack/1` moved `safety_net_at` past `now`), reschedule to the new
+  # deadline. Otherwise fire one loud `execution.safety_net_fired` runtime_event
+  # + post `execution.blocked needs_human=true`. Also idempotency-gated.
+  def handle_info(:check_safety_net, %State{task_id: task_id} = state) do
+    case LeaseManager.get(task_id) do
+      nil ->
+        {:noreply, state}
 
-    stage_type = heartbeat_stage_type(state)
+      %{safety_net_fired?: true} ->
+        {:noreply, state}
 
-    # Heartbeat short-circuit: when the running stage is a manual_approval gate
-    # whose pending validations are all linked to open review_requests, suppress
-    # the dispatch and reschedule for the next tick. The pure predicate
-    # `HeartbeatScheduler.heartbeat_suppressible?/2` is the single source of truth
-    # for this decision (task 019e00cb stage 1). Guardrail b: when a pending
-    # manual_approval is NOT linked to a review_request, the predicate returns
-    # false and we fall through to the normal heartbeat path so the agent gets
-    # nudged to fix the broken linkage instead of stalling silently.
-    if heartbeat_suppressible_for_state?(state) do
-      {:noreply, schedule_heartbeat(state)}
-    else
-      interval_ms = HeartbeatScheduler.interval_ms(stage_type) || 0
+      %{safety_net_at: nil} ->
+        # manual_approval (or otherwise disabled) — never fire.
+        {:noreply, state}
 
-      cond do
-        # Guard 1: Suppress heartbeat if we dispatched within the current heartbeat interval.
-        # The agent hasn't had a full interval to respond yet — don't interrupt.
-        dispatch_within_interval?(state, interval_ms) ->
-          Logger.debug(
-            "[TaskRouter] heartbeat suppressed for task #{state.task_id}: dispatch too recent"
-          )
+      %{safety_net_at: %DateTime{} = deadline} = lease ->
+        remaining_ms = DateTime.diff(deadline, DateTime.utc_now(), :millisecond)
 
-          {:noreply, schedule_heartbeat(state)}
+        if remaining_ms > 0 do
+          # Progress or ack pushed the deadline out; reschedule to the new one.
+          Process.send_after(self(), :check_safety_net, remaining_ms)
+          {:noreply, state}
+        else
+          case LeaseManager.mark_safety_net_fired(task_id) do
+            {:ok, :fired} ->
+              fire_safety_net_alert(state, lease)
+              {:noreply, state}
 
-        # Guard 2: Suppress heartbeat if the runtime sent a progress/heartbeat event recently.
-        # The agent is actively streaming — don't interrupt with a nudge.
-        runtime_activity_within_cooldown?(state) ->
-          Logger.debug(
-            "[TaskRouter] heartbeat suppressed for task #{state.task_id}: runtime activity within cooldown"
-          )
-
-          {:noreply, schedule_heartbeat(state)}
-
-        # Guard 3: Plan-aware gating for the planning phase.
-        # Defensive catch for missed PubSub events — check plan status directly.
-        state.task_status == "planning" ->
-          {:noreply, handle_planning_heartbeat(state)}
-
-        true ->
-          task = Tasks.get_task_detail(state.task_id)
-
-          if task do
-            idle_ms = latest_activity_age_ms(state)
-            stall_threshold = HeartbeatScheduler.stall_threshold_ms(stage_type)
-
-            if stall_threshold && idle_ms >= stall_threshold do
-              {:noreply, handle_possible_stall(state, task)}
-            else
-              send_heartbeat(state, task)
-              {:noreply, schedule_heartbeat(state)}
-            end
-          else
-            {:noreply, schedule_heartbeat(state)}
+            _ ->
+              {:noreply, state}
           end
-      end
+        end
     end
   end
 
@@ -316,13 +351,12 @@ defmodule Platform.Orchestration.TaskRouter do
       state
       |> Map.put(:last_evidence_at, DateTime.utc_now())
       |> then(fn s -> if task_status, do: Map.put(s, :task_status, task_status), else: s end)
-      |> reset_escalation()
 
     state =
       if waiting_for_human_review?(state) do
-        state |> cancel_heartbeat() |> Map.put(:status, :waiting_human)
+        state |> clear_liveness() |> Map.put(:status, :waiting_human)
       else
-        schedule_heartbeat(state)
+        state
       end
 
     {:noreply, state}
@@ -350,15 +384,15 @@ defmodule Platform.Orchestration.TaskRouter do
       # On a `passed` transition the broadcast payload is the just-completed
       # stage — its status is already `passed` and `find_stage(plan, id)` will
       # still resolve it, so keying `current_stage_id` off `stage.id` here
-      # pins the router to a finished stage. `send_heartbeat/2` then filters
+      # pins the router to a finished stage. `do_dispatch/2` then filters
       # that stage's validations to `["pending", "running"]` (empty) and
-      # echoes "No validations are pending…" on every tick until the next
-      # broadcast lands. Instead, resolve to the currently-running stage
-      # from the freshly reloaded plan; fall back to `nil` when no stage is
-      # running yet (next dispatch/hydrate will fill it in). Other statuses
-      # (`running`, `failed`) still key off the transitioned stage as before
-      # — the failure-bounce branch below expects `stage` to be the failing
-      # one, and a `running` broadcast is exactly the stage we should track.
+      # echoes "No validations are pending…" until the next broadcast lands.
+      # Instead, resolve to the currently-running stage from the freshly
+      # reloaded plan; fall back to `nil` when no stage is running yet (next
+      # dispatch/hydrate will fill it in). Other statuses (`running`,
+      # `failed`) still key off the transitioned stage as before — the
+      # failure-bounce branch below expects `stage` to be the failing one,
+      # and a `running` broadcast is exactly the stage we should track.
       next_stage_id =
         case stage.status do
           "passed" ->
@@ -371,14 +405,24 @@ defmodule Platform.Orchestration.TaskRouter do
             stage.id
         end
 
+      # A stage-boundary crossing invalidates the prior stage's liveness
+      # bookkeeping — the next dispatch will call `record_dispatch/4` with a
+      # fresh row. Clear here so a lingering `:check_no_ack` / `:check_safety_net`
+      # doesn't fire against stale state before the new dispatch arrives.
+      if next_stage_id != state.current_stage_id do
+        LeaseManager.clear(state.task_id)
+      end
+
       state =
         state
         |> Map.put(:current_stage_id, next_stage_id)
         |> Map.put(:stage_started_at, DateTime.utc_now())
         |> Map.put(:last_evidence_at, DateTime.utc_now())
-        |> reset_escalation()
+        |> maybe_reset_stalled()
 
       # If a review or deploy stage fails, bounce the task back to in_progress
+      # (regression-critical — preserved byte-for-byte from the pre-redesign
+      # state machine per task 019f640d stage 3 spec).
       state =
         if stage.status == "failed" do
           task = Tasks.get_task_detail(state.task_id)
@@ -406,7 +450,9 @@ defmodule Platform.Orchestration.TaskRouter do
               :ok
           end
 
-          # Re-dispatch so the agent picks up the in_progress prompt
+          # Re-dispatch so the agent picks up the in_progress prompt. The
+          # subsequent `do_dispatch/2` call will `record_dispatch/4` +
+          # re-arm liveness timers automatically.
           if state.execution_space_id do
             ExecutionSpace.post_log(
               state.execution_space_id,
@@ -416,7 +462,7 @@ defmodule Platform.Orchestration.TaskRouter do
           end
 
           send(self(), :dispatch)
-          state |> Map.put(:status, :running) |> schedule_heartbeat()
+          %{state | status: :running}
         else
           state = maybe_mark_review_task_in_review(state)
 
@@ -426,15 +472,16 @@ defmodule Platform.Orchestration.TaskRouter do
             end
 
             maybe_log_heartbeat_suppressed(state, stage)
-            state |> cancel_heartbeat() |> Map.put(:status, :waiting_human)
+            state |> clear_liveness() |> Map.put(:status, :waiting_human)
           else
             # When a new stage becomes running, re-dispatch so the agent gets
-            # an updated prompt that describes the current stage
+            # an updated prompt that describes the current stage. Timers arm
+            # via `do_dispatch/2`.
             if stage.status == "running" do
               send(self(), :dispatch)
             end
 
-            schedule_heartbeat(state)
+            state
           end
         end
 
@@ -478,6 +525,10 @@ defmodule Platform.Orchestration.TaskRouter do
       end
     end
 
+    # Phase boundary — clear the prior stage's liveness. Next dispatch will
+    # arm fresh timers keyed off the new phase's first stage.
+    LeaseManager.clear(task_id)
+
     # Re-dispatch so the agent picks up the updated status prompt
     send(self(), :dispatch)
     {:noreply, state}
@@ -488,16 +539,15 @@ defmodule Platform.Orchestration.TaskRouter do
     state =
       case plan.status do
         "pending_review" ->
-          state |> cancel_heartbeat() |> Map.put(:status, :waiting_human)
+          state |> clear_liveness() |> Map.put(:status, :waiting_human)
 
         "approved" ->
           state
           |> Map.put(:status, :running)
           |> ensure_execution_stage_started(task_id)
-          |> schedule_heartbeat()
 
         "rejected" ->
-          state |> cancel_heartbeat() |> Map.put(:status, :waiting_human)
+          state |> clear_liveness() |> Map.put(:status, :waiting_human)
 
         _other ->
           state
@@ -518,7 +568,7 @@ defmodule Platform.Orchestration.TaskRouter do
 
     state =
       state
-      |> cancel_heartbeat()
+      |> clear_liveness()
       |> Map.put(:status, :waiting_human)
 
     {:noreply, state}
@@ -531,15 +581,13 @@ defmodule Platform.Orchestration.TaskRouter do
         {:review_request_resolved, %{task_id: tid, outcome: outcome}},
         %State{task_id: tid} = state
       ) do
-    state =
-      state
-      |> Map.put(:status, :running)
-      |> schedule_heartbeat()
+    state = %{state | status: :running}
 
     if outcome == :failed do
       # ReviewRequests already posted the consolidated feedback to the
       # execution space; redispatch so the agent picks up the in_progress
-      # prompt that includes that feedback.
+      # prompt that includes that feedback. `do_dispatch/2` arms fresh
+      # liveness timers.
       send(self(), :dispatch)
     end
 
@@ -555,7 +603,7 @@ defmodule Platform.Orchestration.TaskRouter do
 
   @impl true
   def terminate(_reason, state) do
-    cancel_heartbeat(state)
+    clear_liveness(state)
     revoke_deploy_lease(state)
 
     # Archive execution space on shutdown (best-effort — DB may be unavailable)
@@ -584,10 +632,10 @@ defmodule Platform.Orchestration.TaskRouter do
     stage = current_running_stage(plan)
 
     # Stage-level responsibility routing (task 019f5d47 — progressive enhancement).
-    # `state.assignee` stays fixed on the phase assignee so heartbeat/escalation
-    # bookkeeping keys off task-level identity; only the runtime broadcast target
-    # changes per-dispatch when a stage carries a `responsibility` role key. If
-    # the role is unassigned or the target runtime is offline, we fall back to
+    # `state.assignee` stays fixed on the phase assignee so bookkeeping keys off
+    # task-level identity; only the runtime broadcast target changes per-dispatch
+    # when a stage carries a `responsibility` role key. If the role is
+    # unassigned or the target runtime is offline, we fall back to
     # `state.assignee` and emit telemetry — never blocks dispatch.
     dispatch_assignee = resolve_stage_dispatch_assignee(stage, task, state) || state.assignee
 
@@ -626,7 +674,7 @@ defmodule Platform.Orchestration.TaskRouter do
             end
 
           log_content =
-            "Task assigned: #{task.title} | Stage: #{stage_pos}/#{stage_count} | #{assignee_log} | Heartbeat: #{heartbeat_interval_min(stage)}min"
+            "Task assigned: #{task.title} | Stage: #{stage_pos}/#{stage_count} | #{assignee_log}"
 
           ExecutionSpace.post_log(state.execution_space_id, log_content)
 
@@ -634,6 +682,13 @@ defmodule Platform.Orchestration.TaskRouter do
             metadata: %{"reason" => "task_assigned"}
           )
         end
+
+        # Event-driven liveness arm (task 019f640d stage 3). Record the
+        # dispatch in LeaseManager and arm one-shot ack + safety-net timers
+        # for this stage-instance. `arm_liveness_timers/2` no-ops on
+        # manual_approval stage kinds (no timers armed at all).
+        stage_kind = current_stage_type(%{state | current_stage_id: stage && stage.id})
+        arm_liveness_timers(state.task_id, stage, stage_kind)
 
         state =
           state
@@ -645,9 +700,9 @@ defmodule Platform.Orchestration.TaskRouter do
 
         state =
           if waiting_for_human_review?(state) do
-            state |> cancel_heartbeat() |> Map.put(:status, :waiting_human)
+            state |> clear_liveness() |> Map.put(:status, :waiting_human)
           else
-            schedule_heartbeat(state)
+            state
           end
 
         {:noreply, state}
@@ -671,9 +726,9 @@ defmodule Platform.Orchestration.TaskRouter do
 
         state =
           if waiting_for_human_review?(state) do
-            state |> cancel_heartbeat() |> Map.put(:status, :waiting_human)
+            state |> clear_liveness() |> Map.put(:status, :waiting_human)
           else
-            schedule_heartbeat(state)
+            state
           end
 
         {:noreply, state}
@@ -765,255 +820,146 @@ defmodule Platform.Orchestration.TaskRouter do
       {:error, :endpoint_not_ready}
   end
 
-  # Defensive plan-aware heartbeat gating for the planning phase.
-  # Uses latest_plan (any status) instead of current_plan (approved/completed only)
-  # because during planning the plan may be in draft or pending_review.
-  defp handle_planning_heartbeat(state) do
-    plan = Tasks.latest_plan(state.task_id)
+  # ── Liveness (LeaseManager) helpers ────────────────────────────────────
 
-    cond do
-      # Plan submitted and awaiting human review — suppress heartbeat entirely
-      # and move to waiting_human state (defensive catch for missed PubSub).
-      plan && plan.status == "pending_review" ->
-        Logger.info(
-          "[TaskRouter] heartbeat suppressed for task #{state.task_id}: plan is pending_review (defensive catch)"
-        )
+  # Record the dispatch in LeaseManager and arm one-shot ack + safety-net
+  # timers. Idempotent w.r.t. LeaseManager — `record_dispatch/4` overwrites
+  # any prior lease for the task. Timer arming is a no-op on stage kinds
+  # whose `stage_kind_timeouts()` entry has nil ack_ms / safety_net_ms
+  # (manual_approval today; disabled/unknown kinds fall through the same
+  # nil path).
+  defp arm_liveness_timers(_task_id, nil, _stage_kind), do: :ok
 
-        state |> cancel_heartbeat() |> Map.put(:status, :waiting_human)
+  defp arm_liveness_timers(task_id, %Stage{} = stage, stage_kind) do
+    :ok = LeaseManager.record_dispatch(task_id, stage.id, stage_kind, DateTime.utc_now())
 
-      # Plan is still being drafted — agent is actively working on it.
-      # Skip this heartbeat but reschedule (don't interrupt the drafting process).
-      plan && plan.status == "draft" ->
-        Logger.debug(
-          "[TaskRouter] heartbeat suppressed for task #{state.task_id}: plan is in draft"
-        )
+    timeouts =
+      LeaseManager.stage_kind_timeouts()
+      |> Map.get(stage_kind, %{ack_ms: nil, safety_net_ms: nil})
 
-        schedule_heartbeat(state)
-
-      # Plan was rejected — agent needs a nudge to revise.
-      # Fall through to normal heartbeat behavior.
-      plan && plan.status == "rejected" ->
-        task = Tasks.get_task_detail(state.task_id)
-
-        if task do
-          send_heartbeat(state, task)
-          schedule_heartbeat(state)
-        else
-          schedule_heartbeat(state)
-        end
-
-      # No plan exists yet — send heartbeat normally so agent creates one,
-      # but only if the dispatch cooldown has passed (handled by guard 1 above).
-      is_nil(plan) ->
-        task = Tasks.get_task_detail(state.task_id)
-
-        if task do
-          send_heartbeat(state, task)
-          schedule_heartbeat(state)
-        else
-          schedule_heartbeat(state)
-        end
-
-      # Any other plan status (approved, executing, completed, superseded) means
-      # the task shouldn't actually be in `planning` phase. Don't re-prompt the
-      # agent — just reschedule and let the next reconcile sort it out.
-      true ->
-        Logger.debug(
-          "[TaskRouter] planning heartbeat: unexpected plan.status=#{plan.status} for task #{state.task_id}; suppressing without sending"
-        )
-
-        schedule_heartbeat(state)
+    if timeouts.ack_ms do
+      Process.send_after(self(), :check_no_ack, timeouts.ack_ms)
     end
+
+    if timeouts.safety_net_ms do
+      Process.send_after(self(), :check_safety_net, timeouts.safety_net_ms)
+    end
+
+    :ok
   end
 
-  defp send_heartbeat(state, task) do
-    # During planning, use latest_plan to include draft/pending_review plans
-    # that current_plan (approved/completed only) would miss.
-    plan =
-      if state.task_status == "planning" do
-        Tasks.latest_plan(state.task_id)
-      else
-        Tasks.current_plan(state.task_id)
-      end
+  defp arm_liveness_timers(_task_id, _other, _stage_kind), do: :ok
 
-    # When current_stage_id is nil (e.g. task was dispatched before a stage
-    # transition wrote the id back), fall back to the live running stage from
-    # the plan so the heartbeat prompt shows the real stage name/status
-    # instead of "stage: unknown — unknown".
-    stage =
-      find_stage(plan, state.current_stage_id) ||
-        current_running_stage(plan)
-
-    elapsed = elapsed_seconds(state.stage_started_at)
-
-    pending_validations =
-      if stage do
-        (stage.validations || [])
-        |> Enum.filter(&(&1.status in ["pending", "running"]))
-      else
-        []
-      end
-
-    context = ContextAssembler.build(state.task_id, state.deploy_lease)
-    prompt = HeartbeatScheduler.heartbeat_prompt(task, stage, elapsed, pending_validations, plan)
-
-    # Post heartbeat as engagement message (triggers attention routing)
-    if state.execution_space_id do
-      ExecutionSpace.post_engagement(state.execution_space_id, prompt,
-        metadata: %{"reason" => "task_heartbeat"}
-      )
-    end
-
-    dispatch_attention(state.assignee, state.task_id, "task_heartbeat", context, prompt)
-  end
-
-  # ── Heartbeat scheduling ───────────────────────────────────────────────
-
-  defp schedule_heartbeat(state) do
-    state = cancel_heartbeat(state)
-    stage_type = heartbeat_stage_type(state)
-
-    case HeartbeatScheduler.interval_ms(stage_type) do
-      nil ->
-        # manual_approval — no heartbeat
-        state
-
-      interval_ms ->
-        ref = Process.send_after(self(), :heartbeat, interval_ms)
-        %{state | heartbeat_ref: ref}
-    end
-  end
-
-  defp cancel_heartbeat(%{heartbeat_ref: nil} = state), do: state
-
-  defp cancel_heartbeat(%{heartbeat_ref: ref} = state) do
-    Process.cancel_timer(ref)
-    %{state | heartbeat_ref: nil}
-  end
-
-  # ── Stall / escalation ────────────────────────────────────────────────
-
-  defp handle_possible_stall(%State{status: :waiting_human} = state, _task), do: state
-
-  defp handle_possible_stall(state, task) do
-    # Predicate gate (task 019e00cb stage 2): a stalled-but-correctly-linked
-    # manual_approval stage is NOT a stall — it is a task waiting on a human
-    # who can see the review_request. Skip escalation / "Stall detected" log
-    # entirely so we don't pile up false-alarm escalation noise in the
-    # execution space. Guardrail b (predicate returns false on broken linkage)
-    # keeps the original escalation path alive when the review_request is
-    # missing or detached from the stage.
-    if heartbeat_suppressible_for_state?(state) do
-      state
-    else
-      do_handle_possible_stall(state, task)
-    end
-  end
-
-  defp do_handle_possible_stall(state, task) do
-    stage_type = heartbeat_stage_type(state)
-    max_esc = HeartbeatScheduler.max_escalations(stage_type) || 2
-    new_count = state.escalation_count + 1
-
-    idle_seconds = div(latest_activity_age_ms(state), 1_000)
-
-    # Post stall detection log
-    if state.execution_space_id do
-      ExecutionSpace.post_log(
-        state.execution_space_id,
-        "Stall detected: no runtime activity for #{idle_seconds}s | Escalation #{new_count}/#{max_esc} | " <>
-          diagnostic_snapshot(state, task)
-      )
-    end
-
-    if new_count >= max_esc do
-      recover_or_escalate(state, task, idle_seconds)
-    else
-      # Send heartbeat and bump escalation count
-      send_heartbeat(state, task)
-      state = %{state | escalation_count: new_count}
-      schedule_heartbeat(state)
-    end
-  end
-
-  defp recover_or_escalate(%State{} = state, task, idle_seconds) do
-    if silent_active_runtime?(state) do
-      recover_silent_runtime(state, task, idle_seconds)
-    else
-      escalate(state, task)
-    end
-  end
-
-  defp recover_silent_runtime(%State{} = state, task, idle_seconds) do
-    phase = runtime_phase_for_task(task)
-    abandoned = RuntimeSupervision.abandon_current_lease_for_task(state.task_id, phase)
-
-    Logger.warning(
-      "[TaskRouter] task #{state.task_id} detected silent #{phase} runtime after #{idle_seconds}s; abandoned #{abandoned} lease(s) and re-dispatching"
-    )
-
-    if state.execution_space_id do
-      ExecutionSpace.post_log(
-        state.execution_space_id,
-        "Watchdog: runtime went silent for #{idle_seconds}s during #{phase}; abandoning the current attempt and launching a fresh retry | " <>
-          diagnostic_snapshot(state, task)
-      )
-    end
-
-    send(self(), :dispatch)
-
+  # Clear the LeaseManager row for the task. Pending `:check_no_ack` /
+  # `:check_safety_net` timers may still fire later — their handlers
+  # short-circuit on `LeaseManager.get/1 == nil`. Used on human-gate
+  # transitions, phase boundaries, and router termination.
+  defp clear_liveness(%State{task_id: task_id} = state) do
+    LeaseManager.clear(task_id)
     state
-    |> cancel_heartbeat()
-    |> Map.put(:status, :dispatching)
-    |> Map.put(:lease_status, "abandoned")
-    |> Map.put(:escalation_count, 0)
   end
 
-  defp silent_active_runtime?(%State{lease_status: "active", last_runtime_event_at: %DateTime{}}),
-    do: true
+  # Reset the router from `:stalled` → `:running` when fresh runtime activity
+  # arrives after a no-ack / safety-net alert. The stalled state is a signal
+  # to a human, not a permanent lockout — if the runtime resumes, we resume.
+  defp maybe_reset_stalled(%State{status: :stalled} = state), do: %{state | status: :running}
+  defp maybe_reset_stalled(state), do: state
 
-  defp silent_active_runtime?(_state), do: false
+  # Emit one loud runtime_event via `Tasks.broadcast_board/1` — the UI's
+  # `tasks:board` subscribers pick it up. The event carries the same
+  # top-level shape as a real RuntimeEvent (event_type, task_id, payload,
+  # occurred_at) but is NOT persisted through `record_runtime_event/1` —
+  # these are router-emitted alert events, not runtime lifecycle events.
+  defp broadcast_router_event(event_type, task_id, stage_id, payload) do
+    event = %{
+      id: nil,
+      event_type: event_type,
+      task_id: task_id,
+      stage_id: stage_id,
+      payload: payload,
+      occurred_at: DateTime.utc_now(),
+      runtime_id: nil,
+      phase: nil,
+      lease: nil
+    }
 
-  defp runtime_phase_for_task(%{status: "planning"}), do: "planning"
-  defp runtime_phase_for_task(%{status: "in_review"}), do: "review"
-  defp runtime_phase_for_task(%{status: "deploying"}), do: "deploying"
-  defp runtime_phase_for_task(_task), do: "execution"
+    Tasks.broadcast_board({:runtime_event, event})
+  end
 
-  defp escalate(state, task) do
+  defp fire_no_ack_alert(%State{} = state, lease) do
+    elapsed_ms =
+      DateTime.diff(DateTime.utc_now(), lease.dispatched_at, :millisecond)
+
     Logger.warning(
-      "[TaskRouter] task #{state.task_id} stalled after #{state.escalation_count + 1} escalations"
+      "[TaskRouter] task #{state.task_id} stage #{lease.stage_id} — no ack after #{div(elapsed_ms, 1_000)}s; firing execution.no_ack_timeout"
     )
 
-    state = %{state | status: :stalled, escalation_count: state.escalation_count + 1}
+    broadcast_router_event("execution.no_ack_timeout", state.task_id, lease.stage_id, %{
+      task_id: state.task_id,
+      stage_id: lease.stage_id,
+      elapsed_ms_since_dispatch: elapsed_ms
+    })
 
-    # Post stall/escalation log to execution space
-    if state.execution_space_id do
-      ExecutionSpace.post_log(
-        state.execution_space_id,
-        "Escalation: task stalled after #{state.escalation_count} missed heartbeats | Assignee: #{state.assignee.id} | " <>
-          diagnostic_snapshot(state, task)
-      )
-    end
-
-    # Broadcast stall event to PubSub
-    Phoenix.PubSub.broadcast(
-      Platform.PubSub,
-      "tasks:board",
-      {:task_stalled, state.task_id, state.assignee, :heartbeat_timeout}
+    post_router_blocker(
+      state,
+      "Executor never acked the dispatch. No `task_ack` runtime event received within " <>
+        "#{div(elapsed_ms, 1_000)}s of dispatch — the runtime likely dropped before " <>
+        "the agent spawned. Manual intervention required.",
+      %{
+        "reason" => "execution.no_ack_timeout",
+        "stage_id" => lease.stage_id,
+        "needs_human" => true,
+        "elapsed_ms_since_dispatch" => elapsed_ms
+      }
     )
-
-    # Enter slower polling mode (30 min) after escalation
-    state = cancel_heartbeat(state)
-    ref = Process.send_after(self(), :heartbeat, 30 * 60_000)
-    %{state | heartbeat_ref: ref}
   end
 
-  defp reset_escalation(state) do
-    if state.status == :stalled do
-      %{state | status: :running, escalation_count: 0}
-    else
-      %{state | escalation_count: 0}
-    end
+  defp fire_safety_net_alert(%State{} = state, lease) do
+    elapsed_ms =
+      DateTime.diff(DateTime.utc_now(), lease.dispatched_at, :millisecond)
+
+    Logger.warning(
+      "[TaskRouter] task #{state.task_id} stage #{lease.stage_id} (#{lease.stage_kind}) — safety-net fired after #{div(elapsed_ms, 60_000)}m; firing execution.safety_net_fired"
+    )
+
+    broadcast_router_event("execution.safety_net_fired", state.task_id, lease.stage_id, %{
+      task_id: state.task_id,
+      stage_id: lease.stage_id,
+      stage_kind: lease.stage_kind,
+      elapsed_ms: elapsed_ms,
+      ack_at: lease.ack_at,
+      last_validation_pass_at: lease.last_progress_at
+    })
+
+    post_router_blocker(
+      state,
+      "Stage safety-net exceeded (#{div(elapsed_ms, 60_000)}m elapsed for #{lease.stage_kind}). " <>
+        "The executor acked but has not produced validation progress within the stage's safety-net window. " <>
+        "Check whether the agent is stuck; manual intervention may be required.",
+      %{
+        "reason" => "execution.safety_net_fired",
+        "stage_id" => lease.stage_id,
+        "stage_kind" => lease.stage_kind,
+        "needs_human" => true,
+        "elapsed_ms" => elapsed_ms
+      }
+    )
+  end
+
+  # Post the human-facing blocker message to the execution space so a
+  # reviewer sees it inline on the task view. Uses `post_engagement/3` so
+  # the message surfaces as an attention-grabbing event, not a plain log
+  # line lost in the diagnostic scroll.
+  defp post_router_blocker(%State{execution_space_id: nil}, _description, _metadata), do: :ok
+
+  defp post_router_blocker(%State{execution_space_id: space_id}, description, metadata) do
+    ExecutionSpace.post_engagement(
+      space_id,
+      "Blocker reported: " <> description,
+      metadata: metadata
+    )
+
+    :ok
   end
 
   defp maybe_hydrate_from_lease(%State{} = state) do
@@ -1040,6 +986,15 @@ defmodule Platform.Orchestration.TaskRouter do
     maybe_set_stage(state, running_stage)
   end
 
+  # Router-emitted alerts (`execution.no_ack_timeout`, `execution.safety_net_fired`)
+  # are broadcast on `tasks:board` — which the router is subscribed to — so we
+  # receive our own alerts back. They must NOT re-enter the state machine
+  # (specifically, they must not `maybe_reset_stalled/1` and flip us out of
+  # `:stalled` immediately after firing the no-ack alert). Explicit noop for
+  # our own event types keeps the state machine hermetic.
+  defp apply_runtime_event(state, %{event_type: "execution.no_ack_timeout"}), do: state
+  defp apply_runtime_event(state, %{event_type: "execution.safety_net_fired"}), do: state
+
   defp apply_runtime_event(state, event) do
     event_time = event.occurred_at || DateTime.utc_now()
     lease_status = event.lease && event.lease.status
@@ -1048,9 +1003,24 @@ defmodule Platform.Orchestration.TaskRouter do
       state
       |> Map.put(:last_runtime_event_at, event_time)
       |> Map.put(:lease_status, lease_status || state.lease_status)
-      |> reset_escalation()
+      |> maybe_reset_stalled()
 
     case event.event_type do
+      "execution.acked" ->
+        # `task_ack` MCP tool (stage 5) landed — extend the lease.
+        # `LeaseManager.record_ack/1` clears the no-ack countdown and
+        # extends the safety-net deadline; the next `:check_safety_net`
+        # tick will see the extended deadline and reschedule accordingly.
+        _ = LeaseManager.record_ack(state.task_id)
+
+        if still_awaiting_human?(base_state) do
+          base_state
+          |> clear_liveness()
+          |> Map.put(:status, :waiting_human)
+        else
+          %{base_state | status: :running}
+        end
+
       type
       when type in [
              "assignment.accepted",
@@ -1059,16 +1029,18 @@ defmodule Platform.Orchestration.TaskRouter do
              "execution.progress",
              "execution.unblocked"
            ] ->
+        # Any runtime-liveness signal is progress — extends the safety-net
+        # window so long-running stages don't false-alarm.
+        _ = LeaseManager.record_progress(state.task_id)
+
         if still_awaiting_human?(base_state) do
           # A manual-review gate is still pending; runtime activity must not
-          # re-arm the heartbeat or flip us out of the suppressed state.
+          # flip us out of the suppressed state.
           base_state
-          |> cancel_heartbeat()
+          |> clear_liveness()
           |> Map.put(:status, :waiting_human)
         else
-          base_state
-          |> Map.put(:status, :running)
-          |> schedule_heartbeat()
+          %{base_state | status: :running}
         end
 
       "execution.blocked" ->
@@ -1083,17 +1055,17 @@ defmodule Platform.Orchestration.TaskRouter do
         end
 
         base_state
-        |> cancel_heartbeat()
+        |> clear_liveness()
         |> Map.put(:status, :waiting_human)
 
       "execution.finished" ->
         if still_awaiting_human?(base_state) do
           base_state
-          |> cancel_heartbeat()
+          |> clear_liveness()
           |> Map.put(:status, :waiting_human)
         else
           base_state
-          |> cancel_heartbeat()
+          |> clear_liveness()
           |> Map.put(:status, :running)
         end
 
@@ -1109,42 +1081,12 @@ defmodule Platform.Orchestration.TaskRouter do
         end
 
         base_state
-        |> cancel_heartbeat()
+        |> clear_liveness()
         |> Map.put(:status, :stalled)
 
       _ ->
         base_state
     end
-  end
-
-  # Returns true if `last_dispatch_at` is within the given interval, meaning the
-  # agent hasn't had a full heartbeat cycle to respond to the dispatch yet.
-  defp dispatch_within_interval?(%State{last_dispatch_at: nil}, _interval_ms), do: false
-
-  defp dispatch_within_interval?(%State{last_dispatch_at: dispatch_at}, interval_ms) do
-    DateTime.diff(DateTime.utc_now(), dispatch_at, :millisecond) < interval_ms
-  end
-
-  # Returns true if the runtime sent a progress/heartbeat event within the
-  # cooldown window, indicating the agent is actively streaming.
-  defp runtime_activity_within_cooldown?(%State{last_runtime_event_at: nil}), do: false
-
-  defp runtime_activity_within_cooldown?(%State{last_runtime_event_at: event_at}) do
-    DateTime.diff(DateTime.utc_now(), event_at, :millisecond) < @runtime_activity_cooldown_ms
-  end
-
-  defp latest_activity_at(state) do
-    [state.last_runtime_event_at, state.last_evidence_at, state.stage_started_at]
-    |> Enum.reject(&is_nil/1)
-    |> case do
-      [] -> DateTime.utc_now()
-      values -> Enum.max_by(values, &DateTime.to_unix(&1, :microsecond))
-    end
-  end
-
-  defp latest_activity_age_ms(state) do
-    DateTime.diff(DateTime.utc_now(), latest_activity_at(state), :millisecond)
-    |> max(0)
   end
 
   defp maybe_log_heartbeat_suppressed(state, stage, opts \\ [])
@@ -1154,9 +1096,9 @@ defmodule Platform.Orchestration.TaskRouter do
   defp maybe_log_heartbeat_suppressed(%State{} = state, stage, opts) do
     # Predicate gate (task 019e00cb stage 2): when every pending validation on
     # this stage is a manual_approval already linked to an open review_request,
-    # the suppression is "expected" and we don't post a per-tick log. The
+    # the suppression is "expected" and we don't post a per-dispatch log. The
     # review_request itself is the visible signal a human needs. Posting the
-    # same "Dispatch suppressed" line on every heartbeat tick was the message
+    # same "Dispatch suppressed" line on every dispatch was the message
     # pile-up Rowan reported.
     #
     # Some call sites pass `stage = nil` when `current_stage_id` is unset
@@ -1212,7 +1154,7 @@ defmodule Platform.Orchestration.TaskRouter do
       deploy_diagnostic(task, stage),
       validation_diagnostic(stage),
       lease_diagnostic(lease),
-      heartbeat_diagnostic(state, stage)
+      liveness_diagnostic(state, stage)
     ]
     |> Enum.reject(&(&1 in [nil, ""]))
     |> Enum.join(" | ")
@@ -1328,19 +1270,27 @@ defmodule Platform.Orchestration.TaskRouter do
     "lease=#{lease.status}#{worker}#{reason}#{expires}"
   end
 
-  defp heartbeat_diagnostic(%State{} = state, stage) do
+  defp liveness_diagnostic(%State{} = state, stage) do
     cond do
       manual_approval_stage?(stage) and pending_review_request?(state.task_id) ->
-        "heartbeat=suppressed_waiting_human"
+        "liveness=suppressed_waiting_human"
 
       pending_review_request?(state.task_id) ->
-        "heartbeat=awaiting_human_review"
+        "liveness=awaiting_human_review"
 
       state.status == :waiting_human ->
-        "heartbeat=waiting_human"
+        "liveness=waiting_human"
 
       true ->
-        "heartbeat=#{state.status}:escalations=#{state.escalation_count}"
+        case LeaseManager.get(state.task_id) do
+          nil ->
+            "liveness=#{state.status}"
+
+          lease ->
+            ack = if lease.ack_at, do: "acked", else: "unacked"
+
+            "liveness=#{state.status}:#{ack}:no_ack_fired=#{lease.no_ack_fired?}:safety_net_fired=#{lease.safety_net_fired?}"
+        end
     end
   end
 
@@ -1364,6 +1314,11 @@ defmodule Platform.Orchestration.TaskRouter do
       _ -> []
     end
   end
+
+  defp runtime_phase_for_task(%{status: "planning"}), do: "planning"
+  defp runtime_phase_for_task(%{status: "in_review"}), do: "review"
+  defp runtime_phase_for_task(%{status: "deploying"}), do: "deploying"
+  defp runtime_phase_for_task(_task), do: "execution"
 
   # ── Stage helpers ──────────────────────────────────────────────────────
 
@@ -1504,34 +1459,8 @@ defmodule Platform.Orchestration.TaskRouter do
     end
   end
 
-  defp heartbeat_stage_type(%State{} = state) do
-    case current_stage_type(state) do
-      "manual_approval" ->
-        if pending_review_request?(state.task_id), do: "manual_approval", else: "review"
-
-      other ->
-        other
-    end
-  end
-
   defp pending_review_request?(task_id) do
     ReviewRequests.list_pending_for_task(task_id) != []
-  end
-
-  # Stage 2 wiring of `HeartbeatScheduler.heartbeat_suppressible?/2`. Loads the
-  # current stage and the task's open review_requests, then defers to the pure
-  # predicate. Each call performs one DB query (`list_pending_for_task/1`) plus
-  # an in-memory plan lookup; we accept the per-tick query because the heartbeat
-  # path is sparse (per-task interval is minutes, not seconds) and the existing
-  # diagnostic/logging path already issues comparable queries on the same tick.
-  defp heartbeat_suppressible_for_state?(%State{task_id: task_id} = state) do
-    plan = Tasks.current_plan(task_id)
-
-    stage =
-      find_stage(plan, state.current_stage_id) ||
-        current_running_stage(plan)
-
-    heartbeat_suppressible_for_task?(task_id, stage)
   end
 
   defp heartbeat_suppressible_for_task?(_task_id, nil), do: false
@@ -1557,13 +1486,13 @@ defmodule Platform.Orchestration.TaskRouter do
 
     if stage do
       # Check if all remaining (pending) validations on this stage are manual_approval.
-      # If so, treat the stage as a human gate — no heartbeat should fire.
+      # If so, treat the stage as a human gate — no liveness timers should fire.
       #
       # `e2e_behavior` is intentionally NOT included here: it is agent-driven
-      # (review agent executes the script and dispositions), so heartbeats must
-      # continue and dispatch must not be suppressed. Stages whose only pending
-      # validation is `e2e_behavior` fall through to `infer_stage_type/1` and
-      # are treated as a normal "review" stage for cadence purposes.
+      # (review agent executes the script and dispositions), so dispatch must
+      # not be suppressed. Stages whose only pending validation is
+      # `e2e_behavior` fall through to `infer_stage_type/1` and are treated as
+      # a normal "review" stage for liveness purposes.
       pending_validations =
         (stage.validations || [])
         |> Enum.filter(&(&1.status == "pending"))
@@ -1579,8 +1508,9 @@ defmodule Platform.Orchestration.TaskRouter do
     end
   end
 
-  # Map human-readable stage names to cadence keys.
-  # Falls back to "coding" for unrecognized names.
+  # Map human-readable stage names to stage-kind keys used by
+  # `LeaseManager.stage_kind_timeouts/0`. Falls back to "coding" for
+  # unrecognized names.
   defp infer_stage_type(name) do
     name_lower = String.downcase(name || "")
 
@@ -1598,21 +1528,6 @@ defmodule Platform.Orchestration.TaskRouter do
 
   defp find_stage(plan, stage_id) do
     Enum.find(plan.stages || [], &(&1.id == stage_id))
-  end
-
-  defp elapsed_seconds(nil), do: 0
-
-  defp elapsed_seconds(started_at) do
-    DateTime.diff(DateTime.utc_now(), started_at, :second) |> max(0)
-  end
-
-  defp heartbeat_interval_min(nil), do: 10
-
-  defp heartbeat_interval_min(stage) do
-    case HeartbeatScheduler.interval_ms(stage.name) do
-      nil -> 0
-      ms -> div(ms, 60_000)
-    end
   end
 
   # ── Deploy credential leasing ──────────────────────────────────────────

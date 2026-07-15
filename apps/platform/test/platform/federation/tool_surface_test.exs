@@ -49,9 +49,9 @@ defmodule Platform.Federation.ToolSurfaceTest do
   end
 
   describe "tool_definitions/0" do
-    test "returns all 82 tools with required components" do
+    test "returns all 83 tools with required components" do
       tools = ToolSurface.tool_definitions()
-      assert length(tools) == 82
+      assert length(tools) == 83
 
       tool_names = Enum.map(tools, & &1.name)
       assert "send_media" in tool_names
@@ -78,6 +78,7 @@ defmodule Platform.Federation.ToolSurfaceTest do
       assert "task_list" in tool_names
       assert "task_update" in tool_names
       assert "task_start" in tool_names
+      assert "task_ack" in tool_names
       assert "task_complete" in tool_names
       assert "task_dependencies" in tool_names
       assert "task_attach_canvas" in tool_names

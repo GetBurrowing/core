@@ -3,11 +3,25 @@ defmodule Platform.Orchestration.PromptTemplates do
   Context module for managing prompt templates.
 
   Prompt templates are stored in the database and used by HeartbeatScheduler
-  to generate dispatch and heartbeat prompts. Templates use `{{variable_name}}`
+  to generate dispatch and nudge prompts. Templates use `{{variable_name}}`
   mustache-style interpolation (NOT EEx — too dangerous for user-editable content).
 
   If a template is not found in the database, HeartbeatScheduler falls back
   to its hardcoded prompts, so the system works even before seeding.
+
+  ## Payload split (task 019f640d stage 4)
+
+  Two prompt shapes back the router's runtime dispatches:
+
+  * `dispatch.*` slugs (`.planning`, `.in_progress`, `.in_review`,
+    `.review_e2e`, `.deploying`, `.fallback`) — FULL context on state
+    transitions. Fat payload, one shot to load skills / evidence workflow /
+    stage contract.
+  * `nudge` slug — SHORT form on safety-net / no-ack events only. Target
+    <500 tokens; no skills_reference, no task description.
+
+  The old `heartbeat` slug is retained as DEPRECATED for one release and
+  removed in the stage 6 ADR cleanup pass.
   """
 
   import Ecto.Query
@@ -137,7 +151,23 @@ defmodule Platform.Orchestration.PromptTemplates do
     end)
   end
 
+  # Ack-first preamble prepended to every dispatch template body (task
+  # 019f640d stage 5). Interpolated via mustache with the runtime's
+  # current `task_id` + `stage_id` so the ack call is copy-pasteable.
+  # `stage_id` will render as an empty string on the planning dispatch
+  # (there's no plan yet) — the `task_ack` tool tolerates a missing
+  # stage_id and resolves via `current_running_stage` anyway.
+  @task_ack_preamble """
+  **Your first tool call must be `task_ack(task_id="{{task_id}}", stage_id="{{stage_id}}")`.** This tells the orchestrator you received the dispatch and are working; without it the router will fire a no-ack alert in 5 minutes.
+  """
+
+  @doc "Ack-first preamble string interpolated into every dispatch template body."
+  @spec task_ack_preamble() :: String.t()
+  def task_ack_preamble, do: @task_ack_preamble
+
   defp do_default_templates do
+    task_ack_preamble = @task_ack_preamble
+
     skills_reference =
       "## Skill discovery — do this BEFORE you start executing\n\n" <>
         "Skills encode org conventions you may not have; load the right one before improvising. " <>
@@ -162,6 +192,8 @@ defmodule Platform.Orchestration.PromptTemplates do
           "Sent when a task is first assigned and needs a plan created. " <>
             "Instructs the agent to create and submit a plan before starting work.",
         variables: [
+          "task_id",
+          "stage_id",
           "task_title",
           "task_description",
           "task_priority",
@@ -171,6 +203,7 @@ defmodule Platform.Orchestration.PromptTemplates do
           "skills_reference"
         ],
         content: """
+        #{task_ack_preamble}
         You have been assigned a task that requires a plan before any implementation begins.
 
         Task: {{task_title}}
@@ -307,6 +340,8 @@ defmodule Platform.Orchestration.PromptTemplates do
           "Sent when a task is in_progress with an approved plan. " <>
             "Instructs the agent to execute the current stage and push evidence.",
         variables: [
+          "task_id",
+          "stage_id",
           "task_title",
           "stage_info",
           "git_workflow_block",
@@ -315,6 +350,7 @@ defmodule Platform.Orchestration.PromptTemplates do
           "evidence_workflow_reference"
         ],
         content: """
+        #{task_ack_preamble}
         Plan approved — execute the current stage.
 
         Task: {{task_title}}
@@ -468,6 +504,8 @@ defmodule Platform.Orchestration.PromptTemplates do
             "Behavioral validation (`e2e_behavior`) is handled by the dedicated " <>
             "`dispatch.review_e2e` template instead.",
         variables: [
+          "task_id",
+          "stage_id",
           "task_title",
           "stage_info",
           "provider_specific_guidance",
@@ -475,6 +513,7 @@ defmodule Platform.Orchestration.PromptTemplates do
           "evidence_workflow_reference"
         ],
         content: """
+        #{task_ack_preamble}
         Task is in review — produce a human-judgment review request for the UI / manual_approval gate.
 
         Task: {{task_title}}
@@ -612,6 +651,8 @@ defmodule Platform.Orchestration.PromptTemplates do
           "Sent when a task is in deploying status with a running deploy stage. " <>
             "Instructs the agent to execute the deploy based on the resolved strategy.",
         variables: [
+          "task_id",
+          "stage_id",
           "task_title",
           "stage_info",
           "repo_url",
@@ -622,6 +663,7 @@ defmodule Platform.Orchestration.PromptTemplates do
           "skills_reference"
         ],
         content: """
+        #{task_ack_preamble}
         Task is deploying — execute the deploy stage based on the resolved strategy.
 
         Task: {{task_title}}
@@ -680,11 +722,12 @@ defmodule Platform.Orchestration.PromptTemplates do
       },
       %{
         slug: "heartbeat",
-        name: "Heartbeat Prompt",
+        name: "Heartbeat Prompt (DEPRECATED — task 019f640d stage 4)",
         description:
-          "Periodic heartbeat sent to the agent to force it to account for itself. " <>
-            "Carries elapsed time, stage position, pending validations, and plan status. " <>
-            "During the planning phase, plan-aware prompts override this template.",
+          "DEPRECATED. Retained one release for admin-UI parity. The router no " <>
+            "longer emits this — periodic polling is gone (ADR 0025 amendment). " <>
+            "For safety-net / no-ack nudges, see the `nudge` slug. Stage 6 ADR " <>
+            "cleanup pass removes this template entirely.",
         variables: [
           "task_title",
           "stage_name",
@@ -703,6 +746,31 @@ defmodule Platform.Orchestration.PromptTemplates do
         Either push validation evidence or report a blocker.
 
         The attention signal that delivered this message includes a `context` field with the full task hierarchy: project, epic, task metadata, approved plan with stages, and execution_space_id.\
+        """
+      },
+      %{
+        slug: "nudge",
+        name: "Nudge Prompt (short-form, safety-net / no-ack)",
+        description:
+          "Short-form nudge sent on safety-net / no-ack events only (task 019f640d " <>
+            "stage 4). Replaces the polling-era full-context re-fire. No " <>
+            "skills_reference, no evidence_workflow_reference, no task description, " <>
+            "no org preamble — target output <500 tokens (~<2000 chars). Callers: " <>
+            "`TaskRouter.fire_no_ack_alert/2` and `TaskRouter.fire_safety_net_alert/2` " <>
+            "via `HeartbeatScheduler.nudge_prompt/2`.",
+        variables: [
+          "task_id",
+          "stage_id",
+          "elapsed_minutes",
+          "pending_validation_ids"
+        ],
+        content: """
+        Task {{task_id}} stage {{stage_id}} — no ack in {{elapsed_minutes}}m. Please ack, push validation, or report_blocker.
+
+        ## Completion Reminder
+        Current task_id: `{{task_id}}`
+        Current stage_id: `{{stage_id}}`
+        - Pending validation IDs: {{pending_validation_ids}} — ack, push validation_pass, or report_blocker with task_id={{task_id}} stage_id={{stage_id}}
         """
       },
       %{
