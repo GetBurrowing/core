@@ -143,6 +143,98 @@ defmodule Platform.Orchestration.TaskRouterTest do
       assert status.last_evidence_at != nil
     end
 
+    # Regression: prior to the fix, `handle_info({:stage_transitioned, stage}, ...)`
+    # unconditionally set `current_stage_id = stage.id`. On a running→passed
+    # transition the payload is the just-completed stage, so the router pinned
+    # itself to a `passed` stage; `send_heartbeat/2` then resolved that stage,
+    # filtered validations to ["pending", "running"] (empty), and echoed the
+    # "No validations are pending. If the work is complete, call
+    # `stage_complete`…" heartbeat on a loop until the next broadcast. The fix
+    # resolves `current_stage_id` via `current_running_stage/1` when the
+    # broadcast payload is `passed`.
+    test "stage_transitioned with passed stage advances current_stage_id to the next running stage",
+         %{task: task, assignee: assignee, plan: plan, stage: stage_a} do
+      # Stage A becomes running (mirrors the pre-transition state); Stage B
+      # exists as `pending` and will flip to `running` at the same tick.
+      running_stage_a =
+        stage_a
+        |> Ecto.Changeset.change(%{status: "running", started_at: DateTime.utc_now()})
+        |> Platform.Repo.update!()
+
+      {:ok, stage_b} =
+        Tasks.create_stage(%{
+          plan_id: plan.id,
+          position: 2,
+          name: "review",
+          description: "Review the code"
+        })
+
+      {:ok, _validation_b} =
+        Tasks.create_validation(%{stage_id: stage_b.id, kind: "test_pass"})
+
+      {:ok, _pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
+      Process.sleep(50)
+
+      # Prime router state so `current_stage_id` matches the (still running)
+      # stage A — this is the state the router is in right before the
+      # engine writes the passed→running transition pair.
+      Tasks.broadcast_board({:stage_transitioned, running_stage_a})
+      Process.sleep(50)
+
+      assert TaskRouter.current_status(task.id).current_stage_id == stage_a.id
+
+      # Engine now marks stage A `passed` and stage B `running` (order
+      # matches PlanEngine.finalize/advance): both DB rows flip, then the
+      # passed-stage broadcast fires. The router must resolve the running
+      # stage from the freshly loaded plan, not pin to the passed payload.
+      passed_stage_a =
+        running_stage_a
+        |> Ecto.Changeset.change(%{status: "passed", completed_at: DateTime.utc_now()})
+        |> Platform.Repo.update!()
+
+      _running_stage_b =
+        stage_b
+        |> Ecto.Changeset.change(%{status: "running", started_at: DateTime.utc_now()})
+        |> Platform.Repo.update!()
+
+      Tasks.broadcast_board({:stage_transitioned, passed_stage_a})
+      Process.sleep(100)
+
+      status = TaskRouter.current_status(task.id)
+      assert status.current_stage_id == stage_b.id
+      refute status.current_stage_id == stage_a.id
+    end
+
+    # Sibling regression: if the passed broadcast lands before the next
+    # running stage is written (or when the plan is fully completed), the
+    # router must clear `current_stage_id` to nil rather than pin the passed
+    # stage — otherwise heartbeats continue echoing the completed stage's
+    # (empty) validation list.
+    test "stage_transitioned with passed stage and no next running stage clears current_stage_id",
+         %{task: task, assignee: assignee, stage: stage_a} do
+      running_stage_a =
+        stage_a
+        |> Ecto.Changeset.change(%{status: "running", started_at: DateTime.utc_now()})
+        |> Platform.Repo.update!()
+
+      {:ok, _pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
+      Process.sleep(50)
+
+      Tasks.broadcast_board({:stage_transitioned, running_stage_a})
+      Process.sleep(50)
+
+      passed_stage_a =
+        running_stage_a
+        |> Ecto.Changeset.change(%{status: "passed", completed_at: DateTime.utc_now()})
+        |> Platform.Repo.update!()
+
+      Tasks.broadcast_board({:stage_transitioned, passed_stage_a})
+      Process.sleep(100)
+
+      status = TaskRouter.current_status(task.id)
+      assert status.current_stage_id == nil
+    end
+
     test "tracks runtime events as liveness evidence", %{task: task, assignee: assignee} do
       {:ok, _pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
       Process.sleep(50)

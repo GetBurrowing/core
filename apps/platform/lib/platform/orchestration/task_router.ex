@@ -25,7 +25,7 @@ defmodule Platform.Orchestration.TaskRouter do
 
   alias Platform.Repo
   alias Platform.Tasks
-  alias Platform.Tasks.{DeployResolver, ReviewRequests}
+  alias Platform.Tasks.{DeployResolver, ReviewRequests, Stage}
 
   # Cooldown window for runtime activity: if the runtime sent a progress/heartbeat
   # event within this window, suppress the next heartbeat to avoid interrupting
@@ -347,9 +347,33 @@ defmodule Platform.Orchestration.TaskRouter do
           state
         end
 
+      # On a `passed` transition the broadcast payload is the just-completed
+      # stage — its status is already `passed` and `find_stage(plan, id)` will
+      # still resolve it, so keying `current_stage_id` off `stage.id` here
+      # pins the router to a finished stage. `send_heartbeat/2` then filters
+      # that stage's validations to `["pending", "running"]` (empty) and
+      # echoes "No validations are pending…" on every tick until the next
+      # broadcast lands. Instead, resolve to the currently-running stage
+      # from the freshly reloaded plan; fall back to `nil` when no stage is
+      # running yet (next dispatch/hydrate will fill it in). Other statuses
+      # (`running`, `failed`) still key off the transitioned stage as before
+      # — the failure-bounce branch below expects `stage` to be the failing
+      # one, and a `running` broadcast is exactly the stage we should track.
+      next_stage_id =
+        case stage.status do
+          "passed" ->
+            case current_running_stage(plan) do
+              %Stage{id: id} -> id
+              nil -> nil
+            end
+
+          _ ->
+            stage.id
+        end
+
       state =
         state
-        |> Map.put(:current_stage_id, stage.id)
+        |> Map.put(:current_stage_id, next_stage_id)
         |> Map.put(:stage_started_at, DateTime.utc_now())
         |> Map.put(:last_evidence_at, DateTime.utc_now())
         |> reset_escalation()
