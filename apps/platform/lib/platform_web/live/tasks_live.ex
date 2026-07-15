@@ -9,12 +9,14 @@ defmodule PlatformWeb.TasksLive do
   alias Platform.Chat
   alias Platform.Chat.Canvas
   alias Platform.Chat.AttachmentStorage
+  alias Platform.Chat.PubSub, as: ChatPubSub
   alias Platform.Federation.TaskAttrs
   alias Platform.Orchestration.ExecutionSpace
   alias Platform.Repo
   alias Platform.Skills
   alias Platform.Tasks
   alias Platform.Tasks.CanvasAttachments
+  alias Platform.Tasks.ChatPins
   alias Platform.Tasks.{Epic, Plan, Project, ReviewRequest, ReviewRequests, Stack, Stacks, Task}
   alias Platform.Tenancy
 
@@ -86,7 +88,17 @@ defmodule PlatformWeb.TasksLive do
 
   @impl true
   def mount(_params, session, socket) do
-    if connected?(socket), do: Tasks.subscribe_board()
+    if connected?(socket) do
+      Tasks.subscribe_board()
+      # Pin-to-Chat stage 4 (task 019f62a1): subscribe to the global
+      # space-lifecycle topic so `{:task_pin_added, ...}` /
+      # `{:task_pin_removed, ...}` broadcasts from `Platform.Tasks.ChatPins`
+      # reach every open detail panel — the pin button re-renders solid /
+      # outline in step with the truth on disk without requiring the sponsor
+      # to refresh (or to be the one who fired the pin, in the future when
+      # agents can auto-pin on behalf of a mentioned user).
+      ChatPubSub.subscribe_spaces()
+    end
 
     # Stage 5 of ADR-0042: preload `:org` so the sidebar can group projects
     # by `project.org.slug` + light up the org color tokens via
@@ -104,6 +116,24 @@ defmodule PlatformWeb.TasksLive do
       Enum.each(initial_task_ids, &ReviewRequests.subscribe_for_task/1)
     end
 
+    # Pin-to-Chat stage 4: hydrate the current user's email once (pins are
+    # keyed by email for user participants — see `ChatPins.pin/3` and the
+    # stage-3 mention-propagation pass in `Platform.Chat`) and seed the
+    # pin-button MapSet. `MapSet` gives O(1) membership checks so the detail
+    # panel's `pinned_by_me?/3` helper stays a pure lookup, not a Repo query,
+    # across every re-render.
+    current_user_email = fetch_user_email(session["current_user_id"])
+
+    my_pinned_task_ids =
+      case current_user_email do
+        nil ->
+          MapSet.new()
+
+        email ->
+          ChatPins.pinned_task_ids_for(%{kind: "user", id: email})
+          |> MapSet.new()
+      end
+
     stack_entries = Stacks.list_stacks_with_members(%{})
     {stack_board_data, stacks} = split_stack_entries(stack_entries)
     users = Accounts.list_users()
@@ -116,6 +146,11 @@ defmodule PlatformWeb.TasksLive do
      socket
      |> assign(:page_title, "Tasks")
      |> assign(:current_user_id, session["current_user_id"])
+     # Pin-to-Chat stage 4: email backs the pin-participant identity for
+     # `ChatPins.pin/3` (which stores user pins by email) and the socket-side
+     # MapSet driving the header pin-toggle button state per task.
+     |> assign(:current_user_email, current_user_email)
+     |> assign(:my_pinned_task_ids, my_pinned_task_ids)
      |> assign(:projects, projects)
      # Stage 5 of ADR-0042: pre-bucketed `[{org_slug, org_name, [project]}]`
      # list used by the sidebar `<details>` sections. Computed once at mount
@@ -2666,6 +2701,68 @@ defmodule PlatformWeb.TasksLive do
      |> assign(:steering_feedback, nil)}
   end
 
+  # ── Pin-to-Chat toggle (task 019f62a1 stage 4) ─────────────────────────
+  #
+  # Sponsor-only affordance in the task detail header. The DOM `:if` gate
+  # (`sponsor?/2` in the template) already omits the button for non-sponsors,
+  # but the server re-checks: LiveView events can be forged via CDP /
+  # `liveSocket.push`, and the pin write is the earliest point that a fresh
+  # backlog task materialises a `chat_spaces` row (via
+  # `ChatPins.pin/3 → ExecutionSpace.find_or_create/1`). A bypass would let
+  # any authenticated user pin — and thereby materialise the exec space —
+  # for any task they can see. The re-check keeps the sponsor contract
+  # honest and logs the attempt for audit.
+  def handle_event("toggle_task_chat_pin", _params, socket) do
+    task = socket.assigns[:selected_task]
+    user_id = socket.assigns[:current_user_id]
+    email = socket.assigns[:current_user_email]
+
+    cond do
+      is_nil(task) ->
+        # No task open — event fired against a stale panel (e.g. a race
+        # between close_detail and the toggle click). Silent noop.
+        {:noreply, socket}
+
+      is_nil(email) ->
+        # Anonymous session or user record was hard-deleted between mount
+        # and click. Can't attribute a pin — refuse with a flash.
+        {:noreply, put_flash(socket, :error, "You need to be signed in to pin tasks to Chat.")}
+
+      not sponsor?(task, user_id) ->
+        Logger.warning(
+          "[TasksLive] toggle_task_chat_pin refused for user_id=#{inspect(user_id)} " <>
+            "task_id=#{task.id} — non-sponsor bypass attempt (task sponsor_user_id=" <>
+            "#{inspect(task.sponsor_user_id)})"
+        )
+
+        {:noreply, put_flash(socket, :error, "Only the task sponsor can pin this task.")}
+
+      true ->
+        participant = %{kind: "user", id: email}
+
+        if pinned_by_me?(task, user_id, socket.assigns.my_pinned_task_ids) do
+          # Optimistic MapSet update happens on the broadcast round-trip;
+          # `unpin/3` fires `:task_pin_removed` which our own handle_info
+          # clause will drop the id from :my_pinned_task_ids.
+          _ = ChatPins.unpin(task.id, participant, email)
+          {:noreply, put_flash(socket, :info, "Unpinned from Chat.")}
+        else
+          case ChatPins.pin(task.id, participant, email) do
+            {:ok, _} ->
+              {:noreply, put_flash(socket, :info, "Pinned to Chat.")}
+
+            {:error, reason} ->
+              Logger.warning(
+                "[TasksLive] toggle_task_chat_pin pin/3 failed for task_id=#{task.id} " <>
+                  "reason=#{inspect(reason)}"
+              )
+
+              {:noreply, put_flash(socket, :error, "Could not pin this task to Chat.")}
+          end
+        end
+    end
+  end
+
   # Upload cancel
   # ── Mention suggestion no-ops (ComposeInput hook fires these; TasksLive has no mention UI) ──
 
@@ -2745,6 +2842,46 @@ defmodule PlatformWeb.TasksLive do
   def handle_info({:review_request_resolved, _payload}, socket) do
     {:noreply, socket |> refresh_board() |> reload_selected_task() |> reload_selected_stack()}
   end
+
+  # Pin-to-Chat stage 4 (task 019f62a1): global space-lifecycle broadcasts
+  # for task pin add/remove. Only the CURRENT user's pins land in the
+  # socket-side MapSet — other users' pins ride the same topic but must
+  # not shift this panel's button state. `participant_kind == "user"` also
+  # filters out agent pins (agent participants get their pin flow via the
+  # stage-3 mention-propagation pass; they don't drive this human panel).
+  def handle_info(
+        {:task_pin_added,
+         %{task_id: task_id, participant_kind: "user", participant_id: participant_id}},
+        socket
+      ) do
+    if participant_id == socket.assigns[:current_user_email] do
+      {:noreply,
+       assign(socket, :my_pinned_task_ids, MapSet.put(socket.assigns.my_pinned_task_ids, task_id))}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_info({:task_pin_added, _payload}, socket), do: {:noreply, socket}
+
+  def handle_info(
+        {:task_pin_removed,
+         %{task_id: task_id, participant_kind: "user", participant_id: participant_id}},
+        socket
+      ) do
+    if participant_id == socket.assigns[:current_user_email] do
+      {:noreply,
+       assign(
+         socket,
+         :my_pinned_task_ids,
+         MapSet.delete(socket.assigns.my_pinned_task_ids, task_id)
+       )}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_info({:task_pin_removed, _payload}, socket), do: {:noreply, socket}
 
   # Execution space PubSub — re-fetch log on any new message
   def handle_info({:new_message, _msg}, socket) do
@@ -4801,6 +4938,43 @@ defmodule PlatformWeb.TasksLive do
   defp assignee_name(%Task{assignee_type: "user"}, _agent_names), do: "User"
 
   defp assignee_name(_, _), do: nil
+
+  # ── Pin-to-Chat sponsor + pinned-state helpers (task 019f62a1 stage 4) ──
+  #
+  # `sponsor?/2` is the authoritative gate for BOTH the DOM `:if` (button
+  # rendered only for the task sponsor) AND the server-side re-check inside
+  # `toggle_task_chat_pin` (any bypass logs + refuses). We match on
+  # `Task.sponsor_user_id` — the ADR-0042 identity column — not on
+  # `reported_by` (creator, retained for audit even after a sponsor
+  # reassign). Sponsor-less tasks (`sponsor_user_id == nil`) yield `false`
+  # for everyone: no pin surface until the sponsor slot is filled.
+  #
+  # `pinned_by_me?/3` reads the socket-side MapSet seeded at mount and
+  # kept fresh by the `:task_pin_added` / `:task_pin_removed` handlers.
+  # No Repo query per render, so the detail panel stays paint-hot.
+  defp sponsor?(%Task{sponsor_user_id: sponsor_id}, user_id)
+       when is_binary(sponsor_id) and is_binary(user_id),
+       do: sponsor_id == user_id
+
+  defp sponsor?(_task, _user_id), do: false
+
+  defp pinned_by_me?(%Task{id: id}, user_id, %MapSet{} = pinned_ids)
+       when is_binary(user_id),
+       do: MapSet.member?(pinned_ids, id)
+
+  defp pinned_by_me?(_task, _user_id, _pinned_ids), do: false
+
+  # Resolve the acting user's email once at mount so the pin flow doesn't
+  # do a Repo.get on every keystroke of the detail panel. Nil when the
+  # session has no user_id (anonymous) or the user row was deleted.
+  defp fetch_user_email(nil), do: nil
+
+  defp fetch_user_email(user_id) when is_binary(user_id) do
+    case Accounts.get_user(user_id) do
+      %{email: email} when is_binary(email) -> email
+      _ -> nil
+    end
+  end
 
   # Detail-panel Sponsor badge (ADR 0042 stage 4). Returns the display name
   # for the sponsor if set, or `nil` so the template can `:if` the whole row

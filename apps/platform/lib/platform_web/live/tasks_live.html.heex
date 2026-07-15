@@ -1324,6 +1324,49 @@
         >
           <span class="hero-trash size-4"></span>
         </button>
+        <%!-- Pin-to-Chat toggle (task 019f62a1 stage 4). Sponsor-only via
+             DOM `:if` — the server-side re-check inside `toggle_task_chat_pin`
+             is the real gate; the `:if` just keeps non-sponsors from seeing
+             a non-functional button. Rendered for every status (including
+             `backlog`) so a fresh task can be promoted into the rail before
+             the plan engine ever creates its execution space. The pin write
+             lazily materialises `chat_spaces` via `ExecutionSpace.find_or_create/1`.
+             Icon `hero-map-pin(-solid)` — deliberately NOT `hero-bookmark`,
+             which is already the message-level pin glyph. --%>
+        <button
+          :if={sponsor?(@selected_task, @current_user_id)}
+          class={[
+            "btn btn-sm btn-square",
+            if(pinned_by_me?(@selected_task, @current_user_id, @my_pinned_task_ids),
+              do: "btn-primary",
+              else: "btn-ghost"
+            )
+          ]}
+          phx-click="toggle_task_chat_pin"
+          data-role="task-chat-pin-toggle"
+          aria-pressed={
+            to_string(pinned_by_me?(@selected_task, @current_user_id, @my_pinned_task_ids))
+          }
+          aria-label={
+            if pinned_by_me?(@selected_task, @current_user_id, @my_pinned_task_ids),
+              do: "Unpin task from Chat",
+              else: "Pin task to Chat"
+          }
+          title={
+            if pinned_by_me?(@selected_task, @current_user_id, @my_pinned_task_ids),
+              do: "Unpin from Chat",
+              else: "Pin to Chat"
+          }
+        >
+          <span class={[
+            if(pinned_by_me?(@selected_task, @current_user_id, @my_pinned_task_ids),
+              do: "hero-map-pin-solid",
+              else: "hero-map-pin"
+            ),
+            "size-4"
+          ]}>
+          </span>
+        </button>
         <button
           class="btn btn-sm btn-ghost btn-square"
           phx-click="close_detail"

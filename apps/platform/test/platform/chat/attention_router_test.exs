@@ -1172,7 +1172,7 @@ defmodule Platform.Chat.AttentionRouterTest do
 
   describe "extract_bracketed_tokens/1 back-compat with @[here]" do
     test "filters out the @[here] sentinel from the name token list" do
-      # Existing callers (e.g. `Chat.reinvite_mentioned_agents`) consume the
+      # Existing callers (e.g. `Chat.reinvite_and_pin_mentioned`) consume the
       # token list to look up agents by display name. If `here` leaked
       # through, an agent literally named "here" could be mistakenly
       # resurrected on every broadcast.

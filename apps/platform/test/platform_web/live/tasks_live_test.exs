@@ -10242,4 +10242,168 @@ defmodule PlatformWeb.TasksLiveTest do
       assert rendered =~ "Was a real canvas" or rendered =~ "(deleted canvas)"
     end
   end
+
+  # ── Pin-to-Chat stage 4 (task 019f62a1) ────────────────────────────────
+  #
+  # Both the DOM `:if` sponsor gate AND the server-side re-check must
+  # hold. If either regresses, a non-sponsor could pin any task they can
+  # see — and the pin itself would materialise a `chat_spaces` row for
+  # that task via `ExecutionSpace.find_or_create/1`. The regression
+  # fence proves the "sponsor OR nothing" contract from both directions:
+  # rendered DOM (Insertion A) and server event handling.
+  describe "Pin-to-Chat header pin toggle" do
+    alias Platform.Chat.Space
+    alias Platform.Tasks.{ChatPin, ChatPins}
+
+    defp count_chat_spaces_for_task(task_id) do
+      import Ecto.Query
+
+      Repo.aggregate(
+        from(s in Space,
+          where:
+            s.kind == "execution" and
+              fragment("?->>'task_id' = ?", s.metadata, ^task_id)
+        ),
+        :count
+      )
+    end
+
+    test "sponsor sees the pin button in the DOM for a backlog task", %{conn: conn} do
+      project = create_project()
+      {conn, user} = authenticated_conn_with_user(conn)
+
+      task =
+        create_task(project, %{
+          title: "Backlog Pin",
+          status: "backlog",
+          sponsor_user_id: user.id
+        })
+
+      {:ok, view, _html} = live(conn, ~p"/tasks?task_id=#{task.id}")
+
+      assert has_element?(view, "[data-role='task-chat-pin-toggle']")
+      # Unpinned state — outline glyph + not pressed.
+      assert render(view) =~ "hero-map-pin size-4"
+      refute render(view) =~ "hero-map-pin-solid"
+      assert render(view) =~ ~s(aria-pressed="false")
+    end
+
+    test "non-sponsor does NOT see the pin button", %{conn: conn} do
+      project = create_project()
+      other = create_user()
+      conn = authenticated_conn(conn)
+
+      task =
+        create_task(project, %{
+          title: "Not Mine",
+          status: "backlog",
+          sponsor_user_id: other.id
+        })
+
+      {:ok, view, _html} = live(conn, ~p"/tasks?task_id=#{task.id}")
+
+      refute has_element?(view, "[data-role='task-chat-pin-toggle']")
+    end
+
+    test "task without a sponsor renders no pin button (defensive gate)", %{conn: conn} do
+      project = create_project()
+      conn = authenticated_conn(conn)
+
+      task = create_task(project, %{title: "Sponsorless", status: "backlog"})
+
+      {:ok, view, _html} = live(conn, ~p"/tasks?task_id=#{task.id}")
+
+      refute has_element?(view, "[data-role='task-chat-pin-toggle']")
+    end
+
+    test "non-sponsor push-forging toggle_task_chat_pin is refused server-side", %{conn: conn} do
+      project = create_project()
+      other = create_user()
+      {conn, _user} = authenticated_conn_with_user(conn)
+
+      task =
+        create_task(project, %{
+          title: "Bypass Attempt",
+          status: "backlog",
+          sponsor_user_id: other.id
+        })
+
+      {:ok, view, _html} = live(conn, ~p"/tasks?task_id=#{task.id}")
+
+      # DOM gate holds — button absent.
+      refute has_element?(view, "[data-role='task-chat-pin-toggle']")
+
+      # Forge the event anyway (simulates a CDP/liveSocket.push bypass).
+      html = render_hook(view, "toggle_task_chat_pin", %{})
+
+      # Server-side re-check fires an :error flash AND no pin/space landed.
+      assert html =~ "Only the task sponsor can pin this task."
+      assert count_chat_spaces_for_task(task.id) == 0
+      assert Repo.aggregate(from(p in ChatPin, where: p.task_id == ^task.id), :count) == 0
+    end
+
+    test "sponsor pin lazily materialises the execution space + pin row", %{conn: conn} do
+      project = create_project()
+      {conn, user} = authenticated_conn_with_user(conn)
+
+      task =
+        create_task(project, %{
+          title: "Fresh Pin",
+          status: "backlog",
+          sponsor_user_id: user.id
+        })
+
+      # Regression fence: no chat_spaces row exists before the pin fires.
+      assert count_chat_spaces_for_task(task.id) == 0
+
+      {:ok, view, _html} = live(conn, ~p"/tasks?task_id=#{task.id}")
+
+      view
+      |> element("[data-role='task-chat-pin-toggle']")
+      |> render_click()
+
+      # Space materialised via `ExecutionSpace.find_or_create/1`, single row.
+      assert count_chat_spaces_for_task(task.id) == 1
+      assert ChatPins.pinned?(task.id, %{kind: "user", id: user.email})
+
+      # Solid pin glyph + aria-pressed=true reflect the new state.
+      html = render(view)
+      assert html =~ "hero-map-pin-solid"
+      assert html =~ ~s(aria-pressed="true")
+    end
+
+    test "sponsor unpin removes the row and flips the icon back", %{conn: conn} do
+      project = create_project()
+      {conn, user} = authenticated_conn_with_user(conn)
+
+      task =
+        create_task(project, %{
+          title: "Pin then Unpin",
+          status: "backlog",
+          sponsor_user_id: user.id
+        })
+
+      # Pre-pin so the panel starts in the pinned state.
+      {:ok, _} = ChatPins.pin(task.id, %{kind: "user", id: user.email}, user.email)
+
+      {:ok, view, _html} = live(conn, ~p"/tasks?task_id=#{task.id}")
+
+      assert render(view) =~ "hero-map-pin-solid"
+
+      view
+      |> element("[data-role='task-chat-pin-toggle']")
+      |> render_click()
+
+      # Row deleted, chat_spaces intact (per stage 3 unpin_all_for_task
+      # contract — post-mortem access preserved).
+      refute ChatPins.pinned?(task.id, %{kind: "user", id: user.email})
+      assert count_chat_spaces_for_task(task.id) == 1
+
+      html = render(view)
+      # Outline pin + not-pressed.
+      assert html =~ "hero-map-pin size-4"
+      refute html =~ "hero-map-pin-solid"
+      assert html =~ ~s(aria-pressed="false")
+    end
+  end
 end

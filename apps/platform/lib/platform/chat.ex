@@ -854,8 +854,9 @@ defmodule Platform.Chat do
   @doc """
   Insert an agent participant row for the space. Returns the existing row
   if one already exists; otherwise inserts a fresh one. Never resurrects —
-  dismissal is durable, and `reinvite_mentioned_agents/1` is the only path
-  that brings a dismissed agent back (ADR 0038).
+  dismissal is durable, and `reinvite_and_pin_mentioned/1` is the only path
+  that brings a dismissed agent back (ADR 0038; see also task 019f62a1
+  stage 3 for the sponsor pin-propagation pass layered on the same seam).
   """
   @spec add_agent_participant(binary(), Agent.t() | binary(), keyword()) ::
           {:ok, Participant.t()} | {:error, term()}
@@ -944,7 +945,7 @@ defmodule Platform.Chat do
 
     case result do
       {:ok, msg} ->
-        reinvite_mentioned_agents(msg)
+        reinvite_and_pin_mentioned(msg)
         publish_message_posted(msg, opts)
         {:ok, msg}
 
@@ -1004,7 +1005,7 @@ defmodule Platform.Chat do
           |> Enum.sort_by(fn {{:attachment, index}, _value} -> index end)
           |> Enum.map(fn {_key, attachment} -> attachment end)
 
-        reinvite_mentioned_agents(message)
+        reinvite_and_pin_mentioned(message)
         publish_message_posted(message, opts)
         {:ok, message, attachments}
 
@@ -2596,7 +2597,7 @@ defmodule Platform.Chat do
 
   defp stringify_canvas_payload(value), do: value
 
-  # ── Mention-based reinvite (ADR 0038) ──────────────────────────────────────
+  # ── Mention-based reinvite + pin-propagation (ADR 0038 + task 019f62a1) ────
   #
   # An @-mention of an agent who isn't currently an active participant brings
   # them back. This is the ONLY path that should resurrect a dismissed agent
@@ -2606,8 +2607,20 @@ defmodule Platform.Chat do
   # are private by contract; only agents already on the DM's roster receive
   # attention routing. Channels continue to support the mention-reinvite
   # contract.
+  #
+  # Stage 3 of task 019f62a1 (Pin-to-Chat) adds a second pass: when the
+  # message lands in an EXECUTION space carrying a task_id AND the message
+  # author is that task's sponsor, resolve each `@[…]` token to a user
+  # (by email) or agent (by slug) and pin them via
+  # `Platform.Tasks.ChatPins.pin/3`. Only sponsors may propagate a pin —
+  # non-sponsor @-mentions in exec spaces reinvite agents (existing
+  # behaviour) but do NOT add a pin row. Idempotency of `pin/3` (short-
+  # circuit on repeat) covers the "same token twice in one message" case
+  # without a broadcast storm. Channels + DMs are untouched by the
+  # pin-propagation pass — the exec-space guard is the only gate that
+  # matters here.
 
-  defp reinvite_mentioned_agents(%Message{space_id: space_id, content: content})
+  defp reinvite_and_pin_mentioned(%Message{space_id: space_id, content: content} = msg)
        when is_binary(content) and content != "" do
     {bracketed, _legacy_zone} =
       Platform.Chat.AttentionRouter.extract_bracketed_tokens(String.downcase(content))
@@ -2644,10 +2657,18 @@ defmodule Platform.Chat do
               end
             end)
 
+            # Stage 3 pin-propagation pass. Only executes when the space is
+            # a task's execution space AND the message author is that task's
+            # sponsor. Any lookup miss short-circuits the pass — this is a
+            # side-effect layered on top of the reinvite; it must never
+            # crash the message-post transaction.
+            maybe_propagate_task_pins(space, msg, tokens)
             :ok
         end
     end
   end
+
+  defp reinvite_and_pin_mentioned(_), do: :ok
 
   # Single-tenant/default-org setups leave `workspace_id: nil` on both
   # agents and spaces; in that case skip the scope filter and trust the
@@ -2658,7 +2679,81 @@ defmodule Platform.Chat do
     from(a in query, where: a.workspace_id == ^workspace_id or is_nil(a.workspace_id))
   end
 
-  defp reinvite_mentioned_agents(_), do: :ok
+  # ── Pin-propagation pass (task 019f62a1 stage 3) ───────────────────────────
+  #
+  # Fires only when the mention lands in an execution space AND the
+  # author is the task's sponsor. Delegates each resolved participant
+  # to `Platform.Tasks.ChatPins.pin/3` which is idempotent — repeat
+  # mentions of the same target within one message don't re-broadcast.
+  # Non-sponsor mentions are silently skipped; channels/DMs never reach
+  # this callsite.
+  defp maybe_propagate_task_pins(%Space{kind: "execution"} = space, %Message{} = msg, tokens) do
+    with %{"task_id" => task_id} when is_binary(task_id) <- space.metadata || %{},
+         %Platform.Tasks.Task{} = task <- Repo.get(Platform.Tasks.Task, task_id),
+         true <- sponsor_authored?(task, msg),
+         pinned_by when is_binary(pinned_by) <- sponsor_email_for(task, msg) do
+      tokens
+      |> Enum.uniq()
+      |> Enum.each(fn token ->
+        case resolve_pin_target(token) do
+          nil -> :ok
+          participant -> Platform.Tasks.ChatPins.pin(task_id, participant, pinned_by)
+        end
+      end)
+
+      :ok
+    else
+      _ -> :ok
+    end
+  end
+
+  defp maybe_propagate_task_pins(_space, _msg, _tokens), do: :ok
+
+  # Sponsor check: message's snapshotted author_user_id matches task's
+  # sponsor_user_id. `sponsor_user_id` is nullable (ADR 0042) — a task
+  # without a sponsor cannot propagate pins even to a matching author.
+  defp sponsor_authored?(%Platform.Tasks.Task{sponsor_user_id: sponsor_id}, %Message{
+         author_user_id: author_id
+       })
+       when is_binary(sponsor_id) and is_binary(author_id),
+       do: sponsor_id == author_id
+
+  defp sponsor_authored?(_task, _msg), do: false
+
+  # Resolve the sponsor's email for the `pinned_by` audit column on
+  # `ChatPin`. Falls back to the message's snapshotted display name if
+  # the user row was hard-deleted between authorship and mention
+  # dispatch — the column just needs a non-empty string.
+  defp sponsor_email_for(%Platform.Tasks.Task{sponsor_user_id: sponsor_id}, %Message{} = msg)
+       when is_binary(sponsor_id) do
+    case Repo.get(Platform.Accounts.User, sponsor_id) do
+      %Platform.Accounts.User{email: email} when is_binary(email) and email != "" -> email
+      _ -> msg.author_display_name || sponsor_id
+    end
+  end
+
+  defp sponsor_email_for(_task, _msg), do: nil
+
+  # Token → `{kind, id}` map suitable for `ChatPins.pin/3`. Users
+  # resolve by email; agents resolve by slug. Emails are already
+  # downcased by `extract_bracketed_tokens/1` so a case-insensitive
+  # match against `users.email` — canonically stored lowercase in this
+  # codebase — is a direct equality check. Returns `nil` when nothing
+  # matches; caller skips the pin without noise.
+  defp resolve_pin_target(token) when is_binary(token) do
+    cond do
+      user = Repo.get_by(Platform.Accounts.User, email: token) ->
+        %{kind: "user", id: user.email}
+
+      agent = Repo.get_by(Platform.Agents.Agent, slug: token) ->
+        %{kind: "agent", id: agent.slug}
+
+      true ->
+        nil
+    end
+  end
+
+  defp resolve_pin_target(_), do: nil
 
   # Mention-reinvite. Post-ADR-0038 there's no soft-dismissed state —
   # either the row exists (already in the space) or it doesn't (dismissed

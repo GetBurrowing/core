@@ -123,13 +123,34 @@ defmodule PlatformWeb.ChatLive do
         Enum.filter(conversations, fn s -> s.kind in ["dm", "group"] end)
       end
 
+    # Pin-to-Chat stage 4 (task 019f62a1): a dedicated "Pinned" rail section
+    # for task execution spaces the current user has pinned. Loaded via
+    # email (user pins are keyed by email — see `ChatPins.pin/3` and the
+    # stage-3 mention-propagation pass in `Platform.Chat`) and kept fresh
+    # by the `:task_pin_added` / `:task_pin_removed` handlers below. Empty
+    # in embedded mode: the meeting-embed only paints ONE space and has
+    # no sidebar to populate.
+    current_user_email =
+      if embedded?, do: nil, else: fetch_user_email_for_pins(user_id)
+
+    pinned_task_spaces =
+      case current_user_email do
+        nil -> []
+        email -> Platform.Tasks.ChatPins.list_pinned_task_spaces_for(%{kind: "user", id: email})
+      end
+
     socket =
       socket
       |> assign(:page_title, "Chat")
       |> assign(:user_id, user_id)
+      # Pin-to-Chat stage 4: stash the acting user's email so the pin
+      # broadcast filter (`participant_id == current_user_email`) doesn't
+      # need to re-hit `Accounts.get_user/1` on every arriving event.
+      |> assign(:current_user_email, current_user_email)
       |> assign(:embedded, embedded?)
-      |> assign(:spaces, channels ++ dm_conversations)
+      |> assign(:spaces, channels ++ pinned_task_spaces ++ dm_conversations)
       |> assign(:channels, channels)
+      |> assign(:pinned_task_spaces, pinned_task_spaces)
       |> assign(:archived_channels, archived_channels)
       # Collapse state for the sidebar's "Archived" group (task 019e95ea
       # stage 2) — collapsed by default, toggled by `toggle_archived_section`.
@@ -284,7 +305,13 @@ defmodule PlatformWeb.ChatLive do
         progress: &handle_upload_progress/3
       )
 
-    all_spaces = channels ++ dm_conversations
+    # Pin-to-Chat stage 4: pinned task-exec spaces ride the same PubSub
+    # subscribe loop as channels + DMs so unread counts + `:new_message`
+    # broadcasts stay live on the pinned rail rows. `ChatPubSub.subscribe/1`
+    # is idempotent by topic so a pinned space that also happens to be an
+    # active channel (unlikely — exec spaces have their own kind) is a
+    # no-op double-subscribe.
+    all_spaces = channels ++ pinned_task_spaces ++ dm_conversations
 
     # Subscribe to chat pubsub for unread counts in background conversations
     # (active space subscription happens in handle_params).
@@ -1743,6 +1770,41 @@ defmodule PlatformWeb.ChatLive do
     end
   end
 
+  # ── Pin-to-Chat rail unpin (task 019f62a1 stage 4 fixup #2) ───────────────
+  #
+  # Rowan asked for a "small pin icon next to the task" so users can unpin
+  # a task-exec space directly from the Pinned rail without navigating to
+  # the task detail panel. This handler is PARTICIPANT-SCOPED — every
+  # viewer that sees a rail row can unpin themselves regardless of whether
+  # they're the sponsor (the rail surfaces rows for BOTH the sponsor's own
+  # pin AND for participants pinned via sponsor @-mention in stage 3). A
+  # sponsor unpin removes only her row; other participants keep seeing the
+  # space until they unpin themselves or the task hits `done` (which
+  # cascades via `ChatPins.unpin_all_for_task/1`).
+  #
+  # No sponsor gate here on purpose — that gate lives on the pin ADD path
+  # in `TasksLive.handle_event("toggle_task_chat_pin", ...)` because the
+  # add path is the earliest point that materialises a chat_spaces row.
+  # Unpin cannot materialise anything, so a bypass has no side-effect
+  # beyond removing a pin the caller already owns.
+  def handle_event("unpin_task_from_chat", %{"task-id" => task_id}, socket)
+      when is_binary(task_id) and task_id != "" do
+    case socket.assigns[:current_user_email] do
+      nil ->
+        # Anonymous session or user record was deleted between mount and
+        # click. Refuse silently — the pin row is keyed by email so we
+        # can't even attribute a delete.
+        {:noreply, put_flash(socket, :error, "You need to be signed in to unpin tasks.")}
+
+      email ->
+        participant = %{kind: "user", id: email}
+        _ = Platform.Tasks.ChatPins.unpin(task_id, participant, email)
+        {:noreply, put_flash(socket, :info, "Unpinned from Chat.")}
+    end
+  end
+
+  def handle_event("unpin_task_from_chat", _params, socket), do: {:noreply, socket}
+
   # ── Settings modal (see SettingsComponent) ────────────────────────────────
 
   def handle_event("settings_open", _params, socket) do
@@ -1825,6 +1887,42 @@ defmodule PlatformWeb.ChatLive do
   end
 
   def handle_info({:space_created, _space}, socket), do: {:noreply, socket}
+
+  # Pin-to-Chat stage 4 (task 019f62a1). Broadcasts arrive on the global
+  # `chat:spaces` topic via `ChatPubSub.broadcast_space_event/1`. We match
+  # only user-participant events aimed at THIS session's email; agent pins
+  # and other users' pins ride the same topic but must never shift this
+  # sidebar's rail. On a match, re-fetch the pinned-spaces list (cheap
+  # single query) AND (for `:task_pin_added`) subscribe to the new space's
+  # per-space topic so unread counts and `:new_message` broadcasts start
+  # flowing without waiting for a fresh mount.
+  def handle_info(
+        {:task_pin_added,
+         %{space_id: space_id, participant_kind: "user", participant_id: participant_id}},
+        socket
+      ) do
+    if participant_id != nil and participant_id == socket.assigns[:current_user_email] do
+      if connected?(socket), do: ChatPubSub.subscribe(space_id)
+      {:noreply, refresh_pinned_task_spaces(socket)}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_info({:task_pin_added, _payload}, socket), do: {:noreply, socket}
+
+  def handle_info(
+        {:task_pin_removed, %{participant_kind: "user", participant_id: participant_id}},
+        socket
+      ) do
+    if participant_id != nil and participant_id == socket.assigns[:current_user_email] do
+      {:noreply, refresh_pinned_task_spaces(socket)}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_info({:task_pin_removed, _payload}, socket), do: {:noreply, socket}
 
   def handle_info({:new_conversation_closed}, socket) do
     {:noreply, assign(socket, :show_new_conversation_modal, false)}
@@ -2539,6 +2637,45 @@ defmodule PlatformWeb.ChatLive do
   end
 
   def bucket_from_slug(_), do: nil
+
+  # ── Pin-to-Chat helpers (task 019f62a1 stage 4) ────────────────────────
+  #
+  # `fetch_user_email_for_pins/1` is the one Repo hop we allow at mount to
+  # translate the session `current_user_id` UUID into the email the
+  # `task_chat_pins` table indexes by. `Accounts.get_user/1` also preloads
+  # `:org_memberships` for the LiveAuth on_mount hook so the record it
+  # returns is already warm — no extra query. Nil on missing user, keeping
+  # anonymous / deleted-user sessions from lighting up the pin flow.
+  defp fetch_user_email_for_pins(nil), do: nil
+
+  defp fetch_user_email_for_pins(user_id) when is_binary(user_id) do
+    case Accounts.get_user(user_id) do
+      %{email: email} when is_binary(email) -> email
+      _ -> nil
+    end
+  end
+
+  # Central refresh point for the pinned-tasks rail. Called from BOTH
+  # `:task_pin_added` (after the per-space subscribe) and `:task_pin_removed`.
+  # Also refreshes `:spaces` — the ChatLive template's channel-lookup paths
+  # (unread counts, active-space matching) all read from `@pinned_task_spaces`
+  # for the rail rows, but downstream unread-count aggregation walks
+  # `@spaces` to know which space ids to consider.
+  defp refresh_pinned_task_spaces(socket) do
+    case socket.assigns[:current_user_email] do
+      nil ->
+        socket
+
+      email ->
+        pinned = Platform.Tasks.ChatPins.list_pinned_task_spaces_for(%{kind: "user", id: email})
+        channels = socket.assigns[:channels] || []
+        dm_conversations = socket.assigns[:dm_conversations] || []
+
+        socket
+        |> assign(:pinned_task_spaces, pinned)
+        |> assign(:spaces, channels ++ pinned ++ dm_conversations)
+    end
+  end
 
   @impl true
   def terminate(_reason, socket) do

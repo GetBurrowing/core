@@ -2837,4 +2837,319 @@ defmodule PlatformWeb.ChatLiveTest do
       assert has_element?(view, "#archived-banner button", "Unarchive")
     end
   end
+
+  # ── Pin-to-Chat stage 4 (task 019f62a1): Pinned rail section ───────────
+  #
+  # Rail section only surfaces when the current user has pinned at least
+  # one task's execution space. `list_pinned_task_spaces_for/1` joins
+  # `task_chat_pins → chat_spaces` on `metadata->>'task_id'`, so both
+  # writes have to land before the section renders. Load-bearing:
+  # participant_id is EMAIL for user pins, not user UUID.
+  describe "Pinned task-exec rail section" do
+    alias Platform.Chat.PubSub, as: ChatPubSub
+    alias Platform.Tasks
+    alias Platform.Tasks.ChatPins
+
+    defp seed_pin_for(user, opts) do
+      title = Keyword.get(opts, :title, "Pinned Task")
+
+      {:ok, project} =
+        Tasks.create_project(%{name: "Pin Project #{System.unique_integer([:positive])}"})
+
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: title,
+          status: "backlog",
+          sponsor_user_id: user.id
+        })
+
+      {:ok, %{space: space}} =
+        ChatPins.pin(task.id, %{kind: "user", id: user.email}, user.email)
+
+      %{task: task, space: space}
+    end
+
+    test "section absent when user has no pins", %{conn: conn} do
+      conn =
+        authenticated_conn(conn, %{
+          email: "no-pins-#{System.unique_integer([:positive])}@example.com",
+          oidc_sub: "oidc-no-pins-#{System.unique_integer([:positive])}"
+        })
+
+      {:ok, view, _html} = live(conn, ~p"/chat")
+
+      refute has_element?(view, "[aria-label='Pinned tasks']")
+    end
+
+    test "section renders one row per pinned task-exec space", %{conn: conn} do
+      user =
+        insert_chat_user(%{
+          email: "rail-#{System.unique_integer([:positive])}@example.com",
+          oidc_sub: "oidc-rail-#{System.unique_integer([:positive])}"
+        })
+
+      %{space: space1} = seed_pin_for(user, title: "Alpha Pinned")
+      %{space: space2} = seed_pin_for(user, title: "Beta Pinned")
+
+      conn = init_test_session(conn, current_user_id: user.id)
+
+      {:ok, view, html} = live(conn, ~p"/chat")
+
+      assert has_element?(view, "[aria-label='Pinned tasks']")
+
+      assert has_element?(
+               view,
+               "[data-role='pinned-task-rail-row'][data-space-id='#{space1.id}']"
+             )
+
+      assert has_element?(
+               view,
+               "[data-role='pinned-task-rail-row'][data-space-id='#{space2.id}']"
+             )
+
+      # Section header + task-glyph icon rendered (Saru: hero-map-pin-mini
+      # on the header, hero-clipboard-document-list-mini per row).
+      assert html =~ "hero-map-pin-mini"
+      assert html =~ "hero-clipboard-document-list-mini"
+    end
+
+    # Stage-4 review feedback (Rowan): the rail row label was the cryptic
+    # synthesised `task-exec-<8-char-id>` space slug, so two pinned tasks
+    # were indistinguishable. Row must render the real task title now.
+    test "rail row renders the task title, not the cryptic exec-space slug",
+         %{conn: conn} do
+      user =
+        insert_chat_user(%{
+          email: "title-rail-#{System.unique_integer([:positive])}@example.com",
+          oidc_sub: "oidc-title-rail-#{System.unique_integer([:positive])}"
+        })
+
+      %{space: space} = seed_pin_for(user, title: "My cool task")
+
+      conn = init_test_session(conn, current_user_id: user.id)
+
+      {:ok, view, _html} = live(conn, ~p"/chat")
+
+      row_html =
+        view
+        |> element("[data-role='pinned-task-rail-row'][data-space-id='#{space.id}']")
+        |> render()
+
+      assert row_html =~ "My cool task"
+
+      # The `href` on the row still points at `/chat/task-exec-<id>` (URL
+      # slugs are unchanged), so scope the refute to the visible label
+      # span — that MUST NOT read as the cryptic exec-space slug anymore.
+      label_html =
+        view
+        |> element(
+          "[data-role='pinned-task-rail-row'][data-space-id='#{space.id}'] span.truncate"
+        )
+        |> render()
+
+      refute label_html =~ "task-exec-"
+    end
+
+    test "task_pin_added broadcast for THIS user surfaces a fresh row", %{conn: conn} do
+      user =
+        insert_chat_user(%{
+          email: "live-pin-#{System.unique_integer([:positive])}@example.com",
+          oidc_sub: "oidc-live-pin-#{System.unique_integer([:positive])}"
+        })
+
+      conn = init_test_session(conn, current_user_id: user.id)
+
+      {:ok, view, _html} = live(conn, ~p"/chat")
+      refute has_element?(view, "[aria-label='Pinned tasks']")
+
+      # Pin AFTER mount → the handle_info clause + refresh should fold
+      # the new row in without a page refresh.
+      %{space: space} = seed_pin_for(user, title: "Live Add")
+
+      # The pin/3 call already broadcasts on the space-lifecycle topic
+      # ChatLive subscribes to. Wait for the assign refresh to propagate.
+      Process.sleep(50)
+
+      assert has_element?(
+               view,
+               "[data-role='pinned-task-rail-row'][data-space-id='#{space.id}']"
+             )
+    end
+
+    test "task_pin_removed broadcast drops the row live", %{conn: conn} do
+      user =
+        insert_chat_user(%{
+          email: "live-unpin-#{System.unique_integer([:positive])}@example.com",
+          oidc_sub: "oidc-live-unpin-#{System.unique_integer([:positive])}"
+        })
+
+      %{task: task, space: space} = seed_pin_for(user, title: "Will Unpin")
+
+      conn = init_test_session(conn, current_user_id: user.id)
+
+      {:ok, view, _html} = live(conn, ~p"/chat")
+
+      assert has_element?(
+               view,
+               "[data-role='pinned-task-rail-row'][data-space-id='#{space.id}']"
+             )
+
+      {:ok, :removed} = ChatPins.unpin(task.id, %{kind: "user", id: user.email}, user.email)
+
+      Process.sleep(50)
+
+      refute has_element?(
+               view,
+               "[data-role='pinned-task-rail-row'][data-space-id='#{space.id}']"
+             )
+    end
+
+    test "other users' pin broadcasts do NOT surface in this session", %{conn: conn} do
+      user_a =
+        insert_chat_user(%{
+          email: "user-a-#{System.unique_integer([:positive])}@example.com",
+          oidc_sub: "oidc-user-a-#{System.unique_integer([:positive])}"
+        })
+
+      user_b =
+        insert_chat_user(%{
+          email: "user-b-#{System.unique_integer([:positive])}@example.com",
+          oidc_sub: "oidc-user-b-#{System.unique_integer([:positive])}"
+        })
+
+      conn = init_test_session(conn, current_user_id: user_a.id)
+
+      {:ok, view, _html} = live(conn, ~p"/chat")
+
+      # user_b pins a task — the broadcast fans out to every subscriber
+      # of the spaces topic (including user_a's session) but the handler
+      # filter must drop it: participant_id != user_a.email.
+      %{space: b_space} = seed_pin_for(user_b, title: "Not Mine")
+
+      Process.sleep(50)
+
+      refute has_element?(
+               view,
+               "[data-role='pinned-task-rail-row'][data-space-id='#{b_space.id}']"
+             )
+
+      # Sanity: no Pinned tasks section for user_a either (they still
+      # have zero pins of their own).
+      refute has_element?(view, "[aria-label='Pinned tasks']")
+
+      # Sanity: a stray broadcast that isn't wearing the "user" kind at
+      # all (e.g. an agent pin) also doesn't crash the handler or
+      # surface a row for user_a.
+      _ = ChatPubSub.broadcast_space_event({:task_pin_added, %{participant_kind: "agent"}})
+      Process.sleep(50)
+      refute has_element?(view, "[aria-label='Pinned tasks']")
+    end
+
+    # ── Stage 4 fixup #2 (Rowan review): inline unpin icon on each rail row.
+    # Every viewer that sees a row can unpin themselves via a small
+    # `hero-x-mark` at the row's tail — no navigation to the task detail
+    # panel required. Unpin is participant-scoped (self only), so a
+    # sponsor's unpin does NOT drop other participants' rows.
+    test "rail row renders an unpin button that removes the pin", %{conn: conn} do
+      user =
+        insert_chat_user(%{
+          email: "unpin-btn-#{System.unique_integer([:positive])}@example.com",
+          oidc_sub: "oidc-unpin-btn-#{System.unique_integer([:positive])}"
+        })
+
+      %{task: task, space: space} = seed_pin_for(user, title: "Will Self-Unpin")
+
+      conn = init_test_session(conn, current_user_id: user.id)
+
+      {:ok, view, _html} = live(conn, ~p"/chat")
+
+      # Row + inline unpin button both present at initial render.
+      assert has_element?(
+               view,
+               "[data-role='pinned-task-rail-row'][data-space-id='#{space.id}']"
+             )
+
+      assert has_element?(
+               view,
+               "button[data-role='pinned-task-rail-unpin'][data-space-id='#{space.id}']"
+             )
+
+      # Click the unpin button — the phx-click event fires with the task
+      # id as `task-id`, the handler calls `ChatPins.unpin/3`, and the
+      # `:task_pin_removed` broadcast folds the row out of the rail
+      # without a navigation.
+      view
+      |> element("button[data-role='pinned-task-rail-unpin'][data-space-id='#{space.id}']")
+      |> render_click()
+
+      # DB is authoritative: no pin row remains for this user + task.
+      refute Platform.Tasks.ChatPins.pinned?(task.id, %{kind: "user", id: user.email})
+
+      Process.sleep(50)
+
+      refute has_element?(
+               view,
+               "[data-role='pinned-task-rail-row'][data-space-id='#{space.id}']"
+             )
+    end
+
+    # Participant-scope guarantee — the mention-propagation path in
+    # stage 3 seeds a pin row for every @-mentioned participant, and
+    # each of them sees the same task-exec space in their own rail.
+    # When ONE participant clicks unpin, only THEIR row goes; the
+    # other participants (including the sponsor) still see the row.
+    test "unpin from one participant does NOT drop other participants' rows",
+         %{conn: conn} do
+      sponsor =
+        insert_chat_user(%{
+          email: "sponsor-unpin-#{System.unique_integer([:positive])}@example.com",
+          oidc_sub: "oidc-sponsor-unpin-#{System.unique_integer([:positive])}"
+        })
+
+      participant =
+        insert_chat_user(%{
+          email: "participant-unpin-#{System.unique_integer([:positive])}@example.com",
+          oidc_sub: "oidc-participant-unpin-#{System.unique_integer([:positive])}"
+        })
+
+      # Sponsor pins the task (materialises the exec space + sponsor's
+      # own pin row); mentioned participant's pin is seeded via a direct
+      # `ChatPins.pin/3` (stage 3's mention-propagation collapses to the
+      # same call site).
+      %{task: task, space: space} = seed_pin_for(sponsor, title: "Shared Pin")
+
+      {:ok, _} =
+        ChatPins.pin(task.id, %{kind: "user", id: participant.email}, sponsor.email)
+
+      # The participant's session sees the row and clicks unpin.
+      conn = init_test_session(conn, current_user_id: participant.id)
+      {:ok, view, _html} = live(conn, ~p"/chat")
+
+      assert has_element?(
+               view,
+               "[data-role='pinned-task-rail-row'][data-space-id='#{space.id}']"
+             )
+
+      view
+      |> element("button[data-role='pinned-task-rail-unpin'][data-space-id='#{space.id}']")
+      |> render_click()
+
+      Process.sleep(50)
+
+      refute has_element?(
+               view,
+               "[data-role='pinned-task-rail-row'][data-space-id='#{space.id}']"
+             )
+
+      # Sponsor's pin row survives — participant-scoped unpin is the whole
+      # point. The sponsor still sees the space in their own rail.
+      assert Platform.Tasks.ChatPins.pinned?(task.id, %{kind: "user", id: sponsor.email})
+
+      refute Platform.Tasks.ChatPins.pinned?(task.id, %{
+               kind: "user",
+               id: participant.email
+             })
+    end
+  end
 end

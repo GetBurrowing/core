@@ -583,7 +583,13 @@ defmodule Platform.Org.Wiki.ContextT4E2ETest do
       # bearing "Historn: backlog-drain pass. Applied: kickoff-followup-
       # meeting.md ..." entry documenting three real fixes). Mirrors the
       # phantom-flood cleanup pattern at 20260706120000.
-      "20260714000100_cleanup_historian_no_op_journal_entries_20260713.exs"
+      "20260714000100_cleanup_historian_no_op_journal_entries_20260713.exs",
+      # Task 019f62a1 stage 2 — Pin-to-Chat: `task_chat_pins` table
+      # backing `Platform.Tasks.ChatPins`. Per-participant subscription
+      # rows to a task's execution chat space. Materialised lazily on
+      # first pin via `ExecutionSpace.find_or_create/1` so backlog tasks
+      # never picked up leave zero `chat_spaces` rows.
+      "20260715012217_create_task_chat_pins.exs"
     ]
 
     defp t4_root, do: Mix.Project.project_file() |> Path.dirname()

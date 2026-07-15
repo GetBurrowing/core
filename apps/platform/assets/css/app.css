@@ -3160,6 +3160,16 @@ body, .font-fabrikam {
     @apply opacity-100;
   }
 
+  /* Per-row unpin button (Pin-to-Chat stage 4 fixup #2, task 019f62a1).
+     Renders on Pinned task-exec rail rows. Unlike .channel-row-hide-button
+     this stays visible (muted) at rest — Rowan's feedback specifically asked
+     for a discoverable "small pin icon next to the task" rather than a
+     hover-only affordance. Hover/focus lift to `text-primary` so the
+     control still feels interactive when targeted. */
+  .channel-row-unpin-button {
+    @apply flex-shrink-0 inline-flex items-center justify-center w-6 h-6 mr-1 rounded text-base-content/40 hover:text-primary hover:bg-base-200 focus-visible:text-primary transition-colors;
+  }
+
   .channel-row--active {
     @apply bg-primary/10 text-primary font-semibold border-l-2 border-primary;
   }

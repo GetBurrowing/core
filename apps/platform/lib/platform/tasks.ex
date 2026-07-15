@@ -824,9 +824,27 @@ defmodule Platform.Tasks do
   # Lives here (not just in `maybe_finalize_transition/3`) because the
   # MCP `task_update` tool calls `transition_task_status/2` directly,
   # bypassing `transition_task/2`. Both paths need the teardown.
+
+  # Stage 3 of task 019f62a1 (Pin-to-Chat): task-done cascade. Removes
+  # every `task_chat_pins` row so the space stops surfacing in each
+  # pinner's sidebar rail. Placed in the shared teardown path (not
+  # just `maybe_finalize_transition/3 → "done"`) so the MCP
+  # `task_complete` / `task_update({status: "done"})` route — which
+  # calls `transition_task_status/2` directly — also cascades. Does
+  # NOT archive the execution space: plan-engine artifacts, canvases,
+  # and message history persist for post-mortem access.
+  defp maybe_dispatch_teardown(%Task{} = task, "done") do
+    Platform.Tasks.ChatPins.unpin_all_for_task(task.id)
+    :ok
+  end
+
   defp maybe_dispatch_teardown(%Task{} = task, "cancelled") do
     TaskRouterSupervisor.stop_assignment(task.id)
     RuntimeSupervision.abandon_current_lease_for_task(task.id, "execution")
+    # Stage 3 of task 019f62a1 (Pin-to-Chat): cancelled mirrors done —
+    # cascade removes every pin row so cancelled tasks stop bubbling
+    # in sidebar rails. Also pin-only, space preserved.
+    Platform.Tasks.ChatPins.unpin_all_for_task(task.id)
     :ok
   end
 

@@ -797,4 +797,265 @@ defmodule Platform.ChatTest do
       assert log =~ "not_found"
     end
   end
+
+  # ── Pin-propagation on sponsor @-mention (task 019f62a1 stage 3) ──────────
+  #
+  # A sponsor @-mentioning a user or agent in the task's execution space
+  # adds a `task_chat_pins` row for the mentioned participant via
+  # `Platform.Tasks.ChatPins.pin/3`. Non-sponsor mentions do NOT propagate,
+  # and channels/DMs are exempt — the exec-space guard is the only gate.
+  # `pin/3`'s idempotency short-circuit means the second occurrence of the
+  # same token in one message doesn't re-broadcast; `refute_receive` locks
+  # that contract in.
+  describe "sponsor @-mention pin propagation (task 019f62a1 stage 3)" do
+    alias Platform.Chat.PubSub, as: ChatPubSub
+    alias Platform.Orchestration.ExecutionSpace
+    alias Platform.Tasks
+    alias Platform.Tasks.{ChatPin, ChatPins}
+
+    import Ecto.Query
+
+    setup do
+      {:ok, project} =
+        Tasks.create_project(%{name: "PinProp #{System.unique_integer([:positive])}"})
+
+      sponsor = insert_user(email: "sponsor-#{System.unique_integer([:positive])}@example.com")
+      alice = insert_user(email: "alice-#{System.unique_integer([:positive])}@example.com")
+      bob = insert_user(email: "bob-#{System.unique_integer([:positive])}@example.com")
+
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Sponsored task",
+          sponsor_user_id: sponsor.id
+        })
+
+      # Subscribe BEFORE the setup pin so the drain-broadcast below has
+      # something to hit — subscribing after the pin lets the initial
+      # broadcast escape into the void and every test's first
+      # `assert_receive` picks up the phantom row instead.
+      :ok = ChatPubSub.subscribe_spaces()
+      on_exit(fn -> ChatPubSub.unsubscribe_spaces() end)
+
+      # Materialise the exec space via the same lazy path production uses;
+      # this also seeds the sponsor's own pin row (unrelated to what the
+      # tests below assert about mention propagation).
+      {:ok, %{space: exec_space}} =
+        ChatPins.pin(task.id, %{kind: "user", id: sponsor.email}, sponsor.email)
+
+      # Drain the sponsor's own :task_pin_added broadcast from the setup
+      # pin so each test starts from a clean mailbox.
+      assert_receive {:task_pin_added, _}
+
+      %{
+        project: project,
+        task: task,
+        sponsor: sponsor,
+        alice: alice,
+        bob: bob,
+        exec_space: exec_space
+      }
+    end
+
+    defp insert_user(opts) do
+      n = System.unique_integer([:positive])
+
+      Platform.Repo.insert!(%Platform.Accounts.User{
+        name: Keyword.get(opts, :name, "User #{n}"),
+        email: Keyword.fetch!(opts, :email),
+        oidc_sub: "sub-#{n}"
+      })
+    end
+
+    defp participant_for_user(space_id, %Platform.Accounts.User{} = user) do
+      {:ok, p} =
+        Chat.add_participant(space_id, %{
+          participant_type: "user",
+          participant_id: user.id,
+          display_name: user.name,
+          joined_at: DateTime.utc_now()
+        })
+
+      p
+    end
+
+    defp count_pins_for(task_id, kind, id) do
+      Platform.Repo.aggregate(
+        from(p in ChatPin,
+          where:
+            p.task_id == ^task_id and p.participant_kind == ^kind and
+              p.participant_id == ^id
+        ),
+        :count
+      )
+    end
+
+    test "sponsor mentioning @[alice] in the exec space pins alice", %{
+      task: task,
+      sponsor: sponsor,
+      alice: alice,
+      exec_space: exec_space
+    } do
+      sponsor_p = participant_for_user(exec_space.id, sponsor)
+
+      {:ok, _msg} =
+        Chat.post_message(%{
+          space_id: exec_space.id,
+          participant_id: sponsor_p.id,
+          content_type: "text",
+          content: "hey @[#{alice.email}] take a look"
+        })
+
+      assert count_pins_for(task.id, "user", alice.email) == 1
+
+      assert_receive {:task_pin_added,
+                      %{
+                        task_id: broadcast_task_id,
+                        participant_kind: "user",
+                        participant_id: alice_email_broadcast
+                      }}
+
+      assert broadcast_task_id == task.id
+      assert alice_email_broadcast == alice.email
+    end
+
+    test "same @[alice] mentioned twice in one message does NOT re-broadcast", %{
+      task: task,
+      sponsor: sponsor,
+      alice: alice,
+      exec_space: exec_space
+    } do
+      sponsor_p = participant_for_user(exec_space.id, sponsor)
+
+      {:ok, _msg} =
+        Chat.post_message(%{
+          space_id: exec_space.id,
+          participant_id: sponsor_p.id,
+          content_type: "text",
+          content: "@[#{alice.email}] again @[#{alice.email}] please"
+        })
+
+      # Exactly one row inserted.
+      assert count_pins_for(task.id, "user", alice.email) == 1
+
+      # Exactly one broadcast — the context-layer short-circuit fires on
+      # the second call.
+      assert_receive {:task_pin_added, %{participant_id: alice_broadcast}}
+      assert alice_broadcast == alice.email
+      refute_receive {:task_pin_added, %{participant_id: ^alice_broadcast}}, 100
+    end
+
+    test "non-sponsor mentioning @[bob] in the exec space does NOT pin bob", %{
+      task: task,
+      alice: alice,
+      bob: bob,
+      exec_space: exec_space
+    } do
+      # Alice is not the sponsor. Her mention must reinvite agents (a
+      # separate contract) but must NOT propagate a pin.
+      alice_p = participant_for_user(exec_space.id, alice)
+
+      {:ok, _msg} =
+        Chat.post_message(%{
+          space_id: exec_space.id,
+          participant_id: alice_p.id,
+          content_type: "text",
+          content: "@[#{bob.email}] fyi"
+        })
+
+      assert count_pins_for(task.id, "user", bob.email) == 0
+
+      bob_email = bob.email
+      refute_receive {:task_pin_added, %{participant_id: ^bob_email}}, 100
+    end
+
+    test "sponsor mention in a channel space (not execution) does NOT pin", %{
+      sponsor: sponsor,
+      alice: alice
+    } do
+      # Plain channel — pin-propagation is execution-space-only. Even the
+      # sponsor's mention must be a no-op for pins here.
+      channel = create_space()
+      sponsor_p = participant_for_user(channel.id, sponsor)
+
+      {:ok, _msg} =
+        Chat.post_message(%{
+          space_id: channel.id,
+          participant_id: sponsor_p.id,
+          content_type: "text",
+          content: "@[#{alice.email}] in the channel"
+        })
+
+      # No pins for alice at all — the channel isn't tied to a task.
+      assert Platform.Repo.aggregate(
+               from(p in ChatPin, where: p.participant_id == ^alice.email),
+               :count
+             ) == 0
+
+      refute_receive {:task_pin_added, _}, 100
+    end
+
+    test "unknown @[token] in the exec space is silently skipped", %{
+      task: task,
+      sponsor: sponsor,
+      exec_space: exec_space
+    } do
+      sponsor_p = participant_for_user(exec_space.id, sponsor)
+
+      {:ok, _msg} =
+        Chat.post_message(%{
+          space_id: exec_space.id,
+          participant_id: sponsor_p.id,
+          content_type: "text",
+          content: "hey @[ghost@example.com] where are you"
+        })
+
+      # Sponsor's own pin from setup persists; no new row for the ghost.
+      assert Platform.Repo.aggregate(
+               from(p in ChatPin, where: p.task_id == ^task.id),
+               :count
+             ) == 1
+
+      refute_receive {:task_pin_added, _}, 100
+    end
+
+    test "sponsor mentioning an agent by slug pins the agent", %{
+      task: task,
+      sponsor: sponsor,
+      exec_space: exec_space
+    } do
+      n = System.unique_integer([:positive])
+
+      agent =
+        Platform.Repo.insert!(%Platform.Agents.Agent{
+          name: "Higgins #{n}",
+          slug: "higgins-#{n}",
+          status: "active"
+        })
+
+      sponsor_p = participant_for_user(exec_space.id, sponsor)
+
+      {:ok, _msg} =
+        Chat.post_message(%{
+          space_id: exec_space.id,
+          participant_id: sponsor_p.id,
+          content_type: "text",
+          content: "@[#{agent.slug}] handle this"
+        })
+
+      assert count_pins_for(task.id, "agent", agent.slug) == 1
+
+      assert_receive {:task_pin_added,
+                      %{
+                        participant_kind: "agent",
+                        participant_id: broadcast_slug
+                      }}
+
+      assert broadcast_slug == agent.slug
+
+      # Guard: `ExecutionSpace.find_or_create/1` idempotency held — no
+      # duplicate exec space materialised on the second pin call.
+      assert ExecutionSpace.find_by_task_id(task.id).id == exec_space.id
+    end
+  end
 end

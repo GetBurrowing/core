@@ -210,6 +210,80 @@
         </section>
       <% end %>
 
+      <%!-- Pin-to-Chat stage 4 (task 019f62a1): task-exec Pinned section.
+           Renders ONLY when the current user has pinned at least one task —
+           the sponsor's rail should not carry a permanent empty Pinned
+           header (Saru: "when the task hits `done` and cascades removal,
+           the row simply vanishes — no farewell animation, no toast").
+           Section header uses `hero-map-pin-mini` per stage spec, distinct
+           from `hero-bookmark-solid` (message-pin) and the future
+           `hero-star`/etc for channel-pins. Row glyph is
+           `hero-clipboard-document-list-mini` per Saru's design canvas —
+           marks each row as a task-scoped conversation without a chrome
+           badge that would double-signal "this is pinned". NOT reorderable
+           and not hideable. --%>
+      <section
+        :if={@pinned_task_spaces != []}
+        class="channel-section group"
+        data-section-key="task-pins"
+        data-section-reorderable="false"
+        aria-label="Pinned tasks"
+      >
+        <div class="channel-section-header">
+          <span class="hero-map-pin-mini size-3.5 text-base-content/60"></span>
+          <p class="channel-section-label">Pinned</p>
+        </div>
+        <%!-- Row wrapper (Pin-to-Chat stage 4 fixup #2, task 019f62a1): wraps
+             the navigate-link and the inline unpin button as SIBLINGS so
+             the button click never bubbles into the anchor's navigation
+             (mirror of the sub-org `.channel-row-hide-button` pattern —
+             see comment above `.channel-row-hide-button` for the full
+             rationale). Unpin is participant-scoped (self-unpin only),
+             so no sponsor gate here; every viewer that sees the row can
+             remove their own pin. --%>
+        <div
+          :for={space <- @pinned_task_spaces}
+          class={[
+            "channel-row-wrap",
+            @active_space && @active_space.id == space.id && "channel-row-wrap--active"
+          ]}
+          data-role="pinned-task-rail-row-wrap"
+          data-space-id={space.id}
+        >
+          <.link
+            navigate={~p"/chat/#{space_nav_target(space)}"}
+            data-role="pinned-task-rail-row"
+            data-space-id={space.id}
+            class={[
+              "channel-row",
+              @active_space && @active_space.id == space.id && "channel-row--active"
+            ]}
+          >
+            <span class="hero-clipboard-document-list-mini size-3.5 text-base-content/40"></span>
+            <span class="truncate flex-1">
+              {Platform.Tasks.ChatPins.display_name_for_space(space)}
+            </span>
+            <%= if unread_label(Map.get(@unread_counts, space.id, 0)) do %>
+              <span class="channel-row-unread-pill">
+                {unread_label(Map.get(@unread_counts, space.id, 0))}
+              </span>
+            <% end %>
+          </.link>
+          <button
+            type="button"
+            class="channel-row-unpin-button"
+            phx-click="unpin_task_from_chat"
+            phx-value-task-id={space.metadata["task_id"]}
+            data-role="pinned-task-rail-unpin"
+            data-space-id={space.id}
+            aria-label={"Unpin #{Platform.Tasks.ChatPins.display_name_for_space(space)} from Chat"}
+            title="Unpin from Chat"
+          >
+            <span class="hero-x-mark size-3.5"></span>
+          </button>
+        </div>
+      </section>
+
       <%!-- DMs section — always rendered, even when empty (Marlowe: empty
            sections keep their header so the rail's structure is visible).
            Section key: "dms". NOT reorderable (Stage 3) — locked under Pinned. --%>
@@ -939,6 +1013,73 @@
                 </span>
               <% end %>
             </.link>
+          </section>
+
+          <%!-- Pin-to-Chat stage 4 (task 019f62a1): mobile mirror of the
+               desktop task-pinned rail section. Renders when the user has
+               at least one task pinned AND (when a search is active) the
+               query matches at least one pinned task-space name. Locked at
+               the top of the mobile drawer above DMs. --%>
+          <section
+            :if={
+              @pinned_task_spaces != [] and
+                drawer_filter_spaces(@pinned_task_spaces, @drawer_query) != []
+            }
+            data-section-reorderable="false"
+            aria-label="Pinned tasks"
+          >
+            <div class="flex items-center px-4 py-1 mt-2">
+              <p class="text-xs font-semibold uppercase tracking-widest text-base-content/50">
+                Pinned
+              </p>
+            </div>
+            <%!-- Mobile drawer row wrapper (stage 4 fixup #2): SIBLING link +
+                 unpin button — same rationale as the desktop rail (see
+                 comment on the desktop `channel-row-wrap`). The button
+                 also lacks `phx-click="close_mobile_browser"` on purpose
+                 so unpinning doesn't collapse the drawer mid-tap. --%>
+            <div
+              :for={space <- drawer_filter_spaces(@pinned_task_spaces, @drawer_query)}
+              class="flex items-center"
+              data-role="pinned-task-drawer-row-wrap"
+              data-space-id={space.id}
+            >
+              <.link
+                navigate={~p"/chat/#{space_nav_target(space)}"}
+                phx-click="close_mobile_browser"
+                data-role="pinned-task-drawer-row"
+                data-space-id={space.id}
+                class={[
+                  "flex items-center gap-3 flex-1 min-w-0 px-4 py-3 text-sm transition-colors",
+                  "hover:bg-base-200",
+                  @active_space && @active_space.id == space.id &&
+                    "bg-base-200 text-primary font-semibold"
+                ]}
+              >
+                <span class="hero-clipboard-document-list-mini size-4 text-base-content/40">
+                </span>
+                <span class="truncate flex-1">
+                  {Platform.Tasks.ChatPins.display_name_for_space(space)}
+                </span>
+                <%= if unread_label(Map.get(@unread_counts, space.id, 0)) do %>
+                  <span class="ml-1 flex-shrink-0 min-w-[1.125rem] h-[1.125rem] rounded-full bg-primary text-primary-content text-[0.6rem] font-bold flex items-center justify-center px-1 leading-none">
+                    {unread_label(Map.get(@unread_counts, space.id, 0))}
+                  </span>
+                <% end %>
+              </.link>
+              <button
+                type="button"
+                class="flex-shrink-0 inline-flex items-center justify-center w-10 h-10 mr-2 rounded text-base-content/40 hover:text-primary hover:bg-base-200 transition-colors"
+                phx-click="unpin_task_from_chat"
+                phx-value-task-id={space.metadata["task_id"]}
+                data-role="pinned-task-drawer-unpin"
+                data-space-id={space.id}
+                aria-label={"Unpin #{Platform.Tasks.ChatPins.display_name_for_space(space)} from Chat"}
+                title="Unpin from Chat"
+              >
+                <span class="hero-x-mark size-4"></span>
+              </button>
+            </div>
           </section>
 
           <%!-- Direct Messages — locked directly under Pinned. While a search
