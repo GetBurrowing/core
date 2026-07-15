@@ -44,6 +44,18 @@
 //
 // The `.sidebar-resizing` body class + `app.css:448-451` cursor+select rules
 // are reused verbatim from the channel-rail handle — no new CSS.
+//
+// LiveView diff-patch guard (task 019f5cf6 v2):
+//   Any parent re-render (compose_changed fires on every keystroke in the
+//   chat compose form) hands the aside element to morphdom, which
+//   reconciles attributes and clears the inline `style="width: Xpx"` we
+//   set at mount / mousemove — snapping the panel back to the Tailwind
+//   `w-96` fallback. The `updated()` callback re-applies the persisted
+//   width through `_applyWidth()` on every patch. Mirrors the pattern in
+//   `apps/platform/assets/js/hooks/resizable_sidebar.js` (channel rail).
+//   Guarded on `_active` (mobile bail) and on the `sidebar-resizing` body
+//   class (mid-drag: the in-flight mousemove is authoritative and must
+//   not be clobbered back to the last persisted value).
 
 import ClientState from "../client_state.js";
 
@@ -101,6 +113,28 @@ const CanvasSidebarResize = {
     this._activate();
   },
 
+  // LiveView morphdom clobbers our inline width style on parent re-renders
+  // (e.g. compose_changed on every keystroke). Re-apply after each patch —
+  // see task 019f5cf6.
+  updated() {
+    // Mobile branch: hook is attached but `_activate()` short-circuited.
+    // Leave the element to the Tailwind fallback.
+    if (!this._active) return;
+    // Mid-drag: the in-flight mousemove is authoritative. Re-applying the
+    // stored width here would snap the panel out from under the user's
+    // pointer. The `sidebar-resizing` body class is set on mousedown and
+    // cleared on mouseup — same signal the shared cursor+select CSS uses.
+    if (
+      typeof document !== "undefined" &&
+      document.body &&
+      document.body.classList &&
+      document.body.classList.contains("sidebar-resizing")
+    ) {
+      return;
+    }
+    this._applyWidth();
+  },
+
   destroyed() {
     this._removeMediaListener();
     this._deactivate();
@@ -112,13 +146,14 @@ const CanvasSidebarResize = {
     if (this._active) return;
     this._active = true;
 
-    const currentWidth = storedWidth();
-    this.el.style.width = currentWidth + "px";
-
     this._handle = this.el.querySelector("[data-drag-handle]");
-    if (!this._handle) return;
+    // `_applyWidth()` writes both `el.style.width` AND aria attrs; querying
+    // the handle first lets aria populate on the same code path used by
+    // `updated()`. If the handle is missing, we still set the width so the
+    // panel doesn't collapse to the Tailwind fallback.
+    this._applyWidth();
 
-    this._writeAria(currentWidth);
+    if (!this._handle) return;
 
     this._onMouseDown = (e) => {
       e.preventDefault();
@@ -205,6 +240,17 @@ const CanvasSidebarResize = {
     document.removeEventListener("mouseup", this._onMouseUp);
     document.body.classList.remove("sidebar-resizing");
     this._active = false;
+  },
+
+  // Single source of truth for "reset the panel to the persisted width".
+  // Called from `_activate()` on mount / media-query desktop cross AND from
+  // `updated()` after every LiveView diff patch. Aria refresh piggybacks on
+  // width application → viewport-crossing patches update `aria-valuemax`
+  // automatically (no separate `_refreshAria()` needed on window resize).
+  _applyWidth() {
+    const width = storedWidth();
+    this.el.style.width = width + "px";
+    if (this._handle) this._writeAria(width);
   },
 
   _writeAria(width) {

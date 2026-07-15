@@ -277,6 +277,7 @@ defmodule PlatformWeb.ChatLive.Partials do
         aria-orientation="vertical"
         aria-label="Resize canvas sidebar"
         aria-valuemin="360"
+        aria-valuemax="960"
         aria-valuenow="384"
         tabindex="0"
       />

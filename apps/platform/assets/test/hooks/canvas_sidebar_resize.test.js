@@ -731,3 +731,287 @@ describe("CanvasSidebarResize matchMedia change listener — stage 4", () => {
     }
   })
 })
+
+describe("CanvasSidebarResize.updated() — LiveView diff patch guard", () => {
+  beforeEach(() => {
+    installStorage()
+    installMatchMedia(true)
+    installDocumentBody()
+    __resetForTests()
+  })
+
+  afterEach(() => {
+    uninstallStorage()
+    uninstallMatchMedia()
+    uninstallDocumentBody()
+    __resetForTests()
+  })
+
+  it("re-applies the persisted width after a simulated morphdom clobber", () => {
+    const restore = withInnerWidth(1600)
+    try {
+      ClientState.set("canvas_sidebar", "width", 800)
+      const { hook } = buildHook({ initialWidth: 384 })
+      hook.mounted()
+      expect(hook.el.style.width).toBe("800px")
+
+      // Simulate morphdom attribute reconciliation clearing the inline style
+      // (compose_changed on every keystroke → parent re-render → aside diff).
+      hook.el.style.width = ""
+
+      hook.updated()
+
+      expect(hook.el.style.width).toBe("800px")
+    } finally {
+      restore()
+    }
+  })
+
+  it("no-ops on mobile viewport (hook attached but drag machinery inactive)", () => {
+    // Rebuild environment as mobile — mounted() will short-circuit and
+    // updated() must not touch inline style or write to ClientState.
+    uninstallMatchMedia()
+    installMatchMedia(false)
+
+    const { hook } = buildHook({ initialWidth: 384 })
+    hook.mounted()
+    expect(hook.el.style.width).toBe("")
+
+    // A later parent re-render fires updated() — still nothing to do.
+    hook.updated()
+
+    expect(hook.el.style.width).toBe("")
+    expect(ClientState.get("canvas_sidebar", "width")).toBeNull()
+  })
+
+  it("no-ops mid-drag so an in-flight mousemove is not clobbered", () => {
+    const restore = withInnerWidth(1600)
+    try {
+      ClientState.set("canvas_sidebar", "width", 500)
+      const { hook } = buildHook({ initialWidth: 500 })
+      hook.mounted()
+      expect(hook.el.style.width).toBe("500px")
+
+      // Simulate an in-progress drag: mousedown set the body class, mousemove
+      // wrote the live width (say user is dragging out to 820). Then
+      // LiveView emits a diff patch → updated() fires. Must NOT snap back
+      // to the last persisted 500.
+      globalThis.document.body.classList.add("sidebar-resizing")
+      hook.el.style.width = "820px"
+
+      hook.updated()
+
+      expect(hook.el.style.width).toBe("820px")
+    } finally {
+      restore()
+    }
+  })
+
+  it("refreshes aria-valuemax when the viewport width changed since mount", () => {
+    // Mount at 1600 → max=800; then viewport shrinks to 1200 → max=600;
+    // an updated() re-run should refresh aria-valuemax accordingly.
+    const restoreMount = withInnerWidth(1600)
+    const { hook, handle } = buildHook({ initialWidth: 384 })
+    hook.mounted()
+    expect(handle.getAttribute("aria-valuemax")).toBe("800")
+    restoreMount()
+
+    const restorePatch = withInnerWidth(1200)
+    try {
+      hook.updated()
+      expect(handle.getAttribute("aria-valuemax")).toBe("600")
+    } finally {
+      restorePatch()
+    }
+  })
+
+  it("refreshes aria-valuemax upward when the viewport grows since mount", () => {
+    // Symmetric to the shrink case above: mount at 1200 (max=600), then the
+    // browser window is dragged wider to 1920 (max=960). The next patch's
+    // updated() should raise aria-valuemax to 960 so SR users hear the new
+    // ceiling — the divider's static `aria-valuemax="960"` in partials.ex
+    // matches this default 1920-wide viewport assumption; the hook overwrites
+    // once mounted and after every viewport-crossing patch.
+    const restoreMount = withInnerWidth(1200)
+    const { hook, handle } = buildHook({ initialWidth: 384 })
+    hook.mounted()
+    expect(handle.getAttribute("aria-valuemax")).toBe("600")
+    restoreMount()
+
+    const restorePatch = withInnerWidth(1920)
+    try {
+      hook.updated()
+      expect(handle.getAttribute("aria-valuemax")).toBe("960")
+    } finally {
+      restorePatch()
+    }
+  })
+
+  it("no-ops before mounted() runs (guards against updated() first-flight)", () => {
+    // LiveView can, in odd reconnect sequences, fire updated() before or
+    // without mounted(). The `!this._active` guard protects against a
+    // NullReferenceError-shaped bug in that case.
+    const { hook } = buildHook({ initialWidth: 384 })
+    expect(() => hook.updated()).not.toThrow()
+    expect(hook.el.style.width).toBe("")
+  })
+})
+
+describe("CanvasSidebarResize — Rowan's regression scenario: compose_changed sequence", () => {
+  // Stage 3 dedicated regression guard for the exact scenario Rowan reported
+  // in task 019f5cf6 v2: user drags the canvas sidebar wider, then types
+  // into the chat composer — every keystroke fires `compose_changed`, which
+  // triggers a parent re-render, which hands the aside to morphdom, which
+  // reconciles attributes and CLEARS the inline `style="width: 800px"` we
+  // set at mount / mousemove. Panel snaps back to the Tailwind `w-96`
+  // fallback (384px) on every keystroke.
+  //
+  // Stage 2 (commit e252e50) wired `updated()` to re-apply the persisted
+  // width after every diff patch. The three cases below reproduce Rowan's
+  // exact workflow and lock in the fix against future regressions.
+
+  beforeEach(() => {
+    installStorage()
+    installMatchMedia(true)
+    installDocumentBody()
+    __resetForTests()
+  })
+
+  afterEach(() => {
+    uninstallStorage()
+    uninstallMatchMedia()
+    uninstallDocumentBody()
+    __resetForTests()
+  })
+
+  it("Case A — width sticks across 20 sequential compose_changed patches", () => {
+    // Headline regression. A realistic short-burst typing scenario is
+    // ~20 keystrokes (~4 seconds at 5cps). Each keystroke is one
+    // compose_changed → one morphdom pass → one updated() invocation.
+    // Every single one must preserve the 800px width.
+    const restore = withInnerWidth(1600)
+    try {
+      ClientState.set("canvas_sidebar", "width", 800)
+      const { hook } = buildHook({ initialWidth: 384 })
+      hook.mounted()
+      expect(hook.el.style.width).toBe("800px")
+
+      for (let i = 0; i < 20; i++) {
+        // Simulate morphdom attribute reconciliation clearing the inline
+        // style during the diff patch that LiveView applies before
+        // invoking updated().
+        hook.el.style.width = ""
+        hook.updated()
+        expect(hook.el.style.width).toBe("800px")
+      }
+
+      // Persisted value untouched — updated() is a pure re-application,
+      // never a write back to ClientState.
+      expect(ClientState.get("canvas_sidebar", "width")).toBe(800)
+    } finally {
+      restore()
+    }
+  })
+
+  it("Case B — width survives a compose reset after the keystroke burst", () => {
+    // Sending a message clears the composer (`compose_reset`-shaped diff).
+    // From the hook's perspective this is indistinguishable from another
+    // keystroke patch: parent re-renders with an empty compose form and
+    // morphdom passes over the aside again. This case guards against a
+    // regression where the reset patch has a different diff shape (e.g.
+    // whole-tree replace vs attribute-only) that bypasses the fix.
+    const restore = withInnerWidth(1600)
+    try {
+      ClientState.set("canvas_sidebar", "width", 800)
+      const { hook } = buildHook({ initialWidth: 384 })
+      hook.mounted()
+
+      // A short burst of keystroke patches first.
+      for (let i = 0; i < 5; i++) {
+        hook.el.style.width = ""
+        hook.updated()
+      }
+      expect(hook.el.style.width).toBe("800px")
+
+      // Now the send/reset patch. Same code path from the hook's POV.
+      hook.el.style.width = ""
+      hook.updated()
+
+      expect(hook.el.style.width).toBe("800px")
+      expect(ClientState.get("canvas_sidebar", "width")).toBe(800)
+    } finally {
+      restore()
+    }
+  })
+
+  it("Case C — width restored after viewport crosses mobile → desktop mid-sequence", () => {
+    // Viewport-crossing regression. If the user resizes the browser window
+    // across the lg breakpoint (1024px) between compose_changed patches,
+    // the mobile branch's updated() must not clobber the persisted width,
+    // and the desktop re-entry must restore the panel to 800px via
+    // _activate() → _applyWidth(). Persistence isn't lost by the crossing.
+    const mediaListeners = new Set()
+    const state = { desktop: true }
+    const mql = {
+      get matches() {
+        return state.desktop
+      },
+      media: "(min-width: 1024px)",
+      addEventListener(_name, fn) {
+        mediaListeners.add(fn)
+      },
+      removeEventListener(_name, fn) {
+        mediaListeners.delete(fn)
+      },
+      addListener() {},
+      removeListener() {},
+      dispatchEvent() {
+        return false
+      },
+      onchange: null,
+    }
+    globalThis.matchMedia = () => mql
+    globalThis.window ??= globalThis
+    globalThis.window.matchMedia = globalThis.matchMedia
+
+    ClientState.set("canvas_sidebar", "width", 800)
+    const restore = withInnerWidth(1440)
+    try {
+      const { hook } = buildHook({ initialWidth: 384 })
+      hook.mounted()
+      expect(hook.el.style.width).toBe("800px")
+
+      // 1. compose_changed at desktop — width preserved.
+      hook.el.style.width = ""
+      hook.updated()
+      expect(hook.el.style.width).toBe("800px")
+
+      // 2. Viewport shrinks past the lg breakpoint. matchMedia change
+      //    fires → _deactivate(). Any subsequent updated() must no-op
+      //    (the mobile overlay branch owns the presentation).
+      state.desktop = false
+      globalThis.window.innerWidth = 600
+      for (const fn of mediaListeners) fn({ matches: false })
+
+      hook.el.style.width = ""
+      hook.updated()
+      expect(hook.el.style.width).toBe("")
+      // ClientState never mutated by the mobile-branch updated().
+      expect(ClientState.get("canvas_sidebar", "width")).toBe(800)
+
+      // 3. Viewport grows back past lg. matchMedia change → _activate() →
+      //    _applyWidth() restores the persisted 800px on the same DOM node.
+      state.desktop = true
+      globalThis.window.innerWidth = 1440
+      for (const fn of mediaListeners) fn({ matches: true })
+      expect(hook.el.style.width).toBe("800px")
+
+      // 4. A follow-up compose_changed at desktop still preserves 800.
+      hook.el.style.width = ""
+      hook.updated()
+      expect(hook.el.style.width).toBe("800px")
+    } finally {
+      restore()
+    }
+  })
+})
