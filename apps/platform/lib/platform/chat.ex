@@ -665,6 +665,25 @@ defmodule Platform.Chat do
     space.name || "Meeting"
   end
 
+  # Execution spaces became human-navigable via the Pin-to-Chat rail
+  # (task 019f62a1). Before the pin feature they were TaskRouter-only,
+  # so `space_page_title`/`space_header_name` never hit them and the
+  # missing clause was invisible. Post-stage-2 sponsors AND cross-org
+  # bystanders (stage 3 safety-net) both reach handle_params/3 for an
+  # exec-space slug, and the LiveView crashed on FunctionClauseError.
+  # Delegate to `Platform.Tasks.ChatPins.display_name_for_space/1`
+  # which joins `space.metadata["task_id"]` → tasks and returns the
+  # real task title — same helper the rail rows already use. Defensive
+  # fallback to `space.name` if the metadata is malformed (matches the
+  # rail's own fallback shape).
+  def display_name_for_space(
+        %Space{kind: "execution"} = space,
+        _participants,
+        _current_user_id
+      ) do
+    Platform.Tasks.ChatPins.display_name_for_space(space)
+  end
+
   def display_name_for_space(%Space{kind: "dm"}, participants, current_user_id) do
     other = Enum.find(participants, fn p -> p.participant_id != current_user_id end)
 

@@ -1,8 +1,14 @@
 defmodule Platform.Orchestration.ExecutionSpaceTest do
   use Platform.DataCase, async: false
 
+  import Ecto.Query
+  import ExUnit.CaptureLog
+  import Platform.TenancyFixtures
+
   alias Platform.Chat
   alias Platform.Orchestration.ExecutionSpace
+  alias Platform.Repo
+  alias Platform.Tasks
 
   @task_id "01234567-89ab-cdef-0123-456789abcdef"
 
@@ -10,7 +16,12 @@ defmodule Platform.Orchestration.ExecutionSpaceTest do
     test "creates an execution space for a task" do
       assert {:ok, space} = ExecutionSpace.find_or_create(@task_id)
       assert space.kind == "execution"
-      assert space.name == "task-exec-01234567"
+      # 12 hex chars of the UUID (dashes stripped) — see
+      # `execution_space.ex` for the slug-width bump rationale (task
+      # 019f62a1 v4 stage 2). `@task_id` here is
+      # "01234567-89ab-cdef-0123-456789abcdef" so the first 12 hex
+      # chars are "0123456789ab".
+      assert space.name == "task-exec-0123456789ab"
       assert space.metadata["task_id"] == @task_id
     end
 
@@ -30,6 +41,71 @@ defmodule Platform.Orchestration.ExecutionSpaceTest do
       {:ok, space} = ExecutionSpace.find_or_create(@task_id)
       spaces = Chat.list_spaces(include_execution: true)
       assert Enum.any?(spaces, &(&1.id == space.id))
+    end
+
+    # Pin-to-Chat v4 stage 2 regression fence — see
+    # `apps/platform/priv/repo/migrations/20260715165309_backfill_exec_space_org_id.exs`
+    # for the companion backfill. Without an `org_id` on new exec-space
+    # rows, `Chat.get_space_by_slug/2` filters them out for viewers
+    # inside an org and clicking a pinned rail row bounces the user
+    # back to `/chat`.
+    test "stamps org_id on new exec space from task → project.org_id" do
+      fabrikam_id = fabrikam_org_id()
+
+      {:ok, project} =
+        Tasks.create_project(%{name: "Exec Org Stamp Project", org_id: fabrikam_id})
+
+      {:ok, task} =
+        Tasks.create_task(%{project_id: project.id, title: "Exec org stamp"})
+
+      assert {:ok, space} = ExecutionSpace.find_or_create(task.id)
+      assert space.org_id == fabrikam_id
+      assert space.metadata["task_id"] == task.id
+    end
+
+    test "leaves org_id nil + logs warn when task has no resolvable org" do
+      # Random UUID that does NOT correspond to any real task row.
+      orphan_task_id = Ecto.UUID.generate()
+
+      {result, log} =
+        with_log(fn ->
+          ExecutionSpace.find_or_create(orphan_task_id)
+        end)
+
+      assert {:ok, space} = result
+      assert space.org_id == nil
+      assert space.metadata["task_id"] == orphan_task_id
+      assert log =~ "no org_id resolvable"
+      assert log =~ orphan_task_id
+    end
+
+    test "idempotency preserved — second call returns same row without touching org_id" do
+      fabrikam_id = fabrikam_org_id()
+
+      {:ok, project} =
+        Tasks.create_project(%{name: "Exec Idempotency Project", org_id: fabrikam_id})
+
+      {:ok, task} =
+        Tasks.create_task(%{project_id: project.id, title: "Idempotency"})
+
+      assert {:ok, space1} = ExecutionSpace.find_or_create(task.id)
+      assert space1.org_id == fabrikam_id
+
+      # Force the row to a different org_id to prove the second call
+      # short-circuits on `find_by_task_id` and does NOT rewrite it.
+      other_id = tenant_org_id("sxi")
+
+      {1, _} =
+        Repo.update_all(
+          from(s in Platform.Chat.Space, where: s.id == ^space1.id),
+          set: [org_id: other_id]
+        )
+
+      assert {:ok, space2} = ExecutionSpace.find_or_create(task.id)
+      assert space2.id == space1.id
+      # Untouched by the second call — the find branch fired, not the
+      # create branch.
+      assert space2.org_id == other_id
     end
   end
 

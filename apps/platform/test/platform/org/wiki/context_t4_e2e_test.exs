@@ -599,7 +599,16 @@ defmodule Platform.Org.Wiki.ContextT4E2ETest do
       # rows to a task's execution chat space. Materialised lazily on
       # first pin via `ExecutionSpace.find_or_create/1` so backlog tasks
       # never picked up leave zero `chat_spaces` rows.
-      "20260715012217_create_task_chat_pins.exs"
+      "20260715012217_create_task_chat_pins.exs",
+      # Task 019f62a1 v4 stage 2 — Pin-to-Chat data repair. Backfills
+      # `org_id` on every `kind = "execution"` chat_spaces row where
+      # `org_id IS NULL` but the linked task resolves to a project
+      # with an `org_id`. Companion to the code fix that teaches
+      # `ExecutionSpace.find_or_create/1` to stamp `org_id` on new
+      # exec spaces so post-ADR-0042 org-scoped slug lookups
+      # (`Chat.get_space_by_slug/2`) can resolve them. Data-only;
+      # `down/0` is a no-op.
+      "20260715165309_backfill_exec_space_org_id.exs"
     ]
 
     defp t4_root, do: Mix.Project.project_file() |> Path.dirname()

@@ -30,16 +30,51 @@ defmodule Platform.Orchestration.ExecutionSpace do
         {:ok, space}
 
       nil ->
-        short_id = String.slice(task_id, 0, 8)
+        # Take 12 hex chars of the task UUID (dashes stripped) so the slug is
+        # unique enough to survive two backlog tasks pinned into the same
+        # project inside one second. Pre-fix rows used `slice(task_id, 0, 8)`
+        # (32 timestamp bits ≈ 1s precision) which was safe when every exec
+        # space carried `org_id = NULL` (no `chat_spaces_unique_org_slug` to
+        # trip). Post-fix rows carry the project's `org_id`, so same-org same
+        # slug collides. 12 hex chars gets us the full 48-bit ms timestamp
+        # so collisions require sub-ms creation in the same project — well
+        # outside anything the sponsor UI can produce. Existing rows keep
+        # their 8-char slugs; lookups go through `metadata->>'task_id'`, so
+        # no data migration needed.
+        short_id = task_id |> String.replace("-", "") |> String.slice(0, 12)
         name = "task-exec-#{short_id}"
+        org_id = resolve_task_org_id(task_id)
+
+        if is_nil(org_id) do
+          Logger.warning(
+            "ExecutionSpace.find_or_create: no org_id resolvable for task_id=#{inspect(task_id)} (task missing project or project missing org); creating exec space with org_id: nil"
+          )
+        end
 
         Chat.create_space(%{
           name: name,
           slug: name,
           kind: "execution",
+          org_id: org_id,
           metadata: %{"task_id" => task_id}
         })
     end
+  end
+
+  # Resolve a task's owning org via `task → project.org_id`. Returns the
+  # org UUID, or `nil` when the task has no project OR the project has no
+  # org (legacy pre-ADR-0042 rows). Callers stamp the returned value onto
+  # the exec-space row so post-ADR-0042 org-scoped slug lookups
+  # (`Chat.get_space_by_slug/2`) can resolve it for viewers inside an org.
+  @spec resolve_task_org_id(String.t()) :: binary() | nil
+  defp resolve_task_org_id(task_id) do
+    from(t in Platform.Tasks.Task,
+      join: p in Platform.Tasks.Project,
+      on: p.id == t.project_id,
+      where: t.id == ^task_id,
+      select: p.org_id
+    )
+    |> Repo.one()
   end
 
   @doc """

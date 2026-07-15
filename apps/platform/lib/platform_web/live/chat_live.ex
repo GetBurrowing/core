@@ -403,7 +403,8 @@ defmodule PlatformWeb.ChatLive do
   defp bootstrap_embedded_space(socket, slug_or_id) do
     space =
       Chat.get_space_by_slug(slug_or_id, org_id: resolve_active_org_id(socket)) ||
-        (valid_uuid?(slug_or_id) && Chat.get_space(slug_or_id))
+        (valid_uuid?(slug_or_id) && Chat.get_space(slug_or_id)) ||
+        system_prefix_fallback(slug_or_id)
 
     case space do
       nil ->
@@ -470,6 +471,7 @@ defmodule PlatformWeb.ChatLive do
     space =
       Chat.get_space_by_slug(slug_or_id, org_id: active_org_id) ||
         (valid_uuid?(slug_or_id) && Chat.get_space(slug_or_id)) ||
+        system_prefix_fallback(slug_or_id) ||
         bootstrap_space(slug_or_id, active_org_id)
 
     if is_nil(space) do
@@ -2043,6 +2045,22 @@ defmodule PlatformWeb.ChatLive do
   end
 
   defp bootstrap_space(_, _), do: nil
+
+  # Safety-net lookup for system-managed slug prefixes (exec, meeting, dm,
+  # group). These spaces are minted by orchestration code paths and MAY
+  # have `org_id = NULL` (exec spaces created before the org_id backfill
+  # migration; meeting/dm/group spaces intentionally cross-org). The
+  # org-scoped `get_space_by_slug/2` filters them out; fall back to an
+  # unscoped lookup, guarded by the reserved-prefix list so the ADR-0042
+  # per-org channel-slug scoping ("#general" in Fabrikam vs "#general" in SXI)
+  # is NEVER weakened for user-created channel slugs.
+  defp system_prefix_fallback(slug) when is_binary(slug) do
+    if Enum.any?(@reserved_slug_prefixes, &String.starts_with?(slug, &1)) do
+      Chat.get_space_by_slug(slug, [])
+    end
+  end
+
+  defp system_prefix_fallback(_), do: nil
 
   defp maybe_put_org_id(attrs, nil), do: attrs
   defp maybe_put_org_id(attrs, org_id), do: Map.put(attrs, :org_id, org_id)

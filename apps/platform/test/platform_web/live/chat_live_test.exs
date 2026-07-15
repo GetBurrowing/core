@@ -3152,4 +3152,336 @@ defmodule PlatformWeb.ChatLiveTest do
              })
     end
   end
+
+  # ── Stage 3 (task 019f62a1 v4): safety-net slug resolution for
+  # system-managed prefixes. `handle_params/3` now falls through the
+  # org-scoped lookup + UUID branch + `system_prefix_fallback/1` before
+  # bootstrap. The fallback rescues exec/meeting/dm/group slug rows that
+  # sit outside the viewer's org (pre-backfill `org_id = NULL`, or an
+  # intentional cross-org access like an @-mentioned bystander opening
+  # the sponsor's exec space). Non-reserved slugs are UNTOUCHED — the
+  # ADR-0042 per-org channel-slug scoping (`#general` in Fabrikam vs SXI)
+  # must not be weakened.
+  describe "system_prefix_fallback slug resolution" do
+    defp insert_org!(slug \\ nil) do
+      n = System.unique_integer([:positive])
+      fabrikam = Tenancy.get_org_by_slug!("fabrikam")
+
+      Repo.insert!(%Platform.Tenancy.Org{
+        name: "Fallback Org #{n}",
+        slug: slug || "fallback-org-#{n}",
+        parent_org_id: fabrikam.id
+      })
+    end
+
+    defp put_membership!(user, org) do
+      %OrgMembership{}
+      |> OrgMembership.changeset(%{user_id: user.id, org_id: org.id, role: "member"})
+      |> Repo.insert!()
+
+      user
+    end
+
+    test "resolves exec-space slug when org_id NULL and viewer has org membership",
+         %{conn: conn} do
+      # Legacy exec-space row: `find_or_create/1` created it before the
+      # stage-2 org_id stamp shipped, so `org_id = NULL`. The viewer sits
+      # inside an org (e.g. Fabrikam), so the org-scoped `get_space_by_slug/2`
+      # branch filters this row out. Without the safety net, handle_params
+      # push_navigates back to `/chat`.
+      org = insert_org!()
+
+      user =
+        insert_chat_user(%{
+          email: "null-org-exec-#{System.unique_integer([:positive])}@example.com",
+          oidc_sub: "oidc-null-org-exec-#{System.unique_integer([:positive])}"
+        })
+        |> put_membership!(org)
+
+      short_id =
+        Ecto.UUID.generate() |> String.replace("-", "") |> String.slice(0, 12)
+
+      slug = "task-exec-#{short_id}"
+
+      {:ok, exec} =
+        Chat.create_space(%{
+          name: slug,
+          slug: slug,
+          kind: "execution",
+          org_id: nil,
+          metadata: %{"task_id" => Ecto.UUID.generate()}
+        })
+
+      conn = init_test_session(conn, current_user_id: user.id)
+      {:ok, view, _html} = live(conn, ~p"/chat/#{slug}")
+
+      active_space = :sys.get_state(view.pid).socket.assigns.active_space
+      assert active_space.id == exec.id
+    end
+
+    test "does NOT resolve non-reserved channel slug across orgs (ADR-0042 regression fence)",
+         %{conn: conn} do
+      # Two orgs, each with its own `#general` channel. Viewer in org-A
+      # navigates to `/chat/general` — must land on org-A's row, NEVER
+      # org-B's. `general` is not a reserved prefix, so the safety net
+      # MUST NOT fire; the org-scoped lookup wins.
+      org_a = insert_org!()
+      org_b = insert_org!()
+
+      {:ok, general_a} =
+        Chat.create_space(%{
+          name: "General",
+          slug: "general",
+          kind: "channel",
+          org_id: org_a.id
+        })
+
+      {:ok, _general_b} =
+        Chat.create_space(%{
+          name: "General",
+          slug: "general",
+          kind: "channel",
+          org_id: org_b.id
+        })
+
+      user =
+        insert_chat_user(%{
+          email: "cross-org-chan-#{System.unique_integer([:positive])}@example.com",
+          oidc_sub: "oidc-cross-org-chan-#{System.unique_integer([:positive])}"
+        })
+        |> put_membership!(org_a)
+
+      conn = init_test_session(conn, current_user_id: user.id)
+      {:ok, view, _html} = live(conn, ~p"/chat/general")
+
+      active_space = :sys.get_state(view.pid).socket.assigns.active_space
+      assert active_space.id == general_a.id
+    end
+
+    test "resolves cross-org exec-space slug for @-mentioned bystander",
+         %{conn: conn} do
+      # Sponsor in org-A pins a task — the exec space carries org_id: A.
+      # Bystander sits in org-B (different tenant, but got @-mentioned).
+      # Bystander's org-scoped lookup misses (org_id: B vs exec.org_id: A);
+      # the safety net kicks in because the slug starts with `task-exec-`.
+      sponsor_org = insert_org!()
+      bystander_org = insert_org!()
+
+      short_id =
+        Ecto.UUID.generate() |> String.replace("-", "") |> String.slice(0, 12)
+
+      slug = "task-exec-#{short_id}"
+
+      {:ok, exec} =
+        Chat.create_space(%{
+          name: slug,
+          slug: slug,
+          kind: "execution",
+          org_id: sponsor_org.id,
+          metadata: %{"task_id" => Ecto.UUID.generate()}
+        })
+
+      bystander =
+        insert_chat_user(%{
+          email: "bystander-#{System.unique_integer([:positive])}@example.com",
+          oidc_sub: "oidc-bystander-#{System.unique_integer([:positive])}"
+        })
+        |> put_membership!(bystander_org)
+
+      conn = init_test_session(conn, current_user_id: bystander.id)
+      {:ok, view, _html} = live(conn, ~p"/chat/#{slug}")
+
+      active_space = :sys.get_state(view.pid).socket.assigns.active_space
+      assert active_space.id == exec.id
+    end
+  end
+
+  # ── Stage 4 (task 019f62a1 v4): full sponsor-and-bystander OPEN path.
+  # The v4 stages 2+3 fix — org_id stamp on `find_or_create/1` plus the
+  # `system_prefix_fallback/1` safety net — should let every user with a
+  # pin arrive at the exec space by clicking the rail row (or navigating
+  # to the slug directly). Before the fix, the exec-space slug resolved
+  # to nil for org-membered viewers, `handle_params/3` push_navigated to
+  # `/chat`, and the chat index rebounded to the first channel — the
+  # "loading bar but doesn't take me to the space" symptom Rowan filed.
+  #
+  # These tests are disjoint from the pin-write coverage in PR #548's
+  # "Pinned task-exec rail section" describe: they lock the OPEN flow
+  # end-to-end for sponsor + mention-propagated bystander, plus two
+  # regression fences that keep the safety-net narrow (reserved prefixes
+  # only, per-org channel scoping preserved).
+  describe "pinned task exec space navigation" do
+    alias Platform.Tasks
+    alias Platform.Tasks.ChatPins
+
+    test "sponsor opens pinned backlog exec space via rail row navigation",
+         %{conn: conn} do
+      # Sponsor is a Fabrikam member. `Tasks.create_project` defaults project
+      # org_id to Fabrikam (see default_org_id/1), and stage 2's `find_or_create`
+      # now stamps the exec space with `task → project.org_id`. So the
+      # org-scoped `get_space_by_slug/2` branch resolves directly — no
+      # safety-net fallback needed for the happy path.
+      fabrikam = Tenancy.get_org_by_slug!("fabrikam")
+
+      sponsor =
+        insert_chat_user(%{
+          email: "pin-open-sponsor-#{System.unique_integer([:positive])}@example.com",
+          oidc_sub: "oidc-pin-open-sponsor-#{System.unique_integer([:positive])}"
+        })
+        |> put_membership!(fabrikam)
+
+      %{task: task, space: exec} = seed_pin_for(sponsor, title: "Opens via rail row")
+
+      # Stage-2 postcondition: the exec space carries an org_id (Fabrikam).
+      # If this assertion regresses, the whole open path collapses back
+      # to the bug this task fixes.
+      assert exec.org_id == fabrikam.id
+
+      conn = init_test_session(conn, current_user_id: sponsor.id)
+
+      # Direct navigation to the rail-row destination — same URL shape the
+      # `.link navigate={~p"/chat/#{space_nav_target(space)}"}` in the rail
+      # emits. If handle_params bounced us back to `/chat`, `live/2` would
+      # return `{:error, {:live_redirect, %{to: "/chat"}}}` and the OK match
+      # below would fail loudly.
+      {:ok, view, html} = live(conn, ~p"/chat/#{exec.slug}")
+
+      active_space = :sys.get_state(view.pid).socket.assigns.active_space
+      assert active_space.id == exec.id
+      # display_name_for_space renders the task title in the header, so a
+      # sponsor viewer sees the human-readable task name (Rowan's stage-4
+      # fixup on the pinned-rail label).
+      assert html =~ task.title
+    end
+
+    test "mentioned bystander opens pinned exec space via rail row",
+         %{conn: conn} do
+      # Sponsor pins a task (stage 2 materialises the exec space with
+      # sponsor's Fabrikam org_id + a pin row for the sponsor). Stage 3 of
+      # PR #548 propagates a pin to every @-mentioned participant via
+      # `Platform.Chat.reinvite_and_pin_mentioned/1` — that's a private
+      # helper triggered from `post_message`, but both code paths write
+      # via `ChatPins.pin/3`, so we call it directly to seed the bystander
+      # pin without touching the message pipeline.
+      fabrikam = Tenancy.get_org_by_slug!("fabrikam")
+
+      sponsor =
+        insert_chat_user(%{
+          email: "mention-sponsor-#{System.unique_integer([:positive])}@example.com",
+          oidc_sub: "oidc-mention-sponsor-#{System.unique_integer([:positive])}"
+        })
+        |> put_membership!(fabrikam)
+
+      bystander =
+        insert_chat_user(%{
+          email: "mention-bystander-#{System.unique_integer([:positive])}@example.com",
+          oidc_sub: "oidc-mention-bystander-#{System.unique_integer([:positive])}"
+        })
+        |> put_membership!(fabrikam)
+
+      %{task: task, space: exec} = seed_pin_for(sponsor, title: "Bystander opens too")
+
+      {:ok, _} =
+        ChatPins.pin(task.id, %{kind: "user", id: bystander.email}, sponsor.email)
+
+      conn = init_test_session(conn, current_user_id: bystander.id)
+      {:ok, view, _html} = live(conn, ~p"/chat/#{exec.slug}")
+
+      active_space = :sys.get_state(view.pid).socket.assigns.active_space
+      assert active_space.id == exec.id
+
+      # The bystander's own rail carries the pinned row — mention
+      # propagation seeded their pin, and stage 3's safety net (belt for
+      # the fallback case) plus stage 2's org_id stamp (suspenders for
+      # the primary case) together mean the row's navigate target
+      # resolves cleanly for them.
+      assert has_element?(
+               view,
+               "[data-role='pinned-task-rail-row'][data-space-id='#{exec.id}']"
+             )
+    end
+
+    test "cross-org channel slug scoping preserved (ADR-0042 regression fence)",
+         %{conn: conn} do
+      # Two orgs (fabrikam-flavoured + sxi-flavoured sub-orgs), each with its
+      # own `#general` channel. Viewer in the fabrikam-flavoured org must
+      # land on THEIR `#general`, not the sxi-flavoured one. `general`
+      # is not a reserved system-managed prefix (`task-exec-`, `meeting-`,
+      # `dm-`, `group-`), so the stage-3 safety-net MUST NOT fire — the
+      # org-scoped lookup wins, and ADR-0042 per-org channel-slug scoping
+      # stays intact.
+      fabrikam_side = insert_org!("fabrikam-nav-#{System.unique_integer([:positive])}")
+      sxi_side = insert_org!("sxi-nav-#{System.unique_integer([:positive])}")
+
+      {:ok, fabrikam_general} =
+        Chat.create_space(%{
+          name: "General",
+          slug: "general",
+          kind: "channel",
+          org_id: fabrikam_side.id
+        })
+
+      {:ok, sxi_general} =
+        Chat.create_space(%{
+          name: "General",
+          slug: "general",
+          kind: "channel",
+          org_id: sxi_side.id
+        })
+
+      user =
+        insert_chat_user(%{
+          email: "cross-org-nav-#{System.unique_integer([:positive])}@example.com",
+          oidc_sub: "oidc-cross-org-nav-#{System.unique_integer([:positive])}"
+        })
+        |> put_membership!(fabrikam_side)
+
+      conn = init_test_session(conn, current_user_id: user.id)
+      {:ok, view, _html} = live(conn, ~p"/chat/general")
+
+      active_space = :sys.get_state(view.pid).socket.assigns.active_space
+      assert active_space.id == fabrikam_general.id
+      refute active_space.id == sxi_general.id
+      assert active_space.org_id == fabrikam_side.id
+    end
+
+    test "exec space with NULL org_id still resolvable via safety-net fallback",
+         %{conn: conn} do
+      # Simulates a legacy/pre-backfill exec-space row (or a race-created
+      # duplicate where the backfill couldn't derive an org_id because the
+      # task or project was also orphaned). Viewer sits inside Fabrikam, so
+      # `active_org_id = fabrikam.id`; the org-scoped `get_space_by_slug/2`
+      # misses (exec.org_id IS NULL). The `system_prefix_fallback/1`
+      # clause catches it because the slug starts with `task-exec-`.
+      fabrikam = Tenancy.get_org_by_slug!("fabrikam")
+
+      user =
+        insert_chat_user(%{
+          email: "null-org-nav-#{System.unique_integer([:positive])}@example.com",
+          oidc_sub: "oidc-null-org-nav-#{System.unique_integer([:positive])}"
+        })
+        |> put_membership!(fabrikam)
+
+      short_id =
+        Ecto.UUID.generate() |> String.replace("-", "") |> String.slice(0, 12)
+
+      slug = "task-exec-#{short_id}"
+
+      {:ok, exec} =
+        Chat.create_space(%{
+          name: slug,
+          slug: slug,
+          kind: "execution",
+          org_id: nil,
+          metadata: %{"task_id" => Ecto.UUID.generate()}
+        })
+
+      conn = init_test_session(conn, current_user_id: user.id)
+      {:ok, view, _html} = live(conn, ~p"/chat/#{slug}")
+
+      active_space = :sys.get_state(view.pid).socket.assigns.active_space
+      assert active_space.id == exec.id
+      assert is_nil(active_space.org_id)
+    end
+  end
 end
