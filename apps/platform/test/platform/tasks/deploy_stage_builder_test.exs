@@ -179,9 +179,60 @@ defmodule Platform.Tasks.DeployStageBuilderTest do
     end
   end
 
+  describe "build_stage/2 — project_files" do
+    test "returns stage with test_pass validation and description mentions the folder" do
+      strategy = %{
+        "type" => "project_files",
+        "config" => %{
+          "project_id" => "019f0000-0000-7000-8000-000000000000",
+          "folder" => "Deliverables",
+          "deliverable_canvas_id" => "019f0000-0000-7000-8000-000000000001"
+        }
+      }
+
+      result = DeployStageBuilder.build_stage(strategy, 3)
+
+      assert result.name == "Deploy: Project files"
+      assert result.position == 3
+      assert result.validations == [%{kind: "test_pass"}]
+      assert result.description =~ "Files module"
+      assert result.description =~ "Deliverables"
+      assert result.description =~ "019f0000-0000-7000-8000-000000000000"
+      assert result.description =~ "019f0000-0000-7000-8000-000000000001"
+      refute result.description =~ "manual_approval"
+      refute result.description =~ "ci_passed"
+    end
+
+    test "defaults folder to Deliverables when config omits it" do
+      strategy = %{"type" => "project_files", "config" => %{}}
+      result = DeployStageBuilder.build_stage(strategy, 1)
+
+      assert result.name == "Deploy: Project files"
+      assert result.validations == [%{kind: "test_pass"}]
+      assert result.description =~ "Deliverables"
+      # No explicit canvas → falls back to newest exec-space canvas
+      assert result.description =~ "newest canvas in the task's execution space"
+    end
+
+    test "works with empty strategy (no config key)" do
+      strategy = %{"type" => "project_files"}
+      result = DeployStageBuilder.build_stage(strategy, 2)
+
+      assert result.name == "Deploy: Project files"
+      assert result.position == 2
+      assert result.validations == [%{kind: "test_pass"}]
+    end
+  end
+
   describe "build_stage/2 — position" do
     test "uses the provided position for all strategy types" do
-      for {type, pos} <- [{"pr_merge", 1}, {"docker_deploy", 7}, {"fly", 10}, {"manual", 42}] do
+      for {type, pos} <- [
+            {"pr_merge", 1},
+            {"docker_deploy", 7},
+            {"fly", 10},
+            {"manual", 42},
+            {"project_files", 6}
+          ] do
         result = DeployStageBuilder.build_stage(%{"type" => type}, pos)
         assert result.position == pos, "Expected position #{pos} for type #{type}"
       end

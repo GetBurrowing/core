@@ -1029,6 +1029,28 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
   end
 
   defp deploy_strategy_instructions(
+         "project_files",
+         config,
+         _repo_url,
+         _default_branch,
+         _task_slug
+       ) do
+    project_id = Map.get(config, "project_id", "the target project")
+    folder = Map.get(config, "folder", "Deliverables")
+
+    """
+    ## Project Files Deploy Flow
+    The platform automatically executes this deploy — you do NOT push evidence.
+    The `Platform.Deploy.ProjectFiles` handler will:
+      1. Resolve the deliverable canvas (config.deliverable_canvas_id, or the newest canvas in the execution space).
+      2. Export the canvas to Markdown.
+      3. Write the file into project `#{project_id}` under folder `#{folder}/`.
+      4. On success it passes `test_pass`; on failure it fails `test_pass` with a reason.
+    Do NOT push `test_pass` evidence manually and do NOT create a `suite_review_request_create`. Report a blocker only if the handler itself fails to run.
+    """
+  end
+
+  defp deploy_strategy_instructions(
          "skill_driven",
          _config,
          _repo_url,

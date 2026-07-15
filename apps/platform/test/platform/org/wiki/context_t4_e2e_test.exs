@@ -554,6 +554,13 @@ defmodule Platform.Org.Wiki.ContextT4E2ETest do
       # advisory Design-direction stage. Content-only sync; no schema
       # changes.
       "20260713000010_sync_dispatch_planning_responsibility_hint.exs",
+      # Task 019f5e66 stage 2 (project_files deploy strategy) — adds a
+      # nullable `deploy_target_config :map` column to `tasks` for the
+      # richer per-strategy deploy config, alongside the legacy
+      # `deploy_target` string. Backfills existing non-null legacy rows
+      # as `{strategy: "docker_deploy", target: <legacy>}`; idempotent
+      # (only touches rows where the new column is still NULL).
+      "20260713010000_add_deploy_target_config_to_tasks.exs",
       # Task 019f5e7d stage 1 — relax the NOT NULL + composite PK on
       # `org_historian_cursors.workspace_id` so the sentinel-to-nil
       # coercion (extended from PR #537 to the cursor read/write

@@ -830,15 +830,22 @@ defmodule Platform.Tasks.PlanEngine do
     end
 
     # Start the deploy stage immediately
-    {:ok, _started} = transition_stage(deploy_stage, "running")
+    {:ok, running_stage} = transition_stage(deploy_stage, "running")
 
     # Transition the task to "deploying"
     case Tasks.transition_task(task, "deploying") do
-      {:ok, _updated_task} ->
+      {:ok, updated_task} ->
         Logger.info(
           "[PlanEngine] injected deploy stage (#{stage_def.name}) for task #{task.id}, " <>
             "strategy: #{strategy["type"]}"
         )
+
+        # Strategies whose deploy is executed entirely inside the platform
+        # (currently `project_files`) do not require an agent to push
+        # evidence — `Platform.Deploy.dispatch/3` runs the handler and
+        # evaluates the stage's own validations. Other strategies no-op
+        # here; the assigned agent (or a webhook) supplies the evidence.
+        _ = Platform.Deploy.dispatch(updated_task, strategy, running_stage)
 
         # Broadcast plan update so the board refreshes
         Tasks.broadcast_board({:plan_updated, Repo.get!(Plan, plan.id)})

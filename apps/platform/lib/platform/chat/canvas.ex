@@ -12,6 +12,12 @@ defmodule Platform.Chat.Canvas do
 
   alias Platform.Chat.CanvasDocument
 
+  @doc """
+  Render a canvas (or a canonical document map) to GitHub-flavored Markdown.
+  Delegates to `Platform.Chat.Canvas.MarkdownExporter.export_markdown/1`.
+  """
+  defdelegate export_markdown(canvas_or_doc), to: Platform.Chat.Canvas.MarkdownExporter
+
   @primary_key {:id, Platform.Types.UUIDv7, autogenerate: true}
   @foreign_key_type :binary_id
 

@@ -6505,6 +6505,171 @@ defmodule PlatformWeb.TasksLiveTest do
       assert html =~ "Deploy target"
     end
 
+    # ── deploy_target_config strategy-aware label (task 019f5e66 stage 6) ──
+    #
+    # When a task has `deploy_target_config` set, the readonly detail row
+    # renders a strategy-specific label instead of the raw JSON blob (or
+    # the legacy `deploy_target` string). Each strategy has its own shape
+    # of extra config keys; the label degrades gracefully when they're
+    # missing.
+
+    test "deploy_target_config docker_deploy renders `Docker: <target>`",
+         %{conn: conn} do
+      project = create_project()
+
+      task =
+        create_task(project, %{
+          title: "Docker strategy",
+          deploy_target_config: %{
+            "strategy" => "docker_deploy",
+            "target" => "production"
+          }
+        })
+
+      conn = authenticated_conn(conn)
+      {:ok, _view, html} = live(conn, ~p"/tasks/#{task.id}")
+
+      assert html =~ ~s|data-role="deploy-target-value"|
+      assert html =~ ~s|data-state="strategy"|
+      assert html =~ ~s|data-strategy="docker_deploy"|
+      assert html =~ "Docker: production"
+      # Legacy states must not leak into the config-driven render.
+      refute html =~ ~s|data-state="explicit"|
+      refute html =~ ~s|data-role="configure-deploy-target-button"|
+    end
+
+    test "deploy_target_config pr_merge renders `PR merge`",
+         %{conn: conn} do
+      project = create_project()
+
+      task =
+        create_task(project, %{
+          title: "PR merge strategy",
+          deploy_target_config: %{"strategy" => "pr_merge"}
+        })
+
+      conn = authenticated_conn(conn)
+      {:ok, _view, html} = live(conn, ~p"/tasks/#{task.id}")
+
+      assert html =~ ~s|data-strategy="pr_merge"|
+      assert html =~ "PR merge"
+    end
+
+    test "deploy_target_config skill_driven renders `Skill: <slug>`",
+         %{conn: conn} do
+      project = create_project()
+
+      task =
+        create_task(project, %{
+          title: "Skill strategy",
+          deploy_target_config: %{
+            "strategy" => "skill_driven",
+            "skill_slug" => "deploy-to-fly"
+          }
+        })
+
+      conn = authenticated_conn(conn)
+      {:ok, _view, html} = live(conn, ~p"/tasks/#{task.id}")
+
+      assert html =~ ~s|data-strategy="skill_driven"|
+      assert html =~ "Skill: deploy-to-fly"
+    end
+
+    test "deploy_target_config manual renders `Manual`",
+         %{conn: conn} do
+      project = create_project()
+
+      task =
+        create_task(project, %{
+          title: "Manual strategy",
+          deploy_target_config: %{"strategy" => "manual"}
+        })
+
+      conn = authenticated_conn(conn)
+      {:ok, _view, html} = live(conn, ~p"/tasks/#{task.id}")
+
+      assert html =~ ~s|data-strategy="manual"|
+      assert html =~ "Manual"
+    end
+
+    test "deploy_target_config project_files renders `Project Files: <name>/<folder>`",
+         %{conn: conn} do
+      source_project = create_project()
+
+      {:ok, target_project} =
+        Tasks.create_project(%{
+          name: "Deliverables Project",
+          repo_url: "git@github.com:test/deliverables.git"
+        })
+
+      task =
+        create_task(source_project, %{
+          title: "Project files strategy",
+          deploy_target_config: %{
+            "strategy" => "project_files",
+            "project_id" => target_project.id,
+            "folder" => "Deliverables"
+          }
+        })
+
+      conn = authenticated_conn(conn)
+      {:ok, _view, html} = live(conn, ~p"/tasks/#{task.id}")
+
+      assert html =~ ~s|data-strategy="project_files"|
+      assert html =~ "Project Files: Deliverables Project/Deliverables"
+    end
+
+    test "deploy_target_config project_files degrades to folder when target project is missing",
+         %{conn: conn} do
+      project = create_project()
+
+      task =
+        create_task(project, %{
+          title: "Missing target project",
+          deploy_target_config: %{
+            "strategy" => "project_files",
+            "project_id" => Ecto.UUID.generate(),
+            "folder" => "Deliverables"
+          }
+        })
+
+      conn = authenticated_conn(conn)
+      {:ok, _view, html} = live(conn, ~p"/tasks/#{task.id}")
+
+      assert html =~ ~s|data-strategy="project_files"|
+      assert html =~ "Project Files: Deliverables"
+      # No stray UUID in the label.
+      refute html =~ task.deploy_target_config["project_id"]
+    end
+
+    test "deploy_target_config takes precedence over legacy deploy_target string",
+         %{conn: conn} do
+      project = create_project()
+
+      {:ok, project} =
+        Tasks.update_project(project, %{
+          deploy_config: %{"deploy_targets" => ["production"]}
+        })
+
+      task =
+        create_task(project, %{
+          title: "Config wins",
+          deploy_target: "production",
+          deploy_target_config: %{
+            "strategy" => "docker_deploy",
+            "target" => "production"
+          }
+        })
+
+      conn = authenticated_conn(conn)
+      {:ok, _view, html} = live(conn, ~p"/tasks/#{task.id}")
+
+      # Config-driven label wins; the legacy `explicit` state does not render.
+      assert html =~ ~s|data-state="strategy"|
+      assert html =~ "Docker: production"
+      refute html =~ ~s|data-state="explicit"|
+    end
+
     test "update_task_field for priority is a no-op when edit_mode is off (server-side guard)",
          %{conn: conn} do
       project = create_project()

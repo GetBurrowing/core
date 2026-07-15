@@ -1139,7 +1139,7 @@ defmodule Platform.Federation.ToolSurface do
             type: "object",
             required: false,
             description:
-              "Project-wide deploy config. Set deploy_config.default_strategy to a strategy map (e.g. %{\"type\" => \"pr_merge\"}) to provide a fallback for tasks whose deploy_target is unset. Valid strategy types: none, pr_merge, docker_deploy, fly, skill_driven, manual."
+              "Project-wide deploy config. Set deploy_config.default_strategy to a strategy map (e.g. %{\"type\" => \"pr_merge\"}) to provide a fallback for tasks whose deploy_target is unset. Valid strategy types: none, pr_merge, docker_deploy, fly, skill_driven, manual, project_files."
           }
         },
         returns: "The updated project object",
@@ -2874,7 +2874,7 @@ defmodule Platform.Federation.ToolSurface do
                error: "Failed to update project: #{inspect_errors_safe(changeset)}",
                recoverable: true,
                suggestion:
-                 "Check that deploy_config.default_strategy uses a valid strategy type (none, pr_merge, docker_deploy, fly, skill_driven, manual)"
+                 "Check that deploy_config.default_strategy uses a valid strategy type (none, pr_merge, docker_deploy, fly, skill_driven, manual, project_files)"
              }}
         end
     end

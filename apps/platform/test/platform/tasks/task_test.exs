@@ -1086,6 +1086,158 @@ defmodule Platform.Tasks.TaskTest do
     end
   end
 
+  # `deploy_target_config` (task 019f5e66 stage 2) — richer per-task
+  # deploy config replacing the legacy `deploy_target` string. Migration
+  # `20260713010000_add_deploy_target_config_to_tasks.exs` backfills
+  # existing rows that carry a legacy `deploy_target` string; the schema
+  # gains a changeset validator that pins `"strategy"` to the registered
+  # set.
+  describe "deploy_target_config (task 019f5e66 stage 2)" do
+    test "migration backfill: legacy deploy_target 'production' becomes docker_deploy config",
+         %{project: project} do
+      # Simulate a row created before the column existed: insert with the
+      # legacy string set, then run the backfill's UPDATE by hand. This
+      # locks the exact SQL shape used by the migration.
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Legacy prod row",
+          deploy_target: "production"
+        })
+
+      # Ensure the row starts without config (defence-in-depth — the
+      # column default is nil, but a prior test in the module could have
+      # written one).
+      {1, _} =
+        Repo.update_all(
+          from(t in Task, where: t.id == ^task.id),
+          set: [deploy_target_config: nil]
+        )
+
+      Repo.query!("""
+      UPDATE tasks
+         SET deploy_target_config = jsonb_build_object(
+           'strategy', 'docker_deploy',
+           'target',   deploy_target
+         )
+       WHERE deploy_target IS NOT NULL
+         AND deploy_target_config IS NULL
+      """)
+
+      reloaded = Repo.get!(Task, task.id)
+
+      assert reloaded.deploy_target_config == %{
+               "strategy" => "docker_deploy",
+               "target" => "production"
+             }
+    end
+
+    test "migration backfill: nil legacy deploy_target leaves config nil",
+         %{project: project} do
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "No legacy target"})
+      assert task.deploy_target == nil
+
+      Repo.query!("""
+      UPDATE tasks
+         SET deploy_target_config = jsonb_build_object(
+           'strategy', 'docker_deploy',
+           'target',   deploy_target
+         )
+       WHERE deploy_target IS NOT NULL
+         AND deploy_target_config IS NULL
+      """)
+
+      reloaded = Repo.get!(Task, task.id)
+      assert reloaded.deploy_target_config == nil
+    end
+
+    test "changeset rejects an unknown strategy", %{project: project} do
+      changeset =
+        Task.changeset(%Task{}, %{
+          project_id: project.id,
+          title: "Bad strategy",
+          deploy_target_config: %{"strategy" => "invalid"}
+        })
+
+      refute changeset.valid?
+      assert %{deploy_target_config: [msg]} = errors_on(changeset)
+      assert msg =~ "strategy must be one of"
+    end
+
+    test "changeset rejects a map that has no strategy key", %{project: project} do
+      changeset =
+        Task.changeset(%Task{}, %{
+          project_id: project.id,
+          title: "No strategy key",
+          deploy_target_config: %{"target" => "production"}
+        })
+
+      refute changeset.valid?
+      assert %{deploy_target_config: [msg]} = errors_on(changeset)
+      assert msg =~ "strategy"
+    end
+
+    test "changeset accepts project_files strategy with extra config keys", %{project: project} do
+      config = %{
+        "strategy" => "project_files",
+        "project_id" => Ecto.UUID.generate(),
+        "folder" => "Deliverables"
+      }
+
+      changeset =
+        Task.changeset(%Task{}, %{
+          project_id: project.id,
+          title: "Project files deploy",
+          deploy_target_config: config
+        })
+
+      assert changeset.valid?
+      assert get_change(changeset, :deploy_target_config) == config
+    end
+
+    for strategy <- ~w(pr_merge docker_deploy skill_driven manual project_files) do
+      test "changeset accepts strategy '#{strategy}'", %{project: project} do
+        changeset =
+          Task.changeset(%Task{}, %{
+            project_id: project.id,
+            title: "Strategy " <> unquote(strategy),
+            deploy_target_config: %{"strategy" => unquote(strategy)}
+          })
+
+        assert changeset.valid?,
+               "expected strategy #{unquote(strategy)} to be accepted, errors: #{inspect(errors_on(changeset))}"
+      end
+    end
+
+    test "changeset accepts nil (default) explicitly", %{project: project} do
+      changeset =
+        Task.changeset(%Task{}, %{
+          project_id: project.id,
+          title: "Explicit nil",
+          deploy_target_config: nil
+        })
+
+      assert changeset.valid?
+    end
+
+    test "create_task/1 persists a valid deploy_target_config end-to-end",
+         %{project: project} do
+      config = %{"strategy" => "docker_deploy", "target" => "production"}
+
+      assert {:ok, task} =
+               Tasks.create_task(%{
+                 project_id: project.id,
+                 title: "Persist config",
+                 deploy_target_config: config
+               })
+
+      assert task.deploy_target_config == config
+
+      reloaded = Repo.get!(Task, task.id)
+      assert reloaded.deploy_target_config == config
+    end
+  end
+
   describe "stack_pending status + stack assoc" do
     test "stack_pending is included in statuses/0" do
       assert "stack_pending" in Task.statuses()

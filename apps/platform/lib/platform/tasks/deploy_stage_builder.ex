@@ -32,7 +32,7 @@ defmodule Platform.Tasks.DeployStageBuilder do
   `manual_approval`). Do NOT add `e2e_behavior` to any deploy-stage definition.
   """
 
-  @valid_strategy_types ~w(none pr_merge docker_deploy fly skill_driven manual)
+  @valid_strategy_types ~w(none pr_merge docker_deploy fly skill_driven manual project_files)
   @valid_merge_methods ~w(squash merge rebase)
 
   # ── Public API ─────────────────────────────────────────────────────────
@@ -111,6 +111,21 @@ defmodule Platform.Tasks.DeployStageBuilder do
           "and confirm completion via manual approval.",
       position: position,
       validations: [%{kind: "manual_approval"}]
+    }
+  end
+
+  def build_stage(%{"type" => "project_files"} = strategy, position) do
+    config = Map.get(strategy, "config", %{})
+
+    # `test_pass` is the canonical success/failure signal for auto-invoked
+    # deploy handlers (mirrors `docker_deploy`). Stage 4 wires the actual
+    # `Platform.Deploy.ProjectFiles` handler; this stage only registers the
+    # strategy so the plan engine can build the stage definition.
+    %{
+      name: "Deploy: Project files",
+      description: project_files_description(config),
+      position: position,
+      validations: [%{kind: "test_pass"}]
     }
   end
 
@@ -210,6 +225,28 @@ defmodule Platform.Tasks.DeployStageBuilder do
       "Execute fly deploy and verify health check.",
       "test_pass validation covers deploy execution and health check.",
       if(app, do: "Fly app: #{app}.", else: nil)
+    ]
+
+    parts |> Enum.reject(&is_nil/1) |> Enum.join(" ")
+  end
+
+  defp project_files_description(config) do
+    project_id = Map.get(config, "project_id")
+    folder = Map.get(config, "folder", "Deliverables")
+    deliverable_canvas_id = Map.get(config, "deliverable_canvas_id")
+
+    parts = [
+      "Deploy the task's deliverable into a project's Files module.",
+      "The platform auto-executes the deploy — do NOT push evidence manually.",
+      "Deliverable is exported to Markdown from the deliverable canvas and written into the target project's Files.",
+      "test_pass is passed by the auto-invoked deploy handler on success (or failed with a reason).",
+      if(project_id, do: "Target project ID: #{project_id}.", else: nil),
+      "Target folder: #{folder}.",
+      if(deliverable_canvas_id,
+        do: "Deliverable canvas ID: #{deliverable_canvas_id}.",
+        else:
+          "No explicit deliverable canvas — the handler falls back to the newest canvas in the task's execution space."
+      )
     ]
 
     parts |> Enum.reject(&is_nil/1) |> Enum.join(" ")

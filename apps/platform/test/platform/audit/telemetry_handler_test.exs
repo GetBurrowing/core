@@ -578,6 +578,85 @@ defmodule Platform.Audit.TelemetryHandlerTest do
     end
   end
 
+  describe "project_files deploy bridging (task 019f5e66 stage 5)" do
+    test "deployed event persists with resource pointing at the attachment" do
+      source_task_id = Ecto.UUID.generate()
+      target_project_id = Ecto.UUID.generate()
+      attachment_id = Ecto.UUID.generate()
+
+      :telemetry.execute(
+        [:platform, :deploy, :project_files, :deployed],
+        %{system_time: System.system_time()},
+        %{
+          actor_type: "system",
+          action: "deployed",
+          resource_type: "chat_attachment",
+          resource_id: attachment_id,
+          source_task_id: source_task_id,
+          target_project_id: target_project_id,
+          folder: "Deliverables",
+          filename: "Deliverables/spec.md",
+          version_id: attachment_id
+        }
+      )
+
+      [event] = Audit.list(event_type: "platform.deploy.project_files.deployed")
+      assert event.actor_type == "system"
+      assert event.action == "deployed"
+      assert event.resource_type == "chat_attachment"
+      assert event.resource_id == attachment_id
+      assert event.metadata["source_task_id"] == source_task_id
+      assert event.metadata["target_project_id"] == target_project_id
+      assert event.metadata["folder"] == "Deliverables"
+      assert event.metadata["filename"] == "Deliverables/spec.md"
+      assert event.metadata["version_id"] == attachment_id
+      # Top-level fields deduplicated out of metadata (see @top_level_keys).
+      refute Map.has_key?(event.metadata, "resource_type")
+      refute Map.has_key?(event.metadata, "resource_id")
+      refute Map.has_key?(event.metadata, "actor_type")
+      refute Map.has_key?(event.metadata, "action")
+    end
+
+    test "cross_tenant_rejected event persists with resource pointing at the target project" do
+      source_task_id = Ecto.UUID.generate()
+      target_project_id = Ecto.UUID.generate()
+      source_workspace_id = Ecto.UUID.generate()
+      target_workspace_id = Ecto.UUID.generate()
+
+      :telemetry.execute(
+        [:platform, :deploy, :project_files, :cross_tenant_rejected],
+        %{system_time: System.system_time()},
+        %{
+          actor_type: "system",
+          action: "cross_tenant_rejected",
+          resource_type: "project",
+          resource_id: target_project_id,
+          source_task_id: source_task_id,
+          target_project_id: target_project_id,
+          source_workspace_id: source_workspace_id,
+          target_workspace_id: target_workspace_id
+        }
+      )
+
+      [event] = Audit.list(event_type: "platform.deploy.project_files.cross_tenant_rejected")
+      assert event.actor_type == "system"
+      assert event.action == "cross_tenant_rejected"
+      assert event.resource_type == "project"
+      assert event.resource_id == target_project_id
+      assert event.metadata["source_task_id"] == source_task_id
+      assert event.metadata["target_project_id"] == target_project_id
+      assert event.metadata["source_workspace_id"] == source_workspace_id
+      assert event.metadata["target_workspace_id"] == target_workspace_id
+    end
+
+    test "both project_files events are registered on the handler" do
+      events = TelemetryHandler.events()
+
+      assert [:platform, :deploy, :project_files, :deployed] in events
+      assert [:platform, :deploy, :project_files, :cross_tenant_rejected] in events
+    end
+  end
+
   describe "stage dispatch fallback bridging (task 019f5d47)" do
     test "assignee_unresolvable event persists with resource pointing at the stage" do
       stage_id = Ecto.UUID.generate()

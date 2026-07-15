@@ -3562,54 +3562,138 @@ defmodule PlatformWeb.TasksLive do
   defp deploy_target_label("google_drive"), do: "Google Drive"
   defp deploy_target_label(other), do: other
 
-  # Function component: renders the readonly Deploy target value block with
-  # three visual states derived from `Platform.Tasks.resolve_deploy_target/1`:
+  # Function component: renders the readonly Deploy target value block.
   #
-  #   * `{:explicit, value}`  — badge with the label
-  #   * `{:inherited, value}` — badge + subtle "Inherited from project" text
-  #   * `:none`               — warning-styled badge + configure button
+  # Two rendering paths cohabit here during the deploy_target →
+  # deploy_target_config migration (task 019f5e66):
   #
-  # Each render carries `data-state="explicit"|"inherited"|"none"` on the
-  # value block so tests and e2e scripts can pin behavior to the resolution
-  # outcome, not the string in the badge.
+  #   1. `deploy_target_config` is set — render a strategy-aware label
+  #      (`data-state="strategy"`, `data-strategy="<name>"`) built from
+  #      `deploy_target_config_label/1`. Preferred / new path.
+  #   2. `deploy_target_config` is nil — fall back to the legacy
+  #      `Platform.Tasks.resolve_deploy_target/1` flow with its three
+  #      states (`explicit | inherited | none`). Keeps existing tests and
+  #      the "configure a deploy target" affordance intact until every
+  #      writer migrates to the config map.
+  #
+  # `data-state` on the value block is stable — tests and e2e scripts
+  # should pin to that, not the string in the badge.
   attr(:task, :any, required: true)
 
   defp deploy_target_display(assigns) do
+    {config_label, strategy_name} =
+      case assigns.task.deploy_target_config do
+        %{"strategy" => strat} = cfg -> {deploy_target_config_label(cfg), strat}
+        _ -> {nil, nil}
+      end
+
     assigns =
-      assign(assigns, :resolution, Platform.Tasks.resolve_deploy_target(assigns.task))
+      assigns
+      |> assign(:config_label, config_label)
+      |> assign(:strategy_name, strategy_name)
+      |> assign(:resolution, Platform.Tasks.resolve_deploy_target(assigns.task))
 
     ~H"""
-    <div
-      data-role="deploy-target-value"
-      data-state={deploy_target_state_name(@resolution)}
-      class="flex items-center gap-2 flex-wrap"
-    >
-      <%= case @resolution do %>
-        <% {:explicit, value} -> %>
-          <span class="badge badge-sm badge-outline">{deploy_target_label(value)}</span>
-        <% {:inherited, value} -> %>
-          <span class="badge badge-sm badge-outline">{deploy_target_label(value)}</span>
-          <span class="text-xs text-base-content/50">Inherited from project</span>
-        <% :none -> %>
-          <span class="badge badge-sm badge-warning gap-1">
-            <span class="hero-exclamation-triangle size-3"></span> No target set
-          </span>
-          <button
-            type="button"
-            phx-click="open_deploy_target_config"
-            data-role="configure-deploy-target-button"
-            class="btn btn-xs btn-ghost text-warning"
-          >
-            Configure a deploy target
-          </button>
-      <% end %>
-    </div>
+    <%= if @config_label do %>
+      <div
+        data-role="deploy-target-value"
+        data-state="strategy"
+        data-strategy={@strategy_name}
+        class="flex items-center gap-2 flex-wrap"
+      >
+        <span class="inline-flex items-center gap-1 rounded-full border border-base-content/20 bg-base-100 px-2 py-0.5 text-xs">
+          {@config_label}
+        </span>
+      </div>
+    <% else %>
+      <div
+        data-role="deploy-target-value"
+        data-state={deploy_target_state_name(@resolution)}
+        class="flex items-center gap-2 flex-wrap"
+      >
+        <%= case @resolution do %>
+          <% {:explicit, value} -> %>
+            <span class="badge badge-sm badge-outline">{deploy_target_label(value)}</span>
+          <% {:inherited, value} -> %>
+            <span class="badge badge-sm badge-outline">{deploy_target_label(value)}</span>
+            <span class="text-xs text-base-content/50">Inherited from project</span>
+          <% :none -> %>
+            <span class="badge badge-sm badge-warning gap-1">
+              <span class="hero-exclamation-triangle size-3"></span> No target set
+            </span>
+            <button
+              type="button"
+              phx-click="open_deploy_target_config"
+              data-role="configure-deploy-target-button"
+              class="btn btn-xs btn-ghost text-warning"
+            >
+              Configure a deploy target
+            </button>
+        <% end %>
+      </div>
+    <% end %>
     """
   end
 
   defp deploy_target_state_name({:explicit, _}), do: "explicit"
   defp deploy_target_state_name({:inherited, _}), do: "inherited"
   defp deploy_target_state_name(:none), do: "none"
+
+  # Strategy-aware label for `deploy_target_config` (task 019f5e66 stage 6).
+  #
+  # Each registered strategy renders as a self-describing string suitable for
+  # the readonly detail row — no more raw JSON blobs leaking through. Unknown
+  # or malformed configs return `nil` so the caller falls back to the legacy
+  # `deploy_target` string rendering.
+  #
+  # `project_files` performs one lookup for the target project's name so the
+  # label can render `"Project Files: <project>/<folder>"` instead of a bare
+  # UUID. The lookup is best-effort — if the target project is missing (soft-
+  # deleted, cross-tenant, etc.) the label degrades to just the folder.
+  defp deploy_target_config_label(%{"strategy" => "project_files"} = cfg) do
+    folder = string_or_nil(Map.get(cfg, "folder"))
+    project_name = lookup_project_name(Map.get(cfg, "project_id"))
+
+    case {project_name, folder} do
+      {nil, nil} -> "Project Files"
+      {nil, folder} -> "Project Files: #{folder}"
+      {name, nil} -> "Project Files: #{name}"
+      {name, folder} -> "Project Files: #{name}/#{folder}"
+    end
+  end
+
+  defp deploy_target_config_label(%{"strategy" => "docker_deploy"} = cfg) do
+    case string_or_nil(Map.get(cfg, "target")) do
+      nil -> "Docker"
+      target -> "Docker: #{target}"
+    end
+  end
+
+  defp deploy_target_config_label(%{"strategy" => "pr_merge"}), do: "PR merge"
+
+  defp deploy_target_config_label(%{"strategy" => "skill_driven"} = cfg) do
+    slug = string_or_nil(Map.get(cfg, "skill_slug")) || string_or_nil(Map.get(cfg, "skill_id"))
+
+    case slug do
+      nil -> "Skill"
+      s -> "Skill: #{s}"
+    end
+  end
+
+  defp deploy_target_config_label(%{"strategy" => "manual"}), do: "Manual"
+  defp deploy_target_config_label(_), do: nil
+
+  defp string_or_nil(v) when is_binary(v) and v != "", do: v
+  defp string_or_nil(_), do: nil
+
+  defp lookup_project_name(id) when is_binary(id) and id != "" do
+    case Platform.Tasks.get_project(id) do
+      %Platform.Tasks.Project{name: name} -> name
+      _ -> nil
+    end
+  end
+
+  defp lookup_project_name(_), do: nil
 
   # Edit-mode dropdown pre-selection value (ADR 0044 v3 stage 2).
   #

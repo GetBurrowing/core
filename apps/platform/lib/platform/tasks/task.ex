@@ -54,6 +54,13 @@ defmodule Platform.Tasks.Task do
   @valid_dependency_kinds ~w(blocks)
   def valid_dependency_kinds, do: @valid_dependency_kinds
 
+  # Allowed `strategy` values inside `deploy_target_config` (task 019f5e66
+  # stage 2). Mirrors the dispatch-side registration in
+  # `DeployStageBuilder`/`HeartbeatScheduler`; keep in sync when adding
+  # new strategies.
+  @deploy_target_config_strategies ~w(pr_merge docker_deploy skill_driven manual project_files)
+  def deploy_target_config_strategies, do: @deploy_target_config_strategies
+
   schema "tasks" do
     belongs_to(:project, Platform.Tasks.Project)
     belongs_to(:epic, Platform.Tasks.Epic)
@@ -79,6 +86,12 @@ defmodule Platform.Tasks.Task do
     field(:phase_assignees, :map, default: %{})
     field(:deploy_target, :string)
     field(:deploy_strategy, :map)
+    # `deploy_target_config` (task 019f5e66 stage 2) — richer per-task
+    # deploy config replacing the legacy `deploy_target` string. Shape:
+    # `%{"strategy" => one_of(@deploy_target_config_strategies), ...}`.
+    # The legacy `deploy_target` column stays populated in parallel
+    # until every read/write caller migrates; see the migration TODO.
+    field(:deploy_target_config, :map, default: nil)
     field(:dependencies, {:array, :map}, default: [])
     field(:metadata, :map, default: %{})
     field(:stack_position, :integer)
@@ -139,6 +152,7 @@ defmodule Platform.Tasks.Task do
       :phase_assignees,
       :deploy_target,
       :deploy_strategy,
+      :deploy_target_config,
       :dependencies,
       :metadata,
       :stack_position,
@@ -151,6 +165,7 @@ defmodule Platform.Tasks.Task do
     |> validate_inclusion(:priority, @priorities)
     |> validate_phase_assignees()
     |> validate_dependencies()
+    |> validate_deploy_target_config()
     |> foreign_key_constraint(:project_id)
     |> foreign_key_constraint(:epic_id)
     |> foreign_key_constraint(:stack_id)
@@ -219,4 +234,39 @@ defmodule Platform.Tasks.Task do
   end
 
   defp valid_dependency_entry?(_), do: false
+
+  # `deploy_target_config` (task 019f5e66 stage 2) must be a string-keyed
+  # map with a `"strategy"` key drawn from
+  # `@deploy_target_config_strategies`. Extra keys are permitted — each
+  # strategy carries its own additional config (e.g. project_files
+  # includes `"project_id"` + `"folder"`). `nil` is allowed: rows
+  # predating the column and rows that have not opted into the new
+  # shape stay valid.
+  defp validate_deploy_target_config(changeset) do
+    case get_change(changeset, :deploy_target_config) do
+      nil ->
+        changeset
+
+      %{"strategy" => strategy} when is_binary(strategy) ->
+        if strategy in @deploy_target_config_strategies do
+          changeset
+        else
+          add_error(
+            changeset,
+            :deploy_target_config,
+            "strategy must be one of: #{Enum.join(@deploy_target_config_strategies, ", ")}"
+          )
+        end
+
+      config when is_map(config) ->
+        add_error(
+          changeset,
+          :deploy_target_config,
+          "must include a string \"strategy\" key (one of: #{Enum.join(@deploy_target_config_strategies, ", ")})"
+        )
+
+      _other ->
+        add_error(changeset, :deploy_target_config, "must be a map")
+    end
+  end
 end

@@ -89,7 +89,15 @@ defmodule Platform.Audit.TelemetryHandler do
     # resolved to a live runtime or the broadcast fails. Metadata carries
     # agent_id, reason (:agent_not_found | :runtime_unresolvable |
     # :broadcast_failed | :endpoint_not_ready), and optional broadcast_error.
-    [:platform, :meetings, :scribe_dispatch, :assignee_unresolvable]
+    [:platform, :meetings, :scribe_dispatch, :assignee_unresolvable],
+    # Task 019f5e66 stage 5 — project_files deploy strategy audit trail.
+    # Emitted by Platform.Deploy.ProjectFiles.execute/2. The :deployed
+    # event carries source_task_id, target_project_id, folder, filename,
+    # version_id; :cross_tenant_rejected additionally carries
+    # source_workspace_id + target_workspace_id so a reviewer can see
+    # which pairing was refused. Both use actor_type: "system".
+    [:platform, :deploy, :project_files, :deployed],
+    [:platform, :deploy, :project_files, :cross_tenant_rejected]
   ]
 
   @doc "Attach the handler to all registered platform telemetry events."
