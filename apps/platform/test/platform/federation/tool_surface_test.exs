@@ -641,6 +641,183 @@ defmodule Platform.Federation.ToolSurfaceTest do
       assert Tasks.get_task_record(task.id).status == "in_review"
     end
 
+    # ── Sponsor-bypass plan gate through MCP (task 019f6380 stage 2) ──────
+    #
+    # Pre-stage-2 the MCP `task_update` path went straight through
+    # `Tasks.transition_task_status/2`, which is the base primitive with
+    # NO plan-approval gate. That let an agent transition any task into
+    # an execution phase without an approved plan — precisely the bypass
+    # the LiveView entry point was designed to prevent. Stage 2 wires an
+    # explicit `Tasks.require_approved_plan_for/3` call into the MCP
+    # execute pipeline with an agent-typed actor, so the gate now holds
+    # for agent-initiated MCP calls too. These tests pin that behavior.
+
+    test "task_update as agent on sponsor-only-no-agent task with no plan → gate holds (task 019f6380 stage 2)" do
+      # Test case 4 from the task description, wired end-to-end through
+      # the MCP surface. Sponsor-only shape (no agent involvement)
+      # normally BYPASSES the plan gate — but ONLY for human actors.
+      # An agent invoking task_update on the same shape must still be
+      # blocked because the sponsor-bypass is a human-only exemption.
+      project = create_project()
+      sponsor = insert_user_for_sponsor()
+      agent_id = Ecto.UUID.generate()
+
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Sponsor-only, agent-initiated MCP",
+          status: "backlog",
+          sponsor_user_id: sponsor.id
+        })
+
+      {:error, error} =
+        ToolSurface.execute(
+          "task_update",
+          %{"task_id" => task.id, "status" => "in_progress"},
+          %{agent_id: agent_id}
+        )
+
+      assert error.recoverable == true
+      assert error.error =~ "Cannot transition to 'in_progress'"
+      assert error.error =~ "no approved plan"
+      assert error.suggestion =~ ~r/plan_create|plan_approve/
+
+      # Task did NOT transition.
+      assert Tasks.get_task_record(task.id).status == "backlog"
+    end
+
+    test "task_update as agent on agent-assigned task with no plan → gate holds (task 019f6380 stage 2)" do
+      # Standard gate case: agent-assigned task with no plan. Pre-stage-2
+      # this would have silently succeeded via the MCP path (no gate at
+      # all). Post-stage-2 the friendly `:no_approved_plan` envelope
+      # fires.
+      project = create_project()
+      agent_id = Ecto.UUID.generate()
+
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Agent-only, gate must fire on MCP path",
+          status: "backlog",
+          assignee_id: agent_id,
+          assignee_type: "agent"
+        })
+
+      {:error, error} =
+        ToolSurface.execute(
+          "task_update",
+          %{"task_id" => task.id, "status" => "in_progress"},
+          %{agent_id: agent_id}
+        )
+
+      assert error.recoverable == true
+      assert error.error =~ "Cannot transition to 'in_progress'"
+    end
+
+    test "task_update with no status change skips the plan gate entirely (task 019f6380 stage 2)" do
+      # The `maybe_check_plan_gate/3` short-circuit: bare metadata
+      # updates that don't touch status must never hit the gate. This
+      # prevents a regression where the actor-threading refactor
+      # accidentally makes every task_update require a plan.
+      project = create_project()
+      agent_id = Ecto.UUID.generate()
+
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Rename me",
+          status: "backlog",
+          assignee_id: agent_id,
+          assignee_type: "agent"
+        })
+
+      {:ok, result} =
+        ToolSurface.execute(
+          "task_update",
+          %{"task_id" => task.id, "title" => "Renamed"},
+          %{agent_id: agent_id}
+        )
+
+      assert result.title == "Renamed"
+      # And status is untouched.
+      assert Tasks.get_task_record(task.id).status == "backlog"
+    end
+
+    test "task_update with an approved plan lets agent transition normally (task 019f6380 stage 2)" do
+      # Regression pin: the new gate must not block the happy path. An
+      # approved plan opens the gate for any actor.
+      project = create_project()
+      agent_id = Ecto.UUID.generate()
+
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Has plan, agent moves it",
+          status: "backlog",
+          assignee_id: agent_id,
+          assignee_type: "agent"
+        })
+
+      {:ok, _plan} = Tasks.create_plan(%{task_id: task.id, status: "approved"})
+
+      {:ok, result} =
+        ToolSurface.execute(
+          "task_update",
+          %{"task_id" => task.id, "status" => "in_progress"},
+          %{agent_id: agent_id}
+        )
+
+      assert result.status == "in_progress"
+    end
+
+    test "task_update as agent to in_review from blocked on sponsor-only task → gate holds (task 019f6380 stage 3)" do
+      # Stage 3 fence: extends stage 2's MCP-path coverage (which pinned
+      # `backlog → in_progress`) to a second execution-phase target
+      # (`in_review`) from a second non-execution source (`blocked`).
+      # Together the two tests span both the "entering execution phase
+      # for the first time" edge (backlog → in_progress) and the
+      # "recovering from blocked into review" edge (blocked → in_review)
+      # — both must be gated for agent MCP actors even on a
+      # sponsor-only-no-agent task.
+      #
+      # Aside on the plan spec's `status: "done"` sketch — the gate can
+      # never fire for target `"done"`: every source status that
+      # `@valid_task_transitions` permits reaching done from is already
+      # in `@execution_phase_statuses`, so
+      # `require_approved_plan_for/3` short-circuits at the "already in
+      # execution" clause before the plan check. `in_review` from
+      # `blocked` exercises the equivalent semantic (agent-initiated
+      # transition into an execution-phase target that would otherwise
+      # qualify for sponsor-bypass) via a source/target pair that
+      # actually reaches the predicate.
+      project = create_project()
+      sponsor = insert_user_for_sponsor()
+      agent_id = Ecto.UUID.generate()
+
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Sponsor-only, agent-initiated MCP blocked → in_review",
+          status: "blocked",
+          sponsor_user_id: sponsor.id
+        })
+
+      {:error, error} =
+        ToolSurface.execute(
+          "task_update",
+          %{"task_id" => task.id, "status" => "in_review"},
+          %{agent_id: agent_id}
+        )
+
+      assert error.recoverable == true
+      assert error.error =~ "Cannot transition to 'in_review'"
+      assert error.error =~ "no approved plan"
+      assert error.suggestion =~ ~r/plan_create|plan_approve/
+
+      # Task did NOT transition.
+      assert Tasks.get_task_record(task.id).status == "blocked"
+    end
+
     test "task_list with status: 'cancelled' surfaces only cancelled tasks (stage 6 round-trip)" do
       # Stage 3 made `cancelled` an agent-reachable terminal status; this
       # asserts the tool-surface reverse direction — once a task is in

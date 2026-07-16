@@ -259,4 +259,243 @@ defmodule Platform.TasksTest do
       refute_receive {:task_pin_removed, _}, 50
     end
   end
+
+  # ── Sponsor-bypass predicate (task 019f6380 stage 1) ─────────────────────
+  #
+  # `sponsor_bypasses_plan_gate?/2` exempts board-moves on sponsor-only
+  # tasks (human sponsor, no agent involvement, initiated by a human)
+  # from `require_approved_plan_for/3`. The gate exists to protect
+  # against agents self-approving their own work — pointless when no
+  # agent is on the task and the sponsor is manually confirming
+  # completion. See the task description for the full motivation.
+  describe "sponsor_bypasses_plan_gate?/2 (task 019f6380 stage 1)" do
+    setup do
+      {:ok, project} =
+        Tasks.create_project(%{name: "Sponsor bypass #{System.unique_integer([:positive])}"})
+
+      sponsor = insert_bypass_user()
+      other_user = insert_bypass_user()
+      agent_id = Ecto.UUID.generate()
+
+      %{project: project, sponsor: sponsor, other_user: other_user, agent_id: agent_id}
+    end
+
+    # Test case 1 (from task 019f6380 description):
+    # Human sponsor + no agent + no plan → bypass fires for a human actor.
+    test "human sponsor + no assignee + human actor → bypass",
+         %{project: project, sponsor: sponsor, other_user: other_user} do
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Sponsor solo",
+          sponsor_user_id: sponsor.id
+        })
+
+      assert Tasks.sponsor_bypasses_plan_gate?(task, {:user, sponsor.id})
+      # Any human user, not just the sponsor — the gate is about actor
+      # taxonomy, not identity match.
+      assert Tasks.sponsor_bypasses_plan_gate?(task, {:user, other_user.id})
+    end
+
+    # Test case 1 end-to-end: `require_approved_plan_for/3` and
+    # `drop_task_to_column/3` both allow the move without a plan.
+    test "bypass unblocks require_approved_plan_for/3 and drop_task_to_column/3",
+         %{project: project, sponsor: sponsor} do
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Sponsor drops to done",
+          status: "in_progress",
+          sponsor_user_id: sponsor.id
+        })
+
+      # Baseline: two-arity delegator uses `:system` and stays gated —
+      # every existing internal caller keeps its current behavior.
+      assert Tasks.require_approved_plan_for(task, "done") == :ok
+      # (from `in_progress` the intra-execution short-circuit fires, so
+      # test the bypass by going from `backlog` where the plan gate is live.)
+
+      {:ok, backlog_task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Sponsor from backlog",
+          sponsor_user_id: sponsor.id
+        })
+
+      # Two-arity (system actor) — gated as before.
+      assert Tasks.require_approved_plan_for(backlog_task, "in_progress") ==
+               {:error, :no_approved_plan}
+
+      # Three-arity with human actor — bypass fires.
+      assert Tasks.require_approved_plan_for(
+               backlog_task,
+               "in_progress",
+               {:user, sponsor.id}
+             ) == :ok
+
+      # And the actor-aware `drop_task_to_column/3` completes the move
+      # end-to-end without requiring an approved plan.
+      assert {:ok, dropped} =
+               Tasks.drop_task_to_column(backlog_task, "done", {:user, sponsor.id})
+
+      assert dropped.status == "done"
+    end
+
+    # Test case 2: Agent assignee + no plan → still blocked regardless of
+    # actor. The gate exists precisely because there IS an agent on the
+    # task, so no bypass ever fires.
+    test "agent assignee (no sponsor) → predicate stays false, gate still fires",
+         %{project: project, sponsor: sponsor, agent_id: agent_id} do
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Agent solo",
+          assignee_id: agent_id,
+          assignee_type: "agent"
+        })
+
+      refute Tasks.sponsor_bypasses_plan_gate?(task, {:user, sponsor.id})
+      refute Tasks.sponsor_bypasses_plan_gate?(task, {:agent, agent_id})
+      refute Tasks.sponsor_bypasses_plan_gate?(task, :system)
+
+      assert Tasks.require_approved_plan_for(task, "in_progress", {:user, sponsor.id}) ==
+               {:error, :no_approved_plan}
+    end
+
+    # Test case 3: Human sponsor + agent assignee (mixed) → still blocked.
+    # Sponsor alone isn't enough; agent involvement pulls the protection
+    # back in.
+    test "human sponsor + agent assignee (mixed) → still gated",
+         %{project: project, sponsor: sponsor, agent_id: agent_id} do
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Mixed",
+          sponsor_user_id: sponsor.id,
+          assignee_id: agent_id,
+          assignee_type: "agent"
+        })
+
+      refute Tasks.sponsor_bypasses_plan_gate?(task, {:user, sponsor.id})
+
+      # Same result whether resolved via top-level `assignee_type` or
+      # via `phase_assignees[current_phase]` — set phase_assignees too
+      # to prove the phase-resolved clause also blocks agent involvement.
+      {:ok, task} =
+        Tasks.set_phase_assignees(task, %{
+          "planning" => %{"assignee_id" => agent_id, "assignee_type" => "agent"}
+        })
+
+      refute Tasks.sponsor_bypasses_plan_gate?(task, {:user, sponsor.id})
+
+      assert Tasks.require_approved_plan_for(task, "in_progress", {:user, sponsor.id}) ==
+               {:error, :no_approved_plan}
+    end
+
+    # Test case 4: Sponsor-only task, but the transition is agent- or
+    # system-initiated → still blocked. Only human initiation bypasses.
+    test "sponsor-only task + non-human actor → predicate stays false, gate still fires",
+         %{project: project, sponsor: sponsor, agent_id: agent_id} do
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Sponsor-only, agent-initiated",
+          sponsor_user_id: sponsor.id
+        })
+
+      refute Tasks.sponsor_bypasses_plan_gate?(task, {:agent, agent_id})
+      refute Tasks.sponsor_bypasses_plan_gate?(task, :system)
+
+      # Explicit gate check: agent-initiated move stays blocked without a
+      # plan even though the task itself has no agent assignee.
+      assert Tasks.require_approved_plan_for(task, "in_progress", {:agent, agent_id}) ==
+               {:error, :no_approved_plan}
+
+      assert Tasks.require_approved_plan_for(task, "in_progress", :system) ==
+               {:error, :no_approved_plan}
+    end
+
+    # Regression: stage-4 reviewer finding. The old
+    # `non_agent_assignment?/1` short-circuited on `is_nil(assignee_id)`
+    # BEFORE consulting `phase_assignees`, so a task with the top-level
+    # assignee not yet materialized (nil) plus an execution-phase agent
+    # override incorrectly got the bypass. The status must be `planning`
+    # here because the `require_approved_plan_for/3` intra-execution
+    # short-circuit (`task.status in @execution_phase_statuses`) would
+    # otherwise return `:ok` before the predicate runs — which is exactly
+    # how the original stage-3 unit suite missed this bug.
+    test "phase_assignees.execution=agent + nil top-level assignee → predicate stays false",
+         %{project: project, sponsor: sponsor, agent_id: agent_id} do
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Phase-agent, nil top-level",
+          status: "planning",
+          sponsor_user_id: sponsor.id
+        })
+
+      # Simulate the on-disk shape: `phase_assignees.execution` schedules
+      # an agent for the execution phase but the task is still in
+      # planning, so the top-level `assignee_id` is nil.
+      task = %{
+        task
+        | phase_assignees: %{
+            "execution" => %{"assignee_id" => agent_id, "assignee_type" => "agent"}
+          },
+          assignee_id: nil,
+          assignee_type: nil
+      }
+
+      refute Tasks.sponsor_bypasses_plan_gate?(task, {:user, sponsor.id})
+
+      # And the gate stays closed on the actor-aware entry point — this
+      # is the failure mode the reviewer surfaced (dropping to
+      # `in_progress` from `planning` shouldn't sneak past the plan
+      # requirement when an agent is queued to do the execution work).
+      assert Tasks.require_approved_plan_for(task, "in_progress", {:user, sponsor.id}) ==
+               {:error, :no_approved_plan}
+
+      # Symmetric check: a review-phase agent should also hold the gate.
+      review_task = %{
+        task
+        | phase_assignees: %{
+            "review" => %{"assignee_id" => agent_id, "assignee_type" => "agent"}
+          }
+      }
+
+      refute Tasks.sponsor_bypasses_plan_gate?(review_task, {:user, sponsor.id})
+    end
+
+    test "two-arity delegators preserve pre-actor-threading behavior",
+         %{project: project, sponsor: sponsor} do
+      # The two-arity `transition_task/2` and `drop_task_to_column/2`
+      # both default to `:system`. That means every internal
+      # orchestration caller (task router, stacks manager, webhook
+      # controller) keeps the same gate they had before task 019f6380 —
+      # no bypass ever fires from the automated pipeline.
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "System default stays gated",
+          sponsor_user_id: sponsor.id
+        })
+
+      assert Tasks.transition_task(task, "in_progress") == {:error, :no_approved_plan}
+      assert Tasks.drop_task_to_column(task, "in_progress") == {:error, :no_approved_plan}
+    end
+  end
+
+  # Bare-user insert helper for sponsor-bypass tests. Mirrors the pattern
+  # in `apps/platform/test/platform/tasks/task_test.exs` — bypasses
+  # `Platform.Accounts.User.changeset/2`'s name requirement so tests don't
+  # need to plumb an OIDC identity fixture.
+  defp insert_bypass_user do
+    n = System.unique_integer([:positive])
+
+    Repo.insert!(%Platform.Accounts.User{
+      name: "Bypass #{n}",
+      email: "bypass-#{n}@example.com",
+      oidc_sub: "sub-bypass-#{n}"
+    })
+  end
 end

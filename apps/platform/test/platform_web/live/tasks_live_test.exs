@@ -10406,4 +10406,260 @@ defmodule PlatformWeb.TasksLiveTest do
       assert html =~ ~s(aria-pressed="false")
     end
   end
+
+  # ── Sponsor-bypass gate wiring (task 019f6380 stage 2) ───────────────────
+  #
+  # Stage 2 threads the LiveView user actor through both entry paths
+  # (`transition_task` button, `kanban_drop` drag surface) so the
+  # sponsor-bypass rule in `Tasks.require_approved_plan_for/3` can fire
+  # for human-initiated moves on sponsor-only-no-agent tasks. These
+  # tests pin the wiring — not the full gate matrix (stage 3 does that
+  # exhaustively with the mixed and error cases). If the actor stops
+  # being threaded, these both flip red.
+  describe "board-move actor wiring (task 019f6380 stage 2)" do
+    test "kanban_drop as authenticated user on sponsor-only task with no plan succeeds",
+         %{conn: conn} do
+      {conn, user} = authenticated_conn_with_user(conn)
+      project = create_project()
+
+      # Sponsor-only shape: sponsor_user_id set, no agent involvement,
+      # no plan. Pre-actor-threading the drop event would call
+      # `drop_task_to_column/2` (default `:system` actor) and be blocked
+      # by the plan gate. With the actor threaded through as
+      # `{:user, current_user_id}`, the sponsor-bypass fires and the
+      # move lands.
+      task =
+        create_task(project, %{
+          title: "Sponsor drops board card",
+          status: "in_progress",
+          sponsor_user_id: user.id
+        })
+
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+
+      html =
+        view
+        |> render_hook("kanban_drop", %{"task_id" => task.id, "column" => "done"})
+
+      # Success path — info flash, no gate error.
+      assert html =~ "Task moved to Done"
+      refute html =~ "no approved plan"
+
+      assert Repo.get(Task, task.id).status == "done"
+    end
+
+    test "transition_task event as authenticated user on sponsor-only task with no plan succeeds",
+         %{conn: conn} do
+      {conn, user} = authenticated_conn_with_user(conn)
+      project = create_project()
+
+      task =
+        create_task(project, %{
+          title: "Sponsor clicks phase button",
+          status: "in_progress",
+          sponsor_user_id: user.id
+        })
+
+      {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
+
+      html =
+        view
+        |> render_hook("transition_task", %{"id" => task.id, "status" => "in_review"})
+
+      # Success path — no `no approved plan` flash text.
+      refute html =~ "no approved plan"
+      assert Repo.get(Task, task.id).status == "in_review"
+    end
+  end
+
+  # ── Board-move plan-approval gate with sponsor bypass (task 019f6380 stage 3) ──
+  #
+  # Stage 2 pinned the actor-wiring: the LiveView entry paths thread
+  # `{:user, current_user_id}` into `Tasks.transition_task/3` and
+  # `Tasks.drop_task_to_column/3` so `Tasks.require_approved_plan_for/3`
+  # can consult `sponsor_bypasses_plan_gate?/2`. This describe block
+  # pins the OUTCOMES the sponsor sees on the board — the info/error
+  # flash copy and the persisted task status — across the full 2x2
+  # matrix (sponsor-only vs agent-assigned vs mixed, plus the button
+  # surface vs drag surface). If the predicate stops matching (or
+  # matches too eagerly), one of these four turns red and Rowan finds
+  # out at test time rather than in production.
+  #
+  # Starting-status choice: all four tests seed the task at `backlog`
+  # (or `blocked` for the button test) rather than `in_progress` as the
+  # planner initially sketched. Rationale — `require_approved_plan_for/3`
+  # short-circuits to `:ok` when `task.status` is already in
+  # `@execution_phase_statuses` (the intra-execution transitions rule).
+  # Seeding at `in_progress` would open the gate for every actor,
+  # rendering the bypass predicate untested. Seeding at `backlog` /
+  # `blocked` forces the gate to actually consult
+  # `sponsor_bypasses_plan_gate?/2`, which is the code path stages 1-2
+  # introduced and this stage means to fence.
+  describe "board-move plan-approval gate with sponsor bypass (task 019f6380 stage 3)" do
+    # Fixture helper: seed a task with configurable sponsor + agent
+    # shape. Returns the persisted %Task{}. Callers pass the desired
+    # starting `status` in `attrs` per the note above.
+    defp seed_gate_task(project, attrs) do
+      base = %{
+        project_id: project.id,
+        title: "Gate matrix task #{System.unique_integer([:positive])}",
+        priority: "medium"
+      }
+
+      {:ok, task} = Tasks.create_task(Map.merge(base, attrs))
+      task
+    end
+
+    # Test case 1: sponsor-only, no plan, drag to done → move lands via
+    # sponsor-bypass. `backlog → done` is a valid drop
+    # (`@valid_drop_transitions[\"backlog\"]` allows it) and NEITHER
+    # short-circuit branch in `require_approved_plan_for/3` fires from
+    # `backlog`, so the predicate is actually consulted — the bypass
+    # is what opens the gate here, not the intra-exec-phase rule.
+    test "sponsor-only task with no plan drops from backlog to done", %{conn: conn} do
+      {conn, user} = authenticated_conn_with_user(conn)
+      project = create_project()
+
+      task =
+        seed_gate_task(project, %{
+          title: "Sponsor-only drag succeeds",
+          status: "backlog",
+          sponsor_user_id: user.id
+        })
+
+      # Precondition: the predicate must green-light this shape for a
+      # human actor — if it doesn't, the drop below succeeds for the
+      # wrong reason and hides regressions.
+      assert Tasks.sponsor_bypasses_plan_gate?(task, {:user, user.id})
+
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+
+      html =
+        view
+        |> render_hook("kanban_drop", %{"task_id" => task.id, "column" => "done"})
+
+      # Success flash + no gate-error copy. `"no approved plan"` is the
+      # substring shared by both error-flash variants (`transition_task`
+      # and `kanban_drop`); asserting its absence proves neither entry
+      # path fell into the blocked branch.
+      assert html =~ "Task moved to Done"
+      refute html =~ "no approved plan"
+
+      assert Repo.get(Task, task.id).status == "done"
+    end
+
+    # Test case 2: agent-assigned, no plan, drag to done → gate holds.
+    test "agent-assigned task with no plan stays blocked on drop to done", %{conn: conn} do
+      conn = authenticated_conn(conn)
+      project = create_project()
+      agent = create_agent()
+
+      task =
+        seed_gate_task(project, %{
+          title: "Agent-only drag blocks",
+          status: "backlog",
+          assignee_id: agent.id,
+          assignee_type: "agent"
+        })
+
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+
+      html =
+        view
+        |> render_hook("kanban_drop", %{"task_id" => task.id, "column" => "done"})
+
+      # Exact error-flash copy from `tasks_live.ex` at ~line 2579 — if
+      # this string drifts, the test tells us before the sponsor sees
+      # a mystery toast.
+      assert html =~
+               "Cannot move task into Done: no approved plan exists. Create and approve a plan first."
+
+      # And the DB confirms the move did NOT persist.
+      assert Repo.get(Task, task.id).status == "backlog"
+    end
+
+    # Test case 3: mixed sponsor + agent, no plan, drag to done → gate
+    # holds. Agent involvement pulls the plan requirement back in even
+    # when a human sponsor is set (ADR 0042 §sponsor-bypass — the
+    # bypass only fires when no agent is in the loop). Both signals
+    # (top-level `assignee_type: "agent"` AND
+    # `phase_assignees["planning"]`) are stamped so
+    # `non_agent_assignment?/1` sees agent involvement no matter which
+    # of its two branches evaluates first.
+    test "mixed sponsor + agent task with no plan stays blocked", %{conn: conn} do
+      {conn, user} = authenticated_conn_with_user(conn)
+      project = create_project()
+      agent = create_agent()
+
+      task =
+        seed_gate_task(project, %{
+          title: "Mixed sponsor+agent drag blocks",
+          status: "backlog",
+          sponsor_user_id: user.id,
+          assignee_id: agent.id,
+          assignee_type: "agent"
+        })
+
+      # Layer phase-scoped agent assignment on top so the phase-resolved
+      # branch of `non_agent_assignment?/1` also fails — the plan spec
+      # explicitly calls out testing via `phase_assignees["execution"]`,
+      # but at status=`backlog` the current phase is `"planning"`, so
+      # the write targets `"planning"` to keep the predicate consultation
+      # honest across both top-level and phase-scoped assignee reads.
+      {:ok, task} =
+        Tasks.set_phase_assignees(task, %{
+          "planning" => %{"assignee_id" => agent.id, "assignee_type" => "agent"}
+        })
+
+      # Precondition assertion: this shape must NOT trigger the bypass
+      # — if it does, the assertion after render_hook fires a false-
+      # negative pass.
+      refute Tasks.sponsor_bypasses_plan_gate?(task, {:user, user.id})
+
+      {:ok, view, _html} = live(conn, ~p"/tasks")
+
+      html =
+        view
+        |> render_hook("kanban_drop", %{"task_id" => task.id, "column" => "done"})
+
+      assert html =~
+               "Cannot move task into Done: no approved plan exists. Create and approve a plan first."
+
+      assert Repo.get(Task, task.id).status == "backlog"
+    end
+
+    # Test case 4: sponsor-only, no plan, phase-transition BUTTON (not
+    # the drag surface) to in_review → move lands. Proves both LV
+    # entry paths honor the bypass — a fix to `kanban_drop` alone
+    # wouldn't get this test to pass. Starts at `blocked` because
+    # `@valid_task_transitions["blocked"]` includes `in_review` (the
+    # button surface enforces the automated-pipeline table, unlike the
+    # drag surface's permissive `@valid_drop_transitions`) and `blocked`
+    # is a non-execution status so the gate actually consults the
+    # predicate.
+    test "phase-transition button on sponsor-only task with no plan succeeds", %{conn: conn} do
+      {conn, user} = authenticated_conn_with_user(conn)
+      project = create_project()
+
+      task =
+        seed_gate_task(project, %{
+          title: "Sponsor-only button succeeds",
+          status: "blocked",
+          sponsor_user_id: user.id
+        })
+
+      {:ok, view, _html} = live(conn, ~p"/tasks/#{task.id}")
+
+      html =
+        view
+        |> render_hook("transition_task", %{"id" => task.id, "status" => "in_review"})
+
+      # Success flash from `tasks_live.ex` at ~line 1456 (`"Task moved
+      # to <new_status>."`) plus absence of the gate-error text.
+      assert html =~ "Task moved to in_review"
+      refute html =~ "no approved plan"
+
+      assert Repo.get(Task, task.id).status == "in_review"
+    end
+  end
 end

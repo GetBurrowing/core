@@ -737,6 +737,24 @@ defmodule Platform.Tasks do
   end
 
   @doc """
+  Returns `true` when transitioning `task` to `new_status` is permitted by
+  the automated-pipeline transition table (`@valid_task_transitions`).
+  Same rules `transition_task_status/2` enforces internally — surfaced as
+  a pure predicate so callers can pre-check without triggering a write.
+
+  Used by the MCP `task_update` execute path (task 019f6380 stage 2) to
+  skip the plan-approval gate on transitions that would fail as
+  `:invalid_transition` anyway — otherwise the gate would mask the
+  more-specific transition-table error (e.g. `cancelled → in_progress`,
+  where `cancelled` is a terminal state, would surface as
+  `:no_approved_plan` instead of the transition-table refusal).
+  """
+  @spec transition_valid?(Task.t(), String.t()) :: boolean()
+  def transition_valid?(%Task{status: current}, new_status) do
+    new_status in Map.get(@valid_task_transitions, current, [])
+  end
+
+  @doc """
   Transition a task's status, enforcing valid transitions per ADR 0018 §7.
   """
   def transition_task_status(%Task{} = task, new_status) do
@@ -2283,12 +2301,107 @@ defmodule Platform.Tasks do
     end)
   end
 
+  @typedoc """
+  Actor initiating a task-state mutation. Mirrors `Platform.Audit.Event`'s
+  actor triple so we don't invent a parallel taxonomy — see
+  `sponsor_bypasses_plan_gate?/2` for why the predicate needs to know
+  who's moving the task.
+  """
+  @type actor :: {:user, String.t()} | {:agent, String.t()} | :system
+
+  @doc """
+  Predicate: does the sponsor-bypass rule apply for this `task` + `actor`?
+
+  Returns `true` when ALL of the following hold:
+
+    * `task.sponsor_user_id` is set — a human sponsor exists.
+    * There is no agent involvement in the current phase — the task has
+      no top-level assignee, OR the top-level assignee is a user, OR the
+      resolved per-phase assignee for the current phase is a user (or
+      unset).
+    * `actor` is a human user (`{:user, _uuid}`). `{:agent, _}` and
+      `:system` never trigger the bypass — the whole point of the
+      exemption is that a human is initiating the move.
+
+  Rationale (task 019f6380): the `require_approved_plan_for/3` gate
+  exists to prevent agents from marking their own work complete
+  prematurely — an observed pathology in Suite's predecessor. That
+  protection is meaningless when there's no agent in the loop and a
+  human sponsor is confirming completion; forcing a plan in that case
+  wastes tokens on a process the sponsor already knows is done.
+
+  Public because downstream UI (`tasks_live.ex` etc.) may want to hide
+  the "requires plan" affordance for the current viewer when the bypass
+  would apply.
+  """
+  @spec sponsor_bypasses_plan_gate?(Task.t(), actor()) :: boolean()
+  def sponsor_bypasses_plan_gate?(%Task{} = task, actor) do
+    has_sponsor?(task) and human_actor?(actor) and non_agent_assignment?(task)
+  end
+
+  def sponsor_bypasses_plan_gate?(_task, _actor), do: false
+
+  defp has_sponsor?(%Task{sponsor_user_id: id}) when is_binary(id), do: true
+  defp has_sponsor?(_), do: false
+
+  defp human_actor?({:user, uuid}) when is_binary(uuid), do: true
+  defp human_actor?(_), do: false
+
+  # A task has "no agent involvement" for gate-bypass purposes when there
+  # is no agent scheduled for either the `execution` or `review` phase
+  # AND the coarse `assignee_id`/`assignee_type` is either unset or a
+  # user. `phase_has_agent?/1` runs FIRST because a per-phase agent
+  # override can coexist with a nil top-level `assignee_id`
+  # (task.assignee_id may not yet be derived if the task hasn't
+  # transitioned into that phase) — the previous `is_nil(assignee_id) or …`
+  # ordering short-circuited and granted bypass in that case even though
+  # an agent was queued to execute the work (task 019f6380 stage 4
+  # review finding).
+  defp non_agent_assignment?(%Task{} = task) do
+    cond do
+      phase_has_agent?(task) -> false
+      is_nil(task.assignee_id) -> true
+      task.assignee_type == "user" -> true
+      true -> false
+    end
+  end
+
+  # True when `phase_assignees` schedules an agent for the execution or
+  # review phase. Planning-phase agents don't count: the whole point of
+  # a planner agent is to produce a plan, at which point the normal
+  # `current_plan/1` gate opens and the bypass is moot.
+  defp phase_has_agent?(%Task{phase_assignees: pa}) when is_map(pa) do
+    phase_pair_agent?(Map.get(pa, "execution")) or
+      phase_pair_agent?(Map.get(pa, "review"))
+  end
+
+  defp phase_has_agent?(_), do: false
+
+  defp phase_pair_agent?(%{"assignee_type" => "agent"}), do: true
+  defp phase_pair_agent?(%{"assignee_type" => "user"}), do: false
+  # `per_phase_assignee/2` treats a bare `%{"assignee_id" => id}` (no
+  # explicit type) as an agent — mirror that here so both resolvers agree.
+  defp phase_pair_agent?(%{"assignee_id" => id}) when is_binary(id), do: true
+  defp phase_pair_agent?(_), do: false
+
   @doc """
   Returns `:ok` if `task` has an approved plan, otherwise
   `{:error, :no_approved_plan}`. Used to gate transitions into execution
   phases (`in_progress`, `in_review`, `deploying`, `done`).
+
+  Two-arity form preserves the pre-actor-threading behavior by
+  defaulting `actor` to `:system` — every internal orchestration caller
+  (task router, stack manager, webhook controller) stays on the same
+  gate they had before task 019f6380 landed.
+
+  Three-arity form consults `sponsor_bypasses_plan_gate?/2`: when the
+  bypass fires (human sponsor, no agent, human actor) the gate opens
+  even without an approved plan.
   """
-  def require_approved_plan_for(%Task{} = task, new_status) do
+  def require_approved_plan_for(%Task{} = task, new_status),
+    do: require_approved_plan_for(task, new_status, :system)
+
+  def require_approved_plan_for(%Task{} = task, new_status, actor) do
     cond do
       new_status not in @execution_phase_statuses ->
         :ok
@@ -2301,6 +2414,9 @@ defmodule Platform.Tasks do
         :ok
 
       current_plan(task.id) ->
+        :ok
+
+      sponsor_bypasses_plan_gate?(task, actor) ->
         :ok
 
       true ->
@@ -2398,9 +2514,19 @@ defmodule Platform.Tasks do
   Non-`in_progress` transitions skip the freeze path entirely and behave
   exactly as before.
   """
-  def transition_task(%Task{} = task, new_status) do
+  def transition_task(%Task{} = task, new_status),
+    do: transition_task(task, new_status, :system)
+
+  @doc """
+  Actor-aware variant of `transition_task/2`. `actor` is threaded into
+  `require_approved_plan_for/3` so the sponsor-bypass rule can fire when
+  a human user is moving a sponsor-only task with no agent involvement
+  (see `sponsor_bypasses_plan_gate?/2`). Every other guard behaves
+  identically to `transition_task/2`.
+  """
+  def transition_task(%Task{} = task, new_status, actor) do
     with :ok <- require_deploy_target_for(task, new_status),
-         :ok <- require_approved_plan_for(task, new_status),
+         :ok <- require_approved_plan_for(task, new_status, actor),
          :ok <- maybe_prepare_transition(task, new_status),
          {:ok, %{updated: updated, frozen: frozen}} <-
            transition_with_policy2_freeze(task, new_status) do
@@ -2500,7 +2626,19 @@ defmodule Platform.Tasks do
 
   Returns `{:ok, task}` or `{:error, :invalid_drop | :unknown_column | changeset}`.
   """
-  def drop_task_to_column(%Task{} = task, column) do
+  def drop_task_to_column(%Task{} = task, column),
+    do: drop_task_to_column(task, column, :system)
+
+  @doc """
+  Actor-aware variant of `drop_task_to_column/2`. `actor` is threaded
+  into `require_approved_plan_for/3` so a human user dropping a
+  sponsor-only task (no agent involvement) can move it across execution
+  columns without an approved plan — see
+  `sponsor_bypasses_plan_gate?/2` for the full rule. Every other guard
+  and the underlying changeset write are unchanged from
+  `drop_task_to_column/2`.
+  """
+  def drop_task_to_column(%Task{} = task, column, actor) do
     case Map.get(@drop_target_status, column) do
       nil ->
         {:error, :unknown_column}
@@ -2516,7 +2654,8 @@ defmodule Platform.Tasks do
           target_status not in allowed ->
             {:error, :invalid_drop}
 
-          require_approved_plan_for(task, target_status) == {:error, :no_approved_plan} ->
+          require_approved_plan_for(task, target_status, actor) ==
+              {:error, :no_approved_plan} ->
             {:error, :no_approved_plan}
 
           # ADR 0042 Decision 4: manual drops also honour the stack

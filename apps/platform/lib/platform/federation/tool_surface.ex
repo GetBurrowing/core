@@ -3394,8 +3394,18 @@ defmodule Platform.Federation.ToolSurface do
   # end)` inline here, the sponsor + deploy_target clear-tests will go
   # red — that's the guard. See ADR 0042 for the sponsor null-clears
   # contract and ADR 0044 for the assignee auto-routing.
-  def execute("task_update", args, _context) do
+  # As of ADR 0042 §sponsor-bypass (task 019f6380 stage 2), MCP-initiated
+  # status transitions in `task_update` invoke `Tasks.require_approved_plan_for/3`
+  # with an agent-typed actor derived from the MCP call context. Previously
+  # this path routed straight through `Tasks.transition_task_status/2`
+  # (the base primitive, no gate), which meant an agent calling `task_update`
+  # could self-transition to `in_progress` / `done` without an approved
+  # plan — precisely the pathology the gate exists to prevent. The gate
+  # call below closes that hole so the sponsor-bypass rule remains a
+  # HUMAN-only exemption regardless of entry surface.
+  def execute("task_update", args, context) do
     task_id = Map.get(args, "task_id") || Map.get(args, "id")
+    actor = actor_from_mcp_context(context)
 
     case Tasks.get_task_record(task_id) do
       nil ->
@@ -3436,10 +3446,15 @@ defmodule Platform.Federation.ToolSurface do
           # CURRENT status to derive the flat pointer, so we apply it
           # before any status transition — otherwise a same-call
           # phase-slot write for the target phase would still see the
-          # old phase's derivation.
+          # old phase's derivation. The plan-approval gate runs AFTER
+          # phase_attrs so a same-call `phase_assignees.execution =
+          # <user>` rewrite is visible to `sponsor_bypasses_plan_gate?/2`
+          # (the predicate reads phase-resolved assignees, not the
+          # pre-update snapshot).
           with :ok <- auto_check,
                {:ok, updated} <- maybe_update_task(task, non_status_flat),
                {:ok, updated} <- maybe_apply_phase_assignees(updated, phase_attrs),
+               :ok <- maybe_check_plan_gate(updated, status_change, actor),
                {:ok, updated} <- maybe_transition_status(updated, status_change) do
             # `Tasks.update_task/2` and `Tasks.transition_task_status/2`
             # return the un-preloaded struct. Refresh sponsor so
@@ -3461,6 +3476,23 @@ defmodule Platform.Federation.ToolSurface do
                      "To retire a non-started task without walking it through in_progress, " <>
                      "transition to 'cancelled' (terminal, allowed from backlog/planning/" <>
                      "in_progress/blocked/stack_pending)."
+               }}
+
+            {:error, :no_approved_plan} ->
+              # Task 019f6380 stage 2: agent MCP calls that try to
+              # transition into an execution phase without an approved
+              # plan get the same friendly envelope shape as the
+              # `:invalid_transition` case. Sponsor-bypass does NOT fire
+              # for agent actors — that's the whole point of the actor
+              # check in `sponsor_bypasses_plan_gate?/2`.
+              {:error,
+               %{
+                 error:
+                   "Cannot transition to '#{status_change}': task has no approved plan and is not a sponsor-bypass candidate",
+                 recoverable: true,
+                 suggestion:
+                   "Create a plan (plan_create) and approve it (plan_approve) before transitioning to an execution phase. " <>
+                     "The sponsor-bypass exemption only applies to human-initiated moves on sponsor-only tasks with no agent involvement."
                }}
 
             {:error, :no_deploy_target_resolved} ->
@@ -3520,6 +3552,42 @@ defmodule Platform.Federation.ToolSurface do
 
   defp maybe_transition_status(task, new_status),
     do: Tasks.transition_task_status(task, new_status)
+
+  # Task 019f6380 stage 2: consult `Tasks.require_approved_plan_for/3`
+  # before an MCP-initiated status transition. When there's no status
+  # change in this call (`nil`), skip the check entirely — bare
+  # metadata updates should never hit the plan gate. Also skip when the
+  # transition would fail as `:invalid_transition` in
+  # `transition_task_status/2` — otherwise the gate would mask the more-
+  # specific transition-table error (e.g. `cancelled → in_progress`
+  # would surface as `:no_approved_plan` instead of the terminal-state
+  # refusal). When the gate returns `{:error, :no_approved_plan}`,
+  # propagate as-is so the outer `with` chain hits the friendly envelope
+  # branch above.
+  defp maybe_check_plan_gate(_task, nil, _actor), do: :ok
+
+  defp maybe_check_plan_gate(task, new_status, actor) do
+    if Tasks.transition_valid?(task, new_status) do
+      Tasks.require_approved_plan_for(task, new_status, actor)
+    else
+      :ok
+    end
+  end
+
+  # Derive an `actor` tuple for the plan-gate call from the MCP call
+  # context. MCP callers are agents by default — the `:agent_id` key
+  # is the standard shape (see e.g. `space_leave`, `space_list` above).
+  # An absent `:agent_id` falls back to the bare `:agent` atom, which
+  # `sponsor_bypasses_plan_gate?/2` treats as non-human and therefore
+  # never grants the sponsor-bypass exemption.
+  defp actor_from_mcp_context(context) when is_map(context) do
+    case Map.get(context, :agent_id) do
+      id when is_binary(id) -> {:agent, id}
+      _ -> :agent
+    end
+  end
+
+  defp actor_from_mcp_context(_context), do: :agent
 
   # Shared envelope for `TaskAttrs.check_auto_approve_preconditions/4`
   # rejections — both `task_create` and `task_update` surface the identical

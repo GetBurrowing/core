@@ -1443,7 +1443,14 @@ defmodule PlatformWeb.TasksLive do
 
     socket =
       if task do
-        case Tasks.transition_task(task, new_status) do
+        # LiveView is user-facing regardless of session state — thread the
+        # `{:user, _}` actor through so `Tasks.require_approved_plan_for/3`
+        # can fire the sponsor-bypass rule (ADR 0042 §sponsor-bypass, task
+        # 019f6380). If `current_user_id` is `nil` (defensive edge), the
+        # actor is `{:user, nil}` which still pattern-matches `{:user, _}`;
+        # bypass eligibility is protected by the sponsor+no-agent
+        # predicate, not by session authentication.
+        case Tasks.transition_task(task, new_status, {:user, socket.assigns[:current_user_id]}) do
           {:ok, updated} ->
             socket
             |> put_flash(:info, "Task moved to #{new_status}.")
@@ -2540,7 +2547,12 @@ defmodule PlatformWeb.TasksLive do
     if is_nil(task) do
       {:noreply, put_flash(socket, :error, "Task not found.")}
     else
-      case Tasks.drop_task_to_column(task, column) do
+      # Thread the LiveView user actor into the drag-and-drop drop so
+      # `Tasks.require_approved_plan_for/3` inside `drop_task_to_column/3`
+      # can fire the sponsor-bypass rule (ADR 0042 §sponsor-bypass, task
+      # 019f6380). See the parallel comment on the `transition_task`
+      # handler above for the `nil` current-user-id case.
+      case Tasks.drop_task_to_column(task, column, {:user, socket.assigns[:current_user_id]}) do
         {:ok, _updated} ->
           {:noreply,
            socket
