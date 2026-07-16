@@ -20,6 +20,10 @@ defmodule Platform.Orchestration.RuntimeSupervision do
     "assignment.accepted" => nil,
     "assignment.rejected" => "abandoned",
     "execution.acked" => nil,
+    # `nil` — silence is an operator override, orthogonal to lifecycle
+    # state (same rationale as `execution.acked`). See LeaseManager.silence/3
+    # and the `alarm_silence` MCP tool (task 019f6791-c01b stage 3).
+    "execution.alarm_silenced" => nil,
     "execution.started" => "active",
     "execution.heartbeat" => "active",
     "execution.progress" => "active",
@@ -504,6 +508,13 @@ defmodule Platform.Orchestration.RuntimeSupervision do
 
       "execution.acked" ->
         "Runtime #{runtime} acked dispatch for #{event.phase}"
+
+      "execution.alarm_silenced" ->
+        silenced_until =
+          event.payload["silenced_until"] || event.payload[:silenced_until] || "unknown"
+
+        reason = event.payload["reason"] || event.payload[:reason] || "no reason provided"
+        "Runtime #{runtime} silenced no-ack alarm until #{silenced_until}: #{reason}"
 
       "execution.started" ->
         "Runtime #{runtime} started execution (worker=#{(lease && lease.runtime_worker_ref) || "unknown"})"

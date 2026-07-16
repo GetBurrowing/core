@@ -696,6 +696,53 @@ defmodule Platform.Audit.TelemetryHandlerTest do
     end
   end
 
+  describe "orchestration.alarm_silence bridging (task 019f6791-c01b stage 3)" do
+    test "alarm_silence event persists with resource pointing at the task" do
+      task_id = Ecto.UUID.generate()
+      runtime_id = "runtime-alarm-silence-test-#{System.unique_integer([:positive])}"
+      stage_id = Ecto.UUID.generate()
+
+      silenced_until_iso =
+        DateTime.utc_now() |> DateTime.add(1800, :second) |> DateTime.to_iso8601()
+
+      :telemetry.execute(
+        [:platform, :orchestration, :alarm_silence],
+        %{count: 1},
+        %{
+          task_id: task_id,
+          stage_id: stage_id,
+          silenced_until: silenced_until_iso,
+          reason: "operator override — stale MCP catalog",
+          runtime_id: runtime_id,
+          actor_type: "system",
+          resource_type: "task",
+          resource_id: task_id,
+          action: "silence"
+        }
+      )
+
+      [event] = Audit.list(event_type: "platform.orchestration.alarm_silence")
+      assert event.resource_type == "task"
+      assert event.resource_id == task_id
+      assert event.actor_type == "system"
+      assert event.action == "silence"
+      assert event.metadata["task_id"] == task_id
+      assert event.metadata["stage_id"] == stage_id
+      assert event.metadata["reason"] == "operator override — stale MCP catalog"
+      assert event.metadata["runtime_id"] == runtime_id
+      # Top-level fields are deduplicated out of metadata.
+      refute Map.has_key?(event.metadata, "resource_type")
+      refute Map.has_key?(event.metadata, "resource_id")
+      refute Map.has_key?(event.metadata, "actor_type")
+      refute Map.has_key?(event.metadata, "action")
+    end
+
+    test "handler is attached to the alarm_silence event" do
+      events = TelemetryHandler.events()
+      assert [:platform, :orchestration, :alarm_silence] in events
+    end
+  end
+
   describe "meeting scribe dispatch fallback bridging (task 019f5e0b)" do
     test "assignee_unresolvable event persists with resource pointing at the agent" do
       agent_id = Ecto.UUID.generate()

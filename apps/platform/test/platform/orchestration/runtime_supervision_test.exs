@@ -154,6 +154,47 @@ defmodule Platform.Orchestration.RuntimeSupervisionTest do
     assert progress_msg != nil
   end
 
+  test "execution.alarm_silenced is a recognised event_type and does NOT flip lease status" do
+    # Task 019f6791-c01b stage 3 — silence is orthogonal to lifecycle
+    # (same rule as execution.acked). The @event_statuses entry maps to
+    # `nil`, so record_event/1 must accept it AND leave any existing
+    # active lease's status unchanged.
+    task = create_task!()
+    stage_id = Ecto.UUID.generate()
+
+    # Seed an active lease first so we can prove silenced-event doesn't
+    # overwrite it.
+    assert {:ok, _started} =
+             RuntimeSupervision.record_event(%{
+               "task_id" => task.id,
+               "phase" => "execution",
+               "runtime_id" => "runtime:test",
+               "event_type" => "execution.started"
+             })
+
+    pre_lease = RuntimeSupervision.current_lease_for_task(task.id)
+    assert pre_lease.status == "active"
+
+    assert {:ok, event} =
+             RuntimeSupervision.record_event(%{
+               "task_id" => task.id,
+               "phase" => "execution",
+               "runtime_id" => "runtime:test",
+               "event_type" => "execution.alarm_silenced",
+               "payload" => %{
+                 "stage_id" => stage_id,
+                 "silenced_until" => DateTime.utc_now() |> DateTime.to_iso8601(),
+                 "reason" => "operator override"
+               }
+             })
+
+    assert event.event_type == "execution.alarm_silenced"
+
+    post_lease = RuntimeSupervision.current_lease_for_task(task.id)
+    assert post_lease.status == "active"
+    assert post_lease.id == pre_lease.id
+  end
+
   test "current_lease_for_task_runtime/2 expires stale leases on lookup" do
     task = create_task!()
 

@@ -866,6 +866,157 @@ defmodule Platform.Orchestration.TaskRouterTest do
     end
   end
 
+  describe "no-ack silence (task 019f6791-c01b stage 2)" do
+    # These tests cover the silence-honoring branch in
+    # `handle_info(:check_no_ack, ...)`. `LeaseManager.silence/3` is the
+    # operator escape hatch installed by the `alarm_silence` MCP tool
+    # (stage 3 of this task). The router must NOT fire
+    # `execution.no_ack_timeout` while the silence is in effect, must
+    # reschedule the check for `until + 1s`, and must resume normal
+    # fire-on-expiry once the silence lapses.
+
+    test "silenced lease: :check_no_ack reschedules, no broadcast, no state change",
+         %{task: task, assignee: assignee, stage: stage} do
+      Phoenix.PubSub.subscribe(Platform.PubSub, "tasks:board")
+      Phoenix.PubSub.subscribe(Platform.PubSub, "runtime:#{assignee.id}")
+
+      stage
+      |> Ecto.Changeset.change(%{status: "running", started_at: DateTime.utc_now()})
+      |> Platform.Repo.update!()
+
+      {:ok, pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
+      assert_receive %Phoenix.Socket.Broadcast{event: "attention"}, 1_000
+      Process.sleep(100)
+
+      # Install a short silence — 400ms in the future — so the reschedule
+      # target is reachable within test time budget.
+      until = DateTime.add(DateTime.utc_now(), 400, :millisecond)
+      :ok = LeaseManager.silence(task.id, until, "cache-miss simulation")
+
+      assert %{silenced_until: %DateTime{}} = LeaseManager.get(task.id)
+
+      space = ExecutionSpace.find_by_task_id(task.id)
+      before_msgs = length(ExecutionSpace.list_messages_with_participants(space.id))
+
+      # Force `:check_no_ack` NOW — the silence-honoring branch must
+      # reschedule via `Process.send_after` and return without firing.
+      send(pid, :check_no_ack)
+      Process.sleep(75)
+
+      # Silenced: no broadcast on tasks:board.
+      refute_received {:runtime_event, %{event_type: "execution.no_ack_timeout"}}
+
+      # Silenced: no_ack_fired? stays false.
+      lease_after = LeaseManager.get(task.id)
+      refute lease_after.no_ack_fired?
+
+      # Silenced: router still :running, no `:stalled` transition.
+      status = TaskRouter.current_status(task.id)
+      assert status.status == :running
+
+      # Silenced: no blocker post to the execution space.
+      after_msgs = ExecutionSpace.list_messages_with_participants(space.id)
+      new_contents = Enum.drop(after_msgs, before_msgs) |> Enum.map(& &1.content)
+      refute Enum.any?(new_contents, &String.contains?(&1, "Executor never acked"))
+    end
+
+    test "silence lapses → next :check_no_ack fires normally",
+         %{task: task, assignee: assignee, stage: stage} do
+      Phoenix.PubSub.subscribe(Platform.PubSub, "tasks:board")
+
+      stage
+      |> Ecto.Changeset.change(%{status: "running", started_at: DateTime.utc_now()})
+      |> Platform.Repo.update!()
+
+      {:ok, pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
+      Process.sleep(100)
+
+      # Install a silence and immediately rewrite it into the past so the
+      # `DateTime.compare(now, until) == :lt` guard is false — this is the
+      # "silence lapsed by the time :check_no_ack ran" path. Bypasses
+      # `LeaseManager.silence/3`'s past-timestamp validation.
+      lease = LeaseManager.get(task.id)
+      assert lease, "expected LeaseManager row after dispatch"
+      past = DateTime.add(DateTime.utc_now(), -1_000, :millisecond)
+
+      :ets.insert(
+        :orchestration_lease_manager,
+        {task.id, %{lease | silenced_until: past}}
+      )
+
+      send(pid, :check_no_ack)
+      Process.sleep(100)
+
+      # Silence lapsed → normal fire path: broadcast + mark fired + stall.
+      assert_received {:runtime_event, %{event_type: "execution.no_ack_timeout"} = event}
+      assert event.task_id == task.id
+
+      assert %{no_ack_fired?: true} = LeaseManager.get(task.id)
+
+      status = TaskRouter.current_status(task.id)
+      assert status.status == :stalled
+    end
+
+    test "silence + prior ack → :check_no_ack silent via ack clause (silence orthogonal)",
+         %{task: task, assignee: assignee, stage: stage} do
+      Phoenix.PubSub.subscribe(Platform.PubSub, "tasks:board")
+
+      stage
+      |> Ecto.Changeset.change(%{status: "running", started_at: DateTime.utc_now()})
+      |> Platform.Repo.update!()
+
+      {:ok, pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
+      Process.sleep(100)
+
+      # Ack lands first; then a silence is installed. `:check_no_ack` must
+      # match the earlier `ack_at: %DateTime{}` clause before ever
+      # reaching the silence branch — so silence is moot but not harmful.
+      :ok = LeaseManager.record_ack(task.id)
+      until = DateTime.add(DateTime.utc_now(), 5_000, :millisecond)
+      :ok = LeaseManager.silence(task.id, until, "moot but present")
+
+      assert %{ack_at: %DateTime{}, silenced_until: %DateTime{}} = LeaseManager.get(task.id)
+
+      send(pid, :check_no_ack)
+      Process.sleep(75)
+
+      refute_received {:runtime_event, %{event_type: "execution.no_ack_timeout"}}
+      assert %{no_ack_fired?: false} = LeaseManager.get(task.id)
+    end
+
+    test "silence set AFTER alarm fired → next :check_no_ack still no-ops via fired clause",
+         %{task: task, assignee: assignee, stage: stage} do
+      Phoenix.PubSub.subscribe(Platform.PubSub, "tasks:board")
+
+      stage
+      |> Ecto.Changeset.change(%{status: "running", started_at: DateTime.utc_now()})
+      |> Platform.Repo.update!()
+
+      {:ok, pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
+      Process.sleep(100)
+
+      # First :check_no_ack fires normally (no silence, no ack) → sets
+      # no_ack_fired?: true.
+      send(pid, :check_no_ack)
+      Process.sleep(100)
+      assert_received {:runtime_event, %{event_type: "execution.no_ack_timeout"}}
+      assert %{no_ack_fired?: true} = LeaseManager.get(task.id)
+
+      # Operator now installs a silence — a plausible if late intervention.
+      # The silence should NOT un-fire the alarm; subsequent :check_no_ack
+      # must still no-op via the `%{no_ack_fired?: true}` clause, which
+      # sits ABOVE the silence clause in the case expression.
+      until = DateTime.add(DateTime.utc_now(), 5_000, :millisecond)
+      :ok = LeaseManager.silence(task.id, until, "post-fire silence")
+
+      send(pid, :check_no_ack)
+      Process.sleep(75)
+
+      # No second broadcast; no state change.
+      refute_received {:runtime_event, %{event_type: "execution.no_ack_timeout"}}
+    end
+  end
+
   describe "router lifecycle (no assignment persistence)" do
     test "router starts and stops cleanly without persisting to DB", %{
       task: task,

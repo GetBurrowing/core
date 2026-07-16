@@ -1438,6 +1438,42 @@ defmodule Platform.Federation.ToolSurface do
           "As your FIRST tool call after being dispatched for a task, before you start reading code or planning steps. Without an ack the router fires an escalation alert in 5 minutes on `coding`/`review`/`deploying` stages (planning: same 5m ack window, longer safety-net)."
       },
       %{
+        name: "alarm_silence",
+        description:
+          "Operator escape hatch: suppress the `execution.no_ack_timeout` alarm for a stage's lease without firing a blocker. Use when your MCP client's tool cache lacks `task_ack` (a known cross-version issue where a session's catalog predates a new tool) and you KNOW a subagent is actively working the stage. Sets `silenced_until` on the lease so the TaskRouter's `:check_no_ack` reschedules instead of firing. Does NOT pause `stage_complete` / validation dispatch, does NOT clear on `record_ack/1`, dies with the stage transition. Audit-logged to the runtime_event stream AND `platform.orchestration.alarm_silence` audit rows. Capped at 24h — re-silence if the condition persists. Prefer `task_ack` if it's available; this exists to retire the `report_blocker(needs_human: false)` anti-pattern.",
+        parameters: %{
+          task_id: %{
+            type: "string",
+            required: true,
+            description: "UUID of the task whose lease you want to silence."
+          },
+          stage_id: %{
+            type: "string",
+            required: false,
+            description:
+              "Optional — the running stage_id from your dispatch context. When omitted the tool resolves it via `current_running_stage(current_plan(task_id))`, matching the `task_ack` convention."
+          },
+          until_seconds: %{
+            type: "integer",
+            required: true,
+            description:
+              "Silence duration in seconds from now. Must be between 60 (1m minimum — no accidental micro-silences) and 86_400 (24h maximum — no indefinite suppression). Relative window instead of an absolute ISO timestamp avoids clock-skew debates between operator and server."
+          },
+          reason: %{
+            type: "string",
+            required: true,
+            description:
+              "Human-readable justification for the silence, minimum 8 characters. Persisted in the runtime_event payload and audit row so an operator can later explain why the alarm was suppressed."
+          }
+        },
+        returns:
+          "%{task_id, stage_id, silenced_until, reason}. `silenced_until` is a %DateTime{} — the router re-arms `:check_no_ack` at `silenced_until + 1s`.",
+        limitations:
+          "Requires an active LeaseManager row for the task (the router must have already recorded the dispatch). Boot-race calls return `{:error, :not_found}` with a recoverable retry hint. `until_seconds` outside 60..86_400 returns a validation error. Silence does NOT prevent `stage_complete`, does NOT block dispatch of new stages, and dies when `clear/1` runs on the lease at stage transition. Use `task_ack` in preference when your MCP catalog carries it.",
+        when_to_use:
+          "As an operator override when your MCP client cache doesn't include `task_ack` and a no-ack alarm would otherwise fire a spurious `needs_human=true` blocker. Not for general liveness — use `task_ack` for that. Not for pausing execution — use `report_blocker(needs_human: true)` when the stage is actually stuck."
+      },
+      %{
         name: "task_dependencies",
         description:
           "Inspect what a task is waiting on (its declared dependencies + which are still unmet) and what would be unblocked by completing it (its inverse dependents).",
@@ -3946,6 +3982,210 @@ defmodule Platform.Federation.ToolSurface do
            error: "Failed to record ack: #{inspect(reason)}",
            recoverable: true,
            suggestion: "Retry task_ack or push validation_pass evidence to prove liveness."
+         }}
+    end
+  end
+
+  # ── alarm_silence (task 019f6791-c01b stage 3) ────────────────────────
+  # Operator escape hatch for the `execution.no_ack_timeout` alarm when
+  # the MCP client cache lacks `task_ack`. Sets `silenced_until` on the
+  # LeaseManager row so the router's `:check_no_ack` handler reschedules
+  # instead of firing. Emits a persistent runtime_event AND telemetry
+  # (bridged to Audit by Platform.Audit.TelemetryHandler).
+  def execute("alarm_silence", args, context) do
+    task_id = Map.get(args, "task_id")
+    supplied_stage_id = Map.get(args, "stage_id")
+    until_seconds = Map.get(args, "until_seconds")
+    reason = Map.get(args, "reason")
+
+    with :ok <- validate_alarm_silence_task_id(task_id),
+         :ok <- validate_alarm_silence_until_seconds(until_seconds),
+         :ok <- validate_alarm_silence_reason(reason),
+         {:ok, _task} <- fetch_alarm_silence_task(task_id),
+         {:ok, stage_id} <- resolve_ack_stage_id(task_id, supplied_stage_id) do
+      until = DateTime.add(DateTime.utc_now(), until_seconds, :second)
+      emit_alarm_silence(task_id, stage_id, until, reason, context)
+    else
+      {:error, :no_running_stage} ->
+        {:error,
+         %{
+           error: "task_id=#{task_id} has no running stage — cannot silence without a stage_id.",
+           recoverable: true,
+           suggestion:
+             "Supply the stage_id from your dispatch payload, or call task_start first if the task hasn't been transitioned into in_progress yet."
+         }}
+
+      {:error, envelope} when is_map(envelope) ->
+        {:error, envelope}
+    end
+  end
+
+  defp validate_alarm_silence_task_id(nil), do: alarm_silence_missing_field_error("task_id")
+  defp validate_alarm_silence_task_id(""), do: alarm_silence_missing_field_error("task_id")
+  defp validate_alarm_silence_task_id(id) when is_binary(id), do: :ok
+  defp validate_alarm_silence_task_id(_), do: alarm_silence_missing_field_error("task_id")
+
+  defp validate_alarm_silence_until_seconds(nil),
+    do: alarm_silence_missing_field_error("until_seconds")
+
+  defp validate_alarm_silence_until_seconds(n) when is_integer(n) and n >= 60 and n <= 86_400,
+    do: :ok
+
+  defp validate_alarm_silence_until_seconds(_) do
+    {:error,
+     %{
+       error: "until_seconds must be an integer in the range 60..86_400 (1m..24h)",
+       recoverable: true,
+       suggestion:
+         "Pass a positive integer between 60 (1 minute floor) and 86_400 (24 hour cap). Re-silence if you need to extend."
+     }}
+  end
+
+  defp validate_alarm_silence_reason(reason)
+       when is_binary(reason) and byte_size(reason) >= 8,
+       do: :ok
+
+  defp validate_alarm_silence_reason(_) do
+    {:error,
+     %{
+       error: "reason must be a string of at least 8 characters",
+       recoverable: true,
+       suggestion:
+         "Describe why you're silencing the alarm — the reason is audit-logged so operators can later explain the override."
+     }}
+  end
+
+  defp alarm_silence_missing_field_error(field) do
+    {:error,
+     %{
+       error: "#{field} is required",
+       recoverable: true,
+       suggestion:
+         "alarm_silence needs task_id, until_seconds (60..86_400), and reason (>= 8 chars). Optional: stage_id (resolves from current running stage if omitted)."
+     }}
+  end
+
+  defp fetch_alarm_silence_task(task_id) do
+    case Tasks.get_task_record(task_id) do
+      nil ->
+        {:error,
+         %{
+           error: "Task not found: #{task_id}",
+           recoverable: false,
+           suggestion:
+             "Verify the task_id matches your dispatch payload; use task_list to enumerate live tasks."
+         }}
+
+      task ->
+        {:ok, task}
+    end
+  end
+
+  # Persist the runtime_event, emit telemetry, and call LeaseManager.silence/3.
+  # The LeaseManager call is the source of truth for the router — if it
+  # returns :not_found, we surface a recoverable error without emitting
+  # audit noise for a lease that doesn't exist.
+  defp emit_alarm_silence(task_id, stage_id, until, reason, context) do
+    case Platform.Orchestration.LeaseManager.silence(task_id, until, reason) do
+      :ok ->
+        record_alarm_silence_side_effects(task_id, stage_id, until, reason, context)
+
+      {:error, :not_found} ->
+        {:error,
+         %{
+           error: "No active lease for task #{task_id} — dispatch not yet recorded.",
+           recoverable: true,
+           suggestion:
+             "Wait for the router to arm liveness (typically <1s post-dispatch) then retry."
+         }}
+
+      {:error, :invalid_until} ->
+        {:error,
+         %{
+           error: "silenced_until must be strictly in the future",
+           recoverable: true,
+           suggestion:
+             "The lease manager rejected the computed silenced_until as non-future — this usually means clock skew; try a slightly larger until_seconds."
+         }}
+
+      {:error, :cap_exceeded} ->
+        {:error,
+         %{
+           error: "silenced_until exceeds the 24h cap",
+           recoverable: true,
+           suggestion:
+             "Silence is capped at 24 hours to prevent indefinite alarm suppression. Use a smaller until_seconds and re-silence if the condition persists."
+         }}
+    end
+  end
+
+  defp record_alarm_silence_side_effects(task_id, stage_id, until, reason, context) do
+    silenced_at = DateTime.utc_now()
+    runtime_id = Map.get(context, :runtime_id) || "tool-surface"
+
+    attrs = %{
+      "task_id" => task_id,
+      "phase" => current_phase_for_blocker(task_id),
+      "runtime_id" => runtime_id,
+      "event_type" => "execution.alarm_silenced",
+      "execution_space_id" => execution_space_id_for_task(task_id),
+      "occurred_at" => silenced_at,
+      "payload" => %{
+        "stage_id" => stage_id,
+        "silenced_until" => DateTime.to_iso8601(until),
+        "reason" => reason,
+        "runtime_id" => runtime_id
+      }
+    }
+
+    # Persist the runtime_event first — it's the durable audit trail and
+    # PubSub broadcast target. Telemetry is fire-and-forget on top; a
+    # runtime_event persist failure returns an error envelope without
+    # emitting telemetry (which would create an audit row for a silence
+    # that never actually landed in the event stream).
+    case Platform.Orchestration.record_runtime_event(attrs) do
+      {:ok, _event} ->
+        # silenced_until is passed as ISO-8601 because the audit
+        # TelemetryHandler's ensure_json_safe/1 recurses into maps and
+        # DateTime (which IS a map) doesn't implement Enumerable — an
+        # unwrapped %DateTime{} in the metadata crashes the handler.
+        # actor_type is "system" (not "runtime") because
+        # Platform.Audit.Event's actor_type enum only accepts
+        # system|user|agent|anonymous|federated_user, and actor_id is
+        # left nil because runtime IDs are opaque strings, not UUIDs
+        # (the schema casts actor_id as Ecto.UUID). runtime_id + the
+        # opaque caller identity ride in metadata for correlation.
+        :telemetry.execute(
+          [:platform, :orchestration, :alarm_silence],
+          %{count: 1},
+          %{
+            task_id: task_id,
+            stage_id: stage_id,
+            silenced_until: DateTime.to_iso8601(until),
+            reason: reason,
+            runtime_id: runtime_id,
+            actor_type: "system",
+            resource_type: "task",
+            resource_id: task_id,
+            action: "silence"
+          }
+        )
+
+        {:ok,
+         %{
+           task_id: task_id,
+           stage_id: stage_id,
+           silenced_until: until,
+           reason: reason
+         }}
+
+      {:error, reason} ->
+        {:error,
+         %{
+           error: "Failed to record alarm silence: #{inspect(reason)}",
+           recoverable: true,
+           suggestion:
+             "Retry alarm_silence. LeaseManager.silence has already applied; the runtime_event will re-emit on retry."
          }}
     end
   end

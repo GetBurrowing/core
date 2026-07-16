@@ -97,7 +97,15 @@ defmodule Platform.Audit.TelemetryHandler do
     # source_workspace_id + target_workspace_id so a reviewer can see
     # which pairing was refused. Both use actor_type: "system".
     [:platform, :deploy, :project_files, :deployed],
-    [:platform, :deploy, :project_files, :cross_tenant_rejected]
+    [:platform, :deploy, :project_files, :cross_tenant_rejected],
+    # Task 019f6791-c01b stage 3 — alarm_silence MCP tool. Emitted by
+    # Platform.Federation.ToolSurface.execute("alarm_silence", ...) after a
+    # successful LeaseManager.silence + runtime_event persist. Metadata
+    # carries actor_id (runtime_id), actor_type "runtime", resource_type
+    # "task", resource_id (task_id), plus stage_id/silenced_until/reason
+    # payload. Emitted synchronously (default handle_event/4 clause) so
+    # the audit row exists by the time the tool response returns.
+    [:platform, :orchestration, :alarm_silence]
   ]
 
   @doc "Attach the handler to all registered platform telemetry events."

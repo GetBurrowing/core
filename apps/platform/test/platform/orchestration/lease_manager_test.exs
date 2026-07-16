@@ -266,6 +266,173 @@ defmodule Platform.Orchestration.LeaseManagerTest do
     end
   end
 
+  describe "silence/3" do
+    test "record_dispatch/4 initializes silenced_until to nil so freshly-armed leases are not silenced" do
+      task_id = new_task_id()
+      LeaseManager.record_dispatch(task_id, new_stage_id(), "coding", DateTime.utc_now())
+
+      assert %{silenced_until: nil} = LeaseManager.get(task_id)
+    end
+
+    test "sets silenced_until on an armed lease, preserves every other field" do
+      task_id = new_task_id()
+      LeaseManager.record_dispatch(task_id, new_stage_id(), "coding", DateTime.utc_now())
+      before = LeaseManager.get(task_id)
+
+      until = DateTime.add(DateTime.utc_now(), 30 * 60, :second)
+
+      assert :ok =
+               LeaseManager.silence(task_id, until, "operator escape hatch — MCP cache miss")
+
+      after_silence = LeaseManager.get(task_id)
+      assert after_silence.silenced_until == until
+
+      # Every other field is untouched — silence is orthogonal to lifecycle state.
+      for key <-
+            ~w(stage_id stage_kind dispatched_at ack_at last_progress_at safety_net_at no_ack_at no_ack_fired? safety_net_fired?)a do
+        assert Map.fetch!(after_silence, key) == Map.fetch!(before, key),
+               "silence/3 mutated #{key} — expected only silenced_until to change"
+      end
+    end
+
+    test "returns {:error, :not_found} when no lease exists" do
+      until = DateTime.add(DateTime.utc_now(), 60, :second)
+
+      assert LeaseManager.silence(new_task_id(), until, "no lease yet — retryable") ==
+               {:error, :not_found}
+    end
+
+    test "rejects past `until` with {:error, :invalid_until}" do
+      task_id = new_task_id()
+      LeaseManager.record_dispatch(task_id, new_stage_id(), "coding", DateTime.utc_now())
+
+      # Comfortably in the past.
+      past = DateTime.add(DateTime.utc_now(), -60, :second)
+
+      assert LeaseManager.silence(task_id, past, "attempted retroactive silence") ==
+               {:error, :invalid_until}
+
+      # Lease still has silenced_until: nil — the failed call must not mutate state.
+      assert %{silenced_until: nil} = LeaseManager.get(task_id)
+    end
+
+    test "rejects `until` equal to now with {:error, :invalid_until}" do
+      # Edge of the strict-greater-than check — an `until` that equals `now`
+      # would immediately lapse and provides no useful suppression window.
+      task_id = new_task_id()
+      LeaseManager.record_dispatch(task_id, new_stage_id(), "coding", DateTime.utc_now())
+
+      # Race note: this test can flake if `DateTime.utc_now/0` inside the
+      # handler advances past this `now` before the compare runs, in which
+      # case `until` is actually in the past → still :invalid_until. Either
+      # way the assertion holds.
+      now = DateTime.utc_now()
+
+      assert LeaseManager.silence(task_id, now, "equal-to-now silence") ==
+               {:error, :invalid_until}
+    end
+
+    test "rejects `until` past the 24h cap with {:error, :cap_exceeded}" do
+      task_id = new_task_id()
+      LeaseManager.record_dispatch(task_id, new_stage_id(), "coding", DateTime.utc_now())
+
+      # 25h > cap
+      too_far = DateTime.add(DateTime.utc_now(), 25 * 60 * 60, :second)
+
+      assert LeaseManager.silence(task_id, too_far, "operator forgot the cap") ==
+               {:error, :cap_exceeded}
+
+      assert %{silenced_until: nil} = LeaseManager.get(task_id)
+    end
+
+    test "accepts `until` exactly at the 24h boundary" do
+      # Boundary is inclusive — `until == cap` returns :ok. Because a few
+      # microseconds elapse between the caller's clock and the handler's
+      # clock, target 24h - 5s to avoid a boundary flake.
+      task_id = new_task_id()
+      LeaseManager.record_dispatch(task_id, new_stage_id(), "coding", DateTime.utc_now())
+
+      just_inside = DateTime.add(DateTime.utc_now(), 24 * 60 * 60 - 5, :second)
+
+      assert :ok = LeaseManager.silence(task_id, just_inside, "long-running planner reply")
+      assert %{silenced_until: ^just_inside} = LeaseManager.get(task_id)
+    end
+
+    test "re-silencing overwrites the prior silenced_until timestamp" do
+      task_id = new_task_id()
+      LeaseManager.record_dispatch(task_id, new_stage_id(), "coding", DateTime.utc_now())
+
+      first = DateTime.add(DateTime.utc_now(), 60, :second)
+      second = DateTime.add(DateTime.utc_now(), 900, :second)
+
+      assert :ok = LeaseManager.silence(task_id, first, "initial silence")
+      assert %{silenced_until: ^first} = LeaseManager.get(task_id)
+
+      assert :ok = LeaseManager.silence(task_id, second, "extended silence")
+      assert %{silenced_until: ^second} = LeaseManager.get(task_id)
+    end
+
+    test "record_ack/1 does NOT clear silenced_until — silence is orthogonal to ack" do
+      task_id = new_task_id()
+      LeaseManager.record_dispatch(task_id, new_stage_id(), "coding", DateTime.utc_now())
+
+      until = DateTime.add(DateTime.utc_now(), 30 * 60, :second)
+      assert :ok = LeaseManager.silence(task_id, until, "operator escape hatch")
+
+      assert :ok = LeaseManager.record_ack(task_id)
+
+      after_ack = LeaseManager.get(task_id)
+      # Ack landed.
+      assert after_ack.ack_at != nil
+      assert after_ack.no_ack_at == nil
+      assert after_ack.no_ack_fired? == false
+      # Silence survives the ack — it's an operator override, not lifecycle
+      # state.
+      assert after_ack.silenced_until == until
+    end
+
+    test "record_progress/1 does NOT clear silenced_until" do
+      # Documented invariant — progress evidence extends the safety-net but
+      # is not the same signal class as an operator-scoped silence override.
+      task_id = new_task_id()
+      LeaseManager.record_dispatch(task_id, new_stage_id(), "coding", DateTime.utc_now())
+
+      until = DateTime.add(DateTime.utc_now(), 30 * 60, :second)
+      assert :ok = LeaseManager.silence(task_id, until, "operator escape hatch")
+
+      assert :ok = LeaseManager.record_progress(task_id)
+
+      assert %{silenced_until: ^until} = LeaseManager.get(task_id)
+    end
+
+    test "clear/1 deletes the row so silence dies by side effect" do
+      task_id = new_task_id()
+      LeaseManager.record_dispatch(task_id, new_stage_id(), "coding", DateTime.utc_now())
+
+      until = DateTime.add(DateTime.utc_now(), 30 * 60, :second)
+      assert :ok = LeaseManager.silence(task_id, until, "operator escape hatch")
+
+      assert :ok = LeaseManager.clear(task_id)
+
+      # Row gone entirely — silence gone with it.
+      assert LeaseManager.get(task_id) == nil
+    end
+
+    test "re-dispatch on the same task_id resets silenced_until to nil (silence does not leak across stages)" do
+      # A stage transition upgrades the lease in place via record_dispatch —
+      # the fresh row MUST NOT carry the prior stage's silence.
+      task_id = new_task_id()
+      LeaseManager.record_dispatch(task_id, new_stage_id(), "coding", DateTime.utc_now())
+
+      until = DateTime.add(DateTime.utc_now(), 30 * 60, :second)
+      assert :ok = LeaseManager.silence(task_id, until, "silence on stage 1")
+
+      LeaseManager.record_dispatch(task_id, new_stage_id(), "review", DateTime.utc_now())
+
+      assert %{silenced_until: nil, stage_kind: "review"} = LeaseManager.get(task_id)
+    end
+  end
+
   describe "concurrent access" do
     test "100 concurrent readers survive alongside one writer without crashes or stale reads" do
       task_id = new_task_id()

@@ -615,7 +615,17 @@ defmodule Platform.Org.Wiki.ContextT4E2ETest do
       # its own lease. Fixes the root-cause bug where a completing
       # stage released the lease for the whole task, letting siblings
       # silently stall or double-dispatch.
-      "20260715210000_add_stage_id_to_execution_leases.exs"
+      "20260715210000_add_stage_id_to_execution_leases.exs",
+      # Task 019f6791 stage 4 — Router arch fix (alarm_silence rollout).
+      # Force-updates the four dispatch prompt templates (`dispatch.planning`,
+      # `dispatch.in_progress`, `dispatch.in_review`, `dispatch.deploying`)
+      # so the ack-first preamble also documents the `alarm_silence` MCP
+      # tool as the operator escape hatch when `task_ack` is missing from
+      # a caller's stale MCP tool cache. Retires the
+      # `report_blocker(needs_human: false)` ack-proxy anti-pattern by
+      # explicitly forbidding it in the copy. Content-only sync; no schema
+      # changes. Mirrors the force-update pattern at 20260715000000.
+      "20260715220000_refresh_dispatch_templates_alarm_silence_fallback.exs"
     ]
 
     defp t4_root, do: Mix.Project.project_file() |> Path.dirname()

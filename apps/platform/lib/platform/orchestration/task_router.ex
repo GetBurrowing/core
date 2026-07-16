@@ -291,18 +291,39 @@ defmodule Platform.Orchestration.TaskRouter do
         {:noreply, state}
 
       %{no_ack_fired?: true} ->
-        # Already fired for this dispatch — idempotent noop.
+        # Already fired for this dispatch — idempotent noop. Note: silence
+        # set AFTER the alarm already fired does NOT un-fire it; this clause
+        # must remain ahead of the silence clause below so a late silence
+        # doesn't accidentally re-arm.
         {:noreply, state}
 
-      lease ->
-        case LeaseManager.mark_no_ack_fired(task_id) do
-          {:ok, :fired} ->
-            fire_no_ack_alert(state, lease)
-            {:noreply, %{state | status: :stalled}}
+      %{silenced_until: %DateTime{} = until} = lease ->
+        # Operator silence installed via the `alarm_silence` MCP tool
+        # (task 019f6791-c01b stage 3). While the silence is in effect we
+        # reschedule `:check_no_ack` for `until + 1s` — the alarm re-arms
+        # exactly when the silence lapses without firing, transitioning
+        # to `:stalled`, or posting a blocker. If silence has already
+        # lapsed by the time this check runs, fall through to the normal
+        # fire path via `maybe_fire_no_ack/3`.
+        now = DateTime.utc_now()
 
-          _ ->
+        cond do
+          DateTime.compare(now, until) == :lt ->
+            remaining_ms = DateTime.diff(until, now, :millisecond) + 1_000
+            Process.send_after(self(), :check_no_ack, remaining_ms)
+
+            Logger.info(
+              "[TaskRouter] task #{state.task_id} no-ack alarm silenced until #{DateTime.to_iso8601(until)} — rescheduling check"
+            )
+
             {:noreply, state}
+
+          true ->
+            maybe_fire_no_ack(state, task_id, lease)
         end
+
+      lease ->
+        maybe_fire_no_ack(state, task_id, lease)
     end
   end
 
@@ -969,6 +990,22 @@ defmodule Platform.Orchestration.TaskRouter do
     }
 
     Tasks.broadcast_board({:runtime_event, event})
+  end
+
+  # Idempotency-guarded fire path shared by `handle_info(:check_no_ack, ...)`'s
+  # default no-silence branch and the silence-lapsed fall-through above.
+  # `mark_no_ack_fired/1` flips the LeaseManager row's `no_ack_fired?`
+  # atomically — if it returns anything other than `{:ok, :fired}`
+  # (already-fired race), we swallow the check with no state change.
+  defp maybe_fire_no_ack(%State{} = state, task_id, lease) do
+    case LeaseManager.mark_no_ack_fired(task_id) do
+      {:ok, :fired} ->
+        fire_no_ack_alert(state, lease)
+        {:noreply, %{state | status: :stalled}}
+
+      _ ->
+        {:noreply, state}
+    end
   end
 
   defp fire_no_ack_alert(%State{} = state, lease) do

@@ -34,8 +34,22 @@ defmodule Platform.Orchestration.LeaseManager do
         safety_net_at: DateTime.t() | nil,   # nil = safety-net disabled (manual_approval)
         no_ack_at: DateTime.t() | nil,       # nil = no-ack disabled OR ack received
         no_ack_fired?: boolean(),
-        safety_net_fired?: boolean()
+        safety_net_fired?: boolean(),
+        silenced_until: DateTime.t() | nil   # nil = no silence; DateTime = suppress :check_no_ack until this instant
       }
+
+  ## Silence semantics
+
+  `silence/3` is the operator escape hatch for the `execution.no_ack_timeout`
+  alarm — used by the `alarm_silence` MCP tool (task 019f6791-c01b stage 3)
+  when a subagent's MCP client cache lacks `task_ack`. Sets `silenced_until`
+  to an absolute future timestamp (capped at `now + 24h`). Orthogonal to
+  `ack_at` — `record_ack/1` does NOT clear the silence, and `silence/3`
+  does NOT clear ack state. `clear/1` deletes the row so a stage
+  transition ends any silence by side effect. Consumers (the router in
+  task 019f6791-c01b stage 2) check `silenced_until` when a
+  `:check_no_ack` timer fires and reschedule instead of firing when the
+  silence is still in effect.
 
   ## Concurrency
 
@@ -75,6 +89,13 @@ defmodule Platform.Orchestration.LeaseManager do
     "planning" => %{ack_ms: 5 * 60_000, safety_net_ms: 120 * 60_000},
     "manual_approval" => %{ack_ms: nil, safety_net_ms: nil}
   }
+
+  # Upper bound for `silence/3`. Prevents indefinite alarm suppression —
+  # operators must re-silence after 24h if the underlying condition
+  # persists. Value chosen to comfortably outlast the longest configured
+  # `safety_net_ms` (120 min for planning) while still forcing an
+  # operator revisit inside a working day.
+  @silence_cap_ms 24 * 60 * 60 * 1_000
 
   # ── Lifecycle ──────────────────────────────────────────────────────────────
 
@@ -155,6 +176,44 @@ defmodule Platform.Orchestration.LeaseManager do
   @spec record_ack(binary()) :: :ok | {:error, :not_found}
   def record_ack(task_id) when is_binary(task_id) do
     GenServer.call(__MODULE__, {:record_ack, task_id})
+  end
+
+  @doc """
+  Suppress the `execution.no_ack_timeout` alarm for the lease until
+  `until`. Operator escape hatch used by the `alarm_silence` MCP tool
+  (task 019f6791-c01b) — silence exists so an operator can tell the
+  router "I know a subagent is working this stage; don't fire the
+  no-ack alarm and don't post a `needs_human=true` blocker" without
+  the anti-pattern of calling `report_blocker(needs_human: false)`.
+
+  Semantics:
+
+    * `until` MUST be a `%DateTime{}` strictly greater than `now`.
+      Past or equal timestamps return `{:error, :invalid_until}`.
+    * `until` is capped at `now + 24h`. Larger values return
+      `{:error, :cap_exceeded}` and the caller must re-silence.
+    * `reason` (>= 8 char binary at the MCP boundary — this module
+      accepts any binary) is not persisted in the lease itself; the
+      caller emits an audit runtime_event alongside for durability.
+    * Silence is orthogonal to `ack_at`. `record_ack/1` does NOT
+      clear `silenced_until` (an ack is progress, silence is an
+      operator override — different lifecycles). Re-silencing on a
+      row that already has a `silenced_until` overwrites the
+      timestamp.
+    * Silence dies with the row: `clear/1` deletes the lease and
+      `record_dispatch/4` on a subsequent stage builds a fresh
+      `silenced_until: nil` row. Silence never leaks across stage
+      transitions.
+
+  Returns `:ok` on success, `{:error, :not_found}` when no lease
+  exists (the router hasn't recorded the dispatch yet — MCP tool
+  callers surface this as a recoverable retry hint).
+  """
+  @spec silence(binary(), DateTime.t(), binary()) ::
+          :ok | {:error, :not_found | :invalid_until | :cap_exceeded}
+  def silence(task_id, %DateTime{} = until, reason)
+      when is_binary(task_id) and is_binary(reason) do
+    GenServer.call(__MODULE__, {:silence, task_id, until, reason})
   end
 
   @doc """
@@ -248,11 +307,33 @@ defmodule Platform.Orchestration.LeaseManager do
       safety_net_at: maybe_add(dispatched_at, timeouts.safety_net_ms),
       no_ack_at: maybe_add(dispatched_at, timeouts.ack_ms),
       no_ack_fired?: false,
-      safety_net_fired?: false
+      safety_net_fired?: false,
+      silenced_until: nil
     }
 
     :ets.insert(@table, {task_id, lease})
     {:reply, :ok, state}
+  end
+
+  def handle_call({:silence, task_id, until, _reason}, _from, state) do
+    now = DateTime.utc_now()
+    cap = DateTime.add(now, @silence_cap_ms, :millisecond)
+
+    reply =
+      cond do
+        DateTime.compare(until, now) != :gt ->
+          {:error, :invalid_until}
+
+        DateTime.compare(until, cap) == :gt ->
+          {:error, :cap_exceeded}
+
+        true ->
+          update_lease(task_id, fn lease ->
+            Map.put(lease, :silenced_until, until)
+          end)
+      end
+
+    {:reply, reply, state}
   end
 
   def handle_call({:record_ack, task_id}, _from, state) do

@@ -603,7 +603,10 @@ defmodule Platform.Agents.SystemEventSchedulerT6E2ETest do
     # bumped by principal_search hotfix (+principal_search → 81)
     # bumped by Stack v2 stack-level sponsor stage 2 (+stack_update → 82)
     # bumped by TaskRouter redesign stage 5 (+task_ack → 83)
-    @t6_baseline_tool_count 83
+    # bumped by TaskRouter alarm_silence (task 019f6791-c01b stage 3) — the
+    # operator escape hatch that retires the report_blocker(needs_human:
+    # false) anti-pattern (+alarm_silence → 84)
+    @t6_baseline_tool_count 84
 
     defp t6_root, do: Mix.Project.project_file() |> Path.dirname()
 
