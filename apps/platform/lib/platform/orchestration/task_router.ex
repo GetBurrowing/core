@@ -393,6 +393,10 @@ defmodule Platform.Orchestration.TaskRouter do
       # `failed`) still key off the transitioned stage as before — the
       # failure-bounce branch below expects `stage` to be the failing one,
       # and a `running` broadcast is exactly the stage we should track.
+      # Capture the previous stage BEFORE the state overwrite so we know
+      # which stage's leases to drop on the boundary crossing.
+      previous_stage_id = state.current_stage_id
+
       next_stage_id =
         case stage.status do
           "passed" ->
@@ -409,16 +413,52 @@ defmodule Platform.Orchestration.TaskRouter do
       # bookkeeping — the next dispatch will call `record_dispatch/4` with a
       # fresh row. Clear here so a lingering `:check_no_ack` / `:check_safety_net`
       # doesn't fire against stale state before the new dispatch arrives.
-      if next_stage_id != state.current_stage_id do
+      if next_stage_id != previous_stage_id do
         LeaseManager.clear(state.task_id)
+
+        # Task 019f6791: unconditionally clean-slate the outgoing stage's
+        # RuntimeSupervision leases too. Leftover `blocked` rows from the
+        # prior stage were the direct source of the leak on task 019f6380
+        # (router rehydrated into `:waiting_human` on any subsequent boot).
+        if previous_stage_id do
+          RuntimeSupervision.drop_leases_for_stage(state.task_id, previous_stage_id)
+        end
       end
+
+      # Rehydrate `lease_status` from the incoming stage's own lease row
+      # (nil when the fresh stage has no lease yet — the intended state
+      # before the next dispatch arms one). Never carry the prior stage's
+      # `blocked` status forward into diagnostics / state-machine checks.
+      rehydrated_lease_status =
+        case next_stage_id do
+          nil ->
+            nil
+
+          stage_id ->
+            case RuntimeSupervision.current_lease_for_stage(state.task_id, stage_id) do
+              %{status: status} -> status
+              _ -> nil
+            end
+        end
 
       state =
         state
         |> Map.put(:current_stage_id, next_stage_id)
         |> Map.put(:stage_started_at, DateTime.utc_now())
         |> Map.put(:last_evidence_at, DateTime.utc_now())
+        |> then(fn s ->
+          # A stage boundary crossing invalidates the prior stage's
+          # activity timestamp — the old blocker's runtime-event `at`
+          # was masking `no_ack` alarms for the new stage.
+          if next_stage_id != previous_stage_id do
+            Map.put(s, :last_runtime_event_at, nil)
+          else
+            s
+          end
+        end)
+        |> Map.put(:lease_status, rehydrated_lease_status)
         |> maybe_reset_stalled()
+        |> maybe_reset_stale_waiting_human(next_stage_id, previous_stage_id)
 
       # If a review or deploy stage fails, bounce the task back to in_progress
       # (regression-critical — preserved byte-for-byte from the pre-redesign
@@ -865,6 +905,51 @@ defmodule Platform.Orchestration.TaskRouter do
   defp maybe_reset_stalled(%State{status: :stalled} = state), do: %{state | status: :running}
   defp maybe_reset_stalled(state), do: state
 
+  # Stage-scoped blocker predicate (task 019f6791). A blocker "targets" the
+  # current stage when either:
+  #   * the payload has no `stage_id` at all (legacy caller — treat as
+  #     current-stage to preserve pre-fix behaviour), OR
+  #   * the payload's `stage_id` matches the router's `current_stage_id`.
+  # Everything else is stale / cross-stage and must NOT flip the router
+  # into `:waiting_human`.
+  defp blocker_targets_current_stage?(payload, current_stage_id) do
+    case get_in(payload, ["stage_id"]) || get_in(payload, [:stage_id]) do
+      nil -> true
+      stage_id -> stage_id == current_stage_id
+    end
+  end
+
+  # DB-backed "does the current stage have a live blocker?" check
+  # (task 019f6791). Used by the stage-transition handler to decide whether
+  # a stale `:waiting_human` status should reset to `:dispatching` — if the
+  # incoming stage has no live blocker of its own, the prior stage's
+  # blocker must not gate its dispatch.
+  defp stage_has_live_blocker?(%State{current_stage_id: nil}), do: false
+
+  defp stage_has_live_blocker?(%State{task_id: task_id, current_stage_id: stage_id}) do
+    case RuntimeSupervision.current_lease_for_stage(task_id, stage_id) do
+      %{status: "blocked"} -> true
+      _ -> false
+    end
+  end
+
+  # On a stage boundary crossing, if the router was `:waiting_human` from a
+  # prior-stage blocker and the incoming stage has neither a live blocker
+  # nor a pending manual_approval review, reset to `:dispatching` so the
+  # subsequent `:dispatch` handler re-arms the heartbeat via
+  # `arm_liveness_timers/3` cleanly (task 019f6791).
+  defp maybe_reset_stale_waiting_human(state, next_stage_id, previous_stage_id)
+       when next_stage_id != previous_stage_id do
+    cond do
+      state.status != :waiting_human -> state
+      stage_has_live_blocker?(state) -> state
+      still_awaiting_human?(state) -> state
+      true -> %{state | status: :dispatching}
+    end
+  end
+
+  defp maybe_reset_stale_waiting_human(state, _next, _prev), do: state
+
   # Emit one loud runtime_event via `Tasks.broadcast_board/1` — the UI's
   # `tasks:board` subscribers pick it up. The event carries the same
   # top-level shape as a real RuntimeEvent (event_type, task_id, payload,
@@ -962,8 +1047,53 @@ defmodule Platform.Orchestration.TaskRouter do
     :ok
   end
 
+  # Boot rehydration — stage-scoped when a stage is already running (task
+  # 019f6791). Leases whose `stage_id` matches a `passed` stage are
+  # historical and MUST NOT rehydrate into `state.lease_status`; carrying a
+  # stale `blocked` row into `state.status = :waiting_human` was the
+  # direct cause of the boot-time leak Rowan observed on task 019f6380.
   defp maybe_hydrate_from_lease(%State{} = state) do
-    case RuntimeSupervision.current_lease_for_task(state.task_id) do
+    plan = Tasks.current_plan(state.task_id)
+    running_stage = current_running_stage(plan)
+
+    lease =
+      case running_stage do
+        %Stage{id: stage_id} ->
+          case RuntimeSupervision.current_lease_for_stage(state.task_id, stage_id) do
+            %{} = live ->
+              live
+
+            nil ->
+              # Fallback for legacy callers whose runtime events don't
+              # carry `stage_id` in the payload (lease row is written
+              # with `stage_id: nil`). We still want to hydrate from
+              # such rows, but never from a lease whose `stage_id`
+              # references a `passed` stage — that's the leak.
+              case RuntimeSupervision.current_lease_for_task(state.task_id) do
+                nil ->
+                  nil
+
+                candidate ->
+                  if lease_targets_passed_stage?(candidate, plan),
+                    do: nil,
+                    else: candidate
+              end
+          end
+
+        nil ->
+          # No stage running — legacy path. Fall back to the newest
+          # cross-stage lease but drop any row that references a stage
+          # already in `passed` (a leaked historical blocker).
+          case RuntimeSupervision.current_lease_for_task(state.task_id) do
+            nil ->
+              nil
+
+            candidate ->
+              if lease_targets_passed_stage?(candidate, plan), do: nil, else: candidate
+          end
+      end
+
+    case lease do
       %{runtime_id: runtime_id} = lease when runtime_id == state.assignee.id ->
         last_runtime_event_at =
           lease.last_progress_at || lease.last_heartbeat_at || lease.started_at
@@ -976,6 +1106,16 @@ defmodule Platform.Orchestration.TaskRouter do
 
       _ ->
         state
+    end
+  end
+
+  defp lease_targets_passed_stage?(%{stage_id: nil}, _plan), do: false
+  defp lease_targets_passed_stage?(_lease, nil), do: false
+
+  defp lease_targets_passed_stage?(%{stage_id: stage_id}, plan) do
+    case find_stage(plan, stage_id) do
+      %{status: "passed"} -> true
+      _ -> false
     end
   end
 
@@ -1044,19 +1184,37 @@ defmodule Platform.Orchestration.TaskRouter do
         end
 
       "execution.blocked" ->
-        task = Tasks.get_task_detail(state.task_id)
+        # Stage-scoped blocker handling (task 019f6791). A blocker whose payload
+        # names a different stage than the router's current stage must NOT flip
+        # the state machine — it's a leftover from a prior stage (or from a
+        # subagent that got its `stage_id` param wrong) and must not gate the
+        # currently-running stage's dispatch/heartbeat. Legacy callers with no
+        # payload stage_id fall through to today's behaviour so we don't regress
+        # solo tools that never learned to include the field.
+        if blocker_targets_current_stage?(event.payload, base_state.current_stage_id) do
+          task = Tasks.get_task_detail(state.task_id)
 
-        if base_state.execution_space_id && task do
-          ExecutionSpace.post_log(
-            base_state.execution_space_id,
-            "Heartbeat suppressed: runtime reported blocker | " <>
-              runtime_event_summary(event) <> " | " <> diagnostic_snapshot(base_state, task)
+          if base_state.execution_space_id && task do
+            ExecutionSpace.post_log(
+              base_state.execution_space_id,
+              "Heartbeat suppressed: runtime reported blocker | " <>
+                runtime_event_summary(event) <> " | " <> diagnostic_snapshot(base_state, task)
+            )
+          end
+
+          base_state
+          |> clear_liveness()
+          |> Map.put(:status, :waiting_human)
+        else
+          blocked_stage_id =
+            get_in(event.payload, ["stage_id"]) || get_in(event.payload, [:stage_id])
+
+          Logger.info(
+            "[TaskRouter] ignoring stale blocker on stage=#{inspect(blocked_stage_id)} (current=#{inspect(base_state.current_stage_id)}) for task=#{state.task_id}"
           )
-        end
 
-        base_state
-        |> clear_liveness()
-        |> Map.put(:status, :waiting_human)
+          base_state
+        end
 
       "execution.finished" ->
         if still_awaiting_human?(base_state) do

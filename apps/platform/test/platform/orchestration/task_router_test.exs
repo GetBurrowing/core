@@ -3,7 +3,14 @@ defmodule Platform.Orchestration.TaskRouterTest do
 
   import Ecto.Query
 
-  alias Platform.Orchestration.{ExecutionSpace, LeaseManager, TaskRouter}
+  alias Platform.Orchestration.{
+    ExecutionLease,
+    ExecutionSpace,
+    LeaseManager,
+    RuntimeSupervision,
+    TaskRouter
+  }
+
   alias Platform.Tasks
 
   setup do
@@ -1396,6 +1403,315 @@ defmodule Platform.Orchestration.TaskRouterTest do
                        payload: %{signal: %{reason: "task_assigned"}}
                      },
                      1_000
+    end
+  end
+
+  # ────────────────────────────────────────────────────────────────────
+  # Stage-scoped blocker handling (task 019f6791 stage 3)
+  # ────────────────────────────────────────────────────────────────────
+  #
+  # Regression coverage for the router-level leak Rowan observed on
+  # task 019f6380: a `blocked` lease created against a prior stage was
+  # rehydrating the router into `:waiting_human` on stage transition and
+  # on boot, silently gating downstream dispatches. The fix threads
+  # `stage_id` through the blocker handler + hydration paths so leftover
+  # rows for `passed` stages never poison the currently-running stage.
+
+  describe "stage-scoped blocker handling (task 019f6791)" do
+    defp seed_stage!(plan, position, name, status) do
+      attrs = %{
+        plan_id: plan.id,
+        position: position,
+        name: name,
+        description: "stage #{position}"
+      }
+
+      attrs =
+        case status do
+          "running" -> Map.merge(attrs, %{status: "running", started_at: DateTime.utc_now()})
+          "passed" -> Map.merge(attrs, %{status: "passed", completed_at: DateTime.utc_now()})
+          _ -> attrs
+        end
+
+      {:ok, stage} = Tasks.create_stage(attrs)
+      {:ok, _validation} = Tasks.create_validation(%{stage_id: stage.id, kind: "test_pass"})
+      stage
+    end
+
+    defp seed_blocked_lease!(task_id, stage_id, runtime_id) do
+      now = DateTime.utc_now()
+
+      %ExecutionLease{}
+      |> ExecutionLease.changeset(%{
+        task_id: task_id,
+        phase: "execution",
+        runtime_id: runtime_id,
+        stage_id: stage_id,
+        status: "blocked",
+        block_reason: "seeded stale blocker",
+        started_at: now,
+        expires_at: DateTime.add(now, 15 * 60, :second)
+      })
+      |> Platform.Repo.insert!()
+    end
+
+    test "bug repro: blocker on stage B does not gate stage C dispatch after transition", %{
+      task: task,
+      assignee: assignee,
+      plan: plan,
+      stage: stage_a
+    } do
+      Phoenix.PubSub.subscribe(Platform.PubSub, "runtime:#{assignee.id}")
+
+      # Stage A already exists (seeded in setup). Mark it passed; seed B running, C pending.
+      stage_a
+      |> Ecto.Changeset.change(%{status: "passed", completed_at: DateTime.utc_now()})
+      |> Platform.Repo.update!()
+
+      stage_b = seed_stage!(plan, 2, "stage B", "running")
+      stage_c = seed_stage!(plan, 3, "stage C", "pending")
+
+      {:ok, pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
+
+      # Consume the initial dispatch attention for stage B.
+      assert_receive %Phoenix.Socket.Broadcast{event: "attention"}, 1_000
+      Process.sleep(50)
+
+      assert TaskRouter.current_status(task.id).current_stage_id == stage_b.id
+
+      # Fire a legitimate stage-B blocker. Router should flip to
+      # :waiting_human because the blocker targets the current stage.
+      blocked_event = %{
+        id: nil,
+        task_id: task.id,
+        stage_id: stage_b.id,
+        event_type: "execution.blocked",
+        payload: %{"stage_id" => stage_b.id, "description" => "waiting on subagent"},
+        occurred_at: DateTime.utc_now(),
+        runtime_id: assignee.id,
+        phase: "execution",
+        lease: %{status: "blocked"}
+      }
+
+      send(pid, {:runtime_event, blocked_event})
+      Process.sleep(50)
+
+      assert TaskRouter.current_status(task.id).status == :waiting_human
+
+      # Now transition stage B → passed and stage C → running (mirrors
+      # the PlanEngine finalize/advance pair the real engine writes —
+      # both broadcasts fire; the running-broadcast is what re-arms
+      # dispatch, the passed-broadcast is what drops stage-B's leases).
+      stage_b
+      |> Ecto.Changeset.change(%{status: "passed", completed_at: DateTime.utc_now()})
+      |> Platform.Repo.update!()
+
+      running_stage_c =
+        stage_c
+        |> Ecto.Changeset.change(%{status: "running", started_at: DateTime.utc_now()})
+        |> Platform.Repo.update!()
+
+      passed_stage_b = Platform.Repo.get!(Platform.Tasks.Stage, stage_b.id)
+      Tasks.broadcast_board({:stage_transitioned, passed_stage_b})
+      Tasks.broadcast_board({:stage_transitioned, running_stage_c})
+
+      # A fresh attention broadcast for stage C must fire within 500ms.
+      assert_receive %Phoenix.Socket.Broadcast{
+                       event: "attention",
+                       payload: %{signal: %{reason: "task_assigned"}}
+                     },
+                     500
+
+      Process.sleep(50)
+      status = TaskRouter.current_status(task.id)
+      assert status.current_stage_id == stage_c.id
+      assert status.status == :running
+      refute status.lease_status == "blocked"
+      # The old blocker's runtime-event timestamp must not carry into stage C.
+      assert status.last_runtime_event_at == nil
+    end
+
+    test "cross-boundary blocker (payload.stage_id != current) does NOT flip to :waiting_human",
+         %{task: task, assignee: assignee, plan: plan, stage: stage_a} do
+      Phoenix.PubSub.subscribe(Platform.PubSub, "runtime:#{assignee.id}")
+
+      stage_a
+      |> Ecto.Changeset.change(%{status: "passed", completed_at: DateTime.utc_now()})
+      |> Platform.Repo.update!()
+
+      stage_b = seed_stage!(plan, 2, "stage B", "running")
+
+      {:ok, pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
+      assert_receive %Phoenix.Socket.Broadcast{event: "attention"}, 1_000
+      Process.sleep(50)
+
+      assert TaskRouter.current_status(task.id).status == :running
+      assert TaskRouter.current_status(task.id).current_stage_id == stage_b.id
+
+      # File a blocker whose payload.stage_id targets stage A (already passed).
+      # Router must ignore and stay :running.
+      stale_event = %{
+        id: nil,
+        task_id: task.id,
+        stage_id: stage_a.id,
+        event_type: "execution.blocked",
+        payload: %{"stage_id" => stage_a.id, "description" => "stale historical blocker"},
+        occurred_at: DateTime.utc_now(),
+        runtime_id: assignee.id,
+        phase: "execution",
+        lease: %{status: "blocked"}
+      }
+
+      send(pid, {:runtime_event, stale_event})
+      Process.sleep(50)
+
+      status = TaskRouter.current_status(task.id)
+      assert status.status == :running
+      assert status.current_stage_id == stage_b.id
+      # Legit stage-B blocker sanity: same handler still flips when stage_id matches.
+      current_event = %{
+        stale_event
+        | payload: %{"stage_id" => stage_b.id, "description" => "real"}
+      }
+
+      send(pid, {:runtime_event, current_event})
+      Process.sleep(50)
+      assert TaskRouter.current_status(task.id).status == :waiting_human
+    end
+
+    test "legacy blocker with no payload.stage_id preserves pre-fix behaviour (still flips)", %{
+      task: task,
+      assignee: assignee,
+      stage: stage
+    } do
+      Phoenix.PubSub.subscribe(Platform.PubSub, "runtime:#{assignee.id}")
+
+      stage
+      |> Ecto.Changeset.change(%{status: "running", started_at: DateTime.utc_now()})
+      |> Platform.Repo.update!()
+
+      {:ok, pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
+      assert_receive %Phoenix.Socket.Broadcast{event: "attention"}, 1_000
+      Process.sleep(50)
+
+      legacy_event = %{
+        id: nil,
+        task_id: task.id,
+        stage_id: nil,
+        event_type: "execution.blocked",
+        payload: %{"description" => "legacy caller — no stage_id"},
+        occurred_at: DateTime.utc_now(),
+        runtime_id: assignee.id,
+        phase: "execution",
+        lease: %{status: "blocked"}
+      }
+
+      send(pid, {:runtime_event, legacy_event})
+      Process.sleep(50)
+
+      assert TaskRouter.current_status(task.id).status == :waiting_human
+    end
+
+    test "boot rehydration ignores blocked lease attached to a passed stage", %{
+      task: task,
+      assignee: assignee,
+      plan: plan,
+      stage: stage_a
+    } do
+      # Stage A passed with a leaked `blocked` lease; stage B running with no lease yet.
+      stage_a
+      |> Ecto.Changeset.change(%{status: "passed", completed_at: DateTime.utc_now()})
+      |> Platform.Repo.update!()
+
+      stage_b = seed_stage!(plan, 2, "stage B", "running")
+
+      seed_blocked_lease!(task.id, stage_a.id, assignee.id)
+
+      Phoenix.PubSub.subscribe(Platform.PubSub, "runtime:#{assignee.id}")
+
+      {:ok, _pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
+
+      # The stale stage-A blocker must NOT gate the initial dispatch —
+      # a fresh attention broadcast for stage B fires normally.
+      assert_receive %Phoenix.Socket.Broadcast{
+                       event: "attention",
+                       payload: %{signal: %{reason: "task_assigned"}}
+                     },
+                     1_000
+
+      Process.sleep(50)
+
+      status = TaskRouter.current_status(task.id)
+      assert status.current_stage_id == stage_b.id
+      assert status.status == :running
+      # The stage-A `blocked` row must NOT rehydrate into state.lease_status.
+      refute status.lease_status == "blocked"
+    end
+
+    test "boot rehydration prefers the running-stage's own live blocker over a stale one",
+         %{
+           task: task,
+           assignee: assignee,
+           plan: plan,
+           stage: stage_a
+         } do
+      stage_a
+      |> Ecto.Changeset.change(%{status: "passed", completed_at: DateTime.utc_now()})
+      |> Platform.Repo.update!()
+
+      stage_b = seed_stage!(plan, 2, "stage B", "running")
+
+      # Two leases: one leaked from passed stage A, one legit blocker on stage B.
+      seed_blocked_lease!(task.id, stage_a.id, assignee.id)
+      seed_blocked_lease!(task.id, stage_b.id, assignee.id)
+
+      {:ok, _pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
+      Process.sleep(100)
+
+      status = TaskRouter.current_status(task.id)
+      assert status.current_stage_id == stage_b.id
+      assert status.lease_status == "blocked"
+      assert status.status == :waiting_human
+    end
+
+    test "stage_transitioned drop_leases_for_stage cleans up prior-stage leases", %{
+      task: task,
+      assignee: assignee,
+      plan: plan,
+      stage: stage_a
+    } do
+      Phoenix.PubSub.subscribe(Platform.PubSub, "runtime:#{assignee.id}")
+
+      stage_a
+      |> Ecto.Changeset.change(%{status: "running", started_at: DateTime.utc_now()})
+      |> Platform.Repo.update!()
+
+      stage_b = seed_stage!(plan, 2, "stage B", "pending")
+
+      # Seed a blocked lease for the currently-running stage A.
+      seed_blocked_lease!(task.id, stage_a.id, assignee.id)
+
+      {:ok, _pid} = TaskRouter.start_link(task_id: task.id, assignee: assignee)
+      Process.sleep(50)
+
+      assert %{status: "blocked"} =
+               RuntimeSupervision.current_lease_for_stage(task.id, stage_a.id)
+
+      # Now transition A → passed, B → running.
+      stage_a
+      |> Ecto.Changeset.change(%{status: "passed", completed_at: DateTime.utc_now()})
+      |> Platform.Repo.update!()
+
+      stage_b
+      |> Ecto.Changeset.change(%{status: "running", started_at: DateTime.utc_now()})
+      |> Platform.Repo.update!()
+
+      passed_stage_a = Platform.Repo.get!(Platform.Tasks.Stage, stage_a.id)
+      Tasks.broadcast_board({:stage_transitioned, passed_stage_a})
+      Process.sleep(100)
+
+      # Stage-A lease has been dropped by the transition handler.
+      assert nil == RuntimeSupervision.current_lease_for_stage(task.id, stage_a.id)
     end
   end
 end

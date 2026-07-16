@@ -176,4 +176,212 @@ defmodule Platform.Orchestration.RuntimeSupervisionTest do
     expired = Platform.Repo.get!(Platform.Orchestration.ExecutionLease, lease_id)
     assert expired.status == "expired"
   end
+
+  # ------------------------------------------------------------------
+  # Stage-scoped lease keying (task 019f6791)
+  # ------------------------------------------------------------------
+
+  describe "stage-scoped lease keying" do
+    test "record_event with payload.stage_id creates a lease keyed by that stage" do
+      task = create_task!()
+      stage_a = Ecto.UUID.generate()
+
+      assert {:ok, event} =
+               RuntimeSupervision.record_event(%{
+                 "task_id" => task.id,
+                 "phase" => "execution",
+                 "runtime_id" => "runtime:test",
+                 "event_type" => "execution.blocked",
+                 "payload" => %{"stage_id" => stage_a, "description" => "waiting on human"}
+               })
+
+      lease = Platform.Repo.get!(Platform.Orchestration.ExecutionLease, event.lease_id)
+      assert lease.stage_id == stage_a
+      assert lease.status == "blocked"
+      assert lease.block_reason == "waiting on human"
+    end
+
+    test "record_event for two distinct stages produces two coexisting active leases" do
+      task = create_task!()
+      stage_a = Ecto.UUID.generate()
+      stage_b = Ecto.UUID.generate()
+
+      assert {:ok, ev_a} =
+               RuntimeSupervision.record_event(%{
+                 "task_id" => task.id,
+                 "phase" => "execution",
+                 "runtime_id" => "runtime:test",
+                 "event_type" => "execution.blocked",
+                 "payload" => %{"stage_id" => stage_a, "description" => "stage A blocker"}
+               })
+
+      assert {:ok, ev_b} =
+               RuntimeSupervision.record_event(%{
+                 "task_id" => task.id,
+                 "phase" => "execution",
+                 "runtime_id" => "runtime:test",
+                 "event_type" => "execution.started",
+                 "payload" => %{"stage_id" => stage_b}
+               })
+
+      refute ev_a.lease_id == ev_b.lease_id
+
+      lease_a = Platform.Repo.get!(Platform.Orchestration.ExecutionLease, ev_a.lease_id)
+      lease_b = Platform.Repo.get!(Platform.Orchestration.ExecutionLease, ev_b.lease_id)
+
+      assert lease_a.stage_id == stage_a
+      assert lease_a.status == "blocked"
+      assert lease_b.stage_id == stage_b
+      assert lease_b.status == "active"
+    end
+
+    test "current_lease_for_stage/2 returns only the lease for the requested stage" do
+      task = create_task!()
+      stage_a = Ecto.UUID.generate()
+      stage_b = Ecto.UUID.generate()
+
+      {:ok, _} =
+        RuntimeSupervision.record_event(%{
+          "task_id" => task.id,
+          "phase" => "execution",
+          "runtime_id" => "runtime:test",
+          "event_type" => "execution.blocked",
+          "payload" => %{"stage_id" => stage_a, "description" => "old blocker"}
+        })
+
+      {:ok, _} =
+        RuntimeSupervision.record_event(%{
+          "task_id" => task.id,
+          "phase" => "execution",
+          "runtime_id" => "runtime:test",
+          "event_type" => "execution.started",
+          "payload" => %{"stage_id" => stage_b}
+        })
+
+      lease_a = RuntimeSupervision.current_lease_for_stage(task.id, stage_a)
+      lease_b = RuntimeSupervision.current_lease_for_stage(task.id, stage_b)
+
+      assert lease_a.stage_id == stage_a
+      assert lease_a.status == "blocked"
+      assert lease_b.stage_id == stage_b
+      assert lease_b.status == "active"
+
+      assert RuntimeSupervision.current_lease_for_stage(task.id, Ecto.UUID.generate()) == nil
+    end
+
+    test "drop_leases_for_stage/2 abandons matching leases and returns the count" do
+      task = create_task!()
+      stage_a = Ecto.UUID.generate()
+      stage_b = Ecto.UUID.generate()
+
+      {:ok, ev_a} =
+        RuntimeSupervision.record_event(%{
+          "task_id" => task.id,
+          "phase" => "execution",
+          "runtime_id" => "runtime:test",
+          "event_type" => "execution.blocked",
+          "payload" => %{"stage_id" => stage_a, "description" => "leaking blocker"}
+        })
+
+      {:ok, ev_b} =
+        RuntimeSupervision.record_event(%{
+          "task_id" => task.id,
+          "phase" => "execution",
+          "runtime_id" => "runtime:test",
+          "event_type" => "execution.started",
+          "payload" => %{"stage_id" => stage_b}
+        })
+
+      assert RuntimeSupervision.drop_leases_for_stage(task.id, stage_a) == 1
+
+      lease_a = Platform.Repo.get!(Platform.Orchestration.ExecutionLease, ev_a.lease_id)
+      lease_b = Platform.Repo.get!(Platform.Orchestration.ExecutionLease, ev_b.lease_id)
+
+      assert lease_a.status == "abandoned"
+      assert lease_a.block_reason == nil
+      # Stage B untouched.
+      assert lease_b.status == "active"
+      assert lease_b.stage_id == stage_b
+
+      # Idempotent second call sees nothing to drop.
+      assert RuntimeSupervision.drop_leases_for_stage(task.id, stage_a) == 0
+    end
+
+    test "list_active_leases_for_task/1 returns every active/blocked lease across stages" do
+      task = create_task!()
+      stage_a = Ecto.UUID.generate()
+      stage_b = Ecto.UUID.generate()
+
+      {:ok, _} =
+        RuntimeSupervision.record_event(%{
+          "task_id" => task.id,
+          "phase" => "execution",
+          "runtime_id" => "runtime:test",
+          "event_type" => "execution.blocked",
+          "payload" => %{"stage_id" => stage_a, "description" => "blocker"}
+        })
+
+      {:ok, _} =
+        RuntimeSupervision.record_event(%{
+          "task_id" => task.id,
+          "phase" => "execution",
+          "runtime_id" => "runtime:test",
+          "event_type" => "execution.started",
+          "payload" => %{"stage_id" => stage_b}
+        })
+
+      leases = RuntimeSupervision.list_active_leases_for_task(task.id)
+      stage_ids = leases |> Enum.map(& &1.stage_id) |> Enum.sort()
+
+      assert length(leases) == 2
+      assert stage_ids == Enum.sort([stage_a, stage_b])
+    end
+
+    test "legacy record_event with no stage_id in payload produces a stage_id: nil lease" do
+      task = create_task!()
+
+      assert {:ok, event} =
+               RuntimeSupervision.record_event(%{
+                 "task_id" => task.id,
+                 "phase" => "execution",
+                 "runtime_id" => "runtime:legacy",
+                 "event_type" => "execution.started"
+               })
+
+      lease = Platform.Repo.get!(Platform.Orchestration.ExecutionLease, event.lease_id)
+      assert lease.stage_id == nil
+      assert lease.status == "active"
+
+      # A second NULL-stage lease from a different runtime coexists via the
+      # NULL-permissive partial unique index.
+      assert {:ok, second} =
+               RuntimeSupervision.record_event(%{
+                 "task_id" => task.id,
+                 "phase" => "execution",
+                 "runtime_id" => "runtime:legacy-2",
+                 "event_type" => "execution.started"
+               })
+
+      second_lease = Platform.Repo.get!(Platform.Orchestration.ExecutionLease, second.lease_id)
+      assert second_lease.stage_id == nil
+      refute lease.id == second_lease.id
+    end
+
+    test "top-level stage_id attr is honoured when payload omits it" do
+      task = create_task!()
+      stage_a = Ecto.UUID.generate()
+
+      assert {:ok, event} =
+               RuntimeSupervision.record_event(%{
+                 task_id: task.id,
+                 stage_id: stage_a,
+                 phase: "execution",
+                 runtime_id: "runtime:direct",
+                 event_type: "execution.started"
+               })
+
+      lease = Platform.Repo.get!(Platform.Orchestration.ExecutionLease, event.lease_id)
+      assert lease.stage_id == stage_a
+    end
+  end
 end

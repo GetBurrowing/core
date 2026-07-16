@@ -608,7 +608,14 @@ defmodule Platform.Org.Wiki.ContextT4E2ETest do
       # exec spaces so post-ADR-0042 org-scoped slug lookups
       # (`Chat.get_space_by_slug/2`) can resolve them. Data-only;
       # `down/0` is a no-op.
-      "20260715165309_backfill_exec_space_org_id.exs"
+      "20260715165309_backfill_exec_space_org_id.exs",
+      # Task 019f6791 stage 1 — Router arch fix: stage-scoped leases.
+      # Adds `stage_id` column to `execution_leases` and repartitions
+      # the unique index so each `(task_id, stage_id)` pair carries
+      # its own lease. Fixes the root-cause bug where a completing
+      # stage released the lease for the whole task, letting siblings
+      # silently stall or double-dispatch.
+      "20260715210000_add_stage_id_to_execution_leases.exs"
     ]
 
     defp t4_root, do: Mix.Project.project_file() |> Path.dirname()

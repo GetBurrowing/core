@@ -48,6 +48,9 @@ defmodule Platform.Orchestration.RuntimeSupervision do
           Multi.new()
           |> Multi.run(:lease, fn repo, _changes -> upsert_lease(repo, attrs) end)
           |> Multi.insert(:event, fn %{lease: lease} ->
+            # RuntimeEvent has no stage_id column; the stage_id is
+            # preserved on the linked ExecutionLease (via upsert_lease)
+            # and echoed inside `payload["stage_id"]` for downstream consumers.
             RuntimeEvent.changeset(%RuntimeEvent{}, %{
               task_id: task.id,
               lease_id: lease && lease.id,
@@ -79,6 +82,12 @@ defmodule Platform.Orchestration.RuntimeSupervision do
     end
   end
 
+  @doc """
+  Return the newest active lease for the task across every stage. Kept for
+  backward-compatibility and one-shot boot hydration; prefer
+  `current_lease_for_stage/2` when the caller knows which stage it's asking
+  about (see ADR pending — task 019f6791).
+  """
   def current_lease_for_task(task_id) do
     expire_stale_leases(Repo, task_id: task_id)
 
@@ -88,6 +97,71 @@ defmodule Platform.Orchestration.RuntimeSupervision do
     |> order_by([l], desc: l.inserted_at)
     |> limit(1)
     |> Repo.one()
+  end
+
+  @doc """
+  Return the newest active/blocked lease for the given (task_id, stage_id).
+  Returns nil if no such lease exists.
+
+  Stage-scoped alternative to `current_lease_for_task/1` — the router uses
+  this to answer "does the currently-running stage have a live blocker?"
+  without being confused by leftover leases from earlier stages.
+  """
+  def current_lease_for_stage(task_id, stage_id) do
+    expire_stale_leases(Repo, task_id: task_id, stage_id: stage_id)
+
+    ExecutionLease
+    |> where([l], l.task_id == ^task_id and l.status in ^@active_statuses)
+    |> where([l], l.expires_at > ^DateTime.utc_now())
+    |> filter_by_stage(stage_id)
+    |> order_by([l], desc: l.inserted_at)
+    |> limit(1)
+    |> Repo.one()
+  end
+
+  @doc """
+  Mark every active/blocked lease for (task_id, stage_id) as `"abandoned"`
+  with `expires_at: now` and `block_reason: nil`. Returns the number of
+  rows affected.
+
+  Called by `Platform.Orchestration.TaskRouter` on stage transition to
+  guarantee a clean slate for the incoming stage — leftover blockers from
+  the outgoing stage no longer poison the router's rehydration path.
+  """
+  def drop_leases_for_stage(task_id, stage_id) do
+    now = DateTime.utc_now()
+
+    query =
+      ExecutionLease
+      |> where([l], l.task_id == ^task_id and l.status in ^@active_statuses)
+      |> filter_by_stage(stage_id)
+
+    {count, _} =
+      Repo.update_all(query,
+        set: [
+          status: "abandoned",
+          expires_at: now,
+          block_reason: nil,
+          updated_at: now
+        ]
+      )
+
+    count
+  end
+
+  @doc """
+  Return every active/blocked lease for a task across all stages. Used at
+  router boot for hydration and diagnostics — callers that need per-stage
+  behaviour should prefer `current_lease_for_stage/2`.
+  """
+  def list_active_leases_for_task(task_id) do
+    expire_stale_leases(Repo, task_id: task_id)
+
+    ExecutionLease
+    |> where([l], l.task_id == ^task_id and l.status in ^@active_statuses)
+    |> where([l], l.expires_at > ^DateTime.utc_now())
+    |> order_by([l], desc: l.inserted_at)
+    |> Repo.all()
   end
 
   @doc "Return the most recent lease for a task, including failed/expired ones."
@@ -183,6 +257,14 @@ defmodule Platform.Orchestration.RuntimeSupervision do
     payload = Map.get(attrs, :payload) || Map.get(attrs, "payload") || %{}
     worker_ref = Map.get(attrs, :runtime_worker_ref) || Map.get(attrs, "runtime_worker_ref")
 
+    # Stage-scoped lease keying (task 019f6791). The `report_blocker` MCP tool
+    # (and every other runtime-event surface today) puts `stage_id` inside the
+    # payload, so the payload is the source of truth; a top-level `stage_id`
+    # attr is a convenience for direct Elixir callers.
+    stage_id =
+      Map.get(attrs, :stage_id) || Map.get(attrs, "stage_id") ||
+        Map.get(payload, "stage_id") || Map.get(payload, :stage_id)
+
     occurred_at =
       parse_datetime(Map.get(attrs, :occurred_at) || Map.get(attrs, "occurred_at")) ||
         DateTime.utc_now()
@@ -209,13 +291,21 @@ defmodule Platform.Orchestration.RuntimeSupervision do
     # legacy callers (no owner) producing the same keys as before this change.
     user_key_part = invoked_by_user_id || "-"
 
+    # Stage-scoped keying (task 019f6791): sit stage_id between phase and
+    # event_type so blockers filed on distinct stages of the same task
+    # produce distinct idempotency keys and can coexist as separate rows.
+    # NULL-safe sentinel "-" keeps legacy callers (no stage) generating the
+    # same keys they did before this change.
+    stage_key_part = stage_id || "-"
+
     idempotency_key =
       Map.get(attrs, :idempotency_key) ||
         Map.get(attrs, "idempotency_key") ||
-        "#{runtime_id}:#{task_id}:#{phase}:#{event_type}:#{user_key_part}:#{DateTime.to_unix(occurred_at, :microsecond)}"
+        "#{runtime_id}:#{task_id}:#{phase}:#{stage_key_part}:#{event_type}:#{user_key_part}:#{DateTime.to_unix(occurred_at, :microsecond)}"
 
     %{
       task_id: task_id,
+      stage_id: stage_id,
       phase: phase,
       runtime_id: runtime_id,
       event_type: event_type,
@@ -246,21 +336,30 @@ defmodule Platform.Orchestration.RuntimeSupervision do
 
     cond do
       is_nil(status) ->
-        {:ok, current_active_lease(repo, attrs.task_id, attrs.phase, attrs.runtime_id)}
+        {:ok,
+         current_active_lease(repo, attrs.task_id, attrs.phase, attrs.runtime_id, attrs.stage_id)}
 
       true ->
-        lease = current_active_lease(repo, attrs.task_id, attrs.phase, attrs.runtime_id)
+        lease =
+          current_active_lease(repo, attrs.task_id, attrs.phase, attrs.runtime_id, attrs.stage_id)
+
         persist_lease(repo, lease, status, attrs)
     end
   end
 
-  defp current_active_lease(repo, task_id, phase, runtime_id) do
-    expire_stale_leases(repo, task_id: task_id, runtime_id: runtime_id, phase: phase)
+  defp current_active_lease(repo, task_id, phase, runtime_id, stage_id) do
+    expire_stale_leases(repo,
+      task_id: task_id,
+      runtime_id: runtime_id,
+      phase: phase,
+      stage_id: stage_id
+    )
 
     ExecutionLease
     |> where([l], l.task_id == ^task_id and l.phase == ^phase and l.runtime_id == ^runtime_id)
     |> where([l], l.status in ^@active_statuses)
     |> where([l], l.expires_at > ^DateTime.utc_now())
+    |> filter_by_stage(stage_id)
     |> order_by([l], desc: l.inserted_at)
     |> limit(1)
     |> repo.one()
@@ -270,6 +369,7 @@ defmodule Platform.Orchestration.RuntimeSupervision do
     %ExecutionLease{}
     |> ExecutionLease.changeset(%{
       task_id: attrs.task_id,
+      stage_id: attrs.stage_id,
       phase: attrs.phase,
       runtime_id: attrs.runtime_id,
       runtime_worker_ref: attrs.runtime_worker_ref,
@@ -340,6 +440,9 @@ defmodule Platform.Orchestration.RuntimeSupervision do
     task_id = Keyword.get(filters, :task_id)
     runtime_id = Keyword.get(filters, :runtime_id)
     phase = Keyword.get(filters, :phase)
+    # Sentinel `:any` = caller did not scope by stage; `nil` (explicitly passed)
+    # = filter WHERE stage_id IS NULL (legacy leases). See task 019f6791.
+    stage_id = Keyword.get(filters, :stage_id, :any)
 
     query =
       ExecutionLease
@@ -348,15 +451,26 @@ defmodule Platform.Orchestration.RuntimeSupervision do
       |> maybe_filter(:task_id, task_id)
       |> maybe_filter(:runtime_id, runtime_id)
       |> maybe_filter(:phase, phase)
+      |> maybe_filter(:stage_id, stage_id)
 
     repo.update_all(query, set: [status: "expired", updated_at: now])
     :ok
   end
 
+  # stage_id clauses come first so that `maybe_filter(:stage_id, nil)` is
+  # treated as "filter WHERE stage_id IS NULL", not as the generic
+  # `_field, nil` no-op.
+  defp maybe_filter(query, :stage_id, :any), do: query
+  defp maybe_filter(query, :stage_id, value), do: filter_by_stage(query, value)
   defp maybe_filter(query, _field, nil), do: query
   defp maybe_filter(query, :task_id, value), do: where(query, [l], l.task_id == ^value)
   defp maybe_filter(query, :runtime_id, value), do: where(query, [l], l.runtime_id == ^value)
   defp maybe_filter(query, :phase, value), do: where(query, [l], l.phase == ^value)
+
+  # NULL-safe stage_id filter: Postgres `= NULL` is unknown, so callers that
+  # want the legacy no-stage lease set must translate to `IS NULL` explicitly.
+  defp filter_by_stage(query, nil), do: where(query, [l], is_nil(l.stage_id))
+  defp filter_by_stage(query, stage_id), do: where(query, [l], l.stage_id == ^stage_id)
 
   defp broadcast_and_mirror(event, lease, attrs, opts \\ []) do
     unless Keyword.get(opts, :duplicate, false) do

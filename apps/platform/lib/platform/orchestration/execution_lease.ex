@@ -13,6 +13,7 @@ defmodule Platform.Orchestration.ExecutionLease do
 
   schema "execution_leases" do
     belongs_to(:task, Platform.Tasks.Task)
+    field(:stage_id, :binary_id)
     field(:phase, :string)
     field(:runtime_id, :string)
     field(:runtime_worker_ref, :string)
@@ -40,6 +41,7 @@ defmodule Platform.Orchestration.ExecutionLease do
     lease
     |> cast(attrs, [
       :task_id,
+      :stage_id,
       :phase,
       :runtime_id,
       :runtime_worker_ref,
@@ -60,8 +62,8 @@ defmodule Platform.Orchestration.ExecutionLease do
     |> validate_inclusion(:owner_attribution_status, @attribution_statuses)
     |> foreign_key_constraint(:task_id)
     |> unique_constraint(:task_id,
-      name: :execution_leases_active_unique_idx,
-      message: "active lease already exists for task/runtime/phase"
+      name: :execution_leases_active_stage_unique_idx,
+      message: "active lease already exists for task/runtime/phase/stage"
     )
   end
 end
