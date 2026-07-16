@@ -154,6 +154,40 @@ defmodule Platform.Orchestration.RuntimeSupervisionTest do
     assert progress_msg != nil
   end
 
+  test "execution.acked preserves subagent_id in RuntimeEvent.payload verbatim" do
+    # Task 019f6c73 stage 2 — the ToolSurface `task_ack` tool now enforces a
+    # non-empty, bounded `subagent_id` param and emits it as part of the ack
+    # payload. RuntimeSupervision persists `attrs.payload` unchanged (see
+    # `record_event/1` and the payload field on `RuntimeEvent`), so this
+    # regression guard proves the field round-trips into the durable row
+    # exactly as passed. Downstream audit + presence consumers read
+    # `RuntimeEvent.payload["subagent_id"]` directly — no separate telemetry
+    # emit — so any refactor that drops the field from the payload map would
+    # silently break the audit trail.
+    task = create_task!()
+    stage_id = Ecto.UUID.generate()
+    acked_at = DateTime.utc_now() |> DateTime.to_iso8601()
+
+    assert {:ok, event} =
+             RuntimeSupervision.record_event(%{
+               "task_id" => task.id,
+               "phase" => "execution",
+               "runtime_id" => "runtime:test",
+               "event_type" => "execution.acked",
+               "payload" => %{
+                 "stage_id" => stage_id,
+                 "acked_at" => acked_at,
+                 "runtime_id" => "runtime:test",
+                 "subagent_id" => "test-runtime-slug"
+               }
+             })
+
+    assert event.event_type == "execution.acked"
+    assert event.payload["subagent_id"] == "test-runtime-slug"
+    assert event.payload["stage_id"] == stage_id
+    assert event.payload["acked_at"] == acked_at
+  end
+
   test "execution.alarm_silenced is a recognised event_type and does NOT flip lease status" do
     # Task 019f6791-c01b stage 3 — silence is orthogonal to lifecycle
     # (same rule as execution.acked). The @event_statuses entry maps to

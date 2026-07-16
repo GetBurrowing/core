@@ -80,6 +80,16 @@ defmodule Platform.Federation.ToolSurfaceTaskAckTest do
 
       assert task_ack.parameters.task_id.required == true
       assert task_ack.parameters.stage_id.required == false
+
+      # task 019f6c73: subagent_id closes the "acked but never spawned" defect.
+      assert Map.has_key?(task_ack.parameters, :subagent_id),
+             "task_ack must expose subagent_id in its parameters schema"
+
+      assert task_ack.parameters.subagent_id.required == true
+      assert task_ack.parameters.subagent_id.type == "string"
+
+      assert task_ack.description =~ "spawn the subagent FIRST",
+             "task_ack description must instruct spawn-first ordering"
     end
   end
 
@@ -91,7 +101,11 @@ defmodule Platform.Federation.ToolSurfaceTaskAckTest do
       {:ok, result} =
         ToolSurface.execute(
           "task_ack",
-          %{"task_id" => task.id, "stage_id" => stage.id},
+          %{
+            "task_id" => task.id,
+            "stage_id" => stage.id,
+            "subagent_id" => "higgins.moon"
+          },
           %{runtime_id: "runtime-test-#{System.unique_integer([:positive])}"}
         )
 
@@ -106,6 +120,7 @@ defmodule Platform.Federation.ToolSurfaceTaskAckTest do
       assert event.event_type == "execution.acked"
       assert event.task_id == task.id
       assert event.payload["stage_id"] == stage.id
+      assert event.payload["subagent_id"] == "higgins.moon"
     end
 
     test "extends the LeaseManager safety-net past the initial dispatch deadline",
@@ -121,7 +136,11 @@ defmodule Platform.Federation.ToolSurfaceTaskAckTest do
       {:ok, _} =
         ToolSurface.execute(
           "task_ack",
-          %{"task_id" => task.id, "stage_id" => stage.id},
+          %{
+            "task_id" => task.id,
+            "stage_id" => stage.id,
+            "subagent_id" => "higgins.moon"
+          },
           %{}
         )
 
@@ -142,7 +161,7 @@ defmodule Platform.Federation.ToolSurfaceTaskAckTest do
       {:ok, result} =
         ToolSurface.execute(
           "task_ack",
-          %{"task_id" => task.id},
+          %{"task_id" => task.id, "subagent_id" => "higgins.moon"},
           %{}
         )
 
@@ -171,7 +190,7 @@ defmodule Platform.Federation.ToolSurfaceTaskAckTest do
       {:error, err} =
         ToolSurface.execute(
           "task_ack",
-          %{"task_id" => task2.id},
+          %{"task_id" => task2.id, "subagent_id" => "higgins.moon"},
           %{}
         )
 
@@ -186,7 +205,7 @@ defmodule Platform.Federation.ToolSurfaceTaskAckTest do
       {:error, err} =
         ToolSurface.execute(
           "task_ack",
-          %{"task_id" => Ecto.UUID.generate()},
+          %{"task_id" => Ecto.UUID.generate(), "subagent_id" => "higgins.moon"},
           %{}
         )
 
@@ -215,7 +234,11 @@ defmodule Platform.Federation.ToolSurfaceTaskAckTest do
       {:ok, result} =
         ToolSurface.execute(
           "task_ack",
-          %{"task_id" => task.id, "stage_id" => stage.id},
+          %{
+            "task_id" => task.id,
+            "stage_id" => stage.id,
+            "subagent_id" => "higgins.moon"
+          },
           %{runtime_id: "runtime-boot-race-#{System.unique_integer([:positive])}"}
         )
 
@@ -230,6 +253,120 @@ defmodule Platform.Federation.ToolSurfaceTaskAckTest do
         |> Repo.aggregate(:count, :id)
 
       assert event_count >= 1
+    end
+  end
+
+  describe "subagent_id validation (task 019f6c73)" do
+    # Each rejection case must:
+    #   1. return {:error, %{recoverable: true, suggestion: <hints spawn/subagent>}}
+    #   2. NOT emit any execution.acked runtime_event (validation runs before
+    #      record_runtime_event/1)
+
+    setup %{task: task, stage: stage} do
+      dispatched_at = DateTime.utc_now() |> DateTime.add(-30, :second)
+      :ok = LeaseManager.record_dispatch(task.id, stage.id, "coding", dispatched_at)
+      :ok
+    end
+
+    for {label, args} <- [
+          {"missing subagent_id key", %{}},
+          {"empty subagent_id string", %{"subagent_id" => ""}},
+          {"whitespace-only subagent_id", %{"subagent_id" => "   \t  "}},
+          {"oversized subagent_id (>128 bytes)", %{"subagent_id" => String.duplicate("x", 129)}}
+        ] do
+      test "rejects #{label} without writing a runtime_event", %{task: task, stage: stage} do
+        base = %{"task_id" => task.id, "stage_id" => stage.id}
+        args = Map.merge(base, unquote(Macro.escape(args)))
+
+        {:error, err} = ToolSurface.execute("task_ack", args, %{})
+
+        assert err.recoverable == true
+        assert is_binary(err.error)
+        assert is_binary(err.suggestion)
+
+        # Suggestion mentions either the spawn action or the field itself so the
+        # operator has a concrete recovery path.
+        assert err.suggestion =~ ~r/spawn|subagent_id/i
+
+        # No execution.acked row landed — validation short-circuits BEFORE
+        # record_runtime_event/1 runs.
+        event_count =
+          RuntimeEvent
+          |> where(
+            [e],
+            e.task_id == ^task.id and e.event_type == "execution.acked"
+          )
+          |> Repo.aggregate(:count, :id)
+
+        assert event_count == 0,
+               "no execution.acked event should have been persisted for #{unquote(label)}"
+      end
+    end
+  end
+
+  describe "subagent_id success path (task 019f6c73)" do
+    # Schema doesn't police format — only presence + non-empty + ≤128 bytes.
+    # Both actor classes (openclaw runtime slug, Claude Code Task-tool agentId)
+    # must fit through the same gate.
+
+    setup %{task: task, stage: stage} do
+      dispatched_at = DateTime.utc_now() |> DateTime.add(-30, :second)
+      :ok = LeaseManager.record_dispatch(task.id, stage.id, "coding", dispatched_at)
+      :ok
+    end
+
+    test "accepts openclaw runtime slug shape (higgins.moon)",
+         %{task: task, stage: stage} do
+      {:ok, result} =
+        ToolSurface.execute(
+          "task_ack",
+          %{
+            "task_id" => task.id,
+            "stage_id" => stage.id,
+            "subagent_id" => "higgins.moon"
+          },
+          %{}
+        )
+
+      event = Repo.get!(RuntimeEvent, result.event_id)
+      assert event.payload["subagent_id"] == "higgins.moon"
+    end
+
+    test "accepts Claude Code Task-tool agentId shape (hex)",
+         %{task: task, stage: stage} do
+      {:ok, result} =
+        ToolSurface.execute(
+          "task_ack",
+          %{
+            "task_id" => task.id,
+            "stage_id" => stage.id,
+            "subagent_id" => "afd767f1e0cc81633"
+          },
+          %{}
+        )
+
+      event = Repo.get!(RuntimeEvent, result.event_id)
+      assert event.payload["subagent_id"] == "afd767f1e0cc81633"
+    end
+
+    test "accepts a 128-byte subagent_id at the boundary",
+         %{task: task, stage: stage} do
+      # Exactly 128 bytes — inclusive upper bound.
+      id_at_limit = String.duplicate("a", 128)
+
+      {:ok, result} =
+        ToolSurface.execute(
+          "task_ack",
+          %{
+            "task_id" => task.id,
+            "stage_id" => stage.id,
+            "subagent_id" => id_at_limit
+          },
+          %{}
+        )
+
+      event = Repo.get!(RuntimeEvent, result.event_id)
+      assert event.payload["subagent_id"] == id_at_limit
     end
   end
 end

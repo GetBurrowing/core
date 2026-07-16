@@ -98,7 +98,9 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
   # ship the same guidance regardless of whether the DB template row
   # exists yet.
   @task_ack_preamble_template """
-  **Your first tool call must be `task_ack(task_id="__TASK_ID__", stage_id="__STAGE_ID__")`.** This tells the orchestrator you received the dispatch and are working; without it the router will fire a no-ack alert in 5 minutes.
+  **Your first tool call must be `task_ack(task_id="__TASK_ID__", stage_id="__STAGE_ID__", subagent_id="__SUBAGENT_ID__")`.**
+
+  Spawn the subagent FIRST, then include its returned agent id in the ack. Empty or missing subagent_id will fail validation — this ordering makes it structurally impossible to ack a dispatch you never spawned a subagent for. Without a successful ack the router will fire a no-ack alert in 5 minutes.
   """
 
   @evidence_workflow_reference """
@@ -601,14 +603,27 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
   # ── Hardcoded fallback prompts ─────────────────────────────────────────
 
   # Render the ack-first preamble for the hardcoded fallback path with
-  # the runtime's actual task_id / stage_id substituted in place of the
-  # __TASK_ID__ / __STAGE_ID__ placeholders. Callers pass empty strings
-  # when a stage isn't available yet (planning dispatch) — the tool
-  # tolerates a missing stage_id and resolves via current_running_stage.
-  defp render_task_ack_preamble(task_id, stage_id) do
+  # the runtime's actual task_id / stage_id / subagent_id substituted in
+  # place of the __TASK_ID__ / __STAGE_ID__ / __SUBAGENT_ID__ placeholders.
+  # Callers pass empty strings for stage_id when a stage isn't available
+  # yet (planning dispatch) — the tool tolerates a missing stage_id and
+  # resolves via current_running_stage.
+  #
+  # `subagent_id` defaults to the `<unknown — spawn a subagent first>`
+  # sentinel (matching the DB template's placeholder guidance): the
+  # hardcoded fallback is emitted from the periodic scheduler before any
+  # real subagent handle is known to the orchestrator; the readable
+  # sentinel tells the receiving agent to spawn its subagent BEFORE
+  # attempting the ack (task 019f6c73 stage 3).
+  defp render_task_ack_preamble(
+         task_id,
+         stage_id,
+         subagent_id \\ "<unknown — spawn a subagent first>"
+       ) do
     @task_ack_preamble_template
     |> String.replace("__TASK_ID__", task_id || "")
     |> String.replace("__STAGE_ID__", stage_id || "")
+    |> String.replace("__SUBAGENT_ID__", subagent_id || "")
   end
 
   # Kept in parity with the DB `dispatch.planning` template so environments

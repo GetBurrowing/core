@@ -496,11 +496,21 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
                                     "priv/repo/migrations/20260715220000_refresh_dispatch_templates_alarm_silence_fallback.exs"
                                   ])
 
+    @subagent_id_ack_migration_path Path.join([
+                                      __ENV__.file
+                                      |> Path.dirname()
+                                      |> Path.dirname()
+                                      |> Path.dirname()
+                                      |> Path.dirname(),
+                                      "priv/repo/migrations/20260716211312_refresh_dispatch_templates_subagent_id_ack.exs"
+                                    ])
+
     # Load the migration module once for this describe block so the tests
     # below can call `up/0` directly. `Code.compile_file/1` is idempotent —
     # subsequent test runs pick up any edits the developer made without a
     # stale binary lying around.
     Code.compile_file(@alarm_silence_migration_path)
+    Code.compile_file(@subagent_id_ack_migration_path)
 
     test "seed_defaults seeds dispatch.planning with current default content" do
       :ok = PromptTemplates.seed_defaults()
@@ -587,6 +597,94 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
       end
 
       migration = Platform.Repo.Migrations.RefreshDispatchTemplatesAlarmSilenceFallback
+
+      assert :ok = migration.up()
+
+      # Still no rows — migration didn't insert.
+      for slug <- slugs do
+        assert PromptTemplates.get_template_by_slug(slug) == nil,
+               "#{slug} must remain absent — migration is refresh-only, not seed"
+      end
+    end
+
+    test "20260716211312 subagent-id-ack migration refreshes all four dispatch templates idempotently" do
+      # Simulates the production upgrade sequence for task 019f6c73 stage 4:
+      # a prior force-update migration seeded the row with a body that lacked
+      # the subagent_id-required ack copy; this migration force-refreshes
+      # every dispatch row to the current default. Running it twice produces
+      # the same final state — idempotency.
+      migration = Platform.Repo.Migrations.RefreshDispatchTemplatesSubagentIdAck
+      slugs = ~w(dispatch.planning dispatch.in_progress dispatch.in_review dispatch.deploying)
+
+      # Seed baseline rows (matches what a prior force-update migration would
+      # have left in a production DB — descriptor variables + old content
+      # body without the subagent_id-required ack copy).
+      :ok = PromptTemplates.seed_defaults()
+
+      # Mutate each seeded row to simulate the pre-refresh state (an older
+      # preamble body without subagent_id in the copy-pasteable ack). The
+      # migration must overwrite this regardless of what it finds.
+      for slug <- slugs do
+        template = PromptTemplates.get_template_by_slug(slug)
+        stale = String.replace(template.content, "subagent_id=", "REDACTED_STALE_TOKEN=")
+
+        {:ok, _} =
+          PromptTemplates.update_template(template, %{
+            content: stale <> "\n\n<!-- stale marker -->"
+          })
+      end
+
+      # First run — refreshes everything.
+      :ok = migration.up()
+
+      for slug <- slugs do
+        row = PromptTemplates.get_template_by_slug(slug)
+        expected = PromptTemplates.default_content_for_slug(slug)
+
+        assert row.content == expected,
+               "#{slug} must be refreshed to current default content by the migration"
+
+        refute row.content =~ "REDACTED_STALE_TOKEN",
+               "#{slug} must have the pre-refresh marker overwritten"
+
+        refute row.content =~ "<!-- stale marker -->",
+               "#{slug} must have the stale suffix overwritten (not appended)"
+
+        assert row.content =~ "subagent_id=",
+               "#{slug} must carry the subagent_id-required ack copy after migration up/0"
+
+        assert row.content =~ "Spawn the subagent FIRST",
+               "#{slug} must carry the spawn-first ordering instruction after migration up/0"
+      end
+
+      # Second run — same final state (idempotent).
+      :ok = migration.up()
+
+      for slug <- slugs do
+        row = PromptTemplates.get_template_by_slug(slug)
+        expected = PromptTemplates.default_content_for_slug(slug)
+
+        assert row.content == expected,
+               "#{slug} must remain at current default content after a second migration run"
+      end
+    end
+
+    test "20260716211312 subagent-id-ack migration is a safe no-op when the target rows are missing" do
+      # Simulates a fresh DB (or a DB where the dispatch rows were purged) —
+      # migration must not raise. New environments boot by calling
+      # seed_defaults/0 later; the migration only refreshes rows that
+      # already exist.
+      slugs = ~w(dispatch.planning dispatch.in_progress dispatch.in_review dispatch.deploying)
+
+      # Purge any seeded dispatch rows so we exercise the nil-row branch.
+      for slug <- slugs do
+        case PromptTemplates.get_template_by_slug(slug) do
+          nil -> :ok
+          template -> {:ok, _} = PromptTemplates.delete_template(template)
+        end
+      end
+
+      migration = Platform.Repo.Migrations.RefreshDispatchTemplatesSubagentIdAck
 
       assert :ok = migration.up()
 
@@ -1249,8 +1347,14 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
         assert content =~ "no-ack alert in 5 minutes",
                "#{slug} must explain the consequence of skipping the ack"
 
-        assert content =~ "task_ack(task_id=\"{{task_id}}\", stage_id=\"{{stage_id}}\")",
+        assert content =~ "task_ack(task_id=\"{{task_id}}\", stage_id=\"{{stage_id}}\"",
                "#{slug} must interpolate task_id + stage_id into the copy-pasteable ack call"
+
+        assert content =~ "subagent_id=",
+               "#{slug} must include subagent_id in the copy-pasteable ack call (task 019f6c73 stage 3)"
+
+        assert content =~ "Spawn the subagent FIRST",
+               "#{slug} must instruct spawn-first ordering (task 019f6c73 stage 3)"
       end
     end
 
@@ -1295,6 +1399,35 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
       assert preamble =~ "alarm_silence(task_id=\"{{task_id}}\""
       assert preamble =~ "until_seconds=1800"
       assert preamble =~ "Do NOT use `report_blocker(needs_human: false)`"
+      assert preamble =~ "subagent_id="
+      assert preamble =~ "Spawn the subagent FIRST"
+    end
+
+    test "alarm_silence fallback sentence is preserved (task 019f6c73 stage 3)" do
+      # Belt-and-braces regression guard: the alarm_silence escape-hatch
+      # sentence (originally shipped by task 019f6791 stage 4) must survive
+      # every future preamble refactor. Mirrors the four sub-assertions
+      # exercised on each dispatch template body, but pinned directly to
+      # task_ack_preamble/0 so a preamble edit that silently drops the
+      # escape hatch fails LOUDLY here instead of only manifesting as an
+      # audit-trail regression later.
+      preamble = PromptTemplates.task_ack_preamble()
+
+      assert preamble =~ "If `task_ack` is missing from your MCP tool cache",
+             "task_ack_preamble/0 must carry the alarm_silence fallback sentence"
+
+      assert preamble =~
+               "alarm_silence(task_id=\"{{task_id}}\", stage_id=\"{{stage_id}}\", until_seconds=1800",
+             "task_ack_preamble/0 must show a copy-pasteable alarm_silence call with interpolated task_id/stage_id and until_seconds=1800"
+
+      assert preamble =~ "operator escape hatch",
+             "task_ack_preamble/0 must frame alarm_silence as an operator escape hatch"
+
+      assert preamble =~ "Do NOT use `report_blocker(needs_human: false)`",
+             "task_ack_preamble/0 must explicitly forbid the report_blocker(needs_human:false) ack-proxy anti-pattern"
+
+      assert preamble =~ "leaks across stage boundaries",
+             "task_ack_preamble/0 must explain WHY the anti-pattern is dangerous"
     end
 
     test "every dispatch template registers task_id + stage_id as variables" do
@@ -1343,8 +1476,8 @@ defmodule Platform.Orchestration.PromptTemplatesTest do
         assert {:ok, rendered} = PromptTemplates.render_template(slug, base_assigns)
 
         assert rendered =~
-                 ~s|task_ack(task_id="#{task_id}", stage_id="#{stage_id}")|,
-               "#{slug} must interpolate both task_id and stage_id into the preamble at render time"
+                 ~s|task_ack(task_id="#{task_id}", stage_id="#{stage_id}", subagent_id=|,
+               "#{slug} must interpolate both task_id and stage_id into the preamble at render time and carry the subagent_id placeholder"
 
         refute rendered =~ "{{task_id}}",
                "#{slug} must fully consume the {{task_id}} placeholder"

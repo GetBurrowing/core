@@ -778,6 +778,122 @@ defmodule Platform.Orchestration.HeartbeatSchedulerTest do
     end
   end
 
+  describe "subagent_id placeholder in hardcoded fallback dispatch prompts (task 019f6c73 stage 3)" do
+    # Stage 3 extended the hardcoded @task_ack_preamble_template with a
+    # __SUBAGENT_ID__ sentinel + spawn-first instruction. The private
+    # render_task_ack_preamble/2,3 defaults the sentinel to a readable
+    # "<unknown — spawn a subagent first>" fallback so every dispatch
+    # slug renders it even before the orchestrator learns a real
+    # subagent handle. These guards ensure no fallback branch silently
+    # drops the placeholder.
+
+    test "planning fallback carries subagent_id placeholder + spawn-first ordering" do
+      task = %{
+        id: "task-subagent-planning",
+        title: "Ack preamble subagent_id planning",
+        description: "Body",
+        status: "planning",
+        priority: "medium"
+      }
+
+      prompt = HeartbeatScheduler.dispatch_prompt(task, nil, nil)
+
+      assert prompt =~ "subagent_id=",
+             "planning fallback must render subagent_id= in the ack call"
+
+      assert prompt =~ "<unknown — spawn a subagent first>",
+             "planning fallback must render the readable subagent_id sentinel default"
+
+      assert prompt =~ "Spawn the subagent FIRST",
+             "planning fallback must instruct spawn-first ordering"
+    end
+
+    test "in_progress fallback carries subagent_id placeholder + spawn-first ordering" do
+      task = %{
+        id: "task-subagent-ip",
+        title: "Ack preamble subagent_id in_progress",
+        description: "Body",
+        status: "in_progress",
+        priority: "medium",
+        project: %{repo_url: "https://github.com/test/router", default_branch: "main"}
+      }
+
+      plan = %{version: 1, stages: [%{}]}
+      stage = %{id: "stage-subagent-ip", position: 1, name: "coding", validations: []}
+
+      prompt = HeartbeatScheduler.dispatch_prompt(task, plan, stage)
+
+      assert prompt =~ "subagent_id=",
+             "in_progress fallback must render subagent_id= in the ack call"
+
+      assert prompt =~ "<unknown — spawn a subagent first>",
+             "in_progress fallback must render the readable subagent_id sentinel default"
+
+      assert prompt =~ "Spawn the subagent FIRST",
+             "in_progress fallback must instruct spawn-first ordering"
+    end
+
+    test "in_review fallback carries subagent_id placeholder + spawn-first ordering" do
+      task = %{
+        id: "task-subagent-ir",
+        title: "Ack preamble subagent_id in_review",
+        description: "Body",
+        status: "in_review",
+        priority: "medium",
+        project: %{repo_url: "https://github.com/test/router", default_branch: "main"}
+      }
+
+      plan = %{version: 1, stages: [%{}]}
+
+      stage = %{
+        id: "stage-subagent-ir",
+        position: 1,
+        name: "review",
+        validations: [%{id: "val-subagent-manual", kind: "manual_approval", status: "pending"}]
+      }
+
+      prompt = HeartbeatScheduler.dispatch_prompt(task, plan, stage)
+
+      assert prompt =~ "subagent_id=",
+             "in_review fallback must render subagent_id= in the ack call"
+
+      assert prompt =~ "<unknown — spawn a subagent first>",
+             "in_review fallback must render the readable subagent_id sentinel default"
+
+      assert prompt =~ "Spawn the subagent FIRST",
+             "in_review fallback must instruct spawn-first ordering"
+    end
+
+    test "deploying fallback carries subagent_id placeholder + spawn-first ordering" do
+      task = %{
+        id: "task-subagent-dep",
+        title: "Ack preamble subagent_id deploying",
+        description: "Body",
+        status: "deploying",
+        priority: "medium",
+        project: %{
+          repo_url: "https://github.com/test/router",
+          default_branch: "main",
+          deploy_strategy: %{"type" => "manual", "config" => %{}}
+        }
+      }
+
+      plan = %{version: 1, stages: [%{}]}
+      stage = %{id: "stage-subagent-dep", position: 1, name: "deploy", validations: []}
+
+      prompt = HeartbeatScheduler.dispatch_prompt(task, plan, stage)
+
+      assert prompt =~ "subagent_id=",
+             "deploying fallback must render subagent_id= in the ack call"
+
+      assert prompt =~ "<unknown — spawn a subagent first>",
+             "deploying fallback must render the readable subagent_id sentinel default"
+
+      assert prompt =~ "Spawn the subagent FIRST",
+             "deploying fallback must instruct spawn-first ordering"
+    end
+  end
+
   describe "select_review_template/2" do
     test "returns dispatch.in_review with empty assigns for empty pending list" do
       assert {"dispatch.in_review", %{}} = HeartbeatScheduler.select_review_template([])

@@ -1416,7 +1416,7 @@ defmodule Platform.Federation.ToolSurface do
       %{
         name: "task_ack",
         description:
-          "Ack that you (the executor/reviewer/deployer) received the dispatch and are actively working on the stage. Call this as your FIRST tool call after spawning for a task (task 019f640d stage 5). Emits an `execution.acked` runtime_event which the TaskRouter consumes to extend the safety-net timer and suppress the 5-minute no-ack alert. Returns `{ack_at, next_safety_net_at}` for reference — `next_safety_net_at` may be nil when no lease is armed (e.g. planning phase before a plan exists, or manual_approval stages where no safety-net timer runs).",
+          "Ack that you (the executor/reviewer/deployer) received the dispatch and are actively working on the stage. Call this as your FIRST tool call after spawning for a task (task 019f640d stage 5). Emits an `execution.acked` runtime_event which the TaskRouter consumes to extend the safety-net timer and suppress the 5-minute no-ack alert. Returns `{ack_at, next_safety_net_at}` for reference — `next_safety_net_at` may be nil when no lease is armed (e.g. planning phase before a plan exists, or manual_approval stages where no safety-net timer runs). Requires a subagent_id — spawn the subagent FIRST, then include its returned handle in the ack.",
         parameters: %{
           task_id: %{
             type: "string",
@@ -1428,12 +1428,18 @@ defmodule Platform.Federation.ToolSurface do
             required: false,
             description:
               "Optional — the running stage_id from your dispatch context. When omitted the tool resolves it via `current_running_stage(current_plan(task_id))`, so callers who lack a stage_id (e.g. planning-phase agents before the plan exists) can still ack the task-level dispatch."
+          },
+          subagent_id: %{
+            type: "string",
+            required: true,
+            description:
+              "Opaque handle identifying the subagent working this stage — the runtime slug (e.g. `higgins.moon`) for openclaw agents, or the Task-tool `agentId` returned by the Agent spawn call for Claude Code (e.g. `afd767f1e0cc81633`). Must be non-empty and ≤128 chars. Presence forces spawn-before-ack ordering: an operator cannot ack a dispatch they never spawned a subagent for."
           }
         },
         returns:
           "%{task_id, stage_id, event_id, acked_at, next_safety_net_at}. `next_safety_net_at` is nil when the LeaseManager has no active lease for the task (planning-phase dispatch, manual_approval stages, or a boot-race before the router recorded the dispatch).",
         limitations:
-          "Idempotent — re-calling on the same stage is a soft ack refresh; each call emits a fresh execution.acked event and extends the safety-net deadline. Unknown `task_id` returns `{:error, :not_found}`. When no stage_id is supplied and the task has no running stage, returns `{:error, :no_running_stage}` so the caller can decide whether to task_start first or ignore.",
+          "Idempotent — re-calling on the same stage is a soft ack refresh; each call emits a fresh execution.acked event and extends the safety-net deadline. Unknown `task_id` returns `{:error, :not_found}`. When no stage_id is supplied and the task has no running stage, returns `{:error, :no_running_stage}` so the caller can decide whether to task_start first or ignore. Invalid subagent_id returns `{:error, :invalid_subagent_id}` — one of `missing` (key absent or nil), `empty_or_whitespace` (empty string or whitespace-only), or `oversized` (> 128 bytes). No format policing beyond that; any well-formed string identifying the spawn handle is accepted.",
         when_to_use:
           "As your FIRST tool call after being dispatched for a task, before you start reading code or planning steps. Without an ack the router fires an escalation alert in 5 minutes on `coding`/`review`/`deploying` stages (planning: same 5m ack window, longer safety-net)."
       },
@@ -3871,6 +3877,7 @@ defmodule Platform.Federation.ToolSurface do
   def execute("task_ack", args, context) do
     task_id = Map.get(args, "task_id")
     supplied_stage_id = Map.get(args, "stage_id")
+    supplied_subagent_id = Map.get(args, "subagent_id")
 
     cond do
       is_nil(task_id) or task_id == "" ->
@@ -3883,33 +3890,99 @@ defmodule Platform.Federation.ToolSurface do
          }}
 
       true ->
-        case Tasks.get_task_record(task_id) do
-          nil ->
-            {:error,
-             %{
-               error: "Task not found: #{task_id}",
-               recoverable: false,
-               suggestion:
-                 "Verify the task_id matches your dispatch payload; use task_list to enumerate live tasks."
-             }}
+        case validate_subagent_id(supplied_subagent_id) do
+          {:error, envelope} ->
+            {:error, envelope}
 
-          _task ->
-            case resolve_ack_stage_id(task_id, supplied_stage_id) do
-              {:error, :no_running_stage} ->
+          {:ok, subagent_id} ->
+            case Tasks.get_task_record(task_id) do
+              nil ->
                 {:error,
                  %{
-                   error:
-                     "task_id=#{task_id} has no running stage — cannot ack without a stage_id.",
-                   recoverable: true,
+                   error: "Task not found: #{task_id}",
+                   recoverable: false,
                    suggestion:
-                     "Supply the stage_id from your dispatch payload, or call task_start first if the task hasn't been transitioned into in_progress yet."
+                     "Verify the task_id matches your dispatch payload; use task_list to enumerate live tasks."
                  }}
 
-              {:ok, stage_id} ->
-                emit_task_ack(task_id, stage_id, context)
+              _task ->
+                case resolve_ack_stage_id(task_id, supplied_stage_id) do
+                  {:error, :no_running_stage} ->
+                    {:error,
+                     %{
+                       error:
+                         "task_id=#{task_id} has no running stage — cannot ack without a stage_id.",
+                       recoverable: true,
+                       suggestion:
+                         "Supply the stage_id from your dispatch payload, or call task_start first if the task hasn't been transitioned into in_progress yet."
+                     }}
+
+                  {:ok, stage_id} ->
+                    emit_task_ack(task_id, stage_id, subagent_id, context)
+                end
             end
         end
     end
+  end
+
+  # Presence + shape guard for the `subagent_id` param on task_ack. Hard-rejects
+  # (task 019f6c73) rather than warn-and-drift: any in-flight dispatch that
+  # skips the param fails its next ack immediately rather than silently drifting
+  # into a 90-minute no-ack stall. No format policing beyond presence + byte cap
+  # so both openclaw runtime slugs (e.g. `higgins.moon`) and Claude Code
+  # Task-tool agentIds (e.g. `afd767f1e0cc81633`) fit through the same gate.
+  defp validate_subagent_id(nil) do
+    {:error,
+     %{
+       error: "subagent_id is required",
+       recoverable: true,
+       suggestion:
+         "Spawn the subagent (SuiteExecutor / SuiteReviewer via the Agent tool) FIRST, then pass its returned agent id here."
+     }}
+  end
+
+  defp validate_subagent_id(id) when is_binary(id) do
+    cond do
+      id == "" ->
+        {:error,
+         %{
+           error: "subagent_id is required",
+           recoverable: true,
+           suggestion:
+             "Spawn the subagent (SuiteExecutor / SuiteReviewer via the Agent tool) FIRST, then pass its returned agent id here."
+         }}
+
+      String.trim(id) == "" ->
+        {:error,
+         %{
+           error: "subagent_id must not be whitespace-only",
+           recoverable: true,
+           suggestion:
+             "subagent_id was whitespace-only — pass the spawn call's returned agent id verbatim."
+         }}
+
+      byte_size(id) > 128 ->
+        {:error,
+         %{
+           error: "subagent_id exceeds 128 bytes",
+           recoverable: true,
+           suggestion:
+             "Truncate to the spawn call's returned id — free-form annotations don't belong in this field."
+         }}
+
+      true ->
+        {:ok, id}
+    end
+  end
+
+  defp validate_subagent_id(_) do
+    {:error,
+     %{
+       error: "subagent_id must be a string",
+       recoverable: true,
+       suggestion:
+         "Pass the spawn call's returned agent id as a plain string (e.g. `higgins.moon` or `afd767f1e0cc81633`)."
+     }}
   end
 
   # Prefer the explicit stage_id from args; otherwise resolve from the
@@ -3935,7 +4008,7 @@ defmodule Platform.Federation.ToolSurface do
   # LeaseManager row belt-and-braces. Returns the tool envelope with
   # `next_safety_net_at` reflecting whatever the lease now holds (nil
   # when no lease is armed — planning phase or manual_approval stages).
-  defp emit_task_ack(task_id, stage_id, context) do
+  defp emit_task_ack(task_id, stage_id, subagent_id, context) do
     acked_at = DateTime.utc_now()
 
     attrs = %{
@@ -3948,7 +4021,8 @@ defmodule Platform.Federation.ToolSurface do
       "payload" => %{
         "stage_id" => stage_id,
         "acked_at" => DateTime.to_iso8601(acked_at),
-        "runtime_id" => Map.get(context, :runtime_id) || "tool-surface"
+        "runtime_id" => Map.get(context, :runtime_id) || "tool-surface",
+        "subagent_id" => subagent_id
       }
     }
 

@@ -19,6 +19,13 @@ defmodule Platform.Orchestration.RuntimeSupervision do
   @event_statuses %{
     "assignment.accepted" => nil,
     "assignment.rejected" => "abandoned",
+    # Payload shape: %{"stage_id" => binary, "acked_at" => iso8601,
+    # "runtime_id" => binary, "subagent_id" => binary} — subagent_id
+    # (task 019f6c73) is the well-formed spawn-handle enforced by
+    # ToolSurface.execute("task_ack", ...). Keep it in payload verbatim;
+    # downstream audit + presence consumers read RuntimeEvent.payload
+    # directly — no separate telemetry emit, so don't reintroduce a
+    # redundant [:platform, :orchestration, :task_ack] telemetry bridge.
     "execution.acked" => nil,
     # `nil` — silence is an operator override, orthogonal to lifecycle
     # state (same rationale as `execution.acked`). See LeaseManager.silence/3

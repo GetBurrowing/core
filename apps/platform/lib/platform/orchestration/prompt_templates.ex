@@ -158,7 +158,9 @@ defmodule Platform.Orchestration.PromptTemplates do
   # (there's no plan yet) — the `task_ack` tool tolerates a missing
   # stage_id and resolves via `current_running_stage` anyway.
   @task_ack_preamble """
-  **Your first tool call must be `task_ack(task_id="{{task_id}}", stage_id="{{stage_id}}")`.** This tells the orchestrator you received the dispatch and are working; without it the router will fire a no-ack alert in 5 minutes.
+  **Your first tool call must be `task_ack(task_id="{{task_id}}", stage_id="{{stage_id}}", subagent_id="<the id returned when you spawned the SuiteExecutor / SuiteReviewer via the Agent tool>")`.**
+
+  Spawn the subagent FIRST, then include its returned agent id in the ack. Empty or missing subagent_id will fail validation — this ordering makes it structurally impossible to ack a dispatch you never spawned a subagent for. Without a successful ack the router will fire a no-ack alert in 5 minutes.
 
   **If `task_ack` is missing from your MCP tool cache** (a known cross-version issue where a session's catalog predates a new tool), call `alarm_silence(task_id="{{task_id}}", stage_id="{{stage_id}}", until_seconds=1800, reason="task_ack absent from stale MCP catalog; subagent live")` as the operator escape hatch. Do NOT use `report_blocker(needs_human: false)` — that anti-pattern sets a task-level lease to blocked and leaks across stage boundaries.
   """

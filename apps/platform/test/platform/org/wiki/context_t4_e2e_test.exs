@@ -625,7 +625,16 @@ defmodule Platform.Org.Wiki.ContextT4E2ETest do
       # `report_blocker(needs_human: false)` ack-proxy anti-pattern by
       # explicitly forbidding it in the copy. Content-only sync; no schema
       # changes. Mirrors the force-update pattern at 20260715000000.
-      "20260715220000_refresh_dispatch_templates_alarm_silence_fallback.exs"
+      "20260715220000_refresh_dispatch_templates_alarm_silence_fallback.exs",
+      # Task 019f6c73 stage 4 — Router: task_ack requires subagent_id.
+      # Force-updates the four dispatch prompt templates so every runtime
+      # dispatch in prod carries the new @task_ack_preamble body with
+      # subagent_id + spawn-first ordering (shipped stage 3). Without this
+      # refresh the templates keep telling agents to call task_ack without
+      # subagent_id, causing every ack in prod to fail hard until the next
+      # redeploy. Content-only sync; no schema changes. Mirrors the
+      # force-update pattern at 20260715220000.
+      "20260716211312_refresh_dispatch_templates_subagent_id_ack.exs"
     ]
 
     defp t4_root, do: Mix.Project.project_file() |> Path.dirname()
