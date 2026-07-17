@@ -316,6 +316,48 @@ defmodule Platform.Tasks.StackDeployer.GitShellRunner do
   def delete_rollup_branch(_args),
     do: {:error, {:invalid_args, "missing required keys"}}
 
+  # ── sha_reachable? (bug #2, task 019f708f) ──────────────────────────────
+
+  # Ask git whether `sha` is an ancestor of the rollup branch tip on
+  # origin. Used by `Stacks.unblocked_in_stack?/1` and
+  # `StackDeployer.all_members_ready?/2` so a fabricated
+  # `merged_into_rollup_at` stamp can't promote a dependent or open a
+  # rollup PR that omits the member's actual code.
+  @impl true
+  def sha_reachable?(%{
+        repo_url: repo_url,
+        rollup_branch: rollup_branch,
+        sha: sha,
+        project_id: project_id
+      })
+      when is_binary(repo_url) and is_binary(rollup_branch) and is_binary(sha) and sha != "" and
+             is_binary(project_id) do
+    clone_path = clone_path_for(project_id)
+
+    with {:ok, _} <- ensure_clone(clone_path, repo_url),
+         {:ok, _} <- git(["fetch", "origin", rollup_branch], cd: clone_path) do
+      # `merge-base --is-ancestor` exits 0 when `sha` IS an ancestor of
+      # `origin/<rollup>` and 1 when it is NOT. Any other exit code
+      # means the check itself failed (unknown SHA, permission
+      # denied, etc) — surface as `{:error, ...}` so callers can be
+      # conservative.
+      case System.cmd(
+             "git",
+             ["merge-base", "--is-ancestor", sha, "origin/#{rollup_branch}"],
+             cd: clone_path,
+             stderr_to_stdout: true,
+             env: [{"GIT_TERMINAL_PROMPT", "0"}]
+           ) do
+        {_, 0} -> {:ok, true}
+        {_, 1} -> {:ok, false}
+        {output, code} -> {:error, {:git_failed, ["merge-base"], code, String.trim(output)}}
+      end
+    end
+  end
+
+  @impl true
+  def sha_reachable?(_args), do: {:error, {:invalid_args, "missing required keys"}}
+
   defp push_delete(clone_path, rollup_branch) do
     args = ["push", "origin", "--delete", rollup_branch]
 

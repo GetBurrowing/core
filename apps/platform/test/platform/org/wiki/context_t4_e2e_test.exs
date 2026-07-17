@@ -658,7 +658,12 @@ defmodule Platform.Org.Wiki.ContextT4E2ETest do
       # Historian sees which paths were intentionally removed on every
       # dispatch. Content-only sync; no schema changes. Mirrors the
       # `force_update_*` pattern at 20260714000050.
-      "20260716220000_force_update_historian_scheduled_deleted_paths.exs"
+      "20260716220000_force_update_historian_scheduled_deleted_paths.exs",
+      # Task 019f708f stage 3 (bug #3): shape-enforce
+      # `metadata["merged_into_rollup_at"]` at the changeset boundary,
+      # backfill malformed pre-fix stamps. Content-only DELETE via
+      # jsonb operator; no schema change.
+      "20260717173915_drop_malformed_merged_into_rollup_at_stamps.exs"
     ]
 
     defp t4_root, do: Mix.Project.project_file() |> Path.dirname()

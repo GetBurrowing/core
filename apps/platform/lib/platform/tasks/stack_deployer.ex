@@ -257,15 +257,74 @@ defmodule Platform.Tasks.StackDeployer do
       when is_binary(stack_id) and to in [:in_review, "in_review"] do
     if async?() do
       Task.Supervisor.async_nolink(task_supervisor(), fn ->
-        log_merge_result(task, merge_member_into_rollup(task))
+        attempt_member_merge(task)
       end)
     else
-      log_merge_result(task, merge_member_into_rollup(task))
-      :ok
+      attempt_member_merge(task)
     end
   end
 
   def handle_member_transition(%TaskRecord{}, _from, _to), do: :ok
+
+  # Bug #1 (task 019f708f): `Task.Supervisor.async_nolink` swallows any
+  # exception raised inside the fn, silently stranding the member in
+  # `deploying` forever. Wrap `merge_member_into_rollup/1` in try/rescue so
+  # a git conflict / disk-full / network raise files a needs_human blocker
+  # via the runtime-event path (mirroring `tool_surface.ex`'s
+  # `report_blocker` shape) instead of vanishing. Applied to BOTH the
+  # async and non-async branches so `async?: false` mode behaves
+  # identically.
+  defp attempt_member_merge(%TaskRecord{} = task) do
+    log_merge_result(task, merge_member_into_rollup(task))
+  rescue
+    e ->
+      stacktrace = __STACKTRACE__
+      message = Exception.message(e)
+
+      Logger.error(
+        "[StackDeployer] task #{task.id} rollup merge raised: #{message}\n" <>
+          Exception.format(:error, e, stacktrace)
+      )
+
+      record_merge_blocker(task, message)
+      :ok
+  end
+
+  defp record_merge_blocker(%TaskRecord{id: task_id}, exception_message) do
+    attrs = %{
+      "task_id" => task_id,
+      "phase" => "execution",
+      "runtime_id" => "stack_deployer",
+      "event_type" => "execution.blocked",
+      "execution_space_id" => execution_space_id_for_task(task_id),
+      "payload" => %{
+        "stage_id" => nil,
+        "description" => "Rollup merge raised: #{exception_message}",
+        "needs_human" => true,
+        "reported_by" => "stack_deployer"
+      }
+    }
+
+    case Platform.Orchestration.record_runtime_event(attrs) do
+      {:ok, _event} ->
+        :ok
+
+      {:error, reason} ->
+        Logger.error(
+          "[StackDeployer] failed to record rollup-merge blocker for task #{task_id}: " <>
+            inspect(reason)
+        )
+
+        :ok
+    end
+  end
+
+  defp execution_space_id_for_task(task_id) do
+    case Platform.Orchestration.ExecutionSpace.find_by_task_id(task_id) do
+      %{id: id} -> id
+      _ -> nil
+    end
+  end
 
   # ── merge_member_into_rollup ────────────────────────────────────────────
 
@@ -953,7 +1012,7 @@ defmodule Platform.Tasks.StackDeployer do
         members = Stacks.members(stack)
 
         cond do
-          not all_members_ready?(members) ->
+          not all_members_ready?(members, stack) ->
             {:ok, :not_ready}
 
           not deploy_validations_ready?(stack) ->
@@ -1392,7 +1451,7 @@ defmodule Platform.Tasks.StackDeployer do
           {:ok, :already_bounced}
 
         true ->
-          case pick_offender(members, head_sha) do
+          case pick_offender(members, head_sha, stack, project.repo_url) do
             {:ok, offender} ->
               do_atomic_bounce(stack, members, offender, project.repo_url, ci_run_url, head_sha)
 
@@ -1417,9 +1476,9 @@ defmodule Platform.Tasks.StackDeployer do
   # rollup branch chronologically, so the merge SHAs are linearly
   # ordered along the branch. Anything stamped is a candidate; we
   # log when there's ambiguity (>1 candidate).
-  defp pick_offender([], _head_sha), do: {:error, :no_candidate}
+  defp pick_offender([], _head_sha, _stack, _repo_url), do: {:error, :no_candidate}
 
-  defp pick_offender(members, head_sha) when is_list(members) do
+  defp pick_offender(members, head_sha, %Stack{} = stack, repo_url) when is_list(members) do
     candidates =
       members
       |> Enum.filter(&has_merged_stamp?/1)
@@ -1430,6 +1489,7 @@ defmodule Platform.Tasks.StackDeployer do
         {:error, :no_candidate}
 
       [only] ->
+        maybe_log_pick_offender_unreachable(only, stack, repo_url)
         {:ok, only}
 
       [first | rest] ->
@@ -1439,9 +1499,56 @@ defmodule Platform.Tasks.StackDeployer do
             "(#{length(rest)} other candidate(s): #{Enum.map_join(rest, ",", & &1.id)})"
         )
 
+        maybe_log_pick_offender_unreachable(first, stack, repo_url)
         {:ok, first}
     end
   end
+
+  # Bug #2 (task 019f708f): `pick_offender` is a CI-failure heuristic
+  # where the stamp is the only ordering signal — leave it, but log a
+  # warning if the picked offender's stamp isn't actually reachable
+  # from the rollup tip. This preserves the bounce (ops still needs
+  # SOMETHING to revert) while surfacing the fabricated-stamp condition
+  # in the log stream for post-mortem review.
+  defp maybe_log_pick_offender_unreachable(
+         %TaskRecord{
+           id: task_id,
+           metadata: %{"merged_into_rollup_at" => %{"sha" => sha}}
+         },
+         %Stack{rollup_branch: rollup_branch, project_id: project_id},
+         repo_url
+       )
+       when is_binary(sha) and sha != "" and is_binary(rollup_branch) and rollup_branch != "" and
+              is_binary(repo_url) and repo_url != "" do
+    args = %{
+      repo_url: repo_url,
+      rollup_branch: rollup_branch,
+      sha: sha,
+      project_id: project_id
+    }
+
+    case git_runner().sha_reachable?(args) do
+      {:ok, false} ->
+        Logger.warning(
+          "[StackDeployer] pick_offender: picked task #{task_id} but its stamp sha " <>
+            "#{sha} is NOT reachable from #{rollup_branch}; proceeding with bounce " <>
+            "on stamp-order heuristic — review revert target manually"
+        )
+
+      {:error, reason} ->
+        Logger.warning(
+          "[StackDeployer] pick_offender: reachability check failed for #{task_id} " <>
+            "(sha=#{sha}, rollup=#{rollup_branch}): #{inspect(reason)}"
+        )
+
+      _ ->
+        :ok
+    end
+
+    :ok
+  end
+
+  defp maybe_log_pick_offender_unreachable(_task, _stack, _repo_url), do: :ok
 
   defp has_merged_stamp?(%TaskRecord{metadata: %{"merged_into_rollup_at" => %{"sha" => sha}}})
        when is_binary(sha) and sha != "",
@@ -1757,10 +1864,11 @@ defmodule Platform.Tasks.StackDeployer do
 
   defp rollup_pr_url(_), do: nil
 
-  defp all_members_ready?([]), do: false
+  defp all_members_ready?([], _stack), do: false
 
-  defp all_members_ready?(members) when is_list(members) do
-    Enum.all?(members, &member_ready_for_pr?/1)
+  defp all_members_ready?(members, %Stack{} = stack) when is_list(members) do
+    Enum.all?(members, &member_ready_for_pr?/1) and
+      Enum.all?(members, &member_sha_reachable?(&1, stack))
   end
 
   defp member_ready_for_pr?(%TaskRecord{status: status, metadata: meta})
@@ -1772,6 +1880,67 @@ defmodule Platform.Tasks.StackDeployer do
   end
 
   defp member_ready_for_pr?(_member), do: false
+
+  # Bug #2 (task 019f708f): gate the stack-PR-open path on ground-truth
+  # sha reachability. A fabricated `merged_into_rollup_at` stamp
+  # otherwise trips `all_members_ready?/2` and opens a PR that omits
+  # the member's actual code. Only stamps with an extractable SHA are
+  # verified — that's guaranteed because `member_ready_for_pr?/1`
+  # requires a map-shaped stamp for the base case to return true.
+  defp member_sha_reachable?(
+         %TaskRecord{
+           id: task_id,
+           metadata: %{"merged_into_rollup_at" => %{"sha" => sha}}
+         },
+         %Stack{rollup_branch: rollup_branch, project_id: project_id} = _stack
+       )
+       when is_binary(sha) and sha != "" and is_binary(rollup_branch) and rollup_branch != "" do
+    case load_project(project_id) do
+      {:ok, %{repo_url: repo_url}} when is_binary(repo_url) and repo_url != "" ->
+        check_member_sha_reachable(task_id, sha, repo_url, rollup_branch, project_id)
+
+      _ ->
+        # No repo_url configured for the project — reachability check
+        # is not meaningful. Fall through to the stamp-presence check
+        # already done by `member_ready_for_pr?/1`.
+        true
+    end
+  end
+
+  # No SHA extractable from the stamp — `member_ready_for_pr?/1` will
+  # have already returned false, so this branch is defensive.
+  defp member_sha_reachable?(_task, _stack), do: true
+
+  defp check_member_sha_reachable(task_id, sha, repo_url, rollup_branch, project_id) do
+    args = %{
+      repo_url: repo_url,
+      rollup_branch: rollup_branch,
+      sha: sha,
+      project_id: project_id
+    }
+
+    case git_runner().sha_reachable?(args) do
+      {:ok, true} ->
+        true
+
+      {:ok, false} ->
+        Logger.warning(
+          "[StackDeployer] all_members_ready?: task #{task_id} stamp sha #{sha} " <>
+            "not reachable from #{rollup_branch}; treating as unmerged"
+        )
+
+        false
+
+      {:error, reason} ->
+        Logger.warning(
+          "[StackDeployer] all_members_ready?: reachability check failed for task " <>
+            "#{task_id} (sha=#{sha}, rollup=#{rollup_branch}): #{inspect(reason)} — " <>
+            "treating as unmerged"
+        )
+
+        false
+    end
+  end
 
   defp do_open_stack_pr(%Stack{} = stack, members) do
     with {:ok, project} <- load_project(stack.project_id),
@@ -2013,7 +2182,15 @@ defmodule Platform.Tasks.StackDeployer do
 
   defp log_pr_open_result(_stack_id, _other), do: :ok
 
-  defp git_runner do
+  @doc """
+  Public accessor for the configured git runner module.
+
+  Exposed so sibling modules (e.g. `Platform.Tasks.Stacks` for the
+  bug-#2 reachability gate in `unblocked_in_stack?/1`) can invoke
+  runner callbacks without duplicating the config lookup.
+  """
+  @spec git_runner() :: module()
+  def git_runner do
     config()
     |> Keyword.get(:git_runner, @default_runner)
   end

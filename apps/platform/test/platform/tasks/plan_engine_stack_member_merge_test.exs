@@ -151,6 +151,11 @@ defmodule Platform.Tasks.PlanEngineStackMemberMergeTest do
          }}
       end)
     end
+
+    # Bug #2 (task 019f708f): default to reachable so this test's
+    # engine-driven merge fires the pre-bug-#2 promotion path.
+    @impl true
+    def sha_reachable?(_args), do: {:ok, true}
   end
 
   setup do
@@ -280,7 +285,7 @@ defmodule Platform.Tasks.PlanEngineStackMemberMergeTest do
           status: "in_review",
           deploy_strategy: %{"type" => "pr_merge", "config" => %{}},
           metadata: %{
-            "merged_into_rollup_at" => %{"sha" => "abc123", "at" => now_iso}
+            "merged_into_rollup_at" => %{"sha" => "abc1234", "at" => now_iso}
           }
         })
 

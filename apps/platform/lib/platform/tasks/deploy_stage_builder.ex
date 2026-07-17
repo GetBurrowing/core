@@ -32,7 +32,7 @@ defmodule Platform.Tasks.DeployStageBuilder do
   `manual_approval`). Do NOT add `e2e_behavior` to any deploy-stage definition.
   """
 
-  @valid_strategy_types ~w(none pr_merge docker_deploy fly skill_driven manual project_files)
+  @valid_strategy_types ~w(none pr_merge docker_deploy fly skill_driven manual project_files no_op_wait_for_rollup)
   @valid_merge_methods ~w(squash merge rebase)
 
   # ── Public API ─────────────────────────────────────────────────────────
@@ -41,7 +41,9 @@ defmodule Platform.Tasks.DeployStageBuilder do
   Build a deploy stage definition from a resolved strategy map.
 
   Returns a map with `:name`, `:description`, `:position`, and `:validations`,
-  or `:skip` if the strategy type is `"none"`.
+  or `:skip` if the strategy type is `"none"` or `"no_op_wait_for_rollup"`
+  (bug #5 — stack members ship via the stack-level rollup PR, not a
+  per-member deploy stage).
 
   ## Examples
 
@@ -50,9 +52,21 @@ defmodule Platform.Tasks.DeployStageBuilder do
 
       iex> DeployStageBuilder.build_stage(%{"type" => "none"}, 3)
       :skip
+
+      iex> DeployStageBuilder.build_stage(%{"type" => "no_op_wait_for_rollup"}, 3)
+      :skip
   """
   @spec build_stage(map(), pos_integer()) :: map() | :skip
   def build_stage(%{"type" => "none"}, _position), do: :skip
+
+  # Bug #5 (task 019f708f): stack members with a live rollup branch
+  # get `no_op_wait_for_rollup` from `Tasks.resolve_deploy_strategy/1`.
+  # Emit NO deploy stage at all — the stack sweep opens ONE rollup PR
+  # via `StackDeployer.maybe_open_stack_pr/1`, so a per-member stage
+  # would either open a shattering PR (if we materialized `pr_merge`)
+  # or dispatch a deploy subagent that has nothing to do (if we
+  # materialized a stage_complete-only stage). Skipping is safer.
+  def build_stage(%{"type" => "no_op_wait_for_rollup"}, _position), do: :skip
 
   def build_stage(%{"type" => "pr_merge"} = strategy, position) do
     config = Map.get(strategy, "config", %{})
@@ -145,6 +159,7 @@ defmodule Platform.Tasks.DeployStageBuilder do
       %{"type" => "skill_driven", "skill_id" => str, "config" => %{...}}
       %{"type" => "manual"}
       %{"type" => "none"}
+      %{"type" => "no_op_wait_for_rollup"}  # stack member — deploy goes via stack-level PR
   """
   @spec validate_strategy(map()) :: :ok | {:error, String.t()}
   def validate_strategy(%{"type" => type}) when type in @valid_strategy_types do

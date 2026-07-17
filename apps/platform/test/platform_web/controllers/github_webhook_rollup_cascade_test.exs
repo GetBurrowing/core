@@ -54,6 +54,11 @@ defmodule PlatformWeb.GithubWebhookRollupCascadeTest do
 
     @impl true
     def delete_rollup_branch(_args), do: {:ok, :deleted}
+
+    # Bug #2 (task 019f708f): default to reachable so this cascade test
+    # keeps exercising the pre-bug-#2 code paths.
+    @impl true
+    def sha_reachable?(_args), do: {:ok, true}
   end
 
   setup do

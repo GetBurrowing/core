@@ -2098,9 +2098,18 @@ defmodule Platform.Tasks.TasksContextTest do
       reloaded_m1 = Tasks.get_task_record(m1.id)
       assert reloaded_m1.status == "stack_pending"
 
-      # m2 was left alone; the stack itself was not flipped.
+      # m2 was left alone. Bug #6 (task 019f708f): the rollup-status
+      # `cond` now recognizes that a stack with ANY `stack_pending`
+      # member is commenced (waiting on deps, not still forming), so
+      # the enclosing `maybe_finalize_transition` fires
+      # `recompute_stack_status` and flips the stack from `forming` to
+      # `in_progress`. That's the correct semantic — an all-stack_pending
+      # or mixed-stack_pending stack should NOT be classified as
+      # `forming` (pre-bug-#6 shape leaked it there, silently deadlocking
+      # every member behind `CommencementGate.open?/1`'s
+      # stack.status == "in_progress" requirement).
       assert Tasks.get_task_record(m2.id).status == "backlog"
-      assert Stacks.get_stack!(stack.id).status == "forming"
+      assert Stacks.get_stack!(stack.id).status == "in_progress"
 
       # And the gate correctly identifies m2 as the outstanding blocker.
       assert CommencementGate.waiting_on(stack) == [m2.id]

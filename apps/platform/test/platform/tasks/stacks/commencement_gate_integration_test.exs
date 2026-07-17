@@ -56,8 +56,24 @@ defmodule Platform.Tasks.Stacks.CommencementGateIntegrationTest do
       assert Tasks.get_task_record(m2.id).status == "stack_pending"
       assert Tasks.get_task_record(m3.id).status == "planning"
 
-      # ── (iii) After member 3's approval, gate_opened broadcast fires,
-      #         all three remain stack_pending (no auto-start) ──
+      # Bug #6 (task 019f708f) semantic change: as soon as m1 lands at
+      # `stack_pending`, the enclosing `maybe_finalize_transition` fires
+      # `recompute_stack_status` and the stack rolls up to `in_progress`
+      # (the fixed `cond` recognizes any `stack_pending` member as an
+      # in-progress signal — pre-fix that state leaked to `forming`
+      # and silently deadlocked the whole stack behind
+      # `CommencementGate.open?/1`'s `stack.status == "in_progress"`
+      # requirement).
+      assert Repo.reload!(stack).status == "in_progress"
+
+      # ── (iii) After member 3's approval, plans_ready? is true AND
+      #         stack.status is already `in_progress`, so
+      #         `CommencementGate.open?/1` returns true for m3 and
+      #         `apply_dispatch_gate/1` walks it straight to
+      #         `in_progress` (no stack_pending park) — the belt-and-
+      #         suspenders `start_stack/1` isn't needed. The
+      #         `:stack_gate_opened` broadcast still fires so
+      #         watchers see the transition. ──
       approve_new_plan(m3)
 
       assert_receive {:stack_gate_opened, stack_id, executable_ids}, 500
@@ -65,56 +81,43 @@ defmodule Platform.Tasks.Stacks.CommencementGateIntegrationTest do
       # Flat stack -> every member is a root -> executable set is all three.
       assert Enum.sort(executable_ids) == Enum.sort([m1.id, m2.id, m3.id])
 
+      # m3 auto-promoted (open? returned true at the moment of its
+      # gate check). m1 and m2 stay at stack_pending — they were
+      # parked earlier before the stack flipped, and nothing
+      # retroactively promotes them.
       assert Tasks.get_task_record(m1.id).status == "stack_pending"
       assert Tasks.get_task_record(m2.id).status == "stack_pending"
-      assert Tasks.get_task_record(m3.id).status == "stack_pending"
+      assert Tasks.get_task_record(m3.id).status == "in_progress"
 
-      # The stack itself has NOT flipped — `open?/1` still requires
-      # `stack.status == "in_progress"`. Explicit transitions from any
-      # member still return `:stack_plans_pending` because the gate is
-      # not yet strictly "open" (plans_ready? is true, stack.status is
-      # not). This is the documented contract; a future ADR may collapse
-      # the two conditions.
-      assert Repo.reload!(stack).status == "forming"
+      # Stack stays in_progress.
+      assert Repo.reload!(stack).status == "in_progress"
 
-      assert {:error, :stack_plans_pending, %{stack_id: sid, waiting_on: []}} =
-               Tasks.transition_task(Tasks.get_task_record(m1.id), "in_progress")
-
-      assert sid == stack.id
-
-      # ── (iv) Explicit `Stacks.start_stack/1` succeeds now that
-      #         plans_ready? is true. Stack flips to in_progress. Per
-      #         the ADR 0041 cascade (hotfix: stack_start cascades
-      #         stack_pending roots to in_progress), members currently
-      #         at `stack_pending` that are also level-0 roots of the
-      #         in-stack DAG are promoted to `in_progress` — the cascade
-      #         completes the transition that `apply_dispatch_gate/1`
-      #         parked during each approval. Flat stack → all three
-      #         members are roots → all three land in `started:`.
-      assert {:ok, %{stack: started, started: cascaded, parked: []}} =
+      # ── (iv) `start_stack/1` short-circuits with
+      #         `:invalid_stack_status` because the stack is already
+      #         commenced. Under bug #6 semantics, the explicit-start
+      #         hook exists for the initial `forming → in_progress`
+      #         transition; once the stack has auto-commenced, the
+      #         hook is no-op'd. Operators who need to promote stuck
+      #         `stack_pending` members drive them individually via
+      #         `Tasks.transition_task/2` (the gate now returns true
+      #         because all three preconditions hold). ──
+      assert {:error, :invalid_stack_status} =
                Stacks.start_stack(Repo.reload!(stack))
 
-      assert started.status == "in_progress"
+      # Direct promotion of m1 now succeeds — the gate is truly open.
+      assert {:ok, m1_updated} =
+               Tasks.transition_task(Tasks.get_task_record(m1.id), "in_progress")
 
-      cascaded_ids = cascaded |> Enum.map(& &1.id) |> Enum.sort()
-      assert cascaded_ids == Enum.sort([m1.id, m2.id, m3.id])
-      assert Enum.all?(cascaded, &(&1.status == "in_progress"))
+      assert m1_updated.status == "in_progress"
 
-      # ── (v) The cascade already flipped every stack_pending root to
-      #         in_progress, so the "MCP task_start" per-member
-      #         transition path is now a no-op idempotency check: the
-      #         members are already in_progress, and any redundant
-      #         `Tasks.transition_task/2` back into in_progress hits
-      #         `:invalid_transition` — NOT the gate. Proves the
-      #         :stack_plans_pending error is definitively gone.
+      # ── (v) Redundant re-transition of an already-in_progress task
+      #         hits `:invalid_transition` — NOT the gate. Proves
+      #         :stack_plans_pending is definitively gone. ──
       m1_now = Tasks.get_task_record(m1.id)
       assert m1_now.status == "in_progress"
 
       assert {:error, :invalid_transition} =
                Tasks.transition_task(m1_now, "in_progress")
-
-      m2_now = Tasks.get_task_record(m2.id)
-      assert m2_now.status == "in_progress"
 
       _ = project
     end

@@ -7260,7 +7260,7 @@ defmodule PlatformWeb.TasksLiveTest do
         if Keyword.get(opts, :merged, false) do
           %{
             "merged_into_rollup_at" => %{
-              "sha" => "abc#{pos}",
+              "sha" => "abc000#{pos}",
               "at" => "2026-05-12T00:00:00Z"
             }
           }
@@ -7383,7 +7383,7 @@ defmodule PlatformWeb.TasksLiveTest do
         Tasks.update_task(m4, %{
           status: "in_progress",
           metadata: %{
-            "merged_into_rollup_at" => %{"sha" => "abc4", "at" => "2026-05-12T00:00:00Z"}
+            "merged_into_rollup_at" => %{"sha" => "abc0004", "at" => "2026-05-12T00:00:00Z"}
           }
         })
 

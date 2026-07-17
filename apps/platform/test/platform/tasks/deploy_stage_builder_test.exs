@@ -9,6 +9,27 @@ defmodule Platform.Tasks.DeployStageBuilderTest do
     end
   end
 
+  # Bug #5 (task 019f708f): stack members with a live rollup branch
+  # resolve to `no_op_wait_for_rollup`. `build_stage/2` must emit NO
+  # stage — the stack sweep opens ONE rollup PR for the whole stack
+  # via `StackDeployer.maybe_open_stack_pr/1`, so a per-member deploy
+  # stage would either shatter the rollup (pr_merge) or dispatch a
+  # deploy subagent with nothing to do.
+  describe "build_stage/2 — no_op_wait_for_rollup (bug #5)" do
+    test "returns :skip at any position" do
+      assert DeployStageBuilder.build_stage(%{"type" => "no_op_wait_for_rollup"}, 3) == :skip
+      assert DeployStageBuilder.build_stage(%{"type" => "no_op_wait_for_rollup"}, 99) == :skip
+    end
+
+    test "validate_strategy accepts no_op_wait_for_rollup" do
+      assert :ok = DeployStageBuilder.validate_strategy(%{"type" => "no_op_wait_for_rollup"})
+    end
+
+    test "type appears in valid_strategy_types/0" do
+      assert "no_op_wait_for_rollup" in DeployStageBuilder.valid_strategy_types()
+    end
+  end
+
   describe "build_stage/2 — pr_merge" do
     test "auto_merge false: emits a single pr_merged validation" do
       strategy = %{

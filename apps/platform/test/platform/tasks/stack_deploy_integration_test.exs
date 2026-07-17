@@ -87,6 +87,12 @@ defmodule Platform.Tasks.StackDeployIntegrationTest do
       Agent.update(__MODULE__, fn s -> %{s | delete_calls: [args | s.delete_calls]} end)
       {:ok, :deleted}
     end
+
+    # Bug #2 (task 019f708f): default to reachable so the integration
+    # test's ff-only merges promote through without needing per-SHA
+    # reachability seeding.
+    @impl true
+    def sha_reachable?(_args), do: {:ok, true}
   end
 
   setup do
@@ -349,7 +355,9 @@ defmodule Platform.Tasks.StackDeployIntegrationTest do
             status: "in_review",
             metadata: %{
               "merged_into_rollup_at" => %{
-                "sha" => "member#{position}sha",
+                # Bug #3 (task 019f708f) shape validator requires hex-only,
+                # >= 7 chars. Pad the position into a valid hex-shaped SHA.
+                "sha" => "abcdef" <> String.pad_leading(Integer.to_string(position), 2, "0"),
                 "at" => DateTime.utc_now() |> DateTime.to_iso8601()
               }
             }

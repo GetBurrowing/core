@@ -342,13 +342,56 @@ defmodule Platform.Tasks.StackDeployer.GitRunner do
   @callback delete_rollup_branch(delete_args()) ::
               {:ok, :deleted} | {:ok, :already_absent} | {:error, term()}
 
+  # ── sha_reachable? (bug #2, task 019f708f) ──────────────────────────────
+
+  @typedoc """
+  Arguments for `sha_reachable?/1`.
+
+  Given a git SHA and the name of a rollup branch, ask the runner whether
+  the SHA is an ancestor of the branch tip on origin. This is the
+  ground-truth check backing `Stacks.unblocked_in_stack?/1` and
+  `StackDeployer.all_members_ready?/2` — a `metadata["merged_into_rollup_at"]`
+  stamp records the caller's claim, but the runner is the arbiter.
+  """
+  @type reachability_args :: %{
+          required(:repo_url) => String.t(),
+          required(:rollup_branch) => String.t(),
+          required(:sha) => String.t(),
+          required(:project_id) => String.t(),
+          optional(:stack_id) => String.t()
+        }
+
+  @doc """
+  Return `{:ok, true}` if `sha` is reachable from the current tip of
+  `rollup_branch` on `origin`, `{:ok, false}` if not, or `{:error, reason}`
+  if the runner can't answer (e.g. transient fetch failure).
+
+  Implementations must:
+
+    1. Fetch the rollup branch (`git fetch origin <rollup_branch>`) so
+       the local ref is fresh — a stale clone would falsely report
+       "unreachable" for a SHA that WAS just merged.
+    2. Run `git merge-base --is-ancestor <sha> origin/<rollup_branch>`.
+       Git exits 0 when `sha` IS an ancestor, 1 when it is NOT, and
+       128 (or another non-{0,1}) when the SHA is unknown / the check
+       could not be performed. Callers treat `{:ok, false}` as
+       "fabricated stamp — treat as unmerged" and `{:error, reason}` as
+       "check unknown — be conservative".
+
+  Callers may pass a short (e.g. 7-char) SHA; the runner must handle
+  git's abbreviated-SHA resolution the same way `git rev-parse` does.
+  """
+  @callback sha_reachable?(reachability_args()) ::
+              {:ok, boolean()} | {:error, term()}
+
   @optional_callbacks [
     merge_member_into_rollup: 1,
     open_stack_pr: 1,
     diff_stat: 1,
     revert_member_merge: 1,
     close_stack_pr: 1,
-    delete_rollup_branch: 1
+    delete_rollup_branch: 1,
+    sha_reachable?: 1
   ]
 end
 
@@ -387,4 +430,11 @@ defmodule Platform.Tasks.StackDeployer.NoopRunner do
 
   @impl true
   def delete_rollup_branch(_args), do: {:ok, :deleted}
+
+  # Bug #2 (task 019f708f): default to "reachable" in the no-op runner so
+  # existing Stacks tests that use plain-string `merged_into_rollup_at`
+  # stamps or absent-runner setups keep passing. Tests exercising
+  # unreachable-stamp behavior swap in a runner that returns `{:ok, false}`.
+  @impl true
+  def sha_reachable?(_args), do: {:ok, true}
 end

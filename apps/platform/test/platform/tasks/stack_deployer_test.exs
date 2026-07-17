@@ -43,13 +43,22 @@ defmodule Platform.Tasks.StackDeployerTest do
         close_default: Keyword.get(opts, :close_default, {:ok, :closed}),
         delete_responses: Keyword.get(opts, :delete_responses, []),
         delete_default: Keyword.get(opts, :delete_default, {:ok, :deleted}),
+        # Bug #2 (task 019f708f). Reachability responses can be a plain
+        # tuple that applies to every call, OR a `%{"sha" => response}`
+        # map so a single test can queue different answers for
+        # different member SHAs. Default is `{:ok, true}` — matches
+        # NoopRunner and preserves pre-bug-#2 behavior for tests that
+        # don't care about reachability.
+        reachable_responses: Keyword.get(opts, :reachable_responses, %{}),
+        reachable_default: Keyword.get(opts, :reachable_default, {:ok, true}),
         calls: [],
         merge_calls: [],
         pr_calls: [],
         diff_stat_calls: [],
         revert_calls: [],
         close_calls: [],
-        delete_calls: []
+        delete_calls: [],
+        reachable_calls: []
       }
 
       Agent.start_link(fn -> initial end, name: __MODULE__)
@@ -64,6 +73,7 @@ defmodule Platform.Tasks.StackDeployerTest do
     def revert_calls, do: Agent.get(__MODULE__, & &1.revert_calls) |> Enum.reverse()
     def close_calls, do: Agent.get(__MODULE__, & &1.close_calls) |> Enum.reverse()
     def delete_calls, do: Agent.get(__MODULE__, & &1.delete_calls) |> Enum.reverse()
+    def reachable_calls, do: Agent.get(__MODULE__, & &1.reachable_calls) |> Enum.reverse()
 
     @impl true
     def ensure_rollup_branch(args) do
@@ -100,7 +110,14 @@ defmodule Platform.Tasks.StackDeployerTest do
 
         {response, %{state | merge_calls: [args | state.merge_calls], merge_responses: remaining}}
       end)
+      |> maybe_raise()
     end
+
+    # Bug #1 test hook (task 019f708f): a queued response of the shape
+    # `{:raise, message}` triggers a synchronous `raise RuntimeError, message`
+    # so `handle_member_transition/3`'s new try/rescue is observable end-to-end.
+    defp maybe_raise({:raise, message}) when is_binary(message), do: raise(RuntimeError, message)
+    defp maybe_raise(other), do: other
 
     @impl true
     def open_stack_pr(args) do
@@ -184,6 +201,28 @@ defmodule Platform.Tasks.StackDeployerTest do
            | delete_calls: [args | state.delete_calls],
              delete_responses: remaining
          }}
+      end)
+    end
+
+    # Bug #2 (task 019f708f): return the queued reachability answer for
+    # the requested SHA. `reachable_responses` may be a plain
+    # `{:ok, boolean}` / `{:error, reason}` tuple (applies to every
+    # call) OR a `%{"sha" => response}` map so one test can queue
+    # distinct answers per SHA (e.g. a fabricated "deadbeef" returns
+    # `{:ok, false}` while every other SHA returns `{:ok, true}`).
+    @impl true
+    def sha_reachable?(%{sha: sha} = args) do
+      Agent.get_and_update(__MODULE__, fn state ->
+        response =
+          case state.reachable_responses do
+            %{} = by_sha ->
+              Map.get(by_sha, sha, state.reachable_default)
+
+            other ->
+              other || state.reachable_default
+          end
+
+        {response, %{state | reachable_calls: [args | state.reachable_calls]}}
       end)
     end
   end
@@ -901,13 +940,13 @@ defmodule Platform.Tasks.StackDeployerTest do
 
     test "lookup-by-id: passing a binary task_id resolves to the record" do
       {:ok, _} =
-        FakeRunner.start_link(merge_responses: [{:ok, %{status: :merged, merge_sha: "by1d000"}}])
+        FakeRunner.start_link(merge_responses: [{:ok, %{status: :merged, merge_sha: "bb1d000"}}])
 
       project = project_with_repo!()
       stack = stack_for!(project, slug: "byid")
       task = review_ready_member!(project, stack)
 
-      assert {:ok, %{status: :merged, merge_sha: "by1d000"}} =
+      assert {:ok, %{status: :merged, merge_sha: "bb1d000"}} =
                StackDeployer.merge_member_into_rollup(task.id)
     end
 
@@ -924,7 +963,7 @@ defmodule Platform.Tasks.StackDeployerTest do
   describe "transition_task/2 → merge_member_into_rollup hook" do
     test "transitioning a stack member into in_review fires the runner merge" do
       {:ok, _} =
-        FakeRunner.start_link(merge_responses: [{:ok, %{status: :merged, merge_sha: "tr1g0er"}}])
+        FakeRunner.start_link(merge_responses: [{:ok, %{status: :merged, merge_sha: "ab1c0ee"}}])
 
       project = project_with_repo!()
       stack = stack_for!(project, slug: "trigger")
@@ -939,7 +978,7 @@ defmodule Platform.Tasks.StackDeployerTest do
       assert call.rollup_branch == stack.rollup_branch
 
       reloaded = Tasks.get_task_record(task.id)
-      assert reloaded.metadata["merged_into_rollup_at"]["sha"] == "tr1g0er"
+      assert reloaded.metadata["merged_into_rollup_at"]["sha"] == "ab1c0ee"
     end
 
     test "transitioning a non-stack task into in_review does NOT call the runner" do
@@ -965,6 +1004,128 @@ defmodule Platform.Tasks.StackDeployerTest do
       assert updated.status == "in_review"
       assert [_] = FakeRunner.merge_calls()
     end
+  end
+
+  # ── Bug #1 (task 019f708f): try/rescue blocker on async merge raise ──────
+  #
+  # `Task.Supervisor.async_nolink` was silently swallowing any exception
+  # raised inside the fn, stranding the member in `deploying` forever.
+  # `handle_member_transition/3` now wraps the merge in try/rescue and, on
+  # rescue, files an `execution.blocked` runtime event with
+  # `needs_human: true` (mirrors the shape used by
+  # `tool_surface.ex`'s `report_blocker`).
+
+  describe "handle_member_transition/3 try/rescue blocker path" do
+    test "runner raise fires an execution.blocked runtime event and returns :ok (async: false)" do
+      {:ok, _} =
+        FakeRunner.start_link(
+          merge_responses: [{:raise, "simulated merge failure: git conflict"}]
+        )
+
+      project = project_with_repo!()
+      stack = stack_for!(project, slug: "blocker-raise")
+      task = stack_member_at_in_review!(project, stack)
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert :ok = StackDeployer.handle_member_transition(task, "in_progress", "in_review")
+        end)
+
+      assert log =~ "rollup merge raised"
+      assert log =~ "simulated merge failure: git conflict"
+
+      # Runtime event was recorded with the expected shape.
+      import Ecto.Query
+
+      events =
+        Platform.Orchestration.RuntimeEvent
+        |> where([e], e.task_id == ^task.id and e.event_type == "execution.blocked")
+        |> Platform.Repo.all()
+
+      assert [event] = events
+      assert event.runtime_id == "stack_deployer"
+      assert event.phase == "execution"
+      assert event.payload["needs_human"] == true
+      assert event.payload["reported_by"] == "stack_deployer"
+      assert event.payload["stage_id"] == nil
+      assert event.payload["description"] =~ "simulated merge failure: git conflict"
+      assert event.payload["description"] =~ "Rollup merge raised"
+
+      # The merge WAS attempted (runner was invoked once) before the raise.
+      assert [_] = FakeRunner.merge_calls()
+    end
+
+    test "happy path does NOT fire a blocker" do
+      {:ok, _} =
+        FakeRunner.start_link(merge_responses: [{:ok, %{status: :merged, merge_sha: "aabbc01"}}])
+
+      project = project_with_repo!()
+      stack = stack_for!(project, slug: "blocker-happy")
+      task = stack_member_at_in_review!(project, stack)
+
+      assert :ok = StackDeployer.handle_member_transition(task, "in_progress", "in_review")
+
+      import Ecto.Query
+
+      assert Platform.Orchestration.RuntimeEvent
+             |> where([e], e.task_id == ^task.id and e.event_type == "execution.blocked")
+             |> Platform.Repo.all() == []
+    end
+
+    test "runner {:error, reason} tuples do NOT fire a blocker (only raises do)" do
+      # A tagged-tuple failure is already a normal, non-crashing outcome
+      # (see `log_merge_result/2`); the blocker path is reserved for
+      # actual exceptions escaping the merge fn.
+      {:ok, _} =
+        FakeRunner.start_link(merge_responses: [{:error, {:git_failed, ["push"], 128, "auth"}}])
+
+      project = project_with_repo!()
+      stack = stack_for!(project, slug: "blocker-tuple-error")
+      task = stack_member_at_in_review!(project, stack)
+
+      assert :ok = StackDeployer.handle_member_transition(task, "in_progress", "in_review")
+
+      import Ecto.Query
+
+      assert Platform.Orchestration.RuntimeEvent
+             |> where([e], e.task_id == ^task.id and e.event_type == "execution.blocked")
+             |> Platform.Repo.all() == []
+    end
+  end
+
+  # Bug #1 test helper: a stack member sitting AT in_review with a passed
+  # review stage so `handle_member_transition/3` treats the transition as
+  # authoritative. We DO NOT drive it through `Tasks.transition_task/2`
+  # here — the fixture directly stages the record so we can invoke the
+  # deployer hook independently and observe both the happy and rescue
+  # paths.
+  defp stack_member_at_in_review!(project, stack) do
+    {:ok, task} =
+      Tasks.create_task(%{
+        project_id: project.id,
+        title: "Blocker Member #{uniq()}",
+        status: "in_review"
+      })
+
+    {:ok, task} = Tasks.update_task(task, %{stack_id: stack.id, stack_position: 1})
+
+    {:ok, plan} = Tasks.create_plan(%{task_id: task.id, status: "approved"})
+
+    {:ok, stage} =
+      Tasks.create_stage(%{
+        plan_id: plan.id,
+        position: 1,
+        name: "Task-level review",
+        status: "passed"
+      })
+
+    {:ok, _} =
+      Tasks.create_validation(%{stage_id: stage.id, kind: "lint_pass", status: "passed"})
+
+    {:ok, _} =
+      Tasks.create_validation(%{stage_id: stage.id, kind: "test_pass", status: "passed"})
+
+    Tasks.get_task_record(task.id)
   end
 
   # ── Stage 2 helpers ───────────────────────────────────────────────────────
@@ -1146,6 +1307,93 @@ defmodule Platform.Tasks.StackDeployerTest do
 
       assert {:ok, :not_ready} = StackDeployer.maybe_open_stack_pr(stack)
       assert FakeRunner.pr_calls() == []
+    end
+
+    # ── Bug #2 (task 019f708f): reachability gate on all_members_ready?/2 ─
+
+    test "member with unreachable stamp sha → {:ok, :not_ready}; no PR shell-out; warning logged" do
+      # One of three merged members carries a stamp whose SHA the
+      # runner reports NOT reachable from the rollup tip (fabricated
+      # or reverted-out). all_members_ready? must veto the open.
+      {:ok, _} =
+        FakeRunner.start_link(
+          reachable_responses: %{
+            # Fabricated stamp: NOT reachable.
+            "deadbeef" => {:ok, false},
+            # Real stamps: reachable.
+            "0ea0001" => {:ok, true},
+            "0ea0002" => {:ok, true}
+          }
+        )
+
+      project = project_with_repo!()
+      stack = stack_for!(project, slug: "unreachable-stamp")
+
+      _ = merged_member!(project, stack, sha: "0ea0001", position: 1)
+      offender = merged_member!(project, stack, sha: "deadbeef", position: 2)
+      _ = merged_member!(project, stack, sha: "0ea0002", position: 3)
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert {:ok, :not_ready} = StackDeployer.maybe_open_stack_pr(stack)
+        end)
+
+      # Warning names the offender and its unreachable sha.
+      assert log =~ "all_members_ready?"
+      assert log =~ offender.id
+      assert log =~ "deadbeef"
+      assert log =~ "not reachable"
+      assert log =~ stack.rollup_branch
+
+      # No PR shell-out.
+      assert FakeRunner.pr_calls() == []
+      # Reachability runner WAS invoked (at least the offender).
+      assert FakeRunner.reachable_calls() != []
+    end
+
+    test "reachability check errors are treated as unreachable (conservative gate)" do
+      {:ok, _} =
+        FakeRunner.start_link(
+          reachable_responses: %{"bad0001" => {:error, :network_boom}, "a000001" => {:ok, true}}
+        )
+
+      project = project_with_repo!()
+      stack = stack_for!(project, slug: "unreachable-error")
+
+      _ = merged_member!(project, stack, sha: "a000001", position: 1)
+      _ = merged_member!(project, stack, sha: "bad0001", position: 2)
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert {:ok, :not_ready} = StackDeployer.maybe_open_stack_pr(stack)
+        end)
+
+      assert log =~ "reachability check failed"
+      assert log =~ ":network_boom"
+      assert FakeRunner.pr_calls() == []
+    end
+
+    test "all stamps reachable → PR opens (regression: reachability gate does not spuriously fail)" do
+      {:ok, _} =
+        FakeRunner.start_link(
+          # Default reachable_default is {:ok, true}; be explicit.
+          reachable_default: {:ok, true},
+          pr_responses: [{:ok, %{number: 555, url: "https://github.com/test/repo/pull/555"}}]
+        )
+
+      project = project_with_repo!()
+      stack = stack_for!(project, slug: "reachable-happy")
+
+      _ = merged_member!(project, stack, sha: "eac1a01", position: 1)
+      _ = merged_member!(project, stack, sha: "eac2b02", position: 2)
+
+      assert {:ok, %{status: :opened, number: 555}} =
+               StackDeployer.maybe_open_stack_pr(stack)
+
+      # Reachability runner WAS invoked once per member.
+      assert length(FakeRunner.reachable_calls()) == 2
+      assert [pr_call] = FakeRunner.pr_calls()
+      assert pr_call.rollup_branch == stack.rollup_branch
     end
   end
 
@@ -1774,7 +2022,7 @@ defmodule Platform.Tasks.StackDeployerTest do
     test "successful per-member merge triggers the gate (PR opened when last merge lands)" do
       {:ok, _} =
         FakeRunner.start_link(
-          merge_responses: [{:ok, %{status: :merged, merge_sha: "lastmerg"}}],
+          merge_responses: [{:ok, %{status: :merged, merge_sha: "1a5dee6"}}],
           pr_responses: [
             {:ok, %{number: 312, url: "https://github.com/test/repo/pull/312"}}
           ]
@@ -1792,7 +2040,7 @@ defmodule Platform.Tasks.StackDeployerTest do
       # stack PR gate, find all 3 members merged, and open ONE PR.
       task = review_ready_member!(project, stack)
 
-      assert {:ok, %{status: :merged, merge_sha: "lastmerg"}} =
+      assert {:ok, %{status: :merged, merge_sha: "1a5dee6"}} =
                StackDeployer.merge_member_into_rollup(task)
 
       assert [_pr_call] = FakeRunner.pr_calls()
@@ -1804,7 +2052,7 @@ defmodule Platform.Tasks.StackDeployerTest do
 
     test "successful per-member merge with members still pending → gate :not_ready, no PR" do
       {:ok, _} =
-        FakeRunner.start_link(merge_responses: [{:ok, %{status: :merged, merge_sha: "midmerge"}}])
+        FakeRunner.start_link(merge_responses: [{:ok, %{status: :merged, merge_sha: "abcdef1"}}])
 
       project = project_with_repo!()
       stack = stack_for!(project, slug: "still-pending")
@@ -1815,7 +2063,7 @@ defmodule Platform.Tasks.StackDeployerTest do
 
       task = review_ready_member!(project, stack)
 
-      assert {:ok, %{status: :merged, merge_sha: "midmerge"}} =
+      assert {:ok, %{status: :merged, merge_sha: "abcdef1"}} =
                StackDeployer.merge_member_into_rollup(task)
 
       # 1+1+1 merged out of 1+1+1+1 = still incomplete (the unmerged member is in_progress).
@@ -1840,19 +2088,36 @@ defmodule Platform.Tasks.StackDeployerTest do
         status: "in_review"
       })
 
+    # Bug #3 (task 019f708f): the changeset validator requires SHAs
+    # to be at least 7 hex chars. Zero-pad shorter test fixtures
+    # rather than touching every call site.
+    padded_sha = pad_sha_for_validator(sha)
+
     {:ok, task} =
       Tasks.update_task(task, %{
         stack_id: stack.id,
         stack_position: position,
         metadata: %{
           "merged_into_rollup_at" => %{
-            "sha" => sha,
+            "sha" => padded_sha,
             "at" => DateTime.utc_now() |> DateTime.to_iso8601()
           }
         }
       })
 
     task
+  end
+
+  # Bug #3 helper: coerce short / non-hex shas into a
+  # hex-shaped string at least 7 chars so the
+  # `merged_into_rollup_at` shape validator accepts them without
+  # touching every call site.
+  defp pad_sha_for_validator(sha) when is_binary(sha) do
+    hex_only = String.replace(sha, ~r/[^0-9a-fA-F]/, "0")
+
+    if byte_size(hex_only) >= 7,
+      do: hex_only,
+      else: String.duplicate("0", 7 - byte_size(hex_only)) <> hex_only
   end
 
   defp unmerged_member!(project, stack, opts) do
@@ -1907,9 +2172,9 @@ defmodule Platform.Tasks.StackDeployerTest do
       # 3 stack members merged in chronological order; the 3rd (most
       # recent) is the heuristic offender whose merge commit is reverted.
       # But all 3 members must bounce.
-      m1 = merged_member_with_time!(project, stack, sha: "sha1aaaa", position: 1, minutes_ago: 30)
-      m2 = merged_member_with_time!(project, stack, sha: "sha2bbbb", position: 2, minutes_ago: 20)
-      m3 = merged_member_with_time!(project, stack, sha: "sha3cccc", position: 3, minutes_ago: 10)
+      m1 = merged_member_with_time!(project, stack, sha: "aa1aaaa", position: 1, minutes_ago: 30)
+      m2 = merged_member_with_time!(project, stack, sha: "bb2bbbb", position: 2, minutes_ago: 20)
+      m3 = merged_member_with_time!(project, stack, sha: "cc3cccc", position: 3, minutes_ago: 10)
 
       {:ok, deployed} =
         Stacks.update_stack(stack, %{
@@ -1961,7 +2226,7 @@ defmodule Platform.Tasks.StackDeployerTest do
       assert [revert_call] = FakeRunner.revert_calls()
       assert revert_call.repo_url == project.repo_url
       assert revert_call.rollup_branch == stack.rollup_branch
-      assert revert_call.merge_sha == "sha3cccc"
+      assert revert_call.merge_sha == "cc3cccc"
       assert revert_call.project_id == project.id
       assert revert_call.stack_id == stack.id
       assert revert_call.member_task_id == m3.id
@@ -2105,7 +2370,7 @@ defmodule Platform.Tasks.StackDeployerTest do
             |> Tasks.get_task_record()
             |> Map.get(:metadata)
             |> Map.put("merged_into_rollup_at", %{
-              "sha" => "remergea",
+              "sha" => "e0e0eea",
               "at" => DateTime.utc_now() |> DateTime.to_iso8601()
             })
         })
@@ -2160,6 +2425,47 @@ defmodule Platform.Tasks.StackDeployerTest do
 
       assert log =~ "CI attribution heuristic"
       assert log =~ "review may be required"
+    end
+
+    # Bug #2 (task 019f708f): the CI-failure heuristic still bounces
+    # the last-merged member (stamp order is the only ordering signal
+    # available on this path), but logs a warning when the picked
+    # offender's stamp isn't actually reachable from the rollup tip.
+    test "picks the last-merged offender even when its stamp is unreachable but logs a warning" do
+      {:ok, _} =
+        FakeRunner.start_link(
+          reachable_responses: %{"dead001" => {:ok, false}},
+          revert_responses: [{:ok, %{status: :reverted, revert_sha: "revfake1"}}],
+          close_responses: [{:ok, :closed}]
+        )
+
+      project = project_with_repo!()
+      stack = stack_for!(project, slug: "pick-unreachable")
+
+      # Single merged member with a fabricated stamp.
+      m1 = merged_member!(project, stack, sha: "dead001", position: 1)
+
+      {:ok, deployed} =
+        Stacks.update_stack(stack, %{
+          status: "deploying",
+          metadata: %{"rollup_pr" => %{"number" => 44}}
+        })
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          assert {:ok, %{status: :bounced}} =
+                   StackDeployer.handle_rollup_ci_failure(deployed, %{
+                     ci_run_url: "https://example/run/pick",
+                     head_sha: "h-pick"
+                   })
+        end)
+
+      assert log =~ "pick_offender"
+      assert log =~ m1.id
+      assert log =~ "dead001"
+      assert log =~ "NOT reachable"
+      # Bounce still proceeded — a revert was attempted despite the warning.
+      assert FakeRunner.revert_calls() != []
     end
   end
 
@@ -2223,7 +2529,7 @@ defmodule Platform.Tasks.StackDeployerTest do
       project = project_with_repo!()
       stack = stack_for!(project, slug: "pr-close-boom")
 
-      m1 = merged_member_with_time!(project, stack, sha: "cls1aaa", position: 1, minutes_ago: 10)
+      m1 = merged_member_with_time!(project, stack, sha: "c1a1aaa", position: 1, minutes_ago: 10)
 
       {:ok, deployed} =
         Stacks.update_stack(stack, %{
@@ -2242,7 +2548,7 @@ defmodule Platform.Tasks.StackDeployerTest do
       # Bounce went through despite PR close failure.
       reloaded = Tasks.get_task_record(m1.id)
       assert reloaded.status == "in_progress"
-      assert reloaded.metadata["bounced_from_rollup"]["sha"] == "cls1aaa"
+      assert reloaded.metadata["bounced_from_rollup"]["sha"] == "c1a1aaa"
 
       reloaded_stack = Stacks.get_stack(deployed.id)
       assert reloaded_stack.status == "in_progress"
@@ -2341,7 +2647,7 @@ defmodule Platform.Tasks.StackDeployerTest do
   # ── Stage 5 helpers ───────────────────────────────────────────────────────
 
   defp merged_member_with_time!(project, stack, opts) do
-    sha = Keyword.fetch!(opts, :sha)
+    sha = Keyword.fetch!(opts, :sha) |> pad_sha_for_validator()
     position = Keyword.get(opts, :position, 1)
     minutes_ago = Keyword.get(opts, :minutes_ago, 0)
     title = Keyword.get(opts, :title, "Merged member #{uniq()}")
@@ -2691,7 +2997,7 @@ defmodule Platform.Tasks.StackDeployerTest do
 
     test "[:member_merged] fires on successful per-member merge with duration_us + metadata" do
       {:ok, _} =
-        FakeRunner.start_link(merge_responses: [{:ok, %{status: :merged, merge_sha: "mergeSha"}}])
+        FakeRunner.start_link(merge_responses: [{:ok, %{status: :merged, merge_sha: "abccafe"}}])
 
       handler_id = "test-adr42-member-merged-#{uniq()}"
       test_pid = self()
@@ -2715,7 +3021,7 @@ defmodule Platform.Tasks.StackDeployerTest do
       _ = unmerged_member!(project, stack, position: 2)
       task = review_ready_member!(project, stack)
 
-      assert {:ok, %{status: :merged, merge_sha: "mergeSha"}} =
+      assert {:ok, %{status: :merged, merge_sha: "abccafe"}} =
                StackDeployer.merge_member_into_rollup(task)
 
       assert_received {:telemetry, [:platform, :stacks, :rollup, :member_merged],
@@ -2724,7 +3030,7 @@ defmodule Platform.Tasks.StackDeployerTest do
       assert is_integer(duration_us) and duration_us >= 0
       assert metadata.stack_id == stack.id
       assert metadata.task_id == task.id
-      assert metadata.merge_sha == "mergeSha"
+      assert metadata.merge_sha == "abccafe"
       assert is_binary(metadata.member_branch)
       assert String.starts_with?(metadata.member_branch, "task/")
     end

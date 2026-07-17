@@ -322,6 +322,116 @@ defmodule Platform.Tasks.TaskTest do
     end
   end
 
+  # Bug #5 (task 019f708f): stack members with a live rollup_branch must
+  # NOT inherit the project's per-member `pr_merge` default — the stack
+  # ships as ONE rollup PR via `StackDeployer.maybe_open_stack_pr/1`,
+  # so a per-member PR shatters the rollup discipline. Resolver returns
+  # `no_op_wait_for_rollup` in that case; explicit task overrides still
+  # win.
+  describe "resolve_deploy_strategy/1 — bug #5 stack member gate" do
+    alias Platform.Tasks.Stacks
+
+    defp stack_with_rollup!(project, opts \\ []) do
+      slug = Keyword.get(opts, :slug, "b5-#{System.unique_integer([:positive])}")
+
+      {:ok, stack} =
+        Stacks.create_stack(%{
+          project_id: project.id,
+          slug: slug,
+          name: "B5 " <> slug,
+          base_branch: "main",
+          rollup_branch: Stacks.rollup_branch_name(slug)
+        })
+
+      stack
+    end
+
+    defp attach_to_stack!(task, stack) do
+      {:ok, task} = Tasks.update_task(task, %{stack_id: stack.id, stack_position: 1})
+      task
+    end
+
+    test "standalone task with project pr_merge default → pr_merge",
+         %{project: project} do
+      pr_merge = %{"type" => "pr_merge", "config" => %{"auto_merge" => true}}
+
+      {:ok, project} =
+        Tasks.update_project(project, %{deploy_config: %{"default_strategy" => pr_merge}})
+
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Standalone"})
+      task = Platform.Repo.preload(task, :project)
+
+      assert Tasks.resolve_deploy_strategy(task) == pr_merge
+    end
+
+    test "stack member with rollup_branch → no_op_wait_for_rollup (overrides project default)",
+         %{project: project} do
+      pr_merge = %{"type" => "pr_merge", "config" => %{"auto_merge" => true}}
+
+      {:ok, project} =
+        Tasks.update_project(project, %{deploy_config: %{"default_strategy" => pr_merge}})
+
+      stack = stack_with_rollup!(project)
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Stack member"})
+      task = attach_to_stack!(task, stack)
+      task = Platform.Repo.preload(task, :project)
+
+      assert Tasks.resolve_deploy_strategy(task) == %{"type" => "no_op_wait_for_rollup"}
+    end
+
+    test "stack member with blank rollup_branch falls through to project default",
+         %{project: project} do
+      pr_merge = %{"type" => "pr_merge", "config" => %{}}
+
+      {:ok, project} =
+        Tasks.update_project(project, %{deploy_config: %{"default_strategy" => pr_merge}})
+
+      # Defensive scenario: a stack row whose `rollup_branch` is a
+      # blank string (schema-level NOT NULL prevents outright NULL,
+      # but "" is legal at the column and defensively equivalent to
+      # "no rollup"). The resolver must degrade gracefully to the
+      # project default.
+      stack = stack_with_rollup!(project)
+
+      Platform.Repo.query!(
+        "UPDATE task_stacks SET rollup_branch = '' WHERE id = $1",
+        [Ecto.UUID.dump!(stack.id)]
+      )
+
+      {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "Bare stack member"})
+      task = attach_to_stack!(task, stack)
+      task = Platform.Repo.preload(task, :project)
+
+      assert Tasks.resolve_deploy_strategy(task) == pr_merge
+    end
+
+    test "explicit task.deploy_strategy wins over the stack-member override",
+         %{project: project} do
+      pr_merge = %{"type" => "pr_merge", "config" => %{}}
+
+      {:ok, project} =
+        Tasks.update_project(project, %{deploy_config: %{"default_strategy" => pr_merge}})
+
+      stack = stack_with_rollup!(project)
+
+      override = %{"type" => "skill_driven", "skill_id" => "custom-deploy"}
+
+      {:ok, task} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Stack member with explicit override",
+          deploy_strategy: override
+        })
+
+      task = attach_to_stack!(task, stack)
+      task = Platform.Repo.preload(task, :project)
+
+      # Explicit override wins even when the task IS a stack member with
+      # a live rollup — operators can always force a per-member deploy.
+      assert Tasks.resolve_deploy_strategy(task) == override
+    end
+  end
+
   describe "resolve_deploy_target/1" do
     test "returns explicit task target when set", %{project: project} do
       {:ok, task} =
@@ -1235,6 +1345,145 @@ defmodule Platform.Tasks.TaskTest do
 
       reloaded = Repo.get!(Task, task.id)
       assert reloaded.deploy_target_config == config
+    end
+  end
+
+  # Bug #3 (task 019f708f): shape-validate metadata["merged_into_rollup_at"]
+  # at the changeset boundary so the FunctionClauseError class in
+  # `stack_deployer.ex` (every `%{"sha" => sha}` pattern match on the
+  # raw stamp) is closed structurally.
+  describe "validate_metadata (bug #3) merged_into_rollup_at shape" do
+    test "invalid: bare string stamp", %{project: project} do
+      changeset =
+        Task.changeset(%Task{}, %{
+          project_id: project.id,
+          title: "Bare string stamp",
+          metadata: %{"merged_into_rollup_at" => "plain string"}
+        })
+
+      refute changeset.valid?
+      assert %{metadata: [msg]} = errors_on(changeset)
+      assert msg =~ "merged_into_rollup_at must be"
+      assert msg =~ "must be a map"
+    end
+
+    test "invalid: map with sha but bad iso8601 at", %{project: project} do
+      changeset =
+        Task.changeset(%Task{}, %{
+          project_id: project.id,
+          title: "Bad iso",
+          metadata: %{
+            "merged_into_rollup_at" => %{"sha" => "abc1234", "at" => "not-iso"}
+          }
+        })
+
+      refute changeset.valid?
+      assert %{metadata: [msg]} = errors_on(changeset)
+      assert msg =~ "at is not ISO8601"
+    end
+
+    test "invalid: map with too-short sha", %{project: project} do
+      changeset =
+        Task.changeset(%Task{}, %{
+          project_id: project.id,
+          title: "Short sha",
+          metadata: %{
+            "merged_into_rollup_at" => %{"sha" => "abc", "at" => "2026-07-17T00:00:00Z"}
+          }
+        })
+
+      refute changeset.valid?
+      assert %{metadata: [msg]} = errors_on(changeset)
+      assert msg =~ "sha must be at least 7 hex chars"
+    end
+
+    test "invalid: map with non-hex sha", %{project: project} do
+      changeset =
+        Task.changeset(%Task{}, %{
+          project_id: project.id,
+          title: "Non-hex sha",
+          metadata: %{
+            "merged_into_rollup_at" => %{"sha" => "zzzzzzzz", "at" => "2026-07-17T00:00:00Z"}
+          }
+        })
+
+      refute changeset.valid?
+      assert %{metadata: [msg]} = errors_on(changeset)
+      assert msg =~ "sha must be hex-shaped"
+    end
+
+    test "invalid: map missing required keys", %{project: project} do
+      changeset =
+        Task.changeset(%Task{}, %{
+          project_id: project.id,
+          title: "Missing keys",
+          metadata: %{"merged_into_rollup_at" => %{"sha" => "abc1234"}}
+        })
+
+      refute changeset.valid?
+      assert %{metadata: [msg]} = errors_on(changeset)
+      assert msg =~ "must include :sha and :at keys"
+    end
+
+    test "valid: full map with 7-char sha + iso8601 at", %{project: project} do
+      changeset =
+        Task.changeset(%Task{}, %{
+          project_id: project.id,
+          title: "Well-shaped stamp",
+          metadata: %{
+            "merged_into_rollup_at" => %{
+              "sha" => "abc1234",
+              "at" => "2026-07-17T00:00:00Z"
+            }
+          }
+        })
+
+      assert changeset.valid?, "unexpected errors: #{inspect(errors_on(changeset))}"
+    end
+
+    test "valid: full-length 40-char sha + iso8601 at with offset", %{project: project} do
+      changeset =
+        Task.changeset(%Task{}, %{
+          project_id: project.id,
+          title: "Full sha",
+          metadata: %{
+            "merged_into_rollup_at" => %{
+              "sha" => "0123456789abcdef0123456789abcdef01234567",
+              "at" => "2026-07-17T00:00:00.123456+00:00"
+            }
+          }
+        })
+
+      assert changeset.valid?, "unexpected errors: #{inspect(errors_on(changeset))}"
+    end
+
+    test "valid: metadata map without merged_into_rollup_at key", %{project: project} do
+      changeset =
+        Task.changeset(%Task{}, %{
+          project_id: project.id,
+          title: "Metadata absent stamp",
+          metadata: %{"other_key" => "value"}
+        })
+
+      assert changeset.valid?
+    end
+
+    test "valid: empty metadata map", %{project: project} do
+      changeset =
+        Task.changeset(%Task{}, %{
+          project_id: project.id,
+          title: "Empty metadata",
+          metadata: %{}
+        })
+
+      assert changeset.valid?
+    end
+
+    test "valid: metadata omitted from attrs entirely", %{project: project} do
+      # No `:metadata` key in attrs — validate_metadata gets a nil change
+      # and must be a no-op.
+      changeset = Task.changeset(%Task{}, %{project_id: project.id, title: "No metadata attr"})
+      assert changeset.valid?
     end
   end
 

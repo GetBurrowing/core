@@ -1116,6 +1116,37 @@ defmodule Platform.Orchestration.HeartbeatScheduler do
     """
   end
 
+  # Bug #5 (task 019f708f): a stack member with a live rollup branch
+  # must NOT open its own per-member PR — the stack ships as ONE
+  # rollup PR via `Platform.Tasks.StackDeployer.maybe_open_stack_pr/1`.
+  # `Tasks.resolve_deploy_strategy/1` returns `no_op_wait_for_rollup`
+  # for such tasks; the executor needs a one-shot instruction to
+  # yield back to the stack sweep without doing any per-member deploy
+  # work at all.
+  defp deploy_strategy_instructions(
+         "no_op_wait_for_rollup",
+         _config,
+         _repo_url,
+         _default_branch,
+         _task_slug
+       ) do
+    """
+    ## Stack Member — No Per-Member Deploy
+
+    This task is a member of a Task Stack (ADR 0041) with a live rollup
+    branch. The stack ships as ONE rollup PR via
+    `Platform.Tasks.StackDeployer.maybe_open_stack_pr/1`; a per-member
+    `gh pr create` here would shatter the rollup discipline.
+
+    1. Do NOT open a PR for this member.
+    2. Pass any deploy-stage validations that were dispatched for this
+       task with a short "stack-managed" evidence note.
+    3. Call `stage_complete` immediately to yield back to the stack-level
+       sweep — it will open (or has already opened) the rollup PR once
+       every member has merged into `rollup_branch`.
+    """
+  end
+
   defp deploy_strategy_instructions(_type, _config, _repo_url, _default_branch, _task_slug) do
     """
     ## Deploy

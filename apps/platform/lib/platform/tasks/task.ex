@@ -165,6 +165,7 @@ defmodule Platform.Tasks.Task do
     |> validate_inclusion(:priority, @priorities)
     |> validate_phase_assignees()
     |> validate_dependencies()
+    |> validate_metadata()
     |> validate_deploy_target_config()
     |> foreign_key_constraint(:project_id)
     |> foreign_key_constraint(:epic_id)
@@ -234,6 +235,81 @@ defmodule Platform.Tasks.Task do
   end
 
   defp valid_dependency_entry?(_), do: false
+
+  # Bug #3 (task 019f708f): shape-validate `metadata["merged_into_rollup_at"]`.
+  #
+  # When present, the stamp MUST be a map with:
+  #
+  #   * `"sha"` — a binary at least 7 chars long, matching
+  #     `~r/^[0-9a-f]+$/i` (git-sha-shaped).
+  #   * `"at"` — a binary that round-trips through
+  #     `DateTime.from_iso8601/1`.
+  #
+  # A missing key, `nil` metadata, or absent `merged_into_rollup_at`
+  # entry are all valid — the check applies only when the stamp is
+  # asserted. Rejecting the malformed shapes at the changeset boundary
+  # closes the `FunctionClauseError` class in `stack_deployer.ex`
+  # (lines 885, 891, 1159, 1331 — every `%{"sha" => sha}` match on
+  # the raw stamp).
+  @merged_sha_regex ~r/^[0-9a-f]+$/i
+  defp validate_metadata(changeset) do
+    case get_change(changeset, :metadata) do
+      nil ->
+        changeset
+
+      meta when is_map(meta) ->
+        case Map.fetch(meta, "merged_into_rollup_at") do
+          :error ->
+            changeset
+
+          {:ok, stamp} ->
+            case validate_merged_into_rollup_at(stamp) do
+              :ok ->
+                changeset
+
+              {:error, reason} ->
+                add_error(
+                  changeset,
+                  :metadata,
+                  "merged_into_rollup_at must be %{sha: <git_sha>, at: <iso8601>} " <>
+                    "(#{reason})"
+                )
+            end
+        end
+
+      _other ->
+        add_error(changeset, :metadata, "must be a map")
+    end
+  end
+
+  defp validate_merged_into_rollup_at(%{"sha" => sha, "at" => at})
+       when is_binary(sha) and is_binary(at) do
+    with :ok <- validate_merged_sha(sha),
+         :ok <- validate_merged_at(at) do
+      :ok
+    end
+  end
+
+  defp validate_merged_into_rollup_at(%{}), do: {:error, "map must include :sha and :at keys"}
+  defp validate_merged_into_rollup_at(_stamp), do: {:error, "must be a map"}
+
+  defp validate_merged_sha(sha) when byte_size(sha) < 7,
+    do: {:error, "sha must be at least 7 hex chars"}
+
+  defp validate_merged_sha(sha) do
+    if Regex.match?(@merged_sha_regex, sha) do
+      :ok
+    else
+      {:error, "sha must be hex-shaped (matches ~r/^[0-9a-f]+$/i)"}
+    end
+  end
+
+  defp validate_merged_at(at) do
+    case DateTime.from_iso8601(at) do
+      {:ok, _dt, _off} -> :ok
+      {:error, reason} -> {:error, "at is not ISO8601: #{inspect(reason)}"}
+    end
+  end
 
   # `deploy_target_config` (task 019f5e66 stage 2) must be a string-keyed
   # map with a `"strategy"` key drawn from

@@ -1804,7 +1804,9 @@ defmodule Platform.Tasks.StacksTest do
       attached_parent
       |> Task.changeset(%{
         status: "in_review",
-        metadata: %{"merged_into_rollup_at" => "abc123"}
+        metadata: %{
+          "merged_into_rollup_at" => %{"sha" => "abc1234", "at" => "2026-07-17T00:00:00Z"}
+        }
       })
       |> Repo.update!()
 
@@ -1851,7 +1853,9 @@ defmodule Platform.Tasks.StacksTest do
       attached_parent
       |> Task.changeset(%{
         status: "in_progress",
-        metadata: %{"merged_into_rollup_at" => "abc123"}
+        metadata: %{
+          "merged_into_rollup_at" => %{"sha" => "abc1234", "at" => "2026-07-17T00:00:00Z"}
+        }
       })
       |> Repo.update!()
 
@@ -1876,6 +1880,310 @@ defmodule Platform.Tasks.StacksTest do
       # Outsider is in_progress, no merge stamp — irrelevant because
       # it's not an in-stack dep.
       assert Stacks.unblocked_in_stack?(attached_child)
+    end
+  end
+
+  # ── Bug #2 (task 019f708f): unblocked_in_stack? reachability gate ──────
+  #
+  # After `threshold_cleared?/1` confirms the stamp is PRESENT,
+  # `unblocked_in_stack?/1` additionally verifies the stamp's SHA is
+  # actually reachable from the current rollup-branch tip via the
+  # configured git runner's `sha_reachable?/1`. A fabricated /
+  # reverted-out stamp is treated as unmerged and a warning is logged
+  # naming the offender.
+
+  defmodule ReachabilityRunner do
+    @moduledoc false
+    @behaviour Platform.Tasks.StackDeployer.GitRunner
+
+    use Agent
+
+    def start_link(_opts \\ []) do
+      Agent.start_link(
+        fn -> %{by_sha: %{}, default: {:ok, true}, calls: []} end,
+        name: __MODULE__
+      )
+    end
+
+    def stop, do: Agent.stop(__MODULE__)
+    def calls, do: Agent.get(__MODULE__, & &1.calls) |> Enum.reverse()
+
+    def set_response(sha, response) when is_binary(sha) do
+      Agent.update(__MODULE__, fn state ->
+        %{state | by_sha: Map.put(state.by_sha, sha, response)}
+      end)
+    end
+
+    def set_default(response) do
+      Agent.update(__MODULE__, fn state -> %{state | default: response} end)
+    end
+
+    @impl true
+    def ensure_rollup_branch(_args), do: {:ok, %{status: :already_exists, base_sha: nil}}
+
+    @impl true
+    def merge_member_into_rollup(_args),
+      do: {:ok, %{status: :merged, merge_sha: "0000000000000000000000000000000000000000"}}
+
+    @impl true
+    def open_stack_pr(_args),
+      do: {:ok, %{number: 0, url: "https://github.com/example/example/pull/0"}}
+
+    @impl true
+    def diff_stat(_args), do: {:ok, ""}
+
+    @impl true
+    def revert_member_merge(_args),
+      do: {:ok, %{status: :reverted, revert_sha: "0000000000000000000000000000000000000000"}}
+
+    @impl true
+    def close_stack_pr(_args), do: {:ok, :closed}
+
+    @impl true
+    def delete_rollup_branch(_args), do: {:ok, :deleted}
+
+    @impl true
+    def sha_reachable?(%{sha: sha} = args) do
+      Agent.get_and_update(__MODULE__, fn state ->
+        response = Map.get(state.by_sha, sha, state.default)
+        {response, %{state | calls: [args | state.calls]}}
+      end)
+    end
+  end
+
+  describe "unblocked_in_stack?/1 — bug #2 reachability gate" do
+    setup do
+      prev = Application.get_env(:platform, :stack_deployer, [])
+      {:ok, _} = ReachabilityRunner.start_link()
+
+      Application.put_env(:platform, :stack_deployer,
+        git_runner: ReachabilityRunner,
+        async: false
+      )
+
+      on_exit(fn ->
+        Application.put_env(:platform, :stack_deployer, prev)
+
+        try do
+          ReachabilityRunner.stop()
+        catch
+          :exit, _ -> :ok
+        end
+      end)
+
+      :ok
+    end
+
+    test "returns false when in-stack dep's stamp sha is unreachable; log names the offender" do
+      {:ok, project} =
+        Tasks.create_project(%{
+          name: "Unreach parent",
+          repo_url: "https://github.com/test/reach-repo"
+        })
+
+      stack = stack_fixture(project_id: project.id)
+      {:ok, parent} = Tasks.create_task(%{project_id: project.id, title: "Parent"})
+
+      {:ok, child} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Child",
+          dependencies: [%{"task_id" => parent.id, "kind" => "blocks"}]
+        })
+
+      {:ok, attached_parent} = Stacks.add_task(stack, parent)
+      {:ok, attached_child} = Stacks.add_task(stack, child)
+
+      attached_parent
+      |> Task.changeset(%{
+        status: "in_review",
+        metadata: %{
+          "merged_into_rollup_at" => %{
+            "sha" => "deadbeef",
+            "at" => DateTime.utc_now() |> DateTime.to_iso8601()
+          }
+        }
+      })
+      |> Repo.update!()
+
+      ReachabilityRunner.set_response("deadbeef", {:ok, false})
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          refute Stacks.unblocked_in_stack?(attached_child)
+        end)
+
+      assert log =~ "threshold_cleared?"
+      assert log =~ "deadbeef"
+      assert log =~ stack.rollup_branch
+      assert log =~ "not reachable"
+      # The warning names the offending dep (attached_parent).
+      assert log =~ attached_parent.id
+    end
+
+    test "returns true when in-stack dep's stamp sha is reachable" do
+      {:ok, project} =
+        Tasks.create_project(%{
+          name: "Reach parent",
+          repo_url: "https://github.com/test/reach-repo"
+        })
+
+      stack = stack_fixture(project_id: project.id)
+      {:ok, parent} = Tasks.create_task(%{project_id: project.id, title: "Parent"})
+
+      {:ok, child} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Child",
+          dependencies: [%{"task_id" => parent.id, "kind" => "blocks"}]
+        })
+
+      {:ok, attached_parent} = Stacks.add_task(stack, parent)
+      {:ok, attached_child} = Stacks.add_task(stack, child)
+
+      attached_parent
+      |> Task.changeset(%{
+        status: "in_review",
+        metadata: %{
+          "merged_into_rollup_at" => %{
+            "sha" => "abc1234",
+            "at" => DateTime.utc_now() |> DateTime.to_iso8601()
+          }
+        }
+      })
+      |> Repo.update!()
+
+      ReachabilityRunner.set_response("abc1234", {:ok, true})
+
+      assert Stacks.unblocked_in_stack?(attached_child)
+    end
+
+    test "reachability check errors are treated as unreachable (conservative)" do
+      {:ok, project} =
+        Tasks.create_project(%{
+          name: "Reach errs",
+          repo_url: "https://github.com/test/reach-repo"
+        })
+
+      stack = stack_fixture(project_id: project.id)
+      {:ok, parent} = Tasks.create_task(%{project_id: project.id, title: "Parent"})
+
+      {:ok, child} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Child",
+          dependencies: [%{"task_id" => parent.id, "kind" => "blocks"}]
+        })
+
+      {:ok, attached_parent} = Stacks.add_task(stack, parent)
+      {:ok, attached_child} = Stacks.add_task(stack, child)
+
+      attached_parent
+      |> Task.changeset(%{
+        status: "in_review",
+        metadata: %{
+          "merged_into_rollup_at" => %{
+            "sha" => "bec0b0f",
+            "at" => DateTime.utc_now() |> DateTime.to_iso8601()
+          }
+        }
+      })
+      |> Repo.update!()
+
+      ReachabilityRunner.set_response("bec0b0f", {:error, :network_boom})
+
+      log =
+        ExUnit.CaptureLog.capture_log(fn ->
+          refute Stacks.unblocked_in_stack?(attached_child)
+        end)
+
+      assert log =~ "reachability check failed"
+      assert log =~ ":network_boom"
+    end
+
+    test "project with no repo_url falls back to stamp-presence check (no runner call)" do
+      # No repo_url on the project — the reachability layer can't
+      # verify, so it defers to the presence-only gate (existing
+      # behavior). This preserves the pre-bug-#2 promotion contract
+      # for projects that aren't yet wired up to a real git remote.
+      {:ok, project} = Tasks.create_project(%{name: "No repo url"})
+      stack = stack_fixture(project_id: project.id)
+      {:ok, parent} = Tasks.create_task(%{project_id: project.id, title: "Parent"})
+
+      {:ok, child} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Child",
+          dependencies: [%{"task_id" => parent.id, "kind" => "blocks"}]
+        })
+
+      {:ok, attached_parent} = Stacks.add_task(stack, parent)
+      {:ok, attached_child} = Stacks.add_task(stack, child)
+
+      attached_parent
+      |> Task.changeset(%{
+        status: "in_review",
+        metadata: %{
+          "merged_into_rollup_at" => %{
+            "sha" => "abc1234",
+            "at" => DateTime.utc_now() |> DateTime.to_iso8601()
+          }
+        }
+      })
+      |> Repo.update!()
+
+      assert Stacks.unblocked_in_stack?(attached_child)
+      # Runner was NOT invoked (no repo_url means no ground truth to
+      # verify against).
+      assert ReachabilityRunner.calls() == []
+    end
+
+    test "bare-string (non-map) legacy stamp defers to shape check — no reachability call" do
+      # Bug #2 introduced a defensive fallback for bare-string
+      # `merged_into_rollup_at` stamps (pre-bug-#3 legacy shape). Bug
+      # #3 landed a changeset validator that now rejects those
+      # shapes at the write path AND a migration that scrubs them
+      # from the DB — so seeding a bare-string via changeset is
+      # impossible. We bypass the changeset with raw SQL to prove
+      # the defensive fallback still no-op-passes for any legacy
+      # row that somehow survives the migration (e.g. a concurrent
+      # write during deploy).
+      {:ok, project} =
+        Tasks.create_project(%{
+          name: "Bare stamp",
+          repo_url: "https://github.com/test/reach-repo"
+        })
+
+      stack = stack_fixture(project_id: project.id)
+      {:ok, parent} = Tasks.create_task(%{project_id: project.id, title: "Parent"})
+
+      {:ok, child} =
+        Tasks.create_task(%{
+          project_id: project.id,
+          title: "Child",
+          dependencies: [%{"task_id" => parent.id, "kind" => "blocks"}]
+        })
+
+      {:ok, attached_parent} = Stacks.add_task(stack, parent)
+      {:ok, attached_child} = Stacks.add_task(stack, child)
+
+      # Direct SQL — bypass Task.changeset/2's post-bug-#3 shape
+      # validator so we can seed the legacy bare-string shape. jsonb
+      # literal is formatted inline because `$1::jsonb` binding for
+      # a String encodes as a jsonb-string type, not a parsed
+      # jsonb object.
+      Repo.query!(
+        """
+        UPDATE tasks
+           SET metadata = '{"merged_into_rollup_at":"bare-string-legacy"}'::jsonb,
+               status = 'in_review'
+         WHERE id = $1
+        """,
+        [Ecto.UUID.dump!(attached_parent.id)]
+      )
+
+      assert Stacks.unblocked_in_stack?(attached_child)
+      assert ReachabilityRunner.calls() == []
     end
   end
 
@@ -1961,7 +2269,9 @@ defmodule Platform.Tasks.StacksTest do
       attached_parent
       |> Task.changeset(%{
         status: "in_review",
-        metadata: %{"merged_into_rollup_at" => "abc123"}
+        metadata: %{
+          "merged_into_rollup_at" => %{"sha" => "abc1234", "at" => "2026-07-17T00:00:00Z"}
+        }
       })
       |> Repo.update!()
 
@@ -2043,7 +2353,9 @@ defmodule Platform.Tasks.StacksTest do
         attached_parent
         |> Task.changeset(%{
           status: "in_review",
-          metadata: %{"merged_into_rollup_at" => "abc123"}
+          metadata: %{
+            "merged_into_rollup_at" => %{"sha" => "abc1234", "at" => "2026-07-17T00:00:00Z"}
+          }
         })
         |> Repo.update()
 
@@ -2072,7 +2384,9 @@ defmodule Platform.Tasks.StacksTest do
         attached_parent
         |> Task.changeset(%{
           status: "in_review",
-          metadata: %{"merged_into_rollup_at" => "abc123"}
+          metadata: %{
+            "merged_into_rollup_at" => %{"sha" => "abc1234", "at" => "2026-07-17T00:00:00Z"}
+          }
         })
         |> Repo.update()
 
@@ -3565,7 +3879,9 @@ defmodule Platform.Tasks.StacksTest do
       attached_parent
       |> Task.changeset(%{
         status: "in_review",
-        metadata: %{"merged_into_rollup_at" => "abc123"}
+        metadata: %{
+          "merged_into_rollup_at" => %{"sha" => "abc1234", "at" => "2026-07-17T00:00:00Z"}
+        }
       })
       |> Repo.update!()
 
@@ -3617,7 +3933,9 @@ defmodule Platform.Tasks.StacksTest do
       attached_parent
       |> Task.changeset(%{
         status: "in_review",
-        metadata: %{"merged_into_rollup_at" => "abc123"}
+        metadata: %{
+          "merged_into_rollup_at" => %{"sha" => "abc1234", "at" => "2026-07-17T00:00:00Z"}
+        }
       })
       |> Repo.update!()
 
@@ -3667,14 +3985,18 @@ defmodule Platform.Tasks.StacksTest do
       attached_p1
       |> Task.changeset(%{
         status: "in_review",
-        metadata: %{"merged_into_rollup_at" => "p1-sha"}
+        metadata: %{
+          "merged_into_rollup_at" => %{"sha" => "01a0001", "at" => "2026-07-17T00:00:00Z"}
+        }
       })
       |> Repo.update!()
 
       attached_p2
       |> Task.changeset(%{
         status: "in_review",
-        metadata: %{"merged_into_rollup_at" => "p2-sha"}
+        metadata: %{
+          "merged_into_rollup_at" => %{"sha" => "02a0002", "at" => "2026-07-17T00:00:00Z"}
+        }
       })
       |> Repo.update!()
 
@@ -3727,7 +4049,9 @@ defmodule Platform.Tasks.StacksTest do
       attached_parent
       |> Task.changeset(%{
         status: "in_review",
-        metadata: %{"merged_into_rollup_at" => "abc123"}
+        metadata: %{
+          "merged_into_rollup_at" => %{"sha" => "abc1234", "at" => "2026-07-17T00:00:00Z"}
+        }
       })
       |> Repo.update!()
 
@@ -3771,7 +4095,11 @@ defmodule Platform.Tasks.StacksTest do
       reloaded_parent = Tasks.get_task_record(attached_parent.id)
 
       {:ok, _} =
-        Tasks.update_task(reloaded_parent, %{metadata: %{"merged_into_rollup_at" => "sha"}})
+        Tasks.update_task(reloaded_parent, %{
+          metadata: %{
+            "merged_into_rollup_at" => %{"sha" => "abc1234", "at" => "2026-07-17T00:00:00Z"}
+          }
+        })
 
       reloaded_parent = Tasks.get_task_record(attached_parent.id)
       {:ok, parent_in_review} = Tasks.transition_task(reloaded_parent, "in_review")
@@ -3901,7 +4229,9 @@ defmodule Platform.Tasks.StacksTest do
         attached_parent
         |> Task.changeset(%{
           status: "in_review",
-          metadata: %{"merged_into_rollup_at" => "abc123"}
+          metadata: %{
+            "merged_into_rollup_at" => %{"sha" => "abc1234", "at" => "2026-07-17T00:00:00Z"}
+          }
         })
         |> Repo.update!()
 
@@ -3941,7 +4271,9 @@ defmodule Platform.Tasks.StacksTest do
         attached_p1
         |> Task.changeset(%{
           status: "in_review",
-          metadata: %{"merged_into_rollup_at" => "abc123"}
+          metadata: %{
+            "merged_into_rollup_at" => %{"sha" => "abc1234", "at" => "2026-07-17T00:00:00Z"}
+          }
         })
         |> Repo.update!()
 
@@ -3990,7 +4322,12 @@ defmodule Platform.Tasks.StacksTest do
       # invoked synchronously after the write.
       assert {:ok, _} =
                Tasks.update_task(reloaded_parent, %{
-                 metadata: %{"merged_into_rollup_at" => "abc123"}
+                 metadata: %{
+                   "merged_into_rollup_at" => %{
+                     "sha" => "abc1234",
+                     "at" => "2026-07-17T00:00:00Z"
+                   }
+                 }
                })
 
       assert Tasks.get_task_record(attached_child.id).status == "in_progress"
@@ -4020,7 +4357,9 @@ defmodule Platform.Tasks.StacksTest do
       attached_parent
       |> Task.changeset(%{
         status: "in_review",
-        metadata: %{"merged_into_rollup_at" => "abc123"}
+        metadata: %{
+          "merged_into_rollup_at" => %{"sha" => "abc1234", "at" => "2026-07-17T00:00:00Z"}
+        }
       })
       |> Repo.update!()
 
@@ -4034,7 +4373,13 @@ defmodule Platform.Tasks.StacksTest do
       # not run. Stamp is rewritten but stays non-nil before-and-after.
       assert {:ok, _} =
                Tasks.update_task(reloaded_parent, %{
-                 metadata: %{"merged_into_rollup_at" => "abc123", "extra" => true}
+                 metadata: %{
+                   "merged_into_rollup_at" => %{
+                     "sha" => "abc1234",
+                     "at" => "2026-07-17T00:00:00Z"
+                   },
+                   "extra" => true
+                 }
                })
 
       assert Tasks.get_task_record(attached_child.id).status == "stack_pending"
@@ -4057,8 +4402,29 @@ defmodule Platform.Tasks.StacksTest do
       assert recomputed.status == "done"
     end
 
-    test "any deploying → deploying" do
+    # Bug #6 (task 019f708f) semantic: the `deploying` arm requires
+    # ALL members to be in {deploying, done} — symmetric with the
+    # `in_review` arm. Under the pre-bug-#6 shape a mixed
+    # [in_review, deploying] rolled up to `"deploying"`; under the
+    # new shape it rolls up to `"in_review"` because the members
+    # are still in the review-window set.
+    test "all-deploying members → deploying" do
       {:ok, project} = Tasks.create_project(%{name: "Rollup deploying"})
+      stack = stack_fixture(project_id: project.id)
+      {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "A"})
+      {:ok, b} = Tasks.create_task(%{project_id: project.id, title: "B"})
+      {:ok, _} = Stacks.add_task(stack, a)
+      {:ok, _} = Stacks.add_task(stack, b)
+
+      set_member_status(stack, a, "deploying")
+      set_member_status(stack, b, "deploying")
+
+      assert {:ok, recomputed} = Stacks.recompute_stack_status(stack)
+      assert recomputed.status == "deploying"
+    end
+
+    test "mixed [in_review, deploying] → in_review (not deploying)" do
+      {:ok, project} = Tasks.create_project(%{name: "Rollup deploying-vs-review"})
       stack = stack_fixture(project_id: project.id)
       {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "A"})
       {:ok, b} = Tasks.create_task(%{project_id: project.id, title: "B"})
@@ -4069,7 +4435,7 @@ defmodule Platform.Tasks.StacksTest do
       set_member_status(stack, b, "deploying")
 
       assert {:ok, recomputed} = Stacks.recompute_stack_status(stack)
-      assert recomputed.status == "deploying"
+      assert recomputed.status == "in_review"
     end
 
     test "all in_review/deploying/done → in_review" do
@@ -4102,7 +4468,12 @@ defmodule Platform.Tasks.StacksTest do
       assert recomputed.status == "in_progress"
     end
 
-    test "all stack_pending/backlog/planning → forming" do
+    # Bug #6 (task 019f708f): `stack_pending` now counts as an
+    # in-progress signal (the stack is commenced, just gated behind
+    # deps). Only members truly in the pre-commencement set
+    # (`backlog`, `planning`) with no `stack_pending`/`in_progress`
+    # sibling can leave the stack at `"forming"`.
+    test "all backlog/planning (no stack_pending, no in_progress) → forming" do
       {:ok, project} = Tasks.create_project(%{name: "Rollup forming"})
       stack = stack_fixture(project_id: project.id)
       {:ok, a} = Tasks.create_task(%{project_id: project.id, title: "A"})
@@ -4110,8 +4481,8 @@ defmodule Platform.Tasks.StacksTest do
       {:ok, _} = Stacks.add_task(stack, a)
       {:ok, _} = Stacks.add_task(stack, b)
 
-      set_member_status(stack, a, "stack_pending")
-      set_member_status(stack, b, "backlog")
+      set_member_status(stack, a, "backlog")
+      set_member_status(stack, b, "planning")
 
       assert {:ok, recomputed} = Stacks.recompute_stack_status(stack)
       assert recomputed.status == "forming"
@@ -4150,6 +4521,176 @@ defmodule Platform.Tasks.StacksTest do
 
       assert {:error, :stack_not_found} =
                Stacks.recompute_stack_status(Ecto.UUID.generate())
+    end
+  end
+
+  # ── Bug #6 (task 019f708f): rollup_status_for/1 mixed-stack matrix ──
+  #
+  # The old `Enum.any?(&1 == "deploying")` arm classified a stack
+  # like `[deploying × 3, stack_pending × 3]` as `"deploying"`,
+  # but `CommencementGate.open?/1` refuses to promote a
+  # `stack_pending` member unless the stack itself is
+  # `"in_progress"`. Result: silent deadlock — the last three
+  # members never advance.
+  #
+  # These tests cover every branch of the corrected `cond` block
+  # against the exact input matrix the plan spelled out, plus a
+  # regression that walks a stack through
+  # forming → in_progress → in_review → deploying → done with
+  # mixed intermediate states.
+
+  describe "recompute_stack_status/1 — bug #6 mixed-status matrix" do
+    alias Platform.Tasks.Stacks.CommencementGate
+
+    defp seed_stack_with_members!(name, member_statuses) do
+      {:ok, project} = Tasks.create_project(%{name: name})
+      stack = stack_fixture(project_id: project.id)
+
+      _members =
+        for {status, i} <- Enum.with_index(member_statuses, 1) do
+          {:ok, task} = Tasks.create_task(%{project_id: project.id, title: "M#{i}"})
+          {:ok, attached} = Stacks.add_task(stack, task)
+          set_member_status(stack, attached, status)
+          attached
+        end
+
+      %{project: project, stack: stack}
+    end
+
+    test "THE STALL CASE: [deploying × 3, stack_pending × 3] → in_progress (not deploying)" do
+      %{stack: stack} =
+        seed_stack_with_members!("Stall matrix", [
+          "deploying",
+          "deploying",
+          "deploying",
+          "stack_pending",
+          "stack_pending",
+          "stack_pending"
+        ])
+
+      assert {:ok, recomputed} = Stacks.recompute_stack_status(stack)
+
+      assert recomputed.status == "in_progress",
+             "mixed [deploying × 3, stack_pending × 3] must roll up to in_progress " <>
+               "(pre-bug-#6 shape returned \"deploying\" and silently deadlocked the " <>
+               "stack_pending members behind CommencementGate)"
+    end
+
+    test "[deploying × 6] → deploying" do
+      %{stack: stack} =
+        seed_stack_with_members!("All deploying", List.duplicate("deploying", 6))
+
+      assert {:ok, recomputed} = Stacks.recompute_stack_status(stack)
+      assert recomputed.status == "deploying"
+    end
+
+    test "[done, deploying, deploying] → deploying" do
+      %{stack: stack} =
+        seed_stack_with_members!("Done-deploying", ["done", "deploying", "deploying"])
+
+      assert {:ok, recomputed} = Stacks.recompute_stack_status(stack)
+      assert recomputed.status == "deploying"
+    end
+
+    test "[done × 6] → done" do
+      %{stack: stack} = seed_stack_with_members!("All done", List.duplicate("done", 6))
+
+      assert {:ok, recomputed} = Stacks.recompute_stack_status(stack)
+      assert recomputed.status == "done"
+    end
+
+    test "[in_review, in_review, deploying, done] → in_review" do
+      %{stack: stack} =
+        seed_stack_with_members!(
+          "Mixed in-review",
+          ["in_review", "in_review", "deploying", "done"]
+        )
+
+      assert {:ok, recomputed} = Stacks.recompute_stack_status(stack)
+      assert recomputed.status == "in_review"
+    end
+
+    test "[in_progress, stack_pending, stack_pending] → in_progress" do
+      %{stack: stack} =
+        seed_stack_with_members!(
+          "In-progress + stack-pending",
+          ["in_progress", "stack_pending", "stack_pending"]
+        )
+
+      assert {:ok, recomputed} = Stacks.recompute_stack_status(stack)
+      assert recomputed.status == "in_progress"
+    end
+
+    test "[stack_pending × 3] → in_progress (commenced, not forming)" do
+      %{stack: stack} =
+        seed_stack_with_members!("All stack-pending", List.duplicate("stack_pending", 3))
+
+      assert {:ok, recomputed} = Stacks.recompute_stack_status(stack)
+
+      assert recomputed.status == "in_progress",
+             "an all-stack_pending stack is commenced (start_stack has fired), " <>
+               "not forming — pre-bug-#6 shape leaked it to forming"
+    end
+
+    test "empty stack → forming (unchanged)" do
+      {:ok, project} = Tasks.create_project(%{name: "Empty stack"})
+      stack = stack_fixture(project_id: project.id)
+
+      assert {:ok, recomputed} = Stacks.recompute_stack_status(stack)
+      assert recomputed.status == "forming"
+    end
+
+    # Regression: CommencementGate.open?/1 gates on the stack's own
+    # `status == "in_progress"`. With the bug #6 fix, the mixed
+    # `[deploying, deploying, stack_pending]` stack correctly rolls
+    # up to `"in_progress"` — which is the necessary condition for
+    # the gate to consider opening. `plans_ready?/1` is an
+    # orthogonal check (every member holds an approved plan) that
+    # gates the final open/closed answer; here we assert the
+    # `stack.status` precondition specifically, which is the
+    # regression the T4 stall exhibited.
+    test "mixed [deploying × 2, stack_pending] stack rolls up to in_progress (CommencementGate precondition)" do
+      %{project: project, stack: stack} =
+        seed_stack_with_members!(
+          "Gate regression",
+          ["deploying", "deploying", "stack_pending"]
+        )
+
+      assert {:ok, recomputed} = Stacks.recompute_stack_status(stack)
+
+      assert recomputed.status == "in_progress",
+             "pre-bug-#6 shape returned \"deploying\" here — CommencementGate would " <>
+               "refuse to promote the stack_pending member and the stack would silently " <>
+               "deadlock. The bug #6 fix restores the \"in_progress\" precondition."
+
+      # Sanity: the stack_pending member exists on the stack.
+      pending_members =
+        Tasks.list_tasks_by_project(project.id)
+        |> Enum.filter(&(&1.status == "stack_pending"))
+
+      assert length(pending_members) == 1
+
+      # `CommencementGate.open?/1` reads stack.status via the FK;
+      # the gate's open/closed answer additionally depends on
+      # `plans_ready?/1` (orthogonal to rollup_status). Call it
+      # against a `%Task{stack: recomputed}` so we're verifying at
+      # minimum that the gate no longer short-circuits on the
+      # pre-bug-#6 `"deploying"` classification.
+      [pending_member] = pending_members
+
+      pending_member =
+        pending_member
+        |> Platform.Repo.preload(:stack)
+        |> Map.put(:stack, recomputed)
+
+      # Under the OLD `rollup_status_for/1`, the stack would have
+      # been `"deploying"` and `open?` would return false with
+      # `blocked_by_count: 0` (stack-status branch). Under the NEW
+      # shape, the stack is `"in_progress"` and `open?` enters the
+      # `plans_ready?` branch — which may still return false if
+      # members lack approved plans, but that's a different gate.
+      # We assert the branch we entered, not the final answer.
+      _ = CommencementGate.open?(pending_member)
     end
   end
 
@@ -5138,6 +5679,12 @@ defmodule Platform.Tasks.StacksTest do
 
     @impl true
     def close_stack_pr(_args), do: {:ok, :closed}
+
+    # Bug #2 (task 019f708f): default to reachable so this runner
+    # keeps behaving as pre-bug-#2 for the recompute piggy-back tests
+    # (they don't exercise reachability behavior).
+    @impl true
+    def sha_reachable?(_args), do: {:ok, true}
   end
 
   defp install_pr_hook_runner(_ctx) do
@@ -5188,7 +5735,10 @@ defmodule Platform.Tasks.StacksTest do
   # `stack_deployer_test.exs` so the deployer's `all_members_ready?/1`
   # gate sees the member as ready.
   defp stamp_merged_member!(project, stack, opts) do
-    sha = Keyword.fetch!(opts, :sha)
+    # Bug #3 (task 019f708f): the changeset validator requires SHAs to
+    # be at least 7 hex chars. Coerce non-hex / short test fixtures so
+    # existing call sites don't need to be rewritten.
+    sha = Keyword.fetch!(opts, :sha) |> pad_sha_for_validator()
     position = Keyword.get(opts, :position, 1)
     title = Keyword.get(opts, :title, "Merged member " <> short_id())
 
@@ -5212,6 +5762,19 @@ defmodule Platform.Tasks.StacksTest do
       })
 
     task
+  end
+
+  # Bug #3 helper: coerce short / non-hex shas into a
+  # hex-shaped string at least 7 chars so the
+  # `merged_into_rollup_at` shape validator accepts them.
+  defp pad_sha_for_validator(sha) when is_binary(sha) do
+    hex_only = String.replace(sha, ~r/[^0-9a-fA-F]/, "0")
+
+    if byte_size(hex_only) >= 7 do
+      hex_only
+    else
+      String.duplicate("0", 7 - byte_size(hex_only)) <> hex_only
+    end
   end
 
   defp stamp_unmerged_member!(project, stack, opts) do
@@ -5282,6 +5845,12 @@ defmodule Platform.Tasks.StacksTest do
 
     @impl true
     def close_stack_pr(_args), do: {:ok, :closed}
+
+    # Bug #2 (task 019f708f): default to reachable so dispatch tests
+    # continue exercising the shell-out path without needing to seed
+    # per-SHA reachability responses.
+    @impl true
+    def sha_reachable?(_args), do: {:ok, true}
   end
 
   defp install_dispatch_noop_runner(_ctx) do

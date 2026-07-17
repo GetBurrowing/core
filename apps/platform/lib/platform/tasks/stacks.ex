@@ -1666,12 +1666,33 @@ defmodule Platform.Tasks.Stacks do
   defp rollup_status_for(members) do
     statuses = Enum.map(members, & &1.status)
 
+    # Bug #6 (task 019f708f): the previous shape used
+    # `Enum.any?(&1 == "deploying")` here, which collapsed a mixed
+    # stack like `[deploying, deploying, deploying, stack_pending,
+    # stack_pending, stack_pending]` to `"deploying"` — but the
+    # commencement gate refuses to promote a stack_pending member
+    # unless the stack itself is `"in_progress"`, so the last three
+    # members silently deadlocked. Flip the `deploying` arm to
+    # `Enum.all?(&1 in ["deploying", "done"])` (symmetric with the
+    # `in_review` arm below it), and flip the `in_progress` arm to
+    # accept `stack_pending` as an in-progress signal — a stack made
+    # up entirely of `stack_pending` members is commenced, not
+    # forming.
     cond do
-      Enum.all?(statuses, &(&1 == "done")) -> "done"
-      Enum.any?(statuses, &(&1 == "deploying")) -> "deploying"
-      Enum.all?(statuses, &(&1 in ["in_review", "deploying", "done"])) -> "in_review"
-      Enum.any?(statuses, &(&1 == "in_progress")) -> "in_progress"
-      true -> "forming"
+      Enum.all?(statuses, &(&1 == "done")) ->
+        "done"
+
+      Enum.all?(statuses, &(&1 in ["deploying", "done"])) ->
+        "deploying"
+
+      Enum.all?(statuses, &(&1 in ["in_review", "deploying", "done"])) ->
+        "in_review"
+
+      Enum.any?(statuses, &(&1 in ["in_progress", "stack_pending"])) ->
+        "in_progress"
+
+      true ->
+        "forming"
     end
   end
 
@@ -2363,17 +2384,106 @@ defmodule Platform.Tasks.Stacks do
         true
 
       ids ->
+        # Widened select to include `:id` so the bug-#2 reachability
+        # gate below can log the offending task id when a stamp is
+        # fabricated / unreachable.
         deps =
-          from(t in Task, where: t.id in ^ids, select: %{status: t.status, metadata: t.metadata})
+          from(t in Task,
+            where: t.id in ^ids,
+            select: %{id: t.id, status: t.status, metadata: t.metadata}
+          )
           |> Repo.all()
 
         # If a declared dep id has no row (e.g. soft-deleted out from
         # under us), treat it as unmet — better to stall than to
         # falsely promote.
         length(deps) == length(ids) and
-          Enum.all?(deps, &threshold_cleared?/1)
+          Enum.all?(deps, &threshold_cleared?/1) and
+          all_dep_shas_reachable?(deps, stack_id)
     end
   end
+
+  # Bug #2 (task 019f708f): after `threshold_cleared?/1` confirms a stamp
+  # is PRESENT, additionally verify that the stamp's SHA is actually
+  # reachable from the current rollup-branch tip. A fabricated stamp
+  # (or a merge that was later reverted) would otherwise silently
+  # promote a dependent that expects code the rollup does not contain.
+  # Only stamps that are map-shaped (`%{"sha" => sha}`) can be
+  # verified; bare-string stamps predate bug #3's shape enforcement
+  # and are accepted as-is to preserve existing behavior.
+  defp all_dep_shas_reachable?(deps, stack_id) do
+    with %Stack{rollup_branch: rollup_branch, project_id: project_id} = _stack
+         when is_binary(rollup_branch) and rollup_branch != "" <-
+           Repo.get(Stack, stack_id),
+         {:ok, project} <- fetch_project_for_reachability(project_id),
+         {:ok, repo_url} <- fetch_repo_url_for_reachability(project) do
+      Enum.all?(deps, &dep_sha_reachable?(&1, repo_url, rollup_branch, project_id, stack_id))
+    else
+      _ ->
+        # Missing stack / project / repo_url ⇒ no ground truth to
+        # verify against. Fall back to the stamp-presence check only
+        # (preserves pre-bug-#2 behavior for un-repo'd projects and
+        # test fixtures without a git runner set up).
+        true
+    end
+  end
+
+  defp fetch_project_for_reachability(project_id) do
+    case Tasks.get_project(project_id) do
+      nil -> {:error, :project_not_found}
+      project -> {:ok, project}
+    end
+  end
+
+  defp fetch_repo_url_for_reachability(%{repo_url: url}) when is_binary(url) and url != "",
+    do: {:ok, url}
+
+  defp fetch_repo_url_for_reachability(_project), do: {:error, :no_repo_url}
+
+  defp dep_sha_reachable?(
+         %{metadata: %{"merged_into_rollup_at" => %{"sha" => sha}}, id: dep_id},
+         repo_url,
+         rollup_branch,
+         project_id,
+         stack_id
+       )
+       when is_binary(sha) and sha != "" do
+    args = %{
+      repo_url: repo_url,
+      rollup_branch: rollup_branch,
+      sha: sha,
+      project_id: project_id,
+      stack_id: stack_id
+    }
+
+    case StackDeployer.git_runner().sha_reachable?(args) do
+      {:ok, true} ->
+        true
+
+      {:ok, false} ->
+        Logger.warning(
+          "[Stacks] threshold_cleared?: stamp sha #{sha} not reachable from " <>
+            "#{rollup_branch}; treating as unmerged (offender=#{dep_id})"
+        )
+
+        false
+
+      {:error, reason} ->
+        Logger.warning(
+          "[Stacks] threshold_cleared?: reachability check failed for " <>
+            "#{dep_id} (sha=#{sha}, rollup=#{rollup_branch}): #{inspect(reason)} — " <>
+            "treating as unmerged"
+        )
+
+        false
+    end
+  end
+
+  # Non-map or missing-sha stamps aren't shape-verifiable yet
+  # (bug #3 will enforce). Preserve the pre-bug-#2 permissive behavior:
+  # if the stamp is present but not shape-verifiable, we can't check
+  # reachability, so accept the stamp as-is.
+  defp dep_sha_reachable?(_dep, _repo_url, _rollup_branch, _project_id, _stack_id), do: true
 
   defp threshold_cleared?(%{status: status, metadata: metadata})
        when status in ["in_review", "deploying", "done"] do

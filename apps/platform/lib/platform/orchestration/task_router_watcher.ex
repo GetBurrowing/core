@@ -33,11 +33,22 @@ defmodule Platform.Orchestration.TaskRouterWatcher do
   alias Platform.Orchestration.{RuntimeSupervision, TaskRouterSupervisor}
   alias Platform.Repo
   alias Platform.Tasks
-  alias Platform.Tasks.Task
+  alias Platform.Tasks.{ReviewRequests, Task}
 
   @reconcile_interval_ms 5 * 60 * 1_000
 
   @active_statuses ~w(planning in_progress in_review deploying)
+
+  # Bug #4 (task 019f708f): stall sweep debounce. A stack member that
+  # cleared every review validation but never flipped to `deploying`
+  # (because the async transition was dropped or the finalizer never
+  # observed the last validation pass) will be picked up by the sweep
+  # AFTER it has been sitting at `in_review` this long. The debounce
+  # keeps normal review latency invisible to the sweep — a task that
+  # just landed at `in_review` and is legitimately waiting for its
+  # rollup-merge stamp doesn't get auto-transitioned prematurely.
+  @in_review_stall_debounce_minutes 15
+  @in_review_stall_sweep_cap 50
 
   # ── Public API ─────────────────────────────────────────────────────────
 
@@ -82,7 +93,29 @@ defmodule Platform.Orchestration.TaskRouterWatcher do
 
   def handle_info(:reconcile, state) do
     {started, stopped} = reconcile()
-    Logger.info("[TaskRouterWatcher] reconcile: started #{started}, stopped #{stopped}")
+
+    # Bug #4 (task 019f708f) — piggyback on the reconcile tick to
+    # catch stack members that got stranded at `in_review` after
+    # every review validation passed. No new GenServer; the tick
+    # already fires every 5 min.
+    stall_result =
+      try do
+        sweep_in_review_stalls()
+      rescue
+        e ->
+          Logger.warning(
+            "[TaskRouterWatcher] sweep_in_review_stalls raised: #{Exception.message(e)}"
+          )
+
+          %{scanned: 0, transitioned: 0, observed: 0}
+      end
+
+    Logger.info(
+      "[TaskRouterWatcher] reconcile: started #{started}, stopped #{stopped}; " <>
+        "in_review stall sweep: scanned=#{stall_result.scanned}, " <>
+        "transitioned=#{stall_result.transitioned}, observed=#{stall_result.observed}"
+    )
+
     schedule_reconcile()
     {:noreply, state}
   end
@@ -186,6 +219,171 @@ defmodule Platform.Orchestration.TaskRouterWatcher do
       # `Repo.get` above raises. Reporting a distinct error tag lets
       # `evaluate_task/1` short-circuit rather than crash the GenServer.
       {:error, :sandbox_unowned}
+  end
+
+  # ── Bug #4 (task 019f708f): in-review stall sweep ─────────────────────
+
+  @doc """
+  Scan for stack members that got stranded at `in_review` and
+  auto-transition ones whose review contract is fully satisfied.
+
+  A stack member should flip from `in_review` to `deploying` once the
+  rollup-merge finalizer records the `merged_into_rollup_at` stamp AND
+  every review-stage validation is `passed`. If the finalizer's async
+  transition was dropped (dead broadcast, missed retry, etc.), the
+  task sits at `in_review` forever and Rowan surfaces "why is this
+  stalled" hours later. This sweep is the safety net: every reconcile
+  tick (5 min) we walk stack members at `in_review` with a merge
+  stamp that have been idle for `@in_review_stall_debounce_minutes`,
+  confirm the review contract is satisfied, then transition them.
+
+  Non-stack tasks and stack tasks without a merge stamp are surfaced
+  as observe-only telemetry — never auto-transitioned. That covers
+  the residual-observability gap without changing behavior for
+  non-rollup task paths.
+
+  Returns `%{scanned: n, transitioned: t, observed: o}` for the
+  reconcile log line.
+  """
+  @spec sweep_in_review_stalls() :: %{
+          scanned: non_neg_integer(),
+          transitioned: non_neg_integer(),
+          observed: non_neg_integer()
+        }
+  def sweep_in_review_stalls do
+    candidates = list_in_review_stall_candidates()
+
+    if length(candidates) >= @in_review_stall_sweep_cap do
+      Logger.warning(
+        "[TaskRouterWatcher] in_review stall sweep hit the #{@in_review_stall_sweep_cap}-row " <>
+          "LIMIT — indicates a broader stall condition; expect follow-up ticks to drain."
+      )
+    end
+
+    Enum.reduce(candidates, %{scanned: 0, transitioned: 0, observed: 0}, fn task, acc ->
+      acc = %{acc | scanned: acc.scanned + 1}
+      handle_in_review_stall_candidate(task, acc)
+    end)
+  end
+
+  defp list_in_review_stall_candidates do
+    cutoff =
+      DateTime.utc_now()
+      |> DateTime.add(-@in_review_stall_debounce_minutes * 60, :second)
+
+    from(t in Task,
+      where:
+        t.status == "in_review" and
+          not is_nil(t.stack_id) and
+          fragment("? \\? ?", t.metadata, "merged_into_rollup_at") and
+          is_nil(t.deleted_at) and
+          t.updated_at < ^cutoff,
+      order_by: [asc: t.updated_at],
+      limit: @in_review_stall_sweep_cap
+    )
+    |> Repo.all()
+  end
+
+  defp handle_in_review_stall_candidate(%Task{stack_id: nil} = task, acc) do
+    # Defensive: the query already filters `stack_id IS NOT NULL`, but
+    # if that changes, non-stack tasks land here and stay observation-only.
+    emit_stall_telemetry(task, %{action: :observed_only, reason: :no_stamp_or_no_stack})
+    %{acc | observed: acc.observed + 1}
+  end
+
+  defp handle_in_review_stall_candidate(%Task{} = task, acc) do
+    cond do
+      not has_merged_into_rollup_at?(task) ->
+        emit_stall_telemetry(task, %{action: :observed_only, reason: :no_stamp_or_no_stack})
+        %{acc | observed: acc.observed + 1}
+
+      not review_validations_all_passed?(task) ->
+        # Validations still pending — the task is legitimately awaiting
+        # something. Observation only.
+        emit_stall_telemetry(task, %{
+          action: :observed_only,
+          reason: :validations_not_passed
+        })
+
+        %{acc | observed: acc.observed + 1}
+
+      pending_review_requests?(task) ->
+        emit_stall_telemetry(task, %{action: :observed_only, reason: :pending_review_requests})
+        %{acc | observed: acc.observed + 1}
+
+      true ->
+        auto_transition_stalled(task, acc)
+    end
+  end
+
+  defp has_merged_into_rollup_at?(%Task{metadata: meta}) when is_map(meta),
+    do: Map.has_key?(meta, "merged_into_rollup_at")
+
+  defp has_merged_into_rollup_at?(_task), do: false
+
+  # Confirm every validation on every stage of the current approved
+  # plan is `passed`. Missing plan / no stages / any-not-passed → false.
+  defp review_validations_all_passed?(%Task{id: task_id}) do
+    case Tasks.current_plan(task_id) do
+      nil ->
+        false
+
+      %{stages: stages} when is_list(stages) ->
+        all_validations =
+          stages
+          |> Enum.flat_map(fn stage ->
+            case stage.validations do
+              vs when is_list(vs) -> vs
+              _ -> []
+            end
+          end)
+
+        # A plan with zero validations at all cannot be considered
+        # "fully passed" for the purpose of auto-advancing — we want
+        # evidence, not silence.
+        all_validations != [] and Enum.all?(all_validations, &(&1.status == "passed"))
+
+      _ ->
+        false
+    end
+  end
+
+  defp pending_review_requests?(%Task{id: task_id}) do
+    ReviewRequests.list_pending_for_task(task_id) != []
+  end
+
+  defp auto_transition_stalled(%Task{} = task, acc) do
+    case Tasks.transition_task_status(task, "deploying") do
+      {:ok, _updated} ->
+        Logger.info(
+          "[TaskRouterWatcher] in_review stall auto-transitioned task #{task.id} " <>
+            "-> deploying (updated_at was #{inspect(task.updated_at)})"
+        )
+
+        emit_stall_telemetry(task, %{action: :auto_transitioned_to_deploying})
+        %{acc | transitioned: acc.transitioned + 1}
+
+      {:error, reason} ->
+        Logger.warning(
+          "[TaskRouterWatcher] in_review stall detected on task #{task.id} but " <>
+            "transition to deploying failed: #{inspect(reason)}"
+        )
+
+        emit_stall_telemetry(task, %{
+          action: :observed_only,
+          reason: {:transition_failed, reason}
+        })
+
+        %{acc | observed: acc.observed + 1}
+    end
+  end
+
+  defp emit_stall_telemetry(%Task{id: task_id}, metadata) do
+    :telemetry.execute(
+      [:platform, :orchestration, :stall_detected],
+      %{count: 1},
+      Map.put(metadata, :task_id, task_id)
+    )
   end
 
   # ── Private helpers ────────────────────────────────────────────────────

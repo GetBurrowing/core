@@ -995,19 +995,48 @@ defmodule Platform.Tasks do
   Resolve the effective deploy strategy for a task.
 
   Resolution order:
-  1. `task.deploy_strategy` (task-level override)
-  2. `project.deploy_config["default_strategy"]` (project default)
-  3. `%{"type" => "manual"}` (system fallback)
+  1. `task.deploy_strategy` (task-level override) — always wins.
+  2. Stack member with a live `rollup_branch` → `%{"type" => "no_op_wait_for_rollup"}`.
+     Bug #5 (task 019f708f): the per-member deploy stage MUST NOT open a
+     `pr_merge` PR for a stack member, because the stack ships as ONE
+     rollup PR via `StackDeployer.maybe_open_stack_pr/1`. A per-member
+     PR here would shatter the rollup discipline.
+  3. `project.deploy_config["default_strategy"]` (project default).
+  4. `%{"type" => "manual"}` (system fallback).
 
   The task must have `:project` preloaded, or be loaded with project.
   """
   def resolve_deploy_strategy(%Task{} = task) do
-    task = ensure_project_loaded(task)
+    task =
+      task
+      |> ensure_project_loaded()
+      |> Repo.preload(:stack)
 
-    task.deploy_strategy ||
-      get_in(task.project && task.project.deploy_config, ["default_strategy"]) ||
-      %{"type" => "manual"}
+    cond do
+      task.deploy_strategy ->
+        task.deploy_strategy
+
+      stack_member_with_rollup?(task) ->
+        %{"type" => "no_op_wait_for_rollup"}
+
+      default = get_in(task.project && task.project.deploy_config, ["default_strategy"]) ->
+        default
+
+      true ->
+        %{"type" => "manual"}
+    end
   end
+
+  # Bug #5 (task 019f708f): a task is a "stack member with a live
+  # rollup branch" iff its stack association is loaded, the stack row
+  # exists, and its `rollup_branch` is a non-empty binary. That's the
+  # only condition under which the stack-level rollup PR path is the
+  # source of truth for the deploy.
+  defp stack_member_with_rollup?(%Task{stack: %Platform.Tasks.Stack{rollup_branch: rb}})
+       when is_binary(rb) and rb != "",
+       do: true
+
+  defp stack_member_with_rollup?(_), do: false
 
   @doc """
   Resolve the effective deploy target for a task.
